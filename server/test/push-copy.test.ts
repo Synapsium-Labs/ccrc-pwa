@@ -28,7 +28,8 @@ import { TIMER_MAIL_SENDER } from '../../shared/continuity-timers.js';
 import type { FleetState } from '../src/fleetstate.js';
 import { UNTOLD_SUBJECT_PREFIX } from '../src/coord/untold.js';
 import { RUN_CLOSE_WARNING_PREFIX } from '../src/coord/runCloseLane.js';
-import { STALL_CHECK_PREFIX, STALL_FAILED_PREFIX, STALL_ORPHANED_PREFIX, STALL_REPLY_PREFIX, STALL_REPORT_PREFIX, stallFailedSubject, stallOrphanESubject } from '../src/coord/stall.js';
+import { STALL_CHECK_PREFIX, STALL_FAILED_PREFIX, STALL_ORPHANED_PREFIX, STALL_REPLY_PREFIX, STALL_REPORT_PREFIX, stallOrphanESubject } from '../src/coord/stall.js';
+import { stallFailedSubject } from '../src/coord/stopFailure.js';
 
 /** Item 3, fix round 1 (F3/F4): a remote-mode fleetState double — a minimal `FleetState`, same shape as
  *  `update-inventory.test.ts`'s own local factory (that file's is not exported; L0/L1 boundaries keep this

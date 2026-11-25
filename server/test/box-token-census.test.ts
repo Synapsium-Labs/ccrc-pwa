@@ -183,7 +183,9 @@ const LEDGER_OPERATOR_DOORS = ['/api/waiting', '/api/items/:id', '/api/items/:id
   '/api/programmes/:slug/goals/ratify',
   // Programme lifecycle W2: the operator's start, state and hand-over doors; the start takes the account gate, the state door's
   // pause works dark (`flag-off`) and its other edges and the hand-over take the step-up.
-  '/api/programmes', '/api/programmes/:slug/state', '/api/programmes/:slug/coordinator'];
+  '/api/programmes', '/api/programmes/:slug/state', '/api/programmes/:slug/coordinator',
+  // Programme lifecycle W3: the backfill door; it previews with the session alone and applies behind the step-up.
+  '/api/programmes/decisions'];
 
 /** The continuity routes file's session-gated doors (Overlord W1a, the timers piece, slug continuity-session-doors-list):
  *  every door `continuity/routes.ts` registers beyond its box-token lanes (`CONTINUITY_LANES`), whichever piece adds it. The

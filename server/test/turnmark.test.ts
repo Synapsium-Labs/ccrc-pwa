@@ -222,7 +222,7 @@ describe('readTurnMarkMeasured: the ok arm', () => {
     expect(await read(seed())).toEqual({
       ok: true, sessionId: UUID, state: 'done', event: 'Stop', at: T, turnAt: T - MIN, stopAt: T,
       bg: 2, bgKinds: ['monitor', 'subagent'], bgIds: ['b989ocn62', 'a1'], err: null, restartAt: null,
-      lostBg: 0, lostKinds: [], lostIds: [], crons: null, graceUntil: null,
+      lostBg: 0, lostKinds: [], lostIds: [], crons: null, failAts: [], graceUntil: null,
     });
   });
 
@@ -259,6 +259,24 @@ describe('readTurnMarkMeasured: crons (D-5242)', () => {
     for (const bad of ['1', 1.5, -2, null, true, [1]]) {
       const r = await read(seed({ crons: bad }));
       expect(r, JSON.stringify(bad)).toMatchObject({ ok: true, state: 'done', crons: null });
+    }
+  });
+});
+
+// The provider-failure ladder, wave 1: `failAts`, the epochs of consecutive provider failures (at most eight). Additive,
+// as `crons` is: an older hook's line has none, a list this reader cannot judge reads as none, and neither condemns the line.
+describe('readTurnMarkMeasured: failAts', () => {
+  it('an older hook writes none: an empty list, and the line stays ok', async () => {
+    expect(await read(seed())).toMatchObject({ ok: true, failAts: [] });
+  });
+  it('a list of epochs parses as itself, eight at most', async () => {
+    expect(await read(seed({ failAts: [T - MIN, T] }))).toMatchObject({ ok: true, failAts: [T - MIN, T] });
+    expect(await read(seed({ failAts: [1, 2, 3, 4, 5, 6, 7, 8] }))).toMatchObject({ ok: true, failAts: [1, 2, 3, 4, 5, 6, 7, 8] });
+  });
+  it('a malformed list reads as none and never condemns the marker', async () => {
+    for (const bad of ['1', 7, null, {}, [1, 'x'], [1.5], [-1], [8.64e15 + 1], [1, 2, 3, 4, 5, 6, 7, 8, 9]]) {
+      const r = await read(seed({ failAts: bad }));
+      expect(r, JSON.stringify(bad)).toMatchObject({ ok: true, state: 'done', failAts: [] });
     }
   });
 });

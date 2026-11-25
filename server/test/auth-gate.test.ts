@@ -437,7 +437,10 @@ describe('the scanner is looking at something', () => {
     // state door's pause works dark, the rest take the step-up); `POST /api/programmes/:slug/end-proposal`, a box-token
     // machine lane IN EXEMPT; and `GET /api/programmes/:slug/history` and `GET /api/sessions/:id/programme`, session-or-token
     // reads IN EXEMPT.
-    expect(scanRoutes('coord/ledgersRoutes.ts').length).toBe(30);
+    // 31 since programme lifecycle W3: `POST /api/programmes/decisions`, the backfill door, session-gated and NOT EXEMPT, no
+    // box token; its apply takes the step-up, and it reads its body first, so a bodiless request answers the same dark or
+    // signed in and it is not in FLAG_AWARE.
+    expect(scanRoutes('coord/ledgersRoutes.ts').length).toBe(31);
     // 1 in `coord/coordCallsRoute.ts` (D-8126, wave A3): `POST /api/coord/programmes/:slug/calls`, a box-token machine lane IN EXEMPT.
     expect(scanRoutes('coord/coordCallsRoute.ts').length).toBe(1);
     // 1 in `coord/programmeRemainingRoute.ts` (Overlord W2 remaining work A): `POST /api/coord/programmes/:slug/remaining`, a
@@ -818,9 +821,11 @@ describe('the scanner is looking at something', () => {
     // the exempt-HTTP count 113 -> 116.
     // 323 with the seven outside-folder doors (X2 P2.3), in `docs/routes.ts`, session-gated and NOT EXEMPT, no box token: the
     // HTTP half 313 -> 320, the gated count 197 -> 204, the exempt-HTTP count stays 116.
-    // 325 with both Docs settings doors (X2 P4.3): session-gated and NOT EXEMPT, no box token. The HTTP half
-    // 320 -> 322, gated 204 -> 206 (322 - 116); the exempt-HTTP count stays 116.
-    expect(ROUTES.length).toBe(325);
+    // 324 since programme lifecycle W3's backfill door in `coord/ledgersRoutes.ts`, session-gated and NOT EXEMPT: the HTTP half
+    // 320 -> 321, the gated count 204 -> 205 (321 - 116), the exempt-HTTP count stays 116.
+    // 326 with both Docs settings doors (X2 P4.3): session-gated and NOT EXEMPT, no box token. The HTTP half
+    // 321 -> 323, gated 205 -> 207 (323 - 116); the exempt-HTTP count stays 116.
+    expect(ROUTES.length).toBe(326);
     expect(scanRoutes('laneModelsRoutes.ts').length).toBe(1);
     expect(scanRoutes('coord/delegationBackfillRoutes.ts').length).toBe(2);
     expect(scanRoutes('coord/approvalCensusRoutes.ts').length).toBe(1);
@@ -1012,7 +1017,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 325 scanned + the static wildcard when the bundle is built.
+    // 326 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1825,7 +1830,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 322 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 323 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1889,7 +1894,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 322 HTTP routes, not the 116 exempt.
+          //    is not itself flag-aware — the assertion that covers all 323 HTTP routes, not the 116 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

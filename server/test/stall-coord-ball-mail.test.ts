@@ -3,8 +3,9 @@
 // never a third time. Each hold alone makes it none. Pure: every input is built by the factories below.
 import { describe, it, expect } from 'vitest';
 import {
-  COORD_BALL_CAP_MS, rungRecipient, stallCoordBallMail, stallMailClass, stallNotifyDelivery, stallRungWave, stallSessionMail,
+  COORD_BALL_CAP_MS, rungRecipient, stallCoordBallMail, stallMailClass, stallNotifyDelivery, stallRungWave,
 } from '../src/coord/stall.js';
+import { stallSessionMail } from '../src/coord/stopFailure.js';
 import {
   COORD_BALL_MAIL_AGAIN_MS, COORD_BALL_MAIL_MS, coordBallSince, coordWaitSentAt, stallCoordBallMailStep, type StallCoordBallInput,
 } from '../src/coord/coordBall.js';

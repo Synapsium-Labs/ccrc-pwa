@@ -829,6 +829,8 @@ export interface ReclaimMoveOpts {
   /** Programme lifecycle W2 review: runs inside the move's transaction after it, handed every session whose OPEN run the move
    *  took (`holding`, the heir excluded), so a door's mail to them is queued with the move or not at all. */
   readonly onMoved?: (moved: { readonly holding: readonly string[] }) => void;
+  /** Programme lifecycle W3 (spec §13): the hand-over door's, so a conflict's party may be given a programme whose runs it holds. */
+  readonly party?: boolean;
 }
 
 /** The three terminal members, ONCE (spec §3.2). The SQL literal in
@@ -2507,10 +2509,10 @@ export class CoordStore {
     {
       // Programme lifecycle W1 (R11 rule 4, D-8993): an heir that owns another live real programme, or claims an open run
       // in a programme other than this one that it does not own, is refused before anything is written. Its unfiled
-      // placeholder does not count: it is withdrawn below, in this transaction. A conflict's party may be given a
-      // programme whose runs it holds (§13), which the `r.program != ?` clause admits.
+      // placeholder does not count: it is withdrawn below, in this transaction. By the hand-over door (`party`), a
+      // conflict's party may be given a programme whose runs it holds, its claims in its other programmes standing (§13).
       if (to !== null) {
-        const owned = lifecycle.heirOwnsAnotherOf(this.db, to, toUuid, run.program);
+        const owned = lifecycle.heirOwnsAnotherOf(this.db, to, toUuid, run.program, opts.party === true);
         if (owned !== null) return { ok: false as const, kind: 'owns-another-programme' as const, by: owned };
       }
       // Read before the write, and excluding rows ALREADY naming `to`: the
