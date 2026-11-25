@@ -17,8 +17,9 @@ decider or the script. Its findings are about what the tests did not pin; the co
   call of `armedBase` with `process.env` and the root.
 - **F4.** `ci-merge-queue.test.ts` admits the step's script as its exact two lines (`QUEUE_LIVE_RUN`), not any two
   lines. The `QUEUE_BASE` line is left as it was.
-- **F5.** The three comments that said the run always measures from the merge base now name `armedBase` and the queue
-  group's parent (`growthCheck.ts` twice, `growth-check.test.ts`'s header).
+- **F5.** The three comments that said the run always measures from the merge base are corrected (`growthCheck.ts` twice,
+  `growth-check.test.ts`'s header). Two of them name `armedBase` and the queue group's parent; the third names `armedBase`
+  and D-9016 (count corrected after review run 3762).
 - **F6.** The case where the remote cannot be read runs under `ghContainedEnv` (a poisoned `gh` first on `PATH`), and
   asserts that no `gh` was asked.
 - **F7.** The README's three sentences now follow the bypass sentences, which read as they did on `main`, and say

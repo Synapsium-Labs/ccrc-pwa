@@ -176,6 +176,8 @@ describe('the settle step at the loads door (Task 9)', { timeout: 90_000 }, () =
   let calls: string[][];
   let journalRefuses = false;
   let stopThrows = false;
+  /** When set, every keep-awake call waits on `gate` after calling `reached`: a drain held open inside the settle. */
+  let holdKeepAwake: { readonly reached: () => void; readonly gate: Promise<void> } | null = null;
   let waiting: ((o: SettleOutcome) => void)[] = [];
   const journal = { appendInTx: () => (journalRefuses ? { ok: false, error: 'authority-rolled-back', detail: 'refused for the test' }
     : { ok: true, kind: 'appended', record: { sequence: 1 } }) } as unknown as OverlordAuthorityJournal;
@@ -186,7 +188,11 @@ describe('the settle step at the loads door (Task 9)', { timeout: 90_000 }, () =
     calls = rec.calls;
     // keep-awake answers its `released <id>` line, so the drain clears the set and the profile digest before the stop.
     const run: typeof rec.run = async (cmd, args) => {
-      if (args[0] === 'keep-awake') { rec.calls.push([...args]); return { ran: true, code: 0, stdout: `released ${args[2]}\n`, stderr: '' }; }
+      if (args[0] === 'keep-awake') {
+        rec.calls.push([...args]);
+        if (holdKeepAwake !== null) { holdKeepAwake.reached(); await holdKeepAwake.gate; }
+        return { ran: true, code: 0, stdout: `released ${args[2]}\n`, stderr: '' };
+      }
       if (args[0] === 'stop' && stopThrows) { rec.calls.push([...args]); throw new Error('the stop threw for the test'); }
       return rec.run(cmd, args);
     };
@@ -223,7 +229,7 @@ describe('the settle step at the loads door (Task 9)', { timeout: 90_000 }, () =
   };
   const view = () => { const d = coord!.designationRead(); if (d.kind === 'unmeasured') throw new Error(d.why); return d; };
   const stops = () => calls.filter((c) => c[0] === 'stop');
-  beforeEach(() => { journalRefuses = false; stopThrows = false; waiting = []; });
+  beforeEach(() => { journalRefuses = false; stopThrows = false; holdKeepAwake = null; waiting = []; });
 
   it('go-live: a held first report binds the pending session, once', async () => {
     app = await openOv(); pend();
@@ -273,6 +279,60 @@ describe('the settle step at the loads door (Task 9)', { timeout: 90_000 }, () =
     expect((await report(app, loads({ launchRc: 'on' }))).act).toBe('unread');
     expect(JSON.stringify(coord!.db.prepare('SELECT * FROM overlord_designation').all())).toBe(before);
     expect(calls).toStrictEqual([]);
+  });
+
+  // ── review 3366 F2: the composition root hands the drain the body nothing recorded, so its failed stop claims no debt ───
+  for (const how of ['refuses', 'throws'] as const) {
+    it(`a failure record that ${how} reaches the drain as unrecorded: a failed stop logs the residual, never a debt (review 3366 F2)`, async () => {
+      app = await openOv(); pend();
+      await startOv(app);
+      stopThrows = true;
+      const record = vi.spyOn(coord!, 'failPending').mockImplementation(() => {
+        if (how === 'throws') throw new Error('database is locked');
+        return { ok: false, reason: 'bad-outcome' };
+      });
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        expect((await report(app, loads({ launchRc: 'on' }))).act).toBe(how === 'refuses' ? 'fail-refused' : 'fail-threw');
+        expect(record).toHaveBeenCalledTimes(1);
+        expect(stops(), JSON.stringify(calls)).toStrictEqual([STOP_OV]);
+        const lines = warn.mock.calls.map((c) => String(c[0]));
+        // What the drain was handed reads in its one line for a failed stop: the residual of an id no row owes.
+        expect(lines.filter((l) => l.includes(OV) && l.includes('could not be stopped')), JSON.stringify(lines))
+          .toStrictEqual([expect.stringContaining('no row owes it')]);
+        expect(lines.some((l) => l.includes('stays owed')), JSON.stringify(lines)).toBe(false);
+        const d = view();
+        expect(d.kind === 'not-designated' && d.row?.stopsOwed).toStrictEqual([]);
+        expect(d.kind === 'not-designated' && d.row?.pending?.sessionId).toBe(OV);
+      } finally { warn.mockRestore(); record.mockRestore(); }
+    });
+  }
+
+  // ── review 3366 F3: production hands the settle the coordination serialiser the Overlord's doors run on ──────────────
+  it('a settle holding the coordination serialiser keeps an Overlord door out until it ends (review 3366 F3)', async () => {
+    app = await openOv(); pend();
+    await startOv(app);
+    let reached!: () => void;
+    const inDrain = new Promise<void>((res) => { reached = res; });
+    let release!: () => void;
+    holdKeepAwake = { reached, gate: new Promise<void>((res) => { release = res; }) };
+    // The pause door's body runs on the serialiser and reads the ladder's rung first: that read is the sign it got in.
+    const rung = vi.spyOn(coord!, 'ladderRungRead');
+    const settled = report(app, loads({ launchRc: 'on' }));
+    await inDrain;
+    let answered = false;
+    const door = app.inject({ method: 'POST', url: '/api/overlord/pause', payload: {} }).then((r) => { answered = true; return r; });
+    // A read door off the serialiser answers meanwhile (whatever its gate says), so requests flow; the pause door is held out.
+    expect((await app.inject({ method: 'GET', url: '/api/overlord/designation' })).statusCode).toBeGreaterThanOrEqual(200);
+    await new Promise((res) => setTimeout(res, 100));
+    expect(rung).not.toHaveBeenCalled();
+    expect(answered).toBe(false);
+    release();
+    expect((await settled).act).toBe('fail-pending');
+    await door;
+    expect(answered).toBe(true);
+    expect(rung).toHaveBeenCalled();
+    rung.mockRestore();
   });
 
   const HELD_OR_FAILED = [['held', {}], ['failed', { launchRc: 'on' }]] as const;
@@ -531,6 +591,64 @@ describe('the settle step at the loads door (Task 9)', { timeout: 90_000 }, () =
       expect(r).toMatchObject({ act: 'stale' });
       expect(pendingId()).toBe(OV);
       expect(coord!.startLoadsOfNewestStart(OV)).toMatchObject({ ok: true, newest: { report: { conflicted: true } } });
+    });
+
+    // ── review 3366 F4 and F5: the designation half of the evidence check; a failed re-read is unread; each is logged ────
+    describe('evidence the settle cannot trust after the registry read decides nothing, and says so (review 3366 F4, F5)', () => {
+      let warn: ReturnType<typeof vi.spyOn>;
+      beforeEach(() => { warn = vi.spyOn(console, 'warn').mockImplementation(() => {}); });
+      afterEach(() => { warn.mockRestore(); });
+      const idle = () => warn.mock.calls.map((c: unknown[]) => String(c[0])).filter((l: string) => l.includes('decided nothing'));
+
+      it('a designation that changes during the registry read is stale: the old read never goes live (F4)', async () => {
+        app = await openLost(); pend();
+        await startOv(app);
+        await store(app, loads());
+        const r = await rerun(OV, 1, portOf({ workspaceOf: async () => {
+          expect(coord!.failPending(OV, 'overlord-sandbox-unmet', FAKE_T0, false)).toMatchObject({ ok: true, changed: true });
+          return { kind: 'measured', project: 'overlord' };
+        } }));
+        expect(r).toMatchObject({ act: 'stale' });
+        expect(view()).toMatchObject({ kind: 'not-designated' });
+        expect(drained).toStrictEqual([]);
+        expect(idle()).toStrictEqual([`ccrc-server: the sandbox settle for ${OV} (start 1) decided nothing: its evidence changed during the registry read`]);
+      });
+
+      it('a newest start that cannot be read again after the registry read is unread, not stale (F5)', async () => {
+        app = await openLost(); pend();
+        await startOv(app);
+        await store(app, loads({ launchRc: 'on' }));
+        let reads = 0;
+        const flaky = { startLoadsOfNewestStart: (id: string) => (++reads === 1 ? coord!.startLoadsOfNewestStart(id) : { ok: false, detail: 'locked' }) } as unknown as CoordStore;
+        expect(await settleLoads(portOf(), flaky, OV, 1, () => FAKE_T0)).toMatchObject({ act: 'unread' });
+        expect(reads).toBe(2);
+        expect(pendingId()).toBe(OV);
+        expect(drained).toStrictEqual([]);
+        expect(idle()).toStrictEqual([`ccrc-server: the sandbox settle for ${OV} (start 1) decided nothing: the expected surface, the designation or the newest start could not be read`]);
+      });
+
+      it('a designation that reads unmeasured the second time is unread, not stale (F5)', async () => {
+        app = await openLost(); pend();
+        await startOv(app);
+        await store(app, loads({ launchRc: 'on' }));
+        let reads = 0;
+        const r = await rerun(OV, 1, portOf({ read: () => (++reads === 1 ? coord!.designationRead() : { kind: 'unmeasured', why: 'locked' }) }));
+        expect(r).toMatchObject({ act: 'unread' });
+        expect(reads).toBe(2);
+        expect(pendingId()).toBe(OV);
+        expect(drained).toStrictEqual([]);
+        expect(idle()).toHaveLength(1);
+        expect(idle()[0]).toContain('could not be read');
+      });
+
+      it('a settle that acts, or decides none on evidence it trusts, writes no such line', async () => {
+        app = await openLost(); pend();
+        await startOv(app);
+        await store(app, loads());
+        expect(await rerun()).toMatchObject({ act: 'go-live' });
+        expect(await rerun()).toMatchObject({ act: 'none' });
+        expect(idle()).toStrictEqual([]);
+      });
     });
 
     // ── review 3346 F13: the settle runs on the serialiser it is handed ─────────────────────────────────────────────────

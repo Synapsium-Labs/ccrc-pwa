@@ -3,10 +3,14 @@
 // `continuity-start-loads-route.test.ts`.
 import { describe, it } from 'vitest';
 import * as sandbox from '../src/continuity/sandboxCheck.js';
-import { settleCases, skewCases } from './sim/sandboxSets.js';
+import { settleCases, settleEvidenceCases, skewCases } from './sim/sandboxSets.js';
 
 describe('sandboxSettle (Task 9)', () => {
   for (const [name, run] of Object.entries(settleCases(sandbox))) it(name, run);
+});
+
+describe('settleEvidenceStands (review 3366 F4)', () => {
+  for (const [name, run] of Object.entries(settleEvidenceCases(sandbox))) it(name, run);
 });
 
 describe('skewNoticeOf (Task 9, question 5)', () => {
