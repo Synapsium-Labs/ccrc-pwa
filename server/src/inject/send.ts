@@ -1,5 +1,6 @@
 import type { Tmux } from '../exec.js';
 import { autoContinueArmed, editHintShown, freeTextRow, hasMenu, parseDialog, startsWithPromptGlyph, stripSgr, turnRunning } from '../pane/dialog.js';
+import { PROMPT_GLYPH } from '../../../shared/pane-glyph.js';
 import type { KeyedQueue } from './queue.js';
 import {
   composePrompt, isDialogMultiIndexes, isDialogTab, isDialogText, MAIL_ENVELOPE_FENCE,
@@ -252,7 +253,7 @@ const DIM_SPAN = /\x1b\[(?:0;)?(?:1;)?2(?:;[0-9;]*)?m(?:\x1b\[(?!0[;m]|22[;m])[0
 // session failed `stash-failed`. The cursor joins the hint only where it is the row's FIRST cell and the very next code
 // turns dim on: a person's text is never dim, so a draft with the cursor on its first letter (`\e[7mr\e[0meal`), or one
 // letter alone (`\e[7mR\e[0m`), still reads as a draft.
-const HINT_CURSOR = /^((?:\x1b\[[0-9;]*m)*❯[\u00a0 ])\x1b\[7m([^\x1b])\x1b\[0;2m/u;
+const HINT_CURSOR = new RegExp(`^((?:\\x1b\\[[0-9;]*m)*${PROMPT_GLYPH}[\\u00a0 ])\\x1b\\[7m([^\\x1b])\\x1b\\[0;2m`, 'u');
 /** A line with every dim run removed (SGR elsewhere left in place). */
 const undim = (line: string): string =>
   line.replace(HINT_CURSOR, '$1\x1b[2m$2').replace(DIM_REOPEN, '\x1b[2m').replace(DIM_SPAN, '');
