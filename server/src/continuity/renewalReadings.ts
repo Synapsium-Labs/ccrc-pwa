@@ -11,6 +11,7 @@
 // class a generation is minted under (`designatedClassAtMint`) and the `probes-failed-twice` latch's decider
 // (`probesFailedTwiceOf`). PR B: `notLocalOf`, from the transcript resolver's answer on the host that runs the session, and
 // `notLocalAskOf`, what that reading asks the resolver about. The later pull requests of the plan add the other mappers here.
+import type { ReadFailure } from '../../../shared/agent-protocol.js';
 import type { GenerationState, StartRow } from '../../../shared/continuity.js';
 import type { FleetRole } from '../../../shared/fleetRoles.js';
 import type { DesignationRead } from '../../../shared/overlord-designation.js';
@@ -168,11 +169,15 @@ export type Carrier = { readonly digest: string; readonly keyEpoch: number } | '
 /** The part of the transcript resolver's answer (`TranscriptResolution`) this reading reads, declared by the consumer: the
  *  resolver's answer satisfies it structurally, and this module imports nothing from `server/src/transcript/resolve.ts`. */
 export type TranscriptAnswer = { readonly kind: 'found' } | { readonly kind: 'fallback'; readonly complete: boolean };
-/** The resolver's answer, or why it was not asked (`notLocalAskOf`'s reasons, or no config dir). `fresh`: the answer came from a
- *  walk of the ladder taken in this pass, never from the shared resolver's memory; `observedAt`: the wall clock when that answer
- *  was in hand, after the walk (fix round 1, F1). */
+/** The measured search of every place the resolver's own-account search looks (`resolve.ts#uuidGlobPlaces`), declared by the
+ *  consumer (review 3718 F3): the listing of the account's projects root, then one answer per place it named, each from a read
+ *  that tells a proven absence from an unreadable one. `present` is a file at that place. */
+export type AbsenceProbe = { readonly listing: 'listed' | ReadFailure; readonly places: readonly ('present' | ReadFailure)[] };
+/** The resolver's answer, or why it was not asked (`notLocalAskOf`'s reasons, or no config dir). `measured`: the measured search,
+ *  taken in this pass when the resolver answered a complete absence, else null; `observedAt`: the wall clock when the last answer
+ *  was in hand (fix round 1, F1; fix round 2, F3). */
 export type TranscriptAsk =
-  | { readonly kind: 'asked'; readonly answer: TranscriptAnswer; readonly fresh: boolean; readonly observedAt: number }
+  | { readonly kind: 'asked'; readonly answer: TranscriptAnswer; readonly measured: AbsenceProbe | null; readonly observedAt: number }
   | { readonly kind: 'unread'; readonly why: string };
 
 /** What to ask the resolver about, or why not to ask (fix round 1, F2): the start's conversation under the generation's own account,
@@ -199,10 +204,12 @@ export function notLocalAskOf(i: {
  *     epoch (`host changed during the read`): unmeasured, so an answer from another host is never read as this one's;
  *  4. found, at any rung: local (`false`). `foreign` is never asked, so a copy under another account is never "here";
  *  5. a search that could not look everywhere (`complete: false`): unmeasured, never absence;
- *  6. an absence served from the shared resolver's memory (`fresh` false): unmeasured, since a held answer can outlive the file
- *     appearing at another spelling (review 3696, F1);
- *  7. absent on a fresh walk, and the start `resume` or `compact`: not local (`true`) at once, since the conversation existed
- *     before this start (plan fix round 1, F3);
+ *  6. the absence not confirmed by the measured search: unmeasured. No search (`measured` null): the resolver's answer may be its
+ *     memory, which can outlive the file appearing at another spelling (review 3696, F1), and its `complete` folds an unreadable
+ *     read into absence (review 3718, F3). The projects listing unreadable: unmeasured. A file at any place: local (`false`). Any
+ *     place unreadable: unmeasured. So an absence is believed only when every read of it was a proven absence;
+ *  7. absent on the measured search, and the start `resume` or `compact`: not local (`true`) at once, since the conversation
+ *     existed before this start (plan fix round 1, F3);
  *  8. absent and any other source, with the turn marker unread: unmeasured with the marker's reason;
  *  9. absent and no turn of this generation stopped yet (the last stop null or before the start): local when no turn is running,
  *     since a fresh conversation writes nothing before its first turn (question 4); unmeasured while the first turn runs, since its
@@ -221,7 +228,11 @@ export function notLocalOf(i: {
   const a = i.ask.answer;
   if (a.kind === 'found') return { kind: 'measured', value: false };
   if (!a.complete) return unmeasured('transcript search incomplete');
-  if (!i.ask.fresh) return unmeasured('absence not confirmed by a fresh walk');
+  const m = i.ask.measured;
+  if (m === null) return unmeasured('absence not measured');
+  if (m.listing === 'unreadable') return unmeasured('projects listing unreadable');
+  if (m.places.includes('present')) return { kind: 'measured', value: false };
+  if (m.places.includes('unreadable')) return unmeasured('a transcript place unreadable');
   if (i.start.row.source === 'resume' || i.start.row.source === 'compact') return { kind: 'measured', value: true };
   if (!i.turn.ok) return unmeasured(`turn marker ${i.turn.reason}`);
   if (i.turn.stopAt === null || i.turn.stopAt < i.startReportedAt) {

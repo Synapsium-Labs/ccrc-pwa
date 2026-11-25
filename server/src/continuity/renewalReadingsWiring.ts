@@ -14,8 +14,10 @@
 // reads, Overlord and coordinator: the generation's own start by its id (`startById`), then the watcher's one memoized
 // transcript resolver (`deps.transcript`, the same instance its name sweep and idle nudge ask) for that start's uuid under the
 // generation's own account (`notLocalAskOf` decides what to ask, and refuses a registry row that has moved), never with `foreign`.
-// A complete absence from that resolver may be its memory, so it is checked by one fresh walk of the same ladder
-// (`resolveTranscript`, no memory; review 3696 F1), and only that walk's absence is believed. The isolation word's carrier
+// A complete absence from that resolver may be its memory (review 3696 F1), and its `complete` folds an unreadable read into
+// absence (review 3718 F3), so it is checked by one measured search of every place the resolver's own-account search looks
+// (`uuidGlobPlaces`, over the watcher's io, with the reads that tell absent from unreadable); `notLocalOf` believes an absence
+// only from that search. The isolation word's carrier
 // (`deps.isolation`) is read before the first ask and after the last. A field it does not answer keeps the lane's `W1`.
 //
 // THE LATCH (PR C, Task 6). `latch` is the pass's `GenerationsDeps.latch`: the ladder's one delivery-facing raise
@@ -25,8 +27,9 @@ import type { CcrcConfig } from '../config.js';
 import { configDirFor } from '../configDir.js';
 import type { IsolationReader } from '../isolationFacts.js';
 import { measuredIdentity, type SessionRecord } from '../registry.js';
+import { limiter } from '../bounded.js';
 import type { FleetIO } from '../io.js';
-import { resolveTranscript, type ResolveOpts, type TranscriptResolution } from '../transcript/resolve.js';
+import { GLOB_STAT_CONCURRENCY, uuidGlobPlaces, type ResolveOpts, type TranscriptResolution } from '../transcript/resolve.js';
 import type { WatcherCoordPort } from '../coord/ports.js';
 import type { Clock, Entropy } from '../time/ports.js';
 import { familyClassOf } from '../../../shared/models.js';
@@ -39,7 +42,8 @@ import { laneRaiser, type AuthorityAppender } from '../coord/overlordLadderStore
 import type { GenRow } from './continuityStore.js';
 import { usageReading, type GenReadings } from './generationsLane.js';
 import {
-  backstopDueOf, classChangedOf, fittedCeilingOf, notLocalAskOf, notLocalOf, termRaisedOf, type Carrier, type SpotsRead, type TranscriptAsk, type W1Inputs,
+  backstopDueOf, classChangedOf, fittedCeilingOf, notLocalAskOf, notLocalOf, termRaisedOf, type AbsenceProbe, type Carrier, type SpotsRead, type TranscriptAsk,
+  type W1Inputs,
 } from './renewalReadings.js';
 
 /** The store reads and the one write (the ladder's latch raise) the wiring makes, declared by this consumer. */
@@ -57,10 +61,8 @@ export interface ReadingsDeps {
   /** The watcher's one memoized transcript resolver (`TranscriptResolver.resolve`), reading the host that runs the session.
    *  Absent, or `cfg` absent, `notLocal` is not answered and keeps the lane's `W1` (a producer not wired, never a default). */
   readonly transcript?: (o: ResolveOpts) => Promise<TranscriptResolution>;
-  /** One walk of the same ladder with no memory, which confirms an absence the shared resolver answered (F1). Absent: the
-   *  resolver's own `resolveTranscript` over `io`; with neither, an absence is never believed. */
-  readonly transcriptFresh?: (o: ResolveOpts) => Promise<TranscriptResolution>;
-  /** The fleet's IO, the watcher's own, for the fresh walk. */
+  /** The fleet's IO, the watcher's own, for the measured search that confirms an absence (review 3718 F1, F3). Absent: an
+   *  absence is never believed. */
   readonly io?: FleetIO;
   /** The isolation word's one reader; absent, the carrier reads unmeasured and so does `notLocal`. */
   readonly isolation?: Pick<IsolationReader, 'wakingHostKey'>;
@@ -101,8 +103,18 @@ export function renewalReadingsOf(deps: ReadingsDeps, coord: ReadingsCoord, reco
   };
 
   const carrier = (): Carrier => deps.isolation?.wakingHostKey() ?? 'unmeasured';
-  const io = deps.io;
-  const freshWalk = deps.transcriptFresh ?? (io === undefined ? undefined : (o: ResolveOpts) => resolveTranscript(io, o));
+  /** Every place the resolver's own-account search looks, each read with a measured read; `notLocalOf` decides what they mean. */
+  const probe = async (io: FleetIO, configDir: string, uuid: string): Promise<AbsenceProbe> => {
+    const { root, placesIn } = uuidGlobPlaces(configDir, uuid);
+    const listing = await io.readdirMeasured(root);
+    if (!listing.ok) return { listing: listing.reason, places: [] };
+    const limit = limiter(GLOB_STAT_CONCURRENCY);
+    const places = await Promise.all(placesIn(listing.entries).map((p) => limit(async () => {
+      const st = await io.statMeasured(p);
+      return st.ok ? 'present' as const : st.reason;
+    })));
+    return { listing: 'listed', places };
+  };
   /** `notLocal` for one generation (PR B, Task 4): its start by id, then the resolver, bracketed by the carrier. Every input
    *  goes to `notLocalOf`, which decides; a start or identity this cannot read is an ask not made, with its reason. */
   const notLocal = async (g: GenRow, base: GenReadings, cfg: CcrcConfig, transcript: NonNullable<ReadingsDeps['transcript']>): Promise<W1Inputs['notLocal']> => {
@@ -120,10 +132,10 @@ export function renewalReadingsOf(deps: ReadingsDeps, coord: ReadingsCoord, reco
     if (configDir === undefined) return decide({ kind: 'unread', why: 'no config dir' });
     const o: ResolveOpts = { configDir, dir: who.workdir, registryWorkdir: who.workdir, uuid: ask.uuid };
     const before = carrier();
-    let answer = await transcript(o);
-    let fresh = false;
-    if (answer.kind === 'fallback' && answer.complete && freshWalk !== undefined) { answer = await freshWalk(o); fresh = true; }
-    return decide({ kind: 'asked', answer, fresh, observedAt: deps.time.clock.wall() }, before, carrier());
+    const answer = await transcript(o);
+    const io = deps.io;
+    const measured = answer.kind === 'fallback' && answer.complete && io !== undefined ? await probe(io, configDir, ask.uuid) : null;
+    return decide({ kind: 'asked', answer, measured, observedAt: deps.time.clock.wall() }, before, carrier());
   };
 
   return {

@@ -365,9 +365,12 @@ const startRead = (source: StartSource): NotLocalIn['start'] => ({ ok: true, row
   rowIncarnation: null, reportedAt: START_AT, receivedAt: START_AT,
 } });
 const KEY = { digest: 'a'.repeat(64), keyEpoch: 3 };
-/** An asked answer: from a fresh walk unless `fresh` is false (served from the resolver's memory), observed at `AT`. */
-const asked = (answer: Extract<NotLocalIn['ask'], { kind: 'asked' }>['answer'], fresh = true, observedAt = AT): NotLocalIn['ask'] =>
-  ({ kind: 'asked', answer, fresh, observedAt });
+type Probe = Extract<NotLocalIn['ask'], { kind: 'asked' }>['measured'];
+/** The measured search with every read a proven absence: the listing answered, and each place it named is absent. */
+const PROVEN_ABSENT: NonNullable<Probe> = { listing: 'listed', places: ['absent', 'absent'] };
+/** An asked answer, with the measured search's answers (`PROVEN_ABSENT` unless given; null: no search), observed at `AT`. */
+const asked = (answer: Extract<NotLocalIn['ask'], { kind: 'asked' }>['answer'], measured: Probe = PROVEN_ABSENT, observedAt = AT): NotLocalIn['ask'] =>
+  ({ kind: 'asked', answer, measured, observedAt });
 const FOUND = asked({ kind: 'found' });
 const ABSENT = asked({ kind: 'fallback', complete: true });
 const INCOMPLETE = asked({ kind: 'fallback', complete: false });
@@ -401,24 +404,47 @@ export function notLocalCases(m: RenewalReadingsModule): Record<string, SuiteCas
       expect(m.notLocalOf(NL({ after: { ...KEY, keyEpoch: 4 }, start: startRead('resume') })))
         .toEqual(unmeasured('host changed during the read'));
     },
-    'a found transcript is local, for any source and after any turn, from the memory or a fresh walk': () => {
+    'a found transcript is local, for any source and after any turn, with or without a measured search': () => {
       for (const source of ['startup', 'resume', 'compact', 'clear', 'other'] as const) {
         expect(m.notLocalOf(NL({ ask: FOUND, start: startRead(source), turn: TURNED })), source).toEqual(measured(false));
-        expect(m.notLocalOf(NL({ ask: asked({ kind: 'found' }, false), start: startRead(source), turn: TURNED })), source).toEqual(measured(false));
+        expect(m.notLocalOf(NL({ ask: asked({ kind: 'found' }, null), start: startRead(source), turn: TURNED })), source).toEqual(measured(false));
       }
     },
     'a search that could not look everywhere reads unmeasured, never not local, even after a turn': () => {
       expect(m.notLocalOf(NL({ ask: INCOMPLETE, turn: TURNED }))).toEqual(unmeasured('transcript search incomplete'));
       expect(m.notLocalOf(NL({ ask: INCOMPLETE, start: startRead('resume') }))).toEqual(unmeasured('transcript search incomplete'));
     },
-    'an absence served from the resolver\'s memory is never believed, for any source and after any turn (F1)': () => {
-      const held = asked({ kind: 'fallback', complete: true }, false);
+    'an absence with no measured search is never believed, for any source and after any turn (review 3696 F1, 3718 F3)': () => {
+      const held = asked({ kind: 'fallback', complete: true }, null);
       for (const source of ['startup', 'resume', 'compact', 'clear'] as const) {
-        expect(m.notLocalOf(NL({ ask: held, start: startRead(source), turn: TURNED })), source)
-          .toEqual(unmeasured('absence not confirmed by a fresh walk'));
+        expect(m.notLocalOf(NL({ ask: held, start: startRead(source), turn: TURNED })), source).toEqual(unmeasured('absence not measured'));
       }
     },
-    'a resumed or compacted conversation that is absent on a fresh walk is not local at once, before any turn and with no marker': () => {
+    'an absence whose projects listing was unreadable is never believed (3718 F3)': () => {
+      const ask = asked({ kind: 'fallback', complete: true }, { listing: 'unreadable', places: [] });
+      expect(m.notLocalOf(NL({ ask, start: startRead('resume') }))).toEqual(unmeasured('projects listing unreadable'));
+      expect(m.notLocalOf(NL({ ask, turn: TURNED }))).toEqual(unmeasured('projects listing unreadable'));
+    },
+    'an absence with one place unreadable and the rest absent is never believed (3718 F3)': () => {
+      const ask = asked({ kind: 'fallback', complete: true }, { listing: 'listed', places: ['absent', 'unreadable', 'absent'] });
+      expect(m.notLocalOf(NL({ ask, start: startRead('resume') }))).toEqual(unmeasured('a transcript place unreadable'));
+      expect(m.notLocalOf(NL({ ask, turn: TURNED }))).toEqual(unmeasured('a transcript place unreadable'));
+    },
+    'a file the measured search finds is local, beside an unreadable place too (3718 F3)': () => {
+      for (const places of [['absent', 'present'], ['unreadable', 'present']] as const) {
+        const ask = asked({ kind: 'fallback', complete: true }, { listing: 'listed', places });
+        expect(m.notLocalOf(NL({ ask, start: startRead('resume') })), places.join()).toEqual(measured(false));
+        expect(m.notLocalOf(NL({ ask, turn: TURNED })), places.join()).toEqual(measured(false));
+      }
+    },
+    'an absence is believed when every read of it was a proven absence: no projects root, an empty one, or every place absent (3718 F3)': () => {
+      for (const probe of [{ listing: 'absent', places: [] }, { listing: 'listed', places: [] }, PROVEN_ABSENT] as const) {
+        const ask = asked({ kind: 'fallback', complete: true }, probe);
+        expect(m.notLocalOf(NL({ ask, start: startRead('resume') })), probe.listing).toEqual(measured(true));
+        expect(m.notLocalOf(NL({ ask, turn: TURNED })), probe.listing).toEqual(measured(true));
+      }
+    },
+    'a resumed or compacted conversation that is absent on the measured search is not local at once, before any turn and with no marker': () => {
       for (const source of ['resume', 'compact'] as const) {
         expect(m.notLocalOf(NL({ start: startRead(source) })), source).toEqual(measured(true));
         expect(m.notLocalOf(NL({ start: startRead(source), turn: { ok: false, reason: 'absent' } })), source).toEqual(measured(true));
@@ -466,9 +492,13 @@ const NOT_LOCAL_SET: MutantSet<RenewalReadingsModule> = {
     { id: 'L10', old: "  if (i.ask.kind === 'unread') return unmeasured(i.ask.why);\n", new: "  if (i.ask.kind === 'unread') return { kind: 'measured', value: false };\n" },
     { id: 'L11', old: "  if (i.start.row === null) return unmeasured('start row absent');\n", new: '  if (i.start.row === null) return { kind: \'measured\', value: false };\n' },
     { id: 'L12', old: 'if (i.turn.stopAt === null || i.turn.stopAt < i.startReportedAt) {', new: 'if (false) {' },
-    { id: 'L13', old: "  if (!i.ask.fresh) return unmeasured('absence not confirmed by a fresh walk');\n", new: '' },
+    { id: 'L13', old: "  if (m === null) return unmeasured('absence not measured');\n", new: '' },
     { id: 'L14', old: "  if (i.turn.at >= i.ask.observedAt) return unmeasured('absence older than the turn marker');\n", new: '' },
     { id: 'L15', old: 'i.turn.at >= i.ask.observedAt', new: 'i.turn.at > i.ask.observedAt' },
+    { id: 'L16', old: "  if (m.listing === 'unreadable') return unmeasured('projects listing unreadable');\n", new: '' },
+    { id: 'L17', old: "  if (m.places.includes('present')) return { kind: 'measured', value: false };\n", new: '' },
+    { id: 'L18', old: "  if (m.places.includes('unreadable')) return unmeasured('a transcript place unreadable');\n", new: '' },
+    { id: 'L19', old: "m.listing === 'unreadable'", new: "m.listing !== 'listed'" },
   ],
   suite: notLocalCases,
 };

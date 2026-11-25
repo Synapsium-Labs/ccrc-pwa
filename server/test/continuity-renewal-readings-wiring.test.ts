@@ -3,6 +3,10 @@
 // the designation's two readings and binds the pass's latch raise to the ladder's one raise path; PR B adds `notLocal`, for
 // every generation the gather reads, from the watcher's transcript resolver, bracketed by the isolation word's carrier.
 import { describe, it, expect } from 'vitest';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { mkTmp } from './tmpHelpers.js';
+import { localIO, type FleetIO } from '../src/io.js';
 import { parsedFile, sourceOfSymbol } from './scan/symbols.js';
 import { codeOnly } from './sourceScan.js';
 import { FIT_WINDOW, SPOT_PROBE_EVERY_TOKENS } from '../../shared/continuity.js';
@@ -63,13 +67,40 @@ const CFG = { home: '/fixture-home', roster: { byId: new Map([['lane-a', { confi
 const KEY: WakingHostKey = { digest: 'a'.repeat(64), keyEpoch: 3 };
 type Asked = ResolveOpts;
 type Resolve = (o: ResolveOpts) => Promise<TranscriptResolution>;
-/** The pass's deps. `answer` is the shared resolver's (a throw when it is an Error), `fresh` the fresh walk's (default: the same
- *  answer; `'none'`: no fresh walk wired), each ask recorded. The carrier answers `keys` in turn (the last one repeated), or,
- *  with `moveIn`, KEY until that ask has run and the next key epoch after it: a host that moves only during that ask. The
- *  clock reads NOW, or `afterFresh` once the fresh walk has run. `resolve`/`walk` replace the two asks outright. */
-const deps = (logs: string[] = [], o: { answer?: TranscriptResolution | Error; fresh?: TranscriptResolution | 'none';
-  keys?: (WakingHostKey | 'unmeasured')[]; isolation?: false; moveIn?: 'transcript' | 'fresh'; afterFresh?: number;
-  asks?: Asked[]; freshAsks?: Asked[]; resolve?: Resolve; walk?: Resolve } = {}) => {
+/** The session's own account's projects root under `CFG`, and the place the start's transcript has in project directory `dir`. */
+const ROOT = '/fixture-home/.claude-lane-a/projects';
+const placeIn = (dir: string): string => `${ROOT}/${dir}/${START_UUID}.jsonl`;
+/** What the fleet io's measured reads see: the projects root lists `p`, `q` and every directory a file in `files` sits in; a
+ *  stat is present for a file in `files`, unreadable for a path in `unreadable`, else a proven absence. `listing` makes the
+ *  listing itself a failure. */
+type Disk = { readonly files?: () => ReadonlySet<string>; readonly listing?: 'absent' | 'unreadable'; readonly unreadable?: ReadonlySet<string> };
+/** A fleet io stand-in with only the two measured reads the measured search makes; `onRead` sees each path read. Any other
+ *  member is missing, so a read the search should not make throws and fails the case. */
+function diskIO(d: Disk, onRead: (p: string) => void): FleetIO {
+  const files = (): ReadonlySet<string> => d.files?.() ?? new Set<string>();
+  return {
+    readdirMeasured: async (root: string) => {
+      onRead(root);
+      if (d.listing !== undefined) return { ok: false, reason: d.listing };
+      const names = new Set(['p', 'q']);
+      for (const f of files()) if (path.dirname(path.dirname(f)) === root) names.add(path.basename(path.dirname(f)));
+      return { ok: true, entries: [...names].sort() };
+    },
+    statMeasured: async (p: string) => {
+      onRead(p);
+      if (d.unreadable?.has(p) === true) return { ok: false, reason: 'unreadable' };
+      return files().has(p) ? { ok: true, mtimeMs: 1, size: 1 } : { ok: false, reason: 'absent' };
+    },
+  } as unknown as FleetIO;
+}
+/** The pass's deps. `answer` is the shared resolver's (a throw when it is an Error), each ask recorded in `asks`; `disk` is what
+ *  the fleet io's measured reads see (`false`: no io wired), each path read recorded in `reads`. The carrier answers `keys` in
+ *  turn (the last one repeated), or, with `moveIn`, KEY until that read has run and the next key epoch after it: a host that
+ *  moves only during the shared ask, or only during the measured search. The clock reads NOW, or `afterProbe` once the measured
+ *  search has read. `resolve` replaces the shared ask outright. */
+const deps = (logs: string[] = [], o: { answer?: TranscriptResolution | Error; disk?: Disk | false;
+  keys?: (WakingHostKey | 'unmeasured')[]; isolation?: false; moveIn?: 'transcript' | 'probe'; afterProbe?: number;
+  asks?: Asked[]; reads?: string[]; resolve?: Resolve } = {}) => {
   const keys = o.keys ?? [KEY];
   let k = 0;
   let moved = false;
@@ -83,28 +114,24 @@ const deps = (logs: string[] = [], o: { answer?: TranscriptResolution | Error; f
     if (answer instanceof Error) throw answer;
     return answer;
   });
-  const transcriptFresh: Resolve = o.walk ?? (async (a) => {
-    o.freshAsks?.push(a);
-    if (o.moveIn === 'fresh') moved = true;
-    if (o.afterFresh !== undefined) now = o.afterFresh;
-    const answer = o.fresh ?? o.answer ?? FOUND_HERE;
-    if (answer instanceof Error || answer === 'none') throw new Error('no fresh walk');
-    return answer;
+  const io = o.disk === false ? undefined : diskIO(o.disk ?? {}, (p) => {
+    o.reads?.push(p);
+    if (o.moveIn === 'probe') moved = true;
+    if (o.afterProbe !== undefined) now = o.afterProbe;
   });
   return {
     time: { clock: { wall: () => now }, entropy: { hex: (n: number) => 'a'.repeat(2 * n) } }, log: (l: string) => logs.push(l), cfg: CFG,
-    transcript, ...(o.fresh === 'none' ? {} : { transcriptFresh }),
+    transcript, ...(io === undefined ? {} : { io }),
     ...(o.isolation === false ? {} : { isolation: { wakingHostKey: carrier } }),
   };
 };
 /** A resolver fake with the shared resolver's memory (`TranscriptResolver`'s fallback arm): a `fallback` is served again while
- *  its own path has no file, whatever was written elsewhere; `walk` is the ladder with no memory. `files` maps a uuid to the
- *  path its transcript has now. `served` counts the answers served from memory. */
+ *  its own path has no file, whatever was written elsewhere. `files` maps a uuid to the path its transcript has now. `served`
+ *  counts the answers served from memory. */
 function memoResolver(files: Map<string, string>) {
   const memo = new Map<string, TranscriptResolution>();
-  const counts = { served: 0, walks: 0 };
+  const counts = { served: 0 };
   const walk: Resolve = async (o) => {
-    counts.walks += 1;
     const at = files.get(o.uuid);
     return at === undefined ? { kind: 'fallback', path: `${o.configDir}/projects/raw/${o.uuid}.jsonl`, complete: true }
       : { kind: 'found', path: at, rung: 'uuid-glob', account: null, uuid: o.uuid };
@@ -117,7 +144,7 @@ function memoResolver(files: Map<string, string>) {
     memo.set(key, a);
     return a;
   };
-  return { resolve, walk, counts };
+  return { resolve, counts };
 }
 const FOUND_HERE: TranscriptResolution = { kind: 'found', path: '/fixture-home/.claude-lane-a/projects/p/x.jsonl', rung: 'registry-resolved', account: null, uuid: START_UUID };
 const ABSENT_HERE: TranscriptResolution = { kind: 'fallback', path: '/fixture-home/.claude-lane-a/projects/p/x.jsonl', complete: true };
@@ -325,40 +352,72 @@ describe('renewalReadingsOf (PR B: notLocal)', () => {
       [REC(), null, 'generation account unknown'],
     ] as const) {
       const asks: Asked[] = [];
-      const freshAsks: Asked[] = [];
-      const r = await renewalReadingsOf(deps([], { asks, freshAsks, answer: ABSENT_HERE }), coord, [rec]).w1(gen({ lane }), base(undefined, turned));
+      const reads: string[] = [];
+      const r = await renewalReadingsOf(deps([], { asks, reads, answer: ABSENT_HERE }), coord, [rec]).w1(gen({ lane }), base(undefined, turned));
       expect(r.w1?.notLocal, why).toEqual({ kind: 'unmeasured', why });
-      expect([asks, freshAsks], why).toEqual([[], []]);
+      expect([asks, reads], why).toEqual([[], []]);
     }
   });
 
-  it('an absence the shared resolver serves from its memory is checked by a fresh walk, which finds the file at another spelling (F1)', async () => {
+  it('an absence the shared resolver serves from its memory is checked by the measured search over the fleet io, the only arm wired in production, which finds the file at another spelling (3696 F1, 3718 F1)', async () => {
     const files = new Map<string, string>();
     const r = memoResolver(files);
+    const disk: Disk = { files: () => new Set(files.values()) };
     const { coord } = coordOf({ start: () => startRead('startup') });
-    const first = await renewalReadingsOf(deps([], { resolve: r.resolve, walk: r.walk }), coord, [REC()]).w1(gen({}), base(undefined, quiet));
+    const first = await renewalReadingsOf(deps([], { resolve: r.resolve, disk }), coord, [REC()]).w1(gen({}), base(undefined, quiet));
     expect(first.w1?.notLocal).toEqual(FALSE);
-    files.set(START_UUID, '/fixture-home/.claude-lane-a/projects/resolved-spelling/x.jsonl');
-    const second = await renewalReadingsOf(deps([], { resolve: r.resolve, walk: r.walk }), coord, [REC()]).w1(gen({}), base(undefined, turned));
+    files.set(START_UUID, placeIn('resolved-spelling'));
+    const second = await renewalReadingsOf(deps([], { resolve: r.resolve, disk }), coord, [REC()]).w1(gen({}), base(undefined, turned));
     expect(r.counts.served).toBe(1);
     expect(second.w1?.notLocal).toEqual(FALSE);
+    files.clear();
+    const gone = await renewalReadingsOf(deps([], { resolve: r.resolve, disk }), coord, [REC()]).w1(gen({}), base(undefined, turned));
+    expect(gone.w1?.notLocal).toEqual(TRUE);
   });
 
-  it('with no fresh walk wired, an absence from the shared resolver is never believed (F1)', async () => {
+  it('over the real fleet io on a fixture HOME, a remembered absence beside the file on disk reads local, and the file gone reads not local (3718 F1)', async () => {
+    const home = mkTmp('rr-b-notlocal-');
+    const file = path.join(home, '.claude-lane-a', 'projects', '-elsewhere-project-a', `${START_UUID}.jsonl`);
+    mkdirSync(path.dirname(file), { recursive: true });
+    mkdirSync(path.join(home, '.claude-lane-a', 'projects', '-fixture-projects-project-a'));
+    writeFileSync(file, '{}\n');
     const { coord } = coordOf({ start: () => startRead('resume') });
-    const r = await renewalReadingsOf(deps([], { answer: ABSENT_HERE, fresh: 'none' }), coord, [REC()]).w1(gen({}), base(undefined, turned));
-    expect(r.w1?.notLocal).toEqual({ kind: 'unmeasured', why: 'absence not confirmed by a fresh walk' });
+    const d = () => ({ ...deps([], { answer: ABSENT_HERE, disk: false }), cfg: { ...CFG, home } as CcrcConfig, io: localIO });
+    expect((await renewalReadingsOf(d(), coord, [REC()]).w1(gen({}), base())).w1?.notLocal).toEqual(FALSE);
+    rmSync(file);
+    expect((await renewalReadingsOf(d(), coord, [REC()]).w1(gen({}), base())).w1?.notLocal).toEqual(TRUE);
   });
 
-  it('a found answer from the shared resolver takes no fresh walk; an absence takes exactly one, with the same ask', async () => {
+  it('with no fleet io wired, an absence from the shared resolver is never believed (3696 F1)', async () => {
     const { coord } = coordOf({ start: () => startRead('resume') });
-    const asks: Asked[] = [];
-    const freshAsks: Asked[] = [];
-    await renewalReadingsOf(deps([], { asks, freshAsks }), coord, [REC()]).w1(gen({}), base());
-    expect([asks.length, freshAsks.length]).toEqual([1, 0]);
-    await renewalReadingsOf(deps([], { asks, freshAsks, answer: ABSENT_HERE }), coord, [REC()]).w1(gen({}), base());
-    expect([asks.length, freshAsks.length]).toEqual([2, 1]);
-    expect(freshAsks[0]).toEqual(asks[1]);
+    const r = await renewalReadingsOf(deps([], { answer: ABSENT_HERE, disk: false }), coord, [REC()]).w1(gen({}), base(undefined, turned));
+    expect(r.w1?.notLocal).toEqual({ kind: 'unmeasured', why: 'absence not measured' });
+  });
+
+  it('a found answer from the shared resolver takes no measured search; an absence takes one: the account\'s projects root, then every place it names', async () => {
+    const { coord } = coordOf({ start: () => startRead('resume') });
+    const reads: string[] = [];
+    await renewalReadingsOf(deps([], { reads }), coord, [REC()]).w1(gen({}), base());
+    expect(reads).toEqual([]);
+    await renewalReadingsOf(deps([], { reads, answer: ABSENT_HERE }), coord, [REC()]).w1(gen({}), base());
+    expect(reads).toEqual([ROOT, placeIn('p'), placeIn('q')]);
+  });
+
+  it('an unreadable read in the measured search makes the absence unmeasured: the projects listing, or one place with the rest absent (3718 F3)', async () => {
+    const { coord } = coordOf({ start: () => startRead('resume') });
+    for (const [disk, why] of [[{ listing: 'unreadable' }, 'projects listing unreadable'],
+      [{ unreadable: new Set([placeIn('q')]) }, 'a transcript place unreadable']] as const) {
+      const r = await renewalReadingsOf(deps([], { answer: ABSENT_HERE, disk }), coord, [REC()]).w1(gen({}), base(undefined, turned));
+      expect(r.w1?.notLocal, why).toEqual({ kind: 'unmeasured', why });
+    }
+  });
+
+  it('an absence is believed when every read of it was a proven absence: no projects root at all, or every place absent (3718 F3)', async () => {
+    const { coord } = coordOf({ start: () => startRead('resume') });
+    for (const disk of [{ listing: 'absent' }, {}] as const) {
+      const r = await renewalReadingsOf(deps([], { answer: ABSENT_HERE, disk }), coord, [REC()]).w1(gen({}), base(undefined, turned));
+      expect(r.w1?.notLocal, JSON.stringify(disk)).toEqual(TRUE);
+    }
   });
 
   it('a first turn still running reads unmeasured: the transcript\'s first append may not have landed (F1, the race)', async () => {
@@ -368,22 +427,22 @@ describe('renewalReadingsOf (PR B: notLocal)', () => {
     expect(r.w1?.notLocal).toEqual({ kind: 'unmeasured', why: 'first turn still running' });
   });
 
-  it('the absence is dated after the fresh walk: a marker event between the ask and the walk\'s end does not make it older (F1)', async () => {
+  it('the absence is dated after the measured search: a marker event between the ask and the search\'s end does not make it older (F1)', async () => {
     const { coord } = coordOf({ start: () => startRead('startup') });
     const lateStop: TurnMarkRead = { ...turned, at: NOW + 500 };
-    const r = await renewalReadingsOf(deps([], { answer: ABSENT_HERE, afterFresh: NOW + 1_000 }), coord, [REC()]).w1(gen({}), base(undefined, lateStop));
+    const r = await renewalReadingsOf(deps([], { answer: ABSENT_HERE, afterProbe: NOW + 1_000 }), coord, [REC()]).w1(gen({}), base(undefined, lateStop));
     expect(r.w1?.notLocal).toEqual(TRUE);
     const stale = await renewalReadingsOf(deps([], { answer: ABSENT_HERE }), coord, [REC()]).w1(gen({}), base(undefined, lateStop));
     expect(stale.w1?.notLocal).toEqual({ kind: 'unmeasured', why: 'absence older than the turn marker' });
   });
 
-  it('the second carrier read comes after the asks: a host that moves only during the shared ask, or only during the fresh walk, reads unmeasured (F3)', async () => {
+  it('the second carrier read comes after the reads: a host that moves only during the shared ask, or only during the measured search, reads unmeasured (F3)', async () => {
     const { coord } = coordOf({ start: () => startRead('resume') });
-    for (const moveIn of ['transcript', 'fresh'] as const) {
+    for (const moveIn of ['transcript', 'probe'] as const) {
       const r = await renewalReadingsOf(deps([], { answer: ABSENT_HERE, moveIn }), coord, [REC()]).w1(gen({}), base());
       expect(r.w1?.notLocal, moveIn).toEqual({ kind: 'unmeasured', why: 'host changed during the read' });
     }
-    const still = await renewalReadingsOf(deps([], { answer: FOUND_HERE, moveIn: 'fresh' }), coord, [REC()]).w1(gen({}), base());
+    const still = await renewalReadingsOf(deps([], { answer: FOUND_HERE, moveIn: 'probe' }), coord, [REC()]).w1(gen({}), base());
     expect(still.w1?.notLocal).toEqual(FALSE);
   });
 
