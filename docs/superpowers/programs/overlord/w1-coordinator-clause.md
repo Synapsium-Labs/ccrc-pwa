@@ -51,18 +51,19 @@ the next `## ` heading.
 
 ## Departures
 
-- **coord-clause-room-from-compaction-note** — §11.4 says a clause past the room needs existing clauses shortened first,
+- **coord-clause-room-from-compaction-note** (D-9022, defined in the plan) — §11.4 says a clause past the room needs existing clauses shortened first,
   in a pull request of its own. The room came instead from the prose before the contract (call 997). No clause, the
   description or the budget changed.
-- **coord-clause-index-shortening-not-needed** — the index's row says this piece lands "after the shortening
+- **coord-clause-index-shortening-not-needed** (D-9023, defined in the plan) — the index's row says this piece lands "after the shortening
   (question 2)". Operator item 326 raised the budget instead, and this piece took its last bytes from the note.
 - **coord-clause-condition-held-by-the-build** — "acts only while the server advertises `overlord-v1`" is held by the
   build, as §7.5 and §11.5 say, and the skill carries no text for it (ruled with call 997). The residual: the clause's
   last sentence, waves left as a range at the plan and at every wave boundary, needs no door, so it binds from the
   release whatever the word says. It is harmless.
-- **coord-clause-revision-word-unchanged** — `COORDINATOR_SKILL_REVISION` (`server/src/coord/skillRollout.ts`) stays
+- **coord-clause-revision-word-unchanged** (D-9024, defined in the plan) — `COORDINATOR_SKILL_REVISION` (`server/src/coord/skillRollout.ts`) stays
   `clause-21`, though its comment says a contract change bumps it and every running coordinator is mailed once. The
-  plan clause and the recall clause left it too. The coordinator rules whether a bump to `clause-24` follows.
+  plan clause and the recall clause left it too. It is left unchanged here on the coordinator's ruling (call 1025),
+  and the bump is owed at the first relay, with the PR that makes one possible: a W2 entry step in the ledger.
 - **held-files-by-packet** — `server/test/coordinator-skill.test.ts` and `README.md` are held by the landing
   programme's run 1850 and `CLAUDE.md` by this programme's run 3299. Each got a unified-diff packet against `main`
   `7e1f9752fe`, and each file stayed untouched until its holder's yes: run 1850's coordinator said yes to packet v2
@@ -71,6 +72,6 @@ the next `## ` heading.
   clause 17's length and was replaced before any yes. The pin's packet carries the literal (no
   comment), `'twenty-four'` in `WORDS`, the count in the comment above `CONTRACT` and in the verbatim test's title, and
   clause 17's `toHaveLength(24)`.
-- **coord-clause-plan-dated-path** — the index names the plan `2026-11-14-overlord-w1/w1-coordinator-clause.md`. A new
+- **coord-clause-plan-dated-path** (D-9025, defined in the plan) — the index names the plan `2026-11-14-overlord-w1/w1-coordinator-clause.md`. A new
   plan inside that folder fails the layout rule (the ledger guard and the review judge, `spec-misplaced`), so it is
   `docs/superpowers/plans/2026-11-25-overlord-w1-coordinator-clause.md`.

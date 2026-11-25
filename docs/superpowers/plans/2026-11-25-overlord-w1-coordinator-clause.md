@@ -64,13 +64,15 @@ The index names this plan `2026-11-14-overlord-w1/w1-coordinator-clause.md`; it 
      no door, so it binds from the release whatever the word says. It is harmless and stays unconditioned.
 3. **The clause number** (slug `coordinator-clauses-by-name`, the index's question 2). `main` carries 23 clauses; the
    clause is built as 24. If another clause lands first, the later lander renumbers on a base the coordinator names.
-4. **The skill revision word** (slug `coord-clause-revision-word-unchanged`; **for the coordinator**).
+4. **The skill revision word** (slug `coord-clause-revision-word-unchanged`, D-9024; **ruled**, call 1025, routine).
    `server/src/coord/skillRollout.ts`'s `COORDINATOR_SKILL_REVISION` reads `clause-21`, and its comment says a later
    contract change bumps it, which mails every running coordinator once. The plan clause (#3119) and the recall clause
    (#2919) changed the contract and left it. This piece follows them and leaves it: the brief says a merge changes no
    door, capability or setting, and a bump would send a rollout mail to every coordinator at the release.
-   Recommendation: leave it; if the coordinator wants coordinators told, a bump to `clause-24` is one line and its
-   test, in this PR or a follow-up.
+   - **The ruling.** Left unchanged in this PR. The clause asks nothing of a coordinator until an Overlord can send it
+     a relay, which no merged build does yet, so the bump rides with the PR that makes the first relay possible and
+     coordinators are told when there is something to act on. The coordinator carries it in the ledger as a W2 entry
+     step.
 
 ## What exists today
 
@@ -128,16 +130,17 @@ The index names this plan `2026-11-14-overlord-w1/w1-coordinator-clause.md`; it 
 
 ## Deviations found
 
-The coordinator mints the numbers.
+The coordinator issued D-9022 to D-9025 for this run.
 
-- **D-TBD-coord-clause-room-from-compaction-note**: §11.4 says a clause past the room needs existing clauses shortened
+- **D-9022 (2026-11-25)** (`coord-clause-room-from-compaction-note`): §11.4 says a clause past the room needs existing clauses shortened
   first. The room came instead from the compaction note above the contract (programme call 997).
-- **D-TBD-coord-clause-index-shortening-not-needed**: the index's row says the clause lands "after the shortening
+- **D-9023 (2026-11-25)** (`coord-clause-index-shortening-not-needed`): the index's row says the clause lands "after the shortening
   (question 2)". Operator item 326 raised the budget instead, and this piece takes its last bytes from the note; no
   shortening pull request was made.
-- **D-TBD-coord-clause-revision-word-unchanged**: `COORDINATOR_SKILL_REVISION`'s comment says a contract change bumps
-  it; this piece leaves it, as #3119 and #2919 did (question 4).
-- **D-TBD-coord-clause-plan-dated-path**: the index names this plan inside `2026-11-14-overlord-w1/`; a new plan
+- **D-9024 (2026-11-25)** (`coord-clause-revision-word-unchanged`): `COORDINATOR_SKILL_REVISION`'s comment says a
+  contract change bumps it. It is left unchanged here on the coordinator's ruling (call 1025), and the bump is owed at
+  the first relay, with the PR that makes one possible (question 4).
+- **D-9025 (2026-11-25)** (`coord-clause-plan-dated-path`): the index names this plan inside `2026-11-14-overlord-w1/`; a new plan
   there fails the layout rule (`spec-misplaced`), so it is `2026-11-25-overlord-w1-coordinator-clause.md`.
 
 ## Where things stand
@@ -149,6 +152,6 @@ The coordinator mints the numbers.
 **What a merge arms:** every coordinator's contract gains one clause at the next release. No door, capability word or
 setting changes.
 
-**Open questions for the coordinator:** question 4.
+**Open questions for the coordinator:** none. All four are ruled.
 
 **Waiting on the operator:** nothing. The next coordinator clause will need their shortening or a budget decision.
