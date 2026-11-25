@@ -97,7 +97,7 @@ function nudgeHold(input: ProviderRetryInput, now: number): StallHold | null {
   if (held !== null) return held.act === 'hold' ? held.why : 'unmeasured';
   const w = input.session.worker;
   if (w.present !== true) return 'absent';
-  if (input.archived || input.hibernated || w.lifecycle === 'stopped' || w.lifecycle === 'restarting') return 'lifecycle';
+  if (input.archived || input.hibernated || w.lifecycle === 'restarting') return 'lifecycle';
   if (w.lifecycle !== null && lifecycleIsDead(w.lifecycle as Parameters<typeof lifecycleIsDead>[0])) return 'lifecycle';
   if (w.askRow.kind === 'unmeasured') return 'unmeasured';
   if (w.hookAsk.kind === 'ask' || w.hookAsk.kind === 'approval') return 'ask';

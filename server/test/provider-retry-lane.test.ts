@@ -192,6 +192,14 @@ describe('the nudge, for any live session', () => {
     expect(retries(r.coord)).toHaveLength(2);
   }, 60_000);
 
+  it('a nudge that left the watch\'s own mail read still spaces the next one, which is sent', async () => {
+    const r = await one();
+    await r.sweep(FAIL_AT + MIN);
+    r.coord.markAcked(delivery(r.coord).id, FAIL_AT + MIN + 5_000);
+    await r.sweep(FAIL_AT + 26 * H);                  // nobody swept for a day: the nudge is out of the 24 h read
+    expect(retries(r.coord).map((m) => m.subject)).toEqual([providerRetrySubject(FAIL_AT + MIN), providerRetrySubject(FAIL_AT + 16 * MIN + 5_000)]);
+  }, 60_000);
+
   it('a queued nudge the session has moved past is taken back, and says why', async () => {
     const r = await one();
     await r.sweep(FAIL_AT + MIN);
@@ -310,6 +318,26 @@ describe('the operator\'s one notice per provider per outage', () => {
     for (const id of [A, B, C]) writeFileSync(path.join(r.home, '.cc-sessions', `${id}.turn.json`), 'torn');
     for (let t = FAIL_AT + 2 * MIN; t <= FAIL_AT + 30 * MIN; t += MIN) await sweep(t);
     expect(feed(r.coord).map((f) => f.title)).toEqual(['Anthropic is returning errors']);
+  }, 60_000);
+
+  it('a coordinator whose marker turned unreadable keeps the outage standing when every other session has recovered', async () => {
+    const r = await rig();
+    await three(r);
+    seed(r.home, COORD); seedMark(r.home, COORD);
+    const opened = r.coord.openRun({ program: 'demo-program', title: 'demo-program', project: 'demo', wave: 1, waveOf: 1, claimedBy: COORD });
+    if (!('id' in opened)) throw new Error(JSON.stringify(opened));
+    r.coord.markDispatched(opened.id, 'lane-e-project-a', 'ws', 'ws/x', false, FAIL_AT - H);
+    const adv = r.coord.advance(opened.id, 'dispatched', 'coordinator');
+    if (!adv.ok) throw new Error(JSON.stringify(adv));
+    const sweep = async (ms: number): Promise<void> => { at(ms); await r.w.sweepStalls([A, B, C, COORD].map((i) => fleetRow(i)), [], tickOf(A, B, C, COORD)); };
+    await sweep(FAIL_AT + MIN);
+    for (const id of [A, B, C]) seedMark(r.home, id, { state: 'done', event: 'Stop', failAts: [], turnAt: FAIL_AT + 2 * MIN, stopAt: FAIL_AT + 2 * MIN, at: FAIL_AT + 2 * MIN });
+    writeFileSync(path.join(r.home, '.cc-sessions', `${COORD}.turn.json`), 'torn');
+    for (let t = FAIL_AT + 2 * MIN; t <= FAIL_AT + 20 * MIN; t += MIN) await sweep(t);
+    expect(feed(r.coord).map((f) => f.title)).toEqual(['Anthropic is returning errors']);
+    seedMark(r.home, COORD, { state: 'done', event: 'Stop', failAts: [], turnAt: FAIL_AT + 21 * MIN, stopAt: FAIL_AT + 21 * MIN, at: FAIL_AT + 21 * MIN });
+    for (let t = FAIL_AT + 21 * MIN; t <= FAIL_AT + 32 * MIN; t += MIN) await sweep(t);
+    expect(feed(r.coord).map((f) => f.title), 'control: it clears once the coordinator reads again').toContain('Anthropic errors have stopped');
   }, 60_000);
 
   it('a stopped ladder raises none', async () => {
