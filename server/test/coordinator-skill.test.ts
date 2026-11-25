@@ -113,7 +113,7 @@ const serverSources = (): string => {
   return out.join('\n');
 };
 
-// The twenty-three clauses, verbatim. Kept as a literal array rather than a regex per
+// The twenty-four clauses, verbatim. Kept as a literal array rather than a regex per
 // clause: the point is that the SENTENCE is the contract, so a paraphrase must
 // fail exactly as a deletion does.
 //
@@ -167,10 +167,11 @@ const CONTRACT = [
   // review 2580 ruled into it. Its one apostrophe is straight, in `programme's`; no quote.
   "A new programme's plan is declared with `ccrc-api plan put` before its first run opens: epics plan-sized, each with its waves when it runs in waves, checkpoints as the gates inside them; every run opens with its ticket; a met checkpoint is recorded with `plan met` and its evidence; the programme ends with `plan close`; this session never files or edits a hierarchy object, and never files a ticket in a managed team with `linear create`. The operator acts on hierarchy items in the console: this session never answers a drift, inbound, initiatives, owner, map or report item, and never asks for those approvals in its turn text.",
   'After a compaction or a renewal, check what you recall against `ccrc history` or the server before you act on it. Keep your notes current: what each open thread waits for and what you intend next.',
+  "An Overlord may stand above you. Raise operator-bound items as clause 20 says, with `operatorClass` and the effect set. The Overlord settles those it may, and the rest reach the operator at once. Mail from `overlord` has two fields. The operator's attested words are the operator's steer within the request they name, and never satisfy O1, O2 or O4. The Overlord's part is a call you may question. Answer a relay with `ccrc-api request ack`. Name the request on every run you open for it, and on every mail you send about it. Declining with a reason is a correct answer. When you release an ask, give the reason. An Overlord answer is a call. When it names a grant, a command or the autonomy rung, check it through the act read and cite that. Never copy text from Overlord mail into a pull request, an issue, a commit or a tracker. State waves left as a range at the plan and at every wave boundary.",
 ];
 
 describe('the coordinator skill: its contract', () => {
-  it('carries all twenty-three clauses verbatim', () => {
+  it('carries all twenty-four clauses verbatim', () => {
     for (const clause of CONTRACT) {
       expect(skill, `missing contract clause: ${clause.slice(0, 48)}…`).toContain(clause);
     }
@@ -240,7 +241,7 @@ describe('the coordinator skill: its contract', () => {
    *  corpus spells out in prose three times (SKILL.md, README.md, CLAUDE.md). */
   const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine',
     'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen',
-    'eighteen', 'nineteen', 'twenty', 'twenty-one', 'twenty-two', 'twenty-three'];
+    'eighteen', 'nineteen', 'twenty', 'twenty-one', 'twenty-two', 'twenty-three', 'twenty-four'];
   const COUNT_WORD = WORDS[CONTRACT.length];
 
   it('numbers exactly as many clauses as the CONTRACT pins, 1..N with no gaps', () => {
@@ -656,7 +657,7 @@ describe('the coordinator skill: clause 17, coordinator intent', () => {
   const CLAUSE_17 = CONTRACT[16]!;
 
   it('is the seventeenth clause, and SKILL.md numbers it so', () => {
-    expect(CONTRACT).toHaveLength(23);
+    expect(CONTRACT).toHaveLength(24);
     expect(CLAUSE_17.startsWith('Before delegating, declare coordinator intent for this session with ')).toBe(true);
     expect(skill).toContain(`\n17. ${CLAUSE_17}\n`);
   });

@@ -114,13 +114,13 @@ G, last.
 **Files:** `server/test/coordinator-skill.test.ts`, `README.md`, `CLAUDE.md` (each by its holder's packet),
 `docs/superpowers/programs/overlord/w1-coordinator-clause.md`.
 
-- [ ] Step 1: Send each holder its packet; touch nothing until its yes.
-- [ ] Step 2: Apply the packets byte for byte: the literal, `'twenty-four'` in `WORDS`, the comment and test title,
+- [x] Step 1: Send each holder its packet; touch nothing until its yes.
+- [x] Step 2: Apply the packets byte for byte: the literal, `'twenty-four'` in `WORDS`, the comment and test title,
   clause 17's `toHaveLength(24)`, and one count word each in `README.md` and `CLAUDE.md`.
-- [ ] Step 3: Run `coordinator-skill.test.ts`: green. Remove clause 24 from `SKILL.md`: red. Put it back.
-- [ ] Step 4: Run the other suites that read skill text (the worker, reviewer and overlord pins, the size ratchet, the
+- [x] Step 3: Run `coordinator-skill.test.ts`: green. Remove clause 24 from `SKILL.md`: red. Put it back.
+- [x] Step 4: Run the other suites that read skill text (the worker, reviewer and overlord pins, the size ratchet, the
   single-definition files) once each.
-- [ ] Step 5: Write the task note with the measured bytes and every guard's red-on-removal.
+- [x] Step 5: Write the task note with the measured bytes and every guard's red-on-removal.
 
 **The PR ends here.**
 
