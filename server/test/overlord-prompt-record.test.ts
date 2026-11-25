@@ -468,6 +468,15 @@ describe('a session that acks its own operator-message nudge (review 2627 F-1)',
     expect(r.order.filter((o) => o === 'move:deliver')).toHaveLength(1);
   });
 
+  // Review 3852 F6: the real acknowledgement route's binding, on the real coordination store, writes the move's message line there.
+  it('the ack route\'s settle writes the deliver move\'s message line into the server\'s own coordination store', async () => {
+    const r = await rig();
+    expect((await post(r, OVERLORD, { text: 'hello' })).statusCode).toBe(200);
+    expect((await ack(r, firstDelivery(r))).statusCode).toBe(200);
+    expect(r.coord.db.prepare("SELECT id, state, actor, actorKind FROM overlord_sequence WHERE kind = 'message' ORDER BY seq").all())
+      .toEqual([{ id: '1', state: 'queued', actor: 'route', actorKind: 'server' }, { id: '1', state: 'delivered', actor: 'mail-lane', actorKind: 'server' }]);
+  });
+
   it('an ack of any other mail leaves the operator message queued', async () => {
     const r = await rig();
     expect((await post(r, OVERLORD, { text: 'hello' })).statusCode).toBe(200);
@@ -565,6 +574,17 @@ describe('sweepMail: the operator-message branch (open question 3)', () => {
     await w.sweepMail();
     expect(literalSends(h.calls)).toEqual([LINE]);
     expect(om.moveMessage).toHaveBeenCalledTimes(1);
+  });
+
+  // Review 3852 F6: the real watcher's mail pass hands the deliver move its own coordination store, where the line is written.
+  it('the mail pass writes the deliver move\'s message line into the watcher\'s own coordination store', async () => {
+    const om = store('queued');
+    const { coord, w } = await primed([emptyBox, emptyBox, echoedBox(LINE), emptyBox], om);
+    queue(coord, 'operator', operatorMessageSubject(7));
+    await w.sweepMail();
+    expect(om.moveMessage).toHaveBeenCalledWith(7, 'deliver', 'mail-lane', NOW);
+    expect(coord.db.prepare("SELECT id, state, actor, actorKind, at FROM overlord_sequence WHERE kind = 'message'").all())
+      .toEqual([{ id: '7', state: 'delivered', actor: 'mail-lane', actorKind: 'server', at: NOW }]);
   });
 
   it('a box holding THIS delivery\'s own line is resumed (Enter, no retype); a box holding another message\'s line is held as a draft', async () => {
