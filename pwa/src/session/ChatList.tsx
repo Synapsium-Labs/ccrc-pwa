@@ -865,10 +865,10 @@ function ChatScroller({
   // a wheel, a touch or a key ends the settling at once.
   const pinned = useRef(true);
   /** Where the scroller stood when the reader was last measured at the foot (wave 175): a reader who leaves it moved up from
-   *  here. Written by virtuoso's at-the-foot report and by a scroll event that lands within the pill's band of the foot,
-   *  never by one above it: this list's scroll listener runs before virtuoso reports the reader left, so writing it on
+   *  here; null until first measured. Written by virtuoso's at-the-foot report, by a height report that finds the reader at
+   *  the foot of the list before it, and by a scroll event that lands within the pill's band of the foot, never by one above it: this list's scroll listener runs before virtuoso reports the reader left, so writing it on
    *  every scroll moved it to where the reader went (measured: a reader scrolled up was then taken back by a view shrink). */
-  const footTop = useRef(0);
+  const footTop = useRef<number | null>(null);
   /** Take the reader to the foot: the one writer of "stay at the foot" (`footFollow.ts#footLeft`). */
   const toFoot = useCallback((): void => { virtuoso.current?.scrollToIndex({ index: 'LAST', align: 'end' }); }, []);
   const onAtBottom = useCallback((bottom: boolean): void => {
@@ -876,10 +876,10 @@ function ChatScroller({
     if (bottom) {
       if (el !== null) footTop.current = el.scrollTop;
     } else if (pinned.current) {
-      // With no scroller to measure, nothing says the reader did not move: virtuoso's word stands.
+      // With no scroller to measure, or no foot measured yet, nothing says the reader did not move: virtuoso's word stands.
       const left = footLeft({
         settling: column.settling(),
-        movedUp: el === null || el.scrollTop < footTop.current - 1,
+        movedUp: el === null || footTop.current === null || el.scrollTop < footTop.current - 1,
         sinceTap: lastTap.current === null ? null : performance.now() - lastTap.current,
       });
       if (left === 'foot') { toFoot(); return; }
@@ -1089,6 +1089,8 @@ function ChatScroller({
     if (adjusting.current) { adjusted.current += 1; return; }
     const at = performance.now();
     const from = el.scrollTop;
+    // Where the foot stands, measured as `heightMove` measures it: against the list before this change.
+    if (pinned.current && before !== null && before - el.scrollTop - el.clientHeight <= (band ?? 0) + 1) footTop.current = el.scrollTop;
     const move = heightMove({
       pinned: pinned.current, before, scrollTop: el.scrollTop, clientHeight: el.clientHeight, band: band ?? 0,
       sinceTap: lastTap.current === null ? null : at - lastTap.current,
