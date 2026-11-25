@@ -531,8 +531,11 @@ describe.each(SETS)('%s draws one collapsed row per stretch', (_name, set) => {
     seen.scroller.scrollTop = 1200;
     changed(5120);
     expect(seen.scrolls, 'a reader who jumped up was pulled back to the foot').toHaveLength(1);
-    // Back at the foot, then scrolled up: once the list says so, a height change never moves them.
+    // Back at the foot, then scrolled up: once the list says so, a height change never moves them. (Desktop polish wave
+    // 175: the list measures that the reader moved up from where the foot stood, so the scroller moves as a reader's does.)
     seen.scroller.scrollTop = 4520;
+    act(() => { (seen.props!.atBottomStateChange as (b: boolean) => void)(true); });
+    seen.scroller.scrollTop = 4000;
     fireEvent.wheel(within(container).getByTestId('virtuoso'));
     act(() => { (seen.props!.atBottomStateChange as (b: boolean) => void)(false); });
     changed(5400);
