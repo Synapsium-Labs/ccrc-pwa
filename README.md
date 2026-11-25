@@ -2585,12 +2585,25 @@ window less `min(max_tokens, 20000)` less 13,000, measured on Claude Code 2.1.30
 every 15 seconds, and the upstream idle bound is 300 seconds, as in Codex. A context overflow is answered as Claude
 Code's own `prompt is too long: N tokens > M maximum`, so it compacts; N is the bridge's estimate, because the backend's
 overflow message carries no counts. A usage limit is a 429 `billing_error` and a policy refusal a 400 `policy_blocked`,
-each with `x-should-retry: false`. Retries are Claude Code's: the bridge never retries an upstream request, except once
-after it refreshed a token the upstream answered 401, and once without the request markers' additions after a 400
-(below; a reply the upstream marks unfinished is continued inside the same message, at most three times).
+each with `x-should-retry: false`. Retries are Claude Code's, except three: the bridge sends an upstream request again
+once after it refreshed a token the upstream answered 401, once without the request markers' additions after a 400
+(below), and, for a short provider failure, as the next paragraph says (a reply the upstream marks unfinished is
+continued inside the same message, at most three times).
 `count_tokens` is answered locally, from an estimate seeded at 3.5 bytes per token and
 calibrated on the lane's own replies, for any model. A `/v1/messages` request for a model the lane's catalogue does not
 list is answered 404 locally and never sent upstream.
+**A short provider failure is absorbed** (D-9078). The lane's launcher gives Claude Code two retries, because a
+retry of a request that timed out costs 870 seconds, so without this a provider overloaded for a few seconds ended the
+turn. While nothing of the message has reached Claude Code, the bridge tries again itself when the upstream answered
+overloaded (529) or unavailable (503), or could not be reached: after about 1 second, then doubling to 20, each wait
+spread by a quarter, until 120 seconds after the message's first attempt. An upstream `retry-after` is waited out when it
+fits in that time; one that does not, and any attempt that itself took 30 seconds or more, is answered at once, so a slow
+request is never sent again. Rate limits, plan limits, policy refusals, overflows, ineligible plans, refused tokens and
+every other 4xx are answered at once as before, and so is a response that reached its end. When the time is spent, the
+client gets the error it always got. The wait ends as soon as the client closes or the bridge is stopped. Only a request
+carrying Claude Code's beta is held, so another caller of the lane (the models canary) keeps its own deadline. An absorbed
+failure is no `5xx` outcome and is not written to the credential's status file; the stats file's `parity` row counts it in
+`absorbed`, by `overloaded`, `unavailable` and `transport`.
 The credential's refresher is the bridge: it checks every minute and refreshes at about half the token's lifetime,
 through the library's lock.
 
@@ -2697,8 +2710,8 @@ started), `session` (the session id when it has the shape of one, at most 128 ch
 for a subagent's request, never its id), `message` and `post` (the client message's number in this process, and the
 request's index within it: continuations and retries count on), `route` and `model` (the `parity` row's), `status`
 (null when no answer came), `outcome` (the word the stats file counts for what the bridge did with the answer: `2xx`,
-`continuations`, `continuation-cap`, `refresh-after-401`, `4xx`, `5xx`, `client-gone`, `drain-cut`, or `fallback` for the
-400 that started a fallback), `served`, `servedTier` (the `parity` row's word for the tier the response named, or
+`continuations`, `continuation-cap`, `refresh-after-401`, `4xx`, `5xx`, `client-gone`, `drain-cut`, `fallback` for the
+400 that started a fallback, or `absorbed` for a failure the bridge tried again), `served`, `servedTier` (the `parity` row's word for the tier the response named, or
 `absent`), `effort`, the four token counts, `firstOutputMs`, `reasoningMs` (null when no reasoning item finished before
 the first output) and `totalMs` (whole milliseconds, from the same instants the `parity` histograms bucket), `inputTransformations`, `replay` (the message's
 reasoning-store lookups, on its first request only), `markers`, `fallback` and, when set, `turnState`. A field the
