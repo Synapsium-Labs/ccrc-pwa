@@ -42,7 +42,7 @@
  *     `refuseOversizedClaim`, not the table.
  */
 import type { ClaimRefusal } from './box-token.js';
-import type { AccountAuthRefusal, AccountGateRefusal, AccountRouteRefusal, AccountWriteRefusal, ApprovalRefusal, TestboxAdminRouteRefusal, ArchiveRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, QuestionDoorRefusal, RunRefuseCode, RunRouteRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
+import type { AccountAuthRefusal, AccountGateRefusal, AccountRouteRefusal, AccountWriteRefusal, ApprovalRefusal, TestboxAdminRouteRefusal, ArchiveRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, QuestionDoorRefusal, ReclaimRefuseCode, RunRefuseCode, RunRouteRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
 import { ARCHIVE_REFUSALS, LEASE_DOOR_REFUSALS, SWAP_REFUSALS, type LeaseDoorRefusal } from './api.js';
 import type { LinkingRefusal } from './linking.js';
 import { DELEGATION_ADOPT_REFUSALS, type DelegationAdoptRefusal } from './delegation-adopt.js';
@@ -715,6 +715,11 @@ export const RUN_REFUSAL_STATUS: Readonly<Record<OpenRunConflict, number>> = {
   // Programme lifecycle W1 (D-8983, D-8993): chosen, not measured — the family's 409.
   'programme-paused': 409, 'programme-unknown': 409, 'programme-provisional': 409, 'owns-another-programme': 409,
   'not-your-programme': 409,
+};
+
+/** The reclaim ladder's own words (`ReclaimRefuseCode`) at the one status the reclaim door sends them with (programme lifecycle W2). */
+export const RECLAIM_REFUSAL_STATUS: Readonly<Record<ReclaimRefuseCode, 409>> = {
+  'claimant-alive': 409, 'no-claimant': 409, 'heir-is-a-worker': 409,
 };
 
 /** The `reject.code` words `POST /api/runs/:id/advance` answers (D-6733, audit ticket ARCH-33,

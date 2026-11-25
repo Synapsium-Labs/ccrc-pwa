@@ -8,7 +8,7 @@
 // `unmeasured` with `flag-off`; the start takes the account gate; resume, end, reopen, repair, the hand-over and the
 // confirm take its step-up, so they refuse while sign-in is dark.
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import { refuseRoute } from '../refuse.js';
+import { refuseReclaim, refuseRoute, refuseRun } from '../refuse.js';
 import { END_REQUEST_REFUSALS } from '../../../shared/refusal.js';
 import type { AccountGate } from '../accounts/gate.js';
 import type { GateDecision } from '../auth/gate.js';
@@ -82,12 +82,19 @@ function sendReclaimRefusal(reply: FastifyReply, r: Extract<ReclaimOutcome, { ok
   switch (r.kind) {
     case 'owns-another-programme': return refuseRoute(reply, 'owns-another-programme', { by: r.by, detail: `it owns ${r.by}: one coordinator owns one programme` });
     case 'unknown-programme': return refuseRoute(reply, 'unknown-programme');
-    case 'unknown-session': return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    case 'registry-unmeasurable': return reply.code(502).send({ ok: false, error: 'registry-unmeasurable', detail: r.detail });
-    case 'run-unreadable': return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: r.detail });
-    case 'unknown-run': return reply.code(404).send({ ok: false, error: 'unknown-run' });
-    default:
-      return reply.code(409).send({ ok: false, refused: r.kind, ...('by' in r ? { by: r.by } : {}), ...('detail' in r ? { detail: r.detail } : {}) });
+    case 'unknown-session': case 'unknown-run': return refuseRoute(reply, r.kind);
+    case 'registry-unmeasurable': case 'run-unreadable': return refuseRoute(reply, r.kind, { detail: r.detail });
+    // Overlord W1 other lanes (C48): the Overlord's body is never an heir, or that could not be ruled out. The reclaim door's statuses.
+    case 'overlord-not-a-coordinator': case 'unmeasured': return refuseRoute(reply, r.kind, { detail: r.detail });
+    case 'bad-session': return refuseRoute(reply, r.which === 'claimant' ? 'bad-session' : 'bad-session-id', { detail: r.detail });
+    case 'project-mismatch': return refuseRun(reply, 'project-mismatch', { ...(r.by === undefined ? {} : { by: r.by }), ...(r.detail === undefined ? {} : { detail: r.detail }) });
+    case 'no-claimant': return refuseReclaim(reply, r.kind);
+    case 'claimant-alive': return refuseReclaim(reply, r.kind, { by: r.by, detail: r.detail });
+    case 'heir-is-a-worker': return refuseReclaim(reply, r.kind, { by: r.by });
+    default: {
+      const _exhaustive: never = r;
+      return _exhaustive;
+    }
   }
 }
 
@@ -344,7 +351,7 @@ export function programmeDoors(deps: ProgrammeDoorDeps) {
     if (ports === undefined) return refuseRoute(reply, 'not-configured');
     const reading = await ports.readingOf(id);
     if (reading.kind === 'unreadable' || (reading.kind === 'present' && reading.uuid === null)) {
-      return reply.code(502).send({ ok: false, error: 'registry-unmeasurable', detail: `the registry row of ${id} could not be read` });
+      return refuseRoute(reply, 'registry-unmeasurable', { detail: `the registry row of ${id} could not be read` });
     }
     const uuid = reading.kind === 'present' ? reading.uuid : null;
     const own = coord.programmeOf(id, uuid);

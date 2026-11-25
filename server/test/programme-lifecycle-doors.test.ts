@@ -8,6 +8,9 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { programmeDoors, programmesWithLifecycle, raiseEndProposal } from '../src/coord/programmeLifecycleRoutes.js';
 import { coordinatorReadingOf } from '../src/coord/programmeCoordinatorReading.js';
+import { gateActorOf } from '../src/accounts/audit.js';
+import { attributionIdentity } from '../src/auth/attributionIdentity.js';
+import { designatePending } from '../src/coord/overlordDesignationStore.js';
 import { otherLaneReadsOf } from '../src/coord/otherLaneReads.js';
 import { attributionVerdict } from '../src/coord/attribution.js';
 import * as lifecycle from '../src/coord/programmeLifecycleStore.js';
@@ -20,6 +23,9 @@ import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
 let app: FastifyInstance | null = null;
 afterEach(async () => { await app?.close(); app = null; removeTmpFixtures(); });
+
+const OPERATOR = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) })
+  .operator(gateActorOf('operator-a', '0123456789abcdef'));
 
 interface Rig {
   app: FastifyInstance; coord: CoordStore; home: string;
@@ -224,6 +230,18 @@ describe('POST /api/programmes/:slug/coordinator: the hand-over (spec §3 ladder
     expect(m.find((x) => x.toId === 'lane-a')!.body).toMatch(/prog-a was handed to lane-b: its runs are no longer yours/);
     expect(m.find((x) => x.toId === 'lane-b')!.subject).toBe('You are now the coordinator of prog-a');
     expect(r.coord.claimsProgramme('lane-a', 'prog-a', 'u-lane-a')).toBe(false);
+  });
+
+  it('the Overlord\'s body is never a coordinator: the start and the hand-over answer 403 as the reclaim door does, and nothing moves', async () => {
+    const r = await rig();
+    expect(designatePending(r.coord.db, { appendInTx: () => ({ ok: true, kind: 'appended', record: {} }) } as never, { sessionId: 'lane-b', deadlineAt: Date.now() + 60_000, model: 'opus',
+      accountPools: { pools: ['pool-a'], untagged: false }, actor: OPERATOR, at: Date.now(), opKey: 'op-1' }).ok).toBe(true);
+    const hand = await post(r, '/api/programmes/prog-a/coordinator', { session: 'lane-b', why: 'x' });
+    expect([hand.statusCode, hand.json().error]).toEqual([403, 'overlord-not-a-coordinator']);
+    const start = await post(r, '/api/programmes', { slug: 'prog-new', why: 'x', coordinator: 'lane-b' });
+    expect([start.statusCode, start.json().error]).toEqual([403, 'overlord-not-a-coordinator']);
+    expect(row(r, 'prog-a').coordinator).toBe('lane-a');
+    expect(r.coord.programmeLifecycleRow('prog-new')).toBeNull();
   });
 
   it('refuses an heir that owns another live programme, and nothing moves', async () => {
