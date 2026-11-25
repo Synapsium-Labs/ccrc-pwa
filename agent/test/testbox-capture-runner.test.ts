@@ -3,7 +3,7 @@
 // run under Node's type-stripping flag (no compile step). The tests' launcher pipes the build's stdin; the tmux launcher
 // is run once, on a test-only socket, when a `tmux` binary is on PATH.
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -12,6 +12,7 @@ import { recorderPath } from '../src/testbox/captureRecord.js';
 import { CAPTURE_SHELL, CAPTURE_START, CaptureRunner, capturePaneCommand, executableFile, groupLife, tmuxLauncher, type BuildLife, type CaptureLauncher, type CaptureRunnerDeps } from '../src/testbox/captureRunner.js';
 import { startStandIn } from '../src/testbox/captureStub.js';
 import { boundedExec } from '../src/testbox/exec.js';
+import { tmuxTarget } from '../../shared/tmux-target.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const FIXTURE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'fake-claude-build.mjs');
@@ -214,6 +215,86 @@ const REAL_TMUX = ['/usr/bin/tmux', '/usr/local/bin/tmux', '/bin/tmux', '/opt/ho
   .find((f) => existsSync(f) && spawnSync(f, ['-V'], { encoding: 'utf8', timeout: 10_000, env: {} }).status === 0) ?? null;
 const hasTmux = REAL_TMUX !== null;
 
+/** What tmux's report of how a pane was started (`#{pane_start_command}`) says about the shell (review 3765 F3). tmux runs a
+ *  command of two or more words directly, with no shell (its manual), and a command of one word through the pane's default
+ *  shell; its report prints each word, quoting one that holds a space. So the report of exactly the start program and the
+ *  build's path, as two words, is `no-shell`; one bare word, or one quoted word, is `through-a-shell`; anything else, an
+ *  empty report or none, is `cannot-tell`, never a pass. */
+type PaneStart = 'no-shell' | 'through-a-shell' | 'cannot-tell';
+function paneStartReading(report: string | null, start: string, binary: string): PaneStart {
+  if (report === null || report.trim() === '') return 'cannot-tell';
+  if (report === `${start} ${binary}`) return 'no-shell';
+  if (/^"(?:[^"\\]|\\.)*"$/.test(report) || !/\s/.test(report)) return 'through-a-shell';
+  return 'cannot-tell';
+}
+
+/** One read of a process: the file its image runs and its environment's entries; null when it cannot be read. */
+type ProcRead = () => { readonly exe: string; readonly vars: readonly string[] } | null;
+/** The process's environment once its image is no longer `tmuxExe` (the pane's exec has happened) and it lists at least one
+ *  variable, asked every `stepMs` until `boundMs` has passed; past the bound, a failure that says what was last seen
+ *  (review 3765 F4). The clock and the sleep are the caller's, so a unit case runs it without waiting. */
+async function environOnceExecuted(read: ProcRead, tmuxExe: string, o: { boundMs?: number; stepMs?: number; now?: () => number; sleep?: (ms: number) => Promise<void> } = {}): Promise<{ readonly vars: readonly string[] } | { readonly unread: string }> {
+  const now = o.now ?? Date.now;
+  const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => { setTimeout(r, ms); }));
+  const bound = o.boundMs ?? 10_000;
+  const until = now() + bound;
+  let last = 'nothing readable';
+  for (;;) {
+    const r = read();
+    if (r !== null && r.exe !== tmuxExe && r.vars.length > 0) return { vars: r.vars };
+    if (r !== null) last = r.exe === tmuxExe ? 'still the multiplexer\'s own image' : 'an empty environment';
+    if (now() >= until) return { unread: `the pane did not become the build within ${bound} ms (last seen: ${last})` };
+    await sleep(o.stepMs ?? 20);
+  }
+}
+
+/** A process's image and environment from `/proc`, or null while it cannot be read. */
+const procOf = (pid: number): ProcRead => () => {
+  try {
+    return {
+      exe: readlinkSync(path.join('/proc', String(pid), 'exe')),
+      vars: readFileSync(path.join('/proc', String(pid), 'environ'), 'utf8').split('\0').filter((l) => l !== ''),
+    };
+  } catch { return null; }
+};
+
+// The two helpers the real-tmux case below feeds (review 3765 F3, F4), measured here without tmux. The three reports are the
+// shapes tmux 3.6 printed for a pane started from two words, from one word, and from the two joined into one word
+// (measured on a private server; the measured path is replaced by a neutral one here).
+describe('reading how a pane was started, and waiting for the pane to become the build', () => {
+  const START = '/usr/bin/env';
+  const BIN = '/srv/box/captures/builds/2.1.100';
+  it('two plain words, the start program then the build, read as no shell', () => {
+    expect(paneStartReading(`${START} ${BIN}`, START, BIN)).toBe('no-shell');
+  });
+  it('one word, bare or quoted, reads as through a shell', () => {
+    expect(paneStartReading(BIN, START, BIN)).toBe('through-a-shell');
+    expect(paneStartReading(`"${START} ${BIN}"`, START, BIN)).toBe('through-a-shell');
+  });
+  it('an empty, blank or missing report, or another command, cannot tell, and is never no-shell', () => {
+    for (const r of ['', '  ', null, `${START} /other/2.1.100`, `/bin/sh -c ${BIN}`]) expect(paneStartReading(r, START, BIN), String(r)).toBe('cannot-tell');
+  });
+
+  const clock = () => {
+    const c = { t: 0, sleeps: 0 };
+    // Each sleep yields to the event loop, so a wait that never ends meets the case's own timeout instead of starving it.
+    return { c, now: () => c.t, sleep: async (ms: number) => { c.t += ms; c.sleeps++; await new Promise((r) => { setImmediate(r); }); } };
+  };
+  it('reads past the multiplexer\'s own image and an empty environment to the build\'s', async () => {
+    const seq = [null, { exe: '/usr/bin/tmux', vars: ['SHELL=/x'] }, { exe: '/usr/bin/env', vars: [] }, { exe: '/usr/bin/node', vars: ['SHELL=/bin/bash'] }];
+    let i = 0;
+    const { now, sleep } = clock();
+    expect(await environOnceExecuted(() => seq[Math.min(i++, seq.length - 1)]!, '/usr/bin/tmux', { now, sleep })).toEqual({ vars: ['SHELL=/bin/bash'] });
+    expect(i).toBe(4);
+  });
+  it('a pane that never becomes the build ends at the bound with a failure that says so, without hanging', async () => {
+    const { c, now, sleep } = clock();
+    const r = await environOnceExecuted(() => ({ exe: '/usr/bin/tmux', vars: ['A=1'] }), '/usr/bin/tmux', { now, sleep, boundMs: 1000, stepMs: 20 });
+    expect(r).toEqual({ unread: 'the pane did not become the build within 1000 ms (last seen: still the multiplexer\'s own image)' });
+    expect([c.t, c.sleeps]).toEqual([1000, 50]);
+  }, 5000);
+});
+
 describe('the tmux launcher', () => {
   it.skipIf(!hasTmux)('runs the good build in its own tmux server on a test-only socket, and the capture passes', async (ctx) => {
     // A unix socket's path is bounded (about 107 bytes), so the tmux server's directory is a SHORT one from the shared temp
@@ -236,11 +317,13 @@ describe('the tmux launcher', () => {
     }
   }, 120_000);
 
-  // Review 3687 F1: on the test box the service user's shell refuses logins, and tmux takes a pane's default shell from
-  // `SHELL` or else from that user's entry, so a command of one word, run through that shell, ends at once. The case gives
-  // the capture's tmux server such a shell (a fixture that prints a refusal and exits 1, which the case first shows ends a
-  // one-word pane) and holds that the build still starts and the capture passes.
-  it.skipIf(!hasTmux)('starts the build and passes when the pane\'s default shell refuses logins', async (ctx) => {
+  // Review 3687 F1, review 3765 F3: on the test box the service user's shell refuses logins, and the caller's `SHELL` is
+  // such a shell here (a fixture that prints a refusal and exits 1, which the case first shows ends a one-word pane). The
+  // launcher sets the capture server's default shell to the fixed one, so a one-word pane would now run and pass too: what
+  // tells the cure apart is how tmux reports the pane was started. tmux runs a command of two or more words directly, with
+  // no shell (its manual), so the case holds that tmux reports exactly the two words, the fixed start program and the
+  // build's path, and that the pane was given the fixed shell as `SHELL`; and that the build starts and the capture passes.
+  it.skipIf(!hasTmux)('starts the build from two words tmux runs with no shell, under the fixed shell, when the caller\'s shell refuses logins', async (ctx) => {
     const root = freshRoot();
     const sockDir = mkTmp('tx-');
     const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
@@ -268,11 +351,19 @@ describe('the tmux launcher', () => {
       },
     });
     let paneShell: string | null = null;
+    let paneStart: PaneStart | null = null;
     const refusing: CaptureLauncher = {
       start: async (spec) => {
         const b = await real.start({ ...spec, env: [...spec.env, ['SHELL', refuser]] });
-        const environ = panePid === null ? null : path.join('/proc', String(panePid), 'environ');
-        if (environ !== null && existsSync(environ)) paneShell = readFileSync(environ, 'utf8').split('\0').find((l) => l.startsWith('SHELL='))?.slice(6) ?? 'unset';
+        // How tmux reports the pane was started, asked of the capture's own server.
+        const shown = spawnSync(REAL_TMUX!, ['-L', spec.socket, 'display-message', '-p', '-t', tmuxTarget(spec.session), '#{pane_start_command}'],
+          { timeout: 10_000, env: Object.fromEntries(spec.env), encoding: 'utf8' });
+        paneStart = paneStartReading(shown.status === 0 ? shown.stdout.replace(/\n$/, '') : null, CAPTURE_START, spec.binary);
+        // Review 3765 F4: the pane's environment is read once the pane has become the build, never before its exec.
+        if (panePid !== null && existsSync('/proc/self/environ')) {
+          const seen = await environOnceExecuted(procOf(panePid), realpathSync(REAL_TMUX!));
+          paneShell = 'unread' in seen ? seen.unread : seen.vars.find((l) => l.startsWith('SHELL='))?.slice(6) ?? 'unset';
+        }
         return b;
       },
     };
@@ -281,6 +372,8 @@ describe('the tmux launcher', () => {
       const r = await runner(root, { launcher: refusing, tmuxBase: sockDir, stepTimeoutMs: 15_000, exitTimeoutMs: 10_000 }).run('nol', GOOD);
       expect(r.detail).toBeNull();
       expect(r.result).toMatchObject({ pass: true, cwd: true });
+      // tmux reports the pane started from exactly two words, the fixed start program then the build's path: no shell.
+      expect(paneStart, 'how tmux reports the pane was started').toBe('no-shell');
       // Where the kernel lists a process's environment, the pane was given the fixed shell, not the refusing one.
       if (existsSync('/proc/self/environ')) expect(paneShell, 'the pane\'s SHELL').toBe(CAPTURE_SHELL);
     } finally {
@@ -459,8 +552,10 @@ describe('the sweep of stale capture directories (review 3226 F10)', () => {
 });
 
 // Review 3623 and review 3226's F11 nits: the launcher reads the build's life from the build's own process group, never
-// from its terminal server; the build's path is one quoted shell word; and the capture's tmux directory is the runner's own,
-// under the service's temporary directory. A fake spawner stands in for tmux and a fake signal call for the kernel.
+// from its terminal server; the build's path is a word of its own after the fixed start program, never read by a shell
+// (review 3687 F1), and a path tmux could read as anything else is refused (review 3765 F5); and the capture's tmux
+// directory is the runner's own, under the service's temporary directory. A fake spawner stands in for tmux and a fake
+// signal call for the kernel.
 describe('the tmux launcher reads the build, not its terminal server (review 3623)', () => {
   interface Seen { readonly calls: string[][]; readonly signals: [number, NodeJS.Signals | 0][] }
   const fake = (o: { pidOut?: string; newSession?: number; signal?: (pid: number, sig: NodeJS.Signals | 0) => void; shellUsable?: (f: string) => boolean } = {}) => {
@@ -477,7 +572,7 @@ describe('the tmux launcher reads the build, not its terminal server (review 362
     });
     return { launcher, seen, asked };
   };
-  const SPEC = { binary: "/srv/box/captures/builds/it's 2.1.100", cwd: '/w', env: [['PATH', '/usr/bin']] as const, socket: 'ccrc-capture', session: 'capture' };
+  const SPEC = { binary: '/var/lib/ccrc_test-box/captures/builds/2.1.100', cwd: '/w', env: [['PATH', '/usr/bin']] as const, socket: 'ccrc-capture', session: 'capture' };
 
   it('starts the build with no shell: the fixed start program, then the build\'s path as a word of its own (review 3687 F1), and asks tmux to print the pane\'s process', async () => {
     const { launcher, seen } = fake();
@@ -516,18 +611,46 @@ describe('the tmux launcher reads the build, not its terminal server (review 362
 
   // The coordinator's requirement with the cure (call 1003): a pane can never start the fixed program alone, which would print
   // the pane's whole environment into what the capture records. The one builder of the pane's command refuses, before any
-  // tmux call, every path that could leave it alone or read as something else.
+  // tmux call, a path that could leave it alone, and any path holding a character outside the plain set (letters, digits,
+  // `.`, `_`, `/`, `-`), so tmux can read none as other than the one path (review 3765 F5).
   it.each([
     ['an empty path', ''],
     ['a missing path', undefined],
     ['a path of spaces only', '   '],
     ['a relative path', 'builds/2.1.100'],
     ['a path holding an =', '/srv/a=b/captures/builds/2.1.100'],
+    ['a path ending in a semicolon', '/srv/box/captures/builds/2.1.100;'],
+    ['a path ending in a backslash and a semicolon', '/srv/box/captures/builds/2.1.100\\;'],
+    ['a path holding a semicolon', '/srv/a;b/captures/builds/2.1.100'],
+    ['a path holding a space', '/srv/a b/captures/builds/2.1.100'],
+    ['a path holding a quote', "/srv/it's/captures/builds/2.1.100"],
+    ['a path holding a line break', '/srv/a\nb/captures/builds/2.1.100'],
+    ['a path holding a dollar sign', '/srv/$HOME/captures/builds/2.1.100'],
+    ['a path holding a tilde', '/srv/~a/captures/builds/2.1.100'],
+    ['a path holding a non-ASCII letter', '/srv/\u00e9/captures/builds/2.1.100'],
   ])('refuses %s before any tmux call', async (_n, binary) => {
     const { launcher, seen } = fake();
     await expect(launcher.start({ ...SPEC, binary: binary as string })).rejects.toThrow(/cannot be started without a shell/);
     expect(seen.calls).toEqual([]);
     expect(() => capturePaneCommand(binary)).toThrow(/cannot be started without a shell/);
+  });
+
+  it('accepts every path in the plain set, so every root the fleet\'s copy accepts still reaches its builds', () => {
+    for (const b of ['/var/lib/ccrc-testbox/captures/builds/2.1.100', '/srv/T_b.x-1/captures/builds/0.0.0']) {
+      expect(capturePaneCommand(b)).toEqual([CAPTURE_START, b]);
+    }
+  });
+
+  // Review 3765 F5: a refused path is a fault of the box with no verdict, like the builder's other refusals, and no tmux call.
+  it('a capture whose build\'s path is refused ends with no verdict, a fault of the box, and no tmux call', async () => {
+    const root = path.join(freshRoot(), 'a b');
+    mkdirSync(root);
+    place(root, GOOD);
+    const { launcher, seen } = fake();
+    const r = await runner(root, { launcher }).run('spaced', GOOD);
+    expect(r.result).toBeNull();
+    expect(r.detail).toMatch(/^the capture could not start: .*cannot be started without a shell/);
+    expect(seen.calls).toEqual([]);
   });
 
   it('reads life from the printed process\'s GROUP with signal 0: present is alive, gone is gone', async () => {

@@ -3,8 +3,8 @@
 // both themes. `test/add-project-sheet.test.tsx` holds the behaviour in jsdom; this file holds what only an engine can say: no
 // sideways scroll on the page or in the sheet, no clipped text, no select showing only part of its value. An older server's 404 on
 // `GET /api/hierarchy` means "absent": the sheet then draws no owner select, no toggle and no failure sentence.
-// The helpers below (`measure`'s select check and boxes) are copied, trimmed, from `project-linking-card.browser.test.ts`, which
-// keeps them inside its file. Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config
+// The helpers below (`measure`'s select check and boxes) are copied, trimmed, from `projectLinkingCardRig.ts`, which the two
+// linking-card files share. Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config
 // vitest.browser.config.ts browser/add-project-sheet.browser.test.ts )`. `CCRC_SHOTS=<a directory>` keeps one picture per view.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import path from 'node:path';

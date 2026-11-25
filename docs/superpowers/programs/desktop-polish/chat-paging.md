@@ -161,6 +161,7 @@ nine end words: `more` (with the next continuation), `start` (offset 0 measured)
 - A stream whose backlog could not measure the file answers that word (`absent`, `unreadable`, `unmeasured`) with no I/O.
 - Pages are display only: no helper facts, pending question, approval state, notification or status. The forward
   offset, `since` handling and the tailer are untouched by a page.
+- Wave 175 (`chat-history-screen.md` §2): every answer echoes the continuation it answers (`for`, only a value of a continuation's length and grammar), so a request that crossed a new backlog on the wire is never applied; the reply's bound in §5 grows by that one continuation.
 
 ## 7. Not offered, and why
 

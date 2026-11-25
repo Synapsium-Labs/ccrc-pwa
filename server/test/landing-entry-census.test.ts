@@ -176,9 +176,17 @@ describe('the landing line has one writer (landing order wave 5e, D-7614)', () =
     const all = allWrites(/^landing_entries$/);
     expect(all.length).toBeGreaterThanOrEqual(4);
     const outside = all.filter((q) => !inWriter(q));
-    expect(outside.map((q) => `${q.verb}:${inSymbol(AUTHORITY)(q)}`)).toEqual(['INSERT:true']);
+    // walked in sorted path order: `landingDoorsTx.ts` sorts before `store.ts`
+    expect(outside.map((q) => `${q.verb}:${inSymbol(AUTHORITY)(q)}`)).toEqual(['UPDATE:false', 'INSERT:true']);
     // the exception creates a no-run projection only: a NULL runId, state 'pinned', and nothing else
-    expect(outside[0]!.source.replace(/\s+/g, ' ')).toMatch(/VALUES \(\?, \?, \?, \?, \?, NULL, 'pinned', \?, \?\)/);
+    const creation = outside.filter((q) => q.verb === 'INSERT');
+    expect(creation).toHaveLength(1);
+    expect(creation[0]!.source.replace(/\s+/g, ' ')).toMatch(/VALUES \(\?, \?, \?, \?, \?, NULL, 'pinned', \?, \?\)/);
+    // wave 5j-a (D-9046): the operator's withdrawal, the one other writer, in `landingDoorsTx.ts#applyLandingDoorRecordTx`
+    const withdraw = outside.filter((q) => q.verb === 'UPDATE');
+    expect(withdraw.map((q) => path.basename(q.file))).toEqual(['landingDoorsTx.ts']);
+    expect(withdraw[0]!.source.replace(/\s+/g, ' ')).toMatch(
+      /UPDATE landing_entries SET state = 'withdrawn', quarantineKind = NULL, detail = \? WHERE id = \? AND project = \? AND pr = \? AND state NOT IN \(\$\{TERMINAL_SQL\}\)/);
   });
 
   it('every write of landing_intents is an INSERT inside holdLandingIntent, the one writer (5g; D-6096: dispatchRun and bindInPlace both call it)', () => {
@@ -188,11 +196,15 @@ describe('the landing line has one writer (landing order wave 5e, D-7614)', () =
     expect(all.map((q) => q.verb)).toEqual(['INSERT']);
   });
 
-  it('quarantineKind has one writer, advanceLanding: the quarantine UPDATE marks it and the verified re-pin clears it (5f Task 3)', () => {
+  it('quarantineKind has one marking writer, advanceLanding: the quarantine UPDATE marks it, the verified re-pin clears it, and the operator\'s withdrawal only clears it (5f Task 3, 5j-a)', () => {
     const marks = writes(/\bquarantineKind\b/i);
-    expect(marks.map((q) => q.verb), 'the quarantine UPDATE and the re-pin UPDATE').toEqual(['UPDATE', 'UPDATE']);
-    expect(marks.filter((q) => !inWriter(q)).map((q) => `${q.file}:${q.text}`)).toEqual([]);
-    const flat = marks.map((q) => q.source.replace(/\s+/g, ' '));
+    expect(marks.map((q) => q.verb), 'the withdrawal UPDATE, the quarantine UPDATE and the re-pin UPDATE').toEqual(['UPDATE', 'UPDATE', 'UPDATE']);
+    // wave 5j-a (D-9046): the one other writer is the withdraw statement, which only clears the marker
+    const outside = marks.filter((q) => !inWriter(q));
+    expect(outside.map((q) => path.basename(q.file))).toEqual(['landingDoorsTx.ts']);
+    expect(outside[0]!.source.replace(/\s+/g, ' ')).toMatch(/SET state = 'withdrawn', quarantineKind = NULL,/);
+    expect(outside[0]!.source).not.toMatch(/stale-episode-head/);
+    const flat = marks.filter(inWriter).map((q) => q.source.replace(/\s+/g, ' '));
     expect(flat.filter((t) => /quarantineKind = 'stale-episode-head'/.test(t))).toHaveLength(1);
     expect(flat.filter((t) => /quarantineKind = NULL/.test(t))).toHaveLength(1);
     // the decision is made in the pure decider and acted on inside the one writer: nothing else calls it
@@ -201,14 +213,22 @@ describe('the landing line has one writer (landing order wave 5e, D-7614)', () =
     expect(calls.every(inWriter)).toBe(true);
   });
 
-  it('advanceLanding owns pin, repin, ejection and quarantine on landing_entries and the one witness write; replay owns neither', () => {
+  it('advanceLanding owns pin, repin, ejection and quarantine on landing_entries and the one witness write; replay reaches only the withdrawal', () => {
     expect(allWrites(/^landing_entries$/).filter(inWriter).map((q) => q.verb).sort()).toEqual(['INSERT', 'UPDATE', 'UPDATE', 'UPDATE', 'UPDATE']);
     const witness = allWrites(/^landing_projection_witness$/);
     expect(witness.length).toBe(1);
     expect(witness.every(inWriter)).toBe(true);
-    // replay: no landing_entries write, no witness write, and it never calls the creation or the witness writer
+    // replay: no landing_entries write and no witness write of its own, and it never calls the creation or the witness
+    // writer. Wave 5j-a (D-9046): it reaches exactly one landing_entries statement, the operator's withdrawal, through
+    // applyLandingRecord and its companion, and the applier's own SQL writes neither table.
     const replaySql = FILES.flatMap((f) => sqlStatementsInFile(f)).filter((q) => !isSchema(q) && inSymbol(REPLAY)(q));
     expect(replaySql.filter((q) => ['INSERT', 'UPDATE', 'REPLACE', 'DELETE'].includes(q.verb) && /landing_(entries|projection_witness)/.test(q.source)).map((q) => q.text)).toEqual([]);
+    const applySql = FILES.flatMap((f) => sqlStatementsInFile(f)).filter((q) => !isSchema(q) && inSymbol(APPLY)(q));
+    expect(applySql.filter((q) => /landing_(entries|projection_witness)/.test(q.source)).map((q) => q.text)).toEqual([]);
+    expect(callsIn(symbolOf(STORE, APPLY)).map((c) => c.name)).toContain('applyLandingDoorRecordTx');
+    const doors = FILES.filter((f) => f.endsWith('/landingDoorsTx.ts')).flatMap((f) => sqlStatementsInFile(f))
+      .filter((q) => ['INSERT', 'UPDATE', 'REPLACE', 'DELETE'].includes(q.verb) && /landing_(entries|projection_witness)/.test(q.source));
+    expect(doors.map((q) => `${q.verb} ${q.table}`)).toEqual(['UPDATE landing_entries']);
     const replayCalls = callsIn(symbolOf(STORE, REPLAY)).map((c) => c.name);
     expect(replayCalls).toContain('applyLandingRecord');
     expect(replayCalls).not.toContain('advanceLanding');
@@ -276,11 +296,14 @@ describe('the landing line has one writer (landing order wave 5e, D-7614)', () =
     expect(names).not.toContain('advance');
   });
 
-  it('detail has two statements, both inside advanceLanding: the land UPDATE writes state and detail and nothing else, and the re-pin UPDATE clears it', () => {
+  it('detail has two statements inside advanceLanding, the land UPDATE writing state and detail and nothing else and the re-pin UPDATE clearing it, and one outside, the operator\'s withdrawal (5j-a)', () => {
     const marks = writes(/\bdetail\b/i).filter((q) => /^landing_entries$/.test(q.table ?? ''));
-    expect(marks.map((q) => q.verb)).toEqual(['UPDATE', 'UPDATE']);
-    expect(marks.filter((q) => !inWriter(q)).map((q) => `${q.file}:${q.text}`)).toEqual([]);
-    const flat = marks.map((q) => q.source.replace(/\s+/g, ' '));
+    expect(marks.map((q) => q.verb)).toEqual(['UPDATE', 'UPDATE', 'UPDATE']);
+    // wave 5j-a (D-9046): the one statement outside is the withdraw statement in landingDoorsTx.ts
+    const outside = marks.filter((q) => !inWriter(q));
+    expect(outside.map((q) => path.basename(q.file))).toEqual(['landingDoorsTx.ts']);
+    expect(outside[0]!.source.replace(/\s+/g, ' ')).toMatch(/SET state = 'withdrawn', quarantineKind = NULL, detail = \? WHERE/);
+    const flat = marks.filter(inWriter).map((q) => q.source.replace(/\s+/g, ' '));
     expect(flat.filter((t) => /SET state = \?, detail = \? WHERE id = \?/.test(t))).toHaveLength(1);
     expect(flat.filter((t) => /\bdetail = NULL\b/.test(t))).toHaveLength(1);
   });
@@ -437,8 +460,19 @@ describe('wave 5i ownership: one writer of mainRedHold, terminal repair inside a
     const flat = marks[0]!.source.replace(/\s+/g, ' ');
     expect(flat).toMatch(/ON CONFLICT\(project\) DO UPDATE SET mainRedHold = excluded\.mainRedHold['"`]?$/);
     expect(flat).not.toMatch(/operatorPaused/);
-    // and it is the only runtime write of the table at all: no second writer of either flag
-    expect(allWrites(/^landing_projects$/).map((q) => `${q.verb} ${path.basename(q.file)}`)).toEqual(['INSERT landingControlTx.ts']);
+    // and the table has two runtime writers, one per flag: this one, and since wave 5j-a the operator's pause statement
+    expect(allWrites(/^landing_projects$/).map((q) => `${q.verb} ${path.basename(q.file)}`)).toEqual(['INSERT landingControlTx.ts', 'INSERT landingDoorsTx.ts']);
+  });
+
+  it('operatorPaused is written by ONE statement, the pause UPSERT in landingDoorsTx.ts, which names no mainRedHold, called only by applyLandingRecord (5j-a, D-9046)', () => {
+    const marks = writes(/\boperatorPaused\b/i);
+    expect(marks.map((q) => `${q.verb} ${q.table} ${path.basename(q.file)}`)).toEqual(['INSERT landing_projects landingDoorsTx.ts']);
+    const flat = marks[0]!.source.replace(/\s+/g, ' ');
+    expect(flat).toMatch(/INSERT INTO landing_projects \(project, operatorPaused\) VALUES \(\?, \?\) ON CONFLICT\(project\) DO UPDATE SET operatorPaused = excluded\.operatorPaused['"`]?$/);
+    expect(flat).not.toMatch(/mainRedHold/);
+    const callers = FILES.flatMap((f) => parsedFile(f).calls.filter((c) => c.name === 'applyLandingDoorRecordTx').map((c) => ({ file: f, start: c.start })));
+    expect(callers).toHaveLength(1);
+    expect(callers.every(inSymbol(APPLY))).toBe(true);
   });
 
   it('the transaction body is called only by CoordStore.applyLandingControl, inside its tx', () => {

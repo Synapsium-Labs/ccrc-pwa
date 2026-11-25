@@ -8,7 +8,9 @@
 // Gate G1 (review 3316 F1, capture runner PR 3b): the desk and the runner the entry point composes, through the very function
 // that hands them the timing contract (`main.ts#captureDeskComposed`, review 3687 F2), with the real launcher, run on a
 // virtual clock with every tmux call at its bound and every wait at its limit, and each capture ends within
-// `captureWorstCaseMs`, the second of two within the fleet agent's deadline.
+// `captureWorstCaseMs`, the second of two within the fleet agent's deadline. The desk's late check is pinned from both sides
+// and the runner's poll is pinned (review 3765 F2), so a contract other than `CAPTURE_TIMINGS` at any of the three
+// hand-overs, stricter or looser, shows as a difference.
 import { describe, expect, it } from 'vitest';
 import { TESTBOX_CAPTURE_DEADLINE_MS, UPDATE_SPAWN_DRAIN_MS } from '../../shared/agent-protocol.js';
 import type { CaptureAnswer, CaptureSubmit } from '../../shared/claudeBuildCapture.js';
@@ -193,17 +195,24 @@ describe('gate G1: the composed desk and runner, the real launcher, on a virtual
    *  contract's shows up as a difference. */
   const atLimits = captureWorstCaseMs(t) - t.setupMs - t.removeMs - (CAPTURE_STEPS.length + 2) * t.pollMs;
 
+  /** The latest a queued capture may have waited and still start: the desk's late check on the contract (review 3765 F2). */
+  const lastStart = TESTBOX_CAPTURE_DEADLINE_MS - captureWorstCaseMs(t) - CAPTURE_DEADLINE_MARGIN_MS;
+
   /** The production desk and runner, the real launcher, a virtual clock. The build under drive raises each step's events
    *  only once the step has waited the contract's whole limit, and never those of steps from `stallAt` on; it never exits
-   *  and it outlives the stop wait. Each tmux call takes its whole bound plus the drain; the stand-in's close never ends. */
-  async function drive(o: { builds: readonly string[]; stallAt?: number }) {
+   *  and it outlives the stop wait. Each tmux call takes its whole bound plus the drain; the stand-in's close never ends.
+   *  `heldAfterFirst` moves the clock on as the first capture ends, before the desk looks at the next one. Every sleep the
+   *  runner asks for is recorded. */
+  async function drive(o: { builds: readonly string[]; stallAt?: number; heldAfterFirst?: number }) {
     const root = realpathSync(mkTmp('ccrc-capg1-'));
     mkdirSync(path.join(root, 'captures', 'builds'), { recursive: true });
     for (const b of o.builds) writeFileSync(path.join(root, 'captures', 'builds', b), 'bytes');
     const cfg = { root, lines: new Map([['A_BOX_LINE', { key: 'A_BOX_LINE', def: '', value: root, from: 'file' }]]) } as unknown as TestboxConfig;
     const clock = { now: 1_000_000 };
     let cur: { recording: string; step: number; began: number; written: number } | null = null;
+    const sleeps: number[] = [];
     const sleep = async (ms: number): Promise<void> => {
+      sleeps.push(ms);
       clock.now += ms;
       if (cur !== null && cur.written < cur.step + 1 && cur.step < (o.stallAt ?? CAPTURE_STEPS.length) && clock.now >= cur.began + t.stepMs) {
         for (const event of CAPTURE_STEPS[cur.step]!.waitFor) appendFileSync(cur.recording, `${JSON.stringify({ kind: 'hook', event, payload: {}, status: null })}\n`);
@@ -235,25 +244,49 @@ describe('gate G1: the composed desk and runner, the real launcher, on a virtual
     const at: number[] = [];
     const frames: CaptureAnswer[] = [];
     const t0 = clock.now;
-    const sink = { send: (f: CaptureAnswer): void => { if (f.state === 'ended') at.push(clock.now - t0); frames.push(f); } };
+    const sink = { send: (f: CaptureAnswer): void => {
+      if (f.state === 'ended') {
+        if (at.length === 0) clock.now += o.heldAfterFirst ?? 0;
+        at.push(clock.now - t0);
+      }
+      frames.push(f);
+    } };
     o.builds.forEach((b, n) => { desk.submit({ ...SUBMIT(n + 1), build: b }, sink); });
     await desk.settled();
-    return { at, ended: frames.filter((f) => f.state === 'ended'), bounds };
+    return { at, ended: frames.filter((f) => f.state === 'ended'), bounds, sleeps };
   }
+  const words = (ended: readonly CaptureAnswer[]): (string | null)[] => ended.map((f) => (f.result === null ? f.detail : 'verdict'));
 
-  it('two captures, one behind the other, at every limit: each ends exactly at its limits, inside its worst case, the second before the agent stops waiting', async () => {
-    const { at, ended, bounds } = await drive({ builds: [BUILD, '2.1.101'] });
-    expect(ended.map((f) => (f.result === null ? f.detail : 'verdict'))).toEqual(['verdict', 'verdict']);
+  it('three captures, one behind another, at every limit: the first two end exactly at their limits, inside their worst case, the second before the agent stops waiting, and the third, late by the contract, is ended with no verdict', async () => {
+    const { at, ended, bounds, sleeps } = await drive({ builds: [BUILD, '2.1.101', '2.1.102'] });
+    expect(words(ended)).toEqual(['verdict', 'verdict', CAPTURE_LATE_DETAIL]);
     expect(atLimits).toBeLessThanOrEqual(captureWorstCaseMs(t));
-    expect(at).toEqual([atLimits, 2 * atLimits]);
+    expect(at).toEqual([atLimits, 2 * atLimits, 2 * atLimits]);
     expect(at[1]! + CAPTURE_DEADLINE_MARGIN_MS).toBeLessThanOrEqual(TESTBOX_CAPTURE_DEADLINE_MS);
-    // Every call the launcher makes is asked at the contract's bound.
+    // The second had waited one run at its limits, inside what the contract leaves; the third two, past it.
+    expect([captureStartsLate(atLimits), captureStartsLate(2 * atLimits)]).toEqual([false, true]);
+    // Every call the launcher makes is asked at the contract's bound, for the two captures that ran.
     expect(bounds).toEqual([t.tmuxCallMs, t.tmuxCallMs]);
+    // The runner sleeps the contract's poll between reads, and otherwise only the stand-in's close bound (review 3765 F2).
+    expect([...new Set(sleeps)].sort((a, b) => a - b)).toEqual([t.pollMs, t.standInCloseMs].sort((a, b) => a - b));
+  });
+
+  // The desk's late check is the contract's, exactly, from both sides (review 3765 F2): a capture that has waited the last
+  // instant the contract leaves still runs, and one that has waited a millisecond more is ended with no verdict. A desk on a
+  // stricter contract ends the first; one on a looser contract runs the second.
+  it('a capture that waited exactly what the contract leaves runs, and one that waited a millisecond more is ended late', async () => {
+    expect(lastStart).toBeGreaterThan(atLimits);
+    const fits = await drive({ builds: [BUILD, '2.1.101'], heldAfterFirst: lastStart - atLimits });
+    expect(words(fits.ended)).toEqual(['verdict', 'verdict']);
+    expect(fits.at).toEqual([lastStart, lastStart + atLimits]);
+    const late = await drive({ builds: [BUILD, '2.1.101'], heldAfterFirst: lastStart - atLimits + 1 });
+    expect(words(late.ended)).toEqual(['verdict', CAPTURE_LATE_DETAIL]);
+    expect(late.at).toEqual([lastStart + 1, lastStart + 1]);
   });
 
   it('a build that stalls at its last step: the runner waits that step\'s whole limit, not the exit wait, and still answers', async () => {
     const { at, ended } = await drive({ builds: [BUILD], stallAt: CAPTURE_STEPS.length - 1 });
-    expect(ended.map((f) => (f.result === null ? f.detail : 'verdict'))).toEqual(['verdict']);
+    expect(words(ended)).toEqual(['verdict']);
     expect(at).toEqual([atLimits - t.exitMs]);
   });
 

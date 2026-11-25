@@ -72,7 +72,9 @@ const EXEMPT_BUT_AUTHENTICATED = new Set(
    // D-8126: the goals read, `ccrc-api goals show` cookieless from the fleet host, the console with a session.
    'GET /api/programmes/:slug/goals',
    // D-8181: the plan read, `ccrc-api plan show` cookieless from the fleet host, the console with a session.
-   'GET /api/programmes/:slug/plan']);
+   'GET /api/programmes/:slug/plan',
+   // D-9048 (landing order wave 5j-a): the landing line's read, `ccrc-api landing show` cookieless, the console with a session.
+   'GET /api/landing']);
 
 /** DERIVED from `EXEMPT`'s own reason strings, and asserted equal to the
  *  hand-written set above (review round 1, I3+I4): a NINTH entry — `GET
@@ -800,10 +802,12 @@ describe('the scanner is looking at something', () => {
     // 309 since Rebind and Restart the Overlord (Overlord W1 designation B), in `coord/overlordRoutes.ts`: `POST /api/overlord/rebind`
     // and `POST /api/overlord/restart`, each session-gated (the account gate, Rebind with a step-up) and NOT EXEMPT, no box token:
     // the HTTP half 304 -> 306, the gated count 191 -> 193, the exempt-HTTP count stays 113.
+    // 310 since the authority witness door, `POST /api/overlord/witness` in `coord/overlordRoutes.ts`, session-gated with no step-up
+    // and NOT EXEMPT (in FLAG_AWARE): the HTTP half 306 -> 307, the gated count 193 -> 194, the exempt-HTTP count stays 113.
     expect(scanRoutes('poolRunwayRoute.ts').length).toBe(1);
-    // 316 with the seven outside-folder doors (X2 P2.3), in `docs/routes.ts`, session-gated and NOT EXEMPT, no box token: the
-    // HTTP half 306 -> 313, the gated count 193 -> 200, the exempt-HTTP count stays 113.
-    expect(ROUTES.length).toBe(316);
+    // 317 with the seven outside-folder doors (X2 P2.3), in `docs/routes.ts`, session-gated and NOT EXEMPT, no box token: the
+    // HTTP half 307 -> 314, the gated count 194 -> 201, the exempt-HTTP count stays 113.
+    expect(ROUTES.length).toBe(317);
     expect(scanRoutes('laneModelsRoutes.ts').length).toBe(1);
     expect(scanRoutes('coord/delegationBackfillRoutes.ts').length).toBe(2);
     expect(scanRoutes('coord/approvalCensusRoutes.ts').length).toBe(1);
@@ -994,7 +998,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 316 scanned + the static wildcard when the bundle is built.
+    // 317 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1723,6 +1727,8 @@ describe('with CCRC_AUTH off — the shipped default', () => {
     // Confirm the restore (authority journal C): the read and the door each ask the account gate with `cap: null` (the door with a
     // step-up), so dark each answers `auth-off` (501): BY DESIGN.
     'GET /api/overlord/restore', 'POST /api/overlord/restore/confirm',
+    // The witness door asks the account gate with no step-up, and also answers auth-off when dark.
+    'POST /api/overlord/witness',
     // The decision-model doors' five writes (Overlord W2, decision model B): each takes the account gate with `cap: null`, so dark
     // each answers `auth-off` (501); armed with a session the arm, key PUT, and a widening off or ceiling ask the step-up first, and
     // the rest reach their handler, which with no coordination store answers `not-configured`: BY DESIGN. The read is not here.
@@ -1736,7 +1742,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
     'POST /api/continuity/quiz-runs/:id/withdraw',
   ]);
 
-  it('FLAG_AWARE is exactly those thirty-seven — joining it is how a route leaves the sweep', () => {
+  it('FLAG_AWARE is exactly those thirty-eight — joining it is how a route leaves the sweep', () => {
     // Review F2. The set is self-checking in ONE direction (a member is held to an
     // exact 501 dark) and nothing pinned its size, so a future route — Task 8's
     // passkey endpoints plausibly 501 when the gate is dark — could join it and
@@ -1784,6 +1790,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
       'POST /api/overlord/rebind',
       'POST /api/overlord/restart',
       'POST /api/overlord/restore/confirm',
+      'POST /api/overlord/witness',
       'PUT /api/decision-model/key',
       'PUT /api/items/:id/secret',
       'PUT /api/linear/connection',
@@ -1796,7 +1803,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 313 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 314 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1860,7 +1867,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 313 HTTP routes, not the 113 exempt.
+          //    is not itself flag-aware — the assertion that covers all 314 HTTP routes, not the 113 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

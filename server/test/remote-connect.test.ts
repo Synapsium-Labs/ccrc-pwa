@@ -58,7 +58,8 @@ describe('connectFleet — connection lifecycle', () => {
     await vi.waitFor(
       () => expect(fleet!.state).toEqual({
         connected: true, downSince: null, ccdVerbs: [], rosterFp: null, build: null, observedEpoch: null,
-        agentOps: ['update', 'token-sync', 'account', 'disk', 'pressure', 'testbox', 'testbox-tools-sync', 'testbox-admin', 'backup', 'readdir-mtimes', 'models', 'testbox-capture', 'overlord-history'],
+        authorityWitness: { kind: 'nothing' },
+        agentOps: ['update', 'token-sync', 'account', 'disk', 'pressure', 'testbox', 'testbox-tools-sync', 'testbox-admin', 'backup', 'readdir-mtimes', 'models', 'testbox-capture', 'witness', 'overlord-history'],
         // Overlord W1, the isolation word: the report of the booted agent's synthetic ids under the bearer, and the peer
         // measured over the test seams (loopback is local; the tables are unreadable there, so the uid is unmeasured).
         hostReport: { uid: process.getuid?.() ?? 'unmeasured', machine: hostDigest(TOKEN, 'machine', AGENT_MACHINE_ID), boot: hostDigest(TOKEN, 'boot', AGENT_BOOT_ID) },
@@ -719,6 +720,52 @@ describe('FleetClient.onReady — observedEpoch keeps THREE answers apart, never
     extra = {};
     fleet.client.ws?.close();
     await vi.waitFor(() => expect(fleet!.state.observedEpoch).toBeUndefined(), { timeout: 3000 });
+  });
+});
+
+describe('FleetClient.onReady — authorityWitness has ONE reader and keeps its answers apart (Overlord W1 Task 6)', () => {
+  let server: { port: number; close(): Promise<void> } | undefined;
+  let fleet: ConnectedFleet | undefined;
+  afterEach(async () => {
+    await fleet?.close();
+    fleet = undefined;
+    if (server) await server.close();
+    server = undefined;
+  });
+  const TUPLE = {
+    v: 1, epoch: 2, base: 0, terms: { authority: 2, privacy: 'absent', act: 'absent' }, boot: 'boot-a',
+    authority: { sequence: 2, digest: 'a'.repeat(64) }, privacy: 'absent', act: 'absent', highestIds: { restoreGeneration: 0 },
+    told: { operatorRung: null, latches: [] },
+  };
+  const readOf = async (extra: Record<string, unknown>): Promise<unknown> => {
+    server = await fakeReadyAgent(extra);
+    fleet = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
+    const got = fleet.state.authorityWitness;
+    await fleet.close(); fleet = undefined;
+    await server.close(); server = undefined;
+    return got;
+  };
+  it('a tuple is stored as a tuple', async () => { expect(await readOf({ authorityWitness: TUPLE })).toEqual({ kind: 'tuple', tuple: TUPLE }); });
+  it('an absent field is absent (an older agent), never nothing', async () => { expect(await readOf({})).toEqual({ kind: 'absent' }); });
+  it('null is nothing, and the string unmeasured is unmeasured', async () => {
+    expect(await readOf({ authorityWitness: null })).toEqual({ kind: 'nothing' });
+    expect(await readOf({ authorityWitness: 'unmeasured' })).toEqual({ kind: 'unmeasured' });
+  });
+  it('garbage and a tuple with an unknown key are malformed', async () => {
+    expect(await readOf({ authorityWitness: 'garbage' })).toEqual({ kind: 'malformed' });
+    expect(await readOf({ authorityWitness: { ...TUPLE, extra: 1 } })).toEqual({ kind: 'malformed' });
+  });
+  it('the next ready without the field resets it to absent', async () => {
+    let extra: Record<string, unknown> = { authorityWitness: TUPLE };
+    server = await fakeReadyAgent(() => extra);
+    fleet = connectFleet({
+      url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000, reconnectMinMs: 30, reconnectMaxMs: 100,
+    });
+    await vi.waitFor(() => expect(fleet!.state.authorityWitness).toEqual({ kind: 'tuple', tuple: TUPLE }), { timeout: 3000 });
+    extra = {};
+    fleet.client.ws?.close();
+    await vi.waitFor(() => expect(fleet!.state.authorityWitness).toEqual({ kind: 'absent' }), { timeout: 3000 });
   });
 });
 

@@ -328,9 +328,9 @@ describe('the op\'s bounds and its resolver', () => {
 });
 
 describe('the word overlord-history in ready.ops (Task 4)', () => {
-  // The eleventh word is the models op (D-8688) and the twelfth testbox-capture (the capture runner spec of 2026-11-22), the
-  // last fixed one; overlord-history makes a full list thirteen.
-  const BASE_OPS = ['update', 'token-sync', 'account', 'disk', 'pressure', 'testbox', 'testbox-tools-sync', 'testbox-admin', 'backup', 'readdir-mtimes', 'models', 'testbox-capture'];
+  // The eleventh word is the models op (D-8688), the twelfth testbox-capture (the capture runner spec of 2026-11-22) and the
+  // thirteenth witness (Overlord W1 authority journal, Task 6), the last fixed one; overlord-history makes a full list fourteen.
+  const BASE_OPS = ['update', 'token-sync', 'account', 'disk', 'pressure', 'testbox', 'testbox-tools-sync', 'testbox-admin', 'backup', 'readdir-mtimes', 'models', 'testbox-capture', 'witness'];
   let agent: RunningAgent | undefined;
   const clients: TestClient[] = [];
   afterEach(async () => {

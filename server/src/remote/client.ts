@@ -10,7 +10,7 @@ import type {
   TailData,
   TailReset,
 } from '../../../shared/agent-protocol.js';
-import { UPDATE_OP_DETAIL_MAX } from '../../../shared/agent-protocol.js';
+import { UPDATE_OP_DETAIL_MAX, readReadyWitness } from '../../../shared/agent-protocol.js';
 import { parseBuildInfo } from '../../../shared/buildinfo.js';
 import { validCapWords } from '../../../shared/api.js';
 import type { Runner } from '../exec.js';
@@ -166,7 +166,7 @@ export function readReadyOps(raw: unknown): string[] {
 export class FleetClient {
   readonly state: FleetState = {
     connected: false, downSince: null, ccdVerbs: null, rosterFp: null, build: null,
-    observedEpoch: undefined, agentOps: undefined,
+    observedEpoch: undefined, agentOps: undefined, authorityWitness: undefined,
   };
   /** The connection-bound fleet node identity (path-identity spec 2026-10-12 §5.2). It lives HERE, never on `state`
    *  (whose whole shape `remote-connect.test.ts` pins) and never in a listener: index.ts registers its listeners after
@@ -540,6 +540,8 @@ export class FleetClient {
     // `rosterFp`/`build` reason: a reconnect to a downgraded agent must not
     // keep advertising an op the new process no longer answers.
     this.state.agentOps = readReadyOps(frame.ops);
+    // THE SINGLE READER of `frame.authorityWitness` (Overlord W1 Task 6), reset on EVERY ready: a downgraded agent reads `absent`.
+    this.state.authorityWitness = readReadyWitness(frame.authorityWitness);
     // THE SINGLE READER of `frame.host` (Overlord W1, the isolation word, §7.4), and the one place the link's peer is
     // measured, on the socket that delivered this ready. Both are reset on every ready, a re-sent one included, so a
     // reconnect to an older agent keeps nothing from before. Nothing here decides: `isolationWord` reads these facts.

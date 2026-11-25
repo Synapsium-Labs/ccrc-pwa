@@ -16,7 +16,7 @@ import type { AccountLimits } from '../src/limits.js';
 
 const otherConditions = {
   'generation-degraded': () => 'lifted', 'off-model': () => 'lifted', 'rung-word-missing': () => 'lifted',
-  'shared-user': () => 'lifted', 'launch-profile-unengaged': () => 'lifted',
+  'shared-user': () => 'lifted', 'launch-profile-unengaged': () => 'lifted', 'no-witness-since-boot': () => 'lifted',
 } satisfies Omit<LadderConditionInputs, 'load-past-95'>;
 // @ts-expect-error The 95% row cannot ship without its input.
 const missing: LadderConditionInputs = otherConditions;

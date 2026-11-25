@@ -858,6 +858,8 @@ describe('Build 7 nouns', () => {
       'overlordRestoreState.ts', 'lifecycleLaneRows.ts',
       // Wave 5i: `landingControlTx.ts` runs the main-red hold UPSERT inside `CoordStore.applyLandingControl`'s owned transaction, so it names the handle.
       'landingControlTx.ts',
+      // Wave 5j-a (D-9046): `landingDoorsTx.ts` runs the operator's pause and withdraw statements inside `CoordStore.applyLandingRecord`, so it names the handle type.
+      'landingDoorsTx.ts',
       // The coordinator advisor (D-8967): `advisorStore.ts` is its three tables' SQL, `coordCallsStore.ts`'s idiom.
       'advisorStore.ts',
       // The history of limits (Overlord W1 serviceability B): the sampler's SQL takes a handle by argument.
