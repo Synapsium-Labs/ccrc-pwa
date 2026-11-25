@@ -67,9 +67,11 @@ export function decideLandingWrite(f: { landing: LandingAdvance; from: RunState;
     // Wave 5i (D-8626): only over a projection that reads with no marker. A closed row whose pin metadata does not read (a
     // terminal repair retired it without restoring anything) stays closed: a re-pin would write a witness and a pinned row
     // over a setter or a handoff nobody can read, inventing the metadata that was never there.
-    if (current.state === 'closed') {
+    // Wave 5j-a (decision 7, D-9047): a `withdrawn` row re-pins the same way. A withdrawal is not a ban: the run's next
+    // verified pin brings it back, and an unreadable withdrawn row keeps its own word.
+    if (current.state === 'closed' || current.state === 'withdrawn') {
       return f.projection?.kind === 'readable' && f.projection.quarantine === null ? { act: 'repin', id: current.id }
-        : { act: 'none', write: { kind: 'kept', state: 'closed' } };
+        : { act: 'none', write: { kind: 'kept', state: current.state } };
     }
     // Wave 5f: `projection` is the single row reader's verdict on `current`. A quarantined row (literal unknown with exactly
     // the stale-head marker and every retained field readable) re-pins; every other unknown row stays kept.
