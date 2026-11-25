@@ -137,7 +137,9 @@ for the gap (`older-edge.stories.tsx`).
 each publish even when the count is unchanged; a render with an unchanged count arms a 100ms window in which any size
 increase that leaves the foot makes the library scroll to the end itself, without consulting the follow callback.
 
-**Now:** `followOutput={false}`. The chat list keeps a reader at the foot in two places that call one writer (`toFoot`):
+**Now:** `followOutput={false}`. Where the foot stood starts unmeasured: until the list has measured it (an at-the-foot
+report, a height report or a scroll that finds the reader at the foot), and with no scroller to measure, the reader
+leaving is virtuoso's word, as before. The chat list keeps a reader at the foot in two places that call one writer (`toFoot`):
 `heightMove`'s `foot` (a change while the reader was at the foot, measured against the list before it), and
 `footFollow.ts#footLeft`, when virtuoso says the reader left the foot: the foot left the reader unless they moved the
 scroller up from where the foot last stood or tapped a disclosure, so growth below them and a view that shrinks (a phone
@@ -192,8 +194,22 @@ none.** Pinned with room: the heap the held rows cost stays under 4 MiB per thou
   phosphor views. **A rotation** with a request in flight: the late answer never applied. **Keyboard only:** Tab reaches
   Load older, Enter loads, the start's sentence takes focus. **An older server:** no control, no request.
 - **Deletion mutants**, each run against its named suites through the test slice, the source restored and hash-checked:
-  27 in the client and the server, all killed (three first survived; their cases were strengthened, below); the near-top
-  load during a settle is killed by the Chrome anchor case (a 1.5px shift).
+  28 in the client and the server, all killed. Three first survived: the own-write position check (its case let the
+  row's growth cancel the reader's move; the numbers now differ) and unique row keys (no case; one added) were killed once
+  their cases were fixed, and the near-top load during a settle is killed by the Chrome anchor case (a 1.5px shift).
+- **The first full run after the implementation was complete was red** (the wave-done's `suite: red`): `contrast` (the
+  two new text rules had no registered ground), `chat-scroll`, `chat-scroller`, `jump-latest` and `tool-activity` (their
+  stand-in lists report the reader leaving the foot with no scroller, or one that never moved, which the new foot rule
+  read as growth), and `single-definition/vocabularies` (the edge type spelled the read failure pair). Fixed: the grounds
+  registered; an unmeasured leave of the foot is the reader's (no scroller, or no foot measured yet), and the case whose
+  scroller stayed at the foot moves it up (peer leave); the edge types derive from the wire's end words.
+- **After the fixes:** pwa, all 604 files in four parts, 18,695 passed and 2 skipped (151, 154, 153 and 146 files); the whole browser suite, 120 files, 4,320 passed, 52
+  skipped, 1 expected to fail, and 2 timed out under load (`archive-unowned`, `testbox-manage`), both green alone (120 of
+  120); the server's paging and stream suites with the whole-tree guards, 147 files: green but for load timeouts in
+  `retire-executors-pin` (green alone) and one case of `deviation-refs` (two git trees read in 20s; red alone at load 3.9
+  too, a timeout, never a collision), and `typecheck-tests` (no `agent` packages installed in this worktree; the server's
+  tests-inclusive project compiles clean run directly). Compilers: pwa (with ui), ui, and the server's test project
+  clean.
 
 ## 9. Limits
 
