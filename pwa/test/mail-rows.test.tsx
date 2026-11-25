@@ -356,6 +356,15 @@ describe('an older page\'s question is not the question waiting now (desktop pol
     expect(cardsOf(foldMailRows(built, SELF, live))).toEqual([['old?', false], ['live status', false]]);
   });
 
+  it('wave 179, fix round 1 (M2): the boundary row itself is live, so a question that is the first live item opens', () => {
+    const events = [...fetchMail({ subject: 'old status' }), ...fetchMail({ kind: 'question', subject: 'now?' })];
+    const built = buildChatItems(events, []);
+    const live = built.findIndex((i) => i.kind === 'mail' && i.envelope.subject === 'now?');
+    expect(live, 'the fixture has no live question').toBeGreaterThan(0);
+    const cards = foldMailRows(built, SELF, live).filter((i): i is Extract<ChatItem, { kind: 'mail' }> => i.kind === 'mail');
+    expect(cards.map((c) => [c.envelope.subject, c.opens]), 'the first live item was read as older').toEqual([['old status', false], ['now?', true]]);
+  });
+
   for (const [skin, set] of SETS) {
     const view = (events: ChatEvent[], o?: OlderPaging) => (
       <SkinSetProvider set={set}><ChatListInner id={SELF} events={events} pending={[]} older={o} onLoadOlder={() => {}} /></SkinSetProvider>
@@ -374,6 +383,18 @@ describe('an older page\'s question is not the question waiting now (desktop pol
       rerender(view([...page, ...live], older(page.length)));
       expect(opened(), 'the older page\'s question took the default').toEqual([]);
       expect(under(), 'the older page\'s question was drawn under its row').toEqual([]);
+    });
+
+    it(`${skin}: wave 179, fix round 1 (M3): a closed stretch still names the question an older page holds`, () => {
+      const page = [user('Earlier.'), ...call('Bash', 'mail inbox'), ...fetchMail({ kind: 'question', subject: 'old?' })];
+      const live = [user('Go.'), ...call('Bash', 'mail inbox'), ...fetchMail({ subject: 'live status' })];
+      render(view([...page, ...live], older(page.length)));
+      const rows = [...document.querySelectorAll('.tool-activity-row')];
+      expect(rows, 'the page and the live turn are not one stretch row each').toHaveLength(2);
+      expect(rows.map((r) => r.getAttribute('aria-expanded'))).toEqual(['false', 'false']);
+      expect(rows[0]!.querySelector('.tool-activity-asks')?.textContent, 'the older page\'s stretch hid its question')
+        .toBe('1 question');
+      expect(rows[1]!.querySelector('.tool-activity-asks')).toBeNull();
     });
 
     it(`${skin}: a live question still opens, under its row, with an older page's question above it`, () => {
