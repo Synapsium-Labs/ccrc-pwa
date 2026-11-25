@@ -77,3 +77,23 @@ its case (a display `withdrawn` by the outstanding rule, a stored one by `settle
 | A22 | `landingJournalPolicy.ts`: `v.length <= 127` to `v.length <= 128` | actor-longer-than-the-owner case | test/landing-journal.test.ts: 1 failed: the door record kinds (wave 5j-a, D-9045) > an actor longer than the owner can produce is fields | restored, sha256 91f80434a35417de |
 | A23 | `landingJournalPolicy.ts`: `if (!hasExactKeys(doc, FIELDS[doc.kind])) return { ok: false, reason: 'fields' };` to `if (doc.kind !== 'withdraw' && !hasExactKeys(doc, FIELDS[doc.kind])) return { ok: false, reason: 'fields' };` | withdraw exact-keys case | test/landing-journal.test.ts: 1 failed: the door record kinds (wave 5j-a, D-9045) > an extra key or a missing key is fields, for a pause and for a withdraw | restored, sha256 91f80434a35417de |
 | A24 | `landingDoorsTx.ts`: `WHERE id = ? AND project = ? AND pr = ? AND state` to `WHERE id = ? AND ? IS NOT NULL AND ? IS NOT NULL AND state` | other-(project, pr) case | test/landing-journal-store.test.ts: 1 failed: replay applies the operator's pause and withdrawal (wave 5j-a, D-9046) > a withdraw whose subject id names a row of another (project, pr) leaves that row as it was | restored, sha256 04aa3a242f85b3ea |
+
+## The 5j-a gate (Task 5 Step 4), on commit `2783c4b468`
+
+One file per process, from `server/`, each as `ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 <file>`:
+
+- Green: `landing-journal` (76), `landing-journal-store` (79), `landing-entry-store` (61), `landing-entry-census` (40),
+  `landing-read-route` (31), `landing-writes-route` (36), `landing-line-order` (68), `landing-control` (59),
+  `landing-terminal-damage` (64), `auth-gate` (394), `box-token-census` (80), `coord-pause-route` (27),
+  `coordinator-skill` (290), `refusal-status` (28), `secret-mask` (97, 1 skipped), `mail-routes` (61), `growth-check`
+  (61, 3 skipped), `citations` (4), `anchors` (9), `topology-clean` (61), and every file of `single-definition/` (44 files,
+  all green). The server typecheck (`tsc --noEmit -p tsconfig.json`) is clean.
+- `deviation-refs`, after `git fetch origin main`: on the test box, under load, one case ("is looking at two real trees,
+  each with a real ledger in it") ran 21.9 s against its 20 s bound and failed, 33 of 34 green. Alone with
+  `ccrc test --local`: 34 of 34 green.
+- `typecheck-tests`, once with `ccrc test --local`: it did not start. This worktree has no `pwa/node_modules`, so the file's
+  own `require.resolve('typescript')` from `pwa/package.json` throws `Cannot find module 'typescript'`. The tests'
+  server typecheck alone (`tsc --noEmit -p test/tsconfig.tests.json`, once with `--local`) was killed by the test slice:
+  `the test slice's memory cap killed a process during this run (MemoryMax=6G, CCRC_TEST_SLICE_MEMORY_MAX; 1 OOM
+  kill(s) in ccrctests.slice); exit 137`. The pull request's own run is the arbiter for both.
+- No full suite ran locally.
