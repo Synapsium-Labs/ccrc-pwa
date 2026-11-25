@@ -32,7 +32,7 @@ import {
 import {
   DOCS_PRIMARY_NODE, DOCS_REFRESH_SKIPPED, HISTORY_JOB, LISTING_JOB, docsAnswerShape, docsCacheFill, docsCacheHitAnswer,
   docsCacheVerdict, docsFileReply, docsFolderFailureBody, docsFolderFileReply, docsFolderKey, docsFolderLabelRows,
-  docsFolderListFlightKey, docsFolderRangeFlightKey, docsFolderRangePlan, docsFolderShowFlightKey, docsFolderTreeBody,
+  docsFolderListFlightKey, docsFolderPathRows, docsFolderRangeFlightKey, docsFolderRangePlan, docsFolderShowFlightKey, docsFolderTreeBody,
   docsFolderTreeFlightKey, docsIndexCacheable,
   docsIndexFlightKey, docsKnownSize, docsLogDue, docsLogFlightKey, docsNodeKey,
   docsProjectKey, docsRangeAnswerShape, docsRangeFlightKey, docsRangePlan, docsRefreshAnswer, docsRefreshFetchHalf, docsRefreshFlightKey, docsShowBound, docsShowFlightKey,
@@ -635,7 +635,7 @@ export function registerDocsFolderReadRoutes(app: FastifyInstance, readers: Docs
     if (run === null) return reply;
     if (run.kind === 'busy') return sendFolderFailure(reply, run.body);
     if (!run.value.ok) return sendFolderFailure(reply, run.value);
-    const body: DocsFoldersPathsResponse = { ok: true, folders: run.value.answer.folders };
+    const body: DocsFoldersPathsResponse = { ok: true, folders: docsFolderPathRows(run.value.answer.folders) };
     return reply.send(body);
   });
 
@@ -699,9 +699,9 @@ export function registerDocsFolderReadRoutes(app: FastifyInstance, readers: Docs
  * registry and no reader, the read one holds the readers and no registry. Both run in the FETCH lane, keyed by the folder's
  * generation key (`docsFolderKey`): one write per label at a time, two at once across labels, eight waiting, the wait
  * bounded, as the refresh door's fetch is bounded (the one existing lane that bounds a ccd write; a lane of its own would be
- * a second mechanism for the same job). Each write bumps its label's generation and the registry's BEFORE it execs and after
- * it settles, whatever the outcome (ok, refused, or a throw), so a read flight begun before a write is never joined by a
- * read begun after it.
+ * a second mechanism for the same job). Each write bumps its label's generation and the registry's after it settles,
+ * whatever the outcome (ok, refused, or a throw), so a read flight begun before a write is never joined by a read begun
+ * after it.
  * - Add: a widening. The account gate first (dark, an insecure origin, no session, no cap, and the step-up, in its own
  *   order), then the body through L1, then the verb. A refusal body never echoes the path.
  * - Remove: a narrowing, so it works while sign-in is dark and asks no account gate; L1's `folderRemoveGate` still holds an
@@ -714,14 +714,15 @@ export function registerDocsFolderRegistryRoutes(app: FastifyInstance, registrie
   const at = forNode(lanes, node, 'lanes');
   const registryKey = docsFolderKey(node, '');
 
-  /** One write of `label`'s registry entry in the fetch lane, its generations bumped around it. */
+  /** One write of `label`'s registry entry in the fetch lane, its generations bumped when it settles. */
   const written = <T>(reply: FastifyReply, label: string, write: () => Promise<T>): Promise<DocsLaneRun<T>> => {
     const bump = (): void => {
       at.gens.bump(docsFolderKey(node, label));
       at.gens.bump(registryKey);
     };
+    // Only the bump AFTER the write matters: a read begun while it runs may share an older flight (the two are concurrent),
+    // and every read begun after it settles must not.
     return at.fetch.run(docsFolderKey(node, label), clientGone(reply), async () => {
-      bump();
       try {
         return await write();
       } finally {

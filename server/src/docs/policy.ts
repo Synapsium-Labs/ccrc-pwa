@@ -690,6 +690,12 @@ export function docsFolderLabelRows(rows: readonly DocsFolderListRow[]): DocsFol
   return rows.map(({ label, state }) => ({ label, state }));
 }
 
+/** The rows `GET /api/docs-folders/paths` answers: exactly `{label, path, state}`, built from the three named fields so an
+ *  extra key in a ccd row (which `docsFolderAnswerShape` does not refuse) never reaches the one door that carries a path. */
+export function docsFolderPathRows(rows: readonly DocsFolderListRow[]): DocsFolderListRow[] {
+  return rows.map(({ label, path, state }) => ({ label, path, state }));
+}
+
 /** A parsed refresh body. `ref: null` is the default view, one meaning; `reason` changes nothing on the server but
  *  the wording of a failure log line (section 3.4). */
 export type DocsRefreshRequest = { ref: DocsRefSpec | null; reason: 'auto' | 'manual' };
@@ -1477,14 +1483,16 @@ function isFolderLabelText(v: unknown): v is string {
 /** The kinds of a folder entry, typed by the L0 list. */
 const FOLDER_ENTRY_KINDS: ReadonlySet<string> = new Set(DOCS_FOLDER_ENTRY_KINDS);
 
-/** One folder listing row: its section, a key-text path, a kind of the L0 list, and the facts that kind carries: a `file` a
+/** One folder listing row: its section, a section-relative path (`isDocsRelPath`, the request-side grammar, so an absolute
+ *  path is a broken answer, never sent), a kind of the L0 list, and the facts that kind carries: a `file` a
  *  byte count, a decimal-string modified time and a fingerprint or `null`; every other kind `null` for all three; an
  *  `unreadable` row its errno name, no other row one. */
 function folderEntryOk(e: unknown): boolean {
   if (!isRecord(e)) return false;
   const section = own(e, 'section');
   const kind = own(e, 'kind');
-  if (!isText(section) || !isDocsSection(section) || !isKeyText(own(e, 'path'))) return false;
+  const path = own(e, 'path');
+  if (!isText(section) || !isDocsSection(section) || !isText(path) || !isDocsRelPath(path)) return false;
   if (!isText(kind) || !FOLDER_ENTRY_KINDS.has(kind)) return false;
   const size = own(e, 'size');
   const mtimeNs = own(e, 'mtimeNs');

@@ -10,9 +10,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { DOCS_CAP, DOCS_FOLDERS_CAP } from '../src/ccdargv.js';
 import { docsShowPlan } from '../src/docs/policy.js';
+import type { DocsFolderReader, DocsFolderRegistry } from '../src/docs/ports.js';
+import {
+  registerDocsFolderReadRoutes, registerDocsFolderRegistryRoutes, type DocsComposition, type DocsFolderReadDeps,
+  type DocsFolderRegistryDeps, type DocsNodeLanes, type DocsNodes,
+} from '../src/docs/routes.js';
 import { DOCS_RANGE_FRAME_BYTES, docsApi, type DocsRangePin } from '../../shared/docs.js';
 import {
-  FOLDER_FIXTURE_PATH, PWA_HEADERS, docsApp, faultRes, folderHeaders, line, okRes, scripted, sha256Hex, type FolderRig,
+  FOLDER_FIXTURE_PATH, PWA_HEADERS, docsApp, faultRes, folderHeaders, line, okRes, scripted, sha256Hex, until, type FolderRig,
 } from './docsRouteHelpers.js';
 
 const apps: FastifyInstance[] = [];
@@ -433,6 +438,7 @@ describe('folder doors: the absolute path leaves by one door only', () => {
       ['reason', failed('docs-folder-read', 'unreadable', { reason: 'EACCES', detail: P, errno: P })],
       ['protected', failed('docs-folder-read', 'protected', { reason: P, detail: P })],
       ['errno', line({ ...env, label: 'notes', entries: [{ ...unreadable, errno: P }], unlisted: { count: 0, byReason: {} } })],
+      ['abs-path', line({ ...env, label: 'notes', entries: [{ ...row, path: `${P}/a.md` }], unlisted: { count: 0, byReason: {} } })],
     ]);
     const mk = async (answer: string) => {
       const r = scripted(() => okRes(answer));
@@ -465,16 +471,27 @@ describe('folder doors: the absolute path leaves by one door only', () => {
     const bad = await get('errno', docsApi.folderTree('notes'));
     expect(bad.statusCode, 'an errno outside its grammar is a broken answer, never forwarded').toBe(502);
     expect(bad.json()).toEqual({ ok: false, failure: 'malformed-answer', why: 'schema' });
+    const absolute = await get('abs-path', docsApi.folderTree('notes'));
+    expect(absolute.statusCode, 'an entry path that is absolute is a broken answer, never forwarded').toBe(502);
+    expect(absolute.json()).toEqual({ ok: false, failure: 'malformed-answer', why: 'schema' });
+  });
+
+  it('folder doors: an extra key in a ccd list row never reaches the paths door or the labels door', async () => {
+    const rows = [{ label: 'notes', path: FOLDER_FIXTURE_PATH, state: 'ok', extra: 'LEAKMARK' }, { label: 'team-a', path: null, state: 'unreadable', more: 'LEAKMARK' }];
+    const r = scripted(() => okRes(line({ v: 1, verb: 'docs-folder', ok: true, elapsedMs: 1, folders: rows, top: 'LEAKMARK' })));
+    const made = await docsApp({ run: r.run, verbs: FOLDER_VERBS, folders: { signIn: 'armed' } });
+    apps.push(made.app);
+    const paths = await made.app.inject({ method: 'GET', url: docsApi.folderPaths(), headers: folderHeaders() });
+    expect(paths.body).not.toContain('LEAKMARK');
+    expect(paths.json()).toEqual({
+      ok: true, folders: [{ label: 'notes', path: FOLDER_FIXTURE_PATH, state: 'ok' }, { label: 'team-a', path: null, state: 'unreadable' }],
+    });
+    const labels = await made.app.inject({ method: 'GET', url: docsApi.folders(), headers: folderHeaders() });
+    expect(labels.body).not.toContain('LEAKMARK');
   });
 });
 
 // ===== the registration's type walls (review I2) =====
-import type { DocsFolderReader } from '../src/docs/ports.js';
-import {
-  registerDocsFolderReadRoutes, registerDocsFolderRegistryRoutes, type DocsComposition, type DocsFolderReadDeps,
-  type DocsFolderRegistryDeps, type DocsNodeLanes, type DocsNodes,
-} from '../src/docs/routes.js';
-import type { DocsFolderRegistry } from '../src/docs/ports.js';
 
 /** Equal types, in either direction (the standard deferred-conditional form). */
 type Equals<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
@@ -504,7 +521,6 @@ describe('folder doors: the read registration\'s type has no registry (review I2
 });
 
 // ===== a read begun before a write is never joined by a read begun after it (review I3) =====
-import { until } from './docsRouteHelpers.js';
 
 describe('folder doors: a write settles its generation, so a read after it makes its own exec', () => {
   /** The scripted fleet with ONE read answer held: the first call matching `hold` answers (computed at once, as ccd would

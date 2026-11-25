@@ -2196,7 +2196,7 @@ describe('X2 P1.3: the range plan, query and gate', () => {
 import {
   DOCS_FOLDER_PATH_MAX_BYTES, docsFolderAnswerShape, docsFolderFileReply, docsFolderKey, docsFolderLabelRows,
   docsFolderListFlightKey, docsFolderRangeFlightKey, docsFolderRangePlan, docsFolderShowFlightKey, docsFolderTreeFlightKey,
-  docsFolderFailureBody, docsFolderTreeBody, folderGateRefusal, folderReadGate, folderRemoveGate, isDocsFolderPath,
+  docsFolderFailureBody, docsFolderPathRows, docsFolderTreeBody, folderGateRefusal, folderReadGate, folderRemoveGate, isDocsFolderPath,
   parseDocsFolderAddBody, parseDocsFolderLabel, type DocsFolderRangeQuery,
 } from '../src/docs/policy.js';
 import { DOCS_FOLDER_LABEL_RE, type DocsFolderShowOk } from '../../shared/docs.js';
@@ -2462,6 +2462,17 @@ describe('X2 P2.3 review round 1: the Remove gate, the refusal filter and the tr
       ],
       unlisted: { count: 3, byReason: { 'too-deep': 1, 'too-long': 2 } },
     });
+  });
+
+  it('docsFolderAnswerShape: an entry path must be section-relative, else the answer is a schema fault; docsFolderPathRows keeps three fields', () => {
+    const base = { v: 1, verb: 'docs-folder-read', ok: true, elapsedMs: 1, label: 'a', unlisted: { count: 0, byReason: {} } };
+    const file = (path: string) => ({ section: 'specs', path, kind: 'file', size: 1, mtimeNs: '2', fp: null });
+    expect(docsFolderAnswerShape('tree', { ...base, entries: [file('a/b.md')] })).toStrictEqual({ ok: true });
+    for (const bad of ['/abs/a.md', '../a.md', 'a//b', 'a/', '']) {
+      expect(docsFolderAnswerShape('tree', { ...base, entries: [file(bad)] }), bad).toMatchObject({ why: 'schema' });
+    }
+    expect(docsFolderPathRows([{ label: 'a', path: '/x', state: 'ok', extra: 'E' } as never, { label: 'b', path: null, state: 'unreadable' }]))
+      .toStrictEqual([{ label: 'a', path: '/x', state: 'ok' }, { label: 'b', path: null, state: 'unreadable' }]);
   });
 
   it('docsFolderAnswerShape: an unreadable row\'s errno must be an errno name, else the answer is a schema fault', () => {
