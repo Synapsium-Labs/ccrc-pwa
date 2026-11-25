@@ -7,7 +7,8 @@ import { expect } from 'vitest';
 import { GENERATION_STATES } from '../../../shared/continuity.js';
 import { DESIGNATION_SEQUENCE_STATES } from '../../../shared/overlord-designation.js';
 import { MESSAGE_STATES } from '../../../shared/operatorMessages.js';
-import { SEQUENCE_KEEP_MS, SEQUENCE_PAGE_MAX, type SequenceWireLine } from '../../../shared/overlord-sequence.js';
+import { RUNGS } from '../../../shared/overlord-ladder.js';
+import { LADDER_LATCH_SEQUENCE_STATES, SEQUENCE_KEEP_MS, SEQUENCE_PAGE_MAX, type SequenceWireLine } from '../../../shared/overlord-sequence.js';
 import type { MutantSet, SuiteCase } from './mutate.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -35,9 +36,11 @@ export function sequenceLineVerdictCases(m: SequenceModule): Record<string, Suit
       for (const state of GENERATION_STATES) expect(refusal(with_({ kind: 'generation', state }))).toBeNull();
       for (const state of DESIGNATION_SEQUENCE_STATES) expect(refusal(with_({ kind: 'designation', state, id: 'overlord-a' }))).toBeNull();
       for (const state of MESSAGE_STATES) expect(refusal(with_({ kind: 'message', state }))).toBeNull();
+      for (const state of RUNGS) expect(refusal(with_({ kind: 'ladder-rung', state, id: 'operator' }))).toBeNull();
+      for (const state of LADDER_LATCH_SEQUENCE_STATES) expect(refusal(with_({ kind: 'ladder-latch', state, id: 'latch-a' }))).toBeNull();
     },
     'a kind outside the table is unknown-kind, before every other check': () => {
-      for (const kind of ['', 'Generation', 'ladder-rung', 'constructor', '__proto__', 'toString']) {
+      for (const kind of ['', 'Generation', 'grant', 'constructor', '__proto__', 'toString']) {
         expect(refusal(with_({ kind, state: 'nope', id: '', actor: '', actorKind: 'nope', at: -1 }))).toBe('unknown-kind');
       }
     },
@@ -45,6 +48,8 @@ export function sequenceLineVerdictCases(m: SequenceModule): Record<string, Suit
       expect(refusal(with_({ kind: 'generation', state: 'live' }))).toBe('unknown-state');
       expect(refusal(with_({ kind: 'designation', state: 'carded' }))).toBe('unknown-state');
       expect(refusal(with_({ kind: 'message', state: 'carded' }))).toBe('unknown-state');
+      expect(refusal(with_({ kind: 'ladder-rung', state: 'raised' }))).toBe('unknown-state');
+      expect(refusal(with_({ kind: 'ladder-latch', state: 'chat' }))).toBe('unknown-state');
       expect(refusal(with_({ kind: 'generation', state: '' }))).toBe('unknown-state');
       expect(refusal(with_({ kind: 'generation', state: 'CARDED', id: '' }))).toBe('unknown-state');
     },
@@ -78,9 +83,12 @@ export function sequenceLineKnownCases(m: SequenceModule): Record<string, SuiteC
       for (const s of GENERATION_STATES) expect(m.sequenceLineKnown('generation', s, 'server')).toBe(true);
       for (const s of DESIGNATION_SEQUENCE_STATES) for (const k of ['operator', 'session', 'server']) expect(m.sequenceLineKnown('designation', s, k)).toBe(true);
       for (const s of MESSAGE_STATES) expect(m.sequenceLineKnown('message', s, 'server')).toBe(true);
+      for (const s of RUNGS) expect(m.sequenceLineKnown('ladder-rung', s, 'operator')).toBe(true);
+      for (const s of LADDER_LATCH_SEQUENCE_STATES) expect(m.sequenceLineKnown('ladder-latch', s, 'server')).toBe(true);
     },
     'a later kind, a state of another kind or an unknown actor kind is not known': () => {
-      expect(m.sequenceLineKnown('ladder-rung', 'chat', 'operator')).toBe(false);
+      expect(m.sequenceLineKnown('grant', 'chat', 'operator')).toBe(false);
+      expect(m.sequenceLineKnown('ladder-rung', 'raised', 'operator')).toBe(false);
       expect(m.sequenceLineKnown('generation', 'live', 'server')).toBe(false);
       expect(m.sequenceLineKnown('designation', 'carded', 'operator')).toBe(false);
       expect(m.sequenceLineKnown('message', 'carded', 'server')).toBe(false);
@@ -177,6 +185,39 @@ export function retentionCutCases(m: SequenceModule): Record<string, SuiteCase> 
   };
 }
 
+// ------------------------------------------------------------------------------------------------- keptDesignationLine
+
+type DLine = { seq: number; id: string; state: string };
+const dl = (seq: number, id: string, state: string): DLine => ({ seq, id, state });
+
+export function keptDesignationLineCases(m: SequenceModule): Record<string, SuiteCase> {
+  return {
+    'no line: none kept': () => { expect(m.keptDesignationLine([])).toBeNull(); },
+    'with no live line, the newest line': () => {
+      expect(m.keptDesignationLine([dl(3, 'b', 'pending'), dl(1, 'a', 'pending'), dl(2, 'a', 'failed')])).toBe(3);
+    },
+    'a binding standing alone: its live line': () => { expect(m.keptDesignationLine([dl(1, 'a', 'pending'), dl(2, 'a', 'live')])).toBe(2); },
+    'a rebind pending, or failed: the standing binding\'s live line, not the newest': () => {
+      expect(m.keptDesignationLine([dl(2, 'a', 'live'), dl(3, 'b', 'pending')])).toBe(2);
+      expect(m.keptDesignationLine([dl(2, 'a', 'live'), dl(3, 'b', 'pending'), dl(4, 'b', 'failed')])).toBe(2);
+    },
+    'after a go-live, the new live line in either stamp order; given unsorted': () => {
+      expect(m.keptDesignationLine([dl(2, 'a', 'live'), dl(3, 'b', 'pending'), dl(4, 'a', 'retired'), dl(5, 'b', 'live')])).toBe(5);
+      expect(m.keptDesignationLine([dl(5, 'a', 'retired'), dl(4, 'b', 'live'), dl(2, 'a', 'live'), dl(3, 'b', 'pending')])).toBe(4);
+    },
+    'a retired line of the live id after it: no binding, so the newest line': () => {
+      expect(m.keptDesignationLine([dl(2, 'a', 'live'), dl(3, 'a', 'retired')])).toBe(3);
+      expect(m.keptDesignationLine([dl(2, 'a', 'live'), dl(3, 'a', 'retired'), dl(4, 'b', 'pending')])).toBe(4);
+      expect(m.keptDesignationLine([dl(2, 'a', 'live'), dl(3, 'b', 'failed'), dl(4, 'a', 'retired')])).toBe(4);
+    },
+    'a retired line BEFORE the live one, or of another id, ends nothing': () => {
+      expect(m.keptDesignationLine([dl(1, 'a', 'retired'), dl(2, 'a', 'live'), dl(3, 'b', 'pending')])).toBe(2);
+      expect(m.keptDesignationLine([dl(2, 'a', 'live'), dl(3, 'b', 'retired')])).toBe(2);
+    },
+    'the newest of two live lines': () => { expect(m.keptDesignationLine([dl(2, 'a', 'live'), dl(4, 'b', 'live'), dl(3, 'a', 'retired')])).toBe(4); },
+  };
+}
+
 // -------------------------------------------------------------------------------------------------------- mutant sets
 
 const set = (cases: (m: SequenceModule) => Record<string, SuiteCase>, mutants: MutantSet<SequenceModule>['mutants']): MutantSet<SequenceModule> =>
@@ -226,9 +267,20 @@ const CUT_SET = set(retentionCutCases, [
   { id: 'C6 no keep window', old: 'const cutoff = now - SEQUENCE_KEEP_MS;', new: 'const cutoff = now;' },
 ]);
 
+const KEPT_SET = set(keptDesignationLineCases, [
+  { id: 'D1 the newest line always', old: '  if (live !== undefined && !sorted.some(', new: '  if (false && !sorted.some(' },
+  { id: 'D2 a retire ends nothing', old: "!sorted.some((l) => l.seq > live.seq && l.state === 'retired' && l.id === live.id)", new: 'true' },
+  { id: 'D3 any id\'s retire ends the binding', old: " && l.state === 'retired' && l.id === live.id)", new: " && l.state === 'retired')" },
+  { id: 'D4 an earlier retire ends it', old: 'l.seq > live.seq && ', new: '' },
+  { id: 'D5 the oldest live line', old: ".filter((l) => l.state === 'live').at(-1)", new: ".filter((l) => l.state === 'live').at(0)" },
+  { id: 'D6 arrival order', old: 'const sorted = [...lines].sort((a, b) => a.seq - b.seq);', new: 'const sorted = [...lines];' },
+  { id: 'D7 the oldest line with no binding', old: 'return sorted.at(-1)?.seq ?? null;', new: 'return sorted.at(0)?.seq ?? null;' },
+]);
+
 export const SEQUENCE_MUTANT_SETS: Record<string, MutantSet<never>> = {
   [`${KEY}#sequenceLineVerdict`]: VERDICT_SET as MutantSet<never>,
   [`${KEY}#sequenceLineKnown`]: KNOWN_SET as MutantSet<never>,
   [`${KEY}#sequencePage`]: PAGE_SET as MutantSet<never>,
   [`${KEY}#retentionCut`]: CUT_SET as MutantSet<never>,
+  [`${KEY}#keptDesignationLine`]: KEPT_SET as MutantSet<never>,
 };

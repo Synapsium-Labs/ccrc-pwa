@@ -20,7 +20,7 @@ if (false) {
 }
 function rig(rung = 'off') {
   const db = new DatabaseSync(':memory:');
-  db.exec(MIGRATIONS.find((m) => m.includes('CREATE TABLE overlord_ladder'))!);
+  db.exec(MIGRATIONS.find((m) => m.includes('CREATE TABLE overlord_ladder'))!); db.exec(MIGRATIONS.find((m) => m.includes('CREATE TABLE overlord_sequence ('))!);
   db.prepare("INSERT INTO overlord_ladder VALUES (1, ?, 'old', 1, 1, NULL, NULL)").run(rung);
   const entries: unknown[] = [];
   const journal = { appendInTx: (_db: unknown, entry: unknown) => {
