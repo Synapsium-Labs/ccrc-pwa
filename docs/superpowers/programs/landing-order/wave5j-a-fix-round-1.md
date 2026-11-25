@@ -7,16 +7,20 @@ Every test ran through `ccrc test`, one file per process, from `server/`.
 ## R1: a withdrawn row with no run is kept at a pin (the review's F1)
 
 The plan's Task 3 moved the whole `withdrawn` arm out of the kept case. Decision 7, section 4.3 and section 11 C3 say a
-run-less withdrawn entry cannot re-enter, and section 11 wins over a task. In the pin arm of `decideLandingWrite`
+run-less withdrawn entry cannot re-enter, and section 11 wins over a task; section 12, C9, rules this change and names
+row A25. In the pin arm of `decideLandingWrite`
 (`server/src/coord/landingEntry.ts`), a `withdrawn` row now re-pins only when its run field is a number. A withdrawn row
 with no run answers `kept withdrawn`, as on main, and the run still advances. A `closed` row is unchanged in both forms:
 it re-pins with or without a run, because `closed` is GitHub's word and `withdrawn` is the operator's. The comment at the
 branch now says a run-bound withdrawn row.
 
 The run field. `LandingEntry.runId` is `number | null`. The strict row reader (`landingEntryFactsOfRow`) reads a stored run
-id that is neither absent nor a positive safe integer as unreadable, and the store then refuses the whole snapshot, so
-the decider is never handed anything else. The condition is `typeof current.runId === 'number'`, so it keeps on anything
-that is not a number. The type is not widened.
+id that is neither absent nor a positive safe integer as unreadable. The store does not refuse the snapshot for it (it
+refuses only for a bad entry id, pull request or project), so the decider can be handed 0, a negative or NaN, which
+pass `typeof === 'number'`. Such a row cannot reach the withdrawn branch: its display needs a readable run id, so it
+displays `unknown` (review run 3806, F3, which corrected this paragraph). So every row that can read `withdrawn` has a
+run field that is null or a safe integer of 1 or more. The condition is `typeof current.runId === 'number'`, and the
+type is not widened.
 
 Cases, in `server/test/landing-entry-store.test.ts`:
 
@@ -73,8 +77,9 @@ green, 32 of 32. Commit: `f09caa38d354935ed023018082ef0c270e642d19`.
 
 ## R4: a departure named by its slug (the review's F3)
 
-Task 2's commit is red alone in the single-definition directory: the holder list gains `landingDoorsTx.ts` one commit
-later, for the reason the Task 2 note gives. The Task 2 note now names the departure by its slug,
+Task 2's commit is red alone in the single-definition directory: the holder list gains `landingDoorsTx.ts` three
+commits later (`fba44c2421` adds the file, `db84435f21` the line; review run 3806, F1), for the reason the Task 2 note
+gives. The number is D-9072. The Task 2 note now names the departure by its slug,
 `landing-doors-holder-pin-order`. No history is rewritten.
 
 ## R5: the store growth figure (the review's F4)

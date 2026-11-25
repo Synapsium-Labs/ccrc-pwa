@@ -869,6 +869,15 @@ Review run 3781 read wave 5j-a's branch at `e94b55a0c0` (pull request #3375): no
 - **C10, the lane census joins the 5j-a gate (D-9071).** `server/test/coord-token.test.ts` counts the call sites that name their lane, and Task 5's read block is one more. Task 5's file list and its gate did not name that file, so the pull request's first run was red on it.
 - **Section 9 is unchanged.** Its blocks already say that an entry with no run cannot re-enter, and with C9 the code agrees.
 
+Review run 3806 read the first fix round at `621932e57e`: no critical or important finding, seven minor ones. One asked for a ruling, given here (call 1199). Wave 5j-a merged as #3375 at `31d5d9ae26`.
+
+- **C11, a run-bound withdrawn entry re-pins at any run's verified pin (F4; the built rule, ruled, not a new one).**
+  - The fact: the built condition asks only that the withdrawn row has a run, not that it is the pinning run. A verified pin of the same pull request by another run re-pins the row, and the store writes the pinning run's id, exactly as for a `closed` row. A `pinned` row and an `ejected` row re-pin for any run too.
+  - The ruling: that is the rule. Decision 7, section 4.3 and D-9047 say "its run's next verified" pin; read them as any run's verified pin of that pull request, as a `closed` row's. The operator's door removes an entry from the line; it does not bind the entry to one run, and a second run of the same pull request is the same work coming back. C9 is unchanged: a withdrawn row with no run is kept.
+  - No case separated the two readings. Wave 5j-b carries one store case (a withdrawn row bound to run A, a verified pin by run B, and the row ends `pinned` under B with a witness), measured red by the mutant `current.runId === f.runId`, and it rewords the comment above `it.each(['landed'])` in `landing-entry-store.test.ts`, whose reason no longer held after C9. Both are in its brief.
+  - Section 9 is unchanged: its sentence that an entry re-enters at its run's next verified pin stays true; the wider rule adds a case it does not name, and section 9 waits for the operator's reading (item 665).
+- **The 5j-a notes are corrected** on the ledger pull request after #3380: the holder line came three commits after the file, not one (F1); a bad stored run id leaves the snapshot readable and the row displays `unknown`, so it never reaches the withdrawn branch (F3); and the fix round's R1 cites C9 (F6). F2, the stale test comment, is carried to 5j-b as above; F5 and F7 are facts the review recorded, and nothing changes for them.
+
 ## Deviations found
 
 Eight numbers were issued for this plan on 2026-11-25 (D-9045 to D-9052), and all eight are defined below. D-9052 is used only if Task 9 measures `routes.ts` over the growth limit; the 5j-b wave-done says which. Two more were issued the same day, for departures wave 5j-a's build and its first review found (D-9071 and D-9072); they are defined last.
@@ -885,6 +894,7 @@ Eight numbers were issued for this plan on 2026-11-25 (D-9045 to D-9052), and al
   - Replay still writes no pin, landed state, association or witness, and still sends no notice.
 - **D-9047 (2026-11-25)** — `landing-withdrawn-holds-and-repins`: a withdrawal is neither a ban nor a release.
   - **Not a ban:** a run-bound `withdrawn` entry re-pins at its run's next verified `advance → merging` (after a retreat when it is still at `merging`) over a readable, unquarantined projection, exactly as a `closed` one does.
+    As built and ruled (section 12, C11): any run's verified pin of the same pull request re-pins it, as for a `closed` one.
   - **Not a release:** an edge to a withdrawn target stays outstanding, so its dependant waits, named in the read's `order.waits` (each target by entry id and PR), until an attributed session declares its order again without that target (a deliberate act with its feed note, not a door) or the target re-enters and lands. Today an edge to any terminal target is met; `landed` and `closed` keep that meaning.
   - **A release is always in the feed** (ruled after review run 3748; section 11, C1): a changed order that drops an edge to a withdrawn target owes the order arm's feed event whoever the setter is. Before, the feed owed nothing when the setter was the run's own claimant, which is who a held dependant's notice goes to.
   - Re-entry of a run-less entry is left out (follow-up `landing-runless-reentry`): it needs a journal claim over an existing identity, which the parser forbids.
