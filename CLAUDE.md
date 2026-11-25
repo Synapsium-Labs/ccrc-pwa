@@ -685,7 +685,9 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   portfolio B: the operator ratifies one goals version, behind the account gate, so it refuses while sign-in is dark), and the
   programme lifecycle's doors (W2, D-8987, D-8992, D-8993) `POST /api/programmes` (the start, behind the account gate),
   `POST /api/programmes/:slug/state` (pause works while sign-in is dark and records `flag-off`; resume, end, reopen and repair
-  take the step-up) and `POST /api/programmes/:slug/coordinator` (the hand-over, behind the step-up), consult no box token
+  take the step-up) and `POST /api/programmes/:slug/coordinator` (the hand-over, behind the step-up), and its backfill door
+  `POST /api/programmes/decisions` (W3, D-8990: previews the operator's private decisions file, and applies it behind the
+  step-up), consult no box token
   either: the tick queues the operator's answer as system mail to the programme's coordinator in the move's own transaction,
   the secret door stores a pasted one-line value in its protected slot and ticks with "set" and when, and the last four
   characters only for a value the masker catches (at its 20-byte floor or longer, as one run), behind a step-up, the read
@@ -758,7 +760,10 @@ while sign-in is dark) consults no box token and is session-gated when armed. Al
   stuck, marker unreadable, and D5's `restarted`: a run worker respawned over lost background tasks is mailed a re-check
   notice at once and its coordinator one heads-up, at most one per worker on its run per 10 minutes, with no restart and no push)
   record shadow only until `stall-watch-w2-live` exists, and while `mail-disabled` stands every
-  rung that would send mail holds. `stall-watch-disabled`, `stall-watch-live`, `stall-watch-escalate`,
+  rung that would send mail holds. A provider error (`server_error`, `overloaded`) is not the `failed` arm's: the
+  provider-failure ladder (`coord/providerRetry.ts`, armed by its own rule since D-9085, stopped by
+  `stall-watch-disabled`, a chosen Off or Log only, and `mail-disabled`) mails any live session itself at 1, 4 and 15 min,
+  asks no coordinator, and raises one operator notice per provider outage. `stall-watch-disabled`, `stall-watch-live`, `stall-watch-escalate`,
   `stall-watch-w2-live`, `mail-gate-busy-shadow` and `mail-gate-busy` arm them (no `stall-watch-live`: shadow only) and,
   like `mail-gate-strict`, have **no writer in the tree** — `single-definition/*.test.ts` pins that. A level chosen in
   Settings (`/api/coord/stall-watch`, the operator's control) overrides the arming markers, but never

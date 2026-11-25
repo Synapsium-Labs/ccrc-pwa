@@ -137,8 +137,9 @@ export const isProgrammeStateEdge = (v: unknown): v is ProgrammeStateEdge =>
   typeof v === 'string' && (PROGRAMME_STATE_EDGES as readonly string[]).includes(v);
 
 /** Every operator or Overlord programme act the credential rule (spec §14) rules on: the state door's edges, the start, the
- *  hand-over, and the confirm and decline of an end proposal. */
-export const PROGRAMME_DOOR_ACTS = [...PROGRAMME_STATE_EDGES, 'start', 'hand-over', 'confirm-end', 'decline-end'] as const;
+ *  hand-over, the confirm and decline of an end proposal, and the apply of a decisions file (W3; its preview writes nothing,
+ *  so it is no act). */
+export const PROGRAMME_DOOR_ACTS = [...PROGRAMME_STATE_EDGES, 'start', 'hand-over', 'confirm-end', 'decline-end', 'apply-decisions'] as const;
 export type ProgrammeDoorAct = (typeof PROGRAMME_DOOR_ACTS)[number];
 
 /** What a door asks of its caller (spec §14): `dark-ok` works while sign-in is dark and records `flag-off` then; `gate` takes
@@ -222,15 +223,71 @@ export type SessionProgrammeAnswer =
       readonly lifecycle: ProgrammeLifecycle | null } }
   | { readonly ok: true; readonly programme: 'none'; readonly why: NoProgrammeWhy | 'never-joined' };
 
+// ── W3: the backfill door's vocabulary (programme lifecycle spec §13, R9; D-8990) ───────────────────────────────────────
+
+/** What a decisions file may ask of a programme: every shown lifecycle but `unknown`. */
+export type ProgrammeDecisionTarget = Exclude<ProgrammeLifecycle, 'unknown'>;
+export const PROGRAMME_DECISION_TARGETS = PROGRAMME_LIFECYCLES.filter((l): l is ProgrammeDecisionTarget => l !== 'unknown');
+export const isProgrammeDecisionTarget = (v: unknown): v is ProgrammeDecisionTarget =>
+  (PROGRAMME_DECISION_TARGETS as readonly unknown[]).includes(v);
+/** The entries one decisions file may hold. CHOSEN, not measured: far above R9's 56. */
+export const PROGRAMME_DECISIONS_MAX = 500;
+
+/** The decisions file's own two refusals; every other is the door table's or the edge's. A refusal here is an outcome of its
+ *  entry in a 200 answer, never a door's status. */
+export const PROGRAMME_DECISION_REFUSALS = ['duplicate-entry', 'reserved-programme'] as const;
+export type ProgrammeDecisionRefusal = (typeof PROGRAMME_DECISION_REFUSALS)[number] | ProgrammeDoorRefusal | 'programme-ended';
+
+/** One entry's outcome: nothing to write and shown as asked (`unchanged`); a write that makes it read as asked, to come
+ *  (`would-apply`, a preview's) or written (`applied`); its runs show another state than asked, reported and never forced
+ *  (`mismatch`, whose `edge` says whether a decision is written); or refused, nothing written. */
+export const PROGRAMME_DECISION_OUTCOMES = ['unchanged', 'would-apply', 'applied', 'mismatch'] as const;
+export type ProgrammeDecisionOutcome = (typeof PROGRAMME_DECISION_OUTCOMES)[number] | `refused:${ProgrammeDecisionRefusal}`;
+
+/** One entry of a decisions file, answered. `stored` is the decision before; `shown` the lifecycle after (a preview's: as it
+ *  would be); `edge` the event written (a preview's: to write), null for none. All three are null on an entry that names no
+ *  real programme. */
+export interface ProgrammeDecisionRow {
+  readonly slug: string;
+  readonly to: ProgrammeDecisionTarget;
+  readonly outcome: ProgrammeDecisionOutcome;
+  readonly stored: string | null;
+  readonly shown: ProgrammeLifecycle | null;
+  readonly openRuns: number | null;
+  readonly edge: ProgrammeEventEdge | null;
+  readonly detail?: string;
+}
+
+/** A migration conflict as the backfill answer lists it (spec §13): one session with the programmes whose open runs it holds
+ *  without owning them, or one programme with the several sessions that hold its open runs. */
+export type ProgrammeConflictGroup =
+  | { readonly kind: 'session-in-several'; readonly session: string; readonly programmes: readonly { readonly slug: string; readonly openRuns: number }[] }
+  | { readonly kind: 'programme-several-claimants'; readonly slug: string; readonly claimants: readonly string[]; readonly openRuns: number };
+
+/** `POST /api/programmes/decisions`' answer (spec §13). `listed` counts the real programmes the file names, each once, and
+ *  `counts` spreads them over the shown states; every other real programme is in `unlisted`. Placeholders still unfiled are
+ *  a count, and the reserved row only its presence. */
+export interface ProgrammeDecisionsAnswer {
+  readonly ok: true;
+  readonly apply: boolean;
+  readonly entries: readonly ProgrammeDecisionRow[];
+  readonly listed: number;
+  readonly counts: Readonly<Record<ProgrammeLifecycle, number>>;
+  readonly unlisted: readonly { readonly slug: string; readonly shown: ProgrammeLifecycle | null }[];
+  readonly placeholders: number;
+  readonly conflicts: readonly ProgrammeConflictGroup[];
+  readonly reservedRow: boolean;
+}
+
 /** The words a coordinator left owning nothing is told (spec §7), once, by system mail. */
 export const NO_PROGRAMME_SENTENCE =
   'You own no programme now. The operator or the Overlord will give you one or archive this session; open no runs until then.';
 
 /** The lifecycle doors' kebab words, for the code-word census (`mail-routes.test.ts`): their refusals, the event and edge
- *  words, the door acts and credentials, the coordinator lines, the conflict kinds and why a coordinator owns nothing. Each
- *  rides a door's answer or a stored event, never a mail rejection. */
+ *  words, the door acts and credentials, the coordinator lines, the conflict kinds, why a coordinator owns nothing, and the decisions file's
+ *  outcomes and refusals. Each rides a door's answer or a stored event, never a mail rejection. */
 const DOOR_WORDS: ReadonlySet<string> = new Set<string>([
   ...Object.keys(PROGRAMME_DOOR_REFUSALS), ...PROGRAMME_EVENT_EDGES, ...PROGRAMME_DOOR_ACTS, ...DOOR_CREDENTIALS,
-  ...COORDINATOR_LINES, ...CLAIM_CONFLICT_KINDS, ...NO_PROGRAMME_WHYS,
+  ...COORDINATOR_LINES, ...CLAIM_CONFLICT_KINDS, ...NO_PROGRAMME_WHYS, ...PROGRAMME_DECISION_OUTCOMES, ...PROGRAMME_DECISION_REFUSALS,
 ]);
 export const isProgrammeDoorWord = (w: string): boolean => DOOR_WORDS.has(w);

@@ -54,7 +54,7 @@ const STALL_REPLY_WORKING_PREFIX = `${STALL_REPLY_PREFIX} working`;
 const STALL_DETAIL_LIVE = 'stall';
 const STALL_DETAIL_SHADOW = 'stall-shadow';
 /** The sender every watch notice carries: the operator role (`SystemMailSender`), never a session. */
-const STALL_SENDER = 'operator';
+export const STALL_SENDER = 'operator';
 
 // ── arms, holds, markers ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -87,6 +87,7 @@ const STALL_HOLD_MAP = {
   'failed-account': 'the turn ended on an account-class StopFailure: the limit, swap and authdead machinery owns it',
   'failed-unknown': 'the turn ended on a StopFailure token this build cannot classify: never guessed into a self-wake',
   timer: 'a timer the worker set itself is pending, or fired less than one quiet period ago, below TIMER_HOLD_CAP_MS from the ladder\'s start (the quiet arm\'s r1 only; never a backoff, C65)',
+  'provider-retry': 'the worker owes a retry after a provider failure, and `providerRetry.ts` nudges it: no quiet rung asks its coordinator about a provider',
 } as const;
 export type StallHold = keyof typeof STALL_HOLD_MAP;
 export const STALL_HOLDS = Object.keys(STALL_HOLD_MAP) as StallHold[];
@@ -354,9 +355,7 @@ export const ORPHAN_E_IDLE_MS = 10 * 60_000;
 /** restarted rung 2 (D5, #759): a worker's coordinator hears of at most one restart per this window. *Chosen*: the
  *  ticket's number; a herd restart or a pane OOM loop is one cluster, not one mail each. */
 export const RESTARTED_HEADS_UP_MS = 10 * 60_000;
-/** failed. *Chosen*. */
-export const FAILED_IDLE_MS = 10 * 60_000;
-/** failed: a second retry-class StopFailure inside this window goes to the coordinator. *Chosen*. */
+/** failed: a second retry-class StopFailure inside this window goes to the coordinator. *Chosen*. The operator push words it. */
 export const FAILED_REPEAT_MS = 2 * 3_600_000;
 /** §5.1 (c): a stall check still undelivered this long after it was queued is proof for r2. *Chosen*. */
 export const CHECK_UNDELIVERED_MS = 2 * 3_600_000;
@@ -392,26 +391,6 @@ export const MARKER_UNREADABLE_MS = 3_600_000;
 export const COORD_BLOCKED_HELD_MS = 30 * 60_000;
 export const COORD_BLOCKED_STRETCH_MS = 60 * 60_000;
 export const COORD_BLOCKED_OLD_MS = 2 * 60 * 60_000;
-
-// ── StopFailure's error tokens (§5.2) ────────────────────────────────────────────────────────────────────────
-/** 2.1.277–2.1.284's own StopFailure matcher list, identical in every installed lane, in §5.2's three classes.
- *  `retry`: a self-mail, then the coordinator on a repeat. `account`: a hold, because the limit, swap and authdead
- *  machinery owns it. `request`: the coordinator, because a retry fails the same way. It is one total Record, and
- *  the classifier reads it through `hasOwnProperty`, so an inherited name is never a token. */
-const STOP_FAILURE_ERROR_MAP = {
-  server_error: 'retry', overloaded: 'retry', max_output_tokens: 'retry', unknown: 'retry',
-  rate_limit: 'account', billing_error: 'account', authentication_failed: 'account', oauth_org_not_allowed: 'account',
-  account_on_hold: 'account', verification_required: 'account', cloud_credential_error: 'account',
-  invalid_request: 'request', model_not_found: 'request',
-} as const;
-export type StopFailureError = keyof typeof STOP_FAILURE_ERROR_MAP;
-export type StopFailureClass = 'retry' | 'account' | 'request';
-export const STOP_FAILURE_ERRORS: Readonly<Record<StopFailureError, StopFailureClass>> = STOP_FAILURE_ERROR_MAP;
-/** null for a token this build cannot classify (never guessed): the failed arm holds `failed-unknown`. */
-export function stopFailureClass(err: string | null): StopFailureClass | null {
-  if (err === null || !Object.prototype.hasOwnProperty.call(STOP_FAILURE_ERROR_MAP, err)) return null;
-  return STOP_FAILURE_ERROR_MAP[err as StopFailureError];
-}
 
 // ── the kind and event sets, each spelled once ───────────────────────────────────────────────────────────────
 /** Each background kind a turn end can wake with, and whether it resumes the session on its own (§5.1 proof (a))
@@ -472,11 +451,6 @@ export function stallRestartedSubject(restartAt: number): string {
 function stallRestartedHeadsUpSubject(run: StallRunRow, restartAt: number): string {
   return `${STALL_RESTARTED_PREFIX} run ${stallInt(run.id)} — worker ${stallSafe(run.sessionId)} restarted at ${stallUtc(restartAt)}`;
 }
-/** failed: the error token and the turn end's minute. */
-export function stallFailedSubject(err: string, stopAt: number): string {
-  return `${STALL_FAILED_PREFIX} your turn ended on an API error (${stallSafe(err)}) at ${stallUtc(stopAt)}`;
-}
-
 /** The worker's RAW live word. The lane reads it itself (tmux pane pid, config dir, then the measured
  *  live-state read), never `FleetSession.status`, which is a collapse. Every `ok: false` reason is hold 1. */
 export type LiveWordRead =
@@ -619,7 +593,9 @@ export function stallQuietMs(input: StallInput): number {
 }
 /** Wave 2's facts about the subject's worker (`w2-facts-separate-object` (D-3629)): `StallFacts` is unchanged. `absentSince`,
  *  `deadSince` and `markUnreadableSince` are the lane's in-memory first-seen times. They restart with the server. */
-export interface StallW2Facts { readonly mark: TurnMarkRead; readonly hook: HookRawFact; readonly deliveries: readonly StallDeliveryRow[]; readonly absentSince: number | null; readonly deadSince: number | null; readonly markUnreadableSince: number | null }
+export interface StallW2Facts { readonly mark: TurnMarkRead; readonly hook: HookRawFact; readonly deliveries: readonly StallDeliveryRow[]; readonly absentSince: number | null; readonly deadSince: number | null; readonly markUnreadableSince: number | null;
+  /** `providerRetry.ts#providerRetryHoldsQuiet`'s answer; absent reads as false. */
+  readonly providerRetryOwed?: boolean }
 export type StallR3Cause = 'still-silent' | 'coordinator-dead' | 'no-coordinator' | 'coordination-paused';
 /** Total over the r3 causes, for `isStallKebab`. */
 const STALL_R3_CAUSE_MAP: Record<StallR3Cause, string> = {
@@ -704,7 +680,7 @@ function isWatchNotice(m: StallMailRow): boolean {
   return c === 'check' || c === 'report' || c === 'self-wake';
 }
 
-function isIdleWord(word: string): boolean {
+export function isIdleWord(word: string): boolean {
   return stallWatchSays(word) === 'rest';
 }
 
@@ -1151,7 +1127,7 @@ export function stallVerdict(input: StallInput, now: number): StallVerdict {
  *  (6) restart grace;
  *  (7) frozen;
  *  (8) delegates;
- *  (9) the coordinator's ball: coord-deaf, the cap, or none;
+ *  (9) the coordinator's ball: coord-deaf, the cap, or none; then a worker owing a provider retry holds `provider-retry`;
  *  (10) the worker's ball: under the w2 marker, on the marker clock and escalating on proof; otherwise wave 1's
  *      ladder.
  *  Without `stall-watch-w2-live`, every LIVE outcome is wave 1's (`dark-mode-keeps-wave-1-verdict` (D-3645)). A wave-2 arm
@@ -1249,6 +1225,7 @@ function stallVerdictInner(input: StallInput, now: number): StallVerdict {
     const ballAge = ballFrom === null ? 0 : now - ballFrom;
     return ballAge >= COORD_BALL_CAP_MS && rungDoneAt(input, 'coord-ball', 1, key) === null ? capVerdict('coord-ball', key) : VERDICT_NONE;
   }
+  if (w2?.providerRetryOwed === true) return holdVerdict('provider-retry');
   // (10) the worker's ball. Without the w2 marker, or without a current marker: wave 1's ladder, unchanged.
   if (!w2Live || w2 === undefined || okMark === null || view === null) return stallWaveOneLadder(input, f, live.word, live.since, key, now);
   if (view.state === 'working') return holdVerdict('busy');
@@ -1301,7 +1278,7 @@ export function stallUtc(ms: number): string {
 }
 
 /** `YYYY-MM-DDTHH:MM:SSZ`: when a body's quiet began (§4.2's example). */
-function stallUtcSec(ms: number): string {
+export function stallUtcSec(ms: number): string {
   const iso = stallIso(ms);
   return iso === null ? STALL_UNPRINTABLE : `${iso.slice(0, 19)}Z`;
 }
@@ -1325,7 +1302,7 @@ function stallDeadline(ms: number): string {
 }
 
 /** `<h>h <m>m`, floored to the minute. A negative span prints as `0h 0m`. */
-function stallSpan(ms: number): string {
+export function stallSpan(ms: number): string {
   const minutes = Math.max(0, Math.floor(ms / 60_000));
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
@@ -1637,6 +1614,9 @@ export interface TurnMark {
    *  Stop carried no array. NULL when the line has no such field (an older hook) or one this reader cannot judge —
    *  absent, never 0, so hibernation's `scheduled` hold keeps such a session awake. Never condemns the line. */
   readonly crons: number | null;
+  /** The epochs of the last consecutive provider failures, at most eight, oldest first (`stopFailure.ts`'s tokens). The
+   *  reader always sets it; a line with none, or with one it cannot judge, reads as no failures. */
+  readonly failAts?: readonly number[];
   /** `restartAt + RESTART_GRACE_MS` when that restart cut a turn short (`turnMarkGraceUntil`), else null. */
   readonly graceUntil: number | null;
 }
@@ -1735,14 +1715,14 @@ export function stallSessionLive(input: StallSessionInput): { readonly word: str
 
 /** The marker when it is CURRENT: read ok, and not older than the live process. A null `liveStartedAt` reads it
  *  stale (`stale-when-live-has-no-startedat` (D-3655)). */
-function stallCurrentMark(input: StallSessionInput): TurnMark | null {
+export function stallCurrentMark(input: StallSessionInput): TurnMark | null {
   const m = input.mark;
   if (!m.ok || input.liveStartedAt === null || turnMarkStale(m, input.liveStartedAt)) return null;
   return m;
 }
 
 /** A run worker's rungs are recorded on its run's notices; every other session's are run-less. */
-function stallRunBound(input: StallSessionInput): boolean {
+export function stallRunBound(input: StallSessionInput): boolean {
   return input.role === 'worker' && input.run !== null;
 }
 
@@ -1755,7 +1735,7 @@ export function stallSelfMail(input: StallSessionInput, subject: string): StallM
  *  run-less session: its mail row, found by the exact subject that the store's run-less dedupe
  *  (`hasMailWithSubject`) keys on. A run-less shadow rung records nothing, so it is never done here, and the lane
  *  warns once per key instead. */
-function stallSelfRungDone(input: StallSessionInput, arm: StallArm, key: number, subject: string): boolean {
+export function stallSelfRungDone(input: StallSessionInput, arm: StallArm, key: number, subject: string): boolean {
   if (stallRunBound(input)) return rungDoneAt(input, arm, 1, key) !== null;
   return stallSelfMail(input, subject) !== null;
 }
@@ -1763,18 +1743,15 @@ function stallSelfRungDone(input: StallSessionInput, arm: StallArm, key: number,
 /** Is a coordinator- or operator-bound rung done? Only a run worker's is recorded. A run-less session's operator
  *  push is latched in memory by the lane (`stall-<sessionId>-<arm>-<rung>-<key>`, or `orphaned-<toId>-<restartAt>`
  *  for D), so L1 answers false and the lane holds it to one push. */
-function stallRecordedDone(input: StallSessionInput, arm: StallArm, rung: 1 | 2 | 3, key: number): boolean {
+export function stallRecordedDone(input: StallSessionInput, arm: StallArm, rung: 1 | 2 | 3, key: number): boolean {
   return stallRunBound(input) && rungDoneAt(input, arm, rung, key) !== null;
 }
 
-/** The exact subject of a session self-mail (§5.2), for the arm that sends it. The wording is Task 10's three
+/** The exact subject of a session self-mail (§5.2), for the arm that sends it. The wording is Task 10's
  *  builders', never re-spelled here: the lane queues their output through Task 13's texts, the store's run-less dedupe
- *  keys on it, and these verdicts find the sent mail by it. The failed arm passes the `err` and `key` (`stopAt`) its
- *  verdict carries, the same two values Task 13's `stallFailedMail` hands the same builder. */
-function stallSelfSubjectOf(arm: 'orphan-d' | 'orphan-e' | 'failed', m: TurnMark): string {
-  if (arm === 'orphan-d') return stallOrphanDSubject(m);
-  if (arm === 'orphan-e') return stallOrphanESubject(m);
-  return stallFailedSubject(m.err ?? '', m.stopAt ?? Number.NaN);
+ *  keys on it, and these verdicts find the sent mail by it. The failed arm's subject is `stopFailure.ts#stallFailedSubject`. */
+function stallSelfSubjectOf(arm: 'orphan-d' | 'orphan-e', m: TurnMark): string {
+  return arm === 'orphan-d' ? stallOrphanDSubject(m) : stallOrphanESubject(m);
 }
 
 /** The coordinator candidates (Contract note 2). They are the distinct non-null claimants of the rows that
@@ -1919,66 +1896,6 @@ function stallOrphanEInner(input: StallSessionInput, now: number): StallVerdict 
 
 export function stallOrphanEVerdict(input: StallSessionInput, now: number): StallVerdict {
   return stallMailDisabledHold(stallOrphanEInner(input, now), input.arming);
-}
-
-/** A run worker's `failed` rung-1 notices keyed inside `[stopAt - FAILED_REPEAT_MS, stopAt)`, live or shadow: the
- *  failures before this one in the repeat window. The verdict counts them, and the repeat report reads their modes. */
-function stallPriorFailedNotices(input: StallSessionInput, stopAt: number): StallNotice[] {
-  const from = stopAt - FAILED_REPEAT_MS;
-  return input.notices.filter((n) => n.arm === 'failed' && n.rung === 1 && n.key >= from && n.key < stopAt);
-}
-
-/** Was there a failure BEFORE this one inside `[stopAt - FAILED_REPEAT_MS, stopAt)`? For a run worker: a `failed`
- *  rung-1 notice keyed in that window, live or shadow (either one records that the failure happened). For a run-less
- *  session: a `failed:` self-mail from the watch, sent in that window under another subject. */
-function stallPriorFailure(input: StallSessionInput, stopAt: number, subject: string): boolean {
-  const from = stopAt - FAILED_REPEAT_MS;
-  if (stallRunBound(input)) return stallPriorFailedNotices(input, stopAt).length > 0;
-  return input.mail.some((m) => m.fromId === STALL_SENDER && m.toId === input.sessionId && m.subject.startsWith(STALL_FAILED_PREFIX)
-    && m.subject !== subject && m.at >= from && m.at < stopAt);
-}
-
-/** Failed (§5.2), for run workers and coordinators: the marker reads `failed`, FAILED_IDLE_MS have passed since the
- *  failure (and no more than BACKLOG_HORIZON_MS - FAILED_REPEAT_MS), and the pane reads idle or shell. Key: `stopAt`.
- *  Per `STOP_FAILURE_ERRORS` class:
- *  - an unclassifiable token holds `failed-unknown` (the lane warns once, and it is never guessed);
- *  - `account` holds `failed-account`;
- *  - `retry` mails the session itself, or goes to rung 2 `repeat` after a prior failure in the window;
- *  - `request` goes to rung 2 `request`.
- *  Rung 2 goes to a run worker's claimant, or to the operator when there is none, when coordination is paused, or
- *  for a coordinator. */
-function stallFailedInner(input: StallSessionInput, now: number): StallVerdict {
-  if (input.role === 'other') return VERDICT_NONE;
-  const held = stallSessionHold(input, now);
-  if (held !== null) return held;
-  const m = stallCurrentMark(input);
-  if (m === null || m.state !== 'failed' || m.stopAt === null || now - m.stopAt < FAILED_IDLE_MS) return VERDICT_NONE;
-  // `failed-arm-bounded-by-the-mail-horizon` (D-3752): a run-less repeat is told from a first failure by a prior failed:
-  // self-mail at most FAILED_REPEAT_MS before this stop, and the lane's mail read keeps BACKLOG_HORIZON_MS. Past this
-  // bound that evidence may be gone, so the arm answers none rather than re-read a repeat as a first failure.
-  if (now - m.stopAt > BACKLOG_HORIZON_MS - FAILED_REPEAT_MS) return VERDICT_NONE;
-  const live = stallSessionLive(input);
-  if (live === null || !isIdleWord(live.word)) return VERDICT_NONE;
-  const key = m.stopAt;
-  const cls = stopFailureClass(m.err);
-  if (cls === null) return holdVerdict('failed-unknown');
-  if (cls === 'account') return holdVerdict('failed-account');
-  const err = m.err ?? '';
-  const subject = stallSelfSubjectOf('failed', m);
-  if (cls === 'retry' && !stallPriorFailure(input, m.stopAt, subject)) {
-    return stallSelfRungDone(input, 'failed', key, subject) ? VERDICT_NONE : { act: 'notify', arm: 'failed', rung: 1, key, to: 'worker', err };
-  }
-  if (stallRecordedDone(input, 'failed', 2, key)) return VERDICT_NONE;
-  const because = cls === 'retry' ? 'repeat' : 'request';
-  const r = input.run;
-  if (stallRunBound(input) && r !== null && r.claimedBy !== null && !input.coordinationPaused) {
-    return { act: 'notify', arm: 'failed', rung: 2, key, to: 'coordinator', coordinatorId: r.claimedBy, err, because };
-  }
-  return { act: 'notify', arm: 'failed', rung: 2, key, to: 'operator', err, because };
-}
-
-export function stallFailedVerdict(input: StallSessionInput, now: number): StallVerdict {
-  return stallMailDisabledHold(stallFailedInner(input, now), input.arming);
 }
 
 /** When the recipient's main loop went idle (§5.2;
@@ -2232,7 +2149,6 @@ const STALL_PAUSED_LINE = 'Coordination is paused, so no report went to the coor
 const STALL_NO_COORDINATOR_LINE = 'The run has no coordinator, so no report went to one.';
 /** The self-mail heads' words, taken from their prefixes, so no second quoted copy exists. */
 const STALL_ORPHANED_WORD = STALL_ORPHANED_PREFIX.slice(0, -1);
-const STALL_FAILED_WORD = STALL_FAILED_PREFIX.slice(0, -1);
 const STALL_RESTARTED_WORD = STALL_RESTARTED_PREFIX.slice(0, -1);
 
 type OkTurnMark = Extract<TurnMarkRead, { readonly ok: true }>;
@@ -2253,7 +2169,7 @@ function stallSpanOrUnmeasured(since: number | null, now: number): string {
 }
 
 /** Line 1 of a self-mail: who it is from, and the session, with its run when it has one. */
-function stallSelfHead(word: string, input: StallSessionInput): string {
+export function stallSelfHead(word: string, input: StallSessionInput): string {
   const run = input.run === null ? '' : `, ${stallRunLabel(input.run)}`;
   return `${word} from the ccrc stall watch (server), session ${stallSafe(input.sessionId)}${run}.`;
 }
@@ -2330,70 +2246,29 @@ function stallOrphanEMail(input: StallSessionInput, now: number): StallNoticeTex
   };
 }
 
-/** failed rung 1 (retry class), to the session. */
-function stallFailedMail(input: StallSessionInput, err: string, stopAt: number): StallNoticeText {
-  const next = input.role === 'worker'
-    ? "If it fails again, mail the coordinator (toId 'coordinator', kind status) what failed and when, rather than retrying again."
-    : 'If it fails again, report what failed and when to whoever you owe a report, rather than retrying again.';
-  return {
-    subject: stallFailedSubject(err, stopAt),
-    body: [
-      stallSelfHead(STALL_FAILED_WORD, input),
-      `Your turn ended at ${stallUtcSec(stopAt)} on an API error (${stallSafe(err)}), a kind a retry can clear, and your main loop has been idle since.`,
-      `Retry the step that failed, once. ${next}`,
-    ].join('\n'),
-  };
-}
-
 /** `stall: run <id> — <kind>: <rest>`: the form `stallReportKind` reads back. */
-function stallW2ReportSubject(run: StallRunRow, kind: Exclude<StallReportKind, 'stall'>, rest: string): string {
+export function stallW2ReportSubject(run: StallRunRow, kind: Exclude<StallReportKind, 'stall'>, rest: string): string {
   return `${STALL_REPORT_PREFIX} run ${stallInt(run.id)} — ${kind}: ${rest}`;
 }
 
 /** A report's first line (wave 1's r2 opens the same way). */
-function stallReportHead(run: StallRunRow): string {
+export function stallReportHead(run: StallRunRow): string {
   return `stall from the ccrc stall watch (server), ${stallRunLabel(run)}, state ${stallSafe(run.state)}.`;
 }
 
 /** `Worker <id> (workspace <ws>)`. */
-function stallWorkerRef(run: StallRunRow): string {
+export function stallWorkerRef(run: StallRunRow): string {
   return `Worker ${stallSafe(run.sessionId)} (workspace ${run.workspace === null ? 'none' : stallSafe(run.workspace)})`;
 }
 
-/** failed rung 2, to the coordinator: a report. */
-function stallFailedReportMail(input: StallSessionInput, err: string, because: 'repeat' | 'request', stopAt: number): StallNoticeText {
-  const run = input.run;
-  if (run === null) throw new RangeError('stallSessionMail: a failed report names its run, and this session is on none');
-  const e = stallSafe(err);
-  // "Told" only when a first failure's rung 1 went out live. A shadow row records the failure
-  // and sent nothing (it stands while the self-mail is unarmed), so the report names when that first failure happened and that it was recorded only in shadow.
-  const priors = stallPriorFailedNotices(input, stopAt);
-  const first = priors.reduce<StallNotice | null>((f, n) => (f === null || n.key < f.key ? n : f), null);
-  const toldLine = priors.some((n) => n.mode === 'live')
-    ? 'It was told to retry once after the first.'
-    : first === null ? 'It was not told to retry.' : `A first failure at ${stallUtcSec(first.key)} was recorded only in shadow, so it was not told to retry.`;
-  return {
-    subject: stallW2ReportSubject(run, 'failed', `${e} ${because === 'repeat' ? 'twice' : 'request error'} at ${stallUtc(stopAt)}`),
-    body: [
-      stallReportHead(run),
-      because === 'repeat'
-        ? `${stallWorkerRef(run)}: its turn ended on an API error (${e}) at ${stallUtcSec(stopAt)}, its second retryable failure within ${stallSpan(FAILED_REPEAT_MS)}. ${toldLine}`
-        : `${stallWorkerRef(run)}: its turn ended on an API error (${e}) at ${stallUtcSec(stopAt)}. A retry fails the same way, so it was not told to retry.`,
-      `Ack this and act once: mail the worker what to do instead, or mail it a subject beginning "${STALL_WAIT_PREFIX}" naming what it waits for.`,
-    ].join('\n'),
-  };
-}
-
-export function stallSessionMail(input: StallSessionInput, n: StallNotify, now: number): StallNoticeText {
+export function stallArmMail(input: StallSessionInput, n: StallNotify, now: number): StallNoticeText {
   if (n.to === 'worker') {
     if (n.arm === 'coord-ball') return stallCoordBallMail({ key: n.key, rung: n.rung });
     if (n.arm === 'orphan-d') return stallOrphanDMail(input);
     if (n.arm === 'orphan-e') return stallOrphanEMail(input, now);
     if (n.arm === 'restarted') return stallRestartedMail(input);
-    if (n.arm === 'failed') return stallFailedMail(input, n.err, n.key);
   }
   if (n.arm === 'restarted' && n.to === 'coordinator') return stallRestartedHeadsUpMail(input);
-  if (n.arm === 'failed' && n.to === 'coordinator') return stallFailedReportMail(input, n.err, n.because, n.key);
   throw new RangeError(`stallSessionMail: ${n.arm} rung ${n.rung} to the ${n.to} is not a session notice`);
 }
 
