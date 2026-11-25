@@ -33236,26 +33236,38 @@ _provfail_holds_home() {   # id home -> rc 0 iff home is marked and the operator
   [[ "$REG/$1.home" -nt "$REG/$2-provfail" ]] || return 0
   _reg_get_to sw "$1" lastswap; at=$(_plat_mtime "$REG/$1.home") && [[ "$sw" =~ ^[0-9]{1,12}$ ]] && (( 10#$sw > at ))
 }
+_provfail_row() {   # id now-ms [lastswap] -> rc 0 and PF_LANE, PF_GOOD and the counted failures PF_N, PF_FIRST, PF_LAST: what the row's marker says of the lane it is on | 1 evidence of nothing (every PF_* is emptied first)
+  # ONE ROW'S EVIDENCE. The lane is the row's `wrapper`, and a stamp counts for it only when it is newer than the row's
+  # `lastswap` (or the one the caller names: an act gate's, whose own dispatch has just stamped the field): what a session did
+  # before its last move it did on another lane. A field that is absent, unreadable or not this conversation's is evidence of
+  # NOTHING, neither failure nor health (`_turn_mark_read`'s rc, the uuid test, a `lastswap` that is no epoch), and so is a stamp
+  # more than a minute ahead of this clock.
+  #   PF_GOOD, the newest good Stop. A `done` line whose event is Stop; or, on the lines a later event wrote, an empty `failAts`
+  #   beside no failure or a provider's: the hook empties the list at a Stop and a clear alone, and a clear writes no `stopAt`.
+  #   Beside any other word the `stopAt` may be that failure's own, so it says nothing.
+  #   PF_N, PF_FIRST, PF_LAST: how many counted failures inside PROVFAIL_SPAN, the first and the newest, in ms.
+  local uuid sw="${3:-}" lo t
+  PF_LANE="" PF_N=0 PF_FIRST=0 PF_LAST=0 PF_GOOD=0
+  _reg_read_to PF_LANE "$1" wrapper && _is_valid_wrapper "$PF_LANE" && _reg_read_to uuid "$1" uuid && [[ -n "$uuid" ]] || return 1
+  [[ -n "$sw" ]] || _reg_read_to sw "$1" lastswap || { (( $? == 1 )) || return 1; sw=0; }
+  [[ "$sw" =~ ^[0-9]{1,12}$ ]] && _turn_mark_read "$1" && [[ "$TM_SID" == "\"$uuid\"" ]] || return 1
+  lo=$(( 10#$sw * 1000 )) t=$(( 10#${TM_STOP:-0} ))
+  [[ "$TM_STATE.$TM_EVENT" == done.Stop || "$TM_FAILS$TM_ERR" =~ ^\[\](null|\"server_error\"|\"overloaded\")$ ]] && (( t > lo && t <= $2 + 60000 )) && PF_GOOD=$t
+  for t in ${TM_FAILS//[][,]/ }; do
+    (( 10#$t > lo && 10#$t > $2 - PROVFAIL_SPAN * 1000 && 10#$t <= $2 + 60000 )) && PF_N=$(( PF_N + 1 )) PF_LAST=$(( 10#$t )) PF_FIRST=$(( PF_FIRST ? PF_FIRST : 10#$t ))
+  done
+  return 0
+}
 _provfail_pass() {   # now -> each lane's mark set or cleared from every row's turn marker; its rc says nothing
-  # THE EVIDENCE, one row at a time. The lane is the row's `wrapper`, and a stamp counts for it only when it is newer than the
-  # row's `lastswap`: what a session did before its last move it did on another lane. A field that is absent, unreadable or not
-  # this conversation's is evidence of NOTHING, neither failure nor health (`_turn_mark_read`'s rc, the uuid test, a `lastswap`
-  # that is no epoch), and so is a stamp more than a minute ahead of this clock.
-  #   HEALTH (`good`): the newest good Stop. A `done` line whose event is Stop; or, on the lines a later event wrote, an empty
-  #   `failAts` beside no failure or a provider's: the hook empties the list at a Stop and a clear alone, and a clear writes no
-  #   `stopAt`. Beside any other word the `stopAt` may be that failure's own, so it says nothing.
-  #   FAILURE: three counted failures of one session inside PROVFAIL_SPAN, the newest inside PROVFAIL_TTL (2), or one still owed
-  #   inside PROVFAIL_FRESH (1). A lane at 2 is failing, unless its good Stop is newer than the newest of those failures.
-  local now=$(( $1 * 1000 )) f id w uuid sw lo n l t h; local -A good=() last=() hits=() err=()
+  # HEALTH (`good`): the lane's newest good Stop. FAILURE: three counted failures of one session inside PROVFAIL_SPAN, the newest
+  # inside PROVFAIL_TTL (2), or one still owed inside PROVFAIL_FRESH (1). A lane at 2 is failing, unless its good Stop is newer
+  # than the newest of those failures. Each row's own evidence is `_provfail_row`'s.
+  local now=$(( $1 * 1000 )) f id w l h; local -A good=() last=() hits=() err=()
   for f in "$REG"/*.uuid; do id="${f##*/}"; id="${id%.uuid}"
-    _reg_read_to w "$id" wrapper && _is_valid_wrapper "$w" && _reg_read_to uuid "$id" uuid && [[ -n "$uuid" ]] || continue
-    _reg_read_to sw "$id" lastswap || { (( $? == 1 )) || continue; sw=0; }
-    [[ "$sw" =~ ^[0-9]{1,12}$ ]] && _turn_mark_read "$id" && [[ "$TM_SID" == "\"$uuid\"" ]] || continue
-    lo=$(( 10#$sw * 1000 )) n=0 l=0 h=0 t=$(( 10#${TM_STOP:-0} ))
-    [[ "$TM_STATE.$TM_EVENT" == done.Stop || "$TM_FAILS$TM_ERR" =~ ^\[\](null|\"server_error\"|\"overloaded\")$ ]] \
-      && (( t > lo && t <= now + 60000 && t > ${good[$w]:-0} )) && good[$w]=$t
-    for t in ${TM_FAILS//[][,]/ }; do (( 10#$t > lo && 10#$t > now - PROVFAIL_SPAN * 1000 && 10#$t <= now + 60000 )) && n=$(( n + 1 )) l=$(( 10#$t )); done
-    if (( n >= 3 && l > now - PROVFAIL_TTL * 1000 )); then h=2; elif (( n && l > now - PROVFAIL_FRESH * 1000 && l > 10#${TM_TURN:-0} )); then h=1; else continue; fi
+    _provfail_row "$id" "$now" || continue
+    w="$PF_LANE" l=$PF_LAST
+    (( PF_GOOD > ${good[$w]:-0} )) && good[$w]=$PF_GOOD
+    if (( PF_N >= 3 && l > now - PROVFAIL_TTL * 1000 )); then h=2; elif (( PF_N && l > now - PROVFAIL_FRESH * 1000 && l > 10#${TM_TURN:-0} )); then h=1; else continue; fi
     hits[$w]=$(( ${hits[$w]:-0} + h )); (( l <= ${last[$w]:-0} )) || { last[$w]=$l; err[$w]="${TM_ERR//\"/}"; }
   done
   # CLEARED FIRST, so a failure newer than the good Stop that ends a mark sets a new one in the same pass. A standing mark is
