@@ -1526,6 +1526,9 @@ describe('clause W5h-b, M4.H23: what the retirement of part 1\'s highlight bound
 // In `src/docs/mockup/parse.ts` the ONLY allowed hits are one `new DOMParser(` whose callee is the bare identifier and
 // one `.parseFromString(` member call; everything else, a second constructor, an alias, a string, is red, and the
 // allowance is that one file by exact path, never a directory (a parser in `src/docs/mockup/prescan.ts` is red).
+// The draft review page (X3, wave R2 Task R2.1, D-8767) is the one other home: `src/review/main.ts` may hold exactly one
+// `new DOMParser(` and one `.parseFromString(` too (its inert parse of the copy's bytes for "Links in this copy"), each
+// counted on its own, by exact path (a parser in `src/review/other.ts` is red).
 // NOT EXHAUSTIVE. Known evasions it does not see: a name built at run time (`'DOM' + 'Parser'`, a template with a
 // substitution); `eval` and `new Function`; a re-export through a file outside `pwa/src`; `Reflect.get` with a key held
 // in a variable; and the writes that parse without these names (`innerHTML`, `outerHTML`, `insertAdjacentHTML` and
@@ -1535,6 +1538,10 @@ describe('clause W5h-b, M4.H23: what the retirement of part 1\'s highlight bound
 // ---------------------------------------------------------------------------------------------------------------
 
 const PARSER_HOME = 'src/docs/mockup/parse.ts';
+/** The draft review page's entry: the second home, by exact path (X3 R2.1, D-8767). */
+const REVIEW_PARSER_HOME = 'src/review/main.ts';
+/** Every file that may hold the one constructor and the one parse call, each counted on its own. */
+const PARSER_HOMES: readonly string[] = [PARSER_HOME, REVIEW_PARSER_HOME];
 const PARSER_MEMBERS: readonly string[] = [
   'parseFromString', 'createHTMLDocument', 'createContextualFragment', 'parseHTMLUnsafe', 'setHTMLUnsafe', 'parseHTML', 'setHTML',
 ];
@@ -1559,8 +1566,9 @@ function parserHits(source: string, file: string): string[] {
   return hits;
 }
 
-/** The census over a set of sources (path relative to `pwa`, `/` separators): what is left after parse.ts's own
- *  allowance (the first `new DOMParser(` and the first `.parseFromString(` there), and how much of it was found. */
+/** The census over a set of sources (path relative to `pwa`, `/` separators): what is left after each home's own
+ *  allowance (the first `new DOMParser(` and the first `.parseFromString(` in parse.ts, and the same in the review
+ *  page's main.ts), and how much of it was found. */
 function parserCensus(sources: ReadonlyMap<string, string>): { hits: string[]; allowed: number } {
   const hits: string[] = [];
   let allowed = 0;
@@ -1568,8 +1576,8 @@ function parserCensus(sources: ReadonlyMap<string, string>): { hits: string[]; a
   for (const [file, source] of [...sources].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
     for (const hit of parserHits(source, file)) {
       const label = hit.slice(file.length + 1);
-      if (file === PARSER_HOME && (label === 'new DOMParser(' || label === '.parseFromString(') && !spent.has(label)) {
-        spent.add(label);
+      if (PARSER_HOMES.includes(file) && (label === 'new DOMParser(' || label === '.parseFromString(') && !spent.has(`${file} ${label}`)) {
+        spent.add(`${file} ${label}`);
         allowed += 1;
       } else hits.push(hit);
     }
@@ -1591,10 +1599,11 @@ describe('clause C1: the HTML parser has one home, one constructor and one parse
     for (const dir of copies) rmSync(dir, { recursive: true, force: true });
   });
 
-  it('the real tree has exactly the allowance and no other hit: parse.ts holds one constructor and one parse call', () => {
+  it('the real tree has exactly the allowance and no other hit: parse.ts and the review page each hold one constructor and one parse call', () => {
     expect(real.size).toBeGreaterThan(100);
     expect(real.has(PARSER_HOME)).toBe(true);
-    expect(parserCensus(real)).toEqual({ hits: [], allowed: 2 });
+    expect(real.has(REVIEW_PARSER_HOME)).toBe(true);
+    expect(parserCensus(real)).toEqual({ hits: [], allowed: 4 });
   });
 
   it('a planted file in a COPY of the tree on disk is found by the same read', () => {
@@ -1652,11 +1661,31 @@ describe('clause C1: the HTML parser has one home, one constructor and one parse
   ])('planted in parse.ts itself: %s is red beyond the allowance', (_name, text, label) => {
     const answer = parserCensus(planted(PARSER_HOME, `\n${text}\n`));
     expect(answer.hits).toEqual([`${PARSER_HOME} ${label}`]);
-    expect(answer.allowed).toBe(2);
+    expect(answer.allowed).toBe(4);
+  });
+
+  it.each([
+    ['a second new DOMParser()', 'export const second = () => new DOMParser();', 'new DOMParser('],
+    ['an alias', 'const P = DOMParser;\nexport const second = () => new P();', 'DOMParser'],
+    ['a second parseFromString call', "export const second = (p: P) => p.parseFromString('', 'text/html');", '.parseFromString('],
+    ['a string', "export const second = 'DOMParser';", "'DOMParser'"],
+    ['another entry point', "export const second = (r: Range) => r.createContextualFragment('');", '.createContextualFragment('],
+  ])('planted in the review page itself: %s is red beyond its allowance (R2.1)', (_name, text, label) => {
+    const answer = parserCensus(planted(REVIEW_PARSER_HOME, `\n${text}\n`));
+    expect(answer.hits).toEqual([`${REVIEW_PARSER_HOME} ${label}`]);
+    expect(answer.allowed).toBe(4);
+  });
+
+  it('planted: the review page allowance is main.ts by exact path: a parser in src/review/other.ts or main.tsx is red (R2.1)', () => {
+    expect(parserCensus(planted('src/review/other.ts', 'export const p = () => new DOMParser();\nexport const q = (p: P) => p.parseFromString(\'\', \'text/html\');\n')).hits)
+      .toEqual(['src/review/other.ts new DOMParser(', 'src/review/other.ts .parseFromString(']);
+    expect(parserCensus(planted('src/review/main.tsx', 'export const p = () => new DOMParser();\n')).hits)
+      .toEqual(['src/review/main.tsx new DOMParser(']);
   });
 
   it('the allowance is counted, not assumed: a parse.ts with no constructor and no parse call finds none of it', () => {
-    expect(parserCensus(new Map([...real, [PARSER_HOME, 'export const nothing = 1;\n']]))).toEqual({ hits: [], allowed: 0 });
+    expect(parserCensus(new Map([...real, [PARSER_HOME, 'export const nothing = 1;\n']]))).toEqual({ hits: [], allowed: 2 });
+    expect(parserCensus(new Map([...real, [REVIEW_PARSER_HOME, 'export const nothing = 1;\n']]))).toEqual({ hits: [], allowed: 2 });
   });
 
   it.each([
