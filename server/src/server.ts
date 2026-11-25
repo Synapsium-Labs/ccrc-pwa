@@ -2814,10 +2814,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // The launch-profile lane owns `compact` while it and `continuity` are live (`compactRefusal`, review 2024 F3, 2149 F11).
     const owned = compactRefusal(field, (lane) => deps.coord !== undefined && laneArmRowViewOf(lane, deps.coord.laneArmSetting(lane)).live);
     if (owned !== null) return refuseRoute(reply, 'bad-request', { detail: owned });
-    const res = await deps.runCcd(CCD_ARGV.routeApply(id, field, value, pwaDec(req)));
-    if (!res.ok) return ccd502(reply, res);
-    if (deps.coord !== undefined) markOperatorPrompt(deps.coord, id, deps.time.clock.wall(), (l) => console.warn(l));   // the pick was applied: marks as a typed prompt does
-    return { ok: true };
+    const applied = await runCcdOr502(reply, CCD_ARGV.routeApply(id, field, value, pwaDec(req)));
+    // The pick was applied (a ccd failure has already sent its 502): marks as a typed prompt does.
+    if (!reply.sent && deps.coord !== undefined) markOperatorPrompt(deps.coord, id, deps.time.clock.wall(), (l) => console.warn(l));
+    return applied;
   });
 
   /**

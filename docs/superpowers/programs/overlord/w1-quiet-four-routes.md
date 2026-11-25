@@ -20,13 +20,13 @@ writer, with the submit route's keying (`operatorMark.ts#markProgrammesOf`, thro
 | `POST /api/sessions/:id/route` | ccd applied the pick (its run answered ok) | 400, 404, 501, a refused `compact`, and a ccd failure (502) |
 
 The writer already logs and never throws, so a failed write neither fails nor delays the operator's act. No route, status word or
-frame changed shape: the picker's 200 body is still `{ ok: true }`, built inline where it was `runCcdOr502`'s.
+frame changed shape: the picker's answers are still `runCcdOr502`'s.
 
 The drawer's mark throttle (review 3736 F2): it admitted on "now minus the last admitted time is at least two seconds" with the
 wall clock, so after the clock stepped back it admitted nothing until the wall passed the old time. A reading earlier than the
 last admitted time now admits too.
 
-Product lines: `server.ts` +6 −2 (four hunks, each on its route's own lines; applied as a packet the holder of the file's other
+Product lines: `server.ts` +7 −2 (four hunks, each on its route's own lines; applied as a packet the holder of the file's other
 claim consented to), `coord/routes.ts` +4 −1 (one import, the call), `interruptlog.ts` +5 −3.
 
 ## The callers census
@@ -51,9 +51,12 @@ mark means "a console client used this route"; that errs toward keeping the brea
 - **`question-door-marks-on-the-cores-200`**: the route marks when the operator's core answers 200, the status every answer form
   sends only after its keys landed (`questions.ts`'s `answer` and `answerAsk`). An ask answered while the store refused its record
   (`pressPlain`) still pressed the digit, so it marks too.
-- **`picker-inlines-its-ccd-run`**: the picker returned `runCcdOr502` directly, which answers a reply on failure and `{ ok: true }`
-  on success, so it cannot say which happened without reading the reply. The route now runs ccd itself and answers the 502 through
-  the same `ccd502`, then marks; the body on either path is what it was.
+- **`picker-marks-when-the-reply-is-not-sent`**: the picker returns `runCcdOr502`, which sends the reply itself on a ccd failure
+  (its 502, through `ccd502`) and returns `{ ok: true }` on success. The route keeps that one call and marks when the reply has
+  not been sent (`reply.sent`), then returns the call's answer, so the bodies are what they were. Two versions were not kept: one
+  that ran ccd inline, a new `runCcd(` site that the consolidation census (`consolidation-census.test.ts`, the not-ran arm, D-6840)
+  refuses without a table row; and one that compared the answer with the reply object, which is not the object the failure
+  returns, so it marked a failed pick (the refused-pick case went red) and the type check refused the comparison.
 - **`picker-marks-a-pick-for-the-next-spawn`**: a `browser` pick is applied at the session's next spawn, never typed live. The ruling
   says "when the pick was applied"; ccd accepting it is the operator acting at the session, so it marks like any pick.
 - **`mark-throttle-admits-an-earlier-reading`**: the drawer's mark throttle and the drawer's interrupt record share one class,
