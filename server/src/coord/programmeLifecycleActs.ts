@@ -7,17 +7,17 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { TERMINAL_RUN_STATES } from '../../../shared/api.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
-import { END_PROGRAMME_VERB, OPEN_ITEM_STATES, endProgrammeAction, isEndProgrammeAction } from '../../../shared/ledgers.js';
+import { OPEN_ITEM_STATES, endProgrammeAction, isEndProgrammeAction } from '../../../shared/ledgers.js';
 import {
-  isEnded, type CoordinatorWithoutProgramme, type NoProgrammeWhy, type ProgrammeClaimConflict, type ProgrammeEndOutcome,
+  type CoordinatorWithoutProgramme, type NoProgrammeWhy, type ProgrammeClaimConflict, type ProgrammeEndOutcome,
   type ProgrammeHistoryEntry,
 } from '../../../shared/programmeLifecycle.js';
 import * as lifecycle from './programmeLifecycleStore.js';
 import type { LifecycleRowFacts } from './programmeLifecycleView.js';
 import { itemById, moveItemInTx, raiseItemCheckedInTx, type ItemRow } from './ledgersStore.js';
+import { confirmEndDecision } from './programmeEdgePolicy.js';
 
 const TERMINAL_SQL = `('${TERMINAL_RUN_STATES.join("','")}')`;
-const OPEN_ITEM_SQL = `('${OPEN_ITEM_STATES.join("','")}')`;
 
 /** The start door's write (spec §5's start row): a free, well-formed slug (the door shaped it), minted `active` with its
  *  `started` event, and, when a session is named, bound in the same transaction after R11 rule 4: a session that owns a live
@@ -32,7 +32,7 @@ export function startNamedInTx(
   if (lifecycle.programmeRowOf(db, input.slug) !== null || input.slug === LINEAR_SYNC_PROGRAMME) return { ok: false, why: 'slug-taken' };
   const c = input.coordinator;
   if (c !== null) {
-    const owned = lifecycle.ownedLiveProgrammeOf(db, c.session, c.uuid, null) ?? foreignOpenClaimOf(db, c.session);
+    const owned = lifecycle.ownedLiveProgrammeOf(db, c.session, c.uuid, null) ?? lifecycle.foreignOpenClaimOf(db, c.session, null);
     if (owned !== null) return { ok: false, why: 'owns-another-programme', by: owned };
     const own = lifecycle.programmeOf(db, c.session, c.uuid);
     if (own !== null && own.placeholder === 'unfiled') {
@@ -43,26 +43,6 @@ export function startNamedInTx(
     coordinator: c }, now);
   if (!minted.ok) throw new Error(`startNamedInTx: ${minted.kind} ${minted.by} passed the start's own check`);
   return { ok: true };
-}
-
-/** A programme other than its own whose open run `session` claims while it is not that programme's coordinator (a migration
- *  conflict's party, spec §13), or null. */
-export function foreignOpenClaimOf(db: DatabaseSync, session: string): string | null {
-  const r = db.prepare(
-    `SELECT r.program FROM runs r JOIN programs p ON p.slug = r.program WHERE r.claimedBy = ? AND r.state NOT IN ${TERMINAL_SQL} ` +
-    'AND (p.coordinator IS NULL OR p.coordinator != ?) ORDER BY r.id LIMIT 1',
-  ).get(session, session) as { program: string } | undefined;
-  return r?.program ?? null;
-}
-
-/** The programme's open end proposal (an open or held `end-programme` item), or null. At most one is ever raised. */
-export function openEndProposalOf(db: DatabaseSync, slug: string): ItemRow | null {
-  const r = db.prepare(
-    `SELECT id FROM operator_items WHERE program = ? AND state IN ${OPEN_ITEM_SQL} AND action LIKE ? ORDER BY id LIMIT 1`,
-  ).get(slug, `%"verb":"${END_PROGRAMME_VERB}"%`) as { id: number } | undefined;
-  if (r === undefined) return null;
-  const item = itemById(db, r.id);
-  return item !== null && isEndProgrammeAction(item.action) ? item : null;
 }
 
 /** The proposal's raise (spec §8): its decide item and the `end-proposed` event, in one transaction. Returns the item id. */
@@ -84,20 +64,21 @@ export function proposeEndInTx(
 
 export type ConfirmEndResult =
   | { readonly ok: true; readonly slug: string; readonly outcome: ProgrammeEndOutcome; readonly released: string | null }
-  | { readonly ok: false; readonly why: 'not-open' | 'programme-runs-open' | 'programme-ended'; readonly detail: string };
+  | { readonly ok: false; readonly why: 'not-open' | Exclude<ReturnType<typeof confirmEndDecision>, { ok: true }>['why']; readonly detail: string };
 
-/** The confirm (spec §5's confirm row): the item is an open end proposal; no run is open (else the item stays open); the
- *  item moves `act` and `decideInTx` ends the programme with the proposal's outcome, its evidence and the item id, which
- *  releases the binding (R11 rule 6), all in one transaction. */
+/** The confirm (spec §5's confirm row): the item is an open end proposal; the programme may end (`confirmEndDecision`, L1:
+ *  Open, Idle or Paused, readable, no open run, else the item stays open); the item moves `act` and `decideInTx` ends the
+ *  programme with the proposal's outcome, its evidence and the item id, which releases the binding (R11 rule 6), all in
+ *  one transaction. */
 export function confirmEndInTx(db: DatabaseSync, itemId: number, actor: lifecycle.ProgrammeActor, now: number): ConfirmEndResult {
   const item = itemById(db, itemId);
   if (item === null || !isEndProgrammeAction(item.action) || !OPEN_ITEM_STATES.includes(item.state)) {
     return { ok: false, why: 'not-open', detail: `item ${itemId} is not an open end proposal` };
   }
   const row = lifecycle.programmeRowOf(db, item.program);
-  if (row === null || isEnded(row.state)) return { ok: false, why: 'programme-ended', detail: `programme ${item.program} has already ended` };
-  const open = lifecycle.runFactsOf(db, item.program).open;
-  if (open > 0) return { ok: false, why: 'programme-runs-open', detail: `${open} run(s) of ${item.program} opened since the proposal: it stays open` };
+  if (row === null) return { ok: false, why: 'programme-ended', detail: `programme ${item.program} is gone` };
+  const may = confirmEndDecision({ stored: row.state, placeholder: row.placeholder, openRuns: lifecycle.runFactsOf(db, item.program).open });
+  if (!may.ok) return { ok: false, why: may.why, detail: `programme ${item.program}: ${may.detail}` };
   const moved = moveItemInTx(db, itemId, 'act', 'operator', {}, now, { programmeHasOpenRun: false });
   if (!moved.ok) return { ok: false, why: 'not-open', detail: `item ${itemId} is ${item.state}` };
   const proposed = proposalEventOf(db, item.program, itemId);
@@ -119,17 +100,19 @@ function proposalEventOf(db: DatabaseSync, slug: string, itemId: number): { why:
   return { why: r.why, evidence: detail?.evidence ?? [] };
 }
 
-/** The decline (spec §5's decline row): the item moves `decline` and `end-declined` is recorded; the answer names the
- *  coordinator bound at this moment (null when there is none), whom the door mails in this transaction. */
+/** The decline (spec §5's decline row): the item moves `decline` and `end-declined` is recorded, with `dark` (the door's
+ *  `flag-off` mark while sign-in is dark) in its detail; the answer names the coordinator bound at this moment (null when
+ *  there is none), whom the door mails in this transaction. */
 export function declineEndInTx(
   db: DatabaseSync, itemId: number, actor: lifecycle.ProgrammeActor, why: string, now: number,
+  dark: Readonly<Record<string, unknown>> = {},
 ): { readonly ok: true; readonly slug: string; readonly coordinator: string | null; readonly item: ItemRow } | { readonly ok: false; readonly detail: string } {
   const item = itemById(db, itemId);
   if (item === null || !isEndProgrammeAction(item.action)) return { ok: false, detail: `item ${itemId} is not an end proposal` };
   const moved = moveItemInTx(db, itemId, 'decline', 'operator', {}, now, { programmeHasOpenRun: true });
   if (!moved.ok) return { ok: false, detail: `item ${itemId} is ${item.state}, not open` };
   const coordinator = lifecycle.programmeRowOf(db, item.program)?.coordinator ?? null;
-  lifecycle.appendEventInTx(db, { program: item.program, edge: 'end-declined', actor, why, detail: { item: itemId, coordinator } }, now);
+  lifecycle.appendEventInTx(db, { program: item.program, edge: 'end-declined', actor, why, detail: { item: itemId, coordinator, ...dark } }, now);
   return { ok: true, slug: item.program, coordinator, item: moved.item };
 }
 
@@ -143,10 +126,11 @@ export function withdrawEndInTx(db: DatabaseSync, item: ItemRow, by: string, now
   return true;
 }
 
-/** Close the programme's open end proposal as the system (a run opened, spec §8; a direct end closes it with the end):
- *  the item settles with `note` and `end-withdrawn` is recorded with `why`. False when none is open. */
+/** Withdraw the programme's open end proposal as the system because a run opened (spec §8, `openRun`'s transaction): the
+ *  item settles with `why` and `end-withdrawn` is recorded with it. False when none is open. An end closes its proposal
+ *  in `decideInTx` instead, recorded on the end's own event. */
 export function settleEndProposalInTx(db: DatabaseSync, slug: string, why: string, now: number): boolean {
-  const item = openEndProposalOf(db, slug);
+  const item = lifecycle.openEndProposalOf(db, slug);
   if (item === null) return false;
   const moved = moveItemInTx(db, item.id, 'settle', 'ccrc', { note: why }, now, { programmeHasOpenRun: true });
   if (!moved.ok) return false;

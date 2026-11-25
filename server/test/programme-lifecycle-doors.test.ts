@@ -9,6 +9,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { programmeDoors, programmesWithLifecycle, raiseEndProposal } from '../src/coord/programmeLifecycleRoutes.js';
 import { coordinatorReadingOf } from '../src/coord/programmeCoordinatorReading.js';
 import { otherLaneReadsOf } from '../src/coord/otherLaneReads.js';
+import { attributionVerdict } from '../src/coord/attribution.js';
 import * as lifecycle from '../src/coord/programmeLifecycleStore.js';
 import type { CloseOutcome } from '../src/coord/close.js';
 import type { ProgrammesAnswer } from '../../shared/api.js';
@@ -53,7 +54,7 @@ async function rig(opts: { authEnabled?: boolean } = {}): Promise<Rig> {
     sendClose: (reply: FastifyReply, o: CloseOutcome) => reply.code(409).send(o),
     changed: () => undefined,
     ports: { reclaim: { coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux, otherLaneReads }, serial: (fn) => fn(),
-      readingOf: (s) => coordinatorReadingOf(deps.io, deps.cfg, s) },
+      readingOf: (s) => coordinatorReadingOf(deps.io, deps.cfg, s), attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid') },
   });
   app = Fastify({ logger: false });
   app.post('/api/programmes', (req, reply) => doors.start(req, reply));
@@ -61,8 +62,10 @@ async function rig(opts: { authEnabled?: boolean } = {}): Promise<Rig> {
   app.post('/api/programmes/:slug/coordinator', (req, reply) => doors.handOver(req, reply));
   app.post('/api/items/:id/act', (req, reply) => doors.confirm(req, reply, coord.itemById(Number((req.params as { id: string }).id))!));
   app.post('/api/items/:id/decline', (req, reply) => doors.decline(req, reply, coord.itemById(Number((req.params as { id: string }).id))!));
-  app.get('/api/programmes/:slug/history', (req, reply) => doors.history(req, reply));
-  app.get('/api/sessions/:id/programme', (req, reply) => doors.sessionProgramme(req, reply));
+  // `?via=token` stands for the box-token arm the registration picks when no session passed (`ledgersRoutes.ts`).
+  const viaToken = (req: { query: unknown }) => (req.query as { via?: string }).via === 'token';
+  app.get('/api/programmes/:slug/history', (req, reply) => doors.history(req, reply, viaToken(req)));
+  app.get('/api/sessions/:id/programme', (req, reply) => doors.sessionProgramme(req, reply, viaToken(req)));
   const id = (coord.openRun({ program: 'prog-a', title: 'Programme A', project: 'project-a', wave: 1, waveOf: null, claimedBy: 'lane-a', claimedByUuid: 'u-lane-a' }) as { id: number }).id;
   expect(coord.advance(id, 'dispatched', 'coordinator').ok).toBe(true);
   return { app, coord, home, gate, abandoned };
@@ -242,6 +245,32 @@ describe('POST /api/programmes/:slug/coordinator: the hand-over (spec §3 ladder
     expect(row(r, 'prog-a').coordinator).toBe('lane-c');
   });
 
+  it('from an unbound programme, a live party holding its open run is moved to the heir and told, in the move\'s transaction', async () => {
+    const r = await rig();
+    // prog-c is unbound, and lane-c holds its open run (a migration conflict's shape, spec §13).
+    r.coord.db.prepare("INSERT INTO programs (slug, title, createdAt, state) VALUES ('prog-c', 'C', 1, 'active')").run();
+    r.coord.db.prepare("INSERT INTO runs (program, wave, project, state, claimedBy, openedAt, kind) VALUES ('prog-c', 1, 'project-a', 'working', 'lane-c', 1, 'work')").run();
+    const res = await post(r, '/api/programmes/prog-c/coordinator', { session: 'lane-d', why: 'give it a coordinator' });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toMatchObject({ from: null, to: 'lane-d' });
+    expect(row(r, 'prog-c').coordinator).toBe('lane-d');
+    const m = mails(r);
+    expect(m.find((x) => x.toId === 'lane-c')).toMatchObject({ subject: 'prog-c was handed to lane-d' });
+    expect(m.find((x) => x.toId === 'lane-c')!.body).toMatch(/the runs of it you held are lane-d's now/);
+    expect(m.find((x) => x.toId === 'lane-d')!.subject).toBe('You are now the coordinator of prog-c');
+  });
+
+  it('a mail that cannot be queued rolls the move back: nothing moves untold', async () => {
+    const r = await rig();
+    // The heir's mail insert fails: the binding and the claims stay where they were.
+    r.coord.db.exec("CREATE TRIGGER no_mail BEFORE INSERT ON mail WHEN NEW.toId = 'lane-b' BEGIN SELECT RAISE(ABORT, 'no mail'); END");
+    const res = await post(r, '/api/programmes/prog-a/coordinator', { session: 'lane-b', why: 'swap' });
+    expect(res.statusCode).toBe(500);
+    expect(row(r, 'prog-a').coordinator).toBe('lane-a');
+    expect((r.coord.db.prepare("SELECT DISTINCT claimedBy FROM runs WHERE program = 'prog-a'").all() as { claimedBy: string }[]).map((x) => x.claimedBy)).toEqual(['lane-a']);
+    expect(mails(r)).toEqual([]);
+  });
+
   it('refuses an ended programme, and takes the step-up', async () => {
     const r = await rig();
     r.gate.mode = 'dark';
@@ -313,8 +342,61 @@ describe('the end proposal: confirm, decline, withdraw (spec §5, §8)', () => {
     expect(res.json()).toMatchObject({ mailed: 'lane-b' });
     expect(r.coord.itemById(p.id)!.state).toBe('dismissed');
     expect(mails(r).find((m) => m.subject === 'The end of prog-a was declined')!.toId).toBe('lane-b');
-    expect(events(r, 'prog-a').at(-1)).toMatchObject({ edge: 'end-declined', actor: 'unmeasured' });
+    const declined = events(r, 'prog-a').at(-1)!;
+    expect(declined).toMatchObject({ edge: 'end-declined', actor: 'unmeasured', why: 'one more wave' });
+    // W2 review: a dark act records `flag-off` in its detail (spec §5), as the state door's pause does.
+    expect(JSON.parse(declined.detail!)).toEqual({ item: p.id, coordinator: 'lane-b', signIn: 'flag-off' });
     expect(row(r, 'prog-a').state).toBe('active');
+  });
+
+  it('an armed decline records the signed-in device and no flag-off', async () => {
+    const r = await rig({ authEnabled: true });
+    closeAll(r, 'prog-a');
+    const p = propose(r) as { ok: true; id: number };
+    expect((await post(r, `/api/items/${p.id}/decline`, {})).statusCode).toBe(200);
+    const declined = events(r, 'prog-a').at(-1)!;
+    expect(declined).toMatchObject({ edge: 'end-declined', actor: 'device:phone' });
+    expect(JSON.parse(declined.detail!)).toEqual({ item: p.id, coordinator: 'lane-a' });
+  });
+
+  it('a direct end closes the open proposal in the end\'s own transaction, named on the ended event', async () => {
+    const r = await rig();
+    closeAll(r, 'prog-a');
+    const p = propose(r) as { ok: true; id: number };
+    expect((await post(r, '/api/programmes/prog-a/state', { edge: 'end', outcome: 'abandoned', why: 'dropped' })).statusCode).toBe(200);
+    expect(r.coord.itemById(p.id)!.state).toBe('done');
+    expect(r.coord.openEndProposalOf('prog-a')).toBeNull();
+    const tail = events(r, 'prog-a').slice(-2).map((e) => e.edge);
+    expect(tail, 'closed as part of the operator\'s end, not as a system withdraw').toEqual(['end-proposed', 'ended']);
+    expect(JSON.parse(events(r, 'prog-a').at(-1)!.detail!)).toMatchObject({ proposal: p.id, released: 'lane-a' });
+  });
+
+  it('every other end closes it too (the archive door\'s, through the one writer); a refused end closes nothing', async () => {
+    const r = await rig();
+    closeAll(r, 'prog-a');
+    const p = propose(r) as { ok: true; id: number };
+    // `already-ended` refuses inside `decideInTx` before anything is written, so the proposal stays with the programme.
+    r.coord.db.prepare("UPDATE programs SET state = 'done', planEnd = 'done' WHERE slug = 'prog-a'").run();
+    expect(r.coord.decideProgramme({ slug: 'prog-a', to: 'abandoned', edge: 'ended', actor: { kind: 'operator', id: 'unmeasured' }, why: 'x' }, Date.now()))
+      .toMatchObject({ ok: false, kind: 'already-ended' });
+    expect(r.coord.itemById(p.id)!.state).toBe('open');
+    r.coord.db.prepare("UPDATE programs SET state = 'active', planEnd = NULL WHERE slug = 'prog-a'").run();
+    r.coord.decideProgramme({ slug: 'prog-a', to: 'abandoned', edge: 'ended', actor: { kind: 'operator', id: 'unmeasured' }, why: 'archived with programme end' }, Date.now());
+    expect(r.coord.itemById(p.id)!.state).toBe('done');
+    expect(JSON.parse(events(r, 'prog-a').at(-1)!.detail!)).toMatchObject({ proposal: p.id });
+  });
+
+  it('confirm refuses an unreadable stored state (repair is its way), leaving the item open', async () => {
+    const r = await rig();
+    closeAll(r, 'prog-a');
+    const p = propose(r) as { ok: true; id: number };
+    r.coord.db.prepare("UPDATE programs SET state = 'retired-by-hand' WHERE slug = 'prog-a'").run();
+    expect((await post(r, `/api/items/${p.id}/act`, {})).json()).toMatchObject({ error: 'programme-unknown' });
+    expect(r.coord.itemById(p.id)!.state).toBe('open');
+    expect(row(r, 'prog-a').state).toBe('retired-by-hand');
+    // And a proposal is refused over it in the first place.
+    r.coord.db.prepare("UPDATE operator_items SET state = 'withdrawn' WHERE id = ?").run(p.id);
+    expect(propose(r)).toMatchObject({ ok: false, why: 'programme-unknown' });
   });
 });
 
@@ -333,6 +415,26 @@ describe('the reads (spec §11, §7)', () => {
     expect((await r.app.inject({ method: 'GET', url: '/api/programmes/nope/history' })).statusCode).toBe(404);
   });
 
+  it('a row the migration or the boot re-measure wrote says so', async () => {
+    const r = await rig();
+    r.coord.db.prepare(
+      "INSERT INTO programme_events (program, at, edge, fromState, toState, actorKind, actor, why, detail) " +
+      "VALUES ('prog-a', ?, 'migrated', 'active', 'active', 'migration', 'unmeasured', 'seeded by the migration', '{\"rule\":\"open\"}')",
+    ).run(Date.now() + 1);
+    const h = (await r.app.inject({ method: 'GET', url: '/api/programmes/prog-a/history' })).json().history as { source: string; edge?: string; actorKind?: string; why?: string; detail?: unknown }[];
+    expect(h.find((e) => e.edge === 'migrated')).toMatchObject({ source: 'programme', actorKind: 'migration', why: 'seeded by the migration', detail: { rule: 'open' } });
+  });
+
+  it('with the box token, the history is the bound coordinator\'s alone, attributed', async () => {
+    const r = await rig();
+    const as = (q: string) => r.app.inject({ method: 'GET', url: `/api/programmes/prog-a/history?via=token&${q}` });
+    expect((await as('byId=lane-a&byUuid=u-lane-a')).statusCode).toBe(200);
+    const other = await as('byId=lane-b&byUuid=u-lane-b');
+    expect([other.statusCode, other.json().error]).toEqual([403, 'not-your-programme']);
+    expect((await as('byId=lane-a&byUuid=u-stale')).json().error).toBe('stale-uuid');
+    expect((await as('')).statusCode).toBe(400);
+  });
+
   it('a session reads its one programme, or none with why', async () => {
     const r = await rig();
     expect((await r.app.inject({ method: 'GET', url: '/api/sessions/lane-a/programme' })).json())
@@ -340,6 +442,15 @@ describe('the reads (spec §11, §7)', () => {
     expect((await r.app.inject({ method: 'GET', url: '/api/sessions/lane-c/programme' })).json()).toEqual({ ok: true, programme: 'none', why: 'never-joined' });
     await post(r, '/api/programmes/prog-a/coordinator', { session: 'lane-b', why: 'swap' });
     expect((await r.app.inject({ method: 'GET', url: '/api/sessions/lane-a/programme' })).json()).toEqual({ ok: true, programme: 'none', why: 'handed-over' });
+  });
+
+  it('with the box token, a session reads its own programme only, attributed', async () => {
+    const r = await rig();
+    const as = (id: string, q: string) => r.app.inject({ method: 'GET', url: `/api/sessions/${id}/programme?via=token&${q}` });
+    expect((await as('lane-a', 'byId=lane-a&byUuid=u-lane-a')).json()).toMatchObject({ ok: true, programme: { slug: 'prog-a' } });
+    const other = await as('lane-a', 'byId=lane-b&byUuid=u-lane-b');
+    expect([other.statusCode, other.json().error]).toEqual([403, 'not-owner']);
+    expect((await as('lane-a', 'byId=lane-a&byUuid=u-stale')).json().error).toBe('stale-uuid');
   });
 
   it('a coordinator that handed over is listed without a programme; a conflict\'s party is not, and its programme carries the conflict', async () => {

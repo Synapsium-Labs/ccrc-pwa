@@ -27,7 +27,11 @@ import type { CloseOutcome } from './close.js';
 import { insertSystemMailTx } from './rundefsTx.js';
 import { measureHeir, reclaimProgrammeTo, type ReclaimOutcome, type ReclaimRunDeps } from './reclaim.js';
 import type { ProgrammeActor } from './programmeLifecycleStore.js';
-import { doorCredential, edgeDecision, endProposalDecision, endProposalItem, parseEvidence, type EdgeRequest } from './programmeEdgePolicy.js';
+import {
+  doorCredential, edgeDecision, endProposalDecision, endProposalItem, parseEvidence, startDecision, type EdgeRefusal, type EdgeRequest,
+} from './programmeEdgePolicy.js';
+import type { AttributionRead } from './openRun.js';
+import { LEDGER_ROUTE_REFUSALS } from '../../../shared/refusal.js';
 import { withLifecycleFields } from './programmeLifecycleView.js';
 import type { ProgrammesAnswer } from '../../../shared/api.js';
 
@@ -38,6 +42,8 @@ export interface ProgrammeDoorPorts {
   readonly reclaim: ReclaimRunDeps;
   readonly serial: CoordRoutesHandle['serial'];
   readonly readingOf: (session: string) => Promise<CoordinatorRegistryReading>;
+  /** The box-token lanes' sender check (`attributionVerdict`), for the two reads' token arm (spec §14). */
+  readonly attribute: (id: string, uuid: string) => Promise<AttributionRead>;
 }
 
 export interface ProgrammeDoorDeps {
@@ -60,7 +66,8 @@ const text = (v: unknown, max: number): string | null =>
 const bad = (reply: FastifyReply, detail: string) => refuseRoute(reply, 'bad-request', { detail });
 const FLAG_OFF = { signIn: DARK_MARK_ACTOR } as const;
 
-/** The system mail one programme act owes a session, queued inside the act's transaction (`insertSystemMailTx` opens none). */
+/** The system mail one programme act owes a session. `insertSystemMailTx` opens no transaction: every caller here runs it
+ *  inside the act's own (`decideProgramme`'s `onReleased`, the confirm's and decline's callbacks, the move's `onMoved`). */
 function mailTo(coord: CoordStore, toId: string, subject: string, body: string): void {
   insertSystemMailTx(coord, null, { fromId: 'operator', toId, runId: null, kind: 'status', subject, body });
 }
@@ -118,9 +125,8 @@ export function programmeDoors(deps: ProgrammeDoorDeps) {
     const title = b['title'] === undefined ? programmeNameFromSlug(raw) : text(b['title'], 200);
     if (title === null) return bad(reply, 'title is 1 to 200 characters');
     const named = b['coordinator'];
-    if (named === undefined || named === null) {
-      return refuseRoute(reply, 'coordinator-required', { detail: 'name the session that will coordinate it; the start sheet\'s pick arrives with the join sweep' });
-    }
+    const must = startDecision('operator', named !== undefined && named !== null);
+    if (!must.ok) return refuseRoute(reply, must.why, { detail: must.detail });
     if (typeof named !== 'string' || !isRegistryId(named)) return bad(reply, 'coordinator is a registry session id');
     const ports = deps.ports;
     if (ports === undefined) return refuseRoute(reply, 'not-configured');
@@ -180,8 +186,7 @@ export function programmeDoors(deps: ProgrammeDoorDeps) {
       if (!d.ok) return refuseRoute(reply, d.why, { detail: d.detail });
       if (d.kind !== 'decide') return refuseRoute(reply, 'bad-request');
       const now = deps.now();
-      if (d.to === 'done' || d.to === 'abandoned') coord.settleProgrammeEndProposal(slug, `closed with the programme's end: ${why}`, now);
-      // A repair records the unreadable value it replaces (spec §5's repair row); a dark act records `flag-off`.
+      // An end closes the open end proposal in its own transaction (`decideInTx`). A repair records the unreadable value it replaces (spec §5's repair row); a dark act records `flag-off`.
       const detail = { ...(cred.dark ? FLAG_OFF : {}), ...(parsed.req.edge === 'repair' ? { unreadable: row.state } : {}) };
       const res = coord.decideProgramme({ slug, to: d.to, edge: d.event, actor: cred.actor, why,
         ...(Object.keys(detail).length > 0 ? { detail } : {}) },
@@ -207,8 +212,8 @@ export function programmeDoors(deps: ProgrammeDoorDeps) {
   }
 
   /** `POST /api/programmes/:slug/coordinator {session, why}` (spec §5's hand-over row; §3's ladder: rung 1
-   *  `unknown-programme`, rung 2 skipped, rung 3 asked, rung 4 skipped as `displacing`, R11 rule 4 asked). The displaced
-   *  session is mailed; the heir is told it owns the programme; an open end proposal stays open. */
+   *  `unknown-programme`, rung 2 skipped, rung 3 asked, rung 4 skipped as `displacing`, R11 rule 4 asked). Every displaced
+   *  session is mailed and the heir is told it owns the programme, in the move's transaction; an open end proposal stays open. */
   async function handOver(req: FastifyRequest, reply: FastifyReply) {
     const cred = credential(req, reply, 'hand-over');
     if (cred === null) return reply;
@@ -229,13 +234,22 @@ export function programmeDoors(deps: ProgrammeDoorDeps) {
       const d = edgeDecision({ stored: row.state, placeholder: row.placeholder, openRuns: 0 }, { edge: 'hand-over' });
       if (!d.ok) return refuseRoute(reply, d.why, { detail: d.detail });
       const from = row.coordinator;
+      // The mails ride the move's own transaction (`onMoved`), so a binding never moves untold. Every session whose open run
+      // the move took is told, the bound coordinator and a migration conflict's party alike (spec §13: the operator's
+      // hand-over is the consent a live claimant's displacement needs, as `displacing` is for the bound one).
       const r = await reclaimProgrammeTo({ ...ports.reclaim, coord }, slug, from, heir,
-        { ...(from === null ? {} : { displacing: from }), actor: cred.actor, why });
+        { ...(from === null ? {} : { displacing: from }), actor: cred.actor, why, onMoved: ({ holding }) => {
+          if (from !== null && from !== heir) {
+            mailTo(coord, from, `${slug} was handed to ${heir}`, `${slug} was handed to ${heir}: its runs are no longer yours. Why: ${why}. ${NO_PROGRAMME_SENTENCE}`);
+          }
+          for (const party of holding) {
+            if (party === from || party === heir) continue;
+            mailTo(coord, party, `${slug} was handed to ${heir}`,
+              `${slug} was handed to ${heir}: the runs of it you held are ${heir}'s now. Why: ${why}. Report on them to ${heir}.`);
+          }
+          if (from !== heir) mailTo(coord, heir, `You are now the coordinator of ${slug}`, `${slug} was handed to you. Why: ${why}. You own this programme and only this one.`);
+        } });
       if (!r.ok) return sendReclaimRefusal(reply, r);
-      if (from !== null && from !== heir) {
-        mailTo(coord, from, `${slug} was handed to ${heir}`, `${slug} was handed to ${heir}: its runs are no longer yours. Why: ${why}. ${NO_PROGRAMME_SENTENCE}`);
-      }
-      if (from !== heir) mailTo(coord, heir, `You are now the coordinator of ${slug}`, `${slug} was handed to you. Why: ${why}. You own this programme and only this one.`);
       deps.changed();
       return reply.code(200).send({ ok: true, slug, from, to: heir, runIds: r.runIds });
     });
@@ -270,7 +284,7 @@ export function programmeDoors(deps: ProgrammeDoorDeps) {
     const why = isObject(b) && b['why'] !== undefined ? text(b['why'], ITEM_TEXT_MAX) : 'kept open by the operator';
     if (why === null) return bad(reply, `why is 1 to ${ITEM_TEXT_MAX} characters`);
     const actor: ProgrammeActor = cred.actor;
-    const res = coord.declineProgrammeEnd(item.id, actor, cred.dark ? `${why} (sign-in off)` : why, deps.now(), (r) => {
+    const res = coord.declineProgrammeEnd(item.id, actor, why, deps.now(), cred.dark ? FLAG_OFF : {}, (r) => {
       if (r.coordinator !== null) mailTo(coord, r.coordinator, `The end of ${r.slug} was declined`, `The proposed end of ${r.slug} was declined: ${why}. Its item is closed; propose again when it is ready.`);
     });
     if (!res.ok) return refuseRoute(reply, 'not-open', { detail: res.detail });
@@ -278,23 +292,54 @@ export function programmeDoors(deps: ProgrammeDoorDeps) {
     return reply.code(200).send({ ok: true, slug: res.slug, mailed: res.coordinator });
   }
 
-  /** `GET /api/programmes/:slug/history` (spec §11): the programme's story, oldest first. */
-  function history(req: FastifyRequest, reply: FastifyReply) {
+  /** The two reads' box-token arm (spec §14): the query's `byId`/`byUuid`, attributed against the registry; the caller's id,
+   *  or null with the refusal sent. The session arm never reaches it. */
+  const tokenCaller = async (req: FastifyRequest, reply: FastifyReply): Promise<{ byId: string; byUuid: string } | null> => {
+    const q = isObject(req.query) ? req.query : {};
+    const byId = q['byId'];
+    const byUuid = q['byUuid'];
+    if (typeof byId !== 'string' || byId === '' || typeof byUuid !== 'string' || byUuid === '') {
+      bad(reply, 'with the box token, byId and byUuid are required query values');
+      return null;
+    }
+    const ports = deps.ports;
+    if (ports === undefined) { refuseRoute(reply, 'not-configured'); return null; }
+    const v = await ports.attribute(byId, byUuid);
+    if (!v.ok) { refuseRoute(reply, v.error, { detail: v.detail }); return null; }
+    return { byId, byUuid };
+  };
+
+  /** `GET /api/programmes/:slug/history` (spec §11): the programme's story, oldest first. With the box token (`viaToken`),
+   *  only the programme's bound coordinator reads it (spec §14), attributed, then owning it (`claimsProgramme`). */
+  async function history(req: FastifyRequest, reply: FastifyReply, viaToken: boolean) {
     const coord = deps.coord;
     if (!coord) return refuseRoute(reply, 'not-configured');
     const slug = slugOf(req);
+    if (viaToken) {
+      const who = await tokenCaller(req, reply);
+      if (who === null) return reply;
+      if (!coord.claimsProgramme(who.byId, slug, who.byUuid)) {
+        return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.notYourProgramme, { detail: `${who.byId} is not the coordinator of programme ${slug}` });
+      }
+    }
     const h = coord.programmeHistory(slug);
     if (h === null) return refuseRoute(reply, 'unknown-programme', { detail: `no programme ${slug}` });
     return reply.code(200).send({ ok: true, slug, history: h });
   }
 
   /** `GET /api/sessions/:id/programme` (spec §7, §14): the session's one programme, by its measured incarnation, or `none`
-   *  with why. An unreadable registry is `registry-unmeasurable`, never `none`. */
-  async function sessionProgramme(req: FastifyRequest, reply: FastifyReply) {
+   *  with why. An unreadable registry is `registry-unmeasurable`, never `none`. With the box token (`viaToken`), attributed,
+   *  and a session reads only its own (`not-owner`). */
+  async function sessionProgramme(req: FastifyRequest, reply: FastifyReply, viaToken: boolean) {
     const coord = deps.coord;
     if (!coord) return refuseRoute(reply, 'not-configured');
     const id = (req.params as { id: string }).id;
     if (!isRegistryId(id)) return refuseRoute(reply, 'bad-session-id');
+    if (viaToken) {
+      const who = await tokenCaller(req, reply);
+      if (who === null) return reply;
+      if (who.byId !== id) return refuseRoute(reply, 'not-owner', { detail: `with the box token, ${who.byId} reads its own programme only` });
+    }
     const ports = deps.ports;
     if (ports === undefined) return refuseRoute(reply, 'not-configured');
     const reading = await ports.readingOf(id);
@@ -315,7 +360,37 @@ export function programmeDoors(deps: ProgrammeDoorDeps) {
     return reply.code(200).send(answer);
   }
 
-  return { start, state, handOver, confirm, decline, history, sessionProgramme };
+  /** The refused close's programme end (D-8558's `{programme}` body on `POST /api/items/:id/act`, plan W2 item 4): an end,
+   *  so it takes the end's credential (spec §14's step-up, so it refuses while sign-in is dark), asked before the run is
+   *  abandoned. The actor, or null with the refusal sent. */
+  const lastRunEndActor = (req: FastifyRequest, reply: FastifyReply): ProgrammeActor | null => credential(req, reply, 'end')?.actor ?? null;
+
+  /** Whether `slug` may end as `outcome` once its last run closes, asked before that run is abandoned: the state door's
+   *  `end` with no open run (`edgeDecision`, the one decider). An ended programme is not a refusal here: the run is
+   *  closed either way, and the first recorded end stands. */
+  const lastRunEndRefusal = (coord: CoordStore, slug: string, outcome: ProgrammeEndOutcome): { why: EdgeRefusal; detail: string } | null => {
+    const row = coord.programmeLifecycleRow(slug);
+    if (row === null) return { why: 'unknown-programme', detail: `no programme ${slug}` };
+    const d = edgeDecision({ stored: row.state, placeholder: row.placeholder, openRuns: 0 }, { edge: 'end', outcome, abandonRuns: false });
+    return d.ok || d.why === 'programme-ended' ? null : { why: d.why, detail: d.detail };
+  };
+
+  /** The end once the last run closed: `edgeDecision` over the measured open runs, then `decideInTx` (the proposal closed and
+   *  the released coordinator told in its transaction). True when ended, or already ended (its first end stands). */
+  const endWithLastRun = (coord: CoordStore, slug: string, outcome: ProgrammeEndOutcome, actor: ProgrammeActor, why: string,
+    planEndWhy: string | null, now: number): { ok: true } | { ok: false; why: EdgeRefusal; detail: string } => {
+    const row = coord.programmeLifecycleRow(slug);
+    if (row === null) return { ok: false, why: 'unknown-programme', detail: `no programme ${slug}` };
+    const d = edgeDecision({ stored: row.state, placeholder: row.placeholder, openRuns: coord.programOpenRunCount(slug) },
+      { edge: 'end', outcome, abandonRuns: false });
+    if (!d.ok) return d.why === 'programme-ended' ? { ok: true } : d;
+    if (d.kind !== 'decide') return { ok: false, why: 'programme-unknown', detail: 'an end is a decision' };
+    coord.decideProgramme({ slug, to: d.to, edge: d.event, actor, why, planEndWhy }, now,
+      (released) => noProgrammeMail(coord, released, `${slug} ended (${d.to}) with its last run: ${why}`));
+    return { ok: true };
+  };
+
+  return { start, state, handOver, confirm, decline, history, sessionProgramme, lastRunEndActor, lastRunEndRefusal, endWithLastRun };
 }
 
 /** The proposal door's body (spec §8): `{byId, byUuid, outcome, why, evidence[]}`. */
@@ -354,8 +429,9 @@ export function raiseEndProposal(
 }
 
 /** The programmes read with its lifecycle (spec §15), for `GET /api/programmes`: one registry reading per bound session
- *  and per coordinator with no programme; a coordinator with no programme is listed only while its row is present and
- *  not archived. Without the ports (a narrow test), the bound sessions read `unreadable`, never absent. */
+ *  and per coordinator with no programme (W4's registry lane replaces these per-request reads, D-9021), handed to the L1
+ *  view, which decides what each row shows and which coordinators are listed. Without the ports (a narrow test), the
+ *  sessions read `unreadable`, never absent. */
 export async function programmesWithLifecycle(
   coord: CoordStore, answer: ProgrammesAnswer, readingOf: ((session: string) => Promise<CoordinatorRegistryReading>) | undefined,
 ): Promise<ProgrammesAnswer> {
@@ -368,7 +444,6 @@ export async function programmesWithLifecycle(
     for (const [s, r] of read) readings.set(s, r);
   }
   const readOf = (s: string): CoordinatorRegistryReading => readings.get(s) ?? { kind: 'unreadable' };
-  const live = without.filter((w) => { const r = readOf(w.session); return r.kind === 'present' && !r.archived; });
-  return withLifecycleFields(answer, facts, readOf, live);
+  return withLifecycleFields(answer, facts, readOf, without);
 }
 

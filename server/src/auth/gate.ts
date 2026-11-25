@@ -523,11 +523,13 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
   ['GET /api/programmes/:slug/history',
     "EXEMPT-BUT-AUTHENTICATED (D-149's pattern, programme lifecycle W2), the goals read's shape: the PWA's console reads a programme's " +
     'story with a session, and a coordinator reads it COOKIELESS from the fleet host. The route\'s own `onRequest` ' +
-    '(coord/ledgersRoutes.ts) requires a live session OR a valid box token before anything is read; nothing is written'],
+    '(coord/ledgersRoutes.ts) requires a live session OR a valid box token before anything is read; the token arm is then ' +
+    'attributed (`byId`/`byUuid`) and reads only the programme its caller coordinates (spec §14); nothing is written'],
   ['GET /api/sessions/:id/programme',
     "EXEMPT-BUT-AUTHENTICATED (D-149's pattern, programme lifecycle W2), the goals read's shape: a coordinator reads its own one " +
     'programme COOKIELESS from the fleet host at its start, and the console with a session. The route\'s own `onRequest` ' +
-    '(coord/ledgersRoutes.ts) requires a live session OR a valid box token before anything is read; nothing is written'],
+    '(coord/ledgersRoutes.ts) requires a live session OR a valid box token before anything is read; the token arm is then ' +
+    'attributed (`byId`/`byUuid`) and reads only its caller\'s own programme (spec §14); nothing is written'],
   ['POST /api/programmes/:slug/plan/take',
     'box-token machine lane, box token and attribution checked. The programme\'s coordinator takes an inbound issue handed to it, or an ' +
     'Upkeep ticket, into an epic of its plan, closes it with a reason, or returns it to the team\'s Linear owner (`plan take`); the ' +
