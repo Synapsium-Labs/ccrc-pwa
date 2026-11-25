@@ -10,6 +10,8 @@ import { InvariantMonitor, type InvariantMonitorDeps } from '../src/coord/invari
 import { gatherInvariantInput } from '../src/coord/invariantFacts.js';
 import { findingCounts, openFindings, recordFinding, resolveFindings } from '../src/coord/invariantFindingsStore.js';
 import { INVARIANT_NAMES, type InvariantInput } from '../src/coord/invariants.js';
+import { effectiveRung } from '../src/coord/overlordLadder.js';
+import { LADDER_CAUSE_MAP } from '../../shared/overlord-ladder.js';
 import { raiseLatch } from '../src/coord/overlordLadderRead.js';
 import { ladderRows, raiseLatchInTx, type AuthorityAppender } from '../src/coord/overlordLadderStore.js';
 import { serverActorOf } from '../src/auth/attributionIdentity.js';
@@ -281,5 +283,15 @@ describe('InvariantMonitor', () => {
     r.monitor.pass();
     const c = findingCounts(r.db);
     expect(c.kind === 'measured' && [c.value.shadow.total, c.value.live.total]).toEqual([1, 1]);
+  });
+});
+
+describe('the ladder\'s invariant-violation row (Table 7.5a; the seams case, here because the seams file is another run\'s)', () => {
+  it('is a latch capping advise with one item as its notice, and a standing one reads at most advise through the shipped table', () => {
+    expect(LADDER_CAUSE_MAP['invariant-violation']).toMatchObject({ kind: 'latch', effect: { kind: 'cap', cap: 'advise' }, notice: 'item' });
+    const facts = { operatorRung: { kind: 'set', rung: 'full' }, latches: [{ cause: 'invariant-violation', cap: 'advise' }], conditions: [],
+      causeTable: LADDER_CAUSE_MAP, serverCaps: ['overlord-route-v1', 'overlord-answer-v1'] } as const;
+    expect(effectiveRung(facts)).toMatchObject({ rung: 'advise', binding: [{ cause: 'invariant-violation', kind: 'latch', cap: 'advise', known: true }] });
+    expect(effectiveRung({ ...facts, operatorRung: { kind: 'set', rung: 'chat' } })).toMatchObject({ rung: 'chat' });
   });
 });

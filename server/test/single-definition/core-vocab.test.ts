@@ -866,7 +866,12 @@ describe('Build 7 nouns', () => {
       'limitSamplesStore.ts',
       // The programme lifecycle (W1, D-8983): `programmeLifecycleStore.ts` is the decision's, the binding's and the events' one
       // writer, inside its caller's transaction; it names the handle by `import type`, and every function takes it as an argument.
-      'programmeLifecycleStore.ts']);
+      'programmeLifecycleStore.ts',
+      // The invariant monitor (Overlord W1, sequence B2): Confirm's database side as one read (`overlordRestoreRows.ts`), the
+      // gatherer (`invariantFacts.ts`) and the findings' SQL (`invariantFindingsStore.ts`) take the handle as an argument, and
+      // the runner's factory (`invariantLane.ts#invariantMonitorOver`) binds them to it once for `index.ts`; each names it by
+      // `import type`.
+      'overlordRestoreRows.ts', 'invariantFacts.ts', 'invariantFindingsStore.ts', 'invariantLane.ts']);
     const coordFiles = sources(coordDir);
 
     it('visits the whole directory — a moved directory must turn this red, not disarm it', () => {
