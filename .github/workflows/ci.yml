@@ -727,6 +727,8 @@ jobs:
           FILES: ${{ matrix.files }}
           VITEST_SHARD: ${{ matrix.vitest_shard }}
           WORKERS: ${{ matrix.workers }}
+          # D-9016: a queue group's parent, which the growth check measures an entry against; empty on any other event.
+          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
           CCRC_TREE_SCANS_OUT: ${{ needs.select.outputs.tests == 'full' && format('{0}/scans.jsonl', runner.temp) || '' }}
         run: |
           echo "$FILES" | tr ' ' '\n' > "$RUNNER_TEMP/tests.txt"
