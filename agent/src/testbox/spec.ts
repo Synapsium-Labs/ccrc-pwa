@@ -27,7 +27,7 @@
 // worker names carry the same lower count, D-7501) and the service's JSON reporter beside the session's reporters.
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import type { RunSubmit, TestboxRepoRow } from '../../../shared/testbox.js';
+import { isVitestProgram, type RunSubmit, type TestboxRepoRow } from '../../../shared/testbox.js';
 import type { InstallInput } from './pristine.js';
 import type { InstallStep } from './runs.js';
 
@@ -117,7 +117,7 @@ export function commandHead(row: TestboxRepoRow, pkg: string, argv: readonly str
   return null;
 }
 
-const isVitest = (argv: readonly string[]): boolean => path.basename(argv[0] ?? '') === 'vitest';
+const isVitest = (argv: readonly string[]): boolean => isVitestProgram(argv[0] ?? '');
 
 /** Flags placed before a `--` that ends the options, else at the end. */
 function withFlags(argv: readonly string[], flags: readonly string[]): string[] {

@@ -199,12 +199,20 @@ export function queueRunlessNotice(
   coord: WatcherCoordPort,
   n: { toId: string; kind: MailKind; subject: string; body: string },
 ): StallNoticeQueued {
-  return tx(coord.db, (): StallNoticeQueued => {
-    if (coord.hasMailWithSubject('operator', null, n.toId, n.subject)) return { queued: false, why: 'duplicate' };
-    const q = insertSystemMailTx(coord, null, { fromId: 'operator', toId: n.toId, runId: null,
-      kind: n.kind, subject: n.subject, body: n.body });
-    return { queued: true, mailId: q.mailId, deliveryId: q.deliveryId, eventId: null };
-  });
+  return tx(coord.db, () => queueRunlessNoticeTx(coord, n));
+}
+
+/** `queueRunlessNotice`'s BODY (landing order wave 5i), extracted so the next-to-land cue can run it inside the landing
+ *  transaction that also holds its health update. Same dedupe, same mail; it OPENS NO TRANSACTION (`tx` is not re-entrant),
+ *  so each caller holds one around it. */
+export function queueRunlessNoticeTx(
+  coord: WatcherCoordPort,
+  n: { toId: string; kind: MailKind; subject: string; body: string },
+): StallNoticeQueued {
+  if (coord.hasMailWithSubject('operator', null, n.toId, n.subject)) return { queued: false, why: 'duplicate' };
+  const q = insertSystemMailTx(coord, null, { fromId: 'operator', toId: n.toId, runId: null,
+    kind: n.kind, subject: n.subject, body: n.body });
+  return { queued: true, mailId: q.mailId, deliveryId: q.deliveryId, eventId: null };
 }
 
 /** What `queueLandingNotice` did: `queueStallNotice`'s answer, with the observation's own `why`. */
@@ -226,19 +234,28 @@ export function queueLandingNotice(
   run: Pick<RunRow, 'id' | 'program' | 'wave' | 'waveOf'>,
   n: { detail: string; at: number; episode: number; toId: string; subject: string; body: string },
 ): LandingNoticeQueued {
-  return tx(coord.db, (): LandingNoticeQueued => {
-    const row = readChecksRowDetail(n.detail);
-    if (row !== null && row.gen !== null && (row.what === 'stuck' || row.what === 'green' || row.what === 'red')) {
-      const own = coord.checksRows(run.id, n.episode).filter((r) => !r.row.shadow && r.row.gen === row.gen);
-      const held = row.what === 'stuck'
-        ? own.some((r) => r.row.what === 'stuck')
-        : own.some((r) => r.row.what === 'green' || r.row.what === 'red');
-      if (held) return { queued: false, why: 'duplicate' };
-    }
-    const seen = coord.insertObservation(run.id, n.detail, n.at, { kind: 'episode', episode: n.episode });
-    if (!seen.recorded) return { queued: false, why: seen.why };
-    const q = insertSystemMailTx(coord, run, { fromId: 'operator', toId: n.toId, runId: run.id,
-      kind: 'status', subject: n.subject, body: n.body });
-    return { queued: true, mailId: q.mailId, deliveryId: q.deliveryId, eventId: seen.eventId };
-  });
+  return tx(coord.db, () => queueLandingNoticeTx(coord, run, n));
+}
+
+/** `queueLandingNotice`'s BODY (landing order wave 5i), extracted so the next-to-land cue can run it inside the landing
+ *  transaction that also holds its health update. The observation row under the `episode` predicate stays the run arm's
+ *  durable dedupe and its TOCTOU guard; it OPENS NO TRANSACTION (`tx` is not re-entrant), so each caller holds one. */
+export function queueLandingNoticeTx(
+  coord: WatcherCoordPort,
+  run: Pick<RunRow, 'id' | 'program' | 'wave' | 'waveOf'>,
+  n: { detail: string; at: number; episode: number; toId: string; subject: string; body: string },
+): LandingNoticeQueued {
+  const row = readChecksRowDetail(n.detail);
+  if (row !== null && row.gen !== null && (row.what === 'stuck' || row.what === 'green' || row.what === 'red')) {
+    const own = coord.checksRows(run.id, n.episode).filter((r) => !r.row.shadow && r.row.gen === row.gen);
+    const held = row.what === 'stuck'
+      ? own.some((r) => r.row.what === 'stuck')
+      : own.some((r) => r.row.what === 'green' || r.row.what === 'red');
+    if (held) return { queued: false, why: 'duplicate' };
+  }
+  const seen = coord.insertObservation(run.id, n.detail, n.at, { kind: 'episode', episode: n.episode });
+  if (!seen.recorded) return { queued: false, why: seen.why };
+  const q = insertSystemMailTx(coord, run, { fromId: 'operator', toId: n.toId, runId: run.id,
+    kind: 'status', subject: n.subject, body: n.body });
+  return { queued: true, mailId: q.mailId, deliveryId: q.deliveryId, eventId: seen.eventId };
 }

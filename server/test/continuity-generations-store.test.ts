@@ -3,12 +3,12 @@
 // effective state (review 1902 F6), the hold-off's frame (review 1902 F4), and the `continuity` row on the Shadow lanes card.
 import { describe, it, expect, afterEach } from 'vitest';
 import path from 'node:path';
-import { openCoordDb } from '../src/coord/db.js';
+import { openCoordDb, tx } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { MIGRATIONS } from '../src/coord/schema.js';
 import { laneArmViewOf } from '../src/coord/laneArm.js';
 import {
-  effectiveGeneration, genExpectOf, genViewOf, type GenRow, type MintInput,
+  effectiveGeneration, endOverlordGeneration, genExpectOf, genViewOf, type GenRow, type MintInput,
 } from '../src/continuity/continuityStore.js';
 import { GEN_ACTIVE, GEN_MINTED, type GenView } from '../src/continuity/generationMachine.js';
 import { HOLD_OFF_MS, STATE_DEADLINE_S } from '../../shared/continuity.js';
@@ -360,5 +360,114 @@ describe('closedSpotProbes (Overlord W1, renewal readings PR A)', () => {
     const s = store();
     s.db.close();
     expect(s.closedSpotProbes('opus')).toMatchObject({ ok: false });
+  });
+});
+
+describe('the one sequence (Overlord §10.4): the generation lines', () => {
+  type Line = { kind: string; id: string; state: string; actor: string; actorKind: string; at: number };
+  const lines = (s: CoordStore): Line[] =>
+    s.db.prepare('SELECT kind, id, state, actor, actorKind, at FROM overlord_sequence ORDER BY seq').all() as Line[];
+  const line = (id: number, state: string, at: number = NOW): Line =>
+    ({ kind: 'generation', id: String(id), state, actor: 'server', actorKind: 'server', at });
+  const refuse = (s: CoordStore): void => {
+    s.db.exec("CREATE TRIGGER refuse BEFORE INSERT ON overlord_sequence BEGIN SELECT RAISE(ABORT, 'refused'); END");
+  };
+
+  it('a first live mint writes one line, carded for its id', () => {
+    const s = store();
+    expect(s.mintGeneration(mintIn(startOf(s)), null, true)).toEqual({ ok: true, id: 1, n: 1 });
+    expect(lines(s)).toEqual([line(1, 'carded')]);
+  });
+
+  it('a live mint over a live row writes ended for the old id, then carded for the new one, both at the mint\'s now', () => {
+    const s = store();
+    s.mintGeneration(mintIn(startOf(s)), null, true);
+    const one = only(s);
+    const at = NOW + 5_000;
+    expect(s.mintGeneration(mintIn(startOf(s), { outcome: 'woken', now: at }), genExpectOf(one), true)).toEqual({ ok: true, id: 2, n: 2 });
+    expect(lines(s)).toEqual([line(1, 'carded'), line(1, 'ended', at), line(2, 'carded', at)]);
+  });
+
+  it('a shadow mint writes active for its id', () => {
+    const s = store();
+    s.mintGeneration(mintIn(startOf(s)), null, false);
+    expect(lines(s)).toEqual([line(1, 'active')]);
+  });
+
+  it('a refused stamp on a mint over a live row answers write-failed, leaves the old row as it was and writes no row and no line', () => {
+    const s = store();
+    s.mintGeneration(mintIn(startOf(s)), null, true);
+    const one = only(s);
+    const rows = all(s);
+    const before = lines(s);
+    refuse(s);
+    expect(s.mintGeneration(mintIn(startOf(s), { outcome: 'woken', now: NOW + 9 }), genExpectOf(one), true)).toEqual({ ok: false, kind: 'write-failed' });
+    expect(all(s)).toEqual(rows);
+    expect(only(s)).toEqual(one);
+    expect(lines(s)).toEqual(before);
+  });
+
+  it('a live step entering probing writes one line; a second step that stays in probing writes none', () => {
+    const s = store();
+    s.mintGeneration(mintIn(startOf(s)), null, true);
+    let r = only(s);
+    expect(s.stepGeneration(r.id, genExpectOf(r), view({ state: 'probing', proven: false }), true, NOW + 1_000)).toEqual({ changed: true });
+    expect(lines(s)).toEqual([line(1, 'carded'), line(1, 'probing', NOW + 1_000)]);
+    r = only(s);
+    expect(s.stepGeneration(r.id, genExpectOf(r), view({ state: 'probing', proven: false, probeRounds: 1 }), true, NOW + 2_000)).toEqual({ changed: true });
+    expect(lines(s)).toHaveLength(2);
+  });
+
+  it('a shadow step (the walk is in shadow) writes no line', () => {
+    const s = store();
+    s.mintGeneration(mintIn(startOf(s)), null, false);
+    const before = lines(s);
+    const r = only(s);
+    expect(s.stepGeneration(r.id, genExpectOf(r), view({ state: 'probing', proven: false }), false, NOW + 1_000)).toEqual({ changed: true });
+    expect(only(s)).toMatchObject({ shadowState: 'probing', walk: 'shadow' });
+    expect(lines(s)).toEqual(before);
+  });
+
+  it('a step whose compare-and-set misses writes no line and answers exactly { changed: false }', () => {
+    const s = store();
+    s.mintGeneration(mintIn(startOf(s)), null, true);
+    const r = only(s);
+    const before = lines(s);
+    const answer = s.stepGeneration(r.id, { ...genExpectOf(r), n: 7 }, view({ state: 'probing', proven: false }), true, NOW + 1_000);
+    expect(answer).toEqual({ changed: false });
+    expect(Object.keys(answer)).toEqual(['changed']);
+    expect(only(s).state).toBe('carded');
+    expect(lines(s)).toEqual(before);
+  });
+
+  it('a refused live step answers stamp-refused and leaves the row\'s state unchanged', () => {
+    const s = store();
+    s.mintGeneration(mintIn(startOf(s)), null, true);
+    const r = only(s);
+    const before = lines(s);
+    refuse(s);
+    expect(s.stepGeneration(r.id, genExpectOf(r), view({ state: 'probing', proven: false }), true, NOW + 1_000)).toEqual({ changed: false, why: 'stamp-refused' });
+    expect(only(s)).toEqual(r);
+    expect(lines(s)).toEqual(before);
+  });
+
+  it('endOverlordGeneration inside a tx() stamps ended for the live overlord generation at the given at', () => {
+    const s = store();
+    s.mintGeneration(mintIn(startOf(s), { identity: 'overlord' }), null, true);
+    const at = NOW + 7_000;
+    expect(tx(s.db, () => endOverlordGeneration(s.db, ID, at))).toEqual({ changed: true });
+    expect(all(s)).toMatchObject([{ id: 1, state: 'ended', outcome: 'retired' }]);
+    expect(lines(s)).toEqual([line(1, 'carded'), line(1, 'ended', at)]);
+  });
+
+  it('with a refused stamp endOverlordGeneration throws inside the tx and the generation stays live', () => {
+    const s = store();
+    s.mintGeneration(mintIn(startOf(s), { identity: 'overlord' }), null, true);
+    const one = only(s);
+    const before = lines(s);
+    refuse(s);
+    expect(() => tx(s.db, () => endOverlordGeneration(s.db, ID, NOW + 7_000))).toThrow();
+    expect(only(s)).toEqual(one);
+    expect(lines(s)).toEqual(before);
   });
 });

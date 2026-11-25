@@ -165,6 +165,9 @@ export function serverHoldings(cfg: CcrcConfig, codeRoot: Measured<string>, env:
     secret('sessionsPath', cfg.sessionsPath),
     secret('passkeysPath', cfg.passkeysPath),
     secret('accountsPath', cfg.accountsPath),
+    // The draft review store (X3 R1): the operator's snapshots and the share index, which one writer creates 0700. A read
+    // reaches document bytes, and a write could plant an index entry, so it is a secret holding; the measurement reads its real mode.
+    secret('reviewStoreDir', cfg.reviewStoreDir),
     control('codeRoot', codeRoot === 'unmeasured' ? null : codeRoot),
     control('unit', platform === 'darwin' ? unitDir : path.join(unitDir, SERVER_UNIT_NAME)),
     control('unitDropIns', path.join(unitDir, `${SERVER_UNIT_NAME}.d`)),

@@ -18,8 +18,11 @@ export type BackStep = { ok: true; segment: BackSegment } | { ok: false; reason:
  *  Framing relies on `readFileFromBytesMeasured`'s contract that an ok read is exactly `min(maxBytes, size - offset)`
  *  bytes: `localIO` answers `unreadable` for fewer through two checks on its one handle (`io.ts`: `now < offset + owed`,
  *  a file shorter than the path stat promised, and `got !== due`, a read that came back short), and the remote adapter
- *  likewise (`remote/io.ts`, the `bytes.length !== Math.min(maxBytes, size - offset)` check), so a short read never
- *  joins non-adjacent bytes into one segment. */
+ *  likewise (`remote/io.ts`, the `bytes.length !== Math.min(maxBytes, size - offset)` check). Both measure a read against
+ *  the size THEY see at that read, not this walker's `size`, and this walker checks only that a read succeeded, never its
+ *  length: a file cut before a later read's path stat answers a successful read shorter than asked, which this walker
+ *  would join to non-adjacent carry. The older-record framing (`transcript/olderRange.ts`) wraps the port it hands this
+ *  walker to refuse exactly that read; this walker's other callers read through the raw port. */
 export function walkBack(io: FleetIO, file: string, size: number, sizes: readonly number[]):
   { more(): boolean; next(): Promise<BackStep> } {
   let end = size;

@@ -1,14 +1,18 @@
 // Landing order wave 5h (Task 4): the landed reader's pure decisions (`coord/landed.ts`, L1).
 import { describe, it, expect } from 'vitest';
 import {
-  LANDED_FRESH_MS, LANDED_READS_PER_SWEEP, LANDED_STANDING_BACKOFF_MS, landedAnswerOf, landedCandidatesOf, landedNext,
-  isHeldRefusal, closeLandingOf, landedNoticeModeOf, mergedBody, mergedKey, mergedNoticeOf, pickLandedReads, type LandedCandidate, type LandedMemory,
+  LANDED_FRESH_MS, LANDED_READS_PER_SWEEP, LANDED_STANDING_BACKOFF_MS, landedAnswerOf, landedCallStep, landedCandidatesOf, landedNext,
+  isHeldRefusal, closeLandingOf, landedExpectOf, landedNoticeModeOf, mergedBody, mergedKey, mergedNoticeOf, pickLandedReads, type LandedCandidate, type LandedMemory,
 } from '../src/coord/landed.js';
 import { PR_BACKOFF_MAX_MS, PR_SWEEP_MS } from '../src/laneSchedule.js';
 import type { PrMergedFacts, PrStatePrRead } from '../src/prstate.js';
 import type { LandingMutationFacts } from '../src/coord/landingWrites.js';
 import type { LandingEntry, LandingEntryState, LandingRecovery, LandingRecoverySubject } from '../../shared/landingLine.js';
 import type { LandingProjectionRead } from '../src/coord/landingEntry.js';
+import type { CcdResult } from '../src/coord/ports.js';
+import { parseFile } from './scan/parse.js';
+import { REPO_ROOT } from './scan/symbols.js';
+import { codeOf } from './consolidationCensus.js';
 
 const HEAD = 'a'.repeat(40);
 const MERGE = 'b'.repeat(40);
@@ -119,11 +123,14 @@ describe('landedNext', () => {
 
 describe('landedCandidatesOf', () => {
   /** A real `LandingMutationFacts`: the fields the test is about, honest empty values for the rest. */
-  const factsOf = (o: { entries: LandingEntry[]; projections: LandingMutationFacts['projections']; recovery: LandingRecovery }): LandingMutationFacts => ({
+  const factsOf = (o: { entries: LandingEntry[]; projections: LandingMutationFacts['projections']; recovery: LandingRecovery;
+    terminalRepairs?: LandingMutationFacts['terminalRepairs'] }): LandingMutationFacts => ({
     project: 'project-a', flags: { operatorPaused: false, mainRedHold: false }, entries: o.entries, projections: o.projections,
+    stateWords: o.entries.map((e) => ({ id: e.id, value: e.state })),
     dependencies: o.entries.map((e) => ({ id: e.id, value: { kind: 'readable' as const, afterIds: [] } })),
     recovery: o.recovery, nextId: Math.max(0, ...o.entries.map((e) => e.id)) + 1, foreignIds: [],
     coordinators: o.entries.map((e) => ({ id: e.id, value: { kind: 'no-run' as const } })),
+    terminalRepairs: o.terminalRepairs ?? [], creations: [],
   });
   const entry = (id: number, state: LandingEntryState): LandingEntry => ({ id, project: 'project-a', pr: 100 + id, pinnedSha: HEAD, handoffCommit: HEAD,
     runId: id, state, baseSha: null, ejectionKind: null, ejections: 0, afterIds: [], fixesMain: false, setBy: 'lane-a', pinnedAt: id * 10 });
@@ -167,6 +174,46 @@ describe('landedCandidatesOf', () => {
   });
 });
 
+describe('landedCandidatesOf: the terminal-repair alternative (wave 5i, D-8626)', () => {
+  const factsOf = (entries: LandingEntry[], terminalRepairs: LandingMutationFacts['terminalRepairs'], recovery: LandingRecovery = NO_HOLD): LandingMutationFacts => ({
+    project: 'project-a', flags: { operatorPaused: false, mainRedHold: false }, entries,
+    projections: entries.map((e) => ({ id: e.id, value: { kind: 'unreadable' } as LandingProjectionRead })),
+    stateWords: entries.map((e) => ({ id: e.id, value: e.state })),
+    dependencies: entries.map((e) => ({ id: e.id, value: { kind: 'readable' as const, afterIds: [] } })), recovery, nextId: 99, foreignIds: [],
+    coordinators: entries.map((e) => ({ id: e.id, value: { kind: 'no-run' as const } })), terminalRepairs, creations: [],
+  });
+  const entry = (id: number, state: LandingEntryState): LandingEntry => ({ id, project: 'project-a', pr: 100 + id, pinnedSha: HEAD, handoffCommit: HEAD,
+    runId: id, state, baseSha: null, ejectionKind: null, ejections: 0, afterIds: [], fixesMain: false, setBy: 'lane-a', pinnedAt: id * 10 });
+  const T = 'c'.repeat(64);
+  it('an eligible row is a candidate carrying its token; a blocked one, and a row with no verdict, are not', () => {
+    const got = landedCandidatesOf(factsOf([entry(1, 'pinned'), entry(2, 'pinned'), entry(3, 'unknown'), entry(4, 'pinned')], [
+      { id: 1, value: { kind: 'eligible', token: T } }, { id: 2, value: { kind: 'blocked', reason: 'quarantine' } },
+      { id: 3, value: { kind: 'eligible', token: 'd'.repeat(64) } },
+    ]));
+    expect(got).toEqual([
+      { project: 'project-a', id: 1, pr: 101, pinnedAt: 10, pinnedSha: HEAD, runId: 1, repairToken: T },
+      { project: 'project-a', id: 3, pr: 103, pinnedAt: 30, pinnedSha: HEAD, runId: 3, repairToken: 'd'.repeat(64) },
+    ]);
+  });
+  it('a normal candidate carries no repairToken key at all', () => {
+    const facts = factsOf([entry(1, 'pinned')], []);
+    facts.projections = [{ id: 1, value: { kind: 'readable', quarantine: null } }];
+    expect(landedCandidatesOf(facts)).toEqual([{ project: 'project-a', id: 1, pr: 101, pinnedAt: 10, pinnedSha: HEAD, runId: 1 }]);
+  });
+  it('the hold gate still applies: a repair row that is its own unresolved subject, or sits in an identity-conflicted project, is skipped', () => {
+    const subject = (pr: number, projection: LandingRecoverySubject['projection']): LandingRecoverySubject => ({
+      id: 1, project: 'project-a', pr, creation: { kind: 'not-recorded' }, historical: { binding: { kind: 'no-run' }, observedSeq: 1 }, projection, authority: { kind: 'not-set' } });
+    const held = (s: LandingRecoverySubject): LandingRecovery => ({ hold: { reason: 'landing-recovery-unresolved', subjectIds: [s.id] }, subjects: [s] });
+    const verdicts: LandingMutationFacts['terminalRepairs'] = [{ id: 1, value: { kind: 'eligible', token: T } }, { id: 2, value: { kind: 'eligible', token: T } }];
+    expect(ids(landedCandidatesOf(factsOf([entry(1, 'pinned'), entry(2, 'pinned')], verdicts, held(subject(101, { kind: 'missing', association: 'unmeasured' })))))).toEqual([2]);
+    expect(landedCandidatesOf(factsOf([entry(1, 'pinned'), entry(2, 'pinned')], verdicts, held(subject(150, { kind: 'identity-conflict', conflicts: [] }))))).toEqual([]);
+  });
+  it('landedExpectOf carries the token into the compare-and-set, and only for a repair candidate', () => {
+    expect(landedExpectOf({ project: 'project-a', id: 1, pr: 101, pinnedAt: 10, pinnedSha: HEAD, runId: 1 })).toEqual({ id: 1, pinnedAt: 10 });
+    expect(landedExpectOf({ project: 'project-a', id: 1, pr: 101, pinnedAt: 10, pinnedSha: HEAD, runId: 1, repairToken: T })).toEqual({ id: 1, pinnedAt: 10, repairToken: T });
+  });
+});
+
 describe('the merged record', () => {
   it('mergedNoticeOf builds the whole record, for the reader\'s inputs and for announceMerged\'s', () => {
     expect(mergedNoticeOf({ pr: 42, reason: null, sessionId: 'lane-a-demo', workspace: 'demo', key: 'lane-a-demo#42' })).toEqual({
@@ -204,5 +251,27 @@ describe('closeLandingOf', () => {
   });
   it('a failed close is null, facts or not', () => {
     expect(closeLandingOf({ state: 'failed', facts, project: 'project-a', at: 5 })).toBeNull();
+  });
+});
+
+// Fix round 1, R3: the `pr-state --pr` call's not-ran decision is L1's (`landedCallStep` reads `ran` first), and the lane acts on it.
+describe('landedCallStep', () => {
+  const Z = { stderr: '', killed: false as const, signal: null };
+  it('a call that did not run is not-ran, carrying the retry answer and the link stop, whatever its stdout and ok say', () => {
+    const notRan: CcdResult = { ran: false, ok: false, reason: 'transport', detail: 'agent down', stdout: '{"x":1}', ...Z };
+    expect(landedCallStep(notRan)).toEqual({ act: 'not-ran', answer: { act: 'retry', missingField: false }, stopped: 'link' });
+  });
+  it('a call that ran and exited 0 is parsed from its stdout', () => {
+    expect(landedCallStep({ ran: true, ok: true, stdout: 'line\n', ...Z })).toEqual({ act: 'parse', stdout: 'line\n' });
+  });
+  it('a call that ran and failed is failed', () => {
+    expect(landedCallStep({ ran: true, ok: false, stdout: 'boom', ...Z })).toEqual({ act: 'failed' });
+  });
+  it('the lane reads no `.ran` of a runner result: the not-ran policy is landedCallStep\'s alone', () => {
+    const lane = parseFile(`${REPO_ROOT}/server/src/coord/landedLane.ts`);
+    const src = lane.text.split('\n').map(codeOf).join('\n');
+    expect(src).not.toMatch(/\.ran\b/);
+    expect(lane.comparisons.filter((c) => c.leftLeaf === 'ran' || c.rightLeaf === 'ran')).toEqual([]);
+    expect(src).not.toMatch(/missingField:\s*false/);
   });
 });

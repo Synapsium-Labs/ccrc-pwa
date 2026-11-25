@@ -397,8 +397,8 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
     expect(sevenDayHolders(ALL).filter((h) => h in OWN_FACTS)).toEqual(Object.keys(OWN_FACTS).sort());
   });
 
-  it('the holders across shared, server/src, pwa/src and agent/src are exactly the twenty separate seven-day quantities', () => {
-    // A weekly interval anywhere else must import the one in shared/box-token.ts. These twenty are separate
+  it('the holders across shared, server/src, pwa/src and agent/src are exactly the twenty-two separate seven-day quantities', () => {
+    // A weekly interval anywhere else must import the one in shared/box-token.ts. These twenty-two are separate
     // quantities (the coordinator confirmed them, Q2); a new, unrelated seven-day quantity needs a ruling to join.
     // The delegation health window, spec §5.3's seven-day observation window, is a separate quantity ruled in by delegation wave 3
     // (R81), and it does not import the token interval. The review-child ceiling (D-5942) is the separate quantity
@@ -442,6 +442,8 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
     // (2026-11-21, run 3098): spec 2026-11-19 §7.2's seven days of quiet, after which an agent or workflow record passes the check
     // without its parent's measurement. The dry run's first age band edge reads it rather than naming a week of its own. It is
     // unrelated to token rotation, and it does not import the token interval.
+    // Draft review's idle expiry and removed-draft tombstone retention are the twenty-first and twenty-second, its two distinct
+    // seven-day lifetimes (X3 R1, design §4). Neither is the box-token rotation interval.
     expect(sevenDayHolders(ALL).filter((h) => !(h in OWN_FACTS)), HOLDERS_MESSAGE).toEqual([
       'pwa/src/screens/usePrograms.ts:QUIET_AFTER_MS',
       'server/src/childReclaimSweep.ts:CHILD_RECLAIM_LEAF_KEPT_HORIZON_MS',
@@ -461,6 +463,8 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
       'shared/api.ts:LEDGER_STALE_MS',
       'shared/box-token.ts:TOKEN_ROTATION_INTERVAL_MS',
       'shared/continuity-reports.ts:REPORT_KEEP_MS',
+      'shared/docsReview.ts:REVIEW_IDLE_MS',
+      'shared/docsReview.ts:REVIEW_TOMBSTONE_MS',
       'shared/push-outbox.ts:OUTBOX_KEEP_MS',
       'shared/responses.ts:WAITING_WINDOW_MS',
     ]);

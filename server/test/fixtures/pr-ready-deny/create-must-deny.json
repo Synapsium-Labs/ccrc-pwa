@@ -1,0 +1,18 @@
+[
+  "gh pr create",
+  "gh pr create --fill",
+  "gh pr create --title 'wave 2' --body-file /tmp/body.md",
+  "gh pr new --fill",
+  "gh pr create --draft=false --fill",
+  "gh pr create -d=false --fill",
+  "gh pr create --draft=0 --fill",
+  "gh -R owner-a/repo-a pr create --fill",
+  "git push -u origin HEAD && gh pr create --fill",
+  "gh pr create --fill; echo --draft",
+  "gh pr create --title 'not a --draft' --fill",
+  "x=$(gh pr create --fill)",
+  "gh pr create --base main --head ws/slug-a --fill",
+  "gh pr create --fill --draftish",
+  "GH_REPO=owner-a/repo-a gh pr create --fill",
+  "timeout 60 gh pr create --fill"
+]

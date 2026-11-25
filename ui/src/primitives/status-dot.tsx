@@ -73,16 +73,29 @@ const DOT: Record<
  *  same Geometric Shapes block as `◐` and `○` above, and a ring that is "not there right now" rather than `✕`. */
 const ASLEEP = { tone: 'idle', label: 'hibernated', glyph: '\u25CC' } as const;
 
+/** A COORDINATOR WAITING ON ITS WORKERS (the app's wave 173): its own turn is over (`done` or `idle` on the wire, no new
+ *  bucket member) but its workers are still at it, so the lamp must not look finished (no `✓`) nor ask for the operator (no
+ *  amber, no pulse). Idle's matte ink, so no new colour and no new contrast pair, with U+25D4, the circle with its upper
+ *  right quadrant filled: the same Geometric Shapes block as `◐`, `○` and `◌`, a part-filled ring that is neither working's
+ *  half nor idle's empty one. The spoken label is the app's words (`waitingLabel`): this package does not decide them. */
+const WAITING_GLYPH = '\u25D4';
+
 export interface StatusDotProps {
   status: SessionBucket;
   /** The app's answer to "is this `dead` row asleep?" (D-5242). Only a `dead` dot reads it: any other bucket is awake
    *  whatever a stale flag says. This package must not know how the app decides it, so it is a prop. */
   asleep?: boolean;
+  /** The app's words for a coordinator waiting on its workers, when it is one. Only a `done` or `idle` dot reads it: any
+   *  other bucket keeps its own look and label whatever the app passes. */
+  waitingLabel?: string;
   className?: string;
 }
 
-export function StatusDot({ status, asleep = false, className }: StatusDotProps): ReactNode {
-  const dot = asleep && status === 'dead' ? ASLEEP : DOT[status];
+export function StatusDot({ status, asleep = false, waitingLabel, className }: StatusDotProps): ReactNode {
+  const dot = asleep && status === 'dead' ? ASLEEP
+    : waitingLabel !== undefined && (status === 'done' || status === 'idle')
+      ? { tone: 'idle' as const, label: waitingLabel, glyph: WAITING_GLYPH }
+      : DOT[status];
   return (
     <span
       className={cn(dotVariants({ tone: dot.tone }), className)}
