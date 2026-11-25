@@ -6,7 +6,7 @@
 //
 // RECORDED BEFORE DELIVERED. The row and its privacy-journal record commit in `operator-model.db` first. Only then, in ONE
 // `coord.db` transaction, the nudge mail is queued and W1a's mark `@overlord` is written; and with no `await` after the
-// transaction, `moveMessage(id, 'queue', 'route')`. No transaction spans the two files. NOTHING is typed into the pane here:
+// transaction, `moveMessage(id, 'queue', 'route')` with its sequence line (`messageLine.ts`). No transaction spans the two files. NOTHING is typed into the pane here:
 // the nudge is a delivery of the mail lane, one fixed line that names the id and the `messages` door, never the words. A
 // failed record queues no nudge and answers a refusal; a throw after the record leaves the row `recorded` (the boot pass and
 // the inbox both see it), still answers `ok` because the words are recorded, and logs the id only.
@@ -22,6 +22,7 @@ import type { DesignationRead } from '../../../shared/overlord-designation.js';
 import { promptTargetVerdict, settlementMarkOf } from './messages.js';
 import { promptBodyVerdict } from './promptBody.js';
 import { queueOperatorNudge, type NudgeQueueCoord } from './nudgeQueue.js';
+import { moveOperatorMessage, stampOperatorMessageLine } from './messageLine.js';
 import type { OperatorModelStore, StoreWriteError } from './store.js';
 
 /** The route's reading of "no coordination store": nobody is designated, so every prompt takes today's typing path. */
@@ -89,13 +90,16 @@ export async function recordOperatorPrompt(
   }
   const { id, cut, replay } = recorded.value;
   let state: MessageState | 'unknown' = recorded.value.state;
+  const lines = { store, coordDb: coord.db, warn: deps.warn };
   if (!replay) {
-    // From here the words are recorded: nothing below changes the answer's `ok`.
+    // From here the words are recorded: nothing below changes the answer's `ok`. A marked message was created settled: its line
+    // is the route's, right after the record commits (call 1218); creation as `recorded` stamps no line.
+    if (recorded.value.state === 'settled') stampOperatorMessageLine(lines, id, 'settled', 'route', at);
     try {
       const queued = queueOperatorNudge(coord, sessionId, id, at, deps.warn);
-      // No `await` between the committed queue and its move.
+      // No `await` between the committed queue and its move, nor between the move and its line.
       if (queued) {
-        const moved = store.moveMessage(id, 'queue', 'route', at);
+        const moved = moveOperatorMessage(lines, id, 'queue', 'route', at);
         if (moved.ok) state = moved.value.state;
         else deps.warn(`ccrc-server: prompt: message ${id} queue move refused (${moved.error})`);
       }

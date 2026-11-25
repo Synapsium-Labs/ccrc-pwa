@@ -14,6 +14,7 @@ import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import { readTurnMarkMeasured } from '../src/turnmark.js';
 import { stallOrphanDCandidate } from '../src/coord/stall.js';
+import { PROVIDER_FAILURE_ERRORS } from '../src/coord/stopFailure.js';
 import { localIO } from '../src/io.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
@@ -209,7 +210,7 @@ const turnMark = (): any => JSON.parse(turnRaw());
 const plantTurn = (line: string): void => { fs.writeFileSync(turnFile(), line); };
 /** The writer's key order: the base object in TURN_MARK_PROGRAM fixes it. */
 const TURN_KEYS: readonly string[] = ['v', 'sessionId', 'state', 'event', 'at', 'turnAt', 'stopAt', 'bg', 'bgKinds',
-  'bgIds', 'err', 'restartAt', 'lostBg', 'lostKinds', 'lostIds', 'crons'];
+  'bgIds', 'err', 'restartAt', 'lostBg', 'lostKinds', 'lostIds', 'crons', 'failAts'];
 
 /** The delegation join record (`<id>.joined`, delegation broker wave 3): one agent id per line, exactly as the payload sent it
  *  (only an id that is already a plain `[A-Za-z0-9_-]{1,64}` is ever recorded), appended by a SubagentStart. `undefined`
@@ -227,7 +228,7 @@ describe('the turn marker (§5.1)', () => {
   /** A Stop's line with nothing carried: what the writer emits over a foreign or unreadable previous line. */
   const freshStop = (at: number): Record<string, unknown> => ({ v: 1, sessionId: 'uuid-1', state: 'done',
     event: 'Stop', at, turnAt: null, stopAt: at, bg: -1, bgKinds: '', bgIds: '', err: null, restartAt: null,
-    lostBg: 0, lostKinds: '', lostIds: '', crons: -1 });
+    lostBg: 0, lostKinds: '', lostIds: '', crons: -1, failAts: [] });
 
   it("UserPromptSubmit on no marker writes ONE line, exactly, keys in the writer's order", () => {
     const t0 = Date.now();
@@ -239,7 +240,7 @@ describe('the turn marker (§5.1)', () => {
     expect(at).toBeLessThanOrEqual(t1);
     expect(raw).toBe(JSON.stringify({ v: 1, sessionId: 'uuid-1', state: 'working', event: 'UserPromptSubmit', at,
       turnAt: at, stopAt: null, bg: -1, bgKinds: '', bgIds: '', err: null, restartAt: null, lostBg: 0,
-      lostKinds: '', lostIds: '', crons: -1 }) + '\n');
+      lostKinds: '', lostIds: '', crons: -1, failAts: [] }) + '\n');
     expect(Object.keys(JSON.parse(raw))).toEqual(TURN_KEYS);
   });
 
@@ -545,7 +546,7 @@ describe('the turn marker across a restart (§5.1, SessionStart)', () => {
     const m = turnMark();
     expect(m).toEqual({ v: 1, sessionId: 'uuid-2', state: 'done', event: 'SessionStart', at: m.at, turnAt: null,
       stopAt: null, bg: 0, bgKinds: '', bgIds: '', err: null, restartAt: m.at, lostBg: 0, lostKinds: '',
-      lostIds: '', crons: -1 });
+      lostIds: '', crons: -1, failAts: [] });
   });
 
   it('clear writes the fresh line', () => {
@@ -554,7 +555,7 @@ describe('the turn marker across a restart (§5.1, SessionStart)', () => {
     const m = turnMark();
     expect(m).toEqual({ v: 1, sessionId: 'uuid-1', state: 'done', event: 'SessionStart', at: m.at, turnAt: null,
       stopAt: null, bg: -1, bgKinds: '', bgIds: '', err: null, restartAt: null, lostBg: 0, lostKinds: '',
-      lostIds: '', crons: -1 });
+      lostIds: '', crons: -1, failAts: [] });
   });
 
   it('compact leaves the marker byte-identical (D-306: it fires mid-turn)', () => {
@@ -1564,7 +1565,7 @@ describe('the turn marker counts session_crons (D-5242)', () => {
   const stopCrons = (crons: unknown): Record<string, unknown> => ({ ...fiveKinds(), session_crons: crons });
   const stopNoCrons = (): Record<string, unknown> => { const p = fiveKinds(); delete p['session_crons']; return p; };
 
-  it('a Stop with one session cron writes crons: 1, as the last key', () => {
+  it('a Stop with one session cron writes crons: 1, before the last key', () => {
     run(stopCrons([CRON]));
     const m = turnMark();
     expect(m).toMatchObject({ state: 'done', event: 'Stop', crons: 1 });
@@ -1614,5 +1615,109 @@ describe('the turn marker counts session_crons (D-5242)', () => {
       bg: 0, bgKinds: '', bgIds: '', err: null, restartAt: null, lostBg: 0, lostKinds: '', lostIds: '' }) + '\n');
     run({ hook_event_name: 'UserPromptSubmit' });
     expect(turnMark()).toMatchObject({ state: 'working', crons: -1 });
+  });
+});
+
+// ── The marker's `failAts` (the provider-failure ladder, wave 1) ──
+// The last eight epochs of CONSECUTIVE provider failures. A StopFailure whose token is a provider's appends its own stamp;
+// another token leaves the list; a real Stop and a `clear` empty it; a prompt, a tool event and a restart carry it. A
+// restart relabels a `failed` line `done`, so the list, not the state word, is what says a retry is owed.
+describe('the turn marker counts consecutive provider failures (failAts)', () => {
+  const fail = (error: string): void => { run({ hook_event_name: 'StopFailure', error }); };
+  const prompt = (): void => { run({ hook_event_name: 'UserPromptSubmit' }); };
+
+  it('a provider failure appends its own stamp, and the next one a second', () => {
+    fail('server_error');
+    const a = turnMark();
+    expect(a).toMatchObject({ state: 'failed', failAts: [a.stopAt] });
+    prompt();
+    fail('overloaded');
+    const b = turnMark();
+    expect(b.failAts).toEqual([a.stopAt, b.stopAt]);
+  });
+
+  it('a StopFailure that is not the provider\'s leaves the list alone', () => {
+    fail('server_error');
+    const a = turnMark();
+    for (const err of ['max_output_tokens', 'unknown', 'invalid_request', 'rate_limit']) { prompt(); fail(err); }
+    expect(turnMark()).toMatchObject({ state: 'failed', err: 'rate_limit', failAts: [a.stopAt] });
+  });
+
+  it('a first StopFailure that is not the provider\'s writes an empty list', () => {
+    fail('invalid_request');
+    expect(turnMark().failAts).toEqual([]);
+  });
+
+  it('a prompt, a tool event and a restart carry it; a restart relabels the line done and keeps the list', () => {
+    fail('server_error');
+    const at = turnMark().stopAt as number;
+    run({ hook_event_name: 'SessionStart', source: 'resume' });
+    expect(turnMark()).toMatchObject({ state: 'done', event: 'SessionStart', failAts: [at] });
+    run({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'true' } });
+    expect(turnMark()).toMatchObject({ state: 'working', failAts: [at] });
+    prompt();
+    expect(turnMark()).toMatchObject({ state: 'working', failAts: [at] });
+  });
+
+  it('a real Stop empties it', () => {
+    fail('server_error');
+    prompt();
+    run({ hook_event_name: 'Stop' });
+    expect(turnMark()).toMatchObject({ state: 'done', failAts: [] });
+  });
+
+  it('a clear empties it', () => {
+    fail('server_error');
+    run({ hook_event_name: 'SessionStart', source: 'clear' });
+    expect(turnMark().failAts).toEqual([]);
+  });
+
+  it('it keeps the last eight', () => {
+    plantTurn(JSON.stringify({ v: 1, sessionId: 'uuid-1', state: 'working', event: 'UserPromptSubmit', at: 9, turnAt: 9, stopAt: 8,
+      bg: 0, bgKinds: '', bgIds: '', err: null, restartAt: null, lostBg: 0, lostKinds: '', lostIds: '', crons: 0,
+      failAts: [1, 2, 3, 4, 5, 6, 7, 8] }) + '\n');
+    fail('server_error');
+    const m = turnMark();
+    expect(m.failAts).toEqual([2, 3, 4, 5, 6, 7, 8, m.stopAt]);
+  });
+
+  it('another session\'s list, an older line\'s absent list and a list that is not an array carry as none', () => {
+    fail('server_error');
+    run({ hook_event_name: 'UserPromptSubmit' }, { CLAUDE_CODE_SESSION_ID: 'uuid-2' });
+    expect(turnMark()).toMatchObject({ sessionId: 'uuid-2', failAts: [] });
+    const line = (extra: Record<string, unknown>): string => JSON.stringify({ v: 1, sessionId: 'uuid-1', state: 'done', event: 'Stop', at: 5,
+      turnAt: 4, stopAt: 5, bg: 0, bgKinds: '', bgIds: '', err: null, restartAt: null, lostBg: 0, lostKinds: '', lostIds: '', crons: 0,
+      ...extra }) + '\n';
+    for (const extra of [{}, { failAts: 'x' }, { failAts: 7 }]) {
+      plantTurn(line(extra));
+      prompt();
+      expect(turnMark(), JSON.stringify(extra)).toMatchObject({ state: 'working', failAts: [] });
+    }
+    plantTurn(line({ failAts: ['x', 7, null] }));
+    prompt();
+    expect(turnMark().failAts, 'only its numbers').toEqual([7]);
+  });
+
+  it('a subagent\'s StopFailure never counts', () => {
+    fail('server_error');
+    const before = turnRaw();
+    run({ hook_event_name: 'SubagentStart', agent_id: 'a-1', agent_type: 'general' });
+    run({ hook_event_name: 'StopFailure', error: 'server_error', agent_id: 'a-1' });
+    expect(turnRaw()).toBe(before);
+  });
+
+  it('the hook-written list reads back through the one reader', async () => {
+    fail('server_error');
+    const m = turnMark();
+    const read = await readTurnMarkMeasured(localIO, path.join(home, '.cc-sessions'), 'demo-quiet-basin', 'uuid-1', null);
+    expect(read).toMatchObject({ ok: true, failAts: [m.stopAt] });
+  });
+
+  it('the hook\'s provider tokens are exactly the server\'s provider class (one set in two languages)', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    const open = src.indexOf("TURN_MARK_PROGRAM='");
+    const body = src.slice(open, src.indexOf("else empty end'", open));
+    const named = [...body.matchAll(/\$err == "([a-z_]+)"/g)].map((m) => m[1]!).sort();
+    expect(named).toEqual([...PROVIDER_FAILURE_ERRORS].sort());
   });
 });

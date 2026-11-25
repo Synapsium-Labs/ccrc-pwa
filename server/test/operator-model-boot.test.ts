@@ -192,7 +192,7 @@ describe('runOperatorModelBootPass', () => {
     return Number(w.coord.db.prepare('INSERT INTO mail_deliveries (mailId, toId, state, envelope) VALUES (?, ?, ?, ?)').run(mailId, S, state, 'e').lastInsertRowid);
   };
   const queueMove = (w: World, id: number): void => { expect(w.store.moveMessage(id, 'queue', 'route', 2_000).ok).toBe(true); };
-  const ackStub = (w: World) => ({ markAcked: (deliveryId: number) => { w.coord.db.prepare("UPDATE mail_deliveries SET state = 'acked' WHERE id = ?").run(deliveryId); return { ok: true as const, state: 'acked' as const }; } });
+  const ackStub = (w: World) => ({ db: w.coord.db, markAcked: (deliveryId: number) => { w.coord.db.prepare("UPDATE mail_deliveries SET state = 'acked' WHERE id = ?").run(deliveryId); return { ok: true as const, state: 'acked' as const }; } });
 
   it('F3: a queued row whose nudge delivery is ACKED is moved to delivered; an unacked one stays queued', () => {
     const w = world();
@@ -265,6 +265,17 @@ describe('runOperatorModelBootPass', () => {
     expect(stateOf(w, good)).toBe('queued');
     expect(r.lines.join('\n')).toContain(`message ${bad} not re-nudged (db busy)`);
     expect(r.lines.join('\n')).toContain('mail read boom');
+  });
+  it('a move whose sequence line is refused leaves one boot line, which the server prints with its prefix once (review 3852 F4)', () => {
+    const w = world();
+    const id = rec(w);
+    w.coord.db.exec('DROP TABLE overlord_sequence');
+    const r = pass(w);
+    expect(stateOf(w, id)).toBe('queued');
+    const missing = r.lines.filter((l) => l.includes(`operator message ${id}:`));
+    expect(missing).toHaveLength(1);
+    // `index.ts` prints each boot line as `ccrc-server: ${line}`.
+    expect(`ccrc-server: ${missing[0]!}`).toMatch(new RegExp(`^ccrc-server: operator message ${id}: its sequence line \\(queued\\) was not written \\(`));
   });
   it('the summary line carries counts and never a text', () => {
     const w = world();

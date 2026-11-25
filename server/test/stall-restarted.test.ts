@@ -5,10 +5,11 @@
 // prefix, which is spelled once here to pin it.
 import { describe, it, expect } from 'vitest';
 import {
-  stallRestartedVerdict, stallRestartedVerdicts, stallOrphanDVerdict, stallSessionMail, stallMailClass, stallNotifyDelivery, rungRecipient,
+  stallRestartedVerdict, stallRestartedVerdicts, stallOrphanDVerdict, stallMailClass, stallNotifyDelivery, rungRecipient,
   stallArmHasRung, stallDetail, parseStallDetail, stallRestartedSubject,
   RESTARTED_HEADS_UP_MS, STALL_RESTARTED_PREFIX, ORPHAN_D_IDLE_MS, BACKLOG_HORIZON_MS,
 } from '../src/coord/stall.js';
+import { stallSessionMail } from '../src/coord/stopFailure.js';
 import * as stallModule from '../src/coord/stall.js';
 import { restartedHandoffCases } from './sim/handoffSets.js';
 import type {

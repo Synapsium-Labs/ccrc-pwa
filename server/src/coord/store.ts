@@ -58,6 +58,7 @@ import * as probes from '../continuity/continuityStore.js';
 import { modelSwitchesSinceStart, readerEventsSinceStart, type HookStoreRead, type ModelSwitchRow, type ReaderEvent } from '../continuity/hookReportStore.js';
 import * as designation from './overlordDesignationStore.js';
 import * as ladder from './overlordLadderStore.js';
+import { txWithAuthorityReceipt } from './overlordAuthorityJournal.js';
 import * as sequence from './overlordSequenceStore.js';
 import * as outbox from './pushOutboxStore.js';
 import * as census from './approvalCensusStore.js';
@@ -825,6 +826,8 @@ export interface ReclaimMoveOpts {
   /** Programme lifecycle W2 review: runs inside the move's transaction after it, handed every session whose OPEN run the move
    *  took (`holding`, the heir excluded), so a door's mail to them is queued with the move or not at all. */
   readonly onMoved?: (moved: { readonly holding: readonly string[] }) => void;
+  /** Programme lifecycle W3 (spec §13): the hand-over door's, so a conflict's party may be given a programme whose runs it holds. */
+  readonly party?: boolean;
 }
 
 /** The three terminal members, ONCE (spec §3.2). The SQL literal in
@@ -2474,10 +2477,10 @@ export class CoordStore {
     {
       // Programme lifecycle W1 (R11 rule 4, D-8993): an heir that owns another live real programme, or claims an open run
       // in a programme other than this one that it does not own, is refused before anything is written. Its unfiled
-      // placeholder does not count: it is withdrawn below, in this transaction. A conflict's party may be given a
-      // programme whose runs it holds (§13), which the `r.program != ?` clause admits.
+      // placeholder does not count: it is withdrawn below, in this transaction. By the hand-over door (`party`), a
+      // conflict's party may be given a programme whose runs it holds, its claims in its other programmes standing (§13).
       if (to !== null) {
-        const owned = lifecycle.heirOwnsAnotherOf(this.db, to, toUuid, run.program);
+        const owned = lifecycle.heirOwnsAnotherOf(this.db, to, toUuid, run.program, opts.party === true);
         if (owned !== null) return { ok: false as const, kind: 'owns-another-programme' as const, by: owned };
       }
       // Read before the write, and excluding rows ALREADY naming `to`: the
@@ -5741,20 +5744,21 @@ export class CoordStore {
   stopDone(sessionId: string): designation.StopDoneResult { return designation.stopDone(this.db, sessionId); }
   setModelClass(j: designation.AuthorityAppender, i: Parameters<typeof designation.setModelClass>[2]): designation.SettingResult { return designation.setModelClass(this.db, j, i); }
   setAccountSet(j: designation.AuthorityAppender, i: Parameters<typeof designation.setAccountSet>[2]): designation.SettingResult { return designation.setAccountSet(this.db, j, i); }
-  /** Overlord §7.5, H25 (`overlordLadderStore.ts`): the ladder's reads and writers; the three door writers open their own `tx()`. */
+  /** Overlord §7.5, H25 (`overlordLadderStore.ts`): the ladder's reads and writers; the three door writers open their own `tx()`
+   *  through the journal's `txWithAuthorityReceipt`, so a throw after a durable append fences the guard (review 3646 F4). */
   ladderRows(): ladder.LadderRowsRead { return ladder.ladderRows(this.db); }
   ladderRungRead(): ladder.LadderRungRead { return ladder.ladderRungRead(this.db); }
   setRung(j: designation.AuthorityAppender, move: ladder.RungMoveInput): ladder.LadderWrite {
     const actor = ladder.rungActorBefore(move); if (!actor.ok) return actor;
-    return tx(this.db, () => ladder.setRungInTx(this.db, j, move));
+    return txWithAuthorityReceipt(this.db, j, (held) => ladder.setRungInTx(this.db, held, move));
   }
   raiseLatch(j: designation.AuthorityAppender, latch: ladder.LatchRaiseInput): ReturnType<typeof ladder.raiseLatchInTx> {
     const actor = ladder.ladderActor(latch.raisedBy, 'brake'); if (!actor.ok) return actor;
-    return tx(this.db, () => ladder.raiseLatchInTx(this.db, j, latch));
+    return txWithAuthorityReceipt(this.db, j, (held) => ladder.raiseLatchInTx(this.db, held, latch));
   }
   clearLatch(j: designation.AuthorityAppender, clear: ladder.LatchClearInput): ladder.LadderWrite {
     const actor = ladder.ladderActor(clear.actor, 'widen'); if (!actor.ok) return actor;
-    return tx(this.db, () => ladder.clearLatchInTx(this.db, j, clear));
+    return txWithAuthorityReceipt(this.db, j, (held) => ladder.clearLatchInTx(this.db, held, clear));
   }
   /** Overlord §10.4 (`overlordSequenceStore.ts`): the sequence's reads, prune, and the Inbox's post-commit exception. */
   sequenceAfter(after: number, limit: number): ReturnType<typeof sequence.sequenceAfter> { return sequence.sequenceAfter(this.db, after, limit); }

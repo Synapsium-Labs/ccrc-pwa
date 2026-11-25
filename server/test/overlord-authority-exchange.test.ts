@@ -47,7 +47,7 @@ interface Rig {
 function rig(opts: { agent?: boolean; relationOf?: () => AgentHostRelation } = {}): Rig {
   const dir = mkTmp('ccrc-overlord-exchange-');
   const db = new DatabaseSync(path.join(dir, 'coord.db'));
-  for (const n of ['CREATE TABLE overlord_authority_head', 'CREATE TABLE overlord_designation', 'CREATE TABLE overlord_ladder', 'CREATE TABLE decision_rows']) db.exec(find(n));
+  for (const n of ['CREATE TABLE overlord_authority_head', 'CREATE TABLE overlord_designation', 'CREATE TABLE overlord_ladder', 'CREATE TABLE decision_rows', 'CREATE TABLE overlord_sequence (']) db.exec(find(n));
   let journal!: OverlordAuthorityJournal;
   const port = { healTornTail: () => journal.healTornTail(db), measure: () => journal.measure(db) };
   const guard = new OverlordAuthorityGuard(port);
