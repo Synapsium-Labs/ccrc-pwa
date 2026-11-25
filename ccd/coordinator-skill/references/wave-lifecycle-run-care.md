@@ -54,8 +54,9 @@ is the ejection of `references/wave-steps.md` step 6, and a worker that has sent
 this round's wave-done reads no `conflict-sync:` mail as a licence. A worker
 sent back to `working` for a fix round is before its wave-done until it sends
 that round's fresh one: the limit is the run's state, at `working` with this
-round's wave-done not yet sent, never at `awaiting-review` or `merging`, where
-the ejection that names a base is the only route.
+round's wave-done not yet sent, never at `awaiting-review`, where the route is a
+send-back with a report, nor at `merging`, where the route is the ejection that
+names a base.
 
 **Measure first.** After one `git fetch origin`, in one call:
 

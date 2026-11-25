@@ -67,10 +67,26 @@ describe('the conflict-sync mail: one spelling in four files (landing-order wave
 
   it('closes the fourth trigger at the wave-done in the hook and the README too, not only in the clause (review 3727 F3)', () => {
     // The limit keeps trigger 3's edge the only route from `merging`, and the
-    // hook is the only text a session without the skill sees.
-    has('ccd/worker-skill/SKILL.md', worker, 'before your wave-done only');
-    has('ccd/session-hook.sh', hook, 'before your wave-done only');
-    has('README.md', readme, "before the worker's wave-done only");
+    // hook is the only text a session without the skill sees. The words say
+    // THIS ROUND's wave-done: a worker sent back for a fix round has sent one
+    // already, and the fix round is the case this trigger exists for, so the
+    // receiver's words follow the sender's (review 3738 F3, ruled).
+    has('ccd/worker-skill/SKILL.md', worker, "before this round's wave-done only");
+    has('ccd/session-hook.sh', hook, "before this round's wave-done only");
+    has('README.md', readme, "before the worker's wave-done of that round only");
+    // The sender's procedure states the same ruling, by the run's state
+    // (review 3738 F4), and names each state's own route (review 3738 F2).
+    has('wave-lifecycle-run-care.md', runCare,
+      "A worker sent back to `working` for a fix round is before its wave-done until it sends that round's fresh one");
+    has('wave-lifecycle-run-care.md', runCare,
+      'never at `awaiting-review`, where the route is a send-back with a report, nor at `merging`, where the route is the ejection that names a base');
+  });
+
+  it('makes the worker\'s own probe the licence in the hook and the README, not only in the clause (review 3738 F5)', () => {
+    // Without the probe the mail reads as an instruction; with it, as a licence.
+    has('ccd/worker-skill/SKILL.md', worker, 'and your own probe of that commit, `git merge-tree --write-tree --name-only --no-messages HEAD <base>`, exits 1 with a tree id on its first line');
+    has('ccd/session-hook.sh', hook, 'and your own probe of that commit agrees');
+    has('README.md', readme, "and the worker's own probe of that commit agrees");
   });
 
   it('gives the mail the same two body entries where its form is stated', () => {
@@ -80,6 +96,10 @@ describe('the conflict-sync mail: one spelling in four files (landing-order wave
     // a tree id, and a tree id in `base:` leaves the worker's own probe
     // unmeasured, so the trigger would license nothing (review 3727 F1).
     has('wave-lifecycle-run-care.md', runCare, 'git rev-parse origin/main');
+    // The shell block itself, not only the prose that names it: the probe's
+    // last line and the rev-parse line are neighbours inside the fence
+    // (review 3738 F1). Flattened, the fence's close follows the rev-parse.
+    has('wave-lifecycle-run-care.md', runCare, '<the branch tip> origin/main git rev-parse origin/main ```');
     has('wave-lifecycle-run-care.md', runCare, 'copied from the rev-parse output and never typed');
   });
 });
