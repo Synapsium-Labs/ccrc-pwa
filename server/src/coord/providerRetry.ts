@@ -142,7 +142,7 @@ export function providerRetryVerdict(input: ProviderRetryInput, now: number): Pr
 /** The holds a person can read on the session and end: a dialog, a question, a usage limit. The console says the retry waits. */
 const WAITING_HOLDS: ReadonlySet<StallHold> = new Set<StallHold>(['dialog', 'ask', 'limit']);
 
-/** What the console is told of one session (wave 2, D-TBD-provider-words-wire): the retry the ladder would make and when, or
+/** What the console is told of one session (wave 2, D-9100): the retry the ladder would make and when, or
  *  null when it would make none (nothing owed, a stopped ladder, a running turn, a session that is gone, asleep or archived) or
  *  could not be measured. `nextAt` is the verdict's own due time, and null while something keeps the nudge out: one of
  *  `WAITING_HOLDS`, or the mail lane holding one it has not typed (a person's draft, or any gate of its own). */

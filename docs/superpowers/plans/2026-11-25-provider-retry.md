@@ -130,14 +130,14 @@ Hibernated, dead, exited and archived rows, and a question a coordinator holds, 
 - **D-9092** — the outage notice shares the ladder's arming, so a stopped ladder raises none. One
   session that has got past none of its failures for an hour raises it too (the orchestrator's review): its coordinator is not
   told and the quiet ladder holds, so nobody else would hear of it.
-- **D-TBD-provider-words-wire** — the field is absent, never null, when none is known, and it is not kept from one pass to the next: a
+- **D-9100** — the field is absent, never null, when none is known, and it is not kept from one pass to the next: a
   session whose marker, live word or mail could not be read this pass says nothing, where the outage count keeps its last reading.
   Words are a promise, so an unread session makes none.
-- **D-TBD-provider-words-busy** — wave 1's `busy` hold is absence, not "waiting": a running turn is the retry. The pass is a minute
+- **D-9101** — wave 1's `busy` hold is absence, not "waiting": a running turn is the retry. The pass is a minute
   apart, so the assembly takes the field off a row whose raw live word is `busy` now (`shell` is at rest and keeps it).
-- **D-TBD-provider-words-draft** — a draft is read as "queued and not typed at a later pass", not as the delivery's `draft-present`
+- **D-9102** — a draft is read as "queued and not typed at a later pass", not as the delivery's `draft-present`
   reason, which the watch's own mail read does not carry. Whatever gate holds a nudge, "retry waiting" is true of it.
-- **D-TBD-provider-words-attention** — a row that waits on the operator keeps `waiting`: the operator's act is the one thing that
+- **D-9103** — a row that waits on the operator keeps `waiting`: the operator's act is the one thing that
   moves it. Its header says both, and never a time.
-- **D-TBD-provider-words-boxes** — a programme box's "no move 2h" and the face's mood keep reading as before: they speak of a
+- **D-9104** — a programme box's "no move 2h" and the face's mood keep reading as before: they speak of a
   programme's movement, not of a failed turn.
