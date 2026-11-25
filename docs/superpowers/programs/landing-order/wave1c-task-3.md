@@ -33,12 +33,13 @@ packet clean against main and against run 1850's tip. The digest was checked and
 
 `coordinator-skill` 290 of 290 (no pin moved), `docs-parity` 81, `citations` 4, `anchors` 9,
 `topology-clean` 61, and the six suites that read the lifecycle through `server/test/waveLifecycle.ts`
-(the one file `git grep -l wave-lifecycle-run-care server/test` names), 1387 tests: all green.
+(at the time, the one file `git grep -l wave-lifecycle-run-care server/test` named; Task 4's
+`conflict-sync-text.test.ts` is a second reader since), 1387 tests: all green.
 
 ## Left as it is
 
-- The run-care file's H1 and `wave-lifecycle.md`'s index row still list the file's older topics. The
-  plan adds one section only, so neither is retitled.
+- The run-care file's H1 and `wave-lifecycle.md`'s index row still listed the file's older topics; fix
+  round 1 (A1) adds the new section to both (`wave1c-fix-round-1.md`).
 - `references/wave-steps.md` step 6 says a `red:` fix-round mail licenses no absorb and the worker
   absorbs only on its own clause 16's first two triggers. That is about the `red:` mail and stays true;
   the plan does not touch the file.

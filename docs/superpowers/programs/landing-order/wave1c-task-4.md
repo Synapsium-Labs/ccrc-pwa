@@ -35,6 +35,10 @@ run, the file restored from the saved copy and its sha256 checked equal.
 | 1C-03 | same file, same sha | the new worker case (`… to contain 'the fourth licenses one absorption …'`); `conflict-sync-text` case 2; and `carries all twenty clauses verbatim`. 3 failed, 84 passed | sha matches |
 | 1C-04 | `ccd/session-hook.sh`, `15cdaaff663bcaae4115bf46d8158bbc1b0eff929f33aec6db6275d24cc3323d` | `session-hook-sync-advisory`'s 21 `advises on …` cases (`… to contain '(4) the coordinator'`); `conflict-sync-text` cases 1 and 2. 23 failed, 58 passed; the graph-gate case stays green (it reads `four triggers` only) | sha matches |
 | 1C-05 | `README.md`, `bcbb0f81ae983f2aef543d165373fbf2165cb80ffae64bc19cff7561e114fa78` | `conflict-sync-text` case 1 (`README.md lacks: \`conflict-sync:\``). 1 failed, 2 passed | sha matches |
+| G1 (fix round 1, F2) | `ccd/coordinator-skill/references/wave-lifecycle-run-care.md`, `e379849faf1d94ea2f6f9dc3769f9b8c17da0383aa0dcca24cd92f406ad9cdfd` | `absorbs exactly that commit, once, with \`git merge\`` becomes `absorbs the latest main, as often as it likes, …` (the reviewer's G1): `conflict-sync-text` case 2 (`run-care … lacks: absorbs exactly that commit, once, with \`git merge\``). 1 failed, 3 passed; green at round 0 | sha matches |
+| G2 (fix round 1, F3) | `README.md`, `bcbb0f81ae983f2aef543d165373fbf2165cb80ffae64bc19cff7561e114fa78` | drops `, before the worker's wave-done only` (the reviewer's G2): the new case 3 (`README.md lacks: before the worker's wave-done only`). 1 failed, 3 passed; green at round 0 | sha matches |
+| G3 (fix round 1, F3) | `ccd/session-hook.sh`, `ae5cafdd0f66e5e72decce2a93b3094475ab2efd927c796697dcad496c550a70` | drops `, before your wave-done only` from the `(4)` line (the reviewer's G3): the new case 3 (`ccd/session-hook.sh lacks: before your wave-done only`). 1 failed, 81 passed over `conflict-sync-text` and `session-hook-sync-advisory`; green at round 0 | sha matches |
+| F1 (fix round 1) | `ccd/coordinator-skill/references/wave-lifecycle-run-care.md`, `e379849faf1d94ea2f6f9dc3769f9b8c17da0383aa0dcca24cd92f406ad9cdfd` | the rev-parse line leaves the code block and the source goes back to `copied from the command's output`: `conflict-sync-text` case 4 (`lacks: copied from the rev-parse output and never typed`; the prose still names `git rev-parse origin/main`, so the first new assertion holds and the second reds). 1 failed, 3 passed | sha matches |
 
 Every predicted red was red. Two rows red more than the table predicts, and both follow from the
 mutation itself: 1C-01 removes the bound sentence too, so `conflict-sync-text` case 2 reds; 1C-03 changes
@@ -76,7 +80,8 @@ The first push (`e18c4b5516`) ran red in three server shards, for two causes, bo
   clause 2 note under `## Notes on the contract` (it restates clause 2, and the coordinator's dispatch
   reference says the same) is removed, and the clause 5 note is cut to one sentence that keeps its reason.
   No test pinned either. The file is now 35535 bytes, main's size exactly; the caps file is not touched
-  (an entry above its file's size is reported, never a failure, as four other skills' entries are on main).
+  (an entry above its file's size is reported, never a failure; on main three other skills, the
+  coordinator, history and linear skills, sit under their caps the same way).
 
 After the fix: `skill-size-ratchet`, `dtbd`, `ci-shards`, `worker-skill`, `conflict-sync-text` and
 `install-worker-skill`, 160 tests, green.

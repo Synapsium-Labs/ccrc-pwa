@@ -1,4 +1,4 @@
-# The wave lifecycle: a workspace that is gone, a run that cannot finish, the run's signals, the routing door, peers and claims
+# The wave lifecycle: a workspace that is gone, a run that cannot finish, a conflict mid-round, the run's signals, the routing door, peers and claims
 
 One part of the wave lifecycle. `wave-lifecycle.md` lists every part.
 
@@ -49,26 +49,34 @@ conflict you have measured; this is that request's form.
 
 **When.** A worker at `working`, before its wave-done, whose branch conflicts
 with `main` and whose pull request has used the one absorption its own two
-triggers give it. Never after a wave-done: from `merging` the route is the
-ejection of `references/wave-steps.md` step 6, and a worker that has sent its
-wave-done reads no `conflict-sync:` mail as a licence.
+triggers give it. Never after this round's wave-done: from `merging` the route
+is the ejection of `references/wave-steps.md` step 6, and a worker that has sent
+this round's wave-done reads no `conflict-sync:` mail as a licence. A worker
+sent back to `working` for a fix round is before its wave-done until it sends
+that round's fresh one: the limit is the run's state, at `working` with this
+round's wave-done not yet sent, never at `awaiting-review` or `merging`, where
+the ejection that names a base is the only route.
 
-**Measure first.** After one `git fetch origin`:
+**Measure first.** After one `git fetch origin`, in one call:
 
 ```bash
 git merge-tree --write-tree --name-only --no-messages \
   <the branch tip> origin/main
+git rev-parse origin/main
 ```
 
-It must exit 1 with a tree id on its first line, then the conflicted paths.
-Exit 0, or any other answer (exit 1 with no tree id is a ref git could not
-resolve), sends nothing.
+The probe must exit 1 with a tree id on its first line, then the conflicted
+paths. Exit 0, or any other answer (exit 1 with no tree id is a ref git could
+not resolve), sends nothing. The probe prints a tree id, never a commit; the
+`git rev-parse origin/main` line prints the commit it measured, and that commit
+is the base.
 
 **The mail.** `"$API" mail send --json -` to the worker's session id, with the
 run's `runId`, `kind` `status`, subject `conflict-sync: #<pr>`, and a body of
 two entries, one to a line, and nothing else: `base: <sha>`, the `origin/main`
-sha you just read, copied from the command's output and never typed, then
-`paths: <the conflicted paths>`, space-separated.
+commit of that same call, copied from the rev-parse output and never typed (a
+tree id there leaves the worker's own probe unmeasured, and the mail licenses
+nothing), then `paths: <the conflicted paths>`, space-separated.
 
 ```bash
 "$API" mail send --json - <<JSON

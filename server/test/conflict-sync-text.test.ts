@@ -49,6 +49,10 @@ describe('the conflict-sync mail: one spelling in four files (landing-order wave
       const stray = text.match(/conflict[ _]sync:|Conflict-sync:|conflictsync/);
       expect(stray?.[0] ?? null, `${name} misspells the subject word`).toBeNull();
     }
+    // The word anywhere in a file is not the subject: the sender's own example
+    // must open its subject with the exact word (review 3727 A2).
+    has('wave-lifecycle-run-care.md', runCare, 'subject `conflict-sync: #<pr>`');
+    has('wave-lifecycle-run-care.md', runCare, '"subject":"conflict-sync: #<pr>"');
   });
 
   it('bounds the fourth trigger to the named commit in every file that states it', () => {
@@ -56,10 +60,26 @@ describe('the conflict-sync mail: one spelling in four files (landing-order wave
     has('ccd/session-hook.sh', hook, 'absorb exactly that commit, once per mail');
     has('README.md', readme, 'one absorption of exactly the named commit per mail');
     expect(/One mail per measured conflict/.test(runCare), 'run care lacks: One mail per measured conflict').toBe(true);
+    // The reference's own bound, not only its lead-in (review 3727 F2).
+    has('wave-lifecycle-run-care.md', runCare, 'absorbs exactly that commit, once, with `git merge`');
+    has('wave-lifecycle-run-care.md', runCare, 'A newer `main` is not the named commit');
+  });
+
+  it('closes the fourth trigger at the wave-done in the hook and the README too, not only in the clause (review 3727 F3)', () => {
+    // The limit keeps trigger 3's edge the only route from `merging`, and the
+    // hook is the only text a session without the skill sees.
+    has('ccd/worker-skill/SKILL.md', worker, 'before your wave-done only');
+    has('ccd/session-hook.sh', hook, 'before your wave-done only');
+    has('README.md', readme, "before the worker's wave-done only");
   });
 
   it('gives the mail the same two body entries where its form is stated', () => {
     has('wave-lifecycle-run-care.md', runCare, '`base: <sha>`');
     has('wave-lifecycle-run-care.md', runCare, '`paths: <the conflicted paths>`');
+    // The base is a COMMIT, read by rev-parse beside the probe: the probe prints
+    // a tree id, and a tree id in `base:` leaves the worker's own probe
+    // unmeasured, so the trigger would license nothing (review 3727 F1).
+    has('wave-lifecycle-run-care.md', runCare, 'git rev-parse origin/main');
+    has('wave-lifecycle-run-care.md', runCare, 'copied from the rev-parse output and never typed');
   });
 });
