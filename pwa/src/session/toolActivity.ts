@@ -271,9 +271,13 @@ export interface ActivityWords {
   readonly title: string;
   /** "1 call", "5 calls". */
   readonly calls: string;
-  /** "1 message", "2 messages": the fetched mail cards the stretch holds, or null when it holds none; with ", 1
-   *  question" when cards that ask something of the session shown are not drawn under the closed row (`hiddenAsks`). */
+  /** "1 message", "2 messages": the fetched mail cards the stretch holds, or null when it holds none. */
   readonly messages: string | null;
+  /** "1 question", "2 questions": the cards that ask something of the session shown and are not drawn under the CLOSED
+   *  row (`hiddenAsks`), drawn after the count as "2 messages, 1 question"; null when there are none, and always null for
+   *  an open row, whose body draws every card (desktop polish wave 179, B3). Its own words so that they are the last thing
+   *  on the row to shrink (B2, `chat.css`). */
+  readonly asks: string | null;
   /** "running" while the stretch is live, else null. */
   readonly state: string | null;
   /** The newest call's one-line summary. */
@@ -284,18 +288,19 @@ export interface ActivityWords {
 }
 
 /** The words of a row. `choice` is the reader's choices in this view (the list's memo), which decide which cards the
- *  closed row draws under it and so which asking cards it must name; outside a list, none. */
-export function activityWords(item: ToolActivityItem, choice: Choice = NO_CHOICE): ActivityWords {
+ *  closed row draws under it and so which asking cards it must name; outside a list, none. `open`: the row is open, so
+ *  its body draws every card and it names no question (B3). */
+export function activityWords(item: ToolActivityItem, choice: Choice = NO_CHOICE, open = false): ActivityWords {
   const n = item.entries.length;
   const m = item.mail.length;
-  const asks = hiddenAsks(item.mail, choice);
+  const asks = open || m === 0 ? 0 : hiddenAsks(item.mail, choice);
   const counts = new Map<AttentionKind, number>();
   for (const a of item.attention) counts.set(a.kind, (counts.get(a.kind) ?? 0) + 1);
   return {
     title: 'Tool activity',
     calls: n === 1 ? '1 call' : `${n} calls`,
-    messages: m === 0 ? null
-      : `${m === 1 ? '1 message' : `${m} messages`}${asks === 0 ? '' : asks === 1 ? ', 1 question' : `, ${asks} questions`}`,
+    messages: m === 0 ? null : m === 1 ? '1 message' : `${m} messages`,
+    asks: asks === 0 ? null : asks === 1 ? '1 question' : `${asks} questions`,
     state: item.live ? 'running' : null,
     latest: item.latest,
     attention: [
