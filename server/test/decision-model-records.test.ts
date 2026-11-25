@@ -179,7 +179,9 @@ describe('the migration', () => {
     // Later entries intentionally seed lane rows. Require both the exact current rows and every historical row.
     expect(armSettings(again)).toEqual(currentSettings);
     expect(currentSettings).toEqual(expect.arrayContaining(oldSettings));
-    expect(counts(again)).toEqual({ ...before, lane_arm_settings: currentSettings.length });
+    // `sqlite_sequence` is SQLite's own bookkeeping, not an older table's rows: a later entry's AUTOINCREMENT table
+    // (programme lifecycle W1's `programme_events`) adds its row there.
+    expect(counts(again)).toEqual({ ...before, lane_arm_settings: currentSettings.length, sqlite_sequence: expect.any(Number) });
     again.close();
   });
 });

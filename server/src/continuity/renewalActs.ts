@@ -33,6 +33,7 @@ import {
   itemAboutOf, itemStandsWords, renewAnswerEvent, renewalItemPrefix, type ItemAbout, type RenewalAct,
 } from './renewalFeed.js';
 import type { SessionHost } from './sessionHost.js';
+import type { AttemptAction, DesignationRead, SettleFact } from '../../../shared/overlord-designation.js';
 
 /** The renewal item's title (`renewalItemPrefix` and the reason). */
 export const degradedItemTitle = (sessionId: string, n: number, why: string, about?: ItemAbout): string =>
@@ -56,6 +57,56 @@ export interface RenewalActsDeps {
   /** Write the session's `precompact` route field (the renewal hand-offs, Task 6), through `CCD_ARGV.routeSet`. Absent: the
    *  field is not written, and the act is skipped and logged. */
   readonly routePrecompact?: (sessionId: string, value: 'refuse' | 'allow') => Promise<PrecompactWrite>;
+  /** The write-set step before each `renew` of the Overlord (designation B, plan Task 10): the route record's class, set and
+   *  ordered list written again from the designation. Asked before the call is claimed; `ok: false` fails this try and claims
+   *  nothing, so the next pass asks again. Never asked for another role. Absent: no step (a test, a box with no designation). */
+  readonly beforeRenew?: (t: ActTarget) => Promise<{ readonly ok: true } | { readonly ok: false; readonly detail: string }>;
+}
+
+/** The deadline sweep's port (designation B, plan Task 7), declared by its consumer: the composition root builds it from the
+ *  settle step (`settleLoads`, `settleFactOf`), the designation store's `failPending` and the one owed-stop drain, each on the
+ *  coordination serialiser. `facts` is the read the lane's decider takes; the three acts are what it can answer. */
+export interface OverlordAttemptPort {
+  facts(): Promise<{ readonly read: DesignationRead; readonly settle: SettleFact }>;
+  /** The settle step again, from the pending body's stored report; answers what the settle did. */
+  resettle(sessionId: string, startId: number): Promise<{ readonly act: string }>;
+  /** `failPending(id, outcome, at, true)`, then the drain; `changed` is false when it was no longer pending. */
+  expire(sessionId: string, outcome: Extract<AttemptAction, { kind: 'expire' }>['outcome']): Promise<{ readonly changed: boolean }>;
+  /** The owed-stop drain over these ids. */
+  drain(ids: readonly string[]): Promise<{ readonly stopped: readonly string[]; readonly owed: readonly string[] }>;
+}
+
+/** The watcher's one port into the designation (designation B): the attempt port, and the write-set step bound as `beforeRenew`. */
+export type OverlordLanePort = OverlordAttemptPort & {
+  beforeRenew(sessionId: string): Promise<{ readonly ok: true } | { readonly ok: false; readonly detail: string }>;
+};
+
+/** Run the pass's one attempt action through the port, live only (the caller's `pass.live`), and log what it did, so each retry
+ *  of a lost or stale settle is in the log (sandbox B's carried constraint). A port that throws is logged, never thrown. */
+export async function runOverlordAttempt(port: OverlordAttemptPort, a: AttemptAction, log: (line: string) => void): Promise<void> {
+  try {
+    switch (a.kind) {
+      case 'none': return;
+      case 'resettle': {
+        const r = await port.resettle(a.sessionId, a.startId);
+        log(`ccrc-server: overlord attempt: settled ${a.sessionId} again from start ${a.startId}: ${r.act}`);
+        return;
+      }
+      case 'expire': {
+        const r = await port.expire(a.sessionId, a.outcome);
+        log(`ccrc-server: overlord attempt: ${a.sessionId} ${r.changed ? 'failed' : 'was no longer pending at'} its deadline (${a.outcome})`);
+        return;
+      }
+      case 'drain': {
+        const r = await port.drain(a.ids);
+        if (r.owed.length > 0) log(`ccrc-server: overlord attempt: ${r.owed.join(', ')} still owed a stop`);
+        return;
+      }
+      default: { const never: never = a; return never; }
+    }
+  } catch (e) {
+    log(`ccrc-server: overlord attempt: ${a.kind} failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 
 /** `routePrecompact`'s answers: written, refused by ccd, no answer, or a ccd with no `route` verb. */
@@ -131,6 +182,11 @@ async function renew(deps: RenewalActsDeps, t: ActTarget, tryN: number, r: Count
     const receipt = await deps.host.receipt(t.sessionId, t.startId);
     if (receipt.kind === 'started') { r.skipped += 1; say(`try ${tryN} not made: start ${receipt.startId} is recorded`); return; }
     if (receipt.kind === 'unreadable') { r.skipped += 1; say(`try ${tryN} waits: the receipt could not be read (${receipt.detail})`); return; }
+  }
+  // Designation B (Task 10): the Overlord's route record is written again before the call is claimed; a refusal claims nothing.
+  if (t.role === 'overlord' && deps.beforeRenew !== undefined) {
+    const w = await deps.beforeRenew(t);
+    if (!w.ok) { r.failed += 1; say(`try ${tryN} not made: the set was not written before it (${w.detail})`); return; }
   }
   const key = { generationId: t.genId, episode: t.episode, try: tryN };
   const claim = deps.coord.claimRenewCall(key, deps.now());

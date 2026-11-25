@@ -1724,7 +1724,7 @@ describe('ccrc doctor: box-settings reads the box\'s ccrc.env alone (wave 24, D-
     expect(verdict(r)).not.toContain('CCRC_TESTBOX_RUNS');
     expect(verdict(r)).not.toContain('zz-mark');
     expect(r.code).toBe(0);
-    expect(OMIT_KEYS, 'D-8290 adds the live probes\' three box keys: 28 -> 31').toHaveLength(31);
+    expect(OMIT_KEYS, 'D-8290 adds the live probes\' three box keys: 28 -> 31, D-9004 the registry keep: 32').toHaveLength(32);
     const none = runBs(fleetBox('ccrc-doctor-bs-d5-none-', ['CCRC_FLEET=local']));
     for (const k of OMIT_KEYS) expect(verdict(none), k).not.toContain(k);
   });

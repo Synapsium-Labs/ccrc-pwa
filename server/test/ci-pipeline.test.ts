@@ -82,9 +82,15 @@ function needs(block: string): string[] {
   return v.replace(/^\[|\]$/g, '').split(',').map((s) => s.trim()).filter(Boolean).sort();
 }
 
-/** Each step of a job, as the text from its `      - ` line to the next. */
+/** The merge queue's liveness step (D-9015), first in each long job. `queue-live.test.ts` pins it whole (its name,
+ *  condition, token and script), so the pins here read a job without it. */
+const QUEUE_LIVE_STEP = '      - name: queue group still live\n';
+const withoutQueueLive = (block: string): string =>
+  block.split(/^(?= {6}- )/m).filter((p) => !p.startsWith(QUEUE_LIVE_STEP)).join('');
+
+/** Each step of a job, as the text from its `      - ` line to the next, the queue's liveness step set aside. */
 function steps(block: string): string[] {
-  const parts = block.split(/^(?= {6}- )/m);
+  const parts = withoutQueueLive(block).split(/^(?= {6}- )/m);
   return parts.filter((p) => /^ {6}- /.test(p));
 }
 
@@ -2206,7 +2212,8 @@ describe('M8.16: build-pwa verifies the shared Markdown library before it builds
       }
     }
     expect(block.split('\n').filter((l) => !/^\s*#/.test(l)).filter((l) => /^ {4}env:/.test(l)).length).toBe(1);
-    expect(code(block).match(/GH_TOKEN/g) ?? []).toHaveLength(1);
+    // The queue's liveness step carries the job's own token too, pinned by queue-live.test.ts.
+    expect(code(withoutQueueLive(block)).match(/GH_TOKEN/g) ?? []).toHaveLength(1);
   });
 
   it('the provenance script pins the library repo, its release workflow, the tag ref and hosted runners by exact text', () => {

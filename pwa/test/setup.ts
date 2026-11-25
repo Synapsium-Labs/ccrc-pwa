@@ -84,6 +84,14 @@ import { useFleetStore } from '../src/stores/fleet';
 // `screenCache.ts` keeps the last answer of each Settings read and digest day in module state, and the hooks draw it on
 // their first render. Across tests that is a leak: a later test in the same file would draw an earlier test's answer
 // before any read of its own. `screenCache.ts` imports nothing, so this hook loads no hook or screen.
+//
+// (6) THE TAB'S OWN STORE IS EMPTIED AFTER EVERY TEST (desktop polish wave 177).
+//
+// `<App/>` keeps what its tab has been in the tab's session storage (`lib/tabMark.ts`: a console marks its tab), and
+// reads it once when it mounts. Across tests that is a leak: a case that mounts `<App/>` at a Docs address after a case
+// that mounted the console ran as the console, and alone as a Docs tab, the reader alone. Cleared here, after every case,
+// so no case inherits another case's mark. It does not reach a file's own `beforeAll`: a file that mounts `<App/>` there
+// leaves its mark for that file's first case (three files do today, none at a Docs address).
 afterEach(async () => {
   useFleetStore.getState().disconnect();
   cleanup();
@@ -92,6 +100,11 @@ afterEach(async () => {
     window.localStorage.removeItem('ccrc-accounts-strip');
   } catch {
     /* a file on the node environment has no window, and a test may have made storage throw: nothing to clear then */
+  }
+  try {
+    window.sessionStorage.clear();
+  } catch {
+    /* the same two: no window, or a store a test made throw */
   }
   clearEveryLru();
   clearScreenCache();

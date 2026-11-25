@@ -40,7 +40,7 @@ import { LEDGER_SESSION_CALLERS, PROBE_ANSWER_MAX_CHARS, READ_LEDGER_WRITTEN, bo
 import { roundVerdict } from './probes.js';
 import { REPORT_ID_RE, startLoadsOf } from './startLoads.js';
 import { sandboxSettle, sandboxVerdict, settleEvidenceStands, type ExpectedSurface, type WorkspaceFact } from './sandboxCheck.js';
-import type { DesignationRead } from '../../../shared/overlord-designation.js';
+import type { DesignationRead, SettleFact } from '../../../shared/overlord-designation.js';
 import {
   NOTE_LIST_LIMIT, handoverAsked, handoverVerdict, noteKeyFact, noteListBytes, notesPage, noteVerdict, revisedNoteFact, type NoteInput,
   type NoteVerdictRefusal, type RevisedFact,
@@ -75,8 +75,9 @@ export interface SandboxSettlePort {
   /** The Overlord's expected surface: `expectedSurfaceOf('overlord')` with the release's own lists (a test's isolated ones). */
   expected(): ExpectedSurface | null;
   read(): DesignationRead;
-  /** The pending attempt becomes the binding; `ok: false` names why (the authority journal refused it, a row it cannot read). */
-  goLive(sessionId: string, generation: string, at: number): { readonly ok: boolean; readonly detail?: string };
+  /** The pending attempt becomes the binding; `ok: false` names why (the authority journal refused it, a row it cannot read).
+   *  `previous` is the old body a rebind's go-live unbound (designation B), which the settle drains next. */
+  goLive(sessionId: string, generation: string, at: number): { readonly ok: boolean; readonly detail?: string; readonly previous?: string | null };
   /** The pending attempt ends `overlord-sandbox-unmet`, its stop owed; `changed` is false when it was no longer pending. */
   failPending(sessionId: string, at: number): { readonly ok: boolean; readonly changed?: boolean };
   /** Stops the failed body (the designation's one drain). `unrecorded` when no row owes the stop (the failure could not be
@@ -93,7 +94,7 @@ export interface SandboxSettlePort {
 /** What one settle did (review 3325 F6, review 3346 F1 and F2): the act it decided, `none` included, so a negative is seen
  *  evaluated. `none` is the decider's (a stale start, another session or generation, no pending designate); `no-report` a
  *  newest start with no stored report; `stale` evidence that changed during the registry read; `unread` a designation or
- *  newest start that could not be read; `refused` a go-live the store refused. A failed check is `fail-pending` (recorded,
+ *  newest start that could not be read, before or after that read (review 3366 F5); `refused` a go-live the store refused. A failed check is `fail-pending` (recorded,
  *  its owed stop drained), `fail-refused` or `fail-threw` (the record was refused or threw: the body is stopped through the
  *  drain as unrecorded, no stop owed), or `fail-noop` (no longer pending: nothing stopped). `threw` a step that threw. */
 export interface SettleOutcome {
@@ -230,7 +231,7 @@ function cancelOf(coord: CoordStore, id: number, actor: 'setter-cancel' | 'opera
 /** The set door's bound key, measured once (slug bound-key-must-be-live): a run is the caller's own when it is among its
  *  open bindings, claimed or worked (`bindingsOf`), and a programme when it coordinates it and the plan has not ended. A
  *  binding read that fails or throws is `unmeasured`, never `not-own`: a box fault never reads as "not yours". */
-function bindingOf(coord: CoordStore, id: string, bound: { runId: number | null; programme: string | null }): SetFacts['binding'] {
+function bindingOf(coord: CoordStore, id: string, uuid: string, bound: { runId: number | null; programme: string | null }): SetFacts['binding'] {
   try {
     if (bound.runId !== null) {
       const b = coord.bindingsOf(id);
@@ -238,7 +239,7 @@ function bindingOf(coord: CoordStore, id: string, bound: { runId: number | null;
       if (!claimed.ok || !worked.ok) return 'unmeasured';
       return [...claimed.siblings, ...worked.siblings].some((r) => r.id === bound.runId) ? 'own' : 'not-own';
     }
-    if (bound.programme !== null) return coord.claimsProgramme(id, bound.programme) && coord.programmeLive(bound.programme) ? 'own' : 'not-own';
+    if (bound.programme !== null) return coord.claimsProgramme(id, bound.programme, uuid) && coord.programmeLive(bound.programme) ? 'own' : 'not-own';
     return 'none';
   } catch {
     return 'unmeasured';
@@ -368,8 +369,8 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     // THE SETTLE STEP (Task 9): after the write, on every accepted body. It runs after the answer, on the serialiser, so the
     // hook's send budget never waits on the stop; it decides nothing here: `sandboxVerdict` and `sandboxSettle` do. A 202
     // clears the hook's spool, so nothing resends an answered report (review 3325 F2): a settle lost after the answer (a
-    // restart, a throw, a refused go-live) leaves the attempt pending. Nothing in this tree re-runs it: designation B's deadline
-    // sweep, not built yet, is to re-run `settleLoads` from the stored report (ruled in fix round 1).
+    // restart, a throw, a refused go-live) leaves the attempt pending until designation B's deadline sweep re-runs `settleLoads`
+    // from the stored report (`settleFactOf`, `pendingDeadlineOf`; ruled in fix round 1).
     if (deps.settle !== undefined) void settleLoads(deps.settle, coord, id, r.startId, deps.wall);
     return reply.code(202).send({ ok: true, startId: r.startId, fresh: r.fresh });
   });
@@ -565,7 +566,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     if (part === 'anchor' && form === 'fork') return reply.code(200).send(anchorAnswer(anchorLive, { form }));
     const at = deps.wall();
     const masker = deps.masker ?? SHAPE_ONLY_MASKER;
-    const { facts, renderer } = await gatherCardFacts({ coord, ...deps.cardRegistry, messages: deps.operatorModel }, id, at);
+    const { facts, renderer } = await gatherCardFacts({ coord, ...deps.cardRegistry, messages: deps.operatorModel }, { id, uuid }, at);
     const text = masker.maskText(trimCard(renderCard(renderer, facts), CARD_BUDGET_TOKENS).text);
     const hash = sha256(text);
     if (part === 'anchor') {
@@ -690,7 +691,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
       ? { key: closed?.key ?? { kind: 'run', id: revises! }, kind: closed?.kind ?? 'thread', waitsOn: '', next: '', revises, closes }
       : { key: key!, kind: kind as NoteInput['kind'], waitsOn, next, revises, closes };
     // A close's key is not read (`noteVerdict` skips it: close-needs-no-live-key), so it is not measured either.
-    const keyFact: KeyFact = closes ? 'unmeasured' : noteKeyFact(noteKeyReader(coord, id, deps.operatorModel?.() ?? undefined)(input.key), id);
+    const keyFact: KeyFact = closes ? 'unmeasured' : noteKeyFact(noteKeyReader(coord, { id, uuid: b['byUuid'] as string }, deps.operatorModel?.() ?? undefined)(input.key), id);
     const live = coord.liveNotes(id);
     const gen = liveGenerationOf(coord, id, deps.continuityGate);
     if (gen === 'unmeasured') return refuseNote(reply, 'unmeasured', ' (the generations)');
@@ -736,7 +737,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     }
     const live = coord.liveNotes(c.id);
     if (!live.ok) return refuseRoute(reply, 'unmeasured', { detail: 'could not check: continuity_notes could not be read' });
-    const read = noteKeyReader(coord, c.id, deps.operatorModel?.() ?? undefined);
+    const read = noteKeyReader(coord, { id: c.id, uuid: c.b['byUuid'] as string }, deps.operatorModel?.() ?? undefined);
     const wire = live.notes.map((n) => ({
       id: n.id, key: n.key, kind: n.kind, waitsOn: n.waitsOn, next: n.next, revises: n.revises, at: n.at,
     }));
@@ -788,7 +789,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     if (asked !== 'asked' || typeof gen === 'string') {
       return refuseNote(reply, asked === 'unmeasured' ? 'unmeasured' : NOTE_REFUSALS.notAsked, asked === 'unmeasured' ? ' (the generations)' : '');
     }
-    const read = noteKeyReader(coord, id, deps.operatorModel?.() ?? undefined);
+    const read = noteKeyReader(coord, { id, uuid: b['byUuid'] as string }, deps.operatorModel?.() ?? undefined);
     const note: HandoverNote = { threads, cautions: cautions as string[], tone };
     const verdict = handoverVerdict(note, threads.map((t) => noteKeyFact(read(t.ref), id)));
     if (!verdict.ok) return refuseNote(reply, verdict.refusal);
@@ -842,7 +843,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     const { role } = await sessionRoleRead({ coord, ...deps.cardRegistry }, fromId);
     // From here to the write, nothing awaits: the binding, the pending count and the rate are read with the verdict and the
     // write, so a run that closes while the role is read is refused, never stored bound (review 2052 F3).
-    const binding = bindingOf(coord, fromId, { runId: runId as number | null, programme: programme as string | null });
+    const binding = bindingOf(coord, fromId, fromUuid, { runId: runId as number | null, programme: programme as string | null });
     const now = deps.wall();
     const pending = coord.pendingTimersOf(fromId);
     let setsLastHour: number;
@@ -1171,8 +1172,8 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
  *  (review 3366 F11). Every
  *  check runs again inside the serialiser on each call, so a call for a report that is no longer the newest start's, for a
  *  start with no stored report, or for another session or generation, acts on nothing. It is the one settle path: the loads
- *  door calls it after its answer, and designation B's deadline sweep is to re-run it from the stored report (ruled in fix
- *  round 1), with these same ports and writers. */
+ *  door calls it after its answer, and designation B's deadline sweep re-runs it from the stored report (ruled in fix
+ *  round 1), with these same ports and writers. A rebind's go-live drains the old body it unbound. */
 export function settleLoads(port: SandboxSettlePort, coord: Pick<CoordStore, 'startLoadsOfNewestStart'>, id: string, startId: number,
   wall: () => number): Promise<SettleOutcome> {
   return port.serial(async () => {
@@ -1182,11 +1183,34 @@ export function settleLoads(port: SandboxSettlePort, coord: Pick<CoordStore, 'st
     } catch (e) {
       console.warn(`ccrc-server: the sandbox settle for ${id} threw: ${e instanceof Error ? e.message : String(e)}`);
     }
+    // A settle that decided nothing on evidence it could not trust says so (review 3366 F5); it still acts on nothing.
+    if (act === 'stale' || act === 'unread') console.warn(`ccrc-server: the sandbox settle for ${id} (start ${startId}) decided nothing: ${SETTLE_IDLE_WHY[act]}`);
     const outcome = { sessionId: id, startId, act };
     port.settled?.(outcome);
     return outcome;
   });
 }
+
+/** What a settle of `id` would read, for the deadline sweep's decider (`overlordDesignation.ts#pendingDeadlineOf`, designation B):
+ *  the newest start's stored report, with that start's generation and whether the sandbox check holds on it, through the same
+ *  reads and the same `sandboxVerdict` as `settleOnce`; no stored report yet; or a read that failed. It writes nothing. */
+export async function settleFactOf(port: Pick<SandboxSettlePort, 'expected' | 'workspaceOf'>,
+  coord: Pick<CoordStore, 'startLoadsOfNewestStart'>, id: string): Promise<SettleFact> {
+  const expected = port.expected();
+  const newest = coord.startLoadsOfNewestStart(id);
+  if (expected === null) return { kind: 'unread', why: 'the expected surface is not listed' };
+  if (!newest.ok) return { kind: 'unread', why: newest.detail };
+  const n = newest.newest;
+  if (n === null || n.report === null) return { kind: 'no-report' };
+  const held = sandboxVerdict(expected, n.report, await port.workspaceOf(id), n.carry).engaged;
+  return { kind: 'reported', sessionId: id, startId: n.start.id, generation: n.start.rowIncarnation, held };
+}
+
+/** Why a settle that read evidence it could not trust decided nothing: the words of its one log line. */
+const SETTLE_IDLE_WHY = {
+  stale: 'its evidence changed during the registry read',
+  unread: 'the expected surface, the designation or the newest start could not be read',
+} as const;
 
 async function settleOnce(port: SandboxSettlePort, coord: Pick<CoordStore, 'startLoadsOfNewestStart'>, id: string, startId: number,
   wall: () => number): Promise<SettleOutcome['act']> {
@@ -1201,11 +1225,16 @@ async function settleOnce(port: SandboxSettlePort, coord: Pick<CoordStore, 'star
   const workspace = await port.workspaceOf(id);
   // The start and loads doors write outside the serialiser: evidence that changed during that await is obsolete (review 3346 F3).
   const after = coord.startLoadsOfNewestStart(id);
-  if (!after.ok || !settleEvidenceStands({ designation: read, newest: n }, { designation: port.read(), newest: after.newest })) return 'stale';
+  const again = port.read();
+  if (!after.ok || again.kind === 'unmeasured') return 'unread';
+  if (!settleEvidenceStands({ designation: read, newest: n }, { designation: again, newest: after.newest })) return 'stale';
   const verdict = sandboxVerdict(expected, n.report, workspace, n.carry);
   const act = sandboxSettle(read, startId, n.start, verdict);
   if (act.kind === 'go-live') {
     const g = port.goLive(act.sessionId, act.generation, wall());
+    // A rebind's go-live put the old body on `stopsOwed` in its own transaction; it is drained here, on the serialiser (plan
+    // Task 6, review F4): markers off, its set and digest cleared, then the stop. A stop that fails stays owed for the sweep.
+    if (g.ok && typeof g.previous === 'string') await port.drain(g.previous, false);
     if (g.ok) return 'go-live';
     console.warn(`ccrc-server: the sandbox check held for ${act.sessionId}, but it could not go live: ${g.detail ?? 'refused'}`);
     return 'refused';

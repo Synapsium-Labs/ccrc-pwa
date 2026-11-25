@@ -138,6 +138,32 @@ programme the operator wants Idle still reads Done is one deploy, not several.
    second programme claimed by one session under an older build is left unbound and listed as a conflict; a second
    boot writes nothing.
 
+### W1 notes (review round 1, 2026-11-24)
+
+- **Moved to W2, with its doors:** the "You own no programme now" mail (item 8). Every move W1 reaches leaves a session that
+  is being put down: the reclaim door's displaced claimant measures gone (rung 4), and `moveClaims`' is the session the
+  operator is archiving or stopping; the ends W1 reaches are the coordinator's own `plan close` and the operator's abandon
+  with an end. The mail matters from W2's hand-over and decide doors, where a live coordinator is displaced, and ships with
+  them, beside the decline's mail. Withdrawing an open end proposal on `openRun` (item 7) moves too: proposals exist only
+  from W2.
+- **The ladder, keyed on the programme (item 8):** W1 adds `reclaim.ts#reclaimProgrammeTo(deps, slug, from, heir, opts)`
+  and `CoordStore#reclaimProgramme(slug, from, …)` over the same ladder and writer, so `moveClaims` moves an Open or Idle
+  programme's binding (and its finished claims) when the session claims no open run of it. The run-keyed door stays
+  `reclaimRun`. The per-caller rung table (the hand-over door skipping rung 4 and mailing the displaced session; picks and
+  filings taking only `no-coordinator`; rung 1 `unknown-programme`) ships with those callers, in W2 and W4.
+- **Brought forward from W2 and W4**, because W1 can reach `main` and a prerelease on its own: the archive door's
+  `programme:'end'` ends the programme by decision (W2 item 5; it ended nothing once D-51 was gone), CLAUDE.md's "Open
+  wave N+1's run BEFORE closing wave N's" reason (W2 item 8), and the coordinator skill references' "the server retires
+  the program" sentences (`wave-steps.md`, `wave-lifecycle-5-boundary.md`, `wave-lifecycle-6-final-merge.md`; W4 item 6).
+- **Review fixes recorded on the deviations below:** a plan put on a new slug is a start (D-8993); the first recorded end
+  stands, and a kept D-51 end has no effect outside the database until it is decided (D-8983); the plan's owner is the
+  binding (D-8985); `moveClaims` asks R11 rule 4 before its first move (D-8993).
+- **After the fixture sweep (round 2):** the Linear put-back records its Abandoned end whenever no end is RECORDED
+  (`planEndOf` null), as on main, so a kept D-51 end still takes it (D-8983). Left as is, on purpose: `close.ts` still
+  releases a child when a non-final close leaves its programme with no open run (`retiresProgram`). The programme now
+  stays Idle, but holding a child for a wave that may never open would keep its workspace indefinitely; the child is
+  re-minted when the next wave dispatches. `run-routes.test.ts` pins that release.
+
 ## W2: the doors (one PR, server)
 
 1. **`POST /api/programmes`** (start, binding the named coordinator, or none for the start sheet's pick),
@@ -311,7 +337,14 @@ programme the operator wants Idle still reads Done is one deploy, not several.
   that read `planEnd` reads `isEnded(state)`. Linear's `programmeEnd` reads the decision, Abandoned never syncing as
   completed. The refusal code `plan-closed` is kept for the ended programme (no second code). A boot re-measure records
   any state an older build wrote after a rollback. Overturns D-51 and D-8558's "NOT `programs.state`". The unmerged
-  kept-worker branch (D-8980..D-8982) reads the same predicate.
+  kept-worker branch (D-8980..D-8982) reads the same predicate. Amended in the W1 review: the first RECORDED end stands
+  (`decideInTx` refuses a different end over one, `already-ended`; only a reopen moves it, and the boot re-measure's
+  `migrated` edge follows the record an older build wrote), and an end is recorded when `planEnd` equals the state
+  (`endRecorded`). A D-51 end the migration kept (`planEnd` unset) is not, until the operator decides: every gate inside
+  ccrc reads `isEnded`, but the two acts no reopen undoes wait for a recorded end: the timers lane cancels no timer for a
+  kept end (`CoordStore#programmeEndDecided`), and the Linear sync maps a kept end exactly as `main` did
+  (`planPolicy.ts#programmeEnd`). The boot re-measure is a re-measurement, not a migration: a throw rolls it back whole and
+  the server starts on the rows as they are, saying so.
 - **D-8984 (2026-11-24)** — activity-is-derived. Open, Active and Idle are never stored: `lifecycleOf` in
   `shared/programmeLifecycle.ts` decides them from the stored decision and the runs. An open run is any non-terminal
   run (the store's existing predicate, `planned` and `unknown` included); Active needs an open run and a run that was
@@ -332,7 +365,15 @@ programme the operator wants Idle still reads Done is one deploy, not several.
   when a binding names someone else and `not-your-programme` when there is none (as first written, it bound an empty
   binding and took over one measured absent; R11 removed both). `soleActiveCoordinator` resolves over programmes that
   show Active. Overturns spec 2026-10-17 §8's "coordinator-ness is derived from claims"; its "a lighter run kind is out
-  of scope" stands.
+  of scope" stands. Amended in the W1 review: every owner read passes the caller's attributed uuid (the ledger,
+  remaining, calls, review-rounds, quiz and continuity doors and the note keys), the reclaim stamps the heir's MEASURED
+  uuid (an unreadable one refuses `registry-unmeasurable`), and re-naming the current coordinator never changes its
+  incarnation; the `coordinator` event names the caller's actor and why (the reclaim door is `system`/`unmeasured` with the
+  door in its why; the archive and stop doors are the operator's); an ended programme or a filed or withdrawn placeholder is
+  never bound (`programme-ended`), so a reclaim of an ended programme's run moves its claims and binds nobody. The plan's
+  owner (`planStore.ts#planOwnerOf`) is the binding; a live programme released from its coordinator has no plan owner now,
+  so the plan doors refuse every writer until a hand-over (`planOwnerless`), while an ended or never-bound programme keeps
+  `main`'s rule, so the Linear sync still tells whoever ran it.
 - **D-8986 (2026-11-24, amended the same day for R11)** — join-at-spawn-and-provisional. Every session `roleOf` calls
   a coordinator joins a programme, held ones included, and joining means becoming that programme's coordinator. Create
   routes and the start sheet only record a pick, after refusing a programme that already has a live coordinator or a
@@ -399,7 +440,13 @@ programme the operator wants Idle still reads Done is one deploy, not several.
   real programme or claims an open run in one it does not own (an unfiled placeholder is filed or withdrawn instead;
   a conflict's party may be handed a programme whose runs it holds), and a pick or filing into a programme with a live
   coordinator or a live claimant is refused `programme-has-coordinator`. `openRun` never changes ownership except the
-  first run of a new programme, which a session that has been joined and owns nothing may not open.
+  first run of a new programme, which a session that has been joined and owns nothing may not open. Amended in the W1
+  review: a `plan put` on a slug that does not exist yet is the same start as that first run (a new programme's run needs
+  its plan first, so the put is where the start happens): it binds the putter with its attributed uuid, and is refused
+  exactly as the run is (`owns-another-programme`, `not-your-programme`), never minting a programme nobody owns. An archive
+  or stop door's hand-over asks rule 4 before its first move: a session holding the runs of several programmes is refused
+  `owns-another-programme` with nothing moved (it is released, or each programme is handed over on its own), and so is an
+  heir that owns another programme.
   A coordinator left owning nothing is told by mail, listed as a coordinator with no programme, never minted a new one
   and never archived automatically: the operator or the Overlord starts one for it, hands it one, or archives it. The
   migration never invents an owner. Overturns this spec's earlier "one lead and any number of members" and R2's "no

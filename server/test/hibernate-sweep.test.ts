@@ -183,7 +183,7 @@ describe('hibernatePass: the store reads, on a real store', () => {
   const OPEN = RUN_STATES.filter((s) => !(TERMINAL_RUN_STATES as readonly string[]).includes(s));
   let seq = 0;
   const openRun = (s: CoordStore, o: { worker?: string; claimedBy: string; state: RunState }): void => {
-    const r = s.openRun({ program: `program-${++seq}`, title: 't', project: 'project-a', wave: 1, waveOf: 1, claimedBy: o.claimedBy });
+    const r = s.openRun({ program: `program-${o.claimedBy}`, title: 't', project: 'project-a', wave: ++seq, waveOf: null, claimedBy: o.claimedBy });   // one programme per coordinator (R11)
     if (!('id' in r)) throw new Error(`fixture openRun refused: ${JSON.stringify(r)}`);
     if (o.worker !== undefined) s.setSession(r.id, o.worker);
     s.db.prepare('UPDATE runs SET state = ? WHERE id = ?').run(o.state, r.id);

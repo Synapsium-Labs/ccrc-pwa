@@ -166,6 +166,7 @@ import { CLAUDE_ROLL_TARGETS, CLAUDE_ROLL_TARGETS_DEFAULT, isClaudeRollTargets, 
 import { rollTargetsOf } from './rollTarget.js';
 import { plainAutoMemoryOf } from '../continuity/profileFor.js';
 import { coordinatorAdvisorOf } from '../continuity/advisorPolicy.js';
+import { markOperatorPrompt } from '../continuity/promptHandoffs.js';
 import {
   ADVISOR_CAP_MAX, ADVISOR_CAP_MIN, ADVISOR_CHOICES, ADVISOR_SCOPE_MAX_IDS, COORDINATOR_ADVISOR_DEFAULT, advisorScopeOf, isAdvisorCap,
   isAdvisorChoice, type CoordinatorAdvisorView,
@@ -1754,7 +1755,7 @@ export function registerCoordRoutes(
       kind: open.kind, reviews: open.reviews,
       ...(open.homeProject !== undefined ? { homeProject: open.homeProject } : {}),
       ...(open.programmeTitle !== undefined ? { programmeTitle: open.programmeTitle } : {}),
-      coordProject, unattributed: open.unattributed, ticket: open.ticket });
+      coordProject, unattributed: open.unattributed, claimedByUuid: open.claimedByUuid, ticket: open.ticket });
     if ('kind' in opened) {
       return reply.code(opened.kind === 'hold-oversize' ? 413 : 400).send({
         ok: false,
@@ -2024,6 +2025,9 @@ export function registerCoordRoutes(
         return reply.code(409).send({ ok: false, refused: 'claimant-alive', by: r.by, detail: r.detail });
       case 'heir-is-a-worker':
         return reply.code(409).send({ ok: false, refused: 'heir-is-a-worker', by: r.by });
+      // Programme lifecycle W1 (R11 rule 4, D-8993): the heir owns another programme; nothing was re-pointed.
+      case 'owns-another-programme':
+        return refuseRun(reply, 'owns-another-programme', { by: r.by });
       // Overlord W1 other lanes (C48): the heir is the Overlord's body (403), or the designation could not be read and
       // the heir's launch profile could not rule that out (502). `error` words; nothing was re-pointed or measured.
       case 'overlord-not-a-coordinator': case 'unmeasured':
@@ -4940,7 +4944,10 @@ export function registerCoordRoutes(
     } else {
       return refuseRoute(reply, 'bad-request');
     }
-    return sendAnswer(reply, await questions.answer(answer, wiring.answerDeps));
+    const answered = await questions.answer(answer, wiring.answerDeps);
+    // The answer went through (every form answers 200 only once its keys landed): marks as a typed prompt does.
+    if (answered.status === 200 && deps.coord !== undefined) markOperatorPrompt(deps.coord, qid.sessionId, deps.time.clock.wall(), (l) => console.warn(l));
+    return sendAnswer(reply, answered);
   });
 
   /**

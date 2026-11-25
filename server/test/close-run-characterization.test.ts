@@ -95,7 +95,8 @@ describe('closeRun (coord/close.ts): what a work close accepts and records today
       closedBy: 'coordinator', closeDetail: null, sessionId: 'project-a-w1', prLineage: '[]' });
     expect(events(b.coord, id).slice(-2)).toEqual(['working>closing coordinator', 'closing>done coordinator']);
     expect(verbs(b.calls)).toEqual(['pr-state', 'ws-release']);
-    expect(programState(b.coord, 'prog-a')).toBe('done');
+    // Programme lifecycle W1 (D-8983): D-51 is deleted; the last close ends nothing, the programme stays live (Idle).
+    expect(programState(b.coord, 'prog-a')).toBe('active');
     expect(untold(b.coord, id)).toBeNull();
   });
 
@@ -116,7 +117,7 @@ describe('closeRun (coord/close.ts): what a work close accepts and records today
     const row = withoutClosePr(b.coord, id);
     expect(row).toMatchObject({ state: 'failed', closedBy: 'coordinator', closeDetail: null });
     expect(events(b.coord, id).slice(-2)).toEqual(['working>closing coordinator', 'closing>failed coordinator']);
-    expect(programState(b.coord, 'prog-a')).toBe('abandoned');
+    expect(programState(b.coord, 'prog-a')).toBe('active');   // programme lifecycle W1 (D-8983): D-51 deleted
   });
 
   it('the operator abandon of a planned run closes it failed with no closing hop and owes the claimant a word', async () => {
@@ -169,7 +170,7 @@ describe('CoordStore.closeRun: what the store refuses and records today', () => 
     expect(b.coord.closeRun(input(999, { expectClaimedBy: COORD }))).toEqual({ ok: false, error: 'unknown-run' });
   });
 
-  it('a shape-valid handoff is written, the detail is stored, and the programme retires only at its last open run', () => {
+  it('a shape-valid handoff is written, the detail is stored, and the programme never retires at its last open run (D-51 deleted)', () => {
     const b = build();
     const first = b.open('project-a-w6');
     const second = b.open('project-a-w7');
@@ -177,7 +178,7 @@ describe('CoordStore.closeRun: what the store refuses and records today', () => 
     expect(withoutClosePr(b.coord, first)).toMatchObject({ state: 'done', handoffCommit: TIP, closeDetail: 'why-a' });
     expect(programState(b.coord, 'prog-a')).not.toBe('done');
     expect(b.coord.closeRun(input(second, { finalState: 'failed', causedBy: 'sweep' })).ok).toBe(true);
-    expect(programState(b.coord, 'prog-a')).toBe('abandoned');
+    expect(programState(b.coord, 'prog-a')).toBe('active');   // programme lifecycle W1 (D-8983): D-51 deleted, no retire
     expect(untold(b.coord, second)).toEqual({ cause: 'sweep', detail: null, claimant: COORD });
   });
 });

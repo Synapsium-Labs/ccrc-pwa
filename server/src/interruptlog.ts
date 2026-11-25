@@ -24,13 +24,15 @@ export function drawerInterruptSource(data: string): Extract<InterruptSource, 'd
 }
 
 /** The drawer's per-session throttle: `admit` answers true at most once per session every `everyMs`. One instance per
- *  server; its map holds one number per session that ever sent one, bounded by the fleet. */
+ *  server; its map holds one number per session that ever sent one, bounded by the fleet. With `earlierAdmits` (the
+ *  drawer's operator mark), a reading earlier than the last admitted time admits too, so a wall clock stepped back does
+ *  not silence it until the wall passes the old time; the interrupt record keeps the plain rule. */
 export class DrawerInterruptThrottle {
   private readonly last = new Map<string, number>();
-  constructor(private readonly everyMs = DRAWER_INTERRUPT_EVERY_MS) {}
+  constructor(private readonly everyMs = DRAWER_INTERRUPT_EVERY_MS, private readonly opts: { readonly earlierAdmits?: boolean } = {}) {}
   admit(id: string, now: number): boolean {
     const prev = this.last.get(id);
-    if (prev !== undefined && now - prev < this.everyMs) return false;
+    if (prev !== undefined && now - prev < this.everyMs && !(this.opts.earlierAdmits === true && now < prev)) return false;
     this.last.set(id, now);
     return true;
   }

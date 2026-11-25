@@ -69,6 +69,30 @@ describe('testboxCaptureTransport: spec Table 6, one case per row', () => {
   });
 });
 
+describe('testboxCaptureTransport: the detail a word drops is logged (review 3226 F9)', () => {
+  const warned = (): string[] => (console.warn as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => String(c[0]));
+  it.each([
+    ['answered with no verdict', reply('answered', { detail: 'the capture waited in the queue too long' })],
+    ['unanswered', reply('unanswered', { detail: 'no state within the deadline' })],
+    ['unreachable', reply('unreachable', { detail: 'the connection failed' })],
+    ['not-taken', reply('not-taken', { detail: 'the connection closed (code 1008)' })],
+  ] as const)('%s: one line naming the build, the outcome and the detail', async (_n, asked) => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await run(asked);
+    const r = (asked as { reply: TestboxCaptureReply }).reply;
+    expect(warned()).toEqual([`ccrc-server: build capture ${BUILD}: ${r.outcome}, no verdict: ${r.detail}`]);
+  });
+  it.each([
+    ['a verdict', reply('answered', { result: RESULT, detail: 'kept' })],
+    ['a refusal (its detail is its word\'s sentence)', refused('build-absent')],
+    ['no detail at all', reply('unanswered')],
+  ] as const)('%s: nothing logged', async (_n, asked) => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await run(asked);
+    expect(warned()).toEqual([]);
+  });
+});
+
 describe('the remote arm of FleetIO.testboxCapture', () => {
   const GOOD = { outcome: 'answered', refusal: null, result: RESULT, detail: null };
   it('sends nothing to an agent whose ready list lacks the op: no-op', async () => {

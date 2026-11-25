@@ -28,9 +28,9 @@ import { AUTH_CLOSE_CODE, checkHello, DEFAULT_HELLO_TIMEOUT_MS } from '../src/te
 import { listenRefusal, POLICY_CLOSE_CODE, startTestboxServer } from '../src/testbox/main.js';
 import { mirrorOps, type MirrorOps } from '../src/testbox/mirror.js';
 import { admit, cancel, enqueue, EMPTY_QUEUE, finish, positions, type QueueState } from '../src/testbox/queue.js';
-import { cleaned, fillRow, makePool, prepareFailedFrom, retentionPlan, startupSweep, step, takeUser, queuedRun } from '../src/testbox/runs.js';
+import { cleaned, fillRow, makePool, prepareFailedFrom, registryPlan, retentionPlan, startupSweep, step, takeUser, queuedRun } from '../src/testbox/runs.js';
 import { OutputTail } from '../src/testbox/results.js';
-import { FRAME_HANDLERS, TestboxService, type Conn, type ServiceSettings } from '../src/testbox/service.js';
+import { FRAME_HANDLERS, TestboxService, type Conn, type ServiceDeps, type ServiceSettings } from '../src/testbox/service.js';
 import { buildRunSpec, encodeSpec, workerArgv } from '../src/testbox/spec.js';
 import { statusAnswer, type StatusFacts } from '../src/testbox/status.js';
 import { boundedExec, type Exec } from '../src/testbox/exec.js';
@@ -75,7 +75,8 @@ function chownStub(dir: string): string {
 
 const SETTINGS = (root: string, over: Partial<ServiceSettings> = {}): ServiceSettings => ({
   root, workers: 3, runTmpdir: '/tmp', toolsDir: path.join(root, 'tools'), envForward: ['CCRC_HISTORY_BASE', 'CCRC_LEDGER_BASE'],
-  runUserPrefix: 'ccrc-tb-', reportMaxBytes: 1024, serviceUser: ME, runs: 2, sessionRuns: 1, logTail: 5, retentionMs: 3_600_000, outputDrainMs: 100, ...over,
+  runUserPrefix: 'ccrc-tb-', reportMaxBytes: 1024, serviceUser: ME, runs: 2, sessionRuns: 1, logTail: 5, retentionMs: 3_600_000,
+  registryKeepMs: 30 * 86_400_000, outputDrainMs: 100, ...over,
 });
 
 const ROW = (root: string): TestboxRepoRow => ({
@@ -185,6 +186,8 @@ interface Box {
   svc: TestboxService;
   mirror: RecordingMirror;
   clock: { now: number };
+  /** A second service over the same root, mirror and clock: the service restarted. */
+  again: () => TestboxService;
 }
 
 class RecordingMirror implements MirrorOps {
@@ -211,7 +214,7 @@ afterAll(() => {
 });
 const lstatIsLink = (p: string): boolean => { try { return lstatSync(p).isSymbolicLink(); } catch { return false; } };
 
-function makeBox(over: Partial<ServiceSettings> = {}, probeOk = true): Box {
+function makeBox(over: Partial<ServiceSettings> = {}, probeOk = true, extra: Partial<Omit<ServiceDeps, 'settings'>> = {}): Box {
   const root = mkTmp('ccrc-tb-svc-');
   roots.push(root);
   const s = SETTINGS(root, over);
@@ -236,12 +239,13 @@ function makeBox(over: Partial<ServiceSettings> = {}, probeOk = true): Box {
   });
   const clock = { now: Date.now() };
   const mirror = new RecordingMirror();
-  const svc = new TestboxService({
+  const deps: ServiceDeps = {
     settings: s, rows: [ROW(root)], sys: mgr, probe: async () => (probeOk ? { ok: true } : { ok: false, detail: 'cp: failed to clone: Operation not supported' }),
     mirror, now: () => clock.now, chrome: path.join(s.toolsDir, 'current', 'chrome'), release: 'v1.2.3', serviceVersion: '1.2.3',
-    tools: () => BOX_TOOLS,
-  });
-  return { root, template, mgr, svc, mirror, clock };
+    tools: () => BOX_TOOLS, ...extra,
+  };
+  const svc = new TestboxService(deps);
+  return { root, template, mgr, svc, mirror, clock, again: () => new TestboxService(deps) };
 }
 
 async function runOne(box: Box, over: Partial<RunSubmit> = {}): Promise<{ summary: RunSummary; sink: Sink; id: string }> {
@@ -363,6 +367,12 @@ describe('runs.ts: the pool, the phases, the prepare reason and retention', () =
     const plan = retentionPlan(kept, new Set(['live']), 2 * H, H);
     expect(plan).toEqual({ results: ['old', 'live'], logs: ['old', 'live'], refs: ['old'] });
   });
+  it('D-9007: the registry cache\'s plan is every file not served for the keep time, the boundary included', () => {
+    const H = 3_600_000;
+    const files = [{ file: 'a', at: 0 }, { file: 'b', at: H }, { file: 'c', at: H + 1 }];
+    expect(registryPlan(files, 2 * H, H)).toEqual(['a', 'b']);
+    expect(registryPlan(files, 2 * H, 3 * H)).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -407,7 +417,7 @@ const KNOB_VALUES: Record<string, string> = {
   CCRC_TESTBOX_RETENTION: '24h', CCRC_TESTBOX_REPORT_MAX: '16M', CCRC_TESTBOX_TOOLS_DIR: '/opt/ccrc-testbox/tools',
   CCRC_TESTBOX_ENV_FORWARD: 'CCRC_HISTORY_BASE CCRC_LEDGER_BASE', CCRC_TESTBOX_RUN_USER_PREFIX: 'ccrc-tb-', CCRC_TESTBOX_LOG_TAIL: '40',
   CCRC_TESTBOX_SERVICE_USER: 'ccrc-tb-svc', CCRC_TESTBOX_LISTEN: '192.0.2.10:7790', CCRC_TESTBOX_SERVICE_TOKEN_FILE: '/etc/ccrc-testbox/service.token',
-  CCRC_TESTBOX_UNIT_MAX: '1h',
+  CCRC_TESTBOX_UNIT_MAX: '1h', CCRC_TESTBOX_REGISTRY_KEEP: '30d',
 };
 const knobText = (vals: Record<string, string>): string =>
   `${Object.entries(vals).map(([k, v]) => [k, v, v, 'file'].join(KNOB_FIELD_SEP)).join('\n')}\n`;
@@ -419,7 +429,7 @@ describe('config.ts: the service reads its settings once, from the box-mode prin
       runs: 4, sessionRuns: 1, workers: 3, runTmpdir: '/tmp/r', root: '/srv/testbox', repos: '/home/svc/.ccrc/testbox-repos.d',
       fetchEveryMs: 300_000, retentionMs: 86_400_000, reportMaxBytes: 16 * 1024 * 1024, envForward: ['CCRC_HISTORY_BASE', 'CCRC_LEDGER_BASE'],
       logTail: 40, serviceUser: 'ccrc-tb-svc', listen: { host: '192.0.2.10', port: 7790 }, tokenFile: '/etc/ccrc-testbox/service.token',
-      unitMaxMs: 3_600_000,
+      unitMaxMs: 3_600_000, registryKeepMs: 30 * 86_400_000,
     });
   });
   it.each(SERVICE_KNOBS)('a printer without %s refuses the start', (k) => {
@@ -432,6 +442,7 @@ describe('config.ts: the service reads its settings once, from the box-mode prin
     expect(() => parseKnobLines(`${knobText({ CCRC_TESTBOX_RUNS: '2' })}${knobText({ CCRC_TESTBOX_RUNS: '2' })}`)).toThrow(/twice/);
     expect(() => configFromLines(parseKnobLines(knobText({ ...KNOB_VALUES, CCRC_TESTBOX_RUNS: '0' })), '/h')).toThrow(/count/);
     expect(() => configFromLines(parseKnobLines(knobText({ ...KNOB_VALUES, CCRC_TESTBOX_RETENTION: '24' })), '/h')).toThrow(/duration/);
+    expect(() => configFromLines(parseKnobLines(knobText({ ...KNOB_VALUES, CCRC_TESTBOX_REGISTRY_KEEP: '30' })), '/h')).toThrow(/CCRC_TESTBOX_REGISTRY_KEEP.*duration|duration.*CCRC_TESTBOX_REGISTRY_KEEP/);
   });
   it('the printer runs as `<release>/ccd/ccrc-test --testbox-knobs box`, with HOME, PATH and LANG only (a fixture printer)', async () => {
     const release = mkTmp('ccrc-tb-rel-');
@@ -1067,6 +1078,138 @@ describe('retention: results, logs and refs (spec §2.1 "Ref lifetime")', () => 
     await box.svc.start();
     await box.svc.tick();
     expect(box.mirror.calls).toEqual(['fetch project-a.git']);
+  });
+});
+
+describe('retention across restarts, for waiting runs, its failures, and the registry cache (D-9004 to D-9007)', () => {
+  const H = 3_600_000;
+  const seenStamp = (box: Box, id: string): string => path.join(box.root, 'refs-seen', id);
+
+  it('D-9004: a run id with refs only expires on time though the service restarted in between', async () => {
+    const box = makeBox();
+    await box.svc.start();
+    const m = ROW(box.root).mirrorPath;
+    const id = runId();
+    box.mirror.refs.set(m, [id]);
+    await box.svc.retention();
+    expect(existsSync(seenStamp(box, id)), 'the first sight is on disk').toBe(true);
+    box.clock.now += H / 2;
+    const next = box.again();
+    await next.start();
+    await next.retention();
+    expect(box.mirror.calls, 'not yet: half the time').toEqual([]);
+    box.clock.now += H / 2;
+    await next.retention();
+    expect(box.mirror.calls).toEqual([`delete ${id}`, 'gc project-a.git']);
+    expect(existsSync(seenStamp(box, id)), 'the stamp goes with the refs').toBe(false);
+  });
+
+  it('D-9004: a stamp whose refs are gone is removed while every mirror is listed; one whose refs stand is kept', async () => {
+    const box = makeBox();
+    await box.svc.start();
+    const m = ROW(box.root).mirrorPath;
+    const [gone, stays] = [runId(), runId()];
+    box.mirror.refs.set(m, [gone, stays]);
+    await box.svc.retention();
+    box.mirror.refs.set(m, [stays]);
+    await box.svc.retention();
+    expect(existsSync(seenStamp(box, gone))).toBe(false);
+    expect(existsSync(seenStamp(box, stays))).toBe(true);
+    // A mirror that is not there lists nothing, so no stamp is taken for gone on its word.
+    rmSync(path.join(m, 'HEAD'));
+    await box.svc.retention();
+    expect(existsSync(seenStamp(box, stays)), 'kept while a mirror was not listed').toBe(true);
+  });
+
+  // A stamp that cannot be read (a file where the directory belongs: ENOTDIR) or written (a dangling link: ENOENT on the
+  // write) is unmeasured: its run's refs are timed from now for this pass only, said once, and the pass still deletes.
+  it.each([
+    ['cannot be read', (d: string) => writeFileSync(d, '')],
+    ['cannot be written', (d: string) => symlinkSync(path.join(path.dirname(d), 'nowhere'), d)],
+  ])('D-9004: a refs-seen stamp that %s is unmeasured, and old results and logs still go', async (_what, spoil) => {
+    const lines: string[] = [];
+    const box = makeBox({}, true, { log: (l) => lines.push(l) });
+    await box.svc.start();
+    const m = ROW(box.root).mirrorPath;
+    const [old, refOnly] = [runId(), runId()];
+    const dirs = ['results', 'logs'].map((k) => path.join(box.root, k, old));
+    for (const d of dirs) {
+      mkdirSync(d, { recursive: true });
+      const t = (box.clock.now - 2 * H) / 1000;
+      utimesSync(d, t, t);
+    }
+    spoil(path.join(box.root, 'refs-seen'));
+    box.mirror.refs.set(m, [old, refOnly]);
+    await box.svc.retention();
+    for (const d of dirs) expect(existsSync(d), d).toBe(false);
+    expect(box.mirror.calls, 'the old run\'s refs go; the unstamped one is kept').toEqual([`delete ${old}`, 'gc project-a.git']);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^ccrc-testbox: retention: \d+ refs-seen stamps? unmeasured, timed from now this pass \(first: .+\)$/);
+  });
+
+  it('D-9006: the refs of a run handed over to disk are kept past the time; the others go', async () => {
+    const [waiting, done] = [runId(), runId()];
+    const box = makeBox({}, true, { handedOver: (id) => id === waiting });
+    await box.svc.start();
+    const m = ROW(box.root).mirrorPath;
+    box.mirror.refs.set(m, [waiting, done]);
+    await box.svc.retention();
+    box.clock.now += 2 * H;
+    await box.svc.retention();
+    expect(box.mirror.calls).toEqual([`delete ${done}`, 'gc project-a.git']);
+    expect(box.mirror.refs.get(m)).toEqual([waiting]);
+  });
+
+  it('a run still waiting in the queue keeps its log directory past the time', async () => {
+    const box = makeBox({}, true, { admitting: () => false });
+    await box.svc.start();
+    const sink = new Sink();
+    const f = SUBMIT();
+    box.svc.submit(f, sink);
+    expect(sink.refusals).toEqual([]);
+    const logs = path.join(box.root, 'logs', f.runId);
+    const old = (box.clock.now - 2 * H) / 1000;
+    utimesSync(logs, old, old);
+    await box.svc.retention();
+    expect(existsSync(logs)).toBe(true);
+    await box.svc.cancel(f.runId);
+  });
+
+  it('D-9005: the tick logs a retention failure, and the registry cache is still pruned', async () => {
+    const lines: string[] = [];
+    const box = makeBox({ registryKeepMs: H }, true, { log: (l) => lines.push(l) });
+    await box.svc.start();
+    box.mirror.runIds = async () => { throw new Error('the mirror could not be listed'); };
+    const old = path.join(box.root, 'registry', 'packuments', 'old.json');
+    mkdirSync(path.dirname(old), { recursive: true });
+    writeFileSync(old, '{}');
+    const t = (box.clock.now - 2 * H) / 1000;
+    utimesSync(old, t, t);
+    await box.svc.tick();
+    expect(lines).toContain('ccrc-testbox: retention: the mirror could not be listed');
+    expect(existsSync(old)).toBe(false);
+  });
+
+  it('D-9007: a cached registry file not served for CCRC_TESTBOX_REGISTRY_KEEP goes, a fresher one stays, an emptied tarball directory goes', async () => {
+    const box = makeBox({ registryKeepMs: 10 * H });
+    await box.svc.start();
+    const reg = path.join(box.root, 'registry');
+    const at = (rel: string, ageMs: number): string => {
+      const f = path.join(reg, rel);
+      mkdirSync(path.dirname(f), { recursive: true });
+      writeFileSync(f, 'x');
+      const t = (box.clock.now - ageMs) / 1000;
+      utimesSync(f, t, t);
+      return f;
+    };
+    const stale = [at('packuments/old.json', 10 * H), at('tarballs/old/old-1.0.0.tgz', 10 * H), at('tarballs/mixed/mixed-1.0.0.tgz', 11 * H),
+      at('tarballs/mixed/mixed-1.0.1.tgz.123.tmp', 20 * H)];
+    const fresh = [at('packuments/new.json', 10 * H - 1000), at('tarballs/mixed/mixed-2.0.0.tgz', 0)];
+    await box.svc.tick();
+    for (const f of stale) expect(existsSync(f), f).toBe(false);
+    for (const f of fresh) expect(existsSync(f), f).toBe(true);
+    expect(existsSync(path.join(reg, 'tarballs', 'old')), 'an emptied tarball directory goes').toBe(false);
+    expect(existsSync(path.join(reg, 'tarballs', 'mixed'))).toBe(true);
   });
 });
 

@@ -70,7 +70,7 @@ describe('runs attach to tickets (D-8181)', () => {
 
   it('an older programme (planRequired 0) with no plan opens as today', async () => {
     const w = await world();
-    seedLegacyProgramme(w.coord.db, 'prog-a', 'project-a');
+    seedLegacyProgramme(w.coord.db, 'prog-a', 'project-a', OPEN.claimedBy);
     const res = await open(w);
     expect(res.statusCode, res.body).toBe(200);
     expect(ticketsOf(w)).toEqual([]);
@@ -101,7 +101,7 @@ describe('runs attach to tickets (D-8181)', () => {
 
   it('a named ticket in a programme with no epics (planRequired 0) is ticket-unavailable', async () => {
     const w = await world();
-    seedLegacyProgramme(w.coord.db, 'prog-a', 'project-a');
+    seedLegacyProgramme(w.coord.db, 'prog-a', 'project-a', OPEN.claimedBy);
     expect(refused(await open(w, { ...OPEN, ticket: 't1' }))).toEqual([409, 'ticket-unavailable']);
   });
 

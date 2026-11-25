@@ -208,10 +208,12 @@ not after.
      and a merge of `main` is reviewed like any other change.
    - **Clean:** update the ledger — Waves row, Decisions, Carried constraints,
      and the **Next-wave brief** — commit it, then `POST /api/runs` **for wave N+1
-     first**. Order matters: closing first, even briefly, leaves the program with
-     zero open runs, and the server retires a program with none — silently
-     breaking every `toId:'coordinator'` mail from that point on. Opening first
-     never lets the count reach zero.
+     first**. Order matters: closing first, even briefly, leaves the programme with
+     zero open runs, so it shows Idle, and `toId:'coordinator'` mail with no
+     `runId` resolves only over a programme that shows Active — such mail is
+     refused until the next run is dispatched. Opening first never lets the
+     count reach zero. (Nothing ends a programme at zero runs any more: only the
+     operator's or the Overlord's decision does.)
      **One PR per child decides `sessionId` before the project does:** a
      MARKED child — a workspace carrying the `$REG/<id>.child` marker,
      minted for a run by a box that records it — carries at most one PR, so

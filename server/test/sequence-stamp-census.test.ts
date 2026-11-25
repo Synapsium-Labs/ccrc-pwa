@@ -35,12 +35,13 @@ export const STAMPED_TABLES: Readonly<Record<SequenceKind, StampedTable>> = {
       [`${CS}#setGenerationDue`]: 'the due fields only',
       [`${CS}#advanceObserved`]: 'the accumulator only',
       [`${CS}#setHoldOff`]: 'the hold-off only',
-      [`${CS}#restampOverlordGeneration`]: 'the identity and term, not the state (designation B\'s rebind moves it to the stampers)',
+      [`${CS}#restampOverlordGeneration`]: 'the identity and term, not the state: designation B\'s rebind ends the old body\'s generation through `endOverlordGeneration`, which stamps (slug restamp-stays-identity-only)',
     },
   },
   designation: {
     table: 'overlord_designation',
-    stampers: [`${DS}#designatePending`, `${DS}#goLive`, `${DS}#failPending`, `${DS}#retire`, `${DS}#applyDesignationRestoreInTx`],
+    stampers: [`${DS}#designatePending`, `${DS}#rebindPending`, `${DS}#goLive`, `${DS}#goLiveRebind`, `${DS}#failPending`, `${DS}#retire`,
+      `${DS}#applyDesignationRestoreInTx`],
     nothing: {
       [`${DS}#bindPendingGeneration`]: 'it fills the pending attempt\'s generation once; the state stays pending',
       [`${DS}#stopDone`]: 'the owed-stop list only',

@@ -1377,8 +1377,8 @@ naming the file when it is not that shape. Sixteen are the fleet host's, read fr
 alone, into `~/.ccrc/testbox.env` (D-8166), which ccrc's one reader reads after `ccrc.env` and only for a key `ccrc.env` does not name;
 its lines are read by the same rules as `ccrc.env`'s, so a line it cannot decide refuses that key alone, and a value from it
 reads as `file`. The other
-thirty-one are the test box's own, read on the box from its root-owned `/etc/ccrc-testbox/ccrc.env` alone
-(`deploy/testbox/ccrc.env.example` documents them): `CCRC_TESTBOX_RUNS`, `CCRC_TESTBOX_WORKERS`, `CCRC_TESTBOX_RUN_TMPDIR`, `CCRC_TESTBOX_RUN_MEMORY_MAX`, `CCRC_TESTBOX_RUN_SWAP_MAX`, `CCRC_TESTBOX_RUN_CPU_QUOTA`, `CCRC_TESTBOX_ROOT`, `CCRC_TESTBOX_REPOS`, `CCRC_TESTBOX_FETCH_EVERY`, `CCRC_TESTBOX_RETENTION`, `CCRC_TESTBOX_PRISTINE_KEEP`, `CCRC_TESTBOX_PRISTINE_RETRY`, `CCRC_TESTBOX_REPORT_MAX`, `CCRC_TESTBOX_TOOLS_DIR`, `CCRC_TESTBOX_OS_MIRROR`, `CCRC_TESTBOX_EGRESS_ALLOW`, `CCRC_TESTBOX_PUSH_USER`, `CCRC_TESTBOX_ENV_FORWARD`, `CCRC_TESTBOX_RUN_USER_PREFIX`, `CCRC_TESTBOX_REGISTRY_PROXY`, `CCRC_TESTBOX_REGISTRY_UPSTREAM`, `CCRC_TESTBOX_TMPFS`, `CCRC_TESTBOX_LOG_TAIL`, `CCRC_TESTBOX_SESSION_RUNS`, `CCRC_TESTBOX_SERVICE_USER`, `CCRC_TESTBOX_LISTEN`, `CCRC_TESTBOX_SERVICE_TOKEN_FILE`, `CCRC_TESTBOX_UNIT_MAX`, and the live probes' three (D-8290): `CCRC_TESTBOX_PROBE_CONFIG_DIR`, `CCRC_TESTBOX_PROBE_SOCKET` and `CCRC_TESTBOX_PROBES_PER_DAY`. `ccrc test --testbox-knobs host|box` prints either table, one
+thirty-two are the test box's own, read on the box from its root-owned `/etc/ccrc-testbox/ccrc.env` alone
+(`deploy/testbox/ccrc.env.example` documents them): `CCRC_TESTBOX_RUNS`, `CCRC_TESTBOX_WORKERS`, `CCRC_TESTBOX_RUN_TMPDIR`, `CCRC_TESTBOX_RUN_MEMORY_MAX`, `CCRC_TESTBOX_RUN_SWAP_MAX`, `CCRC_TESTBOX_RUN_CPU_QUOTA`, `CCRC_TESTBOX_ROOT`, `CCRC_TESTBOX_REPOS`, `CCRC_TESTBOX_FETCH_EVERY`, `CCRC_TESTBOX_RETENTION`, `CCRC_TESTBOX_PRISTINE_KEEP`, `CCRC_TESTBOX_PRISTINE_RETRY`, `CCRC_TESTBOX_REPORT_MAX`, `CCRC_TESTBOX_TOOLS_DIR`, `CCRC_TESTBOX_OS_MIRROR`, `CCRC_TESTBOX_EGRESS_ALLOW`, `CCRC_TESTBOX_PUSH_USER`, `CCRC_TESTBOX_ENV_FORWARD`, `CCRC_TESTBOX_RUN_USER_PREFIX`, `CCRC_TESTBOX_REGISTRY_PROXY`, `CCRC_TESTBOX_REGISTRY_UPSTREAM`, `CCRC_TESTBOX_TMPFS`, `CCRC_TESTBOX_LOG_TAIL`, `CCRC_TESTBOX_SESSION_RUNS`, `CCRC_TESTBOX_SERVICE_USER`, `CCRC_TESTBOX_LISTEN`, `CCRC_TESTBOX_SERVICE_TOKEN_FILE`, `CCRC_TESTBOX_UNIT_MAX`, and the live probes' three (D-8290): `CCRC_TESTBOX_PROBE_CONFIG_DIR`, `CCRC_TESTBOX_PROBE_SOCKET` and `CCRC_TESTBOX_PROBES_PER_DAY`, and the registry proxy cache's keep time (D-9007): `CCRC_TESTBOX_REGISTRY_KEEP`. `ccrc test --testbox-knobs host|box` prints either table, one
 line per key, and is how every other reader (the fleet agent's `testbox` op, the test service) gets them.
 One more is read by `ccrc doctor` alone, in `file` mode: `CCRC_CARRY_COPY_WARN_BYTES`, the `carry-copies` check's warn
 bound in bytes (default 10737418240, 10 GiB; see **Swap-carry copies and the dedupe sweep**).
@@ -7534,8 +7534,13 @@ nothing, so the row counts no attempt and records why, and the card says that no
 "sent N times". A failed capture stays untrusted and pushes one notice. Child approvals read the record: a child on a build that is not trusted is refused `version-unverified`, with
 `trust` naming why (`not-captured`, `capture-queued`, `capture-failed`, `unread` or `record-unreadable`). The card lists
 every build with its verdict, under the rest at every width. A failed build carries its replay output behind a disclosure
-and **Capture again** (`POST /api/testbox/builds/capture`, the operator's). The box-side capture runner is not built yet
-(plan `docs/superpowers/plans/2026-11-11-new-build-capture.md`, Open), so every new build stays queued until it lands.
+and **Capture again** (`POST /api/testbox/builds/capture`, the operator's). The box captures a build with no credential,
+no new egress and no model spend (spec `docs/superpowers/specs/2026-11-22-build-capture-runner-design.md`): the build runs
+in a scratch home of its own, through a tmux server of its own, against a scripted stand-in model on the capture's
+loopback, and the replay of what it recorded is the verdict. A box that holds no copy of the build answers `build-absent`;
+the server then copies the fleet host's own copy of that build over the admin lane, checked by hash at both ends, and sends
+the job again, so nothing downloads a build. One capture runs at a time, none starts while the box admits no work (a tool
+sync's takeover or a drain), and a fault of the box is never a failed verdict: the build stays queued.
 
 **The settings.** The fleet host's keys are in `~/.ccrc/ccrc.env`, the box's in its own `/etc/ccrc-testbox/ccrc.env`;
 **ccrc's own settings** names every one, and `deploy/testbox/ccrc.env.example` documents the box's with their defaults.
@@ -8597,7 +8602,14 @@ browser suite there and `test (server)` a red node floor, so either stops the me
 Nothing reaches `main` through the queue without it. The one way around it is a bypass actor's direct merge
 (`gh pr merge --admin`, which the ruleset's admin bypass still allows): the required checks are then satisfied by the
 fast run, so such a merge lands only what the fast run tested. Don't do it here (ccrc's admin-merge door, D-8124, refuses any repository with a merge queue, so it never lands this one); the daily `full-suite` is the next run that
-would catch what it skipped. The **macOS legs** (`test-macos`, `probe-macos`) live in `.github/workflows/macos.yml`: they run on every
+would catch what it skipped. In a queue run, a server shard's deadline is 45 minutes, not 30: a full queue shard
+measured from 15m47 to 29m53 by runner, and a green one was cancelled at 30m00 and its entry removed (D-9014). The long
+jobs of a queue run first ask `.github/ci/queue-live.mjs`, fetched from the default branch, whether their group still
+stands (a job whose leg skips, such as a docs-only group's node floor, skips this step too), and end with exit 1 only
+when the queue branch is gone and the group's commit is not on `main`; an unmeasured read lets the job run, and a job
+already running when its group is superseded runs to its end (D-9015). The growth check measures a queue entry against
+the group's parent commit (`merge_group.base_sha`, when it is an ancestor of HEAD), not the merge base with
+`origin/main`, so a stack is judged entry by entry at the same per-PR limit (D-9016). The **macOS legs** (`test-macos`, `probe-macos`) live in `.github/workflows/macos.yml`: they run on every
 push to `main` (coalesced) and nightly, block no pull request and no queue entry, and a red one is a failing run on
 `main`. A refresh **every three hours** runs no test legs: it re-traces what every merge since the last one affected and
 refreshes the map, and traces nothing when `main` has not moved since the newest map. The **daily** run runs every leg in full, macOS included, ending in `full-suite` — skipped when

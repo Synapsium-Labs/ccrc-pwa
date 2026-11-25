@@ -131,7 +131,8 @@ describe('reclaimChild — the pause, read before any argv', () => {
   it('is read AFTER the sibling re-read: a child an open run still names says siblings-open, paused or not', async () => {
     const f = await fixture();
     f.raise();
-    const next = f.coord.openRun({ program: 'w4-paused-2', title: 'w4-paused-2', project: 'demo', wave: 1, waveOf: null, claimedBy: 'demo-coord' });
+    // R11 (programme lifecycle W1): `demo-coord` still owns the Idle `w4-paused`, so the second programme has its own coordinator.
+    const next = f.coord.openRun({ program: 'w4-paused-2', title: 'w4-paused-2', project: 'demo', wave: 1, waveOf: null, claimedBy: 'demo-coord-2' });
     if (!('id' in next)) throw new Error(`openRun refused: ${JSON.stringify(next)}`);
     f.coord.setSession(next.id, 'demo-a');
     const out = await reclaimChild(f.deps, {
@@ -158,8 +159,9 @@ describe('reclaimChild — the pause, read before any argv', () => {
     if (!('id' in coordinated)) throw new Error(`openRun refused: ${JSON.stringify(coordinated)}`);
     expect(f.coord.closeRun({ runId: coordinated.id, finalState: 'failed', causedBy: 'test',
       handoffCommit: null, program: 'w4-both-a', viaClosing: false }).ok).toBe(true);
+    // R11 (programme lifecycle W1): `demo-coord` still owns the Idle `w4-paused`, so `w4-both-b` has its own coordinator.
     const next = f.coord.openRun({ program: 'w4-both-b', title: 'w4-both-b', project: 'demo',
-      wave: 1, waveOf: null, claimedBy: 'demo-coord' });
+      wave: 1, waveOf: null, claimedBy: 'demo-coord-2' });
     if (!('id' in next)) throw new Error(`openRun refused: ${JSON.stringify(next)}`);
     f.coord.setSession(next.id, 'demo-a');
     const out = await reclaimChild(f.deps, {

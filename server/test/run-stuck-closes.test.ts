@@ -22,6 +22,8 @@ const T = 1_800_000_000_000;
 const H = 3_600_000;
 const D = 24 * H;
 const COORD = 'demo-quiet-mesa';
+/** R11: one coordinator owns one live programme, so a second programme has a coordinator of its own. */
+const COORD_B = 'demo-quiet-dune';
 const ALIVE: ClaimantVerdict = { state: 'alive', why: 'live' };
 const DEAD: ClaimantVerdict = { state: 'dead', cause: 'orphan', why: 'gone' };
 
@@ -43,6 +45,11 @@ const setup = (o: { archived?: boolean } = {}) => {
     branch: `ws/${COORD}`, base: 'origin/main', ...(o.archived === true ? { archived: String((T - 49 * D) / 1000), supervised: String((T - 7200_000) / 1000) } : {}),
   };
   for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${COORD}.${k}`), v);
+  const fieldsB: Record<string, string> = {
+    wrapper: 'claude', project: 'demo', workdir: `/w/${COORD_B}`, uuid: `u-${COORD_B}`, started: '1', workspace: COORD_B,
+    branch: `ws/${COORD_B}`, base: 'origin/main',
+  };
+  for (const [k, v] of Object.entries(fieldsB)) writeFileSync(path.join(reg, `${COORD_B}.${k}`), v);
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const verdicts = createRunVerdicts();
   const clock = { now: T };
@@ -213,9 +220,9 @@ describe('the reader joins two clocks and keeps them apart', () => {
   it('every run the lane lists has a verdict (E1 and E1r)', async () => {
     const s = setup();
     const e1 = s.open('programme-a', 1, 4 * D);
-    const work = s.open('programme-b', 1, 40 * D);
+    const work = s.open('programme-b', 1, 40 * D, { claimedBy: COORD_B });
     s.coord.db.prepare("UPDATE runs SET state = 'done', closedAt = ? WHERE id = ?").run(T - 30 * D, work);
-    const e1r = s.open('programme-b', 1, 30 * D, { kind: 'review', reviews: work });
+    const e1r = s.open('programme-b', 1, 30 * D, { kind: 'review', reviews: work, claimedBy: COORD_B });
     await quietFor48h(s);
     await s.stuck(); await s.lane();
     await passesFor(s, 61 * 60_000);

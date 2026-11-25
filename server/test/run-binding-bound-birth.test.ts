@@ -13,8 +13,12 @@ const OLD = 1_700_000_000_000;
 const BORN = OLD + 5_000_000;
 const store = (): CoordStore =>
   new CoordStore(openCoordDb(path.join(mkTmp('ccrc-bound-birth-'), '.ccrc', 'coord.db')));
-const open = (s: CoordStore, program: string, claimedBy: string, openedAt: number): number => {
-  const id = (s.openRun({ program, title: program, project: 'p', wave: 1, waveOf: null, claimedBy }) as { id: number }).id;
+// Programme lifecycle W1 (R11, D-8993): one coordinator owns one programme, so a claimant's later run is a later WAVE of its
+// own programme, never the first run of a second one. A refused open throws, naming the refusal.
+const open = (s: CoordStore, program: string, claimedBy: string, openedAt: number, wave = 1): number => {
+  const opened = s.openRun({ program, title: program, project: 'p', wave, waveOf: null, claimedBy });
+  if (!('id' in opened)) throw new Error(`fixture openRun refused: ${JSON.stringify(opened)}`);
+  const id = opened.id;
   s.db.prepare('UPDATE runs SET openedAt = ? WHERE id = ?').run(openedAt, id);
   return id;
 };
@@ -33,7 +37,7 @@ describe('the bind records the occupant\'s birth (ARCH-62 slice 4, #1407)', () =
   it('a wave planned before the birth and bound to the live worker is bound: the dup-arm run keeps its parent', () => {
     const s = store();
     const w1 = open(s, 'prog-a', 'coord-1', BORN - 1000);
-    const w2 = open(s, 'prog-b', 'coord-1', BORN - 1000);
+    const w2 = open(s, 'prog-a', 'coord-1', BORN - 1000, 2);
     mint(s, w1, 'demo-w', BORN);
     s.setSession(w2, 'demo-w');
     for (const to of ['dispatched', 'closing', 'done'] as const) s.advance(w1, to, 'coordinator');
@@ -47,7 +51,7 @@ describe('the bind records the occupant\'s birth (ARCH-62 slice 4, #1407)', () =
     const s = store();
     const old = open(s, 'prog-old', 'coord-gone', OLD);
     mint(s, old, 'demo-w', OLD);
-    const wave2 = open(s, 'prog-old2', 'coord-gone', OLD + 1000);
+    const wave2 = open(s, 'prog-old', 'coord-gone', OLD + 1000, 2);
     s.setSession(wave2, 'demo-w');
     // The name is reused: a new occupant is born later, its minting run stamped with the new birth.
     s.db.prepare("UPDATE runs SET state = 'done' WHERE id = ?").run(old);
@@ -72,7 +76,7 @@ describe('the bind records the occupant\'s birth (ARCH-62 slice 4, #1407)', () =
     const s = store();
     const a = open(s, 'prog-a', 'coord-1', OLD);
     mint(s, a, 'demo-w', OLD);
-    const b = open(s, 'prog-b', 'coord-1', OLD + 10);
+    const b = open(s, 'prog-a', 'coord-1', OLD + 10, 2);
     s.setSession(b, 'demo-w', null);
     const cols = () => s.db.prepare('SELECT sessionBornAt, sessionBornFor FROM runs WHERE id = ?').get(b);
     expect(cols()).toEqual({ sessionBornAt: null, sessionBornFor: null });
@@ -86,7 +90,7 @@ describe('the bind records the occupant\'s birth (ARCH-62 slice 4, #1407)', () =
     const s = store();
     const a = open(s, 'prog-a', 'coord-1', OLD);
     mint(s, a, 'demo-w', OLD);
-    const b = open(s, 'prog-b', 'coord-1', OLD + 10);
+    const b = open(s, 'prog-a', 'coord-1', OLD + 10, 2);
     s.setSession(b, 'demo-w');
     s.setSession(b, 'demo-w');
     const born = () => s.db.prepare('SELECT sessionBornAt, sessionBornFor FROM runs WHERE id = ?').get(b);
@@ -104,7 +108,7 @@ describe('the bind records the occupant\'s birth (ARCH-62 slice 4, #1407)', () =
     mint(s, a, 'demo-w', OLD);
     const fresh = open(s, 'prog-new', 'coord-live', BORN + 1000);
     mint(s, fresh, 'demo-w', BORN);
-    const c = open(s, 'prog-c', 'coord-live', BORN + 2000);
+    const c = open(s, 'prog-new', 'coord-live', BORN + 2000, 2);
     s.setSession(c, 'demo-w');
     expect(s.db.prepare('SELECT sessionBornAt FROM runs WHERE id = ?').get(c)).toEqual({ sessionBornAt: BORN });
   });
@@ -115,12 +119,12 @@ describe('the bind records the occupant\'s birth (ARCH-62 slice 4, #1407)', () =
     const s = store();
     const w1 = open(s, 'prog-a', 'coord-1', OLD - 10);
     mint(s, w1, 'demo-w', OLD);
-    const w2 = open(s, 'prog-b', 'coord-1', OLD + 100);
+    const w2 = open(s, 'prog-a', 'coord-1', OLD + 100, 2);
     s.setSession(w2, 'demo-w');
     s.db.prepare("UPDATE runs SET dispatchStartedAt = ?, sessionBornAt = ?, sessionBornFor = 'demo-w' WHERE id = ?")
       .run(OLD + 500, OLD + 500, w2);
     for (const id of [w1, w2]) s.db.prepare("UPDATE runs SET state = 'done' WHERE id = ?").run(id);
-    const w3 = open(s, 'prog-c', 'coord-1', OLD + 1000);
+    const w3 = open(s, 'prog-a', 'coord-1', OLD + 1000, 3);
     s.setSession(w3, 'demo-w');
     expect(s.db.prepare('SELECT sessionBornAt FROM runs WHERE id = ?').get(w3)).toEqual({ sessionBornAt: OLD + 500 });
     const binding = bindingOf(series(s, 'demo-w'), bornIncarnation('demo-w', OLD));
@@ -132,9 +136,9 @@ describe('the bind records the occupant\'s birth (ARCH-62 slice 4, #1407)', () =
     const s = store();
     const a = open(s, 'prog-a', 'coord-1', OLD);
     mint(s, a, 'demo-w', OLD);
-    const adopted = open(s, 'prog-x', 'coord-1', OLD + 1);
+    const adopted = open(s, 'prog-a', 'coord-1', OLD + 1, 2);
     s.setSession(adopted, 'demo-w', BORN);   // dispatchStartedAt is NULL: childBirthOf calls this birth unplaceable
-    const c = open(s, 'prog-c', 'coord-1', BORN + 2000);
+    const c = open(s, 'prog-a', 'coord-1', BORN + 2000, 3);
     s.setSession(c, 'demo-w');
     expect(s.db.prepare('SELECT sessionBornAt FROM runs WHERE id = ?').get(c)).toEqual({ sessionBornAt: OLD });
   });

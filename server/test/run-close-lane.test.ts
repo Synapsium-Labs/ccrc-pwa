@@ -80,8 +80,12 @@ const rig = async (o: Opts = {}) => {
     }),
   });
   const pass = (): Promise<RunCloseOutcome> => runClosePass(deps());
+  // Programme lifecycle W1 (R11): one coordinator owns at most one live programme, so each programme's default claimant is
+  // its own (`programme-a` -> `coord-a`, `programme-0` -> `coord-0`, ...), measured alive unless the test says otherwise.
   const open = (program: string, wave: number, over: { kind?: 'review'; reviews?: number; claimedBy?: string; openedAgo?: number } = {}): number => {
-    const r = coord.openRun({ program, title: `T ${wave}`, project: 'demo', wave, waveOf: null, claimedBy: over.claimedBy ?? 'coord-a',
+    const claimedBy = over.claimedBy ?? `coord-${program.replace(/^programme-/, '')}`;
+    if (over.claimedBy === undefined && !(claimedBy in state.verdicts)) state.verdicts[claimedBy] = ALIVE;
+    const r = coord.openRun({ program, title: `T ${wave}`, project: 'demo', wave, waveOf: null, claimedBy,
       ...(over.kind === undefined ? {} : { kind: over.kind, reviews: over.reviews ?? null }) });
     if (!('id' in r)) throw new Error(`fixture openRun refused: ${JSON.stringify(r)}`);
     coord.db.prepare('UPDATE runs SET openedAt = ? WHERE id = ?').run(T0 - (over.openedAgo ?? 100 * H), r.id);

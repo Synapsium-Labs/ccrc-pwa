@@ -13,8 +13,9 @@ const mk = (): CoordStore => new CoordStore(openCoordDb(path.join(mkTmp('ccrc-re
 const NOW = 1_800_000_000_000;
 const REASON = 'F1 and F3 are real majors and round 3 closed two of five';
 
-const workRun = (s: CoordStore, program = 'prog-a'): number =>
-  (s.openRun({ program, title: 'A', project: 'project-a', wave: 1, waveOf: null, claimedBy: 'lane-a' }) as { id: number }).id;
+// Programme lifecycle W1 (R11): lane-a owns prog-a, so a second work run is its next wave there, never a run in another programme.
+const workRun = (s: CoordStore, wave = 1): number =>
+  (s.openRun({ program: 'prog-a', title: 'A', project: 'project-a', wave, waveOf: null, claimedBy: 'lane-a' }) as { id: number }).id;
 /** One more review round, finished (failed) so the next is not review-in-flight. */
 const round = (s: CoordStore, workId: number): number => {
   const res = s.openRun({ program: 'prog-a', title: 'R', project: 'project-a', wave: 1, waveOf: null, claimedBy: 'lane-a',
@@ -105,7 +106,7 @@ describe('review cap store (D-8125)', () => {
     const res = lift(s, id);
     expect(res).toMatchObject({ ok: true, closedAskAt: NOW - 5 });
     expect(row(s, id)!.askHandledAt).toBe(NOW);
-    const other = workRun(s, 'prog-b'); rounds(s, other, 3);
+    const other = workRun(s, 2); rounds(s, other, 3);
     const res2 = lift(s, other);
     expect(res2).toMatchObject({ ok: true, closedAskAt: null });
     expect(row(s, other)!.askHandledAt).toBeNull();

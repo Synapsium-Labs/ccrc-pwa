@@ -101,9 +101,11 @@ function fixture() {
     }));
   };
   /** A run claimed by the parent, naming the child, and the child's `.child` mark. */
+  // Programme lifecycle W1 (R11): the parent owns one live programme, so each child's run is its next wave there.
+  let waves = 0;
   const dispatch = (child: string): number => {
     const run = coord.openRun({
-      program: `prog-${child}`, title: 'Prog', project: PROJECT, wave: 1, waveOf: null, claimedBy: PARENT, coordProject: PROJECT,
+      program: 'prog-parent', title: 'Prog', project: PROJECT, wave: ++waves, waveOf: null, claimedBy: PARENT, coordProject: PROJECT,
     }) as { id: number };
     coord.setSession(run.id, child);
     writeFileSync(path.join(reg, `${child}.child`), String(run.id));

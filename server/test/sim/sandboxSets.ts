@@ -211,12 +211,42 @@ export function settleCases(m: SandboxModule): Record<string, SuiteCase> {
       expect(m.sandboxSettle(pendingRead(), 7, startRow({ rowIncarnation: 'other' }), failed).kind).toBe('none');
       expect(m.sandboxSettle(pendingRead({ generation: null }), 7, startRow(), held).kind).toBe('none');
     },
-    'no pending row (a settled start resent, a live binding), a rebind and an unreadable row change nothing': () => {
+    'no pending row (a settled start resent, a live binding) and an unreadable row change nothing': () => {
       const live: DesignationRead = { kind: 'designated', sessionId: BODY, term: 1, row: view(null, { sessionId: BODY, generation: GEN }) };
       expect(m.sandboxSettle(live, 7, startRow(), failed).kind).toBe('none');
       expect(m.sandboxSettle({ kind: 'not-designated', row: null }, 7, startRow(), held).kind).toBe('none');
-      expect(m.sandboxSettle(pendingRead({ kind: 'rebind' }), 7, startRow(), failed).kind).toBe('none');
       expect(m.sandboxSettle({ kind: 'unmeasured', why: 'x' }, 7, startRow(), held).kind).toBe('none');
+    },
+    // Designation B: a pending rebind settles as a designate does (sandbox B's slug `settle-acts-on-designate-only-until-rebind`).
+    'a pending rebind settles: go-live on a held report, fail-pending on a failed one': () => {
+      expect(m.sandboxSettle(pendingRead({ kind: 'rebind' }), 7, startRow(), held)).toStrictEqual({ kind: 'go-live', sessionId: BODY, generation: GEN });
+      expect(m.sandboxSettle(pendingRead({ kind: 'rebind' }), 7, startRow(), failed).kind).toBe('fail-pending');
+    },
+  };
+}
+
+/** `settleEvidenceStands`'s cases (review 3366 F4): the same evidence read twice stands; a newer start, another report or
+ *  carry, and a changed designation, each with the rest unchanged, do not. */
+export function settleEvidenceCases(m: SandboxModule): Record<string, SuiteCase> {
+  const e = m.expectedSurfaceOf('overlord', FIXTURE_OWN_LISTS)!;
+  type Evidence = Parameters<SandboxModule['settleEvidenceStands']>[0];
+  const newest: NonNullable<Evidence['newest']> = { start: startRow(), report: heldReport(e), carry: { kind: 'none' } };
+  const ev = (over: Partial<Evidence> = {}): Evidence => ({ designation: pendingRead(), newest, ...over });
+  return {
+    'the same evidence, read again, stands': () => {
+      expect(m.settleEvidenceStands(ev(), ev({ designation: pendingRead(), newest: { ...newest, start: startRow() } }))).toBe(true);
+    },
+    'a newer start, another report, another carry or no start, the designation unchanged, does not stand': () => {
+      expect(m.settleEvidenceStands(ev(), ev({ newest: { ...newest, start: startRow({ id: 8 }) } }))).toBe(false);
+      expect(m.settleEvidenceStands(ev(), ev({ newest: { ...newest, report: heldReport(e, { conflicted: true }) } }))).toBe(false);
+      expect(m.settleEvidenceStands(ev(), ev({ newest: { ...newest, report: null } }))).toBe(false);
+      expect(m.settleEvidenceStands(ev(), ev({ newest: { ...newest, carry: { kind: 'absent' } } }))).toBe(false);
+      expect(m.settleEvidenceStands(ev(), ev({ newest: null }))).toBe(false);
+    },
+    'a designation that changed, the newest start unchanged, does not stand (review 3366 F4)': () => {
+      expect(m.settleEvidenceStands(ev(), ev({ designation: pendingRead({ generation: 'other' }) }))).toBe(false);
+      expect(m.settleEvidenceStands(ev(), ev({ designation: { kind: 'not-designated', row: null } }))).toBe(false);
+      expect(m.settleEvidenceStands(ev(), ev({ designation: { kind: 'unmeasured', why: 'locked' } }))).toBe(false);
     },
   };
 }
@@ -299,16 +329,16 @@ const PROFILE_ENGAGED_SET: MutantSet<SandboxModule> = {
   suite: (mod) => sandboxCases(mod),
 };
 
-/** `sandboxSettle`'s mutants: settle an older start's report, a rebind row or another session's report, go live on a failed
- *  verdict, settle another generation. */
+/** `sandboxSettle`'s mutants: settle an older start's report or another session's report, refuse a rebind row (designation B), go
+ *  live on a failed verdict, settle another generation. */
 const SANDBOX_SETTLE_SET: MutantSet<SandboxModule> = {
   modulePath: MODULE,
   mutants: [
     { id: 'T1', old: '|| newest === null || newest.id !== reportStartId) return', new: '|| newest === null) return' },
-    { id: 'T2', old: "if (p === null || p.kind !== 'designate' || p.sessionId !== newest.sessionId)", new: "if (p === null || p.sessionId !== newest.sessionId)" },
+    { id: 'T2', old: "if (p === null || p.sessionId !== newest.sessionId)", new: "if (p === null || p.kind !== 'designate' || p.sessionId !== newest.sessionId)" },
     { id: 'T3', old: "if (verdict.engaged) return { kind: 'go-live'", new: "if (true) return { kind: 'go-live'" },
     { id: 'T4', old: "if (p.generation === null || p.generation !== newest.rowIncarnation) return { kind: 'none' };", new: "if (p.generation === null) return { kind: 'none' };" },
-    { id: 'T7', old: "|| p.kind !== 'designate' || p.sessionId !== newest.sessionId)", new: "|| p.kind !== 'designate')" },
+    { id: 'T7', old: "if (p === null || p.sessionId !== newest.sessionId)", new: "if (p === null)" },
   ],
   suite: (mod) => settleCases(mod),
 };
@@ -329,9 +359,22 @@ const SKEW_NOTICE_SET: MutantSet<SandboxModule> = {
   suite: (mod) => skewCases(mod),
 };
 
+/** `settleEvidenceStands`'s mutants (review 3366 F4): either half of the check dropped, and the newest start compared by its
+ *  id alone. */
+const SETTLE_EVIDENCE_SET: MutantSet<SandboxModule> = {
+  modulePath: MODULE,
+  mutants: [
+    { id: 'E1', old: ' && JSON.stringify(before.designation) === JSON.stringify(after.designation)', new: '' },
+    { id: 'E2', old: 'JSON.stringify(before.newest) === JSON.stringify(after.newest) && ', new: '' },
+    { id: 'E3', old: 'JSON.stringify(before.newest) === JSON.stringify(after.newest)', new: 'before.newest?.start.id === after.newest?.start.id' },
+  ],
+  suite: (mod) => settleEvidenceCases(mod),
+};
+
 export const SANDBOX_MUTANT_SETS: Readonly<Record<string, MutantSet<SandboxModule>>> = {
   'server/src/continuity/sandboxCheck.ts#sandboxVerdict': SANDBOX_VERDICT_SET,
   'server/src/continuity/sandboxCheck.ts#profileEngagedOf': PROFILE_ENGAGED_SET,
   'server/src/continuity/sandboxCheck.ts#sandboxSettle': SANDBOX_SETTLE_SET,
   'server/src/continuity/sandboxCheck.ts#skewNoticeOf': SKEW_NOTICE_SET,
+  'server/src/continuity/sandboxCheck.ts#settleEvidenceStands': SETTLE_EVIDENCE_SET,
 };
