@@ -9,6 +9,7 @@ import { gatherInvariantInput, type InvariantFactsDeps } from '../src/coord/inva
 import { invariantVerdict, type InvariantInput } from '../src/coord/invariants.js';
 import { tx } from '../src/coord/tx.js';
 import { stampReach } from '../src/coord/pushOutboxStore.js';
+import { designationBaseline, pruneSequenceThrough, sequenceOldest, stampSequenceInTx, type SequenceLineInput } from '../src/coord/overlordSequenceStore.js';
 import { cancelTimer, insertTimer, markTimersFired } from '../src/continuity/continuityStore.js';
 import { packTimerMail } from '../src/continuity/timers.js';
 import { MAIL_SUBJECT_MAX_BYTES } from '../../shared/api.js';
@@ -38,7 +39,7 @@ const NAMES = ['I2', 'I5', 'I7', 'I17'] as const;
 const timer = (db: DatabaseSync, setter: string): number => {
   const r = insertTimer(db, {
     setter, setterIncarnation: '11111111-2222-3333-4444-555555555555', setById: setter, setByUuid: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
-    role: 'worker', note: 'n', runId: null, programme: null, setAt: NOW, dueAt: NOW + 1000,
+    role: 'worker', note: 'n', runId: null, programme: null, setAt: NOW, dueAt: NOW + 1000, setRestoreGeneration: null,
   });
   if (!r.ok) throw new Error('timer insert failed');
   return r.id;
@@ -191,5 +192,78 @@ describe('I7 over the restore rig', () => {
 
     const rolled = invariantVerdict('I7', gatherInvariantInput(depsOf(r.db, { ...over, guardState: () => ({ kind: 'rolled-back', cause: 'trailing' }) })));
     expect(rolled.kind).toBe('unmeasured');
+  });
+});
+
+/** I5 over the sequence store's own kept-line read (call 1240; review 3843 F4 and F9): the baseline is `designationBaseline` as it
+ *  is, below a real prune floor, and the window is what the gatherer reads above it. */
+describe('I5 over the real kept designation line (call 1240)', () => {
+  const line = (db: DatabaseSync, l: Partial<SequenceLineInput>): void => {
+    const r = tx(db, () => stampSequenceInTx(db, { kind: 'ladder-rung', id: 'operator', state: 'chat', actor: 'server', actorKind: 'server', at: NOW, ...l }));
+    if (!r.ok) throw new Error(`stamp refused: ${r.error}`);
+  };
+  const designation = (db: DatabaseSync, id: string, state: string): void => { line(db, { kind: 'designation', id, state }); };
+  const byOverlord = (db: DatabaseSync, actor: string): void => { line(db, { actor, actorKind: 'session' }); };
+  /** The retention lane's prune: everything through `through`, keeping what the store marks keep. */
+  const pruneThrough = (db: DatabaseSync, through: number): void => {
+    const oldest = sequenceOldest(db, 100);
+    if (oldest.kind !== 'measured') throw new Error(oldest.why);
+    expect(pruneSequenceThrough(db, through, oldest.value.filter((l) => l.keep && l.seq <= through).map((l) => l.seq))).toEqual(expect.objectContaining({ pruned: expect.any(Number) }));
+  };
+  const real = (db: DatabaseSync): InvariantFactsDeps => depsOf(db, { designationBaseline });
+
+  it('the kept live line below the floor binds the window: a later line from the bound body holds, one from another is violated', () => {
+    const db = openDb();
+    designation(db, 'overlord-a', 'live');                  // seq 1, kept
+    line(db, {});                                           // seq 2
+    pruneThrough(db, 2);
+    byOverlord(db, 'overlord-a');                           // seq 3: the bound body
+    byOverlord(db, 'overlord-c');                           // seq 4: another session
+    const input = gatherInvariantInput(real(db));
+    expect(input.facts.I5).toMatchObject({ kind: 'measured', value: { baseline: { seq: 1, kind: 'designation', id: 'overlord-a', state: 'live' } } });
+    expect(invariantVerdict('I5', input)).toEqual({
+      kind: 'violated', unmeasured: [],
+      findings: [{ invariant: 'I5', subject: 'seq:4', seq: 4, message: 'a session line from overlord-c while overlord-a is bound' }],
+    });
+    // The read ignored (no baseline): the walk falls back on the designation row, which binds nothing, and reads both lines wrong.
+    expect(invariantVerdict('I5', gatherInvariantInput(depsOf(db)))).toMatchObject({ kind: 'violated', findings: [{ subject: 'seq:3' }, { subject: 'seq:4' }] });
+  });
+
+  it('a designation line after the floor moves the kept line to it: the window lines before it read unmeasured, never holds', () => {
+    const db = openDb();
+    designation(db, 'overlord-a', 'live');                  // seq 1
+    line(db, {});                                           // seq 2
+    pruneThrough(db, 2);
+    byOverlord(db, 'overlord-a');                           // seq 3
+    designation(db, 'overlord-a', 'retired');               // seq 4
+    designation(db, 'overlord-b', 'live');                  // seq 5, now the kept line
+    byOverlord(db, 'overlord-b');                           // seq 6
+    const input = gatherInvariantInput(real(db));
+    expect(input.facts.I5).toMatchObject({ kind: 'measured', value: { baseline: { seq: 5, id: 'overlord-b', state: 'live' } } });
+    expect(invariantVerdict('I5', input)).toEqual({ kind: 'holds-where-measured', unmeasured: [{ subject: 'seq:3', why: 'no designation line before it' }] });
+  });
+
+  it('F9: below the floor live a, retired a, pending b; a later session line from a never reads holds', () => {
+    const db = openDb();
+    designation(db, 'overlord-a', 'live');                  // seq 1
+    designation(db, 'overlord-a', 'retired');               // seq 2
+    designation(db, 'overlord-b', 'pending');               // seq 3, kept: no binding stands
+    pruneThrough(db, 3);
+    byOverlord(db, 'overlord-a');                           // seq 4
+    const input = gatherInvariantInput(real(db));
+    expect(input.facts.I5).toMatchObject({ kind: 'measured', value: { baseline: { seq: 3, id: 'overlord-b', state: 'pending' }, current: { kind: 'none' } } });
+    expect(invariantVerdict('I5', input)).toEqual({
+      kind: 'violated', unmeasured: [],
+      findings: [{ invariant: 'I5', subject: 'seq:4', seq: 4, message: 'a session line from overlord-a while nothing is bound' }],
+    });
+  });
+
+  it('an absent sequence table: the read\'s own unmeasured answer, never folded into a baseline of none', () => {
+    const db = openDb();
+    db.exec('DROP TABLE overlord_sequence');
+    const input = gatherInvariantInput(real(db));
+    expect(input.facts.I5).toMatchObject({ kind: 'unmeasured', why: expect.stringContaining('the kept designation line could not be read: the sequence could not be read') });
+    // The window's own table is gone too, so the row answers not-applicable naming it: never holds.
+    expect(invariantVerdict('I5', input)).toMatchObject({ kind: 'not-applicable' });
   });
 });

@@ -18,6 +18,7 @@ import { raiseLatch } from '../src/coord/overlordLadderRead.js';
 import { ladderRows, raiseLatchInTx, type AuthorityAppender } from '../src/coord/overlordLadderStore.js';
 import { serverActorOf } from '../src/auth/attributionIdentity.js';
 import { tx } from '../src/coord/tx.js';
+import { designationBaseline, pruneSequenceThrough, stampSequenceInTx, type SequenceLineInput } from '../src/coord/overlordSequenceStore.js';
 import { insertTimer, markTimersFired } from '../src/continuity/continuityStore.js';
 import { INVARIANTS_LANE } from '../../shared/lane-arm.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -36,7 +37,7 @@ afterEach(() => { for (const d of opened.splice(0)) { try { d.close(); } catch {
 const timer = (db: DatabaseSync, setter: string): number => {
   const r = insertTimer(db, {
     setter, setterIncarnation: '11111111-2222-3333-4444-555555555555', setById: setter, setByUuid: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
-    role: 'worker', note: 'n', runId: null, programme: null, setAt: NOW, dueAt: NOW + 1000,
+    role: 'worker', note: 'n', runId: null, programme: null, setAt: NOW, dueAt: NOW + 1000, setRestoreGeneration: null,
   });
   if (!r.ok) throw new Error('timer insert failed');
   return r.id;
@@ -179,8 +180,12 @@ describe('InvariantMonitor', () => {
     expect(rows(r.db)).toHaveLength(1);
     expect(count(r.db, 'operator_items')).toBe(1);
     expect(invariantLatches(r.db)).toHaveLength(1);
-    r.monitor.pass(); // a pass that succeeded is remembered: nothing is due now
-    expect(r.st.gathers).toBe(2);
+    // The raise stamped its ladder-latch line (sequence B1), so the head moved past the pass that raised it: one more gather.
+    expect(r.db.prepare("SELECT state FROM overlord_sequence WHERE kind = 'ladder-latch' AND id = 'invariant-violation'").all()).toEqual([{ state: 'raised' }]);
+    r.monitor.pass();
+    expect(r.st.gathers).toBe(3);
+    r.monitor.pass(); // a pass that succeeded is remembered, and the head stands: nothing is due now
+    expect(r.st.gathers).toBe(3);
   });
 
   it('a latch raised with its record lost stands with no finding; the very next pass records the finding against it as standing (F8, F10)', () => {
@@ -396,6 +401,33 @@ describe('invariantMonitorOver: the arming binding over the real Shadow lanes ro
     expect(invariantLatches(o.db)).toHaveLength(1);
     expect(count(o.db, 'operator_items')).toBe(1);
     expect(rows(o.db)[0]).toMatchObject({ mode: 'live', latched: 'raised' });
+  });
+});
+
+describe('invariantMonitorOver: I5 through the sequence store\'s kept-line read (call 1240)', () => {
+  it('passes the read to the gather: a session line from another body under the kept live line is recorded, in shadow', () => {
+    const db = openCoordDb(path.join(mkTmp('ccrc-invariant-i5-'), '.ccrc', 'coord.db'));
+    opened.push(db);
+    const line = (l: Partial<SequenceLineInput>): void => {
+      const r = tx(db, () => stampSequenceInTx(db, { kind: 'ladder-rung', id: 'operator', state: 'chat', actor: 'server', actorKind: 'server', at: NOW, ...l }));
+      if (!r.ok) throw new Error(`stamp refused: ${r.error}`);
+    };
+    line({ kind: 'designation', id: 'overlord-a', state: 'live' });   // seq 1, kept below the floor
+    line({});                                                         // seq 2
+    expect(pruneSequenceThrough(db, 2, [1])).toEqual({ pruned: 1 });
+    line({ actor: 'overlord-c', actorKind: 'session' });             // seq 3
+    const journal = { appendInTx: () => ({ ok: true, kind: 'appended', record: { sequence: 1 } }) } as unknown as AuthorityAppender;
+    const monitor = invariantMonitorOver({
+      db, coord: new CoordStore(db), journal, readJournal: () => ({ kind: 'absent' }), guardState: () => ({ kind: 'coherent' }),
+      designationBaseline, clock: { wall: () => NOW, mono: () => 1000 }, entropy: { hex: (n: number) => '0'.repeat(n * 2) }, log: () => {},
+    });
+    monitor.pass();
+    expect(monitor.last()?.verdicts.get('I5')).toEqual({
+      kind: 'violated', unmeasured: [],
+      findings: [{ invariant: 'I5', subject: 'seq:3', seq: 3, message: 'a session line from overlord-c while overlord-a is bound' }],
+    });
+    expect(rows(db).filter((r) => r.invariant === 'I5')).toEqual([expect.objectContaining({ subject: 'seq:3', mode: 'shadow', latched: null, itemId: null })]);
+    expect(invariantLatches(db)).toEqual([]);
   });
 });
 

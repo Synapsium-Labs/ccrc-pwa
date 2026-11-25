@@ -26,9 +26,9 @@ export interface InvariantFactsDeps {
   readonly readJournal: () => AuthorityFileRead;
   /** The authority guard's state (`OverlordAuthorityGuard.state`). */
   readonly guardState: () => AuthorityState;
-  /** The kept designation line, the window's baseline (the sequence store's `designationBaseline`): the line, none, or unmeasured.
-   *  Absent (a build without that read): I5's facts read unmeasured, never a pass and never a violation. */
-  readonly designationBaseline?: ((db: DatabaseSync) => SequenceRead<SequenceLine | null>) | undefined;
+  /** The kept designation line, the window's baseline: the sequence store's `designationBaseline`, passed as it is (call 1240, the
+   *  one reader of the kept line): the line, none, or unmeasured. Required, so a composition root that drops it does not build. */
+  readonly designationBaseline: (db: DatabaseSync) => SequenceRead<SequenceLine | null>;
 }
 
 const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -76,7 +76,6 @@ function i2Facts(db: DatabaseSync): FactsRead<I2Facts> {
 
 function i5Facts(db: DatabaseSync, baselineOf: InvariantFactsDeps['designationBaseline']): FactsRead<I5Facts> {
   return guarded(db, ['overlord_designation'], () => {
-    if (baselineOf === undefined) return unmeasured('the kept designation line has no reader in this build');
     const baseline = baselineOf(db);
     if (baseline.kind === 'unmeasured') return unmeasured(`the kept designation line could not be read: ${baseline.why}`);
     const d = designationRead(db);

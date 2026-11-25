@@ -66,6 +66,7 @@ describe('the timer day on the real lane (I17)', () => {
 describe('the timer day under the production I17 (D-8214: the live predicate through the simulator adapter; review F15)', () => {
   const I17 = liveInvariant('I17', () => gatherInvariantInput({
     db: timerDayDb()!, readJournal: () => ({ kind: 'absent' }), guardState: () => ({ kind: 'coherent' }),
+    designationBaseline: () => ({ kind: 'measured', value: null }),
   }));
   it('holds on every default seed, read over the day\'s own coord.db', async () => {
     for (const seed of simSeeds(DEFAULTS)) expect((await simulate(timerDay(), seed, [I17])).violations, `seed ${seed}`).toEqual([]);
