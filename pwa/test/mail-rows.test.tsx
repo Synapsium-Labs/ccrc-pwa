@@ -24,6 +24,7 @@ import { REFINED_SET } from '../src/skins/refined/parts';
 import type { SkinSet } from '../src/skins/types';
 import { activityWords, foldToolActivity, type ToolActivityItem } from '../src/session/toolActivity';
 import { expansionMemo } from '../src/session/transcriptRow';
+import { NO_PAGING, type OlderPaging } from '../src/session/olderPages';
 import { sameTranscriptItem } from '../src/session/sameRow';
 import { namesWithoutTheirLabel } from './labelInName';
 
@@ -338,6 +339,58 @@ describe('the exception: the newest card that asks the session shown something s
   });
 });
 
+// ---- 2b. an older page never takes the default (desktop polish wave 179, B1) -----------------------------------------
+describe('an older page\'s question is not the question waiting now (desktop polish wave 179, B1)', () => {
+  const older = (rows: number): OlderPaging => ({ ...NO_PAGING, edge: 'more', next: 'c', rows });
+
+  it('the fold takes the boundary in: only a card on the live side opens by default', () => {
+    const events = [...fetchMail({ kind: 'question', subject: 'old?' }), ...fetchMail({ subject: 'live status' })];
+    const built = buildChatItems(events, []);
+    const cardsOf = (items: ChatItem[]) => items.filter((i): i is Extract<ChatItem, { kind: 'mail' }> => i.kind === 'mail')
+      .map((c) => [c.envelope.subject, c.opens]);
+    // No boundary: the question is the newest that asks, and opens.
+    expect(cardsOf(foldMailRows(built, SELF))).toEqual([['old?', true], ['live status', false]]);
+    // The question is an older page's (the boundary after it): nothing opens.
+    const live = built.findIndex((i) => i.kind === 'mail' && i.envelope.subject === 'live status');
+    expect(cardsOf(foldMailRows(built, SELF, live))).toEqual([['old?', false], ['live status', false]]);
+  });
+
+  for (const [skin, set] of SETS) {
+    const view = (events: ChatEvent[], o?: OlderPaging) => (
+      <SkinSetProvider set={set}><ChatListInner id={SELF} events={events} pending={[]} older={o} onLoadOlder={() => {}} /></SkinSetProvider>
+    );
+    const opened = (): string[] => [...document.querySelectorAll('.mail-card-head')]
+      .filter((h) => h.getAttribute('aria-expanded') === 'true').map((h) => h.getAttribute('aria-label')!.split(',')[0]!);
+    const under = (): string[] => [...document.querySelectorAll('.tool-activity-first[data-attention="mail"] .mail-card-head')]
+      .map((h) => h.getAttribute('aria-label')!.split(',')[0]!);
+
+    it(`${skin}: an older page holding a question changes nothing that is open, and draws nothing under a row`, () => {
+      const page = [user('Earlier.'), ...call('Bash', 'mail inbox'), ...fetchMail({ kind: 'question', subject: 'old?' })];
+      const live = [user('Go.'), ...call('Bash', 'mail inbox'), ...fetchMail({ subject: 'live status' })];
+      const { rerender } = render(view(live, older(0)));
+      expect(opened()).toEqual([]);
+      expect(under()).toEqual([]);
+      rerender(view([...page, ...live], older(page.length)));
+      expect(opened(), 'the older page\'s question took the default').toEqual([]);
+      expect(under(), 'the older page\'s question was drawn under its row').toEqual([]);
+    });
+
+    it(`${skin}: a live question still opens, under its row, with an older page's question above it`, () => {
+      const page = [user('Earlier.'), ...call('Bash', 'mail inbox'), ...fetchMail({ kind: 'question', subject: 'old?' })];
+      const live = [user('Go.'), ...call('Bash', 'mail inbox'), ...fetchMail({ kind: 'question', subject: 'now?' })];
+      const { rerender } = render(view(live, older(0)));
+      expect(under()).toEqual(['Mail from coordinator: now?']);
+      rerender(view([...page, ...live], older(page.length)));
+      expect(opened()).toEqual(['Mail from coordinator: now?']);
+      expect(under()).toEqual(['Mail from coordinator: now?']);
+      // Opened with no older rows held, the same transcript opens the newest question, the live one.
+      cleanup();
+      render(view([...page, ...live]));
+      expect(opened()).toEqual(['Mail from coordinator: now?']);
+    });
+  }
+});
+
 // ---- 3. with the tool stretches -------------------------------------------------------------------------------------
 describe('a fetched card belongs with its fetch: one stretch, and the row counts the messages', () => {
   const stretchOf = (events: ChatEvent[]) =>
@@ -601,12 +654,14 @@ describe('the keyboard and the spoken names', () => {
 
   // WCAG 2.5.3 as storybook-a11y's axe measures it (label-content-name-mismatch): the words a line shows are an
   // unbroken run of its spoken name, so a voice user who says what they see reaches it. Adjacent spans with no space
-  // between them read as one word, and a run's range must say the same word ("to") it speaks.
+  // between them read as one word, and a run's range must say the same word ("to") it speaks. The card's subject ends in
+  // a word, not a question mark (desktop polish wave 179, B6): after a "?" the measure reads the subject and the kind word
+  // as apart with or without the space between them, so a lost space there was not caught.
   it.each(SETS)('%s: every mail line, closed and open, single and a run, holds the words it shows in its name', (_n, set) => {
     const NUDGE = renderMailNudge(SELF);
     const events = [
       user(NUDGE, 1), user(NUDGE, 2), user(NUDGE, 4), say('Reading.', 5),
-      user(NUDGE, 6), say('Fetching.', 7), ...fetchMail({ subject: 'which base should wave 3 absorb?' }, 8),
+      user(NUDGE, 6), say('Fetching.', 7), ...fetchMail({ subject: 'the base for wave 3' }, 8),
     ];
     const { container } = render(<SkinSetProvider set={set}><ChatListInner id={SELF} events={events} pending={[]} /></SkinSetProvider>);
     expect(screen.getAllByRole('button', { name: /^Mail / })).toHaveLength(2); // the run and the single prompt
@@ -648,8 +703,32 @@ describe('the row barrier: a build over the same events is the same row', () => 
     const row = a.findIndex((i) => i.kind === 'tool-activity');
     expect(sameTranscriptItem(a[run]!, b[run]!)).toBe(true);
     expect(sameTranscriptItem(a[row]!, b[row]!)).toBe(true);
-    // A card's default flipping is a new row, so the row draws it.
+    // A newer card in the stretch is a new row: its list of cards differs (this alone pins nothing about a card's own
+    // fields; the case below does).
     const later = foldToolActivity(foldMailRows(buildChatItems([...events, ...fetchMail()], []), SELF), { runs: 'none', wait: NONE, busy: false });
     expect(sameTranscriptItem(a[row]!, later[row]!)).toBe(false);
+  });
+
+  const stretchWithQuestion = () => {
+    const events = [user('Go.'), ...call('Bash', 'mail inbox'), ...fetchMail({ kind: 'question' })];
+    const built = foldToolActivity(foldMailRows(buildChatItems(events, []), SELF), { runs: 'none', wait: NONE, busy: false });
+    const row = built.find((i): i is ToolActivityItem => i.kind === 'tool-activity')!;
+    const card = row.mail[0]!;
+    const withCard = (c: typeof card): ToolActivityItem => ({ ...row, mail: [c] });
+    expect(sameTranscriptItem(card, { ...card })).toBe(true);
+    expect(sameTranscriptItem(row, withCard({ ...card }))).toBe(true);
+    return { row, card, withCard };
+  };
+
+  it('desktop polish wave 179, B4: a card whose default alone (opens) differs is another row, alone and in its stretch', () => {
+    const { row, card, withCard } = stretchWithQuestion();
+    expect(sameTranscriptItem(card, { ...card, opens: !card.opens }), 'a card whose opens alone flipped').toBe(false);
+    expect(sameTranscriptItem(row, withCard({ ...card, opens: !card.opens })), 'a stretch whose card\'s opens alone flipped').toBe(false);
+  });
+
+  it('desktop polish wave 179, B4: a card whose asking alone (asks) differs is another row, alone and in its stretch', () => {
+    const { row, card, withCard } = stretchWithQuestion();
+    expect(sameTranscriptItem(card, { ...card, asks: !card.asks }), 'a card whose asks alone flipped').toBe(false);
+    expect(sameTranscriptItem(row, withCard({ ...card, asks: !card.asks })), 'a stretch whose card\'s asks alone flipped').toBe(false);
   });
 });

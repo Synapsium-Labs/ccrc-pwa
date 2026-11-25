@@ -3,10 +3,11 @@
 //
 // WHAT IT DECIDES, AND NOTHING ELSE. Which user turn is the mail lane's own prompt (`isMailPrompt`); which fetched card
 // opens by default (`opensByDefault`); which prompts read as one run (`foldMailRows`, by `SAYS_NOTHING` and the day
-// rule); and which cards a closed tool stretch draws under its row (`underRow`, what the row draws and what the list
-// prices). What the rows say is `promptWords`, `cardTime` and `askWord`. Drawing them is `MailRow.tsx`'s, and the design
-// system's `MailCard` and `MailPromptLine`. Nothing here changes what the server types, what makes a card, or the order
-// of anything.
+// rule); which cards a closed tool stretch draws under its row (`underRow`, what the row draws and what the list
+// prices); and how many asking cards it holds besides (`hiddenAsks`). What the rows say is `promptWords` and `cardTime`
+// here, and the stretch's count of messages and questions is `toolActivity.ts#activityWords`. Drawing them is
+// `MailRow.tsx`'s, and the design system's `MailCard` and `MailPromptLine`. Nothing here changes what the server types,
+// what makes a card, or the order of anything.
 //
 // L1: pure, no I/O, no React.
 import type { MailEnvelope } from '../../../shared/api';
@@ -79,10 +80,16 @@ export function sameDay(a: MailPromptItem, b: MailPromptItem): boolean {
  *  card's `asks` (`asksOf`) and `opens` (`opensByDefault`, the newest asking card only), and each maximal run of two or
  *  more mail prompts of one day with nothing between them but what `SAYS_NOTHING` lets through folded into one
  *  `mail-prompts` item. A divider between two members goes inside the run; a divider after the last member stays where
- *  it is. Every other item passes through in order. Pure: `items` is not changed. */
-export function foldMailRows(items: readonly ChatItem[], self: string): ChatItem[] {
+ *  it is. Every other item passes through in order. Pure: `items` is not changed.
+ *
+ *  `liveFrom` is the index in `items` of the first item drawn from a live row (`olderPages.ts#liveFromOf`, measured by
+ *  the caller, `ChatList.tsx#itemsOf`; 0 when no older row is held). Only a card from there on can be the newest asking
+ *  card (the coordinator's ruling on review 3795, desktop polish wave 179, B1): a question an older page brings in is not
+ *  the question waiting now, so it never opens by default and is never drawn under its closed stretch's row. It still
+ *  asks (`asks`), so a closed stretch holding it names it. */
+export function foldMailRows(items: readonly ChatItem[], self: string, liveFrom = 0): ChatItem[] {
   let newestAsking = -1;
-  items.forEach((item, i) => { if (item.kind === 'mail' && asksOf(item.envelope, self)) newestAsking = i; });
+  items.forEach((item, i) => { if (i >= liveFrom && item.kind === 'mail' && asksOf(item.envelope, self)) newestAsking = i; });
   const marked = items.map((item, i): ChatItem => {
     if (item.kind !== 'mail') return item;
     const asks = asksOf(item.envelope, self);

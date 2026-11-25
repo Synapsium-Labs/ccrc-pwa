@@ -152,13 +152,15 @@ function transcriptOf(
 }
 
 /** The items a list draws, in this order: the chat items (their keys made unique as they are built), the one divider at a
- *  gap marker, the mail fold (wave 176: `self` is the session shown), the older rows' boundary measured on that folded
- *  list (wave 175), then the tool fold. */
+ *  gap marker, the mail fold (wave 176: `self` is the session shown; it takes the older rows' boundary on the list it
+ *  folds, so an older page's question never opens by default, wave 179 B1), the older rows' boundary measured again on
+ *  that folded list (wave 175), then the tool fold, which takes that second one. */
 function itemsOf(
   set: SkinSet | null, events: ChatEvent[], pending: PendingSend[], busy: boolean, wait: LiveWait, older: OlderPaging,
   self: string,
 ): TranscriptItem[] {
-  const built = foldMailRows(oneDividerAtGap(buildChatItems(events, pending, busy)), self);
+  const items = oneDividerAtGap(buildChatItems(events, pending, busy));
+  const built = foldMailRows(items, self, liveFromOf(items, events, older));
   return transcriptOf(set, built, wait, busy, liveFromOf(built, events, older));
 }
 
