@@ -273,7 +273,7 @@ describe('the operator\'s one notice per provider per outage', () => {
     const sweep = await three(r);
     await sweep(FAIL_AT + MIN);
     expect(outages(r)).toEqual([expect.objectContaining({ sessionId: '', tag: 'provider-outage-anthropic', title: 'Anthropic is returning errors' })]);
-    expect(outages(r)[0]!.body).toContain('3 sessions');
+    expect(outages(r)[0]!.body).toContain('3 or more sessions');
     expect(JSON.parse(readFileSync(markFile(r.home), 'utf8'))).toEqual([{ key: 'anthropic', name: 'Anthropic', since: FAIL_AT + MIN }]);
     await sweep(FAIL_AT + 3 * MIN);
     await sweep(FAIL_AT + 30 * MIN);
@@ -299,6 +299,16 @@ describe('the operator\'s one notice per provider per outage', () => {
     for (const id of [A, B, C]) seedMark(r.home, id, { at: FAIL_AT + 20 * MIN, stopAt: FAIL_AT + 20 * MIN, turnAt: FAIL_AT + 19 * MIN, failAts: [FAIL_AT + 20 * MIN] });
     await sweep(FAIL_AT + 21 * MIN);
     expect(outages(r)).toHaveLength(2);
+  }, 60_000);
+
+  it('a server that stopped between the mark and the push tells the operator when it returns', async () => {
+    const r = await rig();
+    await three(r);
+    mkdirSync(path.join(r.home, '.ccrc'), { recursive: true });
+    writeFileSync(markFile(r.home), JSON.stringify([{ key: 'anthropic', name: 'Anthropic', since: FAIL_AT }]));
+    at(FAIL_AT + MIN);
+    await r.w.sweepStalls([fleetRow(A), fleetRow(B), fleetRow(C)], [], tickOf(A, B, C));
+    expect(outages(r)).toHaveLength(1);
   }, 60_000);
 
   it('two sessions raise nothing, nor do three on three providers', async () => {

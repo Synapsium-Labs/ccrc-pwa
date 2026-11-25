@@ -82,7 +82,7 @@ export class ProviderRetryLane {
     if (!this.armed) return;
     const d = this.deps();
     const standing = this.outages ?? new Map(readOutageMarks(d.cfg.ccrcDir).map((m): [string, ProviderOutage] =>
-      [m.key, { since: m.since, lastOwedAt: now, name: m.name }]));
+      [m.key, { since: m.since, lastOwedAt: now, name: m.name, offered: false }]));
     const step = providerOutageStep(standing, [...this.owing.values()], now);
     this.outages = new Map(step.next);
     if (step.notices.length === 0) return;

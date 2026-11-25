@@ -22,14 +22,20 @@ export function outageProviderOf(lane: string, telemetry: string | undefined): O
 
 /** A session that owes a retry, and when its newest failure was. */
 export interface OwingSession { readonly provider: OutageProvider; readonly at: number }
-/** A standing outage: when it was raised, and when a session last owed a retry on it. */
-export interface ProviderOutage { readonly since: number; readonly lastOwedAt: number; readonly name: string }
+/** A standing outage: when it was raised, when a session last owed a retry on it, and whether this process has offered its
+ *  notice. One resumed from its durable mark has not: the notice is offered once more under its first key, and the lane's
+ *  once-only read drops it when it was archived, so a server that stopped between the mark and the push still tells. */
+export interface ProviderOutage { readonly since: number; readonly lastOwedAt: number; readonly name: string; readonly offered: boolean }
 export type ProviderOutages = ReadonlyMap<string, ProviderOutage>;
 export interface ProviderOutageNotice {
   readonly mode: 'push' | 'record-only'; readonly key: string; readonly dedupeKey: string; readonly title: string; readonly body: string;
 }
 
 const minutes = (ms: number): string => `${ms / 60_000} minutes`;
+const raised = (key: string, o: Pick<ProviderOutage, 'since' | 'name'>): ProviderOutageNotice => ({
+  mode: 'push', key, dedupeKey: `provider-outage:${key}:${o.since}`, title: `${o.name} is returning errors`,
+  body: `${PROVIDER_OUTAGE_SESSIONS} or more sessions stopped on a provider error within ${minutes(PROVIDER_OUTAGE_WINDOW_MS)}. ccrc tells each one to continue until it can, so there is nothing for you to do.`,
+});
 
 /** One pass: the next set of standing outages, and the notices it makes due, in key order. */
 export function providerOutageStep(standing: ProviderOutages, owing: readonly OwingSession[], now: number):
@@ -41,8 +47,9 @@ export function providerOutageStep(standing: ProviderOutages, owing: readonly Ow
     const here = owing.filter((o) => o.provider.key === key);
     const was = standing.get(key);
     if (was !== undefined) {
-      if (here.length > 0) next.set(key, { ...was, lastOwedAt: now });
-      else if (now - was.lastOwedAt < PROVIDER_OUTAGE_CLEAR_MS) next.set(key, was);
+      if (!was.offered) notices.push(raised(key, was));
+      if (here.length > 0) next.set(key, { ...was, lastOwedAt: now, offered: true });
+      else if (now - was.lastOwedAt < PROVIDER_OUTAGE_CLEAR_MS) next.set(key, { ...was, offered: true });
       else {
         notices.push({ mode: 'record-only', key, dedupeKey: `provider-outage:${key}:${was.since}:clear`, title: `${was.name} errors have stopped`,
           body: `No session has been waiting on a provider error for ${minutes(PROVIDER_OUTAGE_CLEAR_MS)}.` });
@@ -52,9 +59,8 @@ export function providerOutageStep(standing: ProviderOutages, owing: readonly Ow
     const recent = here.filter((o) => now - o.at <= PROVIDER_OUTAGE_WINDOW_MS);
     if (recent.length < PROVIDER_OUTAGE_SESSIONS) continue;
     const name = recent[0]!.provider.name;
-    next.set(key, { since: now, lastOwedAt: now, name });
-    notices.push({ mode: 'push', key, dedupeKey: `provider-outage:${key}:${now}`, title: `${name} is returning errors`,
-      body: `${recent.length} sessions stopped on a provider error in the last ${minutes(PROVIDER_OUTAGE_WINDOW_MS)}. ccrc tells each one to continue until it can, so there is nothing for you to do.` });
+    next.set(key, { since: now, lastOwedAt: now, name, offered: true });
+    notices.push(raised(key, { since: now, name }));
   }
   return { next, notices };
 }

@@ -32,8 +32,8 @@ describe('raised', () => {
     expect(step(NONE, owe(2)).notices).toEqual([]);
     const r = step(NONE, owe(3));
     expect(r.notices).toEqual([{ mode: 'push', key: 'anthropic', dedupeKey: `provider-outage:anthropic:${NOW}`, title: 'Anthropic is returning errors',
-      body: '3 sessions stopped on a provider error in the last 10 minutes. ccrc tells each one to continue until it can, so there is nothing for you to do.' }]);
-    expect(r.next).toEqual(new Map([['anthropic', { since: NOW, lastOwedAt: NOW, name: 'Anthropic' }]]));
+      body: '3 or more sessions stopped on a provider error within 10 minutes. ccrc tells each one to continue until it can, so there is nothing for you to do.' }]);
+    expect(r.next).toEqual(new Map([['anthropic', { since: NOW, lastOwedAt: NOW, name: 'Anthropic', offered: true }]]));
   });
   it('only failures inside the window count', () => {
     expect(step(NONE, [...owe(2), ...owe(1, NOW - PROVIDER_OUTAGE_WINDOW_MS)]).notices).toHaveLength(1);
@@ -47,7 +47,7 @@ describe('raised', () => {
 });
 
 describe('standing and cleared', () => {
-  const standing: ProviderOutages = new Map([['anthropic', { since: NOW, lastOwedAt: NOW, name: 'Anthropic' }]]);
+  const standing: ProviderOutages = new Map([['anthropic', { since: NOW, lastOwedAt: NOW, name: 'Anthropic', offered: true }]]);
   it('never raised twice while it stands, and one owing session keeps it', () => {
     const r = step(standing, owe(5), NOW + 5 * MIN);
     expect(r.notices).toEqual([]);
@@ -59,6 +59,16 @@ describe('standing and cleared', () => {
     expect(r.next.size).toBe(0);
     expect(r.notices).toEqual([{ mode: 'record-only', key: 'anthropic', dedupeKey: `provider-outage:anthropic:${NOW}:clear`, title: 'Anthropic errors have stopped',
       body: 'No session has been waiting on a provider error for 10 minutes.' }]);
+  });
+});
+
+describe('resumed after a restart', () => {
+  it('its notice is offered once more under its first key, for the once-only read to drop, and then never again', () => {
+    const resumed: ProviderOutages = new Map([['anthropic', { since: NOW, lastOwedAt: NOW + MIN, name: 'Anthropic', offered: false }]]);
+    const r = step(resumed, owe(1), NOW + MIN);
+    expect(r.notices.map((n) => [n.mode, n.dedupeKey])).toEqual([['push', `provider-outage:anthropic:${NOW}`]]);
+    expect(step(r.next, owe(1), NOW + 2 * MIN).notices).toEqual([]);
+    expect(step(resumed, [], NOW + MIN).next.get('anthropic')!.offered).toBe(true);
   });
 });
 
