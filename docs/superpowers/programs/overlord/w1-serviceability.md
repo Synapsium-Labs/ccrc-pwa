@@ -12,7 +12,8 @@ against `main` at `b33a9ae137`. The coordinator mints the numbers; each departur
   `poolRunway`, and the read's helpers `runwayPoolKeys`, `runwayPools` and `runwayByPool`.
 - `server/src/accountLoad.ts` (L1): `overlordLoadCandidates`, `loadLines`, `classUnservableReading`,
   `accountLoadMoveReading`, the ladder's `loadLineReading` and `loadFactsOf`.
-- `limit_samples` (migration 121) behind `server/src/coord/limitSamplesStore.ts` (L3), with three `CoordStore` delegates.
+- `limit_samples` (migration 126 on the first named base) behind `server/src/coord/limitSamplesStore.ts` (L3), with three
+  `CoordStore` delegates.
 - `server/src/limitSampler.ts`: the pass, run by the new `limitSamples` lane row every five minutes over the listed tick's own
   reading.
 - `GET /api/pools/runway` in `server/src/poolRunwayRoute.ts` (L4): each pool's `PoolRunwayAnswer`, masked.
@@ -161,8 +162,9 @@ not behavior changes in this round.
 - The 95% row's notice is `none`. An unmeasured line caps at `chat` by the ladder's rule (F3), and nobody designated lifts it.
 - Behaviour at merge: the sampler writes rows every five minutes, at most one per Anthropic account per reading; nothing reads
   them but the runway read; the 95% row reads `lifted` until an Overlord exists.
-- Migration 121 was provisional in the first fix round. Main subsequently used it for `coordinator_state.capMode`; the
-  serviceability migration and its pins must move to the next slot on the coordinator's named landing base.
+- Migration 121 was provisional in the first fix round. Main subsequently used it for `coordinator_state.capMode`. On the
+  first named base (`7e1f9752fe`), sequence retention is 125 and the samples migration and both database test pins move to
+  126. Re-check that position against the final named landing base.
 - Load-sensitive suites, measured rather than labelled: the three `coord-db` cases review 3330 saw time out (the delegation
   tables' "a failure at ANY statement", portfolio B's and the programme phases' "reaches a database ALREADY at the version
   before it") time out the same way at the merge base `b33a9ae137` (about 170 s, 28 s and 25 s there, 173 s, 26 s and 24 s on
