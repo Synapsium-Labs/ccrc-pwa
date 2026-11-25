@@ -6,7 +6,7 @@
 // the virtual list unmounting the row and live rows arriving, and it ends with the session view (a reload starts
 // fresh). A row draws the reader's choice when they made one, else its default (`openOf`), so a card that opens by
 // default and that the reader closed stays closed, and a card stops opening by default once newer mail arrives below.
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { MailCard, MailPromptLine, MailPromptText } from '@ccrc/ui';
 import type { ChatItem } from './chatItems';
@@ -15,10 +15,18 @@ import { expansionMemo, type ExpansionMemo } from './transcriptRow';
 
 type MailRowItem = Extract<ChatItem, { kind: 'mail' | 'mail-prompt' | 'mail-prompts' }>;
 
-/** The row's open state, read from the memo and written back to it on a toggle. */
+/** The row's open state, read from the memo and written back to it on a toggle.
+ *
+ *  DRAWN OPEN ONCE, OPEN FOR THE VIEW. A card drawn open by default records that as its choice, so when newer mail
+ *  arrives and the default moves on, the card the reader saw open stays open and nothing above them changes size: the
+ *  list does not hold the reader's place over a change that comes with a new item at the end (`footFollow.ts#heightMove`,
+ *  which this wave does not touch), so a card closing then would move every row below it. */
 function useOpen(item: MailRowItem, memo: ExpansionMemo): [boolean, () => void] {
   const [, redraw] = useState(0);
   const open = openOf((k) => memo.choice(k), item);
+  useEffect(() => {
+    if (open && memo.choice(item.key) === undefined) memo.set(item.key, true);
+  }, [open, memo, item.key]);
   const toggle = (): void => {
     memo.set(item.key, !open);
     redraw((n) => n + 1);

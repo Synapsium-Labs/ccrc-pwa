@@ -10,7 +10,7 @@ import type { ReactNode } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import type { ChatEvent } from '../../../shared/api';
 import { splitClipPaths } from '../../../shared/api';
-import { MailCard, TaskCard, ToolCard, askCardLines } from '@ccrc/ui';
+import { TaskCard, ToolCard, askCardLines } from '@ccrc/ui';
 import { RenderBoundary } from '../components/RenderBoundary';
 import { MsgPlain } from '../lib/markdown';
 import { onPageHidden } from '../lib/pageClock';
@@ -19,6 +19,8 @@ import type { SkinSet } from '../skins/types';
 import type { PendingSend } from '../stores/session';
 import { MessageBubble, foldsAway, type MessageEvent } from './MessageBubble';
 import { buildChatItems, type ChatItem } from './chatItems';
+import { MailRow } from './MailRows';
+import { foldMailRows } from './mailRows';
 import {
   FALLBACK_ITEM_HEIGHT, NOMINAL_MEASURES, modelsOf, nominalLines, openingHeight, plainLines, rememberRows,
   rememberedRows, rowHeights, rowId, wellLines,
@@ -61,6 +63,7 @@ function ChatItemBody({
   onAnswer,
   day,
   settled,
+  expansion,
 }: {
   item: ChatItem;
   /** Session id — threaded down to clip thumbnails (`clipUrl(id, name)`). */
@@ -78,6 +81,8 @@ function ChatItemBody({
   onAnswer?: () => void;
   /** The viewer's local day (`lib/clock.ts#dayKey`): a row whose words read the clock draws again when it changes. */
   day?: string;
+  /** The list's open rows (`ExpansionMemo`), which a mail row reads and writes (desktop polish wave 176). */
+  expansion?: ExpansionMemo;
 }): ReactNode {
   switch (item.kind) {
     case 'divider':
@@ -92,7 +97,9 @@ function ChatItemBody({
         />
       );
     case 'mail':
-      return <MailCard envelope={item.envelope} />;
+    case 'mail-prompt':
+    case 'mail-prompts':
+      return <MailRow item={item} expansion={expansion} />;
     case 'task':
       return <TaskCard notification={item.notification} />;
     case 'pending':
@@ -166,7 +173,7 @@ function TranscriptRowView({
   const inner = item.kind === 'tool-activity' ? rowScope(item) : scope;
   const renderItem = (it: ChatItem): ReactNode => (
     <ChatItemView
-      {...rest} item={it} settled={inner?.past === true}
+      {...rest} item={it} settled={inner?.past === true} expansion={expansion}
       askPending={inner === undefined ? rest.askPending : rest.askPending === true && it.key === inner.asked}
     />
   );
@@ -237,7 +244,7 @@ export function ChatListInner({
   day,
 }: ChatListProps): ReactNode {
   const set = useFrameSet();
-  const items = transcriptOf(set, buildChatItems(events, pending, busy), waitOf(askWait, askPending === true), busy);
+  const items = transcriptOf(set, foldMailRows(buildChatItems(events, pending, busy), id), waitOf(askWait, askPending === true), busy);
   // The reader's open rows, for as long as this session's view is open.
   const expansion = useExpansionMemo(id);
   return (
@@ -324,7 +331,8 @@ export function shapeOf(item: TranscriptItem, m: Measures = NOMINAL_MEASURES): R
     case 'tool-activity': {
       const first = item.attention[0];
       const card = first === undefined ? 0 : shapeOf(first.entry, m).lines;
-      return { bucket: 'activity', lines: 1 + (item.waiting ? 1 : 0) + card };
+      const mail = item.surfaced === null ? 0 : shapeOf(item.surfaced, m).lines;
+      return { bucket: 'activity', lines: 1 + (item.waiting ? 1 : 0) + card + mail };
     }
     case 'message': return messageShape(item.event, m);
     case 'tool': {
@@ -332,8 +340,14 @@ export function shapeOf(item: TranscriptItem, m: Measures = NOMINAL_MEASURES): R
       return { bucket: 'tool', lines: ask === null ? 1 : ask.reduce((n, row) => n + plainLines(row, m.prose), 0) };
     }
     case 'mail':
-      // Sender row, meta row, one row per artifact path, then the body's well.
-      return { bucket: 'mail', lines: 2 + item.envelope.artifacts.length + wellLines(item.envelope.body) };
+      // Closed, one line (desktop polish wave 176). Open by default: the head line, the sender row, the meta row, one row
+      // per artifact path, then the body's well; a card the reader opened is never sampled (`inOpeningForm`).
+      return item.opens
+        ? { bucket: 'mail', lines: 3 + item.envelope.artifacts.length + wellLines(item.envelope.body) }
+        : { bucket: 'mail-line', lines: 1 };
+    case 'mail-prompt':
+    case 'mail-prompts':
+      return { bucket: 'mail-line', lines: 1 };
     case 'task':
       // The summary row, and the "n more" toggle when there are details — closed.
       return { bucket: 'task', lines: item.notification.fields.length > 0 ? 2 : 1 };
@@ -769,8 +783,8 @@ function ChatScroller({
   const wait = waitOf(askWait, askPending === true);
   const waitIs = waitKey(wait);
   const items = useMemo(
-    () => transcriptOf(set, buildChatItems(events, pending, busy), wait, busy),
-    [events, pending, busy, set, waitIs], // `wait` is read through its key
+    () => transcriptOf(set, foldMailRows(buildChatItems(events, pending, busy), id), wait, busy),
+    [events, pending, busy, set, waitIs, id], // `wait` is read through its key
   );
   // The reader's open tool-activity rows, for as long as this session's view is open: the list's, not a row's, because
   // virtuoso unmounts a row scrolled out of reach.

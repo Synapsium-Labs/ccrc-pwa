@@ -28,6 +28,7 @@
 import { askQuestions } from '@ccrc/ui';
 import type { AskSource } from './askLive';
 import type { ChatItem } from './chatItems';
+import { NO_CHOICE, surfacedOf } from './mailRows';
 import { groupToolRun, toolSummary, type RunItem } from './toolSummary';
 
 type ToolItem = Extract<ChatItem, { kind: 'tool' }>;
@@ -50,7 +51,8 @@ export interface ToolActivityItem {
   entries: ToolItem[];
   /** The fetched mail cards the stretch holds, in transcript order (`joinsStretch`). */
   mail: MailItem[];
-  /** The card of `mail` that opens by default (`MailItem.opens`), drawn under the closed row, or null. */
+  /** The card of `mail` drawn under the closed row when no choice is recorded (`surfacedOf`): what the list prices. The
+   *  row draws `surfacedOf` with the list's memo. */
   surfaced: MailItem | null;
   /** What the row shows expanded: the entries under the skin's own grouping, in order. */
   inner: RunItem[];
@@ -182,7 +184,7 @@ export function foldToolActivity(items: readonly ChatItem[], fold: ActivityFold)
       key: `activity-${first.key}`,
       entries: stretch,
       mail,
-      surfaced: mail.find((m) => m.opens) ?? null,
+      surfaced: surfacedOf(mail, NO_CHOICE),
       inner: fold.runs === 'tool-runs' ? groupToolRun(members) : [...members],
       live: fold.busy && current && stretch.some((e) => e.result == null),
       latest: toolSummary(last).sentence,

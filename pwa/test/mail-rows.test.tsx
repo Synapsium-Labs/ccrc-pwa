@@ -22,6 +22,7 @@ import { REFINED_SET } from '../src/skins/refined/parts';
 import type { SkinSet } from '../src/skins/types';
 import { activityWords, foldToolActivity, type ToolActivityItem } from '../src/session/toolActivity';
 import { expansionMemo } from '../src/session/transcriptRow';
+import { sameTranscriptItem } from '../src/session/sameRow';
 
 afterEach(cleanup);
 
@@ -102,6 +103,8 @@ describe('the mail prompt: the shared head at the start of the turn, and nothing
   }
 
   it('only a user turn: the session quoting the prompt in its own reply is its own words', () => {
+    expect(isMailPrompt(say(renderMailNudge(SELF)) as Extract<ChatEvent, { kind: 'assistant' }>)).toBe(false);
+    expect(isMailPrompt({ kind: 'system', uuid: 's', ts: TS(0), text: renderMailNudge(SELF) })).toBe(false);
     expect(kinds(buildChatItems([say(renderMailNudge(SELF))], []))).toEqual(['divider', 'message']);
   });
 
@@ -201,6 +204,29 @@ describe('the exception: the newest card that asks the session shown something s
     expect(shapeOf(cards[0]!)).toEqual({ bucket: 'mail-line', lines: 1 });
     expect(shapeOf(cards[1]!).bucket).toBe('mail');
   });
+
+  it('a question drawn open stays open when newer mail arrives below it, so nothing above the reader shrinks', () => {
+    const asked = fetchMail({ kind: 'question', subject: 'which base?' });
+    const { rerender } = render(<ChatListInner id={SELF} events={asked} pending={[]} />);
+    rerender(<ChatListInner id={SELF} events={[...asked, ...fetchMail({ subject: 'later' })]} pending={[]} />);
+    expect(screen.getByRole('button', { name: /^Mail from coordinator: which base\?/ })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: /^Mail from coordinator: later/ })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  for (const [skin, set] of SETS) {
+    it(`${skin}: under a closed row, a question drawn there stays there when newer mail arrives`, () => {
+      const asked = [user('Go.'), ...call('Bash', 'mail inbox'), ...fetchMail({ kind: 'question', subject: 'which?' })];
+      const view = (events: ChatEvent[]) => (
+        <SkinSetProvider set={set}><ChatListInner id={SELF} events={events} pending={[]} /></SkinSetProvider>
+      );
+      const { rerender } = render(view(asked));
+      rerender(view([...asked, say('Asking the operator.'), ...fetchMail({ subject: 'later' })]));
+      const under = document.querySelectorAll('.tool-activity-first[data-attention="mail"] .mail-card-head');
+      expect(under).toHaveLength(1);
+      expect(under[0]).toHaveAttribute('aria-expanded', 'true');
+      expect(under[0]!.getAttribute('aria-label')).toMatch(/^Mail from coordinator: which\?/);
+    });
+  }
 
   it('a card the reader closed stays closed, though it opens by default', () => {
     const memo = expansionMemo();
@@ -393,5 +419,22 @@ describe('the keyboard and the spoken names', () => {
       expect(document.activeElement).toBe(b);
       expect(b.tabIndex).toBe(0);
     }
+  });
+});
+
+// ---- 7. the row barrier ---------------------------------------------------------------------------------------------
+describe('the row barrier: a build over the same events is the same row', () => {
+  it('a run of prompts, and a stretch holding a card, compared by their lists', () => {
+    const NUDGE = renderMailNudge(SELF);
+    const events = [user(NUDGE), user(NUDGE), user('Go.'), ...call('Bash', 'mail inbox'), ...fetchMail({ kind: 'question' })];
+    const build = () => foldToolActivity(foldMailRows(buildChatItems(events, []), SELF), { runs: 'none', wait: NONE, busy: false });
+    const [a, b] = [build(), build()];
+    const run = a.findIndex((i) => i.kind === 'mail-prompts');
+    const row = a.findIndex((i) => i.kind === 'tool-activity');
+    expect(sameTranscriptItem(a[run]!, b[run]!)).toBe(true);
+    expect(sameTranscriptItem(a[row]!, b[row]!)).toBe(true);
+    // A card's default flipping is a new row, so the row draws it.
+    const later = foldToolActivity(foldMailRows(buildChatItems([...events, ...fetchMail()], []), SELF), { runs: 'none', wait: NONE, busy: false });
+    expect(sameTranscriptItem(a[row]!, later[row]!)).toBe(false);
   });
 });

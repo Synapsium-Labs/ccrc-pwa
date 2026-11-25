@@ -15,6 +15,7 @@
 import { useId, useState } from 'react';
 import type { ReactNode } from 'react';
 import { FOCUS_RING } from '@ccrc/ui';
+import { surfacedOf } from './mailRows';
 import { activityWords, waitControlWord, waitWord, type ToolActivityItem } from './toolActivity';
 import { useTranscriptRow } from './transcriptRow';
 
@@ -30,6 +31,7 @@ export function ToolActivityRow({ item }: { item: ToolActivityItem }): ReactNode
   const bodyId = useId();
   const words = activityWords(item);
   const first = item.attention[0];
+  const surfaced = surfacedOf(item.mail, (k) => expansion.choice(k));
   const toggle = (): void => {
     const next = !open;
     expansion.set(item.key, next);
@@ -88,10 +90,11 @@ export function ToolActivityRow({ item }: { item: ToolActivityItem }): ReactNode
       {!open && first !== undefined && (
         <div className="tool-activity-first" data-attention={first.kind}>{renderItem(first.entry)}</div>
       )}
-      {/* Closed, a mail card that opens by default (the newest, asking the session shown) is drawn under it too, so a
-          question is never hidden behind a tap (desktop polish wave 176). Opened, it is in the body, in order. */}
-      {!open && item.surfaced !== null && (
-        <div className="tool-activity-first" data-attention="mail">{renderItem(item.surfaced)}</div>
+      {/* Closed, a mail card that opens by default (the newest, asking the session shown), or one already drawn here or
+          chosen, is drawn under it too, so a question is never hidden behind a tap (desktop polish wave 176). Opened, it
+          is in the body, in order. */}
+      {!open && surfaced !== null && (
+        <div className="tool-activity-first" data-attention="mail">{renderItem(surfaced)}</div>
       )}
       {open && (
         <div id={bodyId} className="tool-activity-body">
