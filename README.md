@@ -2797,8 +2797,10 @@ its own `resetAt` — and `_limit_score` answers `""` unless both windows are me
 declares `fiveWindowMinutes: 0` is scored on `seven` alone). `_ws_least_loaded` skips an account with no
 score, and falls back only when nothing was scored: to the first eligible account the roster says can report
 (`telemetry: "anthropic"`), then to the first eligible account at all, and — only when the health probe has
-condemned every eligible lane — to the first auth-dead one. `_swap_target` ranks an unscored candidate at
-`100`, below every scored one, a lane whose provider is failing (`~/.cc-sessions/<id>-provfail`, below) at `101`, and an
+condemned every eligible lane — to the first auth-dead one. A lane whose provider is failing
+(`~/.cc-sessions/<id>-provfail`, below) is left out of all of that until no unmarked lane with a live credential is
+eligible; then the same rule runs over the marked ones, so it is tried last and never refused. `_swap_target` ranks an unscored candidate at
+`100`, below every scored one, a lane whose provider is failing at `101`, and an
 auth-dead one at `102`, below that. So an account nobody has heard from
 in a week takes work only when nothing measured can, and the server's `projectHome` forecasts the same
 tiers (with one difference: it scores a `telemetry: "codex"` lane, which ccd's placement leaves out of its
@@ -2825,7 +2827,7 @@ turns with errors is a third file, `~/.cc-sessions/<id>-provfail` (`"<epoch> <wo
 limit watchdog's pass when three consecutive provider failures of one session, or a fresh owed one of each of two, stand on
 that lane with no newer good Stop there. It ends at a newer good Stop and means nothing 30 minutes after it was written. An
 automatic move does not return a session to a home that is marked and ranks a marked lane behind every other but an auth-dead
-one, never ineligible; `ccd swap`, `ccd swap-self` and `ccd prefer` never read it. The probe is
+one, never ineligible, and a new workspace is placed on one only when no other lane can take it; `ccd swap`, `ccd swap-self` and `ccd prefer` never read it. The probe is
 described under "Account health and the telemetry keepalive" below; `ccrc account check` is how you measure a
 `login` lane.
 

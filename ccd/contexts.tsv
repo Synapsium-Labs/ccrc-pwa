@@ -606,6 +606,7 @@ _provfail_holds_home	C1
 _provfail_pass	C1
 _lane_provider_to	C1
 _provider_move_rank_to	C1
+_provider_move_fits	C1
 cmd_limit_watchdog	C1
 _hold_is_programme	C4
 _hib_hold_ok	C4
