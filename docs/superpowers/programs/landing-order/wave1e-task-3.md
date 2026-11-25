@@ -15,6 +15,23 @@ Plan: `docs/superpowers/plans/2026-11-25-landing-order-wave1e-browser-shards.md`
   three shards' tests skip" is about the pwa shards, which stay three, and is left as it is.
 - `pwa/test/browser-leg.test.ts` names no count and no file this wave moves: unchanged.
 
+## The amendment: the limit becomes 30 (D-9055)
+
+The coordinator amended the wave after dispatch (mail of 2026-11-25, `browser-shard-deadline`). At 04:18Z a third
+green browser shard was cancelled at its 20-minute limit on a slow runner (run 45543535717, job 138967552810): its 15
+finished files, all green, ran at a median of 1.25 times their times in run 45527962041 (at most 1.54), about 1.7 times
+a fast runner's run of the same shard, while the run's other two shards took 14:29 and 13:14. Four shards fix the
+heavy shard; nothing fixes a slow runner, and at 1.7 times a balanced shard of four stands about three minutes under
+20.
+
+- `ci.yml`, job `browser-pwa`: `timeout-minutes: 30`, and a paragraph after this wave's `FOUR SHARDS (D-9026)` one,
+  `THE LIMIT IS 30 (D-9055)`, which says it overrules D-8167's sentence that the limit is never raised, gives the times
+  above, what a shard expects (about eleven minutes) and what the limit is for (a wedged job, with room for a runner at
+  about twice the usual time). D-8167's paragraph stays as history. No other job's limit moved.
+- `ci-pipeline.test.ts`: the case's title says `a 30-minute deadline (D-7746, D-9055)`, it expects `'30'`, and its
+  comments say why.
+- D-9026's plan text still says the limit stays 20; the coordinator corrects the plan on its ledger pull request.
+
 ## Simulation
 
 The sequencer's own rule, written out: `balancedShard` places files longest first onto the least-loaded shard by
@@ -32,7 +49,7 @@ The sequencer's own rule, written out: `balancedShard` places files longest firs
 Each shard holds about 1,970 s of file time at four. The plan's figures (878 s; 870, 657, 658 and 659 s; 658 to
 659 s) are reproduced. On the other night run's times, whose linking file took half as long, the placement still
 holds every shard at 660 s or under. About 660 s is eleven minutes, about twelve with the job's setup, under the
-deadline of 20.
+limit, now 30 (D-9055).
 
 ## Step 4
 
@@ -48,12 +65,14 @@ command run, the file restored from the copy and its sha256 compared. Commands r
 
 | id | mutation | command | red | restored sha256 (equal before and after) |
 |---|---|---|---|---|
-| 1E-01 | `total: [4]` becomes `total: [3]` in `browser-pwa` | `test/ci-pipeline.test.ts` from `server/` | the shard-count case: `expected [ 1, 2, 3, 4 ] to deeply equal [ 1, 2, 3 ]` (its 1..total check comes first) | `ci.yml` 599847c300b735f4100663105f437a6089da5527ad1f9f768e4cb4e2fb94661b |
-| 1E-01b | both lists back to three, `shard: [1, 2, 3]` and `total: [3]` | the same | the same case: `the browser leg runs as four shards (D-9026): expected 3 to be 4` | `ci.yml` 599847c300b735f4100663105f437a6089da5527ad1f9f768e4cb4e2fb94661b |
-| 1E-02 | `timeout-minutes: 20` on `browser-pwa` becomes 30 | the same | the same case, the deadline: `expected '30' to be '20'` | `ci.yml` 599847c300b735f4100663105f437a6089da5527ad1f9f768e4cb4e2fb94661b |
+| 1E-01 | `total: [4]` becomes `total: [3]` in `browser-pwa` | `test/ci-pipeline.test.ts` from `server/` | the shard-count case: `expected [ 1, 2, 3, 4 ] to deeply equal [ 1, 2, 3 ]` (its 1..total check comes first) | `ci.yml` ffe1f39bb9d8f26c707110f6c9f1941f0758821fc0771ae93f3b7db9d194fd20 |
+| 1E-01b | both lists back to three, `shard: [1, 2, 3]` and `total: [3]` | the same | the same case: `the browser leg runs as four shards (D-9026): expected 3 to be 4` | `ci.yml` ffe1f39bb9d8f26c707110f6c9f1941f0758821fc0771ae93f3b7db9d194fd20 |
+| 1E-02 | `timeout-minutes: 30` on `browser-pwa` goes back to 20 (turned around by D-9055; the plan's row raised it to 30) | the same | the same case, the deadline: `expected '20' to be '30'` | `ci.yml` ffe1f39bb9d8f26c707110f6c9f1941f0758821fc0771ae93f3b7db9d194fd20 |
 | 1E-03 | `runs-widths.browser.test.ts` becomes `run-widths.browser.test.ts` in `FILE_MS` | `test/browser-leg.test.ts` from `pwa/` | `every file FILE_MS names is a browser file, …`: `run-widths.browser.test.ts: expected false to be true` | `slowFirst.ts` 31b5b8aae0590a8e16b54e958d34a7a7014653a4a712e3212164455365a1ae1f |
 | 1E-04 | the `every row opened at ${width}px` block deleted from `project-linking-card-wide.browser.test.ts` | Task 2's title comparison, as written in `wave1e-task-2.md` | exit 1, `DIFF`: `split 17 titles`, five `MISSING every row opened at <w>px …` | `project-linking-card-wide.browser.test.ts` 152e8eab24ee915f4e22d4c046e18e2c5084a7c1a3b224980814d1455a23d9c3 |
 
+1E-01, 1E-01b and 1E-02 were measured again on the amended `ci.yml` (the sha256 above); the first round's runs, on
+the file with the limit at 20, were red in the same places.
 1E-01 and 1E-02 red in the same case: the plan names it "the shard-count case" for one and "the case that names the
 20-minute deadline" for the other, and it is one case that pins both. After every restore the gate below ran green.
 
@@ -65,7 +84,7 @@ One file per process, through `ccrc test -- ./node_modules/.bin/vitest run --max
 |---|---|---|
 | `browser-leg` | `pwa/` | green, 22 passed |
 | pwa typecheck, `tsc --noEmit` | `pwa/` | green twice during the wave (after the move, after the division; the later edits are the table's data and comments). On the final tree it was killed twice by the test slice's memory cap: `ccrc test: the test slice's memory cap killed a process during this run (MemoryMax=6G, CCRC_TEST_SLICE_MEMORY_MAX; 3 OOM kill(s) in ccrctests.slice); exit 137`, then the same with 2 kills. The pull request's `pwa-static` job is the arbiter. |
-| `ci-pipeline` | `server/` | green, 132 passed |
+| `ci-pipeline` | `server/` | green, 132 passed (and again after the amendment) |
 | `ci-merge-queue` | `server/` | green, 6 passed |
 | `oss-metadata` | `server/` | green, 29 passed |
 | `citations` | `server/` | green, 4 passed |

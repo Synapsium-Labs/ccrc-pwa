@@ -41,3 +41,12 @@ keeps the higher figure, which places it most cautiously. Reported as the depart
 
 `ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/browser-leg.test.ts` from `pwa/`: 1 file, 22 tests,
 green. Its case that every name in `FILE_MS` is a browser file holds for all 118.
+
+## The source run's second shard ran on a slow runner
+
+Measured against the green run 45532069453, file by file: the files of shard 1/3 (job 138915898214, 39 files) took a
+median of 0.88 times their time there, those of shard 3/3 (job 138915898257, 40 files) 0.84 times, and those of shard
+2/3 (job 138915898216, 38 files besides the linking file) **1.38 times**. So the second shard's files are heavier in
+this table than a typical runner makes them, by about a half against their neighbours. That is fine for balance: it
+makes those files look longer, so they are placed more cautiously, and the shards are rebalanced from the table either
+way. A later refresh from a run with even runners would even it out.
