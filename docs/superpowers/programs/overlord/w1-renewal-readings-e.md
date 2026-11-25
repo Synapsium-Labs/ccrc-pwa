@@ -120,6 +120,11 @@ By hand, each restored from the commit after its run:
   session marks `@overlord` after its programmes, so one rule serves the Overlord and a coordinator, and the store's
   `putOperatorMark` stays the one writer. The server's main route file took three added lines, by a packet its other open
   holder, Authority B, consented to on main `94bbc42af9`.
+- **The real pass.** The pass cases drive a coordinator, whose quiet already reads its programmes' marks. The Overlord's
+  quiet reads `@overlord` only once renewal readings F lands (#3352, not merged at this round's base), so its pass case is
+  owed by whichever of E and F lands second; the route cases above already pin that both paths write `@overlord`.
+- **The base.** #3352 had not merged by 03:00Z, so main was merged as it stood, once: `4e17ac96ee`. Its one conflict, in
+  `server/src/coord/ports.ts`, kept both sides' members (`pruneSequenceThrough` and this PR's two).
 - **F3, F4.** "What a merge arms" above gains the soft permit; "no reason is lost" is narrowed to what is true; the drift set's
   mutants are R1 to R5.
 
@@ -158,7 +163,9 @@ Known limits, measured by reading, not built for:
 
 ## Tests run
 
-Each alone, through the fleet's test wrapper, from `server/`: the new suite; `continuity-renewal-readings.test.ts`,
+Each alone, through the fleet's test wrapper, from `server/`: the new suite; in fix round 1,
+`continuity-operator-mark-paths.test.ts` (new), `continuity-operator-mark.test.ts`, `continuity-prompt-renewing.test.ts`,
+`pty.test.ts`, `routes.test.ts` and `secret-mask.test.ts`; `continuity-renewal-readings.test.ts`,
 `continuity-renewal-readings-wiring.test.ts`, `continuity-readings.test.ts`, `continuity-hook-reports.test.ts`,
 `continuity-generations-lane.test.ts`; `sim/mutation-floors.test.ts` scoped to the renewal readings' sets, the baseline and
 the two floor checks; `rings/watcher-store-port.test.ts`, `rings/totality.test.ts`, `rings/outward-edges.test.ts`,
