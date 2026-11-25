@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { CAPTURE_STEPS, CAPTURE_TOKEN, capturePaths, captureBuildsDir, captureEnv, captureWrites, staleCaptureDirs } from '../src/testbox/capture.js';
 import { recorderPath } from '../src/testbox/captureRecord.js';
-import { CaptureRunner, groupLife, tmuxLauncher, type BuildLife, type CaptureLauncher, type CaptureRunnerDeps } from '../src/testbox/captureRunner.js';
+import { CAPTURE_START, CaptureRunner, capturePaneCommand, groupLife, tmuxLauncher, type BuildLife, type CaptureLauncher, type CaptureRunnerDeps } from '../src/testbox/captureRunner.js';
 import { startStandIn } from '../src/testbox/captureStub.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -234,6 +234,38 @@ describe('the tmux launcher', () => {
       spawnSync(REAL_TMUX!, ['-L', 'ccrc-capture', 'kill-server'], { timeout: 10_000, env: { TMUX_TMPDIR: path.join(sockDir, 'ccrc-capture-tmx') } });
     }
   }, 120_000);
+
+  // Review 3687 F1: on the test box the service user's shell refuses logins, and tmux takes a pane's default shell from
+  // `SHELL` or else from that user's entry, so a command of one word, run through that shell, ends at once. The case gives
+  // the capture's tmux server such a shell (a fixture that prints a refusal and exits 1, which the case first shows ends a
+  // one-word pane) and holds that the build still starts and the capture passes.
+  it.skipIf(!hasTmux)('starts the build and passes when the pane\'s default shell refuses logins', async (ctx) => {
+    const root = freshRoot();
+    const sockDir = mkTmp('tx-');
+    const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
+    if (path.join(sockDir, 'ccrc-capture-nol', `tmux-${uid}`, 'ccrc-capture').length > 100) ctx.skip();
+    const refuser = path.join(mkTmp('nologin-'), 'nologin');
+    writeFileSync(refuser, '#!/bin/sh\necho "This account is currently not available."\nexit 1\n', { mode: 0o755 });
+    // The fixture shell does refuse: a one-word pane under it is gone at once, its server with it.
+    const probeDir = path.join(sockDir, 'p');
+    mkdirSync(probeDir, { mode: 0o700 });
+    const probeVars = { PATH: '/usr/bin:/bin', TMUX_TMPDIR: probeDir, SHELL: refuser };
+    const made = spawnSync(REAL_TMUX!, ['-L', 'nol', '-f', '/dev/null', 'new-session', '-d', '-s', 'p', 'sleep 30'], { timeout: 10_000, env: probeVars, encoding: 'utf8' });
+    expect(made.status, made.stderr).toBe(0);
+    await new Promise((r) => setTimeout(r, 1000));
+    expect(spawnSync(REAL_TMUX!, ['-L', 'nol', 'has-session', '-t', '=p'], { timeout: 10_000, env: probeVars }).status, 'a one-word pane under the refusing shell ended').not.toBe(0);
+    const real = tmuxLauncher(REAL_TMUX!);
+    const refusing: CaptureLauncher = { start: (spec) => real.start({ ...spec, env: [...spec.env, ['SHELL', refuser]] }) };
+    try {
+      place(root, GOOD);
+      const r = await runner(root, { launcher: refusing, tmuxBase: sockDir, stepTimeoutMs: 15_000, exitTimeoutMs: 10_000 }).run('nol', GOOD);
+      expect(r.detail).toBeNull();
+      expect(r.result).toMatchObject({ pass: true, cwd: true });
+    } finally {
+      spawnSync(REAL_TMUX!, ['-L', 'ccrc-capture', 'kill-server'], { timeout: 10_000, env: { TMUX_TMPDIR: path.join(sockDir, 'ccrc-capture-nol') } });
+      spawnSync(REAL_TMUX!, ['-L', 'nol', 'kill-server'], { timeout: 10_000, env: probeVars });
+    }
+  }, 120_000);
 });
 
 /** A launcher whose build is a stand-in: nothing is run, the answers are the test's. */
@@ -423,12 +455,30 @@ describe('the tmux launcher reads the build, not its terminal server (review 362
   };
   const SPEC = { binary: "/srv/box/captures/builds/it's 2.1.100", cwd: '/w', env: [['PATH', '/usr/bin']] as const, socket: 'ccrc-capture', session: 'capture' };
 
-  it('starts the build by exec of its path as ONE quoted shell word, and asks tmux to print the pane\'s process', async () => {
+  it('starts the build with no shell: the fixed start program, then the build\'s path as a word of its own (review 3687 F1), and asks tmux to print the pane\'s process', async () => {
     const { launcher, seen } = fake();
     await launcher.start(SPEC);
     const made = seen.calls[0]!;
     expect(made.slice(made.indexOf('new-session'), made.indexOf('-s'))).toEqual(['new-session', '-d', '-P', '-F', '#{pane_pid}']);
-    expect(made.at(-1)).toBe(`exec '/srv/box/captures/builds/it'\\''s 2.1.100'`);
+    expect(made.slice(made.indexOf('-c'))).toEqual(['-c', '/w', CAPTURE_START, SPEC.binary]);
+    expect(CAPTURE_START).toBe('/usr/bin/env');
+    expect(capturePaneCommand(SPEC.binary)).toEqual([CAPTURE_START, SPEC.binary]);
+  });
+
+  // The coordinator's requirement with the cure (call 1003): a pane can never start the fixed program alone, which would print
+  // the pane's whole environment into what the capture records. The one builder of the pane's command refuses, before any
+  // tmux call, every path that could leave it alone or read as something else.
+  it.each([
+    ['an empty path', ''],
+    ['a missing path', undefined],
+    ['a path of spaces only', '   '],
+    ['a relative path', 'builds/2.1.100'],
+    ['a path holding an =', '/srv/a=b/captures/builds/2.1.100'],
+  ])('refuses %s before any tmux call', async (_n, binary) => {
+    const { launcher, seen } = fake();
+    await expect(launcher.start({ ...SPEC, binary: binary as string })).rejects.toThrow(/cannot be started without a shell/);
+    expect(seen.calls).toEqual([]);
+    expect(() => capturePaneCommand(binary)).toThrow(/cannot be started without a shell/);
   });
 
   it('reads life from the printed process\'s GROUP with signal 0: present is alive, gone is gone', async () => {

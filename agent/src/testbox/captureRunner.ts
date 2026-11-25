@@ -25,7 +25,7 @@ import path from 'node:path';
 import { readCaptureRecords, replayCapture, type CaptureRecord } from '../../../shared/claudeBuildCapture.js';
 import type { BuildCaptureResult } from '../../../shared/claudeBuildTrust.js';
 import {
-  CAPTURE_SOCKET, CAPTURE_STEPS, CAPTURE_TMUX_SESSION, captureClaudeJson, captureEnv, capturePaths, captureSettings, sq, stepDone,
+  CAPTURE_SOCKET, CAPTURE_STEPS, CAPTURE_TMUX_SESSION, captureClaudeJson, captureEnv, capturePaths, captureSettings, stepDone,
 } from './capture.js';
 import type { StandIn } from './captureStub.js';
 import { tmuxName, tmuxTarget } from '../../../shared/tmux-target.js';
@@ -205,15 +205,35 @@ export function groupLife(signal: (pid: number, sig: 0) => void, pgid: number): 
   }
 }
 
+/** What starts the build in its pane: tmux runs a command given as two or more words directly, with no shell between it
+ *  and the command (tmux's manual, "executed directly (without sh -c)"); a command of one word goes through the pane's
+ *  default shell, which for the test box's service user is one that refuses logins (review 3687 F1). This fixed system
+ *  program, then the build's absolute path, is two words: it replaces itself with the build, so no interpreter reads the
+ *  build's name and the pane's process is the build. */
+export const CAPTURE_START = '/usr/bin/env';
+
+/** The pane's command, built in this one place: {@link CAPTURE_START}, then `binary` as a word of its own. A pane can never
+ *  start the fixed program alone (alone, it would print the pane's whole environment into what the capture records), so
+ *  this throws, before any tmux call, unless `binary` is a string naming an absolute path with no `=` (which that program
+ *  would read as a variable to set): an empty, missing, blank or relative path is refused. */
+export function capturePaneCommand(binary: unknown): readonly [string, string] {
+  if (typeof binary !== 'string' || !path.isAbsolute(binary) || binary.includes('=')) {
+    throw new Error('the build\'s path is missing, not absolute, or holds an =: it cannot be started without a shell');
+  }
+  return [CAPTURE_START, binary];
+}
+
 /** The production launcher: the build in its own tmux server (`-L <socket>`, `TMUX_TMPDIR` from the spec's environment, never
  *  the fleet's), every call through the bounded spawner with the spec's environment as the WHOLE child environment, each
- *  within `boundMs` (the timing contract's `tmuxCallMs`). The build is started by `exec` of its path as one quoted shell
- *  word, so the pane's process IS the build, and tmux makes it the leader of a process group of its own; the creation
- *  prints that process, and the build's life is read from its group (review 3623), never from the terminal server. */
+ *  within `boundMs` (the timing contract's `tmuxCallMs`). The build is started with no shell between tmux and it
+ *  ({@link CAPTURE_START}), so the pane's process IS the build, and tmux makes it the leader of a process group of its own;
+ *  the creation prints that process, and the build's life is read from its group (review 3623), never from the terminal
+ *  server. A path that cannot be started so is refused before any tmux call. */
 export function tmuxLauncher(tmux: string, boundMs = 15_000, seams: TmuxLauncherSeams = {}): CaptureLauncher {
   const signal = seams.signal ?? ((pid: number, sig: NodeJS.Signals | 0) => { process.kill(pid, sig); });
   return {
     async start(spec) {
+      const command = capturePaneCommand(spec.binary);
       const exec = (seams.spawner ?? boundedExec)(Object.fromEntries(spec.env), boundMs);
       const base = ['-L', spec.socket];
       const call = async (args: readonly string[]): Promise<{ readonly status: number; readonly stdout: string; readonly stderr: string }> => {
@@ -224,7 +244,7 @@ export function tmuxLauncher(tmux: string, boundMs = 15_000, seams: TmuxLauncher
       // target, so no `-t` can prefix-match another session even on this private server.
       const made = await call([
         '-f', '/dev/null', 'new-session', '-d', '-P', '-F', '#{pane_pid}', '-s', tmuxName(spec.session), '-x', '200', '-y', '50',
-        '-c', spec.cwd, `exec ${sq(spec.binary)}`,
+        '-c', spec.cwd, ...command,
       ]);
       const pid = made.status === 0 && /^[1-9][0-9]*$/.test(made.stdout.trim()) ? Number(made.stdout.trim()) : null;
       if (pid === null || pid <= 1) {

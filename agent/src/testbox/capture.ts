@@ -97,7 +97,7 @@ export const staleCaptureDirs = (names: readonly string[]): string[] => names.fi
 const MATCHED: ReadonlySet<HookEvent> = new Set<HookEvent>(['PreToolUse', 'PostToolUse', 'PermissionRequest']);
 
 /** A shell word, single-quoted. */
-export const sq = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
+const sq = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
 
 /** `<config>/settings.json`: every event in {@link CAPTURE_EVENTS} and the statusline run the recorder, which is told
  *  what called it by its one last argument. `recorder` is the command that runs it, as argv: the node binary and the

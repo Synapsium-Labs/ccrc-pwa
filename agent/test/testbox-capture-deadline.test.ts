@@ -5,9 +5,10 @@
 // word, never run for an answer nobody hears. And the tool sync's takeover, which replaces the release the capture's
 // recorder runs from, waits for captures as it waits for runs (`service.ts#idle`).
 //
-// Gate G1 (review 3316 F1, capture runner PR 3b): the desk and the runner the entry point composes (`main.ts#captureDeskWith`,
-// `#captureRunnerFor`), with the real launcher, run on a virtual clock with every tmux call at its bound and every wait at
-// its limit, and each capture ends within `captureWorstCaseMs`, the second of two within the fleet agent's deadline.
+// Gate G1 (review 3316 F1, capture runner PR 3b): the desk and the runner the entry point composes, through the very function
+// that hands them the timing contract (`main.ts#captureDeskComposed`, review 3687 F2), with the real launcher, run on a
+// virtual clock with every tmux call at its bound and every wait at its limit, and each capture ends within
+// `captureWorstCaseMs`, the second of two within the fleet agent's deadline.
 import { describe, expect, it } from 'vitest';
 import { TESTBOX_CAPTURE_DEADLINE_MS, UPDATE_SPAWN_DRAIN_MS } from '../../shared/agent-protocol.js';
 import type { CaptureAnswer, CaptureSubmit } from '../../shared/claudeBuildCapture.js';
@@ -23,7 +24,7 @@ import type { SystemManager } from '../src/testbox/systemd.js';
 import { appendFileSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { TestboxConfig } from '../src/testbox/config.js';
-import { captureDeskWith, captureRunnerFor } from '../src/testbox/main.js';
+import { captureDeskComposed } from '../src/testbox/main.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const T: CaptureTimings = { stepMs: 1000, exitMs: 100, pollMs: 10, tmuxCallMs: 20, stopWaitMs: 50, standInCloseMs: 30, setupMs: 5, removeMs: 7 };
@@ -210,7 +211,9 @@ describe('gate G1: the composed desk and runner, the real launcher, on a virtual
       }
     };
     const bounds: number[] = [];
-    const runner = captureRunnerFor(root, root, () => null, t, {
+    // Through the composer the entry point calls (review 3687 F2): the contract it hands the runner and the desk is the one
+    // these exact times are measured against, so another contract there shows as a difference.
+    const desk = captureDeskComposed(cfg, root, true, { home: root, seams: {
       now: () => clock.now, sleep,
       tmux: {
         spawner: (env, boundMs) => {
@@ -228,8 +231,7 @@ describe('gate G1: the composed desk and runner, the real launcher, on a virtual
         signal: () => undefined,
       },
       standIn: async () => ({ port: 1, requests: [], close: () => new Promise<void>(() => undefined) }),
-    });
-    const desk = captureDeskWith(cfg, runner, root, { home: root, seams: { now: () => clock.now } });
+    } });
     const at: number[] = [];
     const frames: CaptureAnswer[] = [];
     const t0 = clock.now;

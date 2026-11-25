@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { existsSync, linkSync, mkdirSync, readdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
-import { buildFileFacts, captureDeskFor, captureDeskWith, captureRunnerFor, pruneBuilds, sweepStaleCaptures } from '../src/testbox/main.js';
+import { buildFileFacts, captureDeskFor, captureDeskWith, captureRunnerFor, captureStoreAtStart, pruneBuilds, sweepStaleCaptures } from '../src/testbox/main.js';
 import { admit, EMPTY_QUEUE, enqueue } from '../src/testbox/queue.js';
 import { realPathOf } from '../src/testbox/probeFs.js';
 import { CAPTURE_REFUSALS, CAPTURE_REFUSAL_SENTENCE, type CaptureAnswer, type CaptureRefusal, type CaptureSubmit } from '../../shared/claudeBuildCapture.js';
@@ -257,6 +257,24 @@ describe('the sweep of stale capture directories at the service start (main.ts#s
     const got = sweepStaleCaptures(root, (d) => { tried.push(path.basename(d)); if (path.basename(d) === ID(2)) throw new Error('EBUSY'); });
     expect(tried).toEqual([ID(1), ID(2), ID(3)]);
     expect(got).toEqual([ID(1), ID(3)]);
+  });
+});
+
+// Review 3687 F5: what the service's start does to the capture store, in the one function its entry point calls.
+describe('the capture store at the service start (main.ts#captureStoreAtStart)', () => {
+  it('sweeps the stale capture directories and prunes the builds store with no build in use', () => {
+    const root = realpathSync(mkTmp('ccrc-capstart-'));
+    const caps = path.join(root, 'captures');
+    mkdirSync(path.join(caps, ID(1)), { recursive: true });
+    mkdirSync(path.join(caps, 'builds'));
+    for (const n of ['2.1.1', '2.1.2', '2.1.3', '2.1.4', '2.1.5']) writeFileSync(path.join(caps, 'builds', n), 'x');
+    const got = captureStoreAtStart(root);
+    expect({ captures: got.captures, builds: [...got.builds].sort() }).toEqual({ captures: [ID(1)], builds: ['2.1.1', '2.1.2'] });
+    expect(readdirSync(caps).sort()).toEqual(['builds']);
+    expect(readdirSync(path.join(caps, 'builds')).sort()).toEqual(['2.1.3', '2.1.4', '2.1.5']);
+  });
+  it('an empty box root is nothing to do', () => {
+    expect(captureStoreAtStart(realpathSync(mkTmp('ccrc-capstart-')))).toEqual({ captures: [], builds: [] });
   });
 });
 

@@ -288,7 +288,13 @@ export function captureDeskFor(cfg: TestboxConfig, o: CaptureDeskOpts = {}): Cap
   const uid = o.uid ?? (typeof process.getuid === 'function' ? process.getuid() : 0);
   const fits = captureSocketFits(tmuxBase, uid);
   if (!fits) console.warn(`ccrc-testbox: a capture's tmux socket would not fit under ${tmuxBase}; captures are refused no-runner`);
-  return captureDeskWith(cfg, fits ? captureRunnerFor(cfg.root, tmuxBase, o.toolsPath ?? (() => null), CAPTURE_TIMINGS, o.seams) : null, tmuxBase, o);
+  return captureDeskComposed(cfg, tmuxBase, fits, o);
+}
+
+/** The composition itself, past the socket's fit (`wired`): the runner built from `CAPTURE_TIMINGS` and the desk around it
+ *  on the same contract (gate G1 runs through this function, review 3687 F2), or no runner. */
+export function captureDeskComposed(cfg: TestboxConfig, tmuxBase: string, wired: boolean, o: CaptureDeskOpts = {}): CaptureDesk {
+  return captureDeskWith(cfg, wired ? captureRunnerFor(cfg.root, tmuxBase, o.toolsPath ?? (() => null), CAPTURE_TIMINGS, o.seams) : null, tmuxBase, o);
 }
 
 /** The desk around `runner`, as `captureDeskFor` composes it: the late check on the same `CAPTURE_TIMINGS` the runner was
@@ -315,6 +321,12 @@ export function sweepStaleCaptures(root: string, remove: (dir: string) => void =
     try { remove(path.join(base, name)); removed.push(name); } catch (e) { console.warn(`ccrc-testbox: stale capture directory ${name} not removed: ${e instanceof Error ? e.message : String(e)}`); }
   }
   return removed;
+}
+
+/** The capture store at the service's start (L5, once): the stale capture directories swept, then the builds store pruned
+ *  with no build in use (nothing is queued yet). Answers what each removed. */
+export function captureStoreAtStart(root: string): { readonly captures: string[]; readonly builds: string[] } {
+  return { captures: sweepStaleCaptures(root), builds: pruneBuilds(root, []) };
 }
 
 export function serviceFor(cfg: TestboxConfig, release: string, exit: (code: number) => void = (c) => process.exit(c), seams: ServiceSeams = {}): TestboxService {
@@ -396,8 +408,7 @@ async function main(): Promise<void> {
   const refused = listenRefusal(cfg.listen.host);
   if (refused !== null) throw new Error(`CCRC_TESTBOX_LISTEN: ${refused}`);
   const token = readToken(cfg.tokenFile);
-  sweepStaleCaptures(cfg.root);
-  pruneBuilds(cfg.root, []);
+  captureStoreAtStart(cfg.root);
   const service = serviceFor(cfg, release);
   // D-8907: a drain request that stands now closes admission before the service queues or starts anything.
   const drain = drainerOf(service);
