@@ -934,9 +934,7 @@ export function withCoordinatorWords(wc: WithCoordinator, project: string): { te
  * from one this build never measured, and folding the two to one value is
  * the overloaded-null this project's CLAUDE.md forbids.
  */
-export function ctxPressure(s: { ctxPct?: number | null }): number | null {
-  return tolerantCount(s.ctxPct);
-}
+export function ctxPressure(s: { ctxPct?: number | null }): number | null { return tolerantCount(s.ctxPct); }
 
 /** Tolerant read of `FleetSession.paneCols` off a cast live frame — the same
  *  ladder as `ctxPressure`: absent (an older server), null, or unusable all
