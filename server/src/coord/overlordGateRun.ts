@@ -20,9 +20,8 @@ import { effectiveGeneration, type CardReadRead, type GenRow, type GenerationsRe
 import { designationFactFrom, identityOf } from '../roleOf.js';
 import type { AuthorityState } from './overlordAuthorityCoherence.js';
 import { doorRow, type OverlordDoorRow } from './overlordDoors.js';
-import { cardHoldVerdict } from './envelope.js';
 import {
-  callerStandingOf, cardFactFrom, counterVerdict, fenceVerdict, gateReads, incarnationNeeded, overlordGate, spendVerdict, standingVerdict, witnessRecordOf,
+  callerStandingOf, cardFactFrom, cardHoldVerdict, counterVerdict, fenceVerdict, gateReads, incarnationNeeded, overlordGate, spendVerdict, standingVerdict, witnessRecordOf,
   type CallerStanding, type FenceFacts, type FencePresented, type FenceVerdict, type FenceWhy, type GateFacts, type GateStep, type GateVerdict, type WitnessRecord,
   type WitnessVerdict,
 } from './overlordGate.js';

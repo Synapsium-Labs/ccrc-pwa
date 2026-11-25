@@ -4,6 +4,7 @@
 // `overlord-inbox-wake-lane.test.ts`.
 import { describe, expect, it } from 'vitest';
 import * as envelope from '../src/coord/envelope.js';
+import * as gate from '../src/coord/overlordGate.js';
 import { cardHoldVerdictCases, fixedLineMailOfCases, sweepDesignationOfCases, timerLineCases } from './sim/fixedLineMailSets.js';
 import {
   FIXED_LINE_MAIL, mailNudgeOf, renderMailNudge, renderOperatorMessageNudge, resumeRuleOf,
@@ -23,7 +24,7 @@ describe('fixedLineMailOf: the table\'s row for a mail, or generic', () => {
 });
 
 describe('the Overlord\'s timer line and its card hold (Overlord W1, the timers)', () => {
-  for (const [name, run] of Object.entries({ ...timerLineCases(envelope), ...cardHoldVerdictCases(envelope) })) it(name, run);
+  for (const [name, run] of Object.entries({ ...timerLineCases(envelope), ...cardHoldVerdictCases(gate) })) it(name, run);
 });
 
 describe('sweepDesignationOf: the sweep\'s designation read as the table takes it', () => {

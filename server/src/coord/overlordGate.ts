@@ -232,6 +232,14 @@ export function cardFactFrom(read: { readonly ok: true; readonly read: { readonl
   return !read.ok ? { kind: 'unmeasured', why: read.detail } : read.read === null ? 'none' : read.read.current ? 'read-current' : 'read-stale';
 }
 
+/** The hold of a `waitsForCard` row (C62: "for the Overlord it also waits until that generation has read its card"): the card
+ *  fact gates B's step 8 reads (`cardFactFrom`), delivered only once it reads current. */
+export function cardHoldVerdict(card: 'read-current' | 'read-stale' | 'none' | { readonly kind: 'unmeasured'; readonly why: string }):
+  { readonly deliver: true } | { readonly deliver: false; readonly why: 'card-unread' | 'unmeasured' } {
+  if (card === 'read-current') return { deliver: true };
+  return { deliver: false, why: typeof card === 'object' ? 'unmeasured' : 'card-unread' };
+}
+
 /** The generation states in which a renewal is under way (step 9): the generation is not serving. */
 const RENEWING_STATES: Readonly<Record<GenerationState, boolean>> = {
   active: false, degraded: false,

@@ -280,13 +280,6 @@ export function renderTimerFiredLine(subject: string): string {
   return `${INJECTED_PROMPTS['mail-nudge'].text} ${n === undefined ? 'Your timers' : `${n} of your timers`} came due: read them with your timer list door.`;
 }
 
-/** The hold of a `waitsForCard` row (C62: "for the Overlord it also waits until that generation has read its card"): the card
- *  fact gates B's step 8 reads (`cardFactFrom`), delivered only once it reads current. */
-export function cardHoldVerdict(card: 'read-current' | 'read-stale' | 'none' | { readonly kind: 'unmeasured'; readonly why: string }):
-  { readonly deliver: true } | { readonly deliver: false; readonly why: 'card-unread' | 'unmeasured' } {
-  if (card === 'read-current') return { deliver: true };
-  return { deliver: false, why: typeof card === 'object' ? 'unmeasured' : 'card-unread' };
-}
 
 /** The designation as the mail sweep read it once for its pass. */
 export type SweepDesignation = { readonly kind: 'designated'; readonly sessionId: string } | { readonly kind: 'not-designated' } | { readonly kind: 'unmeasured' };

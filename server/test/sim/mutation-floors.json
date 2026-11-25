@@ -68,7 +68,7 @@
   "server/src/coord/envelope.ts#sweepDesignationOf": 1,
   "server/src/coord/envelope.ts#fixedLineReplayOf": 1,
   "server/src/coord/envelope.ts#renderTimerFiredLine": 1,
-  "server/src/coord/envelope.ts#cardHoldVerdict": 1,
+  "server/src/coord/overlordGate.ts#cardHoldVerdict": 1,
   "server/src/coord/overlordInbox.ts#inboxProbeSourceOf": 1,
   "server/src/continuity/probeSchedule.ts#roundsOf": 1,
   "server/src/continuity/probeSchedule.ts#compactionWindowStart": 1,

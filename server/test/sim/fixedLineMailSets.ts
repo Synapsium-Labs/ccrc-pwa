@@ -15,6 +15,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../.
 const L1 = path.join(ROOT, 'server/src/coord/envelope.ts');
 
 export type EnvelopeModule = typeof import('../../src/coord/envelope.js');
+/** The gate's module: the card hold lives beside step 8, the one home of its words. */
+type GateModule = typeof import('../../src/coord/overlordGate.js');
+const GATE_TS = path.join(ROOT, 'server/src/coord/overlordGate.ts');
 
 const OVERLORD = 'lane-a-project-a';
 const OTHER = 'lane-b-project-a';
@@ -240,7 +243,7 @@ export function timerLineCases(m: EnvelopeModule): Record<string, SuiteCase> {
   };
 }
 
-export function cardHoldVerdictCases(m: EnvelopeModule): Record<string, SuiteCase> {
+export function cardHoldVerdictCases(m: Pick<GateModule, 'cardHoldVerdict'>): Record<string, SuiteCase> {
   return {
     'delivers only on read-current; none and read-stale hold card-unread; unmeasured holds unmeasured': () => {
       expect(m.cardHoldVerdict('read-current')).toStrictEqual({ deliver: true });
@@ -263,8 +266,8 @@ const TIMER_LINE_SET: MutantSet<EnvelopeModule> = {
   suite: timerLineCases,
 };
 
-const CARD_HOLD_SET: MutantSet<EnvelopeModule> = {
-  modulePath: L1,
+const CARD_HOLD_SET: MutantSet<GateModule> = {
+  modulePath: GATE_TS,
   mutants: [
     { id: 'C1 a stale card delivers', old: "if (card === 'read-current') return { deliver: true };", new: "if (card !== 'none' && typeof card !== 'object') return { deliver: true };" },
     { id: 'C2 unmeasured read as unread', old: "why: typeof card === 'object' ? 'unmeasured' : 'card-unread'", new: "why: 'card-unread'" },
@@ -279,5 +282,5 @@ export const FIXED_LINE_MAIL_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'server/src/coord/envelope.ts#sweepDesignationOf': SWEEP_DESIGNATION_OF_SET as MutantSet<never>,
   'server/src/coord/envelope.ts#fixedLineReplayOf': FIXED_LINE_REPLAY_OF_SET as MutantSet<never>,
   'server/src/coord/envelope.ts#renderTimerFiredLine': TIMER_LINE_SET as MutantSet<never>,
-  'server/src/coord/envelope.ts#cardHoldVerdict': CARD_HOLD_SET as MutantSet<never>,
+  'server/src/coord/overlordGate.ts#cardHoldVerdict': CARD_HOLD_SET as MutantSet<never>,
 };

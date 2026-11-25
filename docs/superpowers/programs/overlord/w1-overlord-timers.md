@@ -26,7 +26,7 @@ Every refusal a timer door answers itself after its token is counted (M36). One 
 | 3, step 1 | `test(timers): pin the timer doors' answers before the gate` | `timer-doors-characterization.test.ts`: the five doors through the real server, as a coordinator, a worker and the operator, every status and body pinned, green on the base. |
 | 3 | `feat(timers): the Overlord's timers through its door process, stamped with designatedTerm` | The three rows (`act: null`, `unmeasuredDesignation: 'by-profile'`); step 10 skipped for a `null` act; step 1's profile arm; the doors' role path, the restore stamp on every set, the reserved identity word, the operator's read and cancel, the refusal count; the mail route's reserved recipient; the console's mark. |
 | 4, move | `refactor(gate): the card fact's mapping is one L1 function` | `cardFactFrom` moved out of the runner, move only, gate suites green. |
-| 4 | `feat(timers): the role's timer mail to overlord, one fixed line after the card` | The lane's reads at the top of the pass, the role's arm, `deliverTo`, the refusal purge; the `timer` row of `FIXED_LINE_MAIL`, `renderTimerFiredLine`, `cardHoldVerdict`, the sweep's hold; the card's timers by identity; the timer day's Overlord case. |
+| 4 | `feat(timers): the role's timer mail to overlord, one fixed line after the card` | The lane's reads at the top of the pass, the role's arm, `deliverTo`, the refusal purge; the `timer` row of `FIXED_LINE_MAIL`, `renderTimerFiredLine`, `cardHoldVerdict` (in `overlordGate.ts`, beside step 8), the sweep's hold; the card's timers by identity; the timer day's Overlord case. |
 | 5 | this note | The older-build measurement, departures, mutation tables, what arms on merge. |
 
 ## Where main differed from the plan's "What exists today"
@@ -102,7 +102,7 @@ Floors (`server/test/sim/mutation-floors.json`, run by `mutation-floors.test.ts`
 | `overlordGate.ts#overlordGate` | O-19 step 10 run for a door with no act kind | killed |
 | `envelope.ts#fixedLineMailOf` | F20 matched on the sender alone, F21 open to every session, F22 types before the card, F24 never matched | all |
 | `envelope.ts#renderTimerFiredLine` (new key, floor 1) | T1 no count, T2 a zero counted, T3 the generic head lost, T4 the hold not carried, T5 matched on the delivery | all |
-| `envelope.ts#cardHoldVerdict` (new key, floor 1) | C1 a stale card delivers, C2 unmeasured read as unread, C3 every card delivers | all |
+| `overlordGate.ts#cardHoldVerdict` (new key, floor 1; beside step 8, the one home of `card-unread`) | C1 a stale card delivers, C2 unmeasured read as unread, C3 every card delivers | all |
 | `roleOf.ts#identityOf` | I3's quote reshaped to the constant | killed |
 
 By hand (applied one at a time to the source, the named suite run through `ccrc test`, the file restored):
