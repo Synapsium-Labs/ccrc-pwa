@@ -364,6 +364,9 @@ async function selfNavigation(label: string, attrs: string, restored: boolean): 
   const urlBefore = [frame.url(), await frame.evaluate(() => location.href)];
   await frame.locator('#nav').click({ timeout: 10_000 });
   await new Promise((r) => setTimeout(r, WATCH_MS));
+  // Under load the frame's navigation and the page's restore can land after the watch window (measured once, beside another
+  // browser file): when a restore is expected, wait for its count, bounded; a missing one is still reported below.
+  if (restored) await expect.poll(() => restoresOf(t.page), { timeout: 15_000 }).toBe('1').catch(() => undefined);
   // A restore replaces the frame's document, so the copy is read back through a fresh handle to the same frame element.
   const back = await frameIn(t.page, 'iframe.review-frame');
   await back.waitForSelector('#seeded', { state: 'attached', timeout: 10_000 }).catch(() => undefined);

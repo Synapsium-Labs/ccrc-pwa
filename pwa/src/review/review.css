@@ -1,6 +1,10 @@
 /* The draft review page (X3 R2.1). System fonts only, no @import, no url(): the page's header policy allows its own
-   scripts, inline styles and data: only. A 16px side gutter, no horizontal scroll, light and dark by the device. */
-:root {
+   scripts, inline styles and data: only. A 16px side gutter, no horizontal scroll, light and dark by the device.
+   Every rule is scoped to the review document (`<html class="review-page">` in review.html, or a `review-` class), so
+   this sheet, built into the shared assets/ beside the shell's, styles nothing else that loads it. Element rules take the
+   scope through `:where()`, so their specificity is the bare element's and a `review-` class rule beats them by weight,
+   never by order. */
+:root.review-page {
   color-scheme: light dark;
   --review-bg: #ffffff;
   --review-fg: #1a1c1b;
@@ -11,7 +15,7 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root.review-page {
     --review-bg: #0b0d0c;
     --review-fg: #e8ece9;
     --review-muted: #aab3ae;
@@ -21,15 +25,16 @@
   }
 }
 
-* {
+:where(:root.review-page),
+:where(:root.review-page) * {
   box-sizing: border-box;
 }
 
-html {
+:root.review-page {
   background: var(--review-bg);
 }
 
-body {
+:where(:root.review-page) body {
   margin: 0;
   padding: 16px;
   background: var(--review-bg);
@@ -61,7 +66,7 @@ body {
   margin: 0;
 }
 
-button {
+:where(:root.review-page) button {
   min-height: 44px;
   padding: 0 24px;
   border: 1px solid var(--review-accent);
@@ -73,13 +78,13 @@ button {
   cursor: pointer;
 }
 
-button:disabled {
+:where(:root.review-page) button:disabled {
   cursor: default;
   opacity: 0.6;
 }
 
-button:focus-visible,
-a:focus-visible {
+:where(:root.review-page) button:focus-visible,
+:where(:root.review-page) a:focus-visible {
   outline: 2px solid var(--review-accent);
   outline-offset: 2px;
 }

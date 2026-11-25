@@ -147,6 +147,78 @@ describe('the built review page (M-X3.12, N8, R2.1)', () => {
     }
   });
 
+  // The page's sheet is built into the shared `assets/` beside the shell's, where a reader of "every sheet under assets/"
+  // (the browser leg's `linear-items` rows, for one) applies it to the shell's document. Every selector is therefore scoped
+  // to the review document (`:root.review-page`, which review.html's root carries) or to a `review-` name. An unscoped
+  // `body { padding: 16px }` moved the shell's act bar 5.5 px under its phone bar there (measured 2026-11-25).
+  it("the page's built sheet styles only the review document: every selector is scoped to it", () => {
+    // A small block walker (sheet review, M2 to M4): a top-level selector list is split at commas outside parentheses and
+    // each must be scoped; keyframe selectors and nested rules sit under a parent already judged. An at-rule that acts on the
+    // whole document (`@font-face`, `@keyframes`, `@property`, `@counter-style`, `@page`, `@import`, `@layer` and the like)
+    // must carry a `review-` name; only the group rules (`@media`, `@supports`, `@container`) are walked into.
+    const SCOPED = /^(?::where\(:root\.review-page\)|:root\.review-page\b|\.review-|#review-)/;
+    const GROUPS = new Set(['media', 'supports', 'container']);
+    const splitTop = (list: string): string[] => {
+      const parts: string[] = [];
+      let depth = 0;
+      let from = 0;
+      for (let i = 0; i < list.length; i += 1) {
+        if (list[i] === '(') depth += 1;
+        else if (list[i] === ')') depth -= 1;
+        else if (list[i] === ',' && depth === 0) { parts.push(list.slice(from, i).trim()); from = i + 1; }
+      }
+      return [...parts, list.slice(from).trim()];
+    };
+    const unscoped = (css: string): string[] => {
+      const text = css.replace(/\/\*[\s\S]*?\*\//g, '');
+      const bad: string[] = [];
+      const stack: Array<'group' | 'keyframes' | 'style' | 'other'> = [];
+      let from = 0;
+      for (let i = 0; i < text.length; i += 1) {
+        const c = text[i];
+        if (c === ';') {
+          const statement = text.slice(from, i).trim();
+          if (statement.startsWith('@') && stack.every((k) => k === 'group') && !/^@charset\b|\breview-/.test(statement)) bad.push(statement);
+          from = i + 1;
+        } else if (c === '}') {
+          stack.pop();
+          from = i + 1;
+        } else if (c === '{') {
+          const prelude = text.slice(from, i).trim();
+          from = i + 1;
+          const parent = stack[stack.length - 1];
+          if (prelude.startsWith('@')) {
+            const name = (/^@(?:-[a-z]+-)?([\w-]+)/i.exec(prelude)?.[1] ?? '').toLowerCase();
+            if (GROUPS.has(name)) { stack.push('group'); continue; }
+            if (!/\breview-/.test(prelude)) bad.push(prelude);
+            stack.push(name === 'keyframes' ? 'keyframes' : 'other');
+          } else if (parent === undefined || parent === 'group') {
+            for (const s of splitTop(prelude)) if (!SCOPED.test(s)) bad.push(s);
+            stack.push('style');
+          } else {
+            stack.push('style');
+          }
+        }
+      }
+      return bad;
+    };
+    const html = read('review.html');
+    expect(html, 'the root carries the scope class').toMatch(/<html\b[^>]*\bclass="review-page"/);
+    const sheets = [...html.matchAll(/\bhref="\/(assets\/[^"]+\.css)"/g)].map((m) => m[1]!);
+    expect(sheets.length, 'the page links its own sheet').toBeGreaterThan(0);
+    for (const s of sheets) {
+      const css = read(s);
+      expect(css.length, s).toBeGreaterThan(100);
+      expect(unscoped(css), s).toEqual([]);
+    }
+    // CONTROL: the checker sees an unscoped rule, inside a media query too, after a statement at-rule, and a document-wide
+    // at-rule with no `review-` name; it passes a scoped `:is()` list, keyframe selectors and a nested rule.
+    expect(unscoped('body{margin:0}@media (prefers-color-scheme:dark){:root{--x:1}}.review-a,button{x:1}@layer a;i{x:1}'
+      + ':where(:root.review-page) :is(a, b){x:1}@keyframes spin{from{x:0}to{x:1}}@keyframes review-spin{50%{x:1}}'
+      + '@font-face{font-family:x}.review-b{&:hover{x:1}}'))
+      .toEqual(['body', ':root', 'button', '@layer a', 'i', '@keyframes spin', '@font-face']);
+  });
+
   it('the shell is still built, and its entry script is assets/index-*.js', () => {
     const html = read('index.html');
     const entry = scripts(html).map((s) => /\bsrc="\/(assets\/[^"]+\.js)"/.exec(s.attrs)?.[1]).filter((s) => s !== undefined);
