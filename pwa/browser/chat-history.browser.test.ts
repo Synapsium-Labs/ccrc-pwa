@@ -430,32 +430,19 @@ describe('an older server', () => {
 });
 
 // ---- movement the reader's input events cannot see (fix round 1, F1 and A7) -------------------------------------------
-/** Move the scroller by `dy` px over `frames` frames, one step a frame, with no input event: a fling's momentum after the
- *  finger lifted, or a scrollbar thumb dragged (its pointer moves are not listened to). Resolves with the row at the top
- *  of the view and where it stood, a frame after the last step. */
-const glide = (page: Page, dy: number, frames: number) => page.evaluate(([d, f]) => new Promise<{ key: string; top: number } | null>((done) => {
-  const s = document.querySelector<HTMLElement>('.chat-scroller')!;
-  let n = 0;
-  const step = (): void => {
-    if (n < f) { s.scrollTop += d / f; n += 1; requestAnimationFrame(step); return; }
-    requestAnimationFrame(() => {
-      const top = s.getBoundingClientRect().top;
-      const row = [...s.querySelectorAll<HTMLElement>('[data-row-key]')].find((r) => r.getBoundingClientRect().bottom > top + 1);
-      done(row === undefined ? null : { key: row.dataset.rowKey!, top: row.getBoundingClientRect().top - top });
-    });
-  };
-  requestAnimationFrame(step);
-}), [dy, frames] as const);
-/** `glide`, started in the first frame the list grows (an older page drawn), after a wheel: the reader moving inside
- *  the settle. */
-const glideOnGrow = (page: Page, dy: number, frames: number) => page.evaluate(([d, f]) => new Promise<{ key: string; top: number } | null>((done) => {
+/** Move the scroller by `dy` px over `frames` frames, one step a frame, starting in the first frame the list grows (an
+ *  older page drawn), so the reader moves inside the settle whatever the timing (fix round 2, A1). With `wheel`, after a
+ *  wheel, an input event the list reads (A7); without, with no input event: a fling's momentum after the finger lifted,
+ *  or a scrollbar thumb dragged (its pointer moves are not listened to). Resolves with the row at the top of the view and
+ *  where it stood, a frame after the last step. */
+const glideOnGrow = (page: Page, dy: number, frames: number, wheel = true) => page.evaluate(([d, f, w]) => new Promise<{ key: string; top: number } | null>((done) => {
   const s = document.querySelector<HTMLElement>('.chat-scroller')!;
   const from = s.scrollHeight;
   let n = -1;
   const step = (): void => {
     if (n < 0) {
       if (s.scrollHeight === from) { requestAnimationFrame(step); return; }
-      s.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: Math.sign(d) * 100 }));
+      if (w) s.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: Math.sign(d) * 100 }));
       n = 0;
     }
     if (n < f) { s.scrollTop += d / f; n += 1; requestAnimationFrame(step); return; }
@@ -466,13 +453,7 @@ const glideOnGrow = (page: Page, dy: number, frames: number) => page.evaluate(([
     });
   };
   requestAnimationFrame(step);
-}), [dy, frames] as const);
-/** Wait until the page's newest message row (the one nearest the rows held) is drawn: the page has landed. */
-async function landed(page: Page, all: Ev[], s: Stream, n: number): Promise<void> {
-  const k = Number(s.asked[n - 1]!.continuation.slice(2));
-  const landing = all.slice(Math.max(0, k - PAGE), k).filter((e) => e.kind === 'user' || e.kind === 'assistant').at(-1)!.uuid as string;
-  await page.waitForSelector(`.chat-scroller [data-row-key="${landing}"]`, { state: 'attached', timeout: 10_000 });
-}
+}), [dy, frames, wheel] as const);
 const reader = (page: Page, type: string) => page.evaluate((t) => {
   document.querySelector<HTMLElement>('.chat-scroller')!.dispatchEvent(new Event(t, { bubbles: true }));
 }, type);
@@ -489,9 +470,10 @@ describe('a settle never sets back movement made after the page landed (fix roun
       await scrollList(page, 40);
       await waitAsked(s, 1);
       await reader(page, 'touchstart'); // the finger, before the page
+      // The fling's momentum, no input event, from the frame the page's rows are drawn: inside the settle (fix round 2, A1).
+      const moving = glideOnGrow(page, 360, 14, false);
       s.release();
-      await landed(page, all, s, 1);
-      const end = await glide(page, 360, 14); // the fling's momentum, no input event
+      const end = await moving;
       expect(end).not.toBeNull();
       await page.waitForTimeout(900);
       const now = await topOf(page, end!.key);
@@ -512,9 +494,9 @@ describe('a settle never sets back movement made after the page landed (fix roun
       await scrollList(page, 40);
       await waitAsked(s, 1);
       await reader(page, 'pointerdown'); // the button, before the page; its moves are not listened to
+      const moving = glideOnGrow(page, 300, 10, false); // dragged from the frame the page's rows are drawn (fix round 2, A1)
       s.release();
-      await landed(page, all, s, 1);
-      const end = await glide(page, 300, 10);
+      const end = await moving;
       expect(end).not.toBeNull();
       await page.waitForTimeout(900); // the button still held, the thumb still
       const now = await topOf(page, end!.key);
@@ -665,6 +647,76 @@ describe('a page of calls only, joining the top stretch, holds the reader (fix r
       await ctx.close();
     }
   }, 60_000);
+});
+
+// ---- paging after a context reset (fix round 2, F1) ---------------------------------------------------------------------
+/** The rows in view that a page can move: every row but the reset's own (a local row and its time divider). */
+const transcriptRowsInView = async (page: Page) =>
+  (await rowsInView(page)).filter((r) => !r.key.startsWith('local-') && !r.key.startsWith('div-local-'));
+
+/** How far the first of `before` that can be found moved: read where it is drawn, or, when it is out of the rows drawn,
+ *  found by moving the list down half a view at a time (a measurement only: the case ends on a wrong answer). */
+async function movedBy(page: Page, before: { key: string; top: number }[]): Promise<number | null> {
+  for (const r of before) {
+    const now = await topOf(page, r.key);
+    if (now !== null) return now - r.top;
+  }
+  return page.evaluate(async (rows) => {
+    const s = document.querySelector<HTMLElement>('.chat-scroller')!;
+    const from = s.scrollTop;
+    for (let i = 0; i < 400; i += 1) {
+      for (const r of rows) {
+        const row = s.querySelector<HTMLElement>(`[data-row-key="${CSS.escape(r.key)}"]`);
+        if (row !== null) return s.scrollTop - from + row.getBoundingClientRect().top - s.getBoundingClientRect().top - r.top;
+      }
+      if (s.scrollTop + s.clientHeight >= s.scrollHeight - 1) return null;
+      s.scrollTop += s.clientHeight / 2;
+      await new Promise((d) => requestAnimationFrame(() => requestAnimationFrame(d)));
+    }
+    return null;
+  }, before);
+}
+
+describe('a page after a context reset holds the reader like any other (fix round 2, F1)', () => {
+  for (const view of [VIEWS.find((v) => v.width === 390)!, VIEWS.find((v) => v.width === 1280)!]) {
+    it(`${named(view)}: each page, put below the "Session context reset" row, keeps the row the reader is on`, async () => {
+      const first = transcript(3);
+      const other = transcript(8, 'r');
+      let serving = first;
+      const { ctx, page, errors, s } = await open(view, () => serving);
+      try {
+        serving = other;
+        s.send({ type: 'rotated', uuid: 'u-2' });
+        s.send({
+          type: 'backlog', uuid: 'u-2', events: other.slice(-PAGE), offset: 1, file: '/w/r.jsonl', missing: false,
+          searchComplete: true, fileMeasured: true, older: `c-${other.length - PAGE}`,
+        });
+        await page.waitForSelector('.chat-scroller [data-row-key^="rm"]', { state: 'attached', timeout: 10_000 });
+        await page.waitForTimeout(800);
+        for (let n = 1; n <= 3; n += 1) {
+          s.hold();
+          await scrollList(page, 40);
+          await waitAsked(s, n);
+          const before = await transcriptRowsInView(page);
+          expect(before.length, 'no transcript row in view').toBeGreaterThan(0);
+          s.release();
+          const until = Date.now() + 10_000;
+          while (s.answered < n && Date.now() < until) await page.waitForTimeout(20);
+          await page.waitForTimeout(900);
+          const shift = await movedBy(page, before);
+          report(`F1 rotation, ${named(view)}, page ${n}: the row in view moved ${shift === null ? 'out of reach' : `${shift.toFixed(1)} px`}, ${s.asked.length} pages asked`);
+          expect(shift, `page ${n}: none of the rows in view could be found again`).not.toBeNull();
+          expect(Math.abs(shift!), `page ${n}: the row in view moved ${shift}px`).toBeLessThanOrEqual(1);
+        }
+        const keys = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.chat-scroller [data-row-key]')].map((r) => r.dataset.rowKey!));
+        expect(keys.some((k) => /^e[mut]/.test(k) || /activity-e/.test(k)), 'a row of the old file is shown').toBe(false);
+        expect(s.asked.length, 'pages chained past the reader').toBe(3);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 120_000);
+  }
 });
 
 describe('measurements (printed)', () => {

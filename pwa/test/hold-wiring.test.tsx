@@ -352,4 +352,62 @@ describe('rows put before the first: an older page (desktop polish wave 175)', (
     settle();
     expect(topOfRow(key), 'the list\'s own write was taken for the reader, and the row was not held').toBeCloseTo(was, 5);
   });
+
+  it('fix round 2, A3: the list\'s write through scrollTo is its own too: the row is held', () => {
+    const events = session();
+    const { rerender } = resting(events);
+    const key = rowsIn(lay.scroller!).find((r) => r.getBoundingClientRect().bottom > 0)!.dataset.rowKey!;
+    const was = topOfRow(key);
+    rerender(view([...paged(12), ...events], { ...NO_PAGING, edge: 'more', rows: 12 }));
+    reports(total());
+    act(() => { lay.scroller!.scrollTo({ top: lay.top + 300 }); });
+    settle();
+    expect(topOfRow(key), 'a scrollTo write was taken for the reader, and the row was not held').toBeCloseTo(was, 5);
+  });
+
+  it('fix round 2, A3: a move after the list\'s own write, with no input event, is the reader\'s: left where it went', () => {
+    const events = session();
+    const { rerender } = resting(events);
+    rerender(view([...paged(12), ...events], { ...NO_PAGING, edge: 'more', rows: 12 }));
+    reports(total());
+    // Virtuoso writes (so the list knows where it left the scroller), then the scroller moves on, by no write of its own and
+    // with no input event: a fling under way. Both before the next scroll event.
+    act(() => { lay.scroller!.scrollBy({ top: 300 }); });
+    const went = lay.top + 200;
+    lay.scroller!.scrollTop = went;
+    settle();
+    expect(lay.top, 'the settle set back a move made after the list\'s own write').toBe(went);
+  });
+
+  it('fix round 2, A2: a scroll whose frame comes after a page has landed reads no anchor: the settle holds the reader\'s row', () => {
+    const events = session();
+    const { rerender } = resting(events);
+    // The reader moves up 50px; the scroll event queues its read of the anchor for the next frame.
+    lay.scroller!.scrollTop = 1000;
+    lay.owed = false;
+    act(() => { lay.scroller!.dispatchEvent(new Event('scroll')); });
+    const key = rowsIn(lay.scroller!).find((r) => r.getBoundingClientRect().bottom > 0)!.dataset.rowKey!;
+    const was = topOfRow(key);
+    // Before that frame, a page lands: the rows at the top of the view are the page's until virtuoso moves the scroller.
+    rerender(view([...paged(12), ...events], { ...NO_PAGING, edge: 'more', rows: 12 }));
+    reports(total());
+    settle();
+    expect(topOfRow(key), 'the anchor was read off the page\'s rows, and the reader\'s row was not held').toBeCloseTo(was, 5);
+  });
+
+  it('fix round 2, A2: a height change whose frame comes after a page has landed writes nothing: the settle holds once', () => {
+    const events = session();
+    const { rerender } = resting(events);
+    const key = rowsIn(lay.scroller!).find((r) => r.getBoundingClientRect().bottom > 0)!.dataset.rowKey!;
+    const was = topOfRow(key);
+    // A row above the reader grows; its hold is queued for the next frame. Before that frame, a page lands.
+    resize(2, 40);
+    rerender(view([...paged(12), ...events], { ...NO_PAGING, edge: 'more', rows: 12 }));
+    reports(total());
+    const at = lay.top;
+    frame(); // the height change's frame: the page is settling, so it writes nothing
+    expect(lay.top, 'the height change\'s frame wrote the scroller while the page settled').toBe(at);
+    settle();
+    expect(topOfRow(key), 'the row the reader was reading moved').toBeCloseTo(was, 5);
+  });
 });

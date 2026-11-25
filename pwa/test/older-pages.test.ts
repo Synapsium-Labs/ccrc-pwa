@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChatEvent, SessionStreamMsg } from '../../shared/api';
 import type { OlderPageAnswer, OlderPageEnd } from '../../shared/olderPage';
 import {
-  BUSY_PAUSE_MS, BUSY_RETRIES, NO_PAGING, answerPaging, isGapMarker, liveFromOf, pagingAsked, pagingOfBacklog, pagingOfDrop,
+  BUSY_PAUSE_MS, BUSY_RETRIES, NO_PAGING, answerPaging, isGapMarker, leadOf, liveFromOf, pagingAsked, pagingOfBacklog, pagingOfDrop,
   prependPage, requestOf, retryDue, type OlderPaging,
 } from '../src/session/olderPages';
 import { buildChatItems } from '../src/session/chatItems';
@@ -253,6 +253,23 @@ describe('the reducer: pages before the rows held, in order, each row once', () 
     expect(s.older).toMatchObject({ edge: 'start', pages: 2, rows: 4 });
   });
 
+  it('the drawn list\'s lead is the reset row and its divider; a page goes after it, so the row after it tells (fix round 2, F1)', () => {
+    let s = applySessionMsg(snap({ uuid: 'u' }), { type: 'rotated', uuid: 'u' });
+    s = applySessionMsg(s, backlog(rows('b', 3), C0));
+    const before = buildChatItems(s.events, [], false);
+    expect(leadOf(before)).toBe(2); // the reset row's time divider, then the reset row
+    expect(before[leadOf(before)]!.key).toBe('div-b0');
+    s = applySessionMsg(asked(s, C0), answer('more', { for: C0, continuation: C1, events: rows('p1-', 2) }));
+    const after = buildChatItems(s.events, [], false);
+    expect(after.slice(0, 2).map((i) => i.key)).toEqual(before.slice(0, 2).map((i) => i.key)); // the first row never changes
+    expect(leadOf(after)).toBe(2);
+    expect(after[leadOf(after)]!.key).toBe('div-p1-0'); // the row after the lead does
+    // No reset row: no lead, whatever the first row is. A gap marker belongs to the pages, never to the lead.
+    expect(leadOf(buildChatItems(rows('b', 2), [], false))).toBe(0);
+    const gapped = prependPage(rows('b', 2), { events: [], gap: true }, (ts) => ({ kind: 'system', uuid: 'local-gap-1', ts, text: 'gap' }));
+    expect(leadOf(buildChatItems(gapped, [], false))).toBe(0);
+  });
+
   it('a page carrying a row already held shows it once', () => {
     let s = applySessionMsg(snap(), backlog(rows('b', 2), C0));
     s = applySessionMsg(asked(s, C0), answer('more', { for: C0, continuation: C1, events: [user('p'), user('b0')] }));
@@ -374,6 +391,121 @@ describe('the store: requests on the socket', () => {
       vi.advanceTimersByTime(BUSY_PAUSE_MS * 4);
       expect(pageRequests(sock.sent), 'a retry while one is outstanding').toHaveLength(2);
       store.getState().disconnect();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /** A store whose sockets are made in turn, each one's address kept. */
+  const reopening = () => {
+    const socks = [fakeSocket(), fakeSocket(), fakeSocket(), fakeSocket()];
+    const urls: string[] = [];
+    let n = 0;
+    const store = createSessionStore('lane-a-project-a', {
+      makeSocket: (url) => { urls.push(url); return socks[n++]!.ws; }, api: { prompt: vi.fn() },
+    });
+    return { socks, urls, store };
+  };
+  /** Connect, take a backlog with `C0`, and have the server answer the first page with `end`. */
+  const pagedTo = (r: ReturnType<typeof reopening>, end: OlderPageEnd): void => {
+    r.store.getState().connect();
+    r.socks[0]!.open();
+    r.socks[0]!.emit(backlog(rows('b', 2), C0));
+    r.store.getState().loadOlder();
+    r.socks[0]!.emit(answer(end, { for: C0 }));
+  };
+  const resumes = (url: string): boolean => url.includes('?since=') && url.includes('sinceFile=');
+  /** Run the clock until the socket's next attempt is made (fake timers), and no further. */
+  const nextAttempt = (r: ReturnType<typeof reopening>): void => {
+    const n = r.urls.length;
+    for (let t = 0; t < 60_000 && r.urls.length === n; t += 50) vi.advanceTimersByTime(50);
+  };
+
+  it('fix round 2, F2: a chat opened again while its older edge reads expired connects as a first open, and Load older is back', () => {
+    vi.useFakeTimers();
+    try {
+      const r = reopening();
+      pagedTo(r, 'expired');
+      expect(r.store.getState().older.edge).toBe('expired');
+      expect(resumes(r.urls[0]!)).toBe(false); // the first open of all: no position yet
+      r.store.getState().disconnect(); // the reader leaves the chat
+      expect(r.store.getState().older.edge, 'the words stand while away').toBe('expired');
+      r.store.getState().connect(); // and opens it again
+      expect(r.urls[1], 'opened again with its resume position: a resumed stream brings no backlog').not.toContain('since=');
+      r.socks[1]!.open();
+      r.socks[1]!.emit(backlog(rows('b', 3), C1));
+      expect(r.store.getState().older).toMatchObject({ edge: 'more', next: C1 });
+      // From that backlog on, the open screen's reconnect resumes as always.
+      r.socks[1]!.close();
+      nextAttempt(r);
+      expect(r.urls).toHaveLength(3);
+      expect(resumes(r.urls[2]!), 'a reconnect after the fresh backlog').toBe(true);
+      r.store.getState().disconnect();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('fix round 2, F2: a drop before the fresh open\'s backlog asks fresh again; it is still the same open', () => {
+    vi.useFakeTimers();
+    try {
+      const r = reopening();
+      pagedTo(r, 'invalid');
+      r.store.getState().disconnect();
+      r.store.getState().connect();
+      r.socks[1]!.open();
+      r.socks[1]!.close(); // gone before its backlog
+      nextAttempt(r);
+      expect(r.urls[2], 'the retry of the open').not.toContain('since=');
+      r.store.getState().disconnect();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('fix round 2, F2: a reconnect of the open screen keeps its resume position, expired or not', () => {
+    vi.useFakeTimers();
+    try {
+      const r = reopening();
+      pagedTo(r, 'expired');
+      r.socks[0]!.close(); // the socket drops under the open screen
+      nextAttempt(r);
+      expect(r.urls).toHaveLength(2);
+      expect(resumes(r.urls[1]!), 'the open screen\'s reconnect').toBe(true);
+      expect(r.urls[1]).toContain(`since=${encodeURIComponent(r.store.getState().uuid!)}:${r.store.getState().offset}`);
+      expect(r.store.getState().older.edge).toBe('expired');
+      r.store.getState().disconnect();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('fix round 2, F2: opened again in any other state, the chat resumes as before', () => {
+    for (const end of ['start', 'changed', 'busy', 'unreadable', 'unmeasured'] as const) {
+      const r = reopening();
+      pagedTo(r, end);
+      expect(r.store.getState().older.edge).not.toBe('expired');
+      r.store.getState().disconnect();
+      r.store.getState().connect();
+      expect(resumes(r.urls[1]!), `opened again after "${end}"`).toBe(true);
+      r.store.getState().disconnect();
+    }
+  });
+
+  it('fix round 2, A3: a retry timer that fires after the reader left and opened the chat again asks nothing they did not', () => {
+    vi.useFakeTimers();
+    try {
+      const r = reopening();
+      pagedTo(r, 'busy');
+      expect(r.store.getState().older).toMatchObject({ edge: 'loading', busy: 1 });
+      r.store.getState().disconnect(); // leaving the screen does not clear the retry's timer
+      expect(r.store.getState().older).toMatchObject({ edge: 'more', asked: null, busy: 0 });
+      r.store.getState().connect(); // opened again within the pause
+      r.socks[1]!.open();
+      vi.advanceTimersByTime(BUSY_PAUSE_MS * 2);
+      expect(pageRequests(r.socks[1]!.sent), 'the old timer asked on the new socket').toEqual([]);
+      expect(r.store.getState().older).toMatchObject({ edge: 'more', asked: null });
+      r.store.getState().disconnect();
     } finally {
       vi.useRealTimers();
     }

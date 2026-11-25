@@ -105,6 +105,12 @@ export function pagingOfDrop(p: OlderPaging): OlderPaging {
   return { ...p, asked: null, voided: 0, edge: p.edge === 'loading' ? 'more' : p.edge, busy: 0 };
 }
 
+/** Whether a chat opened now connects as a first open does, without its resume position (fix round 2, F2): its older
+ *  edge reads `expired`, which only a backlog's continuation clears, and a resumed stream brings no backlog. So opening the
+ *  chat again is what the edge's words say it is, a way to load the older rows. Read when the screen opens, and only then:
+ *  a reconnect of an open screen resumes as it always has, and so does an open in every other state. */
+export const opensFresh = (p: OlderPaging): boolean => p.edge === 'expired';
+
 /** A `busy` request is due to be asked again, after `BUSY_PAUSE_MS` (the store's timer). */
 export const retryDue = (p: OlderPaging): boolean => p.edge === 'loading' && p.asked === null && p.busy > 0 && p.next !== null;
 
@@ -142,11 +148,12 @@ export function answerPaging(p: OlderPaging, a: OlderPageAnswer): Answered {
       return { paging: { ...p, voided: p.voided - 1, asked: null, edge: p.asked === null ? p.edge : 'more' }, page: null };
     }
     if (p.asked === null) return { paging: p, page: null };
-    // The answer to the request before (fix round 1, A3). Sound because a continuation names a place: a page's next
-    // continuation is where that page ends, strictly before the place it was asked from (`server/src/transcript/
-    // olderRange.ts`: every record a page frames ends at or before its cursor), so it is never the continuation it
-    // answers; and two different places' pages end at different places (the same record count, or the same chunk budget,
-    // back from each), so only the request whose page ended here can carry it.
+    // The answer to the request before (fix round 1, A3). Sound because a continuation names a place, and a legitimate
+    // answer's next continuation lies strictly below the one it was asked with (`server/src/transcript/olderRange.ts`:
+    // every record a page frames ends at or before its cursor, and the next cursor is that page's start). So an answer
+    // whose next is the continuation outstanding cannot be that request's own answer: it is an earlier request's, whose
+    // page ended where the outstanding one starts, and the outstanding request is still owed its answer. (Fix round 2,
+    // A6: the argument needs nothing about other requests' pages. Two cursors inside one long record can share a next.)
     if (a.end === 'more' && a.continuation === p.asked) return { paging: p, page: null };
   }
   if (a.end === 'busy') return { paging: busyOf(p), page: null };
@@ -192,6 +199,20 @@ export function rowsFrom(events: readonly ChatEvent[]): number {
   let i = 0;
   while (i < events.length && isLocalDivider(events[i]!) && !isGapMarker(events[i]!)) i += 1;
   return i;
+}
+
+/** The drawn list's leading rows that a page goes after (fix round 2, F1): the local rows `rowsFrom` counts, with the
+ *  time dividers drawn above them. 0 when the list does not open with one. A page changes the row after them, never them,
+ *  so the list tells a page came by that row: after a context reset the "Session context reset" row stays on top. */
+export function leadOf(items: readonly { readonly kind: string; readonly event?: ChatEvent }[]): number {
+  let lead = 0;
+  for (let i = 0; i < items.length; i += 1) {
+    const it = items[i]!;
+    if (it.kind === 'divider') continue;
+    if (it.kind !== 'message' || it.event === undefined || !isLocalDivider(it.event) || isGapMarker(it.event)) break;
+    lead = i + 1;
+  }
+  return lead;
 }
 
 /** The rows with a page prepended: its events that are not copies of rows already held, oldest first, then a gap marker

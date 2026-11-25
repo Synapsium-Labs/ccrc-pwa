@@ -28,7 +28,7 @@ import { PendingBubble } from './PendingBubble';
 import { sameRowProps } from './sameRow';
 import { renderToolWell } from './ToolWellText';
 import { TAP_SETTLE_MS, footLeft, heightMove, holdShift, prependShift } from './footFollow';
-import { NO_PAGING, isGapMarker, liveFromOf, type OlderPaging } from './olderPages';
+import { NO_PAGING, isGapMarker, leadOf, liveFromOf, type OlderPaging } from './olderPages';
 import { keepOpenAcross, renamedAcross } from './stretchJoin';
 import { foldToolActivity, rowScope, waitKey, waitOf, type LiveWait, type RowScope, type TranscriptItem } from './toolActivity';
 import { ToolActivityRow } from './ToolActivityRow';
@@ -1043,6 +1043,8 @@ function ChatScroller({
     readSoon.current = true;
     requestAnimationFrame(() => {
       readSoon.current = false;
+      // A page that came in between is settling (fix round 2, A2): the settle reads the anchor and asks for the next page.
+      if (adjusting.current) return;
       readAnchor();
       nearTop();
     });
@@ -1088,8 +1090,16 @@ function ChatScroller({
   const indexing = useRef({ items, first: FIRST_INDEX, settles: 0 });
   if (indexing.current.items !== items) {
     const was = indexing.current.items;
-    const top = was.length > 0 && items.length > 0 && was[0]!.key !== items[0]!.key;
-    const shift = top ? prependShift(was.map(keyOf), items.map(keyOf), anchor.current[0]?.key ?? null) : 0;
+    // A read of the reader's place still owed to the frame after a scroll is made here, off the rows still drawn, before
+    // the new ones commit (fix round 2, A2): that frame comes after a page and reads nothing then, and the settle holds
+    // the row the reader moved to, not the one they left.
+    if (readSoon.current && !adjusting.current) readAnchor();
+    // A page goes after the local rows a context reset left on top (fix round 2, F1), so the row after them tells it came.
+    const [lw, ln] = [leadOf(was), leadOf(items)];
+    const top = was.length > lw && items.length > ln && was[lw]!.key !== items[ln]!.key;
+    const shift = top
+      ? prependShift(was.slice(lw).map(keyOf), items.slice(ln).map(keyOf), anchor.current[0]?.key ?? null) + ln - lw
+      : 0;
     // A stretch an older page's calls joined (fix round 1, F2): its open state follows it, and the hold reads its new key.
     const joins = top ? renamedAcross(was, items) : null;
     if (joins !== null && joins.size > 0) {
@@ -1205,6 +1215,10 @@ function ChatScroller({
     // A move is a scroll event since the change, or the scroller standing elsewhere than at the change with no event yet
     // (a smooth scroll's first step lands in the frame before its event, carried item 6 of wave 175).
     requestAnimationFrame(() => {
+      // A page that came after this change and before this frame is settling (fix round 2, A2): virtuoso writes the
+      // scroller until it is quiet, and the settle holds once after it, so this frame neither writes nor reads the anchor
+      // (which would clear the renames the settle holds by).
+      if (adjusting.current) return;
       // A tap that shrank the list and left the reader at its foot did not move them off it (fix round 1, A1: a reader at
       // the foot who closes the newest stretch): its window ends, so the next change at the foot is followed. A tap that
       // grew the list (a row opening under the reader) keeps it: they are no longer at the foot, by their own doing.

@@ -27,7 +27,7 @@ import { onOnline, onPageHidden, onPageVisible } from '../lib/pageClock';
 import { isLocalDivider } from '../session/localDivider';
 import { freshOf } from '../session/eventIdentity';
 import {
-  BUSY_PAUSE_MS, GAP_PREFIX, NO_PAGING, answerPaging, pagingAsked, pagingOfBacklog, pagingOfDrop, pagingOfRotated,
+  BUSY_PAUSE_MS, GAP_PREFIX, NO_PAGING, answerPaging, opensFresh, pagingAsked, pagingOfBacklog, pagingOfDrop, pagingOfRotated,
   prependPage, requestOf, retryDue, type OlderPaging,
 } from '../session/olderPages';
 
@@ -971,6 +971,10 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
 
       connect() {
         if (socket) return;
+        // Fix round 2, F2: a chat opened while its older edge reads `expired` connects as a first open does, without its
+        // resume position, until that open's backlog comes (`olderPages.ts#opensFresh`): only a backlog brings a new
+        // continuation. Decided here, when the screen opens; a reconnect of the open screen resumes as before.
+        let fresh = opensFresh(get().older);
         socket = new ReconnectingSocket({
           // Recomputed on EVERY attempt (`ReconnectingSocket`), so an
           // automatic reconnect carries whatever the last frame left behind.
@@ -999,11 +1003,14 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
           url: () => {
             const { uuid, offset, file } = get();
             const base = wsUrl(`/ws/session/${encodeURIComponent(id)}`);
-            if (uuid === null) return base;
+            if (uuid === null || fresh) return base;
             const since = `${base}?since=${encodeURIComponent(uuid)}:${offset}`;
             return file === null ? since : `${since}&sinceFile=${encodeURIComponent(file)}`;
           },
-          onMessage: (m) => get().apply(m as SessionStreamMsg),
+          onMessage: (m) => {
+            if ((m as SessionStreamMsg).type === 'backlog') fresh = false;
+            get().apply(m as SessionStreamMsg);
+          },
           // D-6325 (`the-ask-holds-through-a-reconnect`): the flag is the surface's LIVENESS, so it falls the moment the
           // socket is anything but open, not only when the next one opens. A new connection has said nothing about the
           // envelope yet: the `ask` the store holds is the last connection's, and it is not current until this one's
