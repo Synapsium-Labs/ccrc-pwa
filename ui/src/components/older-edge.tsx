@@ -10,11 +10,13 @@
 // would take focus from a reader who just pressed it). When an end has no control, the sentence that replaces it takes
 // focus if the button had it, so a keyboard reader is never dropped to the page's start.
 import { useLayoutEffect, useRef, type ReactNode } from 'react';
+import type { OlderPageEnd } from '../../../shared/olderPage';
 import { FOCUS_RING } from '../lib/focus';
 import './older-edge.css';
 
-/** Every state the top of the chat can be in while older messages are offered (the app's `none` draws nothing). */
-export type OlderEdgeState = 'more' | 'loading' | 'start' | 'busy' | 'changed' | 'absent' | 'unreadable' | 'unmeasured';
+/** Every state the top of the chat can be in while older messages are offered (the app's `none` draws nothing): the
+ *  wire's end words less the two never shown (`invalid`, `expired`), and `loading`. */
+export type OlderEdgeState = 'loading' | Exclude<OlderPageEnd, 'invalid' | 'expired'>;
 
 /** The words, one sentence per end, and the control's label where there is one. */
 export const OLDER_WORDS: Readonly<Record<OlderEdgeState, { readonly say: string | null; readonly control: string | null }>> =

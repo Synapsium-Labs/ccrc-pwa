@@ -27,7 +27,7 @@
 //
 // L1: pure, no I/O, no React.
 import type { ChatEvent } from '../../../shared/api';
-import type { OlderPageAnswer } from '../../../shared/olderPage';
+import type { OlderPageAnswer, OlderPageEnd } from '../../../shared/olderPage';
 import { freshOf } from './eventIdentity';
 import { isLocalDivider } from './localDivider';
 
@@ -39,9 +39,10 @@ import { isLocalDivider } from './localDivider';
  *  - `start`: the oldest message available here is shown;
  *  - `busy`: the server was already reading a page for this stream; this request did nothing (Try again);
  *  - `changed`, `absent`: older messages cannot be loaded now, and asking again cannot help until a new backlog;
- *  - `unreadable`, `unmeasured`: older messages cannot be loaded now, and asking again may help (Try again). */
-export type OlderEdge =
-  | 'none' | 'more' | 'loading' | 'start' | 'busy' | 'changed' | 'absent' | 'unreadable' | 'unmeasured';
+ *  - `unreadable`, `unmeasured`: older messages cannot be loaded now, and asking again may help (Try again).
+ *  The wire's end words less the two a page never shows (`invalid`, `expired`: dropped quietly, `none`), plus `none` and
+ *  `loading`: derived, so the read failure pair keeps its one home (`shared/agent-protocol.ts`). */
+export type OlderEdge = 'none' | 'loading' | Exclude<OlderPageEnd, 'invalid' | 'expired'>;
 
 /** The edges that offer the control: a load, or a retry of the last request. */
 const ASKABLE: ReadonlySet<OlderEdge> = new Set<OlderEdge>(['more', 'busy', 'unreadable', 'unmeasured']);
