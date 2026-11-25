@@ -1322,11 +1322,21 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin buil
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatch(/^sh -c set -e; r=\$\{1%\/\}; e=\$r\/results; c=\$r\/captures; .*\.ccrc-build-copy\.XXXXXXXX.* exec setpriv .* sh \/srv\/box /);
     expect(calls[0]).toContain(` sh /srv/box ${V} ${SUM} set -e; umask 022; `);
-    expect(calls[0]!.endsWith('; echo installed')).toBe(true);
+    expect(calls[0]!.endsWith('; echo "installed$l"')).toBe(true);
     expect(stdinOfLast(h, '.ccrc-build-copy.XXXXXXXX'), 'the build\'s bytes ride the copy call\'s stdin').toBe(BYTES);
     for (const c of calls) expect(c).not.toContain('\n');
     expect(existsSync(join(h.home, 'systemd-run-calls')), 'a short act never detaches').toBe(false);
     expect(readFileSync(h.lg, 'utf8')).toMatch(/build-copy: ok \(2\.1\.330\)/);
+  });
+
+  // Fix round 1 of capture runner PR 3b: when the box's writer replaced a link at the build's name, the answer says so, for the
+  // server's one log line, and this host's log keeps it; any other success word is still no copy (the rows below).
+  it('the box replaced a link at the build\'s name: the answer carries replaced link, and the log says so', () => {
+    const h = fixture({}, COPY_RULES('0', 'installed-over-link\\n'));
+    connectedTo(h);
+    placed(h);
+    expect(json(copy(h))).toEqual({ ok: true, build: V, sha256: SUM, replaced: 'link' });
+    expect(readFileSync(h.lg, 'utf8')).toContain(`build-copy: ok (${V}; the box replaced a link at the build's name)`);
   });
 
   it('never writes the fleet\'s versions directory: its listing, the file\'s bytes, mode and time are as they were', () => {
@@ -1375,6 +1385,7 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin buil
     ['the box refuses its store', '5', 'captures-absent\\n', 'build-store-refused', 'captures-absent'],
     ['the box program fails otherwise', '1', 'stage-parent\\n', 'build-copy-failed', 'stage-parent'],
     ['the box answers something else', '0', 'what\\n', 'build-copy-failed', 'what'],
+    ['the box says it replaced a link but exits otherwise', '1', 'installed-over-link\\n', 'build-copy-failed', 'installed-over-link'],
     ['the box says a word off the grammar', '5', 'Not A Word\\n', 'build-store-refused', 'unsaid'],
   ])('%s (exit %s, out "%s"): refused %s, in that one call, the box\'s word in the log', (_n, rc, out, code, word) => {
     const h = fixture({}, COPY_RULES(rc, out));
@@ -1536,7 +1547,7 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin buil
 
     // What a pass comes to after the capture desk reads a build as absent (capture runner PR 3b): a build that holds a second
     // name (a hard link of another version) is replaced by a file of its own, one stream, and the other version keeps its
-    // bytes; a link at the build's name is the writer's refusal before any stream (the WRITER_FAULTS cases below).
+    // bytes; a link at the build's name is replaced by the build itself, its target untouched (the link cases below).
     it('a build that holds a second name is replaced by a file of its own, and the other name keeps its bytes', () => {
       const b = box();
       mkdirSync(builds(b));
@@ -1796,8 +1807,6 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin buil
       ['a link at captures/builds', (b: Box) => { const d = join(b.h.home, 'elsewhere'); mkdirSync(d); symlinkSync(d, builds(b)); }, 'builds-link'],
       ['a dangling link at captures/builds', (b: Box) => { symlinkSync(join(b.h.home, 'nowhere'), builds(b)); }, 'builds-link'],
       ['a file at captures/builds', (b: Box) => { writeFileSync(builds(b), 'x'); }, 'builds-kind'],
-      ['a link where the build goes', (b: Box) => { mkdirSync(builds(b)); symlinkSync(b.victim, join(builds(b), V)); }, 'target-link'],
-      ['a dangling link where the build goes', (b: Box) => { mkdirSync(builds(b)); symlinkSync(join(b.h.home, 'nowhere'), join(builds(b), V)); }, 'target-link'],
       ['a directory where the build goes', (b: Box) => { mkdirSync(join(builds(b), V), { recursive: true }); }, 'target-kind'],
     ];
     it.each(WRITER_FAULTS)('P4: %s refuses %s (exit 5) at the writer\'s check, before the stream, and nothing under the box root or outside it changes', (_n, arrange, word) => {
@@ -1823,7 +1832,13 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin buil
         { env: env(b), encoding: 'utf8', input: BYTES, cwd: b.root });
       return { rc: r.status ?? -1, out: r.stdout ?? '' };
     };
-    it.each(WRITER_FAULTS)('P4: %s, appearing after the check, is refused %s (exit 5) by the writer when it writes', (_n, arrange, word) => {
+    // Review 3687 F3: `captures` itself, which the root program proves before the writer is asked (so only the writer's own
+    // write-time check meets a fault that appears there after the proof).
+    const CAPTURES_FAULTS: [string, (b: Box) => void, string][] = [
+      ['a link at captures', (b: Box) => { rmSync(join(b.root, 'captures'), { recursive: true }); const d = join(b.h.home, 'elsewhere'); mkdirSync(d); symlinkSync(d, join(b.root, 'captures')); }, 'captures-link'],
+      ['a file at captures', (b: Box) => { rmSync(join(b.root, 'captures'), { recursive: true }); writeFileSync(join(b.root, 'captures'), 'x'); }, 'captures-kind'],
+    ];
+    it.each([...WRITER_FAULTS, ...CAPTURES_FAULTS])('P4: %s, appearing after the check, is refused %s (exit 5) by the writer when it writes', (_n, arrange, word) => {
       const b = box();
       arrange(b);
       const was = tree(b.root);
@@ -1831,6 +1846,62 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin buil
       expect(writeDirect(b)).toEqual({ rc: 5, out: `${word}\n` });
       expect(tree(b.root)).toEqual(was);
       if (outside !== null) expect(tree(join(b.h.home, 'elsewhere'))).toEqual(outside);
+      victimAsWas(b);
+    });
+
+    // Fix round 1 of capture runner PR 3b (the coordinator's property): a link at exactly the build's name, which the capture
+    // desk reads as absent, is healed by the next pass's one copy, as a second name is. The writer, under the same dropped
+    // identity, replaces the link itself in the one rename that places the build, and never opens, follows, writes or removes
+    // its target; the answer says a link was replaced. Each target kind, through the whole copy and in the writer alone.
+    const LINKS: [string, (b: Box) => { target: string; was: () => unknown }][] = [
+      ['a link to a file outside the box root', (b) => { mkdirSync(builds(b)); symlinkSync(b.victim, join(builds(b), V)); return { target: b.victim, was: () => [readFileSync(b.victim, 'utf8'), statSync(b.victim).mode & 0o7777] }; }],
+      ['a link to a directory outside the box root', (b) => {
+        const d = join(b.h.home, 'elsewhere'); mkdirSync(d); writeFileSync(join(d, 'kept'), 'K\n');
+        mkdirSync(builds(b)); symlinkSync(d, join(builds(b), V));
+        return { target: d, was: () => tree(d) };
+      }],
+      ['a dangling link', (b) => { const n = join(b.h.home, 'nowhere'); mkdirSync(builds(b)); symlinkSync(n, join(builds(b), V)); return { target: n, was: () => existsSync(n) }; }],
+      ['a link to another version in the store', (b) => {
+        mkdirSync(builds(b)); const o = join(builds(b), '2.1.99'); writeFileSync(o, 'OTHER VERSION\n', { mode: 0o555 }); symlinkSync('2.1.99', join(builds(b), V));
+        return { target: o, was: () => [readFileSync(o, 'utf8'), statSync(o).mode & 0o7777, statSync(o).nlink] };
+      }],
+    ];
+    const healed = (b: Box): void => {
+      const f = join(builds(b), V);
+      const st = lstatSync(f);
+      expect([st.isFile(), st.nlink, st.mode & 0o777, readFileSync(f, 'utf8')]).toEqual([true, 1, 0o555, BYTES]);
+      expect(readdirSync(builds(b)).filter((n) => n.startsWith('.copy.'))).toEqual([]);
+    };
+    it.each(LINKS)('heal: %s at the build\'s name is replaced by the build in one stream, its target untouched, and the copy says so', (_n, arrange) => {
+      const b = box();
+      const { was } = arrange(b);
+      const before = was();
+      const r = runCopy(b);
+      expect([r.rc, r.out], r.err).toEqual([0, 'installed-over-link\n']);
+      healed(b);
+      expect(was()).toEqual(before);
+      victimAsWas(b);
+      expect(shimLog(b).filter((l) => l === 'cat 0')).toHaveLength(1);
+      expect(checked(b)).toHaveLength(1);
+    });
+    it.each(LINKS)('heal: %s appearing after the check is replaced by the writer when it writes, its target untouched', (_n, arrange) => {
+      const b = box();
+      const { was } = arrange(b);
+      const before = was();
+      expect(writeDirect(b)).toEqual({ rc: 0, out: 'installed-over-link\n' });
+      healed(b);
+      expect(was()).toEqual(before);
+      victimAsWas(b);
+    });
+    it('heal: the writer\'s check passes a link at the build\'s name and changes nothing', () => {
+      const b = box();
+      mkdirSync(builds(b));
+      symlinkSync(b.victim, join(builds(b), V));
+      const was = tree(b.root);
+      const r = spawnSync(BASH, ['-c', '. "$1"; shift; exec sh -c "$TBA_BUILD_WRITE_SH" sh "$@"', '_', VERB, b.root, V, 'check'],
+        { env: env(b), encoding: 'utf8', input: '', cwd: b.root });
+      expect([r.status, r.stdout]).toEqual([0, '']);
+      expect(tree(b.root)).toEqual(was);
       victimAsWas(b);
     });
 
