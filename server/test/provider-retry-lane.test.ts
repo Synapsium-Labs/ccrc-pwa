@@ -173,6 +173,12 @@ describe('the nudge, for any live session', () => {
     expect(retries(r.coord), 'control').toHaveLength(1);
   }, 60_000);
 
+  it('the nudge never wakes a session that went to sleep after it was queued', async () => {
+    const r = await one();
+    await r.sweep(FAIL_AT + MIN);
+    expect(r.coord.db.prepare('SELECT wake FROM mail_deliveries').all()).toEqual([{ wake: 'never' }]);
+  }, 60_000);
+
   it('a failure older than the watch\'s mail horizon is nudged once per due time, never twice for one', async () => {
     const r = await one();
     const old = FAIL_AT - 3 * 24 * H;

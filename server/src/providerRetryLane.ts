@@ -58,7 +58,7 @@ export class ProviderRetryLane {
       if (!w.changed) console.warn(`ccrc-server: provider-retry delivery ${v.deliveryId}: withdraw refused (${w.state})`);
       this.queued.delete(id);
     } else if (v.act === 'nudge') {
-      const q = queueRunlessNotice(store, { toId: id, kind: 'status', subject: providerRetrySubject(v.dueAt), body: PROVIDER_RETRY_BODY });
+      const q = queueRunlessNotice(store, { toId: id, kind: 'status', subject: providerRetrySubject(v.dueAt), body: PROVIDER_RETRY_BODY, wake: 'never' });
       if (q.queued) this.queued.add(id);
     } else if (v.act === 'none') {
       if (session.mark.ok && providerRetryOwed(session.mark) === null) this.queued.delete(id);

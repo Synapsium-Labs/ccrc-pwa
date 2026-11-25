@@ -33,8 +33,9 @@ matcher list and stays counted). **`unknown` was not produced by any of them**, 
 
 Not measured: the first-party base URL, other Claude Code builds, an HTTP 429 (an account's, not a provider's).
 
-After a failure the input box shows Claude Code's own dim hint, `Resend your message to try again`. The fix that keeps a pane
-reading it from calling it a person's draft is its own change (D-9077); until it lands, rule 5 below refuses such a box.
+After a failure the input box shows Claude Code's own dim hint, `Resend your message to try again`. Measured on `main` with a
+captured pane: the box reader takes the character under the cursor for a one-character draft. The fix is its own change (#3387).
+Rule 5 below refuses a box that reads as a draft, so **this wave lands after #3387**: before it, a focused pane is never nudged.
 
 ## The rungs
 
@@ -64,7 +65,8 @@ A real Stop or a `clear` ends it. So does any turn: what is owed is `failAts` no
 5. **The mail** (`shared/provider-retry.ts`, L0): a run-less system mail to the session itself. It is a row of the mail lane's
    own fixed-line table (`envelope.ts#FIXED_LINE_MAIL`): its line is typed whole, acked as typed, and carries `draft: 'refuse'`,
    which the lane's existing `...nudge.rule` spread turns into `onDraft: 'refuse'`. The refusal is a hold in
-   `delivery.ts#decideSendFailure`: no attempt, no park, no notice. `inject/send.ts` is not touched.
+   `delivery.ts#decideSendFailure`: no attempt, no park, no notice. `inject/send.ts` is not touched. It is queued `wake: never`, so
+   a session that went to sleep after it was queued is not woken for it (D-8073).
 6. **The notice** (`server/src/coord/providerOutage.ts`, L1; `server/src/providerOutageMark.ts`, L3;
    `server/src/providerRetryLane.ts`, L4): the disk alarm lane's shape, a durable mark and `hasNotice('coord', '', key)`.
 7. **The arming** (`providerRetry.ts#providerRetryArmed`): its own rule. Off under `stall-watch-disabled`, a chosen level of
