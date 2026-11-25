@@ -1,23 +1,22 @@
 // An outside folder's pages: the loader seam and the pure rules (X2 P2.4, spec 4.1). L1 policy plus the seam's types, no React,
-// no DOM, no state, and no URL of its own: every link is `docsPageUrl`'s over a `DocsFolderLocation`.
+// no DOM, no state, and no URL of its own.
 //
 // WHY A MODULE OF ITS OWN. `DocsHead.tsx` owns the project page's truth line and the five actions' off reasons, and another
-// programme holds it (#3289), so this wave does not edit it. The folder page's words (`DOCS_FOLDER_TEXT`, docsText.ts) and the
-// deciders here (`folderTruthLine`, `folderActions`, `folderCrumbs`, `folderUp`) are what `DocsHead` is to read once it can
-// take a folder page; until then `FolderHead` (FolderPages.tsx) draws them. A folder has no repository, so none of a project
+// programme held it (#3289), and it has merged. There is ONE head: `DocsHead` draws a folder page too, reading the folder
+// page's words (`DOCS_FOLDER_TEXT`, docsText.ts) through the deciders here (`folderTruthLine`, `folderActions`); its crumbs and
+// its Back are `docsCrumbs` and `docsUpHref`, widened to the folder locations. A folder has no repository, so none of a project
 // page's facts exist for it: no ref, no commit, no drafts, no freshness, no version, no GitHub page. Its one fact is the
 // modified time of the file read, and only a fingerprinted file read (the show answer) carries it: a range read's prepare
 // answer carries none, so the truth line says its first clause alone there (a known limit).
 import {
-  DOC_SECTION_SLUGS, DOCS_CLASS_CAP, DOCS_RANGE_MAX_BYTES, contentClass, docsPageUrl, statPin,
+  DOC_SECTION_SLUGS, DOCS_CLASS_CAP, DOCS_RANGE_MAX_BYTES, contentClass, statPin,
   type DocSectionSlug, type DocsFailure, type DocsFolderAddResponse, type DocsFolderEntry, type DocsFolderFileResponse, type DocsFolderLabelRow,
-  type DocsFolderLocation,
   type DocsFolderRemoveResponse, type DocsFolderTreeOk, type DocsFolderTreeResponse, type DocsFoldersLabelsResponse,
   type DocsFoldersPathsResponse, type DocsRangeFrame, type DocsRangePin, type DocsRangePrepared,
 } from '../../../shared/docs';
-import { DOCS_FOLDER_TEXT, DOCS_HEAD_TEXT, DOCS_RELIST_WORDS, fillSentence } from './docsText';
+import { DOCS_FOLDER_TEXT, DOCS_RELIST_WORDS, fillSentence } from './docsText';
 import type { DocsAnswer } from './failures';
-import { SECTION_LABEL, SECTION_ORDER } from './docsTree';
+import { SECTION_ORDER } from './docsTree';
 import type { RangeLoader, RangeTarget } from './range/readRange';
 
 /** The loader seam of the folder pages and Settings' section (spec 4.1 and 7); `api.docs.folders` is the default and tests
@@ -180,33 +179,3 @@ export function folderActions(): readonly { action: FolderAction; on: false; rea
   return FOLDER_ACTIONS.map((action) => ({ action, on: false as const, reason: DOCS_FOLDER_TEXT.off[action] }));
 }
 
-/** A folder page's crumbs: Docs, the folder (`~label`), the section, then each directory of the path. */
-export function folderCrumbs(loc: DocsFolderLocation): { label: string; href: string }[] {
-  const crumbs: { label: string; href: string }[] = [{ label: DOCS_HEAD_TEXT.index, href: docsPageUrl({ kind: 'index' }) }];
-  crumbs.push({ label: '~' + loc.label, href: docsPageUrl({ kind: 'folder', label: loc.label }) });
-  if (loc.kind === 'folder') return crumbs;
-  crumbs.push({ label: SECTION_LABEL[loc.section], href: docsPageUrl({ kind: 'folder-section', label: loc.label, section: loc.section }) });
-  if (loc.kind === 'folder-section') return crumbs;
-  const parts = loc.path.split('/');
-  parts.forEach((part, i) => {
-    const last = i === parts.length - 1;
-    crumbs.push({
-      label: part,
-      href: docsPageUrl({
-        kind: 'folder-path', label: loc.label, section: loc.section, path: parts.slice(0, i + 1).join('/'),
-        dirSlash: last ? loc.dirSlash : true,
-      }),
-    });
-  });
-  return crumbs;
-}
-
-/** The page one level up from a folder page. */
-export function folderUp(loc: DocsFolderLocation): string {
-  if (loc.kind === 'folder') return docsPageUrl({ kind: 'index' });
-  if (loc.kind === 'folder-section') return docsPageUrl({ kind: 'folder', label: loc.label });
-  const cut = loc.path.lastIndexOf('/');
-  return docsPageUrl(cut < 0
-    ? { kind: 'folder-section', label: loc.label, section: loc.section }
-    : { kind: 'folder-path', label: loc.label, section: loc.section, path: loc.path.slice(0, cut), dirSlash: true });
-}

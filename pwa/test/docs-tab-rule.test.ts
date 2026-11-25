@@ -124,6 +124,14 @@ describe('a Docs tab title (docsTabTitle)', () => {
     expect(docsTabTitle('/docs/project-a/specs/a.md', '')).not.toBe(docsTabTitle('/docs/project-a/specs/b.md', ''));
     expect(docsTabTitle('/docs/project-a/specs/a.md', '?bogus=1')).toBe('Docs · ccrc');
   });
+
+  it('an outside folder titles as a project does, its label where the project name goes (X2 P2.4)', () => {
+    expect(docsTabTitle('/docs/~notes/plans/2026-11/one.md', '')).toBe('one.md · notes · Docs · ccrc');
+    expect(docsTabTitle('/docs/~notes/plans/2026-11/', '')).toBe('2026-11 · notes · Docs · ccrc');
+    expect(docsTabTitle('/docs/~notes/specs', '')).toBe('specs · notes · Docs · ccrc');
+    expect(docsTabTitle('/docs/~notes', '')).toBe('notes · Docs · ccrc');
+    expect(docsTabTitle('/docs/~Not-A-Label', '')).toBe('Docs · ccrc');
+  });
 });
 
 /** `useFollowLink` as a component drawn in a Docs tab (or the console) would hold it. */

@@ -1,5 +1,6 @@
-// An outside folder's pages (X2 P2.4, spec 4.1): the head, the root, a section or directory listing and a leaf. The page
-// family of `DocsTreeView.tsx`'s project pages, kept apart so that file holds one family. Everything is read through
+// An outside folder's pages (X2 P2.4, spec 4.1): the root, a section or directory listing and a leaf, under `DocsHead`, which
+// draws a folder page's head too. The page family of `DocsTreeView.tsx`'s project pages, kept apart so that file holds one
+// family. Everything is read through
 // `DocsFolderLoaders` (the labels, tree, file and range doors), never the project doors; the rows and decisions are
 // `folderPage.ts`'s; every link is `docsPageUrl` over a `DocsFolderLocation`. Nothing here draws the folder's absolute path:
 // the only door that carries one is `paths`, which Settings' section alone calls.
@@ -25,15 +26,15 @@ import { DocsAssetContext, svgDataUrl } from './DocImage';
 import type { DocLinkContextValue } from './DocLink';
 import { DOC_NOT_UTF8_NOTE, DocMarkdown, DocPlain, docMarkdownSource } from './DocMarkdown';
 import { RangeSource } from './DocsLeaf';
-import { DocsPageLink } from './DocsTreeView';
+import { DocsHead } from './DocsHead';
 import {
-  DOCS_FOLDER_TEXT, DOCS_HEAD_TEXT, DOCS_RELIST_WORDS, DOCS_VIEW_TEXT, failureSentence, fillSentence, kib, pluralS, slotSentence,
+  DOCS_FOLDER_TEXT, DOCS_RELIST_WORDS, DOCS_VIEW_TEXT, failureSentence, fillSentence, kib, pluralS, slotSentence,
 } from './docsText';
 import { CLASS_GLYPH, FOLDER_GLYPH, SECTION_LABEL, leafName } from './docsTree';
 import type { DocsNotOk } from './failures';
 import {
-  folderActions, folderCrumbs, folderListing, folderPathKind, folderRangeLoader, folderRangeVisit, folderReadPlan,
-  folderSectionRows, folderTruthLine, folderUp, type DocsFolderLoaders,
+  folderListing, folderPathKind, folderRangeLoader, folderRangeVisit, folderReadPlan, folderSectionRows,
+  type DocsFolderLoaders,
 } from './folderPage';
 import { showBytes } from './objectUrls';
 import { RangeLeaf, rangeReadKey, type RangeBytes } from './range/RangeLeaf';
@@ -77,40 +78,6 @@ function FolderNote(p: { readonly answer: DocsNotOk; readonly onRetry: () => voi
       <p className="docs-note">{text}</p>
       {p.answer.s !== 'auth' && <button type="button" className="docs-fail-action" onClick={p.onRetry}>{DOCS_FOLDER_TEXT.retry}</button>}
     </div>
-  );
-}
-
-/** The folder page's head: back, crumbs, the truth line, and the five actions, all off, each with its reason. It stands
- *  where `DocsHead` stands on a project page; the words and the decision are `folderPage.ts`'s. */
-export function FolderHead(p: { readonly loc: DocsFolderLocation; readonly mtimeNs: string | null }): ReactNode {
-  const crumbs = folderCrumbs(p.loc);
-  return (
-    <header className="docs-head docs-folder-head" data-folder={p.loc.label}>
-      <div className="docs-head-bar">
-        <DocsPageLink className="docs-hint-link" href={folderUp(p.loc)} label={DOCS_HEAD_TEXT.back}>{'‹'}</DocsPageLink>
-        <nav className="docs-crumbs" aria-label={DOCS_HEAD_TEXT.crumbs}>
-          <ol>
-            {crumbs.map((c, i) => (
-              <li key={c.href}>
-                {i === crumbs.length - 1 ? <span className="docs-crumb" aria-current="page">{c.label}</span>
-                  : <DocsPageLink className="docs-crumb" href={c.href}>{c.label}</DocsPageLink>}
-              </li>
-            ))}
-          </ol>
-        </nav>
-      </div>
-      <p className="docs-truth" data-truth="folder">{folderTruthLine(p.mtimeNs)}</p>
-      <ul className="docs-folder-actions">
-        {folderActions().map((a) => (
-          <li key={a.action}>
-            <button type="button" className="docs-action" disabled aria-describedby={'docs-off-' + a.action} data-action={a.action}>
-              {DOCS_FOLDER_TEXT.actionLabel[a.action]}
-            </button>{' '}
-            <small id={'docs-off-' + a.action} className="docs-action-off">{a.reason}</small>
-          </li>
-        ))}
-      </ul>
-    </header>
   );
 }
 
@@ -261,8 +228,11 @@ function FolderRangeBody(p: {
 function FolderLeafBody(p: {
   readonly label: string; readonly entry: DocsFolderEntry; readonly folders: DocsFolderLoaders; readonly parser: MarkdownParser;
   readonly onTime: (mtimeNs: string | null) => void; readonly onRelist: () => void; readonly relists: number;
+  /** Whether this page's one automatic re-list is used. Held by `FolderPage`, not here: a re-list shows the tree as loading,
+   *  which unmounts this body, so a flag of its own would be new on every re-read and the limit would never hold. */
+  readonly spent: { current: boolean };
 }): ReactNode {
-  const { label, entry, folders, parser, onTime, onRelist, relists } = p;
+  const { label, entry, folders, parser, onTime, onRelist, relists, spent } = p;
   const plan = useMemo(() => folderReadPlan(entry), [entry]);
   const link = useMemo(() => folderLinkBase(label, entry.section, entry.path), [label, entry.section, entry.path]);
   const [slot, setSlot] = useState<{ s: 'loading' } | { s: 'ok'; answer: DocsFolderFileResponse } | DocsNotOk>({ s: 'loading' });
@@ -284,8 +254,7 @@ function FolderLeafBody(p: {
     return () => ac.abort();
   }, [label, entry, folders, plan, nonce]);
   const rangeLoader = useMemo(() => folderRangeLoader(label, folders.range), [label, folders]);
-  const spent = useRef(false);
-  const visit = useMemo(() => folderRangeVisit(onRelist, relists, spent), [onRelist, relists]);
+  const visit = useMemo(() => folderRangeVisit(onRelist, relists, spent), [onRelist, relists, spent]);
   const show = useMemo(() => (slot.s === 'ok' ? showOfFolder(slot.answer) : null), [slot]);
   if (plan.mode === 'none') {
     const why = plan.why === 'not-a-file' ? DOCS_FOLDER_TEXT.notAFile : plan.why === 'too-large' ? DOCS_FOLDER_TEXT.tooLarge
@@ -331,6 +300,10 @@ export function FolderPage(p: {
   // The time of the bytes the page shows: the show's own, once this leaf's read has answered; else none (first clause alone).
   const mtimeNs = shown !== null && shown.key === key ? shown.mtimeNs : null;
   const onTime = useCallback((t: string | null) => setShown(t === null ? null : { key, mtimeNs: t }), [key]);
+  // The one automatic re-list of a range read, per page: it outlives the leaf body (a re-list unmounts it) and starts over
+  // on another page, and a successful read gives it back (`folderRangeVisit`'s `rangeRead`).
+  const spent = useRef(false);
+  useEffect(() => { spent.current = false; }, [key]);
   let body: ReactNode;
   if (slot.s === 'loading') body = <p className="docs-loading">{DOCS_FOLDER_TEXT.loading}</p>;
   else if (slot.s !== 'ok') body = <FolderNote answer={slot} onRetry={reload} />;
@@ -341,7 +314,7 @@ export function FolderPage(p: {
     if (kind === 'leaf' && entry !== null) {
       body = (
         <FolderLeafBody
-          key={key} label={loc.label} entry={entry} folders={folders} parser={parser} onTime={onTime} onRelist={reload} relists={reads}
+          key={key} label={loc.label} entry={entry} folders={folders} parser={parser} onTime={onTime} onRelist={reload} relists={reads} spent={spent}
         />
       );
     } else if (kind === 'dir') body = <FolderListingPage key={key} label={loc.label} tree={slot.tree} section={loc.section} dir={loc.path} />;
@@ -349,7 +322,7 @@ export function FolderPage(p: {
   }
   return (
     <>
-      <FolderHead loc={loc} mtimeNs={mtimeNs} />
+      <DocsHead page={loc} folderTime={mtimeNs} />
       {/* No asset context: a relative image in a folder's Markdown is refused as outside a page, never read as a project's. */}
       <DocsAssetContext value={null}>
         <div className="docs-folder-body">{body}</div>

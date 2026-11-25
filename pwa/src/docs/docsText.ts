@@ -162,12 +162,12 @@ export const DOCS_PAGE_INVALID_SENTENCE: Record<DocsPageParseFailure, string> = 
   'reserved-node': 'This address names a fleet node, which Docs does not serve yet.',
 };
 
-/** The outside folders' words (X2 P2.4, spec 4.1): the index group, a folder page's truth line and the five actions' off
- *  reasons (`folderPage.ts` decides which, `FolderHead` draws them until `DocsHead` reads them), and Settings' Docs folders
- *  section. No sentence names an absolute path: the path is Settings' alone, and only as the operator typed or the box listed it. */
 /** The words the account gate refuses the folder Add door with (`{ok: false, error}`, no docs word). */
 export type DocsFolderGateWord = 'auth-off' | 'insecure-origin' | 'unauthenticated' | 'unsupported';
 
+/** The outside folders' words (X2 P2.4, spec 4.1): the index group, a folder page's truth line and the five actions' off
+ *  reasons (`folderPage.ts` decides which, `DocsHead` draws them), and Settings' Docs folders
+ *  section. No sentence names an absolute path: the path is Settings' alone, and only as the operator typed or the box listed it. */
 export const DOCS_FOLDER_TEXT = {
   indexGroup: 'Outside folders',
   /** The index's one quiet line when the labels read was refused or failed: no group, no banner. */

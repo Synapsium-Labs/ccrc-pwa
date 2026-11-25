@@ -10,7 +10,10 @@ import {
 } from '../../shared/docs';
 import { DocsScreen } from '../src/screens/DocsScreen';
 import { DocsFoldersSection } from '../src/screens/settings/DocsFoldersSection';
-import { DOCS_FOLDER_TEXT, DOCS_PAGE_INVALID_SENTENCE, DOCS_FAILURE_SENTENCE } from '../src/docs/docsText';
+import {
+  DOCS_FOLDER_TEXT, DOCS_HEAD_TEXT, DOCS_PAGE_INVALID_SENTENCE, DOCS_FAILURE_SENTENCE, DOCS_RANGE_TEXT, DOCS_VIEW_TEXT,
+} from '../src/docs/docsText';
+import { docsCrumbs, docsUpHref } from '../src/docs/DocsHead';
 import { folderActions, folderReadPlan, folderTruthLine } from '../src/docs/folderPage';
 import type { DocsFolderLoaders } from '../src/docs/folderPage';
 import type { DocsAnswer } from '../src/docs/failures';
@@ -33,6 +36,7 @@ const FOLDER_PATH = '/home/user/notes';
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   history.replaceState(null, '', '/');
 });
 
@@ -257,6 +261,28 @@ describe('folder page: truth line and actions', () => {
     expect(folderActions().map((a) => a.action)).toEqual(['history', 'changes', 'versions', 'github', 'share']);
   });
 
+  it('one head: the crumbs and Back are DocsHead\'s, widened to folders, and nothing with no folder meaning is drawn', async () => {
+    const leaf = { kind: 'folder-path', label: 'notes', section: 'specs', path: 'd/x.md', dirSlash: false } as const;
+    expect(docsCrumbs(leaf).map((c) => [c.label, c.href])).toEqual([
+      ['Docs', '/docs'], ['~notes', '/docs/~notes'], ['specs', '/docs/~notes/specs'],
+      ['d', '/docs/~notes/specs/d/'], ['x.md', '/docs/~notes/specs/d/x.md'],
+    ]);
+    expect(docsUpHref(leaf)).toBe('/docs/~notes/specs/d/');
+    expect(docsUpHref({ ...leaf, path: 'a.md' })).toBe('/docs/~notes/specs');
+    expect(docsUpHref({ kind: 'folder-section', label: 'notes', section: 'specs' })).toBe('/docs/~notes');
+    expect(docsUpHref({ kind: 'folder', label: 'notes' })).toBe('/docs');
+    const f = fakeFolders();
+    open('/docs/~notes/specs/a.md', f);
+    await screen.findByText('hello folder');
+    const head = document.querySelector('.docs-head') as HTMLElement;
+    expect(document.querySelectorAll('.docs-head')).toHaveLength(1);
+    expect(within(head).getByRole('button', { name: DOCS_HEAD_TEXT.back })).toBeTruthy();
+    expect(within(head).getByRole('navigation', { name: DOCS_HEAD_TEXT.crumbs })).toBeTruthy();
+    for (const sel of ['.docs-export', '.docs-more', '[data-plain-note]', '.docs-share', '.docs-fresh']) {
+      expect(head.querySelector(sel), sel).toBeNull();
+    }
+  });
+
   it('the folder pages read the tree and the file doors only: never the paths door, never a project door', async () => {
     const f = fakeFolders();
     const base = fakeLoaders();
@@ -392,6 +418,24 @@ describe('folder leaf: rendered as a draft is, with the folder\'s own links', ()
     expect(reads).toBe(2);
   });
 
+  it('a range read of a file that keeps changing re-lists once on its own, then says it is changing with a Retry, and reads no more', async () => {
+    const tree: DocsFolderTreeOk = { ...TREE, entries: [file('specs', 'big.md', { size: 3 * 1024 * 1024 })] };
+    const prepare = vi.fn(async () => failedAnswer('draft-changed', { now: 'present' }));
+    const base = fakeFolders();
+    const f = fakeFolders({
+      // A listing takes time on the wire, so its loading state is drawn (and the leaf under it goes) on every re-read.
+      tree: async () => { await new Promise((r) => setTimeout(r, 15)); return ok({ ok: true as const, tree }); },
+      range: { prepare, frame: base.folders.range.frame },
+    });
+    open('/docs/~notes/specs/big.md', f);
+    await screen.findByText(DOCS_VIEW_TEXT.changing);
+    expect(screen.getByRole('button', { name: DOCS_RANGE_TEXT.readAgain })).toBeTruthy();
+    // Let anything still scheduled run: nothing more may be read.
+    await act(async () => { await new Promise((r) => setTimeout(r, 100)); });
+    expect(f.calls.filter((c) => c === 'tree'), 'one automatic re-list, never more').toHaveLength(2);
+    expect(prepare).toHaveBeenCalledTimes(2);
+  });
+
   it('a file URL with a trailing slash still shows the leaf', async () => {
     const f = fakeFolders();
     open('/docs/~notes/specs/a.md/', f);
@@ -424,7 +468,6 @@ describe('settings: the Docs folders card sits on the Integrations section', () 
     const region = screen.getByRole('region', { name: card.title });
     expect(within(region).getByText(card.scope)).toBeTruthy();
     expect(within(region).getByText(card.purpose)).toBeTruthy();
-    vi.unstubAllGlobals();
   });
 });
 
@@ -557,7 +600,6 @@ describe('settings: Docs folders section', () => {
     const word = await api.docs.folders.add('notes', FOLDER_PATH);
     expect(word.s).toBe('failed');
     expect(word.s === 'failed' && word.body.failure).toBe('label-exists');
-    vi.unstubAllGlobals();
   });
 
   it('Add refused step-up-required through the real client shows the "Confirm it\'s you" step, and does not claim success', async () => {
@@ -576,7 +618,6 @@ describe('settings: Docs folders section', () => {
     fireEvent.click(screen.getByRole('button', { name: DOCS_FOLDER_TEXT.add }));
     await waitFor(() => expect(document.querySelector('[data-step-up]')).not.toBeNull());
     expect(screen.queryByText(DOCS_FOLDER_TEXT.added)).toBeNull();
-    vi.unstubAllGlobals();
   });
 
   it('any other failed read says so with a Retry, never an empty list', async () => {
