@@ -2984,6 +2984,7 @@ export class FleetWatcher {
       // NEVER awaited, the same reasons: the TIMERS lane (Overlord §3.3.12, W1a): cleanup, then each due timer fired with its one mail.
       void this.sweepTimers(records, registryRead.listedIds, listedAt, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
       void this.sweepSequenceRetention().catch(() => { /* one bad sweep must not kill the poll */ }); // the sequence's 90 days (§10.4)
+      void this.sweepInvariants().catch(() => { /* one bad sweep must not kill the poll */ }); // the invariant monitor, shadow until armed (§10.4)
       void this.sweepPushOutbox().catch(() => { /* one bad sweep must not kill the poll */ });
       void this.sweepResponses().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the weekly replay QUIZ lane (Overlord §3.3.9 C52, W1a): at most one operator item a week.
@@ -6482,6 +6483,13 @@ export class FleetWatcher {
     const coord = this.deps.coord;
     if (!coord) return;
     await this.runLane('sequenceRetention', () => { runSequenceRetentionLane({ coord, clock: this.deps.time.clock, log: (line) => console.warn(line) }); });
+  }
+
+  /** The invariant monitor (Overlord §10.4, Table 11.1c; `coord/invariantLane.ts`): one pass, shadow until its Shadow lanes row is Live. */
+  async sweepInvariants(): Promise<void> {
+    const monitor = this.deps.invariantMonitor;
+    if (!monitor) return;
+    await this.runLane('invariants', () => { monitor.pass(this.itemReach); });
   }
 
   /** The weekly replay quiz lane (Overlord §3.3.9 C52, W1a; `continuity/quizLane.ts`): one read-and-raise pass on the wall clock. */
