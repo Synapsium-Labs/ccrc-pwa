@@ -256,7 +256,11 @@ describe('one KeyedQueue for the process', () => {
   it('is constructed in exactly one file under server/src, and that file is the composition root', () => {
     const holders = ALL.filter((f) => f.includes(`${path.sep}server${path.sep}src${path.sep}`))
       .filter((f) => CONSTRUCTS.test(readFileSync(f, 'utf8'))).map(rel);
-    expect(holders).toEqual(['server/src/index.ts']);
+    // The paste delivery recipe's driver (Desktop polish wave 178) is a composition root of its own, LEGITIMATELY
+    // DIFFERENT (another process, on another host): the test box runs it, compiled, as a bounded child for one case at a
+    // time, on a capture's private tmux server, and nothing in the server imports it (`delivery-drive.test.ts`), so it
+    // shares no lock with the server's sessions and has nothing to race.
+    expect(holders).toEqual(['server/src/index.ts', 'server/src/inject/deliveryDrive.ts']);
   });
 
   it('both consumers take it from Deps rather than making their own', () => {

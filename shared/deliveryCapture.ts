@@ -7,25 +7,19 @@
 // - the cases, built from fixed rules (no case text travels on any wire: a case is named by its id);
 // - the composer's documented normalisations, which make the text the console sends;
 // - what counts as a turn the model received, and that turn's prompt, read from a Messages API request body;
-// - each case's verdict and the recipe's word;
-// - the result, and its ONE reader.
+// - each case's verdict, and the recipe's version (computed from the cases and the rule, never kept by hand).
+// The result, its vocabulary and its ONE reader are `deliveryResult.ts`'s, so the case texts travel in no module graph
+// the capture contract is part of.
 //
 // IT NEVER TOUCHES BUILD TRUST. The build-trust verdict is `claudeBuildTrust.ts`'s and lives in `claude_builds`; nothing
 // here reads or writes it, and a delivery result is never a `BuildCaptureResult`.
 import { composePrompt } from './api.js';
-import { isClaudeVersion } from './claudeVersion.js';
+import {
+  DELIVERY_CASE_IDS, DELIVERY_CONTEXT, deliveryWord,
+  type DeliveryCaptureResult, type DeliveryCaseId, type DeliveryCaseResult, type DeliveryCaseVerdict, type DeliveryDivergence, type DeliveryHookWitness,
+} from './deliveryResult.js';
 
 // ── the cases (paste-reliability.md section 3) ───────────────────────────────────────────────────────────────────
-
-/** The case ids, in the order the recipe sends them: a short control first, then the earlier wave's synthetic cases. */
-export type DeliveryCaseId = 'c0' | 'c1' | 'c1b' | 'c2a' | 'c2b' | 'c3' | 'c3b' | 'c3c' | 'c4' | 'c4b' | 'c5';
-export const DELIVERY_CASE_ID_MAP: Record<DeliveryCaseId, true> = {
-  c0: true, c1: true, c1b: true, c2a: true, c2b: true, c3: true, c3b: true, c3c: true, c4: true, c4b: true, c5: true,
-};
-export const DELIVERY_CASE_IDS: readonly DeliveryCaseId[] = Object.keys(DELIVERY_CASE_ID_MAP) as DeliveryCaseId[];
-
-export const isDeliveryCaseId = (v: unknown): v is DeliveryCaseId =>
-  typeof v === 'string' && Object.prototype.hasOwnProperty.call(DELIVERY_CASE_ID_MAP, v);
 
 /** A long ASCII run: 100-character blocks, each `<id@NNNNN>` (the block's start offset, five digits) padded with
  *  `abcdefghij` repeats, cut to `n` characters. */
@@ -125,41 +119,6 @@ export function turnOf(body: unknown): { readonly prompt: string; readonly block
 
 // ── the verdict ──────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** One case's verdict. `intact`: one turn, equal. `refused`: the send refused and nothing reached the model (honest, not
- *  silent). The rest are faults: `duplicate` (two or more turns, each equal), `split` (two or more turns, not all equal),
- *  `altered` (one turn, unequal), `false-confirmation` (the send answered ok and no turn arrived), `partial` (the send
- *  refused, yet something reached the model). */
-export type DeliveryCaseVerdict = 'intact' | 'refused' | 'duplicate' | 'split' | 'altered' | 'false-confirmation' | 'partial';
-export const DELIVERY_CASE_VERDICT_MAP: Record<DeliveryCaseVerdict, true> = {
-  intact: true, refused: true, duplicate: true, split: true, altered: true, 'false-confirmation': true, partial: true,
-};
-export const DELIVERY_CASE_VERDICTS: readonly DeliveryCaseVerdict[] = Object.keys(DELIVERY_CASE_VERDICT_MAP) as DeliveryCaseVerdict[];
-
-/** The recipe's word: `fault` when any case is a fault, else `refused` when any case was refused, else `intact`. */
-export type DeliveryWord = 'intact' | 'refused' | 'fault';
-export const DELIVERY_WORD_MAP: Record<DeliveryWord, true> = { intact: true, refused: true, fault: true };
-
-/** The send's answer as the driver reported it: `ok`, sendPrompt's refusal word, or a word of the driver's own when it
- *  could not run the send (kebab case, at most 40 characters). */
-export const DELIVERY_SEND_WORD = /^[a-z][a-z-]{0,39}$/;
-
-/** The witness of the build's own UserPromptSubmit hook: its `prompt` equal to the expected text, unequal, or no hook in
- *  the case's window. Reported beside the verdict, never an input to it. */
-export type DeliveryHookWitness = 'equal' | 'unequal' | 'absent';
-export const DELIVERY_HOOK_WITNESS_MAP: Record<DeliveryHookWitness, true> = { equal: true, unequal: true, absent: true };
-
-/** How many code points of context each side of a divergence keeps. */
-export const DELIVERY_CONTEXT = 40;
-
-/** Where a received prompt first differs from the expected one, in code points, with the context each side. */
-export interface DeliveryDivergence {
-  /** Which turn of the case's window, 0-based. */
-  readonly turn: number;
-  readonly index: number;
-  readonly expected: string;
-  readonly received: string;
-}
-
 /** The first divergence of `received` from `expected`, or null when they are equal. Indexes are code points. */
 export function firstDivergence(expected: string, received: string, turn = 0): DeliveryDivergence | null {
   if (expected === received) return null;
@@ -181,20 +140,6 @@ export interface DeliveryObserved {
   readonly sideRequests: number;
   /** The UserPromptSubmit hooks' prompts in the window, in order. */
   readonly hookPrompts: readonly string[];
-}
-
-/** One case's result. */
-export interface DeliveryCaseResult {
-  readonly id: DeliveryCaseId;
-  readonly verdict: DeliveryCaseVerdict;
-  readonly send: string;
-  /** The sent text's length in code points. */
-  readonly sentChars: number;
-  /** Each turn's prompt length in code points, in arrival order; its length is the turn count. */
-  readonly receivedChars: readonly number[];
-  readonly divergence: DeliveryDivergence | null;
-  readonly sideRequests: number;
-  readonly hook: DeliveryHookWitness;
 }
 
 const cps = (s: string): number => Array.from(s).length;
@@ -221,75 +166,45 @@ export function deliveryCaseResult(id: DeliveryCaseId, o: DeliveryObserved): Del
   };
 }
 
-/** The recipe's word over its cases. */
-export function deliveryWord(verdicts: readonly DeliveryCaseVerdict[]): DeliveryWord {
-  if (verdicts.some((v) => v !== 'intact' && v !== 'refused')) return 'fault';
-  return verdicts.includes('refused') ? 'refused' : 'intact';
+// ── the recipe's version ─────────────────────────────────────────────────────────────────────────────────────────
+
+/** FNV-1a over a string's UTF-16 code units, from `seed`: 32 bits. Pure and the same on every engine. */
+function fnv1a(text: string, seed: number): number {
+  let h = seed >>> 0;
+  for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h >>> 0;
 }
 
-// ── the result and its one reader ────────────────────────────────────────────────────────────────────────────────
-
-/** A delivery capture's result. Never a `BuildCaptureResult`, never stored in `claude_builds`. */
-export interface DeliveryCaptureResult {
-  readonly recipe: 'delivery';
-  readonly build: string;
-  readonly word: DeliveryWord;
-  readonly cases: readonly DeliveryCaseResult[];
+/** What the rule answers on a fixed probe table: the verdict rule over each send word and turn shape, the divergence over
+ *  each pair, the turn reader over each request shape, and the composer over each edge. A change in what the rule does on
+ *  any probe changes this text, and with it the version; a change in how its source is spelled does not. */
+function ruleFingerprint(): string {
+  const E = 'abc\ndef';
+  const sends = ['ok', 'verify-failed'];
+  const turnSets: readonly (readonly string[])[] = [[], [E], ['abc'], [E, E], ['abc', 'def'], ['def\nabc']];
+  const verdicts = sends.flatMap((s) => turnSets.map((t) => deliveryCaseVerdict(E, { send: s, turns: t })));
+  const divergences = [['abc', 'abc'], ['abc', 'abd'], ['abc', 'ab'], ['', 'x'], ['x'.repeat(100), 'x'.repeat(99) + 'y']].map(([a, b]) => firstDivergence(a!, b!));
+  const bodies: unknown[] = [
+    { tools: [{ name: 'B' }], messages: [{ role: 'user', content: 'p' }] },
+    { messages: [{ role: 'user', content: 'p' }] },
+    { tools: [{ name: 'B' }], messages: [{ role: 'user', content: [{ type: 'text', text: '<system-reminder>r</system-reminder>' }, { type: 'text', text: 'p' }] }] },
+    { tools: [{ name: 'B' }], messages: [{ role: 'user', content: [{ type: 'text', text: 'a' }, { type: 'text', text: 'b' }] }] },
+    { tools: [{ name: 'B' }], messages: [{ role: 'user', content: [{ type: 'tool_result', content: 'x' }] }] },
+    { tools: [{ name: 'B' }], messages: [{ role: 'user', content: 'p' }, { role: 'assistant', content: 'q' }] },
+  ];
+  const composed = [' \r\n a\r\nb \n', '\n\n  x', 'y\r'].map((t) => [composerOutput(t), composePrompt(composerOutput(t), [])]);
+  return JSON.stringify({ verdicts, divergences, turns: bodies.map(turnOf), composed, context: DELIVERY_CONTEXT });
 }
 
-/** The result from the cases the runner judged. */
+/** The recipe's version: 16 hex characters computed from every case's sent and expected text, in order, and the rule's
+ *  fingerprint. The lane measures a build again when no delivery result exists for it at this version. */
+export const DELIVERY_RECIPE_VERSION: string = ((): string => {
+  const text = JSON.stringify({ cases: DELIVERY_CASE_IDS.map((id) => [id, deliveryCaseText(id), deliveryExpected(id)]), rule: ruleFingerprint() });
+  const hex = (n: number): string => n.toString(16).padStart(8, '0');
+  return hex(fnv1a(text, 0x811c9dc5)) + hex(fnv1a(text, 0x9e3779b9));
+})();
+
+/** The result from the cases the runner judged, at this recipe's version. */
 export function deliveryCaptureResult(build: string, cases: readonly DeliveryCaseResult[]): DeliveryCaptureResult {
-  return { recipe: 'delivery', build, word: deliveryWord(cases.map((c) => c.verdict)), cases };
-}
-
-const has = <T extends string>(map: Record<T, true>, v: unknown): v is T => typeof v === 'string' && Object.prototype.hasOwnProperty.call(map, v);
-const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
-const keysAre = (o: Obj, keys: readonly string[]): boolean => Object.keys(o).sort().join() === [...keys].sort().join();
-const shortText = (v: unknown): v is string => typeof v === 'string' && cps(v) <= 2 * DELIVERY_CONTEXT;
-
-function readDivergence(v: unknown): DeliveryDivergence | null | undefined {
-  if (v === null) return null;
-  if (!isObj(v) || !keysAre(v, ['turn', 'index', 'expected', 'received'])) return undefined;
-  if (!isCount(v['turn']) || !isCount(v['index']) || !shortText(v['expected']) || !shortText(v['received'])) return undefined;
-  return { turn: v['turn'], index: v['index'], expected: v['expected'], received: v['received'] };
-}
-
-const CASE_KEYS = ['id', 'verdict', 'send', 'sentChars', 'receivedChars', 'divergence', 'sideRequests', 'hook'];
-
-function readCase(v: unknown): DeliveryCaseResult | null {
-  if (!isObj(v) || !keysAre(v, CASE_KEYS)) return null;
-  const { id, verdict, send, sentChars, receivedChars, sideRequests, hook } = v;
-  if (!isDeliveryCaseId(id) || !has(DELIVERY_CASE_VERDICT_MAP, verdict) || typeof send !== 'string' || !DELIVERY_SEND_WORD.test(send)) return null;
-  if (!isCount(sentChars) || !isCount(sideRequests) || !has(DELIVERY_HOOK_WITNESS_MAP, hook)) return null;
-  if (!Array.isArray(receivedChars) || !receivedChars.every(isCount)) return null;
-  const divergence = readDivergence(v['divergence']);
-  if (divergence === undefined) return null;
-  // The verdict must be the rule's for the send word and the turn count it carries (equality aside, which the counts
-  // cannot show): a verdict the rule could not give is not a result.
-  const n = receivedChars.length;
-  const possible: readonly DeliveryCaseVerdict[] = send !== 'ok' ? [n === 0 ? 'refused' : 'partial']
-    : n === 0 ? ['false-confirmation'] : n === 1 ? ['intact', 'altered'] : ['duplicate', 'split'];
-  if (!possible.includes(verdict)) return null;
-  // No divergence where every turn was equal or none arrived; one where a turn must have differed; `partial` either way.
-  if ((verdict === 'intact' || verdict === 'duplicate' || n === 0) && divergence !== null) return null;
-  if ((verdict === 'altered' || verdict === 'split') && divergence === null) return null;
-  if (divergence !== null && divergence.turn >= n) return null;
-  return { id, verdict, send, sentChars, receivedChars: [...receivedChars], divergence, sideRequests, hook };
-}
-
-/** THE ONE READER of a delivery capture's result, for `build`: every case once, in `DELIVERY_CASE_IDS` order, each well
- *  formed, and the word the cases decide. `null`: not a delivery result for this build (another build, a field missing,
- *  mistyped or unnamed, a case missing, repeated or out of order, or a word the cases do not give). */
-export function readDeliveryCaptureResult(v: unknown, build: string): DeliveryCaptureResult | null {
-  if (!isObj(v) || !keysAre(v, ['recipe', 'build', 'word', 'cases'])) return null;
-  if (v['recipe'] !== 'delivery' || v['build'] !== build || !isClaudeVersion(build) || !has(DELIVERY_WORD_MAP, v['word'])) return null;
-  if (!Array.isArray(v['cases']) || v['cases'].length !== DELIVERY_CASE_IDS.length) return null;
-  const cases: DeliveryCaseResult[] = [];
-  for (const [i, raw] of (v['cases'] as unknown[]).entries()) {
-    const c = readCase(raw);
-    if (c === null || c.id !== DELIVERY_CASE_IDS[i]) return null;
-    cases.push(c);
-  }
-  if (deliveryWord(cases.map((c) => c.verdict)) !== v['word']) return null;
-  return { recipe: 'delivery', build, word: v['word'], cases };
+  return { recipe: 'delivery', version: DELIVERY_RECIPE_VERSION, build, word: deliveryWord(cases.map((c) => c.verdict)), cases };
 }

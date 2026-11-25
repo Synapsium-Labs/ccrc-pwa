@@ -13,7 +13,9 @@
 // - THE TIMINGS and the recipe's worst case, under the fleet agent's fixed wait.
 import { TESTBOX_CAPTURE_DEADLINE_MS, UPDATE_SPAWN_DRAIN_MS } from '../../../shared/agent-protocol.js';
 import type { CaptureRecord } from '../../../shared/claudeBuildCapture.js';
-import { DELIVERY_CASE_IDS, turnOf, type DeliveryObserved } from '../../../shared/deliveryCapture.js';
+import { hookEventIs } from '../../../shared/hook-events.js';
+import { turnOf, type DeliveryObserved } from '../../../shared/deliveryCapture.js';
+import { DELIVERY_CASE_IDS } from '../../../shared/deliveryResult.js';
 import { CAPTURE_DEADLINE_MARGIN_MS, CAPTURE_STEPS, type CaptureStep, type CaptureTimings, type StandInReply } from './capture.js';
 
 // ── the drive ────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -48,7 +50,7 @@ export function observeWindow(send: string, requests: readonly unknown[], record
     if (t === null) sideRequests += 1; else turns.push(t.prompt);
   }
   const hookPrompts = records.flatMap((r) => {
-    if (r.kind !== 'hook' || r.event !== 'UserPromptSubmit') return [];
+    if (r.kind !== 'hook' || !hookEventIs(r.event, 'UserPromptSubmit')) return [];
     const p = typeof r.payload === 'object' && r.payload !== null ? (r.payload as Record<string, unknown>)['prompt'] : undefined;
     return typeof p === 'string' ? [p] : [];
   });
@@ -57,7 +59,7 @@ export function observeWindow(send: string, requests: readonly unknown[], record
 
 /** Whether the case's turn has ended: a Stop or StopFailure recorded in the window. */
 export const turnEnded = (records: readonly CaptureRecord[]): boolean =>
-  records.some((r) => r.kind === 'hook' && (r.event === 'Stop' || r.event === 'StopFailure'));
+  records.some((r) => r.kind === 'hook' && (hookEventIs(r.event, 'Stop') || hookEventIs(r.event, 'StopFailure')));
 
 // ── the timings ──────────────────────────────────────────────────────────────────────────────────────────────────
 

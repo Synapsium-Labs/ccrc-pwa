@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import { TESTBOX_CAPTURE_DEADLINE_MS } from '../../shared/agent-protocol.js';
 import type { CaptureRecord } from '../../shared/claudeBuildCapture.js';
-import { DELIVERY_CASE_IDS } from '../../shared/deliveryCapture.js';
+import { DELIVERY_CASE_IDS } from '../../shared/deliveryResult.js';
 import { CAPTURE_DEADLINE_MARGIN_MS, CAPTURE_STEPS, CAPTURE_TIMINGS, captureWorstCaseMs, standInReply } from '../src/testbox/capture.js';
 import {
   DELIVERY_PANE, DELIVERY_REPLY_TEXT, DELIVERY_STEPS_BEFORE, DELIVERY_STEP_AFTER, DELIVERY_TIMINGS, deliveryStandInReply,

@@ -12,6 +12,7 @@ import {
   CAPTURE_REFUSAL_MAP, CAPTURE_STATE_WORD_MAP, type CaptureAnswer, type CaptureSubmit,
 } from './claudeBuildCapture.js';
 import { readBuildCaptureResult } from './claudeBuildTrust.js';
+import { readDeliveryCaptureResult } from './deliveryResult.js';
 import { isClaudeVersion } from './claudeVersion.js';
 import { utf8Bytes } from './utf8.js';
 
@@ -438,7 +439,9 @@ function word<K extends string>(map: Record<K, true>, v: unknown, at: string): K
   return v;
 }
 
-const RUN_ID = /^[0-9a-f]{32}$/;
+/** A run id or a capture id: 32 lowercase hex characters. The one spelling of that shape (the delivery driver,
+ *  `server/src/inject/deliveryDrive.ts`, reads it too). */
+export const RUN_ID = /^[0-9a-f]{32}$/;
 const runId = (v: unknown, at: string): string => (typeof v === 'string' && RUN_ID.test(v) ? v : refuse(at, 'not 32 lowercase hex characters'));
 const NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 /** Whether a value is a repository or package name a row takes: lowercase letters, digits, `.`, `_` and `-`, at most 64, not
@@ -616,15 +619,27 @@ function readProbeAnswer(o: Obj): ProbeAnswer {
 
 const build = (v: unknown, at: string): string => (isClaudeVersion(v) ? v : refuse(at, 'not a Claude Code version'));
 
+/** Whether a frame names the field at all (an additive field: absent and present are two shapes, each read exactly). */
+const names = (o: Obj, k: string): boolean => typeof o === 'object' && o !== null && Object.prototype.hasOwnProperty.call(o, k);
+
+/** A submission with no `recipe` is build trust; with one, it must be `delivery` (Desktop polish wave 178). */
 function readCaptureSubmit(o: Obj): CaptureSubmit {
-  const f = exact(o, 'capture.submit', ['t', 'captureId', 'build']);
-  return { t: 'capture.submit', captureId: runId(f.captureId, 'captureId'), build: build(f.build, 'build') };
+  const withRecipe = names(o, 'recipe');
+  const f = exact(o, 'capture.submit', withRecipe ? ['t', 'captureId', 'build', 'recipe'] : ['t', 'captureId', 'build']);
+  const base = { t: 'capture.submit' as const, captureId: runId(f.captureId, 'captureId'), build: build(f.build, 'build') };
+  if (!withRecipe) return base;
+  if (f.recipe !== 'delivery') refuse('recipe', 'not a capture recipe');
+  return { ...base, recipe: 'delivery' };
 }
 
 /** The verdict inside an ended capture is read by the verdict's one reader (`readBuildCaptureResult`), for this frame's
  *  build: a result for another build, or off its shape, refuses the frame. */
 function readCaptureAnswer(o: Obj): CaptureAnswer {
-  const f = exact(o, 'capture.state', ['t', 'captureId', 'build', 'state', 'refusal', 'detail', 'position', 'result']);
+  // A delivery capture's frames carry `delivery` (Desktop polish wave 178), read by its one reader for this build; a build
+  // trust frame carries none, exactly as before.
+  const withDelivery = names(o, 'delivery');
+  const keys = ['t', 'captureId', 'build', 'state', 'refusal', 'detail', 'position', 'result'];
+  const f = exact(o, 'capture.state', withDelivery ? [...keys, 'delivery'] : keys);
   const b = build(f.build, 'build');
   const state = word(CAPTURE_STATE_WORD_MAP, f.state, 'state');
   const refusal = f.refusal === null ? null : word(CAPTURE_REFUSAL_MAP, f.refusal, 'refusal');
@@ -635,7 +650,13 @@ function readCaptureAnswer(o: Obj): CaptureAnswer {
   if (state === 'ended' && result !== null && f.detail !== null) refuse('detail', 'present beside a verdict');
   if ((state === 'queued') !== (position !== null)) refuse('position', state === 'queued' ? 'missing on a queued capture' : `present on a ${state} capture`);
   if (state !== 'ended' && result !== null) refuse('result', `present on a ${state} capture`);
-  return { t: 'capture.state', captureId: runId(f.captureId, 'captureId'), build: b, state, refusal, detail: textOrNull(f.detail, 'detail'), position, result };
+  const answer: CaptureAnswer = { t: 'capture.state', captureId: runId(f.captureId, 'captureId'), build: b, state, refusal, detail: textOrNull(f.detail, 'detail'), position, result };
+  if (!withDelivery) return answer;
+  const delivery = f.delivery === null ? null : (readDeliveryCaptureResult(f.delivery, b) ?? refuse('delivery', 'not a delivery result for this build'));
+  if (result !== null) refuse('result', 'present on a delivery capture');
+  if (state !== 'ended' && delivery !== null) refuse('delivery', `present on a ${state} capture`);
+  if (delivery !== null && f.detail !== null) refuse('detail', 'present beside a delivery result');
+  return { ...answer, delivery };
 }
 
 const FRAME_READERS: { readonly [K in TestboxFrameType]: (o: Obj) => TestboxFrame } = {

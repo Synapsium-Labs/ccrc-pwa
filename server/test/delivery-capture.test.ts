@@ -2,13 +2,15 @@
 // normalisations, what counts as a turn the model received, each case's verdict, the recipe's word and the result's one
 // reader. The cases are checked against the sizes the browser wave recorded (paste-reliability.md section 3), so a
 // generator that drifts from that note is red here.
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { composePrompt } from '../../shared/api.js';
 import {
-  DELIVERY_CASE_IDS, DELIVERY_CASE_RAW, DELIVERY_CONTEXT, DELIVERY_MODE_CHARS, composerOutput, deliveryCaptureResult, deliveryCaseResult,
-  deliveryCaseText, deliveryCaseVerdict, deliveryExpected, deliveryWord, firstDivergence, readDeliveryCaptureResult, turnOf,
-  type DeliveryCaseId, type DeliveryCaseResult, type DeliveryObserved,
+  DELIVERY_CASE_RAW, DELIVERY_MODE_CHARS, DELIVERY_RECIPE_VERSION, composerOutput, deliveryCaptureResult, deliveryCaseResult,
+  deliveryCaseText, deliveryCaseVerdict, deliveryExpected, firstDivergence, turnOf, type DeliveryObserved,
 } from '../../shared/deliveryCapture.js';
+import {
+  DELIVERY_CASE_IDS, DELIVERY_CONTEXT, DELIVERY_VERSION_SHAPE, deliveryWord, readDeliveryCaptureResult, type DeliveryCaseId, type DeliveryCaseResult,
+} from '../../shared/deliveryResult.js';
 
 const BUILD = '2.1.320';
 const cps = (s: string): number => Array.from(s).length;
@@ -193,6 +195,8 @@ describe('readDeliveryCaptureResult: the one reader', () => {
   it.each<[string, (o: Record<string, unknown>) => void]>([
     ['another build', (o) => { o['build'] = '2.1.321'; }],
     ['a recipe that is not delivery', (o) => { o['recipe'] = 'build-trust'; }],
+    ['a version off its shape', (o) => { o['version'] = 'v1'; }],
+    ['no version', (o) => { delete o['version']; }],
     ['a field it does not name', (o) => { o['pass'] = true; }],
     ['a word the cases do not give', (o) => { o['word'] = 'fault'; }],
     ['a case missing', (o) => { casesOf(o).pop(); }],
@@ -221,5 +225,25 @@ describe('readDeliveryCaptureResult: the one reader', () => {
     expect(readDeliveryCaptureResult(wire(r), 'nope')).toBeNull();
     expect(readDeliveryCaptureResult(null, BUILD)).toBeNull();
     expect(readDeliveryCaptureResult([], BUILD)).toBeNull();
+  });
+});
+
+describe('the recipe\'s version: computed from the cases and the rule, never kept by hand', () => {
+  it('is 16 hex characters, and the result carries it', () => {
+    expect(DELIVERY_RECIPE_VERSION).toMatch(DELIVERY_VERSION_SHAPE);
+    expect(deliveryCaptureResult(BUILD, []).version).toBe(DELIVERY_RECIPE_VERSION);
+  });
+  it('is the same every time it is computed (a fresh module graph computes it again)', async () => {
+    vi.resetModules();
+    const again = await import('../../shared/deliveryCapture.js');
+    expect(again.DELIVERY_RECIPE_VERSION).toBe(DELIVERY_RECIPE_VERSION);
+  });
+});
+
+describe('the result travels without the cases', () => {
+  it('the result file names no case text and no generator: only ids', async () => {
+    const { readFileSync } = await import('node:fs');
+    const src = readFileSync(new URL('../../shared/deliveryResult.ts', import.meta.url), 'utf8');
+    expect(src).not.toMatch(/ZQX-END|asciiRun|unicodeRun|DELIVERY_CASE_RAW|from '\.\/deliveryCapture\.js'/);
   });
 });

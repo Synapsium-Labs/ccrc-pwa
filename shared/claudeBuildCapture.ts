@@ -12,6 +12,7 @@
 // (`finished: false`, departure `stalled-build-fails`); only a capture that could not start is no verdict, and the lane keeps
 // that build queued.
 import { readBuildCaptureResult, type BuildCaptureResult } from './claudeBuildTrust.js';
+import type { DeliveryCaptureResult } from './deliveryResult.js';
 import { HOOK_EVENTS, hookEventIs, isHookEvent, type HookEvent } from './hook-events.js';
 
 // ── the job kind's words ─────────────────────────────────────────────────────────────────────────────────────────
@@ -42,6 +43,14 @@ export const CAPTURE_REFUSAL_SENTENCE: Readonly<Record<CaptureRefusal, string>> 
 export type CaptureStateWord = 'refused' | 'queued' | 'running' | 'ended';
 export const CAPTURE_STATE_WORD_MAP: Record<CaptureStateWord, true> = { refused: true, queued: true, running: true, ended: true };
 
+/** Which recipe a capture runs on the one runner (Desktop polish wave 178). `build-trust`: the drive of the spec's Table 1,
+ *  whose replay is the build's trust verdict (`result`). `delivery`: the fixed paste delivery cases sent through the
+ *  product's own send (`shared/deliveryCapture.ts`), whose result (`delivery`) never reads or writes the build-trust
+ *  record. ADDITIVE: a submission with no `recipe` is build trust, its one spelling, so every sender before the delivery
+ *  recipe is unchanged, and a box that predates it refuses a `recipe` field as it refuses any extra field. */
+export type CaptureRecipe = 'build-trust' | 'delivery';
+export const CAPTURE_RECIPE_MAP: Record<CaptureRecipe, true> = { 'build-trust': true, delivery: true };
+
 /** The job: capture one build, under a fresh id. */
 export interface CaptureSubmit {
   readonly t: 'capture.submit';
@@ -49,7 +58,26 @@ export interface CaptureSubmit {
   readonly captureId: string;
   /** The Claude Code build, `isClaudeVersion`. */
   readonly build: string;
+  /** Absent: build trust. Present only as `delivery` (see {@link CaptureRecipe}). */
+  readonly recipe?: 'delivery';
 }
+
+/** The recipe a submission names: absence is build trust. */
+export const captureRecipeOf = (f: Pick<CaptureSubmit, 'recipe'>): CaptureRecipe => f.recipe ?? 'build-trust';
+
+// ── the capture's own terminal server (moved from agent/src/testbox/capture.ts, which re-exports them) ─────────────
+// The names a capture's private tmux server goes by, here so that the delivery driver (`server/src/inject/deliveryDrive.ts`,
+// in another package) can refuse to address anything else: a fixed `-L` name, a fixed session, and a tmux directory named
+// by the whole capture id, never the fleet's server or socket.
+
+/** The capture's own tmux server (`-L`), on the capture's own `TMUX_TMPDIR`: never `default`, the fleet's. */
+export const CAPTURE_SOCKET = 'ccrc-capture';
+
+/** The tmux session the build runs in, on {@link CAPTURE_SOCKET}. */
+export const CAPTURE_TMUX_SESSION = 'capture';
+
+/** The base name of one capture's tmux directory (its `TMUX_TMPDIR`), named by the whole capture id. */
+export const captureTmuxDirName = (captureId: string): string => `ccrc-capture-${captureId}`;
 
 /** Where a capture is. `refusal` only on `refused`; `detail` on `refused` (the refusal's sentence) and on an `ended`
  *  capture with no verdict (why); `position` (1-based) only on `queued`; `result` only on `ended`, null when there is no
@@ -63,6 +91,9 @@ export interface CaptureAnswer {
   readonly detail: string | null;
   readonly position: number | null;
   readonly result: BuildCaptureResult | null;
+  /** A delivery capture's frames only, and every one of them (absent on build trust's): its result on `ended`, null
+   *  there when there is no verdict and on every other state. A delivery capture's `result` is always null. */
+  readonly delivery?: DeliveryCaptureResult | null;
 }
 
 // ── the recording ────────────────────────────────────────────────────────────────────────────────────────────────
