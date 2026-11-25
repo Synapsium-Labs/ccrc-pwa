@@ -63,6 +63,7 @@ import { PLAN_EPIC_WAVES_MUTANT_SETS } from './planEpicWavesSets.js';
 import { WORK_MAP_MUTANT_SETS } from './workMapSets.js';
 import { DONE_TEST_MUTANT_SETS } from './doneTestSets.js';
 import { LADDER_MUTANT_SETS } from './ladderSets.js';
+import { SEQUENCE_MUTANT_SETS } from './sequenceSets.js';
 import { FORECAST_MUTANT_SETS } from './forecastSets.js';
 import { APPROVAL_DENY_FLOOR_MUTANT_SETS } from './approvalDenyFloorSets.js';
 import { APPROVAL_ENVELOPE_MUTANT_SETS } from './approvalEnvelopeSets.js';
@@ -252,6 +253,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...WORK_MAP_MUTANT_SETS,
   ...DONE_TEST_MUTANT_SETS,
   ...LADDER_MUTANT_SETS,
+  ...SEQUENCE_MUTANT_SETS,
   ...FORECAST_MUTANT_SETS,
   ...APPROVAL_DENY_FLOOR_MUTANT_SETS,
   ...APPROVAL_ENVELOPE_MUTANT_SETS,

@@ -441,7 +441,17 @@ function word<K extends string>(map: Record<K, true>, v: unknown, at: string): K
 const RUN_ID = /^[0-9a-f]{32}$/;
 const runId = (v: unknown, at: string): string => (typeof v === 'string' && RUN_ID.test(v) ? v : refuse(at, 'not 32 lowercase hex characters'));
 const NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
-const name = (v: unknown, at: string): string => (typeof v === 'string' && NAME.test(v) ? v : refuse(at, 'not a lowercase name'));
+/** Whether a value is a repository or package name a row takes: lowercase letters, digits, `.`, `_` and `-`, at most 64, not
+ *  starting with a punctuation mark. The one spelling of that shape in TypeScript; its readers import it (D-9009). */
+export const isTestboxName = (v: unknown): v is string => typeof v === 'string' && NAME.test(v);
+const name = (v: unknown, at: string): string => (isTestboxName(v) ? v : refuse(at, 'not a lowercase name'));
+/** Whether a program word (a run's `argv[0]`, a command head's first word) is a vitest runner: its last path segment, trailing
+ *  slashes aside, is `vitest`. The box gives only such a run the reporter and worker flags (`agent/src/testbox/spec.ts#buildRunSpec`),
+ *  and parity runs a row's first package's first head with them, so the connect card refuses any other head there (D-9009). */
+export const isVitestProgram = (word: string): boolean => {
+  const w = word.replace(/\/+$/, '');
+  return w.slice(w.lastIndexOf('/') + 1) === 'vitest';
+};
 const ENV_NAME = /^[A-Z_][A-Z0-9_]{0,127}$/;
 const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 const version = (v: unknown, at: string): string => (isVersion(v) ? v : refuse(at, 'not a version'));

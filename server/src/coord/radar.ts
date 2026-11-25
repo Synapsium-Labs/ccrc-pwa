@@ -23,6 +23,7 @@ import {
   RADAR_PROBE_FRESH_S, freshWithin, isRadarStamp, isRegistryId,
   type LandingConflict, type LandingMergeState, type SessionLanding,
 } from '../../../shared/api.js';
+import type { ReadFailure } from '../../../shared/agent-protocol.js';   // L0 vocabulary: absent | unreadable, declared once
 import type { ProjectEvidence } from '../registry.js';   // type-only: no ring edge
 
 /** The radar writes no cap of its own (D-7482): the reader refuses a `probe` over 512 KiB, measured before the read
@@ -50,6 +51,8 @@ export interface ProbeDoc {
   project: string;
   at: string;
   baseRef: string;
+  /** The producer's fetched base sha (`base.sha`, already validated as 40-hex): the only measured base of the wave. */
+  baseSha: string;
   heads: ProbeHead[];
   headsCut: boolean;
   pairs: ProbePair[];
@@ -60,6 +63,43 @@ export interface ProbeDoc {
 export type ProbeRead =
   | { ok: true; doc: ProbeDoc }
   | { ok: false; reason: 'unreadable' | 'stale' | 'unmeasured' };
+
+/** Why one control document (lander marker, probe, main health) is not a measurement. Wave 5i: every distinction survives
+ *  to the binding decider. `oversize` is a file that is there and over its cap (`size` is what was measured), never an
+ *  absence; `late` is the pass's deadline; `refused` a listed name that is no safe project segment; `unmeasured` an io
+ *  that cannot answer, or a file that changed under the read. The legacy probe parser keeps its own `unreadable` for a
+ *  malformed doc; the new parsers say `malformed`. */
+export type ControlFailure = {
+  ok: false;
+  reason: ReadFailure | 'oversize' | 'malformed' | 'stale' | 'unmeasured' | 'late' | 'refused';
+  size?: number;
+};
+
+/** The pre-pass marker `$REG/landing/<project>/lander` (producer `reconcile_enabled`): `{v:1, project, lander, at}`. */
+export interface LanderDoc { project: string; lander: 'coordinator'; at: string }
+export type LanderRead = { ok: true; doc: LanderDoc } | ControlFailure;
+
+/** `$REG/landing/<project>/main-health`: the producer's verdict on the base tip's required checks. The producer's own
+ *  `state` is authoritative; rendered names may collide after truncation, so nothing here recomputes a colour. */
+export interface MainHealthDoc {
+  project: string;
+  at: string;
+  sha: string | null;
+  state: 'green' | 'red' | 'unmeasured';
+  required: { name: string; app: number | null }[];
+  failing: string[];
+  pending: string[];
+  why?: string;
+}
+export type MainHealthRead = { ok: true; doc: MainHealthDoc } | ControlFailure;
+
+/** One bounded, coherent control bundle of a project (wave 5i): the three documents the binding head is decided from,
+ *  each read on its own and each judged on its own window. */
+export interface LandingControlRead {
+  lander: LanderRead;
+  probe: ProbeRead | ControlFailure;
+  health: MainHealthRead;
+}
 
 const isSha = (v: unknown): v is string => typeof v === 'string' && SHA.test(v);
 const isRecord = (v: unknown): v is Record<string, unknown> =>
@@ -101,11 +141,13 @@ export function parseProbe(content: string, project: string, nowMs: number): Pro
   // `{ref, sha}` of a base it did fetch (`gh-failed` keeps it, D-7382), and no heads or pairs.
   const rawBase = o.base;
   let baseRef = '';
+  let baseSha = '';
   if (rawBase === null) {
     if (measured) return bad;
   } else {
     if (!isRecord(rawBase) || typeof rawBase.ref !== 'string' || rawBase.ref === '' || !isSha(rawBase.sha)) return bad;
     baseRef = rawBase.ref;
+    baseSha = rawBase.sha;
   }
   if (measured ? o.why !== undefined : !isWhy(o.why)) return bad;
 
@@ -163,8 +205,57 @@ export function parseProbe(content: string, project: string, nowMs: number): Pro
   return {
     ok: true,
     doc: {
-      project, at: o.at as string, baseRef, heads, headsCut: o.headsCut, pairs, pairHeads, pairsCut: o.pairsCut,
+      project, at: o.at as string, baseRef, baseSha, heads, headsCut: o.headsCut, pairs, pairHeads, pairsCut: o.pairsCut,
     },
+  };
+}
+
+const isNonEmptyString = (v: unknown): v is string => typeof v === 'string' && v !== '';
+const isNameList = (v: unknown): v is string[] => Array.isArray(v) && v.every(isNonEmptyString);
+const isAppId = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v > 0;
+
+/** The lander marker's bytes, read against the project it must describe. Structure first (`malformed`, foreign project
+ *  included), then the clock (`stale`). The marker is written in the tick's pre-pass, so its `at` is compared with
+ *  nothing but the window. */
+export function parseLander(content: string, project: string, nowMs: number): LanderRead {
+  const bad = { ok: false, reason: 'malformed' } as const;
+  const o = parseObject(content);
+  if (o === null || o.v !== 1 || o.project !== project || o.lander !== 'coordinator' || !isRadarStamp(o.at)) return bad;
+  if (!freshWithin(o.at, RADAR_PROBE_FRESH_S, nowMs)) return { ok: false, reason: 'stale' };
+  return { ok: true, doc: { project, lander: 'coordinator', at: o.at } };
+}
+
+/** `main-health`'s bytes, read against the project it must describe. Green and red need a full sha and a non-empty
+ *  required set with failing and pending names drawn from it (green: both empty; red: failing non-empty); an
+ *  unmeasured doc keeps whatever lists the producer retained, with a null or full sha and a short non-empty `why`. */
+export function parseMainHealth(content: string, project: string, nowMs: number): MainHealthRead {
+  const bad = { ok: false, reason: 'malformed' } as const;
+  const o = parseObject(content);
+  if (o === null || o.v !== 1 || o.project !== project || !isRadarStamp(o.at)) return bad;
+  if (o.state !== 'green' && o.state !== 'red' && o.state !== 'unmeasured') return bad;
+  const state = o.state;
+  if (o.sha !== null && !isSha(o.sha)) return bad;
+  const rawRequired = o.required;
+  if (!Array.isArray(rawRequired) || !isNameList(o.failing) || !isNameList(o.pending)) return bad;
+  const required: { name: string; app: number | null }[] = [];
+  for (const e of rawRequired as unknown[]) {
+    if (!isRecord(e) || !isNonEmptyString(e.name) || (e.app !== null && !isAppId(e.app))) return bad;
+    required.push({ name: e.name, app: e.app });
+  }
+  const failing = o.failing;
+  const pending = o.pending;
+  if (state === 'unmeasured') {
+    if (!isWhy(o.why)) return bad;
+  } else {
+    if (o.why !== undefined || o.sha === null || required.length === 0) return bad;
+    const names = new Set(required.map((e) => e.name));
+    if (![...failing, ...pending].every((n) => names.has(n))) return bad;
+    if (state === 'green' ? failing.length > 0 || pending.length > 0 : failing.length === 0) return bad;
+  }
+  if (!freshWithin(o.at, RADAR_PROBE_FRESH_S, nowMs)) return { ok: false, reason: 'stale' };
+  return {
+    ok: true,
+    doc: { project, at: o.at, sha: o.sha, state, required, failing, pending, ...(state === 'unmeasured' ? { why: o.why as string } : {}) },
   };
 }
 
