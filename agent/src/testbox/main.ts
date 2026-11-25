@@ -292,18 +292,19 @@ export function captureDeskFor(cfg: TestboxConfig, o: CaptureDeskOpts = {}): Cap
 }
 
 /** The composition itself, past the socket's fit (`wired`): the runner built from `CAPTURE_TIMINGS` and the desk around it
- *  on the same contract (gate G1 runs through this function, review 3687 F2), or no runner. */
+ *  handed that very object (gate G1 runs through this function, review 3687 F2 and review 3765 F2), or no runner. */
 export function captureDeskComposed(cfg: TestboxConfig, tmuxBase: string, wired: boolean, o: CaptureDeskOpts = {}): CaptureDesk {
-  return captureDeskWith(cfg, wired ? captureRunnerFor(cfg.root, tmuxBase, o.toolsPath ?? (() => null), CAPTURE_TIMINGS, o.seams) : null, tmuxBase, o);
+  const timings = CAPTURE_TIMINGS;
+  return captureDeskWith(cfg, wired ? captureRunnerFor(cfg.root, tmuxBase, o.toolsPath ?? (() => null), timings, o.seams) : null, timings, tmuxBase, o);
 }
 
-/** The desk around `runner`, as `captureDeskFor` composes it: the late check on the same `CAPTURE_TIMINGS` the runner was
- *  built from (gate G1), the box's admissions (G2), the builds store's prune. */
-export function captureDeskWith(cfg: TestboxConfig, runner: CaptureRunnerLike | null, tmuxBase: string, o: CaptureDeskOpts = {}): CaptureDesk {
+/** The desk around `runner`, as `captureDeskComposed` composes it: the late check on `timings`, the very contract the runner
+ *  was built from (gate G1), the box's admissions (G2), the builds store's prune. */
+export function captureDeskWith(cfg: TestboxConfig, runner: CaptureRunnerLike | null, timings: CaptureTimings, tmuxBase: string, o: CaptureDeskOpts = {}): CaptureDesk {
   const home = o.home ?? os.homedir();
   return new CaptureDesk({
     role: probeRole(cfg.lines), runner,
-    root: cfg.root, tmuxBase, fleetDirs: () => fleetConfigDirs([home]), realPath: realPathOf, buildFacts: buildFileFacts, timings: CAPTURE_TIMINGS,
+    root: cfg.root, tmuxBase, fleetDirs: () => fleetConfigDirs([home]), realPath: realPathOf, buildFacts: buildFileFacts, timings,
     ...(o.admitting === undefined ? {} : { admitting: o.admitting }), ...(o.seams?.now === undefined ? {} : { now: o.seams.now }),
     prune: (inUse) => { pruneBuilds(cfg.root, inUse); },
   });
