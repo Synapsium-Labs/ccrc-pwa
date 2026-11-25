@@ -1,4 +1,4 @@
-// `claude_build_deliveries` (migration 128, Desktop polish wave 178): one new MIGRATIONS entry holding only that table, and
+// `claude_build_deliveries` (migration 129, Desktop polish wave 178): one new MIGRATIONS entry holding only that table, and
 // `CoordStore`'s three methods as its only writers. The slot is found by its DDL, never hard-coded. Fixture coord.db files only.
 import { afterEach, describe, expect, it } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';

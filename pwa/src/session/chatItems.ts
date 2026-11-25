@@ -65,6 +65,11 @@ export type ChatItem =
   | { kind: 'pending'; key: string; send: PendingSend }
   | { kind: 'working'; key: 'working' };
 
+/** The rows built here from no transcript file: a pending send and the working pulse, which trail the rows (see the end of
+ *  `buildChatItems`). They outlive a change of file, so a row in common found on them alone says nothing about where the
+ *  file's rows went (desktop polish wave 179, fix round 1, F1: the list's first index moved by 2 on a new list). */
+export const fromNoFile = (item: { readonly kind: string }): boolean => item.kind === 'pending' || item.kind === 'working';
+
 /** 'today · 14:02' (or '20 Jul · 14:02' across days) for a ts divider. */
 function dividerLabel(ts: string): string | null {
   const d = new Date(ts);

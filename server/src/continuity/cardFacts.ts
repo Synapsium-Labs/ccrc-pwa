@@ -249,9 +249,12 @@ export async function gatherCardFacts(deps: CardFactsDeps, who: NoteKeysCaller, 
     }
   })();
 
-  // The pending timers: the session's own, oldest due first, each note cut to its preview (the one cut, `timerPreview`).
+  // The pending timers: the identity's, oldest due first, each note cut to its preview (the one cut, `timerPreview`). The
+  // bound session's identity is the role, so its card lists the role's timers (Overlord W1); a rebind's pending body keeps its
+  // own id. An unmeasured designation leaves the identity unknown, so the fact is unmeasured, as the checkpoint's is.
   const timers = attempt<readonly CardTimer[]>('your pending timers', () => {
-    const r = coord.pendingTimersOf(id);
+    if (designation === 'unmeasured') return null;
+    const r = coord.pendingTimersOf(identityOf(id, designation));
     return !r.ok ? null : r.rows.map((t) => ({ id: t.id, dueAt: t.dueAt, preview: timerPreview(t.note), runId: t.runId, programme: t.programme }));
   });
 

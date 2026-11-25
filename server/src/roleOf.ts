@@ -109,12 +109,16 @@ export function designationFactOf(sessionId: string, d: DesignationFact): RoleFa
   return 'none';
 }
 
+/** The Overlord's identity word: the generation identity `identityOf` answers for its body, the setter of the role's timers
+ *  and the recipient of their mail (Overlord W1, the Overlord's timers). One spelling: a reserved id, never a session's. */
+export const OVERLORD_IDENTITY = 'overlord';
+
 /** X5: the generation identity of a session. `overlord` for the live bound id, and for the pending id of a
  *  `designate` attempt; the session id for everything else, a rebind's pending body included. */
 export function identityOf(sessionId: string, d: DesignationFact): string {
   if (d.kind === 'none') return sessionId;
-  if (d.live === sessionId) return 'overlord';
-  if (d.pending === sessionId && d.pendingKind === 'designate') return 'overlord';
+  if (d.live === sessionId) return OVERLORD_IDENTITY;
+  if (d.pending === sessionId && d.pendingKind === 'designate') return OVERLORD_IDENTITY;
   return sessionId;
 }
 

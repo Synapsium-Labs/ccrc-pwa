@@ -3,7 +3,7 @@
 // tests build on these; nothing here reaches a server.
 import { vi, type Mock } from 'vitest';
 import {
-  DOC_SECTION_SLUGS, DOC_SECTIONS, parseDocsPage,
+  DOC_SECTION_SLUGS, DOC_SECTIONS, isDocsFolderLocation, parseDocsPage,
   type DocsEntry, type DocsFailureBody, type DocsFileResponse, type DocsPageLocation, type DocsRefreshFetch,
   type DocsRefreshResponse, type DocsTreeOk, type DocsTreeResponse, type DraftsFacts,
 } from '../../shared/docs';
@@ -168,6 +168,7 @@ export function pageAt(url: string): DocsPageLocation {
   const q = url.indexOf('?');
   const parsed = parseDocsPage(q < 0 ? url : url.slice(0, q), q < 0 ? '' : url.slice(q));
   if (!parsed.ok) throw new Error(`fixture URL ${url} does not parse: ${parsed.why}`);
+  if (isDocsFolderLocation(parsed.loc)) throw new Error(`fixture URL ${url} is an outside folder's page, not a project page`);
   return parsed.loc;
 }
 

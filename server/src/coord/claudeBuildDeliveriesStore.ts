@@ -1,4 +1,4 @@
-// The SQL of `claude_build_deliveries` (migration 128), the paste delivery recipe's results (Desktop polish wave 178; task note
+// The SQL of `claude_build_deliveries` (migration 129), the paste delivery recipe's results (Desktop polish wave 178; task note
 // docs/superpowers/programs/desktop-polish/paste-delivery.md section 7). In `claudeBuildsStore.ts`'s idiom: every function takes
 // the store's `DatabaseSync` and is synchronous, and `CoordStore` keeps one-line delegates, so its methods are the table's
 // only writers, and the capture lane (`buildCaptureLane.ts`) their only caller. What a row means is `shared/deliveryLane.ts`'s.

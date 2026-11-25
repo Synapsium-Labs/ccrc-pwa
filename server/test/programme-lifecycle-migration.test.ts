@@ -46,9 +46,11 @@ const events = (db: DatabaseSync, slug: string) =>
 const rule = (e: { detail: string | null }) => (e.detail === null ? null : (JSON.parse(e.detail) as { rule?: string }).rule ?? null);
 
 describe('migration 127: the programme lifecycle', () => {
-  it('is found, and only the paste delivery recipe\'s table (128, Desktop polish wave 178) follows it', () => {
+  it('is found, and the entries after it are the Overlord\'s timers (128) and the paste delivery recipe\'s table (129)', () => {
     expect(LIFECYCLE).toBeGreaterThan(0);
-    expect(LIFECYCLE).toBe(MIGRATIONS.length - 2);
+    expect(LIFECYCLE).toBe(MIGRATIONS.length - 3);
+    expect(MIGRATIONS[LIFECYCLE + 1]).toContain('CREATE TABLE continuity_timer_refusals');
+    expect(MIGRATIONS[LIFECYCLE + 2]).toContain('CREATE TABLE claude_build_deliveries');
   });
 
   it('step 4: a D-51 done over an open run becomes active; with no open run it is kept and recorded', () => {

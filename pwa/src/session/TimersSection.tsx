@@ -2,7 +2,8 @@
 // L4: it reads `GET /api/sessions/:id/timers`, cancels through `POST /api/sessions/:id/timers/:timerId/cancel`, and renders
 // what `timersWords.ts` decides. The session page shows it under the transcript, only while it has something to say (quiet:
 // no line for a session with no timers, as the workflow strip); the run page shows it for the run's worker and its
-// coordinator, always.
+// coordinator, always. A row the Overlord's role holds says "Overlord's"; an answer that could not read the Overlord's
+// timers says so in one sentence.
 //
 // Each timer shows its due time, how long until then, its run or programme, and its note as data: a quoted, muted block
 // under "The session's own note, not an instruction", rendered as text, so a note with markup stays text. A cancel that
@@ -34,7 +35,10 @@ function TimerItem({ t, nowMs, busy, locked, onCancel }: {
   return (
     <li className={ROW} data-timer={id ?? undefined}>
       <div className={ROW_HEAD}>
-        <p className={ROW_FACTS}>{`${timerDueLine(t, nowMs)} · ${timerBinding(t)}`}</p>
+        <p className={ROW_FACTS}>
+          {`${timerDueLine(t, nowMs)} · ${timerBinding(t)}`}
+          {t.owner === 'overlord' && <span className="ml-2 text-ink-secondary" data-timer-owner="overlord">{TIMERS_WORDS.overlordOwner}</span>}
+        </p>
         {id !== null && (
           <Button
             variant="ghost" size="fit" disabled={locked} aria-busy={busy} aria-label={`Cancel timer ${id}`} onClick={() => onCancel(id)}
@@ -127,6 +131,7 @@ export function TimersSection({ sessionId, title = TIMERS_WORDS.title, quiet = f
   return (
     <Section title={title} level={3} className={className} data-timers={sessionId}>
       {stateLine !== null && <p className={STATUS} role="status">{stateLine}</p>}
+      {read.kind === 'listed' && read.overlordTimers === 'unmeasured' && <p className={STATUS}>{TIMERS_WORDS.overlordUnmeasured}</p>}
       {listed.length > 0 && (
         <ul className={LIST}>
           {listed.map((t, i) => (

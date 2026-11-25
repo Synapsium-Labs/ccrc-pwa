@@ -292,9 +292,11 @@ describe('the helper source: one write, python 3.8, ASCII, and its section marke
     expect(() => helperSourceT6(['x', pyCloseT6, 'a', pyOpenT6].join('\n'))).toThrow(/no program/);
   });
 
-  it('importing the helper runs nothing, and VERBS names exactly the six verbs', () => {
+  it('importing the helper runs nothing, and VERBS names exactly the eight verbs', () => {
+    // X2 P2.1 and P2.2 add the folder registry's verb and the folder read.
     expect(unitJsonT6<string[]>(h.home, 'out(sorted(H.VERBS))'))
-      .toEqual(['docs-fetch', 'docs-index', 'docs-log', 'docs-show', 'docs-show-range', 'docs-tree']);
+      .toEqual(['docs-fetch', 'docs-folder', 'docs-folder-read', 'docs-index', 'docs-log', 'docs-show', 'docs-show-range',
+        'docs-tree']);
   });
 });
 
@@ -343,6 +345,8 @@ describe('the helper parity block equals shared/docs.ts, by value and in both di
     ['DOCS_RANGE_MAX_BYTES', parityL0.DOCS_RANGE_MAX_BYTES],
     ['DOCS_RANGE_PREPARE_BUDGET_MS', parityL0.DOCS_RANGE_PREPARE_BUDGET_MS],
     ['MTIME_NS_RE', parityL0.DOCS_MTIME_NS_RE_BODY],
+    // X2 P2.1: the outside-folder label grammar, which ccd checks before any path join.
+    ['FOLDER_LABEL_RE', parityL0.DOCS_FOLDER_LABEL_RE_BODY],
   ];
   /** The block's other names, each compared in its own shape: SECTIONS as ordered pairs (below), FAILURES as a set
    *  and REDACT_RULES rule by rule (Task 6's row-48 cases above). */
@@ -879,20 +883,25 @@ describe('the docs profile masks a Linear API key by its prefix, and the helper 
 });
 
 // ---- Docs W5b-1 Task 11: the doctor's one cap literal (rich-docs spec A12) ----
-// `ccd/ccrc-doctor-checks` names the two `ccd caps` words the Docs screen's W5b features need in ONE assignment,
-// `CCRC_DOCTOR_DOCS_CAPS`, because a shell file cannot import the server's constants. This block holds that one line
-// equal to the two constants joined by a space, so a word renamed on one side reds here. Every import is aliased.
+// `ccd/ccrc-doctor-checks` names the four `ccd caps` words the Docs screen's features need in ONE assignment,
+// `CCRC_DOCTOR_DOCS_CAPS`, because a shell file cannot import the server's constants (W5b's two, and X2's range and
+// folders words, placed by P2.1 Step 0). This block holds that one line equal to the four constants joined by a space,
+// so a word renamed on one side reds here. Every import is aliased.
 import * as docsCapsVitest from 'vitest';
 import * as docsCapsFs from 'node:fs';
 import * as docsCapsPath from 'node:path';
-import { DOCS_LOG_CAP as docsLogCapForDoctor, DOCS_SECTIONS_CAP as docsSectionsCapForDoctor } from '../src/ccdargv.js';
+import {
+  DOCS_LOG_CAP as docsLogCapForDoctor, DOCS_SECTIONS_CAP as docsSectionsCapForDoctor,
+  DOCS_RANGE_CAP as docsRangeCapForDoctor, DOCS_FOLDERS_CAP as docsFoldersCapForDoctor,
+} from '../src/ccdargv.js';
 
-docsCapsVitest.describe("CCRC_DOCTOR_DOCS_CAPS is one literal, equal to ccdargv's two docs cap constants", () => {
+docsCapsVitest.describe("CCRC_DOCTOR_DOCS_CAPS is one literal, equal to ccdargv's four docs cap constants", () => {
   const text = docsCapsFs.readFileSync(docsCapsPath.join(ccrcRoot, 'ccd', 'ccrc-doctor-checks'), 'utf8');
   const lines = text.split('\n').filter((l) => /^\s*CCRC_DOCTOR_DOCS_CAPS=/.test(l));
 
-  docsCapsVitest.it('is assigned on exactly one line, its value the two constants joined by a space', () => {
+  docsCapsVitest.it('is assigned on exactly one line, its value the four constants joined by a space', () => {
     docsCapsVitest.expect(lines).toHaveLength(1);
-    docsCapsVitest.expect(lines[0]).toBe(`CCRC_DOCTOR_DOCS_CAPS='${[docsLogCapForDoctor, docsSectionsCapForDoctor].join(' ')}'`);
+    docsCapsVitest.expect(lines[0]).toBe(`CCRC_DOCTOR_DOCS_CAPS='${[docsLogCapForDoctor, docsSectionsCapForDoctor,
+      docsRangeCapForDoctor, docsFoldersCapForDoctor].join(' ')}'`);
   });
 });

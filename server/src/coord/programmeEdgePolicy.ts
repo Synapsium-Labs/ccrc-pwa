@@ -87,8 +87,9 @@ export function edgeDecision(f: EdgeFacts, req: EdgeRequest): EdgeDecision {
 }
 
 /** An end over `open` runs: none open ends it as asked; open runs refuse unless `abandonRuns`, which only an Abandoned end
- *  may name (spec §5: Done needs no open run, and an end over open runs is always Abandoned, never silently rewritten). */
-function endOver(open: number, outcome: ProgrammeEndOutcome, abandonRuns: boolean, event: 'ended' | 'repaired'): EdgeDecision {
+ *  may name (spec §5: Done needs no open run, and an end over open runs is always Abandoned, never silently rewritten).
+ *  The decisions file asks it too (`programmeDecisionsPolicy.ts`), never naming `abandonRuns`. */
+export function endOver(open: number, outcome: ProgrammeEndOutcome, abandonRuns: boolean, event: 'ended' | 'repaired'): EdgeDecision {
   if (open === 0) return { ok: true, kind: 'decide', to: outcome, event, abandonRuns: false };
   if (!abandonRuns) {
     return refuse('programme-runs-open', `${open} run${open === 1 ? ' is' : 's are'} still open: close ${open === 1 ? 'it' : 'them'}, or end with abandonRuns (Abandoned)`);
@@ -104,6 +105,7 @@ export const OPERATOR_DOOR_CREDENTIALS: Readonly<Record<ProgrammeDoorAct, Exclud
   pause: 'dark-ok', 'decline-end': 'dark-ok',
   start: 'gate',
   resume: 'step-up', end: 'step-up', reopen: 'step-up', repair: 'step-up', 'hand-over': 'step-up', 'confirm-end': 'step-up',
+  'apply-decisions': 'step-up',
 };
 
 export function doorCredential(act: ProgrammeDoorAct, decider: ProgrammeDecider): DoorCredential {

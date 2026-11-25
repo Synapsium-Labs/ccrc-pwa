@@ -72,15 +72,16 @@ describe('the migration (the plan\'s F15)', () => {
     const first = openCoordDb(file);
     first.exec("CREATE TABLE kept_fixture (x TEXT); INSERT INTO kept_fixture VALUES ('kept')");
     first.exec('DROP TABLE limit_samples');
-    // The programme lifecycle's migration (127, W1) and the paste delivery recipe's table (128, Desktop polish wave 178)
-    // landed after this one: undo them too, so the reopen replays all three from the version before this one, which is this
-    // entry's slot.
+    // The programme lifecycle's migration (127, W1), the Overlord's timers (128) and the paste delivery recipe's table (129,
+    // Desktop polish wave 178) landed after this one: undo them too, so the reopen replays all four from the version before
+    // this one, which is this entry's slot.
     first.exec('DROP TABLE claude_build_deliveries;');
+    first.exec('DROP TABLE continuity_timer_refusals; ALTER TABLE continuity_timers DROP COLUMN setRestoreGeneration;');
     first.exec(`DROP INDEX programs_one_per_coordinator; DROP TABLE programme_picks; DROP TABLE programme_events;
       ALTER TABLE programs DROP COLUMN filedInto; ALTER TABLE programs DROP COLUMN placeholder; ALTER TABLE programs DROP COLUMN coordinatorSince;
       ALTER TABLE programs DROP COLUMN coordinatorUuid; ALTER TABLE programs DROP COLUMN coordinator;`);
     const slot = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE limit_samples'));
-    expect(slot).toBe(COORD_SCHEMA_VERSION - 3);
+    expect(slot).toBe(COORD_SCHEMA_VERSION - 4);
     first.exec(`PRAGMA user_version = ${slot}`);
     first.close();
     const db = openCoordDb(file);

@@ -136,7 +136,7 @@ export type DeliveryAction =
   | { readonly kind: 'backOff'; readonly why: string; readonly until: number; readonly countsAsAttempt: boolean }
   /** Retry later because the recipient is waiting, not failing: counts no attempt. The sender is told once, and only
    *  for the hold that names a blocked recipient. */
-  | { readonly kind: 'hold'; readonly why: 'auto-continue-armed' | 'turn-running'; readonly until: number;
+  | { readonly kind: 'hold'; readonly why: 'auto-continue-armed' | 'turn-running' | 'draft-present'; readonly until: number;
       readonly tellSender: boolean }
   /** The recipient is alive and its box would not take the nudge: parked, still queued, re-attempted on a timer. */
   | { readonly kind: 'park'; readonly reason: string; readonly retryAt: number; readonly tellSender: boolean;
@@ -215,7 +215,8 @@ export type SendFailureGate = 'stash-failed' | 'stash-occupied';
 /**
  * `sendPrompt` refused `error`. The guards, in order, each ahead of the next on purpose:
  *  1. `auto-continue-armed` (D-2369) and `turn-running` (worker stall watch §4.1) are HOLDS: the recipient is waiting,
- *     not failing, so they sit ahead of the attempts ceiling and count nothing. Only the first tells the sender, once.
+ *     not failing, so they sit ahead of the attempts ceiling and count nothing. So is `draft-present`, which only a line that
+ *     refuses a person's draft can meet. Only the first tells the sender, once.
  *  2. A row that has NEVER been delivered parks (D-5838) on `enter-ignored` at once, at the attempts ceiling, or when
  *     it is already parked. A delivered row never parks: that would write a false `undeliverable` over a message that
  *     reached the recipient.
@@ -228,6 +229,11 @@ export function decideSendFailure(
   // FOLLOW-UP (D-8173): the spawn settings now pin `autoContinueAtUsageLimit` off, so this hold goes once that pin is watched working live; it is kept until then.
   if (error === 'auto-continue-armed') {
     return { gate: null, action: { kind: 'hold', why: error, until: now + MAIL_ARMED_HOLD_MS, tellSender: d.lastError !== error } };
+  }
+  // D-9090: only a fixed line with `draft: 'refuse'` reaches this word on this lane. A person is writing, so it
+  // waits and counts nothing: no attempt, no park, no escalation.
+  if (error === 'draft-present') {
+    return { gate: null, action: { kind: 'hold', why: error, until: now + MAIL_TURN_HOLD_MS, tellSender: false } };
   }
   if (error === 'turn-running') {
     return { gate: null, action: { kind: 'hold', why: error, until: now + MAIL_TURN_HOLD_MS, tellSender: false } };

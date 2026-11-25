@@ -543,6 +543,21 @@ describe("POST /api/mail — the 'worker' role", () => {
     expect(w.coord.dueDeliveries(Date.now() + 1, 0)).toHaveLength(0);
   });
 
+  it("refuses the Overlord's identity word as a recipient by rule, with a registry row named overlord and without (Overlord W1, the timers)", async () => {
+    for (const planted of [true, false]) {
+      const home = mkTmp('ccrc-mail-');
+      seed(home, 'demo-quiet-mesa');
+      if (planted) seed(home, 'overlord');
+      const w = await withMail(home); app = w.app;
+      const res = await send(app, { ...GOOD, toId: 'overlord', runId: null });
+      expect(res.statusCode, String(planted)).toBe(404);
+      expect(res.json()).toMatchObject({ ok: false, error: 'unknown-recipient' });
+      expect((res.json() as { detail: string }).detail).toContain("the Overlord's role takes no mail in W1");
+      expect(w.coord.dueDeliveries(Date.now() + 1, 0)).toHaveLength(0);
+      await app.close(); app = undefined;
+    }
+  });
+
   it("refuses 'worker' on a run that has no worker yet, and says which run", async () => {
     const home = mkTmp('ccrc-mail-');
     seed(home, 'demo-quiet-mesa');
@@ -1360,7 +1375,8 @@ describe('the rejection table is total, in both directions', () => {
         || (PROGRAMME_STORE_REFUSALS as readonly string[]).includes(tok)
         // THE PROGRAMME LIFECYCLE'S DOORS (W2): `coord/programmeEdgePolicy.ts`, `programmeLifecycleActs.ts` and
         // `programmeLifecycleRoutes.ts` name the doors' refusals, the event words, the door acts and credentials, the
-        // coordinator lines, the conflict kinds and why a coordinator owns nothing. Admitted through L0's guard, never NOT_CODES.
+        // coordinator lines, the conflict kinds and why a coordinator owns nothing; W3's `programmeDecisionsPolicy.ts` the decisions
+        // file's outcomes and refusals. Admitted through L0's guard, never NOT_CODES.
         || isProgrammeDoorWord(tok),
         `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, edge state, health word, edge kind, spend state, service class, Overlord door word, actor issuer, Overlord refusal, designation word, unforecastable reason, approval census word, untrusted-build reason, Overlord gate word, Overlord inbox word, Overlord history word, linking refusal, block-wake word or sequence stamp word`).toBe(true);
     }

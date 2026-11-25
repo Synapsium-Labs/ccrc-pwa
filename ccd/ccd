@@ -9,7 +9,7 @@
 set -uo pipefail
 
 # ── THE DIRECT-ENTRY BOUNDARY (D-3696, D-3697) — before any external command ──
-# A direct `ws-reclaim`, `ws-expire`, `ws-collect`, `ws-orphan`, `scratch-rescue`, `ws-shed-deps`, `keep-awake`, `ws-lease-mark`, `ws-lease-audit` or `delegation-adopt` (D-8112), or a direct `ws-audit --session <id>
+# A direct `ws-reclaim`, `ws-expire`, `ws-collect`, `ws-orphan`, `scratch-rescue`, `ws-shed-deps`, `keep-awake`, `ws-lease-mark`, `ws-lease-audit`, `delegation-adopt` (D-8112) or `docs-folder` (X2 P2.3, the docs folder registry's one writer), or a direct `ws-audit --session <id>
 # --reclaim [--defer-expired]`, `… --expire` or `… --collect`, runs under Bash >= 4.4 PRIVILEGED with
 # no shell function defined — the state the installed launcher (`ccd/ccd-entry.py`
 # rendered to ~/.local/bin/ccd) starts it in, re-measured here, not taken on its
@@ -31,7 +31,7 @@ if [[ $# -ge 5 && "${1-}" == ws-audit && "${2-}" == --session && "${4-}" == --re
     case "${!__ccd_i}" in --defer-expired) ;; --stale|--hold-digest) __ccd_i=$((__ccd_i + 1)) ;; *) __ccd_stale=0; break ;; esac
   done
 fi
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && { [[ "${1-}" == ws-reclaim || "${1-}" == ws-expire || "${1-}" == ws-collect || "${1-}" == ws-orphan || "${1-}" == scratch-rescue || "${1-}" == ws-shed-deps || "${1-}" == keep-awake || "${1-}" == ws-lease-mark || "${1-}" == ws-lease-audit || "${1-}" == delegation-adopt ]] \
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && { [[ "${1-}" == ws-reclaim || "${1-}" == ws-expire || "${1-}" == ws-collect || "${1-}" == ws-orphan || "${1-}" == scratch-rescue || "${1-}" == ws-shed-deps || "${1-}" == keep-awake || "${1-}" == ws-lease-mark || "${1-}" == ws-lease-audit || "${1-}" == delegation-adopt || "${1-}" == docs-folder ]] \
      || (( __ccd_stale )) \
      || { [[ $# -ge 4 && $# -le 6 && "${1-}" == ws-audit && "${2-}" == --session ]] \
           && [[ ( "${4-}" == --reclaim && ( $# -eq 4 || ( $# -eq 5 && "${5-}" == --defer-expired ) ) ) || ( "${4-}" == --expire && ( $# -eq 4 || ( $# -eq 6 && "${5-}" == --child-of ) ) ) || ( $# -eq 4 && "${4-}" == --collect ) ]]; } || [[ $# -eq 4 && "${1-}" == ws-audit && "${2-}" == --loose-hex && "${4-}" == --collect ]]; }; then   # + the loose arm's audit (D-6625)
@@ -2019,7 +2019,7 @@ _lane_enabled() { [[ ! -f "$REG/$1-disabled" ]]; }   # operator kill-switch: tou
 # THE FOLD IS ALREADY HERE AND ITS DIRECTION IS THE FILE'S OWN RULING. An
 # unreadable marker answering "not condemned" folds "no marker" with "cannot
 # tell", exactly as a `chmod 000` marker already did; the digits gate above
-# argues that direction. Both consumers spend this on PREFERENCE only — rank 101
+# argues that direction. Both consumers spend this on PREFERENCE only — rank 102
 # in `_swap_target`, a second-tier fallback in `_ws_least_loaded` — so the fold
 # costs at most one rescue landing on a lane that may not authenticate, and "a
 # rescue must always have a destination". The opposite fold is the unsafe one.
@@ -6975,14 +6975,14 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # marker `$REG/<id>.shedding`, which no alias glob reaches, and the gate fails closed on it
 # (DEPSSHED region).
 #
-# NOT reachable this way, and this set IS the boundary — TWENTY-FOUR dot-prefixed
-# artifacts live under `$REG`; the eight above are reachable, these sixteen are
+# NOT reachable this way, and this set IS the boundary — TWENTY-FIVE dot-prefixed
+# artifacts live under `$REG`; the eight above are reachable, these seventeen are
 # not. THE CARDINAL IS MEASURED NOW, and it had to be: this paragraph said
 # EIGHT about a tree that already held nine, because `.account-placement.lock`
 # landed with `ccrc account` and nothing here reds when prose drifts.
 # `ccd-account-auth.test.ts`'s "the dot-prefixed registry inventory is a
 # census, not a memory" derives the number from the shipped bash and refuses
-# a paragraph that disagrees with it. The sixteen: `$REG/.carry.lock` (no id is the dash-free `.carry`);
+# a paragraph that disagrees with it. The seventeen: `$REG/.carry.lock` (no id is the dash-free `.carry`);
 # `$REG/.door/` (the Overlord's door process directory, ccd/lib/door.sh: a dotted DIRECTORY unreachable for `.reaped/`'s
 # reason; its per-id `<id>/` with the tool-server config and the delta cache is counted WITH it, removed by `_door_purge`);
 # `$REG/.inflight.lock` (the manifest's own slot, D-8362; no id is the dash-free `.inflight`);
@@ -7013,8 +7013,8 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # idiom again: the raise renames it onto the dot-FREE `$REG/testbox-remote-live`,
 # the test box switch, so only the transient copy carries a dot; `ccd scope-sweep-busy`'s
 # `$REG/.scope-sweep-busy-live.$$.tmp` (D-7994), that idiom a third time; `ccd delegation-adopt`'s
-# `$REG/.delegation-adopt.$$.tmp` (D-8112), a fourth; and session-hook.sh's
-# `.$id.$$.hookstate.tmp` — the last five ARE candidate glob matches when
+# `$REG/.delegation-adopt.$$.tmp` (D-8112), a fourth; the limit watchdog's `$REG/.provfail.$$.tmp` (D-9095), a fifth; and session-hook.sh's
+# `.$id.$$.hookstate.tmp` — the last six ARE candidate glob matches when
 # `<id>` is the aliasing id, but their suffix after the match carries a
 # SECOND dot, which is exactly what `_reg_purge`'s own `*.*` skip excludes.
 #
@@ -7536,7 +7536,7 @@ _ws_least_loaded() {   # [project] [class] -> the home-able account with the mos
   #
   # The ordinary health tiers below (condemned included) are computed exactly
   # as before and are untouched by this filter.
-  # `_swap_target`'s rank-101 tier is the same ruling for the rescue lane.
+  # `_swap_target`'s rank-102 tier is the same ruling for the rescue lane.
   # The server's `projectHome` (server/src/limits.ts) makes both calls the same
   # way, and `projected-home.test.ts` drives the two over one seeded HOME so the
   # day either side changes its mind is the day the suite says so.
@@ -9552,6 +9552,8 @@ EOF
   echo docs-sections-v2   # native Docs reader W5b (rich-docs spec G1): SECTIONS in the Docs helper holds vision and promise; the server names either only behind this word
   echo docs-log; echo docs-log-v1   # native Docs reader W5b (rich-docs spec G4): the verb, and the token that says it takes exactly this argv; the server sends it only behind the token
   echo docs-show-range; echo docs-range-v1   # native Docs parity X2 P1.2 (spec 2026-11-18 section 4.3): one file read by range, a snapshot prepare then frames; the verb, and the token that says it takes exactly these four argv shapes; the server sends it only behind the token
+  echo docs-folder; echo docs-folders-v1   # native Docs parity X2 P2.1 (spec 2026-11-18 section 4.1): the outside-folder registry verb, and the token that says this ccd takes its three shapes (--list, --add --path, --remove) and `docs-folder-read`, which P2.2 adds beside it; the server sends either only behind the token
+  echo docs-folder-read   # native Docs parity X2 P2.2 (spec 2026-11-18 section 4.1 "Reading"): the read verb of a registered outside folder, its four ops (tree, show, prepare, range); the token above covers it
   # ws-title-v1 / ws-wrapper-v1 — this ccd takes `--title <text>` and `--wrapper <lane>` on `ws-add` (named workspaces S1,
   # design 2026-10-20 §4.1). Two tokens, because the two flags are separable: the server sends each only behind its own
   # word, and PLACES IT BEFORE THE PROJECT. An older ccd binds an unknown `--` token as a positional (D-6164): leading,
@@ -20434,13 +20436,18 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout (asked, 
     # NEVER BACK TO AN AUTH-DEAD HOME (D-3522). A 401 writes no usage telemetry,
     # so `_avail` passes a home whose credential is dead; the rescue that moved a
     # session OFF it would move it straight back after SWAP_COOLDOWN, and a
-    # forced call would skip the candidate loop's rank-101 demotion by landing
+    # forced call would skip the candidate loop's rank-102 demotion by landing
     # here first. The probe clears the marker on a live answer, and `_authdead`
     # expires it once a credential file ccd can name changes (D-3524) — no spawn.
+    #
+    # NOR TO A HOME WHOSE PROVIDER IS FAILING (`_provfail_holds_home`, D-9095), or a session a failing lane stopped
+    # would be pulled back onto it. Only the preference is spent: a call that MUST leave (`$force`, the caller's or `pool`)
+    # keeps such a home as `hfb`, the fallback below, so no rescue is ever refused for the mark.
     if [[ "$hrc" -eq 0 && " ${SWAP_TARGET_SKIP:-} " != *" $home "* ]] \
       && _account_ok "$home" && { [[ -n "$cross_home" ]] || _pool_ok "$home" "$pps"; } \
       && ! _authdead "$home" && _avail "$home" \
       && { [[ "${CCD_RESCUE_MEASURED_ONLY:-}" != 1 ]] || [[ -n "$(_limit_score "$home")" ]]; } \
+      && { ! _provfail_holds_home "$1" "$home" || { [[ -n "$force" ]] && hfb="$home"; false; }; } \
       && { [[ -z "${4:-}" ]] || [[ -n "$(_limit_score "$home")" ]] || { hfb="$home"; false; }; }; then   # D-8123: a wake move wants MEASURED room only, and a rescue the CALLER forced (`${4:-}`, NOT the `force=pool` a wrong-pool current account sets above, which is a retag relocation and keeps its one-move affinity return) ranks an unmeasured home after every measured account with room, never ahead of it; the unforced affinity return home is unchanged. `hfb` keeps an otherwise-recovered unmeasured home as the rank-100 fallback the loop below returns when it finds nothing: the loop only walks `_pool_for` candidates that pass `_pool_ok`, so it would never rediscover a crossed home or a hand-set pool list that leaves home out
       _class_gate "$home" "$cls" "$1"; src=$?                                     # home recovered: go back — if it can serve the class
       [[ "$src" -eq 0 ]] && { echo "$home"; return 0; }
@@ -20647,7 +20654,7 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout (asked, 
       # cannot be wrong; an auth probe is a MEASUREMENT and can be, so it may cost
       # preference and must never cost eligibility.
       #
-      # 101, ONE TIER WORSE THAN UNMEASURED, and the tier is the whole point.
+      # 102, WORSE THAN UNMEASURED, and the tier is the whole point.
       # This was `sc=100` — the same number as the `:=100` above — until fix round
       # 1 measured what that costs: an auth-dead lane CANNOT REFRESH ITS OWN
       # TELEMETRY, because telemetry is written by a session rendering its
@@ -20668,12 +20675,13 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout (asked, 
       #                     ceiling (`_avail`) — see the two facts above
       #   unmeasured   100   eligible, no score: never measured, window ended, or
       #                     half-measured
-      #   auth-dead    101   eligible, and measured as not authenticating
+      #   failing      101   eligible, and its provider answered several turns with errors (`_provfail`, at most 30 min ago)
+      #   auth-dead    102   eligible, and measured as not authenticating: no turn can run there at all
       #   sentinel     999   `best_score`'s initial value
       #
-      # 101 therefore loses to every healthy candidate, MEASURED OR NOT, which is
+      # 102 therefore loses to every healthy candidate, MEASURED OR NOT, which is
       # the correction: the gap 97 -> 100 is what keeps a score ahead of silence,
-      # and the gap 100 -> 101 is what keeps silence ahead of a verdict. And 101
+      # and the gap 100 -> 101 is what keeps silence ahead of a verdict. And 102
       # is still far below the 999 sentinel, so a condemned candidate is picked
       # the moment it is the only one left — eligibility is untouched by this
       # change, only preference. That is the same rule the `:=100` above obeys and
@@ -20682,13 +20690,14 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout (asked, 
       # AND IT APPLIES WITHIN EITHER BRACKET (merge with #61, 2026-09-08). The
       # walk below now sorts candidates into two: home-able ones compete for
       # `best`, overflow ones for `obest`, and the brackets are consulted in
-      # that order. `sc=101` is assigned BEFORE the split deliberately, so a
+      # that order. The two are assigned BEFORE the split deliberately, so a
       # condemned lane ranks last IN ITS OWN bracket rather than being pushed
       # out of the rotation: a condemned overflow lane still beats no
       # destination at all, which is the same eligibility-vs-preference rule
       # the paragraph above derives. The two changes compose because one sets
       # the score and the other only chooses which bracket reads it.
-      _authdead "$cand" && sc=101
+      _provfail "$cand" && sc=101
+      _authdead "$cand" && sc=102
       # THE TIE GOES TO THE CURRENT ORGANIZATION (`_org_tie`, above), in both brackets alike: `(score, not-same-org,
       # roster position)`. `_org_note` keeps each bracket's lowest `same` score for the near miss, asked only.
       if _is_home_able "$cand"; then
@@ -22160,12 +22169,30 @@ SWAP_BG_HOLD_MAX=7200           # seconds after the last Stop that live backgrou
                                 # (`_swap_bg_hold`): past it a stuck count can no longer pin a session off its home lane
 SWAP_BG_HOLD_SKEW=60            # seconds a marker's stamp may sit AHEAD of this clock and still read as measured (else: no hold)
 
+_turn_mark_read() {   # id -> rc 0 and the TM_* globals: the hook's turn marker | 1 absent | 2 unreadable | 3 not the hook's line (every TM_* is emptied first)
+  # THE ONE READER OF A TURN MARKER'S EVIDENCE (`$REG/<id>.turn.json`, `TURN_MARK_PROGRAM` in session-hook.sh): the affinity
+  # move's background hold and the lane-failing pass (`_provfail_pass`) read it here. `cmd_hibernate` reads its own three facts
+  # inline and refuses on anything else. Builtins only; each field is its own regex, so the key order is not relied on. Nothing
+  # here decides what a fact means, and rc 1, 2 and 3 are never one answer: the hold treats them differently. Whose conversation
+  # the line is, the caller asks. A field the line does not carry, or carries as null, reads empty; `TM_SID`, `TM_ERR` and
+  # `TM_FAILS` keep their JSON spelling, so an empty one (`""`, `[]`), a `null` word and none at all stay different answers.
+  local line="" re k
+  TM_SID="" TM_STATE="" TM_AT="" TM_BG="" TM_STOP="" TM_KINDS="" TM_EVENT="" TM_TURN="" TM_ERR="" TM_FAILS=""
+  _reg_read_to line "$1" turn.json || return $?
+  re='^\{"v":1,'; { (( ${#line} > 4096 )) || [[ "$line" == *$'\n'* || ! "$line" =~ $re ]]; } && return 3
+  for re in 'SID "sessionId":("[^"]*")' 'STATE "state":"(done|working|failed)"' 'AT "at":([0-9]{1,16})[,}]' 'BG "bg":(-?[0-9]{1,9})[,}]' \
+    'STOP "stopAt":([0-9]{1,16})[,}]' 'KINDS "bgKinds":"([a-z_,-]{0,200})"' 'EVENT "event":"([A-Za-z]{1,64})"' \
+    'TURN "turnAt":([0-9]{1,16})[,}]' 'ERR "err":(null|"[a-z_]{0,64}")[,}]' 'FAILS "failAts":(\[[0-9,]{0,200}\])[,}]'; do
+    k="${re%% *}"; re="${re#* }"; [[ "$line" =~ $re ]] && printf -v "TM_$k" '%s' "${BASH_REMATCH[1]}"
+  done
+  # Malformed: no sessionId, state or `at`, or a `done` whose `bg` is not -1 or a count.
+  [[ -n "$TM_SID" && -n "$TM_STATE" && -n "$TM_AT" ]] && [[ "$TM_STATE" != done || "$TM_BG" == -1 || "$TM_BG" =~ ^[0-9]+$ ]] || return 3
+}
+
 _swap_bg_hold() {   # id now -> rc 0 iff the session's own turn marker says background work is live (the affinity move waits), 1 iff nothing holds it
-  # THE ONE READER OF THE TURN MARKER ON THE AFFINITY PATH. `$REG/<id>.turn.json` is the
-  # hook's line (`TURN_MARK_PROGRAM`, session-hook.sh; server/src/turnmark.ts reads it for
-  # the mail gate and the stall watch), and at a Stop it records `bg`, the count of
-  # background tasks Claude Code listed. Read with builtins, as `cmd_hibernate` reads it:
-  # this runs on the 5 s tick. Each field is its own regex, so the key order is not relied on.
+  # THE TURN MARKER ON THE AFFINITY PATH, read through `_turn_mark_read` (above): at a Stop the
+  # hook records `bg`, the count of background tasks Claude Code listed (server/src/turnmark.ts
+  # reads the same line for the mail gate and the stall watch). This runs on the 5 s tick.
   #
   # WHAT HOLDS, AND WHAT DOES NOT (each undecidable case decided once, here):
   #   - `done` with `bg` > 0 and a Stop inside SWAP_BG_HOLD_MAX: HOLDS. This is the case.
@@ -22188,32 +22215,20 @@ _swap_bg_hold() {   # id now -> rc 0 iff the session's own turn marker says back
   #     Today's behaviour returns.
   # The marker is not re-measured against the live process: a restart writes `bg` 0
   # (`restart` in the hook) and the bound caps a hook that did not run.
-  local id="$1" now="$2" line="" rrc re st="" sid="" at="" stop="" bg="" kinds="" uuid="" why="" anchor sig msg age
-  _reg_read_to line "$id" turn.json; rrc=$?; (( rrc == 2 )) && why=unreadable
-  (( rrc == 1 )) && { _swap_bg_release "$id"; return 1; }
-  re='^\{"v":1,'; [[ -z "$why" ]] && { (( ${#line} > 4096 )) || [[ "$line" == *$'\n'* || ! "$line" =~ $re ]]; } && why=malformed
-  if [[ -z "$why" ]]; then
-    # `sid` carries a leading `=` so a present-but-empty sessionId still reads as present.
-    re='"sessionId":"([^"]*)"';             [[ "$line" =~ $re ]] && sid="=${BASH_REMATCH[1]}"
-    re='"state":"(done|working|failed)"';   [[ "$line" =~ $re ]] && st="${BASH_REMATCH[1]}"
-    re='"at":([0-9]{1,16})[,}]';            [[ "$line" =~ $re ]] && at="${BASH_REMATCH[1]}"
-    re='"bg":(-?[0-9]{1,9})[,}]';           [[ "$line" =~ $re ]] && bg="${BASH_REMATCH[1]}"
-    re='"stopAt":([0-9]{1,16})[,}]';        [[ "$line" =~ $re ]] && stop="${BASH_REMATCH[1]}"
-    re='"bgKinds":"([a-z_,-]{0,200})"';     [[ "$line" =~ $re ]] && kinds="${BASH_REMATCH[1]}"
-    # Malformed: no sessionId, state or `at`, or a `done` whose `bg` is not -1 or a count.
-    [[ -n "$sid" && -n "$st" && -n "$at" ]] && [[ "$st" != done || "$bg" == -1 || "$bg" =~ ^[0-9]+$ ]] || why=malformed
-  fi
+  local id="$1" now="$2" uuid="" why="" anchor sig msg age
+  _turn_mark_read "$id"
+  case $? in 1) _swap_bg_release "$id"; return 1 ;; 2) why=unreadable ;; 3) why=malformed ;; esac
   if [[ -z "$why" ]]; then
     # Not a `done` line, or nothing running: no hold. Then another conversation's line: no hold.
-    { [[ "$st" != done ]] || { [[ "$bg" != -1 ]] && (( 10#$bg == 0 )); }; } && { _swap_bg_release "$id"; return 1; }
+    { [[ "$TM_STATE" != done ]] || { [[ "$TM_BG" != -1 ]] && (( 10#$TM_BG == 0 )); }; } && { _swap_bg_release "$id"; return 1; }
     _reg_read_to uuid "$id" uuid; (( $? == 2 )) && why=unreadable
-    [[ -z "$why" && ( -z "$uuid" || "$sid" != "=$uuid" ) ]] && { _swap_bg_release "$id"; return 1; }
+    [[ -z "$why" && ( -z "$uuid" || "$TM_SID" != "\"$uuid\"" ) ]] && { _swap_bg_release "$id"; return 1; }
   fi
   if [[ -n "$why" ]]; then
     anchor=$(_plat_mtime "$REG/$id.turn.json" 2>/dev/null) || anchor=""
     [[ "$anchor" =~ ^[0-9]{1,13}$ ]] || { _swap_bg_release "$id"; return 1; }
     anchor=$(( 10#$anchor * 1000 )); sig="$why:$anchor"; msg="the turn marker is $why, so what runs in the background is unknown"
-  else anchor=$(( 10#${stop:-$at} )); sig="bg:$anchor"; msg="background work (bg=${bg/#-1/unknown} kinds=${kinds:-none})"; fi
+  else anchor=$(( 10#${TM_STOP:-$TM_AT} )); sig="bg:$anchor"; msg="background work (bg=${TM_BG/#-1/unknown} kinds=${TM_KINDS:-none})"; fi
   age=$(( now * 1000 - anchor ))
   (( age < -(SWAP_BG_HOLD_SKEW * 1000) || age >= SWAP_BG_HOLD_MAX * 1000 )) && { _swap_bg_release "$id" expired; return 1; }
   _swap_bg_note "$id" "$sig" "$msg"; return 0
@@ -24874,8 +24889,11 @@ _route_apply_check() {   # id — the supervise tick's applier. Always 0: a tick
 # tmux's write of an italic/inverse/bold drop inside a dim run) continues the
 # run, so the first rule rewrites it to a bare `\e[2m` (an open outside a run,
 # an interleaved code inside one). The close also takes a parameterless `\e[m`.
+# D-9077, the cursor on a hint: an inverse FIRST cell directly before the code that turns dim on is the hint's own first
+# letter under the drawn cursor (`send.ts` HINT_CURSOR, whose note says why only that shape), so the first rule joins
+# it to the run. A draft's first letter under the cursor is followed by a plain reset and stays a draft.
 _pane_box_plain() {   # ANSI (`capture-pane -e`) pane-text on stdin -> dim ghosts and SGR removed
-  LC_ALL=C sed -E $'s/\033\\[0;(1;)?2(;[0-9;]*)?m/\033[2m/g; s/\033\\[(0;)?(1;)?2(;[0-9;]*)?m((\033\\[([13-9][0-9;]*|2|2[013-9;][0-9;]*|22[0-9][0-9;]*)m)|[^\033])*\033\\[(0[0-9;]*|22(;[0-9;]*)?)?m//g; s/\033\\[[0-9;]*m//g'
+  LC_ALL=C sed -E $'s/^((\033\\[[0-9;]*m)*\xe2\x9d\xaf(\xc2\xa0| ))\033\\[7m([\x20-\x7e]|[\xc2-\xf4][\x80-\xbf]+)\033\\[0;2m/\\1\033[2m\\4/; s/\033\\[0;(1;)?2(;[0-9;]*)?m/\033[2m/g; s/\033\\[(0;)?(1;)?2(;[0-9;]*)?m((\033\\[([13-9][0-9;]*|2|2[013-9;][0-9;]*|22[0-9][0-9;]*)m)|[^\033])*\033\\[(0[0-9;]*|22(;[0-9;]*)?)?m//g; s/\033\\[[0-9;]*m//g'
 }
 
 _pane_box_draft() {   # ANSI (`capture-pane -e`) pane-text -> the box's own marker row, or empty; rc 2 when no box is on screen (D-8116)
@@ -30916,6 +30934,8 @@ _rescue_target() {   # id cur home hard-blocked hrc -> `_swap_target`'s stdout a
   # mean the only same-class target with room is one the spread skipped — the
   # walk passes a skipped candidate before `_class_gate` counts it — and the
   # just-left-only pass below then decides, as it does for everything else.
+  # NOR WITH A LANE WHOSE PROVIDER IS FAILING (`_provfail`): the spread pass's name is not taken when it is marked, and the
+  # just-left-only pass, which ranks a marked lane behind the rest, decides.
   # SPREAD NEVER PASSES OVER HOME: a recovered home another session was just
   # rescued onto would only be returned to by the affinity path at the next
   # idle tick — two moves where one does (do-not-bounce still skips a home the
@@ -30930,7 +30950,7 @@ _rescue_target() {   # id cur home hard-blocked hrc -> `_swap_target`'s stdout a
   recent=" $RESCUE_SKIP_RECENT "; [[ -n "$3" ]] && recent="${recent// "$3" / }"   # spread never passes over HOME: the affinity path would only move it back
   if [[ -n "${recent// /}" ]]; then
     out=$(SWAP_TARGET_SKIP="$RESCUE_SKIP_LEFT $recent" _swap_target "$@"); rc=$?
-    [[ -n "$out" && "$rc" -eq 0 ]] && { printf '%s\n' "$out"; return 0; }
+    [[ -n "$out" && "$rc" -eq 0 ]] && ! _provfail "${out%%$'\n'*}" && { printf '%s\n' "$out"; return 0; }
     # …and ITS undecidable answer is never returned: the unskipped probe above
     # already answered every question the skip cannot change (rc 2-4 are asked
     # before the walk), so an rc 5 here means the skip removed every measured
@@ -33183,6 +33203,68 @@ _watchdog_one() {   # id now minutes -> a forced rescue bumps WD_FORCED; everyth
   return 0
 }
 
+# THE LANE-FAILING MARK (the provider-failure ladder, wave 3a, D-9095; docs/superpowers/plans/2026-11-25-provider-retry.md).
+# `$REG/<lane>-provfail` holds `<epoch> <err>`, `_authdead`'s shape: several sessions' turn markers say the provider answers this
+# lane's turns with errors. A PREFERENCE of an AUTOMATIC move and nothing else (`_swap_target`'s home arm and its ranking,
+# `_rescue_target`'s spread): no lane is ever ineligible for it, no session is moved for it, and the operator's own verbs never
+# read it (ruling 2026-10-19). DOTLESS AND PER-LANE, for `_authdead`'s reasons. ONE WRITER, `_provfail_pass`, run by the limit
+# watchdog once a minute, off with it (`CCRC_LIMIT_WATCHDOG_MIN=0`): the tick and the verbs read only. It needs no purge: past
+# PROVFAIL_TTL a mark means nothing to a reader whether or not anything removed it, and the next pass removes it.
+# The seconds: TTL, how long a mark means anything after its write, and how old a lane's newest failure may be at the write;
+# SPAN, how far back one session's consecutive failures are counted; FRESH, how old a failure that is still owed may be to
+# count beside another session's (the server's outage notice uses the same 10 minutes).
+PROVFAIL_TTL=1800 PROVFAIL_SPAN=7200 PROVFAIL_FRESH=600
+_provfail() {   # lane [now] -> rc 0 iff a well-formed mark younger than PROVFAIL_TTL stands (PROVFAIL_AT = its epoch) | 1
+  # `-f` before the open and `! -L`, `_authdead`'s rungs and reasons. Anything but `<epoch> <word>` is no mark, and one written
+  # more than a minute AHEAD of this clock is none either, or a clock set back would keep it for ever.
+  local f="$REG/$1-provfail" t="" re='^([0-9]{1,12}) [a-z_]+$' now="${2:-}"
+  [[ -f "$f" && ! -L "$f" ]] && _file_read_to t "$f" && [[ "$t" =~ $re ]] || return 1
+  PROVFAIL_AT=$(( 10#${BASH_REMATCH[1]} )); [[ -n "$now" ]] || _now_s_to now
+  (( PROVFAIL_AT <= now + 60 && now - PROVFAIL_AT < PROVFAIL_TTL ))
+}
+_provfail_holds_home() {   # id home -> rc 0 iff home is marked and the operator has not chosen it since | 1
+  # `ccd prefer` IS NEVER HELD BACK (ruling 2026-10-19): a `.home` written after the mark is a choice made while it stood, so the
+  # return it asks for goes ahead. Once: a row that has moved since (`lastswap`) took it, or a session that fails there and is
+  # moved off would be pulled straight back. `lastswap`'s VALUE, not its mtime: a requeue writes the old value again.
+  local at sw; _provfail "$2" || return 1
+  [[ "$REG/$1.home" -nt "$REG/$2-provfail" ]] || return 0
+  _reg_get_to sw "$1" lastswap; at=$(_plat_mtime "$REG/$1.home") && [[ "$sw" =~ ^[0-9]{1,12}$ ]] && (( 10#$sw > at ))
+}
+_provfail_pass() {   # now -> each lane's mark set or cleared from every row's turn marker; its rc says nothing
+  # THE EVIDENCE, one row at a time. The lane is the row's `wrapper`, and a stamp counts for it only when it is newer than the
+  # row's `lastswap`: what a session did before its last move it did on another lane. A field that is absent, unreadable or not
+  # this conversation's is evidence of NOTHING, neither failure nor health (`_turn_mark_read`'s rc, the uuid test, a `lastswap`
+  # that is no epoch), and so is a stamp more than a minute ahead of this clock.
+  #   HEALTH (`good`): the newest good Stop. A `done` line whose event is Stop; or, on the lines a later event wrote, an empty
+  #   `failAts` beside no failure or a provider's: the hook empties the list at a Stop and a clear alone, and a clear writes no
+  #   `stopAt`. Beside any other word the `stopAt` may be that failure's own, so it says nothing.
+  #   FAILURE: three counted failures of one session inside PROVFAIL_SPAN, the newest inside PROVFAIL_TTL (2), or one still owed
+  #   inside PROVFAIL_FRESH (1). A lane at 2 is failing, unless its good Stop is newer than the newest of those failures.
+  local now=$(( $1 * 1000 )) f id w uuid sw lo n l t h; local -A good=() last=() hits=() err=()
+  for f in "$REG"/*.uuid; do id="${f##*/}"; id="${id%.uuid}"
+    _reg_read_to w "$id" wrapper && _is_valid_wrapper "$w" && _reg_read_to uuid "$id" uuid && [[ -n "$uuid" ]] || continue
+    _reg_read_to sw "$id" lastswap || { (( $? == 1 )) || continue; sw=0; }
+    [[ "$sw" =~ ^[0-9]{1,12}$ ]] && _turn_mark_read "$id" && [[ "$TM_SID" == "\"$uuid\"" ]] || continue
+    lo=$(( 10#$sw * 1000 )) n=0 l=0 h=0 t=$(( 10#${TM_STOP:-0} ))
+    [[ "$TM_STATE.$TM_EVENT" == done.Stop || "$TM_FAILS$TM_ERR" =~ ^\[\](null|\"server_error\"|\"overloaded\")$ ]] \
+      && (( t > lo && t <= now + 60000 && t > ${good[$w]:-0} )) && good[$w]=$t
+    for t in ${TM_FAILS//[][,]/ }; do (( 10#$t > lo && 10#$t > now - PROVFAIL_SPAN * 1000 && 10#$t <= now + 60000 )) && n=$(( n + 1 )) l=$(( 10#$t )); done
+    if (( n >= 3 && l > now - PROVFAIL_TTL * 1000 )); then h=2; elif (( n && l > now - PROVFAIL_FRESH * 1000 && l > 10#${TM_TURN:-0} )); then h=1; else continue; fi
+    hits[$w]=$(( ${hits[$w]:-0} + h )); (( l <= ${last[$w]:-0} )) || { last[$w]=$l; err[$w]="${TM_ERR//\"/}"; }
+  done
+  # CLEARED FIRST, so a failure newer than the good Stop that ends a mark sets a new one in the same pass. A standing mark is
+  # never rewritten: its 30 minutes run from the write, and only a failure inside them writes the next.
+  for f in "$REG"/*-provfail; do w="${f##*/}"; w="${w%-provfail}"
+    _provfail "$w" "$1" && (( ${good[$w]:-0} < PROVFAIL_AT * 1000 )) && continue
+    rm -f -- "$f" 2>/dev/null && echo "$(date '+%F %T') lane-failing-end $w: a turn ended well there, or the mark ran out" >> "$REG/swap.log"
+  done
+  for w in "${!hits[@]}"; do
+    (( ${hits[$w]} >= 2 && ${last[$w]} > ${good[$w]:-0} )) && ! _provfail "$w" "$1" || continue
+    f="$REG/.provfail.$$.tmp"; printf '%s %s' "$1" "${err[$w]:-unknown}" > "$f" && _plat_mv_notdir "$f" "$REG/$w-provfail" || { rm -f -- "$f"; continue; }
+    echo "$(date '+%F %T') lane-failing $w: its provider answers with errors (${err[$w]:-unknown}); automatic moves prefer other lanes for at most $(( PROVFAIL_TTL / 60 )) min" >> "$REG/swap.log"
+  done
+}
+
 cmd_limit_watchdog() {   # (no args) — one pass over every live session; exits 0 unless the registry is unreadable
   [[ $# -eq 0 ]] || die "usage: ccd limit-watchdog"
   local n="" f id now t0=$SECONDS
@@ -33194,6 +33276,7 @@ cmd_limit_watchdog() {   # (no args) — one pass over every live session; exits
   _now_s_to now
   WD_FORCED=0
   shopt -s nullglob
+  _provfail_pass "$now"   # before the rows: a rescue this pass decides already reads what its markers say
   for f in "$REG"/*.uuid; do
     id="${f##*/}"; id="${id%.uuid}"
     [[ "$id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || continue   # an id is quoted into the dispatch's unit command
@@ -44837,7 +44920,7 @@ _authdead_cred_changed() {   # wrapper epoch -> 0 the lane's credential file cha
 
 _authdead_expired() {   # wrapper epoch -> success iff the lane's credential changed at or after the marker's epoch, having removed the marker. Silent. (D-3524)
   # `_authdead`'s tail, so every ccd reader — the condemned placement tier, the
-  # home-recovered arm, rank 101, the rescue's own check — revives a re-logged-in
+  # home-recovered arm, rank 102, the rescue's own check — revives a re-logged-in
   # account at its next decision, with no spawn and no probe.
   #
   # REMOVED ONLY WHILE IT IS STILL THE VERDICT THAT WAS JUDGED (round 1). Deciding
@@ -45258,6 +45341,59 @@ cmd_docs_show_range() {   # --project P (--commit C | --draft-branch B --head H)
   _docs_py docs-show-range "$PROJECTS_ROOT" "$WORKTREES_ROOT" "$REG" "$@" </dev/null
 }
 
+cmd_docs_folder() {   # --list | --add <label> --path <abs> | --remove <label>
+  # The registry of outside folders and the admission of one (X2 spec 2026-11-18 section 4.1, plan P2.1). Three shapes, each
+  # exact in token count, and no other: a second mode, a repeated flag or a missing value is `die` (rc 1, empty stdout, the
+  # server-bug class). THE LABEL IS NOT CHECKED HERE: the helper owns its grammar (FOLDER_LABEL_RE) and refuses bad-label
+  # before any path join; this front joins no path and touches no file. The roster's config directories (protected: no
+  # folder may sit in or contain one) are computed here, where the roster is sourced, and handed to the helper in argv: a
+  # count and then that many absolute paths, after the three roots and in front of this verb's own tokens.
+  local shape=bad
+  if [[ $# -eq 1 && "${1-}" == --list ]]; then shape=list
+  elif [[ $# -eq 4 && "${1-}" == --add && "${3-}" == --path ]]; then shape=add
+  elif [[ $# -eq 2 && "${1-}" == --remove ]]; then shape=remove
+  fi
+  [[ "$shape" != bad ]] || die "usage: ccd docs-folder (--list | --add <label> --path <abs> | --remove <label>)"
+  _docs_folder_py docs-folder "$@"
+}
+
+# The one place the roster's config directories reach a folder verb: `docs-folder` and `docs-folder-read` both end here, so
+# the protected set the helper compares a folder with is the same list for an Add and for every read (X2 plan P2.2).
+_docs_folder_py() {   # verb tokens... -> the helper's one line, or the front's fixed line when the floor is not met
+  local verb="$1"; shift
+  _docs_front "$verb" || return 0
+  local cfg=() acct dir
+  for acct in "${CCRC_ACCOUNTS[@]}"; do dir=$(_ccrc_cfg_dir "$acct") && [[ -n "$dir" ]] && cfg+=("$dir"); done
+  _docs_py "$verb" "$PROJECTS_ROOT" "$WORKTREES_ROOT" "$REG" "${#cfg[@]}" ${cfg[@]+"${cfg[@]}"} "$@" </dev/null
+}
+
+cmd_docs_folder_read() {   # --label L --op (tree | show --section S --path X --fingerprint F --max-bytes N | prepare --section S --path X --pin PIN | range --section S --path X --pin PIN --snapshot ID --offset O --length LEN)
+  # One read of a registered outside folder (X2 spec 2026-11-18 section 4.1 "Reading", section 4.3, plan P2.2). Four shapes,
+  # each exact in token count and flag order, and no other: tree 4 tokens, show 12, prepare 10, range 16. A second op, a
+  # repeated flag, a missing value or a number outside its grammar is `die` (rc 1, empty stdout, the server-bug class).
+  # THE LABEL IS NOT CHECKED HERE: the helper owns its grammar and refuses bad-label before it resolves anything; this
+  # front joins no path and touches no file. The numbers are checked as `cmd_docs_show` and `cmd_docs_show_range` check
+  # theirs. The roster's config directories ride in argv exactly as `docs-folder`'s do (`_docs_folder_py`).
+  local shape=bad
+  if [[ "${1-}" == --label && "${3-}" == --op ]]; then
+    if [[ $# -eq 4 && "${4-}" == tree ]]; then
+      shape=ok
+    elif [[ $# -eq 12 && "${4-}" == show && "${5-}" == --section && "${7-}" == --path && "${9-}" == --fingerprint \
+            && "${11-}" == --max-bytes ]] && _docs_max_bytes_ok "${12}"; then
+      shape=ok
+    elif [[ $# -eq 10 && "${4-}" == prepare && "${5-}" == --section && "${7-}" == --path && "${9-}" == --pin ]]; then
+      shape=ok
+    elif [[ $# -eq 16 && "${4-}" == range && "${5-}" == --section && "${7-}" == --path && "${9-}" == --pin \
+            && "${11-}" == --snapshot && "${13-}" == --offset && "${15-}" == --length ]] \
+         && _docs_range_nums_ok "${14}" "${16}"; then
+      shape=ok
+    fi
+  fi
+  [[ "$shape" != bad ]] \
+    || die "usage: ccd docs-folder-read --label L --op (tree | show --section S --path X --fingerprint F --max-bytes N | prepare --section S --path X --pin PIN | range --section S --path X --pin PIN --snapshot ID --offset O --length LEN)"
+  _docs_folder_py docs-folder-read "$@"
+}
+
 _docs_py() {   # verb projects_root worktrees_root reg [verb argv...]; the Docs helper (spec 2026-10-01 §2)
   # Embedded for `_pr_py`'s reason: ~/.local/bin/ccd is a COPY, so a sibling
   # file would be a second deployment step, and a way for `ccd caps` to
@@ -45340,8 +45476,9 @@ DOCS_RANGE_FRAME_BYTES=524288
 DOCS_RANGE_MAX_BYTES=67108864
 DOCS_RANGE_PREPARE_BUDGET_MS=10000
 MTIME_NS_RE=r'0|[1-9][0-9]{0,18}'
+FOLDER_LABEL_RE=r'[a-z0-9][a-z0-9-]{0,31}'
 # FAILURES is DOCS_CCD_FAILURES: every word a ccd docs answer may carry.
-FAILURES=frozenset({'bad-project','bad-ref','bad-commit','bad-section','bad-path','bad-fingerprint','unknown-project','not-a-git-repo','linked-worktree','shared-repo','partial-clone','repo-unreadable','no-default-branch','unresolved-ref','ref-not-commit','unknown-commit','not-a-commit','object-missing','absent-path','not-a-file','symlink-in-path','too-large','too-many-entries','unreadable-path','worktree-gone','ambiguous-worktree','untrusted-worktree','worktree-moved','draft-changed','snapshot-gone','range-too-large','prepare-busy','remote-absent','remote-branch-absent','fetch-auth-failed','fetch-rejected-objects','fetch-transport','ref-locked','fetch-too-soon','fetch-timeout','fetch-failed','git-failed','git-timeout','helper-unavailable','helper-failed'})
+FAILURES=frozenset({'bad-project','bad-ref','bad-commit','bad-section','bad-path','bad-fingerprint','unknown-project','not-a-git-repo','linked-worktree','shared-repo','partial-clone','repo-unreadable','no-default-branch','unresolved-ref','ref-not-commit','unknown-commit','not-a-commit','object-missing','absent-path','not-a-file','symlink-in-path','too-large','too-many-entries','unreadable-path','worktree-gone','ambiguous-worktree','untrusted-worktree','worktree-moved','draft-changed','snapshot-gone','range-too-large','prepare-busy','remote-absent','remote-branch-absent','fetch-auth-failed','fetch-rejected-objects','fetch-transport','ref-locked','fetch-too-soon','fetch-timeout','fetch-failed','git-failed','git-timeout','helper-unavailable','helper-failed','bad-label','absent','not-a-directory','foreign-owner','protected','unreadable','label-exists','unknown-folder'})
 # docs-parity: end
 
 # ===== docs: core =====
@@ -45553,6 +45690,10 @@ def read_args(verb, rest):
     if verb == 'docs-index':
         _contract(rest == ['--all'], 'docs-index takes exactly --all')
         return IndexArgs()
+    if verb == 'docs-folder':
+        return folder_args(rest)   # the folder section's: the label first, then the path's shape
+    if verb == 'docs-folder-read':
+        return folder_read_args(rest)   # the folder read section's: the label first, then each value by its own word
     if verb == 'docs-tree':
         project, ref = _one_or_two(rest, '--ref')
         _refuse(valid_project(project), 'bad-project')
@@ -45619,7 +45760,12 @@ import time
 # Budgets. Each literal is ONE line, so W2's budget test can extract it. A verb
 # builds one Deadline from HELPER_DEADLINE_S at its start; each git call it
 # makes is bounded by min(CALL_S[its class], what is left of that deadline).
-HELPER_DEADLINE_S={'docs-index':12,'docs-tree':12,'docs-show':7,'docs-fetch':45,'docs-log':10,'docs-show-range':20}
+# The two folder rows (X2 P2.1, P2.2). docs-folder: the registry lock waits at most FOLDER_LOCK_WAIT_S (5 s) and a remove then
+# waits at most RANGE_LOCK_WAIT_S (5 s) on the cache's lock, each capped by what is left of this Deadline, so 12 s holds
+# both waits and 2 s of admission, purge and fsync between them. docs-folder-read: ONE row for its four ops, the longest
+# being a prepare (its copy budget DOCS_RANGE_PREPARE_BUDGET_MS and the cache's lock waits, as docs-show-range's), so 20 s;
+# a tree walk, a show and a frame end far inside it. docs-budget.test.ts holds both against the runner's rows.
+HELPER_DEADLINE_S={'docs-index':12,'docs-tree':12,'docs-show':7,'docs-fetch':45,'docs-log':10,'docs-show-range':20,'docs-folder':12,'docs-folder-read':20}
 CALL_S={'ref':5,'list':8,'count':2,'show':5,'onref':2,'fetch':40,'index':5,'log':8}
 KILL_GRACE_S=2
 REDACT_BUDGET_MS=900
@@ -46611,7 +46757,7 @@ LS_KIND_BY_MODE = {'100644': 'file', '100755': 'exec', '120000': 'symlink', '160
 LS_UNLISTED_REASONS = ('invalid-utf8', 'unsafe-char', 'too-long', 'too-deep')
 LS_OID_RE = re.compile(rb'[0-9a-f]{40}|[0-9a-f]{64}')
 LS_SECTION_BYTES = tuple((slug, sec.encode('ascii')) for slug, sec in SECTIONS.items())
-LS_ROWS_OF = {'docs-tree': 'entries', 'docs-index': 'projects'}
+LS_ROWS_OF = {'docs-tree': 'entries', 'docs-index': 'projects', 'docs-folder-read': 'entries'}
 
 
 def parse_ls_tree_long(buf):
@@ -47673,7 +47819,7 @@ def _draft_read(fd, limit):
     return b''.join(chunks)
 
 
-def draft_facts(trusted, rel, budget, fmt):
+def draft_facts(trusted, rel, budget, fmt, soft=False):
     """One draft path's facts -> ({kind, size, fp[, mtimeNs][, errno]}, blob | None).
     The walk gives the kind (DRAFT_KIND_OF_WALK names the two refused-middle
     kinds in the wire's words). A regular file that passes the leaf checks and
@@ -47686,7 +47832,13 @@ def draft_facts(trusted, rel, budget, fmt):
     opened, the stat its size comes from; it is what a stat pin names for a
     file with no fp. It never replaces fp: the hash stays the read capability.
     The read draws on `budget` (a HashBudget); a file that would pass it raises
-    DraftBudgetSpent."""
+    DraftBudgetSpent. TWO keywords serve docs-folder-read's walker (X2 P2.2), which
+    reads a folder's files by the same rules and has no `git status` to bound the
+    set: `soft=True` answers a file the budget cannot take as the over-the-ceiling
+    file is answered, its size and mtimeNs with fp None (a stat pin names it),
+    where a draft raises; and `fmt=None` computes no blob id (a folder file has no
+    object format, so the second value is None). A draft passes neither, and its
+    answer is byte for byte what it was."""
     fd, kind, err, st = walk_leaf(trusted.fd, rel, trusted.dev)
     if fd is None:
         facts = {'kind': DRAFT_KIND_OF_WALK.get(kind, kind), 'size': None, 'fp': None}
@@ -47700,6 +47852,8 @@ def draft_facts(trusted, rel, budget, fmt):
             return {'kind': 'file', 'size': st.st_size, 'fp': None, 'mtimeNs': mtime_ns}, None
         left = budget.left()
         if st.st_size > left:
+            if soft:
+                return {'kind': 'file', 'size': st.st_size, 'fp': None, 'mtimeNs': mtime_ns}, None
             raise DraftBudgetSpent()
         try:
             data = _draft_read(fd, min(cap, left) + 1)
@@ -47711,8 +47865,11 @@ def draft_facts(trusted, rel, budget, fmt):
     if len(data) > cap:
         return {'kind': 'file', 'size': len(data), 'fp': None, 'mtimeNs': mtime_ns}, None
     if len(data) > left:
+        if soft:
+            return {'kind': 'file', 'size': len(data), 'fp': None, 'mtimeNs': mtime_ns}, None
         raise DraftBudgetSpent()
-    return {'kind': 'file', 'size': len(data), 'fp': hashlib.sha256(data).hexdigest(), 'mtimeNs': mtime_ns}, blob_id(data, fmt)
+    return ({'kind': 'file', 'size': len(data), 'fp': hashlib.sha256(data).hexdigest(), 'mtimeNs': mtime_ns},
+            blob_id(data, fmt) if fmt is not None else None)
 
 
 def _draft_place(path):
@@ -48271,6 +48428,26 @@ def _pin_leaf(trusted, rel):
     raise ValueError('walk_leaf answered a kind docs-show does not map: %r' % (kind,))
 
 
+def pinned_bytes(leaf, st, cap, fp):
+    """The bytes of an opened leaf `leaf` (fstat `st`, a regular file that passed every leaf check) when they are the ones
+    the fingerprint `fp` names, section 2 (e)'s steps 3 to 5, which a draft's read and a folder's show share: the size
+    within `cap` (too-large {size, cap}, before any read), size + 1 bytes read and the fstat taken again (the read must
+    give exactly size bytes and ino, size, mtime_ns and ctime_ns must be unchanged), and sha256 must be `fp`. Steps 4 and
+    5 fail with the same draft-changed {now:'present'}, carrying no hash and no size. A failed read is unreadable-path."""
+    if st.st_size > cap:
+        raise fail('too-large', size=st.st_size, cap=cap)
+    try:
+        data = _draft_read(leaf, st.st_size + 1)
+        now = SYS.fstat(leaf)
+    except OSError as e:
+        raise fail('unreadable-path', errno=_walk_errno(e.errno))
+    if len(data) != st.st_size or any(getattr(now, k) != getattr(st, k) for k in PIN_STABLE_FIELDS):
+        raise fail('draft-changed', now='present')
+    if hashlib.sha256(data).hexdigest() != fp:
+        raise fail('draft-changed', now='present')
+    return data
+
+
 def read_draft(ctx, repo, a, dl):
     """A DraftPin's bytes, checked in section 2 (e)'s order -> (data, trusted).
     trusted is the holder's Trusted with its fd already closed (fd None); its
@@ -48292,18 +48469,7 @@ def read_draft(ctx, repo, a, dl):
         if trusted.head != a.head:
             raise fail('worktree-moved', head=trusted.head)
         leaf, st = _pin_leaf(trusted, SECTIONS[a.section] + '/' + a.path)
-        cap = min(a.max_bytes, file_ceiling())
-        if st.st_size > cap:
-            raise fail('too-large', size=st.st_size, cap=cap)
-        try:
-            data = _draft_read(leaf, st.st_size + 1)
-            now = SYS.fstat(leaf)
-        except OSError as e:
-            raise fail('unreadable-path', errno=_walk_errno(e.errno))
-        if len(data) != st.st_size or any(getattr(now, k) != getattr(st, k) for k in PIN_STABLE_FIELDS):
-            raise fail('draft-changed', now='present')
-        if hashlib.sha256(data).hexdigest() != a.fp:
-            raise fail('draft-changed', now='present')
+        data = pinned_bytes(leaf, st, min(a.max_bytes, file_ceiling()), a.fp)
         head = _pin_git(trusted.path, DRAFT_HEAD_ARGS, dl).decode('ascii', 'replace').strip()
         if head != a.head:
             raise fail('worktree-moved', head=head)
@@ -48736,11 +48902,20 @@ FETCH_AUTH_MARKS = ('Authentication failed', 'could not read Username', 'Permiss
 # ref-locked means ANOTHER process holds a ref lock (spec 2 (g) step 7, retried),
 # so 'cannot lock ref' alone is not enough: git says the same two words for a
 # directory/file conflict ("'refs/remotes/origin/foo' exists; cannot create
-# ..."), which only a prune cures and which --no-prune never will. The lock arm
-# needs git's own lock-file evidence beside it, `Unable to create '<ref>.lock':
-# File exists` (measured on git 2.43.0 under LC_ALL=C).
+# ..."), which only a prune cures and which --no-prune never will. git words a held
+# ref lock in TWO ways, and the lock arm takes either (rc 1 in both):
+#   git 2.43.0: `error: cannot lock ref '<ref>': Unable to create '<ref>.lock': File
+#     exists.` The mark needs git's own lock-file evidence beside it, `Unable to create
+#     '<ref>.lock': File exists`.
+#   git 2.53.0: `error: fetching ref refs/remotes/origin/<b> failed: reference already
+#     exists`, one whole line with neither the mark nor the evidence (a directory/file
+#     conflict says only the `some local refs could not be updated` summary, and a
+#     permission-denied lock says `cannot lock ref ... Permission denied` with rc 255).
+# Both measured under LC_ALL=C. The 2.53 line is pinned to `refs/remotes/origin/`, the tracked prefix this verb fetches
+# into: the same sentence about another ref is not a lock of ours.
 FETCH_LOCK_MARK = 'cannot lock ref'
 FETCH_LOCK_EVIDENCE_RE = r"Unable to create '[^'\n]*\.lock': File exists"
+FETCH_LOCK_LINE_RE = r'^error: fetching ref refs/remotes/origin/\S+ failed: reference already exists$'
 
 # A failure's `detail` (the envelope's bound, section 2 (b)): redacted BEFORE it
 # is cut, so a cut never slides a secret out from under a pattern's length floor.
@@ -48772,7 +48947,8 @@ def classify_fetch(rc, stderr, timed_out):
         return 'fetch-rejected-objects'
     if any(m in stderr for m in FETCH_AUTH_MARKS):
         return 'fetch-auth-failed'
-    if rc == 1 and FETCH_LOCK_MARK in stderr and re.search(FETCH_LOCK_EVIDENCE_RE, stderr):
+    if rc == 1 and ((FETCH_LOCK_MARK in stderr and re.search(FETCH_LOCK_EVIDENCE_RE, stderr))
+                    or re.search(FETCH_LOCK_LINE_RE, stderr, re.M)):
         return 'ref-locked'
     if rc == 128:
         return 'fetch-transport'
@@ -49323,10 +49499,11 @@ def range_seal(cache, rid, size):
     return {'ino': st.st_ino, 'mtime_ns': st.st_mtime_ns, 'ctime_ns': st.st_ctime_ns}
 
 
-def range_commit(cache, rid, a, size, digest):
+def range_commit(cache, rid, a, size, digest, bind=None):
     """Complete prepare `rid`, under the lock: its copy becomes <id>.bin (sealed, its identity recorded), its binding
     <id>.meta, and its reservation goes. A reservation that expired meanwhile (a prepare that outlived
-    RANGE_RESERVATION_TTL_MS) is prepare-busy."""
+    RANGE_RESERVATION_TTL_MS) is prepare-busy. `bind` is the snapshot's binding: range_bind(a) unless a folder prepare
+    hands its own (folder_bind), so the binding a project request writes is unchanged."""
     fd = range_lock(cache)
     try:
         now = SYS.now_ms()
@@ -49339,7 +49516,7 @@ def range_commit(cache, rid, a, size, digest):
             raise fail('prepare-busy')
         os.rename(range_path(rid, 'part'), range_path(rid, 'bin'), src_dir_fd=cache.fd, dst_dir_fd=cache.fd)
         ident = range_seal(cache, rid, size)
-        e = {'size': size, 'digest': digest, 'bind': range_bind(a)}
+        e = {'size': size, 'digest': digest, 'bind': range_bind(a) if bind is None else bind}
         e.update(ident)
         range_write(cache, range_path(rid, 'meta'), range_meta_line(rid, e, now))
         range_remove(cache, range_path(rid, 'resv'))
@@ -49408,11 +49585,11 @@ def range_copy(cache, rid, size, read, check_after, want_digest):
     return digest
 
 
-def range_prepared(cache, rid, a, size, read, check_after, want_digest):
-    """Reserve `size`, copy, commit -> the prepare's body {snapshot, size, digest}."""
+def range_prepared(cache, rid, a, size, read, check_after, want_digest, bind=None):
+    """Reserve `size`, copy, commit -> the prepare's body {snapshot, size, digest}. `bind` is range_commit's."""
     range_reserve(cache, rid, size)
     digest = range_copy(cache, rid, size, read, check_after, want_digest)
-    range_commit(cache, rid, a, size, digest)
+    range_commit(cache, rid, a, size, digest, bind)
     return {'snapshot': rid, 'size': size, 'digest': digest}
 
 
@@ -49432,6 +49609,29 @@ def range_prepare_committed(ctx, a, dl, cache, rid):
     return range_prepared(cache, rid, a, len(data), read, None, None)
 
 
+def range_leaf_io(leaf, st, pin):
+    """What a prepare's copy reads an opened leaf `leaf` (fstat `st`) through, a draft's and a folder's alike ->
+    (read, stable): `read(n)` is one chunk (a failed read is unreadable-path), and `stable()` is the check after the copy,
+    which refuses draft-changed unless ino, size, mtime_ns and ctime_ns are unchanged and, for a stat pin, the descriptor
+    still gives the pinned size and time."""
+    def read(n):
+        try:
+            return SYS.read(leaf, n)
+        except OSError as e:
+            raise fail('unreadable-path', errno=_walk_errno(e.errno))
+
+    def stable():
+        try:
+            now = SYS.fstat(leaf)
+        except OSError as e:
+            raise fail('unreadable-path', errno=_walk_errno(e.errno))
+        if any(getattr(now, k) != getattr(st, k) for k in PIN_STABLE_FIELDS):
+            raise fail('draft-changed', now='present')
+        if pin[0] == 'stat' and not range_stat_matches(now, pin):
+            raise fail('draft-changed', now='present')
+    return read, stable
+
+
 def range_prepare_draft(ctx, a, dl, cache, rid):
     repo = discover(ctx, a.project, dl)
     if len(a.head) != PIN_OID_HEX.get(repo.object_format):
@@ -49447,22 +49647,10 @@ def range_prepare_draft(ctx, a, dl, cache, rid):
             raise fail('range-too-large', size=st.st_size, cap=DOCS_RANGE_MAX_BYTES)
         if pin[0] == 'stat' and not range_stat_matches(st, pin):
             raise fail('draft-changed', now='present')
-
-        def read(n):
-            try:
-                return SYS.read(leaf, n)
-            except OSError as e:
-                raise fail('unreadable-path', errno=_walk_errno(e.errno))
+        read, stable = range_leaf_io(leaf, st, pin)
 
         def check_after():
-            try:
-                now = SYS.fstat(leaf)
-            except OSError as e:
-                raise fail('unreadable-path', errno=_walk_errno(e.errno))
-            if any(getattr(now, k) != getattr(st, k) for k in PIN_STABLE_FIELDS):
-                raise fail('draft-changed', now='present')
-            if pin[0] == 'stat' and not range_stat_matches(now, pin):
-                raise fail('draft-changed', now='present')
+            stable()
             head = _pin_git(trusted.path, DRAFT_HEAD_ARGS, dl).decode('ascii', 'replace').strip()
             if head != a.head:
                 raise fail('worktree-moved', head=head)
@@ -49473,13 +49661,15 @@ def range_prepare_draft(ctx, a, dl, cache, rid):
         SYS.close(trusted.fd)
 
 
-def range_prepare(ctx, a, dl, cache):
+def range_prepare(ctx, a, dl, cache, source=None):
     """docs-show-range --prepare: take a place, then source, reserve, copy and commit; a prepare that ends any other way
-    gives its place and its partial copy back."""
+    gives its place and its partial copy back. `source(ctx, a, dl, cache, rid)` is the committed or the draft source
+    unless a folder prepare hands its own."""
     rid = range_begin(cache)
     done = False
     try:
-        body = (range_prepare_committed if a.branch is None else range_prepare_draft)(ctx, a, dl, cache, rid)
+        body = (source if source is not None else range_prepare_committed if a.branch is None else range_prepare_draft)(
+            ctx, a, dl, cache, rid)
         done = True
         return body
     finally:
@@ -49495,18 +49685,19 @@ def range_bin_identity_matches(st, e):
             and st.st_ino == e['ino'] and st.st_mtime_ns == e['mtime_ns'] and st.st_ctime_ns == e['ctime_ns'])
 
 
-def range_frame(cache, a):
+def range_frame(cache, a, accept=None):
     """docs-show-range --snapshot: one frame, under the lock. The snapshot must exist, be unexpired and be bound to
     exactly this request (any difference, or none: snapshot-gone); the length may not pass DOCS_RANGE_FRAME_BYTES nor the
     range pass the snapshot's end (range-too-large); the opened `.bin` must still be the file sealed at commit (inode,
     modified and change time, size: any difference is snapshot-gone and the snapshot is dropped); a read touches the
-    entry's last use."""
+    entry's last use. `accept(bind)` is the folder frame's own test of the binding (folder_frame), where a project
+    frame's is range_bind(a), field for field."""
     fd = range_lock(cache)
     try:
         now = SYS.now_ms()
         entries, _resvs = range_scan(cache, now)
         e = entries.get(a.snapshot)
-        if e is None or e['bind'] != range_bind(a):
+        if e is None or not (e['bind'] == range_bind(a) if accept is None else accept(e['bind'])):
             raise fail('snapshot-gone')
         if a.length > DOCS_RANGE_FRAME_BYTES:
             raise fail('range-too-large', size=a.length, cap=DOCS_RANGE_FRAME_BYTES)
@@ -49551,10 +49742,926 @@ def verb_show_range(ctx, a):
     finally:
         os.close(cache.fd)
 
+# ===== docs: folder =====
+# docs-folder (X2 spec 2026-11-18 section 4.1, plan Task P2.1): the registry of outside folders and the admission of one.
+# Three shapes and no other, each exact in token count: `--list`, `--add <label> --path <abs>`, `--remove <label>`. The bash
+# front checked the shape; this section validates every VALUE by fixed index. THE LABEL FIRST, before any path join or any
+# filesystem call: FOLDER_LABEL_RE is ccd's parity copy of shared/docs.ts's DOCS_FOLDER_LABEL_RE, and the bash front checks
+# only the shape, so this check is ccd's own and the one a bad label meets (M11.58). Then the path's shape, then admission.
+# ADMISSION is by descriptors (spec 4.1): `/` is opened, then each component with O_DIRECTORY|O_NOFOLLOW from its parent's
+# descriptor, so a symlink anywhere refuses; the folder must be a directory of this user; and it must neither sit inside nor
+# contain a protected directory, compared by (st_dev, st_ino), never by a path string. A refusal names its failure word and,
+# for `protected`, its reason word, and NEVER the path or a part of it; `--list` is the only answer that carries a path.
+# THE ROSTER'S CONFIG DIRECTORIES reach the helper in argv, not the environment and not the wire: the bash front computes
+# them (`_ccrc_cfg_dir` over the roster) and hands them after the three roots as a count and then that many absolute paths,
+# in front of the verb's own tokens, so the verb's tokens stay at fixed offsets behind them.
+# THE REGISTRY is `$REG/docs-folders/<label>`, one regular file per label holding the admitted path and a newline, in a
+# directory of mode 0700 that only `folder_registry_write` (the one writer) creates, under a flock on `.lock` there.
+
+# docs-folder's own limits. FOLDER_LABEL_RE is a parity copy (DOCS_FOLDER_LABEL_RE) and sits in the docs-parity block above; the others are ccd's.
+FOLDER_PATH_MAX_BYTES=4096
+FOLDER_FILE_MAX_BYTES=4097
+FOLDER_REGISTRY_NAME='docs-folders'
+FOLDER_LOCK_NAME='.lock'
+FOLDER_LOCK_WAIT_S=5
+FOLDER_CHAIN_MAX_STEPS=256
+# The opens of admission. A component opens with O_NOFOLLOW, so a symlink refuses; `/` and a protected directory (which
+# the stat of the protected set already followed) open without it.
+FOLDER_COMPONENT_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+FOLDER_ROOT_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
+# The protected directories under ccd's HOME, in the order a refusal names them, each with its reason word. The roots ccd is
+# handed (projects, worktrees, registry) come before them; the roster's config directories and every `.claude*` directory
+# directly under HOME come after the first four; HOME itself is last.
+FOLDER_PROTECTED_FIRST = (('.cc-secrets', 'secrets'), ('.cc-limits', 'limits'), ('.ccrc', 'ccrc-state'), ('ccrc-backups', 'backups'))
+FOLDER_PROTECTED_LAST = (('.config', 'dot-config'), ('.ssh', 'ssh'), ('.gnupg', 'gnupg'), (os.path.join('.local', 'share'), 'local-share'),
+                         (RANGE_CACHE_NAME, 'range-cache'))
+FolderArgs = namedtuple('FolderArgs', ['mode', 'label', 'path', 'cfg_dirs'])
+
+
+def valid_folder_label(s):
+    """The label's grammar, whole: ccd's own check of it (never the server's)."""
+    return re.fullmatch(FOLDER_LABEL_RE, s) is not None
+
+
+def valid_folder_path(s):
+    """True for an absolute path of at most FOLDER_PATH_MAX_BYTES bytes of strict UTF-8, with no empty component (no `//`),
+    no `.` or `..` component, no trailing slash and no control character. `/` alone is a trailing slash."""
+    try:
+        raw = os.fsencode(s)
+        text = raw.decode('utf-8')
+    except UnicodeError:
+        return False
+    if len(raw) > FOLDER_PATH_MAX_BYTES or not text.startswith('/') or text.endswith('/'):
+        return False
+    if any(unicodedata.category(ch) == 'Cc' for ch in text):
+        return False
+    return all(c not in ('', '.', '..') for c in text[1:].split('/'))
+
+
+def folder_roster(rest, who):
+    """The roster channel of a folder verb: a count, then that many absolute config directories, then the verb's own tokens
+    -> (cfg_dirs, tokens). `who` names the verb in a contract break (helper-failed)."""
+    rest = list(rest)
+    _contract(len(rest) >= 1 and re.fullmatch(r'[0-9]{1,3}', rest[0]) is not None, who + ': the roster count')
+    n = int(rest[0])
+    _contract(len(rest) >= 1 + n, who + ': the roster list')
+    cfg_dirs = rest[1:1 + n]
+    # The front hands only absolute paths (`_ccrc_cfg_dir` joins them to HOME): a relative one is a break of that
+    # contract, answered helper-failed, never skipped, which would leave a wrapper's directory unprotected.
+    _contract(all(os.path.isabs(d) for d in cfg_dirs), who + ': a roster config directory is not absolute')
+    return cfg_dirs, rest[1 + n:]
+
+
+def folder_args(rest):
+    """docs-folder's arguments: the roster's config directories (a count, then that many paths), then one of the three
+    shapes. The front checked the shape, re-asserted here; the label is refused bad-label first, then the path bad-path."""
+    cfg_dirs, toks = folder_roster(rest, 'docs-folder')
+    if toks == ['--list']:
+        return FolderArgs('list', None, None, cfg_dirs)
+    if len(toks) == 4 and toks[0] == '--add' and toks[2] == '--path':
+        _refuse(valid_folder_label(toks[1]), 'bad-label')
+        _refuse(valid_folder_path(toks[3]), 'bad-path')
+        return FolderArgs('add', toks[1], toks[3], cfg_dirs)
+    _contract(len(toks) == 2 and toks[0] == '--remove', 'docs-folder takes exactly three shapes')
+    _refuse(valid_folder_label(toks[1]), 'bad-label')
+    return FolderArgs('remove', toks[1], None, cfg_dirs)
+
+
+def folder_ids(st):
+    return (st.st_dev, st.st_ino)
+
+
+def folder_refused(e):
+    """An OSError at a seam of docs-folder -> the one Fail it is: unreadable, naming the errno and never a path."""
+    return Fail('unreadable', {'reason': _walk_errno(e.errno)})
+
+
+def folder_open_chain(path):
+    """Open `path` (already shaped) from `/` one component at a time -> (fd, chain), the held descriptor of the last
+    component and the (st_dev, st_ino) of every directory opened, `/` and the folder included. A component that will not
+    open as a directory is symlink-in-path, not-a-directory (a file on the way), absent or unreadable (with its errno)."""
+    fd = SYS.open('/', FOLDER_ROOT_FLAGS)
+    chain = []
+    try:
+        chain.append(folder_ids(SYS.fstat(fd)))
+        for comp in path[1:].split('/'):
+            try:
+                nfd = SYS.open(comp, FOLDER_COMPONENT_FLAGS, dir_fd=fd)
+            except OSError as e:
+                kind, err = _walk_middle_refused(fd, comp, e)
+                if kind == 'unreadable':
+                    raise Fail('unreadable', {'reason': err})
+                raise Fail({'file-in-path': 'not-a-directory'}.get(kind, kind))
+            SYS.close(fd)
+            fd = nfd
+            chain.append(folder_ids(SYS.fstat(fd)))
+    except BaseException:
+        SYS.close(fd)
+        raise
+    return fd, chain
+
+
+def folder_protected_set(ctx, cfg_dirs):
+    """Every protected directory that exists -> [(path, (st_dev, st_ino), reason)], each stat FOLLOWING symlinks, so a
+    HOME reached through a link still yields the real directory's identity. HOME is ccd's registry's parent, never read
+    from the environment. One that is absent (or whose parent is a file) is skipped, and so is one that is not a
+    directory; one that cannot be stat'ed for any other reason refuses unreadable: admission fails closed."""
+    home = os.path.dirname(ctx.reg)
+    paths = [(ctx.root, 'projects-root'), (ctx.worktrees, 'worktrees-root'), (ctx.reg, 'registry')]
+    paths += [(os.path.join(home, name), reason) for name, reason in FOLDER_PROTECTED_FIRST]
+    try:
+        under_home = sorted(SYS.listdir(home))
+    except OSError as e:
+        raise folder_refused(e)
+    paths += [(os.path.join(home, n), 'config-dir') for n in under_home if n.startswith('.claude')]
+    paths += [(d, 'config-dir') for d in cfg_dirs]
+    paths += [(os.path.join(home, name), reason) for name, reason in FOLDER_PROTECTED_LAST]
+    paths.append((home, 'home'))
+    out = []
+    for p, reason in paths:
+        try:
+            st = SYS.stat(p)
+        except OSError as e:
+            if e.errno in (errno.ENOENT, errno.ENOTDIR):
+                continue
+            raise folder_refused(e)
+        if stat.S_ISDIR(st.st_mode):
+            out.append((p, folder_ids(st), reason))
+    return out
+
+
+def folder_protected_hit(chain_ids, folder_id, protected):
+    """The INSIDE check, pure: the reason of the first protected entry whose (st_dev, st_ino) is that of any directory
+    in `chain_ids` (every ancestor and the folder itself), else None. `protected` is [((dev, ino), reason)] in the order
+    a refusal names them. HOME is the one exception: a folder inside it is the ordinary case, so it hits only when it
+    is the folder itself. Identity only: no path is read here, so a directory reached by any spelling answers alike."""
+    chain = set(tuple(i) for i in chain_ids)
+    for ident, reason in protected:
+        ident = tuple(ident)
+        if reason == 'home':
+            if ident == tuple(folder_id):
+                return reason
+        elif ident in chain:
+            return reason
+    return None
+
+
+def folder_contains_hit(folder_id, protected):
+    """The CONTAINS check, by descriptors: for each protected directory, open it and walk up by opening `..` from the
+    current descriptor until the identity is that of `/`, comparing every step with the folder's -> the reason of the first
+    protected directory the folder is an ancestor of (or is), else None. At most FOLDER_CHAIN_MAX_STEPS steps; past it, and
+    on any OSError, refuses unreadable."""
+    try:
+        root_id = folder_ids(SYS.stat('/'))
+    except OSError as e:
+        raise folder_refused(e)
+    for p, _ident, reason in protected:
+        try:
+            fd = SYS.open(p, FOLDER_ROOT_FLAGS)
+        except OSError as e:
+            raise folder_refused(e)
+        try:
+            steps = 0
+            while True:
+                cur = folder_ids(SYS.fstat(fd))
+                if cur == tuple(folder_id):
+                    return reason
+                if cur == root_id:
+                    break
+                steps += 1
+                if steps > FOLDER_CHAIN_MAX_STEPS:
+                    raise Fail('unreadable', {'reason': 'too-deep'})
+                nfd = SYS.open('..', FOLDER_ROOT_FLAGS, dir_fd=fd)
+                SYS.close(fd)
+                fd = nfd
+        except OSError as e:
+            raise folder_refused(e)
+        finally:
+            SYS.close(fd)
+    return None
+
+
+def folder_admit_measured(ctx, path, cfg_dirs):
+    """Admit the folder `path` (shaped by valid_folder_path) -> (fd, st, protected): the held descriptor of its directory
+    (the caller closes it), its fstat, and the protected set admission MEASURED, [(ident, reason)] in the order a refusal
+    names them, which a read hands to its walk so the set is measured once per call. In order: the chain from `/`
+    (symlink-in-path, not-a-directory, absent, unreadable), the owner (foreign-owner), then the protected set (protected,
+    with its reason). Every refusal is a word and never the path. `cfg_dirs` are the roster's config directories, handed by
+    the front; ctx's field order is pinned, so they travel beside it."""
+    fd, chain = folder_open_chain(path)
+    try:
+        st = SYS.fstat(fd)
+        if st.st_uid != SYS.geteuid():
+            raise Fail('foreign-owner')
+        protected = folder_protected_set(ctx, cfg_dirs)
+        pairs = [(ident, reason) for _p, ident, reason in protected]
+        hit = folder_protected_hit(chain, folder_ids(st), pairs)
+        if hit is None:
+            hit = folder_contains_hit(folder_ids(st), protected)
+        if hit is not None:
+            raise Fail('protected', {'reason': hit})
+    except BaseException:
+        SYS.close(fd)
+        raise
+    return fd, st, pairs
+
+
+def folder_admit(ctx, path, cfg_dirs):
+    """folder_admit_measured without the set -> (fd, st): what an Add asks (it reads no tree)."""
+    fd, st, _protected = folder_admit_measured(ctx, path, cfg_dirs)
+    return fd, st
+
+
+def folder_registry_open(ctx):
+    """The registry directory, read-only, as a descriptor -> fd, or None when `$REG` or the directory is ABSENT (ENOENT; nothing
+    is created). Any other failure, a `$REG` that is a file (ENOTDIR) included, is unreadable: absence and a failure to look
+    are two answers. The directory is opened O_NOFOLLOW, so a symlink in its place is unreadable, as is one that is not this
+    user's."""
+    try:
+        base_fd = SYS.open(ctx.reg, FOLDER_ROOT_FLAGS)
+    except OSError as e:
+        if e.errno == errno.ENOENT:
+            return None
+        raise folder_refused(e)
+    try:
+        try:
+            fd = SYS.open(FOLDER_REGISTRY_NAME, FOLDER_COMPONENT_FLAGS, dir_fd=base_fd)
+        except OSError as e:
+            if e.errno == errno.ENOENT:
+                return None
+            raise folder_refused(e)
+    finally:
+        SYS.close(base_fd)
+    if SYS.fstat(fd).st_uid != SYS.geteuid():
+        SYS.close(fd)
+        raise Fail('unreadable', {'reason': 'foreign-owner'})
+    return fd
+
+
+def folder_file_path(dir_fd, name):
+    """The path one label file holds -> the path, or None when the entry cannot be read as one: not a regular file of this
+    user's, longer than FOLDER_FILE_MAX_BYTES, or not exactly one admissible absolute path and its newline. Opened O_NOFOLLOW
+    and O_NONBLOCK (a symlink is refused and a FIFO cannot hang the call). Its bytes are never returned in any other form."""
+    try:
+        ffd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dir_fd)
+    except OSError:
+        return None
+    try:
+        st = os.fstat(ffd)
+        raw = os.read(ffd, FOLDER_FILE_MAX_BYTES + 1) if stat.S_ISREG(st.st_mode) and st.st_uid == os.geteuid() else b''
+    except OSError:
+        raw = b''
+    finally:
+        os.close(ffd)
+    if not raw or len(raw) > FOLDER_FILE_MAX_BYTES or raw.count(b'\n') != 1 or not raw.endswith(b'\n'):
+        return None
+    try:
+        text = raw[:-1].decode('utf-8')
+    except UnicodeError:
+        return None
+    return text if valid_folder_path(text) else None
+
+
+def folder_registry_read(ctx):
+    """Every entry of the registry named as a label -> [(label, path | None)] sorted by label: the path when its file holds one
+    admissible absolute path, None when it cannot be read as one (the entry is still listed, so it can be removed, and its
+    bytes are never echoed). A name that is no label (the lock, a temporary file, junk) is not an entry."""
+    fd = folder_registry_open(ctx)
+    if fd is None:
+        return []
+    try:
+        return [(name, folder_file_path(fd, name)) for name in sorted(os.listdir(fd)) if valid_folder_label(name)]
+    finally:
+        os.close(fd)
+
+
+def folder_registry_write(ctx, op, label, body=None, guard=None, purge=None, dl=None):
+    """THE registry's ONE writer (`docs-folder registry has one writer`, docs-ring.test.ts): every create, write, rename and
+    unlink inside `$REG/docs-folders` is here, under a flock on its `.lock` (polled, FOLDER_LOCK_WAIT_S at most).
+    op 'add': makes the directory (0700) if absent, so the lock can live in it; `guard()` runs once the lock is held (the
+    re-run of admission) and returns a closer or None; the label's file is written whole through a temporary name and a
+    rename (the directory fsynced after), refused label-exists when the label stands. An add that refuses after this call
+    made the directory and took the lock takes them away again, while it still holds the lock and only when the lock is
+    the directory's one name, and a call that waited on that lock finds its name gone and writes nothing under it: an add
+    refuses registry-busy, a remove unknown-folder (review 3783 A1): a refused add creates nothing. op 'remove': an absent `$REG` (ENOENT), directory or label is unknown-folder and creates
+    nothing; any other failure is unreadable; `guard()` runs, then `purge()` (the label's range snapshots), and only then the
+    label's file is unlinked, so a purge that fails leaves the label registered and a retry finds it. The closer of `guard`
+    runs last. `dl` is the verb's one Deadline: the lock's wait is the smaller of FOLDER_LOCK_WAIT_S and what is left of it.
+    LOCK ORDER (the one rule of the two locks, docs-folder-read's section states it again): the registry's lock is taken
+    BEFORE the range cache's lock (the remove's `guard` takes the cache's here, under this one), and nothing takes this
+    one while holding the cache's."""
+    try:
+        base_fd = SYS.open(ctx.reg, FOLDER_ROOT_FLAGS)
+    except OSError as e:
+        if op == 'remove' and e.errno == errno.ENOENT:
+            raise Fail('unknown-folder')
+        raise folder_refused(e)
+    reg_fd = None
+    closer = None
+    created = done = locked = False
+    try:
+        if op == 'add':
+            try:
+                os.mkdir(FOLDER_REGISTRY_NAME, 0o700, dir_fd=base_fd)
+                created = True
+            except OSError as e:
+                if e.errno != errno.EEXIST:
+                    raise folder_refused(e)
+        try:
+            reg_fd = os.open(FOLDER_REGISTRY_NAME, FOLDER_COMPONENT_FLAGS, dir_fd=base_fd)
+        except OSError as e:
+            if op == 'remove' and e.errno == errno.ENOENT:
+                raise Fail('unknown-folder')
+            raise folder_refused(e)
+        st = os.fstat(reg_fd)
+        if st.st_uid != os.geteuid():
+            raise Fail('unreadable', {'reason': 'foreign-owner'})
+        if stat.S_IMODE(st.st_mode) != 0o700:
+            os.fchmod(reg_fd, 0o700)
+        lock_fd = os.open(FOLDER_LOCK_NAME, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, 0o600, dir_fd=reg_fd)
+        try:
+            if not stat.S_ISREG(os.fstat(lock_fd).st_mode):
+                raise Fail('unreadable', {'reason': 'lock-not-regular'})
+            end = SYS.monotonic() + (FOLDER_LOCK_WAIT_S if dl is None else min(FOLDER_LOCK_WAIT_S, dl.left()))
+            while True:
+                try:
+                    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError as e:
+                    if e.errno not in (errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES):
+                        raise folder_refused(e)
+                if SYS.monotonic() >= end:
+                    raise Fail('unreadable', {'reason': 'registry-busy'})
+                time.sleep(0.02)
+            locked = True
+            if os.fstat(lock_fd).st_nlink == 0:   # taken back with its empty registry by a refused first add: nothing stands
+                raise Fail('unknown-folder') if op == 'remove' else Fail('unreadable', {'reason': 'registry-busy'})
+            closer = guard() if guard is not None else None
+            try:
+                os.lstat(label, dir_fd=reg_fd)
+                present = True
+            except FileNotFoundError:
+                present = False
+            if op == 'add':
+                if present:
+                    raise Fail('label-exists')
+                tmp = '.add-' + label + '.tmp'
+                tfd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, 0o600, dir_fd=reg_fd)
+                try:
+                    if not stat.S_ISREG(os.fstat(tfd).st_mode):
+                        raise Fail('unreadable', {'reason': 'not-regular'})
+                    view = memoryview(body)
+                    while view:
+                        view = view[os.write(tfd, view):]
+                    os.fsync(tfd)
+                finally:
+                    os.close(tfd)
+                try:
+                    os.rename(tmp, label, src_dir_fd=reg_fd, dst_dir_fd=reg_fd)
+                except BaseException:
+                    os.unlink(tmp, dir_fd=reg_fd)
+                    raise
+                os.fsync(reg_fd)
+            else:
+                if not present:
+                    raise Fail('unknown-folder')
+                if purge is not None:
+                    purge()
+                os.unlink(label, dir_fd=reg_fd)
+                os.fsync(reg_fd)
+            done = True
+        finally:
+            if created and locked and not done:
+                # This call made the directory and refused: take back what it made, the lock file and then the directory,
+                # under the lock still, and only while the lock is its one name: a registry another add wrote into stays.
+                try:
+                    if os.listdir(reg_fd) == [FOLDER_LOCK_NAME]:
+                        os.unlink(FOLDER_LOCK_NAME, dir_fd=reg_fd)
+                        os.rmdir(FOLDER_REGISTRY_NAME, dir_fd=base_fd)
+                except OSError:
+                    pass
+            os.close(lock_fd)
+    except OSError as e:
+        raise folder_refused(e)
+    finally:
+        if closer is not None:
+            closer()
+        if reg_fd is not None:
+            os.close(reg_fd)
+        os.close(base_fd)
+
+
+def folder_cache_guard(ctx, label, dl=None):
+    """The range cache's lock for a remove: -> (guard, purge). `guard()` opens the cache directory if it is there (never
+    creating it) and takes its lock, answering the closer that releases both, or None when there is no cache; `purge()` then
+    removes every completed snapshot whose binding names `label`, under that lock, BEFORE the registry's unlink. The lock is
+    taken first, so a busy cache refuses the remove untouched (prepare-busy, range_lock's word), and a cache that is not
+    a sound directory of this user's (a symlink, a file, another owner's, a lock that is no regular file) is unreadable with
+    the reason `range-cache`, never helper-failed. `dl` is the verb's Deadline, which the cache carries, so the lock's
+    wait is capped by it as every range call's is."""
+    held = []
+
+    def guard():
+        cdir = range_cache_dir(ctx)
+        try:
+            os.lstat(cdir)
+        except FileNotFoundError:
+            return None
+        try:
+            cache = range_open_dir(cdir)._replace(dl=dl)
+        except RuntimeError:
+            raise Fail('unreadable', {'reason': 'range-cache'})
+        try:
+            lock_fd = range_lock(cache)
+        except RuntimeError:
+            os.close(cache.fd)
+            raise Fail('unreadable', {'reason': 'range-cache'})
+        except BaseException:
+            os.close(cache.fd)
+            raise
+        held.append(cache)
+
+        def close():
+            os.close(lock_fd)
+            os.close(cache.fd)
+        return close
+
+    def purge():
+        if held:
+            folder_purge_snapshots(held[0], label)
+    return guard, purge
+
+
+def folder_purge_snapshots(cache, label):
+    """Under the cache's lock: remove every completed snapshot whose `.meta` binding has `label` equal to `label` (a folder
+    snapshot's binding is {'label': L, 'section', 'path', 'pin'}, with `project` absent). A project snapshot has no label."""
+    entries, _resvs = range_scan(cache, SYS.now_ms())
+    for rid in sorted(entries):
+        if entries[rid]['bind'].get('label') == label:
+            range_remove(cache, range_path(rid, 'meta'))
+            range_remove(cache, range_path(rid, 'bin'))
+
+
+def verb_folder(ctx, a):
+    """docs-folder: --list {folders:[{label, path, state}]}, --add {label}, --remove {label, removed}. A listed entry is
+    state ok with its path, or state unreadable with a null path (its file holds no one admissible path: Settings can still
+    remove it). A refusal is a Fail of its word (and reason); none of them carries a path. A refused add creates nothing:
+    admission runs once before the registry is touched, and again under its lock. ONE Deadline (its row of HELPER_DEADLINE_S)
+    bounds the registry lock's wait and, for a remove, the cache lock's."""
+    dl = Deadline(HELPER_DEADLINE_S['docs-folder'])
+    try:
+        if a.mode == 'list':
+            return {'folders': [{'label': label, 'path': path, 'state': 'ok' if path is not None else 'unreadable'}
+                                for label, path in folder_registry_read(ctx)]}
+        if a.mode == 'add':
+            fd, _st = folder_admit(ctx, a.path, a.cfg_dirs)
+            SYS.close(fd)
+
+            def recheck():
+                rfd, _rst = folder_admit(ctx, a.path, a.cfg_dirs)
+                SYS.close(rfd)
+            folder_registry_write(ctx, 'add', a.label, (a.path + '\n').encode('utf-8'), guard=recheck, dl=dl)
+            return {'label': a.label}
+        guard, purge = folder_cache_guard(ctx, a.label, dl)
+        folder_registry_write(ctx, 'remove', a.label, guard=guard, purge=purge, dl=dl)
+        return {'label': a.label, 'removed': True}
+    except OSError as e:
+        # An errno names itself; helper-failed's detail is a traceback line, which can carry a path.
+        raise folder_refused(e)
+
+
+# ===== docs: folder read =====
+# docs-folder-read (X2 spec 2026-11-18 sections 4.1 "Reading" and 4.3, plan P2.2): `--label L --op tree|show|prepare|range`. The
+# bash front checked the four shapes (4, 12, 10 and 16 tokens); this section validates every VALUE by fixed index, the label
+# first (bad-label before anything is resolved), then each value by its own word in argv order.
+# EVERY CALL, FIRST (`folder_open`): the label is resolved from the registry, never from the wire (an unregistered label is
+# unknown-folder), and admission runs again on the registered path (folder_admit), at EVERY op, so a component swapped for a
+# symlink since Add refuses here, a frame included. A refusal answers its word and reason and never a path. After it the
+# folder is the held descriptor, and nothing is opened by an absolute path again.
+# THE PRIMARY WALL: only the six section directories below the folder descriptor are ever read. Each is opened component by
+# component RELATIVE TO THE HELD DESCRIPTOR with O_NOFOLLOW (`folder_section_open`), a symlinked component refuses the whole
+# tree `symlink-in-path` (the spec's "refusing a read through a symlinked directory"), and an absent section is empty. The walk
+# goes depth first by descriptors in the order of sorted name bytes, skips every dot component unlisted and uncounted, and
+# opens a directory only through its parent's descriptor (a symlink, FIFO, socket or device is listed with its mark and is
+# never opened). Each directory opened is compared by (st_dev, st_ino) with the protected set, so a mount below the folder
+# that shows a protected directory refuses the tree `protected`, and with the directories already visited, so a loop ends.
+# THE LOCK ORDER (one rule for the two locks): the registry's lock is taken BEFORE the range cache's lock, as a remove does
+# (folder_registry_write holds the first while its guard takes the second), and nothing takes the registry's lock while it holds
+# the cache's. This verb takes the registry's lock never: it READS the registry without it (`folder_resolve`: a label file is
+# written whole through a rename, so a read sees a whole file or none), and does so before any cache lock, at prepare and at
+# frame alike, so the order cannot invert here.
+# THE BINDING (`folder_bind`): a folder snapshot is bound to {label, section, path, pin} and to the admitted folder's own
+# (st_dev, st_ino) as decimal strings, with no project, commit, branch or head, so a project snapshot never serves a folder
+# frame and a folder snapshot never serves a project frame (range_bind has no label). A Remove purges only COMPLETED
+# snapshots, so a prepare in flight during one commits afterwards; the identity is what stops that snapshot serving a frame
+# once the label names another directory.
+FolderReadArgs = namedtuple('FolderReadArgs', ['op', 'label', 'section', 'path', 'fp', 'max_bytes', 'pin', 'snapshot',
+                                               'offset', 'length', 'cfg_dirs'])
+# What a leaf is walked from: a directory descriptor and the device a leaf must be on (walk_leaf's `trusted` reads these two).
+FolderRoot = namedtuple('FolderRoot', ['fd', 'dev', 'protected'], defaults=((),))
+FOLDER_READ_FLAGS = {'show': ('--section', '--path', '--fingerprint', '--max-bytes'),
+                     'prepare': ('--section', '--path', '--pin'),
+                     'range': ('--section', '--path', '--pin', '--snapshot', '--offset', '--length')}
+
+
+def folder_read_args(rest):
+    """docs-folder-read's arguments: the roster's config directories, then `--label L --op OP` and the op's own tokens. The
+    label is refused bad-label first; then section, path, and the op's fingerprint or pin in argv order (a blob pin is
+    bad-fingerprint: a folder has no commit). The front checked the shapes and the numbers' grammar; those are re-asserted."""
+    cfg_dirs, toks = folder_roster(rest, 'docs-folder-read')
+    _contract(len(toks) >= 4 and toks[0] == '--label' and toks[2] == '--op', 'docs-folder-read: --label then --op')
+    label, op = toks[1], toks[3]
+    _refuse(valid_folder_label(label), 'bad-label')
+    if op == 'tree':
+        _contract(len(toks) == 4, 'docs-folder-read: tree takes no other token')
+        return FolderReadArgs('tree', label, None, None, None, None, None, None, None, None, cfg_dirs)
+    _contract(op in FOLDER_READ_FLAGS, 'docs-folder-read: the op is one of tree, show, prepare, range')
+    vals = _values(toks[4:], FOLDER_READ_FLAGS[op])
+    section = vals[0]
+    _refuse(valid_section(section), 'bad-section')
+    rel = valid_rel_path(vals[1])
+    _refuse(rel is not None, 'bad-path')
+    if op == 'show':
+        _contract(valid_max_bytes(vals[3]), '--max-bytes outside its grammar')
+        _refuse(valid_fingerprint(vals[2]), 'bad-fingerprint')
+        return FolderReadArgs('show', label, section, rel, vals[2], int(vals[3]), None, None, None, None, cfg_dirs)
+    pin = vals[2]
+    parsed = range_pin(pin)
+    _refuse(parsed is not None and parsed[0] != 'blob', 'bad-fingerprint')
+    if op == 'prepare':
+        return FolderReadArgs('prepare', label, section, rel, None, None, pin, None, None, None, cfg_dirs)
+    snapshot, offset, length = vals[3:]
+    _contract(re.fullmatch(RANGE_STAT_SIZE_RE, offset) is not None, '--offset outside its grammar')
+    _contract(re.fullmatch(RANGE_COUNT_RE, length) is not None, '--length outside its grammar')
+    _refuse(re.fullmatch(RANGE_SNAPSHOT_RE, snapshot) is not None, 'snapshot-gone')
+    return FolderReadArgs('range', label, section, rel, None, None, pin, snapshot, int(offset), int(length), cfg_dirs)
+
+
+def folder_resolve(ctx, label):
+    """The path the registry holds for `label`, read now -> the path. A label no entry names is unknown-folder; an entry whose
+    file holds no one admissible path is unreadable (registry-entry). Read WITHOUT the registry's lock (see the lock order)."""
+    for name, path in folder_registry_read(ctx):
+        if name == label:
+            if path is None:
+                raise Fail('unreadable', {'reason': 'registry-entry'})
+            return path
+    raise Fail('unknown-folder')
+
+
+def folder_open(ctx, a):
+    """Every call's first act: resolve the label, then admit the folder it names -> (fd, st, protected), the held descriptor
+    of the admitted directory (the caller closes it), its fstat and the protected set admission measured, which the walk
+    and the leaf walk below compare each directory they open with. Any refusal is folder_admit_measured's word (and reason)."""
+    return folder_admit_measured(ctx, folder_resolve(ctx, a.label), a.cfg_dirs)
+
+
+def folder_bind(a, ident):
+    """What a folder snapshot is bound to: the request (label, section, path, pin) and the admitted folder's identity."""
+    return {'label': a.label, 'section': a.section, 'path': a.path, 'pin': a.pin,
+            'folder_dev': str(ident[0]), 'folder_ino': str(ident[1])}
+
+
+def folder_leaf(root, a):
+    """The file a show or a prepare reads -> (fd, fstat). Below the folder's descriptor every middle component (the
+    section's own included) is opened O_NOFOLLOW and compared with the protected set by (st_dev, st_ino), as the tree walk
+    compares each directory it opens, so a protected directory reached below the folder refuses protected here too, and
+    one on another device than the folder refuses not-a-file other-device. The leaf
+    is lstat'ed relative to its parent BEFORE it is opened: a symlink, FIFO, socket, device or directory refuses
+    not-a-file with its kind and is never opened (a FIFO's open can be seen by its writer). Only a regular file is then
+    opened, by walk_leaf (O_NOFOLLOW and O_NONBLOCK), and its fstat stays the authority: a hardlink, foreign owner or other
+    device is withheld there, with _pin_leaf's words. A path with a dot component is answered as an absent one: the tree
+    never lists one, so none was asked for by a listing, and what it would name is told to nobody. The caller closes fd."""
+    if any(c.startswith('.') for c in a.path.split('/')):
+        raise fail('absent-path')
+    parts = (SECTIONS[a.section] + '/' + a.path).split('/')
+    held = []
+    parent = root.fd
+    try:
+        for comp in parts[:-1]:
+            try:
+                nfd = SYS.open(comp, WALK_DIR_FLAGS, dir_fd=parent)
+            except OSError as e:
+                kind, err = _walk_middle_refused(parent, comp, e)
+                if kind == 'absent':
+                    raise fail('draft-changed', now='absent')
+                if kind == 'unreadable':
+                    raise fail('unreadable-path', errno=err)
+                if kind == 'symlink-in-path':
+                    raise fail('symlink-in-path')
+                raise fail('not-a-file', kind=kind)
+            held.append(nfd)
+            ident = folder_ids(SYS.fstat(nfd))
+            hit = folder_protected_hit([ident], ident, root.protected)
+            if hit is not None:
+                raise Fail('protected', {'reason': hit})
+            if ident[0] != root.dev:   # a directory of the path on another device is never descended (review 3783 A2)
+                raise fail('not-a-file', kind='other-device')
+            parent = nfd
+        try:
+            lst = SYS.lstat(parts[-1], dir_fd=parent)
+        except OSError as e:
+            if e.errno == errno.ENOENT:
+                raise fail('draft-changed', now='absent')
+            raise fail('unreadable-path', errno=_walk_errno(e.errno))
+        if stat.S_ISLNK(lst.st_mode):
+            raise fail('not-a-file', kind='symlink')
+        if not stat.S_ISREG(lst.st_mode):
+            raise fail('not-a-file', kind='special')
+        return _pin_leaf(FolderRoot(parent, root.dev), parts[-1])
+    finally:
+        for f in held:
+            SYS.close(f)
+
+
+class FolderWalk(object):
+    """One tree walk's state: the folder's device (a leaf must be on it), the protected set [(ident, reason)], the visited
+    directories, the section chains' own directories (`chain`: `docs` and `docs/superpowers` are opened by several sections,
+    so they are not visits), the one shared hash budget, the entries so far and the unlisted counts by reason."""
+
+    def __init__(self, dev, protected, dl):
+        self.dev = dev
+        self.protected = protected
+        self.dl = dl
+        self.visited = set()
+        self.chain = set()
+        self.budget = HashBudget(DOCS_DRAFT_HASH_BUDGET)
+        self.entries = []
+        self.unlisted = {}
+        self.full = False
+
+    def add(self, slug, rel, facts):
+        e = {'section': slug, 'path': rel, 'kind': facts['kind'], 'size': facts['size'],
+             'mtimeNs': facts.get('mtimeNs'), 'fp': facts['fp']}
+        if 'errno' in facts:
+            e['errno'] = facts['errno']
+        self.entries.append(e)
+        # One past the cap is enough: guard_listing answers too-many-entries for it, as it does for docs-tree.
+        self.full = len(self.entries) > DOCS_MAX_ENTRIES
+
+    def unlist(self, reason):
+        self.unlisted[reason] = self.unlisted.get(reason, 0) + 1
+
+    def tick(self):
+        if self.dl.left() <= 0:
+            raise Fail('unreadable', {'reason': 'timeout'})
+
+
+def folder_section_open(w, root_fd, slug):
+    """The section directory `slug`, opened below the folder's descriptor one component at a time, each O_NOFOLLOW ->
+    its descriptor (the caller closes it), or None when a component is absent, is a file or is on another device than the
+    folder (each such section reads as empty: a known limit, the unlisted reasons have no word for a device). A
+    component that is a symlink refuses symlink-in-path, an unreadable one unreadable; each component is compared with the
+    protected set (protected). A component that is a directory already visited (the folder itself or a directory an earlier
+    section walked: a loop through the section's own path) skips the section, counted unlisted too-deep. The components
+    before the last go to `w.chain`, which later sections open again without that being a visit; the section's own
+    directory is a visit."""
+    held = []
+    parent = root_fd
+    comps = SECTIONS[slug].split('/')
+    try:
+        for i, comp in enumerate(comps):
+            try:
+                nfd = SYS.open(comp, WALK_DIR_FLAGS, dir_fd=parent)
+            except OSError as e:
+                kind, err = _walk_middle_refused(parent, comp, e)
+                if kind == 'symlink-in-path':
+                    raise Fail('symlink-in-path')
+                if kind == 'unreadable':
+                    raise Fail('unreadable', {'reason': err})
+                return None
+            held.append(nfd)
+            ident = folder_ids(SYS.fstat(nfd))
+            hit = folder_protected_hit([ident], ident, w.protected)
+            if hit is not None:
+                raise Fail('protected', {'reason': hit})
+            if ident[0] != w.dev:   # a section's own directory on another device: never descended, read as empty (3783 A2)
+                return None
+            if ident in w.visited:
+                w.unlist('too-deep')
+                return None
+            if i < len(comps) - 1:
+                w.chain.add(ident)
+            else:
+                w.visited.add(ident)
+            parent = nfd
+        return held.pop()
+    finally:
+        for f in held:
+            SYS.close(f)
+
+
+def folder_unreadable(w, slug, prefix, e):
+    """List the directory at `prefix` (its names below the section as bytes) as an unreadable entry naming the errno, and
+    go on: the walk refuses only for the section's own chain."""
+    w.add(slug, os.fsdecode(b'/'.join(prefix)), {'kind': 'unreadable', 'size': None, 'fp': None, 'errno': _walk_errno(e.errno)})
+
+
+def folder_descend(w, slug, dfd, name, prefix, lst):
+    """The directory `name` below `dfd` (`lst` its lstat; `prefix` its own names below the section, its own included). A
+    directory on another device than the folder is listed other-device and never opened. One whose children would be deeper
+    than PATH_MAX_DEPTH is skipped, counted unlisted too-deep. Otherwise it is opened O_NOFOLLOW (a symlink swapped in refuses
+    symlink-in-path; one that cannot be opened is listed unreadable with its errno and the walk goes on) and its fstat is
+    the authority: another device again lists other-device, a protected directory refuses protected, a directory visited
+    already (a loop) or in a section chain is skipped, counted unlisted too-deep; the rest is walked."""
+    rel = os.fsdecode(b'/'.join(prefix))
+    if lst.st_dev != w.dev:
+        w.add(slug, rel, {'kind': 'other-device', 'size': None, 'fp': None})
+        return
+    if len(prefix) >= PATH_MAX_DEPTH:
+        w.unlist('too-deep')
+        return
+    try:
+        nfd = SYS.open(name, WALK_DIR_FLAGS, dir_fd=dfd)
+    except OSError as e:
+        kind, err = _walk_middle_refused(dfd, name, e)
+        if kind == 'symlink-in-path':
+            raise Fail('symlink-in-path')
+        if kind == 'unreadable':
+            folder_unreadable(w, slug, prefix, e)
+        return
+    try:
+        fst = SYS.fstat(nfd)
+        if fst.st_dev != w.dev:
+            w.add(slug, rel, {'kind': 'other-device', 'size': None, 'fp': None})
+            return
+        ident = folder_ids(fst)
+        hit = folder_protected_hit([ident], ident, w.protected)
+        if hit is not None:
+            raise Fail('protected', {'reason': hit})
+        if ident in w.visited or ident in w.chain:
+            w.unlist('too-deep')
+            return
+        w.visited.add(ident)
+        folder_walk(w, slug, nfd, prefix)
+    finally:
+        SYS.close(nfd)
+
+
+def folder_walk(w, slug, dfd, prefix):
+    """Walk the directory `dfd` (its names below the section as bytes in `prefix`), depth first, in sorted name bytes. A dot
+    name is skipped, listed nowhere and counted nowhere. Every other path goes through listing_admit (its refusals count
+    unlisted by their reason). By lstat: a directory is descended, a symlink and every kind that is neither a directory nor
+    a regular file is listed with its mark and never opened, and a regular file is read by draft_facts' rules (soft: past the
+    shared hash budget it lists with no fp). A directory is folder_descend's (another device, unreadable, loops). A directory
+    whose names cannot be read is listed unreadable (the section's own cannot: that refuses). Stops at one entry past
+    DOCS_MAX_ENTRIES."""
+    names = []
+    try:
+        with os.scandir(dfd) as it:
+            for i, de in enumerate(it):
+                if i % 512 == 0:
+                    w.tick()
+                names.append(de.name)
+    except OSError as e:
+        if not prefix:
+            raise
+        folder_unreadable(w, slug, prefix, e)
+        return
+    names.sort(key=os.fsencode)
+    for name in names:
+        if w.full:
+            return
+        raw = os.fsencode(name)
+        if raw.startswith(b'.'):
+            continue
+        w.tick()
+        rel, reason = listing_admit(b'/'.join(prefix + (raw,)))
+        if reason is not None:
+            w.unlist(reason)
+            continue
+        try:
+            st = SYS.lstat(name, dir_fd=dfd)
+        except OSError as e:
+            if e.errno != errno.ENOENT:
+                w.add(slug, rel, {'kind': 'unreadable', 'size': None, 'fp': None, 'errno': _walk_errno(e.errno)})
+            continue
+        if stat.S_ISDIR(st.st_mode):
+            folder_descend(w, slug, dfd, name, prefix + (raw,), st)
+        elif stat.S_ISLNK(st.st_mode):
+            w.add(slug, rel, {'kind': 'symlink', 'size': None, 'fp': None})
+        elif stat.S_ISREG(st.st_mode):
+            facts, _blob = draft_facts(FolderRoot(dfd, w.dev), name, w.budget, None, soft=True)
+            if facts['kind'] != 'absent':
+                w.add(slug, rel, facts)
+        else:
+            w.add(slug, rel, {'kind': 'special', 'size': None, 'fp': None})
+
+
+def folder_tree(a, dl, root, st):
+    """--op tree -> {label, entries, unlisted}: the six sections walked below the held descriptor `root.fd`, entries in
+    docs-tree's order (the section's place, then the path's bytes). `unlisted` is {count, byReason} in listing's reason
+    order. The protected set is the one admission measured (`root.protected`). No path of the folder is in it."""
+    w = FolderWalk(st.st_dev, root.protected, dl)
+    w.visited.add(folder_ids(st))
+    for slug in SECTIONS:
+        sfd = folder_section_open(w, root.fd, slug)
+        if sfd is None:
+            continue
+        try:
+            folder_walk(w, slug, sfd, ())
+        finally:
+            SYS.close(sfd)
+        if w.full:
+            break
+    entries = sorted(w.entries, key=lambda e: (TREE_SECTION_ORDER[e['section']], e['path'].encode('utf-8')))
+    by_reason = dict((r, w.unlisted[r]) for r in LS_UNLISTED_REASONS if w.unlisted.get(r))
+    return {'label': a.label, 'entries': entries, 'unlisted': {'count': sum(by_reason.values()), 'byReason': by_reason}}
+
+
+def folder_show(a, root):
+    """--op show: the file's bytes when they hash to --fingerprint, read exactly as a draft is (pinned_bytes: within
+    min(--max-bytes, the ceiling), the fstat stable across the read) -> DocsShowOk's body with source 'folder' and the
+    mtimeNs of the descriptor that was read, so the page's time is the one of the bytes it shows. No path in it."""
+    leaf, st = folder_leaf(root, a)
+    try:
+        data = pinned_bytes(leaf, st, min(a.max_bytes, file_ceiling()), a.fp)
+    finally:
+        SYS.close(leaf)
+    fp = hashlib.sha256(data).hexdigest()
+    return encode_show(data, {'label': a.label, 'source': 'folder', 'section': a.section, 'path': a.path, 'size': len(data),
+                              'sha256': fp, 'fp': fp, 'mtimeNs': str(st.st_mtime_ns)})
+
+
+def folder_prepare(ctx, a, dl, root, ident):
+    """--op prepare: the leaf is opened and its pin checked BEFORE the cache is touched (a refused leaf takes no place and
+    makes no cache), then a snapshot is copied as docs-show-range's draft prepare copies one (an fp pin: the copy must hash
+    to it; a stat pin: the descriptor's fstat must give the pinned size and time, before and after) and bound to the folder."""
+    leaf, st = folder_leaf(root, a)
+    try:
+        if st.st_size > DOCS_RANGE_MAX_BYTES:
+            raise fail('range-too-large', size=st.st_size, cap=DOCS_RANGE_MAX_BYTES)
+        pin = range_pin(a.pin)
+        if pin[0] == 'stat' and not range_stat_matches(st, pin):
+            raise fail('draft-changed', now='present')
+        read, stable = range_leaf_io(leaf, st, pin)
+        bind = folder_bind(a, ident)
+
+        def source(ctx_, a_, dl_, cache_, rid):
+            return range_prepared(cache_, rid, a_, st.st_size, read, stable, pin[1] if pin[0] == 'fp' else None, bind)
+        cache = range_open_dir(range_cache_dir(ctx))._replace(dl=dl)
+        try:
+            return range_prepare(ctx, a, dl, cache, source)
+        finally:
+            os.close(cache.fd)
+    finally:
+        SYS.close(leaf)
+
+
+def folder_frame(ctx, a, dl, ident):
+    """--op range: one frame of a snapshot that is bound to this request AND to the folder admitted just now (`ident`, which
+    the caller took from folder_open): the snapshot's binding must equal folder_bind field for field, so a project's
+    snapshot, another label's, another doc's and the same label's after it named another directory all answer
+    snapshot-gone. The label was resolved and admitted before the cache is opened or locked."""
+    bind = folder_bind(a, ident)
+    cache = range_open_dir(range_cache_dir(ctx))._replace(dl=dl)
+    try:
+        return range_frame(cache, a, lambda b: b == bind)
+    finally:
+        os.close(cache.fd)
+
+
+def verb_folder_read(ctx, a):
+    """docs-folder-read: a tree's {label, entries, unlisted}, a show's DocsShowOk body, a prepare's {snapshot, size, digest} or
+    a frame's {snapshot, offset, bytesB64, digest, total}. Every op begins with folder_open (the label resolved, the folder
+    admitted: M11.72), under ONE Deadline (its row of HELPER_DEADLINE_S) that bounds the walk, the cache's lock waits and a
+    prepare's copy. An errno is an unreadable failure naming the errno alone."""
+    dl = Deadline(HELPER_DEADLINE_S['docs-folder-read'])
+    try:
+        fd, st, protected = folder_open(ctx, a)
+        try:
+            ident = folder_ids(st)
+            root = FolderRoot(fd, st.st_dev, protected)
+            if a.op == 'tree':
+                return folder_tree(a, dl, root, st)
+            if a.op == 'show':
+                return folder_show(a, root)
+            if a.op == 'prepare':
+                return folder_prepare(ctx, a, dl, root, ident)
+            return folder_frame(ctx, a, dl, ident)
+        finally:
+            SYS.close(fd)
+    except OSError as e:
+        raise folder_refused(e)
+
+
+def guard_folder_read(obj, line):
+    """docs-folder-read's final guard: a tree answer is a listing (guard_listing's bounds: DOCS_MAX_ENTRIES rows and
+    DOCS_MAX_LISTING_WIRE_BYTES framed), a show answer is a show (guard_show's bound); a prepare and a frame are bounded by
+    their own caps. `line` and the result are without their newline."""
+    if obj.get('ok') is not True:
+        return line
+    if 'entries' in obj:
+        return guard_listing(obj, line)
+    if 'encoding' in obj:
+        return guard_show(line)
+    return line
+
+
 # ===== docs: entry =====
 # The verbs, by the name ccd's front passes first. A unit swaps one entry to
 # make run() reach a stand-in body.
-VERBS = {'docs-index': verb_index, 'docs-tree': verb_tree, 'docs-show': verb_show, 'docs-fetch': verb_fetch, 'docs-log': verb_log, 'docs-show-range': verb_show_range}
+VERBS = {'docs-index': verb_index, 'docs-tree': verb_tree, 'docs-show': verb_show, 'docs-fetch': verb_fetch, 'docs-log': verb_log, 'docs-show-range': verb_show_range, 'docs-folder': verb_folder,
+         'docs-folder-read': verb_folder_read}
 
 # The verbs whose ok answer is a listing, bounded by guard_listing.
 LISTING_VERBS = ('docs-index', 'docs-tree')
@@ -49653,6 +50760,8 @@ def _run_verb(verb, argv):
             line = guard_show(line)
         elif verb == 'docs-log':
             line = guard_log(obj, line)
+        elif verb == 'docs-folder-read':
+            line = guard_folder_read(obj, line)
         return line + b'\n'
     except Fail as f:
         try:
@@ -49978,7 +51087,9 @@ case "${1:-}" in
   docs-fetch) shift; cmd_docs_fetch "$@" ;;
   docs-log)   shift; cmd_docs_log "$@" ;;
   docs-show-range) shift; cmd_docs_show_range "$@" ;;
+  docs-folder) shift; cmd_docs_folder "$@" ;;
+  docs-folder-read) shift; cmd_docs_folder_read "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|pane-scope-stop|scope-sweep-busy|delegation-adopt|keep-awake|limit-watchdog|limit-wait|win-size|account-pane|project-pool|project-add|skill-ensure|route|pool-answer|pr-landing|repo-visibility|pr-template|pr-open|pr-admin-merge|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|docs-log|docs-show-range|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|pane-scope-stop|scope-sweep-busy|delegation-adopt|keep-awake|limit-watchdog|limit-wait|win-size|account-pane|project-pool|project-add|skill-ensure|route|pool-answer|pr-landing|repo-visibility|pr-template|pr-open|pr-admin-merge|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|docs-log|docs-show-range|docs-folder|docs-folder-read|version} <args>" >&2; exit 1 ;;
 esac
 fi

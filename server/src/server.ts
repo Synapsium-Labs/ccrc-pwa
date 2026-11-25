@@ -75,6 +75,7 @@ import { registerDecisionModelRoutes } from './coord/decisionModelRoutes.js';
 import { registerNameListRoutes } from './operatorModel/nameListRoutes.js';
 import { promptTargetVerdict, type PromptTargetVerdict } from './operatorModel/messages.js';
 import { NO_DESIGNATION, promptRecheck, recordOperatorPrompt } from './operatorModel/promptRecord.js';
+import { moveOperatorMessage } from './operatorModel/messageLine.js';
 import { readOperatorSecretMeta } from './coord/ledgersSecrets.js';
 import { coordinatorPresenceIn, type WaitingView } from '../../shared/ledgers.js';
 import { attributionVerdict } from './coord/attribution.js';
@@ -82,7 +83,10 @@ import { queueSystemMail } from './coord/rundefsTx.js';
 import { createQuestions, type OperatorDoorDeps, type Questions } from './coord/questions.js';
 import { heldFor } from './coord/heldFor.js';
 import { registerUpdateRoutes } from './update/routes.js';
-import { composeDocs, readTree, registerDocsReadRoutes, registerDocsRefreshRoute } from './docs/routes.js';
+import {
+  composeDocs, readTree, registerDocsFolderReadRoutes, registerDocsFolderRegistryRoutes, registerDocsReadRoutes,
+  registerDocsRefreshRoute,
+} from './docs/routes.js';
 import { registerReviewOpenRoute } from './review/routes.js';
 import { installDocsRequestPolicy, installDocsResponsePolicy } from './docs/hooks.js';
 import { openReviewStore } from './review/store.js';
@@ -2281,6 +2285,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     counter: (g, c) => (deps.coord === undefined ? 'unmeasured' : advanceCounterGuarded(deps.coord.db, g, c)),
     ...witnessPorts({ coord: deps.coord, fleetState: () => deps.fleetState, journal: deps.overlordAuthority ?? NO_LADDER_AUTHORITY, clock: { wall: () => deps.time.clock.wall() }, entropy: { hex: (n) => deps.time.entropy.hex(n) }, push: (p) => notifyPushOnly(deps, p, 'ccrc-server: the unwitnessed-latch push was rejected') }),
     recordFenceRefusal: (row) => { if (deps.coord === undefined || !recordFenceRefusal(deps.coord.db, row).ok) console.warn(`ccrc-server: a fence refusal at ${row.door} (${row.why}) could not be recorded`); },
+    // The timer doors' profile read (Overlord W1): the other-lane refusals' one reader; asking its designation first notes the
+    // unmeasured episode on their one module-scope latch, so the whole server logs one line an episode.
+    profile: (id) => { otherLaneReads.designation(); return otherLaneReads.profile(id); },
   };
   const gate = overlordGateRun(gateDeps);
   // The inbox wake asks the same readers as a read (no fence, no witness, nothing recorded), through its own handle.
@@ -2348,7 +2355,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     entropy: { hex: (n) => deps.time.entropy.hex(n) },
     pickUp: { sessionOf: (m) => deps.operatorModel?.messageSessionOf(m) ?? { kind: 'unmeasured', why: 'no private store' },
       stateOf: (m) => deps.operatorModel?.messageStateOf(m) ?? { kind: 'unmeasured', why: 'no private store' },
-      pickUp: (m, at) => deps.operatorModel?.moveMessage(m, 'pick-up', 'hook', at) ?? { ok: false, error: 'not-open', detail: 'no private store' } },
+      // The pick-up's move and its sequence line, in one synchronous segment (call 1218).
+      pickUp: (m, at) => deps.operatorModel === undefined ? { ok: false, error: 'not-open', detail: 'no private store' }
+        : moveOperatorMessage({ store: deps.operatorModel, coordDb: deps.coord?.db, warn: (l) => { console.warn(l); } }, m, 'pick-up', 'hook', at) },
     attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'fromUuid'),
     attributeReader: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid'),
     // The card's registry reads (the row's child mark, or that the registry could not say; its incarnation) and declared
@@ -2363,6 +2372,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     },
     // The timer set door's stamp: two agreeing reads of `.generation` (slug setter-stamp-is-a-double-read).
     setterStamp: (id) => incarnationOf({ io: deps.io, registryDir: deps.cfg.registryDir }, id),
+    restoreGeneration: () => deps.overlordRestore?.restoreGeneration() ?? { kind: 'unmeasured' },
     operatorActor: consoleActor, gate,
     notice,
     masker: deps.masker,
@@ -2445,6 +2455,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     installDocsResponsePolicy(app);
     registerDocsReadRoutes(app, docs.readers, docs.lanes);
     registerDocsRefreshRoute(app, docs.readers, docs.fetchers, docs.lanes);
+    // The outside folders (X2 P2.3, spec 2026-11-18 §4.1 and §7): the reads never see the registry's writes, and both
+    // ask L1 with the sign-in state and whether the request carries a session; Add also takes the account gate.
+    const folderSignIn = (): 'armed' | 'dark' => (deps.cfg.authEnabled ? 'armed' : 'dark');
+    const folderSession = (req: FastifyRequest): boolean => { const d = sessionAuth(req); return d.allow && d.reason === 'session'; };
+    registerDocsFolderReadRoutes(app, docs.folderReaders, docs.lanes, { signIn: folderSignIn, hasSession: folderSession });
+    registerDocsFolderRegistryRoutes(app, docs.folderRegistries, docs.lanes,
+      { gate: accountGate, signIn: folderSignIn, hasSession: folderSession });
   });
   registerReaderLabRoutes(app, readerLab);
   // The operator's character choice (the Overlord face plan, Task 6), from its own file: two session-gated routes, no box token.

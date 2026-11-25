@@ -66,7 +66,7 @@ describe('the section', () => {
     expect(matchRoute('/settings/integrations/')?.route.id).toBe('settings-integrations');
   });
 
-  it('/settings/integrations is its page: the h2, the title, and the three cards in order, each a level-3 card with its scope', async () => {
+  it('/settings/integrations is its page: the h2, the title, and the four cards in order, each a level-3 card with its scope', async () => {
     reads();
     renderSettings('integrations');
     await settle();
@@ -74,7 +74,7 @@ describe('the section', () => {
     const h2 = screen.getByRole('heading', { level: 2, name: 'Integrations' });
     expect(document.activeElement, 'opening a section moves focus to its heading').toBe(h2);
     expect(document.title).toBe('Integrations · Settings · ccrc');
-    expect(screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent)).toEqual(['Linear', 'Project linking', 'GitHub']);
+    expect(screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent)).toEqual(['Linear', 'Project linking', 'GitHub', 'Docs folders']);
     expect(within(screen.getByRole('region', { name: 'Linear' })).getByText(SETTINGS_SCOPE.box)).toBeInTheDocument();
     expect(within(screen.getByRole('region', { name: 'Project linking' })).getByText(SETTINGS_SCOPE.box)).toBeInTheDocument();
     expect(within(github()).getByText(SETTINGS_SCOPE.fleet)).toBeInTheDocument();

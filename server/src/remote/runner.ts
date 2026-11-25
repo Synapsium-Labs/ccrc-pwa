@@ -168,7 +168,7 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   // needs a ccd-side bound and is not this row's job.
   swap: 300_000,
   // The Docs verbs (spec 2026-10-01 section 2 (a), Budgets). ccd's python helper bounds each one itself: a
-  // whole-verb deadline (`HELPER_DEADLINE_S` in ccd/ccd: index 12 s, tree 12 s, show 7 s, fetch 45 s, log 10 s, show-range 20 s), at which it
+  // whole-verb deadline (`HELPER_DEADLINE_S` in ccd/ccd: index 12 s, tree 12 s, show 7 s, fetch 45 s, log 10 s, show-range 20 s, folder 12 s, folder-read 20 s), at which it
   // sends SIGTERM to every git process group it started and SIGKILL `KILL_GRACE_S` (2 s) later. Each budget below
   // is strictly greater than that deadline + the 2 s grace + 5 s; `docs-budget.test.ts` reads both sides from
   // source and holds the inequality, and docs-show's margin is the thinnest (exactly 1 s).
@@ -193,6 +193,15 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   // 28.9 s < 30 s, so the agent never kills ccd before its own deadline fires; `docs-budget.test.ts` holds the
   // inequality from source.
   'docs-show-range': 30_000,
+  // docs-folder (X2 P2.1, P2.2): a `HELPER_DEADLINE_S` row of 12 s that caps both of the verb's lock waits (the registry's, then
+  // for a remove the range cache's, 5 s each), so the sequential worst case is 12 + the 2 s grace + the redactor's 0.9 + 5 =
+  // 19.9 s, and 25 s leaves the 5 s over that a remove's purge and fsyncs may take; `docs-budget.test.ts` holds both.
+  'docs-folder': 25_000,
+  // docs-folder-read (X2 P2.2): ONE row for the four ops, a `HELPER_DEADLINE_S` row of 20 s as docs-show-range's (the prepare's
+  // copy budget and the cache's lock waits are the longest, all under the one Deadline, and a prepare that runs it out gives
+  // its place back within `RANGE_ABORT_LOCK_WAIT_S`), so 20 + the 2 s grace + 1 s + the redactor's 0.9 + 5 = 28.9 s < 30 s,
+  // and the agent never kills ccd before its own deadline fires; `docs-budget.test.ts` holds the inequality from source.
+  'docs-folder-read': 30_000,
 };
 
 /** The deps-shed SHADOW's own, shorter row (D-7278): `ws-shed-deps … --dry-run` runs every rung and removes nothing, so

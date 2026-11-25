@@ -354,6 +354,7 @@ _affinity_cur_serves	C1
 _swap_stagger_off	C1
 _auto_swap_check	C1
 _swap_idle_gate	C1
+_turn_mark_read	C1
 _swap_bg_hold	C1
 _swap_bg_note	C1
 _swap_bg_release	C1
@@ -600,6 +601,9 @@ _watchdog_resume_here	C1
 _watchdog_hold	C1
 _wd_operator_hold_to	C1
 _watchdog_one	C1
+_provfail	C1
+_provfail_holds_home	C1
+_provfail_pass	C1
 cmd_limit_watchdog	C1
 _hold_is_programme	C4
 _hib_hold_ok	C4
@@ -834,6 +838,9 @@ cmd_docs_log	C9
 _docs_range_count_ok	C9
 _docs_range_nums_ok	C9
 cmd_docs_show_range	C9
+cmd_docs_folder	C9
+_docs_folder_py	C9
+cmd_docs_folder_read	C9
 _docs_py	C9
 _ws_title	C1
 _ws_title_check	C1

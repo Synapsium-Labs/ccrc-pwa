@@ -48,7 +48,7 @@ import type { ActorRefused, AuthorityAppender, AuthorityRefused, RowUnreadable }
 import { ladderRead, ladderWire, NO_WITNESS_YET, type LadderConditionInputs, type NarrowingWitness } from './overlordLadderRead.js';
 import { isRung, isLadderCauseKey, type Rung } from '../../../shared/overlord-ladder.js';
 import { rungMoveVerdict, narrowingState, type LadderWriterRefusal } from './overlordLadder.js';
-import type { LadderWrite } from './overlordLadderStore.js';
+import { LadderStampRefused, type LadderWrite } from './overlordLadderStore.js';
 import type { OverlordAuthorityExchange } from './overlordAuthorityExchange.js';
 import type { OverlordRestoreState } from './overlordRestoreState.js';
 
@@ -609,6 +609,9 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
     const detail = state?.kind === 'rolled-back' ? state.cause : state?.kind === 'unmeasured' ? state.why : result.error;
     return refuseRoute(reply, LADDER_AUTHORITY_REFUSAL[result.error], { detail });
   };
+  // A refused ladder line: the store rolled the row back (and fenced the guard when a journal record preceded it); the door answers it
+  // as it answers the ladder's other store failures, with its typed refusal (review 3852).
+  const ladderLineRefused = (reply: FastifyReply): FastifyReply => refuseRoute(reply, 'unavailable', { detail: 'the ladder line could not be written' });
   const measuredLadder = (ladder: NonNullable<OverlordRouteDeps['ladder']>): boolean =>
     ladderRead(ladder.coord, ladder.inputs, ladder.witness ?? NO_WITNESS_YET, ladder.serverCaps).kind === 'measured';
   const moveRung = (req: FastifyRequest, reply: FastifyReply, ask: { kind: 'set'; to: Rung } | { kind: 'pause' }) => deps.serial(async () => {
@@ -632,7 +635,10 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
     }
     // W1 Pause and off change only the rung. W2 cancels undelivered mail/kickoffs and nudges,
     // moves requests to needs-you and settles pending acts; W3 releases holds with one push.
-    const result = ladder.coord.setRung(ladder.journal ?? deps.journal, { from: verdict.from, to: verdict.to, actor, at: deps.clock.wall(), opKey: `rung-${deps.entropy.hex(16)}` });
+    let result: LadderWrite;
+    try {
+      result = ladder.coord.setRung(ladder.journal ?? deps.journal, { from: verdict.from, to: verdict.to, actor, at: deps.clock.wall(), opKey: `rung-${deps.entropy.hex(16)}` });
+    } catch (e) { if (e instanceof LadderStampRefused) return ladderLineRefused(reply); throw e; }
     if (!result.ok) return ladderRefusal(reply, result);
     if (!result.changed) return { ok: true, changed: false, rung: verdict.to };
     let held: 'held' | 'not-yet' | 'unmeasured' = 'not-yet';
@@ -674,7 +680,10 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
     return deps.serial(async () => {
       const ladder = deps.ladder;
       if (ladder === undefined || !measuredLadder(ladder)) return ladderUnavailable(reply);
-      const result = ladder.coord.clearLatch(ladder.journal ?? deps.journal, { cause, actor: deps.identity.operator(g.actor), at: deps.clock.wall(), opKey: `latch-clear-${deps.entropy.hex(16)}` });
+      let result: LadderWrite;
+      try {
+        result = ladder.coord.clearLatch(ladder.journal ?? deps.journal, { cause, actor: deps.identity.operator(g.actor), at: deps.clock.wall(), opKey: `latch-clear-${deps.entropy.hex(16)}` });
+      } catch (e) { if (e instanceof LadderStampRefused) return ladderLineRefused(reply); throw e; }
       if (!result.ok) return ladderRefusal(reply, result);
       return result;
     });

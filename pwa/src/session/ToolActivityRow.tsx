@@ -30,7 +30,7 @@ export function ToolActivityRow({ item }: { item: ToolActivityItem }): ReactNode
   const [open, setOpen] = useState(() => expansion.get(item.key));
   const bodyId = useId();
   const choice = (k: string): boolean | undefined => expansion.choice(k);
-  const words = activityWords(item, choice);
+  const words = activityWords(item, choice, open);
   const first = item.attention[0];
   const under = open ? [] : underRow(item.mail, choice);
   // A card drawn under the closed row stays there for the view (`underRow`): recorded once it is drawn.
@@ -61,7 +61,9 @@ export function ToolActivityRow({ item }: { item: ToolActivityItem }): ReactNode
         {words.messages !== null && (
           <>
             <Dot />
-            <span className="tool-activity-calls tool-activity-messages">{words.messages}</span>
+            <span className="tool-activity-calls tool-activity-messages">{`${words.messages}${words.asks === null ? '' : ','}`}</span>
+            {/* The question words never shrink, and wrap to a line of their own before they are cut (B2, `chat.css`). */}
+            {words.asks !== null && <>{' '}<span className="tool-activity-asks">{words.asks}</span></>}
           </>
         )}
         {words.state !== null && (

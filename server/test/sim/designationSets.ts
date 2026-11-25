@@ -21,6 +21,7 @@ import { mkTmp } from '../tmpHelpers.js';
 import { gateActorOf } from '../../src/accounts/audit.js';
 import { attributionIdentity } from '../../src/auth/attributionIdentity.js';
 import { designationFenceCases } from '../overlordDesignationFenceCases.js';
+import { authorityReceiptCases } from '../authorityReceiptCases.js';
 
 /** The operator's actor as a designation writer takes it: the account gate's actor minted through the identity port (gates A). */
 const OPERATOR = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) })
@@ -592,7 +593,7 @@ const DESIGNATION_FACT_SET: MutantSet<RoleOfDesignationModule> = { modulePath: R
 const IDENTITY_SET: MutantSet<RoleOfDesignationModule> = { modulePath: ROLE_OF_MODULE, mutants: [
     { id: 'I1 a rebind pending body keyed overlord', old: "d.pending === sessionId && d.pendingKind === 'designate'", new: 'd.pending === sessionId' },
     { id: 'I2 a designate pending body keyed by its id', old: "d.pending === sessionId && d.pendingKind === 'designate'", new: 'false' },
-    { id: 'I3 the live id keyed by its id', old: "if (d.live === sessionId) return 'overlord';", new: '' },
+    { id: 'I3 the live id keyed by its id', old: "if (d.live === sessionId) return OVERLORD_IDENTITY;", new: '' },
     { id: 'I4 every id keyed overlord under a row', old: "  return sessionId;\n}\n\n/** The one narrowing", new: "  return 'overlord';\n}\n\n/** The one narrowing" },
   ], suite: identityOfCases };
 
@@ -600,6 +601,8 @@ const IDENTITY_SET: MutantSet<RoleOfDesignationModule> = { modulePath: ROLE_OF_M
 
 export type DesignationStoreModule = typeof import('../../src/coord/overlordDesignationStore.js');
 const STORE_MODULE = path.join(ROOT, 'server/src/coord/overlordDesignationStore.ts');
+const JOURNAL_MODULE = path.join(ROOT, 'server/src/coord/overlordAuthorityJournal.ts');
+type JournalModule = typeof import('../../src/coord/overlordAuthorityJournal.js');
 const APPENDED = { ok: true, kind: 'appended', record: {} } as unknown as AuthorityAppend;
 
 /** A live designation over a minted generation, then a retire, over a coord db opened through the real migrations and an
@@ -902,21 +905,27 @@ const withoutFence = (arm: string) => ({
   old: `return txWithAuthorityStamp(db, journal, (add): ${arm} => {`,
   new: `return tx(db, (): ${arm} => {\n    const add = (entry: OverlordAuthorityMove) => append(db, journal, entry);`,
 });
-const FENCE_DECLARATION = '  let postAppendFailed: (() => void) | undefined;';
-const FENCE_FUNCTION = 'function txWithAuthorityStamp<T>(db: DatabaseSync, journal: AuthorityAppender, write: (add: (entry: OverlordAuthorityMove) => Appended) => T): T {';
 const FENCE_CALL = 'try { postAppendFailed?.(); } catch { /* preserve the first error */ }';
+// F1, F2, F4 and F5 moved with the receipt to the journal's `txWithAuthorityReceipt` (sequence PR B1, piece 4): RECEIPT_SET below
+// holds them as R1 to R4, over the receipt's own cases, because a mutant of the journal module is invisible to the store's cases.
 const FENCE_SET: MutantSet<DesignationStoreModule> = { modulePath: STORE_MODULE, mutants: [
     ...['DesignateResult', 'GoLiveResult', 'RetireResult'].map(withoutFence),
-    { id: 'F1 drops the receipt call', old: FENCE_CALL, new: '' },
-    // Replay a real receipt even in a transaction that appended nothing: pending-only retire must not fence.
-    { id: 'F2 fences on a throw with no append', old: `${FENCE_FUNCTION}\n${FENCE_DECLARATION}`,
-      new: `${FENCE_DECLARATION.trim()}\n${FENCE_FUNCTION}` },
-    { id: 'F4 only fences on stamp refusals', old: FENCE_CALL, new: `if (error instanceof SequenceStampRefused) { ${FENCE_CALL} }` },
-    { id: 'F5 lets a throwing receipt replace the original error', old: FENCE_CALL, new: 'postAppendFailed?.();' },
     { id: 'F6 a row-only live retire skips its sequence lines',
       old: 'stampLines(db, lines);\n    return { ok: true, changed: true, term, owed };',
       new: 'if (a.journalled) stampLines(db, lines);\n    return { ok: true, changed: true, term, owed };' },
   ], suite: designationFenceCases };
+const RECEIPT_HEAD = "export function txWithAuthorityReceipt<T>(db: DatabaseSync, journal: Pick<OverlordAuthorityJournal, 'appendInTx'>,\n"
+  + "  write: (journal: Pick<OverlordAuthorityJournal, 'appendInTx'>) => T): T {";
+const RECEIPT_DECLARATION = '  let postAppendFailed: (() => void) | undefined;';
+const RECEIPT_SET: MutantSet<JournalModule> = { modulePath: JOURNAL_MODULE, mutants: [
+    { id: 'R1 drops the receipt call', old: FENCE_CALL, new: '' },
+    { id: 'R2 fences on a throw with no append', old: `${RECEIPT_HEAD}\n${RECEIPT_DECLARATION}`, new: `${RECEIPT_DECLARATION.trim()}\n${RECEIPT_HEAD}` },
+    { id: 'R3 only fences on one kind of error', old: FENCE_CALL, new: `if (error instanceof TypeError) { ${FENCE_CALL} }` },
+    { id: 'R4 lets a throwing receipt replace the original error', old: FENCE_CALL, new: 'postAppendFailed?.();' },
+    { id: 'R5 the write gets the bare journal', old: 'return tx(db, () => write(held));', new: 'return tx(db, () => write(journal));' },
+    { id: 'R6 fences inside the transaction too', old: 'return tx(db, () => write(held));',
+      new: 'return tx(db, () => { try { return write(held); } catch (e) { postAppendFailed?.(); throw e; } });' },
+  ], suite: authorityReceiptCases };
 
 export const DESIGNATION_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'server/src/coord/overlordDesignation.ts#designateVerdict': DESIGNATE_SET as MutantSet<never>,
@@ -933,4 +942,5 @@ export const DESIGNATION_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'server/src/coord/overlordDesignation.ts#restartVerdict': RESTART_SET as MutantSet<never>,
   'server/src/coord/overlordDesignation.ts#pendingDeadlineOf': DEADLINE_SET as MutantSet<never>,
   'server/src/coord/overlordDesignationStore.ts#txWithAuthorityStamp': FENCE_SET as MutantSet<never>,
+  'server/src/coord/overlordAuthorityJournal.ts#txWithAuthorityReceipt': RECEIPT_SET as MutantSet<never>,
 };

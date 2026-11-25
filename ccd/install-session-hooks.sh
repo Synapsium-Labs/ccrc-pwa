@@ -186,7 +186,7 @@ _child_deny_json() {
     heads_ccd+=('*/ccd' '~/.local/bin/ccd'); heads_ccrc+=('*/ccrc' '~/.local/bin/ccrc')
   fi
   up=$(_child_deny_upstream); [[ -z "$up" ]] || claudes+=("$up")
-  for v in ws-rm ws-reap 'ws-gc --prune' ws-archive ws-restore ws-reclaim ws-expire ws-collect ws-orphan scratch-rescue ws-shed-deps keep-awake ws-lease-mark delegation-adopt roll claude; do
+  for v in ws-rm ws-reap 'ws-gc --prune' ws-archive ws-restore ws-reclaim ws-expire ws-collect ws-orphan scratch-rescue ws-shed-deps keep-awake ws-lease-mark delegation-adopt docs-folder roll claude; do
     for h in "${heads_ccd[@]}"; do rules+=("Bash($h $v:*)"); done
   done
   # The child-scope verbs (D-8978, `CHILD_SCOPE_DENY_CCD_VERBS` in shared/api.ts): no SAFETY verb, but no child's either.

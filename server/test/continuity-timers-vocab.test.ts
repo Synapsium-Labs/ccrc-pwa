@@ -3,6 +3,7 @@ import {
   TERMINAL_TIMER_STATES, TIMER_ACTORS, TIMER_CANCEL_REASONS, TIMER_DUE_MAX_MS, TIMER_DUE_MIN_MS, TIMER_HOLD_CAP_MS,
   TIMER_KEEP_MS, TIMER_LANE_PERIOD_MS, TIMER_MAIL_SENDER, TIMER_NOTE_MAX_CHARS, TIMER_PREVIEW_CHARS, TIMER_SETS_PER_HOUR,
   TIMER_STATES, TIMER_TRANSITIONS, cancelActorOf, isTimerCancelReason, timerMoveAllowed, type TimerState,
+  OVERLORD_TIMERS_READS, TIMER_DOORS, TIMER_FIRED_SHOWN_MS, TIMER_OWNERS, TIMER_RESTORE_FACTS, overlordTimerStamp,
 } from '../../shared/continuity-timers.js';
 import { REFUSAL_STATUS, ROUTE_REFUSALS, TIMER_REFUSALS } from '../../shared/refusal.js';
 
@@ -79,5 +80,26 @@ describe('the timers vocabulary (C61, C65)', () => {
     // `capability-missing` is a route word from W1 (the vocabulary piece, 501); `ccrc-api timer` still answers it on the
     // client for `timers-v1`.
     expect(ROUTE_REFUSALS).toContain('capability-missing');
+  });
+});
+
+// The Overlord's timers (Overlord W1, plan w1-overlord-timers.md Task 1): the stamp codec and the answer's words.
+describe("the Overlord's timers vocabulary (C61, question 2, question 6, F13)", () => {
+  it('each list is its map\'s keys, written out', () => {
+    expect(TIMER_RESTORE_FACTS).toEqual(['none', 'set-before-restore', 'unmeasured']);
+    expect(TIMER_DOORS).toEqual(['set', 'list', 'cancel', 'operator-read', 'operator-cancel']);
+    expect(TIMER_OWNERS).toEqual(['session', 'overlord']);
+    expect(OVERLORD_TIMERS_READS).toEqual(['included', 'not-this-session', 'unmeasured']);
+  });
+
+  it('the fired list window is 24 hours', () => { expect(TIMER_FIRED_SHOWN_MS).toBe(86_400_000); });
+
+  it("a term's stamp is its decimal string, and never another term's", () => {
+    expect(overlordTimerStamp(0)).toBe('0');
+    expect(overlordTimerStamp(7)).toBe('7');
+    expect(overlordTimerStamp(2 ** 31)).toBe('2147483648');
+    const terms = [0, 1, 7, 10, 70, 2 ** 31, Number.MAX_SAFE_INTEGER];
+    for (const a of terms) for (const b of terms) if (a !== b) expect(overlordTimerStamp(a), `${a} ${b}`).not.toBe(overlordTimerStamp(b));
+    for (const t of terms) expect(overlordTimerStamp(t)).toMatch(/^(0|[1-9][0-9]*)$/);
   });
 });

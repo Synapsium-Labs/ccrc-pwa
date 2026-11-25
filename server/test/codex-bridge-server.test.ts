@@ -2677,3 +2677,313 @@ describe.skipIf(!PY)('the per-request record behind the record-requests marker (
 function statSyncMode(f: string): number {
   return statSync(f).mode & 0o777;
 }
+
+// ── the failures the bridge absorbs before the commit point (D-9078) ────────────────────────────────────
+// `absorb.py` decides, `server._Request._absorb` waits and acts. Every case sends Claude Code's beta unless it says
+// otherwise, and lowers the waits through `consts`; codex-bridge-absorb.test.ts holds the arithmetic.
+describe.skipIf(!PY)('a short upstream failure is absorbed before the commit point (D-9078)', () => {
+  const KEY = `backend/${MODEL}`;
+  const FROM_CC = { 'anthropic-beta': CLAUDE_CODE_BETA, 'x-claude-code-session-id': 'sess-fx1' };
+  const QUICK = { 'absorb.FIRST_S': 0.02, 'absorb.CAP_S': 0.05 };
+  const ok = (): ResponsesAnswer => ({ status: 200, sse: textReply('after the wait') });
+  const overloaded = (headers: Record<string, string> = {}): ResponsesAnswer => ({
+    status: 503, headers, body: { error: { code: 'server_is_overloaded', message: 'busy' } },
+  });
+  const overloadedStream = (): ResponsesAnswer => ({ status: 200, sse: created() + failed('server_is_overloaded') });
+  const counts = (o: Json = {}): Json => ({ overloaded: 0, unavailable: 0, transport: 0, ...o });
+  const send = (b: SpawnedBridge, body: Json = messages()): Promise<Answer> => call(b, '/v1/messages', { body, headers: FROM_CC });
+  const statusOf = (lane: BridgeLane): string | null => (existsSync(lane.status) ? readFileSync(lane.status, 'utf8') : null);
+  /** The stats after the drain, and the request record's rows (armed by `arm`). */
+  const arm = (lane: BridgeLane): void => writeFileSync(join(lane.laneDir, 'record-requests'), '');
+  const rowsOf = (lane: BridgeLane): Json[] => readFileSync(join(lane.laneDir, BRIDGE_FILES.requests), 'utf8').split('\n')
+    .filter((l) => l !== '').map((l) => JSON.parse(l) as Json);
+
+  it('an overload, an overloaded stream, a 503 and a dropped connection are tried again: the client sees only the reply', async () => {
+    const page: ResponsesAnswer = { status: 503, body: '<html></html>', headers: { 'content-type': 'text/html', 'x-request-id': 'req-fx-page' } };
+    await withBridge([overloaded({ 'x-request-id': 'req-fx-1' }), overloadedStream(), page, { status: 0, drop: true }, ok()], async ({ bridge, up, lane }) => {
+      arm(lane);
+      const before = statusOf(lane);
+      const a = await send(bridge);
+      expect(a.status, a.text).toBe(200);
+      expect(textOf(a)).toBe('after the wait');
+      expect(events(a).filter((e) => e === 'message_start')).toHaveLength(1);
+      expect(events(a)).not.toContain('error');
+      expect(up.requests).toHaveLength(5);
+      for (const r of up.requests) expect(r.body).toEqual(up.requests[0].body);
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      const stats = readStats(lane);
+      expect(stats.outcomes).toEqual({ '2xx': 1 }); // no 5xx: the client never saw one
+      expect(stats.routes[KEY].requests).toBe(1); // a retry is not a second request
+      expect(stats.lastUpstreamRequestId).toBeNull();
+      const row = stats.parity[KEY];
+      expect(row.absorbed).toEqual(counts({ overloaded: 2, unavailable: 1, transport: 1 }));
+      expect(row.responses).toBe(1);
+      expect(row.effort).toEqual({ none: 5 }); // one per body sent, as the 400 fallback counts it
+      expect(statusOf(lane), 'an absorbed failure reached the status file').toBe(before);
+      expect(rowsOf(lane).map((r) => [r.message, r.post, r.status, r.outcome, r.served])).toEqual([
+        [1, 0, 503, 'absorbed', null], [1, 1, 200, 'absorbed', null], [1, 2, 503, 'absorbed', null], [1, 3, null, 'absorbed', null],
+        [1, 4, 200, '2xx', 'absent'],
+      ]);
+    }, { consts: QUICK });
+  });
+
+  it('a stream:false request is absorbed too', async () => {
+    await withBridge([overloaded(), ok()], async ({ bridge, up }) => {
+      const a = await send(bridge, messages({ stream: false }));
+      expect(a.status, a.text).toBe(200);
+      expect(a.json?.content).toEqual([{ type: 'text', text: 'after the wait' }]);
+      expect(up.requests).toHaveLength(2);
+    }, { consts: QUICK });
+  });
+
+  it('when the budget is spent the failure is answered exactly as without the retries, counted and recorded once', async () => {
+    const many = Array.from({ length: 200 }, (_, i) => overloaded({ 'x-request-id': `req-fx-${i}` }));
+    await withBridge(many, async ({ bridge, up, lane }) => {
+      const plain = await call(bridge, '/v1/messages', { body: messages() }); // no beta: today's answer
+      expect(up.requests).toHaveLength(1);
+      const a = await send(bridge);
+      expect([a.status, a.text]).toEqual([529, plain.text]);
+      expect(a.json?.error).toMatchObject({ type: 'overloaded_error' });
+      const bare = (h: IncomingHttpHeaders): Json => ({ ...h, date: undefined });
+      expect(bare(a.headers)).toEqual(bare(plain.headers));
+      const sent = up.requests.length - 1;
+      expect(sent).toBeGreaterThan(2);
+      expect(sent).toBeLessThan(60);
+      expect(a.endAt).toBeGreaterThanOrEqual(300);
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      const stats = readStats(lane);
+      expect(stats.outcomes).toEqual({ '5xx': 2 });
+      expect(stats.routes[KEY].requests).toBe(2);
+      expect(stats.parity[KEY].absorbed).toEqual(counts({ overloaded: sent - 1 }));
+      const status = JSON.parse(statusOf(lane)!) as Json;
+      expect([status.lastErrorCode, status.lastRequestId]).toEqual(['server_is_overloaded', `req-fx-${sent}`]);
+      expect(stats.lastUpstreamRequestId).toBe(`req-fx-${sent}`);
+    }, { consts: { ...QUICK, 'absorb.BUDGET_S': 0.5 } });
+  });
+
+  it('each wait of one message is longer than the last', async () => {
+    const many = Array.from({ length: 60 }, () => overloaded());
+    await withBridge(many, async ({ bridge, up }) => {
+      expect((await send(bridge)).status).toBe(529);
+      // waits of 0.2, 0.4 and 0.8 s fit in 1.9 s and 1.6 s does not; equal waits of 0.2 s would make about nine attempts
+      expect(up.requests.length).toBeGreaterThanOrEqual(3);
+      expect(up.requests.length).toBeLessThanOrEqual(4);
+    }, { consts: { 'absorb.FIRST_S': 0.2, 'absorb.JITTER': 0, 'absorb.BUDGET_S': 1.9 } });
+  });
+
+  it('no other row is tried again: rate, plan limit, policy, overflow, ineligible, another 4xx, a response that ended', async () => {
+    const body = (code: string): Json => ({ error: { code, message: 'no' } });
+    const unknown = created() + ev('response.incomplete', { response: {
+      id: 'resp_fx1', status: 'incomplete', incomplete_details: { reason: 'fx_new_reason' }, output: [], usage: usage(),
+    } });
+    const rows: [ResponsesAnswer, number, string][] = [
+      [{ status: 429, body: body('rate_limit_exceeded') }, 429, 'rate_limit_error'],
+      [{ status: 503, body: body('slow_down') }, 429, 'rate_limit_error'],
+      [{ status: 200, sse: created() + failed('rate_limit_exceeded') }, 429, 'rate_limit_error'],
+      [{ status: 429, body: {} }, 429, 'rate_limit_error'],
+      [{ status: 429, body: { error: { type: 'usage_limit_reached' } } }, 429, 'billing_error'],
+      [{ status: 503, body: body('insufficient_quota') }, 429, 'billing_error'],
+      [{ status: 400, body: body('invalid_prompt') }, 400, 'policy_blocked'],
+      [{ status: 400, body: body('context_length_exceeded') }, 400, 'invalid_request_error'],
+      [{ status: 403, body: body('usage_not_included') }, 403, 'permission_error'],
+      [{ status: 400, body: body('unsupported_parameter') }, 400, 'invalid_request_error'],
+      [{ status: 403, body: {} }, 403, 'invalid_request_error'],
+      [{ status: 401, body: body('token_expired') }, 401, 'authentication_error'], // the planted token is fresh: no refresh
+      [{ status: 200, sse: unknown }, 503, 'api_error'],
+    ];
+    await withBridge(rows.map(([answer]) => answer), async ({ bridge, up, lane }) => {
+      for (const [i, [, status, type]] of rows.entries()) {
+        const a = await send(bridge);
+        expect([i, a.status, a.json?.error.type]).toEqual([i, status, type]);
+        expect(up.requests, `row ${i}`).toHaveLength(i + 1);
+      }
+      const doc = messages();
+      doc.messages[0].content.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: 'eA==' } });
+      const c = await send(bridge, doc);
+      expect(c.json?.error.message).toMatch(/^capability_rejected/);
+      expect(up.requests).toHaveLength(rows.length);
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      expect(readStats(lane).parity[KEY].absorbed).toEqual(counts());
+    }, { consts: QUICK, plant: { credential: { accessClaims: { iat: Math.floor(Date.now() / 1000) } } } });
+  });
+
+  it('the library\'s own transient 503 is answered at once, with no second credential call', async () => {
+    await withBridge([ok()], async ({ bridge, up, auth }) => {
+      const a = await send(bridge);
+      expect(a.status).toBe(503);
+      expect(a.json?.error.message).toMatch(/^refresh-failed/);
+      expect(up.requests).toHaveLength(0);
+      expect(auth!.requests).toHaveLength(1);
+    }, { consts: QUICK, auth: { token: [{ status: 500, body: { error: 'server_error' } }] }, plant: { credential: { expiresIn: -120 } } });
+  });
+
+  it('a slow failure is answered at once: only a fast one is cheap to repeat', async () => {
+    await withBridge([{ ...overloaded(), holdHeadMs: 700 }, ok()], async ({ bridge, up, lane }) => {
+      const a = await send(bridge);
+      expect(a.status).toBe(529);
+      expect(up.requests).toHaveLength(1);
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      expect(readStats(lane).parity[KEY].absorbed).toEqual(counts());
+    }, { consts: { ...QUICK, 'absorb.FAST_S': 0.4 } });
+  });
+
+  it('nothing is tried again once the message is committed: after HOLD_S, in a continued stream, in a continued fold', async () => {
+    const late: ResponsesAnswer = { status: 200, sse: { delayMs: 800, chunks: [created(), failed('server_is_overloaded')] } };
+    const part: ResponsesAnswer = { status: 200, sse: created(1) + done(0, msgItem('msg_fx1', 'part 1')) + completed({}, { end_turn: false }) };
+    await withBridge([late, part, overloaded(), part, overloaded(), ok()], async ({ bridge, up, lane }) => {
+      const held = await send(bridge);
+      expect([held.status, events(held).at(-1)]).toEqual([200, 'error']);
+      expect(up.requests).toHaveLength(1);
+      const cont = await send(bridge);
+      expect([cont.status, textOf(cont), events(cont).at(-1)]).toEqual([200, 'part 1', 'error']);
+      expect(up.requests).toHaveLength(3);
+      const fold = await send(bridge, messages({ stream: false }));
+      expect([fold.status, fold.json?.error.type]).toEqual([529, 'overloaded_error']);
+      expect(up.requests).toHaveLength(5);
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      expect(readStats(lane).parity[KEY].absorbed).toEqual(counts());
+      expect((JSON.parse(statusOf(lane)!) as Json).lastErrorCode).toBe('server_is_overloaded'); // each was answered, so recorded
+    }, { consts: { ...QUICK, 'server.HOLD_S': 0.2 } });
+  });
+
+  it('an upstream retry-after is waited out when it fits the budget, and answered at once when it does not', async () => {
+    await withBridge([overloaded({ 'retry-after': '1' }), ok(), overloaded({ 'retry-after': '600' }), ok()], async ({ bridge, up }) => {
+      const a = await send(bridge);
+      expect(a.status, a.text).toBe(200);
+      expect(a.endAt).toBeGreaterThanOrEqual(1000);
+      expect(up.requests).toHaveLength(2);
+      const b = await send(bridge);
+      expect(b.status).toBe(529);
+      expect(b.headers['retry-after']).toBeUndefined(); // the overloaded answer never carried one
+      expect(up.requests).toHaveLength(3);
+    }, { consts: QUICK });
+  });
+
+  it('a client that closes during the wait ends it: nothing is posted, and it is counted client-gone', async () => {
+    await withBridge([overloaded({ 'x-request-id': 'req-fx-gone' }), ok()], async ({ bridge, up, lane }) => {
+      arm(lane);
+      const payload = Buffer.from(JSON.stringify(messages()));
+      const req = httpRequest({ host: '127.0.0.1', port: bridge.port, path: '/v1/messages', method: 'POST', agent: false,
+        headers: { ...FROM_CC, 'x-api-key': bridge.key, 'content-type': 'application/json', 'content-length': String(payload.length) } });
+      req.on('error', () => { /* destroyed below */ });
+      req.end(payload);
+      const t0 = Date.now();
+      while (up.requests.length === 0 && Date.now() - t0 < 4000) await sleep(25);
+      await sleep(200); // the wait has begun
+      req.destroy();
+      const doc = await statsWhen(lane, (d) => d.outcomes['client-gone'] === 1);
+      expect(Date.now() - t0).toBeLessThan(2500); // the 3 s wait was not sat out
+      expect(doc.outcomes).toEqual({ 'client-gone': 1 });
+      await sleep(3200);
+      expect(up.requests).toHaveLength(1);
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      expect(readStats(lane).parity[KEY].absorbed).toEqual(counts());
+      expect(rowsOf(lane).map((r) => [r.post, r.outcome])).toEqual([[0, 'client-gone']]);
+      // the failure was never overcome, so it is recorded as it would have been without the wait
+      expect((JSON.parse(statusOf(lane)!) as Json).lastRequestId).toBe('req-fx-gone');
+    }, { consts: { 'absorb.FIRST_S': 3, 'absorb.JITTER': 0 } });
+  });
+
+  it('the drain cuts a waiting request: it is answered, counted drain-cut alone, and never posted again', async () => {
+    await withBridge([overloaded(), ok()], async ({ bridge, up, lane }) => {
+      const aP = send(bridge);
+      const t0 = Date.now();
+      while (up.requests.length === 0 && Date.now() - t0 < 4000) await sleep(25);
+      await sleep(200);
+      const t1 = Date.now();
+      bridge.proc.kill('SIGTERM');
+      const a = await aP;
+      expect(await bridge.wait()).toEqual({ code: 0, signal: null });
+      expect(Date.now() - t1).toBeLessThan(5000);
+      expect([a.status, a.json?.error.type]).toEqual([503, 'api_error']);
+      expect(up.requests).toHaveLength(1);
+      expect(readStats(lane).outcomes).toEqual({ 'drain-cut': 1 });
+    }, { consts: { 'absorb.FIRST_S': 15, 'server.DRAIN_S': 0.3, 'server.DRAIN_WRITE_S': 3 } });
+    // a client that takes the cut's answer and keeps its side open: only the cut itself ends the wait, so the drain does
+    // not sit out DRAIN_WRITE_S for this request
+    await withBridge([overloaded(), ok()], async ({ bridge, up }) => {
+      const payload = JSON.stringify(messages());
+      const s = connect({ port: bridge.port, host: '127.0.0.1', allowHalfOpen: true });
+      s.on('error', () => { /* the bridge exits under it */ });
+      s.resume();
+      s.write(`POST /v1/messages HTTP/1.1\r\nHost: x\r\nx-api-key: ${bridge.key}\r\nanthropic-beta: ${CLAUDE_CODE_BETA}\r\n`
+        + `content-type: application/json\r\ncontent-length: ${Buffer.byteLength(payload)}\r\n\r\n${payload}`);
+      const t0 = Date.now();
+      while (up.requests.length === 0 && Date.now() - t0 < 4000) await sleep(25);
+      await sleep(200);
+      const t1 = Date.now();
+      bridge.proc.kill('SIGTERM');
+      expect(await bridge.wait()).toEqual({ code: 0, signal: null });
+      expect(Date.now() - t1).toBeLessThan(4000);
+      s.destroy();
+      expect(up.requests).toHaveLength(1);
+    }, { consts: { 'absorb.FIRST_S': 15, 'server.DRAIN_S': 0.3, 'server.DRAIN_WRITE_S': 4.5 } });
+  });
+
+  it('what is not the upstream\'s failure is not recorded, and what is, is: a drain\'s cut, and a POST nobody waited for', async () => {
+    const silent: ResponsesAnswer = { status: 200, sse: { chunks: [created()], holdOpenMs: 3000 } };
+    await withBridge([silent], async ({ bridge, up, lane }) => {
+      const before = statusOf(lane);
+      const aP = send(bridge);
+      const t0 = Date.now();
+      while (up.requests.length === 0 && Date.now() - t0 < 4000) await sleep(25);
+      await sleep(200);
+      bridge.proc.kill('SIGTERM');
+      expect((await aP).status).toBe(503);
+      expect(await bridge.wait()).toEqual({ code: 0, signal: null });
+      expect(statusOf(lane), 'the bridge\'s own stop was recorded as an upstream failure').toBe(before);
+    }, { consts: { ...QUICK, 'server.DRAIN_S': 0.2, 'server.DRAIN_WRITE_S': 3 } });
+    const part: ResponsesAnswer = { status: 200, sse: created(1) + done(0, msgItem('msg_fx1', 'part 1')) + completed({}, { end_turn: false }) };
+    await withBridge([part, { status: 0, drop: true, holdHeadMs: 1500 }], async ({ bridge, up, lane }) => {
+      const payload = Buffer.from(JSON.stringify(messages()));
+      const req = httpRequest({ host: '127.0.0.1', port: bridge.port, path: '/v1/messages', method: 'POST', agent: false,
+        headers: { ...FROM_CC, 'x-api-key': bridge.key, 'content-type': 'application/json', 'content-length': String(payload.length) } }, (res) => { res.resume(); res.on('error', () => {}); });
+      req.on('error', () => { /* destroyed below */ });
+      req.end(payload);
+      const t0 = Date.now();
+      while (up.requests.length < 2 && Date.now() - t0 < 4000) await sleep(25);
+      req.destroy(); // the stream is committed and the second POST held: the next pings find the client gone
+      await statsWhen(lane, (d) => d.outcomes['client-gone'] === 1);
+      expect(statusOf(lane) ?? '').not.toContain('transport'); // the POST has not failed yet
+      const t1 = Date.now();
+      while (!(statusOf(lane) ?? '').includes('transport') && Date.now() - t1 < 4000) await sleep(25);
+      expect((JSON.parse(statusOf(lane)!) as Json).lastErrorCode).toBe('transport');
+    }, { consts: { ...QUICK, 'server.PING_S': 0.1 } });
+  });
+
+  it('a request that is not Claude Code\'s is answered at once', async () => {
+    await withBridge([overloaded(), ok()], async ({ bridge, up }) => {
+      const a = await call(bridge, '/v1/messages', { body: messages(), headers: { 'anthropic-beta': 'structured-outputs-2025-11-13' } });
+      expect(a.status).toBe(529);
+      expect(up.requests).toHaveLength(1);
+    }, { consts: QUICK });
+  });
+
+  it('the 401 refresh and the 400 fallback stay as they are around it', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const no: ResponsesAnswer = { status: 401, body: { error: { code: 'token_expired', message: 'expired' } } };
+    await withBridge([overloaded(), no, overloaded(), ok()], async ({ bridge, up, lane, auth }) => {
+      arm(lane);
+      const a = await send(bridge);
+      expect(a.status, a.text).toBe(200);
+      expect(auth!.requests).toHaveLength(1);
+      const shas = up.requests.map((r) => r.authorizationSha256);
+      expect(shas[1]).toBe(shas[0]);
+      expect(shas[2]).not.toBe(shas[0]);
+      expect(shas[3]).toBe(shas[2]); // the retry carries the refreshed token
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      expect(rowsOf(lane).map((r) => r.outcome)).toEqual(['absorbed', 'refresh-after-401', 'absorbed', '2xx']);
+      expect(readStats(lane).outcomes).toEqual({ 'refresh-after-401': 1, '2xx': 1 });
+    }, { consts: QUICK, auth: { token: [{ status: 200, body: issuedAnswer({ iatAgo: 600 }) }] }, plant: { credential: { accessClaims: { iat: now - 600 } } } });
+    const unsupported: ResponsesAnswer = { status: 400, body: { error: { type: 'invalid_request_error', code: 'unsupported_parameter', message: 'no' } } };
+    await withBridge([unsupported, overloaded(), ok()], async ({ bridge, up, lane }) => {
+      writeFileSync(join(lane.laneDir, 'bridge-service-tier-fast'), '');
+      const a = await send(bridge);
+      expect(a.status, a.text).toBe(200);
+      expect(up.requests.map((r) => r.body!.service_tier ?? null)).toEqual(['priority', null, null]);
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      const row = readStats(lane).parity[KEY];
+      expect([row.fallbacks['bridge-service-tier-fast'], row.absorbed, readStats(lane).routes[KEY].requests]).toEqual([1, counts({ overloaded: 1 }), 1]);
+    }, { consts: QUICK });
+  });
+});
