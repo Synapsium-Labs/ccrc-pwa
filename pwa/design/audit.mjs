@@ -1131,6 +1131,15 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-page)'],
     why: "the one-line note under a chat message shown as plain text (lib/markdown.tsx's MsgPlain, a <p> after the <pre className=\"msg-plain\">). It is a child of .msg-assist, which paints no background, inside .chat, which paints --bg-page (chat.css's .chat rule), so --bg-page is behind it: the .settings-back reasoning. Its selector names no painted ancestor, so no route could ground it. An opened compaction recap puts the same note on .compaction's --bg-surface, where --ink-secondary measures higher still (tokens.css: 8.67:1 dark, 7.41:1 light); the auditor takes one ground per rule",
   },
+  // ── desktop polish wave 175: older messages at the chat's top ─────────
+  '.older-edge-say': {
+    under: ['var(--bg-page)'],
+    why: "the chat's top while older messages are offered (desktop polish wave 175, @ccrc/ui older-edge.tsx), drawn as the virtual list's header or above ChatListInner's rows: it sets an ink and paints no ground of its own, and neither do .older-edge or the list's scroller; it sits in .chat, which paints --bg-page (chat.css's .chat rule), so --bg-page is behind it: the .msg-plain-note reasoning. Its selector names no painted ancestor, so no route could ground it",
+  },
+  '.older-gap': {
+    under: ['var(--bg-page)'],
+    why: "the marker where an older page left records out (desktop polish wave 175, @ccrc/ui older-edge.tsx, drawn by ChatList for a gap row): it sets an ink and a dashed border and paints no ground of its own, and neither does the list's .chat-item; it sits in .chat, which paints --bg-page (chat.css's .chat rule), so --bg-page is behind it: the .msg-plain-note reasoning. Its selector names no painted ancestor, so no route could ground it",
+  },
   // ── desktop polish wave 168: the tool-activity row ────────────────────
   '.tool-activity-row': {
     under: ['var(--bg-page)'],

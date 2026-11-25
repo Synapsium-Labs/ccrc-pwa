@@ -876,9 +876,10 @@ function ChatScroller({
     if (bottom) {
       if (el !== null) footTop.current = el.scrollTop;
     } else if (pinned.current) {
+      // With no scroller to measure, nothing says the reader did not move: virtuoso's word stands.
       const left = footLeft({
         settling: column.settling(),
-        movedUp: el !== null && el.scrollTop < footTop.current - 1,
+        movedUp: el === null || el.scrollTop < footTop.current - 1,
         sinceTap: lastTap.current === null ? null : performance.now() - lastTap.current,
       });
       if (left === 'foot') { toFoot(); return; }
