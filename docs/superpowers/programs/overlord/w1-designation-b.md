@@ -114,6 +114,14 @@ either. No gate is built for it (the coordinator's ruling).
   read (`this.overlordLane`), the renewal acts built with its before-renew step, and the attempt facts read with its catch. From
   main comes the W1 readings call exactly as main has it, with the watcher's memoized transcript resolver handed in, plus its
   comment. This branch's older one-line readings call did not survive. Nothing else in the hunk changed.
+- The last merge, with main `25ed1ee2ddd0bc60afca0f518e95974f2c554c9e` (Serviceability B #3367 and the sandbox pins #3371 among
+  others), conflicted in three files, as the coordinator measured.
+  - The gate's two files had no holder by then, so they were edited on the coordinator's ruling (call 1122). Every line of main is
+    kept, and this branch adds its two doors' rows and the counts re-derived on the merged tree: 309 scanned, 306 HTTP, 193 gated,
+    113 exempt, thirty-seven flag-aware. Main alone reads 307, 304 and 113, with the runway read.
+  - In `server/src/continuity/routes.ts` both sides only add, at the same place, and both are kept whole: this branch's
+    `settleFactOf`, then main's `SETTLE_IDLE_WHY` (the words of the settle's one log line for a decision it could not trust).
+  - Nothing else conflicted. The mutation floors took main's new key and this branch's three without an edit.
 
 ## Measured
 
