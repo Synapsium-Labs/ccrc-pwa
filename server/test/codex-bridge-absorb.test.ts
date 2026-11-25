@@ -1,5 +1,5 @@
 // codex-bridge-absorb.test.ts — `ccd/codexbridge/absorb.py`, the pure decision of what the bridge tries again and when
-// (D-TBD-bridge-absorb, plan 2026-11-25). The acting half is in codex-bridge-server.test.ts.
+// (D-9078, plan 2026-11-25). The acting half is in codex-bridge-server.test.ts.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { pythonOrSkip } from './ccgptHarness.js';

@@ -2678,10 +2678,10 @@ function statSyncMode(f: string): number {
   return statSync(f).mode & 0o777;
 }
 
-// ── the failures the bridge absorbs before the commit point (D-TBD-bridge-absorb) ────────────────────────────────────
+// ── the failures the bridge absorbs before the commit point (D-9078) ────────────────────────────────────
 // `absorb.py` decides, `server._Request._absorb` waits and acts. Every case sends Claude Code's beta unless it says
 // otherwise, and lowers the waits through `consts`; codex-bridge-absorb.test.ts holds the arithmetic.
-describe.skipIf(!PY)('a short upstream failure is absorbed before the commit point (D-TBD-bridge-absorb)', () => {
+describe.skipIf(!PY)('a short upstream failure is absorbed before the commit point (D-9078)', () => {
   const KEY = `backend/${MODEL}`;
   const FROM_CC = { 'anthropic-beta': CLAUDE_CODE_BETA, 'x-claude-code-session-id': 'sess-fx1' };
   const QUICK = { 'absorb.FIRST_S': 0.02, 'absorb.CAP_S': 0.05 };

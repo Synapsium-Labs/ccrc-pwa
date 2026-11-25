@@ -972,7 +972,7 @@ const zeros = (keys: string[]): Record<string, number> => Object.fromEntries(key
 const REPLAY = ['text-hit', 'text-empty', 'text-absent', 'call-hit', 'call-absent'];
 /** D-8622: the request markers, in backend.MARKERS' order (D-8632's last). */
 const MARKERS = ['bridge-reasoning-all-turns', 'bridge-verbosity', 'bridge-turn-state', 'bridge-service-tier-fast'];
-/** D-TBD-bridge-absorb: absorb.WORDS. */
+/** D-9078: absorb.WORDS. */
 const ABSORBED = ['overloaded', 'unavailable', 'transport'];
 /** A parity row as the writers leave it when they have counted nothing, with `over` laid on top. */
 function parityRow(over: Record<string, unknown> = {}): Line {
@@ -1293,8 +1293,8 @@ describe.skipIf(!PY)('the parity section: the request markers (D-8622, D-8623)',
   });
 });
 
-// D-TBD-bridge-absorb: the failures the bridge tried again, a fixed vocabulary like `fallbacks`.
-describe.skipIf(!PY)('the parity section: the absorbed failures (D-TBD-bridge-absorb)', () => {
+// D-9078: the failures the bridge tried again, a fixed vocabulary like `fallbacks`.
+describe.skipIf(!PY)('the parity section: the absorbed failures (D-9078)', () => {
   it('each is counted once per call under its word, and any other word counts nothing and makes no row', async () => {
     const { home, file } = lane('cb-parity-absorbed-');
     const [, ...rest] = await run(home, [

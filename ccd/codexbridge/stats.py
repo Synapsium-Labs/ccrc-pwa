@@ -80,7 +80,7 @@ outcomes. A row counts:
   over `backend.MARKERS`.
 - `turnState` (D-8623): `captured`, each turn's first sticky-routing token kept, and `echoed`, each POST that sent one
   back. The token itself is never in this file (TOKEN_HEADERS).
-- `absorbed` (D-TBD-bridge-absorb): one per upstream failure the bridge tried again instead of answering, by its word
+- `absorbed` (D-9078): one per upstream failure the bridge tried again instead of answering, by its word
   (`absorb.WORDS`, zero-filled). No such failure is in `outcomes` or moves `routes.requests`; the one the client is
   answered with, when every retry failed, is counted there as it always was and never here.
 A writer ignores a malformed argument (a level, a model or an outcome that is not a string, a count that is not a

@@ -2589,7 +2589,7 @@ continued inside the same message, at most three times).
 `count_tokens` is answered locally, from an estimate seeded at 3.5 bytes per token and
 calibrated on the lane's own replies, for any model. A `/v1/messages` request for a model the lane's catalogue does not
 list is answered 404 locally and never sent upstream.
-**A short provider failure is absorbed** (D-TBD-bridge-absorb). The lane's launcher gives Claude Code two retries, because a
+**A short provider failure is absorbed** (D-9078). The lane's launcher gives Claude Code two retries, because a
 retry of a request that timed out costs 870 seconds, so without this a provider overloaded for a few seconds ended the
 turn. While nothing of the message has reached Claude Code, the bridge tries again itself when the upstream answered
 overloaded (529) or unavailable (503), or could not be reached: after about 1 second, then doubling to 20, each wait

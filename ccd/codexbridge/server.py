@@ -53,7 +53,7 @@ least recent dropped first, and is cleared when the credential reading's account
 owner change). The value reaches no stats, status or log line (stats.TOKEN_HEADERS refuses it in the stats file; a
 recording made under the operator's `record-streams` marker keeps every response header, as it always has).
 
-AN ABSORBED FAILURE (D-TBD-bridge-absorb). The launcher gives Claude Code two retries, so a backend that is overloaded
+AN ABSORBED FAILURE (D-9078). The launcher gives Claude Code two retries, so a backend that is overloaded
 for a few seconds used to end the turn. While nothing is committed to the client, a short failure of the upstream (the
 `overloaded` and `unavailable` rows, and a POST that got no answer) is tried again by the bridge itself (`_absorb`);
 `absorb` decides which failure, how long to wait and when to stop, and says why. When it stops, the failure is answered

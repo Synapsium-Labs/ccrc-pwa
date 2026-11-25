@@ -1,4 +1,4 @@
-"""codexbridge.absorb — which upstream failure the bridge answers by trying again, and when (D-TBD-bridge-absorb).
+"""codexbridge.absorb — which upstream failure the bridge answers by trying again, and when (D-9078).
 
 Plan 2026-11-25 (codex-bridge absorb overload). A lane's launcher gives Claude Code two retries (`ccd/ccrc-codex`),
 because a retry after the request timeout costs 870 s (plan 2026-09-08, the compaction wedge). The same count covers a

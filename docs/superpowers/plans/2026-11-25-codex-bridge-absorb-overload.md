@@ -59,7 +59,7 @@ counter). Each guard was removed in turn and its case measured red; the pull req
 
 ## Deviations found
 
-- **D-TBD-bridge-absorb** — the brief this plan was written from says which failures are retried and how; four points were decided
+- **D-9078** — the brief this plan was written from says which failures are retried and how; four points were decided
   while building:
   1. Only a request carrying Claude Code's beta (`inbound.py#from_claude_code`) is absorbed. The models canary posts to the
      same route with its own 90 s deadline and reads a 529 or a 503 as a refusal; holding its request for 120 s would have
