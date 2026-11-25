@@ -109,6 +109,11 @@ either. No gate is built for it (the coordinator's ruling).
   HTTP, 113 exempt). With this PR's two doors the gate counts are 308 scanned, 305 HTTP, 192 gated and 113 exempt, applied on
   the holder's yes to the exact merge packet. The holder added one word: the flag-aware test's title now says thirty-seven, its
   sorted list's length. Nothing asserts that word. The id-taking census needed no change.
+- Fix round 3's second merge, with main `c4c31578664a88bf72e0a7d46c9eae4d679c3c99` (#3343's renewal readings B), conflicted in one
+  hunk only: the generations pass in `server/src/watch.ts`. Both sides are kept whole. From this branch come three lines: the lane
+  read (`this.overlordLane`), the renewal acts built with its before-renew step, and the attempt facts read with its catch. From
+  main comes the W1 readings call exactly as main has it, with the watcher's memoized transcript resolver handed in, plus its
+  comment. This branch's older one-line readings call did not survive. Nothing else in the hunk changed.
 
 ## Measured
 
