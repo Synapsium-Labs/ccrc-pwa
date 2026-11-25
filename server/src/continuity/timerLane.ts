@@ -27,11 +27,11 @@ import type { SessionRecord } from '../registry.js';
 import { MAIL_DISABLED_MARKER } from '../../../shared/switches.js';
 import type { Clock } from '../time/ports.js';
 import type { TimerRow, TimersRead } from './continuityStore.js';
-import { packTimerMail, timerCleanupVerdict, type CleanupFacts, type DueTimer } from './timers.js';
+import { packTimerMail, timerCleanupVerdict, type CleanupFacts, type DueTimer, type SessionSetterFacts } from './timers.js';
 
 /** What `incarnationOf` answers. */
 export type IncarnationRead = Awaited<ReturnType<typeof incarnationOf>>;
-export type SetterIncarnation = CleanupFacts['incarnation'];
+export type SetterIncarnation = SessionSetterFacts['incarnation'];
 
 /** The one place a reason of `incarnationOf` is compared (slug incarnation-reason-is-a-string): `absent` alone is the
  *  absence that can cancel (`setter-gone`, when the listing did not name the row); every other reason is unmeasured. */
@@ -126,10 +126,12 @@ export function timersPass(d: { coord: WatcherCoordPort; now: number; log: (line
     const verdict = timerCleanupVerdict({
       boundRun: typeof run === 'string' ? run : { state: run.row.state },
       boundProgramme: programmeOf(t.programme),
-      setAt: t.setAt, listedAt: listing.listedAt,
-      listing: listing.listedIds === null || listing.unmeasuredIds.has(t.setter) ? 'unmeasured'
-        : { listed: listing.listedIds.has(t.setter), archived: listing.archivedIds.has(t.setter) },
-      incarnation: facts.incarnations.get(t.setter) ?? { kind: 'unmeasured' },
+      setter: {
+        kind: 'session', setAt: t.setAt, listedAt: listing.listedAt,
+        listing: listing.listedIds === null || listing.unmeasuredIds.has(t.setter) ? 'unmeasured'
+          : { listed: listing.listedIds.has(t.setter), archived: listing.archivedIds.has(t.setter) },
+        incarnation: facts.incarnations.get(t.setter) ?? { kind: 'unmeasured' },
+      },
       stamp: t.setterIncarnation,
     });
     if (verdict.act === 'cancel') {

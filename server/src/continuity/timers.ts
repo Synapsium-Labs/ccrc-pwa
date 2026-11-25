@@ -77,10 +77,10 @@ export function timerCancelVerdict(
   return 'ok';
 }
 
-/** What the timers lane measured about one pending timer, once a pass. */
-export interface CleanupFacts {
-  readonly boundRun: { readonly state: RunState } | 'none' | 'unmeasured';
-  readonly boundProgramme: { readonly planEnded: boolean } | 'none' | 'unmeasured';
+/** What the timers lane read about a timer's setter, once a pass: a session's registry facts (W1a's), in its own arm of the
+ *  union so a setter of another kind brings its own facts (slug setter-facts-are-a-union). */
+export type SetterFacts = {
+  readonly kind: 'session';
   /** When the timer was set, and when the tick's registry listing began (null: the tick has no listing). */
   readonly setAt: number;
   readonly listedAt: number | null;
@@ -88,6 +88,14 @@ export interface CleanupFacts {
   readonly listing: { readonly listed: boolean; readonly archived: boolean } | 'unmeasured';
   /** The setter's incarnation now (`incarnationOf`): `absent` only for the reason `absent`; every other reason unmeasured. */
   readonly incarnation: { readonly kind: 'measured'; readonly v: string } | { readonly kind: 'absent' } | { readonly kind: 'unmeasured' };
+};
+export type SessionSetterFacts = Extract<SetterFacts, { kind: 'session' }>;
+
+/** What the timers lane measured about one pending timer, once a pass. */
+export interface CleanupFacts {
+  readonly boundRun: { readonly state: RunState } | 'none' | 'unmeasured';
+  readonly boundProgramme: { readonly planEnded: boolean } | 'none' | 'unmeasured';
+  readonly setter: SetterFacts;
   /** The incarnation the timer was stamped with at the set. */
   readonly stamp: string;
 }
@@ -113,12 +121,13 @@ export function timerCleanupVerdict(f: CleanupFacts): CleanupVerdict {
   if (f.boundRun !== 'none' && (TERMINAL_RUN_STATES as readonly RunState[]).includes(f.boundRun.state)) return cancel('run-closed');
   if (f.boundProgramme === 'unmeasured') return WAIT;
   if (f.boundProgramme !== 'none' && f.boundProgramme.planEnded) return cancel('programme-ended');
-  if (f.listedAt === null || f.setAt >= f.listedAt) return WAIT;
-  if (f.listing === 'unmeasured') return WAIT;
-  if (f.listing.archived) return cancel('setter-archived');
-  if (f.incarnation.kind === 'absent') return f.listing.listed ? WAIT : cancel('setter-gone');
-  if (f.incarnation.kind === 'unmeasured') return WAIT;
-  return f.incarnation.v === f.stamp ? { act: 'keep' } : cancel('setter-gone');
+  const s = f.setter;
+  if (s.listedAt === null || s.setAt >= s.listedAt) return WAIT;
+  if (s.listing === 'unmeasured') return WAIT;
+  if (s.listing.archived) return cancel('setter-archived');
+  if (s.incarnation.kind === 'absent') return s.listing.listed ? WAIT : cancel('setter-gone');
+  if (s.incarnation.kind === 'unmeasured') return WAIT;
+  return s.incarnation.v === f.stamp ? { act: 'keep' } : cancel('setter-gone');
 }
 
 const SPACE = /\s/u;

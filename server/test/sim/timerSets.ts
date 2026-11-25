@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
 import { RUN_STATES, type RunState } from '../../../shared/api.js';
-import type { CleanupFacts, DueTimer, SetFacts } from '../../src/continuity/timers.js';
+import type { CleanupFacts, DueTimer, SessionSetterFacts, SetFacts } from '../../src/continuity/timers.js';
 import type { MutantSet, SuiteCase } from './mutate.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -192,12 +192,20 @@ const CANCEL_SET: MutantSet<TimersModule> = {
 // ---------- timerCleanupVerdict ----------
 
 const BASE: CleanupFacts = {
-  boundRun: 'none', boundProgramme: 'none', setAt: 1_000, listedAt: 2_000,
-  listing: { listed: true, archived: false }, incarnation: { kind: 'measured', v: 'g1' }, stamp: 'g1',
+  boundRun: 'none', boundProgramme: 'none', stamp: 'g1',
+  setter: { kind: 'session', setAt: 1_000, listedAt: 2_000, listing: { listed: true, archived: false }, incarnation: { kind: 'measured', v: 'g1' } },
 };
+/** A session setter's case: the top-level facts and the setter's own, written flat as W1a wrote them. */
+type SessionOver = Partial<Omit<CleanupFacts, 'setter'> & Omit<SessionSetterFacts, 'kind'>>;
 
 export function timerCleanupCases(m: TimersModule): Record<string, SuiteCase> {
-  const c = (over: Partial<CleanupFacts>) => m.timerCleanupVerdict({ ...BASE, ...over });
+  const c = (over: SessionOver) => {
+    const { boundRun, boundProgramme, stamp, ...setter } = over;
+    return m.timerCleanupVerdict({
+      boundRun: boundRun ?? BASE.boundRun, boundProgramme: boundProgramme ?? BASE.boundProgramme, stamp: stamp ?? BASE.stamp,
+      setter: { ...(BASE.setter as SessionSetterFacts), ...setter },
+    });
+  };
   const KEEP = { act: 'keep' };
   const WAIT = { act: 'wait' };
   const cancel = (reason: string) => ({ act: 'cancel', reason });
@@ -265,20 +273,20 @@ const CLEANUP_SET: MutantSet<TimersModule> = {
   mutants: [
     // The plan's named mutants (Task 2 Step 5): keep on an unmeasured incarnation; cancel on absent with the row listed;
     // drop the listedAt rung.
-    { id: 'K1 unmeasured stamp keeps', old: "if (f.incarnation.kind === 'unmeasured') return WAIT;", new: "if (f.incarnation.kind === 'unmeasured') return { act: 'keep' };" },
-    { id: 'K2 absent and listed cancels', old: "return f.listing.listed ? WAIT : cancel('setter-gone');", new: "return cancel('setter-gone');" },
-    { id: 'K3 no listedAt rung', old: 'if (f.listedAt === null || f.setAt >= f.listedAt) return WAIT;', new: '' },
-    { id: 'K4 a set at the listing is judged', old: 'f.setAt >= f.listedAt', new: 'f.setAt > f.listedAt' },
-    { id: 'K5 a null listedAt is judged', old: 'f.listedAt === null || ', new: 'f.listedAt !== null && ' },
-    { id: 'K6 an unmeasured listing is judged', old: "if (f.listing === 'unmeasured') return WAIT;", new: "if (f.listing === 'unmeasured') return { act: 'keep' };" },
-    { id: 'K7 archived ignored', old: "if (f.listing.archived) return cancel('setter-archived');", new: '' },
-    { id: 'K8 a differing stamp keeps', old: "return f.incarnation.v === f.stamp ? { act: 'keep' } : cancel('setter-gone');", new: "return { act: 'keep' };" },
-    { id: 'K9 an unlisted row is gone', old: "if (f.incarnation.kind === 'absent') return f.listing.listed ? WAIT : cancel('setter-gone');", new: "if (!f.listing.listed) return cancel('setter-gone');\n  if (f.incarnation.kind === 'absent') return WAIT;" },
+    { id: 'K1 unmeasured stamp keeps', old: "if (s.incarnation.kind === 'unmeasured') return WAIT;", new: "if (s.incarnation.kind === 'unmeasured') return { act: 'keep' };" },
+    { id: 'K2 absent and listed cancels', old: "return s.listing.listed ? WAIT : cancel('setter-gone');", new: "return cancel('setter-gone');" },
+    { id: 'K3 no listedAt rung', old: 'if (s.listedAt === null || s.setAt >= s.listedAt) return WAIT;', new: '' },
+    { id: 'K4 a set at the listing is judged', old: 's.setAt >= s.listedAt', new: 's.setAt > s.listedAt' },
+    { id: 'K5 a null listedAt is judged', old: 's.listedAt === null || ', new: 's.listedAt !== null && ' },
+    { id: 'K6 an unmeasured listing is judged', old: "if (s.listing === 'unmeasured') return WAIT;", new: "if (s.listing === 'unmeasured') return { act: 'keep' };" },
+    { id: 'K7 archived ignored', old: "if (s.listing.archived) return cancel('setter-archived');", new: '' },
+    { id: 'K8 a differing stamp keeps', old: "return s.incarnation.v === f.stamp ? { act: 'keep' } : cancel('setter-gone');", new: "return { act: 'keep' };" },
+    { id: 'K9 an unlisted row is gone', old: "if (s.incarnation.kind === 'absent') return s.listing.listed ? WAIT : cancel('setter-gone');", new: "if (!s.listing.listed) return cancel('setter-gone');\n  if (s.incarnation.kind === 'absent') return WAIT;" },
     { id: 'K10 an unmeasured run cancels nothing but is judged', old: "if (f.boundRun === 'unmeasured') return WAIT;", new: '' },
     { id: 'K11 an unmeasured programme is judged', old: "if (f.boundProgramme === 'unmeasured') return WAIT;", new: '' },
     { id: 'K12 a closed run kept', old: "return cancel('run-closed');", new: "return { act: 'keep' };" },
     { id: 'K13 every programme ended', old: "f.boundProgramme !== 'none' && f.boundProgramme.planEnded", new: "f.boundProgramme !== 'none'" },
-    { id: 'K14 the listing before the run', old: "  if (f.boundRun === 'unmeasured') return WAIT;", new: "  if (f.listedAt === null) return WAIT;\n  if (f.boundRun === 'unmeasured') return WAIT;" },
+    { id: 'K14 the listing before the run', old: "  if (f.boundRun === 'unmeasured') return WAIT;", new: "  if (f.setter.listedAt === null) return WAIT;\n  if (f.boundRun === 'unmeasured') return WAIT;" },
   ],
   suite: timerCleanupCases,
 };
