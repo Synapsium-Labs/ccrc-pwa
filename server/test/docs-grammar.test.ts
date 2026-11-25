@@ -223,7 +223,8 @@ describe('parseDocsRef and docsRefText', () => {
     expect(parseDocsRef('main')).toEqual({ kind: 'bare', name: 'main' });
     expect(parseDocsRef('refs/heads/ws/foo')).toEqual({ kind: 'qualified', ref: 'refs/heads/ws/foo' });
     expect(parseDocsRef('refs/remotes/origin/main')).toEqual({ kind: 'qualified', ref: 'refs/remotes/origin/main' });
-    for (const s of ['', '-x', 'HEAD', 'refs/tags/v', 'refs/remotes/upstream/x', 'a..b', '@{-1}', name(201)]) {
+    expect(parseDocsRef('refs/tags/v')).toEqual({ kind: 'qualified', ref: 'refs/tags/v' });
+    for (const s of ['', '-x', 'HEAD', 'refs/tags/', 'refs/tags/a..b', 'refs/remotes/upstream/x', 'a..b', '@{-1}', name(201)]) {
       expect(parseDocsRef(s), label(s)).toBeNull();
     }
   });

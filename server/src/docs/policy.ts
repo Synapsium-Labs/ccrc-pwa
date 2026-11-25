@@ -721,7 +721,8 @@ export function parseDocsRefreshBody(body: unknown): { ok: true; req: DocsRefres
   if (reason !== 'auto' && reason !== 'manual') return badQuery('body', 'reason');
   if (ref === null) return { ok: true, req: { ref: null, reason } };
   const spec = parseDocsRef(ref);
-  return spec === null ? refused('bad-ref') : { ok: true, req: { ref: spec, reason } };
+  return spec === null || (spec.kind === 'qualified' && !isDocsQualifiedRef(spec.ref))
+    ? refused('bad-ref') : { ok: true, req: { ref: spec, reason } };
 }
 
 // ===== Request provenance (section 3.8; refinement (o)) =====

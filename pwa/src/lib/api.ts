@@ -41,6 +41,7 @@ import type {
   DocsFolderAddResponse, DocsFolderFileResponse, DocsFolderRemoveResponse, DocsFolderTreeResponse, DocsFoldersLabelsResponse,
   DocsFoldersPathsResponse, DocsRangeFrameResponse, DocsRangePrepareResponse,
 } from '../../../shared/docs';
+import type { DocsSettings, DocsSettingsResponse } from '../../../shared/docsTracker';
 import type { DocsFolderLoaders } from '../docs/folderPage';
 import type { RangeLoader } from '../docs/range/readRange';
 import type { ClaudeRollTargets } from '../../../shared/claudeVersion';
@@ -1262,7 +1263,10 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      * never rejects for a server answer (`docs/failures.ts`): it rejects only when the caller's signal aborts, or for
      * a defect. `file` and `raster` refuse each other's paths by throwing `wrong-representation` before any request.
      */
-    docs: ((): DocsLoaders & DocsHistoryLoader & { readonly range: RangeLoader; readonly folders: DocsFolderLoaders } => {
+    docs: ((): DocsLoaders & DocsHistoryLoader & { readonly range: RangeLoader; readonly folders: DocsFolderLoaders; readonly settings: {
+      read(signal?: AbortSignal): Promise<DocsAnswer<DocsSettingsResponse>>;
+      write(settings: DocsSettings): Promise<DocsAnswer<DocsSettingsResponse>>;
+    } } => {
       const marker = { [DOCS_REQUEST_HEADER]: DOCS_REQUEST_HEADER_VALUE };
       // NO TIME LIMIT on the docs reads (`timeoutMs: null`, console speed C1): a loader never rejects for a server
       // answer, and its slot vocabulary (`docs/failures.ts`) has no word for "slow", so a timeout would leave a screen
@@ -1319,6 +1323,12 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       };
       return {
         folders,
+        settings: {
+          read: (signal) => read<DocsSettingsResponse>(docsApi.settings(), ['settings'], { headers: marker, signal }),
+          write: (settings) => readWrite<DocsSettingsResponse>(docsApi.settings(), ['settings'], {
+            method: 'PUT', headers: { ...marker, 'content-type': 'application/json' }, body: JSON.stringify({ settings }),
+          }),
+        },
         projects: () => read<DocsProjectsResponse>(docsApi.projects(), ['index'], { headers: marker }),
         tree: (project, ref) =>
           read<DocsTreeResponse>(docsApi.tree(project, ref), ['tree', 'refreshDue'], { headers: marker }),

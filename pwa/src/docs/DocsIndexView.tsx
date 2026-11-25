@@ -2,10 +2,11 @@
 // box listed, `ready` rows with docs first by name, then the rest in words, and the projects with no docs folded
 // under one disclosure. A pure renderer of one `projects()` answer; every link is `docsLocation`'s.
 import { useState, type ReactNode } from 'react';
-import { docsPageUrl, type DocsIndexRow, type DocsProjectsResponse } from '../../../shared/docs';
+import { docsPageUrl, type DocsIndexRow, type DocsPageLocation, type DocsProjectsResponse } from '../../../shared/docs';
+import type { DocsSettings } from '../../../shared/docsTracker';
 import { formatAge } from '../fleet/formatReset';
 import { navigate } from '../lib/router';
-import { docsLocation } from './docsLinks';
+import { docsListingHome, docsLocation } from './docsLinks';
 import { DOCS_FOLDER_TEXT, DOCS_VIEW_TEXT, fillSentence, pluralS, shortCommit } from './docsText';
 import { SECTION_LABEL, indexNewest, leafName, presentSectionCounts, sectionCountsText } from './docsTree';
 import type { FolderIndexSlot } from './folderPage';
@@ -21,8 +22,6 @@ const INDEX_STATE_TEXT: Readonly<Record<Exclude<DocsIndexRow['state'], 'ready' |
 
 /** The page the index's links start from. It names no project and no ref, so nothing refinement (q) guards (the page's
  *  project and ref, W5b's `at`) can be dropped by spelling it; every target from it is `default-view`. */
-const INDEX: { kind: 'index' } = { kind: 'index' };
-
 function byName(a: DocsIndexRow, b: DocsIndexRow): number {
   return a.project < b.project ? -1 : a.project > b.project ? 1 : 0;
 }
@@ -35,18 +34,13 @@ function hasDocs(row: DocsIndexRow): boolean {
   return true;
 }
 
-function defaultViewHref(project: string): string {
-  return docsPageUrl(docsLocation(INDEX, { kind: 'default-view', project }));
-}
-
 /** A ready row's newest docs (X2 P4.1, spec §5.1), after its button and never inside it: per section `indexNewest` reads, the
- *  section's label, each name as a link to its default-view page, and an "N more" link to the section's page. A row that
+ *  section's label, each name as a link on the chosen branch, and an "N more" link to the section's page. A row that
  *  sent no names draws nothing. */
-function NewestLists(p: { readonly row: DocsIndexRow }): ReactNode {
-  const { row } = p;
+function NewestLists(p: { readonly row: DocsIndexRow; readonly home: DocsPageLocation }): ReactNode {
+  const { row, home } = p;
   const groups = indexNewest(row);
   if (groups.length === 0) return null;
-  const home = docsLocation(INDEX, { kind: 'default-view', project: row.project });
   return (
     <>
       {groups.map(({ slug, names, more }) => (
@@ -81,19 +75,24 @@ function NewestLists(p: { readonly row: DocsIndexRow }): ReactNode {
   );
 }
 
-function IndexRow(p: { readonly row: DocsIndexRow; readonly sameAs: readonly string[] }): ReactNode {
-  const { row, sameAs } = p;
+function IndexRow(p: { readonly row: DocsIndexRow; readonly sameAs: readonly string[]; readonly settings?: DocsSettings }): ReactNode {
+  const { row, sameAs, settings } = p;
   const dup = sameAs.length > 0
     ? <span className="docs-row-note">{fillSentence(DOCS_VIEW_TEXT.duplicate, { other: sameAs.join(', ') })}</span>
     : null;
   if (row.state === 'ready') {
     const fetch = row.fetch;
+    const home = docsListingHome(row.project, settings);
+    const branch = home.ref?.kind === 'bare' ? home.ref.name : null;
     return (
       <>
-        <button type="button" className="docs-row" onClick={() => navigate(defaultViewHref(row.project))}>
+        <button type="button" className="docs-row" onClick={() => navigate(docsPageUrl(home))}>
           <span className="docs-row-name">{row.project}</span>
           {row.default !== undefined && (
             <> <span className="docs-row-ref">{row.default.name} · <code>{shortCommit(row.default.commit)}</code></span></>
+          )}
+          {branch !== null && branch !== row.default?.name && (
+            <> <span className="docs-row-note">{fillSentence(DOCS_VIEW_TEXT.indexConfiguredBranch, { branch })}</span></>
           )}
           {row.sections !== undefined && <> <span className="docs-row-count">{sectionCountsText(row.sections)}</span></>}
           {fetch !== undefined && (
@@ -105,7 +104,7 @@ function IndexRow(p: { readonly row: DocsIndexRow; readonly sameAs: readonly str
           )}
           {dup !== null && <> {dup}</>}
         </button>
-        <NewestLists row={row} />
+        <NewestLists row={row} home={home} />
       </>
     );
   }
@@ -113,7 +112,7 @@ function IndexRow(p: { readonly row: DocsIndexRow; readonly sameAs: readonly str
   if (row.state === 'linked-worktree' || row.state === 'shared-repo') {
     const owner = row.owner;
     state = typeof owner === 'string'
-      ? <DocsPageLink className="docs-owner-link" href={defaultViewHref(owner)}>{fillSentence(DOCS_VIEW_TEXT.partOf, { owner })}</DocsPageLink>
+      ? <DocsPageLink className="docs-owner-link" href={docsPageUrl(docsListingHome(owner, settings))}>{fillSentence(DOCS_VIEW_TEXT.partOf, { owner })}</DocsPageLink>
       : DOCS_VIEW_TEXT.partOfUnknown;
   } else {
     state = INDEX_STATE_TEXT[row.state];
@@ -162,7 +161,11 @@ function FoldersGroup(p: { readonly slot: FolderIndexSlot | null; readonly needl
 
 /** The index page (spec 4.4): the header sentence, a filter, the rows, the no-docs disclosure and the footers
  *  (refinement (r): `unwalked` has its own footer, `duplicates` say "same repository as", `cacheAgeMs` is not shown). */
-export function DocsIndexView(p: { readonly answer: DocsProjectsResponse; readonly folders?: FolderIndexSlot | null }): ReactNode {
+export function DocsIndexView(p: {
+  readonly answer: DocsProjectsResponse;
+  readonly folders?: FolderIndexSlot | null;
+  readonly settings?: DocsSettings;
+}): ReactNode {
   const index = p.answer.index;
   const [filter, setFilter] = useState('');
   const needle = filter.toLowerCase();
@@ -175,7 +178,9 @@ export function DocsIndexView(p: { readonly answer: DocsProjectsResponse; readon
   const rest = rows.filter((r) => r.state !== 'ready' && hasDocs(r)).sort(byName);
   const none = rows.filter((r) => !hasDocs(r)).sort(byName);
   const unwalked = index.unwalked ?? 0;
-  const item = (row: DocsIndexRow): ReactNode => <li key={row.project}><IndexRow row={row} sameAs={sameAs(row)} /></li>;
+  const item = (row: DocsIndexRow): ReactNode => (
+    <li key={row.project}><IndexRow row={row} sameAs={sameAs(row)} settings={p.settings} /></li>
+  );
   return (
     <div className="docs-index">
       <p className="docs-index-head">{DOCS_VIEW_TEXT.indexHead}</p>

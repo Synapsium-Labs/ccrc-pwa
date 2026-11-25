@@ -45509,7 +45509,8 @@ def valid_qualified_ref(s):
 
 def valid_ref(s):
     # The two grammars are disjoint: a bare name may not start with refs/.
-    return valid_bare_ref(s) or valid_qualified_ref(s)
+    return (valid_bare_ref(s) or valid_qualified_ref(s)
+            or (s.startswith('refs/tags/') and valid_bare_ref(s[len('refs/tags/'):])))
 
 
 def valid_sha(s):
@@ -46616,6 +46617,26 @@ def resolve_qualified(repo, q, dl):
                       rows.get(other), dl)
 
 
+def legacy_ref(repo, name, row, tried, dl):
+    """Return a canonical version hint, or the existing unresolved refusal."""
+    ctx = {'tried': tried}
+    if row is not None:
+        commit = usable_commit(row)
+        if commit is not None:
+            ctx['resolved'] = {'commit': commit, 'via': 'tag'}
+        else:
+            ctx['hint'] = 'tag'
+    elif re.fullmatch(r'[0-9a-f]{7,64}', name):
+        # Disambiguate across all object types before asking whether the one object is a commit.
+        result = ref_git(repo, ['rev-parse', '--disambiguate=' + name], dl)
+        ids = result.out.decode('ascii', 'replace').splitlines()
+        if result.rc == 0 and len(ids) == 1 and valid_sha(ids[0]):
+            kind = ref_git(repo, ['rev-parse', '--verify', '--end-of-options', ids[0] + '^{commit}'], dl)
+            if kind.rc == 0 and kind.out.strip() == ids[0].encode('ascii'):
+                ctx['resolved'] = {'commit': ids[0], 'via': 'commit'}
+    raise fail('unresolved-ref', **ctx)
+
+
 def resolve_bare(repo, b, dl):
     """Section 2 (c) 3, Q2: the newer side wins. One for-each-ref covers L, R,
     the tag (read only for the hint) and, for a name starting origin/, the
@@ -46630,13 +46651,12 @@ def resolve_bare(repo, b, dl):
     rows = for_each_ref(repo, refs, dl)
     lrow, orow = rows.get(local), rows.get(origin)
     tried = [{'ref': local, 'result': ref_result(lrow)}, {'ref': origin, 'result': ref_result(orow)}]
+    if lrow is None and suggest is not None and usable_commit(rows.get(suggest)) is not None:
+        answer = resolve_qualified(repo, suggest, dl)
+        answer['requested'] = b
+        return answer
     if lrow is None and orow is None:
-        ctx = {'tried': tried}
-        if suggest is not None and usable_commit(rows.get(suggest)) is not None:
-            ctx['suggest'] = suggest
-        if tag in rows:
-            ctx['hint'] = 'tag'
-        raise fail('unresolved-ref', **ctx)
+        return legacy_ref(repo, b, rows.get(tag), tried, dl)
     lc, oc = usable_commit(lrow), usable_commit(orow)
     if lc is None and oc is None:
         bad = local if lrow is not None else origin
@@ -46660,6 +46680,9 @@ def resolve(repo, requested, dl):
         return resolve_default(repo, dl)
     if valid_qualified_ref(requested):
         return resolve_qualified(repo, requested, dl)
+    if requested.startswith(REF_TAGS) and valid_bare_ref(requested[len(REF_TAGS):]):
+        row = for_each_ref(repo, [requested], dl).get(requested)
+        return legacy_ref(repo, '', row, [{'ref': requested, 'result': ref_result(row)}], dl)
     if valid_bare_ref(requested):
         return resolve_bare(repo, requested, dl)
     raise fail('bad-ref')

@@ -12,6 +12,7 @@ import {
   type DocPin, type DocsEntry, type DocsFileResponse, type DocsIndexOk, type DocsIndexRow, type DocsProjectsResponse,
   type DocsTreeOk, type DraftsFacts,
 } from '../../shared/docs';
+import type { DocsSettingsResponse } from '../../shared/docsTracker';
 import { DocsScreen } from '../src/screens/DocsScreen';
 import { DocsLeaf } from '../src/docs/DocsLeaf';
 import { DocsAssetContext } from '../src/docs/DocImage';
@@ -23,7 +24,7 @@ import { exportStateFor } from '../src/docs/DocsHead';
 import { DOCS_FAILURE_SENTENCE, DOCS_HEAD_TEXT, DOCS_PAGE_INVALID_SENTENCE, EXPORT_WAIT_TEXT, MOCKUP_TEXT, SHARE_EXPORT_CLAUSE, fillSentence, shortCommit } from '../src/docs/docsText';
 import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
 import { DOCS_RENDER_GATE_BYTES, HIGHLIGHT_PAGE_WORKER_MS } from '../src/lib/markdownLimits';
-import type { DocsFileAnswer, DocsLoaders, DocsRasterAnswer } from '../src/docs/failures';
+import type { DocsAnswer, DocsFileAnswer, DocsLoaders, DocsRasterAnswer } from '../src/docs/failures';
 import type { RangeLoader } from '../src/docs/range/readRange';
 import { parseMarkdown, type ParseOutcome } from '../src/lib/markdownParse';
 import { HighlighterContext } from '../src/lib/highlighterContext';
@@ -41,9 +42,13 @@ import { inThreadContext, inThreadHighlighter, syncTestStore, withSyncHighlight 
 const parser: MarkdownParser = async (src) => parseMarkdown(src, 'docs');
 
 /** The screen under the live location, as the app's `docs` arm mounts it (one mount across navigations). */
-function Routed(p: { readonly loaders: DocsLoaders; readonly parser?: MarkdownParser }): ReactNode {
+function Routed(p: {
+  readonly loaders: DocsLoaders;
+  readonly parser?: MarkdownParser;
+  readonly readSettings?: () => Promise<DocsAnswer<DocsSettingsResponse>>;
+}): ReactNode {
   const { path, search } = useLocation();
-  return <DocsScreen path={path} search={search} loaders={p.loaders} parser={p.parser ?? parser} />;
+  return <DocsScreen path={path} search={search} loaders={p.loaders} parser={p.parser ?? parser} readSettings={p.readSettings} />;
 }
 
 function open(url: string, f: FakeLoaders, withParser?: MarkdownParser): ReturnType<typeof render> {
@@ -349,6 +354,114 @@ function openIndex(): FakeLoaders {
 
 const mainRowNames = (): string[] =>
   [...document.querySelectorAll('.docs-index > .docs-rows .docs-row-name')].map((n) => n.textContent ?? '');
+
+const readSettingsWith = (defaultBranches: Record<string, string>) => vi.fn(async (): Promise<DocsAnswer<DocsSettingsResponse>> =>
+  ({ s: 'ok', value: { ok: true, settings: { rules: [], defaultBranches } } }));
+
+describe('project default branches (X2 P4.4, M11.37)', () => {
+  it.each([['preview', '?ref=preview'], [null, '']] as const)(
+    'index listing links use the configured ref (%s) or the Git default when unset', async (branch, query) => {
+      const f = fakeLoaders();
+      const answer = indexAnswer();
+      const project = answer.index.projects.find((row) => row.project === 'b')!;
+      project.newest = { specs: ['2026-06-01-guide.md'] };
+      f.projects.mockResolvedValue({ s: 'ok', value: answer });
+      const readSettings = readSettingsWith(branch === null ? {} : { b: branch });
+      navigate('/docs');
+      render(<Routed loaders={f.loaders} readSettings={readSettings} />);
+      const list = await screen.findByRole('list', { name: 'b: specs' });
+      await waitFor(() => expect(within(list).getByRole('link', { name: /^guide/ }))
+        .toHaveAttribute('href', '/docs/b/specs/2026-06-01-guide.md' + query));
+      expect(within(list).getByRole('link', { name: '11 more specs in b' })).toHaveAttribute('href', '/docs/b/specs' + query);
+      fireEvent.click(screen.getByText('b', { selector: '.docs-row-name' }));
+      expect(here()).toBe('/docs/b' + query);
+      expect(readSettings).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('a gone configured branch falls back by replace with a note, without redirecting other explicit refs', async () => {
+    const f = fakeLoaders();
+    f.tree.mockImplementation(async (_project, ref) => ref === null
+      ? okTree(treeOk({ entries: [entry('specs', 'a.md')] })) : failedAnswer('unresolved-ref'));
+    navigate('/docs/b/specs?ref=gone');
+    const before = history.length;
+    render(<Routed loaders={f.loaders} readSettings={readSettingsWith({ b: 'gone' })} />);
+    await waitFor(() => expect(here()).toBe('/docs/b/specs'));
+    expect(history.length).toBe(before);
+    expect(await screen.findByText('Configured branch gone is unavailable. Showing the Git default branch.')).toBeInTheDocument();
+    expect(f.tree.mock.calls.map(([, ref]) => ref)).toEqual([{ kind: 'bare', name: 'gone' }, null]);
+    act(() => { navigate('/docs/b/specs?ref=explicit'); });
+    await screen.findByText(DOCS_FAILURE_SENTENCE['unresolved-ref']);
+    expect(here()).toBe('/docs/b/specs?ref=explicit');
+    expect(screen.queryByText(/Configured branch gone is unavailable/)).toBeNull();
+  });
+});
+
+describe('legacy ref navigation (X2 P4.2)', () => {
+  const withLegacyHint = () => {
+    const f = fakeLoaders();
+    f.tree.mockImplementation(async (_project, ref) => ref === null
+      ? okTree(treeOk({ entries: [entry('specs', 'a.md'), entry('specs', 'group/b.md')] }))
+      : failedAnswer('unresolved-ref', { resolved: { commit: COMMIT_B, via: 'tag' } }));
+    f.file.mockResolvedValue(okFile('# Historical guide'));
+    return f;
+  };
+
+  it.each([[null, COMMIT_B], [COMMIT_A, COMMIT_A]])(
+    'replaces a legacy leaf ref with a full pin, preserving an explicit pin (%s)', async (at, expected) => {
+      const f = withLegacyHint();
+      navigate('/docs/demo/specs/a.md?ref=refs%2Ftags%2Frelease' + (at === null ? '' : `&at=${at}`) + '#historical-guide');
+      const before = history.length;
+      render(<Routed loaders={f.loaders} />);
+      await waitFor(() => expect(here()).toBe(`/docs/demo/specs/a.md?at=${expected}`));
+      expect(history.length).toBe(before);
+      expect(location.hash).toBe('#historical-guide');
+      expect(await screen.findByRole('heading', { name: 'Historical guide' })).toBeInTheDocument();
+      expect(f.file.mock.calls[0]?.[1]).toMatchObject({ kind: 'committed', commit: expected });
+    },
+  );
+
+  it.each([
+    ['/docs/demo', '/docs/demo'],
+    ['/docs/demo/specs', '/docs/demo/specs'],
+    ['/docs/demo/specs/group/', '/docs/demo/specs/group/'],
+    ['/docs/demo/specs/group', '/docs/demo/specs/group/'],
+  ])('replaces a legacy listing ref with the Git default at %s', async (from, to) => {
+    const f = withLegacyHint();
+    navigate(`${from}?ref=release`);
+    const before = history.length;
+    render(<Routed loaders={f.loaders} />);
+    await waitFor(() => expect(here()).toBe(to));
+    expect(history.length).toBe(before);
+    expect(screen.queryByText(/Configured branch/)).toBeNull();
+    expect(f.file).not.toHaveBeenCalled();
+  });
+
+  it.each(['?ref=refs/tags/release', `?at=${COMMIT_B}`])(
+    'a historical-only leaf shows the standing full-pin refusal after %s', async (query) => {
+      const f = withLegacyHint();
+      open(`/docs/demo/specs/renamed.md${query}`, f);
+      expect(await screen.findByText(`Not in this listing at ${COMMIT_A.slice(0, 8)}.`)).toBeInTheDocument();
+      expect(here()).toBe(`/docs/demo/specs/renamed.md?at=${COMMIT_B}`);
+      expect(f.file).not.toHaveBeenCalled();
+      expect(screen.queryByRole('heading', { name: 'Historical guide' })).toBeNull();
+    },
+  );
+
+  it('waits for settings before following a legacy hint whose name might be a missing configured branch', async () => {
+    const f = withLegacyHint();
+    let settle!: (answer: DocsAnswer<DocsSettingsResponse>) => void;
+    const pending = new Promise<DocsAnswer<DocsSettingsResponse>>((resolve) => { settle = resolve; });
+    navigate('/docs/demo/specs/a.md?ref=release');
+    render(<Routed loaders={f.loaders} readSettings={() => pending} />);
+    await act(async () => { await Promise.resolve(); });
+    expect(f.tree).toHaveBeenCalledTimes(1);
+    expect(here()).toBe('/docs/demo/specs/a.md?ref=release');
+    await act(async () => { settle(await readSettingsWith({ demo: 'release' })()); });
+    await waitFor(() => expect(here()).toBe('/docs/demo/specs/a.md'));
+    expect(await screen.findByText(/Configured branch release is unavailable/)).toBeInTheDocument();
+  });
+});
 
 describe('the index (spec 4.4, refinement (r))', () => {
   it('says what it lists, then ready rows by name, then the rest by name; no-docs projects fold under one line', async () => {

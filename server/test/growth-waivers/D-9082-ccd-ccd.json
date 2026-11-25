@@ -1,6 +1,6 @@
 {
   "file": "ccd/ccd",
-  "maxDelta": 63,
+  "maxDelta": 84,
   "d": "D-9082",
   "reason": "X2 P4 (D-9082): the docs index's newest names and the old ref spellings in the docs helper, which spec 2026-11-18 sections 5.1 and 5.3 place in ccd beside the listing and the resolver, plus P2's carry R2 (the registry directory gone at the lock open). P4.1 takes the newest names from the one ls-tree the counts already read and trims them at the listing wire cap; P4.2 adds the tag, refs/tags and short-commit rungs beside the branch rungs of the resolver, sharing its lookups, peel and refusal shape. maxDelta is re-set at the tip to the measured figure plus at most 10",
   "added": "2026-11-25",

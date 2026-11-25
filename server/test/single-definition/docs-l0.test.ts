@@ -468,3 +468,21 @@ describe('logLineRedactors() equals [ccd/ccrc#_upd_redact], may only shrink (C5i
     expect(c5iInlineUserinfoStrips().map((s) => s.name)).toEqual([]);
   });
 });
+
+// X2 P4.4, M11.23: repository defaults are empty; no tenant or tracker address ships in these three source roots.
+// The PWA test package checks the dependency's defaults with this same scanner, since server CI installs no PWA deps.
+import { EMPTY_DOCS_SETTINGS } from '../../../shared/docsTracker.js';
+import { containsTrackerAddress, trackerAddressFiles } from './docsTrackerHostScan.js';
+
+describe('Docs tracker defaults (X2 P4.4)', () => {
+  it('CONTROL: finds a hard-coded issue URL and a template; permits an unrelated link', () => {
+    expect(containsTrackerAddress('const link = "https://tracker-fixture.invalid/browse/EXAMPLE-1";')).toBe(true);
+    expect(containsTrackerAddress('const template = "https://tracker-fixture.invalid/path/{1}";')).toBe(true);
+    expect(containsTrackerAddress('const web = "https://project-fixture.invalid/docs/readme";')).toBe(false);
+  });
+
+  it('no tracker host in pwa/src, server/src or shared, and no default rule', () => {
+    expect(EMPTY_DOCS_SETTINGS).toEqual({ rules: [], defaultBranches: {} });
+    expect(trackerAddressFiles(ccrcRoot, ['pwa/src', 'server/src', 'shared'])).toEqual([]);
+  });
+});
