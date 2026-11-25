@@ -253,7 +253,7 @@
   "server/src/continuity/renewalReadings.ts#accountLoadOf": 1,
   "server/src/continuity/renewalReadings.ts#accountLoadMoveOf": 1,
   "server/src/continuity/renewalReadings.ts#overlordCandidatesOf": 1,
-  "server/src/continuity/renewalReadings.ts#boundCandidates": 1,
+  "server/src/continuity/renewalReadings.ts#unboundCandidates": 1,
   "server/src/continuity/renewalReadings.ts#designatedClassAtMint": 1,
   "server/src/continuity/renewalReadings.ts#probesFailedTwiceOf": 1,
   "server/src/continuity/renewalReadings.ts#notLocalOf": 1,

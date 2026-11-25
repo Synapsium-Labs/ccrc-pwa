@@ -27,8 +27,15 @@
 // roster account's `laneFactsOf`) and the candidates `overlordCandidatesOf` builds from them and the designation. Once a pass per
 // Overlord session: ccd's `pool-answer`, through the body adapter's one composer (`ccdPoolAnswer`, behind `ccdCan`). The mappers
 // (`renewalReadings.ts`) decide; this file only reads. The holds are `'not-wired'` until PR H. A coordinator gets none of the three.
-// These reads are the producers' own readers, called here rather than handed in from the watcher's tick (no `watch.ts` line): a
-// pass that judges an Overlord generation pays one limits read and one shares read of its own.
+// The designation is read first: when it is not this session's live binding, or is unreadable (`unboundCandidates`), the three
+// answer from it alone, and neither the facts nor the pool answer is read (fix round 1, I).
+//
+// A SECOND LIMITS READER, LEGITIMATELY DIFFERENT (fix round 1, A): the tick reads the limits once and publishes them
+// (`FleetWatcher.currentLimits`), but `sweepGenerations` runs before that read in the same tick, so the tick's own reading would be
+// the previous tick's or none. So the wiring calls the producer's own reader (`readLimits`), as the request-time callers in
+// `server.ts` do, and the shares read, which has no tick owner, the same way. From the merge these reads, the edges read and the
+// pool answer run on every tick, in shadow too, for a generation of the Overlord's role that the designation binds; their cost on
+// the fleet box is not measured (the plan's question 8 stays open).
 //
 // THE LATCH (PR C, Task 6). `latch` is the pass's `GenerationsDeps.latch`: the ladder's one delivery-facing raise
 // (`overlordLadderRead.ts#raiseLatch`), which takes the cap from the cause row, raised by the renewal lane (`laneRaiser`). The
@@ -65,7 +72,7 @@ import {
   backstopDueOf, classChangedOf, fittedCeilingOf, notLocalAskOf, notLocalOf, termRaisedOf, type AbsenceProbe, type Carrier, type SpotsRead, type TranscriptAsk,
   type W1Inputs,
 } from './renewalReadings.js';
-import { accountLoadMoveOf, accountLoadOf, accountOutsideSetOf, boundCandidates, classUnservableOf, overlordCandidatesOf } from './renewalReadings.js';
+import { accountLoadMoveOf, accountLoadOf, accountOutsideSetOf, classUnservableOf, overlordCandidatesOf, unboundCandidates } from './renewalReadings.js';
 import { modelDriftReadingOf, readersRunningReadingOf } from './renewalReadings.js';
 import type { Reading } from './renewalDue.js';
 
@@ -219,23 +226,33 @@ export function renewalReadingsOf(deps: ReadingsDeps, coord: ReadingsCoord, reco
     if (p === undefined) { p = r.poolAnswer(id); poolAnswers.set(id, p); }
     return p;
   };
-  /** The three account readings of one Overlord generation (PR D, Task 7), each in its own catch. */
+  /** The three account readings of one Overlord generation (PR D, Task 7), each in its own catch. The designation first: when it
+   *  answers alone (`unboundCandidates`), each mapper is handed that answer and nothing else is read. The pool answer is then
+   *  `not-run`, as it was, and the facts unread; each mapper answers from the designation before it consults either. */
   const accountReadings = async (w1: Partial<W1Inputs>, g: GenRow, base: GenReadings, r: AccountReads,
     edges: NonNullable<ReadingsCoord['accountPoolEdges']>): Promise<void> => {
-    const bound = async (): Promise<{ f: AccountFacts; c: Candidates }> => {
+    const early = (): Candidates | null => unboundCandidates(designation ??= coord.designationRead(), g.sessionId);
+    const live = async (): Promise<{ f: AccountFacts; c: Candidates }> => {
       const f = await factsOf(r, edges);
-      return { f, c: boundCandidates(designation ??= coord.designationRead(), g.sessionId, await candidatesOf(f)) };
+      return { f, c: await candidatesOf(f) };
     };
+    const nowS = (): number => Math.floor(deps.time.clock.wall() / 1000);
     await fieldAsync(w1, 'accountOutsideSet', 'account set', async () => {
-      const [{ c }, answer] = await Promise.all([bound(), poolAnswerOf(r, g.sessionId)]);
+      const e = early();
+      if (e !== null) return accountOutsideSetOf({ kind: 'not-run' }, e, 'not-wired');
+      const [{ c }, answer] = await Promise.all([live(), poolAnswerOf(r, g.sessionId)]);
       return accountOutsideSetOf(answer, c, 'not-wired');
     });
     await fieldAsync(w1, 'classUnservable', 'class serviceability', async () => {
-      const { f, c } = await bound();
+      const e = early();
+      if (e !== null) return classUnservableOf({ account: g.lane, model: g.model, own: undefined }, e, nowS());
+      const { f, c } = await live();
       return classUnservableOf({ account: g.lane, model: g.model, own: g.lane === null ? undefined : f.lanes[g.lane] }, c, f.nowS);
     });
     await fieldAsync(w1, 'accountLoadMove', 'account load', async () => {
-      const { f, c } = await bound();
+      const e = early();
+      if (e !== null) return accountLoadMoveOf(accountLoadOf(g.lane, e, nowS()), base.turn);
+      const { f, c } = await live();
       return accountLoadMoveOf(accountLoadOf(g.lane, c, f.nowS), base.turn);
     });
   };

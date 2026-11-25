@@ -62,7 +62,7 @@ describe('accountLoadMoveOf (PR D, the idle half)', () => {
   for (const [name, fn] of Object.entries(ACCOUNT_READING_CASES.loadMoveCases(readings))) it(name, fn);
 });
 
-describe('overlordCandidatesOf and boundCandidates (PR D)', () => {
+describe('overlordCandidatesOf and unboundCandidates (PR D)', () => {
   for (const [name, fn] of Object.entries(ACCOUNT_READING_CASES.candidatesCases(readings))) it(name, fn);
 });
 

@@ -11,8 +11,8 @@
 // class a generation is minted under (`designatedClassAtMint`) and the `probes-failed-twice` latch's decider
 // (`probesFailedTwiceOf`). PR B: `notLocalOf`, from the transcript resolver's answer on the host that runs the session, and
 // `notLocalAskOf`, what that reading asks the resolver about. PR D: the account readings, `accountOutsideSetOf`,
-// `classUnservableOf`, `accountLoadOf` with `accountLoadMoveOf`, over the candidates `overlordCandidatesOf` builds once a pass and
-// `boundCandidates` binds to one generation. The later pull requests of the plan add the other mappers here.
+// `classUnservableOf`, `accountLoadOf` with `accountLoadMoveOf`, over the candidates `overlordCandidatesOf` builds once a pass, or
+// those `unboundCandidates` answers from the designation alone. The later pull requests of the plan add the other mappers here.
 //
 // IMPORTS ACROSS CONTEXTS (PR D, plan Task 7): L1 into L1 only, each a producer's own decider, never re-derived. C1's
 // `server/src/poolrule.ts` (the pool answer's parsed type) and `server/src/accountLoad.ts` (serviceability B: the candidates, the
@@ -314,10 +314,14 @@ export function overlordCandidatesOf(d: DesignationRead, f: AccountFacts): Candi
   return overlordLoadCandidates(d, d.kind === 'designated' ? overlordAccounts(d.row.accountPools, d.row.model, f).list : [], f);
 }
 
-/** The pass's candidates for one generation: a designation that is not this session's (`boundTo`, the one reader of the binding
- *  that `termRaisedOf` reads too) does not apply to it, so a rebind reads as no designation. */
-export function boundCandidates(d: DesignationRead, sessionId: string, c: Candidates): Candidates {
-  return boundTo(d, sessionId) === false ? { kind: 'not-designated' } : c;
+/** The candidates for one generation when the designation alone answers, or null when it is this session's live binding and the
+ *  facts and the pool answer must be read (fix round 1, I: the designation is checked first, so no read is made for a generation
+ *  the rows do not apply to). Not this session's (`boundTo`, the one reader of the binding that `termRaisedOf` reads too: no
+ *  designation, a pending one, or a rebind): `not-designated`. Unreadable: unmeasured. */
+export function unboundCandidates(d: DesignationRead, sessionId: string): Candidates | null {
+  const b = boundTo(d, sessionId);
+  if (b === false) return { kind: 'not-designated' };
+  return b.kind === 'unmeasured' ? { kind: 'unmeasured', why: 'designation-unreadable' } : null;
 }
 
 /** The account holds (`overlord_account_holds`, PR H) as this reading takes them, or why they are unread. */
@@ -336,8 +340,10 @@ const isSetSide = (side: string): boolean => side.startsWith('set:') || side ===
  *  3. the answer's account held (`holds`): outside the set, to rule 8 (F7);
  *  4. `serve`, and 6. `mismatch` over a crossing that stands: measured false, unless the holds are unread, which might decide;
  *  5. `undecidable`: unmeasured with the pool state; 7. the crossing unreadable: unmeasured;
- *  8. outside the set (`mismatch` with crossing `none`, or held): any candidate unmeasured, unmeasured (F5); one serving, true;
- *     none serving, false (nothing to land on: `stranded`, slug account-triggers-need-a-servable-account). */
+ *  8. outside the set (`mismatch` with crossing `none`, or held): the candidates other than the answer's own account decide (fix
+ *     round 1, D: as the other two readings leave the session's account out; slug outside-set-leaves-its-own-account-out). Any
+ *     unmeasured, unmeasured (F5); one serving, true; none serving, false (nothing to land on: `stranded`, slug
+ *     account-triggers-need-a-servable-account). */
 export function accountOutsideSetOf(a: PoolAnswerRead, c: Candidates, holds: Holds | 'not-wired'): Reading<boolean> {
   if (c.kind === 'not-designated') return { kind: 'measured', value: false };
   if (c.kind === 'unmeasured') return unmeasured('designation unreadable');
@@ -356,8 +362,9 @@ export function accountOutsideSetOf(a: PoolAnswerRead, c: Candidates, holds: Hol
     if (a.answer.verdict === 'undecidable') return unmeasured(`undecidable: ${a.answer.poolState}`);
     if (a.answer.crossing === 'unreadable') return unmeasured('crossing unreadable');
   }
-  if (c.list.some((x) => x.serves === 'unmeasured')) return unmeasured('a candidate unmeasured');
-  return { kind: 'measured', value: c.list.some((x) => x.serves === 'yes') };
+  const elsewhere = c.list.filter((x) => x.id !== a.answer.account);
+  if (elsewhere.some((x) => x.serves === 'unmeasured')) return unmeasured('a candidate unmeasured');
+  return { kind: 'measured', value: elsewhere.some((x) => x.serves === 'yes') };
 }
 
 /** The account the generation runs on, as `classUnservableOf` reads it: its id (the generation's lane), the model it runs (the

@@ -28,18 +28,25 @@ Three readings of the Overlord's generation leave `W1` and become measured. They
   reads idle" (`state !== 'working'`) by Kleene's and. A measured busy session reads `false`. A load that is not due reads
   `false`. An unread marker beside a due load reads unmeasured, naming the marker.
 - **`overlordCandidatesOf(designation, facts)`** builds the candidates once a pass: designation A's `overlordAccounts`
-  list under serviceability B's `overlordLoadCandidates`. **`boundCandidates(designation, sessionId, candidates)`** binds
-  them to one generation, and a designation bound to another session (a rebind) does not apply.
+  list under serviceability B's `overlordLoadCandidates`. **`unboundCandidates(designation, sessionId)`** answers from the
+  designation alone: `not-designated` when it is not this session's live binding (none, a pending one, or a rebind),
+  unmeasured when it is unreadable, and null only for this session's live binding, when the facts must be read.
 - Every mapper checks the designation first. With no designation, all three read measured `false`. With the designation
-  unreadable, all three read unmeasured `designation unreadable`.
+  unreadable, all three read unmeasured `designation unreadable`. In the outside-the-set rule, the answer's own account is
+  left out of the candidates that decide, as the other two readings leave it out (fix round 1, D).
 - **The wiring** (`renewalReadingsWiring.ts`) does this for the Overlord's generation only:
-  - Once a pass, it reads the account facts: the roster, `readLimits`, `readSharesMeasured`, the store's central pool edges
-    and `laneFactsOf` for each roster account. It builds the candidates from those facts once.
-  - Once a pass for each Overlord session, it asks for the pool answer through the body adapter's composer, behind
-    `ccdCan(state, 'poolAnswer')`.
-  - Each reading runs inside its own catch. A read that fails makes only that field unmeasured `<reading> read failed`,
-    logged once per pass (F17).
-  - A coordinator gets none of the three. With no runner, io, roster or store edges, the three keep the lane's `W1`.
+  - It reads the designation first. When it is not this session's live binding, or is unreadable, the three answer from it
+    alone, and neither the facts nor the pool answer is read (fix round 1, I).
+  - Otherwise, once a pass, it reads the account facts: the roster, `readLimits`, `readSharesMeasured`, the store's central
+    pool edges and `laneFactsOf` for each roster account, and builds the candidates from them.
+  - Once a pass for each Overlord session the designation binds, it asks for the pool answer through the body adapter's
+    composer, behind `ccdCan(state, 'poolAnswer')`.
+  - Each reading runs inside its own catch, logged once per pass (F17). A read the three share fails all three: a facts
+    read that throws makes each of them unmeasured `<reading> read failed`, not only one (fix round 1, O).
+  - A coordinator gets none of the three. With no store edges, or with no runner, no io or no config to build the reads
+    from, the three keep the lane's `W1`. A missing roster does not keep `W1`: with reads handed in and no roster, the facts
+    read throws and the three read failed (fix round 1, G). `CcrcConfig.roster` is required by its type, so production cannot
+    reach that case.
 
 ## Where `main` differed from the plan
 
@@ -49,10 +56,12 @@ Three readings of the Overlord's generation leave `W1` and become measured. They
   was built as the plan says, in `accountLoadOf`: a `false` beside any unmeasured other reads unmeasured. It is one owner's
   rule held on the consumer's side until serviceability B reads that case as unmeasured itself (the plan's index change).
   When that lands, this guard's line should go.
-- **No `watch.ts` line.** The wiring already receives the watcher's `io`, `cfg`, `runCcd` and `fleetState` (the deps
-  spread in `sweepGenerations`). So it calls the producers' own readers (`readLimits`, `readSharesMeasured`) instead of
-  taking the tick's limits from the watcher. The cost is one limits read and one shares read of its own on a pass that
-  judges an Overlord generation. No packet to the holder of `watch.ts` was needed.
+- **No `watch.ts` line, and a second limits reader, legitimately different (fix round 1, A).** The tick reads the limits
+  once and publishes them (`FleetWatcher.currentLimits`), but `sweepGenerations` runs before that read in the same tick,
+  so the tick's own reading would be the previous tick's, or none on the first. So the wiring calls the producer's own
+  reader (`readLimits`), as the request-time callers in `server.ts` do, and the shares read, which has no tick owner, the
+  same way. The wiring already receives the watcher's `io`, `cfg`, `runCcd` and `fleetState` (the deps spread in
+  `sweepGenerations`), so no packet to the holder of `watch.ts` was needed. The reason is in the wiring's header too.
 - **The pool-answer read reuses the body adapter's composer.** `overlordBody.ts`'s `poolAnswer` was a closure. It is now
   the exported `ccdPoolAnswer(ran, state, id)`, and the body and the wiring each call it. The body's catch-all runner is
   the exported `bodyRunner`, which the body now builds its own `ran` from. So there is one composer, one capability check,
@@ -70,19 +79,22 @@ Three readings of the Overlord's generation leave `W1` and become measured. They
 | `account-load-split-into-load-and-move` | The plan's `accountLoadMoveOf(load, others, turn)` is two L1 functions: `accountLoadOf(account, candidates, nowS)` (the not-a-candidate rule and the F5 guard) and `accountLoadMoveOf(load, turn)` (the idle half). The plan put "not a candidate" in the wiring. It is a decision, so it belongs in L1. |
 | `class-unservable-takes-the-lane-facts` | `classUnservableOf(on, candidates, nowS)` takes the account's lane facts, not a ready `Serviceability`. Calling `serviceability` is the decision, so it stays in L1. It also needs the account's id to tell this account from the others. |
 | `account-readings-candidates-built-in-l1` | `overlordCandidatesOf` composes designation A's `overlordAccounts` with serviceability B's `overlordLoadCandidates`, the same composition `loadLineReading` makes inline. So `renewalReadings.ts` also imports `coord/overlordDesignation.ts` (C5, L1), beside the plan's `poolrule.ts` and `accountLoad.ts` (C1, L1). All three are named in the module's header. |
-| `rebind-reads-the-account-rows-false` | A designation bound to another session makes the three read measured `false` for this generation, as `termRaisedOf` reads a rebind. The plan did not say. `boundCandidates` asks the module's existing `boundTo`, so no new session comparison enters the run/session census. |
+| `rebind-reads-the-account-rows-false` | A designation bound to another session makes the three read measured `false` for this generation, as `termRaisedOf` reads a rebind. The plan did not say. `unboundCandidates` asks the module's existing `boundTo`, so no new session comparison enters the run/session census. |
 | `designation-checked-before-the-pool-answer` | In each mapper, the designation's arms come before rule 1. This follows Step 1's cases: no designation reads `false` and an unreadable designation reads unmeasured, whatever the pool answer. |
 | `account-reads-from-the-wiring-not-watch` | See "No `watch.ts` line" above. |
 | `pool-answer-composer-shared-with-the-body` | See the body adapter above. |
 | `watcher-port-gains-account-pool-edges` | See `WatcherCoordMember` above. The plan's index row said "others 0". |
+| `outside-set-leaves-its-own-account-out` | Fix round 1, D. Rule 8 counts only the candidates other than the answer's own account, as `classUnservableOf` and `accountLoadOf` leave the session's account out. The plan excludes only a held account. Without it, while the server's set and ccd's answer disagree (up to the pool sync's lag), the session's own serving account would make the reading due and cost a refused renewal on every pass. |
+| `account-reads-wait-for-the-designation` | Fix round 1, I. The designation is read before anything else; when `unboundCandidates` answers, no pool answer, edges, limits or shares are read. `boundCandidates` became `unboundCandidates`. |
 | `load-move-guards-the-unmeasured-other` | The F5 guard, as built. It is blind in one more case than it needs to be: a current account with a fresh load under the hard line reads `false` on the producer's own terms, but beside an unmeasured other it reads unmeasured here, because the mapper sees only the producer's answer. A blind hard row never fires, so the cost is a missed renewal and never a false one. It goes away with serviceability B's fix. |
 
 ## Mutation table
 
 **Before:** each set's baseline (the real module) passes its suite. `mutation-floors.test.ts` refuses a set whose baseline
 fails. **After:** each mutant below is applied in memory by the floors harness, and each one is killed. The six new sets
-are at floor 1 (every mutant killed), measured green in `test/sim/mutation-floors.test.ts`. The floor keys were added and
-no floor was lowered.
+(33 mutants after fix round 1) are at floor 1 (every mutant killed), measured green in `test/sim/mutation-floors.test.ts`.
+The floor keys were added and no floor was lowered; the key `boundCandidates`, added in this PR, is now
+`unboundCandidates`.
 
 | Set | Mutant | Killed by (one of) |
 |---|---|---|
@@ -97,6 +109,9 @@ no floor was lowered.
 | | O9 no set read as a set | "a project word on the route record" |
 | | O10 not designated read as applying | "with no designation the row does not apply" |
 | | O11 an answer not run read as serve | "not run, refused and unparsed…" |
+| | O12 the answer's own account counted (fix round 1, D) | "D: the answer's own account is never a candidate…" |
+| | O13 the mismatch conjunct dropped (fix round 1, E) | "E: an undecidable verdict beside a crossing that stands…" |
+| | O14 a held account held to the unreadable crossing (fix round 1, H-b) | the F7 case |
 | `classUnservableOf` | U1 the servable-account check dropped | "no other candidate serves: not due" |
 | | U2 an unmeasured other folded (F5) | the F5 case |
 | | U3 this account counted as another | the F5 case's second line |
@@ -108,12 +123,14 @@ no floor was lowered.
 | | L2 the current account counted among the others | "this account's own serves word is not an other's" |
 | | L3 not a candidate read as not due | "an account not among the candidates…" |
 | | L4 not designated read as unmeasured | "no designation: measured false" |
+| | L5 the guard holds a due load too (fix round 1, H-a) | "H-a: the guard holds only a false…" |
 | `accountLoadMoveOf` | M1 the idle conjunct dropped | "a measured busy session is not due" |
 | | M2 an unread marker read as idle | "an unread marker with a due load" |
 | | M3 a failed turn read as busy | "a due load on an idle session is due" |
 | | M4 the unmeasured load preferred to a measured busy | "a measured busy session is not due" |
 | `overlordCandidatesOf` | C1 the ordered list not asked | "the designated set's accounts, in order" |
-| `boundCandidates` | B1 a rebind read as this session's | "bound to this session…; to another session…" |
+| `unboundCandidates` | B1 not this session's read as a live binding | "the designation alone answers unless…" |
+| | B2 an unreadable designation read as a live binding | "the designation alone answers unless…" |
 
 **The plan's six (Step 5), also measured by hand** on the real file. Each mutation was applied to
 `renewalReadings.ts`, `continuity-renewal-readings.test.ts` was run alone, and the file was restored. Before: 107 of 107
@@ -136,12 +153,31 @@ for each of these:
 - the account readings moved outside the Overlord-only gate (a coordinator gets them);
 - the rebind binding skipped.
 
+### Fix round 1 (review 3797, call 1187): red before, red after
+
+Each point is a case that passes on the fix round's code (readings suite 110 of 110, wiring suite 48 of 48), measured red by
+hand with its guard removed or its old behaviour put back, each file run alone and restored after:
+
+| Point | Mutation applied | Case red |
+|---|---|---|
+| F | the store's edges read not bound to the store (`.bind(coord)` dropped) | the real-store case (a real `CoordStore` on a fixture database, its designation and a central edge seeded) |
+| E | the `verdict === 'mismatch'` conjunct dropped | "E: an undecidable verdict beside a crossing that stands…" |
+| H-a | the F5 guard's `!load.value` dropped | "H-a: the guard holds only a false…" |
+| H-b | the unreadable-crossing rule hoisted above the held check | the F7 case, its new unreadable-crossing line |
+| G | the reads built with no io; the reads built with no config | the case for no edges, no runner, no io or no config (both) |
+| D | the answer's own account counted again (the round-1 code) | "D: the answer's own account is never a candidate…" |
+| I | the reads started before the designation's answer (the round-1 order) | "the designation first…", whose reads must be zero |
+
+E, H-a, H-b and D also have mutants in the floors sets (O13, L5, O14, O12).
+
 ## What arms when this merges
 
 The three readings change only the due record and `blind`, which the generations lane writes in shadow and live alike.
 The renewal acts run only when the `continuity` row on the Shadow lanes card (`lane_arm_settings`, seeded `shadow`) is
 Live and the box's ccd can renew (`canRenew`). With that row in shadow, nothing acts on the box: the Overlord's shadow walk
-only records the would-be state. With it Live, the Overlord's generation can now become due on `account-outside-set`,
+only records the would-be state. The reads themselves run from the merge, on every tick, in shadow too: for a generation
+of the Overlord's role that the designation binds, one pool-answer exec, one limits read, one shares read and one edges
+read per pass (fix round 1, I). With the row Live, the Overlord's generation can now become due on `account-outside-set`,
 `class-unservable` or `account-load`, and the renewal act drains it at its next turn end and renews it. Coordinators are
 unchanged.
 
@@ -188,7 +224,10 @@ Both fixes were run alone afterwards: `verb-gate` 25 passed, `run-session-census
 
 ## Known limits
 
-- The pool answer's cost per pass on the fleet box (plan question 8) was not measured on the fleet box. It is one ccd
-  read per pass for each Overlord session, plus the one limits read and the one shares read above.
+- The cost of these reads per pass on the fleet box (plan question 8) was not measured there; the question stays open, and
+  the coordinator carries it. They run on every tick from the merge, in shadow too.
+- The account-facts assembly (roster, limits, shares, edges, `laneFactsOf` per account) is a third copy beside
+  `coord/overlordRoutes.ts`'s `accountFactsOf` and `accountLoad.ts`'s `loadFactsOf` (fix round 1, L); its consolidation is
+  carried as a ticket.
 - The F5 load guard is broader than it needs to be (see `load-move-guards-the-unmeasured-other`).
 - The holds stay `'not-wired'` until PR H.

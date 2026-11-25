@@ -84,6 +84,10 @@ function outsideSetCases(m: RenewalReadingsModule): Record<string, SuiteCase> {
       expect(m.accountOutsideSetOf(SET_UNREAD, SERVING, 'not-wired')).toEqual(unmeasured('undecidable: unreadable'));
       expect(m.accountOutsideSetOf(STALE, SERVING, 'not-wired')).toEqual(unmeasured('undecidable: stale'));
     },
+    'E: an undecidable verdict beside a crossing that stands is undecidable, never the crossing\'s false (rule 5 before rule 6)': () => {
+      expect(m.accountOutsideSetOf(line('set:pool-a', 'undecidable', 'account', 'stale', 'valid'), SERVING, 'not-wired'))
+        .toEqual(unmeasured('undecidable: stale'));
+    },
     'a crossing that stands is not due (the operator\'s move stands until the next renewal)': () => {
       expect(m.accountOutsideSetOf(CROSSED, SERVING, 'not-wired')).toEqual(FALSE);
     },
@@ -92,7 +96,7 @@ function outsideSetCases(m: RenewalReadingsModule): Record<string, SuiteCase> {
     },
     'F7: the answer\'s account held is outside the set, whatever the verdict': () => {
       const held = { ok: true as const, lanes: ['lane-a'] };
-      for (const a of [SERVE, CROSSED, STALE]) expect(m.accountOutsideSetOf(a, SERVING, held)).toEqual(TRUE);
+      for (const a of [SERVE, CROSSED, STALE, CROSSING_UNREAD]) expect(m.accountOutsideSetOf(a, SERVING, held), JSON.stringify(a)).toEqual(TRUE);
       expect(m.accountOutsideSetOf(SERVE, cands(cand('lane-b', 'at-ceiling')), held)).toEqual(FALSE);
     },
     'holds read that do not name the account leave a served answer measured': () => {
@@ -108,6 +112,10 @@ function outsideSetCases(m: RenewalReadingsModule): Record<string, SuiteCase> {
       expect(m.accountOutsideSetOf(OUTSIDE, cands(cand('lane-b', 'yes'), cand('lane-c', 'unmeasured')), 'not-wired'))
         .toEqual(unmeasured('a candidate unmeasured'));
       expect(m.accountOutsideSetOf(OUTSIDE, cands(cand('lane-c', 'unmeasured')), 'not-wired')).toEqual(unmeasured('a candidate unmeasured'));
+    },
+    'D: the answer\'s own account is never a candidate to land on, serving or unmeasured': () => {
+      expect(m.accountOutsideSetOf(OUTSIDE, cands(cand('lane-a', 'yes'), cand('lane-b', 'at-ceiling')), 'not-wired')).toEqual(FALSE);
+      expect(m.accountOutsideSetOf(OUTSIDE, cands(cand('lane-a', 'unmeasured'), cand('lane-b', 'yes')), 'not-wired')).toEqual(TRUE);
     },
     'outside the set with none serving is not due (nothing to land on: stranded)': () => {
       expect(m.accountOutsideSetOf(OUTSIDE, cands(cand('lane-b', 'at-ceiling'), cand('lane-c', 'at-ceiling')), 'not-wired')).toEqual(FALSE);
@@ -127,8 +135,8 @@ const OUTSIDE_SET_SET: MutantSet<RenewalReadingsModule> = {
     // F1: "has a set" read from the side the verdict was decided on, not the session's side word.
     { id: 'O1 poolSide tested for the set', old: 'const hasSet = isSetSide(a.answer.side);', new: "const hasSet = a.answer.poolSide === 'set';" },
     { id: 'O2 crossing none read as valid', old: "a.answer.crossing === 'valid'", new: "a.answer.crossing !== 'unreadable'" },
-    { id: 'O3 the servable-account check dropped', old: "c.list.some((x) => x.serves === 'yes')", new: 'true' },
-    { id: 'O4 an unmeasured candidate folded into none serving', old: "  if (c.list.some((x) => x.serves === 'unmeasured')) return unmeasured('a candidate unmeasured');\n", new: '' },
+    { id: 'O3 the servable-account check dropped', old: "elsewhere.some((x) => x.serves === 'yes')", new: 'true' },
+    { id: 'O4 an unmeasured candidate folded into none serving', old: "  if (elsewhere.some((x) => x.serves === 'unmeasured')) return unmeasured('a candidate unmeasured');\n", new: '' },
     { id: 'O5 the held check dropped', old: 'const held = holds !== \'not-wired\' && holds.ok && holds.lanes.includes(a.answer.account);', new: 'const held = false;' },
     { id: 'O6 unread holds read as none', old: "if (holds !== 'not-wired' && !holds.ok) return unmeasured(`holds unread: ${holds.detail}`);", new: '' },
     { id: 'O7 undecidable read as serve', old: "  if (a.answer.verdict === 'undecidable') return unmeasured(`undecidable: ${a.answer.poolState}`);\n", new: '' },
@@ -136,6 +144,10 @@ const OUTSIDE_SET_SET: MutantSet<RenewalReadingsModule> = {
     { id: 'O9 no set read as a set', old: "  if (!hasSet) return unmeasured('no set on the route record');\n", new: '' },
     { id: 'O10 not designated read as applying', old: "  if (c.kind === 'not-designated') return { kind: 'measured', value: false };\n  if (c.kind === 'unmeasured') return unmeasured('designation unreadable');\n  if (a.kind", new: "  if (c.kind === 'unmeasured') return unmeasured('designation unreadable');\n  if (a.kind" },
     { id: 'O11 an unread pool answer read as serve', old: "  if (a.kind === 'not-run') return unmeasured('pool answer not run');\n", new: "  if (a.kind === 'not-run') return { kind: 'measured', value: false };\n" },
+    // Fix round 1 (review 3797 D, E, H-b).
+    { id: 'O12 the answer\'s own account counted as a candidate', old: 'const elsewhere = c.list.filter((x) => x.id !== a.answer.account);', new: 'const elsewhere = c.list;' },
+    { id: 'O13 the mismatch conjunct dropped from a standing crossing', old: "(a.answer.verdict === 'mismatch' && a.answer.crossing === 'valid')", new: "(a.answer.crossing === 'valid')" },
+    { id: 'O14 a held account held to the unreadable crossing', old: "  const held = holds !== 'not-wired'", new: "  if (a.answer.crossing === 'unreadable') return unmeasured('crossing unreadable');\n  const held = holds !== 'not-wired'" },
   ],
   suite: outsideSetCases,
 };
@@ -217,6 +229,10 @@ function accountLoadCases(m: RenewalReadingsModule): Record<string, SuiteCase> {
       expect(m.accountLoadOf('lane-a', cands(cand('lane-a', 'yes', lim(90)), cand('lane-b', 'yes', lim(75)), cand('lane-c', 'unmeasured')), NOW_S))
         .toEqual(unmeasured('a candidate unmeasured'));
     },
+    'H-a: the guard holds only a false: a due load beside an unmeasured other stays due': () => {
+      expect(m.accountLoadOf('lane-a', cands(cand('lane-a', 'yes', lim(90)), cand('lane-b', 'yes', lim(40)), cand('lane-c', 'unmeasured')), NOW_S))
+        .toEqual(TRUE);
+    },
     'this account\'s own serves word is not an other\'s: an unmeasured current account does not trip the guard': () => {
       expect(m.accountLoadOf('lane-a', cands(cand('lane-a', 'unmeasured', lim(90)), cand('lane-b', 'yes', lim(75))), NOW_S)).toEqual(FALSE);
     },
@@ -241,6 +257,7 @@ const ACCOUNT_LOAD_SET: MutantSet<RenewalReadingsModule> = {
     { id: 'L1 the F5 guard dropped', old: "  if (load.kind === 'measured' && !load.value && others.some((x) => x.serves === 'unmeasured')) return unmeasured('a candidate unmeasured');\n", new: '' },
     { id: 'L2 the current account counted among the others', old: 'const others = c.list.filter((x) => x !== current);', new: 'const others = c.list;' },
     { id: 'L3 an account not a candidate read as not due', old: "  if (current === undefined) return unmeasured('account not a candidate');\n", new: "  if (current === undefined) return { kind: 'measured', value: false };\n" },
+    { id: 'L5 the guard holds a due load too (review 3797 H-a)', old: "load.kind === 'measured' && !load.value && others.some", new: "load.kind === 'measured' && others.some" },
     { id: 'L4 not designated read as unmeasured', old: "  if (c.kind === 'not-designated') return { kind: 'measured', value: false };\n  if (c.kind === 'unmeasured') return unmeasured('designation unreadable');\n  if (account === null)", new: "  if (c.kind === 'not-designated') return unmeasured('designation unreadable');\n  if (c.kind === 'unmeasured') return unmeasured('designation unreadable');\n  if (account === null)" },
   ],
   suite: accountLoadCases,
@@ -308,12 +325,12 @@ function candidatesCases(m: RenewalReadingsModule): Record<string, SuiteCase> {
       expect(m.overlordCandidatesOf({ kind: 'not-designated', row: null }, FACTS({}))).toEqual({ kind: 'not-designated' });
       expect(m.overlordCandidatesOf({ kind: 'unmeasured', why: 'locked' }, FACTS({}))).toEqual({ kind: 'unmeasured', why: 'designation-unreadable' });
     },
-    'bound to this session: the candidates; to another session (a rebind): the row does not apply': () => {
-      const c = cands(cand('lane-a', 'yes'));
-      expect(m.boundCandidates(BOUND, 'lane-a-project-a', c)).toBe(c);
-      expect(m.boundCandidates({ ...BOUND, sessionId: 'lane-b-project-a' } as DesignationRead, 'lane-a-project-a', c)).toEqual({ kind: 'not-designated' });
-      expect(m.boundCandidates({ kind: 'not-designated', row: VIEW() }, 'lane-a-project-a', NOT_DESIGNATED)).toEqual(NOT_DESIGNATED);
-      expect(m.boundCandidates({ kind: 'unmeasured', why: 'x' }, 'lane-a-project-a', DESIGNATION_UNREAD)).toEqual(DESIGNATION_UNREAD);
+    'the designation alone answers unless it is this session\'s live binding: none, pending or a rebind, and unreadable': () => {
+      expect(m.unboundCandidates(BOUND, 'lane-a-project-a')).toBeNull();
+      expect(m.unboundCandidates({ ...BOUND, sessionId: 'lane-b-project-a' } as DesignationRead, 'lane-a-project-a')).toEqual(NOT_DESIGNATED);
+      expect(m.unboundCandidates({ kind: 'not-designated', row: VIEW() }, 'lane-a-project-a')).toEqual(NOT_DESIGNATED);
+      expect(m.unboundCandidates({ kind: 'not-designated', row: null }, 'lane-a-project-a')).toEqual(NOT_DESIGNATED);
+      expect(m.unboundCandidates({ kind: 'unmeasured', why: 'x' }, 'lane-a-project-a')).toEqual(DESIGNATION_UNREAD);
     },
   };
 }
@@ -326,10 +343,11 @@ const CANDIDATES_SET: MutantSet<RenewalReadingsModule> = {
   suite: candidatesCases,
 };
 
-const BOUND_SET: MutantSet<RenewalReadingsModule> = {
+const UNBOUND_SET: MutantSet<RenewalReadingsModule> = {
   modulePath: MODULE,
   mutants: [
-    { id: 'B1 a rebind read as this session\'s', old: "boundTo(d, sessionId) === false ? { kind: 'not-designated' } : c", new: 'c' },
+    { id: 'B1 not this session\'s read as a live binding', old: "  if (b === false) return { kind: 'not-designated' };\n", new: '' },
+    { id: 'B2 an unreadable designation read as a live binding', old: "b.kind === 'unmeasured' ? { kind: 'unmeasured', why: 'designation-unreadable' } : null", new: 'null' },
   ],
   suite: candidatesCases,
 };
@@ -342,5 +360,5 @@ export const RENEWAL_ACCOUNT_READING_SETS: Record<string, MutantSet<never>> = {
   'server/src/continuity/renewalReadings.ts#accountLoadOf': ACCOUNT_LOAD_SET as MutantSet<never>,
   'server/src/continuity/renewalReadings.ts#accountLoadMoveOf': LOAD_MOVE_SET as MutantSet<never>,
   'server/src/continuity/renewalReadings.ts#overlordCandidatesOf': CANDIDATES_SET as MutantSet<never>,
-  'server/src/continuity/renewalReadings.ts#boundCandidates': BOUND_SET as MutantSet<never>,
+  'server/src/continuity/renewalReadings.ts#unboundCandidates': UNBOUND_SET as MutantSet<never>,
 };

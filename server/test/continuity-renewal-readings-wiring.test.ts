@@ -4,10 +4,12 @@
 // every generation the gather reads, from the watcher's transcript resolver, bracketed by the isolation word's carrier. PR D adds
 // the account readings, the Overlord's only: one pool answer per Overlord session per pass, the account facts and the candidates
 // once per pass.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { mkTmp } from './tmpHelpers.js';
+import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { parsedFile, sourceOfSymbol } from './scan/symbols.js';
 import { codeOnly } from './sourceScan.js';
@@ -564,6 +566,8 @@ const pick = (w1: object | undefined) => {
 };
 
 describe('renewalReadingsOf (PR D: the account readings)', () => {
+  afterEach(removeTmpFixtures);
+
   it('outside the set with a serving candidate is due (F1: pool set B1\'s line, `pool-side=account`); the class serves here; the account is not a candidate', async () => {
     const c = coordOf({ designation: () => OPUS });
     const r = await renewalReadingsOf(acctDeps([]), withEdges(c), []).w1(gen({}), base());
@@ -589,7 +593,7 @@ describe('renewalReadingsOf (PR D: the account readings)', () => {
       .toEqual({ kind: 'unmeasured', why: 'turn marker absent' });
   });
 
-  it('the pool answer is asked once per pass and only for the Overlord; the facts and the candidates are read once per pass', async () => {
+  it('the pool answer is asked once per pass and only for the Overlord; the limits, the shares and the edges are read once per pass', async () => {
     const calls: string[] = [];
     const c = coordOf({ designation: () => OPUS });
     const pass = renewalReadingsOf(acctDeps(calls), withEdges(c), []);
@@ -601,16 +605,19 @@ describe('renewalReadingsOf (PR D: the account readings)', () => {
     expect(pick(coordinator.w1)).toEqual({ accountOutsideSet: undefined, classUnservable: undefined, accountLoadMove: undefined });
   });
 
-  it('with no designation the three read measured false; with the designation unreadable, unmeasured; bound to another session, false', async () => {
-    const none = await renewalReadingsOf(acctDeps([]), withEdges(coordOf({ designation: () => NONE })), []).w1(gen({}), base());
-    expect(pick(none.w1)).toEqual({ accountOutsideSet: FALSE, classUnservable: FALSE, accountLoadMove: FALSE });
-    const unread = await renewalReadingsOf(acctDeps([]), withEdges(coordOf({ designation: () => ({ kind: 'unmeasured', why: 'locked' }) })), [])
-      .w1(gen({}), base());
+  it('the designation first (fix round 1, I): no designation or a rebind reads measured false, unreadable reads unmeasured, and none of the three reads anything else', async () => {
+    const run = async (d: DesignationRead) => {
+      const calls: string[] = [];
+      const c = coordOf({ designation: () => d });
+      const r = await renewalReadingsOf(acctDeps(calls), withEdges(c), []).w1(gen({}), base());
+      return { got: pick(r.w1), reads: [...calls, ...c.calls.filter((x) => x === 'edges')] };
+    };
+    const F3 = { accountOutsideSet: FALSE, classUnservable: FALSE, accountLoadMove: FALSE };
+    expect(await run(NONE)).toEqual({ got: F3, reads: [] });
+    expect(await run({ kind: 'not-designated', row: VIEW({ bound: null }) })).toEqual({ got: F3, reads: [] });
+    expect(await run({ ...OPUS, sessionId: 'lane-b-project-b' } as DesignationRead)).toEqual({ got: F3, reads: [] });
     const U = { kind: 'unmeasured', why: 'designation unreadable' };
-    expect(pick(unread.w1)).toEqual({ accountOutsideSet: U, classUnservable: U, accountLoadMove: U });
-    const other = await renewalReadingsOf(acctDeps([]), withEdges(coordOf({ designation: () => ({ ...OPUS, sessionId: 'lane-b-project-b' }) as DesignationRead })), [])
-      .w1(gen({}), base());
-    expect(pick(other.w1)).toEqual({ accountOutsideSet: FALSE, classUnservable: FALSE, accountLoadMove: FALSE });
+    expect(await run({ kind: 'unmeasured', why: 'locked' })).toEqual({ got: { accountOutsideSet: U, classUnservable: U, accountLoadMove: U }, reads: [] });
   });
 
   it('a facts read that throws reads each of the three `<reading> read failed`, logged once per reading, and the other fields read as their ports answer (F17)', async () => {
@@ -627,15 +634,42 @@ describe('renewalReadingsOf (PR D: the account readings)', () => {
     for (const l of logs) expect(l).toContain('disk');
   });
 
-  it('with no store edges, or no reads (no runner, io or roster), the three keep the lane\'s W1 and nothing is read', async () => {
+  it('with no store edges, or with no runner, no io or no config to build the reads from, the three keep the lane\'s W1 and nothing is read', async () => {
+    const W1 = { accountOutsideSet: undefined, classUnservable: undefined, accountLoadMove: undefined };
     const calls: string[] = [];
     const c = coordOf({ designation: () => OPUS });
     const noEdges = await renewalReadingsOf(acctDeps(calls), c.coord, []).w1(gen({}), base());
-    expect(pick(noEdges.w1)).toEqual({ accountOutsideSet: undefined, classUnservable: undefined, accountLoadMove: undefined });
-    const noReads = await renewalReadingsOf({ ...deps(), cfg: ACFG }, withEdges(c), []).w1(gen({}), base());
-    expect(pick(noReads.w1)).toEqual({ accountOutsideSet: undefined, classUnservable: undefined, accountLoadMove: undefined });
+    expect(pick(noEdges.w1), 'no edges').toEqual(W1);
     expect(calls).toEqual([]);
+    const ran: string[][] = [];
+    const runCcd = async (argv: CcdArgv): Promise<CcdResult> => { ran.push([...argv]); throw new Error('no runner expected'); };
+    const full = { ...deps(), cfg: ACFG, runCcd, fleetState: { ccdVerbs: ['pool-set'] } };
+    const { runCcd: _r, ...noRunner } = full;
+    const { io: _i, ...noIo } = full;
+    const { cfg: _c, ...noCfg } = full;
+    for (const [arm, d] of [['no runner', noRunner], ['no io', noIo], ['no config', noCfg]] as const) {
+      const r = await renewalReadingsOf(d, withEdges(c), []).w1(gen({}), base());
+      expect(pick(r.w1), arm).toEqual(W1);
+    }
+    expect(ran).toEqual([]);
     expect(c.calls).not.toContain('edges');
+  });
+
+  // Fix round 1 (review 3797 F): the composition hands the wiring the coordination store itself, whose edges read is a method that
+  // needs its object (`this.db`). A stand-in arrow function survives being taken off its object; the real store does not. The central
+  // edge moves `lane-a` into the set, so the load reading sees it as a candidate only if the store's own edges were read.
+  it('over a real coordination store on a fixture database, the central edges are read and the three measure from them', async () => {
+    const s = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-rr-acct-'), '.ccrc', 'coord.db')));
+    s.db.exec(`INSERT INTO overlord_designation (id, sessionId, generation, term, designatedTerm, model, accountPools, actor, updatedAt)
+      VALUES (1, 'lane-a-project-a', 'generation-a', 1, 1, 'opus', '{"pools":["pool-a"],"untagged":false}', 'actor', 1)`);
+    s.db.exec("INSERT INTO pool_edges (subjectKind, subjectId, pool, addedAt, addedBy) VALUES ('account', 'lane-a', 'pool-a', 1, NULL)");
+    expect(s.designationRead()).toMatchObject({ kind: 'designated', sessionId: 'lane-a-project-a' });
+    const logs: string[] = [];
+    const coord: ReadingsCoord = s;
+    const r = await renewalReadingsOf(acctDeps([], logs, { answer: answerLine('serve') }), coord, []).w1(gen({}), base());
+    expect(pick(r.w1)).toEqual({ accountOutsideSet: FALSE, classUnservable: FALSE,
+      accountLoadMove: { kind: 'unmeasured', why: 'turn marker absent' } });
+    expect(logs.filter((l) => /account|class serviceability/.test(l))).toEqual([]);
   });
 
   it('wired from the watcher\'s runner, the pool answer is the body\'s composer: `pool-answer --session <id>` behind the pool-set word, never run without it', async () => {
