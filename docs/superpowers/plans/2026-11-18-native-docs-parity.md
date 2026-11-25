@@ -890,7 +890,7 @@ The review found 6 important findings (F1 to F6) and 5 advisory ones (a0 to a4).
 
 ### Wave P2 (run 3656, 2026-11-24)
 
-Wave 44, ticket `x2-p2`, base `main` at `e0e8989c05` (P1 landed in #3102), with `main` absorbed by merge twice, after #3286 and after #3289 landed. Issued block 9001 to 9003: D-9001 defined here (the `ccd/ccd` growth waiver); 9002 and 9003 returned unused.
+Wave 44, ticket `x2-p2`, base `main` at `e0e8989c05` (P1 landed in #3102), with `main` absorbed by merge three times, after #3286, after #3289 and after #3348 landed. Issued block 9001 to 9003: D-9001 defined here (the `ccd/ccd` growth waiver); 9002 and 9003 returned unused.
 
 #### What was built, by task
 
@@ -952,7 +952,7 @@ Each row: the file's sha256 recorded, the one mutation made with the Edit tool, 
 - **One hook refusal, ruled (mail 34519):** a commit message named the doctor's remedy as the launcher plus its update verb, which the session hook's forbidden-verb arm matched as prose. Nothing ran; it was reported with the exact text from a file and re-run with the phrase reworded.
 - **Whole-tree guards the implementers did not run, caught by the first CI run on the pushed tip (ruled, mail 35348):** the briefs named the suites to run, and none named the guards that scan the whole tree. On the pwa side, `control-census` (hand-drawn buttons), `hook-class-collision` (a hand-drawn button wearing a design-system class), `literal-census` (one sentence in two files), `markup-census` (folder rows, the head bar and the svg leaf rendered twice) and `refusal-literal-ratchet` (a 33rd literal refusal branch). On the server side, `core-vocab` (the ccd script's path spelled in a test), `spawn-group-pin` (a timed spawn outside `spawnSyncGroup`), `secret-mask` (the folder GET doors neither masked nor exempt) and `consolidation-census` (two `runCcd(` sites with no ran row). All were fixed by reusing or extracting the existing owner (`RowButton`, `DirRow`, `OffRow`, `HeadBar`, `SvgImage`, the failure view, `docsAnswerFromError`, `CCD`, `spawnSyncGroup`) or by the guard's own table (the masker's exempt rows with their reasons, the census's ran rows); a pass-through wrapper that would have hidden the two `runCcd(` sites from the census was refused in review. Every pwa census and scan suite ran before the second push. Later briefs name the whole-tree guards of every package they touch.
 - **A claim slip, mine:** I let the console's implementer add cases to `pwa/test/docs-own-tab.test.tsx` without first claiming it; another run held it. Nothing was committed there: the cases moved to a file of their own, `pwa/test/docs-folders-tab.test.tsx`, and the held file was edited back until its diff against the last commit was empty.
-- **Main absorbed by merge twice, each on the coordinator's word:** when #3286 landed, before the doors were built on it (the route counts re-read there), and when #3289 landed, before the head and the tab title changed.
+- **Main absorbed by merge three times:** on the coordinator's word when #3286 landed, before the doors were built on it (the route counts re-read there), and when #3289 landed, before the head and the tab title changed; and before the first push of the CI round, licensed by the merge probe, when #3348 (the Overlord's history door) and the runway read had moved the gate counts: the gate files were taken in turn with run 3726 and the counts re-derived on the merged tree (314 routes, 311 HTTP, 198 gated, 113 exempt; `docs/routes.ts` still 13).
 - **The growth waiver's figure at the tip:** `ccd/ccd` and the ccd program row +914 net against the merge-base, under D-9001's 940; the review fix rounds added nothing to ccd.
 
 #### Not done here, and why
@@ -963,3 +963,59 @@ Each row: the file's sha256 recorded, the one mutation made with the Edit tool, 
 - `DocsHead.tsx` goes past the plan's "the truth line and the off reasons only": after #3289 landed, the review's second-head finding was folded in there (the crumbs and the up link take a folder page; a folder head built from the head's own parts), the coordinator's direction; #3289's Back button keeps its body, hook and behaviour, with only its parameter type widened to the parser's folder location (ruled yes, mail 35244), and a test shows Back from a folder page in the console and in a Docs tab at phone and desk widths.
 - Known limits of the folder leaf against a project leaf: a range read's prepare answer carries no time, so its truth line says "Not in a repository" alone; an `.html` file shows as source (the mockup viewer reads its assets by a repository pin); images inside folder Markdown are refused; the rich reader is not used (it needs a pin and history). The index shows no folder group while the projects index fails or loads, and a dark box shows one quiet "need sign-in" line there.
 - Add and Remove share the fetch lane with the project refreshes, so a busy lane answers them `docs-busy`; `reason` is held to a grammar, not to ccd's closed list of words.
+
+#### Fix round 1 (review run 3783)
+
+Review run 3783 read `b0e7227c45` with three lenses and a refuter on every finding: no Critical, and the box-side boundary, the verb refusal at every layer and the doors held. The coordinator ruled one fix round (F1 and six small advisories), then a short re-review of the delta.
+
+| Finding | What was done | Commit |
+|---|---|---|
+| F1 (Important) | A folder page kept one listing while it stayed on one folder, so a file a session wrote after it, reached by an in-app link, read "That path is not in this folder." with no Retry. `FolderPage` now records, per path, how many listings had answered (or were on their way) when the path was asked for. A path missing from a listing no newer than that reads the tree once more first, and shows the loading line meanwhile. The next answer is newer, so a truly absent path still ends at that sentence with no loop. The age rule was chosen over a re-list on every miss, so the sentence is never shown from a listing older than the navigation. Three cases: the file made after the listing opens after an in-app move (tree read twice); a truly absent path says so after one more listing and reads no more; an absent path opened first is judged by that page's own listing (tree read once). Red first: the first two failed on the old page | `12498d505f` |
+| A1 | The take-back of a refused first Add (its lock file, then its directory) ran after the lock was released, so a concurrent first Add could hold a lock whose name was gone. It now runs while the lock is held. An Add that wins a lock whose name was taken back (`st_nlink` 0 on its descriptor) refuses `unreadable` `registry-busy` and writes nothing; a retry starts over. Both halves have a case with no race in it. The first asks, at the take-back's own unlink, whether the lock is still held (a non-blocking flock through a second open file description). The second takes the lock's name away at the moment the waiter wins it | `af1a1ff243` |
+| A2 | The device check now covers a section's own directories (`docs`, `docs/superpowers`, the section) in the tree walk, where a section on another device reads as empty, and every directory of a shown or prepared path, which refuses `not-a-file` with kind `other-device`, `_pin_leaf`'s word. So the earlier Results sentences that another device is never descended now hold as written. One case, an arm for each check. `ccd/ccd` stands at +925 against D-9001's 940 after this round | `af1a1ff243` |
+| A4 | A fleet box without the folders capability (`unsupported`, or caps not read yet, `caps-unknown`) now draws no folder group and no line on the Docs index, as an empty registry does; a real failure (for example `helper-failed`) keeps its one quiet line. Three rows | `12498d505f` |
+| A7 | `folderTimeText` reads the wire's one grammar, `isDocsMtimeNs`, instead of its own copy | `12498d505f` |
+| A8 | `DOCS_FOLDER_TEXT.settingsUnread`, which nothing showed, is removed; the Remove case's negative check keeps its intent as a pattern (`/could not be read/`) rather than a removed key | `12498d505f` |
+
+**The round's own review (one Opus · high read of `12498d505f` and `af1a1ff243`):** no Critical, no Important. It confirmed F1's age rule on every path asked about: a first page, a move while a listing is on its way, a re-read replaced, Retry and sign-in, directories and leaves, the range re-list, and React's double render. It also confirmed A1's refusal paths and A2's word. Its minors were taken in `340c955ba0`:
+
+- the stale rule moved into the pure policy module (`folderAskedAt`, `folderPathStale` in `folderPage.ts`), as the range re-list's rule already was, with rows;
+- a case for a move while a listing is on its way (the listing started before the move cannot call the path absent);
+- a page watch that the sentence is never drawn from the older listing;
+- the take-back unlinks the lock only while it is the directory's one name, so a registry another add wrote into keeps its lock;
+- a remove that wins a taken-back lock answers `unknown-folder`, its honest word;
+- a case for the `locked` guard (an add that made the directory but never won the lock takes nothing back);
+- the docstrings of the section open and the leaf walk now name the device check.
+
+Two minors are recorded here instead: a section whose own directory is on another device reads as empty (below), and `caps-unknown`'s quiet index (below).
+
+Results only:
+
+- **A section on another device reads as empty, a known limit:** the unlisted reasons (`invalid-utf8`, `unsafe-char`, `too-long`, `too-deep`) have no word for a device, and a listing entry needs a path below the section. So a folder whose `docs/` is a separate mount shows "This folder has none of the Docs sections." Never descending it is the safety property; saying so on the page would need an additive unlisted reason, which is later work.
+- **`caps-unknown` on the index, ruled:** the server words it as retryable (503 with a wait), but the index treats it as a box with no folders, so right after the agent reconnects the folder group is missing until the next visit. If the agent's boot read of the capabilities failed, it stays missing until that read succeeds.
+- **A5, a known limit added:** a raster leaf (PNG, JPEG and the other image classes) in a folder shows no preview, only its row; the image view reads a project's pinned bytes.
+- **A6, the real-git lock case:** the docs fetch file's real-git case of a held ref lock now accepts either git wording, 2.43's `cannot lock ref … File exists` or 2.53's whole line `error: fetching ref refs/… failed: reference already exists`, on any git version. That case runs the git of whichever box runs it: the fleet box measured 2.53.0, and CI's runner image carries its own. So it can only pin that some held-lock wording came back. Each wording is pinned exactly, with its near misses, by the pure classifier's rows.
+- **Not in this round (ruled):** A3, that the protected set omits the clips and session temp folders, matches the spec's list today; widening it is a spec change, carried to the ledger as later hardening. A session can call Remove over HTTP while sign-in is dark: the ruled behaviour, no change.
+
+Mutation rows measured in this round (each made with the Edit tool, run alone and seen red, restored with the file's sha256 equal before and after):
+
+| Row | Red |
+|---|---|
+| F1: the age rule off (`stale` forced false) | `docs-folders`: the in-app move case (`hello folder` never shown) and the truly-absent case (`expected [ 'tree' ] to have a length of 2`) |
+| A4: the `unsupported`/`caps-unknown` arm removed | `docs-folders`: both rows (the quiet line drawn) |
+| A1: the lock closed before the take-back | `ccd-docs-folder`: `held` is `[false]` where `[true]` is pinned |
+| A1: the waiter's name check removed | `ccd-docs-folder`: the add wrote `alpha` under the taken-back name (`[null, null, ['alpha', 'beta']]`) |
+| A2: the section chain's device check removed | `ccd-docs-folder-read`: the specs section listed three entries where `plans:b.md` alone is pinned |
+| A2: the shown path's device check removed | `ccd-docs-folder-read`: the show answered `ok` where `not-a-file` `other-device` is pinned |
+| F1: the in-flight listing counted (`folderAskedAt`'s +1 removed) | `docs-folders`: the move-while-listing case (the path called absent) and the pure row |
+| F1: the loading line while stale removed (`\|\| stale`) | **not red**, measured: with the guard removed, every DOM mutation recorded in jsdom shows the page going from the listing straight to the loading line, never the sentence; why was not established. The guard stays, since without it a real browser could paint the sentence for one frame; the page watch passes either way |
+| A1: the take-back's one-name check removed | `ccd-docs-folder`: the refused add removed the lock of a registry holding `beta` (`['beta']` where `['.lock', 'beta']` is pinned) |
+| A1: the `locked` guard removed | `ccd-docs-folder`: the add that never won the lock took the lock file back |
+| A1: the remove's word under a taken-back lock | `ccd-docs-folder`: `unreadable` where `unknown-folder` is pinned |
+
+Process notes for this round:
+
+- **Two claim slips, mine.** I told the coordinator (mail 35638) that I held no claims, but nine claims from earlier rounds were still live. I found them when I took this round's claim, released them, and corrected the mail (35698). Then I edited `server/test/ccd-docs-folder-read.test.ts` a few minutes after releasing the claim that covered it, before claiming it again. Nobody else held it, and I claimed it before the commit.
+- **One trailer slip, mine, before this round:** the merge commit of the CI round put a blank line between its `Ledger-Edit` line and the co-author line. Git reads only the last paragraph as trailers, so the ledger guard saw none and went red. An empty commit carrying the trailer followed (`b0e7227c45`), which made that round two pushes.
+- I made every edit and every run of this round myself; no implementer was used.
+- One edit of mine during a mutation removed a space beside the mutated text. The restore edit then did not match, which I caught by comparing hashes, and I edited the line back exactly (sha256 equal to the one recorded before).
