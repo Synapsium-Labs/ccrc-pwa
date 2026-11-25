@@ -339,6 +339,17 @@ describe('the store census on the real tree (D-7578)', () => {
       census.portMembers, 'WatcherCoordMember', PORTS_FILE);
   });
 
+  // wave 5i Task 7: the control lane reaches applyLandingControl (and, inside the store, the mail bodies it shares), so the
+  // port holds it and the reach row above is exact in both directions: a member the port names that nothing reaches is `gone`.
+  it('applyLandingControl is a reached port member, and the reach equals the port with no unused addition', () => {
+    expect(census.reach).toContain('applyLandingControl');
+    expect(census.portMembers).toContain('applyLandingControl');
+    expect(census.reach.filter((m) => !census.portMembers.includes(m)), 'reached but not in the port').toEqual([]);
+    expect(census.portMembers.filter((m) => !census.reach.includes(m)), 'in the port but reached by nothing in scope').toEqual([]);
+    // the mail body helpers live behind the store's own methods: the lane reaches `applyLandingControl` and no store-internal one
+    expect(census.reach.filter((m) => /^(queueLandingNoticeTx|queueRunlessNoticeTx|insertSystemMailTx|landingFactsInner)$/.test(m))).toEqual([]);
+  });
+
   it('WatcherCoordMember is sorted and has no duplicate', () => {
     const alias = parseFile(path.join(REPO, PORTS_FILE)).exportedTypeAliases
       .find((a) => a.name === 'WatcherCoordMember');

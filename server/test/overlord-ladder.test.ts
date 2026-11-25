@@ -31,7 +31,7 @@ describe('the rung words', () => {
 describe('every exported union has its runtime list', () => {
   it('the lists hold exactly the members', () => {
     // Presence and value, never a count (the isolation plan's Task 4): rows from other pieces land in either order.
-    for (const k of ['generation-degraded', 'off-model', 'rung-word-missing', 'shared-user', 'unwitnessed-third', 'probes-failed-twice', 'launch-profile-unengaged']) expect(L0.LADDER_CAUSES).toContain(k);
+    for (const k of ['generation-degraded', 'off-model', 'rung-word-missing', 'shared-user', 'load-past-95', 'unwitnessed-third', 'probes-failed-twice', 'launch-profile-unengaged']) expect(L0.LADDER_CAUSES).toContain(k);
     expect(new Set(L0.LADDER_CAUSES).size).toBe(L0.LADDER_CAUSES.length);
     expect(L0.LADDER_READERS).toEqual(['launch-profile-unmet']);
     expect(L0.LADDER_NOTICES).toEqual(['none', 'push', 'item']);

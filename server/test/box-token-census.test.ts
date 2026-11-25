@@ -111,10 +111,14 @@ const QUIZ_LANES = lanesIn(QUIZ_SRC);
  *  operator's session-gated doors: three box-token machine lanes, each behind the Overlord gate. */
 const OVERLORD_INBOX_SRC = read('server/src/coord/overlordInboxRoutes.ts');
 const OVERLORD_INBOX_LANES = lanesIn(OVERLORD_INBOX_SRC);
-const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC), ...UPDATE_LANES, ...TOKEN_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...PLAN_LANES, ...CONTINUITY_LANES, ...QUIZ_LANES, ...OVERLORD_INBOX_LANES];
+/** The Overlord's history door (Overlord W1, PR B1), a routes file of its own beside the inbox's: one box-token machine lane behind
+ *  the Overlord gate. */
+const OVERLORD_HISTORY_SRC = read('server/src/coord/overlordHistoryRoutes.ts');
+const OVERLORD_HISTORY_LANES = lanesIn(OVERLORD_HISTORY_SRC);
+const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC), ...UPDATE_LANES, ...TOKEN_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...PLAN_LANES, ...CONTINUITY_LANES, ...QUIZ_LANES, ...OVERLORD_INBOX_LANES, ...OVERLORD_HISTORY_LANES];
 /** The box-token machine lanes gate.ts counts first (#1444, PL3): the coordination routes, the Linear proxy's and the programme
  *  ledgers', before `/api/notify`, `/api/pools/epoch` and the update projection read join them in the total. */
-const MACHINE_LANES = [...COORD_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...PLAN_LANES, ...CONTINUITY_LANES, ...QUIZ_LANES, ...OVERLORD_INBOX_LANES];
+const MACHINE_LANES = [...COORD_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...PLAN_LANES, ...CONTINUITY_LANES, ...QUIZ_LANES, ...OVERLORD_INBOX_LANES, ...OVERLORD_HISTORY_LANES];
 
 /** The one session-only write that cannot be harvested, with the reason stated so
  *  it is a recorded exception rather than a retyped list. `SESSION_ONLY` lives in
@@ -315,7 +319,9 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   'ninety-seven', 'ninety-eight', 'ninety-nine',
   // The Overlord's inbox doors (W1 inbox piece): GET /api/overlord/inbox, GET /api/overlord/messages/:id and POST
   // /api/overlord/messages/:id/acknowledge, three box-token lanes in the inbox routes file: one hundred and two in all.
-  'one hundred', 'one hundred and one', 'one hundred and two'];
+  'one hundred', 'one hundred and one', 'one hundred and two',
+  // The Overlord's history door (W1, PR B1): POST /api/overlord/history, a box-token lane in the history routes file: one hundred and three in all.
+  'one hundred and three'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`
@@ -478,7 +484,10 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     // …and the Overlord's inbox doors' three (Overlord W1, inbox piece): the inbox, one message and its acknowledge, by name.
     expect(OVERLORD_INBOX_LANES, 'coord/overlordInboxRoutes.ts lost a box-token lane, or gained a door with no census row')
       .toEqual(['GET /api/overlord/inbox', 'GET /api/overlord/messages/:id', 'POST /api/overlord/messages/:id/acknowledge']);
-    expect(ALL_LANES.length).toBe(COORD_LANES.length + 3 + LINEAR_PROXY_LANES.length + LEDGER_LANES.length + LINKING_LANES.length + CALLS_LANES.length + REMAINING_LANES.length + PLAN_LANES.length + CONTINUITY_LANES.length + QUIZ_LANES.length + OVERLORD_INBOX_LANES.length);
+    // …and the history door's one (Overlord W1, PR B1).
+    expect(OVERLORD_HISTORY_LANES, 'coord/overlordHistoryRoutes.ts lost its box-token lane, or gained a door with no census row')
+      .toEqual(['POST /api/overlord/history']);
+    expect(ALL_LANES.length).toBe(COORD_LANES.length + 3 + LINEAR_PROXY_LANES.length + LEDGER_LANES.length + LINKING_LANES.length + CALLS_LANES.length + REMAINING_LANES.length + PLAN_LANES.length + CONTINUITY_LANES.length + QUIZ_LANES.length + OVERLORD_INBOX_LANES.length + OVERLORD_HISTORY_LANES.length);
     expect(UNGATED_DOORS.length, 'the door list collapsed').toBeGreaterThan(3);
   });
 
@@ -1176,6 +1185,56 @@ describe("CLAUDE.md: the account-pool freshness dependency is named, not discove
       .toContain('ccd-pool-sync.timer');
     expect(b, 'the bullet no longer names the resolved-pool document')
       .toContain('/api/pools/epoch');
+  });
+});
+
+// The capability read is a separate surface, not a box-token lane.
+describe('the draft review read surface', () => {
+  const REVIEW_SRC = read('server/src/review/routes.ts');
+  const REVIEW_DOORS = ['POST /api/review/open'];
+  // The plugin's instance is named scope; normalize that receiver for the shared slicer.
+  const normalized = (src: string): string => src.replace(/\bscope\./g, 'app.');
+  const registered = (src: string): string[] => registrationsIn(normalized(src)).map((r) => r.key);
+  const anchor = "}, async (req, reply) => {";
+  const neverRead = (src: string): string[] => {
+    const start = src.indexOf("scope.post('/api/review/open'");
+    expect(start, 'review registration missing').toBeGreaterThan(-1);
+    const end = src.indexOf('\n    });', start);
+    expect(end, 'review registration end missing').toBeGreaterThan(start);
+    const body = src.slice(start, end);
+    return ['req.cookies', 'checkMailToken', 'requireMailToken', 'runCcd', 'ReviewTreeReader', 'docs.readers']
+      .filter((term) => body.includes(term));
+  };
+
+  it('REVIEW_DOORS and registrations agree in both directions, with only the capability door', () => {
+    expect(registered(REVIEW_SRC)).toEqual(REVIEW_DOORS);
+    expect(lanesIn(normalized(REVIEW_SRC))).toEqual([]);
+    expect(GATE_SRC).toContain("  ['POST /api/review/open',");
+    expect(GATE_SRC).toContain('reason 9');
+  });
+
+  it('the open registration never reads session, token, or fleet dependencies', () => {
+    expect(neverRead(REVIEW_SRC)).toEqual([]);
+  });
+
+  it.each(['req.cookies', 'checkMailToken', 'requireMailToken', 'runCcd', 'ReviewTreeReader', 'docs.readers'])
+  ('sees a separately planted %s in the open handler', (term) => {
+    expect(REVIEW_SRC).toContain(anchor);
+    expect(neverRead(REVIEW_SRC.replace(anchor, `${anchor}\n      ${term};`))).toContain(term);
+  });
+
+  it('sees a direct box-token call planted in the open handler', () => {
+    expect(REVIEW_SRC).toContain(anchor);
+    const planted = REVIEW_SRC.replace(anchor, `${anchor}\n      requireMailToken(req, reply);`);
+    expect(lanesIn(normalized(planted))).toEqual(REVIEW_DOORS);
+  });
+
+  it('sees an added registration and a missing listed registration', () => {
+    const added = `${REVIEW_SRC}\nscope.delete('/api/review/extra', async () => {});`;
+    expect(registered(added)).toContain('DELETE /api/review/extra');
+    expect(registered(added)).not.toEqual(REVIEW_DOORS);
+    expect(registered(REVIEW_SRC.replace("scope.post('/api/review/open'", "scope.post('/api/review/other'")))
+      .not.toEqual(REVIEW_DOORS);
   });
 });
 

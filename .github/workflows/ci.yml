@@ -523,6 +523,16 @@ jobs:
         # pinned equal to `engines.node` by ci-pipeline.test.ts.
         node: ['22', '22.16.0']
     steps:
+      # D-9015 (landing-order wave 1d): a merge-queue group the queue has rebuilt or removed ends this job here
+      # instead of holding a runner the live groups wait for (.github/ci/queue-live.mjs). The script is fetched from
+      # the default branch, never from this group's commit; any read that fails lets the job run.
+      - name: queue group still live
+        if: github.event_name == 'merge_group'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/contents/.github/ci/queue-live.mjs" -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/queue-live.mjs" || { echo 'queue-live: unmeasured (the script could not be fetched)'; exit 0; }
+          node "$RUNNER_TEMP/queue-live.mjs"
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
@@ -629,17 +639,29 @@ jobs:
     if: ${{ !cancelled() && needs.select.outputs.docs_followup != 'true' && (needs.select.outputs.fast == 'true' && needs.fast-plan.result == 'success' && needs.fast-plan.outputs.count != '0' || needs.select.outputs.fast != 'true' && needs.select.outputs.count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full')) }}
     runs-on: ubuntu-24.04
     # A deadline, not the default. Without this key a wedged job runs for
-    # GitHub's 360 minutes before anyone learns it wedged. Each shard is
-    # packed to about four minutes, up to 12 shards (a longer file gets one of
-    # its own), and the whole unsharded server leg measured 18.5 min at the
-    # median (21.5 max, 2026-09-23) — so 30 is a deadline even for a shard
-    # that received the entire suite. Pinned — key AND ceiling — by
-    # server/test/oss-metadata.test.ts.
-    timeout-minutes: 30
+    # GitHub's 360 minutes before anyone learns it wedged. A fast pull
+    # request's shards are packed to about four minutes each; a full run's,
+    # the merge queue's among them, are not. A full merge-queue shard took from
+    # 15m47 to 29m53 on 2026-11-24 by runner, and one green shard was
+    # cancelled at a 30-minute deadline a second after its tests passed, which
+    # removed its entry from the queue. So 45 is about half as much again over
+    # the slow case and still under the queue's own hour (D-9014). Pinned —
+    # key AND ceiling — by server/test/oss-metadata.test.ts.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.select.outputs.fast == 'true' && needs.fast-plan.outputs.server_matrix || needs.select.outputs.server_matrix) }}
     steps:
+      # D-9015 (landing-order wave 1d): a merge-queue group the queue has rebuilt or removed ends this job here
+      # instead of holding a runner the live groups wait for (.github/ci/queue-live.mjs). The script is fetched from
+      # the default branch, never from this group's commit; any read that fails lets the job run.
+      - name: queue group still live
+        if: github.event_name == 'merge_group'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/contents/.github/ci/queue-live.mjs" -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/queue-live.mjs" || { echo 'queue-live: unmeasured (the script could not be fetched)'; exit 0; }
+          node "$RUNNER_TEMP/queue-live.mjs"
       # `fetch-depth: 0`, not the default 1, because topology-clean.test.ts
       # scans the commit RANGE this branch adds — not only the tip — and it
       # needs `origin/main` present to resolve a base. At depth 1 that ref does
@@ -705,6 +727,8 @@ jobs:
           FILES: ${{ matrix.files }}
           VITEST_SHARD: ${{ matrix.vitest_shard }}
           WORKERS: ${{ matrix.workers }}
+          # D-9016: a queue group's parent, which the growth check measures an entry against; empty on any other event.
+          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
           CCRC_TREE_SCANS_OUT: ${{ needs.select.outputs.tests == 'full' && format('{0}/scans.jsonl', runner.temp) || '' }}
         run: |
           echo "$FILES" | tr ' ' '\n' > "$RUNNER_TEMP/tests.txt"
@@ -738,6 +762,16 @@ jobs:
     # tsc over server/src alone; about a minute. 15 carries a cold npm cache.
     timeout-minutes: 15
     steps:
+      # D-9015 (landing-order wave 1d): a merge-queue group the queue has rebuilt or removed ends this job here
+      # instead of holding a runner the live groups wait for (.github/ci/queue-live.mjs). The script is fetched from
+      # the default branch, never from this group's commit; any read that fails lets the job run.
+      - name: queue group still live
+        if: github.event_name == 'merge_group'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/contents/.github/ci/queue-live.mjs" -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/queue-live.mjs" || { echo 'queue-live: unmeasured (the script could not be fetched)'; exit 0; }
+          node "$RUNNER_TEMP/queue-live.mjs"
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
@@ -772,6 +806,16 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
+      # D-9015 (landing-order wave 1d): a merge-queue group the queue has rebuilt or removed ends this job here
+      # instead of holding a runner the live groups wait for (.github/ci/queue-live.mjs). The script is fetched from
+      # the default branch, never from this group's commit; any read that fails lets the job run.
+      - name: queue group still live
+        if: github.event_name == 'merge_group'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/contents/.github/ci/queue-live.mjs" -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/queue-live.mjs" || { echo 'queue-live: unmeasured (the script could not be fetched)'; exit 0; }
+          node "$RUNNER_TEMP/queue-live.mjs"
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
@@ -810,6 +854,16 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
+      # D-9015 (landing-order wave 1d): a merge-queue group the queue has rebuilt or removed ends this job here
+      # instead of holding a runner the live groups wait for (.github/ci/queue-live.mjs). The script is fetched from
+      # the default branch, never from this group's commit; any read that fails lets the job run.
+      - name: queue group still live
+        if: github.event_name == 'merge_group'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/contents/.github/ci/queue-live.mjs" -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/queue-live.mjs" || { echo 'queue-live: unmeasured (the script could not be fetched)'; exit 0; }
+          node "$RUNNER_TEMP/queue-live.mjs"
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
@@ -903,6 +957,16 @@ jobs:
       matrix:
         package: [agent]
     steps:
+      # D-9015 (landing-order wave 1d): a merge-queue group the queue has rebuilt or removed ends this job here
+      # instead of holding a runner the live groups wait for (.github/ci/queue-live.mjs). The script is fetched from
+      # the default branch, never from this group's commit; any read that fails lets the job run.
+      - name: queue group still live
+        if: env.CCRC_LEG == 'run' && github.event_name == 'merge_group'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/contents/.github/ci/queue-live.mjs" -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/queue-live.mjs" || { echo 'queue-live: unmeasured (the script could not be fetched)'; exit 0; }
+          node "$RUNNER_TEMP/queue-live.mjs"
       # Full depth, as when this matrix also carried the server leg (whose
       # topology-clean needs `origin/main` — see server-shard): unchanged, so
       # the agent suite meets the tree exactly as before.
@@ -987,6 +1051,16 @@ jobs:
         shard: [1, 2, 3]
         total: [3]
     steps:
+      # D-9015 (landing-order wave 1d): a merge-queue group the queue has rebuilt or removed ends this job here
+      # instead of holding a runner the live groups wait for (.github/ci/queue-live.mjs). The script is fetched from
+      # the default branch, never from this group's commit; any read that fails lets the job run.
+      - name: queue group still live
+        if: env.CCRC_LEG == 'run' && github.event_name == 'merge_group'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/contents/.github/ci/queue-live.mjs" -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/queue-live.mjs" || { echo 'queue-live: unmeasured (the script could not be fetched)'; exit 0; }
+          node "$RUNNER_TEMP/queue-live.mjs"
       - uses: actions/checkout@v7
         if: env.CCRC_LEG == 'run'
         with:
@@ -1072,6 +1146,16 @@ jobs:
     env:
       CCRC_LEG: ${{ (github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}
     steps:
+      # D-9015 (landing-order wave 1d): a merge-queue group the queue has rebuilt or removed ends this job here
+      # instead of holding a runner the live groups wait for (.github/ci/queue-live.mjs). The script is fetched from
+      # the default branch, never from this group's commit; any read that fails lets the job run.
+      - name: queue group still live
+        if: env.CCRC_LEG == 'run' && github.event_name == 'merge_group'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/contents/.github/ci/queue-live.mjs" -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/queue-live.mjs" || { echo 'queue-live: unmeasured (the script could not be fetched)'; exit 0; }
+          node "$RUNNER_TEMP/queue-live.mjs"
       - uses: actions/checkout@v7
         if: env.CCRC_LEG == 'run'
         with:
@@ -1330,6 +1414,16 @@ jobs:
     env:
       CCRC_LEG: ${{ (github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}
     steps:
+      # D-9015 (landing-order wave 1d): a merge-queue group the queue has rebuilt or removed ends this job here
+      # instead of holding a runner the live groups wait for (.github/ci/queue-live.mjs). The script is fetched from
+      # the default branch, never from this group's commit; any read that fails lets the job run.
+      - name: queue group still live
+        if: env.CCRC_LEG == 'run' && github.event_name == 'merge_group'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/contents/.github/ci/queue-live.mjs" -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/queue-live.mjs" || { echo 'queue-live: unmeasured (the script could not be fetched)'; exit 0; }
+          node "$RUNNER_TEMP/queue-live.mjs"
       - uses: actions/checkout@v7
         if: env.CCRC_LEG == 'run'
         # Full depth: the reach step below diffs the pull request from its merge base.
@@ -1457,15 +1551,47 @@ jobs:
     # of the sequencer that put the two-shard run at 1,039 s and 931 s), so a
     # shard expects about 12 minutes with its setup: 8 minutes under 20, and
     # no file alone is larger than a shard.
-    timeout-minutes: 20
+    # FOUR SHARDS (D-9026). At three, the second shard took 916 s to 1,211 s
+    # in the six merge-queue runs of 2026-11-25 that ran the suite, and was
+    # cancelled twice at the 20-minute limit while every file passed (runs
+    # 45516946367 and 45527962041), each ejecting a green entry. `FILE_MS`
+    # named 82 of the 118 files, and project-linking-card had grown from
+    # 360 s to 870 s, one file whose 22 cases run serially. Run 45527962041
+    # (jobs 138915898214, 138915898216 and 138915898257) reported 7,887 s of
+    # file time; `FILE_MS` is refreshed from it and that file runs as two
+    # files of 443 s and 420 s. Split in four by those times, each shard
+    # holds about 1,970 s, about 660 s over three workers, so a shard expects
+    # about 11 minutes, and about 12 with its setup.
+    # THE LIMIT IS 30 (D-9055). This overrules D-8167's sentence above that
+    # the limit is never raised. At 04:18Z on 2026-11-25 a third green shard
+    # was cancelled at 20 minutes on a slow runner (run 45543535717, job
+    # 138967552810): its 15 finished files, all green, ran at a median of
+    # 1.25 times their times in run 45527962041 (at most 1.54), and about 1.7
+    # times a fast runner's run of the same shard, while the run's other two
+    # shards took 14:29 and 13:14. Four shards fix the heavy shard; nothing
+    # fixes a slow runner, and at 1.7 times a balanced shard of four would
+    # stand about three minutes under 20. A shard still expects about eleven
+    # minutes. The limit is for a wedged job, with room for a runner at about
+    # twice the usual time.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
-        total: [3]
+        shard: [1, 2, 3, 4]
+        total: [4]
     env:
       CCRC_LEG: ${{ (github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}
     steps:
+      # D-9015 (landing-order wave 1d): a merge-queue group the queue has rebuilt or removed ends this job here
+      # instead of holding a runner the live groups wait for (.github/ci/queue-live.mjs). The script is fetched from
+      # the default branch, never from this group's commit; any read that fails lets the job run.
+      - name: queue group still live
+        if: env.CCRC_LEG == 'run' && github.event_name == 'merge_group'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/contents/.github/ci/queue-live.mjs" -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/queue-live.mjs" || { echo 'queue-live: unmeasured (the script could not be fetched)'; exit 0; }
+          node "$RUNNER_TEMP/queue-live.mjs"
       - uses: actions/checkout@v7
         if: env.CCRC_LEG == 'run'
         with:
@@ -1560,6 +1686,16 @@ jobs:
     env:
       CCRC_LEG: ${{ (github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild' || (github.event_name == 'pull_request' && (needs.select.outputs.fast == 'true' || needs.select.outputs.floor != 'true' || needs.select.outputs.docs_followup == 'true')) || (github.event_name == 'merge_group' && needs.select.outputs.fast == 'true')) && 'skip' || 'run' }}
     steps:
+      # D-9015 (landing-order wave 1d): a merge-queue group the queue has rebuilt or removed ends this job here
+      # instead of holding a runner the live groups wait for (.github/ci/queue-live.mjs). The script is fetched from
+      # the default branch, never from this group's commit; any read that fails lets the job run.
+      - name: queue group still live
+        if: env.CCRC_LEG == 'run' && github.event_name == 'merge_group'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/contents/.github/ci/queue-live.mjs" -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/queue-live.mjs" || { echo 'queue-live: unmeasured (the script could not be fetched)'; exit 0; }
+          node "$RUNNER_TEMP/queue-live.mjs"
       - uses: actions/checkout@v7
         if: env.CCRC_LEG == 'run'
       - uses: actions/setup-node@v7

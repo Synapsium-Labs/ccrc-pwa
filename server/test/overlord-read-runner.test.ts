@@ -232,3 +232,55 @@ describe('the fence is said', () => {
     expect((await get(said)).statusCode).toBe(200);
   });
 });
+
+// Overlord W1, PR B1 (the history door): a 200 that hands no session text (the history door's `busy`, `deadline` and the rest) is a
+// line with its own outcome word and never a served line, so it does not count against the ceiling (ruled R8); and a refusal may carry
+// its own closed fields (`history-unreachable`'s `cause`) beside or instead of a detail.
+describe('the other 200, and a refusal\'s own fields (Overlord W1, PR B1)', () => {
+  it('an answer compose sends its body at 200 and writes its outcome with count 0', async () => {
+    const { store, db } = storeOnFile();
+    const r = await rig({ ledger: store, compose: () => ({ kind: 'answer', body: { ok: true, outcome: 'busy' }, scope: 'all', outcome: 'busy' }) });
+    const res = await get(r);
+    expect(res.statusCode).toBe(200);
+    expect(json(res)).toEqual({ ok: true, outcome: 'busy' });
+    expect(r.log).toEqual(['turn', 'count', 'compose', 'record:busy', 'sent']);
+    expect(lines(db)).toEqual([{ at: NOW, door: 'history', caller: 'overlord', scope: 'all', count: 0, outcome: 'busy', generation: 3, generationRead: 'measured', turnState: 'done' }]);
+  });
+
+  it('answer lines are not served lines: a ceiling of them leaves the next rows read served', async () => {
+    const { store } = storeOnFile();
+    for (let i = 0; i < READ_CEILINGS.history.perHour + 1; i += 1) store.recordRead({ ...SERVED, outcome: 'busy', count: 0, at: NOW - 1_000 + i });
+    const r = await rig({ ledger: store });
+    expect((await get(r)).statusCode).toBe(200);
+  });
+
+  it('a refusal\'s extra fields ride its answer beside its word, with no detail when none is given', async () => {
+    const { store, db } = storeOnFile();
+    const r = await rig({ ledger: store, compose: () => ({ kind: 'refuse', word: 'history-unreachable', extra: { cause: 'no-agent' }, scope: 'all', outcome: 'no-agent' }) });
+    const res = await get(r);
+    expect(res.statusCode).toBe(REFUSAL_STATUS['history-unreachable']);
+    expect(json(res)).toEqual({ ok: false, error: 'history-unreachable', cause: 'no-agent' });
+    expect(lines(db).map((l) => [l.outcome, l.count])).toEqual([['no-agent', 0]]);
+  });
+
+  it("a refusal's extra may not carry the answer's own ok, error or detail (review 3730 F6; the tests type check holds it)", () => {
+    const shapes: ReadComposed[] = [
+      // @ts-expect-error -- `ok` is the answer's own key
+      { kind: 'refuse', word: 'bad-request', extra: { ok: true }, scope: 'all', outcome: 'x' },
+      // @ts-expect-error -- `error` is the answer's own key
+      { kind: 'refuse', word: 'bad-request', extra: { error: 'other' }, scope: 'all', outcome: 'x' },
+      // @ts-expect-error -- `detail` rides its own field, never the extra
+      { kind: 'refuse', word: 'bad-request', extra: { detail: 'd' }, scope: 'all', outcome: 'x' },
+    ];
+    expect(shapes).toHaveLength(3);
+  });
+
+  it('an answer whose line did not land sends nothing but write-failed', async () => {
+    const { store } = storeOnFile();
+    const r = await rig({ ledger: { servedReadsSince: store.servedReadsSince.bind(store), recordRead: () => ({ ok: false, error: 'refused', detail: 'x' }) as never },
+      compose: () => ({ kind: 'answer', body: { ok: true, outcome: 'deadline', marker: MARKER }, scope: 'all', outcome: 'deadline' }) });
+    const res = await get(r);
+    expect(res.statusCode).toBe(REFUSAL_STATUS['write-failed']);
+    expect(res.body).not.toContain(MARKER);
+  });
+});

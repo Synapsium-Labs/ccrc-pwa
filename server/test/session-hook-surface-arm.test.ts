@@ -153,6 +153,16 @@ describe('the surface arm (W1 sandbox B, Task 8)', () => {
     expect(fire('mcp__door__read', {}, undefined, { hook: noFlags })).toContain('could not be read');
   });
 
+  it('judges the role word against its bound: sixteen letters read the row, seventeen never do (review 3598 N1)', () => {
+    // An installed row under each name, so only the variable's grammar can refuse the longer one.
+    const ROLE16 = 'overlordoverlord';
+    const ROLE17 = `${ROLE16}x`;
+    const hook = installed((rows) => { rows[ROLE16] = rows['overlord']!; rows[ROLE17] = rows['overlord']!; });
+    expect(fire('mcp__door__read', {}, { CCRC_LAUNCH_PROFILE: `${ROLE16}:abc`, ...PIN }, { hook })).toBeNull();
+    const r = fire('mcp__door__read', {}, { CCRC_LAUNCH_PROFILE: `${ROLE17}:abc`, ...PIN }, { hook });
+    expect(r).toContain(`launch profile (\`${ROLE17}\`) whose row could not be read`);
+  });
+
   /** The row's flags less one flag and its value. */
   const without = (flag: string) => installed((rows) => {
     const flags = rows['overlord']!['flags'] as string[];
@@ -200,7 +210,29 @@ describe('the surface arm (W1 sandbox B, Task 8)', () => {
       flags[flags.indexOf('--tools') + 1] = 'Agent,Skill,Read';
     });
     expect(fire('Read', { file_path: '/x' }, undefined, { hook })).toBeNull();
-    expect(fire('Read', { file_path: '/x' })).not.toBeNull();
+    expect(fire('Read', { file_path: '/x' })).toContain('does not list the tool `Read`');
+  });
+
+  /** A hook whose row's reader type also declares `extra` among its tools. */
+  const readerDeclares = (...extra: string[]) => installed((rows) => {
+    const flags = rows['overlord']!['flags'] as string[];
+    const i = flags.indexOf('--agents') + 1;
+    const agents = JSON.parse(flags[i]!) as Record<string, { tools: string[] }>;
+    agents['overlord-reader']!.tools.push(...extra);
+    flags[i] = JSON.stringify(agents);
+  });
+
+  it('a reader type\'s built-in tool names no tool server: it opens no tool, a server-shaped one included (review 3598 N2)', () => {
+    const hook = readerDeclares('Read');
+    expect(fire('mcp__door__read', {}, undefined, { hook })).toBeNull();
+    expect(fire('Read', { file_path: '/x' }, undefined, { hook })).toContain('the tool `Read`');
+    expect(fire('mcp____x', {}, undefined, { hook })).toContain('the tool `mcp____x`');
+  });
+
+  it('a reader type\'s tool with a double underscore that is not a door name opens no server (review 3598 N2)', () => {
+    const hook = readerDeclares('foo__bar');
+    expect(fire('mcp__door__read', {}, undefined, { hook })).toBeNull();
+    expect(fire('mcp__bar__x', {}, undefined, { hook })).toContain('the tool `mcp__bar__x`');
   });
 
   it('leaves an earlier arm\'s deny in place: a subagent loading a role skill reads the role-skill arm\'s reason', () => {

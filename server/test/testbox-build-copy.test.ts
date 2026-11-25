@@ -95,6 +95,18 @@ describe('testboxBuildCopy: every typed refusal writes one log line with the ver
     expect(warn.mock.calls).toEqual([[`ccrc-server: build copy of ${BUILD} refused by the test box admin lane: unreadable (recorded as copy-failed)`]]);
   });
 
+  it('a copy whose answer says the box replaced a link at the build\'s name is copied, in one log line (PR 3b fix round 1)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(await copy(exited(`{"ok":true,"build":"${BUILD}","sha256":"${'a'.repeat(64)}","replaced":"link"}\n`))).toBe('copied');
+    expect(warn.mock.calls).toEqual([[`ccrc-server: build copy of ${BUILD}: the test box replaced a link at the build's name with the build`]]);
+  });
+
+  it('a replaced word other than link logs nothing', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(await copy(exited(`{"ok":true,"build":"${BUILD}","sha256":"${'a'.repeat(64)}","replaced":"other"}\n`))).toBe('copied');
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it('a copy that succeeds logs nothing', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     expect(await copy(exited(`{"ok":true,"build":"${BUILD}","sha256":"${'a'.repeat(64)}"}\n`))).toBe('copied');

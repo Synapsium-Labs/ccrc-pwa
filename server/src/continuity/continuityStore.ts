@@ -22,6 +22,7 @@ import { isDigestCorrectionSubject } from '../coord/digest.js';
 import { isRulingSource, type Checkpoint, type CheckpointHandover, type CheckpointNote, type Ruling } from './checkpoint.js';
 import type { GenView } from './generationMachine.js';
 import { tx } from '../coord/tx.js';
+import { stampSequenceInTx } from '../coord/overlordSequenceStore.js';
 import type { SpotProbe } from './probes.js';
 import { isBackstopHour, isBackstopZone, type BackstopRead } from '../../../shared/renewal-readings.js';
 import type { ClaimRead, StartFact } from './actKey.js';
@@ -139,6 +140,22 @@ export function startsSince(db: DatabaseSync, sinceId: number, limit = -1): Star
     ).all(sinceId, limit) as unknown as (Omit<StartRow, 'source'> & { source: string })[];
     // The table has no CHECK, so a word a newer build wrote reads through the same rule as the writer (review 1911, F10).
     return { ok: true, rows: rows.map((r) => ({ ...r, source: startSourceOf(r.source) })) };
+  } catch (e) {
+    return { ok: false, detail: `continuity_starts read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/** One recorded start, or why it could not be read: `row: null` is no row with that id (renewal readings PR B). */
+export type StartRead = { ok: true; row: StartRow | null } | { ok: false; detail: string };
+
+/** The start with this id, by primary key: the read `notLocal` takes of a generation's own start, which never goes through
+ *  `startsOf`'s newest-N window, where later `/clear` or compact starts would push it out (review 2183, F16). */
+export function startById(db: DatabaseSync, id: number): StartRead {
+  try {
+    const row = stmt(db,
+      'SELECT id, sessionId, reportId, uuid, source, model, rowIncarnation, reportedAt, receivedAt FROM continuity_starts WHERE id = ?',
+    ).get(id) as unknown as (Omit<StartRow, 'source'> & { source: string }) | undefined;
+    return { ok: true, row: row === undefined ? null : { ...row, source: startSourceOf(row.source) } };
   } catch (e) {
     return { ok: false, detail: `continuity_starts read failed: ${e instanceof Error ? e.message : String(e)}` };
   }
@@ -404,6 +421,17 @@ export interface MintInput {
 export type MintResult = { ok: true; id: number; n: number } | { ok: false; kind: 'superseded' | 'write-failed' };
 
 class Superseded extends Error {}
+/** A generation line the sequence refused (`stampSequenceInTx`'s answer), thrown inside the writer's transaction so the row rolls
+ *  back with it (Overlord §10.4; sequence plan Task 2, slug `stamp-failure-is-a-row-write-failure`). */
+class StampRefused extends Error {}
+
+/** The one sequence's generation line (§10.4 "a generation"; sequence plan questions 2 to 4): a live move of `state`, a mint's
+ *  new row and the row it ends, for every identity, never a shadow walk. The generation row records no actor, so the line's is
+ *  the server's. Called INSIDE the writer's transaction; a refusal throws `StampRefused`. */
+function stampGeneration(db: DatabaseSync, id: number, state: GenerationState, at: number): void {
+  const s = stampSequenceInTx(db, { kind: 'generation', id: String(id), state, actor: 'server', actorKind: 'server', at });
+  if (!s.ok) throw new StampRefused(`${s.error}: ${s.detail}`);
+}
 
 /** In ONE transaction: end the identity's live generation with `outcome` and insert the next at `carded`. `expect` is the
  *  live row the caller read, or null when it read none; `superseded` when the live row is not that, or the start was
@@ -437,6 +465,7 @@ export function mintGeneration(db: DatabaseSync, input: MintInput, expect: GenEx
           + "dueWhy = CASE WHEN dueWhy = 'operator' THEN NULL ELSE dueWhy END "
           + `WHERE ${CAS}`).run(input.outcome, ...casArgs(old.id, old));
         if (Number(ended.changes) !== 1) throw new Superseded();
+        stampGeneration(db, old.id, 'ended', input.now);
       }
       const mode: WalkMode = old?.walk === 'live' || live ? 'live' : 'shadow';
       const deadline = deadlineFor('carded', input.now);
@@ -450,8 +479,10 @@ export function mintGeneration(db: DatabaseSync, input: MintInput, expect: GenEx
         mode === 'live' ? deadline : null, mode === 'live' ? null : deadline,
         input.resumed ? 1 : 0, input.startId, input.startReportedAt, input.model, strOrNull(newest?.model), input.lane, input.host,
         JSON.stringify(observed), carried, strOrNull(newest?.lane), input.designatedClass ?? null);
+      const id = Number(res.lastInsertRowid);
+      stampGeneration(db, id, mode === 'live' ? 'carded' : 'active', input.now);
       if (cursor !== null && !advanceCursorIn(db, cursor)) throw new Superseded();
-      return { ok: true as const, id: Number(res.lastInsertRowid), n };
+      return { ok: true as const, id, n };
     });
   } catch (e) {
     return { ok: false, kind: e instanceof Superseded ? 'superseded' : 'write-failed' };
@@ -470,11 +501,18 @@ export function restampOverlordGeneration(db: DatabaseSync, sessionId: string, t
 
 /** Retire's writer (Overlord designation A, F4): end the live `overlord` generation of `sessionId` with outcome `retired`, as a mint
  *  ends one (state, outcome, walk and deadlines), so a later designate's first mint finds no live `overlord` row. It runs INSIDE
- *  the caller's transaction and opens none. */
-export function endOverlordGeneration(db: DatabaseSync, sessionId: string): { changed: boolean } {
-  return changedOf(stmt(db, "UPDATE continuity_generations SET state = 'ended', outcome = 'retired', walk = NULL, deadlineAt = NULL, "
-    + "shadowDeadlineAt = NULL WHERE identity = 'overlord' AND sessionId = ? AND state <> 'ended'").run(sessionId));
+ *  the caller's transaction and opens none, and stamps each generation it ends `ended` at `at` there (a refused stamp throws,
+ *  so the caller's transaction rolls back). */
+export function endOverlordGeneration(db: DatabaseSync, sessionId: string, at: number): { changed: boolean } {
+  const ended = stmt(db, "UPDATE continuity_generations SET state = 'ended', outcome = 'retired', walk = NULL, deadlineAt = NULL, "
+    + "shadowDeadlineAt = NULL WHERE identity = 'overlord' AND sessionId = ? AND state <> 'ended' RETURNING id").all(sessionId) as { id: number }[];
+  for (const g of ended) stampGeneration(db, Number(g.id), 'ended', at);
+  return { changed: ended.length > 0 };
 }
+
+/** A step's answer: written, or not. `stamp-refused` is the sequence refusing the step's line (the step is not written), told
+ *  apart from a compare-and-set miss so the lane can say so (sequence plan review F11). */
+export type StepResult = { changed: true } | { changed: false; why?: 'stamp-refused' };
 
 /** One step of a walk: the machine's next view, written to the walk's column (`effectiveGeneration`'s `column`).
  *  Entering a state with a deadline sets that column's deadline from `STATE_DEADLINE_S`; staying in a state leaves it
@@ -482,7 +520,7 @@ export function endOverlordGeneration(db: DatabaseSync, sessionId: string): { ch
  *  `degraded` clears it and ends the walk. A step never ends a generation: only a mint does, so `ended` is refused.
  *  `card`, when given (a `card-read` step), records the card hash and snapshot the generation read, in the same write. */
 export function stepGeneration(db: DatabaseSync, id: number, expect: GenExpect, next: GenView, live: boolean, now: number,
-  card: { readonly hash: string; readonly snapshotId: string } | null = null): { changed: boolean } {
+  card: { readonly hash: string; readonly snapshotId: string } | null = null): StepResult {
   if (next.state === 'ended' || !GENERATION_STATES.includes(next.state)) return { changed: false };
   const mode: WalkMode = expect.walk ?? (live ? 'live' : 'shadow');
   const current = mode === 'live' ? expect.state : (expect.shadowState ?? expect.state);
@@ -496,12 +534,18 @@ export function stepGeneration(db: DatabaseSync, id: number, expect: GenExpect, 
   if (entering) args.push(now, deadlineFor(next.state, now));
   if (card !== null) args.push(card.hash, card.snapshotId);
   const cardSet = card === null ? '' : ', cardHash = ?, snapshotId = ?';
+  // One transaction (the step opens it: no caller holds one): a live walk entering a state stamps its line with the row, so
+  // a refused line leaves the row unchanged. A shadow step and a step that stays in its state stamp nothing.
   try {
-    return changedOf(stmt(db, `UPDATE continuity_generations SET ${stateCol} = ?, walk = ?, walkClass = ?, proven = ?, renudged = ?, `
-      + `probeRounds = ?, hostEnded = ?, attempts = ?${entering ? ', enteredAt = ?' : ''}${deadlineSet}${cardSet} WHERE ${CAS}`)
-      .run(...args, ...casArgs(id, expect)));
-  } catch {
-    return { changed: false };
+    return tx(db, (): StepResult => {
+      const w = changedOf(stmt(db, `UPDATE continuity_generations SET ${stateCol} = ?, walk = ?, walkClass = ?, proven = ?, renudged = ?, `
+        + `probeRounds = ?, hostEnded = ?, attempts = ?${entering ? ', enteredAt = ?' : ''}${deadlineSet}${cardSet} WHERE ${CAS}`)
+        .run(...args, ...casArgs(id, expect)));
+      if (w.changed && mode === 'live' && entering) stampGeneration(db, id, next.state, now);
+      return w.changed ? { changed: true } : { changed: false };
+    });
+  } catch (e) {
+    return e instanceof StampRefused ? { changed: false, why: 'stamp-refused' } : { changed: false };
   }
 }
 

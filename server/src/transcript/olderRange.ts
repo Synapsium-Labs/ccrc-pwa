@@ -12,7 +12,9 @@
 // longer reaches the cursor) would join non-adjacent bytes, so it is `invalid-boundary` here, never a short page or a
 // start. A file that shrank BELOW a read's offset never gets that far: both adapters answer such a read `unreadable`
 // themselves, and that word passes through unchanged. So a file that changed under a page reads as `invalid-boundary` or
-// as `unreadable`, depending on where it was cut; neither is ever a page.
+// as `unreadable`, depending on where and when it was cut: a cut below a read's offset, or a cut above it that lands
+// between an adapter's path stat and its handle stat or during its read, answers the adapter's own `unreadable`; only a
+// cut made before a read's path stat reaches this wrapper, as a short successful read. Neither is ever a page.
 //
 // THE CURSOR. `line-start`: `before` is the first byte of a record (the byte before it is a newline, or `before` is 0).
 // The page reads [.., before) and so never reads the record that starts at `before`; the observed byte before it must be

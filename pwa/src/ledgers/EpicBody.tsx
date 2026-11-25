@@ -10,7 +10,7 @@ import type { CheckpointView, EpicView, TicketView } from '../../../shared/plan'
 import { pullUrl } from '../../../shared/release-notes';
 import { docHref } from '../docs/docsLinks';
 import { loadProjects } from '../fleet/useProjectRows';
-import { inAppClick } from '../fleet/settingsText';
+import { useTabLink } from '../lib/useTabLink';
 import { openExternal } from '../lib/markdown';
 import { runPath } from '../lib/routes';
 import { runStateWord } from '../fleet/runWords';
@@ -45,8 +45,10 @@ export function useRepoSlug(project: string | null): string | null {
 function External({ href, children }: { href: string; children: ReactNode }): ReactNode {
   return <TextLink href={href} onClick={(e: MouseEvent<HTMLAnchorElement>) => openExternal(e, href)}>{children}</TextLink>;
 }
+/** A console or Docs address: a Docs one, at a desk, opens a Docs tab of its own (the Docs tab rule, desktop polish wave 174). */
 function Internal({ href, children }: { href: string; children: ReactNode }): ReactNode {
-  return <TextLink href={href} onClick={inAppClick(href)}>{children}</TextLink>;
+  const link = useTabLink();
+  return <TextLink {...link(href)}>{children}</TextLink>;
 }
 
 /** The checkpoint's evidence: a link where the address is known, its words as plain text where it is not. */

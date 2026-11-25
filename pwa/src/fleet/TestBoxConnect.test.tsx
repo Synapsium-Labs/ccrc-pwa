@@ -12,7 +12,7 @@ import type { StepUpDeps } from '../accounts/useStepUp';
 import { SETTINGS_CARDS } from './settingsText';
 import { TESTBOX_WIDE_QUERY, TestBoxSection } from './TestBoxSection';
 import { TestBoxConnect } from './TestBoxConnect';
-import { BOX_SETTING_FORM_START, TESTBOX_CONNECT_TEXT, TESTBOX_DEFAULT_RUNNER, TESTBOX_SERVICE_PORT, codeSentence, phaseWord } from './testboxAdminWords';
+import { BOX_SETTING_FORM_START, TESTBOX_CONNECT_TEXT, TESTBOX_DEFAULT_HEADS, TESTBOX_SERVICE_PORT, codeSentence, phaseWord } from './testboxAdminWords';
 import { TESTBOX_ROUTE_TEXT } from '../lib/refusalWords';
 import type { TestboxBlock, TestboxBlockAdmin, TestboxPoll } from './useTestboxView';
 
@@ -348,6 +348,18 @@ describe('step 4: the box settings and the repositories', () => {
     expect(button(T.next)).toBeEnabled();
   });
 
+  it('one repository row takes several package folders, separated by spaces; a folder off the name shape is refused (D-9009)', async () => {
+    await atStepFour();
+    fillRepo();
+    expect(button(T.next)).toBeEnabled();
+    type(T.repoPackage, 'server pwa');
+    expect(within(flow()).queryByText(T.badRepoName)).toBeNull();
+    expect(button(T.next)).toBeEnabled();
+    type(T.repoPackage, 'server ../pwa');
+    expect(within(flow()).getByText(T.badRepoName)).toBeInTheDocument();
+    expect(button(T.next)).toBeDisabled();
+  });
+
   it('takes one to four repository rows', async () => {
     await atStepFour();
     for (let i = 0; i < 3; i++) await click(T.addRepo);
@@ -378,6 +390,8 @@ describe('step 5: install, its six phases and the end of it', () => {
     await click(T.probe);
     await click(T.confirmFingerprint);
     fillRepo();
+    // D-9009: one repository row of several packages, in install order, each with the default command heads.
+    type(T.repoPackage, 'server pwa');
     type('CCRC_TESTBOX_RUN_MEMORY_MAX', '6G');
     await click(T.next);
     await click(T.install);
@@ -389,7 +403,10 @@ describe('step 5: install, its six phases and the end of it', () => {
     });
     expect(sent.repos).toEqual([{
       name: REPO.name, fetchUrl: REPO.url, mirrorPath: '/var/lib/ccrc-testbox/mirrors/project-a.git',
-      packages: [{ name: 'server', installInputs: ['server/package.json', 'server/package-lock.json'], commands: [TESTBOX_DEFAULT_RUNNER] }],
+      packages: [
+        { name: 'server', installInputs: ['server/package.json', 'server/package-lock.json'], commands: [...TESTBOX_DEFAULT_HEADS] },
+        { name: 'pwa', installInputs: ['pwa/package.json', 'pwa/package-lock.json'], commands: [...TESTBOX_DEFAULT_HEADS] },
+      ],
       buildOutputs: [], systemTools: [],
     }]);
     const phases = [...flow().querySelectorAll<HTMLElement>('[data-testbox="phases"] li')];
@@ -399,6 +416,34 @@ describe('step 5: install, its six phases and the end of it', () => {
     expect(phases[1]!.textContent).toContain(phaseWord('copy'));
     // The address typed in step 1 is not kept once the install has started.
     expect(document.body.innerHTML).not.toContain(ADDRESS);
+  });
+
+  it('Install sends typed install inputs after the package\'s own pair, and the typed command heads (D-9009)', async () => {
+    const { box, posts } = fakeFleet(baseStatus());
+    box.on.key = () => { box.status = baseStatus({ addressSet: true }); return { result: { line: LINE } }; };
+    box.on.probe = () => ({ result: { fingerprint: FP } });
+    box.on.pin = () => { box.status = pinned(); return {}; };
+    box.on.preflight = () => ({ result: { pass: true, checks: [] } });
+    box.on.connect = () => { box.status = pinned({ act: connectAct() }); return { result: { act: 'a'.repeat(32) } }; };
+    await mount();
+    await toKey();
+    await click(T.makeKey);
+    await click(T.added);
+    await click(T.probe);
+    await click(T.confirmFingerprint);
+    fillRepo();
+    type(T.repoInputs, 'shared/x.json');
+    type(T.repoCommand, 'npx vitest');
+    // Parity runs the first command with vitest's report flags, which the box adds to a vitest program only.
+    expect(within(flow()).getByText(T.badRepoRunner)).toBeInTheDocument();
+    expect(button(T.next)).toBeDisabled();
+    type(T.repoCommand, 'node_modules/.bin/vitest, npm test');
+    await click(T.next);
+    await click(T.install);
+    const sent = (posts('connect')[0]!.body as { fields: { repos: { packages: unknown }[] } }).fields;
+    expect(sent.repos.map((r) => r.packages)).toEqual([[
+      { name: 'server', installInputs: ['server/package.json', 'server/package-lock.json', 'shared/x.json'], commands: ['node_modules/.bin/vitest', 'npm test'] },
+    ]]);
   });
 
   it('Install survives a remount mid-act: a reload shows the same phases, read from the status, and the poll follows the act to Connected', async () => {

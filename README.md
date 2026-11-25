@@ -1505,7 +1505,7 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the one hundred and two machine lanes the
+liveness gate reads the shipped sha out of it), the one hundred and three machine lanes the
 fleet host reaches (thirty-nine box-token-consulting coordination routes plus
 the Linear proxy's routes under `/api/linear/proxy/`, which a session's `ccrc-api linear`
 verbs call and which refuse any call without the token whatever `CCRC_AUTH` says,
@@ -1526,7 +1526,8 @@ refuses otherwise) and its tick report
 (`POST /api/continuity/quiz-status`, which the Shadow lanes card shows), the coordinator's Live on the quiz's baseline
 (`POST /api/continuity/quiz-baseline/live`, attributed and owned, W1a lanes only),
 the Overlord's inbox doors (`GET /api/overlord/inbox`, `GET /api/overlord/messages/:id` and
-`POST /api/overlord/messages/:id/acknowledge`, attributed, then behind the Overlord gate and its fence),
+`POST /api/overlord/messages/:id/acknowledge`, attributed, then behind the Overlord gate and its fence), the Overlord's
+history door (`POST /api/overlord/history`, a read whose search words ride the body, behind the same gate and fence),
 `/api/notify`, which refuses an absent token like every lane,
 `/api/pools/epoch` and `/api/updates/intent/:nodeId` — the callers are `curl` inside a
 Claude Code session, `ccd-pool-sync.timer` and, from update-management W4, `ccd-update-sync.timer`, none with a cookie jar, though the
@@ -1541,7 +1542,9 @@ login and passkey-assertion doors themselves,
 `GET /api/auth/status` (with a minimized anonymous body), the reader lab's probe
 `/api/reader-lab/probe/:nonce/:name` (a sandboxed frame's request: its answer never depends on whether
 a run exists, and it only counts arrivals for a lab run someone opened, a signed-in session on an armed box and
-anyone who reaches the port on a dark one), and `GET /*`, the
+anyone who reaches the port on a dark one), the draft review's read door `POST /api/review/open` (gate reason 9:
+the token in its body is the credential, so it reads no session and no box token, and every token it cannot serve gets
+the same 404), and `GET /*`, the
 static bundle a browser has to
 download before it can show a login screen. Enrolling a passkey is **not**
 exempt — it requires already being signed in, which is what makes
@@ -4984,7 +4987,7 @@ database is a server-side re-measurement of what they already say, never a
 replacement for them, and a lost `coord.db` reconstructs from them.
 
 **The skill's contract.** A coordinator is an ordinary fleet session running
-the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its twenty-two
+the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its twenty-four
 clauses are pinned verbatim by `server/test/coordinator-skill.test.ts` — a
 softened clause is a red suite, not a silent drift. **A worker is the same
 shape:** the `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`), twenty clauses,
@@ -5810,15 +5813,18 @@ names every measured build. `$REG/hibernate-disabled` stops it too. `ccrc update
 restarts supervisors, never Claude Code.
 
 **Landing order (landing-order wave 1).** Every merge of `main` into a branch restarts that branch's
-CI, so a session absorbs `main` only on a licence. Worker clause 16 names three, each read after one
+CI, so a session absorbs `main` only on a licence. Worker clause 16 names four, each read after one
 `git fetch origin`: the branch conflicts —
 `git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD` exits 1 with a tree id on its
 first line (exit 0 is clean; any other answer is unmeasured and licenses nothing); a required check on
 its PR is red while `main` passes the same tests, measured by re-running the failing test files on a
 clean checkout of `origin/HEAD` in scratch (a red that `main` shows too is reported once as `main-red`
-and left alone); or a `fix-round` mail from the coordinator names the PR ejected from the landing line,
-or next to land in a strict-protection repository. The first two license at most one absorption per
-PR. An absorption is `git merge` and nothing else — never a rebase, a force-push, or GitHub's branch
+and left alone); a `fix-round` mail from the coordinator names the PR ejected from the landing line,
+or next to land in a strict-protection repository; or a `conflict-sync:` mail from the coordinator
+names the PR and a base commit for a conflict the coordinator measured, and the worker's own probe of
+that commit agrees. The first two license at most one absorption per PR. The fourth licenses one
+absorption of exactly the named commit per mail, before the worker's wave-done of that round only. An
+absorption is `git merge` and nothing else — never a rebase, a force-push, or GitHub's branch
 update by any route (its button, `gh pr update-branch`, the API) — and a conflict in a
 `# ccrc:generated` stamp line (the session hook's generated region carries one; `ccd/ccd` does not) is never hand-resolved:
 take either side of that one line, resolve every other hunk as the source it is, then run
@@ -5905,12 +5911,13 @@ is the coordinator's read of one project's line before it enqueues: the entries 
 pinned when the run entered `merging`, which the coordinator requires to equal the head it binds and passes to
 `--match-head-commit`), its `handoffCommit`, its state and its ejections — and, with `&pr=<n>` (`--pr <n>`), that PR's entry in any
 state, `entriesScope` saying which of the two the answer is; beside them the
-operator pause and the main-red hold, and the order the server's decider computes on that read; the line is paused
-while either flag is set. An entry leaves the line `landed` when GitHub reads its PR merged (a merge train's proved landing included), with a head other than
+operator pause (the stored flag) and the main-red hold (`mainRedHold`, and `order.paused`), which the read recomputes from the stored flag and the
+watcher's latest control snapshot, with the same pure transition the radar lane applies and without writing it, and the order the server's decider computes on that read; the line is paused
+while either flag is set, except that a dependency-eligible `fixesMain` head already selected is not paused by the main-red hold alone (D-8625). An entry leaves the line `landed` when GitHub reads its PR merged (a merge train's proved landing included), with a head other than
 the pinned one kept in its `detail`, or `closed` when GitHub reads it closed unmerged or says no such PR exists. The landed reader
 (at most ten entries a sweep, oldest first) marks it, and a work run's `done` close marks it `landed` when GitHub reads the PR
 MERGED (a merge train's landing is left to the landed reader, which carries the train facts); a verified pin re-pins a `closed`
-entry. A project the line has never seen answers no entries and both flags off. The line's authority (no-run creation evidence,
+entry only when its projection is readable and carries no quarantine marker (D-8626). A project the line has never seen answers no entries and both flags off. The line's authority (no-run creation evidence,
 order edges, `fixesMain` and setter attribution) is journalled in `~/.ccrc/landing.log`, which a restored `coord.db` leaves in
 place (no backup copies it) and which the server replays before it serves anything. Replay never fabricates a measured pin or a
 current run association: a project whose projection is missing or whose binding evidence contradicts is reported as unmeasured
@@ -5920,14 +5927,22 @@ and write, an advance's pin and its retreat from `merging` and a landing's mark 
 `landing-fenced` with that word. An uncertain apply is named beside the append and the commit (`landing-db-apply`, as
 `landing-db-commit`, with `mayApply: true`), because the land arm answers the same words. After a `restart` fence the database
 handle is closed, so a later call that reads the database before the landing guard (the advance route reads the run first) fails
-on the closed handle instead of answering `landing-fenced`. A `replay`
+on the closed handle instead of answering `landing-fenced`. That closed handle is why a `restart` fence can leave later non-landing route reads failing too. Landing reads and writes are all fenced alike, and the
+read answers a `binding` (`inert`, `held` with a reason, or `ready` for the selected head), decided on that read, never stored. A `replay`
 fence and a `restart` fence alike clear only when the server restarts: the replay is the only thing that reopens the line, and only
 the boot calls it, so there is no retry timer and nothing reopens the line while the server runs; a restart whose replay refuses
-does not start. A retreat refused `landing-projection-unreadable` (its pin names another head than the
-episode's and a retained field no longer reads) is not cured by a restart, because replay never writes a projection: the run
+does not start. A retreat refused `landing-projection-unreadable` (its projection does not read, whether its pin names the
+episode's head or another) answers `recovery: 'repair'` (D-8627) and is not cured by a restart, because replay never writes a projection: the run
 stays at `merging` and goes to the operator, and this build has no repair route for it. `POST /api/landing/entries` and `POST /api/landing/order` (box token and measured
 `byId`/`byUuid` attribution, `ccrc-api landing entries|order --json -`) record an entry and its order edges; the attributed `byId` is
 the setter, and an omitted `afterIds` or `fixesMain` keeps its value while an explicit `[]` or `false` clears it.
+
+The main-red hold has one writer: a fresh, same-base `main-health` measurement applied through the radar lane. A next-to-land mail
+is sent once per exact episode, base and recipient; it tells a coordinator to re-read the line and is not merge permission. The
+landed reader retires bounded damaged rows on fresh terminal evidence. One trap: a project that opts out (its `lander` removed)
+while main is red keeps the stored `mainRedHold` set, and the read keeps showing it (an absent marker is no evidence, so the recomputation
+keeps the stored value, and `order.paused` stays set for main-red while the `binding` reads `inert`), until it opts back in and a green
+measurement clears it.
 
 **The bypass deny (landing-order wave 2b).** The deny stands whole after D-8124, which adds one gated door beside it ("The admin-merge door", below). A second question, asked of every session after the worker
 deny's and with its text unchanged, closes the two ways past the queue that the worker deny leaves open:
@@ -6955,7 +6970,7 @@ It writes five JSON files, each `"v": 1`, under `~/.cc-sessions/landing/<project
 | `main-health` | `green`, `red` or `unmeasured`, with the required names, the failing ones and those not yet proven |
 | `<id>.lineage` | one registry row's branch tip and its proven chain of clean base merges |
 | `enabled` | the mirror of the conf's `lineage=on`, with its own time |
-| `lander` | the mirror of the conf's `lander=coordinator`, with its own time. The probe removes it on a project's pause, for an invalid conf, a conf whose `lander` is not `coordinator`, a project that is not a main checkout and a landing directory with no conf. When `landing/` or the project's directory under it is a symlink, the probe writes and removes nothing there, so a file already behind the symlink stays; nothing reads it yet, and the reader stage 5's landing line adds in a later wave must treat such a file as absent (D-7647) |
+| `lander` | the mirror of the conf's `lander=coordinator`, with its own time. The probe removes it on a project's pause, for an invalid conf, a conf whose `lander` is not `coordinator`, a project that is not a main checkout and a landing directory with no conf. When `landing/` or the project's directory under it is a symlink, the probe writes and removes nothing there, so a file already behind the symlink stays; wave 5i's landing control reads it, and a file behind such a symlinked ancestor reads as absent (D-7647) |
 
 Anything the probe cannot measure is written as `unmeasured` with a why, and never as clean or green. That covers a
 failed fetch or gh call, a git child past its deadline (`timeout`), and an error before the first write. A child the
@@ -7519,8 +7534,13 @@ nothing, so the row counts no attempt and records why, and the card says that no
 "sent N times". A failed capture stays untrusted and pushes one notice. Child approvals read the record: a child on a build that is not trusted is refused `version-unverified`, with
 `trust` naming why (`not-captured`, `capture-queued`, `capture-failed`, `unread` or `record-unreadable`). The card lists
 every build with its verdict, under the rest at every width. A failed build carries its replay output behind a disclosure
-and **Capture again** (`POST /api/testbox/builds/capture`, the operator's). The box-side capture runner is not built yet
-(plan `docs/superpowers/plans/2026-11-11-new-build-capture.md`, Open), so every new build stays queued until it lands.
+and **Capture again** (`POST /api/testbox/builds/capture`, the operator's). The box captures a build with no credential,
+no new egress and no model spend (spec `docs/superpowers/specs/2026-11-22-build-capture-runner-design.md`): the build runs
+in a scratch home of its own, through a tmux server of its own, against a scripted stand-in model on the capture's
+loopback, and the replay of what it recorded is the verdict. A box that holds no copy of the build answers `build-absent`;
+the server then copies the fleet host's own copy of that build over the admin lane, checked by hash at both ends, and sends
+the job again, so nothing downloads a build. One capture runs at a time, none starts while the box admits no work (a tool
+sync's takeover or a drain), and a fault of the box is never a failed verdict: the build stays queued.
 
 **The settings.** The fleet host's keys are in `~/.ccrc/ccrc.env`, the box's in its own `/etc/ccrc-testbox/ccrc.env`;
 **ccrc's own settings** names every one, and `deploy/testbox/ccrc.env.example` documents the box's with their defaults.
@@ -8582,7 +8602,14 @@ browser suite there and `test (server)` a red node floor, so either stops the me
 Nothing reaches `main` through the queue without it. The one way around it is a bypass actor's direct merge
 (`gh pr merge --admin`, which the ruleset's admin bypass still allows): the required checks are then satisfied by the
 fast run, so such a merge lands only what the fast run tested. Don't do it here (ccrc's admin-merge door, D-8124, refuses any repository with a merge queue, so it never lands this one); the daily `full-suite` is the next run that
-would catch what it skipped. The **macOS legs** (`test-macos`, `probe-macos`) live in `.github/workflows/macos.yml`: they run on every
+would catch what it skipped. In a queue run, a server shard's deadline is 45 minutes, not 30: a full queue shard
+measured from 15m47 to 29m53 by runner, and a green one was cancelled at 30m00 and its entry removed (D-9014). The long
+jobs of a queue run first ask `.github/ci/queue-live.mjs`, fetched from the default branch, whether their group still
+stands (a job whose leg skips, such as a docs-only group's node floor, skips this step too), and end with exit 1 only
+when the queue branch is gone and the group's commit is not on `main`; an unmeasured read lets the job run, and a job
+already running when its group is superseded runs to its end (D-9015). The growth check measures a queue entry against
+the group's parent commit (`merge_group.base_sha`, when it is an ancestor of HEAD), not the merge base with
+`origin/main`, so a stack is judged entry by entry at the same per-PR limit (D-9016). The **macOS legs** (`test-macos`, `probe-macos`) live in `.github/workflows/macos.yml`: they run on every
 push to `main` (coalesced) and nightly, block no pull request and no queue entry, and a red one is a failing run on
 `main`. A refresh **every three hours** runs no test legs: it re-traces what every merge since the last one affected and
 refreshes the map, and traces nothing when `main` has not moved since the newest map. The **daily** run runs every leg in full, macOS included, ending in `full-suite` — skipped when

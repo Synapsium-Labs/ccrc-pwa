@@ -98,7 +98,8 @@ export function readCaptureRecords(text: string): { readonly records: CaptureRec
     try { v = JSON.parse(l); } catch { unreadable++; continue; }
     if (typeof v !== 'object' || v === null || Array.isArray(v)) { unreadable++; continue; }
     const o = v as Record<string, unknown>;
-    const status = Object.prototype.hasOwnProperty.call(o, 'status') ? o['status'] : null;
+    // Every shape below names `status` among its exact keys, so a record without one is unreadable, never `null` here.
+    const status = o['status'];
     const keys = Object.keys(o).sort().join();
     if (o['kind'] === 'hook' && typeof o['event'] === 'string' && keys === 'event,kind,payload,status') {
       records.push({ kind: 'hook', event: o['event'], payload: o['payload'], status });

@@ -27,7 +27,7 @@ import './chat.css';
 import { chipTone, metaChipTone } from './chipTones';
 import { GoalsDoor, SessionCoordination, SessionDetails } from './SessionDetails';
 import type { Coordination } from '../fleet/fleetTree';
-import { COORDINATOR_BADGE, type SessionFactSet } from '../fleet/sessionFacts';
+import { COORDINATOR_BADGE, WAITING_ON_WORKERS, type SessionFactSet } from '../fleet/sessionFacts';
 // W2 Task S7a (D-5471): every word, chip and state below is the view's (`sessionHeaderView`), the one derivation both
 // skins' session chrome render from. This part holds the hooks (the clock, the pointer query, the flows' doors) and
 // the markup, nothing else.
@@ -237,7 +237,7 @@ export function HeaderChips({ view, afterStatus = null, beforeDetails = null, af
     <>
       {statusChip !== undefined && (
         <>
-          <StatusDot status={statusChip.bucket} asleep={statusChip.asleep} />
+          <StatusDot status={statusChip.bucket} asleep={statusChip.asleep} {...(statusChip.waiting ? { waitingLabel: WAITING_ON_WORKERS } : {})} />
           <span
             className={cn('status-line', `status-line--${statusChip.variant}`, statusChip.coordinator !== null && 'status-line--coordinator')}
             title={statusChip.title}

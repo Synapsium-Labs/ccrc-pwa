@@ -181,7 +181,7 @@ describe('the PWA refusal copy, pinned (ARCH-13b)', () => {
           "unsupported-type",
           "unsupported-type",
           "unsupported-type",
-          "Can't attach that — images, text, PDF and RTF only.",
+          "Can't attach that — its name has no extension the server can store.",
           "unsupported-type",
           "unsupported-type",
           "An update reason this build doesn't recognise (unsupported-type).",

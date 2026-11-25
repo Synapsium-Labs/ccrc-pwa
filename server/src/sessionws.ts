@@ -13,6 +13,9 @@ import {
   continuesInto, resumedPastMarker, rungRank, TranscriptResolver, type TranscriptResolution,
 } from './transcript/resolve.js';
 import { readBacklog, TranscriptTailer } from './transcript/tail.js';
+import { PROCESS_CONTINUATION_KEY, type ContinuationKey } from './transcript/continuation.js';
+import { readOlderPage } from './transcript/olderPage.js';
+import { gateOlderPage, olderOf, pageAnswer, pageBinding, servingOf, type Serving } from './transcript/olderPageGate.js';
 import { feedFor, type FeedFacts, type FeedMail, type FeedReading, type FeedSubscriber, type FeedTasks, type SessionFeed } from './sessionFeed.js';
 import { HELPER_FACTS_PENDING_MAX, SessionWorkflows, sessionDirOf } from './workflows/read.js';
 import { helpersFrame, rosterInputOf, type Proc } from './workflows/model.js';
@@ -143,6 +146,14 @@ export class SessionStream implements FeedSubscriber {
   /** H1c (D-8873): where this stream's own reading of the transcript began (the backlog's window, or the client's offset on
    *  a resume), so the reader's start scan reads only the bytes before it. */
   private helperScan: HelperScanSeam | undefined;
+  /** Desktop polish wave 171: what an older page is checked against before any file I/O (`olderPageGate.ts#Serving`).
+   *  `null` while a backlog is being read, before the first one, and on a stream that never served a file. */
+  private serving: Serving | null = null;
+  /** Bumped whenever what this stream serves can change (a backlog, a tailer opened); a page that finds it moved across
+   *  its awaits sends nothing. */
+  private servingGen = 0;
+  /** One older page in flight per stream; another request while it runs is answered `busy` and does no I/O. */
+  private pageInFlight = false;
   /** The hook's last fresh Stop listed a `workflow` among its background kinds
    *  (D-5231's pair, read by `applyHook`). The one witness that a workflow
    *  exists when its directory does not — see `checkWorkflows`. */
@@ -190,6 +201,8 @@ export class SessionStream implements FeedSubscriber {
    *  session, and a session with nothing at any exact address pays for a full
    *  search on a back-off rather than every two seconds. */
   private readonly transcripts: TranscriptResolver;
+  /** The key older-page continuations are issued and verified under (wave 171): this process's, made at its start. */
+  private readonly continuations: ContinuationKey = PROCESS_CONTINUATION_KEY;
   /** The outcome the open tailer was built from — the left-hand side of
    *  §5.3's re-point comparison. Null until the first tailer exists.
    *
@@ -351,6 +364,8 @@ export class SessionStream implements FeedSubscriber {
         // on. It costs a current client nothing.
         this.helperScan = { file: r.data.file, end: this.since.offset };
         this.startTailer(r.data.file, r.data.uuid, this.since.offset);
+        // A resume reads no backlog, so no identity token: a page's reads carry the check themselves (wave 171).
+        this.serving = { state: 'ok', file: r.data.file, ident: null };
       } else {
         await this.sendBacklogAndTail(r.data);
       }
@@ -829,11 +844,14 @@ export class SessionStream implements FeedSubscriber {
    * then tail from the end of what the backlog covered.
    */
   private async sendBacklogAndTail(r: Resolved): Promise<void> {
+    this.servingGen += 1;
+    this.serving = null;
     // ONE stat, not two (D-1399). `missing` used to come from a second
     // `io.stat` right here, so this method and `readBacklog` could stat the
     // same path a moment apart and disagree; and that stat's `null` asserted
     // absence for conditions nobody measured (D-114).
-    const { events, offset, missing, measured, helpers, scanEnd, cut } = await readBacklog(this.deps.io, r.file, BACKLOG_N);
+    const read = await readBacklog(this.deps.io, r.file, BACKLOG_N);
+    const { events, offset, missing, measured, helpers, scanEnd, cut } = read;
     if (this.stopped) return;
     this.tailed = r.resolution;
     this.helperFacts = helpers ?? [];
@@ -843,17 +861,21 @@ export class SessionStream implements FeedSubscriber {
     // is a FIRST read again and is stated — see `lastWorkflowsJson`.
     this.lastWorkflowsJson = undefined;
     this.sentWorkflows = false;
+    this.serving = servingOf(r.file, read);
+    const older = olderOf(this.continuations, this.id, r.file, read);
     this.send({
       type: 'backlog', uuid: r.uuid, events, offset, file: r.file, missing,
       fileMeasured: measured,
       foreignAccount: r.resolution.kind === 'found' ? r.resolution.account : null,
       searchComplete: r.resolution.kind === 'fallback' ? r.resolution.complete : true,
+      ...(older !== undefined ? { older } : {}),
     });
     this.startTailer(r.file, r.uuid, offset);
   }
 
   private startTailer(file: string, uuid: string, fromOffset: number): void {
     if (this.stopped) return;
+    this.servingGen += 1;
     this.tailer?.stop();
     const t = new TranscriptTailer(this.deps.io, file, fromOffset);
     this.tailer = t;
@@ -863,6 +885,27 @@ export class SessionStream implements FeedSubscriber {
     t.on('helpers', (facts) => { this.helperFacts = [...this.helperFacts, ...facts].slice(-HELPER_FACTS_PENDING_MAX); });
     t.on('rotated', () => { void this.onFileShrunk(); }); // truncation/rewrite — refetch
     t.start();
+  }
+
+  /**
+   * Desktop polish wave 171: answer the client's `older-page` request with the page of records before its continuation.
+   * The gate decides every check that needs no I/O (`olderPageGate.ts#gateOlderPage`); only then does the page read, and
+   * only the file THIS stream resolved. A page that finds the stream moved on (a rotation, a re-point, a stop) across its
+   * awaits sends nothing. Display only: the page feeds no helper fact, question, approval, notification or status.
+   */
+  olderPage(continuation: string): void {
+    if (this.stopped) return;
+    const gate = gateOlderPage(this.continuations, continuation, this.id, this.serving, this.pageInFlight);
+    if (!gate.go) { this.send(gate.answer); return; }
+    this.pageInFlight = true;
+    const gen = this.servingGen;
+    const masker = this.deps.masker ?? SHAPE_ONLY_MASKER;
+    const bind = pageBinding(this.continuations, gate.c, (v) => masker.maskDeep(v));
+    void readOlderPage(this.deps.io, gate.file, gate.c.cursor, bind).then((page) => {
+      this.pageInFlight = false;
+      // A late page, after the stream moved on, is dropped.
+      if (!this.stopped && gen === this.servingGen) this.send(pageAnswer(this.continuations, gate.c, page));
+    }, () => { this.pageInFlight = false; });
   }
 
   /** The tailed file shrank under us: treat as rotation — re-resolve, resend backlog.

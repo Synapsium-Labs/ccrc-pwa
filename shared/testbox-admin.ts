@@ -14,7 +14,7 @@
 // reader refuses any field it does not name and any value that does not fit its own grammar.
 import { BOX_SETTING_REFUSAL_WORDS, isReleaseTag, type BoxSettingRow } from './api.js';
 import { isClaudeVersion } from './claudeVersion.js';
-import { parseRepoRow, type Read, type TestboxRepoRow } from './testbox.js';
+import { isTestboxName, parseRepoRow, type Read, type TestboxRepoRow } from './testbox.js';
 import { utf8Bytes, utf8Decode, utf8Encode } from './utf8.js';
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -859,7 +859,6 @@ function orNull<T>(v: unknown, each: (x: unknown) => T): T | null { return v ===
 const RELEASE_TAG_RE = /^v(?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})$/;
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 const ACT_ID_RE = /^[0-9a-f]{32}$/;
-const REPO_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const REV_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const TOOLS_KEY_RE = /^[A-Za-z0-9._:+-]{1,128}$/;
 const FIXTURES = { 'git-state': true, socket: true, workers: true } as const;
@@ -884,7 +883,7 @@ function parityRecord(v: unknown, at: string): TestboxParityRecord {
     result: pick(RESULTS, o['result'], `${at}.result`),
     prs: (o['prs'] as unknown[]).map((p, i) => {
       const e = exact(p, `${at}.prs[${i}]`, ['repo', 'number', 'rev']);
-      if (typeof e['repo'] !== 'string' || !REPO_NAME_RE.test(e['repo'])) refuse(`${at}.prs[${i}].repo`, 'not a repository name');
+      if (typeof e['repo'] !== 'string' || !isTestboxName(e['repo'])) refuse(`${at}.prs[${i}].repo`, 'not a repository name');
       if (!isPrNumber(e['number'])) refuse(`${at}.prs[${i}].number`, 'not a pull request number');
       if (typeof e['rev'] !== 'string' || !REV_RE.test(e['rev'])) refuse(`${at}.prs[${i}].rev`, 'not a revision');
       return { repo: e['repo'] as string, number: e['number'] as number, rev: e['rev'] as string };
