@@ -40,7 +40,8 @@ for them; the coordinator folds them into the plan's ledger. Measured on `main` 
   arm for an unreadable or malformed sidecar, and treats all three non-fresh kinds alike. So `modelDriftInputOf` answers
   `{ sidecar, why }`: the decider's input, and the usage's own word (`usage stale`, `usage from before the start`, `usage
   absent`, `usage unreadable`, `usage malformed`), which `modelDriftReadingOf` appends to an unmeasured answer. No verdict
-  changes and no reason is lost. It takes no `nowMs`: the gather reads the sidecar each pass with the pass's wall clock, so
+  changes, and the reading keeps the usage's word; `renewalDue`'s `blind` then names the row only, as it does for every
+  unmeasured row. It takes no `nowMs`: the gather reads the sidecar each pass with the pass's wall clock, so
   its `stale` flag is already decided against now (`usage.ts#parseUsageSidecar`, the one freshness rule).
 - **`door-reads-optional-on-the-wiring`**: the two reads are optional members of `ReadingsCoord`. A store without them (a
   test, the simulator, an older wiring) leaves both readings at the lane's `W1`, the plan's failure contract for an absent
@@ -62,9 +63,14 @@ for them; the coordinator folds them into the plan's ledger. Measured on `main` 
 ## Not built here, and why
 
 - **No chore for the operator.** Both readings are automatic; nothing here adds a manual step.
-- **What a merge arms.** The two readings change only the generations lane's due record and `blind`, in shadow and live
-  alike. `model-drift` is a hard row of the Overlord, so on a live lane a measured `true` drains the Overlord at its next turn
-  end through the renewal act, which owns the act. No migration, route, timer lane or ccd verb.
+- **What a merge arms.** `modelDrift` changes the generations lane's due record and `blind`, in shadow and live alike:
+  `model-drift` is a hard row of the Overlord, so on a live lane a measured `true` drains the Overlord at its next turn end
+  through the renewal act, which owns the act. `readersRunning` reaches `softRenewalMay` through `soft`: a soft Overlord
+  trigger with readers running now waits `readers` instead of `unmeasured`, and with none running the permit goes on to the
+  break. With renewal readings F's operator quiet beside it, that break can open for the Overlord; fix round 1 makes the
+  terminal drawer's input and the submit route write the operator mark (below), so input through any console path keeps the
+  break shut for 20 minutes. The other break input, `placeHiddenObservedMs`, stays the lane's `W1`. No migration, route,
+  timer lane or ccd verb.
 
 ## Guards, measured red before and green after
 
@@ -85,7 +91,7 @@ The mutant sets (`renewalReadingDoorSets.ts`, floors 1 in `mutation-floors.json`
 | | R2 | unmeasured read as measured false | the stale case |
 | | R3 | the usage word dropped | the stale case's reason |
 | | R4 | the start model not classed | the typed-refused case |
-| | R6 | the start floor lost | the predecessor's sidecar case |
+| | R5 | the start floor lost | the predecessor's sidecar case (numbered R6 until fix round 1) |
 | `readersRunningReadingOf` | N1 | a failed read as 0 | the failed read case |
 | | N2 | the start floor lost | the events-before-the-start case |
 | | N3 | unmeasured as a count | the stale reader case |
@@ -100,6 +106,55 @@ By hand, each restored from the commit after its run:
 | H3: the store's floor at 0, not the start row | the reader events from the start row's receipt |
 | H4: a missing start row read as an empty list | a start row that is missing is a failed read |
 | H5: the switches asked for another start id | an Overlord generation reads by its own session and start id |
+
+## Fix round 1 (review 3710; the coordinator's ruling in call 1020)
+
+- **F1, F2.** The wiring took the store's two reads off the port and called them bare; on the composition the port is the
+  coordination store, whose reads are methods, so both threw and both readings read unmeasured every pass. They are now bound
+  to the store (`coord.modelSwitchesOf?.bind(coord)`, the same form for both). A wiring case over a real `CoordStore` on a
+  fixture database, with a start row, a switch and a reader event, asserts both readings measured and nothing logged; it was
+  red at `b2f8994ba2` (`model drift read failed`) and green with the bind.
+- **The operator's paths that wrote no mark.** The terminal drawer's input (`/ws/pty/:id`, an `input` frame) and the submit
+  route (`POST /api/sessions/:id/submit`, after a submit that went) now call the prompt route's one writer,
+  `promptHandoffs.ts#markOperatorPrompt`. Its keying, `operatorMark.ts#markProgrammesOf`, gains the Overlord: the designated
+  session marks `@overlord` after its programmes, so one rule serves the Overlord and a coordinator, and the store's
+  `putOperatorMark` stays the one writer. The server's main route file took three added lines, by a packet its other open
+  holder, Authority B, consented to on main `94bbc42af9`.
+- **F3, F4.** "What a merge arms" above gains the soft permit; "no reason is lost" is narrowed to what is true; the drift set's
+  mutants are R1 to R5.
+
+Departures of this round, by slug:
+
+- **`drawer-marks-once-per-two-seconds`**: the drawer sends a frame per keystroke, so it marks through a second instance of
+  the drawer's existing per-session throttle (`interruptlog.ts#DrawerInterruptThrottle`, 2 s). The mark's windows are 20 and
+  30 minutes, so the mark is never more than 2 s behind the input.
+- **`unread-designation-writes-no-mark`**: a designation that cannot be read makes the keying `unmeasured`, so the writer
+  writes no mark and logs, as it already did for runs it cannot read (a partial list would mark one key and miss another).
+- **`overlord-prompts-still-mark-through-the-nudge`**: the designated session's prompts are recorded, never typed, and the
+  nudge's transaction (`nudgeQueue.ts#queueOperatorNudge`) keeps writing `@overlord` there; `markOperatorPrompt` writes it
+  for the paths that type.
+
+Guards of this round, each measured red then green:
+
+| Mutation | Case that went red |
+|---|---|
+| H6: the two reads taken off the store, as at `b2f8994ba2` | over a real coordination store, both readings measure and nothing is logged |
+| H7: the drawer's mark call absent (the source before the round) | the drawer marks for the designated session, for a coordinator, and the real pass's drawer case |
+| H8: the submit route's mark call absent (the same) | the submit marks for the designated session, for a coordinator, and the real pass's submit case |
+| H9: the keying's `@overlord` arm dropped | the keying, the writer's designation read, and both designated-session route cases |
+
+Known limits, measured by reading, not built for:
+
+- **A failed mark write.** `putOperatorMark` answers `ok: false` and the writer logs it; the reading then reads the newest
+  mark that was written, aged by the lane, and with none it reads `OPERATOR_MARK_MS`, no activity, so the break input passes.
+  The same holds when the runs or the designation cannot be read and no mark is written.
+- **The host's renewal act re-measures at the act.** `ccd hibernate --roll --fresh` (`ccdSessionHost.ts#ccdSessionHost`'s
+  `renew`) re-reads the box-local facts before it ends the conversation and refuses `session-busy` at exit 3, touching nothing
+  (`ccd/ccd#_hib_refuse`): a turn marker that is not `done`, a pane not idle for a keystroke, a half-typed draft, background
+  tasks or session crons, and any terminal attached to the pane (an open drawer is one). The lane reads that as `refused`,
+  before the first half. So an operator mid-turn at the `checkpointed` stage is not cut off; what stays open is an operator
+  reading between turns, with an empty box and no drawer open, past the mark's 20 minutes, which the plan sets aside as
+  presence.
 
 ## Tests run
 

@@ -119,7 +119,7 @@ const MODEL_DRIFT_READING_SET: MutantSet<DoorModule> = {
     { id: 'R2', old: 'return unmeasured(side.why === null ? a.detail : `${a.detail} (${side.why})`);', new: "return { kind: 'measured', value: false };" },
     { id: 'R3', old: 'return unmeasured(side.why === null ? a.detail : `${a.detail} (${side.why})`);', new: 'return unmeasured(a.detail);' },
     { id: 'R4', old: 'startClass: i.startModel === null ? null : familyClassOf(i.startModel)', new: 'startClass: i.startModel' },
-    { id: 'R6', old: 'const side = modelDriftInputOf(i.usage, i.startReportedAt);', new: 'const side = modelDriftInputOf(i.usage, 0);' },
+    { id: 'R5', old: 'const side = modelDriftInputOf(i.usage, i.startReportedAt);', new: 'const side = modelDriftInputOf(i.usage, 0);' },
   ],
   suite: modelDriftReadingCases,
 };
