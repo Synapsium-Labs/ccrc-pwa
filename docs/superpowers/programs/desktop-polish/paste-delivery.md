@@ -10,8 +10,9 @@ ruled its place and its conditions. Claims are labelled **measured**, **read** (
 ## 1. In short
 
 - **What this PR is.** A recipe, its pure verdict, and the driver that runs the product's own send on a test box
-  capture. The capture runner's wiring of the recipe, the lane that queues it and the result's storage come in follow-up
-  packets, after the Overlord's own follow-up PR on the capture files lands (section 8).
+  capture; the capture runner's wiring of the recipe, in three parts; and the lane that queues it, the result's table and
+  the build list's read of it (section 8). Each capture file came to the capture owner as a packet first, and each held
+  file's hunk to its holder.
 - **No real fault has been reproduced, and no send code changed.** Every fault the tests show comes from a fake build
   written to show it, not from Claude Code.
 - **The first real measurement starts by itself.** Once a release carrying the whole recipe reaches the test box, the lane
@@ -125,7 +126,7 @@ The coordinator put the choice to the operator (item 667), who ruled to keep it:
 guard wave. The recipe's fixed cases stay clear of all four first characters, and `deliveryCapture`'s mode-character pin
 holds that, so no case can become a shell line in the capture's pane.
 
-## 7. How the real measurement starts and is read (the ruling; built in the follow-up packets)
+## 7. How the real measurement starts and is read (the rulings, built in this PR)
 
 There is no door (the capture owner's call 1131): every session holds the box token, so a box-token start would let any
 session run a build on the test box on demand. Instead:
