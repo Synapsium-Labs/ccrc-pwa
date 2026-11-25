@@ -25,12 +25,12 @@ import { authorityCoherence, type AuthorityState } from './overlordAuthorityCohe
 import type { AuthorityFileRead, OverlordAuthorityJournal } from './overlordAuthorityJournal.js';
 import type { OverlordAuthorityGuard } from './overlordAuthorityGuard.js';
 import {
-  CONFIRM_REFUSED, confirmRestorePlan, NARROWEST_RESTORE_SIDE,
-  type ConfirmEpochRead, type ConfirmPrivacyRead, type ConfirmToldRead, type ConfirmWitnessRead, type RestoreSide, type TermRaised,
+  CONFIRM_REFUSED, confirmRestorePlan,
+  type ConfirmEpochRead, type ConfirmPrivacyRead, type ConfirmToldRead, type ConfirmWitnessRead, type TermRaised,
 } from './overlordRestore.js';
 import { applyDesignationRestoreInTx, designationRead } from './overlordDesignationStore.js';
-import { applyRestoreInTx, ladderRows } from './overlordLadderStore.js';
-import { rungRank, type Rung } from '../../../shared/overlord-ladder.js';
+import { restoreRowsSide } from './overlordRestoreRows.js';
+import { applyRestoreInTx } from './overlordLadderStore.js';
 import { liveGenerations } from '../continuity/continuityStore.js';
 import type { RecordedActor } from '../auth/callerIdentity.js';
 
@@ -70,29 +70,6 @@ export interface OverlordRestoreDeps {
   readonly witness: RestoreWitnessFacts;
 }
 
-/** The rows' side (the database's), read in the transaction: an absent designation row binds nothing at term 0, `opus`, the
- *  empty set; an absent ladder row reads `off` (ruling F8); each standing latch at its cap. */
-function rowsSide(db: DatabaseSync): RestoreSide | { kind: 'unmeasured'; why: string } {
-  const d = designationRead(db);
-  if (d.kind === 'unmeasured') return { kind: 'unmeasured', why: d.why };
-  const l = ladderRows(db);
-  if (l.kind === 'unmeasured') return { kind: 'unmeasured', why: l.why };
-  const caps = new Map<string, Rung>();
-  for (const s of l.standing) {
-    const had = caps.get(s.cause);
-    caps.set(s.cause, had === undefined || rungRank(s.cap) < rungRank(had) ? s.cap : had);
-  }
-  const row = d.row;
-  return {
-    binding: row?.bound ?? null,
-    term: row?.term ?? 0,
-    operatorRung: l.rung === null ? NARROWEST_RESTORE_SIDE.operatorRung : l.rung.operatorRung,
-    latches: [...caps].map(([cause, cap]) => ({ cause, cap })).sort((a, b) => (a.cause < b.cause ? -1 : 1)),
-    accountSet: row === null ? NARROWEST_RESTORE_SIDE.accountSet : { pools: [...row.accountPools.pools], untagged: row.accountPools.untagged },
-    modelClass: row === null ? NARROWEST_RESTORE_SIDE.modelClass : row.model,
-  };
-}
-
 export class OverlordRestoreState {
   constructor(private readonly deps: OverlordRestoreDeps) {}
 
@@ -112,7 +89,7 @@ export class OverlordRestoreState {
       answer = tx(db, (): ConfirmAnswer => {
         const file = journal.readVerified();
         const plan = confirmRestorePlan({
-          guard: guard.state(), file, rows: journal.readRows(db), dbSide: rowsSide(db),
+          guard: guard.state(), file, rows: journal.readRows(db), dbSide: restoreRowsSide(db),
           epoch: witness.epoch(file), privacy: witness.privacy(), witnesses: witness.highest(), told: witness.told(), opKey,
         });
         if (plan.kind === 'refuse') return { ok: false, refusal: 'journal-unreadable', detail: plan.detail };
