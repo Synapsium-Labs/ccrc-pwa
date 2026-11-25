@@ -621,7 +621,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   the programme goals read `GET /api/programmes/:slug/goals` (D-8126: a coordinator reads the pin, its definition of done and
   the open items cookieless through `ccrc-api`, the console with a session), the programme lifecycle's two reads
   `GET /api/programmes/:slug/history` and `GET /api/sessions/:id/programme` (W2: a programme's story and a session's one
-  programme, the goals read's shape)
+  programme; the token arm is attributed, and reads the bound coordinator's own programme or the session's own)
   and the update projection read `GET /api/updates/intent/:nodeId` (a fleet node's timer pulls it cookieless from
   update-management W4), call `checkMailToken` only after a session check; `auth/gate.ts`'s EXEMPT reasons — route by route, each
   with its own argument — are the census, not this bullet. What does need saying here are the
@@ -663,7 +663,9 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   session-gated when armed, and is registered in `server.ts`, so the census names it beside the kickoff literal too. So does `POST /api/sessions/:id/prompt` (Overlord W1 private store B): for the designated session it records the operator's message in the private store, then queues the nudge as system mail and writes the `@overlord` operator mark in one `coord.db` transaction, and types nothing; it consults no box token, is session-gated when armed, and is registered in `server.ts`, so the census names it beside the kickoff literal as well. The programme ledgers' operator doors (plan PL4), `GET /api/waiting`, `GET /api/items/:id` (one item by its id, whatever its state and age, D-8194), `GET /api/programmes/:slug/goals`,
   `POST /api/items/:id/tick`, `POST /api/items/:id/dismiss`, `POST /api/items/:id/act` and `POST /api/items/:id/decline` (the operator's
   Abandon run and Keep the run on an end-request item: body-less, the act running the abandon arm inside the coordination hold as
-  the operator and closing its item, the decline mailing the asker), `POST /api/calls/:id/seen` (D-8126: the operator's Seen on a big call a coordinator made in their name), `PUT /api/items/:id/secret` (plan PL6), and
+  the operator and closing its item, the decline mailing the asker; on a programme end proposal, programme lifecycle W2, the act
+  confirms the end behind the step-up and the decline keeps the programme open, working while sign-in is dark and recording
+  `flag-off`, and the dismiss refuses it; a refused close's act that also ends the programme takes the step-up), `POST /api/calls/:id/seen` (D-8126: the operator's Seen on a big call a coordinator made in their name), `PUT /api/items/:id/secret` (plan PL6), and
   `GET /api/programmes/:slug/secrets` and `DELETE /api/programmes/:slug/secrets/:slot` (the PL6 follow-up), `GET /api/portfolio`
   and `POST /api/portfolio/rank` (Overlord W1: the operator's portfolio read and the rank door, which works while sign-in is dark
   and records `flag-off` then), and `POST /api/answer-marks` (Overlord W1: the operator's answer marks on a Waiting on you row,

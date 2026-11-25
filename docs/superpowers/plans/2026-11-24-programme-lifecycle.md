@@ -216,24 +216,42 @@ programme the operator wants Idle still reads Done is one deploy, not several.
   `shared/programmeLifecycle.ts` (`shared/api.ts` is at its cap: `ProgrammeRow` and `ProgrammesAnswer` extend its two
   field interfaces on the lines they already had).
 - **Words.** The proposal door answers ownership with `not-your-programme` (403, the ledger doors' word), not a new 403
-  `not-coordinator`: that word is already the digest's 409, and a word has one status. `already-asked` and
-  `programme-ended` keep their tables' statuses; the new words and their statuses are `PROGRAMME_DOOR_REFUSALS`.
+  `not-coordinator`: that word is already the digest's 409, and a word has one status (D-9020). `already-asked` and
+  `programme-ended` keep their tables' statuses; the new words and their statuses are `PROGRAMME_DOOR_REFUSALS`. The
+  pick's and the filing's words (`programme-has-coordinator`, `coordinator-unmeasured`) join it with their doors in W4.
 - **An end over open runs** names `abandonRuns` and ends Abandoned; `outcome: 'done'` with `abandonRuns` is refused
   `programme-runs-open`, never rewritten to Abandoned. The open runs are ended first, inside the abandon hold, after every
   one is asked `abandonRefusal`, as the archive door does.
-- **The two reads** take the goals read's shape: a live session or the box token, with no ownership check on the token arm
-  (spec §11 says "the box token for the bound coordinator"). A history holds whys, never a value; its answer is masked
+- **The two reads** take a live session or the box token (401 when both fail). The token arm is spec §14's: attributed
+  (`byId`/`byUuid` in the query); the history is the bound coordinator's alone (`not-your-programme`), and a session's
+  programme that session's own (`not-owner`, D-9020). A history holds whys, never a value; its answer is masked
   (`MASKED_GET_ROUTES`).
 - **The coordinator line** reads the registry row's uuid and archive mark; the carry reading (mid-swap, mid-roll) is not
   reached from the server's one-row read yet, and a swap keeps the session id and uuid, so it reads `led`. W4's registry
-  lane owns that reading.
+  lane owns that reading (D-9021).
 - **The programmes read** lists every real programme that has not ended and is not a filed or withdrawn placeholder, even
   with no run in its window (an Idle programme stays reachable, D-8992), and adds `coordinatorsWithoutProgramme`: sessions a
   `coordinator` event named, owning nothing and claiming no open run, keyed by session id, listed while their registry row
-  is present and not archived.
-- **"You own no programme now"** is mailed by the state door's ends, the confirm, and the hand-over (to the displaced
-  session, with the hand-over sentence); the hand-over's two mails are queued after its move commits, the ends' inside the
-  end's transaction. The start naming a session and the hand-over tell the new coordinator it owns the programme.
+  is present and not archived. Its per-request registry reads and its session-id key are W4's to replace (D-9021).
+- **"You own no programme now"** is mailed by every end that releases a coordinator (the state door's, the confirm and the
+  refused close's end), inside the end's transaction. The hand-over's mails ride the move's own transaction
+  (`ReclaimMoveOpts.onMoved`): the displaced coordinator, every other session whose open run the move took (a migration
+  conflict's party, spec §13: the operator's hand-over is the consent, as `displacing` is for the bound one), and the
+  heir; a mail that cannot be queued rolls the move back. The start naming a session and the hand-over tell the new
+  coordinator it owns the programme.
+- **Every end closes an open proposal** in its own transaction, at the one writer (`decideInTx`), named on the end's
+  `ended` event as `proposal`: the state door's, the archive door's, the refused close's, a repair to an end and the boot
+  re-measure. A run opened still withdraws it as the system (`end-withdrawn`). The generic dismiss refuses an end
+  proposal (`actionAdmits`): it is confirmed or declined, so its close is recorded and its coordinator told (D-9020).
+- **The refused close's programme end** (D-8558's `{programme}` body on `POST /api/items/:id/act`) is an end: it takes the
+  end's step-up and asks `edgeDecision`, both before the run is abandoned, and ends through `decideInTx` with the
+  stepped-up operator as its actor and the released coordinator mailed (D-9020).
+- **The confirm and the proposal** refuse an unreadable stored state (`programme-unknown`, the repair's): the confirm's
+  guards are `confirmEndDecision` (L1), the state door's `end` guards with no open run. A dark decline records `flag-off` in
+  its event's detail, as the pause does. R11 rule 4's open-claim query is one predicate,
+  `programmeLifecycleStore.ts#foreignOpenClaimOf`, asked by the start, the first run's start and the reclaim's heir rung.
+  The start's coordinator rule is `startDecision` (L1): the Overlord's start without a coordinator is refused, and so is
+  the operator's until W4.
 - **The start's absent coordinator** is `coordinator-required` (spec §5), lifted by W4's pick. The confirm's `{programme}`
   body is optional and, when sent, must equal the proposal's outcome. The decline takes an optional `why`.
 
@@ -482,3 +500,21 @@ programme the operator wants Idle still reads Done is one deploy, not several.
   and never archived automatically: the operator or the Overlord starts one for it, hands it one, or archives it. The
   migration never invents an owner. Overturns this spec's earlier "one lead and any number of members" and R2's "no
   rule ties one session to one programme".
+- **D-9020 (2026-11-25)** — lifecycle-w2-door-words-and-credentials. The W2 build and its review departed from the plan
+  and spec §14 in four places. (1) The end proposal answers a caller that is not the bound coordinator
+  `not-your-programme` (the ledger doors' 403), not the plan's 403 `not-coordinator`, which is already the digest's 409 (a
+  word has one status). (2) The session-programme read's box-token arm ("the box token with attribution") reads only the
+  attributed caller's own session (`not-owner`); the history's reads the bound coordinator's own programme. (3) The
+  refused close's programme end (D-8558) takes the end's step-up and asks `edgeDecision` before the run is abandoned, so it
+  refuses while sign-in is dark, as spec §14's rule for every end asks; it may still end Done after abandoning that last
+  run, where the state door ends a programme over open runs only as Abandoned: it answers a close the coordinator asked
+  as done that a guard refused, the console's sheet offers both outcomes, and its run is abandoned only because the close
+  door would not take it. (4) The generic dismiss refuses an end proposal (`actionAdmits`), which spec §5 does not list:
+  a dismiss would close it with no `end-declined` event and no mail.
+- **D-9021 (2026-11-25)** — lifecycle-w2-readings-left-to-w4. Three readings of W2's programmes read stay as built until
+  W4's registry lane replaces them. The coordinator line never reads `unmeasured` mid-swap or mid-roll
+  (`programmeCoordinatorReading.ts#coordinatorReadingOf` reads `carrying: false`: the server's one-row registry read
+  does not reach the carry reading). `GET /api/programmes` reads one registry row per bound coordinator and per coordinator
+  with no programme on every request, beside the watcher's fleet snapshot, and that list only grows with every session a
+  `coordinator` event ever named. And the coordinators with no programme are keyed by session id, not by incarnation, so
+  a reused id inherits the list entry of the session before it.

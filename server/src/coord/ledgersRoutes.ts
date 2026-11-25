@@ -22,7 +22,7 @@
 // A coordinator writes only its own programme's ledgers (spec §3.4): an item route also checks the ITEM's programme, so a
 // coordinator acting on another programme's item is `not-your-programme`. A secret's value never reaches these routes
 // (spec §5): the item names a slot, never a path.
-import { OPERATOR_UNMEASURED } from './programmeLifecycleStore.js';
+import type { ProgrammeActor } from './programmeLifecycleStore.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Bus } from '../bus.js';
 import type { NoticeSink } from '../notice.js';
@@ -709,23 +709,12 @@ const RUN_ABANDONED_NOTE = 'The operator abandoned the run.';
  *  (`parsePlanClose`'s `dropped-needs-reason`), and the why is synced to the tracker, so it is these fixed words, which point at the
  *  run whose close detail keeps the operator's own; the operator's words are not checked for the tracker here. */
 const OPERATOR_PLAN_ABANDONED_WHY = 'Ended by the operator with its last run; the reason is on that run\'s record.';
-
-/** D-8558, programme lifecycle W1 (D-8983): the operator ends a programme whose last run its act just closed, through the
- *  lifecycle's one writer (`decideInTx`, reached by `CoordStore#decideProgramme`): the decision and its record together, the
- *  binding released, so no run opens under it again. The operator's reason stays on the run's close detail; an abandoned
- *  end's recorded why is `OPERATOR_PLAN_ABANDONED_WHY`. False when a run of the programme is open. The plan port is no
- *  longer needed for it: the end is the programme's own decision, not the plan's. */
-function endProgrammeByOperator(
-  coord: CoordStore, _plan: PlanStorePort | undefined, program: string, outcome: PlanEndOutcome, now: number,
-): boolean {
-  if (coord.programOpenRunCount(program) !== 0) return false;
-  // An end already recorded stands (`decideInTx`'s `already-ended`, W1 review A6): the run is closed either way, and the
-  // programme keeps its first end rather than having it rewritten. The signed-in device is not carried to this door.
-  coord.decideProgramme({ slug: program, to: outcome, edge: 'ended', actor: OPERATOR_UNMEASURED,
-    why: outcome === 'abandoned' ? OPERATOR_PLAN_ABANDONED_WHY : 'ended by the operator with its last run',
-    planEndWhy: outcome === 'abandoned' ? OPERATOR_PLAN_ABANDONED_WHY : null }, now);
-  return true;
-}
+/** D-8558, programme lifecycle W2 review: the end's why and recorded why when the operator ends a programme with its last
+ *  run. The end itself goes through the lifecycle doors' `endWithLastRun` (the one decider and the one writer, behind the
+ *  end's step-up); the operator's reason stays on the run's close detail. */
+const lastRunEndWhy = (outcome: PlanEndOutcome): { why: string; planEndWhy: string | null } =>
+  (outcome === 'abandoned' ? { why: OPERATOR_PLAN_ABANDONED_WHY, planEndWhy: OPERATOR_PLAN_ABANDONED_WHY }
+    : { why: 'ended by the operator with its last run', planEndWhy: null });
 
 /** Why an operator's `act` or `decline` cannot take an item, or null: it must be open (`nextItemState`'s word), not held (the
  *  operator never saw a held item), and carry an action that may abandon (`act`: `end-run`, or `close-refused` with an abandoning
@@ -914,8 +903,9 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
 
   // ── programme lifecycle W2: the operator's doors and the two reads (spec §5, §11, §14; D-8987, D-8989, D-8992, D-8993) ──
   // Each door's credential is `doorCredential`'s (spec §14), asked first by the handler in `programmeLifecycleRoutes.ts`; none
-  // consults the box token. The two reads are EXEMPT-BUT-AUTHENTICATED, the goals read's shape: a live session OR the box
-  // token, 401 only when both fail, with no ownership check (a history and a session's programme name no secret).
+  // consults the box token. The two reads are EXEMPT-BUT-AUTHENTICATED: a live session OR the box token, 401 only when both
+  // fail. The token arm is spec §14's: attributed (`byId`/`byUuid` in the query), the history to the programme's bound
+  // coordinator alone and a session's programme to that session alone (the handlers).
   const doors = programmeDoors({
     coord: deps.coord, now: deps.now, gate: deps.gate, identity: deps.identity, authEnabled: deps.authEnabled,
     sessionAuth: deps.sessionAuth, withAbandon: deps.withAbandon, sendClose: deps.sendClose,
@@ -933,13 +923,13 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
       if (hasSession(req) || checkMailToken(deps.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'GET /api/programmes/:slug/history') === 'ok') return undefined;
       return unauthenticated(req, reply);
     },
-  }, (req, reply) => doors.history(req, reply));
+  }, (req, reply) => doors.history(req, reply, !hasSession(req)));
   app.get('/api/sessions/:id/programme', {
     onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
       if (hasSession(req) || checkMailToken(deps.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'GET /api/sessions/:id/programme') === 'ok') return undefined;
       return unauthenticated(req, reply);
     },
-  }, (req, reply) => doors.sessionProgramme(req, reply));
+  }, (req, reply) => doors.sessionProgramme(req, reply, !hasSession(req)));
 
   // The operator's ratify door (Overlord W1, portfolio B, question 4; slug operator-ratify-door): it CONFERS AUTHORITY, so it
   // takes the account gate (`cap: null`), which refuses `auth-off` while sign-in is dark. Session-gated only, no box token
@@ -1068,9 +1058,18 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
         return reply.code(200).send({ ok: true, id: runId, state: read.run.state, released: false, childReclaim: 'not-queued', alreadyClosed: true });
       }
       const program = read.ok && read.run !== null ? read.run.program : item.program;
-      // Ending the programme needs this run to be its last one open, checked inside the hold, before anything is ended.
-      if (body.programme !== null && coord.programOpenRunCount(program) !== 1) {
-        return refuseRoute(reply, 'plan-runs-open', { detail: `another run of programme ${program} is not finished: close this run alone, or close that one first` });
+      // Ending the programme needs this run to be its last one open, checked inside the hold, before anything is ended. The
+      // end is an end (programme lifecycle W2 review, spec §14): it takes the end's step-up, so it refuses while sign-in is
+      // dark, and asks the one decider whether the programme may end at all, both before the run is abandoned.
+      let endActor: ProgrammeActor | null = null;
+      if (body.programme !== null) {
+        if (coord.programOpenRunCount(program) !== 1) {
+          return refuseRoute(reply, 'plan-runs-open', { detail: `another run of programme ${program} is not finished: close this run alone, or close that one first` });
+        }
+        endActor = doors.lastRunEndActor(req, reply);
+        if (endActor === null) return reply;
+        const may = doors.lastRunEndRefusal(coord, program, body.programme);
+        if (may !== null) return refuseRoute(reply, may.why, { detail: may.detail });
       }
       // Held from the check above to the move below: a withdraw or a decline in between is refused (`isActing`).
       const holds = actingItems.get(coord) ?? new Set<number>();
@@ -1089,9 +1088,13 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
             return refuseRoute(reply, 'write-failed', { detail: `run ${runId} was abandoned, but item ${id} could not be closed (${moved.why}); it settles on the next read` });
           }
         }
-        if (body.programme !== null && !endProgrammeByOperator(coord, deps.plan, program, body.programme, deps.now())) {
-          deps.bus.emit('waiting');
-          return refuseRoute(reply, 'write-failed', { detail: `run ${runId} was closed, but programme ${program} still has an open run, so it was not ended` });
+        if (body.programme !== null && endActor !== null) {
+          const ended = doors.endWithLastRun(coord, program, body.programme, endActor, lastRunEndWhy(body.programme).why,
+            lastRunEndWhy(body.programme).planEndWhy, deps.now());
+          if (!ended.ok) {
+            deps.bus.emit('waiting');
+            return refuseRoute(reply, 'write-failed', { detail: `run ${runId} was closed, but programme ${program} was not ended: ${ended.detail}` });
+          }
         }
         deps.bus.emit('waiting');
         return deps.sendClose(reply, outcome);
@@ -1153,9 +1156,14 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     const item = coord.itemById(id);
     if (item === null) return refuseRoute(reply, 'unknown-item', { detail: `no item ${id}` });
     const now = deps.now();
-    // Spec D15: the operator may dismiss only while the programme has no open run; `nextItemState` decides it from this.
+    // Spec D15: the operator may dismiss only while the programme has no open run; `nextItemState` decides it from this. An
+    // end proposal is never dismissed (`actionAdmits`, programme lifecycle W2 review): it is confirmed or declined, so its
+    // close is recorded in the programme's history and its coordinator is told.
     const res = coord.moveItem(id, 'dismiss', 'operator', {}, now, { programmeHasOpenRun: coord.programmeHasOpenRun(item.program) });
-    if (!res.ok) return refuseRoute(reply, res.why, { detail: `item ${id} cannot be dismissed from here` });
+    if (!res.ok) {
+      return refuseRoute(reply, res.why, { detail: isEndProgrammeAction(item.action)
+        ? `item ${id} proposes its programme's end: confirm it (act) or keep the programme open (decline)` : `item ${id} cannot be dismissed from here` });
+    }
     deps.bus.emit('waiting');
     return reply.code(200).send({ ok: true, item: operatorView(coord, res.item, now) });
   });

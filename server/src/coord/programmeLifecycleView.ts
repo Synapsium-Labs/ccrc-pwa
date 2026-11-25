@@ -38,7 +38,8 @@ const bareRow = (f: LifecycleRowFacts): ProgrammeRow => ({
  * The programmes read with its lifecycle (spec §6, §15): every row the run window listed gains its fields; every real
  * programme that has not ended and is not a filed or withdrawn placeholder is listed even with no run in the window (an
  * Idle programme stays reachable, D-8992); the reserved row is never listed (the facts never carry it); and
- * `coordinatorsWithoutProgramme` is added. `readingOf` answers the registry reading of a bound session.
+ * `coordinatorsWithoutProgramme` is added, each listed only while its registry row is present and not archived (W2 review:
+ * decided here, not in the door). `readingOf` answers the registry reading of a session.
  */
 export function withLifecycleFields(
   answer: ProgrammesAnswer, facts: readonly LifecycleRowFacts[], readingOf: (session: string) => CoordinatorRegistryReading,
@@ -59,5 +60,6 @@ export function withLifecycleFields(
     if (listed.has(f.slug) || isEnded(f.state) || f.placeholder === 'filed' || f.placeholder === 'withdrawn') continue;
     programmes.push({ ...bareRow(f), ...lifecycleFieldsOf(f, reading(f)) });
   }
-  return { ...answer, programmes, coordinatorsWithoutProgramme: [...without] };
+  const live = without.filter((w) => { const r = readingOf(w.session); return r.kind === 'present' && !r.archived; });
+  return { ...answer, programmes, coordinatorsWithoutProgramme: live };
 }

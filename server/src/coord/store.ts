@@ -821,6 +821,9 @@ export interface ReclaimMoveOpts {
   readonly toUuid?: string | null;
   readonly actor?: lifecycle.ProgrammeActor;
   readonly why?: string;
+  /** Programme lifecycle W2 review: runs inside the move's transaction after it, handed every session whose OPEN run the move
+   *  took (`holding`, the heir excluded), so a door's mail to them is queued with the move or not at all. */
+  readonly onMoved?: (moved: { readonly holding: readonly string[] }) => void;
 }
 
 /** The three terminal members, ONCE (spec §3.2). The SQL literal in
@@ -2486,12 +2489,12 @@ export class CoordStore {
       // guard reads the lowest claimed id with no state predicate, so a terminal row left naming the released session
       // would refuse the coordinator that picks the programme up.
       const moved = (to === null
-        ? this.db.prepare('SELECT id, claimedBy FROM runs WHERE program = ? AND claimedBy IS NOT NULL ORDER BY id')
+        ? this.db.prepare('SELECT id, claimedBy, state FROM runs WHERE program = ? AND claimedBy IS NOT NULL ORDER BY id')
           .all(run.program)
         : this.db.prepare(
-          'SELECT id, claimedBy FROM runs WHERE program = ? AND claimedBy IS NOT NULL ' +
+          'SELECT id, claimedBy, state FROM runs WHERE program = ? AND claimedBy IS NOT NULL ' +
           'AND claimedBy != ? ORDER BY id',
-        ).all(run.program, to)) as { id: number; claimedBy: string }[];
+        ).all(run.program, to)) as { id: number; claimedBy: string; state: string }[];
       // D-2922: `claimedBy` and `coordProject` move TOGETHER, under one WHERE.
       // They are two facts about the same coordinator — who holds the chair,
       // and which card that chair's workers render on — and rewriting only the
@@ -2552,6 +2555,10 @@ export class CoordStore {
         // would still name the corpse, the guard would miss it, and the heir
         // would be handed two copies of one report.
         this.requeueAbandonedMail({ role: 'coordinator', program: run.program }, to, displaced);
+      }
+      if (opts.onMoved !== undefined) {
+        const terminal: readonly string[] = TERMINAL_RUN_STATES;
+        opts.onMoved({ holding: [...new Set(moved.filter((m) => !terminal.includes(m.state)).map((m) => m.claimedBy))] });
       }
       return {
         ok: true as const, program: run.program,
@@ -5625,16 +5632,16 @@ export class CoordStore {
   }
   /** Programme lifecycle W2's acts and reads (`programmeLifecycleActs.ts`), each act in one transaction with its mail. */
   startProgramme(input: Parameters<typeof acts.startNamedInTx>[1], now: number): ReturnType<typeof acts.startNamedInTx> { return tx(this.db, () => acts.startNamedInTx(this.db, input, now)); }
-  openEndProposalOf(slug: string): ItemRow | null { return acts.openEndProposalOf(this.db, slug); }
+  openEndProposalOf(slug: string): ItemRow | null { return lifecycle.openEndProposalOf(this.db, slug); }
   proposeProgrammeEnd(input: Parameters<typeof acts.proposeEndInTx>[1], now: number): number { return tx(this.db, () => acts.proposeEndInTx(this.db, input, now)); }
   confirmProgrammeEnd(itemId: number, actor: lifecycle.ProgrammeActor, now: number, mail: (r: Extract<acts.ConfirmEndResult, { ok: true }>) => void): acts.ConfirmEndResult {
     return tx(this.db, () => { const r = acts.confirmEndInTx(this.db, itemId, actor, now); if (r.ok) mail(r); return r; });
   }
-  declineProgrammeEnd(itemId: number, actor: lifecycle.ProgrammeActor, why: string, now: number, mail: (r: { slug: string; coordinator: string | null }) => void): ReturnType<typeof acts.declineEndInTx> {
-    return tx(this.db, () => { const r = acts.declineEndInTx(this.db, itemId, actor, why, now); if (r.ok) mail(r); return r; });
+  declineProgrammeEnd(itemId: number, actor: lifecycle.ProgrammeActor, why: string, now: number, dark: Readonly<Record<string, unknown>>,
+    mail: (r: { slug: string; coordinator: string | null }) => void): ReturnType<typeof acts.declineEndInTx> {
+    return tx(this.db, () => { const r = acts.declineEndInTx(this.db, itemId, actor, why, now, dark); if (r.ok) mail(r); return r; });
   }
   withdrawProgrammeEnd(item: ItemRow, by: string, now: number): boolean { return tx(this.db, () => acts.withdrawEndInTx(this.db, item, by, now)); }
-  settleProgrammeEndProposal(slug: string, why: string, now: number): boolean { return tx(this.db, () => acts.settleEndProposalInTx(this.db, slug, why, now)); }
   programmeHistory(slug: string): ReturnType<typeof acts.historyOf> { return acts.historyOf(this.db, slug); }
   programmeOpenRunIds(slug: string): number[] { return acts.openRunIdsOf(this.db, slug); }
   programmeLifecycleRows(): ReturnType<typeof acts.lifecycleRowsOf> { return acts.lifecycleRowsOf(this.db); }

@@ -2894,7 +2894,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     liveAsk, liveSpend: (sid) => (watcher === undefined ? { kind: 'not-ready' as const } : watcher.liveSpendReading(sid)),
     // Programme lifecycle W2: the start naming a session and the hand-over run the reclaim ladder on the serialiser.
     ...(deps.coord === undefined ? {} : { lifecycle: { reclaim: { coord: deps.coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux, otherLaneReads },
-      serial: coordRoutes.serial, readingOf: (s: string) => coordinatorReadingOf(deps.io, deps.cfg, s) } }),
+      serial: coordRoutes.serial, readingOf: (s: string) => coordinatorReadingOf(deps.io, deps.cfg, s),
+      attribute: (id: string, uuid: string) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid') } }),
   });
 
   /**

@@ -2,7 +2,8 @@
 // no store, no clock, no registry.
 import { describe, expect, it } from 'vitest';
 import {
-  OPERATOR_DOOR_CREDENTIALS, doorCredential, edgeDecision, endProposalDecision, endProposalItem, parseEvidence, type EdgeFacts, type EdgeRequest,
+  OPERATOR_DOOR_CREDENTIALS, confirmEndDecision, doorCredential, edgeDecision, endProposalDecision, endProposalItem, parseEvidence, startDecision,
+  type EdgeFacts, type EdgeRequest,
 } from '../src/coord/programmeEdgePolicy.js';
 import { PROGRAMME_DOOR_ACTS } from '../../shared/programmeLifecycle.js';
 
@@ -94,12 +95,41 @@ describe('endProposalDecision: spec §8', () => {
     expect(endProposalDecision(base)).toEqual({ ok: true });
     expect(endProposalDecision({ ...base, stored: 'paused' })).toEqual({ ok: true });
   });
-  it('refuses, in order: a placeholder, an ended programme, open runs, an open proposal, no evidence', () => {
+  it('refuses, in order: a placeholder, an ended programme, an unreadable one, open runs, an open proposal, no evidence', () => {
     expect(endProposalDecision({ ...base, placeholder: 'unfiled' })).toMatchObject({ ok: false, why: 'programme-provisional' });
     expect(endProposalDecision({ ...base, stored: 'done' })).toMatchObject({ ok: false, why: 'programme-ended' });
+    // W2 review: an unreadable stored state is the repair's, never an end's (the state door's `end` refuses it the same way).
+    for (const stored of ['unknown', 'retired-by-hand']) {
+      expect(endProposalDecision({ ...base, stored })).toMatchObject({ ok: false, why: 'programme-unknown' });
+    }
     expect(endProposalDecision({ ...base, openRuns: 1 })).toMatchObject({ ok: false, why: 'programme-runs-open' });
     expect(endProposalDecision({ ...base, openProposal: 7 })).toMatchObject({ ok: false, why: 'already-asked', detail: expect.stringContaining('7') });
     expect(endProposalDecision({ ...base, evidence: [] })).toMatchObject({ ok: false, why: 'evidence-required' });
+  });
+});
+
+describe('confirmEndDecision: spec §5 confirm row (Open, Idle or Paused only)', () => {
+  it('admits a readable live programme with no open run, active or paused', () => {
+    expect(confirmEndDecision(live)).toEqual({ ok: true });
+    expect(confirmEndDecision({ ...live, stored: 'paused' })).toEqual({ ok: true });
+  });
+  it('refuses a placeholder, an ended programme, an unreadable one and an open run, as the state door\'s end does', () => {
+    expect(confirmEndDecision({ ...live, placeholder: 'unfiled' })).toMatchObject({ ok: false, why: 'programme-provisional' });
+    expect(confirmEndDecision({ ...live, stored: 'abandoned' })).toMatchObject({ ok: false, why: 'programme-ended' });
+    for (const stored of ['unknown', 'retired-by-hand']) {
+      expect(confirmEndDecision({ ...live, stored })).toMatchObject({ ok: false, why: 'programme-unknown' });
+      expect(decide({ stored }, { edge: 'end', outcome: 'done', abandonRuns: false })).toMatchObject({ ok: false, why: 'programme-unknown' });
+    }
+    expect(confirmEndDecision({ ...live, openRuns: 1 })).toMatchObject({ ok: false, why: 'programme-runs-open' });
+  });
+});
+
+describe('startDecision: spec §5 start row', () => {
+  it('the Overlord\'s start is refused without a coordinator; the operator\'s too until W4 ships the pick', () => {
+    expect(startDecision('overlord', false)).toMatchObject({ ok: false, why: 'coordinator-required', detail: expect.stringContaining('Overlord') });
+    expect(startDecision('operator', false)).toMatchObject({ ok: false, why: 'coordinator-required', detail: expect.stringContaining('join sweep') });
+    expect(startDecision('overlord', true)).toEqual({ ok: true });
+    expect(startDecision('operator', true)).toEqual({ ok: true });
   });
 });
 

@@ -3,6 +3,7 @@
 // names a door, and each door is run against that cell's fixture run and works. A fixture the decider routes to `inform` is checked
 // as inform. Neutral names (prog-*, lane-a, worker-a).
 import { describe, it, expect, afterEach } from 'vitest';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
@@ -15,6 +16,7 @@ import { routeRefusals, type RefusedClose } from '../src/coord/runCloseRefusals.
 import { REFUSAL_REASONS, refusalRoute, type LaneRun, type RefusalReason } from '../src/coord/runClose.js';
 import { ASK_GRACE_MS } from '../src/askwindow.js';
 import { ABANDONING_DOORS, endRunAction, isCloseRefusedAction, closeRefusedAction, parseItemActBody, type ItemDoor } from '../../shared/ledgers.js';
+import { hashLine } from '../src/auth/secret.js';
 import { ID_GATE_TOKEN, recorder, seedRow } from './idGateFixture.js';
 import { testDeps } from './helpers.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
@@ -28,17 +30,42 @@ const RAISING: readonly [RefusalReason, 'lives' | 'gone'][] = [
   ['child-marker-unreadable', 'gone'], ['absent-claimant', 'gone'], ['warning-undelivered', 'gone'],
 ];
 
-interface Rig { app: FastifyInstance; coord: CoordStore; home: string; calls: string[][]; n: number }
+/** `cookie` is the signed-in session's when the rig is ARMED (programme lifecycle W2 review: the refused close's programme end
+ *  is an end, so it takes the end's step-up, spec §14); empty when sign-in is dark. */
+interface Rig { app: FastifyInstance; coord: CoordStore; home: string; calls: string[][]; n: number; cookie: string }
 
-async function rig(): Promise<Rig> {
+const PASSPHRASE = 'a test passphrase for the refused-close suite';
+const ORIGIN = 'http://localhost:7788';
+
+async function rig(o: { armed?: boolean } = {}): Promise<Rig> {
   const home = mkTmp('ccrc-close-refused-');
   // The heir exists in the registry; the dead claimant (`lane-gone`) does not, which is the shortest honest death. `lane-held` is a
   // dead claimant the registry still holds (D-8558): its session page exists.
   for (const id of ['worker-a', 'heir-a', 'lane-held']) seedRow(home, id, { project: 'project-a' });
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const rec = recorder();
-  app = await buildServer({ ...testDeps(home, rec.run), mailToken: ID_GATE_TOKEN, coord, plan: planStorePort(coord.db) }, new Bus());
-  return { app, coord, home, calls: rec.calls as string[][], n: 0 };
+  const base = testDeps(home, rec.run);
+  if (o.armed === true) {
+    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(home, '.ccrc', 'auth.scrypt'), `${await hashLine(PASSPHRASE, { n: 1024, r: 8, p: 1, keylen: 32 }, 1)}\n`, { mode: 0o600 });
+  }
+  const cfg = o.armed === true ? { ...base.cfg, authEnabled: true, cookieSecure: false, rpId: 'localhost', origin: ORIGIN } : base.cfg;
+  app = await buildServer({ ...base, cfg, mailToken: ID_GATE_TOKEN, coord, plan: planStorePort(coord.db) }, new Bus());
+  let cookie = '';
+  if (o.armed === true) {
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { passphrase: PASSPHRASE }, headers: { 'user-agent': 'a test phone', origin: ORIGIN } });
+    expect(login.statusCode, login.body).toBe(204);
+    const set = login.headers['set-cookie'];
+    const line = Array.isArray(set) ? set[0]! : String(set);
+    cookie = line.slice(0, line.indexOf(';'));
+  }
+  return { app, coord, home, calls: rec.calls as string[][], n: 0, cookie };
+}
+
+/** The step-up on an armed rig's session. */
+async function stepUp(r: Rig): Promise<void> {
+  const res = await post(r, '/api/auth/step-up/passphrase', { passphrase: PASSPHRASE });
+  expect(res.statusCode, res.body).toBeLessThan(300);
 }
 
 /** One planned run, claimed by the gone `lane-gone`, optionally with a worker session: the next wave of the claimant's one
@@ -64,7 +91,8 @@ function raise(r: Rig, id: number, reason: RefusalReason, who: 'lives' | 'gone',
 }
 
 const post = (r: Rig, url: string, payload?: unknown) =>
-  r.app.inject({ method: 'POST', url, ...(payload === undefined ? {} : { payload: payload as never }) });
+  r.app.inject({ method: 'POST', url, ...(payload === undefined ? {} : { payload: payload as never }),
+    ...(r.cookie === '' ? {} : { headers: { cookie: r.cookie, origin: ORIGIN } }) });
 const stateOf = (r: Rig, id: number): string => (r.coord.run(id) as { run: { state: string } }).run.state;
 
 describe('the control pin: every item names a control that works', () => {
@@ -253,8 +281,9 @@ describe('a refusal the pass could not measure', () => {
 // D-8558: a refused close whose coordinator the registry no longer holds. "Close this run" is the operator's abandon with a reason the
 // run's close detail keeps, and on the programme's last live run the same act may end the programme.
 describe('Close this run, and the programme\'s end', () => {
-  const closeItem = async () => {
-    const r = await rig();
+  const closeItem = async (o: { armed?: boolean } = {}) => {
+    const r = await rig(o);
+    if (o.armed === true) await stepUp(r);
     const id = fixtureRun(r, false);
     const itemId = raise(r, id, 'warning-undelivered', 'gone');
     const action = r.coord.itemById(itemId)!.action;
@@ -279,7 +308,7 @@ describe('Close this run, and the programme\'s end', () => {
   });
 
   it('with programme done, the same act ends the programme done and closes its plan (the reason stays on the run)', async () => {
-    const { r, id, itemId, programme } = await closeItem();
+    const { r, id, itemId, programme } = await closeItem({ armed: true });
     const res = await post(r, `/api/items/${itemId}/act`, { reason: 'done elsewhere', programme: 'done' });
     expect(res.statusCode, res.body).toBe(200);
     expect(stateOf(r, id)).toBe('failed');
@@ -287,8 +316,30 @@ describe('Close this run, and the programme\'s end', () => {
     expect(detailOf(r, id)).toBe(`abandon:refused:${itemId} done elsewhere`);
   });
 
+  // Programme lifecycle W2 review (spec §14; plan W2 item 4): the end is an end, so it takes the end's step-up, asked before
+  // the run is abandoned. Dark, or signed in without the step-up, nothing is closed or ended; the plain close still works dark.
+  it('the programme\'s end takes the step-up: dark or not stepped up, nothing is closed or ended', async () => {
+    const dark = await closeItem();
+    const refused = await post(dark.r, `/api/items/${dark.itemId}/act`, { reason: 'done elsewhere', programme: 'done' });
+    expect(refused.json()).toMatchObject({ error: 'auth-off' });
+    expect(stateOf(dark.r, dark.id)).toBe('planned');
+    expect(dark.r.coord.itemById(dark.itemId)!.state).toBe('open');
+    expect(dark.programme().state).toBe('active');
+    await app?.close();
+    const signed = await rig({ armed: true });
+    const id = fixtureRun(signed, false);
+    const itemId = raise(signed, id, 'warning-undelivered', 'gone');
+    expect((await post(signed, `/api/items/${itemId}/act`, { reason: 'done elsewhere', programme: 'done' })).json()).toMatchObject({ error: 'step-up-required' });
+    expect(stateOf(signed, id)).toBe('planned');
+    await stepUp(signed);
+    expect((await post(signed, `/api/items/${itemId}/act`, { reason: 'done elsewhere', programme: 'done' })).statusCode).toBe(200);
+    const ended = signed.coord.db.prepare("SELECT actorKind, actor FROM programme_events WHERE edge = 'ended' ORDER BY id DESC LIMIT 1").get() as { actorKind: string; actor: string };
+    expect(ended.actorKind).toBe('operator');
+    expect(ended.actor, 'the stepped-up operator, never unmeasured').not.toBe('unmeasured');
+  });
+
   it('ending the programme abandoned takes a reason, and a refused body ends nothing', async () => {
-    const { r, id, itemId, programme } = await closeItem();
+    const { r, id, itemId, programme } = await closeItem({ armed: true });
     const res = await post(r, `/api/items/${itemId}/act`, { programme: 'abandoned' });
     expect(res.statusCode).toBe(400);
     expect(stateOf(r, id)).toBe('planned');
@@ -344,7 +395,7 @@ describe('Close this run, and the programme\'s end', () => {
   });
 
   it('ending the programme abandoned gives its plan a reason, as the plan\'s own close requires', async () => {
-    const { r, itemId, programme } = await closeItem();
+    const { r, itemId, programme } = await closeItem({ armed: true });
     const res = await post(r, `/api/items/${itemId}/act`, { reason: 'replaced by other work', programme: 'abandoned' });
     expect(res.statusCode, res.body).toBe(200);
     const why = programme().planEndWhy;

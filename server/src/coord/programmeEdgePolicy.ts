@@ -6,7 +6,8 @@
 // `edgeDecision` is spec §5's transition table for the state door's five edges and the hand-over. `doorCredential` is
 // §14's one credential rule, a table: a narrowing act works while sign-in is dark, a widening or irreversible one takes
 // the account gate, and the ones that change who leads or whether a programme lives take its step-up. The Overlord's door
-// (W7) is gated by its rung cell alone, never a step-up. `endProposalDecision` and `endProposalItem` are §8's proposal.
+// (W7) is gated by its rung cell alone, never a step-up. `startDecision` is the start row's coordinator rule.
+// `endProposalDecision` and `endProposalItem` are §8's proposal, and `confirmEndDecision` its confirm.
 import {
   END_EVIDENCE_LINE_MAX, END_EVIDENCE_MAX, END_PROPOSAL_OPTIONS, isEnded,
   type DoorCredential, type ProgrammeDecider, type ProgrammeDoorAct, type ProgrammeDoorRefusal, type ProgrammeEndOutcome, type ProgrammeStateEdge,
@@ -48,6 +49,7 @@ export type EdgeDecision =
   | { readonly ok: false; readonly why: EdgeRefusal; readonly detail: string };
 
 const isKnownLive = (s: string): boolean => s === 'active' || s === 'paused';
+const unreadable = (s: string): string => `the stored state ${JSON.stringify(s)} is unreadable: repair it`;
 const refuse = (why: EdgeRefusal, detail: string): EdgeDecision => ({ ok: false, why, detail });
 
 /**
@@ -61,7 +63,7 @@ export function edgeDecision(f: EdgeFacts, req: EdgeRequest): EdgeDecision {
   switch (req.edge) {
     case 'pause':
       if (ended) return refuse('programme-ended', 'the programme has ended: reopen it first');
-      if (!isKnownLive(f.stored)) return refuse('programme-unknown', `the stored state ${JSON.stringify(f.stored)} is unreadable: repair it`);
+      if (!isKnownLive(f.stored)) return refuse('programme-unknown', unreadable(f.stored));
       return { ok: true, kind: 'decide', to: 'paused', event: EVENT_OF.pause, abandonRuns: false };
     case 'resume':
       if (f.stored !== 'paused') return refuse('not-paused', 'the programme is not paused');
@@ -71,7 +73,7 @@ export function edgeDecision(f: EdgeFacts, req: EdgeRequest): EdgeDecision {
       return { ok: true, kind: 'decide', to: 'active', event: EVENT_OF.reopen, abandonRuns: false };
     case 'end':
       if (ended) return refuse('programme-ended', 'the programme has already ended');
-      if (!isKnownLive(f.stored)) return refuse('programme-unknown', `the stored state ${JSON.stringify(f.stored)} is unreadable: repair it`);
+      if (!isKnownLive(f.stored)) return refuse('programme-unknown', unreadable(f.stored));
       return endOver(f.openRuns, req.outcome, req.abandonRuns, EVENT_OF.end);
     case 'repair':
       if (ended || isKnownLive(f.stored)) return refuse('not-unknown', `the stored state ${JSON.stringify(f.stored)} is readable`);
@@ -108,6 +110,17 @@ export function doorCredential(act: ProgrammeDoorAct, decider: ProgrammeDecider)
   return decider === 'overlord' ? 'rung' : OPERATOR_DOOR_CREDENTIALS[act];
 }
 
+/** Spec §5's start row, on whether the start names its coordinator: the Overlord must always name one; the operator's start
+ *  with none is the start sheet's pick, which arrives with the join sweep (W4), so until then it is refused too. Both answer
+ *  `coordinator-required`, so no start is left unbound with nothing to bind it. */
+export function startDecision(decider: ProgrammeDecider, coordinatorNamed: boolean):
+  { readonly ok: true } | { readonly ok: false; readonly why: 'coordinator-required'; readonly detail: string } {
+  if (coordinatorNamed) return { ok: true };
+  return { ok: false, why: 'coordinator-required', detail: decider === 'overlord'
+    ? 'the Overlord names the session that will coordinate the programme it starts'
+    : 'name the session that will coordinate it; the start sheet\'s pick arrives with the join sweep' };
+}
+
 /** What the proposal door measured (spec §8). */
 export interface EndProposalFacts {
   readonly stored: string;
@@ -123,9 +136,22 @@ export function endProposalDecision(f: EndProposalFacts):
   { readonly ok: true } | { readonly ok: false; readonly why: EdgeRefusal | EndRequestRefusal; readonly detail: string } {
   if (f.placeholder !== null) return { ok: false, why: 'programme-provisional', detail: 'a placeholder is filed, never ended' };
   if (isEnded(f.stored)) return { ok: false, why: 'programme-ended', detail: 'the programme has already ended' };
+  if (!isKnownLive(f.stored)) return { ok: false, why: 'programme-unknown', detail: unreadable(f.stored) };
   if (f.openRuns > 0) return { ok: false, why: 'programme-runs-open', detail: `${f.openRuns} run(s) still open: close them before proposing the end` };
   if (f.openProposal !== null) return { ok: false, why: END_REQUEST_REFUSALS.alreadyAsked, detail: `the end is already proposed, item ${f.openProposal}` };
   if (f.evidence.length === 0) return { ok: false, why: 'evidence-required', detail: 'an end proposal needs evidence against the definition of done' };
+  return { ok: true };
+}
+
+/** Spec §5's confirm row: from Open, Idle or Paused only (a stored `active` or `paused` with no open run), so an ended,
+ *  unreadable or placeholder programme is refused as the state door's `end` refuses it, and an open run refuses with the
+ *  proposal left open. The decider of "may this programme end" stays one: the confirm asks the same guards as `end`. */
+export function confirmEndDecision(f: EdgeFacts):
+  { readonly ok: true } | { readonly ok: false; readonly why: Extract<EdgeRefusal, 'programme-ended' | 'programme-unknown' | 'programme-provisional' | 'programme-runs-open'>; readonly detail: string } {
+  if (f.placeholder !== null) return { ok: false, why: 'programme-provisional', detail: 'a placeholder is filed or withdrawn, never ended' };
+  if (isEnded(f.stored)) return { ok: false, why: 'programme-ended', detail: 'the programme has already ended' };
+  if (!isKnownLive(f.stored)) return { ok: false, why: 'programme-unknown', detail: unreadable(f.stored) };
+  if (f.openRuns > 0) return { ok: false, why: 'programme-runs-open', detail: `${f.openRuns} run(s) opened since the proposal: it stays open` };
   return { ok: true };
 }
 

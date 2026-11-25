@@ -182,12 +182,13 @@ export const actAbandons = (a: ItemAction | null): boolean =>
   a !== null && (a.verb === 'end-run' || (a.verb === 'close-refused' && a.doors.some((d) => ABANDONING_DOORS.includes(d))));
 /** Whether an item's action admits a move (A-1, review 2394, against D-8720). An item that carries an action ends by `act`,
  *  `decline`, `withdraw` or `settle`: a tick, confirm or return would strand it. A persistent-drift item is closed by the operator's
- *  Hand or Keep alone (`linear-drift`), so the generic dismiss door must not quiet it. `moveItemInTx` is the one asker; it answers
- *  `not-open` for a refusal, as for any move the item's state does not take. */
+ *  Hand or Keep alone (`linear-drift`), and an end proposal by its confirm or decline alone (`end-programme`, programme lifecycle W2
+ *  review: each records the close in the programme's history and tells its coordinator), so the generic dismiss door must quiet
+ *  neither. `moveItemInTx` is the one asker; it answers `not-open` for a refusal, as for any move the item's state does not take. */
 export function actionAdmits(action: ItemAction | null, act: ItemAct): boolean {
   if (action === null) return true;
   if (act === 'tick' || act === 'confirm' || act === 'return') return false;
-  return !(act === 'dismiss' && action.verb === 'linear-drift');
+  return !(act === 'dismiss' && (action.verb === 'linear-drift' || action.verb === 'end-programme'));
 }
 /** Reads a stored action column; null when it is not an `ItemAction`. The one reader of the column's JSON. */
 export function parseItemAction(text: string): ItemAction | null {

@@ -3,7 +3,7 @@ import type { SessionVerdict } from '../exec.js';
 import { lifecycleInputFor } from '../fleet.js';
 import type { FleetIO } from '../io.js';
 import { fieldMeasured, readSessionRecord } from '../registry.js';
-import type { CoordStore, OpenSibling } from './store.js';
+import type { CoordStore, OpenSibling, ReclaimMoveOpts } from './store.js';
 import type { WatcherCoordPort } from './ports.js';
 import { CLAIMS_MOVE_REFUSALS, isRegistryId, sessionLifecycle, type SessionLifecycle } from '../../../shared/api.js';
 import { readSession, type SessionFacts } from '../sessionReading.js';
@@ -303,6 +303,8 @@ export interface ReclaimOptions {
   readonly actor?: ProgrammeActor;
   /** The `coordinator` event's why; absent, the reclaim door's own sentence. */
   readonly why?: string;
+  /** Programme lifecycle W2 review: run inside the move's transaction (`ReclaimMoveOpts.onMoved`), for the hand-over door's mail. */
+  readonly onMoved?: ReclaimMoveOpts['onMoved'];
 }
 
 /** The reclaim door's own actor: an ungated door (D-282) whose caller carries no attribution, so the event says `unmeasured`
@@ -418,7 +420,8 @@ export async function reclaimProgrammeTo(
   const ladder = await heirLadder(deps, from, to, opts, now);
   if (!ladder.ok) return ladder.refusal;
   const committed = deps.coord.reclaimProgramme(slug, from, to, now, ladder.coordProject,
-    { toUuid: ladder.toUuid, actor: opts.actor ?? RECLAIM_DOOR_ACTOR, why: opts.why ?? reclaimDoorWhy(from ?? 'no coordinator') });
+    { toUuid: ladder.toUuid, actor: opts.actor ?? RECLAIM_DOOR_ACTOR, why: opts.why ?? reclaimDoorWhy(from ?? 'no coordinator'),
+      ...(opts.onMoved === undefined ? {} : { onMoved: opts.onMoved }) });
   if (!committed.ok) return committed;
   return { ok: true, program: committed.program, runIds: committed.runIds, from: committed.from, to };
 }

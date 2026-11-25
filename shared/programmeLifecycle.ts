@@ -152,12 +152,12 @@ export type ProgrammeDecider = (typeof PROGRAMME_DECIDERS)[number];
 
 /** The doors' own refusal words, each with its ONE status, spread into `shared/refusal.ts`'s `REFUSAL_STATUS`
  *  (`DELEGATION_ADOPT_REFUSALS`' idiom). CHOSEN, not measured: 400 for what the caller can fix, 404 for a programme that
- *  is not there, 409 for a state that refuses the act, 503 for a coordinator line that could not be measured. The words the
- *  doors share with older tables (`programme-ended`, `already-asked`, `not-your-programme`) keep those tables' statuses. */
+ *  is not there, 409 for a state that refuses the act. The pick's and the filing's words (`programme-has-coordinator`,
+ *  `coordinator-unmeasured`) arrive with their doors in W4. The words the doors share with older tables
+ *  (`programme-ended`, `already-asked`, `not-your-programme`) keep those tables' statuses. */
 export const PROGRAMME_DOOR_REFUSALS = {
   'slug-taken': 409, 'why-required': 400, 'coordinator-required': 409, 'owns-another-programme': 409,
-  'programme-has-coordinator': 409, 'coordinator-unmeasured': 503, 'unknown-programme': 404, 'not-paused': 409,
-  'not-ended': 409, 'not-unknown': 409, 'programme-runs-open': 409, 'evidence-required': 400, 'programme-provisional': 409,
+  'unknown-programme': 404, 'not-paused': 409, 'not-ended': 409, 'not-unknown': 409, 'programme-runs-open': 409, 'evidence-required': 400, 'programme-provisional': 409,
   'programme-unknown': 409, 'no-coordinator': 409,
 } as const;
 export type ProgrammeDoorRefusal = keyof typeof PROGRAMME_DOOR_REFUSALS;
