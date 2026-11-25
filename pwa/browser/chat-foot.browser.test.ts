@@ -248,7 +248,19 @@ describe('a reader at the foot stays there; a reader scrolled up is not moved (d
         await toMiddle(app.page);
         await app.page.locator('.jump-latest').click();
         await app.page.waitForTimeout(1500);
-        await expectAtFoot(app.page, 'Jump to latest');
+        // As today: its own smooth scroll to the last row's start, which lands a few pixels above the very end (measured 3px
+        // with virtuoso's follow on and off alike), inside the pill's band, so the pill goes and the reader is at the foot.
+        const band = await app.page.evaluate(() => {
+          const st = getComputedStyle(document.documentElement);
+          return Number.parseFloat(st.getPropertyValue('--tap-min')) + Number.parseFloat(st.getPropertyValue('--sp-3'));
+        });
+        const at = await foot(app.page);
+        expect(at.gap, 'Jump to latest: the reader stopped short of the foot').toBeLessThanOrEqual(band);
+        expect(at.pill, 'Jump to latest: the pill is still up').toBe(false);
+        // And a reader it brought there is followed: an append lands at the foot.
+        app.send({ type: 'events', uuid: 'u-1', events: [{ kind: 'assistant', uuid: 'after-jump', ts: TS, text: 'After the jump.' }], offset: 50 });
+        await app.page.waitForTimeout(900);
+        await expectAtFoot(app.page, 'an append after Jump to latest');
       } finally {
         await app.ctx.close();
       }

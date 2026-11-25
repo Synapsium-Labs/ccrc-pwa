@@ -864,7 +864,10 @@ function ChatScroller({
   // put back. A reader who had scrolled up is not pinned and is never moved;
   // a wheel, a touch or a key ends the settling at once.
   const pinned = useRef(true);
-  /** Where the scroller stood when the reader was last at the foot (wave 175): a reader who leaves it moved up from here. */
+  /** Where the scroller stood when the reader was last measured at the foot (wave 175): a reader who leaves it moved up from
+   *  here. Written by virtuoso's at-the-foot report and by a scroll event that lands within the pill's band of the foot,
+   *  never by one above it: this list's scroll listener runs before virtuoso reports the reader left, so writing it on
+   *  every scroll moved it to where the reader went (measured: a reader scrolled up was then taken back by a view shrink). */
   const footTop = useRef(0);
   /** Take the reader to the foot: the one writer of "stay at the foot" (`footFollow.ts#footLeft`). */
   const toFoot = useCallback((): void => { virtuoso.current?.scrollToIndex({ index: 'LAST', align: 'end' }); }, []);
@@ -965,7 +968,9 @@ function ChatScroller({
     // write left it: a reader who moved it since owes an event of their own, and this one is theirs.
     if (el !== null && own !== null && Math.abs(el.scrollTop - own) < 1) return;
     if (adjusting.current) { adjusted.current += 1; return; }
-    if (el !== null && pinned.current) footTop.current = el.scrollTop;
+    // Where the foot stands, while the scroller is measured at it (within the pill's band): rows measuring under a reader at
+    // the foot move it; a reader scrolling up leaves the band at their first event, and leaves this where the foot was.
+    if (el !== null && el.scrollHeight - el.scrollTop - el.clientHeight <= (band ?? 0) + 1) footTop.current = el.scrollTop;
     lastMove.current = performance.now();
     if (readSoon.current) return;
     readSoon.current = true;
@@ -974,7 +979,7 @@ function ChatScroller({
       readAnchor();
       nearTop();
     });
-  }, [readAnchor, nearTop]);
+  }, [readAnchor, nearTop, band]);
   const onTap = useCallback((e: Event): void => {
     if (e.target instanceof Element && e.target.closest('[aria-expanded]') !== null) lastTap.current = performance.now();
   }, []);
