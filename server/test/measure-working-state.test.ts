@@ -16,7 +16,7 @@ import { ccdSource } from './ccdWsHelpers.js';
 import { NON_DELEGATING_TASK_KINDS, sessionBucket, type FleetSession } from '../../shared/api.js';
 import { HOOKSTATE_FRESH_MS } from '../src/hookstate.js';
 import { liveStatusCoversDelegation } from '../src/livestate.js';
-import { STALL_CHECK_PREFIX, STALL_REPORT_PREFIX } from '../src/coord/stall.js';
+import { STALL_CHECK_PREFIX, STALL_REPORT_PREFIX, STALL_SENDER } from '../src/coord/stall.js';
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const SCRIPT = path.join(ROOT, 'deploy', 'measure-working-state.py');
@@ -209,10 +209,7 @@ describe('measure-working-state.py: its second spellings are bound to their home
     expect(src()).toContain('END_RE = re.compile(r"^session (\\S+) ended; exiting for systemd restart$")');
     expect(src()).toContain(`STALL_CHECK_PREFIX = '${STALL_CHECK_PREFIX}'`);
     expect(src()).toContain(`STALL_REPORT_PREFIX = '${STALL_REPORT_PREFIX}'`);
-    const stall = fs.readFileSync(path.join(ROOT, 'server', 'src', 'coord', 'stall.ts'), 'utf8');
-    const sender = /^const STALL_SENDER = '([^']+)';$/m.exec(stall);
-    expect(sender).not.toBeNull();
-    expect(src()).toContain(`STALL_SENDER = '${sender![1]}'`);
+    expect(src()).toContain(`STALL_SENDER = '${STALL_SENDER}'`);
   });
 
   // The displayed bucket the instrument counts is `sessionBucket`'s, fed as `fleet.ts` feeds it (an aged hookstate

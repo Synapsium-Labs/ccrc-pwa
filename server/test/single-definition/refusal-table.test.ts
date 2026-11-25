@@ -24,6 +24,7 @@ import * as refusal from '../../../shared/refusal.js';
 import * as api from '../../../shared/api.js';
 import * as delegationAdopt from '../../../shared/delegation-adopt.js';
 import * as delegationBackfill from '../../../shared/delegationBackfill.js';
+import * as programmeLifecycle from '../../../shared/programmeLifecycle.js';
 import { LANE_ARM_REFUSALS } from '../../../shared/lane-arm.js';
 import { ts } from '../scan/parse.js';
 import { ccrcRoot } from './helpers.js';
@@ -347,10 +348,10 @@ describe('OVERLORD_REFUSALS: complete, alone, and each status by the family rule
     expect(literal).toEqual([]);
     expect(spreads).toContain('OVERLORD_REFUSALS');
     // The modules refusal.ts spreads from; a spread from any other module is red until it is named here.
-    const modules: Array<Record<string, unknown>> = [refusal, api, delegationAdopt, delegationBackfill] as Array<Record<string, unknown>>;
+    const modules: Array<Record<string, unknown>> = [refusal, api, delegationAdopt, delegationBackfill, programmeLifecycle] as Array<Record<string, unknown>>;
     for (const s of spreads.filter((x) => x !== 'OVERLORD_REFUSALS')) {
       const v = modules.map((m) => m[s]).find((x) => x !== undefined);
-      expect(v, `the spread ${s} resolves in refusal.ts, api.ts, delegation-adopt.ts or delegationBackfill.ts`).toBeDefined();
+      expect(v, `the spread ${s} resolves in refusal.ts, api.ts, delegation-adopt.ts, delegationBackfill.ts or programmeLifecycle.ts`).toBeDefined();
       for (const w of Object.keys(v as object)) expect(mine.has(w), `${s} spreads ${w}`).toBe(false);
     }
   });

@@ -1505,7 +1505,7 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the one hundred and three machine lanes the
+liveness gate reads the shipped sha out of it), the one hundred and six machine lanes the
 fleet host reaches (thirty-nine box-token-consulting coordination routes plus
 the Linear proxy's routes under `/api/linear/proxy/`, which a session's `ccrc-api linear`
 verbs call and which refuse any call without the token whatever `CCRC_AUTH` says,
@@ -1513,6 +1513,8 @@ the programme ledgers' item and goal routes (`/api/programmes/:slug/{items,spec,
 and `/api/items/:id/{confirm,return,withdraw,blocking}`),
 the programme doors (`POST /api/coord/programmes/:slug/calls`, the coordinator's call record, and
 `POST /api/coord/programmes/:slug/remaining`, what a programme says is left),
+the programme lifecycle's end proposal (`POST /api/programmes/:slug/end-proposal`, the bound coordinator's, attributed and owned)
+and its reads (`GET /api/programmes/:slug/history` and `GET /api/sessions/:id/programme`),
 the plan verbs' routes (`POST /api/programmes/:slug/plan` and `/api/programmes/:slug/plan/{met,tickets,tickets/move,tickets/done,phases/refs,epics/drop,close,take}`, and the inbound triage `POST /api/teams/:team/plan/triage`),
 the hook's start report (`POST /api/sessions/:id/start`) and its loads report (`POST /api/sessions/:id/start/loads`), the door process's act-key claim (`POST /api/sessions/:id/act-key`), the hook's report door (`POST /api/sessions/:id/report`: the witness, readers and picked-up reports), the card door (`GET /api/sessions/:id/card`), the note door
 (`POST /api/sessions/:id/notes`, `GET /api/sessions/:id/notes`, `POST /api/sessions/:id/handover`), the timer doors
@@ -1533,7 +1535,8 @@ history door (`POST /api/overlord/history`, a read whose search words ride the b
 Claude Code session, `ccd-pool-sync.timer` and, from update-management W4, `ccd-update-sync.timer`, none with a cookie jar, though the
 exempt-but-authenticated GETs among them (`/api/runs`, `/api/runs/:id/items`,
 `/api/runs/:id`, `/api/runs/:id/record`, `/api/runs/:id/signals`, `/api/feed`, `/api/lifecycle`, `/api/peers`, `/api/claims`,
-`/api/asks`, `/api/pools/epoch`, `/api/updates/intent/:nodeId`, `/api/testbox`, `/api/programmes/:slug/goals`, `/api/programmes/:slug/plan`, `/api/landing`, and the
+`/api/asks`, `/api/pools/epoch`, `/api/updates/intent/:nodeId`, `/api/testbox`, `/api/programmes/:slug/goals`, `/api/programmes/:slug/plan`, `/api/landing`,
+`/api/programmes/:slug/history`, `/api/sessions/:id/programme`, and the
 one POST of the kind, `/api/testbox/tools-sync`) take a live session
 cookie **or** the token, which is how a coordinator reads its own wave ledger from
 the fleet host), `POST /api/token/claim` (the box token's claim door, which
@@ -2582,12 +2585,25 @@ window less `min(max_tokens, 20000)` less 13,000, measured on Claude Code 2.1.30
 every 15 seconds, and the upstream idle bound is 300 seconds, as in Codex. A context overflow is answered as Claude
 Code's own `prompt is too long: N tokens > M maximum`, so it compacts; N is the bridge's estimate, because the backend's
 overflow message carries no counts. A usage limit is a 429 `billing_error` and a policy refusal a 400 `policy_blocked`,
-each with `x-should-retry: false`. Retries are Claude Code's: the bridge never retries an upstream request, except once
-after it refreshed a token the upstream answered 401, and once without the request markers' additions after a 400
-(below; a reply the upstream marks unfinished is continued inside the same message, at most three times).
+each with `x-should-retry: false`. Retries are Claude Code's, except three: the bridge sends an upstream request again
+once after it refreshed a token the upstream answered 401, once without the request markers' additions after a 400
+(below), and, for a short provider failure, as the next paragraph says (a reply the upstream marks unfinished is
+continued inside the same message, at most three times).
 `count_tokens` is answered locally, from an estimate seeded at 3.5 bytes per token and
 calibrated on the lane's own replies, for any model. A `/v1/messages` request for a model the lane's catalogue does not
 list is answered 404 locally and never sent upstream.
+**A short provider failure is absorbed** (D-9078). The lane's launcher gives Claude Code two retries, because a
+retry of a request that timed out costs 870 seconds, so without this a provider overloaded for a few seconds ended the
+turn. While nothing of the message has reached Claude Code, the bridge tries again itself when the upstream answered
+overloaded (529) or unavailable (503), or could not be reached: after about 1 second, then doubling to 20, each wait
+spread by a quarter, until 120 seconds after the message's first attempt. An upstream `retry-after` is waited out when it
+fits in that time; one that does not, and any attempt that itself took 30 seconds or more, is answered at once, so a slow
+request is never sent again. Rate limits, plan limits, policy refusals, overflows, ineligible plans, refused tokens and
+every other 4xx are answered at once as before, and so is a response that reached its end. When the time is spent, the
+client gets the error it always got. The wait ends as soon as the client closes or the bridge is stopped. Only a request
+carrying Claude Code's beta is held, so another caller of the lane (the models canary) keeps its own deadline. An absorbed
+failure is no `5xx` outcome and is not written to the credential's status file; the stats file's `parity` row counts it in
+`absorbed`, by `overloaded`, `unavailable` and `transport`.
 The credential's refresher is the bridge: it checks every minute and refreshes at about half the token's lifetime,
 through the library's lock.
 
@@ -2694,8 +2710,8 @@ started), `session` (the session id when it has the shape of one, at most 128 ch
 for a subagent's request, never its id), `message` and `post` (the client message's number in this process, and the
 request's index within it: continuations and retries count on), `route` and `model` (the `parity` row's), `status`
 (null when no answer came), `outcome` (the word the stats file counts for what the bridge did with the answer: `2xx`,
-`continuations`, `continuation-cap`, `refresh-after-401`, `4xx`, `5xx`, `client-gone`, `drain-cut`, or `fallback` for the
-400 that started a fallback), `served`, `servedTier` (the `parity` row's word for the tier the response named, or
+`continuations`, `continuation-cap`, `refresh-after-401`, `4xx`, `5xx`, `client-gone`, `drain-cut`, `fallback` for the
+400 that started a fallback, or `absorbed` for a failure the bridge tried again), `served`, `servedTier` (the `parity` row's word for the tier the response named, or
 `absent`), `effort`, the four token counts, `firstOutputMs`, `reasoningMs` (null when no reasoning item finished before
 the first output) and `totalMs` (whole milliseconds, from the same instants the `parity` histograms bucket), `inputTransformations`, `replay` (the message's
 reasoning-store lookups, on its first request only), `markers`, `fallback` and, when set, `turnState`. A field the
@@ -5823,7 +5839,7 @@ and left alone); a `fix-round` mail from the coordinator names the PR ejected fr
 or next to land in a strict-protection repository; or a `conflict-sync:` mail from the coordinator
 names the PR and a base commit for a conflict the coordinator measured, and the worker's own probe of
 that commit agrees. The first two license at most one absorption per PR. The fourth licenses one
-absorption of exactly the named commit per mail, before the worker's wave-done of that round only. An
+absorption of exactly the named commit per mail, before the wave-done of the round the worker is in. An
 absorption is `git merge` and nothing else — never a rebase, a force-push, or GitHub's branch
 update by any route (its button, `gh pr update-branch`, the API) — and a conflict in a
 `# ccrc:generated` stamp line (the session hook's generated region carries one; `ccd/ccd` does not) is never hand-resolved:
@@ -6194,7 +6210,8 @@ next before the turn ends.
 session, `$REG/<id>.turn.json`, written on the main thread only: an event that
 carries a subagent's `agent_id` never touches it. It reads `working` from a
 turn's first event, `done` at its Stop (with the Stop's background-task count,
-kinds and ids), and `failed` at a `StopFailure` (with the API error's token).
+kinds and ids), and `failed` at a `StopFailure` (with the API error's token),
+and it keeps the times of the last consecutive provider failures (`failAts`).
 Every SessionStart but a `clear` or `compact` records the restart, and its lost
 lists name only what that restart cut short: the background tasks the last
 `done` turn left running. The lane reads the marker, the raw hookstate and the
@@ -6239,9 +6256,10 @@ unreadable (ahead of every wave-1 rung and cap), coordinator deaf (ahead of the
   reading `idle` or `shell`, and no more than about 22 h ago (the 24 h mail
   read less the 2 h repeat window), so a repeat is never re-read as a first
   failure.
-  - A retry-class error (`server_error`, `overloaded`, `max_output_tokens`,
-    `unknown`) draws a `failed:` mail to the session, and a second within 2 h
-    goes to the coordinator.
+  - A provider error (`server_error`, `overloaded`) is not this arm's: the
+    provider-failure ladder below owns it, and no coordinator is told.
+  - A retry-class error (`max_output_tokens`, `unknown`) draws a `failed:` mail
+    to the session, and a second within 2 h goes to the coordinator.
   - A request-class error (`invalid_request`, `model_not_found`) goes to the
     coordinator at once.
   - Those two reach the operator as a `⚠ failed` push instead when the failing
@@ -6250,6 +6268,32 @@ unreadable (ahead of every wave-1 rung and cap), coordinator deaf (ahead of the
   - An account-class error holds, because the limit and swap machinery owns it.
   - A token this build does not know holds with one `ccrc-server: stall-watch
     unknown StopFailure` line. It is never guessed into a self-wake.
+
+**The provider-failure ladder** (`server/src/coord/providerRetry.ts`, run inside
+the stall watch's pass by `server/src/providerRetryLane.ts`). Any live session
+whose turn ended on a provider error is told to continue by itself: a worker, a
+reviewer, a coordinator, the designated Overlord, or a session of the
+operator's own. One mail to the session, typed as one line (`Your turn ended on
+a provider error; continue where you stopped.`), falls due 1 minute after the
+first consecutive failure, 4 after the second and 15 after the third and every
+later one. One that started no turn is repeated 15 minutes after it landed, and
+two are never out at once. What is owed is the marker's `failAts`, which a real
+Stop and a `clear` empty and a restart carries, so a restart that relabels the
+marker `done` silences nothing; the 22 h cutoff does not apply. It does not
+nudge a running turn, an open dialog or question, a session with no pane, one
+that is stopped, hibernated or archived, one held by a usage limit, or anything
+it could not measure. A person's unsent text in the box is refused, not stashed:
+nothing is typed, and the mail waits for the box. A queued nudge the session has
+moved past is taken back. No coordinator is asked to mend a provider, and a
+worker that owes a retry holds the quiet ladder, so none is mailed `stall:`
+about it. When three sessions owe a retry on one provider (the Anthropic lanes,
+the Codex lanes, or any other lane by itself) within 10 minutes, or one session has
+got past none of its failures for an hour, one notice with
+no session goes to the operator, and one record-only row says when none has owed
+one for 10 minutes; the standing outages are kept in
+`~/.ccrc/provider-outages.json`, so a restart repeats no notice. It ships armed
+and has no marker of its own: `stall-watch-disabled`, a level of Off or Log only
+chosen in Settings, and `mail-disabled` each stop it.
 
 The `orphaned:` and `failed:` mails are class `self-wake`: recorded, never
 pushed, and they move neither the quiet clock nor the episode. With a current
@@ -8604,7 +8648,7 @@ browser suite there and `test (server)` a red node floor, so either stops the me
 Nothing reaches `main` through the queue without it. The one way around it is a bypass actor's direct merge
 (`gh pr merge --admin`, which the ruleset's admin bypass still allows): the required checks are then satisfied by the
 fast run, so such a merge lands only what the fast run tested. Don't do it here (ccrc's admin-merge door, D-8124, refuses any repository with a merge queue, so it never lands this one); the daily `full-suite` is the next run that
-would catch what it skipped. In a queue run, a server shard's deadline is 45 minutes, not 30: a full queue shard
+would catch what it skipped. A server shard's deadline is 45 minutes on every run, not 30: a full queue shard
 measured from 15m47 to 29m53 by runner, and a green one was cancelled at 30m00 and its entry removed (D-9014). The long
 jobs of a queue run first ask `.github/ci/queue-live.mjs`, fetched from the default branch, whether their group still
 stands (a job whose leg skips, such as a docs-only group's node floor, skips this step too), and end with exit 1 only

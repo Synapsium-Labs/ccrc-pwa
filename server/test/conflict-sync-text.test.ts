@@ -59,6 +59,8 @@ describe('the conflict-sync mail: one spelling in four files (landing-order wave
     has('ccd/worker-skill/SKILL.md', worker, 'one absorption of exactly the named commit per mail');
     has('ccd/session-hook.sh', hook, 'absorb exactly that commit, once per mail');
     has('README.md', readme, 'one absorption of exactly the named commit per mail');
+    // The README's bound on the first two triggers (review 3751 F2).
+    has('README.md', readme, 'The first two license at most one absorption per PR.');
     expect(/One mail per measured conflict/.test(runCare), 'run care lacks: One mail per measured conflict').toBe(true);
     // The reference's own bound, not only its lead-in (review 3727 F2).
     has('wave-lifecycle-run-care.md', runCare, 'absorbs exactly that commit, once, with `git merge`');
@@ -73,7 +75,11 @@ describe('the conflict-sync mail: one spelling in four files (landing-order wave
     // receiver's words follow the sender's (review 3738 F3, ruled).
     has('ccd/worker-skill/SKILL.md', worker, "before this round's wave-done only");
     has('ccd/session-hook.sh', hook, "before this round's wave-done only");
-    has('README.md', readme, "before the worker's wave-done of that round only");
+    // "of that round" had no antecedent (review 3751 F6): the round is the one
+    // the worker is in.
+    has('README.md', readme, 'before the wave-done of the round the worker is in');
+    // The run-care lead-in states the same limit (review 3751 F2).
+    has('wave-lifecycle-run-care.md', runCare, "Never after this round's wave-done");
     // The sender's procedure states the same ruling, by the run's state
     // (review 3738 F4), and names each state's own route (review 3738 F2).
     has('wave-lifecycle-run-care.md', runCare,
@@ -98,8 +104,17 @@ describe('the conflict-sync mail: one spelling in four files (landing-order wave
     has('wave-lifecycle-run-care.md', runCare, 'git rev-parse origin/main');
     // The shell block itself, not only the prose that names it: the probe's
     // last line and the rev-parse line are neighbours inside the fence
-    // (review 3738 F1). Flattened, the fence's close follows the rev-parse.
-    has('wave-lifecycle-run-care.md', runCare, '<the branch tip> origin/main git rev-parse origin/main ```');
+    // (review 3738 F1).
+    // The tip is the pull request's head as GitHub reads it, and the probe's
+    // own exit status is captured on its own line: the call's status is the
+    // last command's, so without `rc` the rev-parse line answers for the probe
+    // (review 3751 F1, D-9066). Flattened, the fence's close follows the echo.
+    has('wave-lifecycle-run-care.md', runCare, 'tip=$(gh pr view <pr> --json headRefOid --jq .headRefOid)');
+    has('wave-lifecycle-run-care.md', runCare, '"$tip" origin/main; rc=$? git rev-parse origin/main echo "probe exit $rc" ```');
+    has('wave-lifecycle-run-care.md', runCare, "The probe's own exit status is the `probe exit` line");
     has('wave-lifecycle-run-care.md', runCare, 'copied from the rev-parse output and never typed');
+    // The paths are prose for the reader, never an argument list the worker
+    // parses (review 3738's residual on a path with a space).
+    has('wave-lifecycle-run-care.md', runCare, "The paths are for the reader: the worker's own probe is what measures");
   });
 });

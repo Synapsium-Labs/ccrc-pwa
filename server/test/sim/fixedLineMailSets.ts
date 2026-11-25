@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
 import { operatorMessageSubject } from '../../../shared/operatorMessages.js';
 import { INBOX_WAKE_SUBJECT } from '../../../shared/overlordInbox.js';
+import { providerRetrySubject } from '../../../shared/provider-retry.js';
 import { SPOT_PROBE_SUBJECT } from '../../src/continuity/renewalFeed.js';
 import type { DesignationFact } from '../../src/roleOf.js';
 import type { MutantSet, SuiteCase } from './mutate.js';
@@ -85,11 +86,11 @@ export function fixedLineMailOfCases(m: EnvelopeModule): Record<string, SuiteCas
     },
 
     'names each row once, and a row that matches a mail is the only one that does': () => {
-      expect(m.FIXED_LINE_MAIL.map((r) => r.name)).toEqual(['operator-message', 'spot-probe', 'inbox-wake', 'timer']);
+      expect(m.FIXED_LINE_MAIL.map((r) => r.name)).toEqual(['operator-message', 'spot-probe', 'inbox-wake', 'provider-retry', 'timer']);
       expect(m.FIXED_LINE_MAIL.filter((r) => r.matches({ fromId: 'timer', subject: 'timer: 1 due (4)', mailToId: 'overlord' })).map((r) => r.name)).toStrictEqual(['timer']);
       // Only the timer row waits for the card (C62): the other rows each name a door that itself refuses card-unread.
       expect(m.FIXED_LINE_MAIL.filter((r) => r.waitsForCard).map((r) => r.name)).toStrictEqual(['timer']);
-      for (const x of [{ fromId: 'operator', subject: operatorMessageSubject(1) }, { fromId: 'operator', subject: SPOT_PROBE_SUBJECT }, { fromId: 'operator', subject: INBOX_WAKE_SUBJECT }]) {
+      for (const x of [{ fromId: 'operator', subject: providerRetrySubject(1_800_000_000_000) }, { fromId: 'operator', subject: operatorMessageSubject(1) }, { fromId: 'operator', subject: SPOT_PROBE_SUBJECT }, { fromId: 'operator', subject: INBOX_WAKE_SUBJECT }]) {
         expect(m.FIXED_LINE_MAIL.filter((r) => r.matches(x))).toHaveLength(1);
       }
     },

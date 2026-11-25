@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { INJECTED_PROMPTS } from '../../shared/injected-prompts.mjs';
 import { renderInboxWakeLine, renderSpotProbeLine } from '../../shared/overlordInbox.js';
+import { renderProviderRetryLine } from '../../shared/provider-retry.js';
 import { FIXED_LINE_MAIL, renderMailNudge, renderOperatorMessageNudge, renderTimerFiredLine } from '../src/coord/envelope.js';
 import fixture from './fixtures/mail-prompt-forms.json' with { type: 'json' };
 
@@ -20,6 +21,7 @@ describe('the mail prompt forms fixture is what the server types', () => {
       spotProbe: renderSpotProbeLine(),
       timerFired: renderTimerFiredLine('timer: 2 due (7, 8)'),
       timerFiredUncounted: renderTimerFiredLine(''),
+      providerRetry: renderProviderRetryLine(),
     });
   });
 
@@ -40,7 +42,8 @@ describe('the mail prompt forms fixture is what the server types', () => {
       }
     }
     expect(renderMailNudge(fixture.self).startsWith(`${head} `)).toBe(true);
-    const FORM_OF: Record<string, string> = { 'operator-message': 'operatorMessage', 'spot-probe': 'spotProbe', 'inbox-wake': 'inboxWake', timer: 'timerFired' };
+    const FORM_OF: Record<string, string> = { 'operator-message': 'operatorMessage', 'spot-probe': 'spotProbe', 'inbox-wake': 'inboxWake',
+      'provider-retry': 'providerRetry', timer: 'timerFired' };
     expect(FIXED_LINE_MAIL.map((r) => FORM_OF[r.name] ?? `no fixture form for the row ${r.name}`).sort())
       .toEqual(Object.keys(FORM_OF).map((k) => FORM_OF[k]!).sort());
   });

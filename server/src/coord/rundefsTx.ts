@@ -197,12 +197,13 @@ export function queueStallNotice(
  * A run-less notice from `operator`, deduped on its SUBJECT across every delivery state, in ONE transaction: `hasMailWithSubject`, then
  * `insertSystemMailTx`. A subject already sent (outstanding, delivered, acked or parked) answers `duplicate` and writes nothing, so a
  * notice whose subject names its fact (a lease and its generation, never a pass instant) is queued exactly once across restarts. The
- * run-less arm of `queueStallNotice` (a coordinator's or a registry row's notice) and the delegation lane's lease notices call it. `tx`
+ * run-less arm of `queueStallNotice` (a coordinator's or a registry row's notice) and the delegation lane's lease notices call it. With
+ * `wake: 'never'` (the provider-failure ladder's) the notice waits for a hibernated recipient and never wakes it (D-8073). `tx`
  * is not re-entrant: no caller may hold one around this.
  */
 export function queueRunlessNotice(
   coord: WatcherCoordPort,
-  n: { toId: string; kind: MailKind; subject: string; body: string },
+  n: { toId: string; kind: MailKind; subject: string; body: string; readonly wake?: 'never' },
 ): StallNoticeQueued {
   return tx(coord.db, () => queueRunlessNoticeTx(coord, n));
 }
@@ -212,11 +213,11 @@ export function queueRunlessNotice(
  *  so each caller holds one around it. */
 export function queueRunlessNoticeTx(
   coord: WatcherCoordPort,
-  n: { toId: string; kind: MailKind; subject: string; body: string },
+  n: { toId: string; kind: MailKind; subject: string; body: string; readonly wake?: 'never' },
 ): StallNoticeQueued {
   if (coord.hasMailWithSubject('operator', null, n.toId, n.subject)) return { queued: false, why: 'duplicate' };
   const q = insertSystemMailTx(coord, null, { fromId: 'operator', toId: n.toId, runId: null,
-    kind: n.kind, subject: n.subject, body: n.body });
+    kind: n.kind, subject: n.subject, body: n.body, ...(n.wake === undefined ? {} : { wake: n.wake }) });
   return { queued: true, mailId: q.mailId, deliveryId: q.deliveryId, eventId: null };
 }
 

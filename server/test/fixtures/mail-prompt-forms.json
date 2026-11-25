@@ -9,6 +9,7 @@
     "inboxWakeUnreadable": "ccrc-mail: you have new mail. Something waits in your inbox: read it with your inbox door.",
     "spotProbe": "ccrc-mail: you have new mail. A probe round is open: answer it with your probe door.",
     "timerFired": "ccrc-mail: you have new mail. 2 of your timers came due: read them with your timer list door.",
-    "timerFiredUncounted": "ccrc-mail: you have new mail. Your timers came due: read them with your timer list door."
+    "timerFiredUncounted": "ccrc-mail: you have new mail. Your timers came due: read them with your timer list door.",
+    "providerRetry": "ccrc-mail: you have new mail. Your turn ended on a provider error; continue where you stopped."
   }
 }

@@ -16,6 +16,8 @@ import {
   endRecorded, isEnded, PROGRAMME_ENDED_STATES, type ProgrammeActorKind, type ProgrammeEventEdge, type ProgrammeMigrationRule,
   type ProgrammeStoredState,
 } from '../../../shared/programmeLifecycle.js';
+import { END_PROGRAMME_VERB, OPEN_ITEM_STATES, isEndProgrammeAction } from '../../../shared/ledgers.js';
+import { itemById, moveItemInTx, type ItemRow } from './ledgersStore.js';
 
 const TERMINAL_SQL = `('${TERMINAL_RUN_STATES.join("','")}')`;
 /** The end set as SQL, built from `PROGRAMME_ENDED_STATES` (the one spelling), as `TERMINAL_SQL` is from its list. */
@@ -144,12 +146,40 @@ export function decideInTx(
   if (released !== null) {
     bindCoordinatorInTx(db, input.slug, null, input.actor, input.why, now, { quiet: true });
   }
+  // An end closes the programme's open end proposal with it (spec §5's direct-end row, W2 review): here, at the one writer,
+  // so every end (the state door, the archive door, the refused close's end, the Linear put-back, a repair or the boot
+  // re-measure) closes it in its own transaction, and the end's event names it. The confirm moved its item first.
+  const proposal = ended ? closeEndProposalInTx(db, input.slug, now) : null;
+  const extra = { ...(released === null ? {} : { released }), ...(proposal === null ? {} : { proposal }) };
   appendEventInTx(db, {
     program: input.slug, edge: input.edge, fromState: row.state, toState: input.to, actor: input.actor, why: input.why,
-    detail: released === null ? (input.detail ?? null) : { ...(input.detail ?? {}), released },
+    detail: Object.keys(extra).length === 0 ? (input.detail ?? null) : { ...(input.detail ?? {}), ...extra },
   }, now);
   if ((ended && row.planEnd !== input.to) || (!ended && row.planEnd !== null)) markSyncDueInTx(db, input.slug, now);
   return { ok: true, changed: true, from: row.state, released };
+}
+
+/** The note an end proposal closed by its programme's end settles with. */
+export const END_PROPOSAL_CLOSED_NOTE = 'closed with the programme\'s end';
+
+/** The programme's open end proposal (an open or held `end-programme` item), or null. At most one is ever raised. */
+export function openEndProposalOf(db: DatabaseSync, slug: string): ItemRow | null {
+  const r = db.prepare(
+    `SELECT id FROM operator_items WHERE program = ? AND state IN ('${OPEN_ITEM_STATES.join("','")}') AND action LIKE ? ORDER BY id LIMIT 1`,
+  ).get(slug, `%"verb":"${END_PROGRAMME_VERB}"%`) as { id: number } | undefined;
+  if (r === undefined) return null;
+  const item = itemById(db, r.id);
+  return item !== null && isEndProgrammeAction(item.action) ? item : null;
+}
+
+/** Settle the programme's open end proposal as closed by its end, through the items' one writer; its id, or null when none
+ *  is open. A settle refused on an open item is a fault, and throws, rolling the end back with it. */
+function closeEndProposalInTx(db: DatabaseSync, slug: string, now: number): number | null {
+  const item = openEndProposalOf(db, slug);
+  if (item === null) return null;
+  const moved = moveItemInTx(db, item.id, 'settle', 'ccrc', { note: END_PROPOSAL_CLOSED_NOTE }, now, { programmeHasOpenRun: true });
+  if (!moved.ok) throw new Error(`decideInTx: the end proposal ${item.id} of ${slug} could not be closed (${moved.why})`);
+  return item.id;
 }
 
 /** A new programme row (spec §5's start rows). Initial `paused` only for the system (the Linear backlog, D-8186). */
@@ -263,8 +293,10 @@ export function programmeOf(
   return r ?? null;
 }
 
-/** The oldest open run `session` claims in a programme it does not own, by programme; `except` (the programme being given to
- *  it) does not count. R11 rule 4's one predicate: the start, the open and the reclaim heir all ask it. Null: none. */
+/** R11 rule 4's second half, the ONE predicate (programme lifecycle W2 review): a programme other than `except` whose open
+ *  run `session` claims while it is not that programme's coordinator (a migration conflict's party, spec §13), lowest run
+ *  first, or null. `except` is the programme a hand-over gives it (a party may be given a programme whose runs it holds);
+ *  null for a start, which gives it a new one. Asked by `mayStartProgrammeInTx`, the start door and the reclaim's heir rung. */
 export function foreignOpenClaimOf(db: DatabaseSync, session: string, except: string | null): string | null {
   const r = db.prepare(
     `SELECT r.program FROM runs r JOIN programs p ON p.slug = r.program WHERE r.claimedBy = ? AND r.state NOT IN ${TERMINAL_SQL} ` +
@@ -491,9 +523,17 @@ export function openRunOwnershipOf(db: DatabaseSync, program: string, claimedBy:
 }
 
 /** Does this heir own another live real programme, or claim an open run in a programme other than `program` that it does not
- *  own (R11 rule 4, D-8993)? Names it; null admits. Its unfiled placeholder does not count: `moveBindingInTx` withdraws it. */
-export function heirOwnsAnotherOf(db: DatabaseSync, to: string, toUuid: string | null, program: string): string | null {
-  return ownedLiveProgrammeOf(db, to, toUuid, program) ?? foreignOpenClaimOf(db, to, program);
+ *  own (R11 rule 4, D-8993)? Names it; null admits. Its unfiled placeholder does not count: `moveBindingInTx` withdraws it.
+ *  `party` is the hand-over door's (spec §13, rule 4's one exception; W3): a migration conflict's party, which holds open
+ *  runs in several programmes and owns none, may be given one whose open runs it holds, so its other claims do not count
+ *  (its ownership still does). Without it no conflict could be resolved by giving the party the programme it keeps. */
+export function heirOwnsAnotherOf(db: DatabaseSync, to: string, toUuid: string | null, program: string, party = false): string | null {
+  const owned = ownedLiveProgrammeOf(db, to, toUuid, program);
+  if (owned !== null) return owned;
+  const holds = party && db.prepare(
+    `SELECT 1 AS x FROM runs WHERE program = ? AND claimedBy = ? AND state NOT IN ${TERMINAL_SQL} LIMIT 1`,
+  ).get(program, to) !== undefined;
+  return holds ? null : foreignOpenClaimOf(db, to, program);
 }
 
 /** The binding's half of a move between sessions (`to` null: a release), inside the transaction that moves the claims (D-8985).

@@ -21,5 +21,13 @@ export function docsTabTitle(path: string, search: string): string {
       const name = segs.at(-1) ?? SECTION_LABEL[loc.section];
       return `${name} · ${loc.project} · ${tail}`;
     }
+    // An outside folder (X2 P2.4) titles as a project does, its label where the project name goes.
+    case 'folder': return `${loc.label} · ${tail}`;
+    case 'folder-section': return `${SECTION_LABEL[loc.section]} · ${loc.label} · ${tail}`;
+    case 'folder-path': {
+      const segs = loc.path.split('/').filter((s) => s !== '');
+      const name = segs.at(-1) ?? SECTION_LABEL[loc.section];
+      return `${name} · ${loc.label} · ${tail}`;
+    }
   }
 }

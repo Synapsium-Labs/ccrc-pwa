@@ -231,6 +231,12 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
     what: 'the docs range read granted without --project',
     codes: ['TS2322'],
   },
+  // NATIVE DOCS READER X2 wave P2, g32's shape for the outside-folder read: read-only, enrolled on `--label`, so the
+  // narrowed grant is a compile error. (`docs-folder` is deliberately not enrolled, so it has no fixture here.)
+  'g33-docs-folder-read-without-label.ts': {
+    what: 'the docs folder read granted without --label',
+    codes: ['TS2322'],
+  },
   // THE PANE-SCOPE STOP'S SWITCH (D-7902), g24's shape: enrolled on `--state`, so the narrowed grant is a compile error.
   'g27-pane-scope-stop-without-state.ts': {
     what: 'the pane-scope stop switch verb granted without --state',

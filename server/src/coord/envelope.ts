@@ -4,6 +4,7 @@ import { MAIL_INBOX_FENCE_INFO, parseMailEnvelope } from '../../../shared/api.js
 import { OPERATOR_MESSAGE_SENDER, isOperatorMessageMail, operatorMessageIdOf, operatorMessageNudgeBody } from '../../../shared/operatorMessages.js';
 import { squash } from '../../../shared/whitespace.js';
 import { SPOT_PROBE_SUBJECT } from '../continuity/renewalFeed.js';
+import { isProviderRetryMail, renderProviderRetryLine } from '../../../shared/provider-retry.js';
 import { OVERLORD_IDENTITY, type DesignationFact } from '../roleOf.js';
 import { TIMER_MAIL_SENDER } from '../../../shared/continuity-timers.js';
 import {
@@ -244,9 +245,10 @@ export function renderOperatorMessageNudge(id: number): string {
  *  a further kind is a row, never a parallel mechanism. `matches` names the mail; `designatedOnly` says the row types its line only
  *  to the designated session (any other recipient keeps the generic nudge); `line` is typed with the resume rule of
  *  `resumeRuleOf`, from the mail and the mail pass's clock (read once at the pass's start, so at most one pass before typing); `firstDelivery` is what the first delivery moves besides the delivery's
- *  ack: the operator message's `delivered`, or nothing. */
+ *  ack: the operator message's `delivered`, or nothing. `draft` says what a person's unsent text does to the send: absent, it is
+ *  stashed and given back (D-5912); `refuse` types nothing while it stands (D-9090). */
 export interface FixedLineMailRow {
-  readonly name: 'operator-message' | 'spot-probe' | 'inbox-wake' | 'timer';
+  readonly name: 'operator-message' | 'spot-probe' | 'inbox-wake' | 'provider-retry' | 'timer';
   /** `mailToId` is the MAIL ROW's recipient (a role's word, kept on the row), never the delivery's session (Overlord W1). */
   readonly matches: (m: { readonly fromId: string; readonly subject: string; readonly mailToId?: string }) => boolean;
   readonly designatedOnly: boolean;
@@ -255,6 +257,7 @@ export interface FixedLineMailRow {
   /** True when the row's delivery waits until the designated session's live generation has read its card (C62; the timer row
    *  only): while it holds, nothing is typed and no attempt is spent. */
   readonly waitsForCard: boolean;
+  readonly draft?: 'refuse';
 }
 export const FIXED_LINE_MAIL: readonly FixedLineMailRow[] = [
   // Only the designated session is ever sent an operator message, so its row needs no designation.
@@ -266,6 +269,10 @@ export const FIXED_LINE_MAIL: readonly FixedLineMailRow[] = [
   // The time left is read at the mail pass's clock, taken once at the pass's start (at most one pass before typing), never at queueing.
   { name: 'inbox-wake', matches: isInboxWakeMail, designatedOnly: true, firstDelivery: 'none', waitsForCard: false,
     line: (m, now) => renderInboxWakeLine(readInboxWakeBody(m.body), now) },
+  // A session whose turn ended on a provider error (`providerRetry.ts`): the line says it all and is acked as typed, so no replay
+  // stands beside the ladder's own repeat. A person writing in that box is about to continue the session themselves.
+  { name: 'provider-retry', matches: isProviderRetryMail, designatedOnly: false, firstDelivery: 'none', draft: 'refuse', waitsForCard: false,
+    line: () => renderProviderRetryLine() },
   // The Overlord's timers (W1): the timer lane's mail to the role, matched on the MAIL ROW's recipient, so a session-keyed
   // timer mail keeps the generic nudge. The Overlord has no mail verb: the line names its timer list door, and waits for the card.
   { name: 'timer', matches: (m) => m.fromId === TIMER_MAIL_SENDER && m.mailToId === OVERLORD_IDENTITY, designatedOnly: true,
@@ -309,6 +316,7 @@ export interface MailNudge {
   readonly firstDelivery?: 'none';
   /** Set for a row that waits for the designated session's card (the timer row): the lane asks `cardHoldVerdict` first. */
   readonly waitsForCard?: true;
+  readonly draft?: 'refuse';
 }
 
 /** The line the mail lane types for one due delivery. A mail the table names types its own fixed line; every other mail types the
@@ -323,8 +331,9 @@ export function mailNudgeOf(
   const row = origin === null ? 'generic' : fixedLineMailOf({ fromId: origin.fromId, subject: origin.subject, mailToId: origin.toId, toId }, designated);
   if (origin === null || row === 'generic') return { line: renderMailNudge(toId), operatorMessageId: null };
   const line = row.line({ subject: origin.subject, body: origin.body ?? '' }, now);
-  if (row.firstDelivery === 'message-delivered') return { line, operatorMessageId: operatorMessageIdOf(origin.subject) };
-  return { line, operatorMessageId: null, firstDelivery: row.firstDelivery, ...(row.waitsForCard ? { waitsForCard: true as const } : {}) };
+  return row.firstDelivery === 'message-delivered' ? { line, operatorMessageId: operatorMessageIdOf(origin.subject) }
+    : { line, operatorMessageId: null, firstDelivery: row.firstDelivery, ...(row.draft === undefined ? {} : { draft: row.draft }),
+      ...(row.waitsForCard ? { waitsForCard: true as const } : {}) };
 }
 
 /** One due delivery of a fixed line whose first delivery moves nothing but the ack (`firstDelivery: 'none'`), already delivered
@@ -347,9 +356,11 @@ export function fixedLineReplayOf(nudge: Pick<MailNudge, 'firstDelivery'>, deliv
  *  is typed into an empty box, and any other text, another message's line included, is a draft (slug `whole-mode-never-types`).
  *  This holds for every fixed line of the table (a wake's and a spot-probe notice's too), each compared to its OWN line, typed
  *  with the time left at the mail pass's clock. The box is compared up to whitespace (`squash`, as `sendPrompt`'s own wrap-tolerant comparison does), so a pane narrower than the
- *  line, which wraps it, still reads as the line (review 2550 F4). */
+ *  line, which wraps it, still reads as the line (review 2550 F4). A row with `draft: 'refuse'` adds `onDraft: 'refuse'`, which the
+ *  lane spreads over its own `stash` (D-9090). */
 export function resumeRuleOf(nudge: MailNudge, box: string | null):
-  { readonly resumeIfOwn: true } | { readonly resumeIfOwn: 'whole' } | Record<string, never> {
+  { readonly resumeIfOwn: true } | { readonly resumeIfOwn?: 'whole'; readonly onDraft?: 'refuse' } {
   if (nudge.operatorMessageId === null && nudge.firstDelivery === undefined) return { resumeIfOwn: true };
-  return box !== null && squash(box) === squash(nudge.line) ? { resumeIfOwn: 'whole' } : {};
+  return { ...(box !== null && squash(box) === squash(nudge.line) ? { resumeIfOwn: 'whole' as const } : {}),
+    ...(nudge.draft === undefined ? {} : { onDraft: nudge.draft }) };
 }

@@ -112,6 +112,8 @@ const CAP_GATED_VERBS: ReadonlySet<string> = new Set([
   'route', 'ws-reclaim', 'reclaim-pause', 'ws-expire', 'ws-collect', 'docs-index', 'docs-tree', 'docs-show', 'docs-fetch', 'docs-log',
   // X2 P1.2: the range verb, read through `ccdCan`'s `docsShowRange` row (`DOCS_RANGE_CAP`); the docs range route is its call site.
   'docs-show-range',
+  // X2 P2.1 and P2.2: the outside-folder verbs, read through `ccdCan`'s `docsFolder*` rows (`DOCS_FOLDERS_CAP`); P2.3's folder doors are their call sites.
+  'docs-folder', 'docs-folder-read',
   // D-6784: sent only behind the `pr-landing-v1` capability word (CCD_CAN's `capRow`); PL-4's lane is its one call site.
   'pr-landing',
   // The Overlord W1 ccd arms (cross-plan ruling X8): `keep-awake` is read through `capRow(KEEP_AWAKE_CAP)`, refusing on no
@@ -161,6 +163,8 @@ const PROBE_ARGS: Partial<Record<string, readonly unknown[]>> = {
   hibernate: ['x', null, null, 'sleep'],
   // X2 P1.2: `docsShowRange`'s second parameter is the place (`{commit}` or `{branch, head}`) and its last the step, not strings.
   docsShowRange: ['x', { commit: 'x' }, 'specs', 'a.md', 'x', 'prepare'],
+  // X2 P2.2: `docsFolderRead`'s second parameter is the read (`{op: ...}`), not a string.
+  docsFolderRead: ['x', { op: 'tree' }],
 };
 
 /** `CCD_ARGV` key -> the verb it emits, taken from the table itself rather

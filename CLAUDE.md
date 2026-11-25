@@ -119,6 +119,7 @@ real values: `deploy/reference-fleet.md` (gitignored).
   **`ws-lease-mark` is forbidden to every session too**: it is the SERVER's act on a delegation lease's carrier only (`ccd ws-lease-mark --lease <id> …`), composed after the server has journalled the generation it writes, behind `lease-mark-v1` and the installed direct entry — never a session's verb, and never run against the live host from a shell or a test.
   **`delegation-adopt` is forbidden to every session too** (D-8112): it is the SERVER's act on the delegation lane's adoption switch only (`ccd delegation-adopt --state on|off`, the one writer of `$REG/delegation-adopt`), composed by `POST /api/coord/delegation-adopt`, the operator's session-gated door, behind the installed direct entry, past its refusal rule (D-8113), which refuses `on` without a signed-in operator — never a session's verb, coordinators and workers included, and never run against the live host from a shell or a test. The child hook and the child deny file stop a child; for a top-level session it is a convention, as it is for `ws-lease-mark`.
   **`keep-awake` is forbidden to every session too** (Overlord W1 ccd arms): it is the SERVER's act on one session's two sleep markers (`ccd keep-awake --session <id> --state on|off`, the one writer of `$REG/<id>.no-hibernate` and `$REG/<id>.no-roll` in the tree), composed by the designation's doors, behind the installed direct entry. It removes only markers holding its own stamp, and it stops no session — never a session's verb, and never run against the live host from a shell or a test. The child hook and the child deny file stop a child; for a top-level session it is a convention, as it is for `ws-lease-mark`.
+  **`docs-folder` is forbidden to every session too** (X2 P2, spec 2026-11-18 §7): it is the SERVER's act on the Docs reader's outside-folder registry only (`ccd docs-folder --list`, `--add <label> --path <abs>` and `--remove <label>`, the one writer of `$REG/docs-folders/<label>`), composed by the docs plugin's folder doors (Add behind the account gate's step-up, so it refuses while sign-in is dark; Remove works dark), behind `docs-folders-v1` and the installed direct entry, in every form, `--list` included — never a session's verb, and never run against the live host from a shell or a test. `docs-folder-read`, the folder read, stays an ordinary verb. The child hook and the child deny file stop a child; for a top-level session it is a convention, as it is for `ws-lease-mark`.
   **`limit-watchdog` and `limit-wait` are no session's verbs either** (D-8123): `ccd limit-watchdog` is the fleet limit watchdog's one pass, run once a minute by `ccd-limit-watchdog.timer` (its own timer, never a supervisor tick), and `ccd limit-wait <id>` records the operator's "Wait until reset" choice behind the session-gated route beside the swap route. Neither is run by hand against the live host from a shell or a test, and neither ever sends a key: the rescue ends the session and resumes it on another account, and the rate-limit menu ("What do you want to do?") is never typed into, because an Enter or a digit there can pick "Switch to usage credits" (`ccd-limit-no-keys.test.ts` cuts the function bodies out of `ccd/ccd` and refuses a key sender in any of them).
 - **Rolling, installing and selecting a Claude Code build are never a session's** (D-5696, spec 2026-10-18 §7.6):
   `ccd roll`, every `ccd claude …` verb (the operator's switches) and any write into `~/.local/share/claude/versions/`
@@ -606,7 +607,10 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `POST /api/coord/programmes/:slug/calls` (D-8126; its handler is in `server/src/coord/coordCallsRoute.ts`, a lane source of its own
   for the census, attribution- then ownership-checked the same way, and in the EXEMPT table) and the remaining-work door
   `POST /api/coord/programmes/:slug/remaining` (Overlord W2; its handler is in `server/src/coord/programmeRemainingRoute.ts`,
-  a lane source of its own, checked the same way and in the EXEMPT table) all call
+  a lane source of its own, checked the same way and in the EXEMPT table) and the programme lifecycle's end proposal
+  `POST /api/programmes/:slug/end-proposal` (W2, D-8987: the bound coordinator proposes its programme's end with evidence;
+  registered in `server/src/coord/ledgersRoutes.ts`, attribution- then ownership-checked by the binding, and in the EXEMPT
+  table) all call
   `requireMailToken` outside both (the intent door, where a session declares its own coordinator
   intent through `ccrc-api`, is attribution-checked and sits in `auth/gate.ts`'s EXEMPT table like the claim lanes: its only
   caller holds the token and has no cookie). The Overlord's inbox doors, `GET /api/overlord/inbox`,
@@ -617,7 +621,10 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   body; its handler is in `server/src/coord/overlordHistoryRoutes.ts`, a lane source of its own for the census). The dual-credential reads, including `GET /api/feed`,
   the programme goals read `GET /api/programmes/:slug/goals` (D-8126: a coordinator reads the pin, its definition of done and
   the open items cookieless through `ccrc-api`, the console with a session), the landing line's read `GET /api/landing`
-  (landing order wave 5j, D-9048: a coordinator reads it cookieless through `ccrc-api landing show`, the console with a session)
+  (landing order wave 5j, D-9048: a coordinator reads it cookieless through `ccrc-api landing show`, the console with a session),
+  the programme lifecycle's two reads
+  `GET /api/programmes/:slug/history` and `GET /api/sessions/:id/programme` (W2: a programme's story and a session's one
+  programme; the token arm is attributed, and reads the bound coordinator's own programme or the session's own)
   and the update projection read `GET /api/updates/intent/:nodeId` (a fleet node's timer pulls it cookieless from
   update-management W4), call `checkMailToken` only after a session check; `auth/gate.ts`'s EXEMPT reasons — route by route, each
   with its own argument — are the census, not this bullet. What does need saying here are the
@@ -659,12 +666,19 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   session-gated when armed, and is registered in `server.ts`, so the census names it beside the kickoff literal too. So does `POST /api/sessions/:id/prompt` (Overlord W1 private store B): for the designated session it records the operator's message in the private store, then queues the nudge as system mail and writes the `@overlord` operator mark in one `coord.db` transaction, and types nothing; it consults no box token, is session-gated when armed, and is registered in `server.ts`, so the census names it beside the kickoff literal as well. The programme ledgers' operator doors (plan PL4), `GET /api/waiting`, `GET /api/items/:id` (one item by its id, whatever its state and age, D-8194), `GET /api/programmes/:slug/goals`,
   `POST /api/items/:id/tick`, `POST /api/items/:id/dismiss`, `POST /api/items/:id/act` and `POST /api/items/:id/decline` (the operator's
   Abandon run and Keep the run on an end-request item: body-less, the act running the abandon arm inside the coordination hold as
-  the operator and closing its item, the decline mailing the asker), `POST /api/calls/:id/seen` (D-8126: the operator's Seen on a big call a coordinator made in their name), `PUT /api/items/:id/secret` (plan PL6), and
+  the operator and closing its item, the decline mailing the asker; on a programme end proposal, programme lifecycle W2, the act
+  confirms the end behind the step-up and the decline keeps the programme open, working while sign-in is dark and recording
+  `flag-off`, and the dismiss refuses it; a refused close's act that also ends the programme takes the step-up), `POST /api/calls/:id/seen` (D-8126: the operator's Seen on a big call a coordinator made in their name), `PUT /api/items/:id/secret` (plan PL6), and
   `GET /api/programmes/:slug/secrets` and `DELETE /api/programmes/:slug/secrets/:slot` (the PL6 follow-up), `GET /api/portfolio`
   and `POST /api/portfolio/rank` (Overlord W1: the operator's portfolio read and the rank door, which works while sign-in is dark
   and records `flag-off` then), and `POST /api/answer-marks` (Overlord W1: the operator's answer marks on a Waiting on you row,
   which work while sign-in is dark and record `flag-off` then), and `POST /api/programmes/:slug/goals/ratify` (Overlord W1
-  portfolio B: the operator ratifies one goals version, behind the account gate, so it refuses while sign-in is dark), consult no box token
+  portfolio B: the operator ratifies one goals version, behind the account gate, so it refuses while sign-in is dark), and the
+  programme lifecycle's doors (W2, D-8987, D-8992, D-8993) `POST /api/programmes` (the start, behind the account gate),
+  `POST /api/programmes/:slug/state` (pause works while sign-in is dark and records `flag-off`; resume, end, reopen and repair
+  take the step-up) and `POST /api/programmes/:slug/coordinator` (the hand-over, behind the step-up), and its backfill door
+  `POST /api/programmes/decisions` (W3, D-8990: previews the operator's private decisions file, and applies it behind the
+  step-up), consult no box token
   either: the tick queues the operator's answer as system mail to the programme's coordinator in the move's own transaction,
   the secret door stores a pasted one-line value in its protected slot and ticks with "set" and when, and the last four
   characters only for a value the masker catches (at its 20-byte floor or longer, as one run), behind a step-up, the read
@@ -737,7 +751,10 @@ while sign-in is dark) consults no box token and is session-gated when armed. Al
   stuck, marker unreadable, and D5's `restarted`: a run worker respawned over lost background tasks is mailed a re-check
   notice at once and its coordinator one heads-up, at most one per worker on its run per 10 minutes, with no restart and no push)
   record shadow only until `stall-watch-w2-live` exists, and while `mail-disabled` stands every
-  rung that would send mail holds. `stall-watch-disabled`, `stall-watch-live`, `stall-watch-escalate`,
+  rung that would send mail holds. A provider error (`server_error`, `overloaded`) is not the `failed` arm's: the
+  provider-failure ladder (`coord/providerRetry.ts`, armed by its own rule since D-9085, stopped by
+  `stall-watch-disabled`, a chosen Off or Log only, and `mail-disabled`) mails any live session itself at 1, 4 and 15 min,
+  asks no coordinator, and raises one operator notice per provider outage. `stall-watch-disabled`, `stall-watch-live`, `stall-watch-escalate`,
   `stall-watch-w2-live`, `mail-gate-busy-shadow` and `mail-gate-busy` arm them (no `stall-watch-live`: shadow only) and,
   like `mail-gate-strict`, have **no writer in the tree** — `single-definition/*.test.ts` pins that. A level chosen in
   Settings (`/api/coord/stall-watch`, the operator's control) overrides the arming markers, but never

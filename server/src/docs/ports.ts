@@ -12,10 +12,11 @@
 // The failure arm is the whole `DocsFailureBody`, not a narrower per-operation union (refinement (d)): ccd's per-verb
 // word set is not a checked contract, so a narrower static type would claim what the adapter cannot measure.
 import type {
-  DocFilePin, DocPin, DocsFailureBody, DocsFetchOk, DocsIndexOk, DocsLogAsk, DocsLogOk, DocsRangeFrameOk, DocsRangePreparedOk,
-  DocsRefSpec, DocsShowOk, DocsTreeOk,
+  DocFilePin, DocPin, DocsFailureBody, DocsFetchOk, DocsFolderAddOk, DocsFolderFrameOk, DocsFolderListOk, DocsFolderPreparedOk,
+  DocsFolderRemoveOk, DocsFolderShowOk, DocsFolderTreeOk, DocsIndexOk, DocsLogAsk, DocsLogOk, DocsRangeFrameOk,
+  DocsRangePreparedOk, DocsRefSpec, DocsShowOk, DocsTreeOk,
 } from '../../../shared/docs.js';
-import type { DocsJob, DocsRangeFrameAsk, DocsRangeTarget } from './policy.js';
+import type { DocsFolderFileAsk, DocsFolderRangeTarget, DocsJob, DocsRangeFrameAsk, DocsRangeTarget } from './policy.js';
 
 /** Which fleet node answers a project-less read. An implementation is bound to one node at construction; W3's node
  *  map selects it, and passes the id through so every port operation names its node the same way. */
@@ -30,6 +31,11 @@ export interface DocsSourceId { node: string; project: string }
  *  - `listedBlob`: the committed blob the server's listing map holds for this pin; `null` means only "the server
  *    holds no listing entry for it", never "the blob is absent". A draft pin carries `null`. */
 export interface DocsShowAsk { maxBytes: number; job: DocsJob; listedBlob: string | null }
+
+/** The server's own facts about one folder show, decided before the call and never taken from the request: `maxBytes`, the
+ *  class cap of the path's content class (sent as `--max-bytes`), and `job`, L1's lane estimate for the answer. A folder has
+ *  no listing map, so there is no `listedBlob` and no known size. */
+export interface DocsFolderShowAsk { maxBytes: number; job: DocsJob }
 
 /** `docs-index --all`'s answer, carried verbatim, or the failure. */
 export type DocsIndexRead = { ok: true; answer: DocsIndexOk } | DocsFailureBody;
@@ -64,6 +70,70 @@ export interface DocsRangeRead {
   prepare(src: DocsSourceId, target: DocsRangeTarget): Promise<DocsRangePrepareRead>;
   /** One frame of a snapshot `prepare` made for `target`; `frame` is what L1's `docsRangePlan` admitted. */
   frame(src: DocsSourceId, target: DocsRangeTarget, frame: DocsRangeFrameAsk): Promise<DocsRangeFrameRead>;
+}
+
+/** One outside folder on one fleet node, by its label (X2 spec 4.1): the label is a value L1's `parseDocsFolderLabel` admitted,
+ *  and it is all the server ever names of a folder, since ccd resolves the path from its own registry. */
+export interface DocsFolderId { node: string; label: string }
+
+/** `docs-folder --list`'s answer, carried verbatim once its shape holds (`docsFolderAnswerShape`), or the failure. A row
+ *  whose registry file is unreadable is kept as `state: 'unreadable'` with `path: null`, never dropped or folded. */
+export type DocsFolderListRead = { ok: true; answer: DocsFolderListOk } | DocsFailureBody;
+
+/** `docs-folder-read --op tree`'s answer, carried verbatim once its shape holds and it echoes the label asked, or the failure. */
+export type DocsFolderTreeRead = { ok: true; answer: DocsFolderTreeOk } | DocsFailureBody;
+
+/** `docs-folder-read --op show`'s answer, carried verbatim once it is held to the bytes it encodes and to the leaf and
+ *  fingerprint asked, with `bytes`: the content it encodes, decoded once here. Or the failure. */
+export type DocsFolderShowRead = { ok: true; answer: DocsFolderShowOk; bytes: Uint8Array } | DocsFailureBody;
+
+/** `docs-folder-read --op prepare`'s ok line, carried verbatim once held to the pin it was sent (the route then believes it
+ *  after `docsRangeAnswerShape`, as for a project's range), or the failure. */
+export type DocsFolderPrepareRead = { ok: true; answer: DocsFolderPreparedOk } | DocsFailureBody;
+
+/** `docs-folder-read --op range`'s ok line, held to its ask as a project range frame is (and believed by the route after
+ *  `docsRangeAnswerShape`), or the failure. */
+export type DocsFolderFrameRead = { ok: true; answer: DocsFolderFrameOk } | DocsFailureBody;
+
+/** `docs-folder --add`'s and `--remove`'s ok lines, carried verbatim once their shape holds, or the failure. */
+export type DocsFolderAddRun = { ok: true; answer: DocsFolderAddOk } | DocsFailureBody;
+export type DocsFolderRemoveRun = { ok: true; answer: DocsFolderRemoveOk } | DocsFailureBody;
+
+/** One outside-folder file read by range (spec 4.1 and 4.3), a prepare and then frames of what it snapshotted. The failure
+ *  contract of `DocsRangeRead` holds for it; `target` carries no commit, branch or head. */
+export interface DocsFolderRangeRead {
+  /** Snapshot `target`'s pinned bytes. */
+  prepare(src: DocsFolderId, target: DocsFolderRangeTarget): Promise<DocsFolderPrepareRead>;
+  /** One frame of a snapshot `prepare` made for `target`; `frame` is what L1's `docsFolderRangePlan` admitted. */
+  frame(src: DocsFolderId, target: DocsFolderRangeTarget, frame: DocsRangeFrameAsk): Promise<DocsFolderFrameRead>;
+}
+
+/**
+ * The outside-folder READS (X2 spec 4.1), under the port's one failure contract: each answers its own named result type, and
+ * every gate, transport, ccd and classification condition (a fleet without `docs-folders-v1`, `unknown-folder`, a refused
+ * admission, a malformed answer) is a failure BODY carrying its word, never a `null` and never a rejection. None of them
+ * writes anything on the fleet but the range prepare's private cache. No answer carries a folder's path but `list`'s.
+ */
+export interface DocsFolderReader {
+  /** Every registered folder: its label, its state and (state `ok` only) its path. */
+  list(at: DocsNodeId): Promise<DocsFolderListRead>;
+  /** One folder's six sections, walked below the held descriptor. */
+  tree(src: DocsFolderId): Promise<DocsFolderTreeRead>;
+  /** One leaf of a folder, read only while its bytes hash to `ask.fp`; `plan` carries the server's own facts (`maxBytes`,
+   *  `job`), never taken from the request. */
+  show(src: DocsFolderId, ask: DocsFolderFileAsk, plan: DocsFolderShowAsk): Promise<DocsFolderShowRead>;
+  /** One file in frames, for a leaf above what `show` carries. */
+  range: DocsFolderRangeRead;
+}
+
+/** The two operations that WRITE the folder registry (the fleet box's `docs-folder --add` and `--remove`), held apart from
+ *  the reads so a read route cannot reach them (as `DocsFetcher` is for the one fetch). Both answer a failure BODY, never a
+ *  `null` and never a rejection; neither answer carries a path. */
+export interface DocsFolderRegistry {
+  /** Register `path` (absolute, shape checked by L1) under `label`. ccd decides admission and answers its word. */
+  add(at: DocsNodeId, label: string, path: string): Promise<DocsFolderAddRun>;
+  /** Remove `label` and purge its range snapshots. */
+  remove(at: DocsNodeId, label: string): Promise<DocsFolderRemoveRun>;
 }
 
 /** The five reads. None of them writes anything on the fleet but the range prepare's private cache (section 2 (g)'s wall
