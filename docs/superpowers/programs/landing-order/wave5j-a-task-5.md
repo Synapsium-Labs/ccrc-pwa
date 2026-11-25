@@ -90,7 +90,11 @@ One file per process, from `server/`, each as `ccrc test -- ./node_modules/.bin/
   all green). The server typecheck (`tsc --noEmit -p tsconfig.json`) is clean.
 - `deviation-refs`, after `git fetch origin main`: on the test box, under load, one case ("is looking at two real trees,
   each with a real ledger in it") ran 21.9 s against its 20 s bound and failed, 33 of 34 green. Alone with
-  `ccrc test --local`: 34 of 34 green.
+  `ccrc test --local`: 34 of 34 green; I did not record the box's load or the heavy slots at either of these two runs.
+  The review measured 33 of 34 at both, the same case timing out at 20 s, with both heavy slots held and others waiting.
+  In fix round 1 the file ran in the gate list on the test box: 34 of 34 green at a load average of 11.95, both heavy
+  slots held and one run waiting (the measurement is in `wave5j-a-fix-round-1.md`). So the case passes and fails on the
+  same load; a count here means nothing without the condition beside it (fix round 1, R6).
 - `typecheck-tests`, once with `ccrc test --local`: it did not start. This worktree has no `pwa/node_modules`, so the file's
   own `require.resolve('typescript')` from `pwa/package.json` throws `Cannot find module 'typescript'`. The tests'
   server typecheck alone (`tsc --noEmit -p test/tsconfig.tests.json`, once with `--local`) was killed by the test slice:

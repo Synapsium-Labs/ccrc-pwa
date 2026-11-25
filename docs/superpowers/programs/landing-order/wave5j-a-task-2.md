@@ -16,7 +16,10 @@ Task 2 and section 4.2.
 - The comment on `replayLandingJournal` ("It never writes a projection or a witness") now says what replay writes: one
   projection column word, the operator's `withdrawn`, with its `detail` and the cleared marker, and no pin, landed state,
   association or witness; it never notices.
-- Store growth on this branch against `origin/main` after Tasks 1 and 2: 23 lines added, 15 removed.
+- Store growth against the branch's merge base with main, `531bdb86bd60c0f8809cfa8a9a887779d57c4be6`
+  (`git diff --numstat <base> HEAD -- server/src/coord/store.ts`): 21 lines added, 12 removed. Tasks 1 and 2 are the
+  only commits on the branch that touch the file. (Fix round 1, R5: this line first gave 23 added and 15 removed, which
+  the review reproduced only as a two-dot diff against that day's main tip, a figure that counts main's own changes.)
 
 ## The census, moved
 
@@ -39,7 +42,8 @@ on the new source; the source was restored from saved copies and checked by sha2
   - The one-overlay-writer pin is unchanged.
 - `single-definition/core-vocab.test.ts` (`HANDLE_HOLDERS` gains `landingDoorsTx.ts`): the file is under a recently
   lapsed claim of another session at this commit, so the line is added last, by claim or by peer packet, as the brief
-  says. The case is red on this commit alone.
+  says. The case is red on this commit alone. Departure, by its slug: `landing-doors-holder-pin-order` (the holder list
+  gains the new file one commit after the file itself; fix round 1, R4). The tip is green.
 
 ## Said here
 
