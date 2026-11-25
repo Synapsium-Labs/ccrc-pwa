@@ -529,7 +529,7 @@ describe('the post-append receipt (txWithAuthorityReceipt)', () => {
   });
   it('a refusal before any append, and a throw with no append, leave the guard coherent', () => {
     const store = decisionArmingStore(f.db, f.journal);
-    expect(store.move({ ...MOVE, expected: side({ mode: 'live' }), to: side({ mode: 'shadow' }), opKey: 'op-r3' })).toMatchObject({ ok: false, error: 'row-changed' });
+    expect(store.move({ ...MOVE, expected: side({ mode: 'armed' }), to: side({ mode: 'shadow' }), opKey: 'op-r3' })).toMatchObject({ ok: false, error: 'row-changed' });
     expect(() => store.inTx(() => { throw new Error('nothing appended'); })).toThrow('nothing appended');
     expect(f.guard.state()).toEqual({ kind: 'coherent' });
     expect(f.lines()).toEqual([]);

@@ -129,7 +129,11 @@ describe('every mover stamps through it', () => {
     expect(a).toMatchObject({ kind: 'answer', status: 200, body: { ok: true, state: 'queued' } });
     const b = await prompt(w, '/icommand');
     expect(b).toMatchObject({ kind: 'answer', status: 200, body: { ok: true, state: 'settled' } });
-    const [ida, idb] = [(a as { body: { messageId: number } }).body.messageId, (b as { body: { messageId: number } }).body.messageId];
+    const idOf = (r: typeof a): number => {
+      if (r.kind !== 'answer') throw new Error('the gate replied');
+      return r.body['messageId'] as number;
+    };
+    const [ida, idb] = [idOf(a), idOf(b)];
     expect(lines(w)).toEqual([line(ida, 'queued', 'route'), line(idb, 'settled', 'route')]);
   });
   it('the mail lane\'s delivery, and a session\'s own ack of its nudge, stamp delivered as the mail lane\'s', () => {
