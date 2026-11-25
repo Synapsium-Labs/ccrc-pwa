@@ -305,6 +305,8 @@ export interface ReclaimOptions {
   readonly why?: string;
   /** Programme lifecycle W2 review: run inside the move's transaction (`ReclaimMoveOpts.onMoved`), for the hand-over door's mail. */
   readonly onMoved?: ReclaimMoveOpts['onMoved'];
+  /** Programme lifecycle W3 (spec §13): `ReclaimMoveOpts.party`, set by the hand-over door alone. */
+  readonly party?: boolean;
 }
 
 /** The reclaim door's own actor: an ungated door (D-282) whose caller carries no attribution, so the event says `unmeasured`
@@ -421,7 +423,7 @@ export async function reclaimProgrammeTo(
   if (!ladder.ok) return ladder.refusal;
   const committed = deps.coord.reclaimProgramme(slug, from, to, now, ladder.coordProject,
     { toUuid: ladder.toUuid, actor: opts.actor ?? RECLAIM_DOOR_ACTOR, why: opts.why ?? reclaimDoorWhy(from ?? 'no coordinator'),
-      ...(opts.onMoved === undefined ? {} : { onMoved: opts.onMoved }) });
+      ...(opts.onMoved === undefined ? {} : { onMoved: opts.onMoved }), ...(opts.party === true ? { party: true } : {}) });
   if (!committed.ok) return committed;
   return { ok: true, program: committed.program, runIds: committed.runIds, from: committed.from, to };
 }

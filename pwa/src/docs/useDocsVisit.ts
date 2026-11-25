@@ -9,7 +9,7 @@
 // the first pass's in-flight request), and a version counter re-renders when an answer lands.
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import {
-  DOCS_CLASS_CAP, DOCS_STALE_MS, contentClass, docsRefText, entryView, parseDocsPage,
+  DOCS_CLASS_CAP, DOCS_STALE_MS, contentClass, docsRefText, entryView, isDocsFolderLocation, parseDocsPage,
   type DocListPin, type DocPin, type DocsEntry, type DocsFailure, type DocsFailureBody, type DocsFileResponse, type DocsPageLocation,
   type DocsRefreshFetch, type DocsRefSpec, type DocsTreeOk, type DocsTreeResponse,
 } from '../../../shared/docs';
@@ -307,7 +307,8 @@ function fragmentKey(page: DocsPageLocation | null): string | null {
 function fragmentKeyOfHref(href: string): string | null {
   const q = href.indexOf('?');
   const parsed = parseDocsPage(q < 0 ? href : href.slice(0, q), q < 0 ? '' : href.slice(q));
-  return parsed.ok ? fragmentKey(parsed.loc) : null;
+  // An outside folder's page holds no pending fragment (X2 P2.4: it is read by its own page, not this visit).
+  return parsed.ok && !isDocsFolderLocation(parsed.loc) ? fragmentKey(parsed.loc) : null;
 }
 
 /** The commit a pin reads at: a committed pin's commit, a draft pin's holder HEAD. */

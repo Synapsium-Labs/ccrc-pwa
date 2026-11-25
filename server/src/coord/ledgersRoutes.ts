@@ -918,6 +918,9 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
   app.post('/api/programmes', (req, reply) => doors.start(req, reply));
   app.post('/api/programmes/:slug/state', (req, reply) => doors.state(req, reply));
   app.post('/api/programmes/:slug/coordinator', (req, reply) => doors.handOver(req, reply));
+  // The backfill door (programme lifecycle W3, spec §13; D-8990): the operator's private decisions file, previewed unless
+  // `apply` is true, which takes the step-up.
+  app.post('/api/programmes/decisions', (req, reply) => doors.decisions(req, reply));
   app.get('/api/programmes/:slug/history', {
     onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
       if (hasSession(req) || checkMailToken(deps.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'GET /api/programmes/:slug/history') === 'ok') return undefined;

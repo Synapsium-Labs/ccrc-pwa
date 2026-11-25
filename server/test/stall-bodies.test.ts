@@ -17,8 +17,9 @@ import {
   type StallFacts, type StallInput, type StallMailRow, type StallNotice, type StallNotify, type StallRunRow,
   type StallWorker,
 } from '../src/coord/stall.js';
+import { stallSessionMail } from '../src/coord/stopFailure.js';
 import {
-  stallReportKind, stallReportTitle, stallSessionMail, stallSessionPushText, stallW2ReportMail,
+  stallReportKind, stallReportTitle, stallSessionPushText, stallW2ReportMail,
   type StallDeliveryRow, type StallReportKind, type StallSessionInput, type StallW2Facts, type TurnMarkRead,
 } from '../src/coord/stall.js';
 

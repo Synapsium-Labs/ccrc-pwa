@@ -168,4 +168,11 @@ export const CCD_ARGV_SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   // X2 P1.2: one builder, four argv shapes, its own grant `['docs-show-range','--project']`. The sample is the committed
   // prepare; `whitelist-subset.test.ts` pins the other three shapes token for token.
   docsShowRange: ['demo', { commit: 'a'.repeat(40) }, 'specs', 'a.md', `blob:${'d'.repeat(40)}`, 'prepare'],
+  // X2 P2.1: the registry verb's three builders, one grant each (`['docs-folder','--list']`, `--add`, `--remove`).
+  docsFolderList: [],
+  docsFolderAdd: ['notes', '/srv/notes'],
+  docsFolderRemove: ['notes'],
+  // X2 P2.2: one builder, four argv shapes, its own grant `['docs-folder-read','--label']`. The sample is the tree;
+  // `whitelist-subset.test.ts` pins the other three shapes token for token.
+  docsFolderRead: ['notes', { op: 'tree' }],
 };

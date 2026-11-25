@@ -2585,12 +2585,25 @@ window less `min(max_tokens, 20000)` less 13,000, measured on Claude Code 2.1.30
 every 15 seconds, and the upstream idle bound is 300 seconds, as in Codex. A context overflow is answered as Claude
 Code's own `prompt is too long: N tokens > M maximum`, so it compacts; N is the bridge's estimate, because the backend's
 overflow message carries no counts. A usage limit is a 429 `billing_error` and a policy refusal a 400 `policy_blocked`,
-each with `x-should-retry: false`. Retries are Claude Code's: the bridge never retries an upstream request, except once
-after it refreshed a token the upstream answered 401, and once without the request markers' additions after a 400
-(below; a reply the upstream marks unfinished is continued inside the same message, at most three times).
+each with `x-should-retry: false`. Retries are Claude Code's, except three: the bridge sends an upstream request again
+once after it refreshed a token the upstream answered 401, once without the request markers' additions after a 400
+(below), and, for a short provider failure, as the next paragraph says (a reply the upstream marks unfinished is
+continued inside the same message, at most three times).
 `count_tokens` is answered locally, from an estimate seeded at 3.5 bytes per token and
 calibrated on the lane's own replies, for any model. A `/v1/messages` request for a model the lane's catalogue does not
 list is answered 404 locally and never sent upstream.
+**A short provider failure is absorbed** (D-9078). The lane's launcher gives Claude Code two retries, because a
+retry of a request that timed out costs 870 seconds, so without this a provider overloaded for a few seconds ended the
+turn. While nothing of the message has reached Claude Code, the bridge tries again itself when the upstream answered
+overloaded (529) or unavailable (503), or could not be reached: after about 1 second, then doubling to 20, each wait
+spread by a quarter, until 120 seconds after the message's first attempt. An upstream `retry-after` is waited out when it
+fits in that time; one that does not, and any attempt that itself took 30 seconds or more, is answered at once, so a slow
+request is never sent again. Rate limits, plan limits, policy refusals, overflows, ineligible plans, refused tokens and
+every other 4xx are answered at once as before, and so is a response that reached its end. When the time is spent, the
+client gets the error it always got. The wait ends as soon as the client closes or the bridge is stopped. Only a request
+carrying Claude Code's beta is held, so another caller of the lane (the models canary) keeps its own deadline. An absorbed
+failure is no `5xx` outcome and is not written to the credential's status file; the stats file's `parity` row counts it in
+`absorbed`, by `overloaded`, `unavailable` and `transport`.
 The credential's refresher is the bridge: it checks every minute and refreshes at about half the token's lifetime,
 through the library's lock.
 
@@ -2697,8 +2710,8 @@ started), `session` (the session id when it has the shape of one, at most 128 ch
 for a subagent's request, never its id), `message` and `post` (the client message's number in this process, and the
 request's index within it: continuations and retries count on), `route` and `model` (the `parity` row's), `status`
 (null when no answer came), `outcome` (the word the stats file counts for what the bridge did with the answer: `2xx`,
-`continuations`, `continuation-cap`, `refresh-after-401`, `4xx`, `5xx`, `client-gone`, `drain-cut`, or `fallback` for the
-400 that started a fallback), `served`, `servedTier` (the `parity` row's word for the tier the response named, or
+`continuations`, `continuation-cap`, `refresh-after-401`, `4xx`, `5xx`, `client-gone`, `drain-cut`, `fallback` for the
+400 that started a fallback, or `absorbed` for a failure the bridge tried again), `served`, `servedTier` (the `parity` row's word for the tier the response named, or
 `absent`), `effort`, the four token counts, `firstOutputMs`, `reasoningMs` (null when no reasoning item finished before
 the first output) and `totalMs` (whole milliseconds, from the same instants the `parity` histograms bucket), `inputTransformations`, `replay` (the message's
 reasoning-store lookups, on its first request only), `markers`, `fallback` and, when set, `turnState`. A field the
@@ -6197,7 +6210,8 @@ next before the turn ends.
 session, `$REG/<id>.turn.json`, written on the main thread only: an event that
 carries a subagent's `agent_id` never touches it. It reads `working` from a
 turn's first event, `done` at its Stop (with the Stop's background-task count,
-kinds and ids), and `failed` at a `StopFailure` (with the API error's token).
+kinds and ids), and `failed` at a `StopFailure` (with the API error's token),
+and it keeps the times of the last consecutive provider failures (`failAts`).
 Every SessionStart but a `clear` or `compact` records the restart, and its lost
 lists name only what that restart cut short: the background tasks the last
 `done` turn left running. The lane reads the marker, the raw hookstate and the
@@ -6242,9 +6256,10 @@ unreadable (ahead of every wave-1 rung and cap), coordinator deaf (ahead of the
   reading `idle` or `shell`, and no more than about 22 h ago (the 24 h mail
   read less the 2 h repeat window), so a repeat is never re-read as a first
   failure.
-  - A retry-class error (`server_error`, `overloaded`, `max_output_tokens`,
-    `unknown`) draws a `failed:` mail to the session, and a second within 2 h
-    goes to the coordinator.
+  - A provider error (`server_error`, `overloaded`) is not this arm's: the
+    provider-failure ladder below owns it, and no coordinator is told.
+  - A retry-class error (`max_output_tokens`, `unknown`) draws a `failed:` mail
+    to the session, and a second within 2 h goes to the coordinator.
   - A request-class error (`invalid_request`, `model_not_found`) goes to the
     coordinator at once.
   - Those two reach the operator as a `⚠ failed` push instead when the failing
@@ -6253,6 +6268,32 @@ unreadable (ahead of every wave-1 rung and cap), coordinator deaf (ahead of the
   - An account-class error holds, because the limit and swap machinery owns it.
   - A token this build does not know holds with one `ccrc-server: stall-watch
     unknown StopFailure` line. It is never guessed into a self-wake.
+
+**The provider-failure ladder** (`server/src/coord/providerRetry.ts`, run inside
+the stall watch's pass by `server/src/providerRetryLane.ts`). Any live session
+whose turn ended on a provider error is told to continue by itself: a worker, a
+reviewer, a coordinator, the designated Overlord, or a session of the
+operator's own. One mail to the session, typed as one line (`Your turn ended on
+a provider error; continue where you stopped.`), falls due 1 minute after the
+first consecutive failure, 4 after the second and 15 after the third and every
+later one. One that started no turn is repeated 15 minutes after it landed, and
+two are never out at once. What is owed is the marker's `failAts`, which a real
+Stop and a `clear` empty and a restart carries, so a restart that relabels the
+marker `done` silences nothing; the 22 h cutoff does not apply. It does not
+nudge a running turn, an open dialog or question, a session with no pane, one
+that is stopped, hibernated or archived, one held by a usage limit, or anything
+it could not measure. A person's unsent text in the box is refused, not stashed:
+nothing is typed, and the mail waits for the box. A queued nudge the session has
+moved past is taken back. No coordinator is asked to mend a provider, and a
+worker that owes a retry holds the quiet ladder, so none is mailed `stall:`
+about it. When three sessions owe a retry on one provider (the Anthropic lanes,
+the Codex lanes, or any other lane by itself) within 10 minutes, or one session has
+got past none of its failures for an hour, one notice with
+no session goes to the operator, and one record-only row says when none has owed
+one for 10 minutes; the standing outages are kept in
+`~/.ccrc/provider-outages.json`, so a restart repeats no notice. It ships armed
+and has no marker of its own: `stall-watch-disabled`, a level of Off or Log only
+chosen in Settings, and `mail-disabled` each stop it.
 
 The `orphaned:` and `failed:` mails are class `self-wake`: recorded, never
 pushed, and they move neither the quiet clock nor the episode. With a current

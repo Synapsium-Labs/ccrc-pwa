@@ -1361,7 +1361,8 @@ describe('the rejection table is total, in both directions', () => {
         || (PROGRAMME_STORE_REFUSALS as readonly string[]).includes(tok)
         // THE PROGRAMME LIFECYCLE'S DOORS (W2): `coord/programmeEdgePolicy.ts`, `programmeLifecycleActs.ts` and
         // `programmeLifecycleRoutes.ts` name the doors' refusals, the event words, the door acts and credentials, the
-        // coordinator lines, the conflict kinds and why a coordinator owns nothing. Admitted through L0's guard, never NOT_CODES.
+        // coordinator lines, the conflict kinds and why a coordinator owns nothing; W3's `programmeDecisionsPolicy.ts` the decisions
+        // file's outcomes and refusals. Admitted through L0's guard, never NOT_CODES.
         || isProgrammeDoorWord(tok)
         // THE INVARIANT MONITOR (Overlord W1, sequence B2): `coord/invariants.ts` names a verdict's kinds (`'not-applicable'`, ...),
         // why a row is not applicable (`'tables-absent'`, `'predicate-not-built'`) and how a live finding's latch stood

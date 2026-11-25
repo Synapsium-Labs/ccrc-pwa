@@ -167,6 +167,12 @@ function TextSource(p: { readonly text: string; readonly path: string }): ReactN
   );
 }
 
+/** An SVG's bytes as the one `data:` image a Docs leaf draws (never a `blob:`, never `/api/`): the project leaf's and an
+ *  outside folder's (`FolderPages.tsx`) both. */
+export function SvgImage(p: { readonly bytes: Uint8Array; readonly name: string }): ReactNode {
+  return <img className="docs-svg-img" src={svgDataUrl(p.bytes)} alt={p.name} />;
+}
+
 /** An `svg` leaf (spec 5.5): the bytes as the same `data:` image Markdown gets (never a `blob:`, never `/api/`),
  *  with Source and Download. */
 function SvgBody(p: { readonly show: DocsShowOk; readonly answered: string; readonly download: ReactNode; readonly name: string }): ReactNode {
@@ -176,7 +182,7 @@ function SvgBody(p: { readonly show: DocsShowOk; readonly answered: string; read
   return (
     <div className="docs-svg">
       <div className="docs-leaf-actions"><SourceButton shown={source} onToggle={() => setSource((s) => !s)} />{p.download}</div>
-      {source ? <SourceText show={p.show} /> : <img className="docs-svg-img" src={svgDataUrl(bytes)} alt={p.name} />}
+      {source ? <SourceText show={p.show} /> : <SvgImage bytes={bytes} name={p.name} />}
     </div>
   );
 }
