@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Delete the retired deviation allocator: its two routes, its `ccrc-api` verbs, its watcher sweeps and lanes,
+**Goal:** Delete the retired deviation allocator: its POST route, its `ccrc-api` verbs, its watcher sweeps and lanes,
 its store methods, its log, its seed reader and the decisions only they used.
 
 **Architecture:** Pure removal, outside in. Task 1 removes the doors (routes, client verbs, gate rows, censuses,
@@ -21,7 +21,7 @@ PR 1 (`docs/superpowers/plans/2026-11-23-deviation-numbers-self-assigned-pr1.md`
   (the era `crossTreeCollisions` and `deviation-refs.test.ts` still use), `SELF_ASSIGNED_ERA`,
   `selfAssignedCollisions`, `nextDeviationNumbers`, `LEDGER_ALLOC_MAX` (the helper's count bound), the
   grandfathered sets, `server/scripts/next-deviation.ts`.
-- `coord.db` migrations and the two tables' DDL stay; nothing reads or writes the tables after this PR. A schema test
+- `coord.db` migrations and the two tables' DDL stay; nothing writes the tables; `GET /api/ledger` reads them (D-10001). A schema test
   that asserts the tables exist stays.
 - Removal follows CLAUDE.md's "characterization first when moving code" only where code moves; here code is deleted,
   so the tests that pinned it are deleted with it, and every census or ratchet that listed it is updated in the same
