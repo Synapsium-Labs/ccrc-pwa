@@ -199,8 +199,7 @@ const overlordAuthority: OverlordAuthorityJournal = new OverlordAuthorityJournal
 // verdict raises too (ruling F4; `coord/overlordRestoreLatch.ts`).
 raiseRestoreDetectedOn(overlordAuthorityGuard, { coord, journal: overlordAuthority, clock: time.clock, entropy: time.entropy, inTransaction: () => coordDb.isTransaction, warn: (line) => console.warn(line) });
 runOverlordAuthorityBoot(overlordAuthorityPort, overlordAuthorityGuard, (line) => console.warn(line));
-// The process's ONE `PoolEdgeLog` — beside `coord`, same reason as
-// `routes.ts`'s `LedgerLog`: `CoordStore.setAccountPools` calls `log.append`
+// The process's ONE `PoolEdgeLog`, beside `coord`: `CoordStore.setAccountPools` calls `log.append`
 // INSIDE its transaction, so every caller needs to share this one instance
 // rather than each route constructing its own.
 const poolEdgeLog = new PoolEdgeLog(defaultPoolEdgeLogPath(cfg.home));

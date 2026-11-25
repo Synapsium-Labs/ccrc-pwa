@@ -128,7 +128,6 @@ const EXEMPT: Record<string, string> = {
   'lane-beats-characterization.test.ts': MEASURED,
   'lane-draft-never-blocks.test.ts': MEASURED,
   'lane-sweeps-characterization.test.ts': MEASURED,
-  'ledger-sweep.test.ts': MEASURED,
   'lifecycle-sweep.test.ts': MEASURED,
   'mail-delivery-characterization.test.ts': MEASURED,
   'mail-sweep.test.ts': MEASURED,
@@ -175,8 +174,9 @@ const EXEMPT: Record<string, string> = {
 /** The pinned size of `EXEMPT`: lower it when an entry goes; raising it is a decision a reviewer sees. Raised once, from
  *  95 by the 13 partial quiets (fix round 1 of C17, review 1724 F1): a correction of what the census measured, not a
  *  new loud builder. It only falls from here: to 103 when `watcherTeardown` came to quiet through `quietWatcher` (F2), to
- *  102 when `tick-refused-lanes.test.ts` came to quiet its rig's watcher (D-8269). */
-const EXEMPT_CEILING = 102;
+ *  102 when `tick-refused-lanes.test.ts` came to quiet its rig's watcher (D-8269), to 101 when `ledger-sweep.test.ts` was
+ *  deleted with the deviation allocator's sweeps. */
+const EXEMPT_CEILING = 101;
 
 describe('every test that builds a FleetWatcher quiets it, or is exempt with its reason (D-8140)', () => {
   const files = testFiles();

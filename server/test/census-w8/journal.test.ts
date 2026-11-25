@@ -379,12 +379,12 @@ describe('the real tree (C8f\'s tip)', () => {
     expect(calls).toHaveLength(1);
   });
 
-  it('the queries are not over nothing: the kernel defines the pieces, and the five writers call appendThenApply', () => {
+  it('the queries are not over nothing: the kernel defines the pieces, and the four writers call appendThenApply', () => {
     const kernel = parsedFile(path.join(REPO, 'server/src/journalKernel.ts'));
     expect(kernel.symbols.map((x) => x.name)).toEqual(expect.arrayContaining(['maxJournalEpoch', 'journalFloor', 'appendThenApply']));
     const calls = parsedFile(path.join(REPO, 'server/src/coord/store.ts')).calls.filter((c) => c.name === 'appendThenApply');
-    expect(calls).toHaveLength(5);
-    expect(appendThenApplyOwners()).toEqual(['CoordStore.allocateDeviations', 'CoordStore.setAccountPools', 'CoordStore.setCollectLane', 'CoordStore.setIntent',
+    expect(calls).toHaveLength(4);
+    expect(appendThenApplyOwners()).toEqual(['CoordStore.setAccountPools', 'CoordStore.setCollectLane', 'CoordStore.setIntent',
       'CoordStore.writeLandingAuthority']);
   });
 });

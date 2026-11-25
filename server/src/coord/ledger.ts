@@ -1,105 +1,16 @@
-import { LEDGER_SEED_GAP } from '../../../shared/api.js';
-
 /**
- * L1: pure — the allocator's DECISION and the floor SCAN, with no clock, no
- * fs and no handle (`single-definition.test.ts`'s coord-ring scan). The CAS
- * around the decision — BEGIN IMMEDIATE, the log-first append, the PRIMARY
- * KEY (project, n) backstop, the 3x in-request retry — is part B's store
- * method and `ledgerlog.ts`; `ledger-race.test.ts` pins it there.
+ * L1: pure — reading `D-<n>` definitions out of plan text and deciding the two
+ * collision checks, with no clock, no fs and no handle (`single-definition.test.ts`'s
+ * coord-ring scan). The deviation allocator whose decision and floor scan lived here
+ * retired (docs/superpowers/plans/2026-11-24-deviation-allocator-removal-pr2.md):
+ * numbers are self-assigned with `npm run next-deviation`.
  */
 
-/** The per-request block ceiling. A program pre-allocates its whole D-block
- *  at run-open (D13 / coordinator clause 10); 100 numbers is several
+/** The block ceiling: `nextDeviationNumbers`' count bound, kept from the
+ *  retired allocator's per-request ceiling (D13). 100 numbers is several
  *  programs' worth, and anything larger is likelier a caller bug than a
- *  plan. Not L0: no wire type carries it — the route answers bad-count. */
+ *  plan. Not L0: no wire type carries it. */
 export const LEDGER_ALLOC_MAX = 100;
-
-export type AllocationDecision =
-  | { readonly ok: true; readonly numbers: readonly number[]; readonly floor: number }
-  | { readonly refused: 'not-seeded' }
-  | { readonly refused: 'bad-count' };
-
-/**
- * D13: until seeded, allocation fails shut (`not-seeded` — openCoordDb's
- * "refuse to start rather than open empty", one level up). `maxLanded` is
- * the greatest n ever ISSUED for this project — MAX over ledger_alloc in
- * EVERY state and over ~/.ccrc/ledger-alloc.log, null when none. Every
- * state, because an allocated-but-unwritten number is invisible to the
- * plan scan, and re-issuing one IS the bb47c9e failure; the caller
- * measures, this function only compares.
- *
- * bad-count is checked before not-seeded, and the order MASKS, not
- * combines: a caller with both defects learns bad-count alone, then
- * not-seeded on the retry — one per round trip. That is the point. Shape
- * is the caller's own defect, fixable this instant with no data consulted;
- * not-seeded is a wait-for-the-sweep condition, so answering it first
- * would park a caller whose request could never have been served anyway.
- * `not-seeded` is only ever said about a request that was otherwise
- * servable.
- */
-export function decideAllocation(
-  floorRow: { readonly floor: number } | null,
-  maxLanded: number | null,
-  count: number,
-): AllocationDecision {
-  if (!Number.isInteger(count) || count < 1 || count > LEDGER_ALLOC_MAX) {
-    return { refused: 'bad-count' };
-  }
-  if (floorRow === null) return { refused: 'not-seeded' };
-  const start = Math.max(floorRow.floor, (maxLanded ?? 0) + 1);
-  const numbers = Array.from({ length: count }, (_, i) => start + i);
-  return { ok: true, numbers, floor: floorRow.floor };
-}
-
-export interface LedgerFloorScan {
-  readonly floor: number;
-  /** Names the file and the number the seed was measured from — written
-   *  into ledger_floor.evidence verbatim (D13). */
-  readonly evidence: string;
-  /** Every distinct legacy D-B<k>-<m> token seen, sorted — the D14
-   *  reconciliation wave's worklist, and the reader's proof that "no
-   *  global refs" and "no refs at all" are two different scans. */
-  readonly legacy: readonly string[];
-}
-
-// The two forms, and they CANNOT cross-match: after 'D-' the global form
-// requires a digit, so 'D-B4-' + '400' contributes nothing to GLOBAL_RE (the
-// 'B' blocks it) and the plain global token — 'D-' + '400', spelled split
-// here because deviation-refs.test.ts scans this repo's own tracked text
-// with GLOBAL_RE — contains no 'B' for LEGACY_RE. Global is
-// bounded at 5 digits WITH a trailing \b, so a 6-digit token matches at NO
-// length (every prefix ends digit-before-digit) rather than truncating.
-const GLOBAL_RE = /\bD-(\d{1,5})\b/g;
-const LEGACY_RE = /\bD-B(\d{1,3})-(\d{1,4})\b/g;
-
-/**
- * D13's seed, D14's transition. The floor derives from the GLOBAL form
- * alone: a legacy number lives in a different namespace, and D14
- * reconciles it by allocating a FRESH global number through the allocator
- * — so feeding a legacy tail into this max would burn numbers for a token
- * that is about to be renamed anyway. A scan finding only legacy refs (or
- * nothing) answers null: not seeded, fail shut, never guess.
- *
- * Files are scanned in the order given; on a tie the FIRST file naming the
- * max is the evidence — deterministic because the caller (sweepLedgerFloor,
- * part B) sorts its readdir.
- */
-export function floorFromScan(
-  files: readonly { readonly path: string; readonly text: string }[],
-): LedgerFloorScan | null {
-  let max = 0;
-  let evidence = '';
-  const legacy = new Set<string>();
-  for (const f of files) {
-    for (const m of f.text.matchAll(LEGACY_RE)) legacy.add(m[0]);
-    for (const m of f.text.matchAll(GLOBAL_RE)) {
-      const n = Number(m[1]);
-      if (n > max) { max = n; evidence = `${f.path} names D-${n}`; }
-    }
-  }
-  if (max === 0) return null;
-  return { floor: max + LEDGER_SEED_GAP, evidence, legacy: [...legacy].sort() };
-}
 
 /* ── F7: the cross-tree collision decision ─────────────────────────────────── */
 
@@ -413,65 +324,4 @@ export function nextDeviationNumbers(defs: readonly Definition[], count: number)
   }
   const top = defs.reduce((m, d) => (d.n >= SELF_ASSIGNED_ERA && d.n > m ? d.n : m), SELF_ASSIGNED_ERA - 1);
   return Array.from({ length: count }, (_, i) => top + 1 + i);
-}
-
-/**
- * A project's own allocator era: the FIRST number its allocator ever issued.
- * Anything a plan defines below it predates the allocator for that project and is
- * not reportable — nobody could have asked.
- *
- * DERIVED PER PROJECT, and that is the whole point. The first version of this
- * hardcoded `LEDGER_ALLOCATOR_ERA` (211, this repo's first allocator-era number)
- * plus a `LEDGER_BOOTSTRAP` set of 211..224 (build 9b's own hand-numbered plan) —
- * and `sweepLedgerReconcile` applies this to EVERY project that has ever issued a
- * number. The second project to adopt the allocator, carrying its own few hundred
- * hand-numbered deviations, would have had most of them named as "never
- * allocated" alongside a nonsensical 14-number hole grandfathered out of a
- * different repo's history (review finding).
- *
- * The allocator already knows the answer for each project and it costs one
- * `MIN(n)`. Measured on ccrc-pwa: the hardcoded pair and this derivation report
- * the SAME orphans, because this project's first issued number is 274 — so
- * 211..273 were all hand-numbered, and the bootstrap set was both too narrow and
- * specific to one repo. 274 is safe to write down where a count is not: it is
- * `MIN(n)` over an append-only allocation table, so it can only change if the
- * allocator issues something lower, which it never does.
- *
- * THE COUNT THAT USED TO SIT IN THAT SENTENCE — "the SAME four orphans
- * (D-1066..1069)" — WAS FALSIFIED BY THIS WAVE'S OWN NEXT MEASUREMENT (D-1332),
- * because two merged plans defined numbers the allocator never issued (D-1325).
- * ITS REPLACEMENT THEN NAMED A COUNT OF ITS OWN, and that one is gone too
- * (D-1436). This set is a JOIN of a live `coord.db` no suite may open against a
- * plan corpus that grows with every merge, so nothing in this repo can pin it,
- * and any number written here is a snapshot waiting to go stale in a file whose
- * subject is exactly that. The property is what the sentence is for — the
- * hardcoded pair and this derivation report the SAME SET, whatever it is at the
- * time. The dated snapshots live in the wave's plan, which is what a document is
- * for (D-1328).
- *
- * `null` — a project with no allocations at all — reports nothing: there is no
- * era, so no definition can be below or above it.
- */
-export function projectEra(allocated: ReadonlySet<number>): number | null {
-  let min: number | null = null;
-  for (const n of allocated) if (min === null || n < min) min = n;
-  return min;
-}
-
-export function unallocatedDefinitions(
-  definitions: readonly Definition[],
-  allocated: ReadonlySet<number>,
-): CrossTreeCollision[] {
-  const era = projectEra(allocated);
-  if (era === null) return [];
-  const byN = new Map<number, Set<string>>();
-  for (const d of definitions) {
-    if (d.n < era || allocated.has(d.n)) continue;
-    const files = byN.get(d.n) ?? new Set<string>();
-    files.add(d.file);
-    byN.set(d.n, files);
-  }
-  return [...byN.entries()]
-    .map(([n, files]) => ({ n, files: [...files].sort() }))
-    .sort((a, b) => a.n - b.n);
 }

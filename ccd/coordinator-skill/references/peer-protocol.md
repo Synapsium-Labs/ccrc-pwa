@@ -195,6 +195,6 @@ definition before anyone else takes numbers. In ccrc, two branches in flight wil
 without merging, and the merge queue runs it on the merged result, so the pair
 never lands; the one that lands second renumbers, the entry and every reference
 to it. Until a number is taken, a deviation is `D-TBD-<slug>`, which the tree's
-own red suite refuses to let land. The allocator (`POST /api/ledger/deviations`)
-retired on 2026-11-23 and answers 410; `GET /api/ledger` above still reads the
+own red suite refuses to let land. The server allocator
+retired on 2026-11-23 and its route is removed; `GET /api/ledger` above still reads the
 numbers it issued.

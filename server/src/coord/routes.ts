@@ -4339,30 +4339,15 @@ export function registerCoordRoutes(
   });
 
   /**
-   * `POST /api/ledger/deviations` — RETIRED: deviation numbers are self-assigned
-   * (docs/superpowers/plans/2026-11-23-deviation-numbers-self-assigned-pr1.md).
-   * The box-token check stays (the EXEMPT row and the census stay true until
-   * PR 2 deletes the route); the answer is 410 and nothing is written.
-   */
-  app.post('/api/ledger/deviations', async (req, reply) => {
-    if (!deps.coord) return notConfigured(reply);
-    if (!requireMailToken(req, reply, 'POST /api/ledger/deviations')) return;
-    return refuseRoute(reply, 'retired',
-      { detail: 'deviation numbers are self-assigned: the highest D-N defined on main and your branch, plus one, '
-        + 'from 10000 (ccrc: cd server && npm run next-deviation)' });
-  });
-
-  /**
    * `GET /api/ledger?project=` — the allocation record and the floor, read
    * cookieless from the fleet host (box token, the `GET /api/mail` convention:
    * a read with no attribution to check). Per-project, REQUIRED: `ledger_alloc`
    * is `PRIMARY KEY (project, n)` and a floor is meaningless across projects.
    * `floor: null` is "not seeded", a different fact from 0 — no overloaded
-   * value at the seam. On a seeded project the floor answered is the NEXT
-   * FREE number — the seeded floor walked past the issued rows, what the next
-   * POST would mint from this table (the file's half of MAX(file, db) only
-   * diverges after a crash between append and commit, and the next POST
-   * re-measures it regardless). `stale` is DERIVED here, per row, from
+   * value at the seam. On a seeded project the floor answered is the seeded
+   * floor walked past the issued rows. Nothing writes either table any more:
+   * the allocator retired, and this read of its history stays because
+   * `ccrc-token-sync` proves the box token here (D-10001). `stale` is DERIVED here, per row, from
    * `allocatedAt`, `state` and this read's clock (`LEDGER_STALE_MS`) — never
    * stored, `DEVIATION_ALLOC_STATES`'s own D4 argument — so a phone can see
    * it without owning a clock policy.

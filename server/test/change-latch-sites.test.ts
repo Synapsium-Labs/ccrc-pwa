@@ -1,9 +1,9 @@
-// Characterization (D-5861; ARCH-76 #811): the six hand-rolled "warn once until it changes" latches in
+// Characterization (D-5861; ARCH-76 #811): the four hand-rolled (six until the ledger reconcile sweep's two retired) "warn once until it changes" latches in
 // `FleetWatcher`, driven through their own methods. Each warns once for a repeated key, again for a changed key, and
 // again after its clear arm has run. Green on the hand-rolled fields; the moves to `changeLatch` run these rows
 // unchanged, so a latch that stopped deduping, or stopped re-arming, shows here and not in a log. Fixture homes only.
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
@@ -11,9 +11,6 @@ import { CoordStore, type NodeMeasurement, type ReleaseListingRow } from '../src
 import { openCoordDb } from '../src/coord/db.js';
 import { FLEET_LABEL, SERVER_LABEL } from '../src/update/inventory.js';
 import type { NodeRole } from '../../shared/api.js';
-import { LedgerLog } from '../src/coord/ledgerlog.js';
-import { loadConfig } from '../src/config.js';
-import { localIO } from '../src/io.js';
 import { seedRoster, testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -164,62 +161,12 @@ describe('lastReleasePushFailure — pushRelease', () => {
   });
 });
 
-describe('lastStaleReport and lastOrphanReport — sweepLedgerReconcile', () => {
-  const NOW = 1_785_300_000_000;
-  const DAY = 24 * 3_600_000;
-  const ledger = () => {
-    const home = mkTmp('ccrc-change-latch-ledger-');
-    const projectsRoot = mkTmp('ccrc-change-latch-docs-');
-    seedRoster(home);
-    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
-    const cfg = loadConfig({ CCRC_HOME: home, CCRC_PROJECTS_ROOT: projectsRoot } as never);
-    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
-    const log = new LedgerLog(path.join(home, '.ccrc', 'ledger-alloc.log'));
-    const w = new FleetWatcher(withFakeClock({ ...testDeps(home), cfg, io: localIO, coord } as never), new Bus(), 10_000);
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const allocate = (project: string): void => {
-      coord.raiseLedgerFloor(project, 261, 'seeded by test', NOW);
-      const r = coord.allocateDeviations({ project, count: 1, title: 'the seam', allocatedTo: `${project}-quiet-basin`, runId: null, now: NOW }, log);
-      if (!r.ok) throw new Error('fixture allocation refused');
-    };
-    const plant = (project: string, name: string, text: string): void => {
-      const d = path.join(projectsRoot, project, 'docs', 'superpowers', 'plans');
-      mkdirSync(d, { recursive: true });
-      writeFileSync(path.join(d, name), text);
-    };
-    const sweepAt = async (ms: number): Promise<void> => { vi.spyOn(Date, 'now').mockReturnValue(ms); await w.sweepLedgerReconcile(); };
-    const said = (needle: string): string[] => warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes(needle));
-    return { allocate, plant, sweepAt, said };
-  };
-
-  it('a second project\'s orphans are reported, and a changed set for one project speaks again', async () => {
-    const h = ledger();
-    h.allocate('demo'); h.allocate('other');
-    h.plant('demo', 'p.md', `- **D-${299}** — never asked for`);
-    h.plant('other', 'q.md', `- **D-${399}** — never asked for`);
-    await h.sweepAt(NOW + 1000);
-    expect(h.said('never allocated'), 'each project reports its own orphans once').toHaveLength(2);
-    expect(h.said(`D-${299}`)).toHaveLength(1);
-    expect(h.said(`D-${399}`)).toHaveLength(1);
-    await h.sweepAt(NOW + 1000 + 15 * 60_000);
-    expect(h.said('never allocated'), 'an unchanged set reported again').toHaveLength(2);
-    h.plant('demo', 'r.md', `- **D-${298}** — also never asked for`);
-    await h.sweepAt(NOW + 1000 + 30 * 60_000);
-    expect(h.said('never allocated'), 'only the changed project speaks again').toHaveLength(3);
-    expect(h.said(`D-${298}`)).toHaveLength(1);
-  });
-
-  it('the stale report speaks once per set, and again when the set changes', async () => {
-    const h = ledger();
-    h.allocate('demo');
-    await h.sweepAt(NOW + 8 * DAY);
-    expect(h.said('never landed in a plan')).toHaveLength(1);
-    expect(h.said('never landed in a plan')[0]).toBe(
-      'ccrc-server: 1 allocated deviation number(s) never landed in a plan after 7 days: demo D-261 — reported, never reclaimed (D13)');
-    await h.sweepAt(NOW + 8 * DAY + 16 * 60_000);
-    expect(h.said('never landed in a plan'), 'an unchanged stale set reported twice').toHaveLength(1);
-    h.allocate('other');
-    await h.sweepAt(NOW + 8 * DAY + 32 * 60_000);
-    expect(h.said('never landed in a plan'), 'a changed stale set was swallowed').toHaveLength(2);
+// The ledger reconcile sweep's two latches (`staleReport`, `orphanReport`) retired with the deviation allocator
+// (docs/superpowers/plans/2026-11-24-deviation-allocator-removal-pr2.md): the watcher declares neither.
+describe('the retired ledger latches', () => {
+  it('a watcher carries no staleReport and no orphanReport', () => {
+    const { w } = fixture();
+    expect('staleReport' in w).toBe(false);
+    expect('orphanReport' in w).toBe(false);
   });
 });

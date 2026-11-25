@@ -842,7 +842,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       'server/src/coord/schema.ts': 3,
       'server/src/coord/stall.ts': 6,
       'server/src/coord/stallsettings.ts': 5,
-      'server/src/coord/store.ts': 55,
+      'server/src/coord/store.ts': 51,
       'server/src/deps.ts': 2,
       'server/src/docs/policy.ts': 10,
       'server/src/exec.ts': 1,

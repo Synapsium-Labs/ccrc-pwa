@@ -115,7 +115,7 @@ new dated plan, or a new task note `docs/superpowers/programs/<programme>/<task-
 `.github/ci/ledger-guard.mjs` allows both (a pull request may add files under `plans/` and
 `programs/`); it refuses a modified, deleted or renamed-away existing file there unless the head
 commit carries a `Ledger-Edit: <reason>` trailer. Until then the entry is `D-TBD-<slug>`, which CI
-refuses to land. The server allocator (`POST /api/ledger/deviations`) retired on 2026-11-23.
+refuses to land. The server allocator (`POST /api/ledger/deviations`) retired on 2026-11-23 and its route is gone.
 
 Two pull requests in flight can take the same number, so a collision is checked rather than
 prevented:

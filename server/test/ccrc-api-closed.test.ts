@@ -300,14 +300,14 @@ describe('the client stays closed', () => {
         .not.toMatch(new RegExp(`['"\`\\s]\\${flag}\\b`));
     }
     // DERIVED from the client's own case labels, not a hand-kept list: a second
-    // identity-bearing flag reds here the day it lands. (`--*)` is not matched —
+    // identity-bearing flag reds here the day it lands. (`--by`, the removed allocator row's flag, is gone.) (`--*)` is not matched —
     // `*` is outside the class.)
     const cases = [...clientCode().matchAll(/^\s*(--[a-z-]+)\)/gm)].map((m) => m[1]!);
     // `--session` (delegation broker wave 3, Task 15) is the third label and is NOT a second identity-bearing flag: it belongs to
     // `parse_intent`, the focused grammar of `coordinators intent`, where it is an ASSERTION that must equal the pane-derived id
     // (the next test holds that), the shape `asks list --parent` already has. `--key` (Overlord wave 164) carries no identity
     // either: it is `mail send`'s idempotency key, refused on every other row, and `ccrc-api-mail-key.test.ts` holds it.
-    expect(cases.sort()).toEqual(['--by', '--json', '--key', '--session']);
+    expect(cases.sort()).toEqual(['--json', '--key', '--session']);
   });
 
   it('`coordinators intent` takes its identity from the pane: --session is compared with it and never builds anything (Task 15)', () => {
@@ -400,7 +400,7 @@ describe('the client stays closed', () => {
 
   it('fills a body on exactly two rows and splices the family\'s kind on the four claimant rows, and the census of rows is unchanged (D-5298, D-7322)', () => {
     // A body fill is one of the two ways this client writes words its caller did not.
-    // `ledger.allocate` fills `byId`; `runs.open` fills `claimedByUuid`, the
+    // `runs.open` fills `claimedByUuid`, the
     // claimant's own `.uuid` (coordinator-first routing, plan Task 11a). A third
     // row, or `runs.open`'s fill moved onto a row that sets no claimant, is a
     // decision this census makes someone take on purpose. Neither fill is a new
@@ -433,7 +433,7 @@ describe('the client stays closed', () => {
     const code = clientCode();
     const filled = [...code.matchAll(/^\s*if \[\[ "\$key" == '([a-z.-]+)' && -n "\$body" \]\]; then$/gm)]
       .map((m) => m[1]!).sort();
-    expect(filled).toEqual(['ledger.allocate', 'runs.open']);
+    expect(filled).toEqual(['runs.open']);
     // `calls.record` (autonomy-default wave A3, D-8126) took it to sixty-four; it is the one body fill that REFUSES a caller's byId
     // and byUuid, so it is counted by its own scan (`calls.record` below), not by the keyed fills' spelling.
     // `mail.inbox` (D-6780) took it to sixty-five; its read takes no body, and the ack body it synthesizes is pinned below.
@@ -459,7 +459,8 @@ describe('the client stays closed', () => {
     // `overlord.inbox`, `overlord.messages` and `overlord.acknowledge` (Overlord W1, the inbox piece: the pane's pair in the
     // query of the two reads, and the acknowledge body built from it alone) to one hundred and one. `overlord.history` (Overlord W1,
     // PR B1: a body built whole by its own grammar, the pane's pair appended last) to one hundred and two.
-    expect(routeKeys().size).toBe(102);
+    // One hundred and one since the allocator row (`ledger.allocate`) was removed.
+    expect(routeKeys().size).toBe(101);
     // The call record's fill is the one that REFUSES a caller's identity (D-8126): it tests the stripped copy for both keys and
     // refuses, then derives the pair from the pane and appends it LAST, byId then byUuid (review 2039 F7, review 3245 A2). Each
     // slice below ends at its own block's closing `fi`, so a later block's splice (`runs.review-rounds`) cannot satisfy it

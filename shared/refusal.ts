@@ -128,8 +128,6 @@ export const GENERIC_REFUSALS = [
   'not-remote', 'pool-mismatch', 'pool-unreadable', 'registry-unreadable', 'run-closed',
   'run-unreadable', 'runs-unreadable', 'sweep-stopped', 'too-large', 'unknown-ask', 'unknown-claim',
   'unknown-session', 'unmeasured', 'unrouteable-record', 'unsupported', 'unsupported-type',
-  // The retired deviation allocator's POST (self-assigned numbers, PR 1); PR 2 deletes the route and this word.
-  'retired',
   // The Linear routes (named workspaces S4 and S4b): the preview read's two and the connection routes' six.
   'bad-ref', 'ref-too-long', 'bad-key', 'key-rejected', 'key-forbidden', 'not-connected', 'unreachable', 'timeout', 'malformed',
   // The Linear routes with no rate service to ask (#1444, D-7684): nothing calls Linear.
@@ -474,7 +472,7 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'no-claim': 404, 'unknown-recipient': 404, 'unknown-run': 404, 'unknown-scope': 404, 'unknown-node': 404,
   'gone': 404, 'no-such-passkey': 404, 'not-found': 404, 'unknown-ask': 404, 'unknown-claim': 404,
   'unknown-session': 404,
-  'code-expired': 410, 'code-used': 410, 'retired': 410,
+  'code-expired': 410, 'code-used': 410,
   // 409
   'duplicate': 409, 'key-conflict': 409, 'superseded': 409, 'busy': 409, 'auto-needs-rollback-gate': 409, 'no-channel': 409,
   'unknown-tag': 409, 'not-newer': 409, 'refused-by-node': 409, 'stamp-unread': 409, 'floor-unread': 409,

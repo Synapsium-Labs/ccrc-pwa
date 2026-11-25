@@ -9,9 +9,9 @@ import { COORDINATOR_SKILL_DIR, WORKER_SKILL_DIR, readSkillState } from './skill
  * The program-ready measurement (program-leverage wave 3, F3).
  *
  * Lives OUTSIDE `server/src/coord/` on purpose: it must not import
- * `coord/db.js` or `node:sqlite`, and the one coord fact it needs — whether a
- * project's deviation floor row exists — arrives as a PORT its consumer
- * declares, the way wave 2's `configDir` port did (D-1015).
+ * `coord/db.js` or `node:sqlite`, and the one coord fact it needs — whether
+ * the coordination database answers — arrives as a PORT its consumer
+ * declares (`coordProbe`), the way wave 2's `configDir` port did (D-1015).
  *
  * Split in two because the two halves have different clocks. The FLEET-WIDE
  * half costs `2 * homes` reads OVER THE WIRE (both skills in every rostered
@@ -19,7 +19,7 @@ import { COORDINATOR_SKILL_DIR, WORKER_SKILL_DIR, readSkillState } from './skill
  * apiece and no batch op in the protocol — plus ONE SERVER-LOCAL read for the
  * box token and one in-process probe for the coordination database. The wire
  * half is what puts this on a slow sweep rather than a request. The
- * PER-PROJECT half is one indexed SELECT and is composed at the route.
+ * per-project answer is this fleet half, composed at the route.
  *
  * Nothing here decides anything about a REQUEST: it measures, and hands back
  * values. The refusal, the rendering and the caching all live with their own

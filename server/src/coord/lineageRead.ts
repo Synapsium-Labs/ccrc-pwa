@@ -26,8 +26,16 @@ import {
   type ControlFailure, type LandingControlRead, type ProbeRead,
 } from './radar.js';
 import { READ_FROM_MAX_BYTES } from '../../../shared/agent-protocol.js';
-import { isSafeProjectSegment } from './ledgerseed.js';
 import { mapBounded } from '../bounded.js';
+
+/**
+ * A project name as one path SEGMENT, safe to join under a root (D-1017): no separator, no `.` or `..`, no leading
+ * punctuation. Moved here from the retired `ledgerseed.ts` when the deviation allocator went, unchanged: the radar
+ * pass below is its one reader.
+ */
+export function isSafeProjectSegment(project: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(project) && project !== '.' && project !== '..';
+}
 
 export interface LandingFacts {
   marker: MarkerRead;

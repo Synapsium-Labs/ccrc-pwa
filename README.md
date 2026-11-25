@@ -1505,8 +1505,8 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the one hundred and three machine lanes the
-fleet host reaches (thirty-nine box-token-consulting coordination routes plus
+liveness gate reads the shipped sha out of it), the one hundred and two machine lanes the
+fleet host reaches (thirty-eight box-token-consulting coordination routes plus
 the Linear proxy's routes under `/api/linear/proxy/`, which a session's `ccrc-api linear`
 verbs call and which refuse any call without the token whatever `CCRC_AUTH` says,
 the programme ledgers' item and goal routes (`/api/programmes/:slug/{items,spec,modifications,modifications/merged}`
@@ -4345,7 +4345,7 @@ token from `~/.cc-secrets/ccrc-mail.token` (absent, `no-token`), and the route
 from a fixed table (`ROUTES`, pinned closed by `ccrc-api-closed.test.ts`):
 `runs list|open|dispatch|advance|close|items|items-list|signals|route`,
 `mail list|send|fetch|ack|inbox`, `peers list`, `lifecycle list`,
-`claims list|take|release`, `ledger list|allocate` (`allocate` answers 410: the allocator retired),
+`claims list|take|release`, `ledger list`,
 `landing show|entries|order`,
 `asks list|answer|release`, `goals show` and `feed list` — plus `whoami`, which reads this session's `{id, uuid}` from its
 tmux pane and the registry and refuses rather than name another session. The
@@ -6100,9 +6100,8 @@ merge, not prevented: `cd server && ./node_modules/.bin/vitest run test/deviatio
 fetch) compares this branch's definitions against the base's without merging and, for a number of 10000 or
 more, reds on one defined with two different subjects across all three directories (a mirrored entry or a
 renamed file is one deviation; below 10000 the older rule stands); the merge queue runs it on the merged result, and the one that lands second renumbers.
-The allocator retired the same day: `POST /api/ledger/deviations` still checks the box token, then answers
-`410 retired` naming the helper and writes nothing, and the watcher no longer runs the ledger sweeps.
-`GET /api/ledger?project=<p>` (box token) still reads the numbers it issued.
+The allocator retired the same day: `POST /api/ledger/deviations` is gone (404, or 401 behind an armed sign-in gate), and the watcher no longer runs the ledger sweeps.
+`GET /api/ledger?project=<p>` (box token) still reads the numbers it issued; it stays as the box-token proof door of `ccrc token sync`.
 
 **The stall watch.** A watcher lane, `sweepStalls` (every 60 s, its verdict the
 pure `server/src/coord/stall.ts`), looks at the worker of every active run. It

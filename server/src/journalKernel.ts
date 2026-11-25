@@ -2,9 +2,9 @@
 // journals' shared pieces, stated once. It imports nothing and makes no I/O (ring L1, context K): each journal's
 // adapter reads its own file and hands the text here, and each writer calls `appendThenApply` inside its own `tx()`.
 // What stays each caller's own: its error mapping (`setIntent`'s `journal-unreadable`/`journal-unwritable`,
-// `setCollectLane`'s `failed` phases), its leniency (`LedgerLog.maxAllocated` parses per project and salvages, and is
-// NOT routed through `maxJournalEpoch`), its file format and its path. The delegation journal (authority, not a
-// projection; spec §3.19) never imports this file.
+// `setCollectLane`'s `failed` phases), its file format and its path. (The retired deviation allocator's
+// `LedgerLog.maxAllocated` was the one lenient reader, never through `maxJournalEpoch`.) The delegation journal
+// (authority, not a projection; spec §3.19) never imports this file.
 // D-7059 (spec K17's first and second bullets): `splitJournalRecords` is the one NDJSON framer of the lifecycle mirror
 // (`coord/mirrorplan.ts#frameRead`) and the collect-lane journal (`collectLane.ts#parseCollectLaneJournal`). Framing is
 // the only step they share: the mirror's byte cursor, its `lifecycle_gaps` and its rotation-name generations, and the

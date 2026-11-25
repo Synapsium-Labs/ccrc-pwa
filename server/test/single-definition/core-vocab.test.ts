@@ -629,7 +629,7 @@ describe('Build 7 nouns', () => {
   // homes is two thresholds nothing forces to agree. The SECOND assertion is
   // the one that earns this its own block — 512 is deliberately the same
   // number as `LC_REASON_MAX_BYTES` and deliberately NOT an alias of it
-  // (`LEDGER_TITLE_MAX_BYTES`'s stated argument: tying two seams' caps
+  // (`CLAIM_INTENT_MAX_BYTES`'s stated argument: tying two seams' caps
   // together lets a change to one silently rewrite the other's refusal
   // threshold), so "one definition" here must mean an own-value literal, not
   // a re-export of the neighbour that happens to hold the same integer.

@@ -322,13 +322,20 @@ describe('LaneRunner — the catch', () => {
   });
 });
 
-describe('the nine sweep lanes outside coordination (D-5862, PR 1b)', () => {
-  const NINE: Array<[string, number]> = [
+describe('the seven sweep lanes outside coordination (D-5862, PR 1b)', () => {
+  // The deviation allocator's two lanes (`ledgerReconcile`, `ledgerFloor`) retired with it: numbers are self-assigned
+  // (docs/superpowers/plans/2026-11-24-deviation-allocator-removal-pr2.md).
+  const SEVEN: Array<[string, number]> = [
     ['tasks', 10_000], ['usage', 60_000], ['pr', 120_000], ['names', 10_000], ['divergences', 60_000],
-    ['lifecycle', 5_000], ['readiness', 600_000], ['ledgerReconcile', 900_000], ['ledgerFloor', 3_600_000],
+    ['lifecycle', 5_000], ['readiness', 600_000],
   ];
 
-  it.each(NINE)('the %s row exists, on the monotonic clock (OA-C4), at %i ms', (name, cadenceMs) => {
+  it('the retired allocator lanes have no row', () => {
+    expect(LANE_SCHEDULE.map((r) => r.name)).not.toContain('ledgerReconcile');
+    expect(LANE_SCHEDULE.map((r) => r.name)).not.toContain('ledgerFloor');
+  });
+
+  it.each(SEVEN)('the %s row exists, on the monotonic clock (OA-C4), at %i ms', (name, cadenceMs) => {
     const r = laneRow(name);
     expect(r.cadenceMs).toBe(cadenceMs);
     expect(r.clock).toBe('mono');
@@ -340,13 +347,13 @@ describe('the nine sweep lanes outside coordination (D-5862, PR 1b)', () => {
     expect(pr.flight).toBe('skip');
     expect(pr.staleAfterMs).toBe(900_000);
     expect(pr.activeCadenceMs).toBe(30_000);
-    for (const [name] of NINE) if (name !== 'pr') expect(laneRow(name).flight, `${name} has no guard today`).toBe('none');
+    for (const [name] of SEVEN) if (name !== 'pr') expect(laneRow(name).flight, `${name} has no guard today`).toBe('none');
   });
 
   it('each cadence has one home, here: the watcher declares none of them', () => {
     const w = text('watch.ts');
     for (const c of ['TASK_SWEEP_MS', 'USAGE_SWEEP_MS', 'NAME_SWEEP_MS', 'DIVERGENCE_SWEEP_MS', 'LC_SWEEP_MS', 'READINESS_SWEEP_MS',
-      'LEDGER_FLOOR_SWEEP_MS', 'LEDGER_RECONCILE_SWEEP_MS', 'PR_SWEEP_MS', 'PR_SWEEP_ACTIVE_MS', 'PR_SWEEP_STUCK_MS', 'PR_BACKOFF_MAX_MS']) {
+      'PR_SWEEP_MS', 'PR_SWEEP_ACTIVE_MS', 'PR_SWEEP_STUCK_MS', 'PR_BACKOFF_MAX_MS']) {
       expect(w, `${c} is declared a second time in watch.ts`).not.toMatch(new RegExp(`const ${c}\\s*=\\s*[0-9]`));
       expect(text('laneSchedule.ts'), `${c} is declared nowhere here`).toMatch(new RegExp(`export const ${c}\\b`));
     }
@@ -524,9 +531,9 @@ describe('the four reclaim lanes (D-5862, PR 3)', () => {
 });
 
 describe('every throttle is on the monotonic clock (OA-C4, ruled (a) on #803)', () => {
-  it('no row of LANE_SCHEDULE is on the wall clock: 64 of 64 are monotonic (the authority witness lane, Overlord W1 §7.6; the limit sampler, Overlord W1 serviceability B; the sequence retention lane, Overlord §10.4; the Overlord inbox wake, W1 inbox Task 4; the coordinator advisor count lane, D-8971; the disk-lane stall alert, D-8955; the coordinator skill rollout mail, D-8126 A9-3; the block-wake lane, D-8126; the Linear plan sync, D-8182; the Linear drift pass, D-8183; the Linear migration, D-8186; the disk alarm, the tmp census and the stale-archive arm are rows, D-7895; the stuck verdict pass, D-8071; the run-close lane, D-8077; the case lane, Overlord §10.5; the generations lane, Overlord §3.3.11; the launch-profile lane, Overlord §3.6; the timers lane, Overlord §3.3.12; the quiz lane, Overlord §3.3.9; the push outbox lane, Overlord §6.7; the response lane, Overlord §4.3; the overlaps arm, Overlord §5.5; the forecast lane, Overlord §5.6; the decision anchors lane, Overlord W2; the skill self-install lane, D-8126; the mailhold projection, mid-turn mail PR 4; the admission wake, D-6095)', () => {
+  it('no row of LANE_SCHEDULE is on the wall clock: 62 of 62 are monotonic (the two ledger lanes retired with the deviation allocator; the authority witness lane, Overlord W1 §7.6; the limit sampler, Overlord W1 serviceability B; the sequence retention lane, Overlord §10.4; the Overlord inbox wake, W1 inbox Task 4; the coordinator advisor count lane, D-8971; the disk-lane stall alert, D-8955; the coordinator skill rollout mail, D-8126 A9-3; the block-wake lane, D-8126; the Linear plan sync, D-8182; the Linear drift pass, D-8183; the Linear migration, D-8186; the disk alarm, the tmp census and the stale-archive arm are rows, D-7895; the stuck verdict pass, D-8071; the run-close lane, D-8077; the case lane, Overlord §10.5; the generations lane, Overlord §3.3.11; the launch-profile lane, Overlord §3.6; the timers lane, Overlord §3.3.12; the quiz lane, Overlord §3.3.9; the push outbox lane, Overlord §6.7; the response lane, Overlord §4.3; the overlaps arm, Overlord §5.5; the forecast lane, Overlord §5.6; the decision anchors lane, Overlord W2; the skill self-install lane, D-8126; the mailhold projection, mid-turn mail PR 4; the admission wake, D-6095)', () => {
     expect(LANE_SCHEDULE.filter((r) => r.clock === 'wall').map((r) => r.name), 'a throttle on Date.now()').toEqual([]);
-    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(64);
+    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(62);
   });
 
   it('the runner throttles a monotonic row on the monotonic reading: a wall step back runs it at its cadence, a step forward never early', () => {

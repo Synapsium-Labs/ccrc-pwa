@@ -81,6 +81,7 @@ the check makes that loud and cheap.
    and `ledger_alloc` tables stay in `coord.db` unread: `coord.db` migrations only move forward, and dropping them buys
    nothing. `~/.ccrc/ledger-alloc.log` stops growing. Keeping the allocator beside the new rule would be two owners of
    one fact, which CLAUDE.md forbids.
+   (See D-10001: `GET /api/ledger` stays as the token-sync proof door.)
 
 ## Order
 

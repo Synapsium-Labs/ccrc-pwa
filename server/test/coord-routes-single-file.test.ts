@@ -95,7 +95,7 @@ describe('all coordination routes live in coord/routes.ts (D17)', () => {
     // by the old routes alone:
     const paths = coord.map((r) => `${r.verb.toUpperCase()} ${r.routePath}`);
     for (const r of ['GET /api/peers', 'POST /api/claims', 'POST /api/claims/:id/release',
-      'POST /api/claims/:id/break', 'GET /api/claims', 'POST /api/ledger/deviations',
+      'POST /api/claims/:id/break', 'GET /api/claims',
       'GET /api/ledger']) {
       expect(paths, `${r} was not found by the scanner`).toContain(r);
     }

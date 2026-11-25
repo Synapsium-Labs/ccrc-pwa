@@ -709,9 +709,6 @@ describe('the rejection table is total, in both directions', () => {
       'not-failed',
       // D-8289 — the same record's `notSent` CHECK vocabulary: why a capture try sent nothing. A row fact, not a refusal.
       ...Object.keys(BUILD_CAPTURE_NOT_SENT_MAP),
-      // The retired deviation allocator's fail-shut answer (`coord/ledger.ts`, `coord/store.ts`): no route sends it since
-      // the allocator's POST answers 410 `retired` (self-assigned numbers, PR 1); PR 2 deletes the code and this row.
-      'not-seeded',
       'x-ccrc-mail-token',   // coord/token.ts's header name
       'content-type',        // coord/decisionModelHttp.ts's request header name (Overlord W2 decision model A)
       'not-configured',      // the generic "no store wired" answer, shared with push/notifyLog
@@ -783,16 +780,6 @@ describe('the rejection table is total, in both directions', () => {
       'non-terminal',        // coord/store.ts — a `writeDeliveries` guard name (D-5997).
                              // NOT a wire code: the one delivery writer's private
                              // guard selector, never answered over a route.
-      'no-refs',              // coord/ledgerseed.ts — a `FloorMeasurement.why`
-                               // (wave 2, F2). NOT a wire code: the allocator's
-                               // refusal stays `not-seeded`, and this only
-                               // chooses WHICH detail sentence that 409 carries.
-                               // One in-process caller, no route maps it to a
-                               // status, nothing switches on it over the wire.
-                               // Its sibling `unmeasurable` is one word and
-                               // never reaches this scan at all — the same
-                               // asymmetry `refused-project`/`unlistable` above
-                               // records.
       'coordinator-paused',   // $REG marker filename, not a code
       'reclaim-paused',       // $REG marker filename, not a code (child-reclamation wave 4)
       'bad-request',          // the generic body-shape refusal server.ts
@@ -854,19 +841,14 @@ describe('the rejection table is total, in both directions', () => {
                               // above: stored forensics on a released claim, never a
                               // refusal a caller switches on. A FOURTH value gets its
                               // own entry too.
-      'bad-count',            // ledger.ts `decideAllocation`'s local refusal arm. The plan
-                              // ruled it NOT L0 ("no wire type carries it"), so it is
-                              // deliberately absent from CLAIM_REFUSE_CODES and has no
-                              // guard to pass through. If the allocator route later gives
-                              // it a wire spelling, that task moves it out of this list.
       'not-live',             // store.ts `ClaimEndResult`'s local refusal arm (Task 12) —
-                              // the `bad-count` shape exactly: a store-internal spelling
+                              // a store-internal spelling
                               // no wire carries. The claims routes (Task 19) map it to
                               // 'claim-terminal' (CLAIM_REFUSE_CODES) before any caller
                               // sees it, so admitting it through the guard would put a
                               // never-wire word INTO the wire vocabulary to do it.
       'already-acked',        // store.ts `MarkAckedResult`'s refusal arm (wave 8) —
-                              // the `bad-count`/`not-live` shape exactly: a
+                              // the `not-live` shape exactly: a
                               // store-internal spelling no wire carries. The ack
                               // route maps it to `{already:true, parked:false}`
                               // before any caller sees it, so admitting it to a

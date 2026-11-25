@@ -496,9 +496,10 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   entry mirrored in a spec and its plan, or a renamed file, is one deviation; below 10000 the old rule stands: an
   allocator-era number defined in two plans). The merge queue runs it on the
   merged result, so the pair never lands; the one that lands second renumbers, the entry and every reference to
-  it. The allocator (`POST /api/ledger/deviations`) retired on 2026-11-23: it answers 410 and writes nothing,
-  and its prose-seeded floor, which only ever rose, is no longer raised; `GET /api/ledger?project=` still reports
-  it as history, never a number to take, and still reads the numbers it issued. Source files carry `D-N` refs in comments; **read them
+  it. The allocator (`POST /api/ledger/deviations`) retired on 2026-11-23 and its route is gone (404, or 401 behind an
+  armed sign-in gate); its prose-seeded floor, which only ever rose, is no longer raised. `GET /api/ledger?project=`
+  still reports it as history, never a number to take, still reads the numbers it issued, and is the box-token proof
+  door of `ccrc token sync` and `probe`. Source files carry `D-N` refs in comments; **read them
   as authoritative history, don't delete them.** Anchors in plans are snapshots — trust shipped source's own
   comments over a plan document.
 - **Cite code by anchor, not by line:** a `file.ts:123` citation conflicts whenever any PR touches the lines above it, though
@@ -599,7 +600,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   question door family's claimant pair `POST
   /api/questions/:id/rule` and `POST /api/questions/:id/release` (W3 Q3f, D-7030), `POST /api/claims`, `POST
   /api/claims/:id/release`,
-  `POST /api/coordinators/:session/intent`, `POST /api/leases/:lease/retain`, `POST /api/ledger/deviations`, `GET /api/ledger`,
+  `POST /api/coordinators/:session/intent`, `POST /api/leases/:lease/retain`, `GET /api/ledger`,
   `POST /api/landing/entries` and `POST /api/landing/order` (setter attribution, not coordinator authorisation), and the approvals lane's
   four (`POST /api/approvals`, `GET /api/approvals/:id/ruling`, `GET /api/approvals/key` and
   `GET /api/approvals/:id`, coordinator-first routing D-5298) and the programme ledgers' coordinator routes (plan PL3; their handlers
