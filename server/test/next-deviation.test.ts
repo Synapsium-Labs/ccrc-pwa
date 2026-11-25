@@ -3,7 +3,7 @@ import { spawnSync, execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { LEDGER_ALLOC_MAX, nextDeviationNumbers } from '../src/coord/ledger.js';
+import { LEDGER_ALLOC_MAX, nextDeviationNumbers, selfAssignedCollisions } from '../src/coord/ledger.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 import { DEFINITION_DIRS, changedDefinitionPaths, readDefinitionFilesAt, resolveLedgerBase, staleLedgerBase } from '../scripts/next-deviation.js';
 
@@ -49,6 +49,11 @@ function onMainAhead(root: string, tree: Tree): void {
   git('update-ref', 'refs/remotes/origin/main', 'HEAD');
   git('checkout', '-q', back);
   git('branch', '-q', '-D', 'main-ahead');
+}
+/** The collision guard's own composition (`deviation-refs.test.ts`), run on a fixture repo against `origin/main`. */
+function guard(root: string): { n: number; files: string[] }[] {
+  return selfAssignedCollisions(readDefinitionFilesAt(root, 'HEAD'), readDefinitionFilesAt(root, 'origin/main'),
+    changedDefinitionPaths(root, 'origin/main'));
 }
 function entry(n: number): string { return `## Deviations found\n\n- **${D(n)}** \u2014 a deviation.\n`; }
 const run = (cwd: string, ...args: string[]) => spawnSync(TSX, [SCRIPT, ...args], { cwd, encoding: 'utf8' });
@@ -122,6 +127,14 @@ describe('the guard\'s two git reads', () => {
     const later = git(root, 'commit-tree', 'origin/main^{tree}', '-p', 'origin/main', '-m', 'main moves on');
     git(root, 'update-ref', 'refs/remotes/origin/main', later);
     expect([...changedDefinitionPaths(root, 'origin/main')]).toEqual([A]);
+  });
+  it('changedDefinitionPaths diffs from the merge base: a file main added after the fork is not listed, and its clash reds', () => {
+    const mine = 'docs/superpowers/plans/mine.md';
+    const theirs = 'docs/superpowers/plans/theirs.md';
+    const root = fixtureRepo(undefined, { [mine]: `- **${D(10020)}** \u2014 mine.\n` });
+    onMainAhead(root, { [theirs]: `- **${D(10020)}** \u2014 theirs.\n` });
+    expect([...changedDefinitionPaths(root, 'origin/main')]).toEqual([mine]);
+    expect(guard(root)).toEqual([{ n: 10020, files: [mine, theirs] }]);
   });
   it('staleLedgerBase: a fork whose own origin/main diverged is measured against upstream/main, and is not stale', () => {
     const root = fixtureRepo();
