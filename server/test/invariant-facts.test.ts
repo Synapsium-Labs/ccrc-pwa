@@ -152,7 +152,8 @@ describe('gatherInvariantInput', () => {
     // Ids of seven digits, so the lane's subject for one mail cuts well before the last id.
     tx(db, () => { db.prepare('UPDATE continuity_timers SET id = 999999 WHERE id = ?').run(timer(db, 'lane-a')); });
     const ids = Array.from({ length: 24 }, () => timer(db, 'lane-a'));
-    const due = ids.map((id) => ({ id, setter: 'lane-a', dueAt: NOW + 1000, note: 'n', setAt: NOW, setById: 'lane-a', runId: null, programme: null }));
+    const due = ids.map((id) => ({ id, setter: 'lane-a', dueAt: NOW + 1000, note: 'n', setAt: NOW, setById: 'lane-a', runId: null, programme: null,
+      restore: 'none' as const, restoreNow: 0 }));
     const [first] = packTimerMail(due, NOW + 2000);
     expect(first!.ids).toEqual(ids);
     expect(Buffer.byteLength(first!.subject)).toBeLessThanOrEqual(MAIL_SUBJECT_MAX_BYTES);
