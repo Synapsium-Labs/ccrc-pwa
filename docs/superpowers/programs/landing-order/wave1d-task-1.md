@@ -6,7 +6,7 @@ Run 3739, plan `docs/superpowers/plans/2026-11-25-landing-order-wave1d-queue-ci.
   from 15m47 to 29m24 on 2026-11-24 by runner, one green shard was cancelled at 30m00, and 45 is about half as much
   again over the slow case and still under the queue's hour. The sentence that said every shard is packed to about
   four minutes now says that is a fast pull request's packing only.
-- No other job's deadline changed. Wave 1e's `browser-pwa` deadline (30, D-9055) is its own.
+- No other job's deadline changed. Wave 1e's `browser-pwa` deadline (30) is that wave's own.
 - **The pin.** `oss-metadata.test.ts` holds every job's deadline between 1 and 60, and `ci-pipeline.test.ts` the same;
   neither names `server-shard`'s number. So no suite pins 45 (mutation 1D-01, measured green in both suites with 30),
   and, as the plan's table allows, none was added.
