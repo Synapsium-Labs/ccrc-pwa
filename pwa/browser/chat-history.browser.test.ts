@@ -1011,7 +1011,7 @@ describe('reopening a chat whose older edge reads expired (follow-up A4)', () =>
         report(`A4 ${named(view)}: connects ${connects.map((c) => `#${c.n} ${c.resuming ? 'resuming' : 'fresh'}`).join(', ')}`);
         expect(reopen.resuming, 'the reopen resumed: its older edge was not expired').toBe(false);
         const fx = figures(frames);
-        const { drawn, run, changes, biggest } = fx;
+        const { drawn, changes, biggest } = fx;
         for (const fr of changes.slice(0, 14)) {
           report(`A4 ${named(view)} frame ${fr.f} (${fr.ms} ms): scrollTop ${fr.top} of ${fr.height}, ${fr.rows} rows, first ${fr.first}, last ${fr.last}`);
         }
