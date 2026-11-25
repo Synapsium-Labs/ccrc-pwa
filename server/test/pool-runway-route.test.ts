@@ -12,6 +12,7 @@ import type { LimitSample } from '../src/poolRunway.js';
 import { buildServer } from '../src/server.js';
 import { FleetWatcher } from '../src/watch.js';
 import { fakeTime } from './fakeTime.js';
+import { quietAtTestEnd } from './laneQuiet.js';
 import { testDeps } from './helpers.js';
 
 const NOW = 2_000_000_000;
@@ -43,7 +44,7 @@ it('the composed server reads the ladder load from the watcher and the runway hi
   const coord = new CoordStore(db);
   const bus = new Bus();
   const deps = { ...fixture, cfg: { ...fixture.cfg, roster }, coord, time: fakeTime({ wallMs: NOW * 1000 }).ports };
-  const watcher = new FleetWatcher(deps, bus, 2000);
+  const watcher = quietAtTestEnd(new FleetWatcher(deps, bus, 2000));
   const cachedLimits = vi.spyOn(watcher, 'currentLimits');
   const setLiveLoad = (pct: number) => cachedLimits.mockReturnValue({ listedAt: NOW * 1000, limits: {
     'lane-a': { five: pct, seven: pct, ts: NOW - 30, fiveResetAt: NOW + 9_000, sevenResetAt: NOW + 300_000,
