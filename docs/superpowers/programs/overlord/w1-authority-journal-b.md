@@ -141,7 +141,7 @@ Isolation-only cases that did not lift the unrelated witness condition. Both fix
 the test-project check exited 0 and ladder read went from 3 failed / 7 passed to 10 passed in the lane. This supersedes the prior
 local test-project measurement gap, not the record of its exit 137.
 
-| Focused evidence | Measured in the fleet test lane |
+| Focused evidence before the Sequence A merge | Measured in the fleet test lane |
 | --- | --- |
 | Restore and witness | Confirm route 11, restore 55, generation 10, exchange 39 and witness policy 52 after round 3, witness route 9, witness link 5 |
 | Journal and ladder | Journal 42, guard 19, restore latch 11, ladder policy 68, read 10, actor 25, route 42, seams 11 |
@@ -167,13 +167,52 @@ files; the other cases in those two files were not measured by these runs.
 
 ### Known limits
 
-A forged witness, whether from the agent or the console, can open gaps in message ids, the epoch and the restore generation up
-to the witnessed raise ceiling, but cannot exhaust a counter. A forged agent file cannot lift trust in W1. Witnessed maxima
-above the ceiling never raise the numbering bounds; protection after a rollback rests on the verdict's fence and the database
-and journal highest values.
+The agent fixtures show that a forged witness can open gaps in message ids, the epoch and the restore generation up to the
+witnessed raise ceiling, but cannot exhaust a counter. The console uses the same bound; that path is established by reading,
+not by a named case. A forged agent file cannot lift the effective W1 rung above `chat`; that conclusion is from reading the
+ladder, not from a witness-specific case. Witnessed maxima above the ceiling never raise the numbering bounds; protection
+after a rollback rests on the verdict's fence and the database and journal highest values.
 
 A forged base above the ceiling still fences authority. Confirm reports success and spends an epoch and a generation, but its
-follow-up compares the same held agent answer and restores the fence in that pass. The agent receives no replacement offer;
-the operator must remove the held witness file to clear that witness. A console tuple takes the same verdict path, but the
-post-Confirm console exchange is not pinned by this fixture. Confirm does not clear the device's stored witness; the operator
-clears it on that device to recover.
+follow-up compares the same held agent answer and restores the fence in that pass. The agent receives no replacement offer.
+Removing the held file has no effect until the agent sends a new ready frame on reconnect or restart. Once the stored witness
+is gone and the peer no longer reports it, the guard still reads rolled back until a second Confirm, spending another epoch
+and generation, or a server restart. These conditions after re-fencing are established by reading; the fixture does not run
+that recovery sequence. A console tuple takes the same verdict path, but this fixture does not pin the post-Confirm console
+exchange. Nothing in the console removes its stored witness; it is cleared by hand on that device. That console recovery
+condition is also established by reading, not by a named case.
+
+## Sequence A merge and focused verification
+
+The landed Sequence A merge (#3218) had exactly three conflict resolutions:
+
+- `server/src/coord/overlordAuthorityJournal.ts` keeps both the deferred guard nudge after writing the head row and the
+  `postAppendFailed` receipt stamped writers use after attempting rollback.
+- `server/src/laneSchedule.ts` keeps both `sequenceRetention` and `authorityWitness` in the lane-name union; both rows merged
+  without a manual edit.
+- `server/test/lane-schedule.test.ts` re-derives the pin at 63 unique monotonic lanes, with no wall-clock lane. The follow-up
+  pins the exact tail: `forecasts`, `decisionAnchors`, `authorityWitness`.
+
+The eight-file worker batch on the Sequence A merge plus the first review follow-up passed 645 cases:
+
+| File | Passed |
+| --- | ---: |
+| `server/test/overlord-authority-exchange.test.ts` | 39 |
+| `server/test/overlord-authority-witness.test.ts` | 52 |
+| `server/test/single-definition/advance-switches.test.ts` | 53 |
+| `server/test/overlord-restore-route.test.ts` | 11 |
+| `server/test/overlord-authority-restore-latch.test.ts` | 11 |
+| `server/test/auth-gate.test.ts` | 390 |
+| `server/test/box-token-census.test.ts` | 70 |
+| `agent/test/witness-op.test.ts` | 19 |
+| **Total** | **645** |
+
+Seven files ran on the test box; the agent carrier used the supported local slice. The journal file
+(`server/test/overlord-authority-journal.test.ts`, 43) and lane schedule file (`server/test/lane-schedule.test.ts`, 75) also
+passed independently on the merge before the first review follow-up, and review 3715 confirmed both counts on that follow-up.
+The merged mutation-floor map has 332 entries, with nine fixed cases in `server/test/sim/mutation-floors.test.ts` by source
+count, not a run of that file. The merge adds no migration: the schema matches the landed Sequence A base.
+
+For the exact-tail follow-up, its targeted case failed on both controlled changes: an extra row after `authorityWitness`
+and an extra row immediately before it. With both changes removed, the lane schedule file passed 75 cases, the exchange file
+passed 39, and the agent carrier file passed 19 in the local test slice. None of these measurements is a full-suite result.

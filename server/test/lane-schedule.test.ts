@@ -720,10 +720,8 @@ describe('the decision anchors lane row (Overlord W2, plan w2-decision-model.md 
     expect(DECISION_ANCHOR_PERIOD_MS).toBe(86_400_000);
     expect(DECISION_ANCHOR_PERIOD_MS).toBe(QUIZ_LANE_PERIOD_MS);
   });
-  it('is followed only by rows added after it', () => {
-    const names = LANE_SCHEDULE.map((r) => r.name);
-    expect(names.indexOf('decisionAnchors')).toBeGreaterThan(names.indexOf('forecasts'));
-    expect(names.indexOf('authorityWitness')).toBeGreaterThan(names.indexOf('decisionAnchors'));
+  it('ends the lane table with forecasts, decisionAnchors and authorityWitness in that order', () => {
+    expect(LANE_SCHEDULE.slice(-3).map((row) => row.name)).toEqual(['forecasts', 'decisionAnchors', 'authorityWitness']);
   });
 });
 
