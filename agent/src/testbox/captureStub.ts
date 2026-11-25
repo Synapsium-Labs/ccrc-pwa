@@ -28,7 +28,9 @@ function contentOf(r: Exclude<StandInReply, { kind: 'error' }>, id: string, stre
 
 const sse = (event: string, data: Obj): string => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 
-export async function startStandIn(opts: { host?: string; port?: number } = {}): Promise<StandIn> {
+/** `reply`: the rule each request is answered by (default `capture.ts#standInReply`, build trust's; the delivery recipe
+ *  passes its own, `captureDelivery.ts#deliveryStandInReply`). */
+export async function startStandIn(opts: { host?: string; port?: number; reply?: (body: unknown) => StandInReply } = {}): Promise<StandIn> {
   const requests: unknown[] = [];
   let n = 0;
 
@@ -40,7 +42,7 @@ export async function startStandIn(opts: { host?: string; port?: number } = {}):
 
   const answer = (res: http.ServerResponse, body: unknown): void => {
     requests.push(body);
-    const reply = standInReply(body);
+    const reply = (opts.reply ?? standInReply)(body);
     if (reply.kind === 'error') { json(res, reply.status, errorBody('invalid_request_error', reply.message)); return; }
     n += 1;
     const o = typeof body === 'object' && body !== null && !Array.isArray(body) ? (body as Obj) : {};

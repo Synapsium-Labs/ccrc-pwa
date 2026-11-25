@@ -19,17 +19,22 @@
 // After each capture ends, the desk hands the builds still queued to the builds store's prune (`capture.ts#buildsToPrune`
 // decides; the entry point acts), so a build a capture still needs is never removed.
 import path from 'node:path';
-import { CAPTURE_REFUSAL_SENTENCE, type CaptureAnswer, type CaptureRefusal, type CaptureStateWord, type CaptureSubmit } from '../../../shared/claudeBuildCapture.js';
+import { CAPTURE_REFUSAL_SENTENCE, captureRecipeOf, type CaptureAnswer, type CaptureRecipe, type CaptureRefusal, type CaptureStateWord, type CaptureSubmit } from '../../../shared/claudeBuildCapture.js';
 import {
   CAPTURE_CLOSED_DETAIL, CAPTURE_LATE_DETAIL, CAPTURE_TIMINGS, captureBuildsDir, capturedBuildUsable, captureStartsLate, captureWrites, capturePaths,
   type BuildFileFacts, type CaptureTimings,
 } from './capture.js';
+import { deliveryStartsLate } from './captureDelivery.js';
 import type { CaptureRun } from './captureRunner.js';
 import { writeRefusal, type ProbeRole } from './probes.js';
 import { admit, cancel, EMPTY_QUEUE, enqueue, finish, positions, type QueueState } from './queue.js';
 
-/** The runner as the desk sees it. */
-export interface CaptureRunnerLike { run(captureId: string, build: string): Promise<CaptureRun> }
+/** The runner as the desk sees it. `recipe` and `part` are the submission's (absent: build trust, as every caller before
+ *  the delivery recipe calls it). `delivers`: whether it runs the delivery recipe (absent: it does not). */
+export interface CaptureRunnerLike {
+  run(captureId: string, build: string, recipe?: CaptureRecipe, part?: number): Promise<CaptureRun>;
+  readonly delivers?: boolean;
+}
 
 /** Where a capture's frames go. */
 export interface CaptureSink { send(frame: CaptureAnswer): void }
@@ -89,8 +94,16 @@ export class CaptureDesk {
     return captureWrites(paths).map((p) => writeRefusal(this.d.realPath(p), fleet)).some((r) => r !== null) ? 'path-refused' : null;
   }
 
-  private answer(f: CaptureSubmit, sink: CaptureSink, state: CaptureStateWord, rest: Partial<Pick<CaptureAnswer, 'refusal' | 'detail' | 'position' | 'result'>> = {}): void {
-    sink.send({ t: 'capture.state', captureId: f.captureId, build: f.build, state, refusal: null, detail: null, position: null, result: null, ...rest });
+  private answer(f: CaptureSubmit, sink: CaptureSink, state: CaptureStateWord, rest: Partial<Pick<CaptureAnswer, 'refusal' | 'detail' | 'position' | 'result' | 'delivery'>> = {}): void {
+    // A delivery capture's every frame carries `delivery` (null until its result); a build-trust frame carries none.
+    const delivery = captureRecipeOf(f) === 'delivery' ? { delivery: null } : {};
+    sink.send({ t: 'capture.state', captureId: f.captureId, build: f.build, state, refusal: null, detail: null, position: null, result: null, ...delivery, ...rest });
+  }
+
+  /** Whether a capture that waited `waited` would answer after the fleet agent stops waiting, on its recipe's worst case. */
+  private late(f: CaptureSubmit, waited: number): boolean {
+    const t = this.d.timings ?? CAPTURE_TIMINGS;
+    return captureRecipeOf(f) === 'delivery' ? deliveryStartsLate(waited, t) : captureStartsLate(waited, t);
   }
 
   private refuse(f: CaptureSubmit, sink: CaptureSink, refusal: CaptureRefusal): void {
@@ -98,6 +111,9 @@ export class CaptureDesk {
   }
 
   /** A submission: refused with its typed reason, or queued. */
+  /** Whether this desk runs the delivery recipe: its runner is wired, with the delivery driver (call 1148). */
+  delivers(): boolean { return this.d.runner?.delivers === true; }
+
   submit(f: CaptureSubmit, sink: CaptureSink): void {
     const standing = this.standing(f);
     if (standing !== null) { this.refuse(f, sink, standing); return; }
@@ -133,15 +149,22 @@ export class CaptureDesk {
     const h = this.held.get(captureId)!;
     const standing = this.standing(h.f);
     const runner = this.d.runner;
-    if (standing === null && runner !== null && captureStartsLate(this.now() - h.at, this.d.timings ?? CAPTURE_TIMINGS)) {
+    if (standing === null && runner !== null && this.late(h.f, this.now() - h.at)) {
       // Its verdict would come after the fleet agent stopped waiting: ended with no verdict and the word, never run
       // (review 3226 F8). The decision is `capture.ts#captureStartsLate`'s.
       this.answer(h.f, h.sink, 'ended', { detail: CAPTURE_LATE_DETAIL });
     } else if (standing === null && runner !== null) {
       this.answer(h.f, h.sink, 'running');
       let run: CaptureRun;
-      try { run = await runner.run(captureId, h.f.build); } catch { run = { result: null, detail: RUNNER_FAILED }; }
-      this.answer(h.f, h.sink, 'ended', run.result !== null ? { result: run.result } : { detail: run.detail ?? RUNNER_FAILED });
+      if (captureRecipeOf(h.f) === 'delivery') {
+        // The delivery recipe (Desktop polish wave 178): its result rides `delivery`, never `result`.
+        try { run = await runner.run(captureId, h.f.build, 'delivery', h.f.part ?? 0); } catch { run = { result: null, delivery: null, detail: RUNNER_FAILED }; }
+        const d = run.delivery ?? null;
+        this.answer(h.f, h.sink, 'ended', d !== null ? { delivery: d } : { detail: run.detail ?? RUNNER_FAILED });
+      } else {
+        try { run = await runner.run(captureId, h.f.build); } catch { run = { result: null, detail: RUNNER_FAILED }; }
+        this.answer(h.f, h.sink, 'ended', run.result !== null ? { result: run.result } : { detail: run.detail ?? RUNNER_FAILED });
+      }
     } else {
       this.refuse(h.f, h.sink, standing ?? 'no-runner');
     }

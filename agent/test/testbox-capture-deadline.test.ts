@@ -18,6 +18,8 @@ import { readTestboxFrame } from '../../shared/testbox.js';
 import {
   CAPTURE_DEADLINE_MARGIN_MS, CAPTURE_LATE_DETAIL, CAPTURE_STEPS, CAPTURE_TIMINGS, captureStartsLate, captureWorstCaseMs, type BuildFileFacts, type CaptureTimings,
 } from '../src/testbox/capture.js';
+import { DELIVERY_PART_COUNT } from '../../shared/deliveryResult.js';
+import { deliveryPartCount, deliveryStartsLate, deliveryWorstCaseMs } from '../src/testbox/captureDelivery.js';
 import { CaptureDesk, type CaptureDeskDeps, type CaptureRunnerLike } from '../src/testbox/captureDesk.js';
 import type { CaptureRun } from '../src/testbox/captureRunner.js';
 import type { MirrorOps } from '../src/testbox/mirror.js';
@@ -26,10 +28,15 @@ import type { SystemManager } from '../src/testbox/systemd.js';
 import { appendFileSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { TestboxConfig } from '../src/testbox/config.js';
-import { captureDeskComposed } from '../src/testbox/main.js';
+import { captureDeskComposed, deliveryOf } from '../src/testbox/main.js';
 import { mkTmp } from './tmpHelpers.js';
 
-const T: CaptureTimings = { stepMs: 1000, exitMs: 100, pollMs: 10, tmuxCallMs: 20, stopWaitMs: 50, standInCloseMs: 30, setupMs: 5, removeMs: 7 };
+const T: CaptureTimings = {
+  stepMs: 1000, exitMs: 100, pollMs: 10, tmuxCallMs: 20, stopWaitMs: 50, standInCloseMs: 30, setupMs: 5, removeMs: 7,
+  deliveryDriveMs: 300, deliverySettleMs: 200, deliveryQuietMs: 40,
+};
+/** The delivery recipe's bounds in the contract (Desktop polish wave 178): build trust's worst case never reads them. */
+const DELIVERY_KEYS: readonly (keyof CaptureTimings)[] = ['deliveryDriveMs', 'deliverySettleMs', 'deliveryQuietMs'];
 
 describe('the worst case of one capture by the wired runner (capture.ts#captureWorstCaseMs)', () => {
   it('adds the setup allowance, the start, each typed step\'s two calls, each step\'s wait and a poll, the exit wait and a poll, the stop, the stop wait and a poll, the stand-in\'s close and the removal allowance', () => {
@@ -42,14 +49,29 @@ describe('the worst case of one capture by the wired runner (capture.ts#captureW
   });
   it('grows with each timing it is made of', () => {
     const base = captureWorstCaseMs(T);
-    for (const k of Object.keys(T) as (keyof CaptureTimings)[]) expect(captureWorstCaseMs({ ...T, [k]: T[k] + 1 }), k).toBeGreaterThan(base);
+    for (const k of Object.keys(T) as (keyof CaptureTimings)[]) {
+      if (!DELIVERY_KEYS.includes(k)) expect(captureWorstCaseMs({ ...T, [k]: T[k] + 1 }), k).toBeGreaterThan(base);
+    }
+  });
+  it('the delivery recipe\'s bounds leave it unchanged, and they are the only ones that do', () => {
+    const base = captureWorstCaseMs(T);
+    for (const k of DELIVERY_KEYS) expect(captureWorstCaseMs({ ...T, [k]: T[k] + 1 }), k).toBe(base);
   });
 });
 
 describe('the timing contract fits the fleet agent\'s deadline (review 3226 F8; gate G1)', () => {
-  it('under the contract, a capture with one capture ahead of it in the queue ends, with its margin, before the agent stops waiting', () => {
+  it('under the contract, a capture with one capture ahead of it in the queue ends, with its margin, before the agent stops waiting, a delivery part either member', () => {
     const worst = captureWorstCaseMs(CAPTURE_TIMINGS);
     expect(2 * worst + CAPTURE_DEADLINE_MARGIN_MS).toBeLessThanOrEqual(TESTBOX_CAPTURE_DEADLINE_MS);
+    // The delivery recipe's largest part (Desktop polish wave 178; the capture owner's calls 1148 and 1159), ahead of or
+    // behind a build-trust capture or another part.
+    const part = deliveryWorstCaseMs(CAPTURE_TIMINGS);
+    for (const [ahead, own] of [[worst, part], [part, worst], [part, part]] as const) {
+      expect(ahead + own + CAPTURE_DEADLINE_MARGIN_MS, `${ahead} then ${own}`).toBeLessThanOrEqual(TESTBOX_CAPTURE_DEADLINE_MS);
+    }
+    // The shared part count is the one this contract derives: the smallest that fits, so a count one higher or lower than
+    // the derivation is red here (shared/deliveryResult.ts#DELIVERY_PART_COUNT).
+    expect(deliveryPartCount(CAPTURE_TIMINGS)).toBe(DELIVERY_PART_COUNT);
   });
   it('the drive carries door B2\'s typed step and still fits', () => {
     const typed = CAPTURE_STEPS.filter((s) => s.type === '/model haiku');
@@ -315,5 +337,32 @@ describe('the desk\'s late check reads the contract it is given', () => {
     expect(runner.runs).toEqual([ID(1), ID(2)]);
     runner.release();
     await d.settled();
+  });  it('so does a delivery part\'s, on the same contract\'s delivery bounds (Desktop polish wave 178)', async () => {
+    const runner = new GatedRunner();
+    const clock = { now: 0 };
+    const d = new CaptureDesk({
+      role: 'test-box', runner, root: '/srv/testbox', tmuxBase: '/tmp', fleetDirs: () => [], realPath: (p) => p, buildFacts: HERE, now: () => clock.now, timings: T,
+    });
+    d.submit(SUBMIT(1), new Sink());
+    d.submit({ ...SUBMIT(2), recipe: 'delivery', part: 0 }, new Sink());
+    await new Promise((r) => { setTimeout(r, 5); });
+    const waited = TESTBOX_CAPTURE_DEADLINE_MS - deliveryWorstCaseMs(T) - CAPTURE_DEADLINE_MARGIN_MS;
+    expect([deliveryStartsLate(waited, T), deliveryStartsLate(waited, CAPTURE_TIMINGS)]).toEqual([false, true]);
+    clock.now += waited;
+    runner.release();
+    await new Promise((r) => { setTimeout(r, 5); });
+    expect(runner.runs).toEqual([ID(1), ID(2)]);
+    runner.release();
+    await d.settled();
+  });
+});
+
+// The delivery recipe's settle and quiet bounds reach its runner from the contract the runner is built from, never from a
+// seam or a copy (Desktop polish wave 178; the capture owner's condition 5).
+describe('the runner\'s delivery bounds are the contract\'s', () => {
+  const driver = { drive: async (): Promise<never> => { throw new Error('not run'); } };
+  it('a seam\'s wiring takes the given contract\'s settle and quiet bounds, and no wiring is none', () => {
+    expect(deliveryOf({ delivery: { driver, tmuxConf: null } }, T)).toEqual({ delivery: { driver, tmuxConf: null, settleMs: T.deliverySettleMs, quietMs: T.deliveryQuietMs } });
+    expect(deliveryOf({ delivery: null }, T)).toEqual({});
   });
 });

@@ -7,7 +7,7 @@ import type { CaptureRecord } from '../../shared/claudeBuildCapture.js';
 import { DELIVERY_CASE_IDS, DELIVERY_PART_COUNT, deliveryParts } from '../../shared/deliveryResult.js';
 import { CAPTURE_DEADLINE_MARGIN_MS, CAPTURE_STEPS, CAPTURE_TIMINGS, captureWorstCaseMs, standInReply } from '../src/testbox/capture.js';
 import {
-  DELIVERY_PANE, DELIVERY_REPLY_TEXT, DELIVERY_STEPS_BEFORE, DELIVERY_STEP_AFTER, DELIVERY_TIMINGS, deliveryStandInReply,
+  DELIVERY_PANE, DELIVERY_REPLY_TEXT, DELIVERY_STEPS_BEFORE, DELIVERY_STEP_AFTER, deliveryStandInReply,
   DELIVERY_PART_LARGEST, deliveryPartCount, deliveryStartsLate, deliveryWorstCaseMs, observeWindow, turnEnded,
 } from '../src/testbox/captureDelivery.js';
 
@@ -63,20 +63,21 @@ describe('the worst case, under the fleet agent\'s fixed wait', () => {
   });
   it('the worst case is its formula: the start, the two steps before, each case, /exit, the exit wait and the teardown', () => {
     const t = CAPTURE_TIMINGS;
-    const d = DELIVERY_TIMINGS;
     const call = t.tmuxCallMs + 2_000;
     const expected = t.setupMs + call
       + (t.stepMs + t.pollMs) + (2 * call + t.stepMs + t.pollMs)
-      + DELIVERY_PART_LARGEST * (d.driveMs + 2_000 + d.settleMs + t.pollMs + d.quietMs + t.pollMs)
+      + DELIVERY_PART_LARGEST * (t.deliveryDriveMs + 2_000 + t.deliverySettleMs + t.pollMs + t.deliveryQuietMs + t.pollMs)
       + (2 * call + t.stepMs + t.pollMs)
       + t.exitMs + t.pollMs
       + call + t.stopWaitMs + t.pollMs + t.standInCloseMs + t.removeMs;
-    expect(deliveryWorstCaseMs(t, d)).toBe(expected);
+    expect(deliveryWorstCaseMs(t)).toBe(expected);
   });
   it('grows with each case and each bound, so a longer case list or bound is seen', () => {
     const base = deliveryWorstCaseMs(CAPTURE_TIMINGS);
-    expect(deliveryWorstCaseMs(CAPTURE_TIMINGS, DELIVERY_TIMINGS, DELIVERY_PART_LARGEST + 1)).toBeGreaterThan(base);
-    expect(deliveryWorstCaseMs(CAPTURE_TIMINGS, { ...DELIVERY_TIMINGS, settleMs: DELIVERY_TIMINGS.settleMs + 1 })).toBe(base + DELIVERY_PART_LARGEST);
+    expect(deliveryWorstCaseMs(CAPTURE_TIMINGS, DELIVERY_PART_LARGEST + 1)).toBeGreaterThan(base);
+    for (const k of ['deliveryDriveMs', 'deliverySettleMs', 'deliveryQuietMs'] as const) {
+      expect(deliveryWorstCaseMs({ ...CAPTURE_TIMINGS, [k]: CAPTURE_TIMINGS[k] + 1 }), k).toBe(base + DELIVERY_PART_LARGEST);
+    }
   });
   it('a capture that waited long enough to end past the wait does not start', () => {
     const worst = deliveryWorstCaseMs(CAPTURE_TIMINGS);
@@ -90,26 +91,23 @@ describe('the worst case, under the fleet agent\'s fixed wait', () => {
   });
 });
 
-describe('the parts: their count derived from the pair bound, and the shared count held to it (call 1148)', () => {
+// The shared count held equal to this derivation, and every pairing at that count, are gate G1's, in
+// `testbox-capture-deadline.test.ts` beside the build-trust pair (the capture owner's call 1159).
+describe('the parts: their count derived from the pair bound (call 1148)', () => {
   const fits = (a: number, b: number): boolean => a + b + CAPTURE_DEADLINE_MARGIN_MS <= TESTBOX_CAPTURE_DEADLINE_MS;
   const trust = captureWorstCaseMs(CAPTURE_TIMINGS);
-  const partMs = (k: number): number => deliveryWorstCaseMs(CAPTURE_TIMINGS, DELIVERY_TIMINGS, Math.ceil(DELIVERY_CASE_IDS.length / k));
-  it('the shared count is the derived one, under the timing contract and today\'s case list', () => {
-    expect(deliveryPartCount(CAPTURE_TIMINGS)).toBe(DELIVERY_PART_COUNT);
+  const partMs = (k: number): number => deliveryWorstCaseMs(CAPTURE_TIMINGS, Math.ceil(DELIVERY_CASE_IDS.length / k));
+  it('the largest part is the first, and the worst case counts it', () => {
     expect(DELIVERY_PART_LARGEST).toBe(Math.max(...deliveryParts().map((p) => p.length)));
-  });
-  it('at that count every pairing fits: trust then trust, trust then a part, a part then trust, a part then a part', () => {
-    const part = partMs(DELIVERY_PART_COUNT);
-    expect(part).toBe(deliveryWorstCaseMs(CAPTURE_TIMINGS));
-    for (const [a, b] of [[trust, trust], [trust, part], [part, trust], [part, part]] as const) expect(fits(a, b), `${a} + ${b}`).toBe(true);
+    expect(partMs(DELIVERY_PART_COUNT)).toBe(deliveryWorstCaseMs(CAPTURE_TIMINGS));
   });
   it('one part fewer does not fit: the count is the smallest', () => {
     const fewer = partMs(DELIVERY_PART_COUNT - 1);
     expect(fits(trust, fewer) && fits(fewer, fewer)).toBe(false);
   });
   it('a longer case or a longer bound re-derives the count: more parts, never a pair past the wait', () => {
-    expect(deliveryPartCount(CAPTURE_TIMINGS, { ...DELIVERY_TIMINGS, settleMs: DELIVERY_TIMINGS.settleMs + 20_000 })).toBeGreaterThan(DELIVERY_PART_COUNT);
-    expect(deliveryPartCount(CAPTURE_TIMINGS, DELIVERY_TIMINGS, 30)).toBeGreaterThan(DELIVERY_PART_COUNT);
+    expect(deliveryPartCount({ ...CAPTURE_TIMINGS, deliverySettleMs: CAPTURE_TIMINGS.deliverySettleMs + 20_000 })).toBeGreaterThan(DELIVERY_PART_COUNT);
+    expect(deliveryPartCount(CAPTURE_TIMINGS, 30)).toBeGreaterThan(DELIVERY_PART_COUNT);
   });
   it('no count at all when even a one-case part cannot fit beside trust', () => {
     expect(deliveryPartCount({ ...CAPTURE_TIMINGS, stepMs: 200_000 })).toBeNull();

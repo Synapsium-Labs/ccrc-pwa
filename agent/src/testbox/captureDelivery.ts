@@ -10,7 +10,8 @@
 //   (a tool, an error, a subagent) is asked of the build.
 // - THE WINDOW of one case: what the stand-in received and what the hooks recorded between that case's send and its
 //   settle, read into `DeliveryObserved`.
-// - THE TIMINGS and the recipe's worst case, under the fleet agent's fixed wait.
+// - THE WORST CASE of one part, under the fleet agent's fixed wait, from the one timing contract (`capture.ts#CaptureTimings`,
+//   whose delivery bounds are this recipe's; the capture owner's condition 5: no second constant set).
 import { TESTBOX_CAPTURE_DEADLINE_MS, UPDATE_SPAWN_DRAIN_MS } from '../../../shared/agent-protocol.js';
 import type { CaptureRecord } from '../../../shared/claudeBuildCapture.js';
 import { hookEventIs } from '../../../shared/hook-events.js';
@@ -63,31 +64,16 @@ export const turnEnded = (records: readonly CaptureRecord[]): boolean =>
 
 // ── the timings ──────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** The delivery recipe's own bounds, beside the capture's (`CaptureTimings`, whose step, exit, poll, tmux, stop, close,
- *  setup and removal bounds it reuses for the steps it shares). */
-export interface DeliveryTimings {
-  /** How long the driver child may take for one case (its node start, and `sendPrompt` with its own echo, clear and
-   *  submit budgets); past it the child is killed and the capture answers no verdict. */
-  readonly driveMs: number;
-  /** How long, after the send, a turn may take to end (a Stop recorded). */
-  readonly settleMs: number;
-  /** How long the window stays open after the turn ended (or the settle bound passed), so a late second submit still
-   *  falls in this case's window. */
-  readonly quietMs: number;
-}
-
-export const DELIVERY_TIMINGS: DeliveryTimings = Object.freeze({ driveMs: 25_000, settleMs: 15_000, quietMs: 2_000 });
-
-/** The worst case of one delivery capture under `t` and `d`: the setup allowance and the start (one tmux call); the two
+/** The worst case of one delivery capture under `t` (the one timing contract, its delivery bounds among it): the setup allowance and the start (one tmux call); the two
  *  steps before (the model switch's two calls), each with its wait and one poll's overrun; per case, the driver's bound
  *  plus the child's drain, the settle bound and the quiet period, each with one poll's overrun; the `/exit` step; the exit
  *  wait; and the teardown, as `capture.ts#captureWorstCaseMs` counts it. */
-export function deliveryWorstCaseMs(t: CaptureTimings, d: DeliveryTimings = DELIVERY_TIMINGS, cases: number = DELIVERY_PART_LARGEST): number {
+export function deliveryWorstCaseMs(t: CaptureTimings, cases: number = DELIVERY_PART_LARGEST): number {
   const call = t.tmuxCallMs + UPDATE_SPAWN_DRAIN_MS;
   const step = (s: CaptureStep): number => (s.type === null ? 0 : 2 * call) + t.stepMs + t.pollMs;
   const start = t.setupMs + call;
   const before = DELIVERY_STEPS_BEFORE.reduce((ms, s) => ms + step(s), 0);
-  const perCase = d.driveMs + UPDATE_SPAWN_DRAIN_MS + d.settleMs + t.pollMs + d.quietMs + t.pollMs;
+  const perCase = t.deliveryDriveMs + UPDATE_SPAWN_DRAIN_MS + t.deliverySettleMs + t.pollMs + t.deliveryQuietMs + t.pollMs;
   const exit = t.exitMs + t.pollMs;
   const teardown = call + t.stopWaitMs + t.pollMs + t.standInCloseMs + t.removeMs;
   return start + before + cases * perCase + step(DELIVERY_STEP_AFTER) + exit + teardown;
@@ -105,10 +91,10 @@ const pairFits = (aheadMs: number, ownMs: number): boolean => aheadMs + ownMs + 
  *  part, with the cases split evenly, fits the pair bound in every pairing (trust then trust, trust then a part, a part
  *  then trust, a part then a part), under `t`. `null` when no count fits, which is a timing a release must not ship.
  *  `shared/deliveryResult.ts#DELIVERY_PART_COUNT` is held equal to this by an agent test that goes red on any drift, either way. */
-export function deliveryPartCount(t: CaptureTimings, d: DeliveryTimings = DELIVERY_TIMINGS, cases: number = DELIVERY_CASE_IDS.length): number | null {
+export function deliveryPartCount(t: CaptureTimings, cases: number = DELIVERY_CASE_IDS.length): number | null {
   const trust = captureWorstCaseMs(t);
   for (let k = 1; k <= cases; k++) {
-    const part = deliveryWorstCaseMs(t, d, Math.ceil(cases / k));
+    const part = deliveryWorstCaseMs(t, Math.ceil(cases / k));
     // A pair's time is a sum, so trust then a part and a part then trust are one check, and it never exceeds twice the
     // longer of the two: when both same-kind pairs fit, every mixed pair does too.
     if (pairFits(trust, trust) && pairFits(part, part)) return k;
@@ -118,6 +104,6 @@ export function deliveryPartCount(t: CaptureTimings, d: DeliveryTimings = DELIVE
 
 /** Whether a delivery capture that has waited `waitedMs` must not start (the late check of `capture.ts#captureStartsLate`,
  *  on this recipe's worst case). */
-export function deliveryStartsLate(waitedMs: number, t: CaptureTimings, d: DeliveryTimings = DELIVERY_TIMINGS, deadlineMs: number = TESTBOX_CAPTURE_DEADLINE_MS): boolean {
-  return waitedMs + deliveryWorstCaseMs(t, d) + CAPTURE_DEADLINE_MARGIN_MS > deadlineMs;
+export function deliveryStartsLate(waitedMs: number, t: CaptureTimings, deadlineMs: number = TESTBOX_CAPTURE_DEADLINE_MS): boolean {
+  return waitedMs + deliveryWorstCaseMs(t) + CAPTURE_DEADLINE_MARGIN_MS > deadlineMs;
 }
