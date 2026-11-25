@@ -3840,6 +3840,51 @@ _box_unit_env_shell() {   # <KEY>
   return 3
 }
 
+# ── _box_unit_file — the FILE a unit is on disk, in this platform's spelling ──
+# systemd's unit name IS its filename; launchd's is a label plus `.plist` (`_svc_label`). Doctor's `_dr_unit_file`
+# delegates here, so the reach reader below and every doctor check spell a unit file the same way.
+_box_unit_file() {   # <unit> -> the filename to look for in a unit directory
+  if [ "${CCD_OS:-linux}" = darwin ]; then printf '%s.plist' "$(_svc_label "$1")"; else printf '%s' "$1"; fi
+}
+
+# ── _box_reach — IS THIS BOX'S SERVER REACHED FROM ANYWHERE BUT ITSELF? (wave 181) ──
+# The ONE reach reader: doctor's `update-exposure` check and `ccrc auth` both ask it, so "provably loopback-only" is
+# one measurement with one answer. Moved out of `_check_update-exposure` unchanged (its reasons read as they did).
+# Reachable is any one of: CCRC_HOST, as ccrc.service receives it (`_box_unit_env`'s precedence), not empty,
+# `localhost`, `::1` or 127.x (a wildcard, a routable address and a HOSTNAME all count: judging a hostname loopback
+# would need a resolver, and that wrong answer is a false "loopback"); the exposure file; the Caddyfile; the ddns
+# unit installed in the unit directory given (on Linux the .service or the .timer, on macOS the one job file).
+# Out-params; rc 0 always, because what it found is all in them:
+#   BRE_REASONS  one sentence per piece of evidence (empty: none found)
+#   BRE_HOST     CCRC_HOST as the unit gets it ("" = config.ts's default, 127.0.0.1); BRE_HOSTSRC the file that named it
+#   BRE_HOSTRC   `_box_unit_env`'s rc for that read: 0 measured, 2 the exposure file is there and unreadable, 3 a
+#                shape it does not decide; BRE_HOSTWHY / BRE_HOSTFIX its cause and remedy clauses on rc 3
+# A caller that needs PROVABLY loopback-only requires both BRE_REASONS empty and BRE_HOSTRC 0.
+BRE_REASONS=(); BRE_HOST=""; BRE_HOSTSRC=""; BRE_HOSTRC=0; BRE_HOSTWHY=""; BRE_HOSTFIX=""
+_box_reach() {   # <unit dir>
+  local udir="$1" u f
+  local -a ddns
+  BRE_REASONS=(); BRE_HOSTRC=0
+  _box_unit_env CCRC_HOST || BRE_HOSTRC=$?
+  BRE_HOSTWHY="$BUE_WHY"; BRE_HOSTFIX="$BUE_FIX"
+  BRE_HOST="$BUE_VAL"; BRE_HOSTSRC="$BUE_SRC"
+  case "$BRE_HOST" in
+    ''|localhost|::1|'[::1]'|127.*) ;;
+    *) BRE_REASONS+=("CCRC_HOST=$BRE_HOST in $BRE_HOSTSRC") ;;
+  esac
+  [ ! -e "$CCRC_EXPOSURE_FILE" ] || BRE_REASONS+=("$CCRC_EXPOSURE_FILE exists")
+  [ ! -e "$CCRC_CADDYFILE" ] || BRE_REASONS+=("$CCRC_CADDYFILE exists")
+  # On macOS `_exp_ddns_units` writes ONE launchd job for the pair, reached through the `.service` name only:
+  # `_svc_label` strips `.service` and nothing else, so a `.timer` lookup there would be vacuous.
+  ddns=("$CCRC_DDNS_UNIT.service")
+  [ "${CCD_OS:-linux}" = darwin ] || ddns+=("$CCRC_DDNS_UNIT.timer")
+  for u in "${ddns[@]}"; do
+    f="$(_box_unit_file "$u")"
+    [ ! -f "$udir/$f" ] || BRE_REASONS+=("$f is installed in $udir")
+  done
+  return 0
+}
+
 # ── _box_auth_path — WHICH FILE IS THIS BOX'S PASSPHRASE SECRET (D-143) ───
 # `server/src/config.ts:339` is `env.CCRC_AUTH_SECRET_PATH || <default>`, so a
 # box CAN redirect the gate's secret, and the two things in this tree that
