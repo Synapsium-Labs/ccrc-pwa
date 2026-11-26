@@ -1473,7 +1473,9 @@ lines (a cookie line it did not write stays, named) and proves sign-in off. Both
 reached from elsewhere (an exposure file, a Caddyfile or the ddns unit: that box arms with `ccrc expose duckdns`,
 `ccrc expose byo` or `ccrc expose ip`; a `CCRC_HOST` bind beyond loopback: bind it back to `127.0.0.1`, or arm it by
 hand), on a box whose `ccrc.service` can take its bind or a sign-in key from anywhere but `ccrc.env` and the exposure
-file (a drop-in, an `Environment=` line, another environment file, the service manager's own environment), while an
+file (a drop-in, an `Environment=` line, another environment file, the service manager's own environment), on a box
+whose `ccrc.service` is not, byte for byte, the unit file ccrc installs (any hand edit of it, an `ExecStart=` one
+included: an install or an update puts the shipped file back) or one systemd has not reloaded since it changed, while an
 update or rollback holds `~/.ccrc/update.lock`, and inside a Claude Code session, without a terminal or in a fleet
 session's pane. Those last three are speed bumps, not walls: `env -u CLAUDECODE`, a terminal made with `script`, an
 unset `TMUX_PANE`, a script file or another interpreter each run past them, so they stop a session that arms or disarms
@@ -1481,7 +1483,10 @@ the gate by accident, never one that sets out to. The hand edit above stays the 
 proxy of your own, and `ccrc auth off` refuses a box whose `CCRC_ORIGIN` or `CCRC_RP_ID` holds a value it did not write:
 that box looks armed for another address, and turning sign-in off there is a hand edit too. Such a box that has not yet
 set `CCRC_ORIGIN` looks loopback-only to the verb; armed for localhost, it signs in through the proxy but cannot act, so
-run `ccrc auth off` there and use the hand edit.
+run `ccrc auth off` there and use the hand edit. The verb is Linux only for now: on a Mac it refuses, changing nothing,
+and the hand edit above is the route there (ticket auth-verb-on-a-mac). It cannot see a drop-in placed outside the user
+unit directory that systemd has not loaded yet, or a script that `NODE_OPTIONS` in `ccrc.env` or the exposure file tells
+node to preload.
 
 **On a box exposed with `ccrc expose`, skip the edit.** The verb writes `CCRC_AUTH=on` and
 `CCRC_ORIGIN` into `~/.ccrc/exposure.env` itself — and `CCRC_RP_ID` too, on every arm but

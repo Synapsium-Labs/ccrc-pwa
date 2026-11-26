@@ -77,7 +77,7 @@ digest for every child.
 
 ## 4. Residuals, stated
 
-Every residual of the build and of fix round 1. "Read" means read on the tree, not run.
+Every residual of the build and of fix rounds 1 and 2. "Read" means read on the tree, not run.
 
 - **A proxy on the box is what the proof still cannot see.** A box behind a TLS-terminating proxy of the operator's own
   that has not yet set `CCRC_ORIGIN` looks loopback-only to the verb. Armed for localhost, it signs in through the proxy
@@ -90,23 +90,37 @@ Every residual of the build and of fix round 1. "Read" means read on the tree, n
   whole, then answers "not measured" for the path as well as for the flag. So `ccrc auth on` refuses a
   `CCRC_AUTH_SECRET_PATH =/x` line that `passwd` and doctor still read as no line at all. For the coordinator to
   ticket.
-- **What the sources reading does not see (F2).** On Linux it reads the unit file and its two drop-in directories in
-  the user unit directory on disk, and what systemd loaded (`DropInPaths`, `EnvironmentFiles`, `Environment`,
-  `PassEnvironment`) plus the user manager's environment. It does not see:
-  - a drop-in written in another directory of the unit search path since the last daemon-reload (systemd has not loaded
-    it, and the verb reads only the user unit directory on disk);
+- **What the proof reads on Linux, and what it still cannot see (F2, fix round 2's R1).** It reads the unit file and
+  its two drop-in directories in the user unit directory on disk, what systemd loaded (`DropInPaths`,
+  `EnvironmentFiles`, `Environment`, `PassEnvironment`) and the user manager's environment. Since fix round 2 it also
+  requires the installed unit to be the tree's `deploy/ccrc.service` byte for byte, the file `_inst_units` and
+  deploy.sh copy unchanged, and systemd to answer `NeedDaemonReload=no` for it. So every hand edit of the unit refuses,
+  on and off alike, naming the file and never the difference, with an install or an update (which put the shipped file
+  back) or the README's hand route as the way on. That covers an assignment in `ExecStart` (`env CCRC_HOST=0.0.0.0
+  node`), which this section used to state as a residual, and the shapes the line reading parses differently from
+  systemd: a space around `=`, a continued line, an escape in a name. Each is a red case (section 10). A unit systemd has
+  not reloaded since it changed refuses with the reload as the way on, and a systemd that does not say refuses as not
+  measured. It still does not see:
+  - a drop-in written in another directory of the unit search path (`/etc`, `/run`, `~/.local`) since the last
+    daemon-reload: systemd has not loaded it, and the verb reads only the user unit directory on disk. Whether systemd
+    then answers `NeedDaemonReload=yes` was not measured: no real user manager was asked, a stub stood in;
   - a unit file of the same name earlier in the search path;
-  - an environment assignment inside `ExecStart` (the shipped line is `/usr/bin/env node …`, which sets none).
-  The macOS arm is run as a function on Linux (`CCD_OS` set after sourcing), never on a Mac. There, `launchctl getenv`
-  for an unset name is assumed to exit 0 with nothing printed, which is unmeasured. If it exits non-zero, the verb
-  refuses on every Mac, the safe direction. A `<key>NAME</key>` anywhere in the job file counts, so a key name in
-  another dictionary refuses wrongly, also the safe direction. Doctor and install do not ask the sources, because that
-  needs the service manager; so on a box with a drop-in they may name `ccrc auth on`, which then refuses by name (a
-  dead end, no harm, review 3934 A5's class).
-- **Signals (F3).** SIGKILL cannot be caught: a run killed outright may leave the copy and the new file. The next run
-  then refuses, naming the copy. A signal between the copy and the rename puts the same bytes back and restarts once,
-  which changes nothing. A signal during the failed-proof restore's own re-proof says the box is back on its old file,
-  unproven.
+  - a preload carried by the environment files themselves. `ccrc.env` or the exposure file can set `NODE_OPTIONS` to
+    `--require` a script, and node runs it before the server: measured with node v24.22.1 on this box, a script named
+    that way printed before the main one. The verb reads only its own keys from those files, and `ccd/ccrc` never
+    reads `NODE_OPTIONS` (read). Such a script could set the bind before the server reads it;
+  - a same-user process that edits the unit, a drop-in or an environment file after the reading and before the
+    restart (read; the same class as the concurrent runs below).
+  Doctor and install do not ask the sources, because that needs the service manager; so on a box with a drop-in
+  they may name `ccrc auth on`, which then refuses by name (a dead end, no harm, review 3934 A5's class).
+- **Signals (F3, fix round 2's R4).** SIGKILL cannot be caught: a run killed outright may leave the copy and the new
+  file. The next run then refuses, naming the copy. The handler reads the disk, not the state word alone. It puts a copy
+  that is still there back, and takes a copy already gone for the old file back. A restore that failed earlier in the
+  run is never reported as back: the handler names the kept copy, says the file still holds this run's lines, and
+  restarts nothing. Wherever the old file is back, it restarts once. A signal between the copy and the rename puts the
+  same bytes back and restarts once, which changes nothing. A signal during the failed-proof restore's re-proof says the
+  box is back on its old file, unproven, and restarts once more. A signal after the proof passed says the change stands.
+  The state moves to `proved` before the copy is removed, and an end-to-end case holds that order (section 10).
 - **Concurrent runs, read and unmeasured.** Neither `ccrc passwd` nor `ccrc expose` takes `~/.ccrc/update.lock`, so
   either can run during an auth run: `passwd` can replace the passphrase file after the check, and `expose` can write
   the exposure file after the reach proof. A same-uid process could plant a symlink or hard link at the temp or copy
@@ -114,11 +128,10 @@ Every residual of the build and of fix round 1. "Read" means read on the tree, n
 - That running sessions survive the restart is read, not measured live: sessions run in their own `claude-session@`
   units, and ccd creates the tmux server in its own `ccrc-tmux-server.scope` (`ccd/ccd`), so neither is in
   `ccrc.service`'s cgroup; on a two-box fleet they are on the other box.
-- On macOS without `flock` the lock cannot be taken and the verb refuses, as `ccrc coordination-snapshot` does.
-- **The copy's mode and the restore on a BSD box are unmeasured.** The copy's `chmod -- 600` and the restore's
-  `chmod -- <mode>` name the mode after `--`, the order BSD chmod accepts. That order is held by the D-3510 census
-  (`ccd-child-tmpdir`), not by a run on a BSD box. This box's cases pin the copy's mode and the restore with GNU
-  chmod only.
+- **Linux only for now (fix round 2's R1(d), ruling B).** On a Mac the verb refuses before reading the box, and gives
+  the hand route; doctor and install offer the hand route there; ticket auth-verb-on-a-mac. Its end-to-end cases
+  skip on darwin, and its function-level cases (the Mac refusal, the helper, the signal handler) run everywhere
+  (R3).
 - The fleet-pane guard asks tmux through D-8270's socket lookup (`"${_TMX_ARGV[@]}"`), so with a socket setting the pane
   id is asked of the fleet's server. A pane id of the operator's own tmux that collides with a fleet session's pane
   there refuses wrongly. That is the safe direction, and running the verb outside tmux clears it.
@@ -336,7 +349,10 @@ was red first; the red-first runs are named in 9.2.
    - the checker's exit 5 and another exit;
    - an unreadable mode, a failed copy and a failed rewrite (a failing `stat`, `cp` or `mv` ahead on PATH).
 
-   Each is reachable in a fixture, so none was removed.
+   Each is reachable in a fixture, so none was removed. Review 3971 (its F1) found five more refusals with no case:
+   an undecidable `CCRC_PORT`, an undecidable one of the four keys, no `flock` on PATH, the user manager's environment
+   alone not answering, and a lock that cannot be opened. Fix round 2 adds a case for each (section 10), so from that
+   round this item holds as written.
 6. **The helper doctor and install share (F5, A5).** There is a case in doctor's suite for each of: role, unit and an
    undecidable bind, where the verb is not offered. Install's suite covers role and the undecidable bind. Its unit arm
    cannot be reached there, because install writes `ccrc.service` before its gate line. The helper now also declines
@@ -470,7 +486,8 @@ the shellcheck ratchet. The third push answers those.
 - **The shellcheck ratchet, server shard 1 of the second push.** The pinned 0.11.0 did not download within its two
   60 s attempts, so the ratchet found the runner's 0.9.0 and failed as designed. That is the runner, not this change.
 
-The second push carries both fixes, by the coordinator's yes. Before it, every guard file CI's fast plan selects
+The second push, `010ebf63cb`, carried the two fixes of the first push's red, by the coordinator's yes. The third,
+`c03586ba94`, carried the fixes of the second push's red, listed above. Before the second push, every guard file CI's fast plan selects
 (`guardTests`, `.github/ci/fast-plan.mjs`) that names `ccd/` or `deploy/` was run on the fix commit: 122 files in four
 parts.
 
@@ -482,3 +499,152 @@ parts.
 
 The shellcheck ratchet was killed again by the test slice's memory cap, so CI measures it. The fix only reorders
 chmod's arguments.
+
+## 10. Review fix round 2 (review 3971)
+
+Review 3971 read `c03586ba94`. The coordinator's fix round 2 is the list below, the last round the review cap allows;
+anything outside it is mailed first. Each change was red first.
+
+1. **R1: the verb acts only on a service definition that is the installer's.** `_auth_unit_own` runs after the sources
+   reading. On Linux the installed `ccrc.service` must be the tree's `deploy/ccrc.service` byte for byte (`cmp`), the
+   file `_inst_units` and deploy.sh copy unchanged. Any difference refuses, on and off alike: the words name the file,
+   say the verb acts only on its own, and give the ways on (an install or an update puts the shipped file back, or the
+   README's hand route). They never print the difference. A tree file or unit that cannot be read, or no `cmp`,
+   refuses as not measured. systemd must answer `NeedDaemonReload=no`: `yes` refuses with `systemctl --user
+   daemon-reload` as the way on, and no answer refuses as not measured. The existing source reads stay as they were (R1
+   c). The sources reading runs first, so a unit that names a key still gets its own reason.
+   - **macOS: R1(d), ruled (B).** The job file cannot be reproduced byte for byte. `_inst_plist_server` writes the
+     installing process's PATH (`_svc_job_path`) and the `ProcessType` it reads from `~/.ccrc/launchd-class` at
+     install time, and the box no longer determines either when the operator later runs the verb. By R1(d) that went
+     to the coordinator (mail 38407), who ruled (B) (mail 38411): on a Mac the verb refuses.
+     - `cmd_auth` refuses on darwin right after the operator-only checks, before any read of the box, and writes
+       nothing. The words say the verb does not act on a Mac yet, and give the hand route as it holds there: for `on`,
+       `ccrc passwd`, then the four lines in `ccrc.env`; for `off`, the four lines to remove; then the platform's own
+       restart hint from `_svc_restart_hint` (`launchctl kickstart -k …`).
+     - `_auth_fits_here` answers no on darwin, so doctor's `auth` line and install's gate line give the hand route
+       there. Their wave-181 positive cases now branch on the platform, as the siblings do, so the macOS leg asks the
+       hand route of each surface.
+     - The macOS arm of `_auth_unit_sources` is removed, with its three function-level cases (the shipped job,
+       its EnvironmentVariables, a third sourced file, launchd's environment, an unreadable job), because no macOS
+       path reads the job any more. This is a removal by ruling, not a weakening: what those cases held is now a
+       refusal before the reading, held by the two Mac cases and by mutant D1.
+   - The fixture now plants what the installer writes: the tree's `deploy/ccrc.service` at `<home>/ccrc/deploy/`, and
+     the same bytes as the installed unit. A changed claim: the old "shipped shape" case passed a hand-written unit
+     with a harmless `Environment=NODE_ENV=production` line. That unit now refuses as not the installer's ("an edit that
+     names no key at all" is its case). The case now passes the untouched installed unit, with that key in what
+     systemd loaded instead. The F2 cases that edit the unit now add their line to the installed file instead of
+     replacing it.
+2. **R2: every refusal has a red case.** Five cases are added: an undecidable `CCRC_PORT` (on and off), each of the
+   four keys undecidable (one case per key, on and off), no `flock` on PATH, the user manager's environment alone not
+   answering (on and off), and `update.lock` as a directory. The reviewer's four survivors are red by case name
+   (section 10.1: R4, R5, R6, R8), and so is the lock's rc 3 (L3), which the reviewer read but did not mutate.
+3. **R3: the end-to-end cases skip on darwin.** Ten describes take `describe.skipIf(IS_DARWIN)`, the R1 one among
+   them. The Mac describe (its two refusals and the helper's two rows) and the handler describe are function-level and
+   run everywhere. The `flock` refusal gives the way on.
+4. **R4: the handler reads the disk.** The states are `pre`, `written` and `proved`; `restored` is gone. From just
+   before the rename to the end of the last proof the state is `written`, and the handler decides from the files:
+   - a copy still there is put back;
+   - a copy gone is the old file back, and gets one restart;
+   - after a restore that failed (`AUTH_KEEP_BAK=1`, now set when a created file cannot be removed too), it names the
+     kept copy and restarts nothing.
+   `proved` is set before the copy is removed. The failed-proof message no longer says "back as it was" after a
+   restore that failed: it says the server answers as before, on this run's lines. Cases H1 to H4 call the handler
+   with what each line reaches, and an end-to-end case signals the verb from an `rm` stub as it removes the copy.
+5. **R5: words.**
+   - A3a: a bind and nothing else gets one sentence on and off that is true of every refused value: "is not a value
+     this verb can read as this machine only (127.0.0.1 to 127.255.255.254, localhost or ::1)". `127.1` and `LOCALHOST`
+     join the cases, on and off.
+   - A5: `on` gives the README's remedy for that box (bind it back to `127.0.0.1`, or arm it by hand), never the three
+     expose arms.
+   - The leftover copy's sentence says the run did not finish: it was killed, or it could not put the file back and
+     kept the copy.
+   - A6: section 9.3's line about the second push names both later pushes.
+
+Not in this round, as ticketed by the coordinator: A3c and A4 (auth-verb-remedy-dead-ends), a Mac measurement and a
+darwin fixture (auth-verb-on-a-mac), the shellcheck pin (A7), and the readers' trailing-whitespace split
+(auth-readers-one-reader).
+
+### 10.1 Red first, and the mutants
+
+The suite had 85 cases before ruling (B), against 63 at `c03586ba94`. Run against `c03586ba94`'s `ccd/ccrc`, 20 of
+them are red:
+- every R1 case;
+- H2 to H4;
+- the six bind-text cases and the bind case (R5 A3a and A5);
+- the `flock` case (its new way on);
+- the leftover-copy case (its new sentence);
+- the end-to-end signal case: the old handler, finding the copy gone in `written`, says it could not be put back.
+The other R2 cases are green there, because those refusals already existed; the mutants below are what hold them.
+Ruling (B) then removed three launchd cases and added four. The two Mac refusals are red on `c03586ba94`, whose
+darwin run went on into the box. The helper's darwin row is red there too, since that helper had no platform
+decline, and its Linux row is the control. That makes 86 cases, 23 of them red on `c03586ba94`.
+
+Each mutant was applied to the new `ccd/ccrc`, the whole suite run, and the file restored and compared (`cmp`).
+
+| Mutant | What it does | Red cases |
+|---|---|---|
+| R4 | the user manager's environment refusal becomes `\|\| true` | "refuses when only the user manager's environment does not answer" |
+| R5 | `true \|\|` before the CCRC_PORT refusal | "refuses a CCRC_PORT line the unit reader cannot decide" |
+| R6 | `true \|\|` before the four keys' refusal | the four "refuses a <key> line the unit reader cannot decide" cases |
+| R8 | the `flock` refusal becomes `:` | "refuses with no flock on PATH" |
+| L3 | the lock's rc 3 refusal becomes `:` | "refuses when the lock cannot be opened (update.lock is a directory)" |
+| O1 | `true \|\|` before the installer's-unit refusal | the five edit cases, the reload case, the unreadable tree case (7) |
+| O2 | `cmp`'s difference ignored | the five edit cases |
+| O3 | `NeedDaemonReload=yes` accepted | "refuses a unit systemd has not reloaded since it changed" |
+| O4 | no NeedDaemonReload answer accepted | the same case (its second half) |
+| O5 | an unreadable tree file accepted | "refuses as not measured when the tree's own unit file cannot be read" |
+| H1 | the handler stops asking whether the copy is there | H2 |
+| H2 | the handler ignores a restore that failed | H3 |
+| H3 | `proved` falls through to `pre`'s words | H4, and the end-to-end signal case |
+| H5 | `proved` set after the copy is removed | "a signal as the proven run removes its copy leaves the change standing" |
+| W1 | `on` with a bind alone gets the expose arms again | the six bind-text cases and the bind case (7) |
+| D1 | the darwin refusal skipped | the two Mac refusal cases |
+| D2 | the helper's darwin decline removed | "the helper that offers the verb, on darwin, answers 1" |
+
+All 17 are red. H5 survived the first batch, which had only the function-level cases. It is red since the end-to-end
+signal case was added. D2 survived its first run: the darwin row had only `ccrc.service` in the unit directory, so the
+helper declined for want of a job file. Once the row held the job the installer's writer prints, the platform was the
+only reason left to decline, and D2 went red.
+
+### 10.2 Notes for the Mac wave (from reading the writer)
+
+- What the box determines in the job file, and so can be proved: the label, the log path, the `bash -c` line with
+  the two environment files and the entry, `HOME`, the core limits. What it does not: the `PATH` string (the
+  installing process's own, plus the Homebrew directories) and `ProcessType` (`~/.ccrc/launchd-class` as it was then).
+- A compare that frees those two fields must still refuse a `PATH` value that could open a new key (no `<`, no `&`, no
+  newline), and a binary job file.
+- The lock needs a form that works without `flock`, which stock macOS lacks.
+- The end-to-end fixture needs a launchd job in `~/Library/LaunchAgents`, a `launchctl` stub and `cp` at `/bin/cp`
+  (review 3971 F4).
+
+### 10.3 Evidence
+
+All runs went through `ccrc test`. The code is commit `4c52b239df`; the head adds only this note and the README.
+
+- **The verb's suite:** 86 cases, all passing on the code commit; 23 of them red on `c03586ba94`'s `ccd/ccrc` (10.1).
+- **Mutants:** 17, each applied to the final `ccd/ccrc`, the whole suite run, and the file restored and compared; all
+  red (10.1).
+- **Neighbours:**
+  - doctor core-auth, install landing and the verb: 198 passed, 9 skipped, after ruling (B);
+  - before it, doctor exposure, expose, passwd, the CLI, the settings census, the tmux socket census, door-origin-read
+    and offered-commands with them: 549 passed. Its one red was the census file's BSD-order shim case.
+- **The shell-script guards on the code commit:** every guard file CI's fast plan selects that names `ccd/` or
+  `deploy/`, 122 files in four parts. 120 files passed. Two are red, the same way as on a scratch merge with main on
+  this box, and CI's shards passed them in round 1:
+  - the census file's BSD-order shim case;
+  - `ccd-tmux-anchor`'s real-tmux cases, 19 of them.
+- **Growth:** `ccd/ccrc` +520 net code lines (14351 to 14871) against main `9a21a20715`, whose `ccd/ccrc` is the merge
+  base's. Measured with the growth check's own `codeLines`, which gives +481 for `c03586ba94`, the waiver's old
+  number. Main `aba5845760` has not changed `ccd/ccrc` since. D-9105's waiver says 520, set in the code commit, and
+  `growth-check` and `growth-caps` pass on it.
+- **The offered-commands guard on the merge with #3459:** 12 of 12 on a scratch merge of the code commit with main
+  `aba5845760`, #3459's own merge. Their entry needed no reshaping.
+- **Browser:** review 3971's 14 files, on a scratch merge of the code commit with main `aba5845760` (`fa2b24e5be`),
+  in a tree with its own `pwa` and `ui` packages (`npm ci` after main's renderer package change), no symlinked ones:
+  14 files, 322 cases, all passing. `docs-mockup-export` started and passed 20 of 20 (it could not start in the review's
+  tree). The others: connect-sheet 20, auth-resume 16, reauth-sheet 20, chatgpt-sheet 32, accounts-openrouter-card 16,
+  accounts-cards 24, accounts-open 16, account-knob 16, account-pool-unavailable 16, remove-sheet 16, sign-in-sheet 16,
+  docs-mockup 23, mockup-parse 71. The same 14 passed on the earlier merge with main `9a21a20715` too (322 of 322).
+- **The shellcheck ratchet** cannot run here: the test slice's memory cap kills its run of `ccd/ccrc`. The exact
+  head's CI job measures it, named in the wave-done.
+- **Merge probe:** clean against main `aba5845760`.
