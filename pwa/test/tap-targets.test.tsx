@@ -1333,7 +1333,10 @@ describe('the one bar: the rendered bar carries .docs-title and .docs-tool (docs
       })),
       mount: vi.fn(async (_el: HTMLElement, input: ReaderMountInput) => {
         inputs.push(input);
-        return { destroy: vi.fn(), setPrefs: vi.fn(), command: vi.fn() } as unknown as ReaderMount;
+        return {
+          destroy: vi.fn(), setPrefs: vi.fn(), command: vi.fn(),
+          seed: { hosted: false }, follow: vi.fn(),
+        } as unknown as ReaderMount;
       }),
       images: vi.fn(async () => ({ urls: {}, drafts: 0, auth: 0 })),
     } as unknown as ReaderDeps;

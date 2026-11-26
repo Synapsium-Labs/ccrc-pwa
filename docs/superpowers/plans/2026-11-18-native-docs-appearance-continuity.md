@@ -20,6 +20,7 @@
 - One bad-value rule, the library's: the adapter builds the raw contract from ccrc's tokens and passes it through the library's `parseAppearance`, then sends only its verdict. ccrc spells none of the library's ranges or grammars. In the verdict, colour slots are all or nothing, and skin slots and the label fall back one by one. Appearance never drops the reader to the plain view.
 - Contrast floors: 4.5:1 for every text colour on every ground the stylesheet paints, plain or tint, for code tokens, and for the labels of figures of the kinds in `MERMAID_HOSTED_KINDS` that are not author-styled, on the shapes painted behind them; 3:1 for the focus ring on `bg`, `surface`, `surface2` and the tints, the grounds a ring is drawn on, and for those figures' lines; no floor for decorative edges. Every other figure draws on 1.1.0's plate and filter, as in 1.1.0 (spec §5, §10). A coloured tint holds at most 4% of its colour, mixed over `bg` or `surface`. Inline code sits on the opaque `surface2`, never on a tint (spec §5, §10).
 - Budgets: payload at most 4 KiB serialised; at most one `appearance` op per animation frame, latest wins; hosted srcdoc growth over the same document at the 1.1.0 pin in three parts: ccrc's two faces exactly 187 640 characters; this contract's own frame-asset growth at most 32 768 characters over the baseline row, the sum of every `FRAME_MANIFEST` entry with Mermaid's included at the first parent of the landing that adds the tables (1.1.0's 4 528 020 when no library landing comes between), measured at the library landing that lands it, with each later design in the release measured from that landing against its own share, which the coordinator sets; the appearance seed at most 4 096. So at most 224 504 plus the other designs' shares; hosted open-to-`ready` median of 9 opens at most 1.10 x the BASE median of 9; a change while open shows on the frame root within 100 ms, same iframe and nonce, scroll within 1 px; Mermaid redraw one figure per task, no gap over 200 ms.
+  - **Timing amendment (2026-11-24; D-9018):** On desktop Chromium, the hosted nine-open median may add at most 30 ms over its paired BASE per skin. Mode-only keeps the 1.10× limit. On a phone engine F records the paired figure; more than 100 ms added stops and returns to the coordinator. The other budgets above are unchanged.
 - The reader lab mounts with no appearance (spec X1-10).
 - Heavy tests, typecheck and browser runs go through `ccrc test`, in the foreground, with a timeout of at least 600000 ms. Mutations run in sequence from saved copies, and each is restored and hash-checked, never with `git checkout`.
 - Commit on the workspace branch only. Private-name scan every changed file before each commit and before the push.
@@ -322,6 +323,7 @@ Each row reads the frame's computed values through the existing harness's frame 
 
     Once per skin, with Aa open and under a fine pointer, assert the rows below. Each compares the browser's computed value on both sides, never a token's text with a computed value. The host side is a probe element in ccrc's own document (test-only, removed after), given the token through the same property: `box-shadow: var(--elev-pop)`, `border-radius: var(--r-md)`, `height: var(--row-h)`, and for the heading `font-size: var(--fs-section); letter-spacing: var(--ls-section)`, so an `em` resolves against the same size. Both sides then serialise alike: `rgba(0, 0, 0, 0.55) 0px 12px 40px 0px` on each, and `letter-spacing` in px on each.
     - a popover row's height equals the probe's `height`;
+      **Aa row amendment (2026-11-25; D-9053):** at default text size under a fine pointer, the row's computed minimum height equals the probe's height exactly and the rendered row is between that floor and 2 px above it, inclusive. A larger text size may grow the row and is not compared.
     - the popover's `box-shadow` equals the probe's;
     - the radii of a control, a pill and a popover equal the probes' for `--r-md`, `--r-sm` and `--r-lg`;
     - the Aa group heading's `font-size`, `font-weight`, `letter-spacing` and `text-transform` equal the probe's; its `font-family` starts with the library's fixed family name for the role `sectionFamily` names.
@@ -330,10 +332,13 @@ Each row reads the frame's computed values through the existing harness's frame 
   - **AP-3:** with a stale reader theme stored under the reader prefix (`{"theme":"dark"}` under a light palette, and the reverse), the values at first `ready` equal the host's, never the stored theme's.
   - **AP-4:** hold the chunk, change palette and skin, release; at most one `appearance` op.
   - **AP-5:** while open, under both emulated device modes (light and dark), run every transition of the palette set, Follow the system included as a start and as an end: each palette to the next, each palette to Follow the system and back, and, while on Follow the system, the device mode flipping light to dark and dark to light. Then switch skin both ways. After each transition: same iframe element and nonce, scroll within 1 px, values within 100 ms, a drawn figure redrawn. The number of transitions is printed from the discovered catalogue.
+    **Live-follow measurement amendment (2026-11-25; D-9030):** the ordinary browser leg checks one matching in-frame write per applied transition, in order, and no write on an applied-appearance no-op. It keeps the existing liveness wait and the other checks. Run the unchanged 100 ms ceiling in both modes with `CCRC_MEASURE=1`, the same switch as the paired open measurements. A quiet start and end are required for a verdict.
+    **Separate redraw row (2026-11-25; D-9054):** keep the AP-5 fixture. Add a four-figure desktop fixture for the design's §9 Mermaid redraw budget. The ordinary run checks nearest-first ordering, one figure per browser task, and cancellation of queued work when a newer appearance arrives. Under D-9030, `CCRC_MEASURE=1` records the gaps and asserts the unchanged 200 ms ceiling on a quiet box.
   - **AP-6:** pairs on computed values, the focus ring at 3:1 after a Tab, and a drawn figure's edge `stroke` at 3:1 on its plate. Width, font and one fold changed in Aa are back after a reopen, and the stored `pref:prefs` holds no `theme` key. Aa shows the line "Appearance follows ccrc Settings", the label ccrc sent, and no theme row. Tab never lands on the line. A lab-profile mount, which carries no appearance, keeps its theme row. **Meaning without colour** (spec §10, X1-12), on a fixture that carries a glossary term, an id link and an ordinary link in running text, and opens the contents index and quick jump: in GitHub Light, Solarized Light and Catppuccin Latte, where `term` has no hue, `a.term`'s computed `text-decoration-style` is `dotted`, `a.xref`'s `dashed` and the link's `solid`; in Phosphor and Phosphor Daylight, where `ok` equals `info`, the index's `ok` and `info` dots have different computed `border-radius` or size; in Solarized Dark and Solarized Light, where `id` equals `accent`, `a.xref`'s and the ordinary link's computed `text-decoration-style` differ; in Tokyo Night, Nord, Gruvbox Dark and One Dark, where `chg` collides, a changed block's mark is the double bar; and quick jump's selected row has an inset `accent` box-shadow. The changed-mark geometry is the library's test 10, sampled from pixels; F reads it on the installed frame. **Mermaid, live:** one figure of each kind in the library's `MERMAID_HOSTED_KINDS` (read from the installed package, never typed), drawn in every palette: every label meets 4.5:1 on the shape painted behind it and every line that is not `border` or `rule` meets 3:1 on `surface` and `surface2`, on computed values; and a figure with a fill-only `classDef`, and a `journey`, each draw on 1.1.0's plate and filter.
   - **AP-8:** the bridge sent `appearance`; a forced mode-only mount fails this row's own assertion.
   - Extend the geometry files to run their existing assertions once per skin (**AP-7**), the one-bar assertion included.
   - Extend `frame-cost` with the srcdoc-growth budget, for the default layout (X2's wave P5 adds a row per layout, each over its own BASE): at most 191 736 characters over BASE, the two faces (187 640) and the seed (4 096). BASE is taken at Task 1's pin, so it already holds every design's library growth, which Task 1 Step 2a checks share by share. Together they keep spec §9's total over the same document at the 1.1.0 pin: 224 504 plus the other designs' shares. Also extend it with the open-to-`ready` budget (median of 9 opens at most 1.10 x BASE's median of 9).
+    **Timing amendment (2026-11-24; D-9018):** The timing row uses the D-9017 paired method, with separate hosted (+30 ms) and mode-only (1.10×) limits on desktop Chromium, per skin. The ordinary run still asserts the srcdoc growth independently. F records the phone-engine timing as a device item, with a stop above +100 ms.
 - [ ] **Step 3: Run each file through `ccrc test`**, with `CCRC_CHROME` from the brief. Expected: PASS. Record each figure line beside BASE.
 - [ ] **Step 4: Measure the mutation rows** below, one at a time, from saved copies, restoring and hash-checking after each.
 - [ ] **Step 5: Commit** the four browser files: `test(docs): the appearance matrix and per-skin budgets`.
@@ -401,6 +406,15 @@ Each row is measured once, alone, from a saved copy, with `timeout -k 10 600` (9
 | AP-M19 | `readerAppearanceOf` leaves `label` out | Task 2 "every mapped token" row; AP-6 shows the library's neutral default instead of ccrc's line |
 | AP-M20 | Drop the `[prefs]` effect, so stamp changes are the only trigger | Task 5 "the mode-only trigger" |
 | AP-M21 | `ReaderFrame.tsx` imports `readHostAppearance` by value | `docs-scans.test.ts`'s main-bundle scan (Task 4 "the main bundle stays library-free") |
+| AP-M23 | Add 1 px to the hosted Aa row's computed minimum without exceeding the rendered ceiling | AP-6's exact minimum-height comparison (D-9053) |
+| AP-M24 | Add 2 px to each side of the Aa label's block padding, leaving the minimum unchanged | AP-6's rendered-height ceiling in Instrument (D-9053) |
+| AP-M25 | Drop an in-frame appearance write while still redrawing the figure | AP-5 ordinary mode: in-frame write count is zero instead of one (D-9030) |
+| AP-M26 | Deliver two successive appearance writes out of order | AP-5 ordinary mode: the first in-frame appearance does not match that transition (D-9030) |
+| AP-M27 | Delay an appearance write beyond 100 ms without hitting the liveness wait | AP-5 measurement mode, with a quiet start and end: the stamp-to-write ceiling assertion (D-9030) |
+| AP-M28 | Start two figure redraws in one browser task | D-9054 ordinary mode: the one-figure-per-task assertion |
+| AP-M29 | Reverse the nearest-first redraw order | D-9054 ordinary mode: the observed figure order differs from the order by viewport distance |
+| AP-M30 | Let an older appearance's queued redraws continue after a newer appearance arrives | D-9054 ordinary mode: the latest appearance did not cancel the older queue |
+| AP-M31 | Delay the next figure redraw so a consecutive gap exceeds 200 ms | D-9054 quiet measurement mode: the gap ceiling, not the liveness wait |
 
 ## Deviations found
 
@@ -454,6 +468,67 @@ Each row is measured once, alone, from a saved copy, with `timeout -k 10 600` (9
   - Amended in place in §10 test 4, marked "(amended 2026-11-20; D-8827)".
 
 All of run 2631's block is defined: 8759, 8760, 8761. Run 2843's numbers are defined: 8816 and 8824 to 8827.
+
+- **D-8994 (2026-11-24)**: reader-assets-holds-no-hash-literals. Issued to run 3639 (wave C, wave 43). It departs from the reader-mode plan's amendment §3 row for `pwa/test/reader-assets.test.ts` ("its hash rows in the last commit") and its §4 list of what waits for the registry ("`reader-pin.test.ts`'s and `reader-assets.test.ts`'s literals"), and from this plan's amendment bullet "the wave's last commit: … `reader-pin.test.ts`'s and `reader-assets.test.ts`'s literals".
+  - `reader-assets.test.ts` holds no registry-dependent literal: its hash rows compare each asset's sha256 against the installed package's own `FRAME_MANIFEST` entry, read at run time, and its specifiers are built from `FRAME_MANIFEST[k].path`. Measured at Task 1 on `main` at `fff0917bf7`: no 64-hex literal and no version literal in the file. So it takes only its renames, in Task 1's first commit, and the last commit holds `reader-pin.test.ts`'s literals alone among the tests.
+  - Why: review 3635's advisory A1 found the file holds no hash rows; the brief asked Task 1 to confirm it and define the correction.
+- **D-8995 (2026-11-24)**: m79-library-exception-retired. Issued to run 3639 (wave C, wave 43). It departs from the reader-mode plan's amendment §3 row for `server/test/docs-parity.test.ts` ("M79's specifier rule and its planted cases, the near-miss cases (`@synapsium-labs/docserverx`, `@other/docserver`) included"), and from the rich-docs spec's A21 and M8.18, the exception that let the library's import specifiers carry the standalone server's name in `pwa/src`.
+  - M7.9's needle is that name. The library's new name, `@synapsium-labs/pinax-lib`, does not hold it, so renamed planted cases are no hits and the nine "is a hit" cases go red. The plan's text cannot be built as written.
+  - The exception is retired instead: `M79_LIBRARY_SPECIFIER` and its code-position reader `m79InCode` are removed, so no import specifier is excepted. The planted cases keep the old name, and stay hits. The three cases that held an old-name import specifier green now hold it a hit, and a new case holds the new name's four specifiers clean. Measured: restoring the exception over the old name reds the three (Results, wave C).
+  - Why: the exception existed only because the package was named after the needle (spec R-f). Kept over the new name it would except nothing; kept over the old one it would let the retired package back into the PWA unseen.
+  - It is a second edit in place of `docs-parity.test.ts`'s append-only M7.9 block, after W8a's, and its header says so.
+  - Task 7 amends A21 and M8.18 in place, marked "(amended 2026-11-24; D-8995)".
+
+- **D-8996 (2026-11-24)**: checked-reader-mount-casts. Issued to run 3639 (wave C, wave 43). Task 4 Step 4 requires a clean PWA type check, but Task 4 Step 1 and Task 5's Files list defer all cast fakes to Task 5 on the premise that their casts bypass the check.
+  - Measured with the required `ReaderMount.seed` and `follow`: eight TS2352 errors from direct `as ReaderMount` casts in `reader-frame.test.tsx`, `docs-version.test.tsx` and `reader-history-adapter.test.tsx`. Unlike a cast through `unknown`, the direct assertions still require sufficient overlap.
+  - The affected fakes gain `seed` and `follow` with Task 4's interface, without changing any test's expectations. Both double-cast files and the late sign-in fake stay with Task 5, as does the component behavior. No cast is widened to hide a missing field.
+
+Run 3639's block (8994 to 8996) is defined.
+
+- **D-9017 (2026-11-24)**: same-session-reader-timing-base. Issued to run 3639 (wave C, wave 43). It departs from Task 6 Step 1 and the 2026-11-24 amendment only in how the timing BASE is taken. The geometry and srcdoc-size BASE remain at Task 1's commit.
+  - For timing, build the Task 1 tree with the same candidate library as the hosted tree. Use the same ordinary Docs fixture and mount-start and ready marks for both. In one stock Chromium session, interleave the builds, alternating which goes first. Measure nine fresh opens per build per skin in each of two rounds, reversing the order in the second round. Each hosted median must be at most 1.10 times its own same-round BASE median; all four comparisons must pass.
+  - The ordinary browser suite asserts the srcdoc size budget independently. `frame-cost.browser.test.ts` runs the timing comparison on demand: set `CCRC_MEASURE=1` and `CCRC_PAIRED_READER_BASE_DIST` to that built BASE, and select `reader paired timing`. Each comparison prints the samples and their spread. The earlier standalone timing figures remain Results evidence, not a fixed ceiling in the ordinary suite.
+  - Why: the paired BASE medians were near 200 ms on the same machine that previously measured near 88 ms. A historical wall-clock comparator mixes the build's cost with changes in load. The fixture, library pin, measurement endpoints and 1.10 ceiling are unchanged.
+
+- **D-9018 (2026-11-24)**: hosted-open-budget-after-measurement. Issued to run 3639 (wave C, wave 43). The earlier 1.10× hosted ceiling was a regression guard written before the host faces and first appearance were measured; this ruling supersedes that number for hosted mounts, not D-9017's comparator or any non-timing budget.
+  - **Evidence:** the live hosted path added about 12–24 ms across the four measurement sessions. In the checkpoint run, the first shipped hosted mount added 23.8 ms Refined and 18.6 ms Instrument by the paired medians; all 18 individual deltas were positive. The mode-only bridge and the tip with all hosted work bypassed had mixed-sign paired deltas, with no consistent positive remainder. The measured cost belongs to the live hosted path as a group (the faces, seed, and first appearance), not to a separately measured stage. The reviewed overlap remains; the measurements isolated no timing effect from it.
+  - **Desktop Chromium:** per skin, the median of nine hosted opens may add at most 30 ms over the median of nine BASE opens in the same session, interleaved per D-9017. Each of the two rounds must meet its own BASE. The mode-only mount keeps its separate 1.10× guard over its own same-session BASE in both rounds; build it with the same candidate library and the hosted decision forced false, not with a different reader or layout.
+  - **What is asserted:** the ordinary `frame-cost` browser suite asserts the hosted srcdoc growth for both skins. Timing is a recorded opt-in `frame-cost` run, with an executable budget assertion for each arm, skin and round; run it against builds with the same corrected library, matching the BASE and fixtures. An ordinary suite pass is not a timing result.
+  - **Phone engine:** F records a paired figure in its device item. More than 100 ms added is a stop to bring back to the coordinator. The desktop measurement is not phone evidence.
+
+- **D-9030 (2026-11-25)**: quiet conditions for reader wall-clock measurements. Issued to run 3639 (wave C, wave 43). It adds a validity gate before D-9018's desktop budgets and before AP-5's live-follow ceiling, without changing either budget, the fixtures, or the paired open method.
+  - A row is valid only when its BASE median is at most 1.25 times the quiet BASE recorded under D-9017 for its skin, and its BASE interquartile range is at most 20 ms. Otherwise the row reads **not measured: reference not quiet**, even if its candidate falls under the ceiling. Only valid rows get a D-9018 verdict.
+  - The quiet reference is 81.4 ms for Refined and 86.6 ms for Instrument, giving ceilings of 101.75 ms and 108.25 ms respectively. Use one reference per skin in both arms and both rounds. These are the larger of the two quiet after-overlap D-9017 BASE medians per skin: both readings were quiet, and the bound admits both. Round numbers do not pair across sessions, and the diagnostic checkpoint medians had a different purpose.
+  - Retain every attempt in Results, with raw rows, one-minute load at start and end, and validity and verdict per row. Attempt 1 below is not a measurement in any row; its start and end loads were not captured. Identical BASE bytes gave medians from 113.0 to 203.4 ms and a sample of 844.8 ms, versus quiet medians around 80 ms. Hosted deltas reversed sign per skin between rounds. The coordinator observed one-minute load of 9 to 11 on a 16-core box during the run; a reference that moves by 90 ms cannot decide a 30 ms budget.
+  - For paired open timing, start at most three further attempts, only with one-minute load below 4. The first valid result decides its row; a valid red stops and returns to the coordinator, without optimisation or retry of that row. If three further attempts leave any row unmeasured, stop and report it; the coordinator chooses where to measure next. If no exact per-skin quiet figure is identifiable in D-9017, refer the recorded evidence back before a new attempt.
+  - For a wall-clock ceiling without a reference arm, the one-minute load must be below 4 at both the start and end of the row. Otherwise the row reads **not measured: box not quiet**, whether its raw time was above or below the ceiling. This applies to AP-5's stamp-to-write ceiling in both emulated modes. Keep the 100 ms ceiling and fixtures unchanged. The one diagnostic replay counts as the next attempt if valid; name every transition and record its host stamp, operation send and frame write times. A valid red stops that row; report the worst transition without optimisation.
+  - The ordinary AP-5 browser rows check matching writes in order, exactly one per applied transition and none at all for a no-op, under their existing liveness wait. Only `CCRC_MEASURE=1` measures the 100 ms ceiling; this is the same switch as for the paired open budgets. Record verdicts and loads separately by emulated mode. AP-M25 and AP-M26 are ordinary-mode mutations.
+  - **Amendment (2026-11-25):** after four scheduled checks found no quiet window, start irrespective of one-minute load. The reason is directional: box load can add time, so an absolute reading at or below its ceiling still proves the budget, but an overrun does not by itself distinguish the reader from the box. The rules below replace the original start gate, absolute-row validity and attempt limits above; fixtures, sampling and budgets stay unchanged.
+    - **Absolute ceilings:** AP-5 light and dark at 100 ms and D-9054 at 200 ms pass at any load when the reading is at or below the ceiling. An overrun is red only from a quiet sitting, otherwise record **over, box busy** and leave the row unsettled. A sitting is quiet if its start and end one-minute loads are both below 4, or if the paired readings bracketing the ceiling block are both valid by the BASE median and IQR rule.
+    - **Paired open speed:** the BASE median (at most 101.75 ms Refined or 108.25 ms Instrument) and IQR (at most 20 ms) alone decide whether the row is valid. Log the one-minute load at both ends; it no longer gates the reading. The first valid result decides the row.
+    - **Delay controls:** AP-M27 and AP-M31 must fail on their own ceiling assertions at any load, not on startup, liveness or timeout. A control that completes without tripping its ceiling is a finding at any load. In a measurement run, `CCRC_READER_DELAY_CONTROL` names the exact control whose ceiling must assert without a quietness check.
+    - **Sittings:** take the first sitting in order: paired rows, ceiling rows and gap, delay controls, paired rows again. Take up to five more sittings, at least 45 minutes apart by timer, only for unsettled rows; do not watch the load between sittings. Record each sitting's readings, start and end loads, and rows settled in Results. Stop when all rows are settled. Report a valid red immediately without retry or optimisation. If six sittings leave rows unsettled, report those rows and the BASE figures and stop for a ruling on the next venue.
+  - **Second amendment (2026-11-25; paired rows only):** this rule changed after sitting 1, before any further reading. A quiet BASE arm does not show that the candidate arm escaped a load burst. Mode-only Instrument round 1 read 1.0168× and 1.1272× while the two eligible BASE medians differed by only 0.1 ms (95.0 and 95.1 ms). Both are readings, neither is a verdict. The first-valid-reading rule above is superseded. Both AP-5 ceilings, the four-figure gap and the two delay controls settled in sitting 1; do not take them again.
+    - Count a paired reading only if its BASE meets the same median and IQR bounds. Keep both medians from each counted reading. Load can add time to either arm, so with at least three counted readings take the lowest candidate median over the lowest BASE median, independently even if they come from different brackets. Compare those minima with the unchanged budget: hosted candidate ≤ BASE + 30 ms, mode-only candidate ≤ 1.10 × BASE. Fewer than three counted readings leave the row undecided. An aggregate red returns immediately with every reading, without retry or optimisation.
+    - Show every reading's own ratio and the median of the counted ratios. For the hosted diagnostic, express BASE + 30 ms as a ratio using the lowest counted BASE. If that median ratio exceeds the ceiling but the aggregate passes, mark the disagreement and leave the pass in place; the coordinator names the row to the reviewer.
+    - Keep the existing alternating BASE/candidate samples and reverse the lead in round two. The opt-in browser bracket reports each requested reading without asserting a timing budget on it; its fixture and size controls and the ordinary CI checks are unchanged. The cumulative rule has its own focused cases in `pwa/test/reader-paired-verdict.test.ts`.
+    - Use opening and closing paired brackets only in up to five more sittings, at least 45 minutes apart by timer. Take only rows still undecided, evaluate after each bracket, and stop when all eight are decided or an aggregate is red. After the sixth sitting, report any undecided rows and their readings and stop for the coordinator's decision on acceptance or a window.
+  - **Final form for paired rows (2026-11-25):** the quiet-BASE rule and lowest-of-three rule above were tried and withdrawn on the same day. In sitting 1, nearly identical eligible BASE medians (95.0 and 95.1 ms) accompanied ratios of 1.0168× and 1.1272× for the same comparison. In sitting 2, hosted BASE medians rose to 204.8–315.8 ms against the earlier quiet references of 81.4 and 86.6 ms, and a 90 s ready wait expired before a mode-only row completed. Sitting 2 is a recorded attempt, not a counted sitting or a timing red. None of the earlier paired readings counts under the final method. The two AP-5 ceilings, four-figure gap and both delay controls remain settled; do not retake them.
+    - Within each comparison take 20 adjacent BASE/candidate pairs in one Chromium session, flipping which arm leads each pair (`BASE, candidate, candidate, BASE, …` in round one; the inverse in round two). This retains the original sampling order and makes the pairing explicit. Compute each statistic on the pairs before taking its median; do not compare independent arm medians. Fix the count for all rows before taking the first sitting. Keep the fixture, open-to-ready witness and ordinary CI unchanged.
+    - Before the comparisons and again after them, take one BASE/BASE row in each skin using the same 20-pair sampler. All four control medians must be in [0.97, 1.03], inclusive. An out-of-range control excludes the entire sitting; neither load nor a BASE median or spread determines whether a completed reading counts. Record each pair and all four controls, without a timing budget assertion in the browser run. A ready timeout ends the sitting without a verdict; retain its completed pairs.
+    - Mode-only uses the median of candidate/BASE for each pair against 1.10×. Hosted uses the median of candidate minus BASE for each pair against 30 ms, with no ratio conversion. Record the BASE/BASE controls' median differences in milliseconds beside their ratios; only the ratios determine validity. A counted reading at or under its ceiling passes. A counted mode-only overrun is red. A counted hosted overrun is referred for a ruling, with its pairs, median BASE time and median per-pair ratio: a busy box stretching the measured time makes the 30 ms comparison stricter, not looser, so a pass stands but an overrun alone does not distinguish the reader from stretch. Return either kind of overrun immediately, without retry or optimisation.
+    - For the initial sequence, read one-minute load once immediately before a sitting. Above 16, defer by timer for 45 minutes without starting a browser; do not poll. Record endpoint loads for started sittings as observations. Take at most four sittings in this form, taking only undecided comparisons with all four controls. Stop when all eight rows are decided and report the table, or report remaining rows and control readings after four sittings for acceptance.
+  - **Close-out disposition (2026-11-25):** none of the four final-form sittings counted: two ended at the ready wait and two completed with BASE/BASE controls outside [0.97, 1.03]. All eight rows are undecided, not passed and not red. They no longer hold Wave C. At programme close-out, take the same eight rows and four controls in the same form, with the same verdict rules, before calling the programme done.
+    - Sitting 4 is evidence only and decides nothing. Hosted medians were 16.60–20.55 ms over BASE against the 30 ms budget; the absolute median differences of the BASE/BASE controls were at most 5.60 ms. Three mode-only ratios were 1.003–1.027×; Instrument round two was 1.112× against 1.10×, in a sitting whose Instrument closing control was 0.960×. The coordinator will flag that comparison to the reviewer.
+    - **While awaiting publication:** at most eight timer checks of one-minute load, at least 90 minutes apart. Start only at load ≤6, with at most four more sittings. This changes the start gate and cap only; use the same method and verdict rules. Record every further sitting in Results whether it counted or not. Stop at the first counted sitting and send the table; report any counted red immediately with its pairs, and refer any counted hosted overrun as above. Stop altogether on publication authority or after the eighth check; record the number of checks and sittings in Results. If none counted, the close-out disposition stands and no further sitting is owed by Wave C. Publication, the final dependency/lock/pin and push remain on hold pending separate authority.
+
+- **D-9053 (2026-11-25)**: hosted-Aa-row-floor-and-ceiling. Issued to run 3639 (wave C, wave 43). It departs from Task 6 Step 2's equality of rendered row height with the host probe. Under a fine pointer at default text size, the Aa row's minimum height must exactly equal the host's height; the rendered height may be between that floor and 2 px above it, inclusive. A row at larger text size may grow and is not compared. Shadow and radius comparisons remain exact.
+  - Refined measured 52 px for the host probe, minimum and rendered height. Instrument measured 32 px for the host probe and minimum, and 33.0469 px rendered. The label has a computed 21.06 px line box and 6 px padding above and below, with no block border; in Instrument, those are the full row height to layout rounding (0.0131 px). The row itself adds no block padding or border and its container has no explicit row gap. The label's own content and padding exceed Instrument's floor by about 1.05 px. The library intentionally uses `min-height` so text size and zoom can grow the row.
+
+- **D-9054 (2026-11-25)**: multi-figure redraw witness in the console. Issued to run 3639 (wave C, wave 43). Task 6's original AP-5 case observes one drawn figure and stays intact. A separate desktop case covers the design §9 redraw budget using at least four already drawn, unstyled figures of covered kinds at distinct viewport distances. It checks every redraw's order, browser task and new paint after one appearance change. Then it sends a newer appearance with older work demonstrably queued, and checks that only the newest queue completes and that no old paint is installed after the newer appearance. This is a browser test, not a new library hook or a substitute for F's phone evidence.
+  - A consecutive redraw gap above 200 ms fails only in `CCRC_MEASURE=1` on a valid D-9030 row; log all gaps and load at both ends. AP-M28, AP-M29 and AP-M30 run in ordinary mode; AP-M31 is the quiet measurement-mode control.
+
+- **D-9056 (2026-11-25)**: the Wave C file list omitted `pwa/test/skin-identity.test.ts`. Issued to run 3639. Add only the exact-path registry entries for `pwa/src/lib/appearance.ts`, which observes changes to the root's skin attribute for the applied appearance, and `pwa/src/lib/appearanceStamp.ts`, which reads the same attribute to derive the applied appearance stamp. Neither writes it. Leave the scanner and every standing negative control unchanged. Removing either new entry must red its own row; a third, unregistered neighbouring reader must still red the guard.
 
 ## Results
 
@@ -972,3 +1047,534 @@ grep over the built frame/bootstrap.js (read only)                  -> port ops 
 ```
 
 No test, build or install ran: nothing in this wave changes code. Every commit was scanned for private names before it was made, and again before the push.
+
+### Wave C, run 3639: built ahead of publication (2026-11-24)
+
+**Base.** `main` at `fff0917bf7`. The workspace branch only; nothing pushed and no pull request opened before publication (the reader-mode plan's amendment §4).
+
+#### The built-ahead library
+
+The coordinator's word for the install is the brief of run 3639. The library's repository was cloned bare from `https://github.com/Synapsium-Labs/pinax-lib.git` into the session temp root, and `996a39b2602d2e1e636c54c95cc9e403fe55cf88` ("Prepare library version 1.2.0 (#94)", 2026-11-24) exported from it with `git archive`, never from a working tree. No tag pointed at it when read.
+
+| Step, in the export | Result |
+|---|---|
+| `npm ci` | rc 0. npm's install-scripts gate skipped esbuild's postinstall; the build did not need it |
+| `npm run build` | rc 0 |
+| Built `assets/` against the commit's blobs (`git hash-object` of each built file against the tree's blob) | 0 differ |
+| `npm pack` (its `prepack`, `scripts/verify-assets.mjs`) | rc 0; "every file under assets/ is named by assets/assets.json"; 514 files, 3.7 MB packed, 12.2 MB unpacked |
+| Tarball `synapsium-labs-pinax-lib-1.2.0.tgz` | sha512 `sha512-vZTiHrZvQBz/AfY8tD5/URE0yrDOjA/ANtmgsy4PE7J5H7DAUu/LxSZpsuna6RsAXwcCkikD+dsV7vN3VZOhlQ==`; sha256 `f2d71d20ea59f44f63a75677e029d33be8ba494efb74d1fb7f7ac1ede5c83757`; 3 678 313 bytes; npm's shasum `5efbe62d23aaceb845a74a4cc726fbc9d23eb950` |
+| `npm install --no-save <tarball>` in `pwa/` | rc 0; `pwa/package.json` and the lock unchanged (`git status` clean); `node_modules/@synapsium-labs/pinax-lib` 1.2.0 beside the locked `docserver` 1.1.0; its `assets/assets.json` byte-identical to the commit's |
+
+The registry tarball's integrity need not equal this local pack's; the lock takes the registry's at the last commit.
+
+**Task 1 Step 2a, Git-object read ahead of publication (rc 0).** At `aacae4c56dcbf3d8da4069957a957eb530e2ac17`, `conformance/size/shares.json` holds exactly X1 and X2's rows below, and `conformance/size/growth.json` holds exactly `baseline` and `x1`. The first parent `aceb346ae09ac65b70b5587a5676f941056ca3a1` counts 4 528 020 characters (4 530 427 bytes), in entries of 3 643, 30 153, 198 215, 549 069 and 3 746 940 characters. Both genesis rows trace to the X1 landing by first-parent line history. Its own row is 4 558 002 on each measure, a rise of 29 982.
+
+At the 1.2.0 candidate, each design row equals its landing's manifest as read from its Git object. The cumulative deltas and the release's recorded ceilings are:
+
+| Design | Growth (total / largest frame, characters) | Share (total / largest frame, characters) |
+|---|---:|---:|
+| X1 | 29 982 / 29 982 | 32 768 / 32 768 |
+| X2 (four rows) | 721 478 / 13 423 | 1 166 336 / 72 704 |
+| X6 | 37 411 / 8 788 | 59 392 / 15 360 |
+
+The candidate's last row (`x6`, at `61c4bdfde06b99738e0df4a87cf0e8489c9cd4ec`) matches the installed `FRAME_MANIFEST`: 5 316 891 characters over all 13 entries and 4 580 213 in the largest frame (common entries plus the largest layout). Each counted file's character count, byte length and sha256 match the committed manifest and the installed `assets/assets.json` hashes. This is the local candidate check only; it does not verify a tag or registry publication.
+
+The installed `assets/assets.json` (manifest 1, package `@synapsium-labs/pinax-lib`, version 1.2.0, bridge protocol 1), every entry:
+
+| Asset | sha256 | CSP source |
+|---|---|---|
+| `fonts/OFL.txt` | `18aabf190848725e2576eefb5c29ba06aac1029d02132252a7f312eac2e50cf3` |  |
+| `fonts/README.md` | `cfd817cfc6a573679d6961ed40a410b9c0c87ccd1af8bdce2d28c00846e314e9` |  |
+| `fonts/source-sans-3-latin-wght-italic.woff2` | `9a15dafc2c2b2414aaa9d6c30830d9aab4361329d8495b1574633603b994b411` |  |
+| `fonts/source-sans-3-latin-wght-normal.woff2` | `7a19a7027e125257d310c6dbd78ae3a30b5ea1e3794d60b12bb28227a003bfda` |  |
+| `fonts/source-serif-4-latin-opsz-italic.woff2` | `96e6393209728ab93c334ae739af8a040cd2006c82e8614d6465a8084db88f89` |  |
+| `fonts/source-serif-4-latin-opsz-normal.woff2` | `f2ea9c12d2fe9bd3a9589b02ad2c0909da88f30938c91adc838c4f4098f9f9e0` |  |
+| `frame/bootstrap.js` | `d0ab0f7e312251e25005b7c090dbb8129a971c0755d456cf35f82fe450d26c63` | `'sha256-0KsPfjEiUeJQBbfAkNu4EpqXHAdV1FbPNfgv5FDSbGM='` |
+| `frame/enhance-classic.js` | `608037f6acd409299b19fa32b65c2488dd8bbf276da3d182d38a298d9c5af86a` | `'sha256-YIA39qzUCSmbGfoytlwkiN2Lvydto9GC04opjZxa+Go='` |
+| `frame/enhance-editorial.js` | `91948b8a6af0c8f0c30b36a5a935f71c727fdb386e1f6ce58ee4a4be38f66edd` | `'sha256-kZSLimrwyPDDCzalqTX3HHJ/2zhuH2zljuSkvjj2bt0='` |
+| `frame/enhance-guided.js` | `152934356f24ee2286a67176d0497213c97825fe36b1344622df46fc26273a14` | `'sha256-FSk0NW8k7iKGpnF20ElyE8l4Jf42sTRGIt9G/CYnOhQ='` |
+| `frame/enhance-review.js` | `920c60b298691f8293b79df9208e96f4a54cf4260a7f4501bf4ee30aa51a51a3` | `'sha256-kgxgsphpH4KTt535II6W9KVM9CYKf0UBv07jCqUaUaM='` |
+| `frame/enhance.js` | `0a1b49f4a8c20dd3fe7df8d4589cc7ff5030fde2cc548015d2d7ff47d5c787ef` | `'sha256-ChtJ9KjCDdP+ffjUWJzH/1Aw/eLMVIAV0tf/R9XHh+8='` |
+| `frame/guard.js` | `ff3c25da5703bc06d40ca0412b2e760c619a73a4153306f4d0f3b662bda65c4d` | `'sha256-/zwl2lcDvAbUDKBBKy52DGGac6QVMwb00PO2Yr2mXE0='` |
+| `frame/layout-classic.css` | `90de780c9e0f98fea4bb916357b1ce74a962e577027e1cb88f28e0470b7ea23c` |  |
+| `frame/layout-editorial.css` | `c15993de4b7d34298fe9287c25516e8254cc1ff70f5b4c9eca92f731b8835dda` |  |
+| `frame/layout-guided.css` | `9ceef0b3f36b5d9ec611767f20622d0edc7cf0a91f76be65e34f61dbb897304c` |  |
+| `frame/layout-review.css` | `920780aaeccf034223d33179d0f1a77fab74663d317825f75960b7920a7def68` |  |
+| `frame/reader.css` | `32aa81ef916560fe4a304599dfcebcd96cd4825e1d8c33d0e6ae81916d563529` |  |
+| `layouts/classic.css` | `90de780c9e0f98fea4bb916357b1ce74a962e577027e1cb88f28e0470b7ea23c` |  |
+| `layouts/editorial.css` | `c15993de4b7d34298fe9287c25516e8254cc1ff70f5b4c9eca92f731b8835dda` |  |
+| `layouts/guided.css` | `9ceef0b3f36b5d9ec611767f20622d0edc7cf0a91f76be65e34f61dbb897304c` |  |
+| `layouts/review.css` | `920780aaeccf034223d33179d0f1a77fab74663d317825f75960b7920a7def68` |  |
+| `mermaid/mermaid.frame.js` | `7585b2055ba386b9acff71b9c8a0c40b36dec79c2106a4aa56048c8fe59832c3` | `'sha256-dYWyBVujhrms/3G5yKDECzbex5whBqSqVgSMj+WYMsM='` |
+| `mermaid/mermaid.mjs` | `dfba66fc5c75e030c35bf16d5e7a62bbee7be5496cabec94ec93f85d626b38df` |  |
+| `print.css` | `2ba6cfdc58eaf2e5bced8b767eb85fb3255bcd1c9a23ee1e62ee5add4bfb6113` |  |
+| `reader.css` | `816db9774bbda71b99b85d1404523c8c837866bee2072eae0806339405cc2996` |  |
+
+**The import list, read ahead on the tarball** (Task 1 Step 1 reads it again at publication): 1.2.0's `exports` are 1.1.0's, key for key (`./render`, `./conformance`, `./enhance`, `./frame`, `./host`, `./highlight`, `./assets/*`, `./package.json`), and every asset the console imports by specifier (`frame/guard.js`, `frame/bootstrap.js`, `frame/enhance.js`, `frame/reader.css`, `mermaid/mermaid.frame.js`) and the two deep paths the tests read (`dist/frame/seed.js`, `dist/host`) exist in it. No change to the list.
+
+#### Task 1's first commit: the rename (D-8976)
+
+Every file of the reader-mode plan's amendment §3 outside the package file, the lock and the pin's literals moved to `@synapsium-labs/pinax-lib` and `Synapsium-Labs/pinax-lib`: the four source files, the pwa and server tests, the browser test, and the provenance step's repository, signer, lock key, pack spec, tarball name and closing line. `git grep` of the old name outside `docs/` then answers only the package file, the lock, `reader-pin.test.ts`'s `resolved` prefix, `docs-parity.test.ts`'s planted old-name cases (D-8995), and the standalone docs server's own lines that §3 leaves alone. `reader-pin.test.ts` changed only its `LIB` constant and its title's package name. `reader-assets.test.ts` took its renames only (D-8994). `docs-parity.test.ts`'s M7.9 exception is retired, not renamed (D-8995).
+
+| Check, on the built-ahead tree (`ccrc test`, foreground) | Result |
+|---|---|
+| `pwa`: `tsc --noEmit` | rc 0 |
+| `pwa`: the 14 renamed files (`docs-scans`, `markdown-purity`, `reader-assets`, `reader-bridge`, `reader-built`, `reader-commands.test-d`, `reader-diff`, `reader-history-types.test-d`, `reader-images`, `reader-lab-bridge`, `reader-lab-frames`, `reader-pin`, `reader-policy`, `w7-storage-keys`) | 503 of 508 pass; the 5 reds are `reader-pin.test.ts`'s 1.1.0 literals, red by design until the last commit |
+| `server`: `ci-pipeline`, `docs-parity` | 214 of 214 pass |
+| D-8995's mutation: the exception restored over the old name, from a saved copy, restored and hash-checked | the three retired-exception cases red |
+| The browser leg, renamed `reader-frame.browser.test.ts` included | run as Task 6 Step 1's BASE, on this commit (below) |
+
+#### Task 6 Step 1: BASE, at Task 1's commit
+
+Taken at `63ba659ed5` (Task 1's rename and its follow-up, below), on the built-ahead tree, before any edit of Tasks 2 to 5, with no appearance: Chromium (Playwright's build), this box, each file once through `ccrc test`, foreground. The per-skin extensions Task 6 Step 2 keeps (every one-skin case of `docs-compact-head` and `reader-frame`'s worst case once per skin, and `frame-cost`'s reader-open measurement, on demand under `CCRC_MEASURE=1`) were written for this measurement and held out of the tree until Task 6. Runs: `docs-compact-head` 132 of 132, `reader-frame` 55 of 55, `frame-cost` reader-open 2 of 2.
+
+| Figure | Refined | Instrument |
+|---|---|---|
+| Open to `ready`, an ordinary page (6 sections, 42 paragraphs, no image, no figure), 9 opens | median 88.4 ms (80.0 to 109.1) | median 84.4 ms (77.2 to 100.3) |
+| srcdoc of that page | 839 815 characters | 839 815 characters |
+| `T10-FIGURES worst` (30 images, 5 MiB) | srcdoc 13 600 319; mount 109.7 ms; ready 2 085.5 ms; wall 2 540 ms; 57 316 elements | srcdoc 13 600 319; mount 105.0 ms; ready 2 061.2 ms; wall 2 557 ms; 57 316 elements |
+| One bar at 412 x 915 (`L11-FIGURE`) | title 56 px down, frame at 48 | title 56 px down, frame at 48 |
+| Full head, `above` at 600, 768 and 1280 | 233, 213, 306 | 233, 213, 310 |
+| Touch laptop `above`, 1280 and 915 x 412 | 322, 342 | 326, 346 |
+
+All 142 `PHH-FIGURE`, `L11-FIGURE`, `T10-FIGURES worst` and `FRAME-COST-READER` lines are kept with the wave's scratch and summarised here; Task 6 compares each against its own line. Hold condition 5 decides whether this BASE stands at the registry pin.
+
+**Task 1 follow-up (`63ba659ed5`).** The browser leg's first run at the rename commit failed to collect `reader-frame.browser.test.ts`: its fixture read the installed bootstrap's global list by the name 1.1.0's minifier gave it (`var O=[…]`), and 1.2.0's names it `M` (118 names; 117 in 1.1.0). The case's comment already says it reads the first array literal, so the code now matches any name. No assertion changed.
+
+#### Task 4: Bridge checks
+
+- Red: the new hosted-policy row failed before the function existed. A subsequent three-file run had eight failing and 149 passing rows, one failure a font-loader timeout. The four-file red run as a single command was not captured. The first full PWA type check of Task 4 exited 2 on the eight direct casts recorded in D-8996.
+- Green after the fix and re-review: the PWA type check exited 0. The bridge, policy, scan, alias, lab-run, frame, version, history-adapter and host-appearance files passed 512 of 512 through `ccrc test` (rc 0). The wrapper ran locally with the unsaved candidate.
+- Assertion-red and restored with hash checks: AP-M1, AP-M4, both AP-M22 holds, AP-M8, AP-M12 (including the lab row), AP-M14 and AP-M16. A compile-valid microtask yield immediately after the appearance read also reddened the timing assertion. AP-M21 has a matching planted-import control; the actual source mutation remains for Task 6.
+- Re-review found no production blocker. Follow-up for the whole-branch review: stripping fonts copies the base asset object, so a non-production `deps.assets` implementation that supplies asset fields through inherited or non-enumerable properties could lose them. The shipped loader supplies ordinary own fields.
+
+#### Task 6: Hosted measurements at the build-ahead pin
+
+The timing row remains **red** (D-9017). The first, standalone hosted run gave medians of 107.3 ms (92.5–113.3) for Refined and 96.5 ms (92.1–106.8) for Instrument, both over 1.10 times the historical BASE. The same-library, same-session comparison below used the same fixture and the same mount-start and `ready` endpoints. Each cell reports medians with min–max in ms, from nine fresh opens per build; the first build alternated and the lead was reversed in round 2.
+
+| Test | Round | Skin | BASE | Hosted | Ratio |
+|---|---:|---|---:|---:|---:|
+| Before overlap | 1 | Refined | 206.2 (141.4–393.9) | 227.9 (177.1–278.6) | 1.1052 |
+| Before overlap | 1 | Instrument | 193.8 (138.8–378.8) | 214.7 (163.2–278.5) | 1.1078 |
+| Before overlap | 2 | Refined | 185.1 (128.6–240.2) | 203.1 (146.1–259.3) | 1.0972 |
+| Before overlap | 2 | Instrument | 177.6 (98.7–219.0) | 196.8 (120.7–268.0) | 1.1081 |
+| After overlap | 1 | Refined | 79.9 (76.2–94.6) | 100.3 (95.7–122.0) | 1.2553 |
+| After overlap | 1 | Instrument | 82.9 (78.7–98.5) | 97.5 (91.0–107.9) | 1.1761 |
+| After overlap | 2 | Refined | 81.4 (76.3–90.9) | 97.5 (93.8–110.0) | 1.1978 |
+| After overlap | 2 | Instrument | 86.6 (75.2–103.9) | 102.9 (91.4–110.6) | 1.1882 |
+
+- Both paired runs exited 1. Three comparisons missed before the experiment and four after it. The across-run change in the ratios does not isolate the effect of the overlap: the BASE and hosted builds both ran much faster in the later session, despite the fixtures and procedure matching. No second timing experiment was attempted. The bridge unit run failed on serial loading (3 failed, 79 passed) and on faces-first ordering (1 failed, 81 passed), then passed 82 of 82 after base-first overlap. Read-only review found no production blocker; late face rejection after the base fallback returned was not tested independently. The full PWA suite attempt stopped after the runner's budget warning; the focused run is not a full-suite result.
+- Ordinary-page srcdoc independently passed in each skin after the experiment (2 passed, 51 skipped, rc 0). The paired run measured the same sizes in all opens: 1 028 425 Refined and 1 028 424 Instrument, against BASE 839 815 and limit 1 031 551. No timing result is inferred from the size pass.
+- The production CSS guard is assertion-red on the build-ahead candidate (1 failed, 13 skipped, rc 1). The complete scratch comparison covered 12 explicit palettes and two system modes × two skins × two pointer kinds × 43 slots = 2 408 values. Of 1 844 spelling differences, the library accepted 1 720 case-only changes and 28 alpha-hex shadow conversions. It refused 40 short hex occurrences (`#FFFFFF` → `#fff`, in `accent-ink`, `surface` and `bg`) and 56 leading-dot tracking occurrences (`-0.011em` → `-.011em` and `0.08em` → `.08em`). 620 individually accepted colour values were also omitted when one other colour slot dropped their group. No host-side normalisation was introduced. AP-1, AP-2, AP-3, and AP-6 remain open; the corrected package must turn the ordinary guard green.
+- The Chromium compact-head suite passed 132 of 132 (rc 0). Both skins have one phone bar, the title at 56 px, console part 48 px, and the 44 px tap floor. In the 26 matched figure rows, maximum delta in `above`, `frameTop`, `screenTop`, `titleInFrame` and measured head height was 0 px; head mode never differed. This is not a phone-engine run or a comparison of the frame's own measure, prose, gutters and title-block dimensions.
+- The Chromium reader-frame suite passed 55 of 55 (rc 0). The worst fixture decoded all 30 images in each skin; Refined / Instrument respectively: srcdoc 13 788 256 / 13 788 255, mount 117.5 / 117.9 ms, ready 2 750.4 / 2 134.5 ms, wall 3 266 / 2 647 ms. The fixture remained at the 5 MiB image budget; the ordinary-page srcdoc cap above does not apply to this row.
+- AP-8 passed on the production build (1 passed, 13 skipped, rc 0). The same row on a separate build forced to take the mode-only mount failed at its appearance-seed assertion (`undefined` vs the expected object, 1 failed, 13 skipped, rc 1). The live working-tree source was not mutated.
+
+#### Task 6: Bounded timing diagnostic after the stop
+
+The coordinator kept the red-first overlap and authorised one diagnostic, not a second optimisation. Task 2 adds the map and Task 3 the stamp helper, but neither can mount hosted. Task 4 (`e1ce2bb945`) exposes the new bridge interface without the shipped caller supplying its appearance root, so its measured mount is still mode-only. Task 5 (`59a0423d13`) is the first shipped hosted mount. In the overlap tip's scratch control the caller omits the appearance root and substitutes a constant for the stamp hook; it loads no hosted faces, sends no appearance seed or appearance op, and leaves the rest of the mount and its lazy bridge in place.
+
+One paired round per checkpoint, nine opens per skin/build, alternating lead, same fixture and ready mark, one Chromium session. Values are medians (sample min–max) in ms; the paired delta range is over the nine individual pairs, not a confidence interval.
+
+| Checkpoint | Skin | BASE | Checkpoint median | Added by medians | Paired delta range |
+|---|---|---:|---:|---:|---:|
+| Task 4, mode-only | Refined | 83.9 (78.2–104.5) | 86.2 (80.9–104.8) | +2.3 | −10.3 to +16.2 |
+| Task 4, mode-only | Instrument | 85.6 (73.7–88.1) | 80.6 (74.7–86.4) | −5.0 | −12.7 to +9.7 |
+| Task 5, hosted | Refined | 75.6 (72.5–81.5) | 99.4 (91.9–101.4) | +23.8 | +13.3 to +27.6 |
+| Task 5, hosted | Instrument | 79.4 (73.0–82.7) | 98.0 (89.4–108.1) | +18.6 | +11.3 to +27.2 |
+| Tip, all hosted work bypassed | Refined | 80.8 (76.7–87.6) | 81.6 (76.9–90.6) | +0.8 | −6.9 to +10.3 |
+| Tip, all hosted work bypassed | Instrument | 80.2 (75.9–87.8) | 78.1 (74.5–81.3) | −2.1 | −11.5 to +1.2 |
+
+The diagnostic completed all six comparisons. Srcdoc was 839 815 in every BASE and mode-only/control open and 1 028 425 / 1 028 424 in the hosted opens. Task 5 added time in every pair; both mode-only checkpoints have mixed signs and no consistent positive remainder. This locates the cost in the hosted path as a group, not in a particular stage or asset. It does not change the ceiling, and it is not timing acceptance.
+
+#### Scratch profiling before the overlap: removals, not acceptance
+
+Nine adjacent control and variant opens per skin and variant. In the table, positive means the removal saved time (median of per-pair open savings, ms). Each row's sample range included both signs.
+
+| Removal | Refined | Instrument |
+|---|---:|---:|
+| Omit the font payload, still wait for the chunks | +3.1 | +5.6 |
+| Keep the payload, bypass font decode and registration | +1.3 | −0.8 |
+| Bypass first appearance application, keep seed and faces | −4.0 | +0.5 |
+| Omit the appearance seed, keep root read and faces | −2.7 | +0.3 |
+| Bypass the stamp hook | −0.8 | +11.4 |
+
+The unmodified measurement path in the scratch control took 2.4–3.3 ms for the face chunk wait, 1.0–1.3 ms for the host read and verdict, 0.3–0.4 ms for the initial apply, and 4.9–5.2 ms for synchronous font handling. Face loads settled 16.8–18.1 ms from entry, while other readiness work was running; those spans are not additive. The no-font-payload variant removed 187 670 srcdoc characters including the envelope. Refined / Instrument reductions: mount preparation 3.2 → 0.8 ms in each; srcdoc build 11.9 → 9.5 / 9.6 ms; append to seed parse 14.4 → 11.9 / 12.3 ms; parse and validate 1.2 / 1.1 → 0.4 / 0.4 ms. Both font-removal variants loaded neither face; the control loaded both. The profiling was deliberately instrumented; five diagnostic cases passed, not an acceptance budget.
+
+**Known cost, candidate follow-up:** the two faces travel as text inside the frame document. A cheaper way to carry them may exist within the unchanged sandbox and frame policy. Neither the measurements nor D-9018 promise or authorise a different carriage in this wave. The corrected library still needs its own paired measurement.
+
+#### D-9018 harness verification (2026-11-24)
+
+The ordinary size rows still passed independently after the paired harness changed (2 passed, 51 skipped): 1 028 425 characters Refined and 1 028 424 Instrument, against 839 815 BASE and a 1 031 551 ceiling. TypeScript passed on retry at the same test-slice cap after the first run exited 137. The restated timing gate was not run: desktop timing acceptance waits for three matching corrected-library builds, and F owns the phone-engine pair.
+
+#### Task 6: Paired reading geometry in scratch
+
+On the build-ahead library, a separate Chromium probe paired both skins at 412 × 915, 600 × 960, 768 × 1024 and 1280 × 800. Both builds had identical one-line byline metadata and the probe selected the same visible prose paragraph. Across all eight pairs the maximum delta was 0 px for the reader bar, measure, gutters and padding, visible prose size, title and byline heights, and full title block. The title and byline each stayed on one line. This diagnostic used a different fixture from the protected phone title-budget row and does not replace the phone-engine run.
+
+#### Task 6: Lazy-open check on the held pin
+
+AP-4 initially stopped at the browser's command-palette locator: the option's accessible name includes its group, and the choice page renames the search box. The test now selects the option by its exact visible title and uses the choice page's own search box. One retry stopped during Vitest startup with `code.charCodeAt is not a function` and reported test-slice OOM kills. The next run applied both choices and passed the full seed-colour comparison, then failed the seed-skin comparison: Instrument's `.08em` was absent from `sectionTracking` (one failed, 13 skipped). AP-4 remains open until the corrected library; the test still requires all skin slots.
+
+#### Task 7: Verification while the pin is held
+
+- Scoped PWA tests and built guards: 4 593 passed, five failed. The five are `reader-pin` checks for the exact manifest and lock entry, installed version, installed asset manifest version and protocol, and its pinned hashes. The local build-ahead install and the committed 1.1.0 pin intentionally differ. The scoped rerun passed the asset-import census with the five manifest-derived entries and exactly two inline faces. The first full run is recorded below.
+- Scoped server guards: 261 passed, one failed. The deviation cross-tree case timed out at its 20 s limit both in the batch and alone. A one-off 60 s diagnostic passed 34 of 34; it does not clear the default failure. Neither the guard nor its timeout was changed.
+- The Task 7 rich-reader amendment passed scoped re-review after clarifying that a hosted theme is not stored as a reader preference. Both protected 2026-11-06 phone evidence blocks and the rich-reader spec's E17 summary row were compared byte for byte and were unchanged.
+
+#### Corrected local library (2026-11-25)
+
+After merging `bce2bc52fd` locally, the named producer-main object `59d4d18a98e14b9edc6fbe9f64d3d39793347502` was exported from Git, rebuilt, packed and installed without saving. The local pack has 514 entries, 3 681 976 bytes, SHA-256 `c8cfafcf0537a642d0d87d0f1f6d1e254e2880f56b1691d269bc1cbf32b39d8b`, npm shasum `40f825be68ae586bfcea9bbdd05ded8290c9e3d7` and integrity `sha512-V4QhSgY5HwSQ/yhy2G/I6VB9gO/3LEGrv+bJUd+6+E7dnaBEqWCK4iXN309h+7G7y/T5N1JEhI26tO29hFkJ4g==`. Asset-manifest SHA-256 is `179a330da49ad4fefc8ba51a00f6f0eb0da9464c0868178fe18a7150d430dfa9`. All 26 asset hashes and applicable script CSP hashes matched the installed and rebuilt manifests. The five enhancer hashes changed; the committed pin and lock did not. This is local evidence, not the producer's browser acceptance or registry provenance.
+
+- The production CSS guard passed all 56 contexts and 2 408 values without a refusal, against the identical guard's red on the held package above. No host normalisation was introduced.
+- A scoped browser run passed twelve tests, two AP-5 cases skipped. It included 28 catalogue opens, both first-ready stale-theme controls, the lazy-open seed including Instrument's `.08em`, the implemented chrome, preference, contrast, cue and fallback rows, and AP-8. This was not the complete AP-6 matrix.
+- The corrected Task 1 BASE rebuilt at `63ba659ed5` reads 840 371 srcdoc characters in both skins. Mode-only equals BASE; hosted reads 1 029 009 in Refined and 1 029 006 in Instrument, against 1 032 107. Both ordinary size checks and every paired size control passed.
+
+#### Corrected AP-6, geometry and census (2026-11-25)
+
+- Five post-merge PWA import, storage, control and role census files: 238 passed, no reported type errors, rc 0. The wrapper also reported one shared test-slice OOM kill.
+- The built lab-profile control kept Aa's selected Auto theme and had no hosted label. The revised live figure probe passed all 12 canonical palettes × eight installed kinds. Phosphor Daylight's ER cardinality circle had an opaque `rgb(234, 238, 234)` interior and a 1 px `rgb(78, 88, 80)` outline. The previous false failure counted the interior as a line; the outline was checked on both grounds. The producer's pixel checks and F's installed-device checks are separate.
+- The exact-height Aa check was assertion-red on Instrument, then the D-9053 floor and ceiling check passed in both skins with the same computed heights. AP-M23 set the rendered Refined row and its minimum to 53 px against a 52 px host floor. It failed the exact minimum comparison, not the ceiling. AP-M24 held Instrument's 32 px minimum and increased the rendered row to 37.0469 px, which failed the 34 px ceiling. Both were measured independently by mutating the open frame's CSSOM; the test input was restored and hash-checked after each. Initial startup and mount failures did not count as red. Candidate for a later library release, not a promise: make Instrument's default label content fit its 32 px floor while preserving text-size and zoom growth.
+- The corrected same-library geometry row passed all eight pairs: two skins at 412 × 915, 600 × 960, 768 × 1024 and 1280 × 800. Across all pairs, head mode stayed the same, each title and byline stayed on one line, and every measured length had a 0 px delta. This fixture's byline makes it different from the one-bar title-budget fixture. The separate 412 × 915 browser rows passed in both skins: one bar, no frame bar, frame at 48 px, title starts at 56 px, tap row 44 px. This is not phone-engine evidence.
+- The four corrected-package browser files passed together before the D-9054 case was added: 226 passes, one expected failure and 41 skips, rc 0. Both worst-frame rows painted and decoded all 30 images within the unchanged 5 MiB image budget. Hosted worst-frame srcdoc was 13 789 513 characters in Refined and 13 789 510 in Instrument (earlier Task 1 witness: 13 600 319 each). The measured mount/ready times were 253.1/2 792.1 ms and 142.3/2 674.2 ms respectively; these are ordinary-run diagnostics, not paired timing acceptance.
+
+#### Corrected AP-5 live-follow timing, attempt 1 (D-9030)
+
+The coordinator measured one-minute load of 14.49 on the 16-core host during the run; individual row start and end loads were not captured. The wrapper reported three shared test-slice OOM kills. The two selected files together had three passes, one failure and 156 skips, rc 1. The light assertion stopped the light row; neither observed timing result is an acceptance verdict.
+
+| Emulated device mode | What was observed | Validity / verdict |
+|---|---|---|
+| Light | In-frame write 152.599853515625 ms after the host stamp, above 100 ms; the transition was not named in that run's output | Not measured: box not quiet |
+| Dark | The timing assertions completed over 41 transitions (38 effective, three applied-appearance no-ops); individual times were not printed | Not measured: box not quiet |
+
+After the D-9030 split, the ordinary correctness checks passed 41 transitions in each mode: light had 39 effective and two no-ops; dark had 38 effective and three no-ops. The probes stayed active across the sequence and counted complete in-frame slot writes synchronously, not MutationObserver batches. The same run passed the restored Aa case (three selected passes, 24 skipped). Ordinary results do not measure latency.
+
+AP-M25 in ordinary mode red on `phosphor → light`: the figure redrew, but there were zero in-frame writes instead of one. AP-M26 in ordinary mode captured two real host appearance messages and forwarded their appearances in reverse order on the next pass; both transitions failed the matching-write assertion. Each input was restored and hash-checked. The initial M25 startup error and M26 setup on a no-op did not count. The later isolated AP-M23–26 runs reproduced each intended assertion with a measured process cap of 4 096 and the 900 s browser deadline, with the input restored and hash-checked after each. AP-M27 has no quiet measurement yet.
+
+#### First full PWA unit run against the corrected package (2026-11-25)
+
+20 970 passed, two skipped and 13 failed across 617 files; no reported type errors, rc 1. Five `reader-pin` assertions still see the deliberately held pin. `browser-dist` caught the new test calling `serveDist(sharedDist())` rather than the existing two-step shared-build idiom. The exact-input unit test saw `#2e3440` from the corrected library instead of `#2E3440`; the raw host input was still uppercase. Six `skin-identity` assertions failed because the existing registry did not list the two applied-appearance readers. The registry-only fix was approved as D-9056.
+
+After the two in-scope test fixes and the D-9056 registry entries, the restored `browser-dist`, `reader-appearance`, `skin-identity` and `docs-scans` suites passed 289 tests with no reported type errors. The raw-input check still requires uppercase from the host, separately from the canonical lowercase library verdict.
+
+D-9056 controls: removing either entry in isolation failed the existing census on that exact module. A third reader planted in the copied tree's `pwa/src/lib/theme.ts` failed on that path with both valid entries still present. All three controls ran with the 4 096 process cap and 600 s deadline and were assertion-red, not timeouts. The temporary cases were removed and the test file restored and hash-checked; only the two registry entries remain. The AP-M21 real-source mutation likewise failed with `src/docs/ReaderFrame.tsx main-bundle:value-import` at the same cap and deadline; the frame source was restored and hash-checked before the green run.
+
+The full restored PWA rerun had 20 978 passes, two skips, five failures across 617 files, and no reported type errors (rc 1). Only `reader-pin` failed: package manifest exact pin; lock root and package integrity; installed package version; installed asset manifest version and protocol; installed asset manifest's pinned hashes. All five require the held final pin; no other case failed.
+
+The restored production build (`tsc --noEmit && vite build`) exited 0. Vite reported a 12.91 s build and the PWA precache had 76 entries; the wrapper reported one kill in the shared test slice, not a failed build or typecheck.
+
+The producer's separate Chromium and WebKit opt-in runs passed on the exact packed commit, each with one ready and no fallback. Signed tag, registry publication and the final pin remain separate gates.
+
+#### Remaining ordinary appearance mutations (2026-11-25)
+
+| Mutation | Intended assertion observed |
+|---|---|
+| AP-M7 | `text` sourced from disabled ink: Refined Phosphor text on page measured 3.226:1 and Refined Light 2.425:1, both below 4.5:1. |
+| AP-M13 | With the hosted seed and fallback preference both absent, the first ready had the stored dark appearance instead of the console's light appearance. |
+| AP-M15 | Removing the skin group produced zero of the ten required skin slots in both the unit and live frame assertions. |
+| AP-M17 | Forcing the section family to sans failed the unit mono comparison and the live Instrument family comparison. |
+| AP-M18 | Substituting the medium token for the large radius made Refined's popover 10 px instead of 14 px. |
+| AP-M19 | Removing the host label failed the unit assertion and showed the library's neutral text instead of the console's Aa label. |
+
+Each selected run exited 1 on a named assertion under the 4 096 process cap and the applicable 600 s or 900 s deadline. The source files were restored and compared to their saved copies.
+
+#### Desktop multi-figure redraw (D-9054)
+
+On the restored package, the four drawn figures sat 3 996.70, 2 528.44, 1 060.17 and 0 px from the viewport in document order. They started and replaced their SVGs in order `[3, 2, 1, 0]`, with four distinct Chromium tasks and the new node fill in each replacement. In the cancellation control, one older timer was held after the first old SVG replacement; the newer appearance then canceled the old queue and every figure finished with the newest node fill (`#434c5e`). The scoped ordinary run passed (one selected, 27 skipped, rc 0). After review, the witness traced both the starts and the SVG replacements, and took the final exact-count and paint snapshot after the released and scheduled zero-delay timers and temporary redraw stages drained. The restored four-file browser run passed (227 passes, one expected failure, 41 skips, rc 0). Each start and its corresponding replacement shared a Chromium task, with four distinct tasks across the four figures. Both AP-5 modes also passed again. Neither ordinary run measured gaps.
+
+| Mutation | Ordinary assertion result |
+|---|---|
+| AP-M28 | Two starts per task: four redraw markers in two Chromium tasks; failed the one-figure-per-task assertion. |
+| AP-M29 | Reversed the distance sort: observed `[0, 1, 2, 3]` instead of `[3, 2, 1, 0]`; failed nearest-first order. |
+| AP-M30 | Removed generation cancellation: after the newer appearance, observed `[2, 3, 1, 2, 0, 1]` instead of `[3, 2, 1, 0]`; failed the old-queue cancellation assertion. |
+
+Each mutant was built separately from the exact producer checkout with matching generated asset manifests. The browser ran with a 4 096 process cap and the 900 s deadline; each exited 1 on its named assertion, not the deadline. The five installed enhancer variants and both manifests were restored and SHA-256 checked after each run. No producer source or release change is needed for these ordinary rows. The quiet gap row and AP-M31 have no timing verdict yet.
+
+#### Docs tab carry after #3289 (2026-11-25)
+
+Main's Docs tab cases and Wave C's per-skin console rows were retained as separate witnesses. The appearance and open-cost fixtures now mark that they open in the console, rather than letting a direct URL choose a standalone Docs tab. The checked tap-target mount fake survived the merge. Post-carry typecheck exited 0; the four scoped unit files passed 196 tests, and the four ordinary browser files passed 241 tests with one expected failure and 41 skips (rc 0). Both AP-5 modes and the task/queue redraw checks passed on the carried build. The eight unchanged corrected-library console BASE pairs had a 0 px maximum delta. The standalone 412 × 915 Docs tab draws one bar with frame at 48 px and title at 56 px in both skins. Those are Chromium fixture measurements, not F's phone-engine evidence.
+
+#### Corrected desktop timing, attempt 1 (D-9030)
+
+Start and end loads were not captured in the original command. The coordinator measured a load of 9 to 11 during the run. The old harness exited 1 on three ceilings before the validity rule was written; those assertion results are not acceptance verdicts. All eight rows are invalid on BASE spread alone (IQR here uses the seventh minus the third sorted sample). D-9018 therefore has no verdict in any row.
+
+| Arm, skin, round | BASE → candidate median (ms) | Hosted delta or mode-only ratio | BASE IQR (ms) | Validity / verdict |
+|---|---:|---:|---:|---|
+| Hosted, Refined, 1 | 151.4 → 217.1 | +65.7 ms | 86.6 | Not measured: reference not quiet |
+| Hosted, Instrument, 1 | 175.3 → 135.1 | −40.2 ms | 80.4 | Not measured: reference not quiet |
+| Hosted, Refined, 2 | 139.7 → 116.7 | −23.0 ms | 72.5 | Not measured: reference not quiet |
+| Hosted, Instrument, 2 | 113.0 → 205.5 | +92.5 ms | 90.7 | Not measured: reference not quiet |
+| Mode-only, Refined, 1 | 133.9 → 171.5 | 1.281× | 113.6 | Not measured: reference not quiet |
+| Mode-only, Instrument, 1 | 134.8 → 132.6 | 0.984× | 105.9 | Not measured: reference not quiet |
+| Mode-only, Refined, 2 | 134.8 → 134.9 | 1.001× | 27.3 | Not measured: reference not quiet |
+| Mode-only, Instrument, 2 | 203.4 → 192.9 | 0.948× | 122.4 | Not measured: reference not quiet |
+
+At the local build-ahead cut, including the #3289 carry, no further paired attempt started below the D-9030 load threshold. The one-minute load after the final ordinary checks was 6.51. Both hosted skins and both mode-only skins remain unmeasured in rounds 1 and 2. The AP-5 light and dark ceilings, the multi-figure redraw-gap ceiling, and the AP-M27 and AP-M31 delay controls also remain unmeasured; their ordinary counterparts are not timing evidence. A quiet retake and F's phone/pixel checks are separate from this local proof.
+
+Raw samples, in open order, milliseconds displayed to a tenth; the harness log retains full precision:
+
+| Arm, skin, round | BASE samples | Candidate samples |
+|---|---|---|
+| Hosted, Refined, 1 | 198.1, 119.3, 151.4, 269.4, 199.5, 98.8, 81.6, 176.7, 111.5 | 318.4, 217.1, 320.4, 123.9, 229.7, 146.8, 113.9, 191.0, 243.0 |
+| Hosted, Instrument, 1 | 231.5, 252.9, 151.1, 289.0, 131.4, 208.7, 175.3, 135.9, 169.2 | 167.5, 130.0, 135.1, 106.8, 206.0, 153.7, 103.8, 106.0, 150.9 |
+| Hosted, Refined, 2 | 88.0, 139.7, 203.4, 207.2, 83.3, 185.9, 115.7, 113.4, 181.6 | 299.3, 173.1, 273.0, 116.7, 103.5, 104.4, 102.5, 144.9, 107.1 |
+| Hosted, Instrument, 2 | 216.3, 95.7, 138.1, 108.6, 286.9, 186.4, 113.0, 89.5, 86.1 | 318.6, 205.5, 375.7, 168.2, 151.2, 118.0, 203.0, 220.7, 265.9 |
+| Mode-only, Refined, 1 | 94.9, 208.5, 135.9, 564.5, 844.8, 81.1, 83.4, 100.2, 133.9 | 81.3, 171.5, 159.4, 210.8, 123.7, 209.9, 222.2, 150.0, 204.4 |
+| Mode-only, Instrument, 1 | 221.6, 189.8, 102.1, 107.6, 94.4, 134.8, 94.4, 208.0, 288.7 | 97.3, 111.7, 109.7, 265.4, 194.8, 132.6, 295.5, 375.5, 123.3 |
+| Mode-only, Refined, 2 | 321.8, 135.9, 138.5, 110.5, 111.2, 114.2, 134.8, 190.9, 103.8 | 186.8, 138.5, 134.9, 89.8, 93.8, 153.3, 123.4, 109.7, 143.8 |
+| Mode-only, Instrument, 2 | 210.9, 130.4, 115.8, 98.4, 305.2, 270.6, 203.4, 102.8, 238.2 | 122.0, 142.4, 172.5, 237.2, 96.7, 192.9, 204.8, 499.6, 313.5 |
+
+#### D-9030 amended timing, sitting 1 (2026-11-25)
+
+The four scheduled pre-amendment checks (5.81, 4.19, 6.76 and 9.18) started no tests. Under the amendment, sitting 1 ran from 11:50:03 to 11:58:37 UTC, one-minute load 6.87 → 11.15. The opening paired bracket ran at 7.14 → 15.12 (exit 0), the ceiling block passed three selected browser cases, both delay controls hit their intended assertions, and the closing bracket ran at 8.08 → 10.98 (exit 1 on an eligible BASE comparison). Neither bracket was quiet overall. The ceiling passes stand independently of its load.
+
+| Measurement | Start → end load | Reading | Outcome |
+|---|---:|---|---|
+| AP-5 light | 13.72 → 13.88 | Worst 49.5999 ms (`skin refined → instrument`), ceiling 100 ms | Pass |
+| AP-5 dark | 13.88 → 17.63 | Worst 19.5999 ms (`skin refined → instrument`), ceiling 100 ms | Pass |
+| Four-figure redraw | 17.63 → 19.02 | Consecutive gaps 49.2, 23.4, 23.2 ms, ceiling 200 ms | Pass |
+| AP-M27 | 18.12 → 11.24 | Worst 213.3999 ms (`Follow system → phosphor`), ceiling 100 ms | Intended assertion red |
+| AP-M31 | 8.74 → 10.40 | Consecutive gaps 286.9, 22.3, 20.8 ms, ceiling 200 ms | Intended assertion red |
+
+AP-5 logged 41 named transitions in each mode and 41 in AP-M27. In the worst normal light transition, the host stamp, operation send and frame write read 1795607586633.1, 1795607586681.0 and 1795607586682.7 ms; in dark they read 1795607637375.4, 1795607637394.4 and 1795607637395.0 ms. Each control ran with the measured 4 096 process cap and 900 s browser deadline and exited 1 on its named ceiling assertion. AP-M27 delayed the real port send; AP-M31 delayed the second real redraw timer by 250 ms in a scratch producer build with matching manifests. Both inputs were restored and SHA-256 checked before the closing paired run.
+
+| Paired row | Opening BASE → candidate median (ms); BASE IQR (ms); verdict | Closing BASE → candidate median (ms); BASE IQR (ms); verdict |
+|---|---|---|
+| `hosted:refined:1` | 106.3 → 133.0; IQR 45.8; invalid | 181.6 → 211.2; IQR 23.1; invalid |
+| `hosted:instrument:1` | 127.3 → 144.5; IQR 11.4; invalid | 194.7 → 214.6; IQR 10.9; invalid |
+| `hosted:refined:2` | 135.4 → 144.2; IQR 27.3; invalid | 191.9 → 228.2; IQR 36.7; invalid |
+| `hosted:instrument:2` | 208.9 → 329.0; IQR 273.0; invalid | 176.1 → 204.5; IQR 61.2; invalid |
+| `mode-only:refined:1` | 218.0 → 140.4; IQR 40.9; invalid | 101.2 → 105.2; IQR 6.8; **pass** |
+| `mode-only:instrument:1` | 95.0 → 96.6; IQR 9.0; **pass** | 95.1 → 107.2; IQR 11.5; **red** |
+| `mode-only:refined:2` | 138.5 → 157.6; IQR 33.1; invalid | Not reached |
+| `mode-only:instrument:2` | 125.9 → 120.4; IQR 80.9; invalid | Not reached |
+
+Under the rule in force at the sitting, the opening Instrument round 1 reading was an eligible 1.0168× pass. The closing reading also had an eligible BASE, but its 1.1272× exceeded the 1.10× ceiling (107.20 vs 104.61 ms). Both readings were reported immediately for a ruling. Closing also recorded an eligible Refined round 1 pass under that rule. No further timing, optimisation or release action followed the stop before the rule changed.
+
+The second D-9030 amendment sets aside the historical pass/red labels above, not the readings. **No paired row is yet decided.** The three eligible readings carry forward: two for mode-only Instrument round 1 and one for mode-only Refined round 1. The five non-paired results above are final and will not be repeated. BASE and candidate samples already alternated in both brackets with the lead reversed in round two; no sampling-order change was needed.
+
+| Paired row | Opening ratio | Closing ratio | Counted readings | Median counted ratio | Lowest counted BASE → candidate (ms) |
+|---|---:|---:|---:|---:|---:|
+| `hosted:refined:1` | 1.2512× (excluded) | 1.1630× (excluded) | 0 | — | — |
+| `hosted:instrument:1` | 1.1351× (excluded) | 1.1022× (excluded) | 0 | — | — |
+| `hosted:refined:2` | 1.0650× (excluded) | 1.1892× (excluded) | 0 | — | — |
+| `hosted:instrument:2` | 1.5749× (excluded) | 1.1613× (excluded) | 0 | — | — |
+| `mode-only:refined:1` | 0.6440× (excluded) | 1.0395× | 1 | 1.0395× | 101.20 → 105.20 |
+| `mode-only:instrument:1` | 1.0168× | 1.1272× | 2 | 1.0720× | 95.00 → 96.60 |
+| `mode-only:refined:2` | 1.1379× (excluded) | — | 0 | — | — |
+| `mode-only:instrument:2` | 0.9563× (excluded) | — | 0 | — | — |
+
+Raw paired samples, in open order, in milliseconds to a tenth:
+
+| Bracket | Row | BASE samples | Candidate samples |
+|---|---|---|---|
+| Opening | `hosted:refined:1` | 88.2, 87.6, 106.3, 99.2, 89.1, 231.8, 134.8, 196.0, 134.9 | 118.5, 111.4, 115.5, 119.1, 133.0, 222.0, 176.9, 193.0, 207.5 |
+| Opening | `hosted:instrument:1` | 163.6, 130.9, 135.5, 125.9, 124.1, 153.3, 122.7, 127.3, 98.4 | 282.5, 143.8, 281.7, 144.5, 212.1, 139.1, 172.8, 129.1, 143.9 |
+| Opening | `hosted:refined:2` | 133.0, 139.2, 137.6, 137.4, 144.6, 135.4, 110.3, 94.0, 82.0 | 198.2, 190.7, 266.1, 113.2, 144.2, 100.7, 152.7, 92.7, 106.5 |
+| Opening | `hosted:instrument:2` | 85.5, 108.2, 90.0, 114.7, 208.9, 365.3, 499.7, 381.2, 400.0 | 104.2, 105.6, 101.1, 275.7, 426.3, 390.4, 622.2, 329.0, 374.7 |
+| Opening | `mode-only:refined:1` | 312.0, 218.0, 194.5, 223.1, 207.5, 235.4, 250.3, 103.4, 151.9 | 280.0, 210.2, 140.4, 138.2, 296.6, 211.5, 117.5, 124.8, 103.8 |
+| Opening | `mode-only:instrument:1` | 95.0, 94.4, 85.3, 97.1, 84.1, 96.2, 101.0, 125.5, 88.1 | 96.6, 84.5, 97.0, 88.1, 88.5, 100.6, 100.5, 96.6, 99.8 |
+| Opening | `mode-only:refined:2` | 120.1, 138.5, 153.2, 128.7, 99.3, 222.6, 146.7, 233.2, 113.4 | 98.9, 173.8, 139.8, 152.3, 157.6, 253.4, 133.5, 293.0, 175.1 |
+| Opening | `mode-only:instrument:2` | 115.3, 101.3, 125.9, 262.5, 142.3, 182.2, 88.8, 183.7, 90.6 | 119.4, 101.2, 114.2, 193.1, 114.7, 132.2, 120.4, 194.4, 167.4 |
+| Closing | `hosted:refined:1` | 208.8, 154.0, 181.8, 183.7, 161.4, 160.6, 155.8, 249.6, 181.6 | 239.8, 205.6, 271.8, 154.9, 211.2, 209.5, 262.3, 201.4, 220.6 |
+| Closing | `hosted:instrument:1` | 192.3, 202.0, 146.5, 224.2, 208.9, 202.7, 191.8, 187.3, 194.7 | 214.6, 211.9, 208.3, 249.6, 200.3, 252.0, 280.2, 228.4, 206.6 |
+| Closing | `hosted:refined:2` | 215.2, 228.3, 191.9, 140.5, 204.4, 190.4, 227.2, 165.8, 178.5 | 203.2, 228.2, 229.9, 220.5, 306.8, 197.5, 255.8, 309.3, 219.1 |
+| Closing | `hosted:instrument:2` | 154.2, 255.3, 176.1, 182.2, 191.9, 299.3, 130.7, 82.6, 109.7 | 204.5, 270.9, 218.3, 211.6, 195.8, 217.2, 135.3, 114.2, 115.2 |
+| Closing | `mode-only:refined:1` | 225.6, 98.5, 88.6, 105.3, 103.4, 98.5, 85.6, 109.5, 101.2 | 198.1, 207.0, 95.8, 120.0, 105.8, 102.0, 96.9, 105.2, 90.2 |
+| Closing | `mode-only:instrument:1` | 99.7, 106.3, 94.8, 92.5, 93.6, 126.6, 95.1, 94.9, 119.4 | 221.1, 111.8, 97.4, 127.8, 107.2, 102.5, 96.0, 94.1, 112.2 |
+
+#### D-9030 paired timing, sitting 2 (2026-11-25)
+
+The sitting ran from 12:45:13 to 12:48:58 UTC, one-minute load 10.46 → 37.66. The opening bracket logged 9.41 → 37.66 and exited 1: a 90 s wait for the ready witness expired during `mode-only:refined:1`, after all four hosted rows logged. The log does not identify which arm or sample timed out. No mode-only row produced medians. This was not a timing-budget assertion and does not show why the witness was absent. The closing bracket was not run; none of the five settled non-paired cases was repeated.
+
+| Paired row | BASE → candidate median (ms) | BASE IQR (ms) | Reading ratio |
+|---|---:|---:|---:|
+| `hosted:refined:1` | 245.00 → 286.80 | 81.20 | 1.1706× (excluded) |
+| `hosted:instrument:1` | 275.80 → 280.30 | 149.20 | 1.0163× (excluded) |
+| `hosted:refined:2` | 204.80 → 233.30 | 81.50 | 1.1392× (excluded) |
+| `hosted:instrument:2` | 315.80 → 334.70 | 89.30 | 1.0598× (excluded) |
+
+All four recorded BASE arms missed both bounds. No counted median or ratio changed, and **all eight rows remain undecided**. Raw samples from the four completed rows, in open order, in milliseconds to a tenth:
+
+| Paired row | BASE samples | Candidate samples |
+|---|---|---|
+| `hosted:refined:1` | 245.0, 207.0, 332.2, 120.6, 290.8, 266.7, 204.9, 235.9, 288.2 | 479.4, 317.9, 301.7, 265.0, 266.6, 286.8, 218.2, 221.9, 314.5 |
+| `hosted:instrument:1` | 275.8, 401.3, 311.8, 297.5, 282.3, 112.4, 204.5, 148.3, 128.1 | 396.4, 275.3, 280.3, 514.3, 236.1, 155.3, 195.6, 290.1, 293.0 |
+| `hosted:refined:2` | 224.9, 244.0, 162.5, 119.0, 204.8, 317.4, 194.0, 93.3, 291.3 | 303.6, 233.4, 233.3, 106.5, 129.4, 315.2, 188.7, 235.2, 197.5 |
+| `hosted:instrument:2` | 315.8, 319.7, 297.9, 393.6, 244.2, 340.0, 211.0, 250.7, 480.6 | 384.6, 294.3, 399.8, 227.4, 334.7, 287.4, 334.7, 491.3, 308.2 |
+
+#### D-9030 final method, sitting 1 of at most 4 (2026-11-25)
+
+The start check was 12.53 at 13:08:54 UTC; the sitting ended at 13:14:24 UTC at 11.68. The browser bracket ran at 11.76 → 11.68 and exited 0 with all 12 rows, 20 pairs apiece. The BASE/BASE control excluded the sitting: three of the four control ratios were outside [0.97, 1.03]. **All eight comparisons remain undecided.** In particular, the below-budget figures in the table are not passes. All decisions used the full-precision receipt, not the displayed rounding.
+
+| Row | Median BASE (ms) | Median paired difference (ms) | Median paired ratio | Outcome |
+|---|---:|---:|---:|---|
+| `control:opening:refined` | 288.90 | −47.05 | 0.845492× | Outside |
+| `control:opening:instrument` | 191.80 | +10.10 | 1.055437× | Outside |
+| `hosted:refined:1` | 168.80 | −7.65 | 0.954181× | Not counted |
+| `hosted:instrument:1` | 96.35 | +28.80 | 1.344848× | Not counted |
+| `hosted:refined:2` | 86.90 | +14.05 | 1.157013× | Not counted |
+| `hosted:instrument:2` | 113.45 | +14.85 | 1.146395× | Not counted |
+| `mode-only:refined:1` | 104.70 | +1.65 | 1.016526× | Not counted |
+| `mode-only:instrument:1` | 91.40 | −2.05 | 0.982281× | Not counted |
+| `mode-only:refined:2` | 91.00 | −0.40 | 0.995056× | Not counted |
+| `mode-only:instrument:2` | 99.35 | −0.25 | 1.001976× | Not counted |
+| `control:closing:refined` | 147.15 | +2.00 | 1.015249× | Within |
+| `control:closing:instrument` | 161.45 | −5.60 | 0.969605× | Outside |
+
+Raw pairs are shown in sampling order, always `BASE/second arm` in milliseconds to a tenth, regardless of which arm led:
+
+| Row | Open-to-ready pairs |
+|---|---|
+| `control:opening:refined` | 202.0/203.6, 399.0/150.6, 290.8/215.9, 318.5/291.5, 220.9/281.4, 143.4/199.6, 318.2/303.4, 224.7/272.0, 317.0/126.1, 255.5/188.4, 230.3/210.5, 197.9/226.9, 186.0/197.1, 396.0/300.4, 317.5/211.2, 291.3/131.8, 402.6/304.9, 277.1/294.2, 393.2/305.5, 287.0/203.2 |
+| `control:opening:instrument` | 230.2/352.0, 169.7/198.0, 131.9/219.2, 225.2/93.8, 133.6/138.8, 184.2/134.3, 108.3/104.2, 153.5/199.0, 176.1/206.8, 155.2/135.5, 244.5/301.2, 143.8/208.5, 154.7/131.2, 249.9/189.9, 199.4/287.7, 347.8/308.2, 218.2/233.9, 305.3/170.3, 366.2/309.0, 201.9/216.9 |
+| `hosted:refined:1` | 144.9/254.5, 283.9/170.3, 438.8/260.1, 178.5/208.9, 288.6/215.8, 114.5/225.2, 171.2/119.9, 196.6/282.9, 286.6/172.5, 175.7/257.5, 218.3/174.5, 119.8/278.4, 166.4/150.6, 150.9/151.4, 82.5/125.2, 194.2/100.2, 135.7/214.1, 121.5/156.0, 135.2/100.3, 127.1/103.5 |
+| `hosted:instrument:1` | 118.1/255.2, 88.4/151.1, 90.6/145.7, 201.8/200.4, 180.9/248.5, 163.8/249.6, 84.5/107.0, 146.7/130.9, 150.4/104.2, 85.7/137.3, 89.4/108.0, 115.0/157.8, 133.4/145.1, 100.1/143.9, 82.7/118.7, 92.7/109.0, 83.1/108.3, 100.0/102.8, 82.8/115.2, 75.9/100.0 |
+| `hosted:refined:2` | 83.3/100.2, 81.2/92.5, 86.4/112.5, 80.3/101.8, 93.9/103.1, 89.1/104.0, 97.9/96.0, 80.0/101.9, 89.6/97.2, 83.3/94.1, 107.7/94.5, 87.4/92.8, 81.7/96.5, 90.6/103.9, 82.4/102.6, 83.9/94.0, 83.7/93.6, 95.8/113.6, 92.1/154.8, 105.1/149.5 |
+| `hosted:instrument:2` | 134.2/144.8, 102.6/135.7, 141.0/118.1, 102.1/115.5, 112.4/117.9, 109.7/118.0, 100.9/117.2, 112.2/105.3, 94.1/128.5, 87.8/174.4, 135.6/135.7, 146.1/155.2, 114.5/193.3, 128.7/179.7, 128.8/156.4, 163.7/156.7, 91.3/111.5, 126.3/131.5, 96.4/128.8, 115.2/136.8 |
+| `mode-only:refined:1` | 110.7/122.2, 144.4/112.7, 108.1/93.6, 134.7/175.3, 128.6/133.8, 95.4/132.6, 79.0/96.8, 84.9/100.9, 102.9/84.2, 106.5/100.3, 100.4/102.3, 86.6/100.9, 90.6/85.1, 119.0/84.4, 117.0/130.4, 93.7/88.3, 107.8/90.7, 107.4/92.2, 84.9/89.2, 99.1/100.5 |
+| `mode-only:instrument:1` | 85.4/97.1, 79.1/96.8, 90.0/102.3, 134.0/99.9, 120.1/90.8, 110.3/85.9, 111.9/107.2, 145.0/97.2, 120.7/98.4, 92.5/93.5, 89.7/90.6, 85.5/86.4, 91.4/92.0, 125.1/86.4, 95.5/85.0, 82.5/85.5, 85.9/87.6, 91.4/84.4, 78.0/101.8, 89.9/80.4 |
+| `mode-only:refined:2` | 91.1/86.1, 83.3/87.5, 83.4/88.5, 96.6/106.1, 92.3/92.2, 90.9/82.9, 95.7/93.9, 104.2/88.1, 81.0/82.0, 78.7/87.5, 91.4/86.9, 87.4/88.9, 79.5/78.8, 92.1/95.9, 85.5/85.6, 96.3/83.5, 77.3/91.1, 94.7/85.0, 92.8/84.1, 87.1/80.8 |
+| `mode-only:instrument:2` | 82.2/78.4, 78.2/91.0, 82.9/87.7, 88.3/84.7, 88.8/92.9, 99.9/82.3, 82.6/83.8, 75.6/95.6, 98.8/86.0, 116.1/87.7, 93.3/96.7, 91.5/94.4, 122.5/124.0, 195.5/152.5, 205.0/203.3, 195.3/211.7, 100.2/195.5, 141.2/116.8, 195.1/154.0, 207.3/197.2 |
+| `control:closing:refined` | 174.5/182.6, 159.9/169.4, 124.7/126.6, 137.6/139.7, 147.8/174.3, 176.5/150.8, 141.9/130.4, 90.7/121.7, 111.6/126.5, 179.4/107.3, 130.1/129.3, 146.5/222.5, 154.0/149.8, 150.9/145.1, 171.6/142.2, 115.4/112.6, 231.7/413.3, 158.9/131.6, 130.1/137.5, 137.7/520.7 |
+| `control:closing:instrument` | 709.6/289.1, 292.9/220.2, 110.7/1618.9, 162.1/127.8, 118.7/147.5, 157.2/119.6, 136.2/142.1, 123.7/494.9, 297.3/294.5, 309.1/494.9, 706.0/288.9, 142.2/226.7, 213.7/197.4, 213.7/206.2, 225.9/203.5, 186.3/195.9, 119.7/145.9, 142.6/132.5, 144.0/140.3, 160.8/120.1 |
+
+#### D-9030 final method, sitting 2 of at most 4 (2026-11-25)
+
+The start check was 8.99 at 14:01:27 UTC; the sitting ended at 14:04:52 UTC at 14.56. The browser bracket ran at 9.44 → 14.56 and exited 1. The candidate arm of pair 9 in `hosted:instrument:1` hit the 90 s ready-witness timeout after eight complete pairs. Both opening controls were within range, but neither closing control ran. The timeout excludes this sitting: **all eight comparisons remain undecided**. The completed hosted Refined row is evidence only; the load observations do not establish the cause of the timeout.
+
+| Completed row | Median BASE (ms) | Median paired difference (ms) | Median paired ratio | Outcome |
+|---|---:|---:|---:|---|
+| `control:opening:refined` | 96.75 | +1.10 | 1.011476× | Within |
+| `control:opening:instrument` | 89.05 | +1.15 | 1.013338× | Within |
+| `hosted:refined:1` | 116.00 | +24.05 | 1.165747× | Not counted |
+
+Completed pairs, in sampling order (`BASE/second arm`, milliseconds to a tenth). The interrupted row has no 20-pair statistic.
+
+| Row | Open-to-ready pairs |
+|---|---|
+| `control:opening:refined` | 92.9/87.9, 96.3/99.6, 97.5/105.6, 83.4/142.5, 116.1/98.9, 144.7/86.7, 108.0/122.6, 85.5/92.9, 86.7/130.2, 84.3/81.4, 87.4/81.0, 97.2/96.1, 112.8/111.1, 103.3/127.8, 127.9/103.6, 264.3/95.5, 182.1/146.9, 90.0/102.4, 87.7/104.0, 84.0/94.8 |
+| `control:opening:instrument` | 115.1/81.1, 94.9/87.6, 86.1/88.3, 91.5/94.2, 105.1/78.3, 89.0/89.1, 130.8/109.6, 88.9/98.5, 79.6/122.0, 76.9/79.2, 181.6/96.3, 81.7/92.4, 92.6/90.9, 75.1/116.2, 82.1/79.7, 77.0/81.0, 81.6/84.3, 104.1/111.3, 89.1/78.6, 91.1/81.7 |
+| `hosted:refined:1` | 113.5/93.7, 95.6/104.6, 106.8/134.3, 108.1/194.7, 82.2/144.6, 108.4/120.6, 118.5/135.9, 101.3/204.7, 137.9/133.2, 89.8/175.9, 94.3/217.9, 128.0/94.2, 107.9/204.5, 212.2/155.1, 279.5/301.6, 140.8/166.8, 311.8/198.7, 269.3/174.4, 137.2/413.9, 148.2/198.9 |
+| `hosted:instrument:1` | 514.9/418.4, 216.7/572.5, 299.9/494.4, 397.3/6785.1, 393.5/587.0, 372.4/487.8, 494.9/688.7, 687.2/499.5 |
+
+#### D-9030 final method, sitting 3 of at most 4 (2026-11-25)
+
+The start check was 9.59 at 14:52:41 UTC; the sitting ended at 14:56:15 UTC at 12.71. The browser bracket ran at 8.29 → 12.71 and exited 1. The candidate arm of pair 5 in `mode-only:refined:1` hit the 90 s ready-witness timeout after four complete pairs. Both opening controls were within range, but neither closing control ran. The timeout excludes this sitting: **all eight comparisons remain undecided**. All four hosted rows completed, but their below-budget figures are evidence only, not passes. The cause of the timeout was not established.
+
+| Completed row | Median BASE (ms) | Median paired difference (ms) | Median paired ratio | Outcome |
+|---|---:|---:|---:|---|
+| `control:opening:refined` | 95.65 | −0.50 | 1.000598× | Within |
+| `control:opening:instrument` | 80.05 | +1.00 | 1.011291× | Within |
+| `hosted:refined:1` | 82.80 | +15.50 | 1.176311× | Not counted |
+| `hosted:instrument:1` | 85.30 | +15.85 | 1.171510× | Not counted |
+| `hosted:refined:2` | 90.70 | +14.20 | 1.170265× | Not counted |
+| `hosted:instrument:2` | 101.50 | +15.00 | 1.133921× | Not counted |
+
+Completed pairs in sampling order (`BASE/second arm`, milliseconds to a tenth). The interrupted row has no 20-pair statistic.
+
+| Row | Open-to-ready pairs |
+|---|---|
+| `control:opening:refined` | 122.8/129.0, 114.2/120.4, 116.2/112.8, 79.6/117.1, 132.7/122.7, 94.9/114.5, 97.6/109.2, 115.2/97.2, 106.9/93.0, 96.4/149.3, 141.9/89.7, 78.8/81.2, 89.3/85.1, 92.3/78.8, 88.9/103.7, 91.9/77.8, 73.3/104.0, 75.7/86.6, 93.7/89.2, 98.9/81.1 |
+| `control:opening:instrument` | 76.6/90.8, 78.8/77.3, 79.9/76.3, 79.3/84.5, 79.1/75.7, 79.4/91.5, 76.7/85.8, 86.8/79.0, 78.6/85.8, 74.3/81.1, 116.0/93.4, 85.5/78.8, 86.0/81.4, 84.3/80.1, 84.1/87.6, 81.7/79.6, 76.7/88.5, 80.2/85.4, 107.3/79.6, 81.3/88.0 |
+| `hosted:refined:1` | 109.9/100.1, 80.4/99.3, 81.4/102.9, 82.7/97.2, 77.0/105.0, 86.9/92.4, 99.2/101.8, 85.4/109.7, 87.8/96.7, 81.7/94.1, 79.8/97.2, 82.9/104.1, 86.3/101.6, 102.2/120.0, 120.4/100.8, 82.1/102.9, 78.3/94.0, 85.3/94.9, 81.2/94.9, 76.1/105.4 |
+| `hosted:instrument:1` | 89.1/106.2, 113.6/130.4, 85.1/95.0, 80.0/105.0, 85.9/92.5, 84.8/103.7, 78.6/97.0, 100.4/127.2, 108.3/102.9, 80.0/93.5, 91.6/100.7, 87.1/89.7, 83.5/94.0, 79.5/109.1, 133.2/104.0, 81.0/106.1, 80.1/103.5, 76.1/107.8, 85.5/100.4, 119.7/95.5 |
+| `hosted:refined:2` | 90.3/105.5, 88.3/94.2, 105.2/106.9, 97.5/174.4, 80.1/106.3, 108.8/121.6, 88.2/103.8, 185.7/101.4, 91.1/99.8, 92.3/126.8, 81.9/101.8, 82.6/182.9, 96.6/150.9, 85.5/95.9, 81.5/95.9, 115.6/95.2, 82.0/143.8, 106.8/98.9, 94.2/99.1, 81.3/95.3 |
+| `hosted:instrument:2` | 167.9/101.0, 85.3/120.5, 100.0/96.9, 79.9/113.3, 84.7/93.9, 94.4/97.2, 103.1/157.1, 123.3/107.3, 114.4/100.8, 83.6/121.4, 103.0/119.4, 84.5/160.8, 75.9/114.2, 87.0/147.1, 91.7/183.2, 128.0/141.6, 146.7/114.9, 121.8/216.8, 163.8/146.7, 164.0/122.2 |
+| `mode-only:refined:1` | 84.1/103.3, 104.4/111.9, 92.1/80.7, 138.1/187.5 |
+
+#### D-9030 final method, sitting 4 of 4 (2026-11-25)
+
+The start check was 8.10 at 15:43:25 UTC; the sitting ended at 15:47:10 UTC at 14.87. The browser bracket ran at 9.03 → 14.87 and completed all 240 pairs (exit 0). Three of four BASE/BASE controls were outside the inclusive [0.97, 1.03] band. The opening Instrument control was below the band at 0.9679959724328056×; rounding to two decimal places would hide the miss. The four hosted figures were below 30 ms, and the mode-only Instrument round-two figure was above 1.10×, but neither is a timing verdict without valid controls.
+
+**All eight comparisons remained undecided at the initial four-sitting cap.** Sittings 1 and 4 completed with out-of-band controls; sittings 2 and 3 ended at the ready wait without closing controls. The separate live-follow and redraw results are unchanged.
+
+| Completed row | Median BASE (ms) | Median paired difference (ms) | Median paired ratio | Outcome |
+|---|---:|---:|---:|---|
+| `control:opening:refined` | 92.20 | +1.85 | 1.019391× | Within |
+| `control:opening:instrument` | 101.65 | −2.80 | 0.967996× | Outside |
+| `hosted:refined:1` | 100.65 | +17.70 | 1.183288× | Not counted |
+| `hosted:instrument:1` | 96.35 | +20.55 | 1.220365× | Not counted |
+| `hosted:refined:2` | 86.20 | +17.75 | 1.205767× | Not counted |
+| `hosted:instrument:2` | 84.40 | +16.60 | 1.204474× | Not counted |
+| `mode-only:refined:1` | 87.20 | +0.25 | 1.002860× | Not counted |
+| `mode-only:instrument:1` | 80.30 | +0.25 | 1.003176× | Not counted |
+| `mode-only:refined:2` | 82.25 | +2.20 | 1.026554× | Not counted |
+| `mode-only:instrument:2` | 84.45 | +8.95 | 1.111888× | Not counted |
+| `control:closing:refined` | 83.30 | +5.60 | 1.067639× | Outside |
+| `control:closing:instrument` | 87.35 | −3.30 | 0.960134× | Outside |
+
+Completed pairs in sampling order (`BASE/second arm`, milliseconds to a tenth).
+
+| Row | Open-to-ready pairs |
+|---|---|
+| `control:opening:refined` | 98.8/100.6, 99.1/85.3, 83.5/170.1, 83.6/89.6, 89.3/86.8, 83.3/80.5, 83.9/93.0, 85.2/91.6, 91.3/90.0, 92.9/90.2, 89.2/144.5, 123.6/133.9, 135.9/135.8, 145.3/111.7, 92.0/116.5, 92.4/94.3, 89.1/100.6, 120.4/101.9, 106.9/121.0, 150.9/112.0 |
+| `control:opening:instrument` | 127.4/107.4, 150.6/138.4, 120.5/95.6, 157.1/129.5, 147.5/201.6, 104.6/324.2, 98.7/187.4, 127.9/115.8, 170.7/157.9, 114.4/163.1, 88.1/80.7, 98.0/79.1, 123.7/81.3, 87.8/83.1, 85.4/87.5, 85.9/85.0, 81.3/84.0, 82.0/81.8, 83.6/93.4, 83.5/99.0 |
+| `hosted:refined:1` | 92.0/110.0, 87.9/107.5, 92.5/103.3, 76.6/99.8, 100.0/121.9, 101.3/137.9, 88.6/110.5, 112.2/116.2, 99.4/126.6, 136.8/106.8, 111.5/116.0, 84.9/130.3, 271.0/132.7, 94.8/100.5, 104.2/198.6, 110.5/108.2, 101.8/119.2, 107.3/109.5, 86.1/111.3, 108.3/116.8 |
+| `hosted:instrument:1` | 106.8/112.3, 83.4/102.0, 112.5/107.2, 78.2/117.6, 88.9/128.0, 119.7/113.4, 106.2/113.1, 90.8/126.0, 109.2/129.4, 82.4/173.7, 123.0/100.9, 79.2/91.6, 104.0/166.6, 96.0/116.9, 96.7/112.4, 95.0/113.4, 92.7/120.6, 108.1/184.2, 98.1/186.5, 79.2/136.8 |
+| `hosted:refined:2` | 89.6/192.6, 99.2/126.6, 100.0/106.5, 121.0/137.7, 86.0/102.8, 82.8/104.2, 94.3/103.3, 75.8/106.6, 126.1/102.6, 92.5/102.8, 90.3/98.9, 81.8/108.5, 83.8/113.9, 79.1/132.7, 79.8/100.6, 81.4/96.0, 86.5/105.2, 86.4/98.5, 82.2/142.5, 79.6/93.5 |
+| `hosted:instrument:2` | 87.7/102.8, 77.6/107.2, 84.7/100.2, 95.5/97.0, 79.3/99.9, 114.7/152.3, 81.8/119.9, 90.5/99.6, 74.9/116.1, 84.1/101.2, 102.5/101.2, 87.1/93.5, 77.8/98.4, 101.2/108.8, 82.9/100.8, 78.3/94.4, 90.8/126.2, 81.9/113.0, 85.3/97.2, 80.5/96.5 |
+| `mode-only:refined:1` | 100.8/78.6, 126.4/79.4, 87.0/77.3, 85.1/92.6, 82.1/75.3, 97.9/81.5, 77.9/93.8, 81.2/79.7, 89.5/78.6, 87.4/87.9, 83.5/83.5, 74.1/83.9, 95.5/90.2, 84.4/88.5, 85.1/87.5, 84.0/103.2, 123.8/135.0, 127.7/120.8, 98.7/118.0, 94.0/103.7 |
+| `mode-only:instrument:1` | 78.5/78.4, 80.9/81.8, 83.2/77.1, 84.3/80.3, 99.8/82.4, 78.3/89.2, 78.1/78.7, 86.4/80.7, 81.9/130.9, 80.2/79.3, 79.9/80.6, 80.8/82.3, 82.9/78.1, 126.8/78.6, 78.7/79.3, 80.0/78.0, 80.4/102.0, 77.7/84.6, 75.4/87.2, 78.6/78.5 |
+| `mode-only:refined:2` | 75.6/83.1, 79.7/89.2, 80.3/82.3, 80.5/91.8, 82.1/85.1, 89.2/87.7, 87.4/82.7, 81.2/104.5, 82.8/79.0, 83.6/79.2, 198.7/85.8, 97.9/84.9, 80.3/85.3, 85.1/87.5, 82.1/86.4, 82.7/73.9, 86.9/88.3, 80.3/98.1, 80.2/83.9, 82.4/82.9 |
+| `mode-only:instrument:2` | 78.5/87.9, 89.7/87.9, 76.9/84.9, 85.6/115.6, 101.6/89.3, 101.1/79.7, 83.5/90.2, 92.9/122.3, 78.5/102.8, 82.7/83.0, 85.9/97.1, 74.5/117.0, 82.1/137.8, 85.5/110.4, 82.0/106.9, 75.7/118.1, 119.6/128.1, 85.4/77.6, 101.5/85.6, 82.3/75.2 |
+| `control:closing:refined` | 83.1/85.7, 75.3/91.8, 117.6/119.2, 79.7/87.5, 164.5/106.0, 169.6/140.0, 82.0/91.1, 92.8/78.4, 83.5/89.8, 79.0/113.2, 80.4/137.0, 78.7/86.0, 82.2/137.9, 84.7/83.2, 130.3/88.3, 82.4/97.2, 81.9/86.8, 154.3/79.4, 125.1/89.5, 106.9/132.9 |
+| `control:closing:instrument` | 148.0/207.1, 88.5/88.2, 114.9/107.3, 218.9/170.6, 83.7/123.6, 86.2/101.7, 79.3/130.9, 83.0/75.3, 84.3/76.5, 78.3/83.0, 90.0/76.2, 103.9/81.7, 85.8/100.5, 72.9/74.8, 89.5/93.7, 126.7/76.4, 83.3/78.7, 137.1/88.6, 81.6/79.6, 126.3/78.8 |
+
+#### D-9030 close-out disposition (2026-11-25)
+
+None of the four final-form sittings counted: two ended at the ready wait and two completed with controls outside [0.97, 1.03]. **All eight comparisons are undecided, not passed and not red.** They no longer hold Wave C and carry to programme acceptance. At close-out, take the same eight rows and four BASE/BASE controls again in the same form and apply the same verdict rules before calling the programme done.
+
+Sitting 4 is evidence only and decides nothing. The four hosted rows were 16.60–20.55 ms over BASE against the 30 ms budget, while the BASE/BASE controls' median paired differences were at most 5.60 ms in absolute value. Three mode-only ratios were 1.003–1.027×; Instrument round two was 1.112× against 1.10×, in a sitting whose Instrument closing control was 0.960×. The coordinator will flag that comparison to the reviewer.
+
+While waiting for publication, D-9030 permits at most eight timer checks at least 90 minutes apart and at most four more sittings, with a preflight of 6 or under. The sampling and verdict rules are unchanged, as is the publication and final-pin hold.
+
+#### D-9030 publication wait, check 1 of 8 and optional sitting 1 of 4 (2026-11-25)
+
+The one-minute preflight was 5.27 at 17:22:06 UTC. The sitting started at 17:22:18 UTC, with an opening bracket load of 5.04, and ended at 17:25:15 UTC at a process endpoint load of 16.35. The test runner exited 1 after its worker received `SIGKILL`. There was no ready-timeout record, closing bracket load, or closing control. The last completed comparison was mode-only Refined round one; the interrupted pair and arm, and the cause of the signal, were not established. This uses one optional sitting but is not counted. **All eight comparisons remain undecided.**
+
+| Completed row | Median BASE (ms) | Median paired difference (ms) | Median paired ratio | Outcome |
+|---|---:|---:|---:|---|
+| `control:opening:refined` | 79.70 | +0.90 | 1.011513× | Within |
+| `control:opening:instrument` | 83.25 | −0.55 | 0.993007× | Within |
+| `hosted:refined:1` | 80.90 | +17.55 | 1.224925× | Not counted |
+| `hosted:instrument:1` | 81.55 | +16.20 | 1.214072× | Not counted |
+| `hosted:refined:2` | 86.00 | +14.30 | 1.162276× | Not counted |
+| `hosted:instrument:2` | 94.55 | +16.30 | 1.186129× | Not counted |
+| `mode-only:refined:1` | 139.40 | −5.75 | 0.932133× | Not counted |
+
+Completed pairs in sampling order (`BASE/second arm`, milliseconds to a tenth).
+
+| Row | Open-to-ready pairs |
+|---|---|
+| `control:opening:refined` | 83.6/85.1, 76.0/80.1, 78.7/79.1, 79.5/79.3, 79.9/78.3, 93.6/83.2, 76.7/74.1, 77.3/74.1, 74.1/84.3, 77.3/80.0, 81.1/75.0, 74.9/77.0, 75.4/76.8, 81.3/77.4, 80.2/72.8, 85.7/89.1, 93.6/92.4, 83.1/106.4, 80.2/83.8, 78.3/94.4 |
+| `control:opening:instrument` | 87.3/78.3, 78.7/78.2, 79.5/90.4, 80.3/78.8, 83.0/78.7, 79.4/85.1, 83.6/78.5, 87.7/79.7, 98.6/83.0, 76.5/80.2, 84.2/78.0, 83.5/81.8, 87.5/90.5, 76.3/81.5, 78.1/80.3, 78.6/78.0, 83.7/104.5, 78.8/88.1, 97.6/90.6, 92.3/102.3 |
+| `hosted:refined:1` | 86.2/106.3, 80.4/98.3, 95.9/104.0, 83.1/95.6, 76.7/95.3, 86.6/99.9, 82.2/99.0, 76.5/95.0, 77.1/97.1, 74.2/95.4, 78.7/93.9, 80.6/91.2, 81.2/101.9, 81.4/101.7, 87.6/93.5, 74.4/93.0, 82.3/90.8, 73.8/92.4, 89.4/88.6, 75.7/92.9 |
+| `hosted:instrument:1` | 74.8/89.3, 90.8/90.0, 75.3/98.3, 74.5/96.8, 77.2/98.7, 84.2/89.7, 73.0/92.7, 86.4/96.4, 78.2/88.7, 76.4/94.3, 88.5/124.9, 123.8/93.9, 96.2/105.9, 89.3/113.6, 81.4/95.8, 106.5/103.6, 81.7/102.5, 81.2/109.5, 85.2/98.9, 80.5/99.6 |
+| `hosted:refined:2` | 82.7/94.8, 84.4/98.3, 85.7/99.4, 94.3/109.0, 79.2/96.6, 86.0/107.5, 77.5/92.8, 117.6/99.4, 91.8/100.7, 92.6/112.6, 83.9/101.8, 96.7/109.2, 82.2/104.4, 79.9/104.5, 89.6/99.1, 87.5/103.0, 91.6/95.4, 86.0/96.8, 83.9/109.2, 89.5/102.8 |
+| `hosted:instrument:2` | 84.9/116.8, 93.0/102.5, 96.4/108.7, 89.1/127.2, 82.8/113.8, 89.4/100.1, 109.0/109.2, 97.6/99.2, 102.0/110.5, 89.1/121.7, 83.8/99.3, 91.3/108.4, 96.8/111.7, 93.3/101.5, 91.7/103.2, 142.4/292.9, 95.8/116.7, 210.8/427.5, 222.8/401.3, 130.6/390.2 |
+| `mode-only:refined:1` | 210.7/220.5, 155.6/300.6, 198.3/164.1, 226.2/99.8, 193.1/480.7, 176.8/225.8, 176.6/120.8, 117.0/88.8, 103.4/90.1, 100.5/114.6, 117.8/86.5, 84.0/84.1, 81.7/76.6, 78.7/79.3, 87.3/80.9, 130.6/93.2, 299.2/138.9, 148.2/184.6, 201.2/176.9, 85.7/130.5 |
+
+#### D-9030 publication wait, final optional totals (2026-11-26)
+
+Eight one-minute load checks yielded 5.27, 14.90, 8.75, 28.27, 13.09, 11.20, 22.20 and 8.75, in order. The final check at 04:05:31 UTC was above 6, so no browser started. Only the first check qualified. Its interrupted run was the only optional sitting and did not count: **eight checks, one sitting, zero counted**. No further optional check or sitting is planned. All eight comparisons remain undecided, not passed and not red; they carry to programme acceptance under the unchanged method and no longer hold Wave C. The separate publication and final-pin hold remains.
+
+#### Wave C local main absorption (2026-11-26)
+
+- Merged `86a8c90390fda4cc388c07bb5b3342adf610a1bc` once, locally, at `5081e50dc0fa4335a5aecf9fc2fe83b1c4d92b67`. The only conflict was the rich-reader spec's M8.10 row: the resolution keeps main's review-page guard clause and Wave C's package rename. Main's PDF dependency (`pdfjs-dist` 6.5.438) stays intact; the committed reader pin is still `@synapsium-labs/docserver` 1.1.0. The corrected `@synapsium-labs/pinax-lib` 1.2.0 candidate remains installed unsaved.
+- The new offered-command guard reproduced one failure (five other checks passed): Wave C's static Aa label was read as a CLI verb. Ask 594 fixes those words. A separate test-only commit, `2baae355cdcedbef12cfbe4d7b016d80faab5653`, adds the documented allowance for that sentence, not for the word everywhere. The guard then passed all six checks. No label or scan rule changed.
+- The first preflight measured a one-minute load of 18.90; no browser started. At the next wake, both AP-3 cases passed in one isolated built-PWA run (light over stale dark and Phosphor over stale light), with one-minute load 5.52 → 4.51. The first-ready mismatch did not reproduce; its cause is unestablished.
+- AP-1/2 passed its complete palette and skin matrix in a separate one-worker run, with one-minute load 4.31 → 15.17. The test exited 0 without a ready timeout; the wrapper separately reported five kills in the shared test slice during the run, not which processes were killed. The case passed even as load rose, but this is not an unloaded bracket and does not establish why the earlier timeout happened. No AP code, assertion or timeout changed.
+- The first typecheck and scoped unit attempts did not start: both foreground waits expired in the test queue. On the next wake the one-minute load was 20.91, so no browser was started. The test wrapper's remote route refused the combined command's multiline argument and the wrapper itself fell back to the local queue. The slot opened after 493 seconds. The PWA typecheck exited 0; the scoped unit run printed the five expected held-pin failures but was cut off by the outer deadline (exit 124) before it printed a suite summary. That invocation produced no scoped-suite verdict. After the coordinator cleared the refusal, a separate invocation with the package runner named directly finished at `2baae355cdcedbef12cfbe4d7b016d80faab5653`: **2,327 passed, five failed** across eight files, with no type errors (exit 1). Only the five deliberately held checks in `reader-pin` failed: manifest, lock, installed version, asset manifest version and pinned hashes. No paired timing was retaken.
+
+#### Published 1.2.0: final pin verification (2026-11-26)
+
+- The final local merge took `595d9c5c0f9e1b4721c184a50bb65425678865de` at `a58175327b3274327e3b95cd143130e7e352aa74`. The sentence allowance remains intact. Tag `v1.2.0` is the annotated object `4f47315a512f5438b686ed67f6494181f1ca5dcf` on the corrected producer commit `59d4d18a98e14b9edc6fbe9f64d3d39793347502`. GitHub did not recognize the SSH key. Against the producer's release signers file on `main`, SSH verification exited 0: `Good "git" signature for release-signer with ED25519 key SHA256:+t7W33ECSXbsX0w4muCbYQ5o1Xvp23h9VMJHmnBv8nU`.
+- Registry SRI: `sha512-V4QhSgY5HwSQ/yhy2G/I6VB9gO/3LEGrv+bJUd+6+E7dnaBEqWCK4iXN309h+7G7y/T5N1JEhI26tO29hFkJ4g==`. Registry tarball SHA-256: `c8cfafcf0537a642d0d87d0f1f6d1e254e2880f56b1691d269bc1cbf32b39d8b`. The packed bytes match the lock's integrity and verify against the producer's release workflow at `refs/tags/v1.2.0`, with the provenance script unchanged. The clean lockfile install replaced the unsaved candidate. Installed `assets/assets.json` SHA-256: `179a330da49ad4fefc8ba51a00f6f0eb0da9464c0868178fe18a7150d430dfa9`; it also compared byte-for-byte with the tested candidate's manifest. `npm audit signatures` exited 0: 1,224 verified registry signatures and 327 verified attestations.
+- Offered-command guard: 6/6 after the merge. The first registry-pin scoped run passed 2,335 cases, including all five previously held pin cases, and failed one incoming warm-cache planted control. The fixture planted the retired package name while the scanner looks for the renamed package. Re-anchoring the fixture to the current specifier, without changing its assertion or the scan, gave **2,336/2,336** across eight files with no type errors. The separate PWA compile check exited 0.
+- The five-file ordinary Chromium gate has no verdict yet. A wrong-package startup did not run any cases. The two corrected attempts reached the sealed PWA build but ran out of the foreground deadline before a browser summary (both exit 124); the second also reported five kills in the shared test slice. No individual browser case is declared red on those receipts. Firefox, phone-device evidence and the eight paired timing comparisons remain unmeasured here; paired timing stays with programme acceptance.
+- The subsequent file-alone appearance run on the committed pin `b043177988174c318954e555070ce146ef3cc3dc` completed with **27 passed, one failed** (exit 1; one-minute load 12.32 → 15.98). AP-3 Phosphor over stale Light reported `expected undefined to deeply equal { scheme: 'dark', colour: { …(33) } }`: the first-ready witness was absent, not a measured wrong palette. This is an isolated-file assertion failure, not a no-summary attempt. Stopped before the other browser files or a push; the cause is not established.
+- AP-3 diagnosis took the pre-document capture branch: the test awaits the browser context's init script before navigating. The child document runs that script before its own scripts, and the host transfers the port after the iframe's first load. A send before instrumentation would be lost, but the documented ordering shows no late-attachment window. An absent witness does not distinguish a missing hook, a missed send, or a missing sample root. Two unchanged Phosphor case runs, each alone, passed at one-minute loads 19.02 → 19.14 and 18.81 → 19.94.
+- Test-only failure evidence now distinguishes hook installation, the first observed frame send and its seed and message appearance fields, host admission, and fallback relative to the first observed mount. The expected appearance and wait remain unchanged. Five further isolated Phosphor runs passed at one-minute loads 17.45 → 17.98, 17.58 → 17.34, 17.34 → 16.87, 16.96 → 17.84, and 17.62 → 17.46. There is no new failing trace, no product fix, and no explanation established for either the earlier first-ready mismatch or the AP-1/2 timeouts. The diagnostics are retained to identify the missing step if the failure returns.
+- On the diagnostic-only commit `519625ae55d85ab841de8f3b7ee8c6506b56d6c7`, the whole appearance file passed **28/28** (one-minute load 20.67 → 22.90), reader frame **61/61** (22.70 → 23.93), and reader history **12/12** (23.45 → 24.34), one file per run. The first two runs reported shared-slice kills but each returned a passing test summary and exit 0. The earlier AP-3 failure remains unexplained, not cleared by the green rerun.
+- The compact-header file alone passed 140 and failed one (load 23.91 → 31.99, exit 1). The GitHub-refusal case for Instrument at 600 × 960 under a mouse (F1) reported `TimeoutError: page.waitForFunction: Timeout 30000ms exceeded.` It did not observe the disabled GitHub action in the desk head before the first wait ended; the later Export and geometry checks were not reached in that case. This is a completed file failure, not an outer timeout with no summary. Its cause is unestablished. Stopped before the remaining frame-cost file and before any push. The wave changes hosted reader appearance and other compact-header checks, but not this case's fixture or selector, the desk header's disabled GitHub action, or the definition of Instrument.
+- The one ruled isolated F1 retry passed (one passed, 140 skipped; one-minute load 20.41 → 21.31). The original 30 s wait expiry remains unattributed: an isolated pass does not show that load caused it. The temporary failure-only page receipt did not run on the pass and was removed. The frame-cost file was **not measured locally at the registry pin**; the hosted run will check its ordinary rows, and the eight paired timing rows stay with programme acceptance.
