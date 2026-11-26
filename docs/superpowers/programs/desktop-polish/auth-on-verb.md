@@ -115,6 +115,10 @@ Every residual of the build and of fix round 1. "Read" means read on the tree, n
   units, and ccd creates the tmux server in its own `ccrc-tmux-server.scope` (`ccd/ccd`), so neither is in
   `ccrc.service`'s cgroup; on a two-box fleet they are on the other box.
 - On macOS without `flock` the lock cannot be taken and the verb refuses, as `ccrc coordination-snapshot` does.
+- **The copy's mode and the restore on a BSD box are unmeasured.** The copy's `chmod -- 600` and the restore's
+  `chmod -- <mode>` name the mode after `--`, the order BSD chmod accepts. That order is held by the D-3510 census
+  (`ccd-child-tmpdir`), not by a run on a BSD box. This box's cases pin the copy's mode and the restore with GNU
+  chmod only.
 - The fleet-pane guard asks tmux through D-8270's socket lookup (`"${_TMX_ARGV[@]}"`), so with a socket setting the pane
   id is asked of the fleet's server. A pane id of the operator's own tmux that collides with a fleet session's pane
   there refuses wrongly. That is the safe direction, and running the verb outside tmux clears it.
@@ -445,3 +449,28 @@ All runs went through `ccrc test`.
   slice's memory cap). `connect-sheet`, this PR's door, passed in its part. The per-file list goes with the wave-done.
 - **Not run here.** The server tests' typecheck, which the test slice's memory cap killed last round; CI's job measures
   it.
+
+### 9.3 The pushed head's red, and its fix
+
+The fast run on `7ed7ca519f`, this round's first push, was red in two places.
+
+- **The D-3510 census, one case in server shard 10.** It finds no `chmod <mode> --` in a shipped script. This round's
+  F3 code wrote it three times: the copy's `chmod 600` and the two restores of the saved mode. BSD chmod reads that
+  `--` as a file and exits 1, so on a Mac the copy would never get its 0600 and the restore would always fail. The
+  census was outside the guard set run here. The fix names the mode after `--`. It changes no line count, so growth
+  stays +481.
+- **CodeQL, two alerts in the verb's test file.** Its 127-text case built a regular expression from a host literal and
+  escaped only the dots. The host is now escaped with the full class.
+
+The second push carries both fixes, by the coordinator's yes. Before it, every guard file CI's fast plan selects
+(`guardTests`, `.github/ci/fast-plan.mjs`) that names `ccd/` or `deploy/` was run on the fix commit: 122 files in four
+parts.
+
+- 119 passed.
+- `docs-parity` timed out once under load and passed alone, 82 of 82.
+- Two are red on this box the same way on a scratch merge with main, and CI's shards passed them:
+  - the census file's own BSD-order shim case;
+  - `ccd-tmux-anchor`, 19 cases whose fixture pane never printed its mark.
+
+The shellcheck ratchet was killed again by the test slice's memory cap, so CI measures it. The fix only reorders
+chmod's arguments.
