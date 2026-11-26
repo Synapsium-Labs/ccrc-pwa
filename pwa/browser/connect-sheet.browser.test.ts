@@ -143,7 +143,7 @@ describe('the Add account door and the connect sheet at every width and skin (D-
         const n = await dark.page.evaluate(() => {
           const doors = [...document.querySelectorAll<HTMLElement>('.acct-door, .acct-door-action')];
           const door = doors[0]!;
-          const reason = document.getElementById(door.getAttribute('aria-describedby') ?? '')!;
+          const reason = document.getElementById('acct-door-reason')!;
           // A token's computed colour, read through a probe so the comparison is the engine's own.
           const ink = (token: string): string => {
             const probe = document.createElement('span');
@@ -159,9 +159,13 @@ describe('the Add account door and the connect sheet at every width and skin (D-
           const lines = new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size;
           const field = document.querySelector<HTMLElement>('.acct-door-reason .acct-fix-field');
           const cs = getComputedStyle(door);
+          const summary = document.querySelector('.acct-door-reason details > summary');
+          const marker = summary === null ? null : getComputedStyle(summary, '::before');
           return {
             doors: doors.length,
             disabled: door.getAttribute('aria-disabled'),
+            describedBy: door.getAttribute('aria-describedby'),
+            chevron: marker === null ? '' : `${marker.content} ${marker.borderRightStyle}`,
             reason: reason?.textContent ?? '',
             command: field?.textContent ?? '',
             commandLabel: field?.getAttribute('aria-label') ?? '',
@@ -174,10 +178,12 @@ describe('the Add account door and the connect sheet at every width and skin (D-
         });
         expect(n.doors, 'one door, narrowed in place').toBe(1);
         expect(n.disabled).toBe('true');
+        expect(n.describedBy, 'the door names no description: the press says the reason, once').toBeNull();
         expect(n.reason).toBe(DOOR_NARROWED['gate-dark'].text);
         expect(n.command).toBe(DOOR_NARROWED['gate-dark'].fix);
         expect(n.commandLabel).toBe(DOOR_COMMAND_LABEL);
         expect(n.more).toBe(DOOR_NARROWED['gate-dark'].more!.summary);
+        expect(n.chevron, 'the disclosure shows that it opens: the settings folds\' chevron').toBe('"" solid');
         expect(n.below, 'the reason sits beneath the door').toBe(true);
         // It stands down: the design system's disabled ink, never the live door's.
         expect(n.color, 'the narrowed door is drawn in the disabled ink').toBe(n.disabledInk);
@@ -202,6 +208,52 @@ describe('the Add account door and the connect sheet at every width and skin (D-
         }, undefined, { timeout: 5_000 });
         expect(await dark.page.locator('[data-frame="provider"]').count(), 'a narrowed door opens nothing').toBe(0);
         await dark.page.waitForSelector('.acct-door-reason:not([data-marked])', { timeout: 5_000 });
+        // No press (fix round 1): held down under the mouse, the door neither sinks nor grounds. The primitives' press is
+        // the individual `scale` property, so it is read beside `transform`.
+        const box = (await dark.page.locator('.acct-door, .acct-door-action').boundingBox())!;
+        await dark.page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        await dark.page.mouse.down();
+        const held = await dark.page.evaluate(() => {
+          const door = document.querySelector<HTMLElement>('.acct-door, .acct-door-action')!;
+          const cs = getComputedStyle(door);
+          return { active: door.matches(':active'), scale: cs.scale, transform: cs.transform, ground: cs.backgroundColor };
+        });
+        await dark.page.mouse.up();
+        expect(held.active, 'the mouse is held on the door').toBe(true);
+        expect(held.scale, 'a held narrowed door does not sink').toBe('none');
+        expect(held.transform).toBe('none');
+        expect(held.ground, 'nor grounds').toBe('rgba(0, 0, 0, 0)');
+        await dark.page.waitForSelector('.acct-door-reason:not([data-marked])', { timeout: 5_000 });
+        // Forced colours (fix round 1): the door keeps the system's disabled colour, never the live button's, and the mark
+        // is drawn by an outline, which forced colours keep.
+        await dark.page.emulateMedia({ forcedColors: 'active' });
+        try {
+          const forced = await dark.page.evaluate(() => {
+            const sys = (c: string): string => {
+              const probe = document.createElement('span');
+              probe.style.color = c;
+              document.body.append(probe);
+              const v = getComputedStyle(probe).color;
+              probe.remove();
+              return v;
+            };
+            const door = document.querySelector<HTMLElement>('.acct-door, .acct-door-action')!;
+            return { forced: matchMedia('(forced-colors: active)').matches, color: getComputedStyle(door).color, gray: sys('GrayText'), button: sys('ButtonText') };
+          });
+          expect(forced.forced, 'forced colours are emulated').toBe(true);
+          expect(forced.color, 'under forced colours the narrowed door is in GrayText').toBe(forced.gray);
+          expect(forced.color).not.toBe(forced.button);
+          await dark.page.click('.acct-door, .acct-door-action', { force: true });
+          await dark.page.waitForSelector('.acct-door-reason[data-marked="true"]', { timeout: 5_000 });
+          const mark = await dark.page.evaluate(() => {
+            const cs = getComputedStyle(document.querySelector('.acct-door-reason')!);
+            return `${cs.outlineStyle} ${cs.outlineWidth}`;
+          });
+          expect(mark, 'under forced colours the mark is an outline').toBe('solid 2px');
+          await dark.page.waitForSelector('.acct-door-reason:not([data-marked])', { timeout: 5_000 });
+        } finally {
+          await dark.page.emulateMedia({ forcedColors: 'none' });
+        }
         await step(dark.page, 'narrowed door');
         expect(dark.errors).toEqual([]);
       } finally {
@@ -401,7 +453,7 @@ const readOffline = (page: Page): Promise<{
   return {
     door: {
       disabled: door.getAttribute('aria-disabled'),
-      reason: document.getElementById(door.getAttribute('aria-describedby') ?? '')?.textContent ?? '',
+      reason: document.getElementById('acct-door-reason')?.textContent ?? '',
     },
     cards: [...document.querySelectorAll<HTMLElement>('.accounts-row')].map((c) => ({
       lane: c.dataset['lane'],

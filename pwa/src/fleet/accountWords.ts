@@ -379,24 +379,39 @@ export const DOOR_WORD = 'Add account';
 export const DOOR_META = 'Anthropic · OpenAI · OpenRouter';
 
 /** Why the door narrows in place, other than offline (spec §5): each with its sentence, at most two lines at 390 px;
- *  `more`, the longer half (how to fix it), behind a disclosure; and `fix`, the command to copy. A copied command is
- *  one the CLI has (`pwa/test/offered-commands.test.ts` reads `ccd/ccrc`'s own table) and one that changes nothing run
- *  alone, so a reader who runs only it cannot lock the console. `waiting` is the screen before its first answer, which
- *  cannot yet say whether it may add.
+ *  `more`, the longer half (how to fix it), behind a disclosure; and `fix`, the command to copy, when one says something
+ *  true on the box that sees the reason and changes nothing run alone, so a reader who runs only it cannot lock the
+ *  console. Every `ccrc <verb>` written here is one the CLI has (`server/test/single-definition/offered-commands.test.ts`
+ *  reads `ccd/ccrc`'s own dispatch). `waiting` is the screen before its first answer, which cannot yet say whether it may
+ *  add.
  *
- *  THE TWO KINDS OF BOX (desktop-polish wave 180). Sign-in is turned on in two ways: a box reached from other devices
- *  takes `ccrc expose`, which sets an https address and sign-in together; a box used only at localhost on itself is
- *  armed by hand (README, "The session gate"), because no verb does it yet. The account gate accepts a loopback origin
- *  (`server/src/accounts/gate.ts`), so https is not required there; sign-in is. {@link LOCAL_ARMING} names the hand
- *  route in one place, so a verb can replace it later without touching the sentences around it. */
+ *  THE KINDS OF BOX (desktop-polish wave 180). Sign-in is turned on in three ways: a box reached from other devices with
+ *  https served by the box itself takes `ccrc expose`, which sets an https address and sign-in together; a box behind
+ *  the operator's own https proxy is armed by hand in `~/.ccrc/ccrc.env`; a box used only at localhost on itself is
+ *  armed by hand too, as the README's "The session gate" says, because no verb does it yet. The account gate accepts a
+ *  loopback origin (`server/src/accounts/gate.ts`), so https is not required there; sign-in is. {@link LOCAL_ARMING}
+ *  names the localhost hand route in ONE place, and both reasons say it through it, so a verb can replace it later in
+ *  one edit without touching the sentences around it.
+ *
+ *  WHERE A PLAIN-HTTP ORIGIN COMES FROM (fix round 1). An armed box's origin is `CCRC_ORIGIN` in `~/.ccrc/ccrc.env`,
+ *  else `exposure.env`, which `ccrc expose` writes with an https origin only, else the default
+ *  `http://localhost:<port>`, which the gate accepts. So a box that sees the insecure-origin reason set its origin by
+ *  hand in `ccrc.env` (or in the unit's own environment), `ccrc expose status` has nothing to show it, and the expose
+ *  verb refuses until `CCRC_AUTH`, `CCRC_RP_ID` and `CCRC_ORIGIN` are out of that file. Its copy line is a read of that
+ *  file's three keys. */
 export type DoorNarrowing = 'waiting' | 'gate-dark' | 'insecure-origin' | 'unsupported';
 export interface DoorNarrowed {
   readonly text: string;
   readonly more?: { readonly summary: string; readonly lines: readonly string[] };
   readonly fix?: string;
 }
-/** How a box used only at localhost turns sign-in on: by hand, as the README says, until a verb does it. */
-export const LOCAL_ARMING = 'turn it on by hand as the README\'s "The session gate" says, then restart the server';
+/** How a box used only at localhost sets sign-in up: by hand, as the README says, until a verb does it. The one place
+ *  the localhost hand route is written; both reasons below say it through this. */
+export const LOCAL_ARMING = 'set sign-in up for localhost by hand, as the README\'s "The session gate" says, then restart the '
+  + 'server';
+/** The insecure-origin reason's copy line: a read of the three keys of `~/.ccrc/ccrc.env` that set the origin and
+ *  arm the gate. It changes nothing, and on the box that sees the reason it shows the plain-HTTP origin. */
+export const ORIGIN_READ = "grep -E '^CCRC_(ORIGIN|RP_ID|AUTH)=' ~/.ccrc/ccrc.env";
 /** The copy field's name for a command the door offers: it runs where this console's server runs, which on a two-box
  *  fleet is not the fleet host (the trouble card's commands run there). */
 export const DOOR_COMMAND_LABEL = "Command to run on this console's server";
@@ -408,8 +423,10 @@ export const DOOR_NARROWED: { readonly [N in DoorNarrowing]: DoorNarrowed } = {
       summary: 'How to turn sign-in on',
       lines: [
         "First set a passphrase on this console's server: ccrc passwd. On its own it changes nothing.",
-        'Reached from other devices: then ccrc expose duckdns, byo or ip, which gives the box an https address and turns '
-          + 'sign-in on, and follow the steps it prints.',
+        'Reached from other devices, with https served by the box itself: then ccrc expose duckdns, byo or ip, which '
+          + 'gives the box an https address and turns sign-in on, and follow the steps it prints.',
+        'Behind your own https proxy: then set CCRC_AUTH=on with CCRC_RP_ID and CCRC_ORIGIN (that https address) in '
+          + '~/.ccrc/ccrc.env, as the README\'s "The session gate" says, and restart the server.',
         `Used only at localhost on the box itself: then ${LOCAL_ARMING}, and open it at localhost.`,
       ],
     },
@@ -420,13 +437,17 @@ export const DOOR_NARROWED: { readonly [N in DoorNarrowing]: DoorNarrowed } = {
     more: {
       summary: 'How to fix it',
       lines: [
-        "Reached from other devices: on this console's server, ccrc expose duckdns, byo or ip gives the box an https "
-          + 'address with sign-in. ccrc expose status shows what is set now.',
-        'Used only on the box itself: set its origin to localhost as the README\'s "The session gate" says, restart the '
-          + 'server, and open it at localhost.',
+        "This console's origin was set by hand, as CCRC_ORIGIN in ~/.ccrc/ccrc.env on its server (the expose verb only "
+          + 'ever writes an https one). The command below shows it.',
+        'Behind your own https proxy: set CCRC_ORIGIN there to that https address and CCRC_RP_ID to its domain, then '
+          + 'restart the server.',
+        'With https served by the box itself: first take CCRC_AUTH, CCRC_RP_ID and CCRC_ORIGIN out of that file (the '
+          + 'expose verb refuses while they are set), then run ccrc expose duckdns, byo or ip and follow the steps it '
+          + 'prints.',
+        `Used only on the box itself: ${LOCAL_ARMING}, and open it at localhost.`,
       ],
     },
-    fix: 'ccrc expose status',
+    fix: ORIGIN_READ,
   },
   unsupported: { text: "Needs a fleet update: the fleet host doesn't support adding accounts yet." },
 };

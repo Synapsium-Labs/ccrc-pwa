@@ -1436,8 +1436,8 @@ export const INHERITED_GROUNDS = {
     why: "the compromise disclosure's summary, in a result frame (CompromiseSteps.tsx), and the sign-in URL card's \"What this grants\" (RunFrame.tsx's UrlCard, Task A22), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The remove and replace sheets' frames (.acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
   },
   '.acct-compromise-steps': {
-    under: ['var(--bg-sheet)'],
-    why: "the compromise disclosure's steps, in a result frame (CompromiseSteps.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The remove and replace sheets' frames (.acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+    under: ['var(--bg-sheet)', 'var(--bg-page)'],
+    why: "the compromise disclosure's steps, in a result frame (CompromiseSteps.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet), and the Add account door's \"How to…\" steps (ConnectSheet.tsx's DoorReason, desktop-polish wave 180), which reuse this rule on the Accounts page's var(--bg-page). The remove and replace sheets' frames (.acct-frame) and the door's reason box paint no background, and the selector names no painted ancestor, so the auditor cannot recover either ground from CSS alone",
   },
   // ── accounts plan Task A25 (D-8051): the ChatGPT device code ───────────
   '.acct-device-code': {

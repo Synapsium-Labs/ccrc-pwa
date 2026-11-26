@@ -10,7 +10,7 @@ import type { AccountAddBody, AccountsConnect, LaneWire, RosterWire } from '../.
 import { newLaneConfigSuffix } from '../../shared/roster';
 import { PROVIDERS } from '../../shared/providers';
 import { AccountsScreen } from '../src/screens/AccountsScreen';
-import { ConnectSheet, DOOR_REASON_MARK_MS, type ConnectClient, type ConnectSheetProps } from '../src/accounts/ConnectSheet';
+import { ConnectSheet, DOOR_REASON_ID, DOOR_REASON_MARK_MS, type ConnectClient, type ConnectSheetProps } from '../src/accounts/ConnectSheet';
 import { DOOR_PROVIDERS, defaultHue, methodChoices, onLedgerLine } from '../src/accounts/connectFlow';
 import {
   DOOR_COMMAND_LABEL, DOOR_NARROWED, LEDGER, METHOD_LINES, NOT_ON_THIS_FLEET_YET, OUTCOME_UNKNOWN, READ_AGAIN, checkedLine, notFoundAfterUnknown, offlineRefusal,
@@ -122,30 +122,49 @@ describe('the door (D-5522)', () => {
     desk.unmount();
     vi.unstubAllGlobals();
 
-    // Each narrowing: the door stays, aria-disabled, its reason beneath it and named by it; a tap opens nothing.
-    const cases: [AccountsConnect | null, boolean, string][] = [
-      [null, true, DOOR_NARROWED['gate-dark'].text],
-      [{ ...FRESH(), origin: 'insecure' }, true, DOOR_NARROWED['insecure-origin'].text],
-      [{ ...FRESH(), accountOps: 'unsupported', caps: [] }, true, DOOR_NARROWED.unsupported.text],
-      [FRESH(), false, DOOR_NARROWED.waiting.text],
+    // Each narrowing: the door stays, aria-disabled, its reason beneath it; a tap opens nothing. The door names no
+    // description (fix round 1): the press says the reason, once.
+    // Each narrowing's copy line, or none, as written (fix round 1): one that exists, changes nothing run alone and says
+    // something true on the box that sees it. Literals, so a changed command is a red case here, not only a new string.
+    const cases: [AccountsConnect | null, boolean, string, string | null][] = [
+      [null, true, DOOR_NARROWED['gate-dark'].text, 'ccrc passwd'],
+      [{ ...FRESH(), origin: 'insecure' }, true, DOOR_NARROWED['insecure-origin'].text, "grep -E '^CCRC_(ORIGIN|RP_ID|AUTH)=' ~/.ccrc/ccrc.env"],
+      [{ ...FRESH(), accountOps: 'unsupported', caps: [] }, true, DOOR_NARROWED.unsupported.text, null],
+      [FRESH(), false, DOOR_NARROWED.waiting.text, null],
     ];
-    for (const [connect, landed, text] of cases) {
+    for (const [connect, landed, text, copy] of cases) {
       show(connect, landed);
       const r = render(<AccountsScreen />);
       const door = screen.getByRole('button', { name: /Add account/ });
       expect(door, text).toHaveAttribute('aria-disabled', 'true');
-      const reason = document.getElementById(door.getAttribute('aria-describedby')!)!;
+      expect(door, text).not.toHaveAttribute('aria-describedby');
+      const reason = document.getElementById(DOOR_REASON_ID)!;
       expect(reason).toHaveTextContent(text);
+      const box = reason.closest('.acct-door-reason')!;
+      const fields = box.querySelectorAll('.acct-fix-field');
+      if (copy === null) expect(fields, text).toHaveLength(0);
+      else {
+        expect(fields, text).toHaveLength(1);
+        expect(fields[0]!.textContent, text).toBe(copy);
+        expect(fields[0]).toHaveAttribute('aria-label', DOOR_COMMAND_LABEL);
+      }
       fireEvent.click(door);
       expect(screen.queryByRole('dialog'), text).toBeNull();
       r.unmount();
     }
   });
 
+  /** Every live node on the page whose text is `sentence`: the door must have exactly one place that says it. */
+  const liveSaying = (sentence: string): Element[] =>
+    [...document.querySelectorAll('[role="status"], [role="alert"], [aria-live]:not([aria-live="off"])')]
+      .filter((n) => n.textContent?.includes(sentence));
+  /** The scrolls of the door's reason, read off a spy on every element (a remount brings a new box). */
+  const reasonScrolls = (spy: { mock: { contexts: unknown[] } }): number =>
+    spy.mock.contexts.filter((el) => el instanceof Element && el.matches('.acct-door-reason')).length;
+
   it('a tap or Enter on a narrowed door brings its reason into view, marks it and announces it once (wave 180)', async () => {
     vi.spyOn(api, 'accounts').mockReturnValue(new Promise(() => {}));
-    // jsdom lays nothing out: a spy on the reason itself stands in for scrolling it into view.
-    const scrolled = vi.fn();
+    const scrolled = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {});
     try {
       for (const desk of [false, true]) {
         if (desk) stubWidth(1280);
@@ -154,42 +173,46 @@ describe('the door (D-5522)', () => {
         const r = render(<AccountsScreen />);
         const door = screen.getByRole('button', { name: /Add account/ });
         expect(door).toHaveAttribute('data-narrowed', 'true');
-        const box = document.getElementById(door.getAttribute('aria-describedby')!)!.closest('.acct-door-reason')!;
+        // Both forms name no description, so a reader that focused the door does not hear the sentence again on Enter.
+        expect(door).not.toHaveAttribute('aria-describedby');
+        const box = document.getElementById(DOOR_REASON_ID)!.closest('.acct-door-reason')!;
+        // The door's one live region (fix round 1, review R2): no second node, filled or not.
+        expect(box.querySelectorAll('[role="status"], [aria-live]')).toHaveLength(1);
         const live = box.querySelector('[role="status"]')!;
-        (box as HTMLElement).scrollIntoView = scrolled;
         expect(box).not.toHaveAttribute('data-marked');
         expect(live.textContent).toBe('');
-        // The copy line is the server's, and harmless alone.
-        expect(box.querySelector('.acct-fix-field')).toHaveTextContent('ccrc passwd');
-        expect(box.querySelector('.acct-fix-field')).toHaveAttribute('aria-label', DOOR_COMMAND_LABEL);
         scrolled.mockClear();
 
         fireEvent.click(door);
-        expect(scrolled, 'the reason is brought into view').toHaveBeenCalledTimes(1);
+        expect(reasonScrolls(scrolled), 'the reason is brought into view').toBe(1);
         expect(box).toHaveAttribute('data-marked', 'true');
         expect(live.children).toHaveLength(1);
         expect(live.textContent).toBe(DOOR_NARROWED['gate-dark'].text);
+        expect(liveSaying(DOOR_NARROWED['gate-dark'].text), 'said in one live place').toHaveLength(1);
         const first = live.firstElementChild;
         expect(screen.queryByRole('dialog'), 'a narrowed door opens nothing').toBeNull();
         // A render that is not a tap announces nothing new.
         act(() => useFleetStore.setState({ lanes: {} }));
         expect(live.firstElementChild).toBe(first);
-        // The mark is for a moment.
+        // The mark is for a moment, and the live region empties with it, so the sentence is not left in the page twice.
         act(() => { vi.advanceTimersByTime(DOOR_REASON_MARK_MS + 1); });
         expect(box).not.toHaveAttribute('data-marked');
+        expect(live.textContent).toBe('');
         // A second tap: marked again, and announced again, once.
         fireEvent.click(door);
         expect(box).toHaveAttribute('data-marked', 'true');
         expect(live.children).toHaveLength(1);
         expect(live.firstElementChild).not.toBe(first);
+        act(() => { vi.advanceTimersByTime(DOOR_REASON_MARK_MS + 1); });
         vi.useRealTimers();
 
         // Enter on the focused door does the same.
         scrolled.mockClear();
         door.focus();
         await userEvent.keyboard('{Enter}');
-        expect(scrolled).toHaveBeenCalledTimes(1);
+        expect(reasonScrolls(scrolled)).toBe(1);
         expect(box).toHaveAttribute('data-marked', 'true');
+        expect(live.textContent).toBe(DOOR_NARROWED['gate-dark'].text);
         expect(screen.queryByRole('dialog')).toBeNull();
         r.unmount();
         vi.unstubAllGlobals();
@@ -197,6 +220,128 @@ describe('the door (D-5522)', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('the answer is the tap\'s snapshot: offline, a later render and three minutes of age never rewrite or repeat it (fix round 1)', () => {
+    vi.spyOn(api, 'accounts').mockReturnValue(new Promise(() => {}));
+    vi.useFakeTimers();
+    try {
+      const readAt = Date.now() - 4 * 60_000;
+      act(() => useFleetStore.setState({
+        conn: 'down', usage: [], roster: ROSTER, accountsConnect: FRESH(), lanes: null, accountsReadAt: () => readAt,
+      }));
+      render(<AccountsScreen />);
+      const door = screen.getByRole('button', { name: /Add account/ });
+      const live = document.getElementById(DOOR_REASON_ID)!.closest('.acct-door-reason')!.querySelector('[role="status"]')!;
+      const said = offlineRefusal(readAt, Date.now());
+      fireEvent.click(door);
+      expect(live.textContent).toBe(said);
+      const node = live.firstElementChild;
+      // A render that changes the sentence while the answer stands: the answer keeps the words of the tap.
+      act(() => useFleetStore.setState({ accountsReadAt: () => readAt - 60_000 }));
+      expect(document.getElementById(DOOR_REASON_ID)).not.toHaveTextContent(said);
+      expect(live.firstElementChild).toBe(node);
+      expect(live.textContent).toBe(said);
+      // Three minutes of the sentence's age ticking: the live region is never filled again.
+      const fills: string[] = [];
+      for (let s = 0; s < 180; s += 5) {
+        act(() => { vi.advanceTimersByTime(5_000); });
+        if (live.textContent !== '' && live.textContent !== said) fills.push(live.textContent!);
+        if (s > 5 && live.textContent !== '') fills.push(`still filled at ${s + 5}s: ${live.textContent}`);
+      }
+      expect(fills).toEqual([]);
+      expect(document.getElementById(DOOR_REASON_ID)!.textContent).not.toBe(said);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a remount with no tap answers nothing: a tap while waiting, the door opening, then the link dropping (fix round 1)', () => {
+    vi.spyOn(api, 'accounts').mockReturnValue(new Promise(() => {}));
+    const scrolled = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {});
+    show(FRESH(), false);
+    render(<AccountsScreen />);
+    const door = screen.getByRole('button', { name: /Add account/ });
+    expect(document.getElementById(DOOR_REASON_ID)).toHaveTextContent(DOOR_NARROWED.waiting.text);
+    fireEvent.click(door);
+    expect(reasonScrolls(scrolled)).toBe(1);
+    // The accounts land: the door opens and its reason goes.
+    act(() => useFleetStore.setState({ usage: [] }));
+    expect(document.getElementById(DOOR_REASON_ID)).toBeNull();
+    scrolled.mockClear();
+    // The link drops: the door narrows again, offline, and nobody has tapped since.
+    act(() => useFleetStore.setState({ conn: 'down', accountsReadAt: () => Date.now() - 60_000 }));
+    const box = document.getElementById(DOOR_REASON_ID)!.closest('.acct-door-reason')!;
+    expect(reasonScrolls(scrolled), 'no scroll').toBe(0);
+    expect(box, 'no mark').not.toHaveAttribute('data-marked');
+    expect(box.querySelector('[role="status"]')!.textContent, 'no filled live region').toBe('');
+  });
+
+  it('the answer is dropped when the narrowing changes: a tap on one reason is never said under the next (fix round 1)', () => {
+    vi.spyOn(api, 'accounts').mockReturnValue(new Promise(() => {}));
+    vi.useFakeTimers();
+    try {
+      show(null);
+      render(<AccountsScreen />);
+      const box = document.getElementById(DOOR_REASON_ID)!.closest('.acct-door-reason')!;
+      fireEvent.click(screen.getByRole('button', { name: /Add account/ }));
+      expect(box.querySelector('[role="status"]')!.textContent).toBe(DOOR_NARROWED['gate-dark'].text);
+      // Within the mark, the server says the origin is the trouble now: the same box, a new reason, and nobody has
+      // tapped it. Nothing of the old answer is left, and nothing is said.
+      act(() => useFleetStore.setState({ accountsConnect: { ...FRESH(), origin: 'insecure' } }));
+      const now = document.getElementById(DOOR_REASON_ID)!.closest('.acct-door-reason')!;
+      expect(now).toBe(box);
+      expect(now).toHaveTextContent(DOOR_NARROWED['insecure-origin'].text);
+      expect(now.querySelector('[role="status"]')!.textContent).toBe('');
+      expect(now).not.toHaveAttribute('data-marked');
+      act(() => { vi.advanceTimersByTime(DOOR_REASON_MARK_MS + 1); });
+      expect(now.querySelector('[role="status"]')!.textContent).toBe('');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a remount with no tap answers nothing: the 900 px crossing keeps an open disclosure open and replays nothing (fix round 1)', () => {
+    vi.spyOn(api, 'accounts').mockReturnValue(new Promise(() => {}));
+    const scrolled = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {});
+    show(null);
+    render(<AccountsScreen />);
+    const phoneBox = document.getElementById(DOOR_REASON_ID)!.closest('.acct-door-reason')!;
+    fireEvent.click(screen.getByRole('button', { name: /Add account/ }));
+    expect(phoneBox).toHaveAttribute('data-marked', 'true');
+    const more = phoneBox.querySelector('details')!;
+    act(() => { more.open = true; more.dispatchEvent(new Event('toggle')); });
+    scrolled.mockClear();
+    // Across the line: the reason moves to the desk slot, a new box.
+    stubWidth(1280);
+    act(() => useFleetStore.setState({ lanes: {} }));
+    const deskBox = document.getElementById(DOOR_REASON_ID)!.closest('.acct-door-reason')!;
+    expect(deskBox).not.toBe(phoneBox);
+    expect(reasonScrolls(scrolled), 'no scroll').toBe(0);
+    expect(deskBox, 'no mark').not.toHaveAttribute('data-marked');
+    expect(deskBox.querySelector('[role="status"]')!.textContent, 'no filled live region').toBe('');
+    expect(deskBox.querySelector('details')!.open, 'the disclosure is still open').toBe(true);
+    // And back: the same.
+    stubWidth(390);
+    act(() => useFleetStore.setState({ lanes: {} }));
+    const back = document.getElementById(DOOR_REASON_ID)!.closest('.acct-door-reason')!;
+    expect(reasonScrolls(scrolled)).toBe(0);
+    expect(back).not.toHaveAttribute('data-marked');
+    expect(back.querySelector('[role="status"]')!.textContent).toBe('');
+    expect(back.querySelector('details')!.open).toBe(true);
+  });
+
+  it('the door\'s copy field is keyed by its command: Copied does not carry to the next narrowing\'s command (fix round 1, F9)', async () => {
+    vi.spyOn(api, 'accounts').mockReturnValue(new Promise(() => {}));
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText: vi.fn(async () => {}) } });
+    show(null);
+    render(<AccountsScreen />);
+    const box = (): Element => document.getElementById(DOOR_REASON_ID)!.closest('.acct-door-reason')!;
+    fireEvent.click(within(box() as HTMLElement).getByRole('button', { name: /Copy/ }));
+    await waitFor(() => expect(within(box() as HTMLElement).getByRole('button', { name: /Copied/ })).toBeInTheDocument());
+    act(() => useFleetStore.setState({ accountsConnect: { ...FRESH(), origin: 'insecure' } }));
+    expect(box().querySelector('.acct-fix-field')!.textContent).toBe("grep -E '^CCRC_(ORIGIN|RP_ID|AUTH)=' ~/.ccrc/ccrc.env");
+    expect(within(box() as HTMLElement).queryByRole('button', { name: /Copied/ })).toBeNull();
   });
 
   it('opens the sheet at the provider frame when nothing narrows it', () => {
@@ -231,7 +376,7 @@ describe('offline (spec §12.5)', () => {
     // The door: narrowed in place with the sentence.
     const door = screen.getByRole('button', { name: /Add account/ });
     expect(door).toHaveAttribute('aria-disabled', 'true');
-    expect(document.getElementById(door.getAttribute('aria-describedby')!)).toHaveTextContent(sentence);
+    expect(document.getElementById(DOOR_REASON_ID)).toHaveTextContent(sentence);
     fireEvent.click(door);
     expect(screen.queryByRole('dialog')).toBeNull();
     // The knob and Check on every card: disabled or gone, each with the sentence beneath.

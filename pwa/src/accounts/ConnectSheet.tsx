@@ -600,37 +600,62 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
   );
 }
 
-/** How long a tap on the narrowed door marks its reason (desktop-polish wave 180). */
+/** How long a tap on the narrowed door marks its reason, and holds its announcement (desktop-polish wave 180). */
 export const DOOR_REASON_MARK_MS = 1600;
+
+/** The element id of the door's reason sentence. */
+export const DOOR_REASON_ID = 'acct-door-reason';
+
+/** One tap's answer: the tap's number, never reused while the screen lives, and the reason's sentence AS IT READ AT THE
+ *  TAP. A snapshot, so a later render (the offline sentence's age ticking every minute) never rewrites what was said. */
+export interface DoorAnswer { n: number; text: string }
 
 /**
  * The door's reason, beneath it: the sentence, the longer half behind a disclosure when there is one, and the command
- * to copy when one helps. A NARROWED DOOR IS NOT SILENT (desktop-polish wave 180): each tap or Enter on it bumps
- * `called`, and the reason is brought into view, marked for {@link DOOR_REASON_MARK_MS} and its sentence announced once,
- * politely, in a live region of its own (the door already names it by `aria-describedby` for a reader that focuses it).
+ * to copy when one helps. A NARROWED DOOR IS NOT SILENT (desktop-polish wave 180): each tap or Enter on it hands this a
+ * new `answer`, and the reason is brought into view, marked for {@link DOOR_REASON_MARK_MS}, and the answer's snapshot
+ * announced once, politely, in the one live region of the door. THE ANSWER BELONGS TO THE TAP, NOT TO THE RENDER (fix
+ * round 1): a mount answers only a tap that arrives after it, so a remount (the 900 px crossing moves the reason to the
+ * other slot) replays nothing; the screen drops the answer when the narrowing changes or ends; and the live region
+ * empties when the mark ends, so the sentence is not left in the page twice. The door names no description
+ * (`aria-describedby`): a reader that focused the door and then pressed it would hear the sentence twice, and the press
+ * is where it is said. The disclosure's open state is the screen's (`moreOpen`), so it survives the crossing too.
  */
-export function DoorReason({ id, reason, called = 0 }: { id: string; reason: DoorNarrowed; called?: number }): ReactNode {
+export function DoorReason({ reason, answer = null, moreOpen = false, onMoreToggle }: {
+  reason: DoorNarrowed;
+  answer?: DoorAnswer | null;
+  moreOpen?: boolean;
+  onMoreToggle?: (open: boolean) => void;
+}): ReactNode {
   const box = useRef<HTMLDivElement>(null);
-  const [marked, setMarked] = useState(false);
+  // The last tap this mount has answered, or was mounted after: a remount starts at the screen's latest answer.
+  const answered = useRef(answer?.n ?? 0);
+  const [said, setSaid] = useState<DoorAnswer | null>(null);
   useEffect(() => {
-    if (called === 0) return undefined;
+    if (answer === null) { setSaid(null); return undefined; }
+    if (answer.n === answered.current) return undefined;
+    answered.current = answer.n;
     box.current?.scrollIntoView?.({ block: 'nearest' });
-    setMarked(true);
-    const t = setTimeout(() => setMarked(false), DOOR_REASON_MARK_MS);
+    setSaid(answer);
+    const t = setTimeout(() => setSaid(null), DOOR_REASON_MARK_MS);
     return () => clearTimeout(t);
-  }, [called]);
+  }, [answer]);
   return (
-    <div className="acct-door-reason" ref={box} data-marked={marked ? 'true' : undefined}>
-      <p className="m-0" id={id}>{reason.text}</p>
+    <div className="acct-door-reason" ref={box} data-marked={said !== null ? 'true' : undefined}>
+      <p className="m-0" id={DOOR_REASON_ID}>{reason.text}</p>
       {reason.more !== undefined && (
-        <details className="acct-door-more">
+        <details
+          className="acct-door-more" open={moreOpen}
+          onToggle={(e) => { const open = e.currentTarget.open; if (open !== moreOpen) onMoreToggle?.(open); }}
+        >
           <summary>{reason.more.summary}</summary>
           <ul className="acct-compromise-steps">{reason.more.lines.map((l) => <li key={l}>{l}</li>)}</ul>
         </details>
       )}
-      {reason.fix !== undefined && <CopyCommand command={reason.fix} label={DOOR_COMMAND_LABEL} />}
-      {/* One node per tap, so each tap is announced once and a re-render announces nothing. */}
-      <p className="sr-only" role="status">{called > 0 && <span key={called}>{reason.text}</span>}</p>
+      {reason.fix !== undefined && <CopyCommand key={reason.fix} command={reason.fix} label={DOOR_COMMAND_LABEL} />}
+      {/* The door's one live region. It holds the tap's snapshot, keyed by the tap, so each tap is said once; a render
+          never rewrites it, and it empties with the mark. */}
+      <p className="sr-only" role="status">{said !== null && <span key={said.n}>{said.text}</span>}</p>
     </div>
   );
 }
@@ -639,25 +664,25 @@ export function DoorReason({ id, reason, called = 0 }: { id: string; reason: Doo
  * THE ADD ACCOUNT DOOR (D-5522; spec §5): one per width. On a phone (both skins) it is the lane list's last row, a
  * `ListRow` whose height is the skin's row (52px in Refined, 44px in Instrument) with the meta line beside the word; on
  * desktop it is a secondary button in the page's header. It NARROWS IN PLACE, never vanishes: `aria-disabled`, still
- * focusable, its reason named by `aria-describedby` and drawn beneath it. No palette command and no hint key. Narrowed,
- * it stands down in the design system's disabled look (fleet.css), and a tap or Enter calls `onNarrowedTap`, which
- * brings the reason forward (`DoorReason`'s `called`), never the sheet (desktop-polish wave 180).
+ * focusable, its reason drawn beneath it. No palette command and no hint key. Narrowed, it stands down in the design
+ * system's disabled look (fleet.css), and a tap or Enter calls `onNarrowedTap`, which brings the reason forward and says
+ * it (`DoorReason`'s `answer`), never the sheet (desktop-polish wave 180). It names no `aria-describedby`: the press
+ * says the reason, once (fix round 1).
  */
-export function AddAccountDoor({ desk, narrowedBy, onOpen, onNarrowedTap }: {
+export function AddAccountDoor({ desk, narrowed, onOpen, onNarrowedTap }: {
   desk: boolean;
-  /** The reason's element id when the door is narrowed, or `null` when it opens. */
-  narrowedBy: string | null;
+  /** Whether the door is narrowed (it then opens nothing), or opens the sheet. */
+  narrowed: boolean;
   onOpen: () => void;
   /** A tap or Enter while narrowed. */
   onNarrowedTap?: () => void;
 }): ReactNode {
-  const narrowed = narrowedBy !== null;
   const tap = (): void => { if (narrowed) onNarrowedTap?.(); else onOpen(); };
   if (desk) {
     return (
       <Button
         variant="ghost" size="fit" className="acct-door-action"
-        aria-disabled={narrowed || undefined} aria-describedby={narrowedBy ?? undefined}
+        aria-disabled={narrowed || undefined}
         data-narrowed={narrowed ? 'true' : undefined} onClick={tap}
       >
         <span aria-hidden="true">＋</span> {DOOR_WORD}
@@ -668,7 +693,7 @@ export function AddAccountDoor({ desk, narrowedBy, onOpen, onNarrowedTap }: {
     <ListRow
       className="acct-door"
       aria-label={DOOR_WORD}
-      aria-disabled={narrowed || undefined} aria-describedby={narrowedBy ?? undefined}
+      aria-disabled={narrowed || undefined}
       data-narrowed={narrowed ? 'true' : undefined} onClick={tap}
     >
       <span className="acct-door-word"><span aria-hidden="true">＋</span> {DOOR_WORD}</span>
