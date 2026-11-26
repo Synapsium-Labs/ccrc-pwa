@@ -323,6 +323,7 @@ import { liveRowFor, liveWordFor, processStartedAtFor, turnMarkFor, turnReadDeps
 import { rollPass, type ReleaseRead, type RollSweepMemory } from './rollLane.js';
 import { readLaneModels } from './laneModels.js';
 import { longLivedOf, rollTargetsOf } from './coord/rollTarget.js';
+import type { ReadinessTick } from './coord/overlordReadinessLane.js';
 import { NODE_FILES } from '../../shared/agent-protocol.js';
 import {
   COLLECT_AUDITS_PER_PASS, COLLECT_FEED_TITLE, collectAfterAct, collectFeedTitle, collectAfterAudit, collectAfterFoldFailed, collectAfterHold,
@@ -2844,6 +2845,7 @@ export class FleetWatcher {
         await this.emitPools(null, listedAt); // an unlistable registry: nobody may decide a pool, so `listed:false` reaches the wire now (free: no io)
         this.registryTick = { listed: false, at: listedAt };            // D-6436: `lastFleet` is kept, but not as a listing
         this.withdrawDelegation();                                      // wave 4: no lane runs below, so the frame is withdrawn here
+        void this.sweepOverlordReadiness({ listed: false })?.catch(() => { /* one bad sweep must not kill the poll */ }); // F2: the registry fact is unmeasured
         // Retain, don't erase, at fleet scale: `this.hookStates`/
         // `this.taskProgress`/`this.prevStatus`/`this.frameLatch` are all left
         // exactly as the prior successful tick set them. Nothing is broadcast
@@ -3224,6 +3226,8 @@ export class FleetWatcher {
       // the claim pair's synchronous try-block. It gates itself on `primed`, which is set below, so the priming tick
       // never judges.
       void this.sweepStalls(sessions, registryRead.names, { panePids, records, refused: registryRead.refused }).catch(() => { /* one bad sweep must not kill the poll */ });
+      // The Overlord's readiness word (§6.4, C23, H20), never awaited: this tick's assembled fleet and its listing (F4, F6).
+      void this.sweepOverlordReadiness({ listed: true, sessions, records, listedIds: registryRead.listedIds, names: registryRead.names })?.catch(() => { /* one bad sweep must not kill the poll */ });
       // Block wakes (P7) are their own lane, never awaited: the stall watch's switch and its run read do not gate them.
       void this.sweepBlockWakes(sessions, registryRead.names, { panePids, records, refused: registryRead.refused }).catch(() => { /* one bad sweep must not kill the poll */ });
       // D-6095: the admission wake, its own lane, never awaited; it reads the tick's listing for the two switches.
@@ -6503,6 +6507,13 @@ export class FleetWatcher {
     const monitor = this.deps.invariantMonitor;
     if (!monitor) return;
     await this.runLane('invariants', () => { monitor.pass(this.itemReach); });
+  }
+
+  /** The Overlord's readiness word (§6.4, C23, H20; `coord/overlordReadinessLane.ts`): one pass on this tick, with the watcher's
+   *  item reach. Absent (a test, a script): no pass runs and nothing is written. */
+  sweepOverlordReadiness(tick: ReadinessTick): Promise<unknown> | null {
+    const lane = this.deps.overlordReadiness;
+    return lane ? this.runLane('overlordReadiness', () => lane.pass(tick, this.itemReach)) : null;
   }
 
   /** The weekly replay quiz lane (Overlord §3.3.9 C52, W1a; `continuity/quizLane.ts`): one read-and-raise pass on the wall clock. */

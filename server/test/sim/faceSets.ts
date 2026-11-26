@@ -105,7 +105,7 @@ export function moodCases(m: MoodModule): Record<string, SuiteCase> {
     'a session with a question is Alert': () => { expect(mood(withSession({ bucket: 'attention' }))).toBe('alert'); },
     'a recent unchosen death is Crying, dated from lastEnd': () => { expect(mood(withSession(deadRow({ lastEnd: endedAgo(10 * MIN) })))).toBe('crying'); },
     'a swap or a limit restart is no death': () => {
-      for (const cause of ['swap-auto-home', 'swap-auto-rescue', 'swap-auto', 'swap-manual', 'limit-resume']) {
+      for (const cause of ['swap-auto-home', 'swap-auto-rescue', 'swap-auto-provider', 'swap-auto', 'swap-manual', 'limit-resume']) {
         expect(mood(withSession(deadRow({ lastEnd: endedAgo(MIN, cause) })))).not.toBe('crying');
       }
       for (const cause of ['oom', 'tmux-server', 'exited', 'unknown']) expect(mood(withSession(deadRow({ lastEnd: endedAgo(MIN, cause) })))).toBe('crying');

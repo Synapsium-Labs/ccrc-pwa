@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { openCoordDb } from '../src/coord/db.js';
-import { findingCounts, invariantItemOf, openFindings, recordFinding, resolveFindings } from '../src/coord/invariantFindingsStore.js';
+import { findingCounts, findingRows, invariantItemOf, openFindings, recordFinding, resolveFindings } from '../src/coord/invariantFindingsStore.js';
 import { itemById, raiseItem, raiseItemCheckedInTx, type RaiseItemInput } from '../src/coord/ledgersStore.js';
 import type { Finding } from '../src/coord/invariants.js';
 import { OVERLORD_ITEM_PROGRAMME } from '../../shared/overlord-sequence.js';
@@ -172,11 +172,33 @@ describe('the reads', () => {
     expect(c).toEqual({ kind: 'measured', value: { live: { total: 0, open: 0, byInvariant: {} }, shadow: { total: 0, open: 0, byInvariant: {} } } });
   });
 
+  it('findingRows (the operator\'s read, sequence C): open or resolved rows of both modes, newest first, at most the limit', () => {
+    const db = openDb();
+    const s1 = recordFinding(db, finding('timer:1'), 'shadow', null, NOW);
+    recordFinding(db, finding('timer:2'), 'shadow', null, NOW + 2);
+    const l3 = recordFinding(db, finding('timer:3'), 'live', LIVE, NOW + 3);
+    if (!s1.ok || !l3.ok) throw new Error('fixture');
+    resolveFindings(db, [s1.id], NOW + 5);
+    const open = findingRows(db, 'open', 10);
+    expect(open.kind === 'measured' && open.value.map((r) => `${r.mode}/${r.subject}`)).toEqual(['live/timer:3', 'shadow/timer:2']);
+    expect(open.kind === 'measured' && open.value[0]).toEqual({
+      id: l3.id, invariant: 'I17', subject: 'timer:3', mode: 'live', seq: null, message: 'a fixture message', foundAt: NOW + 3,
+      resolvedAt: null, latched: 'raised', itemId: l3.itemId,
+    });
+    const resolved = findingRows(db, 'resolved', 10);
+    expect(resolved.kind === 'measured' && resolved.value.map((r) => [r.subject, r.resolvedAt, r.latched, r.itemId])).toEqual([['timer:1', NOW + 5, null, null]]);
+    const one = findingRows(db, 'open', 1);
+    expect(one.kind === 'measured' && one.value.map((r) => r.subject)).toEqual(['timer:3']);
+    expect(findingRows(openDb(), 'open', 10)).toEqual({ kind: 'measured', value: [] });
+  });
+
   it('a closed database reads unmeasured', () => {
     const db = openDb();
     db.close();
     expect(openFindings(db, 'live').kind).toBe('unmeasured');
     expect(findingCounts(db).kind).toBe('unmeasured');
+    expect(findingRows(db, 'open', 1).kind).toBe('unmeasured');
+    expect(findingRows(db, 'resolved', 1).kind).toBe('unmeasured');
   });
 });
 

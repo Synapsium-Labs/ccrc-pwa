@@ -118,6 +118,8 @@ _profile_spawn_compose -> _route_note_floored
 _profile_spawn_compose -> _route_reject_note
 _profile_spawn_compose -> _route_unread_note
 _profile_workspace -> _reg_get
+_provider_hold_to -> _pane_box_read
+_provider_hold_to -> _tmux_t
 _redrive_after_spawn -> _reg_get
 _redrive_after_spawn -> _tmux_at
 _redrive_after_spawn -> _tmx

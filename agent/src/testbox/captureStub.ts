@@ -10,11 +10,15 @@ import { standInReply, type StandInReply } from './capture.js';
 
 /** A running stand-in. `requests` holds each parsed request body, in arrival order (build trust and the tests read it);
  *  `routes` holds the route each request came by (`messages` or `count_tokens`), at the same index and in the same order,
- *  always pushed together with its body, so the delivery recipe never reads a `count_tokens` body as a turn. */
+ *  always pushed together with its body, so the delivery recipe never reads a `count_tokens` body as a turn. `others` holds
+ *  one entry for each request on a route the stand-in does not script (it answers those 404, before anything is recorded),
+ *  each the length of `requests` at its arrival: only the count and the position, never the body (review 3898 A3). It is
+ *  optional for a fake stand-in, which has none. */
 export interface StandIn {
   readonly port: number;
   readonly requests: readonly unknown[];
   readonly routes: readonly DeliveryRoute[];
+  readonly others?: readonly number[];
   close(): Promise<void>;
 }
 
@@ -37,6 +41,7 @@ const sse = (event: string, data: Obj): string => `event: ${event}\ndata: ${JSON
 export async function startStandIn(opts: { host?: string; port?: number; reply?: (body: unknown) => StandInReply } = {}): Promise<StandIn> {
   const requests: unknown[] = [];
   const routes: DeliveryRoute[] = [];
+  const others: number[] = [];
   let n = 0;
 
   const json = (res: http.ServerResponse, status: number, body: Obj): void => {
@@ -74,7 +79,7 @@ export async function startStandIn(opts: { host?: string; port?: number; reply?:
   const server = http.createServer((req, res) => {
     const route = (req.url ?? '').split('?')[0];
     const known = req.method === 'POST' && (route === '/v1/messages' || route === '/v1/messages/count_tokens');
-    if (!known) { req.resume(); json(res, 404, errorBody('not_found_error', 'not scripted by the capture stand-in')); return; }
+    if (!known) { others.push(requests.length); req.resume(); json(res, 404, errorBody('not_found_error', 'not scripted by the capture stand-in')); return; }
     const chunks: Buffer[] = [];
     req.on('data', (c: Buffer) => chunks.push(c));
     req.on('end', () => {
@@ -91,7 +96,7 @@ export async function startStandIn(opts: { host?: string; port?: number; reply?:
   });
   const port = (server.address() as AddressInfo).port;
   return {
-    port, requests, routes,
+    port, requests, routes, others,
     close: () => new Promise<void>((resolve) => { server.close(() => resolve()); server.closeAllConnections(); }),
   };
 }

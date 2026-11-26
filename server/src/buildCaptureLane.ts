@@ -61,7 +61,7 @@ export type BuildCaptureUnavailable = BuildCaptureNotSent | 'recipe-not-run' | '
  *  there is none. */
 export type BuildCaptureAnswer =
   | { readonly kind: 'answered'; readonly result: unknown }
-  | { readonly kind: 'unavailable'; readonly why: BuildCaptureUnavailable };
+  | { readonly kind: 'unavailable'; readonly why: BuildCaptureUnavailable; readonly detail?: string };
 
 /** THE PORT: one capture job to the test box through the fleet agent. A rejection reads as `unanswered`. */
 export interface BuildCaptureTransport {
@@ -169,8 +169,10 @@ export class BuildCaptureLane {
     // stamp ends the pass before anything is recorded, as the trust loop's does (call 1253, condition 1).
     if (!coord.markDeliveryAttempt(build, part, at, answer.kind === 'unavailable' && answer.why !== 'unanswered' ? answer.why : 'sent')) return;
     if (answer.kind === 'unavailable') {
+      // THE ONE LINE of a delivery job that was not taken (review 3898 F6, the coordinator's ruling): the transport and the
+      // remote arm log nothing for it and hand over what was measured, the fleet agent's refusal or the box's closed frame.
       if (answer.why === 'recipe-not-run') {
-        console.warn(`ccrc-server: delivery capture: ${build} part ${part}: the box does not run the delivery recipe — nothing was sent, asked again after the spacing`);
+        console.warn(`ccrc-server: delivery capture: ${build} part ${part}: not sent: ${answer.detail ?? 'the test box closed the connection on the delivery frame'}; no attempt counted, asked again after the spacing`);
       }
       return;
     }

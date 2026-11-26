@@ -10,6 +10,7 @@ import { DESIGNATION_SEQUENCE_STATES } from './overlord-designation.js';
 import { ACTOR_SUBJECT_MAX, type ActorKind } from './overlord-identity.js';
 import { MESSAGE_STATES } from './operatorMessages.js';
 import { RUNGS } from './overlord-ladder.js';
+import { READINESS_WORDS } from './overlord-readiness.js';
 
 /** A latch's two moves: its row inserted standing, and its clear stamped. The ladder's latch rows carry no state column (a latch
  *  stands while its clear is unset), so these words are named here, beside the one kind that stamps them (slug
@@ -37,6 +38,7 @@ export const SEQUENCE_KIND_MAP = {
   message: { states: MESSAGE_STATES, id: 'the operator message id', spec: '§10.4 "a message"' },
   'ladder-rung': { states: RUNGS, id: 'the fixed id operator: the one rung row', spec: '§10.4 "the ladder"' },
   'ladder-latch': { states: LADDER_LATCH_SEQUENCE_STATES, id: 'the latch cause', spec: '§10.4 "the ladder"' },
+  readiness: { states: READINESS_WORDS, id: 'the session the word concerns, or none for absent', spec: '§10.4 "the readiness word"' },
 } as const satisfies Readonly<Record<string, { readonly states: readonly string[]; readonly id: string; readonly spec: string }>>;
 export type SequenceKind = keyof typeof SEQUENCE_KIND_MAP;
 export const SEQUENCE_KINDS = Object.keys(SEQUENCE_KIND_MAP) as SequenceKind[];

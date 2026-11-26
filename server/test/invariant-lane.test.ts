@@ -18,7 +18,7 @@ import { raiseLatch } from '../src/coord/overlordLadderRead.js';
 import { ladderRows, raiseLatchInTx, type AuthorityAppender } from '../src/coord/overlordLadderStore.js';
 import { serverActorOf } from '../src/auth/attributionIdentity.js';
 import { tx } from '../src/coord/tx.js';
-import { designationBaseline, pruneSequenceThrough, stampSequenceInTx, type SequenceLineInput } from '../src/coord/overlordSequenceStore.js';
+import { pruneSequenceThrough, stampSequenceInTx, type SequenceLineInput } from '../src/coord/overlordSequenceStore.js';
 import { insertTimer, markTimersFired } from '../src/continuity/continuityStore.js';
 import { INVARIANTS_LANE } from '../../shared/lane-arm.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -63,12 +63,18 @@ const invariantLatches = (db: DatabaseSync) => {
 
 interface Rig {
   db: DatabaseSync; monitor: InvariantMonitor; log: string[];
-  st: { armed: boolean; mono: number; wall: number; raises: number; refuseNext: number; failRecordNext: number; gathers: number; gather: (() => InvariantInput) | null };
+  st: {
+    armed: boolean; mono: number; wall: number; raises: number; refuseNext: number; failRecordNext: number; failResolveNext: number; gathers: number;
+    gather: (() => InvariantInput) | null;
+    /** A pinned sequence head: the head the runner reads stays here, so a line the pass itself stamps (a latch raise) does not
+     *  make the next pass due. Null reads the real head. */
+    headPin: number | null;
+  };
 }
 const rig = (): Rig => {
   const db = openCoordDb(path.join(mkTmp('ccrc-invariant-lane-'), '.ccrc', 'coord.db'));
   opened.push(db);
-  const st: Rig['st'] = { armed: false, mono: 1000, wall: NOW, raises: 0, refuseNext: 0, failRecordNext: 0, gathers: 0, gather: null };
+  const st: Rig['st'] = { armed: false, mono: 1000, wall: NOW, raises: 0, refuseNext: 0, failRecordNext: 0, failResolveNext: 0, gathers: 0, gather: null, headPin: null };
   const log: string[] = [];
   let seq = 0;
   const journal = { appendInTx: () => ({ ok: true, kind: 'appended', record: { sequence: ++seq } }) } as unknown as AuthorityAppender;
@@ -80,6 +86,7 @@ const rig = (): Rig => {
   const deps: InvariantMonitorDeps = {
     armed: () => st.armed,
     head: () => {
+      if (st.headPin !== null) return { kind: 'measured', value: st.headPin };
       const r = db.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'overlord_sequence'").get() as { seq: number } | undefined;
       return { kind: 'measured', value: r === undefined ? 0 : Number(r.seq) };
     },
@@ -94,7 +101,10 @@ const rig = (): Rig => {
       if (st.failRecordNext > 0) { st.failRecordNext -= 1; return { ok: false, error: 'a fixture write failure' }; }
       return recordFinding(db, f, mode, live, at);
     },
-    resolve: (ids, at) => resolveFindings(db, ids, at),
+    resolve: (ids, at) => {
+      if (st.failResolveNext > 0 && ids.length > 0) { st.failResolveNext -= 1; return { error: 'a fixture resolve failure' }; }
+      return resolveFindings(db, ids, at);
+    },
     raiseLatch: (detail) => {
       if (st.refuseNext > 0) { st.refuseNext -= 1; return { ok: false }; }
       st.raises += 1;
@@ -193,6 +203,9 @@ describe('InvariantMonitor', () => {
     r.st.armed = true;
     const t = firedTimer(r.db, 'lane-a', true);
     r.st.failRecordNext = 1;
+    // The head is pinned (sequence-b2-review-carries): the latch raise stamps a `ladder-latch` line (sequence B1), and a moved head
+    // would make the next pass due anyway, so this case would stay green with the pass remembered before its record.
+    r.st.headPin = 0;
     r.monitor.pass();
     expect(invariantLatches(r.db)).toHaveLength(1);
     expect(rows(r.db)).toEqual([]);
@@ -217,6 +230,26 @@ describe('InvariantMonitor', () => {
     expect(r.st.gathers).toBe(2);
     expect(rows(r.db)).toHaveLength(1);
     expect(r.st.raises).toBe(0);
+  });
+
+  it('a failed resolve is retried by the very next pass, with no clock advance (sequence-b2-review-carries)', () => {
+    const r = rig();
+    const t = firedTimer(r.db, 'lane-a', true);
+    r.st.headPin = 0;
+    r.monitor.pass();
+    expect(rows(r.db)).toEqual([expect.objectContaining({ subject: `timer:${t.id}`, mode: 'shadow', resolvedAt: null })]);
+    setMail(r.db, t.id, t.good);                  // the open finding now holds
+    r.st.failResolveNext = 1;
+    later(r);                                     // the cadence passes: the resolve fails once
+    expect(r.st.gathers).toBe(2);
+    expect(rows(r.db)[0]?.resolvedAt).toBeNull();
+    expect(r.log.some((l) => l.includes('resolved nothing: a fixture resolve failure'))).toBe(true);
+    r.monitor.pass();                             // the same head, mode and clock: due only because the last pass failed
+    expect(r.st.gathers).toBe(3);
+    expect(rows(r.db)).toHaveLength(1);
+    expect(rows(r.db)[0]?.resolvedAt).not.toBeNull();
+    r.monitor.pass();                             // that pass succeeded and is remembered: nothing is due now
+    expect(r.st.gathers).toBe(3);
   });
 
   it('repaired: the next pass resolves the finding; broken again it is a new finding and a new item', () => {
@@ -347,7 +380,6 @@ const overRig = () => {
   let keys = 0;
   const monitor = invariantMonitorOver({
     db, coord, journal, readJournal: () => ({ kind: 'absent' }), guardState: () => ({ kind: 'coherent' }),
-    designationBaseline: () => ({ kind: 'measured', value: null }),
     clock: { wall: () => NOW, mono: () => 1000 }, entropy: { hex: (n: number) => String(++keys).padStart(n * 2, '0') }, log: () => {},
   });
   firedTimer(db, 'lane-a', true);
@@ -405,7 +437,9 @@ describe('invariantMonitorOver: the arming binding over the real Shadow lanes ro
 });
 
 describe('invariantMonitorOver: I5 through the sequence store\'s kept-line read (call 1240)', () => {
-  it('passes the read to the gather: a session line from another body under the kept live line is recorded, in shadow', () => {
+  // The factory binds the read itself (slug `i5-baseline-bound-in-the-factory`), so this case is the production binding: a factory
+  // that bound a stand-in answering none leaves the walk to the designation row, which binds nothing here, and this case goes red.
+  it('binds the read to the gather: a session line from another body under the kept live line is recorded, in shadow', () => {
     const db = openCoordDb(path.join(mkTmp('ccrc-invariant-i5-'), '.ccrc', 'coord.db'));
     opened.push(db);
     const line = (l: Partial<SequenceLineInput>): void => {
@@ -419,7 +453,7 @@ describe('invariantMonitorOver: I5 through the sequence store\'s kept-line read 
     const journal = { appendInTx: () => ({ ok: true, kind: 'appended', record: { sequence: 1 } }) } as unknown as AuthorityAppender;
     const monitor = invariantMonitorOver({
       db, coord: new CoordStore(db), journal, readJournal: () => ({ kind: 'absent' }), guardState: () => ({ kind: 'coherent' }),
-      designationBaseline, clock: { wall: () => NOW, mono: () => 1000 }, entropy: { hex: (n: number) => '0'.repeat(n * 2) }, log: () => {},
+      clock: { wall: () => NOW, mono: () => 1000 }, entropy: { hex: (n: number) => '0'.repeat(n * 2) }, log: () => {},
     });
     monitor.pass();
     expect(monitor.last()?.verdicts.get('I5')).toEqual({

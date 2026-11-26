@@ -13,6 +13,7 @@ import { DISPATCH_ABANDON_DEFAULT_MS } from '../../shared/dispatch-abandon.js';
 import { backupStaleHoursOf } from '../../shared/backup.js';
 import { privateTrackerKeysOf } from './linking/publicTextClasses.js';
 import type { FingerprintAnswer } from './accounts/mask.js';
+import { artifactConfig, type ArtifactConfig } from './artifacts/policy.js';
 import { DEPS_SHED_AFTER_HOURS_DEFAULT, DEPS_SHED_PER_PASS_DEFAULT } from './depsShed.js';
 import {
   WAKE_GATE_DEFAULT, WAKE_HEADROOM_MIN_GIB_DEFAULT, WAKE_HEADROOM_MIN_GIB_MAX, WAKE_PRESSURE_GATES, type WakeGateConfig, type WakePressureGate,
@@ -360,6 +361,14 @@ export interface CcrcConfig {
    */
   origin: string;
   /**
+   * The artifact tier's config (native Docs HTML artifacts X5, spec §2.3), decided ONCE here by `artifactConfig` from
+   * `CCRC_ARTIFACT_ORIGIN`, `CCRC_ARTIFACT_CONTENT_ORIGIN`, `CCRC_ARTIFACT_PORT` and `CCRC_EXPOSE_MODE` beside {@link origin}
+   * and {@link port}. ALL OR NOTHING: all three keys present and valid is `on`; anything else is `off` with a word, never a
+   * boot error (an optional feature never refuses boot). `partial` and `invalid` log one warning line; `unset` and
+   * `by-address` stay silent, since nobody asked for the tier.
+   */
+  artifact: ArtifactConfig;
+  /**
    * The flat-file passkey credential store (`server/src/auth/credentials.ts`).
    * `defaultPasskeysPath(home)`, for `sessionsPath`'s reason one field up.
    */
@@ -559,6 +568,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
   const releaseApiUrl = (env.CCRC_RELEASE_API_URL || '').replace(/\/+$/, '');
   const deadlineNum = Number(env.CCRC_UPDATE_DEADLINE_MS);
   const dispatchAbandonMs = dispatchAbandonMsOf(env.CCRC_DISPATCH_ABANDON_MS);
+  // Hoisted for the `port`/`origin` reason above: the console origin is read by `origin` and by the artifact decision.
+  const consoleOrigin = env.CCRC_ORIGIN || `http://localhost:${port}`;
+  const artifact = artifactConfig(
+    {
+      origin: env.CCRC_ARTIFACT_ORIGIN, content: env.CCRC_ARTIFACT_CONTENT_ORIGIN,
+      port: env.CCRC_ARTIFACT_PORT, exposeMode: env.CCRC_EXPOSE_MODE,
+    },
+    consoleOrigin, port);
+  if (artifact.state === 'off' && (artifact.why === 'partial' || artifact.why === 'invalid')) {
+    console.warn(`ccrc-server: artifact tier off — ${artifact.detail}`);
+  }
   return {
     // `||`, not `??`: a bare `CCRC_HOST=` EnvironmentFile line yields '', and
     // `listen({host: ''})` binds ALL interfaces — the opposite of the loopback
@@ -632,7 +652,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
     // enrolment ceremony would be handed `rpId: ''`, which every browser
     // refuses with an opaque `SecurityError` and no server-side trace.
     rpId: env.CCRC_RP_ID || 'localhost',
-    origin: env.CCRC_ORIGIN || `http://localhost:${port}`,
+    origin: consoleOrigin,
+    artifact,
     passkeysPath: env.CCRC_PASSKEYS_PATH || defaultPasskeysPath(home),
   };
 }

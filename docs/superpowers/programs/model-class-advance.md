@@ -68,6 +68,7 @@ Statements 5 and 6 read as modification 94 rewrote them on 2026-11-22.
 | Follow-up | `revert-ends-itself`: a Revert records what it left and the refresh ends its hold by itself, on both kinds of lane | #3237 | merged 2026-11-23 |
 | Follow-up | `typed-repick`: a session behind its class's id is one more reason for the existing idle roll, which types no command | #3238 | merged 2026-11-23 |
 | Follow-up | `revert-holds-until-newer` with `ccrcdir-param-drop`: the sheet and its door offer Revert alone, where the box reports that it ends holds (D-8757) | #3246 | merged 2026-11-23; v0.0.1416 is a published prerelease |
+| Wave 10 | The README, the spec and this file describe what shipped; #2607 closed | #3250 | merged 2026-11-23 |
 
 The hourly advance has moved classes by itself, each move after a passing canary: one class on both Codex lanes on
 2026-10-26, and on one lane an opus class that stepped to an older model on 2026-11-10 and back two hours later (wave 3
@@ -118,14 +119,14 @@ and acceptance.
 | 7 | anthropic-arm | anthropic-writer | The alias file, holds and doctor causes on Anthropic lanes | #3107 | merged 2026-11-20 |
 | 8 | anthropic-arm | anthropic-ccd | ccd launches a held class on its pin and carries effort to the new model | #3122 | merged 2026-11-22 |
 | 9 | anthropic-arm | anthropic-pwa | Labels and the Models sheet on Anthropic lanes | #3221 | merged 2026-11-22, with no Hold, Release or Revert on an Anthropic lane until #3246 (below) |
-| 10 | acceptance | docs-and-issues | The README's context-window rule, the spec's status, #2607, and the Fable-ceiling issue | | building (run 3500) |
+| 10 | acceptance | docs-and-issues | The README's context-window rule, the spec's status, #2607, and the Fable-ceiling issue | #3250 | merged 2026-11-23 |
 | - | catalogue-current | usage-user-agent | The usage reader sends the probe's Codex client version, from one reader | #3085 | merged 2026-11-21 |
 | - | models-sheet | transient-beside-kept-answer | The sheet names a transient answer beside a kept one; a session-screen case and two text corrections | #3086 | merged 2026-11-19 |
 | - | models-sheet | revert-writes-before-refusing | A refused Revert must not leave the class held | #3118 | folded into wave 3 |
 | - | read-path | ccrcdir-param-drop | Drop `readLaneModels`' unread `ccrcDir` parameter (D-8757) | #3246 | merged 2026-11-23, with `revert-holds-until-newer` |
 | - | doctor | release-lookup-warn | Doctor warns when the Codex release lookup has failed for over a day | #3118 | folded into wave 3 |
 | - | anthropic-arm | repick-landing-notes | Six notes for the id re-pick, read with A3.6's re-check | | dropped: no typed re-pick is built (below) |
-| - | acceptance | natural-move | Watch the next real release through: canary, move, a new session, no sessions-behind warning | | watched from wave 1's rollout |
+| - | acceptance | natural-move | Watch the next real release through: canary, move, a new session, no sessions-behind warning | | run 3524, read-only: waits for a real release |
 | - | anthropic-arm | cache-row-skip | One bad row in Claude Code's model cache must not make the whole file unreadable (wave 7's review, F5) | #3223 | merged 2026-11-22 |
 | - | doctor | doctor-caps-one-reader | One reader of `ccd caps` in doctor; an unmeasured answer is never a PASS (wave 7's review, F6) | #3222 | merged 2026-11-22 |
 | - | doctor | effort-fallback-pins | Pin the two terms of the effort-file claim that wave 3's last review found unpinned, with three note corrections | #3217 | merged 2026-11-22 |
@@ -134,7 +135,7 @@ and acceptance.
 | - | doctor | release-lookup-pins | Pin the release lookup's library read with a stand-in library, and two text corrections (wave 3's fifth review) | #3216 | merged 2026-11-22 |
 | - | anthropic-arm | no-keys-transitive | Guard passive alias observation against indirect key senders (wave 8's third review) | #3219 | merged 2026-11-22 |
 | - | anthropic-arm | entry-comment-seven | The launcher's comment names its seven libraries, with the launcher's next change of substance | | with that change |
-| - | acceptance | readme-anthropic-arm | README lines for the Anthropic arm, after the README freeze lifts | | wave 10, run 3500: only as an exact packet the freeze holder has consented to |
+| - | acceptance | readme-anthropic-arm | README lines for the Anthropic arm, after the README freeze lifts | #3250 | dropped 2026-11-23: #3250 carried those lines, under the freeze holder's consent |
 
 Order: waves 3 and 8 merged on 2026-11-22 (#3118, then #3122), and wave 9 built on both and merged that evening
 (#3221). Five follow-ups ran beside wave 9, each on files wave 9 did not hold, and all merged the same day. On
@@ -308,6 +309,25 @@ Codex lanes marked as Codex lanes in its roster, the fleet box on v0.0.1288 or l
   rulings, one for correctness) and landed it, rather than spend another review round.
 - **Workers and reviews:** each wave is a dispatched worker on its own branch, read by a review run with the held-out
   panel, and merged through the queue by the coordinator. Rollout rides the release lane; nothing here moves a box by hand.
+- **Acceptance reads, and the window after a move (2026-11-23, calls 627 and 628).** The acceptance run is read-only.
+  Its worker holds one run-bound timer for a later read, and never polls. Both Codex lanes read a 272000-token window
+  from the provider's own figure, because three of their models have no measured window. That value is kept, and
+  doctor's WARN records it, rather than a hand `set-window`.
+- **How the definition of done is proved (2026-11-26, call 1494, a design-level call the owner may overturn).** A
+  behaviour that only shows after a Revert or a fault is accepted from the merged tests at the installed commit plus a
+  live reading of the installed check, or of the fact the installed build reports about it. It is not staged on the
+  live fleet: a fault warning cannot occur on a
+  healthy fleet, and a live Revert holds real sessions on an older model until a newer one appears. A behaviour that a
+  real release shows stays a live wait. The other choices were one supervised live Revert on a Codex lane, and waiting
+  for a natural event for every line. The evidence, line by line, is in
+  `docs/superpowers/programs/model-class-advance/acceptance-evidence.md`.
+- **The sheet's display (2026-11-26, call 1499, a design-level call the owner may overturn).** The Models sheet is
+  drawn only on a signed-in device, which no session can read. Its display is accepted from the merged browser tests on
+  the commit the server box serves, plus a live reading on every lane of the data the sheet draws from. The other
+  choices were to ask the owner for one look, or to leave line 5 open.
+- **The next read (2026-11-26, call 1495).** The three-day read found no new model on either kind of lane: no new Codex
+  model id, and no alias change. The worker
+  holds one more read-only recheck, seven days on. Move history is kept, so a later read loses no evidence.
 
 ## Carried constraints
 
@@ -323,13 +343,17 @@ Codex lanes marked as Codex lanes in its roster, the fleet box on v0.0.1288 or l
 
 ## Remaining after wave 10's docs
 
-Merged is not released, released is not installed, and installed is not observed live. #3237, #3238 and #3246 are merged;
-v0.0.1416 is a published prerelease and no evidence of installation. Open, unless separately measured:
+Merged is not released, released is not installed, and installed is not observed live. On 2026-11-26 both boxes were
+measured on v0.0.1486, which holds every wave. Lines 1, 3, 4, 5 and 8 of the definition of done are proved; the
+evidence is in `docs/superpowers/programs/model-class-advance/acceptance-evidence.md`. Open:
 
-- `moves-only-forward`, measured on the fleet box once a release with wave 3 is installed there.
-- The Models sheet's live acceptance, once a build with #3246 is installed.
-- `natural-move` at a real model release: the canary, the move, a new session on the new model, and no sessions-behind
-  warning 24 hours later, doctor's evidence.
+- `moves-only-forward` (line 2): a move on a build that holds every wave. It waits for a real Codex model release.
+- `anthropic-follows` (line 6): labels and effort following an alias that resolves to a new model. It waits for a real
+  alias change.
+- `natural-move` (line 7) at a real model release: the canary, the move, a new session on the new model, and no
+  sessions-behind warning 24 hours later, doctor's evidence.
 - The renewal programme's evaluation evidence, which owns any claim about session renewal.
 
-Nothing here moves the fleet or asks the owner for a step.
+No feature build is left in the plan. Three tickets stay open there without one: `natural-move` is the wait itself,
+`entry-comment-seven` rides the launcher's next change of substance, and `doctor-land` is bookkeeping for #2943, which
+merged. The three open lines wait for the providers, and the acceptance worker reads again on its timer. Nothing here moves the fleet or asks the owner for a step.

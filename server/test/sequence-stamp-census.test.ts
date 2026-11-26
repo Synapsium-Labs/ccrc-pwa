@@ -12,6 +12,7 @@ const CS = 'server/src/continuity/continuityStore.ts';
 const DS = 'server/src/coord/overlordDesignationStore.ts';
 const OM = 'server/src/operatorModel/store.ts';
 const LS = 'server/src/coord/overlordLadderStore.ts';
+const RS = 'server/src/coord/overlordReadinessStore.ts';
 const INBOX = 'server/src/coord/overlordInboxRoutes.ts#registerOverlordInboxRoutes';
 const STAMP_ACK = 'server/src/coord/overlordSequenceStore.ts#stampInboxAcknowledgement';
 const STAMP_MESSAGE = 'server/src/coord/overlordSequenceStore.ts#stampMessageLine';
@@ -76,6 +77,13 @@ export const STAMPED_TABLES: Readonly<Record<SequenceKind, StampedTable>> = {
       [`${LS}#journalPendingInTx`]: 'the catch-up stamps a pending record\'s sequence only; the latch it records was stamped when it was raised',
     },
   },
+  readiness: {
+    table: 'overlord_readiness',
+    stampers: [`${RS}#recordReadinessInTx`],
+    nothing: {
+      [`${RS}#pruneReadiness`]: 'retention removes rows older than 90 days and changes no word (the readiness plan, question 13)',
+    },
+  },
 };
 
 /** The operator message's after-commit path (call 1218, slug `message-lines-stamp-after-the-move`; review 3646 F8): the one helper
@@ -103,7 +111,7 @@ const times = (counted: Readonly<Record<string, number>>): string[] =>
   Object.entries(counted).flatMap(([ref, n]) => Array.from({ length: n }, () => ref)).sort();
 
 /** The helpers a stamper calls, each of which calls the writer and checks its answer. */
-const TX_STAMP_HELPERS = [`${CS}#stampGeneration`, `${DS}#stampLines`, `${LS}#stampLadderLine`] as const;
+const TX_STAMP_HELPERS = [`${CS}#stampGeneration`, `${DS}#stampLines`, `${LS}#stampLadderLine`, `${RS}#stampReadinessLine`] as const;
 const AFTER_COMMIT = Object.values(STAMPED_TABLES).flatMap((row) => row.afterCommit === undefined ? [] : [row.afterCommit]);
 const STAMP_HELPERS = [...TX_STAMP_HELPERS, STAMP_MESSAGE];
 

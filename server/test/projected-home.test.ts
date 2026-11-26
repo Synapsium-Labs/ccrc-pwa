@@ -159,6 +159,14 @@ const seedAuthDeadMalformed = (byWrapper: Record<string, string>): void => {
   }
 };
 
+/** `<w>-provfail` with these exact bytes (the limit watchdog's mark). */
+const seedProvFailing = (byWrapper: Record<string, string>): void => {
+  const dir = path.join(home, '.cc-sessions');
+  fs.mkdirSync(dir, { recursive: true });
+  for (const name of fs.readdirSync(dir)) if (name.endsWith('-provfail')) fs.rmSync(path.join(dir, name));
+  for (const [w, content] of Object.entries(byWrapper)) fs.writeFileSync(path.join(dir, `${w}-provfail`), content);
+};
+
 /** `_limit_score` says "wholly unknown" with an empty string, and `|| '0'` IS
  *  reached — by `all-rolled-over`, whose expected winner is unmeasured on both
  *  sides the moment the provenance fix lands (until then it is an inferred 0 on
@@ -269,6 +277,7 @@ describe('projectHome agrees with ccd _ws_least_loaded', () => {
       seedDisabled(c.disabled ?? []);
       seedAuthDead(c.authDead ?? []);
       seedAuthDeadMalformed(c.authDeadMalformed ?? {});
+      seedProvFailing(c.provFailing ?? {});
       seedSpawns(c.spawns);
       seedSweep(c.sweep);
       if (c.project?.tag != null) seedPoolTag(c.project.name, c.project.tag);
@@ -322,6 +331,20 @@ describe('projectHome agrees with ccd _ws_least_loaded', () => {
 });
 
 describe('projectHome edge cases', () => {
+  it('a symlinked lane-failing mark is no mark on either side, as a symlinked authdead is none', async () => {
+    seedRoster(home); seedAccountsSh(home);
+    seed({ claude: JSON.stringify({ five: 5, seven: 5, ts: now() - 60 }), 'claude-a': JSON.stringify({ five: 60, seven: 5, ts: now() - 60 }) });
+    seedProvFailing({ claude: `${now() - 60} server_error` });
+    const pick = async (): Promise<string[]> => {
+      const cfg = loadConfig({ CCRC_HOME: home });
+      return [projectHome(cfg.roster, await readLimits(localIO, cfg), { state: 'untagged' }, NO_EDGES)!.wrapper, sh('_ws_least_loaded')];
+    };
+    expect(await pick(), 'control: the regular file is a mark').toEqual(['claude-a', 'claude-a']);
+    const f = path.join(home, '.cc-sessions', 'claude-provfail');
+    fs.renameSync(f, path.join(home, 'elsewhere')); fs.symlinkSync(path.join(home, 'elsewhere'), f);
+    expect(await pick()).toEqual(['claude', 'claude']);
+  });
+
   it('projects claude at full headroom when there is no telemetry at all', () => {
     // First boot, or a limits dir nothing has written yet. NOTHING is measured,
     // so the rule cannot rank at all — and "cannot rank" must not become

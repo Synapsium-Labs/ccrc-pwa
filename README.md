@@ -1505,7 +1505,7 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the one hundred and six machine lanes the
+liveness gate reads the shipped sha out of it), the one hundred and seven machine lanes the
 fleet host reaches (thirty-nine box-token-consulting coordination routes plus
 the Linear proxy's routes under `/api/linear/proxy/`, which a session's `ccrc-api linear`
 verbs call and which refuse any call without the token whatever `CCRC_AUTH` says,
@@ -1529,7 +1529,9 @@ refuses otherwise) and its tick report
 (`POST /api/continuity/quiz-baseline/live`, attributed and owned, W1a lanes only),
 the Overlord's inbox doors (`GET /api/overlord/inbox`, `GET /api/overlord/messages/:id` and
 `POST /api/overlord/messages/:id/acknowledge`, attributed, then behind the Overlord gate and its fence), the Overlord's
-history door (`POST /api/overlord/history`, a read whose search words ride the body, behind the same gate and fence),
+history door (`POST /api/overlord/history`, a read whose search words ride the body, behind the same gate and fence), the
+Overlord's cursor read of the sequence (`GET /api/overlord/sequence`, server words and ids only, behind the same gate, its row not
+fenced),
 `/api/notify`, which refuses an absent token like every lane,
 `/api/pools/epoch` and `/api/updates/intent/:nodeId` — the callers are `curl` inside a
 Claude Code session, `ccd-pool-sync.timer` and, from update-management W4, `ccd-update-sync.timer`, none with a cookie jar, though the
@@ -2797,8 +2799,10 @@ its own `resetAt` — and `_limit_score` answers `""` unless both windows are me
 declares `fiveWindowMinutes: 0` is scored on `seven` alone). `_ws_least_loaded` skips an account with no
 score, and falls back only when nothing was scored: to the first eligible account the roster says can report
 (`telemetry: "anthropic"`), then to the first eligible account at all, and — only when the health probe has
-condemned every eligible lane — to the first auth-dead one. `_swap_target` ranks an unscored candidate at
-`100`, below every scored one, a lane whose provider is failing (`~/.cc-sessions/<id>-provfail`, below) at `101`, and an
+condemned every eligible lane — to the first auth-dead one. A lane whose provider is failing
+(`~/.cc-sessions/<id>-provfail`, below) is left out of all of that until no unmarked lane with a live credential is
+eligible; then the same rule runs over the marked ones, so it is tried last and never refused. `_swap_target` ranks an unscored candidate at
+`100`, below every scored one, a lane whose provider is failing at `101`, and an
 auth-dead one at `102`, below that. So an account nobody has heard from
 in a week takes work only when nothing measured can, and the server's `projectHome` forecasts the same
 tiers (with one difference: it scores a `telemetry: "codex"` lane, which ccd's placement leaves out of its
@@ -2825,7 +2829,7 @@ turns with errors is a third file, `~/.cc-sessions/<id>-provfail` (`"<epoch> <wo
 limit watchdog's pass when three consecutive provider failures of one session, or a fresh owed one of each of two, stand on
 that lane with no newer good Stop there. It ends at a newer good Stop and means nothing 30 minutes after it was written. An
 automatic move does not return a session to a home that is marked and ranks a marked lane behind every other but an auth-dead
-one, never ineligible; `ccd swap`, `ccd swap-self` and `ccd prefer` never read it. The probe is
+one, never ineligible, and a new workspace is placed on one only when no other lane can take it; `ccd swap`, `ccd swap-self` and `ccd prefer` never read it. The probe is
 described under "Account health and the telemetry keepalive" below; `ccrc account check` is how you measure a
 `login` lane.
 
@@ -3133,8 +3137,8 @@ none per supervise tick). When tmux pronounces the session `gone`, the supervise
 end: `oom` when that scope's journal names an OOM kill in the last 120 s (`journalctl --user -u
 <scope>`, bounded by `timeout 5`), `tmux-server` when `tmux list-sessions` fails, `exited`
 otherwise, and `unknown` when the journal read fails or no scope was recorded on Linux. `cmd_swap`
-records `swap-manual`, `swap-auto-home`, `swap-auto-rescue` or `swap-auto` after its act-time gates
-and before it stops the unit, so a refused swap records no end. Each goes to `$REG/<id>.lastend`
+records `swap-manual`, `swap-auto-home`, `swap-auto-rescue`, `swap-auto-provider` or `swap-auto` after its
+act-time gates and before it stops the unit, so a refused swap records no end. Each goes to `$REG/<id>.lastend`
 (`<epoch> <cause>`; an `oom` also appends to `$REG/<id>.oomends`, kept to the last 10 minutes) and
 to `swap.log` as `ended <id>: <cause>`. `_resume_prompt_for` composes the prompt per spawn: a
 `lastend` at most 10 minutes old replaces RESUME_PROMPT's "an account swap or a supervisor revival"
@@ -5968,7 +5972,13 @@ entry whose order names it directly, where one is recorded and reads; the answer
 journalled, and both work while sign-in is dark, recording `flag-off`. Neither chooses, reorders or brings forward the head: an
 order edge to a withdrawn entry stays outstanding, so its dependant waits, named in the read's `order.waits` with each target's
 entry id and PR, until a session declares its order again without that entry, which the feed records whoever does it, or the
-entry re-enters at its run's next verified pin and then lands or is closed; a run-less entry cannot re-enter (D-9047).
+entry re-enters at its run's next verified pin and then lands or is closed; a run-less entry cannot re-enter (D-9047). Since wave 5k
+the console draws the line on the fleet screen's project card, only for a project whose line has an open entry or the operator's
+pause: each open entry by pull request in the read's order, which one is next to land, what waits and on which withdrawn entry, and
+why the line is paused. It reads `GET /api/landing` for every known project, at once when the list of projects changes, every 60
+seconds, when the page is shown again and after each door's answer (D-9108). A read that fails is shown only over a line already
+drawn, as not read again (D-9109). Pause and resume are one tap; a withdrawal is a sheet that sends the pin time of the entry it
+shows, and then names who was told and who could not be.
 
 The main-red hold has one writer: a fresh, same-base `main-health` measurement applied through the radar lane. A next-to-land mail
 is sent once per exact episode, base and recipient; it tells a coordinator to re-read the line and is not merge permission. The
@@ -6283,6 +6293,22 @@ unreadable (ahead of every wave-1 rung and cap), coordinator deaf (ahead of the
   - An account-class error holds, because the limit and swap machinery owns it.
   - A token this build does not know holds with one `ccrc-server: stall-watch
     unknown StopFailure` line. It is never guessed into a self-wake.
+
+**A session on a failing provider moves by itself**, the last rung of the
+provider-failure ladder below (`ccd/ccd#_watchdog_provider`, in the fleet limit
+watchdog's pass). On the third counted failure since its last move, still owed,
+it goes to another lane by itself: the limit rescue's act, with the
+arm `provider`, and no key is sent. Every gate of a rescue stands (the pool side,
+the class, `<lane>-disabled`, measured room, the 15 minutes after a move, do not
+bounce, three moves a pass), never one class down, and never a lane that is marked
+failing, one of a provider with two marked lanes, or one the session's measured
+context does not fit. A lane with a good turn since the first failure comes first,
+then another provider, then an unproved lane of its own. It waits for a running
+turn, background work, a dialog, a question and unsent text in the box, at the
+decision and again at the act. With no lane it stays, the nudges go on, and
+`~/.cc-sessions/<id>.provwait` (an epoch) says since when, until a good turn or a
+move. It raises no notice. `ccd swap`, `ccd swap-self` and `ccd prefer` are never
+held by any of it, and `CCRC_LIMIT_WATCHDOG_MIN=0` stops it.
 
 **The provider-failure ladder** (`server/src/coord/providerRetry.ts`, run inside
 the stall watch's pass by `server/src/providerRetryLane.ts`). Any live session
