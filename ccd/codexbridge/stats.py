@@ -726,7 +726,10 @@ class Stats:
         """Write the file when something changed, at most every FLUSH_S (a forced flush, and the first call after a
         failed one or a store event, write at once). True when it wrote; a failure is counted and kept for the next
         call, never raised. The write runs outside self._lock; an unforced flush while another write is in flight
-        returns False, unless `wait`: then it waits for that write, and decides after it as any unforced flush does."""
+        returns False, unless `wait`: then it waits for that write, and decides after it as any unforced flush does.
+        The last flush's tick is the tick at its write's START, never its end: a waiting idle flush fires FLUSH_S after
+        an answer that ended while that write was in flight, so it is at least FLUSH_S past the start and the interval
+        rule lets it through; a tick at the end would throttle it and leave that answer's counts in memory (#3462)."""
         if not self._write_lock.acquire(blocking=force or wait):
             return False
         try:

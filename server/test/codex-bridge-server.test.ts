@@ -192,9 +192,10 @@ function readStats(lane: BridgeLane): Json {
 }
 
 /** The stats file once `ready` holds of it: the bridge flushes after the answer's last byte, so a case polls (at most
- *  3 s) rather than racing the flush. Answers back to back too: an answer whose own flush met a write in flight is
- *  written by its idle flush once that write ends (#3462). A case that reads `readStats` after `bridge.stop()`'s drain
- *  instead (D-6997) reads the same counts, written by the drain's forced flush. */
+ *  3 s) rather than racing the flush. Answers back to back too, when the write in flight ends inside that poll: an
+ *  answer whose own flush met a write in flight is written by its idle flush once that write ends (#3462). A case that
+ *  reads `readStats` after `bridge.stop()`'s drain instead (D-6997) reads the same counts, written by the drain's forced
+ *  flush. */
 async function statsWhen(lane: BridgeLane, ready: (s: Json) => boolean): Promise<Json> {
   const t0 = Date.now();
   for (;;) {
@@ -2244,21 +2245,29 @@ describe.skipIf(!PY || !HAS_PROC)('an idle flush that meets a write in flight wa
   };
   const answers = (n: number): ResponsesAnswer[] => Array.from({ length: n }, () => ({ status: 200, sse: textReply('ok') }));
 
-  it('answers behind a held idle write end at once, and all of them reach the file once that write ends, with no further request', async () => {
+  it('answers behind a held idle write end at once, on both routes, and all of them reach the file once that write ends, with no further request', async () => {
     await withBridge(answers(4), async ({ bridge, lane }) => {
       const end = await holdIdleWrite(bridge, lane);
       try {
         // a handler's flush meets the write in flight and returns at once, so the answer ends (it ends at the close)
         for (const nth of ['third', 'fourth']) expect((await answered(bridge, 5000))?.status, `the ${nth} answer ended`).toBe(200);
-        await sleep((FLUSH_S + 1.5) * 1000);  // the fourth answer's idle flush has come, and met the write in flight
+        // the token count route's handler flushes too, after its answer's last byte: over a raw socket, which resolves at
+        // the bridge's close, that close comes only once its flush has returned
+        const body = JSON.stringify(messages());
+        const counted = rawCall(bridge, ['POST /v1/messages/count_tokens HTTP/1.1', `Host: 127.0.0.1:${bridge.port}`,
+          `x-api-key: ${bridge.key}`, 'Content-Type: application/json', `Content-Length: ${Buffer.byteLength(body)}`], body);
+        counted.catch(() => undefined);
+        expect((await Promise.race([counted, sleep(5000).then(() => null)]))?.status, 'the token count answer ended').toBe(200);
+        await sleep((FLUSH_S + 1.5) * 1000);  // the token count's idle flush has come, and met the write in flight
         expect(writing(bridge, lane), 'the write is still held').toBe(true);
         expect(readStats(lane).outcomes['2xx']).toBe(1);
       } finally {
         closeSync(end);
       }
       // the held write fails; the idle flush that waited behind it writes what is dirty then: both answers behind it
-      const stats = await statsWhen(lane, (d) => d.outcomes['2xx'] === 4);
+      const stats = await statsWhen(lane, (d) => d.outcomes['2xx'] === 4 && d.outcomes.countTokens === 1);
       expect(stats.outcomes['2xx']).toBe(4);
+      expect(stats.outcomes.countTokens).toBe(1);
       expect(stats.outcomes['stats:flush-failed']).toBe(1);
       expect(existsSync(tmpName(lane))).toBe(false);
       expect(bridge.exited()).toBeNull();

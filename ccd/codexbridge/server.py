@@ -77,12 +77,13 @@ into a request and never changes the client's answer or the wire.
 
 THE IDLE FLUSH (D-8624). Each answer's handler flushes the stats file, which writes at most every `stats.FLUSH_S`; then
 it re-arms one timer (`_IdleFlush`) that flushes again once the bridge has been idle for FLUSH_S, so a run's figures
-reach the disk soon after its last response rather than at the next request. One timer at most; the drain stops it
-before its own forced flush. The idle flush waits for a write in flight (`wait`), where a handler's flush does not: the
-idle flush is the last word on an idle lane, so an answer whose own flush met a write in flight (the previous idle
-flush's, still in fsync) reaches the file once that write ends, never only at the next request (#3462). It writes what
-is dirty when its turn comes, so every answer behind one slow write is counted; a second one that waits behind it finds
-nothing left and writes nothing.
+reach the disk soon after its last response rather than at the next request. One pending timer at most; the drain
+stops it before its own forced flush. The idle flush waits for a write in flight (`wait`), where a handler's flush does
+not: the idle flush is the last word on an idle lane, so an answer whose own flush met a write in flight (the previous
+idle flush's, still in fsync) reaches the file once that write ends, never only at the next request (#3462). It writes
+what is dirty when its turn comes, so every answer behind one slow write is counted. A second one that waits behind it
+writes only what changed after the first one's write; when the interval rule stops it, the answer that made that
+change has its own idle flush still to come.
 
 THE CATALOGUE. A model outside it is the client's: 404 `not_found_error`, counted `modelSubstitution:<model>` when the
 request carries Claude Code's claude-code beta (`inbound.from_claude_code`) and `foreignSubstitution:<model>` when it

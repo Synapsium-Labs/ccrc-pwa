@@ -61,10 +61,10 @@ The four things the coordinator asked to hold:
 
 | # | Held how |
 |---|---|
-| 1 | A handler's flush returns at once when a write is in flight: both new cases send answers while the write is held and require each to end within 5 s (an answer's body ends when its handler's `finally` has flushed and the connection closes). Mutant M3 (the handler's flush waits) is killed by both. |
+| 1 | A handler's flush returns at once when a write is in flight, at both handler sites: the messages route and the token count route. Both new cases send messages answers while the write is held and require each to end within 5 s (a streamed answer's body ends when its handler's `finally` has flushed and the connection closes). The first case also sends a token count request over a raw socket, which resolves only at the bridge's close, after that handler's flush (fix round 1, review F2: its JSON answer carries a length, so an ordinary client ends before the flush). Mutant M3 (the messages handler waits) is killed by both cases, and M3b (the token count handler waits) by the first. |
 | 2 | The stop's drain ends once the write in flight ends, with an idle flush waiting behind it: the second case. While the write is held, the drain's forced flush waits for it (the forced rule, pinned in the stats suite), as on `main`; a write that never completes holds the stop until the unit's stop bound, as on `main`. The waiting idle flush adds no wait of its own: it is a daemon thread, and it takes the counter lock only after the write lock. Mutant M5 (it waits while holding the counter lock) hangs the stop and is killed. |
 | 3 | The waiting flush writes what is dirty when its turn comes: the first case puts two answers behind one held write and requires both counted after it ends (4 in all). |
-| 4 | No second timer and no loop. `arm` still cancels a timer that has not fired, so there is one pending timer at most. A timer that has fired and waits cannot be cancelled; if another answer's timer fires while it waits, that one waits too. They take the write lock in turn: the first writes everything dirty, and a later one finds nothing dirty (unless an answer came after the first wrote) and returns without writing. Each fired timer ends after one flush. Waiting threads are at most one per idle gap of `FLUSH_S` during one write. A strict single waiter would need a second piece of state in `Stats`; I left it out as larger than the defect. |
+| 4 | No second timer and no loop. `arm` still cancels a timer that has not fired, so there is one pending timer at most. A timer that has fired and waits cannot be cancelled; if another answer's timer fires while it waits, that one waits too. They take the write lock in turn: the first writes everything dirty, and a later one finds nothing dirty (unless an answer came after the first wrote) and returns without writing. Each fired timer ends after one flush. A later waiter can also be stopped by the interval rule while a later answer's counts are dirty; that answer's own idle flush is still to come and writes them (the review measured it). Waiting threads are bounded by traffic: at most one per answer followed by a quiet `FLUSH_S` during one write. A strict single waiter would need a second piece of state in `Stats`; I left it out as larger than the defect (slug `strict-single-waiter-deferred`). |
 
 **The new cases** (server suite, block "an idle flush that meets a write in flight waits for it, a handler's never does
 (#3462)", Linux only). A FIFO at the stats file's temp name, with its pipe filled by the case through an `O_RDWR`
@@ -73,7 +73,21 @@ blocks on the full pipe, holding the write lock. The hold is seen as the bridge'
 `/proc/<pid>/fd`. Closing the case's end fails the held write (a broken pipe: counted `stats:flush-failed`, retried at
 the next flush). `FLUSH_S` is 3: the first answer is written, the second comes inside `FLUSH_S` of that write so its
 own flush is throttled, and its idle flush is the writer the FIFO holds. The first case is red on `main` (`expected 1 to
-be 4`: the counts never reach the file) and green with the fix; the second is green on both (a guard).
+be 4`: the counts never reach the file) and green with the fix; the second is green on both (a guard). Measured
+durations: about 10.7 s and 11.7 s on the hosted runner, 11 to 14 s on the loaded fleet box, inside the 20 s bound.
+
+**The case behind a write that succeeds** (fix round 1, review F1). Both cases above end their held write in a failure
+(a pipe cannot be synced), and a failure sets the retry flag, which skips the interval rule. The queue's red took the
+other path: a waiter behind a write that SUCCEEDS, let through only by the interval rule. What lets it through is that
+the last flush's tick is the tick at the write's start; a tick taken at the end would throttle it and bring the lost
+write back. The bridge's count stats suite, block "the stats file's write lock and value rules", now has "a waiting flush
+behind a write that succeeds waits for it, then writes the counts made during it". It uses the suite's race op, which
+holds a real fsync that succeeds and runs the stats module in process on every platform. One count goes in before the
+hold and one during it; the waiting flush waits out a 0.6 s hold at `FLUSH_S` 0.3, then writes, and the next flush finds
+nothing dirty. It is red on main (the waiting flush returns at once) and under the end-tick mutant (X2: the waiter is
+throttled, `[null, false]`). I chose that home, as the review advised, over a third FIFO case in the server suite: a
+FIFO write can only fail, so the server suite cannot hold a write that succeeds without a hook in the bridge. The flush's
+docstring now says the tick is the write's start, and why.
 
 **The back-to-back cases that use `statsWhen`** in the server suite, all covered by the bridge fix with no test change:
 "a compaction request is counted only when it succeeds" (a 5xx then a 2xx), "a 200 with no content type is reduced, and
@@ -122,6 +136,11 @@ the bridge as a subprocess that imports the package from disk, so it could not d
 | M3: a handler's flush passes `wait` | killed in both cases: the answer behind the held write did not end within 5 s |
 | M4: a waiting flush returns after its wait without writing | killed in both cases (the first answer's idle write never lands) |
 | M5: a waiting flush holds the counter lock while it waits | killed: `expected 1 to be 4`, and the stop case times out at 20 s |
+| M3b: the token count handler's flush passes `wait` (fix round 1) | killed: the token count answer did not end within 5 s |
+| X2: the last flush's tick taken at the write's end (fix round 1; survived round 0) | killed by the count stats case: `[null, false]` |
+
+In fix round 1 all seven ran again against the three cases together (both server cases and the count stats case), and
+all seven were killed. M2, M4 and M5 are now also killed by the count stats case.
 
 ## 6. What ran
 
@@ -135,7 +154,9 @@ type-checks the whole tree. The shell lint ratchet was not started, as the brief
 
 ## 7. What I left
 
-- A strict single waiting idle flush (row 4 above), if a reviewer wants it.
+- A strict single waiting idle flush (row 4 above, slug `strict-single-waiter-deferred`), if a reviewer wants it.
+- Two losses the review found on `main`, untouched here, which the coordinator tickets: a failed idle write re-arms
+  nothing, and the model listing route counts a refusal without flushing or arming.
 - The new cases are Linux only (`/proc`); the macOS legs skip them.
 
 ## Departures (by slug)
@@ -143,5 +164,6 @@ type-checks the whole tree. The shell lint ratchet was not started, as the brief
 - `brief-named-proxy-file`: the fix is in `ccd/codexbridge/stats.py` and `ccd/codexbridge/server.py`, not the file the
   brief named; agreed by the coordinator before the edit.
 - `mutation-by-hand-subprocess`: mutants applied on disk and restored, not through the mutation runner.
+- `strict-single-waiter-deferred`: a second waiting idle flush waits its turn rather than returning at once (row 4).
 - `typecheck-narrowed-slice-oom`: the tests' type check narrowed to the changed files after two out-of-memory kills in
   the shared test slice.
