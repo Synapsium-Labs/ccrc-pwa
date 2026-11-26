@@ -703,8 +703,14 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     const r = runInstall(home);
     const line = r.stdout.split('\n').find((l) => l.startsWith('install: gate: ')) ?? '';
     expect(line, r.stdout).toContain('NO PWA passphrase');
-    expect(line).toContain('To arm the gate: ccrc passwd, then ccrc auth on');
-    expect(line).not.toContain('CCRC_RP_ID');
+    if (process.platform === 'darwin') {
+      // Review 3971 R1(d), ruling B: the verb refuses on a Mac, so the gate line gives the hand route there.
+      expect(line).not.toContain('ccrc auth on');
+      expect(line).toContain('CCRC_RP_ID');
+    } else {
+      expect(line).toContain('To arm the gate: ccrc passwd, then ccrc auth on');
+      expect(line).not.toContain('CCRC_RP_ID');
+    }
     expect(existsSync(join(home, '.ccrc', 'auth.scrypt'))).toBe(false);
   });
 

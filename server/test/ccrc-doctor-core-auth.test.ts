@@ -139,10 +139,16 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     const none = unexposedBox('ccrc-doctor-auth-verb-none-');
     rmSync(join(none, '.ccrc', 'auth.scrypt'), { force: true });
     const a = authLine(runDoctor(none).stdout);
-    expect(a).toMatch(/^PASS auth: .*to arm the gate: ccrc passwd, then ccrc auth on$/);
-    expect(a).not.toContain('CCRC_RP_ID');
     const set = unexposedBox('ccrc-doctor-auth-verb-set-');
     const b = authLine(runDoctor(set).stdout);
+    if (process.platform === 'darwin') {
+      // Review 3971 R1(d), ruling B: the verb refuses on a Mac, so doctor gives the hand route there.
+      expect(a).toMatch(/^PASS auth: .*to arm the gate: ccrc passwd, then set CCRC_AUTH=on together with CCRC_RP_ID and CCRC_ORIGIN/);
+      for (const l of [a, b]) expect(l).not.toContain('ccrc auth on');
+      return;
+    }
+    expect(a).toMatch(/^PASS auth: .*to arm the gate: ccrc passwd, then ccrc auth on$/);
+    expect(a).not.toContain('CCRC_RP_ID');
     expect(b).toMatch(/^PASS auth: .*holds a usable passphrase .*no request is gated yet; to arm it: ccrc auth on$/);
   });
 

@@ -17,10 +17,14 @@
 //     of `<home>/restart-plan` if any (`dead`, `off`), else `armed` when ccrc.env holds `CCRC_AUTH=on`, else `off`.
 //  5. The verb is the operator's, so every run that should get past the guards runs on a pty (node-pty), with
 //     CLAUDECODE, TMUX and TMUX_PANE removed from its environment: this suite itself may run inside a session.
+//  6. The installed unit is what the installer lands, never a stand-in: this checkout's deploy/ccrc.service, copied to
+//     `<home>/ccrc/deploy/` and to the user unit directory unchanged (review 3971 R1). The end-to-end cases run on
+//     Linux only; the function-level ones (a Mac's refusal and the helper, the signal handler) run everywhere (review
+//     3971 R3).
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import {
-  chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, symlinkSync, writeFileSync,
+  chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -40,6 +44,12 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
 const CCRC_SRC = join(REPO, 'ccd', 'ccrc');
 const BASH = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim();
+/** The unit the installer lands: the tree's own file, copied unchanged (`_inst_units`, deploy.sh). */
+const SHIPPED_UNIT_SRC = join(REPO, 'deploy', 'ccrc.service');
+const SHIPPED_UNIT = readFileSync(SHIPPED_UNIT_SRC, 'latin1');
+/** The verb's end-to-end cases plant a systemd user unit and a systemctl stub; on a Mac the verb looks for a launchd
+ *  job instead, so they run on Linux only (review 3971 R3), as the install and expose suites branch. */
+const IS_DARWIN = process.platform === 'darwin';
 
 const ccrcIn = (home: string): string => join(home, 'ccrc', 'ccd', 'ccrc');
 const envFile = (home: string): string => join(home, '.ccrc', 'ccrc.env');
@@ -96,9 +106,14 @@ const SYSTEMCTL_STUB = [
   '      printf \'EnvironmentFiles=%s (ignore_errors=yes)\\n\' "$HOME/.ccrc/ccrc.env" "$HOME/.ccrc/exposure.env"; fi',
   '    printf \'PassEnvironment=\\n\'; exit 0 ;;',
   '  "--user show-environment")',
-  '    [ ! -e "$HOME/sd-show-fails" ] || exit 1',
+  '    [ ! -e "$HOME/sd-show-fails" ] && [ ! -e "$HOME/sd-manager-env-fails" ] || exit 1',
   '    if [ -e "$HOME/sd-manager-env" ]; then cat "$HOME/sd-manager-env"; else printf \'HOME=%s\\nLANG=C.UTF-8\\n\' "$HOME"; fi',
   '    exit 0 ;;',
+  // Whether systemd loaded the unit file as it is now (review 3971 R1): `<home>/sd-needreload` holds the answer (no by
+  // default), and `<home>/sd-needreload-fails` makes the query fail.
+  '  "--user show ccrc.service -p NeedDaemonReload")',
+  '    [ ! -e "$HOME/sd-needreload-fails" ] || exit 1',
+  '    printf \'NeedDaemonReload=%s\\n\' "$(cat "$HOME/sd-needreload" 2>/dev/null || echo no)"; exit 0 ;;',
   '  "--user is-active ccrc.service")',
   '    if [ "$(cat "$HOME/server-state" 2>/dev/null)" = down ]; then echo failed; exit 3; fi',
   '    echo active; exit 0 ;;',
@@ -121,9 +136,12 @@ function box(prefix: string, envText: string, opts: { passphrase?: boolean | 'ga
   mkdirSync(join(home, '.ccrc'), { recursive: true });
   writeFileSync(envFile(home), envText, { mode: 0o600 });
   chmodSync(envFile(home), 0o600);
+  // The tree's unit file, and the installed copy of it, byte for byte: what `_inst_units` lands (review 3971 R1).
+  mkdirSync(join(home, 'ccrc', 'deploy'), { recursive: true });
+  copyFileSync(SHIPPED_UNIT_SRC, join(home, 'ccrc', 'deploy', 'ccrc.service'));
   const units = join(home, '.config', 'systemd', 'user');
   mkdirSync(units, { recursive: true });
-  writeFileSync(join(units, 'ccrc.service'), '[Service]\n');
+  copyFileSync(SHIPPED_UNIT_SRC, join(units, 'ccrc.service'));
   if (opts.passphrase !== false) {
     writeFileSync(join(home, '.ccrc', 'auth.scrypt'), opts.passphrase === 'garbled' ? 'not a secret line\n' : fixtureSecretLine(),
       { mode: 0o600 });
@@ -197,7 +215,7 @@ const ON_LINES = (port: number): string =>
   `# ccrc auth on: sign-in at http://localhost:${port} ('ccrc auth off' removes these lines)\n`
   + `CCRC_AUTH=on\nCCRC_RP_ID=localhost\nCCRC_ORIGIN=http://localhost:${port}\nCCRC_COOKIE_INSECURE=on\n`;
 
-describe('ccrc auth: the guards an operator-only verb runs first', () => {
+describe.skipIf(IS_DARWIN)('ccrc auth: the guards an operator-only verb runs first', () => {
   it('refuses inside a Claude Code session (CLAUDECODE set)', async () => {
     const b = box('ccrc-auth-claudecode-', portLines());
     const before = bytes(envFile(b.home));
@@ -224,7 +242,7 @@ describe('ccrc auth: the guards an operator-only verb runs first', () => {
   });
 });
 
-describe('ccrc auth: which box may run it', () => {
+describe.skipIf(IS_DARWIN)('ccrc auth: which box may run it', () => {
   it('refuses on the fleet role, and on a box with no ccrc.service installed', async () => {
     const a = box('ccrc-auth-fleet-', `${portLines()}CCRC_ROLE=fleet\n`);
     await expectRefused(a, await runTty(a.home, ['auth', 'on']), bytes(envFile(a.home)), /runs no console/);
@@ -254,23 +272,31 @@ describe('ccrc auth: which box may run it', () => {
 
   it('refuses a non-loopback CCRC_HOST bind, and an undecidable one', async () => {
     const a = box('ccrc-auth-wild-', `CCRC_HOST=0.0.0.0\nCCRC_PORT=${PORT}\n`);
-    await expectRefused(a, await runTty(a.home, ['auth', 'on']), bytes(envFile(a.home)), /CCRC_HOST=0\.0\.0\.0/);
+    // Review 3971 R5 (A5): a bind and nothing else gets the README's remedy on `on` too, never the three expose arms.
+    const onBind = await runTty(a.home, ['auth', 'on']);
+    await expectRefused(a, onBind, bytes(envFile(a.home)), /CCRC_HOST=0\.0\.0\.0 in .* is not a value this verb can read as this machine only/);
+    expect(onBind.out).toMatch(/Bind it back to 127\.0\.0\.1 \(or remove the line\) and re-run, or arm it by hand \(the README's 'The session gate'\)/);
+    expect(onBind.out).not.toMatch(/ccrc expose/);
     // Review 3934 A4: off names the bind, not un-exposing (there is nothing to un-expose).
     const offBind = await runTty(a.home, ['auth', 'off']);
-    await expectRefused(a, offBind, bytes(envFile(a.home)), /CCRC_HOST=0\.0\.0\.0 in .* binds the server beyond this machine/);
+    await expectRefused(a, offBind, bytes(envFile(a.home)), /CCRC_HOST=0\.0\.0\.0 in .* is not a value this verb can read as this machine only/);
     expect(offBind.out).not.toMatch(/un-exposing/);
     const u = box('ccrc-auth-undecided-', `CCRC_HOST ="127.0.0.1"\nCCRC_PORT=${PORT}\n`);
     await expectRefused(u, await runTty(u.home, ['auth', 'on']), bytes(envFile(u.home)), /was not measured/);
   });
 
-  // Review 3934 A2: loopback is an address, never any text that begins 127.
-  for (const host of ['127.0.0.1.example.com', '127.256.0.1', '127.0.0.01', '127.255.255.255']) {
-    it(`refuses CCRC_HOST=${host} as reached from elsewhere: loopback is 127.0.0.1 to 127.255.255.254, localhost or ::1`, async () => {
+  // Review 3934 A2: loopback is an address, never any text that begins 127. Review 3971 R5 (A3a): the sentence is true of
+  // each value refused, a loopback spelling this reader does not take (127.1, LOCALHOST) among them: never "beyond".
+  for (const host of ['127.0.0.1.example.com', '127.256.0.1', '127.0.0.01', '127.255.255.255', '127.1', 'LOCALHOST']) {
+    it(`refuses CCRC_HOST=${host}, on and off: loopback is 127.0.0.1 to 127.255.255.254, localhost or ::1`, async () => {
       const b = box('ccrc-auth-127text-', `CCRC_HOST=${host}\nCCRC_PORT=${PORT}\n`);
       const before = bytes(envFile(b.home));
-      const r = await runTty(b.home, ['auth', 'on']);
-      await expectRefused(b, r, before, /reached from elsewhere \(CCRC_HOST=/);
-      expect(r.out).toContain(`reached from elsewhere (CCRC_HOST=${host} in `);
+      for (const sub of ['on', 'off']) {
+        const r = await runTty(b.home, ['auth', sub]);
+        await expectRefused(b, r, before, /is not a value this verb can read as this machine only \(127\.0\.0\.1 to 127\.255\.255\.254, localhost or ::1\)/);
+        expect(r.out).toContain(`auth ${sub}: CCRC_HOST=${host} in `);
+        expect(r.out).not.toMatch(/beyond this machine/);
+      }
     });
   }
 
@@ -300,7 +326,7 @@ describe('ccrc auth: which box may run it', () => {
   });
 });
 
-describe('ccrc auth on: what must hold before anything is written', () => {
+describe.skipIf(IS_DARWIN)('ccrc auth on: what must hold before anything is written', () => {
   it('refuses with no passphrase, and says to run ccrc passwd first', async () => {
     const b = box('ccrc-auth-nopass-', portLines(), { passphrase: false });
     await expectRefused(b, await runTty(b.home, ['auth', 'on']), bytes(envFile(b.home)), /ccrc passwd, then ccrc auth on/);
@@ -336,7 +362,7 @@ const others = (): string => `# box config\n${portLines()}# CCRC_AUTH=off   <- a
   + 'CCRC_VAPID_SUBJECT=mailto:fixture@example.invalid\nCCRC_FLEET=local\r\nNOTE_LINE=a  b\tc';
 const RESTART = '--user restart ccrc.service';
 
-describe('ccrc auth on: the write, the restart and the proof', () => {
+describe.skipIf(IS_DARWIN)('ccrc auth on: the write, the restart and the proof', () => {
 
   it('appends the four lines, keeps every other byte and the file mode, restarts once and proves sign-in on', async () => {
     const b = box('ccrc-auth-on-', others());
@@ -417,7 +443,7 @@ describe('ccrc auth on: the write, the restart and the proof', () => {
   });
 });
 
-describe('ccrc auth off', () => {
+describe.skipIf(IS_DARWIN)('ccrc auth off', () => {
   it('removes exactly what on wrote — the file is back to its bytes — and proves sign-in off', async () => {
     const original = `# box config\n${portLines()}# CCRC_AUTH=on  <- a comment, never removed\nCCRC_FLEET=local\n`;
     const b = box('ccrc-auth-off-', original);
@@ -511,9 +537,11 @@ describe('ccrc auth off', () => {
 // user manager's own environment; the verb reads the unit file and its drop-in directories on disk (what the next
 // start applies) and asks systemd what it loaded (what the restart applies), and refuses, on and off alike, naming
 // each source by path and never a value. A source it cannot list is undecidable, and refuses too.
-describe("ccrc auth: the unit's other sources of its environment (review 3934 F2)", () => {
+describe.skipIf(IS_DARWIN)("ccrc auth: the unit's other sources of its environment (review 3934 F2)", () => {
   const units = (h: string): string => join(h, '.config', 'systemd', 'user');
-  const unit = (h: string, text: string): void => writeFileSync(join(units(h), 'ccrc.service'), text);
+  /** The installed unit with `lines` added under [Service]: the reading names them before the installer's check would. */
+  const unit = (h: string, lines: string): void =>
+    writeFileSync(join(units(h), 'ccrc.service'), SHIPPED_UNIT.replace('[Service]\n', `[Service]\n${lines}`));
   const dropIn = (h: string, dir: string, name: string, text: string): void => {
     mkdirSync(join(units(h), dir), { recursive: true });
     writeFileSync(join(units(h), dir, name), text);
@@ -523,11 +551,11 @@ describe("ccrc auth: the unit's other sources of its environment (review 3934 F2
       /ccrc\.service\.d\/bind\.conf is a drop-in for ccrc\.service/],
     ['a drop-in for every user service', (h) => dropIn(h, 'service.d', 'all.conf', '[Service]\nEnvironment=CCRC_HOST=0.0.0.0\n'),
       /service\.d\/all\.conf is a drop-in for ccrc\.service/],
-    ['an Environment= line in the unit itself', (h) => unit(h, '[Service]\nEnvironment="CCRC_HOST=0.0.0.0" NODE_ENV=production\n'),
+    ['an Environment= line in the unit itself', (h) => unit(h, 'Environment="CCRC_HOST=0.0.0.0" NODE_ENV=production\n'),
       /ccrc\.service sets CCRC_HOST in an Environment= line/],
-    ['a PassEnvironment= line in the unit itself', (h) => unit(h, '[Service]\nPassEnvironment=CCRC_ORIGIN\n'),
+    ['a PassEnvironment= line in the unit itself', (h) => unit(h, 'PassEnvironment=CCRC_ORIGIN\n'),
       /ccrc\.service passes CCRC_ORIGIN from the service manager \(PassEnvironment=\)/],
-    ['an environment file beyond the two', (h) => unit(h, '[Service]\nEnvironmentFile=-%h/.ccrc/ccrc.env\nEnvironmentFile=-%h/.ccrc/more.env\n'),
+    ['an environment file beyond the two', (h) => unit(h, 'EnvironmentFile=-%h/.ccrc/more.env\n'),
       /ccrc\.service reads .*\/\.ccrc\/more\.env \(EnvironmentFile=\)/],
     ['a drop-in systemd loaded from another directory', (h) => writeFileSync(join(h, 'sd-dropins'), '/etc/systemd/user/ccrc.service.d/bind.conf'),
       /systemd loaded the drop-in \/etc\/systemd\/user\/ccrc\.service\.d\/bind\.conf for ccrc\.service/],
@@ -567,9 +595,11 @@ describe("ccrc auth: the unit's other sources of its environment (review 3934 F2
     await expectRefused(c, await runTty(c.home, ['auth', 'on']), bytes(envFile(c.home)), /systemctl --user show did not answer, so .* was not measured/);
   });
 
-  it('passes the shipped shape: the two known EnvironmentFile= lines (%h), another key in Environment=, an empty drop-in directory', async () => {
+  // Review 3971 R1: the shipped shape is the installed unit untouched (its two EnvironmentFile= lines with %h). A hand
+  // edit of it, even one naming no key, now refuses as not the installer's file (the next describe).
+  it('passes the installed unit untouched, another key in what systemd loaded, and an empty drop-in directory', async () => {
     const b = box('ccrc-auth-src-shipped-', portLines());
-    unit(b.home, '[Service]\nEnvironmentFile=-%h/.ccrc/ccrc.env\nEnvironmentFile=-%h/.ccrc/exposure.env\nEnvironment=NODE_ENV=production\nLimitCORE=0\n');
+    expect(readFileSync(join(units(b.home), 'ccrc.service'), 'latin1')).toBe(SHIPPED_UNIT);
     mkdirSync(join(units(b.home), 'ccrc.service.d'));
     writeFileSync(join(b.home, 'sd-environment'), 'NODE_ENV=production');
     const r = await runTty(b.home, ['auth', 'on']);
@@ -578,68 +608,125 @@ describe("ccrc auth: the unit's other sources of its environment (review 3934 F2
   });
 });
 
-// The launchd job (macOS): its EnvironmentVariables, the files its bash line sources, and launchd's own environment.
-// `ccrc` recomputes CCD_OS from uname on every run, so the Darwin arm is asked as a function, with CCD_OS set after
-// sourcing (the unit reader's own harness, ccrc-doctor-core-auth), against a recording launchctl stub.
-describe('ccrc auth: the launchd job\'s other sources (review 3934 F2, the Darwin arm, as a function)', () => {
-  function sources(plant: (dir: string, plist: string) => void, launchctl: string): { rc: number; reasons: string; why: string } {
-    const dir = mkTmp('ccrc-auth-src-darwin-');
-    const bin = join(dir, 'bin');
-    mkdirSync(join(dir, '.ccrc'), { recursive: true });
-    mkdirSync(join(dir, 'Library', 'LaunchAgents'), { recursive: true });
-    mkdirSync(bin);
-    writeFileSync(join(bin, 'launchctl'), `#!/bin/sh\n${launchctl}\n`, { mode: 0o755 });
-    const script = [
-      `. ${JSON.stringify(CCRC_SRC)}`, 'CCD_OS=darwin', `HOME=${JSON.stringify(dir)}`,
-      'BOX_UNIT_DIR="$HOME/Library/LaunchAgents"; BOX_ENV_FILE="$HOME/.ccrc/ccrc.env"; CCRC_EXPOSURE_FILE="$HOME/.ccrc/exposure.env"',
-      'plist="$BOX_UNIT_DIR/$(_box_unit_file ccrc.service)"; printf "%s" "$plist" > "$HOME/plist-path"',
-      `[ -x ${JSON.stringify(join(dir, 'plant'))} ] && ${JSON.stringify(join(dir, 'plant'))} "$plist"`,
-      '_auth_unit_sources "$BOX_UNIT_DIR"; rc=$?',
-      'printf "%s" "$rc" > "$HOME/rc"; printf "%s\\n" "${AUS_REASONS[@]}" > "$HOME/reasons"; printf "%s" "$AUS_WHY" > "$HOME/why"',
-    ].join('\n');
-    writeFileSync(join(dir, 'plant'), '#!/bin/sh\n:\n', { mode: 0o755 });
-    plant(dir, '');
-    const r = spawnSync(BASH, ['-c', script], {
-      encoding: 'utf8', env: { HOME: dir, PATH: `${bin}:${process.env['PATH'] ?? '/usr/bin:/bin'}`, CCRC_ALLOW_SANDBOX_LAUNCHCTL: '1' },
+// ── review 3971 R1: the verb acts only on the unit the installer lands ────────────────────────────────────────────
+// `_inst_units` (and deploy.sh) copy the tree's deploy/ccrc.service to the user unit directory unchanged. A unit that
+// is not that file byte for byte refuses, on and off alike, naming the file and never the difference: this closes the
+// ExecStart edit (`env CCRC_HOST=0.0.0.0 node`) and every line the reading above parses differently from systemd. A unit
+// systemd has not reloaded since it changed (NeedDaemonReload=yes), or a systemd that does not say, refuses too.
+describe.skipIf(IS_DARWIN)('ccrc auth: the installed unit is the installer\'s, as systemd loaded it (review 3971 R1)', () => {
+  const installed = (h: string): string => join(h, '.config', 'systemd', 'user', 'ccrc.service');
+  const edits: [string, (u: string) => string][] = [
+    ['an ExecStart= edit that binds every interface (env CCRC_HOST=0.0.0.0 before node)',
+      (u) => u.replace('ExecStart=/usr/bin/env node', 'ExecStart=/usr/bin/env CCRC_HOST=0.0.0.0 node')],
+    ["an Environment line with a space around '=', which systemd takes and the reading does not",
+      (u) => u.replace('[Service]\n', '[Service]\nEnvironment = CCRC_HOST=0.0.0.0\n')],
+    ['an Environment= line continued onto the next line',
+      (u) => u.replace('[Service]\n', '[Service]\nEnvironment=NODE_ENV=production \\\n  CCRC_HOST=0.0.0.0\n')],
+    ['an Environment= line with an escape in the name',
+      (u) => u.replace('[Service]\n', '[Service]\nEnvironment=CCRC_\\x48OST=0.0.0.0\n')],
+    ['an edit that names no key at all', (u) => u.replace('RestartSec=3', 'RestartSec=4')],
+  ];
+  for (const [name, edit] of edits) {
+    it(`refuses on and off: ${name}, naming the file and never the difference`, async () => {
+      const b = box('ccrc-auth-own-', portLines());
+      writeFileSync(installed(b.home), edit(SHIPPED_UNIT));
+      expect(readFileSync(installed(b.home), 'latin1')).not.toBe(SHIPPED_UNIT);
+      const before = bytes(envFile(b.home));
+      for (const sub of ['on', 'off']) {
+        const r = await runTty(b.home, ['auth', sub]);
+        await expectRefused(b, r, before, /ccrc\.service is not the unit file ccrc installs \(.*\/ccrc\/deploy\/ccrc\.service\), and this verb acts only on its own/);
+        expect(r.out).toMatch(/ccrc install, or an update, puts the shipped file back; or set the keys by hand \(the README's 'The session gate'\)/);
+        expect(r.out).not.toMatch(/0\.0\.0\.0|RestartSec/);
+      }
     });
-    expect(r.status, r.stderr).toBe(0);
-    const g = (n: string): string => readFileSync(join(dir, n), 'utf8');
-    return { rc: Number(g('rc')), reasons: g('reasons'), why: g('why') };
   }
-  /** A plist written by the shipped writer, `_inst_plist_server`, then edited by `edit` (a sed expression or none). */
-  const shipped = (edit: string) => (dir: string): void => {
-    writeFileSync(join(dir, 'plant'), `#!/bin/bash\n. ${JSON.stringify(CCRC_SRC)}\nCCD_OS=darwin\n`
-      + `HOME=${JSON.stringify(dir)}; BOX_ENV_FILE="$HOME/.ccrc/ccrc.env"; CCRC_EXPOSURE_FILE="$HOME/.ccrc/exposure.env"\n`
-      + `_inst_plist_server "$(_svc_label ccrc.service)" "$HOME/ccrc.log" > "$1"\n${edit ? `sed -i ${JSON.stringify(edit)} "$1"\n` : ''}`,
-    { mode: 0o755 });
-  };
-  const UNSET = 'case "$1" in getenv) exit 0 ;; esac; exit 90';
 
-  it('the shipped job, with nothing in launchd\'s environment, has no other source', () => {
-    const r = sources(shipped(''), UNSET);
-    expect(r).toEqual({ rc: 0, reasons: '\n', why: '' });
+  it('refuses a unit systemd has not reloaded since it changed, and a systemd that does not say, naming the reload', async () => {
+    const a = box('ccrc-auth-own-stale-', portLines());
+    writeFileSync(join(a.home, 'sd-needreload'), 'yes\n');
+    for (const sub of ['on', 'off']) {
+      const r = await runTty(a.home, ['auth', sub]);
+      await expectRefused(a, r, bytes(envFile(a.home)), /systemd has not loaded .*ccrc\.service as it is now \(NeedDaemonReload=yes\)/);
+      expect(r.out).toMatch(/To go on: run systemctl --user daemon-reload, then re-run/);
+    }
+    const c = box('ccrc-auth-own-unsaid-', portLines());
+    writeFileSync(join(c.home, 'sd-needreload-fails'), '');
+    await expectRefused(c, await runTty(c.home, ['auth', 'on']), bytes(envFile(c.home)),
+      /systemctl --user show did not say whether systemd loaded .*ccrc\.service as it is now \(NeedDaemonReload\), so what the restart would apply was not measured/);
   });
 
-  it('names a key in the job\'s EnvironmentVariables, a third sourced file, and a key in launchd\'s environment — never a value', () => {
-    const k = sources(shipped('s|<key>HOME</key>|<key>CCRC_HOST</key><string>0.0.0.0</string><key>HOME</key>|'), UNSET);
-    expect(k.rc).toBe(0);
-    expect(k.reasons).toMatch(/\.plist sets CCRC_HOST in its EnvironmentVariables/);
-    const f = sources(shipped("s|set +a;|[ -f '/etc/ccrc/extra.env' ] \\&amp;\\&amp; . '/etc/ccrc/extra.env'; set +a;|"), UNSET);
-    expect(f.reasons).toMatch(/\.plist sources \/etc\/ccrc\/extra\.env/);
-    const l = sources(shipped(''), 'case "$1 $2" in "getenv CCRC_HOST") echo 0.0.0.0; exit 0 ;; getenv*) exit 0 ;; esac; exit 90');
-    expect(l.reasons).toMatch(/launchd's own environment \(launchctl getenv\) sets CCRC_HOST/);
-    for (const x of [k, f, l]) expect(x.reasons).not.toMatch(/0\.0\.0\.0/);
+  it('refuses as not measured when the tree\'s own unit file cannot be read', async () => {
+    const b = box('ccrc-auth-own-notree-', portLines());
+    spawnSync('rm', ['-f', join(b.home, 'ccrc', 'deploy', 'ccrc.service')]);
+    await expectRefused(b, await runTty(b.home, ['auth', 'on']), bytes(envFile(b.home)),
+      /ccrc\/deploy\/ccrc\.service, the unit file ccrc installs, cannot be read, so whether .* is that file was not measured/);
+  });
+});
+
+// ── review 3971 R1(d), the coordinator's ruling B: not on a Mac yet ──────────────────────────────────────────────
+// Two fields of the launchd job belong to the moment of the install, so the job file cannot be proved the installer's:
+// on a Mac the verb refuses before any read of the box, with the hand route, and the helper that offers it declines.
+// `ccrc` takes its platform from bash's OSTYPE, so darwin is set after sourcing (the unit reader's own harness) and these
+// run on every platform. The launchd arm of the sources reading went with this ruling, and its three function-level
+// cases with it (the task note's section 10).
+describe('ccrc auth: on a Mac the verb refuses with the hand route, and is not offered (review 3971 R1(d))', () => {
+  /** A loopback server box (ccrc.env, the installed unit), then `body` run in a bash that sourced ccrc with `os` set. */
+  function asFunction(os: 'linux' | 'darwin', body: string): { rc: number; err: string; env: string | null; calls: string } {
+    const dir = mkTmp('ccrc-auth-mac-');
+    const bin = join(dir, 'bin');
+    mkdirSync(bin);
+    mkdirSync(join(dir, '.ccrc'), { recursive: true });
+    writeFileSync(join(dir, '.ccrc', 'ccrc.env'), 'CCRC_HOST=127.0.0.1\nCCRC_PORT=7788\n', { mode: 0o600 });
+    mkdirSync(join(dir, '.config', 'systemd', 'user'), { recursive: true });
+    copyFileSync(SHIPPED_UNIT_SRC, join(dir, '.config', 'systemd', 'user', 'ccrc.service'));
+    for (const m of ['launchctl', 'systemctl']) {
+      writeFileSync(join(bin, m), `#!/bin/sh\nprintf '%s %s\\n' ${m} "$*" >> "$HOME/calls"; exit 90\n`, { mode: 0o755 });
+    }
+    const script = [`. ${JSON.stringify(CCRC_SRC)}`, `CCD_OS=${os}`, body].join('\n');
+    const r = spawnSync(BASH, ['-c', script], { encoding: 'utf8', env: { HOME: dir, PATH: `${bin}:${process.env['PATH'] ?? '/usr/bin:/bin'}` } });
+    const calls = existsSync(join(dir, 'calls')) ? readFileSync(join(dir, 'calls'), 'utf8') : '';
+    return { rc: r.status ?? -1, err: r.stderr, env: bytes(join(dir, '.ccrc', 'ccrc.env')), calls };
+  }
+  // The operator-only checks pass by stub: what is asked here is the platform's refusal right after them.
+  const verb = (sub: string): string => `_ccrc_operator_only() { :; }\ncmd_auth ${sub}`;
+
+  it('on refuses on a Mac before any read of the box, naming the four lines, the file and the launchd restart', () => {
+    const r = asFunction('darwin', verb('on'));
+    expect(r.rc).not.toBe(0);
+    expect(r.err).toMatch(/auth on: this verb does not act on a Mac yet/);
+    expect(r.err).toMatch(/put CCRC_AUTH=on, CCRC_RP_ID=localhost, CCRC_ORIGIN=http:\/\/localhost:<port> and CCRC_COOKIE_INSECURE=on in .*\/\.ccrc\/ccrc\.env/);
+    expect(r.err).toMatch(/then restart: launchctl kickstart -k gui\/\d+\/app\.ccrc\.ccrc/);
+    expect(r.err).toMatch(/Nothing was changed/);
+    expect(r.env).toBe('CCRC_HOST=127.0.0.1\nCCRC_PORT=7788\n');
+    expect(r.calls).toBe('');
   });
 
-  it('a launchctl that does not answer, and a job file it cannot read, are undecidable', () => {
-    expect(sources(shipped(''), 'exit 3')).toMatchObject({ rc: 1, why: expect.stringMatching(/launchctl getenv did not answer/) });
-    const u = sources((dir) => writeFileSync(join(dir, 'plant'), '#!/bin/sh\nmkdir "$1"\n', { mode: 0o755 }), UNSET);
-    expect(u).toMatchObject({ rc: 1, why: expect.stringMatching(/\.plist cannot be read/) });
+  it('off refuses on a Mac the same way, naming the lines to remove and the launchd restart', () => {
+    const r = asFunction('darwin', verb('off'));
+    expect(r.rc).not.toBe(0);
+    expect(r.err).toMatch(/auth off: this verb does not act on a Mac yet/);
+    expect(r.err).toMatch(/remove the CCRC_AUTH, CCRC_RP_ID, CCRC_ORIGIN and CCRC_COOKIE_INSECURE lines that arm it in .*\/\.ccrc\/ccrc\.env, then restart: launchctl kickstart -k/);
+    expect(r.err).toMatch(/Nothing was changed/);
+    expect(r.calls).toBe('');
+  });
+
+  // The helper's declines on the platform: the same box fits on Linux and not on a Mac. On darwin the unit directory
+  // also holds the launchd job the installer's writer prints, so the platform is the only reason left to decline.
+  // Doctor's `auth` line and install's gate line ask only this helper, so it decides for both surfaces.
+  it.each([['linux', 0], ['darwin', 1]] as const)('the helper that offers the verb, on %s, answers %i', (os, want) => {
+    const r = asFunction(os, [
+      'd="$HOME/.config/systemd/user"',
+      '[ "$CCD_OS" != darwin ] || _inst_plist_server "$(_svc_label ccrc.service)" "$HOME/ccrc.log" > "$d/$(_box_unit_file ccrc.service)"',
+      '[ -f "$d/$(_box_unit_file ccrc.service)" ] || echo "no job or unit planted" >&2',
+      '_auth_fits_here "$d"; echo "rc=$?" >&2',
+    ].join('\n'));
+    expect(r.err).not.toContain('no job or unit planted');
+    expect(r.err).toContain(`rc=${want}`);
   });
 });
 
 // ── review 3934 F3: a signal in the proof window, the copy it keeps, and a copy a killed run left ─────────────────
-describe('ccrc auth: a signal in the proof window (review 3934 F3)', () => {
+describe.skipIf(IS_DARWIN)('ccrc auth: a signal in the proof window (review 3934 F3)', () => {
   for (const sig of ['INT', 'TERM', 'HUP'] as const) {
     it(`SIG${sig} three seconds into the proof puts the old bytes back, restarts once more, leaves no copy and frees the lock`, async () => {
       const b = box(`ccrc-auth-sig-${sig.toLowerCase()}-`, others());
@@ -685,6 +772,24 @@ describe('ccrc auth: a signal in the proof window (review 3934 F3)', () => {
     expect(leftovers(b.home)).toEqual([]);
   });
 
+  // Review 3971 R4: the state is `proved` before the copy goes, so a signal there finds the change standing, not a
+  // copy gone that would read as a file put back. An rm that signals the verb as it removes the copy, once.
+  it('a signal as the proven run removes its copy leaves the change standing: no restore, no second restart', async () => {
+    const b = box('ccrc-auth-sig-proved-', portLines());
+    mkdirSync(join(b.home, '.local', 'bin'), { recursive: true });
+    writeFileSync(join(b.home, '.local', 'bin', 'rm'), '#!/bin/sh\n'
+      + 'case "$*" in *auth-restore*) [ -e "$HOME/rm-signalled" ] || { : > "$HOME/rm-signalled"; kill -TERM "$PPID"; } ;; esac\n'
+      + 'exec /usr/bin/rm "$@"\n', { mode: 0o755 });
+    const r = await runTty(b.home, ['auth', 'on']);
+    expect(existsSync(join(b.home, 'rm-signalled'))).toBe(true);
+    expect(r.code, r.out).toBe(130);
+    expect(r.out).toMatch(/stopped by a signal after the change was proven: it stands/);
+    expect(r.out).not.toMatch(/is back on its old file/);
+    expect(bytes(envFile(b.home))).toBe(`${portLines()}${ON_LINES(PORT)}`);
+    expect(restarts(b.home)).toEqual([RESTART]);
+    expect(leftovers(b.home)).toEqual([]);
+  });
+
   it('refuses while a copy that a killed run left stands beside ccrc.env, naming it and what it is — on and off', async () => {
     const b = box('ccrc-auth-leftover-', portLines());
     const left = join(b.home, '.ccrc', 'ccrc.env.auth-restore.4242');
@@ -694,7 +799,7 @@ describe('ccrc auth: a signal in the proof window (review 3934 F3)', () => {
       const r = await runTty(b.home, ['auth', sub]);
       expect(r.code, r.out).not.toBe(0);
       expect(r.out).toContain(left);
-      expect(r.out).toMatch(/a copy of .*ccrc\.env as it was before a run of ccrc auth that was killed/);
+      expect(r.out).toMatch(/a copy of .*ccrc\.env as it was before a run of ccrc auth that did not finish \(it was killed, or it could not put the file back and kept the copy\)/);
       expect(r.out).toMatch(/Nothing was changed/);
       expect(bytes(envFile(b.home))).toBe(before);
       expect(restarts(b.home)).toEqual([]);
@@ -703,8 +808,62 @@ describe('ccrc auth: a signal in the proof window (review 3934 F3)', () => {
   });
 });
 
-// ── review 3934 F4: every refusal before the write has a case that goes red without it ───────────────────────────
-describe('ccrc auth: every refusal before the write (review 3934 F4)', () => {
+// ── review 3971 R4: the handler reads the disk, not where the run had got to ───────────────────────────────────────
+// Called as a function with the state, the files and the kept-copy flag that each line of the write and restore reaches,
+// with a recording restart: the reviewer's measurement, red on the handler that read the state word alone. Bash only,
+// so it runs on every platform.
+describe('ccrc auth: the proof window\'s signal handler, line by line (review 3971 R4)', () => {
+  function handler(o: { state: string; keep: 0 | 1; dest: string | null; copy: string | null }):
+  { rc: number; err: string; dest: string | null; copy: string | null; restarts: number } {
+    const dir = mkTmp('ccrc-auth-handler-');
+    const dest = join(dir, 'ccrc.env');
+    const copy = join(dir, 'ccrc.env.auth-restore.4242');
+    if (o.dest !== null) writeFileSync(dest, o.dest, { mode: 0o600 });
+    if (o.copy !== null) writeFileSync(copy, o.copy, { mode: 0o600 });
+    const script = [
+      `. ${JSON.stringify(CCRC_SRC)}`, `HOME=${JSON.stringify(dir)}`,
+      '_svc_restart() { printf "%s\\n" "$*" >> "$HOME/restarts"; }',
+      `AUTH_SIG_SUB=on; AUTH_SIG_DEST=${JSON.stringify(dest)}; AUTH_BAK=${JSON.stringify(copy)}; AUTH_SIG_MODE=640; AUTH_SIG_HAD=1`,
+      `AUTH_KEEP_BAK=${o.keep}; AUTH_SIG_STATE=${o.state}`,
+      '_auth_on_signal',
+    ].join('\n');
+    const r = spawnSync(BASH, ['-c', script], { encoding: 'utf8', env: { HOME: dir, PATH: process.env['PATH'] ?? '/usr/bin:/bin' } });
+    const n = existsSync(join(dir, 'restarts')) ? readFileSync(join(dir, 'restarts'), 'utf8').split('\n').filter(Boolean).length : 0;
+    return { rc: r.status ?? -1, err: r.stderr, dest: bytes(dest), copy: bytes(copy), restarts: n };
+  }
+  const OLD = 'CCRC_PORT=7788\n';
+  const NEW = `CCRC_PORT=7788\n${ON_LINES(7788)}`;
+
+  it('H1 written, the copy there (the rename or the first proof): the old bytes go back, one restart, said', () => {
+    const r = handler({ state: 'written', keep: 0, dest: NEW, copy: OLD });
+    expect(r).toMatchObject({ rc: 130, dest: OLD, copy: null, restarts: 1 });
+    expect(r.err).toMatch(/is back on its old file, byte for byte, and ccrc\.service was restarted once on it\. That was not proven/);
+  });
+
+  it('H2 written, the copy already moved back (just after the failed proof\'s restore): no copy named, one restart', () => {
+    const r = handler({ state: 'written', keep: 0, dest: OLD, copy: null });
+    expect(r).toMatchObject({ rc: 130, dest: OLD, copy: null, restarts: 1 });
+    expect(r.err).toMatch(/is back on its old file/);
+    expect(r.err).not.toMatch(/could NOT|auth-restore/);
+  });
+
+  it('H3 written, after a restore that failed (the copy kept): never said to be back, the copy named, no restart', () => {
+    const r = handler({ state: 'written', keep: 1, dest: NEW, copy: OLD });
+    expect(r).toMatchObject({ rc: 130, dest: NEW, copy: OLD, restarts: 0 });
+    expect(r.err).toMatch(/could NOT be put back: the previous file is kept at .*ccrc\.env\.auth-restore\.4242, and .*ccrc\.env still holds this run's lines/);
+    expect(r.err).not.toMatch(/is back on its old file/);
+  });
+
+  it('H4 proved, the copy removed (just after the proof passed): the change stands, nothing is put back or restarted', () => {
+    const r = handler({ state: 'proved', keep: 0, dest: NEW, copy: null });
+    expect(r).toMatchObject({ rc: 130, dest: NEW, copy: null, restarts: 0 });
+    expect(r.err).toMatch(/stopped by a signal after the change was proven: it stands/);
+    expect(r.err).not.toMatch(/before anything was written|could NOT/);
+  });
+});
+
+// ── review 3934 F4, review 3971 R2: every refusal before the write has a case that goes red without it ─────────
+describe.skipIf(IS_DARWIN)('ccrc auth: every refusal before the write (review 3934 F4)', () => {
   /** A command on PATH ahead of the real one (the containment's bin), failing for the arguments `when` matches. */
   const failing = (h: string, cmd: string, when: string): void => {
     mkdirSync(join(h, '.local', 'bin'), { recursive: true });
@@ -773,9 +932,60 @@ describe('ccrc auth: every refusal before the write (review 3934 F4)', () => {
       await expectRefused(b, await runTty(b.home, ['auth', 'on']), bytes(envFile(b.home)), words);
     }
   });
+
+  // Review 3971 R2 (its F1): the five refusals that had no case. Each goes red without its refusal (the note's 9.1 rows).
+  it('refuses a CCRC_PORT line the unit reader cannot decide (a space before =), rather than taking the default port', async () => {
+    const b = box('ccrc-auth-port-undecided-', `CCRC_HOST=127.0.0.1\nCCRC_PORT =${PORT}\n`);
+    for (const sub of ['on', 'off']) {
+      await expectRefused(b, await runTty(b.home, ['auth', sub]), bytes(envFile(b.home)),
+        /names CCRC_PORT in a shape this reader does not decide .*, so the address was not measured/);
+    }
+  });
+
+  for (const key of ['CCRC_AUTH', 'CCRC_RP_ID', 'CCRC_ORIGIN', 'CCRC_COOKIE_INSECURE']) {
+    it(`refuses a ${key} line the unit reader cannot decide (a space before =), on and off`, async () => {
+      const b = box('ccrc-auth-key-undecided-', `${portLines()}${key} =x\n`);
+      for (const sub of ['on', 'off']) {
+        await expectRefused(b, await runTty(b.home, ['auth', sub]), bytes(envFile(b.home)),
+          new RegExp(`names ${key} in a shape this reader does not decide`));
+      }
+    });
+  }
+
+  it('refuses with no flock on PATH, and says how to go on', async () => {
+    const b = box('ccrc-auth-noflock-', portLines());
+    // Every command of the real PATH but flock, so nothing else the verb runs goes missing.
+    const bin = join(b.home, 'path-without-flock');
+    mkdirSync(bin);
+    for (const d of (process.env['PATH'] ?? '').split(':').filter((x) => x && existsSync(x))) {
+      for (const f of readdirSync(d)) {
+        if (f === 'flock' || existsSync(join(bin, f))) continue;
+        try { symlinkSync(join(d, f), join(bin, f)); } catch { /* a name two directories share: the first wins */ }
+      }
+    }
+    const r = await runTty(b.home, ['auth', 'on'], { PATH: `${join(b.home, '.local', 'bin')}:${bin}` });
+    await expectRefused(b, r, bytes(envFile(b.home)), /update\.lock cannot be taken \(flock is not on PATH\)/);
+    expect(r.out).toMatch(/Put flock on PATH and re-run, or set the keys by hand \(the README's 'The session gate'\)/);
+  });
+
+  it('refuses when the lock cannot be opened (update.lock is a directory) as not measured', async () => {
+    const b = box('ccrc-auth-lockdir-', portLines());
+    mkdirSync(join(b.home, '.ccrc', 'update.lock'));
+    await expectRefused(b, await runTty(b.home, ['auth', 'on']), bytes(envFile(b.home)),
+      /update\.lock could not be taken or measured, so a running update could not be ruled out/);
+  });
+
+  it("refuses when only the user manager's environment does not answer (systemctl --user show-environment)", async () => {
+    const b = box('ccrc-auth-managerenv-unasked-', portLines());
+    writeFileSync(join(b.home, 'sd-manager-env-fails'), '');
+    for (const sub of ['on', 'off']) {
+      await expectRefused(b, await runTty(b.home, ['auth', sub]), bytes(envFile(b.home)),
+        /systemctl --user show-environment did not answer, so the user service manager's environment was not read/);
+    }
+  });
 });
 
-describe('ccrc auth: the verb is in the usage and the verb table', () => {
+describe.skipIf(IS_DARWIN)('ccrc auth: the verb is in the usage and the verb table', () => {
   it('lists auth in the usage, and refuses a missing or unknown subcommand as a usage error', () => {
     const b = box('ccrc-auth-usage-', portLines());
     const help = runPiped(b.home, ['auth', '--help']);
