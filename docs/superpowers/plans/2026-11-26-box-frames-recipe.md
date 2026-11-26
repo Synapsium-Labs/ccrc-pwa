@@ -36,8 +36,8 @@ build (`agent/test/fixtures/fake-delivery-build.mjs`'s pattern), never Claude Co
 
 - **One frame is one capture.** Each frame case runs on a fresh scratch directory and a fresh start of the build, at one
   pane size. So no frame depends on clearing the box between frames, which on a new form is exactly what cannot be
-  proved. That gives 44 parts: 22 cases at 220x50 and at 220x40. The lane sends one part a pass, after trust and after
-  delivery.
+  proved. That gives 52 parts: 26 cases at 220x50 and at 220x40. The lane sends one part a pass, after trust and after
+  delivery. The case list folds in the wave 185 worker's list (its mail of 2026-11-26, section 3).
 - **Every key comes from the product.** Drafts are typed by the send's own line loop, moved out of `sendPrompt` into
   one exported function that `sendPrompt` itself calls. The stash key is the send's own. The submit and the queued
   message go through `sendPrompt` with the route's options. The driver is the one driver, `deliveryDrive.ts`, with a frames
@@ -90,44 +90,55 @@ case's steps, a frame, `/exit`. Each case runs at both pane sizes, 220x50 (the f
 `ccd/tmux.conf` as the delivery recipe has it. A frame's id is `<case>@<cols>x<rows>`.
 
 **The drafts** are fixed texts built from rules, like the delivery cases. They are named by id and never travel on a
-wire. A row of a tall draft is `frames row NNN of MMM` (14 to 20 characters, so one draft line is one box row at 220
-columns). The long line is 900 characters, built by the delivery recipe's `asciiRun` rule, so it is over the
-800-character collapse floor. No draft starts with `/`, `!`, `#` or `@`; the delivery recipe's mode-character pin covers
-the frames texts too.
+wire. A row of a draft is 60 characters: `frames row NNN of MMM ` followed by a fixed filler. Each row is distinct and
+numbered, so a frame's row names its line (the wave 185 worker's ask), and one draft line is one box row at 220 columns.
+The long line is 900 characters, built by the delivery recipe's `asciiRun` rule, so it is over the 800-character
+collapse floor. No draft starts with `/`, `!`, `#` or `@`; the delivery recipe's mode-character pin covers the frames
+texts too.
 
 | Case | Steps after the model switch | Draft |
 |---|---|---|
-| `empty` | frame | none |
+| `empty` | frame | none (the old form's baseline) |
+| `rows-3` | type, frame | 3 rows (the old form's baseline) |
 | `cap` | type, frame | rows = 2.1.300's cap for the pane (20 at 50, 15 at 40) |
-| `cap-over` | type, frame | that cap + 1 |
+| `cap-over` | type, frame | that cap + 1 (the "1 more" grammar) |
 | `rows-25` | type, frame | 25 rows |
-| `rows-180` | type, frame | 180 rows |
-| `long-in-view` | type, frame | 180 rows, the LAST one the 900-character line |
-| `long-out` | type, frame | 180 rows, the SECOND one the 900-character line |
-| `view-up` | type, view-up, frame | 180 rows, then `Up` pressed 60 times |
+| `rows-180` | type, frame | 180 rows ("many more") |
+| `long-in-view` | type, frame | 180 rows, the LAST one the 900-character line (its chip row in view) |
+| `long-out` | type, frame | 180 rows, the SECOND one the 900-character line (scrolled out above the window) |
+| `up-3` | type, `Up` three times, frame | 180 rows |
+| `up-3-pageup` | type, `Up` three times, `PageUp` once, frame | 180 rows |
 | `person` | type as a person, frame | the same 180 rows |
-| each of the nine above, `+turn` | turn, then the case's steps | one earlier short user turn first |
+| each of the eleven above, `+turns` | two turns, then the case's steps | two earlier user turns first |
 | `submitted` | send, wait for the turn, frame | the 180 rows, through `sendPrompt` |
 | `chip` | type, frame | one line of 900 characters |
 | `stash` | type, stash, frame | `frames stash probe ZQX-END-stash` |
 | `queued` | held turn, send, frame | `frames queued probe ZQX-END-queued` while a held turn runs |
 
-That is 22 cases at each size, 44 frames a build.
+That is 26 cases at each size, 52 frames a build. The wave 185 worker ranks its needs as frames `rows-*` and `cap*`, the
+`+turns` ones, and the two baselines first. The lane's part order follows that ranking (section 6), so a partial set
+holds those first.
 
 **The steps, and whose keys they are.**
 - `type`: the send's own line loop (section 4.1), the same keys `sendPrompt` types and no submit.
-- `turn`: `sendPrompt` of `frames earlier turn ZQX-END-turn` with the route's options. The runner waits for the turn's
-  Stop (the delivery recipe's settle and quiet), as it does for a delivery case.
+- `two turns`: `sendPrompt` of `frames earlier turn ZQX-END-turn`, then of the product's generic mail notice line
+  (`shared/injected-prompts.mjs`'s `mail-nudge` text, read from there, never copied), each with the route's options.
+  The runner waits for each turn's Stop (the delivery recipe's settle and quiet), as it does for a delivery case. The
+  mail notice is the past turn the wave 185 worker's hazard needs: how a past user turn is drawn above a tall box, its
+  glyph and its background, and how many stay in view.
 - `send`: `sendPrompt` of the 180 rows with the route's options. Its answer word is recorded beside the frame. On a new
   form the send may refuse (`verify-failed`), and then the frame shows the draft left unsent. That is the evidence, not a
   fault. Nothing presses a raw Enter: the only submit is the product's.
 - `stash`: the send's own stash key (exported from `send.ts`, section 4.1).
 - `held turn`: `sendPrompt` of `frames held turn ZQX-HOLD`, which the stand-in holds open (section 4.3). Once the build's
   UserPromptSubmit is recorded, `send` the queued text, then frame. The runner then releases the hold.
-- `view-up`: the recipe's own key shape. `Up` is sent 60 times through the `Tmux` adapter's `sendKey`, one call each.
-- `person`: the recipe's own key shape, a second case shape of `type`, named as such. One `sendLiteral` per character,
-  15 ms apart, with each line break typed as `\` then `Enter`, the line break Claude Code documents that needs no
-  terminal setup. If a build submits on it, the stand-in receives a turn, and the case records that count (section 5.1).
+- `Up` and `PageUp`: the recipe's own key shape (`view-up`). Each key is one `sendKey` call through the `Tmux` adapter,
+  250 ms apart. The two cases show whether a bottom indicator appears, what the top rule then says, and where the glyph
+  is.
+- `person`: the recipe's own key shape, a second case shape of `type`, named as such. Each line is sent as plain
+  `sendLiteral` bursts of 8 characters, 15 ms apart, and each line break as `C-j`. `C-j` is the Enter-free newline
+  Claude Code documents, and it needs no terminal setup. This is not the product's per-line loop. If a build submits on
+  it anyway, the stand-in receives a turn, and the case records that count (section 5.1).
 - `frame`: the driver reads the screen through `Tmux.captureAnsi`, the send's own read, so a fixture holds the bytes the
   send reads. It also reads the cursor (`display-message -p '#{cursor_x} #{cursor_y}'`). It reads until two reads 500 ms
   apart are equal, within the frame bound. A frame that never settles is kept, marked `unsettled`.
@@ -140,7 +151,7 @@ That is 22 cases at each size, 44 frames a build.
   arrive one at a time, not every way a person types.
 - **A submit by Enter at the terminal.** That would be a second copy of the submit. `submitted` is the product's send
   only. If the send refuses on a new form, the frame after a person's Enter is not on record.
-- **The view moved by the mouse wheel**, and any scroll position other than 60 presses of `Up` from the end.
+- **The view moved by the mouse wheel**, and any scroll position other than the two named ones.
 - **The exact row cap of a new build.** `cap` and `cap-over` use 2.1.300's formula. The recipe does not read the box to
   find the cap, because reading this form is what is broken. `rows-25` and `rows-180` exceed any cap seen. The cap a build
   draws is read off those frames by a person or by the shape rule's `T` count (section 7).
@@ -162,7 +173,7 @@ before the move and after it. The stash key becomes an exported constant that `s
 `deliveryDrive.ts` takes a second input form, `{capture, tmux, frames: <step word>}`, beside `{capture, tmux, case}`. The
 same directory refusals, the same runner (tmux only, the capture's socket, an environment built from empty), and the
 same halt on the first call that could not complete. The step words are fixed:
-`type:<case>`, `person:<case>`, `view-up`, `stash`, `send:<case>`, `turn`, `hold`, `frame`. A word names a draft by its
+`type:<case>`, `person:<case>`, `up`, `pageup`, `stash`, `send:<case>`, `turn:<1|2>`, `hold`, `frame`. A word names a draft by its
 case id. No text crosses the input. The answer stays one JSON line: the send word for a send step, `{"typed":true}` for a
 typing step, and `{"frame":<text>,"cursor":[x,y],"settled":<bool>}` for `frame`. The frame step's output cap is
 `FRAMES_DRIVER_OUTPUT_MAX` (192 KiB: a 64 KiB frame JSON-escaped); every other step keeps 4096. The driver's input
@@ -253,7 +264,9 @@ The rules, in order. Each has its own case:
    `organization`, `account`, `plan`, an `@` followed by a dotted name) becomes `‹account›`.
 6. **Status line.** The capture's own settings configure no status line, and a case pins that. So there is no status line
    to replace. A row that rules 3 to 5 catch below the box is replaced like any other row.
-7. **The scan, then refuse.** On the reduced text: `scan` hits anything (`private-name`); or a private shape remains
+7. **The scan, then refuse.** On the reduced text, less the rows rule 2 kept as ours. Those are fixed texts from this
+   repository, and the mail notice turn names a home-relative path by design. The frame is refused when `scan` hits
+   anything (`private-name`), or when a private shape remains
    (`private-shape`). A private shape is an absolute path under `/home/`, `/Users/`, `/root` or `/mnt/`, a `~/` path, an
    email shape, an IPv4 address other than `127.0.0.1`, a dotted host name with a public suffix, or a run of 32 or more
    hex characters (an id or a token). A hit refuses the whole frame (`outcome: 'refused'`, `text: null`, the rule word).
@@ -274,7 +287,7 @@ direction: the row keeps its width and its border, so the shape rule sees the sa
   coordinator before the push.
 - **Bounded.** The lane keeps `result` for the newest `FRAMES_KEEP_BUILDS` (16) framed builds. An older build's rows
   keep their shape and their word and lose the text. That is one `UPDATE` in the same transaction as a new build's
-  first record, and its own case. At 44 frames of at most 66 KiB, that is under 50 MiB at worst. A plain 220x50 frame
+  first record, and its own case. At 52 frames of at most 66 KiB, that is under 55 MiB at worst. A plain 220x50 frame
   is about 11 to 25 KiB (inferred), so about 1 MiB a build is typical.
 - **The signed-in read.** `GET /api/testbox/frames?build=<build>` answers that build's rows: every part's case, pane, word,
   outcome, cursor and reduced text. It is registered from a route file of its own. It asks the account gate first and
@@ -293,8 +306,10 @@ is the one the owner's condition names, **a file by a fixed path**:
 - **The fleet agent writes it.** A frames capture's reply passes through the fleet agent's `testbox-capture` op
   (`agent/src/testboxOp.ts`) on its way to the server. When that reply is `answered` and its frames result passes the one
   reader, the agent writes the reduced frame to
-  `~/.ccrc/box-frames/<build>/<frames version>/<case>@<cols>x<rows>.ansi`. Beside it goes `<same>.json`, the record
-  without the text: outcome, cursor, sends, turns, release. Each file is written to a temporary name and renamed.
+  `~/.ccrc/box-frames/<build>/<frames version>/<case>@<cols>x<rows>.ansi`, the bytes exactly as `captureAnsi` read them,
+  less the reducer's replaced rows. Beside it goes `<same>.json`: the build, the pane size, the case, outcome, cursor,
+  sends, turns and release, and the lines that were typed. Those come from the shared case file, not from the wire, so a
+  case can compare rows to the text (the wave 185 worker's ask). Each file is written to a temporary name and renamed.
 - **The path is built from checked values only:** a build of the build grammar, 16 hex, a fixed case word, and the two
   pane numbers the part names. No free text reaches a path, and a case proves a hostile build string is refused before
   any write.
@@ -345,11 +360,13 @@ All additive, with no `FLEET_PROTO` or `TESTBOX_PROTO` bump, one reader per fiel
 ## 6. The version, the parts, the lane and the cost
 
 - **The version.** `FRAMES_RECIPE_VERSION`, 16 hex. It is computed over every case's id and steps, every draft's text,
-  the pane sizes, the part list, the person pause and the `view-up` count, and the reducer's answers on a fixed probe
+  the pane sizes, the part list, the person burst and pause and the view keys, and the reducer's answers on a fixed probe
   table. It is never kept by hand. The shape rule has a version of its own, `FRAME_SHAPE_VERSION`. The server applies the
   shape rule to stored text, so changing that rule re-reads stored frames and asks nothing of the box again.
-- **The parts.** One part is one case at one size: `FRAMES_PARTS` is the 22 cases at 220x50, then the same 22 at 220x40,
-  so 44. The count is the list's length, not a derivation. A test holds every part's worst case inside the pair bound
+- **The parts.** One part is one case at one size, so 52 parts. `FRAMES_PARTS` is ordered by the wave 185 worker's
+  ranking, each case at 220x50 then at 220x40: `empty`, `rows-3`, `cap`, `cap-over`, `rows-25`, `rows-180`, their
+  `+turns`, `submitted`, `long-in-view`, `long-out`, `up-3`, `up-3-pageup`, their `+turns`, `person`, `person+turns`,
+  `chip`, `stash`, `queued`. The count is the list's length, not a derivation. A test holds every part's worst case inside the pair bound
   with a trust capture and with the longest part, from the one timing contract (`CaptureTimings` gains
   `framesDriveMs`, `framesPersonDriveMs`, `framesSettleMs` and `framesHoldMs`; no second constant set).
 - **The lane.** `shared/framesLane.ts#nextFramesJob`: the newest trusted build only (`deliveryLane.ts#newestTrustedBuild`,
@@ -362,13 +379,15 @@ All additive, with no `FLEET_PROTO` or `TESTBOX_PROTO` bump, one reader per fiel
   finish stays `incomplete`.
 - **The cost per build (inferred until measured).** For a part's worst case, take the delivery part's fixed share: start
   17 s, the start and model-switch steps 85 s, `/exit` 49.5 s, the exit wait 30.5 s and teardown 19.5 s, 201.5 s in all.
-  Each driver step adds its bound plus 1 s of grace and 2 s of drain. `frame` is 25 s, so 28 s. `type` is 28 s. A `turn`
-  adds 28 s plus the settle and quiet (18 s). `person` is 120 s plus 3 s. So the worst cases are a plain case 257.5 s,
-  `+turn` 303.5 s, and `person+turn` 398.5 s, about trust's 399.5 s. A `person+turn` part beside a trust capture is
-  828 s with the margin, inside the 900 s wait. The typical run is not measured: perhaps 15 s a part, and 60 to 70 s for
-  `person` (2,900 keys at about 20 ms each). That is about 15 minutes of test box time a build. The wall clock is at least
-  44 lane passes, one a minute, so about an hour on a quiet box. The first real run's recorded times replace these
-  figures in the task note.
+  Each driver step adds its bound plus 1 s of grace and 2 s of drain. `frame` is 25 s, so 28 s, and `type` is 28 s.
+  Each of the two turns adds 28 s plus the settle and quiet (18 s), 92 s for both. The four view keys are one step of
+  28 s. `person` (`framesPersonDriveMs`) is 60 s plus 3 s. So the worst cases are a plain case 257.5 s, `+turns`
+  349.5 s, `up-3-pageup+turns` 377.5 s, and `person+turns` 384.5 s, under trust's 399.5 s. Paired with a trust capture,
+  `person+turns` comes to 814 s with the margin, inside the 900 s wait. The typical run is not measured. Perhaps 15 s a
+  part, 25 s with two turns, and about 35 s for `person`: about 1,530 tmux calls (180 rows of 60 characters in bursts of
+  8, and the line breaks) at about 20 ms each. That is about 20 minutes of test box time a build. The wall clock is at
+  least 52 lane passes, one a minute, so about an hour on a quiet box. The first real run's recorded times replace
+  these figures in the task note.
 
 ## 7. The alarm: what a NEW FORM looks like to the lane
 
@@ -388,7 +407,7 @@ The signature is that token list. It is stored beside the row and hashed for com
 
 **What the status read carries.** `GET /api/testbox`'s `frames`, beside `delivery`, has one of four kinds. `standing` holds
 the newest trusted build, the build it is compared against (the previous build with a full current set, or null), a word,
-and `differing`: at most 44 frame ids. `no-trusted-build`, `unreadable` and `unknown` are as delivery's are. The word is
+and `differing`: at most 52 frame ids. `no-trusted-build`, `unreadable` and `unknown` are as delivery's are. The word is
 one of `same-form`, `new-form`, `first-form` (nothing earlier to compare) or `incomplete` (the newest build's parts are not
 all current). Only fixed words, build names and frame ids: no shape tokens and no text. One reader, with the delivery
 standing's checks, and a case that feeds a frame holding a marker and finds it in no serialised answer.
@@ -398,7 +417,7 @@ standing's checks, and a case that feeds a frame holding a marker and finds it i
   Only the digit skeleton of rule labels and chips is kept.
 - Behaviour that a settled frame does not show: when an Enter submits, paste detection's timing, the auto-submit split,
   key handling, and what the send does next. The delivery recipe measures the send. Frames record only the drawing.
-- Anything outside the 44 frames: other sizes, other drafts, macOS, a real model or account (section 3).
+- Anything outside the 52 frames: other sizes, other drafts, macOS, a real model or account (section 3).
 - Colour, except dim on our rows, chips and the glyph.
 - A form that differs only in rows the reducer replaced. Those rows keep their class, so a change inside a working
   directory or model line is invisible.
