@@ -821,6 +821,9 @@ on hook context.
   as a tool result. The server trims live state by rank, and never trims the constitution pointer. Open holds and
   unsettled operator messages are never trimmed either. If they do not fit, the card lists their ids and says how
   many it left out (I8).
+  - The card lists each unsettled message's id and facts: its time, its state and whether its text was cut. It carries
+    no text. The Overlord reads the words through the `messages` door, which writes a read-ledger line for each read
+    (§9.4).
   - Until this generation has read the current hash, every other Overlord door refuses `card-unread`. The mail gate
     holds its deliveries, and no hold is taken for it.
   - The card, probe and note doors skip `authority-rolled-back`, `overlord-off`, `launch-profile-unmet`,
@@ -829,8 +832,9 @@ on hook context.
   end of the context, where recall is strongest:
   1. a pointer to the constitution;
   2. the live grants;
-  3. live state: unsettled operator messages, live commands, open holds, open requests, each programme in one
-     line, the notes, pending timers (§3.3.12) and recent acts, ranked by recency, importance and age (the Generative Agents retrieval score);
+  3. live state: unsettled operator messages (each one's id and facts), live commands, open holds, open requests,
+     each programme in one line, the notes, pending timers (§3.3.12) and recent acts, ranked by recency, importance
+     and age (the Generative Agents retrieval score);
   4. the operator-model entries of kind `style`, phrased in the third person ("the operator prefers X, since date"),
      and a count of the other entries;
   5. practice notes, three at most, as untrusted data (§9.7);
@@ -1175,7 +1179,9 @@ Table 3.3.9b applies to it.
   - **The card is never empty.** The card looks past runs: declared coordinator intent, claims, items the session
     raised, outstanding mail, and the programme ledger by slug. A coordinator between runs, designing or waiting on the
     operator, gets its programme's card. A session the server cannot place gets an explicit line saying that no runs,
-    claims or intent were measured, never silence.
+    claims or intent were measured, never silence. The Overlord's card has a nothing line of its own, which names its
+    messages, notes and checkpoint. Pending timers are on no role's never-empty list: a card holding only timers
+    carries the nothing line and its timers section.
   - Workers and reviewers get only this call. Their life is one wave, and the wave is their renewal.
 - **C52. Recall is steered, and memory is measured.**
   - **Steering.** The card's history line names the session's last node and the one verb to read it
@@ -5730,9 +5736,9 @@ condition lifts by itself. A latch is cleared only by the operator.*
 - **A hop that rarely helps is bypassed.** A kind of answer whose settle share stays low for a programme goes straight
   to the operator, and only the operator re-arms it (§6.8).
 
-- **The ladder needs `overlord-v1`.** `ccrc-api`'s Overlord verbs, the hook's card arm and clause 22 act only while
-  the server's capability file carries it. After a rollback to an older server, everything takes today's path by
-  itself (Table 11.1d lists the capability words).
+- **The ladder needs `overlord-v1`.** `ccrc-api`'s Overlord verbs, the card door's Overlord renderer and clause 22 act
+  only while the server's capability file carries it. After a rollback to an older server, everything takes today's
+  path by itself (Table 11.1d lists the capability words).
 
 ### 7.5.1 Autonomy mode, the critical list, and coordinator autonomy (R23)
 
@@ -7966,9 +7972,10 @@ reversible, so no act reads the two `reversible` weights in version 1.
   `retrying`. W3 generalises the pool set's one capability record and rollback floor check, with a second `--below-cap`
   word and its own standing fact, and no `--force` crosses the floor (the push outbox plan, its question 5,
   `rollback-refusal-ships-with-holds`).
-- **A capability word is a property of the build.** `ccrc-api`'s Overlord verbs, the hook's card arm and clause 22 act
-  only while the server's capability file carries `overlord-v1`. A later wave's doors and verbs act only while its own
-  word stands (Table 11.1d). After a rollback to an older server, everything takes today's path by itself.
+- **A capability word is a property of the build.** `ccrc-api`'s Overlord verbs, the card door's Overlord renderer and
+  clause 22 act only while the server's capability file carries `overlord-v1`. The hook has no Overlord arm: it prints
+  what the card door answers. A later wave's doors and verbs act only while its own word stands (Table 11.1d). After a
+  rollback to an older server, everything takes today's path by itself.
 - **An older fleet build.** The `pool-set` capability (Table 11.1d) is checked again on every capability
   refresh, for every agent that can place sessions. `agent/src/server.ts#refreshVerbs` runs `ccd caps` again whenever
   the stat of the ccd entry or body changes, and on every request of the server's 60 s `caps` lane. Losing it raises
@@ -8443,7 +8450,7 @@ prerequisites gate W1, where the Overlord itself begins. Nothing in any wave is 
 |---|---|
 | W0, a spike | It changes nothing that runs: its test-only files ship in the tarball and do nothing. It measures what the design depends on: the hook's cap and the anchor slot; a fresh start as the renewal act, and its time; what a clear or a fresh start does to running readers, queued input and scheduled tasks; whether a compaction rotates the uuid; auto memory, forks, the subagent model, the model-switch hooks and a refused proactive compaction; the door process under a restricted launch (hooks, skills, the permission mode); reader types with no shell; nudge-and-read for the operator's messages; the statusline's token fields; whether the inbox socket can be used with the peer channel closed; a continuity record for each lane; whether its accounts bill Fable to usage credits; how closely the seven-day figure times the Fable share reading tracks the Fable allowance; how ccd picks an account today (no listed order exists yet: that is W1's build); the restart numbers and the first sweep after boot (§6.4); what an account's shared config directory loads into a session; how reliable the typed `/clear` is. It writes the first model of holds, readiness and generations (§11.7). Where the real thing does not exist yet (the renewal verb, probes), it measures the parts with stand-ins, and W1a measures again with the real ones |
 | W1a, continuity for every long-lived role | The one role table and its launch profiles; `continuity_generations`, the receipt and the renewal lane on the `SessionHost` port (in shadow: the `continuity` row's gate refuses Live, `lane-gated`, until the renewal act ships); the anchor slot and the card door; notes; compaction instructions (after history W3-1); probes and the weekly quiz; the trigger table (stall arms); coordinator clause 23; the skill-size ratchet, with caps measured at its merge, and each role skill's contract moved to the front of its file; the `MAIL_PACE` table (today's two rows first, behind a characterization test; total over `FLEET_ROLES`, with the Overlord's row, once the role table lands); the ports for time and chance; the simulator's skeleton; mutation floors for new deciders; the case lane in shadow; ccd's fresh-start flag and its capability word `hibernate-fresh`; the capability word `continuity-v1`; timers for coordinators and workers: `continuity_timers`, `TIMER_TRANSITIONS`, the timer doors and the operator's cancel, the `timers` row with its cleanup arm, the `timer` mail sender, pending timers on the card, worker clause 17 naming a timer as a wake, the timer hold in the stall watch's hold map, and the capability word `timers-v1` |
-| W1, designate and talk | The private store, with the operator's messages and the read ledger; the designation with its term and `designatedTerm`; the identity port and the isolation word; the door process and the reader types; the history door and its agent op; the sandbox check; the fence; ccd's sleep markers' verb and its capability word `keep-awake-v1`; the ladder at `chat`, and Pause; the readiness word; the inbox, with band 1 (the operator's messages), probes and the coalesced wake; the journal kernel, the authority journal, the privacy journal's file with its record of the highest message id issued, and the "Confirm the restore" door; the push outbox and its capability word `push-outbox-v1`; the account set on the designation, the pool rule's set and ccd's capability word `pool-set`, and the two-account check; the home, the chat with message ticks, the board; the portfolio rank, the limit samples and `portfolioFor`; the refusal on other write lanes; the invariant monitor and `overlord_sequence`, with its cursor read; the Overlord's timers, through its door process, stamped with `designatedTerm`; the response record: `operator_responses`, `response_receipts` and the receipts door, the response lane, and "I handled this elsewhere", recording only, with the per-send verdict of `PushService`, a random push id in each push's payload, and the service worker's `shown` and `opened` receipts; the operator's two answer marks on Waiting on you (R21); the capability word `overlord-v1` |
+| W1, designate and talk | The private store, with the operator's messages and the read ledger; the designation with its term and `designatedTerm`; the identity port and the isolation word; the door process, with the `history`, `board` and `sequence` door tools among its W1 tools, and the reader types; the history door and its agent op; the sandbox check; the fence; ccd's sleep markers' verb and its capability word `keep-awake-v1`; the ladder at `chat`, and Pause; the readiness word; the inbox, with band 1 (the operator's messages), probes and the coalesced wake; the journal kernel, the authority journal, the privacy journal's file with its record of the highest message id issued, and the "Confirm the restore" door; the push outbox and its capability word `push-outbox-v1`; the account set on the designation, the pool rule's set and ccd's capability word `pool-set`, and the two-account check; the home, the chat with message ticks, the board; the portfolio rank, the limit samples and `portfolioFor`; the refusal on other write lanes; the invariant monitor and `overlord_sequence`, with its cursor read; the Overlord's timers, through its door process, stamped with `designatedTerm`; the response record: `operator_responses`, `response_receipts` and the receipts door, the response lane, and "I handled this elsewhere", recording only, with the per-send verdict of `PushService`, a random push id in each push's payload, and the service worker's `shown` and `opened` receipts; the operator's two answer marks on Waiting on you (R21); the capability word `overlord-v1` |
 | W2, route and follow up | The act catalogue, `overlordMayAct`, revisions and operation keys, two-step acts and the act journal; requests as contracts, with `requestId` on runs, on mail and on `goals modify`, and the request doors; the home's Requests groups, the one-tap next steps, and what each request and programme cost; band 3 of the inbox (request moves, follow-ups, read-back flags and the Overlord's fired timers); the relay door with its checks, and the door that uploads the private-name list; `followUpDue`, with the follow-up arm on a `LANE_SCHEDULE` row of its own; overlaps and goal conflicts, with the operator's door that rules a goal-conflict pair; remaining work, forecasts, health and edges; the decision-model port, with its W2 rows in shadow, and the label queue and its cards; the ladder at `advise`; R22's brakes, `pause-coordination`, `pause-programme-starts` and `lift-own-pause`, with the pause door's `programme` scope and `coord_pause_events` (§7.1.1); R23's critical list, `OVERLORD_CRITICAL`, with `change-goal` and its pin against D-8126, the "Ask me" mark, and the call record's nullable grant column (§7.5.1); the capability word `overlord-route-v1` |
 | W3, step one: brief first | `operatorClass` and `effect` on rows, with the floors; the operator's profile, the place line, outcome tests, `decisionOutcome` and the three records (§6.9); briefs with their reveal modes, `answerExamined` and `decisionRank`; `attach-brief`, and the inbox's rows that wait for a brief; sealed predictions; the blind sample; proposals and commands; the attention budget and its Settings, in shadow, with the state and pin of each class of push, start quiet and the class step (§4.3); engagement per programme; the replay body and the scenario suite; the weekly check and the Week page, with the response figures; the handover brief; R22's proposals: `lift-review-cap`, `interrupt-session`, `abandon-run`, `reclaim-run` and `propose-dispatch-cap` at `advise` (§7.1.1); the capability word `overlord-brief-v1` |
 | W3, step two: answer first | The holds, `mayHold`, retention and the breaker; the inbox's held rows, admission, packets and precedents; `askOrAct`; the answer and escalate doors; the grants door with all of H26, and staging; drills and the outside audit; background work; each kind of answer armed on evidence; the `full` cells of R22's kinds, `lift-own-pause` included, with `OVERLORD_ACT_REASONS`, each run act and the review round in shadow until the operator arms it (§7.1.1); the capability word `overlord-answer-v1`; and, under its own word `overlord-autonomy-v1`, R23's `autonomous` rung and its `autonomy-off` latch, `grant-coordinator-autonomy` and `revoke-coordinator-autonomy` with `coordinator_autonomy` and the revocation lane, and coordinator clause 25 (§7.5.1) |
@@ -9131,8 +9138,12 @@ coordinator ruled the matter, the row says so.
 | The rollback refusal below `push-outbox-v1` (§6.7, §11.5, risk table) | `ccrc rollback` below it refuses unless forced, in W1 | The refusal ships with W3's hold arming, on the pool set's floor check with a second `--below-cap` word, never `--force`. The push outbox plan, question 5 |
 | The outbox's sender (§6.7, §4.3, Table 11.1a) | Sends every unsent row at boot; a silent row "marked sent at once"; the verdict in the response record; items "had no hold before"; the funnel's pushes unspecified | A row is claimed before each attempt, at boot only unclaimed rows inside the retry horizon are sent, a claimed one is sealed `unknown`; `silent` is a terminal state of its own; the verdict ships with the outbox, with `unsendable`; items already have `heldUntil`, stamped by the sender's lane pass; every push rides the outbox. The push outbox plan, questions 1 to 4 |
 | The portfolio read (Table 11.1e) | No read door | A session-gated, masked `GET /api/portfolio`, which answers the rank's revision for a stale-write check. The portfolio plan, `portfolio-read-door` |
+| The card's holder of `overlord-v1` (§7.5, §11.5) | "The hook's card arm" acts only while the capability file carries the word | The card door's Overlord renderer. The hook has no Overlord arm and prints what the card door answers, so the server's renderer is what the build holds. The `overlord-v1` plan (2026-11-25), `card-renderer-held-by-the-build` |
+| The card's list of unsettled messages (§3.3.3) | What each line of the list carries was not said | Each message's id and facts (its time, its state, whether its text was cut), never its text, which the Overlord reads through the `messages` door and its read ledger. I8's sentence stands as written. The `overlord-v1` plan, `card-lists-message-facts-not-text` |
+| The never-empty card (C51) | One nothing line, naming runs, claims and intent | The Overlord's card has a nothing line of its own, naming messages, notes and the checkpoint; timers are on no role's never-empty list. The `overlord-v1` plan, `overlord-nothing-line-names-its-facts` |
+| The door process's W1 tools (§14, Table 14) | The W1 row named the door process and no tool | It names the `history`, `board` and `sequence` door tools, which `overlord-v1` waits for. The `overlord-v1` plan, `overlord-v1-waits-for-the-door-tools` |
 
-*Table B7. The corrections from the W1 plans.*
+*Table B7. The corrections from the W1 plans. The last four rows are the `overlord-v1` plan's, folded on 2026-11-26.*
 
 **The operator's answers, 2026-11-16.** The operator answered three items the programme's coordinator raised. This
 table keeps the trail. The body states only the result.
