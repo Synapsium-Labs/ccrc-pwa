@@ -39,16 +39,16 @@ export function LandingWithdrawSheet({
   const [phase, setPhase] = useState<Phase>({ kind: 'confirm' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  /** Set by a refusal: the next read that differs from the snapshot's view, or `null`, becomes the snapshot. */
-  const [adopt, setAdopt] = useState(false);
+  /** The plan's flag (R3), set by a refusal: the next read that differs from the snapshot's view, or `null`, becomes the snapshot. */
+  const [awaitingRead, setAwaitingRead] = useState(false);
   // `LiftCapSheet`'s generation guard: an answer that lands after the sheet has gone acts on nothing.
   const gen = useRef(0);
   useEffect(() => () => { gen.current += 1; }, []);
   useEffect(() => {
-    if (!adopt || (view !== null && view === snapshot.view)) return;
+    if (!awaitingRead || (view !== null && view === snapshot.view)) return;
     setSnapshot(snapshotOf(view, entryId));
-    setAdopt(false);
-  }, [adopt, view, snapshot.view, entryId]);
+    setAwaitingRead(false);
+  }, [awaitingRead, view, snapshot.view, entryId]);
 
   const preview = snapshot.preview;
   const confirm = (): void => {
@@ -67,7 +67,7 @@ export function LandingWithdrawSheet({
         if (gen.current !== mine) return;
         setBusy(false);
         setError(landingFailureOf(err, 'withdraw').text);
-        setAdopt(true);
+        setAwaitingRead(true);
         onReload();
       },
     );

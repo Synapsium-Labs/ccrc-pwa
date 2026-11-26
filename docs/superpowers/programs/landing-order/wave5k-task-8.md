@@ -857,3 +857,56 @@ Each line below is one `ccrc test` run.
     - the agent package's typecheck could not find `node:fs`, because this worktree has no `agent/node_modules`.
   - The wrapper's words: "the test slice's memory cap killed a process during this run (MemoryMax=6G, CCRC_TEST_SLICE_MEMORY_MAX; 9 OOM kill(s) in ccrctests.slice)".
   - The pull request's own run is the arbiter.
+
+## After the pull request's first run
+
+The pull request's first run, on `e4a75d847e`, failed one case in server shard 4: `delegation-wave3.integration`'s closed scope census ("the wave-4 shape …").
+
+- **The cause:** that census allows the stem `adopt` in code only in the PWA files that already had it on `main`. The withdraw sheet's flag for "take the next read after a refusal" (R3) was named `adopt`.
+- **The fix:** the flag is now `awaitingRead`. The plan names this flag only in prose ("an adopt flag"), so no plan text changes. The comment in `landingLineView.ts` that says "adopt" stays, because the census strips comments.
+- **The checks after the rename,** each through `ccrc test`:
+  - the census file: 36 passed;
+  - the sheet and line files: 36 passed;
+  - the pwa typecheck: clean.
+- **Rows M12, M45 and M50 named the flag in their text, so I measured them again on the renamed code.** All three went red in the same file, and each restore's sha256 matched. Their records follow. The records above them show the text as it was when first measured.
+- **This wave's other new PWA files** add no other stem of that census: `delegat`, `lease`, `spool`, `carrier`, `retain`, `dispos` and `cleanup` all appear zero times in the added lines.
+
+### M12, after the rename
+
+- Mutation: in `pwa/src/fleet/LandingWithdrawSheet.tsx`, `        setAwaitingRead(true);
+        onReload();` → `        setAwaitingRead(true);`
+- `test/landing-withdraw-sheet.test.tsx`: exit 1 (RED)
+    - `× landing-entry-moved: stays in confirm, says so, re-reads, adopts the next read with the sentence above, and sends its pin time 16ms`
+    - `Tests  1 failed | 17 passed (18)`
+    - `⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯`
+    - `FAIL  test/landing-withdraw-sheet.test.tsx > the refusals > landing-entry-moved: stays in confirm, says so, re-reads, adopts the next read with the sentence above, and sends its pin time`
+    - `AssertionError: expected "vi.fn()" to be called 1 times, but got 0 times`
+- Restored from the saved copy; sha256 after restore `dbf036e8cd2b053b53cc89cda8ad79549b2a9b2b3277ba42610b1d2950dd96b3` (matches the copy taken before)
+
+### M45, after the rename
+
+- Mutation: in `pwa/src/fleet/LandingWithdrawSheet.tsx`, `        setAwaitingRead(true);
+` → ``
+- `test/landing-withdraw-sheet.test.tsx`: exit 1 (RED)
+    - `× landing-entry-moved: stays in confirm, says so, re-reads, adopts the next read with the sentence above, and sends its pin time 25ms`
+    - `× a view that was already new when the refusal lands is adopted at once 20ms`
+    - `× landing-entry-terminal then a read without the entry: the gone line, the confirm off 16ms`
+    - `Tests  3 failed | 15 passed (18)`
+    - `⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯`
+    - `FAIL  test/landing-withdraw-sheet.test.tsx > the refusals > landing-entry-moved: stays in confirm, says so, re-reads, adopts the next read with the sentence above, and sends its pin time`
+    - `AssertionError: expected 'Withdraw #104?#104 leaves project-a\'…' to contain 'wait on it directly: #107, #111.'`
+    - `Expected: "wait on it directly: #107, #111."`
+- Restored from the saved copy; sha256 after restore `dbf036e8cd2b053b53cc89cda8ad79549b2a9b2b3277ba42610b1d2950dd96b3` (matches the copy taken before)
+
+### M50, after the rename
+
+- Mutation: in `pwa/src/fleet/LandingWithdrawSheet.tsx`, `  }, [awaitingRead, view, snapshot.view, entryId]);` → `  }, [view]);`
+- `test/landing-withdraw-sheet.test.tsx`: exit 1 (RED)
+    - `× a view that was already new when the refusal lands is adopted at once 23ms`
+    - `Tests  1 failed | 17 passed (18)`
+    - `⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯`
+    - `FAIL  test/landing-withdraw-sheet.test.tsx > the refusals > a view that was already new when the refusal lands is adopted at once`
+    - `AssertionError: expected [ 1104, 1104 ] to deeply equal [ 1104, 5555 ]`
+    - `- Expected`
+    - `+ Received`
+- Restored from the saved copy; sha256 after restore `dbf036e8cd2b053b53cc89cda8ad79549b2a9b2b3277ba42610b1d2950dd96b3` (matches the copy taken before)
