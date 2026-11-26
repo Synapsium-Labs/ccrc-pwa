@@ -34,6 +34,14 @@
 // current one is stored (`recordDelivery`). A DELIVERY RESULT NEVER TOUCHES A TRUST ROW: it never records a verdict, stamps a
 // trust attempt, requeues a build, raises an item or pushes.
 //
+// THE FRAMES CAPTURE (Desktop polish wave 187; `shared/framesLane.ts` decides, this file acts). ONLY when this pass sent no
+// trust job and no delivery job, `nextFramesJob` names at most ONE (build, part) of the box frames recipe, sent through the
+// same transport. The result is read by its one reader; a result of another recipe version is not stored; a current one is
+// CHECKED AGAIN here, on the server (the capture owner's condition 1: `framesReduce.ts#checkReducedFrame`, the reducer's own
+// check, with the live masker beside it), and stored with the check's word, its text only when the check is clear, while
+// the frame texts of builds past the newest four are set aside in the same write. A refused frame is one log line naming
+// the build, the part and the word, never the text. A FRAMES RESULT NEVER TOUCHES A TRUST OR DELIVERY ROW.
+//
 // `watch.ts` owns one of these and calls `sweep()` from its tick beside the roll, never awaited.
 import {
   BUILD_CAPTURE_OUTPUT_MAX, captureNextAct, capturesToRetry, captureTryOf, givenUpToTell, nextCaptureJob,
@@ -43,6 +51,11 @@ import {
 import { nextDeliveryJob } from '../../shared/deliveryLane.js';
 import { deliveryResultCurrency } from '../../shared/deliveryCapture.js';
 import { readDeliveryCaptureResult } from '../../shared/deliveryResult.js';
+import { FRAMES_RECIPE_VERSION, framesOurs } from '../../shared/framesCapture.js';
+import { framesTextToDrop, nextFramesJob } from '../../shared/framesLane.js';
+import { checkReducedFrame } from '../../shared/framesReduce.js';
+import { FRAMES_PARTS, readFramesCaptureResult } from '../../shared/framesResult.js';
+import { framesScan } from '../../shared/framesScan.mjs';
 import type { WatcherCoordPort } from './coord/ports.js';
 import {
   openUntrustedBuildItems, UNTRUSTED_BUILD_ITEM_PROGRAMME, untrustedBuildItemsToRaise, untrustedBuildItemsToSettle,
@@ -79,7 +92,11 @@ export interface BuildCopyTransport {
 
 export interface BuildCaptureLaneDeps extends NoticeDeps {
   readonly coord?: Pick<WatcherCoordPort, 'claudeBuilds' | 'noteClaudeBuildsSeen' | 'markClaudeBuildAttempt'
-    | 'recordClaudeBuildVerdict' | 'requeueClaudeBuild' | 'claudeBuildDeliveries' | 'markDeliveryAttempt' | 'recordDelivery' | 'hasNotice' | 'recordFeedEvent' | 'itemsFor' | 'moveItem' | 'raiseItem'> | undefined;
+    | 'recordClaudeBuildVerdict' | 'requeueClaudeBuild' | 'claudeBuildDeliveries' | 'markDeliveryAttempt' | 'recordDelivery'
+    | 'claudeBuildFrames' | 'markFramesAttempt' | 'recordFrames' | 'hasNotice' | 'recordFeedEvent' | 'itemsFor' | 'moveItem' | 'raiseItem'> | undefined;
+  /** Whether the product's live masker would change a text (`SecretMasker`): the receiver's check runs it beside the
+   *  reducer's own shapes. Absent: the shapes alone. */
+  readonly framesMasked?: ((text: string) => boolean) | undefined;
   /** Absent (a test, a script): rows are recorded and no job is sent. */
   readonly buildCapture?: BuildCaptureTransport | undefined;
   /** Absent: a `build-absent` refusal is answered `no-admin-lane`, and nothing is copied. */
@@ -128,7 +145,11 @@ export class BuildCaptureLane {
     const transport = d.buildCapture;
     const build = transport === undefined ? null : nextCaptureJob(records, at);
     if (transport === undefined) return;
-    if (build === null) { await this.deliveryPass(coord, transport, records, at); return; }
+    if (build === null) {
+      if (await this.deliveryPass(coord, transport, records, at)) return;
+      await this.framesPass(d, coord, transport, records, at);
+      return;
+    }
     // One pass at a time (`inflight`), so the try is stamped after the pass's acts: it says whether a job actually went out.
     // Each act is the decider's (`captureNextAct`): the capture, and after a `build-absent` the copy and the capture again.
     const steps: CapturePassStep[] = [];
@@ -159,9 +180,18 @@ export class BuildCaptureLane {
    *  reads or writes a trust row. */
   private async deliveryPass(
     coord: NonNullable<BuildCaptureLaneDeps['coord']>, transport: BuildCaptureTransport, records: readonly ClaudeBuildRecord[], at: number,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const job = nextDeliveryJob(records, coord.claudeBuildDeliveries(), at);
-    if (job === null) return;
+    if (job === null) return false;
+    await this.deliverySend(coord, transport, job, at);
+    return true;
+  }
+
+  /** The delivery job the decider named: sent, stamped, read and stored (the body of the pass before wave 187, unchanged). A
+   *  pass that named one sends no frames job. */
+  private async deliverySend(
+    coord: NonNullable<BuildCaptureLaneDeps['coord']>, transport: BuildCaptureTransport, job: { readonly build: string; readonly part: number }, at: number,
+  ): Promise<void> {
     const { build, part } = job;
     let answer: BuildCaptureAnswer;
     try { answer = await transport.capture({ build, recipe: 'delivery', part }); } catch { answer = { kind: 'unavailable', why: 'unanswered' }; }
@@ -189,6 +219,43 @@ export class BuildCaptureLane {
       case 'contradiction':
         console.warn(`ccrc-server: delivery capture: ${build} part ${part} carries this recipe's version with cases the part does not hold — no row is stored`);
         return;
+    }
+  }
+
+  /** The box frames recipe's one job of a pass, when no trust job and no delivery job went out: the decider's (build, part),
+   *  sent through the same transport, the attempt stamped after the send, then what came back, checked again and stored. */
+  private async framesPass(
+    d: BuildCaptureLaneDeps, coord: NonNullable<BuildCaptureLaneDeps['coord']>, transport: BuildCaptureTransport, records: readonly ClaudeBuildRecord[], at: number,
+  ): Promise<void> {
+    const rows = coord.claudeBuildFrames();
+    const job = nextFramesJob(records, rows, at);
+    if (job === null) return;
+    const { build, part } = job;
+    let answer: BuildCaptureAnswer;
+    try { answer = await transport.capture({ build, recipe: 'frames', part }); } catch { answer = { kind: 'unavailable', why: 'unanswered' }; }
+    if (!coord.markFramesAttempt(build, part, at, answer.kind === 'unavailable' && answer.why !== 'unanswered' ? answer.why : 'sent')) return;
+    if (answer.kind === 'unavailable') {
+      if (answer.why === 'recipe-not-run') {
+        console.warn(`ccrc-server: frames capture: ${build} part ${part}: not sent: ${answer.detail ?? 'the test box closed the connection on the frames frame'}; no attempt counted, asked again after the spacing`);
+      }
+      return;
+    }
+    const result = readFramesCaptureResult(answer.result, build, part);
+    if (result === null) {
+      console.warn(`ccrc-server: frames capture: the answer for ${build} part ${part} is not a frames result — no row is stored`);
+      return;
+    }
+    if (result.version !== FRAMES_RECIPE_VERSION) return;
+    // The receiver checks again (the capture owner's condition 1): the reducer's own check, and the live masker beside it.
+    const p = FRAMES_PARTS[part]!;
+    const text = result.frame.text;
+    const masked = d.framesMasked;
+    const check = text === null ? { ok: true as const }
+      : checkReducedFrame(text, p.pane, framesOurs(p.case, p.pane), framesScan, masked === undefined ? undefined : (t) => masked(t));
+    const checked = check.ok ? 'clear' as const : check.refusal;
+    if (!check.ok) console.warn(`ccrc-server: frames capture: ${build} frame ${part} refused by the server's check (${check.refusal}); its text is not stored`);
+    if (!coord.recordFrames(result, checked, this.now(), framesTextToDrop(rows, build))) {
+      console.warn(`ccrc-server: frames capture: the result for ${build} part ${part} could not be stored — asked again after the spacing`);
     }
   }
 

@@ -46,11 +46,14 @@ import { REVIEW_CAP_SUMMARY_MAX, cutWhole, reviewCapRefuses, reviewCapStatus } f
 import { linkTeamAuto, linkTeamOverlord, linkingAll, linkingOf, recordReading, recordTeamCandidates, recordTeamSuggestion, setLinking } from './linkingStore.js';
 import * as builds from './claudeBuildsStore.js';
 import * as deliveries from './claudeBuildDeliveriesStore.js';
+import * as framesStore from './claudeBuildFramesStore.js';
 import * as limitSamples from './limitSamplesStore.js';
 import type { LimitSample } from '../poolRunway.js';
 import type { BuildCaptureResult, BuildCaptureTry, ClaudeBuildRecord } from '../../../shared/claudeBuildTrust.js';
 import type { DeliveryRow } from '../../../shared/deliveryLane.js';
 import type { DeliveryCaptureResult, DeliveryNotSent } from '../../../shared/deliveryResult.js';
+import type { FramesRow } from '../../../shared/framesLane.js';
+import type { FramesCaptureResult, FramesRefusal } from '../../../shared/framesResult.js';
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking.js';
 import { openPracticeCase, practiceCaseNewest, type PracticeCaseNewestRead, type PracticeCaseOpen } from './practiceCasesStore.js';
 import type { CaseDue } from './practiceCases.js';
@@ -6693,6 +6696,15 @@ export class CoordStore {
   markDeliveryAttempt(build: string, part: number, now: number, tried: 'sent' | DeliveryNotSent): boolean { return deliveries.markDeliveryAttempt(this.db, build, part, now, tried); }
   /** One part's current result (the caller has judged it current), replacing an older version's. */
   recordDelivery(r: DeliveryCaptureResult, now: number): boolean { return deliveries.recordDelivery(this.db, r, now); }
+
+  // ── the box frames recipe's results (Desktop polish wave 187; `coord/claudeBuildFramesStore.ts`) ──
+
+  /** Every `claude_build_frames` row, newest build first, by part. Throws when the table cannot be read. */
+  claudeBuildFrames(): FramesRow[] { return framesStore.claudeBuildFrames(this.db); }
+  /** The capture lane tried one frames part: a job went out, or why none could. */
+  markFramesAttempt(build: string, part: number, now: number, tried: 'sent' | DeliveryNotSent): boolean { return framesStore.markFramesAttempt(this.db, build, part, now, tried); }
+  /** One part's current result with the receiver's word, and the texts of `drop` set aside, in one savepoint. */
+  recordFrames(r: FramesCaptureResult, checked: 'clear' | FramesRefusal, now: number, drop: readonly string[]): boolean { return framesStore.recordFrames(this.db, r, checked, now, drop); }
 
   // ── stall watch settings (design 2026-10-05 §8, §11) ───────────────────────
 
