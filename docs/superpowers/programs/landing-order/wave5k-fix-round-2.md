@@ -8,11 +8,11 @@ X3 stands as built in fix round 1: the sheet's generation guard and the line's `
 
 ### F1: the withdraw wrapper's generation check has its case
 
-`LandingLine`'s `sheetWithdraw` re-reads only while the line is mounted (`if (gen.current === mine)`). This is the pause tap's rule from section 4.5, and row M32 covers only the pause tap.
+`LandingLine`'s `sheetWithdraw` re-reads only while the line is mounted (`if (gen.current === mine)`). This is the pause tap's rule from section 4.5. Row M32's recorded run covered only the pause tap; review run 3983 measured its second mutant, the generation ref dropped, red in this round's two unmount cases as well, and row FR8 is the one specific to this check.
 
 - **New case** in `landing-line.test.tsx`, run once for the answer and once for the refusal: "the line unmounted before the door's answer lands: no re-read". Each opens the sheet, confirms with a deferred door, unmounts the line, then resolves or rejects, and expects no `onReload` call.
 - **Row FR8:** the check removed.
-- **The note's sentence** in `wave5k-fix-round-1.md` that named M32 for the wrapper now says M32 covers the pause tap only, and points at FR8.
+- **The note's sentence** in `wave5k-fix-round-1.md` that named M32 for the wrapper was changed in this round to say M32 covers the pause tap only, and to point at FR8. The coordinator corrected it again after review run 3983: M32's second mutant also turns this round's two unmount cases red.
 
 ### F2: the active-element check has its case, and the sentence says what holds
 
