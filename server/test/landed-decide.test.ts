@@ -59,24 +59,55 @@ describe('pickLandedReads', () => {
 });
 
 describe('landedAnswerOf', () => {
+  /** A normal candidate: no `repairToken` (D-8626). */
+  const NORMAL: Pick<LandedCandidate, 'repairToken'> = {};
   const facts = { headRefOid: HEAD, baseRefName: 'main', isCrossRepository: false, mergedAt: '2026-11-11T10:00:00Z', mergeCommit: MERGE };
   it('merged lands with its facts, the train included', () => {
     const train = { number: 50, mergeCommit: 'e'.repeat(40) };
-    expect(landedAnswerOf({ state: 'merged', pr: 7, facts, train: null })).toEqual({ act: 'land',
+    expect(landedAnswerOf({ state: 'merged', pr: 7, facts, train: null }, NORMAL)).toEqual({ act: 'land',
       outcome: { word: 'merged', head: HEAD, base: 'main', mergedAt: '2026-11-11T10:00:00Z', mergeCommit: MERGE, train: null } });
-    expect(landedAnswerOf({ state: 'merged', pr: 7, facts, train })).toMatchObject({ act: 'land', outcome: { train } });
+    expect(landedAnswerOf({ state: 'merged', pr: 7, facts, train }, NORMAL)).toMatchObject({ act: 'land', outcome: { train } });
   });
   it('closed and absent close; open waits', () => {
-    expect(landedAnswerOf({ state: 'closed', pr: 7, facts, train: null })).toEqual({ act: 'close', outcome: { word: 'closed' } });
-    expect(landedAnswerOf({ state: 'absent', pr: 7 })).toEqual({ act: 'close', outcome: { word: 'absent' } });
-    expect(landedAnswerOf({ state: 'open', pr: 7, facts, train: null })).toEqual({ act: 'wait' });
+    expect(landedAnswerOf({ state: 'closed', pr: 7, facts, train: null }, NORMAL)).toEqual({ act: 'close', outcome: { word: 'closed', reason: null } });
+    expect(landedAnswerOf({ state: 'absent', pr: 7 }, NORMAL)).toEqual({ act: 'close', outcome: { word: 'absent' } });
+    expect(landedAnswerOf({ state: 'open', pr: 7, facts, train: null }, NORMAL)).toEqual({ act: 'wait' });
   });
   it('unmeasured and a failed call retry; only ccd\'s missing-field says so', () => {
     const ccd = (reason: Extract<PrStatePrRead, { by: 'ccd' }>['reason']): PrStatePrRead => ({ state: 'unmeasured', pr: 7, by: 'ccd', reason, train: null });
-    expect(landedAnswerOf(ccd('timeout'))).toEqual({ act: 'retry', missingField: false });
-    expect(landedAnswerOf(ccd('missing-field'))).toEqual({ act: 'retry', missingField: true });
-    expect(landedAnswerOf({ state: 'unmeasured', pr: 7, by: 'reader', reason: 'fields', train: null })).toEqual({ act: 'retry', missingField: false });
-    expect(landedAnswerOf({ state: 'call-failed' })).toEqual({ act: 'retry', missingField: false });
+    expect(landedAnswerOf(ccd('timeout'), NORMAL)).toEqual({ act: 'retry', missingField: false });
+    expect(landedAnswerOf(ccd('missing-field'), NORMAL)).toEqual({ act: 'retry', missingField: true });
+    expect(landedAnswerOf({ state: 'unmeasured', pr: 7, by: 'reader', reason: 'fields', train: null }, NORMAL)).toEqual({ act: 'retry', missingField: false });
+    expect(landedAnswerOf({ state: 'call-failed' }, NORMAL)).toEqual({ act: 'retry', missingField: false });
+  });
+  describe('a CLOSED, labelled PR whose train record was read and did not prove it (D-9112)', () => {
+    const unproven: PrStatePrRead = { state: 'unmeasured', pr: 7, by: 'ccd', reason: 'train-unproven', train: 'unproven' };
+    it('R-A: train-unproven with its flag closes the entry, the reason carried', () => {
+      expect(landedAnswerOf(unproven, NORMAL)).toEqual({ act: 'close', outcome: { word: 'closed', reason: 'train-unproven' } });
+    });
+    it('R-B: train-unread is asked again', () => {
+      expect(landedAnswerOf({ state: 'unmeasured', pr: 7, by: 'ccd', reason: 'train-unread', train: 'unread' }, NORMAL))
+        .toEqual({ act: 'retry', missingField: false });
+    });
+    it('R-C: a train-unproven reason without its flag is asked again', () => {
+      expect(landedAnswerOf({ state: 'unmeasured', pr: 7, by: 'ccd', reason: 'train-unproven', train: null }, NORMAL))
+        .toEqual({ act: 'retry', missingField: false });
+    });
+    it('R-D: the reader\'s own train-flags refusal is asked again', () => {
+      expect(landedAnswerOf({ state: 'unmeasured', pr: 7, by: 'reader', reason: 'train-flags', train: null }, NORMAL))
+        .toEqual({ act: 'retry', missingField: false });
+    });
+    it('R-E: a merged read lands, its train carried', () => {
+      const train = { number: 50, mergeCommit: 'e'.repeat(40) };
+      expect(landedAnswerOf({ state: 'merged', pr: 7, facts, train }, NORMAL)).toEqual({ act: 'land',
+        outcome: { word: 'merged', head: HEAD, base: 'main', mergedAt: '2026-11-11T10:00:00Z', mergeCommit: MERGE, train } });
+    });
+    it('R-F: an open read waits', () => {
+      expect(landedAnswerOf({ state: 'open', pr: 7, facts, train: null }, NORMAL)).toEqual({ act: 'wait' });
+    });
+    it('R-G: a terminal-repair candidate is asked again on train-unproven (spec amendment B)', () => {
+      expect(landedAnswerOf(unproven, { repairToken: 'c'.repeat(64) })).toEqual({ act: 'retry', missingField: false });
+    });
   });
 });
 

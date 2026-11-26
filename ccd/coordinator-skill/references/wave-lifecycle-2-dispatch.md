@@ -381,8 +381,10 @@ green, non-draft PR whose author holds the maintainer role or higher on its
 repository, and the fleet's PRs are such PRs, so a PR still under review must
 be a draft. CI runs on a draft as on any PR (D-9000), so the review still
 reads green checks. This session marks the PR ready (`gh pr ready <pr>`) only
-once its review passes, immediately before the advance to `merging` (§4); the
-session hook refuses a worker `gh pr ready` and a `gh pr create` without
+once its review passes, immediately before the advance to `merging`, and on a
+project positively opted in to the binding head turns it back into a draft
+while it waits its turn on the landing line (§4, D-9115); the session hook
+refuses a worker `gh pr ready` and a `gh pr create` without
 `--draft` (D-8998).
 
 **The workspace's name is frozen for the life of the claim.** This is a fact
