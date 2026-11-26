@@ -9,6 +9,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { compressAssets } from './build/compressAssets.js';
 import { REACT_SINGLETON } from './vite.react-singleton.js';
+import { PDF_ASSETS_INCLUDE } from './vite.pdf-assets.js';
 
 // The worker bundle resolves `decode-named-character-reference` (reached through
 // remark-gfm and micromark) to its plain `index.js`, never its `browser` entry,
@@ -83,6 +84,8 @@ function precompressAssets(): Plugin {
 
 // https://vite.dev/config/
 export default defineConfig({
+  // The PDF frame's CMaps and standard fonts, inlined as base64 (vite.pdf-assets.ts says why).
+  assetsInclude: [...PDF_ASSETS_INCLUDE],
   // ONE REACT, ALWAYS: the three lists live in vite.react-singleton.ts, whose header holds the rule (and
   // vitest.browser.config.ts reads the same module). Only pwa's own `@` alias is stated here.
   resolve: {
@@ -167,7 +170,9 @@ export default defineConfig({
         // The reader frame's Mermaid script is far over workbox's 2 MiB precache ceiling, which makes the build throw.
         // It is not precached: it loads on demand, only for a document the Mermaid gate lets in (A9, M8.14; the
         // precache exclusion is the W8a plan's refinement (i)).
-        globIgnores: ['**/mermaid.frame-*.js'],
+        // The PDF frame's assets (pdf.js's viewer and parser, its standard fonts and CMaps: X2 P3) are one chunk of about
+        // 4.4 MB, also over that ceiling. They load on demand, only when a PDF page opens, so they are not precached.
+        globIgnores: ['**/mermaid.frame-*.js', '**/pdfAssets-*.js'],
         navigateFallback: '/index.html',
         navigateFallbackDenylist: swDenylist(process.env['CCRC_SW_DENYLIST']),
         // Web Push handlers (push + notificationclick) live in public/push-sw.js
