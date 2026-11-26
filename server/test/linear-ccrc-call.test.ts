@@ -211,14 +211,15 @@ describe('runCcrcOp (D-8180)', () => {
     expect(rows(r.fx)[0]).toMatchObject({ outcome: 'failed', code: 'linear-invalid' });
   });
 
-  // Round 2 A3b: a body the op's shape would read as success is never an ok on a failing status. (Every shaper reads `errors` before
-  // `data`, so a kept body cannot read as success today; the pin holds the answer if a shaper ever did.)
-  it('D-9132 (round 2 A3b): a write answered 400 with a success payload beside a non-empty errors array is never ok', async () => {
+  // Round 2 A3b, corrected in round 3: a kept 4xx body is read for its `errors` before its `data`, so a success payload beside an
+  // unknown code is the marked `unreachable`, never an ok. (The `!answered.ok` in `run` is the narrowing `refused` needs, not a branch
+  // of its own: a kept body always has a non-empty `errors` array, so it never shapes as ok, and that case would fall through to
+  // the plain `unreachable` a missing body takes.)
+  it('D-9132 (round 2 A3b): a write answered 400 with a success payload beside an unknown-code errors array reads the errors first: marked unreachable, never ok', async () => {
     const r = await rig(() => Promise.resolve(linearAnswer({ ok: false, status: 400, json: async () => ({
       data: { projectCreate: { success: true, project: { id: CREATED } } }, errors: [{ message: 'x', extensions: { code: 'SOMETHING_NEW' } }] }) })));
     const out = await runCcrcOp(r.deps, WRITE);
-    expect(out.ok).toBe(false);
-    expect(out).toMatchObject({ ok: false, word: 'unreachable', maybeSent: true });
+    expect(out).toEqual({ ok: false, word: 'unreachable', maybeSent: true, outsideTable: true });
     expect(rows(r.fx)[0]).toMatchObject({ outcome: 'unknown' });
   });
 

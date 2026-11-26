@@ -152,8 +152,9 @@ export class PlanSync {
   /** Consecutive deferrals of a key: the backoff step. Reset by progress and by `done`. */
   private readonly attempts = new Map<string, number>();
   /** Consecutive answers outside the grammar for one binding (D-9132: also those outside the closed error table): after the last
-   *  backoff step it is failed. Cleared by a good WRITE for the binding (`bind`: a create, an update, a link, an adoption), by its
-   *  failure and when the programme goes clean. A good READ does not clear it: answers outside the table that a read splits still count. */
+   *  backoff step it is failed. Cleared by any `bind` of the binding (a create, an update, a link, a read-only `same` verdict, and an
+   *  adoption, which binds after reads), by its failure and when the programme goes clean. A read that does not reach `bind` does not
+   *  clear it: answers outside the table that such a read splits still count. */
   private readonly malformed = new Map<number, number>();
   /** Workspaces whose key is not configured, for this tick: no call is made for them again until the next. */
   private readonly notConfigured = new Set<string>();

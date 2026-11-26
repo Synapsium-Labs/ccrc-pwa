@@ -16,7 +16,7 @@ import { redactShapedCount } from '../coord/redact.js';
 import { publicTextVerdict, ticketRefOfBranch } from '../linking/policy.js';
 import type { RaiseItemInput } from '../coord/ledgersStore.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
-import { ADOPTED_FINGERPRINT, type BindingRow, type CheckpointRow, type EpicRow, type StoredPlan, type SyncDeferral, type TicketRow } from '../coord/planStore.js';
+import type { BindingRow, CheckpointRow, EpicRow, StoredPlan, SyncDeferral, TicketRow } from '../coord/planStore.js';
 import { LINEAR_INITIATIVE_STATUSES, withCcrcProvenance, type CcrcOpInput, type CcrcOpName, type LinearInitiativeStatus } from './hierarchyOps.js';
 import { statusOfType, type LinearDirectoryEntries } from './ops.js';
 import type { DriftKind, OwnedFields } from './driftPolicy.js';
@@ -114,6 +114,11 @@ export function plannedFingerprint(fields: Readonly<Record<string, unknown>>): s
  *  its stored fingerprint, which reads `<base>` or `<base>+<mark>`: `<base>` is F(the planned fields without the link), `<mark>` is
  *  F({ link: <initiativeId> }) for a project's link to its initiative, F({ pr: <url> }) for an issue's pull request link. */
 const LINK_MARK_SEPARATOR = '+';
+/** The fingerprint of an adopted object (recovery, conflict, an inbound issue taken or placed): it was never sent the current
+ *  inputs, so it matches no planned one and the next re-read emits one absolute update (or link) that writes the real
+ *  fingerprint. The sync's `adopted` word, spelled once, here beside the encoding that reads it (D-9131: the policy reads it, so it
+ *  lives in L1; the plan store imports it from here and re-exports it, never the other way round). */
+export const ADOPTED_FINGERPRINT = 'adopted';
 /** A stored fingerprint: the base alone, or the base with the link's mark. */
 export function withLinkMark(base: string, mark: string | null): string {
   return mark === null ? base : `${base}${LINK_MARK_SEPARATOR}${mark}`;
