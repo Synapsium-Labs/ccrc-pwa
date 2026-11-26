@@ -7386,17 +7386,28 @@ _exp_artifacts() {
     esac
   done
   [ -z "$off" ] || [ -z "$ao$co" ] || _ccrc_usage_die "--off"
-  [ -f "$CCRC_EXPOSURE_FILE" ] \
-    || _ccrc_die "this box has no exposure file yet: run ccrc expose duckdns or ccrc expose byo first; the artifact names sit beside the console's. Nothing was written."
-  origin="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_ORIGIN)"
-  rpid="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_RP_ID)"
-  mode="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_EXPOSE_MODE)"
-  prov="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_DDNS_PROVIDER)"
-  dom="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_DDNS_DOMAIN)"
-  token="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_DDNS_TOKEN)"
-  bind="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_CADDY_BIND)"
-  [ "$mode" != ip ] \
-    || _ccrc_die "an address has no second site; artifacts need names (ccrc expose duckdns or ccrc expose byo gives this box a name first). Nothing was written."
+  # The tier never stands alone: it sits beside a named console exposure that arms sign-in, or nowhere, so no
+  # artifacts-only exposure can exist (and the reach proof never meets one).
+  local why="" auth=""
+  if [ ! -f "$CCRC_EXPOSURE_FILE" ]; then why="this box has no exposure file yet"
+  else
+    origin="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_ORIGIN)"
+    rpid="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_RP_ID)"
+    auth="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_AUTH)"
+    mode="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_EXPOSE_MODE)"
+    prov="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_DDNS_PROVIDER)"
+    dom="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_DDNS_DOMAIN)"
+    token="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_DDNS_TOKEN)"
+    bind="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_CADDY_BIND)"
+    if [ "$mode" = ip ]; then why="this box is exposed by address, which has no second site; artifacts need names"
+    elif [ "$auth" != on ] || [ -z "$rpid" ] || [ -z "$origin" ]; then
+      why="this box's exposure file does not carry the console's sign-in (CCRC_AUTH=on, CCRC_RP_ID and CCRC_ORIGIN together)"
+    fi
+  fi
+  if [ -n "$why" ]; then
+    [ -z "$off" ] || { echo "expose: artifacts: nothing to turn off — $why"; return 0; }
+    _ccrc_die "$why: run ccrc expose duckdns or ccrc expose byo first; the artifact names sit beside the console's. Nothing was written."
+  fi
   host="${origin#https://}"
   if [ "$prov" = duckdns ]; then arm=duckdns; host="${dom%%,*}"; fi
   if [ -z "$off" ]; then

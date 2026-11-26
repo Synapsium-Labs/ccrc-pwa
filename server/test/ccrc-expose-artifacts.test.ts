@@ -420,16 +420,27 @@ describe('ccrc expose artifacts: the arm', () => {
     expect(bytesAt(exposurePath(byo))).toBe(byoEnv('https://box.example.invalid', 'example.invalid'));
     expect(bytesAt(caddyfilePath(byo))).toBe(caddyfile('box.example.invalid'));
 
-    // ip: no second site, so the keys and the block are removed, said once.
+    // ip, from a duckdns box with its names: no second site, so everything of the tier goes, said once: the three keys,
+    // the two extra names on the updater's list (the address form writes no list at all), the second block and the
+    // global log block. Both files equal the address form's console-only bytes.
     const ip = box('ccrc-art-rerun-ip-');
-    await seedByo(ip, 'https://ccrc.example.test', 'example.test');
-    expect(runPiped(ip, ['expose', 'artifacts', '--artifact-origin', ao, '--content-origin', co]).code).toBe(0);
+    const [ipSub, ipA, ipC] = [genLabel(), genLabel(), genLabel()];
+    await seedDuckdns(ip, ipSub);
+    expect((await runTty(ip, ['artifacts'], [ipA, ipC])).code).toBe(0);
+    expect(bytesAt(exposurePath(ip))).toBe(duckdnsArtEnv(ipSub, ipA, ipC));
     stubHostname(ip, IP_ADDR);
     const gone = await runTty(ip, ['ip'], [''], POISON);
     expect(gone.code, gone.stdout).toBe(0);
     expect(gone.stdout).toContain('artifacts turned off: an address has no second site');
-    expect(bytesAt(exposurePath(ip))).toBe(ipEnv(IP_ADDR));
-    expect(bytesAt(caddyfilePath(ip))).toBe(ipCaddyfile(IP_ADDR));
+    const ipEnvAfter = bytesAt(exposurePath(ip)) ?? '';
+    expect(ipEnvAfter).toBe(ipEnv(IP_ADDR));
+    for (const gonePart of ['CCRC_ARTIFACT_', 'CCRC_DDNS_DOMAIN', `${ipA}.duckdns.org`, `${ipC}.duckdns.org`]) {
+      expect(ipEnvAfter, gonePart).not.toContain(gonePart);
+    }
+    const ipCf = bytesAt(caddyfilePath(ip)) ?? '';
+    expect(ipCf).toBe(ipCaddyfile(IP_ADDR));
+    expect(ipCf).not.toContain('log default');
+    expect(ipCf).not.toContain(`${ipA}.duckdns.org`);
   });
 
   it('expose: labels equal to the console\'s or to each other refuse', async () => {
@@ -475,15 +486,40 @@ describe('ccrc expose artifacts: the arm', () => {
     const r = runPiped(home, ['expose', 'artifacts', '--artifact-origin', 'https://art.example.invalid',
       '--content-origin', 'https://content.example.invalid']);
     expect(r.code).toBe(1);
-    expect(r.stderr).toContain('an address has no second site; artifacts need names');
+    expect(r.stderr).toContain('this box is exposed by address, which has no second site; artifacts need names');
     expect([bytesAt(exposurePath(home)), bytesAt(caddyfilePath(home))]).toEqual(before);
     expect(bytesAt(caddyfilePath(home))).not.toContain('reverse_proxy 127.0.0.1:7790');
-    // and a box with no exposure file is told to run a console arm first
-    const bare = box('ccrc-art-bare-');
-    const none = runPiped(bare, ['expose', 'artifacts', '--off']);
-    expect(none.code).toBe(1);
-    expect(none.stderr).toContain('this box has no exposure file yet');
-    expect(ccrcDirEntries(bare)).toEqual([]);
+  });
+
+  it('expose: the arm never stands alone', () => {
+    // Beside a named console exposure that arms sign-in, or nowhere: every other box is refused with nothing written,
+    // and `--off` there changes nothing and says there is nothing to turn off.
+    const full = byoEnv('https://ccrc.example.test', 'example.test');
+    const cases: [string, string | null, string][] = [
+      ['no exposure file', null, 'this box has no exposure file yet'],
+      ['an exposure file that records no console', `${HEADER}\n`, 'does not carry the console\'s sign-in'],
+      ['no CCRC_AUTH', full.replace('CCRC_AUTH=on\n', ''), 'does not carry the console\'s sign-in'],
+      ['CCRC_AUTH not on', full.replace('CCRC_AUTH=on\n', 'CCRC_AUTH=off\n'), 'does not carry the console\'s sign-in'],
+      ['no CCRC_RP_ID', full.replace('CCRC_RP_ID=example.test\n', ''), 'does not carry the console\'s sign-in'],
+      ['no CCRC_ORIGIN', full.replace('CCRC_ORIGIN=https://ccrc.example.test\n', ''), 'does not carry the console\'s sign-in'],
+      ['an address', ipEnv(IP_ADDR), 'this box is exposed by address'],
+    ];
+    for (const [what, text, says] of cases) {
+      const home = box('ccrc-art-alone-');
+      if (text !== null) seedFile(home, text);
+      const before = { dir: ccrcDirEntries(home), env: bytesAt(exposurePath(home)), cf: bytesAt(caddyfilePath(home)) };
+      const r = runPiped(home, ['expose', 'artifacts', '--artifact-origin', 'https://art.example.invalid',
+        '--content-origin', 'https://content.example.invalid']);
+      expect(r.code, `${what}: ${r.stderr}`).toBe(1);
+      expect(r.stderr, what).toContain(says);
+      expect(r.stderr, what).toContain('run ccrc expose duckdns or ccrc expose byo first');
+      expect(r.stderr, what).toContain('Nothing was written.');
+      const off = runPiped(home, ['expose', 'artifacts', '--off']);
+      expect(off.code, `${what} --off: ${off.stderr}`).toBe(0);
+      expect(off.stdout, what).toContain(`expose: artifacts: nothing to turn off — `);
+      expect(off.stdout, what).toContain(says);
+      expect({ dir: ccrcDirEntries(home), env: bytesAt(exposurePath(home)), cf: bytesAt(caddyfilePath(home)) }, what).toEqual(before);
+    }
   });
 
   it('expose: --off removes the keys, the labels and the block', async () => {
