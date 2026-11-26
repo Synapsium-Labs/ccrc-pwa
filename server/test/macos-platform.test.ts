@@ -336,7 +336,7 @@ describe('no call site outside the platform block runs a GNU-only command bare',
     // `ccd` is scanned WITH its library (D-6913): the moved disk-retention code is still ccd's.
     const src = name === 'ccd' ? ccdSource() : readFileSync(path.join(ccdRoot, name), 'utf8');
     if (name === HOOK) return executableText(src.replace(HOOK_EPOCH_COPY, ''));
-    if (name === 'ccrc-testbox-admin' || name === 'testbox-build-copy') return executableText(src.replace(BOX_SIDE, ''));
+    if (name === 'ccrc-testbox-admin' || name === 'testbox-build-copy' || name === 'testbox-user-write') return executableText(src.replace(BOX_SIDE, ''));
     return executableText(name === 'ccd' ? src.replace(COLLECT_MV, '').replace(LIB_LOAD, '').replace(LIB_HASH_TOOLS, '') : src);
   }
 
@@ -392,6 +392,21 @@ describe('no call site outside the platform block runs a GNU-only command bare',
     expect([...region.matchAll(/^([A-Z_]+)=/gm)].map((m) => m[1])).toEqual(['TBA_BUILD_COPY_SH', 'TBA_BUILD_WRITE_SH']);
     expect([...region.matchAll(/^(\w+)\(\) \{/gm)]).toEqual([]);
     expect(gnuHits(executableText(region)).map((h) => h.split(':')[0]).sort()).toEqual(['mv -T', 'sha256sum']);
+    expect(gnuHits(executableText(src.replace(BOX_SIDE, '')))).toEqual([]);
+  });
+
+  // The admin verb's box-side writes in a less privileged user's place (ccd/testbox-user-write) run on the test box too, in one
+  // marked region cut by the same BOX_SIDE expression: exactly its seven strings (the privilege drop, the one writer, the token's
+  // two programs, the access key file's two edits and the repair's copy) and exactly one GNU line (the writer's rename that never
+  // treats the name as a directory), so the region cannot grow quietly.
+  it('ccd/testbox-user-write\'s box-side region holds exactly its seven strings and one GNU line, and the cut leaves none outside it', () => {
+    const src = readFileSync(path.join(ccdRoot, 'testbox-user-write'), 'utf8');
+    const region = BOX_SIDE.exec(src)?.[0] ?? '';
+    expect(region, 'the BOX-SIDE COMMANDS region is not in ccd/testbox-user-write').not.toBe('');
+    expect([...region.matchAll(/^([A-Z_]+)=/gm)].map((m) => m[1])).toEqual(
+      ['TBA_DROP', 'TBA_PUT_FN', 'TBA_TOKEN_PUT_SH', 'TBA_TOKEN_WRITE_SH', 'TBA_AK_ADD', 'TBA_AK_DROP', 'TBA_TREE_COPY_SH']);
+    expect([...region.matchAll(/^(\w+)\(\) \{/gm)]).toEqual([]);
+    expect(gnuHits(executableText(region)).map((h) => h.split(':')[0]).sort()).toEqual(['mv -T']);
     expect(gnuHits(executableText(src.replace(BOX_SIDE, '')))).toEqual([]);
   });
 
