@@ -46,7 +46,7 @@ const cutOut = (src: string, cut: RegExp, allowed: readonly number[]): string =>
 /** The anchor before `norm`, in each of the two modes that ask the row; absent once the gate is removed. */
 const ANCHOR = /select\(test\(QZANC\)\) \| (?=\(\., norm\) \| qzmatch\))/g;
 /** The row's own gate, whatever literal it asks: a wrong literal then reds on behaviour, not on this cut. */
-const LITERAL = /(?<=def qzmatch: )select\(test\("[^"]*"\)\) \|/g;
+const LITERAL = /(?<=def qzmatch:) select\(test\("[^"]*"\)\) \|/g;
 /** The row in each mode that asks it, gated or not. */
 const ROW = / \/\/ first\((?:select\(test\(QZANC\)\) \| )?\(\., norm\) \| qzmatch\)/g;
 const gated = hookProgram();
@@ -144,6 +144,7 @@ describe('the quiz row\'s literal gate changes no answer', () => {
   it('the control and the floor are derived from the hook: no gate left in the one, no quiz row in the other', () => {
     expect(ungated()).not.toMatch(/test\(QZANC\)/);
     expect(ungated()).not.toMatch(/def qzmatch: select/);
+    expect(ungated()).toMatch(/def qzmatch:\n/);
     expect(rowless()).not.toMatch(/\| qzmatch\)/);
   });
 
