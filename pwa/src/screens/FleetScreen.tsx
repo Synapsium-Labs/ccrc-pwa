@@ -45,6 +45,7 @@ import type { FleetStore } from '../stores/fleet';
 import { useHeardRuns } from '../fleet/useHeard';
 import { FLEET_ID, useFrameSet } from '../skins/frame';
 import { useDesk } from '../lib/useMediaQuery';
+import { ReadinessLine } from '../overlord/ReadinessLine';
 import '../fleet/fleet.css';
 
 export function FleetScreen({
@@ -391,6 +392,7 @@ export function FleetScreen({
       {/* Wave 19, D-5124: the four surfaces show the stale sentence; this one region announces it, once. */}
       <div className="sr-only" role="status">{stale ? UPDATES_STALE_TEXT : null}</div>
       <BuildLine health={fleetHealth} nodes={updates.view?.nodes ?? null} staleNote={stale ? UPDATES_STALE_TEXT : null} />
+      <ReadinessLine />
     </section>
   );
 }

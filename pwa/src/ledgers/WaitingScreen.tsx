@@ -31,6 +31,7 @@ import { apiErrorText } from '../lib/refusalWords';
 import { CALLS_GROUP_WORDS, CALL_TARGET_WORDS, OVERTURN_WORD, SEEN_WORD, callLine, callTargetOf, callRefusalText, callsApartOf, clearedCallsOf, openCallsOf, type CallFilter } from './callWords';
 import { OverturnSheet, type OverturnSend } from './OverturnSheet';
 import { ParkedApprovals } from './ParkedApprovals';
+import { ReadinessLine } from '../overlord/ReadinessLine';
 import './ledgers.css';
 
 export interface WaitingScreenProps {
@@ -516,7 +517,7 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
   if (view === null || sessions === null) {
     return (
       <div className="wl">
-        <header className="wl-head"><h1 className="wl-title">Waiting on you</h1></header>
+        <header className="wl-head"><h1 className="wl-title">Waiting on you</h1><ReadinessLine /></header>
         {typeof props.unavailable === 'string'
           ? <p className="wl-note" role="alert">{props.unavailable}</p>
           : <p className="wl-note" role="status">{NO_FRAME_WORD}</p>}
@@ -563,7 +564,7 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
   const clearedCalls = clearedCallsOf(view, callFilter);
   return (
     <div className="wl">
-      <header className="wl-head"><h1 className="wl-title">Waiting on you</h1></header>
+      <header className="wl-head"><h1 className="wl-title">Waiting on you</h1><ReadinessLine /></header>
       {target !== null && target.at !== 'open' && <p className="wl-note" role="status" data-call-target={target.at}>{CALL_TARGET_WORDS[target.at]}</p>}
       {props.notCurrent !== undefined && <NotCurrentLine words={props.notCurrent} />}
       <ParkedApprovals approvals={view.approvals} />
