@@ -17,6 +17,13 @@
 // On the Docs screen the mount asks for the bar the screen's slot names (`docs/readerBar.ts`), as it starts; on ccrc's
 // bar the handle (the title, the commands, the progress) is published while the frame is ready (the library 1.1
 // take-up plan, refinement (i)).
+// A body also takes part in reader mode (X6 XR1.4 with XR2.1, D-8975, D-8805; `useReaderMode.ts`'s context, absent outside a Docs
+// screen, which reads as reader mode off): every production mount listens for `progress` (the bar's, and a changed share counts as
+// the reader's activity), its figure `place`s count as activity too, and its `reader` acts go to the context (`menu`, `exit`,
+// `toggle`, and `active`, which is activity only). A mount is made under the reading the context says is in force for this body's
+// own document (`readingFor`), and a frame that is ready is handed to the context (`setFrame`, which brings it to the reading in
+// force); a frame that falls back, or a body that ends, takes it away again, and a fallback reaches the context so reader mode ends.
+//
 // A body stays where it landed until its `bodyKey` changes (`MarkdownBody` keys this component by it), so a fallback
 // never mounts again. The reason of G3, G4 and G6 is kept for the console and never reaches the page.
 // One thing starts the body again: images that answered 401 (`ReaderImages.auth`). Those images show the frame's own
@@ -65,6 +72,8 @@ import {
 } from './ReaderSheets';
 import type { ReaderImages, loadReaderImages } from './reader/images';
 import type { ReaderMount, ReaderMountInput, ReaderThemePref } from './reader/bridge';
+import { readerModeDocKeyOf, type ReaderReading } from './reader/readerMode';
+import { ReaderModeContext, type ReaderModeFrame } from './useReaderMode';
 import { readerServedHash, readerVersionSeed } from './reader/history';
 import { startReaderHistory } from './readerHistory';
 import { docNow, startPlaces } from './reader/places';
@@ -202,14 +211,16 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
   /** The bar this body's frame publishes once ready; `null`: its frame is on its own bar, or not mounted yet. */
   const [bar, setBar] = useState<ReaderBar | null>(null);
   const barSlot = useContext(ReaderBarContext);
+  /** Reader mode's context; `null` outside a Docs screen, which reads as reader mode off. */
+  const readerMode = useContext(ReaderModeContext);
   const hostRef = useRef<HTMLDivElement | null>(null);
   const mountRef = useRef<ReaderMount | null>(null);
   /** The frame theme the frame was last given: the mount's seed, then each `setPrefs`. */
   const seededPrefs = useRef<ReaderThemePref['theme'] | null>(null);
   /** The latest props, for the callbacks the frame holds for its whole life. */
-  const live = useRef({ props: p, link, assets, prefs, stamp, barSlot });
+  const live = useRef({ props: p, link, assets, prefs, stamp, barSlot, readerMode });
   useEffect(() => {
-    live.current = { props: p, link, assets, prefs, stamp, barSlot };
+    live.current = { props: p, link, assets, prefs, stamp, barSlot, readerMode };
   });
   const followedStamp = useRef<string | null>(null);
 
@@ -255,12 +266,16 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
     let unwatchAuth: (() => void) | null = null;
     /** The anchor a same-page link last opened the frame at, held by the visit until the frame opened at it is ready. */
     let reopened: string | null = null;
+    /** The frame this body handed reader mode's context, while it stands; the context clears it only if it is still this one. */
+    let published: ReaderModeFrame | null = null;
 
     const drop = (): void => {
       places.host(null);
       mount?.destroy();
       mount = null;
       mountRef.current = null;
+      if (published !== null) live.current.readerMode?.dropFrame(published);
+      published = null;
     };
     /** The drafts this body counted go back once: a fallback hands the page to the plain view, which counts its own. */
     const giveBack = (): void => {
@@ -279,12 +294,16 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
       console.warn(`ccrc: reader fell back (${reason})`);
       drop();
       giveBack();
+      // The rich view is gone: reader mode, if it is on, ends and gives its place back (X6.24).
+      live.current.readerMode?.setFallback();
       dispatch({ e: 'fallback', reason });
     };
     /** G4 and G5: the plain view, decided before any mount. */
     const goPlain = (why: string, budgetMs?: number): void => {
       if (ac.signal.aborted || landed) return;
       landed = true;
+      // A body made while reader mode was on, which lands in the plain view, leaves no rich view to read: it ends as a fallback does.
+      live.current.readerMode?.setFallback();
       dispatch(budgetMs === undefined ? { e: 'plain', why } : { e: 'plain', why, budgetMs });
     };
 
@@ -425,7 +444,39 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
       seededPrefs.current = cur.prefs;
       // The bar is read once, here: the frame keeps it for its life (refinement (f)).
       const chrome = cur.barSlot?.chrome ?? 'frame-bar';
-      const progress = chrome === 'host-bar' ? createReaderProgress() : null;
+      // Every production mount asks for progress (D-8805): the bar's line on ccrc's bar, and the reader's activity on either.
+      const progress = createReaderProgress();
+      const barTitle = readerBarTitle(outcome.result.meta.title, leafName(cur.props.show.path));
+      // The reading this mount is made under, asked as the mount starts: the turn when reader mode is on for this body's own
+      // document (and it is still the screen's), else `off`. A mount made under a reading is sent it before its `ready`.
+      const reading = cur.readerMode?.readingFor(readerModeDocKeyOf({
+        kind: 'project', owner: cur.props.link.project, section: cur.props.show.section, path: cur.props.show.path,
+      })) ?? 'off';
+      /** What the frame was last sent as its reading: this mount's, then each `setReading` the context sent through the handle. */
+      let sentReading: ReaderReading = reading;
+      /** Whether this body's frame has reported `ready`: with the mount, it is what makes the frame the context's. */
+      let isReady = false;
+      /** Hands reader mode's context this body's frame, once the mount has landed and the frame is ready (again after each
+       *  same-page reopening: a new frame, made under the reading the handle last sent). */
+      const publishFrame = (): void => {
+        const m = mount;
+        const ctx = live.current.readerMode;
+        if (!isReady || m === null || ctx === null) return;
+        const f: ReaderModeFrame = {
+          ready: true,
+          planned: sentReading !== 'off',
+          focus: () => m.focus?.(),
+          setReading: (mode) => {
+            sentReading = mode;
+            m.setReading?.(mode);
+          },
+          command: (name) => m.command?.(name),
+          title: barTitle,
+          progress,
+        };
+        published = f;
+        ctx.setFrame(f);
+      };
       /** The fragment this mount was handed: `onReady` spends it. */
       const handedFragment = cur.props.pendingFragment;
       let spent = false;
@@ -450,8 +501,37 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
         appearanceRoot: document.documentElement,
         onLink,
         onHash: places.onHash,
-        onPlace: places.onPlace,
+        // The visit's places hear the frame's figure opening and closing, and so does the reader's activity (the wake lock).
+        onPlace: (kind) => {
+          places.onPlace(kind);
+          live.current.readerMode?.activity();
+        },
         copy: onCopy,
+        reading,
+        // A changed share is activity; a share resent is not.
+        onProgress: (share: number) => {
+          const last = progress.read();
+          progress.set(share);
+          if (share !== last) live.current.readerMode?.activity();
+        },
+        onReader: (act) => {
+          const ctx = live.current.readerMode;
+          if (ctx === null) return;
+          switch (act) {
+            case 'menu':
+              ctx.menu();
+              break;
+            case 'exit':
+              ctx.frameExit();
+              break;
+            case 'toggle':
+              ctx.frameToggle();
+              break;
+            case 'active':
+              ctx.activity();
+              break;
+          }
+        },
         onReady: () => {
           if (ac.signal.aborted || landed) return;
           dispatch({ e: 'ready' });
@@ -465,10 +545,11 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
             reopened = null;
             live.current.props.onFragmentConsumed();
           }
+          isReady = true;
+          publishFrame();
         },
         onFallback: (r) => fallBack(String(r)),
         chrome,
-        ...(progress === null ? {} : { onProgress: (share: number) => progress.set(share) }),
       };
       performance.mark('ccrc-reader-mount-start');
       let m: ReaderMount;
@@ -487,13 +568,12 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
       mount = m;
       mountRef.current = m;
       places.host(m);
-      if (progress !== null) {
-        setBar({
-          title: readerBarTitle(outcome.result.meta.title, leafName(cur.props.show.path)),
-          command: (name) => m.command?.(name),
-          progress,
-        });
+      // Only a mount on ccrc's own bar publishes the bar's handle.
+      if (chrome === 'host-bar') {
+        setBar({ title: barTitle, command: (name) => m.command?.(name), progress });
       }
+      // The frame may have reported ready before the mount's promise landed here.
+      publishFrame();
       const latest = live.current;
       if (m.seed?.hosted) {
         followedStamp.current = m.seed.stamp;

@@ -7,6 +7,7 @@ import {
   READER_MODE_OFF,
   READER_WAKE_IDLE_MS,
   readerModeDocKey,
+  readerModeDocKeyOf,
   readerModeOffered,
   readerModeStep,
   timeLeftMinutes,
@@ -46,6 +47,15 @@ describe('reader mode: the document it is entered for', () => {
     expect(readerModeDocKey(null, folder)).toBe(['folder', 'notes', 'specs', 'a.md'].join('\u0000'));
     expect(readerModeDocKey(null, folder), 'a folder is never a project of the same name').not.toBe(readerModeDocKey(leaf, null));
     expect(readerModeDocKey(null, null)).toBeNull();
+  });
+
+  it('doc key: the key a body computes from its own parts is the page\'s key for the same document, and no other', () => {
+    const leaf = { kind: 'path', project: 'demo', section: 'specs', path: 'a.md', dirSlash: false, ref: null } as unknown as DocsPageLocation;
+    const folder = { kind: 'folder-path', label: 'notes', section: 'specs', path: 'a.md', dirSlash: false } as unknown as DocsFolderLocation;
+    expect(readerModeDocKeyOf({ kind: 'project', owner: 'demo', section: 'specs', path: 'a.md' })).toBe(readerModeDocKey(leaf, null));
+    expect(readerModeDocKeyOf({ kind: 'folder', owner: 'notes', section: 'specs', path: 'a.md' })).toBe(readerModeDocKey(null, folder));
+    expect(readerModeDocKeyOf({ kind: 'project', owner: 'demo', section: 'specs', path: 'b.md' })).not.toBe(readerModeDocKey(leaf, null));
+    expect(readerModeDocKeyOf({ kind: 'project', owner: 'notes', section: 'specs', path: 'a.md' })).not.toBe(readerModeDocKey(null, folder));
   });
 });
 
@@ -279,6 +289,30 @@ describe('reader ops: the frame', () => {
   });
 });
 
+describe('reader mode: a frame that reports ready (X6 XR1.4)', () => {
+  it('reader mode: a frame that reports ready is brought to the reading in force, whichever way it was mounted', () => {
+    // On, and the mount was made before reader mode was entered: its reading must be set now.
+    const started = readerModeStep(on(), { kind: 'frame-ready', planned: false });
+    expect(started.acts).toEqual(['start-reading']);
+    expect(started.state).toEqual(on());
+    // On, and the mount was made under the reading (sent `setReading` before its ready): nothing to do.
+    expect(readerModeStep(on(), { kind: 'frame-ready', planned: true }).acts).toEqual([]);
+    // Off, and the mount was planned under a reading that ended before its ready (a link's new document, an exit during a
+    // remount): it is told to stop.
+    const stopped = readerModeStep(READER_MODE_OFF, { kind: 'frame-ready', planned: true });
+    expect(stopped.acts).toEqual(['stop-reading']);
+    expect(stopped.state).toEqual(READER_MODE_OFF);
+    // Off, and never planned: a fresh frame is off already.
+    expect(readerModeStep(READER_MODE_OFF, { kind: 'frame-ready', planned: false }).acts).toEqual([]);
+    // It changes no state in any case: the overlay, the fill and the place stay as they were.
+    for (const state of [on({ overlay: true }), on({ how: 'fill', placed: false })]) {
+      const answer = readerModeStep(state, { kind: 'frame-ready', planned: false });
+      expect(answer.state).toEqual(state);
+      expect(answer.acts).toEqual(['start-reading']);
+    }
+  });
+});
+
 describe('reader mode: what is offered, and the wake lock', () => {
   it('offered: only a ready frame outside the plain view, and never while a modal layer is mounted', () => {
     expect(readerModeOffered({ frameReady: true, plainView: false, modalMounted: false })).toBe(true);
@@ -321,6 +355,8 @@ describe('reader mode: time left and its words', () => {
   it('words: the reader mode sentences', () => {
     expect(READER_MODE_TEXT).toEqual({
       enter: 'Reader mode', exit: 'Exit reader mode', live: 'Reader mode. Back or Exit leaves it.', toolbar: 'Reader mode',
+      // The overlay's own words (X6 XR2.1, D-8803): Exit shows a short word under its full name, and Aa opens the reader's settings.
+      exitShown: 'Exit', aa: 'Reading settings', aaShown: 'Aa',
     });
     expect(Object.isFrozen(READER_MODE_TEXT)).toBe(true);
   });

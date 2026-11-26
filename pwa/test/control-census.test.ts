@@ -543,6 +543,15 @@ const CONTROLS: Record<string, string> = {
   'docs/DocImage.tsx <button> doc-img-load': 'TOKEN. Load image, for an image the page budget held back.',
   'docs/DocImage.tsx <button> doc-img-action': "TOKEN. A refused image's Open externally or Open in the viewer.",
   'docs/DocImage.tsx <button> doc-img-link': "TOKEN. A loaded image's own button, which opens its leaf.",
+  'docs/ReaderModeOverlay.tsx <button> docs-reading-exit': "TOKEN. Reader mode's Exit, at the left end of the overlay's bottom strip.",
+  'docs/ReaderModeOverlay.tsx <button> docs-reading-aa': "TOKEN. Reader mode's Aa, which opens the reader's settings (D-8803).",
+  'docs/ReaderModeOverlay.tsx <div> docs-reading-top':
+    "TOKEN. Reader mode's top strip: the document's title, and a tap anywhere on it hides the overlay; it holds no control, "
+    + 'and its rule declares the floor.',
+  'docs/ReaderModeOverlay.tsx <div> docs-reading-layer':
+    "TOKEN. Reader mode's clear layer between the strips (`aria-hidden`, not focusable): a tap hides the overlay and does "
+    + "nothing else, as the terminal drawer's wrapped view does with its glass. It is `inset: 0` over the reading area, and "
+    + 'its rule declares the floor.',
   'docs/DocLink.tsx <a> (none)':
     'INLINE. The links inside a rendered document, react-markdown\'s `a` for Docs (in-app, fragment and external). '
     + 'WCAG 2.2 SC 2.5.8 exempts a target in a sentence or block of text, as for chat\'s `lib/markdown.tsx <a> (none)`.',

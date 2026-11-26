@@ -449,7 +449,12 @@
    area, and every other child of the body is undrawn, so no focusable control sits between the frame and ccrc's own controls
    (the focus guards' wrap, spec 6.5). The guards, the live region, the controls and the portal target keep their own rules. The
    rules carry the screen's class so they outrank the normal view's flex rules above, which sit at the same specificity. */
+/* The fill covers the viewport and the console's bars with it, so it reads the device's own safe areas, never the console's:
+   inside the phone's `.app-shell` the bar's mount redefines `--safe-bottom` as the inset plus `--phone-bar-h` (shell.css), which
+   would leave a blank band under the fill and float the bottom strip above it. (`--safe-top` is declared once, on the root, in
+   the tokens, and no shell rule redefines it, so it needs no restatement.) */
 .docs-reading[data-reader-mode] {
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
   display: block; position: fixed; inset: 0; z-index: var(--z-reading);
   padding: var(--safe-top) env(safe-area-inset-right, 0px) var(--safe-bottom) env(safe-area-inset-left, 0px);
   background: var(--bg-page);
@@ -470,6 +475,47 @@
 .docs-screen > .docs-reading[data-reader-mode] > .docs-leaf:has(.docs-reader) > :not(.docs-reader):not(:has(.docs-reader)) { display: none; }
 .docs-screen > .docs-reading[data-reader-mode] > .docs-leaf :has(.docs-reader) > :not(.docs-reader):not(:has(.docs-reader)) { display: none; }
 .docs-screen > .docs-reading[data-reader-mode] > .docs-leaf .docs-reader { min-block-size: 0; }
+/* §4.2 and §6.5 (reader mode, X6 XR2.1: the overlay, drawn by ReaderModeOverlay.tsx inside `.docs-reading-controls`, which has no
+   box, so these are positioned against the fixed container). Two thin strips on the reader's ground and a clear layer between
+   them. The top strip runs the full width below `--safe-top`, holds the title alone and no control, and a tap anywhere on it hides
+   the overlay (so its height is the tap floor); the bottom strip sits above `--safe-bottom` and holds Exit, then (from XR2.2) the
+   turn setting, then Aa, then the progress text, which takes the strip's far end (the spec's order). The layer covers the reading area under the strips,
+   `touch-action: none` so it takes the touch (a drag on it does not scroll the frame beneath), with no ground of its own. The
+   strips are above the layer, and every control is at least `--tap-min` in both dimensions. §6.2: they fade in over
+   `--dur-fast`, and with no transition under reduced motion (the block at the end of this file names them). */
+.docs-reading-top, .docs-reading-bottom {
+  position: absolute; z-index: 2;
+  inset-inline: env(safe-area-inset-left, 0px) env(safe-area-inset-right, 0px);
+  display: flex; align-items: center; min-width: 0;
+  background: var(--bg-page);
+  opacity: 1; transition: opacity var(--dur-fast) var(--ease-swift);
+}
+/* The fade is a transition from the starting style (no keyframes: the keyframe census registers every opacity trough). An engine
+   without `@starting-style` draws the strips at once, which is the reduced-motion look. */
+@starting-style { .docs-reading-top, .docs-reading-bottom { opacity: 0; } }
+.docs-reading-top {
+  inset-block-start: var(--safe-top); min-height: var(--tap-min); padding: 0 var(--sp-3);
+  font: var(--weight-medium) var(--text-sm) / var(--leading-tight) var(--font-ui);
+  cursor: pointer;
+}
+.docs-reading-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.docs-reading-bottom { inset-block-end: var(--safe-bottom); gap: var(--sp-2); padding: var(--sp-1) var(--sp-3); }
+.docs-reading-exit, .docs-reading-aa {
+  flex: none; min-width: var(--tap-min); min-height: var(--tap-min); padding: 0 var(--sp-3);
+  border: 0; border-radius: var(--r-sm); background: none;
+  font: var(--weight-medium) var(--text-sm) / 1 var(--font-ui);
+  cursor: pointer;
+}
+.docs-reading-percent {
+  flex: none; margin-inline-start: auto;
+  font: var(--weight-regular) var(--text-sm) / 1 var(--font-ui); font-variant-numeric: tabular-nums;
+}
+.docs-reading-layer {
+  position: absolute; inset: 0; z-index: 1;
+  /* The whole reading area is the tap that hides the overlay; it declares the floor anyway, as the terminal's glass does. */
+  min-height: var(--tap-min); min-width: var(--tap-min);
+  touch-action: none; overscroll-behavior: contain;
+}
 .docs-reader-sheet { display: grid; gap: var(--sp-3); min-width: 0; }
 .docs-reader-sheet-url { margin: 0; font: var(--weight-regular) var(--text-sm) / var(--leading-mono) var(--font-mono); overflow-wrap: anywhere; }
 .docs-reader-sheet-note { margin: 0; font-size: var(--text-sm); line-height: var(--leading-normal); }
@@ -650,4 +696,5 @@
    halves). — */
 @media (prefers-reduced-motion: reduce) {
   .docs-door, .docs-back, .docs-row, .docs-fresh, .docs-copy, .docs-leaf-action, .doc-img-load, .doc-img-action, .doc-plain-action, .doc-gate-btn { transition: none; }
+  .docs-reading-top, .docs-reading-bottom { transition: none; }
 }

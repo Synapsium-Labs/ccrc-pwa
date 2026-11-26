@@ -11,29 +11,43 @@
 // The reader place (XR1.3): the default port is `READER_PLACES`, the history half's own functions (`reader/places.ts`), and the
 // hook registers its host with the pop dispatcher (`setReaderPlaceHost`, through the port's `register`) for its whole life. The hook is the one writer of
 // `exitPending` true on its paths: it marks before it steps back (or before it arms the settle) and unmarks when nothing was
-// stepped; the pop decider clears the mark when the landing is consumed. What is left to the later tasks: the frame's wiring
-// and the overlay (XR1.4), and the stored turn (XR2.2).
+// stepped; the pop decider clears the mark when the landing is consumed.
+//
+// The frame (XR1.4 with XR2.1, D-8975): `ReaderFrame` hands the hook its ready frame (`setFrame`, which steps `frame-ready` so the
+// frame is brought to the reading in force), asks it which reading a mount is made under (`readingFor`), and reports the frame's
+// own `reader` acts (`menu`, `frameExit`, `frameToggle`) and its activity. The hook subscribes to no window blur. The overlay
+// (`ReaderModeOverlay`, drawn by `DocsReading`) reads the stored frame's title and progress from the context and acts through
+// `exit`, `aa`, `dismiss`, `escOverlay` and `activity`; `aa` hides the overlay first, then sends `command('settings')`. What is
+// left to the later task: the stored turn (XR2.2).
 import { createContext, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { hideAsPage, releaseAsPage, type PageHiding } from '@ccrc/ui';
 import { useAuthLost } from '../lib/auth';
 import { onPageHidden, onPageVisible } from '../lib/pageClock';
 import { setReaderPlaceHost, type ReaderPlaceHost } from '../lib/popstate';
 import { useFleetStore } from '../stores/fleet';
+import type { ReaderCommand } from './reader/policy';
+import type { ReaderProgress } from './readerBar';
 import {
   landedBelowReaderPlace, markReaderExitPending, pushReaderPlace, readerPlaceFreeNow, standingOnDeadReaderEntry,
   stepBelowReaderPlace,
 } from './reader/places';
 import {
   READER_EXIT_SETTLE_MS, READER_MODE_OFF, READER_WAKE_IDLE_MS, readerModeOffered, readerModeStep, wakeLockWanted,
-  type ReaderModeAct, type ReaderModeEvent, type ReaderModeHow, type ReaderModeState, type ReaderTurn,
+  type ReaderModeAct, type ReaderModeEvent, type ReaderModeHow, type ReaderModeState, type ReaderReading, type ReaderTurn,
 } from './reader/readerMode';
 import { READER_MODE_TEXT } from './reader/readerModeWords';
 
-/** The frame, as reader mode needs it: ready or not, focus, and the `reading` op. No remount and no layout (D-8975). */
+/** The frame, as reader mode needs it: ready or not, whether its mount was made under a reading (sent `setReading` before its
+ *  ready, which `frame-ready` reads), focus, the `reading` op, and, for the overlay, the document's title, how far it has been
+ *  read and the frame's own commands (`command('settings')`). No remount and no layout (D-8975). */
 export interface ReaderModeFrame {
   readonly ready: boolean;
+  readonly planned: boolean;
   focus(): void;
-  setReading(mode: ReaderTurn | 'off'): void;
+  setReading(mode: ReaderReading): void;
+  command(name: ReaderCommand): void;
+  readonly title: string;
+  readonly progress: ReaderProgress;
 }
 
 /** The history port reader mode acts through (consumer-declared; `READER_PLACES` is the real one). `placeFree`: the place budget has
@@ -88,8 +102,24 @@ export interface ReaderModeContextValue {
   escOverlay(): void;
   activity(): void;
   dismiss(): void;
+  /** The overlay's Aa (X6 XR2.1, D-8803): hides the overlay and its layer FIRST (`dismiss`), then sends the frame's
+   *  `command('settings')`, so its settings menu is never under the layer; counted as activity. */
+  aa(): void;
+  /** The frame stored now (title, progress and commands for the overlay); `null` while none is stored. */
+  readonly frame: ReaderModeFrame | null;
+  /** A ready frame is stored and brought to the reading in force (`frame-ready`); `null` clears the stored one, as `dropFrame` does. */
   setFrame(f: ReaderModeFrame | null): void;
+  /** Clears the stored frame only when it is `f`: a body that ends never clears the frame of the body that replaced it. A frame
+   *  that goes while the overlay shows hides the overlay (reader mode stays on). */
+  dropFrame(f: ReaderModeFrame): void;
   setFallback(): void;
+  /** The reading a mount made now for the document `doc` is made under: the turn when reader mode is on for that document and it is
+   *  still the screen's current one, else `off`. */
+  readingFor(doc: string | null): ReaderReading;
+  /** The frame's own `exit` act. */
+  frameExit(): void;
+  /** The frame's own `toggle` act (`r` in the frame): enters or exits, read as `enter` reads its facts. */
+  frameToggle(): void;
 }
 
 /** Null outside a Docs screen. */
@@ -121,7 +151,7 @@ const noop = (): void => undefined;
 interface Sink {
   state(s: ReaderModeState): void;
   live(text: string): void;
-  frameReady(ready: boolean): void;
+  frame(f: ReaderModeFrame | null): void;
 }
 
 /** The mutable half of the hook: refs and handles, in closures. One per mount of the hook, never rebuilt by a render. */
@@ -266,11 +296,30 @@ function createController(sink: Sink) {
     const before = state;
     const answer = readerModeStep(before, event);
     state = answer.state;
-    if (!before.on && answer.state.on) lastActivity = Date.now();   // entering counts as activity
+    if (!before.on && answer.state.on) {
+      lastActivity = Date.now();   // entering counts as activity
+      // An entry during an exit's settle (by `enter` or by the frame's toggle): the old settle must not run into the new reading,
+      // it would step back its place.
+      if (settleTimer !== null) {
+        clearTimeout(settleTimer);
+        settleTimer = null;
+        input.places.markExitPending(false);
+      }
+    }
     for (const act of answer.acts) perform(act);
     if (alive) sink.state(answer.state);
     if (state.on) armIdle(); else clearIdle();
     syncWake();
+  }
+
+  /** Clears the stored frame only when it is `f`. A frame that goes while the overlay shows takes the overlay with it (`dismiss`,
+   *  stepped after the frame is cleared so it focuses nothing): reader mode stays on, and the next frame's ready never draws the
+   *  overlay again, which would pull focus to Exit unasked. */
+  function dropFrame(f: ReaderModeFrame): void {
+    if (frame !== f) return;
+    frame = null;
+    sink.frame(null);
+    step({ kind: 'dismiss' });
   }
 
   const offered = (): boolean => readerModeOffered({
@@ -284,12 +333,6 @@ function createController(sink: Sink) {
     const doc = input.doc;
     // The offer is read now, every time: a modal layer can mount between a render and a tap.
     if (c === null || doc === null || !offered()) return;
-    // A re-entry during an exit's settle: the old settle must not run into the new reading (it would step back its place).
-    if (settleTimer !== null && !state.on) {
-      clearTimeout(settleTimer);
-      settleTimer = null;
-      input.places.markExitPending(false);
-    }
     step({
       kind: 'enter', doc,
       activation: navigator.userActivation?.isActive ?? true,
@@ -297,14 +340,64 @@ function createController(sink: Sink) {
       placeFree: input.places.placeFree(),
     });
   };
+  /** Whether the active element of the document is the frame's iframe, inside the reader host. */
+  const frameFocused = (): boolean => {
+    const a = document.activeElement;
+    return container !== null && a !== null && a.tagName === 'IFRAME' && container.contains(a) && a.closest('.docs-reader') !== null;
+  };
+  /** The frame's `r`: the facts are read now, as `enter` reads them, and the decider rules (it refuses an entry unless reader
+   *  mode is offered and the frame holds focus). Nothing to enter with (no container or document) is no event. */
+  const frameToggle = (): void => {
+    const c = container;
+    const doc = input.doc;
+    if (!state.on && (c === null || doc === null)) return;
+    step({
+      kind: 'frame-toggle', doc: doc ?? '',
+      activation: navigator.userActivation?.isActive ?? false,
+      fullscreenEnabled: c !== null && document.fullscreenEnabled === true && typeof c.requestFullscreen === 'function',
+      placeFree: input.places.placeFree(),
+      offered: offered(),
+      frameFocused: frameFocused(),
+    });
+  };
+
+  /** A tap on ccrc's own controls, or the frame's `active` act: the wake lock's idle timer starts again. */
+  const activity = (): void => {
+    if (!state.on) return;
+    lastActivity = Date.now();
+    armIdle();
+    syncWake();
+  };
+  /** The overlay's Aa: the decider's `dismiss` runs FIRST (state stored at once, the overlay and its layer leave the next
+   *  render), and only then the frame's settings command, so the frame's menu is never opened under the layer. */
+  const aa = (): void => {
+    step({ kind: 'dismiss' });
+    frame?.command('settings');
+    activity();
+  };
 
   return {
     setInput(doc: string | null, plainView: boolean, places: ReaderModePlaces): void { input = { doc, plainView, places }; },
     setContainer(el: HTMLElement | null): void { container = el; },
     setFrame(f: ReaderModeFrame | null): void {
+      // `null` clears the stored frame through the same guard as `dropFrame`: nothing stored, nothing to do.
+      if (f === null) {
+        if (frame !== null) dropFrame(frame);
+        return;
+      }
       frame = f;
-      sink.frameReady(f?.ready === true);
+      sink.frame(f);
+      // A frame that is ready is brought to the reading in force, however it was mounted: the decider answers (L1).
+      if (f.ready) step({ kind: 'frame-ready', planned: f.planned });
     },
+    dropFrame,
+    /** What a mount for `doc` is made under: the turn only while reader mode is on for `doc` and `doc` is still the screen's
+     *  current document, so a new document's frame never inherits the old document's reading. */
+    readingFor(doc: string | null): ReaderReading {
+      return doc !== null && state.on && state.doc === doc && input.doc === doc ? READER_TURN : 'off';
+    },
+    frameExit: (): void => step({ kind: 'frame-exit' }),
+    frameToggle,
     focusFrame(): void { frame?.focus(); },
     offered,
     on: (): boolean => state.on,
@@ -318,12 +411,8 @@ function createController(sink: Sink) {
     block: (): void => step({ kind: 'block' }),
     docChanged(doc: string | null): void { if (state.on) step({ kind: 'doc-changed', doc: doc ?? '' }); },
     fullScreenChanged: (): void => { if (state.on && document.fullscreenElement !== container) step({ kind: 'full-screen-lost' }); },
-    activity(): void {
-      if (!state.on) return;
-      lastActivity = Date.now();
-      armIdle();
-      syncWake();
-    },
+    activity,
+    aa,
     pageVisible: (): void => syncWake(),
     /** The browser drops the lock when the page is hidden: forget the sentinel, then re-read. */
     pageHidden: (): void => { sentinel = null; syncWake(); },
@@ -366,8 +455,8 @@ export function useReaderMode(o: { doc: string | null; plainView: boolean; place
 } {
   const [state, setState] = useState<ReaderModeState>(READER_MODE_OFF);
   const [live, setLive] = useState('');
-  const [frameReady, setFrameReady] = useState(false);
-  const [ctl] = useState(() => createController({ state: setState, live: setLive, frameReady: setFrameReady }));
+  const [frame, setFrameState] = useState<ReaderModeFrame | null>(null);
+  const [ctl] = useState(() => createController({ state: setState, live: setLive, frame: setFrameState }));
   const { doc, plainView } = o;
   const places = o.places ?? READER_PLACES;
 
@@ -401,10 +490,12 @@ export function useReaderMode(o: { doc: string | null; plainView: boolean; place
 
   const value = useMemo<ReaderModeContextValue>(() => ({
     // `readerModeOffered` owns the rule. The modal-layer test is read at each `enter` and in the handle, not at render.
-    state, offered: readerModeOffered({ frameReady, plainView, modalMounted: false }), turn: READER_TURN,
+    state, offered: readerModeOffered({ frameReady: frame?.ready === true, plainView, modalMounted: false }), turn: READER_TURN,
     enter: ctl.enter, exit: ctl.exit, menu: ctl.menu, escOverlay: ctl.escOverlay, activity: ctl.activity, dismiss: ctl.dismiss,
-    setFrame: ctl.setFrame, setFallback: ctl.setFallback,
-  }), [ctl, state, frameReady, plainView]);
+    aa: ctl.aa, frame,
+    setFrame: ctl.setFrame, dropFrame: ctl.dropFrame, setFallback: ctl.setFallback, readingFor: ctl.readingFor,
+    frameExit: ctl.frameExit, frameToggle: ctl.frameToggle,
+  }), [ctl, state, frame, plainView]);
   const container = useMemo<ReaderModeContainer>(() => ({
     setContainer: ctl.setContainer, on: state.on, how: state.on ? state.how : undefined, live, focusFrame: ctl.focusFrame,
   }), [ctl, state, live]);

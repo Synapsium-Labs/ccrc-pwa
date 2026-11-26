@@ -12,6 +12,9 @@
 // held, the latest only, and sent at `ready`, since the library drops such a command (a close then is dropped: a fresh
 // frame has no overlay open); a mount made without `onPlace` passes none and does none of them (the library throws for
 // such a host).
+// Reader mode (X6 XR1.4 with XR2.1, D-8975, D-8805): every Docs mount asks for `onProgress` (`policy.ts#readerMountAsks`'s
+// `progress`, on either bar) and, when the input has `onReader`, for the frame's `reader` acts (its `reader`); neither is the lab's. `setReading` is in place,
+// never a remount, and `focus` focuses the live iframe; each library mount is sent the bridge's current reading before its `ready`.
 // It never passes `mermaidGate`, so the Mermaid gate runs at the library's own caps.
 //
 // It decides nothing a policy file decides: the watchdog, the doc key and the prefs arrive already measured. It
@@ -44,8 +47,9 @@ import { isDocsCommit } from '../../../../shared/docs';
 import { READER_STORE_PREFIX } from '../../lib/readerLimits';
 import { enumerablePageStorage, type EnumerableStoragePort } from '../../lib/storage';
 import {
-  READER_E17_MERMAID, isHostedMount, readerMountFocusFor, readerMountPlan,
-  type ReaderChrome, type ReaderCommand, type ReaderE17Reading, type ReaderLink, type ReaderMountProfile,
+  READER_E17_MERMAID, isHostedMount, readerMountAsks, readerMountFocusFor, readerMountPlan,
+  type ReaderChrome, type ReaderCommand, type ReaderE17Reading, type ReaderLink, type ReaderMountProfile, type ReaderReading,
+  type ReaderAct,
 } from './policy';
 import { loadMermaidAsset, loadReaderAssets, loadReaderFonts } from './assets';
 import { readHostAppearance } from './hostAppearance';
@@ -92,8 +96,15 @@ export interface ReaderMountInput {
   /** Whose bar the frame has; absent, the frame's own. `host-bar` turns the frame's bar off (the take-up plan,
    *  refinement (g)). The lab passes none. */
   readonly chrome?: ReaderChrome;
-  /** How far the document has been read, 0 to 1, for a mount on ccrc's bar; absent, nobody listens. */
+  /** How far the document has been read, 0 to 1. Every Docs body passes it (D-8805): the bar's line on ccrc's bar, and reader
+   *  mode's activity on either. Absent, the mount asks the frame for progress only on ccrc's bar, and nobody listens to it. */
   readonly onProgress?: (share: number) => void;
+  /** The frame's reader-mode acts (`menu`, `exit`, `toggle`, `active`), as the library parsed them, for a Docs mount; giving it is
+   *  what asks the frame to send them. The reader lab's mounts never pass it on. */
+  readonly onReader?: (act: ReaderAct) => void;
+  /** The reading this mount is made under (reader mode's turn); absent reads `off`. A mount made while reader mode is on is sent
+   *  `setReading` with it before its `ready`. The reader lab's mounts ignore it. */
+  readonly reading?: ReaderReading;
   /** `history.ts#readerVersionSeed`'s answer for this body. Absent, the document's own `version` is cut to `{sha, draft}`
    *  as before. Passed on only when the mount's plan carries history (all three of this and the next two). */
   readonly version?: ReaderVersionSeed;
@@ -141,6 +152,13 @@ export interface ReaderMount {
   /** Takes the frame to the top of the document, as Back from a jump whose reader was at the top (no `from`): `goto(id,
    *  TOP_TOKEN)`. Does nothing, as `goto` does nothing. */
   gotoTop?(id: string): void;
+  /** Sets reader mode's reading in place, with no remount: records it as the reading every later library mount of this mount
+   *  (`openAt`'s) is sent, and calls the live frame's `setReading`, which the library queues before `ready` (the latest wins).
+   *  Does nothing after `destroy`; a frame that refuses is warned about and ignored. Absent: this mount has no frame. */
+  setReading?(mode: ReaderReading): void;
+  /** Focuses the live frame's iframe (an already focused one is blurred first, so the focus lands anew). Does nothing after
+   *  `destroy`. Absent: this mount has no frame. */
+  focus?(): void;
 }
 
 /** The position token for "the top of the document". The library's host refuses an empty id, and its reader restores a
@@ -193,6 +211,7 @@ function withSeed(d: RenderInput, v: ReaderVersionSeed): RenderInput {
  *  and mounts nothing. */
 export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps: ReaderMountDeps = {}): Promise<ReaderMount> {
   const plan = readerMountPlan(input.profile, input.bytes, input.chrome ?? 'frame-bar', deps.e17 ?? READER_E17_MERMAID);
+  const asks = readerMountAsks(input.profile, input.reading === undefined ? {} : { reading: input.reading });
   const contract = (deps.libraryContract ?? (() => frameLibrary.APPEARANCE_CONTRACT ?? 'none'))();
   const hosted = isHostedMount(plan, readerAppearanceSupported(contract), input.appearanceRoot !== undefined);
   // Start the base I/O first, then faces without yielding; contain either loader's immediate failure.
@@ -298,9 +317,13 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
         ...(v.sha === undefined ? {} : { sha: v.sha }), ...(v.only === undefined ? {} : { only: v.only }),
       }),
     }),
-    ...(plan.chrome === 'host-bar'
-      ? { features: { chrome: { bar: false, topSpace: false } }, onProgress: (share: number) => input.onProgress?.(share) }
-      : {}),
+    // The frame's bar is turned off only on ccrc's bar; progress is asked for by every production mount (D-8805), whose plan says so.
+    ...(plan.chrome === 'host-bar' ? { features: { chrome: { bar: false, topSpace: false } } } : {}),
+    // A `host-bar` mount always did; any other Docs mount does when its input listens (the reader's body always does now).
+    ...(asks.progress && (plan.chrome === 'host-bar' || input.onProgress !== undefined)
+      ? { onProgress: (share: number) => input.onProgress?.(share) } : {}),
+    // The library sends `reader` acts only to a host that passed this, and parses the closed set itself: they go on as they came.
+    ...(asks.reader && input.onReader !== undefined ? { onReader: (act: ReaderAct) => input.onReader?.(act) } : {}),
     title: input.title,
     focus: readerMountFocusFor(input.profile, hostOwnsFocus(el)),
     onLink: (l) => input.onLink(readerLinkOf(l)),
@@ -339,8 +362,23 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
     if (!isReady) { held = h; return; }
     deliver(h);
   };
+  // The reading the live mount is under (reader mode's turn, or `off`): the asks' for the first mount, then the latest
+  // `setReading`. Every library mount is a new `DocFrame`, and the library replays a `setReading` only within one frame, so
+  // each mount is sent this one right after `mountFrame` returns, before its `ready` (X6.76); `off` sends nothing, a fresh mount
+  // being off. It is NOT the `held` mechanism above: the library itself queues a `setReading` made before `ready` (the latest
+  // wins) and posts it at `ready`, unlike `command`, `goto` and `closeOverlay`, which it drops there, so holding it here would
+  // be a second queue beside the library's and dropping it would lose the turn.
+  let reading: ReaderReading = asks.reading;
+  const sendReading = (f: ReturnType<typeof mountDocFrame>, mode: ReaderReading): void => {
+    try {
+      f.setReading(mode);
+    } catch (e) {
+      console.warn('ccrc-reader: the frame refused setReading', e);
+    }
+  };
   mountGen += 1;
   let frame = mountFrame(el, { document, adapters: adaptersNow() });
+  if (reading !== 'off') sendReading(frame, reading);
   return {
     get seed() { return seed; },
     follow(nextTheme) {
@@ -374,6 +412,21 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
       // The library runs host code while it mounts (a focus or insertion handler, a fallback): one that destroyed this
       // mount then reached the frame before it, so the new frame goes too.
       if (destroyed) next.destroy();
+      else if (reading !== 'off') sendReading(next, reading);
+    },
+    setReading(mode) {
+      if (destroyed) return;
+      reading = mode;
+      sendReading(frame, mode);
+    },
+    focus() {
+      if (destroyed) return;
+      // A second `focus()` on an element that is already the document's active element does nothing, and the frame's own
+      // document may not hold focus then (Step 0, M-4, 2026-11-26): blur it first, so the focus lands anew.
+      const iframe = el.querySelector('iframe');
+      if (iframe === null) return;
+      if (el.ownerDocument.activeElement === iframe) iframe.blur();
+      iframe.focus();
     },
     closeOverlay() {
       // Before `ready` the frame is a fresh one with no overlay open, so there is nothing to close: the close is dropped,

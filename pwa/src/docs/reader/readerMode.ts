@@ -17,15 +17,28 @@ import type { DocsFolderLocation, DocsPageLocation } from '../../../../shared/do
  *  same document and another file is not. NUL joins the parts (no part can hold it). `null` has one meaning: the page is
  *  no leaf path, so there is no document to read. */
 export function readerModeDocKey(page: DocsPageLocation | null, folderPage: DocsFolderLocation | null): string | null {
-  if (page !== null && page.kind === 'path' && !page.dirSlash) return ['project', page.project, page.section, page.path].join('\u0000');
+  if (page !== null && page.kind === 'path' && !page.dirSlash) {
+    return readerModeDocKeyOf({ kind: 'project', owner: page.project, section: page.section, path: page.path });
+  }
   if (folderPage !== null && folderPage.kind === 'folder-path' && !folderPage.dirSlash) {
-    return ['folder', folderPage.label, folderPage.section, folderPage.path].join('\u0000');
+    return readerModeDocKeyOf({ kind: 'folder', owner: folderPage.label, section: folderPage.section, path: folderPage.path });
   }
   return null;
 }
 
+/** The one rule of the key, from its parts: what a document body knows of itself (its project, section and path) is enough,
+ *  so a body names its own document the way the page does, and a mount can be asked whether reader mode is on for it. `owner`
+ *  is the project or the folder's label. */
+export function readerModeDocKeyOf(o: { kind: 'project' | 'folder'; owner: string; section: string; path: string }): string {
+  return [o.kind, o.owner, o.section, o.path].join('\u0000');
+}
+
 /** How the reader turns the page: the frame's own `reading` op carries it (`screens`: pages; `scroll`: continuous). */
 export type ReaderTurn = 'screens' | 'scroll';
+
+/** Reader mode's reading as a frame is told it (the library's `setReading`): the turn, or `off` when reader mode is not on. The
+ *  one definition: the mount's policy, the bridge, the frame's body and the hook all name it from here. */
+export type ReaderReading = ReaderTurn | 'off';
 
 /** How reader mode fills the screen. `fill`: the console's layer is drawn over the viewport. `full-screen`: the browser
  *  also granted element full screen. A refusal leaves reader mode on as `fill`. */
@@ -50,7 +63,10 @@ export const READER_MODE_OFF: ReaderModeState = Object.freeze({ on: false as con
  *  mode: the console's state goes, and the place is left for X2's decider to skip as stale). `menu` toggles the overlay;
  *  `dismiss` (a tap on the clear layer outside it) only hides it. No window blur reaches it: wave XR subscribes none
  *  (XR2.1). `frame-toggle` is the frame's `r`: it enters or exits, and is refused unless reader mode is offered (the
- *  whole of `readerModeOffered`, read by delivery as the op arrives) and the frame holds focus (spec §8). */
+ *  whole of `readerModeOffered`, read by delivery as the op arrives) and the frame holds focus (spec §8). `frame-ready` is a
+ *  mount reporting ready, with `planned` whether it was mounted under a reading (sent `setReading` before its ready): it is
+ *  brought to the reading in force, which a mount made just before entering, or planned under a reading that has since ended
+ *  (a new document's frame after a link, an exit during a remount), would otherwise miss. */
 export type ReaderModeEvent =
   | { kind: 'enter'; doc: string; activation: boolean; fullscreenEnabled: boolean; placeFree: boolean }
   | { kind: 'full-screen-granted' }
@@ -68,6 +84,7 @@ export type ReaderModeEvent =
   | { kind: 'dismiss' }
   | { kind: 'frame-exit' }
   | { kind: 'leave' }
+  | { kind: 'frame-ready'; planned: boolean }
   | {
       kind: 'frame-toggle'; doc: string; activation: boolean; fullscreenEnabled: boolean; placeFree: boolean;
       offered: boolean; frameFocused: boolean;
@@ -156,6 +173,11 @@ export function readerModeStep(state: ReaderModeState, event: ReaderModeEvent): 
     case 'frame-toggle':
       if (state.on) return operatorExit(state);
       return event.offered && event.frameFocused ? entered(event) : NOTHING(state);
+    case 'frame-ready':
+      // On and not planned: its reading must be set now. Off and planned: the reading it was made under has ended.
+      if (state.on && !event.planned) return { state, acts: ['start-reading'] };
+      if (!state.on && event.planned) return { state, acts: ['stop-reading'] };
+      return NOTHING(state);
     case 'leave':
       // The screen is going: give the page back (full screen, the fill, the console). The frame goes with the screen, so
       // it is neither told to stop nor focused, and nothing steps back: the place is stale once the visit ends (spec §3.3).

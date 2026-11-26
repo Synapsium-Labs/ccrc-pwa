@@ -43,7 +43,10 @@ vi.mock('../src/docs/ReaderFrame', async (importOriginal) => {
     const setFrame = ctx?.setFrame;
     const [sheet, setSheet] = useState(false);
     useEffect(() => {
-      setFrame?.({ ready: true, focus: () => undefined, setReading: () => undefined });
+      setFrame?.({
+        ready: true, planned: false, focus: () => undefined, setReading: () => undefined, command: () => undefined,
+        title: 'a.md', progress: { read: () => 0, subscribe: () => () => undefined },
+      });
       return () => setFrame?.(null);
     }, [setFrame]);
     useEffect(() => {
@@ -163,7 +166,10 @@ interface FakeFrame extends ReaderModeFrame {
 }
 
 function fakeFrame(ready = true): FakeFrame {
-  return { ready, focus: vi.fn<() => void>(), setReading: vi.fn<ReaderModeFrame['setReading']>() };
+  return {
+    ready, planned: false, focus: vi.fn<() => void>(), setReading: vi.fn<ReaderModeFrame['setReading']>(), command: () => undefined,
+    title: 'a.md', progress: { read: () => 0, subscribe: () => () => undefined },
+  };
 }
 
 // ─── the harness ───────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -495,15 +501,8 @@ describe('focus (X6 XR1.2)', () => {
     (document.activeElement as HTMLElement | null)?.blur();
     act(() => { trailing.focus(); });
     expect(frame.focus, 'the trailing guard sends focus into the frame').toHaveBeenCalledTimes(1);
-
-    // A control drawn in `.docs-reading-controls` takes the leading guard's focus instead of the frame.
-    const control = document.createElement('button');
-    document.querySelector('.docs-reading-controls')?.append(control);
-    frame.focus.mockClear();
-    (document.activeElement as HTMLElement | null)?.blur();
-    act(() => { leading.focus(); });
-    expect(document.activeElement, 'the leading guard did not wrap to the last ccrc control').toBe(control);
-    expect(frame.focus).not.toHaveBeenCalled();
+    // With the overlay shown, the leading guard wraps to the overlay's last control instead: it decides by reader mode's
+    // state, not by the controls it finds (`reader-mode-overlay.test.tsx`'s focus case, X6.77).
   });
 });
 
