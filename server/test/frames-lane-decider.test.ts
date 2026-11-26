@@ -64,7 +64,8 @@ describe('framesListOf: the list answer carries no text', () => {
     expect(JSON.stringify(list)).not.toContain('"text"');
   });
   it('a frame the server refused at store time lists as refused, with its word and no text', () => {
-    const f = framesListOf([row('2.1.332', 0, { checked: 'private-shape', text: null })], '2.1.332').frames[0]!;
+    // A text beside a store-time refusal is never listed as held, whatever the row carries.
+    const f = framesListOf([row('2.1.332', 0, { checked: 'private-shape', text: 'x\n' })], '2.1.332').frames[0]!;
     expect([f.outcome, f.refusal, f.hasText]).toEqual(['refused', 'private-shape', false]);
   });
 });
