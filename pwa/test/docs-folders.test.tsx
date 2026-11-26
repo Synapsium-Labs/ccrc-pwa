@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import {
-  docsPageUrl, parseDocsPage,
+  DOCS_PDF_INLINE_MAX_BYTES, docsPageUrl, parseDocsPage,
   type DocsFolderEntry, type DocsFolderTreeOk, type DocsIndexOk, type DocsProjectsResponse,
 } from '../../shared/docs';
 import { DocsScreen } from '../src/screens/DocsScreen';
@@ -14,6 +14,7 @@ import {
   DOCS_FOLDER_TEXT, DOCS_HEAD_TEXT, DOCS_PAGE_INVALID_SENTENCE, DOCS_FAILURE_SENTENCE, DOCS_RANGE_TEXT, DOCS_VIEW_TEXT,
 } from '../src/docs/docsText';
 import { docsCrumbs, docsUpHref } from '../src/docs/DocsHead';
+import { pdfOverInlineSentence } from '../src/docs/pdf/PdfLeaf';
 import { folderActions, folderAskedAt, folderPathStale, folderReadPlan, folderTruthLine } from '../src/docs/folderPage';
 import type { DocsFolderLoaders } from '../src/docs/folderPage';
 import type { DocsAnswer } from '../src/docs/failures';
@@ -365,6 +366,42 @@ describe('folder page: truth line and actions', () => {
     expect(folderReadPlan(file('specs', 'x.md', { fp: null, mtimeNs: null }))).toEqual({ mode: 'none', why: 'unpinned' });
     expect(folderReadPlan(file('specs', 'x.md', { size: 80 * 1024 * 1024, fp: null }))).toEqual({ mode: 'none', why: 'too-large' });
     expect(folderReadPlan(file('specs', 'x.png'))).toEqual({ mode: 'none', why: 'no-preview' });
+  });
+
+  it('a folder PDF one byte over the inline ceiling reads only after Download is tapped', async () => {
+    const size = DOCS_PDF_INLINE_MAX_BYTES + 1;
+    const tree: DocsFolderTreeOk = { ...TREE, entries: [file('specs', 'large.pdf', { size, fp: null })] };
+    const f = fakeFolders({ tree: async () => ok({ ok: true as const, tree }) });
+    open('/docs/~notes/specs/large.pdf', f);
+    await screen.findByText(pdfOverInlineSentence(size));
+    expect(f.calls).toEqual(['tree']);
+    expect(document.querySelector('iframe')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: DOCS_VIEW_TEXT.download }));
+    await waitFor(() => expect(f.calls).toEqual(['tree', 'range-prepare']));
+  });
+
+  it('a small folder PDF saves its shown bytes as octet-stream on one Download tap', async () => {
+    const text = '%PDF-1.7\n%%EOF\n';
+    const tree: DocsFolderTreeOk = { ...TREE, entries: [file('specs', 'short.pdf', { size: text.length })] };
+    const f = fakeFolders({
+      tree: async () => ok({ ok: true as const, tree }),
+      file: async (_label, section, path) => ok({
+        ok: true as const, contentClass: 'pdf' as const,
+        show: {
+          v: 1 as const, verb: 'docs-folder-read' as const, ok: true as const, elapsedMs: 1, label: 'notes', source: 'folder' as const,
+          section, path, size: text.length, sha256: FP, fp: FP, mtimeNs: MTIME, encoding: 'base64' as const, b64: btoa(text),
+        },
+      }),
+    });
+    const createObjectURL = vi.fn((_blob: Blob) => 'blob:download');
+    vi.stubGlobal('URL', class extends URL { static createObjectURL = createObjectURL; static revokeObjectURL = vi.fn(); });
+    const downloads: string[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) { downloads.push(this.download); });
+    open('/docs/~notes/specs/short.pdf', f);
+    fireEvent.click(await screen.findByRole('button', { name: DOCS_VIEW_TEXT.download }));
+    expect(downloads).toEqual(['short.pdf']);
+    expect(createObjectURL.mock.calls.map(([b]) => [b.type, b.size])).toEqual([['application/octet-stream', text.length]]);
+    expect(f.calls).toEqual(['tree', 'file']);
   });
 
   it('a large folder file reads through the folder range door (prepare), not the file door', async () => {

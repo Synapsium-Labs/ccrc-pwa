@@ -13,9 +13,10 @@
 // origin in the empty stand-in tree, makes every link that would leave them inert, exactly as a draft's. The body sits under
 // a null asset context, so a relative image is refused as outside a page and never read. The rich reader (`ReaderFrame`) is
 // not used: it reads a project's pin and history, which a folder has none of.
+import { Button } from '@ccrc/ui';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
-  contentClass, docsPageUrl,
+  contentClass, docsPageUrl, pdfVerdict,
   type DocSectionSlug, type DocsFolderEntry, type DocsFolderFileResponse, type DocsFolderLocation, type DocsFolderTreeOk,
   type DocsShowOk, type DocsTreeOk,
 } from '../../../shared/docs';
@@ -36,7 +37,8 @@ import {
   folderSectionRows,
   type DocsFolderLoaders,
 } from './folderPage';
-import { showBytes } from './objectUrls';
+import { saveBytes, showBytes } from './objectUrls';
+import { PdfLeaf, pdfOverInlineSentence } from './pdf/PdfLeaf';
 import { RangeLeaf, rangeReadKey, type RangeBytes } from './range/RangeLeaf';
 
 /** A folder page's answer slot: the listing, or why there is none. */
@@ -172,9 +174,20 @@ function FolderBody(p: {
 }): ReactNode {
   const { show, link, parser } = p;
   const cls = contentClass(show.path);
-  const src = useMemo(() => docMarkdownSource(show), [show]);
+  const src = useMemo(() => cls === 'pdf' ? null : docMarkdownSource(show), [cls, show]);
   const bytes = useMemo(() => showBytes(show), [show]);
-  if (src.kind === 'no-bytes' || bytes === null) return <p className="docs-note">{DOCS_FOLDER_TEXT.noPreview}</p>;
+  if (bytes === null) return <p className="docs-note">{DOCS_FOLDER_TEXT.noPreview}</p>;
+  // Small PDFs reuse the bytes already shown for their Download; no second read and no Download inside the frame.
+  if (cls === 'pdf') {
+    const name = leafName(show.path);
+    return <>
+      <PdfLeaf bytes={bytes} name={name} />
+      <div className="docs-leaf-actions">
+        <Button variant="ghost" onClick={() => saveBytes(name, bytes)}>{DOCS_VIEW_TEXT.download}</Button>
+      </div>
+    </>;
+  }
+  if (src === null || src.kind === 'no-bytes') return <p className="docs-note">{DOCS_FOLDER_TEXT.noPreview}</p>;
   if (src.kind === 'not-utf8') return <DocPlain text={src.text} note={DOC_NOT_UTF8_NOTE} />;
   if (cls === 'markdown') {
     const pinKey = ['folder', link.project, show.section, show.path, show.sha256].join('\u0000');
@@ -191,14 +204,17 @@ function FolderRangeBody(p: {
   readonly parser: MarkdownParser;
 }): ReactNode {
   const { read, entry, link, parser } = p;
+  const cls = contentClass(entry.path);
   const decoded = useMemo(() => {
+    if (cls !== 'markdown') return null;
     try {
       return { utf8: true, text: new TextDecoder('utf-8', { fatal: true }).decode(read.bytes) };
     } catch {
       return { utf8: false, text: new TextDecoder('utf-8').decode(read.bytes) };
     }
-  }, [read.bytes]);
-  if (contentClass(entry.path) !== 'markdown') return <RangeSource read={read} path={entry.path} />;
+  }, [cls, read.bytes]);
+  if (cls === 'pdf') return <PdfLeaf bytes={read.bytes} name={leafName(entry.path)} />;
+  if (decoded === null) return <RangeSource read={read} path={entry.path} />;
   if (!decoded.utf8) return <DocPlain text={decoded.text} note={DOC_NOT_UTF8_NOTE} />;
   const pinKey = ['folder-range', link.project, entry.section, entry.path, read.digest].join('\u0000');
   return <DocMarkdown key={pinKey} text={decoded.text} pinKey={pinKey} parser={parser} link={link} />;
@@ -250,14 +266,14 @@ function FolderLeafBody(p: {
       pin: { kind: 'draft', branch: '', head: '', section: entry.section, path: entry.path, fp: null,
         stat: { size: plan.size, mtimeNs: entry.mtimeNs ?? '0' } },
     } as const;
-    return (
-      <RangeLeaf
-        key={rangeReadKey(target)} target={target} cls={contentClass(entry.path)} name={leafName(entry.path)}
-        loader={rangeLoader} visit={visit}
-      >
-        {(read: RangeBytes) => <FolderRangeBody read={read} entry={entry} link={link} parser={parser} />}
+    const cls = contentClass(entry.path);
+    const pdfOver = cls === 'pdf' && pdfVerdict(plan.size) === 'download';
+    const range = (
+      <RangeLeaf key={rangeReadKey(target)} target={target} cls={cls} name={leafName(entry.path)} loader={rangeLoader} visit={visit}>
+        {pdfOver ? undefined : (read: RangeBytes) => <FolderRangeBody read={read} entry={entry} link={link} parser={parser} />}
       </RangeLeaf>
     );
+    return pdfOver ? <><p className="docs-note">{pdfOverInlineSentence(plan.size)}</p>{range}</> : range;
   }
   if (slot.s === 'loading') return <p className="docs-loading">{DOCS_VIEW_TEXT.loading}</p>;
   if (slot.s !== 'ok' || show === null) {

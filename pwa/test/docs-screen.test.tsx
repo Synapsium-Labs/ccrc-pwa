@@ -688,9 +688,9 @@ describe('the leaf by content class (M5.3, leaf-routing half)', () => {
     expect(container.querySelector('.docs-leaf .code-block')).toBeNull();
   });
 
-  it('other (x.pdf): "No preview (N KiB)" with Download, and no file or raster request', async () => {
-    const f = byPath(treeOk({ entries: [entry('specs', 'x.pdf', { committed: { kind: 'file', blob: '1'.repeat(40), size: 3000 } })] }), {});
-    open('/docs/demo/specs/x.pdf', f);
+  it('other (x.zip): "No preview (N KiB)" with Download, and no file or raster request', async () => {
+    const f = byPath(treeOk({ entries: [entry('specs', 'x.zip', { committed: { kind: 'file', blob: '1'.repeat(40), size: 3000 } })] }), {});
+    open('/docs/demo/specs/x.zip', f);
     expect(await screen.findByText('No preview (3 KiB)')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Download' })).toBeInTheDocument();
     expect(f.file).not.toHaveBeenCalled();
@@ -702,11 +702,11 @@ describe('the leaf by content class (M5.3, leaf-routing half)', () => {
     vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function record(this: HTMLAnchorElement) {
       clicks.push(this);
     });
-    const f = byPath(treeOk({ entries: [entry('specs', 'x.pdf')] }), { 'x.pdf': fileAs('x.pdf', 'bytes', 'other') });
-    open('/docs/demo/specs/x.pdf', f);
+    const f = byPath(treeOk({ entries: [entry('specs', 'x.zip')] }), { 'x.zip': fileAs('x.zip', 'bytes', 'other') });
+    open('/docs/demo/specs/x.zip', f);
     fireEvent.click(await screen.findByRole('button', { name: 'Download' }));
     await waitFor(() => expect(clicks).toHaveLength(1));
-    expect(clicks[0]!.download).toBe('x.pdf');
+    expect(clicks[0]!.download).toBe('x.zip');
     expect(f.file).toHaveBeenCalledTimes(1);
     const blob = vi.mocked(URL.createObjectURL).mock.calls[0]![0] as Blob;
     expect(blob.type).toBe('application/octet-stream');
@@ -1695,8 +1695,8 @@ describe('W5 Export on the Docs screen (spec 4.5, 4.17; M4.SH3, M4.SH8 Export ha
   });
 
   it('no Export for class other; an html leaf offers it from W6 (M4.SH8; C2 Task 9, base 4.17)', async () => {
-    const tree = treeOk({ entries: [entry('specs', 'o.pdf'), entry('specs', 'm.html')] });
-    open('/docs/demo/specs/o.pdf', fakeLoaders({ tree: okTree(tree) }));
+    const tree = treeOk({ entries: [entry('specs', 'o.zip'), entry('specs', 'm.html')] });
+    open('/docs/demo/specs/o.zip', fakeLoaders({ tree: okTree(tree) }));
     await waitFor(() => expect(screen.getByRole('button', { name: DOCS_HEAD_TEXT.share })).toBeEnabled());
     expect(document.querySelector('.docs-export')).toBeNull();
     cleanup();
