@@ -69,3 +69,7 @@ export type SequencePageWire =
   | { readonly kind: 'unmeasured'; readonly why: string };
 /** The most lines one page serves. */
 export const SEQUENCE_PAGE_MAX = 500;
+
+/** The programme an Overlord-side server item is raised under: the weekly replay quiz's and the invariant monitor's (plan
+ *  w1-sequence-monitor.md question 14, slug `invariant-items-sit-under-overlord`). One value, one home. */
+export const OVERLORD_ITEM_PROGRAMME = 'overlord';

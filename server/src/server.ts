@@ -87,7 +87,7 @@ import {
   composeDocs, readTree, registerDocsFolderReadRoutes, registerDocsFolderRegistryRoutes, registerDocsReadRoutes,
   registerDocsRefreshRoute,
 } from './docs/routes.js';
-import { registerReviewOpenRoute } from './review/routes.js';
+import { registerReviewOpenRoute, registerReviewPageRoutes } from './review/routes.js';
 import { installDocsRequestPolicy, installDocsResponsePolicy } from './docs/hooks.js';
 import { openReviewStore } from './review/store.js';
 import { startReviewSweep } from './review/sweep.js';
@@ -1346,7 +1346,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         pendingDialogs: watcher?.currentPending(), statuslines: watcher?.currentStatuslines(),
         taskProgress: watcher?.currentTaskProgress(), prStates: watcher?.currentPrStates(),
         hookStates: watcher?.currentHookStates(), records: reg.records, coord: deps.coord,
-        usageReadings: watcher?.currentUsage(), headBranches: watcher?.currentHeadBranches(), landings: watcher?.currentLandings(),
+        usageReadings: watcher?.currentUsage(), headBranches: watcher?.currentHeadBranches(), landings: watcher?.currentLandings(), providerRetries: watcher?.currentProviderRetries(),
       }),
       pools: poolsWire(
         poolsRead,
@@ -1816,7 +1816,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
           pendingDialogs: watcher?.currentPending(), statuslines: watcher?.currentStatuslines(),
           taskProgress: watcher?.currentTaskProgress(), prStates: watcher?.currentPrStates(),
           hookStates: watcher?.currentHookStates(), records: reg.records, coord: deps.coord,
-          usageReadings: watcher?.currentUsage(), headBranches: watcher?.currentHeadBranches(), landings: watcher?.currentLandings(),
+          usageReadings: watcher?.currentUsage(), headBranches: watcher?.currentHeadBranches(), landings: watcher?.currentLandings(), providerRetries: watcher?.currentProviderRetries(),
         })
         : null));
     }
@@ -4650,7 +4650,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   // Static PWA (populated by Plan 2's build): serve dist-pwa/ at / with SPA
   // fallback to index.html; absent -> skip (API-only mode).
-  const pwaRoot = findPwaRoot();
+  const pwaRoot = deps.pwaRoot !== undefined ? deps.pwaRoot : findPwaRoot();
   if (pwaRoot) {
     // No size/mtime validators: a release's sw.js kept the same weak ETag, so no deploy reached a
     // browser with the worker installed (pwaStatic.ts).
@@ -4680,6 +4680,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     ? { store: review.store, wall: () => reviewClock.wall() }
     : null;
   registerReviewOpenRoute(app, reviewAccess);
+  registerReviewPageRoutes(app, pwaRoot);
   const reviewAbort = new AbortController();
   const node = docs.readers.primary;
   const reviewSweep = reviewAccess === null ? null : startReviewSweep(reviewAccess.store, {

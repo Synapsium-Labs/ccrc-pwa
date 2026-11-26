@@ -5892,6 +5892,14 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   back from its second CR whenever a LF comes before it, blanks between or none, so a CR LF right before it no longer
   stops the cap's step back at the blank row (`crcrlf-arm-after-crlf`, review 2644 F1: the round-2 guard left that form,
   the whole key past the cap where `main` showed 360 bytes). Sizes and runs in `c45.md`.
+- **D-9106** — `door-stood-down`: desktop-polish wave 180, issued on 2026-11-26. Narrowed, the Add account door is
+  drawn stood down in the ghost button's own disabled ink (`--ink-disabled`, and the `--edge-subtle` border at 900 and
+  up), and the contrast census exempts that rule as an inactive control (WCAG 1.4.3, `SELF_GROUNDED_EXEMPT` in
+  `pwa/design/audit.mjs`), keyed to the narrowed state only (`data-narrowed='true'`), so no live door is covered. This
+  departs from D-7740's recorded choice that this door never takes the disabled ink: a live-looking door that ignored a
+  tap was the reported fault, and the reason beside it, which a person must read, stays in the measured secondary ink.
+  The coordinator's ruling in fix round 1 (review run 3876). Task note:
+  `docs/superpowers/programs/desktop-polish/add-account-safari.md` §4.4.
 - **D-9105** — `auth-on-verb`: wave 181, issued on 2026-11-26. The accounts design's gate-dark remedy named a verb ccrc
   did not have; the operator ruled on 2026-11-25 to build it for a local box, so `ccrc auth on|off` arms or disarms the
   console's sign-in on a server box used only at http://localhost. `on` refuses without a usable passphrase, on a box

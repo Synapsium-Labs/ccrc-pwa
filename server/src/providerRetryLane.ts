@@ -1,14 +1,16 @@
-// The provider-failure ladder's beat (wave 1; plan docs/superpowers/plans/2026-11-25-provider-retry.md). L4, context Coordination
+// The provider-failure ladder's beat (plan docs/superpowers/plans/2026-11-25-provider-retry.md). L4, context Coordination
 // (C5). It runs inside the stall watch's pass, on the facts that pass already read for each live session, so it adds no timer and
 // no marker read. `coord/providerRetry.ts` decides a session's nudge, `coord/providerOutage.ts` the operator's one notice; this
-// queues the mail through the run-less notice door, takes a queued one back, and sends the notice as the disk alarm lane does.
+// queues the mail through the run-less notice door, takes a queued one back, sends the notice as the disk alarm lane does, and
+// publishes what the console is told of each session (wave 2).
 import type { SessionRecord } from './registry.js';
 import type { FleetSession } from '../../shared/api.js';
 import type { WatcherDeps } from './deps.js';
 import type { WatcherCoordPort } from './coord/ports.js';
 import { PROVIDER_RETRY_BODY, providerRetrySubject } from '../../shared/provider-retry.js';
+import { type ProviderRetryWire } from '../../shared/provider-retry-wire.js';
 import {
-  PROVIDER_RETRY_WITHDRAWN, providerRetryArmed, providerRetryHoldsQuiet, providerRetryMailSince, providerRetryOwed, providerRetryVerdict,
+  PROVIDER_RETRY_WITHDRAWN, providerRetryArmed, providerRetryHoldsQuiet, providerRetryMailSince, providerRetryOwed, providerRetryVerdict, providerRetryWire,
 } from './coord/providerRetry.js';
 import { outageProviderOf, providerOutageStep, type OwingSession, type ProviderOutage } from './coord/providerOutage.js';
 import { BACKLOG_HORIZON_MS, stallCurrentMark, stallMarkUnreadable, type StallArming, type StallSessionInput, type TurnMarkRead } from './coord/stall.js';
@@ -27,11 +29,22 @@ export class ProviderRetryLane {
    *  queued nudge the session has moved past is taken back. */
   private readonly queued = new Set<string>();
   private outages: Map<string, ProviderOutage> | null = null;
+  /** What the console is told, as the last pass said it, and what this one has said so far. A pass says it afresh, so a session
+   *  no pass could judge is not said to be retrying. */
+  private said: ReadonlyMap<string, ProviderRetryWire> = new Map();
+  private saying = new Map<string, ProviderRetryWire>();
 
   constructor(private readonly deps: () => Deps) {}
 
-  /** The pass's arming, resolved once. */
-  begin(arming: StallArming, levelSource: StallResolved['levelSource']): void { this.armed = providerRetryArmed(arming, levelSource); }
+  /** The pass's arming, resolved once. A stopped ladder says nothing from here on, whatever becomes of the pass. */
+  begin(arming: StallArming, levelSource: StallResolved['levelSource']): void {
+    this.armed = providerRetryArmed(arming, levelSource);
+    this.saying = new Map();
+    if (!this.armed) this.said = this.saying;
+  }
+
+  /** The map the fleet assembly reads (`FleetSession.providerRetry`). */
+  wire(): ReadonlyMap<string, ProviderRetryWire> { return this.said; }
 
   /** The quiet ladder's fact for one worker. */
   holdsQuiet(mark: TurnMarkRead): boolean { return providerRetryHoldsQuiet(mark, this.armed); }
@@ -52,7 +65,10 @@ export class ProviderRetryLane {
       if (!read.ok) { console.warn(`ccrc-server: provider-retry ${id} mail unreadable (${read.kind}: ${read.detail}) — held this sweep`); return; }
       si = { ...session, mail: read.mail, deliveries: read.deliveries };
     }
-    const v = providerRetryVerdict({ session: si, archived: (s?.archivedAt ?? null) !== null, hibernated: (rec?.hibernatedAt ?? null) !== null, armed: this.armed }, now);
+    const input = { session: si, archived: (s?.archivedAt ?? null) !== null, hibernated: (rec?.hibernatedAt ?? null) !== null, armed: this.armed };
+    const told = providerRetryWire(input, now);
+    if (told !== null) this.saying.set(id, told);
+    const v = providerRetryVerdict(input, now);
     if (v.act === 'withdraw') {
       const w = store.rejectDelivery(v.deliveryId, 'undeliverable', PROVIDER_RETRY_WITHDRAWN);
       if (!w.changed) console.warn(`ccrc-server: provider-retry delivery ${v.deliveryId}: withdraw refused (${w.state})`);
@@ -77,6 +93,7 @@ export class ProviderRetryLane {
 
   /** The end of a pass: a session with no live pane owes nothing, and the outage steps. An unarmed pass raises nothing. */
   end(live: (id: string) => boolean, now: number): void {
+    this.said = this.saying;
     for (const id of [...this.owing.keys()]) if (!live(id)) this.owing.delete(id);
     for (const id of [...this.queued]) if (!live(id)) this.queued.delete(id);
     if (!this.armed) return;

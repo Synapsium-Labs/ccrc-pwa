@@ -252,6 +252,23 @@ describe("the CLI fix's Copy tells the truth (spec §12.4)", () => {
     expect(await screen.findAllByText('Copied')).toHaveLength(2); // the button and the toast
   });
 
+  it('three presses say Copied once: the button, and one toast (desktop-polish wave 180)', async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+    show();
+    // Two presses before the first write resolves, then one more after.
+    fireEvent.click(copyButton());
+    fireEvent.click(copyButton());
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    fireEvent.click(within(card('lane-c')).getByRole('button', { name: 'Copied' }));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(writeText).toHaveBeenCalledTimes(3);
+    // Settle the toast host, then count: the button and one toast, never three toasts stacked.
+    await screen.findAllByText('Copied');
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(screen.getAllByText('Copied')).toHaveLength(2);
+  });
+
   it('a refused clipboard leaves the command selected, with the hold-to-copy line, and never says Copied', async () => {
     const writeText = vi.fn(() => Promise.reject(new Error('denied')));
     vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
