@@ -43,6 +43,10 @@ Plan: `docs/superpowers/plans/2026-11-25-landing-order-wave5j-doors.md`, Task 7,
 
 ## Departure (D-9093, issued by the coordinator)
 
+**Superseded by fix round 1** (`wave5j-b-fix-round-1.md`, R1; the plan's section 13, C12): the copy described below
+was deleted, `landingWrites.ts` imports `LANDING_ENTRY_TERMINAL` from the shared landing vocabulary, and the purity
+case admits that one file. The paragraph is kept as the record of what was first built.
+
 - **D-9093** `withdraw-terminal-mirror`: the withdraw arm needs `LANDING_ENTRY_TERMINAL`'s classification, and
   `landingWrites.ts` takes no value import (its purity test, `valueImports(p)` is `[]`). The file therefore mirrors the
   map as an exhaustive `Record<LandingEntryState, boolean>` (a new state is a compile error there), and a new

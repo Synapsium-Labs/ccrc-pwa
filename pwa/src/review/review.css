@@ -1,0 +1,250 @@
+/* The draft review page (X3 R2.1). System fonts only, no @import, no url(): the page's header policy allows its own
+   scripts, inline styles and data: only. A 16px side gutter, no horizontal scroll, light and dark by the device.
+   Every rule is scoped to the review document (`<html class="review-page">` in review.html, or a `review-` class), so
+   this sheet, built into the shared assets/ beside the shell's, styles nothing else that loads it. Element rules take the
+   scope through `:where()`, so their specificity is the bare element's and a `review-` class rule beats them by weight,
+   never by order. */
+:root.review-page {
+  color-scheme: light dark;
+  --review-bg: #ffffff;
+  --review-fg: #1a1c1b;
+  --review-muted: #4d5551;
+  --review-line: #b9c1bc;
+  --review-accent: #0b5d3b;
+  --review-banner-bg: #eef3ef;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root.review-page {
+    --review-bg: #0b0d0c;
+    --review-fg: #e8ece9;
+    --review-muted: #aab3ae;
+    --review-line: #3b4540;
+    --review-accent: #7bd4a6;
+    --review-banner-bg: #151a17;
+  }
+}
+
+:where(:root.review-page),
+:where(:root.review-page) * {
+  box-sizing: border-box;
+}
+
+:root.review-page {
+  background: var(--review-bg);
+}
+
+:where(:root.review-page) body {
+  margin: 0;
+  padding: 16px;
+  background: var(--review-bg);
+  color: var(--review-fg);
+  font: 16px/1.5 system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  overflow-wrap: anywhere;
+}
+
+#review-root {
+  display: block;
+  max-width: 64rem;
+  margin: 0 auto;
+}
+
+.review-message,
+.review-banner {
+  margin: 0 0 16px;
+}
+
+.review-banner {
+  padding: 12px 16px;
+  border: 1px solid var(--review-line);
+  border-radius: 8px;
+  background: var(--review-banner-bg);
+  font-weight: 600;
+}
+
+.review-actions {
+  margin: 0;
+}
+
+:where(:root.review-page) button {
+  min-height: 44px;
+  padding: 0 24px;
+  border: 1px solid var(--review-accent);
+  border-radius: 8px;
+  background: var(--review-bg);
+  color: var(--review-accent);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+:where(:root.review-page) button:disabled {
+  border-color: var(--review-line);
+  color: var(--review-muted);
+  cursor: default;
+}
+
+:where(:root.review-page) button:focus-visible,
+:where(:root.review-page) a:focus-visible {
+  outline: 2px solid var(--review-accent);
+  outline-offset: 2px;
+}
+
+.review-links {
+  margin: 0 0 16px;
+}
+
+.review-links h2 {
+  margin: 0 0 8px;
+  color: var(--review-muted);
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.review-links ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.review-links a {
+  color: var(--review-accent);
+}
+
+.review-frame {
+  display: block;
+  width: 100%;
+  min-height: 70vh;
+  border: 1px solid var(--review-line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+/* The one sentence under a copy the page put back, or stopped putting back (D-9029). */
+.review-restore-note {
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  border: 1px solid var(--review-line);
+  border-radius: 8px;
+  background: var(--review-banner-bg);
+  font-weight: 600;
+}
+
+/* Lab mode (X3 R2.3, `/review#lab`): the measurement page. Two short frames, then six lines, each with its reference and
+   its three answers, then the result block. Same palette, same 16px gutter, no horizontal scroll. */
+.review-lab-title {
+  margin: 0 0 8px;
+  font-size: 1.25rem;
+}
+
+.review-lab-intro {
+  margin: 0 0 16px;
+}
+
+.review-lab-copies,
+.review-lab-lines,
+.review-lab-result-block {
+  margin: 0 0 24px;
+}
+
+.review-lab-copy {
+  margin: 0 0 16px;
+}
+
+.review-lab-caption {
+  margin: 0 0 4px;
+  color: var(--review-muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.review-frame.review-lab-frame {
+  min-height: 18rem;
+}
+
+.review-lab-lines {
+  padding: 0;
+  list-style: none;
+}
+
+.review-lab-row {
+  margin: 0 0 16px;
+  padding: 12px 16px;
+  border: 1px solid var(--review-line);
+  border-radius: 8px;
+  background: var(--review-banner-bg);
+}
+
+.review-lab-line {
+  margin: 0 0 8px;
+  font-weight: 600;
+}
+
+.review-lab-key {
+  color: var(--review-accent);
+}
+
+.review-lab-ref {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 0 0 12px;
+}
+
+.review-lab-swatch {
+  display: inline-block;
+  width: 64px;
+  height: 16px;
+  border: 1px solid var(--review-fg);
+}
+
+.review-lab-swatch-wide {
+  width: 120px;
+  height: 24px;
+}
+
+/* The page's reference for the canary's block: the same pure red and white words the fixture's script would add. */
+.review-lab-failure {
+  display: inline-block;
+  padding: 4px 8px;
+  color: #ffffff;
+  font: 700 1rem/1.25 sans-serif;
+}
+
+.review-lab-sample {
+  font-size: 1.25rem;
+}
+
+.review-lab-look {
+  flex: 1 1 16rem;
+  color: var(--review-muted);
+}
+
+.review-lab-answers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 8px;
+}
+
+.review-lab-answers button[aria-pressed='true'] {
+  background: var(--review-accent);
+  color: var(--review-bg);
+}
+
+.review-lab-status {
+  display: block;
+  font-weight: 600;
+}
+
+.review-lab-result {
+  margin: 0;
+  padding: 12px 16px;
+  border: 1px solid var(--review-line);
+  border-radius: 8px;
+  background: var(--review-banner-bg);
+  font: 0.875rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
