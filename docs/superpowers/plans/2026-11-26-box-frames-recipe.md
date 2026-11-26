@@ -334,10 +334,10 @@ read-only, and step 2 turns it into a case over the same panes that pins these c
   It mirrors migration 130's delivery table, which is not altered. Its one writer is the capture lane, through a store
   file of its own beside `claudeBuildDeliveriesStore.ts`, with `CoordStore` keeping the delegates (`store.ts` is held
   today, claim 7359: a hunk packet). The alarm's shape columns are the next wave's, added by their own migration.
-- **The migration number** (the owner's condition 5, the coordinator's condition 6). Not 133: the renewal readings PR
-  (#3455) carries 133 and is ahead. I take the first free number on `main` at my last merge of `main` before the queue,
-  never while another migration PR is queued. I mail the number to the coordinator before the push. The coordinator and
-  the capture owner mail each other before either enqueues.
+- **The migration number** (the owner's condition 5, the coordinator's condition 6). **133**, the first free number on
+  `main` at this push (the coordinator's ruling 38642: do not wait for #3455). The renewal readings PR (#3455) carries 133
+  too, and whichever of the two queues second renumbers in its absorb and re-derives the count suites. The number was
+  mailed to the coordinator before the push. The coordinator and the capture owner mail each other before either enqueues.
 - **Text for the newest 4 framed builds** (the owner's condition 4). Rows of older builds keep their record, word and
   check and lose the text. That is one `UPDATE` in the transaction of a new build's first record, and it has its own
   case. At 52 frames of at most 66 KiB, the table holds under 14 MiB of text at worst. A plain 220x50 frame is about
