@@ -54,20 +54,23 @@ TBA_TOKEN_WRITE_SH="$TBA_PUT_FN"'; umask 022; tba_put "$1" "$2" 0600'
 # The edits of the login user's access key file, run as that user (TBA_SSH_NOSUDO: no sudo, so a login user other than root
 # never becomes root for them; a root login edits root's own file), each through the one writer, so the file keeps its mode and
 # its times and is replaced by one rename, and is then the login user's. Each reads the file through a command substitution,
-# which drops trailing blank lines (sshd skips blank lines). `$1` is the login user. ADD appends `$2` (the
-# new line) unless a line already holds `$3` (its key), so a retried append never doubles it; a file that is absent is exit 3.
-# DROP rewrites the file through the awk program `$4`, with `$5` an old key (or empty); a file that is absent is left so. A line
+# which drops trailing blank lines (sshd skips blank lines) and every NUL byte, and the rewrite ends the last line with a
+# newline when it had none (only the login user, or root on its own file, can put a NUL there). `$1` is the login user. ADD
+# appends `$2` (the new line) unless a line already holds `$3` (its key), so a retried append never doubles it; a file that is
+# absent is exit 3. DROP rewrites the file through the awk program `$4`, with `$5` an old key (or empty); a file that is absent
+# is left so, and absence is proved by standing in each folder on the way: a file the login user cannot prove absent (a folder
+# it cannot search) refuses with exit 1 and no word, as a key folder it can search but not write does. A line
 # is ccrc's when its last word is ccrc's comment once trailing spaces, tabs and a CR are trimmed (sshd lets a pasted CRLF or
 # trailing-space line in); a line HOLDS a key when one of its words is exactly that key's base64. With `$2` = drop it takes out
 # every line holding the key `$3` (the new key a refused rotate made: only ccrc has it); with `$2` = keep it takes out every one
 # of ccrc's lines that does not hold `$3`, so a line an interrupted rotate left goes too, and every line holding the old key `$5`
 # whatever its comment; with `$2` = all (Disconnect, key-revoke) it takes out every one of ccrc's lines and every line holding
-# `$5`. No other line is touched, beyond those trailing blank lines. Each checks the file and its folder (`check`) before it
-# reads the file.
+# `$5`. No other line is taken out or moved; the lines kept change only as said above (trailing blank lines, NUL bytes, the
+# last newline). Each checks the file and its folder (`check`) before it reads the file.
 # shellcheck disable=SC2016,SC2034  # expanded by the box's sh, not here; read by ccd/ccrc-testbox-admin
 TBA_AK_ADD="$TBA_PUT_FN"'; set -e; h=$(getent passwd "$1" | cut -d: -f6); f=$h/.ssh/authorized_keys; tba_put "$h" "$f" check; [ -f "$f" ] || exit 3; if awk -v k="$3" '"'"'{ for (i = 1; i <= NF; i++) if ($i == k) f = 1 } END { exit !f }'"'"' "$f"; then exit 0; fi; c=$(awk 1 "$f"); { [ -z "$c" ] || printf "%s\n" "$c"; printf "%s\n" "$2"; } | tba_put "$h" "$f" keep'
 # shellcheck disable=SC2016,SC2034  # expanded by the box's sh, not here; read by ccd/ccrc-testbox-admin
-TBA_AK_DROP="$TBA_PUT_FN"'; set -e; h=$(getent passwd "$1" | cut -d: -f6); f=$h/.ssh/authorized_keys; tba_put "$h" "$f" check; [ -f "$f" ] || exit 0; c=$(awk -v m="$2" -v k="$3" -v o="${5-}" "$4" "$f"); { [ -z "$c" ] || printf "%s\n" "$c"; } | tba_put "$h" "$f" keep'
+TBA_AK_DROP="$TBA_PUT_FN"'; set -e; h=$(getent passwd "$1" | cut -d: -f6); f=$h/.ssh/authorized_keys; tba_put "$h" "$f" check; [ -f "$f" ] || { (cd -- "$h" && { [ ! -e .ssh ] && [ ! -L .ssh ] || { cd ./.ssh && [ ! -e authorized_keys ] && [ ! -L authorized_keys ]; }; }) 2>/dev/null || exit 1; exit 0; }; c=$(awk -v m="$2" -v k="$3" -v o="${5-}" "$4" "$f"); { [ -z "$c" ] || printf "%s\n" "$c"; } | tba_put "$h" "$f" keep'
 # The repair's copy over the installed tree, as root: $1 the tools folder, $2 the staging folder, $3 the tag. Exit 3: the
 # installed tree names another tag (other-release). The tree and every folder above it to `/` must be a real directory of
 # root's that neither group nor other may write, and every entry of the tree root's and not writable by group or other (what

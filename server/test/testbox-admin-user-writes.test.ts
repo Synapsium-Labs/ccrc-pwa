@@ -192,7 +192,7 @@ describe.skipIf(UID === 0)('the service token is written as the service user (TB
   });
 
   it.each<[string, NodeJS.ProcessEnv]>([['a user number that is a word', { TB_SVC_UID: '1000x' }], ['an empty user number', { TB_SVC_UID: '' }],
-    ['a group number that is a word', { TB_SVC_GID: 'g1' }]])(
+    ['a group number that is a word', { TB_SVC_GID: 'g1' }], ['an empty group number', { TB_SVC_GID: '' }]])(
     'P1: a service user with %s is refused token-user before any write', (_n, env) => {
       const b = box();
       const h = homes(b);
@@ -436,6 +436,36 @@ describe.skipIf(UID === 0)('the access key file\'s edits (TBA_AK_ADD, TBA_AK_DRO
     writeFileSync(l.ak, `${OTHER}\n${OURS}\n\n\n`);
     expect(drop(b, 'all', '').rc).toBe(0);
     expect(readFileSync(l.ak, 'utf8')).toBe(`${OTHER}\n`);
+  });
+
+  it('P4, a named difference: an edit drops NUL bytes and ends the last line with a newline', () => {
+    const b = box();
+    const l = login(b);
+    writeFileSync(l.ak, `${OTHER}\n${OURS}\nssh-ed25519 AA\0AAkept x`);
+    expect(drop(b, 'all', '').rc).toBe(0);
+    expect(readFileSync(l.ak, 'utf8')).toBe(`${OTHER}\nssh-ed25519 AAAAkept x\n`);
+  });
+
+  // A folder on the way that the login user cannot write: searchable (0500), it refuses at the writer's temporary file; not
+  // searchable (0600, 0000; the key folder, or the home above it), the removal cannot prove the file absent and refuses too,
+  // with the same exit and no word, so each caller reports the failure word it already has. The file is untouched.
+  it.each<[string, (l: { home: string }) => string, number]>([
+    ['a key folder it may search but not write', (l) => join(l.home, '.ssh'), 0o500],
+    ['a key folder it may read but not search', (l) => join(l.home, '.ssh'), 0o600],
+    ['a key folder closed to it', (l) => join(l.home, '.ssh'), 0o000],
+    ['a home it may not search', (l) => l.home, 0o600],
+  ])('P4: %s: every DROP refuses with exit 1 and no word, and the file is untouched', (_n, where, mode) => {
+    for (const [m, k, o] of [['drop', 'AAAAnew', ''], ['keep', 'AAAAnew', 'AAAAours'], ['all', '', 'AAAAours']] as const) {
+      const b = box();
+      const l = login(b, [OTHER, OURS, NEW]);
+      const dir = where(l);
+      chmodSync(dir, mode);
+      let r: { rc: number; out: string };
+      try { r = drop(b, m, k, o); } finally { chmodSync(dir, 0o700); chmodSync(join(l.home, '.ssh'), 0o700); }
+      expect([r.rc, r.out], `${m} at ${mode.toString(8)}`).toEqual([1, '']);
+      expect(readFileSync(l.ak, 'utf8')).toBe(`${OTHER}\n${OURS}\n${NEW}\n`);
+      expect(readdirSync(join(l.home, '.ssh'))).toEqual(['authorized_keys']);
+    }
   });
 
   it('P4: with no key folder, ADD is exit 3 and DROP exit 0, and neither makes the folder (the checks make nothing)', () => {
