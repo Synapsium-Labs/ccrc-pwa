@@ -1125,6 +1125,8 @@ describe('places (X2 P5.3)', () => {
   it('closeOverlay and goto do nothing after destroy', async () => {
     const r = rig({ onPlace: vi.fn() });
     const m = await r.run();
+    // Ready first, so `closeOverlay` gets past its not-ready return and meets the destroy guard it names.
+    r.optionsAt(0).adapters.onReady!();
     m.destroy();
     m.closeOverlay!();
     m.goto!('sec-4', 'tok');
@@ -1137,6 +1139,8 @@ describe('places (X2 P5.3)', () => {
     r.frame.closeOverlay.mockImplementation(() => { throw new TypeError('no onPlace'); });
     r.frame.goto.mockImplementation(() => { throw new TypeError('no onPlace'); });
     const m = await r.run();
+    // Ready first, so `closeOverlay` gets past its not-ready return and meets the no-onPlace guard it names.
+    r.optionsAt(0).adapters.onReady!();
     expect(() => m.closeOverlay!()).not.toThrow();
     expect(() => m.goto!('sec-4')).not.toThrow();
     expect(r.frame.closeOverlay).not.toHaveBeenCalled();
@@ -1162,7 +1166,10 @@ describe('places (X2 P5.3)', () => {
     r.frame.goto.mockImplementation(() => { throw new TypeError('refused'); });
     const m = await r.run();
     m.goto!('sec-4', 'tok');
+    expect(r.frame.goto, 'held: nothing is sent before ready').not.toHaveBeenCalled();
     expect(() => r.optionsAt(0).adapters.onReady!()).not.toThrow();
+    expect(r.frame.goto, 'sent once, at ready').toHaveBeenCalledTimes(1);
+    expect(r.frame.goto).toHaveBeenCalledWith('sec-4', 'tok');
     expect(warn).toHaveBeenCalledTimes(1);
     expect(r.input.onReady).toHaveBeenCalledTimes(1);
   });

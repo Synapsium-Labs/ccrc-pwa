@@ -289,6 +289,66 @@ describe('P5.3 rows: Back places in the built app, desktop Chromium', () => {
     }
   }, 180_000);
 
+  it('places: Back from a jump with no from sends the top token, and the library\'s restore ends at the top', async () => {
+    const app = await open('places.md');
+    try {
+      const page = app.page;
+      let frame = await frameOf(page);
+      const scrollY = (): Promise<number> => frame.evaluate(() => Math.round(document.scrollingElement?.scrollTop ?? window.scrollY));
+      const y0 = await scrollY();
+      const length = await lengthOf(page);
+      // Jump from the top, as the case above does.
+      await frame.getByRole('link', { name: 'part 20', exact: true }).click();
+      await becomes(() => lengthOf(page), length + 1, 'history after an in-document link', page);
+      expect(await placeOf(page), 'a jump place').toMatchObject({ kind: 'jump', id: 'part-20' });
+      await becomes(() => scrollY().then((y) => y > y0 + 100), true, 'the frame away from the top', page);
+      // Chromium answers a `from` even at the top, so that case never reaches the library's `restore` on the top token. Force
+      // the no-`from` path: the jump's place loses its `from` in the tab record and in the entry's state, which then agree.
+      // The page keeps its own copy of the record once it has written one, and a pop reads that copy, not the store; so the
+      // page is reloaded on the jump's entry after the rewrite (the reload continues the visit and reads the store).
+      await quietEval(page, `(() => {
+        const key = 'ccrc:docs:v1:places';
+        const rec = JSON.parse(sessionStorage.getItem(key));
+        for (const p of rec.places) if (p.kind === 'jump') delete p.from;
+        sessionStorage.setItem(key, JSON.stringify(rec));
+        const s = history.state;
+        if (s && s.docsPlace) {
+          const docsPlace = { ...s.docsPlace };
+          delete docsPlace.from;
+          history.replaceState({ ...s, docsPlace }, '', location.href);
+        }
+        return null;
+      })()`);
+      const fromsNow = (): Promise<{ record: boolean[]; state: boolean | null }> => quietEval(page, `(() => {
+        const rec = JSON.parse(sessionStorage.getItem('ccrc:docs:v1:places'));
+        return {
+          record: rec.places.filter((p) => p.kind === 'jump').map((p) => 'from' in p),
+          state: history.state?.docsPlace ? 'from' in history.state.docsPlace : null,
+        };
+      })()`);
+      const assertNoFrom = async (when: string): Promise<void> => {
+        const read = await fromsNow();
+        expect(read.record.length, `${when}: the record holds the jump place`).toBeGreaterThan(0);
+        expect(read.record.every((has) => !has), `${when}: the record's jump place has no from`).toBe(true);
+        expect(read.state, `${when}: the entry's state agrees`).toBe(false);
+      };
+      await assertNoFrom('after the rewrite');
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await ready(page);
+      frame = await frameOf(page);
+      expect(await placeOf(page), 'the reloaded entry still stands as the jump place').toMatchObject({ kind: 'jump', id: 'part-20' });
+      await becomes(() => scrollY().then((y) => y > y0 + 100), true, 'the reloaded frame at the heading', page);
+      await assertNoFrom('after the reload');
+      await page.goBack();
+      await becomes(() => placeOf(page), null, 'the entry after Back', page);
+      // No `from`: the console sends the top token, and the library's own restore takes the frame to the top.
+      await becomes(() => scrollY().then((y) => Math.abs(y - y0) < 40), true, 'the frame\'s position after Back', page);
+      expect(app.errors, 'no uncaught error').toEqual([]);
+    } finally {
+      await app.ctx.close();
+    }
+  }, 180_000);
+
   it('places: a jump puts its id in the address, Back restores it, Forward returns', async () => {
     const app = await open('places.md');
     try {

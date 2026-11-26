@@ -212,7 +212,7 @@ sequenceDiagram
 ```
 *Figure 2. One Back model. Entering draws the fill, pushes one place and only then asks for full screen, because the request consumes the tap's activation and the push must not wait on it. Back pops the place, and an exit by any other path steps back over it. The router never runs for these pops, so the page does not reload or move.*
 
-- **The place.** `docsPlace: {visit, seq, kind: 'reader'}` on an entry carrying the doc's URL unchanged, beside X2's `overlay` and `jump` places. It counts toward X2's `PLACES_MAX` of 50 per visit.
+- **The place.** `docsPlace: {visit, seq, kind: 'reader'}` on an entry carrying the doc's URL unchanged, beside X2's `overlay` and `jump` places. It counts toward X2's `PLACES_MAX` of 20 per visit (amended 2026-11-26; D-9139: was 50).
 - **The visit's base.** X2's tab record (`{visit, doc, places, pendingSeq, lastIdx, next}`, X2 plan P5.3) gains one field, `baseIdx`: the `docsIdx` of the visit's own base entry, the doc's entry before any place, stamped when the visit starts. Without it the decider could not tell the doc's own entry from the previous screen's, because neither carries a `docsPlace`.
 - **The reader place that counts** is the topmost `reader` place of the current visit at or below `lastIdx`. A visit normally holds one: a dead reader entry is left at once (below), and the next place push drops it from the record. Two stand only between a `leaveDead()` step-back and its landing, and then the topmost at or below `lastIdx` is the live one.
 - **The decider.** `historyPlaces.ts#decidePop` gains one answer, `{kind: 'exit-reader'; closeOverlay: boolean; route: boolean}`, and only when two things hold together:

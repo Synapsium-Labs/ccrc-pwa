@@ -1489,9 +1489,10 @@ describe('places: stale entries and numbering through the real frame and history
     expect(s.rig.mounts).toHaveLength(2);
   });
 
-  it('places: a place pushed on a stale entry at the bottom of history undoes with one Back', async () => {
-    // The mirror, not a traversal: a Back skip that cannot step leaves the page on a stale entry at the bottom of the tab's
-    // history. The entry the reader stands on holds another visit's place, and it is the entry last shown.
+  it('places: a place pushed from an entry holding another visit\'s place undoes with one Back', async () => {
+    // Pins that the strip fires whenever the entry pushed from holds another visit's place, wherever it sits in history. The
+    // mirror, not a traversal: a Back skip that cannot step leaves the page on a stale entry. The entry the reader stands on
+    // holds another visit's place, and it is the entry last shown.
     const { m } = await docStack();
     history.replaceState({ ...stateNow(), docsPlace: { visit: 'old', seq: 1, kind: 'overlay' } }, '', DOC_A);
     m.input.onPlace!('overlay');
