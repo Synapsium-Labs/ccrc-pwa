@@ -185,7 +185,7 @@ the restore hash.
 
 ### M8
 
-- Mutation: in `pwa/src/fleet/LandingLine.tsx`, `    const label = busy ? card.pauseBusyLabel : card.pauseLabel;` → `    const label = busy ? card.pauseBusyLabel : (error === '' ? (card.pauseNext ? 'Resume line' : 'Pause line') : card.pauseLabel);` (and 1 more edit(s))
+- Mutation: in `pwa/src/fleet/LandingLine.tsx`, `    const label = busy ? card.pauseBusyLabel : card.pauseLabel;` → `    const label = busy ? card.pauseBusyLabel : (error === '' ? (card.pauseNext ? 'Resume line' : 'Pause line') : card.pauseLabel);` and, in the same file, in the pause tap's answer arm, `setError('');` inserted between `setBusy(false);` and `onReload?.();` (the label reads the read's word again only while `error` is not `''`: on a refusal, or before any tap)
 - `test/landing-line.test.tsx`: exit 1 (RED)
     - `× Pause sends true once, shows the busy label, re-reads on the answer, and keeps its label until a read changes it 109ms`
     - `Tests  1 failed | 17 passed (18)`
@@ -466,7 +466,7 @@ export const NOT_PURE = api;
 
 ### M30
 
-- Mutation: in `pwa/src/fleet/landingLineView.ts`, `  if (e.state === 'ejected') return` → `  if (e.state === 'ejected' && !o.order.some((x) => x.id === e.id)) return` (and 1 more edit(s))
+- Mutation: in `pwa/src/fleet/landingLineView.ts`, `  if (e.state === 'ejected') return` → `  if (e.state === 'ejected' && !o.order.some((x) => x.id === e.id)) return` and, in the same file, `  if (e.state === 'unknown') return` → `  if (e.state === 'unknown' && !o.order.some((x) => x.id === e.id)) return`
 - `test/landing-line-view.test.ts`: exit 1 (RED)
     - `× an inconsistent read that lists the ejected and unknown entries in order.order still gives them their own roles 8ms`
     - `Tests  1 failed | 34 passed (35)`

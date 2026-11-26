@@ -277,6 +277,21 @@ describe('the re-read on each answer of the withdraw door is the line\'s (fix ro
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
+  it.each(['answer', 'refusal'] as const)('the line unmounted before the door\'s %s lands: no re-read (the generation ref; fix round 2, F1)', async (how) => {
+    const d = deferred<Awaited<ReturnType<LandingWithdrawer>>>();
+    const onReload = vi.fn();
+    const { unmount } = render(<Card state={stateOf(lineView())} withdraw={() => d.promise} onReload={onReload} />);
+    open(104);
+    confirm104();
+    unmount();
+    await act(async () => {
+      if (how === 'answer') d.resolve(withdrawn(E104));
+      else d.reject(new ApiError(409, { ok: false, error: 'landing-entry-moved' }));
+    });
+    await flush();
+    expect(onReload).not.toHaveBeenCalled();
+  });
+
   it('a sheet opened again before the earlier answer lands shows nothing of it, and its Cancel is a cancel', async () => {
     const d = deferred<Awaited<ReturnType<LandingWithdrawer>>>();
     const withdraw = vi.fn<LandingWithdrawer>().mockImplementationOnce(() => d.promise).mockImplementation(never);
@@ -317,6 +332,18 @@ describe('the block removes itself (R6)', () => {
     rerender(<Card state={NONE} onReload={() => {}} />);
     await flush();
     expect(document.activeElement).toBe(screen.getByTestId('card'));
+  });
+  it('focus on another element while the block still holds its record: a read that removes the held row moves no focus (fix round 2, F2)', async () => {
+    const { rerender } = render(<Card state={stateOf(lineView())} onReload={() => {}} />);
+    const elsewhere = screen.getByRole('button', { name: 'elsewhere' });
+    elsewhere.focus();
+    // The block records #104's Withdraw as its control (a focus event, as from script), and no blur to an element
+    // outside the block follows, so the record stands while the page's focus sits on another element.
+    fireEvent.focus(withdrawButton(104));
+    expect(document.activeElement).toBe(elsewhere);
+    rerender(<Card state={stateOf(withoutRow)} onReload={() => {}} />);
+    await flush();
+    expect(document.activeElement).toBe(elsewhere);
   });
   it('the same empty read while focus is outside the block moves no focus', async () => {
     const { rerender } = render(<Card state={stateOf(pausedEmpty())} onReload={() => {}} />);

@@ -51,7 +51,7 @@ its part. The whole pwa suite's result is in Task 8's note.
 From `pwa/`, through `ccrc test`, all green:
 
 - the pwa typecheck;
-- `landing-line` (18), `landing-withdraw-sheet` (18), `landing-line-hold` (1) and `project-card` (116): 153 cases in all;
+- `landing-line`, `landing-withdraw-sheet`, `landing-line-hold` and `project-card`: 18, 18, 1 and 116 cases at Task 7, 153 in all. Measured again at fix round 2's tip, after both fix rounds' new cases: 27, 20, 1 and 116, 164 in all;
 - `line-props`, `programme-box-card`, `fleet-list-memo`, `accounts-one-poll` and `fleet-screen`;
 - `refusal-literal-ratchet`, `fleet-css`, `css-vars`, `utility-pairs`, `contrast`, `hover-states`, `focus-ring` and
   `design-system-boundary`.

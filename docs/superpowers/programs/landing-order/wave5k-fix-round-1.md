@@ -10,7 +10,7 @@ The sheet can still be closed while its call is in flight: Cancel, Escape and th
 
 - **`LandingWithdrawSheet`** no longer takes `onReload` and no longer re-reads. Its two arms set only its own state: busy, the done phase, the error and the R3 flag.
 - **`LandingLine`** wraps the withdraw call it passes to the sheet. On the answer and on a refusal, the wrapper calls `onReload` once, whether the sheet is still open or not. That is the one call: exactly one re-read per answer.
-- **The wrapper is guarded by the line's own generation ref,** the same one the pause tap uses (row M32). So nothing is re-read once the card has gone.
+- **The wrapper is guarded by the line's own generation ref,** the one the pause tap uses, so nothing is re-read once the card has gone. (Row M32 covers only the pause tap. The wrapper's check has its own case and row since fix round 2: FR8, in `wave5k-fix-round-2.md`.)
 - **A sheet closed mid-flight shows nothing more.** It is unmounted, so its arms' state changes are dropped. Nothing new is drawn on the card for it. The re-read removes the row, and the feed records who was told.
 
 **The sheet's generation guard (F3's X3).** Once the re-read moved, I looked at what that guard still protected:
@@ -32,7 +32,7 @@ Pinned by the case "a sheet opened again before the earlier answer lands shows n
 - **The effect generalises the old block-gone effect (M46).** The block remembers the control inside it that last held focus. When a read has removed that control, no sheet is open, and focus is on the page, the effect focuses the pause button, else the card.
 - **The block-gone case is the same rule.** There, the pause button is gone with the block, so the card takes focus.
 - **When the record is forgotten.** It is cleared only when focus moves to an element outside the block. A blur to nowhere keeps it: the window losing focus, or the control being removed. This is the blur test of F3's X4.
-- **No focus is taken from the operator's own place.** A read that removes nothing moves no focus, and focus that sits on another element is never moved.
+- **No focus is taken from the operator's own place.** A read that removes nothing moves no focus. Focus that sits on another element is never moved. Focus that has gone to the page is placed by the chain, a click on blank page included. (Corrected in fix round 2; the check that leaves focus on another element has its own case and row, FR9.)
 
 ### F2: section 11's document order
 
@@ -67,7 +67,7 @@ D-9129 and D-9130 were issued on 2026-11-26. They are defined once, in the plan'
 
 ### F5: the case count
 
-`wave5k-task-7.md` now says the four files have 18, 18, 1 and 116 cases, 153 in all.
+`wave5k-task-7.md` then said the four files have 18, 18, 1 and 116 cases, 153 in all, which held before this round's new cases. Those cases moved them; fix round 2 records the counts at its tip.
 
 ### F6: no fixed wait in browser case 2
 
@@ -213,7 +213,7 @@ The records follow, as the runner wrote them.
 
 ### M8b
 
-- Mutation: in `pwa/src/fleet/LandingLine.tsx`, `    const label = busy ? card.pauseBusyLabel : card.pauseLabel;` → `    const label = busy ? card.pauseBusyLabel : (error === '' ? (card.pauseNext ? 'Resume line' : 'Pause line') : card.pauseLabel);` (and 1 more edit(s))
+- Mutation: in `pwa/src/fleet/LandingLine.tsx`, `    const label = busy ? card.pauseBusyLabel : card.pauseLabel;` → `    const label = busy ? card.pauseBusyLabel : (error === '' ? (card.pauseNext ? 'Resume line' : 'Pause line') : card.pauseLabel);` and, in the same file, in the pause tap's answer arm, `setError('');` inserted between `setBusy(false);` and `onReload?.();` (the label reads the read's word again only while `error` is not `''`: on a refusal, or before any tap)
 - `--config vitest.browser.config.ts browser/landing-line.browser.test.ts -t at 390px: the line as read`: exit 1 (RED)
     - `× at 390px: the line as read, its fit, the pause round trip, Cancel's and Done's focus 10966ms`
     - `× at 390px: the line as read, its fit, the pause round trip, Cancel's and Done's focus 11342ms`
