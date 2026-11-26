@@ -244,13 +244,13 @@ forecast (A) and one more restart word (B).
 
 ### Deviations found (wave 3b, A)
 
-- **D-TBD-provmove-fit** — the fit is at nine tenths, not at the whole window: the landing's first turn sends the whole conversation
+- **D-9119** — the fit is at nine tenths, not at the whole window: the landing's first turn sends the whole conversation
   and needs room to answer, and the figure is from the last render. It is asked of a provider move only; a limit rescue, the wake
   move and the operator's verbs are unchanged.
-- **D-TBD-provmove-floor** — the window of an Anthropic lane is stated nowhere. Between two of them the model, and so the window, is
+- **D-9120** — the window of an Anthropic lane is stated nowhere. Between two of them the model, and so the window, is
   the session's own, so nothing is compared; from another provider it is taken as 200000, which refuses some sessions a one-million
   window would take and never admits one that does not fit.
-- **D-TBD-provmove-place** — a marked lane is left out of every tier of the placement walk, the measured one included: an unmeasured
+- **D-9121** — a marked lane is left out of every tier of the placement walk, the measured one included: an unmeasured
   unmarked lane is taken before a marked one with room. Only a dead credential, or a lane whose newest spawn was refused, ranks behind.
 
 ### B. The act: what a move proves before it ends anything
