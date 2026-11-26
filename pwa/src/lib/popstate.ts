@@ -2,8 +2,9 @@
 // `history`, and it decides nothing. On every `popstate` it asks `historyPlaces.ts` (L1) what the pop means, writes the
 // tab record the decider's index rule hands back, and acts: the router's pop runs every subscriber, in order, and every
 // other answer runs none of them. The decider runs BEFORE any subscriber, so a pop that is the console's own, or a place
-// to step over, never reaches a screen. `navigate`, the shell's `useLocation`, the reader's day filter and the release
-// gate all subscribe here through `onPop`; nothing else in `pwa/src` adds a `popstate` listener (a source scan pins it).
+// to step over, never reaches a screen. The shell's `useLocation`, the reader's day filter and the release gate all
+// subscribe here through `onPop`, and `navigate`'s synthetic pop reaches them the same way; nothing else in `pwa/src`
+// adds a `popstate` listener (a source scan pins it).
 //
 // The window's listener is added when the first subscriber arrives and removed when the last leaves. The reader's places
 // module (`docs/reader/places.ts`) registers the mounted frame as the place host (`setPlaceHost`) and reads and writes the
