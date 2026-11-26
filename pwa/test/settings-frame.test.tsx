@@ -10,7 +10,7 @@ import { CommandLayer } from '../src/command/CommandLayer';
 import { api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { SETTINGS_SECTIONS } from '../src/lib/routes';
-import { SETTINGS_SCOPE } from '../src/fleet/settingsText';
+import { SETTINGS_CARDS, SETTINGS_SCOPE } from '../src/fleet/settingsText';
 import { SettingsDataProvider, useSettingsView } from '../src/screens/settings/SettingsDataProvider';
 import { SettingsScreen } from '../src/screens/settings/SettingsFrame';
 import { useFleetStore } from '../src/stores/fleet';
@@ -399,7 +399,7 @@ describe('the cards: scope and purpose, in order (spec §3.3)', () => {
     notifications: ['Push notifications', 'Release announcements'],
     automation: ['Stall watch', 'Overrides in force', 'Temp root collector', 'Shadow lanes', 'Dispatches that never came back', 'Cleanup pause', 'Browser tools', 'Roll idle sessions', 'Auto memory for plain sessions', 'Coordinator advisor', 'When soft renewals happen', 'Stop leftovers', 'Leftover processes', 'Worktrees left behind', 'Backups', 'Work in transcript folders', 'Test box'],
     security: ['Sign-in gate', 'Box token', 'Approvals', 'Permission prompts (M38)'],
-    integrations: ['Linear', 'Project linking', 'GitHub', 'Docs folders', 'Docs settings'],
+    integrations: ['Linear', 'Project linking', 'GitHub', 'Docs folders', SETTINGS_CARDS.integrations.docsSettings.title],
   };
   const SCOPES: readonly string[] = Object.values(SETTINGS_SCOPE);
 
@@ -421,9 +421,10 @@ describe('the cards: scope and purpose, in order (spec §3.3)', () => {
         const purpose = head.nextElementSibling;
         expect(purpose?.tagName, `${s.id} › ${h.textContent}: its purpose line`).toBe('P');
         expect(purpose!.textContent!.length, `${s.id} › ${h.textContent}: a purpose`).toBeGreaterThan(20);
-        if (h.textContent === 'Docs settings') {
-          expect(scope?.textContent).toBe(SETTINGS_SCOPE.box);
-          expect(purpose?.textContent).toBe('Set item links and project default branches.');
+        const docs = SETTINGS_CARDS.integrations.docsSettings;
+        if (s.id === 'integrations' && h.textContent === docs.title) {
+          expect(scope?.textContent).toBe(docs.scope);
+          expect(purpose?.textContent).toBe(docs.purpose);
         }
         expect(h.closest('section')!.getAttribute('aria-labelledby')).toBe(h.id);
       }

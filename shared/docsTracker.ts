@@ -1,12 +1,12 @@
 // Docs settings, the pure half (X2 Native Docs parity, spec 2026-11-18 section 4.5 "Tracker links", row 5.4, section 7's
 // `PUT /api/docs/settings` row): the tracker rule checker, the one place a rule runs (`resolveItemLink`), the strict
-// shape check for a stored row or a PUT body, and the one widening decision the server and the console both ask.
+// shape check for a stored row or a PUT body, and the server's one widening decision.
 //
 // L0: this file imports only other `shared/*.ts` modules, because the PWA bundles it. It names no tracker product
 // and no host: Settings starts empty, and a rule is the operator's data.
 //
-// Who may call what. `checkTrackerRule`, `checkTrackerRules`, `parseDocsSettings` and `settingsWidening` are for the
-// server (its settings door) and the console (its Settings form). `resolveItemLink` RUNS a rule's pattern against a
+// The server validates rule semantics on PUT and decides whether a write widens. The Settings form does not
+// validate rules before submitting; the Docs screen decodes settings reads. `resolveItemLink` RUNS a pattern against a
 // document's item value, and nothing may do that on a main thread: in the console only the tracker job
 // (`pwa/src/lib/trackerLinkJob.ts`, a later wave), which runs in the parse worker under its own 250 ms budget, may
 // import it. The checkers compile a pattern and test it against the EMPTY STRING only, never against a document value.

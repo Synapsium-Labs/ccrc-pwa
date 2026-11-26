@@ -617,7 +617,8 @@ describe('settings: the Docs folders card sits on the Integrations section', () 
     await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
     const levels = screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent);
     const card = SETTINGS_CARDS.integrations.docsFolders;
-    expect(levels).toEqual(['Linear', 'Project linking', 'GitHub', card.title, 'Docs settings']);
+    const settingsCard = SETTINGS_CARDS.integrations.docsSettings;
+    expect(levels).toEqual(['Linear', 'Project linking', 'GitHub', card.title, settingsCard.title]);
     const region = screen.getByRole('region', { name: card.title });
     expect(within(region).getByText(card.scope)).toBeTruthy();
     expect(within(region).getByText(card.purpose)).toBeTruthy();

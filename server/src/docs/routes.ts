@@ -781,8 +781,8 @@ interface DocsSettingsPorts {
 }
 export interface DocsSettingsDeps extends DocsFolderRegistryDeps, DocsSettingsPorts {
   now: () => number;
-  /** Would the existing egress masker change this answer? Measured before trying to store it. */
-  maskChanges: (answer: DocsSettingsResponse) => boolean;
+  /** Would the existing egress masker change this structured value? Measured before trying to store it. */
+  maskChanges: (value: unknown) => boolean;
 }
 
 /**
@@ -819,7 +819,10 @@ export function registerDocsSettingsRoutes(app: FastifyInstance, deps: DocsSetti
     const put = parseDocsSettingsPut(req.body);
     if (!put.ok) return sendDocsFailure(reply, put);
     const sent: DocsSettingsResponse = { ok: true, settings: put.settings };
-    const masked = docsSettingsMaskRefusal(put.settings, deps.maskChanges(sent));
+    // The structured egress masker walks values, not record keys. Also show it the project names as values,
+    // without changing the response shape or inventing a second masking rule.
+    const maskProbe = { ...sent, defaultBranchProjects: Object.keys(put.settings.defaultBranches) };
+    const masked = docsSettingsMaskRefusal(put.settings, deps.maskChanges(maskProbe));
     if (masked !== null) return sendDocsFailure(reply, masked);
     const wrote = deps.write(put.settings, deps.now(), () => deps.gate(req, reply, { cap: null, stepUp: true }).pass);
     if (wrote.kind === 'denied') return reply;

@@ -35,7 +35,7 @@ import {
   DOCS_HEAD_TEXT, DOCS_PAGE_INVALID_SENTENCE, DOCS_VIEW_TEXT, failureSentence, fillSentence, slotSentence,
 } from '../docs/docsText';
 import { docsPathKind } from '../docs/docsTree';
-import { useDocsVisit, type Freshness, type TreeSlot } from '../docs/useDocsVisit';
+import { canFetchUnresolvedRef, useDocsVisit, type Freshness, type TreeSlot } from '../docs/useDocsVisit';
 import { api } from '../lib/api';
 import { onAuthRegained } from '../lib/auth';
 import { HighlighterContext, type HighlighterContextValue } from '../lib/highlighterContext';
@@ -398,7 +398,8 @@ export function DocsScreen(p: {
       body = (
         <>
           <DocsFailureView
-            answer={slot} onRetry={visit.retryTree} onFetchFromOrigin={visit.fetchFromOrigin} suggestHref={suggestHref}
+            answer={slot} onRetry={visit.retryTree} suggestHref={suggestHref}
+            onFetchFromOrigin={canFetchUnresolvedRef(page.ref) ? visit.fetchFromOrigin : undefined}
             fetching={visit.freshness.s === 'fetching'} fetchNote={fetchNoteOf(visit.freshness, soon === null ? clock : Date.now())}
           />
           {looped && <p className="docs-note">{DOCS_VIEW_TEXT.redirectLoop}</p>}

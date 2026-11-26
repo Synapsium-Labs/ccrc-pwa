@@ -512,6 +512,7 @@ describe('parseDocsRefreshBody: exactly {ref, reason} (section 3.4, refinement (
     ['ref a number', { ref: 7, reason: 'auto' }, badQuery('body', 'ref')],
     ['ref an array', { ref: ['main'], reason: 'auto' }, badQuery('body', 'ref')],
     ['ref outside both grammars', { ref: 'a..b', reason: 'auto' }, refusal('bad-ref')],
+    ['a tag is readable but not a refresh ref', { ref: 'refs/tags/release', reason: 'manual' }, refusal('bad-ref')],
     ['ref empty', { ref: '', reason: 'auto' }, refusal('bad-ref')],
     ['precedence: a bad reason beats a bad ref string', { ref: 'a..b', reason: 'later' }, badQuery('body', 'reason')],
     ['precedence: an extra key beats a bad shape', { ref: 7, x: 1 }, badQuery('unknown', 'x')],

@@ -32,6 +32,7 @@ import type { Highlighter } from '../src/lib/highlightProtocol';
 import type { HighlightClock } from '../src/lib/highlightStore';
 import { docsRunner, type MarkdownParser } from '../src/lib/markdownRunner';
 import { navigate, useLocation } from '../src/lib/router';
+import * as router from '../src/lib/router';
 import {
   BLOB_1, BLOB_2, COMMIT_A, COMMIT_B, FP_1, NO_RANGE_VISIT, RAN, draftOf, entry, failedAnswer, fakeLoaders, fetchFailed, fileResponse, holder,
   okFile, okRefresh, okTree, pageAt, treeOk, treeResponse, type FakeLoaders,
@@ -114,6 +115,24 @@ describe('canonical URLs are fixed by replace (spec 3.1, M4.R4)', () => {
     render(<Routed loaders={f.loaders} />);
     await waitFor(() => expect(here()).toBe(to));
     expect(history.length).toBe(before);
+  });
+
+  it('a queued canonical redirect cannot replace a location that moved before the microtask', async () => {
+    navigate('/docs/demo/');
+    const replace = vi.spyOn(router, 'navigate');
+    vi.useFakeTimers({ toFake: ['queueMicrotask'] });
+    try {
+      render(<Routed loaders={fakeLoaders().loaders} />);
+      expect(here()).toBe('/docs/demo/');
+      // Change only the location, not React's props: cleanup alone cannot detect this move.
+      history.replaceState(null, '', '/docs/other#current');
+      await act(async () => { vi.runAllTicks(); });
+      expect(replace).not.toHaveBeenCalled();
+      expect(here()).toBe('/docs/other');
+      expect(location.hash).toBe('#current');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('a directory reached without its slash replace-navigates to the slash form, keeping the ref', async () => {
@@ -1199,6 +1218,20 @@ describe('T13 review 3-7: the index retries an auto-class word once, then shows 
 });
 
 describe('T13 review 3-2: Fetch from origin on an unresolved ref says what it is doing and how it ended', () => {
+  it.each(['refs/tags/missing', 'refs/heads/missing'])('does not offer fetching an unresolved %s', async (ref) => {
+    const f = fakeLoaders({ tree: failedAnswer('unresolved-ref') });
+    open(`/docs/demo?ref=${ref}`, f);
+    expect(await screen.findByText(DOCS_FAILURE_SENTENCE['unresolved-ref'])).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Fetch from origin' })).toBeNull();
+  });
+
+  it('offers fetching an unresolved origin-tracking ref and sends it verbatim', async () => {
+    const ref = 'refs/remotes/origin/ws/missing';
+    const f = fakeLoaders({ tree: failedAnswer('unresolved-ref') });
+    open(`/docs/demo?ref=${ref}`, f);
+    fireEvent.click(await screen.findByRole('button', { name: 'Fetch from origin' }));
+    expect(f.refresh).toHaveBeenCalledExactlyOnceWith('demo', { ref, reason: 'manual' });
+  });
   it('the button is disabled and the page says fetching while the POST runs, then the fetch failure sentence', async () => {
     const f = fakeLoaders({ tree: failedAnswer('unresolved-ref') });
     let release: (a: Awaited<ReturnType<DocsLoaders['refresh']>>) => void = () => {};

@@ -107,7 +107,7 @@ describe('its entry on the Settings index', () => {
     expect(entry()).toHaveAttribute('href', '/settings/integrations');
     expect(entry().querySelector('.settings-index-name')?.textContent).toBe('Integrations');
     expect(entry().querySelector('.settings-index-purpose')?.textContent).toBe(SETTINGS_INDEX_TEXT.purpose.integrations);
-    expect(SETTINGS_INDEX_TEXT.purpose.integrations).toBe('The services ccrc works with: the Linear keys, the Linear team each project is linked to, and GitHub.');
+    expect(SETTINGS_INDEX_TEXT.purpose.integrations).toBe('Linear keys and project linking, GitHub, and the folders, item links and default branches used by Docs.');
     expect(SECTION_ICON.integrations).toBe('network');
     expect(entry().querySelectorAll('svg')).toHaveLength(2);
     expect(entry().querySelector('.settings-index-status')?.textContent).toBe(`Linear: no key yet · ${INTEGRATIONS_GITHUB_STATUS}`);

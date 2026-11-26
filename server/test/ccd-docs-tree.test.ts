@@ -293,6 +293,20 @@ describe('docs ref resolution: legacy tag and commit spellings (M11.36, M11.48)'
     expect(served(resolveIn('demo', short))).toMatchObject({ served: `refs/heads/${short}` });
   });
 
+  it('an abbreviated annotated tag object is not a commit, even when it peels to one', () => {
+    const main = h.makeRepo('demo');
+    const commit = rev(main, 'HEAD');
+    h.git(main, 'tag', '-a', 'release', '-m', 'release', commit);
+    const tag = rev(main, 'refs/tags/release');
+    const prefix = tag.slice(0, 12);
+    expect(h.git(main, 'rev-parse', `--disambiguate=${prefix}`).trim()).toBe(tag);
+    expect(rev(main, `${tag}^{commit}`)).toBe(commit);
+    const result = refused(resolveIn('demo', prefix));
+    expect(result.failure).toBe('unresolved-ref');
+    expect(result).not.toHaveProperty('resolved');
+    expect(result).not.toHaveProperty('hint');
+  });
+
   it('refuses an ambiguous object prefix, even when one candidate is a commit', () => {
     h.makeRepo('demo');
     const pre = [

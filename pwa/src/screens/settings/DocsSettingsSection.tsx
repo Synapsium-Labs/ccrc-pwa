@@ -7,7 +7,7 @@ import { ConfirmItsYou } from '../../accounts/ConfirmItsYou';
 import { useStepUp, type StepUpDeps } from '../../accounts/useStepUp';
 import { failureSentence, slotSentence } from '../../docs/docsText';
 import type { DocsAnswer, DocsNotOk } from '../../docs/failures';
-import { ResultLine, SETTINGS_SCOPE, useResultLine } from '../../fleet/settingsText';
+import { ResultLine, SETTINGS_CARDS, useResultLine } from '../../fleet/settingsText';
 import { ApiError, api } from '../../lib/api';
 import type { ProjectListRead } from './useProjectList';
 
@@ -97,8 +97,9 @@ export function DocsSettingsSection({ list, settings = api.docs.settings, stepUp
     ...Object.keys(confirmed?.defaultBranches ?? {}),
   ])].sort();
   const disabled = busy || stepUp.busy;
+  const card = SETTINGS_CARDS.integrations.docsSettings;
   return (
-    <Section level={3} scope={SETTINGS_SCOPE.box} title="Docs settings" purpose="Set item links and project default branches.">
+    <Section level={3} scope={card.scope} title={card.title} purpose={card.purpose}>
       {draft === null ? <p className="settings-note">{readError ?? 'Reading Docs settings…'}</p> : <>
         <p className="settings-note">Rules are tried in order. Leave projects empty to apply a rule everywhere.</p>
         <ul className="linear-list">

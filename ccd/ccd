@@ -46717,9 +46717,9 @@ def legacy_ref(repo, name, row, tried, dl):
 
 def resolve_bare(repo, b, dl):
     """Section 2 (c) 3, Q2: the newer side wins. One for-each-ref covers L, R,
-    the tag (read only for the hint) and, for a name starting origin/, the
-    remote-tracking ref of the remainder (read only for suggest). A candidate
-    that does not peel to a commit is excluded exactly as if it were absent."""
+    a possible legacy tag and, for a name starting origin/, the remote-tracking
+    ref of the remainder (served if there is no literal local branch). A side
+    that does not peel to a commit cannot win."""
     local, origin, tag = REF_HEADS + b, REF_ORIGIN + b, REF_TAGS + b
     refs = [local, origin, tag]
     suggest = None
@@ -46751,7 +46751,7 @@ def resolve_bare(repo, b, dl):
 
 def resolve(repo, requested, dl):
     """Section 2 (c): the DocsTreeOk ref object for --ref `requested`, None
-    being the default view. It raises unresolved-ref {tried, suggest?, hint?},
+    being the default view. It raises unresolved-ref {tried, resolved?, hint?},
     ref-not-commit {ref, type} or no-default-branch {tried}. read_args has
     already applied the grammar, so the last line is a contract assertion."""
     if requested is None:

@@ -261,12 +261,12 @@ describe('settings round-trip through the real server masker', () => {
   const before = settings([A, secretRule]);
   const headers = folderHeaders({ session: false });
 
-  async function openMasked() {
+  async function openMasked(initial = before) {
     const home = mkTmp('ccrc-docs-mask-');
     const deps = testDeps(home);
     const db = openCoordDb(path.join(home, '.ccrc', 'coord.db'));
     const coord = new CoordStore(db);
-    expect(coord.writeDocsSettings(before, NOW, () => true)).toEqual({ kind: 'written' });
+    expect(coord.writeDocsSettings(initial, NOW, () => true)).toEqual({ kind: 'written' });
     const token = 'c2'.repeat(32);
     const masker = new SecretMasker({ db, token: () => token });
     masker.ingest({ gen: fingerprintGeneration(token), rows: [fingerprintRow(token, 'lane-a', matched)] });
@@ -277,6 +277,35 @@ describe('settings round-trip through the real server masker', () => {
     const put = (value: DocsSettings) => app.inject({ method: 'PUT', url: URL_SETTINGS, headers, payload: { settings: value } });
     return { coord, get, put };
   }
+
+  it('refuses a widening write through the composed server while sign-in is off', async () => {
+    const { coord, put } = await openMasked(settings([A]));
+    const row = coord.readDocsSettings();
+    const res = await put(settings([A, B]));
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toEqual({ ok: false, error: 'auth-off' });
+    expect(coord.readDocsSettings()).toEqual(row);
+  });
+
+  it('refuses a recognized project key even in an otherwise removal-only write', async () => {
+    const branches = { [matched]: 'main' };
+    const { coord, put } = await openMasked(settings([A, B], branches));
+    const row = coord.readDocsSettings();
+    const res = await put(settings([A], branches));
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ ok: false, failure: 'bad-query', why: 'settings-masked', key: 'settings' });
+    expect(coord.readDocsSettings()).toEqual(row);
+  });
+
+  it('retains a normal project key unchanged when removing a rule', async () => {
+    const branches = { 'project-a': 'main' };
+    const { put, get } = await openMasked(settings([A, B], branches));
+    const next = settings([A], branches);
+    const res = await put(next);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, settings: next });
+    expect((await get()).json()).toEqual({ ok: true, settings: next });
+  });
 
   it('masks a stored rule on GET without rewriting the stored row', async () => {
     const { coord, get } = await openMasked();
