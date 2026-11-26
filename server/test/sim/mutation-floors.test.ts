@@ -192,9 +192,54 @@ const PEER_SET: MutantSet<PeerBoundModule> = {
   },
 };
 
+// Overlord W1 home B, Task 7 (plan w1-home.md): the place mark's decider, against the cases `continuity-place-mark.test.ts`
+// asserts, written out here as suite cases over the loaded module. P1 to P4 are the plan's; P5 to P7 pin the edges.
+type PlaceMarkModule = typeof import('../../src/continuity/placeMark.js');
+const PLACE_MARK_KEY = 'server/src/continuity/placeMark.ts#placeMarkDue';
+const PLACE_MARK_SET: MutantSet<PlaceMarkModule> = {
+  modulePath: path.join(ROOT, 'server/src/continuity/placeMark.ts'),
+  mutants: [
+    { id: 'P1 write on a hidden frame', old: "if (!i.visible) return 'skip';", new: '' },
+    { id: 'P2 write for another session', old: "if (i.bound.sessionId !== i.frameSessionId) return 'skip';", new: '' },
+    { id: 'P3 write when the designation is unread', old: "if (i.bound.kind === 'unread') return 'skip';",
+      new: "if (i.bound.kind === 'unread') return i.markAtMs === 'unread' ? 'skip' : 'write';" },
+    { id: 'P4 ignore the minute', old: "return i.markAtMs <= i.nowMs && i.nowMs - i.markAtMs < PLACE_MARK_EVERY_MS ? 'skip' : 'write';", new: "return 'write';" },
+    { id: 'P5 the minute is exclusive', old: 'i.nowMs - i.markAtMs < PLACE_MARK_EVERY_MS', new: 'i.nowMs - i.markAtMs <= PLACE_MARK_EVERY_MS' },
+    { id: 'P6 write when the mark is unread', old: "if (i.markAtMs === 'unread') return 'skip';", new: "if (i.markAtMs === 'unread') return 'write';" },
+    { id: 'P7 a mark from the future holds', old: 'return i.markAtMs <= i.nowMs && ', new: 'return ' },
+    { id: 'P8 write when no session is designated', old: "if (i.bound.kind === 'not-designated') return 'skip';", new: "if (i.bound.kind === 'not-designated') return 'write';" },
+    { id: 'P9 never write on an absent mark', old: "if (i.markAtMs === 'absent') return 'write';", new: "if (i.markAtMs === 'absent') return 'skip';" },
+  ],
+  suite(mod) {
+    const NOW = 1_800_000_000_000;
+    type Facts = Parameters<PlaceMarkModule['placeMarkDue']>[0];
+    const f = (over: Partial<Facts> = {}): Facts => ({ frameSessionId: 'lane-a-overlord', visible: true,
+      bound: { kind: 'bound', sessionId: 'lane-a-overlord' }, markAtMs: 'absent', nowMs: NOW, ...over });
+    const due = (over: Partial<Facts> = {}): string => mod.placeMarkDue(f(over));
+    return {
+      'the bound session, a visible frame, no mark: write': () => { expect(due()).toBe('write'); },
+      'a hidden frame': () => { expect(due({ visible: false })).toBe('skip'); expect(due({ visible: false, markAtMs: NOW - 600_000 })).toBe('skip'); },
+      'another session': () => { expect(due({ frameSessionId: 'lane-b-project-a' })).toBe('skip'); },
+      'no session designated': () => { expect(due({ bound: { kind: 'not-designated' } })).toBe('skip'); },
+      'an unread designation, with the mark absent, old or readable': () => {
+        for (const markAtMs of ['absent', NOW - 600_000, NOW] as const) expect(due({ bound: { kind: 'unread' }, markAtMs })).toBe('skip');
+      },
+      'an unread mark': () => { expect(due({ markAtMs: 'unread' })).toBe('skip'); },
+      'the minute, at its edge': () => {
+        expect(due({ markAtMs: NOW })).toBe('skip');
+        expect(due({ markAtMs: NOW - 59_999 })).toBe('skip');
+        expect(due({ markAtMs: NOW - 60_000 })).toBe('write');
+        expect(due({ markAtMs: NOW - 300_000 })).toBe('write');
+      },
+      'a mark from the future is refreshed': () => { expect(due({ markAtMs: NOW + 1 })).toBe('write'); expect(due({ markAtMs: NOW + 3_600_000 })).toBe('write'); },
+    };
+  },
+};
+
 const MUTANT_SETS: Record<string, MutantSet<never>> = {
   [KEY]: COORD_BLOCKED_SET as MutantSet<never>,
   [PEER_KEY]: PEER_SET as MutantSet<never>,
+  [PLACE_MARK_KEY]: PLACE_MARK_SET as MutantSet<never>,
   [CARD_TRIM_KEY]: CARD_TRIM_SET as MutantSet<never>,
   [CARD_NEVER_EMPTY_KEY]: CARD_NEVER_EMPTY_SET as MutantSet<never>,
   [CARD_ONE_LINE_KEY]: CARD_ONE_LINE_SET as MutantSet<never>,

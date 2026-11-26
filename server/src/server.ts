@@ -134,6 +134,7 @@ import { actKeyFact, advanceCounterGuarded, recordFenceRefusal } from './coord/o
 import { CONTINUITY_LANE } from '../../shared/lane-arm.js';
 import { NO_LADDER_AUTHORITY } from './coord/overlordAuthorityJournal.js';
 import { renewalHostOf } from './continuity/renewalWiring.js';
+import { placeMarkReporter } from './continuity/placeMarkReport.js';
 import { registerResponseRoutes } from './responses/routes.js';
 import { readLinearStore } from './linear/store.js';
 import { trackerIdsIn } from './linking/policy.js';
@@ -2500,6 +2501,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   });
   registerResponseRoutes(app, { coord: deps.coord, time: deps.time, gate: accountGate, notice, actorOf: consoleActor });
 
+  // The visible Overlord place's report: a visible frame of the bound session refreshes the @overlord-place mark, at most once a minute.
+  const reportPlaceVisible = placeMarkReporter(deps.coord, () => deps.time.clock.wall());
   app.get('/ws/session/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };
     const q = req.query as { since?: string; sinceFile?: string };
@@ -2522,7 +2525,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       viewers.touch(token);
       try {
         const m = asSessionClientMsg(JSON.parse(String(raw)));
-        if (m?.type === 'visible') viewers.setVisible(token, m.visible ? id : null);
+        if (m?.type === 'visible') { viewers.setVisible(token, m.visible ? id : null); reportPlaceVisible(id, m.visible); }
         else if (m?.type === 'helper-report') stream.helperReport(m.id);
         else if (m?.type === 'older-page') stream.olderPage(m.continuation);
       } catch { /* a client that sends garbage simply isn't reporting visibility */ }
