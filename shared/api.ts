@@ -4732,6 +4732,7 @@ export const RESTART_CAUSE_WORDS = {
   exited: 'process exited',
   'swap-auto-home': 'swapped home',
   'swap-auto-rescue': 'swapped off a blocked account',
+  'swap-auto-provider': 'moved off a failing provider',
   'swap-auto': 'swapped automatically',   // D-5348: an automatic swap whose arm is not named
   'swap-manual': 'swapped by hand',
   'limit-resume': 'restarted after a limit reset',   // D-8123: the fleet watchdog's in-place restart once an awaited reset passed

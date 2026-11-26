@@ -198,13 +198,14 @@ describe('_pane_box_draft reads an ANSI capture, exactly as draftOf does', () =>
     // `)"` sits mid-call, ahead of the real close — a class excluding `)`
     // truncates there and silently drops the trailing ` -e` from the match.
     const calls = src.match(/_pane_box_read "\$\("\$\{_TMX_ARGV\[@\]\}" capture-pane.*\)"/g) ?? [];   // the socket lookup's argv (D-8270)
-    // Six sites: `_idle_for_keystroke` (the compactor's and the route applier's
+    // Seven sites: `_idle_for_keystroke` (the compactor's and the route applier's
     // gate), `_redrive_after_spawn`, `_session_hard_blocked`,
-    // `_auto_stale_check`, `_auto_swap_check`'s draft stand-down (D-6181), and
-    // `_pane_type_ready`, the one check before every key ccd sends (D-8271).
+    // `_auto_stale_check`, `_auto_swap_check`'s draft stand-down (D-6181),
+    // `_pane_type_ready`, the one check before every key ccd sends (D-8271), and
+    // `_provider_hold_to`, a provider move's draft stand-down (provider-retry wave 3b).
     // Every one can destroy or submit the box, so every one must ask the
     // whole-box presence question rather than read row one.
-    expect(calls, 'all six synthesized-action guards use the whole-box reader').toHaveLength(6);
+    expect(calls, 'all seven synthesized-action guards use the whole-box reader').toHaveLength(7);
     for (const c of calls) expect(c, c).toContain(' -e');
   });
 });
