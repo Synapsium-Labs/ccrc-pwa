@@ -455,6 +455,7 @@ Each row ships with the task that owns it; the row is red when the guard is remo
 | M11.114 | P1.4 | Drop the open-page check in `DocsLeaf`'s `onTold` | a late Download answer for a page left behind is dropped: coming back saves nothing, a direct tap saves once |
 | M11.115 | P1.5 | End a four-column zone at its opener's own column (`Math.max(2, r.indent - 3)` to `r.indent`) | md parts: residual 6 (indented fence-looking code, then an indented real fence opener the zone detector swallows): pinned as today's behaviour, which P6.1 Step 0b2 flips |
 | M11.116 | P1.5 | Let a lazy line end a list item (`listAfter`'s final `return` to `return 0`) | md parts: residual 7 (an empty list marker, a plain line, then a fence at the marker's content column: the item is read as open): pinned as today's behaviour, which P6.1 Step 0b2 flips |
+| M11.123 | P4.4 | Keep the resolved leaf in loading when its settings read fails | Docs screen: an already visible draft retains its article, plain item text, URL and original draft body read when the settings route is unavailable |
 | M11.74 | P5.5 | Drop the review strip's and the plan marks' classes (`rs-wait`, `cnt`, `tmeta`, `step-no`, `who`) from `printAllow`'s class list | print mode: the review strip prints its waiting list (its `div.rs-wait > ol > li` selector finds none); print mode: each task heading prints its chip (`span.task-id span.tmeta` finds none) |
 
 ## Deviations found
@@ -1048,7 +1049,7 @@ Review run 3816 read the fix round at `92749f7a63`: F1 closed in behaviour; A1, 
 
 #### P4.3: settings store and its doors
 
-- The singleton table has no seed. A missing row reads empty; an unreadable store or malformed row does not. Migration 128 appends on this branch; the programme lifecycle's already-deployed slot stays pinned at 127. Recheck both slots and the counts if the base moves.
+- The singleton table has no seed. A missing row reads empty; an unreadable store or malformed row does not. On base `ad35cf5538`, the Docs migration appends at 130, after the deployed lifecycle (127), timers (128) and monitor findings (129). On a later base, remeasure the append slot and update `server/src/coord/schema.ts#MIGRATIONS` and both version-pin blocks in `server/test/coord-db.test.ts`; keep the lifecycle test's absolute index and both deployed SQL assertions.
 - The marked Docs GET and PUT are session-gated, with no box-token exemption. PUT compares with the current row inside the same synchronous transaction that writes. Any widening takes the account gate's step-up and refuses with sign-in off; removal alone works dark. There is no client revision: among authorized writes the later write replaces the earlier one, even from another device. The stale apparent removal case verifies that a removed rule cannot be restored without step-up.
 - Foreground test-box evidence: the integrated store, routes, validator and censuses passed 828 cases. On the already-integrated ref and migration run, nine suites passed, including the three migration files; the Docs ring guard identified an overlapping refusal literal in delivery. After moving the unavailable-port answer to the settings vocabulary, the focused server run including both Docs guards passed 413 cases. Server source typecheck passed.
 
@@ -1057,3 +1058,68 @@ Review run 3816 read the fix round at `92749f7a63`: F1 closed in behaviour; A1, 
 - Integrations holds a box-wide Docs card. The editor keeps its draft after a refusal and asks the existing confirmation flow only when the server requests step-up. There are no default tracker rules; document rendering of item links is still P5.
 - Index project, newest and section links use configured refs; the displayed counts and newest names still come from the measured Git-default index, not a second walk. A gone configured branch falls back by replace with a note; a different explicit ref is not silently dropped. The configured branch takes precedence over a tag or commit of the same spelling when that branch is gone.
 - M11.23: planting one neutral tracker URL in a shipped source made the scan name that file; removing it restored the original bytes and the scan passed. Server scans the three shipped source roots; PWA checks the installed library against the lock and scans its defaults because that is the package that installs it. The literal scan does not infer assembled URLs or generic self-hosted addresses with no tracker-shaped path. M11.37 red when the configured branch was ignored: the newest link lost its query. The focused screen, Settings and package-scan run passed 155 cases including the historical-only refusal rows.
+
+#### Verification after absorbing main
+
+- The measured conflict with `5b14086b57` was confined to the two auth census files. The merge retained the incoming programme backfill door and both Docs settings doors. The resulting census is 326 routes: 323 HTTP, 207 gated and 116 exempt; Docs is 15. Settings, gate, migration and guard checks passed 1,077 cases across ten files after the merge.
+- The post-merge Docs batch initially found one stale dispatcher expectation: `refs/tags/v` had been pinned as `bad-ref` before Git. The new pin proves a well-formed tag reaches Git resolution and an absent tag answers `unresolved-ref`; `refs/tags/v..x` still answers `bad-ref` with zero Git calls. No resolver change was needed. The index file passed all 264 cases, and the repeated eight-file Docs batch passed all 1,861 cases.
+- The first whole browser invocation stopped before any tests ran; the shared test slice reported a memory-cap kill. A scoped startup and an isolated production build also reported memory-cap kills. These attempts did not measure a browser result. The first PWA typecheck after the merge was also killed (exit 137); it is not a type result.
+- **M11.123 measured.** With the normal render gate, the draft's heading was visible while the settings reply was pending and stayed visible when it answered that the route was unavailable. The test also pins its plain item text, unchanged URL, and single fingerprinted draft read. Extending the leaf loading gate to hold on a settled settings failure made the targeted case red on the missing article. Restoring the production file byte-for-byte gave 138/138 in `docs-screen`; the mutation was never in a browser build.
+
+#### Local browser gate (2026-11-26)
+
+The first full-folder attempt never started tests. Under the revised gate, the local run covers the two edited browser files, the files opening Docs or Settings, and direct test imports of changed modules or fixtures. The hosted full run on the exact pull-request head verifies the whole folder. The fast pull-request check does not run it.
+
+The table uses 1-based rows of the 123 browser test paths, sorted in C locale, on the locally measured tree. These 21 foreground parts supplied final passing results for **103 files, 3,493 cases, 52 ordinary skips and one expected failure**. Rows 79–84 are the six passing files from the mixed 77–84 part; rows 77 and 78 use their replacement runs. The isolated diagnostic runs are not counted again.
+
+| Manifest rows | Files passed | Passing cases | Part |
+|---|---:|---:|---|
+| 1–8 | 8 | 151 | Group |
+| 10 | 1 | 500 | Inline ask, alone; 12 skipped |
+| 9, 11–16 | 7 | 234 | Group |
+| 17–24 | 8 | 184 | Group |
+| 25–32 | 8 | 353 | Group |
+| 33–41 | 9 | 123 | Group |
+| 42–46 | 5 | 57 | Group; 40 skipped, one expected failure |
+| 47–54 | 8 | 280 | Group |
+| 55–62 | 8 | 364 | Group |
+| 63–68 | 6 | 111 | Group |
+| 69–74 | 6 | 203 | Group |
+| 75 | 1 | 10 | Wide Project linking, alone |
+| 76 | 1 | 12 | Project linking, alone |
+| 79–84 | 6 | 135 | Kept from the original mixed part, which ran rows 77–84 |
+| 78 | 1 | 12 | Reader history, corrected fixture, alone |
+| 77 | 1 | 60 | Reader frame, full file alone |
+| 85–89 | 5 | 254 | Group |
+| 90 | 1 | 231 | Runs widths, alone |
+| 91, 95–97 | 4 | 33 | Settings group; includes the five-card Integrations assertion |
+| 100–101, 105–107 | 5 | 67 | Settings sheets and cards |
+| 108–109, 113, 115 | 4 | 119 | Settings cards and Updates |
+
+- **No final local result:** rows 92–94, 98–99, 102–104, 110–112, 114 and 116–123: `session-header`, `session-panel-words`, `session-timers`, `sheet-desktop-arm`, `sheet-focus-ring`, `sign-in-sheet`, `single-readers`, `skin-default`, `tool-activity`, `tool-group-fit`, `tool-well-colour`, `update-indicator`, `vaul-motion`, `waiting-close-run`, `waiting-controls`, `waiting-doors`, `waiting`, `wheel-chain-chip`, `wheel-chain-well` and `wheel-chain`. These files have no direct changed import or Docs or Settings visit. They do import the unchanged browser harness, whose PNG signature input from the shared Docs module did not change. The hosted run covers them rather than treating that transitive dependency as locally verified.
+- **Retries without results:** two 1–41 attempts and the first 9–16 attempt reached the foreground tool deadline and were stopped, with no final summaries counted. The first 91–98 attempt stopped at Vite startup with a source-map error and shared memory-cap kills; nothing ran. Some later parts exited zero with final passing summaries even as the shared slice recorded kills; that notice does not identify the victim.
+- **First actual assertion failures:** the original 77–84 part reported six passing files and two failing assertions. In reader history, the bare `ref=main` draft case reached its final console assertion with a 404, after rendering the draft, taking only the fingerprinted draft read and showing no comparison controls. It reproduced alone. The mock caught every `/api/docs/` request but did not answer the settings read. Adding just the canonical empty settings answer made the whole file pass 12/12. No product change was needed.
+- **Reader-frame finding for review:** D-8729, desk-born refined view, five directories, 600 × 960, got `fallback` instead of `ready` after the bridge was released, before focus could be measured. The same case passed in isolation; the first full-file retry was killed after 29 cases and gave no file result; the next full-file retry passed 60/60. The no-ref leaf makes no settings request and does not wait on settings. The cause of the first fallback and the identity of the shared-slice kill victim were not established.
+- **Carry boundary:** the only browser-file edit after the earlier browser parts was the history fixture reply. No other browser file imports that test; the other new test is a unit witness, with no browser importer. On the same head (`79ae0a935b`), excluding those two paths gave back the original binary diff SHA-256 `70db57492e20e51031f6bf0ab7a994120df182c7f9fc4058fc0ca8d337352505`; with both paths the measured diff was `548023d29dc473e0f475b0d278f77431e30a09e8f3f749037495572b2acb8e73`, before this reporting-only plan edit. Production and browser setup inputs did not change between those runs. Rows 85 onward in the table ran with both tests in place.
+
+#### Reverification on the migration 130 base
+
+- The named-base probe at `ad35cf5538` conflicted only in the schema, the database version pins and the lifecycle migration test. The merge `babf760b9e` preserved the deployed SQL, appended Docs at 130 and pinned lifecycle at zero-based 126 without dropping either follow-on SQL assertion. The route census remained Docs 15 and 326 total (323 HTTP, 207 gated, 116 exempt). Migration, settings, gate and architecture checks passed **1,137 cases in 11 files**; the Docs, fixture ccd and monitor run passed **1,136 in 10**. The repository's `codeLines` measured `ccd/ccd` at 23,784 → 23,858 (+74; D-9082 cap 84).
+- The full PWA typecheck caught a parallel MIME table in the range renderer that did not cover ICO. The renderer now reads MIME from `DOCS_RASTER_TYPES`; its existing trusted-dimensions check still prevents decoding an ICO from a range read. No reader host file changed. The restored typecheck exited zero, and the focused PWA range, image, Docs screen and Settings suite passed **382 cases in 9 files**. The combined server source and test type pass exited 137 under the shared memory cap without a compiler diagnostic; it is unmeasured locally on this base.
+- The 103-file evidence above predates this merge. With the MIME fix and the incoming browser fixture change in place, five sequential Chromium groups passed **1,135 cases in 46 files** on the new browser candidate:
+
+| Scope | Files | Passing cases |
+|---|---:|---:|
+| Reader frame, history, lab; Settings Integrations | 4 | 78 |
+| Docs navigation, headers, mockup, export and phone bar | 10 | 363 |
+| Settings entry, linking and confirmation flows | 13 | 327 |
+| Diagnostics, Settings cards, sheets and Updates | 12 | 207 |
+| Incoming chat-history and mail-rows fixtures; Accounts | 7 | 160 |
+
+The frame and history files both completed with final passing summaries. The incoming session-socket fixture hook is opt-in; its caller, `chat-history`, ran on the new candidate, as did the changed `mail-rows` file. The full hosted browser folder remains the exact-head gate.
+
+#### Reverification after the landing-route census sync
+
+- The exact-base probe at `83c1ed227f` conflicted only in the auth census test. Merge `c6f08d5290` retains both incoming landing operator doors and both Docs settings doors: 328 total, 325 HTTP, 209 gated, 116 exempt; Docs stays 15. The schema and its pins are unchanged at 130. The base and candidate `ccd/ccd` blobs are unchanged from the previous measurement, so the +74 growth and D-9082 cap 84 still apply.
+- The first attempt did not snapshot an unmerged index and was stopped after it left the foreground; it supplied no result. Once the resolution was staged, the foreground test-box run passed **1,103 cases in 11 files**, covering the auth and box-token censuses, landing doors, Docs settings, migration pins and coordination guards.
+- This sync did not change the PWA or ccd sources. The 46-file local Chromium result remains from the previous candidate, not this head. The exact-head hosted browser folder and server type checks are still owed.

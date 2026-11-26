@@ -379,6 +379,31 @@ describe('project default branches (X2 P4.4, M11.37)', () => {
     },
   );
 
+  it('keeps the draft body and its plain item text when the settings read is unavailable', async () => {
+    const f = fakeLoaders({
+      tree: okTree(treeOk({ entries: [entry('specs', 'a.md', { draft: draftOf('modified') })], drafts: holder() })),
+      file: okFile('# Draft guide\n\nItem: DEMO-42'),
+    });
+    let settle!: (answer: DocsAnswer<DocsSettingsResponse>) => void;
+    const pending = new Promise<DocsAnswer<DocsSettingsResponse>>((resolve) => { settle = resolve; });
+    const readSettings = vi.fn(() => pending);
+    const url = '/docs/demo/specs/a.md?ref=main';
+    navigate(url);
+    render(<Routed loaders={f.loaders} readSettings={readSettings} />);
+    const heading = await screen.findByRole('heading', { name: 'Draft guide' });
+    expect(readSettings).toHaveBeenCalledTimes(1);
+
+    await act(async () => { settle({ s: 'no-docs-route' }); });
+
+    const article = within(screen.getByRole('article'));
+    expect(article.getByRole('heading', { name: 'Draft guide' })).toBe(heading);
+    expect(article.getByText('Item: DEMO-42')).toBeInTheDocument();
+    expect(article.queryByRole('link')).toBeNull();
+    expect(here()).toBe(url);
+    expect(f.file).toHaveBeenCalledTimes(1);
+    expect(f.file.mock.calls[0]?.[1]).toMatchObject({ kind: 'draft', fp: FP_1 });
+  });
+
   it('a gone configured branch falls back by replace with a note, without redirecting other explicit refs', async () => {
     const f = fakeLoaders();
     f.tree.mockImplementation(async (_project, ref) => ref === null

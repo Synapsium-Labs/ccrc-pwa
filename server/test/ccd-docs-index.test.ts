@@ -527,7 +527,7 @@ describe('docs argv grammar through the dispatcher: refused before any git call 
     return o;
   };
 
-  it.each(['-x', 'main~1', 'main:docs', 'a..b', 'x.lock/y', 'HEAD', 'refs/tags/v', '\u{00e9}', '@{-1}'])(
+  it.each(['-x', 'main~1', 'main:docs', 'a..b', 'x.lock/y', 'HEAD', 'refs/tags/v..x', '\u{00e9}', '@{-1}'])(
     'row 1: docs-tree --ref %j answers bad-ref', (ref) => {
       refused(['docs-tree', '--project', 'demo', '--ref', ref], 'bad-ref');
     });
@@ -610,6 +610,17 @@ describe('docs argv grammar through the dispatcher: refused before any git call 
   ])('row 63: a path holding %s answers bad-path', (_label, p) => {
     refused(committed({ path: p }), 'bad-path');
     refused(draft({ path: p }), 'bad-path');
+  });
+
+  it('X2 P4: a well-formed explicit tag reaches Git resolution', () => {
+    rec.reset();
+    const ref = 'refs/tags/v';
+    const r = runArgv(h, ['docs-tree', '--project', 'demo', '--ref', ref]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(oneLineOfArgv(r)).toMatchObject({
+      v: 1, verb: 'docs-tree', ok: false, failure: 'unresolved-ref', tried: [{ ref, result: 'absent' }],
+    });
+    expect(rec.calls().some(({ argv }) => argv.includes('for-each-ref') && argv.includes(ref))).toBe(true);
   });
 
   it.each([

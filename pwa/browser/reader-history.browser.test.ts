@@ -24,7 +24,8 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Frame, type Page } from 'playwright-core';
 import { REFINED, SKIN_STORAGE_KEY, THEME_STORAGE_KEY } from '@ccrc/ui';
-import { DOC_SECTION_SLUGS, DOCS_RESPONSE_HEADERS } from '../../shared/docs';
+import { DOC_SECTION_SLUGS, DOCS_RESPONSE_HEADERS, docsApi } from '../../shared/docs';
+import { EMPTY_DOCS_SETTINGS } from '../../shared/docsTracker';
 import { READER_FALLBACK_NOTE } from '../src/docs/reader/readerText';
 import { readerDiff, type ReaderDiff } from '../src/docs/reader/diff';
 import { READER_SEED_DATE_MAX_UNITS, READER_SEED_MAX_COMMITS, READER_SEED_SUBJECT_MAX_UNITS } from '../src/docs/reader/history';
@@ -198,7 +199,9 @@ async function openSession(opts: SessionOptions = {}): Promise<Session> {
     hits.push({ verb, q });
     const doc = DOCS[q['path'] ?? ''];
     let answer: { status: number; headers: Record<string, string>; body: Buffer };
-    if (verb === 'tree') {
+    if (url.pathname === docsApi.settings()) {
+      answer = { status: 200, headers: json, body: enc(JSON.stringify({ ok: true, settings: EMPTY_DOCS_SETTINGS })) };
+    } else if (verb === 'tree') {
       const entries = Object.entries(DOCS).map(([p, d]) => entry(SECTION, p, {
         committed: { kind: 'file', blob: blobOf(p), size: Buffer.byteLength(d.texts[C3] ?? '') },
         ...(opts.draft === true && p === 'doc.md' ? { draft: draftOf('modified') } : {}),
