@@ -7300,6 +7300,10 @@ export interface ProgrammesAnswer extends ProgrammesLifecycleAnswer {
   ok: true;
   programmes: ProgrammeRow[];
   closedToday: { operator: number; sweep: number; coordinator: number };
+  /** The `since` the counts were taken from, epoch ms, after the read held it to the last 48 hours and to now: set on every
+   *  answer, so a reader compares the window it asked with the one applied (Overlord W1 home B, review 3998 F6). Absent from an
+   *  older server: the window is unknown, never the asked one. */
+  appliedSince?: number;
 }
 
 /** One row of a run's trail (D-8071, spec 2026-11-04 §11.5). `by` is who caused it: a stored session id reads 'session'.
