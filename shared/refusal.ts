@@ -366,6 +366,17 @@ export type DecisionModelRefusal = keyof typeof DECISION_MODEL_REFUSALS;
 export const ARTIFACT_FENCE_REFUSALS = { misdirected: 421 } as const;
 export type ArtifactFenceRefusal = keyof typeof ARTIFACT_FENCE_REFUSALS;
 
+/** The artifact scope read's and mint's own refusals (X5 plan Task A2.3, spec section 3.2). CHOSEN, not measured, eight new words,
+ *  each declared once here: 409 for the tier not being on or the pinned version having moved (the operator can reload), 503 for
+ *  a listener that is down (a server condition), 400 for what the operator can retype (a page that is not HTML, an origin outside
+ *  the grammar), 429 for the live limit, 413 for a page or draft above its ceiling. The gate's words and `unmeasured` are already
+ *  in the table. */
+export const ARTIFACT_MINT_REFUSALS = {
+  'artifact-host-unset': 409, 'artifact-listener-down': 503, 'not-html': 400, 'too-many': 429, 'bad-origin': 400,
+  'pin-moved': 409, 'page-too-large': 413, 'draft-too-large': 413,
+} as const;
+export type ArtifactMintRefusal = keyof typeof ARTIFACT_MINT_REFUSALS;
+
 /** The approval routes' own words (plan Task 16, D-5298): typed from the start, as D-5381 set out to make them. */
 export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | CollectLaneRouteRefusal | SwapRefusal | GenericRefusal
   | ApprovalRefusal | DigestRefusal | StepUpRefusal | AccountGateRefusal | WsCreateRefusal | WsTitleRefusal | ProjectAddRefusal
@@ -426,6 +437,8 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   | DelegationBackfillRefusal
   // The console's host fence (X5 A1.3): its one word, declared once, `ARTIFACT_FENCE_REFUSALS` above.
   | ArtifactFenceRefusal
+  // The artifact scope read's and mint's words (X5 A2.3): declared once, `ARTIFACT_MINT_REFUSALS` above.
+  | ArtifactMintRefusal
   // The linking standard's words (D-8147): declared once, `linking.ts#LINKING_REFUSALS`, each with its status below.
   | LinkingRefusal
   // The plan verbs' and the hierarchy routes' words (Linear hierarchy design, D-8181): declared once, `plan.ts#PLAN_REFUSALS`.
@@ -463,6 +476,8 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   ...DELEGATION_BACKFILL_REFUSALS,
   // The console's host fence (X5 A1.3): one new word, CHOSEN, with its status in `ARTIFACT_FENCE_REFUSALS`.
   ...ARTIFACT_FENCE_REFUSALS,
+  // The artifact scope read and mint (X5 A2.3): eight new words, CHOSEN, with their statuses in `ARTIFACT_MINT_REFUSALS`.
+  ...ARTIFACT_MINT_REFUSALS,
   // The programme lifecycle's doors (W2): CHOSEN, each status declared once in `PROGRAMME_DOOR_REFUSALS`.
   ...PROGRAMME_DOOR_REFUSALS,
   // The linking standard (D-8147): CHOSEN, not measured, new words. 400 for what the operator can retype (a team key or an

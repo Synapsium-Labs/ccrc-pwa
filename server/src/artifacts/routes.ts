@@ -19,14 +19,16 @@
 // A FAILED LISTEN TURNS THE TIER OFF, NEVER THE CONSOLE: `listenArtifactServer` never throws. It writes one warning, marks the
 // listen state `down`, and the console's own listen, which follows it in `index.ts`, still runs.
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
-import { artifactMethodAllowed, clientErrorStatus, hostFence, namesArtifactHost, type ArtifactConfig } from './policy.js';
+import {
+  artifactMethodAllowed, clientErrorStatus, hostFence, namesArtifactHost, type ArtifactConfig, type ArtifactListenWord,
+} from './policy.js';
 import { refuseRoute } from '../refuse.js';
 import { ARTIFACT_FENCE_REFUSALS } from '../../../shared/refusal.js';
 
 /** The listen state of the artifact listener: `pending` until `listenArtifactServer` has run. Built once in `buildServer`'s body. */
 export interface ArtifactListenerState {
-  read(): 'pending' | 'listening' | 'down';
-  mark(s: 'listening' | 'down'): void;
+  read(): ArtifactListenWord;
+  mark(s: Exclude<ArtifactListenWord, 'pending'>): void;
 }
 
 declare module 'fastify' {
@@ -138,7 +140,7 @@ export function buildArtifactServer(deps: ArtifactRouteDeps): FastifyInstance {
 
 /** A fresh listen state, `pending`. */
 export function createArtifactListenerState(): ArtifactListenerState {
-  let state: 'pending' | 'listening' | 'down' = 'pending';
+  let state: ArtifactListenWord = 'pending';
   return { read: () => state, mark: (s) => { state = s; } };
 }
 

@@ -85,8 +85,8 @@ import { createQuestions, type OperatorDoorDeps, type Questions } from './coord/
 import { heldFor } from './coord/heldFor.js';
 import { registerUpdateRoutes } from './update/routes.js';
 import {
-  composeDocs, readTree, registerDocsFolderReadRoutes, registerDocsFolderRegistryRoutes, registerDocsReadRoutes,
-  registerDocsRefreshRoute, registerDocsSettingsRoutes,
+  composeDocs, readTree, registerDocsArtifactRoutes, registerDocsFolderReadRoutes, registerDocsFolderRegistryRoutes,
+  registerDocsReadRoutes, registerDocsRefreshRoute, registerDocsSettingsRoutes,
 } from './docs/routes.js';
 import { registerReviewOpenRoute, registerReviewPageRoutes } from './review/routes.js';
 import { installDocsRequestPolicy, installDocsResponsePolicy } from './docs/hooks.js';
@@ -95,6 +95,8 @@ import { startReviewSweep } from './review/sweep.js';
 import { createReaderLabRuns } from './readerLab/runs.js';
 import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/routes.js';
 import { buildArtifactServer, createArtifactListenerState, installConsoleHostFence } from './artifacts/routes.js';
+import { createArtifactStore } from './artifacts/store.js';
+import { sessionLiveness } from './artifacts/liveness.js';
 import { operatorActRoute, servedFleetReads, servedFromWatcher, servedProjectReads, takenAfter } from './servedRead.js';
 import { registerTokenRoutes } from './token/routes.js';
 import { registerLaneModelsRoutes } from './laneModelsRoutes.js';
@@ -608,7 +610,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const artifactCfg = deps.cfg.artifact;
   const artifactApp = artifactCfg.state === 'on' ? buildArtifactServer({ cfg: artifactCfg }) : null;
   app.decorate('artifactServer', artifactApp);
-  app.decorate('artifactListener', artifactApp === null ? null : createArtifactListenerState());
+  const artifactListener = artifactApp === null ? null : createArtifactListenerState();
+  app.decorate('artifactListener', artifactListener);
+  // The one capability store (X5 A2.2), in memory, built beside the listener state when the tier is on and handed to the docs
+  // plugin's mint-side doors below. Its liveness port asks `authStore` with the secret measured afresh on every call: `secretNow`
+  // is declared further down this body and is only called at a request, after it exists.
+  const artifactStore = artifactApp === null ? null : createArtifactStore(Date.now, sessionLiveness(authStore, () => secretNow()));
   if (artifactApp !== null) app.addHook('onClose', async () => { await artifactApp.close(); });
   installConsoleHostFence(app, artifactCfg);
   // The reader lab's door (the reader lab design, section 4): its counter is an onRequest hook added HERE, before the
@@ -2487,6 +2494,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     registerDocsSettingsRoutes(app, {
       ...docs.settings, gate: accountGate, signIn: folderSignIn, hasSession: folderSession,
       now: () => deps.time.clock.wall(),
+      maskChanges: (answer) => !isDeepStrictEqual((deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(answer), answer),
+    });
+    // The artifact tier's five mint-side doors (X5 A2.3): the availability read, the scope read, the mint, Revoke and Revoke all.
+    // The scope read and the mint take the account gate; the mint draws its token again while the answer mask would alter it.
+    registerDocsArtifactRoutes(app, docs.readers, docs.lanes, {
+      gate: accountGate, signIn: folderSignIn, tier: artifactCfg, listener: artifactListener, store: artifactStore,
+      consoleOrigin: deps.cfg.origin,
       maskChanges: (answer) => !isDeepStrictEqual((deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(answer), answer),
     });
   });

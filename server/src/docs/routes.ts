@@ -23,7 +23,16 @@ import {
   type DocsSettings, type DocsSettingsResponse, type DocsSettingsStoreWrite, type DocsSettingsStored,
 } from '../../../shared/docsTracker.js';
 import type { AccountGate } from '../accounts/gate.js';
+import type { ArtifactTree } from '../artifacts/ports.js';
+import {
+  TREE_FAILURE_REFUSAL, artifactAvailability, artifactTreeDefect, artifactTreeRef, capabilityInput, htmlRefusal, listAnswer,
+  mintAnswer, originsRefusal, ownOrigins, parseMintBody, parseScopeQuery, revokeAnswer, scopeAnswer, scopeOfTree, tierStep,
+  type ArtifactConfig, type ArtifactListenWord, type ArtifactParseFailure, type ArtifactPinAsk, type ManifestScope,
+} from '../artifacts/policy.js';
+import type { ArtifactListenerState } from '../artifacts/routes.js';
+import { expiresAt, type ArtifactStore } from '../artifacts/store.js';
 import { DOCS_FOLDERS_CAP } from '../ccdargv.js';
+import { refuseRoute } from '../refuse.js';
 import { docsCaches, type DocsCaches } from './cache.js';
 import {
   ccdDocsFetcher, ccdDocsFolderReader, ccdDocsFolderRegistry, ccdDocsReader, type CcdDocsDeps,
@@ -34,7 +43,7 @@ import {
   type DocsLaneRun, type DocsReadLane,
 } from './lane.js';
 import {
-  DOCS_PRIMARY_NODE, DOCS_REFRESH_SKIPPED, HISTORY_JOB, LISTING_JOB, docsAnswerShape, docsCacheFill, docsCacheHitAnswer,
+  DOCS_PRIMARY_NODE, DOCS_REFRESH_SKIPPED, HISTORY_JOB, LISTING_JOB, docsAnswerShape, docsBusyBody, docsCacheFill, docsCacheHitAnswer,
   docsCacheVerdict, docsFileReply, docsFolderFailureBody, docsFolderFileReply, docsFolderKey, docsFolderLabelRows,
   docsFolderListFlightKey, docsFolderPathRows, docsFolderRangeFlightKey, docsFolderRangePlan, docsFolderShowFlightKey, docsFolderTreeBody,
   docsFolderTreeFlightKey, docsIndexCacheable,
@@ -831,5 +840,141 @@ export function registerDocsSettingsRoutes(app: FastifyInstance, deps: DocsSetti
       return sendDocsFailure(reply, docsSettingsUnreadableBody());
     }
     return reply.send(sent);
+  });
+}
+
+// ===== X5 A2.3: the artifact tier's console doors (spec 2026-11-19 sections 3.2 and 3.3) =====
+
+/** What the artifact doors need of the composition root: the account gate, the sign-in state (read per request), the tier's
+ *  config and listener state (the listener's is `null` when the tier is off), the capability store (`null` when it is off), the
+ *  console's origin (an origin a page may confirm shares no host with it) and whether the egress mask would alter an answer. */
+export interface DocsArtifactDeps {
+  gate: AccountGate;
+  signIn: () => DocsSignIn;
+  tier: ArtifactConfig;
+  listener: ArtifactListenerState | null;
+  store: ArtifactStore | null;
+  consoleOrigin: string;
+  /** The clock the capability store was built over, so a mint's provisional expiry is the one the store will give. Absent means
+   *  `Date.now`, the clock the composition root builds its store over; a root that builds the store over another passes it. */
+  clock?: () => number;
+  maskChanges: (answer: unknown) => boolean;
+}
+
+/** The mint's tree port over the console's own tree read (`readTree`), so a mint shares the console's read lane, flight and
+ *  cache. The ref is L1's (`artifactTreeRef`). It never throws: a lane that is busy or closed, a client that left, a failed
+ *  read and a thrown one each answer `{ok: false}` with a docs failure body. */
+function artifactTree(reader: DocsReader, at: DocsNodeLanes, node: string): ArtifactTree {
+  return {
+    read: async (project, pin, signal) => {
+      const ref = artifactTreeRef(pin);
+      if (!ref.ok) return { ok: false, detail: ref };
+      try {
+        const run = await readTree(reader, at, { node, project }, ref.ref, signal);
+        if (run.kind === 'busy') return { ok: false, detail: run.body };
+        if (run.kind === 'abandoned') return { ok: false, detail: docsBusyBody('read') };
+        return run.value.ok ? { ok: true, tree: run.value.answer } : { ok: false, detail: run.value };
+      } catch {
+        return { ok: false, detail: artifactTreeDefect() };
+      }
+    },
+  };
+}
+
+/** A parse failure as the doors send it: this tier's own refusal through `refuseRoute`, the docs parser's body as it came. */
+function sendParseFailure(reply: FastifyReply, failure: ArtifactParseFailure): FastifyReply {
+  return 'error' in failure ? refuseRoute(reply, failure.error) : sendDocsFailure(reply, failure);
+}
+
+/**
+ * The five artifact doors (X5 A2.3), on the docs plugin's own instance, so the docs marker check and the response policy apply
+ * (and the root gate's origin check for a write). Like every docs handler this one decides nothing: the tier step, the parse,
+ * the class, the origins, the pin check, the manifest and every answer are L1's (`artifacts/policy.ts`); this file acts on
+ * them. The scope read and the mint share one order, each step's refusal sent as it came:
+ * 1. the account gate (`cap: null`, no step-up), which answers `auth-off`, `insecure-origin` and `unauthenticated` itself;
+ * 2. the tier: off is `artifact-host-unset`, a listener not listening is `artifact-listener-down`;
+ * 3. the parse, before any tree read: `project`, then the pin through the file read's own parser, and for the mint the body;
+ * 4. the page's class (`not-html`), and for the mint the origins (`bad-origin`);
+ * 5. one tree read through `ArtifactTree`, a failure being `unmeasured`; then L1's `scopeOfTree` over it.
+ * The list read is not account-gated and answers `available` with the reason it is not. Revoke and Revoke all are not
+ * account-gated either, so they answer while sign-in is dark (a narrowing, as the folder Remove is); with sign-in armed the
+ * root gate holds them to a session. A mint's answer is the one place its token is written out: the store keeps a hash, a list
+ * row has no URL, and the store draws again while the mask would alter the answer.
+ */
+export function registerDocsArtifactRoutes(app: FastifyInstance, readers: DocsNodes<DocsReader>, lanes: DocsNodes<DocsNodeLanes>,
+  deps: DocsArtifactDeps): void {
+  const node = readers.primary;
+  const tree = artifactTree(forNode(readers, node, 'reader'), forNode(lanes, node, 'lanes'), node);
+  const listenerState = (): ArtifactListenWord | null => deps.listener?.read() ?? null;
+
+  /** Steps 1 and 2: `null` means the refusal is already sent. */
+  const admitted = (req: FastifyRequest, reply: FastifyReply) => {
+    const gated = deps.gate(req, reply, { cap: null });
+    if (!gated.pass) return null;
+    const tier = tierStep(deps.tier, listenerState(), deps.store);
+    if (!tier.ok) {
+      void refuseRoute(reply, tier.error);
+      return null;
+    }
+    return { sessionIdHash: gated.sessionIdHash, cfg: tier.cfg, store: tier.store };
+  };
+
+  /** Step 5: the tree read and L1's verdict over it. `ok: false` carries the reply that already answered. */
+  const scoped = async (reply: FastifyReply, ask: ArtifactPinAsk):
+    Promise<{ ok: true; tree: DocsTreeOk; scope: ManifestScope } | { ok: false; reply: FastifyReply }> => {
+    const signal = clientGone(reply);
+    const read = await tree.read(ask.project, ask.pin, signal);
+    if (!read.ok) return { ok: false, reply: signal.aborted ? abandon(reply) : refuseRoute(reply, TREE_FAILURE_REFUSAL) };
+    const verdict = scopeOfTree(ask.pin, read.tree);
+    if (!verdict.ok) return { ok: false, reply: refuseRoute(reply, verdict.error) };
+    return { ok: true, tree: read.tree, scope: verdict.scope };
+  };
+
+  app.get('/api/docs/artifacts', { exposeHeadRoute: false }, async (_req, reply) => {
+    const verdict = artifactAvailability(deps.signIn(), deps.tier, listenerState(), deps.store !== null);
+    return reply.send(listAnswer(verdict, deps.store?.list() ?? null));
+  });
+
+  app.get('/api/docs/artifacts/scope', { exposeHeadRoute: false }, async (req, reply) => {
+    if (admitted(req, reply) === null) return reply;
+    const ask = parseScopeQuery(req.query as DocsQuery);
+    if (!ask.ok) return sendParseFailure(reply, ask);
+    const notHtml = htmlRefusal(ask.pin);
+    if (notHtml !== null) return refuseRoute(reply, notHtml);
+    const got = await scoped(reply, ask);
+    if (!got.ok) return got.reply;
+    return reply.send(scopeAnswer(got.scope));
+  });
+
+  app.post('/api/docs/artifacts', async (req, reply) => {
+    const here = admitted(req, reply);
+    if (here === null) return reply;
+    const ask = parseMintBody(req.body);
+    if (!ask.ok) return sendParseFailure(reply, ask);
+    const notHtml = htmlRefusal(ask.pin);
+    if (notHtml !== null) return refuseRoute(reply, notHtml);
+    const badOrigin = originsRefusal(ask.origins, ownOrigins(deps.consoleOrigin, here.cfg));
+    if (badOrigin !== null) return refuseRoute(reply, badOrigin);
+    const got = await scoped(reply, ask);
+    if (!got.ok) return got.reply;
+    const input = capabilityInput(here.sessionIdHash, ask, got.tree, got.scope, ask.origins, ask.windows);
+    // The store draws again while `accept` refuses: the answer the operator receives is never one the mask would alter. The
+    // check runs over the answer exactly as it will be sent: the expiry is the store's own `expiresAt` over the record it is
+    // about to make (minted and last used now, by the store's own clock, with the manifest's uncommitted count as its drafts).
+    const now = (deps.clock ?? Date.now)();
+    const expires = expiresAt({ mintedAt: now, lastAt: now, drafts: got.scope.uncommitted });
+    const minted = here.store.mint(input, (token, id) =>
+      !deps.maskChanges(mintAnswer(here.cfg.artifactOrigin, token, id, expires, got.scope)));
+    if (!minted.ok) return refuseRoute(reply, minted.error);
+    return reply.send(mintAnswer(here.cfg.artifactOrigin, minted.token, minted.id, minted.expiresAt, got.scope));
+  });
+
+  app.post('/api/docs/artifacts/:id/revoke', async (req, reply) => {
+    const id = (req.params as { id: string }).id;
+    return reply.send(revokeAnswer(deps.store?.revoke(id) ?? null));
+  });
+
+  app.post('/api/docs/artifacts/revoke-all', async (_req, reply) => {
+    return reply.send(revokeAnswer(deps.store?.revokeAll() ?? null));
   });
 }
