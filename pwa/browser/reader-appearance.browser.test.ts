@@ -42,6 +42,21 @@ beforeAll(async () => {
 }, 180_000);
 afterAll(async () => { await browser?.close(); await server?.close(); });
 
+type FirstReadyTrace = {
+  mountedAt?: number;
+  admittedAt?: number;
+  fallbackAt?: number;
+  hookAt?: number;
+  sent?: { at: number; rootPresent: boolean; seedAppearance: boolean | null; messageAppearance: boolean };
+};
+
+async function firstReadyHostTrace(page: Page) {
+  return page.evaluate(() => {
+    const trace = (window as Window & { __firstReadyTrace?: FirstReadyTrace }).__firstReadyTrace;
+    return { ...trace, fellBack: document.querySelector('.doc-plain-note') !== null || trace?.fallbackAt !== undefined };
+  });
+}
+
 async function open(skin: string, theme: string, device: 'light' | 'dark', stale?: string,
   prepare?: (app: OpenedApp) => Promise<() => Promise<void>>, text = DOC): Promise<OpenedApp> {
   const size = Buffer.byteLength(text);
@@ -54,7 +69,21 @@ async function open(skin: string, theme: string, device: 'light' | 'dark', stale
     const w = window as unknown as {
       __appearanceOps: { at: number }[];
       __appearanceAtReady?: { scheme: string; colour: Record<string, string> };
+      __firstReadyTrace?: FirstReadyTrace;
     };
+    const now = () => performance.timeOrigin + performance.now();
+    const trace: FirstReadyTrace | undefined = firstReady ? { hookAt: now() } : undefined;
+    if (trace) w.__firstReadyTrace = trace;
+    if (isHost && trace) {
+      // Observe the host's own ready/fallback projection independently of the frame-side send probe.
+      new MutationObserver(() => {
+        if (document.querySelector('.docs-reader iframe')) {
+          trace.mountedAt ??= now();
+          if (!document.querySelector('.doc-formatting')) trace.admittedAt ??= now();
+        }
+        if (document.querySelector('.doc-plain-note')) trace.fallbackAt ??= now();
+      }).observe(document, { childList: true, subtree: true });
+    }
     w.__appearanceOps = [];
     const original = MessagePort.prototype.postMessage;
     MessagePort.prototype.postMessage = function (message: unknown, transfer?: Transferable[] | StructuredSerializeOptions): void {
@@ -63,10 +92,19 @@ async function open(skin: string, theme: string, device: 'light' | 'dark', stale
       if (!isHost && kind === 'ready' && w.__appearanceAtReady === undefined) {
         // Sample within the frame at its first send, before the host can respond. No new listener or port.
         const root = document.querySelector('[data-docreader-root]');
+        const at = now();
         if (root) {
           const cs = getComputedStyle(root);
           w.__appearanceAtReady = { scheme: cs.colorScheme,
             colour: Object.fromEntries(colours.map((slot) => [slot, cs.getPropertyValue(`--${slot}`).trim()])) };
+        }
+        if (trace && !trace.sent) {
+          let seedAppearance: boolean | null = null;
+          try {
+            const seed = JSON.parse(document.querySelector('head script[type="application/json"]')?.textContent ?? 'null');
+            if (seed && typeof seed === 'object') seedAppearance = Object.hasOwn(seed, 'appearance');
+          } catch { /* An unreadable seed is reported as unknown, not as an absent field. */ }
+          trace.sent = { at, rootPresent: root !== null, seedAppearance, messageAppearance: Object.hasOwn(message as object, 'appearance') };
         }
       }
       Reflect.apply(original, this, transfer === undefined ? [message] : [message, transfer]);
@@ -89,8 +127,14 @@ async function open(skin: string, theme: string, device: 'light' | 'dark', stale
   const during = await prepare?.(app);
   await app.page.goto(`${server.origin}/docs/demo/${SECTION}/${NAME}`, { waitUntil: 'domcontentloaded' });
   await during?.();
-  await app.page.waitForFunction(() => document.querySelector('.docs-reader iframe') !== null && document.querySelector('.doc-formatting') === null,
-    undefined, { timeout: 90_000 });
+  try {
+    await app.page.waitForFunction(() => document.querySelector('.docs-reader iframe') !== null && document.querySelector('.doc-formatting') === null,
+      undefined, { timeout: 90_000 });
+  } catch (error) {
+    if (stale === undefined) throw error;
+    const trace = await firstReadyHostTrace(app.page).catch(() => null);
+    throw new Error(`AP-3 host ready wait failed; first-ready trace: ${JSON.stringify(trace)}`, { cause: error });
+  }
   return app;
 }
 
@@ -521,9 +565,17 @@ describe('Docs hosted appearance', () => {
     const app = await open(SKINS[0]!.id, theme, 'light', stale);
     try {
       const { scheme, colour } = await hostAppearanceValues(app.page);
-      const atReady = await (await frameOf(app.page)).evaluate(() =>
-        (window as unknown as { __appearanceAtReady?: unknown }).__appearanceAtReady);
-      expect(atReady, 'the frame sent ready with the console appearance already applied').toEqual({ scheme, colour });
+      const { atReady, frameTrace } = await (await frameOf(app.page)).evaluate(() => {
+        const w = window as Window & { __appearanceAtReady?: unknown; __firstReadyTrace?: FirstReadyTrace };
+        return { atReady: w.__appearanceAtReady, frameTrace: w.__firstReadyTrace };
+      });
+      const hostTrace = await firstReadyHostTrace(app.page);
+      const { mountedAt } = hostTrace;
+      const fromMount = (at: number | undefined) => at === undefined || mountedAt === undefined ? null : at - mountedAt;
+      const trace = { hostTrace, frameTrace: frameTrace ?? null, sentAfterMountMs: fromMount(frameTrace?.sent?.at),
+        admittedAfterMountMs: fromMount(hostTrace.admittedAt), fallbackAfterMountMs: fromMount(hostTrace.fallbackAt) };
+      expect(atReady, `the frame sent ready with the console appearance already applied; first-ready trace: ${JSON.stringify(trace)}`)
+        .toEqual({ scheme, colour });
       await assertAppearance(app.page);
       expect(app.errors).toEqual([]);
     } finally { await app.ctx.close(); }
