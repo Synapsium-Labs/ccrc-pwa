@@ -17,7 +17,9 @@ const SNIPPET = /^\s*_tba_cx_out sh -c '(umask 077; p=\$1; d=\$\(dirname "\$p"\)
 
 // The token step's two programs, in their own file since testbox-admin-hardening (written as the service user, through the drop).
 const USER_WRITE = path.join(REPO, 'ccd', 'testbox-user-write');
-const helperText = (name: string): string => spawnSync('bash', ['-c', `. "$1"; printf %s "\${!2}"`, '_', USER_WRITE, name], { encoding: 'utf8' }).stdout;
+// The command text is constant: the file and the string's name ride the environment.
+const helperText = (name: string): string =>
+  spawnSync('bash', ['-c', '. "$TB_FILE"; printf %s "${!TB_NAME}"'], { encoding: 'utf8', env: { ...process.env, TB_FILE: USER_WRITE, TB_NAME: name } }).stdout;
 // The installer and its steps (deploy/testbox/box-steps since D-8903, which the box updater calls too).
 const INSTALLER = ['install.sh', 'box-steps'].map((f) => readFileSync(path.join(REPO, 'deploy', 'testbox', f), 'utf8')).join('\n');
 
@@ -101,8 +103,11 @@ describe('connect: try again against the real installer (D-8166, TC7)', () => {
     mkdirSync(path.join(homes, 'svc-user'));
     const file = path.join(homes, 'svc-user', '.ccrc', 'testbox-service.token');
     const put = helperText('TBA_TOKEN_PUT_SH');
+    // The program runs from a script file (only its `$0` differs from `sh -c`, and it never reads `$0`).
+    const putScript = path.join(shim, 'token-put.sh');
+    writeFileSync(putScript, `${put}\n`);
     const write = (tok: string): number =>
-      spawnSync('sh', ['-c', put, 'sh', '~/.ccrc/testbox-service.token', 'svc-user', helperText('TBA_TOKEN_WRITE_SH'), homes],
+      spawnSync('sh', [putScript, '~/.ccrc/testbox-service.token', 'svc-user', helperText('TBA_TOKEN_WRITE_SH'), homes],
         { input: tok, encoding: 'utf8', env: { ...process.env, PATH: `${shim}:${process.env.PATH ?? ''}` } }).status ?? -1;
     expect(write('a'.repeat(64))).toBe(0);
     expect(readFileSync(file, 'utf8')).toBe('a'.repeat(64));
