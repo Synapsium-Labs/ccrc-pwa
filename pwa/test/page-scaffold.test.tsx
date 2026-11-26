@@ -172,6 +172,13 @@ describe('PageScaffold (D-5102)', () => {
     }
     // The column caps are skin tokens too.
     expect(allTokens.has('--page-max')).toBe(true);
+    // Whether the column centres in a wider pane is the skin's (desktop polish wave 182): the row, the body and the nav's
+    // grid read `--page-margin-inline` and none of them hard-codes `mx-auto`.
+    expect(allTokens.has('--page-margin-inline')).toBe(true);
+    for (const el of [row, body]) {
+      expect(el.className.split(/\s+/), 'the column margin is the skin role').toContain('mx-(--page-margin-inline)');
+      expect(el.className.split(/\s+/), 'never a fixed centring').not.toContain('mx-auto');
+    }
     expect(allTokens.has('--page-max-wide')).toBe(true);
   });
 
@@ -228,7 +235,7 @@ describe('PageScaffold (D-5102)', () => {
     const navColumn = screen.getByRole('navigation', { name: 'sections' }).parentElement!.className.split(/\s+/);
     expect(navColumn).toEqual(expect.arrayContaining(['hidden', `${at}block`]));
     const body = container.querySelector('[data-page-body]')!.className.split(/\s+/);
-    expect(body).toEqual(expect.arrayContaining(['mx-auto', 'px-gutter']));
+    expect(body).toEqual(expect.arrayContaining(['mx-(--page-margin-inline)', 'px-gutter']));
     expect(body.filter((c) => c === 'mx-0' || c === 'pl-0'), 'an unconditional nav-side measure').toEqual([]);
   });
 

@@ -4,6 +4,7 @@
 // `FleetFlows` mounts, and an add goes through the projects plane, which re-reads `GET /api/projects`. The success
 // toast's "Start session" opens the new-session sheet, which picks the new project once an account is chosen.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ReactNode } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ToastHost } from '@ccrc/ui';
 import type { FleetSession, UpdatesView } from '../../shared/api';
@@ -13,6 +14,8 @@ import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { FleetChromeProvider } from '../src/fleet/FleetChrome';
 import { FleetFlows } from '../src/fleet/FleetFlows';
+import { SkinSetProvider } from '../src/skins/frame';
+import { REFINED_SET } from '../src/skins/refined/parts';
 import { PROJECT_ADD_TEXT, projectAddedText } from '../src/fleet/projectAddWords';
 import { fleetSession } from './fleetFixture';
 import { TEST_ROSTER } from './rosterFixture';
@@ -66,7 +69,7 @@ describe('the Add project door', () => {
     await waitFor(() => expect(sheetOpen()).toBe(true));
   });
 
-  it('where no runs line is drawn (Instrument\'s desk column), heads the list in a row of its own', async () => {
+  it('where no runs line is drawn and no skin list heads itself (a bare screen), heads the list in a row of its own', async () => {
     vi.spyOn(api, 'projects').mockResolvedValue({ roots: [], projects: [] });
     const store = makeStore();
     render(
@@ -78,6 +81,42 @@ describe('the Add project door', () => {
     act(() => { store.setState({ conn: 'open', sessions: [session()], roster: TEST_ROSTER }); });
     expect(door().closest('.fleet-projects-head')).not.toBeNull();
     expect(document.querySelector('.fleet-runs-line')).toBeNull();
+  });
+
+  // Desktop polish wave 182: a skin's list placed where no runs line is drawn (Instrument's desk column) heads itself, with
+  // the door on its first row and the pool-lag line under it (FleetTable; the browser leg's console-spacing file measures
+  // that row). The screen then draws neither: one door, one lag line. A part fact, never a skin name: this stub is a set.
+  it("where a skin's list heads itself, the screen draws no door row and no lag line of its own", async () => {
+    vi.spyOn(api, 'projects').mockResolvedValue({ roots: [], projects: [] });
+    const StubList = (): ReactNode => <div data-testid="stub-list" />;
+    const store = makeStore();
+    render(
+      <SkinSetProvider set={{ ...REFINED_SET, FleetList: StubList }}>
+        <FleetChromeProvider store={store}>
+          <FleetScreen store={store} runsLine={false} headChrome={false} epoch={1} observedEpoch={null} />
+          <FleetFlows />
+        </FleetChromeProvider>
+      </SkinSetProvider>,
+    );
+    act(() => { store.setState({ conn: 'open', sessions: [session()], roster: TEST_ROSTER }); });
+    expect(screen.getByTestId('stub-list')).toBeInTheDocument();
+    expect(document.querySelector('.fleet-projects-head')).toBeNull();
+    expect(screen.queryByRole('button', { name: PROJECT_ADD_TEXT.open })).toBeNull();
+    expect(screen.queryByTestId('pool-epoch-lag')).toBeNull();
+  });
+
+  it('with no list drawn yet (the first-run panel), the head keeps the lag line where a skin list would head itself', () => {
+    const StubList = (): ReactNode => <div data-testid="stub-list" />;
+    const store = makeStore();
+    render(
+      <SkinSetProvider set={{ ...REFINED_SET, FleetList: StubList }}>
+        <FleetChromeProvider store={store}>
+          <FleetScreen store={store} runsLine={false} headChrome={false} epoch={1} observedEpoch={null} />
+        </FleetChromeProvider>
+      </SkinSetProvider>,
+    );
+    act(() => { store.setState({ conn: 'open', sessions: [], roster: TEST_ROSTER }); });
+    expect(screen.getByTestId('pool-epoch-lag')).toHaveTextContent('epoch 1 / observed never synced');
   });
 
   it('is in the first-run panel too, beside Start a session, and only there', async () => {

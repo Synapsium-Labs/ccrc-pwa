@@ -1,6 +1,8 @@
 // The page scaffold (D-5102): the header and column every secondary screen
 // stands on. Switch the toolbar's skin to see Instrument's dense header (40px
-// under a mouse, 44 on touch — D-5667), its 14px title and its 960 column.
+// under a mouse, 44 on touch — D-5667), its 14px title and its 960 column,
+// which at a desk starts at the gutter where Refined's centres (the skin's
+// `--page-margin-inline`, wave 182: view it wider than 1100 to see both).
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { Button } from './button';
 import { EmptyState } from './empty-state';
@@ -16,8 +18,9 @@ const meta = {
       description: {
         component:
           'A sticky header — Back, the `❯` caret in the accent (identity core, both skins), the title '
-          + 'at `--fs-page`, the actions — over a body centred at `--page-max` (or `--page-max-wide` '
-          + 'with `wide`) at `--gutter`. Every measure is a skin token; nothing here is a literal.',
+          + 'at `--fs-page`, the actions — over a body capped at `--page-max` (or `--page-max-wide` '
+          + 'with `wide`) at `--gutter`, centred in a wider pane or kept at the gutter as the skin\'s '
+          + '`--page-margin-inline` says. Every measure is a skin token; nothing here is a literal.',
       },
     },
   },

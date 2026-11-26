@@ -228,6 +228,11 @@ export function FleetScreen({
   // the server's own watcher tick, so an equal pair here is a genuinely
   // current fact, not a stale first impression.
   const poolLag = poolLagText(epoch, observedEpoch);
+  // A skin's list placed where no runs line is drawn (Instrument's desk column) heads itself (desktop polish wave 182): its
+  // first row carries the New project door and the pool-lag line sits under that row (`FleetTable`), so this screen draws
+  // neither while that list is drawn. A part fact, never a skin name. With no list drawn yet (loading, or the first-run
+  // panel) the head keeps the readout.
+  const listHead = FleetList !== null && !runsLine && sessions.length > 0;
 
   // Task 4: which card each run belongs on — the card its WORKER renders on —
   // is decided with every row's card by `fleetTree` (D-5527), from the whole
@@ -239,7 +244,7 @@ export function FleetScreen({
       {Head !== null ? <Head /> : (
         <FleetHead
           countLine={headCount && sessions.length > 0 ? countLine : null}
-          poolLag={poolLag}
+          poolLag={listHead ? null : poolLag}
           chrome={headChrome}
         />
       )}
@@ -345,8 +350,9 @@ export function FleetScreen({
               counts itself (Instrument's status heads, and its own bar in project mode), so a second set of chips
               above it would count every bucket twice. A part fact, never a skin name; the shared cards (Refined, or
               no frame) have no counts of their own, so they keep this bar. */}
-          {/* Where no runs line carries the New project door (Instrument's desk column), a row of its own heads the list. */}
-          {!runsLine && <NewProjectDoor inline={false} onNewProject={flows.openAddProject} />}
+          {/* Where no runs line carries the New project door and no skin list heads itself (a bare screen), a row of its own
+              heads the list; a skin's list carries it on its own first row (`listHead`, wave 182). */}
+          {!runsLine && !listHead && <NewProjectDoor inline={false} onNewProject={flows.openAddProject} />}
           {FleetList === null && <BucketBar sessions={sessions} acks={acks} ackAll={ackAll} />}
 
           {/* The list itself: the skin's own (Instrument's status-grouped table, W2 Task S10, D-5473), or the shared

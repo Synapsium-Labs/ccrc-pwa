@@ -12,8 +12,10 @@
 //   - Back, then `❯` in the accent, then the title at `--fs-page`, then the
 //     actions. The caret is identity core (spec §3.1, §12 O3), drawn in both
 //     skins, and aria-hidden: the heading's name is the title alone;
-//   - a body centred at `--page-max`, or `--page-max-wide` with `wide`, at
-//     `--gutter`. Never a literal: pwa/test/page-scaffold.test.tsx reds one.
+//   - a body capped at `--page-max`, or `--page-max-wide` with `wide`, at
+//     `--gutter`, centred in a wider pane or kept at the gutter as the skin's
+//     `--page-margin-inline` says (Refined `auto`, Instrument at a desk `0`;
+//     wave 182). Never a literal: pwa/test/page-scaffold.test.tsx reds one.
 //
 // THE NAV SLOT (D-5666, the Settings spec's §15.3 C3; its geometry D-5668). A
 // screen with its own section nav (Settings) hands it to `nav`. From a pane of
@@ -36,14 +38,20 @@ import { BackButton } from './back-button';
 /** The header: sticky over the body, painted with the page's ground so a row
  *  scrolling under it never shows through. */
 export const PAGE_HEAD = 'sticky top-0 z-10 bg-page';
+/** Under a mouse, every control in the header's row (Back and the actions) is `min(--row-h, --tap-min)` tall, centred in
+ *  the row: Instrument's 32 in its 40 row, where at the tap floor it was 44 and stretched the row past `--head-h`;
+ *  Refined's stays 44 (its row is 52). `pointer-fine:` is `@media (pointer: fine)`, the one condition Instrument's dense
+ *  rows and toggle already read, so a touch screen keeps 44 everywhere. Nothing outside the row changes (desktop polish
+ *  wave 182, the coordinator's word for this one rule). */
+export const PAGE_HEAD_CONTROLS = 'pointer-fine:[&_:is(button,select)]:min-h-[min(var(--row-h),var(--tap-min))]';
 /** The header's row: as wide as the body's column, at the header's height. */
-export const PAGE_HEAD_ROW = 'mx-auto flex w-full min-h-head items-center gap-2 px-gutter';
+export const PAGE_HEAD_ROW = `mx-(--page-margin-inline) flex w-full min-h-head items-center gap-2 px-gutter ${PAGE_HEAD_CONTROLS}`;
 /** The caret shares the title's size and line, in the accent. */
 export const PAGE_CARET = 'flex-none font-mono text-title font-medium leading-tight text-phosphor';
 /** The title wraps rather than clipping: a long one takes a second line. */
 export const PAGE_TITLE = 'm-0 min-w-0 flex-1 font-mono text-title font-medium leading-tight text-ink-primary wrap-break-word';
 export const PAGE_ACTIONS = 'flex flex-none items-center gap-2';
-export const PAGE_BODY = 'mx-auto grid w-full content-start gap-3 px-gutter pt-2 pb-section';
+export const PAGE_BODY = 'mx-(--page-margin-inline) grid w-full content-start gap-3 px-gutter pt-2 pb-section';
 /** Focus never lands under the sticky header (WCAG 2.2 SC 2.4.11). When Tab or
  *  Shift+Tab scrolls a row into view, the browser stops at the row's scroll
  *  margin, so every element in the body and the nav keeps the header's height
@@ -104,7 +112,7 @@ export function PageScaffold({
       {nav === undefined ? body : (
         <div
           className={cn(
-            'mx-auto grid w-full max-w-(--page-max-wide)',
+            'mx-(--page-margin-inline) grid w-full max-w-(--page-max-wide)',
             '@min-[760px]:grid-cols-[200px_minmax(0,1fr)] min-[1600px]:@min-[760px]:grid-cols-[220px_minmax(0,1fr)]',
             '@min-[760px]:gap-6 @min-[760px]:pl-gutter',
           )}

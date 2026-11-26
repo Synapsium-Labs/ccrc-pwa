@@ -78,7 +78,10 @@
   :root[data-skin='instrument'] {
     --fs-ui:     var(--fs-sm);       /* 13 */
     --fs-prose:  var(--fs-md);       /* 14 */
-    --gutter:    14px;
+    /* One inset for both panes at a desk (wave 182): the list column's and the top bar's 16, never a literal. */
+    --gutter:    var(--sp-4);        /* 16 */
+    /* A page column starts at the gutter and its measure caps only its right side, as Waiting on you's does. */
+    --page-margin-inline: 0;
   }
 }
 

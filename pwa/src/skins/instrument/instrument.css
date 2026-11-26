@@ -35,6 +35,15 @@
     grid-column: 2;
     grid-row: 2;
   }
+  /* ONE INSET AND ONE HEAD LINE (desktop polish wave 182). The list column's sides are the skin's `--gutter`, the inset
+     every detail screen reads, and its first row (the toggle with New project, FleetTable's `.ins-head-row`, `--row-h`
+     tall) is centred in a `--head-h` band from the pane's top, as a page's title is in its head row: the toggle, the door
+     and every detail title share one line across the desk. Tokens only, so a touch screen at a desk (44 and 44) starts
+     the row at the pane's top, as its title row does. */
+  .ins-frame .shell-nav .fleet {
+    padding-top: calc((var(--head-h) - var(--row-h)) / 2);
+    padding-inline: var(--gutter);
+  }
   .ins-frame .shell-status {
     grid-column: 1 / -1;
     grid-row: 3;
@@ -257,6 +266,13 @@
   gap: var(--sp-1);
   min-width: 0;
 }
+/* The pool-lag readout under the head row at a desk (wave 182): a quiet line of its own, `--sp-3` from the row above and
+   the first group below (the table's `--sp-1` gap plus this pad), the head block's group gap. */
+.ins-lag {
+  display: flex;
+  padding-block: calc(var(--sp-3) - var(--sp-1));
+  min-width: 0;
+}
 .ins-toggle,
 .ins-tabs {
   display: flex;
@@ -416,7 +432,8 @@
   }
   .ins-group-seen,
   .ins-group-head,
-  .ins-toggle-option {
+  .ins-toggle-option,
+  .ins-head-row .fleet-new-project {
     min-height: var(--row-h);
   }
 }

@@ -425,6 +425,7 @@
   --gap-section: var(--sp-8);     /* between a page's sections */
   --page-max:      760px;         /* a secondary screen's column */
   --page-max-wide: 1120px;        /* a wide screen's column (Runs) */
+  --page-margin-inline: auto;     /* a page column's inline margin: auto centres it in a wider pane, 0 keeps it at the gutter (wave 182) */
   --head-h:       56px;          /* a page's sticky header (PageScaffold, D-5102). Tap-bearing (D-5667) */
   --section-flow:  column-reverse; /* a Section head's flex-direction: the scope ABOVE the title (D-5666) */
   --measure-chat:  1200px;        /* the transcript's column at a desk (spec 2026-11-06 R2) */

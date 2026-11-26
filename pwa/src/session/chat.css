@@ -28,6 +28,11 @@
   border-bottom: 1px solid var(--edge-subtle);
   background: var(--bg-surface);
 }
+/* At a desk the header's sides are the skin's `--gutter`, the inset every detail screen and the list column share (desktop
+   polish wave 182): its title starts where a page's title does, not 8 px from the divider. The phone keeps its pads. */
+@media (min-width: 900px) {
+  .chat-head { padding-inline: var(--gutter); }
+}
 .chat-title-wrap {
   flex: 1;
   min-width: 0;

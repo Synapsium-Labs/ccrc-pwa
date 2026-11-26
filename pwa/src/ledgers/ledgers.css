@@ -22,6 +22,19 @@
 }
 .wl-route { display: grid; gap: var(--sp-1); min-width: 0; background: var(--bg-page); color: var(--ink-primary); }
 .wl-head { display: flex; align-items: center; gap: var(--sp-2); }
+/* ONE INSET (desktop polish wave 182, the operator's ruling 6): the list's side pad is the skin's `--gutter`, the one every
+   page scaffold reads, at every width, so Waiting on you starts where Accounts, Settings and Mail do, on a phone too. */
+.wl { padding-inline: var(--gutter); }
+/* At a desk the list and the item take the page column's rules too (wave 182): the head is a `--head-h` row with the title
+   centred in it, as the scaffold's is, so every detail screen's title sits on one line; the column starts at the gutter or
+   centres as the skin's `--page-margin-inline` says; the title is `--sp-2` above the first line and the groups are `--sp-3`
+   apart, the scaffold's head-to-body and body gaps. The item view and its strip take the inset and the column rule. */
+@media (min-width: 900px) {
+  .wl { padding-block-start: 0; row-gap: var(--sp-3); margin-inline: var(--page-margin-inline); }
+  .wl > .wl-head { min-height: var(--head-h); margin-block-end: calc(var(--sp-2) - var(--sp-3)); }
+  .wi { padding-inline: var(--gutter); margin-inline: var(--page-margin-inline); }
+  .wi-nav { padding-inline: var(--gutter); margin-inline: var(--page-margin-inline); }
+}
 .wl .wl-title { font: var(--weight-medium) var(--fs-base) / var(--lh-tight) var(--family-mono); color: var(--ink-primary); }
 .wl .wl-note { font-size: var(--fs-meta); color: var(--ink-secondary); overflow-wrap: anywhere; }
 

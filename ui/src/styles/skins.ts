@@ -135,6 +135,9 @@ export const SKIN_TOKENS: { readonly [C in SkinTokenClass]: readonly SkinToken[]
     { name: '--gap-section' },
     { name: '--page-max' },
     { name: '--page-max-wide' },
+    // Whether a page column centres in a wider pane (`auto`) or starts at the gutter (`0`): a keyword or a length, read
+    // by PageScaffold's three column margins (desktop polish wave 182). Refined centres; Instrument at a desk does not.
+    { name: '--page-margin-inline' },
     { name: '--measure-chat' },
     // The chat's prose measure inside that column (D-8059): a length, read by chat.css from 900 up.
     { name: '--measure-chat-prose' },
