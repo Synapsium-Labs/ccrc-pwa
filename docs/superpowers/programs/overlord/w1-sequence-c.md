@@ -160,7 +160,13 @@ routes.
 ## Stage 1 state
 
 - Commits on `ws/overlord-w1-sequence-c`, nothing pushed.
-- Packets sent, each file untouched here until its holder answers: `server/src/index.ts` (two lines) and the two mutation
-  floor files, to the readiness worker; the kebab census arm in `server/test/mail-routes.test.ts`, to the landing worker.
-  Until they land, the server's type check names `index.ts` (the dropped argument) and the store-port census reads that
-  error, and the kebab census names `no-pass-yet`.
+- Packets, each sent before any edit of a file another worker holds: `server/src/index.ts` (two lines) and the kebab census arm
+  in `server/test/mail-routes.test.ts` were answered yes and applied as sent; the two mutation floor files wait on their
+  holder's answer, untouched here.
+- Runs, each through the fleet test wrapper, at most two workers: the Task 0 and Task 7 suites; the rings and single-definition
+  suites; the client, door process, containment, skill, census and growth suites that read the changed files; the doc suites
+  for this note; the server's source type check. The tests' type check over the whole test tree was killed by the test
+  slice's memory cap, so it ran narrowed over the changed test files and what they import: its one error is the route suite's
+  missing stage-2 module, by design.
+- One red that `main` shows too, on the same box, run alone: the containment suite's loopback `curl` case
+  (`--url=` exits 7 where the case expects 2), with the box's curl 8.18.0. Not this branch's; left alone.
