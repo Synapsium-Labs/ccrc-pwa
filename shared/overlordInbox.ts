@@ -83,9 +83,12 @@ export const READ_SERVED_OUTCOME = 'rows';
 /** The outcome of the line a ceiling refusal writes (one for each door and window), which the counter reads the newest of. */
 export const READ_CEILING_OUTCOME = 'read-ceiling';
 export const READ_CEILING_WINDOW_MS = 3_600_000;
-/** Every read door's ceiling over a rolling hour (question 1), total over the ledger's doors. */
+/** Every read door's ceiling over a rolling hour (question 1), total over the ledger's doors. The chat's two doors are the
+ *  operator's console's own (the chat plan, question 9): their counter counts the operator's lines alone, so the console and the
+ *  Overlord never spend each other's ceilings. */
 export const READ_CEILINGS: Readonly<Record<ReadDoor, { readonly perHour: number }>> = {
   inbox: { perHour: 240 }, messages: { perHour: 120 }, board: { perHour: 120 }, history: { perHour: 60 }, sequence: { perHour: 120 },
+  chat: { perHour: 720 }, 'chat-history': { perHour: 240 },
 };
 
 /** A path id: a positive safe integer, no sign, no leading zero. A refusal's detail never echoes the input. */

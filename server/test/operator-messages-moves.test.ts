@@ -25,7 +25,7 @@ describe('the vocabulary', () => {
     expect(MESSAGE_EVENTS).toEqual(['queue', 'deliver', 'pick-up', 'settle', 'spend', 'unsettle']);
     expect(MESSAGE_ACTORS).toEqual(['route', 'mail-lane', 'hook', 'acknowledge', 'citing-door', 'boot-pass']);
     expect(SETTLED_BY).toEqual(['cite', 'acknowledge', 'mark']);
-    expect(READ_DOORS).toEqual(['board', 'messages', 'inbox', 'history', 'sequence']);
+    expect(READ_DOORS).toEqual(['board', 'messages', 'inbox', 'history', 'sequence', 'chat', 'chat-history']);
     expect(READ_CALLERS).toEqual(['overlord', 'reader', 'operator']);
   });
 

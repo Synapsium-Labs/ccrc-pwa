@@ -1,7 +1,7 @@
 import { MAIL_ENVELOPE_FENCE, type MailKind } from '../../../shared/api.js';
 import { INJECTED_PROMPTS } from '../../../shared/injected-prompts.mjs';
 import { MAIL_INBOX_FENCE_INFO, parseMailEnvelope } from '../../../shared/api.js';
-import { OPERATOR_MESSAGE_SENDER, isOperatorMessageMail, operatorMessageIdOf, operatorMessageNudgeBody } from '../../../shared/operatorMessages.js';
+import { OPERATOR_MESSAGE_SENDER, isOperatorMessageMail, operatorMessageIdOf, operatorMessageNudgeLine } from '../../../shared/operatorMessages.js';
 import { squash } from '../../../shared/whitespace.js';
 import { SPOT_PROBE_SUBJECT } from '../continuity/renewalFeed.js';
 import { isProviderRetryMail, renderProviderRetryLine } from '../../../shared/provider-retry.js';
@@ -238,7 +238,8 @@ export function renderMailNudge(toId: string): string {
  *  One line, no `ccrc-api` and no mail-client words: the Overlord reads the message through its `messages` door, and the words
  *  themselves are never typed. */
 export function renderOperatorMessageNudge(id: number): string {
-  return `${INJECTED_PROMPTS['mail-nudge'].text} ${operatorMessageNudgeBody(id)}`;
+  // The line's grammar is L0's (`operatorMessageNudgeLine`), so the chat's recogniser reads back exactly what is typed.
+  return operatorMessageNudgeLine(id);
 }
 
 /** One kind of mail the lane types a fixed line for (Overlord W1, inbox piece, question 8): the ONE table the mail lane reads, so

@@ -2,6 +2,9 @@
 // PWA bundles `shared/*.ts`. The operator's messages to the designated session: their states, the events that move them,
 // the actor allowed each event, the message moves table, the settlement kinds, the read ledger's words, the text bound,
 // the nudge's subject helpers and the wire row. Each runtime list is derived from its map, so a word is spelled once.
+// Its one import is the injected-prompt list, for the nudge line's head (the chat's recogniser reads the line the mail lane
+// types, so the line has one grammar, here).
+import { INJECTED_PROMPTS } from './injected-prompts.mjs';
 
 const MESSAGE_STATE_MAP = {
   recorded: 'the row committed; no nudge is queued yet',
@@ -111,6 +114,25 @@ const NUDGE_MARKER = new RegExp(`${NUDGE_MARKER_HEAD.trim().replace(' ', '\\s+')
 /** The nudge mail's body: the id and the `messages` door, never the text (the private store plan, Task 6; the route's
  *  nudge and the boot pass's re-nudge say the same words). */
 export const operatorMessageNudgeBody = (id: number): string => `${NUDGE_MARKER_HEAD}${id}: read it with your messages door.`;
+/** The whole line the mail lane types for an operator message: the mail nudge's generic head, so `sendPrompt`'s 24-character
+ *  echo needle and the injected-prompt census are unchanged, then the body above. `envelope.ts#renderOperatorMessageNudge`
+ *  types exactly this, and `operatorMessageNudgeIdOf` reads it back (the Overlord W1 chat plan, question 6). */
+export const operatorMessageNudgeLine = (id: number): string => `${INJECTED_PROMPTS['mail-nudge'].text} ${operatorMessageNudgeBody(id)}`;
+const escapeRe = (t: string): string => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const NUDGE_LINE = new RegExp(
+  `^${escapeRe(`${INJECTED_PROMPTS['mail-nudge'].text} ${NUDGE_MARKER_HEAD}`)}([1-9][0-9]*)${escapeRe(': read it with your messages door.')}$`,
+);
+/** The id a transcript user turn names when it is exactly an operator message's nudge line, or null. One trailing newline is
+ *  trimmed and nothing else (the injected-prompt reader's rule); a leading space, a trailing word, a zero, a sign, a decimal or
+ *  an id past the largest safe integer is no nudge. */
+export function operatorMessageNudgeIdOf(line: string): number | null {
+  if (typeof line !== 'string') return null;
+  const whole = line.endsWith('\n') ? line.slice(0, -1) : line;
+  const m = NUDGE_LINE.exec(whole);
+  if (m === null) return null;
+  const n = Number(m[1]);
+  return Number.isSafeInteger(n) ? n : null;
+}
 /** Whether a box's text carries an operator message's nudge marker (`Operator message <id>:`), wherever a narrow pane wrapped it. The
  *  generic mail nudge's resume asks it so it never presses Enter on that line: the line names one message, and the generic head it
  *  opens with is shared (review 2550 F2). */
@@ -131,6 +153,8 @@ const READ_DOOR_MAP = {
   inbox: "the Overlord's inbox read",
   history: "the Overlord's history read",
   sequence: "the sequence cursor's read",
+  chat: "the operator's read of the Overlord's chat thread",
+  'chat-history': "the operator's read of one page of an earlier generation",
 } as const;   // W4 adds model, feed
 export type ReadDoor = keyof typeof READ_DOOR_MAP;
 export const READ_DOORS = Object.keys(READ_DOOR_MAP) as ReadDoor[];
@@ -197,4 +221,7 @@ export interface OperatorMessageRow {
   readonly settledAt: number | null;
   readonly settledBy: SettledBy | 'unknown' | null;
   readonly spentAt: number | null;
+  /** Sent under the chat's off-the-record toggle (§9.4 rule 9): still recorded and answered, but no feed learns from it. A row
+   *  written before the column reads false. */
+  readonly offRecord: boolean;
 }
