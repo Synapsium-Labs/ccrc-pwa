@@ -205,16 +205,17 @@ const FRAME_KEYS = ['outcome', 'refusal', 'rows', 'width', 'bytes', 'cursor', 'r
 /** One frame, for `pane`: its outcome and refusal agreeing, its sizes counts, its cursor inside the pane, its text present
  *  exactly with `drawn` or `unsettled` and then fitting the shape rule, and `over-cap` exactly when the measured sizes pass
  *  the cap. */
-export function readFramesFrame(v: unknown, pane: FramesPane): FramesFrame | null {
+export function readFramesFrame(v: unknown, pane: FramesPane, aside = false): FramesFrame | null {
   if (!isObj(v) || !keysAre(v, FRAME_KEYS)) return null;
   const { outcome, refusal, rows, width, bytes, cursor, replaced, text } = v;
   if (!has(FRAMES_OUTCOME_MAP, outcome) || !isCount(rows) || !isCount(width) || !isCount(bytes)) return null;
   if ((outcome === 'refused') !== (refusal !== null) || (refusal !== null && !isFramesRefusal(refusal))) return null;
   if ((outcome === 'over-cap') !== frameOverCap({ rows, width, bytes }, pane)) return null;
   const carried = outcome === 'drawn' || outcome === 'unsettled';
-  if (carried !== (text !== null)) return null;
+  // `aside`: a stored record whose text is kept apart (`claudeBuildFramesStore.ts`), so its text is null whatever its outcome.
+  if (aside ? text !== null : carried !== (text !== null)) return null;
   if (text !== null && (typeof text !== 'string' || !frameTextFits(text, pane))) return null;
-  if ((text !== null) !== (replaced !== null)) return null;
+  if (carried !== (replaced !== null)) return null;
   let rep: FramesReplaced | null = null;
   if (replaced !== null) {
     if (!isObj(replaced) || !keysAre(replaced, REPLACED_KEYS) || !REPLACED_KEYS.every((k) => isCount(replaced[k]))) return null;
@@ -235,8 +236,9 @@ const RESULT_KEYS = ['recipe', 'version', 'build', 'part', 'case', 'pane', 'rele
 /** THE ONE READER of a frames capture's result, for `build` and the `part` asked: the recipe echoed, a version of its shape,
  *  the build and part echoed, the part's own case and pane, the box's release (a tag or null), the unmeasured list, the sends,
  *  the counts, the frame (`readFramesFrame`), and the word its outcome gives. `null`: not a frames result for this build and
- *  part. Which version is THIS side's is the lane's currency question, never a malformed answer. */
-export function readFramesCaptureResult(v: unknown, build: string, part: number): FramesCaptureResult | null {
+ *  part. Which version is THIS side's is the lane's currency question, never a malformed answer. `aside`: the stored record
+ *  of a result whose frame text the store keeps apart, read the same way save that its text is null. */
+export function readFramesCaptureResult(v: unknown, build: string, part: number, aside = false): FramesCaptureResult | null {
   if (!isObj(v) || !keysAre(v, RESULT_KEYS) || v['recipe'] !== 'frames') return null;
   const want = FRAMES_PARTS[part];
   if (want === undefined || v['part'] !== part || v['build'] !== build || !isClaudeVersion(build)) return null;
@@ -249,7 +251,7 @@ export function readFramesCaptureResult(v: unknown, build: string, part: number)
   const unmeasured = readUnmeasured(v['unmeasured']);
   const sends = readSends(v['sends']);
   if (unmeasured === null || sends === null || !isCount(v['turns']) || !isCount(v['sideRequests'])) return null;
-  const frame = readFramesFrame(v['frame'], want.pane);
+  const frame = readFramesFrame(v['frame'], want.pane, aside);
   if (frame === null || v['word'] !== framesWord(frame.outcome)) return null;
   return {
     recipe: 'frames', version: v['version'], build, part, case: want.case, pane: want.pane, release: release as string | null, unmeasured,

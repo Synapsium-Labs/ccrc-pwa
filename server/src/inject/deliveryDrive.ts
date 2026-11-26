@@ -250,7 +250,7 @@ export async function driveFramesStep(input: FramesDriveInput, runner: Runner, s
     const cur = prev === null ? null : await halt.run('tmux', ['display-message', '-p', '-t', tmuxTarget(S), '#{cursor_x} #{cursor_y}']);
     const m = cur !== null && cur.ran && cur.code === 0 ? /^(\d+) (\d+)\s*$/.exec(cur.stdout) : null;
     out = { kind: 'frame', frame: prev, cursor: m === null ? null : [Number(m[1]), Number(m[2])], settled };
-  } else {
+  } else if ('part' in step) {
     const p = FRAMES_PARTS[step.part]!;
     const lines = framesDraftLines(p.case, p.pane);
     if (step.kind === 'send' || step.kind === 'queued') out = { kind: 'sent', send: await send(lines.join('\n')) };
@@ -272,6 +272,8 @@ export async function driveFramesStep(input: FramesDriveInput, runner: Runner, s
       }
       out = { kind: 'typed', typed: ok };
     }
+  } else {
+    out = { kind: 'fault', reason: 'step', detail: 'not a frames step' };
   }
   const fault = halt.fault();
   return fault === null ? out : { kind: 'fault', reason: fault.reason, detail: fault.detail };
