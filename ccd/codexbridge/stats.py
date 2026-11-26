@@ -117,7 +117,9 @@ A flush is tmp (`<path>.tmp`, one name, so a killed writer's leftover is overwri
 fsync + rename, at most every FLUSH_S unless forced; a failed one is counted in memory (`stats:flush-failed`) and
 retried at the next flush call, whatever FLUSH_S says, so nothing is lost. A flush serialises the document under the
 lock and writes it outside it, under a second lock, so a slow fsync never stalls a counter: an unforced flush while
-another write is in flight writes nothing (its changes stay dirty for the next one), a forced one waits for it. No
+another write is in flight writes nothing (its changes stay dirty for the next one), a forced one waits for it, and so
+does a waiting one (`wait`: the server's idle flush, the last word on an idle lane), which then keeps the unforced
+rules and writes what is dirty when its turn comes (#3462). No
 method raises into a request: a malformed argument is ignored (a headers argument that is not a mapping of headers,
 or a header item that is not a (name, value) pair, counts nothing; a byte count that is not an int moves no ratio), and
 a `now` that is not a finite number in range reads as the wall clock. A store event makes the next flush call write
@@ -720,12 +722,12 @@ class Stats:
                 pass
             raise
 
-    def flush(self, *, force: bool = False) -> bool:
+    def flush(self, *, force: bool = False, wait: bool = False) -> bool:
         """Write the file when something changed, at most every FLUSH_S (a forced flush, and the first call after a
         failed one or a store event, write at once). True when it wrote; a failure is counted and kept for the next
         call, never raised. The write runs outside self._lock; an unforced flush while another write is in flight
-        returns False."""
-        if not self._write_lock.acquire(blocking=force):
+        returns False, unless `wait`: then it waits for that write, and decides after it as any unforced flush does."""
+        if not self._write_lock.acquire(blocking=force or wait):
             return False
         try:
             with self._lock:
