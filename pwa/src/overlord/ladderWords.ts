@@ -69,9 +69,10 @@ export const rungLabel = (rung: string): string => (has(RUNG_LABEL, rung) ? RUNG
 
 /** Is moving from `current` to `to` a raise? A raise goes through the step-up and a lowering does not (plan "Authority"). A rung
  *  either side of which this build does not know is a raise: the safe direction, since the step-up door asks the server's gate
- *  and a lowering sent through it still runs. The server's gate stays the authority. */
-export function rungMovesUp(current: string, to: string): boolean {
-  if (!isRung(current) || !isRung(to)) return true;
+ *  and a lowering sent through it still runs. The server's gate stays the authority. An UNREAD ladder (`current` null: no
+ *  answer yet, so no rung to compare) is a raise for the same reason (review 3998 M6, slug `rung-direction-is-l1`). */
+export function rungMovesUp(current: string | null, to: string): boolean {
+  if (current === null || !isRung(current) || !isRung(to)) return true;
   return rungRank(to) > rungRank(current);
 }
 
@@ -103,16 +104,25 @@ export function rungControlOf(
   };
 }
 
-/** The "taking effect" line (F1, F14). Null unless a narrowing door (Pause or a rung lowered) answered a `narrowing`, present
- *  and not null: keyed on that, never on `changed`. Then the ladder read's `lastChange.narrowing` rules while the read has a
- *  reading of the change: its sentence while it reads `taking-effect`, null once it reads `done`. Before the ladder has a
- *  reading of the change (the read loading or failed, or no change recorded yet), the door's own answer holds the line. */
+/** The "taking effect" line (F1, F14; review 3998 F5). Null unless a narrowing door (Pause or a rung lowered) answered a
+ *  `narrowing`, present and not null: keyed on that, never on `changed`.
+ *
+ *  THE RULE: a ladder read speaks of the door's change only if it was ANSWERED AT OR AFTER the moment the door answered
+ *  (`doorAnsweredAt`, the console's clock when the door's answer arrived; the read's own `at` is the console's clock when that
+ *  read arrived, and a stale read keeps the `at` of its last answer, so a refresh that failed leaves it old). A read that
+ *  predates the door says nothing about this change: the door's own narrowing holds the line. Once a read that postdates the
+ *  door has a last change, its `lastChange.narrowing` rules: its sentence while `taking-effect`, null once `done`, and null when
+ *  it is null (another device changed the rung after this one: this tab's old narrowing must not revive a line). A postdating
+ *  read with no last change recorded has no reading of the change, so the door's narrowing holds. A door time that is unknown
+ *  (null or missing) trusts no read. */
 export function takingEffectLine(
-  doorNarrowing: NarrowingState | null | undefined, ladder: ReadState<LadderWire>,
+  doorNarrowing: NarrowingState | null | undefined, ladder: ReadState<LadderWire>, doorAnsweredAt: number | null | undefined,
 ): string | null {
   if (doorNarrowing === null || doorNarrowing === undefined) return null;
-  const read = ladder.state === 'answered' || ladder.state === 'stale' ? ladder.value.lastChange?.narrowing ?? null : null;
-  const reading = read ?? doorNarrowing;
-  if (reading.state !== 'taking-effect') return null;
+  const postdates = (ladder.state === 'answered' || ladder.state === 'stale')
+    && typeof doorAnsweredAt === 'number' && ladder.at >= doorAnsweredAt;
+  const change = postdates ? ladder.value.lastChange : null;
+  const reading = change ? change.narrowing : doorNarrowing;
+  if (reading === null || reading.state !== 'taking-effect') return null;
   return has(takingEffectWords, reading.why) ? takingEffectWords[reading.why] : `Taking effect: ${reading.why}`;
 }

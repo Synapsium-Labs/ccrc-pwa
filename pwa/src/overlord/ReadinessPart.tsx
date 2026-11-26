@@ -27,7 +27,7 @@ export function ReadinessPart({ doors }: { readonly doors: LadderDoors }): React
   const ladder = useLadder();
   const now = useNow(NOW_TICK_MS);
   const view = readinessViewOf(read, now);
-  const line = doors.door === 'pause' ? takingEffectLine(doors.narrowing, ladder) : null;
+  const line = doors.door === 'pause' ? takingEffectLine(doors.narrowing, ladder, doors.answeredAt) : null;
   const said = doors.door === 'pause' ? doors.said : null;
   return (
     <section className="ovl-readiness" data-readiness-part aria-label="Overlord readiness">

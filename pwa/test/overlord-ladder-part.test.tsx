@@ -219,6 +219,33 @@ describe('lowering the rung', () => {
     expect(takingEffect()).toBeNull();
   });
 
+  // F5: the ladder read held when the door answers may predate the door.
+  const DONE_READ = ladder({ lastChange: { at: NOW - 60_000, actor: 'operator', narrowing: { state: 'done' } } });
+  it('F5: an older read that says done does not hide the line, even when the refresh after the door failed (stale)', async () => {
+    answered(ladder());
+    vi.spyOn(api, 'overlordRung').mockResolvedValue({ changed: true, rung: 'off', narrowing: TAKING });
+    mount();
+    // An earlier narrowing is already done on the read the console holds when the door answers.
+    act(() => useOverlordStore.setState({ ladder: { state: 'answered', value: DONE_READ, at: NOW - 30_000 } }));
+    fireEvent.click(rungButton('off'));
+    await waitFor(() => expect(takingEffect()).toBe(takingEffectWords['witness-unmeasured']));
+    // The refresh failed: the store keeps the old value as stale, at its old time.
+    act(() => useOverlordStore.setState({ ladder: { state: 'stale', value: DONE_READ, at: NOW - 30_000, error: 'timeout' } }));
+    expect(takingEffect()).toBe(takingEffectWords['witness-unmeasured']);
+  });
+  it('F5: a read newer than the door that records no narrowing (a raise from another device) leaves no line', async () => {
+    answered(ladder());
+    vi.spyOn(api, 'overlordRung').mockResolvedValue({ changed: true, rung: 'off', narrowing: TAKING });
+    mount();
+    fireEvent.click(rungButton('off'));
+    await waitFor(() => expect(takingEffect()).toBe(takingEffectWords['witness-unmeasured']));
+    act(() => useOverlordStore.setState({ ladder: {
+      state: 'answered', at: NOW + 1_000,
+      value: ladder({ operatorRung: 'chat', lastChange: { at: NOW + 900, actor: 'operator', narrowing: null } }),
+    } }));
+    expect(takingEffect()).toBeNull();
+  });
+
   it('a refusal says its sentence and refreshes the store; no line, no witness', async () => {
     answered(ladder());
     vi.spyOn(api, 'overlordRung').mockRejectedValue(new ApiError(503, { ok: false, error: 'authority-rolled-back', detail: 'witness-epoch' }));
@@ -245,6 +272,14 @@ describe('raising the rung', () => {
     expect(stepUp.runAct).toHaveBeenCalledTimes(1);
     expect(nudgeWitness).not.toHaveBeenCalled();
     expect(takingEffect()).toBeNull();
+  });
+
+  it('M6: with the ladder unread, a rung asked for is a raise: it goes through the step-up', async () => {
+    const rung = vi.spyOn(api, 'overlordRung').mockResolvedValue({ changed: true, rung: 'chat', narrowing: null });
+    const stepUp = mount();
+    await act(async () => { await doorsOut!.setRung('chat'); });
+    expect(stepUp.runAct).toHaveBeenCalledTimes(1);
+    expect(rung).toHaveBeenCalledWith('chat');
   });
 
   it('a raise is disabled while its word is missing: a tap sends nothing', () => {

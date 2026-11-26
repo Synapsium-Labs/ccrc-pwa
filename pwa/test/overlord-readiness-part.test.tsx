@@ -173,6 +173,17 @@ describe('Pause', () => {
     expect(takingEffect()).toBeNull();
   });
 
+  it('F5: an older ladder read that says done does not hide the line Pause just drew; a newer one that says done ends it', async () => {
+    answered(wire());
+    act(() => useOverlordStore.setState({ ladder: { state: 'stale', at: NOW - 30_000, error: 'timeout', value: ladderWith({ state: 'done' }) } }));
+    vi.spyOn(api, 'overlordPause').mockResolvedValue({ changed: true, rung: 'off', narrowing: TAKING });
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: /^pause/i }));
+    await waitFor(() => expect(takingEffect()).toBe(takingEffectWords['no-witness-yet']));
+    act(() => useOverlordStore.setState({ ladder: { state: 'answered', at: NOW + 1_000, value: ladderWith({ state: 'done' }) } }));
+    expect(takingEffect()).toBeNull();
+  });
+
   it('exchanges the witness once and refreshes the store after the answer', async () => {
     answered(wire());
     vi.spyOn(api, 'overlordPause').mockResolvedValue({ changed: true, rung: 'off', narrowing: TAKING });

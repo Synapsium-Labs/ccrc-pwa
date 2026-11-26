@@ -29,6 +29,9 @@ export interface LadderDoors {
   readonly said: string | null;
   /** The narrowing the last narrowing door answered, present and not null; null otherwise. */
   readonly narrowing: NarrowingState | null;
+  /** This device's clock when that narrowing's door answered, null with no narrowing: the fact `takingEffectLine` compares a
+   *  ladder read's `at` with, so a read taken before the door is never taken for the door's change. */
+  readonly answeredAt: number | null;
   /** The door `said` and `narrowing` belong to. */
   readonly door: LadderDoor | null;
   pause(): Promise<void>;
@@ -49,6 +52,7 @@ export function useLadderDoors(stepUp: StepUp): LadderDoors {
   const [busy, setBusy] = useState(false);
   const [said, setSaid] = useState<string | null>(null);
   const [narrowing, setNarrowing] = useState<NarrowingState | null>(null);
+  const [answeredAt, setAnsweredAt] = useState<number | null>(null);
   const [door, setDoor] = useState<LadderDoor | null>(null);
   const inFlight = useRef(false);
   const mounted = useRef(true);
@@ -68,10 +72,12 @@ export function useLadderDoors(stepUp: StepUp): LadderDoors {
     setBusy(true);
     setSaid(null);
     setNarrowing(null);
+    setAnsweredAt(null);
     setDoor(which);
     try {
       let answer: unknown;
-      const act = async (): Promise<void> => { answer = await call(); };
+      let answerAt = 0;
+      const act = async (): Promise<void> => { answer = await call(); answerAt = Date.now(); };
       if (opts.stepped) {
         const outcome = await stepUpRef.current.runAct(act);
         if (outcome === 'step-up') return;
@@ -80,7 +86,7 @@ export function useLadderDoors(stepUp: StepUp): LadderDoors {
       }
       const n = opts.narrows ? narrowingOf(answer) : null;
       if (n !== null) {
-        if (mounted.current) setNarrowing(n);
+        if (mounted.current) { setNarrowing(n); setAnsweredAt(answerAt); }
         nudgeWitness();
       }
     } catch (err) {
@@ -95,10 +101,10 @@ export function useLadderDoors(stepUp: StepUp): LadderDoors {
 
   const pause = useCallback(() => run('pause', () => api.overlordPause(), { stepped: false, narrows: true, act: 'pause' }), [run]);
   const setRung = useCallback((rung: Rung) => {
-    const raise = currentRung.current === null ? true : rungMovesUp(currentRung.current, rung);
+    const raise = rungMovesUp(currentRung.current, rung);
     return run('rung', () => api.overlordRung(rung), { stepped: raise, narrows: !raise, act: raise ? 'raise' : 'lower' });
   }, [run]);
   const clear = useCallback((cause: string) => run('clear', () => api.clearLatch(cause), { stepped: true, narrows: false, act: 'clear' }), [run]);
 
-  return { busy, said, narrowing, door, pause, setRung, clear };
+  return { busy, said, narrowing, answeredAt, door, pause, setRung, clear };
 }
