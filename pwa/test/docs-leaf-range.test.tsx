@@ -6,7 +6,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type React from 'react';
 import { StrictMode, type ComponentProps } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { DOCS_RANGE_FRAME_BYTES, DOCS_RANGE_MAX_BYTES, type DocListPin, type DocPin } from '../../shared/docs';
+import {
+  DOCS_CLASS_CAP, DOCS_PDF_INLINE_MAX_BYTES, DOCS_RANGE_FRAME_BYTES, DOCS_RANGE_MAX_BYTES, type DocListPin, type DocPin,
+} from '../../shared/docs';
+import { pdfOverInlineSentence } from '../src/docs/pdf/PdfLeaf';
+import { PDF_TEXT } from '../src/docs/pdf/pdfWords';
 import { DOCS_RENDER_GATE_BYTES } from '../src/lib/markdownLimits';
 import type { ReaderRenderOutcome } from '../src/lib/readerRenderJob';
 import { DocsLeaf, RangeMarkdown, openedRangePin } from '../src/docs/DocsLeaf';
@@ -25,6 +29,10 @@ import { RangeImage, RangeLeaf as RangeLeafOf, rangeReadKey } from '../src/docs/
 import type { RangeLoader, RangeTarget } from '../src/docs/range/readRange';
 
 afterEach(cleanup);
+
+// The PDF frame loads its viewer assets by a dynamic import; here it never finishes, so no case loads the real package
+// and the frame shows its loading line.
+vi.mock('../src/docs/pdf/pdfAssets', () => ({ loadPdfAssets: () => new Promise(() => undefined) }));
 
 /** `RangeLeaf` with a visit that does nothing about a stale read, unless a test gives one. */
 function RangeLeaf(p: Omit<ComponentProps<typeof RangeLeafOf>, 'visit'> & { readonly visit?: ComponentProps<typeof RangeLeafOf>['visit'] }): React.ReactNode {
@@ -770,7 +778,7 @@ describe('a save answers only its own tap (X2 P1, review F2)', () => {
     }
   });
 
-  it('a late Download answer for a page left behind is dropped: coming back saves nothing, a direct tap saves once', async () => {
+  it('a late Download answer keyed by the tap: back on the page when it lands saves nothing, a direct tap saves once', async () => {
     const VERSION = '9'.repeat(40);
     const src = new Uint8Array([1, 2, 3, 4]) as Uint8Array<ArrayBuffer>;
     const f = fakeLoaders({ tree: okTree(treeOk({ entries: [entry('specs', 'a.bin'), entry('specs', 'b.bin')] })) });
@@ -799,10 +807,10 @@ describe('a save answers only its own tap (X2 P1, review F2)', () => {
       await waitFor(() => expect(land).not.toBeNull());
       rerender(<Harness page={B} />);
       await waitFor(() => expect(screen.getByText('Download')).toBeTruthy());
-      await act(async () => { land?.(); await new Promise((r) => setTimeout(r, 20)); });
       rerender(<Harness page={A} />);
-      await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
-      expect(clicks, 'a late answer for a page left behind saves nothing').toHaveLength(0);
+      await waitFor(() => expect(screen.getByText('Download')).toBeTruthy());
+      await act(async () => { land?.(); await new Promise((r) => setTimeout(r, 50)); });
+      expect(clicks, 'a late answer for a tap made on an earlier visit saves nothing').toHaveLength(0);
       expect(screen.getByText('Download')).toBeTruthy();
       fireEvent.click(screen.getByText('Download'));
       await waitFor(() => expect(clicks).toHaveLength(1));
@@ -947,4 +955,92 @@ describe('a save answers only its own tap (X2 P1, review F2)', () => {
     expect(screen.getByText(DOCS_RANGE_TEXT.readAgain)).toBeTruthy();
     expect(screen.queryByText(DOCS_VIEW_TEXT.loading)).toBeNull();
   });
+});
+
+describe('the pdf leaf (X2 P3, spec 4.4)', () => {
+  const MIB3 = 3 * 1048576;
+  /** `size` bytes that begin as a PDF does (or, with `magic` false, that do not). */
+  const pdfBytes = (size: number, magic = true): Uint8Array<ArrayBuffer> => {
+    const b = new Uint8Array(size).fill(65);
+    if (magic) b.set(new TextEncoder().encode('%PDF-1.7\n'));
+    return b;
+  };
+  const b64Of = (b: Uint8Array): string => { let s = ''; for (const x of b) s += String.fromCharCode(x); return btoa(s); };
+  const fileOf = (b: Uint8Array): DocsFileAnswer => ({
+    s: 'ok',
+    value: {
+      ok: true, contentClass: 'pdf', from: 'ccd',
+      show: {
+        v: 1, verb: 'docs-show', ok: true, elapsedMs: 3, source: 'committed', section: 'specs', path: 'a.pdf',
+        size: b.length, sha256: 'c'.repeat(64), encoding: 'base64', b64: b64Of(b),
+      },
+    },
+  });
+  /** `a.pdf` listed at `size` bytes, opened as a committed leaf: the file route answers `file`, the range loader is `loader`. */
+  function openPdf(size: number, file: DocsFileAnswer, loader: RangeLoader) {
+    const f = fakeLoaders({
+      tree: okTree(treeOk({ entries: [entry('specs', 'a.pdf', { committed: { kind: 'file', blob: BLOB_2, size } })] })),
+      file,
+    });
+    const located = pageAt('/docs/demo/specs/a.pdf');
+    if (located.kind !== 'path') throw new Error('fixture: not a leaf');
+    const page = located;
+    const parser = async (text: string) => parseMarkdown(text, 'docs');
+    function Harness(): React.ReactNode {
+      const visit = useDocsVisit(page, f.loaders);
+      if (visit.tree?.s !== 'ok') return null;
+      return <DocsLeaf visit={visit} tree={visit.tree.answer.tree} page={page} parser={parser} rangeLoader={loader} />;
+    }
+    return { f, ...render(<Harness />) };
+  }
+  /** A range loader that counts every call it gets. */
+  function countingLoader(src: Uint8Array<ArrayBuffer>) {
+    const s = servingLoader(src);
+    const calls: string[] = [];
+    const loader: RangeLoader = {
+      prepare: (t, signal) => { calls.push('prepare'); return s.loader.prepare(t, signal); },
+      frame: (t, snapshot, offset, length, signal) => { calls.push('frame'); return s.loader.frame(t, snapshot, offset, length, signal); },
+    };
+    return { loader, calls };
+  }
+
+  it('a PDF under the class cap opens through the file route: the PDF view shows beside Download, the range loader is never called', async () => {
+    const bytes = pdfBytes(3000);
+    expect(3000).toBeLessThanOrEqual(DOCS_CLASS_CAP.pdf);
+    const { loader, calls } = countingLoader(bytes);
+    const { f } = openPdf(3000, fileOf(bytes), loader);
+    await waitFor(() => expect(screen.getByRole('status').textContent).toBe(PDF_TEXT.loading));
+    expect(screen.getByText('Download')).toBeTruthy();
+    expect(f.file).toHaveBeenCalled();
+    expect(calls).toEqual([]);
+  });
+
+  it('a committed PDF above the class cap and within the inline ceiling is read by range, then shown in the PDF view', async () => {
+    expect(MIB3).toBeGreaterThan(DOCS_CLASS_CAP.pdf);
+    expect(MIB3).toBeLessThanOrEqual(DOCS_PDF_INLINE_MAX_BYTES);
+    const { loader, calls } = countingLoader(pdfBytes(MIB3));
+    openPdf(MIB3, failedAnswer('too-large') as DocsFileAnswer, loader);
+    await waitFor(() => expect(screen.getByRole('status').textContent).toBe(PDF_TEXT.loading), { timeout: 20000 });
+    expect(calls[0]).toBe('prepare');
+    expect(calls).toContain('frame');
+    expect(screen.queryByRole('alert')).toBeNull();
+  }, 60000);
+
+  it('a committed PDF one byte above the inline ceiling is a Download with its reason: nothing is read on open, no PDF view', async () => {
+    const size = DOCS_PDF_INLINE_MAX_BYTES + 1;
+    const { loader, calls } = countingLoader(pdfBytes(16));
+    openPdf(size, failedAnswer('too-large') as DocsFileAnswer, loader);
+    await waitFor(() => expect(screen.getByText(pdfOverInlineSentence(size))).toBeTruthy());
+    expect(screen.getByText('Download')).toBeTruthy();
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    expect(calls, 'nothing is read before a tap').toEqual([]);
+    expect(screen.queryByText(PDF_TEXT.loading)).toBeNull();
+  });
+
+  it('bytes read by range that do not begin with %PDF- show the not-a-PDF sentence and no PDF view', async () => {
+    const { loader } = countingLoader(pdfBytes(MIB3, false));
+    openPdf(MIB3, failedAnswer('too-large') as DocsFileAnswer, loader);
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toBe(PDF_TEXT.notPdf), { timeout: 20000 });
+    expect(screen.queryByText(PDF_TEXT.loading)).toBeNull();
+  }, 60000);
 });

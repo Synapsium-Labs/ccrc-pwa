@@ -680,7 +680,8 @@ describe('wire estimates read server facts only (M6.4, section 6.2)', () => {
     ['dir/b.svg', 5000000, { cls: 'svg', maxBytes: 2097152, job: { raw: 2097152, wire: 2861740 } }],
     ['a.html', 0, { cls: 'html', maxBytes: 2097152, job: { raw: 0, wire: 65536 } }],
     ['a.json', 3, { cls: 'text', maxBytes: 2097152, job: { raw: 3, wire: 65540 } }],
-    ['a.pdf', undefined, { cls: 'other', maxBytes: 2097152, job: { raw: 2097152, wire: 2861740 } }],
+    ['a.pdf', undefined, { cls: 'pdf', maxBytes: 2097152, job: { raw: 2097152, wire: 2861740 } }],
+    ['a.zip', undefined, { cls: 'other', maxBytes: 2097152, job: { raw: 2097152, wire: 2861740 } }],
   ] as const)('docsShowPlan(%j, %j)', (p, size, want) => {
     expect(docsShowPlan(p, size)).toStrictEqual(want);
   });
@@ -688,7 +689,7 @@ describe('wire estimates read server facts only (M6.4, section 6.2)', () => {
   it("docsShowPlan's --max-bytes is the path's class cap, for every class", () => {
     const byClass: readonly (readonly [string, DocContentClass])[] = [
       ['a.md', 'markdown'], ['a.png', 'raster'], ['a.svg', 'svg'], ['a.html', 'html'], ['a.txt', 'text'],
-      ['a.pdf', 'other'],
+      ['a.pdf', 'pdf'], ['a.zip', 'other'],
     ];
     for (const [p, cls] of byClass) expect(docsShowPlan(p, undefined).maxBytes, p).toBe(DOCS_CLASS_CAP[cls]);
   });
@@ -1554,7 +1555,7 @@ describe('W3 T2: docsFileReply, the representation by contentClass(path) alone (
 
   it.each([
     ['a.md', 'markdown'], ['a.svg', 'svg'], ['a.html', 'html'], ['a.json', 'text'], ['a.woff2', 'other'],
-    ['a.pdf', 'other'], ['a', 'other'], ['a.png.html', 'html'],
+    ['a.pdf', 'pdf'], ['a', 'other'], ['a.png.html', 'html'],
   ] as const)('%s is DocsFileResponse JSON of class %s, from carried', (p, cls) => {
     const bytes = t2Magic('png');
     for (const from of ['ccd', 'cache'] as const) {

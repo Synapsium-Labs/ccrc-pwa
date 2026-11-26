@@ -35,6 +35,7 @@ export const CLASS_GLYPH: Readonly<Record<DocContentClass, string>> = {
   raster: '▣',
   svg: '◇',
   html: '⧉',
+  pdf: '▤',
   text: '≡',
   other: '·',
 };

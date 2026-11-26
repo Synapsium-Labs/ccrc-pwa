@@ -890,20 +890,22 @@ export type DocsCcdFailure = {
 // the PWA picks its renderer and its "too large" sentence from the same ones.
 // ---------------------------------------------------------------------------
 
-export type DocContentClass = 'markdown' | 'raster' | 'svg' | 'html' | 'text' | 'other';
+export type DocContentClass = 'markdown' | 'raster' | 'svg' | 'html' | 'pdf' | 'text' | 'other';
 
 /** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
 const DOC_CONTENT_CLASS_MAP: Record<DocContentClass, true> = {
-  markdown: true, raster: true, svg: true, html: true, text: true, other: true,
+  markdown: true, raster: true, svg: true, html: true, pdf: true, text: true, other: true,
 };
 export const DOC_CONTENT_CLASSES: readonly DocContentClass[] = Object.keys(DOC_CONTENT_CLASS_MAP) as DocContentClass[];
 
-/** The extension table, spec 5.1 verbatim. `xml`, `xsl` and `xhtml` are TEXT: shown as source, never as a
- *  document. Anything unlisted (`pdf`, `mht`, `svgz`, fonts) is `other`, download only. */
+/** The extension table, spec 5.1 verbatim, plus `pdf` (X2 spec 4.4, wave P3: drawn in the PDF frame). `xml`, `xsl` and
+ *  `xhtml` are TEXT: shown as source, never as a document. Anything unlisted (`mht`, `svgz`, fonts) is `other`, download
+ *  only. */
 export const DOC_CONTENT_CLASS_BY_EXT = {
   md: 'markdown', markdown: 'markdown',
-  png: 'raster', jpg: 'raster', jpeg: 'raster', gif: 'raster', webp: 'raster', ico: 'raster',
-  svg: 'svg', html: 'html', htm: 'html',
+  png: 'raster', jpg: 'raster', jpeg: 'raster', gif: 'raster', webp: 'raster',
+  svg: 'svg', html: 'html', htm: 'html', pdf: 'pdf',
+  ico: 'raster',
   txt: 'text', json: 'text', yaml: 'text', yml: 'text', toml: 'text', csv: 'text', tsv: 'text', log: 'text',
   ts: 'text', tsx: 'text', js: 'text', mjs: 'text', cjs: 'text', css: 'text', py: 'text', sh: 'text',
   sql: 'text', diff: 'text', patch: 'text', xml: 'text', xsl: 'text', xhtml: 'text',
@@ -952,9 +954,25 @@ export const DOCS_CLASS_CAP: Record<DocContentClass, number> = {
   raster: DOCS_MAX_IMAGE_BYTES,
   svg: DOCS_MAX_IMAGE_BYTES,
   html: DOCS_MAX_DOC_BYTES,
+  pdf: DOCS_MAX_DOC_BYTES,
   text: DOCS_MAX_DOC_BYTES,
   other: DOCS_MAX_DOC_BYTES,
 };
+
+/** A PDF's magic (X2 spec 4.4): `%PDF-` at offset 0, checked before the bytes reach the PDF frame, as a raster's are
+ *  before they are drawn. */
+export const DOCS_PDF_MAGIC: readonly number[] = [0x25, 0x50, 0x44, 0x46, 0x2d];
+
+/** Whether `bytes` begin with `%PDF-` at offset 0. Input too short to hold it is a `mismatch`. */
+export function sniffPdf(bytes: Uint8Array): 'match' | 'mismatch' {
+  return DOCS_PDF_MAGIC.every((b, i) => bytes[i] === b) ? 'match' : 'mismatch';
+}
+
+/** Whether a PDF of `size` bytes opens inline in the PDF frame or is offered as a Download only (X2 spec 4.4, C4): at
+ *  most `DOCS_PDF_INLINE_MAX_BYTES` opens inline. A size that is not a whole byte count opens nothing. */
+export function pdfVerdict(size: number): 'inline' | 'download' {
+  return Number.isSafeInteger(size) && size >= 0 && size <= DOCS_PDF_INLINE_MAX_BYTES ? 'inline' : 'download';
+}
 
 /** The raster types the file route answers as bytes, each with its MIME type and its magic: a type matches when
  *  EVERY run of ANY ONE of its alternatives is present at its offset (spec 5.1). */

@@ -177,7 +177,9 @@ describe("clause 1: no Docs file reads a draft's state (M4.T7, base form)", () =
 //   and `srcDoc` forms in `docs/export/buildExport.tsx`, and `default-src 'none'` in `docs/export/policy.ts`, the mockup
 //   frame's `iframe` and `srcDoc` forms in `docs/MockupFrame.tsx` (C2 Task 8, M5.13), by exact path too, and the
 //   mockup viewer's one (M5.16's last bullet): `default-src 'none'` in `docs/mockup/policy.ts` (`MOCKUP_CSP`), by exact
-//   path, never the directory. The allowance holds whether or not those files exist yet. One more, for the mockup
+//   path, never the directory; and the PDF frame's two (X2 P3, spec 2026-11-18 4.4): the `iframe` and `srcDoc` forms in
+//   `docs/pdf/PdfFrame.tsx` and `default-src 'none'` in `docs/pdf/pdfPolicy.ts`, by exact path too. The allowance holds
+//   whether or not those files exist yet. One more, for the mockup
 //   export's snapshot (C2 Task 9, spec 5.6.9 step 3): the STRING `srcdoc` (its strip list names the attribute it drops)
 //   in `docs/mockup/exportMockup.ts`, by exact path; an identifier, property name, JSX attribute or `<iframe` string
 //   there stays red, and the same string in any other file, `docs/mockup/load.ts` and a sibling `exportMockup2.ts`
@@ -240,14 +242,23 @@ const renderJobValueHome = (file: string): boolean => file === 'src/lib/markdown
  *  or name `srcdoc`, by exact path, never the directory or a prefix (`MockupFrame2.tsx` and `MockupView.tsx` are not it). */
 const MOCKUP_FRAME_HOME = 'src/docs/MockupFrame.tsx';
 
+/** The PDF frame's one frame file (X2 P3, spec 2026-11-18 4.4): like the mockup's, the only file of its viewer that may draw the
+ *  JSX `iframe` or name `srcdoc`, by exact path, never the directory or a prefix. */
+const PDF_FRAME_HOME = 'src/docs/pdf/PdfFrame.tsx';
+
+/** The PDF frame's one policy file (X2 P3): the only file of its viewer that may spell `default-src 'none'`, by exact path. */
+const PDF_POLICY_HOME = 'src/docs/pdf/pdfPolicy.ts';
+
 /** The one file that may spell the string `srcdoc` without drawing a frame: the mockup export's snapshot, whose strip list
  *  names the attribute it removes (C2 Task 9). By exact path, and for the string form only. */
 const SRCDOC_STRING_HOME = 'src/docs/mockup/exportMockup.ts';
 
 /** Export's two allowances, by exact path (A2b, M8.10): the `iframe` element and `srcDoc`, and the `default-src 'none'` string;
- *  and the mockup frame's `iframe` and `srcDoc` (`MOCKUP_FRAME_HOME`). */
+ *  the mockup frame's `iframe` and `srcDoc` (`MOCKUP_FRAME_HOME`); and the PDF frame's two (`PDF_FRAME_HOME`, `PDF_POLICY_HOME`). */
 function exportAllows(kind: 'iframe' | 'policy', file: string): boolean {
-  return kind === 'iframe' ? file === 'src/docs/export/buildExport.tsx' || file === MOCKUP_FRAME_HOME : file === 'src/docs/export/policy.ts';
+  return kind === 'iframe'
+    ? file === 'src/docs/export/buildExport.tsx' || file === MOCKUP_FRAME_HOME || file === PDF_FRAME_HOME
+    : file === 'src/docs/export/policy.ts' || file === PDF_POLICY_HOME;
 }
 
 /** A module specifier an import, export or `import()` names; `value` is false for the type-only forms. */
@@ -485,6 +496,19 @@ describe('clause W8a: the reader library has its homes (M8.10 amended, M8.21)', 
     const sibling = treeCopy();
     plant(sibling, 'src/docs/MockupFrame2.tsx', "export const PlantedSibling = () => <iframe srcDoc=\"x\" />;\n");
     expect(names(readerScan(sibling).hits, 'docs:')).toEqual(['src/docs/MockupFrame2.tsx docs:iframe', 'src/docs/MockupFrame2.tsx docs:srcDoc']);
+  });
+
+  it("X2 P3: the PDF frame's iframe and srcDoc are allowed at src/docs/pdf/PdfFrame.tsx only, its policy string at pdfPolicy.ts only; the same in a sibling is red", () => {
+    const dir = treeCopy();
+    plant(dir, PDF_FRAME_HOME, "\nexport const PlantedPdfFrame = () => <iframe srcDoc=\"x\" />;\n");
+    plant(dir, PDF_POLICY_HOME, "\nexport const PLANTED_PDF_POLICY = \"default-src 'none'\";\n");
+    expect(readerScan(dir).hits).toEqual([]);
+    const sibling = treeCopy();
+    plant(sibling, 'src/docs/pdf/PdfLeaf.tsx', "\nexport const PlantedLeaf = () => <iframe srcDoc=\"x\" />;\n");
+    plant(sibling, 'src/docs/pdf/pdfSrcdoc.ts', "\nexport const PLANTED_PDF_POLICY = \"default-src 'none'\";\n");
+    expect(names(readerScan(sibling).hits, 'docs:')).toEqual([
+      'src/docs/pdf/PdfLeaf.tsx docs:iframe', 'src/docs/pdf/PdfLeaf.tsx docs:srcDoc', 'src/docs/pdf/pdfSrcdoc.ts docs:default-src-none',
+    ]);
   });
 
   it("Task 9: the snapshot's srcdoc STRING is allowed at src/docs/mockup/exportMockup.ts only; every other form there, and the string in load.ts or a sibling, is red", () => {
@@ -1106,6 +1130,51 @@ describe('clause W5 Share: one share door, and one clipboard writer under pwa/sr
 const parse = (source: string, file: string): ts.SourceFile =>
   ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
 
+const PDF_ASSETS_HOME = 'src/docs/pdf/pdfAssets.ts';
+
+/** The installed PDF library is data only. Detect literal dependencies across the app, not only PDF's siblings. */
+function pdfDependencyHits(source: string, file: string): string[] {
+  if (!source.includes('pdfjs-dist')) return [];
+  const sf = parse(source, file);
+  const approved = new Set<ts.Node>();
+  if (file === PDF_ASSETS_HOME) {
+    for (const use of moduleUses(sf)) {
+      if (ts.isImportDeclaration(use.node) && /^pdfjs-dist\/build\/pdf(?:\.worker)?\.min\.mjs\?raw$/.test(use.specifier)) {
+        approved.add(use.node.moduleSpecifier);
+      }
+    }
+    const globs = (n: ts.Node): void => {
+      if (ts.isCallExpression(n) && n.expression.getText(sf) === 'import.meta.glob') {
+        const p = n.arguments[0];
+        if (p !== undefined && isPlainString(p) && (p.text === '/node_modules/pdfjs-dist/standard_fonts/*.{pfb,ttf}'
+          || p.text === '/node_modules/pdfjs-dist/cmaps/*.bcmap')) approved.add(p);
+      }
+      ts.forEachChild(n, globs);
+    };
+    globs(sf);
+  }
+  const hits: string[] = [];
+  const visit = (n: ts.Node): void => {
+    const text = stringText(n);
+    if (text !== undefined && /(?:^|\/)pdfjs-dist(?:$|\/)/.test(text) && !approved.has(n)) hits.push(`${file} ${text}`);
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return hits;
+}
+
+describe('pdf dependency: no app runtime import of pdfjs-dist', () => {
+  it('only the adapter takes raw viewer and parser text, fonts and CMaps', () => {
+    expect(sourceFiles(SRC_DIR).flatMap((f) => pdfDependencyHits(readFileSync(f, 'utf8'), path.relative(PWA, f).split(path.sep).join('/'))))
+      .toEqual([]);
+  });
+
+  it('detects a raw sibling import and a runtime import even in the allowed adapter', () => {
+    expect(pdfDependencyHits("import src from 'pdfjs-dist/build/pdf.min.mjs?raw';", 'src/screens/Example.tsx')).toHaveLength(1);
+    expect(pdfDependencyHits("const m = import('pdfjs-dist');", PDF_ASSETS_HOME)).toHaveLength(1);
+  });
+});
+
 /** The files M4.EX2's token rule reads. */
 const exportInertScope = (file: string): boolean => file.startsWith('src/docs/export/')
   || ['src/docs/ExportSheet.tsx', 'src/docs/share.ts', 'src/docs/ShareSheet.tsx', 'src/docs/mockup/exportMockup.ts'].includes(file);
@@ -1321,6 +1390,9 @@ describe('clause W5 Export: inert by construction, confined, one pin rule, no hi
       'src/docs/mockup/plan.ts imagePinFor',
       'src/docs/objectUrls.ts createObjectURL',
       'src/docs/objectUrls.ts new Blob',
+      // The PDF frame (X2 P3, spec 2026-11-18 4.4): its one frame file, as the mockup's.
+      'src/docs/pdf/PdfFrame.tsx iframe',
+      'src/docs/pdf/PdfFrame.tsx srcDoc',
     ]);
   });
 

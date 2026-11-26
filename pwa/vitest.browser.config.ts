@@ -9,8 +9,12 @@
 import { defineConfig } from 'vitest/config';
 import { SlowFirstSequencer } from './browser/slowFirst.js';
 import { REACT_SINGLETON } from './vite.react-singleton.js';
+import { PDF_ASSETS_INCLUDE } from './vite.pdf-assets.js';
 
 export default defineConfig({
+  // The PDF frame's rows build its page from `src/docs/pdf/pdfAssets.ts`, whose CMaps and standard fonts are inline
+  // assets: the same one list vite.config.ts reads (vite.pdf-assets.ts).
+  assetsInclude: [...PDF_ASSETS_INCLUDE],
   // This config is a standalone defineConfig: it does not inherit vite.config.ts, so the allow list is stated again here.
   // pwa has no workspace root above it, so the dev server and vitest would allow pwa/ alone, and @ccrc/ui resolves
   // through its symlink to ../ui: a `?raw` read of its stylesheets (docs/export/stylesheet.ts) is refused outside

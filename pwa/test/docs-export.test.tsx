@@ -1319,9 +1319,20 @@ describe('exportStateFor for a mockup, class html (spec 4.17 "When it is offered
     expect(state(mockup, version)).toMatchObject({ s: 'updating' });
   });
 
+  it.each(['loading', 'settled'] as const)('a PDF leaf has no Export (%s)', (phase) => {
+    const pdfTree = treeOk({ entries: [entry('specs', 'x.pdf')] });
+    const pdfPage = leafAt('/docs/demo/specs/x.pdf');
+    const pdfPin = pinFor(pdfTree, pdfPage);
+    if (pdfPin === null || (pdfPin.kind === 'draft' && pdfPin.fp === null)) throw new Error('fixture');
+    const shown = fileResponse('%PDF-1.7\n');
+    const answer = { ...shown, contentClass: 'pdf' as const, show: { ...shown.show, path: 'x.pdf' } };
+    const slot: FileSlot = phase === 'loading' ? { s: 'loading', pin: pdfPin } : { s: 'ok', pin: pdfPin, answer, receivedAt: 0 };
+    expect(state(null, pdfPage, pdfTree, slot)).toEqual({ s: 'absent' });
+  });
+
   it('a class other leaf still offers no Export', () => {
-    const other = treeOk({ entries: [entry('specs', 'o.pdf')] });
-    const p = pageAt('/docs/demo/specs/o.pdf');
+    const other = treeOk({ entries: [entry('specs', 'o.zip')] });
+    const p = pageAt('/docs/demo/specs/o.zip');
     expect(exportStateFor(p, other, { s: 'none' }, { body: null, store: null, settled: true, assets: null })).toEqual({ s: 'absent' });
   });
 });

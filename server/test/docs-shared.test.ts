@@ -597,7 +597,9 @@ describe('(F) contentClass (spec 5.1; M5.3, L0 cases)', () => {
     ['a/b.c/README', 'other'],
     ['a.md/README', 'other'],
     ['x.abcdefghijk', 'other'],
-    ['x.pdf', 'other'],
+    ['x.pdf', 'pdf'],
+    ['dir/Report.PDF', 'pdf'],
+    ['x.pdf.txt', 'text'],
     ['x.woff2', 'other'],
     ['x.tar.gz', 'other'],
     ['dir/Notes.MarkDown', 'markdown'],
@@ -610,11 +612,12 @@ describe('(F) contentClass (spec 5.1; M5.3, L0 cases)', () => {
     expect('x.mar\u212Adown'.toLowerCase()).toBe('x.markdown');
   });
 
-  it('the table is spec 5.1 verbatim', () => {
+  it('the table is spec 5.1 verbatim, plus pdf (X2 spec 4.4)', () => {
     expect(DocsFG.DOC_CONTENT_CLASS_BY_EXT).toEqual({
       md: 'markdown', markdown: 'markdown',
-      png: 'raster', jpg: 'raster', jpeg: 'raster', gif: 'raster', webp: 'raster', ico: 'raster',
-      svg: 'svg', html: 'html', htm: 'html',
+      png: 'raster', jpg: 'raster', jpeg: 'raster', gif: 'raster', webp: 'raster',
+      svg: 'svg', html: 'html', htm: 'html', pdf: 'pdf',
+      ico: 'raster',
       txt: 'text', json: 'text', yaml: 'text', yml: 'text', toml: 'text', csv: 'text', tsv: 'text', log: 'text',
       ts: 'text', tsx: 'text', js: 'text', mjs: 'text', cjs: 'text', css: 'text', py: 'text', sh: 'text',
       sql: 'text', diff: 'text', patch: 'text', xml: 'text', xsl: 'text', xhtml: 'text',
@@ -632,7 +635,7 @@ describe('(F) contentClass (spec 5.1; M5.3, L0 cases)', () => {
 describe('(F) DOCS_CLASS_CAP (spec 6.1)', () => {
   it('holds each class to its cap', () => {
     expect(DocsFG.DOCS_CLASS_CAP).toEqual({
-      markdown: 2097152, raster: 2097152, svg: 2097152, html: 2097152, text: 2097152, other: 2097152,
+      markdown: 2097152, raster: 2097152, svg: 2097152, html: 2097152, pdf: 2097152, text: 2097152, other: 2097152,
     });
   });
 
@@ -640,7 +643,7 @@ describe('(F) DOCS_CLASS_CAP (spec 6.1)', () => {
     for (const cls of ['raster', 'svg'] as const) {
       expect(DocsFG.DOCS_CLASS_CAP[cls], cls).toBe(DocsFG.DOCS_MAX_IMAGE_BYTES);
     }
-    for (const cls of ['markdown', 'html', 'text', 'other'] as const) {
+    for (const cls of ['markdown', 'html', 'pdf', 'text', 'other'] as const) {
       expect(DocsFG.DOCS_CLASS_CAP[cls], cls).toBe(DocsFG.DOCS_MAX_DOC_BYTES);
     }
   });
@@ -654,8 +657,37 @@ describe('(F) DOCS_CLASS_CAP (spec 6.1)', () => {
     const named = Object.fromEntries([...(decl?.[1] ?? '').matchAll(/(\w+): (\w+),/g)].map((m) => [m[1], m[2]]));
     expect(named).toEqual({
       markdown: 'DOCS_MAX_DOC_BYTES', raster: 'DOCS_MAX_IMAGE_BYTES', svg: 'DOCS_MAX_IMAGE_BYTES',
-      html: 'DOCS_MAX_DOC_BYTES', text: 'DOCS_MAX_DOC_BYTES', other: 'DOCS_MAX_DOC_BYTES',
+      html: 'DOCS_MAX_DOC_BYTES', pdf: 'DOCS_MAX_DOC_BYTES', text: 'DOCS_MAX_DOC_BYTES', other: 'DOCS_MAX_DOC_BYTES',
     });
+  });
+});
+
+describe('(F) the pdf class: sniffPdf and pdfVerdict (X2 spec 4.4; P3.1, M11.54)', () => {
+  it('pdfVerdict: 4194303 and 4194304 bytes inline, 4194305 download only', () => {
+    expect(DocsFG.DOCS_PDF_INLINE_MAX_BYTES).toBe(4194304);
+    expect(DocsFG.pdfVerdict(4194303)).toBe('inline');
+    expect(DocsFG.pdfVerdict(4194304)).toBe('inline');
+    expect(DocsFG.pdfVerdict(4194305)).toBe('download');
+  });
+
+  it('pdfVerdict: a size that is not a whole byte count opens nothing', () => {
+    for (const s of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) expect(DocsFG.pdfVerdict(s), String(s)).toBe('download');
+    expect(DocsFG.pdfVerdict(0)).toBe('inline');
+  });
+
+  it('contentClass: .pdf is pdf', () => {
+    expect(DocsFG.contentClass('specs/x.pdf')).toBe('pdf');
+    expect(DocsFG.contentClass('specs/X.Pdf')).toBe('pdf');
+  });
+
+  it('sniffPdf: %PDF- at 0 matches, else mismatch', () => {
+    expect(DocsFG.sniffPdf(bytesFG('%PDF-1.7\n%\xe2\xe3\xcf\xd3'))).toBe('match');
+    expect(DocsFG.sniffPdf(bytesFG('%PDF-'))).toBe('match');
+    expect(DocsFG.sniffPdf(bytesFG('%PDF')), 'truncated at 4 bytes').toBe('mismatch');
+    expect(DocsFG.sniffPdf(bytesFG(' %PDF-1.7')), '%PDF- at offset 1').toBe('mismatch');
+    expect(DocsFG.sniffPdf(bytesFG('%pdf-1.7')), 'lower case').toBe('mismatch');
+    expect(DocsFG.sniffPdf(new Uint8Array(0)), 'empty input').toBe('mismatch');
+    expect(DocsFG.sniffPdf(bytesFG('\x89PNG\r\n\x1a\n')), 'PNG bytes').toBe('mismatch');
   });
 });
 
