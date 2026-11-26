@@ -9,8 +9,9 @@ allocated for this run: departures are recorded by slug below, for the coordinat
 
 A start of the Overlord that loads something from its account's own configuration that the launch profile does not list holds
 that account out of the Overlord's ordered list until the operator clears it. A held account reads as outside the set, so the
-existing hard row `account-outside-set` renews the Overlord off it (F7). A hold only narrows: it never empties a list and never
-strands the Overlord.
+existing hard row `account-outside-set` renews the Overlord off it (F7). A hold only narrows: it never empties a list (holds that
+would leave none are overridden, in the list builder and the account readings alike), and when the holds leave no account that
+serves, readiness reads `stranded`, as for any other reason nothing serves.
 
 - **The table** `overlord_account_holds` (coordination migration 133 on today's `main`): one row per lane, the one cause word
   `launch-profile-unmet`, the start that held it, when, and the clear's time and actor. Its store is
@@ -34,14 +35,19 @@ strands the Overlord.
   load line and readiness), and the readings wiring's facts. No second list exists.
 - **The hold** (`generationsLane.ts#holdOverlordStart`, called once a pass): for the designated Overlord's live generation
   (`holdTargetOf`), the sandbox check's verdict of its newest `startup` or `resume` start (`newestStartVerdict`) and
-  `holdOfStart` over it. `hold` writes; `settled` (a pass, or failures another account would not cure) stops asking for that
-  start; `unmeasured` (no report yet, an unmeasured property, an unknown account) holds nothing and is asked again next pass
-  (F10). The settled starts are a per-process memo (`GenerationsDeps.holdsSettled`, kept by the watcher). Nobody designated:
+  `holdOfStart` over it. `hold` writes; `settled` (a pass, or failures another account would not cure) ends the decision for
+  that start: its loads report is still read every pass, but nothing is decided or written for it again; `unmeasured` (no report
+  yet, an unmeasured property, an unknown account) holds nothing and is decided again next pass (F10). A start that ran another
+  launch profile (its `profile` property not held: the role or the digest differs, or the report names none) is settled with no
+  hold, whatever else it loaded: its extras say nothing about the account (fix round 1, F2, the stance `overlordInstallBehindOf`
+  takes on build skew). The settled starts are a per-process memo (`GenerationsDeps.holdsSettled`, kept by the watcher). Nobody designated:
   nothing is read or written.
 - **What the hold reads of the harness** lives in the sandbox check (`sandboxCheck.ts`), not in the hold's decider: each property
   verdict gains `fromAccount`, true only when the property failed because the start loaded something extra from the account's own
   configuration directory. `holdOfStart` reads only that flag.
-- **The account readings**: `accountOutsideSetOf` takes the standing holds (read once a pass) in place of `'not-wired'`; a store
+- **The account readings**: `accountOutsideSetOf` takes the holds as the list builder applied them, from the same
+  `overlordAccounts` result as the candidates (`overlordCandidatesAndHoldsOf`, mapped by `holdsAppliedOf`), in place of
+  `'not-wired'`: an overridden hold reads exactly as no hold, so the reading and the list cannot disagree (fix round 1, F1). A store
   without the read keeps `'not-wired'`.
 - **The Overlord's `installBehind`** (question 5, ruled Q5): `overlordInstallBehindOf` over the gather's roll test, the newest
   start's digest against the server's (`startDigestDiffersOf`) and the fleet's build agreement (`buildsAgreeOf` over
@@ -77,6 +83,28 @@ strands the Overlord.
   and the coordinator's yes); and the limit samples migration case rolls back every later migration, so it drops
   `overlord_account_holds` too and counts eight later migrations, not seven.
 
+## Fix round 1 (review run 3981, ruled in call 1605)
+
+- **The merge of `main` 87c64a957a** (the sequence doors, #3456) is commit 937eef091b, an ordinary merge before the fixes.
+  Hand-resolved: `server/test/auth-gate.test.ts` (one comment conflict beside sequence C's count paragraph, and one count
+  sentence). That file and `server/src/auth/gate.ts` are another run's claim, so the merge takes `main`'s side of both, and this
+  PR's two doors' counts are re-derived on the merged tree in a commit of their own, sent to their holder first. Everything else
+  merged without a hand: `overlordDoors.ts` keeps both sets (`main`'s sequence and invariants rows, this PR's two not-Overlord
+  entries), and the other count files took both sides. Main's last migration is still 132, so 133 stays this PR's.
+- **The gate counts on the merged tree**, measured by the gate file's own suite: 336 scanned, 333 HTTP, 215 gated, 118 exempt.
+- **F1, fixed**: when the holds cover every listed account, the list builder keeps the list as it was, and the account-outside-set
+  reading used to read a held account outside the set and find another held one serving, so a Live lane would renew at every turn
+  end. The reading now takes its holds from the list builder's own result (above).
+- **F2, fixed**: a start whose `profile` property is not held holds no account (above).
+- **F3, a recorded limit** (below, and the departure `first-start-failure-writes-no-hold`).
+- **F4, fixed (tests)**: a case at each of the three builders the first round left unpinned, each with a standing hold, and the
+  readiness lane's case now builds its candidates from the hold the lane hands over. Each by-hand mutant that swaps the holds for
+  an empty answer is red (the mutation table).
+- **A1**: the comments and this note say what the code does (the report is read every pass; only the decision and the write stop
+  once settled), and the asked-again case asserts the start is never settled, so a mutant that settles an unmeasured verdict is red
+  there too. **A2**: a pass-level case reaches `settled` with no hold, through F2's fixture (a start that reports another profile);
+  a fixture with a listed Claude Code version is not cheap, since the release lists no build's own skills and agents yet.
+
 ## Departures, by slug
 
 | Slug | What and why |
@@ -89,6 +117,9 @@ strands the Overlord.
 | `holds-read-shape-in-l0` | `AccountHoldsRead` in `shared/renewal-readings.ts` is the one shape of the read for the store, the list, the account readings and readiness. |
 | `install-behind-rides-w1-inputs` | `W1Inputs` gains `installBehind`, so the wiring answers the Overlord's and the lane's spread lays it over the gather's `behind`; a coordinator's, and a store without the two reads, keep the gather's. |
 | `readiness-candidates-take-the-holds` | The readiness port's `candidates(d, held)`: the lane reads the holds once a pass and hands them to the candidates, the word and the items. |
+| `first-start-failure-writes-no-hold` | A start that fails the check during designate or rebind writes no hold (fix round 1, F3, ruled a recorded limit): the hold is written by the generations pass, which sees only live generations, and the settle retires a failing pending generation in the same transaction. The fix rides the next readings PR (ticket `first-start-failure-holds-its-account`). |
+| `another-profile-holds-nothing` | `holdOfStart` settles a start whose `profile` property is not held, with no hold (fix round 1, F2): the plan's question 6 reads the extras alone. |
+| `holds-read-unreadable-answers-502` | The account holds' read answers 502 `unmeasured` when the table cannot be read, the `unmeasured` refusal's own status, as for every sibling in `continuity/routes.ts`; the home plan says "or 503". |
 | `settled-starts-memo-in-the-watcher` | `GenerationsDeps.holdsSettled`, a memo the watcher keeps across passes, like `retried` and `emptyTries`; `watch.ts` grows by three lines. |
 | `newest-start-verdict-in-the-sandbox-check` | `newestStartVerdict` (L1) beside `profileEngagedOf`, which it does not replace (the ladder's mutants pin `profileEngagedOf`'s text). |
 | `hold-written-in-shadow-too` | The hold acts on no session, so the pass writes it in shadow and live alike; only the renewal it leads to waits for the `continuity` row. |
@@ -100,7 +131,10 @@ strands the Overlord.
 |---|---|
 | An unmeasured verdict holds nothing and is asked again | "a verdict that is unmeasured on the first pass ... holds on the next (F10)" and "an unmeasured property never holds an account, and the start is asked again each pass" (`continuity-renewal-holds.test.ts`); mutants H1, H3, H4 |
 | A property the workspace loaded never holds an account | "a property the workspace loaded ... never holds an account (H2)"; the sandbox's `fromAccount` case; mutants H2, FA3, FA4 |
-| A hold is written once per start | "a hold is written once per start" (`account-holds-route.test.ts`); "settled: the start is not asked again"; "a cleared hold is never put back by the same start" |
+| A hold is written once per start | "a hold is written once per start" (`account-holds-route.test.ts`); the first pass case (one write over two passes); "a cleared hold is never put back by the same start" |
+| An overridden hold is overridden everywhere | wiring "holds over every candidate are overridden everywhere" (F1); `holdsAppliedOf` cases; mutants HA1, HA2; by hand M7, M8 |
+| A start that ran another profile holds no account | "a start that ran another launch profile holds nothing" (the set, and the pass-level case); mutants H6, H7; by hand M6 |
+| Every builder of the account facts reads the holds | readiness wiring "the candidates the wiring builds leave a standing hold out"; lane port "a standing hold leaves its account out of the order written"; ladder "a hold on the one account under the line ..."; readings wiring "a held account is left out of the candidates"; by hand M1 to M4 |
 | Holds that would empty the list leave it as it was and report it | `heldOutOfList` L1 case; designation "holds that would empty the list leave it as it was, overridden"; mutants L1, L4 |
 | An unread hold leaves the list unfiltered and marked, and the reading unmeasured | designation "unread holds leave the list unfiltered and marked unread"; wiring "holds that cannot be read leave the reading unmeasured"; readiness "holds that cannot be read reach the word as unmeasured"; mutants A16, A17, FA-H1 |
 | A clear puts the account back | wiring "a clear puts the account back"; route "a clear puts the account back, records the actor" |
@@ -111,9 +145,9 @@ strands the Overlord.
 ## Mutation table
 
 **Before:** each set's baseline (the real module) passes its suite; `mutation-floors.test.ts` refuses a set whose baseline
-fails. **After:** every mutant below is applied in memory by the floors harness and killed. Five new sets join `MUTANT_SETS`
-at floor 1 (`holdOfStart`, `holdTargetOf`, `overlordInstallBehindOf`, `heldOutOfList`, `newestStartVerdict`), and four existing
-sets gain mutants (`sandboxVerdict`, `overlordAccounts`, `designateVerdict`, `readinessFactsOf`); no floor was lowered. On the
+fails. **After:** every mutant below is applied in memory by the floors harness and killed. Six new sets join `MUTANT_SETS`
+at floor 1 (`holdOfStart`, `holdTargetOf`, `overlordInstallBehindOf`, `heldOutOfList`, `newestStartVerdict`, and in fix round 1
+`holdsAppliedOf`), and four existing sets gain mutants (`sandboxVerdict`, `overlordAccounts`, `designateVerdict`, `readinessFactsOf`); no floor was lowered. On the
 first floors run one new mutant survived (FA4, a `User` file inside the workspace read as the account's); its case was added and
 the set re-run killed every mutant.
 
@@ -124,6 +158,9 @@ the set re-run killed every mutant.
 | | H3 an unmeasured property settles | "an unmeasured property never holds an account" |
 | | H4 no verdict settles | "no verdict yet holds nothing and asks again" |
 | | H5 an unknown account settles | "an account load on a start whose account is unknown" |
+| | H6 the profile state ignored; H7 only a failed profile settles (fix round 1, F2) | "a start that ran another launch profile holds nothing" |
+| `holdsAppliedOf` | HA1 the readings see the holds while the list is overridden; HA2 every answer reads as no hold (fix round 1, F1) | the two `holdsAppliedOf` cases |
+| `overlordCandidatesOf` | C1 the ordered list not asked (PR D's, re-pinned to the one `overlordAccounts` result) | PR D's candidates case |
 | `heldOutOfList` | L1 drop the empty-list arm (the plan's) | "holds that would leave none keep the list as it was" |
 | | L2 an empty list overridden; L3 the holds kept; L4 an override that empties | the four `heldOutOfList` cases |
 | `overlordInstallBehindOf` | I1 read skew as agreement (the plan's); I2 unknown builds read as agreement | "every combination" |
@@ -148,6 +185,23 @@ Before: every named file green. After:
 | the readings wiring hands the account readings `'not-wired'` again | `continuity-renewal-readings-wiring.test.ts` | 2 of 57 |
 | the facts carry no holds (the list unfiltered) | `continuity-renewal-readings-wiring.test.ts` | 1 of 57 |
 | the clear records `flag-off` whatever the actor | `account-holds-route.test.ts` | 2 of 15 |
+
+Fix round 1, on the merged tree (`handmut` script in the worker's scratch, each mutation applied, the file run alone, the source
+restored). Before: every named file green (holds 34, wiring 58, lane port 16, readiness lane 50). After:
+
+| Mutation | File run | Red |
+|---|---|---|
+| M1 the readiness wiring hands the candidates an empty holds answer | `continuity-renewal-holds.test.ts` | 1 of 34 |
+| M2 the doors' account facts carry an empty holds answer | `overlord-lane-port.test.ts` | 1 of 16 |
+| M3 the composed server's ladder load line carries an empty holds answer | `continuity-renewal-holds.test.ts` | 1 of 34 |
+| M4 the readiness lane hands the candidates an empty holds answer | `overlord-readiness-lane.test.ts` | 3 of 50 (the real-hold case among them) |
+| M5 an unmeasured verdict settles | `continuity-renewal-holds.test.ts` | 2 of 34 |
+| M6 only a hold settles (A2's mutant) | `continuity-renewal-holds.test.ts` | 1 of 34 |
+| M7 the readings wiring hands the reading the holds as read | `continuity-renewal-readings-wiring.test.ts` | 1 of 58 |
+| M8 the candidates-and-holds builder answers the holds as read | `continuity-renewal-readings-wiring.test.ts` | 1 of 58 |
+
+Red first: on the old source with the new cases, the F1 wiring case is red (1 of 58) and the F1 and F2 set and pass cases are red
+(4 of 34).
 
 ## What a merge arms
 
@@ -185,3 +239,6 @@ From the merge, with the server on this build:
 - The plan's question 8 (the cost of the reads per pass) was not measured on the fleet box: this piece adds one start-loads read
   per pass for the Overlord, and one holds read per pass in the readings, in readiness and per ladder read.
 - The clear has no console control until home C (the hold's window above).
+- **A start that fails the check during designate or rebind holds no account** (F3, `first-start-failure-writes-no-hold`): a
+  retry is likely to pick the same account and fail the same way. The operator sees the refusal by name
+  (`overlord-sandbox-unmet`) and can change the account set; the hold for a first start rides the next readings PR.
