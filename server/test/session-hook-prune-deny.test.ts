@@ -340,6 +340,17 @@ describe('the linearity verdict is the median of the per-round differences (D-91
     const lastCurrent = order.filter((first) => first === 'original').length;
     expect(lastCurrent).toBe(LINEARITY_ROUNDS - lastCurrent);
   });
+
+  it('runs each round\'s pair in that round\'s order and puts each sample in its own program\'s cell, in both orders (pairCells)', () => {
+    for (let i = 0; i < LINEARITY_ROUNDS; i++) {
+      const calls: Program[] = [];
+      // A sample reads its program (original 10s, current 20s) plus its place in the round's run order (1 or 2).
+      const cells = pairCells(i, (p) => { calls.push(p); return (p === 'original' ? 10 : 20) + calls.length; });
+      const first = linearityOrder(i);
+      expect(calls, `round ${i} runs ${first} first`).toEqual(first === 'original' ? ['original', 'current'] : ['current', 'original']);
+      expect(cells, `round ${i}'s cells are [original, current]`).toEqual(first === 'original' ? [11, 22] : [12, 21]);
+    }
+  });
 });
 
 // Review 1493, FD8/R3/R4: compare the actual original program, not a synthetic reference or the presence of pmatch.
@@ -419,6 +430,14 @@ describe('the forbidden program\'s cost on quote-dense payloads naming worktree 
     expect(cost).not.toBe('');
     expect(cost, 'the two baselines answer two rulings').not.toBe(readBaseline());
     expect(cost.startsWith('def WS:'), 'a forbidden program, as `extract` returns it').toBe(true);
+  });
+  it('each row reads the baseline its ruling names: the four cost rows the program at the gate (D-9141), the four linearity rows the original (FD8)', () => {
+    expect(BASELINES.original.fixture).toBe('forbidden-jq-33e521e07.jq');
+    expect(BASELINES.gate.fixture).toBe('forbidden-jq-06aed21ff.jq');
+    const rows = (['quotes', 'dqsub'] as const).flatMap((name) => (['deny', 'class'] as const)
+      .flatMap((mode) => (['cost', 'linearity'] as const).map((kind): Row => `${name}/${mode} ${kind}`)));
+    expect(Object.keys(ROW_BASELINE).sort(), 'one entry for each of the eight rows').toEqual([...rows].sort());
+    for (const row of rows) expect(ROW_BASELINE[row], row).toBe(row.endsWith(' cost') ? 'gate' : 'original');
   });
   for (const [name, unit, quoted] of [['quotes', 'a "b c" \'d\' \\e ', false], ['dqsub', '$(x) `y` ', true]] as const) {
     const timed = (p: string, mode: string, kb: number): number => {
