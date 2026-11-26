@@ -97,3 +97,49 @@ export interface TimerView {
   readonly programme: string | null;
   readonly untrusted: true;
 }
+
+/** The stamp of an `overlord` timer (C61; plan `w1-overlord-timers.md` Task 1): the designation's `designatedTerm`, in
+ *  decimal. One codec, both ways: the set door writes it and the cleanup compares with it, so a session's stamp (its
+ *  registry `.generation`) never equals one. */
+export function overlordTimerStamp(designatedTerm: number): string {
+  return designatedTerm.toString(10);
+}
+
+/** How long after its mail's ack a fired timer of the role stays in the designated caller's list (question 2): 24 hours,
+ *  a starting value (Table 11.5b). The window starts at the ack, because the card hold can keep the line from the pane. */
+export const TIMER_FIRED_SHOWN_MS = 86_400_000;
+
+/** Whether a fired timer was set before a confirmed restore of `coord.db` (question 5): the lane can tell that a timer was
+ *  set before a restore, never that it fired before it, so `set-before-restore` says it may have. */
+const TIMER_RESTORE_FACT_MAP = {
+  none: 'no restore was confirmed between its set and its fire',
+  'set-before-restore': 'it was set before a confirmed restore, so it may have fired once before that restore',
+  unmeasured: 'whether a restore came between could not be read',
+} as const;
+export type TimerRestoreFact = keyof typeof TIMER_RESTORE_FACT_MAP;
+export const TIMER_RESTORE_FACTS = Object.keys(TIMER_RESTORE_FACT_MAP) as TimerRestoreFact[];
+
+/** One fired timer of the role, in the designated caller's list answer (question 2). */
+export interface FiredTimerView extends TimerView { readonly firedAt: number; readonly restore: TimerRestoreFact }
+
+/** The timer doors, as the refusal count names them (question 6, M36). */
+const TIMER_DOOR_MAP = {
+  set: 'POST /api/timers', list: 'GET /api/timers', cancel: 'POST /api/timers/:id/cancel',
+  'operator-read': 'GET /api/sessions/:id/timers', 'operator-cancel': 'POST /api/sessions/:id/timers/:timerId/cancel',
+} as const;
+export type TimerDoor = keyof typeof TIMER_DOOR_MAP;
+export const TIMER_DOORS = Object.keys(TIMER_DOOR_MAP) as TimerDoor[];
+
+/** Whose a row of the operator's read is (F13): the path's session set it, or the role it is bound to holds it. */
+const TIMER_OWNER_MAP = { session: 'the session the path names set it', overlord: "the Overlord's role holds it" } as const;
+export type TimerOwner = keyof typeof TIMER_OWNER_MAP;
+export const TIMER_OWNERS = Object.keys(TIMER_OWNER_MAP) as TimerOwner[];
+
+/** Whether the operator's read of a session carries the role's timers (F13). */
+const OVERLORD_TIMERS_READ_MAP = {
+  included: 'the designation binds this session, and the role timers are listed',
+  'not-this-session': 'the designation binds no session, or another one',
+  unmeasured: 'the designation could not be read, so the role timers are not listed',
+} as const;
+export type OverlordTimersRead = keyof typeof OVERLORD_TIMERS_READ_MAP;
+export const OVERLORD_TIMERS_READS = Object.keys(OVERLORD_TIMERS_READ_MAP) as OverlordTimersRead[];

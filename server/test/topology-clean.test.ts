@@ -340,9 +340,16 @@ const CANARY_H8 = entryOf(CANARY, 'part').h.slice(0, 8);
 
 const FIXTURES: Record<string, { catches: string[]; passes: string[] }> = {
   'public IPv4': {
-    catches: ['1.2.3.4', '100.200.0.1', '172.32.0.1'],
+    // The browser-version rows (X3 R2, the coordinator's ruling of 2026-11-25): a quad of the form N.0.0.0 directly
+    // after a browser product token and its slash is the reduced user agent's version, decided at the token; the
+    // same token with a non-zero part, a bare N.0.0.0, and a real address on the same line as a user agent are caught.
+    catches: ['1.2.3.4', '100.200.0.1', '172.32.0.1',
+      'Chrome/130.0.0.7', 'Chrome/130.1.0.0', '130.0.0.0', 'Chrome /130.0.0.0', 'XChrome/130.0.0.0',
+      'Chrome/130.0.0.0 Safari/537.36 from 1.2.3.4'],
     passes: ['203.0.113.7', '198.51.100.7', '192.0.2.1', '10.1.2.3', '127.0.0.1',
-      '192.168.7.7', '172.31.255.1', '100.100.1.1', '0.0.0.0'],
+      '192.168.7.7', '172.31.255.1', '100.100.1.1', '0.0.0.0',
+      'Chrome/130.0.0.0', 'HeadlessChrome/130.0.0.0', 'Chromium/130.0.0.0', 'Edg/130.0.0.0',
+      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0'],
   },
   'claude.ai session id': {
     // Constructed, not spelled: a verbatim 24-char id-shaped literal in this
@@ -355,12 +362,15 @@ const FIXTURES: Record<string, { catches: string[]; passes: string[] }> = {
     passes: ['100.100.1.1', '100.63.0.1', '100.128.0.1', '203.0.113.7', '10.64.0.1'],
   },
   'tailnet name': {
-    catches: ['fixture-box.ts.net', 'Fixture-Box.TS.NET'],
+    // The glued row (X3 R2): a name right behind another's `.ts.net`. A liveness token only: this class has no allowed
+    // list, so the first name already scores; the duckdns class's glued row is the witness for the second lookbehind.
+    catches: ['fixture-box.ts.net', 'Fixture-Box.TS.NET', 'fixture-box.ts.netfixture-box.ts.net'],
     passes: ['mybox.example.com', 'ts.net', '*.ts.net', '<tailnet>.ts.net',
       '<other-box>.<tailnet>.ts.net', 'tailscale.net'],
   },
   'duckdns subdomain': {
-    catches: ['realbox.duckdns.org', 'RealBox.DuckDNS.org'],
+    // The glued row (X3 R2): a real name right behind an allowed placeholder still scores under the anchored pattern.
+    catches: ['realbox.duckdns.org', 'RealBox.DuckDNS.org', 'mybox.duckdns.orgrealbox.duckdns.org'],
     passes: ['mybox.duckdns.org', 'otherbox.duckdns.org', 'fixture.duckdns.org',
       'subdomain.duckdns.org', 'www.duckdns.org', '<sub>.duckdns.org', '<name>.duckdns.org'],
   },
@@ -481,6 +491,20 @@ describe('the corpus this walks', () => {
   it('every class sets exactly one of pattern and match', () => {
     for (const cls of FORBIDDEN) {
       expect(Boolean(cls.pattern) !== Boolean(cls.match), `${cls.name} sets both or neither`).toBe(true);
+    }
+  });
+
+  it('every pattern class reads one long run in linear time', () => {
+    // X3 R2 (2026-11-25): a committed line held a 124 000-character base64 run, and the unanchored tailnet and duckdns
+    // patterns retried from every position of it, quadratic: about 23 s each, so their tree and range rows timed out.
+    // A 100 000-character run of label characters and digits takes milliseconds per class when the match starts only
+    // at a run's start, and seconds when it does not, so the bound below sits between the two.
+    const run = 'ab12-cd3'.repeat(12_500);
+    for (const cls of FORBIDDEN) {
+      if (!cls.pattern) continue;
+      const started = performance.now();
+      void [...run.matchAll(cls.pattern)].length;
+      expect(performance.now() - started, `${cls.name} took quadratic time over a long run`).toBeLessThan(2_000);
     }
   });
 

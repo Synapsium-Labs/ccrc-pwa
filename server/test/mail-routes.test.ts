@@ -79,6 +79,7 @@ import { isOverlordGateKebab } from '../src/coord/overlordGate.js';
 import { isOverlordInboxKebab } from '../src/coord/overlordInbox.js';
 import { isOverlordHistoryKebab } from '../src/coord/overlordHistory.js';
 import { isLadderKebab } from '../src/coord/overlordLadder.js';
+import { isInvariantKebab } from '../src/coord/invariants.js';
 import { isOverlapsKebab } from '../src/coord/overlaps.js';
 import { isDoneTestKebab } from '../src/coord/doneTests.js';
 import { isSequenceStampKebab } from '../src/coord/overlordSequenceStore.js';
@@ -543,6 +544,21 @@ describe("POST /api/mail — the 'worker' role", () => {
     expect(w.coord.dueDeliveries(Date.now() + 1, 0)).toHaveLength(0);
   });
 
+  it("refuses the Overlord's identity word as a recipient by rule, with a registry row named overlord and without (Overlord W1, the timers)", async () => {
+    for (const planted of [true, false]) {
+      const home = mkTmp('ccrc-mail-');
+      seed(home, 'demo-quiet-mesa');
+      if (planted) seed(home, 'overlord');
+      const w = await withMail(home); app = w.app;
+      const res = await send(app, { ...GOOD, toId: 'overlord', runId: null });
+      expect(res.statusCode, String(planted)).toBe(404);
+      expect(res.json()).toMatchObject({ ok: false, error: 'unknown-recipient' });
+      expect((res.json() as { detail: string }).detail).toContain("the Overlord's role takes no mail in W1");
+      expect(w.coord.dueDeliveries(Date.now() + 1, 0)).toHaveLength(0);
+      await app.close(); app = undefined;
+    }
+  });
+
   it("refuses 'worker' on a run that has no worker yet, and says which run", async () => {
     const home = mkTmp('ccrc-mail-');
     seed(home, 'demo-quiet-mesa');
@@ -743,6 +759,8 @@ describe('the rejection table is total, in both directions', () => {
       'not-ran',            // coord/landed.ts#landedCallStep: the act word for a `pr-state --pr` call that did not run (landing order wave 5i), a pure-decider discriminant, not a refusal code
       'main-health',        // coord/lineageRead.ts: the main-health reading's tag (landing order wave 5i), a tag on a stored value, not a mail or run refusal code
       'landing-next',       // coord/landingNext.ts: the control document kind / cue tuple tag (landing order wave 5i), a tag on a stored value, not a mail or run refusal code
+      'landing-withdrawn',  // coord/landingWrites.ts: the withdrawal notice's identity tuple and subject tag (landing order wave 5j), a tag on a stored value, not a mail or run refusal code
+      'landing-held',       // coord/landingWrites.ts: the dependant's notice's identity tuple and subject tag (landing order wave 5j), a tag on a stored value, not a mail or run refusal code
       'creation-unrecorded',// coord/landingNext.ts: a no-send reason (landing order wave 5i), a pure-decider discriminant, not a mail or run refusal code
       'recipient-missing',  // coord/landingNext.ts: a no-send reason (landing order wave 5i), a pure-decider discriminant, not a mail or run refusal code
       'episode-unreadable', // coord/landingNext.ts: a no-send reason (landing order wave 5i), a pure-decider discriminant, not a mail or run refusal code
@@ -1360,9 +1378,15 @@ describe('the rejection table is total, in both directions', () => {
         || (PROGRAMME_STORE_REFUSALS as readonly string[]).includes(tok)
         // THE PROGRAMME LIFECYCLE'S DOORS (W2): `coord/programmeEdgePolicy.ts`, `programmeLifecycleActs.ts` and
         // `programmeLifecycleRoutes.ts` name the doors' refusals, the event words, the door acts and credentials, the
-        // coordinator lines, the conflict kinds and why a coordinator owns nothing. Admitted through L0's guard, never NOT_CODES.
-        || isProgrammeDoorWord(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, edge state, health word, edge kind, spend state, service class, Overlord door word, actor issuer, Overlord refusal, designation word, unforecastable reason, approval census word, untrusted-build reason, Overlord gate word, Overlord inbox word, Overlord history word, linking refusal, block-wake word or sequence stamp word`).toBe(true);
+        // coordinator lines, the conflict kinds and why a coordinator owns nothing; W3's `programmeDecisionsPolicy.ts` the decisions
+        // file's outcomes and refusals. Admitted through L0's guard, never NOT_CODES.
+        || isProgrammeDoorWord(tok)
+        // THE INVARIANT MONITOR (Overlord W1, sequence B2): `coord/invariants.ts` names a verdict's kinds (`'not-applicable'`, ...),
+        // why a row is not applicable (`'tables-absent'`, `'predicate-not-built'`) and how a live finding's latch stood
+        // (`'row-only'`) as literals. Each rides a verdict or a findings row, never a `refused` or `reject.code`. Admitted
+        // through the module's guard, derived from its maps, never NOT_CODES.
+        || isInvariantKebab(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, edge state, health word, edge kind, spend state, service class, Overlord door word, actor issuer, Overlord refusal, designation word, unforecastable reason, approval census word, untrusted-build reason, Overlord gate word, Overlord inbox word, Overlord history word, linking refusal, block-wake word, sequence stamp word or invariant monitor word`).toBe(true);
     }
   });
 });

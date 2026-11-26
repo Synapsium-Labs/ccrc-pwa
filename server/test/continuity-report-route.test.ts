@@ -206,9 +206,13 @@ describe('POST /api/sessions/:id/report: picked-up moves the operator message', 
       const first = await report(app, { kind: 'picked-up', messageId: rec.value.id });
       expect([first.statusCode, first.json()]).toEqual([200, { ok: true, changed: true }]);
       expect(store.messageStateOf(rec.value.id)).toEqual({ kind: 'measured', value: 'picked-up' });
+      // The pick-up's sequence line, written right after its move (sequence PR B1, call 1218): once, the hook's, the server's kind.
+      const lines = () => coord!.db.prepare("SELECT id, state, actor, actorKind FROM overlord_sequence WHERE kind = 'message'").all();
+      expect(lines()).toEqual([{ id: String(rec.value.id), state: 'picked-up', actor: 'hook', actorKind: 'server' }]);
       const again = await report(app, { kind: 'picked-up', messageId: rec.value.id });
       expect([again.statusCode, again.json()]).toEqual([200, { ok: true, changed: false }]);
       expect(store.messageStateOf(rec.value.id)).toEqual({ kind: 'measured', value: 'picked-up' });
+      expect(lines()).toHaveLength(1);
     } finally { db.close(); }
   });
   it('a server without the private store answers 502 unmeasured for picked-up only (the port is always built; its store may be absent)', async () => {

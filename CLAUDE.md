@@ -544,7 +544,10 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   settings choice, the collector switch — is gone without the snapshot every `ccrc update` (and `ccrc backup`) takes into
   `~/ccrc-backups/<ts>/` (`pool-edges.log` is never replayed). The landing line has an authority-recovery exception:
   `~/.ccrc/landing.log` restores no-run creation evidence, order edges, `fixesMain` and setter attribution before
-  service starts. Leave it in place when restoring coord.db; no backup copies it or restores an older copy over it.
+  service starts. Since landing order wave 5j it also restores the operator's pause of a project's line and the operator's
+  withdrawal of an entry (D-9045, D-9046), and a server older than wave 5j-a refuses to start on a journal that holds
+  either record, so once either door has been used a rollback below wave 5j-a leaves the server down until it rolls
+  forward. Leave it in place when restoring coord.db; no backup copies it or restores an older copy over it.
   The privacy journal, `~/.ccrc/privacy-journal.log` (the Overlord's private store, `operator-model.db`, which every backup
   snapshots and every restore puts back with coord.db as one set), is never copied into a snapshot or restored with one
   either: leave it in place, so a restored store never reissues a message id.
@@ -644,12 +647,18 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   the operator's Shadow lanes card, one switch per shadow lane, which also refuses `live` while sign-in is dark), `POST /api/testbox/switch` (test box plan TB9, D-7411,
   the operator's remote switch for test runs; the test box's read and sync take a session or the box token, D-7554), `POST /api/testbox/builds/capture` (D-8289,
   the operator's Capture again on a Claude Code build whose capture failed, which puts it back in the capture queue),
-  `POST /api/questions/:id/answer` (W3 Q3f, D-7030, the operator's answer door of the question family) and
+  `POST /api/questions/:id/answer` (W3 Q3f, D-7030, the operator's answer door of the question family),
+  `POST /api/landing/pause` and `POST /api/landing/withdraw` (landing order wave 5j, D-9049: the operator's pause and resume
+  of one project's landing line, and the operator's withdrawal of one entry from it, with a notice to its coordinator and to
+  the coordinator of each direct dependant where one is recorded and reads; neither chooses, reorders or brings forward the
+  head, a dependant stays held until a session declares its order again without the withdrawn entry, which the feed records
+  whoever does it, or that entry re-enters through its run and then lands or is closed, and the pause, the resume and the
+  withdrawal all work while sign-in is dark and record `flag-off` then) and
   `POST /api/leases/:lease/operator-retain` and `POST /api/leases/:lease/resolve` (delegation wave 5 PR8, the operator's
   keep, attach and "not delegated" for a delegated worktree) are session-gated only — armed, they sit behind the auth gate like every other PWA-surface write. The first
   needs prose because no scanner can see it: `coord-pause-route.test.ts` reads
   `server/src/coord/routes.ts` alone, and that route is registered in `server.ts`, so a door opened outside
-  that one file is invisible to the set that pins the doors. The other eighteen are in that file's `SESSION_ONLY`
+  that one file is invisible to the set that pins the doors. The other twenty-one are in that file's `SESSION_ONLY`
   set, and `box-token-census.test.ts` checks this sentence against it in both directions (D-1231). The update
   control plane's routes are session-only by design (the box token never writes intent — design 2026-09-20,
   decision 15): `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh`, `POST
@@ -676,7 +685,9 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   portfolio B: the operator ratifies one goals version, behind the account gate, so it refuses while sign-in is dark), and the
   programme lifecycle's doors (W2, D-8987, D-8992, D-8993) `POST /api/programmes` (the start, behind the account gate),
   `POST /api/programmes/:slug/state` (pause works while sign-in is dark and records `flag-off`; resume, end, reopen and repair
-  take the step-up) and `POST /api/programmes/:slug/coordinator` (the hand-over, behind the step-up), consult no box token
+  take the step-up) and `POST /api/programmes/:slug/coordinator` (the hand-over, behind the step-up), and its backfill door
+  `POST /api/programmes/decisions` (W3, D-8990: previews the operator's private decisions file, and applies it behind the
+  step-up), consult no box token
   either: the tick queues the operator's answer as system mail to the programme's coordinator in the move's own transaction,
   the secret door stores a pasted one-line value in its protected slot and ticks with "set" and when, and the last four
   characters only for a value the masker catches (at its 20-byte floor or longer, as one run), behind a step-up, the read
@@ -749,7 +760,10 @@ while sign-in is dark) consults no box token and is session-gated when armed. Al
   stuck, marker unreadable, and D5's `restarted`: a run worker respawned over lost background tasks is mailed a re-check
   notice at once and its coordinator one heads-up, at most one per worker on its run per 10 minutes, with no restart and no push)
   record shadow only until `stall-watch-w2-live` exists, and while `mail-disabled` stands every
-  rung that would send mail holds. `stall-watch-disabled`, `stall-watch-live`, `stall-watch-escalate`,
+  rung that would send mail holds. A provider error (`server_error`, `overloaded`) is not the `failed` arm's: the
+  provider-failure ladder (`coord/providerRetry.ts`, armed by its own rule since D-9085, stopped by
+  `stall-watch-disabled`, a chosen Off or Log only, and `mail-disabled`) mails any live session itself at 1, 4 and 15 min,
+  asks no coordinator, and raises one operator notice per provider outage. `stall-watch-disabled`, `stall-watch-live`, `stall-watch-escalate`,
   `stall-watch-w2-live`, `mail-gate-busy-shadow` and `mail-gate-busy` arm them (no `stall-watch-live`: shadow only) and,
   like `mail-gate-strict`, have **no writer in the tree** — `single-definition/*.test.ts` pins that. A level chosen in
   Settings (`/api/coord/stall-watch`, the operator's control) overrides the arming markers, but never

@@ -2798,7 +2798,8 @@ declares `fiveWindowMinutes: 0` is scored on `seven` alone). `_ws_least_loaded` 
 score, and falls back only when nothing was scored: to the first eligible account the roster says can report
 (`telemetry: "anthropic"`), then to the first eligible account at all, and — only when the health probe has
 condemned every eligible lane — to the first auth-dead one. `_swap_target` ranks an unscored candidate at
-`100`, below every scored one, and an auth-dead one at `101`, below that. So an account nobody has heard from
+`100`, below every scored one, a lane whose provider is failing (`~/.cc-sessions/<id>-provfail`, below) at `101`, and an
+auth-dead one at `102`, below that. So an account nobody has heard from
 in a week takes work only when nothing measured can, and the server's `projectHome` forecasts the same
 tiers (with one difference: it scores a `telemetry: "codex"` lane, which ccd's placement leaves out of its
 measured tier). The accounts screen's "last reported *age*" line still tells you which case a pick was, and
@@ -2819,7 +2820,12 @@ operator intent: `touch`/`rm` by hand, or `ccrc account disable --id <id>` / `en
 the placement lock — and `disable` refuses to switch off the last placeable home-able lane
 (`last-enabled-home`); `ccrc account add` and `declare` write it for every lane they create. A dead
 credential is a different file, `~/.cc-sessions/<id>-authdead`, written by the health probe or by a rescue
-off a 401; it costs a lane preference, never eligibility, and `_account_ok` never reads it. The probe is
+off a 401; it costs a lane preference, never eligibility, and `_account_ok` never reads it. A lane whose provider answers
+turns with errors is a third file, `~/.cc-sessions/<id>-provfail` (`"<epoch> <word>"`), written once a minute by the fleet
+limit watchdog's pass when three consecutive provider failures of one session, or a fresh owed one of each of two, stand on
+that lane with no newer good Stop there. It ends at a newer good Stop and means nothing 30 minutes after it was written. An
+automatic move does not return a session to a home that is marked and ranks a marked lane behind every other but an auth-dead
+one, never ineligible; `ccd swap`, `ccd swap-self` and `ccd prefer` never read it. The probe is
 described under "Account health and the telemetry keepalive" below; `ccrc account check` is how you measure a
 `login` lane.
 
@@ -5935,7 +5941,8 @@ the pinned one kept in its `detail`, or `closed` when GitHub reads it closed unm
 (at most ten entries a sweep, oldest first) marks it, and a work run's `done` close marks it `landed` when GitHub reads the PR
 MERGED (a merge train's landing is left to the landed reader, which carries the train facts); a verified pin re-pins a `closed`
 entry only when its projection is readable and carries no quarantine marker (D-8626). A project the line has never seen answers no entries and both flags off. The line's authority (no-run creation evidence,
-order edges, `fixesMain` and setter attribution) is journalled in `~/.ccrc/landing.log`, which a restored `coord.db` leaves in
+order edges, `fixesMain`, setter attribution, and since wave 5j the operator's pause of the line and withdrawals of entries) is
+journalled in `~/.ccrc/landing.log`, which a restored `coord.db` leaves in
 place (no backup copies it) and which the server replays before it serves anything. Replay never fabricates a measured pin or a
 current run association: a project whose projection is missing or whose binding evidence contradicts is reported as unmeasured
 and held, and invalid history refuses startup. An uncertain journal append or landing database commit fences every landing read
@@ -5953,7 +5960,15 @@ episode's head or another) answers `recovery: 'repair'` (D-8627) and is not cure
 the operator's withdrawal (D-9046) and so repairs none: the run
 stays at `merging` and goes to the operator, and this build has no repair route for it. `POST /api/landing/entries` and `POST /api/landing/order` (box token and measured
 `byId`/`byUuid` attribution, `ccrc-api landing entries|order --json -`) record an entry and its order edges; the attributed `byId` is
-the setter, and an omitted `afterIds` or `fixesMain` keeps its value while an explicit `[]` or `false` clears it.
+the setter, and an omitted `afterIds` or `fixesMain` keeps its value while an explicit `[]` or `false` clears it. Since wave 5j the
+operator has two session-only doors on the line (D-9049), with no box token and no `ccrc-api` verb: `POST /api/landing/pause`
+(`{project, paused}`) pauses or resumes one project's line, and `POST /api/landing/withdraw` (`{project, pr, pinnedAt}`, the pin
+time the console read) withdraws one entry that is not terminal, with a notice to its coordinator and to the coordinator of each
+entry whose order names it directly, where one is recorded and reads; the answer names anyone who could not be told. Both are
+journalled, and both work while sign-in is dark, recording `flag-off`. Neither chooses, reorders or brings forward the head: an
+order edge to a withdrawn entry stays outstanding, so its dependant waits, named in the read's `order.waits` with each target's
+entry id and PR, until a session declares its order again without that entry, which the feed records whoever does it, or the
+entry re-enters at its run's next verified pin and then lands or is closed; a run-less entry cannot re-enter (D-9047).
 
 The main-red hold has one writer: a fresh, same-base `main-health` measurement applied through the radar lane. A next-to-land mail
 is sent once per exact episode, base and recipient; it tells a coordinator to re-read the line and is not merge permission. The
@@ -6210,7 +6225,8 @@ next before the turn ends.
 session, `$REG/<id>.turn.json`, written on the main thread only: an event that
 carries a subagent's `agent_id` never touches it. It reads `working` from a
 turn's first event, `done` at its Stop (with the Stop's background-task count,
-kinds and ids), and `failed` at a `StopFailure` (with the API error's token).
+kinds and ids), and `failed` at a `StopFailure` (with the API error's token),
+and it keeps the times of the last consecutive provider failures (`failAts`).
 Every SessionStart but a `clear` or `compact` records the restart, and its lost
 lists name only what that restart cut short: the background tasks the last
 `done` turn left running. The lane reads the marker, the raw hookstate and the
@@ -6255,9 +6271,10 @@ unreadable (ahead of every wave-1 rung and cap), coordinator deaf (ahead of the
   reading `idle` or `shell`, and no more than about 22 h ago (the 24 h mail
   read less the 2 h repeat window), so a repeat is never re-read as a first
   failure.
-  - A retry-class error (`server_error`, `overloaded`, `max_output_tokens`,
-    `unknown`) draws a `failed:` mail to the session, and a second within 2 h
-    goes to the coordinator.
+  - A provider error (`server_error`, `overloaded`) is not this arm's: the
+    provider-failure ladder below owns it, and no coordinator is told.
+  - A retry-class error (`max_output_tokens`, `unknown`) draws a `failed:` mail
+    to the session, and a second within 2 h goes to the coordinator.
   - A request-class error (`invalid_request`, `model_not_found`) goes to the
     coordinator at once.
   - Those two reach the operator as a `⚠ failed` push instead when the failing
@@ -6266,6 +6283,43 @@ unreadable (ahead of every wave-1 rung and cap), coordinator deaf (ahead of the
   - An account-class error holds, because the limit and swap machinery owns it.
   - A token this build does not know holds with one `ccrc-server: stall-watch
     unknown StopFailure` line. It is never guessed into a self-wake.
+
+**The provider-failure ladder** (`server/src/coord/providerRetry.ts`, run inside
+the stall watch's pass by `server/src/providerRetryLane.ts`). Any live session
+whose turn ended on a provider error is told to continue by itself: a worker, a
+reviewer, a coordinator, the designated Overlord, or a session of the
+operator's own. One mail to the session, typed as one line (`Your turn ended on
+a provider error; continue where you stopped.`), falls due 1 minute after the
+first consecutive failure, 4 after the second and 15 after the third and every
+later one. One that started no turn is repeated 15 minutes after it landed, and
+two are never out at once. What is owed is the marker's `failAts`, which a real
+Stop and a `clear` empty and a restart carries, so a restart that relabels the
+marker `done` silences nothing; the 22 h cutoff does not apply. It does not
+nudge a running turn, an open dialog or question, a session with no pane, one
+that is stopped, hibernated or archived, one held by a usage limit, or anything
+it could not measure. A person's unsent text in the box is refused, not stashed:
+nothing is typed, and the mail waits for the box. A queued nudge the session has
+moved past is taken back. No coordinator is asked to mend a provider, and a
+worker that owes a retry holds the quiet ladder, so none is mailed `stall:`
+about it. When three sessions owe a retry on one provider (the Anthropic lanes,
+the Codex lanes, or any other lane by itself) within 10 minutes, or one session has
+got past none of its failures for an hour, one notice with
+no session goes to the operator, and one record-only row says when none has owed
+one for 10 minutes; the standing outages are kept in
+`~/.ccrc/provider-outages.json`, so a restart repeats no notice. It ships armed
+and has no marker of its own: `stall-watch-disabled`, a level of Off or Log only
+chosen in Settings, and `mail-disabled` each stop it.
+
+While a session owes a retry the console says so (`FleetSession.providerRetry`,
+optional; computed by the same pass, off the ladder's own schedule, and left out
+of a row whose turn runs now): `Provider overloaded, retrying 14:52` or `Provider
+error, retrying 14:52` by the token, in the viewer's own time, `retrying now` past
+the due time, and `retry waiting`, with no time, while a question, a dialog, a
+usage limit or a nudge the mail lane has not typed (unsent text in the box) holds
+it. The words (`pwa/src/fleet/providerRetryWords.ts`) take the place of the row's
+and the session header's status word, of the `stalled` marker, and of `turn
+failed` and `quiet` on a run; a row that waits on you keeps its word, and its
+header says both.
 
 The `orphaned:` and `failed:` mails are class `self-wake`: recorded, never
 pushed, and they move neither the quiet clock nor the episode. With a current

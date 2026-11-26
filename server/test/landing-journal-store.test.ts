@@ -13,6 +13,7 @@ import { createLandingJournal, type LandingJournalFsOps } from '../src/coord/lan
 import type { LandingJournalPort } from '../src/coord/landingJournalPort.js';
 import type { LandingAdvance } from '../src/coord/landingEntry.js';
 import { landingOrder } from '../src/coord/landingLine.js';
+import { landingAppendParses } from '../src/coord/landingDoorsTx.js';
 import type { LandingRecovery } from '../../shared/landingLine.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 import { tx } from '../src/coord/tx.js';
@@ -1071,5 +1072,185 @@ describe('replay applies the operator\'s pause and withdrawal (wave 5j-a, D-9046
     expect(JSON.stringify(rows(g, 'SELECT * FROM landing_entries WHERE id = 7'))).toBe(row);
     expect(authorityBytes(g)).toBe(before);
     expect(cursor(g)).toBe(2);
+  });
+});
+
+describe('the authority writer journals the operator\'s doors and tells the coordinators (wave 5j-b, Task 8)', () => {
+  const withdrawCmd = (pr: number, pinnedAt: number, actor = 'flag-off') =>
+    ({ kind: 'withdraw' as const, project: P, pr, pinnedAt, setBy: 'operator' as const, actor });
+  const pauseCmd = (paused: boolean, project: string = P) =>
+    ({ kind: 'pause' as const, project, paused, setBy: 'operator' as const, actor: 'flag-off' });
+  const pinTime = (f: Fx, pr: number): number => facts(f).entries.find((e) => e.pr === pr)!.pinnedAt;
+  const mails = (f: Fx) => rows(f, "SELECT fromId, toId, kind, subject, runId FROM mail ORDER BY id") as
+    { fromId: string; toId: string; kind: string; subject: string; runId: number | null }[];
+  const flagsOf = (f: Fx) => f.db.prepare('SELECT operatorPaused, mainRedHold FROM landing_projects WHERE project = ?').get(P) as
+    { operatorPaused: number; mainRedHold: number } | undefined;
+  const stateOf = (f: Fx, id: number): string => (f.db.prepare('SELECT state FROM landing_entries WHERE id = ?').get(id) as { state: string }).state;
+  /** A (pr 1) the head, B (pr 2) after A, C (pr 3) after B: run-less entries created by `lane-a`. */
+  const lineOf = (f: Fx): { a: number; b: number; c: number } => {
+    const a = created(f, 1); const b = created(f, 2); const c = created(f, 3);
+    order(f, 2, { afterIds: [a] });
+    order(f, 3, { afterIds: [b] });
+    return { a, b, c };
+  };
+
+  it('a withdraw appends exactly one withdraw record, at the answer\'s seq, and makes the entry withdrawn', () => {
+    const f = boot();
+    const { a } = lineOf(f);
+    const before = lines(f).length;
+    const r = f.store.writeLandingAuthority(withdrawCmd(1, pinTime(f, 1), 'device:phone '), 9000);
+    if (!r.ok) throw new Error(`refused ${r.error}`);
+    expect(lines(f)).toHaveLength(before + 1);
+    expect(lines(f).at(-1)).toEqual({ v: 1, seq: r.seq, at: 9000, setBy: 'operator', subject: { id: a, project: P, pr: 1, binding: { kind: 'no-run' } },
+      kind: 'withdraw', actor: 'device:phone ' });
+    expect(r).toMatchObject({ changed: true, entry: { id: a, state: 'withdrawn' }, previous: { id: a, state: 'pinned' }, coordinator: { kind: 'no-run' } });
+    expect(stateOf(f, a)).toBe('withdrawn');
+    expect(cursor(f)).toBe(r.seq);
+  });
+
+  it('a stored pin time that does not read is never 0: a withdraw carrying pinnedAt 0 is landing-entry-moved, nothing appended (F4)', () => {
+    const f = boot();
+    const { a } = lineOf(f);
+    f.db.prepare("UPDATE landing_entries SET pinnedAt = 'not-a-time' WHERE id = ?").run(a);
+    const before = journal(f);
+    expect(f.store.writeLandingAuthority(withdrawCmd(1, 0), 9000)).toMatchObject({ ok: false, error: 'landing-entry-moved' });
+    expect(journal(f)).toBe(before);
+    expect(stateOf(f, a)).toBe('pinned');
+    expect(mails(f)).toEqual([]);
+  });
+
+  it('the entry\'s notice and one landing-held per direct dependant are queued once each, from operator; a transitive one gets none', () => {
+    const f = boot();
+    const { a, b } = lineOf(f);
+    const r = f.store.writeLandingAuthority(withdrawCmd(1, pinTime(f, 1)), 9000);
+    if (!r.ok) throw new Error(`refused ${r.error}`);
+    const m = mails(f);
+    expect(m).toHaveLength(2);
+    expect(m[0]).toMatchObject({ fromId: 'operator', toId: 'lane-a', kind: 'status', runId: null });
+    expect(m[0]!.subject).toMatch(/^landing-withdrawn:#1:[0-9a-f]{64}$/);
+    expect(m[1]).toMatchObject({ fromId: 'operator', toId: 'lane-a', kind: 'status' });
+    expect(m[1]!.subject).toMatch(/^landing-held:#2:[0-9a-f]{64}$/);
+    expect(r.notices).toEqual([
+      { word: 'landing-withdrawn', entryId: a, kind: 'queued', toId: 'lane-a', mailId: expect.any(Number), deliveryId: expect.any(Number) },
+      { word: 'landing-held', entryId: b, kind: 'queued', toId: 'lane-a', mailId: expect.any(Number), deliveryId: expect.any(Number) }]);
+    // the dependant waits; the head is not brought forward
+    const fx = facts(f);
+    const o = landingOrder(fx.entries, fx.flags, fx.recovery, fx.stateWords);
+    expect(o.paused === false ? o.head : 'paused').toBeNull();
+    expect(o.waits).toEqual([{ entryId: b, reason: 'withdrawn', on: [{ entryId: a, pr: 1 }] }]);
+  });
+
+  it('a fault in the second mail insert rolls the whole apply back: landing-db-apply, mayApply, no mail, and the fence stands', () => {
+    const f = boot();
+    const { a } = lineOf(f);
+    f.db.exec("CREATE TRIGGER boom BEFORE INSERT ON mail WHEN (SELECT COUNT(*) FROM mail) >= 1 BEGIN SELECT RAISE(ABORT, 'boom'); END;");
+    expect(f.store.writeLandingAuthority(withdrawCmd(1, pinTime(f, 1)), 9000))
+      .toEqual({ ok: false, error: 'landing-db-apply', recovery: 'replay', mayApply: true });
+    f.db.exec('DROP TRIGGER boom');
+    expect(mails(f)).toEqual([]);
+    expect(stateOf(f, a)).toBe('pinned');
+    expect(f.store.readLanding(P)).toMatchObject({ ok: false, error: 'landing-fenced' });
+    expect(f.store.replayLandingJournal()).toMatchObject({ ok: true });
+    expect(stateOf(f, a)).toBe('withdrawn');
+    expect(mails(f)).toEqual([]);
+  });
+
+  it('nobody to tell: a run-less entry with no recorded creation gets no mail, and notices says why', () => {
+    const f = boot();
+    created(f, 1);
+    rawProjection(f, 7, 70);
+    const r = f.store.writeLandingAuthority(withdrawCmd(70, 1), 9000);
+    if (!r.ok) throw new Error(`refused ${r.error}`);
+    expect(r.notices).toEqual([{ word: 'landing-withdrawn', entryId: 7, kind: 'none', reason: 'unrecorded' }]);
+    expect(mails(f)).toEqual([]);
+  });
+
+  it('a dependant whose association does not read gets no mail; the withdrawal applies and notices names it unreadable', () => {
+    const f = boot();
+    const a = created(f, 1);
+    const run = openRun(f);
+    rawProjection(f, 8, 80, P, run);
+    f.db.prepare('UPDATE landing_entries SET afterIds = ? WHERE id = 8').run(JSON.stringify([a]));
+    f.db.prepare("UPDATE runs SET claimedBy = x'00' WHERE id = ?").run(run);   // a BLOB: its association does not read
+    const r = f.store.writeLandingAuthority(withdrawCmd(1, pinTime(f, 1)), 9000);
+    if (!r.ok) throw new Error(`refused ${r.error}`);
+    expect(stateOf(f, a)).toBe('withdrawn');
+    expect(r.notices).toEqual([
+      { word: 'landing-withdrawn', entryId: a, kind: 'queued', toId: 'lane-a', mailId: expect.any(Number), deliveryId: expect.any(Number) },
+      { word: 'landing-held', entryId: 8, kind: 'unreadable' }]);
+    expect(mails(f).map((x) => x.subject.split(':')[0])).toEqual(['landing-withdrawn']);
+  });
+
+  it('parse before append: a withdraw whose actor carries a control character is refused unparseable; nothing appended, nothing fenced', () => {
+    const f = boot();
+    lineOf(f);
+    const bytes = journal(f);
+    const db = JSON.stringify(rows(f, 'SELECT * FROM landing_entries ORDER BY id'));
+    expect(f.store.writeLandingAuthority(withdrawCmd(1, pinTime(f, 1), 'device:a\u0007b'), 9000)).toEqual({ ok: false, error: 'landing-record-unparseable' });
+    expect(journal(f)).toBe(bytes);
+    expect(JSON.stringify(rows(f, 'SELECT * FROM landing_entries ORDER BY id'))).toBe(db);
+    expect(mails(f)).toEqual([]);
+    expect(f.store.readLanding(P)).toMatchObject({ ok: true });
+  });
+
+  it('parse before append, the pure check: an old kind the parser refuses, and a text that leaves the built record out', () => {
+    const f = boot();
+    const { a, b } = lineOf(f);
+    const text = journal(f);
+    const seq = lines(f).length + 1;
+    const ref = (id: number, pr: number) => ({ id, project: P, pr, binding: { kind: 'no-run' as const } });
+    const good = { v: 1 as const, seq, at: 1, setBy: 'lane-b', subject: ref(b, 2), kind: 'order' as const, after: [ref(a, 1)], fixesMain: false };
+    // CONTROL: the built record, with its line, parses and ends at its seq
+    expect(landingAppendParses(text, good, `${JSON.stringify(good)}\n`)).toBe(true);
+    const dup = { ...good, after: [ref(a, 1), ref(a, 1)] };
+    expect(landingAppendParses(text, dup, `${JSON.stringify(dup)}\n`)).toBe(false);
+    expect(landingAppendParses(text, good, '')).toBe(false);
+  });
+
+  it.each(['withdraw', 'pause'] as const)('a fault after the %s append fences every entrance; replay clears it, applies the door and queues no mail', (kind) => {
+    const f = boot();
+    const { a, b } = lineOf(f);
+    const at1 = pinTime(f, 1);   // read before the one-shot COMMIT fault is armed: a read's own COMMIT would take it
+    failOnce(f.db, 'COMMIT');
+    const r = kind === 'withdraw' ? f.store.writeLandingAuthority(withdrawCmd(1, at1), 9000) : f.store.writeLandingAuthority(pauseCmd(true), 9000);
+    expect(r).toEqual({ ok: false, error: 'landing-db-commit', recovery: 'replay', mayApply: true });
+    vi.restoreAllMocks();
+    expect(f.store.readLanding(P)).toMatchObject({ ok: false, error: 'landing-fenced' });
+    expect(f.store.writeLandingAuthority(pauseCmd(false), 9001)).toMatchObject({ ok: false, error: 'landing-fenced' });
+    expect(f.store.replayLandingJournal()).toMatchObject({ ok: true });
+    expect(mails(f)).toEqual([]);
+    if (kind === 'withdraw') {
+      expect(stateOf(f, a)).toBe('withdrawn');
+      const fx = facts(f);
+      expect(landingOrder(fx.entries, fx.flags, fx.recovery, fx.stateWords).waits).toEqual([{ entryId: b, reason: 'withdrawn', on: [{ entryId: a, pr: 1 }] }]);
+    } else {
+      expect(flagsOf(f)).toEqual({ operatorPaused: 1, mainRedHold: 0 });
+    }
+  });
+
+  it('a pause appends one record and sets operatorPaused; mainRedHold set beforehand stays set', () => {
+    const f = boot();
+    created(f, 1);
+    f.db.prepare('INSERT INTO landing_projects (project, mainRedHold) VALUES (?, 1)').run(P);
+    const before = lines(f).length;
+    const r = f.store.writeLandingAuthority(pauseCmd(true), 9000);
+    expect(r).toEqual({ ok: true, project: P, operatorPaused: true, changed: true, seq: before + 1 });
+    expect(lines(f)).toHaveLength(before + 1);
+    expect(lines(f).at(-1)).toEqual({ v: 1, seq: before + 1, at: 9000, setBy: 'operator', kind: 'pause', project: P, paused: true, actor: 'flag-off' });
+    expect(flagsOf(f)).toEqual({ operatorPaused: 1, mainRedHold: 1 });
+  });
+
+  it('a repeated pause appends nothing and answers changed false, seq null; a resume clears operatorPaused only', () => {
+    const f = boot();
+    created(f, 1);
+    f.db.prepare('INSERT INTO landing_projects (project, mainRedHold) VALUES (?, 1)').run(P);
+    expect(f.store.writeLandingAuthority(pauseCmd(true), 9000)).toMatchObject({ ok: true, changed: true });
+    const bytes = journal(f);
+    expect(f.store.writeLandingAuthority(pauseCmd(true), 9001)).toEqual({ ok: true, project: P, operatorPaused: true, changed: false, seq: null });
+    expect(journal(f)).toBe(bytes);
+    const r = f.store.writeLandingAuthority(pauseCmd(false), 9002);
+    expect(r).toMatchObject({ ok: true, operatorPaused: false, changed: true });
+    expect(flagsOf(f)).toEqual({ operatorPaused: 0, mainRedHold: 1 });
+    expect(f.store.writeLandingAuthority(pauseCmd(false, Q), 9003)).toEqual({ ok: false, error: 'landing-project-unknown' });
   });
 });

@@ -176,8 +176,8 @@ describe('the entry is written by advanceLanding, in the run\'s own transaction 
     expect(coord.currentEpisode(id)).toMatchObject({ pr: null });
   });
 
-  // Wave 5j-a (D-9047), inverted: this case ran for `landed` and `withdrawn`. A readable, unmarked `withdrawn` row now
-  // re-pins at a verified pin (the case below), so the each keeps `landed` alone.
+  // Wave 5j-a (D-9047), inverted: this case ran for `landed` and `withdrawn`. The withdrawn row has cases of its own below,
+  // because a run-less one is kept and a run-bound one re-pins, so the each keeps `landed` alone.
   it.each(['landed'])('a %s row is kept, and the run still advances', (state) => {
     const id = atReview();
     insertRaw(7, state, null);
@@ -218,6 +218,23 @@ describe('the entry is written by advanceLanding, in the run\'s own transaction 
       .toEqual([{ entryId: first.id, runId: id, pinnedSha: HEAD2 }]);
     const f = landingFactsOf(coord, P);
     expect(landingOrder(f.entries, f.flags, f.recovery).order.map((e) => e.id)).toEqual([first.id]);
+  });
+
+  it('wave 5j-b carry (review run 3806): a withdrawn row bound to run A re-pins at run B\'s verified pin of its pull request, under run B, with a witness', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(1_784_600_000_000);
+    const other = coord.openRun({ program: 'p', title: 't', project: P, wave: 2, waveOf: 2, claimedBy: 'coord-a' });
+    if (!('id' in other)) throw new Error('fixture openRun refused');
+    const id = atReview();
+    insertRaw(7, 'withdrawn', other.id, HEAD2, 1);
+    coord.db.prepare('UPDATE landing_entries SET detail = ? WHERE pr = 7')
+      .run(JSON.stringify({ v: 1, by: 'operator', at: 1, word: 'withdrawn', seq: 1 }));
+    expect(coord.advanceLanding({ runId: id, to: 'merging', causedBy: 'coordinator', landing: pin() }))
+      .toMatchObject({ ok: true, to: 'merging', landing: { kind: 'pinned', created: false,
+        entry: { pr: 7, state: 'pinned', pinnedSha: HEAD, pinnedAt: 1_784_600_000_000, runId: id } } });
+    expect(coord.db.prepare('SELECT entryId, runId, pinnedSha FROM landing_projection_witness').all())
+      .toEqual([{ entryId: lineEntries()[0]!.id, runId: id, pinnedSha: HEAD }]);
+    expect((coord.db.prepare('SELECT detail FROM landing_entries WHERE pr = 7').get() as { detail: string | null }).detail).toBeNull();
   });
 
   it('fix round 1, R1: a withdrawn row with no run is kept at a verified pin of its pull request, unchanged, with no witness, and the run still advances (decision 7)', () => {

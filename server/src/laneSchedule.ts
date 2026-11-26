@@ -38,6 +38,10 @@ export const QUIZ_LANE_PERIOD_MS = 86_400_000;
 /** The forecast lane's look (Overlord W2 forecasts A): once a minute, so a seal lands within a minute of its boundary, and
  *  forecasts B's spend arm reads a closed run's session before its workspace is reclaimed. */
 export const FORECAST_LANE_PERIOD_MS = 60_000;
+/** The invariant monitor's cadence (Overlord spec §10.4; `invariants` row): a minute, and the table invariants' own sweep, ten
+ *  minutes, for the rows whose tables stamp no line. Starting values. */
+export const INVARIANT_SWEEP_MS = 60_000;
+export const INVARIANT_TABLE_SWEEP_MS = 10 * 60_000;
 /** The decision model's anchor-set lane's look (Overlord W2, the decision model PR B): once a day, the quiz lane's period by
  *  reference. The anchors are re-asked daily because drift is counted in days (question 10: 4 of 20 moved against the line's
  *  baseline), and the maintenance cap that bounds a pass is a UTC day's, so a pass that runs short resumes the next day. */
@@ -216,7 +220,7 @@ export type LaneName =
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'blockWakes' | 'admissionWake' | 'idleNudge' | 'mail' | 'mailHold' | 'inboxWake' | 'asks' | 'approvalPrune' | 'digestBeat' | 'pushOutbox'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
   | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'diskLaneStall' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases' | 'overlaps' | 'generations'
-  | 'launchProfile' | 'advisorCount' | 'timers' | 'sequenceRetention' | 'quiz' | 'responses' | 'linearPlanSync' | 'linearDrift' | 'linearMigration' | 'forecasts' | 'decisionAnchors' | 'skillInstall' | 'skillRollout' | 'limitSamples' | 'authorityWitness';
+  | 'launchProfile' | 'advisorCount' | 'timers' | 'sequenceRetention' | 'quiz' | 'responses' | 'linearPlanSync' | 'linearDrift' | 'linearMigration' | 'forecasts' | 'decisionAnchors' | 'skillInstall' | 'skillRollout' | 'limitSamples' | 'authorityWitness' | 'invariants';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -439,6 +443,10 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   // one pass at a time, hourly; a pass deletes at most SEQUENCE_PRUNE_BATCH lines, so a long-stopped server catches up over a
   // few passes. The throttle is monotonic, as every row's is; the verdict reads the wall clock through the time port.
   { name: 'sequenceRetention', cadenceMs: 60 * 60_000, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the sequence retention lane failed' },
+  // `invariants`: the invariant monitor's runner (Overlord spec §10.4, Table 11.1c; `coord/invariantLane.ts`). One pass at a time,
+  // a minute; a pass gathers only when the sequence head moved, or at INVARIANT_TABLE_SWEEP_MS for the table invariants (I2, I7,
+  // I17 read tables that stamp no line). Shadow until its row of the Shadow lanes card is Live.
+  { name: 'invariants', cadenceMs: INVARIANT_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the invariant monitor failed' },
   // The weekly replay quiz lane (Overlord spec §3.3.9 C52, Table 11.1c; W1a, plan `w1a-replay-quiz.md` Task 4): it looks once a
   // day and raises at most one operator item an ISO week, keyed by the week (`quiz.ts#quizLaneVerdict`); a thrown pass is
   // caught here. It raises nothing while the record path is absent (`QUIZ_RECORD_READY`).

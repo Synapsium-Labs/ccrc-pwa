@@ -373,7 +373,9 @@ describe('the scanner is looking at something', () => {
     // 76 since `GET`/`POST /api/coord/plain-auto-memory` (Overlord W1a launch profiles PR B, Settings › Automation › Auto memory for
     // plain sessions): session-gated, NOT EXEMPT, no box token.
     // 78 since `GET`/`POST /api/coord/coordinator-advisor` (the coordinator advisor, D-8967): session-gated, NOT EXEMPT, no box token.
-    expect(scanRoutes('coord/routes.ts').length).toBe(78);
+    // 80 since landing order wave 5j-b (2026-11-25, D-9049): `POST /api/landing/pause` and `POST /api/landing/withdraw`, the
+    // operator's, session-gated, NOT EXEMPT, no box token.
+    expect(scanRoutes('coord/routes.ts').length).toBe(80);
     // 5 in `update/routes.ts` (update-management W2, design 2026-09-20 §12):
     // `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh`
     // and `POST /api/updates/ack`, session-only and NOT EXEMPT, plus the
@@ -436,7 +438,10 @@ describe('the scanner is looking at something', () => {
     // state door's pause works dark, the rest take the step-up); `POST /api/programmes/:slug/end-proposal`, a box-token
     // machine lane IN EXEMPT; and `GET /api/programmes/:slug/history` and `GET /api/sessions/:id/programme`, session-or-token
     // reads IN EXEMPT.
-    expect(scanRoutes('coord/ledgersRoutes.ts').length).toBe(30);
+    // 31 since programme lifecycle W3: `POST /api/programmes/decisions`, the backfill door, session-gated and NOT EXEMPT, no
+    // box token; its apply takes the step-up, and it reads its body first, so a bodiless request answers the same dark or
+    // signed in and it is not in FLAG_AWARE.
+    expect(scanRoutes('coord/ledgersRoutes.ts').length).toBe(31);
     // 1 in `coord/coordCallsRoute.ts` (D-8126, wave A3): `POST /api/coord/programmes/:slug/calls`, a box-token machine lane IN EXEMPT.
     expect(scanRoutes('coord/coordCallsRoute.ts').length).toBe(1);
     // 1 in `coord/programmeRemainingRoute.ts` (Overlord W2 remaining work A): `POST /api/coord/programmes/:slug/remaining`, a
@@ -799,7 +804,6 @@ describe('the scanner is looking at something', () => {
     // machine lanes IN EXEMPT: the HTTP half 298 -> 301, the gated count stays 190 (301 - 111), the exempt-HTTP count 108 -> 111.
     // 305 with the draft-review read door (X3 R1), in `review/routes.ts`: class 9, not a box-token lane. The HTTP half 301 -> 302,
     // the gated count stays 190 (302 - 112), the exempt-HTTP count 111 -> 112.
-    expect(scanRoutes('review/routes.ts').map(key)).toEqual(['POST /api/review/open']);
     // 306 with the Overlord's history door (Overlord W1, PR B1), in `coord/overlordHistoryRoutes.ts`, a routes file of its own:
     // `POST /api/overlord/history`, one box-token machine lane IN EXEMPT: the HTTP half 302 -> 303, the gated count stays 190
     // (303 - 113), the exempt-HTTP count 112 -> 113.
@@ -817,7 +821,14 @@ describe('the scanner is looking at something', () => {
     // the exempt-HTTP count 113 -> 116.
     // 323 with the seven outside-folder doors (X2 P2.3), in `docs/routes.ts`, session-gated and NOT EXEMPT, no box token: the
     // HTTP half 313 -> 320, the gated count 197 -> 204, the exempt-HTTP count stays 116.
-    expect(ROUTES.length).toBe(323);
+    // 324 since programme lifecycle W3's backfill door in `coord/ledgersRoutes.ts`, session-gated and NOT EXEMPT: the HTTP half
+    // 320 -> 321, the gated count 204 -> 205 (321 - 116), the exempt-HTTP count stays 116.
+    // 326 since landing order wave 5j-b (2026-11-25, D-9049): the operator's pause and withdraw doors in `coord/routes.ts`,
+    // session-gated and NOT EXEMPT, no box token: the HTTP half 321 -> 323, the gated count 205 -> 207, the exempt-HTTP count stays 116.
+    // 329 with the review page's three routes (X3 R2), in `review/routes.ts`: `GET /review` EXEMPT as class 9, `GET /review.html`
+    // and `GET /review/` gated 404s. The HTTP half 323 -> 326, the gated count 207 -> 209, the exempt-HTTP count 116 -> 117.
+    expect(scanRoutes('review/routes.ts').map(key)).toEqual(['POST /api/review/open', 'GET /review', 'GET /review.html', 'GET /review/']);
+    expect(ROUTES.length).toBe(329);
     expect(scanRoutes('laneModelsRoutes.ts').length).toBe(1);
     expect(scanRoutes('coord/delegationBackfillRoutes.ts').length).toBe(2);
     expect(scanRoutes('coord/approvalCensusRoutes.ts').length).toBe(1);
@@ -1008,7 +1019,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 323 scanned + the static wildcard when the bundle is built.
+    // 329 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1153,6 +1164,7 @@ describe('EXEMPT is complete in both directions', () => {
       'GET /api/timers',
       'GET /api/updates/intent/:nodeId',
       'GET /health',
+      'GET /review',
       'POST /api/approvals',
       'POST /api/auth/login',
       'POST /api/auth/passkey/assert/finish',
@@ -1427,10 +1439,13 @@ describe('the landing write doors: exempt from the session gate, and the route s
       expect(EXEMPT.get(k), k).not.toContain('EXEMPT-BUT-AUTHENTICATED');
       expect(EXEMPT_BUT_AUTHENTICATED.has(k), k).toBe(false);
     }
+    // Since landing order wave 5j-b (D-9049) `SESSION_ONLY` holds the operator's two doors, `/api/landing/pause` and
+    // `/api/landing/withdraw`; neither literal may hold these two box-token lanes.
     for (const name of ['UNGATED', 'SESSION_ONLY']) {
       const m = new RegExp(`const ${name} = new Set\\(\\[([^\\]]*)\\]\\)`).exec(pause);
       expect(m, `the ${name} literal moved`).not.toBeNull();
-      expect(m![1]).not.toContain('/api/landing/');
+      expect(m![1]).not.toContain('/api/landing/entries');
+      expect(m![1]).not.toContain('/api/landing/order');
     }
   });
 
@@ -1821,7 +1836,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 320 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 326 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1885,7 +1900,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 320 HTTP routes, not the 116 exempt.
+          //    is not itself flag-aware — the assertion that covers all 326 HTTP routes, not the 117 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

@@ -107,6 +107,10 @@ const CASES: Record<string, FactInput> = {
   'a session behind the fleet\'s newest Claude Code build': {
     session: s({ workspace: 'quiet-fen', version: '2.1.296' }), now: NOW, claudeLatest: '2.1.302', claudeLaneLatest: '2.1.302',
   },
+  'a session whose provider error ccrc retries': {
+    session: s({ workspace: 'mild-heath', providerRetry: { err: 'overloaded', since: NOW - 60_000, attempts: 1, nextAt: NOW + 60_000, phase: 'retrying' } }),
+    now: NOW,
+  },
   'an unreachable pane with every other marker too': {
     session: s({ substrate: { at: NOW - 60_000, text: 'tmux socket gone' }, limits: { five: 99, seven: null },
       swapBlocked: { at: NOW, reason: 'no headroom' }, unmeasured: ['uuid'] }),

@@ -28,11 +28,14 @@ import { parseLandingJournal } from './landingJournalPolicy.js';
 import type { LandingAdvance, LandingLand, LandingLandWrite, LandingWrite } from './landingEntry.js';
 import type { LandingBoundaryFailure, LandingEntryState, LandingInfrastructureFailure, LandingJournalRecord } from '../../../shared/landingLine.js';
 import { LANDING_TERMINAL_STATES } from '../../../shared/landingLine.js';
-import { decideLandingMutation } from './landingWrites.js';
+import { decideLandingMutation, landingWithdrawNoticesOf } from './landingWrites.js';
 import { applyLandingControlTx, type LandingControlInput, type LandingControlPhase } from './landingControlTx.js';
-import { applyLandingDoorRecordTx } from './landingDoorsTx.js';
+import { applyLandingDoorRecordTx, landingAppendParses, queueLandingDoorNoticesTx } from './landingDoorsTx.js';
 import type { LandingControlApplyResult } from './landingNext.js';
-import type { LandingAuthorityCommand, LandingAuthorityWrite, LandingJournalReplay, LandingMutationFacts, LandingReadResult } from './landingWrites.js';
+import type { LandingAuthorityCommand, LandingAuthorityWrite, LandingAuthorityWriteOf, LandingJournalReplay,
+  LandingMutationFacts, LandingPauseWrite, LandingReadResult, LandingWithdrawWrite } from './landingWrites.js';
+/** The authority writer's three answers (wave 5j-b); the public method narrows it by its command (`LandingAuthorityWriteOf`). */
+type LandingAnyWrite = LandingAuthorityWrite | LandingPauseWrite | LandingWithdrawWrite;
 import type { LandingJournalPort, LandingJournalSnapshot } from './landingJournalPort.js';
 import { redactCommand } from './redact.js';
 import { REVIEW_CAP_SUMMARY_MAX, cutWhole, reviewCapRefuses, reviewCapStatus } from './reviewcap.js';
@@ -58,6 +61,7 @@ import * as probes from '../continuity/continuityStore.js';
 import { modelSwitchesSinceStart, readerEventsSinceStart, type HookStoreRead, type ModelSwitchRow, type ReaderEvent } from '../continuity/hookReportStore.js';
 import * as designation from './overlordDesignationStore.js';
 import * as ladder from './overlordLadderStore.js';
+import { txWithAuthorityReceipt } from './overlordAuthorityJournal.js';
 import * as sequence from './overlordSequenceStore.js';
 import * as outbox from './pushOutboxStore.js';
 import * as census from './approvalCensusStore.js';
@@ -825,6 +829,8 @@ export interface ReclaimMoveOpts {
   /** Programme lifecycle W2 review: runs inside the move's transaction after it, handed every session whose OPEN run the move
    *  took (`holding`, the heir excluded), so a door's mail to them is queued with the move or not at all. */
   readonly onMoved?: (moved: { readonly holding: readonly string[] }) => void;
+  /** Programme lifecycle W3 (spec §13): the hand-over door's, so a conflict's party may be given a programme whose runs it holds. */
+  readonly party?: boolean;
 }
 
 /** The three terminal members, ONCE (spec §3.2). The SQL literal in
@@ -2474,10 +2480,10 @@ export class CoordStore {
     {
       // Programme lifecycle W1 (R11 rule 4, D-8993): an heir that owns another live real programme, or claims an open run
       // in a programme other than this one that it does not own, is refused before anything is written. Its unfiled
-      // placeholder does not count: it is withdrawn below, in this transaction. A conflict's party may be given a
-      // programme whose runs it holds (§13), which the `r.program != ?` clause admits.
+      // placeholder does not count: it is withdrawn below, in this transaction. By the hand-over door (`party`), a
+      // conflict's party may be given a programme whose runs it holds, its claims in its other programmes standing (§13).
       if (to !== null) {
-        const owned = lifecycle.heirOwnsAnotherOf(this.db, to, toUuid, run.program);
+        const owned = lifecycle.heirOwnsAnotherOf(this.db, to, toUuid, run.program, opts.party === true);
         if (owned !== null) return { ok: false as const, kind: 'owns-another-programme' as const, by: owned };
       }
       // Read before the write, and excluding rows ALREADY naming `to`: the
@@ -3808,20 +3814,21 @@ export class CoordStore {
   /** The whole journal, validated, against the DB cursor: `fail` is the typed refusal (never raw text), `snapshot` the
    *  adapter's evidence the caller must release. Absence is bootstrap only with cursor 0 and no overlay rows. */
   private landingHistory(log: LandingJournalPort): { fail: LandingBoundaryFailure | null; snapshot: LandingJournalSnapshot | null;
-    records: LandingJournalRecord[]; lastSeq: number; cursor: number } {
+    records: LandingJournalRecord[]; lastSeq: number; cursor: number; text: string } {
     const r = log.read();
-    if (!r.ok) return { fail: { error: 'landing-journal-unreadable', recovery: 'replay' }, snapshot: null, records: [], lastSeq: 0, cursor: 0 };
+    if (!r.ok) return { fail: { error: 'landing-journal-unreadable', recovery: 'replay' }, snapshot: null, records: [], lastSeq: 0, cursor: 0, text: '' };
     try { return this.landingHistoryOf(r); } catch (err) { r.snapshot.release(); throw err; }
   }
 
-  /** `landingHistory`'s body after a successful read: a throw out of it is released by the caller. */
+  /** `landingHistory`'s body after a successful read: a throw out of it is released by the caller. `text` is the journal's
+   *  text (`''` when absent), for the writer's parse before the append (wave 5j-b). */
   private landingHistoryOf(r: Extract<ReturnType<LandingJournalPort['read']>, { ok: true }>): { fail: LandingBoundaryFailure | null;
-    snapshot: LandingJournalSnapshot | null; records: LandingJournalRecord[]; lastSeq: number; cursor: number } {
+    snapshot: LandingJournalSnapshot | null; records: LandingJournalRecord[]; lastSeq: number; cursor: number; text: string } {
     const c = this.bigReads('SELECT appliedSeq AS cursor, (SELECT COUNT(*) FROM landing_subjects) + (SELECT COUNT(*) FROM landing_authority) AS overlay ' +
       'FROM landing_journal_cursor WHERE id = 1').get() as { cursor: bigint; overlay: bigint } | undefined;
     if (c === undefined) throw new Error('landing_journal_cursor has no row');
     const cursor = Number(c.cursor);
-    const base = { snapshot: r.snapshot, cursor, records: [] as LandingJournalRecord[], lastSeq: 0 };
+    const base = { snapshot: r.snapshot, cursor, records: [] as LandingJournalRecord[], lastSeq: 0, text: r.kind === 'absent' ? '' : r.text };
     if (r.kind === 'absent') {
       return { ...base, fail: cursor !== 0 || c.overlay !== 0n ? { error: 'landing-journal-missing', recovery: 'replay' } : null };
     }
@@ -3895,24 +3902,29 @@ export class CoordStore {
   }
 
   /**
-   * The ONE authoritative landing write (an entry for a PR with no run, or a PR's order edges and flag): validate the
-   * complete journal and cursor, gather the guarded facts in the same transaction, decide (L1), append the record, apply
-   * it to the overlay (and, for a creation, to its projection), COMMIT. A failure once the append was entered fences every
-   * landing entrance and answers `mayApply` with the phase that failed; a refusal before it appends nothing.
+   * The ONE authoritative landing write: an entry for a PR with no run, a PR's order edges and flag, and (wave 5j-b) the
+   * operator's pause or resume of a project's line and withdrawal of one entry. Validate the complete journal and cursor,
+   * gather the guarded facts in the same transaction, decide (L1), build the record and PARSE it after the journal's text
+   * with the journal's own parser (`landingAppendParses`, every kind: a line the next read would refuse answers
+   * `landing-record-unparseable` and appends nothing), append, apply it to the overlay (a creation to its projection too, a
+   * withdrawal with its notices, queued in this transaction), COMMIT. A no-op and an unchanged pause append nothing. A
+   * failure once the append was entered fences every landing entrance and answers `mayApply` with the phase that failed; a
+   * refusal before it appends nothing and fences nothing. Typed by its command (`LandingAuthorityWriteOf`).
    */
-  writeLandingAuthority(command: LandingAuthorityCommand, at: number): LandingAuthorityWrite {
+  writeLandingAuthority<C extends LandingAuthorityCommand>(command: C, at: number): LandingAuthorityWriteOf<C> {
+    const answer = (w: LandingAnyWrite): LandingAuthorityWriteOf<C> => w as LandingAuthorityWriteOf<C>;
     const log = this.landing.landingJournal;
     const fenced = this.landingGuard();
-    if (log === undefined || fenced !== null) return { ok: false, ...(fenced ?? { error: 'landing-journal-unavailable' as const, recovery: 'restart' as const }) };
+    if (log === undefined || fenced !== null) return answer({ ok: false, ...(fenced ?? { error: 'landing-journal-unavailable' as const, recovery: 'restart' as const }) });
     const phase: { at: JournalPhase } = { at: 'decide' };
     let held: LandingJournalSnapshot | null = null;
     try {
-      return tx(this.db, (): LandingAuthorityWrite => appendThenApply<{ snapshot: LandingJournalSnapshot; record: LandingJournalRecord;
-        mutation: Parameters<typeof landingRecordOf>[1] }, LandingAuthorityWrite, LandingAuthorityWrite>({
+      return answer(tx(this.db, (): LandingAnyWrite => appendThenApply<{ snapshot: LandingJournalSnapshot; record: LandingJournalRecord;
+        mutation: Parameters<typeof landingRecordOf>[1] }, LandingAnyWrite, LandingAnyWrite>({
         decide: () => {
           const hist = this.landingHistory(log);
           held = hist.snapshot;
-          const stop = (f: LandingBoundaryFailure): { stop: LandingAuthorityWrite } => { this.landingFence ??= 'replay'; return { stop: { ok: false, ...f } }; };
+          const stop = (f: LandingBoundaryFailure): { stop: LandingAnyWrite } => { this.landingFence ??= 'replay'; return { stop: { ok: false, ...f } }; };
           if (hist.fail !== null) return stop(hist.fail);
           if (hist.lastSeq !== hist.cursor) return stop({ error: 'landing-journal-cursor', recovery: 'replay' });
           const read = this.landingFactsInner(command.project);
@@ -3923,9 +3935,13 @@ export class CoordStore {
               : { ok: false, error: decision.error } };
           }
           const m = decision.mutation;
-          if (m.kind === 'noop') return { stop: { ok: true, entry: m.entry, previous: m.entry, changed: false, seq: null, coordinator: m.coordinator } };
+          if (m.kind === 'noop') return { stop: { ok: true, entry: m.entry, previous: m.entry, changed: false, seq: null, coordinator: m.coordinator, released: [] } };
+          if (m.kind === 'unchanged') return { stop: { ok: true, project: m.project, operatorPaused: m.operatorPaused, changed: false, seq: null } };
           if (hist.lastSeq >= Number.MAX_SAFE_INTEGER) return { stop: { ok: false, error: 'landing-sequence-overflow' } };
-          return { go: { snapshot: held!, mutation: m, record: landingRecordOf(command, m, hist.lastSeq + 1, at) } };
+          const record = landingRecordOf(command, m, hist.lastSeq + 1, at);
+          // The exact bytes the adapter appends (`landingJournal.ts`: one `JSON.stringify(record)` plus LF).
+          if (!landingAppendParses(hist.text, record, `${JSON.stringify(record)}\n`)) return { stop: { ok: false, error: 'landing-record-unparseable' } };
+          return { go: { snapshot: held!, mutation: m, record } };
         },
         append: ({ snapshot, record }) => {
           const appended = log.append(snapshot, record);
@@ -3938,20 +3954,27 @@ export class CoordStore {
               "VALUES (?, ?, ?, ?, ?, NULL, 'pinned', ?, ?)").run(mutation.id, mutation.project, mutation.pr, mutation.pinnedSha, mutation.handoffCommit, mutation.setBy, at);
           }
           const after = this.landingFactsInner(command.project);
-          const entry = after.ok ? after.facts.entries.find((e) => e.pr === command.pr) : undefined;
+          if (!after.ok) throw new Error('landing write reads back unreadable');
+          if (mutation.kind === 'pause') return { ok: true, project: mutation.project, operatorPaused: after.facts.flags.operatorPaused, changed: true, seq: record.seq };
+          const pr = mutation.kind === 'entry' ? mutation.pr : mutation.entry.pr;
+          const entry = after.facts.entries.find((e) => e.pr === pr);
           if (entry === undefined) throw new Error('landing write reads back absent');
+          if (mutation.kind === 'withdraw') {
+            const notices = queueLandingDoorNoticesTx(this, mutation, landingWithdrawNoticesOf({ project: mutation.entry.project, mutation, seq: record.seq, at }));
+            return { ok: true, entry, previous: mutation.entry, changed: true, seq: record.seq, notices, coordinator: mutation.coordinator };
+          }
           // The order's association is the decision's (readable only); a creation is a no-run entry by construction.
           return mutation.kind === 'order'
-            ? { ok: true, entry, previous: mutation.entry, changed: true, seq: record.seq, coordinator: mutation.coordinator }
-            : { ok: true, entry, previous: null, changed: true, seq: record.seq, coordinator: { kind: 'no-run' } };
+            ? { ok: true, entry, previous: mutation.entry, changed: true, seq: record.seq, coordinator: mutation.coordinator, released: mutation.released }
+            : { ok: true, entry, previous: null, changed: true, seq: record.seq, coordinator: { kind: 'no-run' }, released: [] };
         },
-      }, phase));
+      }, phase)));
     } catch {
       const recovery = this.landingBoundary();
-      if (phase.at === 'decide') return { ok: false, error: 'landing-db-unavailable', recovery };
+      if (phase.at === 'decide') return answer({ ok: false, error: 'landing-db-unavailable', recovery });
       this.landingFence = recovery;
-      return { ok: false, recovery, mayApply: true,
-        error: phase.at === 'append' ? 'landing-journal-append' : phase.at === 'apply' ? 'landing-db-apply' : 'landing-db-commit' };
+      return answer({ ok: false, recovery, mayApply: true,
+        error: phase.at === 'append' ? 'landing-journal-append' : phase.at === 'apply' ? 'landing-db-apply' : 'landing-db-commit' });
     } finally { (held as LandingJournalSnapshot | null)?.release(); }
   }
 
@@ -5741,20 +5764,21 @@ export class CoordStore {
   stopDone(sessionId: string): designation.StopDoneResult { return designation.stopDone(this.db, sessionId); }
   setModelClass(j: designation.AuthorityAppender, i: Parameters<typeof designation.setModelClass>[2]): designation.SettingResult { return designation.setModelClass(this.db, j, i); }
   setAccountSet(j: designation.AuthorityAppender, i: Parameters<typeof designation.setAccountSet>[2]): designation.SettingResult { return designation.setAccountSet(this.db, j, i); }
-  /** Overlord §7.5, H25 (`overlordLadderStore.ts`): the ladder's reads and writers; the three door writers open their own `tx()`. */
+  /** Overlord §7.5, H25 (`overlordLadderStore.ts`): the ladder's reads and writers; the three door writers open their own `tx()`
+   *  through the journal's `txWithAuthorityReceipt`, so a throw after a durable append fences the guard (review 3646 F4). */
   ladderRows(): ladder.LadderRowsRead { return ladder.ladderRows(this.db); }
   ladderRungRead(): ladder.LadderRungRead { return ladder.ladderRungRead(this.db); }
   setRung(j: designation.AuthorityAppender, move: ladder.RungMoveInput): ladder.LadderWrite {
     const actor = ladder.rungActorBefore(move); if (!actor.ok) return actor;
-    return tx(this.db, () => ladder.setRungInTx(this.db, j, move));
+    return txWithAuthorityReceipt(this.db, j, (held) => ladder.setRungInTx(this.db, held, move));
   }
   raiseLatch(j: designation.AuthorityAppender, latch: ladder.LatchRaiseInput): ReturnType<typeof ladder.raiseLatchInTx> {
     const actor = ladder.ladderActor(latch.raisedBy, 'brake'); if (!actor.ok) return actor;
-    return tx(this.db, () => ladder.raiseLatchInTx(this.db, j, latch));
+    return txWithAuthorityReceipt(this.db, j, (held) => ladder.raiseLatchInTx(this.db, held, latch));
   }
   clearLatch(j: designation.AuthorityAppender, clear: ladder.LatchClearInput): ladder.LadderWrite {
     const actor = ladder.ladderActor(clear.actor, 'widen'); if (!actor.ok) return actor;
-    return tx(this.db, () => ladder.clearLatchInTx(this.db, j, clear));
+    return txWithAuthorityReceipt(this.db, j, (held) => ladder.clearLatchInTx(this.db, held, clear));
   }
   /** Overlord §10.4 (`overlordSequenceStore.ts`): the sequence's reads, prune, and the Inbox's post-commit exception. */
   sequenceAfter(after: number, limit: number): ReturnType<typeof sequence.sequenceAfter> { return sequence.sequenceAfter(this.db, after, limit); }
@@ -5800,6 +5824,10 @@ export class CoordStore {
   timerHoldFacts(setter: string, firedSince: number): timers.TimerHoldRead { return timers.timerHoldFacts(this.db, setter, firedSince); }
   setsSince(setter: string, since: number): number { return timers.setsSince(this.db, setter, since); }
   purgeTimers(before: number): { removed: number } { return timers.purgeTimers(this.db, before); }
+  firedTimersOf(setter: string, stamp: string, since: number): timers.TimersRead { return timers.firedTimersOf(this.db, setter, stamp, since); }
+  recordTimerRefusal(r: timers.TimerRefusalCount): { ok: boolean } { return timers.recordTimerRefusal(this.db, r); }
+  timerRefusalCounts(sinceDay: string): timers.TimerRefusalCountsRead { return timers.timerRefusalCounts(this.db, sinceDay); }
+  purgeTimerRefusals(beforeDay: string): { removed: number } { return timers.purgeTimerRefusals(this.db, beforeDay); }
   /** Overlord §3.3.2 C37 (the notes piece, `continuityStore.ts`): the note door's two writers, append-only, and the reads
    *  the door and the card's gatherer make. */
   appendNote(n: NoteInsert): { ok: true; id: number } | { ok: false; kind: 'superseded' | 'write-failed' } { return appendNote(this.db, n); }
@@ -7585,9 +7613,9 @@ export class CoordStore {
    *  (`coordinatorOfRun`, `soleActiveCoordinator()`) because only the caller knows whether it is about
    *  to push, and resolving here would hide the unresolvable case behind a
    *  value that looks like an id. */
-  mailOrigin(mailId: number): { fromId: string; runId: number | null; subject: string; body: string } | null {
-    const row = this.db.prepare('SELECT fromId, runId, subject, body FROM mail WHERE id = ?')
-      .get(mailId) as { fromId: string; runId: number | null; subject: string; body: string } | undefined;
+  mailOrigin(mailId: number): { fromId: string; toId: string; runId: number | null; subject: string; body: string } | null {
+    const row = this.db.prepare('SELECT fromId, toId, runId, subject, body FROM mail WHERE id = ?')
+      .get(mailId) as { fromId: string; toId: string; runId: number | null; subject: string; body: string } | undefined;
     return row ?? null;
   }
 

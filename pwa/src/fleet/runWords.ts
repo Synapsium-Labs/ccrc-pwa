@@ -11,6 +11,7 @@ import { KICKOFF_UNACKED_MS, MAIL_REPLAY_WARN_COUNT, SPAWN_STALL_MS, isChildRecl
   type ChildMark, type ChildReclaimStatus, type ChildReclaimWord, type FleetSession, type RunHealth, type RunItemTally, type ProgrammePendingClose, type RunKind, type RunState, type RunSummary, type SessionRun } from '../../../shared/api';
 import { formatAge, formatElapsed } from './formatReset';
 import { closeWords } from './closeWords';
+import { providerRetryNote } from './providerRetryWords';
 import { STUCK_HEADING, closeWhen } from './stuckWords';
 import type { CoordinatorPresence } from './presence';
 
@@ -149,18 +150,21 @@ export function workerQuietAt(run: RunSummary, quietMs: number | null): number |
 /** The ONE reader of `RunSummary.workerLastSeen` and `.workerLastTurn` (D-8285). Absent or not a finite number (an older
  *  server, a marker the sweep could not read, no sweep yet) draws nothing: "not measured" is never "dead". `quietMs` is the
  *  runs frame's `stallQuietMs`, the threshold `lastMoveAt`'s stalled word uses; null (no frame yet, an older server) is never
- *  quiet. A turn still open is never quiet either: the marker does not move inside a turn, so its age is the turn's. */
-export function workerSeenNote(run: RunSummary, nowMs: number, quietMs: number | null): WorkerSeenNote | null {
+ *  quiet. A turn still open is never quiet either: the marker does not move inside a turn, so its age is the turn's. `worker`
+ *  is the run's own session: while ccrc retries its provider error, that is said in place of `turn failed` and of `quiet`. */
+export function workerSeenNote(run: RunSummary, nowMs: number, quietMs: number | null, worker: FleetSession | null = null): WorkerSeenNote | null {
   const at = run.workerLastSeen;
   if (typeof at !== 'number' || !Number.isFinite(at)) return null;
   const state = run.workerLastTurn?.state;
   const open = state === 'working';
+  const retry = open || worker === null ? null : providerRetryNote(worker, nowMs);
   const quietAt = workerQuietAt(run, quietMs);
-  const quiet = quietAt !== null && nowMs >= quietAt;
+  const quiet = retry === null && quietAt !== null && nowMs >= quietAt;
   const ago = formatAge(Math.floor((nowMs - at) / 1000));
-  const tail = state === 'working' || state === 'failed' ? ` · ${WORKER_TURN_WORD[state]}` : quiet ? ' · quiet' : '';
+  const tail = retry !== null ? ` · ${retry.text}` : state === 'working' || state === 'failed' ? ` · ${WORKER_TURN_WORD[state]}` : quiet ? ' · quiet' : '';
   const when = new Date(at).toISOString().replace('T', ' ').slice(0, 16);
   const title = `The worker's turn marker last moved at ${when} UTC.`
+    + (retry === null ? '' : ` ${retry.title}`)
     + (open ? ' A turn is open, and the marker does not move inside one.' : '')
     + (quiet ? ' That is longer ago than the stall watch\'s quiet time.' : '');
   return { word: `last seen ${ago}${tail}`, quiet, title };

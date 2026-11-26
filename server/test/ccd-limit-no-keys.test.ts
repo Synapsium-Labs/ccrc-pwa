@@ -14,6 +14,8 @@ import { CCD_ALIASES_LIB, ccdSource } from './ccdWsHelpers.js';
 const GUARDED = [
   'cmd_limit_watchdog', '_watchdog_one', '_watchdog_sign_to', '_swap_watchdog_act_gate', '_watchdog_resume_here',
   '_watchdog_resume_run', '_limitwait_open', '_limitwait_close', '_limitwait_choose', 'cmd_limit_wait', '_wake_ceiling_move',
+  // The lane-failing mark (the provider-failure ladder, wave 3a): its reader, its home gate, its writer and the marker reader.
+  '_provfail', '_provfail_holds_home', '_provfail_pass', '_turn_mark_read',
 ];
 
 /** The body of `name() { … }` at column 0, up to the closing brace at column 0. */

@@ -46,6 +46,7 @@ import {
   resolveColor,
   ruleKey,
   rulesOf,
+  SEPARATE_DOCUMENTS,
   selectorList,
   stylesheets,
   subjectCompound,
@@ -1177,6 +1178,7 @@ describe('every stylesheet under src/ is audited', () => {
       'src/screens/stuck-band.css', // the Stuck band (D-8074): layout and ink only; the band is grounded on --bg-page, its heads and rows on --bg-surface
       'src/screens/digest.css',   // the daily digest screen (D-5300)
       'src/screens/settings/settings.css', // Settings' frame (R2b1, D-5504); one ink since R2b2: `.settings-when`
+      'src/review/review.css', // the draft review page, a separate document (SEPARATE_DOCUMENTS): walked and read by every structural check, left out of the console-palette measurement only
       'src/session/chat.css',
       'src/session/pasteChips.css', // the composer's paste-chip row (desktop-polish wave 169): grounded on --bg-raised; its controls' ink is measured in the browser leg
       'src/skins/instrument/instrument.css', // Instrument's shell (W2 Task S9, D-5472): the top bar door's tooltip is self-grounded
@@ -1243,7 +1245,10 @@ describe('every stylesheet under src/ is audited', () => {
   // names a painter, or restates a painter's subject, ever lands in the census
   // again (which is what the MAJOR was), this fails.
   describe('the uncovered census', () => {
-    const rules = stylesheets(ROOT).flatMap((rel) => rulesOf(ROOT, rel));
+    // The census is of the rules measured against the console's palettes, so a SEPARATE_DOCUMENTS sheet is not in it.
+    const rules = stylesheets(ROOT)
+      .filter((rel) => !Object.hasOwn(SEPARATE_DOCUMENTS, rel))
+      .flatMap((rel) => rulesOf(ROOT, rel));
     const paints = (r: { body: string }): boolean => paintOf(r.body).paints;
     const painters = rules.filter((r) => declOf(r.body, 'color') !== null && paints(r));
 
@@ -1392,6 +1397,8 @@ describe('every hand-typed copy of a tokens.css colour is bound to it', () => {
     'design/contrast-check.mjs': 'one hex inside a prose comment explaining why a pair takes attention-TEXT and not the dot hue; no colour is typed into the gate itself (palette() looks every one up by token)',
     'test/contrast.test.ts': 'the hand-computed arithmetic controls this file exists to carry, each already asserted against resolveColor',
     'test/fleet-css.test.ts': 'one hex inside a prose comment about --accent and --status-busy sharing a value',
+    'src/review/review.css': "the draft review page's own palette (--review-*): deliberately unbound copies. The page is a separate document that never reads the console's tokens (SEPARATE_DOCUMENTS in design/audit.mjs), so a bind to them is not wanted (--review-bg dark is the console's dark --bg-page on purpose); its light and dark pairs are measured by test/review-contrast.test.ts",
+    'generated/reviewLabFixture.ts': "generated Export output (lab mode's two copies), whose bytes carry the console's token CSS because Export embeds it; bound by the byte-equality row in test/review-lab-fixture.test.tsx, which regenerates it from Export and the tokens and fails on any drift",
     'src/session/drawerModel.ts': 'the xterm 16-colour ANSI palette, GLASS_ANSI, moved out of terminalFactory.ts glass() so the terminal theme and the wrapped view read one table (D-5006). The four that matter (background, foreground, cursor, cursorAccent) already come from tokenValue() in glass(); the ANSI 16 are a separate table that reuses seven brand hues and adds eight bright variants that are not tokens. Reported, not bound — the file is outside the css lane',
   };
 

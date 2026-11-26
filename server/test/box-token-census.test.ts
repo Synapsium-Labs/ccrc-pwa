@@ -183,7 +183,9 @@ const LEDGER_OPERATOR_DOORS = ['/api/waiting', '/api/items/:id', '/api/items/:id
   '/api/programmes/:slug/goals/ratify',
   // Programme lifecycle W2: the operator's start, state and hand-over doors; the start takes the account gate, the state door's
   // pause works dark (`flag-off`) and its other edges and the hand-over take the step-up.
-  '/api/programmes', '/api/programmes/:slug/state', '/api/programmes/:slug/coordinator'];
+  '/api/programmes', '/api/programmes/:slug/state', '/api/programmes/:slug/coordinator',
+  // Programme lifecycle W3: the backfill door; it previews with the session alone and applies behind the step-up.
+  '/api/programmes/decisions'];
 
 /** The continuity routes file's session-gated doors (Overlord W1a, the timers piece, slug continuity-session-doors-list):
  *  every door `continuity/routes.ts` registers beyond its box-token lanes (`CONTINUITY_LANES`), whichever piece adds it. The
@@ -1212,7 +1214,8 @@ describe("CLAUDE.md: the account-pool freshness dependency is named, not discove
 // The capability read is a separate surface, not a box-token lane.
 describe('the draft review read surface', () => {
   const REVIEW_SRC = read('server/src/review/routes.ts');
-  const REVIEW_DOORS = ['POST /api/review/open'];
+  // The capability door, then the page and its two refused spellings (R2.2), in registration order.
+  const REVIEW_DOORS = ['POST /api/review/open', 'GET /review', 'GET /review.html', 'GET /review/'];
   // The plugin's instance is named scope; normalize that receiver for the shared slicer.
   const normalized = (src: string): string => src.replace(/\bscope\./g, 'app.');
   const registered = (src: string): string[] => registrationsIn(normalized(src)).map((r) => r.key);
@@ -1223,19 +1226,44 @@ describe('the draft review read surface', () => {
     const end = src.indexOf('\n    });', start);
     expect(end, 'review registration end missing').toBeGreaterThan(start);
     const body = src.slice(start, end);
-    return ['req.cookies', 'checkMailToken', 'requireMailToken', 'runCcd', 'ReviewTreeReader', 'docs.readers']
-      .filter((term) => body.includes(term));
+    return NEVER.filter((term) => body.includes(term));
+  };
+  const NEVER = ['req.cookies', 'checkMailToken', 'requireMailToken', 'runCcd', 'ReviewTreeReader', 'docs.readers'];
+  // The page routes sit after the open door in the same file: from the first of them to the end of the file.
+  const pageAnchor = "app.get('/review'";
+  const pageNeverRead = (src: string): string[] => {
+    const start = src.indexOf(pageAnchor);
+    expect(start, 'review page registration missing').toBeGreaterThan(-1);
+    const body = src.slice(start);
+    return NEVER.filter((term) => body.includes(term));
   };
 
-  it('REVIEW_DOORS and registrations agree in both directions, with only the capability door', () => {
+  it('REVIEW_DOORS and registrations agree in both directions; the read door and the page are exempt, the 404s are not', () => {
     expect(registered(REVIEW_SRC)).toEqual(REVIEW_DOORS);
     expect(lanesIn(normalized(REVIEW_SRC))).toEqual([]);
     expect(GATE_SRC).toContain("  ['POST /api/review/open',");
+    expect(GATE_SRC).toContain("  ['GET /review',");
     expect(GATE_SRC).toContain('reason 9');
+    for (const key of ['GET /review.html', 'GET /review/']) expect(GATE_SRC, `${key} must stay gated`).not.toContain(`  ['${key}',`);
   });
 
   it('the open registration never reads session, token, or fleet dependencies', () => {
     expect(neverRead(REVIEW_SRC)).toEqual([]);
+  });
+
+  it('the page registrations never read session, token, or fleet dependencies', () => {
+    expect(pageNeverRead(REVIEW_SRC)).toEqual([]);
+  });
+
+  it.each(NEVER)('sees a separately planted %s in the page handlers', (term) => {
+    expect(pageNeverRead(`${REVIEW_SRC}\n${term};`)).toContain(term);
+  });
+
+  it('sees a box-token call planted in a page handler', () => {
+    const planted = REVIEW_SRC.replace("app.get('/review.html', async (_req, reply) => {",
+      "app.get('/review.html', async (req, reply) => {\n    requireMailToken(req, reply);");
+    expect(planted).not.toEqual(REVIEW_SRC);
+    expect(lanesIn(normalized(planted))).toEqual(['GET /review.html']);
   });
 
   it.each(['req.cookies', 'checkMailToken', 'requireMailToken', 'runCcd', 'ReviewTreeReader', 'docs.readers'])
@@ -1247,7 +1275,7 @@ describe('the draft review read surface', () => {
   it('sees a direct box-token call planted in the open handler', () => {
     expect(REVIEW_SRC).toContain(anchor);
     const planted = REVIEW_SRC.replace(anchor, `${anchor}\n      requireMailToken(req, reply);`);
-    expect(lanesIn(normalized(planted))).toEqual(REVIEW_DOORS);
+    expect(lanesIn(normalized(planted))).toEqual(['POST /api/review/open']);
   });
 
   it('sees an added registration and a missing listed registration', () => {

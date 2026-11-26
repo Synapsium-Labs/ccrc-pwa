@@ -12,6 +12,8 @@ import { fileURLToPath } from 'node:url';
 import { runMutants } from './sim/mutate.js';
 import { NODE_APPEND_ONLY_FS, type AppendOnlyFsOps } from '../src/appendOnlyFile.js';
 import { MIGRATIONS } from '../src/coord/schema.js';
+import * as journalModule from '../src/coord/overlordAuthorityJournal.js';
+import { authorityReceiptCases } from './authorityReceiptCases.js';
 import { tx } from '../src/coord/tx.js';
 import {
   OVERLORD_AUTHORITY_BASENAME, OVERLORD_AUTHORITY_FORMAT, OVERLORD_AUTHORITY_TORN_DIR, type OverlordAuthorityMove,
@@ -436,4 +438,9 @@ describe('F6 and F7: a head row that cannot be read keeps the rows word; a widen
     expect(f.failures).toEqual(['journal-unreadable']);
     expect(f.lines()).toEqual([]);
   });
+});
+
+// Sequence PR B1, piece 4: the post-append receipt every authority writer opens its transaction through.
+describe('txWithAuthorityReceipt (review 3646 F4, call 1216)', () => {
+  for (const [name, run] of Object.entries(authorityReceiptCases(journalModule))) it(name, run);
 });

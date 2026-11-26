@@ -202,6 +202,33 @@ export function callerStandingCases(m: OverlordGateModule): Record<string, Suite
         expect(s.kind === 'unmeasured' && s.why).toContain('the row is unreadable');
       }
     },
+    'an unmeasured designation at a by-profile door: another session for a measured profile not the Overlord\'s or an absent one; unmeasured otherwise': () => {
+      const d = DESIGNATION_FIXTURES.unmeasured!;
+      const profiles: [string, unknown, string][] = [
+        ['coordinator', { kind: 'measured', word: 'coordinator' }, 'other'], ['worker', { kind: 'measured', word: 'worker' }, 'other'],
+        ['absent', { kind: 'absent' }, 'other'], ['overlord', { kind: 'measured', word: 'overlord' }, 'unmeasured'],
+        ['unreadable', { kind: 'unreadable', why: 'profile unreadable' }, 'unmeasured'], ['not read', 'not-read', 'unmeasured'],
+      ];
+      for (const [name, profile, want] of profiles) {
+        const by = m.callerStandingOf({ sessionId: 'lane-x', incarnation: 'not-asked', profile: profile as never }, d, 'by-profile');
+        expect(by.kind, `by-profile, ${name}`).toBe(want);
+        if (by.kind === 'unmeasured') expect(by.word, name).toBe('unavailable');
+        // A refuse door keeps gates B's answer whatever the profile.
+        const refuseDoor = m.callerStandingOf({ sessionId: 'lane-x', incarnation: 'not-asked', profile: profile as never }, d, 'refuse');
+        expect(refuseDoor.kind, `refuse, ${name}`).toBe('unmeasured');
+      }
+      // No profile handed in reads as not read.
+      expect(m.callerStandingOf({ sessionId: 'lane-x', incarnation: 'not-asked' }, d, 'by-profile').kind).toBe('unmeasured');
+      // A measured designation never asks the profile: the bound id and another one answer as at a refuse door.
+      for (const [name, md] of Object.entries(DESIGNATION_FIXTURES)) {
+        if (name === 'unmeasured') continue;
+        for (const id of IDS) {
+          const plain = m.callerStandingOf({ sessionId: id, incarnation: 'not-asked' }, md);
+          const withProfile = m.callerStandingOf({ sessionId: id, incarnation: 'not-asked', profile: { kind: 'measured', word: 'worker' } as never }, md, 'by-profile');
+          expect(withProfile, `${name} / ${id}`).toStrictEqual(plain);
+        }
+      }
+    },
     'incarnationNeeded is true exactly for the bound id and a pending designate id': () => {
       for (const [name, d] of Object.entries(DESIGNATION_FIXTURES)) {
         for (const id of IDS) {
@@ -412,6 +439,8 @@ export const ORACLE_STEPS: ReadonlyArray<(f: Gf) => Res | null> = [
   // 10: the effective rung; every W1 act is allowed at every rung above off, and the Overlord's team link (D-8809) at full only
   (f) => {
     if (isStart(f.door) || f.ladder === 'start-door' || f.ladder.kind !== 'read') return null;
+    // A door that names no act kind (the timer doors, Overlord W1) skips step 10 alone.
+    if (f.door.act === null) return null;
     if (f.ladder.rung.rung === 'off') return refuseOf('rung-below', '10');
     return FULL_ONLY_ACTS.includes(f.door.act) && f.ladder.rung.rung !== 'full' ? refuseOf('rung-below', '10') : null;
   },
@@ -564,6 +593,19 @@ export function overlordGateCases(m: OverlordGateModule): Record<string, SuiteCa
       refused(passFacts(d, { generation: { kind: 'state', state: 'probing' } }), 'renewing', '9', 'step 9');
       refused(passFacts(d, { ladder: ladderRead({ rung: 'off' }) }), 'rung-below', '10', 'step 10');
     },
+    'a door that names no act kind skips step 10 at every rung, and runs steps 1 to 9 (Overlord W1, the timer doors)': () => {
+      for (const key of ['timer-set', 'timer-list', 'timer-cancel']) {
+        const d = doorOf(key);
+        expect(d.act, key).toBeNull();
+        for (const rung of ['off', 'chat', 'advise', 'full']) {
+          expect(g(passFacts(d, { ladder: ladderRead({ operatorRung: 'chat', rung }) })), `${key} at ${rung}`).toEqual({ kind: 'pass' });
+        }
+        refused(passFacts(d, { ladder: ladderRead({ operatorRung: 'off' }) }), 'overlord-off', '4', `${key} step 4`);
+        refused(passFacts(d, { card: 'none' }), 'card-unread', '8', `${key} step 8`);
+        refused(passFacts(d, { generation: { kind: 'state', state: 'draining' } }), 'renewing', '9', `${key} step 9`);
+        refused(passFacts(d, { authority: { kind: 'rolled-back', cause: 'behind' } }), 'authority-rolled-back', '3', `${key} step 3`);
+      }
+    },
     'step 4 reads the operator rung, step 10 the effective rung': () => {
       const d = door('card', { ladderClass: 'other', write: false });
       refused(passFacts(d, { ladder: ladderRead({ operatorRung: 'off', rung: 'full' }) }), 'overlord-off', '4', 'operator off, effective full');
@@ -665,6 +707,12 @@ export const CALLER_STANDING_SET: MutantSet<OverlordGateModule> = {
     G('S-9', 'placeOf(sessionId, designation) !== null;', 'placeOf(sessionId, designation) === null;'),
     G('S-10', "word: 'registry-unmeasurable', why: `the incarnation could not be read", "word: 'unavailable', why: `the incarnation could not be read"),
     G('S-11', "if (place === null) return { kind: 'other' };", "if (place === null) return { kind: 'other-incarnation' };"),
+    // Overlord W1, the timer doors (question 12): the profile arm.
+    G('S-13', "(p.kind === 'measured' && p.word !== OVERLORD_PROFILE)", "p.kind === 'measured'"),
+    G('S-14', "if (unmeasuredDesignation === 'by-profile' && p !== 'not-read'", "if (p !== 'not-read'"),
+    G('S-15', "p !== 'not-read' && (p.kind === 'absent' ||", "p !== 'not-read' && (p.kind !== 'measured' ||"),
+    G('S-16', "(p.kind === 'absent' || (p.kind", "((p.kind"),
+    G('S-17', "const p = caller.profile ?? 'not-read';", "const p = caller.profile ?? { kind: 'absent' };"),
   ],
 };
 
@@ -725,6 +773,8 @@ export const OVERLORD_GATE_SET: MutantSet<OverlordGateModule> = {
     G('O-16', "if (g.kind === 'none') return refuse('renewing', '9', 'no live generation');", ''),
     G('O-17', "if (s.kind === 'other') return door.others === 'hook' ?", "if (s.kind === 'other') return door.others !== 'hook' ?"),
     G('O-18', "if (!start && ladder !== 'start-door' && ladder.kind === 'read') {\n    const unmet", "if (start && ladder !== 'start-door' && ladder.kind === 'read') {\n    const unmet"),
+    // Overlord W1, the timer doors (question 1): the step-10 skip for a door that names no act kind.
+    G('O-19', "if (door.act !== null && ladder !== 'start-door' && ladder.kind === 'read') {", "if (ladder !== 'start-door' && ladder.kind === 'read') {"),
   ],
 };
 
