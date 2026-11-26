@@ -71,6 +71,12 @@ strands the Overlord.
 - **`Holds` existed as `{ ok: false; detail }`** in the L1 module; the plan wrote `AccountFacts.held` as `{ ok: false }`. Both now
   use L0's one shape, `AccountHoldsRead`, with its detail.
 
+- **Two more files the plan did not name, found by this pull request's first CI run** (red on both, fixed in the second push):
+  the Overlord door census reads `continuity/routes.ts` and wants every registration there to be a door row or a
+  `NOT_OVERLORD_DOORS` entry, so the two operator doors joined that list in `overlordDoors.ts` (by peer packet, with its holder's
+  and the coordinator's yes); and the limit samples migration case rolls back every later migration, so it drops
+  `overlord_account_holds` too and counts eight later migrations, not seven.
+
 ## Departures, by slug
 
 | Slug | What and why |

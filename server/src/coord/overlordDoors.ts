@@ -152,5 +152,7 @@ export const NOT_OVERLORD_DOORS: Readonly<Record<string, { readonly file: string
   'POST /api/sessions/:id/renew': { file: CONTINUITY, why: "the operator's Renew now on one session: session-gated, no box token" },
   'GET /api/coord/renewal-mode': { file: CONTINUITY, why: "the operator's read of when soft renewals happen: session-gated, no box token" },
   'POST /api/coord/renewal-mode': { file: CONTINUITY, why: "the operator's setting of when soft renewals happen: session-gated, no box token" },
+  'GET /api/continuity/account-holds': { file: CONTINUITY, why: "the operator's read of the standing account holds: session-gated, no box token" },
+  'POST /api/continuity/account-holds/:lane/clear': { file: CONTINUITY, why: "the operator's clear of one account hold, recording who cleared it: session-gated, no box token" },
 };
 
