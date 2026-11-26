@@ -296,7 +296,7 @@ describe('the door process: the claim and the fence', () => {
     for (const e of log()) expect(e.wit === 'cd'.repeat(32), `${e.verb} inherited the stale key`).toBe(false);
   });
 
-  // Board B2 (call 1590): board and history are the readers' doors. Every other door, the fenced card and messages included, is
+  // Board B2 (slug history-and-board-reads-attributed-not-proven): board and history are the readers' doors. Every other door, the fenced card and messages included, is
   // refused by the read tool before anything runs; a readable door runs its own row, unfenced (no key, no counter).
   it('read refuses every door that is not a reader\'s, and runs nothing; the board runs unfenced through it', async () => {
     const p = new Proc();

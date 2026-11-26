@@ -124,7 +124,7 @@ export const OVERLORD_DOORS: Readonly<Record<string, DoorRow>> = {
     word: 'overlord-v1', others: 'refuse', ladderClass: 'other', act: 'acknowledge', unmeasuredDesignation: 'refuse',
   },
   // The Overlord's history door (W1, PR B1): a read, so verb class `view`; a POST only so free text rides the body (ruled R7).
-  // NOT fenced (`write: false`, board B2, call 1590, slug history-and-board-reads-attributed-not-proven): a reader reads it through
+  // NOT fenced (`write: false`, board B2, slug history-and-board-reads-attributed-not-proven, docs/superpowers/programs/overlord/w1-board-b2.md): a reader reads it through
   // the door process's read tool, which serves unfenced views only; so its read runner says `unfenced`, its ceiling counts every
   // attributed served read, and a read is attributed to the Overlord, not proven its own (proven reader reads: way B, later).
   history: {
@@ -138,7 +138,7 @@ export const OVERLORD_DOORS: Readonly<Record<string, DoorRow>> = {
     group: 'overlord', method: 'GET', path: '/api/overlord/sequence', file: SEQUENCE, verbClass: 'view', write: false,
     word: 'overlord-v1', others: 'refuse', ladderClass: 'other', act: 'read', unmeasuredDesignation: 'refuse',
   },
-  // The Overlord's board (W1, PR B2; plan Task 6, Table 11.1e): a read, verb class `view`, NOT fenced (`write: false`, call 1590),
+  // The Overlord's board (W1, PR B2; plan Task 6, Table 11.1e): a read, verb class `view`, NOT fenced (`write: false`, slug history-and-board-reads-attributed-not-proven),
   // as history is and for the same reason: a reader reads it through the read tool. Its ceiling counts every attributed served read.
   board: {
     group: 'overlord', method: 'GET', path: '/api/overlord/board', file: BOARD, verbClass: 'view', write: false,

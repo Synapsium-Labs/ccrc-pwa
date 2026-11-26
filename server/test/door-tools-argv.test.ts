@@ -282,7 +282,7 @@ describe('every DOOR_TOOLS row, through the real ccrc-api, reaches its route', (
     expect(seen).toEqual([]);
   });
 
-  it('read: board and history run their own row\'s builder; every other door, fenced ones included, is refused before anything runs (call 1590)', async () => {
+  it('read: board and history run their own row\'s builder; every other door, fenced ones included, is refused before anything runs (slug history-and-board-reads-attributed-not-proven)', async () => {
     expect(row('read').argv({ door: 'board' }, ID)).toEqual(row('board').argv({}, ID));
     expect(row('read').argv({ door: 'history', args: { verb: 'search', all: true, args: ['x'] } }, ID))
       .toEqual(['overlord', 'history', 'search', '--all', 'x']);

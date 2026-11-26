@@ -272,7 +272,7 @@ describe('GET /api/overlord/board: the gate first, nothing gathered before every
     untouched(r);
   });
 
-  // Call 1590 (slug history-and-board-reads-attributed-not-proven): the board row is not a write, so the door runs no fence.
+  // The slug history-and-board-reads-attributed-not-proven: the board row is not a write, so the door runs no fence.
   it('the designated id with no act key and no fence headers is served: the row is not fenced, so the read is attributed, not proven', async () => {
     const r = await rig();
     const res = await board(r);

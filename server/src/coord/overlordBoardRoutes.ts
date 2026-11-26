@@ -8,7 +8,7 @@
 // has had its turn: the gather runs inside the read runner's compose, after the ceiling. The runner counts the ceiling, records
 // one line (door `board`, scope `fleet`, the count of programmes) and answers; a line that could not be written refuses the read.
 //
-// The row is not fenced (`write: false`, call 1590, slug history-and-board-reads-attributed-not-proven), so a reader reads the board
+// The row is not fenced (`write: false`, slug history-and-board-reads-attributed-not-proven), so a reader reads the board
 // through the door process's read tool, the runner is told `unfenced`, and its ceiling counts every attributed served read: a read
 // is attributed to the Overlord, not proven its own.
 //

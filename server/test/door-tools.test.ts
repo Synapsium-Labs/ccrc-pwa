@@ -89,7 +89,7 @@ describe('DOOR_TOOLS', () => {
     expect(TEAM_KEY_SHAPE.flags).toBe(LINEAR_TEAM_KEY_SHAPE.flags);
   });
 
-  it('the readers\' doors are board and history (question 9, call 1590), and the read tool\'s enum names exactly them', () => {
+  it('the readers\' doors are board and history (question 9, slug history-and-board-reads-attributed-not-proven), and the read tool\'s enum names exactly them', () => {
     expect(ROWS.filter((r) => r.reader).map((r) => r.name)).toEqual([...READABLE_DOORS]);
     const read = ROWS.find((r) => r.name === 'read')!;
     expect([read.class, read.fenced, read.reader]).toEqual(['view', false, false]);
@@ -104,13 +104,13 @@ describe('DOOR_TOOLS', () => {
     expect(ROWS.filter((r) => r.class === 'view' && !r.fenced).map((r) => r.name).sort()).toEqual(['board', 'history', 'note_list', 'probe', 'read', 'sequence', 'timer_list']);
   });
 
-  it('the board row: a view, unfenced (its door row is not a write, call 1590), a reader\'s door, no input', () => {
+  it('the board row: a view, unfenced (its door row is not a write, slug history-and-board-reads-attributed-not-proven), a reader\'s door, no input', () => {
     const r = ROWS.find((x) => x.name === 'board')!;
     expect([r.verb, r.class, r.fenced, r.reader]).toEqual(['overlord.board', 'view', false, true]);
     expect(r.input).toMatchObject({ type: 'object', additionalProperties: false, required: [], properties: {} });
   });
 
-  it('the history row: a view, unfenced (call 1590), a reader\'s door; its verbs are shared/overlordHistory.ts\'s', () => {
+  it('the history row: a view, unfenced (slug history-and-board-reads-attributed-not-proven), a reader\'s door; its verbs are shared/overlordHistory.ts\'s', () => {
     const r = ROWS.find((x) => x.name === 'history')!;
     expect([r.verb, r.class, r.fenced, r.reader]).toEqual(['overlord.history', 'view', false, true]);
     expect([...PROGRAM_HISTORY_VERBS]).toEqual([...HISTORY_VERBS]);
@@ -146,7 +146,7 @@ describe('DOOR_TOOLS', () => {
   });
 });
 
-// THE READERS' CENSUS (board B2, call 1590, ruling point 5): every row marked reader is a view the read tool admits (unfenced), its
+// THE READERS' CENSUS (board B2, slug history-and-board-reads-attributed-not-proven, the coordinator's point 5): every row marked reader is a view the read tool admits (unfenced), its
 // route's Overlord door row is not a write, the marked rows are exactly `READABLE_DOORS`, and the read tool's enum is exactly
 // them. A function over the tables passed in, so each mutant below reds a named check on a synthetic table, and the real
 // tables read clean. The read tool is rebuilt from the rows through the door process's own `readToolOver`, and admission is
@@ -178,7 +178,7 @@ function readerCensus(rows: readonly Row[], doors: readonly DoorLike[], routes: 
   return out;
 }
 
-describe('the readers\' census (board B2, call 1590): both directions, each check red on a synthetic table', () => {
+describe('the readers\' census (board B2, slug history-and-board-reads-attributed-not-proven): both directions, each check red on a synthetic table', () => {
   const doors = Object.values(OVERLORD_DOORS) as unknown as DoorLike[];
   const routes = clientRoutes();
   const swap = (name: string, over: Partial<Row>): Row[] => ROWS.map((r) => (r.name === name ? { ...r, ...over } as Row : r));

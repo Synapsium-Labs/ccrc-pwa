@@ -299,7 +299,7 @@ describe('every overlord door asks the one gate, with its own row, before the st
     expect(violationsOf(sourceOf(BOARD_ROUTES), BOARD_ROUTES)).toEqual([]);
   });
 
-  // Call 1590, ruling point 5: the history and board reads are unfenced, so the gate call is all that stands before them.
+  // The slug history-and-board-reads-attributed-not-proven (the coordinator's point 5): the history and board reads are unfenced, so the gate call is all that stands before them.
   it('CONTROL: a board read that skips the gate call is found', () => {
     const t = mutate(sourceOf(BOARD_ROUTES), /const g = await deps\.gate\(req, reply, 'board'[^\n]*\n\s*if \(g\.kind === 'refused'\) return reply;\n/, '');
     expect(violationsOf(t, BOARD_ROUTES).join('\n')).toMatch(/board: the handler never calls gate\(/);

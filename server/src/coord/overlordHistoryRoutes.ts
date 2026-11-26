@@ -90,7 +90,7 @@ export function registerOverlordHistoryRoutes(app: FastifyInstance, deps: Overlo
     const scope = overlordTargetId(request.target);
     if (ac.signal.aborted) return refuseRoute(reply, 'unavailable', { detail: 'the caller went away before the read' });
     // From here, a caller that goes away aborts the port's wait: before the frame is sent it answers `not-started`, after it
-    // `lost` (review 3749 F3), and either way its line is still written. The row is not fenced (call 1590), so the runner is
+    // `lost` (review 3749 F3), and either way its line is still written. The row is not fenced (slug history-and-board-reads-attributed-not-proven), so the runner is
     // told `unfenced`: a read is attributed to the Overlord, not proven its own, and its ceiling counts attributed served reads.
     return deps.readRunner(req, reply, {
       door: 'history', pass: g, row: overlordRow('history'), unfenced: true,

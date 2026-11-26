@@ -1313,7 +1313,7 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/overlord/designation': "the designation row's view (server-minted session ids and generations, the operator's model class and pool names, the actor label, closed outcome words and times), the ordered account ids and warnings naming the operator's pools: no session-written text (Overlord W1 designation A)",
     // The Overlord's cursor read of the sequence (Overlord W1 sequence C): each line is a closed kind, a server-minted id, a closed
     // state word, an actor label and its kind, a time and a seq; the page's facts are integers; no session-written text.
-    '/api/overlord/sequence': "the sequence's lines (closed kinds and state words, server-minted ids, actor labels and kinds, times and seqs), the cursor, the head, the prune floor and the restore generation: no session-written text (Overlord W1 sequence C)",
+    '/api/overlord/sequence': "the sequence's lines (closed kinds and state words, server-minted ids, actor labels and kinds, times and seqs), the cursor, the head, the prune floor and the restore generation, and its refusals' fixed phrases (its 503 says only that the sequence could not be read, never the store's text: review 3978 F4): no session-written text (Overlord W1 sequence C)",
     '/api/overlord/restore': "the authority guard's state: one of three closed words and a closed cause or reason word (AUTHORITY_STATE_WORDS, AUTHORITY_STATE_CAUSES, AUTHORITY_STATE_WHYS); no session-written text (Overlord W1 authority journal C)",
     '/api/linking': "the caller's project name, the operator's team key and override, and the measured visibility: closed words, a repository slug, a time; no session text (D-8147)",
   };

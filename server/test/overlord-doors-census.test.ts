@@ -137,7 +137,7 @@ describe('the table itself', () => {
       'history',
       // The Overlord's cursor read of the sequence (W1 sequence C): not fenced, its row not a write.
       'sequence',
-      // The Overlord's board (W1, PR B2): not fenced, its row not a write (call 1590).
+      // The Overlord's board (W1, PR B2): not fenced, its row not a write (slug history-and-board-reads-attributed-not-proven).
       'board',
       // The timer doors (W1, the Overlord's timers): every other session keeps W1a's path.
       'timer-set', 'timer-list', 'timer-cancel',

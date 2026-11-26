@@ -292,7 +292,7 @@ describe('the door: the token, the pair, then the gate, before anything is read'
     expect(r.lines()).toEqual([]);
   });
 
-  // Board B2, call 1590 (slug history-and-board-reads-attributed-not-proven): the history row is not a write, so the door runs no
+  // Board B2 (slug history-and-board-reads-attributed-not-proven): the history row is not a write, so the door runs no
   // fence: the designated id with no act key is served, attributed to the Overlord and not proven its own (a reader's read
   // through the door process's read tool carries none), and its line is a served line the ceiling counts.
   it('the designated id without the act key is served: the row is not fenced, so the read is attributed, not proven', async () => {
