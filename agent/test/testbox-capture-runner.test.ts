@@ -199,7 +199,7 @@ describe('a capture that could not START answers no verdict, with why', () => {
     let closed = false;
     const r = await runner(root, {
       launcher: { start: () => Promise.reject(new Error('no tmux here')) },
-      standIn: async () => { const s = await startStandIn(); return { port: s.port, requests: s.requests, close: async () => { closed = true; await s.close(); } }; },
+      standIn: async () => { const s = await startStandIn(); return { port: s.port, requests: s.requests, routes: s.routes, close: async () => { closed = true; await s.close(); } }; },
     }).run('nolaunch', GOOD);
     expect(r.result).toBeNull();
     expect(r.detail).toContain('no tmux here');
@@ -717,7 +717,7 @@ describe('the capture\'s tmux directory and its stand-in (review 3226 F8, gate G
     const t0 = Date.now();
     const r = await runner(root, {
       launcher: inert({ life: 'gone' }), stepTimeoutMs: 200, standInCloseMs: 300,
-      standIn: async () => { const s = await startStandIn(); await s.close(); return { port: s.port, requests: s.requests, close: () => new Promise<void>(() => undefined) }; },
+      standIn: async () => { const s = await startStandIn(); await s.close(); return { port: s.port, requests: s.requests, routes: s.routes, close: () => new Promise<void>(() => undefined) }; },
     }).run('hungclose', GOOD);
     expect(r.result).toBeNull();
     expect(Date.now() - t0).toBeLessThan(10_000);

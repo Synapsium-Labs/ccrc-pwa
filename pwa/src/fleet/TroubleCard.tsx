@@ -47,10 +47,16 @@ export function StateLamp({ word }: { word: AccountStateWord }): ReactNode {
 export const COPY_FAILED = "Couldn't copy: press and hold to copy";
 
 /** One fleet-host command, read-only, with a truthful Copy. The command is text in a mono field that wraps, so a phone
- *  shows all of it; on a failed copy the whole command is selected there, ready for a long press. */
-export function CopyCommand({ command }: { command: string }): ReactNode {
+ *  shows all of it; on a failed copy the whole command is selected there, ready for a long press. `label` names the
+ *  field where the command runs elsewhere (the Add account door's run on this console's server).
+ *
+ *  ONE CONFIRMATION (desktop-polish wave 180): the toast says Copied once, when the button turns to Copied. A press while
+ *  it already says so copies again and toasts nothing, so three presses no longer stack three identical toasts. */
+export function CopyCommand({ command, label = 'Command to run on the fleet host' }: { command: string; label?: string }): ReactNode {
   const field = useRef<HTMLElement>(null);
   const [copy, setCopy] = useState<'idle' | 'copied' | 'failed'>('idle');
+  // A ref, not the state: two presses before the first write resolves both read the state as not yet copied.
+  const toasted = useRef(false);
   const failed = (): void => {
     setCopy('failed');
     const el = field.current;
@@ -64,12 +70,15 @@ export function CopyCommand({ command }: { command: string }): ReactNode {
     if (clipboard === undefined) { failed(); return; }
     let written: Promise<void>;
     try { written = clipboard.writeText(command); } catch { failed(); return; }
-    written.then(() => { setCopy('copied'); toast('Copied'); }, failed);
+    written.then(() => {
+      setCopy('copied');
+      if (!toasted.current) { toasted.current = true; toast('Copied'); }
+    }, failed);
   };
   return (
     <div className="acct-fix-command">
       <div className="acct-fix-row">
-        <code ref={field} className="acct-fix-field" tabIndex={0} aria-label="Command to run on the fleet host">{command}</code>
+        <code ref={field} className="acct-fix-field" tabIndex={0} aria-label={label}>{command}</code>
         <Button variant="ghost" className="acct-fix-copy" onClick={onCopy}>{copy === 'copied' ? 'Copied' : 'Copy'}</Button>
       </div>
       {copy === 'failed' && <p className="acct-fix-hold" role="status">{COPY_FAILED}</p>}

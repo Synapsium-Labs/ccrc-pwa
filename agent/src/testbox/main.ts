@@ -12,7 +12,7 @@
 // once the service has bound its address: the release it runs from and its process id, which the box's updater reads
 // as its form of "the new release answers", with no token and no network. Neither is a frame (D-8912). A stop removes
 // both files here; the unit's `RuntimeDirectory=` removes the directory at every stop, a takeover's exit included.
-import { lstatSync, readdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { BlockList, isIP } from 'node:net';
 import os from 'node:os';
@@ -25,10 +25,11 @@ import { startedAsProgram } from './entry.js';
 import { BOX_PATHS, encodeReady, READY_FILE, type BoxPaths } from './boxFiles.js';
 import { boxFs, type BoxFs } from './boxFs.js';
 import {
-  CAPTURE_TIMINGS, captureBuildsDir, captureDirsRoot, buildsToPrune, captureSocketFits, staleCaptureDirs, type BuildFileFacts, type CaptureTimings,
+  CAPTURE_TIMINGS, captureBuildsDir, captureDirsRoot, buildsToPrune, captureSocketFits, staleCaptureDirs, type BuildFileFacts, type CaptureTimings, type StandInReply,
 } from './capture.js';
 import { CaptureDesk, type CaptureRunnerLike } from './captureDesk.js';
-import { CaptureRunner, tmuxLauncher, type CaptureLauncher, type TmuxLauncherSeams } from './captureRunner.js';
+import { nodeDeliveryDriver } from './captureDeliveryRun.js';
+import { CaptureRunner, tmuxLauncher, type CaptureDeliveryDeps, type CaptureLauncher, type TmuxLauncherSeams } from './captureRunner.js';
 import { startStandIn, type StandIn } from './captureStub.js';
 import { durationMs, hostPort, readRepoRows, readTestboxConfig, type TestboxConfig } from './config.js';
 import { reflinkProbe, reflinkProbeDir } from './fsprobe.js';
@@ -222,23 +223,53 @@ export interface CaptureSeams {
   readonly sleep?: (ms: number) => Promise<void>;
   readonly tmux?: TmuxLauncherSeams;
   readonly launcher?: CaptureLauncher;
-  readonly standIn?: () => Promise<StandIn>;
+  readonly standIn?: (reply?: (body: unknown) => StandInReply) => Promise<StandIn>;
+  /** The delivery recipe's wiring; `null` wires none. Absent: {@link deliveryWiring}. Its settle and quiet bounds are never
+   *  a seam's: they come from the timing contract the runner is built from. */
+  readonly delivery?: DeliveryWiring | null;
 }
+
+/** The delivery recipe's wiring past its bounds: the driver and the tmux config. */
+export type DeliveryWiring = Pick<CaptureDeliveryDeps, 'driver' | 'tmuxConf'>;
 
 /** The compiled recorder, beside this file in the release (`agent/dist/agent/src/testbox/captureRecord.js`, where
  *  `testbox-capture-compiled.test.ts` finds it). Named, never imported: the recorder is an entry point of its own, run as a
  *  hook's process (`testbox-imports.test.ts`). */
 export const compiledRecorder = (): string => fileURLToPath(new URL('./captureRecord.js', import.meta.url));
 
+/** The delivery recipe's driver in the release tree this file runs from (Desktop polish wave 178): the server's compiled
+ *  `server/src/inject/deliveryDrive.ts`, beside the agent's dist (`<tree>/agent/dist/agent/src/testbox/main.js`, five
+ *  levels below `<tree>`). Named, never imported: the driver is the server package's entry point of its own. */
+export const compiledDeliveryDriver = (): string => fileURLToPath(new URL('../../../../../server/dist/server/src/inject/deliveryDrive.js', import.meta.url));
+
+/** The fleet's tmux config in that release tree (`ccd/tmux.conf`), which the delivery recipe's pane starts with. */
+export const shippedTmuxConf = (): string => fileURLToPath(new URL('../../../../../ccd/tmux.conf', import.meta.url));
+
+/** The delivery recipe's wiring: the driver run by this process's node within `t`'s driver bound and kill grace, and the fleet's tmux
+ *  config when the tree holds it. A tree with no compiled driver wires none, so a delivery capture is refused at the frame
+ *  (`service.ts#capture`). */
+export function deliveryWiring(t: CaptureTimings = CAPTURE_TIMINGS, driver: string = compiledDeliveryDriver(), conf: string = shippedTmuxConf()): DeliveryWiring | undefined {
+  if (!existsSync(driver)) return undefined;
+  return { driver: nodeDeliveryDriver(process.execPath, driver, t.deliveryDriveMs, t.deliveryKillGraceMs), tmuxConf: existsSync(conf) ? conf : null };
+}
+
 /** The capture runner (spec 2026-11-22 §2.3; gate G1): every bound it keeps from the one timing contract `t`, the launcher's
  *  per-call bound included; the build's tmux server is the box's `tmux`, found on the capture's own `PATH`; the recorder
  *  is the compiled one beside this file, run by this process's node. */
-export function captureRunnerFor(root: string, tmuxBase: string, toolsPath: () => string | null, t: CaptureTimings = CAPTURE_TIMINGS, seams: CaptureSeams = {}): CaptureRunner {
+/** The runner's delivery dependencies: the wiring (the seam's, or {@link deliveryWiring} on `t`) with `t`'s settle and quiet
+ *  bounds, so every bound of a delivery capture is the one contract's. */
+export const deliveryOf = (seams: CaptureSeams, t: CaptureTimings, release: string | null = null): { delivery?: CaptureDeliveryDeps } => {
+  const d = seams.delivery === undefined ? deliveryWiring(t) : seams.delivery;
+  return d === undefined || d === null ? {} : { delivery: { ...d, release, settleMs: t.deliverySettleMs, quietMs: t.deliveryQuietMs } };
+};
+
+export function captureRunnerFor(root: string, tmuxBase: string, toolsPath: () => string | null, t: CaptureTimings = CAPTURE_TIMINGS, seams: CaptureSeams = {}, release: string | null = null): CaptureRunner {
   return new CaptureRunner({
     root, tmuxBase, recorder: [process.execPath, compiledRecorder()], toolsPath,
     launcher: seams.launcher ?? tmuxLauncher('tmux', t.tmuxCallMs, seams.tmux),
-    standIn: seams.standIn ?? (() => startStandIn()),
+    standIn: seams.standIn ?? ((reply) => startStandIn(reply === undefined ? {} : { reply })),
     stepTimeoutMs: t.stepMs, exitTimeoutMs: t.exitMs, pollMs: t.pollMs, stopWaitMs: t.stopWaitMs, standInCloseMs: t.standInCloseMs,
+    ...deliveryOf(seams, t, release),
     ...(seams.now === undefined ? {} : { now: seams.now }), ...(seams.sleep === undefined ? {} : { sleep: seams.sleep }),
   });
 }
@@ -277,6 +308,9 @@ export interface CaptureDeskOpts {
   readonly tmuxBase?: string;
   readonly uid?: number;
   readonly seams?: CaptureSeams;
+  /** The test box's own release tag (`releaseFacts(release).release`), which a delivery capture's result carries; absent
+   *  or null: unknown. */
+  readonly release?: string | null;
 }
 
 /** The build capture desk (spec 2026-11-22), with its runner wired (PR 3b): the role and the fleet directories as the probe
@@ -295,7 +329,7 @@ export function captureDeskFor(cfg: TestboxConfig, o: CaptureDeskOpts = {}): Cap
  *  handed that very object (gate G1 runs through this function, review 3687 F2 and review 3765 F2), or no runner. */
 export function captureDeskComposed(cfg: TestboxConfig, tmuxBase: string, wired: boolean, o: CaptureDeskOpts = {}): CaptureDesk {
   const timings = CAPTURE_TIMINGS;
-  return captureDeskWith(cfg, wired ? captureRunnerFor(cfg.root, tmuxBase, o.toolsPath ?? (() => null), timings, o.seams) : null, timings, tmuxBase, o);
+  return captureDeskWith(cfg, wired ? captureRunnerFor(cfg.root, tmuxBase, o.toolsPath ?? (() => null), timings, o.seams, o.release ?? null) : null, timings, tmuxBase, o);
 }
 
 /** The desk around `runner`, as `captureDeskComposed` composes it: the late check on `timings`, the very contract the runner
@@ -364,7 +398,7 @@ export function serviceFor(cfg: TestboxConfig, release: string, exit: (code: num
     probes: probeDeskFor(cfg, seams.probeRunner ?? null),
     // Spec 2026-11-22 PR 3b: the capture's tools are the current set's when each capture starts, and it starts only while
     // the box admits work (gate G2).
-    captures: captureDeskFor(cfg, { ...seams.capture, toolsPath: () => tools.bin(), admitting: () => tools.admitting() }),
+    captures: captureDeskFor(cfg, { ...seams.capture, release: facts.release, toolsPath: () => tools.bin(), admitting: () => tools.admitting() }),
     // D-8907: a submission queued while a drain has the queue on disk goes there at once; a cancel for a run on disk
     // removes it there; and a run on disk keeps its id.
     queued: () => drain.queued(), cancelHandedOver: (id) => tools.cancelHandedOver(id), handedOver: (id) => tools.handedOver(id),

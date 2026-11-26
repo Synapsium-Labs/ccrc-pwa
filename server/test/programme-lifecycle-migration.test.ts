@@ -46,12 +46,13 @@ const events = (db: DatabaseSync, slug: string) =>
 const rule = (e: { detail: string | null }) => (e.detail === null ? null : (JSON.parse(e.detail) as { rule?: string }).rule ?? null);
 
 describe('migration 127: the programme lifecycle', () => {
-  it('is found, and the three entries after it are the Overlord\'s timers (128), the invariant monitor\'s findings (129) and the readiness word (130)', () => {
+  it('is found, and the four entries after it are the Overlord\'s timers (128), the invariant monitor\'s findings (129), the paste delivery recipe\'s table (130) and the readiness word (131)', () => {
     expect(LIFECYCLE).toBeGreaterThan(0);
-    expect(LIFECYCLE).toBe(MIGRATIONS.length - 4);
+    expect(LIFECYCLE).toBe(MIGRATIONS.length - 5);
     expect(MIGRATIONS[LIFECYCLE + 1]).toContain('CREATE TABLE continuity_timer_refusals');
     expect(MIGRATIONS[LIFECYCLE + 2]).toContain('CREATE TABLE overlord_invariant_findings');
-    expect(MIGRATIONS[LIFECYCLE + 3]).toContain('CREATE TABLE overlord_readiness');
+    expect(MIGRATIONS[LIFECYCLE + 3]).toContain('CREATE TABLE claude_build_deliveries');
+    expect(MIGRATIONS[LIFECYCLE + 4]).toContain('CREATE TABLE overlord_readiness');
   });
 
   it('step 4: a D-51 done over an open run becomes active; with no open run it is kept and recorded', () => {

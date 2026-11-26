@@ -224,6 +224,10 @@ export class TestboxService {
   /** A capture submission: the desk's, or refused when this service has none. */
   capture(f: CaptureSubmit, conn: Conn): void {
     if (this.d.captures === undefined) { conn.refuse('capture.submit is not a frame this service takes'); return; }
+    // A delivery submission to a box whose runner has no delivery driver is refused at the frame, before the desk: the
+    // same close a box that predates the recipe gives, so the fleet agent answers not-taken for both, and nothing is
+    // queued, run or counted here (the capture owner's call 1148).
+    if (f.recipe === 'delivery' && !this.d.captures.delivers()) { conn.refuse('delivery is not a recipe this box runs'); return; }
     this.d.captures.submit(f, conn);
   }
 
