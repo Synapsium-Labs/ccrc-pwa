@@ -21,6 +21,9 @@ import { READER_MODE_TEXT } from '../src/docs/reader/readerModeWords';
 import { DocsScreen } from '../src/screens/DocsScreen';
 import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
 import { navigate, useLocation } from '../src/lib/router';
+import { IDX_KEY, PLACES_RECORD_KEY, PLACE_KEY } from '../src/lib/historyPlaces';
+import { onPop, readPlaces, resetPopstateForTests } from '../src/lib/popstate';
+import { startPlaces, type Places } from '../src/docs/reader/places';
 import { useFleetStore } from '../src/stores/fleet';
 import type { ReaderDeps } from '../src/docs/ReaderFrame';
 import { parseMarkdown } from '../src/lib/markdownParse';
@@ -148,6 +151,8 @@ function fakePlaces(order: string[] = []): PlacesFake {
     stepBack: vi.fn(() => { order.push('step-back'); return 1; }),
     landedBelow: () => p.landed,
     markExitPending: vi.fn(),
+    register: () => () => undefined,
+    standingOnDead: () => false,
   };
   return p;
 }
@@ -632,6 +637,9 @@ describe('the default places port', () => {
     expect(NO_READER_PLACES.stepBack()).toBe(0);
     expect(NO_READER_PLACES.landedBelow()).toBe(false);
     expect(() => NO_READER_PLACES.markExitPending(true)).not.toThrow();
+    expect(NO_READER_PLACES.standingOnDead()).toBe(false);
+    const stop = NO_READER_PLACES.register({ on: () => false, exitReader: () => undefined, leaveDead: () => undefined });
+    expect(() => stop()).not.toThrow();
   });
 });
 
@@ -782,5 +790,248 @@ describe('docs.css: the fill keeps the reader host\'s path drawn in both shapes 
     );
     expect(idsOf(root, `${UNDRAWN_LEAF}, ${UNDRAWN_DEEP}`)).toEqual(['deep-note', 'outer-note']);
     expect(idsOf(root, ON_PATH)).toEqual(['inner', 'outer']);
+  });
+});
+
+// ─── the reader place, through the hook with the real port and the real history (X6 XR1.3, the hook's half) ─────────────
+
+describe('reader place: the hook with the real port (X6 XR1.3)', () => {
+  const DOC = '/docs/demo/specs/a.md';
+  const sleep = (ms: number): Promise<void> => new Promise((r) => { setTimeout(r, ms); });
+  const lastIdx = (): number => readPlaces().lastIdx;
+  const stateNow = (): Record<string, unknown> => (history.state ?? {}) as Record<string, unknown>;
+  /** Waits for the landing (a traversal's `popstate` fires a task later), then a little more so an extra event would show. */
+  const landed = (n: number): Promise<void> => act(async () => {
+    await vi.waitFor(() => { expect(lastIdx()).toBe(n); }, { timeout: 4000, interval: 10 });
+    await sleep(30);
+  });
+
+  interface Real {
+    fs: FullScreenFake;
+    frame: FakeFrame;
+    ran: Mock<() => void>;
+    places: Places;
+    popstates: () => number;
+    props: Parameters<typeof Harness>[0];
+  }
+  let visit: Places | null = null;
+  let counted = 0;
+  const countPop = (): void => { counted += 1; };
+
+  /** The page as the Docs screen leaves it: the previous screen's entry (0), the doc's own (1), the visit started as the
+   *  reader body does, a router subscriber counting runs, and the hook mounted with NO injected port (the real one). */
+  function mountReal(): Real {
+    resetPopstateForTests();
+    history.replaceState(null, '', '/before');
+    const ran = vi.fn<() => void>();
+    onPop(ran);
+    history.pushState(null, '', DOC);
+    const places = startPlaces({ doc: DOC });
+    visit = places;
+    const fs = installFullScreen();
+    const frame = fakeFrame();
+    const props = { frame };
+    counted = 0;
+    window.addEventListener('popstate', countPop);
+    restorers.push(() => window.removeEventListener('popstate', countPop));
+    render(<Harness {...props} />);
+    return { fs, frame, ran, places, popstates: () => counted, props };
+  }
+
+  afterEach(async () => {
+    cleanup();
+    await sleep(20);
+    visit?.end();
+    visit = null;
+    resetPopstateForTests();
+  });
+
+  const consoleFree = (): boolean => {
+    for (const id of ['console-head', 'console-nav']) {
+      const n = screen.getByTestId(id);
+      if (n.hasAttribute('inert') || n.hasAttribute('aria-hidden')) return false;
+    }
+    return true;
+  };
+
+  it('reader place: Exit and losing full screen each consume exactly one reader place', async () => {
+    for (const how of ['Exit', 'full screen lost'] as const) {
+      const r = mountReal();
+      act(() => { latest.enter('button'); });
+      await act(async () => { r.fs.grant(); });
+      expect(latest.state.on, `${how}: CONTROL: entered`).toBe(true);
+      expect(lastIdx(), `${how}: the reader place was pushed`).toBe(2);
+      expect(stateNow()[IDX_KEY]).toBe(2);
+      expect(stateNow()[PLACE_KEY], `${how}: the entry carries the place`).toBeDefined();
+      const go = vi.spyOn(history, 'go');
+      if (how === 'Exit') {
+        act(() => { latest.exit('exit-tap'); });
+      } else {
+        await act(async () => { r.fs.lose(); });
+        expect(latest.state.on, 'full screen lost ends reader mode at once').toBe(false);
+        await act(async () => { await sleep(READER_EXIT_SETTLE_MS + 60); });
+      }
+      await landed(1);
+      expect(latest.state.on, how).toBe(false);
+      expect(go, `${how}: the reader place's entry is left exactly once`).toHaveBeenCalledTimes(1);
+      expect(go).toHaveBeenCalledWith(-1);
+      expect(r.popstates(), `${how}: one traversal`).toBe(1);
+      expect(r.ran, `${how}: no router run`).not.toHaveBeenCalled();
+      expect(stateNow()[IDX_KEY], `${how}: the doc's own entry`).toBe(1);
+      expect(stateNow()[PLACE_KEY], `${how}: no place left on it`).toBeUndefined();
+      expect(location.pathname).toBe(DOC);
+      expect(readPlaces().exitPending, `${how}: the landing was consumed`).toBe(false);
+      cleanup();
+      visit?.end();
+      visit = null;
+      while (restorers.length > 0) restorers.pop()?.();
+      go.mockRestore();
+    }
+  });
+
+  it('reader place: fullscreenchange and popstate in either order exit once', async () => {
+    for (const order of ['fullscreenchange first', 'popstate first'] as const) {
+      const r = mountReal();
+      act(() => { latest.enter('button'); });
+      await act(async () => { r.fs.grant(); });
+      expect(lastIdx(), `${order}: CONTROL: the place was pushed`).toBe(2);
+      const go = vi.spyOn(history, 'go');
+      if (order === 'fullscreenchange first') {
+        await act(async () => { r.fs.lose(); });
+        expect(latest.state.on).toBe(false);
+        // The browser's own Back arrives inside the settle.
+        await act(async () => { await sleep(50); history.back(); });
+      } else {
+        await act(async () => { history.back(); });
+        await landed(1);
+        expect(latest.state.on, 'the Back ended reader mode').toBe(false);
+        // The browser's `fullscreenchange` follows the pop.
+        await act(async () => { await sleep(50); r.fs.lose(); });
+      }
+      await landed(1);
+      // Past the settle: a second step-back would show now.
+      await act(async () => { await sleep(READER_EXIT_SETTLE_MS + 60); });
+      expect(lastIdx(), order).toBe(1);
+      expect(latest.state.on, `${order}: reader mode is off`).toBe(false);
+      expect(r.popstates(), `${order}: exactly one history step in total`).toBe(1);
+      expect(go, `${order}: the hook stepped nothing of its own`).not.toHaveBeenCalled();
+      expect(r.ran, `${order}: no router run`).not.toHaveBeenCalled();
+      expect(stateNow()[IDX_KEY], `${order}: the doc's own entry`).toBe(1);
+      expect(location.pathname).toBe(DOC);
+      expect(readPlaces().exitPending, order).toBe(false);
+      cleanup();
+      visit?.end();
+      visit = null;
+      while (restorers.length > 0) restorers.pop()?.();
+      go.mockRestore();
+    }
+  });
+
+  it('reader place: a reload in reader mode steps below the reader place once, and the next Back leaves the doc', async () => {
+    const first = mountReal();
+    act(() => { latest.enter('button'); });
+    expect(lastIdx()).toBe(2);
+    expect(first.ran).not.toHaveBeenCalled();
+    // A reload keeps the tab's stored record and the page's history, and loses the page's own memory: its copy of the record
+    // and its once-per-page seed. The storage is the tab's, so the stored record is put back after the reset.
+    const stored = sessionStorage.getItem(PLACES_RECORD_KEY);
+    expect(stored, 'CONTROL: the record is stored').not.toBeNull();
+    cleanup();
+    resetPopstateForTests();
+    sessionStorage.setItem(PLACES_RECORD_KEY, stored as string);
+    const ran = vi.fn<() => void>();
+    onPop(ran);
+    expect(lastIdx(), 'CONTROL: the page seeded on the reader entry').toBe(2);
+    visit = startPlaces({ doc: DOC });
+    expect(readPlaces().visit, 'CONTROL: the same doc continues the visit').not.toBeNull();
+    const go = vi.spyOn(history, 'go');
+    const popstates = (): number => counted;
+    counted = 0;
+    render(<Harness frame={fakeFrame()} />);
+    expect(latest.state.on, 'reader mode is always off at a mount').toBe(false);
+    await landed(1);
+    expect(go, 'stepped below the reader place once').toHaveBeenCalledTimes(1);
+    expect(go).toHaveBeenCalledWith(-1);
+    expect(popstates()).toBe(1);
+    expect(ran, 'the landing is consumed: no router run').not.toHaveBeenCalled();
+    expect(readPlaces().exitPending, 'the mark is cleared by the landing').toBe(false);
+    expect(stateNow()[IDX_KEY]).toBe(1);
+    expect(stateNow()[PLACE_KEY]).toBeUndefined();
+    expect(location.pathname).toBe(DOC);
+    expect(latest.state.on, 'reader mode never reopens').toBe(false);
+    // The next Back leaves the doc.
+    history.back();
+    await vi.waitFor(() => { expect(ran).toHaveBeenCalledTimes(1); }, { timeout: 4000, interval: 10 });
+    expect(location.pathname).toBe('/before');
+    expect(go, 'no second step of the hook').toHaveBeenCalledTimes(1);
+  });
+
+  it('reader place: Forward onto the dead reader entry steps below it once through the hook', async () => {
+    const r = mountReal();
+    act(() => { latest.enter('button'); });
+    await act(async () => { r.fs.grant(); });
+    expect(lastIdx()).toBe(2);
+    await act(async () => { history.back(); });
+    await landed(1);
+    expect(latest.state.on, 'CONTROL: the Back ended reader mode').toBe(false);
+    expect(r.ran).not.toHaveBeenCalled();
+    const go = vi.spyOn(history, 'go');
+    await act(async () => { history.forward(); });
+    await act(async () => { await vi.waitFor(() => { expect(go).toHaveBeenCalledTimes(1); }, { timeout: 4000, interval: 10 }); });
+    await landed(1);
+    expect(go, 'one step below the dead entry').toHaveBeenCalledTimes(1);
+    expect(go).toHaveBeenCalledWith(-1);
+    expect(r.popstates(), 'the Back, the Forward and the step').toBe(3);
+    expect(r.ran, 'its landing is consumed: no router run').not.toHaveBeenCalled();
+    expect(readPlaces().exitPending).toBe(false);
+    expect(latest.state.on, 'reader mode does not reopen').toBe(false);
+    expect(stateNow()[IDX_KEY], 'the doc\'s own entry').toBe(1);
+    expect(location.pathname).toBe(DOC);
+  });
+
+  it('reader place: the hook\'s reader host leaves with the screen', async () => {
+    // The port: `register` is called once, and its unregister once, on unmount.
+    const stop = vi.fn();
+    const register = vi.fn((_host: Parameters<ReaderModePlaces['register']>[0]) => stop);
+    const standingOnDead = vi.fn(() => false);
+    const injected = render(<Harness frame={fakeFrame()} places={{ ...fakePlaces(), register, standingOnDead }} />);
+    expect(register).toHaveBeenCalledTimes(1);
+    expect(standingOnDead, 'the reload check runs right after registering').toHaveBeenCalledTimes(1);
+    expect(stop).not.toHaveBeenCalled();
+    injected.unmount();
+    expect(stop, 'the host was not unregistered').toHaveBeenCalledTimes(1);
+
+    // The real dispatcher: a Forward onto a dead reader entry after the screen left is not the hook's to step.
+    const r = mountReal();
+    act(() => { latest.enter('button'); });
+    await act(async () => { r.fs.grant(); });
+    await act(async () => { history.back(); });
+    await landed(1);
+    cleanup();
+    const go = vi.spyOn(history, 'go');
+    history.forward();
+    await act(async () => { await sleep(150); });
+    expect(go, 'a host that outlived the screen stepped the page').not.toHaveBeenCalled();
+  });
+
+  it('reader place: Back from reader mode shows the doc in the normal view, a second Back leaves it', async () => {
+    const r = mountReal();
+    act(() => { latest.enter('button'); });
+    await act(async () => { r.fs.grant(); });
+    expect(attr()).toBe('full-screen');
+    expect(consoleFree(), 'CONTROL: the console is hidden while on').toBe(false);
+    await act(async () => { history.back(); });
+    await landed(1);
+    expect(latest.state.on, 'reader mode is off').toBe(false);
+    expect(attr(), 'the fill is cleared').toBeNull();
+    expect(consoleFree(), 'the console is released').toBe(true);
+    expect(r.frame.setReading).toHaveBeenLastCalledWith('off');
+    expect(r.ran, 'no router run').not.toHaveBeenCalled();
+    expect(location.pathname).toBe(DOC);
+    expect(stateNow()[IDX_KEY]).toBe(1);
+    // The second Back is no exit: it leaves the doc, and the router runs once.
+    history.back();
+    await vi.waitFor(() => { expect(r.ran).toHaveBeenCalledTimes(1); }, { timeout: 4000, interval: 10 });
+    expect(location.pathname).toBe('/before');
   });
 });

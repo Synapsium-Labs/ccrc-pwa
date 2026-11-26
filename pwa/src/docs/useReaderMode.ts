@@ -8,13 +8,21 @@
 // change, on activity, on the idle timer and on the page clock's visible and hidden (`lib/pageClock.ts`, never a
 // `visibilitychange` of this file's own).
 //
-// What this task leaves to the later ones: the reader place behind `ReaderModePlaces` (XR1.3 replaces `NO_READER_PLACES`), the
-// frame's wiring and the overlay (XR1.4), and the stored turn (XR2.2).
+// The reader place (XR1.3): the default port is `READER_PLACES`, the history half's own functions (`reader/places.ts`), and the
+// hook registers its host with the pop dispatcher (`setReaderPlaceHost`, through the port's `register`) for its whole life. The hook is the one writer of
+// `exitPending` true on its paths: it marks before it steps back (or before it arms the settle) and unmarks when nothing was
+// stepped; the pop decider clears the mark when the landing is consumed. What is left to the later tasks: the frame's wiring
+// and the overlay (XR1.4), and the stored turn (XR2.2).
 import { createContext, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { hideAsPage, releaseAsPage, type PageHiding } from '@ccrc/ui';
 import { useAuthLost } from '../lib/auth';
 import { onPageHidden, onPageVisible } from '../lib/pageClock';
+import { setReaderPlaceHost, type ReaderPlaceHost } from '../lib/popstate';
 import { useFleetStore } from '../stores/fleet';
+import {
+  landedBelowReaderPlace, markReaderExitPending, pushReaderPlace, readerPlaceFreeNow, standingOnDeadReaderEntry,
+  stepBelowReaderPlace,
+} from './reader/places';
 import {
   READER_EXIT_SETTLE_MS, READER_MODE_OFF, READER_WAKE_IDLE_MS, readerModeOffered, readerModeStep, wakeLockWanted,
   type ReaderModeAct, type ReaderModeEvent, type ReaderModeHow, type ReaderModeState, type ReaderTurn,
@@ -28,19 +36,23 @@ export interface ReaderModeFrame {
   setReading(mode: ReaderTurn | 'off'): void;
 }
 
-/** The history port reader mode acts through (consumer-declared; XR1.3 supplies the real one). `placeFree`: the place budget has
+/** The history port reader mode acts through (consumer-declared; `READER_PLACES` is the real one). `placeFree`: the place budget has
  *  room. `push`: push the reader place, true when it was pushed. `stepBack`: undo the pushed place once, answering how many
  *  entries it stepped over. `landedBelow`: a pop already landed below the reader place. `markExitPending`: tell the pop
- *  dispatcher an exit is waiting on a settle, or that it no longer is. */
+ *  dispatcher an exit is waiting on a settle, or that it no longer is. `register`: give the pop dispatcher the hook's host,
+ *  returning the unregister. `standingOnDead`: the tab stands on a dead reader entry (reader mode off), asked once right after
+ *  registering. The hook names nothing of the dispatcher or the record but through this port. */
 export interface ReaderModePlaces {
   placeFree(): boolean;
   push(): boolean;
   stepBack(): number;
   landedBelow(): boolean;
   markExitPending(on: boolean): void;
+  register(host: ReaderPlaceHost): () => void;
+  standingOnDead(): boolean;
 }
 
-/** Places nothing, steps nothing and lands nowhere: the port until XR1.3 wires the real one. With it `placeFree` is false, so
+/** Places nothing, steps nothing and lands nowhere: a port for a test that wants no history. With it `placeFree` is false, so
  *  reader mode enters unplaced and an exit has no place to undo. */
 export const NO_READER_PLACES: ReaderModePlaces = Object.freeze({
   placeFree: () => false,
@@ -48,6 +60,20 @@ export const NO_READER_PLACES: ReaderModePlaces = Object.freeze({
   stepBack: () => 0,
   landedBelow: () => false,
   markExitPending: () => undefined,
+  register: () => () => undefined,
+  standingOnDead: () => false,
+});
+
+/** The real port: the history half's own functions (`reader/places.ts`) and the dispatcher's host slot, the default of the
+ *  hook. */
+export const READER_PLACES: ReaderModePlaces = Object.freeze({
+  placeFree: readerPlaceFreeNow,
+  push: pushReaderPlace,
+  stepBack: stepBelowReaderPlace,
+  landedBelow: landedBelowReaderPlace,
+  markExitPending: markReaderExitPending,
+  register: setReaderPlaceHost,
+  standingOnDead: () => standingOnDeadReaderEntry(false),
 });
 
 /** What the head, the frame's mount and the overlay see of reader mode. */
@@ -103,7 +129,7 @@ function createController(sink: Sink) {
   let state: ReaderModeState = READER_MODE_OFF;
   let container: HTMLElement | null = null;
   let frame: ReaderModeFrame | null = null;
-  let input: { doc: string | null; plainView: boolean; places: ReaderModePlaces } = { doc: null, plainView: false, places: NO_READER_PLACES };
+  let input: { doc: string | null; plainView: boolean; places: ReaderModePlaces } = { doc: null, plainView: false, places: READER_PLACES };
   let hiding: PageHiding | null = null;
   let settleTimer: ReturnType<typeof setTimeout> | null = null;
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -157,6 +183,12 @@ function createController(sink: Sink) {
   };
 
   // ── the acts ──
+  /** Marks the exit's landing as expected, then steps below the reader place; the mark is cleared again when nothing was
+   *  stepped (no landing is coming). The one path of `step-back` and of `leaveDead`. */
+  const stepBelow = (): void => {
+    input.places.markExitPending(true);
+    if (input.places.stepBack() === 0) input.places.markExitPending(false);
+  };
   const requestFullScreen = (): void => {
     const c = container;
     if (c === null) return;
@@ -214,7 +246,7 @@ function createController(sink: Sink) {
         queueMicrotask(() => { if (alive) sink.live(READER_MODE_TEXT.live); });
         break;
       case 'step-back':
-        input.places.stepBack();
+        stepBelow();
         break;
       case 'await-settle':
         input.places.markExitPending(true);
@@ -295,6 +327,20 @@ function createController(sink: Sink) {
     pageVisible: (): void => syncWake(),
     /** The browser drops the lock when the page is hidden: forget the sentinel, then re-read. */
     pageHidden: (): void => { sentinel = null; syncWake(); },
+    /** Registers this hook's host with the pop dispatcher for its whole life, and returns the unregister. `exitReader` is the
+     *  landing of a pop that crossed the reader place (a no-op while off: the landing of the hook's own step-back);
+     *  `leaveDead` steps below a reader entry whose reader mode is over. Right after registering, the reload check: reader
+     *  mode is always off at a mount, so a tab standing on a dead reader entry is stepped below it once. */
+    registerHost(): () => void {
+      const places = input.places;
+      const unregister = places.register({
+        on: (): boolean => state.on,
+        exitReader: (_closeOverlay: boolean): void => step({ kind: 'place-popped' }),
+        leaveDead: stepBelow,
+      });
+      if (places.standingOnDead()) stepBelow();
+      return unregister;
+    },
     start: (): void => { alive = true; },
     /** The screen unmounting: the decider's `leave` (the console back, the fill cleared, full screen left; no step back, no
      *  focus), then the hook's own teardown: its timers and the wake lock. */
@@ -323,7 +369,7 @@ export function useReaderMode(o: { doc: string | null; plainView: boolean; place
   const [frameReady, setFrameReady] = useState(false);
   const [ctl] = useState(() => createController({ state: setState, live: setLive, frameReady: setFrameReady }));
   const { doc, plainView } = o;
-  const places = o.places ?? NO_READER_PLACES;
+  const places = o.places ?? READER_PLACES;
 
   useLayoutEffect(() => { ctl.setInput(doc, plainView, places); });
   // Layout, so the container is still attached when the screen leaves while on (a ref detaches after its owner's cleanup).
@@ -339,6 +385,9 @@ export function useReaderMode(o: { doc: string | null; plainView: boolean; place
   const stopped = blocked || lost;
   const on = state.on;
   useEffect(() => { if (stopped && on) ctl.block(); }, [ctl, stopped, on]);
+
+  // The reader place's host, for the hook's whole life (the pops that cross or stand on the reader place are its).
+  useEffect(() => ctl.registerHost(), [ctl]);
 
   // The Docs screen's one `fullscreenchange` subscription.
   useEffect(() => {
