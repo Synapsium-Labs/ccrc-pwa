@@ -121,7 +121,7 @@ const ITEM_MESSAGE_NOTE = 'This message could not render; shown as plain text.';
  *  then the note) and is keyed by its text, so a streaming message that threw on one chunk is tried again on the
  *  next; every other kind says "This item could not be shown." and is keyed by its item key. `ChatListInner` and the
  *  virtualised `ChatList` both render through here. */
-function ChatItemView(props: Parameters<typeof ChatItemBody>[0]): ReactNode {
+export function ChatItemView(props: Parameters<typeof ChatItemBody>[0]): ReactNode {
   const { item } = props;
   return (
     <RenderBoundary

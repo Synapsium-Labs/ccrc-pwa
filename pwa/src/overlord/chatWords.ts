@@ -13,7 +13,8 @@
 // The one harness surface this leans on is Claude Code's transcript (the live generation's stream, and what a pane turn is).
 // It is read only through the readers that already exist (`buildChatItems`, the history door's items), so another harness
 // changes those readers, not this file.
-import type { ChatEntry, ChatSendAnswer, ChatTicks, TickStage } from '../../../shared/overlordChat';
+import type { SessionStatus, SessionStreamMsg } from '../../../shared/api';
+import type { ChatEntry, ChatSendAnswer, ChatThread, ChatTicks, TickStage } from '../../../shared/overlordChat';
 import { TICK_STAGES, tickStageWords } from '../../../shared/overlordChat';
 import { carriesOperatorMessageMarker, operatorMessageNudgeIdOf } from '../../../shared/operatorMessages';
 import { injectedPromptOf } from '../../../shared/injected-prompts.mjs';
@@ -25,6 +26,32 @@ import type { ChatItem } from '../session/chatItems';
  *  Every refusal word (`renewing` included), an answer in no shape the chat knows, and no answer at all keep it. */
 export function draftAfterSend(a: ChatSendAnswer): 'clear' | 'keep' {
   return a.kind === 'recorded' ? 'clear' : 'keep';
+}
+
+// ── when the thread is read again (question 10) ───────────────────────────────────────────────────────────────────────
+
+/** The coalescer's spacing: at most one thread read every 10 seconds, whatever asks for it (360 an hour, half the ceiling). */
+export const CHAT_READ_EVERY_MS = 10_000;
+
+/** Whether a frame of the Overlord's session stream asks for the thread again, by an allow-list: a transcript `events` frame
+ *  holding a user turn (the nudge's typing is the delivery), or a turn's end (`idle` after `busy`, when a pick-up or a
+ *  settlement may have landed). Never a `beat`, never an assistant's text, never any other frame. `was` is the status the
+ *  stream last said, or null before it said one. */
+export function chatReadTrigger(msg: SessionStreamMsg, was: SessionStatus | null): boolean {
+  if (msg.type === 'events') return msg.events.some((e) => e.kind === 'user');
+  if (msg.type === 'status') return msg.status === 'idle' && was === 'busy';
+  return false;
+}
+
+/** When the next thread read may run: not before the coalescer's spacing after the last read, and not before a ceiling's
+ *  `retryAfterS` has passed (`notBefore`). Null `lastReadAt`: no read yet. */
+export function nextReadAt(lastReadAt: number | null, now: number, notBefore: number): number {
+  return Math.max(now, lastReadAt === null ? now : lastReadAt + CHAT_READ_EVERY_MS, notBefore);
+}
+
+/** Whether a shown message still waits for its pick-up (not picked up and not settled): the timer reads only then. */
+export function awaitsPickUp(thread: ChatThread): boolean {
+  return thread.entries.some((e) => e.kind === 'message' && !e.ticks.lit['picked-up'] && !e.ticks.lit.settled);
 }
 
 // ── what a transcript user turn is (question 6) ───────────────────────────────────────────────────────────────────────
@@ -194,6 +221,11 @@ export const READ_CEILING_WORDS = 'Paused updating for a moment';
 export const MESSAGES_UNMEASURED_WORDS = 'Messages could not be read';
 export const GENERATIONS_UNMEASURED_WORDS = 'Earlier generations could not be read';
 export const EARLIER_UNREACHABLE_WORDS = 'Earlier history is not reachable now';
+export const READINESS_UNMEASURED_WORDS = "The Overlord's state could not be read";
+export const NO_OVERLORD_WORDS = 'No Overlord is started. Messages already sent stay in the record.';
+export const THREAD_NO_ANSWER_WORDS = 'No answer from the server; this is the conversation as last read.';
+export const THREAD_OFF_SHAPE_WORDS = "This server's answer could not be read; this is the conversation as last read.";
+export const READING_WORDS = 'Reading the conversation';
 
 /** What the chat says after a send beside the refusal's own words (`apiErrorText`'s), or null for nothing more. A toggled send
  *  whose answer carries no `offRecord` echo was recorded on the record by a server that does not know the toggle (question 4). */

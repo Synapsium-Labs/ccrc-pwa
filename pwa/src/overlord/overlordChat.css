@@ -1,0 +1,150 @@
+/* The Overlord chat (Overlord W1, the chat, Task 4). The part is a column: the thread scrolls inside it, never the page, and
+   the composer sits at its foot. An operator bubble is `.oc-msg` alone; a pane turn is visibly not one (a dashed, left-set
+   figure with its label), and the server's line is a quiet line, not a bubble. */
+.oc-chat {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  max-height: 100%;
+}
+.oc-thread {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  display: grid;
+  align-content: start;
+  gap: var(--sp-2);
+  padding: var(--sp-2) 0;
+}
+.oc-msg {
+  justify-self: end;
+  max-width: 85%;
+  min-width: 0;
+  background: var(--bg-raised);
+  border-radius: var(--r-lg) var(--r-lg) var(--r-sm) var(--r-lg);
+  padding: 10px 14px;
+  color: var(--ink-primary);
+}
+.oc-msg-text {
+  margin: 0;
+  font-size: var(--fs-base);
+  line-height: var(--lh-normal);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.oc-msg-marks {
+  margin: var(--sp-1) 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+.oc-mark {
+  font: var(--weight-regular) var(--fs-xs) / 1.4 var(--family-ui);
+  color: var(--ink-secondary);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-full);
+  padding: 0 var(--sp-2);
+}
+.oc-ticks {
+  margin: var(--sp-1) 0 0;
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 2px;
+  font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
+  color: var(--ink-tertiary);
+}
+.oc-tick[data-lit] { color: var(--accent); }
+.oc-server-line {
+  justify-self: end;
+  max-width: 85%;
+  margin: 0;
+  font: var(--weight-regular) var(--fs-meta) / var(--lh-normal) var(--family-ui);
+  color: var(--ink-secondary);
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.oc-divider {
+  display: grid;
+  gap: var(--sp-1);
+  justify-items: center;
+  min-width: 0;
+}
+.oc-divider-label {
+  margin: 0;
+  font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
+  letter-spacing: var(--ls-caps);
+  color: var(--ink-tertiary);
+}
+.oc-divider-where,
+.oc-quiet {
+  margin: 0;
+  font: var(--weight-regular) var(--fs-meta) / var(--lh-normal) var(--family-ui);
+  color: var(--ink-tertiary);
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+.oc-divider-show,
+.oc-off-record {
+  min-height: 32px;
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-full);
+  background: transparent;
+  color: var(--ink-secondary);
+  font: var(--weight-regular) var(--fs-meta) / 1 var(--family-ui);
+  padding: 0 var(--sp-3);
+  cursor: pointer;
+}
+.oc-off-record { flex: none; white-space: nowrap; }
+.oc-off-record[aria-pressed='true'] {
+  background: var(--accent-tint);
+  color: var(--ink-primary);
+  border-color: var(--accent);
+}
+.oc-earlier {
+  display: grid;
+  gap: var(--sp-2);
+  justify-self: stretch;
+  min-width: 0;
+}
+.oc-pane-turn {
+  justify-self: start;
+  max-width: 85%;
+  min-width: 0;
+  margin: 0;
+  border: 1px dashed var(--edge-strong);
+  border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-3);
+}
+.oc-pane-turn-label {
+  font: var(--weight-regular) var(--fs-xs) / 1.4 var(--family-ui);
+  color: var(--ink-tertiary);
+}
+.oc-pane-turn-text,
+.oc-untrusted {
+  margin: var(--sp-1) 0 0;
+  font: var(--weight-regular) var(--fs-meta) / var(--lh-normal) var(--family-mono);
+  color: var(--ink-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.oc-history-text {
+  margin: 0;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--ink-primary);
+}
+.oc-unmeasured,
+.oc-notice {
+  margin: 0;
+  font: var(--weight-regular) var(--fs-meta) / var(--lh-normal) var(--family-ui);
+  color: var(--ink-secondary);
+  overflow-wrap: anywhere;
+}
+.oc-unmeasured { text-align: center; }
+.oc-notice { padding: var(--sp-1) 0; }
+.oc-composer { flex: none; min-width: 0; }

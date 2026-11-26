@@ -26,7 +26,9 @@ import { PasteChipBar } from './PasteChipBar';
 import './chat.css';
 
 export interface ComposerProps {
-  onSend: (
+  /** Today's send: the composer hands the text over and clears at once; the store's `PendingSend` holds it after. Unused
+   *  when `onRecord` is given. */
+  onSend?: (
     text: string,
     opts?: { replaceDraft?: boolean; attachments?: PendingAttachment[] },
   ) => void;
@@ -53,6 +55,13 @@ export interface ComposerProps {
    *  `DialogSheet`'s held, read-only card is up (`askInline` stays true then), so Send is held and Escape does not
    *  interrupt until the new connection decides. Stop is unaffected: it stays enabled beside a disabled Send. */
   askUp?: boolean;
+  /** Opt-in (Overlord W1 chat, question 5): the send is a record, so the text stays in the box until the answer and is
+   *  cleared only when the answer says `clear` (`chatWords.ts#draftAfterSend`, asked by the caller). Send is held while
+   *  one answer is on its way, a throw keeps the text, and a draft edited meanwhile is never cleared by that answer.
+   *  Absent: today's behaviour, unchanged. */
+  onRecord?: (text: string) => Promise<'clear' | 'keep'>;
+  /** Opt-in: a node drawn in the input bar before the send control (the chat's off-the-record toggle). */
+  leading?: ReactNode;
 }
 
 /** After a send empties the draft during a busy turn, the danger Stop takes Send's spot at once; it ignores taps for
@@ -111,6 +120,8 @@ export function Composer({
   busy = false,
   onInterrupt,
   askUp = false,
+  onRecord,
+  leading,
 }: ComposerProps): ReactNode {
   // Paste chips (wave 169). The field's value is the draft, chips included (pasteChips.ts header): the live chips are a
   // parse of it after every change, so nothing about them is tracked between changes. `valueNow` mirrors the state for
@@ -130,6 +141,7 @@ export function Composer({
   const valueWas = useRef('');
   const pointing = useRef(false);
   const [conflict, setConflict] = useState<DraftConflict | null>(null);
+  const [recording, setRecording] = useState(false);
   const [commands, setCommands] = useState<SlashCommand[] | null>(null);
   const box = useRef<HTMLTextAreaElement>(null);
   // Paste is the main way a screenshot gets here on desktop — ⌘⇧4 then ⌘V,
@@ -363,7 +375,7 @@ export function Composer({
   // A marker outside every chip (an edit the composer did not plan broke a block, markers came with no chip, or an undo
   // brought back an old label). Sending holds until none is left, so a broken label never goes out in place of its text.
   const broken = inertMarkers(value, chips.current).length > 0;
-  const canSend = !disabled && !staged.hasFailed && !staged.uploading && !broken
+  const canSend = !disabled && !staged.hasFailed && !staged.uploading && !broken && !recording
     && (expanded.trim() !== '' || attachments.length > 0);
 
   // Stop in the send slot (W2 Task S7b; D-5471, inside D-5099's "Later"). While a turn runs and nothing is drafted,
@@ -386,10 +398,22 @@ export function Composer({
     // while the card is up, not after a try.
     if (askUp) return;
     const text = expanded.trim();
+    if (onRecord !== undefined) {
+      // The record's send: nothing is cleared until the answer, and an answer clears only the draft it was asked for.
+      const sent = valueNow.current;
+      setRecording(true);
+      void onRecord(text).then((d) => d, () => 'keep' as const).then((d) => {
+        setRecording(false);
+        if (d !== 'clear' || valueNow.current !== sent) return;
+        put('');
+        chips.current = emptyChips();
+      });
+      return;
+    }
     // An explicit `undefined` second argument still counts as a 2-arg call to
     // a caller matching on arity — only pass opts when there is one.
-    if (attachments.length > 0) onSend(text, { attachments });
-    else onSend(text);
+    if (attachments.length > 0) onSend?.(text, { attachments });
+    else onSend?.(text);
     sentAt.current = Date.now();
     put('');
     chips.current = emptyChips(); // a new draft's table; its numbers go on from the last one
@@ -577,6 +601,7 @@ export function Composer({
         {id !== undefined && (
           <AttachButton accept={ATTACH_ACCEPT} disabled={disabled} onPick={(files) => staged.add(files)} />
         )}
+        {leading}
         {stopping && !drafted ? (
           <Button variant="danger" size="fit" className="stop-slot flex-none gap-2 rounded-full" onClick={stop}>
             <Icon name="square" />

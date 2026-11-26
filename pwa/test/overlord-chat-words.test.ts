@@ -60,6 +60,13 @@ describe('turnOrigin: what a transcript user turn is', () => {
       expect(turnOrigin(t), JSON.stringify(t)).toEqual({ kind: 'pane' });
     }
   });
+  it('a near miss by one character at either end is pane text, never the nudge and never ccrc\'s', () => {
+    const line = operatorMessageNudgeLine(12);
+    const flip = (c: string): string => (c === 'x' ? 'y' : 'x');
+    for (const t of [flip(line[0]!) + line.slice(1), line.slice(0, -1) + flip(line.at(-1)!), line.slice(1), line.slice(0, -1), `x${line}`, `${line}x`]) {
+      expect(turnOrigin(t), JSON.stringify(t)).toEqual({ kind: 'pane' });
+    }
+  });
 });
 
 describe('mergeLive: the record placed in the live transcript', () => {
