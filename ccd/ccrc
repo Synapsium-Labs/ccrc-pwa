@@ -6574,7 +6574,7 @@ _auth_on_signal() {
   case "$AUTH_SIG_STATE" in
     written)
       if [ "$AUTH_SIG_HAD" -eq 1 ]; then
-        if ! chmod "$AUTH_SIG_MODE" -- "$AUTH_BAK" 2>/dev/null || ! mv -f -- "$AUTH_BAK" "$AUTH_SIG_DEST" 2>/dev/null; then
+        if ! chmod -- "$AUTH_SIG_MODE" "$AUTH_BAK" 2>/dev/null || ! mv -f -- "$AUTH_BAK" "$AUTH_SIG_DEST" 2>/dev/null; then
           AUTH_KEEP_BAK=1
           echo "$PROG: auth $AUTH_SIG_SUB: stopped by a signal while proving the change, and $AUTH_SIG_DEST could NOT be put back: the previous file is kept at $AUTH_BAK, and $AUTH_SIG_DEST still holds this run's lines. Put it back (mv $AUTH_BAK $AUTH_SIG_DEST), then restart: $(_svc_restart_hint ccrc.service)" >&2
           exit 130
@@ -6764,7 +6764,7 @@ cmd_auth() {
     bak="$dest.auth-restore.$$"
     AUTH_BAK="$bak"
     _exit_add '[ "$AUTH_KEEP_BAK" = 1 ] || rm -f -- "$AUTH_BAK"'
-    { ( umask 077; cp -- "$dest" "$bak" ) && chmod 600 -- "$bak"; } \
+    { ( umask 077; cp -- "$dest" "$bak" ) && chmod -- 600 "$bak"; } \
       || { rm -f -- "$bak"; _ccrc_die "auth $sub: could not keep a copy of $dest to restore from. Nothing was changed."; }
   fi
   AUTH_SIG_HAD="$had"; AUTH_SIG_MODE="$mode"
@@ -6780,7 +6780,7 @@ cmd_auth() {
   if ! _auth_restart_prove "$want" "$addr"; then
     local why="$AUTH_WHY" back="put back"
     if [ "$had" -eq 1 ]; then
-      if ! chmod "$mode" -- "$bak" || ! mv -f -- "$bak" "$dest"; then
+      if ! chmod -- "$mode" "$bak" || ! mv -f -- "$bak" "$dest"; then
         AUTH_KEEP_BAK=1
         back="NOT put back: the previous file is kept at $bak, and $dest still holds this run's lines"
       fi

@@ -268,7 +268,7 @@ describe('ccrc auth: which box may run it', () => {
     it(`refuses CCRC_HOST=${host} as reached from elsewhere: loopback is 127.0.0.1 to 127.255.255.254, localhost or ::1`, async () => {
       const b = box('ccrc-auth-127text-', `CCRC_HOST=${host}\nCCRC_PORT=${PORT}\n`);
       const before = bytes(envFile(b.home));
-      await expectRefused(b, await runTty(b.home, ['auth', 'on']), before, new RegExp(`reached from elsewhere \\(CCRC_HOST=${host.replace(/\./g, '\\.')} in `));
+      await expectRefused(b, await runTty(b.home, ['auth', 'on']), before, new RegExp(`reached from elsewhere \\(CCRC_HOST=${host.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} in `));
     });
   }
 
