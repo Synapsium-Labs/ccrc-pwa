@@ -25,7 +25,7 @@ import type { ApprovalParkWord, ApprovalRulingAuthority, ApprovalRulingFamily } 
 import type { LandingWrite } from './landingLine.js';
 import { hookEventIs, type HookEvent } from './hook-events.js';
 import { providerRetryOf, type ProviderRetryWire } from './provider-retry-wire.js';
-import { PROGRAMME_RUN_REFUSAL_MAP, PROGRAMME_STORED_STATES, type ProgrammeLifecycleFields, type ProgrammeRunRefuseCode, type ProgrammesLifecycleAnswer, type ProgrammeStoredState } from './programmeLifecycle.js';
+import { PROGRAMME_RUN_REFUSAL_MAP, PROGRAMME_STORED_STATES, type ProgrammeLifecycleFields, type ProgrammeRunRefuseCode, type ProgrammesLifecycleAnswer, type ProgrammesWindowAnswer, type ProgrammeStoredState } from './programmeLifecycle.js';
 
 export type SessionStatus = 'busy' | 'idle' | 'dead';
 
@@ -7296,14 +7296,10 @@ export interface ProgrammeRow extends ProgrammeLifecycleFields {   // programme 
 }
 
 /** `GET /api/programmes`'s answer: the rows, and the runs closed since the operator's local midnight, by who closed them (A32). */
-export interface ProgrammesAnswer extends ProgrammesLifecycleAnswer {
+export interface ProgrammesAnswer extends ProgrammesLifecycleAnswer, ProgrammesWindowAnswer {
   ok: true;
   programmes: ProgrammeRow[];
   closedToday: { operator: number; sweep: number; coordinator: number };
-  /** The `since` the counts were taken from, epoch ms, after the read held it to the last 48 hours and to now: set on every
-   *  answer, so a reader compares the window it asked with the one applied (Overlord W1 home B, review 3998 F6). Absent from an
-   *  older server: the window is unknown, never the asked one. */
-  appliedSince?: number;
 }
 
 /** One row of a run's trail (D-8071, spec 2026-11-04 §11.5). `by` is who caused it: a stored session id reads 'session'.

@@ -139,8 +139,12 @@ a slug, and the coordinator mints its number when it folds this note into the le
 - **`placemark-reads-only-for-a-visible-frame`** (review 3998 M11). `placeMarkReadsFor` rules before any read, so a hidden
   frame of any session costs no read and never warns of a read fault.
 - **`programmes-read-says-its-window`** (review 3998 F6, call 1618). One optional field on `GET /api/programmes`' answer,
-  `appliedSince` (`shared/api.ts`, beside `ProgrammesAnswer`'s other fields), set on every answer by `readProgrammes`; the
-  console's one reader is in `sinceWords.ts`. No protocol change.
+  `appliedSince`, set on every answer by `readProgrammes`; the console's one reader is in `sinceWords.ts`. No protocol change.
+  The ruling put the field beside `ProgrammesAnswer`'s other fields in `shared/api.ts`, but that file is capped (D-8635: its
+  code lines at the cap, 5140, which may only fall), and the first full run went red on the cap with the field in. So the field
+  is declared as `ProgrammesWindowAnswer` in `shared/programmeLifecycle.ts`, beside the read's other additive part
+  (`ProgrammesLifecycleAnswer`), and `ProgrammesAnswer` extends both: `shared/api.ts` changes two lines in place and grows by
+  none (slug `programmes-window-type-beside-the-lifecycle-part`).
 - **`three-class-prefixes`.** The parts' classes are `ov-`, `ovl-` and `overlord-body-`; one stylesheet holds all three.
 
 ## Fix round 1 (review 3998, call 1616)
