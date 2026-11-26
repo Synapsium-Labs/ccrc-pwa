@@ -37,12 +37,13 @@
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { chromium, type Browser, type Page } from 'playwright-core';
+import { chromium, errors, type Browser, type Page } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED, SKINS } from '@ccrc/ui';
 import { DOC_SECTION_SLUGS, DOCS_RESPONSE_HEADERS } from '../../shared/docs';
 import { COMMIT_A, entry, treeOk, treeResponse } from '../test/docsFixtures';
 import { resolveChrome } from './harness';
 import { MEASURE, readerTimingLoad } from './measurement';
+import { READER_PAIRED_COUNT, readerPairedStats, type ReaderTimingPair } from './reader-paired-verdict';
 import {
   backlogFrame, countRenders, fleetApi, fleetFixture, fleetFrame, fleetFrameAt, FIXTURE_NOW_MS, frameCost, INFLIGHT_CAP_MS, longTranscript, medianOf,
   openApp, QUIET_CAP_MS, serveDist, sharedDist, SPAN_SLACK_MS, summarize, type AppFixture, type AppView, type DistServer, type FrameCostRecord,
@@ -501,10 +502,10 @@ describe('measurement — C6 Step 0/4', () => {
   // `__readyAts` reads it); `srcdocChars` is the length of the hosted frame's `srcdoc`. The size check runs independently
   // of the on-demand timing comparison. For timing, set CCRC_MEASURE=1 and CCRC_PAIRED_READER_BASE_DIST to the built
   // Task 1 BASE (same library bytes, no hosted appearance) and CCRC_PAIRED_READER_MODE_ONLY_DIST to the diagnostic
-  // candidate build, then select 'reader paired timing'. All builds use this exact fixture in one browser; a historical
-  // wall-clock median is not a comparator. The diagnostic forces the hosted decision false without removing the stamp
-  // hook or the rest of the bridge; this harness consumes the build, never makes that mutation. D-9030 retries can set
-  // CCRC_PAIRED_READER_ROWS to comma-separated arm:skin:round keys for the undecided rows only.
+  // candidate build, then select 'reader paired timing'. The three builds share one Chromium session, one fixture and
+  // the same open sampler. The mode-only build forces the hosted decision false without removing the rest of the bridge.
+  // D-9030 retries may set CCRC_PAIRED_READER_ROWS to comma-separated arm:skin:round keys for the undecided rows;
+  // both BASE/BASE controls still run on each side of the selected comparisons.
   const READER_PROJECT = 'demo';
   const READER_SECTION = DOC_SECTION_SLUGS[0]!;
   const READER_LEAF = '2026-10-20-path-identity-design.md';
@@ -513,7 +514,6 @@ describe('measurement — C6 Step 0/4', () => {
     + ['first', 'second', 'third', 'fourth', 'fifth', 'sixth'].map((n, i) => `## The ${n} section\n\n`
       + Array.from({ length: 7 }, (_, j) => `Paragraph ${i * 7 + j + 1} of the body, long enough to wrap on a phone's width.`).join('\n\n')).join('\n\n')
     + '\n';
-  const READER_OPENS = 9;
   // Both skins at Task 1's commit, rebuilt with the corrected 1.2.0 candidate.
   const BASE_SRCDOC_CHARS = 840_371;
   const MAX_SRCDOC_GROWTH = 191_736;
@@ -568,52 +568,46 @@ describe('measurement — C6 Step 0/4', () => {
   const PAIR_MODE_ONLY_DIST = process.env['CCRC_PAIRED_READER_MODE_ONLY_DIST'];
   it.runIf(MEASURE && PAIR_BASE_DIST !== undefined)('reader paired timing: interleaved BASE, hosted and mode-only opens', async () => {
     if (!PAIR_MODE_ONLY_DIST) throw new Error('CCRC_PAIRED_READER_MODE_ONLY_DIST must name the built mode-only checkout');
-    // D-9030: a retry selects only undecided rows. The original lead order is retained for each selected round.
     const rows = (['hosted', 'mode-only'] as const).flatMap((arm) => [1, 2].flatMap((round) =>
       SKINS.map(({ id: skin }) => ({ key: `${arm}:${skin}:${round}`, arm, round, skin }))));
     const requested = process.env['CCRC_PAIRED_READER_ROWS']?.split(',') ?? rows.map(({ key }) => key);
     const selected = new Set(requested);
     expect(selected.size, 'unique timing row keys').toBe(requested.length);
     expect(requested.every((key) => rows.some((row) => row.key === key)), 'known timing row keys').toBe(true);
-    const quietMedian: Readonly<Record<(typeof SKINS)[number]['id'], number>> = { [REFINED]: 81.4, [INSTRUMENT]: 86.6 };
-    const { oneMinute: startLoad, quiet: started } = readerTimingLoad();
-    console.log(`FRAME-COST-PAIRED-LOAD ${JSON.stringify({ startLoad, started, rows: requested })}`);
-    if (!started) throw new Error('paired timing not started: one-minute load must be below 4');
+    const comparisons = rows.filter(({ key }) => selected.has(key));
+    console.log(`FRAME-COST-PAIRED-LOAD ${JSON.stringify({ startLoad: readerTimingLoad(), rows: comparisons.map(({ key }) => key) })}`);
     let base: DistServer | undefined;
     let modeOnly: DistServer | undefined;
     try {
       base = await serveDist(PAIR_BASE_DIST!);
       modeOnly = await serveDist(PAIR_MODE_ONLY_DIST);
+      const controlRows = (phase: 'opening' | 'closing') => SKINS.map(({ id: skin }) =>
+        ({ key: `control:${phase}:${skin}`, arm: 'base' as const, round: phase === 'opening' ? 1 : 2, skin }));
+      const schedule = [...controlRows('opening'), ...comparisons, ...controlRows('closing')];
       const failures: string[] = [];
-      for (const { key, arm, round, skin } of rows) {
-        if (!selected.has(key)) continue;
-        const samples = { base: [] as number[], candidate: [] as number[] };
+      for (const { key, arm, round, skin } of schedule) {
+        const origins = { base: base.origin, candidate: arm === 'base' ? base.origin : arm === 'hosted' ? server!.origin : modeOnly.origin };
+        const pairs: ReaderTimingPair[] = [];
         const sizes = { base: new Set<number>(), candidate: new Set<number>() };
-        for (let i = 0; i < READER_OPENS; i += 1) {
-          // Each arm has its own contemporaneous BASE; alternate the lead and reverse it in round 2.
+        for (let i = 0; i < READER_PAIRED_COUNT; i += 1) {
+          // BASE, candidate, candidate, BASE, …; flip the initial lead in round two.
           const order = (i + round) % 2 === 1 ? (['base', 'candidate'] as const) : (['candidate', 'base'] as const);
-          for (const build of order) {
-            const origin = build === 'base' ? base.origin : arm === 'hosted' ? server!.origin : modeOnly.origin;
-            const open = await openReaderOnce(skin, origin);
-            samples[build].push(open.openToReadyMs);
-            sizes[build].add(open.srcdocChars);
+          const sample = { base: 0, candidate: 0 };
+          for (const side of order) {
+            try {
+              const open = await openReaderOnce(skin, origins[side]);
+              sample[side] = open.openToReadyMs;
+              sizes[side].add(open.srcdocChars);
+            } catch (error) {
+              const readyTimeout = error instanceof errors.TimeoutError && error.message.startsWith('page.waitForFunction:');
+              console.log(`FRAME-COST-PAIRED-INTERRUPTED ${JSON.stringify({ key, pair: i + 1, side, readyTimeout, pairs })}`);
+              throw error;
+            }
           }
+          pairs.push({ baseMs: sample.base, candidateMs: sample.candidate });
         }
-        const describeSamples = (values: number[]) => ({ samples: values, median: medianOf(values), min: Math.min(...values), max: Math.max(...values) });
-        const baseline = describeSamples(samples.base);
-        const candidate = describeSamples(samples.candidate);
-        const sorted = [...samples.base].sort((a, b) => a - b);
-        // Nine samples: the linear-interpolated quartiles land on the third and seventh sorted values.
-        const baseIqr = sorted[6]! - sorted[2]!;
-        const quietCeiling = quietMedian[skin] * 1.25;
-        const valid = baseline.median <= quietCeiling && baseIqr <= 20;
-        const delta = candidate.median - baseline.median;
-        const ratio = candidate.median / baseline.median;
-        const ceiling = arm === 'hosted' ? baseline.median + 30 : 1.10 * baseline.median;
-        const verdict = !valid ? 'not measured: reference not quiet' : candidate.median > ceiling ? 'fail' : 'pass';
-        const row = { key, arm, skin, round, baseline, candidate, delta, ratio, ceiling, baseIqr, quietCeiling, valid, verdict,
-          sizes: { base: [...sizes.base], candidate: [...sizes.candidate] } };
-        console.log(`FRAME-COST-PAIRED ${JSON.stringify(row)}`);
+        console.log(`FRAME-COST-PAIRED ${JSON.stringify({ key, arm, skin, round, pairs, ...readerPairedStats(pairs),
+          sizes: { base: [...sizes.base], candidate: [...sizes.candidate] } })}`);
         if (sizes.base.size !== 1 || !sizes.base.has(BASE_SRCDOC_CHARS)) {
           failures.push(`${key}: BASE srcdoc size changed`);
         }
@@ -621,14 +615,11 @@ describe('measurement — C6 Step 0/4', () => {
           || (arm === 'hosted' ? [...sizes.candidate][0]! <= BASE_SRCDOC_CHARS : !sizes.candidate.has(BASE_SRCDOC_CHARS))) {
           failures.push(`${key}: candidate srcdoc size control failed`);
         }
-        if (verdict === 'fail') {
-          failures.push(`${key}: timing ceiling exceeded with a quiet reference`);
-          break;
-        }
       }
-      expect(failures, 'paired timing and srcdoc controls').toEqual([]);
+      // Timing has no assertion here. Evaluate the recorded pairs and all four controls together.
+      expect(failures, 'paired srcdoc controls').toEqual([]);
     } finally {
-      console.log(`FRAME-COST-PAIRED-LOAD ${JSON.stringify({ endLoad: readerTimingLoad().oneMinute })}`);
+      console.log(`FRAME-COST-PAIRED-LOAD ${JSON.stringify({ endLoad: readerTimingLoad() })}`);
       await modeOnly?.close();
       await base?.close();
     }

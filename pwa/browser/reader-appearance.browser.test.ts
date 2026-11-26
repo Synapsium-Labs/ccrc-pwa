@@ -11,7 +11,7 @@ import { READER_STORE_PREFIX } from '../src/lib/readerLimits';
 import { COMMIT_A, entry, treeOk, treeResponse } from '../test/docsFixtures';
 import { openApp, serveDist, sharedDist, type DistServer, type OpenedApp } from './app';
 import { resolveChrome } from './harness';
-import { MEASURE, readerTimingLoad } from './measurement';
+import { MEASURE, readerCeilingReading, readerTimingLoad } from './measurement';
 import { readRedraws, REDRAW_FIGURE, setRedrawGate, traceRedrawTasks, waitForRedrawDrain, waitForRedraws, watchRedraws } from './reader-redraw';
 
 const SECTION = DOC_SECTION_SLUGS[0]!;
@@ -42,6 +42,21 @@ beforeAll(async () => {
 }, 180_000);
 afterAll(async () => { await browser?.close(); await server?.close(); });
 
+type FirstReadyTrace = {
+  mountedAt?: number;
+  admittedAt?: number;
+  fallbackAt?: number;
+  hookAt?: number;
+  sent?: { at: number; rootPresent: boolean; seedAppearance: boolean | null; messageAppearance: boolean };
+};
+
+async function firstReadyHostTrace(page: Page) {
+  return page.evaluate(() => {
+    const trace = (window as Window & { __firstReadyTrace?: FirstReadyTrace }).__firstReadyTrace;
+    return { ...trace, fellBack: document.querySelector('.doc-plain-note') !== null || trace?.fallbackAt !== undefined };
+  });
+}
+
 async function open(skin: string, theme: string, device: 'light' | 'dark', stale?: string,
   prepare?: (app: OpenedApp) => Promise<() => Promise<void>>, text = DOC): Promise<OpenedApp> {
   const size = Buffer.byteLength(text);
@@ -54,7 +69,21 @@ async function open(skin: string, theme: string, device: 'light' | 'dark', stale
     const w = window as unknown as {
       __appearanceOps: { at: number }[];
       __appearanceAtReady?: { scheme: string; colour: Record<string, string> };
+      __firstReadyTrace?: FirstReadyTrace;
     };
+    const now = () => performance.timeOrigin + performance.now();
+    const trace: FirstReadyTrace | undefined = firstReady ? { hookAt: now() } : undefined;
+    if (trace) w.__firstReadyTrace = trace;
+    if (isHost && trace) {
+      // Observe the host's own ready/fallback projection independently of the frame-side send probe.
+      new MutationObserver(() => {
+        if (document.querySelector('.docs-reader iframe')) {
+          trace.mountedAt ??= now();
+          if (!document.querySelector('.doc-formatting')) trace.admittedAt ??= now();
+        }
+        if (document.querySelector('.doc-plain-note')) trace.fallbackAt ??= now();
+      }).observe(document, { childList: true, subtree: true });
+    }
     w.__appearanceOps = [];
     const original = MessagePort.prototype.postMessage;
     MessagePort.prototype.postMessage = function (message: unknown, transfer?: Transferable[] | StructuredSerializeOptions): void {
@@ -63,10 +92,19 @@ async function open(skin: string, theme: string, device: 'light' | 'dark', stale
       if (!isHost && kind === 'ready' && w.__appearanceAtReady === undefined) {
         // Sample within the frame at its first send, before the host can respond. No new listener or port.
         const root = document.querySelector('[data-docreader-root]');
+        const at = now();
         if (root) {
           const cs = getComputedStyle(root);
           w.__appearanceAtReady = { scheme: cs.colorScheme,
             colour: Object.fromEntries(colours.map((slot) => [slot, cs.getPropertyValue(`--${slot}`).trim()])) };
+        }
+        if (trace && !trace.sent) {
+          let seedAppearance: boolean | null = null;
+          try {
+            const seed = JSON.parse(document.querySelector('head script[type="application/json"]')?.textContent ?? 'null');
+            if (seed && typeof seed === 'object') seedAppearance = Object.hasOwn(seed, 'appearance');
+          } catch { /* An unreadable seed is reported as unknown, not as an absent field. */ }
+          trace.sent = { at, rootPresent: root !== null, seedAppearance, messageAppearance: Object.hasOwn(message as object, 'appearance') };
         }
       }
       Reflect.apply(original, this, transfer === undefined ? [message] : [message, transfer]);
@@ -89,8 +127,14 @@ async function open(skin: string, theme: string, device: 'light' | 'dark', stale
   const during = await prepare?.(app);
   await app.page.goto(`${server.origin}/docs/demo/${SECTION}/${NAME}`, { waitUntil: 'domcontentloaded' });
   await during?.();
-  await app.page.waitForFunction(() => document.querySelector('.docs-reader iframe') !== null && document.querySelector('.doc-formatting') === null,
-    undefined, { timeout: 90_000 });
+  try {
+    await app.page.waitForFunction(() => document.querySelector('.docs-reader iframe') !== null && document.querySelector('.doc-formatting') === null,
+      undefined, { timeout: 90_000 });
+  } catch (error) {
+    if (stale === undefined) throw error;
+    const trace = await firstReadyHostTrace(app.page).catch(() => null);
+    throw new Error(`AP-3 host ready wait failed; first-ready trace: ${JSON.stringify(trace)}`, { cause: error });
+  }
   return app;
 }
 
@@ -521,9 +565,17 @@ describe('Docs hosted appearance', () => {
     const app = await open(SKINS[0]!.id, theme, 'light', stale);
     try {
       const { scheme, colour } = await hostAppearanceValues(app.page);
-      const atReady = await (await frameOf(app.page)).evaluate(() =>
-        (window as unknown as { __appearanceAtReady?: unknown }).__appearanceAtReady);
-      expect(atReady, 'the frame sent ready with the console appearance already applied').toEqual({ scheme, colour });
+      const { atReady, frameTrace } = await (await frameOf(app.page)).evaluate(() => {
+        const w = window as Window & { __appearanceAtReady?: unknown; __firstReadyTrace?: FirstReadyTrace };
+        return { atReady: w.__appearanceAtReady, frameTrace: w.__firstReadyTrace };
+      });
+      const hostTrace = await firstReadyHostTrace(app.page);
+      const { mountedAt } = hostTrace;
+      const fromMount = (at: number | undefined) => at === undefined || mountedAt === undefined ? null : at - mountedAt;
+      const trace = { hostTrace, frameTrace: frameTrace ?? null, sentAfterMountMs: fromMount(frameTrace?.sent?.at),
+        admittedAfterMountMs: fromMount(hostTrace.admittedAt), fallbackAfterMountMs: fromMount(hostTrace.fallbackAt) };
+      expect(atReady, `the frame sent ready with the console appearance already applied; first-ready trace: ${JSON.stringify(trace)}`)
+        .toEqual({ scheme, colour });
       await assertAppearance(app.page);
       expect(app.errors).toEqual([]);
     } finally { await app.ctx.close(); }
@@ -574,11 +626,7 @@ describe('Docs hosted appearance', () => {
   }, 180_000);
 
   it.each(['light', 'dark'] as const)('AP-5: palette and skin transitions in place with device %s', async (device) => {
-    const start = MEASURE ? readerTimingLoad() : undefined;
-    if (start?.quiet === false) {
-      console.log(`AP-5-TIMING ${JSON.stringify({ device, startLoad: start.oneMinute, endLoad: null, verdict: 'not measured: box not quiet' })}`);
-      return;
-    }
+    const startLoad = MEASURE ? readerTimingLoad() : undefined;
     expect(THEMES.length).toBeGreaterThan(1);
     expect(SKINS.length).toBeGreaterThanOrEqual(2);
     type Timed = Awaited<ReturnType<typeof checkTransition>> & { latencyMs: number };
@@ -588,7 +636,7 @@ describe('Docs hosted appearance', () => {
     let noops = 0;
     let app: OpenedApp | undefined;
     let complete = false;
-    let end: ReturnType<typeof readerTimingLoad> | undefined;
+    const ceiling = APPEARANCE_FOLLOW_MAX_MS;
     try {
       app = await open(SKINS[0]!.id, THEMES[0]!.id, device);
       const { page } = app;
@@ -599,7 +647,7 @@ describe('Docs hosted appearance', () => {
         const sample = await checkTransition(page, frame, cursor, device, transition, action);
         if (sample.effective) effective += 1;
         else noops += 1;
-        if (start && sample.effective) {
+        if (MEASURE && sample.effective) {
           const { hostStampMs, operationSendMs, frameWriteMs, latencyMs } = sample;
           allClocksOrdered &&= hostStampMs !== null && operationSendMs !== null && frameWriteMs !== null
             && hostStampMs <= operationSendMs && operationSendMs <= frameWriteMs;
@@ -625,28 +673,24 @@ describe('Docs hosted appearance', () => {
       expect(app.errors).toEqual([]);
       complete = true;
     } finally {
-      if (start) {
-        end = readerTimingLoad();
-        const verdict = !end.quiet ? 'not measured: box not quiet'
-          : !complete ? 'not measured: transition did not complete'
-          : worst && allClocksOrdered && worst.latencyMs <= APPEARANCE_FOLLOW_MAX_MS ? 'pass' : 'fail';
-        console.log(`AP-5-TIMING ${JSON.stringify({ device, startLoad: start.oneMinute, endLoad: end.oneMinute, verdict, worst })}`);
+      if (MEASURE) {
+        const reading = complete && worst && allClocksOrdered
+          ? readerCeilingReading(worst.latencyMs, ceiling, 'AP-M27').reading : 'incomplete';
+        console.log(`AP-5-TIMING ${JSON.stringify({ device, startLoad, endLoad: readerTimingLoad(), ceiling, reading, worst })}`);
       }
       await app?.ctx.close();
     }
-    if (end?.quiet) {
+    if (MEASURE) {
       expect(worst, `${device}: measured an applied appearance write`).toBeDefined();
       expect(allClocksOrdered, `${device}: host stamp, operation send and frame write are ordered`).toBe(true);
-      expect(worst!.latencyMs, `${device}: ${worst!.transition} appearance latency in ms`).toBeLessThanOrEqual(APPEARANCE_FOLLOW_MAX_MS);
+      if (readerCeilingReading(worst!.latencyMs, ceiling, 'AP-M27').assertCeiling) {
+        expect(worst!.latencyMs, `${device}: ${worst!.transition} appearance latency in ms`).toBeLessThanOrEqual(ceiling);
+      }
     }
   }, 1_200_000);
 
   it('D-9054: drawn figures redraw nearest first in separate tasks and cancel the old queue', async () => {
-    const start = MEASURE ? readerTimingLoad() : undefined;
-    if (start?.quiet === false) {
-      console.log(`AP-REDRAW-GAPS ${JSON.stringify({ startLoad: start.oneMinute, endLoad: null, verdict: 'not measured: box not quiet' })}`);
-      return;
-    }
+    const startLoad = MEASURE ? readerTimingLoad() : undefined;
     const count = 4;
     const spacer = 'A paragraph keeps the next figure at a distinct distance.\n\n'.repeat(24);
     const text = `# Redraw order\n\n${Array.from({ length: count }, (_, i) => `## Figure ${i + 1}\n\n\`\`\`mermaid\nflowchart LR\n  A[Start ${i + 1}] --> B[Finish]\n\`\`\`\n\n${spacer}`).join('')}`;
@@ -688,14 +732,14 @@ describe('Docs hosted appearance', () => {
       expect(firstRun.starts, 'nearest-first redraw starts').toEqual(order);
       expect(firstRun.writes.map(({ figure }) => figure), 'nearest-first redraw writes').toEqual(order);
       expect(firstRun.writes.map(({ paint }) => paint), 'every drawing was repainted exactly once').toEqual(Array<string>(count).fill(firstPaint!));
-      if (start) {
-        const end = readerTimingLoad();
+      if (MEASURE) {
         const gapsMs = firstRun.writes.slice(1).map(({ at }, i) => at - firstRun.writes[i]!.at);
         const ceiling = 200;
         const worstMs = Math.max(...gapsMs);
-        const verdict = !end.quiet ? 'not measured: box not quiet' : worstMs > ceiling ? 'fail' : 'pass';
-        console.log(`AP-REDRAW-GAPS ${JSON.stringify({ startLoad: start.oneMinute, endLoad: end.oneMinute, gapsMs, worstMs, verdict })}`);
-        if (end.quiet) expect(worstMs, 'consecutive figure redraw gap in ms').toBeLessThanOrEqual(ceiling);
+        expect(gapsMs.every((ms) => Number.isFinite(ms) && ms >= 0), 'finite, ordered redraw times').toBe(true);
+        const { reading, assertCeiling } = readerCeilingReading(worstMs, ceiling, 'AP-M31');
+        console.log(`AP-REDRAW-GAPS ${JSON.stringify({ startLoad, endLoad: readerTimingLoad(), gapsMs, worstMs, ceiling, reading })}`);
+        if (assertCeiling) expect(worstMs, 'consecutive figure redraw gap in ms').toBeLessThanOrEqual(ceiling);
       }
 
       await setRedrawGate(frame, 'holdAfterNextWrite');
