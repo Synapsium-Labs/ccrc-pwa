@@ -906,13 +906,18 @@ export function runInstall(home: string, args: string[] = ['install'],
 export const INSTALL_RUN_MS = 15_000;
 /** A case's own work beside its installs, and the margin that keeps its bound at twice the slowest measurement, in ms. */
 export const INSTALL_CASE_BASE_MS = 15_000;
+/** The slowest hosted duration measured for a case with this many installs, in ms, from the runs #3408 names: 14,660 ms
+ *  (a single-install case, the fast run's first attempt), 21,521 ms (two installs, the same attempt) and 20,146 ms
+ *  (three installs, a queue run). The pin in `ccrc-install-tree.test.ts` holds each bound at twice its figure. */
+export const SLOWEST_HOSTED_MS = { 1: 14_660, 2: 21_521, 3: 20_146 } as const;
 /** The suite's default per-case bound, as `vitest.config.ts` sets `testTimeout`: the pin in `ccrc-install-tree.test.ts`
  *  reads both and fails when the two spell different values (the worker offers no read of the configured one). */
-const SUITE_CASE_MS = scaled(process.platform === 'darwin' ? 90_000 : 20_000);
+export const SUITE_CASE_MS = scaled(process.platform === 'darwin' ? 90_000 : 20_000);
 /** The bound of a case that runs `ccrc install` `runs` times: this suite's one formula, scaled and Darwin-adjusted as
  *  every deadline a test sets for itself is (`platformDeadline`, D-8398), and never below the suite's own default for
- *  the platform (`SUITE_CASE_MS`: 90 s on macOS, where the formula alone gives a single-install case 87 s). The
- *  collector suite's budget uses `scaled` alone, which would leave macOS under its own default here. */
+ *  the platform (`SUITE_CASE_MS`). Today the floor raises nothing: with both terms at 15 s the single-install formula
+ *  on macOS is 90 s, the default exactly. It guards a later lowering of a constant, which would otherwise leave macOS
+ *  under its own default. The collector suite's budget uses `scaled` alone, which has no such floor. */
 export const installBudgetMs = (runs: number): number =>
   Math.max(platformDeadline(INSTALL_CASE_BASE_MS + runs * INSTALL_RUN_MS), SUITE_CASE_MS);
 /** Every `ccrc install` `runInstall` has spawned in this process; `itInstalls` reads it before and after a case. */

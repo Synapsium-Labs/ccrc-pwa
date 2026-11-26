@@ -1685,8 +1685,9 @@ describe('a platform-asserting test title owes the other platform an answer (D-2
   // name-then-punctuation shape ("BSD:", "GNU —") rather than any mention.
   const ASSERTS_PLATFORM = /\b(BSD|macOS|darwin|GNU|util-linux|Linux|launchd|systemd)\b\s*[:—-]/i;
   // A case opened through the installer wrapper with a platform runner (`itInstalls(2, itLinux)('title', …)`,
-  // ccrc-installFixture.ts) is the same claim as the bare runner's: the optional prefix and the closing `)(` keep it
-  // in this scan (#3408, review 3912 F5).
+  // ccrc-installFixture.ts) is the same claim as the bare runner's. What admits it is the closing form: `)(` after the
+  // runner's name, where a bare opener has `(`. The optional `itInstalls(<n>, ` prefix only spells the whole opener; the
+  // match would begin at the runner's name without it, and it keeps nothing (#3408, review 3912 F5, review 3917 F4).
   const CASE = /\b(?:itInstalls\(\s*\d+\s*,\s*)?(itDarwin|itLinux|describeDarwin|describeLinux)(?:\)\(|\()\s*(['"`])([\s\S]*?)\2/g;
   const MARKER = 'PLATFORM-ONLY:';
 

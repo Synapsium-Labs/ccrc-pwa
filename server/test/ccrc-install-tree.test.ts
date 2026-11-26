@@ -7,13 +7,13 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync, statSync, chmodSync
 import path, { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
-import { scaled } from './timeScale.js';
+import { scaled, TIME_SCALE } from './timeScale.js';
 import { installedCcdBody, renderCcdEntry } from './ccdWsHelpers.js';
 import { CONTAINED_TOOLS, assertNoRealTool, plantPoison } from './containedTools.js';
 import { describeLinux, describeDarwin, itLinux, itDarwin } from './platformFixtures.js';
 import { TREE_STUBS, installFixtureTree, rsyncRecorder } from './installTreeFixture.js';
 import { GPT_LANE_BINS } from './codexLaneFixture.js';
-import { INSTALL_FAMILY_FILES, here, REPO, LANE_BINS_IN_LINE, treeRoot, ccrcIn, treeFile, placed, versionDir, healthyDoctorBox, FIXTURE_BINS, freshBox, ccrcEnv, replantDoctorStubs, runInstall, itInstalls, runLauncherVersion, pathWithout, read, dotCcrc, mtime, preexisting, strays, DEFAULT_SEED, FIVE_ACCOUNT_ROSTER, gitInit, type Result } from './ccrc-installFixture.js';
+import { INSTALL_FAMILY_FILES, here, REPO, LANE_BINS_IN_LINE, treeRoot, ccrcIn, treeFile, placed, versionDir, healthyDoctorBox, FIXTURE_BINS, freshBox, ccrcEnv, replantDoctorStubs, runInstall, itInstalls, installBudgetMs, SLOWEST_HOSTED_MS, SUITE_CASE_MS, runLauncherVersion, pathWithout, read, dotCcrc, mtime, preexisting, strays, DEFAULT_SEED, FIVE_ACCOUNT_ROSTER, gitInit, type Result } from './ccrc-installFixture.js';
 
 removeTmpFixturesEachTest();
 
@@ -511,6 +511,22 @@ describe('ccrc install: the fixture tree', () => {
     const dflt = "scaled(process.platform === 'darwin' ? 90_000 : 20_000)";
     expect(fixture, 'the fixture spells the suite default differently from vitest.config.ts').toContain(`const SUITE_CASE_MS = ${dflt};`);
     expect(read(join(REPO, 'server', 'vitest.config.ts')), 'vitest.config.ts spells testTimeout differently from the fixture').toContain(`testTimeout: ${dflt},`);
+    // The SIZE of the bound, which the shape above cannot hold: with both constants at zero every bound falls back to the
+    // suite default and the shape is intact (issue #3408 again, with a green suite).
+    // On every platform and scale: more installs never get a smaller bound, and two and three installs get strictly more
+    // than the suite default.
+    expect(installBudgetMs(2), 'two installs are bounded no higher than one').toBeGreaterThanOrEqual(installBudgetMs(1));
+    expect(installBudgetMs(3), 'three installs are bounded no higher than two').toBeGreaterThanOrEqual(installBudgetMs(2));
+    expect(installBudgetMs(2), 'two installs sit at the suite default again').toBeGreaterThan(SUITE_CASE_MS);
+    expect(installBudgetMs(3), 'three installs sit at the suite default again').toBeGreaterThan(SUITE_CASE_MS);
+    // On Linux at time scale 1 (the platform and scale the measurements are from): each bound is at least twice the
+    // slowest hosted duration measured for that many installs.
+    if (process.platform === 'linux' && TIME_SCALE === 1) {
+      for (const runs of [1, 2, 3] as const) {
+        expect(installBudgetMs(runs), `${runs} install(s) are bounded under twice the slowest measured ${SLOWEST_HOSTED_MS[runs]} ms`)
+          .toBeGreaterThanOrEqual(2 * SLOWEST_HOSTED_MS[runs]);
+      }
+    }
     const converted: Array<[string, Array<[string, number]>]> = [
     ['ccrc-install-tree.test.ts', [
       ['replaces a file whose size and mtime are unchanged but whose content is not', 2],
