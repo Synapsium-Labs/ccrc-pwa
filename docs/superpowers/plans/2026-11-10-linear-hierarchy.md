@@ -577,9 +577,10 @@ number from `POST /api/ledger/deviations`.
   once per address. A cleared call's notice never outlives its row (review 3222): Show all opens its group and the folded
   trail keeps its row. Record: the wave 8 note.
 - **D-9131 (2026-11-26)** — w8-team-move-create-order: after a team-key move, a new ticket's create waits until its epic's
-  project carries the ticket's team as last written to Linear (the project binding's recorded team), not as planned now.
+  project carries the ticket's team as last written to Linear (the team the project binding records at every successful
+  project write: create, adoption and update), not as planned now.
   Record: `docs/superpowers/programs/linear-hierarchy/w8-team-move-create-order.md`.
-- **D-9132 (2026-11-26)** — w8-team-move-create-order: a write Linear answered with an error outside the closed table fails
+- **D-9132 (2026-11-26)** — w8-team-move-create-order: a write or a read Linear answered with an error outside the closed table fails
   its binding `malformed` after the last backoff step, never a silent, permanent hold. Record: the same note.
 
 ## Global Constraints
@@ -1624,7 +1625,7 @@ Every `CcrcOpOutcome` has one handling (a test row each):
 |---|---|---|---|
 | `ok` | `bound` (create) or fingerprint updated (update, link) | goes on | none |
 | `rate-limited` | unchanged | deferred by `retryAfterS`, at least the next backoff step | none |
-| `unreachable`, or `timeout` with `maybeSent: false` | unchanged | deferred by the backoff | none |
+| `unreachable`, or `timeout` with `maybeSent: false` | unchanged (the `unreachable` that Linear answered outside its closed error table, `outsideTable`, takes the `malformed` row below instead: D-9132) | deferred by the backoff | none |
 | `timeout` (or any word) with `maybeSent: true` | stays `pending`: the next pass binds a create by `requestId` (conflict on insert) or by name and creator, and re-sends an update (updates set absolute values) | deferred by the backoff | none |
 | `malformed` (sent and answered outside the grammar) | as `maybeSent: true`; after the last backoff step it is `failed` | deferred by the backoff | once, at `failed` |
 | `not-configured` (no key for the slot) | unchanged | the tick ends for that workspace; due stays | none (the key settings already show it) |
