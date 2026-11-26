@@ -5630,7 +5630,10 @@ fi
 # guards it). Text that only names one is refused too, as the account arm's is. An accident guard, not a wall: `bash -c`
 # with an assembled string, another interpreter or a script file runs past it. The prefilter of both branches reads
 # `quiz` followed by a blank, a stripped tab or newline (`t`, `n`) or a backslash, or `quiz-record`, never `quiz` alone,
-# so a session whose working directory or transcript path names `quiz` forks no jq on every call.
+# so a session whose working directory or transcript path names `quiz` forks no jq on every call. Inside the program the
+# row is gated on its literal (#3418's cost): every pattern of `qzmatch` holds `quiz`, so `QZANC` (its four letters with
+# only what `norm` removes between them, `PANC`'s form) is asked of the command as written before `norm` is computed,
+# and `quiz` itself is asked inside `qzmatch` of each form. `session-hook-gate-equivalence.test.ts` holds both.
 # THE PRUNE ROW ON EVERY SESSION (cleanup un-wedge, Task R3; spec 2026-11-04 §5, D9 to D11). A repository-wide
 # `git worktree prune` deletes git's record of every gone worktree of the repository at once, and ccd's cleanup reads
 # those records, so one session's prune holds the cleanup of every lane on the box. `pmatch` answers the category

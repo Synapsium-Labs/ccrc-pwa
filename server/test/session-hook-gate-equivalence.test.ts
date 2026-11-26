@@ -33,21 +33,27 @@ const hookProgram = (): string => {
   return m[1] as string;
 };
 
-/** `src` with every `cut` removed; throws unless it occurs exactly `times` times, so a moved gate reds here. */
-const cutOut = (src: string, cut: string, times: number): string => {
-  const parts = src.split(cut);
-  if (parts.length - 1 !== times) throw new Error(`expected ${times} of ${JSON.stringify(cut)}, found ${parts.length - 1}`);
-  return parts.join('');
+/**
+ * `src` with every match of `cut` (a global pattern) removed; throws unless it matched a count in `allowed`, so a gate
+ * that moved, or a row asked from a third place, reds here rather than leaving the comparison vacuous or partial.
+ */
+const cutOut = (src: string, cut: RegExp, allowed: readonly number[]): string => {
+  const found = (src.match(cut) ?? []).length;
+  if (!allowed.includes(found)) throw new Error(`expected ${allowed.join(' or ')} of ${String(cut)}, found ${found}`);
+  return src.replace(cut, '');
 };
 
-const ANCHOR = 'select(test(QZANC)) | ';
-const LITERAL = 'select(test("quiz")) |';
-const ROW = ' // first(select(test(QZANC)) | (., norm) | qzmatch)';
+/** The anchor before `norm`, in each of the two modes that ask the row; absent once the gate is removed. */
+const ANCHOR = /select\(test\(QZANC\)\) \| (?=\(\., norm\) \| qzmatch\))/g;
+/** The row's own gate, whatever literal it asks: a wrong literal then reds on behaviour, not on this cut. */
+const LITERAL = /(?<=def qzmatch: )select\(test\("[^"]*"\)\) \|/g;
+/** The row in each mode that asks it, gated or not. */
+const ROW = / \/\/ first\((?:select\(test\(QZANC\)\) \| )?\(\., norm\) \| qzmatch\)/g;
 const gated = hookProgram();
-/** The row as it stood before the gate: both gates cut out, nothing else touched. */
-const ungated = (): string => cutOut(cutOut(gated, ANCHOR, 2), LITERAL, 1);
+/** The row as it stood before the gate: both gates cut out, nothing else touched. With no gate, the program itself. */
+const ungated = (): string => cutOut(cutOut(gated, ANCHOR, [0, 2]), LITERAL, [0, 1]);
 /** The program with the quiz row deleted from both modes that ask it: the cost floor. */
-const rowless = (): string => cutOut(gated, ROW, 2);
+const rowless = (): string => cutOut(gated, ROW, [2]);
 
 type Mode = 'deny' | 'account' | 'class';
 const MODES: readonly Mode[] = ['deny', 'account', 'class'];
@@ -135,10 +141,10 @@ const OTHERS: readonly string[] = [
 ];
 
 describe('the quiz row\'s literal gate changes no answer', () => {
-  it('the gate is where the row is asked: the anchor before norm in both modes, the literal inside the row', () => {
-    expect(ungated()).not.toContain('QZANC)');
-    expect(ungated()).not.toBe(gated);
-    expect(rowless()).not.toContain('qzmatch)');
+  it('the control and the floor are derived from the hook: no gate left in the one, no quiz row in the other', () => {
+    expect(ungated()).not.toMatch(/test\(QZANC\)/);
+    expect(ungated()).not.toMatch(/def qzmatch: select/);
+    expect(rowless()).not.toMatch(/\| qzmatch\)/);
   });
 
   it('the copied lists still say what the quiz deny suite says: refusals refused, the open list open (deny mode)', () => {
@@ -199,9 +205,10 @@ const childCpu = (argv: readonly string[], input: string, timeoutMs = scaled(120
 };
 
 /**
- * The bound: the gated program within 15% (or 25 ms) of the program with the row deleted. Measured on the fleet box at
- * load 16 (deny mode, quote-dense, faster of interleaved runs): gated against rowless 0.98 to 1.08; the ungated row
- * against rowless 1.27 to 1.40 at 32 KB and 1.48 to 1.75 at 64 KB.
+ * The bound: the gated program within 15% (or 25 ms) of the program with the row deleted. Measured at load 13 to 18
+ * (deny mode, quote-dense, faster of interleaved runs): gated against rowless 0.98 to 1.08 in single runs and 1.00 and
+ * 1.01 as this case reads it; the gate removed against rowless 1.27 to 1.40 at 32 KB and 1.48 to 1.75 at 64 KB in single
+ * runs, and 1.23 and 1.39 as this case reads it, so the 64 KB row is the one that always catches a removed gate.
  */
 const BOUND = 1.15;
 
