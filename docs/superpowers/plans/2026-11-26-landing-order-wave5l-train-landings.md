@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. This plan dispatches nothing itself: the wave is built by a worker the coordinator dispatches.
 
-**Status:** drafted on 2026-11-26 for run 3930 (programme `landing-order`, the run's wave 31) from the brief's six decisions and the coordinator's answer of the same day (D-9115 issued for the ready mark; the clear line; the one early sentence); **revised the same day in fix round 1, after review run 3935, with the coordinator's rulings of call 1453**, and **again in fix round 2, after review run 3936, with the rulings of call 1459** (section 11 maps both rounds: each finding and ruling and where it went). One build wave; section 2 says why it is not split and where the seam would be.
+**Status:** drafted on 2026-11-26 for run 3930 (programme `landing-order`, the run's wave 31) from the brief's six decisions and the coordinator's answer of the same day (D-9115 issued for the ready mark; the clear line; the one early sentence); **revised the same day in fix round 1, after review run 3935, with the coordinator's rulings of call 1453**, and **again in fix round 2, after review run 3936, with the rulings of call 1459** (section 11 maps both rounds: each finding and ruling and where it went). **Corrected by the coordinator on 2026-11-26 after review run 3939 (round 3, the last): section 12 lists each correction, and where it and another section or a task disagree, section 12 wins.** One build wave; section 2 says why it is not split and where the seam would be.
 
 **Goal:** A pull request that a merge train landed and closed never holds its project's landing line: the prover reads the record the train tool really writes, the landed reader takes a CLOSED, labelled, unproven entry out of the line, and a coordinator keeps its pull request a draft while it waits its turn.
 
@@ -75,9 +75,10 @@ One build wave, one pull request, one context: the prover's change is one python
 | `server/src/coord/landedLane.ts` | L4, C4 | one argument: `landedPass` passes the candidate it already holds to `landedAnswerOf` (no decision moves into it) | 2 |
 | `server/test/landed-decide.test.ts` | test | answer cases R-A to R-G; the existing calls pass a normal candidate; the existing `closed` expectation gains `reason: null` | 2 |
 | `server/test/landing-land-store.test.ts` | test | the store case; its four literal `{ word: 'closed' }` inputs gain `reason: null`, and its parametric `closed`/`absent` case builds each outcome whole | 2 |
-| `server/test/landing-land-words.test.ts` | test | its parametric `closed`/`absent` case builds each outcome whole, and gains a `train-unproven` row for the detail | 2 |
+| `server/test/landing-land-words.test.ts` | test | its parametric `closed`/`absent` case builds each outcome whole; a case of its own beside it pins the `train-unproven` detail (section 12, C8) | 2 |
 | `server/test/landing-journal-store.test.ts` | test | one existing `{ word: 'closed' }` input gains `reason: null` | 2 |
-| `server/test/landed-lane.test.ts` | test | two lane cases | 2 |
+| `server/test/mail-routes.test.ts` | test | `NOT_CODES` gains `'train-unproven'` beside `'missing-field'`, with a comment that names `coord/landed.ts#landedAnswerOf` and `coord/landingEntry.ts#LandingOutcome`: ccd's `pr-state` reason, kept in a closed mark's detail (D-9112), a reader-internal discriminant, not a refusal code (section 12, C1) | 2 |
+| `server/test/landed-lane.test.ts` | test | three lane cases (the third is the repair candidate; section 12, C2) | 2 |
 | `server/test/landing-control.test.ts` | test | two binding cases | 2 |
 | `ccd/coordinator-skill/references/wave-lifecycle-5b-landing.md` | skill text | §5b's opening, the landing-line paragraph, the stop paragraph | 3 |
 | `ccd/coordinator-skill/references/wave-lifecycle-5-boundary.md` | skill text | the native-queue paragraph gains one sentence | 3 |
@@ -99,6 +100,7 @@ The body is split as `train_block` splits it today: `[l.strip() for l in body.sp
 - **Closing:** the first later line equal to ```` ``` ````. None proves nothing.
 - **Content:** the lines strictly between, joined with `\n`, parsed by `json.loads(text, object_pairs_hook=…, parse_constant=…)`: the hook refuses a key given twice in one object, and `parse_constant` refuses `NaN`, `Infinity` and `-Infinity`. A parse error proves nothing. The parse catches `(ValueError, RecursionError)`: `json.JSONDecodeError` and the two refusals are `ValueError`s, but a body of many nested `[` raises `RecursionError`, which is not one, and uncaught it would end the python with no output, which `_ws_train_record`'s search-fallback arm reads as no candidate and its comment arm as unread (A10; P31 pins it).
 - **Shape:** one JSON array with at least one element; each element an object whose `pr` has `type(pr) is int` (so `true` is refused) and whose decimal text matches `PR_NUM` (`[1-9][0-9]{0,9}`, the program's one spelling), and whose `headSha` is a `str` matching `[0-9a-f]{40}` whole. Any other key, the tool's `blast` among them, is never read. A `pr` listed twice proves nothing.
+- **The map's key:** the member's decimal text (`str(pr)`), as `train_block`'s map is keyed by the text its pattern matched, so the two maps compare equal and the loop's `member in listed`, which tests the text of its argument, reads both (section 12, C7).
 
 As a schema (the python is the authority; this is its reading):
 
@@ -129,13 +131,13 @@ def train_members(body): # -> ({pr: head}, None, form) | (None, why, None)      
 
 | v1 block | `train-members` block | answer |
 |---|---|---|
-| absent | absent | `(None, 'carries no train record: no ccrc-train v1 block and no train-members block')` |
-| bad | any | `(None, <v1's why, unchanged>)` |
-| any | bad | `(None, <the members block's why>)` |
-| ok | absent | v1's map |
-| absent | ok | the members map |
-| ok | ok, equal maps | that map |
-| ok | ok, maps differ | `(None, 'has a ccrc-train v1 block and a train-members block that list different members or heads')` |
+| absent | absent | `(None, 'carries no train record: no ccrc-train v1 block and no train-members block', None)` |
+| bad | any | `(None, <v1's why, unchanged>, None)` |
+| any | bad | `(None, <the members block's why>, None)` |
+| ok | absent | `(v1's map, None, 'ccrc-train v1 block')` |
+| absent | ok | `(the members map, None, 'train-members block')` |
+| ok | ok, equal maps | `(that map, None, 'ccrc-train v1 block, like its train-members block,')` |
+| ok | ok, maps differ | `(None, 'has a ccrc-train v1 block and a train-members block that list different members or heads', None)` |
 
 The candidate loop calls `train_members(body)` where it calls `train_block(body)` today. Its state, merge commit, base and cross-repository tests do not change. Its two sentences after the parse name the form that was read (F7): `train #%d's %s does not list #%s` and `train #%d's %s lists #%s at %s, not its head %s`, with `form` in the `%s` after the train number. With the v1 block alone, `form` is `'ccrc-train v1 block'`, so both sentences are byte for byte today's (P9b pins it); with the tool's block alone they name `train-members block` (P9, P10 pin it); with both, the third form (P37, P38). The members block's own refusals say `train-members` where v1's say `ccrc-train v1`: `carries 2 train-members blocks, not one`, `has a train-members block that never closes`, `has a train-members block that is not one JSON array of members` (a parse error, a non-array, an empty array), `has a train-members block with a member that is not a pr and a full head sha` and `has a train-members block listing #42 twice`. The absent sentence, `carries no train record: no ccrc-train v1 block and no train-members block`, keeps the substring `ccrc-train` that `ccd-ws-audit.test.ts`' two no-block cases assert. Every why stays a fixed sentence with only digits and these fixed words interpolated, as today.
 
@@ -230,13 +232,15 @@ Old and new text, each as the flat sentences the pins hold (`server/test/coordin
 
 ### 7.1 §5b's opening (`wave-lifecycle-5b-landing.md`; the intro pin)
 
-Old:
+Old (the opening's last sentence, the one the new sentence follows; it occurs once in the flattened text):
 
-> Before every landing, on every project, this session reads the PR's repository and lands only by the route its rules give (spec 2026-09-23 §5.7).
+> It makes GETs only, prints exactly one line, and never merges, enqueues or writes a setting.
 
-New (one sentence added after it; the coordinator's "one sentence, early"):
+New (that sentence unchanged, then one; the coordinator's "one sentence, early". It stands last in the opening and not second, so that "The reads run fresh each time" and "They are the block below" still speak of the verdict's reads alone; section 12, C6):
 
-> Before every landing, on every project, this session reads the PR's repository and lands only by the route its rules give (spec 2026-09-23 §5.7). On a project opted in to the binding head, it also reads the landing line with the PR's number, `ccrc-api landing show --project <project> --pr <pr>`, and lands only when that read's `binding` is `ready` for this run's own entry at the head it binds: any other answer lands nothing (**The landing line**, below).
+> It makes GETs only, prints exactly one line, and never merges, enqueues or writes a setting. Besides the verdict, on a project positively opted in to the binding head, this session reads the landing line with the PR's number, `ccrc-api landing show --project <project> --pr <pr>`, and lands only when that read's `binding` is `ready` for this run's own entry at the head it binds: any other answer lands nothing (**The landing line**, below).
+
+The intro pin takes the new sentence as its last element, after the four it holds today.
 
 ### 7.2 The landing-line paragraph (`wave-lifecycle-5b-landing.md`; the line pin)
 
@@ -272,7 +276,7 @@ Old (the sentence the new one follows):
 
 New (that sentence unchanged, then one):
 
-> A refused advance turns the PR back into a draft at once (`gh pr ready <pr> --undo`, §4), and a head other than `handoffCommit` is never marked ready. On a project opted in to the binding head, read the landing line as soon as the advance answers `ok` (§5b, **The landing line**): when its `binding` is `ready` for this run's own entry, the gate below, the enqueue and the read-back run in this sitting; otherwise turn the PR back into a draft, and they run only in the later sitting that marks it ready again (D-9115).
+> A refused advance turns the PR back into a draft at once (`gh pr ready <pr> --undo`, §4), and a head other than `handoffCommit` is never marked ready. On a project positively opted in to the binding head, read the landing line as soon as the advance answers `ok` (§5b, **The landing line**): when its `binding` is `ready` for this run's own entry, the gate below, the enqueue and the read-back run in this sitting; otherwise turn the PR back into a draft, and they run only in the later sitting that marks it ready again (D-9115).
 
 ### 7.5 "Ready, then `merging`" (`wave-lifecycle-4-advance.md`; not pinned)
 
@@ -282,7 +286,7 @@ Old (the sentence the new one follows):
 
 New (that sentence unchanged, then one):
 
-> On every send-back to `working`, from `merging` or from `awaiting-review`, turn it back into a draft first (`gh pr ready <pr> --undo`; on a PR already a draft it changes nothing). On a project opted in to the binding head, also turn it back into a draft once the advance to `merging` answers `ok` while the landing line's `binding` is not `ready` for this run's own entry, and mark it ready again only on a read whose `binding` is, as §5b's **The landing line** says (D-9115); a `checks:` mail whose `left` names `draft` for that run is this act and needs nothing.
+> On every send-back to `working`, from `merging` or from `awaiting-review`, turn it back into a draft first (`gh pr ready <pr> --undo`; on a PR already a draft it changes nothing). On a project positively opted in to the binding head, also turn it back into a draft once the advance to `merging` answers `ok` while the landing line's `binding` is not `ready` for this run's own entry, and mark it ready again only on a read whose `binding` is, as §5b's **The landing line** says (D-9115); a `checks:` mail whose `left` names `draft` for that run is this act and needs nothing.
 
 ### 7.6 The ready sentence of a brief (`wave-lifecycle-2-dispatch.md`; not pinned)
 
@@ -292,7 +296,7 @@ Old:
 
 New:
 
-> This session marks the PR ready (`gh pr ready <pr>`) only once its review passes, immediately before the advance to `merging`, and on a project opted in to the binding head turns it back into a draft while it waits its turn on the landing line (§4, D-9115); the session hook refuses a worker `gh pr ready` and a `gh pr create` without `--draft` (D-8998).
+> This session marks the PR ready (`gh pr ready <pr>`) only once its review passes, immediately before the advance to `merging`, and on a project positively opted in to the binding head turns it back into a draft while it waits its turn on the landing line (§4, D-9115); the session hook refuses a worker `gh pr ready` and a `gh pr create` without `--draft` (D-8998).
 
 ## 8. The README (Task 4)
 
@@ -335,8 +339,9 @@ makes. A proved one reads `merged` with `landedInTrain: true`, `train` and `trai
 whose record was read and did not prove it, or could not be read, reads `unmeasured`
 (`train-unproven`, `train-unread`); a labelled PR from a fork is never proved and reads `unmeasured` (`train-unread`). The workspace form reads a claim whose record was read and did not prove it as `closed` (`train-unproven`); this form reads the same fact as `unmeasured`, so the two forms' words are not interchangeable.
 The landed reader reads this form's `unmeasured` line with reason `train-unproven` and `trainUnproven: true` as
-GitHub's CLOSED: it marks the pinned entry `closed`, its detail naming `train-unproven`, so the entry leaves the
-landing line (D-9112); a `train-unread` line, and every other `unmeasured` one, it asks again at its back-off.
+GitHub's CLOSED: it marks the entry `closed`, its detail naming `train-unproven`, so the entry leaves the
+landing line (D-9112), except a damaged row the bounded terminal repair hands it, which it asks again (spec
+amendment B); a `train-unread` line, and every other `unmeasured` one, it asks again at its back-off.
 `ccd caps` lists `pr-state-pr-v1` for a ccd that has the form.
 ````
 
@@ -427,11 +432,11 @@ Old (it occurs once):
 
 New:
 
-> or `closed` when GitHub reads it closed unmerged, reads it closed with the train label while its train record does not prove the landing (`train-unproven`, D-9112), or says no such PR exists.
+> or `closed` when GitHub reads it closed unmerged, reads it closed with the train label while its train record was read and did not prove the landing (`train-unproven`, D-9112), or says no such PR exists.
 
 ## 9. Tests by layer
 
-- **Prover (Task 1), `server/test/ccd-train-members.test.ts`:** a fixture HOME from `makePrHarness` (`server/test/ccdPrHelpers.ts`), the harness's poisoned `gh` stub (`GH_STUB`, which answers only from the fixture files `ghView`, `ghViewFail` and `ghSearch` plant), no network. Most cases pipe a train PR's JSON straight into `_pr_py train-check <member> <head> main` through `h.sh` and compare the one line it prints (`<train>\t<oid>`, `!<why>`, `?<why>`); two run the one-PR form end to end. Bodies come from three new helpers (A9), beside `trainBlock` and `trainRow`:
+- **Prover (Task 1), `server/test/ccd-train-members.test.ts`:** a fixture HOME from `makePrHarness` (`server/test/ccdPrHelpers.ts`), no network. Most cases pipe a train PR's JSON straight into `_pr_py train-check <member> <head> main` through `h.sh`, make no gh call, and compare the one line it prints (`<train>\t<oid>`, `!<why>`, `?<why>`). Two, P19 and P20, run the one-PR form end to end: each calls `h.makeGhRepo('demo')` and runs `${GH_STUB} cmd_pr_state --project demo --pr 42`, as `ccd-pr-state-pr-words.test.ts` does, with the member planted through `ghView(42, …)` and the train through `ghView(50, …)` (P19) or `ghSearch([…])` (P20); without the repository they read `no-remote` and fail for the wrong reason. `GH_STUB` is a shell function a snippet must include (it answers from the fixture files the helpers plant); a gh call a snippet makes without it meets the base harness's poisoned `gh` (section 12, C9). Bodies come from three new helpers (A9), beside `trainBlock` and `trainRow`:
   - `rawTrainMembers(content: string): string` writes the opening fence line, `content` exactly as given, and the closing fence line, each ended by `\n`. It is the one writer of a raw block, for every grammar case: P4's odd `pr` values, P7's contents, P28, P29, P31 to P35 write their content text by hand, and a case that changes the fence lines or the line ends (P6 drops the closing fence, P21 and P36 indent the fences, P22 turns every `\n` of the body into `\r\n`, P25 quotes every line) does it with a plain string operation on the helper's output, written in the case.
   - `trainMembers(members: Array<[number, string]>): string` is `rawTrainMembers` of the measured line: the members as `{"pr": n, "headSha": "…", "blast": 1}`, `json.dumps`' default separators, objects joined by `, `.
   - `toolTrainRow(number, mergeOid, block: string, over: Record<string, unknown> = {})` is a MERGED train whose body is the tool's header text, a fixed table (never parsed), `block` and the trailer (as #3415's was before the hand edit, with neutral numbers); `over` replaces any field, as `trainRow`'s does, so P16 and P17 set the state and a case that changes the whole body passes `body`.
@@ -508,6 +513,7 @@ R-A to R-F, and every existing call of `landedAnswerOf` in `landed-decide.test.t
 
 - **Lane, the mark:** one pinned entry; `runCcd` answers the `by-pr` line of a labelled, closed, unproven PR (as `ccd` prints it, `trainUnproven: true`, the facts echoed). After one `landedPass`: the entry reads `closed`, `result.closed === 1`, `result.landed === 0`, the entry's memory is gone, and no `merged` notice was raised.
 - **Lane, the retry:** the same with `trainUnread: true`, `reason: 'train-unread'`: the entry stays `pinned`, the memory's `nextAt` is `at + 2 * PR_SWEEP_MS`, nothing is marked.
+- **Lane, the repair candidate (section 12, C2):** one pinned entry damaged with that file's own `damage` helper (an unreadable handoff commit), so `landedCandidatesOf` hands it to the lane with a `repairToken`; assert that first, as the file's repair cases do (the mark's `expect` carries a 64-hex `repairToken`, or no mark is made at all here). `runCcd` answers the same labelled, closed, unproven line as the mark case. After one `landedPass`: the row's stored state and `detail` are what they were before the pass, `result.closed === 0`, nothing was marked, and the memory's `nextAt` is `at + 2 * PR_SWEEP_MS`.
 - **Store:** two pinned entries in one project. Read the journal's bytes and `landing_journal_cursor`; mark the first with `{ word: 'closed', reason: null }` and the second with `{ word: 'closed', reason: 'train-unproven' }`. Both read `closed`; the first's `detail` is exactly `{ v: 1, by: 'reader', at: 5000, word: 'closed' }` and the second's exactly `{ v: 1, by: 'reader', at: 5000, word: 'closed', reason: 'train-unproven' }`; the journal's bytes and the cursor equal what they were before both marks.
 - **Binding, before the mark (the defect, pinned):** entries A (`pr` 41, pinned first) and B (`pr` 42, pinned later), every control document fresh and green, the probe listing only B at its pinned sha: `landingBindingOf` answers `{ mode: 'held', reason: 'head-mismatch', entryId: A.id }`.
 - **Binding, after the mark:** the same with A's display state and stored word `closed`: `{ mode: 'ready', entryId: B.id, pr: 42, … }`.
@@ -529,7 +535,7 @@ R-A to R-F, and every existing call of `landedAnswerOf` in `landed-decide.test.t
 
 1. **A body that proves what it should not:** a short, long, uppercase, string or zero member beside a valid one, two tool blocks, a duplicate key or member, `NaN`, an empty array, a deeply nested array, an OPEN train with merge facts, or two blocks that differ (P2 to P8, P12 to P14, P16, P26 to P29, P31; rows M1 to M8, M19, M20, M24, M26).
 2. **A body that stops proving what it did:** a hand-added `ccrc-train v1` block alone, both blocks agreeing, the shapes accepted by decision, and every v1 refusal sentence unchanged (P9b, P11, P15, P21 to P24, P30, P32 to P38, the existing `ccd-pr-state` and `ccd-ws-audit` train cases; rows M9, M21 to M23).
-3. **An entry marked on an answer that says nothing definitive:** `train-unread`, a `train-unproven` reason without its flag, a reader refusal, an `open` or a `merged` read, and a repair candidate on `train-unproven` (R-B to R-G; rows M11 to M14, M25).
+3. **An entry marked on an answer that says nothing definitive:** `train-unread`, a `train-unproven` reason without its flag, a reader refusal, an `open` or a `merged` read, and a repair candidate on `train-unproven`, at the decider and at the lane's hand-off (R-B to R-G, the lane's repair-candidate case; rows M11 to M14, M25, M27).
 4. **The line still held:** a closed, labelled, unproven entry left `pinned`, or the binding still naming it (R-A, the lane mark, the two binding cases; rows M10, M15, M16).
 5. **The procedure:** the early sentence of §5b, the take-back after the advance and its re-mark in one sitting, the held-on-a-train-closed-PR stop, and the stop paragraph's second exception, each pinned (Task 3; row M18).
 
@@ -544,7 +550,7 @@ R-A to R-F, and every existing call of `landedAnswerOf` in `landed-decide.test.t
 - **No notice is raised when an entry leaves as `closed`.** The lane counts it; the operator sees it in `ccrc-api landing show --pr <n>`, not in the feed.
 - **The run's close is unchanged.** It still needs MERGED, or CLOSED with `landedInTrain: true`, so a run whose train record never proves still waits at `merging` for the operator, as today.
 - **The ready mark is a convention.** The take-back is the coordinator's act in the references; nothing in the server or the hook enforces it, and a train can still board a PR in the minutes between the advance and the take-back.
-- **The procedure applies to projects opted in to the binding head.** On any other project the coordinator lands in the sitting that marks the PR ready, as today.
+- **The procedure applies to projects positively opted in to the binding head.** On any other project the coordinator lands in the sitting that marks the PR ready, as today.
 - **The tool is not taught anything.** It still boards any ready PR, and this wave does not change what it writes.
 
 ---
@@ -565,15 +571,15 @@ R-A to R-F, and every existing call of `landedAnswerOf` in `landed-decide.test.t
 
 ### Task 2: the reader takes a train-closed, unproven entry out of the line (D-9112)
 
-**Files:** `server/src/coord/landingEntry.ts`, `server/src/coord/landed.ts`, `server/src/coord/landedLane.ts` (one argument), `server/test/landed-decide.test.ts`, `server/test/landing-land-store.test.ts`, `server/test/landing-land-words.test.ts`, `server/test/landing-journal-store.test.ts`, `server/test/landed-lane.test.ts`, `server/test/landing-control.test.ts`, `docs/superpowers/programs/landing-order/wave5l-task-2.md` (new).
+**Files:** `server/src/coord/landingEntry.ts`, `server/src/coord/landed.ts`, `server/src/coord/landedLane.ts` (one argument), `server/test/landed-decide.test.ts`, `server/test/landing-land-store.test.ts`, `server/test/landing-land-words.test.ts`, `server/test/landing-journal-store.test.ts`, `server/test/landed-lane.test.ts`, `server/test/landing-control.test.ts`, `server/test/mail-routes.test.ts` (one `NOT_CODES` row; section 12, C1), `docs/superpowers/programs/landing-order/wave5l-task-2.md` (new).
 
 - [ ] **Step 1: claim** the files.
-- [ ] **Step 2: red first.** Write R-A to R-G (section 9.2) and the five cases of section 9.3. Add to `landing-land-words.test.ts`' case "closed and absent mark closed and carry only v, by, at and word" a row for `{ word: 'closed', reason: 'train-unproven' }` whose detail is `{ v: 1, by: 'close', at: 5000, word: 'closed', reason: 'train-unproven' }`. These are written against the new type, so the typecheck is their first red. After Step 3 (the type and the detail): the store case's second detail and the new `landing-land-words` row are green, because `decideLandingLand` builds the detail; R-A and the lane mark case are still red, and turn green at Step 4 (`landedAnswerOf`); R-G passes at run time on the baseline (today's code retries every `unmeasured`; only the typecheck reds it, until Step 4 adds the parameter) and stays green, which row M25 proves it guards. Both binding cases are green on the baseline and stay green: the before case pins the defect's mechanism, and the after case pins the existing order rule this wave relies on (a `closed` entry is neither in the line nor outstanding), which row M15 proves it guards.
+- [ ] **Step 2: red first.** Write R-A to R-G (section 9.2) and the six cases of section 9.3. Keep `landing-land-words.test.ts`' case "closed and absent mark closed and carry only v, by, at and word" as section 4.4 rebuilds it, and add beside it a case of its own, `a train-unproven close records its reason in the detail (D-9112)`, which asserts `{ v: 1, by: 'close', at: 5000, word: 'closed', reason: 'train-unproven' }`. Add the `NOT_CODES` row to `mail-routes.test.ts` (section 3); its census case is red from Step 3 until that row stands, so add it with Step 3. These are written against the new type, so the typecheck is their first red. After Step 3 (the type and the detail): the store case's second detail and the new `landing-land-words` case are green, because `decideLandingLand` builds the detail; the lane's repair-candidate case passes at run time on the baseline, as R-G does (today's code retries every `unmeasured`), and row M27 proves it guards; R-A and the lane mark case are still red, and turn green at Step 4 (`landedAnswerOf`); R-G passes at run time on the baseline (today's code retries every `unmeasured`; only the typecheck reds it, until Step 4 adds the parameter) and stays green, which row M25 proves it guards. Both binding cases are green on the baseline and stay green: the before case pins the defect's mechanism, and the after case pins the existing order rule this wave relies on (a `closed` entry is neither in the line nor outstanding), which row M15 proves it guards.
 - [ ] **Step 3: the type and the detail.** `LandingOutcome` as section 4.4; `decideLandingLand` spreads `reason` into `detail` only when it is not null.
 - [ ] **Step 4: the answer.** `landedAnswerOf` as section 4.3, with its comment and its candidate parameter; `landedPass` passes `cand`.
 - [ ] **Step 5: the constructors.** The nine existing builders of the closed outcome (section 4.4): the seven literal `{ word: 'closed' }` sites take `reason: null`, and the two parametric cases are rebuilt whole; `ccrc test -- npx tsc --noEmit -p tsconfig.json` and `ccrc test -- npx tsc --noEmit -p test/tsconfig.tests.json` name any missed.
-- [ ] **Step 6: green.** The five test files above; then `landing-terminal-damage.test.ts`, `landing-next-mail.test.ts`, `landing-line-order.test.ts`, `prstate-pr-line.test.ts`, `brief-landed.test.ts`, and the single-definition suite (`ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/single-definition`).
-- [ ] **Step 7: mutation rows** M10 to M17 and M25.
+- [ ] **Step 6: green.** The seven test files above, `mail-routes.test.ts` among them and each run alone; then `landing-terminal-damage.test.ts`, `landing-next-mail.test.ts`, `landing-line-order.test.ts`, `prstate-pr-line.test.ts`, `brief-landed.test.ts`, and the single-definition suite (`ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/single-definition`).
+- [ ] **Step 7: mutation rows** M10 to M17, M17b, M25 and M27.
 - [ ] **Step 8: commit** `fix(landing): a train-closed pull request whose record does not prove it leaves the landing line as closed (D-9112)`.
 
 ### Task 3: the references (D-9115)
@@ -641,7 +647,8 @@ Each row is one change to the built code, measured red by the named case, then r
 | M14 | `landedAnswerOf`'s `open` arm answers `close` | R-F |
 | M15 | `landingOrder`'s line filter is `x.state === 'pinned' \|\| x.state === 'closed'` | the binding-after case |
 | M16 | `decideLandingLand` maps a `closed` outcome to state `pinned` (the entry kept) | the lane mark case; the store case |
-| M17 | `decideLandingLand` always writes `reason` (as `null` for a plain closed) | the store case's first detail; `landing-land-words`' closed row |
+| M17 | `decideLandingLand` always writes `reason` (as `null` for a plain closed) | the store case's first detail; `landing-land-words`' closed-and-absent case |
+| M17b | `decideLandingLand` never writes `reason` | the store case's second detail; `landing-land-words`' `train-unproven` case |
 | M18 | any one new sentence of section 7 removed from its reference | its pin in `coordinator-skill.test.ts` |
 | M19 | `json.loads` without `parse_constant` (`NaN` passes) | P7's `NaN` in the never-read `blast` |
 | M20 | `members_block` accepts an empty array | P7's `[]` (its whole-line sentence; the mutant prints `does not list #42`) |
@@ -651,6 +658,7 @@ Each row is one change to the built code, measured red by the named case, then r
 | M24 | `train_members` treats a bad members block as absent when the v1 block reads | P14 |
 | M25 | `landedAnswerOf`'s new arm drops `cand.repairToken === undefined` | R-G |
 | M26 | `members_block`'s parse catches `ValueError` alone | P31 (the prover prints nothing, so the whole-line check reds) |
+| M27 | `landedPass` calls `landedAnswerOf(read, {})` in place of `landedAnswerOf(read, cand)` | the lane's repair-candidate case (the damaged row is retired `closed`) |
 
 The store case's journal check (the bytes and the cursor unchanged) is a characterization pin with no natural mutation; the builder measures it red by adding a `landing.log` append to the land arm in a scratch copy, then discards the copy.
 
@@ -703,6 +711,28 @@ Review run 3936 read the tip `ec647ba1f4`; the coordinator ruled in call 1459. E
 | A13 | Task 5 names its note file | Task 5 |
 | A14 | one re-read after 20 minutes, the longest back-off plus one beat, with the reason (ruled) | sections 1 and 7.2, D-9115 |
 
+## 12. Corrections after review run 3939
+
+Review run 3939 (round 3, the last) read this plan at `8935fd2736d8c886b2becf26c693d07db8c2d9a3`, the commit that merged as #3423. It found nothing critical and said a builder can start once one test file is named; it left four important points and seven minor ones, each with the right text. There is no fourth round: the coordinator corrected them here, on the ledger's pull request, after reading the cited code on `main` at `aac570d3d1e470066abd8c056c33752bd6398375`. Each correction is also made in place in the section it names, so a text a pin or a script quotes has one copy. **Where this section and another section or a task disagree, this section wins.**
+
+- **C1, the census of quoted tokens (the review's F1).** `server/test/mail-routes.test.ts` has a case that reads every `server/src/coord/*.ts` file as text and requires each quoted kebab token to be declared. No coord file quotes `train-unproven` today; Task 2 puts it in `landed.ts` and `landingEntry.ts`, so that case would go red in a file the task did not claim. The reader's other reason word, `missing-field`, has its own `NOT_CODES` row there for the same cause.
+  - Added: the file's row in section 3, the file in Task 2's files (so Step 1 claims it), the row's addition in Step 2, and the file among those Step 6 runs alone.
+- **C2, the repair guard at the lane's hand-off (F2).** `landedAnswerOf` takes `Pick<LandedCandidate, 'repairToken'>`, which an empty object satisfies. A lane that passed a literal without the token would still compile, a repair candidate's `train-unproven` reading would answer `close`, and the land arm, whose compare-and-set still carries the token, would retire the damaged row `closed`: the widening call 1459 ruled out. Case R-G guards the decider alone.
+  - Added: a third lane case in section 9.3 (a damaged entry, built with `landed-lane.test.ts`' own `damage` helper, left untouched by the pass), row M27, and their mention in Step 2, Step 7 and Review Focus 3. The repair-candidate case asserts first that the entry reached the lane as a repair candidate: without that it would pass for the wrong reason.
+- **C3, the README's sentence on the reader (F3).** Section 8.1's new text said the reader marks "the pinned entry" `closed` with no exception. The land arm also marks an `ejected` entry, and a damaged row the bounded repair hands the reader is asked again, not marked. Edited in place: "the entry", and the exception.
+- **C4, the README's sentence on the line (F4).** Section 8.3's new text said "its train record does not prove the landing", which is also true of a record that could not be read, and that case stays a retry. Edited in place: "was read and did not prove".
+- **C5, the spec's amended line (A-1).** Its last sentence argued in a circle: the reader "reads it as GitHub's CLOSED", yet a repair candidate is excluded "since amendment B retires a row only on a merged, closed or absent reading". Amendment B names the PR-keyed form's own word, and that word for this claim is `unmeasured`. Edited in place in the D-9112 entry, and the spec carries the corrected line.
+- **C6, where the early sentence stands, and one term (A-2, A-3).**
+  - Section 7.1's sentence stood second in §5b's opening, ahead of "The reads run fresh each time" and "They are the block below", so "the reads" could be taken to include the landing-line read. It now stands last in the opening, after "It makes GETs only…", and begins "Besides the verdict". The intro pin takes it as its last element. Edited in place; the old text of 7.1 is now that last sentence.
+  - The paragraph these sentences defer to says a project is "positively opted in to the binding head". Sections 7.1, 7.4, 7.5, 7.6, "What this does not claim" and the D-9115 entry said "opted in"; each now says "positively opted in", and the pins take the sentences as written here.
+- **C7, the parser's table (A-6).** Section 4.2's table wrote refusals as pairs and named no form on its proving rows, against the three-part answer its signature gives. Each row is now a triple. Section 4.1 says the map is keyed by the member's decimal text, as `train_block`'s is: a map keyed by the integer would refuse every proving case, because the loop tests the text of its argument.
+- **C8, a case of its own for the reason (A-7).** Task 2 Step 2 added the `train-unproven` row to the case titled "closed and absent mark closed and carry only v, by, at and word", whose title and rebuilt loop it contradicts. That case stays as section 4.4 rebuilds it, and a case of its own beside it pins the detail that carries the reason. Row M17 names the first; a new row, M17b, names the second.
+- **C9, smaller points.**
+  - Task 2 Step 6 said "the five test files above" (A-4); with the two added since the first draft it is seven.
+  - Section 9's harness facts for P19 and P20 (A-5): the repository fixture and the command they run, and what `GH_STUB` is.
+  - The reviewer's note on P30: its body is written by hand (the opening line, then the closing line). `trainBlock([])` leaves an empty line inside the block, which is refused as a line that is not a member line, so the helper cannot build it. The baseline's green holds for the hand-written body only.
+- **Not changed.** The review listed a recovery hold as a second case with no `order.head`: with no head, the rule for a held head that is a train-closed pull request does not fire, and the paragraph's ordinary stop applies. Mutation rows are the builder's to measure.
+
 ## Deviations found
 
 Three numbers were issued for this plan on 2026-11-26, and all three are defined below.
@@ -718,10 +748,10 @@ Three numbers were issued for this plan on 2026-11-26, and all three are defined
   - `closed` is final (ruled, call 1453): an entry so marked may have landed and stays `closed` when its proof holds later; no re-mark is built or planned, and its ticket is closed by naming its run.
   - It departs from spec §5.5 for the refused case only. The spec's wave 5c amendment says "a train claim the proof refused or could not read is `unmeasured` (D-7596)": the PR-keyed form still prints that, and the reader now acts on the refused claim as GitHub's CLOSED; `could not read` stays `unmeasured` and is read again. This pull request changes no spec. The coordinator adds this line to §5.5 on the ledger pull request, after the wave 5c amendment's closing "gated by the `pr-state-pr-v1` capability.)", word for word:
 
-    > (Amended 2026-11-26, wave 5l, D-9112: a train claim the proof refused is still `unmeasured` on the PR-keyed form, but the landed reader reads it as GitHub's CLOSED, so the entry is `closed`, its `detail` naming `train-unproven`, and it stays `closed` if a proof appears later; a claim the proof could not read stays `unmeasured` and is read again. A terminal-repair candidate is not retired on such a claim: it is read again, since amendment B retires a row only on a merged, closed or absent reading.)
+    > (Amended 2026-11-26, wave 5l, D-9112: a train claim the proof refused is still `unmeasured` on the PR-keyed form, but the landed reader reads it as GitHub's CLOSED, so the entry is `closed`, its `detail` naming `train-unproven`, and it stays `closed` if a proof appears later; a claim the proof could not read stays `unmeasured` and is read again. A terminal-repair candidate is not retired on such a claim: it is read again, since amendment B retires a row only on a fresh PR-keyed `merged`, `closed` or `absent` observation, and the PR-keyed form's word for this claim is `unmeasured`.)
 
     The line covers D-9112 alone (ruled, call 1459): §5.5 does not specify the train record's grammar, which the README owns.
 
-- **D-9115 (2026-11-26)** — `ready-mark-waits-for-the-line`: on a project opted in to the binding head, the coordinator reads the landing line with the PR's number, lands only on a `ready` binding for its own run's entry at its head, keeps the PR a draft while it waits (taken back right after the advance to `merging`, marked ready again only on a read whose binding is ready, then the verdict, the checks gate and the landing in one sitting), and on a held binding whose head (`order.head`, or while the line is paused the entry whose `id` is `binding.entryId`) is another run's entry whose PR is closed with the train label lands nothing past it, writes no train record, reads the line once more after 20 minutes (the landed reader's longest back-off for that answer, 15 minutes, plus one beat of its lane, rounded up), and only if the same head still holds mails the coordinator of that entry's run, or, for an entry with no run, puts it to the operator as an item.
+- **D-9115 (2026-11-26)** — `ready-mark-waits-for-the-line`: on a project positively opted in to the binding head, the coordinator reads the landing line with the PR's number, lands only on a `ready` binding for its own run's entry at its head, keeps the PR a draft while it waits (taken back right after the advance to `merging`, marked ready again only on a read whose binding is ready, then the verdict, the checks gate and the landing in one sitting), and on a held binding whose head (`order.head`, or while the line is paused the entry whose `id` is `binding.entryId`) is another run's entry whose PR is closed with the train label lands nothing past it, writes no train record, reads the line once more after 20 minutes (the landed reader's longest back-off for that answer, 15 minutes, plus one beat of its lane, rounded up), and only if the same head still holds mails the coordinator of that entry's run, or, for an entry with no run, puts it to the operator as an item.
   - Why: a merge train boards any ready PR, so a PR left ready while it waits its turn is exposed for as long as it waits (issue #3422's third defect); and a coordinator that read only the line's flags landed past a held head.
   - The ready mark still precedes the advance (D-8999); the probe lists drafts, so a drafted entry still binds. No `SKILL.md` clause changes: clause 15 already defers the ready mark to §4, which now says it.
