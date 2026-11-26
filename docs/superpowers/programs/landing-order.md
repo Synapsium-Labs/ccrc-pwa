@@ -45,7 +45,7 @@ merges, workers never do, and an unattended landing is the goal when every safeg
 | 5i | 5, the line's head | `mainRedHold` from the radar's `main-health`, the next-to-land mail, and the reader of 5d's marker | server, skills | 5d on the fleet box, 5e and 5h | plan #2801 | plan approved as written 2026-11-14 (item 312; `docs/superpowers/plans/2026-11-14-landing-order-wave5i-line-head.md`, D-8625 to D-8629), seven tasks, P1–P6 and amendments A/B (Decisions, 2026-11-14 22:16); the plan merged (#2801) and run 1850 was dispatched (`ccrc-pwa-landing-order-5i`), PR #2837; two review rounds (review runs 2123 and 2152); fix round 2 complete locally at `3c432734d`, not pushed; parked from 2026-11-16 to 2026-11-24 on a second merge of `main`, which the operator allowed (item 641; Decisions, 2026-11-24 20:04); that merge was made and pushed with the round's fixes (tip `1ce1b9cc`); review run 3685, the third, confirmed no finding, and the coordinator accepted the wave on 2026-11-25 (Decisions, 2026-11-25 01:40); **merged** in #2837 on 2026-11-25 (`7fdd6a80`), run 1850 closed; its as-built departures are D-9031 to D-9044 in the plan (Decisions, 2026-11-25 03:10) |
 | 5j | 5, the doors (server) | the two session-only routes, pause the line and withdraw an entry, and `landing-subtractive.test.ts` | server, skills | 5e and 5i | — | the plan is on `main` (`docs/superpowers/plans/2026-11-25-landing-order-wave5j-doors.md`, #3360, `39fbd18f`, D-9045 to D-9052), accepted at the review cutoff after three rounds and corrected by the coordinator in its section 11; two build waves, 5j-a then 5j-b; 5j-a is dispatched as run 3759 (the run's wave 26), and the operator's reading of the plan's section 9 is asked as item 665, which holds nothing; 5j-a's first review (run 3781) found five minor points, and one fix round kept a withdrawn entry with no run at a pin, which the plan's Task 3 got wrong (the plan's section 12, C9; D-9071 and D-9072); its second review (run 3806) found seven minor points, one ruled (section 12, C11); 5j-a **merged** as #3375 (`31d5d9ae`); 5j-b's two reviews (runs 3864 and 3887) found six and five minor points, and one fix round made the terminal states one shared copy and widened the subtractive suite to all seven landing tables (the plan's section 13; D-9093, D-9094); 5j-b **merged** as #3397 (`83c1ed22`) (Decisions, 2026-11-25 04:30, 07:10, 08:42, 12:06 and 14:51, and 2026-11-26 02:10) |
 | 5k | 5, the doors (PWA) | the line on the project card, the pause control and the withdraw sheet | pwa | 5j | — | the plan is **merged** as #3410 (`44f2b15a`) after three review rounds (runs 3895, 3906 and 3911); its section 11 is the coordinator's corrections and wins over the tasks; D-9107 to D-9110 are defined there, and the two numbers issued after them, D-9111 and D-9112, are defined in wave 5l's plan; the build, run 3914 (the run's wave 30), is **merged** as #3426 (`7c365ded`) after three review rounds (runs 3946, 3969 and 3983) and two fix rounds; D-9129 and D-9130 are two departures in existing tests, defined in the plan; the plan's section 12 is the coordinator's corrections to it as built (Decisions, 2026-11-26 02:10, 06:20 and 20:20) |
-| 5l | 5, the line | a merge-train landing must not hold the landing line: the train record's one parser reads the train tool's own member list, the landed reader marks a closed, labelled, unproven entry `closed`, and the coordinator references keep a waiting pull request a draft | ccd (fleet box first), server, skills | 5h, 5i | — | the plan is **merged** as #3423 (`aac570d3`) after three review rounds (runs 3935, 3936 and 3939); its section 12 is the coordinator's corrections and wins over the tasks; D-9111, D-9112 and D-9115 are defined there; the spec's §5.5 carries the amended line for D-9112; the build is run 3942 (the run's wave 32), dispatched 2026-11-26 11:49Z; its pull request #3451 is a draft in fix round 1 after its first review (run 3963: nothing critical or important) (issue #3422; Decisions, 2026-11-26 11:10 and 20:20) |
+| 5l | 5, the line | a merge-train landing must not hold the landing line: the train record's one parser reads the train tool's own member list, the landed reader marks a closed, labelled, unproven entry `closed`, and the coordinator references keep a waiting pull request a draft | ccd (fleet box first), server, skills | 5h, 5i | — | the plan is **merged** as #3423 (`aac570d3`) after three review rounds (runs 3935, 3936 and 3939); its section 12 is the coordinator's corrections and wins over the tasks; D-9111, D-9112 and D-9115 are defined there; the spec's §5.5 carries the amended line for D-9112; the build, run 3942 (the run's wave 32), is **merged** as #3451 (`48d35634`) after two review rounds (runs 3963 and 3995) and one fix round; D-9134 is a departure in one store case, defined in the plan; the plan's section 13 is the coordinator's corrections to it as built; two loose phrases of one reference sentence and one prover case are carried as issue #3466, for run 4011 (issue #3422; Decisions, 2026-11-26 11:10, 20:20 and 23:10) |
 
 **A fresh workspace per wave (R4) is child-reclamation's.** The spec first drew it as step 6 of the wave lifecycle,
 gated on #166 wave 3. #166 wave 2 (#178) made it live on `main` as "One PR per child", so wave 1 no longer
@@ -2761,6 +2761,49 @@ carries it (spec §5.1, amended 2026-09-24).
     own; refused, because they describe this wave's reader change.
   - **Also:** two cases of the session-continuity card's facts suite time out at their 20-second bound on a loaded
     box (#3458, reported by a peer coordinator); the fix is that programme's next wave.
+- **2026-11-26 23:10 — wave 5l is merged: a merge-train landing no longer holds the landing line. Run 4011 is open for the carried corrections.**
+  - **Wave 5l** (#3451, `48d35634`, run 3942) answers issue #3422. The train record's one parser now reads the train
+    tool's own member list, so a tool-written train proves its members. The landed reader marks an entry `closed`
+    when its pull request is closed with the train label and its train record was read and did not prove, so that
+    entry no longer holds the head of the line. A damaged entry under repair is asked again instead. The coordinator references keep a waiting pull request a draft, and
+    say what to do on a held head that is a train-closed pull request.
+  - **Two review rounds** (runs 3963 and 3995), one fix round.
+    - Call 1600, the fix round (the 20:20 entry). It added two prover cases for one unpinned check, made the lane's
+      mark case able to fail for another, measured the journal's bytes check that the builder's own row had only
+      stood in for, and reworded the reference sentence.
+    - Call 1621. Round 2 found no fault in code or tests and reproduced every row of the fix round. It found two
+      loose phrases in the reworded sentence, which are the coordinator's own words: the 20 minutes is the reader's
+      longest retry step and one beat of its lane added and rounded up, not each of them; and an entry whose record
+      cannot be read is not "never" taken out, since a later read can settle it. The instruction itself is right, so
+      the wave landed with the sentence as it is. A third round would have cost a review panel and a CI run for two
+      phrases.
+    - Call 1622. The review judge was red on three blocking reasons and two that do not block. Rules files changed
+      with other files: no split, because the references describe this wave's reader change. The proof for the lane
+      is not built: the standing yes (item 480). A code-owner approval: an approval reason holds no pull request
+      here. One unlisted path and nine edited tests: the reviews read each edited test and found no assertion lost.
+  - **One departure found while building,** D-9134, the store case's journal seed, is defined in the plan. The
+    plan's section 13 is the coordinator's corrections to it as built, made on this pull request.
+  - **The landing.** The line read ready for the run's own entry before the ready mark; the mark, the verdict and
+    the enqueue came in one sitting.
+    - Call 1613. The pull request's server check first failed on two 20-second timeouts in a test file the wave
+      does not touch (#3464). The failed job, run again once, passed.
+    - Call 1626. The merge queue removed the pull request once: one browser case in the adoption card's
+      focus-timing file failed its own timing precondition (#3419, its second sighting). The wave changes no file
+      under `pwa/` or `ui/`. It was enqueued again once at the same head, after the line and the verdict were read
+      again, and merged on that second entry.
+  - **Rollout: the fleet box first,** which is the updater's default order. The plan's section 6 says what each
+    order costs: a server that moved first would record every train landing it read in that window as `closed`,
+    for good.
+  - **Carried, as issue #3466:** the two phrases of the reference sentence, one prover case with both blocks
+    bad, whose precedence no case pins, and a case each for two refusals of the parser that have none. **Run 4011** (the run's wave 33) is open for them, planned and not
+    dispatched, together with the two hardenings carried from wave 5k.
+  - **A peer's fix in this programme's file** (call 1620). The Desktop polish coordinator found that the landing
+    line's browser file passes a theme id the catalogue does not have, so its dark cases ran on the light palette.
+    That programme's worker changes the one loop with six files of its own and touches nothing else in the file. A
+    failure the real dark palette then shows in the landing block comes back to this programme, and to run 4011.
+  - **A claim has a hard expiry.** The builders of waves 5k and 5l each had file claims lapse while their pull
+    request was still open; nothing was edited against them. From now on a brief for a long build tells the worker
+    to read its own claims before each push and to take a lapsed one again.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -3446,14 +3489,19 @@ Deploy: ccrc's updater carries the server, the PWA and the skill text.
   change to the console's landing block. For any wave: a worker reads its trailer lines back with git's own
   trailer reader before a push that edits a plan, and a wave that changes the console runs the whole browser
   suite locally before its wave-done.
-- **5l's plan is merged** (#3423 `aac570d3`; Decisions, 2026-11-26 11:10). **5l is being built**, as run 3942 (the run's
-  wave 32; pull request #3451, in fix round 1 after its first review), from `docs/superpowers/plans/2026-11-26-landing-order-wave5l-train-landings.md`, whose section 12
-  wins over its tasks. One wave of five tasks; the seam, if the builder's context runs short, is between the
-  prover (`ccd`) and the reader with the references (server and docs). Its README change was agreed with wave 5k's builder,
-  who held the file then; 5k has merged since, so 5l absorbs `main`. At rollout the fleet box moves first. Until the wave is live
+- **5l's plan is merged** (#3423 `aac570d3`; Decisions, 2026-11-26 11:10). **5l is merged** (#3451 `48d35634`; Decisions,
+  2026-11-26 23:10). It was built as run 3942 (the run's wave 32) from
+  `docs/superpowers/plans/2026-11-26-landing-order-wave5l-train-landings.md`, whose section 13 says where the
+  build and its reviews changed the text and wins over the sections before it. At rollout the fleet box moves
+  first, the updater's default order; the plan's section 6 says what each order costs. Until the wave is live
   on both boxes, the practice of the 11:10 entry stands: a coordinator marks a pull request ready only on a ready
   binding for its own entry, and a held binding on a train-closed pull request comes to this programme's
   coordinator.
+- **Run 4011** (the run's wave 33) is open, planned and not dispatched. It is for the carried corrections: issue
+  #3466 (two phrases of the coordinator's landing reference, and one prover case), the two hardenings of wave
+  5k's newest cases, and any failure the dark palette shows in the landing block once the browser file's theme
+  loop is fixed (Decisions, 2026-11-26 23:10). It has no plan yet. For any long build: the brief tells the worker
+  to read its own claims before each push, because a claim has a hard expiry.
 - **Waves 1c and 1e are merged** (#3357 `6ac066f5`, #3362 `cb973d69`; Decisions, 2026-11-25 08:42). Their
   departures are D-9057 to D-9064 and D-9065, each in its wave's plan. The spec's section 5.1 says the fourth
   trigger holds until that round's wave-done.
