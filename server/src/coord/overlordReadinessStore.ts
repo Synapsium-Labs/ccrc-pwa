@@ -5,10 +5,21 @@
 // lane alone. Its readers: `readinessNow` (the current word, `readySince`, `leftReadyAt`, the episode's first row and its push
 // mark), `readinessChanges` (the chat's window, with `oldest`), `openReadinessItems` (each record joined to its item's own
 // state), and the guarded prune. Nothing here decides a word: `overlordReadiness.ts` (L1) does, and this file records it.
+//
+// WRITERS (the census names them): `overlord_readiness` is written by `recordReadinessInTx` (insert and in-place update) and
+// `pruneReadiness` (delete); `overlord_readiness_items` by `raiseReadinessItem` (insert, with its item and reach in one
+// transaction), `settleReadinessItem` (the lane's settle: the item's move and the record's stamp, one transaction) and
+// `closeReadinessItem` (the operator's move, the record alone). `operator_items` is never written here but through the ledger's
+// checked entries, `raiseItemCheckedInTx` and `settleItemCheckedInTx`.
 import type { DatabaseSync } from 'node:sqlite';
-import { isReadinessWord, isStrandCause, READINESS_ITEM_KINDS, type ReadinessItemKind } from '../../../shared/overlord-readiness.js';
-import type { ItemState } from '../../../shared/ledgers.js';
+import {
+  isReadinessWord, isStrandCause, READINESS_ITEM_KINDS, type ReadinessItemKind, type ReadinessItemText,
+} from '../../../shared/overlord-readiness.js';
+import { OVERLORD_ITEM_PROGRAMME } from '../../../shared/overlord-sequence.js';
+import type { ItemState, NeededBy } from '../../../shared/ledgers.js';
 import { stampSequenceInTx, type SequenceLineInput } from './overlordSequenceStore.js';
+import { raiseItemCheckedInTx, settleItemCheckedInTx } from './ledgersStore.js';
+import { reachInTx, type ItemReachOf } from './pushOutboxStore.js';
 import { tx } from './tx.js';
 import type { ReadinessAnswer, ReadinessItemRecord, ReadinessNowRow } from './overlordReadiness.js';
 
@@ -160,6 +171,56 @@ export function openReadinessItems(db: DatabaseSync): { ok: true; rows: Readines
     return { ok: true, rows };
   } catch (e) {
     return { ok: false, detail: `overlord_readiness_items read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/** How soon each kind of item is needed. A stranded Overlord cannot serve a question, so its item blocks; the count item (one
+ *  account short of a spare) and a held account stand beside a running Overlord, so they wait: `later`. */
+const NEEDED_BY_OF_ITEM: Readonly<Record<ReadinessItemKind, NeededBy>> = { stranded: 'blocking', count: 'later', hold: 'later' };
+
+const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+/** The item for (item, key) and its record, in ONE transaction: `raiseItemCheckedInTx` (programme `OVERLORD_ITEM_PROGRAMME`,
+ *  raised by `ccrc`, kind `do`), its reach when `itemReach` is given (as `invariantFindingsStore.ts#recordFinding` writes it),
+ *  then the record. A second open record for the same (item, key) is refused by the partial unique index, and a refused raise
+ *  or record rolls both back: nothing is written. Never throws. */
+export function raiseReadinessItem(
+  db: DatabaseSync, r: { readonly item: ReadinessItemKind; readonly key: string; readonly text: ReadinessItemText }, at: number,
+  itemReach?: ItemReachOf,
+): { ok: true; recordId: number; itemId: number } | { ok: false; error: string } {
+  const neededBy = NEEDED_BY_OF_ITEM[r.item];
+  try {
+    return tx(db, () => {
+      const how = [...r.text.how];
+      const itemId = raiseItemCheckedInTx(db, {
+        program: OVERLORD_ITEM_PROGRAMME, runId: null, raisedBy: 'ccrc', kind: 'do', title: r.text.title, why: r.text.why, how,
+        options: null, neededBy, soonLabel: null, secretSlot: null,
+      }, at, 'ccrc', itemReach && ((id) => { reachInTx(db, 'item', id, itemReach({ title: r.text.title, neededBy })(id), at); }));
+      const res = db.prepare('INSERT INTO overlord_readiness_items (item, key, itemId, raisedAt) VALUES (?, ?, ?, ?)')
+        .run(r.item, r.key, itemId, at);
+      return { ok: true as const, recordId: Number(res.lastInsertRowid), itemId };
+    });
+  } catch (e) {
+    return { ok: false, error: errText(e) };
+  }
+}
+
+/** The lane's settle, in ONE transaction: the open record's item moves `settle` by `ccrc` (`settleItemCheckedInTx`), and only
+ *  on that move does the record take `settledAt` and `closedBy: 'lane'`. No open record answers `settled: false`. A refused move
+ *  (the operator dismissed the item, or it is done) writes nothing and answers `settled: false`; the next pass's reconcile
+ *  closes the record as the operator's. Never throws. */
+export function settleReadinessItem(db: DatabaseSync, recordId: number, note: string, at: number):
+  { ok: true; settled: boolean } | { ok: false; error: string } {
+  try {
+    return tx(db, () => {
+      const rec = db.prepare('SELECT itemId FROM overlord_readiness_items WHERE id = ? AND settledAt IS NULL').get(recordId) as { itemId: number } | undefined;
+      if (rec === undefined) return { ok: true as const, settled: false };
+      if (!settleItemCheckedInTx(db, Number(rec.itemId), note, at).ok) return { ok: true as const, settled: false };
+      db.prepare("UPDATE overlord_readiness_items SET settledAt = ?, closedBy = 'lane' WHERE id = ? AND settledAt IS NULL").run(at, recordId);
+      return { ok: true as const, settled: true };
+    });
+  } catch (e) {
+    return { ok: false, error: errText(e) };
   }
 }
 

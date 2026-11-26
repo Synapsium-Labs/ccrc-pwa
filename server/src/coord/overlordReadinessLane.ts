@@ -11,8 +11,10 @@
 //  2. Decide: facts, then the word.
 //  3. Record (`recordReadiness`). A refused write stops the pass: no notice for a word the record does not hold, and the
 //     pass mark is not moved, so the read goes `stale` if writes keep failing. One log line per failure kind.
-//  4. Tell: the notices for the written answer: the dead push (after the commit that marked it), then each item's close,
-//     settle or raise through the port, in the decider's order.
+//  4. Tell: the notices for the written answer: the dead push (after the commit that marked it, its payload `readinessPushOf`'s),
+//     then each item's close, settle or raise in the decider's order, through the readiness store on the port's own database
+//     (a raise carries `readinessItemTextOf`'s words and, when the pass was given an `itemReach`, its push-outbox reach in the
+//     same transaction). A raise or settle the store refuses is logged once per kind and never throws.
 //  5. Mark the pass on the monotonic clock; once a day, prune.
 //
 // ITS MEMORY (never stored, so no second writer of any fact): the first pass of this process (`boot`), the first sighting of
@@ -24,13 +26,16 @@ import type { DesignationRead } from '../../../shared/overlord-designation.js';
 import type { EarliestReset } from '../../../shared/loadLines.js';
 import type { Rung } from '../../../shared/overlord-ladder.js';
 import type { FleetSession, MarkerState } from '../../../shared/api.js';
-import { READINESS_PRUNE_EVERY_MS, READINESS_KEEP_MS, READINESS_RESTART_WINDOW_MS, type ReadinessItemKind, type ReadinessWire } from '../../../shared/overlord-readiness.js';
+import { READINESS_PRUNE_EVERY_MS, READINESS_KEEP_MS, READINESS_RESTART_WINDOW_MS, type ReadinessWire } from '../../../shared/overlord-readiness.js';
 import { overlordBodyOf } from './overlordDesignation.js';
 import {
-  overlordReadiness, readinessCountOf, readinessFactsOf, readinessNotices, readinessSubjectOf, servedReadiness,
-  type GenerationReading, type NoticeInputs, type ReadinessAnswer, type SubjectReadings,
+  overlordReadiness, readinessCountOf, readinessFactsOf, readinessItemTextOf, readinessNotices, readinessPushOf, readinessSubjectOf,
+  servedReadiness, type GenerationReading, type NoticeInputs, type ReadinessAnswer, type ReadinessPush, type SubjectReadings,
 } from './overlordReadiness.js';
-import { closeReadinessItem, openReadinessItems, pruneReadiness, readinessNow, recordReadiness } from './overlordReadinessStore.js';
+import {
+  closeReadinessItem, openReadinessItems, pruneReadiness, raiseReadinessItem, readinessNow, recordReadiness, settleReadinessItem,
+} from './overlordReadinessStore.js';
+import type { ItemReachOf } from './pushOutboxStore.js';
 import type { Candidates } from '../accountLoad.js';
 import type { TurnMarkRead } from './stall.js';
 import type { HookStateRead } from '../hookstate.js';
@@ -77,10 +82,7 @@ export interface ReadinessLanePort {
   /** Renewal readings PR H's holds: `not-wired` until it lands. */
   holds(): NoticeInputs['holds'];
   /** The dead push, sent after the commit that marked it (the push outbox's one sender, behind `notify`). */
-  push(n: { readonly rowId: number; readonly withRestart: boolean }): void;
-  /** Raise an item and its record in one transaction; settle an item and stamp its record (sequence B's checked writers). */
-  raiseItem(item: ReadinessItemKind, key: string, at: number): void;
-  settleItem(recordId: number, note: string, at: number): void;
+  push(p: ReadinessPush): void;
   log(line: string): void;
 }
 
@@ -110,8 +112,9 @@ export class ReadinessLane {
     return { ok: true, wire: servedReadiness(now.now, { lastPassMono: this.lastPassMono, nowMono: this.port.clock.mono(), nowWall: this.port.clock.wall() }) };
   }
 
-  /** One pass. Never throws: a failure is logged once per kind and leaves the previous word standing. */
-  async pass(tick: ReadinessTick): Promise<ReadinessAnswer | null> {
+  /** One pass. Never throws: a failure is logged once per kind and leaves the previous word standing. `itemReach` is the push
+   *  outbox's item reach (`pushSender.ts#itemBoundOf`), handed to each raise so its bound row commits with the item. */
+  async pass(tick: ReadinessTick, itemReach?: ItemReachOf): Promise<ReadinessAnswer | null> {
     const p = this.port;
     const registry = !this.booted ? 'boot' : tick.listed ? 'listed' : 'failed';
     this.booted = true;
@@ -128,7 +131,7 @@ export class ReadinessLane {
     const answer = overlordReadiness(facts, now);
     const written = recordReadiness(p.db, { ...answer, sessionId }, now);
     if (!written.ok) { this.once(`record-${written.why}`, `ccrc-server: the Overlord readiness lane could not record the word ${answer.word} (${written.why})`); return null; }
-    this.tell(answer, written, subject);
+    this.tell(answer, written, subject, itemReach);
     this.lastPassMono = p.clock.mono();
     this.prune(now);
     return answer;
@@ -178,23 +181,29 @@ export class ReadinessLane {
   }
 
   /** Step 4: the notices for the written answer, acted in the decider's order, each act in its own catch. */
-  private tell(answer: ReadinessAnswer, written: { rowId: number | null; episodeFirst: boolean }, s: SubjectReadings | null): void {
+  private tell(answer: ReadinessAnswer, written: { rowId: number | null; episodeFirst: boolean }, s: SubjectReadings | null,
+    itemReach: ItemReachOf | undefined): void {
     const p = this.port;
     const at = p.clock.wall();
     const records = safe(() => openReadinessItems(p.db), (detail) => ({ ok: false as const, detail }));
     if (!records.ok) this.once('items', `ccrc-server: the Overlord readiness lane could not read its items (${records.detail})`);
-    const count = readinessCountOf(s?.candidates ?? null);
+    const count = records.ok ? readinessCountOf(s?.candidates ?? null) : { kind: 'unmeasured' as const, why: 'items unread' };
     const notices = readinessNotices({
       written: { answer, episodeFirst: written.episodeFirst, rowId: written.rowId },
-      records: records.ok ? records.rows : [], count: records.ok ? count : { kind: 'unmeasured', why: 'items unread' },
+      records: records.ok ? records.rows : [], count,
       holds: records.ok ? safe(() => p.holds(), () => ({ kind: 'unmeasured' as const })) : { kind: 'unmeasured' },
     });
     for (const n of notices) {
       safe(() => {
-        if (n.kind === 'dead-push') p.push({ rowId: n.rowId, withRestart: n.withRestart });
+        if (n.kind === 'dead-push') p.push(readinessPushOf(n.rowId, n.withRestart));
         else if (n.kind === 'close') closeReadinessItem(p.db, n.recordId, at);
-        else if (n.kind === 'settle') p.settleItem(n.recordId, n.note, at);
-        else p.raiseItem(n.item, n.key, at);
+        else if (n.kind === 'settle') {
+          const r = settleReadinessItem(p.db, n.recordId, n.note, at);
+          if (!r.ok) this.once('notice-settle', `ccrc-server: the Overlord readiness lane could not settle an item (${r.error})`);
+        } else {
+          const r = raiseReadinessItem(p.db, { item: n.item, key: n.key, text: readinessItemTextOf(n, { readings: s, count }) }, at, itemReach);
+          if (!r.ok) this.once('notice-raise', `ccrc-server: the Overlord readiness lane could not raise an item (${r.error})`);
+        }
       }, (detail) => { this.once(`notice-${n.kind}`, `ccrc-server: the Overlord readiness lane could not ${n.kind === 'dead-push' ? 'send the dead push' : `${n.kind} an item`} (${detail})`); });
     }
   }

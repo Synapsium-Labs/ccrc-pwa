@@ -1,6 +1,6 @@
 // The Overlord's readiness word, its deciders (Overlord spec §6.4, Table 6.4a, C23, H20, C56, C57; plan
 // `docs/superpowers/plans/2026-11-14-overlord-w1/w1-readiness.md` Task 1). Ring L1, context C5: pure decisions, no I/O and no
-// clock (every time arrives as an argument). Four functions:
+// clock (every time arrives as an argument). Six functions:
 // - `readinessFactsOf` maps each producer's raw answer (the lane's gather) to one fact: every mapping of the plan's Table 2
 //   but the body, which is designation B's one mapper (`overlordBodyOf`);
 // - `overlordReadiness` is Table 6.4a, first match, and an unmeasured input answers `unmeasured` at the first row that
@@ -8,13 +8,16 @@
 // - `readinessNotices` decides what the operator is told: the dead push on the episode's edge, and which items to raise,
 //   settle and close;
 // - `servedReadiness` decides what the door and the board are served: the stored word while this process's lane is
-//   fresh, else `unmeasured` with `boot` or `stale` (fix round 1, F2).
+//   fresh, else `unmeasured` with `boot` or `stale` (fix round 1, F2);
+// - `readinessPushOf` and `readinessItemTextOf` decide the words of the dead push and of each item (plan Task 4), from L0's
+//   text data and the pass's readings: an unreadable input reads "unmeasured" in the text, never a throw.
 // Runtime imports: L0, designation B's L1 module, the renewal act's `RENEWING_STATES` and the stall watch's StopFailure
 // classifier (`stopFailureClass`, L1); every other import is a type.
 import {
-  READINESS_DEAF_MS, READINESS_DIALOG_MS, READINESS_FRESH_MS, READINESS_HOOK_QUIET_MS,
-  READINESS_LONG_TURN_MS, READINESS_RESTART_BOUND_MS, READINESS_RESTARTS_PER_HOUR, READINESS_SERVED_WHY, READINESS_WORDS,
-  type ReadinessItemKind, type ReadinessWire, type ReadinessWord, type StrandCause,
+  READINESS_DEAF_MS, READINESS_DIALOG_MS, READINESS_FRESH_MS, READINESS_HOOK_QUIET_MS, READINESS_ITEM_TEXT,
+  READINESS_LONG_TURN_MS, READINESS_PUSH_TEXT, READINESS_RESTART_BOUND_MS, READINESS_RESTARTS_PER_HOUR, READINESS_SERVED_WHY,
+  READINESS_WORDS, isStrandCause,
+  type ReadinessItemKind, type ReadinessItemText, type ReadinessWire, type ReadinessWord, type StrandCause,
 } from '../../../shared/overlord-readiness.js';
 import type { DesignationRead } from '../../../shared/overlord-designation.js';
 import type { GenerationState } from '../../../shared/continuity.js';
@@ -408,6 +411,105 @@ export function readinessCountOf(c: Candidates | null): Fact<number> {
   if (c.kind !== 'candidates') return unmeasured(`count: ${c.kind}`);
   if (c.list.some((x) => x.serves === 'unmeasured')) return unmeasured('count: a candidate is unmeasured');
   return measured(c.list.filter((x) => x.serves === 'yes').length);
+}
+
+// ── The words of the push and of the items (plan Task 4) ────────────────────────────────────────────────────────────────
+
+/** The dead push as `notify` takes it: the payload's copy, its tag and its per-episode-row key. */
+export interface ReadinessPush {
+  readonly title: string; readonly body: string; readonly tag: 'overlord-readiness'; readonly url: string;
+  /** The Restart control, only when the door would act. */
+  readonly actions: { readonly action: string; readonly title: string }[];
+  /** One push per episode: `overlord-dead:<the episode's first row id>`. */
+  readonly dedupeKey: string;
+}
+
+/** The dead push (Task 4): L0's words, the Restart action only with `withRestart`, the key per episode row. */
+export function readinessPushOf(rowId: number, withRestart: boolean): ReadinessPush {
+  return {
+    title: READINESS_PUSH_TEXT.title,
+    body: withRestart ? READINESS_PUSH_TEXT.body.withRestart : READINESS_PUSH_TEXT.body.withoutRestart,
+    tag: 'overlord-readiness', url: READINESS_PUSH_TEXT.url,
+    actions: withRestart ? [{ action: 'overlord-restart', title: 'Restart' }] : [],
+    dedupeKey: `overlord-dead:${rowId}`,
+  };
+}
+
+/** `poolRunway.ts#earliestReset` over the candidates together: the earliest reset still to come, `none-exhausted` when no
+ *  candidate has one, or `unmeasured` with why when any candidate's reset or the list cannot be read (the earliest of the rest
+ *  would not be the earliest). */
+export type CandidatesReset = { readonly kind: 'at'; readonly atS: number } | { readonly kind: 'none-exhausted' }
+  | { readonly kind: 'unmeasured'; readonly why: string };
+
+export function readinessEarliestReset(s: Pick<SubjectReadings, 'candidates' | 'resets'>): CandidatesReset {
+  const c = s.candidates;
+  if (c.kind !== 'candidates') return unmeasured('candidates');
+  if (c.list.length === 0) return unmeasured('no candidates');
+  if (!s.resets.ok) return unmeasured(s.resets.detail);
+  let earliest: number | null = null;
+  for (const x of c.list) {
+    const r = s.resets.value[x.id];
+    if (r === undefined) return unmeasured(`no reset read for ${x.id}`);
+    if (r.kind === 'unmeasured') return unmeasured(r.why);
+    if (r.kind === 'at' && (earliest === null || r.atS < earliest)) earliest = r.atS;
+  }
+  return earliest === null ? { kind: 'none-exhausted' } : { kind: 'at', atS: earliest };
+}
+
+/** What an item's text reads beyond its (item, key): the pass's raw readings for a subject (null when none were gathered)
+ *  and the count item's figure. */
+export interface ReadinessItemContext {
+  readonly readings: SubjectReadings | null;
+  readonly count: Fact<number>;
+}
+
+const UNMEASURED_WORD = 'unmeasured';
+/** A UTC time with whole seconds, `2026-11-26T12:00:00Z`: no clock and no zone of the reader's is involved. */
+const utcOf = (epochS: number): string => {
+  const d = new Date(epochS * 1000);
+  return Number.isNaN(d.getTime()) ? UNMEASURED_WORD : `${d.toISOString().slice(0, 19)}Z`;
+};
+
+/** The one measured sentence a stranded text appends to its `why`, from the readings of the cause it names. */
+function strandDetail(cause: StrandCause, r: SubjectReadings | null): string | null {
+  switch (cause) {
+    case 'limited': {
+      const e = r === null ? unmeasured('not read') : readinessEarliestReset(r);
+      return e.kind === 'at' ? `The earliest reset is ${utcOf(e.atS)}.`
+        : e.kind === 'none-exhausted' ? 'No account reads exhausted, so no reset is pending.'
+          : `The earliest reset is ${UNMEASURED_WORD}.`;
+    }
+    case 'swap-blocked':
+      return r?.swapBlocked != null ? `ccd recorded the refusal: "${r.swapBlocked.reason}".` : `The refusal is ${UNMEASURED_WORD}.`;
+    case 'turn-failed': {
+      const t = r?.turnMark;
+      return `The account's failure word is ${t !== undefined && t.ok && t.err !== null ? t.err : UNMEASURED_WORD}.`;
+    }
+    case 'unread':
+      return r?.strand.kind === 'marked' ? `ccd's reason: "${r.strand.reason}".` : `ccd's reason is ${UNMEASURED_WORD}.`;
+    case 'projection': case 'set-unreadable': case 'set-admits-none':
+      return null;
+  }
+}
+
+const withDetail = (t: ReadinessItemText, detail: string | null): ReadinessItemText =>
+  detail === null ? t : { ...t, why: `${t.why} ${detail}` };
+
+/** The words of one item to raise (Task 4): L0's title, `why` and `how` for its item and cause, with the one measured detail
+ *  the cause needs. An input that could not be read reads "unmeasured" in the text; a stranded key this build does not know
+ *  gets L0's fallback text. Never throws. */
+export function readinessItemTextOf(n: { readonly item: ReadinessItemKind; readonly key: string }, ctx: ReadinessItemContext): ReadinessItemText {
+  if (n.item === 'stranded') {
+    return isStrandCause(n.key)
+      ? withDetail(READINESS_ITEM_TEXT.stranded[n.key], strandDetail(n.key, ctx.readings))
+      : READINESS_ITEM_TEXT.strandedUnknown;
+  }
+  if (n.item === 'count') {
+    const c = ctx.count;
+    return withDetail(READINESS_ITEM_TEXT.count,
+      c.kind === 'measured' ? `It counts ${c.value} account${c.value === 1 ? '' : 's'} that can serve it.` : `The count is ${UNMEASURED_WORD}.`);
+  }
+  return { ...READINESS_ITEM_TEXT.hold, title: `${READINESS_ITEM_TEXT.hold.title}: ${n.key}` };
 }
 
 // ── What is served ──────────────────────────────────────────────────────────────────────────────────────────────────

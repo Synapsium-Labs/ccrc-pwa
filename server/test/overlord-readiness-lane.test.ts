@@ -1,12 +1,19 @@
 // Overlord W1 readiness, plan `w1-readiness.md` Task 3 Step 1: the delivery lane (`overlordReadinessLane.ts`) on a fake
 // port with controllable wall and monotonic clocks, over a coord db opened through the real migrations. The end-to-end
-// operator_items cases are a later stage and are not tested here.
+// operator_items cases (the last describe blocks) run against the real item store: the lane calls the readiness store itself.
 import { describe, it, expect, afterEach, afterAll, beforeAll } from 'vitest';
 import type { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import { copyFileSync, mkdirSync } from 'node:fs';
 import { openCoordDb } from '../src/coord/db.js';
 import { ReadinessLane, type ReadinessLanePort, type ReadinessTick } from '../src/coord/overlordReadinessLane.js';
+import type { ReadinessPush } from '../src/coord/overlordReadiness.js';
+import { itemById, moveItemInTx } from '../src/coord/ledgersStore.js';
+import { itemBoundOf, type SenderDeps } from '../src/pushSender.js';
+import type { ItemReachOf } from '../src/coord/pushOutboxStore.js';
+import { OVERLORD_ITEM_PROGRAMME } from '../../shared/overlord-sequence.js';
+import { fakeTime } from './fakeTime.js';
+import { pushSeam } from './pushSeam.js';
 import { readinessNow, recordReadiness } from '../src/coord/overlordReadinessStore.js';
 import type { DesignationRead, DesignationView } from '../../shared/overlord-designation.js';
 import type { FleetSession } from '../../shared/api.js';
@@ -66,9 +73,7 @@ function harness(db: DatabaseSync = openDb()) {
     candidates: twoYes as Candidates,
     served: W0 - 1_000 as number | 'none',
   };
-  const pushes: { rowId: number; withRestart: boolean }[] = [];
-  const raised: { item: string; key: string; at: number }[] = [];
-  const settled: { recordId: number; note: string }[] = [];
+  const pushes: ReadinessPush[] = [];
   const logs: string[] = [];
   const port: ReadinessLanePort = {
     db,
@@ -89,15 +94,13 @@ function harness(db: DatabaseSync = openDb()) {
     lastServedReadAt: () => ({ kind: 'measured', value: s.served }),
     lastContinuityRead: () => ({ ok: true, at: null }),
     holds: () => ({ kind: 'not-wired' }),
-    push: (n) => { pushes.push(n); },
-    raiseItem: (item, key, at) => { raised.push({ item, key, at }); },
-    settleItem: (recordId, note) => { settled.push({ recordId, note }); },
+    push: (p) => { pushes.push(p); },
     log: (l) => { logs.push(l); },
   };
   const lane = new ReadinessLane(port);
   /** A pass, then `ms` later on both clocks. */
-  const pass = async (tick: ReadinessTick, advanceMs = 10_000) => {
-    const r = await lane.pass(tick);
+  const pass = async (tick: ReadinessTick, advanceMs = 10_000, reach?: ItemReachOf) => {
+    const r = await lane.pass(tick, reach);
     s.wall += advanceMs; s.mono += advanceMs;
     return r;
   };
@@ -105,7 +108,7 @@ function harness(db: DatabaseSync = openDb()) {
   /** Boot pass, then one measured pass over a healthy body: the word is `ready`. */
   const warm = async () => { await pass(UP()); const r = await pass(UP()); expect(r?.word).toBe('ready'); };
   const words = () => (db.prepare('SELECT word, why FROM overlord_readiness ORDER BY id').all() as { word: string; why: string | null }[]);
-  return { db, s, port, lane, pushes, raised, settled, logs, pass, advance, warm, words };
+  return { db, s, port, lane, pushes, logs, pass, advance, warm, words };
 }
 
 describe('the read', () => {
@@ -151,19 +154,27 @@ describe('the first passes and the listing', () => {
 });
 
 describe('no designation', () => {
-  it('writes absent once and settles an open record retired', async () => {
+  it('writes absent once and settles every open record retired, end to end', async () => {
     const h = harness();
+    await h.warm();
+    h.s.candidates = { kind: 'candidates', list: [{ id: 'lane-a', limits: undefined, serves: 'yes' }] };
+    await h.pass(UP()); // the count item
+    h.s.candidates = { kind: 'candidates', list: [] };
+    await h.pass(UP()); // the stranded item (set-admits-none), and the count item settled by it
+    const open = h.db.prepare('SELECT id, itemId, item FROM overlord_readiness_items WHERE settledAt IS NULL ORDER BY id').all() as { id: number; itemId: number; item: string }[];
+    expect(open.map((r) => r.item)).toEqual(['stranded']);
     h.s.designation = notDesignated;
-    const itemId = Number(h.db.prepare("INSERT INTO operator_items (program, raisedBy, kind, title, why, how, neededBy, state, raisedAt) "
-      + "VALUES ('p', 'server', 'do', 't', 'w', 'h', 'soon', 'open', ?)").run(W0).lastInsertRowid);
-    const recId = Number(h.db.prepare('INSERT INTO overlord_readiness_items (item, key, itemId, raisedAt) VALUES (?, ?, ?, ?)')
-      .run('stranded', 'set-admits-none', itemId, W0).lastInsertRowid);
     const a = await h.pass(UP());
     expect(a?.word).toBe('absent');
     await h.pass(UP());
     expect(h.words().filter((w) => w.word === 'absent')).toHaveLength(1);
-    expect(h.words()).toHaveLength(1);
-    expect(h.settled[0]).toEqual({ recordId: recId, note: 'retired' });
+    for (const r of open) {
+      expect(itemById(h.db, r.itemId)).toMatchObject({ state: 'done' });
+      expect(h.db.prepare("SELECT actor, note FROM operator_item_events WHERE itemId = ? AND act = 'settle'").all(r.itemId))
+        .toEqual([{ actor: 'ccrc', note: 'retired' }]);
+    }
+    expect(h.db.prepare('SELECT COUNT(*) AS n FROM overlord_readiness_items WHERE settledAt IS NULL').get()).toEqual({ n: 0 });
+    expect(h.db.prepare("SELECT COUNT(*) AS n FROM overlord_readiness_items WHERE closedBy = 'lane'").get()).toEqual({ n: 2 });
   });
 });
 
@@ -200,7 +211,8 @@ describe('the body', () => {
     const dead = await h.pass(down, 5_000);
     expect(dead).toMatchObject({ word: 'dead', why: 'restart-bound', restartable: false });
     expect(h.pushes).toHaveLength(1);
-    expect(h.pushes[0]!.withRestart).toBe(false);
+    expect(h.pushes[0]).toMatchObject({ title: 'The Overlord has stopped', tag: 'overlord-readiness', url: '/', actions: [],
+      body: 'Questions go to you as usual. It is restarting repeatedly: open the Overlord place.' });
     await h.pass(down);
     await h.pass(down);
     expect(h.pushes).toHaveLength(1);
@@ -227,7 +239,10 @@ describe('the body', () => {
     await h.warm();
     const r = await h.pass(tickOf(session({ presence: 'asleep' })));
     expect(r).toMatchObject({ word: 'dead', why: 'asleep', restartable: true });
-    expect(h.pushes).toEqual([{ rowId: expect.any(Number), withRestart: true }]);
+    expect(h.pushes).toEqual([{ title: 'The Overlord has stopped', body: 'Questions go to you as usual. Restart it from the Overlord place.',
+      tag: 'overlord-readiness', url: '/', actions: [{ action: 'overlord-restart', title: 'Restart' }], dedupeKey: expect.stringMatching(/^overlord-dead:\d+$/) }]);
+    const first = h.db.prepare("SELECT id FROM overlord_readiness WHERE word = 'dead' ORDER BY id LIMIT 1").get() as { id: number };
+    expect(h.pushes[0]!.dedupeKey).toBe(`overlord-dead:${first.id}`);
   });
 });
 
@@ -274,7 +289,8 @@ describe('a failed row write', () => {
     expect(await h.pass(asleep)).toBeNull();
     expect(await h.pass(asleep, 1_000)).toBeNull();
     expect(h.pushes).toEqual([]);
-    expect(h.raised).toEqual([]);
+    expect(h.db.prepare('SELECT COUNT(*) AS n FROM operator_items').get()).toEqual({ n: 0 });
+    expect(h.db.prepare('SELECT COUNT(*) AS n FROM overlord_readiness_items').get()).toEqual({ n: 0 });
     expect(h.logs).toHaveLength(1);
     expect(h.logs[0]).toContain('could not record');
     expect(h.words()).toHaveLength(rowsBefore);
@@ -283,23 +299,131 @@ describe('a failed row write', () => {
   });
 });
 
-describe('the stranded and count items', () => {
-  it('an empty candidate list raises the stranded item set-admits-none and not the count item', async () => {
+/** The item rows end to end: the lane raises through the real item store, on the Overlord's programme, raised by ccrc. */
+const items = (db: DatabaseSync) => db.prepare('SELECT id, program, raisedBy, kind, title, neededBy, state FROM operator_items ORDER BY id').all() as
+  { id: number; program: string; raisedBy: string; kind: string; title: string; neededBy: string; state: string }[];
+const records = (db: DatabaseSync) => db.prepare('SELECT id, item, key, itemId, settledAt, closedBy FROM overlord_readiness_items ORDER BY id').all() as
+  { id: number; item: string; key: string; itemId: number; settledAt: number | null; closedBy: string | null }[];
+const ONE_YES: Candidates = { kind: 'candidates', list: [{ id: 'lane-a', limits: undefined, serves: 'yes' }] };
+
+describe('the stranded and count items, end to end', () => {
+  it('an empty candidate list raises the stranded item set-admits-none, blocking, and not the count item', async () => {
     const h = harness();
     await h.warm();
     h.s.candidates = { kind: 'candidates', list: [] };
     const r = await h.pass(UP());
     expect(r).toMatchObject({ word: 'stranded', strandCause: 'set-admits-none' });
-    expect(h.raised.map((x) => [x.item, x.key])).toEqual([['stranded', 'set-admits-none']]);
+    expect(items(h.db)).toEqual([{ id: expect.any(Number), program: OVERLORD_ITEM_PROGRAMME, raisedBy: 'ccrc', kind: 'do',
+      title: 'The Overlord cannot run: its set admits no account that can serve it', neededBy: 'blocking', state: 'open' }]);
+    expect(records(h.db)).toMatchObject([{ item: 'stranded', key: 'set-admits-none', settledAt: null, closedBy: null }]);
+    await h.pass(UP());
+    expect(items(h.db)).toHaveLength(1); // a standing cause raises once
   });
 
-  it('one candidate that serves raises the count item', async () => {
+  it('one candidate that serves raises the count item, later, with the figure in its why', async () => {
     const h = harness();
     await h.warm();
-    h.s.candidates = { kind: 'candidates', list: [{ id: 'lane-a', limits: undefined, serves: 'yes' }] };
+    h.s.candidates = ONE_YES;
     const r = await h.pass(UP());
     expect(r?.word).toBe('ready');
-    expect(h.raised.map((x) => [x.item, x.key])).toEqual([['count', 'count']]);
+    expect(items(h.db)).toMatchObject([{ program: 'overlord', raisedBy: 'ccrc', title: 'The Overlord has fewer than two accounts', neededBy: 'later' }]);
+    const why = (h.db.prepare('SELECT why FROM operator_items').get() as { why: string }).why;
+    expect(why).toMatch(/It counts 1 account that can serve it\.$/);
+    expect(records(h.db)).toMatchObject([{ item: 'count', key: 'count' }]);
+  });
+
+  it('when the cause clears the lane settles the item with the note cleared, by ccrc, and stamps the record lane', async () => {
+    const h = harness();
+    await h.warm();
+    h.s.candidates = ONE_YES;
+    await h.pass(UP());
+    h.s.candidates = twoYes;
+    await h.pass(UP());
+    const [it1] = items(h.db);
+    expect(it1!.state).toBe('done');
+    expect(h.db.prepare("SELECT actor, note FROM operator_item_events WHERE itemId = ? AND act = 'settle'").all(it1!.id)).toEqual([{ actor: 'ccrc', note: 'cleared' }]);
+    expect(records(h.db)).toMatchObject([{ closedBy: 'lane', settledAt: expect.any(Number) }]);
+    await h.pass(UP());
+    expect(h.db.prepare("SELECT COUNT(*) AS n FROM operator_item_events WHERE act = 'settle'").get()).toEqual({ n: 1 }); // settled once
+  });
+
+  it('a set-admits-none strand takes the count item\'s place: the standing count item is settled and not raised again', async () => {
+    const h = harness();
+    await h.warm();
+    h.s.candidates = ONE_YES;
+    await h.pass(UP());
+    h.s.candidates = { kind: 'candidates', list: [] };
+    await h.pass(UP());
+    expect(items(h.db).map((i) => [i.title, i.state])).toEqual([
+      ['The Overlord has fewer than two accounts', 'done'],
+      ['The Overlord cannot run: its set admits no account that can serve it', 'open'],
+    ]);
+  });
+
+  it('dismiss then recur: the operator dismisses, the cause stands, the next pass closes the record and raises a new item', async () => {
+    const h = harness();
+    await h.warm();
+    h.s.candidates = { kind: 'candidates', list: [] };
+    await h.pass(UP());
+    const [first] = items(h.db);
+    const moved = moveItemInTx(h.db, first!.id, 'dismiss', 'operator', {}, W0, { programmeHasOpenRun: false });
+    expect(moved.ok).toBe(true);
+    await h.pass(UP());
+    const all = items(h.db);
+    expect(all.map((i) => i.state)).toEqual(['dismissed', 'open']);
+    expect(all[1]!.id).not.toBe(first!.id);
+    expect(records(h.db)).toMatchObject([{ itemId: first!.id, closedBy: 'operator' }, { itemId: all[1]!.id, closedBy: null, settledAt: null }]);
+    expect(h.db.prepare("SELECT COUNT(*) AS n FROM operator_item_events WHERE itemId = ? AND act = 'settle'").get(first!.id)).toEqual({ n: 0 });
+  });
+
+  it('a dismissed item whose cause then clears is closed by the operator and never settled', async () => {
+    const h = harness();
+    await h.warm();
+    h.s.candidates = ONE_YES;
+    await h.pass(UP());
+    const [it1] = items(h.db);
+    moveItemInTx(h.db, it1!.id, 'dismiss', 'operator', {}, W0, { programmeHasOpenRun: false });
+    h.s.candidates = twoYes;
+    await h.pass(UP());
+    expect(itemById(h.db, it1!.id)).toMatchObject({ state: 'dismissed' });
+    expect(records(h.db)).toMatchObject([{ closedBy: 'operator' }]);
+  });
+
+  it('an itemReach handed to the pass writes the item\'s bound outbox row in the raise\'s transaction', async () => {
+    const h = harness();
+    await h.warm();
+    h.s.candidates = { kind: 'candidates', list: [] };
+    const deps = { push: pushSeam().push, time: fakeTime({ wallMs: W0 }).ports } as unknown as SenderDeps;
+    await h.pass(UP(), 10_000, (item) => itemBoundOf(deps, item, 'reach'));
+    const [it1] = items(h.db);
+    expect(h.db.prepare('SELECT sourceKind, sourceId, state FROM push_outbox').all()).toEqual([{ sourceKind: 'item', sourceId: it1!.id, state: 'pending' }]);
+  });
+});
+
+describe('a raise or settle the store refuses', () => {
+  it('logs once per kind across passes, never throws, and writes no item', async () => {
+    const h = harness();
+    await h.warm();
+    h.db.exec("CREATE TRIGGER refuse_record BEFORE INSERT ON overlord_readiness_items BEGIN SELECT RAISE(ABORT, 'refused'); END");
+    h.s.candidates = { kind: 'candidates', list: [] };
+    expect((await h.pass(UP()))?.word).toBe('stranded');
+    expect((await h.pass(UP()))?.word).toBe('stranded');
+    expect(items(h.db)).toEqual([]);
+    expect(h.logs.filter((l) => l.includes('could not raise an item'))).toHaveLength(1);
+  });
+
+  it('a settle that is refused logs once, writes nothing and leaves the item open for the next pass', async () => {
+    const h = harness();
+    await h.warm();
+    h.s.candidates = ONE_YES;
+    await h.pass(UP());
+    h.db.exec("CREATE TRIGGER refuse_stamp BEFORE UPDATE ON overlord_readiness_items BEGIN SELECT RAISE(ABORT, 'refused'); END");
+    h.s.candidates = twoYes;
+    await h.pass(UP());
+    await h.pass(UP());
+    expect(h.logs.filter((l) => l.includes('could not settle an item'))).toHaveLength(1);
+    expect(items(h.db).map((i) => i.state)).toEqual(['open']);
+    expect(records(h.db)).toMatchObject([{ settledAt: null, closedBy: null }]);
   });
 });
 

@@ -123,3 +123,70 @@ export interface ReadinessWire {
 
 /** The two words a served `unmeasured` carries when this process cannot vouch for the stored word (F2). */
 export const READINESS_SERVED_WHY = { boot: 'boot', stale: 'stale' } as const;
+
+// ── What the operator is told (plan Task 4) ─────────────────────────────────────────────────────────────────────────
+
+/** One operator item's words: its title, one `why` paragraph and the `how` steps. Static data; the decider
+ *  (`readinessItemTextOf`) appends the one measured detail a text needs to its `why` as a last sentence, and never touches
+ *  `how`. */
+export interface ReadinessItemText { readonly title: string; readonly why: string; readonly how: readonly string[] }
+
+/** The dead push (Task 4): the title and `url` are fixed (home A turns `/` into the Overlord place once it lands), and the body
+ *  depends on whether the Restart control is offered. */
+export const READINESS_PUSH_TEXT = {
+  title: 'The Overlord has stopped',
+  body: {
+    withRestart: 'Questions go to you as usual. Restart it from the Overlord place.',
+    withoutRestart: 'Questions go to you as usual. It is restarting repeatedly: open the Overlord place.',
+  },
+  url: '/',
+} as const;
+
+const lowerFirst = (s: string): string => s.charAt(0).toLowerCase() + s.slice(1);
+/** A stranded item's title is stable per cause ("The Overlord cannot run: <the cause's sentence>"), because an item is never
+ *  re-raised by title. */
+const strandedText = (cause: StrandCause, why: string, how: readonly string[]): ReadinessItemText =>
+  ({ title: `The Overlord cannot run: ${lowerFirst(STRAND_CAUSE_MAP[cause])}`, why, how });
+
+/** Every item's words, by item and, for `stranded`, by cause (a `Record`, so a new cause is a compile error). A `hold` title is
+ *  the prefix of "<title>: <lane>". */
+export const READINESS_ITEM_TEXT: {
+  readonly stranded: Readonly<Record<StrandCause, ReadinessItemText>>;
+  /** For a stranded key this build does not know (an older row, a newer build): never a throw. */
+  readonly strandedUnknown: ReadinessItemText;
+  readonly count: ReadinessItemText;
+  readonly hold: ReadinessItemText;
+} = {
+  stranded: {
+    limited: strandedText('limited', 'Every account in the Overlord\'s set is at its limit, so no session of it can run until one resets.',
+      ['Wait for the earliest reset.']),
+    projection: strandedText('projection', 'The pool projection that says which accounts can serve it is stale or unreadable.',
+      ['Check the pool sync and the control-plane link.', 'A reset does not clear this.']),
+    'set-unreadable': strandedText('set-unreadable', 'The account set saved on its route record cannot be read.',
+      ['Save the set again in Settings.']),
+    'set-admits-none': strandedText('set-admits-none', 'Its account set admits no account that can serve it.',
+      ['Widen the set in Settings, or bring an account back.']),
+    'swap-blocked': strandedText('swap-blocked', 'A swap off its account was refused, so it stays on an account that cannot serve it.',
+      ['Open the session to see why.']),
+    'turn-failed': strandedText('turn-failed', 'Its last turn failed on its account.',
+      ['It moves at its next renewal.', 'Check the account in Settings.']),
+    unread: strandedText('unread', 'ccd marked the session stranded, and no structured reader names the cause.',
+      ['Open the session to see why.']),
+  },
+  strandedUnknown: {
+    title: 'The Overlord cannot run: unmeasured',
+    why: 'The session is stranded for a cause this build does not know.',
+    how: ['Open the session to see why.'],
+  },
+  count: {
+    title: 'The Overlord has fewer than two accounts',
+    why: 'With fewer than two accounts that can serve it, a failing account leaves it nowhere to move.',
+    how: ['Widen its account set in Settings, or bring an account back.', 'Retiring the Overlord is the other way.'],
+  },
+  hold: {
+    title: 'An account is held out of the Overlord\'s list',
+    why: 'The Overlord\'s ordered list leaves this account out while its hold stands.',
+    how: ['Open the hold beside this item to see which profile properties failed.',
+      'Clear the hold beside this item once the account\'s config is fixed.'],
+  },
+};

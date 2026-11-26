@@ -1,15 +1,22 @@
 // Overlord W1 readiness, plan `w1-readiness.md` Task 2 Step 2: the readiness word's rows and their one writer
-// (`overlordReadinessStore.ts`), over a coord db opened through the real migrations. The raise and settle of items are a
-// later stage and are not tested here.
+// (`overlordReadinessStore.ts`), over a coord db opened through the real migrations. The raise and settle of items are the
+// last two describe blocks (plan Task 2 Step 2, "Raise, settle and close").
 import { describe, it, expect, afterEach, afterAll, beforeAll } from 'vitest';
 import type { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import { copyFileSync, mkdirSync } from 'node:fs';
 import { openCoordDb, tx } from '../src/coord/db.js';
 import {
-  closeReadinessItem, openReadinessItems, pruneReadiness, readinessChanges, readinessNow, recordReadiness, recordReadinessInTx,
-  READINESS_NO_SESSION, type ReadinessWrite,
+  closeReadinessItem, openReadinessItems, pruneReadiness, raiseReadinessItem, readinessChanges, readinessNow, recordReadiness,
+  recordReadinessInTx, settleReadinessItem, READINESS_NO_SESSION, type ReadinessWrite,
 } from '../src/coord/overlordReadinessStore.js';
+import { itemById, settleItemCheckedInTx } from '../src/coord/ledgersStore.js';
+import { itemBoundOf, type SenderDeps } from '../src/pushSender.js';
+import type { ItemReachOf } from '../src/coord/pushOutboxStore.js';
+import type { ReadinessItemText } from '../../shared/overlord-readiness.js';
+import { OVERLORD_ITEM_PROGRAMME } from '../../shared/overlord-sequence.js';
+import { fakeTime } from './fakeTime.js';
+import { pushSeam } from './pushSeam.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
 let template = '';
@@ -325,5 +332,172 @@ describe('one transaction around a pass', () => {
     expect(() => tx(db, () => { recordReadinessInTx(db, W('ready'), AT); throw new Error('abort'); })).toThrow('abort');
     expect(rows(db)).toHaveLength(0);
     expect(lines(db)).toHaveLength(0);
+  });
+});
+
+// ── Raise, settle and close (Task 2 Step 2) ─────────────────────────────────────────────────────────────────────────────
+
+describe('raiseReadinessItem', () => {
+  const TEXT: ReadinessItemText = { title: 'The Overlord cannot run: fixture', why: 'A fixture reason.', how: ['Do one', 'Do two'] };
+  const raise = (db: DatabaseSync, item: 'stranded' | 'count' | 'hold' = 'stranded', key = 'limited', at = AT, reach?: ItemReachOf) =>
+    raiseReadinessItem(db, { item, key, text: TEXT }, at, reach);
+  const count = (db: DatabaseSync, table: string): number => Number((db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n);
+  const events = (db: DatabaseSync, itemId: number) =>
+    db.prepare('SELECT act, actor, note FROM operator_item_events WHERE itemId = ? ORDER BY id').all(itemId);
+  /** The push outbox's own item reach, as the production composition builds it (`pushSender.ts#itemBoundOf`). */
+  const reachOf = (): ItemReachOf => {
+    const deps = { push: pushSeam().push, time: fakeTime({ wallMs: AT }).ports } as unknown as SenderDeps;
+    return (item) => itemBoundOf(deps, item, 'reach');
+  };
+
+  it('writes the item (programme overlord, raised by ccrc, a do item, the text) and its record in one go', () => {
+    const db = openDb();
+    const r = raise(db);
+    expect(r).toMatchObject({ ok: true });
+    if (!r.ok) return;
+    const item = itemById(db, r.itemId);
+    expect(item).toMatchObject({ program: OVERLORD_ITEM_PROGRAMME, runId: null, raisedBy: 'ccrc', kind: 'do', title: TEXT.title, why: TEXT.why,
+      how: TEXT.how, options: null, state: 'open', raisedAt: AT });
+    expect(item?.program).toBe('overlord');
+    expect(events(db, r.itemId)).toEqual([{ act: 'raise', actor: 'ccrc', note: null }]);
+    expect(db.prepare('SELECT * FROM overlord_readiness_items WHERE id = ?').get(r.recordId))
+      .toEqual({ id: r.recordId, item: 'stranded', key: 'limited', itemId: r.itemId, raisedAt: AT, settledAt: null, closedBy: null });
+  });
+
+  it('the level is blocking for stranded and later for count and hold', () => {
+    const db = openDb();
+    const level = (item: 'stranded' | 'count' | 'hold', key: string): string | undefined => {
+      const r = raise(db, item, key);
+      return r.ok ? itemById(db, r.itemId)?.neededBy : undefined;
+    };
+    expect([level('stranded', 'limited'), level('count', 'count'), level('hold', 'lane-a')]).toEqual(['blocking', 'later', 'later']);
+  });
+
+  it('a second raise for the same open (item, key) answers not ok and leaves exactly one item, one event line and one record', () => {
+    const db = openDb();
+    const first = raise(db);
+    expect(first.ok).toBe(true);
+    const again = raise(db, 'stranded', 'limited', AT + 1);
+    expect(again).toMatchObject({ ok: false });
+    expect(count(db, 'operator_items')).toBe(1);
+    expect(count(db, 'operator_item_events')).toBe(1);
+    expect(count(db, 'overlord_readiness_items')).toBe(1);
+    expect(db.isTransaction).toBe(false);
+    // another key, and another item kind with the same key, are their own records
+    expect(raise(db, 'stranded', 'turn-failed').ok).toBe(true);
+    expect(raise(db, 'count', 'limited').ok).toBe(true);
+    expect(count(db, 'overlord_readiness_items')).toBe(3);
+  });
+
+  it('a refused raise (a kind with no level) writes neither the item nor the record', () => {
+    const db = openDb();
+    const r = raiseReadinessItem(db, { item: 'bogus' as never, key: 'k', text: TEXT }, AT);
+    expect(r).toMatchObject({ ok: false });
+    expect(count(db, 'operator_items')).toBe(0);
+    expect(count(db, 'overlord_readiness_items')).toBe(0);
+    expect(db.isTransaction).toBe(false);
+  });
+
+  it('with an itemReach the reach stamp and one bound outbox row commit with the item; without one, none is written', () => {
+    const db = openDb();
+    const r = raise(db, 'stranded', 'limited', AT, reachOf());
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const out = db.prepare('SELECT sourceKind, sourceId, state, tag FROM push_outbox').all();
+    expect(out).toEqual([{ sourceKind: 'item', sourceId: r.itemId, state: 'pending', tag: `item-${r.itemId}` }]);
+    const plain = raise(db, 'count', 'count', AT + 1);
+    expect(plain.ok).toBe(true);
+    expect(count(db, 'push_outbox')).toBe(1);
+  });
+
+  it('a refused record rolls the reach back too: a second raise leaves one bound row', () => {
+    const db = openDb();
+    expect(raise(db, 'stranded', 'limited', AT, reachOf()).ok).toBe(true);
+    expect(raise(db, 'stranded', 'limited', AT + 1, reachOf())).toMatchObject({ ok: false });
+    expect(count(db, 'push_outbox')).toBe(1);
+    expect(count(db, 'operator_items')).toBe(1);
+  });
+
+  it('a closed database answers not ok and does not throw', () => {
+    const db = openDb();
+    db.close();
+    expect(() => raise(db)).not.toThrow();
+    expect(raise(db)).toMatchObject({ ok: false });
+  });
+});
+
+describe('settleReadinessItem', () => {
+  const TEXT: ReadinessItemText = { title: 'The Overlord cannot run: fixture', why: 'A fixture reason.', how: ['Do it'] };
+  const raised = (db: DatabaseSync, key = 'limited'): { recordId: number; itemId: number } => {
+    const r = raiseReadinessItem(db, { item: 'stranded', key, text: TEXT }, AT);
+    if (!r.ok) throw new Error(r.error);
+    return r;
+  };
+  const recordRow = (db: DatabaseSync, id: number) =>
+    db.prepare('SELECT settledAt, closedBy FROM overlord_readiness_items WHERE id = ?').get(id);
+  const settleEvents = (db: DatabaseSync, itemId: number) =>
+    db.prepare("SELECT actor, note FROM operator_item_events WHERE itemId = ? AND act = 'settle'").all(itemId);
+
+  it('moves the item to done with a settle event by ccrc and stamps the record closedBy lane, in one go', () => {
+    const db = openDb();
+    const { recordId, itemId } = raised(db);
+    expect(settleReadinessItem(db, recordId, 'cleared', AT + 10)).toEqual({ ok: true, settled: true });
+    expect(itemById(db, itemId)).toMatchObject({ state: 'done' });
+    expect(settleEvents(db, itemId)).toEqual([{ actor: 'ccrc', note: 'cleared' }]);
+    expect(recordRow(db, recordId)).toEqual({ settledAt: AT + 10, closedBy: 'lane' });
+    expect(db.isTransaction).toBe(false);
+  });
+
+  it('a settled record frees (item, key): the same cause raises a new item', () => {
+    const db = openDb();
+    const a = raised(db);
+    settleReadinessItem(db, a.recordId, 'cleared', AT + 1);
+    const b = raised(db);
+    expect(b.itemId).not.toBe(a.itemId);
+  });
+
+  it('settling twice settles once: the second answers settled false and writes no second event', () => {
+    const db = openDb();
+    const { recordId, itemId } = raised(db);
+    expect(settleReadinessItem(db, recordId, 'cleared', AT + 1)).toEqual({ ok: true, settled: true });
+    expect(settleReadinessItem(db, recordId, 'retired', AT + 2)).toEqual({ ok: true, settled: false });
+    expect(settleEvents(db, itemId)).toHaveLength(1);
+    expect(recordRow(db, recordId)).toEqual({ settledAt: AT + 1, closedBy: 'lane' });
+  });
+
+  it('a dismissed item is not settled: nothing is written, the record stays open for the reconcile to close', () => {
+    const db = openDb();
+    const { recordId, itemId } = raised(db);
+    db.prepare("UPDATE operator_items SET state = 'dismissed' WHERE id = ?").run(itemId);
+    const before = db.prepare('SELECT COUNT(*) AS n FROM operator_item_events').get();
+    expect(settleReadinessItem(db, recordId, 'cleared', AT + 1)).toEqual({ ok: true, settled: false });
+    expect(itemById(db, itemId)).toMatchObject({ state: 'dismissed' });
+    expect(db.prepare('SELECT COUNT(*) AS n FROM operator_item_events').get()).toEqual(before);
+    expect(recordRow(db, recordId)).toEqual({ settledAt: null, closedBy: null });
+  });
+
+  it('an unknown record, and a record the operator closed, answer settled false', () => {
+    const db = openDb();
+    expect(settleReadinessItem(db, 9_999, 'cleared', AT)).toEqual({ ok: true, settled: false });
+    const { recordId, itemId } = raised(db);
+    closeReadinessItem(db, recordId, AT + 1);
+    expect(settleReadinessItem(db, recordId, 'cleared', AT + 2)).toEqual({ ok: true, settled: false });
+    expect(itemById(db, itemId)).toMatchObject({ state: 'open' });
+  });
+
+  it('settleItemCheckedInTx outside a transaction throws before any write', () => {
+    const db = openDb();
+    const { itemId } = raised(db);
+    expect(() => settleItemCheckedInTx(db, itemId, 'cleared', AT)).toThrow(/no transaction/);
+    expect(itemById(db, itemId)).toMatchObject({ state: 'open' });
+    expect(tx(db, () => settleItemCheckedInTx(db, itemId, 'cleared', AT))).toMatchObject({ ok: true });
+  });
+
+  it('a closed database answers not ok and does not throw', () => {
+    const db = openDb();
+    const { recordId } = raised(db);
+    db.close();
+    expect(() => settleReadinessItem(db, recordId, 'cleared', AT)).not.toThrow();
+    expect(settleReadinessItem(db, recordId, 'cleared', AT)).toMatchObject({ ok: false });
   });
 });
