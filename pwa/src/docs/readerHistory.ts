@@ -21,6 +21,7 @@
 // on, as the mockup viewer does for its full-frame entry (`MockupView.tsx`'s `pendingFullFrom`). A page load clears it.
 import { useEffect, useState } from 'react';
 import { docsPageUrl, type DocPin, type DocsLogOk, type DocsPageLocation, type DocsShowOk } from '../../../shared/docs';
+import { onPop } from '../lib/popstate';
 import { navigate } from '../lib/router';
 import { docMarkdownSource } from './DocMarkdown';
 import { docsLocation } from './docsLinks';
@@ -112,8 +113,7 @@ export function useReaderOnly(): string | null {
   useEffect(() => {
     const sync = (): void => setOnly(entryOnly(true));
     sync();
-    addEventListener('popstate', sync);
-    return () => removeEventListener('popstate', sync);
+    return onPop(sync);
   }, []);
   return only;
 }

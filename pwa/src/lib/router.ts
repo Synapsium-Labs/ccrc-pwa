@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { prefersReducedMotion } from '@ccrc/ui';
+import { replacedState } from './historyPlaces';
+import { onPop } from './popstate';
 import { reloadOnMove } from './swupdate';
 
 /** document.startViewTransition, where the platform has it. */
@@ -19,7 +21,7 @@ type DocWithVT = Document & {
  *
  *  `href` is a path with an optional search (`/docs/p?ref=b`); a `#` fragment
  *  is outside this contract. `opts.replace: true` rewrites the current history
- *  entry (`replaceState`), so Back skips it; absent or `false` pushes a new
+ *  entry (`replaceState`), so Back skips it, and the entry keeps its `docsIdx` (D-9116); absent or `false` pushes a new
  *  one. Both ride the same view transition and the same `flushSync` dispatch
  *  of `popstate`: only the history call differs.
  *
@@ -36,7 +38,11 @@ export function navigate(href: string, opts?: { replace?: boolean; from?: string
   if (reloadOnMove(href, opts?.replace === true)) return;
   const go = (): void => {
     if (!still()) return;
-    if (opts?.replace === true) history.replaceState(null, '', href);
+    // A replace carries the replaced entry's `docsIdx` and nothing else (D-9116): the entry keeps its place in the tab's
+    // numbering, as the plan's "every routed entry gains a docsIdx and keeps its state" has it. Written as null it would
+    // be numbered afresh by the synthetic pop, above any forward entries, and a later skip over stale places would read
+    // its direction the wrong way round. Its `docsPlace` is not carried.
+    if (opts?.replace === true) history.replaceState(replacedState(history.state), '', href);
     else history.pushState(null, '', href);
     // flushSync so the new screen is in the DOM before the transition
     // captures its "new" snapshot (no-op for the non-transition path).
@@ -61,15 +67,15 @@ const read = (): string => location.pathname + location.search;
 /** The current path and search, live across push, replace, back and forward
  *  (design 2026-10-01 section 4.2). One string in state, so a change of the
  *  search alone (`?ref=a` to `?ref=b`) re-renders; the memo hands out one
- *  object per location. `useState` + `popstate`, never
+ *  object per location. `useState` + `popstate` (through `onPop`), never
  *  `useSyncExternalStore`: `navigate`'s `flushSync` and view-transition
  *  timing, and app-pane-reset-timing.test.tsx, rely on this mechanism. */
 export function useLocation(): Loc {
   const [raw, setRaw] = useState(read);
   useEffect(() => {
-    const on = (): void => setRaw(read());
-    addEventListener('popstate', on);
-    return () => removeEventListener('popstate', on);
+    // Through the one dispatcher (`popstate.ts`), which asks the decider first: a pop that is a place's or the console's
+    // own never reaches here. `navigate`'s own pop is the router's, so it still runs this before `navigate` returns.
+    return onPop(() => setRaw(read()));
   }, []);
   return useMemo(() => {
     const q = raw.indexOf('?');          // a pathname cannot contain '?'

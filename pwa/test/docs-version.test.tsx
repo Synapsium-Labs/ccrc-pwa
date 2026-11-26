@@ -54,7 +54,7 @@ interface ReaderSpy {
 /** A `ReaderDeps` whose mount records its input and whose render answers a fixed outcome. */
 function readerSpy(): ReaderSpy {
   const inputs: ReaderMountInput[] = [];
-  const handle = { destroy: vi.fn(), setPrefs: vi.fn(), command: vi.fn() };
+  const handle = { destroy: vi.fn(), setPrefs: vi.fn(), command: vi.fn(), seed: { hosted: false as const }, follow: vi.fn() };
   return {
     inputs,
     reader: {

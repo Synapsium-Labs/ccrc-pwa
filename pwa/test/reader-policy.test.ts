@@ -5,7 +5,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { ts } from '../../server/test/scan/parse';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BRIDGE_LIMITS } from '@synapsium-labs/docserver/frame';
+import { BRIDGE_LIMITS } from '@synapsium-labs/pinax-lib/frame';
 import { DOC_SECTION_SLUGS } from '../../shared/docs';
 import { DOCS_PARSE_BUDGET_MS } from '../src/lib/markdownLimits';
 import { READER_COPY_WRITE_MAX_BYTES, READER_LAB_DRAW_WATCHDOG_MS } from '../src/lib/readerLimits';
@@ -14,7 +14,7 @@ import { replaceFragment } from '../src/lib/router';
 import type { DocLinkContextValue } from '../src/docs/DocLink';
 import {
   copyDecision, docsDrawFor, oneBarTools, READER_E17_MERMAID, readerBarTitle, readerBodyReducer, readerChromeFor,
-  readerDocKey, readerMountFocusFor, readerMountPlan, readerPrefsOf, readerWatchdogMs, routeReaderLink,
+  isHostedMount, readerDocKey, readerMountFocusFor, readerMountPlan, readerPrefsOf, readerWatchdogMs, routeReaderLink,
   type ReaderBodyState, type ReaderChrome, type ReaderE17Reading, type ReaderLink,
 } from '../src/docs/reader/policy';
 import { THEMES } from '@ccrc/ui';
@@ -391,6 +391,15 @@ describe('the library 1.1 take-up: the reader\'s decisions (the take-up plan, Ta
   const READINGS: readonly ReaderE17Reading[] = ['holds', 'does-not-hold', 'not-measured'];
   const CHROMES: readonly ReaderChrome[] = ['frame-bar', 'host-bar'];
 
+  it('hosts only when support, the plan and the root all permit it', () => {
+    for (const profile of [undefined, 'lab-draw'] as const) {
+      const plan = readerMountPlan(profile, 100, 'frame-bar', 'holds');
+      for (const supported of [false, true]) for (const hasRoot of [false, true]) {
+        expect(isHostedMount(plan, supported, hasRoot)).toBe(profile === undefined && supported && hasRoot);
+      }
+    }
+  });
+
   it('docsDrawFor draws after ready only when the E17 Mermaid line holds', () => {
     expect(docsDrawFor('holds')).toBe('after-ready');
     expect(docsDrawFor('does-not-hold')).toBe('on-request');
@@ -405,7 +414,7 @@ describe('the library 1.1 take-up: the reader\'s decisions (the take-up plan, Ta
     for (const e17 of READINGS) {
       for (const chrome of CHROMES) {
         expect(readerMountPlan(undefined, 100, chrome, e17))
-          .toEqual({ draw: docsDrawFor(e17), watchdogMs: readerWatchdogMs(100), store: true, chrome, history: true });
+          .toEqual({ draw: docsDrawFor(e17), watchdogMs: readerWatchdogMs(100), store: true, chrome, history: true, appearance: true });
       }
     }
   });
@@ -414,7 +423,7 @@ describe('the library 1.1 take-up: the reader\'s decisions (the take-up plan, Ta
     for (const e17 of READINGS) {
       for (const chrome of CHROMES) {
         expect(readerMountPlan('lab-draw', 100, chrome, e17))
-          .toEqual({ draw: 'auto', watchdogMs: READER_LAB_DRAW_WATCHDOG_MS, store: false, chrome: 'frame-bar', history: false });
+          .toEqual({ draw: 'auto', watchdogMs: READER_LAB_DRAW_WATCHDOG_MS, store: false, chrome: 'frame-bar', history: false, appearance: false });
       }
     }
   });

@@ -20,6 +20,7 @@
 - One bad-value rule, the library's: the adapter builds the raw contract from ccrc's tokens and passes it through the library's `parseAppearance`, then sends only its verdict. ccrc spells none of the library's ranges or grammars. In the verdict, colour slots are all or nothing, and skin slots and the label fall back one by one. Appearance never drops the reader to the plain view.
 - Contrast floors: 4.5:1 for every text colour on every ground the stylesheet paints, plain or tint, for code tokens, and for the labels of figures of the kinds in `MERMAID_HOSTED_KINDS` that are not author-styled, on the shapes painted behind them; 3:1 for the focus ring on `bg`, `surface`, `surface2` and the tints, the grounds a ring is drawn on, and for those figures' lines; no floor for decorative edges. Every other figure draws on 1.1.0's plate and filter, as in 1.1.0 (spec §5, §10). A coloured tint holds at most 4% of its colour, mixed over `bg` or `surface`. Inline code sits on the opaque `surface2`, never on a tint (spec §5, §10).
 - Budgets: payload at most 4 KiB serialised; at most one `appearance` op per animation frame, latest wins; hosted srcdoc growth over the same document at the 1.1.0 pin in three parts: ccrc's two faces exactly 187 640 characters; this contract's own frame-asset growth at most 32 768 characters over the baseline row, the sum of every `FRAME_MANIFEST` entry with Mermaid's included at the first parent of the landing that adds the tables (1.1.0's 4 528 020 when no library landing comes between), measured at the library landing that lands it, with each later design in the release measured from that landing against its own share, which the coordinator sets; the appearance seed at most 4 096. So at most 224 504 plus the other designs' shares; hosted open-to-`ready` median of 9 opens at most 1.10 x the BASE median of 9; a change while open shows on the frame root within 100 ms, same iframe and nonce, scroll within 1 px; Mermaid redraw one figure per task, no gap over 200 ms.
+  - **Timing amendment (2026-11-24; D-9018):** On desktop Chromium, the hosted nine-open median may add at most 30 ms over its paired BASE per skin. Mode-only keeps the 1.10× limit. On a phone engine F records the paired figure; more than 100 ms added stops and returns to the coordinator. The other budgets above are unchanged.
 - The reader lab mounts with no appearance (spec X1-10).
 - Heavy tests, typecheck and browser runs go through `ccrc test`, in the foreground, with a timeout of at least 600000 ms. Mutations run in sequence from saved copies, and each is restored and hash-checked, never with `git checkout`.
 - Commit on the workspace branch only. Private-name scan every changed file before each commit and before the push.
@@ -322,6 +323,7 @@ Each row reads the frame's computed values through the existing harness's frame 
 
     Once per skin, with Aa open and under a fine pointer, assert the rows below. Each compares the browser's computed value on both sides, never a token's text with a computed value. The host side is a probe element in ccrc's own document (test-only, removed after), given the token through the same property: `box-shadow: var(--elev-pop)`, `border-radius: var(--r-md)`, `height: var(--row-h)`, and for the heading `font-size: var(--fs-section); letter-spacing: var(--ls-section)`, so an `em` resolves against the same size. Both sides then serialise alike: `rgba(0, 0, 0, 0.55) 0px 12px 40px 0px` on each, and `letter-spacing` in px on each.
     - a popover row's height equals the probe's `height`;
+      **Aa row amendment (2026-11-25; D-9053):** at default text size under a fine pointer, the row's computed minimum height equals the probe's height exactly and the rendered row is between that floor and 2 px above it, inclusive. A larger text size may grow the row and is not compared.
     - the popover's `box-shadow` equals the probe's;
     - the radii of a control, a pill and a popover equal the probes' for `--r-md`, `--r-sm` and `--r-lg`;
     - the Aa group heading's `font-size`, `font-weight`, `letter-spacing` and `text-transform` equal the probe's; its `font-family` starts with the library's fixed family name for the role `sectionFamily` names.
@@ -330,10 +332,13 @@ Each row reads the frame's computed values through the existing harness's frame 
   - **AP-3:** with a stale reader theme stored under the reader prefix (`{"theme":"dark"}` under a light palette, and the reverse), the values at first `ready` equal the host's, never the stored theme's.
   - **AP-4:** hold the chunk, change palette and skin, release; at most one `appearance` op.
   - **AP-5:** while open, under both emulated device modes (light and dark), run every transition of the palette set, Follow the system included as a start and as an end: each palette to the next, each palette to Follow the system and back, and, while on Follow the system, the device mode flipping light to dark and dark to light. Then switch skin both ways. After each transition: same iframe element and nonce, scroll within 1 px, values within 100 ms, a drawn figure redrawn. The number of transitions is printed from the discovered catalogue.
+    **Live-follow measurement amendment (2026-11-25; D-9030):** the ordinary browser leg checks one matching in-frame write per applied transition, in order, and no write on an applied-appearance no-op. It keeps the existing liveness wait and the other checks. Run the unchanged 100 ms ceiling in both modes with `CCRC_MEASURE=1`, the same switch as the paired open measurements. A quiet start and end are required for a verdict.
+    **Separate redraw row (2026-11-25; D-9054):** keep the AP-5 fixture. Add a four-figure desktop fixture for the design's §9 Mermaid redraw budget. The ordinary run checks nearest-first ordering, one figure per browser task, and cancellation of queued work when a newer appearance arrives. Under D-9030, `CCRC_MEASURE=1` records the gaps and asserts the unchanged 200 ms ceiling on a quiet box.
   - **AP-6:** pairs on computed values, the focus ring at 3:1 after a Tab, and a drawn figure's edge `stroke` at 3:1 on its plate. Width, font and one fold changed in Aa are back after a reopen, and the stored `pref:prefs` holds no `theme` key. Aa shows the line "Appearance follows ccrc Settings", the label ccrc sent, and no theme row. Tab never lands on the line. A lab-profile mount, which carries no appearance, keeps its theme row. **Meaning without colour** (spec §10, X1-12), on a fixture that carries a glossary term, an id link and an ordinary link in running text, and opens the contents index and quick jump: in GitHub Light, Solarized Light and Catppuccin Latte, where `term` has no hue, `a.term`'s computed `text-decoration-style` is `dotted`, `a.xref`'s `dashed` and the link's `solid`; in Phosphor and Phosphor Daylight, where `ok` equals `info`, the index's `ok` and `info` dots have different computed `border-radius` or size; in Solarized Dark and Solarized Light, where `id` equals `accent`, `a.xref`'s and the ordinary link's computed `text-decoration-style` differ; in Tokyo Night, Nord, Gruvbox Dark and One Dark, where `chg` collides, a changed block's mark is the double bar; and quick jump's selected row has an inset `accent` box-shadow. The changed-mark geometry is the library's test 10, sampled from pixels; F reads it on the installed frame. **Mermaid, live:** one figure of each kind in the library's `MERMAID_HOSTED_KINDS` (read from the installed package, never typed), drawn in every palette: every label meets 4.5:1 on the shape painted behind it and every line that is not `border` or `rule` meets 3:1 on `surface` and `surface2`, on computed values; and a figure with a fill-only `classDef`, and a `journey`, each draw on 1.1.0's plate and filter.
   - **AP-8:** the bridge sent `appearance`; a forced mode-only mount fails this row's own assertion.
   - Extend the geometry files to run their existing assertions once per skin (**AP-7**), the one-bar assertion included.
   - Extend `frame-cost` with the srcdoc-growth budget, for the default layout (X2's wave P5 adds a row per layout, each over its own BASE): at most 191 736 characters over BASE, the two faces (187 640) and the seed (4 096). BASE is taken at Task 1's pin, so it already holds every design's library growth, which Task 1 Step 2a checks share by share. Together they keep spec §9's total over the same document at the 1.1.0 pin: 224 504 plus the other designs' shares. Also extend it with the open-to-`ready` budget (median of 9 opens at most 1.10 x BASE's median of 9).
+    **Timing amendment (2026-11-24; D-9018):** The timing row uses the D-9017 paired method, with separate hosted (+30 ms) and mode-only (1.10×) limits on desktop Chromium, per skin. The ordinary run still asserts the srcdoc growth independently. F records the phone-engine timing as a device item, with a stop above +100 ms.
 - [ ] **Step 3: Run each file through `ccrc test`**, with `CCRC_CHROME` from the brief. Expected: PASS. Record each figure line beside BASE.
 - [ ] **Step 4: Measure the mutation rows** below, one at a time, from saved copies, restoring and hash-checking after each.
 - [ ] **Step 5: Commit** the four browser files: `test(docs): the appearance matrix and per-skin budgets`.
@@ -401,6 +406,15 @@ Each row is measured once, alone, from a saved copy, with `timeout -k 10 600` (9
 | AP-M19 | `readerAppearanceOf` leaves `label` out | Task 2 "every mapped token" row; AP-6 shows the library's neutral default instead of ccrc's line |
 | AP-M20 | Drop the `[prefs]` effect, so stamp changes are the only trigger | Task 5 "the mode-only trigger" |
 | AP-M21 | `ReaderFrame.tsx` imports `readHostAppearance` by value | `docs-scans.test.ts`'s main-bundle scan (Task 4 "the main bundle stays library-free") |
+| AP-M23 | Add 1 px to the hosted Aa row's computed minimum without exceeding the rendered ceiling | AP-6's exact minimum-height comparison (D-9053) |
+| AP-M24 | Add 2 px to each side of the Aa label's block padding, leaving the minimum unchanged | AP-6's rendered-height ceiling in Instrument (D-9053) |
+| AP-M25 | Drop an in-frame appearance write while still redrawing the figure | AP-5 ordinary mode: in-frame write count is zero instead of one (D-9030) |
+| AP-M26 | Deliver two successive appearance writes out of order | AP-5 ordinary mode: the first in-frame appearance does not match that transition (D-9030) |
+| AP-M27 | Delay an appearance write beyond 100 ms without hitting the liveness wait | AP-5 measurement mode, with a quiet start and end: the stamp-to-write ceiling assertion (D-9030) |
+| AP-M28 | Start two figure redraws in one browser task | D-9054 ordinary mode: the one-figure-per-task assertion |
+| AP-M29 | Reverse the nearest-first redraw order | D-9054 ordinary mode: the observed figure order differs from the order by viewport distance |
+| AP-M30 | Let an older appearance's queued redraws continue after a newer appearance arrives | D-9054 ordinary mode: the latest appearance did not cancel the older queue |
+| AP-M31 | Delay the next figure redraw so a consecutive gap exceeds 200 ms | D-9054 quiet measurement mode: the gap ceiling, not the liveness wait |
 
 ## Deviations found
 
@@ -454,6 +468,49 @@ Each row is measured once, alone, from a saved copy, with `timeout -k 10 600` (9
   - Amended in place in §10 test 4, marked "(amended 2026-11-20; D-8827)".
 
 All of run 2631's block is defined: 8759, 8760, 8761. Run 2843's numbers are defined: 8816 and 8824 to 8827.
+
+- **D-8994 (2026-11-24)**: reader-assets-holds-no-hash-literals. Issued to run 3639 (wave C, wave 43). It departs from the reader-mode plan's amendment §3 row for `pwa/test/reader-assets.test.ts` ("its hash rows in the last commit") and its §4 list of what waits for the registry ("`reader-pin.test.ts`'s and `reader-assets.test.ts`'s literals"), and from this plan's amendment bullet "the wave's last commit: … `reader-pin.test.ts`'s and `reader-assets.test.ts`'s literals".
+  - `reader-assets.test.ts` holds no registry-dependent literal: its hash rows compare each asset's sha256 against the installed package's own `FRAME_MANIFEST` entry, read at run time, and its specifiers are built from `FRAME_MANIFEST[k].path`. Measured at Task 1 on `main` at `fff0917bf7`: no 64-hex literal and no version literal in the file. So it takes only its renames, in Task 1's first commit, and the last commit holds `reader-pin.test.ts`'s literals alone among the tests.
+  - Why: review 3635's advisory A1 found the file holds no hash rows; the brief asked Task 1 to confirm it and define the correction.
+- **D-8995 (2026-11-24)**: m79-library-exception-retired. Issued to run 3639 (wave C, wave 43). It departs from the reader-mode plan's amendment §3 row for `server/test/docs-parity.test.ts` ("M79's specifier rule and its planted cases, the near-miss cases (`@synapsium-labs/docserverx`, `@other/docserver`) included"), and from the rich-docs spec's A21 and M8.18, the exception that let the library's import specifiers carry the standalone server's name in `pwa/src`.
+  - M7.9's needle is that name. The library's new name, `@synapsium-labs/pinax-lib`, does not hold it, so renamed planted cases are no hits and the nine "is a hit" cases go red. The plan's text cannot be built as written.
+  - The exception is retired instead: `M79_LIBRARY_SPECIFIER` and its code-position reader `m79InCode` are removed, so no import specifier is excepted. The planted cases keep the old name, and stay hits. The three cases that held an old-name import specifier green now hold it a hit, and a new case holds the new name's four specifiers clean. Measured: restoring the exception over the old name reds the three (Results, wave C).
+  - Why: the exception existed only because the package was named after the needle (spec R-f). Kept over the new name it would except nothing; kept over the old one it would let the retired package back into the PWA unseen.
+  - It is a second edit in place of `docs-parity.test.ts`'s append-only M7.9 block, after W8a's, and its header says so.
+  - Task 7 amends A21 and M8.18 in place, marked "(amended 2026-11-24; D-8995)".
+
+- **D-8996 (2026-11-24)**: checked-reader-mount-casts. Issued to run 3639 (wave C, wave 43). Task 4 Step 4 requires a clean PWA type check, but Task 4 Step 1 and Task 5's Files list defer all cast fakes to Task 5 on the premise that their casts bypass the check.
+  - Measured with the required `ReaderMount.seed` and `follow`: eight TS2352 errors from direct `as ReaderMount` casts in `reader-frame.test.tsx`, `docs-version.test.tsx` and `reader-history-adapter.test.tsx`. Unlike a cast through `unknown`, the direct assertions still require sufficient overlap.
+  - The affected fakes gain `seed` and `follow` with Task 4's interface, without changing any test's expectations. Both double-cast files and the late sign-in fake stay with Task 5, as does the component behavior. No cast is widened to hide a missing field.
+
+Run 3639's block (8994 to 8996) is defined.
+
+- **D-9017 (2026-11-24)**: same-session-reader-timing-base. Issued to run 3639 (wave C, wave 43). It departs from Task 6 Step 1 and the 2026-11-24 amendment only in how the timing BASE is taken. The geometry and srcdoc-size BASE remain at Task 1's commit.
+  - For timing, build the Task 1 tree with the same candidate library as the hosted tree. Use the same ordinary Docs fixture and mount-start and ready marks for both. In one stock Chromium session, interleave the builds, alternating which goes first. Measure nine fresh opens per build per skin in each of two rounds, reversing the order in the second round. Each hosted median must be at most 1.10 times its own same-round BASE median; all four comparisons must pass.
+  - The ordinary browser suite asserts the srcdoc size budget independently. `frame-cost.browser.test.ts` runs the timing comparison on demand: set `CCRC_MEASURE=1` and `CCRC_PAIRED_READER_BASE_DIST` to that built BASE, and select `reader paired timing`. Each comparison prints the samples and their spread. The earlier standalone timing figures remain Results evidence, not a fixed ceiling in the ordinary suite.
+  - Why: the paired BASE medians were near 200 ms on the same machine that previously measured near 88 ms. A historical wall-clock comparator mixes the build's cost with changes in load. The fixture, library pin, measurement endpoints and 1.10 ceiling are unchanged.
+
+- **D-9018 (2026-11-24)**: hosted-open-budget-after-measurement. Issued to run 3639 (wave C, wave 43). The earlier 1.10× hosted ceiling was a regression guard written before the host faces and first appearance were measured; this ruling supersedes that number for hosted mounts, not D-9017's comparator or any non-timing budget.
+  - **Evidence:** the live hosted path added about 12–24 ms across the four measurement sessions. In the checkpoint run, the first shipped hosted mount added 23.8 ms Refined and 18.6 ms Instrument by the paired medians; all 18 individual deltas were positive. The mode-only bridge and the tip with all hosted work bypassed had mixed-sign paired deltas, with no consistent positive remainder. The measured cost belongs to the live hosted path as a group (the faces, seed, and first appearance), not to a separately measured stage. The reviewed overlap remains; the measurements isolated no timing effect from it.
+  - **Desktop Chromium:** per skin, the median of nine hosted opens may add at most 30 ms over the median of nine BASE opens in the same session, interleaved per D-9017. Each of the two rounds must meet its own BASE. The mode-only mount keeps its separate 1.10× guard over its own same-session BASE in both rounds; build it with the same candidate library and the hosted decision forced false, not with a different reader or layout.
+  - **What is asserted:** the ordinary `frame-cost` browser suite asserts the hosted srcdoc growth for both skins. Timing is a recorded opt-in `frame-cost` run, with an executable budget assertion for each arm, skin and round; run it against builds with the same corrected library, matching the BASE and fixtures. An ordinary suite pass is not a timing result.
+  - **Phone engine:** F records a paired figure in its device item. More than 100 ms added is a stop to bring back to the coordinator. The desktop measurement is not phone evidence.
+
+- **D-9030 (2026-11-25)**: quiet conditions for reader wall-clock measurements. Issued to run 3639 (wave C, wave 43). It adds a validity gate before D-9018's desktop budgets and before AP-5's live-follow ceiling, without changing either budget, the fixtures, or the paired open method.
+  - A row is valid only when its BASE median is at most 1.25 times the quiet BASE recorded under D-9017 for its skin, and its BASE interquartile range is at most 20 ms. Otherwise the row reads **not measured: reference not quiet**, even if its candidate falls under the ceiling. Only valid rows get a D-9018 verdict.
+  - The quiet reference is 81.4 ms for Refined and 86.6 ms for Instrument, giving ceilings of 101.75 ms and 108.25 ms respectively. Use one reference per skin in both arms and both rounds. These are the larger of the two quiet after-overlap D-9017 BASE medians per skin: both readings were quiet, and the bound admits both. Round numbers do not pair across sessions, and the diagnostic checkpoint medians had a different purpose.
+  - Retain every attempt in Results, with raw rows, one-minute load at start and end, and validity and verdict per row. Attempt 1 below is not a measurement in any row; its start and end loads were not captured. Identical BASE bytes gave medians from 113.0 to 203.4 ms and a sample of 844.8 ms, versus quiet medians around 80 ms. Hosted deltas reversed sign per skin between rounds. The coordinator observed one-minute load of 9 to 11 on a 16-core box during the run; a reference that moves by 90 ms cannot decide a 30 ms budget.
+  - For paired open timing, start at most three further attempts, only with one-minute load below 4. The first valid result decides its row; a valid red stops and returns to the coordinator, without optimisation or retry of that row. If three further attempts leave any row unmeasured, stop and report it; the coordinator chooses where to measure next. If no exact per-skin quiet figure is identifiable in D-9017, refer the recorded evidence back before a new attempt.
+  - For a wall-clock ceiling without a reference arm, the one-minute load must be below 4 at both the start and end of the row. Otherwise the row reads **not measured: box not quiet**, whether its raw time was above or below the ceiling. This applies to AP-5's stamp-to-write ceiling in both emulated modes. Keep the 100 ms ceiling and fixtures unchanged. The one diagnostic replay counts as the next attempt if valid; name every transition and record its host stamp, operation send and frame write times. A valid red stops that row; report the worst transition without optimisation.
+  - The ordinary AP-5 browser rows check matching writes in order, exactly one per applied transition and none at all for a no-op, under their existing liveness wait. Only `CCRC_MEASURE=1` asserts the 100 ms ceiling; this is the same switch as for the paired open budgets. Record verdicts and loads separately by emulated mode. AP-M25 and AP-M26 are ordinary-mode mutations; AP-M27 is a quiet measurement-mode mutation.
+
+- **D-9053 (2026-11-25)**: hosted-Aa-row-floor-and-ceiling. Issued to run 3639 (wave C, wave 43). It departs from Task 6 Step 2's equality of rendered row height with the host probe. Under a fine pointer at default text size, the Aa row's minimum height must exactly equal the host's height; the rendered height may be between that floor and 2 px above it, inclusive. A row at larger text size may grow and is not compared. Shadow and radius comparisons remain exact.
+  - Refined measured 52 px for the host probe, minimum and rendered height. Instrument measured 32 px for the host probe and minimum, and 33.0469 px rendered. The label has a computed 21.06 px line box and 6 px padding above and below, with no block border; in Instrument, those are the full row height to layout rounding (0.0131 px). The row itself adds no block padding or border and its container has no explicit row gap. The label's own content and padding exceed Instrument's floor by about 1.05 px. The library intentionally uses `min-height` so text size and zoom can grow the row.
+
+- **D-9054 (2026-11-25)**: multi-figure redraw witness in the console. Issued to run 3639 (wave C, wave 43). Task 6's original AP-5 case observes one drawn figure and stays intact. A separate desktop case covers the design §9 redraw budget using at least four already drawn, unstyled figures of covered kinds at distinct viewport distances. It checks every redraw's order, browser task and new paint after one appearance change. Then it sends a newer appearance with older work demonstrably queued, and checks that only the newest queue completes and that no old paint is installed after the newer appearance. This is a browser test, not a new library hook or a substitute for F's phone evidence.
+  - A consecutive redraw gap above 200 ms fails only in `CCRC_MEASURE=1` on a valid D-9030 row; log all gaps and load at both ends. AP-M28, AP-M29 and AP-M30 run in ordinary mode; AP-M31 is the quiet measurement-mode control.
+
+- **D-9056 (2026-11-25)**: the Wave C file list omitted `pwa/test/skin-identity.test.ts`. Issued to run 3639. Add only the exact-path registry entries for `pwa/src/lib/appearance.ts`, which observes changes to the root's skin attribute for the applied appearance, and `pwa/src/lib/appearanceStamp.ts`, which reads the same attribute to derive the applied appearance stamp. Neither writes it. Leave the scanner and every standing negative control unchanged. Removing either new entry must red its own row; a third, unregistered neighbouring reader must still red the guard.
 
 ## Results
 
@@ -972,3 +1029,278 @@ grep over the built frame/bootstrap.js (read only)                  -> port ops 
 ```
 
 No test, build or install ran: nothing in this wave changes code. Every commit was scanned for private names before it was made, and again before the push.
+
+### Wave C, run 3639: built ahead of publication (2026-11-24)
+
+**Base.** `main` at `fff0917bf7`. The workspace branch only; nothing pushed and no pull request opened before publication (the reader-mode plan's amendment §4).
+
+#### The built-ahead library
+
+The coordinator's word for the install is the brief of run 3639. The library's repository was cloned bare from `https://github.com/Synapsium-Labs/pinax-lib.git` into the session temp root, and `996a39b2602d2e1e636c54c95cc9e403fe55cf88` ("Prepare library version 1.2.0 (#94)", 2026-11-24) exported from it with `git archive`, never from a working tree. No tag pointed at it when read.
+
+| Step, in the export | Result |
+|---|---|
+| `npm ci` | rc 0. npm's install-scripts gate skipped esbuild's postinstall; the build did not need it |
+| `npm run build` | rc 0 |
+| Built `assets/` against the commit's blobs (`git hash-object` of each built file against the tree's blob) | 0 differ |
+| `npm pack` (its `prepack`, `scripts/verify-assets.mjs`) | rc 0; "every file under assets/ is named by assets/assets.json"; 514 files, 3.7 MB packed, 12.2 MB unpacked |
+| Tarball `synapsium-labs-pinax-lib-1.2.0.tgz` | sha512 `sha512-vZTiHrZvQBz/AfY8tD5/URE0yrDOjA/ANtmgsy4PE7J5H7DAUu/LxSZpsuna6RsAXwcCkikD+dsV7vN3VZOhlQ==`; sha256 `f2d71d20ea59f44f63a75677e029d33be8ba494efb74d1fb7f7ac1ede5c83757`; 3 678 313 bytes; npm's shasum `5efbe62d23aaceb845a74a4cc726fbc9d23eb950` |
+| `npm install --no-save <tarball>` in `pwa/` | rc 0; `pwa/package.json` and the lock unchanged (`git status` clean); `node_modules/@synapsium-labs/pinax-lib` 1.2.0 beside the locked `docserver` 1.1.0; its `assets/assets.json` byte-identical to the commit's |
+
+The registry tarball's integrity need not equal this local pack's; the lock takes the registry's at the last commit.
+
+**Task 1 Step 2a, Git-object read ahead of publication (rc 0).** At `aacae4c56dcbf3d8da4069957a957eb530e2ac17`, `conformance/size/shares.json` holds exactly X1 and X2's rows below, and `conformance/size/growth.json` holds exactly `baseline` and `x1`. The first parent `aceb346ae09ac65b70b5587a5676f941056ca3a1` counts 4 528 020 characters (4 530 427 bytes), in entries of 3 643, 30 153, 198 215, 549 069 and 3 746 940 characters. Both genesis rows trace to the X1 landing by first-parent line history. Its own row is 4 558 002 on each measure, a rise of 29 982.
+
+At the 1.2.0 candidate, each design row equals its landing's manifest as read from its Git object. The cumulative deltas and the release's recorded ceilings are:
+
+| Design | Growth (total / largest frame, characters) | Share (total / largest frame, characters) |
+|---|---:|---:|
+| X1 | 29 982 / 29 982 | 32 768 / 32 768 |
+| X2 (four rows) | 721 478 / 13 423 | 1 166 336 / 72 704 |
+| X6 | 37 411 / 8 788 | 59 392 / 15 360 |
+
+The candidate's last row (`x6`, at `61c4bdfde06b99738e0df4a87cf0e8489c9cd4ec`) matches the installed `FRAME_MANIFEST`: 5 316 891 characters over all 13 entries and 4 580 213 in the largest frame (common entries plus the largest layout). Each counted file's character count, byte length and sha256 match the committed manifest and the installed `assets/assets.json` hashes. This is the local candidate check only; it does not verify a tag or registry publication.
+
+The installed `assets/assets.json` (manifest 1, package `@synapsium-labs/pinax-lib`, version 1.2.0, bridge protocol 1), every entry:
+
+| Asset | sha256 | CSP source |
+|---|---|---|
+| `fonts/OFL.txt` | `18aabf190848725e2576eefb5c29ba06aac1029d02132252a7f312eac2e50cf3` |  |
+| `fonts/README.md` | `cfd817cfc6a573679d6961ed40a410b9c0c87ccd1af8bdce2d28c00846e314e9` |  |
+| `fonts/source-sans-3-latin-wght-italic.woff2` | `9a15dafc2c2b2414aaa9d6c30830d9aab4361329d8495b1574633603b994b411` |  |
+| `fonts/source-sans-3-latin-wght-normal.woff2` | `7a19a7027e125257d310c6dbd78ae3a30b5ea1e3794d60b12bb28227a003bfda` |  |
+| `fonts/source-serif-4-latin-opsz-italic.woff2` | `96e6393209728ab93c334ae739af8a040cd2006c82e8614d6465a8084db88f89` |  |
+| `fonts/source-serif-4-latin-opsz-normal.woff2` | `f2ea9c12d2fe9bd3a9589b02ad2c0909da88f30938c91adc838c4f4098f9f9e0` |  |
+| `frame/bootstrap.js` | `d0ab0f7e312251e25005b7c090dbb8129a971c0755d456cf35f82fe450d26c63` | `'sha256-0KsPfjEiUeJQBbfAkNu4EpqXHAdV1FbPNfgv5FDSbGM='` |
+| `frame/enhance-classic.js` | `608037f6acd409299b19fa32b65c2488dd8bbf276da3d182d38a298d9c5af86a` | `'sha256-YIA39qzUCSmbGfoytlwkiN2Lvydto9GC04opjZxa+Go='` |
+| `frame/enhance-editorial.js` | `91948b8a6af0c8f0c30b36a5a935f71c727fdb386e1f6ce58ee4a4be38f66edd` | `'sha256-kZSLimrwyPDDCzalqTX3HHJ/2zhuH2zljuSkvjj2bt0='` |
+| `frame/enhance-guided.js` | `152934356f24ee2286a67176d0497213c97825fe36b1344622df46fc26273a14` | `'sha256-FSk0NW8k7iKGpnF20ElyE8l4Jf42sTRGIt9G/CYnOhQ='` |
+| `frame/enhance-review.js` | `920c60b298691f8293b79df9208e96f4a54cf4260a7f4501bf4ee30aa51a51a3` | `'sha256-kgxgsphpH4KTt535II6W9KVM9CYKf0UBv07jCqUaUaM='` |
+| `frame/enhance.js` | `0a1b49f4a8c20dd3fe7df8d4589cc7ff5030fde2cc548015d2d7ff47d5c787ef` | `'sha256-ChtJ9KjCDdP+ffjUWJzH/1Aw/eLMVIAV0tf/R9XHh+8='` |
+| `frame/guard.js` | `ff3c25da5703bc06d40ca0412b2e760c619a73a4153306f4d0f3b662bda65c4d` | `'sha256-/zwl2lcDvAbUDKBBKy52DGGac6QVMwb00PO2Yr2mXE0='` |
+| `frame/layout-classic.css` | `90de780c9e0f98fea4bb916357b1ce74a962e577027e1cb88f28e0470b7ea23c` |  |
+| `frame/layout-editorial.css` | `c15993de4b7d34298fe9287c25516e8254cc1ff70f5b4c9eca92f731b8835dda` |  |
+| `frame/layout-guided.css` | `9ceef0b3f36b5d9ec611767f20622d0edc7cf0a91f76be65e34f61dbb897304c` |  |
+| `frame/layout-review.css` | `920780aaeccf034223d33179d0f1a77fab74663d317825f75960b7920a7def68` |  |
+| `frame/reader.css` | `32aa81ef916560fe4a304599dfcebcd96cd4825e1d8c33d0e6ae81916d563529` |  |
+| `layouts/classic.css` | `90de780c9e0f98fea4bb916357b1ce74a962e577027e1cb88f28e0470b7ea23c` |  |
+| `layouts/editorial.css` | `c15993de4b7d34298fe9287c25516e8254cc1ff70f5b4c9eca92f731b8835dda` |  |
+| `layouts/guided.css` | `9ceef0b3f36b5d9ec611767f20622d0edc7cf0a91f76be65e34f61dbb897304c` |  |
+| `layouts/review.css` | `920780aaeccf034223d33179d0f1a77fab74663d317825f75960b7920a7def68` |  |
+| `mermaid/mermaid.frame.js` | `7585b2055ba386b9acff71b9c8a0c40b36dec79c2106a4aa56048c8fe59832c3` | `'sha256-dYWyBVujhrms/3G5yKDECzbex5whBqSqVgSMj+WYMsM='` |
+| `mermaid/mermaid.mjs` | `dfba66fc5c75e030c35bf16d5e7a62bbee7be5496cabec94ec93f85d626b38df` |  |
+| `print.css` | `2ba6cfdc58eaf2e5bced8b767eb85fb3255bcd1c9a23ee1e62ee5add4bfb6113` |  |
+| `reader.css` | `816db9774bbda71b99b85d1404523c8c837866bee2072eae0806339405cc2996` |  |
+
+**The import list, read ahead on the tarball** (Task 1 Step 1 reads it again at publication): 1.2.0's `exports` are 1.1.0's, key for key (`./render`, `./conformance`, `./enhance`, `./frame`, `./host`, `./highlight`, `./assets/*`, `./package.json`), and every asset the console imports by specifier (`frame/guard.js`, `frame/bootstrap.js`, `frame/enhance.js`, `frame/reader.css`, `mermaid/mermaid.frame.js`) and the two deep paths the tests read (`dist/frame/seed.js`, `dist/host`) exist in it. No change to the list.
+
+#### Task 1's first commit: the rename (D-8976)
+
+Every file of the reader-mode plan's amendment §3 outside the package file, the lock and the pin's literals moved to `@synapsium-labs/pinax-lib` and `Synapsium-Labs/pinax-lib`: the four source files, the pwa and server tests, the browser test, and the provenance step's repository, signer, lock key, pack spec, tarball name and closing line. `git grep` of the old name outside `docs/` then answers only the package file, the lock, `reader-pin.test.ts`'s `resolved` prefix, `docs-parity.test.ts`'s planted old-name cases (D-8995), and the standalone docs server's own lines that §3 leaves alone. `reader-pin.test.ts` changed only its `LIB` constant and its title's package name. `reader-assets.test.ts` took its renames only (D-8994). `docs-parity.test.ts`'s M7.9 exception is retired, not renamed (D-8995).
+
+| Check, on the built-ahead tree (`ccrc test`, foreground) | Result |
+|---|---|
+| `pwa`: `tsc --noEmit` | rc 0 |
+| `pwa`: the 14 renamed files (`docs-scans`, `markdown-purity`, `reader-assets`, `reader-bridge`, `reader-built`, `reader-commands.test-d`, `reader-diff`, `reader-history-types.test-d`, `reader-images`, `reader-lab-bridge`, `reader-lab-frames`, `reader-pin`, `reader-policy`, `w7-storage-keys`) | 503 of 508 pass; the 5 reds are `reader-pin.test.ts`'s 1.1.0 literals, red by design until the last commit |
+| `server`: `ci-pipeline`, `docs-parity` | 214 of 214 pass |
+| D-8995's mutation: the exception restored over the old name, from a saved copy, restored and hash-checked | the three retired-exception cases red |
+| The browser leg, renamed `reader-frame.browser.test.ts` included | run as Task 6 Step 1's BASE, on this commit (below) |
+
+#### Task 6 Step 1: BASE, at Task 1's commit
+
+Taken at `63ba659ed5` (Task 1's rename and its follow-up, below), on the built-ahead tree, before any edit of Tasks 2 to 5, with no appearance: Chromium (Playwright's build), this box, each file once through `ccrc test`, foreground. The per-skin extensions Task 6 Step 2 keeps (every one-skin case of `docs-compact-head` and `reader-frame`'s worst case once per skin, and `frame-cost`'s reader-open measurement, on demand under `CCRC_MEASURE=1`) were written for this measurement and held out of the tree until Task 6. Runs: `docs-compact-head` 132 of 132, `reader-frame` 55 of 55, `frame-cost` reader-open 2 of 2.
+
+| Figure | Refined | Instrument |
+|---|---|---|
+| Open to `ready`, an ordinary page (6 sections, 42 paragraphs, no image, no figure), 9 opens | median 88.4 ms (80.0 to 109.1) | median 84.4 ms (77.2 to 100.3) |
+| srcdoc of that page | 839 815 characters | 839 815 characters |
+| `T10-FIGURES worst` (30 images, 5 MiB) | srcdoc 13 600 319; mount 109.7 ms; ready 2 085.5 ms; wall 2 540 ms; 57 316 elements | srcdoc 13 600 319; mount 105.0 ms; ready 2 061.2 ms; wall 2 557 ms; 57 316 elements |
+| One bar at 412 x 915 (`L11-FIGURE`) | title 56 px down, frame at 48 | title 56 px down, frame at 48 |
+| Full head, `above` at 600, 768 and 1280 | 233, 213, 306 | 233, 213, 310 |
+| Touch laptop `above`, 1280 and 915 x 412 | 322, 342 | 326, 346 |
+
+All 142 `PHH-FIGURE`, `L11-FIGURE`, `T10-FIGURES worst` and `FRAME-COST-READER` lines are kept with the wave's scratch and summarised here; Task 6 compares each against its own line. Hold condition 5 decides whether this BASE stands at the registry pin.
+
+**Task 1 follow-up (`63ba659ed5`).** The browser leg's first run at the rename commit failed to collect `reader-frame.browser.test.ts`: its fixture read the installed bootstrap's global list by the name 1.1.0's minifier gave it (`var O=[…]`), and 1.2.0's names it `M` (118 names; 117 in 1.1.0). The case's comment already says it reads the first array literal, so the code now matches any name. No assertion changed.
+
+#### Task 4: Bridge checks
+
+- Red: the new hosted-policy row failed before the function existed. A subsequent three-file run had eight failing and 149 passing rows, one failure a font-loader timeout. The four-file red run as a single command was not captured. The first full PWA type check of Task 4 exited 2 on the eight direct casts recorded in D-8996.
+- Green after the fix and re-review: the PWA type check exited 0. The bridge, policy, scan, alias, lab-run, frame, version, history-adapter and host-appearance files passed 512 of 512 through `ccrc test` (rc 0). The wrapper ran locally with the unsaved candidate.
+- Assertion-red and restored with hash checks: AP-M1, AP-M4, both AP-M22 holds, AP-M8, AP-M12 (including the lab row), AP-M14 and AP-M16. A compile-valid microtask yield immediately after the appearance read also reddened the timing assertion. AP-M21 has a matching planted-import control; the actual source mutation remains for Task 6.
+- Re-review found no production blocker. Follow-up for the whole-branch review: stripping fonts copies the base asset object, so a non-production `deps.assets` implementation that supplies asset fields through inherited or non-enumerable properties could lose them. The shipped loader supplies ordinary own fields.
+
+#### Task 6: Hosted measurements at the build-ahead pin
+
+The timing row remains **red** (D-9017). The first, standalone hosted run gave medians of 107.3 ms (92.5–113.3) for Refined and 96.5 ms (92.1–106.8) for Instrument, both over 1.10 times the historical BASE. The same-library, same-session comparison below used the same fixture and the same mount-start and `ready` endpoints. Each cell reports medians with min–max in ms, from nine fresh opens per build; the first build alternated and the lead was reversed in round 2.
+
+| Test | Round | Skin | BASE | Hosted | Ratio |
+|---|---:|---|---:|---:|---:|
+| Before overlap | 1 | Refined | 206.2 (141.4–393.9) | 227.9 (177.1–278.6) | 1.1052 |
+| Before overlap | 1 | Instrument | 193.8 (138.8–378.8) | 214.7 (163.2–278.5) | 1.1078 |
+| Before overlap | 2 | Refined | 185.1 (128.6–240.2) | 203.1 (146.1–259.3) | 1.0972 |
+| Before overlap | 2 | Instrument | 177.6 (98.7–219.0) | 196.8 (120.7–268.0) | 1.1081 |
+| After overlap | 1 | Refined | 79.9 (76.2–94.6) | 100.3 (95.7–122.0) | 1.2553 |
+| After overlap | 1 | Instrument | 82.9 (78.7–98.5) | 97.5 (91.0–107.9) | 1.1761 |
+| After overlap | 2 | Refined | 81.4 (76.3–90.9) | 97.5 (93.8–110.0) | 1.1978 |
+| After overlap | 2 | Instrument | 86.6 (75.2–103.9) | 102.9 (91.4–110.6) | 1.1882 |
+
+- Both paired runs exited 1. Three comparisons missed before the experiment and four after it. The across-run change in the ratios does not isolate the effect of the overlap: the BASE and hosted builds both ran much faster in the later session, despite the fixtures and procedure matching. No second timing experiment was attempted. The bridge unit run failed on serial loading (3 failed, 79 passed) and on faces-first ordering (1 failed, 81 passed), then passed 82 of 82 after base-first overlap. Read-only review found no production blocker; late face rejection after the base fallback returned was not tested independently. The full PWA suite attempt stopped after the runner's budget warning; the focused run is not a full-suite result.
+- Ordinary-page srcdoc independently passed in each skin after the experiment (2 passed, 51 skipped, rc 0). The paired run measured the same sizes in all opens: 1 028 425 Refined and 1 028 424 Instrument, against BASE 839 815 and limit 1 031 551. No timing result is inferred from the size pass.
+- The production CSS guard is assertion-red on the build-ahead candidate (1 failed, 13 skipped, rc 1). The complete scratch comparison covered 12 explicit palettes and two system modes × two skins × two pointer kinds × 43 slots = 2 408 values. Of 1 844 spelling differences, the library accepted 1 720 case-only changes and 28 alpha-hex shadow conversions. It refused 40 short hex occurrences (`#FFFFFF` → `#fff`, in `accent-ink`, `surface` and `bg`) and 56 leading-dot tracking occurrences (`-0.011em` → `-.011em` and `0.08em` → `.08em`). 620 individually accepted colour values were also omitted when one other colour slot dropped their group. No host-side normalisation was introduced. AP-1, AP-2, AP-3, and AP-6 remain open; the corrected package must turn the ordinary guard green.
+- The Chromium compact-head suite passed 132 of 132 (rc 0). Both skins have one phone bar, the title at 56 px, console part 48 px, and the 44 px tap floor. In the 26 matched figure rows, maximum delta in `above`, `frameTop`, `screenTop`, `titleInFrame` and measured head height was 0 px; head mode never differed. This is not a phone-engine run or a comparison of the frame's own measure, prose, gutters and title-block dimensions.
+- The Chromium reader-frame suite passed 55 of 55 (rc 0). The worst fixture decoded all 30 images in each skin; Refined / Instrument respectively: srcdoc 13 788 256 / 13 788 255, mount 117.5 / 117.9 ms, ready 2 750.4 / 2 134.5 ms, wall 3 266 / 2 647 ms. The fixture remained at the 5 MiB image budget; the ordinary-page srcdoc cap above does not apply to this row.
+- AP-8 passed on the production build (1 passed, 13 skipped, rc 0). The same row on a separate build forced to take the mode-only mount failed at its appearance-seed assertion (`undefined` vs the expected object, 1 failed, 13 skipped, rc 1). The live working-tree source was not mutated.
+
+#### Task 6: Bounded timing diagnostic after the stop
+
+The coordinator kept the red-first overlap and authorised one diagnostic, not a second optimisation. Task 2 adds the map and Task 3 the stamp helper, but neither can mount hosted. Task 4 (`e1ce2bb945`) exposes the new bridge interface without the shipped caller supplying its appearance root, so its measured mount is still mode-only. Task 5 (`59a0423d13`) is the first shipped hosted mount. In the overlap tip's scratch control the caller omits the appearance root and substitutes a constant for the stamp hook; it loads no hosted faces, sends no appearance seed or appearance op, and leaves the rest of the mount and its lazy bridge in place.
+
+One paired round per checkpoint, nine opens per skin/build, alternating lead, same fixture and ready mark, one Chromium session. Values are medians (sample min–max) in ms; the paired delta range is over the nine individual pairs, not a confidence interval.
+
+| Checkpoint | Skin | BASE | Checkpoint median | Added by medians | Paired delta range |
+|---|---|---:|---:|---:|---:|
+| Task 4, mode-only | Refined | 83.9 (78.2–104.5) | 86.2 (80.9–104.8) | +2.3 | −10.3 to +16.2 |
+| Task 4, mode-only | Instrument | 85.6 (73.7–88.1) | 80.6 (74.7–86.4) | −5.0 | −12.7 to +9.7 |
+| Task 5, hosted | Refined | 75.6 (72.5–81.5) | 99.4 (91.9–101.4) | +23.8 | +13.3 to +27.6 |
+| Task 5, hosted | Instrument | 79.4 (73.0–82.7) | 98.0 (89.4–108.1) | +18.6 | +11.3 to +27.2 |
+| Tip, all hosted work bypassed | Refined | 80.8 (76.7–87.6) | 81.6 (76.9–90.6) | +0.8 | −6.9 to +10.3 |
+| Tip, all hosted work bypassed | Instrument | 80.2 (75.9–87.8) | 78.1 (74.5–81.3) | −2.1 | −11.5 to +1.2 |
+
+The diagnostic completed all six comparisons. Srcdoc was 839 815 in every BASE and mode-only/control open and 1 028 425 / 1 028 424 in the hosted opens. Task 5 added time in every pair; both mode-only checkpoints have mixed signs and no consistent positive remainder. This locates the cost in the hosted path as a group, not in a particular stage or asset. It does not change the ceiling, and it is not timing acceptance.
+
+#### Scratch profiling before the overlap: removals, not acceptance
+
+Nine adjacent control and variant opens per skin and variant. In the table, positive means the removal saved time (median of per-pair open savings, ms). Each row's sample range included both signs.
+
+| Removal | Refined | Instrument |
+|---|---:|---:|
+| Omit the font payload, still wait for the chunks | +3.1 | +5.6 |
+| Keep the payload, bypass font decode and registration | +1.3 | −0.8 |
+| Bypass first appearance application, keep seed and faces | −4.0 | +0.5 |
+| Omit the appearance seed, keep root read and faces | −2.7 | +0.3 |
+| Bypass the stamp hook | −0.8 | +11.4 |
+
+The unmodified measurement path in the scratch control took 2.4–3.3 ms for the face chunk wait, 1.0–1.3 ms for the host read and verdict, 0.3–0.4 ms for the initial apply, and 4.9–5.2 ms for synchronous font handling. Face loads settled 16.8–18.1 ms from entry, while other readiness work was running; those spans are not additive. The no-font-payload variant removed 187 670 srcdoc characters including the envelope. Refined / Instrument reductions: mount preparation 3.2 → 0.8 ms in each; srcdoc build 11.9 → 9.5 / 9.6 ms; append to seed parse 14.4 → 11.9 / 12.3 ms; parse and validate 1.2 / 1.1 → 0.4 / 0.4 ms. Both font-removal variants loaded neither face; the control loaded both. The profiling was deliberately instrumented; five diagnostic cases passed, not an acceptance budget.
+
+**Known cost, candidate follow-up:** the two faces travel as text inside the frame document. A cheaper way to carry them may exist within the unchanged sandbox and frame policy. Neither the measurements nor D-9018 promise or authorise a different carriage in this wave. The corrected library still needs its own paired measurement.
+
+#### D-9018 harness verification (2026-11-24)
+
+The ordinary size rows still passed independently after the paired harness changed (2 passed, 51 skipped): 1 028 425 characters Refined and 1 028 424 Instrument, against 839 815 BASE and a 1 031 551 ceiling. TypeScript passed on retry at the same test-slice cap after the first run exited 137. The restated timing gate was not run: desktop timing acceptance waits for three matching corrected-library builds, and F owns the phone-engine pair.
+
+#### Task 6: Paired reading geometry in scratch
+
+On the build-ahead library, a separate Chromium probe paired both skins at 412 × 915, 600 × 960, 768 × 1024 and 1280 × 800. Both builds had identical one-line byline metadata and the probe selected the same visible prose paragraph. Across all eight pairs the maximum delta was 0 px for the reader bar, measure, gutters and padding, visible prose size, title and byline heights, and full title block. The title and byline each stayed on one line. This diagnostic used a different fixture from the protected phone title-budget row and does not replace the phone-engine run.
+
+#### Task 6: Lazy-open check on the held pin
+
+AP-4 initially stopped at the browser's command-palette locator: the option's accessible name includes its group, and the choice page renames the search box. The test now selects the option by its exact visible title and uses the choice page's own search box. One retry stopped during Vitest startup with `code.charCodeAt is not a function` and reported test-slice OOM kills. The next run applied both choices and passed the full seed-colour comparison, then failed the seed-skin comparison: Instrument's `.08em` was absent from `sectionTracking` (one failed, 13 skipped). AP-4 remains open until the corrected library; the test still requires all skin slots.
+
+#### Task 7: Verification while the pin is held
+
+- Scoped PWA tests and built guards: 4 593 passed, five failed. The five are `reader-pin` checks for the exact manifest and lock entry, installed version, installed asset manifest version and protocol, and its pinned hashes. The local build-ahead install and the committed 1.1.0 pin intentionally differ. The scoped rerun passed the asset-import census with the five manifest-derived entries and exactly two inline faces. The first full run is recorded below.
+- Scoped server guards: 261 passed, one failed. The deviation cross-tree case timed out at its 20 s limit both in the batch and alone. A one-off 60 s diagnostic passed 34 of 34; it does not clear the default failure. Neither the guard nor its timeout was changed.
+- The Task 7 rich-reader amendment passed scoped re-review after clarifying that a hosted theme is not stored as a reader preference. Both protected 2026-11-06 phone evidence blocks and the rich-reader spec's E17 summary row were compared byte for byte and were unchanged.
+
+#### Corrected local library (2026-11-25)
+
+After merging `bce2bc52fd` locally, the named producer-main object `59d4d18a98e14b9edc6fbe9f64d3d39793347502` was exported from Git, rebuilt, packed and installed without saving. The local pack has 514 entries, 3 681 976 bytes, SHA-256 `c8cfafcf0537a642d0d87d0f1f6d1e254e2880f56b1691d269bc1cbf32b39d8b`, npm shasum `40f825be68ae586bfcea9bbdd05ded8290c9e3d7` and integrity `sha512-V4QhSgY5HwSQ/yhy2G/I6VB9gO/3LEGrv+bJUd+6+E7dnaBEqWCK4iXN309h+7G7y/T5N1JEhI26tO29hFkJ4g==`. Asset-manifest SHA-256 is `179a330da49ad4fefc8ba51a00f6f0eb0da9464c0868178fe18a7150d430dfa9`. All 26 asset hashes and applicable script CSP hashes matched the installed and rebuilt manifests. The five enhancer hashes changed; the committed pin and lock did not. This is local evidence, not the producer's browser acceptance or registry provenance.
+
+- The production CSS guard passed all 56 contexts and 2 408 values without a refusal, against the identical guard's red on the held package above. No host normalisation was introduced.
+- A scoped browser run passed twelve tests, two AP-5 cases skipped. It included 28 catalogue opens, both first-ready stale-theme controls, the lazy-open seed including Instrument's `.08em`, the implemented chrome, preference, contrast, cue and fallback rows, and AP-8. This was not the complete AP-6 matrix.
+- The corrected Task 1 BASE rebuilt at `63ba659ed5` reads 840 371 srcdoc characters in both skins. Mode-only equals BASE; hosted reads 1 029 009 in Refined and 1 029 006 in Instrument, against 1 032 107. Both ordinary size checks and every paired size control passed.
+
+#### Corrected AP-6, geometry and census (2026-11-25)
+
+- Five post-merge PWA import, storage, control and role census files: 238 passed, no reported type errors, rc 0. The wrapper also reported one shared test-slice OOM kill.
+- The built lab-profile control kept Aa's selected Auto theme and had no hosted label. The revised live figure probe passed all 12 canonical palettes × eight installed kinds. Phosphor Daylight's ER cardinality circle had an opaque `rgb(234, 238, 234)` interior and a 1 px `rgb(78, 88, 80)` outline. The previous false failure counted the interior as a line; the outline was checked on both grounds. The producer's pixel checks and F's installed-device checks are separate.
+- The exact-height Aa check was assertion-red on Instrument, then the D-9053 floor and ceiling check passed in both skins with the same computed heights. AP-M23 set the rendered Refined row and its minimum to 53 px against a 52 px host floor. It failed the exact minimum comparison, not the ceiling. AP-M24 held Instrument's 32 px minimum and increased the rendered row to 37.0469 px, which failed the 34 px ceiling. Both were measured independently by mutating the open frame's CSSOM; the test input was restored and hash-checked after each. Initial startup and mount failures did not count as red. Candidate for a later library release, not a promise: make Instrument's default label content fit its 32 px floor while preserving text-size and zoom growth.
+- The corrected same-library geometry row passed all eight pairs: two skins at 412 × 915, 600 × 960, 768 × 1024 and 1280 × 800. Across all pairs, head mode stayed the same, each title and byline stayed on one line, and every measured length had a 0 px delta. This fixture's byline makes it different from the one-bar title-budget fixture. The separate 412 × 915 browser rows passed in both skins: one bar, no frame bar, frame at 48 px, title starts at 56 px, tap row 44 px. This is not phone-engine evidence.
+- The four corrected-package browser files passed together before the D-9054 case was added: 226 passes, one expected failure and 41 skips, rc 0. Both worst-frame rows painted and decoded all 30 images within the unchanged 5 MiB image budget. Hosted worst-frame srcdoc was 13 789 513 characters in Refined and 13 789 510 in Instrument (earlier Task 1 witness: 13 600 319 each). The measured mount/ready times were 253.1/2 792.1 ms and 142.3/2 674.2 ms respectively; these are ordinary-run diagnostics, not paired timing acceptance.
+
+#### Corrected AP-5 live-follow timing, attempt 1 (D-9030)
+
+The coordinator measured one-minute load of 14.49 on the 16-core host during the run; individual row start and end loads were not captured. The wrapper reported three shared test-slice OOM kills. The two selected files together had three passes, one failure and 156 skips, rc 1. The light assertion stopped the light row; neither observed timing result is an acceptance verdict.
+
+| Emulated device mode | What was observed | Validity / verdict |
+|---|---|---|
+| Light | In-frame write 152.599853515625 ms after the host stamp, above 100 ms; the transition was not named in that run's output | Not measured: box not quiet |
+| Dark | The timing assertions completed over 41 transitions (38 effective, three applied-appearance no-ops); individual times were not printed | Not measured: box not quiet |
+
+After the D-9030 split, the ordinary correctness checks passed 41 transitions in each mode: light had 39 effective and two no-ops; dark had 38 effective and three no-ops. The probes stayed active across the sequence and counted complete in-frame slot writes synchronously, not MutationObserver batches. The same run passed the restored Aa case (three selected passes, 24 skipped). Ordinary results do not measure latency.
+
+AP-M25 in ordinary mode red on `phosphor → light`: the figure redrew, but there were zero in-frame writes instead of one. AP-M26 in ordinary mode captured two real host appearance messages and forwarded their appearances in reverse order on the next pass; both transitions failed the matching-write assertion. Each input was restored and hash-checked. The initial M25 startup error and M26 setup on a no-op did not count. The later isolated AP-M23–26 runs reproduced each intended assertion with a measured process cap of 4 096 and the 900 s browser deadline, with the input restored and hash-checked after each. AP-M27 has no quiet measurement yet.
+
+#### First full PWA unit run against the corrected package (2026-11-25)
+
+20 970 passed, two skipped and 13 failed across 617 files; no reported type errors, rc 1. Five `reader-pin` assertions still see the deliberately held pin. `browser-dist` caught the new test calling `serveDist(sharedDist())` rather than the existing two-step shared-build idiom. The exact-input unit test saw `#2e3440` from the corrected library instead of `#2E3440`; the raw host input was still uppercase. Six `skin-identity` assertions failed because the existing registry did not list the two applied-appearance readers. The registry-only fix was approved as D-9056.
+
+After the two in-scope test fixes and the D-9056 registry entries, the restored `browser-dist`, `reader-appearance`, `skin-identity` and `docs-scans` suites passed 289 tests with no reported type errors. The raw-input check still requires uppercase from the host, separately from the canonical lowercase library verdict.
+
+D-9056 controls: removing either entry in isolation failed the existing census on that exact module. A third reader planted in the copied tree's `pwa/src/lib/theme.ts` failed on that path with both valid entries still present. All three controls ran with the 4 096 process cap and 600 s deadline and were assertion-red, not timeouts. The temporary cases were removed and the test file restored and hash-checked; only the two registry entries remain. The AP-M21 real-source mutation likewise failed with `src/docs/ReaderFrame.tsx main-bundle:value-import` at the same cap and deadline; the frame source was restored and hash-checked before the green run.
+
+The full restored PWA rerun had 20 978 passes, two skips, five failures across 617 files, and no reported type errors (rc 1). Only `reader-pin` failed: package manifest exact pin; lock root and package integrity; installed package version; installed asset manifest version and protocol; installed asset manifest's pinned hashes. All five require the held final pin; no other case failed.
+
+The restored production build (`tsc --noEmit && vite build`) exited 0. Vite reported a 12.91 s build and the PWA precache had 76 entries; the wrapper reported one kill in the shared test slice, not a failed build or typecheck.
+
+The producer's separate Chromium and WebKit opt-in runs passed on the exact packed commit, each with one ready and no fallback. Signed tag, registry publication and the final pin remain separate gates.
+
+#### Remaining ordinary appearance mutations (2026-11-25)
+
+| Mutation | Intended assertion observed |
+|---|---|
+| AP-M7 | `text` sourced from disabled ink: Refined Phosphor text on page measured 3.226:1 and Refined Light 2.425:1, both below 4.5:1. |
+| AP-M13 | With the hosted seed and fallback preference both absent, the first ready had the stored dark appearance instead of the console's light appearance. |
+| AP-M15 | Removing the skin group produced zero of the ten required skin slots in both the unit and live frame assertions. |
+| AP-M17 | Forcing the section family to sans failed the unit mono comparison and the live Instrument family comparison. |
+| AP-M18 | Substituting the medium token for the large radius made Refined's popover 10 px instead of 14 px. |
+| AP-M19 | Removing the host label failed the unit assertion and showed the library's neutral text instead of the console's Aa label. |
+
+Each selected run exited 1 on a named assertion under the 4 096 process cap and the applicable 600 s or 900 s deadline. The source files were restored and compared to their saved copies.
+
+#### Desktop multi-figure redraw (D-9054)
+
+On the restored package, the four drawn figures sat 3 996.70, 2 528.44, 1 060.17 and 0 px from the viewport in document order. They started and replaced their SVGs in order `[3, 2, 1, 0]`, with four distinct Chromium tasks and the new node fill in each replacement. In the cancellation control, one older timer was held after the first old SVG replacement; the newer appearance then canceled the old queue and every figure finished with the newest node fill (`#434c5e`). The scoped ordinary run passed (one selected, 27 skipped, rc 0). After review, the witness traced both the starts and the SVG replacements, and took the final exact-count and paint snapshot after the released and scheduled zero-delay timers and temporary redraw stages drained. The restored four-file browser run passed (227 passes, one expected failure, 41 skips, rc 0). Each start and its corresponding replacement shared a Chromium task, with four distinct tasks across the four figures. Both AP-5 modes also passed again. Neither ordinary run measured gaps.
+
+| Mutation | Ordinary assertion result |
+|---|---|
+| AP-M28 | Two starts per task: four redraw markers in two Chromium tasks; failed the one-figure-per-task assertion. |
+| AP-M29 | Reversed the distance sort: observed `[0, 1, 2, 3]` instead of `[3, 2, 1, 0]`; failed nearest-first order. |
+| AP-M30 | Removed generation cancellation: after the newer appearance, observed `[2, 3, 1, 2, 0, 1]` instead of `[3, 2, 1, 0]`; failed the old-queue cancellation assertion. |
+
+Each mutant was built separately from the exact producer checkout with matching generated asset manifests. The browser ran with a 4 096 process cap and the 900 s deadline; each exited 1 on its named assertion, not the deadline. The five installed enhancer variants and both manifests were restored and SHA-256 checked after each run. No producer source or release change is needed for these ordinary rows. The quiet gap row and AP-M31 have no timing verdict yet.
+
+#### Docs tab carry after #3289 (2026-11-25)
+
+Main's Docs tab cases and Wave C's per-skin console rows were retained as separate witnesses. The appearance and open-cost fixtures now mark that they open in the console, rather than letting a direct URL choose a standalone Docs tab. The checked tap-target mount fake survived the merge. Post-carry typecheck exited 0; the four scoped unit files passed 196 tests, and the four ordinary browser files passed 241 tests with one expected failure and 41 skips (rc 0). Both AP-5 modes and the task/queue redraw checks passed on the carried build. The eight unchanged corrected-library console BASE pairs had a 0 px maximum delta. The standalone 412 × 915 Docs tab draws one bar with frame at 48 px and title at 56 px in both skins. Those are Chromium fixture measurements, not F's phone-engine evidence.
+
+#### Corrected desktop timing, attempt 1 (D-9030)
+
+Start and end loads were not captured in the original command. The coordinator measured a load of 9 to 11 during the run. The old harness exited 1 on three ceilings before the validity rule was written; those assertion results are not acceptance verdicts. All eight rows are invalid on BASE spread alone (IQR here uses the seventh minus the third sorted sample). D-9018 therefore has no verdict in any row.
+
+| Arm, skin, round | BASE → candidate median (ms) | Hosted delta or mode-only ratio | BASE IQR (ms) | Validity / verdict |
+|---|---:|---:|---:|---|
+| Hosted, Refined, 1 | 151.4 → 217.1 | +65.7 ms | 86.6 | Not measured: reference not quiet |
+| Hosted, Instrument, 1 | 175.3 → 135.1 | −40.2 ms | 80.4 | Not measured: reference not quiet |
+| Hosted, Refined, 2 | 139.7 → 116.7 | −23.0 ms | 72.5 | Not measured: reference not quiet |
+| Hosted, Instrument, 2 | 113.0 → 205.5 | +92.5 ms | 90.7 | Not measured: reference not quiet |
+| Mode-only, Refined, 1 | 133.9 → 171.5 | 1.281× | 113.6 | Not measured: reference not quiet |
+| Mode-only, Instrument, 1 | 134.8 → 132.6 | 0.984× | 105.9 | Not measured: reference not quiet |
+| Mode-only, Refined, 2 | 134.8 → 134.9 | 1.001× | 27.3 | Not measured: reference not quiet |
+| Mode-only, Instrument, 2 | 203.4 → 192.9 | 0.948× | 122.4 | Not measured: reference not quiet |
+
+At the local build-ahead cut, including the #3289 carry, no further paired attempt started below the D-9030 load threshold. The one-minute load after the final ordinary checks was 6.51. Both hosted skins and both mode-only skins remain unmeasured in rounds 1 and 2. The AP-5 light and dark ceilings, the multi-figure redraw-gap ceiling, and the AP-M27 and AP-M31 delay controls also remain unmeasured; their ordinary counterparts are not timing evidence. A quiet retake and F's phone/pixel checks are separate from this local proof.
+
+Raw samples, in open order, milliseconds displayed to a tenth; the harness log retains full precision:
+
+| Arm, skin, round | BASE samples | Candidate samples |
+|---|---|---|
+| Hosted, Refined, 1 | 198.1, 119.3, 151.4, 269.4, 199.5, 98.8, 81.6, 176.7, 111.5 | 318.4, 217.1, 320.4, 123.9, 229.7, 146.8, 113.9, 191.0, 243.0 |
+| Hosted, Instrument, 1 | 231.5, 252.9, 151.1, 289.0, 131.4, 208.7, 175.3, 135.9, 169.2 | 167.5, 130.0, 135.1, 106.8, 206.0, 153.7, 103.8, 106.0, 150.9 |
+| Hosted, Refined, 2 | 88.0, 139.7, 203.4, 207.2, 83.3, 185.9, 115.7, 113.4, 181.6 | 299.3, 173.1, 273.0, 116.7, 103.5, 104.4, 102.5, 144.9, 107.1 |
+| Hosted, Instrument, 2 | 216.3, 95.7, 138.1, 108.6, 286.9, 186.4, 113.0, 89.5, 86.1 | 318.6, 205.5, 375.7, 168.2, 151.2, 118.0, 203.0, 220.7, 265.9 |
+| Mode-only, Refined, 1 | 94.9, 208.5, 135.9, 564.5, 844.8, 81.1, 83.4, 100.2, 133.9 | 81.3, 171.5, 159.4, 210.8, 123.7, 209.9, 222.2, 150.0, 204.4 |
+| Mode-only, Instrument, 1 | 221.6, 189.8, 102.1, 107.6, 94.4, 134.8, 94.4, 208.0, 288.7 | 97.3, 111.7, 109.7, 265.4, 194.8, 132.6, 295.5, 375.5, 123.3 |
+| Mode-only, Refined, 2 | 321.8, 135.9, 138.5, 110.5, 111.2, 114.2, 134.8, 190.9, 103.8 | 186.8, 138.5, 134.9, 89.8, 93.8, 153.3, 123.4, 109.7, 143.8 |
+| Mode-only, Instrument, 2 | 210.9, 130.4, 115.8, 98.4, 305.2, 270.6, 203.4, 102.8, 238.2 | 122.0, 142.4, 172.5, 237.2, 96.7, 192.9, 204.8, 499.6, 313.5 |

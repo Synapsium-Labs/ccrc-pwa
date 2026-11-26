@@ -1,6 +1,7 @@
 // The router's search channel (native Docs reader, W4 Task 7; design 2026-10-01 section 4.2, row M4.R1's W4 half,
 // the W4 plan's refinements (a) and (o)). `useLocation()` re-renders on a change of the search alone, splits at the
-// FIRST '?', follows back/forward, and removes its listener on unmount; `usePath()` is its wrapper and still
+// FIRST '?', follows back/forward, and ends its subscription on unmount (through the one `popstate` dispatcher since X2
+// P5.3); `usePath()` is its wrapper and still
 // re-renders a component that reads nothing else; `navigate(href, {replace: true})` rewrites the current history
 // entry instead of adding one. M4.R1's W5 half ("injected `loaders.tree` called with ref `b`") is W5's: this file
 // proves the channel on probes, never on a Docs screen.
@@ -9,6 +10,20 @@ import type { ReactNode } from 'react';
 import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { navigate, useLocation, usePath } from '../src/lib/router';
 import type { Loc } from '../src/lib/router';
+
+/** Every `onPop` subscription, with the unsubscribe it handed back (X2 P5.3: the hooks subscribe through the dispatcher). */
+const pops = vi.hoisted(() => ({ subscribed: [] as { listener: () => void; unsubscribe: ReturnType<typeof vi.fn> }[] }));
+vi.mock('../src/lib/popstate', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../src/lib/popstate')>();
+  return {
+    ...real,
+    onPop: (listener: () => void) => {
+      const unsubscribe = vi.fn(real.onPop(listener));
+      pops.subscribed.push({ listener, unsubscribe });
+      return unsubscribe;
+    },
+  };
+});
 
 afterEach(() => {
   cleanup();
@@ -81,16 +96,22 @@ describe('useLocation: the search channel (M4.R1, W4 half)', () => {
     await waitFor(() => expect(last(seen)).toEqual({ path: '/docs/p', search: '?ref=a' }));
   });
 
-  it('removes on unmount exactly the popstate listener it added on mount', () => {
+  // Changed by X2 P5.3 (D-8763), an intended behaviour change: the hook no longer adds a `popstate` listener of its own.
+  // It subscribes through the one dispatcher (`lib/popstate.ts#onPop`), which holds the window's only listener.
+  it('each mounted hook subscribes once through onPop, the window holds one popstate listener however many hooks are mounted, and unmount unsubscribes exactly what it subscribed', () => {
     const add = vi.spyOn(window, 'addEventListener');
     const remove = vi.spyOn(window, 'removeEventListener');
+    pops.subscribed.length = 0;
     try {
-      const { unmount } = render(<LocProbe seen={[]} />);
+      const { unmount } = render(<><LocProbe seen={[]} /><LocProbe seen={[]} /><LocProbe seen={[]} /></>);
+      expect(pops.subscribed, 'one subscription per mounted hook').toHaveLength(3);
       const added = add.mock.calls.filter(([type]) => type === 'popstate').map(([, fn]) => fn);
-      expect(added, 'one listener per mounted hook').toHaveLength(1);
+      expect(added, 'one window listener for the three hooks').toHaveLength(1);
+      expect(pops.subscribed.every((s) => s.unsubscribe.mock.calls.length === 0)).toBe(true);
       unmount();
+      expect(pops.subscribed.map((s) => s.unsubscribe.mock.calls.length), 'each subscription ended once').toEqual([1, 1, 1]);
       const removed = remove.mock.calls.filter(([type]) => type === 'popstate').map(([, fn]) => fn);
-      expect(removed).toEqual(added);
+      expect(removed, 'and the window listener with the last').toEqual(added);
     } finally {
       add.mockRestore();
       remove.mockRestore();

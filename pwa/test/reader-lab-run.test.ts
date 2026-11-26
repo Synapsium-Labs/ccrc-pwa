@@ -128,7 +128,7 @@ function rig(o: RigOptions = {}): Rig {
         inputs.push(input);
         const index = inputs.length - 1;
         queueMicrotask(() => { input.onReady(); o.afterReady?.(input, index); });
-        return { destroy: vi.fn(() => { liveReaders -= 1; }), setPrefs: vi.fn() } satisfies ReaderMount;
+        return { seed: { hosted: false }, follow: vi.fn(), destroy: vi.fn(() => { liveReaders -= 1; }), setPrefs: vi.fn() } satisfies ReaderMount;
       },
       frame: () => Promise.resolve((clock += 16)),
       now: () => clock,
