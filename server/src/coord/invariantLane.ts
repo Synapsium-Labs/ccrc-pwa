@@ -22,7 +22,7 @@ import { INVARIANTS_LANE } from '../../../shared/lane-arm.js';
 import { serverActorOf } from '../auth/attributionIdentity.js';
 import { INVARIANT_TABLE_SWEEP_MS } from '../laneSchedule.js';
 import { gatherInvariantInput, sequenceHead, type InvariantFactsDeps } from './invariantFacts.js';
-import { openFindings, recordFinding, resolveFindings } from './invariantFindingsStore.js';
+import { findingCounts, findingRows, openFindings, recordFinding, resolveFindings } from './invariantFindingsStore.js';
 import { laneArmRowViewOf } from './laneArm.js';
 import { raiseLatch } from './overlordLadderRead.js';
 import type { AuthorityAppender } from './overlordLadderStore.js';
@@ -61,11 +61,15 @@ export class InvariantMonitor {
   /** The last pass's verdicts, or null before the first. */
   last(): InvariantPass | null { return this.lastVerdicts; }
 
+  /** The arming now, the one reading every pass and the operator's read take: `live` when the `invariants` row is Live, else
+   *  `shadow` (an unreadable row is not Live). */
+  mode(): FindingMode { return this.deps.armed() ? 'live' : 'shadow'; }
+
   /** One pass. `itemReach` is the watcher's bound-row writer for an item shown at its raise (the other `ccrc` raisers' seam).
    *  Never throws past a log line: a failed step logs and the next pass retries. */
   pass(itemReach?: ItemReachOf): void {
     const d = this.deps;
-    const mode: FindingMode = d.armed() ? 'live' : 'shadow';
+    const mode = this.mode();
     const head = d.head();
     const now = { head: head.kind === 'measured' ? head.value : 'unmeasured' as const, mode, atMono: d.clock.mono() };
     if (!invariantPassDue(now, this.lastPass, d.tableSweepMs)) return;
@@ -123,4 +127,18 @@ export function invariantMonitorOver(o: {
       serverActorOf('invariants')),
     clock: o.clock, tableSweepMs: INVARIANT_TABLE_SWEEP_MS, log: o.log,
   });
+}
+
+/** The operator's read of the monitor (sequence C, `GET /api/overlord/invariants`) over the same `coord.db` the monitor writes:
+ *  the monitor's own mode and last pass, and the findings store's two list reads and its counts. Built once in `server.ts`. */
+export function invariantsReadOver(monitor: Pick<InvariantMonitor, 'mode' | 'last'>, db: DatabaseSync): {
+  readonly mode: () => FindingMode; readonly last: () => InvariantPass | null;
+  readonly open: (limit: number) => ReturnType<typeof findingRows>; readonly resolved: (limit: number) => ReturnType<typeof findingRows>;
+  readonly counts: () => ReturnType<typeof findingCounts>;
+} {
+  return {
+    mode: () => monitor.mode(), last: () => monitor.last(),
+    open: (limit) => findingRows(db, 'open', limit), resolved: (limit) => findingRows(db, 'resolved', limit),
+    counts: () => findingCounts(db),
+  };
 }

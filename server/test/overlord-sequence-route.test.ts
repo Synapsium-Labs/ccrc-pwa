@@ -14,6 +14,7 @@ import { genExpectOf, type GenRow, type MintInput } from '../src/continuity/cont
 import { openCoordDb } from '../src/coord/db.js';
 import { findingCounts, findingRows, recordFinding } from '../src/coord/invariantFindingsStore.js';
 import { INVARIANT_NAMES, type InvariantName, type InvariantVerdict } from '../src/coord/invariants.js';
+import type { InvariantMonitor } from '../src/coord/invariantLane.js';
 import { overlordGateRun, type OverlordGateDeps } from '../src/coord/overlordGateRun.js';
 import { actKeyFact, advanceCounterGuarded, recordFenceRefusal } from '../src/coord/overlordGateStore.js';
 import { runOverlordRead, type OverlordReadDeps } from '../src/coord/overlordRead.js';
@@ -320,6 +321,15 @@ describe('GET /api/overlord/invariants: the operator\'s read of the monitor', ()
     expect(body.counts.shadow).toMatchObject({ total: 2, open: 1 });
   });
 
+  it('no monitor on this server: 503 unavailable, never no-pass-yet and never an empty list', async () => {
+    const app = Fastify({ logger: false });
+    apps.push(app);
+    registerOverlordRoutes(app, { coord: new CoordStore(sequenceDb([])), facts: {}, serial: async (f: () => unknown) => f() } as unknown as OverlordRouteDeps);
+    const res = await app.inject({ method: 'GET', url: '/api/overlord/invariants' });
+    expect(res.statusCode).toBe(REFUSAL_STATUS.unavailable);
+    expect(json(res)).toMatchObject({ ok: false, error: 'unavailable' });
+  });
+
   it('an unreadable findings table is 503 unavailable, never an empty list', async () => {
     const db = sequenceDb([]);
     db.exec('DROP TABLE overlord_invariant_findings');
@@ -334,7 +344,9 @@ describe('GET /api/overlord/invariants: the operator\'s read of the monitor', ()
     writeFileSync(path.join(home, '.ccrc', 'auth.scrypt'), `${await hashLine('fixture-passphrase', { n: 1024, r: 8, p: 1, keylen: 32 }, 1)}\n`);
     const base = testDeps(home);
     const coordDb = sequenceDb([]);
-    const app = await buildServer({ ...base, cfg: { ...base.cfg, authEnabled: true, cookieSecure: false }, coord: new CoordStore(coordDb) });
+    // A stand-in monitor that has run no pass: the read is wired only where a monitor and a store are (the composition root's).
+    const invariantMonitor = { mode: () => 'shadow', last: () => null } as unknown as InvariantMonitor;
+    const app = await buildServer({ ...base, cfg: { ...base.cfg, authEnabled: true, cookieSecure: false }, coord: new CoordStore(coordDb), invariantMonitor });
     apps.push(app);
     expect((await app.inject({ method: 'GET', url: '/api/overlord/invariants' })).statusCode).toBe(REFUSAL_STATUS.unauthenticated);
     const login = await app.inject({ method: 'POST', url: '/api/auth/login', headers: { 'user-agent': 'lane-a' }, payload: { passphrase: 'fixture-passphrase' } });
