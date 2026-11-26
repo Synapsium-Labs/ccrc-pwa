@@ -139,7 +139,12 @@ const ROLE_BEARING: Readonly<Record<string, RoleBearing>> = {
   // D-5102 (Task 11): the page scaffold. The header's height and the gutters
   // are density roles, the title the page's type role; the caret shares the
   // title's size, so it reads the same role.
-  'page-scaffold.tsx': { roles: ['text-title', 'px-gutter', 'min-h-head'], allow: [] },
+  'page-scaffold.tsx': {
+    roles: ['text-title', 'px-gutter', 'min-h-head'],
+    allow: [
+      { cls: 'min-h-[min(var(--row-h),var(--tap-min))]', why: "the head row's controls under a mouse (desktop polish wave 182): the smaller of the row role and the tap floor, Instrument's 32 in its 40 row and Refined's 44 in its 56; two tokens, no step, and no single role equals it (no new token, by ruling)" },
+    ],
+  },
   // A section's title is the section role, and its card's padding the card
   // role (D-5666: the scope tag and the purpose line ride the same census).
   'section.tsx': {
@@ -500,7 +505,8 @@ describe('the role census (D-5093)', () => {
       expect(ROLE_BEARING[f], `${f} is role-bearing`).toBeDefined();
       expect(primitiveFiles()).toContain(f);
     }
-    expect(ROLE_BEARING['page-scaffold.tsx']!.allow).toEqual([]);
+    // Its one entry is the head row's control height, built from two tokens and no step (wave 182).
+    expect(ROLE_BEARING['page-scaffold.tsx']!.allow.map((a) => a.cls)).toEqual(['min-h-[min(var(--row-h),var(--tap-min))]']);
     expect(ROLE_BEARING['empty-state.tsx']!.allow).toEqual([]);
   });
 

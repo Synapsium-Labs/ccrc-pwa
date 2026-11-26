@@ -10,6 +10,11 @@
      measures every line below against it through the named-ancestor route instead of the uncovered census. */
   background: var(--bg-page); color: var(--ink-primary);
 }
+/* At a desk the digest starts at the skin's `--gutter`, the inset every detail screen shares, and its column centres or
+   stays at the gutter as the skin's `--page-margin-inline` says (desktop polish wave 182). The phone keeps its pad. */
+@media (min-width: 900px) {
+  .digest-screen { padding-inline: var(--gutter); margin-inline: var(--page-margin-inline); }
+}
 .digest-head { display: flex; align-items: center; gap: var(--sp-2); }
 .digest-screen .digest-title { font: var(--weight-medium) var(--fs-base) / var(--lh-tight) var(--family-mono); color: var(--ink-primary); }
 .digest-days { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); }

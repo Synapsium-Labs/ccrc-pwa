@@ -28,9 +28,13 @@
 /* At a desk the list and the item take the page column's rules too (wave 182): the head is a `--head-h` row with the title
    centred in it, as the scaffold's is, so every detail screen's title sits on one line; the column starts at the gutter or
    centres as the skin's `--page-margin-inline` says; the title is `--sp-2` above the first line and the groups are `--sp-3`
-   apart, the scaffold's head-to-body and body gaps. The item view and its strip take the inset and the column rule. */
+   apart, the scaffold's head-to-body and body gaps. The head row and the rhythm are the list's alone (the `.wl` that holds a
+   `.wl-head`); the screens that share its root (a programme, an epic, upkeep, the item route's notes and side list) take
+   the inset and the column rule only, and keep their own heads. The item view and its strip take the inset and the column
+   rule. */
 @media (min-width: 900px) {
-  .wl { padding-block-start: 0; row-gap: var(--sp-3); margin-inline: var(--page-margin-inline); }
+  .wl { margin-inline: var(--page-margin-inline); }
+  .wl:has(> .wl-head) { padding-block-start: 0; row-gap: var(--sp-3); }
   .wl > .wl-head { min-height: var(--head-h); margin-block-end: calc(var(--sp-2) - var(--sp-3)); }
   .wi { padding-inline: var(--gutter); margin-inline: var(--page-margin-inline); }
   .wi-nav { padding-inline: var(--gutter); margin-inline: var(--page-margin-inline); }
