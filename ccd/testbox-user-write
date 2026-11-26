@@ -40,10 +40,10 @@ TBA_PUT_FN='tba_put() { b=$1; f=$2; m=$3; case $f in "$b"/?*) ;; *) echo put-out
 # in it, and walks the folders of the token's path that exist: each must be a real directory at its own physical path, the
 # user's, or root's holding nothing but the next name on the path (a folder this verb made as root before it wrote as the user,
 # which root hands to the user by changing the owner of the folder it stands in). Then it drops to the user, who writes the token.
-# shellcheck disable=SC2016  # expanded by the box's sh, not here
+# shellcheck disable=SC2016,SC2034  # expanded by the box's sh, not here; read by ccd/ccrc-testbox-admin
 TBA_TOKEN_PUT_SH='set -e; s=$2; w=$3; h=${4:-/var/lib}/$s; p=$1; case $p in "~/"*) p=$h/${p#"~/"};; esac; case $p in "$h"/?*) ;; *) echo token-path; exit 5;; esac; u=$(id -u -- "$s") && g=$(id -g -- "$s") || { echo token-user; exit 5; }; case "$u.$g" in *[!0-9.]*|.*|*.) echo token-user; exit 5;; esac; [ "$u" != 0 ] || { echo token-user; exit 5; }; x=$(cd -P -- "${h%/*}" && pwd -P) || { echo token-home; exit 5; }; x=${x%/}/$s; cd -P -- "$h" 2>/dev/null && [ "$(pwd -P)" = "$x" ] || { echo token-home; exit 5; }; set -- $(ls -ldn .); [ "${3-}" = "$u" ] || { echo token-home; exit 5; }; r=${p#"$h"/}; while :; do case $r in */*) n=${r%%/*}; r=${r#*/};; *) break;; esac; x=$x/$n; [ -e "$x" ] || [ -L "$x" ] || break; if ! cd -P -- "$n" 2>/dev/null || [ "$(pwd -P)" != "$x" ]; then echo token-dir; exit 5; fi; set -- $(ls -ldn .); if [ "${3-}" = 0 ]; then l=$(ls -A .); [ -z "$l" ] || [ "$l" = "${r%%/*}" ] || { echo token-dir-owner; exit 5; }; chown "$u:$g" .; elif [ "${3-}" != "$u" ]; then echo token-dir-owner; exit 5; fi; done; cd /; exec '"$TBA_DROP"' sh -c "$w" sh "$h" "$p"'
 # The writer, as the service user: $1 its home, $2 the token's path; stdin the token. The file is 0600, the folders it makes 0755.
-# shellcheck disable=SC2016  # expanded by the box's sh, not here
+# shellcheck disable=SC2016,SC2034  # expanded by the box's sh, not here; read by ccd/ccrc-testbox-admin
 TBA_TOKEN_WRITE_SH="$TBA_PUT_FN"'; umask 022; tba_put "$1" "$2" 0600'
 # The edits of the login user's access key file, run as that user (TBA_SSH_NOSUDO: they never become root), each through the
 # one writer, so the file keeps its mode and times and is replaced by one rename. `$1` is the login user. ADD appends `$2` (the
@@ -55,15 +55,15 @@ TBA_TOKEN_WRITE_SH="$TBA_PUT_FN"'; umask 022; tba_put "$1" "$2" 0600'
 # of ccrc's lines that does not hold `$3`, so a line an interrupted rotate left goes too, and every line holding the old key `$5`
 # whatever its comment; with `$2` = all (Disconnect, key-revoke) it takes out every one of ccrc's lines and every line holding
 # `$5`. No other line is touched. Each checks the file and its folder (`check`) before it reads the file.
-# shellcheck disable=SC2016  # expanded by the box's sh, not here
+# shellcheck disable=SC2016,SC2034  # expanded by the box's sh, not here; read by ccd/ccrc-testbox-admin
 TBA_AK_ADD="$TBA_PUT_FN"'; set -e; h=$(getent passwd "$1" | cut -d: -f6); f=$h/.ssh/authorized_keys; tba_put "$h" "$f" check; [ -f "$f" ] || exit 3; if awk -v k="$3" '"'"'{ for (i = 1; i <= NF; i++) if ($i == k) f = 1 } END { exit !f }'"'"' "$f"; then exit 0; fi; c=$(awk 1 "$f"); { [ -z "$c" ] || printf "%s\n" "$c"; printf "%s\n" "$2"; } | tba_put "$h" "$f" keep'
-# shellcheck disable=SC2016  # expanded by the box's sh, not here
+# shellcheck disable=SC2016,SC2034  # expanded by the box's sh, not here; read by ccd/ccrc-testbox-admin
 TBA_AK_DROP="$TBA_PUT_FN"'; set -e; h=$(getent passwd "$1" | cut -d: -f6); f=$h/.ssh/authorized_keys; tba_put "$h" "$f" check; [ -f "$f" ] || exit 0; c=$(awk -v m="$2" -v k="$3" -v o="${5-}" "$4" "$f"); { [ -z "$c" ] || printf "%s\n" "$c"; } | tba_put "$h" "$f" keep'
 # The repair's copy over the installed tree, as root: $1 the tools folder, $2 the staging folder, $3 the tag. Exit 3: the
 # installed tree names another tag (other-release). The tree and every folder above it to `/` must be a real directory of
 # root's that neither group nor other may write, and every entry of the tree root's and not writable by group or other (what
 # the installer's release step leaves), so no less privileged user can change a name the copy, the owner change or the mode
 # change acts on; anything else refuses with a word and exit 4 before anything is written. Then the copy, the owner and the mode.
-# shellcheck disable=SC2016  # expanded by the box's sh, not here
+# shellcheck disable=SC2016,SC2034  # expanded by the box's sh, not here; read by ccd/ccrc-testbox-admin
 TBA_TREE_COPY_SH='set -e; t=$1/release; s=$2; v=$3; [ "$(basename "$(readlink "$t/installed")")" = "$v" ] || exit 3; [ -d "$t/$v" ] || exit 3; p=$t/$v; while :; do if [ -L "$p" ] || [ ! -d "$p" ]; then echo tree-kind; exit 4; fi; set -- $(ls -ldn -- "$p"); [ "${3-}" = 0 ] || { echo tree-owner; exit 4; }; case "$1" in ?????w*|????????w*) echo tree-mode; exit 4;; esac; [ "$p" != / ] || break; p=$(dirname -- "$p"); done; e=$(find "$t/$v" \( ! -user 0 -o -perm -g+w -o -perm -o+w \) ! -type l -print -quit); [ -z "$e" ] || { echo tree-entry; exit 4; }; cp -RP -- "$s"/. "$t/$v"/; chown -R -h root:root "$t/$v"; chmod -R go-w "$t/$v"'
 # ── BOX-SIDE COMMANDS (end) ──────────────────────────────────────────────────────────────────────────────────────

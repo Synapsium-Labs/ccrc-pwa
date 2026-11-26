@@ -5,7 +5,7 @@
 // test user (chown is a no-op shim, the installer runs under the TB_SYS fixture).
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { makeBox, makeWorld, install, REPO, type Box, type World } from './testboxBoxFixture.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
@@ -15,7 +15,9 @@ removeTmpFixturesEachTest();
 const ADMIN = readFileSync(path.join(REPO, 'ccd', 'ccrc-testbox-admin'), 'utf8');
 const SNIPPET = /^\s*_tba_cx_out sh -c '(umask 077; p=\$1; d=\$\(dirname "\$p"\);[^']*)' sh "\$TBA_BOX_ENV_PATH"/m.exec(ADMIN)?.[1];
 
-const TOKEN_SNIPPET = /^\s*_tba_cx_out sh -c '(umask 022; p=\$1; case \$p in[^']*)' sh "\$svc_tok"/m.exec(ADMIN)?.[1];
+// The token step's two programs, in their own file since testbox-admin-hardening (written as the service user, through the drop).
+const USER_WRITE = path.join(REPO, 'ccd', 'testbox-user-write');
+const helperText = (name: string): string => spawnSync('bash', ['-c', `. "$1"; printf %s "\${!2}"`, '_', USER_WRITE, name], { encoding: 'utf8' }).stdout;
 // The installer and its steps (deploy/testbox/box-steps since D-8903, which the box updater calls too).
 const INSTALLER = ['install.sh', 'box-steps'].map((f) => readFileSync(path.join(REPO, 'deploy', 'testbox', f), 'utf8')).join('\n');
 
@@ -90,19 +92,26 @@ describe('connect: try again against the real installer (D-8166, TC7)', () => {
   it('the service token is written again over the one a first pairing left, at 0600 (a second pairing of the same box)', () => {
     const shim = mkTmp('ccrc-tb-token-shim-');
     shimOwners(shim);
-    const dir = mkTmp('ccrc-tb-token-');
-    const file = path.join(dir, 'svc', 'testbox-service.token');
-    const script = path.join(shim, 'token-write.sh');
-    writeFileSync(script, `${TOKEN_SNIPPET!}\n`);
+    // The service user is this test's own user, and the drop starts what follows `--` as this user (no root here).
+    const uid = process.getuid?.() ?? 0;
+    const gid = process.getgid?.() ?? 0;
+    writeFileSync(path.join(shim, 'id'), `#!/bin/sh\ncase "$1" in -u) echo ${uid} ;; -g) echo ${gid} ;; *) exit 1 ;; esac\n`, { mode: 0o755 });
+    writeFileSync(path.join(shim, 'setpriv'), '#!/bin/sh\nwhile [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done; shift\nexec "$@"\n', { mode: 0o755 });
+    const homes = realpathSync(mkTmp('ccrc-tb-token-'));
+    mkdirSync(path.join(homes, 'svc-user'));
+    const file = path.join(homes, 'svc-user', '.ccrc', 'testbox-service.token');
+    const put = helperText('TBA_TOKEN_PUT_SH');
     const write = (tok: string): number =>
-      spawnSync('sh', [script, file, 'svc-user'], { input: tok, encoding: 'utf8', env: { ...process.env, PATH: `${shim}:${process.env.PATH ?? ''}` } }).status ?? -1;
+      spawnSync('sh', ['-c', put, 'sh', '~/.ccrc/testbox-service.token', 'svc-user', helperText('TBA_TOKEN_WRITE_SH'), homes],
+        { input: tok, encoding: 'utf8', env: { ...process.env, PATH: `${shim}:${process.env.PATH ?? ''}` } }).status ?? -1;
     expect(write('a'.repeat(64))).toBe(0);
     expect(readFileSync(file, 'utf8')).toBe('a'.repeat(64));
     expect(write('b'.repeat(64))).toBe(0);
     expect(readFileSync(file, 'utf8')).toBe('b'.repeat(64));
     expect(mode(file)).toBe('600');
     expect(readdirSync(path.dirname(file))).toEqual(['testbox-service.token']);
-    expect(TOKEN_SNIPPET).not.toContain('/dev/stdin');
+    expect(put + helperText('TBA_TOKEN_WRITE_SH')).not.toContain('/dev/stdin');
+    expect(ADMIN).toContain('_tba_cx_out sh -c "$TBA_TOKEN_PUT_SH" sh "$svc_tok" "${CX_VAL[SVC]}" "$TBA_TOKEN_WRITE_SH"');
   });
 
   it('the installer sets a mirror\'s config by its file, so a second run does not open a repository the service user owns', () => {
