@@ -275,8 +275,9 @@ Known limits sentence on the unfenced history read.
 
 ## The gate's counts
 
-The coordinator read the rows by diff before they were committed (call 1606). Measured on this branch, which is main `87c64a957a`
-plus this work; `origin/HEAD` was `7c365dedaf` (#3426), which changes no route.
+The coordinator read the rows by diff before they were committed (call 1606). First measured on main `87c64a957a` plus this work.
+Re-derived in fix round 1 on the merged tree (merge commit `1d9a96358d`, main `6f3f88143e`): main brought no route, gate or client
+change, the censuses that pin these counts are green there, and every figure below stands. Neither #3455 nor #3460 had landed.
 
 | Count | Main | This branch |
 |---|---|---|
