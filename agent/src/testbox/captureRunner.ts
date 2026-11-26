@@ -82,6 +82,8 @@ export interface CaptureDeliveryDeps {
   readonly driver: DeliveryDriver;
   /** The fleet's shipped tmux config (`ccd/tmux.conf` in the release tree), or null for none. */
   readonly tmuxConf: string | null;
+  /** The test box's own release tag, which the part's result carries; null when it is not known (never a made-up tag). */
+  readonly release: string | null;
   /** The settle and quiet bounds of one case: `CaptureTimings.deliverySettleMs` and `deliveryQuietMs`, from the one
    *  contract the runner is built from (`main.ts#captureRunnerFor`). */
   readonly settleMs: number;
@@ -187,8 +189,11 @@ export class CaptureRunner {
         const s = standIn;
         const pathVar = deliveryEnv.find(([k]) => k === 'PATH')?.[1] ?? '';
         const out = await runDeliveryDrive({
-          launched: l, life: () => lifeOf(l), requests: s.requests, records: () => this.recorded(p.recording).records,
+          launched: l, life: () => lifeOf(l), requests: s.requests, routes: s.routes, records: () => this.recorded(p.recording).records,
           input: { capture: p.dir, tmux: p.tmux }, place: { path: pathVar, tmpBase: this.d.tmuxBase }, build, part: part!, driver: delivery.driver, settleMs: delivery.settleMs, quietMs: delivery.quietMs,
+          release: delivery.release,
+          // A pane started with no tmux config (the release tree had none) is not the fleet's pane: the result says so.
+          unmeasured: delivery.tmuxConf === null ? ['fleet-tmux-config'] : [],
           stepTimeoutMs: this.d.stepTimeoutMs, exitTimeoutMs: this.d.exitTimeoutMs, pollMs: this.d.pollMs, sleep, now,
         });
         return { result: null, delivery: out.delivery, detail: out.detail };

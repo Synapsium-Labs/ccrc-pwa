@@ -11,10 +11,10 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { readTestboxCaptureReply } from '../../shared/agent-protocol.js';
 import { deliveryCaseText, deliveryExpected } from '../../shared/deliveryCapture.js';
-import { DELIVERY_PART_COUNT, deliveryParts, readDeliveryCaptureResult } from '../../shared/deliveryResult.js';
+import { DELIVERY_PART_COUNT, deliveryParts, readDeliveryCaptureResult, type DeliveryRoute } from '../../shared/deliveryResult.js';
 import { CAPTURE_SOCKET, CAPTURE_TMUX_SESSION, captureBuildsDir, captureEnv, capturePaths, standInReply } from '../src/testbox/capture.js';
 import { DELIVERY_PANE, DELIVERY_REPLY_TEXT, deliveryStandInReply } from '../src/testbox/captureDelivery.js';
-import { nodeDeliveryDriver, readDriverAnswer, type DeliveryDriver, type DriverAnswer } from '../src/testbox/captureDeliveryRun.js';
+import { nodeDeliveryDriver, readDriverAnswer, DRIVER_BOX_FAULT_SENDS, runDeliveryDrive, type DeliveryDriveContext, type DeliveryDriver, type DriverAnswer } from '../src/testbox/captureDeliveryRun.js';
 import { recorderPath } from '../src/testbox/captureRecord.js';
 import { CAPTURE_SHELL, CAPTURE_START, CaptureRunner, DELIVERY_NO_PART, tmuxLauncher, type CaptureLaunchSpec, type CaptureLauncher, type CaptureRunnerDeps } from '../src/testbox/captureRunner.js';
 import { startStandIn } from '../src/testbox/captureStub.js';
@@ -33,6 +33,8 @@ const SPLITS = '2.1.989';
 const TRUNCATES = '2.1.988';
 const DIES = '2.1.987';
 const SIDE = '2.1.986';
+const LATE = '2.1.985';
+const COUNTS = '2.1.984';
 /** The settle and quiet bounds the runner is handed (`CaptureDeliveryDeps`); the driver's bound is the fake driver's own. */
 const BOUNDS = { settleMs: 8_000, quietMs: 150 } as const;
 
@@ -78,7 +80,7 @@ function runner(root: string, launcher: CaptureLauncher, driver: DeliveryDriver 
     root, tmuxBase: root, recorder: RECORDER, toolsPath: () => NODE_DIR, launcher,
     standIn: (reply) => startStandIn(reply === undefined ? {} : { reply }),
     stepTimeoutMs: 20_000, exitTimeoutMs: 10_000, pollMs: 50, stopWaitMs: 5000, standInCloseMs: 2000,
-    ...(driver === null ? {} : { delivery: { driver, tmuxConf: null, ...BOUNDS } }), ...over,
+    ...(driver === null ? {} : { delivery: { driver, tmuxConf: null, release: null, ...BOUNDS } }), ...over,
   });
 }
 
@@ -150,7 +152,7 @@ describe('a delivery capture of a build that receives every prompt intact', () =
     const l = pipeLauncher();
     const r = await runner(root, l.launcher, typingDriver(l.child)).run('side', SIDE, 'delivery', 0);
     expect(r.delivery?.word).toBe('intact');
-    expect(r.delivery?.cases.every((c) => c.sideRequests >= 1)).toBe(true);
+    expect(r.delivery?.cases.every((c) => c.sideRequests.messages >= 1 && c.sideRequests.count_tokens === 0)).toBe(true);
   }, 120_000);
 });
 
@@ -319,7 +321,7 @@ describe('a fault of the box is never a verdict, and the directories go on every
     const panePath = new Map(l.specs[0]!.env).get('PATH');
     expect(panePath).toContain(NODE_DIR);
     expect(new Set(paths)).toEqual(new Set([panePath]));
-  });
+  }, 120_000);
 });
 
 // The delivery recipe's launch on a REAL tmux (the capture owner's call 1208, condition 3): the fleet's shipped config and
@@ -436,6 +438,17 @@ describe('the driver child', () => {
     expect(readDriverAnswer(0, '{"send":"ok","extra":1}')).toMatchObject({ kind: 'fault' });
   });
 
+  it('a driver whose own tmux call could not complete exits non-zero with a fault word: a fault, never a send, whatever send word it carries (review 3882 F2)', () => {
+    expect(readDriverAnswer(3, '{"fault":"tmux-call","send":"not-alive","detail":"the pane is gone"}')).toMatchObject({ kind: 'fault', detail: expect.stringMatching(/exited 3/) });
+    expect(readDriverAnswer(3, '{"send":"ok"}')).toMatchObject({ kind: 'fault' });
+  });
+
+  it('not-alive at exit 0 is a fault of the box (the capture\'s own session is not alive), never the product\'s refusal', () => {
+    expect(readDriverAnswer(0, '{"send":"not-alive"}')).toMatchObject({ kind: 'fault', detail: expect.stringMatching(/not-alive/) });
+    expect(DRIVER_BOX_FAULT_SENDS).toContain('not-alive');
+    expect(readDriverAnswer(0, '{"send":"verify-failed"}')).toEqual({ kind: 'sent', send: 'verify-failed' });
+  });
+
   it('is given the capture\'s directories and a case id on stdin, never text, in an environment built from empty', async () => {
     const dir = mkTmp('ccrc-capdel-echo-');
     const seen = path.join(dir, 'seen.json');
@@ -478,5 +491,161 @@ describe('the op\'s reader reads a delivery reply only as one', () => {
     expect(readTestboxCaptureReply({ ...reply, delivery: { ...reply.delivery, word: 'fault' } }, GOOD, 'delivery', 0)).toBeNull();
     expect(readTestboxCaptureReply({ outcome: 'answered', refusal: null, result: null, detail: null }, GOOD, 'delivery', 0)).toBeNull();
     expect(readTestboxCaptureReply(reply, GOOD)?.delivery).toBeUndefined();
+  }, 120_000);
+});
+
+// The stand-in tags each request with the route it came by (review 3882 F4); `requests` itself is build trust's and stays.
+describe('the stand-in records the route of each request beside its body', () => {
+  it('a Messages request and a count_tokens request, over real HTTP, each in its own place and order, one route each', async () => {
+    const s = await startStandIn();
+    try {
+      const post = (p: string, body: unknown): Promise<Response> => fetch(`http://127.0.0.1:${s.port}${p}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      const a = { tools: [{ name: 'Bash' }], messages: [{ role: 'user', content: 'a' }] };
+      await post('/v1/messages?beta=true', a);
+      await post('/v1/messages/count_tokens?beta=true', a);
+      await post('/v1/messages', { ...a, stream: true }).then((r) => r.text());
+      expect(s.routes).toEqual(['messages', 'count_tokens', 'messages']);
+      expect(s.requests).toHaveLength(3);
+      expect(s.requests[1]).toEqual(a);
+    } finally { await s.close(); }
+  });
+});
+
+// The drive on a scripted window, a virtual clock and no process: what the drive does with a window, not what a build does.
+describe('the drive on a scripted window', () => {
+  const POLL = 10;
+  const SETTLE = 200;
+  const QUIET = 40;
+  const bodyOf = (id: string): Record<string, unknown> => ({ tools: [{ name: 'Bash' }], messages: [{ role: 'user', content: deliveryExpected(id as never) }] });
+
+  /** A drive context over a fake build that is always alive. `onCase` scripts what each case's send does to the window;
+   *  `late` is a request that arrives `after` virtual ms past the last case's driver answer (the quiet period is 40). */
+  function scripted(part: number, o: { onCase?: (id: string, k: number) => DriverAnswer; late?: { after: number; route: DeliveryRoute }; release?: string | null; unmeasured?: boolean } = {}) {
+    const clock = { now: 0 };
+    const requests: unknown[] = [];
+    const routes: DeliveryRoute[] = [];
+    const records: { kind: 'hook'; event: string; payload: Record<string, unknown>; status: null }[] = [];
+    const hook = (event: string): void => { records.push({ kind: 'hook', event, payload: {}, status: null }); };
+    const cases = deliveryParts()[part]!;
+    const asked: string[] = [];
+    let lateAt: number | null = null;
+    const driver: DeliveryDriver = {
+      async drive(input) {
+        asked.push(input.case);
+        const k = asked.length - 1;
+        const answer = o.onCase?.(input.case, k) ?? { kind: 'sent' as const, send: 'ok' };
+        if (answer.kind === 'fault') return answer;
+        requests.push(bodyOf(input.case)); routes.push('messages'); hook('Stop');
+        if (k === cases.length - 1 && o.late !== undefined) lateAt = clock.now + o.late.after;
+        return answer;
+      },
+    };
+    const ctx: DeliveryDriveContext = {
+      launched: { type: async (text) => { if (text.startsWith('/model')) { hook('PreModelSwitch'); hook('PostModelSwitch'); } if (text === '/exit') hook('SessionEnd'); }, life: async () => 'alive', stop: async () => undefined },
+      life: async () => 'alive', requests, routes, records: () => records, input: { capture: '/c', tmux: '/t' }, place: { path: '', tmpBase: '' },
+      build: GOOD, part, driver, settleMs: SETTLE, quietMs: QUIET, stepTimeoutMs: 1000, exitTimeoutMs: 100, pollMs: POLL,
+      release: o.release ?? null, unmeasured: o.unmeasured === true ? ['fleet-tmux-config'] : [],
+      sleep: async (ms) => {
+        clock.now += ms;
+        if (records.length === 0) hook('SessionStart');
+        if (lateAt !== null && clock.now >= lateAt) { lateAt = null; requests.push(bodyOf(cases.at(-1)!)); routes.push(o.late!.route); }
+      },
+      now: () => clock.now,
+    };
+    return { ctx, asked, clock };
+  }
+
+  // A request after the last case's quiet period, inside the trailing window (one settle after it): judged against that case.
+  for (const part of [0, 1, 2]) {
+    const last = deliveryParts()[part]!.at(-1)!;
+    it(`part ${part}: a late second request of the last case (${last}) reads duplicate, a fault, never intact (review 3882 F3)`, async () => {
+      const { ctx } = scripted(part, { late: { after: QUIET + 100, route: 'messages' } });
+      const run = await runDeliveryDrive(ctx);
+      expect(run.detail).toBeNull();
+      const cases = run.delivery!.cases;
+      expect(cases.map((c) => [c.id, c.verdict])).toEqual(cases.map((c) => [c.id, c.id === last ? 'duplicate' : 'intact']));
+      expect(run.delivery!.word).toBe('fault');
+    });
+  }
+
+  it('a late count_tokens request is a side request of the last case, never a second turn', async () => {
+    const { ctx } = scripted(0, { late: { after: QUIET + 100, route: 'count_tokens' } });
+    const run = await runDeliveryDrive(ctx);
+    expect(run.delivery!.cases.at(-1)).toMatchObject({ verdict: 'intact', sideRequests: { messages: 0, count_tokens: 1 } });
+  });
+
+  it('the trailing window is one settle past the quiet period, no more: a request after it is nobody\'s window', async () => {
+    const { ctx } = scripted(0, { late: { after: QUIET + SETTLE + 3 * POLL, route: 'messages' } });
+    expect((await runDeliveryDrive(ctx)).delivery!.word).toBe('intact');
+  });
+
+  it('a request with no route answers no verdict, naming the case: a fault of the box', async () => {
+    const { ctx } = scripted(0);
+    const bare: DeliveryDriveContext = { ...ctx, routes: [] };
+    const run = await runDeliveryDrive(bare);
+    expect(run.delivery).toBeNull();
+    expect(run.detail).toMatch(/case c0: .*no route.*a fault of the box, not a verdict/);
+  });
+
+  it('the part stops at the first box fault: no later case is typed into a pane that may hold a half-typed draft (review 3882 F2)', async () => {
+    const { ctx, asked } = scripted(0, { onCase: () => ({ kind: 'fault', detail: 'the driver exited 3: not-alive' }) });
+    const run = await runDeliveryDrive(ctx);
+    expect(run.delivery).toBeNull();
+    expect(run.detail).toMatch(/case c0: the driver exited 3/);
+    expect(asked).toEqual(['c0']);
+  });
+
+  it('the result carries the release the drive was given, and null when it was given none (review 3882 F5)', async () => {
+    expect((await runDeliveryDrive(scripted(0, { release: 'v1.2.3' }).ctx)).delivery?.release).toBe('v1.2.3');
+    expect((await runDeliveryDrive(scripted(0).ctx)).delivery?.release).toBeNull();
+  });
+
+  it('the result carries what was not measured: the fleet tmux config when the pane started without it, and nothing otherwise (A3)', async () => {
+    expect((await runDeliveryDrive(scripted(0, { unmeasured: true }).ctx)).delivery?.unmeasured).toEqual(['fleet-tmux-config']);
+    expect((await runDeliveryDrive(scripted(0).ctx)).delivery?.unmeasured).toEqual([]);
+  });
+});
+
+describe('the runner hands the drive the release and what the pane lacked', () => {
+  it('a runner built with a release tag and the fleet config answers its tag and nothing unmeasured', async () => {
+    const root = freshRoot();
+    place(root, GOOD);
+    const l = pipeLauncher();
+    const r = await runner(root, l.launcher, typingDriver(l.child), { delivery: { driver: typingDriver(l.child), tmuxConf: '/tree/ccd/tmux.conf', release: 'v1.2.3', ...BOUNDS } }).run('rel', GOOD, 'delivery', 2);
+    expect(r.delivery).toMatchObject({ word: 'intact', release: 'v1.2.3', unmeasured: [] });
+    expect(l.specs[0]!.tmuxConf).toBe('/tree/ccd/tmux.conf');
+  }, 120_000);
+
+  it('a runner built with no release and no tmux config answers null and the unmeasured config', async () => {
+    const root = freshRoot();
+    place(root, GOOD);
+    const l = pipeLauncher();
+    const r = await runner(root, l.launcher, typingDriver(l.child)).run('norel', GOOD, 'delivery', 2);
+    expect(r.delivery).toMatchObject({ word: 'intact', release: null, unmeasured: ['fleet-tmux-config'] });
+  }, 120_000);
+});
+
+describe('on the fake build: the late request and the count_tokens route (review 3882 F3 and F4)', () => {
+  for (const part of [0, 1, 2]) {
+    const last = deliveryParts()[part]!.at(-1)!;
+    it(`part ${part}: a build that asks the last case (${last}) again after its quiet period is a duplicate, the other cases intact`, async () => {
+      const root = freshRoot();
+      place(root, LATE);
+      const l = pipeLauncher();
+      const r = await runner(root, l.launcher, typingDriver(l.child)).run(`late${part}`, LATE, 'delivery', part);
+      expect(r.detail).toBeNull();
+      expect(r.delivery?.cases.map((c) => [c.id, c.verdict])).toEqual(deliveryParts()[part]!.map((id) => [id, id === last ? 'duplicate' : 'intact']));
+      expect(r.delivery?.word).toBe('fault');
+      expect(gone(root, `late${part}`, LATE)).toBe(true);
+    }, 120_000);
+  }
+
+  it('a build that also asks count_tokens with the turn\'s own body is intact, the request counted as a side request of its route', async () => {
+    const root = freshRoot();
+    place(root, COUNTS);
+    const l = pipeLauncher();
+    const r = await runner(root, l.launcher, typingDriver(l.child)).run('counts', COUNTS, 'delivery', 0);
+    expect(r.delivery?.word).toBe('intact');
+    expect(r.delivery?.cases.every((c) => c.sideRequests.count_tokens === 1 && c.sideRequests.messages === 0)).toBe(true);
   }, 120_000);
 });

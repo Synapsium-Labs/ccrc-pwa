@@ -11,7 +11,7 @@ import { RUN_ID, readTestboxFrame } from '../../shared/testbox.js';
 const BUILD = '2.1.320';
 const ID = '0123456789abcdef0123456789abcdef';
 const wire = (v: unknown): unknown => JSON.parse(JSON.stringify(v));
-const RESULT = wire(deliveryCaptureResult(BUILD, 1, deliveryParts()[1]!.map((id) => deliveryCaseResult(id, { send: 'ok', turns: [deliveryExpected(id)], sideRequests: 0, hookPrompts: [] }))));
+const RESULT = wire(deliveryCaptureResult(BUILD, 1, deliveryParts()[1]!.map((id) => deliveryCaseResult(id, { send: 'ok', turns: [deliveryExpected(id)], sideRequests: { messages: 0, count_tokens: 0 }, hookPrompts: [] })), 'v0.0.1500', []));
 const TRUST = { build: BUILD, pass: true, cwd: true, output: 'verdict: pass' };
 const read = (frame: Record<string, unknown>) => readTestboxFrame(JSON.stringify(frame));
 const state = (over: Record<string, unknown> = {}): Record<string, unknown> =>

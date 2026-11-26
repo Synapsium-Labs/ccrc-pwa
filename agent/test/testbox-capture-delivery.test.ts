@@ -3,6 +3,7 @@
 // fixed wait.
 import { describe, expect, it } from 'vitest';
 import { TESTBOX_CAPTURE_DEADLINE_MS } from '../../shared/agent-protocol.js';
+import { deliveryCaseResult, deliveryExpected } from '../../shared/deliveryCapture.js';
 import type { CaptureRecord } from '../../shared/claudeBuildCapture.js';
 import { DELIVERY_CASE_IDS, DELIVERY_PART_COUNT, deliveryParts } from '../../shared/deliveryResult.js';
 import { CAPTURE_DEADLINE_MARGIN_MS, CAPTURE_STEPS, CAPTURE_TIMINGS, captureWorstCaseMs, standInReply } from '../src/testbox/capture.js';
@@ -37,16 +38,26 @@ describe('the stand-in\'s delivery reply', () => {
 });
 
 describe('observeWindow: one case\'s window', () => {
-  it('counts each turn and each side request, and reads the hooks\' prompts', () => {
-    const o = observeWindow('ok', [side('a title'), turn('the prompt'), side('x')], [hook('UserPromptSubmit', { prompt: 'the prompt' }), hook('Stop')]);
-    expect(o).toEqual({ send: 'ok', turns: ['the prompt'], sideRequests: 2, hookPrompts: ['the prompt'] });
+  it('counts each turn and each side request by its route, and reads the hooks\' prompts', () => {
+    const o = observeWindow('ok', [side('a title'), turn('the prompt'), side('x')], ['messages', 'messages', 'count_tokens'], [hook('UserPromptSubmit', { prompt: 'the prompt' }), hook('Stop')]);
+    expect(o).toEqual({ send: 'ok', turns: ['the prompt'], sideRequests: { messages: 1, count_tokens: 1 }, hookPrompts: ['the prompt'] });
   });
   it('two turns in one window are both kept, in arrival order', () => {
-    expect(observeWindow('ok', [turn('a'), turn('b')], []).turns).toEqual(['a', 'b']);
+    expect(observeWindow('ok', [turn('a'), turn('b')], ['messages', 'messages'], [])?.turns).toEqual(['a', 'b']);
+  });
+  it('a count_tokens request shaped exactly like a turn is a side request, never a turn (review 3882 F4)', () => {
+    const o = observeWindow('ok', [turn('the prompt'), turn('the prompt')], ['messages', 'count_tokens'], []);
+    expect(o).toMatchObject({ turns: ['the prompt'], sideRequests: { messages: 0, count_tokens: 1 } });
+    const c0 = deliveryCaseResult('c0', { ...o!, turns: [deliveryExpected('c0')] });
+    expect(c0.verdict).toBe('intact');
+    expect(c0.sideRequests).toEqual({ messages: 0, count_tokens: 1 });
+  });
+  it('a request with no route is a fault of the box: no window to judge', () => {
+    expect(observeWindow('ok', [turn('a'), turn('a')], ['messages'], [])).toBeNull();
   });
   it('a hook with no string prompt, a statusline and another event add no prompt', () => {
     const records: CaptureRecord[] = [hook('UserPromptSubmit', {}), { kind: 'statusline', payload: {}, status: null }, hook('Stop', { prompt: 'x' })];
-    expect(observeWindow('ok', [], records).hookPrompts).toEqual([]);
+    expect(observeWindow('ok', [], [], records)?.hookPrompts).toEqual([]);
   });
   it('a turn ends at a Stop or a StopFailure', () => {
     expect(turnEnded([hook('UserPromptSubmit')])).toBe(false);
@@ -61,12 +72,13 @@ describe('the worst case, under the fleet agent\'s fixed wait', () => {
     expect(worst + CAPTURE_DEADLINE_MARGIN_MS).toBeLessThanOrEqual(TESTBOX_CAPTURE_DEADLINE_MS);
     expect(deliveryStartsLate(0, CAPTURE_TIMINGS)).toBe(false);
   });
-  it('the worst case is its formula: the start, the two steps before, each case, /exit, the exit wait and the teardown', () => {
+  it('the worst case is its formula: the start, the two steps before, each case, the last case\'s trailing window, /exit, the exit wait and the teardown', () => {
     const t = CAPTURE_TIMINGS;
     const call = t.tmuxCallMs + 2_000;
     const expected = t.setupMs + call
       + (t.stepMs + t.pollMs) + (2 * call + t.stepMs + t.pollMs)
       + DELIVERY_PART_LARGEST * (t.deliveryDriveMs + t.deliveryKillGraceMs + 2_000 + t.deliverySettleMs + t.pollMs + t.deliveryQuietMs + t.pollMs)
+      + t.deliverySettleMs + t.pollMs
       + (2 * call + t.stepMs + t.pollMs)
       + t.exitMs + t.pollMs
       + call + t.stopWaitMs + t.pollMs + t.standInCloseMs + t.removeMs;
@@ -76,7 +88,7 @@ describe('the worst case, under the fleet agent\'s fixed wait', () => {
     const base = deliveryWorstCaseMs(CAPTURE_TIMINGS);
     expect(deliveryWorstCaseMs(CAPTURE_TIMINGS, DELIVERY_PART_LARGEST + 1)).toBeGreaterThan(base);
     for (const k of ['deliveryDriveMs', 'deliveryKillGraceMs', 'deliverySettleMs', 'deliveryQuietMs'] as const) {
-      expect(deliveryWorstCaseMs({ ...CAPTURE_TIMINGS, [k]: CAPTURE_TIMINGS[k] + 1 }), k).toBe(base + DELIVERY_PART_LARGEST);
+      expect(deliveryWorstCaseMs({ ...CAPTURE_TIMINGS, [k]: CAPTURE_TIMINGS[k] + 1 }), k).toBe(base + DELIVERY_PART_LARGEST + (k === 'deliverySettleMs' ? 1 : 0));
     }
   });
   it('a capture that waited long enough to end past the wait does not start', () => {
@@ -85,8 +97,8 @@ describe('the worst case, under the fleet agent\'s fixed wait', () => {
     expect(deliveryStartsLate(room, CAPTURE_TIMINGS)).toBe(false);
     expect(deliveryStartsLate(room + 1, CAPTURE_TIMINGS)).toBe(true);
   });
-  it('a delivery part\'s worst case is not build trust\'s (385.5 s against 399.5 s today), so it has its own late check', () => {
-    expect(deliveryWorstCaseMs(CAPTURE_TIMINGS)).toBe(385_500);
+  it('a delivery part\'s worst case is not build trust\'s (401 s against 399.5 s today), so it has its own late check', () => {
+    expect(deliveryWorstCaseMs(CAPTURE_TIMINGS)).toBe(401_000);
     expect(captureWorstCaseMs(CAPTURE_TIMINGS)).toBe(399_500);
   });
 });

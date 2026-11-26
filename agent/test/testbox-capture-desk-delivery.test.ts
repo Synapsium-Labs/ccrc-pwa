@@ -22,7 +22,7 @@ const BUILD = '2.1.100';
 const HERE = (f: string): BuildFileFacts => ({ regular: true, link: false, links: 1, real: f });
 const PASS: BuildCaptureResult = { build: BUILD, pass: true, cwd: true, output: 'verdict: pass (12 records)' };
 const RESULT: DeliveryCaptureResult = deliveryCaptureResult(BUILD, 1, deliveryParts()[1]!.map((id) =>
-  deliveryCaseResult(id, { send: 'ok', turns: [deliveryExpected(id)], sideRequests: 0, hookPrompts: [] })));
+  deliveryCaseResult(id, { send: 'ok', turns: [deliveryExpected(id)], sideRequests: { messages: 0, count_tokens: 0 }, hookPrompts: [] })), 'v1.2.3', []);
 const submit = (n: number, recipe?: 'delivery', part = 1): CaptureSubmit => ({ t: 'capture.submit', captureId: ID(n), build: BUILD, ...(recipe === undefined ? {} : { recipe, part }) });
 
 class Sink {
@@ -106,12 +106,12 @@ describe('the desk with the delivery recipe', () => {
 });
 
 describe('the late check reads each recipe\'s own worst case', () => {
-  it('a build-trust capture that waited past its room is ended late where a delivery part, whose worst case is shorter today, still starts', async () => {
+  it('a delivery part that waited past its room is ended late where a build-trust capture, whose worst case is shorter today (399.5 s against 401 s for a part, the trailing window), still starts', async () => {
     let t = 0;
     const deliveryRoom = TESTBOX_CAPTURE_DEADLINE_MS - CAPTURE_DEADLINE_MARGIN_MS - deliveryWorstCaseMs(CAPTURE_TIMINGS);
     const trustRoom = TESTBOX_CAPTURE_DEADLINE_MS - CAPTURE_DEADLINE_MARGIN_MS - captureWorstCaseMs(CAPTURE_TIMINGS);
-    expect(trustRoom).toBeLessThan(deliveryRoom);
-    // A gate holds the first capture so the next ones wait; the clock then jumps past the trust capture's room only.
+    expect(deliveryRoom).toBeLessThan(trustRoom);
+    // A gate holds the first capture so the next ones wait; the clock then jumps past the delivery part's room only.
     let open: (() => void) | null = null;
     const asked: (CaptureRecipe | undefined)[] = [];
     const runner: CaptureRunnerLike = {
@@ -128,12 +128,12 @@ describe('the late check reads each recipe\'s own worst case', () => {
     d.submit(submit(11), trust);
     const delivery = new Sink();
     d.submit(submit(12, 'delivery'), delivery);
-    t = trustRoom + 1;
+    t = deliveryRoom + 1;
     open!();
     await d.settled();
-    expect(trust.frames.at(-1)).toMatchObject({ state: 'ended', result: null, detail: expect.stringMatching(/waited in the queue too long/) });
-    expect(delivery.frames.at(-1)).toMatchObject({ state: 'ended', delivery: RESULT });
-    expect(asked).toEqual([undefined, 'delivery']);
+    expect(trust.frames.at(-1)).toMatchObject({ state: 'ended', result: PASS });
+    expect(delivery.frames.at(-1)).toMatchObject({ state: 'ended', delivery: null, detail: expect.stringMatching(/waited in the queue too long/) });
+    expect(asked).toEqual([undefined, undefined]);
   });
   it('a delivery part that waited past its own room is ended late with delivery: null', async () => {
     let t = 0;

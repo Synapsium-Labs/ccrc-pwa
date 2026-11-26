@@ -1,4 +1,4 @@
-// `claude_build_deliveries` (migration 129, Desktop polish wave 178): one new MIGRATIONS entry holding only that table, and
+// `claude_build_deliveries` (migration 130, Desktop polish wave 178): one new MIGRATIONS entry holding only that table, and
 // `CoordStore`'s three methods as its only writers. The slot is found by its DDL, never hard-coded. Fixture coord.db files only.
 import { afterEach, describe, expect, it } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
@@ -48,7 +48,7 @@ describe('the delivery writers', () => {
     const r = deliveryResultFor('2.1.320', 1, 'refused');
     expect(c.recordDelivery(r, 50)).toBe(true);
     expect(c.claudeBuildDeliveries()).toEqual([{
-      build: '2.1.320', part: 1, version: r.version, word: 'refused', result: r, at: 50, attempts: 0, lastAttemptAt: null, notSent: null,
+      build: '2.1.320', part: 1, version: r.version, release: 'v0.0.1500', word: 'refused', result: r, at: 50, attempts: 0, lastAttemptAt: null, notSent: null,
     }]);
     const again = deliveryResultFor('2.1.320', 1, 'intact');
     c.recordDelivery(again, 60);
@@ -118,6 +118,47 @@ describe('the delivery writers', () => {
     const rows = c.claudeBuildDeliveries();
     for (const p of [0, 1]) expect(rows[p]).toMatchObject({ part: p, version: null, word: null, result: null, at: null, attempts: 0 });
     expect(rows[2]).toMatchObject({ part: 2, notSent: null, lastAttemptAt: 3 });
+  });
+
+  it('a release round-trips, and null (unknown) reads as null', () => {
+    const c = store();
+    c.recordDelivery(deliveryResultFor('2.1.320', 0, 'intact', undefined, 'v0.0.1777'), 1);
+    c.recordDelivery(deliveryResultFor('2.1.320', 1, 'intact', undefined, null), 1);
+    const rows = c.claudeBuildDeliveries();
+    expect(rows[0]).toMatchObject({ part: 0, release: 'v0.0.1777', word: 'intact' });
+    expect(rows[0]!.result!.release).toBe('v0.0.1777');
+    expect(rows[1]).toMatchObject({ part: 1, release: null, word: 'intact' });
+    expect(rows[1]!.result).not.toBeNull();
+  });
+
+  it('a release column at odds with the stored result\'s release reads as a part with none (the whole-row rule)', () => {
+    const c = store();
+    c.recordDelivery(deliveryResultFor('2.1.320', 0), 1);
+    c.recordDelivery(deliveryResultFor('2.1.320', 1, 'intact', undefined, null), 1);
+    c.db.prepare("UPDATE claude_build_deliveries SET release = 'v9.9.9' WHERE part = 0").run();
+    c.db.prepare("UPDATE claude_build_deliveries SET release = 'v0.0.1500' WHERE part = 1").run();
+    for (const r of c.claudeBuildDeliveries()) expect(r, String(r.part)).toMatchObject({ version: null, release: null, word: null, result: null, at: null });
+  });
+
+  it('a stored not-sent word of toString or constructor reads as none, and so does a stored word (review 3882 A8)', () => {
+    const c = store();
+    c.markDeliveryAttempt('2.1.320', 0, 3, 'busy');
+    c.markDeliveryAttempt('2.1.320', 1, 3, 'busy');
+    c.recordDelivery(deliveryResultFor('2.1.320', 2), 1);
+    c.db.prepare("UPDATE claude_build_deliveries SET notSent = 'toString' WHERE part = 0").run();
+    c.db.prepare("UPDATE claude_build_deliveries SET notSent = 'constructor' WHERE part = 1").run();
+    c.db.prepare("UPDATE claude_build_deliveries SET word = 'toString' WHERE part = 2").run();
+    const rows = c.claudeBuildDeliveries();
+    expect(rows[0]).toMatchObject({ part: 0, notSent: null, lastAttemptAt: 3 });
+    expect(rows[1]).toMatchObject({ part: 1, notSent: null, lastAttemptAt: 3 });
+    expect(rows[2]).toMatchObject({ part: 2, word: null, result: null });
+  });
+
+  it('the store\'s header names migration 130', async () => {
+    const { readFileSync } = await import('node:fs');
+    const src = readFileSync(new URL('../src/coord/claudeBuildDeliveriesStore.ts', import.meta.url), 'utf8');
+    // `.test`, not `toMatch`: a literal pin over a server/src file is ratcheted by single-definition/advance-switches.
+    expect(/\(migration 130\)/.test(src.split('\n')[0]!)).toBe(true);
   });
 
   it('never touches claude_builds', () => {

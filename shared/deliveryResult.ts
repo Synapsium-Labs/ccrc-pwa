@@ -4,6 +4,7 @@
 // pulls into any module graph, the front end's included: the case texts and their generators stay out of it.
 //
 // IT NEVER TOUCHES BUILD TRUST: a delivery result is never a `BuildCaptureResult` and decides nothing.
+import { isReleaseTag } from './api.js';
 import { isClaudeVersion } from './claudeVersion.js';
 import { BUILD_CAPTURE_NOT_SENT_MAP, type BuildCaptureNotSent } from './claudeBuildTrust.js';
 
@@ -71,6 +72,23 @@ export const DELIVERY_CONTEXT = 40;
 export const DELIVERY_TURNS_MAX = 16;
 export const DELIVERY_COUNT_MAX = 1_000_000;
 
+/** The stand-in's routes (`agent/src/testbox/captureStub.ts`), as each recorded request is tagged with the one it came by
+ *  (review 3882 F4): the Messages API, and its token count. A `count_tokens` request is a side request, never a turn. */
+export type DeliveryRoute = 'messages' | 'count_tokens';
+export const DELIVERY_ROUTE_MAP: Record<DeliveryRoute, true> = { messages: true, count_tokens: true };
+export const DELIVERY_ROUTES: readonly DeliveryRoute[] = Object.keys(DELIVERY_ROUTE_MAP) as DeliveryRoute[];
+export const isDeliveryRoute = (v: unknown): v is DeliveryRoute => typeof v === 'string' && Object.prototype.hasOwnProperty.call(DELIVERY_ROUTE_MAP, v);
+
+/** One case's side requests (every request in its window that was not a turn), counted by the route it came by, so the
+ *  first real run shows what a real build asks beside a turn (review 3882 F4). */
+export type DeliverySideRequests = Readonly<Record<DeliveryRoute, number>>;
+
+/** What a part's result could not measure as the product has it, by name (review 3882 A3). `fleet-tmux-config`: the release
+ *  tree held no fleet tmux configuration (`ccd/tmux.conf`), so the pane started without it and is not the product's pane. */
+export type DeliveryUnmeasured = 'fleet-tmux-config';
+export const DELIVERY_UNMEASURED_MAP: Record<DeliveryUnmeasured, true> = { 'fleet-tmux-config': true };
+export const DELIVERY_UNMEASURED: readonly DeliveryUnmeasured[] = Object.keys(DELIVERY_UNMEASURED_MAP) as DeliveryUnmeasured[];
+
 /** The recipe version's shape: 16 lowercase hex characters (`deliveryCapture.ts#DELIVERY_RECIPE_VERSION`, computed). */
 export const DELIVERY_VERSION_SHAPE = /^[0-9a-f]{16}$/;
 
@@ -93,12 +111,13 @@ export interface DeliveryCaseResult {
   /** Each turn's prompt length in code points, in arrival order; its length is the turn count. */
   readonly receivedChars: readonly number[];
   readonly divergence: DeliveryDivergence | null;
-  readonly sideRequests: number;
+  readonly sideRequests: DeliverySideRequests;
   readonly hook: DeliveryHookWitness;
 }
 
 /** A delivery capture's result: the recipe it echoes, the recipe's version (so the lane can tell a result of an older
- *  recipe), the build, the part it ran, the word and every case of that part. Never a `BuildCaptureResult`, never a trust
+ *  recipe), the build, the part it ran, the word and every case of that part, the release of the box that ran it, and what
+ *  it could not measure. Never a `BuildCaptureResult`, never a trust
  *  input. The case ids are the box's own copy of the part, so a box on another recipe can be told apart (the lane stores
  *  a row as current only when the version and the ids are its own recipe's for that part). */
 export interface DeliveryCaptureResult {
@@ -108,6 +127,12 @@ export interface DeliveryCaptureResult {
   readonly part: number;
   readonly word: DeliveryWord;
   readonly cases: readonly DeliveryCaseResult[];
+  /** The release tag of the test box that ran the send (its tree's stamp, the one its status answer carries); null when
+   *  that box could not read it, and when the field is absent (an older box): unknown (review 3882 F5, the coordinator's
+   *  ruling). The send measured is that release's. */
+  readonly release: string | null;
+  /** What this part did not measure as the product has it, each name once, in {@link DELIVERY_UNMEASURED} order. */
+  readonly unmeasured: readonly DeliveryUnmeasured[];
 }
 
 /** The recipe's word over its cases. */
@@ -131,38 +156,77 @@ function readDivergence(v: unknown): DeliveryDivergence | null | undefined {
   return { turn: v['turn'], index: v['index'], expected: v['expected'], received: v['received'] };
 }
 
+/** Whether a verdict is one the rule could give for `n` turns and this divergence: with the send word known (a result's
+ *  case), exactly the rule's; with it not known (a view's case, which does not carry it), any the rule could give for some
+ *  send word. No divergence where every turn was equal or none arrived; one where a turn must have differed; `partial`
+ *  either way. */
+function verdictFits(verdict: DeliveryCaseVerdict, n: number, divergence: DeliveryDivergence | null, send: string | null): boolean {
+  const possible: readonly DeliveryCaseVerdict[] = send === null
+    ? (n === 0 ? ['refused', 'false-confirmation'] : n === 1 ? ['intact', 'altered', 'partial'] : ['duplicate', 'split', 'partial'])
+    : send !== 'ok' ? [n === 0 ? 'refused' : 'partial']
+      : n === 0 ? ['false-confirmation'] : n === 1 ? ['intact', 'altered'] : ['duplicate', 'split'];
+  if (!possible.includes(verdict)) return false;
+  if ((verdict === 'intact' || verdict === 'duplicate' || n === 0) && divergence !== null) return false;
+  if ((verdict === 'altered' || verdict === 'split') && divergence === null) return false;
+  return divergence === null || divergence.turn < n;
+}
+
+/** A case's side requests: exactly one count per route. */
+function readSideRequests(v: unknown): DeliverySideRequests | null {
+  if (!isObj(v) || !keysAre(v, DELIVERY_ROUTES)) return null;
+  const out: Partial<Record<DeliveryRoute, number>> = {};
+  for (const r of DELIVERY_ROUTES) { const n = v[r]; if (!isCount(n)) return null; out[r] = n; }
+  return out as DeliverySideRequests;
+}
+
 const CASE_KEYS = ['id', 'verdict', 'send', 'sentChars', 'receivedChars', 'divergence', 'sideRequests', 'hook'];
 
 function readCase(v: unknown): DeliveryCaseResult | null {
   if (!isObj(v) || !keysAre(v, CASE_KEYS)) return null;
-  const { id, verdict, send, sentChars, receivedChars, sideRequests, hook } = v;
+  const { id, verdict, send, sentChars, receivedChars, hook } = v;
   if (!isDeliveryCaseId(id) || !has(DELIVERY_CASE_VERDICT_MAP, verdict) || typeof send !== 'string' || !DELIVERY_SEND_WORD.test(send)) return null;
-  if (!isCount(sentChars) || !isCount(sideRequests) || !has(DELIVERY_HOOK_WITNESS_MAP, hook)) return null;
+  const sideRequests = readSideRequests(v['sideRequests']);
+  if (!isCount(sentChars) || sideRequests === null || !has(DELIVERY_HOOK_WITNESS_MAP, hook)) return null;
   if (!Array.isArray(receivedChars) || receivedChars.length > DELIVERY_TURNS_MAX || !receivedChars.every(isCount)) return null;
   const divergence = readDivergence(v['divergence']);
   if (divergence === undefined) return null;
   // The verdict must be the rule's for the send word and the turn count it carries (equality aside, which the counts
   // cannot show): a verdict the rule could not give is not a result.
-  const n = receivedChars.length;
-  const possible: readonly DeliveryCaseVerdict[] = send !== 'ok' ? [n === 0 ? 'refused' : 'partial']
-    : n === 0 ? ['false-confirmation'] : n === 1 ? ['intact', 'altered'] : ['duplicate', 'split'];
-  if (!possible.includes(verdict)) return null;
-  // No divergence where every turn was equal or none arrived; one where a turn must have differed; `partial` either way.
-  if ((verdict === 'intact' || verdict === 'duplicate' || n === 0) && divergence !== null) return null;
-  if ((verdict === 'altered' || verdict === 'split') && divergence === null) return null;
-  if (divergence !== null && divergence.turn >= n) return null;
+  if (!verdictFits(verdict, receivedChars.length, divergence, send)) return null;
   return { id, verdict, send, sentChars, receivedChars: [...receivedChars], divergence, sideRequests, hook };
 }
 
+/** A result's `unmeasured` list: known names, each once, in {@link DELIVERY_UNMEASURED} order. */
+function readUnmeasured(v: unknown): DeliveryUnmeasured[] | null {
+  if (!Array.isArray(v) || v.length > DELIVERY_UNMEASURED.length) return null;
+  let after = -1;
+  for (const x of v as unknown[]) {
+    const at = has(DELIVERY_UNMEASURED_MAP, x) ? DELIVERY_UNMEASURED.indexOf(x) : -1;
+    if (at <= after) return null;
+    after = at;
+  }
+  return [...v] as DeliveryUnmeasured[];
+}
+
+/** A result's or a view's `release`: a release tag, or null; ABSENT (an older box) reads as null, unknown. */
+const releaseOf = (o: Obj): string | null | undefined => {
+  if (!Object.prototype.hasOwnProperty.call(o, 'release') || o['release'] === null) return null;
+  return isReleaseTag(o['release']) ? o['release'] : undefined;
+};
+
+/** Every key of `o` is one of `required` or `optional`, and every `required` one is present. */
+const keysWithin = (o: Obj, required: readonly string[], optional: readonly string[]): boolean =>
+  required.every((k) => Object.prototype.hasOwnProperty.call(o, k)) && Object.keys(o).every((k) => required.includes(k) || optional.includes(k));
+
 /** THE ONE READER of a delivery capture's result, for `build` and the `part` asked: the recipe echoed, a version of its
- *  shape, the part echoed, at least one case, each a known id once and in `DELIVERY_CASE_IDS` order, each well formed and
+ *  shape, the part echoed, the box's release (a tag or null; absent reads as null), the unmeasured list, at least one case, each a known id once and in `DELIVERY_CASE_IDS` order, each well formed and
  *  within the bounds, and the word the cases decide. `null`: not a delivery result for this build and part (another build,
  *  part or recipe, a field missing, mistyped or unnamed, no case, a case unknown, repeated or out of order, a bound
  *  passed, or a word the cases do not give). WHICH cases the part holds is not read here: a box on another recipe may
  *  split them otherwise, and that is the lane's currency question (`deliveryCapture.ts#deliveryResultCurrency`), never a
  *  malformed answer. */
 export function readDeliveryCaptureResult(v: unknown, build: string, part: number): DeliveryCaptureResult | null {
-  if (!isObj(v) || !keysAre(v, ['recipe', 'version', 'build', 'part', 'word', 'cases'])) return null;
+  if (!isObj(v) || !keysWithin(v, ['recipe', 'version', 'build', 'part', 'word', 'cases', 'unmeasured'], ['release'])) return null;
   if (v['recipe'] !== 'delivery' || v['build'] !== build || !isClaudeVersion(build) || !has(DELIVERY_WORD_MAP, v['word'])) return null;
   if (!isDeliveryPart(part) || v['part'] !== part) return null;
   if (typeof v['version'] !== 'string' || !DELIVERY_VERSION_SHAPE.test(v['version'])) return null;
@@ -178,7 +242,10 @@ export function readDeliveryCaptureResult(v: unknown, build: string, part: numbe
     cases.push(c);
   }
   if (deliveryWord(cases.map((c) => c.verdict)) !== v['word']) return null;
-  return { recipe: 'delivery', version: v['version'], build, part, word: v['word'], cases };
+  const release = releaseOf(v);
+  const unmeasured = readUnmeasured(v['unmeasured']);
+  if (release === undefined || unmeasured === null) return null;
+  return { recipe: 'delivery', version: v['version'], build, part, word: v['word'], cases, release, unmeasured };
 }
 
 // ── what the console's build list reads (Desktop polish wave 178, the capture lane) ──────────────────────────────
@@ -219,10 +286,12 @@ export interface DeliveryCaseView {
   readonly divergence: DeliveryDivergence | null;
 }
 
-/** One current part of a build: the recipe version it ran, when it was recorded, its word and its cases. */
+/** One current part of a build: the recipe version it ran, the release of the box that ran it (null: unknown), when it was
+ *  recorded, its word and its cases. */
 export interface DeliveryPartView {
   readonly part: number;
   readonly version: string;
+  readonly release: string | null;
   readonly at: number;
   readonly word: DeliveryWord;
   readonly cases: readonly DeliveryCaseView[];
@@ -249,25 +318,45 @@ function readCaseView(v: unknown): DeliveryCaseView | null {
   if (!Array.isArray(receivedChars) || receivedChars.length > DELIVERY_TURNS_MAX || !receivedChars.every(isCount)) return null;
   const divergence = readDivergence(v['divergence']);
   if (divergence === undefined) return null;
+  // A verdict the rule could give for some send word, given the counts and the divergence (the view carries no send word).
+  if (!verdictFits(verdict, receivedChars.length, divergence, null)) return null;
   return { id, verdict, sentChars, receivedChars: [...receivedChars], divergence };
 }
 
+/** A part's view: well formed, its cases each a known id once and in `DELIVERY_CASE_IDS` order, each verdict one the rule
+ *  could give for its counts, and its word the one its cases decide (review 3882 A5). */
 function readPartView(v: unknown): DeliveryPartView | null {
-  if (!isObj(v) || !keysAre(v, ['part', 'version', 'at', 'word', 'cases'])) return null;
+  if (!isObj(v) || !keysWithin(v, ['part', 'version', 'at', 'word', 'cases'], ['release'])) return null;
   const { part, version, at, word, cases } = v;
-  if (!isDeliveryPart(part) || typeof version !== 'string' || !DELIVERY_VERSION_SHAPE.test(version) || !isCount(at) || !has(DELIVERY_WORD_MAP, word)) return null;
+  const release = releaseOf(v);
+  if (!isDeliveryPart(part) || typeof version !== 'string' || !DELIVERY_VERSION_SHAPE.test(version) || !isCount(at) || !has(DELIVERY_WORD_MAP, word) || release === undefined) return null;
   if (!Array.isArray(cases) || cases.length === 0 || cases.length > DELIVERY_CASE_IDS.length) return null;
-  const read = cases.map(readCaseView);
-  return read.every((c) => c !== null) ? { part, version, at, word, cases: read as DeliveryCaseView[] } : null;
+  const read: DeliveryCaseView[] = [];
+  let after = -1;
+  for (const raw of cases as unknown[]) {
+    const c = readCaseView(raw);
+    const at2 = c === null ? -1 : DELIVERY_CASE_IDS.indexOf(c.id);
+    if (c === null || at2 <= after) return null;
+    after = at2;
+    read.push(c);
+  }
+  if (deliveryWord(read.map((c) => c.verdict)) !== word) return null;
+  return { part, version, release, at, word, cases: read };
 }
 
+/** How many builds the build list's `deliveries` carries at most, newest first (review 3882 A5: a reader-side bound on
+ *  every list). The lane's view (`deliveryLane.ts#deliveryViewsOf`) cuts to it, so the reader never refuses a whole answer
+ *  because the table grew. */
+export const DELIVERY_VIEW_BUILDS_MAX = 64;
+
 /** THE ONE READER of `GET /api/testbox/builds`'s optional `deliveries` list (beside `claudeBuildTrust.ts#readClaudeBuildRecords`,
- *  which reads the list beside it): every build well formed once, each part once and in order, every part of the recipe listed
- *  once as measured or unmeasured, and the word the join of them, or `null`. ABSENT
+ *  which reads the list beside it): at most {@link DELIVERY_VIEW_BUILDS_MAX} builds, every build well formed once, each part
+ *  once and in order and consistent with itself (its cases in order, each verdict one its counts allow, its word its cases'
+ *  word), every part of the recipe listed once as measured or unmeasured, and the build's word the join of them, or `null`. ABSENT
  *  (`undefined`, a server older than the key) reads as no list at all, `[]`: the answer is still the build record's. */
 export function readDeliveryViews(v: unknown): DeliveryBuildView[] | null {
   if (v === undefined) return [];
-  if (!Array.isArray(v)) return null;
+  if (!Array.isArray(v) || v.length > DELIVERY_VIEW_BUILDS_MAX) return null;
   const out: DeliveryBuildView[] = [];
   for (const x of v as unknown[]) {
     if (!isObj(x) || !keysAre(x, ['build', 'word', 'parts', 'unmeasured']) || !isClaudeVersion(x['build']) || !has(DELIVERY_JOIN_WORD_MAP, x['word'])) return null;

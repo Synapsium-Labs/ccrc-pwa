@@ -19,8 +19,13 @@
 // empty, so no `TMUX` or fleet socket setting reaches it. No free text travels: the text is built here from the shared
 // cases (`shared/deliveryCapture.ts#deliveryCaseText`).
 //
-// Its answer is one JSON line on stdout: `{"send":"ok"}`, or `{"send":"<sendPrompt's refusal word>"}`; or, for a refused
-// input, `{"refused":"<word>","detail":"<sentence>"}` with exit status 2. It decides no verdict: the runner does.
+// Its answer is one JSON line on stdout: `{"send":"ok"}`, or `{"send":"<sendPrompt's refusal word>"}`, with exit status 0;
+// for a refused input, `{"refused":"<word>","detail":"<sentence>"}` with exit status 2; and for a FAULT OF THE BOX,
+// `{"fault":"<the runner's reason>","send":"<the word the send then answered>","detail":"<sentence>"}` with exit status 3
+// (`DRIVE_FAULT_EXIT`): a tmux call its own runner could not complete (the per-call bound, a spawn that failed) is never
+// read as the product's send word (review 3882 F2, the coordinator's ruling), and once one has failed no later call of the
+// case runs, so nothing more is typed into a pane that may hold a half-typed draft. It decides no verdict: the runner does,
+// and reads any non-zero status as a fault of the box, which ends the part with no verdict.
 import { spawn } from 'node:child_process';
 import { lstatSync } from 'node:fs';
 import os from 'node:os';
@@ -112,16 +117,48 @@ export function captureTmuxRunner(tmuxDir: string, pathVar: string | undefined, 
   };
 }
 
+/** A runner that stops at its first fault: the first call `inner` answers not run (its bound, a spawn that failed) is
+ *  recorded, and every later call is answered not run without reaching `inner`, so no key follows a call that may have
+ *  half-typed. `fault()` reads the first such answer, or null when every call ran. */
+export function haltingRunner(inner: Runner): { readonly run: Runner; readonly fault: () => { readonly reason: string; readonly detail: string } | null } {
+  let first: { reason: string; detail: string } | null = null;
+  const run: Runner = async (cmd, args) => {
+    if (first !== null) return { ran: false, reason: 'spawn', detail: 'not run: an earlier tmux call of this case could not complete', code: 1, stdout: '', stderr: '' };
+    const r = await inner(cmd, args);
+    if (!r.ran) first = { reason: r.reason, detail: r.detail ?? '' };
+    return r;
+  };
+  return { run, fault: () => first };
+}
+
+/** One case's outcome: the send's word (`ok`, or sendPrompt's refusal word), when every tmux call ran; or a fault of the
+ *  box, the first call the runner could not complete, beside the word the send then answered (never read as the product's). */
+export type DriveOutcome =
+  | { readonly kind: 'sent'; readonly send: string }
+  | { readonly kind: 'fault'; readonly reason: string; readonly detail: string; readonly send: string };
+
+/** The exit status of a fault of the box. */
+export const DRIVE_FAULT_EXIT = 3;
+
+/** The driver's one stdout line and exit status for an outcome. */
+export function driveAnswer(o: DriveOutcome): { readonly code: number; readonly line: string } {
+  if (o.kind === 'sent') return { code: 0, line: JSON.stringify({ send: o.send }) };
+  return { code: DRIVE_FAULT_EXIT, line: JSON.stringify({ fault: o.reason, send: o.send, detail: o.detail.slice(0, 200) }) };
+}
+
 /** The options the prompt route passes `sendPrompt` for a plain prompt (no `replaceDraft`, no attachments, no `resume`). */
 export const ROUTE_PLAIN_PROMPT_OPTIONS = Object.freeze({ onDraft: 'refuse' as const, attachments: Object.freeze([]) as readonly string[] });
 
-/** One case through the product's send, on the capture's session: `ok`, or sendPrompt's refusal word. */
-export async function driveCase(input: DriveInput, runner: Runner, sleep?: SendDeps['sleep']): Promise<string> {
-  const deps: SendDeps = { tmux: new Tmux(runner), queue: new KeyedQueue(), ...(sleep === undefined ? {} : { sleep }) };
+/** One case through the product's send, on the capture's session: the send's word, or a fault of the box. */
+export async function driveCase(input: DriveInput, runner: Runner, sleep?: SendDeps['sleep']): Promise<DriveOutcome> {
+  const halt = haltingRunner(runner);
+  const deps: SendDeps = { tmux: new Tmux(halt.run), queue: new KeyedQueue(), ...(sleep === undefined ? {} : { sleep }) };
   // The route's own options, `onDraft` spelled at the call: `lane-draft-never-blocks.test.ts` reads each call's policy there.
   const res = await sendPrompt(deps, CAPTURE_TMUX_SESSION, deliveryCaseText(input.case),
     { onDraft: ROUTE_PLAIN_PROMPT_OPTIONS.onDraft, attachments: ROUTE_PLAIN_PROMPT_OPTIONS.attachments });
-  return res.ok ? 'ok' : res.error;
+  const send = res.ok ? 'ok' : res.error;
+  const fault = halt.fault();
+  return fault === null ? { kind: 'sent', send } : { kind: 'fault', reason: fault.reason, detail: fault.detail, send };
 }
 
 async function readStdin(): Promise<string> {
@@ -136,9 +173,9 @@ export async function main(): Promise<number> {
   try { raw = JSON.parse(await readStdin()); } catch { raw = undefined; }
   const read = readDriveInput(raw);
   if (!read.ok) { process.stdout.write(`${JSON.stringify({ refused: read.refusal, detail: read.detail })}\n`); return 2; }
-  const send = await driveCase(read.input, captureTmuxRunner(read.input.tmux, process.env['PATH']));
-  process.stdout.write(`${JSON.stringify({ send })}\n`);
-  return 0;
+  const answer = driveAnswer(await driveCase(read.input, captureTmuxRunner(read.input.tmux, process.env['PATH'])));
+  process.stdout.write(`${answer.line}\n`);
+  return answer.code;
 }
 
 if (process.argv[1] !== undefined && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

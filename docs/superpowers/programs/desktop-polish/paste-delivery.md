@@ -157,7 +157,12 @@ session run a build on the test box on demand. Instead:
   reader refuses a whole answer for a key it does not name, so a list would break every capture and test run on an older
   agent. An older box, or a box without the driver wired, refuses the delivery submission at its frame reader, before
   anything runs, and closes that capture's own connection. The agent answers not-taken, and the lane records not-sent,
-  with no attempt counted and a log line naming the cause. Not-taken never becomes a fault or a verdict.
+  with no attempt counted and a log line naming the cause. Not-taken never becomes a fault or a verdict. An older FLEET
+  AGENT, one that lists the capture op but predates its `recipe` and `part` fields, refuses the delivery request as a bad
+  request; the server's remote arm reads that, on a delivery job only, as not-taken too, so it also counts no attempt
+  (review 3882 A1, the coordinator's ruling). Its one log line says what was measured (the agent answered a delivery job
+  as a bad request, and the part was not sent) and names an older agent as the likely cause, not as a fact: a current
+  agent refusing a malformed delivery ask would land on the same arm (the capture owner's answer to the round's packet). A trust job's reading is unchanged.
 - **Version skew** (calls 1148 and 1159). The result carries the recipe version and the ids of the cases it ran.
   `deliveryResultCurrency` answers one of three words. `current`: the version and the part's cases are this side's; only
   these are stored. `another-recipe`: another version, ordinary skew between releases; no row, asked again at the lane's
@@ -171,22 +176,30 @@ session run a build on the test box on demand. Instead:
   length) need no cap: every case keeps both under the ceiling, and that is pinned.
 - The result rides the read that returns capture state today, written by the lane alone, into a table of its own; the
   trust table is untouched. A lost database heals by itself: with no row, the lane measures again.
+- **What the record is** (review 3882 F5, the coordinator's ruling). A part's row is the newest trusted build as SENT BY
+  ONE RELEASE AT ONE TIME: the result, its row and the read carry the release tag of the test box that ran the send (the
+  tag that box's tree is stamped with, the one its status answer carries), and an older box's result, which has no such
+  field, reads as unknown. A row is keyed by build and part, not by release: releases arrive several times a day and a
+  part is measured once an hour, so a row keyed by release would rarely complete. So a repair of the send is measured
+  again when the next build passes trust. A PR that changes the send and wants it measured at once raises the recipe
+  version, which makes every stored row another recipe's and asks each part again.
 - **The join.** A build's delivery word is intact only when every part at the current version is intact. One faulted part
   makes the whole a fault. A part not yet measured, or one whose box fault left no verdict, leaves the whole without a
   verdict (its own word, never folded into intact or fault).
 - **The busy point** is the longest part. A trust capture for a build that appears while a part runs waits for it, at
-  worst 385.5 s (6 min 25.5 s) for a four-case part. A running capture is never cut.
+  worst 401.0 s (6 min 41 s) for a four-case part. A running capture is never cut.
 - **The timings** (the capture owner's condition 5 and call 1208). The recipe's bounds are fields of the one capture
   timing contract (`CaptureTimings`): the driver's 25 s, its kill grace of 1 s, the settle's 15 s and the quiet 2 s. The
   desk's late check, the runner's settle and quiet, and the compiled driver's bound and grace are all read from the object
   the entry point composes. Per case the worst case counts the driver's bound, its grace and one drain, the settle and
-  the quiet, each with one poll's overrun. Today: build trust 399.5 s; a four-case part 385.5 s; two parts with the
-  margin 801 s of the 900 s wait; three parts. Gate G1 runs the composed delivery runner on a virtual clock with every
+  the quiet, each with one poll's overrun, and once per part the last case's trailing window (one more settle and a
+  poll; review 3882 F3). Today: build trust 399.5 s; a four-case part 401.0 s; two parts with the margin 832.0 s of the
+  900 s wait, a part and a trust capture 830.5 s; three parts. Gate G1 runs the composed delivery runner on a virtual clock with every
   bound taken, and its elapsed time EQUALS the worst case less the two allowances and the polls' overruns, exactly. So
   the worst case is a bound the runner is held to, not an estimate.
-- **To read it:** the test box builds read (`GET /api/testbox/builds`) carries `deliveries`: for each build with any row,
-  its join word, each measured part's cases (verdict, counts, first divergence), and each unmeasured part with its last
-  not-sent word. So a reader tells "no box runs the recipe" (`recipe-not-run`) from "the box was not reached"
+- **To read it:** the test box builds read (`GET /api/testbox/builds`) carries `deliveries`: for at most the newest 64
+  builds with any row, its join word, each measured part's release and cases (verdict, counts, first divergence), and each
+  unmeasured part with its last not-sent word. So a reader tells "no box runs the recipe" (`recipe-not-run`) from "the box was not reached"
   (`no-test-box`, `not-started`). There is no console surface yet.
 
 ## 7a. The lane, built (the capture owner's call 1253), and its known limits
@@ -200,7 +213,11 @@ build is queued. Its conditions are built with it:
   transport and at both io arms.
 - **The view's reader refuses a view at odds with itself**: every part of the recipe listed exactly once, measured or
   unmeasured, and the word the join of what is listed. So it refuses a part listed both ways or not at all, and an
-  `intact` or `refused` word beside an unmeasured part. The join is written once (`deliveryResult.ts#deliveryJoinWord`);
+  `intact` or `refused` word beside an unmeasured part. Within a part (review 3882 A5) it also refuses cases repeated or
+  out of order, a case verdict its counts and divergence cannot give (the view carries no send word, so any verdict the
+  rule could give for some send word is accepted), and a part word that is not its cases' word. The list is bounded on
+  the reader's side at 64 builds, and the lane's view cuts to the newest 64, so the reader never refuses the lane's own
+  answer because the table grew. The join is written once (`deliveryResult.ts#deliveryJoinWord`);
   the lane's word and the reader's check both ask it. A row is current only with its version, word, result and time
   together, so the join, the next job and the view split a build's parts the same way.
 
@@ -210,15 +227,52 @@ build is queued. Its conditions are built with it:
   an item or pushes for it. The spacing is measured by the lane's unanswered and another-recipe cases.
 - **While a delivery capture is out, the whole pass waits** (read; the in-flight case measures that no second job goes
   out). Builds seen are not noted, the untrusted-build items are neither raised nor settled, and no trust retry is put
-  back, for at most the request's deadline (17 min). At the part's worst case it is 385.5 s.
+  back, for at most the request's deadline (17 min). At the part's worst case it is 401.0 s.
 - **The table is never pruned** (read: the store has no delete). It holds at most one row per part of each build that was
   ever the newest passed one.
 - **A deliveries read that throws makes the whole build list read unavailable**, the trust list with it: one answer,
   never half of one (measured by a case).
+- **A superseded build reads `incomplete` for good** (read; review 3882 A4). Once a newer build passes trust, an older
+  build's missing parts are never asked again, and after a recipe version change every older build's stored parts (a
+  past `fault` among them) are another recipe's and read as missing. The read gives no word for "superseded": it shows
+  the same `incomplete` as a build still being measured.
+- **A key in flight at the driver's bound** (read; review 3882 A2). At its bound the driver child's process group is
+  killed, but each tmux client it starts runs in a group of its own, so a `send-keys` already in flight is not reached and
+  may still type into the capture's pane during teardown. It stays on the capture's own private tmux server, which the
+  runner then stops, and the test service's unit stop clears anything left.
 - **What a merge starts** (read). On a server whose capture lane runs (its transport is wired at start-up, as in
   production), delivery jobs begin for the newest passed build, with no switch. A test box whose tools do not carry the
   driver closes the frame, and the lane records `recipe-not-run` once an hour until they do (measured by the not-taken
   case and the spacing).
+
+## 7b. Before the first measurement, and what a healthy one looks like (review 3882 A9)
+
+**What must carry the release first.** A measurement needs this PR's release on all three of these, in any order. Until
+then, each missing one has its own visible answer:
+- **The server box** (the capture lane, migration 130, the remote arm). Without it nothing asks.
+- **The fleet agent** (the capture op's `recipe` and `part` fields). An older agent refuses the request as a bad request;
+  the lane records `recipe-not-run`, counts no attempt and logs one line naming the cause (section 7).
+- **The test box's installed release tree.** It needs the agent's compiled runner with the delivery branch, the server's
+  compiled driver (`server/dist/.../inject/deliveryDrive.js`) and `ccd/tmux.conf`. A tree without the driver closes the
+  frame (`recipe-not-run`). A tree without the configuration runs, but each part names `fleet-tmux-config` as unmeasured.
+
+**What a healthy first result looks like**, read from `GET /api/testbox/builds` `deliveries`, for the newest build whose
+trust capture passed:
+- the build's `word` is `intact`, with three entries in `parts` (0, 1 and 2) and `unmeasured` empty;
+- each part's `version` is the recipe version of the server's release, its `release` is the test box's release tag (not
+  null), and its `word` is `intact`;
+- each case (four, four and three) reads `verdict: intact`, `divergence: null`, and one entry in `receivedChars`. That entry
+  equals the expected text's length, which can be shorter than `sentChars`, since the composer trims and turns CRLF into
+  LF as the product declares.
+- In the stored result behind the view, each case also has `send: "ok"` and `hook: "equal"`, and the result's
+  `unmeasured` is empty. Its side-request counts are whatever the build asked beside the turn: they are the first
+  measurement of that, not a pass condition.
+
+**The timeline.** The lane passes at most once a minute (`BUILD_CAPTURE_SWEEP_MS`), and a pass waits for the capture it
+sent. After a build's trust capture passes, the next pass that sends no trust job sends part 0, and each later pass sends
+the next part. The parts therefore run back to back: at worst one minute plus three times a part's worst case (401.0 s),
+about 21 minutes. A typical part, with every turn ending at once, is far shorter; that is not measured yet. A part
+whose box faults is asked again at the lane's hour.
 
 ## 8. What lands where
 
@@ -231,7 +285,7 @@ build is queued. Its conditions are built with it:
 | The drive's steps, reply, window and worst case | `agent/src/testbox/captureDelivery.ts` | this PR |
 | The runner's delivery branch, the stand-in's reply rule, the launch geometry, the desk, the composition, the op | the capture files | this PR (packet 2, the Overlord's yes, call 1208) |
 | The parts, the part index on the wire and the version over the split | the capture contract and the result file | this PR (the Overlord's yes, call 1159) |
-| The lane, the store and the read | `shared/deliveryLane.ts`, `server/src/buildCaptureLane.ts`, `server/src/testboxCapture.ts`, the io arms, `server/src/coord/claudeBuildDeliveriesStore.ts`, migration 129, the builds read | this PR (the Overlord's yes, call 1253; each held file's hunk with its holder's yes) |
+| The lane, the store and the read | `shared/deliveryLane.ts`, `server/src/buildCaptureLane.ts`, `server/src/testboxCapture.ts`, the io arms, `server/src/coord/claudeBuildDeliveriesStore.ts`, migration 130, the builds read | this PR (the Overlord's yes, call 1253; each held file's hunk with its holder's yes) |
 
 ## 9. What this cannot prove, and what stays unmeasured
 
@@ -242,7 +296,17 @@ build is queued. Its conditions are built with it:
 - A real model's handling, a signed-in account, the fleet's session hook and spawn flags, and fleet load are not covered.
   A quiet test box under-reports timing races such as wave 167's `M-Enter` split lead.
 - A split whose second part arrives after the quiet period falls into the next case's window. It still reads as a fault,
-  but on the wrong case.
+  but on the wrong case. After the LAST case of a part there is no next case, so that case's window stays open for one
+  more settle bound (15 s) after its quiet: a request arriving then is judged against the last case (review 3882 F3). A
+  request later than that, after a part's last case, is not seen.
+- **Side requests by route** (review 3882 F4). The stand-in tags each request with the route it came by. A token-count
+  request (`count_tokens`) is a side request whatever its body holds, never a turn, and each case's result counts side
+  requests by route, so the first real run shows what a real build asks beside a turn. NOT MEASURED BY ANYONE YET: a
+  forked request (a suggestion or a summary) that carries the tools and ends on a user text block reads as a turn, and so
+  as a false `split` or `duplicate`. No rule is guessed for it; the first real run's counts are where it would show.
+- **A pane without the fleet's configuration says so** (review 3882 A3). When the release tree a test box runs from has
+  no `ccd/tmux.conf`, the pane starts without it, and the part's result names `fleet-tmux-config` in its `unmeasured`
+  list: that pane is not the product's pane.
 - The transcript file, which would be a third witness, is not read.
 - The recipe measures prompts that reach the model. A leading `!` is, by design, not one (section 6).
 - Only the newest trusted build is measured (section 7).
@@ -274,6 +338,15 @@ The driver is the one thing in the recipe that types keys. Each statement has a 
   environment. Case: `testbox-capture-driver-compiled.test.ts`, beside the recorder's compiled-file test. Measured: the
   driver's imports reach the shared `.mjs` files, which the build emits only through its `../shared/**/*.mjs` include,
   and the case pins that include.
+- **A fault of the box is never a verdict** (review 3882 F2, the coordinator's ruling). Any tmux call the driver's own
+  runner could not complete (its 5 s per-call bound, a spawn that failed) ends the driver with exit status 3 and a
+  `fault` line, never a send word, and once one has failed no later call of the case runs, so nothing more is typed into
+  a pane that may hold a half-typed draft. The runner reads any non-zero status as a fault, and reads the send word
+  `not-alive` (the capture's own session is gone) as one too. Either ends the part with no verdict, no row is stored,
+  and the lane's spacing applies. The part stops at the first such fault: no later case is typed. Cases:
+  `delivery-drive.test.ts` ("a tmux call that timed out", "a tmux that could not start", "after the first call that
+  could not complete", "a screen read that could not complete", "the answer line") and the runner's cases in
+  `testbox-capture-delivery-run.test.ts`.
 - **Its stop is bounded and counted.** At its bound the child's group gets TERM, KILL its grace later, then one drain; a
   child that ignores TERM is held the whole grace (real time, in two cases: the driver's own and the production
   wiring's), and the worst case counts the grace.
@@ -316,12 +389,14 @@ The driver is the one thing in the recipe that types keys. Each statement has a 
   `claudeBuildTrust.ts` imports one type from `deliveryResult.ts`. The front end already bundles both. The decider,
   `deliveryLane.ts`, imports the case file, and nothing in `pwa/src` imports it. The bundle is measured again at the final
   tip.
-- **redundant guards dropped.** The link checks on the driver's directories and the explicit field check on a delivery
-  reply could not be shown red, since other checks already refuse those inputs. They were removed, not kept.
+- **redundant guards dropped.** A separate link test beside each directory's `lstat`, and the explicit field check on a
+  delivery reply, could not be shown red, since other checks already refuse those inputs. They were removed, not kept.
+  The driver still refuses a link at either directory's name: `lstat` reads a link as no directory (case: "a link at the
+  scratch directory's name is refused", on the real file system; review 3882 A10 corrected this sentence).
 
 ## 11. Mutation record
 
-52 mutants over two rounds, three more for the tmux directory's owner rule (call 1145), 27 for the parts (rounds 3 to 5), 13 for packet 2's drafts (round 6), 8 for packet 2 (round 7), 7 for call 1208 (round 8) and 46 for the lane (round 9, call 1253), each run through `ccrc test` with the file restored afterwards. Every
+52 mutants over two rounds, three more for the tmux directory's owner rule (call 1145), 27 for the parts (rounds 3 to 5), 13 for packet 2's drafts (round 6), 8 for packet 2 (round 7), 7 for call 1208 (round 8), 46 for the lane (round 9, call 1253) and 29 for review 3882's fix round (round 10), each run through `ccrc test` with the file restored afterwards. Every
 remaining guard is killed by a named case. Round 1's eight survivors were three redundant guards, now removed, and five
 weak tests, now sharpened: each of those mutations also broke the word, so the word check refused it first, or the case
 had no text beside its tool result. Round 2's one survivor was redundant and was removed.
@@ -330,7 +405,7 @@ had no text beside its tool result. Round 2's one survivor was redundant and was
 |---|---|---|
 | driver | input keys exact | a field missing; a socket field |
 | driver | case id; capture id shape; the `captures/` parent; normal form | an unknown case; not named by a capture id; outside `captures/`; relative or not normal |
-| driver | tmux directory equal to `<tmp>/ccrc-capture-<id>` (basename only instead) | a right-looking name under the wrong parent; one level down |
+| driver | tmux directory equal to `<tmp>/ccrc-capture-<id>` (basename only instead) | a right-looking name under the wrong parent; one level down. Corrected in round 10 (review 3882 F6): until then these rows reached no parent rule, since every other check refused them first, and the mutant survived. Each row now passes the directory and ownership checks, so only the parent rule refuses it. |
 | driver | real directory, read by `lstat` (`stat` instead) | a link at either directory's name, on the real file system |
 | driver | the tmux directory is this user's own and private; the owner; the group and other write bits | a directory that is not; owned by another user or root; mode 0770 and 0707 on the real file system |
 | driver | tmux only; environment from empty; the capture's socket name; the route's options | runs nothing but tmux; `-L ccrc-capture` with only `PATH`, `TMUX_TMPDIR`, `LANG`; refuse a draft, no attachments |
@@ -343,3 +418,4 @@ had no text beside its tool result. Round 2's one survivor was redundant and was
 | call 1208 (round 8) | the kill grace dropped from the worst case; the driver's grace at 0; the runner's no-part check; the desk's part defaulted to 0; the environment built twice; the server's tree dropped from the release; the wiring's grace a constant | the composed delivery run and the figures; the stubborn-child case; the no-part runner and desk cases; the one-environment case; the compiled-driver case; the wiring's grace case (the one survivor, now killed) |
 | parts (rounds 4 and 5) | the turn-length and side-request caps; each currency word; the shared count one more and one fewer | the over-long turn case; the three currency cases; the derivation's equality case |
 | the lane (round 9, call 1253) | the decider: the current-row test, the spacing and its boundary, skipping ahead, the oldest passed build, a failed build, the queued hold put back; the join's order, its `refused` and its `incomplete`; the word from any row; currency's version, result and time; the view's order, not-sent word and word; the reader's coverage and word checks. The lane: trust not first, the attempt word either way, each writer's answer ignored, each currency arm, the null-result check, the recipe line. The transport: not-taken per job kind, the delivery field, the dropped detail, a part-less ask; the remote arm's part-less ask and its reply reader. The store: the whole-row version and word, an unknown not-sent word, the attempt's count, accumulation, why and clock, the record's replace, its clearing of the why and its time | the decider, lane, transport and store cases. Five first survived: the store's whole-row version and word and its unknown-word check, and the record's clearing of the why, each now killed by a new store case; the null-result check, killed once its case named its own line (the sweep's catch had logged one line too). One was cut again where its first snippet matched twice |
+| review 3882 (round 10) | the driver: the first fault not recorded, later calls of the case still run, a fault answered exit 0, a fault read as sent, the tmux directory by its last name only (F6). The runner: the trailing window removed (F3), the route tag dropped (F4), the route-count check dropped, `not-alive` read as a send word (F2), the release and the unmeasured list dropped (F5, A3). The result's reader: a non-tag release, a release absent refused, an unknown or inherited unmeasured name, a side-request key added or not a count. The view's reader (A5): a part word not its cases', a verdict its counts cannot give, cases out of order or repeated, the build bound. The lane's view: the newest-64 cut, the part's release. The store: the whole-row release, the not-sent word by own property (A8). The rule: a `count_tokens` body read as a turn, the route table out of the version. The remote arm (A1): a delivery job's `bad-request` folded to unanswered, the trust job's folded too, no log line | the driver cases ("a tmux call that timed out", "a tmux that could not start", "after the first call that could not complete", "a screen read that could not complete", "the answer line", and the two wrong-parent rows); the runner's late-request cases for c2a, c3c and c5, scripted and on the fixture build (variant 985), the composed G1 run, the route cases (variant 984), the no-route case, the `not-alive` case and the two release and unmeasured cases; the reader, view, lane, store and rule cases; the three remote-arm cases. One mutant alone first survived: the unmeasured list's repeat check, since with one name in the vocabulary the length bound refuses a repeat too. It is killed only together with that bound. The stored-word half of A8 is caught by the whole-row rule first. |

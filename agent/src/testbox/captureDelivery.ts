@@ -15,8 +15,8 @@
 import { TESTBOX_CAPTURE_DEADLINE_MS, UPDATE_SPAWN_DRAIN_MS } from '../../../shared/agent-protocol.js';
 import type { CaptureRecord } from '../../../shared/claudeBuildCapture.js';
 import { hookEventIs } from '../../../shared/hook-events.js';
-import { turnOf, type DeliveryObserved } from '../../../shared/deliveryCapture.js';
-import { DELIVERY_CASE_IDS, deliveryParts } from '../../../shared/deliveryResult.js';
+import { deliveryTurnOf, type DeliveryObserved } from '../../../shared/deliveryCapture.js';
+import { DELIVERY_CASE_IDS, deliveryParts, type DeliveryRoute, type DeliverySideRequests } from '../../../shared/deliveryResult.js';
 import { CAPTURE_DEADLINE_MARGIN_MS, CAPTURE_STEPS, captureWorstCaseMs, type CaptureStep, type CaptureTimings, type StandInReply } from './capture.js';
 
 // ── the drive ────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -41,20 +41,25 @@ export const deliveryStandInReply = (_body: unknown): StandInReply => ({ kind: '
 
 // ── one case's window ────────────────────────────────────────────────────────────────────────────────────────────
 
-/** What one case's window held: the stand-in's requests in it (in arrival order) and the hooks recorded in it, with the
- *  driver's word for the send. A request that is a turn (`turnOf`) is counted as one; every other is a side request. */
-export function observeWindow(send: string, requests: readonly unknown[], records: readonly CaptureRecord[]): DeliveryObserved {
+/** What one case's window held: the stand-in's requests in it (in arrival order), each with the route it came by
+ *  (`routes[i]` is `requests[i]`'s), and the hooks recorded in it, with the driver's word for the send. A request is a turn
+ *  only by `deliveryTurnOf` (a `count_tokens` request never is); every other is a side request, counted under its route.
+ *  `null` when a request has no route (the lists differ in length): that is a fault of the box, the stand-in tags every
+ *  request, so the drive answers no verdict rather than judge a window it cannot read. */
+export function observeWindow(send: string, requests: readonly unknown[], routes: readonly DeliveryRoute[], records: readonly CaptureRecord[]): DeliveryObserved | null {
+  if (routes.length !== requests.length) return null;
   const turns: string[] = [];
-  let sideRequests = 0;
-  for (const r of requests) {
-    const t = turnOf(r);
-    if (t === null) sideRequests += 1; else turns.push(t.prompt);
-  }
+  const side: Record<DeliveryRoute, number> = { messages: 0, count_tokens: 0 };
+  requests.forEach((r, i) => {
+    const t = deliveryTurnOf(routes[i]!, r);
+    if (t === null) side[routes[i]!] += 1; else turns.push(t.prompt);
+  });
   const hookPrompts = records.flatMap((r) => {
     if (r.kind !== 'hook' || !hookEventIs(r.event, 'UserPromptSubmit')) return [];
     const p = typeof r.payload === 'object' && r.payload !== null ? (r.payload as Record<string, unknown>)['prompt'] : undefined;
     return typeof p === 'string' ? [p] : [];
   });
+  const sideRequests: DeliverySideRequests = side;
   return { send, turns, sideRequests, hookPrompts };
 }
 
@@ -66,7 +71,8 @@ export const turnEnded = (records: readonly CaptureRecord[]): boolean =>
 
 /** The worst case of one delivery capture under `t` (the one timing contract, its delivery bounds among it): the setup allowance and the start (one tmux call); the two
  *  steps before (the model switch's two calls), each with its wait and one poll's overrun; per case, the driver's bound,
- *  its kill grace and the child's drain, the settle bound and the quiet period, each with one poll's overrun; the `/exit` step; the exit
+ *  its kill grace and the child's drain, the settle bound and the quiet period, each with one poll's overrun; once per part, the
+ *  last case's trailing window (one more settle and a poll); the `/exit` step; the exit
  *  wait; and the teardown, as `capture.ts#captureWorstCaseMs` counts it. */
 export function deliveryWorstCaseMs(t: CaptureTimings, cases: number = DELIVERY_PART_LARGEST): number {
   const call = t.tmuxCallMs + UPDATE_SPAWN_DRAIN_MS;
@@ -74,9 +80,12 @@ export function deliveryWorstCaseMs(t: CaptureTimings, cases: number = DELIVERY_
   const start = t.setupMs + call;
   const before = DELIVERY_STEPS_BEFORE.reduce((ms, s) => ms + step(s), 0);
   const perCase = t.deliveryDriveMs + t.deliveryKillGraceMs + UPDATE_SPAWN_DRAIN_MS + t.deliverySettleMs + t.pollMs + t.deliveryQuietMs + t.pollMs;
+  // The part's LAST case keeps its window open one more settle after its quiet period (`captureDeliveryRun.ts`), once per
+  // part, with one poll's overrun.
+  const trailing = t.deliverySettleMs + t.pollMs;
   const exit = t.exitMs + t.pollMs;
   const teardown = call + t.stopWaitMs + t.pollMs + t.standInCloseMs + t.removeMs;
-  return start + before + cases * perCase + step(DELIVERY_STEP_AFTER) + exit + teardown;
+  return start + before + cases * perCase + trailing + step(DELIVERY_STEP_AFTER) + exit + teardown;
 }
 
 /** The largest part's case count: a delivery capture runs one part (`shared/deliveryResult.ts#deliveryParts`), and the

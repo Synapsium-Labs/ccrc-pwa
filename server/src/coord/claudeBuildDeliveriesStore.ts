@@ -1,4 +1,4 @@
-// The SQL of `claude_build_deliveries` (migration 129), the paste delivery recipe's results (Desktop polish wave 178; task note
+// The SQL of `claude_build_deliveries` (migration 130), the paste delivery recipe's results (Desktop polish wave 178; task note
 // docs/superpowers/programs/desktop-polish/paste-delivery.md section 7). In `claudeBuildsStore.ts`'s idiom: every function takes
 // the store's `DatabaseSync` and is synchronous, and `CoordStore` keeps one-line delegates, so its methods are the table's
 // only writers, and the capture lane (`buildCaptureLane.ts`) their only caller. What a row means is `shared/deliveryLane.ts`'s.
@@ -9,11 +9,14 @@ import type { DeliveryRow } from '../../../shared/deliveryLane.js';
 import { DELIVERY_NOT_SENT_MAP, DELIVERY_WORD_MAP, readDeliveryCaptureResult, type DeliveryCaptureResult, type DeliveryNotSent } from '../../../shared/deliveryResult.js';
 
 interface Row {
-  build: string; part: number; version: string | null; word: string | null; result: string | null; at: number | null;
+  build: string; part: number; version: string | null; release: string | null; word: string | null; result: string | null; at: number | null;
   attempts: number; lastAttemptAt: number | null; notSent: string | null;
 }
 
-const COLUMNS = 'build, part, version, word, result, at, attempts, lastAttemptAt, notSent';
+const COLUMNS = 'build, part, version, release, word, result, at, attempts, lastAttemptAt, notSent';
+
+/** A word of a vocabulary map, by its own property only: a stored `toString` or `constructor` is no word (review 3882 A8). */
+const ownWord = <T extends string>(map: Record<T, true>, v: string | null): v is T => v !== null && Object.prototype.hasOwnProperty.call(map, v);
 
 function parsed(r: Row): DeliveryCaptureResult | null {
   if (r.result === null) return null;
@@ -30,11 +33,12 @@ export function claudeBuildDeliveries(db: DatabaseSync): DeliveryRow[] {
   for (const r of rows) {
     if (!isClaudeVersion(r.build)) continue;
     const result = parsed(r);
-    const whole = result !== null && r.version === result.version && r.word === result.word && r.word !== null && r.word in DELIVERY_WORD_MAP;
-    const notSent = r.notSent !== null && r.notSent in DELIVERY_NOT_SENT_MAP ? r.notSent as DeliveryNotSent : null;
+    // Read whole or not at all: the version, word and release columns must each be the stored result's own.
+    const whole = result !== null && r.version === result.version && r.word === result.word && ownWord(DELIVERY_WORD_MAP, r.word) && r.release === result.release;
+    const notSent = ownWord(DELIVERY_NOT_SENT_MAP, r.notSent) ? r.notSent as DeliveryNotSent : null;
     out.push({
       build: r.build, part: r.part, attempts: r.attempts, lastAttemptAt: r.lastAttemptAt, notSent,
-      version: whole ? r.version : null, word: whole ? result.word : null, result: whole ? result : null, at: whole ? r.at : null,
+      version: whole ? r.version : null, release: whole ? result.release : null, word: whole ? result.word : null, result: whole ? result : null, at: whole ? r.at : null,
     });
   }
   return out.sort((a, b) => compareClaudeVersions(b.build, a.build) || a.part - b.part);
@@ -51,12 +55,12 @@ export function markDeliveryAttempt(db: DatabaseSync, build: string, part: numbe
   ).run(build, part, sent ? 1 : 0, now, sent ? null : tried).changes) === 1;
 }
 
-/** One part's current result, an upsert: the version, word, result and time replace an older version's, and the attempts
+/** One part's current result, an upsert: the version, the box's release, word, result and time replace an older version's, and the attempts
  *  and the retry clock stay. The caller has read the result (`readDeliveryCaptureResult`) and judged it current
  *  (`deliveryResultCurrency`); nothing here decides that. */
 export function recordDelivery(db: DatabaseSync, r: DeliveryCaptureResult, now: number): boolean {
   return Number(db.prepare(
-    `INSERT INTO claude_build_deliveries (build, part, version, word, result, at) VALUES (?, ?, ?, ?, ?, ?)
-     ON CONFLICT(build, part) DO UPDATE SET version = excluded.version, word = excluded.word, result = excluded.result, at = excluded.at, notSent = NULL`,
-  ).run(r.build, r.part, r.version, r.word, JSON.stringify(r), now).changes) === 1;
+    `INSERT INTO claude_build_deliveries (build, part, version, release, word, result, at) VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(build, part) DO UPDATE SET version = excluded.version, release = excluded.release, word = excluded.word, result = excluded.result, at = excluded.at, notSent = NULL`,
+  ).run(r.build, r.part, r.version, r.release, r.word, JSON.stringify(r), now).changes) === 1;
 }

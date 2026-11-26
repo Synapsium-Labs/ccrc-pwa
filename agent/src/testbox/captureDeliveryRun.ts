@@ -14,7 +14,7 @@ import { UPDATE_SPAWN_DRAIN_MS } from '../../../shared/agent-protocol.js';
 import type { CaptureRecord } from '../../../shared/claudeBuildCapture.js';
 import { deliveryCaptureResult, deliveryCaseResult } from '../../../shared/deliveryCapture.js';
 import {
-  DELIVERY_SEND_WORD, deliveryParts, type DeliveryCaptureResult, type DeliveryCaseId, type DeliveryCaseResult,
+  DELIVERY_SEND_WORD, deliveryParts, type DeliveryCaptureResult, type DeliveryCaseId, type DeliveryCaseResult, type DeliveryRoute, type DeliveryUnmeasured,
 } from '../../../shared/deliveryResult.js';
 import { boundedStdinSpawn } from '../../../shared/spawn.mjs';
 import { stepDone, type CaptureStep } from './capture.js';
@@ -34,13 +34,19 @@ export interface DriverPlace { readonly path: string; readonly tmpBase: string }
 /** Runs the driver for one case. Never throws. */
 export interface DeliveryDriver { drive(input: DeliveryDriveInput, place: DriverPlace): Promise<DriverAnswer> }
 
+/** The send words that are a fault of the box, never the product's answer. `not-alive`: the capture's own tmux session is
+ *  not alive, so nothing was sent to a build and the product refused nothing. (A driver whose own tmux call could not
+ *  complete exits non-zero, which is a fault below whatever send word its line carries.) */
+export const DRIVER_BOX_FAULT_SENDS: readonly string[] = Object.freeze(['not-alive']);
+
 /** The driver child's answer, from its exit status and its one stdout line: `{"send":<word>}` with status 0 is the send's
- *  word; anything else (a refused input, a driver that failed, a line off its shape) is a fault of the box. */
+ *  word, unless it is one of {@link DRIVER_BOX_FAULT_SENDS}; anything else (a refused input, a driver that failed, a line
+ *  off its shape, a non-zero exit with a send word) is a fault of the box. */
 export function readDriverAnswer(code: number, stdout: string): DriverAnswer {
   let v: unknown;
   try { v = JSON.parse(stdout.trim()); } catch { return { kind: 'fault', detail: `the driver exited ${code} with no answer` }; }
   const o = typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
-  if (code === 0 && Object.keys(o).join() === 'send' && typeof o['send'] === 'string' && DELIVERY_SEND_WORD.test(o['send'])) {
+  if (code === 0 && Object.keys(o).join() === 'send' && typeof o['send'] === 'string' && DELIVERY_SEND_WORD.test(o['send']) && !DRIVER_BOX_FAULT_SENDS.includes(o['send'])) {
     return { kind: 'sent', send: o['send'] };
   }
   const word = typeof o['refused'] === 'string' ? `refused ${o['refused']}` : typeof o['send'] === 'string' ? o['send'] : 'an answer off its shape';
@@ -72,6 +78,8 @@ export interface DeliveryDriveContext {
   readonly life: () => Promise<BuildLife>;
   /** Every request the stand-in has received, in arrival order (the stand-in's own list, read live). */
   readonly requests: readonly unknown[];
+  /** The route each of `requests` came by, same index (the stand-in's own list, read live). */
+  readonly routes: readonly DeliveryRoute[];
   /** The recording so far, read fresh. */
   readonly records: () => readonly CaptureRecord[];
   readonly input: Omit<DeliveryDriveInput, 'case'>;
@@ -85,6 +93,10 @@ export interface DeliveryDriveContext {
   readonly settleMs: number;
   /** `CaptureTimings.deliveryQuietMs`: how long the window stays open after the turn ended or the settle bound passed. */
   readonly quietMs: number;
+  /** The test box's release tag the result carries, or null when it is not known. */
+  readonly release: string | null;
+  /** What the part could not measure (decided once by the runner from its dependencies), carried into the result. */
+  readonly unmeasured: readonly DeliveryUnmeasured[];
   readonly stepTimeoutMs: number;
   readonly exitTimeoutMs: number;
   readonly pollMs: number;
@@ -123,7 +135,7 @@ export async function runDeliveryDrive(c: DeliveryDriveContext): Promise<Deliver
     }
   }
   const results: DeliveryCaseResult[] = [];
-  for (const id of cases) {
+  for (const [at, id] of cases.entries()) {
     const life = await c.life();
     if (life !== 'alive') return noVerdict(`the build is ${life === 'gone' ? 'gone' : 'of unknown life'} before case ${id}: a fault of the box, not a verdict`);
     const reqAt = c.requests.length;
@@ -138,7 +150,15 @@ export async function runDeliveryDrive(c: DeliveryDriveContext): Promise<Deliver
     // The quiet period: a late second submit still falls in this case's window.
     const quiet = c.now() + c.quietMs;
     while (c.now() < quiet) await c.sleep(c.pollMs);
-    results.push(deliveryCaseResult(id, observeWindow(answer.send, c.requests.slice(reqAt), c.records().slice(recAt))));
+    // The trailing window: after the part's LAST case no case follows to take a late request into its window, so this one
+    // stays open one more settle, and a request that comes after its quiet period is still judged against it.
+    if (at === cases.length - 1) {
+      const trailing = c.now() + c.settleMs;
+      while (c.now() < trailing) await c.sleep(c.pollMs);
+    }
+    const observed = observeWindow(answer.send, c.requests.slice(reqAt), c.routes.slice(reqAt, c.requests.length), c.records().slice(recAt));
+    if (observed === null) return noVerdict(`case ${id}: a request of its window has no route: a fault of the box, not a verdict`);
+    results.push(deliveryCaseResult(id, observed));
   }
   // A build gone after the last case's window ended this part early too: its last window cannot be trusted.
   const after = await c.life();
@@ -147,5 +167,5 @@ export async function runDeliveryDrive(c: DeliveryDriveContext): Promise<Deliver
   try { await step(c, DELIVERY_STEP_AFTER); } catch { /* the teardown stops the build */ }
   const deadline = c.now() + c.exitTimeoutMs;
   while (await c.life() === 'alive' && c.now() < deadline) await c.sleep(c.pollMs);
-  return { delivery: deliveryCaptureResult(c.build, c.part, results), detail: null };
+  return { delivery: deliveryCaptureResult(c.build, c.part, results, c.release, c.unmeasured), detail: null };
 }

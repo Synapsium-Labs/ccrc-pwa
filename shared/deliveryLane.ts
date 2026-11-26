@@ -11,7 +11,7 @@ import { compareClaudeVersions, isClaudeVersion } from './claudeVersion.js';
 import { BUILD_CAPTURE_RETRY_MS, type ClaudeBuildRecord } from './claudeBuildTrust.js';
 import { DELIVERY_RECIPE_VERSION } from './deliveryCapture.js';
 import {
-  deliveryCaseViewOf, deliveryJoinWord, deliveryParts, type DeliveryBuildView, type DeliveryCaptureResult, type DeliveryJoinWord, type DeliveryNotSent, type DeliveryPartView, type DeliveryUnmeasuredPart, type DeliveryWord,
+  DELIVERY_VIEW_BUILDS_MAX, deliveryCaseViewOf, deliveryJoinWord, deliveryParts, type DeliveryBuildView, type DeliveryCaptureResult, type DeliveryJoinWord, type DeliveryNotSent, type DeliveryPartView, type DeliveryUnmeasuredPart, type DeliveryWord,
 } from './deliveryResult.js';
 
 /** One (build, part) row of `claude_build_deliveries`, as `CoordStore.claudeBuildDeliveries` reads it. `version`, `word`,
@@ -21,6 +21,8 @@ export interface DeliveryRow {
   readonly build: string;
   readonly part: number;
   readonly version: string | null;
+  /** The release of the box that ran the stored result (its `release`), null with no result or when it was unknown. */
+  readonly release: string | null;
   readonly word: DeliveryWord | null;
   readonly result: DeliveryCaptureResult | null;
   readonly at: number | null;
@@ -71,10 +73,12 @@ export function deliveryWordOf(deliveries: readonly DeliveryRow[], build: string
   }));
 }
 
-/** The build list's `deliveries`: one entry for each build that has any row, newest build first, its join word and each
- *  current part that holds a result, by part, and each part with none beside its last not-sent word. */
+/** The build list's `deliveries`: one entry for each build that has any row, newest build first and at most
+ *  `DELIVERY_VIEW_BUILDS_MAX` of them (the reader's bound), its join word and each current part that holds a result, by part,
+ *  with the release that ran it, and each part with none beside its last not-sent word. */
 export function deliveryViewsOf(deliveries: readonly DeliveryRow[]): DeliveryBuildView[] {
-  const builds = [...new Set(deliveries.map((r) => r.build))].filter((b) => isClaudeVersion(b)).sort((a, b) => compareClaudeVersions(b, a));
+  const builds = [...new Set(deliveries.map((r) => r.build))].filter((b) => isClaudeVersion(b)).sort((a, b) => compareClaudeVersions(b, a))
+    .slice(0, DELIVERY_VIEW_BUILDS_MAX);
   return builds.map((build) => {
     const parts: DeliveryPartView[] = [];
     const unmeasured: DeliveryUnmeasuredPart[] = [];
@@ -84,7 +88,7 @@ export function deliveryViewsOf(deliveries: readonly DeliveryRow[]): DeliveryBui
         unmeasured.push({ part: p, notSent: r?.notSent ?? null });
         continue;
       }
-      parts.push({ part: p, version: r.version, at: r.at, word: r.word, cases: r.result.cases.map(deliveryCaseViewOf) });
+      parts.push({ part: p, version: r.version, release: r.result.release, at: r.at, word: r.word, cases: r.result.cases.map(deliveryCaseViewOf) });
     }
     return { build, word: deliveryWordOf(deliveries, build), parts, unmeasured };
   });

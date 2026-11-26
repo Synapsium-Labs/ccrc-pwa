@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { BUILD_CAPTURE_RETRY_MS } from '../../shared/claudeBuildTrust.js';
 import { deliveryWordOf, deliveryViewsOf, isCurrentDelivery, nextDeliveryJob } from '../../shared/deliveryLane.js';
-import { DELIVERY_PART_COUNT, readDeliveryViews } from '../../shared/deliveryResult.js';
+import { DELIVERY_PART_COUNT, DELIVERY_VIEW_BUILDS_MAX, readDeliveryViews, type DeliveryBuildView } from '../../shared/deliveryResult.js';
 import { attemptRow, deliveryResultFor, record, rowOf } from './deliveryLaneHelpers.js';
 
 const AT = 10_000_000;
@@ -107,6 +107,103 @@ describe('deliveryViewsOf and its reader', () => {
     const [all] = deliveryViewsOf(done('2.1.320', DELIVERY_PART_COUNT));
     expect(all!.word).toBe('intact');
     expect(readDeliveryViews([{ ...all, word: 'incomplete' }])).toBeNull();
+  });
+});
+
+describe('the reader\'s checks of a part view (review 3882 A5)', () => {
+  const wire = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
+  const full = (): DeliveryBuildView => wire(deliveryViewsOf(done('2.1.320', DELIVERY_PART_COUNT))[0]!);
+  const ALTERED = { verdict: 'altered', receivedChars: [9], divergence: { turn: 0, index: 3, expected: 'abc', received: 'abd' } };
+  it('the unaltered view is read whole', () => {
+    expect(readDeliveryViews([full()])).toEqual([full()]);
+  });
+  it('a part whose word is not its cases\' word is refused: an intact part beside an altered case', () => {
+    const v = full();
+    Object.assign(v.parts[0]!.cases[0]!, ALTERED);
+    expect(v.parts[0]!.word).toBe('intact');
+    expect(v.word).toBe('intact');
+    expect(readDeliveryViews([v])).toBeNull();
+    // the same case with the part's word and the build's word following it is read
+    const ok = full();
+    Object.assign(ok.parts[0]!.cases[0]!, ALTERED);
+    Object.assign(ok.parts[0]!, { word: 'fault' });
+    Object.assign(ok, { word: 'fault' });
+    expect(readDeliveryViews([ok])).not.toBeNull();
+  });
+  it('a case verdict its counts cannot give is refused: intact with two received turns, false-confirmation with one', () => {
+    const twoTurns = full();
+    Object.assign(twoTurns.parts[0]!.cases[0]!, { receivedChars: [10, 10] });
+    expect(readDeliveryViews([twoTurns])).toBeNull();
+    const oneTurn = full();
+    Object.assign(oneTurn.parts[0]!.cases[0]!, { verdict: 'false-confirmation' });
+    Object.assign(oneTurn.parts[0]!, { word: 'fault' });
+    Object.assign(oneTurn, { word: 'fault' });
+    expect(readDeliveryViews([oneTurn])).toBeNull();
+  });
+  it('a divergence on an intact case, or none on an altered one, is refused', () => {
+    const a = full();
+    Object.assign(a.parts[0]!.cases[0]!, { divergence: ALTERED.divergence });
+    expect(readDeliveryViews([a])).toBeNull();
+    const b = full();
+    Object.assign(b.parts[0]!.cases[0]!, { verdict: 'altered' });
+    Object.assign(b.parts[0]!, { word: 'fault' });
+    Object.assign(b, { word: 'fault' });
+    expect(readDeliveryViews([b])).toBeNull();
+  });
+  it('cases repeated, or out of order, are refused', () => {
+    const rep = full();
+    (rep.parts[0]!.cases as unknown[])[1] = rep.parts[0]!.cases[0];
+    expect(readDeliveryViews([rep])).toBeNull();
+    const swapped = full();
+    const c = swapped.parts[0]!.cases as unknown[];
+    [c[0], c[1]] = [c[1], c[0]];
+    expect(readDeliveryViews([swapped])).toBeNull();
+  });
+  it('a part with no cases, or a case the recipe does not have, is refused', () => {
+    const none = full();
+    Object.assign(none.parts[0]!, { cases: [] });
+    expect(readDeliveryViews([none])).toBeNull();
+    const unknown = full();
+    Object.assign(unknown.parts[0]!.cases[0]!, { id: 'c9' });
+    expect(readDeliveryViews([unknown])).toBeNull();
+  });
+  it('more than the bound\'s builds is refused, and exactly the bound is read', () => {
+    const build = (n: number): DeliveryBuildView => ({ ...full(), build: `2.1.${n}` });
+    const atBound = Array.from({ length: DELIVERY_VIEW_BUILDS_MAX }, (_, i) => build(1000 - i));
+    expect(readDeliveryViews(atBound)).toHaveLength(DELIVERY_VIEW_BUILDS_MAX);
+    expect(readDeliveryViews([...atBound, build(1)])).toBeNull();
+  });
+  it('a part view\'s release: absent reads null, a tag as given, a non-tag refused', () => {
+    const v = full();
+    expect(v.parts[0]!.release).toBe('v0.0.1500');
+    const absent = full();
+    delete (absent.parts[0] as { release?: unknown }).release;
+    expect(readDeliveryViews([absent])![0]!.parts[0]!.release).toBeNull();
+    for (const bad of ['main', 'v1', 7]) {
+      const w = full();
+      Object.assign(w.parts[0]!, { release: bad });
+      expect(readDeliveryViews([w]), String(bad)).toBeNull();
+    }
+    const nul = full();
+    Object.assign(nul.parts[0]!, { release: null });
+    expect(readDeliveryViews([nul])![0]!.parts[0]!.release).toBeNull();
+  });
+});
+
+describe('deliveryViewsOf carries each part\'s release and cuts to the newest builds (review 3882 A5, F5)', () => {
+  it('each part view carries the release of the box that ran it, and null where it was unknown', () => {
+    const rows = [rowOf(deliveryResultFor('2.1.320', 0, 'intact', undefined, 'v0.0.1500')), rowOf(deliveryResultFor('2.1.320', 1, 'intact', undefined, null))];
+    const [v] = deliveryViewsOf(rows);
+    expect(v!.parts.map((p) => [p.part, p.release])).toEqual([[0, 'v0.0.1500'], [1, null]]);
+    expect(readDeliveryViews(JSON.parse(JSON.stringify([v])))).toEqual([v]);
+  });
+  it('65 builds in, 64 out, the oldest dropped, and the reader reads the lane\'s own view', () => {
+    const rows = Array.from({ length: DELIVERY_VIEW_BUILDS_MAX + 1 }, (_, i) => attemptRow(`2.1.${1000 + i}`, 0, 3));
+    const views = deliveryViewsOf(rows);
+    expect(views).toHaveLength(DELIVERY_VIEW_BUILDS_MAX);
+    expect(views[0]!.build).toBe(`2.1.${1000 + DELIVERY_VIEW_BUILDS_MAX}`);
+    expect(views.map((v) => v.build)).not.toContain('2.1.1000');
+    expect(readDeliveryViews(JSON.parse(JSON.stringify(views)))).toEqual(views);
   });
 });
 

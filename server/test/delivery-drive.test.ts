@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { CAPTURE_SOCKET, captureTmuxDirName } from '../../shared/claudeBuildCapture.js';
 import { deliveryCaseText, deliveryExpected } from '../../shared/deliveryCapture.js';
 import { DELIVERY_CASE_IDS } from '../../shared/deliveryResult.js';
-import { ROUTE_PLAIN_PROMPT_OPTIONS, captureTmuxRunner, driveCase, privateTo, readDriveInput } from '../src/inject/deliveryDrive.js';
+import { DRIVE_FAULT_EXIT, ROUTE_PLAIN_PROMPT_OPTIONS, captureTmuxRunner, driveAnswer, driveCase, privateTo, readDriveInput } from '../src/inject/deliveryDrive.js';
 import type { Runner } from '../src/exec.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 
@@ -48,7 +48,9 @@ describe('readDriveInput: refused before any tmux call', () => {
     ['a relative tmux directory', { ...ok, tmux: captureTmuxDirName(ID) }, 'tmux-dir'],
     ['a tmux directory not in normal form', { ...ok, tmux: `/tmp/./${captureTmuxDirName(ID)}` }, 'tmux-dir'],
   ])('refuses %s', (_why, raw, refusal) => {
-    const r = readDriveInput(raw, allDirs, BASE);
+    // Every directory reads as a real one and as this user's own private one, so each row is refused by the rule it names
+    // and by no later check (review 3882 F6: a right-looking name under the wrong parent reaches the parent rule).
+    const r = readDriveInput(raw, allDirs, BASE, allDirs);
     expect(r).toMatchObject({ ok: false, refusal });
   });
   it.each<[string, (p: string) => boolean, string]>([
@@ -178,23 +180,87 @@ describe('driveCase: the product\'s own send, with the prompt route\'s options',
   const input = (c: 'c0' | 'c5' | 'c3c') => ({ capture: CAPTURE, tmux: TMUX, case: c });
   it('types the case\'s text into the capture\'s session and answers ok once it is submitted', async () => {
     const p = boxPane();
-    expect(await driveCase(input('c0'), p.run, async () => {})).toBe('ok');
+    expect(await driveCase(input('c0'), p.run, async () => {})).toEqual({ kind: 'sent', send: 'ok' });
     expect(p.submitted).toEqual([deliveryExpected('c0')]);
     expect(p.calls.every((c) => c[0] === 'tmux' && c.includes('=cc-capture:'))).toBe(true);
   });
   it('a multiline case is typed line by line with M-Enter, and submitted once', async () => {
     const p = boxPane();
-    expect(await driveCase(input('c5'), p.run, async () => {})).toBe('ok');
+    expect(await driveCase(input('c5'), p.run, async () => {})).toEqual({ kind: 'sent', send: 'ok' });
     expect(p.submitted).toEqual([deliveryExpected('c5')]);
     const enters = p.calls.filter((c) => c.at(-1) === 'Enter').length;
     expect(enters).toBe(1);
   });
-  it('answers sendPrompt\'s own refusal word: a dead session is not-alive', async () => {
+  it('answers sendPrompt\'s own refusal word when every tmux call ran: a dead session is not-alive', async () => {
     const dead: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: 'can\'t find session' });
-    expect(await driveCase(input('c0'), dead, async () => {})).toBe('not-alive');
+    expect(await driveCase(input('c0'), dead, async () => {})).toEqual({ kind: 'sent', send: 'not-alive' });
   });
-  it('the options are the prompt route\'s for a plain prompt: refuse a draft, no attachments (read off server.ts\'s route)', () => {
+  it('the options it passes are the ones the prompt route passes for a plain prompt: refuse a draft, no attachments', () => {
+    // WHAT THIS COMPARES (review 3882 A6): the driver's constant against the plain-prompt values, written here. It does not
+    // read the route. The route's own policy is read where its call is by the send census (`lane-draft-never-blocks.test.ts`,
+    // which reads each `sendPrompt` call's `onDraft` at the call), and the driver's call spells `onDraft` by name for the
+    // same reason. The route's two other options are left out on purpose: `resumeIfOwn` is a Retry's only (`body.resume`),
+    // and `recheck` is the designation's re-ask before the first key, which answers `go` for any session that is not the
+    // Overlord, as a capture's session never is.
     expect(ROUTE_PLAIN_PROMPT_OPTIONS).toEqual({ onDraft: 'refuse', attachments: [] });
+  });
+
+  // A FAULT OF THE BOX IS NEVER A VERDICT (review 3882 F2, the coordinator's ruling): a tmux call the driver's own runner
+  // could not complete (its per-call bound, a spawn that failed) ends the case as a fault, with no send word read as the
+  // product's, and no later call of the case runs, so nothing more is typed into a pane that may hold a half-typed draft.
+  const notRan = (reason: 'timeout' | 'spawn'): Awaited<ReturnType<Runner>> => ({ ran: false, reason, detail: `tmux ${reason}`, code: 1, stdout: '', stderr: '' });
+  it('a tmux call that timed out is a fault of the box, not a send word', async () => {
+    const p = boxPane();
+    const slow: Runner = async (cmd, args) => (args[0] === 'capture-pane' ? notRan('timeout') : p.run(cmd, args));
+    expect(await driveCase(input('c0'), slow, async () => {})).toMatchObject({ kind: 'fault', reason: 'timeout' });
+  });
+  it('a tmux that could not start is a fault of the box, not a send word', async () => {
+    expect(await driveCase(input('c0'), async () => notRan('spawn'), async () => {})).toMatchObject({ kind: 'fault', reason: 'spawn' });
+  });
+  it('after the first call that could not complete, no later call of the case runs: a failed type is not followed by more keys', async () => {
+    const p = boxPane();
+    let typed = 0;
+    const failsOnFirstType: Runner = async (cmd, args) => {
+      if (args[0] === 'send-keys' && args.includes('-l') && ++typed === 1) return notRan('timeout');
+      return p.run(cmd, args);
+    };
+    const out = await driveCase(input('c5'), failsOnFirstType, async () => {});
+    expect(out).toMatchObject({ kind: 'fault', reason: 'timeout' });
+    // The failed type was the case's last tmux call: no key after it (no M-Enter, no clear, no Enter) reached the pane.
+    const typedAt = p.calls.length;
+    expect(p.calls.slice(typedAt).length).toBe(0);
+    expect(p.calls.filter((c) => c[1] === 'send-keys')).toEqual([]);
+    expect(p.submitted).toEqual([]);
+    expect(typed).toBe(1);
+  });
+  it('a screen read that could not complete stops the case there, wherever it falls: no key and no read follows it', async () => {
+    // The send reads the pane back before and after typing (its draft and echo checks) and after its Enter. Any of those
+    // reads failing is a fault, and the send must not go on to type or press a key on a screen it could not read.
+    let faults = 0;
+    for (let failAt = 1; failAt <= 6; failAt++) {
+      const p = boxPane();
+      let reads = 0;
+      let faultAt = -1;
+      let submittedAt = -1;
+      const readFails: Runner = async (cmd, args) => {
+        if (args[0] === 'capture-pane' && ++reads === failAt) { faultAt = p.calls.length; submittedAt = p.submitted.length; return notRan('timeout'); }
+        return p.run(cmd, args);
+      };
+      const out = await driveCase(input('c0'), readFails, async () => {});
+      if (faultAt < 0) continue;
+      faults += 1;
+      expect(out, `read ${failAt}`).toMatchObject({ kind: 'fault', reason: 'timeout' });
+      expect(p.calls.slice(faultAt), `read ${failAt}`).toEqual([]);
+      expect(p.submitted.length, `read ${failAt}`).toBe(submittedAt);
+    }
+    expect(faults).toBeGreaterThanOrEqual(3);
+  });
+  it('the answer line: a send word exits 0 with {send}; a fault exits non-zero with {fault, send, detail}, which no reader takes as sent', () => {
+    expect(driveAnswer({ kind: 'sent', send: 'ok' })).toEqual({ code: 0, line: '{"send":"ok"}' });
+    const f = driveAnswer({ kind: 'fault', reason: 'timeout', detail: 'tmux did not answer', send: 'not-alive' });
+    expect(f.code).toBe(DRIVE_FAULT_EXIT);
+    expect(f.code).not.toBe(0);
+    expect(JSON.parse(f.line)).toEqual({ fault: 'timeout', send: 'not-alive', detail: 'tmux did not answer' });
   });
   it('every case is sent as the console sends it', () => {
     for (const id of DELIVERY_CASE_IDS) expect(deliveryCaseText(id).length).toBeGreaterThan(0);

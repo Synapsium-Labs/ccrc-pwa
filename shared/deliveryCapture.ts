@@ -15,8 +15,9 @@
 // here reads or writes it, and a delivery result is never a `BuildCaptureResult`.
 import { composePrompt } from './api.js';
 import {
-  DELIVERY_CASE_IDS, DELIVERY_CONTEXT, DELIVERY_COUNT_MAX, DELIVERY_TURNS_MAX, deliveryParts, deliveryWord,
+  DELIVERY_CASE_IDS, DELIVERY_CONTEXT, DELIVERY_COUNT_MAX, DELIVERY_ROUTES, DELIVERY_TURNS_MAX, deliveryParts, deliveryWord,
   type DeliveryCaptureResult, type DeliveryCaseId, type DeliveryCaseResult, type DeliveryCaseVerdict, type DeliveryDivergence, type DeliveryHookWitness,
+  type DeliveryRoute, type DeliverySideRequests, type DeliveryUnmeasured,
 } from './deliveryResult.js';
 
 // ── the cases (paste-reliability.md section 3) ───────────────────────────────────────────────────────────────────
@@ -117,6 +118,10 @@ export function turnOf(body: unknown): { readonly prompt: string; readonly block
   return { prompt: kept.join('\n'), blocks: kept.length };
 }
 
+/** THE request rule (review 3882 F4): a request is a turn only when it came by the Messages route and {@link turnOf} reads
+ *  one; a `count_tokens` request is a side request whatever its body holds. */
+export const deliveryTurnOf = (route: DeliveryRoute, body: unknown): ReturnType<typeof turnOf> => (route === 'messages' ? turnOf(body) : null);
+
 // ── the verdict ──────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** The first divergence of `received` from `expected`, or null when they are equal. Indexes are code points. */
@@ -136,8 +141,8 @@ export interface DeliveryObserved {
   readonly send: string;
   /** Every turn's prompt in the window, in arrival order. */
   readonly turns: readonly string[];
-  /** The requests in the window that were not turns. */
-  readonly sideRequests: number;
+  /** The requests in the window that were not turns, by the route each came by. */
+  readonly sideRequests: DeliverySideRequests;
   /** The UserPromptSubmit hooks' prompts in the window, in order. */
   readonly hookPrompts: readonly string[];
 }
@@ -172,7 +177,7 @@ export function deliveryCaseResult(id: DeliveryCaseId, observed: DeliveryObserve
   return {
     id, verdict: deliveryCaseVerdict(expected, o), send: o.send, sentChars: cps(deliveryCaseText(id)),
     receivedChars: o.turns.map((t) => capped(cps(t))), divergence: unequal < 0 ? null : firstDivergence(expected, o.turns[unequal]!, unequal),
-    sideRequests: capped(o.sideRequests), hook,
+    sideRequests: Object.fromEntries(DELIVERY_ROUTES.map((r) => [r, capped(o.sideRequests[r])])) as DeliverySideRequests, hook,
   };
 }
 
@@ -203,7 +208,8 @@ function ruleFingerprint(): string {
     { tools: [{ name: 'B' }], messages: [{ role: 'user', content: 'p' }, { role: 'assistant', content: 'q' }] },
   ];
   const composed = [' \r\n a\r\nb \n', '\n\n  x', 'y\r'].map((t) => [composerOutput(t), composePrompt(composerOutput(t), [])]);
-  return JSON.stringify({ verdicts, divergences, turns: bodies.map(turnOf), composed, context: DELIVERY_CONTEXT });
+  const routed = DELIVERY_ROUTES.map((r) => bodies.map((b) => deliveryTurnOf(r, b)));
+  return JSON.stringify({ verdicts, divergences, turns: bodies.map(turnOf), routed, composed, context: DELIVERY_CONTEXT });
 }
 
 /** The recipe's version: 16 hex characters computed from every case's sent and expected text, in order, the split into
@@ -215,9 +221,12 @@ export function deliveryRecipeVersionOf(parts: readonly (readonly DeliveryCaseId
 }
 export const DELIVERY_RECIPE_VERSION: string = deliveryRecipeVersionOf();
 
-/** The result of one part from the cases the runner judged, at this recipe's version. */
-export function deliveryCaptureResult(build: string, part: number, cases: readonly DeliveryCaseResult[]): DeliveryCaptureResult {
-  return { recipe: 'delivery', version: DELIVERY_RECIPE_VERSION, build, part, word: deliveryWord(cases.map((c) => c.verdict)), cases };
+/** The result of one part from the cases the runner judged, at this recipe's version, with the release of the box that ran
+ *  it (null: it could not read it) and what it did not measure as the product has it. */
+export function deliveryCaptureResult(
+  build: string, part: number, cases: readonly DeliveryCaseResult[], release: string | null, unmeasured: readonly DeliveryUnmeasured[],
+): DeliveryCaptureResult {
+  return { recipe: 'delivery', version: DELIVERY_RECIPE_VERSION, build, part, word: deliveryWord(cases.map((c) => c.verdict)), cases, release, unmeasured };
 }
 
 /** How a read result stands against THIS side's recipe (the capture owner's call 1159). `current`: its version is this

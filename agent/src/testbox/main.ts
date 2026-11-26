@@ -258,18 +258,18 @@ export function deliveryWiring(t: CaptureTimings = CAPTURE_TIMINGS, driver: stri
  *  is the compiled one beside this file, run by this process's node. */
 /** The runner's delivery dependencies: the wiring (the seam's, or {@link deliveryWiring} on `t`) with `t`'s settle and quiet
  *  bounds, so every bound of a delivery capture is the one contract's. */
-export const deliveryOf = (seams: CaptureSeams, t: CaptureTimings): { delivery?: CaptureDeliveryDeps } => {
+export const deliveryOf = (seams: CaptureSeams, t: CaptureTimings, release: string | null = null): { delivery?: CaptureDeliveryDeps } => {
   const d = seams.delivery === undefined ? deliveryWiring(t) : seams.delivery;
-  return d === undefined || d === null ? {} : { delivery: { ...d, settleMs: t.deliverySettleMs, quietMs: t.deliveryQuietMs } };
+  return d === undefined || d === null ? {} : { delivery: { ...d, release, settleMs: t.deliverySettleMs, quietMs: t.deliveryQuietMs } };
 };
 
-export function captureRunnerFor(root: string, tmuxBase: string, toolsPath: () => string | null, t: CaptureTimings = CAPTURE_TIMINGS, seams: CaptureSeams = {}): CaptureRunner {
+export function captureRunnerFor(root: string, tmuxBase: string, toolsPath: () => string | null, t: CaptureTimings = CAPTURE_TIMINGS, seams: CaptureSeams = {}, release: string | null = null): CaptureRunner {
   return new CaptureRunner({
     root, tmuxBase, recorder: [process.execPath, compiledRecorder()], toolsPath,
     launcher: seams.launcher ?? tmuxLauncher('tmux', t.tmuxCallMs, seams.tmux),
     standIn: seams.standIn ?? ((reply) => startStandIn(reply === undefined ? {} : { reply })),
     stepTimeoutMs: t.stepMs, exitTimeoutMs: t.exitMs, pollMs: t.pollMs, stopWaitMs: t.stopWaitMs, standInCloseMs: t.standInCloseMs,
-    ...deliveryOf(seams, t),
+    ...deliveryOf(seams, t, release),
     ...(seams.now === undefined ? {} : { now: seams.now }), ...(seams.sleep === undefined ? {} : { sleep: seams.sleep }),
   });
 }
@@ -308,6 +308,9 @@ export interface CaptureDeskOpts {
   readonly tmuxBase?: string;
   readonly uid?: number;
   readonly seams?: CaptureSeams;
+  /** The test box's own release tag (`releaseFacts(release).release`), which a delivery capture's result carries; absent
+   *  or null: unknown. */
+  readonly release?: string | null;
 }
 
 /** The build capture desk (spec 2026-11-22), with its runner wired (PR 3b): the role and the fleet directories as the probe
@@ -326,7 +329,7 @@ export function captureDeskFor(cfg: TestboxConfig, o: CaptureDeskOpts = {}): Cap
  *  handed that very object (gate G1 runs through this function, review 3687 F2 and review 3765 F2), or no runner. */
 export function captureDeskComposed(cfg: TestboxConfig, tmuxBase: string, wired: boolean, o: CaptureDeskOpts = {}): CaptureDesk {
   const timings = CAPTURE_TIMINGS;
-  return captureDeskWith(cfg, wired ? captureRunnerFor(cfg.root, tmuxBase, o.toolsPath ?? (() => null), timings, o.seams) : null, timings, tmuxBase, o);
+  return captureDeskWith(cfg, wired ? captureRunnerFor(cfg.root, tmuxBase, o.toolsPath ?? (() => null), timings, o.seams, o.release ?? null) : null, timings, tmuxBase, o);
 }
 
 /** The desk around `runner`, as `captureDeskComposed` composes it: the late check on `timings`, the very contract the runner
@@ -395,7 +398,7 @@ export function serviceFor(cfg: TestboxConfig, release: string, exit: (code: num
     probes: probeDeskFor(cfg, seams.probeRunner ?? null),
     // Spec 2026-11-22 PR 3b: the capture's tools are the current set's when each capture starts, and it starts only while
     // the box admits work (gate G2).
-    captures: captureDeskFor(cfg, { ...seams.capture, toolsPath: () => tools.bin(), admitting: () => tools.admitting() }),
+    captures: captureDeskFor(cfg, { ...seams.capture, release: facts.release, toolsPath: () => tools.bin(), admitting: () => tools.admitting() }),
     // D-8907: a submission queued while a drain has the queue on disk goes there at once; a cancel for a run on disk
     // removes it there; and a run on disk keeps its id.
     queued: () => drain.queued(), cancelHandedOver: (id) => tools.cancelHandedOver(id), handedOver: (id) => tools.handedOver(id),

@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { composePrompt } from '../../shared/api.js';
 import {
   DELIVERY_CASE_RAW, DELIVERY_MODE_CHARS, DELIVERY_RECIPE_VERSION, composerOutput, deliveryCaptureResult, deliveryCaseResult,
-  deliveryCaseText, deliveryCaseVerdict, deliveryExpected, deliveryRecipeVersionOf, deliveryResultCurrency, firstDivergence, turnOf,
+  deliveryCaseText, deliveryCaseVerdict, deliveryExpected, deliveryRecipeVersionOf, deliveryTurnOf, deliveryResultCurrency, firstDivergence, turnOf,
   type DeliveryObserved,
 } from '../../shared/deliveryCapture.js';
 import {
@@ -15,6 +15,8 @@ import {
 } from '../../shared/deliveryResult.js';
 
 const BUILD = '2.1.320';
+const RELEASE = 'v0.0.1500';
+const NO_SIDE = { messages: 0, count_tokens: 0 } as const;
 const cps = (s: string): number => Array.from(s).length;
 const bytes = (s: string): number => new TextEncoder().encode(s).length;
 const lines = (s: string): number => s.split('\n').length;
@@ -112,6 +114,30 @@ describe('turnOf: what the model was asked for', () => {
   });
 });
 
+describe('deliveryTurnOf: the request rule, by route (review 3882 F4)', () => {
+  const turnBody = { model: 'm', tools: [{ name: 'Bash' }], messages: [{ role: 'user', content: 'hello' }] };
+  it('a count_tokens request shaped like a turn is never a turn', () => {
+    expect(turnOf(turnBody)).toEqual({ prompt: 'hello', blocks: 1 });
+    expect(deliveryTurnOf('count_tokens', turnBody)).toBeNull();
+  });
+  it('the same body by the messages route is a turn', () => {
+    expect(deliveryTurnOf('messages', turnBody)).toEqual({ prompt: 'hello', blocks: 1 });
+  });
+  it('the route table is part of the recipe\'s version: a table with one route less is another version', async () => {
+    vi.resetModules();
+    const actual = await vi.importActual<typeof import('../../shared/deliveryResult.js')>('../../shared/deliveryResult.js');
+    vi.doMock('../../shared/deliveryResult.js', () => ({ ...actual, DELIVERY_ROUTES: ['messages'] }));
+    try {
+      const other = await import('../../shared/deliveryCapture.js');
+      expect(other.DELIVERY_RECIPE_VERSION).toMatch(DELIVERY_VERSION_SHAPE);
+      expect(other.DELIVERY_RECIPE_VERSION).not.toBe(DELIVERY_RECIPE_VERSION);
+    } finally {
+      vi.doUnmock('../../shared/deliveryResult.js');
+      vi.resetModules();
+    }
+  });
+});
+
 describe('the verdict of one case', () => {
   const E = deliveryExpected('c1');
   it('one equal turn is intact', () => {
@@ -124,7 +150,7 @@ describe('the verdict of one case', () => {
   it('a truncated prompt is altered, with its first divergence', () => {
     const cut = E.slice(0, 5000);
     expect(deliveryCaseVerdict(E, { send: 'ok', turns: [cut] })).toBe('altered');
-    const r = deliveryCaseResult('c1', { send: 'ok', turns: [cut], sideRequests: 0, hookPrompts: [cut] });
+    const r = deliveryCaseResult('c1', { send: 'ok', turns: [cut], sideRequests: NO_SIDE, hookPrompts: [cut] });
     expect(r.divergence).toMatchObject({ turn: 0, index: 5000 });
     expect(r.hook).toBe('unequal');
   });
@@ -132,7 +158,7 @@ describe('the verdict of one case', () => {
     const lines2 = deliveryExpected('c1b').split('\n');
     const turns = [lines2[0]!, lines2.slice(1).join('\n')];
     expect(deliveryCaseVerdict(deliveryExpected('c1b'), { send: 'ok', turns })).toBe('split');
-    const r = deliveryCaseResult('c1b', { send: 'ok', turns, sideRequests: 0, hookPrompts: [] });
+    const r = deliveryCaseResult('c1b', { send: 'ok', turns, sideRequests: NO_SIDE, hookPrompts: [] });
     expect(r.divergence).toMatchObject({ turn: 0, index: 3000 });
     expect(r.receivedChars).toEqual([3000, 38]);
   });
@@ -162,9 +188,9 @@ describe('the verdict of one case', () => {
     expect(firstDivergence(exp, exp)).toBeNull();
   });
   it('the hook\'s witness is reported, never the verdict', () => {
-    const r = deliveryCaseResult('c0', { send: 'ok', turns: [deliveryExpected('c0')], sideRequests: 2, hookPrompts: ['other'] });
-    expect(r).toMatchObject({ verdict: 'intact', hook: 'unequal', sideRequests: 2 });
-    expect(deliveryCaseResult('c0', { send: 'ok', turns: [deliveryExpected('c0')], sideRequests: 0, hookPrompts: [] }).hook).toBe('absent');
+    const r = deliveryCaseResult('c0', { send: 'ok', turns: [deliveryExpected('c0')], sideRequests: { messages: 1, count_tokens: 1 }, hookPrompts: ['other'] });
+    expect(r).toMatchObject({ verdict: 'intact', hook: 'unequal', sideRequests: { messages: 1, count_tokens: 1 } });
+    expect(deliveryCaseResult('c0', { send: 'ok', turns: [deliveryExpected('c0')], sideRequests: NO_SIDE, hookPrompts: [] }).hook).toBe('absent');
   });
 });
 
@@ -197,12 +223,12 @@ describe('the parts: the cases split evenly in their order (the capture owner\'s
 });
 
 describe('readDeliveryCaptureResult: the one reader', () => {
-  const intact = (id: DeliveryCaseId): DeliveryCaseResult => deliveryCaseResult(id, { send: 'ok', turns: [deliveryExpected(id)], sideRequests: 0, hookPrompts: [deliveryExpected(id)] });
+  const intact = (id: DeliveryCaseId): DeliveryCaseResult => deliveryCaseResult(id, { send: 'ok', turns: [deliveryExpected(id)], sideRequests: NO_SIDE, hookPrompts: [deliveryExpected(id)] });
   const allIntact = (part = 0): DeliveryCaseResult[] => deliveryParts()[part]!.map(intact);
   const wire = (r: unknown): unknown => JSON.parse(JSON.stringify(r));
   it('reads back each part\'s result over the wire', () => {
     for (const part of [0, 1, 2]) {
-      const r = deliveryCaptureResult(BUILD, part, allIntact(part));
+      const r = deliveryCaptureResult(BUILD, part, allIntact(part), RELEASE, []);
       expect(r.word).toBe('intact');
       expect(readDeliveryCaptureResult(wire(r), BUILD, part)).toEqual(r);
     }
@@ -212,24 +238,24 @@ describe('readDeliveryCaptureResult: the one reader', () => {
     // The first tab alone becomes two spaces: one divergence, at its index.
     const c3 = deliveryExpected('c3');
     const tab = c3.indexOf('\t');
-    const obs: DeliveryObserved = { send: 'ok', turns: [`${c3.slice(0, tab)}  ${c3.slice(tab + 1)}`], sideRequests: 1, hookPrompts: [] };
+    const obs: DeliveryObserved = { send: 'ok', turns: [`${c3.slice(0, tab)}  ${c3.slice(tab + 1)}`], sideRequests: { messages: 0, count_tokens: 1 }, hookPrompts: [] };
     cases[1] = deliveryCaseResult('c3', obs);
-    const r = deliveryCaptureResult(BUILD, 1, cases);
+    const r = deliveryCaptureResult(BUILD, 1, cases, RELEASE, []);
     expect(r.word).toBe('fault');
     expect(readDeliveryCaptureResult(wire(r), BUILD, 1)).toEqual(r);
   });
   it('reads a part whose cases are another split\'s (a box on another recipe): that is currency, not shape', () => {
-    const r = deliveryCaptureResult(BUILD, 0, DELIVERY_CASE_IDS.slice(0, 6).map(intact));
+    const r = deliveryCaptureResult(BUILD, 0, DELIVERY_CASE_IDS.slice(0, 6).map(intact), RELEASE, []);
     expect(readDeliveryCaptureResult(wire(r), BUILD, 0)).toEqual(r);
     expect(deliveryResultCurrency(r)).toBe('contradiction');
   });
   it('caps every count at the reader\'s ceiling: a turn longer than the ceiling still reads as its fault verdict', () => {
     const huge = 'x'.repeat(DELIVERY_COUNT_MAX + 5);
-    const c = deliveryCaseResult('c0', { send: 'ok', turns: [huge], sideRequests: DELIVERY_COUNT_MAX + 9, hookPrompts: [] });
+    const c = deliveryCaseResult('c0', { send: 'ok', turns: [huge], sideRequests: { messages: DELIVERY_COUNT_MAX + 9, count_tokens: 3 }, hookPrompts: [] });
     expect(c.verdict).toBe('altered');
     expect(c.receivedChars).toEqual([DELIVERY_COUNT_MAX]);
-    expect(c.sideRequests).toBe(DELIVERY_COUNT_MAX);
-    const r = deliveryCaptureResult(BUILD, 0, [c, ...allIntact(0).slice(1)]);
+    expect(c.sideRequests).toEqual({ messages: DELIVERY_COUNT_MAX, count_tokens: 3 });
+    const r = deliveryCaptureResult(BUILD, 0, [c, ...allIntact(0).slice(1)], RELEASE, []);
     expect(r.word).toBe('fault');
     expect(readDeliveryCaptureResult(wire(r), BUILD, 0)).toEqual(r);
   });
@@ -239,16 +265,16 @@ describe('readDeliveryCaptureResult: the one reader', () => {
       expect(cps(deliveryExpected(id)), id).toBeLessThan(DELIVERY_COUNT_MAX);
     }
     const long = deliveryExpected('c5') + 'y'.repeat(DELIVERY_COUNT_MAX + 5);
-    expect(deliveryCaseResult('c5', { send: 'ok', turns: [long], sideRequests: 0, hookPrompts: [] }).divergence!.index).toBe(cps(deliveryExpected('c5')));
+    expect(deliveryCaseResult('c5', { send: 'ok', turns: [long], sideRequests: NO_SIDE, hookPrompts: [] }).divergence!.index).toBe(cps(deliveryExpected('c5')));
   });
   it('judges and reports at most the bound\'s turns, and the reader reads what it reports', () => {
-    const c = deliveryCaseResult('c0', { send: 'ok', turns: Array.from({ length: DELIVERY_TURNS_MAX + 4 }, () => deliveryExpected('c0')), sideRequests: 0, hookPrompts: [] });
+    const c = deliveryCaseResult('c0', { send: 'ok', turns: Array.from({ length: DELIVERY_TURNS_MAX + 4 }, () => deliveryExpected('c0')), sideRequests: NO_SIDE, hookPrompts: [] });
     expect(c.receivedChars).toHaveLength(DELIVERY_TURNS_MAX);
     expect(c.verdict).toBe('duplicate');
-    const r = deliveryCaptureResult(BUILD, 0, [c, ...allIntact(0).slice(1)]);
+    const r = deliveryCaptureResult(BUILD, 0, [c, ...allIntact(0).slice(1)], RELEASE, []);
     expect(readDeliveryCaptureResult(wire(r), BUILD, 0)).toEqual(r);
   });
-  const good = (): Record<string, unknown> => wire(deliveryCaptureResult(BUILD, 0, allIntact())) as Record<string, unknown>;
+  const good = (): Record<string, unknown> => wire(deliveryCaptureResult(BUILD, 0, allIntact(), RELEASE, [])) as Record<string, unknown>;
   const casesOf = (o: Record<string, unknown>): Record<string, unknown>[] => o['cases'] as Record<string, unknown>[];
   it.each<[string, (o: Record<string, unknown>) => void]>([
     ['another build', (o) => { o['build'] = '2.1.321'; }],
@@ -289,13 +315,70 @@ describe('readDeliveryCaptureResult: the one reader', () => {
     mutate(o);
     expect(readDeliveryCaptureResult(o, BUILD, 0)).toBeNull();
   });
+  describe('release (review 3882 F5)', () => {
+    it('absent reads as null, null reads as null, a tag reads as given', () => {
+      const o = good();
+      delete o['release'];
+      expect(readDeliveryCaptureResult(o, BUILD, 0)?.release).toBeNull();
+      o['release'] = null;
+      expect(readDeliveryCaptureResult(o, BUILD, 0)?.release).toBeNull();
+      o['release'] = 'v0.0.1501';
+      expect(readDeliveryCaptureResult(o, BUILD, 0)?.release).toBe('v0.0.1501');
+    });
+    it.each(['main', 'v1', '', 'v0.0.1500-rc1', 7, {}])('refuses %j', (bad) => {
+      const o = good();
+      o['release'] = bad;
+      expect(readDeliveryCaptureResult(o, BUILD, 0)).toBeNull();
+    });
+  });
+  describe('unmeasured (review 3882 A3)', () => {
+    it('reads the known name, and the empty list', () => {
+      const o = good();
+      o['unmeasured'] = ['fleet-tmux-config'];
+      expect(readDeliveryCaptureResult(o, BUILD, 0)?.unmeasured).toEqual(['fleet-tmux-config']);
+      o['unmeasured'] = [];
+      expect(readDeliveryCaptureResult(o, BUILD, 0)?.unmeasured).toEqual([]);
+    });
+    it.each<[string, (o: Record<string, unknown>) => void]>([
+      ['absent', (o) => { delete o['unmeasured']; }],
+      ['a name the vocabulary does not have', (o) => { o['unmeasured'] = ['no-such-thing']; }],
+      ['a name twice', (o) => { o['unmeasured'] = ['fleet-tmux-config', 'fleet-tmux-config']; }],
+      ['not a list', (o) => { o['unmeasured'] = 'fleet-tmux-config'; }],
+      ['a name that is not text', (o) => { o['unmeasured'] = [1]; }],
+      ['an inherited name', (o) => { o['unmeasured'] = ['toString']; }],
+    ])('refuses it %s', (_why, mutate) => {
+      const o = good();
+      mutate(o);
+      expect(readDeliveryCaptureResult(o, BUILD, 0)).toBeNull();
+    });
+  });
+  describe('sideRequests by route (review 3882 F4)', () => {
+    it('reads one count per route', () => {
+      const o = good();
+      casesOf(o)[0]!['sideRequests'] = { messages: 2, count_tokens: 5 };
+      expect(readDeliveryCaptureResult(o, BUILD, 0)?.cases[0]!.sideRequests).toEqual({ messages: 2, count_tokens: 5 });
+    });
+    it.each<[string, unknown]>([
+      ['a missing route', { messages: 1 }],
+      ['an extra key', { messages: 1, count_tokens: 1, models: 1 }],
+      ['a non-count', { messages: 1, count_tokens: 'x' }],
+      ['a negative count', { messages: -1, count_tokens: 0 }],
+      ['a count past its ceiling', { messages: DELIVERY_COUNT_MAX + 1, count_tokens: 0 }],
+      ['a bare number (the old shape)', 0],
+      ['null', null],
+    ])('refuses %s', (_why, bad) => {
+      const o = good();
+      casesOf(o)[0]!['sideRequests'] = bad;
+      expect(readDeliveryCaptureResult(o, BUILD, 0)).toBeNull();
+    });
+  });
   it('refuses a part the recipe does not have, even when the result echoes it', () => {
     const o = good();
     o['part'] = DELIVERY_PART_COUNT;
     expect(readDeliveryCaptureResult(o, BUILD, DELIVERY_PART_COUNT)).toBeNull();
   });
   it('refuses a build that is not a Claude Code version, and anything that is not an object', () => {
-    const r = deliveryCaptureResult('nope', 0, allIntact());
+    const r = deliveryCaptureResult('nope', 0, allIntact(), RELEASE, []);
     expect(readDeliveryCaptureResult(wire(r), 'nope', 0)).toBeNull();
     expect(readDeliveryCaptureResult(null, BUILD, 0)).toBeNull();
     expect(readDeliveryCaptureResult([], BUILD, 0)).toBeNull();
@@ -303,7 +386,7 @@ describe('readDeliveryCaptureResult: the one reader', () => {
 });
 
 describe('deliveryResultCurrency: a row at this side\'s recipe, as a word (calls 1148 and 1159, version skew)', () => {
-  const r = (part: number, ids: readonly DeliveryCaseId[]) => deliveryCaptureResult(BUILD, part, ids.map((id) => deliveryCaseResult(id, { send: 'ok', turns: [deliveryExpected(id)], sideRequests: 0, hookPrompts: [] })));
+  const r = (part: number, ids: readonly DeliveryCaseId[]) => deliveryCaptureResult(BUILD, part, ids.map((id) => deliveryCaseResult(id, { send: 'ok', turns: [deliveryExpected(id)], sideRequests: NO_SIDE, hookPrompts: [] })), RELEASE, []);
   it('is current when the version and the part\'s cases are this recipe\'s', () => {
     for (const part of [0, 1, 2]) expect(deliveryResultCurrency(r(part, deliveryParts()[part]!))).toBe('current');
   });
@@ -322,7 +405,7 @@ describe('deliveryResultCurrency: a row at this side\'s recipe, as a word (calls
 describe('the recipe\'s version: computed from the cases and the rule, never kept by hand', () => {
   it('is 16 hex characters, and the result carries it', () => {
     expect(DELIVERY_RECIPE_VERSION).toMatch(DELIVERY_VERSION_SHAPE);
-    expect(deliveryCaptureResult(BUILD, 0, []).version).toBe(DELIVERY_RECIPE_VERSION);
+    expect(deliveryCaptureResult(BUILD, 0, [], null, []).version).toBe(DELIVERY_RECIPE_VERSION);
   });
   it('covers the split: another partition is another version', () => {
     expect(deliveryRecipeVersionOf()).toBe(DELIVERY_RECIPE_VERSION);

@@ -2,7 +2,8 @@
 // at most ONE delivery job goes out through the same transport; its result lands in `claude_build_deliveries` when the one
 // reader accepts it and the recipe calls it current, and it NEVER touches a trust row. Also the transport's delivery rows, the
 // remote arm's frame, and the build list's `deliveries` read. The transport is a FAKE: nothing reaches a test box.
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { copyFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { openCoordDb } from '../src/coord/db.js';
@@ -12,6 +13,7 @@ import { BUILD_CAPTURE_SWEEP_MS, BuildCaptureLane, type BuildCaptureAnswer, type
 import { testboxCaptureTransport } from '../src/testboxCapture.js';
 import type { CaptureAsked } from '../src/io.js';
 import { createIo } from '../src/remote/io.js';
+import { AgentOpError } from '../src/remote/errors.js';
 import { registerCoordRoutes } from '../src/coord/routes.js';
 import { Bus } from '../src/bus.js';
 import type { Deps } from '../src/server.js';
@@ -21,9 +23,34 @@ import { DELIVERY_PART_COUNT, readDeliveryViews, type DeliveryCaptureResult } fr
 import { TESTBOX_CAPTURE_OP, TESTBOX_CAPTURE_REQUEST_MS, type TestboxCaptureReply } from '../../shared/agent-protocol.js';
 import { testDeps } from './helpers.js';
 import { deliveryResultFor } from './deliveryLaneHelpers.js';
-import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
+import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 
-afterEach(() => { removeTmpFixtures(); vi.restoreAllMocks(); });
+// ONE migrated coord.db for the file (review 3882 A7): opening a store runs every migration, which took 6 to 13 s a case on
+// the loaded box (36 cases, 152 s together), so each case copies a template migrated once. A fresh warn spy per case, restored
+// after it, and every pass a case started is settled before the case ends, so a case that fails or times out can never leave
+// its warning to the next ("warn called 2 times").
+let template = '';
+const opened: CoordStore[] = [];
+const started: Promise<unknown>[] = [];
+beforeAll(() => {
+  template = path.join(mkTmp('ccrc-delivery-lane-template-'), 'coord.db');
+  openCoordDb(template).close();
+});
+removeTmpFixturesEachTest(); // the template, made in beforeAll, is older than any case's mark and stays until the file ends
+beforeEach(() => { vi.spyOn(console, 'warn').mockImplementation(() => {}); });
+afterEach(async () => {
+  await Promise.allSettled(started.splice(0));
+  for (const o of opened.splice(0)) { try { o.db.close(); } catch { /* already closed */ } }
+  vi.restoreAllMocks();
+});
+/** A store over a copy of the migrated template, closed after the case. */
+function freshStore(home: string): CoordStore {
+  mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+  copyFileSync(template, path.join(home, '.ccrc', 'coord.db'));
+  const c = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+  opened.push(c);
+  return c;
+}
 
 type Answer = BuildCaptureAnswer | Promise<BuildCaptureAnswer>;
 /** A fake transport: records every full job, answers what the row hands it. */
@@ -37,12 +64,17 @@ const intact = (job: BuildCaptureJob): BuildCaptureAnswer =>
 
 async function setup(transport: BuildCaptureTransport) {
   const home = mkTmp('ccrc-delivery-lane-');
-  const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+  const coord = freshStore(home);
   const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
   await notifyLog.load();
   let clock = 1_000_000_000_000;
   const lane = new BuildCaptureLane(() => ({ coord, notifyLog, buildCapture: transport }), () => clock);
-  const pass = async (versions: (string | null)[] = []) => { clock += BUILD_CAPTURE_SWEEP_MS; await lane.sweep(versions); };
+  const pass = (versions: (string | null)[] = []): Promise<void> => {
+    clock += BUILD_CAPTURE_SWEEP_MS;
+    const run = lane.sweep(versions);
+    started.push(run);
+    return run;
+  };
   return { coord, lane, pass, tick: (ms: number) => { clock += ms; }, now: () => clock };
 }
 const warned = (): string[] => (console.warn as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => String(c[0]));
@@ -98,10 +130,13 @@ describe('the lane sends one delivery job after the trust part', () => {
     const t = fake((job) => new Promise((r) => { release = () => r(intact(job)); }));
     const s = await setup(t);
     const first = s.pass();
-    await s.pass();
-    await s.pass();
-    expect(t.jobs).toHaveLength(1);
-    release();
+    try {
+      await s.pass();
+      await s.pass();
+      expect(t.jobs).toHaveLength(1);
+    } finally {
+      release(); // cancels the held job whatever the assertions say, so the pass can end before the case does
+    }
     await first;
     expect(s.coord.claudeBuildDeliveries()).toHaveLength(1);
   });
@@ -290,6 +325,38 @@ describe('the remote arm sends the recipe and the part for a delivery ask only',
     expect(await testboxCaptureTransport(() => ({ testboxCapture })).capture({ build: BUILD, recipe: 'delivery' })).toEqual({ kind: 'unavailable', why: 'not-started' });
     expect(testboxCapture).not.toHaveBeenCalled();
   });
+  describe('an older fleet agent that lists the op but predates the recipe fields (review 3882 A1)', () => {
+    const old = () => new AgentOpError('bad-request', null);
+    it('a delivery job answered bad-request is not-taken, with one log line saying what was measured and the likely cause', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const request = vi.fn(async () => { throw old(); });
+      const io = createIo({ state: { agentOps: [TESTBOX_CAPTURE_OP] }, request } as never);
+      expect(await io.testboxCapture(BUILD, 'delivery', 0)).toEqual({
+        ok: true, reply: { outcome: 'not-taken', refusal: null, result: null, detail: null, delivery: null },
+      });
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]![0])).toMatch(/^ccrc-server: .*answered bad-request to a delivery job, so the part was not sent \(likely an agent older/);
+    });
+    it('a trust job answered bad-request is still unanswered, with no line', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const io = createIo({ state: { agentOps: [TESTBOX_CAPTURE_OP] }, request: async () => { throw old(); } } as never);
+      expect(await io.testboxCapture(BUILD)).toEqual({ ok: false, reason: 'unanswered' });
+      expect(warn).not.toHaveBeenCalled();
+    });
+    it('any other agent error on a delivery job is still unanswered', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const io = createIo({ state: { agentOps: [TESTBOX_CAPTURE_OP] }, request: async () => { throw new AgentOpError('forbidden', null); } } as never);
+      expect(await io.testboxCapture(BUILD, 'delivery', 0)).toEqual({ ok: false, reason: 'unanswered' });
+    });
+    it('through the lane: the part is recipe-not-run and no attempt is counted', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const io = createIo({ state: { agentOps: [TESTBOX_CAPTURE_OP] }, request: async () => { throw old(); } } as never);
+      const s = await setup(testboxCaptureTransport(() => io));
+      await s.pass();
+      expect(s.coord.claudeBuildDeliveries()[0]).toMatchObject({ part: 0, attempts: 0, notSent: 'recipe-not-run', result: null });
+    });
+  });
   it('a trust ask sends no recipe or part', async () => {
     const request = vi.fn(async () => ({ outcome: 'unreachable', refusal: null, result: null, detail: null }));
     const io = createIo({ state: { agentOps: [TESTBOX_CAPTURE_OP] }, request } as never);
@@ -303,7 +370,7 @@ describe('GET /api/testbox/builds carries the deliveries', () => {
   afterEach(async () => { for (const a of apps.splice(0)) await a.close(); });
   async function route() {
     const home = mkTmp('ccrc-deliveries-route-');
-    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const coord = freshStore(home);
     const deps: Deps = { ...testDeps(home), coord };
     const sessionAuth = (): GateDecision => ({ allow: true, verdict: 'ok', reason: 'session', device: null });
     const app = Fastify();

@@ -261,7 +261,7 @@ describe('gate G1: the composed desk and runner, the real launcher, on a virtual
         },
         signal: () => undefined,
       },
-      standIn: async () => ({ port: 1, requests: [], close: () => new Promise<void>(() => undefined) }),
+      standIn: async () => ({ port: 1, requests: [], routes: [], close: () => new Promise<void>(() => undefined) }),
     } });
     const at: number[] = [];
     const frames: CaptureAnswer[] = [];
@@ -362,8 +362,12 @@ describe('the desk\'s late check reads the contract it is given', () => {
 describe('the runner\'s delivery bounds are the contract\'s', () => {
   const driver = { drive: async (): Promise<never> => { throw new Error('not run'); } };
   it('a seam\'s wiring takes the given contract\'s settle and quiet bounds, and no wiring is none', () => {
-    expect(deliveryOf({ delivery: { driver, tmuxConf: null } }, T)).toEqual({ delivery: { driver, tmuxConf: null, settleMs: T.deliverySettleMs, quietMs: T.deliveryQuietMs } });
-    expect(deliveryOf({ delivery: null }, T)).toEqual({});
+    expect(deliveryOf({ delivery: { driver, tmuxConf: null } }, T, null)).toEqual({ delivery: { driver, tmuxConf: null, release: null, settleMs: T.deliverySettleMs, quietMs: T.deliveryQuietMs } });
+    expect(deliveryOf({ delivery: null }, T, null)).toEqual({});
+  });
+  it('the box\'s release tag is pinned into the delivery dependencies, and absent is null, never a made-up tag (review 3882 F5)', () => {
+    expect(deliveryOf({ delivery: { driver, tmuxConf: null } }, T, 'v1.2.3')).toEqual({ delivery: { driver, tmuxConf: null, release: 'v1.2.3', settleMs: T.deliverySettleMs, quietMs: T.deliveryQuietMs } });
+    expect(deliveryOf({ delivery: { driver, tmuxConf: null } }, T)).toEqual({ delivery: { driver, tmuxConf: null, release: null, settleMs: T.deliverySettleMs, quietMs: T.deliveryQuietMs } });
   });
   it('the production wiring\'s driver child is stopped at the given contract\'s bound and killed its kill grace later', async () => {
     const dir = mkTmp('ccrc-capwire-');
@@ -388,8 +392,9 @@ describe('gate G1: a delivery part, composed, every bound taken, ends within its
   const t = CAPTURE_TIMINGS;
   const cases = deliveryParts()[0]!.length;
   /** The worst case less its two allowances and the polls' overruns, which this clock never has: the start's, the two
-   *  steps before's, each case's settle and quiet, the /exit step's, the exit wait's and the stop wait's. Measured EXACTLY. */
-  const atLimits = deliveryWorstCaseMs(t) - t.setupMs - t.removeMs - (DELIVERY_STEPS_BEFORE.length + 2 * cases + 3) * t.pollMs;
+   *  steps before's, each case's settle and quiet, the last case's trailing settle window, the /exit step's, the exit wait's
+   *  and the stop wait's. Measured EXACTLY. */
+  const atLimits = deliveryWorstCaseMs(t) - t.setupMs - t.removeMs - (DELIVERY_STEPS_BEFORE.length + 2 * cases + 4) * t.pollMs;
 
   it(`the steps before at their bound, each of the ${cases} cases' driver stopped at its bound with its kill grace and drain, the settle and the quiet in full, /exit at its bound, the exit wait and the stop`, async () => {
     const root = realpathSync(mkTmp('ccrc-capg1d-'));
@@ -426,7 +431,7 @@ describe('gate G1: a delivery part, composed, every bound taken, ends within its
         },
         signal: () => undefined,
       },
-      standIn: async () => ({ port: 1, requests: [], close: () => new Promise<void>(() => undefined) }),
+      standIn: async () => ({ port: 1, requests: [], routes: [], close: () => new Promise<void>(() => undefined) }),
       delivery: { driver, tmuxConf: null },
     } });
     const t0 = clock.now;
@@ -440,9 +445,13 @@ describe('gate G1: a delivery part, composed, every bound taken, ends within its
     expect(at).toBeLessThanOrEqual(deliveryWorstCaseMs(t));
   });
 
-  it('the figures today: a four-case part 385.5 s, two parts with the margin 801 s of the 900 s wait, and three parts', () => {
-    expect(deliveryWorstCaseMs(t)).toBe(385_500);
-    expect(2 * deliveryWorstCaseMs(t) + CAPTURE_DEADLINE_MARGIN_MS).toBe(801_000);
+  it('the figures today: a four-case part 401 s (the trailing window, one settle and a poll, over 385.5 s), trust unchanged at 399.5 s, every pair with the margin inside the 900 s wait, and three parts', () => {
+    const part = deliveryWorstCaseMs(t);
+    const trust = captureWorstCaseMs(t);
+    expect(part).toBe(401_000);
+    expect(trust).toBe(399_500);
+    expect([part + part, part + trust, trust + part].map((pair) => pair + CAPTURE_DEADLINE_MARGIN_MS)).toEqual([832_000, 830_500, 830_500]);
+    for (const pair of [part + part, part + trust, trust + part]) expect(pair + CAPTURE_DEADLINE_MARGIN_MS).toBeLessThanOrEqual(TESTBOX_CAPTURE_DEADLINE_MS);
     expect(deliveryPartCount(t)).toBe(3);
   });
 });

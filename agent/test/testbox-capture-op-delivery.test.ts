@@ -22,7 +22,7 @@ const BUILD = '2.1.150';
 const ID = 'ab'.repeat(16);
 const PART = 1;
 const RESULT = JSON.parse(JSON.stringify(deliveryCaptureResult(BUILD, PART, deliveryParts()[PART]!.map((id) =>
-  deliveryCaseResult(id, { send: 'ok', turns: [deliveryExpected(id)], sideRequests: 0, hookPrompts: [] })))));
+  deliveryCaseResult(id, { send: 'ok', turns: [deliveryExpected(id)], sideRequests: { messages: 0, count_tokens: 0 }, hookPrompts: [] })), 'v1.2.3', [])));
 const PASS = { build: BUILD, pass: true, cwd: true, output: 'ok' };
 
 interface World { home: string; agentPath: string; calls(): string[] }
@@ -119,7 +119,7 @@ describe('captureTestbox with the delivery recipe', () => {
 
   it('a result for another part than the one submitted is no answer (call 1159: this check alone binds them)', async () => {
     const other = JSON.parse(JSON.stringify(deliveryCaptureResult(BUILD, 0, deliveryParts()[0]!.map((id) =>
-      deliveryCaseResult(id, { send: 'ok', turns: [deliveryExpected(id)], sideRequests: 0, hookPrompts: [] })))));
+      deliveryCaseResult(id, { send: 'ok', turns: [deliveryExpected(id)], sideRequests: { messages: 0, count_tokens: 0 }, hookPrompts: [] })), 'v1.2.3', [])));
     const b = await box((ws) => send(ws, state({ state: 'ended', position: null, delivery: other })));
     expect(await run(world(b.url), 'delivery')).toMatchObject({ outcome: 'unanswered', delivery: null, detail: expect.stringMatching(/a result for part 0, not the part 1 submitted/) });
   });
