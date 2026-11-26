@@ -461,11 +461,13 @@ describe('W3 T3: hooks.ts spells none of the response-policy headers (it sets wh
 /** The passphrase and the fast scrypt parameters of an armed fixture (`update-routes.test.ts`'s pair). */
 const M54_PASSPHRASE = 'correct horse battery staple';
 const M54_FAST_PARAMS: ScryptParams = { n: 1024, r: 8, p: 1, keylen: 32 };
-/** The eight Docs routes as `METHOD path` keys (including X2 P4's two settings doors): what the derived set must equal. */
+/** The thirteen Docs routes as `METHOD path` keys (including X2 P4's two settings doors and X5 A2.3's five artifact doors):
+ *  what the derived set must equal. */
 const M54_DOCS_KEYS = [
   'GET /api/docs/:project/file', 'GET /api/docs/:project/history', 'GET /api/docs/:project/range',
-  'GET /api/docs/:project/tree', 'GET /api/docs/projects', 'GET /api/docs/settings',
-  'POST /api/docs/:project/refresh', 'PUT /api/docs/settings',
+  'GET /api/docs/:project/tree', 'GET /api/docs/artifacts', 'GET /api/docs/artifacts/scope', 'GET /api/docs/projects',
+  'GET /api/docs/settings', 'POST /api/docs/:project/refresh', 'POST /api/docs/artifacts', 'POST /api/docs/artifacts/:id/revoke',
+  'POST /api/docs/artifacts/revoke-all', 'PUT /api/docs/settings',
 ];
 /** The range recipe's pin and snapshot, and the frame the runner answers for it (the fixture's own four bytes). */
 const M54_RANGE_PIN: DocsRangePin = { kind: 'blob', sha: 'b'.repeat(40) };
@@ -479,10 +481,43 @@ const M54_PIN: DocPin = {
 /** The history ask the history recipe makes (the ok line for it is built where the runner answers). */
 const M54_LOG_ASK = { commit: FIXTURE_COMMIT, section: 'specs', path: 'a.md' } as const;
 
-/** One request: its method, URL, optional JSON body and the status of a refusal other than 400. */
+/** One request: its method, URL, optional JSON body, and the status it answers when that is not the probe's default (an
+ *  `ok` request's other than 200, a `refused` one's other than 400). */
 interface M54Req { method: 'GET' | 'POST' | 'PUT'; url: string; payload?: string; withoutMarker?: boolean; status?: number }
-/** How to make one docs route answer a 200 and a 4xx (a refused query, body or marker), by its derived key. */
-const RECIPES: Readonly<Record<string, { ok: M54Req; refused: M54Req }>> = {
+/** How to make one docs route answer its ok and its 4xx (a refused query, body or marker), by its derived key, and, where it
+ *  is not the 502 or 503 of a failing ccd, what its `ok` request answers on the fault arm. */
+const RECIPES: Readonly<Record<string, { ok: M54Req; refused: M54Req; fault?: number }>> = {
+  // The artifact tier's five doors (X5 A2.3). The fixture's tier is off and its sign-in dark: the scope read and the mint
+  // answer the account gate's `auth-off` (501) before any parse, on every arm, and the list read, Revoke and Revoke all answer
+  // 200, since none of them reads ccd. Each refuses a request without the docs marker (403), before its handler.
+  'GET /api/docs/artifacts': {
+    ok: { method: 'GET', url: docsApi.artifacts() },
+    refused: { method: 'GET', url: docsApi.artifacts(), withoutMarker: true, status: 403 },
+    fault: 200,
+  },
+  'GET /api/docs/artifacts/scope': {
+    ok: { method: 'GET', url: docsApi.artifactScope('demo', M54_PIN), status: 501 },
+    refused: { method: 'GET', url: docsApi.artifactScope('demo', M54_PIN), withoutMarker: true, status: 403 },
+    fault: 501,
+  },
+  'POST /api/docs/artifacts': {
+    ok: {
+      method: 'POST', url: docsApi.artifactMint(), status: 501,
+      payload: JSON.stringify({ project: 'demo', pin: M54_PIN, origins: [], windows: false }),
+    },
+    refused: { method: 'POST', url: docsApi.artifactMint(), payload: '{}', withoutMarker: true, status: 403 },
+    fault: 501,
+  },
+  'POST /api/docs/artifacts/:id/revoke': {
+    ok: { method: 'POST', url: docsApi.artifactRevoke('demo-id'), payload: '{}' },
+    refused: { method: 'POST', url: docsApi.artifactRevoke('demo-id'), payload: '{}', withoutMarker: true, status: 403 },
+    fault: 200,
+  },
+  'POST /api/docs/artifacts/revoke-all': {
+    ok: { method: 'POST', url: docsApi.artifactRevokeAll(), payload: '{}' },
+    refused: { method: 'POST', url: docsApi.artifactRevokeAll(), payload: '{}', withoutMarker: true, status: 403 },
+    fault: 200,
+  },
   'GET /api/docs/projects': {
     ok: { method: 'GET', url: docsApi.projects() },
     refused: { method: 'GET', url: `${docsApi.projects()}?x=1` },
@@ -621,7 +656,7 @@ function sendM54(app: FastifyInstance, req: M54Req, headers: Record<string, stri
 }
 
 /** The recipe for a derived key; a route with none fails by name. */
-function recipeFor(key: string): { ok: M54Req; refused: M54Req } {
+function recipeFor(key: string): { ok: M54Req; refused: M54Req; fault?: number } {
   const r = RECIPES[key];
   expect(r, `${key} is a docs route with no recipe here — was a route added outside this plan?`).toBeDefined();
   return r;
@@ -634,7 +669,7 @@ function expectDecorated(key: string, res: { statusCode: number; headers: Record
 }
 
 describe('M5.4 — every docs route in the real server\'s table carries the four headers (section 5.3, section 5.8)', () => {
-  it('the derived set: the real table under /api/docs is exactly the eight Docs routes, and the walk read every row', async () => {
+  it('the derived set: the real table under /api/docs is exactly the thirteen Docs routes, and the walk read every row', async () => {
     const { app } = await m54Server();
     expect(derivedDocsRoutes(app)).toEqual(M54_DOCS_KEYS);
   });
@@ -666,7 +701,7 @@ describe('M5.4 — every docs route in the real server\'s table carries the four
     for (const key of derivedDocsRoutes(app)) {
       const req = recipeFor(key).ok;
       const res = await sendM54(app, req, PWA);
-      expect(res.statusCode, key).toBe(200);
+      expect(res.statusCode, key).toBe(req.status ?? 200);
       expectDecorated(key, res);
       if (req.url === docsApi.settings()) {
         expect(res.headers['cache-control'], key).toBe('no-store');
@@ -688,10 +723,11 @@ describe('M5.4 — every docs route in the real server\'s table carries the four
   it('a 5xx: ccd or settings store unreadable (502), refresh caps-unknown (503)', async () => {
     const { app, state } = await m54Server({ fault: true });
     for (const key of derivedDocsRoutes(app)) {
-      const req = recipeFor(key).ok;
+      const recipe = recipeFor(key);
+      const req = recipe.ok;
       state.ccdVerbs = req.method === 'POST' ? null : ['caps', DOCS_CAP, DOCS_LOG_CAP, DOCS_RANGE_CAP];
       const res = await sendM54(app, req, PWA);
-      expect(res.statusCode, key).toBe(req.method === 'POST' ? 503 : 502);
+      expect(res.statusCode, key).toBe(recipe.fault ?? (req.method === 'POST' ? 503 : 502));
       expectDecorated(key, res);
     }
   });
@@ -714,7 +750,10 @@ describe('M5.4 — every docs route in the real server\'s table carries the four
     const first = Array.isArray(set) ? set[0] : String(set);
     const cookie = first.slice(0, first.indexOf(';'));
     const writes = derivedDocsRoutes(app).filter((k) => !k.startsWith('GET '));
-    expect(writes).toEqual(['POST /api/docs/:project/refresh', 'PUT /api/docs/settings']);
+    expect(writes).toEqual([
+      'POST /api/docs/:project/refresh', 'POST /api/docs/artifacts', 'POST /api/docs/artifacts/:id/revoke',
+      'POST /api/docs/artifacts/revoke-all', 'PUT /api/docs/settings',
+    ]);
     for (const key of writes) {
       const res = await sendM54(app, recipeFor(key).ok, { ...PWA, cookie, origin: 'https://other.example' });
       expect(res.statusCode, key).toBe(403);
