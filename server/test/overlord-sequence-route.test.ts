@@ -30,6 +30,7 @@ import { buildServer } from '../src/server.js';
 import type { DesignationRead } from '../../shared/overlord-designation.js';
 import { SEQUENCE_PAGE_MAX } from '../../shared/overlord-sequence.js';
 import { REFUSAL_STATUS } from '../../shared/refusal.js';
+import { READ_CEILINGS } from '../../shared/overlordInbox.js';
 import { testDeps } from './helpers.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
@@ -98,6 +99,7 @@ interface SeqRig {
   app: FastifyInstance; lines: () => Record<string, unknown>[];
   /** How many times the door read the sequence. */
   reads: () => number;
+  store: OperatorModelStore;
 }
 interface SeqOpts {
   db?: DatabaseSync; words?: readonly string[]; unreadable?: boolean; ledgerFails?: boolean;
@@ -145,7 +147,7 @@ async function seqRig(o: SeqOpts = {}): Promise<SeqRig> {
   });
   await app.ready();
   return {
-    app, reads: () => reads,
+    app, reads: () => reads, store,
     lines: () => storeDb.prepare('SELECT door, caller, scope, count, outcome FROM read_ledger ORDER BY id').all() as never,
   };
 }
@@ -185,6 +187,36 @@ describe('GET /api/overlord/sequence: the gate first', () => {
       .toBe(REFUSAL_STATUS.unauthenticated);
     expect((await r.app.inject({ method: 'GET', url: '/api/overlord/sequence', headers: HEADERS })).statusCode).toBe(400);
     expect([r.reads(), r.lines()]).toEqual([0, []]);
+  });
+});
+
+// The ceiling (review 3978, residue b): it counts every attributed SERVED line of this door, so a page counts and a gap does not.
+describe('GET /api/overlord/sequence: the read ceiling', () => {
+  const served = (r: SeqRig, n: number, outcome = 'rows', door: 'sequence' | 'board' = 'sequence'): void => {
+    for (let i = 0; i < n; i += 1) {
+      const w = r.store.recordRead({ at: NOW - 60_000, door, caller: 'overlord', scope: 'after=0', count: outcome === 'rows' ? 1 : 0, outcome,
+        generation: 1, generationRead: 'measured', turnState: 'done' });
+      expect(w.ok).toBe(true);
+    }
+  };
+
+  it('past the ceiling: read-ceiling with its retry time, and the sequence is not read', async () => {
+    const r = await seqRig({ db: sequenceDb([{}, {}]) });
+    served(r, READ_CEILINGS.sequence.perHour);
+    const res = await read(r);
+    expect(res.statusCode).toBe(REFUSAL_STATUS['read-ceiling']);
+    expect(json(res)).toMatchObject({ ok: false, error: 'read-ceiling', retryAfterS: expect.any(Number) });
+    expect((json(res)['retryAfterS'] as number) > 0).toBe(true);
+    expect(r.reads()).toBe(0);
+  });
+
+  it('answers that serve no line, and other doors\' served lines, do not count: a gap, ahead or unmeasured line leaves the read served', async () => {
+    const r = await seqRig({ db: sequenceDb([{}, {}]) });
+    served(r, READ_CEILINGS.sequence.perHour, 'gap');
+    served(r, READ_CEILINGS.sequence.perHour, 'rows', 'board');
+    const res = await read(r);
+    expect(res.statusCode).toBe(200);
+    expect(r.reads()).toBe(1);
   });
 });
 
