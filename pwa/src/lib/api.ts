@@ -51,8 +51,11 @@ import type { RenewalMode, RenewalModeView } from '../../../shared/continuity';
 import type { TestboxAdminFields, TestboxAdminSub } from '../../../shared/testbox-admin';
 import type { ProjectAddAnswer, ProjectAddBody } from '../../../shared/projectAdd';
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking';
-import type { DesignationView } from '../../../shared/overlord-designation';
-import type { LadderWire } from '../../../shared/overlord-ladder';
+import type { DesignateBody, DesignationView } from '../../../shared/overlord-designation';
+import type { LadderWire, NarrowingState, Rung } from '../../../shared/overlord-ladder';
+import type { ReadinessWire } from '../../../shared/overlord-readiness';
+import type { PortfolioView, RankWrite } from '../../../shared/portfolio';
+import type { PoolRunwayWire } from '../../../shared/loadLines';
 import type { EpicView, HierarchyAnswer, HierarchyProjectRow, MigrationView, PlanView, WorkAnswer } from '../../../shared/plan';
 import type { ReceiptIn, ResponseRetentionView, ResponseRowBrief } from '../../../shared/responses';
 import type { LinearItemAct, SecretRemoveAnswer, SecretSaveAnswer, StoredSecretsAnswer } from '../../../shared/ledgers';
@@ -351,6 +354,24 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     overlordDesignation: (opts?: ReadOpts) => getJsonOrAbsent<{ readonly designation: DesignationView | null }>('/api/overlord/designation', opts),
     overlordLadder: (opts?: ReadOpts) => getJsonOrAbsent<LadderWire>('/api/overlord/ladder', opts),
     serverCaps: (opts?: ReadOpts) => getJson<{ readonly caps?: readonly string[] }>('/health', opts),
+    /** The readiness word (Overlord W1 home B, Task 4), read only by `stores/overlord.ts`: `ReadinessWire` as served, `absent` on
+     *  an older server's 404; a 503 `unavailable` throws, which the store reads as unmeasured. */
+    overlordReadiness: (opts?: ReadOpts) => getJsonOrAbsent<ReadinessWire>('/api/overlord/readiness', opts),
+    /** The ladder's operator doors (home B, Task 4). A lowering answers `narrowing` (the "taking effect" line keys on it, never on
+     *  `changed`); a raise above `chat` refuses `capability-missing`, and the server asks the step-up for every raise. */
+    overlordRung: (rung: Rung) => postJson<{ readonly changed: boolean; readonly rung: Rung; readonly narrowing?: NarrowingState | null }>('/api/overlord/rung', { rung }),
+    overlordPause: () => postJson<{ readonly changed: boolean; readonly rung: Rung; readonly narrowing?: NarrowingState | null }>('/api/overlord/pause'),
+    /** A latch's Clear is a raise: the step-up, and no `narrowing` in its answer. */
+    clearLatch: (cause: string) => postJson<{ readonly changed: boolean }>(`/api/overlord/latches/${encodeURIComponent(cause)}/clear`),
+    /** Start, Rebind and Restart (home B, Task 5). Designate and Rebind ask the step-up; Restart does not. */
+    overlordDesignate: (body: DesignateBody) =>
+      postJson<{ readonly sessionId: string; readonly deadlineAt: number; readonly warnings: readonly { readonly warning: string; readonly pool?: string }[] }>('/api/overlord/designate', body),
+    overlordRebind: (force: boolean) => postJson<{ readonly sessionId: string; readonly deadlineAt: number }>('/api/overlord/rebind', { force }),
+    overlordRestart: () => postJson<{ readonly sessionId: string }>('/api/overlord/restart'),
+    /** The portfolio strip and the capacity line (home B, Task 6): `absent` on a server without the read. */
+    portfolio: () => getJsonOrAbsent<{ readonly portfolio: PortfolioView }>('/api/portfolio'),
+    rankPortfolio: (body: RankWrite) => postJson<{ readonly revision: number; readonly portfolio: PortfolioView }>('/api/portfolio/rank', body),
+    poolRunway: () => getJsonOrAbsent<PoolRunwayWire>('/api/pools/runway'),
     rebootFleet: () => post('/api/fleet/reboot'),
 
     /** `GET /api/updates` — the control plane read (W2 Task 13): catalogue line,
