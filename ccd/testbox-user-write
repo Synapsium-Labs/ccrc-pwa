@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# testbox-user-write — the test box admin verb's box-side writes that land where a less privileged user of the box has a say.
+# SOURCED by ccd/ccrc-testbox-admin (before ccd/testbox-build-copy, which takes TBA_DROP from here), never run: it defines
+# strings only, the box programs the verb sends over its one way to the box (`_tba_ssh`, which quotes each word with `%q`, so
+# each program is one line: a newline would reach the box's login shell as bash's `$'...'`).
+#
+# The properties every program here holds (task note docs/superpowers/programs/overlord/testbox-admin-hardening.md):
+#   P1  a write into a place a less privileged user controls is made with that user's identity, or it refuses: root drops to
+#       the user through TBA_DROP (the one privilege drop of the verb, which the build copy's writer runs under too), or the
+#       step never becomes root at all (the access key file's edits run as the login user itself: TBA_SSH_NOSUDO);
+#   P2  a link, a second name or a wrong kind of file at any name a step is about to write, own, mode or rename refuses, with
+#       a word of its own on stdout; nothing is followed: the writer renames with `mv -T`, which never treats the name as a
+#       directory, and a root step that must act on a folder of that user's acts on the folder it stands in (`.`), proved by
+#       its physical path, never on a name;
+#   P3  a check and the act it guards are one step: under the drop the kernel's own permission check, made at the act, is the
+#       guard (a name the user swaps after a check only leads the user's own act to the user's own files), and a root step
+#       checks only what no less privileged user can change (root's own folders, or the folder root stands in);
+#   P4  for a box in order nothing answers differently: each program fails with the exit its caller already maps to a closed
+#       code (5 with a word for the token and the access key file, 4 with a word for the release copy), and the word goes only
+#       to this host's log.
+#
+# ── BOX-SIDE COMMANDS (begin) ── they run on the test box over ssh, never on this host: the box runs the fleet host's own
+# distribution release (the preflight's `os` check), so its userland is GNU and util-linux's privilege drop is there. The
+# macOS scan (server/test/macos-platform.test.ts) cuts this region and pins what is in it.
+#
+# The privilege drop, as the words of one command: to `$u` and `$g` (numbers the caller has read), groups cleared, no
+# inheritable capability, a reset environment. The drop tool has no working-folder flag, so its caller changes folder first.
+# shellcheck disable=SC2016  # expanded by the box's sh, not here
+TBA_DROP='setpriv --reuid="$u" --regid="$g" --clear-groups --inh-caps=-all --reset-env --'
+# The one writer, a shell function the user-side programs carry: `tba_put <base> <file> <mode|keep|check>`, stdin the bytes.
+# <file> is below <base>, a real directory; every folder between is a real directory (one that is absent is made); the file is
+# absent, or a regular file with one name. Then the bytes go to a temporary file beside it, which takes <mode> (or, with `keep`,
+# the old file's mode and times), and one rename that never treats the name as a directory places it. `check` asks the checks
+# only and makes nothing. A refusal is one word on stdout and return 5; a failed step is return 1.
+# shellcheck disable=SC2016  # expanded by the box's sh, not here
+TBA_PUT_FN='tba_put() { b=$1; f=$2; m=$3; case $f in "$b"/?*) ;; *) echo put-outside; return 5;; esac; if [ -L "$b" ] || [ ! -d "$b" ]; then echo put-base; return 5; fi; d=$b; r=${f#"$b"/}; while :; do case $r in */*) n=${r%%/*}; r=${r#*/};; *) break;; esac; d=$d/$n; if [ -L "$d" ]; then echo put-dir-link; return 5; elif [ ! -e "$d" ]; then [ "$m" = check ] || mkdir -- "$d" || return 1; elif [ ! -d "$d" ]; then echo put-dir-kind; return 5; fi; done; if [ -L "$f" ]; then echo put-link; return 5; elif [ -e "$f" ] && [ ! -f "$f" ]; then echo put-kind; return 5; elif [ -e "$f" ]; then set -- $(ls -ldn -- "$f"); [ "${2-}" = 1 ] || { echo put-names; return 5; }; fi; [ "$m" != check ] || return 0; t=$(mktemp "$d/.ccrc-put.XXXXXXXX") || return 1; if { if [ "$m" = keep ] && [ -f "$f" ]; then cp -p -- "$f" "$t"; else chmod "$m" "$t"; fi; } && cat >"$t" && mv -fT -- "$t" "$f"; then return 0; fi; rm -f -- "$t"; return 1; }'
+# The service token, as root: $1 the setting (`~/…` or a path in the service user's home), $2 the service user, $3 the writer
+# (TBA_TOKEN_WRITE_SH), $4 the folder that holds the homes (absent on a box: /var/lib; a test's fixture names its own); stdin
+# the token. Root resolves that folder, which is root's, to its physical path, reads the user's numbers, proves the home is that user's real directory by standing
+# in it, and walks the folders of the token's path that exist: each must be a real directory at its own physical path, the
+# user's, or root's holding nothing but the next name on the path (a folder this verb made as root before it wrote as the user,
+# which root hands to the user by changing the owner of the folder it stands in). Then it drops to the user, who writes the token.
+# shellcheck disable=SC2016  # expanded by the box's sh, not here
+TBA_TOKEN_PUT_SH='set -e; s=$2; w=$3; h=${4:-/var/lib}/$s; p=$1; case $p in "~/"*) p=$h/${p#"~/"};; esac; case $p in "$h"/?*) ;; *) echo token-path; exit 5;; esac; u=$(id -u -- "$s") && g=$(id -g -- "$s") || { echo token-user; exit 5; }; case "$u.$g" in *[!0-9.]*|.*|*.) echo token-user; exit 5;; esac; [ "$u" != 0 ] || { echo token-user; exit 5; }; x=$(cd -P -- "${h%/*}" && pwd -P) || { echo token-home; exit 5; }; x=${x%/}/$s; cd -P -- "$h" 2>/dev/null && [ "$(pwd -P)" = "$x" ] || { echo token-home; exit 5; }; set -- $(ls -ldn .); [ "${3-}" = "$u" ] || { echo token-home; exit 5; }; r=${p#"$h"/}; while :; do case $r in */*) n=${r%%/*}; r=${r#*/};; *) break;; esac; x=$x/$n; [ -e "$x" ] || [ -L "$x" ] || break; if ! cd -P -- "$n" 2>/dev/null || [ "$(pwd -P)" != "$x" ]; then echo token-dir; exit 5; fi; set -- $(ls -ldn .); if [ "${3-}" = 0 ]; then l=$(ls -A .); [ -z "$l" ] || [ "$l" = "${r%%/*}" ] || { echo token-dir-owner; exit 5; }; chown "$u:$g" .; elif [ "${3-}" != "$u" ]; then echo token-dir-owner; exit 5; fi; done; cd /; exec '"$TBA_DROP"' sh -c "$w" sh "$h" "$p"'
+# The writer, as the service user: $1 its home, $2 the token's path; stdin the token. The file is 0600, the folders it makes 0755.
+# shellcheck disable=SC2016  # expanded by the box's sh, not here
+TBA_TOKEN_WRITE_SH="$TBA_PUT_FN"'; umask 022; tba_put "$1" "$2" 0600'
+# The edits of the login user's access key file, run as that user (TBA_SSH_NOSUDO: they never become root), each through the
+# one writer, so the file keeps its mode and times and is replaced by one rename. `$1` is the login user. ADD appends `$2` (the
+# new line) unless a line already holds `$3` (its key), so a retried append never doubles it; a file that is absent is exit 3.
+# DROP rewrites the file through the awk program `$4`, with `$5` an old key (or empty); a file that is absent is left so. A line
+# is ccrc's when its last word is ccrc's comment once trailing spaces, tabs and a CR are trimmed (sshd lets a pasted CRLF or
+# trailing-space line in); a line HOLDS a key when one of its words is exactly that key's base64. With `$2` = drop it takes out
+# every line holding the key `$3` (the new key a refused rotate made: only ccrc has it); with `$2` = keep it takes out every one
+# of ccrc's lines that does not hold `$3`, so a line an interrupted rotate left goes too, and every line holding the old key `$5`
+# whatever its comment; with `$2` = all (Disconnect, key-revoke) it takes out every one of ccrc's lines and every line holding
+# `$5`. No other line is touched. Each checks the file and its folder (`check`) before it reads the file.
+# shellcheck disable=SC2016  # expanded by the box's sh, not here
+TBA_AK_ADD="$TBA_PUT_FN"'; set -e; h=$(getent passwd "$1" | cut -d: -f6); f=$h/.ssh/authorized_keys; tba_put "$h" "$f" check; [ -f "$f" ] || exit 3; if awk -v k="$3" '"'"'{ for (i = 1; i <= NF; i++) if ($i == k) f = 1 } END { exit !f }'"'"' "$f"; then exit 0; fi; c=$(awk 1 "$f"); { [ -z "$c" ] || printf "%s\n" "$c"; printf "%s\n" "$2"; } | tba_put "$h" "$f" keep'
+# shellcheck disable=SC2016  # expanded by the box's sh, not here
+TBA_AK_DROP="$TBA_PUT_FN"'; set -e; h=$(getent passwd "$1" | cut -d: -f6); f=$h/.ssh/authorized_keys; tba_put "$h" "$f" check; [ -f "$f" ] || exit 0; c=$(awk -v m="$2" -v k="$3" -v o="${5-}" "$4" "$f"); { [ -z "$c" ] || printf "%s\n" "$c"; } | tba_put "$h" "$f" keep'
+# The repair's copy over the installed tree, as root: $1 the tools folder, $2 the staging folder, $3 the tag. Exit 3: the
+# installed tree names another tag (other-release). The tree and every folder above it to `/` must be a real directory of
+# root's that neither group nor other may write, and every entry of the tree root's and not writable by group or other (what
+# the installer's release step leaves), so no less privileged user can change a name the copy, the owner change or the mode
+# change acts on; anything else refuses with a word and exit 4 before anything is written. Then the copy, the owner and the mode.
+# shellcheck disable=SC2016  # expanded by the box's sh, not here
+TBA_TREE_COPY_SH='set -e; t=$1/release; s=$2; v=$3; [ "$(basename "$(readlink "$t/installed")")" = "$v" ] || exit 3; [ -d "$t/$v" ] || exit 3; p=$t/$v; while :; do if [ -L "$p" ] || [ ! -d "$p" ]; then echo tree-kind; exit 4; fi; set -- $(ls -ldn -- "$p"); [ "${3-}" = 0 ] || { echo tree-owner; exit 4; }; case "$1" in ?????w*|????????w*) echo tree-mode; exit 4;; esac; [ "$p" != / ] || break; p=$(dirname -- "$p"); done; e=$(find "$t/$v" \( ! -user 0 -o -perm -g+w -o -perm -o+w \) ! -type l -print -quit); [ -z "$e" ] || { echo tree-entry; exit 4; }; cp -RP -- "$s"/. "$t/$v"/; chown -R -h root:root "$t/$v"; chmod -R go-w "$t/$v"'
+# ── BOX-SIDE COMMANDS (end) ──────────────────────────────────────────────────────────────────────────────────────

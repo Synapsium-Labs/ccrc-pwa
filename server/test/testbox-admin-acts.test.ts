@@ -888,6 +888,17 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin repa
     expect(cmds(h).slice(-1)[0]).toContain('rm -rf');
   });
 
+  // testbox-admin-hardening: the copy over the installed tree runs only in folders of root's; a box where it would not refuses with
+  // a word of its own (exit 4), which the verb answers as install-failed, the code a failed copy always had, and logs; no installer runs.
+  it('repair ends install-failed when the box refuses the copy over the installed tree, logs the box\'s word, and runs no installer', () => {
+    const h = fixture({}, [['tree-entry', '4', 'tree-owner\\n'], MARKER, ...PASSING_RULES]);
+    connectedTo(h);
+    act(h, 'repair', []);
+    expect(lastAct(h)).toMatchObject({ outcome: 'failed', code: 'install-failed', phase: 'install' });
+    expect(cmds(h).some((c) => c.includes('install.sh'))).toBe(false);
+    expect(readFileSync(h.lg, 'utf8')).toContain('repair: the copy over the installed tree did not run (rc 4: tree-owner)');
+  });
+
   it('repair ends verify-failed when the box records no tag, and nothing is copied', () => {
     const h = fixture({}, WITH(['^(sudo -n -- )?cat -- /etc/ccrc-testbox/installed$', '1', '']));
     connectedTo(h);
