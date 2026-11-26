@@ -576,6 +576,11 @@ number from `POST /api/ledger/deviations`.
   hidden (the side rail's filter hides it), gone, or not yet heard (only on the device's saved list), and the page scrolls
   once per address. A cleared call's notice never outlives its row (review 3222): Show all opens its group and the folded
   trail keeps its row. Record: the wave 8 note.
+- **D-9131 (2026-11-26)** — w8-team-move-create-order: after a team-key move, a new ticket's create waits until its epic's
+  project carries the ticket's team as last written to Linear (the project binding's recorded team), not as planned now.
+  Record: `docs/superpowers/programs/linear-hierarchy/w8-team-move-create-order.md`.
+- **D-9132 (2026-11-26)** — w8-team-move-create-order: a write Linear answered with an error outside the closed table fails
+  its binding `malformed` after the last backoff step, never a silent, permanent hold. Record: the same note.
 
 ## Global Constraints
 
