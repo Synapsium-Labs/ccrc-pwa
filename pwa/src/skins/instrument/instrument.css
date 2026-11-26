@@ -278,6 +278,15 @@
   padding-block: calc(var(--sp-3) - var(--sp-1));
   min-width: 0;
 }
+/* Project mode's class chooser on a line of its own under the head row (wave 182, ruling A): the head block's `--sp-2`
+   above it and below it (the table's `--sp-1` gap plus this pad), to the lag line or the first group alike, so the lag
+   line drops its own pad when it follows. */
+.ins-chooser-line {
+  display: flex;
+  padding-block: calc(var(--sp-2) - var(--sp-1));
+  min-width: 0;
+}
+.ins-chooser-line + .ins-lag { padding-block-start: 0; }
 .ins-toggle,
 .ins-tabs {
   display: flex;

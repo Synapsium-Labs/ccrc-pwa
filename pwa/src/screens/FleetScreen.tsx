@@ -306,12 +306,16 @@ export function FleetScreen({
           >
             Runs · {runsLabel}
           </BareRow>
-          <ClassChooser />
+          {!desk && <ClassChooser />}
           {/* The New project door rides this line where there is a list to add to (`NewProjectDoor`); the first-run
               panel has its own. */}
           {sessions.length > 0 && <NewProjectDoor inline onNewProject={flows.openAddProject} />}
         </div>
       )}
+      {/* At a desk the chooser has a line of its own under the runs line (desktop polish wave 182, the coordinator's ruling
+          A, as in Instrument's Project mode): the door, the chooser and New project do not fit the desk column's one line,
+          and the door's words are never squeezed. The column's own gap spaces it; the phone keeps its one line. */}
+      {runsLine && desk && <div className="fleet-chooser-line flex min-w-0"><ClassChooser /></div>}
 
       {/* Build 9's contested-files signal (D12 ruling 3) — renders itself or
           nothing, so it mounts unconditionally, the AccountsStrip rule. */}

@@ -1311,7 +1311,15 @@ describe('the desk (T2g): one count, in the status bar', () => {
       expect(row, `${width}px`).toHaveClass('fleet-runs-row');
       const choosers = document.querySelectorAll('select[aria-label="Class"]');
       expect(choosers, `${width}px: class choosers in the document`).toHaveLength(1);
-      expect(lines[0]!.contains(choosers[0]!), `${width}px: the chooser is on the runs line`).toBe(true);
+      // Changed claim (desktop polish wave 182, the coordinator's ruling A): at a desk the chooser has a line of its own
+      // under the runs line, as in Instrument's project mode; the phone keeps it on the runs line.
+      if (width >= 900) {
+        expect(lines[0]!.contains(choosers[0]!), `${width}px: the chooser is not on the runs line`).toBe(false);
+        expect(lines[0]!.nextElementSibling, `${width}px: the chooser's line follows the runs line`).toHaveClass('fleet-chooser-line');
+        expect(lines[0]!.nextElementSibling!.contains(choosers[0]!), `${width}px: the chooser is on that line`).toBe(true);
+      } else {
+        expect(lines[0]!.contains(choosers[0]!), `${width}px: the chooser is on the runs line`).toBe(true);
+      }
       cleanup();
     }
   });

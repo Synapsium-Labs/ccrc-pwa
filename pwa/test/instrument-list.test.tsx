@@ -753,7 +753,7 @@ describe('dense rows at the desk (T2e, D-6335)', () => {
 
 // ---- Desk polish, T2f (D-6371) ----------------------------------------------------------------------------------
 
-describe("Instrument's desk column: no runs row, and the class chooser on the toggle's row in project mode (T2f)", () => {
+describe("Instrument's desk column: no runs row, and the class chooser under the toggle's row in project mode (T2f; wave 182)", () => {
   /** The class chooser, by its accessible name: every one in the document. */
   const choosers = (): HTMLElement[] => screen.queryAllByLabelText('Class');
   /** The fleet column in the frame's nav slot; asserted present first, so an absent column never passes as "no row". */
@@ -773,16 +773,21 @@ describe("Instrument's desk column: no runs row, and the class chooser on the to
     expect(document.querySelectorAll('[data-command="go-runs"]'), 'the rail\'s Runs door').toHaveLength(1);
   });
 
-  it("project mode at the desk: the chooser on the toggle's row", () => {
+  it("project mode at the desk: the chooser on a line of its own under the toggle's row (desktop polish wave 182, ruling A)", () => {
     mount();
     pick('Project');
     expect(column().querySelector('.fleet-runs-line'), 'the runs line').toBeNull();
     expect(choosers(), 'class choosers').toHaveLength(1);
     const chooser = choosers()[0]!;
-    // Beside the toggle on its row, never inside the radiogroup (whose arrow keys would rove into it).
+    // Never inside the radiogroup (whose arrow keys would rove into it). Changed claim (wave 182, the coordinator's ruling
+    // A): the chooser was beside the toggle on its row; New project now rides that row, the three do not fit one line,
+    // and the chooser has its own line directly under the row, so the row is the same in both modes.
     expect(toggle().contains(chooser), 'inside the radiogroup').toBe(false);
-    expect(toggle().parentElement, 'the toggle sits on a row of its own').not.toBe(table());
-    expect(toggle().parentElement!.contains(chooser), "on the toggle's row").toBe(true);
+    const row = toggle().parentElement!;
+    expect(row, 'the toggle sits on a row of its own').not.toBe(table());
+    expect(row.contains(chooser), "on the toggle's row").toBe(false);
+    expect(row.nextElementSibling, "the chooser's line follows the toggle's row").toHaveClass('ins-chooser-line');
+    expect(row.nextElementSibling!.contains(chooser), "the chooser is on that line").toBe(true);
     // It is the live chooser: the options and the value the fleet screen's had.
     expect([...(chooser as HTMLSelectElement).options].map((o) => o.value)).toEqual(['', 'default', 'fable', 'opus', 'sonnet', 'haiku']);
     expect((chooser as HTMLSelectElement).value).toBe('');

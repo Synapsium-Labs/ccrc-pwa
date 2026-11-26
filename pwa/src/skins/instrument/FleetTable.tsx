@@ -191,9 +191,12 @@ export function FleetTable(): ReactNode {
             </Button>
           ))}
         </div>
-        {desk && mode === 'project' && <ClassChooser className="min-h-row" />}
         {desk && <NewProjectDoor inline onNewProject={flows.openAddProject} />}
       </div>
+      {/* Project mode's class chooser has a line of its own under the head row (desktop polish wave 182, the coordinator's
+          ruling A): the switch, the chooser and New project do not fit the column's one line, and the head row stays the
+          same box in both modes, so the switch and the door never move when the mode changes. */}
+      {desk && mode === 'project' && <div className="ins-chooser-line"><ClassChooser className="min-h-row" /></div>}
       {lag !== null && <div className="ins-lag"><PoolLag text={lag} /></div>}
       {mode === 'project'
         ? <ProjectCards selectedId={selectedId} />

@@ -507,10 +507,10 @@ describe("a session screen has one edge: its header, its transcript and its comp
   }
 });
 
-describe("Refined's desk runs line wraps rather than crush (the ruling's point 5)", () => {
+describe("Refined's desk runs line: the door and New project share it, the chooser has a line of its own (the ruling's point 5; ruling A, condition 3)", () => {
   for (const [width, height] of DESKS) {
     for (const [name, fixture] of [['first run', FIRST], ['busy', BUSY]] as const) {
-      it(`refined, ${width}x${height}, ${name}: the Runs door, the chooser and New project never overlap, and the door's words are one line`, async () => {
+      it(`refined, ${width}x${height}, ${name}: the Runs door and New project on the runs line, the chooser on its own line under it on the inset and the column's gap, none overlapping, the door's words one line`, async () => {
         const { ctx, page, errors } = await openApp(browser!, { skin: REFINED, theme: PHOSPHOR, width }, fixture);
         try {
           await page.setViewportSize({ width, height });
@@ -521,16 +521,46 @@ describe("Refined's desk runs line wraps rather than crush (the ruling's point 5
             const line = document.querySelector('.shell-nav .fleet-runs-line')!;
             const boxes = [...line.children].map((k) => {
               const r = k.getBoundingClientRect();
-              return { cls: (k.getAttribute('class') ?? '').split(' ')[0] ?? '', l: r.left, t: r.top, r: r.right, b: r.bottom };
+              const c = k.getAttribute('class') ?? '';
+              const cls = c.includes('fleet-runs-row') ? 'fleet-runs-row' : c.includes('fleet-new-project') ? 'fleet-new-project'
+                : k.querySelector('select[aria-label="Class"]') !== null || k.matches('select') ? 'chooser' : c;
+              return { cls, l: r.left, t: r.top, r: r.right, b: r.bottom };
             });
             const row = line.querySelector<HTMLElement>('.fleet-runs-row')!;
             const range = document.createRange();
             range.selectNodeContents(row);
             const tops = [...new Set([...range.getClientRects()].filter((r) => r.width > 0).map((r) => Math.round(r.top)))];
             const lr = line.getBoundingClientRect();
-            return { boxes, lines: tops.length, words: row.textContent ?? '', line: { l: lr.left, r: lr.right } };
+            // The chooser: the one in the column, its own line (the column's child that holds it), and what is drawn next.
+            const choosers = [...document.querySelectorAll<HTMLElement>('.shell-nav select[aria-label="Class"]')];
+            const sel = choosers[0] ?? null;
+            const sb = sel?.getBoundingClientRect() ?? null;
+            let own: Element | null = sel;
+            while (own !== null && own.parentElement !== line.parentElement) own = own.parentElement;
+            let next = own?.nextElementSibling ?? null;
+            while (next !== null && next.getBoundingClientRect().height === 0) next = next.nextElementSibling;
+            const probe = document.createElement('div');
+            probe.style.cssText = 'position:absolute;visibility:hidden;height:var(--sp-3)';
+            document.body.appendChild(probe);
+            const sp3 = probe.getBoundingClientRect().height;
+            probe.remove();
+            return {
+              boxes, lines: tops.length, words: row.textContent ?? '', line: { l: lr.left, r: lr.right, t: lr.top, b: lr.bottom },
+              choosers: choosers.length, inLine: sel !== null && line.contains(sel),
+              chooser: sb === null ? null : { l: sb.left, t: sb.top, b: sb.bottom },
+              nextTop: next === null ? null : next.getBoundingClientRect().top, sp3,
+            };
           });
-          expect(m.boxes.length, 'the three controls').toBe(3);
+          expect(m.boxes.map((b) => b.cls), 'the runs line holds the door and New project').toEqual(['fleet-runs-row', 'fleet-new-project']);
+          expect(m.choosers, 'one chooser in the column').toBe(1);
+          expect(m.inLine, 'the chooser is not on the runs line').toBe(false);
+          expect(m.chooser!.t, 'the chooser is under the runs line').toBeGreaterThanOrEqual(m.line.b - 0.5);
+          expect(Math.abs(m.chooser!.l - m.line.l), 'the chooser starts on the runs line\'s inset').toBeLessThanOrEqual(0.5);
+          expect(m.chooser!.t - m.line.b, "the column's gap above the chooser").toBeCloseTo(m.sp3, 0);
+          expect(m.nextTop, 'something is drawn under the chooser').not.toBeNull();
+          expect(m.nextTop! - m.chooser!.b, "the column's gap under the chooser").toBeCloseTo(m.sp3, 0);
+          const [door, add] = [m.boxes[0]!, m.boxes[1]!];
+          expect(door.t < add.b && add.t < door.b, 'the door and New project share one line (their boxes overlap vertically)').toBe(true);
           for (let i = 0; i < m.boxes.length; i += 1) {
             for (let j = i + 1; j < m.boxes.length; j += 1) {
               const a = m.boxes[i]!;
