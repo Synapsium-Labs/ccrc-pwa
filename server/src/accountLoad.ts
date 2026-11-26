@@ -11,6 +11,7 @@ import type { ConditionReading } from '../../shared/overlord-ladder.js';
 import { serviceability, type LaneFacts, type Serviceability } from '../../shared/serviceability.js';
 import type { ModelClass } from '../../shared/models.js';
 import type { Roster } from '../../shared/roster.js';
+import type { AccountHoldsRead } from '../../shared/renewal-readings.js';
 import { laneFactsOf, measured, type AccountLimits } from './limits.js';
 import type { AccountFacts } from './coord/overlordDesignation.js';
 // `Reading` is `continuity/renewalDue.ts#Reading` (L1, C3), imported as a type: an L1-to-L1 import across contexts, named
@@ -115,12 +116,12 @@ export function loadLineReading(read: DesignationRead, listOf: (row: Designation
 /** The facts the load lines read, from the tick's reading: `limits.ts#laneFactsOf` per roster account with no Fable share
  *  read. A share decides only Fable's answer, and Fable serves where `opus` does not only when the seven-day figure is at
  *  the ceiling (98, past every line) or unread (no fresh load, so no "under"), so no line reads differently without it
- *  (slug `load-lines-read-no-share`). */
+ *  (slug `load-lines-read-no-share`). `held` is the standing account holds (renewal readings PR H), read once by the caller. */
 export function loadFactsOf(roster: Roster, limits: Readonly<Record<string, AccountLimits>>,
-  edges: ReadonlyMap<string, readonly string[]>, nowS: number): AccountFacts {
+  edges: ReadonlyMap<string, readonly string[]>, nowS: number, held: AccountHoldsRead): AccountFacts {
   const lanes: Record<string, LaneFacts> = {};
   for (const a of roster.accounts) lanes[a.id] = laneFactsOf(a, limits as Record<string, AccountLimits>, { kind: 'absent' });
-  return { roster, limits, edges, lanes, nowS };
+  return { roster, limits, edges, lanes, nowS, held };
 }
 
 /** Table 3.4b's `classUnservable`, from the server's twin (slug `class-unservable-from-the-server-twin`). */

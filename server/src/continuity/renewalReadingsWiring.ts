@@ -26,7 +26,7 @@
 // the account facts (the roster, `readLimits` and `readSharesMeasured` over the watcher's io, the store's central pool edges, each
 // roster account's `laneFactsOf`) and the candidates `overlordCandidatesOf` builds from them and the designation. Once a pass per
 // Overlord session: ccd's `pool-answer`, through the body adapter's one composer (`ccdPoolAnswer`, behind `ccdCan`). The mappers
-// (`renewalReadings.ts`) decide; this file only reads. The holds are `'not-wired'` until PR H. A coordinator gets none of the three.
+// (`renewalReadings.ts`) decide; this file only reads. A coordinator gets none of the three.
 // The designation is read first: when it is not this session's live binding, or is unreadable (`unboundCandidates`), the three
 // answer from it alone, and neither the facts nor the pool answer is read (fix round 1, I).
 //
@@ -36,6 +36,13 @@
 // `server.ts` do, and the shares read, which has no tick owner, the same way. From the merge these reads, the edges read and the
 // pool answer run on every tick, in shadow too, for a generation of the Overlord's role that the designation binds; their cost on
 // the fleet box is not measured (the plan's question 8 stays open).
+//
+// PR H wires the launch profile, the Overlord's only. The standing account holds (`accountHolds`), read once a pass, go into the
+// account facts (designation A's list leaves a held account out) and into `accountOutsideSetOf` in place of `'not-wired'`; a store
+// without the read keeps `'not-wired'` and the list unfiltered. The Overlord's `installBehind` is `overlordInstallBehindOf` over
+// the gather's `behind`, the newest start's digest against the server's (`startLoadsOfNewestStart`, `launchDigestOf`) and the
+// fleet's build agreement (`inventoryBuildAgreement`, the profile lane's read); a store without those reads leaves the base
+// `behind`. The hold itself is written by the generations pass, never here: this file writes nothing.
 //
 // THE LATCH (PR C, Task 6). `latch` is the pass's `GenerationsDeps.latch`: the ladder's one delivery-facing raise
 // (`overlordLadderRead.ts#raiseLatch`), which takes the cap from the cause row, raised by the renewal lane (`laneRaiser`). The
@@ -75,6 +82,10 @@ import {
 import { accountLoadMoveOf, accountLoadOf, accountOutsideSetOf, classUnservableOf, overlordCandidatesOf, unboundCandidates } from './renewalReadings.js';
 import { modelDriftReadingOf, readersRunningReadingOf } from './renewalReadings.js';
 import type { Reading } from './renewalDue.js';
+import { buildsAgreeOf, overlordInstallBehindOf, startDigestDiffersOf } from './renewalReadings.js';
+import { launchDigestOf } from './launchProfile.js';
+import { inventoryBuildAgreement } from '../fleetstate.js';
+import type { AccountHoldsRead } from '../../../shared/renewal-readings.js';
 
 /** The store reads and the one write (the ladder's latch raise) the wiring makes, declared by this consumer. */
 export interface ReadingsCoord extends Pick<WatcherCoordPort, 'closedSpotProbes' | 'backstopRead' | 'designationRead' | 'raiseLatch' | 'startById'> {
@@ -85,6 +96,12 @@ export interface ReadingsCoord extends Pick<WatcherCoordPort, 'closedSpotProbes'
   /** PR D: the central pool edges (designation A's ordered list reads them), optional so that a store without them leaves the
    *  account readings at the lane's `W1`. */
   readonly accountPoolEdges?: WatcherCoordPort['accountPoolEdges'];
+  /** PR H: the standing account holds; absent, the account readings take `'not-wired'` and the list is unfiltered. */
+  readonly accountHolds?: WatcherCoordPort['accountHolds'];
+  /** PR H: the Overlord's newest start with its loads report, and the fleet's nodes for the build agreement; absent (either),
+   *  the Overlord's `installBehind` is the gather's `behind`, as before. */
+  readonly startLoadsOfNewestStart?: WatcherCoordPort['startLoadsOfNewestStart'];
+  readonly nodes?: WatcherCoordPort['nodes'];
 }
 
 /** PR D: the account readings' three reads, each its producer's own reader. A test hands fakes; absent, the wiring builds them from
@@ -152,6 +169,9 @@ export function renewalReadingsOf(deps: ReadingsDeps, coord: ReadingsCoord, reco
   const spotsByClass = new Map<string, SpotsRead>();
   let backstop: BackstopRead | undefined;
   let designation: DesignationRead | undefined;
+  // PR H: the standing holds, once a pass; absent read: `'not-wired'`, and the facts' `held` names it unread (no filter).
+  let holdsRead: AccountHoldsRead | 'not-wired' | undefined;
+  const holdsOf = (): AccountHoldsRead | 'not-wired' => holdsRead ??= coord.accountHolds === undefined ? 'not-wired' : coord.accountHolds();
 
   /** A field whose read threw: unmeasured `<name> read failed`, logged once per pass (F17). */
   const failed = <K extends keyof W1Inputs>(out: Partial<W1Inputs>, key: K, name: string, e: unknown): void => {
@@ -218,7 +238,8 @@ export function renewalReadingsOf(deps: ReadingsDeps, coord: ReadingsCoord, reco
     if (roster === undefined) throw new Error('no roster');
     const lanes: Record<string, LaneFacts> = {};
     for (const a of roster.accounts) lanes[a.id] = laneFactsOf(a, limits, shares);
-    return { roster, limits, edges: edges(), lanes, nowS };
+    const h = holdsOf();
+    return { roster, limits, edges: edges(), lanes, nowS, held: h === 'not-wired' ? { ok: false, detail: 'the holds are not wired' } : h };
   })();
   const candidatesOf = (f: AccountFacts): Promise<Candidates> => candidates ??= Promise.resolve(overlordCandidatesOf(designation ??= coord.designationRead(), f));
   const poolAnswerOf = (r: AccountReads, id: string): Promise<PoolAnswerRead> => {
@@ -241,7 +262,7 @@ export function renewalReadingsOf(deps: ReadingsDeps, coord: ReadingsCoord, reco
       const e = early();
       if (e !== null) return accountOutsideSetOf({ kind: 'not-run' }, e, 'not-wired');
       const [{ c }, answer] = await Promise.all([live(), poolAnswerOf(r, g.sessionId)]);
-      return accountOutsideSetOf(answer, c, 'not-wired');
+      return accountOutsideSetOf(answer, c, holdsOf());
     });
     await fieldAsync(w1, 'classUnservable', 'class serviceability', async () => {
       const e = early();
@@ -302,6 +323,11 @@ export function renewalReadingsOf(deps: ReadingsDeps, coord: ReadingsCoord, reco
         // PR D: the account readings, only where the reads and the store's edges are wired (absent: the lane's `W1`).
         const edges = coord.accountPoolEdges?.bind(coord);
         if (reads !== undefined && edges !== undefined) await accountReadings(w1, g, base, reads, edges);
+        // PR H: the digest reading folded into the Overlord's `installBehind` (question 5), where the store hands both reads.
+        const newest = coord.startLoadsOfNewestStart?.bind(coord);
+        const nodes = coord.nodes?.bind(coord);
+        if (newest !== undefined && nodes !== undefined) field(w1, 'installBehind', 'install', () => overlordInstallBehindOf(base.behind,
+          startDigestDiffersOf(newest(g.sessionId), launchDigestOf('overlord')), buildsAgreeOf(inventoryBuildAgreement({ nodes }))));
       }
       const { cfg, transcript } = deps;
       if (cfg !== undefined && transcript !== undefined) await fieldAsync(w1, 'notLocal', 'not-local', () => notLocal(g, base, cfg, transcript));

@@ -694,10 +694,101 @@ describe('renewalReadingsOf (PR D: the account readings)', () => {
   });
 });
 
+// ------------------------------------------------------------------------------------- PR H: the launch profile's hold and digest
+
+describe('renewalReadingsOf (PR H: the holds into the account readings, and the Overlord\'s installBehind)', () => {
+  afterEach(removeTmpFixtures);
+  const SERVE = answerLine('serve');
+  /** The store with its edges and the standing holds `holds` answers, each read recorded. */
+  const withHolds = (c: ReturnType<typeof coordOf>, holds: () => ReturnType<NonNullable<ReadingsCoord['accountHolds']>>): ReadingsCoord =>
+    ({ ...withEdges(c), accountHolds: () => { c.calls.push('holds'); return holds(); } });
+
+  it('a held account is outside the set: on a serve verdict, with another account serving, the hard row is due (F7)', async () => {
+    const c = coordOf({ designation: () => OPUS });
+    const r = await renewalReadingsOf(acctDeps([], [], { answer: SERVE }), withHolds(c, () => ({ ok: true, lanes: ['lane-a'] })), []).w1(gen({}), base());
+    expect(r.w1?.accountOutsideSet).toEqual(TRUE);
+  });
+
+  it('a clear puts the account back: the same serve verdict with no hold standing is not due', async () => {
+    const c = coordOf({ designation: () => OPUS });
+    const r = await renewalReadingsOf(acctDeps([], [], { answer: SERVE }), withHolds(c, () => ({ ok: true, lanes: [] })), []).w1(gen({}), base());
+    expect(r.w1?.accountOutsideSet).toEqual(FALSE);
+  });
+
+  it('holds that cannot be read leave the reading unmeasured on a serve verdict, never "no holds"', async () => {
+    const c = coordOf({ designation: () => OPUS });
+    const r = await renewalReadingsOf(acctDeps([], [], { answer: SERVE }), withHolds(c, () => ({ ok: false, detail: 'locked' })), []).w1(gen({}), base());
+    expect(r.w1?.accountOutsideSet).toEqual({ kind: 'unmeasured', why: 'holds unread: locked' });
+  });
+
+  it('a store with no holds read keeps the reading as PR D left it (not wired)', async () => {
+    const c = coordOf({ designation: () => OPUS });
+    const r = await renewalReadingsOf(acctDeps([], [], { answer: SERVE }), withEdges(c), []).w1(gen({}), base());
+    expect(r.w1?.accountOutsideSet).toEqual(FALSE);
+  });
+
+  it('the holds are read once a pass, and not at all for a coordinator or when the designation answers alone', async () => {
+    const c = coordOf({ designation: () => OPUS });
+    const pass = renewalReadingsOf(acctDeps([], [], { answer: SERVE }), withHolds(c, () => ({ ok: true, lanes: [] })), []);
+    await pass.w1(gen({ id: 1 }), base());
+    await pass.w1(gen({ id: 2 }), base());
+    await pass.w1(gen({ id: 3, role: 'coordinator' }), base());
+    expect(c.calls.filter((x) => x === 'holds')).toHaveLength(1);
+    const none = coordOf({ designation: () => NONE });
+    await renewalReadingsOf(acctDeps([], [], { answer: SERVE }), withHolds(none, () => ({ ok: true, lanes: [] })), []).w1(gen({}), base());
+    expect(none.calls.filter((x) => x === 'holds')).toEqual([]);
+  });
+
+  it('a held account is left out of the candidates the other account readings read', async () => {
+    // lane-b and lane-c are the set's; lane-b held, the generation on lane-b: not a candidate any more
+    const c = coordOf({ designation: () => OPUS });
+    const r = await renewalReadingsOf(acctDeps([], [], { answer: SERVE }), withHolds(c, () => ({ ok: true, lanes: ['lane-b'] })), [])
+      .w1(gen({ lane: 'lane-b' }), base());
+    expect(r.w1?.accountLoadMove).toEqual({ kind: 'unmeasured', why: 'account not a candidate' });
+  });
+
+  /** One node row of role `both` whose stamp reads: a single box agrees with itself. */
+  const BOTH = { role: 'both', stampRead: 'ok', currentSha: 's', currentRef: 'main', currentBuiltAt: 'b', currentDirty: false, currentVersion: null };
+  const SERVER = { ...BOTH, role: 'server' };
+  const FLEET = (sha: string) => ({ ...BOTH, role: 'fleet', currentSha: sha });
+  const loads = (profileDigest: string | null) => ({ ok: true as const, newest: { start: {} as never, carry: { kind: 'none' } as const,
+    report: { profileDigest } as never } });
+  const withInstall = (c: ReturnType<typeof coordOf>, digest: string | null, nodes: () => unknown[]): ReadingsCoord =>
+    ({ ...c.coord, startLoadsOfNewestStart: () => loads(digest) as never, nodes: nodes as never });
+
+  it('the Overlord\'s installBehind: a digest that differs while the builds agree is a new install; an equal one is behind as the roll says', async () => {
+    const { launchDigestOf } = await import('../src/continuity/launchProfile.js');
+    const d = launchDigestOf('overlord');
+    const ask = async (digest: string | null, nodes: () => unknown[], behind = FALSE) => (await renewalReadingsOf(deps(), withInstall(coordOf(), digest, nodes), [])
+      .w1(gen({}), { ...base(), behind })).w1?.installBehind;
+    expect(await ask('0'.repeat(64), () => [BOTH])).toEqual(TRUE);
+    expect(await ask(d, () => [BOTH])).toEqual(FALSE);
+    expect(await ask(d, () => [BOTH], TRUE)).toEqual(TRUE);
+    expect(await ask('0'.repeat(64), () => [SERVER, FLEET('s')])).toEqual(TRUE);
+    expect(await ask(null, () => [BOTH])).toEqual({ kind: 'unmeasured', why: 'no digest reported' });
+  });
+
+  it('build skew reads the install-behind reading unmeasured, never behind: builds that differ, are unknown or cannot be read', async () => {
+    const ask = async (nodes: () => unknown[]) => (await renewalReadingsOf(deps(), withInstall(coordOf(), '0'.repeat(64), nodes), [])
+      .w1(gen({}), { ...base(), behind: TRUE })).w1?.installBehind;
+    const SKEW = { kind: 'unmeasured', why: 'build skew' };
+    expect(await ask(() => [SERVER, FLEET('t')])).toEqual(SKEW);
+    expect(await ask(() => [])).toEqual(SKEW);
+    expect(await ask(() => { throw new Error('locked'); })).toEqual(SKEW);
+  });
+
+  it('a coordinator\'s installBehind is untouched, and a store without the two reads leaves the Overlord\'s to the gather', async () => {
+    const coordinator = await renewalReadingsOf(deps(), withInstall(coordOf(), '0'.repeat(64), () => [BOTH]), []).w1(gen({ role: 'coordinator' }), base());
+    expect(coordinator.w1?.installBehind).toBeUndefined();
+    const bare = await renewalReadingsOf(deps(), coordOf().coord, []).w1(gen({}), base());
+    expect(bare.w1?.installBehind).toBeUndefined();
+  });
+});
+
 describe('the watcher binds the latch (PR C) and the transcript resolver (PR B)', () => {
   it('sweepGenerations hands the pass the wiring\'s latch, and the wiring the watcher\'s one memoized resolver', () => {
     const sweep = codeOnly(sourceOfSymbol('server/src/watch.ts', 'FleetWatcher.sweepGenerations'));
     expect(sweep).toContain('const w1 = renewalReadingsOf({ ...this.deps, transcript: (o) => this.transcripts.resolve(o) }, coord, records)');
-    expect(sweep).toMatch(/generationsPass\(\{[^}]*latch: w1\.latch \}/);
+    expect(sweep).toMatch(/generationsPass\(\{[^}]*latch: w1\.latch,\s*holdsSettled: this\.generationsHoldsSettled \}/);
   });
 });

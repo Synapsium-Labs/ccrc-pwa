@@ -59,7 +59,7 @@ export interface FleetWatcherView {
  *  needs a new member adds it here, in its sorted place, in the same PR. Never split it per lane or per callee (the
  *  ruling of 2026-10-30, the plan's Rejected list): one port, one member list. */
 export type WatcherCoordMember =
-  | 'absorbParkEscalation' | 'accountPoolEdges' | 'activeClaims' | 'admissionWaiters' | 'advanceCursor' | 'advanceLanding' | 'advanceMarkQuiet'
+  | 'absorbParkEscalation' | 'accountHolds' | 'accountPoolEdges' | 'activeClaims' | 'admissionWaiters' | 'advanceCursor' | 'advanceLanding' | 'advanceMarkQuiet'
   | 'advanceObserved' | 'advisorDayCounts' | 'advisorReadState' | 'answerRenewCall' | 'applyLandingControl' | 'applyPairMoves' | 'approvalById' | 'approvalPark' | 'approvalPushSources'
   | 'approvalRowsForCensus' | 'approvalsForChild' | 'approvalsInState' | 'approvalsUnfetchedLive' | 'askById'
   | 'askForCorrection' | 'autoContinueHeldUntil' | 'backOff' | 'backstopRead' | 'baselineParkBox' | 'bigCallsIn' | 'bindingRunsOf' | 'bindingsOf' | 'blockClaimants' | 'blocksToWake' | 'bumpReplayCount'
@@ -73,7 +73,7 @@ export type WatcherCoordMember =
   | 'driftFindingRows' | 'driftFindingsOpenAt' | 'driftHeldQuestions' | 'driftOpenRuns' | 'driftOutstandingDeliveries'
   | 'driftPushesOnDay' | 'driftStallToldRows' | 'dueDeliveries' | 'firstMailIdWithPrefix' | 'foldPrLineage' | 'generationsCursor' | 'goalsStamp' | 'goneSince'
   | 'handoverOf' | 'hasMailWithSubject' | 'hasNotice' | 'hasOutstandingMail' | 'heldApprovalRowsByChild' | 'heldApprovalsFor'
-  | 'heldAskFor' | 'heldQuestionRows' | 'holdParked' | 'importLaneArmMarker' | 'ingestJournal' | 'insertApprovalAt' | 'insertAsk'
+  | 'heldAskFor' | 'heldQuestionRows' | 'holdAccount' | 'holdParked' | 'importLaneArmMarker' | 'ingestJournal' | 'insertApprovalAt' | 'insertAsk'
   | 'insertCensusRow' | 'insertDelegationEvents' | 'insertDigestResponses' | 'insertMail' | 'insertObservation' | 'insertStallObservation' | 'intentFor' | 'isPinned' | 'itemById'
   | 'itemHistory' | 'itemsFor' | 'journalGenerations' | 'landingReadProjects' | 'laneArmSetting' | 'lapseApproval' | 'lapseClaimRow' | 'lastRunBySession' | 'laterReviewClosedFor' | 'laterReviewMovedAt'
   | 'ledgerFloor' | 'ledgerIssued' | 'ledgerProjects' | 'lifecycleBirthEventsFor' | 'lifecycleCreatesFor'
@@ -94,7 +94,7 @@ export type WatcherCoordMember =
   | 'runCloseAnchors' | 'runCloseChoice' | 'runCloseRuns' | 'runCloseWarning' | 'runCloseWarningProgrammes' | 'runEvents' | 'runEventsSince' | 'runLastMoves' | 'runs' | 'runsNamingSession' | 'sealDeadCoordinatorBreakerState'
   | 'sealResponse' | 'sequenceOldest' | 'setCollectLane' | 'setDeliveryEnvelope' | 'setGenerationDue' | 'setGoneSince' | 'setHoldOff' | 'setRunCloseAnchor' | 'setSession' | 'settleAsk' | 'settleNode' | 'snapshotFacts' | 'softRenewalsOf' | 'staleAllocations'
   | 'staleApproval' | 'staleAsk' | 'stallCandidates' | 'stallMailFor' | 'stallObservationsSince' | 'stallSettings' | 'stalledDispatchRunIds' | 'standingPairs'
-  | 'startById' | 'startRunsOnTakenBrief' | 'startsOf' | 'startsSince' | 'stepGeneration' | 'strandedClear' | 'sweepClosesBetween' | 'takeApprovalForRule' | 'takeAskForAnswer' | 'tellRefusal' | 'timerHoldFacts' | 'unlandedBriefs'
+  | 'startById' | 'startLoadsOfNewestStart' | 'startRunsOnTakenBrief' | 'startsOf' | 'startsSince' | 'stepGeneration' | 'strandedClear' | 'sweepClosesBetween' | 'takeApprovalForRule' | 'takeAskForAnswer' | 'tellRefusal' | 'timerHoldFacts' | 'unlandedBriefs'
   | 'unsealDeadCoordinatorBreakerState' | 'untakeAsk' | 'untoldRows' | 'updateEpoch' | 'upsertNodeMeasurement' | 'urgentHolds' | 'wakeBlockTx' | 'wakeParked';
 
 /** D-7579: the watcher's narrow view of the coordination store, the one `Pick` of `CoordStore` the series uses. A

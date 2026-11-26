@@ -321,7 +321,7 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'continuity_act_keys', 'approval_census', 'approval_parks', 'overlord_fence_refusals',
   'continuity_hook_reports', 'continuity_witness_checks', 'coordinator_state', 'overlord_sequence', 'overlord_sequence_pruned', 'limit_samples',
   'programme_events', 'programme_picks', 'continuity_timer_refusals',
-  'overlord_invariant_findings', 'overlord_readiness', 'overlord_readiness_items'] as const;
+  'overlord_invariant_findings', 'overlord_readiness', 'overlord_readiness_items', 'overlord_account_holds'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique, read off the one scan (`sqlStatements.ts#sqlWrites`). `tables`
  *  is the table list to read: coord.db's by default, and the private store's for its own describe (Overlord W1 private store A). */
@@ -462,6 +462,9 @@ describe(TABLES_PIN, () => {
       decision_rows: ['server/src/coord/decisionModelStore.ts#moveDecisionRowInTx'],
       decision_host: ['server/src/coord/decisionModelStore.ts#setDecisionHostInTx'],
       decision_lines: ['admitDecisionLine', 'recordCanary'].map((f) => `server/src/coord/decisionModelStore.ts#${f}`),
+      // The Overlord's account holds (Overlord W1 renewal readings H, §3.6): two writers, each a different move of one fact, the
+      // generations pass's hold and the operator door's clear.
+      overlord_account_holds: ['clearAccountHold', 'holdAccount'].map((f) => `server/src/continuity/accountHolds.ts#${f}`),
       // The daily backstop (Overlord W1 renewal readings A): its seed row, and its door's one writer.
       renewal_backstop_settings: ['server/src/continuity/continuityStore.ts#setBackstop', 'server/src/coord/schema.ts#(module)'],
       // What a programme says is left (Overlord W2 remaining work A): one writer of both tables, reached only from the

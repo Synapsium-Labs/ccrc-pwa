@@ -313,7 +313,7 @@ const VIEW = (over: Partial<DesignationView> = {}): DesignationView => ({
 const BOUND: DesignationRead = { kind: 'designated', sessionId: 'lane-a-project-a', term: 1, row: VIEW() };
 const ROSTER = { accounts: ['lane-a', 'lane-b', 'lane-c'].map((id) => ({ id, homeAble: true, exec: { kind: 'upstream' }, pool: 'pool-a' })) } as unknown as Roster;
 const FACTS = (lanes: Record<string, LaneFacts>) => ({ roster: ROSTER, limits: { 'lane-a': lim(40), 'lane-b': lim(40), 'lane-c': lim(40) },
-  edges: new Map<string, readonly string[]>(), lanes, nowS: NOW_S });
+  edges: new Map<string, readonly string[]>(), lanes, nowS: NOW_S, held: { ok: true as const, lanes: [] } });
 
 function candidatesCases(m: RenewalReadingsModule): Record<string, SuiteCase> {
   return {

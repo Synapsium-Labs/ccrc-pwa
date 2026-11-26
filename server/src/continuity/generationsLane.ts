@@ -103,8 +103,9 @@ import type { GenAction, GenStep } from './generationMachine.js';
 import { softRenewalMay, type SoftInputs, type SoftReading } from './softRenewal.js';
 import { overlordFirst, type OverlordGenerationReading } from './renewalOrder.js';
 import type { DrainRead } from './renewalDrain.js';
-import { designatedClassAtMint, probesFailedTwiceOf, type W1Inputs } from './renewalReadings.js';
-import type { AttemptAction, DesignationRead, SettleFact } from '../../../shared/overlord-designation.js';
+import { designatedClassAtMint, holdOfStart, probesFailedTwiceOf, type W1Inputs } from './renewalReadings.js';
+import { OVERLORD_PROJECT, type AttemptAction, type DesignationRead, type SettleFact } from '../../../shared/overlord-designation.js';
+import { expectedSurfaceOf, newestStartVerdict } from './sandboxCheck.js';
 import { pendingDeadlineOf } from '../coord/overlordDesignation.js';
 import type { LadderLatchCause } from '../../../shared/overlord-ladder.js';
 import {
@@ -128,7 +129,9 @@ export type GenerationsCoord = Pick<CoordStore, 'startsSince' | 'startsOf' | 'li
   | 'setGenerationDue' | 'clearShadowWalk' | 'generationsCursor' | 'advanceCursor' | 'laneArmSetting' | 'openCoordinatorIds'
   | 'run' | 'bindingRunsOf' | 'cardReadOfStart' | 'stepGeneration' | 'probeRows' | 'openRound' | 'snapshotFacts' | 'liveNotes'
   | 'designationRead' | 'mailForRecipient' | 'handoverOf' | 'softRenewalsOf' | 'recordSoftRenewal' | 'renewCallsOf' | 'itemsFor'
-  | 'renewRequestsAfter' | 'operatorMarks' | 'advanceMarkQuiet' | 'bindingsOf' | 'renewalModeSetting'>;
+  | 'renewRequestsAfter' | 'operatorMarks' | 'advanceMarkQuiet' | 'bindingsOf' | 'renewalModeSetting'
+  // renewal readings PR H: the account hold's one write here, and the sandbox check's read of the newest start's report
+  | 'holdAccount' | 'startLoadsOfNewestStart'>;
 
 /** What the registry says of one row at the pass: its current conversation (null: unreadable), its account and its child
  *  mark. */
@@ -194,6 +197,10 @@ export interface GenerationsDeps {
    *  `probes-failed-twice` row on a live Overlord step (`probesFailedTwiceOf`). The cap is the cause row's, never the lane's.
    *  Absent: nothing is raised. Its answer is checked; a refusal or a throw is logged, never thrown. */
   readonly latch?: (cause: LadderLatchCause, detail: string) => { readonly ok: true } | { readonly ok: false; readonly why: string };
+  /** The Overlord's starts whose hold verdict is settled (renewal readings PR H, `holdOfStart`): a memo kept by the caller across
+   *  passes, never a decision's durable state. A restart re-asks, and the hold's write answers `changed: false` for a start it
+   *  has seen. Absent: no start is asked and no hold is written. */
+  readonly holdsSettled?: Set<number>;
 }
 
 /** The empty-try memo: by generation id, then by round kind, the `emptyTryKey` of the newest try that had no question. */
@@ -567,6 +574,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
   // ---- THREE: the `renewalDue` answer is recorded for every generation whose `state` is at rest (`active` or `degraded`),
   // whatever a shadow walk holds (review 2003 F1).
   const gens = coord.liveGenerations();
+  if (gens.ok) holdOverlordStart(deps, gens.rows, now);
   // The PreCompact field's retraction (ruling F2 on review 2312): it walks the registry rows that carry the field, not only
   // the live generations, and a shadow pass plans it too, so the field never outlives the row's setting or its generation.
   retract.push(...precompactRetractions(input.registry ?? [], live, gens.ok ? new Set(gens.rows.map((g) => g.sessionId)) : null));
@@ -868,6 +876,37 @@ export function renewalInputsOf(g: GenRow, r: GenReadings | undefined, wave: Rea
     notLocal: W1, waveBoundary: wave, renewNow,
     ...definedOf(r?.w1),
   };
+}
+
+/** THE LAUNCH PROFILE'S ACCOUNT HOLD (renewal readings PR H, plan Task 11; spec §3.6), in shadow and live alike, since it acts on
+ *  no session: for the designated Overlord's live generation, the sandbox check's verdict of its newest `startup` or `resume`
+ *  start (`newestStartVerdict`, over the workspace the settle measured, as the ladder reads it) and `holdOfStart` over it. A hold
+ *  is written once per start (`holdAccount`, its answer checked); a start whose verdict is settled is not asked again
+ *  (`holdsSettled`); an unmeasured verdict, a failed read and a refused write hold nothing and are asked again next pass (review
+ *  2183 F10). A start newer than the generation's own is not yet its account's, so it waits for its mint. Nobody designated:
+ *  nothing is read or written. */
+export function holdOverlordStart(deps: Pick<GenerationsDeps, 'holdsSettled' | 'log'>
+  & { readonly coord: Pick<GenerationsCoord, 'designationRead' | 'startLoadsOfNewestStart' | 'holdAccount'> }, rows: readonly GenRow[], now: number): void {
+  const settled = deps.holdsSettled;
+  const expected = expectedSurfaceOf('overlord');
+  if (settled === undefined || expected === null) return;
+  const { coord } = deps;
+  const d = coord.designationRead();
+  if (d.kind !== 'designated') return;
+  const g = rows.find((x) => x.role === 'overlord' && x.sessionId === d.sessionId);
+  if (g === undefined) return;
+  const read = coord.startLoadsOfNewestStart(g.sessionId);
+  if (!read.ok) return;
+  const v = newestStartVerdict(read.newest, expected, { kind: 'measured', project: OVERLORD_PROJECT });
+  if (v === null || settled.has(v.startId) || v.startId > g.startId) return;
+  const h = holdOfStart(v.verdict, g.lane);
+  if (h.kind === 'unmeasured') return;
+  if (h.kind === 'hold') {
+    const w = coord.holdAccount({ lane: h.lane, startId: v.startId, at: now });
+    if (!w.ok) { deps.log(`ccrc-server: generations: the account hold for start ${v.startId} could not be written (${w.detail}); asked again next pass`); return; }
+    if (w.changed) deps.log(`ccrc-server: generations: the Overlord's start ${v.startId} loaded what its launch profile does not list from ${h.lane}'s own configuration; ${h.lane} is held out of its ordered list until the operator clears it`);
+  }
+  settled.add(v.startId);
 }
 
 /** The renewal readings the wiring answered, without a key it left undefined: an absent field keeps its `W1` default. */

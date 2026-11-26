@@ -773,3 +773,48 @@ describe('an item raised with the push outbox reach (R4)', () => {
     expect(outbox(h.db)).toEqual([]);
   });
 });
+
+describe('the holds (renewal readings PR H): read once a pass, into the candidates, the word and the items', () => {
+  it('the holds are read once a pass and handed to the candidates as the list\'s holds', async () => {
+    const h = harness();
+    await h.warm();
+    let reads = 0;
+    const handed: unknown[] = [];
+    h.s.holds = { kind: 'read', lanes: ['lane-a'] };
+    const holds = h.port.holds;
+    (h.port as { holds: ReadinessLanePort['holds'] }).holds = () => { reads += 1; return holds(); };
+    (h.port as { candidates: ReadinessLanePort['candidates'] }).candidates = (_d, held) => { handed.push(held); return h.s.candidates; };
+    await h.pass(UP());
+    expect(reads).toBe(1);
+    expect(handed).toEqual([{ ok: true, lanes: ['lane-a'] }]);
+  });
+
+  it('holds that cannot be read reach the word as unmeasured, never as no holds, and the candidates as unread', async () => {
+    const h = harness();
+    await h.warm();
+    const handed: unknown[] = [];
+    (h.port as { candidates: ReadinessLanePort['candidates'] }).candidates = (_d, held) => { handed.push(held); return h.s.candidates; };
+    h.s.holds = { kind: 'unmeasured' };
+    const r = await h.pass(UP());
+    expect([r?.word, r?.why]).toEqual(['unmeasured', 'stranded: holds unread']);
+    expect(handed).toEqual([{ ok: false, detail: 'the holds could not be read' }]);
+  });
+
+  it('a holds read that throws reads as unmeasured too', async () => {
+    const h = harness();
+    await h.warm();
+    (h.port as { holds: ReadinessLanePort['holds'] }).holds = () => { throw new Error('holds boom'); };
+    const r = await h.pass(UP());
+    expect([r?.word, r?.why]).toEqual(['unmeasured', 'stranded: holds unread']);
+  });
+
+  it('a hold that leaves only an account at its ceiling reaches the word as stranded (limited)', async () => {
+    const h = harness();
+    await h.warm();
+    h.s.holds = { kind: 'read', lanes: ['lane-a'] };
+    // the list the wiring builds with lane-a held out leaves lane-b, at its ceiling
+    h.s.candidates = { kind: 'candidates', list: [{ id: 'lane-b', limits: undefined, serves: 'at-ceiling' }] };
+    const r = await h.pass(UP());
+    expect([r?.word, r?.why]).toEqual(['stranded', 'limited']);
+  });
+});

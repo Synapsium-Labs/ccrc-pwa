@@ -23,7 +23,7 @@ describe('a lane that is not home-able (review 2349 F5)', () => {
   const roster = parseRoster({ version: 1, accounts: [acct('lane-a', true), acct('lane-c', false)] });
   const facts = afacts({ 'lane-a': limit(), 'lane-c': limit() }, { roster });
   it('is neither listed, counted nor picked', () => {
-    expect(m.overlordAccounts(SET_A, 'opus', facts)).toEqual({ list: ['lane-a'], counted: ['lane-a'], unmeasured: [] });
+    expect(m.overlordAccounts(SET_A, 'opus', facts)).toEqual({ list: ['lane-a'], counted: ['lane-a'], unmeasured: [], holds: 'applied' });
   });
   it('does not make a second account: the designate refuses overlord-single-account', () => {
     expect(m.designateVerdict(dfacts({ accountPools: SET_A, accounts: facts }))).toMatchObject({ act: 'refuse', word: 'overlord-single-account', count: 1 });

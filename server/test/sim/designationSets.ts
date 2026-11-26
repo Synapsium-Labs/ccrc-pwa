@@ -62,6 +62,8 @@ const HEALTHY: Record<string, AccountLimits> = {
   'lane-off': limit({ disabled: true }),
 };
 const NO_EDGES: ReadonlyMap<string, readonly string[]> = new Map();
+/** No account held (renewal readings PR H): the list as the set orders it. */
+const NO_HOLDS = { ok: true, lanes: [] } as const;
 
 /** The door's facts: `lanes` built with `limits.ts#laneFactsOf`, one per roster account (`shares` only feeds that call). */
 export const afacts = (
@@ -73,7 +75,7 @@ export const afacts = (
   const read: SharesRead = shares === undefined || first === undefined ? { kind: 'absent' }
     : { kind: 'reading', finishedAtS: first.finishedAtS, byAccount: Object.fromEntries(Object.entries(shares).map(([k, v]) => [k, v.estimatePct])) };
   const lanes = Object.fromEntries(roster.accounts.map((a) => [a.id, laneFactsOf(a, limits, read)]));
-  return { roster, limits, edges: NO_EDGES, lanes, nowS: NOW_S, ...rest };
+  return { roster, limits, edges: NO_EDGES, lanes, nowS: NOW_S, held: NO_HOLDS, ...rest };
 };
 
 export const SET_AB: PoolSet = { pools: ['pool-b', 'pool-a'], untagged: false };
@@ -127,38 +129,38 @@ export function overlordAccountsCases(m: DesignationModule): Record<string, Suit
       expect(run(SET_AB).list).not.toContain('lane-d');
     },
     'the empty set lists and counts nothing': () => {
-      expect(run({ pools: [], untagged: false })).toEqual({ list: [], counted: [], unmeasured: [] });
+      expect(run({ pools: [], untagged: false })).toEqual({ list: [], counted: [], unmeasured: [], holds: 'applied' });
     },
     'a signed-out account is listed and not counted, and is not unmeasured either': () => {
       const r = run(SET_A, 'opus', afacts({ ...HEALTHY, 'lane-c': limit({ authDead: true }) }));
-      expect(r).toEqual({ list: ['lane-a', 'lane-c'], counted: ['lane-a'], unmeasured: [] });
+      expect(r).toEqual({ list: ['lane-a', 'lane-c'], counted: ['lane-a'], unmeasured: [], holds: 'applied' });
     },
     'an account at the ceiling is listed and not counted': () => {
       const r = run(SET_A, 'opus', afacts({ ...HEALTHY, 'lane-a': limit({ seven: 99 }) }));
-      expect(r).toEqual({ list: ['lane-a', 'lane-c'], counted: ['lane-c'], unmeasured: [] });
+      expect(r).toEqual({ list: ['lane-a', 'lane-c'], counted: ['lane-c'], unmeasured: [], holds: 'applied' });
     },
     'an account with no continuity record is listed and not counted (a set-side asker)': () => {
       const noCont = parseRoster({ version: 1, accounts: [
         entry('lane-a', { exec: { kind: 'upstream' }, pool: 'pool-a' }), entry('lane-c', { pool: 'pool-a', continuity: undefined }),
       ] });
       const r = run(SET_A, 'opus', afacts(HEALTHY, { roster: noCont }));
-      expect(r).toEqual({ list: ['lane-a', 'lane-c'], counted: ['lane-a'], unmeasured: [] });
+      expect(r).toEqual({ list: ['lane-a', 'lane-c'], counted: ['lane-a'], unmeasured: [], holds: 'applied' });
     },
     'an unmeasured account is listed, never counted, and named unmeasured': () => {
       const r = run(SET_A, 'opus', afacts({ ...HEALTHY, 'lane-c': limit({ seven: null }) }));
-      expect(r).toEqual({ list: ['lane-a', 'lane-c'], counted: ['lane-a'], unmeasured: ['lane-c'] });
+      expect(r).toEqual({ list: ['lane-a', 'lane-c'], counted: ['lane-a'], unmeasured: ['lane-c'], holds: 'applied' });
       const gone = run(SET_A, 'opus', afacts({ 'lane-a': limit(), 'lane-off': limit({ disabled: true }) }));
-      expect(gone).toEqual({ list: ['lane-a', 'lane-c'], counted: ['lane-a'], unmeasured: ['lane-c'] });
+      expect(gone).toEqual({ list: ['lane-a', 'lane-c'], counted: ['lane-a'], unmeasured: ['lane-c'], holds: 'applied' });
     },
     'an account with no lane facts is unmeasured, never counted': () => {
       const f = afacts(HEALTHY);
       const { 'lane-c': _gone, ...lanes } = f.lanes;
       void _gone;
-      expect(run(SET_A, 'opus', { ...f, lanes })).toEqual({ list: ['lane-a', 'lane-c'], counted: ['lane-a'], unmeasured: ['lane-c'] });
+      expect(run(SET_A, 'opus', { ...f, lanes })).toEqual({ list: ['lane-a', 'lane-c'], counted: ['lane-a'], unmeasured: ['lane-c'], holds: 'applied' });
     },
     'a seven-day window that rolled over is unmeasured, not an inferred zero': () => {
       const r = run(SET_A, 'opus', afacts({ ...HEALTHY, 'lane-c': limit({ seven: 0, sevenRolledOver: true }) }));
-      expect(r).toEqual({ list: ['lane-a', 'lane-c'], counted: ['lane-a'], unmeasured: ['lane-c'] });
+      expect(r).toEqual({ list: ['lane-a', 'lane-c'], counted: ['lane-a'], unmeasured: ['lane-c'], holds: 'applied' });
     },
     'a fable class reads the share figure: no estimate is unmeasured, a fresh low one counts': () => {
       const billing = parseRoster({ version: 1, accounts: [
@@ -166,7 +168,22 @@ export function overlordAccountsCases(m: DesignationModule): Record<string, Suit
         entry('lane-c', { pool: 'pool-a', fableBilling: 'included' }),
       ] });
       const f = afacts(HEALTHY, { roster: billing, shares: { 'lane-a': { estimatePct: 5, finishedAtS: NOW_S - 10 } } });
-      expect(run(SET_A, 'fable', f)).toEqual({ list: ['lane-a', 'lane-c'], counted: ['lane-a'], unmeasured: ['lane-c'] });
+      expect(run(SET_A, 'fable', f)).toEqual({ list: ['lane-a', 'lane-c'], counted: ['lane-a'], unmeasured: ['lane-c'], holds: 'applied' });
+    },
+    'PR H: a held account is left out of the list, and still counted (a hold orders, it does not disable)': () => {
+      const r = run(SET_AB, 'opus', afacts(HEALTHY, { held: { ok: true, lanes: ['lane-b'] } }));
+      expect(r).toEqual({ list: ['lane-a', 'lane-c'], counted: ['lane-b', 'lane-a', 'lane-c'], unmeasured: [], holds: 'applied' });
+    },
+    'PR H: holds that would empty the list leave it as it was, overridden, never empty': () => {
+      const r = run(SET_A, 'opus', afacts(HEALTHY, { held: { ok: true, lanes: ['lane-a', 'lane-c'] } }));
+      expect(r).toEqual({ list: ['lane-a', 'lane-c'], counted: ['lane-a', 'lane-c'], unmeasured: [], holds: 'overridden' });
+    },
+    'PR H: unread holds leave the list unfiltered and marked unread, never empty': () => {
+      const r = run(SET_A, 'opus', afacts(HEALTHY, { held: { ok: false, detail: 'locked' } }));
+      expect(r).toEqual({ list: ['lane-a', 'lane-c'], counted: ['lane-a', 'lane-c'], unmeasured: [], holds: 'unread' });
+    },
+    'PR H: a hold on an account the set does not list changes nothing': () => {
+      expect(run(SET_A, 'opus', afacts(HEALTHY, { held: { ok: true, lanes: ['lane-b'] } })).list).toEqual(['lane-a', 'lane-c']);
     },
     'a central edge decides the account\'s pool before the roster\'s': () => {
       const f = afacts(HEALTHY, { edges: new Map([['lane-b', ['pool-a']]]) });
@@ -268,6 +285,14 @@ export function designateVerdictCases(m: DesignationModule): Record<string, Suit
     'a set admitting an API-key lane does not list it, and the pick never lands on it': () => {
       const v = verdict({ accountPools: SET_A, home: { wrapper: 'lane-pay', score: 0 } });
       expect(v).toEqual({ act: 'create', wrapper: 'lane-a', acctorder: 'lane-a,lane-c', poolset: 'pool-a' });
+    },
+    'PR H: a held account is left out of acctorder and of the pick, the home included': () => {
+      const v = verdict({ accountPools: SET_A, accounts: afacts(HEALTHY, { held: { ok: true, lanes: ['lane-a'] } }) });
+      expect(v).toEqual({ act: 'create', wrapper: 'lane-c', acctorder: 'lane-c', poolset: 'pool-a' });
+    },
+    'PR H: every held account left out of the list, the pick still lands on a counted account, never on none': () => {
+      const f = afacts({ ...HEALTHY, 'lane-c': limit({ seven: null }) }, { held: { ok: true, lanes: ['lane-a', 'lane-b'] } });
+      expect(verdict({ accountPools: SET_AB, accounts: f })).toEqual({ act: 'create', wrapper: 'lane-a', acctorder: 'lane-c', poolset: 'pool-a,pool-b' });
     },
     '+untagged admits untagged accounts, listed after every pool': () => {
       const v = verdict({ accountPools: { pools: ['pool-a'], untagged: true } });
@@ -475,7 +500,9 @@ const DESIGNATE_SET: MutantSet<DesignationModule> = { modulePath: MODULE, mutant
     { id: 'D1 capability before exists', old: '  // 1. a session is bound or pending.', new: "  { const n: string[] = []; for (const w of DESIGNATE_CCD_WORDS) if (!present(f.ccdWords, w)) n.push(w); if (n.length > 0) return { act: 'refuse', word: 'capability-missing', detail: 'x', needs: n }; }\n  // 1. a session is bound or pending." },
     { id: 'D2 null ccdWords read as present', old: 'words !== null && words.includes(w)', new: 'words === null || words.includes(w)' },
     { id: 'D3 unknown builds pass', old: "f.builds !== 'agreed'", new: "f.builds === 'skewed'" },
-    { id: 'D4 pick outside counted', old: 'f.home !== null && counted.includes(f.home.wrapper) ? f.home.wrapper : counted[0]!', new: 'f.home !== null ? f.home.wrapper : counted[0]!' },
+    { id: 'D4 pick outside counted', old: 'f.home !== null && pickable.includes(f.home.wrapper) ? f.home.wrapper : pickable[0]!', new: 'f.home !== null ? f.home.wrapper : pickable[0]!' },
+    { id: 'D14 a held account picked', old: 'const pickable = open.length > 0 ? open : counted;', new: 'const pickable = counted;' },
+    { id: 'D15 a hold strands the pick', old: 'const pickable = open.length > 0 ? open : counted;', new: 'const pickable = open;' },
     { id: 'D5 refused code 1 is not present', old: "(p.kind === 'refused' && p.code === 1)", new: 'false' },
     { id: 'D6 not-run read as present', old: "return p.kind === 'answer' || (", new: "return p.kind === 'answer' || p.kind === 'not-run' || (" },
     { id: 'D7 one counted account passes', old: 'counted.length < 2', new: 'counted.length < 1' },
@@ -499,6 +526,10 @@ const ACCOUNTS_SET: MutantSet<DesignationModule> = { modulePath: MODULE, mutants
     { id: 'A10 central edges ignored', old: 'resolvedAccountPool(a.id, a, f.edges)', new: 'resolvedAccountPool(a.id, a, new Map())' },
     { id: 'A13 a missing lane counted', old: 'if (lane === undefined) { unmeasured.push(id); continue; }', new: '' },
     { id: 'A12 an unmeasured account dropped', old: "else if (s.kind !== 'unservable') unmeasured.push(id);", new: '' },
+    { id: 'A14 the holds ignored', old: 'const list = kept === null ? all : kept.list;', new: 'const list = all;' },
+    { id: 'A15 held accounts not counted', old: '  for (const id of all) {', new: '  for (const id of list) {' },
+    { id: 'A16 unread holds read as none', old: 'const kept = f.held.ok ? heldOutOfList(all, f.held.lanes) : null;', new: 'const kept = heldOutOfList(all, f.held.ok ? f.held.lanes : []);' },
+    { id: 'A17 unread holds empty the list', old: 'const list = kept === null ? all : kept.list;', new: 'const list = kept === null ? [] : kept.list;' },
   ], suite: overlordAccountsCases };
 const RETIRE_SET: MutantSet<DesignationModule> = { modulePath: MODULE, mutants: [
     { id: 'R1 a live binding cancels', old: "return { act: 'retire-live' }", new: "return { act: 'cancel-pending' }" },

@@ -4755,6 +4755,21 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE UNIQUE INDEX overlord_readiness_items_open ON overlord_readiness_items (item, key) WHERE settledAt IS NULL;
   `,
+
+  // ── 133: user_version 132 -> 133 ──────────────────────────────────────────
+  // The Overlord's account holds (spec §3.6; plan `docs/superpowers/plans/2026-11-14-overlord-w1/w1-renewal-readings.md` Task 11):
+  // a start that loaded what the launch profile does not list holds its account out of the ordered list until the operator
+  // clears it. One row per lane; TWO writers, `continuity/accountHolds.ts#holdAccount` (the generations pass) and
+  // `#clearAccountHold` (the operator's door). NEW TABLE only: an older build takes rule 3 and never names it. RE-MEASURE the
+  // slot before merge (it must print 132 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE overlord_account_holds (
+    lane TEXT PRIMARY KEY, cause TEXT NOT NULL CHECK (cause = 'launch-profile-unmet'), startId INTEGER NOT NULL,
+    heldAt INTEGER NOT NULL, clearedAt INTEGER, clearedBy TEXT
+  );
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

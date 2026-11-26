@@ -92,7 +92,8 @@ describe('the store: three states per group, default shadow', () => {
     const file = path.join(mkTmp('ccrc-runclose-migrate-'), 'coord.db');
     const fresh = openCoordDb(file);
     fresh.prepare("UPDATE run_close_settings SET neverStarted = 'on', claimantCrashed = 'off', updatedAt = 9").run();
-    // Back to version 53: undo migrations 132 (overlord_readiness and overlord_readiness_items, the Overlord's readiness word), 131 (docs_settings),
+    // Back to version 53: undo migrations 133 (overlord_account_holds, the Overlord's account holds, renewal readings H),
+    // 132 (overlord_readiness and overlord_readiness_items, the Overlord's readiness word), 131 (docs_settings),
     // 130 (claude_build_deliveries, the paste delivery recipe's results, Desktop polish
     // wave 178), 129 (overlord_invariant_findings, the invariant monitor, Overlord W1 sequence B2, its
     // lane-arm row gone with lane_arm_settings below), 128 (continuity_timers.setRestoreGeneration and continuity_timer_refusals, the Overlord's timers, undone by the table drops below), 127 (the programme lifecycle's binding and placeholder columns on programs, its
@@ -110,7 +111,9 @@ describe('the store: three states per group, default shadow', () => {
     // D-8395), 61 (nodes.reportedSweep, D-8386), 60 (claude_builds, D-8289), 59 (the plan model, D-8181), 58 (practice_cases,
     // Overlord W1a), 57 (testbox_events, D-8166), 56 (lane_arm_settings, D-8274) and 55 (coordinator_calls, D-8126) as well
     // as 54 (100, the replay quiz run's state and counts, goes with continuity_quiz_runs), so the reopen replays
-    // 54 through 132, including the unseeded Docs settings singleton (131, X2 P4.3) and the readiness word's two tables (132).
+    // 54 through 133, including the unseeded Docs settings singleton (131, X2 P4.3), the readiness word's two tables (132) and
+    // the account holds (133).
+    fresh.exec('DROP TABLE overlord_account_holds;');
     fresh.exec('DROP TABLE overlord_readiness_items; DROP TABLE overlord_readiness;');
     fresh.exec('DROP TABLE docs_settings');
     fresh.exec('DROP TABLE claude_build_deliveries;');

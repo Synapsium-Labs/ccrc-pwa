@@ -73,7 +73,7 @@ function rig(read: DesignationRead = designated(OLD)): Rig {
     body,
     clock: { wall: () => NOW },
     coord: {
-      designationRead: sequenceRead, failPending: r.failPending, stopDone: r.stopDone, accountPoolEdges: () => new Map(),
+      designationRead: sequenceRead, failPending: r.failPending, stopDone: r.stopDone, accountPoolEdges: () => new Map(), accountHolds: () => ({ ok: true, lanes: [] }),
     } as unknown as OverlordLaneDeps['coord'],
     facts: {
       roster: () => ROSTER,

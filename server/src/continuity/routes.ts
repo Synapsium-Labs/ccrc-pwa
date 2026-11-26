@@ -5,7 +5,8 @@
 // W1a registers the start report, the card door, the note door (the notes piece: a note, the live notes, the handover
 // note), the timer doors (the session's three, box-token lanes, and the operator's two, session-gated) and the probe door (the
 // probes piece: a session's open round, and its answers). W1's loaded-file report and witness extend this file (Table 11.1e,
-// "The hook's reports"), and W1's renewal readings add the daily backstop's two operator doors, beside the timer doors.
+// "The hook's reports"), and W1's renewal readings add the daily backstop's two operator doors, beside the timer doors, and
+// (PR H) the account holds' two operator doors: the standing holds' read and the clear.
 import { createHash } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { SHAPE_ONLY_MASKER, type SecretMasker } from '../accounts/mask.js';
@@ -23,6 +24,7 @@ import {
   TIMER_FIRED_SHOWN_MS, overlordTimerStamp, timerNoteFits, type FiredTimerView, type OverlordTimersRead, type TimerDoor, type TimerOwner, type TimerView,
 } from '../../../shared/continuity-timers.js';
 import { BACKSTOP_ZONE_MAX, isBackstopHour, isBackstopZone, type BackstopRead } from '../../../shared/renewal-readings.js';
+import { ACCOUNT_ID_RE } from '../../../shared/roster.js';
 import { timerCapOf } from '../../../shared/fleetRoles.js';
 import { ANCHOR_SLOT_LANE, CONTINUITY_LANE, laneArmGate } from '../../../shared/lane-arm.js';
 import { utf8Bytes } from '../../../shared/utf8.js';
@@ -1144,6 +1146,38 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     const r = coord.backstopRead();
     if (!r.ok) return refuseRoute(reply, 'unavailable', { detail: r.detail });
     return reply.code(200).send(backstopView(r));
+  });
+
+  // THE ACCOUNT HOLDS' DOORS (spec §3.6; renewal readings PR H, plan Task 11, questions 6 and 7 of the home plan): the operator's,
+  // session-gated when sign-in is armed, never EXEMPT, consulting no box token, the backstop's shape. A hold only narrows (it
+  // leaves one account out of the Overlord's ordered list), so its clear widens back to the set the operator chose: no step-up,
+  // and the clear records who cleared it (`operatorActor`). `clearAccountHold` is the clear's one writer; the generations pass is
+  // the hold's. `box-token-census.test.ts`'s `CONTINUITY_SESSION_DOORS` names both paths.
+
+  /** `GET /api/continuity/account-holds`: the standing holds, oldest first, each its lane, its cause word, the start that held it
+   *  and when (`{ ok, holds: [{ lane, cause, startId, heldAt }] }`): no session text, only the lane names Settings shows. A table
+   *  that cannot be read answers `unmeasured` (502) with the store's detail, never an empty list. */
+  app.get('/api/continuity/account-holds', async (_req, reply) => {
+    const coord = deps.coord;
+    if (coord === undefined) return refuseRoute(reply, 'unavailable');
+    const r = coord.standingHolds();
+    if (!r.ok) return refuseRoute(reply, 'unmeasured', { detail: r.detail });
+    return reply.code(200).send({ ok: true, holds: r.holds });
+  });
+
+  /** `POST /api/continuity/account-holds/:lane/clear`: the operator clears the standing hold on `lane`, which goes back into the
+   *  Overlord's ordered list at the next list any caller builds. `bad-request` for a path that names no account id, `not-found`
+   *  (404) when no hold stands on it, `write-failed` when the store could not write it; `200 { ok, lane }` with the clear recorded
+   *  by the actor (the signed-in device, or `flag-off` while sign-in is dark). */
+  app.post('/api/continuity/account-holds/:lane/clear', async (req, reply) => {
+    const { lane } = req.params as { lane: string };
+    if (!ACCOUNT_ID_RE.test(lane)) return refuseRoute(reply, 'bad-request', { detail: 'the path names an account id' });
+    const coord = deps.coord;
+    if (coord === undefined) return refuseRoute(reply, 'unavailable');
+    const w = coord.clearAccountHold({ lane, by: deps.operatorActor?.(req) ?? 'flag-off', at: deps.wall() });
+    if (!w.ok) return refuseRoute(reply, 'write-failed', { detail: w.detail });
+    if (!w.changed) return refuseRoute(reply, 'not-found', { detail: `no hold stands on ${lane}` });
+    return reply.code(200).send({ ok: true, lane });
   });
 
   // THE PROBE DOOR (spec §3.3.5 C41, §3.3.9 C52; the probes piece, Task 4). Two box-token lanes, each an `auth/gate.ts` EXEMPT

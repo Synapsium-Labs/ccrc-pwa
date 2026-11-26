@@ -15,8 +15,8 @@
 // `diskAlarmLane.ts`'s one-shot push uses it, so the payload's `url`, not a session deep link, decides where a tap goes.
 //
 // ABSENT PRODUCERS answer unmeasured, never a default: no private store (a test, a script) makes the inbox and the served reads
-// `unmeasured`; no limits read yet makes every candidate's serviceability `unmeasured`; the holds are `not-wired` until renewal
-// readings PR H wires them.
+// `unmeasured`; no limits read yet makes every candidate's serviceability `unmeasured`. The holds are the store's
+// (`accountHolds`, renewal readings PR H): an unread table answers `unmeasured`, never an empty list.
 import type { Candidates } from '../accountLoad.js';
 import { loadFactsOf } from '../accountLoad.js';
 import type { Deps } from '../deps.js';
@@ -43,7 +43,7 @@ import type { AccountLimits } from '../limits.js';
 /** The store's members the wiring reads. */
 export type ReadinessWiringCoord = Pick<CoordStore,
   'designationRead' | 'ladderRows' | 'liveGenerationOfIdentity' | 'restartsSince' | 'laneArmSetting' | 'accountPoolEdges'
-  | 'limitSamplesSince' | 'lastContinuityRead'>;
+  | 'limitSamplesSince' | 'lastContinuityRead' | 'accountHolds'>;
 
 /** What the root hands the builder. `deps` is read at call time, so a sink set after this call (the response stamp) is seen. */
 export interface ReadinessWiringInputs {
@@ -95,10 +95,10 @@ export function readinessLaneOver(i: ReadinessWiringInputs): ReadinessLane {
     liveGeneration: (identity) => coord.liveGenerationOfIdentity(identity),
     effective: (row) => effectiveGeneration(row, continuityLive()),
     restartsSince: (identity, sinceMs) => coord.restartsSince(identity, sinceMs),
-    candidates: (d): Candidates => {
+    candidates: (d, held): Candidates => {
       const nowS = Math.floor(clock.wall() / 1000);
       // No limits read yet: an empty read, so each candidate's serviceability is unmeasured (`laneFactsOf`), never a default.
-      return overlordCandidatesOf(d, loadFactsOf(deps.cfg.roster, i.limits()?.limits ?? {}, coord.accountPoolEdges(), nowS));
+      return overlordCandidatesOf(d, loadFactsOf(deps.cfg.roster, i.limits()?.limits ?? {}, coord.accountPoolEdges(), nowS, held));
     },
     resets: (accounts) => {
       const nowS = Math.floor(clock.wall() / 1000);
@@ -115,7 +115,7 @@ export function readinessLaneOver(i: ReadinessWiringInputs): ReadinessLane {
     unsettled: () => i.operatorModel?.unsettledFacts() ?? { kind: 'unmeasured', why: NO_STORE },
     lastServedReadAt: (generation, sinceMs) => i.operatorModel?.lastServedReadAt(generation, sinceMs) ?? { kind: 'unmeasured', why: NO_STORE },
     lastContinuityRead: (sessionId) => coord.lastContinuityRead(sessionId),
-    holds: () => ({ kind: 'not-wired' }),
+    holds: () => { const h = coord.accountHolds(); return h.ok ? { kind: 'read', lanes: h.lanes } : { kind: 'unmeasured' }; },
     push: readinessPushVia(deps),
     log: (line) => console.warn(line),
   };

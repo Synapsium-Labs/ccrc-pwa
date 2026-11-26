@@ -157,8 +157,10 @@ export interface SubjectReadings {
   readonly lastDownAt: number | null;
   readonly generation: Read<GenerationReading | null>;
   readonly restarts: Read<number>;
-  /** Serviceability B's candidates (renewal readings' `overlordCandidatesOf`). */
+  /** Serviceability B's candidates (renewal readings' `overlordCandidatesOf`), the list leaving out every held account. */
   readonly candidates: Candidates;
+  /** Renewal readings PR H's holds, as the pass read them: an unread hold makes the stranded fact unmeasured, never "no holds". */
+  readonly holds: NoticeInputs['holds'];
   /** `poolRunway.ts#earliestReset` over each candidate alone: exhausted (`at`), clear (`none-exhausted`), or unmeasured. */
   readonly resets: Read<Readonly<Record<string, EarliestReset>>>;
   /** The record's strand marker: none, its reason, a listed marker that could not be read, or no assembled record. */
@@ -246,6 +248,9 @@ function strandedOf(s: SubjectReadings): Fact<StrandCause | null> {
       }
     }
   }
+  // A held account is left out of the candidates; holds that could not be read leave them unfiltered, so "a candidate serves" is
+  // not proven (renewal readings PR H). `not-wired` is a port with no holds read, which filters nothing and doubts nothing.
+  if (s.holds.kind === 'unmeasured') unread.push('holds');
   if (s.swapBlocked !== null) return measured('swap-blocked');
   // The account failed the turn when the stall watch's one classifier puts the token in its account class (slug
   // account-failure-reads-the-stopfailure-classes); a token it cannot classify is neither a failure nor a pass: unread.
@@ -364,7 +369,7 @@ export interface NoticeInputs {
   readonly records: readonly ReadinessItemRecord[];
   /** The candidates with `serves === 'yes'` (F11), unmeasured if any candidate is. */
   readonly count: Fact<number>;
-  /** Renewal readings PR H's holds; `not-wired` until it lands. */
+  /** Renewal readings PR H's holds (`CoordStore.accountHolds`); `not-wired` only for a port with no holds read (a test). */
   readonly holds: { readonly kind: 'not-wired' } | { readonly kind: 'unmeasured' } | { readonly kind: 'read'; readonly lanes: readonly string[] };
 }
 
@@ -380,7 +385,7 @@ export const READINESS_SETTLE_NOTE = { cleared: 'cleared', retired: 'retired' } 
 /** The readiness module's own words, each a fact's or a notice's kind, a dead or unread cause, a push field or a log kind; none
  *  is a refusal or a `reject.code`. With the fourteen words and the strand causes, the coordination kebab census admits them. */
 const READINESS_KEBAB_MAP = {
-  'not-built': 'a fact this build has no input for', 'not-wired': 'the holds port before renewal readings PR H',
+  'not-built': 'a fact this build has no input for', 'not-wired': 'a holds port with no holds read (a test)',
   'no-record': 'no registry record for the subject', 'no-state': 'no hook state yet', 'dead-push': 'the dead push notice',
   'restart-bound': 'down past the restart bound', 'third-restart': 'a third restart in the hour',
   'strand-marker': 'the strand marker unread', 'turn-marker': 'the turn marker unread', 'notice-raise': 'a refused raise, logged once',

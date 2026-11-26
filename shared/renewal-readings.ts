@@ -1,6 +1,6 @@
 // L0, context K (Session Conversation's shared vocabulary): the Overlord's renewal readings' wire shapes (Overlord spec
 // §3.3.11, R19; W1, plan `w1-renewal-readings.md`). The daily backstop's setting, its bounds and its default; the ordered
-// list's hold filter joins it in PR H. Imports nothing: the PWA bundles this file.
+// list's hold filter (PR H): the holds' read shape and `heldOutOfList`. Imports nothing: the PWA bundles this file.
 
 /** The daily backstop's setting (R19, Table 11.1d's Settings row): the wall-clock hour in an IANA time zone at which a
  *  generation that has lived through it is due a soft renewal. `isDefault` while no operator has set it; `setAt` is the
@@ -40,4 +40,21 @@ export function isBackstopZone(v: unknown): v is string {
   } catch {
     return false;
   }
+}
+
+// ── The ordered list's hold (PR H, plan Task 11; spec §3.6) ─────────────────────────────────────────────────────────────
+
+/** The standing account holds (`overlord_account_holds`, `continuity/accountHolds.ts#accountHolds`): the lanes a start that
+ *  loaded what the launch profile does not list holds out of the Overlord's ordered list until the operator clears them, or
+ *  why they could not be read. One vocabulary for every reader: the designation's list, the account readings and readiness.
+ *  An unread hold is never an empty list (Review Focus 7). */
+export type AccountHoldsRead = { readonly ok: true; readonly lanes: readonly string[] } | { readonly ok: false; readonly detail: string };
+
+/** The ordered list with every held account left out, unless that leaves none: then the list as it was, `overridden`, so the
+ *  holds are reported and the Overlord always has somewhere to start (Review Focus 7; a hold only narrows). An empty list
+ *  stays empty and is not `overridden`: nothing was held out of it. */
+export function heldOutOfList(list: readonly string[], holds: readonly string[]): { readonly list: readonly string[]; readonly overridden: boolean } {
+  const kept = list.filter((id) => !holds.includes(id));
+  if (kept.length === 0 && list.length > 0) return { list, overridden: true };
+  return { list: kept, overridden: false };
 }

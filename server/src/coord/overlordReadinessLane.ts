@@ -42,6 +42,7 @@ import {
   closeReadinessItem, openReadinessItems, pruneReadiness, raiseReadinessItem, readinessNow, recordReadiness, settleReadinessItem,
 } from './overlordReadinessStore.js';
 import type { Candidates } from '../accountLoad.js';
+import type { AccountHoldsRead } from '../../../shared/renewal-readings.js';
 import type { TurnMarkRead } from './stall.js';
 import type { HookStateRead } from '../hookstate.js';
 import type { MessageFacts } from './overlordInbox.js';
@@ -74,8 +75,9 @@ export interface ReadinessLanePort {
   /** `effectiveGeneration(row, continuity live)`: the one accessor of the state and deadline. */
   effective(row: GenRow): { readonly state: GenRow['state']; readonly deadlineAt: number | null };
   restartsSince(identity: string, sinceMs: number): { ok: true; count: number } | { ok: false; detail: string };
-  /** Serviceability B's candidates over designation A's list (`renewalReadings.ts#overlordCandidatesOf`). */
-  candidates(d: DesignationRead): Candidates;
+  /** Serviceability B's candidates over designation A's list (`renewalReadings.ts#overlordCandidatesOf`), the list leaving out the
+   *  accounts `held` holds (renewal readings PR H), read by the lane once a pass through `holds`. */
+  candidates(d: DesignationRead, held: AccountHoldsRead): Candidates;
   /** `poolRunway.ts#earliestReset` over each account alone. */
   resets(accounts: readonly string[]): Read<Readonly<Record<string, EarliestReset>>>;
   turnMark(record: SessionRecord): Promise<TurnMarkRead>;
@@ -85,7 +87,8 @@ export interface ReadinessLanePort {
   unsettled(): StoreRead<readonly MessageFacts[]>;
   lastServedReadAt(generation: number, sinceMs: number): StoreRead<number | 'none'>;
   lastContinuityRead(sessionId: string): { ok: true; at: number | null } | { ok: false; detail: string };
-  /** Renewal readings PR H's holds: `not-wired` until it lands. */
+  /** Renewal readings PR H's holds (`CoordStore.accountHolds`): the held lanes, or `unmeasured` when they could not be read;
+   *  `not-wired` only where a port has no holds read (a test). Read once a pass, for the candidates, the word and the items. */
   holds(): NoticeInputs['holds'];
   /** The dead push, sent after the commit that marked it (the push outbox's one sender, behind `notify`). */
   push(p: ReadinessPush): void;
@@ -175,7 +178,12 @@ export class ReadinessLane {
     }, (detail) => ({ ok: false as const, detail }));
     const restarts = !identity.ok ? identity
       : safe(() => p.restartsSince(identity.value, now - READINESS_RESTART_WINDOW_MS), (detail) => ({ ok: false as const, detail }));
-    const candidates = safe(() => p.candidates(d), (): Candidates => ({ kind: 'unmeasured', why: 'designation-unreadable' }));
+    // The holds first (renewal readings PR H), read once a pass: the candidates' list leaves a held account out, and the stranded
+    // fact reads an unread hold as unmeasured (`strandedOf`), never as no holds.
+    const holds = safe(() => p.holds(), (): NoticeInputs['holds'] => ({ kind: 'unmeasured' }));
+    const held: AccountHoldsRead = holds.kind === 'read' ? { ok: true, lanes: holds.lanes }
+      : { ok: false, detail: holds.kind === 'unmeasured' ? 'the holds could not be read' : 'the holds are not wired' };
+    const candidates = safe(() => p.candidates(d, held), (): Candidates => ({ kind: 'unmeasured', why: 'designation-unreadable' }));
     const resets = safe(() => p.resets(candidates.kind === 'candidates' ? candidates.list.map((c) => c.id) : []), (detail) => ({ ok: false as const, detail }));
     const unread = { ok: false as const, reason: 'unmeasured' as const };
     const turnMark = record === null ? unread : await safeAsync(() => p.turnMark(record), () => unread);
@@ -187,7 +195,7 @@ export class ReadinessLane {
       lastDownAt: this.lastDownAt.get(sessionId) ?? null,
       generation: genReading,
       restarts: restarts.ok ? { ok: true, value: restarts.count } : restarts,
-      candidates, resets,
+      candidates, resets, holds,
       strand: record === null ? { kind: 'no-record' } : record.stranded === null ? { kind: 'none' }
         : safe(() => p.strandUnreadable(record), () => true) ? { kind: 'unreadable' } : { kind: 'marked', reason: record.stranded.reason },
       swapBlocked: record?.swapBlocked ?? null,
@@ -212,7 +220,7 @@ export class ReadinessLane {
     const notices = readinessNotices({
       written: { answer, episodeFirst: written.episodeFirst, rowId: written.rowId },
       records: records.ok ? records.rows : [], count,
-      holds: records.ok ? safe(() => p.holds(), () => ({ kind: 'unmeasured' as const })) : { kind: 'unmeasured' },
+      holds: !records.ok ? { kind: 'unmeasured' } : s !== null ? s.holds : safe(() => p.holds(), () => ({ kind: 'unmeasured' as const })),
     });
     for (const n of notices) {
       safe(() => {

@@ -119,6 +119,48 @@ export function sandboxCases(m: SandboxModule): Record<string, SuiteCase> {
       expect(v.engaged).toBe(false);
       expect(m.profileEngagedOf({ start: startRow(), report: heldReport(p, { claudeVersion: '2.1.330' }) }, p, WS)).toBe('not-engaged');
     },
+    'fromAccount (renewal readings PR H): an extra load is the account\'s, a missing one, the workspace\'s or the launch\'s is not': () => {
+      const acct = (r: StartLoadsRow, p: SandboxProperty) => m.sandboxVerdict(e, r, WS).properties.find((x) => x.property === p)?.fromAccount;
+      // every property of a held report, and of an unread one, is never the account's
+      for (const x of m.sandboxVerdict(e, heldReport(e), WS).properties) expect(x.fromAccount, x.property).toBe(false);
+      for (const k of ['tools', 'toolServers', 'instructions', 'skills', 'agents', 'hooks'] as const) {
+        for (const x of m.sandboxVerdict(e, unread(k), WS).properties) expect(x.fromAccount, `${k} unread: ${x.property}`).toBe(false);
+      }
+      expect(acct(heldReport(e, {}, { skills: ['ccrc-overlord', 'dataviz', 'plug:thing'] }), 'skills')).toBe(true);
+      expect(acct(heldReport(e, {}, { skills: ['dataviz'] }), 'skills')).toBe(false);
+      expect(acct(heldReport(e, {}, { agents: ['Explore', 'overlord-reader', 'plug:agent'] }), 'agents')).toBe(true);
+      expect(acct(heldReport(e, {}, { agents: ['Explore'] }), 'agents')).toBe(false);
+      expect(acct(heldReport(e, {}, { hooks: [e.hookSha256, 'd'.repeat(64)] }), 'hooks')).toBe(true);
+      expect(acct(heldReport(e, {}, { hooks: [] }), 'hooks')).toBe(false);
+      expect(acct(heldReport(e, {}, { tools: ['Agent', 'mcp__door__act', 'mcp__other__x'] }), 'tools')).toBe(true);
+      expect(acct(heldReport(e, {}, { tools: ['Agent', 'Skill'] }), 'tools')).toBe(false);
+      expect(acct(heldReport(e, {}, { toolServers: ['door', 'other'] }), 'tool-servers')).toBe(true);
+      expect(acct(heldReport(e, {}, { toolServers: ['other'] }), 'tool-servers')).toBe(true);
+      expect(acct(heldReport(e, {}, { toolServers: [] }), 'tool-servers')).toBe(false);
+      expect(acct(heldReport(e, {}, { toolServers: ['door', 'door'] }), 'tool-servers')).toBe(false);
+      const con = { type: 'Project', name: 'CLAUDE.md', inWorkspace: true, sha256: e.constitutionSha256 };
+      const user = { type: 'User', name: 'CLAUDE.md', inWorkspace: false, sha256: 'a'.repeat(64) };
+      const parent = { type: 'Project', name: 'CLAUDE.md', inWorkspace: false, sha256: 'b'.repeat(64) };
+      expect(acct(heldReport(e, {}, { instructions: [con, user] }), 'instructions')).toBe(true);
+      expect(acct(heldReport(e, {}, { instructions: [user] }), 'instructions')).toBe(true);
+      expect(acct(heldReport(e, {}, { instructions: [con, parent] }), 'instructions')).toBe(false);
+      expect(acct(heldReport(e, {}, { instructions: [parent] }), 'instructions')).toBe(false);
+      expect(acct(heldReport(e, {}, { instructions: [{ ...con, sha256: 'e'.repeat(64) }] }), 'instructions')).toBe(false);
+      expect(acct(heldReport(e, {}, { instructions: [con, { ...con, name: 'AGENTS.md' }] }), 'instructions')).toBe(false);
+      // the launch's own composition and the workspace never are
+      expect(acct(heldReport(e, { launchRc: 'on' }), 'remote-control')).toBe(false);
+      expect(acct(heldReport(e, { permissionMode: 'default' }), 'permission-mode')).toBe(false);
+      expect(acct(heldReport(e, { profileDigest: 'x' }), 'profile')).toBe(false);
+      expect(m.sandboxVerdict(e, heldReport(e, { cwdInWorkspace: false }), WS).properties.find((x) => x.property === 'workspace')?.fromAccount).toBe(false);
+    },
+    'newestStartVerdict (renewal readings PR H): the newest start\'s own report, with its id; none, no report or another start\'s is unmeasured': () => {
+      expect(m.newestStartVerdict(null, e, WS)).toBeNull();
+      expect(m.newestStartVerdict({ start: startRow(), report: null, carry: { kind: 'none' } }, e, WS)).toEqual({ startId: 7, verdict: 'unmeasured' });
+      expect(m.newestStartVerdict({ start: startRow({ id: 8 }), report: heldReport(e), carry: { kind: 'none' } }, e, WS)).toEqual({ startId: 8, verdict: 'unmeasured' });
+      const v = m.newestStartVerdict({ start: startRow(), report: heldReport(e, {}, { hooks: [e.hookSha256, 'd'.repeat(64)] }), carry: { kind: 'none' } }, e, WS);
+      expect(v?.startId).toBe(7);
+      expect(v?.verdict !== 'unmeasured' && v?.verdict.properties.find((x) => x.property === 'hooks')).toMatchObject({ state: 'failed', fromAccount: true });
+    },
     'agents: a plugin agent or a missing reader type fails; unread is unmeasured': () => {
       expect(state(heldReport(e, {}, { agents: ['Explore', 'overlord-reader', 'plug:agent'] }), 'agents')).toBe('failed');
       expect(state(heldReport(e, {}, { agents: ['Explore'] }), 'agents')).toBe('failed');
@@ -314,6 +356,14 @@ const SANDBOX_VERDICT_SET: MutantSet<SandboxModule> = {
     { id: 'S14', old: "  if (carry.report.conflicted) return \"the carried start's report is conflicted\";\n", new: '' },
     { id: 'S15', old: "  return { engaged: out.every((p) => p.state === 'held'), properties: out };", new: "  return { engaged: out.every((p) => p.state === 'held'), properties: out.filter((p) => p.property !== 'workspace') };" },
     { id: 'S16', old: "else if (!names(L.tools).some((t) => t.startsWith(door)))", new: 'else if (false)' },
+    // renewal readings PR H: which failure is the account's (`fromAccount`)
+    { id: 'S17 a missing skill is the account\'s', old: "if (missing.length > 0) return v(property, 'failed', `the profile's ${list(missing)} not loaded`);", new: "if (missing.length > 0) return v(property, 'failed', `the profile's ${list(missing)} not loaded`, true);" },
+    { id: 'S18 an extra skill is not the account\'s', old: "if (extra.length > 0) return v(property, 'failed', `not in the profile: ${list(extra)}`, true);", new: "if (extra.length > 0) return v(property, 'failed', `not in the profile: ${list(extra)}`);" },
+    { id: 'S19 any outside file is the account\'s', old: "f.type === 'User' && !f.inWorkspace", new: '!f.inWorkspace' },
+    { id: 'S20 a User file in the workspace is the account\'s', old: "f.type === 'User' && !f.inWorkspace", new: "f.type === 'User'" },
+    { id: 'S21 an extra tool is not the account\'s', old: "`not in the profile: ${list(extra)}`, true));\n    else if (!names", new: "`not in the profile: ${list(extra)}`));\n    else if (!names" },
+    { id: 'S22 a foreign hook is not the account\'s', old: "SessionStart hook(s) not ccrc's`, true));", new: "SessionStart hook(s) not ccrc's`));" },
+    { id: 'S23 only the door server is the account\'s', old: 'names(L.toolServers).some((n) => n !== expected.toolServer)', new: 'true' },
   ],
   suite: (mod) => sandboxCases(mod),
 };
