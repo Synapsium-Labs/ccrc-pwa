@@ -72,16 +72,17 @@ describe('the migration (the plan\'s F15)', () => {
     const first = openCoordDb(file);
     first.exec("CREATE TABLE kept_fixture (x TEXT); INSERT INTO kept_fixture VALUES ('kept')");
     first.exec('DROP TABLE limit_samples');
-    // Undo the four later migrations too: programme lifecycle (127), timers (128), invariant findings (129),
-    // and Docs settings (130). The reopen replays all five from the version before the limit-samples migration.
+    // Undo the five later migrations too: programme lifecycle (127), timers (128), invariant findings (129),
+    // paste delivery (130) and Docs settings (131). The reopen replays all six from the version before limit samples.
     first.exec('DROP TABLE docs_settings');
+    first.exec('DROP TABLE claude_build_deliveries;');
     first.exec("DROP TABLE overlord_invariant_findings; DELETE FROM lane_arm_settings WHERE lane = 'invariants'");
     first.exec('DROP TABLE continuity_timer_refusals; ALTER TABLE continuity_timers DROP COLUMN setRestoreGeneration;');
     first.exec(`DROP INDEX programs_one_per_coordinator; DROP TABLE programme_picks; DROP TABLE programme_events;
       ALTER TABLE programs DROP COLUMN filedInto; ALTER TABLE programs DROP COLUMN placeholder; ALTER TABLE programs DROP COLUMN coordinatorSince;
       ALTER TABLE programs DROP COLUMN coordinatorUuid; ALTER TABLE programs DROP COLUMN coordinator;`);
     const slot = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE limit_samples'));
-    expect(slot).toBe(COORD_SCHEMA_VERSION - 5);
+    expect(slot).toBe(COORD_SCHEMA_VERSION - 6);
     first.exec(`PRAGMA user_version = ${slot}`);
     first.close();
     const db = openCoordDb(file);

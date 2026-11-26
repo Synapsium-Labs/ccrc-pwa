@@ -5,12 +5,16 @@
 // the placeholder token arrives in one and is never read. Anything it does not script is a JSON error, never a hang.
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
+import type { DeliveryRoute } from '../../../shared/deliveryResult.js';
 import { standInReply, type StandInReply } from './capture.js';
 
-/** A running stand-in. `requests` holds each parsed request body, in arrival order, for the tests. */
+/** A running stand-in. `requests` holds each parsed request body, in arrival order (build trust and the tests read it);
+ *  `routes` holds the route each request came by (`messages` or `count_tokens`), at the same index and in the same order,
+ *  always pushed together with its body, so the delivery recipe never reads a `count_tokens` body as a turn. */
 export interface StandIn {
   readonly port: number;
   readonly requests: readonly unknown[];
+  readonly routes: readonly DeliveryRoute[];
   close(): Promise<void>;
 }
 
@@ -28,8 +32,11 @@ function contentOf(r: Exclude<StandInReply, { kind: 'error' }>, id: string, stre
 
 const sse = (event: string, data: Obj): string => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 
-export async function startStandIn(opts: { host?: string; port?: number } = {}): Promise<StandIn> {
+/** `reply`: the rule each request is answered by (default `capture.ts#standInReply`, build trust's; the delivery recipe
+ *  passes its own, `captureDelivery.ts#deliveryStandInReply`). */
+export async function startStandIn(opts: { host?: string; port?: number; reply?: (body: unknown) => StandInReply } = {}): Promise<StandIn> {
   const requests: unknown[] = [];
+  const routes: DeliveryRoute[] = [];
   let n = 0;
 
   const json = (res: http.ServerResponse, status: number, body: Obj): void => {
@@ -40,7 +47,8 @@ export async function startStandIn(opts: { host?: string; port?: number } = {}):
 
   const answer = (res: http.ServerResponse, body: unknown): void => {
     requests.push(body);
-    const reply = standInReply(body);
+    routes.push('messages');
+    const reply = (opts.reply ?? standInReply)(body);
     if (reply.kind === 'error') { json(res, reply.status, errorBody('invalid_request_error', reply.message)); return; }
     n += 1;
     const o = typeof body === 'object' && body !== null && !Array.isArray(body) ? (body as Obj) : {};
@@ -72,7 +80,7 @@ export async function startStandIn(opts: { host?: string; port?: number } = {}):
     req.on('end', () => {
       let body: unknown;
       try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { json(res, 400, errorBody('invalid_request_error', 'the body is not JSON')); return; }
-      if (route === '/v1/messages/count_tokens') { requests.push(body); json(res, 200, { input_tokens: 1 }); return; }
+      if (route === '/v1/messages/count_tokens') { requests.push(body); routes.push('count_tokens'); json(res, 200, { input_tokens: 1 }); return; }
       answer(res, body);
     });
   });
@@ -83,7 +91,7 @@ export async function startStandIn(opts: { host?: string; port?: number } = {}):
   });
   const port = (server.address() as AddressInfo).port;
   return {
-    port, requests,
+    port, requests, routes,
     close: () => new Promise<void>((resolve) => { server.close(() => resolve()); server.closeAllConnections(); }),
   };
 }
