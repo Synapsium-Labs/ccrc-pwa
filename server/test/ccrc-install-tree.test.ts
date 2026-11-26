@@ -13,7 +13,7 @@ import { CONTAINED_TOOLS, assertNoRealTool, plantPoison } from './containedTools
 import { describeLinux, describeDarwin, itLinux, itDarwin } from './platformFixtures.js';
 import { TREE_STUBS, installFixtureTree, rsyncRecorder } from './installTreeFixture.js';
 import { GPT_LANE_BINS } from './codexLaneFixture.js';
-import { INSTALL_FAMILY_FILES, here, REPO, LANE_BINS_IN_LINE, treeRoot, ccrcIn, treeFile, placed, versionDir, healthyDoctorBox, FIXTURE_BINS, freshBox, ccrcEnv, replantDoctorStubs, runInstall, runLauncherVersion, pathWithout, read, dotCcrc, mtime, preexisting, strays, DEFAULT_SEED, FIVE_ACCOUNT_ROSTER, gitInit, type Result } from './ccrc-installFixture.js';
+import { INSTALL_FAMILY_FILES, here, REPO, LANE_BINS_IN_LINE, treeRoot, ccrcIn, treeFile, placed, versionDir, healthyDoctorBox, FIXTURE_BINS, freshBox, ccrcEnv, replantDoctorStubs, runInstall, itInstalls, runLauncherVersion, pathWithout, read, dotCcrc, mtime, preexisting, strays, DEFAULT_SEED, FIVE_ACCOUNT_ROSTER, gitInit, type Result } from './ccrc-installFixture.js';
 
 removeTmpFixturesEachTest();
 
@@ -361,7 +361,7 @@ describe('ccrc install: the shipped tree lands at $HOME/ccrc', () => {
     expect(existsSync(join(home, 'ccrc-versions')), 'the versions root was made before rsync was known to be there').toBe(false);
   });
 
-  it('replaces a file whose size and mtime are unchanged but whose content is not', () => {
+  itInstalls(2)('replaces a file whose size and mtime are unchanged but whose content is not', () => {
     // The release tarball is reproducible (`build-release.sh`: `--mtime=@0`),
     // so every file `ccrc update` extracts — and therefore every file it placed
     // last time — has mtime 0. rsync's default quick check compares size and
@@ -391,7 +391,7 @@ describe('ccrc install: the shipped tree lands at $HOME/ccrc', () => {
     expect(read(join(home, 'rsync-argv'))).toContain('--checksum');
   });
 
-  it('a second run keeps the runtime deps the first one installed', () => {
+  itInstalls(2)('a second run keeps the runtime deps the first one installed', () => {
     // `--delete` with `--exclude node_modules` protects the excluded path on
     // the RECEIVER (rsync does not delete what it was told to ignore, absent
     // `--delete-excluded`). Drop that exclude and every re-install wipes
@@ -676,7 +676,7 @@ describe('ccrc install: the files the operator owns', () => {
     expect(r.stdout).not.toMatch(/local fleet mode|localhost/);
   });
 
-  it('keeps a remote-control flag the box already had, byte for byte, on every re-run', () => {
+  itInstalls(2)('keeps a remote-control flag the box already had, byte for byte, on every re-run', () => {
     // The THIRD file on the user-owned side of `deploy.sh#ship_roster`'s rule, and
     // the one whose overwrite is loudest: this flag decides what every session
     // on the box is SPAWNED AS, so a step that rewrote it would change the
@@ -932,7 +932,7 @@ describeDarwin('ccrc install: a macOS box missing what ccd needs', () => {
 });
 
 describe('ccrc install: re-running converges', () => {
-  it('leaves the two seeded files alone and does not rewrite accounts.sh', () => {
+  itInstalls(2)('leaves the two seeded files alone and does not rewrite accounts.sh', () => {
     // Idempotence measured on MTIME, not on bytes: "the file still says the
     // right thing" is satisfied by a step that rewrites it every run, and a
     // converger that rewrites what it did not change is one an operator cannot
@@ -957,7 +957,7 @@ describe('ccrc install: re-running converges', () => {
     expect(strays(home)).toEqual([]);
   });
 
-  it('DOES rewrite accounts.sh when the operator has edited the roster', () => {
+  itInstalls(2)('DOES rewrite accounts.sh when the operator has edited the roster', () => {
     // The other half, and the reason the mtime assertion above is not simply
     // "this step never writes": a roster the operator changed between runs
     // must reach the bash projection `ccd` sources, or the box would run on a
@@ -1174,7 +1174,7 @@ describe('ccrc install: the executables and files it installs', () => {
     }
   });
 
-  itLinux('the DARWIN arm of _inst_bins, forced on Linux (OSTYPE=darwin23): the five GPT-lane executables on both and fleet, none on server', () => {
+  itInstalls(3, itLinux)('the DARWIN arm of _inst_bins, forced on Linux (OSTYPE=darwin23): the five GPT-lane executables on both and fleet, none on server', () => {
     // Final review F-8 (DAR-1): the two-arm placement and the Darwin closing
     // line were pinned only by `itDarwin`/`process.platform` branches, and no
     // CI leg runs those. `ccd/ccrc` takes its arm from `$OSTYPE` first
@@ -1387,7 +1387,7 @@ describe('ccrc install: the executables and files it installs', () => {
     }
   });
 
-  it('a second run rewrites none of them, and leaves no temp file behind', () => {
+  itInstalls(2)('a second run rewrites none of them, and leaves no temp file behind', () => {
     // Idempotence measured on MTIME, for `_inst_accounts_sh`'s reason: "the
     // file still says the right thing" is satisfied by a step that rewrites it
     // every run, and a converger that rewrites what it did not change is one
@@ -1434,7 +1434,7 @@ describe('ccrc install: the executables and files it installs', () => {
     expect(strays(home)).toEqual([]);
   });
 
-  it('repairs a mode someone changed — without rewriting the file', () => {
+  itInstalls(3)('repairs a mode someone changed — without rewriting the file', () => {
     // The other half of the byte-compare skip, and the reason it is a `chmod`
     // rather than an early `return`: a `ccd` an operator (or a bad copy) left
     // at 0600 is a box where every session supervisor gets EACCES, and bytes
@@ -1481,7 +1481,7 @@ describe('ccrc install: the executables and files it installs', () => {
     expect(r.stdout).toMatch(/^install: files: kept .*\.tmux\.conf\.pre-ccrc-/m);
   });
 
-  it('a second run makes no second copy — the file it would save is its own', () => {
+  itInstalls(2)('a second run makes no second copy — the file it would save is its own', () => {
     const home = freshBox('ccrc-install-personal-idem-');
     writeFileSync(join(home, '.tmux.conf'), '# mine\n');
     expect(runInstall(home).code).toBe(0);
