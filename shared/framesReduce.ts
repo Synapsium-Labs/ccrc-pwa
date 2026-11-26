@@ -107,12 +107,16 @@ export function reduceFrame(
   const priv = privates.filter((p) => p !== '');
   const count = { cwd: 0, path: 0, model: 0, account: 0 };
   const scanned: string[] = [];
+  let ruleLeak = false;
   const rows = frame.split('\n').map((row) => {
     const plain = stripSgr(row);
     const hasPrivate = priv.some((p) => plain.includes(p));
     if (isRuleRow(plain)) {
-      // Rule 7: a rule row's label is kept byte for byte, unless it holds a private string.
+      // Rule 7: a rule row's label is kept byte for byte, unless it holds a private string. A label rules 4 to 6 would
+      // catch is never kept and never rewritten: the frame is refused (below), so a cut-short path, a model or a plan
+      // cannot ride a rule row out of the box (the security review of F3).
       if (hasPrivate) { count.cwd++; return replaced(plain, FRAMES_REPLACED.cwd); }
+      if (PATH_LIKE.test(plain) || MODEL_WORD.test(plain) || ACCOUNT_WORD.test(plain)) ruleLeak = true;
       scanned.push(plain);
       return row;
     }
@@ -131,8 +135,10 @@ export function reduceFrame(
   // Rule 9: the scans over every row not ours, then the masker's over the whole frame. A hit refuses it whole.
   const foreign = scanned.join('\n');
   if (scan(foreign)) return { kind: 'refused', refusal: 'private-name' };
-  if (PRIVATE_SHAPES.some((r) => r.test(foreign)) || priv.some((p) => foreign.includes(p))) return { kind: 'refused', refusal: 'private-shape' };
-  if (mask(text)) return { kind: 'refused', refusal: 'masked' };
+  if (ruleLeak || PRIVATE_SHAPES.some((r) => r.test(foreign)) || priv.some((p) => foreign.includes(p))) return { kind: 'refused', refusal: 'private-shape' };
+  // The masker over the whole frame as drawn AND with its SGR removed, so a colour change inside a key cannot split it
+  // past the shapes (the security review of F3).
+  if (mask(text) || mask(stripSgr(text))) return { kind: 'refused', refusal: 'masked' };
   return { kind: 'reduced', text, replaced: count };
 }
 

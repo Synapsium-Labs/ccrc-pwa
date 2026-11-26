@@ -95,6 +95,11 @@ describe('rule 7: a rule row\'s label is kept byte for byte (the coordinator\'s 
     expect(PATH_LIKE.test('↑ 156 more')).toBe(false);
     expect(isRuleRow(rule.replace(/\x1b\[[0-9;]*m/g, ''))).toBe(true);
   });
+  it('a rule row whose label rules 4 to 6 would catch refuses the frame: never kept, never rewritten', () => {
+    for (const label of ['…/work/x', 'Haiku 9', 'Claude Max']) {
+      expect(reduceFrame(frame(`${'─'.repeat(20)} ${label} ${'─'.repeat(20)}`), PANE, OURS, [], NONE)).toEqual({ kind: 'refused', refusal: 'private-shape' });
+    }
+  });
   it('a rule row holding a private string is replaced', () => {
     const out = reduced(frame(`${'─'.repeat(20)} /srv/capture-x ${'─'.repeat(20)}`), ['/srv/capture-x']);
     expect(out).toContain(FRAMES_REPLACED.cwd);
@@ -116,6 +121,9 @@ describe('rule 9: the scans refuse the whole frame', () => {
   it('the masker over the whole frame, our rows included', () => {
     const key = 'sk-ant-api03-abcdefghijkl';
     expect(reduceFrame(frame(`❯ ${key}`), PANE, [key], [], NONE)).toEqual({ kind: 'refused', refusal: 'masked' });
+  });
+  it('a colour change inside a key does not split it past the masker', () => {
+    expect(reduceFrame(frame(`  sk-ant-${ESC}[2mapi03-abcdefghijkl${ESC}[0m`), PANE, OURS, [], NONE)).toEqual({ kind: 'refused', refusal: 'masked' });
   });
   it('loopback passes', () => {
     expect(reduced(frame('  at 127.0.0.1 only'))).toBe(frame('  at 127.0.0.1 only'));
