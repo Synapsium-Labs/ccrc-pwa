@@ -54,9 +54,32 @@ the Overlord doors census, `CLAUDE.md`). Stage 2 adds those, after the readiness
   would be green for this door once stage 2 adds its door row.
 - The route suite, `server/test/overlord-sequence-route.test.ts`, written red against the doors stage 2 adds.
 
-**Task 7, stage 2.** Pending the coordinator's word: one ordinary merge of the named `main`, then the routes file of the
-sequence door (`server/src/coord/overlordSequenceRoutes.ts`), the operator door in `overlordRoutes.ts`, the two door rows, the
-deps in `server.ts`, and every census of the door seam.
+**Task 7, stage 2.** After one ordinary merge of `main` `f97f102979` (the readiness door, #3416):
+- `server/src/coord/overlordSequenceRoutes.ts` (C5, L4): `GET /api/overlord/sequence`. The box token in its own `onRequest`;
+  the caller's pair; the Overlord gate with the row's key `sequence`, returning on `refused`; then the cursor
+  (`readSequenceQuery`, 400 `bad-request` with no read and no line); then the one read runner, `unfenced` because the row is
+  not a write, composing from `sequenceDoorAnswer` over one `sequenceAfter` read and the restore counter's reader (a throw
+  reads `unmeasured`). It decides nothing.
+- `GET /api/overlord/invariants` in `overlordRoutes.ts`: session-gated when armed, no box token, no step-up. No monitor wired
+  is 503 `unavailable`, never `no-pass-yet`; otherwise `invariantsReadAnswer` over the monitor's mode and last pass and the
+  findings store's reads, each list asked for one row past the cut.
+- The monitor gains `mode()`, the one reading of its arming that each pass and the operator's read take
+  (`invariantLane.ts#InvariantMonitor.mode`), and `invariantsReadOver` builds the read's port over the monitor and `coord.db`,
+  so `server.ts` wires it in one line.
+- `OVERLORD_DOORS` gains `sequence` (Overlord group, `GET`, its own file, `view`, `write: false`, `overlord-v1`, others
+  refused, class `other`, act `read`, an unreadable designation refuses) and `invariants` (an operator row, `view`).
+- `server.ts`: the sequence door registered beside the history door, over `coord.db`'s `sequenceAfter` and the restore
+  counter's one reader (the same expression the timers' deps use); the invariants read wired into `registerOverlordRoutes`
+  where a monitor and a store exist; `/api/overlord/invariants` joins `MASKED_GET_ROUTES`.
+- The session gate: `GET /api/overlord/sequence` joins EXEMPT as a box-token machine lane with its reason; the counts move
+  (below, "The gate's counts").
+- Censuses: `auth-gate.test.ts` (the new file scanned, the counts, the EXEMPT lane list, the census title);
+  `box-token-census.test.ts` (the new file as a lane source of its own, its one lane by name, the invariants read in
+  `OVERLORD_OPERATOR_DOORS`, the Overlord routes file's sixteen registrations, the count word one hundred and seven);
+  `rings/fastify-l4.data.ts` (the new L4 file); `secret-mask.test.ts` (the sequence read exempt with its reason; the
+  invariants read is masked, so the hook's own set covers it); `overlord-doors-census.test.ts` and
+  `overlord-gate-census.test.ts` (the new file read, both rows, the form held, a control that skips the gate call);
+  `CLAUDE.md`'s box-token bullet and README's lane paragraph (the two doors, each in its class, and the count).
 
 ## Where main differed from the plan
 
@@ -65,7 +88,8 @@ Measured at `main` `ad35cf5538`.
 - **The sequence door's routes file.** The plan puts both handlers in `overlordRoutes.ts`. On `main` that file registers only
   the operator's session-gated doors (the box-token census pins it); the Overlord's box-token doors each have their own file
   (`overlordInboxRoutes.ts`, `overlordHistoryRoutes.ts`). So the sequence door gets `overlordSequenceRoutes.ts`, and the
-  invariants door stays in `overlordRoutes.ts` (slug `sequence-door-in-its-own-routes-file`). What either door answers, writes
+  invariants door stays in `overlordRoutes.ts` (slug `sequence-door-in-its-own-routes-file`): a box-token door beside the
+  operator's session-gated doors would blur what the censuses read by file (accepted, call 1527). What either door answers, writes
   or admits does not change.
 - **The client's grammar.** The plan's `ccrc-api sequence` is a bare verb; the client takes a group and a verb, and the
   Overlord's rows are the `overlord` group. The row is `overlord.sequence`, run as `ccrc-api overlord sequence` (slug
@@ -102,6 +126,14 @@ Measured at `main` `ad35cf5538`.
 - `invariants-read-lists-are-cut`: each findings list is cut at 200 rows, newest first, with a flag; rows are never deleted in
   W1, and M24's counts carry the totals.
 - `i5-baseline-bound-in-the-factory`: Task 0, above.
+- `invariants-read-is-masked`: the plan lists both reads as needing no mask. The sequence read holds to that (closed words,
+  server-minted ids, integers). The invariants read is masked by the one answer hook instead: a finding's message and an
+  unmeasured verdict's reason are composed text that can carry a producer's error detail, as the ladder's and the readiness
+  word's `why` do, and both of those reads are masked. So the plan's census line for this read changed: the masked-routes suite
+  has no exempt entry for it, because the read is in `MASKED_GET_ROUTES` (`server.ts`), whose comment names the composed text
+  as the reason. The coordinator accepted this (call 1527): masking composed text is the safe direction.
+- `invariants-read-needs-a-monitor`: with no monitor wired (a test server, a script) the read answers 503 `unavailable`,
+  never `no-pass-yet`, which claims the monitor ran no pass.
 - `sequence-door-sets-apart`: the four deciders' mutant sets live in `server/test/sim/sequenceDoorSets.ts`, beside the
   sequence's and the monitor's own sets files, which are other runs'.
 
@@ -129,8 +161,13 @@ refuses. A sixteen-digit value above the safe bound now kills it.
 | the factory binds a stand-in baseline answering none | `invariantLane.ts#invariantMonitorOver` | (no such seam: the root passed it) | the I5 real-read case red |
 | the root passes a stand-in | `index.ts` | compiled (the type allowed any read) | cannot compile: the factory takes no such argument |
 
-Task 7's two hand mutations (the page served before the gate; the ledger line skipped on `gap`) run in stage 2, with the
-routes.
+**Task 7's two hand mutations** (plan Step 4), each applied to `overlordSequenceRoutes.ts` in a scratch tree that carries the whole
+stage 2, the route suite run on the test box, the file restored byte for byte:
+
+| Mutant | Before | After |
+|---|---|---|
+| the page served before the gate (the cursor read and answered at the top of the handler) | the route suite green (19 cases) | 12 red, among them both gate-first refusals (`not-the-overlord` and `capability-missing`, each with no read and no line) |
+| the ledger line skipped on `gap` (a gap answered around the read runner) | green | the gap case red, alone: its line is missing |
 
 ## What a merge arms
 
