@@ -259,6 +259,29 @@ describe('the earlier page', () => {
   });
 });
 
+describe('the earlier page, its next page', () => {
+  it('Show earlier asks around the page\'s first item and draws the older items above', async () => {
+    const t = thread([divider(1, 1, 0, { readable: true }), divider(2, 1, 20, { newTerm: true, current: true })]);
+    const port = fakePort({ kind: 'thread', thread: t });
+    const scope = { kind: 'overlord', id: `session:${SID}`, project: null, families: [], families_total: 0, transcripts: 1 } as const;
+    const item = (n: number, text: string) =>
+      ({ kind: 'entry', role: 'assistant', text, trust: 'untrusted', uuid: `aaaaaaaa-0000-4000-8000-00000000000${n}` }) as never;
+    port.earliers.push(
+      { ok: true, gen: { term: 1, n: 1 }, page: { outcome: 'rows', exit: 0, items: [item(3, 'newer words')], shown: 1, total: 2, scope } },
+      { ok: true, gen: { term: 1, n: 1 }, page: { outcome: 'rows', exit: 0, items: [item(2, 'older words')], shown: 1, total: 1, scope } },
+    );
+    await mount(port);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Show generation 1' })); });
+    await flush();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Show earlier' })); });
+    await flush();
+    expect(port.earlierCalls[1]).toEqual({ term: 1, n: 1, around: 'aaaaaaaa-0000-4000-8000-000000000003' });
+    const text = screen.getByRole('region', { name: 'Chat with the Overlord' }).textContent ?? '';
+    expect(text.indexOf('older words')).toBeLessThan(text.indexOf('newer words'));
+    expect(screen.queryByRole('button', { name: 'Show earlier' }), 'the last page offers no more').toBeNull();
+  });
+});
+
 describe('the refresh: an allow-list of triggers through one coalescer', () => {
   beforeEach(() => { vi.useFakeTimers({ now: T0 + 60_000 }); });
   const quiet = (): ChatThread => thread([divider(2, 1, 0, { current: true }), message(settled(3, 5))]);

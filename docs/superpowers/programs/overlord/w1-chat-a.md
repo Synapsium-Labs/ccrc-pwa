@@ -81,7 +81,7 @@ the first case of `server/test/overlord-chat-earlier.test.ts`.
 
 ## Departures, by slug
 
-The coordinator ruled on the first five on 2026-11-26 (call 1543): all stand as built.
+The coordinator ruled on the first five on 2026-11-26 (call 1543): all stand as built. The stage 1b slugs below stand for review (call 1570).
 
 - **`readiness-at-names-not-on-record`**: the plan's `readinessAt` answered `ReadinessWord | 'unmeasured'`, but `unmeasured` is
   already a readiness word (a stored row saying the state could not be read) with its own line. The two conditions draw
@@ -178,6 +178,8 @@ keeps its rule that no transcript user turn is ever the operator's words.
 - The browser suite at every width is stage 2's, once the part is mounted in the place.
 - One census line is stage 2's: `pwa/test/contrast.test.ts`'s `APP_SHEETS` gains `src/overlord/overlordChat.css` (the app's sheets
   are a closed list there). Until then its "discovers them from disk" case is red on this branch, and it is the only red: every
-  pair of the sheet is measured and passes.
+  pair of the sheet is measured and passes. That red is expected (the coordinator, call 1570): the contrast suite, the control
+  census, the shared client and the mount are in home B's branch, so the census line, the three calls and the mount line go in
+  after home B lands, on a main that carries it.
 - The full server test-project type check is killed by the test slice's memory cap on this box; the changed test files are type
   checked in a narrowed project instead, and `typecheck-tests` in CI covers the whole.
