@@ -194,17 +194,41 @@ stage 2, the route suite run on the test box, the file restored byte for byte:
   `live` line or the retire of the bound body moves it; with no binding, any newer designation line does
   (`overlordSequence.ts#keptDesignationLine`). The moved-line case in `invariant-facts.test.ts` now says so.
 
-## Stage 1 state
+## The gate's counts
 
-- Commits on `ws/overlord-w1-sequence-c`, nothing pushed.
-- Packets, each sent before any edit of a file another worker holds: `server/src/index.ts` (two lines) and the kebab census arm
-  in `server/test/mail-routes.test.ts` were answered yes and applied as sent, and so were the two mutation floor files (the four
-  sequence door rows at floor 1), after their holder's yes; that holder appends its own rows beside these.
-- Runs, each through the fleet test wrapper, at most two workers: the Task 0 and Task 7 suites; the rings and single-definition
-  suites; the client, door process, containment, skill, census and growth suites that read the changed files; the doc suites
-  for this note; the server's source type check. The tests' type check over the whole test tree was killed by the test
-  slice's memory cap, so it ran narrowed over the changed test files and what they import: its one error is the route suite's
-  missing stage-2 module, by design.
-- One red that `main` shows too, on the same box, run alone: the containment suite's loopback `curl` case
-  (`--url=` exits 7 where the case expects 2), with the box's curl 8.18.0. Not this branch's; left alone, by the
-  coordinator's ruling, who has ticketed it on its own.
+Measured on this branch and on it merged with `main` `86a8c90390` (the auth gate suite, the box-token census and the
+masked-routes suite derive them and hold them equal to their own sentences):
+
+| Count | `main` `f97f102979` | This branch |
+|---|---|---|
+| Routes scanned | 332 | 334 |
+| HTTP routes | 329 | 331 |
+| Gated | 212 | 213 (the invariants read) |
+| Exempt | 117 | 118 (the cursor read) |
+| Box-token machine lanes | 103 | 104 |
+| Box-token lanes in all | 106 | 107 |
+
+The coordinator read the gate's rows by diff before they were committed (call 1527). Renewal readings H, in flight, adds two
+session-gated doors on the same count lines; it lands after this branch and re-derives (336, 333, 215, 118).
+
+## State at the push
+
+- Stage 1 (Task 0, the deciders, the client verb, the typed tool, the route suite red) and stage 2 (one ordinary merge of
+  `main` `f97f102979`, then the doors, their rows, the wiring and the censuses). The merge resolved three files by hand, each
+  as both sides with `main`'s lines first: the composition root's imports (the kept-line reader's import dropped, since this
+  branch binds that read in the monitor's factory), the coordination kebab census's two arms (one trailing comma removed) and
+  the mutation floors' imports and spreads.
+- Packets, each sent before any edit of a file another worker held, each answered yes and applied as sent: `server/src/index.ts`
+  and the kebab census arm (stage 1); the two mutation floor files (stage 1); `server/src/server.ts`; README's lane paragraph;
+  the box-token census and the rings data file. The masked-routes suite's claim had lapsed when its packet went out, so this
+  branch claimed the file and applied its one hunk.
+- Runs, each through the fleet test wrapper, at most two workers: the route suite and every census of the seam, first in a
+  scratch tree carrying the held files' packets before any holder answered, then on this branch; the same count-bearing
+  suites on this branch merged with `main` `86a8c90390`; the Task 0 and Task 7 suites; the rings and single-definition suites;
+  the growth check armed (`server.ts` +8 code lines); the docs, anchors, citations, topology and deviation-refs suites; the
+  server's source type check and a type check narrowed to the changed test files (the whole test tree's check is killed by
+  the test slice's memory cap).
+- Reds that are not this branch's: the containment suite's loopback `curl` case (`--url=` exits 7 where the case expects 2),
+  red on clean `main` with the box's curl 8.18.0, left alone by the coordinator's ruling, who ticketed it; and the mutation
+  floors' two `pwa/src/face/mood.ts` rows, whose baseline cannot resolve `@ccrc/ui` in the test box's checkout. The masked-routes
+  suite timed out four cases in one local run under load, and passed whole when run alone.
