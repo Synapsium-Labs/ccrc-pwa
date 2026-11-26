@@ -1,0 +1,114 @@
+/* One project's landing line on its card, and the withdraw sheet (landing order wave 5k). Tokens only, no colour of its own:
+   every rule that sets an ink sets its ground beside it, the card's --bg-surface (.proj-card, fleet.css), so the contrast
+   gate measures each pair. A new sheet, not fleet.css, which is capped (growth-caps). Phone width first: a row's role text
+   wraps under its PR, beside the Withdraw button, and sits on the PR's line from 600px. The buttons carry the tap floor
+   themselves (@ccrc/ui's Button). */
+.landing-line {
+  display: grid;
+  gap: var(--sp-1);
+  min-width: 0;
+  margin: 0;
+  padding: var(--sp-2);
+  border-top: 1px solid var(--edge-subtle);
+  color: var(--ink-primary);
+  background: var(--bg-surface);
+}
+.landing-line-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-1) var(--sp-2);
+  min-width: 0;
+}
+.landing-line-title {
+  margin: 0;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--ink-secondary);
+  background: var(--bg-surface);
+}
+.landing-line-status {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.landing-line-stale {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--fs-sm);
+  color: var(--ink-secondary);
+  background: var(--bg-surface);
+}
+.landing-line-error {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--fs-sm);
+  color: var(--status-dead-text);
+  background: var(--bg-surface);
+}
+.landing-line-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+.landing-line-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  grid-template-areas: "pr . act" "role role role";
+  align-items: center;
+  gap: 0 var(--sp-2);
+  min-width: 0;
+}
+.landing-line-pr {
+  grid-area: pr;
+  font-weight: 600;
+}
+.landing-line-role {
+  grid-area: role;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--ink-secondary);
+  background: var(--bg-surface);
+}
+.landing-line-act {
+  grid-area: act;
+}
+@media (min-width: 600px) {
+  .landing-line-row { grid-template-areas: "pr role act"; }
+}
+/* The sheet's body: .abandon-sheet's ground and ink, its own rule so this sheet's error ink is this file's (the plan's
+   section 4.5), measured on the same --bg-surface. */
+.landing-withdraw-sheet {
+  display: grid;
+  gap: var(--sp-3);
+  min-width: 0;
+  padding: var(--sp-3);
+  border-radius: var(--r-md);
+  color: var(--ink-primary);
+  background: var(--bg-surface);
+}
+.landing-withdraw-sheet p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.landing-withdraw-notices {
+  margin: 0;
+  padding-left: var(--sp-4);
+  display: grid;
+  gap: var(--sp-1);
+}
+.landing-withdraw-error {
+  font-size: var(--fs-sm);
+  color: var(--status-dead-text);
+  background: var(--bg-surface);
+}

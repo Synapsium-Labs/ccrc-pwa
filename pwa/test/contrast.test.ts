@@ -1173,6 +1173,7 @@ describe('every stylesheet under src/ is audited', () => {
       'src/screens/run-detail.css', // one run's page (D-8072): layout and ink only, grounded on --bg-page
       'src/accounts/models-sheet.css', // the Models sheet (model-class-advance R4): the body on --bg-sheet and each card on --bg-raised, self-grounded
       'src/fleet/group-abandon.css', // the group abandon sheet (D-8074): layout and ink only, on .abandon-sheet's own ground (fleet.css); the refusal ink is .abandon-sheet .abandon-error's
+      'src/fleet/landing-line.css', // one project's landing line on its card and the withdraw sheet (landing order wave 5k): every ink on --bg-surface, set beside it
       'src/screens/programme-card.css', // the programme cards, quiet fold and Finished (D-8075): layout and ink only, every ink on its own --bg-surface
       'src/screens/run-close.css', // Advanced's lane rows (D-8077): grounded on --bg-surface by the row and the sheet's own rule, ink only
       'src/screens/stuck-band.css', // the Stuck band (D-8074): layout and ink only; the band is grounded on --bg-page, its heads and rows on --bg-surface
