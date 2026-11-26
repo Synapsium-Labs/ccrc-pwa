@@ -76,7 +76,7 @@ import type { SessionStore } from './sessions.js';
  *     ledgers' coordinator lanes, the coordinator call record's one, the remaining-work door's one, the plan verbs', the linking standard's read, suggestion and confirm, the hook's start report and its
  *     loads report, the door process's act-key claim, the hook's reports, the card door, the note door's lanes, the timer doors, the probe door's lanes, the replay quiz's record
  *     door, its unattended confirmation, the timer's tick report and the coordinator's Live on its baseline, the Overlord's inbox doors,
- *     its history door and its cursor read of the sequence, and the programme lifecycle's end proposal and its reads) plus
+ *     its history door, its cursor read of the sequence and its board, and the programme lifecycle's end proposal and its reads) plus
  *     `/api/notify`, `/api/pools/epoch`
  *     and `/api/updates/intent/:nodeId` — the fleet host's ingress. These callers
  *     are `curl` inside a Claude Code session, ccd's `notify.sh`, `ccd-pool-sync.timer`
