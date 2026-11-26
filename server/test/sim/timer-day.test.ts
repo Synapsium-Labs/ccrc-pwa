@@ -9,13 +9,15 @@ import { CoordStore } from '../../src/coord/store.js';
 import { gatherTimerFacts, timersPass } from '../../src/continuity/timerLane.js';
 import { TIMER_MAIL_SENDER } from '../../../shared/continuity-timers.js';
 import { mkTmp } from '../tmpHelpers.js';
-import { TIMER_DAY_INVARIANTS, timerDay } from './timerDay.js';
-import { assertScenario, simSeeds } from './run.js';
+import { TIMER_DAY_INVARIANTS, timerDay, timerDayDb } from './timerDay.js';
+import { assertScenario, simSeeds, simulate } from './run.js';
+import { gatherInvariantInput } from '../../src/coord/invariantFacts.js';
+import { liveInvariant } from './livePredicate.js';
 import type { SequenceLine } from './sequence.js';
 
 type Row = [kind: string, id: string, state: string];
 const seqOf = (rows: readonly Row[]): SequenceLine[] =>
-  rows.map(([kind, id, state], i) => ({ seq: i + 1, at: i * 1_000, kind, id, state, actor: 'lane' }));
+  rows.map(([kind, id, state], i) => ({ seq: i + 1, at: i * 1_000, kind, id, state, actor: 'lane', actorKind: 'server' as const, known: true }));
 const byName = (n: string) => TIMER_DAY_INVARIANTS.find((i) => i.name === n)!;
 const FILE = 'test/sim/timer-day.test.ts';
 /** 32 seeds in CI; CCRC_SIM=full runs 1,000. */
@@ -58,6 +60,26 @@ describe('the timer day\'s invariants go red on a hand-made sequence', () => {
 describe('the timer day on the real lane (I17)', () => {
   it('holds T1 to T5 on every default seed and reaches every edge', async () => {
     await assertScenario(timerDay(), TIMER_DAY_INVARIANTS, { seeds: simSeeds(DEFAULTS), testFile: FILE });
+  }, BOUND_MS);
+});
+
+describe('the timer day under the production I17 (D-8214: the live predicate through the simulator adapter; review F15)', () => {
+  const I17 = liveInvariant('I17', () => gatherInvariantInput({
+    db: timerDayDb()!, readJournal: () => ({ kind: 'absent' }), guardState: () => ({ kind: 'coherent' }),
+    designationBaseline: () => ({ kind: 'measured', value: null }),
+  }));
+  it('holds on every default seed, read over the day\'s own coord.db', async () => {
+    for (const seed of simSeeds(DEFAULTS)) expect((await simulate(timerDay(), seed, [I17])).violations, `seed ${seed}`).toEqual([]);
+  }, BOUND_MS);
+  it('catches a fired row stamped with another mail\'s id, on the seed that plants it', async () => {
+    expect((await simulate(timerDay(), 1, [I17])).violations).toEqual([]);
+    const db = timerDayDb()!;
+    const fired = db.prepare("SELECT id, setter FROM continuity_timers WHERE state = 'fired' ORDER BY id LIMIT 1").get() as { id: number; setter: string } | undefined;
+    expect(fired).toBeDefined();
+    const other = Number(db.prepare("INSERT INTO mail (at, fromId, fromUuid, toId, runId, kind, subject, body) VALUES (0, 'lane-b-project-a', 'u', ?, NULL, 'status', 's', 'b')")
+      .run(fired!.setter).lastInsertRowid);
+    db.prepare('UPDATE continuity_timers SET mailId = ? WHERE id = ?').run(other, fired!.id);
+    expect(I17.check([])).toMatchObject({ invariant: 'I17', message: expect.stringContaining(`timer:${fired!.id}`) });
   }, BOUND_MS);
 });
 

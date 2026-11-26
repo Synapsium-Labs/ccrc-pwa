@@ -93,6 +93,11 @@ export const LADDER_CAUSE_MAP = {
     kind: 'latch', effect: { kind: 'cap', cap: 'chat' }, notice: 'none',
     spec: 'a restore detected; the operator clears it once the restore is confirmed (Table 7.5a, §7.6)',
   },
+  // The invariant monitor (sequence plan Task 6): raised as the server's `invariants` lane, once per new live finding's episode.
+  'invariant-violation': {
+    kind: 'latch', effect: { kind: 'cap', cap: 'advise' }, notice: 'item',
+    spec: 'an invariant-monitor violation (Table 7.5a, §10.4)',
+  },
   'no-witness-since-boot': {
     kind: 'condition', effect: { kind: 'cap', cap: 'advise' }, notice: 'none',
     spec: "since boot, no witness off the server's volume has answered (Table 7.5a, §7.6)",

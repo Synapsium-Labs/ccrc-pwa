@@ -4653,6 +4653,38 @@ export const MIGRATIONS: readonly string[] = [
     PRIMARY KEY (day, door, word)
   ) WITHOUT ROWID;
   `,
+
+  // ── 129: user_version 128 -> 129 ──────────────────────────────────────────
+  // The invariant monitor's findings (Overlord spec §10.4 "One invariant monitor", §12 M24; plan
+  // `docs/superpowers/plans/2026-11-14-overlord-w1/w1-sequence-monitor.md` Task 6, question 12): one row per episode of a
+  // violation, written only by `invariantFindingsStore.ts` (`recordFinding` inserts, `resolveFindings` stamps `resolvedAt`); at
+  // most one open row per invariant, subject and mode (the partial unique index), so a row is the deduplication and M24's count.
+  // A live row carries its item and its latch answer, a shadow row neither. Rows are never deleted in W1. And the Shadow lanes
+  // card's `invariants` row, seeded `shadow`: the monitor records and raises nothing until the operator sets it Live. A NEW TABLE
+  // AND ONE SEED ROW: an older build opening a file at this entry's version takes rule 3 (it warns, reads as-is and migrates
+  // nothing), never names the table, and its `isLaneArmLane` refuses the row's word. The slot is the next free one by position on
+  // `main`; whoever lands second renumbers. RE-MEASURE the slot before merge (it must print 128 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE overlord_invariant_findings (
+    id         INTEGER PRIMARY KEY,
+    invariant  TEXT NOT NULL,
+    subject    TEXT NOT NULL,
+    mode       TEXT NOT NULL CHECK (mode IN ('shadow', 'live')),
+    seq        INTEGER,                  -- the line that showed it; NULL for a finding over a table (I2, I7, I17)
+    message    TEXT NOT NULL,            -- ids, kinds and states only, never a body (§10.4)
+    foundAt    INTEGER NOT NULL,
+    itemId     INTEGER,                  -- the live finding's item; NULL in shadow
+    latched    TEXT CHECK (latched IN ('raised', 'standing', 'row-only')),   -- NULL in shadow
+    resolvedAt INTEGER,
+    CHECK ((mode = 'live') = (itemId IS NOT NULL)),
+    CHECK ((mode = 'live') = (latched IS NOT NULL))
+  );
+  CREATE UNIQUE INDEX overlord_invariant_findings_open ON overlord_invariant_findings (invariant, subject, mode)
+    WHERE resolvedAt IS NULL;
+  INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('invariants', 'shadow', 0);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
