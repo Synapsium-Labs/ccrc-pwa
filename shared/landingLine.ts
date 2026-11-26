@@ -235,3 +235,9 @@ export type LandingNoticeOutcome = { word: 'landing-withdrawn' | 'landing-held';
   | { kind: 'none'; reason: 'unclaimed' | 'unrecorded' }
   | { kind: 'unreadable' }
 );
+/** `POST /api/landing/pause`'s 200 answer beside `ok` (wave 5j-b; declared here in wave 5k, D-9107). `changed: false` with
+ *  `seq: null` for a pause or resume that matched the flag. */
+export interface LandingPauseAnswer { project: string; operatorPaused: boolean; changed: boolean; seq: number | null }
+/** `POST /api/landing/withdraw`'s 200 answer beside `ok` (wave 5j-b; declared here in wave 5k, D-9107): the entry after and
+ *  before, the record's seq and what each notice did. */
+export interface LandingWithdrawAnswer { entry: LandingEntry; previous: LandingEntry; changed: true; seq: number; notices: LandingNoticeOutcome[] }
