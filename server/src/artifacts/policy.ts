@@ -163,3 +163,56 @@ export function artifactConfig(
   if (!c.ok) return invalid(c.detail);
   return { state: 'on', artifactOrigin: origin, contentOrigin: content, port, artifactHost: a.host, contentHost: c.host };
 }
+
+// ---- The listeners' host and method decisions (plan Task A1.3, spec 2.2 and 3.4) ----
+
+/** A `Host` value as both sides of a comparison are read: lower-cased, and ONE trailing dot dropped from the hostname part (the
+ *  part before a `:port`, if there is one). A port is kept as written, never defaulted: a browser omits the default port, so
+ *  `host:443` is not a spelling of `host`. */
+function normalizeHost(host: string): string {
+  const h = host.toLowerCase();
+  const m = /^(.*?)(:[^:]*)?$/.exec(h);
+  const name = m![1]!;
+  const port = m![2] ?? '';
+  return (name.endsWith('.') ? name.slice(0, -1) : name) + port;
+}
+
+/** Whether `host` (a request's `Host` header) is one of `hosts`. A missing or empty header matches nothing, and so does an empty
+ *  entry. */
+export function hostMatches(host: string | undefined, hosts: readonly string[]): boolean {
+  if (host === undefined || host === '') return false;
+  const want = normalizeHost(host);
+  return hosts.some((h) => h !== '' && normalizeHost(h) === want);
+}
+
+/** The console's side of the fence, which REFUSES, so it reads wider than `hostMatches`: an artifact host configured with no
+ *  port (an https name) is matched by hostname whatever port the request writes (`host:443`, `host:`, `HOST.:8443`), because a
+ *  reverse proxy's host matcher ignores the port and a refusal list must refuse too much, never too little. An artifact host
+ *  configured with a port (the loopback pair) is matched exactly, so the console's own `127.0.0.1:<port>` still answers. */
+export function namesArtifactHost(host: string | undefined, artifactHosts: readonly string[]): boolean {
+  if (host === undefined || host === '') return false;
+  const want = normalizeHost(host);
+  const wantName = hostnameOf(want);
+  return artifactHosts.some((h) => {
+    if (h === '') return false;
+    const n = normalizeHost(h);
+    return n.includes(':') ? n === want : n === wantName;
+  });
+}
+
+/** The hostname part of a normalized `Host` (the text before a `:port`, if any). */
+function hostnameOf(normalized: string): string {
+  const colon = normalized.lastIndexOf(':');
+  return colon < 0 || normalized.startsWith('[') ? normalized : normalized.slice(0, colon);
+}
+
+/** The artifact listener's fence: it ALLOWS its own two hosts, exactly, and anything else is `misdirected` (421). Strict on
+ *  purpose: an allow list fails shut. The console's side, which refuses, is `namesArtifactHost`. */
+export function hostFence(host: string | undefined, allowed: readonly string[]): 'ok' | 'misdirected' {
+  return hostMatches(host, allowed) ? 'ok' : 'misdirected';
+}
+
+/** The artifact listener serves reads only: GET, and HEAD, which Fastify adds beside every GET route. */
+export function artifactMethodAllowed(method: string): boolean {
+  return method === 'GET' || method === 'HEAD';
+}

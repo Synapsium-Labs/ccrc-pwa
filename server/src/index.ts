@@ -1,4 +1,5 @@
 import { buildServer, type CollectLaneDeps, type Deps } from './server.js';
+import { listenArtifactServer } from './artifacts/routes.js';
 import { derivedRoleNote, loadConfig } from './config.js';
 import { reloadRoster, rosterAnswerOf } from './config.js';
 import { reconcilingAccountOps } from './accounts/reconcile.js';
@@ -600,6 +601,9 @@ deps.responseStamp = () => responseStampNow(responseBoot, overlordRestore.restor
 const app = await buildServer(deps, bus, watcher);
 watcher.start();
 perf.start();
+// X5 A1.3 (html-artifacts design section 2.2): the artifact listener first, on loopback. It never throws: a failed listen
+// writes one warning and turns the tier off (`artifact-listener-down`), and the console's listen below still runs.
+if (app.artifactServer !== null && cfg.artifact.state === 'on') await listenArtifactServer(app, cfg.artifact.port);
 await app.listen({ host: cfg.host, port: cfg.port });
 tokenDriver.start();
 console.log(`ccrc-server on ${cfg.host}:${cfg.port} (fleet=${cfg.fleetMode})`);

@@ -80,6 +80,9 @@ const MODELS_SRC = read('server/src/laneModelsRoutes.ts');
 /** The approval census's read (approvals PR 1, Task 1.4): `GET /api/approvals/census`, a routes file of its own with NO box-token
  *  lane. The operator's read, session-gated: `APPROVAL_CENSUS_DOORS`. */
 const APPROVAL_CENSUS_SRC = read('server/src/coord/approvalCensusRoutes.ts');
+/** The artifact tier's listener (native Docs HTML artifacts X5, A1.3): four `GET` doors on an instance of its own, NEVER the console's.
+ *  No box token, no cookie and no session: `ARTIFACT_DOORS`. */
+const ARTIFACT_SRC = read('server/src/artifacts/routes.ts');
 
 /** The one-time pass over the delegation broker's unmeasured records (session helpers S2, D-8874): `GET` and `POST
  *  /api/coord/delegation-backfill`, a routes file of its own with NO box-token lane. The operator's, session-gated:
@@ -236,6 +239,13 @@ const MODELS_DOORS = ['/api/models/:lane'];
  *  derives the file's registrations and compares in both directions. The operator's, behind the session gate, no box token, in no
  *  EXEMPT table. */
 const APPROVAL_CENSUS_DOORS = ['/api/approvals/census'];
+
+/** The artifact listener's four doors (X5 A1.3, spec 3.4), registered from `server/src/artifacts/routes.ts` on the artifact tier's OWN
+ *  Fastify instance, never the console's: the console's auth gate never sees them, so they are in no EXEMPT table and no
+ *  `SESSION_ONLY_ALL` list. They take no box token, no cookie and no session: a path's capability token is the whole credential, and
+ *  A1 answers the identical 404 on every one. Hand-kept for the NAME only, like `MODELS_DOORS`: the describe below derives the file's
+ *  registrations and compares in both directions. */
+const ARTIFACT_DOORS = ['/', '/a/:token', '/c/:token/*', '/clear'];
 
 /** The one-time pass's door (session helpers S2, D-8874), registered from `server/src/coord/delegationBackfillRoutes.ts`, which no harvest
  *  above can see: the dry run (`GET`) and the pass or its undo (`POST`), one path registered twice, so listed once per registration and
@@ -594,6 +604,27 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     for (const key of keys) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
     for (const door of APPROVAL_CENSUS_DOORS) {
       expect(ALL_LANES.map((k) => k.slice(k.indexOf(' ') + 1)), `${door} consults the box token — it is the operator's door`).not.toContain(door);
+    }
+  });
+
+  it('ARTIFACT_DOORS is exactly what the artifact listener\'s file registers, in both directions, all GET; none is a lane or EXEMPT (X5 A1.3)', () => {
+    const keys = registrationsIn(ARTIFACT_SRC).map((r) => r.key);
+    expect(keys.map((k) => k.slice(k.indexOf(' ') + 1)).sort(),
+      'artifacts/routes.ts and ARTIFACT_DOORS disagree — a door was registered, or a name listed, on one side only').toEqual([...ARTIFACT_DOORS].sort());
+    expect(keys.filter((k) => !k.startsWith('GET ')), 'the artifact listener serves reads only').toEqual([]);
+    expect(lanesIn(ARTIFACT_SRC), 'an artifact door consults the box token — the capability in its path is the whole credential').toEqual([]);
+    for (const key of keys) expect(GATE_SRC, `${key} is EXEMPT — the artifact listener's instance is never the gated one`).not.toContain(`  ['${key}',`);
+    for (const door of ARTIFACT_DOORS) {
+      expect(ALL_LANES.map((k) => k.slice(k.indexOf(' ') + 1)), `${door} consults the box token — the artifact listener takes none`).not.toContain(door);
+    }
+  });
+
+  it('a box-token call planted in the artifact listener\'s file is SEEN — the lane source is live (the control)', () => {
+    const LINE = "app.get('/clear', notFound);";
+    expect(ARTIFACT_SRC, 'the registration line moved — re-point this control at it').toContain(LINE);
+    for (const call of ['requireMailToken(req, reply);', 'checkMailToken(null, undefined);']) {
+      const planted = ARTIFACT_SRC.replace(LINE, `${LINE}\n  ${call}`);
+      expect(lanesIn(planted), `a planted ${call} went unseen`).toEqual(['GET /clear']);
     }
   });
 
