@@ -28,11 +28,7 @@
   border-bottom: 1px solid var(--edge-subtle);
   background: var(--bg-surface);
 }
-/* At a desk the header's sides are the skin's `--gutter`, the inset every detail screen and the list column share (desktop
-   polish wave 182): its title starts where a page's title does, not 8 px from the divider. The phone keeps its pads. */
-@media (min-width: 900px) {
-  .chat-head { padding-inline: var(--gutter); }
-}
+/* At a desk the header's sides are the skin's `--gutter` (desktop polish wave 182): in the header's desk block below. */
 .chat-title-wrap {
   flex: 1;
   min-width: 0;
@@ -387,6 +383,9 @@ button.metachip:active {
 .keycap--pr .keycap-word,
 .chat-head .keycap-word { display: none; }
 @media (min-width: 900px) {
+  /* The header's sides are the skin's `--gutter`, the inset every detail screen and the list column share (desktop polish
+     wave 182): its title starts where a page's title does, not 8 px from the divider. The phone keeps its pads. */
+  .chat-head { padding-inline: var(--gutter); }
   .chat-head .keycap-word {
     display: inline;
     white-space: nowrap;

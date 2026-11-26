@@ -1267,19 +1267,27 @@ describe('the desk (T2g): one count, in the status bar', () => {
     expect(document.querySelector('footer.shell-status')).toBeNull();
   });
 
-  it("at the desk the list column's head is the pool lag alone when the epochs differ, and there is no head when they agree", () => {
+  // Desktop polish wave 182 (the ruling on the measured proposal): the column has no head at a desk. Its first row is the
+  // list's own head row (the toggle, with New project at its end), and the pool lag, when the epochs differ, is the line
+  // UNDER that row, so the row never moves with it. Before, the lag was the column's head, above a New project row.
+  it("at the desk the pool lag is the line under the list's head row when the epochs differ, and absent when they agree; the column draws no head", () => {
     stubAt(1280);
     act(() => useFleetStore.setState({ pools: { listed: false, enforcement: 'unknown', epoch: 5, observedEpoch: 3 } }));
     mount('/fleet');
-    const head = document.querySelector('.shell-nav .fleet-head');
-    expect(head).not.toBeNull();
-    expect(head!.textContent).toBe(poolLagText(5, 3));
-    expect(head!.querySelector('.fleet-count, .wordmark')).toBeNull();
+    expect(document.querySelector('.shell-nav .fleet-head')).toBeNull();
+    const row = document.querySelector('.shell-nav .ins-head-row');
+    expect(row, 'the list heads itself').not.toBeNull();
+    expect(row!.querySelector('.fleet-new-project'), 'New project rides the head row').not.toBeNull();
+    const lag = row!.nextElementSibling;
+    expect(lag?.className).toBe('ins-lag');
+    expect(lag!.textContent).toBe(poolLagText(5, 3));
+    expect(document.querySelectorAll('.shell-nav [data-testid="pool-epoch-lag"]')).toHaveLength(1);
     cleanup();
     act(() => useFleetStore.setState({ pools: { listed: false, enforcement: 'unknown', epoch: 5, observedEpoch: 5 } }));
     mount('/fleet');
     expect(document.querySelector('.shell-nav section[aria-label="Fleet"]')).not.toBeNull();
     expect(document.querySelector('.shell-nav .fleet-head')).toBeNull();
+    expect(document.querySelector('.shell-nav .ins-lag')).toBeNull();
   });
 
   it("Refined's desk column keeps its count line", () => {

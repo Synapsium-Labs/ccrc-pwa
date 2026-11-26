@@ -70,6 +70,9 @@ const renumberIds = (html: string): string => {
  *  list is `Button`'s. */
 const PROJECTS_HEAD = /<button type="button" class="[^"]*\bfleet-new-project\b[^"]*"><svg[^>]*>[\s\S]*?<\/svg>New project<\/button>/g;
 
+/** The list's head row hook (desktop polish wave 182), on the table's toggle line; the base drew the line without it. */
+const HEAD_ROW_CLASS = 'class="ins-head-row ';
+
 describe('an older server: no delegation frame, the base\'s fleet (delegation broker wave 4)', () => {
   it('W4-U27: origin/main\'s frame sequence renders unavailable, the base\'s markup, and no delegation word', () => {
     expect(baseline.source).toBe(PR2_BASE);
@@ -90,11 +93,12 @@ describe('an older server: no delegation frame, the base\'s fleet (delegation br
       expect(html.match(HEAD_DOORS), `${view}: today's head draws no door to a bar place`).toBeNull();
       // Each box's title is a door today, round the very span the base drew.
       expect(html.match(TITLE_DOOR)?.length ?? 0, `${view}: one title door per box`).toBe(baseline.views[view].split('class="pg-title"').length - 1);
-      // The Instrument view renders the skin's table alone, outside `FleetScreen`, so it draws no head.
+      // The Instrument view renders the skin's table alone, outside `FleetScreen`, so it draws no head. Its toggle line's
+      // hook class (`ins-head-row`, desktop polish wave 182) is a declared addition.
       expect((html.match(PROJECTS_HEAD) ?? []).length, `${view}: one projects head per fleet screen`).toBe(view === 'instrument' ? 0 : 1);
       expect((html.match(FACE_MARK) ?? []).length, `${view}: one face per fleet head`).toBe(count(html, 'class="fleet-head"'));
       expect(count(html, 'class="fleet-id"'), `${view}: one wordmark-and-face group per fleet head`).toBe(count(html, 'class="fleet-head"'));
-      const old = html.split(MARKED).join(LIST).split(BACKUP_SLOT).join('').replace(TITLE_DOOR, '$1').replace(PROJECTS_HEAD, '')
+      const old = html.split(MARKED).join(LIST).split(BACKUP_SLOT).join('').split(HEAD_ROW_CLASS).join('class="').replace(TITLE_DOOR, '$1').replace(PROJECTS_HEAD, '')
         .replace(FACE_MARK, '').replace(FACE_GROUP, '$1');
       expect(baseline.views[view].match(ROLE_CELL), `${view}: the base drew no role cell`).toBeNull();
       // The badge is stripped below as a declared head-only addition, so it is counted FIRST: the world has two coordinators
