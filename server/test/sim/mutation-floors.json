@@ -367,5 +367,6 @@
   "server/src/coord/overlordReadiness.ts#overlordReadiness": 1,
   "server/src/coord/overlordReadiness.ts#readinessFactsOf": 1,
   "server/src/coord/overlordReadiness.ts#readinessNotices": 1,
-  "server/src/coord/overlordReadiness.ts#servedReadiness": 1
+  "server/src/coord/overlordReadiness.ts#servedReadiness": 1,
+  "server/src/coord/overlordReadiness.ts#readinessCountOf": 1
 }

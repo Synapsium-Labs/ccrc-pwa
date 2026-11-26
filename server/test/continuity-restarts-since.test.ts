@@ -1,20 +1,37 @@
 // Overlord W1 readiness, plan `w1-readiness.md` Task 2: `restartsSince` (completed restarts of an identity in a window, by
 // RESTART_OUTCOME_MAP) and `liveGenerationOfIdentity` (one identity's live row, parsed alone), over a coord db opened through
 // the real migrations.
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, afterAll, beforeAll } from 'vitest';
+import type { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
+import { copyFileSync, mkdirSync } from 'node:fs';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { liveGenerationOfIdentity, restartsSince } from '../src/continuity/continuityStore.js';
 import { RESTART_OUTCOME_MAP } from '../../shared/overlord-readiness.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
-afterEach(removeTmpFixtures);
+// One migrated template, copied per case (F16): the migrations run once, not once per case.
+let template = '';
+const opened: DatabaseSync[] = [];
+beforeAll(() => {
+  template = path.join(mkTmp('ccrc-restarts-template-'), 'coord.db');
+  openCoordDb(template).close();
+});
+afterEach(() => { for (const d of opened.splice(0)) { try { d.close(); } catch { /* already closed */ } } });
+afterAll(() => removeTmpFixtures());
 
 const T0 = 1_800_000_000_000;
 const A = 'lane-a-project-a';
 const B = 'lane-b-project-a';
-const store = (): CoordStore => new CoordStore(openCoordDb(path.join(mkTmp('ccrc-restarts-'), '.ccrc', 'coord.db')));
+const store = (): CoordStore => {
+  const dir = path.join(mkTmp('ccrc-restarts-'), '.ccrc');
+  mkdirSync(dir, { recursive: true });
+  copyFileSync(template, path.join(dir, 'coord.db'));
+  const db = openCoordDb(path.join(dir, 'coord.db'));
+  opened.push(db);
+  return new CoordStore(db);
+};
 
 let reports = 0;
 const startOf = (s: CoordStore, at: number): number => {

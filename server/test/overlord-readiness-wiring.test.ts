@@ -1,0 +1,60 @@
+// Overlord W1 readiness, review 3922 F7: the lane is wired and the watcher calls it. The lane's own cases build a lane and call
+// `pass` themselves, so nothing there goes red when the composition root stops assigning it or the watcher stops calling it.
+// (a) the watcher's `sweepOverlordReadiness` runs the lane's pass through its `overlordReadiness` lane, once per cadence, with the
+// tick it is given; (b) text pins on the three call sites no behaviour test reaches without a whole tick: `index.ts` assigns
+// `deps.overlordReadiness`, and `watch.ts` calls the sweep once on a failed listing and once on a listed tick.
+import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { Bus } from '../src/bus.js';
+import { FleetWatcher } from '../src/watch.js';
+import type { ReadinessLane, ReadinessTick } from '../src/coord/overlordReadinessLane.js';
+import { OVERLORD_READINESS_SWEEP_MS } from '../../shared/overlord-readiness.js';
+import { testDeps } from './helpers.js';
+import { mkTmp } from './tmpHelpers.js';
+
+const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'src');
+const text = (f: string): string => readFileSync(path.join(SRC, f), 'utf8');
+
+const LISTED: ReadinessTick = { listed: true, sessions: [], records: [], listedIds: new Set(), names: [] };
+const FAILED: ReadinessTick = { listed: false };
+
+function build(withLane: boolean) {
+  let mono = 1_000_000;
+  const passes: ReadinessTick[] = [];
+  const lane = { pass: async (tick: ReadinessTick) => { passes.push(tick); return null; } } as unknown as ReadinessLane;
+  const deps = { ...testDeps(mkTmp('ccrc-readiness-wiring-')), monotonicMs: () => mono, ...(withLane ? { overlordReadiness: lane } : {}) };
+  const watcher = new FleetWatcher(deps as never, new Bus(), 10_000);
+  return { watcher, passes, advance: (ms: number) => { mono += ms; } };
+}
+
+describe('the watcher runs the readiness lane (F7)', () => {
+  it('sweepOverlordReadiness passes the tick it is given to the lane, on a listed tick and on a failed listing', async () => {
+    const f = build(true);
+    await f.watcher.sweepOverlordReadiness(LISTED);
+    f.advance(OVERLORD_READINESS_SWEEP_MS + 1);
+    await f.watcher.sweepOverlordReadiness(FAILED);
+    expect(f.passes).toEqual([LISTED, FAILED]);
+  });
+
+  it('with no lane wired it runs nothing and answers null', () => {
+    const f = build(false);
+    expect(f.watcher.sweepOverlordReadiness(LISTED)).toBeNull();
+    expect(f.passes).toEqual([]);
+  });
+});
+
+describe('the composition and the two tick paths, pinned as text (F7)', () => {
+  it('index.ts assigns deps.overlordReadiness from the lane builder', () => {
+    expect(text('index.ts')).toContain('deps.overlordReadiness = readinessLaneOver(');
+  });
+
+  it('watch.ts calls the sweep twice: once with listed: false, once with listed: true, through the overlordReadiness lane', () => {
+    const w = text('watch.ts');
+    expect(w.match(/this\.sweepOverlordReadiness\(/g)).toHaveLength(2);
+    expect(w).toContain('this.sweepOverlordReadiness({ listed: false })');
+    expect(w).toMatch(/this\.sweepOverlordReadiness\(\{ listed: true, /);
+    expect(w).toContain("this.runLane('overlordReadiness'");
+  });
+});

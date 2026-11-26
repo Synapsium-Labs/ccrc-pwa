@@ -12,7 +12,7 @@ import { GENERATION_OUTCOMES } from '../../shared/continuity.js';
 import type { DesignationRead, DesignationView } from '../../shared/overlord-designation.js';
 import {
   READINESS_DEAF_MS, READINESS_DIALOG_MS, READINESS_FRESH_MS, READINESS_HOOK_QUIET_MS,
-  READINESS_LONG_TURN_MS, READINESS_RESTART_BOUND_MS, READINESS_RESTARTS_PER_HOUR, READINESS_WORDS, RESTART_OUTCOME_MAP,
+  READINESS_LONG_TURN_MS, READINESS_RESTART_BOUND_MS, READINESS_RESTART_WINDOW_MS, READINESS_RESTARTS_PER_HOUR, READINESS_WORDS, RESTART_OUTCOME_MAP,
   RESTART_OUTCOMES, STRAND_CAUSES, admitRank, type ReadinessWire, type ReadinessWord, type StrandCause,
 } from '../../shared/overlord-readiness.js';
 import { STOP_FAILURE_ERRORS } from '../src/coord/stopFailure.js';
@@ -257,14 +257,14 @@ const gen = (over: Partial<GenerationReading> = {}): GenerationReading =>
   ({ state: 'active', deadlineAt: null, proven: true, startReportedAt: 1_000, n: 1, ...over });
 
 const sub = (over: Partial<SubjectReadings> = {}): SubjectReadings => ({
-  ladder: { kind: 'read', operatorRung: 'full' }, body: { kind: 'up' }, generation: { ok: true, value: gen() }, restarts: { ok: true, value: 0 },
+  ladder: { kind: 'read', operatorRung: 'full' }, body: { kind: 'up' }, generation: { ok: true, value: gen() }, restarts: { ok: true, value: 0 }, lastDownAt: null,
   candidates: { kind: 'candidates', list: [{ id: 'lane-a', limits: undefined, serves: 'yes' }, { id: 'lane-b', limits: undefined, serves: 'yes' }] },
   resets: { ok: true, value: {} }, strand: { kind: 'none' }, swapBlocked: null, turnMark: ABSENT_MARK, hookState: NO_HOOK, sessionStatus: 'idle',
   dialogSince: null, unsettled: { kind: 'measured', value: [] }, servedReadAt: { kind: 'measured', value: 'none' },
   continuityReadAt: { ok: true, value: null }, ...over,
 });
 const row = (over: Partial<ReadinessNowRow> = {}): ReadinessNowRow => ({
-  id: 5, sessionId: ME, word: 'ready', why: null, until: null, strandCause: null, restartable: false, at: 2_000, readySince: 2_000,
+  id: 5, sessionId: ME, word: 'ready', why: null, until: null, strandCause: null, restartable: false, at: 2_000, readySince: 2_000, readySessionId: ME,
   leftReadyAt: null, episodeFirstId: null, pushedAt: null, ...over,
 });
 const readings = (s: Partial<SubjectReadings> | null = {}, over: Partial<ReadinessReadings> = {}): ReadinessReadings => ({
@@ -291,6 +291,38 @@ describe('the restart count through readinessFactsOf (F1: restartsSince counts c
     const f = completed(2, { body: { kind: 'up' } });
     expect(f.restarts).toEqual(m(2));
     expect(overlordReadiness(f, NOW).word).not.toBe('dead');
+  });
+  // F1 (review 3922): `restartsSince` counts minted generations only, so a restart whose body is back up but whose generation
+  // is not minted yet is still the one in progress, until a generation started after the last down sighting is live.
+  describe('the restart under way after the body is back up (F1, lastDownAt)', () => {
+    const upAfter = (s: Partial<SubjectReadings>): ReadinessFacts => completed(2, { body: { kind: 'up' }, ...s });
+    it('2 completed, the body up, a down sighting within the hour and the live generation older than it: the third, dead', () => {
+      const f = upAfter({ lastDownAt: NOW - 5_000, generation: { ok: true, value: gen({ proven: true, startReportedAt: NOW - 50_000 }) } });
+      expect(f.restarts).toEqual(m(3));
+      expect(overlordReadiness(f, NOW)).toMatchObject({ word: 'dead', why: 'third-restart' });
+    });
+    it('the same with a generation started after the down sighting: minted, so not added and not dead', () => {
+      const f = upAfter({ lastDownAt: NOW - 5_000, generation: { ok: true, value: gen({ proven: true, startReportedAt: NOW - 1_000 }) } });
+      expect(f.restarts).toEqual(m(2));
+      expect(overlordReadiness(f, NOW).word).not.toBe('dead');
+    });
+    it('the same with the down sighting older than the hour: not added and not dead', () => {
+      const f = upAfter({ lastDownAt: NOW - READINESS_RESTART_WINDOW_MS - 1, generation: { ok: true, value: gen({ proven: true, startReportedAt: 1_000 }) } });
+      expect(f.restarts).toEqual(m(2));
+      expect(overlordReadiness(f, NOW).word).not.toBe('dead');
+    });
+    it('a down sighting exactly an hour old still counts (the window is inclusive)', () => {
+      const f = upAfter({ lastDownAt: NOW - READINESS_RESTART_WINDOW_MS, generation: { ok: true, value: gen({ proven: true, startReportedAt: 1_000 }) } });
+      expect(f.restarts).toEqual(m(3));
+    });
+    it('the body up with a renewing generation adds nothing, whatever the sighting', () => {
+      const f = upAfter({ lastDownAt: NOW - 5_000, generation: { ok: true, value: gen({ state: 'probing', deadlineAt: 4_242, proven: false, startReportedAt: NOW - 50_000 }) } });
+      expect(f.restarts).toEqual(m(2));
+      expect(overlordReadiness(f, NOW).word).not.toBe('dead');
+    });
+    it('no down sighting (lastDownAt null) adds nothing: the case above stays as it was', () => {
+      expect(upAfter({ lastDownAt: null }).restarts).toEqual(m(2));
+    });
   });
   it('3 completed, the body up and the generation proven: dead', () => {
     expect(overlordReadiness(completed(3, { body: { kind: 'up' }, generation: { ok: true, value: gen({ proven: true }) } }), NOW).word).toBe('dead');
@@ -404,6 +436,14 @@ describe('the deaf clock (F18)', () => {
   });
   it('readySince null (never ready, or no stored row) reads no message deaf', () => {
     expect(deafAt(1, null, NOW)).toEqual(m(false));
+  });
+  it('a ready row of another session starts no clock for the current subject (F10): a never-ready new Overlord is not deaf on its predecessor\'s clock', () => {
+    const waiting = { unsettled: { kind: 'measured' as const, value: [msg(500, 'recorded')] } };
+    const at = (readySessionId: string | null): Buildable<boolean> =>
+      readinessFactsOf(readings(waiting, { stored: { ok: true, value: row({ readySince: 10_000, readySessionId }) } }), 10_000 + READINESS_DEAF_MS).deaf;
+    expect(at(ME)).toEqual(m(true));
+    expect(at('cc-overlord-b')).toEqual(m(false));
+    expect(at(null)).toEqual(m(false));
   });
   it('a picked-up or settled message is not waiting', () => {
     expect(deafAt(1, 1, NOW, 'picked-up')).toEqual(m(false));

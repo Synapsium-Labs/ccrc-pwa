@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
 import {
   READINESS_DEAF_MS, READINESS_DIALOG_MS, READINESS_FRESH_MS, READINESS_HOOK_QUIET_MS, READINESS_LONG_TURN_MS,
-  READINESS_RESTARTS_PER_HOUR, READINESS_WORDS, STRAND_CAUSES, admitRank,
+  READINESS_RESTART_WINDOW_MS, READINESS_RESTARTS_PER_HOUR, READINESS_WORDS, STRAND_CAUSES, admitRank,
   type ReadinessWire, type ReadinessWord, type StrandCause,
 } from '../../../shared/overlord-readiness.js';
 import type { DesignationRead, DesignationView } from '../../../shared/overlord-designation.js';
@@ -31,6 +31,7 @@ export const OVERLORD_READINESS_KEY = 'server/src/coord/overlordReadiness.ts#ove
 export const READINESS_FACTS_OF_KEY = 'server/src/coord/overlordReadiness.ts#readinessFactsOf';
 export const READINESS_NOTICES_KEY = 'server/src/coord/overlordReadiness.ts#readinessNotices';
 export const SERVED_READINESS_KEY = 'server/src/coord/overlordReadiness.ts#servedReadiness';
+export const READINESS_COUNT_OF_KEY = 'server/src/coord/overlordReadiness.ts#readinessCountOf';
 
 export type ReadinessModule = typeof import('../../src/coord/overlordReadiness.js');
 type M = ReadinessModule;
@@ -256,14 +257,14 @@ const NO_HOOK: HookStateRead = { ok: false, reason: 'no-state' };
 const gen = (over: Partial<GenerationReading> = {}): GenerationReading =>
   ({ state: 'active', deadlineAt: null, proven: true, startReportedAt: 1_000, n: 1, ...over });
 const sub = (over: Partial<SubjectReadings> = {}): SubjectReadings => ({
-  ladder: { kind: 'read', operatorRung: 'full' }, body: { kind: 'up' }, generation: { ok: true, value: gen() }, restarts: { ok: true, value: 0 },
+  ladder: { kind: 'read', operatorRung: 'full' }, body: { kind: 'up' }, generation: { ok: true, value: gen() }, restarts: { ok: true, value: 0 }, lastDownAt: null,
   candidates: { kind: 'candidates', list: [{ id: 'lane-a', limits: undefined, serves: 'yes' }, { id: 'lane-b', limits: undefined, serves: 'yes' }] },
   resets: { ok: true, value: {} }, strand: { kind: 'none' }, swapBlocked: null, turnMark: ABSENT_MARK, hookState: NO_HOOK, sessionStatus: 'idle',
   dialogSince: null, unsettled: { kind: 'measured', value: [] }, servedReadAt: { kind: 'measured', value: 'none' },
   continuityReadAt: { ok: true, value: null }, ...over,
 });
 const row = (over: Partial<ReadinessNowRow> = {}): ReadinessNowRow => ({
-  id: 5, sessionId: ME, word: 'ready', why: null, until: null, strandCause: null, restartable: false, at: 2_000, readySince: 2_000,
+  id: 5, sessionId: ME, word: 'ready', why: null, until: null, strandCause: null, restartable: false, at: 2_000, readySince: 2_000, readySessionId: ME,
   leftReadyAt: null, episodeFirstId: null, pushedAt: null, ...over,
 });
 const readings = (s: Partial<SubjectReadings> | null = {}, over: Partial<ReadinessReadings> = {}): ReadinessReadings => ({
@@ -298,6 +299,31 @@ export function readinessFactsOfCases(mod: M): Record<string, SuiteCase> {
       const f = completed(2, { body: { kind: 'up' } });
       expect(f.restarts).toEqual(m(2));
       expect(mod.overlordReadiness(f, NOW).word).not.toBe('dead');
+    },
+    // Fix round 1, F1 (slug restart-under-way-until-minted): back up, the restart is under way until its generation mints.
+    'restarts: back up after a down sighting, no generation since: the third is still under way, dead': () => {
+      const f = completed(2, { body: { kind: 'up' }, lastDownAt: NOW - 60_000, generation: { ok: true, value: gen({ startReportedAt: NOW - 120_000 }) } });
+      expect(f.restarts).toEqual(m(3));
+      expect(mod.overlordReadiness(f, NOW).word).toBe('dead');
+    },
+    'restarts: a sighting exactly an hour old still counts, and a generation started at the sighting is not minted since': () => {
+      const at = NOW - READINESS_RESTART_WINDOW_MS;
+      expect(completed(2, { body: { kind: 'up' }, lastDownAt: at, generation: { ok: true, value: gen({ startReportedAt: at - 1 }) } }).restarts).toEqual(m(3));
+      expect(completed(2, { body: { kind: 'up' }, lastDownAt: NOW - 60_000, generation: { ok: true, value: gen({ startReportedAt: NOW - 60_000 }) } }).restarts).toEqual(m(3));
+      expect(completed(2, { body: { kind: 'up' }, lastDownAt: NOW - 60_000, generation: { ok: true, value: gen({ startReportedAt: NOW - 59_999 }) } }).restarts).toEqual(m(2));
+    },
+    'restarts: back up with a renewing generation after a down sighting adds nothing': () => {
+      const f = completed(2, { body: { kind: 'up' }, lastDownAt: NOW - 60_000, generation: { ok: true, value: gen({ state: 'draining', startReportedAt: NOW - 120_000 }) } });
+      expect(f.restarts).toEqual(m(2));
+    },
+    // Fix round 1, F10 (slug readiness-ready-clock-per-binding): another session's ready row starts no deaf clock.
+    'deaf: a ready row of another session starts no clock for this subject': () => {
+      const r = readings({ unsettled: { kind: 'measured', value: [msg(NOW - 10 * READINESS_DEAF_MS, 'recorded')] } },
+        { stored: { ok: true, value: row({ readySince: NOW - 20 * READINESS_DEAF_MS, readySessionId: 'cc-overlord-before' }) } });
+      expect(mod.readinessFactsOf(r, NOW).deaf).toEqual(m(false));
+      const own = readings({ unsettled: { kind: 'measured', value: [msg(NOW - 10 * READINESS_DEAF_MS, 'recorded')] } },
+        { stored: { ok: true, value: row({ readySince: NOW - 20 * READINESS_DEAF_MS }) } });
+      expect(mod.readinessFactsOf(own, NOW).deaf).toEqual(m(true));
     },
     'restarts: three completed and the generation renewing is dead': () => {
       expect(mod.overlordReadiness(completed(3, { generation: { ok: true, value: gen({ state: 'draining', proven: false }) } }), NOW).word).toBe('dead');
@@ -685,8 +711,7 @@ export const READINESS_FACTS_OF_SET = set(readinessFactsOfCases, [
   // The plan's five.
   { id: 'FA-1 drop the in-progress +1', old: 's.restarts.value + inProgress', new: 's.restarts.value' },
   { id: 'FA-2 add the +1 while renewing',
-    old: "const inProgress = s.body.kind === 'down' && !(generation.kind === 'measured' && generation.value.kind === 'renewing') ? 1 : 0;",
-    new: "const inProgress = s.body.kind === 'down' ? 1 : 0;" },
+    old: "const underWay = s.body.kind === 'down' ? !renewing", new: "const underWay = s.body.kind === 'down' ? true" },
   { id: 'FA-3 read limited when some candidate is at its ceiling (the plan\'s "chat line": the ceiling line)',
     old: "c.list.every((x) => x.serves === 'at-ceiling')", new: "c.list.some((x) => x.serves === 'at-ceiling')" },
   { id: 'FA-4 an absent turn marker read as wedged',
@@ -696,8 +721,8 @@ export const READINESS_FACTS_OF_SET = set(readinessFactsOfCases, [
     old: '  if (since === null) return measured(false);\n', new: '' },
   // Beyond the plan's list.
   { id: 'FA-6 a doubt about the generation does not count the restart in progress',
-    old: "!(generation.kind === 'measured' && generation.value.kind === 'renewing') ? 1 : 0;",
-    new: "(generation.kind === 'measured' && generation.value.kind !== 'renewing') ? 1 : 0;" },
+    old: "const renewing = generation.kind === 'measured' && generation.value.kind === 'renewing';",
+    new: "const renewing = !(generation.kind === 'measured' && generation.value.kind !== 'renewing');" },
   { id: 'FA-7 >= for the long turn',
     old: 'now - t.turnAt > READINESS_LONG_TURN_MS', new: 'now - t.turnAt >= READINESS_LONG_TURN_MS' },
   { id: 'FA-8 >= for the hook quiet',
@@ -725,6 +750,16 @@ export const READINESS_FACTS_OF_SET = set(readinessFactsOfCases, [
   { id: 'FA-19 an unproven generation reads proven',
     old: "return g.proven ? measured({ kind: 'proven' }) : measured({ kind: 'renewing', until: g.deadlineAt });",
     new: "return measured({ kind: 'proven' });" },
+  // Fix round 1 (review 3922): F1, the restart under way after the body is back up, and F10, the ready clock's session.
+  { id: 'FA-20 the restart under way ends when the body is back up',
+    old: '    : downAt !== null && now - downAt <= READINESS_RESTART_WINDOW_MS && !renewing && !mintedSince;', new: '    : false;' },
+  { id: 'FA-21 a sighting exactly an hour old no longer counts',
+    old: 'now - downAt <= READINESS_RESTART_WINDOW_MS', new: 'now - downAt < READINESS_RESTART_WINDOW_MS' },
+  { id: 'FA-22 a generation started at the sighting reads minted since', old: 'genRow.startReportedAt > downAt', new: 'genRow.startReportedAt >= downAt' },
+  { id: 'FA-23 a renewing generation counts a restart under way once back up',
+    old: '&& !renewing && !mintedSince;', new: '&& !mintedSince;' },
+  { id: 'FA-24 the ready clock of any session',
+    old: "stored.value === 'none' || stored.value.readySessionId !== subjectId ? null", new: "stored.value === 'none' ? null" },
 ]);
 
 export const READINESS_NOTICES_SET = set(readinessNoticesCases, [
@@ -758,7 +793,8 @@ export const READINESS_NOTICES_SET = set(readinessNoticesCases, [
   { id: 'NO-14 a held lane with a record is raised again',
     old: '!holdLive.some((r) => r.key === lane)', new: 'true' },
   { id: 'NO-15 a checking item is not live',
-    old: "new Set(['open', 'checking'])", new: "new Set(['open'])" },
+    old: 'const LIVE_ITEM_STATES: ReadonlySet<string> = new Set(OPEN_ITEM_STATES);',
+    new: "const LIVE_ITEM_STATES: ReadonlySet<string> = new Set(OPEN_ITEM_STATES.filter((x) => x !== 'checking'));" },
   { id: 'NO-16 a standing set-admits-none record is not read before stranded',
     old: ': strandedLive.some((r) => r.key === \'set-admits-none\');', new: ': false;' },
 ]);
@@ -780,9 +816,37 @@ export const SERVED_READINESS_SET = set(servedReadinessCases, [
   { id: 'SR-9 the strand cause is dropped', old: 'strandCause: stored.strandCause,', new: 'strandCause: null,' },
 ]);
 
+/** Fix round 1, F8: the count item's figure, with its unmeasured-candidate guard. */
+export function readinessCountOfCases(mod: M): Record<string, SuiteCase> {
+  const cand = (id: string, serves: 'yes' | 'at-ceiling' | 'unmeasured') => ({ id, limits: undefined, serves });
+  const of = (...c: ReturnType<typeof cand>[]): Parameters<M['readinessCountOf']>[0] => ({ kind: 'candidates', list: c });
+  return {
+    'count: no list read is unmeasured': () => { expect(mod.readinessCountOf(null).kind).toBe('unmeasured'); },
+    'count: an unmeasured candidate list is unmeasured': () => {
+      expect(mod.readinessCountOf({ kind: 'unmeasured', why: 'designation-unreadable' }).kind).toBe('unmeasured');
+    },
+    'count: one candidate merely unread makes the figure unmeasured, never one short': () => {
+      expect(mod.readinessCountOf(of(cand('lane-a', 'yes'), cand('lane-b', 'unmeasured'))).kind).toBe('unmeasured');
+    },
+    'count: only the candidates that serve are counted': () => {
+      expect(mod.readinessCountOf(of(cand('lane-a', 'yes'), cand('lane-b', 'at-ceiling'), cand('lane-c', 'yes')))).toEqual(m(2));
+      expect(mod.readinessCountOf(of())).toEqual(m(0));
+    },
+  };
+}
+
+export const READINESS_COUNT_OF_SET = set(readinessCountOfCases, [
+  { id: 'CO-1 the unmeasured-candidate guard deleted',
+    old: "  if (c.list.some((x) => x.serves === 'unmeasured')) return unmeasured('count: a candidate is unmeasured');\n", new: '' },
+  { id: 'CO-2 every candidate counted', old: "c.list.filter((x) => x.serves === 'yes').length", new: 'c.list.length' },
+  { id: 'CO-3 no list read counts none', old: "if (c === null) return unmeasured('count: not read');", new: 'if (c === null) return measured(0);' },
+  { id: 'CO-4 an unmeasured list counts none', old: 'if (c.kind !== \'candidates\') return unmeasured(`count: ${c.kind}`);', new: "if (c.kind !== 'candidates') return measured(0);" },
+]);
+
 export const READINESS_MUTANT_SETS: Record<string, MutantSet<never>> = {
   [OVERLORD_READINESS_KEY]: OVERLORD_READINESS_SET as MutantSet<never>,
   [READINESS_FACTS_OF_KEY]: READINESS_FACTS_OF_SET as MutantSet<never>,
   [READINESS_NOTICES_KEY]: READINESS_NOTICES_SET as MutantSet<never>,
   [SERVED_READINESS_KEY]: SERVED_READINESS_SET as MutantSet<never>,
+  [READINESS_COUNT_OF_KEY]: READINESS_COUNT_OF_SET as MutantSet<never>,
 };

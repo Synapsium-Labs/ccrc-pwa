@@ -11,12 +11,8 @@ import {
   recordReadinessInTx, settleReadinessItem, READINESS_NO_SESSION, type ReadinessWrite,
 } from '../src/coord/overlordReadinessStore.js';
 import { itemById, settleItemCheckedInTx } from '../src/coord/ledgersStore.js';
-import { itemBoundOf, type SenderDeps } from '../src/pushSender.js';
-import type { ItemReachOf } from '../src/coord/pushOutboxStore.js';
 import type { ReadinessItemText } from '../../shared/overlord-readiness.js';
 import { OVERLORD_ITEM_PROGRAMME } from '../../shared/overlord-sequence.js';
-import { fakeTime } from './fakeTime.js';
-import { pushSeam } from './pushSeam.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
 let template = '';
@@ -316,6 +312,19 @@ describe('pruneReadiness', () => {
     expect(rows(db)).toHaveLength(2);
   });
 
+  it('keeps an open dead episode\'s first row when the newest row is a boot `unmeasured` row (F9), so the episode never pushes twice', () => {
+    const db = openDb();
+    rec(db, 'dead', 10);                  // 1: the episode's first row, old, kept
+    rec(db, 'unmeasured', 20, { why: 'x' }); // 2: removed
+    rec(db, 'dead', 30);                  // 3: removed
+    rec(db, 'unmeasured', 40, { why: 'boot' }); // 4: the newest row, kept
+    expect(pruneReadiness(db, 1_000)).toEqual({ removed: 2 });
+    expect(rows(db).map((r) => r.id)).toEqual([1, 4]);
+    expect(rec(db, 'dead', 50)).toMatchObject({ ok: true, episodeFirst: false });
+    expect(nowOf(db)).toMatchObject({ word: 'dead', episodeFirstId: 1, pushedAt: 10 });
+    expect(rows(db).filter((r) => r.pushedAt !== null)).toHaveLength(1);
+  });
+
   it('a closed dead episode\'s first row is not kept', () => {
     const db = openDb();
     rec(db, 'dead', 10);
@@ -339,17 +348,11 @@ describe('one transaction around a pass', () => {
 
 describe('raiseReadinessItem', () => {
   const TEXT: ReadinessItemText = { title: 'The Overlord cannot run: fixture', why: 'A fixture reason.', how: ['Do one', 'Do two'] };
-  const raise = (db: DatabaseSync, item: 'stranded' | 'count' | 'hold' = 'stranded', key = 'limited', at = AT, reach?: ItemReachOf) =>
-    raiseReadinessItem(db, { item, key, text: TEXT }, at, reach);
+  const raise = (db: DatabaseSync, item: 'stranded' | 'count' | 'hold' = 'stranded', key = 'limited', at = AT) =>
+    raiseReadinessItem(db, { item, key, text: TEXT }, at);
   const count = (db: DatabaseSync, table: string): number => Number((db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n);
   const events = (db: DatabaseSync, itemId: number) =>
     db.prepare('SELECT act, actor, note FROM operator_item_events WHERE itemId = ? ORDER BY id').all(itemId);
-  /** The push outbox's own item reach, as the production composition builds it (`pushSender.ts#itemBoundOf`). */
-  const reachOf = (): ItemReachOf => {
-    const deps = { push: pushSeam().push, time: fakeTime({ wallMs: AT }).ports } as unknown as SenderDeps;
-    return (item) => itemBoundOf(deps, item, 'reach');
-  };
-
   it('writes the item (programme overlord, raised by ccrc, a do item, the text) and its record in one go', () => {
     const db = openDb();
     const r = raise(db);
@@ -364,13 +367,13 @@ describe('raiseReadinessItem', () => {
       .toEqual({ id: r.recordId, item: 'stranded', key: 'limited', itemId: r.itemId, raisedAt: AT, settledAt: null, closedBy: null });
   });
 
-  it('the level is blocking for stranded and later for count and hold', () => {
+  it('the level is soon for stranded and later for count and hold (F2: none is blocking)', () => {
     const db = openDb();
     const level = (item: 'stranded' | 'count' | 'hold', key: string): string | undefined => {
       const r = raise(db, item, key);
       return r.ok ? itemById(db, r.itemId)?.neededBy : undefined;
     };
-    expect([level('stranded', 'limited'), level('count', 'count'), level('hold', 'lane-a')]).toEqual(['blocking', 'later', 'later']);
+    expect([level('stranded', 'limited'), level('count', 'count'), level('hold', 'lane-a')]).toEqual(['soon', 'later', 'later']);
   });
 
   it('a second raise for the same open (item, key) answers not ok and leaves exactly one item, one event line and one record', () => {
@@ -398,24 +401,13 @@ describe('raiseReadinessItem', () => {
     expect(db.isTransaction).toBe(false);
   });
 
-  it('with an itemReach the reach stamp and one bound outbox row commit with the item; without one, none is written', () => {
+  it('a raise takes no reach: no push-outbox row is written for any kind of item (F2)', () => {
     const db = openDb();
-    const r = raise(db, 'stranded', 'limited', AT, reachOf());
-    expect(r.ok).toBe(true);
-    if (!r.ok) return;
-    const out = db.prepare('SELECT sourceKind, sourceId, state, tag FROM push_outbox').all();
-    expect(out).toEqual([{ sourceKind: 'item', sourceId: r.itemId, state: 'pending', tag: `item-${r.itemId}` }]);
-    const plain = raise(db, 'count', 'count', AT + 1);
-    expect(plain.ok).toBe(true);
-    expect(count(db, 'push_outbox')).toBe(1);
-  });
-
-  it('a refused record rolls the reach back too: a second raise leaves one bound row', () => {
-    const db = openDb();
-    expect(raise(db, 'stranded', 'limited', AT, reachOf()).ok).toBe(true);
-    expect(raise(db, 'stranded', 'limited', AT + 1, reachOf())).toMatchObject({ ok: false });
-    expect(count(db, 'push_outbox')).toBe(1);
-    expect(count(db, 'operator_items')).toBe(1);
+    expect(raise(db, 'stranded', 'limited').ok).toBe(true);
+    expect(raise(db, 'count', 'count', AT + 1).ok).toBe(true);
+    expect(raise(db, 'hold', 'lane-a', AT + 2).ok).toBe(true);
+    expect(count(db, 'push_outbox')).toBe(0);
+    expect(count(db, 'operator_items')).toBe(3);
   });
 
   it('a closed database answers not ok and does not throw', () => {

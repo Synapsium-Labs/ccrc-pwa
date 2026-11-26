@@ -58,7 +58,7 @@ const markOf = (over: Record<string, unknown> = {}): TurnMarkRead => ({
 const AT_NOON = Date.UTC(2026, 10, 26, 12, 0, 0) / 1000;
 const AT_LATER = Date.UTC(2026, 10, 27, 6, 30, 15) / 1000;
 const sub = (over: Partial<SubjectReadings> = {}): SubjectReadings => ({
-  ladder: { kind: 'read', operatorRung: 'full' }, body: { kind: 'up' }, generation: { ok: true, value: null }, restarts: { ok: true, value: 0 },
+  ladder: { kind: 'read', operatorRung: 'full' }, body: { kind: 'up' }, generation: { ok: true, value: null }, restarts: { ok: true, value: 0 }, lastDownAt: null,
   candidates: { kind: 'candidates', list: [{ id: 'lane-a', limits: undefined, serves: 'at-ceiling' }, { id: 'lane-b', limits: undefined, serves: 'at-ceiling' }] },
   resets: { ok: true, value: { 'lane-a': { kind: 'at', atS: AT_LATER }, 'lane-b': { kind: 'at', atS: AT_NOON } } },
   strand: { kind: 'none' }, swapBlocked: null, turnMark: { ok: false, reason: 'absent' }, hookState: { ok: false, reason: 'no-state' },
