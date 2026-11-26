@@ -55,6 +55,7 @@ const LINKING = 'server/src/linking/routes.ts';
 const INBOX = 'server/src/coord/overlordInboxRoutes.ts';
 const HISTORY = 'server/src/coord/overlordHistoryRoutes.ts';
 const SEQUENCE = 'server/src/coord/overlordSequenceRoutes.ts';
+const BOARD = 'server/src/coord/overlordBoardRoutes.ts';
 
 const operator = (method: HttpMethod, path: string, file: string, verbClass: VerbClass): OperatorDoorRow =>
   ({ group: 'operator', method, path, file, verbClass });
@@ -122,17 +123,25 @@ export const OVERLORD_DOORS: Readonly<Record<string, DoorRow>> = {
     group: 'overlord', method: 'POST', path: '/api/overlord/messages/:id/acknowledge', file: INBOX, verbClass: 'operate', write: true,
     word: 'overlord-v1', others: 'refuse', ladderClass: 'other', act: 'acknowledge', unmeasuredDesignation: 'refuse',
   },
-  // The Overlord's history door (W1, PR B1): a read, so verb class `view`, fenced as the inbox reads are (`write: true`), so a
-  // forger of the attribution reads no history and spends no ceiling; a POST only so free text rides the body (ruled R7).
+  // The Overlord's history door (W1, PR B1): a read, so verb class `view`; a POST only so free text rides the body (ruled R7).
+  // NOT fenced (`write: false`, board B2, call 1590, slug history-and-board-reads-attributed-not-proven): a reader reads it through
+  // the door process's read tool, which serves unfenced views only; so its read runner says `unfenced`, its ceiling counts every
+  // attributed served read, and a read is attributed to the Overlord, not proven its own (proven reader reads: way B, later).
   history: {
-    group: 'overlord', method: 'POST', path: '/api/overlord/history', file: HISTORY, verbClass: 'view', write: true,
+    group: 'overlord', method: 'POST', path: '/api/overlord/history', file: HISTORY, verbClass: 'view', write: false,
     word: 'overlord-v1', others: 'refuse', ladderClass: 'other', act: 'read', unmeasuredDesignation: 'refuse',
   },
   // The Overlord's cursor read of the sequence (W1, sequence C; plan Task 7's table): a read, verb class `view`, and NOT fenced
   // (`write: false`): its lines are server words and ids, so its read runner says `unfenced` and its ceiling counts every
-  // attributed line (question 18); a fence is a later piece's. Others refused: no session but the Overlord reads the cursor.
+  // attributed served line (question 18); a fence is a later piece's. Others refused: no session but the Overlord reads the cursor.
   sequence: {
     group: 'overlord', method: 'GET', path: '/api/overlord/sequence', file: SEQUENCE, verbClass: 'view', write: false,
+    word: 'overlord-v1', others: 'refuse', ladderClass: 'other', act: 'read', unmeasuredDesignation: 'refuse',
+  },
+  // The Overlord's board (W1, PR B2; plan Task 6, Table 11.1e): a read, verb class `view`, NOT fenced (`write: false`, call 1590),
+  // as history is and for the same reason: a reader reads it through the read tool. Its ceiling counts every attributed served read.
+  board: {
+    group: 'overlord', method: 'GET', path: '/api/overlord/board', file: BOARD, verbClass: 'view', write: false,
     word: 'overlord-v1', others: 'refuse', ladderClass: 'other', act: 'read', unmeasuredDesignation: 'refuse',
   },
   // The timer doors (Overlord W1, the Overlord's timers): the set and the cancel are writes (the fence, the witness and the
