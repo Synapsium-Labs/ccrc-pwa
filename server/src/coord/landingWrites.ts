@@ -1,5 +1,6 @@
-// L1, context C4 (landing order wave 5f). PURE: no clock, no fs, no store, no I/O; every import is a type
-// except the shared landing vocabulary's terminal map (D-9093). The
+// L1, context C4 (landing order wave 5f). PURE: no clock, no fs, no store, no I/O; every import is a type except
+// those from the shared landing vocabulary, `shared/landingLine.ts`, the one file the purity case admits a value
+// import from (D-9093; the wave 5j plan's section 13, C12). The
 // attributed landing writes' vocabulary and their ONE decision: `decideLandingMutation` reads the coherent facts the
 // store gathered inside its transaction and answers a refusal or the one mutation to journal. `CoordStore.
 // writeLandingAuthority` (L3) gathers, calls this, then appends and applies; nothing here acts.
