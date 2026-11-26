@@ -124,12 +124,26 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     // it at boot, because behind `tailscale serve` it never learns the
     // hostname it is reached under. An operator who arms the flag from this
     // line alone would find out one tap at a time.
-    const home = unexposedBox('ccrc-doctor-auth-rpid-');
+    // Wave 181: a box reached from elsewhere (here a wildcard bind) keeps the hand route; a loopback-only server box
+    // is told the verb that writes all three (the next case).
+    const home = unexposedBox('ccrc-doctor-auth-rpid-', 'CCRC_FLEET=local\nCCRC_HOST=0.0.0.0\nCCRC_PORT=7788\n');
     rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
     const line = authLine(runDoctor(home).stdout);
     expect(line).toContain('CCRC_AUTH=on');
     expect(line).toContain('CCRC_RP_ID');
     expect(line).toContain('CCRC_ORIGIN');
+    expect(line).not.toContain('ccrc auth on');
+  });
+
+  it('wave 181: on a loopback-only server box the dark remedy is ccrc auth on, with or without a passphrase', () => {
+    const none = unexposedBox('ccrc-doctor-auth-verb-none-');
+    rmSync(join(none, '.ccrc', 'auth.scrypt'), { force: true });
+    const a = authLine(runDoctor(none).stdout);
+    expect(a).toMatch(/^PASS auth: .*to arm the gate: ccrc passwd, then ccrc auth on$/);
+    expect(a).not.toContain('CCRC_RP_ID');
+    const set = unexposedBox('ccrc-doctor-auth-verb-set-');
+    const b = authLine(runDoctor(set).stdout);
+    expect(b).toMatch(/^PASS auth: .*holds a usable passphrase .*no request is gated yet; to arm it: ccrc auth on$/);
   });
 
   it('FAILS when the gate is ARMED and there is no passphrase — the fail-shut state, made visible', () => {

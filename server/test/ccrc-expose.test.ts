@@ -405,6 +405,24 @@ describe('ccrc expose: the shadow refusal', () => {
     });
   }
 
+  it('wave 181: when the keys are the lines ccrc auth on wrote, the refusal names ccrc auth off first — and only then', () => {
+    const home = box('ccrc-expose-shadow-auth-on-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(envFilePath(home), "# ccrc auth on: sign-in at http://localhost:7788 ('ccrc auth off' removes these lines)\n"
+      + 'CCRC_AUTH=on\nCCRC_RP_ID=localhost\nCCRC_ORIGIN=http://localhost:7788\nCCRC_COOKIE_INSECURE=on\n');
+    const r = runPiped(home, ['expose', 'duckdns'], `${SUB}\n${TOKEN}\n`);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('These are the lines ccrc auth on writes: run ccrc auth off first');
+    expect(existsSync(exposurePath(home))).toBe(false);
+    // A hand-set key with no marker line keeps the old words alone.
+    const hand = box('ccrc-expose-shadow-hand-');
+    mkdirSync(join(hand, '.ccrc'), { recursive: true });
+    writeFileSync(envFilePath(hand), 'CCRC_AUTH=on\nCCRC_RP_ID=localhost\nCCRC_ORIGIN=http://localhost:7788\n');
+    const h = runPiped(hand, ['expose', 'duckdns'], `${SUB}\n${TOKEN}\n`);
+    expect(h.code).toBe(1);
+    expect(h.stderr).not.toContain('ccrc auth off');
+  });
+
   it('a bare KEY= line in ccrc.env is NOT a shadow — empty is unset, the || rule', async () => {
     // `config.ts` reads both keys with `||`, so a bare `CCRC_ORIGIN=` line is
     // an unset key to the server — and must be one to this refusal too, or the

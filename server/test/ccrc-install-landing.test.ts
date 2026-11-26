@@ -680,7 +680,10 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     // cannot warn about a wrong one at boot (behind `tailscale serve` it never
     // learns the hostname it is reached under). An operator working from this
     // transcript is the one who needs to be told all three at once.
+    // Wave 181: on a box reached from elsewhere (here a wildcard bind) the three keys are the hand route; a
+    // loopback-only server box is told `ccrc auth on`, which writes them itself (the next case).
     const home = freshBox('ccrc-install-gate-line-');
+    preexisting(home, 'ccrc.env', 'CCRC_HOST=0.0.0.0\n');
     const r = runInstall(home);
     const line = r.stdout.split('\n').find((l) => l.startsWith('install: gate: ')) ?? '';
     expect(line, r.stdout).toContain('NO PWA passphrase');
@@ -688,9 +691,20 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     expect(line).toContain('CCRC_AUTH=on');
     expect(line).toContain('CCRC_RP_ID');
     expect(line).toContain('CCRC_ORIGIN');
+    expect(line).not.toContain('ccrc auth on');
     // …and the install really did not write one. A passphrase this run invented
     // would be a credential nobody chose, and one it PROMPTED for cannot be
     // read at all under `curl … | bash`, where stdin is the script itself.
+    expect(existsSync(join(home, '.ccrc', 'auth.scrypt'))).toBe(false);
+  });
+
+  it('wave 181: on a loopback-only server box the arming remedy is ccrc passwd, then ccrc auth on', () => {
+    const home = freshBox('ccrc-install-gate-auth-verb-');
+    const r = runInstall(home);
+    const line = r.stdout.split('\n').find((l) => l.startsWith('install: gate: ')) ?? '';
+    expect(line, r.stdout).toContain('NO PWA passphrase');
+    expect(line).toContain('To arm the gate: ccrc passwd, then ccrc auth on');
+    expect(line).not.toContain('CCRC_RP_ID');
     expect(existsSync(join(home, '.ccrc', 'auth.scrypt'))).toBe(false);
   });
 
@@ -712,8 +726,10 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
   const gateLine = (out: string): string => out.split('\n').find((l) => l.startsWith('install: gate: ')) ?? '';
 
   it('G2b: a passphrase file at the default path with the flag OFF — "a PWA passphrase file is at", and the OFF remedy names ccrc.env', () => {
+    // A box reached from elsewhere (a wildcard bind), so the remedy is the hand edit in ccrc.env (wave 181).
     const home = freshBox('ccrc-install-gate-file-off-');
     preexisting(home, 'auth.scrypt', 'fixture-not-a-real-secret\n');
+    preexisting(home, 'ccrc.env', 'CCRC_HOST=0.0.0.0\n');
     const r = runInstall(home);
     const line = gateLine(r.stdout);
     expect(line, r.stdout).toContain('a PWA passphrase file is at');
@@ -721,6 +737,16 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     expect(line).toContain('the gate is OFF');
     expect(line).toContain(join(home, '.ccrc', 'ccrc.env'));
     expect(line).not.toContain('NO PWA passphrase');
+  });
+
+  it('G2b (wave 181): the same on a loopback-only server box — the OFF remedy is ccrc auth on, with no restart line', () => {
+    const home = freshBox('ccrc-install-gate-file-off-local-');
+    preexisting(home, 'auth.scrypt', 'fixture-not-a-real-secret\n');
+    const r = runInstall(home);
+    const line = gateLine(r.stdout);
+    expect(line, r.stdout).toContain('a PWA passphrase file is at');
+    expect(line).toContain('the gate is OFF. To arm it: ccrc auth on');
+    expect(line).not.toContain('systemctl');
   });
 
   it('G2c: an absolute CCRC_AUTH_SECRET_PATH, with the file present there and absent at the default — the present arm, naming the redirected path', () => {

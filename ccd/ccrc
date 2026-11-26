@@ -6295,7 +6295,8 @@ _ccrc_operator_only() {   # <the verb's words, e.g. "auth on">
 #   the update health window; 9. on any failure the original bytes go back, the unit is restarted again, and exit 1.
 # Already in the asked state: said, and nothing is written or restarted.
 AUTH_KEYS=(CCRC_AUTH CCRC_RP_ID CCRC_ORIGIN CCRC_COOKIE_INSECURE)
-_auth_marker() { printf "# ccrc auth on: sign-in at http://localhost:%s ('ccrc auth off' removes these lines)" "$1"; }   # <port>
+AUTH_MARKER_HEAD="# ccrc auth on: sign-in at http://localhost:"   # the marker line's head: `_auth_marker` and expose's shadow refusal
+_auth_marker() { printf "%s%s ('ccrc auth off' removes these lines)" "$AUTH_MARKER_HEAD" "$1"; }   # <port>
 _auth_want() {   # <key> <port> -> the value `ccrc auth on` writes for it
   case "$1" in
     CCRC_AUTH) printf 'on' ;;
@@ -6303,6 +6304,18 @@ _auth_want() {   # <key> <port> -> the value `ccrc auth on` writes for it
     CCRC_ORIGIN) printf 'http://localhost:%s' "$2" ;;
     CCRC_COOKIE_INSECURE) printf 'on' ;;
   esac
+}
+
+# `_auth_fits_here` — is `ccrc auth` this box's remedy? rc 0 iff it serves the console (no CCRC_ROLE=fleet, ccrc.service
+# in the unit directory given) and is PROVABLY loopback-only (`_box_reach`: no evidence, CCRC_HOST measured). The three
+# readers `cmd_auth` refuses on, asked as one yes for the words that name the verb: doctor's `auth` check, install's
+# gate line. It reads nothing else, and it clobbers `_box_unit_env`'s out-params, so a caller asks it first.
+_auth_fits_here() {   # <unit dir>
+  local role=""
+  [ ! -f "$BOX_ENV_FILE" ] || [ ! -r "$BOX_ENV_FILE" ] || role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  [ "$role" != fleet ] && [ -f "$1/$(_box_unit_file ccrc.service)" ] || return 1
+  _box_reach "$1"
+  [ "${#BRE_REASONS[@]}" -eq 0 ] && [ "$BRE_HOSTRC" -eq 0 ]
 }
 
 # The rewrite, as one awk pass in bytes (LC_ALL=C). A line is one of ours only when, after leading spaces and tabs,
@@ -6645,8 +6658,14 @@ cmd_expose() {
   # overloaded seam D3 bans, applied to the one key whose silent loss takes a
   # PUBLIC box dark (measured live 2026-08-22: a deploy shipped a ccrc.env
   # without it and the box ran unauthenticated for 3m17s).
+  # Wave 181: when the keys found are the lines `ccrc auth on` wrote (its marker line stands in ccrc.env), the remedy is
+  # its own undo, said first.
+  local auth_said=""
+  if [ -n "$shadow_keys" ] && [ -r "$BOX_ENV_FILE" ] && LC_ALL=C grep -qF -- "$AUTH_MARKER_HEAD" "$BOX_ENV_FILE"; then
+    auth_said=" These are the lines ccrc auth on writes: run ccrc auth off first, which removes them and restarts the server, then re-run this."
+  fi
   [ -z "$shadow_keys" ] \
-    || _ccrc_die "refusing to write $CCRC_EXPOSURE_FILE — $BOX_ENV_FILE already sets$shadow_keys (the stage-3a hand-edit path). The server reads BOTH files and $CCRC_EXPOSURE_FILE wins for any key in both — so this verb's copy would silently override yours. Remove those keys from $BOX_ENV_FILE (that file is yours; this verb owns the other), then re-run. Nothing was written."
+    || _ccrc_die "refusing to write $CCRC_EXPOSURE_FILE — $BOX_ENV_FILE already sets$shadow_keys (the stage-3a hand-edit path).$auth_said The server reads BOTH files and $CCRC_EXPOSURE_FILE wins for any key in both — so this verb's copy would silently override yours. Remove those keys from $BOX_ENV_FILE (that file is yours; this verb owns the other), then re-run. Nothing was written."
 
   [ -t 0 ] \
     || _ccrc_die "stdin is not a terminal, and this verb will not read a DuckDNS token or an origin from a pipe or a file. A piped token cannot be typed without echo, and — the case this refusal exists for — under \`curl … | bash\` stdin is the INSTALLER SCRIPT, so a read here would take a line of shell as this box's answers. Run 'ccrc expose $sub' from a terminal. Nothing was written."
@@ -17091,7 +17110,9 @@ cmd_install() {
   # the flag in a shape the reader cannot decide (on macOS, either file is not
   # plain assignments), worded from `$BUE_WHY` in both arms; the rc-2 sentence
   # above is untouched.
-  local gsec grc urc=0
+  local gsec grc urc=0 fits=0
+  # Wave 181: asked FIRST — it reads through `_box_unit_env` too, and the arms below read its out-params.
+  ! _auth_fits_here "$BOX_UNIT_DIR" || fits=1
   gsec="$(_box_auth_path)"; grc=$?
   if [ "$grc" -eq 3 ]; then
     echo "install: gate: CCRC_AUTH_SECRET_PATH in $BOX_ENV_FILE is RELATIVE ($gsec), so install cannot say whether this box has a PWA passphrase — make it absolute (or remove the line); ccrc doctor's auth check says the rest"
@@ -17105,8 +17126,13 @@ cmd_install() {
       echo "install: gate: CCRC_AUTH=on in $BUE_SRC, and a PWA passphrase file is at $gsec (arming also needs CCRC_RP_ID and CCRC_ORIGIN beside the flag; ccrc doctor's auth check measures whether the file is usable)"
     else
       local gate_how="set CCRC_AUTH=on together with CCRC_RP_ID and CCRC_ORIGIN in $BOX_ENV_FILE (or run ccrc expose)"
+      [ "$fits" -eq 0 ] || gate_how="ccrc auth on (it writes the localhost lines and restarts the server itself)"
       [ "$BUE_SRC" != "$CCRC_EXPOSURE_FILE" ] || gate_how="set CCRC_AUTH=on in $CCRC_EXPOSURE_FILE, which overrides $BOX_ENV_FILE (ccrc expose writes it with CCRC_RP_ID and CCRC_ORIGIN)"
-      echo "install: gate: a PWA passphrase file is at $gsec, but the gate is OFF. To arm it: $gate_how, then: $(_svc_restart_hint ccrc.service)"
+      if [ "$fits" -eq 1 ] && [ "$BUE_SRC" != "$CCRC_EXPOSURE_FILE" ]; then
+        echo "install: gate: a PWA passphrase file is at $gsec, but the gate is OFF. To arm it: $gate_how"
+      else
+        echo "install: gate: a PWA passphrase file is at $gsec, but the gate is OFF. To arm it: $gate_how, then: $(_svc_restart_hint ccrc.service)"
+      fi
     fi
   else
     _box_unit_env CCRC_AUTH || urc=$?
@@ -17118,6 +17144,8 @@ cmd_install() {
       echo "install: gate: this box has NO PWA passphrase, and $CCRC_EXPOSURE_FILE is there and cannot be read, so whether CCRC_AUTH is on (and the gate failing shut) was not measured — ccrc doctor's auth check says what to do"
     elif [ "$BUE_SRC" = "$CCRC_EXPOSURE_FILE" ]; then
       echo "install: gate: this box has NO PWA passphrase — install never writes one. To arm the gate: ccrc passwd, then set CCRC_AUTH=on in $CCRC_EXPOSURE_FILE, which overrides $BOX_ENV_FILE (ccrc expose writes it with CCRC_RP_ID and CCRC_ORIGIN), then: $(_svc_restart_hint ccrc.service)"
+    elif [ "$fits" -eq 1 ]; then
+      echo "install: gate: this box has NO PWA passphrase — install never writes one. To arm the gate: ccrc passwd, then ccrc auth on (it writes the localhost lines and restarts the server itself)"
     else
       echo "install: gate: this box has NO PWA passphrase — install never writes one. To arm the gate: ccrc passwd, then set CCRC_AUTH=on together with CCRC_RP_ID and CCRC_ORIGIN in $BOX_ENV_FILE, then: $(_svc_restart_hint ccrc.service)"
     fi

@@ -1505,9 +1505,9 @@ _check_auth() {
      || ! declare -F _box_env_value >/dev/null 2>&1 \
      || ! declare -F _box_unit_env >/dev/null 2>&1 \
      || ! declare -F _box_auth_path >/dev/null 2>&1 \
-     || ! declare -F _box_sessions_path >/dev/null 2>&1; then
+     || ! declare -F _box_sessions_path >/dev/null 2>&1 || ! declare -F _auth_fits_here >/dev/null 2>&1; then
     _dr_fail auth "ccrc's own config reader is not loaded, so neither this box's CCRC_AUTH flag nor its passphrase file was measured" \
-      "this is a bug in ccrc, not a fact about your box — _check_auth reads CCRC_AUTH through _box_unit_env (BOX_ENV_FILE and CCRC_EXPOSURE_FILE) and resolves the secret's and the session store's paths through _box_auth_path and _box_sessions_path, all declared once in ccrc itself, and this check table was sourced by something that is not ccrc"
+      "this is a bug in ccrc, not a fact about your box — _check_auth reads CCRC_AUTH through _box_unit_env (BOX_ENV_FILE and CCRC_EXPOSURE_FILE) and resolves the secret's and the session store's paths through _box_auth_path and _box_sessions_path, and asks _auth_fits_here whether ccrc auth is this box's remedy, all declared once in ccrc itself, and this check table was sourced by something that is not ccrc"
     return 1
   fi
 
@@ -1634,7 +1634,10 @@ _check_auth() {
       # DEFAULT and a legitimate state for a box to be in (`_check_rc`'s rule —
       # a doctor that WARNed here would be asserting a preference). The detail
       # says the gate is off so nobody reads this line as "we are protected".
-      _dr_pass auth "$secret$via holds a usable passphrase ($detail), but $gate, so no request is gated yet"
+      # Wave 181: on a box `ccrc auth on` serves (a loopback-only server box), the verb is the arming remedy.
+      local tail=""
+      ! _auth_fits_here "$CCRC_UNIT_DIR" || tail="; to arm it: ccrc auth on"
+      _dr_pass auth "$secret$via holds a usable passphrase ($detail), but $gate, so no request is gated yet$tail"
       return 0 ;;
     3)
       # Wave 8 item D, D-3596: same reasoning as rc 0's — with no passphrase
@@ -1672,6 +1675,8 @@ _check_auth() {
       # to set the flag THERE, not in the file the unit no longer reads it
       # from.
       local arming="set CCRC_AUTH=on together with CCRC_RP_ID and CCRC_ORIGIN in $BOX_ENV_FILE and restart ccrc.service"
+      # Wave 181: a loopback-only server box arms with one verb, which writes the four localhost lines and restarts.
+      if _auth_fits_here "$CCRC_UNIT_DIR"; then arming="ccrc auth on"; fi
       [ "$expnamed" -eq 0 ] || arming="set CCRC_AUTH=on in $CCRC_EXPOSURE_FILE, which overrides $BOX_ENV_FILE, together with CCRC_RP_ID and CCRC_ORIGIN (ccrc expose writes all three), and restart ccrc.service"
       _dr_pass auth "no passphrase file at $secret$via, and $gate — the shipped default, so nothing is gated and anyone who can reach this box can drive it; to arm the gate: ccrc passwd, then $arming"
       return 0 ;;
