@@ -308,6 +308,19 @@ Codex lanes marked as Codex lanes in its roster, the fleet box on v0.0.1288 or l
   rulings, one for correctness) and landed it, rather than spend another review round.
 - **Workers and reviews:** each wave is a dispatched worker on its own branch, read by a review run with the held-out
   panel, and merged through the queue by the coordinator. Rollout rides the release lane; nothing here moves a box by hand.
+- **Acceptance reads, and the window after a move (2026-11-23, calls 627 and 628).** The acceptance run is read-only.
+  Its worker holds one run-bound timer for a later read, and never polls. Both Codex lanes read a 272000-token window
+  from the provider's own figure, because three of their models have no measured window. That value is kept, and
+  doctor's WARN records it, rather than a hand `set-window`.
+- **How the definition of done is proved (2026-11-26, call 1494, a design-level call the owner may overturn).** A
+  behaviour that only shows after a Revert or a fault is proved by the merged tests at the installed commit plus a live
+  reading of the installed check or surface. It is not staged on the live fleet: a fault warning cannot occur on a
+  healthy fleet, and a live Revert holds real sessions on an older model until a newer one appears. A behaviour that a
+  real release shows stays a live wait. The other choices were one supervised live Revert on a Codex lane, and waiting
+  for a natural event for every line. The evidence, line by line, is in
+  `docs/superpowers/programs/model-class-advance/acceptance-evidence.md`.
+- **The next read (2026-11-26, call 1495).** The three-day read found no release on either kind of lane. The worker
+  holds one more read-only recheck, seven days on. Move history is kept, so a later read loses no evidence.
 
 ## Carried constraints
 
@@ -323,13 +336,16 @@ Codex lanes marked as Codex lanes in its roster, the fleet box on v0.0.1288 or l
 
 ## Remaining after wave 10's docs
 
-Merged is not released, released is not installed, and installed is not observed live. #3237, #3238 and #3246 are merged;
-v0.0.1416 is a published prerelease and no evidence of installation. Open, unless separately measured:
+Merged is not released, released is not installed, and installed is not observed live. On 2026-11-26 both boxes were
+measured on v0.0.1486, which holds every wave. Lines 1, 3, 4, 5 and 8 of the definition of done are proved; the
+evidence is in `docs/superpowers/programs/model-class-advance/acceptance-evidence.md`. Open:
 
-- `moves-only-forward`, measured on the fleet box once a release with wave 3 is installed there.
-- The Models sheet's live acceptance, once a build with #3246 is installed.
-- `natural-move` at a real model release: the canary, the move, a new session on the new model, and no sessions-behind
-  warning 24 hours later, doctor's evidence.
+- `moves-only-forward` (line 2): a move on a build that holds every wave. It waits for a real Codex model release.
+- `anthropic-follows` (line 6): labels and effort following an alias that resolves to a new model. It waits for a real
+  alias change.
+- `natural-move` (line 7) at a real model release: the canary, the move, a new session on the new model, and no
+  sessions-behind warning 24 hours later, doctor's evidence.
 - The renewal programme's evaluation evidence, which owns any claim about session renewal.
 
-Nothing here moves the fleet or asks the owner for a step.
+No build is left in the plan. The three open lines wait for the providers, and the acceptance worker reads again on
+its timer. Nothing here moves the fleet or asks the owner for a step.
