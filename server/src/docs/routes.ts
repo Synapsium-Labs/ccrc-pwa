@@ -855,8 +855,10 @@ export interface DocsArtifactDeps {
   listener: ArtifactListenerState | null;
   store: ArtifactStore | null;
   consoleOrigin: string;
-  /** The clock the capability store was built over, so a mint's provisional expiry is the one the store will give. Absent means
-   *  `Date.now`, the clock the composition root builds its store over; a root that builds the store over another passes it. */
+  /** The clock the route reads for a mint's PROVISIONAL expiry, the one the mask check sees. Absent means `Date.now`, the clock
+   *  the composition root builds its store over; a root that builds the store over another passes it. The store reads its own
+   *  clock again when it makes the record, so the two readings can differ by the milliseconds between them; the answer sent
+   *  carries the store's `expiresAt`. */
   clock?: () => number;
   maskChanges: (answer: unknown) => boolean;
 }
@@ -921,13 +923,13 @@ export function registerDocsArtifactRoutes(app: FastifyInstance, readers: DocsNo
 
   /** Step 5: the tree read and L1's verdict over it. `ok: false` carries the reply that already answered. */
   const scoped = async (reply: FastifyReply, ask: ArtifactPinAsk):
-    Promise<{ ok: true; tree: DocsTreeOk; scope: ManifestScope } | { ok: false; reply: FastifyReply }> => {
+    Promise<{ ok: true; tree: DocsTreeOk; scope: ManifestScope; gone: AbortSignal } | { ok: false; reply: FastifyReply }> => {
     const signal = clientGone(reply);
     const read = await tree.read(ask.project, ask.pin, signal);
     if (!read.ok) return { ok: false, reply: signal.aborted ? abandon(reply) : refuseRoute(reply, TREE_FAILURE_REFUSAL) };
     const verdict = scopeOfTree(ask.pin, read.tree);
     if (!verdict.ok) return { ok: false, reply: refuseRoute(reply, verdict.error) };
-    return { ok: true, tree: read.tree, scope: verdict.scope };
+    return { ok: true, tree: read.tree, scope: verdict.scope, gone: signal };
   };
 
   app.get('/api/docs/artifacts', { exposeHeadRoute: false }, async (_req, reply) => {
@@ -957,10 +959,15 @@ export function registerDocsArtifactRoutes(app: FastifyInstance, readers: DocsNo
     if (badOrigin !== null) return refuseRoute(reply, badOrigin);
     const got = await scoped(reply, ask);
     if (!got.ok) return got.reply;
+    // A read that was already running resolves ok whatever the client does: a client that left during it gets no record (it
+    // would hold a slot for a token nobody received) and no answer, as the failure arm of `scoped` does.
+    if (got.gone.aborted) return abandon(reply);
     const input = capabilityInput(here.sessionIdHash, ask, got.tree, got.scope, ask.origins, ask.windows);
     // The store draws again while `accept` refuses: the answer the operator receives is never one the mask would alter. The
-    // check runs over the answer exactly as it will be sent: the expiry is the store's own `expiresAt` over the record it is
-    // about to make (minted and last used now, by the store's own clock, with the manifest's uncommitted count as its drafts).
+    // check runs over the answer with a PROVISIONAL expiry: this route reads its own clock (`deps.clock`) and computes the expiry
+    // the record will have (minted and last used now, with the manifest's uncommitted count as its drafts), and the store reads
+    // its own clock again when it makes the record, so the two can differ by the milliseconds between the reads. The answer sent
+    // carries the store's `expiresAt`. The mask alters strings only, never a number, so that difference cannot change its verdict.
     const now = (deps.clock ?? Date.now)();
     const expires = expiresAt({ mintedAt: now, lastAt: now, drafts: got.scope.uncommitted });
     const minted = here.store.mint(input, (token, id) =>

@@ -696,7 +696,7 @@ describe('M5.4 — every docs route in the real server\'s table carries the four
     expectDecorated('range 501', unsupported);
   });
 
-  it('a 200: dark, the PWA headers, ok answers (writes with their JSON bodies)', async () => {
+  it('the ok request of every route, dark, with the PWA headers: its expected status (200, or 501 `auth-off` for the artifact scope read and mint), decorated', async () => {
     const { app } = await m54Server();
     for (const key of derivedDocsRoutes(app)) {
       const req = recipeFor(key).ok;
@@ -720,7 +720,7 @@ describe('M5.4 — every docs route in the real server\'s table carries the four
     }
   });
 
-  it('a 5xx: ccd or settings store unreadable (502), refresh caps-unknown (503)', async () => {
+  it('the fault arm: ccd or settings store unreadable (502), refresh caps-unknown (503), the artifact scope read and mint `auth-off` (501), the artifact list, Revoke and Revoke all 200', async () => {
     const { app, state } = await m54Server({ fault: true });
     for (const key of derivedDocsRoutes(app)) {
       const recipe = recipeFor(key);

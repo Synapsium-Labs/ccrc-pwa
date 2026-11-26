@@ -8,13 +8,15 @@
 // - a REAL `createArtifactStore` over a fake clock and a fake liveness.
 // Hosts are under `.test`, the project is `project-a`, and the docs marker header is L0's constant (`PWA_HEADERS`), never quoted.
 import { afterEach, describe, expect, it } from 'vitest';
+import http from 'node:http';
+import type { AddressInfo, Socket } from 'node:net';
 import Fastify, { type FastifyInstance } from 'fastify';
 import {
   ARTIFACT_IDLE_MS, ARTIFACT_MAX_ORIGINS, ARTIFACT_REFUSALS, type ArtifactListOk, type ArtifactMintAsk, type ArtifactMintOk,
   type ArtifactRefusal, type ArtifactScopeOk,
 } from '../../shared/artifacts.js';
 import {
-  DOCS_MAX_FILE_BYTES, DOCS_RANGE_MAX_BYTES, docsApi, type DocListPin, type DocPin, type DocsEntry, type DocsFailureBody,
+  DOCS_MAX_FILE_BYTES, DOCS_RANGE_MAX_BYTES, DOCS_RESPONSE_HEADERS, docsApi, type DocListPin, type DocPin, type DocsEntry, type DocsFailureBody,
   type DocsTreeOk,
 } from '../../shared/docs.js';
 import { ARTIFACT_MINT_REFUSALS, REFUSAL_STATUS, type RouteRefusal } from '../../shared/refusal.js';
@@ -28,6 +30,7 @@ import { NO_SESSION, type GateDecision } from '../src/auth/gate.js';
 import { SESSION_COOKIE } from '../src/auth/cookie.js';
 import { sessionIdHash } from '../src/auth/sessions.js';
 import { installDocsRequestPolicy, installDocsResponsePolicy } from '../src/docs/hooks.js';
+import { DOCS_JSON_CONTENT_TYPE } from '../src/docs/policy.js';
 import type { DocsFetcher, DocsReader, DocsTreeRead } from '../src/docs/ports.js';
 import { composeDocs, registerDocsArtifactRoutes, registerDocsReadRoutes, registerDocsRefreshRoute } from '../src/docs/routes.js';
 import { FIXTURE_COMMIT, FIXTURE_SERVED, PWA_HEADERS, committedEntry, treeOk } from './docsRouteHelpers.js';
@@ -89,8 +92,8 @@ interface RigOpts {
   tier?: ArtifactConfig;
   listener?: 'pending' | 'listening' | 'down' | null;
   store?: boolean;
-  /** The tree the fake reader answers; a function sees each call. */
-  tree?: DocsTreeRead | (() => DocsTreeRead);
+  /** The tree the fake reader answers; a function sees each call, and may hold the answer open by returning a promise. */
+  tree?: DocsTreeRead | (() => DocsTreeRead | Promise<DocsTreeRead>);
   draw?: () => string;
   maskChanges?: (answer: unknown) => boolean;
 }
@@ -352,6 +355,57 @@ describe('artifact mint doors: the scope read and the mint (X5 A2.3)', () => {
     expect(m.id).toMatch(/^[A-Za-z0-9_-]{22}$/);
   });
 
+  it('mint: the 200 that carries the token has the docs headers and `no-store`', async () => {
+    // The rig registers the doors inside the docs plugin, with its request and response policy, as `buildServer` does, so the
+    // headers here are the plugin's own. Two layers write the `no-store`: the account gate at the mint's first step, and
+    // `docsSendPolicy`'s default for a 200 that set none. This case pins what the client receives, not which layer wrote it.
+    const r = await rig();
+    const m = await mint(r);
+    expect(m.statusCode).toBe(200);
+    expect(tokenOf(m)).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    for (const [name, value] of Object.entries(DOCS_RESPONSE_HEADERS)) expect(m.headers[name], name).toBe(value);
+    expect(m.headers['cache-control']).toBe('no-store');
+    expect(m.headers['content-type']).toBe(DOCS_JSON_CONTENT_TYPE);
+  });
+
+  it('mint: a client that left during the tree read stores nothing', async () => {
+    // A real socket: the reply's `close` is what `clientGone` reads. The tree read is held open, the client destroys its end,
+    // the case waits for the SERVER's socket to close (Node's own close listener on the response ran first), then the read
+    // resolves ok. The success arm must check the signal: no record, so the session and the box lose no slot.
+    let release: () => void = () => {};
+    let started: () => void = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const began = new Promise<void>((resolve) => { started = resolve; });
+    const r = await rig({
+      tree: async () => {
+        started();
+        await held;
+        return { ok: true as const, answer: treeOf(standardEntries()) };
+      },
+    });
+    const sockets: Socket[] = [];
+    r.app.server.on('connection', (s: Socket) => { sockets.push(s); });
+    await r.app.listen({ port: 0, host: '127.0.0.1' });
+    const port = (r.app.server.address() as AddressInfo).port;
+    const req = http.request({
+      host: '127.0.0.1', port, method: 'POST', path: docsApi.artifactMint(),
+      headers: { ...PWA_HEADERS, cookie: COOKIE, 'content-type': 'application/json' },
+    });
+    req.on('error', () => { /* the client destroys itself below */ });
+    req.end(JSON.stringify(ask()));
+    await began;
+    expect(sockets).toHaveLength(1);
+    const serverSideClosed = new Promise<void>((resolve) => { sockets[0]!.once('close', () => resolve()); });
+    req.destroy();
+    await serverSideClosed;
+    release();
+    // The continuation after the read is microtasks only; a few macrotask turns let it run to its end.
+    for (let i = 0; i < 5; i++) await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    expect(r.treeCalls).toHaveLength(1);
+    expect(r.store!.list(), 'the mint of a client that had gone made no record').toEqual([]);
+    expect(r.maskSeen, 'and drew no token').toEqual([]);
+  });
+
   it('mint: no later answer contains the token', async () => {
     const r = await rig();
     const m = await mint(r);
@@ -411,8 +465,9 @@ describe('artifact mint doors: the scope read and the mint (X5 A2.3)', () => {
     expect(r.store!.lookup(tok(1))).toBeNull();
     expect(r.store!.lookup(tok(2))).not.toBeNull();
     expect(r.store!.list()).toHaveLength(1);
-    // The mask checked the answer exactly as it was sent: the first draw's answer was refused, the second's was sent, and its
-    // expiry (the store's own, an idle hour on) was already in the answer the mask saw.
+    // The mask checked the answer that was sent: the first draw's answer was refused, the second's was sent. The route's
+    // provisional expiry equals the store's here only because this rig's clock does not move between the two reads (a live
+    // clock can differ by milliseconds, and the sent `expiresAt` is the store's; the mask alters strings only).
     expect(r.maskSeen).toHaveLength(2);
     expect(r.maskSeen.at(-1)).toEqual(m.json());
     expect(r.maskSeen.at(-1)).toMatchObject({ expiresAt: T0 + ARTIFACT_IDLE_MS });
