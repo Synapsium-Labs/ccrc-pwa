@@ -354,8 +354,8 @@ describe('ccrc auth on: the write, the restart and the proof', () => {
   });
 
   it('replaces a bare KEY= line and CCRC_AUTH=off rather than adding a second line', async () => {
-    // Review 3934 A8 (X3): the cookie line too, so no key is left twice.
-    const b = box('ccrc-auth-bare-', `${portLines()}CCRC_AUTH=off\nCCRC_RP_ID=\nCCRC_COOKIE_INSECURE=on\nCCRC_ORIGIN="http://localhost:${PORT}"\n`);
+    // Review 3934 A8 (X3): a bare cookie line too, so no key is left twice (one holding `on` already matches).
+    const b = box('ccrc-auth-bare-', `${portLines()}CCRC_AUTH=off\nCCRC_RP_ID=\nCCRC_COOKIE_INSECURE=\nCCRC_ORIGIN="http://localhost:${PORT}"\n`);
     const r = await runTty(b.home, ['auth', 'on']);
     expect(r.code, r.out).toBe(0);
     expect(bytes(envFile(b.home))).toBe(`${portLines()}${ON_LINES(PORT)}`);
@@ -664,6 +664,24 @@ describe('ccrc auth: a signal in the proof window (review 3934 F3)', () => {
       expect(spawnSync('flock', ['-n', join(b.home, '.ccrc', 'update.lock'), 'true']).status).toBe(0);
     });
   }
+
+  it('a signal after the copy is made and before the write changes nothing, restarts nothing and leaves no copy', async () => {
+    const b = box('ccrc-auth-sig-pre-', portLines());
+    const before = bytes(envFile(b.home));
+    // A cp that makes the copy, then waits, so the signal lands between the copy and the rename.
+    mkdirSync(join(b.home, '.local', 'bin'), { recursive: true });
+    writeFileSync(join(b.home, '.local', 'bin', 'cp'), '#!/bin/sh\n/usr/bin/cp "$@" || exit $?\n'
+      + 'case "$*" in *auth-restore*) : > "$HOME/cp-done"; sleep 3 ;; esac\n', { mode: 0o755 });
+    const { p, done } = startTty(b.home, ['auth', 'on']);
+    await waitFor(() => existsSync(join(b.home, 'cp-done')));
+    process.kill(p.pid, 'SIGTERM');
+    const r = await done;
+    expect(r.code, r.out).not.toBe(0);
+    expect(r.out).toMatch(/stopped by a signal before anything was written\. Nothing was changed/);
+    expect(bytes(envFile(b.home))).toBe(before);
+    expect(restarts(b.home)).toEqual([]);
+    expect(leftovers(b.home)).toEqual([]);
+  });
 
   it('refuses while a copy that a killed run left stands beside ccrc.env, naming it and what it is — on and off', async () => {
     const b = box('ccrc-auth-leftover-', portLines());

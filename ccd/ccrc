@@ -6428,7 +6428,7 @@ _auth_unit_sources() {   # <unit dir>
         done ;;
       PassEnvironment=*)
         for k in "${AUTH_SOURCE_KEYS[@]}"; do
-          [[ " ${t#PassEnvironment=} " =~ [[:space:]]$k[[:space:]] ]] && AUS_REASONS+=("$uf passes $k from the service manager (PassEnvironment=)")
+          [[ " ${t#PassEnvironment=} " =~ [[:space:]]${k}[[:space:]] ]] && AUS_REASONS+=("$uf passes $k from the service manager (PassEnvironment=)")
         done ;;
       EnvironmentFile=*)
         p="${t#EnvironmentFile=}"; p="${p#-}"; p="${p//%h/$HOME}"
@@ -6463,7 +6463,7 @@ _auth_unit_sources() {   # <unit dir>
         done ;;
       PassEnvironment=?*)
         for k in "${AUTH_SOURCE_KEYS[@]}"; do
-          [[ " ${line#PassEnvironment=} " =~ [[:space:]]$k[[:space:]] ]] && AUS_REASONS+=("systemd loaded ccrc.service passing $k from the service manager")
+          [[ " ${line#PassEnvironment=} " =~ [[:space:]]${k}[[:space:]] ]] && AUS_REASONS+=("systemd loaded ccrc.service passing $k from the service manager")
         done ;;
     esac
   done <<< "$out"
@@ -6799,7 +6799,7 @@ cmd_auth() {
     _ccrc_die "auth $sub: the restarted console did not prove the change: $why. The previous $dest was $back, and ccrc.service was restarted again: $again."
   fi
   [ -z "$bak" ] || rm -f -- "$bak"
-  AUTH_SIG_STATE=done
+  AUTH_SIG_STATE=proved
   trap - INT TERM HUP
 
   if [ "$sub" = on ]; then
