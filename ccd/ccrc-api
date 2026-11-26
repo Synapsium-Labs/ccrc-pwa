@@ -21,7 +21,7 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, one-hundred-and-three rows, and nothing else; the
+#   * The route comes from ROUTES below, one-hundred-and-four rows, and nothing else; the
 #     four claimant rows name the question door family's template, their only
 #     door since the old ones were retired (D-7324), refused here, unsent, when a
 #     current cap file says the server lacks `questions-v1` (D-7328); `runs
@@ -108,7 +108,7 @@ SAFE_RE='^[A-Za-z0-9_-]+$'
 # (`/api/questions/<ask|approval>-{id}/<rule|release>`): from Q3j it was their
 # fifth field, sent only while the server advertised `questions-v1` (D-7325), and
 # since the old doors were retired it is their path (D-7324). Every row has four.
-# One-hundred-and-three rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
+# One-hundred-and-four rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
 # derives the count from the table below and reds if this line or the bullet at
 # the top of this file states a different one. The original rows were chosen on
 # 2026-08-26 by measuring the skill corpora; the standing executable-corpus
@@ -383,6 +383,9 @@ declare -A ROUTES=(
   # The Overlord's cursor read of the one sequence (Overlord W1, sequence C): `--after <n>` and `--limit <m>`, each a canonical
   # non-negative integer (`bad-query` otherwise, unsent), and the pane's pair in the query after them, as the inbox's reads.
   [overlord.sequence]='GET|/api/overlord/sequence|no|after,limit'
+  # The Overlord's board (Overlord W1, PR B2): one composed read of the fleet, no keys of its own; the pane's pair rides the query,
+  # as the inbox's reads.
+  [overlord.board]='GET|/api/overlord/board|no|-'
 )
 
 # A Linear issue identifier, the `<REF>` of the five issue rows (D-7669): a team key that starts with a letter, a hyphen,
@@ -732,7 +735,10 @@ parse_timer() {   # verb, then the verb's arguments
 # bound passes here and is refused by the server; jq's `tojson` writes the delete character (U+007F) as six bytes where the
 # reader's JSON writes one, so a request of many such characters near the byte bound is refused here as `oversize` where
 # the server would take it; and an argument that is not valid UTF-8, which jq would change to U+FFFD, is refused here as
-# `bad-args` (it cannot reach the server as typed), when `iconv` is on PATH to tell. The pane's
+# `bad-args` (it cannot reach the server as typed), when `iconv` is on PATH to tell: it converts to UTF-16LE, a target that
+# refuses the two forms a UTF-8 to UTF-8 pass let through (a code point past U+10FFFF, the old five-byte form; review 3749 F1).
+# A project or session name is anchored at both ends of the string (`\A`, `\z`), so a name with a trailing newline is refused
+# here as the server's reader refuses it (review 3749 F2; jq's `$` also matched before a final newline). The pane's
 # pair goes LAST (review 2039 F7), and nothing else of it is taken: a flag that is not the grammar's is an argument.
 # Sets HISTORY_BODY, or refuses. NEVER call it inside $( ).
 OVERLORD_HISTORY_REQUEST_MAX_BYTES=8192   # shared/overlordHistory.ts, held equal by ccrc-api.test.ts
@@ -760,7 +766,7 @@ parse_overlord_history() {   # the verb, then the target, --agents and the verb'
   command -v jq >/dev/null 2>&1 || refuse 'no-jq' 'overlord history builds its body with jq, and jq is not on PATH; nothing was sent'
   if command -v iconv >/dev/null 2>&1; then
     for flag in "$@"; do
-      printf '%s' "$flag" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 \
+      printf '%s' "$flag" | iconv -f UTF-8 -t UTF-16LE >/dev/null 2>&1 \
         || refuse 'bad-args' 'overlord history: an argument is not valid UTF-8, and would not be sent as typed; nothing was sent'
     done
   fi
@@ -768,7 +774,7 @@ parse_overlord_history() {   # the verb, then the target, --agents and the verb'
   verdict=$(jq -cn --arg verb "$verb" --arg kind "$kind" --arg name "$name" --argjson agents "$agents" --argjson n "$#" \
     --argjson maxBytes "$OVERLORD_HISTORY_REQUEST_MAX_BYTES" --argjson maxArgs "$OVERLORD_HISTORY_ARGS_MAX" \
     --argjson maxChars "$OVERLORD_HISTORY_ARG_MAX_CHARS" "${named[@]}" '
-    def name_ok: test("^[A-Za-z0-9._-]{1,224}$") and . != "." and . != "..";
+    def name_ok: test("\\A[A-Za-z0-9._-]{1,224}\\z") and . != "." and . != "..";
     [range(1; $n + 1) as $i | $ARGS.named["a\($i)"]] as $a
     | ({verb: $verb}
       + (if $kind == "" then {} elif $kind == "all" then {target: {kind: "all"}}
@@ -1473,10 +1479,10 @@ main() {
     append_body_field 'byId' "$DERIVED_ID" 'the statement body is not a JSON object; byId cannot be added'
     append_body_field 'byUuid' "$DERIVED_UUID" 'the statement body is not a JSON object; byUuid cannot be added'
   fi
-  # THE OVERLORD INBOX ROWS' IDENTITY (and the sequence read's): the pane's, derived here, never typed. The reads carry the pair in the query after
+  # THE OVERLORD INBOX ROWS' IDENTITY (and the sequence and board reads'): the pane's, derived here, never typed. The reads carry the pair in the query after
   # any declared key (`--byId` is `unknown-query`); `acknowledge` is attributed to this pane and carries nothing else, so a
   # `--json` of any kind is refused `bad-body`, unsent, and the body is built here over `{}`, byId then byUuid, LAST.
-  if [[ "$key" == 'overlord.inbox' || "$key" == 'overlord.messages' || "$key" == 'overlord.sequence' ]]; then
+  if [[ "$key" == 'overlord.inbox' || "$key" == 'overlord.messages' || "$key" == 'overlord.sequence' || "$key" == 'overlord.board' ]]; then
     derive_identity
     query+="${query:+&}byId=$DERIVED_ID&byUuid=$DERIVED_UUID"
   fi
