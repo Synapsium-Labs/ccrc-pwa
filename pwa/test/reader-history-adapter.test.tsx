@@ -113,7 +113,7 @@ interface Rig {
 
 function rig(over: { files?: ReturnType<typeof fakeLoaders>; history?: DocsHistoryLoader['history'] } = {}): Rig {
   const inputs: ReaderMountInput[] = [];
-  const handle = { destroy: vi.fn(), setPrefs: vi.fn(), command: vi.fn() };
+  const handle = { destroy: vi.fn(), setPrefs: vi.fn(), command: vi.fn(), seed: { hosted: false as const }, follow: vi.fn() };
   const renderFn = vi.fn<ReaderDeps['render']>(async () => RENDERED);
   const mountFn = vi.fn<ReaderDeps['mount']>(async (_el, input) => {
     inputs.push(input);

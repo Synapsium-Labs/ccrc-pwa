@@ -186,6 +186,7 @@ export interface ReaderMountPlan {
   /** Whether the mount carries the doc's history: the version seed's commits and day filter, and the `changes` and
    *  `openVersion` adapters (completion plan Task 12). The reader lab's mounts never do. */
   readonly history: boolean;
+  readonly appearance: boolean;
 }
 
 /** The one decision: the Docs reader draws as the E17 reading says (`docsDrawFor`), waits `readerWatchdogMs(bytes)`, keeps
@@ -196,8 +197,13 @@ export function readerMountPlan(
   profile: ReaderMountProfile | undefined, bytes: number, chrome: ReaderChrome, e17: ReaderE17Reading,
 ): ReaderMountPlan {
   return profile === 'lab-draw'
-    ? { draw: 'auto', watchdogMs: READER_LAB_DRAW_WATCHDOG_MS, store: false, chrome: 'frame-bar', history: false }
-    : { draw: docsDrawFor(e17), watchdogMs: readerWatchdogMs(bytes), store: true, chrome, history: true };
+    ? { draw: 'auto', watchdogMs: READER_LAB_DRAW_WATCHDOG_MS, store: false, chrome: 'frame-bar', history: false, appearance: false }
+    : { draw: docsDrawFor(e17), watchdogMs: readerWatchdogMs(bytes), store: true, chrome, history: true, appearance: true };
+}
+
+/** Hosted only when the contract, the mount plan and the caller all permit it. */
+export function isHostedMount(plan: ReaderMountPlan, supported: boolean, hasRoot: boolean): boolean {
+  return supported && plan.appearance && hasRoot;
 }
 
 /** Whether the library's mount focuses the frame as it inserts it (the completion plan's D-8729). The Docs reader yields

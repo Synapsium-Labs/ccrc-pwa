@@ -12,7 +12,7 @@
 // and the post are both wrapped: a throw anywhere answers `threw` and the thrown name, a `post` that throws (a
 // structured clone's `DataCloneError`) is answered once more, and a throw from that second post is swallowed, so the
 // runner's budget answers the job. The runner adds `timeout`, `worker-unavailable` and `worker-failed`.
-import { render, scanRefs, type FrontEntry, type Heading, type ScanRefsResult } from '@synapsium-labs/docserver/render';
+import { render, scanRefs, type FrontEntry, type Heading, type ScanRefsResult } from '@synapsium-labs/pinax-lib/render';
 import { prescanMarkdown } from './markdownGuard';
 import { DOCS_RENDER_GATE_BYTES } from './markdownLimits';
 import type { ParseOutcome } from './markdownParse';

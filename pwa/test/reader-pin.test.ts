@@ -5,11 +5,11 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 const root = path.join(import.meta.dirname, '..');
-const LIB = '@synapsium-labs/docserver';
+const LIB = '@synapsium-labs/pinax-lib';
 const readJson = (rel: string): any => JSON.parse(readFileSync(path.join(root, rel), 'utf8'));
 
 describe('W8a: the shared Markdown library is pinned exactly (M8.12, pin half)', () => {
-  it('pwa/package.json pins @synapsium-labs/docserver at exactly 1.1.0', () => {
+  it('pwa/package.json pins @synapsium-labs/pinax-lib at exactly 1.1.0', () => {
     const pkg = readJson('package.json');
     expect(pkg.dependencies[LIB]).toBe('1.1.0');
     expect(pkg.devDependencies?.[LIB]).toBeUndefined();
