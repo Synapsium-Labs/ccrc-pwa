@@ -3968,6 +3968,15 @@ button.proj-card-pool::before {
    hyphens and spaces) wrap inside the box rather than run out of it sideways with no `…`. Below 900px nothing
    changes. */
 @media (min-width: 900px) {
+  /* AT A DESK THE RUNS LINE WRAPS RATHER THAN CRUSH (desktop polish wave 182). Refined's desk column carries the Runs
+     door, the class chooser and New project on that line, and at 1280 and 1440 the three do not fit (measured: the line
+     is 287 and 313 wide; the door's words are 73 to 124, the chooser 113, New project 130, with two 8 px gaps), so the
+     door's words were squeezed onto three and four lines in a 27 px box. Now the door is never narrower than its words,
+     and New project takes a second line, at its end, only where the three do not fit; the phone keeps its one line (its
+     height budget is pinned). In this block, the sheet's first desk block, beside the other desk rules. */
+  .fleet-runs-line { flex-wrap: wrap; row-gap: var(--sp-2); }
+  .fleet-runs-line .fleet-runs-row { flex: 1 0 auto; }
+  .fleet-runs-line .fleet-new-project { margin-inline-start: auto; }
   .sess-body .fit-full { display: inline; }
   .sess-body .fit-short { display: none; }
   .sess-label-fit,
