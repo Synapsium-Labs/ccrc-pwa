@@ -22,6 +22,8 @@ import { ProjectCard } from './ProjectCard';
 import { isRunClosed } from './runWords';
 import { useFolded, useRollupPrefs } from './foldState';
 import { useHoldView } from './useHoldView';
+import { useLandingLines } from './useLandingLines';
+import { landingLineHoldPart } from './landingLineView';
 import { useBoxClock } from './useBoxClock';
 import { cardBoxes, foldedCard } from './programmeBoxes';
 import { prunePrefs, rollupFleet, toggleChildren, toggleProject } from './rollup';
@@ -81,6 +83,9 @@ export function FleetCards({ selectedId, onOpen }: {
     [sessions, projects.knownProjects, activeRuns, acks]);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- `roll.next` stands for `roll.now`: it moves only at a boundary.
   const rollup = useMemo(() => rollupFleet(tree, rollupPrefs, roll.now, selectedId), [tree, rollupPrefs, selectedId, roll.next]);
+  // Landing order wave 5k (D-9108): every card project's landing line, one read each on the one poll primitive. Never
+  // spelled `landing` alone (`rings/pwa-one-owner`).
+  const landingLine = useLandingLines({ projects: tree.map((g) => g.project) });
   // Rule 4's reset: a stored ▾ made in the other activity class, or an open worker line whose coordinator left, is
   // dropped — from a FRESH frame only, never from a cached snapshot (`fleetFrameSeen`). `prunePrefs` answers null when
   // nothing changes, so this writes nothing on an ordinary frame.
@@ -106,8 +111,11 @@ export function FleetCards({ selectedId, onOpen }: {
       const { ranked } = cardBoxes(g.rows, g.runs, g.claimed, g.hues, boxNow, stallQuietMs, coordPaused);
       return foldedCard(ranked, [], []).keep.length;
     };
-    return [...rollup.cards].map(([p, c]) => `${p}:${c.collapsed ? `-${kept(p)}` : c.rows.length}`).join('|');
-  }, [tree, rollup, boxNow, stallQuietMs, coordPaused]);
+    // Wave 5k (F8, R8): a card's landing block, its rows and its status kind join its part; a card with no block keeps
+    // today's part byte for byte.
+    const line = (p: string): string => { const part = landingLineHoldPart(landingLine.states.get(p)); return part === '' ? '' : `~${part}`; };
+    return [...rollup.cards].map(([p, c]) => `${p}:${c.collapsed ? `-${kept(p)}` : c.rows.length}${line(p)}`).join('|');
+  }, [tree, rollup, boxNow, stallQuietMs, coordPaused, landingLine.states]);
   useHoldView(listRef, holdKey);
   // "Archive all" in a card's Released fold (workspace lifecycle spec §5.1):
   // the cards read the loop's in-flight set, which the chrome holds (D-5468).
@@ -214,6 +222,8 @@ export function FleetCards({ selectedId, onOpen }: {
           releasedOpen={folded.has(`${g.project}::released`)}
           onArchiveReleased={flows.openArchiveAll}
           archivingReleased={archiveAll.archiving.has(g.project)}
+          landingLine={landingLine.states.get(g.project)}
+          onLandingLineReload={landingLine.reload}
         />
       ))}
     </div>

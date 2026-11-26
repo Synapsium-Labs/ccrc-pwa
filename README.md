@@ -5972,7 +5972,13 @@ entry whose order names it directly, where one is recorded and reads; the answer
 journalled, and both work while sign-in is dark, recording `flag-off`. Neither chooses, reorders or brings forward the head: an
 order edge to a withdrawn entry stays outstanding, so its dependant waits, named in the read's `order.waits` with each target's
 entry id and PR, until a session declares its order again without that entry, which the feed records whoever does it, or the
-entry re-enters at its run's next verified pin and then lands or is closed; a run-less entry cannot re-enter (D-9047).
+entry re-enters at its run's next verified pin and then lands or is closed; a run-less entry cannot re-enter (D-9047). Since wave 5k
+the console draws the line on the fleet screen's project card, only for a project whose line has an open entry or the operator's
+pause: each open entry by pull request in the read's order, which one is next to land, what waits and on which withdrawn entry, and
+why the line is paused. It reads `GET /api/landing` for every known project, at once when the list of projects changes, every 60
+seconds, when the page is shown again and after each door's answer (D-9108). A read that fails is shown only over a line already
+drawn, as not read again (D-9109). Pause and resume are one tap; a withdrawal is a sheet that sends the pin time of the entry it
+shows, and then names who was told and who could not be.
 
 The main-red hold has one writer: a fresh, same-base `main-health` measurement applied through the radar lane. A next-to-land mail
 is sent once per exact episode, base and recipient; it tells a coordinator to re-read the line and is not merge permission. The

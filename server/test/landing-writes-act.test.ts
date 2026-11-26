@@ -54,6 +54,17 @@ describe('actLandingWrite (wave 5j-b)', () => {
     expect(s.seen).toEqual([{ mode: 'record-only', event: expect.objectContaining({ sessionId: '', title: 'landing-withdrawn: project-a #1', runId: null }) }]);
   });
 
+  it('a withdraw whose coordinator is a run raises the event with that run and no session (D-9110 carry)', () => {
+    const s = sink();
+    const command: Extract<LandingAuthorityCommand, { kind: 'withdraw' }> = { kind: 'withdraw', project: 'project-a', pr: 1, pinnedAt: 1001,
+      setBy: 'operator', actor: 'flag-off' };
+    const result: LandingWithdrawWrite = { ok: true, entry: entry({ state: 'withdrawn', runId: 7 }), previous: entry({ runId: 7 }), changed: true, seq: 6,
+      notices: [{ word: 'landing-withdrawn', entryId: 101, kind: 'queued', toId: 'lane-a', mailId: 1, deliveryId: 2 }],
+      coordinator: { kind: 'run', runId: 7, claimedBy: 'lane-a' } };
+    expect(actLandingWrite(command, 7, { write: answering(result), notice: s.notice })).toBe(result);
+    expect(s.seen).toEqual([{ mode: 'record-only', event: expect.objectContaining({ sessionId: '', title: 'landing-withdrawn: project-a #1', runId: 7 }) }]);
+  });
+
   it('a refusal raises nothing and is answered as the write gave it', () => {
     const s = sink();
     const command: Extract<LandingAuthorityCommand, { kind: 'withdraw' }> = { kind: 'withdraw', project: 'project-a', pr: 1, pinnedAt: 1,

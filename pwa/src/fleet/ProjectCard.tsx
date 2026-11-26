@@ -20,7 +20,7 @@
 // PROGRAMME BOXES (Task G2): a coordinator's open work is one box (`ProgrammeBox`), drawn first, most urgent first;
 // the workers of programmes elsewhere and the rows in no programme follow under their sub-headings. The decision is
 // `programmeBoxes.ts`'s; this maps over it with the one row renderer below. A box's movement readout ticks itself.
-import { Fragment, memo } from 'react';
+import { Fragment, memo, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { BareRow, Button, useNow } from '@ccrc/ui';
 import type {
@@ -40,6 +40,8 @@ import {
   cardAbroad, cardBoxes, fleetHues, foldedCard, rowRun, trayOf, type BoxState, type ProgHue, type ProgrammeBoxView, type SummaryRow,
 } from './programmeBoxes';
 import { ProgrammeBox } from './ProgrammeBox';
+import { LandingLine } from './LandingLine';
+import type { LandingCardState } from './landingLineView';
 import { SessionLine } from './SessionLine';
 import { sameCardProps } from './lineProps';
 import { openRunAt } from './openers';
@@ -128,6 +130,8 @@ function ProjectCardView({
   coordOf = () => null,
   frameSeen = false,
   rollup,
+  landingLine,
+  onLandingLineReload,
   onToggleChildren,
 }: {
   group: FleetGroup;
@@ -241,8 +245,15 @@ function ProjectCardView({
   rollup?: CardRollup;
   /** Open or close a coordinator's worker line, by the coordinator's id. */
   onToggleChildren?: (parentId: string) => void;
+  /** Landing order wave 5k: this project's landing line as last read (`useLandingLines`), absent while unread. Never
+   *  spelled `landing` alone (`rings/pwa-one-owner`). */
+  landingLine?: LandingCardState;
+  /** Re-read every card's line, after a door's answer. */
+  onLandingLineReload?: () => void;
 }): ReactNode {
   const collapsed = rollup?.collapsed ?? collapsedProp;
+  /** The card's own section: where the landing block's focus falls back once the block has gone (wave 5k, R6). */
+  const cardRef = useRef<HTMLElement>(null);
   // A measured row carries pool and placement from one `/api/projects` read.
   // Only a legacy row's forecast falls back to the global projection; no row
   // reads a pool value from the independently paced websocket frame.
@@ -450,6 +461,8 @@ function ProjectCardView({
 
   return (
     <section
+      ref={cardRef}
+      tabIndex={-1}
       className={cardClass}
       data-collapsed={collapsed || undefined}
       data-holds-selection={holdsSelection || undefined}
@@ -469,6 +482,7 @@ function ProjectCardView({
           now={nowMs}
           pinnedOpen={rollup?.pinnedOpen ?? false}
         />
+      {landingLine !== undefined && <LandingLine project={group.project} state={landingLine} onReload={onLandingLineReload} focusFallback={cardRef} />}
 
       {!collapsed && (
         <div className="proj-card-body">

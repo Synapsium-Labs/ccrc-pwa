@@ -20,6 +20,7 @@ import { TEST_ROSTER } from './rosterFixture';
 import { fleetTree } from '../src/fleet/fleetTree';
 import { NO_ROLLUP_PREFS, rollupCard } from '../src/fleet/rollup';
 import { WARN_GLYPH } from '@ccrc/ui';
+import { lineView as landingLineView, stateOf as landingStateOf } from './landingLineFixture';
 
 // vitest runs without globals, so RTL's auto-cleanup never registers itself —
 // without this, rerender/multi-render tests below leak DOM across `it` blocks.
@@ -1522,5 +1523,35 @@ describe('a project card draws no delegation row and no count of subagents (desk
     expect(parts.length, 'positive control: the fold is drawn').toBeGreaterThan(0);
     for (const t of parts) expect(t, t ?? '').not.toMatch(/delegated|worktrees/);
     expect(container.querySelectorAll('.proj-work')).toHaveLength(0);
+  });
+});
+
+// Landing order wave 5k, Task 7: the card's landing line, between its head and its body, outside the fold. The prop is
+// `landingLine`, never `landing` alone (`rings/pwa-one-owner`).
+describe('the landing line on the card (wave 5k)', () => {
+  const line = landingStateOf(landingLineView({ project: 'demo' }));
+  const region = (): HTMLElement | null => screen.queryByRole('region', { name: 'Landing line of demo' });
+  it('a line state draws the region between the card\'s head and its body', () => {
+    const { container } = render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} landingLine={line} />);
+    const r = region()!;
+    const head = container.querySelector('.proj-card-head')!;
+    const body = container.querySelector('.proj-card-body')!;
+    expect(head.compareDocumentPosition(r) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(r.compareDocumentPosition(body) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+  it('a collapsed card still draws it', () => {
+    render(<ProjectCard group={grp()} collapsed onOpen={() => {}} onActions={() => {}} landingLine={line} />);
+    expect(region()).not.toBeNull();
+  });
+  it('none, or no landingLine at all, draws none', () => {
+    render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} landingLine={{ kind: 'none' }} />);
+    expect(region()).toBeNull();
+    cleanup();
+    render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} />);
+    expect(region()).toBeNull();
+  });
+  it('the card\'s section takes focus by script only (tabIndex -1)', () => {
+    const { container } = render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('section')!.getAttribute('tabindex')).toBe('-1');
   });
 });
