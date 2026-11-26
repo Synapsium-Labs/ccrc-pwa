@@ -4685,6 +4685,76 @@ export const MIGRATIONS: readonly string[] = [
     WHERE resolvedAt IS NULL;
   INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('invariants', 'shadow', 0);
   `,
+
+  // ── 130: user_version 129 -> 130 ──────────────────────────────────────────
+  // The paste delivery recipe's capture lane (Desktop polish wave 178; task note docs/superpowers/programs/desktop-polish/
+  // paste-delivery.md section 7): `claude_build_deliveries`, one row per (build, part), the recipe's results beside the trust
+  // table and never in it. `claude_builds` is NOT altered, and a delivery result never writes a trust row. ONE writer, the
+  // capture lane, through `coord/claudeBuildDeliveriesStore.ts`'s `markDeliveryAttempt` and `recordDelivery` (`CoordStore`
+  // keeps the delegates). `result` is the result's JSON, written only from a result the one reader accepted and the recipe
+  // judged current; `version`, `word`, `result` and `at` are set together, and null on a row that holds attempts only.
+  // A NEW TABLE only: an older build opening a file at this entry's version takes rule 3 (it warns, reads as-is and migrates
+  // nothing) and never names it. The slot is the next free one by position on `main`; whoever lands second renumbers.
+  // `release` is the release tag of the test box that ran the stored result (the result's own `release`, review 3882 F5, the
+  // coordinator's ruling), null when that box could not read it.
+  // RE-MEASURE the slot before merge (it must print 129, the count before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE claude_build_deliveries (
+    build         TEXT    NOT NULL,
+    part          INTEGER NOT NULL CHECK (part >= 0),
+    version       TEXT,
+    release       TEXT,
+    word          TEXT,
+    result        TEXT,
+    at            INTEGER,
+    attempts      INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    lastAttemptAt INTEGER,
+    notSent       TEXT,
+    PRIMARY KEY (build, part)
+  );
+  `,
+
+  // ── 131: user_version 130 -> 131 ──────────────────────────────────────────
+  // X2 P4.3: one console-wide Docs settings row. No seed: absence means empty.
+  // RE-MEASURE the slot before merge (it must print 130 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE docs_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    body TEXT NOT NULL,
+    updatedAt INTEGER NOT NULL
+  );
+  `,
+
+  // ── 132: user_version 131 -> 132 ──────────────────────────────────────────
+  // The Overlord's readiness word (spec §6.4, H20, C56, C57; plan `docs/superpowers/plans/2026-11-14-overlord-w1/
+  // w1-readiness.md` Task 2): `overlord_readiness`, one row per change of word, stamped on `overlord_sequence` in its own
+  // transaction, with `pushedAt` on an episode's first `dead` row; and `overlord_readiness_items`, which operator item the lane
+  // raised for which cause and how it ended. ONE writer, `coord/overlordReadinessStore.ts`, called by the readiness lane alone.
+  // The word is checked by the writer against `READINESS_WORDS`, never by SQL, so a new word is a row of the map. NEW TABLES
+  // only: an older build opening a file at this entry's version takes rule 3 and never names them. The slot is the next free
+  // one by position on `main`; whoever lands second renumbers. RE-MEASURE the slot before merge (it must print 131 before this
+  // entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE overlord_readiness (
+    id INTEGER PRIMARY KEY, sessionId TEXT, word TEXT NOT NULL, why TEXT, untilAt INTEGER, strandCause TEXT,
+    restartable INTEGER NOT NULL DEFAULT 0, at INTEGER NOT NULL,
+    seq INTEGER,       -- the overlord_sequence line stamped in the same transaction
+    pushedAt INTEGER   -- set only on an episode's first dead row, in the transaction that writes it
+  );
+  CREATE INDEX overlord_readiness_at ON overlord_readiness (at);
+  CREATE TABLE overlord_readiness_items (
+    id INTEGER PRIMARY KEY, item TEXT NOT NULL CHECK (item IN ('stranded', 'count', 'hold')),
+    key TEXT NOT NULL, itemId INTEGER NOT NULL, raisedAt INTEGER NOT NULL, settledAt INTEGER,
+    closedBy TEXT CHECK (closedBy IN ('lane', 'operator'))
+  );
+  CREATE UNIQUE INDEX overlord_readiness_items_open ON overlord_readiness_items (item, key) WHERE settledAt IS NULL;
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

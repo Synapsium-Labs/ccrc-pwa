@@ -373,7 +373,9 @@ describe('the scanner is looking at something', () => {
     // 76 since `GET`/`POST /api/coord/plain-auto-memory` (Overlord W1a launch profiles PR B, Settings › Automation › Auto memory for
     // plain sessions): session-gated, NOT EXEMPT, no box token.
     // 78 since `GET`/`POST /api/coord/coordinator-advisor` (the coordinator advisor, D-8967): session-gated, NOT EXEMPT, no box token.
-    expect(scanRoutes('coord/routes.ts').length).toBe(78);
+    // 80 since landing order wave 5j-b (2026-11-25, D-9049): `POST /api/landing/pause` and `POST /api/landing/withdraw`, the
+    // operator's, session-gated, NOT EXEMPT, no box token.
+    expect(scanRoutes('coord/routes.ts').length).toBe(80);
     // 5 in `update/routes.ts` (update-management W2, design 2026-09-20 §12):
     // `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh`
     // and `POST /api/updates/ack`, session-only and NOT EXEMPT, plus the
@@ -401,7 +403,8 @@ describe('the scanner is looking at something', () => {
     // `POST /api/docs-folders`, `DELETE /api/docs-folders/:label` and `GET /api/docs-folders/:label/{tree,file,range}`, the
     // same class on the docs plugin's own instance, so with no marker header they answer 403 `foreign-request` too. Past the
     // marker, every read and the add refuse `auth-off` while sign-in is dark; the add takes the account gate's step-up.
-    expect(scanRoutes('docs/routes.ts').length, 'auth-gate: docs/routes.ts registers 13').toBe(13);
+    // 15 with the two settings doors (X2 P4.3): session-gated, and on the same request-marker check.
+    expect(scanRoutes('docs/routes.ts').length, 'auth-gate: docs/routes.ts registers 15').toBe(15);
     // 1 in `linear/routes.ts` (named workspaces S4, design 2026-10-20 §4.2): `GET /api/linear/resolve`, the
     // ticket-title preview read. Session-gated and NOT EXEMPT, no box token, `Cache-Control: no-store`.
     // 5 since S4b (design §5.1): the connection's `GET`, `PUT`, `POST …/check` and `DELETE /api/linear/connection`, all
@@ -802,7 +805,6 @@ describe('the scanner is looking at something', () => {
     // machine lanes IN EXEMPT: the HTTP half 298 -> 301, the gated count stays 190 (301 - 111), the exempt-HTTP count 108 -> 111.
     // 305 with the draft-review read door (X3 R1), in `review/routes.ts`: class 9, not a box-token lane. The HTTP half 301 -> 302,
     // the gated count stays 190 (302 - 112), the exempt-HTTP count 111 -> 112.
-    expect(scanRoutes('review/routes.ts').map(key)).toEqual(['POST /api/review/open']);
     // 306 with the Overlord's history door (Overlord W1, PR B1), in `coord/overlordHistoryRoutes.ts`, a routes file of its own:
     // `POST /api/overlord/history`, one box-token machine lane IN EXEMPT: the HTTP half 302 -> 303, the gated count stays 190
     // (303 - 113), the exempt-HTTP count 112 -> 113.
@@ -822,7 +824,16 @@ describe('the scanner is looking at something', () => {
     // HTTP half 313 -> 320, the gated count 197 -> 204, the exempt-HTTP count stays 116.
     // 324 since programme lifecycle W3's backfill door in `coord/ledgersRoutes.ts`, session-gated and NOT EXEMPT: the HTTP half
     // 320 -> 321, the gated count 204 -> 205 (321 - 116), the exempt-HTTP count stays 116.
-    expect(ROUTES.length).toBe(324);
+    // 326 since landing order wave 5j-b (2026-11-25, D-9049): the operator's pause and withdraw doors in `coord/routes.ts`,
+    // session-gated and NOT EXEMPT, no box token: the HTTP half 321 -> 323, the gated count 205 -> 207, the exempt-HTTP count stays 116.
+    // 329 with the review page's three routes (X3 R2), in `review/routes.ts`: `GET /review` EXEMPT as class 9, `GET /review.html`
+    // and `GET /review/` gated 404s. The HTTP half 323 -> 326, the gated count 207 -> 209, the exempt-HTTP count 116 -> 117.
+    expect(scanRoutes('review/routes.ts').map(key)).toEqual(['POST /api/review/open', 'GET /review', 'GET /review.html', 'GET /review/']);
+    // 331 with both Docs settings doors (X2 P4.3): session-gated and NOT EXEMPT, no box token. The HTTP half
+    // 326 -> 328, gated 209 -> 211 (328 - 117); the exempt-HTTP count stays 117.
+    // 332 since the Overlord's readiness read, `GET /api/overlord/readiness` in `coord/overlordRoutes.ts`, session-gated and NOT
+    // EXEMPT, no box token: the HTTP half 328 -> 329, the gated count 211 -> 212 (329 - 117), the exempt-HTTP count stays 117.
+    expect(ROUTES.length).toBe(332);
     expect(scanRoutes('laneModelsRoutes.ts').length).toBe(1);
     expect(scanRoutes('coord/delegationBackfillRoutes.ts').length).toBe(2);
     expect(scanRoutes('coord/approvalCensusRoutes.ts').length).toBe(1);
@@ -882,6 +893,7 @@ describe('the scanner is looking at something', () => {
       'POST /api/docs/:project/refresh',
       'GET /api/docs/:project/history',
       'GET /api/docs/:project/range',
+      'GET /api/docs/settings', 'PUT /api/docs/settings',
       // The sixth file's one (named workspaces S4): a scanner that stopped reading `linear/routes.ts` would lose it.
       'GET /api/linear/resolve',
       // …and its four Settings routes for workspace keys (#1444, plan task LK11), lost with it.
@@ -1013,7 +1025,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 324 scanned + the static wildcard when the bundle is built.
+    // 332 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1158,6 +1170,7 @@ describe('EXEMPT is complete in both directions', () => {
       'GET /api/timers',
       'GET /api/updates/intent/:nodeId',
       'GET /health',
+      'GET /review',
       'POST /api/approvals',
       'POST /api/auth/login',
       'POST /api/auth/passkey/assert/finish',
@@ -1432,10 +1445,13 @@ describe('the landing write doors: exempt from the session gate, and the route s
       expect(EXEMPT.get(k), k).not.toContain('EXEMPT-BUT-AUTHENTICATED');
       expect(EXEMPT_BUT_AUTHENTICATED.has(k), k).toBe(false);
     }
+    // Since landing order wave 5j-b (D-9049) `SESSION_ONLY` holds the operator's two doors, `/api/landing/pause` and
+    // `/api/landing/withdraw`; neither literal may hold these two box-token lanes.
     for (const name of ['UNGATED', 'SESSION_ONLY']) {
       const m = new RegExp(`const ${name} = new Set\\(\\[([^\\]]*)\\]\\)`).exec(pause);
       expect(m, `the ${name} literal moved`).not.toBeNull();
-      expect(m![1]).not.toContain('/api/landing/');
+      expect(m![1]).not.toContain('/api/landing/entries');
+      expect(m![1]).not.toContain('/api/landing/order');
     }
   });
 
@@ -1826,7 +1842,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 321 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 329 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1890,7 +1906,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 321 HTTP routes, not the 116 exempt.
+          //    is not itself flag-aware — the assertion that covers all 329 HTTP routes, not the 117 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

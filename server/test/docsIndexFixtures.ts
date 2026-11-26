@@ -39,6 +39,8 @@ export const DOCS_INDEX_READY: DocsIndexOk = {
       default: { name: 'main', via: 'default:origin-head', commit: ZERO_SHA },
       sections: { specs: 2, plans: 1, 'product-design': null, conventions: null, vision: null, promise: null },
       fetch: { okAgeMs: 0, lastOutcome: 'ok' },
+      // X2 P4.1: the newest names per section with a count, newest first (name descending).
+      newest: { specs: ['two.md', 'one.md'], plans: ['plan.md'] },
     },
     { project: 'nongit', state: 'not-a-git-repo', github: { state: 'none' }, sectionsOnDisk: ['specs'] },
   ],

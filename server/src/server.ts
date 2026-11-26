@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import fastifyWebsocket from '@fastify/websocket';
 import fastifyMultipart from '@fastify/multipart';
@@ -85,9 +86,9 @@ import { heldFor } from './coord/heldFor.js';
 import { registerUpdateRoutes } from './update/routes.js';
 import {
   composeDocs, readTree, registerDocsFolderReadRoutes, registerDocsFolderRegistryRoutes, registerDocsReadRoutes,
-  registerDocsRefreshRoute,
+  registerDocsRefreshRoute, registerDocsSettingsRoutes,
 } from './docs/routes.js';
-import { registerReviewOpenRoute } from './review/routes.js';
+import { registerReviewOpenRoute, registerReviewPageRoutes } from './review/routes.js';
 import { installDocsRequestPolicy, installDocsResponsePolicy } from './docs/hooks.js';
 import { openReviewStore } from './review/store.js';
 import { startReviewSweep } from './review/sweep.js';
@@ -320,9 +321,11 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   // A session's pending timers, its own read and the operator's (Overlord W1a, the timers piece): each note a session wrote.
   '/api/timers', '/api/sessions/:id/timers',
   // The portfolio (Overlord W1): programme titles a coordinator wrote, and blocking items' titles a session wrote.
-  '/api/portfolio', '/api/overlord/ladder',
+  '/api/portfolio', '/api/overlord/ladder', '/api/overlord/readiness',
   // The operator's messages, one by its id (W1 inbox piece): the text is the operator's own words, masked by the one answer hook.
   '/api/overlord/inbox', '/api/overlord/messages/:id',
+  // Docs settings (X2 P4.3): the link rules are operator-entered text, not fixed server vocabulary.
+  '/api/docs/settings',
 ]);
 /** Whether the one answer hook masks a route's answer (D-5995). */
 export const answerMasked = (method: string, url: string | undefined): boolean =>
@@ -2449,7 +2452,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // place, and a replaced one too. Registered UNCONDITIONALLY: before the handshake, and in local mode with no
   // measured caps, the adapter itself refuses every call before any exec. The read registration is never handed a
   // fetcher; only the refresh is.
-  const docs = composeDocs({ runCcd: deps.runCcd, get fleetState() { return deps.fleetState; } });
+  const docsCoord = deps.coord;
+  const docs = composeDocs({ runCcd: deps.runCcd, get fleetState() { return deps.fleetState; } }, {
+    settings: docsCoord == null ? undefined : {
+      // Call at use, like the neighbouring ports: a partial store in an unrelated fixture need not implement these.
+      read: () => docsCoord.readDocsSettings(),
+      write: (...args) => docsCoord.writeDocsSettings(...args),
+    },
+  });
   await app.register(async (app) => {
     installDocsRequestPolicy(app);
     installDocsResponsePolicy(app);
@@ -2462,6 +2472,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     registerDocsFolderReadRoutes(app, docs.folderReaders, docs.lanes, { signIn: folderSignIn, hasSession: folderSession });
     registerDocsFolderRegistryRoutes(app, docs.folderRegistries, docs.lanes,
       { gate: accountGate, signIn: folderSignIn, hasSession: folderSession });
+    registerDocsSettingsRoutes(app, {
+      ...docs.settings, gate: accountGate, signIn: folderSignIn, hasSession: folderSession,
+      now: () => deps.time.clock.wall(),
+      maskChanges: (answer) => !isDeepStrictEqual((deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(answer), answer),
+    });
   });
   registerReaderLabRoutes(app, readerLab);
   // The operator's character choice (the Overlord face plan, Task 6), from its own file: two session-gated routes, no box token.
@@ -2470,7 +2485,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // path as `stopCreated`, and the first prompt through the renewal lane's `SessionHost`.
   registerOverlordRoutes(app, {
     gate: accountGate, identity, serial: coordRoutes.serial, ...overlordStore, exchange: deps.overlordAuthorityExchange, consoleFacts: (req) => ({ armed: deps.cfg.authEnabled, device: deps.cfg.authEnabled ? sessionAuth(req).device : null }), host: renewalHostOf(deps, deps.coord ?? { startsOf: () => ({ ok: false, detail: 'no coordination store' }) }, null),
-    ladder: ladderDeps, restore: deps.overlordRestore,
+    ladder: ladderDeps, restore: deps.overlordRestore, readiness: () => deps.overlordReadiness?.read() ?? null,
     // Read at call time, as the continuity routes read `deps.time`: a test server may hand none.
     clock: { wall: () => deps.time.clock.wall() }, entropy: { uuid: () => deps.time.entropy.uuid(), hex: (n) => deps.time.entropy.hex(n) }, dec: pwaDec,
     body: overlordBody,
@@ -4650,7 +4665,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   // Static PWA (populated by Plan 2's build): serve dist-pwa/ at / with SPA
   // fallback to index.html; absent -> skip (API-only mode).
-  const pwaRoot = findPwaRoot();
+  const pwaRoot = deps.pwaRoot !== undefined ? deps.pwaRoot : findPwaRoot();
   if (pwaRoot) {
     // No size/mtime validators: a release's sw.js kept the same weak ETag, so no deploy reached a
     // browser with the worker installed (pwaStatic.ts).
@@ -4680,6 +4695,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     ? { store: review.store, wall: () => reviewClock.wall() }
     : null;
   registerReviewOpenRoute(app, reviewAccess);
+  registerReviewPageRoutes(app, pwaRoot);
   const reviewAbort = new AbortController();
   const node = docs.readers.primary;
   const reviewSweep = reviewAccess === null ? null : startReviewSweep(reviewAccess.store, {

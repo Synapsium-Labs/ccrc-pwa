@@ -108,7 +108,7 @@ const causeOf = (m: Mood, f: MoodFacts): string => {
  *  (Dizzy's and Crying's limit arm own them). Keyed by cause so a new `RestartCause` is a compile error until it is placed. */
 const DEATH_CAUSE: Readonly<Record<RestartCause, boolean>> = {
   oom: true, 'tmux-server': true, exited: true, unknown: true,
-  'swap-auto-home': false, 'swap-auto-rescue': false, 'swap-auto': false, 'swap-manual': false, 'limit-resume': false,
+  'swap-auto-home': false, 'swap-auto-rescue': false, 'swap-auto-provider': false, 'swap-auto': false, 'swap-manual': false, 'limit-resume': false,
 };
 
 /** When a dead, unchosen session's process ended, or null: `dead` and neither asleep nor stopped on purpose, with a recent

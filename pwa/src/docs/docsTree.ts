@@ -3,8 +3,8 @@
 // counts string. Every list of sections is derived from L0's `DOC_SECTION_SLUGS`, and the label and order tables are
 // `Record`s over its type, so a seventh section is a compile error here until it has both. No React, no DOM, no state.
 import {
-  DOC_SECTION_SLUGS, entryView,
-  type DocContentClass, type DocSectionSlug, type DocsEntry, type DocsPageLocation, type DocsTreeOk, type DraftsFacts,
+  DOC_SECTION_SLUGS, DOCS_INDEX_NEWEST_PER_SECTION, entryView,
+  type DocContentClass, type DocSectionSlug, type DocsEntry, type DocsIndexRow, type DocsPageLocation, type DocsTreeOk, type DraftsFacts,
   type EntryMode, type EntryView, type GithubTarget,
 } from '../../../shared/docs';
 
@@ -35,6 +35,7 @@ export const CLASS_GLYPH: Readonly<Record<DocContentClass, string>> = {
   raster: '▣',
   svg: '◇',
   html: '⧉',
+  pdf: '▤',
   text: '≡',
   other: '·',
 };
@@ -158,4 +159,57 @@ export function githubTargetFor(page: DocsPageLocation, tree: DocsTreeOk): Githu
 /** The last segment of a section-relative path: a leaf's file name, and the name Download saves it under. */
 export function leafName(path: string): string {
   return path.slice(path.lastIndexOf('/') + 1);
+}
+
+/** A leaf name read as a title (X2 P4.1, spec §2.1 I3): the extension and a leading `YYYY-MM-DD-` come off, and every `-` and
+ *  `_` becomes a space, runs collapsed. An extension is the last `.` followed by 1 to 10 letters or digits (at least one a
+ *  letter) and nothing else, never a dotfile's whole name, so `v1.0-notes` and `release-1.2.3` keep their dots. The date is
+ *  its own label (`'YYYY-MM-DD'`, else null). A name that leaves nothing reads as itself, whole, with no date label; a name
+ *  whose stem is only a date keeps the date label and reads as itself. `name` is a leaf name, never a path. */
+export function docTitle(name: string): { title: string; date: string | null } {
+  const dot = name.lastIndexOf('.');
+  const stem = dot > 0 && /^(?=.*[A-Za-z])[A-Za-z0-9]{1,10}$/.test(name.slice(dot + 1)) ? name.slice(0, dot) : name;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(stem)) return { title: name, date: stem };
+  const m = /^(\d{4}-\d{2}-\d{2})-/.exec(stem);
+  const body = m === null ? stem : stem.slice(m[0].length);
+  const title = body.replace(/[-_]+/g, ' ').replace(/ {2,}/g, ' ').trim();
+  return title === '' ? { title: name, date: null } : { title, date: m === null ? null : m[1]! };
+}
+
+/** One section's newest names from an index row (X2 P4.1, spec §5.1): `names` as received (newest first, at most
+ *  `DOCS_INDEX_NEWEST_PER_SECTION`, never re-sorted), and `more` the docs the count holds beyond them. */
+export interface IndexNewest {
+  readonly slug: DocSectionSlug;
+  readonly names: readonly string[];
+  readonly more: number;
+}
+
+/** THE ONE READER of `DocsIndexRow.newest` (the wire's absence-permits rule, as `presentSectionCounts` is for `sections`):
+ *  absent, nothing. Otherwise, in `DOC_SECTION_SLUGS` order, only a section the row's counts carry above 0 and whose names
+ *  the row sent, its first five names and `more` = the count less the names shown, never negative. A project whose `newest`
+ *  the wire cap dropped (ccd drops a whole project's, from the last project backwards) has the field absent, so it reads as
+ *  nothing, its counts still whole in `sectionCountsText`. A field that is not an array, or an entry that is not a string
+ *  (a newer or odd ccd), is left out, never a crash. */
+export function indexNewest(row: DocsIndexRow): readonly IndexNewest[] {
+  const newest = row.newest;
+  if (newest === undefined || newest === null || row.sections === undefined) return [];
+  return presentSectionCounts(row.sections).flatMap(([slug, n]) => {
+    const sent: unknown = newest[slug];
+    if (n === null || n <= 0 || !Array.isArray(sent)) return [];
+    const names = (sent as unknown[]).filter((x): x is string => typeof x === 'string').slice(0, DOCS_INDEX_NEWEST_PER_SECTION);
+    if (names.length === 0) return [];
+    return [{ slug, names, more: Math.max(0, n - names.length) }];
+  });
+}
+
+/** A project page's docs of one section (X2 P4.1, spec §5.2): every file `entryView` lists in `mode`, at any depth, newest
+ *  first (descending code-unit order of the section-relative path), from the tree answer the page already holds. */
+export function sectionDocs(
+  entries: readonly DocsEntry[], section: DocSectionSlug, mode: EntryMode, drafts: DraftsFacts,
+): readonly { entry: DocsEntry; view: EntryView }[] {
+  return entries
+    .filter((e) => e.section === section)
+    .map((entry) => ({ entry, view: entryView(entry, drafts, mode) }))
+    .filter((x) => x.view.listed)
+    .sort((a, b) => -byName(a.entry.path, b.entry.path));
 }

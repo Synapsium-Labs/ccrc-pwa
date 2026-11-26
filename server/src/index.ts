@@ -34,6 +34,7 @@ import { witnessLinkOver } from './coord/overlordAuthorityWitnessLink.js';
 import type { PrivacyJournalHead } from './coord/privacyJournalHead.js';
 import { OverlordRestoreState } from './coord/overlordRestoreState.js';
 import { invariantMonitorOver } from './coord/invariantLane.js';
+import { readinessLaneOver } from './coord/overlordReadinessWiring.js';
 import { bootBoxToken } from './token/boot.js';
 import { BoxTokenDriver } from './token/driver.js';
 import { fileBothRoleWriter, fileTokenStore, tokenPaths } from './token/files.js';
@@ -595,6 +596,7 @@ deps.invariantMonitor = invariantMonitorOver({
   db: coordDb, coord, journal: overlordAuthority, readJournal: () => overlordAuthority.readVerified(), guardState: () => overlordAuthorityGuard.state(),
   clock: time.clock, entropy: time.entropy, log: (line) => console.warn(line),
 });
+deps.overlordReadiness = readinessLaneOver({ db: coordDb, coord, deps, operatorModel: operatorModel.store, limits: () => watcher.currentLimits() });   // the readiness word (§6.4)
 deps.responseStamp = () => responseStampNow(responseBoot, overlordRestore.restoreGeneration());
 const app = await buildServer(deps, bus, watcher);
 watcher.start();

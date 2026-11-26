@@ -26,12 +26,23 @@
 // row. A `fail` that gives up raises ONE push notice opening Settings, keyed by build and attempt (`hasNotice`, read before
 // the write), so a restart never repeats it and an operator's re-capture that fails again raises its own.
 //
+// THE DELIVERY CAPTURE (Desktop polish wave 178; `shared/deliveryLane.ts` decides, this file acts). After the trust part, and
+// ONLY when this pass sent no trust job (`nextCaptureJob` gave none), `nextDeliveryJob` names at most ONE (build, part) of the
+// paste delivery recipe, sent through the same transport. So a pass makes at most one capture, trust first, and the pass's
+// `inflight` guard keeps at most one delivery capture in flight for the box: a sweep that comes while one is out sends
+// nothing. The result is read by its one reader (`readDeliveryCaptureResult`) and judged by `deliveryResultCurrency`; only a
+// current one is stored (`recordDelivery`). A DELIVERY RESULT NEVER TOUCHES A TRUST ROW: it never records a verdict, stamps a
+// trust attempt, requeues a build, raises an item or pushes.
+//
 // `watch.ts` owns one of these and calls `sweep()` from its tick beside the roll, never awaited.
 import {
   BUILD_CAPTURE_OUTPUT_MAX, captureNextAct, capturesToRetry, captureTryOf, givenUpToTell, nextCaptureJob,
   readBuildCaptureResult, unrecordedBuilds, type BuildCaptureJob, type BuildCaptureNotSent, type BuildCopyFailure,
   type CapturePassStep, type ClaudeBuildRecord,
 } from '../../shared/claudeBuildTrust.js';
+import { nextDeliveryJob } from '../../shared/deliveryLane.js';
+import { deliveryResultCurrency } from '../../shared/deliveryCapture.js';
+import { readDeliveryCaptureResult } from '../../shared/deliveryResult.js';
 import type { WatcherCoordPort } from './coord/ports.js';
 import {
   openUntrustedBuildItems, UNTRUSTED_BUILD_ITEM_PROGRAMME, untrustedBuildItemsToRaise, untrustedBuildItemsToSettle,
@@ -42,8 +53,9 @@ import { notify, type NoticeDeps } from './notice.js';
 export const BUILD_CAPTURE_SWEEP_MS = 60_000;
 
 /** Why the transport brought back nothing it could judge: a not-sent word (nothing was sent), or `unanswered` (the job went
- *  out and no answer came back). */
-export type BuildCaptureUnavailable = BuildCaptureNotSent | 'unanswered';
+ *  out and no answer came back). `recipe-not-run` is a DELIVERY job's word alone (`deliveryResult.ts#DeliveryNotSent`): the box
+ *  was reached and does not run the recipe. The trust loop below never receives it. */
+export type BuildCaptureUnavailable = BuildCaptureNotSent | 'recipe-not-run' | 'unanswered';
 
 /** What the transport answers: the runner's answer, unread (the lane reads it through `readBuildCaptureResult`), or why
  *  there is none. */
@@ -67,7 +79,7 @@ export interface BuildCopyTransport {
 
 export interface BuildCaptureLaneDeps extends NoticeDeps {
   readonly coord?: Pick<WatcherCoordPort, 'claudeBuilds' | 'noteClaudeBuildsSeen' | 'markClaudeBuildAttempt'
-    | 'recordClaudeBuildVerdict' | 'requeueClaudeBuild' | 'hasNotice' | 'recordFeedEvent' | 'itemsFor' | 'moveItem' | 'raiseItem'> | undefined;
+    | 'recordClaudeBuildVerdict' | 'requeueClaudeBuild' | 'claudeBuildDeliveries' | 'markDeliveryAttempt' | 'recordDelivery' | 'hasNotice' | 'recordFeedEvent' | 'itemsFor' | 'moveItem' | 'raiseItem'> | undefined;
   /** Absent (a test, a script): rows are recorded and no job is sent. */
   readonly buildCapture?: BuildCaptureTransport | undefined;
   /** Absent: a `build-absent` refusal is answered `no-admin-lane`, and nothing is copied. */
@@ -115,7 +127,8 @@ export class BuildCaptureLane {
     this.raiseItems(coord, records, versions, at);
     const transport = d.buildCapture;
     const build = transport === undefined ? null : nextCaptureJob(records, at);
-    if (transport === undefined || build === null) return;
+    if (transport === undefined) return;
+    if (build === null) { await this.deliveryPass(coord, transport, records, at); return; }
     // One pass at a time (`inflight`), so the try is stamped after the pass's acts: it says whether a job actually went out.
     // Each act is the decider's (`captureNextAct`): the capture, and after a `build-absent` the copy and the capture again.
     const steps: CapturePassStep[] = [];
@@ -123,7 +136,7 @@ export class BuildCaptureLane {
     for (let act = captureNextAct(steps); act !== 'stop'; act = captureNextAct(steps)) {
       if (act === 'copy') { steps.push(await this.copy(d.buildCopy, build)); continue; }
       try { answer = await transport.capture({ build }); } catch { answer = { kind: 'unavailable', why: 'unanswered' }; }
-      steps.push(answer.kind === 'unavailable' && answer.why !== 'unanswered' ? answer.why : 'sent');
+      steps.push(answer.kind === 'unavailable' && answer.why !== 'unanswered' && answer.why !== 'recipe-not-run' ? answer.why : 'sent');
     }
     if (!coord.markClaudeBuildAttempt(build, at, captureTryOf(steps))) return;
     if (answer === null || answer.kind === 'unavailable') return;
@@ -139,6 +152,42 @@ export class BuildCaptureLane {
     if (row === undefined || !givenUpToTell(row, versions)) return;
     this.raiseItems(coord, after, versions, at);
     this.pushGivenUp(d, coord, row);
+  }
+
+  /** The delivery recipe's one job of a pass, when no trust job went out (the caller's `build === null`): the decider's
+   *  (build, part), sent through the same transport, the attempt stamped after the send, then what came back. Nothing here
+   *  reads or writes a trust row. */
+  private async deliveryPass(
+    coord: NonNullable<BuildCaptureLaneDeps['coord']>, transport: BuildCaptureTransport, records: readonly ClaudeBuildRecord[], at: number,
+  ): Promise<void> {
+    const job = nextDeliveryJob(records, coord.claudeBuildDeliveries(), at);
+    if (job === null) return;
+    const { build, part } = job;
+    let answer: BuildCaptureAnswer;
+    try { answer = await transport.capture({ build, recipe: 'delivery', part }); } catch { answer = { kind: 'unavailable', why: 'unanswered' }; }
+    // A not-sent word stamps the try only; an answer, or `unanswered`, is one counted attempt, spaced by the hour. A refused
+    // stamp ends the pass before anything is recorded, as the trust loop's does (call 1253, condition 1).
+    if (!coord.markDeliveryAttempt(build, part, at, answer.kind === 'unavailable' && answer.why !== 'unanswered' ? answer.why : 'sent')) return;
+    if (answer.kind === 'unavailable') {
+      if (answer.why === 'recipe-not-run') {
+        console.warn(`ccrc-server: delivery capture: ${build} part ${part}: the box does not run the delivery recipe — nothing was sent, asked again after the spacing`);
+      }
+      return;
+    }
+    const result = readDeliveryCaptureResult(answer.result, build, part);
+    if (result === null) {
+      console.warn(`ccrc-server: delivery capture: the answer for ${build} part ${part} is not a delivery result — no row is stored`);
+      return;
+    }
+    switch (deliveryResultCurrency(result)) {
+      case 'current':
+        if (!coord.recordDelivery(result, this.now())) console.warn(`ccrc-server: delivery capture: the result for ${build} part ${part} could not be stored — asked again after the spacing`);
+        return;
+      case 'another-recipe': return;
+      case 'contradiction':
+        console.warn(`ccrc-server: delivery capture: ${build} part ${part} carries this recipe's version with cases the part does not hold — no row is stored`);
+        return;
+    }
   }
 
   /** The copy, once: the port's answer, `no-admin-lane` with no port, `copy-failed` for a rejection. */

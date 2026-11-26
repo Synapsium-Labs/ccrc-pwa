@@ -183,8 +183,18 @@ describe('openApp blocks service workers, unless a view opts in (reader lab 10, 
     expect(readFileSync(path.join(BROWSER, 'app.ts'), 'utf8')).toMatch(/readonly serviceWorkers\?: 'allow';/);
   });
 
-  it('exactly one browser file opts in: the reader frame\'s lab 10', () => {
+  /** The browser files that run with the service worker allowed, each with its reason. The row below holds the files
+   *  that opt in equal to this table, so an entry deleted while its file still opts in is red, and so is an entry left
+   *  behind by a file that no longer opts in. */
+  const SERVICE_WORKER_OPT_INS: Record<string, string> = {
+    'reader-frame.browser.test.ts': 'the reader frame\'s lab 10 (completion plan Task 13) measures the frame under the installed shell\'s worker',
+    // X3 R2.3: its browser harness (`reviewServer.ts`, D-9027) takes the option itself.
+    'docs-review.browser.test.ts': 'the review page\'s installed-PWA row needs the shell\'s worker running to prove a navigation to /review bypasses it',
+  };
+
+  it('exactly the browser files in SERVICE_WORKER_OPT_INS opt in, each with its reason', () => {
     const optedIn = browserFiles().filter((f) => /serviceWorkers\s*:\s*'allow'/.test(textOf(f)));
-    expect(optedIn).toEqual(['reader-frame.browser.test.ts']);
+    expect(optedIn.sort()).toEqual(Object.keys(SERVICE_WORKER_OPT_INS).sort());
+    for (const [f, why] of Object.entries(SERVICE_WORKER_OPT_INS)) expect(why.length, f).toBeGreaterThan(40);
   });
 });

@@ -144,8 +144,32 @@ function walkCss(dir, root, out) {
  *  is about, arrived at by a directory move instead of a paste. */
 export const UI_ROOT = path.join(PWA_ROOT, '..', 'ui');
 
+/** The body-text contrast floor. `audit()` uses it for its `?? 4.5` defaults (other literal 4.5s remain elsewhere and are
+ *  not derived from it). Exported so the draft review page's own row (test/review-contrast.test.ts) reads the same number. */
+export const TEXT_FLOOR = 4.5;
+/** The floor the console gate uses for its non-text pairs (a control's border, a focus ring): the literal 3 in
+ *  design/contrast-check.mjs. `audit()` never reads this constant; it is exported so the draft review page's own row
+ *  (test/review-contrast.test.ts) reads the same number. */
+export const UI_FLOOR = 3;
+
+/** Sheets exempt from ONE measurement only: the colour pairs against the CONSOLE'S PALETTES (`audit()`'s `colourRules`).
+ *  Keyed by EXACT package-relative path (as `stylesheets()` spells it), each with the reason. No pattern and no folder: an
+ *  entry that names a path that is not a discovered sheet is a `problems` entry of `audit()`, so a stale or pattern-like
+ *  key fails. Every structural, palette-independent check still reads these sheets: one selector one sheet, the opacity
+ *  registry, keyframe troughs, the reduced-motion census. An opacity in a separate document still needs an
+ *  OPACITY_REGISTRY entry, which is measured against the console palettes, so the review page carries no opacity (the
+ *  ruling: remove it rather than list it). */
+export const SEPARATE_DOCUMENTS = {
+  'src/review/review.css':
+    'Exempt from the measurement against the console palettes ONLY; every structural check still reads it. The draft review '
+    + 'page is a separate document under its own header policy, shown to a reader with no console session and no skin '
+    + 'setting. Its frame is a banner, a sentence and a button around bytes that carry their own look. It never takes the '
+    + "console's palettes, so measuring it against them is meaningless; its own light and dark pairs are measured by "
+    + 'test/review-contrast.test.ts.',
+};
+
 /** Every stylesheet the app actually ships, relative to the package root,
- *  sorted. That is BOTH packages: this one, and @ccrc/ui. ui's entries come
+ *  sorted, SEPARATE_DOCUMENTS included. That is BOTH packages: this one, and @ccrc/ui. ui's entries come
  *  back spelled `../ui/src/...`, so `path.join(root, rel)` still round-trips
  *  and every `where:` in a report stays a path a reader can open. */
 export function stylesheets(root = PWA_ROOT) {
@@ -602,6 +626,10 @@ export const SELF_GROUNDED_EXEMPT = {
   // above are exempt for; this one only became visible when variants that
   // override `color` DIRECTLY started being measured (final2-gates F1), and it
   // is exempt for the same clause, not a new judgement.
+  // Desktop polish wave 180: the narrowed Add account door stands down in the ghost button's own disabled ink
+  // (--ink-disabled, the `disabled:` stand-down), an inactive control that stays focusable and aria-disabled, its reason
+  // beneath it in the secondary ink, which is measured. It was measured in the secondary ink until then.
+  ".acct-door[data-narrowed='true'], .acct-door[data-narrowed='true'] .acct-door-meta, .acct-door-action[data-narrowed='true']": 'WCAG 1.4.3 exempts inactive controls; --ink-disabled is documented sub-AA in tokens.css',
   '.attach-strip': "the ground is the user's own image, so no ratio is computable; the rule IS the mitigation (a scrim gradient under --ink-on-well)",
 };
 
@@ -1378,10 +1406,6 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-page)'],
     why: "the door's meta line (Anthropic · OpenAI · OpenRouter), inside the same row, on the Accounts page's body, which paints nothing of its own over the page's var(--bg-page) (PageScaffold); the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
   },
-  ".acct-door[data-narrowed='true'], .acct-door[data-narrowed='true'] .acct-door-meta, .acct-door-action[data-narrowed='true']": {
-    under: ['var(--bg-page)'],
-    why: "the narrowed door in its disabled ink: the phone row in .accounts-list, or the header action in PageScaffold's head (bg-page, PAGE_HEAD), on the Accounts page's body, which paints nothing of its own over the page's var(--bg-page) (PageScaffold); the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
-  },
   '.acct-field > label, .acct-secret > label': {
     under: ['var(--bg-sheet)'],
     why: "the connect sheet's field labels (NameFrame.tsx, SecretField.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
@@ -1436,8 +1460,8 @@ export const INHERITED_GROUNDS = {
     why: "the compromise disclosure's summary, in a result frame (CompromiseSteps.tsx), and the sign-in URL card's \"What this grants\" (RunFrame.tsx's UrlCard, Task A22), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The remove and replace sheets' frames (.acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
   },
   '.acct-compromise-steps': {
-    under: ['var(--bg-sheet)'],
-    why: "the compromise disclosure's steps, in a result frame (CompromiseSteps.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The remove and replace sheets' frames (.acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+    under: ['var(--bg-sheet)', 'var(--bg-page)'],
+    why: "the compromise disclosure's steps, in a result frame (CompromiseSteps.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet), and the Add account door's \"How to…\" steps (ConnectSheet.tsx's DoorReason, desktop-polish wave 180), which reuse this rule on the Accounts page's var(--bg-page). The remove and replace sheets' frames (.acct-frame) and the door's reason box paint no background, and the selector names no painted ancestor, so the auditor cannot recover either ground from CSS alone",
   },
   // ── accounts plan Task A25 (D-8051): the ChatGPT device code ───────────
   '.acct-device-code': {
@@ -1633,7 +1657,14 @@ export function audit(root = PWA_ROOT) {
   // in this loop is a theme nothing measures.
   const THEMES = all;
   const sheets = stylesheets(root);
-  const rules = sheets.flatMap((rel) => rulesOf(root, rel));
+  const rulesBySheet = sheets.map((rel) => ({ rel, found: rulesOf(root, rel) }));
+  /** EVERY rule of every sheet: the structural checks (one selector, one sheet; opacity; keyframes; registry staleness)
+   *  read this, SEPARATE_DOCUMENTS included. */
+  const rules = rulesBySheet.flatMap((s) => s.found);
+  /** The rules measured AGAINST THE CONSOLE'S PALETTES: every colour pair, ground, unknown-custom-property and uncovered-census
+   *  check below reads this. A SEPARATE_DOCUMENTS sheet is left out here and only here (its reason argues the palettes
+   *  and nothing else); its own pairs are measured by test/review-contrast.test.ts. */
+  const colourRules = rulesBySheet.filter((s) => !Object.hasOwn(SEPARATE_DOCUMENTS, s.rel)).flatMap((s) => s.found);
 
   const measured = [];
   const problems = [];
@@ -1668,7 +1699,7 @@ export function audit(root = PWA_ROOT) {
   // measurable, and that is exactly why it belongs in this set: outside it the
   // rule fell into the "colour-only, ground unrecoverable" bucket and was
   // skipped in silence.
-  const selfGrounded = rules.filter(
+  const selfGrounded = colourRules.filter(
     (r) => !isKeyframeStop(r) && isColour(declOf(r.body, 'color')) && paintOf(r.body).paints,
   );
 
@@ -1721,7 +1752,7 @@ export function audit(root = PWA_ROOT) {
     // forge written EARLIER in the file lost to a lower-specificity real rule
     // written later.)
     const groups = new Map();
-    for (const v of rules) {
+    for (const v of colourRules) {
       if (v === base || isKeyframeStop(v)) continue;
       // `variantSuffix` answers null for a selector that is textually the base's
       // — it is written for "is this a NARROWER restatement". A SECOND rule with
@@ -1804,7 +1835,7 @@ export function audit(root = PWA_ROOT) {
           continue;
         }
         const chain = bg[3] === 1 && ground === undefined ? [bgExpr] : [...(ground?.under ?? []), bgExpr];
-        add(label, theme, ratio(fgExpr, chain, tokens), ground?.floor ?? 4.5, `${fgExpr} on ${bgExpr}`);
+        add(label, theme, ratio(fgExpr, chain, tokens), ground?.floor ?? TEXT_FLOOR, `${fgExpr} on ${bgExpr}`);
       } catch (e) {
         problems.push(`${theme} ${label}: ${e.message} — add a GROUNDS entry or an exemption with a reason`);
       }
@@ -1845,7 +1876,7 @@ export function audit(root = PWA_ROOT) {
   const byKey = new Map(selfGrounded.map((r) => [ruleKey(r), r]));
   let pseudoCount = 0;
   const pseudoKeys = new Set();
-  for (const rule of rules) {
+  for (const rule of colourRules) {
     if (isKeyframeStop(rule)) continue;
     const at = rule.selector.lastIndexOf('::');
     if (at <= 0) continue;
@@ -1891,7 +1922,7 @@ export function audit(root = PWA_ROOT) {
   }
   let descendantCount = 0;
   const descendantKeys = new Set();
-  for (const rule of rules) {
+  for (const rule of colourRules) {
     if (isKeyframeStop(rule)) continue;
     const fg = declOf(rule.body, 'color');
     if (!isColour(fg) || paintOf(rule.body).paints) continue;
@@ -1919,7 +1950,7 @@ export function audit(root = PWA_ROOT) {
 
   // 4: hand-written ground, stylesheet colour.
   for (const [k, entry] of Object.entries(INHERITED_GROUNDS)) {
-    const rule = rules.find((r) => ruleKey(r) === k);
+    const rule = colourRules.find((r) => ruleKey(r) === k);
     if (rule === undefined) {
       problems.push(`stale INHERITED_GROUNDS entry: no rule ${k}`);
       continue;
@@ -1931,7 +1962,7 @@ export function audit(root = PWA_ROOT) {
     }
     for (const [theme, palette] of THEMES) {
       try {
-        add(k, theme, ratio(fg, entry.under, { ...palette, ...localVars(rule.body) }), entry.floor ?? 4.5, `${fg} on ${entry.under.join(' / ')}`);
+        add(k, theme, ratio(fg, entry.under, { ...palette, ...localVars(rule.body) }), entry.floor ?? TEXT_FLOOR, `${fg} on ${entry.under.join(' / ')}`);
       } catch (e) {
         problems.push(`${theme} ${k}: ${e.message}`);
       }
@@ -1995,7 +2026,10 @@ export function audit(root = PWA_ROOT) {
 
   // stale registry entries — a registry that outlives its rule is a comment
   // pretending to be a gate.
-  const liveRules = new Set(rules.map(ruleKey));
+  // The registries of the colour stage (GROUNDS, SELF_GROUNDED_EXEMPT, INHERITED_GROUNDS) are live only against
+  // `colourRules`: an entry keyed to a SEPARATE_DOCUMENTS rule is measured by nothing and must read as stale. Opacity and
+  // keyframe staleness stay on every rule (`rules`), because those checks read the separate documents too.
+  const liveRules = new Set(colourRules.map(ruleKey));
   const liveSelfGrounded = new Set(selfGrounded.map(ruleKey));
   const liveFades = new Set(faded.map((f) => f.k));
   const liveTroughs = new Set(troughs.map((t) => t.key));
@@ -2008,6 +2042,10 @@ export function audit(root = PWA_ROOT) {
   };
   for (const [kind, keys] of Object.entries(stale)) {
     for (const k of keys) problems.push(`stale ${kind} registry entry: ${k} matches no rule in the stylesheets`);
+  }
+  const discovered = new Set(sheets);
+  for (const k of Object.keys(SEPARATE_DOCUMENTS)) {
+    if (!discovered.has(k)) problems.push(`stale SEPARATE_DOCUMENTS entry: no sheet ${k}`);
   }
 
   // ── the census of what this auditor CANNOT measure ────────────────────────
@@ -2033,7 +2071,7 @@ export function audit(root = PWA_ROOT) {
     ...Object.keys(SELF_GROUNDED_EXEMPT),
   ]);
   for (const base of selfGrounded) for (const ctx of contextsFor(base)) groundedKeys.add(ruleKey(ctx.rule));
-  const uncovered = rules
+  const uncovered = colourRules
     .filter((r) => !isKeyframeStop(r) && isColour(declOf(r.body, 'color')) && !groundedKeys.has(ruleKey(r)))
     .map(ruleKey);
 

@@ -209,7 +209,7 @@ const OVERLORD_OPERATOR_DOORS = ['/api/overlord/designation', '/api/overlord/des
   '/api/overlord/model', '/api/overlord/account-set',
   // designation B: Rebind (a step-up) and Restart (a recovery, no step-up)
   '/api/overlord/rebind', '/api/overlord/restart',
-  '/api/overlord/ladder', '/api/overlord/rung', '/api/overlord/pause', '/api/overlord/latches/:cause/clear',
+  '/api/overlord/ladder', '/api/overlord/readiness', '/api/overlord/rung', '/api/overlord/pause', '/api/overlord/latches/:cause/clear',
   // the console's witness exchange (Overlord W1 authority journal, Task 6): the account gate, no step-up, no box token
   '/api/overlord/witness',
   // Confirm the restore (authority journal C): the guard's state, and the door behind the step-up
@@ -539,7 +539,7 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     expect([...new Set(regs.map((k) => k.slice(k.indexOf(' ') + 1)))].sort(),
       'overlordRoutes.ts and OVERLORD_OPERATOR_DOORS disagree — a door was registered, or a name listed, on one side only')
       .toEqual([...OVERLORD_OPERATOR_DOORS].sort());
-    expect(regs.length, 'the Overlord doors file registers fourteen routes (seven designation, four ladder, two restore and the witness exchange)').toBe(14);
+    expect(regs.length, 'the Overlord doors file registers fifteen routes (seven designation, four ladder, two restore, the witness exchange and the readiness read)').toBe(15);
     expect(lanesIn(OVERLORD_SRC), 'a designation door consults the box token — they are the operator\'s').toEqual([]);
     for (const key of regs) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
     for (const door of OVERLORD_OPERATOR_DOORS) {
@@ -1214,7 +1214,8 @@ describe("CLAUDE.md: the account-pool freshness dependency is named, not discove
 // The capability read is a separate surface, not a box-token lane.
 describe('the draft review read surface', () => {
   const REVIEW_SRC = read('server/src/review/routes.ts');
-  const REVIEW_DOORS = ['POST /api/review/open'];
+  // The capability door, then the page and its two refused spellings (R2.2), in registration order.
+  const REVIEW_DOORS = ['POST /api/review/open', 'GET /review', 'GET /review.html', 'GET /review/'];
   // The plugin's instance is named scope; normalize that receiver for the shared slicer.
   const normalized = (src: string): string => src.replace(/\bscope\./g, 'app.');
   const registered = (src: string): string[] => registrationsIn(normalized(src)).map((r) => r.key);
@@ -1225,19 +1226,44 @@ describe('the draft review read surface', () => {
     const end = src.indexOf('\n    });', start);
     expect(end, 'review registration end missing').toBeGreaterThan(start);
     const body = src.slice(start, end);
-    return ['req.cookies', 'checkMailToken', 'requireMailToken', 'runCcd', 'ReviewTreeReader', 'docs.readers']
-      .filter((term) => body.includes(term));
+    return NEVER.filter((term) => body.includes(term));
+  };
+  const NEVER = ['req.cookies', 'checkMailToken', 'requireMailToken', 'runCcd', 'ReviewTreeReader', 'docs.readers'];
+  // The page routes sit after the open door in the same file: from the first of them to the end of the file.
+  const pageAnchor = "app.get('/review'";
+  const pageNeverRead = (src: string): string[] => {
+    const start = src.indexOf(pageAnchor);
+    expect(start, 'review page registration missing').toBeGreaterThan(-1);
+    const body = src.slice(start);
+    return NEVER.filter((term) => body.includes(term));
   };
 
-  it('REVIEW_DOORS and registrations agree in both directions, with only the capability door', () => {
+  it('REVIEW_DOORS and registrations agree in both directions; the read door and the page are exempt, the 404s are not', () => {
     expect(registered(REVIEW_SRC)).toEqual(REVIEW_DOORS);
     expect(lanesIn(normalized(REVIEW_SRC))).toEqual([]);
     expect(GATE_SRC).toContain("  ['POST /api/review/open',");
+    expect(GATE_SRC).toContain("  ['GET /review',");
     expect(GATE_SRC).toContain('reason 9');
+    for (const key of ['GET /review.html', 'GET /review/']) expect(GATE_SRC, `${key} must stay gated`).not.toContain(`  ['${key}',`);
   });
 
   it('the open registration never reads session, token, or fleet dependencies', () => {
     expect(neverRead(REVIEW_SRC)).toEqual([]);
+  });
+
+  it('the page registrations never read session, token, or fleet dependencies', () => {
+    expect(pageNeverRead(REVIEW_SRC)).toEqual([]);
+  });
+
+  it.each(NEVER)('sees a separately planted %s in the page handlers', (term) => {
+    expect(pageNeverRead(`${REVIEW_SRC}\n${term};`)).toContain(term);
+  });
+
+  it('sees a box-token call planted in a page handler', () => {
+    const planted = REVIEW_SRC.replace("app.get('/review.html', async (_req, reply) => {",
+      "app.get('/review.html', async (req, reply) => {\n    requireMailToken(req, reply);");
+    expect(planted).not.toEqual(REVIEW_SRC);
+    expect(lanesIn(normalized(planted))).toEqual(['GET /review.html']);
   });
 
   it.each(['req.cookies', 'checkMailToken', 'requireMailToken', 'runCcd', 'ReviewTreeReader', 'docs.readers'])
@@ -1249,7 +1275,7 @@ describe('the draft review read surface', () => {
   it('sees a direct box-token call planted in the open handler', () => {
     expect(REVIEW_SRC).toContain(anchor);
     const planted = REVIEW_SRC.replace(anchor, `${anchor}\n      requireMailToken(req, reply);`);
-    expect(lanesIn(normalized(planted))).toEqual(REVIEW_DOORS);
+    expect(lanesIn(normalized(planted))).toEqual(['POST /api/review/open']);
   });
 
   it('sees an added registration and a missing listed registration', () => {
@@ -1263,21 +1289,21 @@ describe('the draft review read surface', () => {
 
 // ── the docs surface (the native Docs reader's W3, design 2026-10-01 §3.13) ───
 //
-// `server/src/docs/routes.ts` is the FIFTH file that registers routes. Its thirteen are session-gated, NOT EXEMPT and
+// `server/src/docs/routes.ts` is the FIFTH file that registers routes. Its fifteen are session-gated, NOT EXEMPT and
 // consult no box token at all (§3.4: "No box token is used"), so the census here is the update surface's, minus the
 // one lane: every registration it reads is a door in `DOCS_DOORS`, in both directions, and no docs file consults the
 // token. EVERY file under `server/src/docs/` is read, not `routes.ts` alone: a box-token call in the plugin's own
-// hooks would gate all thirteen routes as surely as one in a handler. `DOCS_DOORS` joins neither `SESSION_ONLY_ALL` nor
+// hooks would gate all fifteen routes as surely as one in a handler. `DOCS_DOORS` joins neither `SESSION_ONLY_ALL` nor
 // `ALL_LANES`: a docs read or refresh is not a coordination write, so CLAUDE.md's box-token bullet owes it no
 // sentence and no number word moves. And the page grammar's prefix is never a SERVER route (§3.13's new scan): a
 // `/docs/...` URL is the PWA's page, answered by the SPA shell, under every file in `server/src`.
-describe('the docs surface: thirteen session-gated doors, no box token, no /docs route (spec 2026-10-01 §3.13)', () => {
+describe('the docs surface: fifteen session-gated doors, no box token, no /docs route (spec 2026-10-01 §3.13)', () => {
   const DOCS_SRC = read('server/src/docs/routes.ts');
   /** Every source file of the docs surface, by listing the directory, so a file added there is read without an edit
    *  here. */
   const DOCS_FILES = readdirSync(path.join(REPO, 'server', 'src', 'docs'))
     .filter((f) => f.endsWith('.ts')).sort().map((f) => `server/src/docs/${f}`);
-  /** The thirteen doors, by path (§3.4; the history door, rich-docs spec G4; the range door, X2 P1; the outside folders' seven, X2 P2). Hand-kept for the NAMES only: the cases below derive the same set from the file
+  /** The fifteen doors, by path (§3.4; the history door, rich-docs spec G4; the range door, X2 P1; the outside folders' seven, X2 P2; the settings pair, X2 P4.3). Hand-kept for the NAMES only: the cases below derive the same set from the file
    *  and compare in both directions, so a route there cannot join or leave without this literal moving. */
   const DOCS_DOORS = ['/api/docs/projects', '/api/docs/:project/tree', '/api/docs/:project/file',
     '/api/docs/:project/history',
@@ -1286,7 +1312,9 @@ describe('the docs surface: thirteen session-gated doors, no box token, no /docs
     // The outside folders (X2 P2.3, spec 2026-11-18 §7): the labels read and Add share a path (GET and POST), the
     // `:label` door is Remove (DELETE), and the three folder reads; session-gated, no box token, like the six above.
     '/api/docs-folders', '/api/docs-folders', '/api/docs-folders/paths', '/api/docs-folders/:label',
-    '/api/docs-folders/:label/tree', '/api/docs-folders/:label/file', '/api/docs-folders/:label/range'];
+    '/api/docs-folders/:label/tree', '/api/docs-folders/:label/file', '/api/docs-folders/:label/range',
+    // The docs settings (X2 P4.3, spec 2026-11-18 §7): one path, GET and PUT; session-gated, no box token, like the thirteen above.
+    '/api/docs/settings', '/api/docs/settings'];
   const REGISTERED = registrationsIn(DOCS_SRC).map((r) => r.key);
   const pathOf = (k: string): string => k.slice(k.indexOf(' ') + 1);
   /** The registration lines the planted-call controls anchor on (the plan's fixed registration text). */

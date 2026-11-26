@@ -192,7 +192,7 @@ do-not-bounce are unchanged.
 ### Left for the next pull request
 
 The order a provider move takes its target in (`_provider_move_rank_to`, pure, no caller) and the provider of a lane
-(`_lane_provider_to`). They are 14 code lines and this wave is at the growth limit (`ccd (program)` +40).
+(`_lane_provider_to`). They are 14 code lines and this wave is at the growth limit (`ccd (program)` +40). They landed in wave 3b, A.
 
 ### Deviations found (wave 3a)
 
@@ -208,3 +208,89 @@ The order a provider move takes its target in (`_provider_move_rank_to`, pure, n
   landed on, ahead of a healthy one. Its name is refused when it is marked, and the pass after it decides.
 - **D-9099** — `ccd prefer` acts through the home arm, so gate 1 alone would have held it back. A `.home` written
   after the mark is not held, for one move: a row whose `lastswap` is newer than its `.home` is held like any other.
+
+## Wave 3b: a session moves to a working lane
+
+After its third provider failure on a lane a session moves to another account by itself; with no lane that can take it, it stays and
+wave 1's retries continue. No setting, armed. Three pull requests, each safe alone, in this order: A (below) moves nobody; B is the
+act's own gate, which nothing dispatches; C decides and dispatches. `ccd` alone decides and acts; the server's part is the placement
+forecast (A) and one more restart word (B).
+
+### A. The pure pieces, and new-session placement
+
+1. **The order of a move's targets** (`ccd/ccd#_provider_move_rank_to`, pure, no caller yet): 0 a lane with a good Stop newer than the
+   episode's first failure, 1 a lane of another provider, 2 an unproved lane of the same one. Never the lane it is on, a marked lane,
+   or a lane of a provider with two marked lanes. A lane's provider is `ccd/ccd#_lane_provider_to`.
+2. **Whether the session fits** (`ccd/ccd#_provider_move_fits`, no caller yet). No owner existed: a rescue lands a session on any lane
+   with room, whatever its context.
+
+| The target | Its window | The session's context | Answer |
+|---|---|---|---|
+| on another provider | stated by its own settings | measured | fits at nine tenths of the window |
+| an Anthropic lane, entered from another provider | not stated: 200000, the smallest a Claude model has | measured | the same |
+| any other lane of another provider | not stated | any | never |
+| on another provider | any | not measured | never |
+| on the same provider | stated | measured | fits at nine tenths |
+| on the same provider | not stated | any | yes |
+| on the same provider | any | not measured | yes |
+
+   The window is the lane's `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, which `shared/modelenv.mjs` decides and writes to its settings; settings
+   that cannot be read state nothing, and take the floor away. The context is `ctxTokens` of the statusline's sidecar, when it names
+   this conversation, is at most 2 h old, and is not zero.
+3. **Placement** (`ccd/ccd#_ws_least_loaded`, and its forecast `server/src/limits.ts#projectHome`): the walk runs without the marked
+   lanes, and again with them only when it found no lane that is not condemned. `readLimits` reads the mark as `_provfail` does (type,
+   grammar, 30 minutes, at most a minute ahead) and says `providerFailing` only when it stands. `projected-home.test.ts` drives both
+   sides over one home.
+
+### Deviations found (wave 3b, A)
+
+- **D-9119** — the fit is at nine tenths, not at the whole window: the landing's first turn sends the whole conversation
+  and needs room to answer, and the figure is from the last render. It is asked of a provider move only; a limit rescue, the wake
+  move and the operator's verbs are unchanged.
+- **D-9120** — the window of an Anthropic lane is stated nowhere. Between two of them the model, and so the window, is
+  the session's own, so nothing is compared; from another provider it is taken as 200000, which refuses some sessions a one-million
+  window would take and never admits one that does not fit.
+- **D-9121** — a marked lane is left out of every tier of the placement walk, the measured one included: an unmeasured
+  unmarked lane is taken before a marked one with room. Only a dead credential, or a lane whose newest spawn was refused, ranks behind.
+
+### B. The act: what a move proves before it ends anything
+
+Nothing dispatches the arm yet.
+
+4. **One row's evidence** (`ccd/ccd#_provfail_row`), out of wave 3a's pass in a commit of its own: one count for the lane's mark and
+   for the session's move. **What is owed** (`ccd/ccd#_provfail_owed`): three counted failures or more since the last move, inside 2 h,
+   no turn newer than the newest, and the line's own word a provider's (never `unknown`, `max_output_tokens`, or a limit's).
+5. **What holds it** (`ccd/ccd#_provider_hold_to`), asked at the decision and at the act: `_swap_idle_gate` as it is, then background
+   work, then the input box. The box must read `empty`: a draft is a person about to continue the session, and no box is a dialog.
+   A pending question holds twice over: the live status is not `idle`, and there is no box.
+6. **The act's gate** (`ccd/ccd#_swap_provider_act_gate`), `cmd_swap`'s arm `provider`. Cancelled, with `provider-cancel` in the log
+   and nothing stopped, when any of these holds:
+
+| At the act | `lastswap` |
+|---|---|
+| it is not what the dispatch stamped: another move landed, the operator's own | left as it is |
+| the session was stopped, is asleep, or a probe does not say it is live | put back |
+| the newest counted failure is not the one the decision read (`CCD_SWAP_FAIL`), or is no longer owed | put back |
+| the target is marked, switched off, or at its ceiling | put back |
+| anything of 5 | put back |
+
+7. **What the move records**: the cause `swap-auto-provider` (`.lastend`, the `ended` line, the resume prompt, the console's "moved off
+   a failing provider"), where a rescue records `swap-auto-rescue`. `ccd/ccd#_rescue_history` reads a `provider-rescue` line as it
+   reads a `watchdog-rescue` one, so do-not-bounce and spread see it, and `ccd/ccd#_rescue_target` keeps a skip list its caller set.
+8. **Nothing is typed.** `ccd-limit-no-keys.test.ts` names every function of this, its transitive scan included.
+9. **The carry.** A swap does not touch the marker: it is keyed by the session's id, not by the lane, and the uuid it names is kept, so
+   `failAts` survives it (pinned in `ccd-provider-move.test.ts`). The landing's `SessionStart` relabels the line `done` and carries the
+   list (pinned since wave 1, `session-hook-turnmark.test.ts`), and wave 1 owes the nudge on the list, so the moved session is nudged
+   at the due time its newest failure already had. One case is not carried: a conversation continued under a new id
+   (`_ci_resume_follow`) is another conversation to the hook, which starts an empty list.
+
+### Deviations found (wave 3b, B)
+
+- **D-9122** — `_swap_bg_hold` reads nothing into a `failed` line, whose `bg` the last good Stop counted. A provider move
+  holds on any count but 0, `-1` included, for 30 minutes from the episode's first failure: a subagent still running then is a client
+  of the same provider, and only a good Stop would rewrite the count, so an unbounded hold would never end during an outage. A
+  background shell holds without a bound, by the live status word.
+- **D-9123** — the move does not run `notify.sh`, which every other swap does: the ruling is one operator notice per
+  outage, and the server raises it.
+- **D-9124** — a cause word of its own, where the watchdog's and the wake move's arms took existing ones: "off a blocked
+  account" is false of this move and is said to the session itself. An older server or console reads it as `unknown`.

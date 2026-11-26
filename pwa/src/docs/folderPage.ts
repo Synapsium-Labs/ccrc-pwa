@@ -15,7 +15,7 @@ import {
   type DocsFoldersPathsResponse, type DocsRangeFrame, type DocsRangePin, type DocsRangePrepared,
 } from '../../../shared/docs';
 import { DOCS_FOLDER_TEXT, DOCS_RELIST_WORDS, fillSentence } from './docsText';
-import type { DocsAnswer } from './failures';
+import { docsRetryPlan, type DocsAnswer } from './failures';
 import { SECTION_ORDER } from './docsTree';
 import type { RangeLoader, RangeTarget } from './range/readRange';
 
@@ -42,14 +42,20 @@ export interface DocsFolderLoaders {
  *  error banner for them and never a group with nothing in it. `null`: no read answered yet. The smallest honest behaviour:
  *  a refused read (sign-in dark, or no session) says so in one note; a fleet box that cannot do folders (`unsupported`, or
  *  its caps not yet read: `caps-unknown`) has none, so it draws nothing, as an empty registry does (review 3783 A4); any
- *  other failure says the folders could not be read. */
+ *  other failure says the folders could not be read. `retryAfterMs` marks the one of these a later read can change: the
+ *  server has not yet learned the fleet box's caps, so the index reads the labels once more after the wait
+ *  `docsRetryPlan` gives that answer, the rule the projects read follows (review 3816, carried to X2 P4). */
 export type FolderIndexSlot =
-  | { readonly s: 'ok'; readonly rows: readonly DocsFolderLabelRow[] }
+  | { readonly s: 'ok'; readonly rows: readonly DocsFolderLabelRow[]; readonly retryAfterMs?: number }
   | { readonly s: 'quiet'; readonly text: string };
 
 export function folderIndexSlot(a: DocsAnswer<DocsFoldersLabelsResponse>): FolderIndexSlot {
   if (a.s === 'ok') return { s: 'ok', rows: a.value.folders };
-  if (a.s === 'failed' && (a.body.failure === 'unsupported' || a.body.failure === 'caps-unknown')) return { s: 'ok', rows: [] };
+  if (a.s === 'failed' && a.body.failure === 'caps-unknown') {
+    const plan = docsRetryPlan(a.body);
+    return plan.kind === 'auto' ? { s: 'ok', rows: [], retryAfterMs: plan.afterMs } : { s: 'ok', rows: [] };
+  }
+  if (a.s === 'failed' && a.body.failure === 'unsupported') return { s: 'ok', rows: [] };
   const dark = a.s === 'auth' || (a.s === 'failed' && (a.body.failure === 'auth-off' || a.body.failure === 'unauthenticated'));
   return { s: 'quiet', text: dark ? DOCS_FOLDER_TEXT.indexNeedsSignIn : DOCS_FOLDER_TEXT.indexUnread };
 }
