@@ -318,7 +318,7 @@ describe('the real viewer: a PDF page of the built console', () => {
       await route.fulfill({ status: 200, headers: { ...DOCS_RESPONSE_HEADERS, 'content-type': json }, body: JSON.stringify(body) });
     });
     await app.page.goto(`${server.origin}/docs/${PROJECT}/${SECTION}`);
-    const row = app.page.getByRole('button', { name: /x\.pdf/ });
+    const row = app.page.getByRole('button').and(app.page.getByTitle('x.pdf', { exact: true }));
     await row.waitFor();
     const readFeedback = async (): Promise<number | undefined> => app.page.evaluate(() =>
       (window as unknown as { pdfFeedbackMs?: number }).pdfFeedbackMs);
@@ -393,7 +393,7 @@ describe('the real viewer: a PDF page of the built console', () => {
       return reply({ ok: true, frame: { snapshot, offset, total: size, bytesB64: base64Of(part), digest: hash(part) } });
     });
     await app.page.goto(`${server.origin}/docs/${PROJECT}/${SECTION}`);
-    await app.page.getByRole('button', { name: /boundary\.pdf/ }).click();
+    await app.page.getByRole('button').and(app.page.getByTitle('boundary.pdf', { exact: true })).click();
     const frames = app.page.locator('iframe.docs-pdf-frame');
     if (inline) {
       await frames.waitFor({ timeout: 60_000 });
