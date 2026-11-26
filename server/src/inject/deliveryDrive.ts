@@ -34,17 +34,23 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { UPDATE_SPAWN_DRAIN_MS } from '../../../shared/agent-protocol.js';
 import { CAPTURE_SOCKET, CAPTURE_TMUX_SESSION, captureTmuxDirName } from '../../../shared/claudeBuildCapture.js';
+import {
+  FRAMES_HOLD_TEXT, FRAMES_NUDGE_ID, FRAMES_PERSON, FRAMES_TURN_ONE, FRAMES_VIEW_KEY_PAUSE_MS, framesDraftLines, framesViewKeys, readFramesStepWord,
+  type FramesDriveStep,
+} from '../../../shared/framesCapture.js';
+import { FRAMES_PARTS } from '../../../shared/framesResult.js';
 import { deliveryCaseText } from '../../../shared/deliveryCapture.js';
 import { isDeliveryCaseId, type DeliveryCaseId } from '../../../shared/deliveryResult.js';
 import { boundedSpawn } from '../../../shared/spawn.mjs';
 import { RUN_ID } from '../../../shared/testbox.js';
-import { tmuxCommand } from '../../../shared/tmux-target.js';
+import { tmuxCommand, tmuxTarget } from '../../../shared/tmux-target.js';
+import { renderMailNudge } from '../coord/envelope.js';
 import { Tmux, type ExecResult, type Runner } from '../exec.js';
 import { KeyedQueue } from './queue.js';
-import { sendPrompt, type SendDeps } from './send.js';
+import { STASH_KEY, sendPrompt, typeComposedLines, type SendDeps } from './send.js';
 
 /** Why the driver refuses its input. */
-export type DriveRefusal = 'bad-input' | 'capture-dir' | 'tmux-dir' | 'case';
+export type DriveRefusal = 'bad-input' | 'capture-dir' | 'tmux-dir' | 'case' | 'step';
 
 /** A checked input: the capture's scratch directory, its tmux directory, and the case. */
 export interface DriveInput { readonly capture: string; readonly tmux: string; readonly case: DeliveryCaseId }
@@ -179,10 +185,119 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-/** The entry: one JSON input on stdin, one JSON line out. */
+// ── the box frames recipe's form (Desktop polish wave 187; plan docs/superpowers/plans/2026-11-26-box-frames-recipe.md
+// section 4.2) ──────────────────────────────────────────────────────────────────────────────────────────────────────
+// The same entry point, the same directory refusals and the same runner: the capture's own tmux server only, through the
+// one socket lookup, halting at the first call that could not complete. Its input names ONE step by its word
+// (`shared/framesCapture.ts#framesStepWord`), never text: the driver builds every text from the shared case file at the
+// part's own pane. Every key it types is the product's (`typeComposedLines`, `sendPrompt`, `STASH_KEY`), except the
+// recipe's two named shapes, `person` and the view keys. It decides nothing: the runner reduces and judges.
+
+/** A checked frames input: the capture's scratch directory, its tmux directory, and one step. */
+export interface FramesDriveInput { readonly capture: string; readonly tmux: string; readonly step: FramesDriveStep }
+
+/** The frames input rule: `{capture, tmux, frames}` and nothing else, the directories checked by the case form's own rule
+ *  (`readDriveInput`, asked with a fixed case so its checks run unchanged), and the step a word the grammar reads. */
+export function readFramesDriveInput(raw: unknown, isDir: (p: string) => boolean = realDir, tmpBase: string = os.tmpdir(), isOwn: (p: string) => boolean = ownPrivateDir):
+  { readonly ok: true; readonly input: FramesDriveInput } | { readonly ok: false; readonly refusal: DriveRefusal; readonly detail: string } {
+  if (!isObj(raw) || Object.keys(raw).sort().join() !== 'capture,frames,tmux') return { ok: false, refusal: 'bad-input', detail: 'the input is not exactly {capture, tmux, frames}' };
+  const step = readFramesStepWord(raw['frames']);
+  if (step === null) return { ok: false, refusal: 'step', detail: 'not a frames step word' };
+  const dirs = readDriveInput({ capture: raw['capture'], tmux: raw['tmux'], case: 'c0' }, isDir, tmpBase, isOwn);
+  if (!dirs.ok) return dirs;
+  return { ok: true, input: { capture: dirs.input.capture, tmux: dirs.input.tmux, step } };
+}
+
+/** How long the frame step waits for two equal reads, and the pause between two reads. */
+export const FRAMES_FRAME_SETTLE_MS = 10_000;
+export const FRAMES_FRAME_READ_PAUSE_MS = 500;
+
+/** One frames step's outcome: a send word, a typing step's answer, a frame, or a fault of the box. */
+export type FramesDriveOutcome =
+  | { readonly kind: 'sent'; readonly send: string }
+  | { readonly kind: 'typed'; readonly typed: boolean }
+  | { readonly kind: 'frame'; readonly frame: string | null; readonly cursor: readonly [number, number] | null; readonly settled: boolean }
+  | { readonly kind: 'fault'; readonly reason: string; readonly detail: string };
+
+const realSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/** One frames step on the capture's session, through a runner that stops at its first fault. */
+export async function driveFramesStep(input: FramesDriveInput, runner: Runner, sleep: (ms: number) => Promise<void> = realSleep, now: () => number = Date.now): Promise<FramesDriveOutcome> {
+  const halt = haltingRunner(runner);
+  const tmux = new Tmux(halt.run);
+  const deps: SendDeps = { tmux, queue: new KeyedQueue(), sleep };
+  const S = CAPTURE_TMUX_SESSION;
+  // The route's own options, `onDraft` spelled at the call: `lane-draft-never-blocks.test.ts` reads each call's policy there.
+  const send = async (text: string): Promise<string> => {
+    const res = await sendPrompt(deps, S, text, { onDraft: ROUTE_PLAIN_PROMPT_OPTIONS.onDraft, attachments: ROUTE_PLAIN_PROMPT_OPTIONS.attachments });
+    return res.ok ? 'ok' : res.error;
+  };
+  const step = input.step;
+  let out: FramesDriveOutcome;
+  if (step.kind === 'turn') out = { kind: 'sent', send: await send(step.which === 1 ? FRAMES_TURN_ONE : renderMailNudge(FRAMES_NUDGE_ID)) };
+  else if (step.kind === 'held') out = { kind: 'sent', send: await send(FRAMES_HOLD_TEXT) };
+  else if (step.kind === 'stash') out = { kind: 'typed', typed: await tmux.sendKey(S, STASH_KEY) };
+  else if (step.kind === 'frame') {
+    let prev = await tmux.captureAnsi(S);
+    let settled = false;
+    const deadline = now() + FRAMES_FRAME_SETTLE_MS;
+    while (prev !== null && now() < deadline) {
+      await sleep(FRAMES_FRAME_READ_PAUSE_MS);
+      const next = await tmux.captureAnsi(S);
+      if (next === prev) { settled = true; break; }
+      prev = next;
+    }
+    const cur = prev === null ? null : await halt.run('tmux', ['display-message', '-p', '-t', tmuxTarget(S), '#{cursor_x} #{cursor_y}']);
+    const m = cur !== null && cur.ran && cur.code === 0 ? /^(\d+) (\d+)\s*$/.exec(cur.stdout) : null;
+    out = { kind: 'frame', frame: prev, cursor: m === null ? null : [Number(m[1]), Number(m[2])], settled };
+  } else {
+    const p = FRAMES_PARTS[step.part]!;
+    const lines = framesDraftLines(p.case, p.pane);
+    if (step.kind === 'send' || step.kind === 'queued') out = { kind: 'sent', send: await send(lines.join('\n')) };
+    else if (step.kind === 'type') out = { kind: 'typed', typed: await typeComposedLines(tmux, S, lines) };
+    else if (step.kind === 'keys') {
+      let ok = true;
+      for (const k of framesViewKeys(p.case)) { if (!(await tmux.sendKey(S, k))) { ok = false; break; } await sleep(FRAMES_VIEW_KEY_PAUSE_MS); }
+      out = { kind: 'typed', typed: ok };
+    } else {
+      // The person's shape, the recipe's own: each line as plain literal bursts, a pause between, the Enter-free newline.
+      let ok = true;
+      for (const [i, line] of lines.entries()) {
+        if (i > 0 && !(await tmux.sendKey(S, FRAMES_PERSON.newline))) { ok = false; break; }
+        for (let at = 0; ok && at < line.length; at += FRAMES_PERSON.burst) {
+          if (!(await tmux.sendLiteral(S, line.slice(at, at + FRAMES_PERSON.burst)))) ok = false;
+          else await sleep(FRAMES_PERSON.pauseMs);
+        }
+        if (!ok) break;
+      }
+      out = { kind: 'typed', typed: ok };
+    }
+  }
+  const fault = halt.fault();
+  return fault === null ? out : { kind: 'fault', reason: fault.reason, detail: fault.detail };
+}
+
+/** The frames step's one stdout line and exit status: 0 with the answer, or the fault exit. The frame line carries the
+ *  RAW frame, which never leaves the test box: the runner reads it from this pipe, reduces it and lets it go. */
+export function framesDriveAnswer(o: FramesDriveOutcome): { readonly code: number; readonly line: string } {
+  if (o.kind === 'fault') return { code: DRIVE_FAULT_EXIT, line: JSON.stringify({ fault: o.reason, detail: o.detail.slice(0, 200) }) };
+  if (o.kind === 'sent') return { code: 0, line: JSON.stringify({ send: o.send }) };
+  if (o.kind === 'typed') return { code: 0, line: JSON.stringify({ typed: o.typed }) };
+  return { code: 0, line: JSON.stringify({ frame: o.frame, cursor: o.cursor, settled: o.settled }) };
+}
+
+/** The entry: one JSON input on stdin, one JSON line out. The input's keys pick the form: `case` the delivery recipe's,
+ *  `frames` the box frames recipe's. */
 export async function main(): Promise<number> {
   let raw: unknown;
   try { raw = JSON.parse(await readStdin()); } catch { raw = undefined; }
+  if (isObj(raw) && Object.prototype.hasOwnProperty.call(raw, 'frames')) {
+    const fr = readFramesDriveInput(raw);
+    if (!fr.ok) { process.stdout.write(`${JSON.stringify({ refused: fr.refusal, detail: fr.detail })}\n`); return 2; }
+    const answer = framesDriveAnswer(await driveFramesStep(fr.input, captureTmuxRunner(fr.input.tmux, process.env['PATH'])));
+    process.stdout.write(`${answer.line}\n`);
+    return answer.code;
+  }
   const read = readDriveInput(raw);
   if (!read.ok) { process.stdout.write(`${JSON.stringify({ refused: read.refusal, detail: read.detail })}\n`); return 2; }
   const answer = driveAnswer(await driveCase(read.input, captureTmuxRunner(read.input.tmux, process.env['PATH'])));
