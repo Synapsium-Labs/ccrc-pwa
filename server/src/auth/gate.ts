@@ -72,17 +72,17 @@ import type { SessionStore } from './sessions.js';
  *     the moment the operator arms the flag. It publishes an `ok` and a build
  *     stamp and nothing about the fleet.
  *
- *  2. The one hundred and three box-token machine lanes (the coordination routes, the Linear proxy's routes, #1444, and the programme
+ *  2. The one hundred and four box-token machine lanes (the coordination routes, the Linear proxy's routes, #1444, and the programme
  *     ledgers' coordinator lanes, the coordinator call record's one, the remaining-work door's one, the plan verbs', the linking standard's read, suggestion and confirm, the hook's start report and its
  *     loads report, the door process's act-key claim, the hook's reports, the card door, the note door's lanes, the timer doors, the probe door's lanes, the replay quiz's record
  *     door, its unattended confirmation, the timer's tick report and the coordinator's Live on its baseline, the Overlord's inbox doors,
- *     its history door, and the programme lifecycle's end proposal and its reads) plus
+ *     its history door and its cursor read of the sequence, and the programme lifecycle's end proposal and its reads) plus
  *     `/api/notify`, `/api/pools/epoch`
  *     and `/api/updates/intent/:nodeId` — the fleet host's ingress. These callers
  *     are `curl` inside a Claude Code session, ccd's `notify.sh`, `ccd-pool-sync.timer`
  *     (account-pool-membership wave 1, T7, D-3084), from update-management W4,
  *     `ccd-update-sync.timer`, the operator's own shell on the fleet box (`ccrc quiz-record`, through `ccrc-api`), and `ccd-quiz-weekly.timer`;
- *     none of them has a cookie jar and never will. All one hundred and six CHECK the box token (`checkMailToken`), and the mail pair
+ *     none of them has a cookie jar and never will. All one hundred and seven CHECK the box token (`checkMailToken`), and the mail pair
  *     records every refusal — but "checks" is not "requires", and the difference is
  *     worth stating rather than rounding off, in BOTH directions rather than only
  *     one (D-1242: this paragraph used to say it in one, and was wrong in kind
@@ -632,6 +632,11 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
   ['POST /api/overlord/history',
     "the Overlord's read of every project's history, a POST only so free text rides the body, a read by its row: the box token and " +
     'attribution, then the gate order with the fence, then the read ceiling and one read-ledger line'],
+  // The Overlord's cursor read of the sequence (Overlord W1, sequence C), from `coord/overlordSequenceRoutes.ts`: a box-token machine
+  // lane behind the gate, not fenced by its row (`write: false`), so the read ceiling counts every attributed line.
+  ['GET /api/overlord/sequence',
+    "the Overlord's cursor read of the sequence, server words and ids only: the box token and attribution, then the gate order " +
+    'with no fence (its row is not a write), then the cursor, the read ceiling and one read-ledger line'],
 
   // The continuity routes (Overlord §3.3.11, W1a): the hook reports every SessionStart of a session that is not a child.
   ['POST /api/sessions/:id/start',
@@ -1154,8 +1159,8 @@ export function originVerdict(origin: unknown, expected: string): OriginVerdict 
  * clause. Checking reads would additionally refuse `<img>`/`<link>` style
  * same-site loads of the SPA shell for no gain.
  *
- * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the one hundred and three box-token machine
- * lanes plus `/api/notify`, `/api/pools/epoch` and `/api/updates/intent/:nodeId` — one hundred and six in all — are `curl` inside a Claude Code session (no `Origin`
+ * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the one hundred and four box-token machine
+ * lanes plus `/api/notify`, `/api/pools/epoch` and `/api/updates/intent/:nodeId` — one hundred and seven in all — are `curl` inside a Claude Code session (no `Origin`
  * at all, hence `'absent'`, hence permitted even if they were checked), and
  * their real guard is a header a cross-site page cannot add without triggering a
  * preflight it will fail. (ORDER-PINNED, like reason 2 above and for the same

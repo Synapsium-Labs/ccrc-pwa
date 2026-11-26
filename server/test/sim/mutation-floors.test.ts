@@ -67,6 +67,7 @@ import { LADDER_MUTANT_SETS } from './ladderSets.js';
 import { SEQUENCE_MUTANT_SETS } from './sequenceSets.js';
 import { INVARIANT_MUTANT_SETS } from './invariantSets.js';
 import { READINESS_MUTANT_SETS } from './readinessSets.js';
+import { SEQUENCE_DOOR_MUTANT_SETS } from './sequenceDoorSets.js';
 import { ACCOUNT_LOAD_MUTANT_SETS } from './accountLoadSets.js';
 import { FORECAST_MUTANT_SETS } from './forecastSets.js';
 import { APPROVAL_DENY_FLOOR_MUTANT_SETS } from './approvalDenyFloorSets.js';
@@ -261,6 +262,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...SEQUENCE_MUTANT_SETS,
   ...INVARIANT_MUTANT_SETS,
   ...READINESS_MUTANT_SETS,
+  ...SEQUENCE_DOOR_MUTANT_SETS,
   ...FORECAST_MUTANT_SETS,
   ...APPROVAL_DENY_FLOOR_MUTANT_SETS,
   ...APPROVAL_ENVELOPE_MUTANT_SETS,

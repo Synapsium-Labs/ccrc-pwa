@@ -106,7 +106,8 @@ function scanRoutes(file: string): ScannedRoute[] {
     .map((m) => ({ method: m[1]!.toUpperCase(), routePath: m[2]!, file }));
 }
 
-/** THIRTY-ONE files register routes since the runway read (`server/src/poolRunwayRoute.ts`, Overlord W1 serviceability B: its one session-gated route);
+/** THIRTY-TWO files register routes since the Overlord's cursor read of the sequence (`server/src/coord/overlordSequenceRoutes.ts`,
+ *  Overlord W1 sequence C: its one box-token route); THIRTY-ONE since the runway read (`server/src/poolRunwayRoute.ts`, Overlord W1 serviceability B: its one session-gated route);
  *  THIRTY since the Overlord's history door (`server/src/coord/overlordHistoryRoutes.ts`, Overlord W1 PR B1: its one box-token route);
  *  TWENTY-NINE since the draft review's read door (`server/src/review/routes.ts`, X3 R1: its one capability route,
  *  gate reason 9); TWENTY-EIGHT since the Overlord's inbox doors (`server/src/coord/overlordInboxRoutes.ts`, Overlord W1 inbox: its three box-token routes); TWENTY-SEVEN since the one-time pass's door (`server/src/coord/delegationBackfillRoutes.ts`, session helpers S2, D-8874: its two session-gated routes on one path); TWENTY-SIX since the approval census's read (`server/src/coord/approvalCensusRoutes.ts`, approvals PR 1, Task 1.4: its one session-gated route); TWENTY-FIVE since the replay quiz's record path (`server/src/continuity/quizRoutes.ts`, Overlord W1a quiz record); TWENTY-FOUR since the Models sheet's write door (`server/src/laneModelsRoutes.ts`, model-class-advance R4: its one session-gated route); TWENTY-THREE since the decision-model doors (`server/src/coord/decisionModelRoutes.ts`, Overlord W2 decision model B: six routes on five paths, session-gated, registered from `server.ts`); TWENTY-TWO since the Overlord's designation doors (`server/src/coord/overlordRoutes.ts`, Overlord W1 designation A: three session-gated routes; designation C adds its two Settings doors to the same file); TWENTY-ONE since the remaining-work door (`server/src/coord/programmeRemainingRoute.ts`, Overlord W2: its one
@@ -145,6 +146,7 @@ const ROUTES: ScannedRoute[] = [
   ...scanRoutes('coord/overlordRoutes.ts'),
   ...scanRoutes('coord/overlordInboxRoutes.ts'),
   ...scanRoutes('coord/overlordHistoryRoutes.ts'),
+  ...scanRoutes('coord/overlordSequenceRoutes.ts'),
   ...scanRoutes('continuity/quizRoutes.ts'),
   ...scanRoutes('operatorModel/nameListRoutes.ts'),
   ...scanRoutes('coord/decisionModelRoutes.ts'),
@@ -833,9 +835,11 @@ describe('the scanner is looking at something', () => {
     // 326 -> 328, gated 209 -> 211 (328 - 117); the exempt-HTTP count stays 117.
     // 332 since the Overlord's readiness read, `GET /api/overlord/readiness` in `coord/overlordRoutes.ts`, session-gated and NOT
     // EXEMPT, no box token: the HTTP half 328 -> 329, the gated count 211 -> 212 (329 - 117), the exempt-HTTP count stays 117.
-    // 334 since the account holds' two doors (Overlord W1 renewal readings H), in `continuity/routes.ts`: `GET
-    // /api/continuity/account-holds` and `POST /api/continuity/account-holds/:lane/clear`, session-gated and NOT EXEMPT, no box
-    // token: the HTTP half 329 -> 331, the gated count 212 -> 214 (331 - 117), the exempt-HTTP count stays 117.
+    // 334 with sequence C's two reads: `GET /api/overlord/sequence`, the Overlord's cursor read, in `coord/overlordSequenceRoutes.ts`,
+    // a routes file of its own, one box-token machine lane IN EXEMPT; and `GET /api/overlord/invariants`, the operator's read of the
+    // invariant monitor in `coord/overlordRoutes.ts`, session-gated and NOT EXEMPT, no box token. The HTTP half 329 -> 331, the
+    // gated count 212 -> 213 (331 - 118), the exempt-HTTP count 117 -> 118.
+    expect(scanRoutes('coord/overlordSequenceRoutes.ts').length).toBe(1);
     expect(ROUTES.length).toBe(334);
     expect(scanRoutes('laneModelsRoutes.ts').length).toBe(1);
     expect(scanRoutes('coord/delegationBackfillRoutes.ts').length).toBe(2);
@@ -1153,6 +1157,7 @@ describe('EXEMPT is complete in both directions', () => {
       'GET /api/mail/inbox',
       'GET /api/overlord/inbox',
       'GET /api/overlord/messages/:id',
+      'GET /api/overlord/sequence',
       'GET /api/peers',
       'GET /api/pools/epoch',
       'GET /api/programmes/:slug/goals',
@@ -1273,7 +1278,7 @@ describe('EXEMPT is complete in both directions', () => {
     expect([...EXEMPT_BUT_AUTHENTICATED].sort()).toEqual([...EXEMPT_BUT_AUTHENTICATED_DERIVED].sort());
   });
 
-  it('the thirty-nine box-token lanes in EXEMPT are those coord routes, and one hundred and six with notify, pools/epoch, updates/intent, the Linear proxy, the ledgers, the linking lanes, the call record, the remaining-work door, the plan lanes, the start report, the loads report, the act-key claim, the report door, the card door, the note door, the timer doors, the probe door, the quiz record door, its confirmation, its tick report, the coordinator\'s Live, the Overlord\'s inbox doors and its history door', () => {
+  it('the thirty-nine box-token lanes in EXEMPT are those coord routes, and one hundred and seven with notify, pools/epoch, updates/intent, the Linear proxy, the ledgers, the linking lanes, the call record, the remaining-work door, the plan lanes, the start report, the loads report, the act-key claim, the report door, the card door, the note door, the timer doors, the probe door, the quiz record door, its confirmation, its tick report, the coordinator\'s Live, the Overlord\'s inbox doors, its history door and its cursor read', () => {
     // ORDER-PINNED TITLE. `box-token-census.test.ts` reads the number words in the
     // line above IN SEQUENCE — lanes first, total second — so rewording the title
     // the other way round is a red suite until that expectation moves with it
@@ -1909,7 +1914,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 331 HTTP routes, not the 117 exempt.
+          //    is not itself flag-aware — the assertion that covers all 331 HTTP routes, not the 118 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

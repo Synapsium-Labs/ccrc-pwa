@@ -621,7 +621,10 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `server/src/coord/overlordInboxRoutes.ts`, a lane source of its own for the census), each check the box token in their own
   `onRequest`, then ask the Overlord gate with their own row's key, and sit in `auth/gate.ts`'s EXEMPT table like the linking
   confirm. So does the Overlord's history door, `POST /api/overlord/history` (Overlord W1 PR B1: a read whose search words ride the
-  body; its handler is in `server/src/coord/overlordHistoryRoutes.ts`, a lane source of its own for the census). The dual-credential reads, including `GET /api/feed`,
+  body; its handler is in `server/src/coord/overlordHistoryRoutes.ts`, a lane source of its own for the census). So does the Overlord's cursor
+  read of the sequence, `GET /api/overlord/sequence` (Overlord W1 sequence C: server words and ids only, its row not fenced, so its read
+  ceiling counts every attributed line; its handler is in `server/src/coord/overlordSequenceRoutes.ts`, a lane source of its own for the
+  census). The dual-credential reads, including `GET /api/feed`,
   the programme goals read `GET /api/programmes/:slug/goals` (D-8126: a coordinator reads the pin, its definition of done and
   the open items cookieless through `ccrc-api`, the console with a session), the landing line's read `GET /api/landing`
   (landing order wave 5j, D-9048: a coordinator reads it cookieless through `ccrc-api landing show`, the console with a session),
@@ -712,7 +715,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   its retire), consult no box token either: each asks the account gate first, the two writes with a step-up, and runs on the
   coordination serialiser, so they are session-gated when armed and refuse `auth-off` dark. So do its two Settings doors (designation C),
   `POST /api/overlord/model` (a step-up for `fable`) and `POST /api/overlord/account-set` (a step-up for a widening). So do
-  designation B's `POST /api/overlord/rebind` (a step-up) and `POST /api/overlord/restart` (a recovery, with no step-up). `GET /api/overlord/ladder`, `GET /api/overlord/readiness` (the readiness word),
+  designation B's `POST /api/overlord/rebind` (a step-up) and `POST /api/overlord/restart` (a recovery, with no step-up). `GET /api/overlord/ladder`, `GET /api/overlord/readiness` (the readiness word), `GET /api/overlord/invariants` (the invariant monitor's last pass, findings and counts),
   `POST /api/overlord/rung`, `POST /api/overlord/pause` and `POST /api/overlord/latches/:cause/clear` consult no box token and are
   session-gated when armed. A rung lowering and Pause work dark, a raise takes the account gate's step-up, and a latch clear always
   takes the step-up. Confirm the restore (authority journal C), `GET /api/overlord/restore` (the guard's state) and

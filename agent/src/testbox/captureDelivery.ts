@@ -45,8 +45,9 @@ export const deliveryStandInReply = (_body: unknown): StandInReply => ({ kind: '
  *  (`routes[i]` is `requests[i]`'s), and the hooks recorded in it, with the driver's word for the send. A request is a turn
  *  only by `deliveryTurnOf` (a `count_tokens` request never is); every other is a side request, counted under its route.
  *  `null` when a request has no route (the lists differ in length): that is a fault of the box, the stand-in tags every
- *  request, so the drive answers no verdict rather than judge a window it cannot read. */
-export function observeWindow(send: string, requests: readonly unknown[], routes: readonly DeliveryRoute[], records: readonly CaptureRecord[]): DeliveryObserved | null {
+ *  request, so the drive answers no verdict rather than judge a window it cannot read. `others`: how many requests on a route
+ *  the stand-in does not script arrived in the window; counted as `other` only when above zero (review 3898 A3). */
+export function observeWindow(send: string, requests: readonly unknown[], routes: readonly DeliveryRoute[], records: readonly CaptureRecord[], others = 0): DeliveryObserved | null {
   if (routes.length !== requests.length) return null;
   const turns: string[] = [];
   const side: Record<DeliveryRoute, number> = { messages: 0, count_tokens: 0 };
@@ -59,7 +60,7 @@ export function observeWindow(send: string, requests: readonly unknown[], routes
     const p = typeof r.payload === 'object' && r.payload !== null ? (r.payload as Record<string, unknown>)['prompt'] : undefined;
     return typeof p === 'string' ? [p] : [];
   });
-  const sideRequests: DeliverySideRequests = side;
+  const sideRequests: DeliverySideRequests = others > 0 ? { ...side, other: others } : side;
   return { send, turns, sideRequests, hookPrompts };
 }
 

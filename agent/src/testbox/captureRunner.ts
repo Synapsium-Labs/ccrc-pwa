@@ -189,7 +189,7 @@ export class CaptureRunner {
         const s = standIn;
         const pathVar = deliveryEnv.find(([k]) => k === 'PATH')?.[1] ?? '';
         const out = await runDeliveryDrive({
-          launched: l, life: () => lifeOf(l), requests: s.requests, routes: s.routes, records: () => this.recorded(p.recording).records,
+          launched: l, life: () => lifeOf(l), requests: s.requests, routes: s.routes, ...(s.others === undefined ? {} : { others: s.others }), records: () => this.recorded(p.recording).records,
           input: { capture: p.dir, tmux: p.tmux }, place: { path: pathVar, tmpBase: this.d.tmuxBase }, build, part: part!, driver: delivery.driver, settleMs: delivery.settleMs, quietMs: delivery.quietMs,
           release: delivery.release,
           // A pane started with no tmux config (the release tree had none) is not the fleet's pane: the result says so.

@@ -114,6 +114,21 @@ describe('the stand-in model answers the Messages API (spec §2.1)', () => {
     }
   });
 
+  it('counts a request on a route it does not script by its position, and records no body, route or request for it (review 3898 A3)', async () => {
+    const s = await open();
+    await post(s, user(CAPTURE_MARK.one, false));
+    expect((await fetch(url(s, '/v1/models'), { method: 'GET' })).status).toBe(404);
+    expect((await post(s, { secret: 'never-kept' }, '/v1/other')).status).toBe(404);
+    await post(s, { messages: [] }, '/v1/messages/count_tokens');
+    expect((await fetch(url(s, '/v1/messages'), { method: 'GET' })).status).toBe(404);
+    // Each entry is the length of `requests` at its arrival.
+    expect(s.others).toEqual([1, 1, 2]);
+    // Build trust's own lists are as before: only the two scripted routes, bodies and routes together.
+    expect(s.requests).toHaveLength(2);
+    expect(s.routes).toEqual(['messages', 'count_tokens']);
+    expect(JSON.stringify([s.requests, s.routes, s.others])).not.toContain('never-kept');
+  });
+
   it('keeps each parsed body for the tests, and listens on loopback', async () => {
     const s = await open();
     await post(s, user(CAPTURE_MARK.one, false));

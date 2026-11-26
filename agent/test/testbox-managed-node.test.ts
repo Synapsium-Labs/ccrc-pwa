@@ -14,7 +14,7 @@
 // contacts a box, a system manager or a release host.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket, { WebSocketServer } from 'ws';
@@ -1495,6 +1495,51 @@ describe('the entry point\'s capture desk starts no capture while admissions are
       expect(states.map((f) => f.state)).toEqual(['queued', 'ended']);
       expect(states.at(-1)!.detail).toBe(CAPTURE_CLOSED_DETAIL);
       expect(started).toEqual([]);
+      c.ws.close();
+    } finally {
+      await b.srv.close();
+    }
+  });
+});
+
+// The release tag's hops through the entry point's composition (review 3898 F3a): the box's stamp reaches a delivery result
+// through `serviceFor`, `captureDeskComposed`, `captureRunnerFor` and `deliveryOf`. Every hop defaults to null, so a deleted
+// hop compiles and every real result would carry release null; this case reads the tag at the end of all of them.
+describe('a delivery capture through the entry point\'s composition carries the release the tree\'s stamp names (review 3898 F3a)', () => {
+  it('the stamp\'s tag is in the result the door sends, with the driver, launcher and stand-in stubbed and the clock virtual', async () => {
+    const plain = fixture();
+    const lines = new Map([...LINES].map(([k, v]) => [k, { key: k, def: '', value: v.value, from: 'file' }]));
+    const fx: Fx = { ...plain, cfg: { ...plain.cfg, lines: lines as unknown as TestboxConfig['lines'] } };
+    const builds = path.join(fx.cfg.root, 'captures', 'builds');
+    mkdirSync(builds, { recursive: true });
+    writeFileSync(path.join(builds, '2.1.100'), 'bytes');
+    const clock = { now: 1_000_000 };
+    const hooks: Record<string, readonly string[]> = { '/model haiku': ['PreModelSwitch', 'PostModelSwitch'], '/exit': ['SessionEnd'] };
+    let recording: string | null = null;
+    const record = (event: string): void => appendFileSync(recording!, `${JSON.stringify({ kind: 'hook', event, payload: {}, status: null })}\n`);
+    const b = await boot(fx, units(fx).sys, {
+      capture: {
+        home: fx.dir, tmuxBase: '/tmp', seams: {
+          // The build's first hook arrives once the drive first waits, as a started build's does.
+          now: () => clock.now, sleep: async (ms) => { clock.now += ms; if (recording !== null && !existsSync(`${recording}.started`)) { writeFileSync(`${recording}.started`, ''); record('SessionStart'); } },
+          standIn: async () => ({ port: 1, requests: [], routes: [], close: async () => undefined }),
+          launcher: {
+            start: async (spec) => {
+              recording = spec.env.find(([k]) => k === 'CCRC_CAPTURE_RECORDING')![1];
+              return { type: async (text) => { for (const e of hooks[text] ?? []) record(e); }, life: async () => 'alive', stop: async () => undefined };
+            },
+          },
+          delivery: { driver: { drive: async () => ({ kind: 'sent', send: 'ok' }) }, tmuxConf: null },
+        },
+      },
+    });
+    try {
+      const c = await door(b.srv.port);
+      c.send({ t: 'capture.submit', captureId: 'b'.repeat(32), build: '2.1.100', recipe: 'delivery', part: 0 });
+      await expect.poll(() => c.frames.filter((f) => f.includes('"capture.state"') && /"(ended|refused)"/.test(f)).length, { timeout: 20_000 }).toBe(1);
+      const ended = c.frames.map((f) => JSON.parse(f) as { t: string; state?: string; delivery?: { release?: unknown } | null }).filter((f) => f.t === 'capture.state').at(-1)!;
+      expect(ended).toMatchObject({ state: 'ended', detail: null });
+      expect(ended.delivery?.release).toBe(TAG);
       c.ws.close();
     } finally {
       await b.srv.close();

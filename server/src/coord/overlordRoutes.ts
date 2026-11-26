@@ -48,6 +48,9 @@ import type { ActorRefused, AuthorityAppender, AuthorityRefused, RowUnreadable }
 import { ladderRead, ladderWire, NO_WITNESS_YET, type LadderConditionInputs, type NarrowingWitness } from './overlordLadderRead.js';
 import { isRung, isLadderCauseKey, type Rung } from '../../../shared/overlord-ladder.js';
 import type { ReadinessLane } from './overlordReadinessLane.js';
+import { INVARIANTS_READ_ROWS_MAX, invariantsReadAnswer, type FindingsRead, type InvariantPassFact } from './overlordSequenceDoor.js';
+import type { FindingMode, FindingTally } from './invariantFindingsStore.js';
+import type { SequenceRead } from './overlordSequenceStore.js';
 import { rungMoveVerdict, narrowingState, type LadderWriterRefusal } from './overlordLadder.js';
 import { LadderStampRefused, type LadderWrite } from './overlordLadderStore.js';
 import type { OverlordAuthorityExchange } from './overlordAuthorityExchange.js';
@@ -110,6 +113,13 @@ export interface OverlordRouteDeps {
   readonly ladder?: { readonly coord: Pick<CoordStore, 'ladderRows' | 'ladderRungRead' | 'setRung' | 'clearLatch'>; readonly inputs: LadderConditionInputs; readonly witness?: NarrowingWitness; readonly serverCaps: readonly string[]; readonly journal?: AuthorityAppender };
   /** The readiness word's read (`ReadinessLane.read`, §6.4), called per request; null when no lane is wired (a test, a script). */
   readonly readiness?: () => ReturnType<ReadinessLane['read']> | null;
+  /** The operator's read of the invariant monitor (sequence C): its mode and last pass, and the findings store's reads, each list
+   *  asked for one row past the cut so a cut can be told. Absent (no monitor, no store, a test): the read answers 503. */
+  readonly invariants?: {
+    readonly mode: () => FindingMode; readonly last: () => InvariantPassFact | null;
+    readonly open: (limit: number) => FindingsRead; readonly resolved: (limit: number) => FindingsRead;
+    readonly counts: () => SequenceRead<{ readonly live: FindingTally; readonly shadow: FindingTally }>;
+  };
   /** The authority witness exchange's console arm (Overlord W1 authority journal, Task 6). Absent (a test, a script): the witness door answers 503. */
   readonly exchange?: Pick<OverlordAuthorityExchange, 'exchangeConsole'>;
   readonly consoleFacts?: (req: FastifyRequest) => { readonly armed: boolean; readonly device: string | null };
@@ -611,6 +621,19 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
     const read = deps.readiness?.() ?? null;
     if (read === null || !read.ok) return refuseRoute(reply, 'unavailable', { detail: 'the readiness word could not be read' });
     return read.wire;
+  });
+
+  // The operator's read of the invariant monitor (sequence C; §10.4, question 18): session-gated, no box token, no step-up. Before
+  // the first pass `no-pass-yet`, never an empty list; a findings or count read that failed is 503 `unavailable` naming it.
+  app.get('/api/overlord/invariants', async (_req, reply) => {
+    const inv = deps.invariants;
+    if (inv === undefined) return refuseRoute(reply, 'unavailable', { detail: 'the invariant monitor is not running on this server' });
+    const a = invariantsReadAnswer({
+      mode: inv.mode(), last: inv.last(), open: inv.open(INVARIANTS_READ_ROWS_MAX + 1), resolved: inv.resolved(INVARIANTS_READ_ROWS_MAX + 1),
+      counts: inv.counts(),
+    });
+    if (a.kind === 'unmeasured') return refuseRoute(reply, 'unavailable', { detail: a.why });
+    return a;
   });
 
   // The ladder's operator doors share the serialiser and the store used by its read.

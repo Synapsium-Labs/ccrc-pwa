@@ -1,4 +1,5 @@
 import { buildServer, type CollectLaneDeps, type Deps } from './server.js';
+import { listenArtifactServer } from './artifacts/routes.js';
 import { derivedRoleNote, loadConfig } from './config.js';
 import { reloadRoster, rosterAnswerOf } from './config.js';
 import { reconcilingAccountOps } from './accounts/reconcile.js';
@@ -34,7 +35,6 @@ import { witnessLinkOver } from './coord/overlordAuthorityWitnessLink.js';
 import type { PrivacyJournalHead } from './coord/privacyJournalHead.js';
 import { OverlordRestoreState } from './coord/overlordRestoreState.js';
 import { invariantMonitorOver } from './coord/invariantLane.js';
-import { designationBaseline } from './coord/overlordSequenceStore.js';
 import { readinessLaneOver } from './coord/overlordReadinessWiring.js';
 import { bootBoxToken } from './token/boot.js';
 import { BoxTokenDriver } from './token/driver.js';
@@ -595,13 +595,16 @@ deps.overlordRestore = overlordRestore;
 // The invariant monitor (§10.4): its reads and its findings over the same coord.db, journal and guard; shadow until armed.
 deps.invariantMonitor = invariantMonitorOver({
   db: coordDb, coord, journal: overlordAuthority, readJournal: () => overlordAuthority.readVerified(), guardState: () => overlordAuthorityGuard.state(),
-  designationBaseline, clock: time.clock, entropy: time.entropy, log: (line) => console.warn(line),
+  clock: time.clock, entropy: time.entropy, log: (line) => console.warn(line),
 });
 deps.overlordReadiness = readinessLaneOver({ db: coordDb, coord, deps, operatorModel: operatorModel.store, limits: () => watcher.currentLimits() });   // the readiness word (§6.4)
 deps.responseStamp = () => responseStampNow(responseBoot, overlordRestore.restoreGeneration());
 const app = await buildServer(deps, bus, watcher);
 watcher.start();
 perf.start();
+// X5 A1.3 (html-artifacts design section 2.2): the artifact listener first, on loopback. It never throws: a failed listen
+// writes one warning and turns the tier off (`artifact-listener-down`), and the console's listen below still runs.
+if (app.artifactServer !== null && cfg.artifact.state === 'on') await listenArtifactServer(app, cfg.artifact.port);
 await app.listen({ host: cfg.host, port: cfg.port });
 tokenDriver.start();
 console.log(`ccrc-server on ${cfg.host}:${cfg.port} (fleet=${cfg.fleetMode})`);

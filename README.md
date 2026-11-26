@@ -1505,7 +1505,7 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the one hundred and six machine lanes the
+liveness gate reads the shipped sha out of it), the one hundred and seven machine lanes the
 fleet host reaches (thirty-nine box-token-consulting coordination routes plus
 the Linear proxy's routes under `/api/linear/proxy/`, which a session's `ccrc-api linear`
 verbs call and which refuse any call without the token whatever `CCRC_AUTH` says,
@@ -1529,7 +1529,9 @@ refuses otherwise) and its tick report
 (`POST /api/continuity/quiz-baseline/live`, attributed and owned, W1a lanes only),
 the Overlord's inbox doors (`GET /api/overlord/inbox`, `GET /api/overlord/messages/:id` and
 `POST /api/overlord/messages/:id/acknowledge`, attributed, then behind the Overlord gate and its fence), the Overlord's
-history door (`POST /api/overlord/history`, a read whose search words ride the body, behind the same gate and fence),
+history door (`POST /api/overlord/history`, a read whose search words ride the body, behind the same gate and fence), the
+Overlord's cursor read of the sequence (`GET /api/overlord/sequence`, server words and ids only, behind the same gate, its row not
+fenced),
 `/api/notify`, which refuses an absent token like every lane,
 `/api/pools/epoch` and `/api/updates/intent/:nodeId` — the callers are `curl` inside a
 Claude Code session, `ccd-pool-sync.timer` and, from update-management W4, `ccd-update-sync.timer`, none with a cookie jar, though the
@@ -6285,6 +6287,22 @@ unreadable (ahead of every wave-1 rung and cap), coordinator deaf (ahead of the
   - An account-class error holds, because the limit and swap machinery owns it.
   - A token this build does not know holds with one `ccrc-server: stall-watch
     unknown StopFailure` line. It is never guessed into a self-wake.
+
+**A session on a failing provider moves by itself**, the last rung of the
+provider-failure ladder below (`ccd/ccd#_watchdog_provider`, in the fleet limit
+watchdog's pass). On the third counted failure since its last move, still owed,
+it goes to another lane by itself: the limit rescue's act, with the
+arm `provider`, and no key is sent. Every gate of a rescue stands (the pool side,
+the class, `<lane>-disabled`, measured room, the 15 minutes after a move, do not
+bounce, three moves a pass), never one class down, and never a lane that is marked
+failing, one of a provider with two marked lanes, or one the session's measured
+context does not fit. A lane with a good turn since the first failure comes first,
+then another provider, then an unproved lane of its own. It waits for a running
+turn, background work, a dialog, a question and unsent text in the box, at the
+decision and again at the act. With no lane it stays, the nudges go on, and
+`~/.cc-sessions/<id>.provwait` (an epoch) says since when, until a good turn or a
+move. It raises no notice. `ccd swap`, `ccd swap-self` and `ccd prefer` are never
+held by any of it, and `CCRC_LIMIT_WATCHDOG_MIN=0` stops it.
 
 **The provider-failure ladder** (`server/src/coord/providerRetry.ts`, run inside
 the stall watch's pass by `server/src/providerRetryLane.ts`). Any live session
