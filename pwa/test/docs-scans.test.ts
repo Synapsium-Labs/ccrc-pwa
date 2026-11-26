@@ -719,7 +719,7 @@ describe('clause W8a: the reader library has its homes (M8.10 amended, M8.21)', 
     expect(files).toContain(LEAF);
     expect(READER_SCAN_CACHE.size).toBeGreaterThanOrEqual(files.length);
     const dir = treeCopy();
-    plant(dir, LEAF, "\nimport { createHost } from '@synapsium-labs/docserver/host';\nvoid createHost;\n");
+    plant(dir, LEAF, `\nimport { createHost } from '${LIBRARY}/host';\nvoid createHost;\n`);
     expect(names(readerScan(dir).hits, 'library:')).toEqual([`${LEAF} library:/host`]);
   });
 });
