@@ -1113,6 +1113,8 @@ describe('end to end through runCcrcOp, Linear faked at FetchLike (recorded answ
         sentInitiative += 1;
         return linearAnswer({ ok: true, status: 200, json: async () => ({ data: null, errors: [{ message: 'something new', extensions: { code: 'SOMETHING_NEW' } }] }) });
       }
+      // The pending binding's recovery reads by name before each later create: Linear holds no such initiative.
+      if (q === D.initiativesByName) return linearAnswer({ ok: true, status: 200, json: async () => ({ data: { initiatives: { nodes: [] } } }) });
       const name = ANSWERS.get(q);
       if (name === undefined) throw new Error('no recorded answer for this document');
       return recordedAnswer(name);

@@ -855,17 +855,21 @@ export class PlanSync {
 
   /** `failWith` is what a failing word does (by default the binding fails with it, C16's link gives the URL up instead). */
   private onFailure(out: Failure, s: Subject, failWith: (word: string) => void = (word) => this.fail(s, word)): Flow {
+    // Sent and answered outside the grammar: as `maybeSent`, and failed after the last backoff step.
+    const outsideGrammar = (): Flow => {
+      const n = (this.malformed.get(s.bindingId ?? -1) ?? 0) + 1;
+      if (s.bindingId !== null) this.malformed.set(s.bindingId, n);
+      if (s.bindingId !== null && n > PLAN_SYNC_BACKOFF_MS.length) { failWith('malformed'); return 'next'; }
+      return this.hold(s, 'malformed');
+    };
+    // D-9132: Linear answered, but with an error outside the closed table (`outsideTable`): the malformed row's handling, not a
+    // transport failure's endless hold. The binding fails `malformed` after the last backoff step, so the pass goes on.
+    if (out.word === 'unreachable' && out.outsideTable === true) return outsideGrammar();
     switch (out.word) {
       case 'rate-limited': return this.hold(s, out.word, { floorMs: 'retryAfterS' in out ? out.retryAfterS * 1000 : 0 });
       case 'unreachable': case 'timeout': case 'policy-unavailable': case 'journal-unavailable':
         return this.hold(s, out.word);
-      case 'malformed': {
-        // Sent and answered outside the grammar: as `maybeSent`, and failed after the last backoff step.
-        const n = (this.malformed.get(s.bindingId ?? -1) ?? 0) + 1;
-        if (s.bindingId !== null) this.malformed.set(s.bindingId, n);
-        if (s.bindingId !== null && n > PLAN_SYNC_BACKOFF_MS.length) { failWith('malformed'); return 'next'; }
-        return this.hold(s, 'malformed');
-      }
+      case 'malformed': return outsideGrammar();
       case 'not-configured': this.notConfigured.add(s.workspaceId); return 'next';
       case 'linear-unauthorised': {
         this.hold(s, 'linear-unauthorised');
