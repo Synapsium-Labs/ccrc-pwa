@@ -1463,18 +1463,25 @@ At `http://localhost`, put `CCRC_COOKIE_INSECURE=on` in the same edit: Safari (W
 on a plain-http localhost origin, and the session cookie is `Secure` unless that key says otherwise, so without it a
 Safari login answers 204 and the login screen comes straight back (Chromium keeps the cookie either way).
 
-**On a box used only at localhost, one verb does all of it: `ccrc passwd`, then `ccrc auth on`.** It refuses unless
-the passphrase file is usable, writes `CCRC_AUTH=on`, `CCRC_RP_ID=localhost`, `CCRC_ORIGIN=http://localhost:<port>` and
+**On a box used only at localhost, one verb does all of it: `ccrc passwd`, then `ccrc auth on`.** It refuses unless the
+passphrase file is usable, writes `CCRC_AUTH=on`, `CCRC_RP_ID=localhost`, `CCRC_ORIGIN=http://localhost:<port>` and
 `CCRC_COOKIE_INSECURE=on` into `ccrc.env` (every other line byte for byte as it was, the file's mode kept), restarts
-`ccrc.service`, and proves that the server answers with sign-in on; if it does not, the file goes back as it was and the
-unit is restarted again. Open `http://localhost:<port>/` exactly: `http://127.0.0.1:<port>` is a different origin, where
-the console signs in and loads but every change is refused. `ccrc auth off` removes those lines (a value it did not
-write stays, named) and proves sign-in off. Both refuse, changing nothing, on a box reached from elsewhere (an exposure
-file, a Caddyfile, the ddns unit, or a `CCRC_HOST` bind off loopback: that box arms with `ccrc expose`), while an update
-or rollback holds `~/.ccrc/update.lock`, and inside a Claude Code session, without a terminal or in a fleet session's
-pane. The hand edit above stays the route for a box behind a TLS-terminating proxy of your own. Such a box that has not
-yet set `CCRC_ORIGIN` looks loopback-only to the verb; armed for localhost, it signs in through the proxy but cannot
-act, so run `ccrc auth off` there and use the hand edit.
+`ccrc.service`, and proves that the server answers with sign-in on; if it does not, or the run is interrupted, the file
+goes back as it was and the unit is restarted again. Open `http://localhost:<port>/` exactly: `http://127.0.0.1:<port>`
+is a different origin, where the console signs in and loads but every change is refused. `ccrc auth off` removes those
+lines (a cookie line it did not write stays, named) and proves sign-in off. Both refuse, changing nothing, on a box
+reached from elsewhere (an exposure file, a Caddyfile or the ddns unit: that box arms with `ccrc expose duckdns`,
+`ccrc expose byo` or `ccrc expose ip`; a `CCRC_HOST` bind beyond loopback: bind it back to `127.0.0.1`, or arm it by
+hand), on a box whose `ccrc.service` can take its bind or a sign-in key from anywhere but `ccrc.env` and the exposure
+file (a drop-in, an `Environment=` line, another environment file, the service manager's own environment), while an
+update or rollback holds `~/.ccrc/update.lock`, and inside a Claude Code session, without a terminal or in a fleet
+session's pane. Those last three are speed bumps, not walls: `env -u CLAUDECODE`, a terminal made with `script`, an
+unset `TMUX_PANE`, a script file or another interpreter each run past them, so they stop a session that arms or disarms
+the gate by accident, never one that sets out to. The hand edit above stays the route for a box behind a TLS-terminating
+proxy of your own, and `ccrc auth off` refuses a box whose `CCRC_ORIGIN` or `CCRC_RP_ID` holds a value it did not write:
+that box looks armed for another address, and turning sign-in off there is a hand edit too. Such a box that has not yet
+set `CCRC_ORIGIN` looks loopback-only to the verb; armed for localhost, it signs in through the proxy but cannot act, so
+run `ccrc auth off` there and use the hand edit.
 
 **On a box exposed with `ccrc expose`, skip the edit.** The verb writes `CCRC_AUTH=on` and
 `CCRC_ORIGIN` into `~/.ccrc/exposure.env` itself — and `CCRC_RP_ID` too, on every arm but

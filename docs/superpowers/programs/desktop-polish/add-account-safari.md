@@ -123,9 +123,10 @@ prose, in one of two lists, as ruled (36889):
 2. `COMMAND_LIKE`, words that could be read as a command after the product's name (`access`, `close`, `connect`,
    `managed`, `moves`, `next`, `on`, `operator`, `push`, `release`, `restarts`, `runs`, `sends`, `sets`, `stops`), each
    excused only inside the sentences it stands in today. All its sites were read, 23 prose hits at 22 sites over 18
-   listed sentences (corrected in desktop-polish wave 181: review run 3901 A7 measured these at this wave's head, where
-   this note first said 25, counting two comments the scan leaves out): each is prose and offers nothing to run, so
-   none was a finding.
+   listed entries, 17 sentences and one exact literal, the `operator` entry (corrected in desktop-polish wave 181:
+   review run 3901 A7 measured these at this wave's head, where this note first said 25, counting two comments the scan
+   leaves out, and review run 3934 A10 the 17 and the one): each is prose and offers nothing to run, so none was a
+   finding.
 
 A listed word excuses prose, never a command: inside backticks, in a `<code>`, `<kbd>`, `<pre>` or `<samp>`, or in a
 command position (a `fix`, a `command`, or anything a name with "command" in it holds, such as `fixCommands`), only a
