@@ -58,6 +58,15 @@ export function holdOfStartCases(m: RenewalReadingsModule): Record<string, Suite
     'a measured account load holds even beside an unmeasured property': () => {
       expect(m.holdOfStart(verdict({ agents: ['failed', true], tools: ['unmeasured', false] }), 'lane-a')).toEqual({ kind: 'hold', lane: 'lane-a' });
     },
+    'a start that ran another launch profile holds nothing: its extras say nothing about the account, and it is settled (F2)': () => {
+      for (const profile of [['failed', false], ['unmeasured', false]] as const) {
+        for (const p of ['tools', 'tool-servers', 'hooks'] as const) {
+          expect(m.holdOfStart(verdict({ profile, [p]: ['failed', true] }), 'lane-a'), `${profile[0]} ${p}`).toEqual({ kind: 'settled' });
+        }
+        expect(m.holdOfStart(verdict({ profile, tools: ['failed', true], 'tool-servers': ['failed', true], hooks: ['failed', true] }), 'lane-a'))
+          .toEqual({ kind: 'settled' });
+      }
+    },
     'an account load on a start whose account is unknown holds nothing and asks again': () => {
       expect(m.holdOfStart(verdict({ hooks: ['failed', true] }), null)).toEqual({ kind: 'unmeasured', why: 'the account the start ran on is unknown' });
     },
@@ -71,6 +80,8 @@ const HOLD_OF_START_SET: MutantSet<RenewalReadingsModule> = {
     { id: 'H2 hold on a workspace-loaded property', old: "p.state === 'failed' && p.fromAccount)) {", new: "p.state === 'failed')) {" },
     { id: 'H3 an unmeasured property settles', old: "  if (open !== undefined) return { kind: 'unmeasured', why: `${open.property} unmeasured` };\n", new: '' },
     { id: 'H4 no verdict settles', old: "if (verdict === 'unmeasured') return { kind: 'unmeasured', why: 'no verdict for the start yet' };", new: "if (verdict === 'unmeasured') return { kind: 'settled' };" },
+    { id: 'H6 the profile state ignored', old: "  if (verdict.properties.find((p) => p.property === 'profile')?.state !== 'held') return { kind: 'settled' };\n", new: '' },
+    { id: 'H7 only a failed profile settles', old: "?.state !== 'held') return { kind: 'settled' };", new: "?.state === 'failed') return { kind: 'settled' };" },
     { id: 'H5 an unknown account settles', old: "return lane === null ? { kind: 'unmeasured', why: 'the account the start ran on is unknown' } : { kind: 'hold', lane };", new: "return lane === null ? { kind: 'settled' } : { kind: 'hold', lane };" },
   ],
   suite: holdOfStartCases,
@@ -172,6 +183,9 @@ export function holdTargetCases(m: RenewalReadingsModule): Record<string, SuiteC
     },
     'nobody designated, a pending row or an unreadable one: no target': () => {
       expect(m.holdTargetOf({ kind: 'not-designated', row: null }, rows)).toBeNull();
+      // A pending row has no target: a start that fails the check during designate or rebind writes no hold, since the settle
+      // retires the pending generation in the same transaction and the pass sees only live ones. A recorded limit, not this PR's
+      // (slug first-start-failure-writes-no-hold; the next readings PR, ticket first-start-failure-holds-its-account).
       expect(m.holdTargetOf({ kind: 'not-designated', row: { ...view, bound: null } } as never, rows)).toBeNull();
       expect(m.holdTargetOf({ kind: 'unmeasured', why: 'locked' }, rows)).toBeNull();
     },
@@ -191,7 +205,33 @@ const HOLD_TARGET_SET: MutantSet<RenewalReadingsModule> = {
   suite: holdTargetCases,
 };
 
+// ------------------------------------------------------------------------------------------------------------- holdsAppliedOf
+
+export function holdsAppliedCases(m: RenewalReadingsModule): Record<string, SuiteCase> {
+  const held = { ok: true as const, lanes: ['lane-a', 'lane-b'] };
+  const unread = { ok: false as const, detail: 'locked' };
+  return {
+    'an overridden hold reads as no hold, so the readings agree with the list builder (F1)': () => {
+      expect(m.holdsAppliedOf(held, 'overridden')).toEqual({ ok: true, lanes: [] });
+    },
+    'applied holds and unread holds reach the readings as read': () => {
+      expect(m.holdsAppliedOf(held, 'applied')).toEqual(held);
+      expect(m.holdsAppliedOf(unread, 'unread')).toEqual(unread);
+    },
+  };
+}
+
+const HOLDS_APPLIED_SET: MutantSet<RenewalReadingsModule> = {
+  modulePath: READINGS,
+  mutants: [
+    { id: 'HA1 the readings see the holds while the list is overridden', old: "return applied === 'overridden' ? { ok: true, lanes: [] } : held;", new: 'return held;' },
+    { id: 'HA2 every answer reads as no hold', old: "return applied === 'overridden' ? { ok: true, lanes: [] } : held;", new: "return { ok: true, lanes: [] };" },
+  ],
+  suite: holdsAppliedCases,
+};
+
 export const RENEWAL_HOLD_READING_SETS: Record<string, MutantSet<never>> = {
+  'server/src/continuity/renewalReadings.ts#holdsAppliedOf': HOLDS_APPLIED_SET as MutantSet<never>,
   'server/src/continuity/renewalReadings.ts#holdTargetOf': HOLD_TARGET_SET as MutantSet<never>,
   'server/src/continuity/renewalReadings.ts#holdOfStart': HOLD_OF_START_SET as MutantSet<never>,
   'shared/renewal-readings.ts#heldOutOfList': HELD_OUT_SET as MutantSet<never>,

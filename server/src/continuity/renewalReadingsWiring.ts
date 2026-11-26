@@ -79,7 +79,7 @@ import {
   backstopDueOf, classChangedOf, fittedCeilingOf, notLocalAskOf, notLocalOf, termRaisedOf, type AbsenceProbe, type Carrier, type SpotsRead, type TranscriptAsk,
   type W1Inputs,
 } from './renewalReadings.js';
-import { accountLoadMoveOf, accountLoadOf, accountOutsideSetOf, classUnservableOf, overlordCandidatesOf, unboundCandidates } from './renewalReadings.js';
+import { accountLoadMoveOf, accountLoadOf, accountOutsideSetOf, classUnservableOf, overlordCandidatesAndHoldsOf, unboundCandidates, type Holds } from './renewalReadings.js';
 import { modelDriftReadingOf, readersRunningReadingOf } from './renewalReadings.js';
 import type { Reading } from './renewalDue.js';
 import { buildsAgreeOf, overlordInstallBehindOf, startDigestDiffersOf } from './renewalReadings.js';
@@ -229,7 +229,7 @@ export function renewalReadingsOf(deps: ReadingsDeps, coord: ReadingsCoord, reco
   // generations of one pass share one read, and a read that fails fails each field that awaits it, in that field's own catch.
   const reads = accountReadsOf(deps);
   let facts: Promise<AccountFacts> | undefined;
-  let candidates: Promise<Candidates> | undefined;
+  let candidates: Promise<{ readonly candidates: Candidates; readonly holds: Holds }> | undefined;
   const poolAnswers = new Map<string, Promise<PoolAnswerRead>>();
   const factsOf = (r: AccountReads, edges: NonNullable<ReadingsCoord['accountPoolEdges']>): Promise<AccountFacts> => facts ??= (async () => {
     const nowS = Math.floor(deps.time.clock.wall() / 1000);
@@ -241,7 +241,8 @@ export function renewalReadingsOf(deps: ReadingsDeps, coord: ReadingsCoord, reco
     const h = holdsOf();
     return { roster, limits, edges: edges(), lanes, nowS, held: h === 'not-wired' ? { ok: false, detail: 'the holds are not wired' } : h };
   })();
-  const candidatesOf = (f: AccountFacts): Promise<Candidates> => candidates ??= Promise.resolve(overlordCandidatesOf(designation ??= coord.designationRead(), f));
+  const candidatesOf = (f: AccountFacts): Promise<{ readonly candidates: Candidates; readonly holds: Holds }> =>
+    candidates ??= Promise.resolve(overlordCandidatesAndHoldsOf(designation ??= coord.designationRead(), f));
   const poolAnswerOf = (r: AccountReads, id: string): Promise<PoolAnswerRead> => {
     let p = poolAnswers.get(id);
     if (p === undefined) { p = r.poolAnswer(id); poolAnswers.set(id, p); }
@@ -253,16 +254,18 @@ export function renewalReadingsOf(deps: ReadingsDeps, coord: ReadingsCoord, reco
   const accountReadings = async (w1: Partial<W1Inputs>, g: GenRow, base: GenReadings, r: AccountReads,
     edges: NonNullable<ReadingsCoord['accountPoolEdges']>): Promise<void> => {
     const early = (): Candidates | null => unboundCandidates(designation ??= coord.designationRead(), g.sessionId);
-    const live = async (): Promise<{ f: AccountFacts; c: Candidates }> => {
+    const live = async (): Promise<{ f: AccountFacts; c: Candidates; holds: Holds }> => {
       const f = await factsOf(r, edges);
-      return { f, c: await candidatesOf(f) };
+      const built = await candidatesOf(f);
+      return { f, c: built.candidates, holds: built.holds };
     };
     const nowS = (): number => Math.floor(deps.time.clock.wall() / 1000);
     await fieldAsync(w1, 'accountOutsideSet', 'account set', async () => {
       const e = early();
       if (e !== null) return accountOutsideSetOf({ kind: 'not-run' }, e, 'not-wired');
-      const [{ c }, answer] = await Promise.all([live(), poolAnswerOf(r, g.sessionId)]);
-      return accountOutsideSetOf(answer, c, holdsOf());
+      const [{ c, holds }, answer] = await Promise.all([live(), poolAnswerOf(r, g.sessionId)]);
+      // The holds as the list builder applied them (F1), so an overridden hold reads as no hold here too.
+      return accountOutsideSetOf(answer, c, holdsOf() === 'not-wired' ? 'not-wired' : holds);
     });
     await fieldAsync(w1, 'classUnservable', 'class serviceability', async () => {
       const e = early();

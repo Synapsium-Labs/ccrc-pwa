@@ -709,6 +709,17 @@ describe('renewalReadingsOf (PR H: the holds into the account readings, and the 
     expect(r.w1?.accountOutsideSet).toEqual(TRUE);
   });
 
+  it('holds over every candidate are overridden everywhere: on each lane in turn the reading reads as with no holds (F1)', async () => {
+    // lane-b and lane-c are the set's; both held, so the list builder keeps the list as it was, and the reading must agree
+    for (const on of ['lane-b', 'lane-c']) {
+      const c = coordOf({ designation: () => OPUS });
+      const answer = `pool-answer side=set:pool-a verdict=serve pool-side=account pool-state=named:pool-a crossing=none account=${on}\n`;
+      const r = await renewalReadingsOf(acctDeps([], [], { answer }), withHolds(c, () => ({ ok: true, lanes: ['lane-b', 'lane-c'] })), [])
+        .w1(gen({ lane: on }), base());
+      expect(r.w1?.accountOutsideSet, on).toEqual(FALSE);
+    }
+  });
+
   it('a clear puts the account back: the same serve verdict with no hold standing is not due', async () => {
     const c = coordOf({ designation: () => OPUS });
     const r = await renewalReadingsOf(acctDeps([], [], { answer: SERVE }), withHolds(c, () => ({ ok: true, lanes: [] })), []).w1(gen({}), base());

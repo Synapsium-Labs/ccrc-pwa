@@ -318,7 +318,20 @@ export function notLocalOf(i: {
 /** The Overlord's candidates for one pass: designation A's ordered list (`overlordAccounts`, asked only of a live binding, which
  *  alone has a set) under serviceability B's `overlordLoadCandidates`. */
 export function overlordCandidatesOf(d: DesignationRead, f: AccountFacts): Candidates {
-  return overlordLoadCandidates(d, d.kind === 'designated' ? overlordAccounts(d.row.accountPools, d.row.model, f).list : [], f);
+  return overlordCandidatesAndHoldsOf(d, f).candidates;
+}
+
+/** The candidates and the holds as the list builder applied them, from ONE `overlordAccounts` result, so the account readings and
+ *  the list cannot disagree about which accounts are held (fix round 1, F1: an overridden hold is overridden everywhere). */
+export function overlordCandidatesAndHoldsOf(d: DesignationRead, f: AccountFacts): { readonly candidates: Candidates; readonly holds: Holds } {
+  const built = d.kind === 'designated' ? overlordAccounts(d.row.accountPools, d.row.model, f) : null;
+  return { candidates: overlordLoadCandidates(d, built === null ? [] : built.list, f), holds: built === null ? f.held : holdsAppliedOf(f.held, built.holds) };
+}
+
+/** The holds a reading takes from the list builder's answer (F1): `overridden` (the holds would have left no account, so the list
+ *  is kept as it was) reads exactly as no holds; `applied` and `unread` are the holds as read. */
+export function holdsAppliedOf(held: Holds, applied: 'applied' | 'overridden' | 'unread'): Holds {
+  return applied === 'overridden' ? { ok: true, lanes: [] } : held;
 }
 
 /** The candidates for one generation when the designation alone answers, or null when it is this session's live binding and the
@@ -448,6 +461,9 @@ export type StartHold =
 
 /** A start's hold (§3.6, plan question 6), first match:
  *  1. no verdict yet (no loads report, or one that is not this start's): unmeasured;
+ *  1b. the `profile` property not held (the role or the digest differs, or the report names none): settled with no hold. The
+ *     start ran another launch profile, so its extras say nothing about the account (fix round 1, F2; the stance
+ *     `overlordInstallBehindOf` takes on build skew);
  *  2. a property failed with something loaded from the account's own config directory (`PropertyVerdict.fromAccount`, the sandbox
  *     check's own reading of the harness): hold the account the start ran on, or unmeasured when that account is unknown;
  *  3. any property unmeasured: unmeasured, since an unmeasured property never holds an account and may yet hide one;
@@ -455,6 +471,7 @@ export type StartHold =
  *     account would not cure. */
 export function holdOfStart(verdict: SandboxVerdict | 'unmeasured', lane: string | null): StartHold {
   if (verdict === 'unmeasured') return { kind: 'unmeasured', why: 'no verdict for the start yet' };
+  if (verdict.properties.find((p) => p.property === 'profile')?.state !== 'held') return { kind: 'settled' };
   if (verdict.properties.some((p) => p.state === 'failed' && p.fromAccount)) {
     return lane === null ? { kind: 'unmeasured', why: 'the account the start ran on is unknown' } : { kind: 'hold', lane };
   }

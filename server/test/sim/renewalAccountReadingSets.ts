@@ -338,7 +338,8 @@ function candidatesCases(m: RenewalReadingsModule): Record<string, SuiteCase> {
 const CANDIDATES_SET: MutantSet<RenewalReadingsModule> = {
   modulePath: MODULE,
   mutants: [
-    { id: 'C1 the ordered list not asked', old: "d.kind === 'designated' ? overlordAccounts(d.row.accountPools, d.row.model, f).list : []", new: '[]' },
+    // Re-pinned in PR H's fix round 1 (F1): the list now comes from the one `overlordAccounts` result the holds are read from too.
+    { id: 'C1 the ordered list not asked', old: 'overlordLoadCandidates(d, built === null ? [] : built.list, f)', new: 'overlordLoadCandidates(d, [], f)' },
   ],
   suite: candidatesCases,
 };
