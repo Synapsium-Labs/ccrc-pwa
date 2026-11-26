@@ -15,7 +15,7 @@ import { INVARIANT_NAMES, findingMoves, invariantPassDue, invariantVerdict, latc
   type Finding, type InvariantInput, type InvariantName, type InvariantVerdict, type LastPass } from './invariants.js';
 import type { FindingLatched, FindingMode, OpenFindingRow } from './invariantFindingsStore.js';
 import type { BoundOf, ItemReachOf } from './pushOutboxStore.js';
-import type { SequenceRead } from './overlordSequenceStore.js';
+import { designationBaseline, type SequenceRead } from './overlordSequenceStore.js';
 import type { Clock, Entropy } from '../time/ports.js';
 import type { DatabaseSync } from 'node:sqlite';
 import { INVARIANTS_LANE } from '../../../shared/lane-arm.js';
@@ -102,18 +102,20 @@ export class InvariantMonitor {
 }
 
 /** The monitor over one `coord.db`, built once in `index.ts` (L5): its reads and writes bound to the handle, its arming read from
- *  the Shadow lanes card's `invariants` row, and its latch raised through the ladder as the server's `invariants` lane. */
+ *  the Shadow lanes card's `invariants` row, and its latch raised through the ladder as the server's `invariants` lane. I5's
+ *  kept designation line is bound here too, to the sequence store's one reader (`designationBaseline`, call 1240), like the head,
+ *  the open findings, the record and the resolve: the composition root passes no read of it, so no stand-in can reach the gather
+ *  (slug `i5-baseline-bound-in-the-factory`). */
 export function invariantMonitorOver(o: {
   readonly db: DatabaseSync; readonly coord: Pick<CoordStore, 'raiseLatch' | 'laneArmSetting'>; readonly journal: AuthorityAppender;
   readonly readJournal: InvariantFactsDeps['readJournal']; readonly guardState: InvariantFactsDeps['guardState'];
-  readonly designationBaseline: InvariantFactsDeps['designationBaseline'];
   readonly clock: Pick<Clock, 'wall' | 'mono'>; readonly entropy: Pick<Entropy, 'hex'>; readonly log: (line: string) => void;
 }): InvariantMonitor {
   const { db } = o;
   return new InvariantMonitor({
     armed: () => laneArmRowViewOf(INVARIANTS_LANE, o.coord.laneArmSetting(INVARIANTS_LANE)).live,
     head: () => sequenceHead(db),
-    gather: () => gatherInvariantInput({ db, readJournal: o.readJournal, guardState: o.guardState, designationBaseline: o.designationBaseline }),
+    gather: () => gatherInvariantInput({ db, readJournal: o.readJournal, guardState: o.guardState, designationBaseline }),
     open: (mode) => openFindings(db, mode),
     record: (f, mode, live, at) => recordFinding(db, f, mode, live, at),
     resolve: (ids, at) => resolveFindings(db, ids, at),
