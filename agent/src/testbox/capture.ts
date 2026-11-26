@@ -170,7 +170,7 @@ export const CAPTURE_CD_COMMAND = `cd ${CAPTURE_CD_DIR}`;
  *  build does not retry (400, `invalid_request_error`), which ends the turn with StopFailure. */
 export type StandInReply =
   | { readonly kind: 'tool'; readonly name: string; readonly input: Readonly<Record<string, unknown>> }
-  | { readonly kind: 'text'; readonly text: string }
+  | { readonly kind: 'text'; readonly text: string; readonly holdMs?: number }
   | { readonly kind: 'error'; readonly status: 400; readonly message: string };
 
 type Obj = Record<string, unknown>;
@@ -271,12 +271,21 @@ export interface CaptureTimings {
   /** The delivery recipe's: how long a case's window stays open after its turn ended (or the settle bound passed), so a
    *  late second submit still falls in that case's window. */
   readonly deliveryQuietMs: number;
+  /** The box frames recipe's (Desktop polish wave 187): how long the driver child may take for one step (its node start,
+   *  and a typing step, a `sendPrompt` or the frame read with its settle); past it the child is killed, with the delivery
+   *  recipe's kill grace and one drain, and the capture answers no result. */
+  readonly framesDriveMs: number;
+  /** The frames recipe's: the same bound for the person's typing, one tmux call per burst. */
+  readonly framesPersonDriveMs: number;
+  /** The frames recipe's: how long the stand-in holds the held turn open at most (`queued`), released after the frame. */
+  readonly framesHoldMs: number;
 }
 
 /** The contract. A step of the drive against the stand-in takes seconds; 35 s each leaves room on a slow box. */
 export const CAPTURE_TIMINGS: CaptureTimings = Object.freeze({
   stepMs: 35_000, exitMs: 30_000, pollMs: 500, tmuxCallMs: 5_000, stopWaitMs: 5_000, standInCloseMs: 2_000, setupMs: 10_000, removeMs: 5_000,
   deliveryDriveMs: 25_000, deliveryKillGraceMs: 1_000, deliverySettleMs: 15_000, deliveryQuietMs: 2_000,
+  framesDriveMs: 25_000, framesPersonDriveMs: 90_000, framesHoldMs: 60_000,
 });
 
 /** The slack kept beside the worst case: the frames' travel and the clocks of two processes. */

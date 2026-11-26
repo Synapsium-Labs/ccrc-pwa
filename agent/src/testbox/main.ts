@@ -29,7 +29,9 @@ import {
 } from './capture.js';
 import { CaptureDesk, type CaptureRunnerLike } from './captureDesk.js';
 import { nodeDeliveryDriver } from './captureDeliveryRun.js';
-import { CaptureRunner, tmuxLauncher, type CaptureDeliveryDeps, type CaptureLauncher, type TmuxLauncherSeams } from './captureRunner.js';
+import { nodeFramesDriver } from './captureFramesRun.js';
+import { framesScan } from '../../../shared/framesScan.mjs';
+import { CaptureRunner, tmuxLauncher, type CaptureDeliveryDeps, type CaptureFramesDeps, type CaptureLauncher, type TmuxLauncherSeams } from './captureRunner.js';
 import { startStandIn, type StandIn } from './captureStub.js';
 import { durationMs, hostPort, readRepoRows, readTestboxConfig, type TestboxConfig } from './config.js';
 import { reflinkProbe, reflinkProbeDir } from './fsprobe.js';
@@ -227,7 +229,12 @@ export interface CaptureSeams {
   /** The delivery recipe's wiring; `null` wires none. Absent: {@link deliveryWiring}. Its settle and quiet bounds are never
    *  a seam's: they come from the timing contract the runner is built from. */
   readonly delivery?: DeliveryWiring | null;
+  /** The box frames recipe's wiring; `null` wires none. Absent: {@link framesWiring}. */
+  readonly frames?: FramesWiring | null;
 }
+
+/** The frames recipe's wiring past its bounds: the driver, the tmux config, the box's private strings and the scan. */
+export type FramesWiring = Pick<CaptureFramesDeps, 'driver' | 'tmuxConf' | 'privates' | 'scan'>;
 
 /** The delivery recipe's wiring past its bounds: the driver and the tmux config. */
 export type DeliveryWiring = Pick<CaptureDeliveryDeps, 'driver' | 'tmuxConf'>;
@@ -253,6 +260,34 @@ export function deliveryWiring(t: CaptureTimings = CAPTURE_TIMINGS, driver: stri
   return { driver: nodeDeliveryDriver(process.execPath, driver, t.deliveryDriveMs, t.deliveryKillGraceMs), tmuxConf: existsSync(conf) ? conf : null };
 }
 
+/** The box's own private strings every frame's reducer is given (Desktop polish wave 187, plan 5.2 rule 3): its home
+ *  directory, its user name (four characters or more, so a short one does not match half the screen), its host name and its
+ *  short form, and the release tree it runs from. Each capture adds its own directories and the stand-in's address. */
+export function boxPrivates(home: string = os.homedir(), user: string = os.userInfo().username, host: string = os.hostname(),
+  tree: string = fileURLToPath(new URL('../../../../../', import.meta.url))): string[] {
+  const short = host.split('.')[0] ?? '';
+  return [home, tree.replace(/\/$/, ''), ...(user.length >= 4 ? [user] : []), ...(host.length >= 4 ? [host] : []), ...(short.length >= 4 && short !== host ? [short] : [])]
+    .filter((x) => x !== '' && x !== '/');
+}
+
+/** The frames recipe's wiring: the same compiled driver as the delivery recipe's (its frames form), run by this process's
+ *  node within `t`'s two frames bounds and the kill grace; the fleet's tmux config when the tree holds it; the box's private
+ *  strings; the committed private-name scan. A tree with no compiled driver wires none, so a frames capture is refused at
+ *  the frame (`service.ts#capture`). */
+export function framesWiring(t: CaptureTimings = CAPTURE_TIMINGS, driver: string = compiledDeliveryDriver(), conf: string = shippedTmuxConf()): FramesWiring | undefined {
+  if (!existsSync(driver)) return undefined;
+  return {
+    driver: nodeFramesDriver(process.execPath, driver, t.framesDriveMs, t.framesPersonDriveMs, t.deliveryKillGraceMs),
+    tmuxConf: existsSync(conf) ? conf : null, privates: boxPrivates(), scan: framesScan,
+  };
+}
+
+/** The runner's frames dependencies: the wiring with `t`'s settle, quiet and hold bounds, so every bound is the contract's. */
+export const framesOf = (seams: CaptureSeams, t: CaptureTimings, release: string | null = null): { frames?: CaptureFramesDeps } => {
+  const f = seams.frames === undefined ? framesWiring(t) : seams.frames;
+  return f === undefined || f === null ? {} : { frames: { ...f, release, settleMs: t.deliverySettleMs, quietMs: t.deliveryQuietMs, holdMs: t.framesHoldMs } };
+};
+
 /** The capture runner (spec 2026-11-22 §2.3; gate G1): every bound it keeps from the one timing contract `t`, the launcher's
  *  per-call bound included; the build's tmux server is the box's `tmux`, found on the capture's own `PATH`; the recorder
  *  is the compiled one beside this file, run by this process's node. */
@@ -270,6 +305,7 @@ export function captureRunnerFor(root: string, tmuxBase: string, toolsPath: () =
     standIn: seams.standIn ?? ((reply) => startStandIn(reply === undefined ? {} : { reply })),
     stepTimeoutMs: t.stepMs, exitTimeoutMs: t.exitMs, pollMs: t.pollMs, stopWaitMs: t.stopWaitMs, standInCloseMs: t.standInCloseMs,
     ...deliveryOf(seams, t, release),
+    ...framesOf(seams, t, release),
     ...(seams.now === undefined ? {} : { now: seams.now }), ...(seams.sleep === undefined ? {} : { sleep: seams.sleep }),
   });
 }

@@ -53,6 +53,7 @@ import { measureBackup, type BackupSeams } from './backup.js';
 import { captureTestbox, measureTestbox, realTestboxSeams, syncTestboxTools, type TestboxCaptureSeams, type TestboxOpSeams } from './testboxOp.js';
 import { isClaudeVersion } from '../../shared/claudeVersion.js';
 import { isDeliveryPart } from '../../shared/deliveryResult.js';
+import { isFramesPart } from '../../shared/framesResult.js';
 import { answerWitness, readHeldWitness } from './witness.js';
 import { parseWitnessTuple } from '../../shared/authorityWitness.js';
 import { createHistoryOp, realHistoryOpSeams, type HistoryOp, type HistoryOpSeams } from './historyOp.js';
@@ -1101,14 +1102,15 @@ function validateReq(msg: Record<string, unknown>): AgentReq | ReqRefusal | Acco
       // The ONE build guard (`isClaudeVersion`, never a regex here). A missing or malformed build is a `ReqRefusal`
       // carrying `bad-build`; any other field is malformed (`null`, `bad-request`: an agent that predates the op).
       // `recipe` and `part` (Desktop polish wave 178; the capture owner's calls 1148 and 1159) are additive and travel
-      // together: absent, build trust; present, only `delivery` with a part this side's recipe has; either one alone, or
-      // off its shape, is malformed.
+      // together: absent, build trust; present, only `delivery` or `frames` (wave 187) with a part this side's recipe has;
+      // either one alone, or off its shape, is malformed.
       if (Object.keys(msg).some((k) => k !== 't' && k !== 'id' && k !== 'op' && k !== 'build' && k !== 'recipe' && k !== 'part')) return null;
       const hasRecipe = Object.prototype.hasOwnProperty.call(msg, 'recipe');
       if (hasRecipe !== Object.prototype.hasOwnProperty.call(msg, 'part')) return null;
-      if (hasRecipe && (msg.recipe !== 'delivery' || !isDeliveryPart(msg.part))) return null;
+      if (hasRecipe && !(msg.recipe === 'delivery' ? isDeliveryPart(msg.part) : msg.recipe === 'frames' && isFramesPart(msg.part))) return null;
       if (!isClaudeVersion(msg.build)) return { refuse: 'bad-build', id };
       if (msg.recipe === 'delivery') return { t: 'req', id, op: 'testbox-capture', build: msg.build, recipe: 'delivery', part: msg.part as number } satisfies TestboxCaptureReq;
+      if (msg.recipe === 'frames') return { t: 'req', id, op: 'testbox-capture', build: msg.build, recipe: 'frames', part: msg.part as number } satisfies TestboxCaptureReq;
       return { t: 'req', id, op: 'testbox-capture', build: msg.build } satisfies TestboxCaptureReq;
     }
     case 'token-sync': {

@@ -228,6 +228,7 @@ export class TestboxService {
     // same close a box that predates the recipe gives, so the fleet agent answers not-taken for both, and nothing is
     // queued, run or counted here (the capture owner's call 1148).
     if (f.recipe === 'delivery' && !this.d.captures.delivers()) { conn.refuse('delivery is not a recipe this box runs'); return; }
+    if (f.recipe === 'frames' && !this.d.captures.frames()) { conn.refuse('frames is not a recipe this box runs'); return; }
     this.d.captures.submit(f, conn);
   }
 
