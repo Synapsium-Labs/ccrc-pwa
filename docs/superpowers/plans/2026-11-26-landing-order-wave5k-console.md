@@ -881,7 +881,7 @@ Review run 3911 read this plan at `30d0d64456` (round 3, the last the cap allows
 
 ## Deviations found
 
-Six numbers were issued for this plan on 2026-11-26; four are defined below, and the coordinator holds the other two.
+Six numbers were issued for this plan on 2026-11-26; four are defined below, and the coordinator holds the other two. Two more numbers were issued on 2026-11-26 for departures found while building, and are defined below, after D-9110.
 
 - **D-9107 (2026-11-26)** — `landing-door-answers-in-l0`: the two doors' 200 answers, `LandingPauseAnswer` and `LandingWithdrawAnswer`, are declared once in `shared/landingLine.ts`, and the server's `LandingPauseWrite` and `LandingWithdrawWrite` ok arms are expressed over them.
   - Why: the console must name a shared type for each answer and define no copy, and the answers had only server-side types in an L1 file the PWA cannot import.
@@ -896,3 +896,9 @@ Six numbers were issued for this plan on 2026-11-26; four are defined below, and
   - Why: almost all of these fail every project's read at once, `landing-projection-unreadable` included (the guarded read folds every project's subject, authority and witness rows and every other project's entry identities), so a block for it would draw the same alarm on every card, most of which have no line, while hiding it entirely would show a stale line as current.
   - Not claimed: a line paused while every read failed stays unseen until a read succeeds; on a fresh page load while every read fails, no card shows a line, though lines may exist; a surface that says the landing read itself is failing is not built here.
 - **D-9110 (2026-11-26)** — `landing-subtractive-table-census`: `landing-subtractive.test.ts`'s table list is checked against the database the schema builds (`sqlite_master`'s tables named `landing_*`), so a new landing table that no door may change cannot be left out of the doors' table diff unnoticed (the 5j plan's section 13, C13, carried).
+- **D-9129 (2026-11-26)** — `landing-line-css-in-app-sheets`: `pwa/test/contrast.test.ts`'s exact list of audited stylesheets, `APP_SHEETS`, gains `src/fleet/landing-line.css`.
+  - Why: the list is compared for equality with the stylesheets the auditor finds, so a new stylesheet must join it, and the plan named no change to this file.
+  - The equality stays exact. The file's comment that said the set has five members now says the set is the literal list.
+- **D-9130 (2026-11-26)** — `older-server-card-tabindex`: `pwa/test/older-server-render.test.tsx` declares the project card section's `tabindex="-1"` as a difference from the older build, counted once per card against the base's cards, and strips exactly that string before the byte comparison.
+  - Why: the landing block's focus falls back to the card (R6), which the older build predates, and the plan allowed only a count or a stub's routing to change in an existing test.
+  - Nothing else in the comparison is loosened.
