@@ -104,10 +104,9 @@ answer as before. There are five quiet differences:
   writing through it.
 - **`macos-scan-pin`.** The new file's box-side region holds three GNU spellings: the writer's `chmod --reference` and
   `mv -T`, and the copy's `--remove-destination`. The macOS scan's table has a row for each. The scan cuts and pins the
-  region, as it does for the build copy's region, and its pin counts all three. The new row also matches one existing line
-  of the verb, outside its own region: the box's settings file write, which runs on the box. The scan cuts that one line
-  and pins it to that one spelling, so a second use anywhere else in the verb is a hit. The verb's code is unchanged. In
-  the first round the scan's suite was held by another run, which cleared that hunk before it was applied.
+  region, as it does for the build copy's region, and its pin counts all three. The verb has one counted line outside its
+  own region, a write that runs on the box, so a second such line is a hit. The verb's code is unchanged. In the first
+  round the scan's suite was held by another run, which cleared that hunk before it was applied.
 - **`test-lane-first-run`.** The first run of the new suite went through the test wrapper's default lane. That lane is
   allowed for fixture-only runs. Every later run was `--local`.
 - **`claim-after-edit`.** The retry suite was edited a moment before it was claimed. Its claim was free and was taken
@@ -184,8 +183,11 @@ review-words rows are the first round's: their code did not change.
 | The repair copy: an entry's owner arm alone | red, 2 cases |
 | The repair copy: an entry's other-write arm alone | red, 2 cases |
 | The repair copy writing through a link at a destination name | red, 1 case; and the macOS scan's pin, red |
-| The macOS scan's `chmod --reference` row taken out | red, 2 cases: the region's pin and the verb's one-line exemption (round 2) |
-| The macOS scan's cut of the verb's one line taken out, the row kept | red, 2 cases: the verb's sweep and its region's outside check (round 2) |
+| The macOS scan's `chmod --reference` row taken out | red, 2 cases: the region's pin and the verb's count (round 2) |
+| The macOS scan's cut of the verb's one line taken out of its sweep, the row kept | red, 1 case: the verb's sweep (round 2) |
+| The region's spellings one fewer (the writer's mode copy taken out), or one more (a second in the repair copy) | red, 1 case each: the region's pin (round 2) |
+| The verb's counted line one fewer (its spelling taken out) | red, 1 case: the verb's count (round 2) |
+| The verb's counted line one more (the same line twice, or another line with the spelling) | red, 3 cases each: the verb's sweep, its region's outside check and its count (round 2) |
 | Each of the four access key edit calls made under sudo (key-rotate suite) | red, each |
 | The box word's reader accepting any text (acts suite) | red, 1 case |
 | The copy's box-root set widened by one character (agent) | red, 1 case |
