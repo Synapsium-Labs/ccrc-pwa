@@ -2471,11 +2471,12 @@ export function registerCoordRoutes(
     const coord = deps.coord;
     return reply.code(200).send({ ok: true, testbox: watcher?.testboxLane.block() ?? null, ...(coord ? { delivery: deliveryStandingRead(coord) } : {}) });
   });
-  // Desktop polish wave 187: the box frames recipe's one read (`testboxFramesRoutes.ts`), a session or the box token, checked
-  // even while sign-in is dark, its query closed, its text checked again before it is served.
+  // Desktop polish wave 187: the box frames recipe's one read (`testboxFramesRoutes.ts`), a session or the box token exactly as
+  // the status read above takes them (sign-in dark lets every caller through, as the gate's own property holds), its query
+  // closed, its text checked again before it is served.
   registerTestboxFramesRoute(app, {
     frames: deps.coord ? () => deps.coord!.claudeBuildFrames() : undefined,
-    session: (req) => sessionAuth(req).reason === 'session',
+    session: (req) => !deps.cfg.authEnabled || sessionAuth(req).reason === 'session',
     boxToken: (req) => checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/testbox/frames') === 'ok',
     masker: deps.masker ?? SHAPE_ONLY_MASKER,
   });

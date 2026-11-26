@@ -4,9 +4,10 @@
 // the stored row's; the one check it runs again before a text leaves is the reducer's own (`framesReduce.ts`), with the
 // product's live masker beside it.
 //
-// CREDENTIALS: a live session, or the box token (`ccrc-api testbox frames`, a cookieless fleet-host caller), checked
-// before anything is read, and checked even while sign-in is dark: the status read answers anyone then, this one never.
-// With neither it answers 401.
+// CREDENTIALS: a live session, or the box token (`ccrc-api testbox frames`, a cookieless fleet-host caller), checked before
+// anything is read, exactly as the test box status read takes them (the capture owner's call 1558): while sign-in is dark the
+// composition counts every caller as signed in, as that read does and as the gate's own property holds (a dark box answers
+// what a signed-in caller sees). With neither it answers 401.
 //
 // THE QUERY IS CLOSED (the capture owner's addition): exactly `build`, and optionally `frame`, each once and not empty. Any
 // other key, a repeated key or an empty value is a bad request before the store is read.
