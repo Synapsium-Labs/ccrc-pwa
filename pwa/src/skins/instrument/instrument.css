@@ -44,6 +44,11 @@
     padding-top: calc((var(--head-h) - var(--row-h)) / 2);
     padding-inline: var(--gutter);
   }
+  /* A banner on top of the column keeps the group gap above it, as the item route's stack has it (`.wl-banners`): the head
+     row cannot sit on the title band under a banner anyway, so the band's centring gives way to the banner's gap. */
+  .ins-frame .shell-nav .fleet:has(> .banner-slot:not([hidden]) > *, > .banner-more) {
+    padding-top: var(--sp-3);
+  }
   .ins-frame .shell-status {
     grid-column: 1 / -1;
     grid-row: 3;

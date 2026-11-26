@@ -615,12 +615,14 @@ for (const width of MATRIX.widths) {
   for (const skin of MATRIX.skins) {
     for (const theme of MATRIX.themes) {
       describe(`the top of the board and the switches, ${skin} ${theme} at ${width}px`, () => {
-        it('puts Start a program in the header at the tap floor, holds no switch, and Advanced draws the switches inside the window', async () => {
+        it('puts Start a program in the header at the head row\'s control floor, holds no switch, and Advanced draws the switches inside the window', async () => {
           const { ctx, page, errors } = await openBoard(width, skin, theme);
           try {
             const board = await page.evaluate(() => {
+              // A page's head-row controls take `min(--row-h, --tap-min)` under a mouse (desktop polish wave 182, rule (c)), which
+              // is the tap floor under touch, where `--row-h` is 44: the door is in the head row, so that is its floor.
               const probe = document.createElement('div');
-              probe.style.cssText = 'position:absolute;visibility:hidden;min-height:var(--tap-min);width:1px';
+              probe.style.cssText = 'position:absolute;visibility:hidden;min-height:min(var(--row-h), var(--tap-min));width:1px';
               document.body.appendChild(probe);
               const tap = probe.getBoundingClientRect().height;
               probe.remove();
@@ -638,7 +640,7 @@ for (const width of MATRIX.widths) {
             });
             expect(board.door, 'the start door is drawn').not.toBeNull();
             expect(board.inHead, 'in the header, beside the title').toBe(true);
-            expect(board.door!.h, 'at the tap floor').toBeGreaterThanOrEqual(board.tap - 1);
+            expect(board.door!.h, "at the head row's control floor").toBeGreaterThanOrEqual(board.tap - 1);
             expect(board.door!.right).toBeLessThanOrEqual(board.vw);
             expect(board.door!.left).toBeGreaterThanOrEqual(0);
             expect(board.page, 'no sideways page scroll').toBeLessThanOrEqual(0);
