@@ -206,16 +206,43 @@ describe('ccrc doctor: artifacts', () => {
   }, SLOW);
 
   it('doctor: the ip arm skips', () => {
-    const n = names();
     const home = healthy('ccrc-doctor-art-ip-');
     writeExposureEnv(home, { ip: '203.0.113.9' });
-    plantKeys(home, n);
     const r = runDoctor(home);
     const l = skipLineFor(r.stdout, 'artifacts');
     expect(l, r.stdout).toContain('mode ip');
     expect(l).toContain('the artifact tier is off by design');
     expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) artifacts: /m);
   });
+
+  it('doctor: artifact keys beside an address FAIL', () => {
+    // A hand-made state no command writes (the ip arm drops the keys): the tier cannot serve, said by name.
+    const n = names();
+    const home = healthy('ccrc-doctor-art-ip-keys-');
+    writeExposureEnv(home, { ip: '203.0.113.9' });
+    plantKeys(home, n);
+    const r = runDoctor(home);
+    expect(artifactLine(r.stdout), r.stdout).toBe(
+      'FAIL artifacts: artifact keys stand on a box exposed by address, where the artifact tier cannot serve (an address has no second site)');
+    expect(remedyFor(r.stdout, 'artifacts')).toBe('  remedy: ccrc expose ip — a re-run drops them');
+  }, SLOW);
+
+  it('doctor: artifact keys beside an incomplete sign-in FAIL', () => {
+    // Each of the three sign-in keys missing in turn, with the artifact keys standing: no command writes this.
+    for (const omit of ['CCRC_AUTH', 'CCRC_RP_ID', 'CCRC_ORIGIN']) {
+      const n = names();
+      const home = healthy('ccrc-doctor-art-signin-');
+      writeExposureEnv(home, { omit: [omit] });
+      plantKeys(home, n);
+      plantBlock(home, n);
+      stubProbe(home, n.port, {});
+      const r = runDoctor(home);
+      const l = artifactLine(r.stdout);
+      expect(l, `${omit}\n${r.stdout}`).toMatch(/^FAIL artifacts: artifact keys stand while .* does not carry the console's sign-in/);
+      expect(l).toContain('so the artifact tier cannot serve');
+      expect(remedyFor(r.stdout, 'artifacts')).toContain('ccrc expose duckdns or ccrc expose byo');
+    }
+  }, SLOW);
 
   it('doctor: the fixed sentence is the listener\'s', () => {
     const m = /^_DR_ARTIFACT_FIXED='([^'\n]+)'$/m.exec(readFileSync(CHECKS_SRC, 'utf8'));

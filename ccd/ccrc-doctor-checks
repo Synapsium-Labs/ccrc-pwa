@@ -2466,14 +2466,25 @@ _check_artifacts() {
     _dr_skip artifacts "no exposure configured (no $CCRC_EXPOSURE_FILE), so this box has no artifact names"
     return 3
   fi
-  if [ "$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_EXPOSE_MODE)" = ip ]; then
-    _dr_skip artifacts "mode ip — an address has no second site, so the artifact tier is off by design (it needs names)"
-    return 3
-  fi
-  local aorigin corigin port cport=""
+  local aorigin corigin port cport="" mode
   aorigin="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_ARTIFACT_ORIGIN)"
   corigin="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_ARTIFACT_CONTENT_ORIGIN)"
   port="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_ARTIFACT_PORT)"
+  mode="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_EXPOSE_MODE)"
+  # The tier never outlives the console's exposure: keys beside an address, or beside a sign-in that is not whole, are
+  # a hand-made state no command writes, and the tier cannot serve there.
+  if [ "$mode" = ip ]; then
+    [ -n "$aorigin$corigin$port" ] || { _dr_skip artifacts "mode ip — an address has no second site, so the artifact tier is off by design (it needs names)"; return 3; }
+    _dr_fail artifacts "artifact keys stand on a box exposed by address, where the artifact tier cannot serve (an address has no second site)" \
+      "ccrc expose ip — a re-run drops them"
+    return 1
+  fi
+  if [ -n "$aorigin$corigin$port" ] && { [ "$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_AUTH)" != on ] \
+     || [ -z "$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_RP_ID)" ] || [ -z "$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_ORIGIN)" ]; }; then
+    _dr_fail artifacts "artifact keys stand while $CCRC_EXPOSURE_FILE does not carry the console's sign-in (CCRC_AUTH=on, CCRC_RP_ID and CCRC_ORIGIN together), so the artifact tier cannot serve" \
+      "ccrc expose duckdns or ccrc expose byo — a re-run writes the sign-in keys and keeps artifact names that still pass"
+    return 1
+  fi
   [ ! -r "$BOX_ENV_FILE" ] || cport="$(_box_env_value "$BOX_ENV_FILE" CCRC_PORT)"
   _art_config "$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_ORIGIN)" "${cport:-7788}" "$aorigin" "$corigin" "$port" ""
   case "$ART_STATE" in
