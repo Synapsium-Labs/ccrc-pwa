@@ -109,7 +109,8 @@ describe('the store: three states per group, default shadow', () => {
     // D-8395), 61 (nodes.reportedSweep, D-8386), 60 (claude_builds, D-8289), 59 (the plan model, D-8181), 58 (practice_cases,
     // Overlord W1a), 57 (testbox_events, D-8166), 56 (lane_arm_settings, D-8274) and 55 (coordinator_calls, D-8126) as well
     // as 54 (100, the replay quiz run's state and counts, goes with continuity_quiz_runs), so the reopen replays
-    // all seventy-seven (54 through 130).
+    // 54 through 131, including the unseeded Docs settings singleton (131, X2 P4.3).
+    fresh.exec('DROP TABLE docs_settings');
     fresh.exec('DROP TABLE claude_build_deliveries;');
     fresh.exec(`DROP TABLE overlord_invariant_findings;
       DROP INDEX programs_one_per_coordinator; DROP TABLE programme_picks; DROP TABLE programme_events;
@@ -162,6 +163,7 @@ describe('the store: three states per group, default shadow', () => {
     fresh.exec('DROP TABLE continuity_reads; DROP TABLE continuity_probes; DROP TABLE continuity_handovers; DROP TABLE continuity_notes; DROP TABLE plain_memory_settings; DROP TABLE continuity_timers; DROP TABLE continuity_card_reads; DROP TABLE continuity_snapshots; DROP TABLE continuity_generations; DROP TABLE continuity_cursor; DROP TABLE face_settings; DROP TABLE continuity_starts; DROP INDEX mail_answers_once; ALTER TABLE mail DROP COLUMN answersMail; DROP TABLE testbox_staged_changes; ALTER TABLE claims DROP COLUMN chainedFrom; ALTER TABLE nodes DROP COLUMN reportedSweep; DROP TABLE claude_builds; DROP TABLE practice_cases; DROP TABLE testbox_events; DROP TABLE lane_arm_settings; DROP TABLE coordinator_calls; ALTER TABLE run_close_settings DROP COLUMN claimantGone; PRAGMA user_version = 53;');
     fresh.close();
     const coord = new CoordStore(openCoordDb(file));
+    expect(coord.readDocsSettings()).toEqual({ kind: 'absent' });
     expect(coord.runCloseSetting()).toEqual({ kind: 'row', neverStarted: 'on', claimantCrashed: 'off', claimantGone: 'shadow', updatedAt: 9 });
     coord.setRunCloseChoice('claimant-gone', 'on', 10);
     expect(coord.runCloseChoice('claimant-gone')).toBe('on');

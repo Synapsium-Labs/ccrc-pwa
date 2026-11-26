@@ -12,6 +12,7 @@ import {
   type DocPin, type DocsEntry, type DocsFileResponse, type DocsIndexOk, type DocsIndexRow, type DocsProjectsResponse,
   type DocsTreeOk, type DraftsFacts,
 } from '../../shared/docs';
+import type { DocsSettingsResponse } from '../../shared/docsTracker';
 import { DocsScreen } from '../src/screens/DocsScreen';
 import { DocsLeaf } from '../src/docs/DocsLeaf';
 import { DocsAssetContext } from '../src/docs/DocImage';
@@ -23,7 +24,7 @@ import { exportStateFor } from '../src/docs/DocsHead';
 import { DOCS_FAILURE_SENTENCE, DOCS_HEAD_TEXT, DOCS_PAGE_INVALID_SENTENCE, EXPORT_WAIT_TEXT, MOCKUP_TEXT, SHARE_EXPORT_CLAUSE, fillSentence, shortCommit } from '../src/docs/docsText';
 import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
 import { DOCS_RENDER_GATE_BYTES, HIGHLIGHT_PAGE_WORKER_MS } from '../src/lib/markdownLimits';
-import type { DocsFileAnswer, DocsLoaders, DocsRasterAnswer } from '../src/docs/failures';
+import type { DocsAnswer, DocsFileAnswer, DocsLoaders, DocsRasterAnswer } from '../src/docs/failures';
 import type { RangeLoader } from '../src/docs/range/readRange';
 import { parseMarkdown, type ParseOutcome } from '../src/lib/markdownParse';
 import { HighlighterContext } from '../src/lib/highlighterContext';
@@ -31,6 +32,7 @@ import type { Highlighter } from '../src/lib/highlightProtocol';
 import type { HighlightClock } from '../src/lib/highlightStore';
 import { docsRunner, type MarkdownParser } from '../src/lib/markdownRunner';
 import { navigate, useLocation } from '../src/lib/router';
+import * as router from '../src/lib/router';
 import {
   BLOB_1, BLOB_2, COMMIT_A, COMMIT_B, FP_1, NO_RANGE_VISIT, RAN, draftOf, entry, failedAnswer, fakeLoaders, fetchFailed, fileResponse, holder,
   okFile, okRefresh, okTree, pageAt, treeOk, treeResponse, type FakeLoaders,
@@ -41,9 +43,13 @@ import { inThreadContext, inThreadHighlighter, syncTestStore, withSyncHighlight 
 const parser: MarkdownParser = async (src) => parseMarkdown(src, 'docs');
 
 /** The screen under the live location, as the app's `docs` arm mounts it (one mount across navigations). */
-function Routed(p: { readonly loaders: DocsLoaders; readonly parser?: MarkdownParser }): ReactNode {
+function Routed(p: {
+  readonly loaders: DocsLoaders;
+  readonly parser?: MarkdownParser;
+  readonly readSettings?: () => Promise<DocsAnswer<DocsSettingsResponse>>;
+}): ReactNode {
   const { path, search } = useLocation();
-  return <DocsScreen path={path} search={search} loaders={p.loaders} parser={p.parser ?? parser} />;
+  return <DocsScreen path={path} search={search} loaders={p.loaders} parser={p.parser ?? parser} readSettings={p.readSettings} />;
 }
 
 function open(url: string, f: FakeLoaders, withParser?: MarkdownParser): ReturnType<typeof render> {
@@ -111,6 +117,24 @@ describe('canonical URLs are fixed by replace (spec 3.1, M4.R4)', () => {
     expect(history.length).toBe(before);
   });
 
+  it('a queued canonical redirect cannot replace a location that moved before the microtask', async () => {
+    navigate('/docs/demo/');
+    const replace = vi.spyOn(router, 'navigate');
+    vi.useFakeTimers({ toFake: ['queueMicrotask'] });
+    try {
+      render(<Routed loaders={fakeLoaders().loaders} />);
+      expect(here()).toBe('/docs/demo/');
+      // Change only the location, not React's props: cleanup alone cannot detect this move.
+      history.replaceState(null, '', '/docs/other#current');
+      await act(async () => { vi.runAllTicks(); });
+      expect(replace).not.toHaveBeenCalled();
+      expect(here()).toBe('/docs/other');
+      expect(location.hash).toBe('#current');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('a directory reached without its slash replace-navigates to the slash form, keeping the ref', async () => {
     const f = fakeLoaders({ tree: okTree(treeOk({ entries: [entry('specs', 'd/x.md')] })) });
     navigate('/docs/demo/specs/d?ref=ws/a');
@@ -118,7 +142,7 @@ describe('canonical URLs are fixed by replace (spec 3.1, M4.R4)', () => {
     render(<Routed loaders={f.loaders} />);
     await waitFor(() => expect(here()).toBe('/docs/demo/specs/d/?ref=ws/a'));
     expect(history.length).toBe(before);
-    expect(await screen.findByText('x.md')).toBeInTheDocument();
+    expect(await screen.findByText('x')).toBeInTheDocument();
     expect(f.tree).toHaveBeenCalledTimes(1);
   });
 
@@ -249,7 +273,7 @@ describe('a linked worktree is followed to its owner by replace (spec 4.7, M4.R4
     open('/docs/b/specs/x.md?ref=ws/a', f);
     expect(await screen.findByText(NOTE)).toBeInTheDocument();
     act(() => { navigate('/docs/a/specs'); });
-    expect(await screen.findByText('x.md')).toBeInTheDocument();
+    expect(await screen.findByText('x')).toBeInTheDocument();
     expect(screen.queryByText(NOTE)).toBeNull();
   });
 
@@ -259,7 +283,7 @@ describe('a linked worktree is followed to its owner by replace (spec 4.7, M4.R4
     await waitFor(() => expect(here()).toBe('/docs/a/specs/x.md'));
     expect(await screen.findByText(NOTE)).toBeInTheDocument();
     act(() => { navigate('/docs/a/specs'); });
-    expect(await screen.findByText('x.md')).toBeInTheDocument();
+    expect(await screen.findByText('x')).toBeInTheDocument();
     act(() => { navigate('/docs/a/specs/x.md'); });
     expect(await screen.findByRole('heading', { name: 'A' })).toBeInTheDocument();
     expect(screen.queryByText(NOTE)).toBeNull();
@@ -290,7 +314,7 @@ describe('a linked worktree is followed to its owner by replace (spec 4.7, M4.R4
     open('/docs/b/specs/x.md', f);
     await waitFor(() => expect(here()).toBe('/docs/a/specs/x.md?ref=ws/a'));
     act(() => { navigate('/docs/a/specs?ref=ws/a'); });
-    expect(await screen.findByText('x.md')).toBeInTheDocument();
+    expect(await screen.findByText('x')).toBeInTheDocument();
     act(() => { navigate('/docs/b/specs/x.md'); });
     await waitFor(() => expect(here()).toBe('/docs/a/specs/x.md?ref=ws/a'));
     expect(screen.queryByText(LOOP)).toBeNull();
@@ -349,6 +373,139 @@ function openIndex(): FakeLoaders {
 
 const mainRowNames = (): string[] =>
   [...document.querySelectorAll('.docs-index > .docs-rows .docs-row-name')].map((n) => n.textContent ?? '');
+
+const readSettingsWith = (defaultBranches: Record<string, string>) => vi.fn(async (): Promise<DocsAnswer<DocsSettingsResponse>> =>
+  ({ s: 'ok', value: { ok: true, settings: { rules: [], defaultBranches } } }));
+
+describe('project default branches (X2 P4.4, M11.37)', () => {
+  it.each([['preview', '?ref=preview'], [null, '']] as const)(
+    'index listing links use the configured ref (%s) or the Git default when unset', async (branch, query) => {
+      const f = fakeLoaders();
+      const answer = indexAnswer();
+      const project = answer.index.projects.find((row) => row.project === 'b')!;
+      project.newest = { specs: ['2026-06-01-guide.md'] };
+      f.projects.mockResolvedValue({ s: 'ok', value: answer });
+      const readSettings = readSettingsWith(branch === null ? {} : { b: branch });
+      navigate('/docs');
+      render(<Routed loaders={f.loaders} readSettings={readSettings} />);
+      const list = await screen.findByRole('list', { name: 'b: specs' });
+      await waitFor(() => expect(within(list).getByRole('link', { name: /^guide/ }))
+        .toHaveAttribute('href', '/docs/b/specs/2026-06-01-guide.md' + query));
+      expect(within(list).getByRole('link', { name: '11 more specs in b' })).toHaveAttribute('href', '/docs/b/specs' + query);
+      fireEvent.click(screen.getByText('b', { selector: '.docs-row-name' }));
+      expect(here()).toBe('/docs/b' + query);
+      expect(readSettings).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('keeps the draft body and its plain item text when the settings read is unavailable', async () => {
+    const f = fakeLoaders({
+      tree: okTree(treeOk({ entries: [entry('specs', 'a.md', { draft: draftOf('modified') })], drafts: holder() })),
+      file: okFile('# Draft guide\n\nItem: DEMO-42'),
+    });
+    let settle!: (answer: DocsAnswer<DocsSettingsResponse>) => void;
+    const pending = new Promise<DocsAnswer<DocsSettingsResponse>>((resolve) => { settle = resolve; });
+    const readSettings = vi.fn(() => pending);
+    const url = '/docs/demo/specs/a.md?ref=main';
+    navigate(url);
+    render(<Routed loaders={f.loaders} readSettings={readSettings} />);
+    const heading = await screen.findByRole('heading', { name: 'Draft guide' });
+    expect(readSettings).toHaveBeenCalledTimes(1);
+
+    await act(async () => { settle({ s: 'no-docs-route' }); });
+
+    const article = within(screen.getByRole('article'));
+    expect(article.getByRole('heading', { name: 'Draft guide' })).toBe(heading);
+    expect(article.getByText('Item: DEMO-42')).toBeInTheDocument();
+    expect(article.queryByRole('link')).toBeNull();
+    expect(here()).toBe(url);
+    expect(f.file).toHaveBeenCalledTimes(1);
+    expect(f.file.mock.calls[0]?.[1]).toMatchObject({ kind: 'draft', fp: FP_1 });
+  });
+
+  it('a gone configured branch falls back by replace with a note, without redirecting other explicit refs', async () => {
+    const f = fakeLoaders();
+    f.tree.mockImplementation(async (_project, ref) => ref === null
+      ? okTree(treeOk({ entries: [entry('specs', 'a.md')] })) : failedAnswer('unresolved-ref'));
+    navigate('/docs/b/specs?ref=gone');
+    const before = history.length;
+    render(<Routed loaders={f.loaders} readSettings={readSettingsWith({ b: 'gone' })} />);
+    await waitFor(() => expect(here()).toBe('/docs/b/specs'));
+    expect(history.length).toBe(before);
+    expect(await screen.findByText('Configured branch gone is unavailable. Showing the Git default branch.')).toBeInTheDocument();
+    expect(f.tree.mock.calls.map(([, ref]) => ref)).toEqual([{ kind: 'bare', name: 'gone' }, null]);
+    act(() => { navigate('/docs/b/specs?ref=explicit'); });
+    await screen.findByText(DOCS_FAILURE_SENTENCE['unresolved-ref']);
+    expect(here()).toBe('/docs/b/specs?ref=explicit');
+    expect(screen.queryByText(/Configured branch gone is unavailable/)).toBeNull();
+  });
+});
+
+describe('legacy ref navigation (X2 P4.2)', () => {
+  const withLegacyHint = () => {
+    const f = fakeLoaders();
+    f.tree.mockImplementation(async (_project, ref) => ref === null
+      ? okTree(treeOk({ entries: [entry('specs', 'a.md'), entry('specs', 'group/b.md')] }))
+      : failedAnswer('unresolved-ref', { resolved: { commit: COMMIT_B, via: 'tag' } }));
+    f.file.mockResolvedValue(okFile('# Historical guide'));
+    return f;
+  };
+
+  it.each([[null, COMMIT_B], [COMMIT_A, COMMIT_A]])(
+    'replaces a legacy leaf ref with a full pin, preserving an explicit pin (%s)', async (at, expected) => {
+      const f = withLegacyHint();
+      navigate('/docs/demo/specs/a.md?ref=refs%2Ftags%2Frelease' + (at === null ? '' : `&at=${at}`) + '#historical-guide');
+      const before = history.length;
+      render(<Routed loaders={f.loaders} />);
+      await waitFor(() => expect(here()).toBe(`/docs/demo/specs/a.md?at=${expected}`));
+      expect(history.length).toBe(before);
+      expect(location.hash).toBe('#historical-guide');
+      expect(await screen.findByRole('heading', { name: 'Historical guide' })).toBeInTheDocument();
+      expect(f.file.mock.calls[0]?.[1]).toMatchObject({ kind: 'committed', commit: expected });
+    },
+  );
+
+  it.each([
+    ['/docs/demo', '/docs/demo'],
+    ['/docs/demo/specs', '/docs/demo/specs'],
+    ['/docs/demo/specs/group/', '/docs/demo/specs/group/'],
+    ['/docs/demo/specs/group', '/docs/demo/specs/group/'],
+  ])('replaces a legacy listing ref with the Git default at %s', async (from, to) => {
+    const f = withLegacyHint();
+    navigate(`${from}?ref=release`);
+    const before = history.length;
+    render(<Routed loaders={f.loaders} />);
+    await waitFor(() => expect(here()).toBe(to));
+    expect(history.length).toBe(before);
+    expect(screen.queryByText(/Configured branch/)).toBeNull();
+    expect(f.file).not.toHaveBeenCalled();
+  });
+
+  it.each(['?ref=refs/tags/release', `?at=${COMMIT_B}`])(
+    'a historical-only leaf shows the standing full-pin refusal after %s', async (query) => {
+      const f = withLegacyHint();
+      open(`/docs/demo/specs/renamed.md${query}`, f);
+      expect(await screen.findByText(`Not in this listing at ${COMMIT_A.slice(0, 8)}.`)).toBeInTheDocument();
+      expect(here()).toBe(`/docs/demo/specs/renamed.md?at=${COMMIT_B}`);
+      expect(f.file).not.toHaveBeenCalled();
+      expect(screen.queryByRole('heading', { name: 'Historical guide' })).toBeNull();
+    },
+  );
+
+  it('waits for settings before following a legacy hint whose name might be a missing configured branch', async () => {
+    const f = withLegacyHint();
+    let settle!: (answer: DocsAnswer<DocsSettingsResponse>) => void;
+    const pending = new Promise<DocsAnswer<DocsSettingsResponse>>((resolve) => { settle = resolve; });
+    navigate('/docs/demo/specs/a.md?ref=release');
+    render(<Routed loaders={f.loaders} readSettings={() => pending} />);
+    await act(async () => { await Promise.resolve(); });
+    expect(f.tree).toHaveBeenCalledTimes(1);
+    expect(here()).toBe('/docs/demo/specs/a.md?ref=release');
+    await act(async () => { settle(await readSettingsWith({ demo: 'release' })()); });
+    await waitFor(() => expect(here()).toBe('/docs/demo/specs/a.md'));
+    expect(await screen.findByText(/Configured branch release is unavailable/)).toBeInTheDocument();
+  });
+});
 
 describe('the index (spec 4.4, refinement (r))', () => {
   it('says what it lists, then ready rows by name, then the rest by name; no-docs projects fold under one line', async () => {
@@ -423,7 +580,7 @@ describe('the project page (spec 4.4)', () => {
     t.sections[3] = { ...t.sections[3]!, state: 'not-a-directory', count: 0 };
     open('/docs/demo', fakeLoaders({ tree: okTree(t) }));
     await screen.findByText('specs');
-    const rows = [...document.querySelectorAll('.docs-project .docs-row')];
+    const rows = [...document.querySelectorAll('.docs-project > .docs-rows > li > .docs-row')];
     expect(rows.map((r) => r.querySelector('.docs-row-name')?.textContent)).toEqual(['specs', 'plans', 'design', 'conventions', 'vision', 'promise']);
     expect(rows[0]).toHaveTextContent('docs/superpowers/specs');
     expect(rows[2]).toHaveTextContent(`not in this repository at ${COMMIT_A.slice(0, 8)}`);
@@ -474,15 +631,15 @@ describe('section and directory pages (spec 4.4)', () => {
     open('/docs/demo/specs?ref=main', fakeLoaders({ tree: okTree(treeOk({ entries, drafts: holder() })) }));
     await screen.findByText('old/');
     const rows = [...document.querySelectorAll('.docs-listing .docs-row')];
-    expect(rows.map((r) => r.querySelector('.docs-row-name')?.textContent)).toEqual(['old/', 'l.md', '2026-02-01-b.md', '2026-01-01-a.md']);
+    expect(rows.map((r) => r.querySelector('.docs-row-name')?.textContent)).toEqual(['old/', 'l', 'b', 'a']);
     expect(rows[0]).toHaveTextContent('2');
     expect(rows[2]).toHaveTextContent('draft · modified');
     expect(rows[2]).toHaveTextContent('1 KiB');
     expect(rows[1]).toHaveTextContent('symlink');
     fireEvent.click(rows[0] as HTMLElement);
     expect(here()).toBe('/docs/demo/specs/old/?ref=main');
-    expect(await screen.findByText('y.md')).toBeInTheDocument();
-    fireEvent.click(screen.getByText('y.md').closest('button') as HTMLElement);
+    expect(await screen.findByText('y')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('y').closest('button') as HTMLElement);
     expect(here()).toBe('/docs/demo/specs/old/y.md?ref=main');
   });
 
@@ -491,7 +648,7 @@ describe('section and directory pages (spec 4.4)', () => {
     await screen.findByText('old/');
     expect(screen.getByRole('searchbox', { name: 'Filter this listing' })).toHaveAttribute('placeholder', 'Filter this listing');
     fireEvent.change(screen.getByRole('searchbox', { name: 'Filter this listing' }), { target: { value: '-b.' } });
-    expect([...document.querySelectorAll('.docs-listing .docs-row-name')].map((n) => n.textContent)).toEqual(['2026-02-01-b.md']);
+    expect([...document.querySelectorAll('.docs-listing .docs-row-name')].map((n) => n.textContent)).toEqual(['b']);
   });
 
   it('a committed symlink leaf says it is not followed, and asks for no file', async () => {
@@ -755,7 +912,7 @@ describe('one mount is one visit', () => {
     open('/docs/demo', f);
     await screen.findByText('specs');
     act(() => { navigate('/docs/demo/specs'); });
-    await screen.findByText('a.md');
+    await screen.findByText('a');
     act(() => { navigate('/docs/demo/specs/a.md'); });
     await screen.findByRole('heading', { name: 'A' });
     expect(f.tree).toHaveBeenCalledTimes(1);
@@ -1061,6 +1218,20 @@ describe('T13 review 3-7: the index retries an auto-class word once, then shows 
 });
 
 describe('T13 review 3-2: Fetch from origin on an unresolved ref says what it is doing and how it ended', () => {
+  it.each(['refs/tags/missing', 'refs/heads/missing'])('does not offer fetching an unresolved %s', async (ref) => {
+    const f = fakeLoaders({ tree: failedAnswer('unresolved-ref') });
+    open(`/docs/demo?ref=${ref}`, f);
+    expect(await screen.findByText(DOCS_FAILURE_SENTENCE['unresolved-ref'])).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Fetch from origin' })).toBeNull();
+  });
+
+  it('offers fetching an unresolved origin-tracking ref and sends it verbatim', async () => {
+    const ref = 'refs/remotes/origin/ws/missing';
+    const f = fakeLoaders({ tree: failedAnswer('unresolved-ref') });
+    open(`/docs/demo?ref=${ref}`, f);
+    fireEvent.click(await screen.findByRole('button', { name: 'Fetch from origin' }));
+    expect(f.refresh).toHaveBeenCalledExactlyOnceWith('demo', { ref, reason: 'manual' });
+  });
   it('the button is disabled and the page says fetching while the POST runs, then the fetch failure sentence', async () => {
     const f = fakeLoaders({ tree: failedAnswer('unresolved-ref') });
     let release: (a: Awaited<ReturnType<DocsLoaders['refresh']>>) => void = () => {};

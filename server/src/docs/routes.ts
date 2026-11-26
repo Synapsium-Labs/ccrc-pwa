@@ -18,6 +18,10 @@ import type {
   DocsFoldersPathsResponse, DocsHistoryResponse, DocsProjectsResponse, DocsRangeFrameResponse,
   DocsRangePrepareResponse, DocsRefreshFetch, DocsRefSpec, DocsTreeOk, DocsTreeResponse,
 } from '../../../shared/docs.js';
+import {
+  DOCS_SETTINGS_UNAVAILABLE, docsSettingsFromStored, docsSettingsMaskRefusal, docsSettingsUnreadableBody, parseDocsSettingsPut,
+  type DocsSettings, type DocsSettingsResponse, type DocsSettingsStoreWrite, type DocsSettingsStored,
+} from '../../../shared/docsTracker.js';
 import type { AccountGate } from '../accounts/gate.js';
 import { DOCS_FOLDERS_CAP } from '../ccdargv.js';
 import { docsCaches, type DocsCaches } from './cache.js';
@@ -70,6 +74,8 @@ export interface DocsComposition {
   /** The outside-folder reads (X2 P2.3), and, held apart as the fetchers are, the registry's two writes. */
   folderReaders: DocsNodes<DocsFolderReader>;
   folderRegistries: DocsNodes<DocsFolderRegistry>;
+  /** Console-wide settings are not a fleet-node read. */
+  settings: DocsSettingsPorts;
 }
 
 /** `nowMs`: the clock (default `Date.now`). `readLane`: builds the read lane (default `docsReadLane`); only the
@@ -77,6 +83,7 @@ export interface DocsComposition {
 export interface DocsComposeOptions {
   nowMs?: () => number;
   readLane?: () => DocsReadLane;
+  settings?: DocsSettingsPorts;
 }
 
 /** A single-node map under `DOCS_PRIMARY_NODE`. */
@@ -96,6 +103,7 @@ export function composeDocs(source: CcdDocsDeps, opts: DocsComposeOptions = {}):
     fetchers: primaryOnly(ccdDocsFetcher(source)),
     folderReaders: primaryOnly(ccdDocsFolderReader(source)),
     folderRegistries: primaryOnly(ccdDocsFolderRegistry(source)),
+    settings: opts.settings ?? DOCS_SETTINGS_UNAVAILABLE,
     lanes: primaryOnly<DocsNodeLanes>({
       read: (opts.readLane ?? docsReadLane)(),
       fetch: docsFetchLane(),
@@ -754,6 +762,74 @@ export function registerDocsFolderRegistryRoutes(app: FastifyInstance, registrie
     if (run.kind !== 'ran') return notRan(reply, run);
     if (!run.value.ok) return sendFolderFailure(reply, run.value);
     const sent: DocsFolderRemoveResponse = { ok: true, label: run.value.answer.label, removed: true };
+    return reply.send(sent);
+  });
+}
+
+// ===== X2 P4.3: the docs settings doors (spec 2026-11-18 sections 4.5 and 7) =====
+
+/**
+ * What the settings doors need of the composition root: the sign-in state, whether a request carries a session, and the
+ * account gate the widening PUT asks (`DocsFolderRegistryDeps`); the store's two functions; and the clock. The store is
+ * `CoordStore`'s reader and writer, passed as plain functions, so this file imports no coordination module (the shapes are
+ * L0's, `shared/docsTracker.ts`). The synchronous `write` measures the current row, decides widening and invokes the
+ * authorization callback only for widening, all in the same transaction. An unreadable row refuses the write.
+ */
+interface DocsSettingsPorts {
+  read: () => DocsSettingsStored;
+  write: (settings: DocsSettings, at: number, authorizeWidening: () => boolean) => DocsSettingsStoreWrite;
+}
+export interface DocsSettingsDeps extends DocsFolderRegistryDeps, DocsSettingsPorts {
+  now: () => number;
+  /** Would the existing egress masker change this structured value? Measured before trying to store it. */
+  maskChanges: (value: unknown) => boolean;
+}
+
+/**
+ * The two docs settings doors (X2 P4.3; spec 4.5 "Storage", 7), on the docs plugin's own instance, so the marker header
+ * check and the response policy apply. Like every docs handler this one decides nothing: the body's shape and the rule
+ * checks are L0's `parseDocsSettingsPut`, and what a stored row means is `docsSettingsFromStored`. Refusal bodies are
+ * built by L0 or L1 and sent as they came.
+ * - GET: settings, with no row meaning empty. The session verdict is L1's `folderRemoveGate`.
+ * - PUT: the session verdict, body and egress mask check precede the synchronous store write. The store compares with
+ *   its current row inside the transaction and calls the account gate only for widening; removal works dark. Later writes win.
+ */
+export function registerDocsSettingsRoutes(app: FastifyInstance, deps: DocsSettingsDeps): void {
+  /** The session verdict: `null` lets the door go on, otherwise the refusal is already sent. */
+  const refusedSession = (req: FastifyRequest, reply: FastifyReply): FastifyReply | null => {
+    const verdict = folderRemoveGate(deps.signIn(), deps.hasSession(req));
+    return verdict === 'allow' ? null : sendDocsFailure(reply, folderGateRefusal(verdict));
+  };
+
+  app.get('/api/docs/settings', { exposeHeadRoute: false }, async (req, reply) => {
+    const refused = refusedSession(req, reply);
+    if (refused !== null) return refused;
+    const stored = docsSettingsFromStored(deps.read());
+    if (!stored.ok) {
+      console.warn('ccrc-server: docs settings store unreadable');
+      return sendDocsFailure(reply, docsSettingsUnreadableBody());
+    }
+    const body: DocsSettingsResponse = { ok: true, settings: stored.settings };
+    return reply.send(body);
+  });
+
+  app.put('/api/docs/settings', async (req, reply) => {
+    const refused = refusedSession(req, reply);
+    if (refused !== null) return refused;
+    const put = parseDocsSettingsPut(req.body);
+    if (!put.ok) return sendDocsFailure(reply, put);
+    const sent: DocsSettingsResponse = { ok: true, settings: put.settings };
+    // The structured egress masker walks values, not record keys. Also show it the project names as values,
+    // without changing the response shape or inventing a second masking rule.
+    const maskProbe = { ...sent, defaultBranchProjects: Object.keys(put.settings.defaultBranches) };
+    const masked = docsSettingsMaskRefusal(put.settings, deps.maskChanges(maskProbe));
+    if (masked !== null) return sendDocsFailure(reply, masked);
+    const wrote = deps.write(put.settings, deps.now(), () => deps.gate(req, reply, { cap: null, stepUp: true }).pass);
+    if (wrote.kind === 'denied') return reply;
+    if (wrote.kind !== 'written') {
+      console.warn('ccrc-server: docs settings store unreadable');
+      return sendDocsFailure(reply, docsSettingsUnreadableBody());
+    }
     return reply.send(sent);
   });
 }

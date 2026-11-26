@@ -4715,6 +4715,19 @@ export const MIGRATIONS: readonly string[] = [
     PRIMARY KEY (build, part)
   );
   `,
+
+  // ── 131: user_version 130 -> 131 ──────────────────────────────────────────
+  // X2 P4.3: one console-wide Docs settings row. No seed: absence means empty.
+  // RE-MEASURE the slot before merge (it must print 130 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE docs_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    body TEXT NOT NULL,
+    updatedAt INTEGER NOT NULL
+  );
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

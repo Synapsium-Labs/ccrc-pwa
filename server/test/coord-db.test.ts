@@ -788,9 +788,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[126] (the programme lifecycle: the binding, the placeholder, programme_events and programme_picks, W1),
     // and MIGRATIONS[127] (continuity_timers.setRestoreGeneration and continuity_timer_refusals, the Overlord's timers),
     // and MIGRATIONS[128] (overlord_invariant_findings and the invariants lane-arm row, the Overlord invariant monitor),
-    // and MIGRATIONS[129] (claude_build_deliveries, the paste delivery recipe's results, Desktop polish wave 178).
-    expect(COORD_SCHEMA_VERSION).toBe(130);
-    expect(MIGRATIONS.length).toBe(130);
+    // and MIGRATIONS[129] (claude_build_deliveries, the paste delivery recipe's results, Desktop polish wave 178),
+    // and MIGRATIONS[130] (docs_settings, the console-wide Docs settings row).
+    expect(COORD_SCHEMA_VERSION).toBe(131);
+    expect(MIGRATIONS.length).toBe(131);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -946,8 +947,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[126] (the programme lifecycle, W1),
     // and MIGRATIONS[127] (the Overlord's timers' restore column and refusal counts),
     // and MIGRATIONS[128] (the invariant monitor's findings, Overlord W1 sequence B2),
-    // and MIGRATIONS[129] (claude_build_deliveries, Desktop polish wave 178); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(130);
+    // and MIGRATIONS[129] (claude_build_deliveries, Desktop polish wave 178),
+    // and MIGRATIONS[130] (docs_settings); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(131);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();

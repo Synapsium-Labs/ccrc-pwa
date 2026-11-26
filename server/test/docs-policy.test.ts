@@ -512,6 +512,7 @@ describe('parseDocsRefreshBody: exactly {ref, reason} (section 3.4, refinement (
     ['ref a number', { ref: 7, reason: 'auto' }, badQuery('body', 'ref')],
     ['ref an array', { ref: ['main'], reason: 'auto' }, badQuery('body', 'ref')],
     ['ref outside both grammars', { ref: 'a..b', reason: 'auto' }, refusal('bad-ref')],
+    ['a tag is readable but not a refresh ref', { ref: 'refs/tags/release', reason: 'manual' }, refusal('bad-ref')],
     ['ref empty', { ref: '', reason: 'auto' }, refusal('bad-ref')],
     ['precedence: a bad reason beats a bad ref string', { ref: 'a..b', reason: 'later' }, badQuery('body', 'reason')],
     ['precedence: an extra key beats a bad shape', { ref: 7, x: 1 }, badQuery('unknown', 'x')],
@@ -1448,6 +1449,7 @@ function t2Runs(type: RasterType): readonly { readonly at: number; readonly byte
 
 /** Bytes that are `type` by L0's table: its first magic alternative's runs, written into 16 zero bytes. */
 function t2Magic(type: RasterType): Uint8Array {
+  if (type === 'ico') return Uint8Array.from([0, 0, 1, 0, 1, 0, 16, 16, 0, 0, 1, 0, 32, 0, 1, 0, 0, 0, 22, 0, 0, 0, 42]);
   const out = new Uint8Array(16);
   for (const run of t2Runs(type)) out.set(run.bytes, run.at);
   return out;
@@ -1475,8 +1477,8 @@ describe('W3 T2: docsRasterType, the declared raster type of a path (section 5.2
 });
 
 describe("W3 T2: rasterVerdict, the declared type against the bytes (section 5.2 step 5; M5.2's L1 half)", () => {
-  it('the table holds the four raster types the spec names', () => {
-    expect(T2_RASTER_TYPES).toEqual(['png', 'jpeg', 'gif', 'webp']);
+  it('the table holds the five raster types the spec names', () => {
+    expect(T2_RASTER_TYPES).toEqual(['png', 'jpeg', 'gif', 'webp', 'ico']);
   });
 
   it.each(T2_RASTER_TYPES.flatMap((declared) => T2_RASTER_TYPES.map((actual) => [declared, actual] as const)))(
@@ -1508,7 +1510,7 @@ const t2Draft = (p: string): DocPin =>
 describe('W3 T2: docsFileReply, the representation by contentClass(path) alone (section 3.6, section 5.2)', () => {
   it.each([
     ['a.png', 'png', 'image/png'], ['x.jpg', 'jpeg', 'image/jpeg'], ['x.GIF', 'gif', 'image/gif'],
-    ['x.webp', 'webp', 'image/webp'],
+    ['x.webp', 'webp', 'image/webp'], ['x.ico', 'ico', 'image/x-icon'],
   ] as const)('a committed %s holding %s bytes is raw bytes, %s, immutable', (p, type, mime) => {
     const bytes = t2Magic(type);
     const reply: DocsFileReply = docsFileReply(t2Committed(p), t2Show(p, bytes), bytes, 'ccd');

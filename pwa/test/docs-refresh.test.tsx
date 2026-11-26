@@ -8,7 +8,7 @@ import { Activity, type ReactNode } from 'react';
 import { act, cleanup, render, renderHook } from '@testing-library/react';
 import { DOCS_STALE_MS, type DocsPageLocation } from '../../shared/docs';
 import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
-import { DocsHead } from '../src/docs/DocsHead';
+import { DocsHead, freshnessChip } from '../src/docs/DocsHead';
 import { useDocsVisit } from '../src/docs/useDocsVisit';
 import type { DocsLoaders, DocsRefreshLoaderAnswer } from '../src/docs/failures';
 import {
@@ -80,6 +80,42 @@ describe('M4.A1: once per open per (project, ref)', () => {
     await flush();
     expect(f.refresh).toHaveBeenCalledTimes(2);
     expect(f.refresh.mock.calls[1]).toEqual(['demo', { ref: 'ws/a', reason: 'auto' }]);
+  });
+
+  it.each(['auto', 'manual'] as const)('refreshes the served remote branch from a legacy origin URL (%s) and clears its stale marker', async (reason) => {
+    const served = 'refs/remotes/origin/ws/topic';
+    const requested = 'origin/ws/topic';
+    const old = treeOk();
+    old.ref = { ...old.ref, requested, served, name: 'ws/topic', via: 'qualified' };
+    old.freshness = { ...old.freshness, trackedRef: served };
+    const fresh = treeOk({ commit: COMMIT_B });
+    fresh.ref = { ...old.ref, requested: served, commit: COMMIT_B };
+    fresh.freshness = { ...old.freshness, stamp: { lastOutcome: 'ok', attemptAgeMs: 0, okAgeMs: 0, okCommit: COMMIT_B } };
+    const f = fakeLoaders({ tree: okTree(old, reason === 'auto') });
+    f.refresh.mockImplementation(async (_project, body) => body.ref === served
+      ? okRefresh(RAN, treeResponse(fresh)) : okRefresh(fetchFailed('remote-branch-absent')));
+    const { result } = visit(f.loaders, `/docs/demo?ref=${requested}`);
+    await flush();
+    if (reason === 'manual') {
+      expect(freshnessChip(old, Date.now(), result.current.freshness, Date.now()).state).toBe('never');
+      act(() => result.current.refreshManual());
+      await flush();
+    }
+    expect(f.refresh).toHaveBeenCalledExactlyOnceWith('demo', { ref: served, reason });
+    const slot = result.current.tree;
+    if (slot?.s !== 'ok') throw new Error('The refreshed listing did not arrive');
+    expect(slot.answer.tree.ref.commit).toBe(COMMIT_B);
+    expect(freshnessChip(slot.answer.tree, slot.receivedAt, result.current.freshness, Date.now()).state).toBe('ok');
+  });
+
+  it('keeps the literal local branch name when it is actually named origin/ws/topic', async () => {
+    const requested = 'origin/ws/topic';
+    const local = treeOk();
+    local.ref = { ...local.ref, requested, served: `refs/heads/${requested}`, name: requested, side: 'local', via: 'local' };
+    const f = fakeLoaders({ tree: okTree(local, true) });
+    visit(f.loaders, `/docs/demo?ref=${requested}`);
+    await flush();
+    expect(f.refresh).toHaveBeenCalledExactlyOnceWith('demo', { ref: requested, reason: 'auto' });
   });
 
   it('a remount is a new open and adds one', async () => {

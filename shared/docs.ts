@@ -252,7 +252,9 @@ export type DocsRefSpec = { kind: 'bare'; name: string } | { kind: 'qualified'; 
 
 /** `null` has ONE meaning: `s` is in neither grammar. */
 export function parseDocsRef(s: string): DocsRefSpec | null {
-  if (isDocsQualifiedRef(s)) return { kind: 'qualified', ref: s };
+  if (isDocsQualifiedRef(s) || (typeof s === 'string' && s.startsWith('refs/tags/') && isDocsBareRef(s.slice('refs/tags/'.length)))) {
+    return { kind: 'qualified', ref: s };
+  }
   if (isDocsBareRef(s)) return { kind: 'bare', name: s };
   return null;
 }
@@ -536,6 +538,7 @@ export interface DocsFailureContext {
   tried?: DocsTriedRef[];
   suggest?: string;
   hint?: 'tag';
+  resolved?: { commit: string; via: 'tag' | 'commit' };
   ref?: string;
   type?: string;
   kind?: DocsNotAFileKind;
@@ -839,8 +842,20 @@ export interface DocsIndexOk {
     sections?: Partial<Record<DocSectionSlug, number | null>>;
     sectionsOnDisk?: DocSectionSlug[] /* non-git dirs: one lstat per section */; owner?: string | null; branch?: string | null;
     fetch?: { okAgeMs: number | null; lastOutcome: string };
+    /** X2 P4.1 (spec section 5.1, I1): per section of `sections` with a count above 0, its newest names, at most
+     *  `DOCS_INDEX_NEWEST_PER_SECTION`, each a path relative to the section, newest first (name descending, code-unit
+     *  order; names are date-prefixed). Additive: an older ccd sends none, and a project's whole `newest` is left out once
+     *  the wire cap dropped it (`newestTruncated`). Read through `pwa/src/docs/docsTree.ts#indexNewest` alone. */
+    newest?: Partial<Record<DocSectionSlug, string[]>>;
   }[];
+  /** X2 P4.1: set when the listing wire cap made ccd drop projects' `newest`, whole, from the last project backwards; the counts in
+   *  `sections` are kept whole. Absent when nothing was dropped. */
+  newestTruncated?: true;
 }
+
+/** How many newest names `docs-index` carries per section (spec section 5.1, the standalone index's five). ccd holds a parity
+ *  copy (`docs-parity.test.ts`). */
+export const DOCS_INDEX_NEWEST_PER_SECTION = 5;
 
 export type DocsIndexRow = DocsIndexOk['projects'][number];
 
@@ -890,6 +905,7 @@ export const DOC_CONTENT_CLASS_BY_EXT = {
   md: 'markdown', markdown: 'markdown',
   png: 'raster', jpg: 'raster', jpeg: 'raster', gif: 'raster', webp: 'raster',
   svg: 'svg', html: 'html', htm: 'html', pdf: 'pdf',
+  ico: 'raster',
   txt: 'text', json: 'text', yaml: 'text', yml: 'text', toml: 'text', csv: 'text', tsv: 'text', log: 'text',
   ts: 'text', tsx: 'text', js: 'text', mjs: 'text', cjs: 'text', css: 'text', py: 'text', sh: 'text',
   sql: 'text', diff: 'text', patch: 'text', xml: 'text', xsl: 'text', xhtml: 'text',
@@ -965,11 +981,12 @@ export const DOCS_RASTER_TYPES = {
   jpeg: { mime: 'image/jpeg', magic: [[{ at: 0, bytes: [0xff, 0xd8, 0xff] }]] },
   gif:  { mime: 'image/gif',  magic: [[{ at: 0, bytes: [0x47, 0x49, 0x46, 0x38, 0x37, 0x61] }], [{ at: 0, bytes: [0x47, 0x49, 0x46, 0x38, 0x39, 0x61] }]] },
   webp: { mime: 'image/webp', magic: [[{ at: 0, bytes: [0x52, 0x49, 0x46, 0x46] }, { at: 8, bytes: [0x57, 0x45, 0x42, 0x50] }]] },
+  ico:  { mime: 'image/x-icon', magic: [[{ at: 0, bytes: [0, 0, 1, 0] }]] },
 } as const;
 export type RasterType = keyof typeof DOCS_RASTER_TYPES;
 export type RasterMime = (typeof DOCS_RASTER_TYPES)[RasterType]['mime'];
-export const DOCS_RASTER_EXT: Record<'png' | 'jpg' | 'jpeg' | 'gif' | 'webp', RasterType> =
-  { png: 'png', jpg: 'jpeg', jpeg: 'jpeg', gif: 'gif', webp: 'webp' };
+export const DOCS_RASTER_EXT: Record<'png' | 'jpg' | 'jpeg' | 'gif' | 'webp' | 'ico', RasterType> =
+  { png: 'png', jpg: 'jpeg', jpeg: 'jpeg', gif: 'gif', webp: 'webp', ico: 'ico' };
 
 /** One run of magic bytes at an offset: the shape every alternative in the table above has. */
 type MagicRun = { readonly at: number; readonly bytes: readonly number[] };
@@ -978,6 +995,15 @@ type MagicRun = { readonly at: number; readonly bytes: readonly number[] };
  *  bytes, so a `.png` holding JPEG bytes is a `mismatch`; so is input too short to hold the magic. */
 export function sniffRaster(declared: RasterType, bytes: Uint8Array): 'match' | 'mismatch' {
   const alternatives: readonly (readonly MagicRun[])[] = DOCS_RASTER_TYPES[declared].magic;
+  if (declared === 'ico') {
+    if (bytes.length < 22) return 'mismatch';
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const count = view.getUint16(4, true);
+    const size = view.getUint32(14, true);
+    const offset = view.getUint32(18, true);
+    const tableEnd = 6 + count * 16;
+    if (count < 1 || count > 64 || tableEnd > bytes.length || size === 0 || offset < tableEnd || offset + size > bytes.length) return 'mismatch';
+  }
   for (const runs of alternatives) {
     if (runs.every((run) => run.bytes.every((b, i) => bytes[run.at + i] === b))) return 'match';
   }
@@ -1426,6 +1452,19 @@ export type DocsPageLocation =
       /** The version view's commit (rich-docs spec G6); `null` has one meaning, the latest at `ref`. */
       at: string | null;
       view: 'effective' | 'committed'; frame: 'inline' | 'full' };
+/** Canonicalise a validated legacy-ref hint, without trusting the failure's optional context. */
+export function docsResolvedRefLocation(page: DocsPageLocation, body: unknown): DocsPageLocation | null {
+  if (page.kind === 'index' || page.ref === null || typeof body !== 'object' || body === null) return null;
+  const failure = body as { ok?: unknown; failure?: unknown; resolved?: unknown };
+  if (failure.ok !== false || failure.failure !== 'unresolved-ref' || typeof failure.resolved !== 'object'
+      || failure.resolved === null || Array.isArray(failure.resolved)) return null;
+  const resolved = failure.resolved as { commit?: unknown; via?: unknown };
+  if (typeof resolved.commit !== 'string' || !isDocsCommit(resolved.commit)
+      || (resolved.via !== 'tag' && resolved.via !== 'commit')) return null;
+  if (page.kind === 'path' && !page.dirSlash) return { ...page, ref: null, at: page.at ?? resolved.commit, view: 'effective' };
+  return { ...page, ref: null };
+}
+
 /** An outside folder's page (X2 P2.4, spec 4.1): `/docs/~<label>`, `/docs/~<label>/<section>`, `/docs/~<label>/<section>/<path>`.
  *  A SEPARATE union beside `DocsPageLocation`, never a kind of it: every project page carries a `project` and a `ref`, a folder
  *  page has neither (a folder is no repository, so nothing names a ref), and `DocsHead`, `share.ts` and the project views narrow
@@ -1716,6 +1755,7 @@ function rangePlace(pin: DocListPin): (readonly [string, string])[] {
  *  validates nothing; the server's L1 query parser does, with the same predicates. */
 export const docsApi = {
   projects: (): string => DOCS_API_PREFIX + '/projects',
+  settings: (): string => DOCS_API_PREFIX + '/settings',
   tree: (project: string, ref: DocsRefSpec | null): string =>
     apiProjectPath(project) + '/tree' + (ref === null ? '' : apiQuery([['ref', docsRefText(ref)]])),
   // The file route's pin is the opened one, which always names its bytes by `fp`: the file URL never carries `stat`.
