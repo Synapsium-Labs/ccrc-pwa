@@ -178,7 +178,9 @@ describe('the Add account door and the connect sheet at every width and skin (D-
         });
         expect(n.doors, 'one door, narrowed in place').toBe(1);
         expect(n.disabled).toBe('true');
-        expect(n.describedBy, 'the door names no description: the press says the reason, once').toBeNull();
+        // Desktop-polish wave 181 (the coordinator reversing that part of wave 180's fix round 1): the narrowed door names
+        // its visible reason as its description again, so a reader that focuses it hears why; a press repeats it.
+        expect(n.describedBy, 'the narrowed door names its visible reason as its description').toBe('acct-door-reason');
         expect(n.reason).toBe(DOOR_NARROWED['gate-dark'].text);
         expect(n.command).toBe(DOOR_NARROWED['gate-dark'].fix);
         expect(n.commandLabel).toBe(DOOR_COMMAND_LABEL);
