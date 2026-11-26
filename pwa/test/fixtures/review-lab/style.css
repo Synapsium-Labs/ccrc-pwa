@@ -1,0 +1,4 @@
+@font-face { font-family: 'ReviewLabFace'; src: url(Geist-Variable.woff2) format('woff2'); }
+body { margin: 16px; background: #fdfdfb; color: #1a1a1a; }
+.lab-swatch { width: 120px; height: 24px; background: #1f7a4d; }
+.lab-text { font-family: 'ReviewLabFace', serif; font-size: 20px; }

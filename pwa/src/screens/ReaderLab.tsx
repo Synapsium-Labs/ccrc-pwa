@@ -97,6 +97,7 @@ export function ReaderLab(p: { readonly load?: () => Promise<RunModule> }): Reac
       <p>{LAB_TEXT.intro}</p>
       <p>{LAB_TEXT.journal}</p>
       <p>{deviceFacts(device).join(' · ')}</p>
+      <p>Draft review: open the <a href="/review#lab" target="_blank" rel="noopener noreferrer">Draft review frame (M-X3.16)</a> in a new tab.</p>
       {state.s === 'running'
         ? <Button onClick={stop}>{LAB_TEXT.stop}</Button>
         : state.s === 'stopping'

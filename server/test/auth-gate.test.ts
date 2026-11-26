@@ -804,7 +804,6 @@ describe('the scanner is looking at something', () => {
     // machine lanes IN EXEMPT: the HTTP half 298 -> 301, the gated count stays 190 (301 - 111), the exempt-HTTP count 108 -> 111.
     // 305 with the draft-review read door (X3 R1), in `review/routes.ts`: class 9, not a box-token lane. The HTTP half 301 -> 302,
     // the gated count stays 190 (302 - 112), the exempt-HTTP count 111 -> 112.
-    expect(scanRoutes('review/routes.ts').map(key)).toEqual(['POST /api/review/open']);
     // 306 with the Overlord's history door (Overlord W1, PR B1), in `coord/overlordHistoryRoutes.ts`, a routes file of its own:
     // `POST /api/overlord/history`, one box-token machine lane IN EXEMPT: the HTTP half 302 -> 303, the gated count stays 190
     // (303 - 113), the exempt-HTTP count 112 -> 113.
@@ -826,7 +825,10 @@ describe('the scanner is looking at something', () => {
     // 320 -> 321, the gated count 204 -> 205 (321 - 116), the exempt-HTTP count stays 116.
     // 326 since landing order wave 5j-b (2026-11-25, D-9049): the operator's pause and withdraw doors in `coord/routes.ts`,
     // session-gated and NOT EXEMPT, no box token: the HTTP half 321 -> 323, the gated count 205 -> 207, the exempt-HTTP count stays 116.
-    expect(ROUTES.length).toBe(326);
+    // 329 with the review page's three routes (X3 R2), in `review/routes.ts`: `GET /review` EXEMPT as class 9, `GET /review.html`
+    // and `GET /review/` gated 404s. The HTTP half 323 -> 326, the gated count 207 -> 209, the exempt-HTTP count 116 -> 117.
+    expect(scanRoutes('review/routes.ts').map(key)).toEqual(['POST /api/review/open', 'GET /review', 'GET /review.html', 'GET /review/']);
+    expect(ROUTES.length).toBe(329);
     expect(scanRoutes('laneModelsRoutes.ts').length).toBe(1);
     expect(scanRoutes('coord/delegationBackfillRoutes.ts').length).toBe(2);
     expect(scanRoutes('coord/approvalCensusRoutes.ts').length).toBe(1);
@@ -1017,7 +1019,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 326 scanned + the static wildcard when the bundle is built.
+    // 329 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1162,6 +1164,7 @@ describe('EXEMPT is complete in both directions', () => {
       'GET /api/timers',
       'GET /api/updates/intent/:nodeId',
       'GET /health',
+      'GET /review',
       'POST /api/approvals',
       'POST /api/auth/login',
       'POST /api/auth/passkey/assert/finish',
@@ -1833,7 +1836,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 323 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 326 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1897,7 +1900,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 323 HTTP routes, not the 116 exempt.
+          //    is not itself flag-aware — the assertion that covers all 326 HTTP routes, not the 117 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

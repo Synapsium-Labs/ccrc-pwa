@@ -1,8 +1,12 @@
 // Capability read door. The store owns the snapshot and the expiry decision is shared with its writers.
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import {
-  isReviewToken, REVIEW_IDLE_MS, REVIEW_MARKER_HEADER, REVIEW_MARKER_VALUE, REVIEW_OPEN_BODY_BYTES,
-  REVIEW_OPEN_STREAMS, REVIEW_OPEN_STREAMS_PER_SHARE, REVIEW_SEND_IDLE_MS,
+  isReviewToken, REVIEW_IDLE_DAYS, REVIEW_IDLE_DAYS_HEADER, REVIEW_MARKER_HEADER, REVIEW_MARKER_VALUE, REVIEW_OPEN_BODY_BYTES,
+  REVIEW_NOT_FOUND, REVIEW_OPEN_CONTENT_TYPE, REVIEW_OPEN_HEADERS, REVIEW_OPEN_STREAMS, REVIEW_OPEN_STREAMS_PER_SHARE,
+  REVIEW_PAGE_CONTENT_TYPE, REVIEW_PAGE_HEADERS, REVIEW_PAGE_NOT_FOUND_HEADERS, REVIEW_SEND_IDLE_MS,
+  REVIEW_SHARED_AT_HEADER, REVIEW_VERSION_HEADER,
 } from '../../../shared/docsReview.js';
 import { REFUSAL_STATUS } from '../../../shared/refusal.js';
 import { expiryOf, type ReviewEntry } from './policy.js';
@@ -33,18 +37,18 @@ export function registerReviewOpenRoute(app: FastifyInstance, access: ReviewAcce
     // Let Fastify enforce the same bounded read for every other media type; none supplies a token.
     scope.addContentTypeParser<Buffer>('*', { parseAs: 'buffer' }, (_req, _body, done) => done(null, undefined));
     const headers = (reply: FastifyReply): void => {
-      reply.header('cache-control', 'no-store').header('referrer-policy', 'no-referrer')
-        .header('x-content-type-options', 'nosniff').header('content-disposition', 'attachment');
+      for (const [name, value] of Object.entries(REVIEW_OPEN_HEADERS)) reply.header(name, value);
     };
     const failure = (reply: FastifyReply, error: 'not-found' | 'too-large' | 'busy') => {
       headers(reply);
       // The review wire says `busy` for send capacity, not the generic 409 conflict with that word.
-      return reply.code(REFUSAL_STATUS[error === 'busy' ? 'rate-limited' : error]).send({ ok: false, error });
+      return reply.code(REFUSAL_STATUS[error === 'busy' ? 'rate-limited' : error])
+        .send(error === 'not-found' ? REVIEW_NOT_FOUND : { ok: false, error });
     };
     scope.setErrorHandler((error, _req, reply) => {
       if (reply.raw.headersSent || reply.raw.destroyed || reply.raw.writableEnded) return;
       // Fastify stages stream headers on both reply and raw response before the first byte.
-      for (const name of ['content-type', 'x-ccrc-review-shared-at', 'x-ccrc-review-version', 'x-ccrc-review-idle-days']) {
+      for (const name of ['content-type', REVIEW_SHARED_AT_HEADER, REVIEW_VERSION_HEADER, REVIEW_IDLE_DAYS_HEADER]) {
         reply.removeHeader(name);
       }
       const tooLarge = typeof error === 'object' && error !== null &&
@@ -130,11 +134,51 @@ export function registerReviewOpenRoute(app: FastifyInstance, access: ReviewAcce
         });
       }) as typeof reply.raw.write;
       headers(reply);
-      reply.header('x-ccrc-review-shared-at', String(entry.sharedAt))
-        .header('x-ccrc-review-version', String(entry.version))
-        .header('x-ccrc-review-idle-days', String(REVIEW_IDLE_MS / 86400000))
-        .type('application/octet-stream');
+      reply.header(REVIEW_SHARED_AT_HEADER, String(entry.sharedAt))
+        .header(REVIEW_VERSION_HEADER, String(entry.version))
+        .header(REVIEW_IDLE_DAYS_HEADER, String(REVIEW_IDLE_DAYS))
+        .type(REVIEW_OPEN_CONTENT_TYPE);
       return reply.send(source.stream);
     });
+  });
+}
+
+/**
+ * The review page (draft-review design §3.5, Task R2.2). `GET /review` sends the built `review.html` with the page's
+ * own header policy (`REVIEW_PAGE_HEADERS`, one home in L0). It reads the file itself and sends the bytes with
+ * `reply.send`; it never calls the static plugin's `sendFile`, which runs the plugin's path filter (that refuses this
+ * very file) and its `setHeaders` (which would turn `no-store` into `no-cache`), review finding N6.
+ *
+ * The file is read on every request, not once at registration: it is a few kilobytes, the operating system caches
+ * it, and the shell (`index.html`) is read per request by the plugin too, so a tree replaced under a running server
+ * (the fallback deploy) never pairs a stale page with new hashed assets. A missing root or an unreadable file is a
+ * 404 with `no-store`, never the app shell: the page's own policy must not be replaced by the shell's.
+ *
+ * `GET /review.html` and `GET /review/` are registered only to answer 404 with `no-store`. They are not exempt from
+ * the auth gate, so armed and with no session the gate answers 401 first; either way a mistyped `/review/#token`
+ * never lands under the app shell's policy. A query string on `/review` reaches the page route, as Fastify routes
+ * on the path. The routes are registered on `app` itself, in the form the source scanners read.
+ */
+export function registerReviewPageRoutes(app: FastifyInstance, pwaRoot: string | null): void {
+  const notFound = (reply: FastifyReply) => {
+    for (const [name, value] of Object.entries(REVIEW_PAGE_NOT_FOUND_HEADERS)) reply.header(name, value);
+    return reply.code(404).send(REVIEW_NOT_FOUND);
+  };
+  app.get('/review', async (_req, reply) => {
+    if (pwaRoot === null) return notFound(reply);
+    let bytes: Buffer;
+    try {
+      bytes = await readFile(path.join(pwaRoot, 'review.html'));
+    } catch {
+      return notFound(reply);
+    }
+    for (const [name, value] of Object.entries(REVIEW_PAGE_HEADERS)) reply.header(name, value);
+    return reply.type(REVIEW_PAGE_CONTENT_TYPE).send(bytes);
+  });
+  app.get('/review.html', async (_req, reply) => {
+    return notFound(reply);
+  });
+  app.get('/review/', async (_req, reply) => {
+    return notFound(reply);
   });
 }
