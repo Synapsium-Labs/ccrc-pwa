@@ -195,6 +195,7 @@ describe('no call site outside the platform block runs a GNU-only command bare',
     ['GNU date -d',     /(?<![-_a-zA-Z])date\s+(-u\s+)?(-d|--date)[\s='"]/],
     ['cp --remove-destination', /cp\s+(-[a-zA-Z]+\s+)*--remove-destination/],
     ['mv -T',           /(?<![-_a-zA-Z])mv\s+-[a-zA-Z]*T/],
+    ['chmod --reference', /(?<![-_a-zA-Z])chmod\s+(-[a-zA-Z]+\s+)*--reference/],
     ['uuidgen',         /(?<![-_a-zA-Z])uuidgen\b/],
   ];
 
@@ -329,6 +330,12 @@ describe('no call site outside the platform block runs a GNU-only command bare',
    *  hit and the region cannot grow quietly. */
   const BOX_SIDE = /^# ── BOX-SIDE COMMANDS \(begin\)[^\n]*\n[\s\S]*?^# ── BOX-SIDE COMMANDS \(end\)[^\n]*\n/m;
 
+  /** `ccd/ccrc-testbox-admin`'s ONE exempted GNU spelling outside its box-side region: the box's settings file write, one
+   *  line that `_tba_cx_out` sends to the test box over ssh, where `chmod --reference` copies the old file's mode. It runs on
+   *  the box's GNU userland, never on this host. Cut as `_ws_collect_mv` is, one line pinned below to exactly that one
+   *  spelling, so a second `chmod --reference` anywhere else in the file is a hit. */
+  const BOX_ENV_WRITE = /^[ \t]*_tba_cx_out sh -c 'umask 077; p=\$1; [^\n]*' sh "\$TBA_BOX_ENV_PATH" <"\$1"\n/m;
+
   /** One file's scanned text: the platform block cut where the file carries
    *  one, the pinned epoch copy cut out of the hook, and the pinned rename cut
    *  out of ccd. */
@@ -336,7 +343,8 @@ describe('no call site outside the platform block runs a GNU-only command bare',
     // `ccd` is scanned WITH its library (D-6913): the moved disk-retention code is still ccd's.
     const src = name === 'ccd' ? ccdSource() : readFileSync(path.join(ccdRoot, name), 'utf8');
     if (name === HOOK) return executableText(src.replace(HOOK_EPOCH_COPY, ''));
-    if (name === 'ccrc-testbox-admin' || name === 'testbox-build-copy' || name === 'testbox-user-write') return executableText(src.replace(BOX_SIDE, ''));
+    if (name === 'ccrc-testbox-admin') return executableText(src.replace(BOX_SIDE, '').replace(BOX_ENV_WRITE, ''));
+    if (name === 'testbox-build-copy' || name === 'testbox-user-write') return executableText(src.replace(BOX_SIDE, ''));
     return executableText(name === 'ccd' ? src.replace(COLLECT_MV, '').replace(LIB_LOAD, '').replace(LIB_HASH_TOOLS, '') : src);
   }
 
@@ -378,7 +386,16 @@ describe('no call site outside the platform block runs a GNU-only command bare',
     expect(region, 'the BOX-SIDE COMMANDS region is not in ccd/ccrc-testbox-admin').not.toBe('');
     expect([...region.matchAll(/^(_tba_[a-z_]+)\(\) \{/gm)].map((m) => m[1])).toEqual(['_tba_box_manifest_ok', '_tba_box_file_sha', '_tba_box_tcp']);
     expect(gnuHits(executableText(region)).map((h) => h.split(':')[0]).sort()).toEqual(['bare timeout', 'sha256sum', 'sha256sum']);
-    expect(gnuHits(executableText(src.replace(BOX_SIDE, '')))).toEqual([]);
+    expect(gnuHits(executableText(src.replace(BOX_SIDE, '').replace(BOX_ENV_WRITE, '')))).toEqual([]);
+  });
+
+  it('ccd/ccrc-testbox-admin\'s one exemption outside its region is the box\'s settings file write: one line, sent to the box, one spelling', () => {
+    const src = readFileSync(path.join(ccdRoot, 'ccrc-testbox-admin'), 'utf8');
+    const outside = src.replace(BOX_SIDE, '');
+    expect([...outside.matchAll(new RegExp(BOX_ENV_WRITE.source, 'gm'))].length, 'the exemption is meant to be exact').toBe(1);
+    const cut = BOX_ENV_WRITE.exec(outside)![0]!;
+    expect(cut.trimStart().startsWith("_tba_cx_out sh -c '"), 'it runs on the box, over the verb\'s one way there').toBe(true);
+    expect(gnuHits(executableText(cut)).map((h) => h.split(':')[0]), 'the exemption buys exactly one spelling').toEqual(['chmod --reference']);
   });
 
   // The build copy's box programs (capture runner spec 2026-11-22 §2.2) run on the test box too, in one marked region of
@@ -397,17 +414,17 @@ describe('no call site outside the platform block runs a GNU-only command bare',
 
   // The admin verb's box-side writes in a less privileged user's place (ccd/testbox-user-write) run on the test box too, in one
   // marked region cut by the same BOX_SIDE expression: exactly its seven strings (the privilege drop, the one writer, the token's
-  // two programs, the access key file's two edits and the repair's copy) and exactly two GNU lines (the writer's rename that never
-  // treats the name as a directory, and the repair's copy that replaces a link at a destination name rather than writing through
-  // it), so the region cannot grow quietly.
-  it('ccd/testbox-user-write\'s box-side region holds exactly its seven strings and two GNU lines, and the cut leaves none outside it', () => {
+  // two programs, the access key file's two edits and the repair's copy) and exactly three GNU spellings (the writer's mode copy
+  // from the old file and its rename that never treats the name as a directory, and the repair's copy that replaces a link at a
+  // destination name rather than writing through it), so the region cannot grow quietly.
+  it('ccd/testbox-user-write\'s box-side region holds exactly its seven strings and three GNU spellings, and the cut leaves none outside it', () => {
     const src = readFileSync(path.join(ccdRoot, 'testbox-user-write'), 'utf8');
     const region = BOX_SIDE.exec(src)?.[0] ?? '';
     expect(region, 'the BOX-SIDE COMMANDS region is not in ccd/testbox-user-write').not.toBe('');
     expect([...region.matchAll(/^([A-Z_]+)=/gm)].map((m) => m[1])).toEqual(
       ['TBA_DROP', 'TBA_PUT_FN', 'TBA_TOKEN_PUT_SH', 'TBA_TOKEN_WRITE_SH', 'TBA_AK_ADD', 'TBA_AK_DROP', 'TBA_TREE_COPY_SH']);
     expect([...region.matchAll(/^(\w+)\(\) \{/gm)]).toEqual([]);
-    expect(gnuHits(executableText(region)).map((h) => h.split(':')[0]).sort()).toEqual(['cp --remove-destination', 'mv -T']);
+    expect(gnuHits(executableText(region)).map((h) => h.split(':')[0]).sort()).toEqual(['chmod --reference', 'cp --remove-destination', 'mv -T']);
     expect(gnuHits(executableText(src.replace(BOX_SIDE, '')))).toEqual([]);
   });
 
