@@ -322,18 +322,25 @@ const walkRoot = async (io: FleetIO, cfg: CcrcConfig): Promise<{ rows: ProjectRo
  * before. The walk and the registry workdirs' probes run through `mapBounded`, and precedence is unchanged whatever
  * order the reads finish in: root rows first, then registry rows in record order, the first holder of a workdir
  * keeping it. `cache`, when given, keeps the walk and the probes' verdicts (`ProjectWalkCache`).
+ *
+ * `walk` (additive, board B2 review 4010 F1) is the root walk's own flag: `'unmeasured'` when the projects root could not be
+ * listed or a probe under it could not answer, so the walk's rows may be short or empty because nothing was read. It is the
+ * flag that already decides caching; no caller has to read it, and the projects route still folds it (a ticket).
  */
 export async function listProjects(
   io: FleetIO,
   cfg: CcrcConfig,
   rows?: readonly ProjectSourceRow[],
   cache?: ProjectWalkCache,
-): Promise<{ roots: string[]; projects: ProjectRow[]; registry: 'listed' | 'unlistable' }> {
+): Promise<{ roots: string[]; projects: ProjectRow[]; registry: 'listed' | 'unlistable'; walk: 'measured' | 'unmeasured' }> {
   let walked = cache?.keptWalk() ?? null;
+  // A kept walk was measured (the cache keeps no other); a fresh one is measured when the root listed and every probe answered.
+  let walk: 'measured' | 'unmeasured' = 'measured';
   if (walked === null) {
     const startedAt = cache?.stamp();
     const fresh = await walkRoot(io, cfg);
     if (fresh !== null && fresh.measured && startedAt !== undefined) cache?.keepWalk(fresh.rows, startedAt);
+    if (fresh === null || !fresh.measured) walk = 'unmeasured';
     walked = fresh?.rows ?? [];
   }
   const byWorkdir = new Map<string, ProjectRow>(walked.map((r) => [r.workdir, r]));
@@ -367,5 +374,5 @@ export async function listProjects(
   const projects = [...byWorkdir.values()].sort((a, b) =>
     a.name < b.name ? -1 : a.name > b.name ? 1 : a.workdir < b.workdir ? -1 : 1,
   );
-  return { roots: [cfg.projectsRoot], projects, registry: listed ? 'listed' : 'unlistable' };
+  return { roots: [cfg.projectsRoot], projects, registry: listed ? 'listed' : 'unlistable', walk };
 }

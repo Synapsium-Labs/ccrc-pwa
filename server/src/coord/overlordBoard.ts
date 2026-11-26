@@ -15,7 +15,7 @@ import type { IsolationRead } from '../../../shared/isolation.js';
 import type { ReadinessWord } from '../../../shared/overlord-readiness.js';
 import type { Rung } from '../../../shared/overlord-ladder.js';
 import type {
-  BoardGoalsRow, BoardIdentityRow, BoardItem, BoardPortfolioRow, BoardStallNoticeCount, BoardText, BoardTextSource,
+  BoardCondition, BoardGoalsRow, BoardIdentityRow, BoardItem, BoardLatch, BoardPortfolioRow, BoardStallNoticeCount, BoardText, BoardTextSource,
   BoardTimersRow, BoardUnmeasured, BoardWorkRow, Measured, OverlordBoard, UntrustedText,
 } from '../../../shared/overlordBoard.js';
 import { BOARD_TEXT_SOURCES, BOARD_UNMEASURED } from '../../../shared/overlordBoard.js';
@@ -49,7 +49,8 @@ export interface BoardInputs {
   readonly capacity: BoardRead<{ readonly maxConcurrentWorkers: number; readonly running: number }>;
   readonly projects: BoardRead<{ readonly registry: 'listed' | 'unlistable'; readonly names: readonly string[] }>;
   readonly switches: BoardRead<Readonly<Record<string, MarkerState>>>;
-  readonly ladder: BoardRead<{ readonly rung: Rung; readonly operatorRung: Rung }>;
+  /** The ladder read's projection (`ladderWire`), its latches cut to the board's fields by the gatherer. */
+  readonly ladder: BoardRead<{ readonly rung: Rung; readonly operatorRung: Rung; readonly latches: readonly BoardLatch[]; readonly conditions: readonly BoardCondition[] }>;
   readonly readiness: BoardRead<{ readonly word: ReadinessWord; readonly since: number; readonly until: number | null }>;
   readonly isolation: BoardRead<IsolationRead>;
   readonly sandbox: BoardRead<{ readonly held: boolean }>;
@@ -117,8 +118,16 @@ export function composeBoard(i: BoardInputs): OverlordBoard {
     items: partOf(readFor(i.items, p.slug), (open) => ({ open: open.map(item) })),
   });
   const portfolioRow = (e: PortfolioView['programmes'][number]): BoardPortfolioRow => ({
-    slug: e.slug, title: untrusted('programme-title', e.title), rank: e.rank, cls: e.cls, wip: e.wip, oldestOpenMs: e.oldestOpenMs,
+    slug: e.slug, title: untrusted('programme-title', e.title), rank: e.rank, cls: e.cls, rankUnreadable: e.rankUnreadable === true,
+    wip: e.wip, oldestOpenMs: e.oldestOpenMs, oldestOpenUnmeasured: e.oldestOpenUnmeasured ?? null,
+    closedWaves: e.closedWaves, cycle: e.cycle, cycleUnmeasured: e.cycleUnmeasured, reviewRounds: e.reviewRounds, ended28: e.ended28,
+    waitingOnOperatorMs28: e.waitingOnOperatorMs28, itemsUnmeasured: e.itemsUnmeasured, asksUnmeasured: e.asksUnmeasured,
+    blocking: {
+      items: e.blocking.items.map((b) => ({ id: b.id, title: untrusted('item-title', b.title) })), asks: e.blocking.asks, edges: e.blocking.edges ?? null,
+    },
   });
+  const latch = (x: BoardLatch): BoardLatch => ({ cause: x.cause, cap: x.cap, raisedAt: x.raisedAt, known: x.known, narrowing: x.narrowing });
+  const condition = (c: BoardCondition): BoardCondition => ({ cause: c.cause, reading: c.reading, effect: c.effect });
   const iso = i.isolation;
   return {
     identity: partOf(programmes, (ps) => ({ programmes: ps.map(identityRow) })),
@@ -130,7 +139,7 @@ export function composeBoard(i: BoardInputs): OverlordBoard {
     brakes: {
       state: 'measured',
       switches: partOf(i.switches, (m) => ({ markers: m })),
-      ladder: partOf(i.ladder, (l) => ({ rung: l.rung, operatorRung: l.operatorRung })),
+      ladder: partOf(i.ladder, (l) => ({ rung: l.rung, operatorRung: l.operatorRung, latches: l.latches.map(latch), conditions: l.conditions.map(condition) })),
     },
     itself: {
       state: 'measured',

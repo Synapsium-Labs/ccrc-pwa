@@ -151,10 +151,17 @@ function gatherer(f: Fixture): Gathered {
     portfolio: () => {
       hit();
       return { at: NOW, revision: 4, programmes: f.programmes.map((p, i) => ({ slug: p.slug, title: p.title, rank: { position: i + 1, cls: 'standard', fixedDate: null },
-        cls: 'standard', wip: { working: 1, waiting: 0, queued: 0 }, oldestOpenMs: null })) } as never;
+        cls: 'standard', wip: { working: 1, waiting: 0, queued: 0 }, oldestOpenMs: null, oldestOpenUnmeasured: 0, closedWaves: { days7: 0, days28: 1 },
+        cycle: { n: 1, medianMs: 60_000, p85Ms: 60_000 }, cycleUnmeasured: 0, reviewRounds: { rounds: 1, waves: 1 },
+        ended28: { done: 1, failed: 0, neverStarted: 0 }, waitingOnOperatorMs28: 0, itemsUnmeasured: 0, asksUnmeasured: 0,
+        blocking: { items: [], asks: 0 } })) } as never;
     },
     capNow: () => { hit(); return { mode: 'override', cap: 3, derived: { kind: 'unmeasured', why: 'no-reading' } }; },
-    ladder: () => { hit(); return { kind: 'measured', effective: { rung: 'full', operatorRung: 'full' } } as never; },
+    ladder: () => {
+      hit();
+      return { kind: 'measured', effective: { rung: 'full', operatorRung: 'full', binding: [], readBy: [] }, rows: { kind: 'measured', rung: null, standing: [] },
+        conditions: [], lastChange: null, latchNarrowing: new Map() } as never;
+    },
     readiness: () => { hit(); return { ok: true, wire: { word: 'unmeasured', since: NOW, why: null, until: null, questionsGo: 'no' } } as never; },
     isolation: () => { hit(); return { kind: 'measured', word: 'shared-user', cause: 'same-user' } as never; },
     now: () => NOW,

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { composeBoard, timersByProgramme, boardProgrammeCount } from '../src/coord/overlordBoard.js';
 import { BOARD_PROGRAMMES_SINCE_MS, gatherBoard, type BoardGatherPorts, type BoardStore } from '../src/coord/overlordBoardRead.js';
-import { ProjectWalkCache } from '../src/lifecycle.js';
+import { ProjectWalkCache, listProjects } from '../src/lifecycle.js';
 import type { FleetIO } from '../src/io.js';
 import type { ProgrammesAnswer } from '../../shared/api.js';
 import type { PortfolioView } from '../../shared/portfolio.js';
@@ -74,6 +74,15 @@ function fakeStore(over: Partial<Record<keyof BoardStore | 'caps', unknown>> = {
 type FakeStore = ReturnType<typeof fakeStore>;
 
 const VERDICTS = { replace: vi.fn() } as unknown as RunVerdicts;
+
+/** A measured ladder read as `ladderRead` answers it: its rows (standing latches with their stored detail), the conditions and
+ *  each latch's narrowing, so the gatherer's projection runs through the real `ladderWire`. */
+type LatchRowIn = { id: number; cause: string; cap: string; detail: string; raisedAt: number };
+const ladderOf = (standing: readonly LatchRowIn[] = [], conditions: readonly { cause: string; reading: string }[] = []): LadderRead => ({
+  kind: 'measured', effective: { rung: 'chat', operatorRung: 'advise', binding: [], readBy: [] },
+  rows: { kind: 'measured', rung: null, standing: standing.map((r) => ({ ...r, raisedBy: 'server:test', raiseSequence: null, journalled: true })) },
+  conditions, lastChange: null, latchNarrowing: new Map(standing.map((r) => [r.id, { state: 'done' }])),
+}) as unknown as LadderRead;
 const portfolioView = { at: 1, revision: 2, programmes: [] } as unknown as PortfolioView;
 
 /** A port set over a fixture home whose projects root holds one project; `io` counts the walks of that root. */
@@ -96,7 +105,7 @@ function fixturePorts(over: Partial<BoardGatherPorts> = {}, store: FakeStore | u
     projects: { io, cfg, cache: new ProjectWalkCache() },
     portfolio: () => portfolioView,
     capNow: vi.fn(() => ({ mode: 'override' as const, cap: 6, derived: { kind: 'unmeasured' as const, why: 'no-reading' as const } })),
-    ladder: () => ({ kind: 'measured', effective: { rung: 'chat', operatorRung: 'advise' } }) as unknown as LadderRead,
+    ladder: () => ladderOf(),
     readiness: () => ({ ok: true, wire: { word: 'ready', since: 1, why: null, until: null } }) as unknown as ReturnType<NonNullable<BoardGatherPorts['readiness']>>,
     isolation: () => ({ kind: 'measured', word: 'separate-user', cause: 'other-user' }) as IsolationRead,
     now: () => NOW,
@@ -310,5 +319,56 @@ describe('the capacity part reads the cap in force, and the switches part a meas
     expect(g.switches).toEqual({ ok: false, reason: 'read-failed' });
     const board = composeBoard(g);
     expect(board.brakes.state === 'measured' && board.brakes.switches).toEqual({ state: 'unmeasured', reason: 'read-failed' });
+  });
+});
+
+describe('the projects part reads read-failed when the walk of the projects root was not measured (review 4010 F1)', () => {
+  /** An io whose listing of the projects root fails; every other read is the fixture's. */
+  const rootUnreadable = (io: FleetIO, root: string): FleetIO => Object.assign(Object.create(io) as FleetIO, {
+    readdir: async (p: string) => (p === root ? null : io.readdir(p)),
+    readdirMeasured: async (p: string, t?: number, s?: AbortSignal) => (p === root ? { ok: false, reason: 'unreadable' } : io.readdirMeasured(p, t, s)),
+  });
+
+  it('the lister answers its walk flag: measured over a readable root and from a kept walk, unmeasured when the root cannot be listed', async () => {
+    const { io, cfg } = fixturePorts();
+    const cache = new ProjectWalkCache();
+    expect((await listProjects(io, cfg, [], cache)).walk).toBe('measured');
+    expect((await listProjects(rootUnreadable(io, cfg.projectsRoot), cfg, [], cache)).walk).toBe('measured');   // the kept walk
+    const failed = await listProjects(rootUnreadable(io, cfg.projectsRoot), cfg, []);
+    expect(failed).toMatchObject({ walk: 'unmeasured', registry: 'listed', projects: [] });
+  });
+
+  it('a projects root that cannot be listed is the projects part\'s read-failed, never a measured empty list, and the root is not probed twice', async () => {
+    const { ports, io, cfg } = fixturePorts();
+    const seen: string[] = [];
+    const failing = rootUnreadable(io, cfg.projectsRoot);
+    const counting = Object.assign(Object.create(failing) as FleetIO, {
+      readdir: async (p: string) => { seen.push(p); return failing.readdir(p); },
+      readdirMeasured: async (p: string, t?: number, s?: AbortSignal) => { seen.push(p); return failing.readdirMeasured(p, t, s); },
+    });
+    const g = await gatherBoard({ ...ports, projects: { ...ports.projects, io: counting } });
+    expect(g.projects).toEqual({ ok: false, reason: 'read-failed' });
+    expect(composeBoard(g).projects).toEqual({ state: 'unmeasured', reason: 'read-failed' });
+    expect(seen.filter((p) => p === cfg.projectsRoot)).toHaveLength(1);
+  });
+});
+
+describe('the brakes\' ladder input is the ladder read\'s own projection, cut to the board\'s fields (review 4010 F2)', () => {
+  it('each standing latch keeps its cause, cap, raise time, known word and narrowing, never its detail; each condition its reading and its effect', async () => {
+    const read = ladderOf(
+      [{ id: 1, cause: 'invariant-violation', cap: 'advise', detail: 'SENTINEL-DETAIL-7 a subject', raisedAt: 4242 },
+        { id: 2, cause: 'a-cause-this-build-does-not-know', cap: 'chat', detail: 'SENTINEL-DETAIL-8', raisedAt: 99 }],
+      [{ cause: 'no-witness-since-boot', reading: 'standing' }],
+    );
+    const g = await gatherBoard(fixturePorts({ ladder: () => read }).ports);
+    expect(g.ladder).toEqual({ ok: true, value: {
+      rung: 'chat', operatorRung: 'advise',
+      latches: [
+        { cause: 'invariant-violation', cap: 'advise', raisedAt: 4242, known: true, narrowing: { state: 'done' } },
+        { cause: 'a-cause-this-build-does-not-know', cap: 'chat', raisedAt: 99, known: false, narrowing: { state: 'done' } },
+      ],
+      conditions: [{ cause: 'no-witness-since-boot', reading: 'standing', effect: { kind: 'cap', cap: 'advise' } }],
+    } });
+    expect(JSON.stringify(composeBoard(g))).not.toContain('SENTINEL-DETAIL');
   });
 });

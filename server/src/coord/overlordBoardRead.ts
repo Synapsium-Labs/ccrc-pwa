@@ -20,7 +20,7 @@ import type { BoardUnmeasured } from '../../../shared/overlordBoard.js';
 import type { CoordCapNow } from '../../../shared/runCap.js';
 import type { CoordStore } from './store.js';
 import type { RunVerdicts } from './runVerdicts.js';
-import type { LadderRead } from './overlordLadderRead.js';
+import { ladderWire, type LadderRead } from './overlordLadderRead.js';
 import { STALL_NOTICE_WINDOW_MS, stallNoticeCounts } from './stallsettings.js';
 import type { BoardInputs, BoardRead } from './overlordBoard.js';
 
@@ -95,6 +95,9 @@ export async function gatherBoard(p: BoardGatherPorts): Promise<BoardInputs> {
     : { ok: true, value: { maxConcurrentWorkers: p.capNow().cap, running: coord.capsUsage().running } }));
   const projects = await onceAsync(async () => {
     const l = await listProjects(p.projects.io, p.projects.cfg, undefined, p.projects.cache);
+    // A walk of the projects root that was not measured may be short or empty because nothing was read: the part's
+    // `read-failed`, as the switches part reads its own listing (review 4010 F1). The lister's own flag; no second probe.
+    if (l.walk !== 'measured') return fail('read-failed');
     return { ok: true, value: { registry: l.registry, names: l.projects.map((r) => r.name) } };
   });
   // The measured listing: one that cannot be read is the part's `read-failed`, never a row of `unmeasurable` switches.
@@ -105,7 +108,15 @@ export async function gatherBoard(p: BoardGatherPorts): Promise<BoardInputs> {
   const ladder = once(() => {
     if (p.ladder === undefined) return fail('not-wired');
     const r = p.ladder();
-    return r.kind === 'measured' ? { ok: true, value: { rung: r.effective.rung, operatorRung: r.effective.operatorRung } } : fail('read-failed');
+    if (r.kind !== 'measured') return fail('read-failed');
+    // The ladder read's own projection (`ladderWire`, the session-gated read's): the board takes neither its rungs list (so no
+    // server words are passed) nor a latch's `detail`, server prose that can name a subject (slug `board-latch-detail-not-carried`).
+    const w = ladderWire(r, []);
+    return { ok: true, value: {
+      rung: w.effectiveRung, operatorRung: w.operatorRung,
+      latches: w.latches.map((l) => ({ cause: l.cause, cap: l.cap, raisedAt: l.raisedAt, known: l.known, narrowing: l.narrowing })),
+      conditions: w.conditions.map((c) => ({ cause: c.cause, reading: c.reading, effect: c.effect })),
+    } };
   });
   const readiness = once(() => {
     if (p.readiness === undefined) return fail('not-wired');

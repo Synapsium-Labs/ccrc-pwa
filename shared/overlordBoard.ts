@@ -10,10 +10,10 @@
 import type { ProgrammeWaves, SessionStatus, MarkerState } from './api.js';
 import type { ItemKind, ItemState, NeededBy } from './ledgers.js';
 import type { ProgrammeLifecycle, CoordinatorLine } from './programmeLifecycle.js';
-import type { ServiceClass } from './portfolio.js';
+import type { Measure, ServiceClass } from './portfolio.js';
 import type { ReadinessWord } from './overlord-readiness.js';
 import type { IsolationWord, IsolationCause, IsolationUnmeasured } from './isolation.js';
-import type { Rung } from './overlord-ladder.js';
+import type { ConditionReading, LadderEffect, NarrowingState, Rung } from './overlord-ladder.js';
 
 /** The W1 parts (question 3). W2 adds Requests, Unread reports, Overlaps and Goal conflicts; W3 Engagement and Attention: each a
  *  new key here, so a W1 reader is unchanged. */
@@ -105,13 +105,48 @@ export interface BoardWorkRow {
 }
 export interface BoardStallNoticeCount { readonly row: string; readonly sent: number; readonly shadow: number }
 
+/** One programme of the portfolio view (`portfolioFor`), its W1 fields as the view gives them, each unmeasured flag beside the
+ *  value it qualifies (review 4010 F3): an unreadable rank is not "unranked", and an unknown age is not "no open wave". The view's
+ *  later-wave fields (the health word, the forecast's two dates, spend, the edge list and the critical path) are not carried
+ *  (slug `board-portfolio-later-wave-fields`). */
 export interface BoardPortfolioRow {
   readonly slug: string; readonly title: UntrustedText;
+  /** Null: unranked, or a stored rank this build cannot read (then `rankUnreadable`). */
   readonly rank: { readonly position: number; readonly cls: ServiceClass; readonly fixedDate: string | null } | null;
   readonly cls: ServiceClass;
+  /** A stored rank row whose class word this build does not know: the programme reads unranked, and says so. */
+  readonly rankUnreadable: boolean;
   readonly wip: { readonly working: number; readonly waiting: number; readonly queued: number };
+  /** The oldest started, still open wave's age; null when no such wave has a measured start. */
   readonly oldestOpenMs: number | null;
+  /** Started, still open waves left out of `oldestOpenMs` because their start is unknown (a rebuild stood in for it); null when
+   *  the view counted none (a server before portfolio B, never this one). */
+  readonly oldestOpenUnmeasured: number | null;
+  readonly closedWaves: { readonly days7: number; readonly days28: number };
+  /** Done waves, first dispatch to close; `cycleUnmeasured` counts the done waves it could not time. */
+  readonly cycle: Measure;
+  readonly cycleUnmeasured: number;
+  readonly reviewRounds: { readonly rounds: number; readonly waves: number };
+  readonly ended28: { readonly done: number; readonly failed: number; readonly neverStarted: number };
+  readonly waitingOnOperatorMs28: number;
+  /** Items whose events this build cannot fold, and asks whose end no live signal shows. */
+  readonly itemsUnmeasured: number;
+  readonly asksUnmeasured: number;
+  /** What blocks on the operator: shown blocking items, live asks, and the open decision edges (null when the view did not count
+   *  them: clearing not shipped). */
+  readonly blocking: {
+    readonly items: readonly { readonly id: number; readonly title: UntrustedText }[]; readonly asks: number; readonly edges: number | null;
+  };
 }
+
+/** A standing latch, as the ladder read answers it: its cause, the rung it caps the ladder at, when it was raised, whether this
+ *  build knows the cause, and whether its narrowing has taken effect. Its `detail`, server prose that can name a subject, stays
+ *  on the ladder's own read (slug `board-latch-detail-not-carried`). */
+export interface BoardLatch {
+  readonly cause: string; readonly cap: Rung; readonly raisedAt: number; readonly known: boolean; readonly narrowing: NarrowingState;
+}
+/** A live condition, as the ladder read answers it: its cause, its reading and its effect (closed words each). */
+export interface BoardCondition { readonly cause: string; readonly reading: ConditionReading; readonly effect: LadderEffect }
 
 export interface BoardTimersRow { readonly slug: string; readonly pending: number; readonly nextDueAt: number | null }
 
@@ -129,7 +164,11 @@ export interface OverlordBoard {
   readonly projects: Measured<{ readonly registry: 'listed' | 'unlistable'; readonly names: readonly string[] }>;
   readonly brakes: Measured<{
     readonly switches: Measured<{ readonly markers: Readonly<Record<string, MarkerState>> }>;
-    readonly ladder: Measured<{ readonly rung: Rung; readonly operatorRung: Rung }>;
+    /** The effective rung, the operator's rung, the standing latches and the live conditions (spec Table 5.2a). The armed kinds of
+     *  answer are W3's (plan question 3): an absent key. */
+    readonly ladder: Measured<{
+      readonly rung: Rung; readonly operatorRung: Rung; readonly latches: readonly BoardLatch[]; readonly conditions: readonly BoardCondition[];
+    }>;
   }>;
   readonly itself: Measured<{
     readonly readiness: Measured<{ readonly word: ReadinessWord; readonly since: number; readonly until: number | null }>;

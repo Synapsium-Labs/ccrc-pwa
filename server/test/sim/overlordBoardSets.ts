@@ -9,7 +9,7 @@ import type { MarkerState } from '../../../shared/api.js';
 import type { GoalsView, Ratification } from '../../../shared/ledgers.js';
 import type { PortfolioView } from '../../../shared/portfolio.js';
 import {
-  BOARD_PARTS, BOARD_UNMEASURED, type BoardPart, type BoardUnmeasured, type OverlordBoard,
+  BOARD_PARTS, BOARD_UNMEASURED, type BoardCondition, type BoardLatch, type BoardPart, type BoardUnmeasured, type OverlordBoard,
 } from '../../../shared/overlordBoard.js';
 import type { BoardInputs, BoardItemIn, BoardProgrammeIn, BoardRead, BoardTimerIn } from '../../src/coord/overlordBoard.js';
 import type { MutantSet, SuiteCase } from './mutate.js';
@@ -76,17 +76,37 @@ const item = (id: number, over: Partial<BoardItemIn> = {}): BoardItemIn =>
 const itemWithExtras = (id: number): BoardItemIn =>
   Object.assign(item(id), { why: 'SENTINEL-WHY-7', how: 'SENTINEL-HOW-7', answer: 'SENTINEL-ANSWER-7', note: 'SENTINEL-ITEMNOTE-7' });
 
+/** A portfolio entry with every W1 field of the view, each value distinct, so a field moved or dropped shows. */
 const entry = (slug: string, title: string, over: Record<string, unknown> = {}) => ({
   slug, title, rank: null, cls: 'standard', wip: { working: 1, waiting: 2, queued: 3 }, closedWaves: { days7: 9, days28: 19 },
-  cycle: { n: 3, median: 77 }, cycleUnmeasured: 0, oldestOpenMs: null, reviewRounds: { rounds: 4, waves: 2 }, ...over,
+  cycle: { n: 3, medianMs: 77, p85Ms: 88 }, cycleUnmeasured: 1, oldestOpenMs: null, oldestOpenUnmeasured: 0,
+  reviewRounds: { rounds: 4, waves: 2 }, ended28: { done: 5, failed: 1, neverStarted: 2 }, waitingOnOperatorMs28: 3600,
+  itemsUnmeasured: 6, asksUnmeasured: 7, blocking: { items: [{ id: 31, title: 'Blocking item 31' }], asks: 8 }, ...over,
 });
+/** The view's later-wave fields, which the board does not carry (slug `board-portfolio-later-wave-fields`). */
+const laterWave = {
+  health: { word: 'SENTINEL-HEALTH-7', evidence: 'unreadable', at: 1 },
+  forecast: { kind: 'forecast', medianAt: 4_000_001, p85At: 4_000_002, n: 3, source: 'own', sealedAt: 1, outcome: 'pending' },
+  edges: { list: [{ from: 'SENTINEL-EDGE-7' }], clearingShipped: false },
+  spend: { total: 4_000_003, byClass: {}, perWaveMedian: null, wavesMeasured: 0, wavesUnmeasured: 0, runsUnmeasured: 0, attributed: true, coordinatorExcluded: true, classAtClose: true },
+  criticalPath: { chain: ['SENTINEL-PATH-7'], latestP85At: 4_000_004, unmeasured: [], cut: false },
+};
+/** prog-a: ranked, a measured oldest wave, the later-wave fields and decision edges; prog-b: a stored rank this build cannot read,
+ *  and two started waves whose age is unknown, so neither null means what it means on a plain unranked, idle row. */
 const portfolioView = (): PortfolioView => ({
   at: 5000, revision: 4,
   programmes: [
-    entry('prog-a', 'Programme A title', { rank: { position: 1, cls: 'expedite', fixedDate: null }, cls: 'expedite', oldestOpenMs: 1234 }),
-    entry('prog-b', 'Programme B title'),
+    entry('prog-a', 'Programme A title', {
+      rank: { position: 1, cls: 'expedite', fixedDate: null }, cls: 'expedite', oldestOpenMs: 1234, ...laterWave,
+      blocking: { items: [{ id: 31, title: 'Blocking item 31' }], asks: 8, edges: 3 },
+    }),
+    entry('prog-b', 'Programme B title', { rankUnreadable: true, oldestOpenUnmeasured: 2, blocking: { items: [], asks: 0 } }),
   ],
 }) as unknown as PortfolioView;
+
+/** One standing latch and one live condition, as the ladder read's projection hands them over. */
+const LATCH: BoardLatch = { cause: 'invariant-violation', cap: 'advise', raisedAt: 4242, known: true, narrowing: { state: 'taking-effect', why: 'no-witness-yet' } };
+const CONDITION: BoardCondition = { cause: 'no-witness-since-boot', reading: 'standing', effect: { kind: 'cap', cap: 'advise' } };
 
 const timerRows = (): BoardTimerIn[] => [
   { setter: A, dueAt: 5000, note: NOTE }, { setter: A, dueAt: 2000, note: NOTE }, { setter: B, dueAt: 9000, note: NOTE },
@@ -105,7 +125,7 @@ export function healthyInputs(over: Partial<BoardInputs> = {}): BoardInputs {
     capacity: ok({ maxConcurrentWorkers: 6, running: 2 }),
     projects: ok({ registry: 'listed', names: ['project-a', 'project-b'] }),
     switches: ok({ 'mail-disabled': 'set', 'coordinator-paused': 'clear' } as Record<string, MarkerState>),
-    ladder: ok({ rung: 'chat', operatorRung: 'advise' }),
+    ladder: ok({ rung: 'chat', operatorRung: 'advise', latches: [LATCH], conditions: [CONDITION] }),
     readiness: ok({ word: 'ready', since: 300, until: null }),
     isolation: ok({ kind: 'measured', word: 'separate-user', cause: 'other-user' }),
     sandbox: ok({ held: true }),
@@ -139,16 +159,20 @@ export function bigInputs(n: number): BoardInputs {
     portfolio: ok({
       at: 1, revision: 9,
       programmes: slugs.map((s, k) => entry(s, `Programme number ${k} with a title of a usual length`,
-        { rank: { position: k + 1, cls: 'standard', fixedDate: null }, oldestOpenMs: 100000 + k })),
+        { rank: { position: k + 1, cls: 'standard', fixedDate: null }, oldestOpenMs: 100000 + k,
+          blocking: { items: [{ id: 3 * k + 1, title: `Item ${3 * k + 1}` }], asks: 1, edges: 0 } })),
     } as unknown as PortfolioView),
     timers: ok(slugs.flatMap((_, k) => [{ setter: lane(k), dueAt: 1000 + k, note: NOTE }, { setter: lane(k), dueAt: 2000 + k, note: NOTE }])),
   });
 }
 
-/** The measured size of `JSON.stringify(composeBoard(bigInputs(50)))` on the day the case was written, and the bound pinned
- *  over it (about 16 percent headroom): a part that starts carrying a body or a note outgrows it. */
-export const BOARD_50_MEASURED_BYTES = 81_988;
-export const BOARD_50_BOUND_BYTES = 95_000;
+/** The measured size of `JSON.stringify(composeBoard(bigInputs(50)))`, and the bound pinned over it (about 16 percent headroom).
+ *  It catches a part that grows by a whole new list per programme; a leaked body or note adds too little to cross it at this
+ *  scale. What catches those is the sentinel cases (`SENTINEL` above and the board door suite's C44 case). First measured at
+ *  81,988 bytes (bound 95,000); re-measured in review 4010's round with the portfolio's measures and what blocks, and the
+ *  ladder's latches and conditions: 103,424 bytes, the bound moved to 120,000 (the same 16 percent). */
+export const BOARD_50_MEASURED_BYTES = 103_424;
+export const BOARD_50_BOUND_BYTES = 120_000;
 
 // ------------------------------------------------------------------------------------------------------------ composeBoard
 
@@ -357,6 +381,8 @@ export function composeBoardCases(compose: Compose): Record<string, SuiteCase> {
       for (const r of rowsOf(b.portfolio)) {
         expect(r.title).toEqual({ trust: 'untrusted', source: 'programme-title', text: r.slug === 'prog-a' ? 'Programme A title' : 'Programme B title' });
       }
+      // A blocking item's title is an item title too.
+      expect(rowsOf(b.portfolio)[0]?.blocking.items).toEqual([{ id: 31, title: { trust: 'untrusted', source: 'item-title', text: 'Blocking item 31' } }]);
       for (const w of work(b)) {
         if (w.items.state !== 'measured') throw new Error('items are unmeasured');
         for (const it of w.items.open) expect(it.title).toEqual({ trust: 'untrusted', source: 'item-title', text: `Item ${it.id}` });
@@ -422,13 +448,24 @@ export function composeBoardCases(compose: Compose): Record<string, SuiteCase> {
         if (r.items.state === 'measured') for (const it of r.items.open) expect(keysOf(it)).toEqual(['id', 'kind', 'neededBy', 'state', 'title']);
       }
       expect(keysOf(b.portfolio)).toEqual(['programmes', 'revision', 'state']);
-      for (const r of rowsOf(b.portfolio)) expect(keysOf(r)).toEqual(['cls', 'oldestOpenMs', 'rank', 'slug', 'title', 'wip']);
+      for (const r of rowsOf(b.portfolio)) {
+        expect(keysOf(r)).toEqual([
+          'asksUnmeasured', 'blocking', 'closedWaves', 'cls', 'cycle', 'cycleUnmeasured', 'ended28', 'itemsUnmeasured', 'oldestOpenMs',
+          'oldestOpenUnmeasured', 'rank', 'rankUnreadable', 'reviewRounds', 'slug', 'title', 'waitingOnOperatorMs28', 'wip',
+        ]);
+        expect(keysOf(r.blocking)).toEqual(['asks', 'edges', 'items']);
+        for (const it of r.blocking.items) expect(keysOf(it)).toEqual(['id', 'title']);
+      }
       expect(keysOf(b.capacity)).toEqual(['maxConcurrentWorkers', 'running', 'state']);
       expect(keysOf(b.projects)).toEqual(['names', 'registry', 'state']);
       expect(keysOf(b.brakes)).toEqual(['ladder', 'state', 'switches']);
       if (b.brakes.state === 'measured') {
         expect(keysOf(b.brakes.switches)).toEqual(['markers', 'state']);
-        expect(keysOf(b.brakes.ladder)).toEqual(['operatorRung', 'rung', 'state']);
+        expect(keysOf(b.brakes.ladder)).toEqual(['conditions', 'latches', 'operatorRung', 'rung', 'state']);
+        if (b.brakes.ladder.state === 'measured') {
+          for (const l of b.brakes.ladder.latches) expect(keysOf(l)).toEqual(['cap', 'cause', 'known', 'narrowing', 'raisedAt']);
+          for (const c of b.brakes.ladder.conditions) expect(keysOf(c)).toEqual(['cause', 'effect', 'reading']);
+        }
       }
       expect(keysOf(b.itself)).toEqual(['isolation', 'readiness', 'sandbox', 'state']);
       if (b.itself.state === 'measured') {
@@ -496,7 +533,7 @@ export function composeBoardCases(compose: Compose): Record<string, SuiteCase> {
       ]);
     },
 
-    'the bound coordinator is the programme\'s coordinator, and the run\'s claimant only stands in when none is bound': () => {
+    'the bound coordinator is the programme\'s coordinator, and the run\'s claimant stands in when the read carries no bound one': () => {
       const rows = identity(board());
       // prog-a binds A and its run is claimed by B: the bound session is the coordinator, its status is A's.
       expect(rows[0]?.coordinator?.text).toBe(A);
@@ -513,7 +550,7 @@ export function composeBoardCases(compose: Compose): Record<string, SuiteCase> {
       expect(b.brakes).toEqual({
         state: 'measured',
         switches: { state: 'measured', markers: { 'mail-disabled': 'set', 'coordinator-paused': 'clear' } },
-        ladder: { state: 'measured', rung: 'chat', operatorRung: 'advise' },
+        ladder: { state: 'measured', rung: 'chat', operatorRung: 'advise', latches: [LATCH], conditions: [CONDITION] },
       });
       expect(b.itself).toEqual({
         state: 'measured',
@@ -524,6 +561,52 @@ export function composeBoardCases(compose: Compose): Record<string, SuiteCase> {
       if (b.work.state !== 'measured') throw new Error('work is not measured');
       expect(b.work.stallNotices).toEqual({ state: 'measured', since: 100, windowMs: 200, counts: [{ row: 'checks', sent: 1, shadow: 2 }] });
       expect(b.portfolio).toMatchObject({ state: 'measured', revision: 4 });
+    },
+
+    'portfolio rows carry the view\'s W1 fields as it gives them: the measures, what blocks, and each unmeasured flag (review 4010 F3)': () => {
+      const pf = rowsOf(board().portfolio);
+      const title = (text: string) => ({ trust: 'untrusted', source: 'programme-title', text });
+      const measures = {
+        wip: { working: 1, waiting: 2, queued: 3 }, closedWaves: { days7: 9, days28: 19 }, cycle: { n: 3, medianMs: 77, p85Ms: 88 }, cycleUnmeasured: 1,
+        reviewRounds: { rounds: 4, waves: 2 }, ended28: { done: 5, failed: 1, neverStarted: 2 }, waitingOnOperatorMs28: 3600, itemsUnmeasured: 6, asksUnmeasured: 7,
+      };
+      expect(pf).toEqual([
+        { slug: 'prog-a', title: title('Programme A title'), rank: { position: 1, cls: 'expedite', fixedDate: null }, cls: 'expedite', rankUnreadable: false,
+          oldestOpenMs: 1234, oldestOpenUnmeasured: 0, ...measures,
+          blocking: { items: [{ id: 31, title: { trust: 'untrusted', source: 'item-title', text: 'Blocking item 31' } }], asks: 8, edges: 3 } },
+        { slug: 'prog-b', title: title('Programme B title'), rank: null, cls: 'standard', rankUnreadable: true,
+          oldestOpenMs: null, oldestOpenUnmeasured: 2, ...measures, blocking: { items: [], asks: 0, edges: null } },
+      ]);
+    },
+
+    'an unreadable rank is not "unranked" and an unknown age is not "no open wave": the flags keep the two nulls apart': () => {
+      const view = portfolioView();
+      const plain = { ...view.programmes[1]!, rankUnreadable: undefined, oldestOpenUnmeasured: 0 };
+      const b = board({ portfolio: ok({ ...view, programmes: [view.programmes[1]!, plain] } as PortfolioView) });
+      const [unreadable, unranked] = rowsOf(b.portfolio);
+      // Both read rank null and oldestOpenMs null; only the flags tell them apart.
+      expect([unreadable?.rank, unranked?.rank, unreadable?.oldestOpenMs, unranked?.oldestOpenMs]).toEqual([null, null, null, null]);
+      expect([unreadable?.rankUnreadable, unranked?.rankUnreadable]).toEqual([true, false]);
+      expect([unreadable?.oldestOpenUnmeasured, unranked?.oldestOpenUnmeasured]).toEqual([2, 0]);
+    },
+
+    'the view\'s later-wave fields (health, forecast dates, spend, edges, critical path) are not carried': () => {
+      const text = JSON.stringify(board().portfolio);
+      for (const s of ['SENTINEL-HEALTH-7', 'SENTINEL-EDGE-7', 'SENTINEL-PATH-7', '4000001', '4000002', '4000003', '4000004']) expect(text).not.toContain(s);
+    },
+
+    'the brakes carry each standing latch with its cause and cap, and each live condition, as the ladder read hands them over (review 4010 F2)': () => {
+      const second: BoardLatch = { cause: 'restore-detected', cap: 'chat', raisedAt: 99, known: false, narrowing: { state: 'done' } };
+      const lifted: BoardCondition = { cause: 'no-witness-since-boot', reading: 'lifted', effect: { kind: 'cap', cap: 'advise' } };
+      const withDetail = Object.assign({ ...LATCH }, { detail: 'SENTINEL-DETAIL-7' });
+      const b = board({ ladder: ok({ rung: 'chat', operatorRung: 'full', latches: [withDetail, second], conditions: [lifted, CONDITION] }) });
+      if (b.brakes.state !== 'measured') throw new Error('brakes are unmeasured');
+      expect(b.brakes.ladder).toEqual({ state: 'measured', rung: 'chat', operatorRung: 'full', latches: [LATCH, second], conditions: [lifted, CONDITION] });
+      expect(JSON.stringify(b)).not.toContain('SENTINEL-DETAIL-7');
+      // No latch and no condition is a measured empty list, never unmeasured.
+      const none = board({ ladder: ok({ rung: 'full', operatorRung: 'full', latches: [], conditions: [] }) });
+      if (none.brakes.state !== 'measured') throw new Error('brakes are unmeasured');
+      expect(none.brakes.ladder).toEqual({ state: 'measured', rung: 'full', operatorRung: 'full', latches: [], conditions: [] });
     },
   };
 }
@@ -619,6 +702,32 @@ const COMPOSE_SET: MutantSet<BoardModule> = {
     { id: 'C5j a goals row is composed from another slug', old: 'goals: partOf(readFor(i.goals, p.slug), (g) => ({', new: "goals: partOf(readFor(i.goals, 'prog-a'), (g) => ({" },
     { id: 'C5k an item note rides the output', old: 'title: untrusted(\'item-title\', t.title) });', new: "title: untrusted('item-title', t.title), why: (t as { why?: string }).why } as never);" },
     { id: 'C5l the timers carry the programmes read\'s claimant only', old: 'coordinator: coordinatorOf(p) }))', new: 'coordinator: p.claimedBy }))' },
+    // Review 4010 F3: the portfolio row's flags, measures and what blocks, each field.
+    { id: 'P1 an unreadable rank reads unranked', old: 'rankUnreadable: e.rankUnreadable === true,', new: 'rankUnreadable: false,' },
+    { id: 'P2 an unknown age reads no open wave', old: 'oldestOpenUnmeasured: e.oldestOpenUnmeasured ?? null,', new: 'oldestOpenUnmeasured: null,' },
+    { id: 'P3 the 7-day closed count is the 28-day one', old: 'closedWaves: e.closedWaves, ', new: 'closedWaves: { days7: e.closedWaves.days28, days28: e.closedWaves.days28 }, ' },
+    { id: 'P4 the cycle median is its 85th percentile', old: 'cycle: e.cycle, ', new: 'cycle: { ...e.cycle, medianMs: e.cycle.p85Ms }, ' },
+    { id: 'P5 waves the cycle could not time are dropped', old: 'cycleUnmeasured: e.cycleUnmeasured,', new: 'cycleUnmeasured: 0,' },
+    { id: 'P6 review rounds are counted per wave', old: 'reviewRounds: e.reviewRounds,', new: 'reviewRounds: { rounds: e.reviewRounds.waves, waves: e.reviewRounds.waves },' },
+    { id: 'P7 failed endings are dropped', old: 'ended28: e.ended28,', new: 'ended28: { ...e.ended28, failed: 0 },' },
+    { id: 'P8 the time waiting on the operator is zero', old: 'waitingOnOperatorMs28: e.waitingOnOperatorMs28,', new: 'waitingOnOperatorMs28: 0,' },
+    { id: 'P9 items the build cannot fold are dropped', old: 'itemsUnmeasured: e.itemsUnmeasured,', new: 'itemsUnmeasured: 0,' },
+    { id: 'P10 asks with no live end are dropped', old: 'asksUnmeasured: e.asksUnmeasured,', new: 'asksUnmeasured: 0,' },
+    { id: 'P11 a blocking item title loses its untrusted mark', old: "title: untrusted('item-title', b.title)", new: 'title: b.title as never' },
+    { id: 'P12 live asks are dropped', old: 'asks: e.blocking.asks,', new: 'asks: 0,' },
+    { id: 'P13 uncounted decision edges read zero', old: 'edges: e.blocking.edges ?? null', new: 'edges: e.blocking.edges ?? 0' },
+    { id: 'P14 the blocking items are dropped', old: 'items: e.blocking.items.map(', new: 'items: ([] as typeof e.blocking.items).map(' },
+    { id: 'P15 a later-wave forecast rides the row', old: 'wip: e.wip, oldestOpenMs', new: 'wip: e.wip, forecast: e.forecast, oldestOpenMs' },
+    // Review 4010 F2: the ladder's latches and conditions, each field.
+    { id: 'L1 a latch caps at full', old: 'cap: x.cap,', new: "cap: 'full'," },
+    { id: 'L2 the latches are dropped', old: 'latches: l.latches.map(latch)', new: 'latches: []' },
+    { id: 'L3 every latch cause reads known', old: 'known: x.known,', new: 'known: true,' },
+    { id: 'L4 every narrowing reads done', old: 'narrowing: x.narrowing });', new: "narrowing: { state: 'done' } as never });" },
+    { id: 'L5 a latch loses when it was raised', old: 'raisedAt: x.raisedAt,', new: 'raisedAt: 0,' },
+    { id: 'L6 every condition reads standing', old: 'reading: c.reading,', new: "reading: 'standing' as never," },
+    { id: 'L7 a condition loses its effect', old: 'effect: c.effect });', new: "effect: { kind: 'cap', cap: 'off' } as never });" },
+    { id: 'L8 the conditions are dropped', old: 'conditions: l.conditions.map(condition)', new: 'conditions: []' },
+    { id: 'L9 a latch carries what its reader handed over, detail included', old: 'const latch = (x: BoardLatch): BoardLatch => ({', new: 'const latch = (x: BoardLatch): BoardLatch => ({ ...x,' },
   ],
 };
 
