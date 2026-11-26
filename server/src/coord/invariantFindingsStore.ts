@@ -22,6 +22,12 @@ import { OVERLORD_ITEM_PROGRAMME } from '../../../shared/overlord-sequence.js';
 export type FindingMode = 'shadow' | 'live';
 export type { FindingLatched };
 export interface OpenFindingRow { readonly id: number; readonly invariant: string; readonly subject: string }
+/** One findings row as the operator's read serves it (`findingRows`): ids, words, times and the message, which names ids only. */
+export interface FindingRow {
+  readonly id: number; readonly invariant: string; readonly subject: string; readonly mode: string; readonly seq: number | null;
+  readonly message: string; readonly foundAt: number; readonly resolvedAt: number | null; readonly latched: string | null;
+  readonly itemId: number | null;
+}
 export interface FindingTally { readonly total: number; readonly open: number; readonly byInvariant: Readonly<Record<string, number>> }
 
 const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -78,6 +84,26 @@ export function openFindings(db: DatabaseSync, mode: FindingMode): SequenceRead<
     const rows = db.prepare('SELECT id, invariant, subject FROM overlord_invariant_findings WHERE mode = ? AND resolvedAt IS NULL ORDER BY id')
       .all(mode) as { id: number; invariant: string; subject: string }[];
     return { kind: 'measured', value: rows.map((r) => ({ id: Number(r.id), invariant: String(r.invariant), subject: String(r.subject) })) };
+  } catch (e) {
+    return { kind: 'unmeasured', why: errText(e) };
+  }
+}
+
+const numOrNull = (v: unknown): number | null => (v === null || v === undefined ? null : Number(v));
+
+/** The open or the resolved rows of both modes, newest first, at most `limit` (the operator's invariants read asks one more than
+ *  it serves, to tell a cut). */
+export function findingRows(db: DatabaseSync, which: 'open' | 'resolved', limit: number): SequenceRead<readonly FindingRow[]> {
+  try {
+    const rows = db.prepare('SELECT id, invariant, subject, mode, seq, message, foundAt, resolvedAt, latched, itemId FROM overlord_invariant_findings '
+      + `WHERE resolvedAt IS ${which === 'open' ? '' : 'NOT '}NULL ORDER BY id DESC LIMIT ?`).all(Math.max(0, Math.trunc(limit))) as Record<string, unknown>[];
+    return {
+      kind: 'measured', value: rows.map((r) => ({
+        id: Number(r['id']), invariant: String(r['invariant']), subject: String(r['subject']), mode: String(r['mode']), seq: numOrNull(r['seq']),
+        message: String(r['message']), foundAt: Number(r['foundAt']), resolvedAt: numOrNull(r['resolvedAt']),
+        latched: r['latched'] === null || r['latched'] === undefined ? null : String(r['latched']), itemId: numOrNull(r['itemId']),
+      })),
+    };
   } catch (e) {
     return { kind: 'unmeasured', why: errText(e) };
   }

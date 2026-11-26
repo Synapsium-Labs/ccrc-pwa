@@ -130,10 +130,11 @@ describe('the six doors and the table agree (a door this file does not drive wou
     const rows = Object.entries(OVERLORD_DOORS).filter(([, r]) => r.group === 'overlord').map(([k]) => k);
     // D-8809: `link-team` (POST /api/linking/confirm) is driven through the real gate in `linking-overlord-confirm.test.ts`.
     // The inbox piece's three doors (`inbox`, `messages`, `acknowledge`) are driven through the real gate in `overlord-inbox-routes.test.ts`,
-    // and the history door (`history`, W1 PR B1) in `overlord-history-door.test.ts`. The three timer doors (the Overlord's
+    // and the history door (`history`, W1 PR B1) in `overlord-history-door.test.ts`, and the cursor read (`sequence`, W1 sequence C)
+    // in `overlord-sequence-route.test.ts`. The three timer doors (the Overlord's
     // timers, W1) are driven through the real server's gate for every other session in `timer-doors-characterization.test.ts`,
     // and on the role's path in `continuity-timers-route.test.ts`.
-    expect(rows.sort()).toEqual([...DOORS.map((d) => d.key), 'card-record', 'link-team', 'inbox', 'messages', 'acknowledge', 'history',
+    expect(rows.sort()).toEqual([...DOORS.map((d) => d.key), 'card-record', 'link-team', 'inbox', 'messages', 'acknowledge', 'history', 'sequence',
       'timer-set', 'timer-list', 'timer-cancel'].sort());
   });
 });

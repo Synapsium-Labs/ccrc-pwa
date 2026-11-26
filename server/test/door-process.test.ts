@@ -362,6 +362,35 @@ describe('the door process: the claim and the fence', () => {
   });
 });
 
+describe('the door process: the sequence read (Overlord W1, sequence C)', () => {
+  it('an unfenced view: the child carries no key, no counter and no witness key, and claims nothing', async () => {
+    const p = new Proc();
+    const r = await p.call('sequence', { after: 7, limit: 20 });
+    expect(r.isError).toBe(false);
+    const calls = of('overlord');
+    expect(calls.map((e) => [e.argv, e.key, e.gen, e.counter, e.wit, e.nonce])).toEqual([
+      [['overlord', 'sequence', '--after', '7', '--limit', '20'], null, null, null, null, null],
+    ]);
+    expect(of('sessions-act-key')).toEqual([]);
+  });
+
+  it('a cursor or limit outside its bounds, or an attribution field, is refused with no client call', async () => {
+    const p = new Proc();
+    for (const args of [{ after: -1 }, { limit: 0 }, { limit: 501 }, { after: '3' }, { byId: 'x' }]) {
+      const r = await p.call('sequence', args);
+      expect(r.isError, JSON.stringify(args)).toBe(true);
+    }
+    expect(of('overlord')).toEqual([]);
+  });
+
+  it('the client\'s ok:false is an error result, its text passed through', async () => {
+    const p = new Proc();
+    answer('overlord', { ok: false, error: 'not-the-overlord' });
+    const r = await p.call('sequence', {});
+    expect(r).toEqual({ text: '{"ok":false,"error":"not-the-overlord"}', isError: true });
+  });
+});
+
 describe('the door process: refusals, errors and the cache', () => {
   it.each([
     ['fromUuid at the top', 'note_add', { fromUuid: 'x' }],
