@@ -37,8 +37,13 @@ An ADOPTED project is the exception. Adoption binds with the team planned at ado
 sent (a key may have moved between the lost reply and the adoption), and it is not a write ccrc made. So the check reads an
 epic binding whose stored fingerprint base is the adoption fingerprint (`linkMarkOf(...).base`, so a link mark added later
 does not hide it) as having no recorded team. Its create waits for the project's update, which is emitted because the
-adopted fingerprint is never current, and the update records the team. The decision is in L1; the store and the adoption
-binds are unchanged. Issue adoption is unchanged: an adopted issue records the team Linear answered.
+adopted fingerprint is never current, and the update records the team. The decision is in L1, and the adoption binds are
+unchanged. To read the adoption fingerprint, the policy needs its word, so in fix round 3 the word (`ADOPTED_FINGERPRINT`)
+moved to its L1 home, `planSyncPolicy.ts`, beside the fingerprint encoding that reads it (`linkMarkOf`, `withLinkMark`).
+The plan store imports it from there and re-exports it for its own readers. So the policy still takes only types from the
+store, as on main, and no runtime import cycle runs from the policy through the store and back. Fix round 2 had taken the
+value from the store instead, an L1 import from the store adapter that the rings suite cannot see, because the store's own
+facts measure as L1. Issue adoption is unchanged: an adopted issue records the team Linear answered.
 
 Otherwise the create waits until the project's stored fingerprint is current (`projectHasTeams`). A binding that recorded
 no team cannot tell what Linear holds, so its create waits too.
@@ -48,8 +53,9 @@ order, and when a bound ticket's update or move is ready all stay as they were. 
 binding is the one change (the planned team, above).
 
 **Why the recorded team.** After a move, the planned key is not what Linear holds. The binding's recorded team is the
-last fact ccrc wrote. When the project's update is not current, it is emitted in the same pass. So the wait costs one pass
-at most, and a project binding that failed skips its tickets, as before. A stale record can only cost a pass, never a
+last fact ccrc wrote. When the project's update is not current, it is emitted in the same pass, unless the project's own
+step is skipped or failing (see Limits). So the wait otherwise costs one pass at most, and a project binding that failed
+skips its tickets, as before. A stale record can only cost a pass, never a
 create into a project without its team: a record that lags makes the create wait.
 
 **Readers of an epic binding's team.** Recording the team at an update changes what the readers see, and each was read:
@@ -83,8 +89,9 @@ sent once, with the same request id. No issue is created twice.
 
 ## D-9132: an answer outside the closed error table is never a silent, permanent hold
 
-**Definition.** A write or a read that Linear answered with an error the closed table does not know, or with a payload that
-is not `success`, is handled like `malformed`. It holds on the backoff steps (`PLAN_SYNC_BACKOFF_MS`) with the same
+**Definition.** A write or a read that Linear answered, on a 200 or a 4xx, with an error the closed table does not know, or
+with a payload that is not `success`, is handled like `malformed`. A 5xx stays a plain `unreachable` that holds, whatever its
+body. It holds on the backoff steps (`PLAN_SYNC_BACKOFF_MS`) with the same
 per-binding counter. After the last step, its binding fails with the word `malformed` and the failure is mailed once, as a
 `malformed` failure already is. The pass then goes on to the programme's other objects.
 
@@ -97,9 +104,10 @@ per-binding counter. After the last step, its binding fails with the word `malfo
   binding in flight, so it is a plain `unreachable` that keeps its hold whatever its body says. A body that does not parse, has no
   `errors` array or has an empty one (it says nothing) is a plain `unreachable` as before. The body is never logged, journaled or
   sent on a wire.
-- **Consecutive answers.** The counter counts consecutive answers for one binding. What clears it: a good WRITE for the binding
-  (`bind`, which a create, an update, a link and an adoption all reach), the programme going clean, and the failure itself, so a
-  requeued binding counts again from one. A good READ does not clear it: answers outside the table that a read splits still count.
+- **Consecutive answers.** The counter counts consecutive answers for one binding. What clears it: any `bind` of the binding (a
+  create, an update, a link, a read-only `same` verdict after the issue read, and an adoption, which binds after reads and is not
+  a write ccrc made), the programme going clean, and the failure itself, so a requeued binding counts again from one. A read
+  that does not reach `bind` does not clear it: answers outside the table that such a read splits still count.
   This also changes the true `malformed` word, for the better: its count used to run over the life of the server.
 
 - **Word.** `malformed` is an existing word. The console shows it as "Linear answered in a form ccrc could not read",
@@ -147,7 +155,7 @@ Fixtures only, with neutral team keys AAA, BBB and CCC. None calls Linear.
 | `linear-ccrc-call.test.ts` | round 2 A1: a 400 with an empty `errors` array is a plain `unreachable`, not `malformed`, no `outsideTable` | red (`malformed`) | green |
 | `linear.test.ts` | round 2 A1: a 400 with an empty `errors` array keeps no `answered` | red | green |
 | `linear-ccrc-call.test.ts` | round 2 A3a: a 400 whose `errors` code is in the table (`INVALID_INPUT`) answers `linear-invalid`, not maybe sent, no `outsideTable`, the journal row `failed` with that word (red when a known code is made to stay `unreachable`: measured, 1 failed of 26) | green | green |
-| `linear-ccrc-call.test.ts` | round 2 A3b: a 400 with a `success` payload beside a non-empty `errors` array is never ok, a plain `unreachable` marked `outsideTable`, journaled `unknown` (every shaper reads `errors` before `data`, so a kept body cannot read as success today: the guard `!answered.ok` is a defence, and the pin stayed green when it was mutated to return ok: measured, 26 of 26) | green | green |
+| `linear-ccrc-call.test.ts` | round 2 A3b, corrected in round 3: a 400 with a `success` payload beside an unknown-code `errors` array reads the errors first: `unreachable`, maybe sent, marked `outsideTable`, journaled `unknown`, never ok. It pins the errors-first read, not a guard: the `!answered.ok` in `run` is the narrowing `refused` needs (removing it fails the typecheck), and its ok case would fall through to the same plain `unreachable` as a missing body. A kept body always has a non-empty `errors` array, so it never shapes as ok | green | green |
 
 Red first: on the base, 7 of the 282 cases in the four changed test files failed (the rows marked red), and the rest
 passed. With the fix, all of them pass. The round 1 rows were measured against the head the review read: of the five test
@@ -160,8 +168,11 @@ without an answer the fake threw, which is a transport-shaped `unreachable` that
 the base in its amended form.
 
 The round 2 rows were measured against the head the review read (4527a4c0's source, tests at the round's tests commit): of the
-five test files, 7 of 343 cases failed (the rows marked red); F3, F4 and A3a are mutation pins, green on the base by
+five test files, 6 of 343 cases failed (the six rows marked red); F3, F4 and A3a are mutation pins, green on the base by
 construction and measured red under the one deletion each names.
+
+Fix round 3 changes no behaviour. The word's home moved (above), `single-definition/plan.test.ts` names its new home, and the
+A3b pin asserts the marked answer exactly.
 
 ## Limits
 
@@ -173,6 +184,10 @@ construction and measured red under the one deletion each names.
   outside the table.
 - **The wait is conservative.** A project binding that recorded no team (one written before the team was recorded) makes
   a later create in its planned team wait for the project's update to be current. When the update is current, the create
-  goes ahead in the same pass. When it is not, the update is emitted first. No sequence leaves the create waiting forever.
+  goes ahead in the same pass. When it is not, the update is emitted first.
+- **An adopted project waits for its own update.** Its new tickets wait one pass, even in a team that never changed, and for
+  as long as the project's own update is skipped (`status-missing`, `text-public`) or failing. The skip is itself a reported
+  step, and the failure is mailed, so the wait lasts until the operator fixes the project's text, the workspace's statuses or
+  the cause of the failure.
 - **The moves follow the create.** See the order above. Nothing in Linear depends on the moves coming first: the create
   needs only its team on the project.
