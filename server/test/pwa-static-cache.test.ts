@@ -21,7 +21,7 @@ import { brotliCompressSync, brotliDecompressSync, gunzipSync, gzipSync } from '
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import fastifyStatic from '@fastify/static';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PWA_ASSET_CACHE, PWA_SHELL_CACHE, pwaStaticOptions } from '../src/pwaStatic.js';
@@ -114,6 +114,43 @@ describe('the server registers the PWA root through pwaStaticOptions', () => {
     const calls = [...src.matchAll(/app\.register\(\s*fastifyStatic\s*,\s*(.+?)\);/g)].map((m) => (m[1] ?? '').trim());
     expect(calls, 'one registration of the PWA root').toHaveLength(1);
     expect(calls[0]).toBe('pwaStaticOptions(pwaRoot)');
+  });
+});
+
+// The review page is served only by its own route, with its own headers (draft-review design §3.5, review finding N6
+// and advisory own-2). The router and the plugin's path checks already refuse today's odd spellings of the built file,
+// so no route-level test can show the filter red; these unit rows do. A case-insensitive file system would add
+// `/Review.HTML`, so the filter decodes, normalises and lower-cases before it judges.
+describe('the static filter refuses the built review page by every spelling', () => {
+  const allowed = (url: string): boolean => {
+    const filter = pwaStaticOptions(root).allowedPath;
+    if (filter === undefined) throw new Error('pwaStaticOptions has no allowedPath filter');
+    return filter(url, root, {} as FastifyRequest);
+  };
+
+  it.each(['/review.html', '/Review.HTML', '/review%2Ehtml', '/assets/../review.html', '/review.html/', '/REVIEW%2eHTML',
+    '/review.html.br', '/Review.html.GZ'])(
+    'refuses %s', (url) => {
+      expect(allowed(url), url).toBe(false);
+    });
+
+  it('refuses a path it cannot decode, so a malformed escape is never served', () => {
+    expect(allowed('/%E0%A4%A')).toBe(false);
+  });
+
+  it.each(['/index.html', '/assets/x.js', '/review', '/reviews.html', '/assets/review.html', '/review.htmlx'])('allows %s', (url) => {
+    expect(allowed(url), url).toBe(true);
+  });
+
+  it('answers the app shell, never the page, for a refused spelling that reaches the plugin', async () => {
+    writeFileSync(path.join(root, 'review.html'), '<!doctype html><title>stand-in review page</title>');
+    try {
+      const res = await app.inject({ method: 'GET', url: '/review.html' });
+      expect(res.body).not.toContain('stand-in review page');
+      expect(res.body).toBe('<!doctype html><title>fixture</title>');
+    } finally {
+      rmSync(path.join(root, 'review.html'), { force: true });
+    }
   });
 });
 

@@ -81,6 +81,24 @@ function precompressAssets(): Plugin {
   };
 }
 
+// The PWA plugin's post-order `transformIndexHtml` adds the web manifest link to every HTML entry, the review page's
+// too. That page is a separate document with no service worker and a policy (`default-src 'none'`) that refuses the
+// manifest fetch, and its lab mode makes no request at all (draft review X3 R2.1), so the link is taken back out of
+// `review.html` only. The PWA plugin is itself `enforce: 'post'` with a `post`-order hook, so this one is too and is
+// listed after it, which is what makes it run last. Pinned by test/review-built.test.ts.
+function reviewPageWithoutManifest(): Plugin {
+  return {
+    name: 'ccrc-review-page-without-manifest',
+    apply: 'build',
+    enforce: 'post',
+    transformIndexHtml: {
+      order: 'post',
+      handler: (html, ctx) => (path.basename(ctx.filename) === 'review.html'
+        ? html.replace(/<link\b[^>]*\brel="manifest"[^>]*>\s*/g, '') : html),
+    },
+  };
+}
+
 // https://vite.dev/config/
 export default defineConfig({
   // ONE REACT, ALWAYS: the three lists live in vite.react-singleton.ts, whose header holds the rule (and
@@ -167,7 +185,9 @@ export default defineConfig({
         // The reader frame's Mermaid script is far over workbox's 2 MiB precache ceiling, which makes the build throw.
         // It is not precached: it loads on demand, only for a document the Mermaid gate lets in (A9, M8.14; the
         // precache exclusion is the W8a plan's refinement (i)).
-        globIgnores: ['**/mermaid.frame-*.js'],
+        // The draft review page is not precached either: an installed client would then answer `/review` from a cached
+        // copy that carries none of the page's response headers (X3 R2.1; test/review-built.test.ts).
+        globIgnores: ['**/mermaid.frame-*.js', 'review.html'],
         navigateFallback: '/index.html',
         navigateFallbackDenylist: swDenylist(process.env['CCRC_SW_DENYLIST']),
         // Web Push handlers (push + notificationclick) live in public/push-sw.js
@@ -176,6 +196,7 @@ export default defineConfig({
         runtimeCaching: [{ urlPattern: /\/(?:api|ws)\//, handler: 'NetworkOnly' }],
       },
     }),
+    reviewPageWithoutManifest(),
   ],
   // The Markdown parse worker (src/lib/markdownWorker.ts, spawned by
   // src/lib/markdownRunner.ts) is bundled as an ES module worker, with its own
@@ -186,6 +207,15 @@ export default defineConfig({
   build: {
     outDir: '../server/dist-pwa',
     emptyOutDir: true,
+    // Two documents: the shell, under its own key so its entry chunk and sheet keep their `assets/index-*` names
+    // (test/fonts-built.test.ts matches them), and the draft review page, a fixed page with no React that the server
+    // sends from its own route under its own header policy (X3 R2.1; test/review-built.test.ts).
+    rollupOptions: {
+      input: {
+        index: fileURLToPath(new URL('./index.html', import.meta.url)),
+        review: fileURLToPath(new URL('./review.html', import.meta.url)),
+      },
+    },
   },
   server: {
     // pwa has no workspace root above it, so the dev server and vitest would allow pwa/ alone, and @ccrc/ui resolves

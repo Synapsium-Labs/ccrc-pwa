@@ -15,6 +15,7 @@ import { programmeIsOpenable, programmePath } from '../lib/routes';
 import { accountLabel } from '../lib/accounts';
 import { sessionLabel } from '../fleet/sessionLabel';
 import { hibernatedSince } from '../fleet/hibernated';
+import { providerRetryNote } from '../fleet/providerRetryWords';
 import { contextFact, headerMetaHasCells, headerStatusWord, WAITING_ON_WORKERS_TITLE, waitingOnWorkers } from '../fleet/sessionFacts';
 import type { Coordination } from '../fleet/fleetTree';
 import type { SessionFactSet } from '../fleet/sessionFacts';
@@ -272,15 +273,17 @@ export function sessionHeaderView({
   // row: a live stream that says dead over a row filed done or idle paints `dead`, so the header reads exited while the row
   // may read waiting on workers, the done-versus-exited shape that predates this wave. With no facts yet (the fleet list
   // not loaded), the rule is off here.
-  const waiting = bucket !== null && facts !== null && waitingOnWorkers({
+  // The provider retry's words, off the row itself, as the card reads them: a question the coordinator holds keeps its word.
+  const retry = session === null || wcWords !== null || bucket === 'dead' ? null : providerRetryNote(session, now);
+  const waiting = bucket !== null && facts !== null && retry === null && waitingOnWorkers({
     coordinator: facts.coordinatorRole, bucket, asleep: asleepAt !== null, workersBusy: facts.workersBusy,
   });
-  const word = bucket === null ? '' : headerStatusWord({ bucket, asleepAt, background: bgWords, at, now, waiting });
+  const word = bucket === null ? '' : headerStatusWord({ bucket, asleepAt, background: bgWords, at, now, waiting, retry: retry?.text ?? null });
   // Four tints for seven buckets, on purpose: `status-line--*` is the existing, contrast-verified set (chat.css) and
   // the glyph already carries the distinction colour must not carry alone. done/cleanup/archived take idle's matte
   // ink, exactly as their dots do (StatusDot's table).
   const variant: StatusVariant =
-    bucket === 'attention' ? 'attention' : wcWords !== null || asleepAt !== null ? 'idle' : working ? 'busy' : bucket === 'dead' ? 'dead' : 'idle';
+    bucket === 'attention' ? 'attention' : wcWords !== null || asleepAt !== null || retry !== null ? 'idle' : working ? 'busy' : bucket === 'dead' ? 'dead' : 'idle';
 
   // The session is the title (desktop polish T3c, D-6333): a workspace is named by its row's label, `sessionLabel`, the
   // same words its fleet row shows, and the project is the crumb before it, so two workspaces of one project read
@@ -308,7 +311,7 @@ export function sessionHeaderView({
     chips.push({
       kind: 'status', bucket, asleep: asleepAt !== null, variant, word, waiting,
       coordinator: wcWords === null ? null : { short: wcWords.short },
-      title: wcWords?.title ?? (waiting ? WAITING_ON_WORKERS_TITLE : bgWords?.title),
+      title: wcWords?.title ?? retry?.title ?? (waiting ? WAITING_ON_WORKERS_TITLE : bgWords?.title),
     });
   }
   if (wrapper !== '') chips.push({ kind: 'lane', text: accountLabel(roster, wrapper), title: facts?.lane.label });

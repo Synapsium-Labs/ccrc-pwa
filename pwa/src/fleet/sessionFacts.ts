@@ -37,6 +37,7 @@ import { elapsedShort, elapsedWords, statusLabel } from '@ccrc/ui';
 import { restartWords, type RestartWords } from '../lib/restart';
 import { humanBytes } from '../lib/format';
 import { lifecycleQualifier } from './lifecycleWords';
+import { providerRetryNote, type ProviderRetryNote } from './providerRetryWords';
 import { hibernatedSince, hibernatedWords } from './hibernated';
 import { paneGone } from './presence';
 import {
@@ -165,6 +166,9 @@ export interface SessionFactSet {
   readonly workersBusy: boolean;
   /** Wave 173: the rule (`waitingOnWorkers`) over this row's own bucket: the status word is `WAITING_ON_WORKERS`. */
   readonly waitingOnWorkers: boolean;
+  /** The provider retry this row says in its status word (`providerRetryNote`), null when it says none: none known, or a
+   *  question its coordinator holds, whose word stands. A row that waits on the operator keeps its word on the card. */
+  readonly providerRetry: ProviderRetryNote | null;
   readonly workingOn: string | null;
   readonly childOf: ChildOfRunLabel | null;
   readonly activeRun: NonNullable<ChildRunContext['run']> | null;
@@ -342,7 +346,7 @@ export function sessionFacts(input: FactInput): SessionFactSet {
   const lead = coordinatorRole(session);
   // Wave 173: the bucket, its timestamp, the sort and the rollup stay the measurement; only the word (and the lamp) change.
   const busyNow = workersWaitAt(workersBusy, now);
-  const waiting = waitingOnWorkers({ coordinator: lead, bucket: session.bucket, asleep: asleepAt !== null, workersBusy: busyNow });
+  const waitsOnWorkers = waitingOnWorkers({ coordinator: lead, bucket: session.bucket, asleep: asleepAt !== null, workersBusy: busyNow });
 
   const childOf = childOfRunLabel(session, childRun);
   const activeRun = childRun?.run ?? null;
@@ -353,6 +357,9 @@ export function sessionFacts(input: FactInput): SessionFactSet {
   const askRaw = sessionAsk(session);
   const wc = rowWithCoordinator(session);
   const wcWords = wc === null ? null : withCoordinatorWords(wc, session.project);
+  const retry = wcWords !== null ? null : providerRetryNote(session, now);
+  const retryWord = session.bucket === 'attention' ? null : retry;
+  const waiting = waitsOnWorkers && retryWord === null;
   const ask = askRaw !== null && (askRaw.state === 'answered' || (askRaw.state === 'held' && wc === null)) ? askRaw : null;
   const askState = ask === null ? null : { state: ask.state, ...askWords(ask) };
   // A held ask is the coordinator answering first: on the card that is "with coordinator", not "needs you".
@@ -361,7 +368,7 @@ export function sessionFacts(input: FactInput): SessionFactSet {
   const ctxPct = dead ? null : ctxPressure(session);
   const ctxHigh = ctxPct !== null && ctxPct >= CTX_PRESSURE;
   const bg = dead ? null : backgroundWork(session);
-  const wedged = ctxHigh && !dead && session.status === 'busy' && !session.dialogPending && bg === null
+  const wedged = ctxHigh && !dead && retry === null && session.status === 'busy' && !session.dialogPending && bg === null
     && turnStall(session, now);
   const turnAge = wedged && session.statusUpdatedAt !== null ? elapsedWords(now - session.statusUpdatedAt) : null;
   const bgWords = state === 'working' && bg !== null ? backgroundWords(bg) : null;
@@ -401,13 +408,15 @@ export function sessionFacts(input: FactInput): SessionFactSet {
     // background work (D-5231). They are WHAT the lamp means, not extra facts.
     statusText: asleepAt !== null ? hibernatedWords(asleepAt, now)
       : wcWords !== null ? wcWords.text
+      : retryWord !== null ? retryWord.text
       : waiting ? WAITING_ON_WORKERS
       : cardBgWords !== null ? `${state} · ${cardBgWords.text}` : state,
-    statusTitle: wcWords?.title ?? (waiting ? WAITING_ON_WORKERS_TITLE : cardBgWords?.title),
-    stateTone: wcWords !== null ? 'coordinator' : state,
+    statusTitle: wcWords?.title ?? retryWord?.title ?? (waiting ? WAITING_ON_WORKERS_TITLE : cardBgWords?.title),
+    stateTone: wcWords !== null ? 'coordinator' : retryWord !== null ? 'idle' : state,
     coordinatorRole: lead,
     workersBusy: busyNow,
     waitingOnWorkers: waiting,
+    providerRetry: retry,
     workingOn,
     childOf, activeRun, coordinatorName: childRun?.coordinator ?? null, heldRun, heldTitle,
     spawn: spawnChip(session),
@@ -665,14 +674,17 @@ export function headerStatusWord(input: {
   readonly now: number;
   /** Wave 173: the rule's answer (`waitingOnWorkers`) for this bucket; only a `done` or `idle` bucket reads it. */
   readonly waiting?: boolean;
+  /** The provider retry's words (`providerRetryNote`), or null: they take the word's place, and stand beside `on you`. */
+  readonly retry?: string | null;
 }): string {
-  const { bucket, asleepAt, background, at, now, waiting = false } = input;
+  const { bucket, asleepAt, background, at, now, waiting = false, retry = null } = input;
   if (asleepAt !== null) return hibernatedWords(asleepAt, now);
+  if (retry !== null && (bucket === 'done' || bucket === 'idle' || bucket === 'working')) return retry;
   // The card's word, verbatim: the header adds no age to it (the wait is the coordinator's present, not when it went quiet).
   if (waiting && (bucket === 'done' || bucket === 'idle')) return WAITING_ON_WORKERS;
   const rel = at === null ? null : elapsedShort(now - at);
   switch (bucket) {
-    case 'attention': return `${STATE_WORD.attention} on you`;
+    case 'attention': return `${STATE_WORD.attention} on you${retry === null ? '' : ` · ${retry}`}`;
     case 'working':
       return background !== null ? `working · ${background.text}` : at !== null ? `working · ${clock(now - at)}` : 'working…';
     case 'done': return rel !== null ? `done · ${rel} ago` : 'done';
@@ -687,6 +699,7 @@ export function headerStatusWord(input: {
 /** The header's status fact's title (L1-2, D-8771): the header's OWN background words (`backgroundWords`, the kinds, no count), or the
  *  with-coordinator title; never the card's (`statusTitle`, which carries the count and is the card's). */
 function headerStatusTitle(f: SessionFactSet): string | undefined {
+  if (f.providerRetry !== null) return f.providerRetry.title;
   return f.stateTone === 'coordinator' || f.waitingOnWorkers ? f.statusTitle : f.background?.title;
 }
 
@@ -696,6 +709,6 @@ function headerStatusText(f: SessionFactSet): string {
   if (f.asleepAt !== null || f.stateTone === 'coordinator') return f.statusText;
   return headerStatusWord({
     bucket: f.session.bucket, asleepAt: null, background: f.background, at: f.session.statusUpdatedAt, now: f.now,
-    waiting: f.waitingOnWorkers,
+    waiting: f.waitingOnWorkers, retry: f.providerRetry?.text ?? null,
   });
 }

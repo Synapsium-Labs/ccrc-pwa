@@ -108,6 +108,13 @@ export const PWA_ROOT: string;
 /** The @ccrc/ui package root. tokens.css and the design system's own
  *  stylesheets live there; `stylesheets()` walks both packages. */
 export const UI_ROOT: string;
+/** The body-text floor (4.5), which `audit()` uses for its `?? 4.5` defaults, and the non-text floor (3) the console gate
+ *  uses (a literal in contrast-check.mjs), exported so the review page's own row reads the same numbers. */
+export const TEXT_FLOOR: number;
+export const UI_FLOOR: number;
+/** Sheets exempt from the measurement against the console palettes only (structural checks still read them): exact
+ *  package-relative path -> the reason. A key naming no discovered sheet is a `problems` entry of `audit()`. */
+export const SEPARATE_DOCUMENTS: Record<string, string>;
 export const GROUNDS: Record<string, Ground>;
 export const SELF_GROUNDED_EXEMPT: Record<string, string>;
 export const INHERITED_GROUNDS: Record<string, Ground>;

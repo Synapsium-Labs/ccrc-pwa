@@ -24,6 +24,7 @@ import type { CoordCapNow } from './runCap.js';
 import type { ApprovalParkWord, ApprovalRulingAuthority, ApprovalRulingFamily } from './approval-park.js';
 import type { LandingWrite } from './landingLine.js';
 import { hookEventIs, type HookEvent } from './hook-events.js';
+import { providerRetryOf, type ProviderRetryWire } from './provider-retry-wire.js';
 import { PROGRAMME_RUN_REFUSAL_MAP, PROGRAMME_STORED_STATES, type ProgrammeLifecycleFields, type ProgrammeRunRefuseCode, type ProgrammesLifecycleAnswer, type ProgrammeStoredState } from './programmeLifecycle.js';
 
 export type SessionStatus = 'busy' | 'idle' | 'dead';
@@ -117,11 +118,8 @@ export function isSessionRole(v: unknown): v is SessionRole {
 
 /** `FleetSession.limitWait`'s value (D-8123; `waitingBy`, D-8173): see the field's own doc. */
 export interface LimitWait {
-  readonly since: number;
-  readonly reset: number | null;
-  readonly account: string;
-  readonly waiting: boolean;
-  readonly waitingBy: 'operator' | 'auto' | null;
+  readonly since: number; readonly reset: number | null; readonly account: string;
+  readonly waiting: boolean; readonly waitingBy: 'operator' | 'auto' | null;
 }
 
 export interface FleetSession {
@@ -497,6 +495,9 @@ export interface FleetSession {
    *  this build cannot read → null, because it is a display line that gates nothing server-side. An older server's value
    *  without `waitingBy` revives as `'operator'` when waiting (the only chooser it knew) and null otherwise. */
   readonly limitWait: LimitWait | null;
+  /** The provider-failure ladder's retry of this session (`ProviderRetryWire`), off the stall pass (`coord/providerRetry.ts`).
+   *  Absent: none is known. Read ONLY through `providerRetryOf`, live frames being cast. ADDITIVE: no `FLEET_PROTO` bump. */
+  readonly providerRetry?: ProviderRetryWire | null;
   /** The supervisor's standing substrate fault — `$REG/<id>.substrate`, the
    *  decision record `cmd_supervise` writes while tmux answers neither `live`
    *  nor `gone` (spec §2). Epoch MS (converted from the registry's seconds in
@@ -3577,6 +3578,7 @@ export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnW
       swapBlocked: reviveSwapBlocked(o, 'swapBlocked'),
       stranded: reviveStranded(o, 'stranded'),
       limitWait: reviveLimitWait(o, 'limitWait'),
+      ...((p) => (p === null ? {} : { providerRetry: p }))(providerRetryOf(o['providerRetry'])),
       substrate: reviveSubstrate(o, 'substrate'),
       // THE DEGRADE, DOCUMENTED: absent reads TRUE, not false. Every session a
       // pre-Wave-1 build persisted had a claim, and `false` would light

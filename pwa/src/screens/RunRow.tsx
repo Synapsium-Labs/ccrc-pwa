@@ -123,7 +123,7 @@ export const RunRow = memo(function RunRow({
   // links that run, and a link cannot sit inside the open button, so it stands beside it.
   const waitLine = runWaitLine(run, nowMs);
   // D-8285: the worker heartbeat, `workerSeenNote`'s words. Absent draws nothing.
-  const seen = workerSeenNote(run, nowMs, quietMs);
+  const seen = workerSeenNote(run, nowMs, quietMs, session);
   const commits = branchCommitsNote(run, session);
   const body = (
     <>

@@ -3561,8 +3561,11 @@ button.proj-card-pool::before {
 }
 /* display:flex drops the native marker, so the disclosure draws its own: a chevron in the summary's own ink
    (currentColor, no new colour) pointing right when shut and down when open, a touch cue that hover does not give. */
-.settings-release-fold > summary::-webkit-details-marker { display: none; }
-.settings-release-fold > summary::before {
+.settings-release-fold > summary::-webkit-details-marker,
+.acct-door-more > summary::-webkit-details-marker { display: none; }
+/* The Add account door's "How to…" disclosure draws the same chevron (desktop-polish wave 180, fix round 1). */
+.settings-release-fold > summary::before,
+.acct-door-more > summary::before {
   content: "";
   flex: none;
   width: 0.4em;
@@ -3574,9 +3577,11 @@ button.proj-card-pool::before {
   transform: rotate(-45deg);
   transition: transform var(--dur-fast) var(--curve-swift);
 }
-.settings-release-fold[open] > summary::before { transform: rotate(45deg); }
+.settings-release-fold[open] > summary::before,
+.acct-door-more[open] > summary::before { transform: rotate(45deg); }
 @media (prefers-reduced-motion: reduce) {
-  .settings-release-fold > summary::before { transition: none; }
+  .settings-release-fold > summary::before,
+  .acct-door-more > summary::before { transition: none; }
 }
 .settings-release-fold > p { margin: 0 0 var(--sp-1); }
 .settings-window { display: grid; gap: var(--sp-2); min-width: 0; }
@@ -4010,8 +4015,12 @@ button.proj-card-pool::before {
 /* — The Add account door and the connect sheet (accounts plan Task A18, D-5522, D-7740; spec §5, §12.1–§12.4) —
    The door is one per width: on a phone the lane list's last row, a `ListRow` at the skin's own row height (52px in
    Refined, 44px in Instrument, `--row-h`), the word and its meta on one line that wraps only between them; at ≥900 a
-   secondary button in the page header. Narrowed, it stays where it is in the secondary ink (a word that must still read,
-   so never the disabled ink, which no text pair clears), with its reason beneath. */
+   secondary button in the page header. Narrowed, it stays where it is and STANDS DOWN (desktop-polish wave 180): the
+   design system's disabled look, the ghost button's own `disabled:` stand-down (`--ink-disabled`, an `--edge-subtle`
+   border at ≥900), with no lift under the mouse and no press, so it no longer reads as the live buttons beside it. It
+   stays focusable and `aria-disabled`; WCAG 1.4.3 exempts an inactive control's ink, and the census registers it so
+   (design/audit.mjs). The reason beneath keeps the secondary ink, which every pair clears, and a tap or Enter on the
+   door brings it into view and marks it (`.acct-door-reason[data-marked]`). */
 .acct-door {
   flex-wrap: wrap;
   column-gap: var(--sp-3);
@@ -4028,8 +4037,59 @@ button.proj-card-pool::before {
 }
 .acct-door[data-narrowed='true'],
 .acct-door[data-narrowed='true'] .acct-door-meta,
-.acct-door-action[data-narrowed='true'] { color: var(--ink-secondary); cursor: default; }
-.acct-door-reason { display: grid; gap: var(--sp-1); min-width: 0; }
+.acct-door-action[data-narrowed='true'] { color: var(--ink-disabled); cursor: default; }
+.acct-door-action[data-narrowed='true'] { border-color: var(--edge-subtle); }
+/* No press: the primitives' press is `active:scale-[0.97]`, which Tailwind 4 writes as the individual `scale` property
+   (and an `aria-disabled` button still matches `:enabled`), so it is `scale` that is set off (fix round 1). Not beside
+   `transform: none`: the build's minifier folds the two into `transform: scale(1)` and drops `scale`, which left the
+   press in place (measured in the built stylesheet). Nothing here sets a `transform`. */
+.acct-door[data-narrowed='true']:active,
+.acct-door-action[data-narrowed='true']:active { background-color: transparent; scale: none; }
+@media (hover: hover) {
+  .acct-door[data-narrowed='true']:hover,
+  .acct-door-action[data-narrowed='true']:hover { background-color: transparent; }
+}
+/* Forced colours replace the disabled ink and edge with the live button's colours and drop the mark's inset
+   box-shadow, so a narrowed door would draw as a live one and a tap would draw nothing. The system's own disabled
+   colour keeps it stood down, and an inset outline, the channel that survives (as `.sess-line--active` above), draws
+   the mark (fix round 1). */
+@media (forced-colors: active) {
+  .acct-door[data-narrowed='true'],
+  .acct-door[data-narrowed='true'] .acct-door-meta,
+  .acct-door-action[data-narrowed='true'] { color: GrayText; border-color: GrayText; }
+  .acct-door-reason[data-marked='true'] {
+    outline: 2px solid CanvasText;
+    outline-offset: -2px;
+  }
+}
+.acct-door-reason {
+  display: grid;
+  gap: var(--sp-1);
+  min-width: 0;
+  padding-inline-start: var(--sp-2);
+  box-shadow: inset 2px 0 0 transparent;
+  transition: box-shadow var(--dur-fast) var(--curve-swift);
+}
+/* The mark a tap on the narrowed door leaves on its reason for a moment: a bar in the attention mark's colour at the
+   reason's start edge. It paints no ground, so the reason's ink is measured on the page as before. */
+.acct-door-reason[data-marked='true'] { box-shadow: inset 3px 0 0 var(--status-attention); }
+@media (prefers-reduced-motion: reduce) {
+  .acct-door-reason { transition: none; }
+}
+/* The reason's longer half, how to fix it: closed by default, the compromise disclosure's row in the reason's own size.
+   The summary sets no colour (the page's own ink) and draws the settings folds' chevron (`.settings-release-fold`), so
+   it shows that it opens. Its list is the compromise steps' own rule (`.acct-compromise-steps`), which sets
+   `--ink-primary` and is measured on the sheet and on the page (design/audit.mjs). */
+.acct-door-more { display: grid; gap: var(--sp-1); min-width: 0; }
+.acct-door-more > summary {
+  display: flex;
+  align-items: center;
+  min-height: var(--tap-min);
+  cursor: pointer;
+  font-family: var(--family-ui);
+  font-size: var(--fs-meta);
+  font-weight: var(--weight-medium);
+}
 /* The sheet's body: every frame a stack, nothing wider than the sheet at 360. */
 .acct-connect,
 .acct-frame { display: grid; gap: var(--sp-3); min-width: 0; }

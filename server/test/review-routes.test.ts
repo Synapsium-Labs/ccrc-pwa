@@ -286,7 +286,13 @@ describe('draft review read door', () => {
       expect(f.views).not.toHaveBeenCalled();
       spy.mockRestore();
       const fresh = await f.save('fresh.md');
-      expect((await f.open(fresh.token)).status).toBe(200);
+      // The body is read to its end, so the server has ended this response before `close()` begins. Read only the
+      // status and `close()` can start while the response is still in flight: Fastify closes the connections that are
+      // idle at that moment, once, so this one, idle a moment later, stays open until its keep-alive timeout, past the
+      // test's limit (measured: one hang in about 50 to 150 repeats, 2026-11-25; the X3 R2 carry).
+      const freshOpen = await f.open(fresh.token);
+      expect(freshOpen.status).toBe(200);
+      expect(await freshOpen.text()).toBe('draft bytes');
     } finally {
       release();
       if (pending) await Promise.allSettled([pending]);
@@ -371,6 +377,217 @@ describe('draft review read door', () => {
       expect(await measured(await f.open(entry.token, { ...marker, [MAIL_TOKEN_HEADER]: BOX }))).toEqual(anonymous);
       expect(await expectUnavailable(await f.open('b'.repeat(43), { ...marker, cookie })))
         .toEqual(await expectUnavailable(await f.open('b'.repeat(43), { ...marker, [MAIL_TOKEN_HEADER]: BOX })));
+    } finally { await f.close(); }
+  });
+});
+
+// The review page's routes (draft-review design §3.5, Task R2.2). The real `buildServer`, with `deps.pwaRoot`
+// pointing at a fixture root that holds a stand-in page and a stand-in shell, so no build is needed.
+const PAGE_BYTES = '<!doctype html><title>stand-in review page</title><script src="/assets/review-STANDIN.js"></script>';
+const SHELL_BYTES = '<!doctype html><title>stand-in app shell</title>';
+// The spec's string, written out here and never imported: a drifted constant must not pass its own test.
+const SPEC_CSP = "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline' data:; img-src data:; font-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
+function pageRoot(): string {
+  const root = mkTmp('review-root-');
+  writeFileSync(path.join(root, 'review.html'), PAGE_BYTES);
+  writeFileSync(path.join(root, 'index.html'), SHELL_BYTES);
+  return root;
+}
+
+async function pageFixture(armed: boolean, root: string | null) {
+  const home = mkTmp('review-page-');
+  const fs = { ...nodeReviewFs };
+  const opened = await openReviewStore(path.join(home, 'store'), fs);
+  if (!opened.ok) throw new Error(opened.why);
+  const deps = testDeps(home);
+  if (armed) {
+    mkdirSync(deps.cfg.ccrcDir, { recursive: true });
+    const line = await hashLine(PASS, { n: 1024, r: 8, p: 1, keylen: 32 }, 1);
+    writeFileSync(deps.cfg.authSecretPath, `${line}\n`, { mode: 0o600 });
+  }
+  const app = await buildServer({ ...deps, cfg: { ...deps.cfg, authEnabled: armed, cookieSecure: false },
+    mailToken: BOX, review: { store: opened.store }, pwaRoot: root });
+  try {
+    if (!app.reviewSweep) throw new Error('review sweep unavailable');
+    await app.reviewSweep.started;
+    await app.reviewSweep.stop();
+    const address = await app.listen({ host: '127.0.0.1', port: 0 });
+    const get = (url: string, headers: Record<string, string> = {}) => fetch(`${address}${url}`, {
+      headers, redirect: 'manual', signal: AbortSignal.timeout(3000),
+    });
+    // A request line exactly as written: fetch would fold `//x` and `/a/../x` before sending.
+    const raw = (target: string, headers: Record<string, string> = {}) => new Promise<{ status: number; body: string }>(
+      (resolve, reject) => {
+        const { port } = new URL(address);
+        const req = request({ host: '127.0.0.1', port: Number(port), path: target, method: 'GET', headers }, res => {
+          let body = '';
+          res.setEncoding('utf8');
+          res.on('data', chunk => { body += chunk; });
+          res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
+          res.on('error', reject);
+        });
+        req.setTimeout(2000, () => req.destroy(new Error('fixture request timed out')));
+        req.on('error', reject);
+        req.end();
+      });
+    const cookie = async (): Promise<string> => {
+      const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { passphrase: PASS } });
+      expect(login.statusCode).toBe(204);
+      const set = login.headers['set-cookie'];
+      const first = (Array.isArray(set) ? set[0] : set)?.split(';', 1)[0];
+      if (!first) throw new Error('fixture login did not set a cookie');
+      return first;
+    };
+    return { app, get, raw, cookie, close: () => app.close() };
+  } catch (err) {
+    await app.close();
+    throw err;
+  }
+}
+
+describe('draft review page routes', () => {
+  it.each([false, true])('GET /review answers the spec policy exactly, with no inline script and no allow- token (armed=%s)', async armed => {
+    const f = await pageFixture(armed, pageRoot());
+    try {
+      const response = await f.get('/review');
+      expect(response.status).toBe(200);
+      const csp = response.headers.get('content-security-policy');
+      expect(csp).toBe(SPEC_CSP);
+      const script = csp!.split(';').map(d => d.trim()).find(d => d.startsWith('script-src'));
+      expect(script).toBe("script-src 'self'");
+      expect(script).not.toContain("'unsafe-inline'");
+      expect(csp).not.toMatch(/allow-/);
+      // Read to its end before close: an unread keep-alive answer can hold close() past the test's limit (R1 carry).
+      expect(await response.text()).toBe(PAGE_BYTES);
+    } finally { await f.close(); }
+  });
+
+  it.each([
+    ['cache-control', 'no-store'], ['referrer-policy', 'no-referrer'],
+    ['x-content-type-options', 'nosniff'], ['x-frame-options', 'DENY'],
+  ])('GET /review carries %s: %s', async (name, value) => {
+    const f = await pageFixture(false, pageRoot());
+    try {
+      const response = await f.get('/review');
+      expect(response.status).toBe(200);
+      expect(response.headers.get(name)).toBe(value);
+      expect(await response.text()).toBe(PAGE_BYTES);
+    } finally { await f.close(); }
+  });
+
+  it('GET /review answers no-store with the static filter in place, which a sendFile route would not', async () => {
+    const f = await pageFixture(false, pageRoot());
+    try {
+      const response = await f.get('/review');
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      expect(await response.text()).toBe(PAGE_BYTES);
+    } finally { await f.close(); }
+  });
+
+  // Fastify's automatic HEAD route runs the GET handler, so HEAD carries the whole policy too (review of R2.2, minor 7).
+  it('HEAD /review carries all five page headers and no body', async () => {
+    const f = await pageFixture(false, pageRoot());
+    try {
+      const response = await f.app.inject({ method: 'HEAD', url: '/review' });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['content-security-policy']).toBe(SPEC_CSP);
+      for (const [name, value] of [['cache-control', 'no-store'], ['referrer-policy', 'no-referrer'],
+        ['x-content-type-options', 'nosniff'], ['x-frame-options', 'DENY']] as const) {
+        expect(response.headers[name], name).toBe(value);
+      }
+      expect(response.body).toBe('');
+    } finally { await f.close(); }
+  });
+
+  it('GET /review sends the page as HTML', async () => {
+    const f = await pageFixture(false, pageRoot());
+    try {
+      const response = await f.get('/review');
+      expect(response.headers.get('content-type')).toBe('text/html; charset=utf-8');
+      expect(await response.text()).toBe(PAGE_BYTES);
+    } finally { await f.close(); }
+  });
+
+  it.each([false, true])('GET /review answers the stand-in page bytes exactly, with and without a cookie (armed=%s)', async armed => {
+    const f = await pageFixture(armed, pageRoot());
+    try {
+      const anonymous = await f.get('/review');
+      expect(anonymous.status).toBe(200);
+      expect(await anonymous.text()).toBe(PAGE_BYTES);
+      const headers = armed ? { cookie: await f.cookie() } : { cookie: 'ccrc_session=fixture' };
+      const withCookie = await f.get('/review', headers);
+      expect(withCookie.status).toBe(200);
+      expect(await withCookie.text()).toBe(PAGE_BYTES);
+    } finally { await f.close(); }
+  });
+
+  it.each([false, true])('GET /review?utm_source=x reaches the page route and carries the policy (armed=%s)', async armed => {
+    const f = await pageFixture(armed, pageRoot());
+    try {
+      const response = await f.get('/review?utm_source=x');
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-security-policy')).toBe(SPEC_CSP);
+      expect(await response.text()).toBe(PAGE_BYTES);
+    } finally { await f.close(); }
+  });
+
+  it.each(['/review.html', '/review/'])('GET %s is a 404 when dark, with neither the page nor the shell', async url => {
+    const f = await pageFixture(false, pageRoot());
+    try {
+      const response = await f.get(url);
+      expect(response.status).toBe(404);
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      const body = await response.text();
+      expect(body).toBe(unavailable);
+      expect(body).not.toContain('stand-in');
+    } finally { await f.close(); }
+  });
+
+  // Armed and without a session the gate answers first: neither route is EXEMPT (only `GET /review` is, reason 9).
+  it.each(['/review.html', '/review/'])('GET %s is a 401 when armed without a session, with neither the page nor the shell', async url => {
+    const f = await pageFixture(true, pageRoot());
+    try {
+      const response = await f.get(url);
+      expect(response.status).toBe(401);
+      expect(await response.text()).not.toContain('stand-in');
+    } finally { await f.close(); }
+  });
+
+  // Characterisation (A0): the router and the static plugin's own path checks already refuse these spellings, so
+  // these rows describe today; the filter's own unit rows are in `pwa-static-cache.test.ts`.
+  it.each([false, true])('no odd spelling of the built file answers the page bytes (armed=%s)', async armed => {
+    const f = await pageFixture(armed, pageRoot());
+    try {
+      for (const target of ['//review.html', '/assets/../review.html', '/review%2Ehtml', '/Review.html']) {
+        const response = await f.raw(target);
+        expect(response.body, target).not.toBe(PAGE_BYTES);
+        expect(response.body, target).not.toContain('stand-in review page');
+      }
+    } finally { await f.close(); }
+  });
+
+  it('a null PWA root answers 404 on /review, never a shell', async () => {
+    const f = await pageFixture(false, null);
+    try {
+      const response = await f.get('/review');
+      expect(response.status).toBe(404);
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      expect(await response.text()).toBe(unavailable);
+    } finally { await f.close(); }
+  });
+
+  it('a root with no readable page answers 404 on /review, never the shell', async () => {
+    const root = mkTmp('review-root-');
+    writeFileSync(path.join(root, 'index.html'), SHELL_BYTES);
+    const f = await pageFixture(false, root);
+    try {
+      const response = await f.get('/review');
+      expect(response.status).toBe(404);
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      const body = await response.text();
+      expect(body).toBe(unavailable);
+      expect(body).not.toContain('stand-in');
     } finally { await f.close(); }
   });
 });

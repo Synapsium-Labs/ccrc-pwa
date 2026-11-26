@@ -5941,7 +5941,8 @@ the pinned one kept in its `detail`, or `closed` when GitHub reads it closed unm
 (at most ten entries a sweep, oldest first) marks it, and a work run's `done` close marks it `landed` when GitHub reads the PR
 MERGED (a merge train's landing is left to the landed reader, which carries the train facts); a verified pin re-pins a `closed`
 entry only when its projection is readable and carries no quarantine marker (D-8626). A project the line has never seen answers no entries and both flags off. The line's authority (no-run creation evidence,
-order edges, `fixesMain` and setter attribution) is journalled in `~/.ccrc/landing.log`, which a restored `coord.db` leaves in
+order edges, `fixesMain`, setter attribution, and since wave 5j the operator's pause of the line and withdrawals of entries) is
+journalled in `~/.ccrc/landing.log`, which a restored `coord.db` leaves in
 place (no backup copies it) and which the server replays before it serves anything. Replay never fabricates a measured pin or a
 current run association: a project whose projection is missing or whose binding evidence contradicts is reported as unmeasured
 and held, and invalid history refuses startup. An uncertain journal append or landing database commit fences every landing read
@@ -5959,7 +5960,15 @@ episode's head or another) answers `recovery: 'repair'` (D-8627) and is not cure
 the operator's withdrawal (D-9046) and so repairs none: the run
 stays at `merging` and goes to the operator, and this build has no repair route for it. `POST /api/landing/entries` and `POST /api/landing/order` (box token and measured
 `byId`/`byUuid` attribution, `ccrc-api landing entries|order --json -`) record an entry and its order edges; the attributed `byId` is
-the setter, and an omitted `afterIds` or `fixesMain` keeps its value while an explicit `[]` or `false` clears it.
+the setter, and an omitted `afterIds` or `fixesMain` keeps its value while an explicit `[]` or `false` clears it. Since wave 5j the
+operator has two session-only doors on the line (D-9049), with no box token and no `ccrc-api` verb: `POST /api/landing/pause`
+(`{project, paused}`) pauses or resumes one project's line, and `POST /api/landing/withdraw` (`{project, pr, pinnedAt}`, the pin
+time the console read) withdraws one entry that is not terminal, with a notice to its coordinator and to the coordinator of each
+entry whose order names it directly, where one is recorded and reads; the answer names anyone who could not be told. Both are
+journalled, and both work while sign-in is dark, recording `flag-off`. Neither chooses, reorders or brings forward the head: an
+order edge to a withdrawn entry stays outstanding, so its dependant waits, named in the read's `order.waits` with each target's
+entry id and PR, until a session declares its order again without that entry, which the feed records whoever does it, or the
+entry re-enters at its run's next verified pin and then lands or is closed; a run-less entry cannot re-enter (D-9047).
 
 The main-red hold has one writer: a fresh, same-base `main-health` measurement applied through the radar lane. A next-to-land mail
 is sent once per exact episode, base and recipient; it tells a coordinator to re-read the line and is not merge permission. The
@@ -6300,6 +6309,17 @@ one for 10 minutes; the standing outages are kept in
 `~/.ccrc/provider-outages.json`, so a restart repeats no notice. It ships armed
 and has no marker of its own: `stall-watch-disabled`, a level of Off or Log only
 chosen in Settings, and `mail-disabled` each stop it.
+
+While a session owes a retry the console says so (`FleetSession.providerRetry`,
+optional; computed by the same pass, off the ladder's own schedule, and left out
+of a row whose turn runs now): `Provider overloaded, retrying 14:52` or `Provider
+error, retrying 14:52` by the token, in the viewer's own time, `retrying now` past
+the due time, and `retry waiting`, with no time, while a question, a dialog, a
+usage limit or a nudge the mail lane has not typed (unsent text in the box) holds
+it. The words (`pwa/src/fleet/providerRetryWords.ts`) take the place of the row's
+and the session header's status word, of the `stalled` marker, and of `turn
+failed` and `quiet` on a run; a row that waits on you keeps its word, and its
+header says both.
 
 The `orphaned:` and `failed:` mails are class `self-wake`: recorded, never
 pushed, and they move neither the quiet clock nor the episode. With a current

@@ -271,6 +271,9 @@ const APP_ROLE_RULES: Readonly<Record<string, Readonly<Record<string, TypeRole>>
     '.acct-door': UI,
     '.acct-field > label, .acct-secret > label': META,
     '.acct-field-note, .acct-narrowed, .acct-door-reason > p, .acct-door-reason .acct-fix-hold': META,
+    // The door reason's disclosure row (desktop-polish wave 180), in the reason's own size; its list is the compromise
+    // steps' (`.acct-compromise-steps`).
+    '.acct-door-more > summary': META,
     '.acct-method-line': META,
     // Remove and Replace token (accounts plan Task A19, D-7742): a session's restart word, and the compromise
     // disclosure's steps.

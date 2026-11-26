@@ -30,6 +30,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
  *  share of it is `browserImports()`, scanned below. */
 const TREES: Array<{ dir: string; pkgs: string[] }> = [
   { dir: 'pwa/src', pkgs: ['pwa', 'browser', 'pwa-build'] },
+  { dir: 'pwa/generated', pkgs: ['pwa', 'browser', 'pwa-build'] },
   { dir: 'pwa/test', pkgs: ['pwa'] },
   { dir: 'pwa/browser', pkgs: ['pwa', 'browser', 'pwa-build'] },
   { dir: 'ui/src', pkgs: ['pwa', 'browser', 'pwa-build'] },

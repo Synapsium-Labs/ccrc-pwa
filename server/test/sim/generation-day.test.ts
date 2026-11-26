@@ -24,9 +24,9 @@ import type { SequenceLine } from './sequence.js';
 
 type Row = [kind: string, id: string, state: string, actor: string];
 const seqOf = (rows: readonly Row[]): SequenceLine[] =>
-  rows.map(([kind, id, state, actor], i) => ({ seq: i + 1, at: i * 1_000, kind, id, state, actor }));
+  rows.map(([kind, id, state, actor], i) => ({ seq: i + 1, at: i * 1_000, kind, id, state, actor, actorKind: 'server' as const, known: true }));
 type TRow = [...Row, at: number];
-const timed = (rows: readonly TRow[]): SequenceLine[] => rows.map(([kind, id, state, actor, at], i) => ({ seq: i + 1, at, kind, id, state, actor }));
+const timed = (rows: readonly TRow[]): SequenceLine[] => rows.map(([kind, id, state, actor, at], i) => ({ seq: i + 1, at, kind, id, state, actor, actorKind: 'server' as const, known: true }));
 const byName = (n: string) => GEN_DAY_INVARIANTS.find((i) => i.name === n)!;
 const REAL: GenDayModules = { renewal, soft, machine, observed };
 const FILE = 'test/sim/generation-day.test.ts';
