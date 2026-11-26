@@ -9,7 +9,8 @@
 // amended), and the New project door on each fleet screen's runs line (add-project spec 2026-11-04 §2, as redrawn), which
 // the base predates, and the console's face straight after the fleet head's wordmark (the Overlord face plan, Task 8:
 // `FaceMark`, an `svg.chr.face-mark`, grouped with the wordmark in a `span.fleet-id` so it centres on the wordmark's
-// row), which the base predates too; nothing else is removed or rewritten. The file renders the world ONCE: React's
+// row), which the base predates too, and the project card section's `tabindex="-1"` (landing order wave 5k, Task 7: the
+// landing block's focus falls back to the card); nothing else is removed or rewritten. The file renders the world ONCE: React's
 // `useId` counter is per module graph, so a second render, or a case before this one, numbers Instrument's tab ids
 // differently from the capture's single render.
 import { createHash } from 'node:crypto';
@@ -55,6 +56,10 @@ const FACE_MARK = /<svg class="chr face-mark"[^>]*>[\s\S]*?<\/svg>/g;
 /** The group the face shares with the wordmark on the fleet head; with the face removed it holds the base's wordmark alone. */
 const FACE_GROUP = /<span class="fleet-id">(<span class="wordmark">[^<]*<\/span>)<\/span>/g;
 const TITLE_DOOR = /<a [^>]*pg-title-door[^>]*>(<span class="pg-title">[^<]*<\/span>)<\/a>/g;
+/** The project card's section is focusable from script (landing order wave 5k, Task 7: the landing block's focus falls back
+ *  to the card when the block has gone, R6), so it carries `tabindex="-1"`, which the base predates. Counted per card below. */
+const CARD_TABINDEX = '<section tabindex="-1" class="proj-card';
+const BASE_CARD = '<section class="proj-card';
 /** React's `useId` values, renumbered by first appearance. The ids' NUMBERS are the counter's position, not markup: a
  *  closed sheet mounted at screen level (the Add project sheet, whose vaul root takes three ids though it draws nothing)
  *  moves every later id along, and the base's capture cannot know that. What an id names, and which elements share
@@ -94,8 +99,10 @@ describe('an older server: no delegation frame, the base\'s fleet (delegation br
       expect((html.match(PROJECTS_HEAD) ?? []).length, `${view}: one projects head per fleet screen`).toBe(view === 'instrument' ? 0 : 1);
       expect((html.match(FACE_MARK) ?? []).length, `${view}: one face per fleet head`).toBe(count(html, 'class="fleet-head"'));
       expect(count(html, 'class="fleet-id"'), `${view}: one wordmark-and-face group per fleet head`).toBe(count(html, 'class="fleet-head"'));
+      // Every card's section is focusable today, each once, where the base drew the same card.
+      expect(count(html, CARD_TABINDEX), `${view}: one focusable section per card`).toBe(count(baseline.views[view], BASE_CARD));
       const old = html.split(MARKED).join(LIST).split(BACKUP_SLOT).join('').replace(TITLE_DOOR, '$1').replace(PROJECTS_HEAD, '')
-        .replace(FACE_MARK, '').replace(FACE_GROUP, '$1');
+        .replace(FACE_MARK, '').replace(FACE_GROUP, '$1').split(CARD_TABINDEX).join(BASE_CARD);
       expect(baseline.views[view].match(ROLE_CELL), `${view}: the base drew no role cell`).toBeNull();
       // The badge is stripped below as a declared head-only addition, so it is counted FIRST: the world has two coordinators
       // (`coord`, `coord-e`) and each view draws exactly two badges, each on one of their rows, so a badge drawn on a worker's
