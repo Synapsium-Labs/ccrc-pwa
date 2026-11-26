@@ -47,6 +47,7 @@ import {
 import type { ActorRefused, AuthorityAppender, AuthorityRefused, RowUnreadable } from './overlordDesignationStore.js';
 import { ladderRead, ladderWire, NO_WITNESS_YET, type LadderConditionInputs, type NarrowingWitness } from './overlordLadderRead.js';
 import { isRung, isLadderCauseKey, type Rung } from '../../../shared/overlord-ladder.js';
+import type { ReadinessLane } from './overlordReadinessLane.js';
 import { rungMoveVerdict, narrowingState, type LadderWriterRefusal } from './overlordLadder.js';
 import { LadderStampRefused, type LadderWrite } from './overlordLadderStore.js';
 import type { OverlordAuthorityExchange } from './overlordAuthorityExchange.js';
@@ -107,6 +108,8 @@ export interface OverlordRouteDeps {
   readonly serial: CoordRoutesHandle['serial'];
   readonly coord: OverlordCoord;
   readonly ladder?: { readonly coord: Pick<CoordStore, 'ladderRows' | 'ladderRungRead' | 'setRung' | 'clearLatch'>; readonly inputs: LadderConditionInputs; readonly witness?: NarrowingWitness; readonly serverCaps: readonly string[]; readonly journal?: AuthorityAppender };
+  /** The readiness word's read (`ReadinessLane.read`, §6.4), called per request; null when no lane is wired (a test, a script). */
+  readonly readiness?: () => ReturnType<ReadinessLane['read']> | null;
   /** The authority witness exchange's console arm (Overlord W1 authority journal, Task 6). Absent (a test, a script): the witness door answers 503. */
   readonly exchange?: Pick<OverlordAuthorityExchange, 'exchangeConsole'>;
   readonly consoleFacts?: (req: FastifyRequest) => { readonly armed: boolean; readonly device: string | null };
@@ -599,6 +602,14 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
     const read = ladderRead(ladder.coord, ladder.inputs, ladder.witness ?? NO_WITNESS_YET, ladder.serverCaps);
     if (read.kind === 'unmeasured') return refuseRoute(reply, 'unavailable', { detail: 'the ladder could not be read' });
     return ladderWire(read, ladder.serverCaps);
+  });
+
+  // The readiness word (Overlord §6.4, C23, H20): session-gated, no box token, masked like the ladder (`why` carries a producer's
+  // detail). An unreadable store or no lane wired is the same 503 the ladder's read gives.
+  app.get('/api/overlord/readiness', async (_req, reply) => {
+    const read = deps.readiness?.() ?? null;
+    if (read === null || !read.ok) return refuseRoute(reply, 'unavailable', { detail: 'the readiness word could not be read' });
+    return read.wire;
   });
 
   // The ladder's operator doors share the serialiser and the store used by its read.

@@ -320,7 +320,7 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   // A session's pending timers, its own read and the operator's (Overlord W1a, the timers piece): each note a session wrote.
   '/api/timers', '/api/sessions/:id/timers',
   // The portfolio (Overlord W1): programme titles a coordinator wrote, and blocking items' titles a session wrote.
-  '/api/portfolio', '/api/overlord/ladder',
+  '/api/portfolio', '/api/overlord/ladder', '/api/overlord/readiness',
   // The operator's messages, one by its id (W1 inbox piece): the text is the operator's own words, masked by the one answer hook.
   '/api/overlord/inbox', '/api/overlord/messages/:id',
 ]);
@@ -2470,7 +2470,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // path as `stopCreated`, and the first prompt through the renewal lane's `SessionHost`.
   registerOverlordRoutes(app, {
     gate: accountGate, identity, serial: coordRoutes.serial, ...overlordStore, exchange: deps.overlordAuthorityExchange, consoleFacts: (req) => ({ armed: deps.cfg.authEnabled, device: deps.cfg.authEnabled ? sessionAuth(req).device : null }), host: renewalHostOf(deps, deps.coord ?? { startsOf: () => ({ ok: false, detail: 'no coordination store' }) }, null),
-    ladder: ladderDeps, restore: deps.overlordRestore,
+    ladder: ladderDeps, restore: deps.overlordRestore, readiness: () => deps.overlordReadiness?.read() ?? null,
     // Read at call time, as the continuity routes read `deps.time`: a test server may hand none.
     clock: { wall: () => deps.time.clock.wall() }, entropy: { uuid: () => deps.time.entropy.uuid(), hex: (n) => deps.time.entropy.hex(n) }, dec: pwaDec,
     body: overlordBody,

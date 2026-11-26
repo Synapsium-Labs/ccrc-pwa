@@ -76,6 +76,8 @@ export const OVERLORD_DOORS: Readonly<Record<string, DoorRow>> = {
   model: operator('POST', '/api/overlord/model', OVERLORD, 'admin'),
   'account-set': operator('POST', '/api/overlord/account-set', OVERLORD, 'admin'),
   ladder: operator('GET', '/api/overlord/ladder', OVERLORD, 'view'),
+  // The readiness word (§6.4, C23, H20): the operator's read of whether the Overlord can take a question; no act, no box token.
+  readiness: operator('GET', '/api/overlord/readiness', OVERLORD, 'view'),
   rung: operator('POST', '/api/overlord/rung', OVERLORD, 'admin'),
   pause: operator('POST', '/api/overlord/pause', OVERLORD, 'admin'),
   'latch-clear': operator('POST', '/api/overlord/latches/:cause/clear', OVERLORD, 'admin'),
