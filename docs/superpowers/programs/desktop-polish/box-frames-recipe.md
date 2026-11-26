@@ -110,14 +110,16 @@ Every run went through `ccrc test --local`, in the foreground, one file per comm
   and after it.
 
 **The mutation round** was run by hand, because the mutation helper mutates Python modules only. Each mutant was applied to
-its file, its named test file run once through the supported runner, and the file restored byte for byte. 46 mutants, 46
+its file, its named test file run once through the supported runner, and the file restored byte for byte. 50 mutants, 50
 killed. One was killed only after its test was sharpened: a store-refused frame never lists a text, whatever its row
-carries.
+carries. One store mutant was first written in an equivalent form (`map[v] === true`, which a `toString` lookup already
+fails) and was replaced by `v in map`, which the own-property cases kill.
 
 | Area | Guard removed or weakened | Killed by |
 |---|---|---|
 | reducer | the shape gate; a decoration-only row read as ours; the turn marker off the decoration list; exact private strings; the path, model and account rules; the rule-label refusal; a rule row's private string; the private-name scan; the private shapes; the masker with SGR removed; the masker; the receiver's idempotence; the width | `frames-reduce.test.ts`, each rule's own cases |
 | result reader | the case echo; over-cap against the measured sizes; the text's shape; the text's presence; the counts' presence; the cursor bound; the word; control characters; the byte ceiling | `frames-result.test.ts`, each refusal case |
+| store | the text kept only when the check is clear; the texts set aside; the whole-row version check; the own-property word check | `frames-lane-store.test.ts`, and `frames-lane-capture.test.ts` for the texts set aside |
 | lane decider | the spacing; the version in `isCurrentFrames`; four builds kept; the incoming build counted; a store-refused frame's text | `frames-lane-decider.test.ts` |
 | fixture | the header's build and version grammar | `box-frame-fixtures.test.ts` |
 | the read | the credentials; the closed keys; an empty value; the check before serving; the live masker | `testbox-frames-route.test.ts` |
