@@ -72,13 +72,16 @@ describe('the migration (the plan\'s F15)', () => {
     const first = openCoordDb(file);
     first.exec("CREATE TABLE kept_fixture (x TEXT); INSERT INTO kept_fixture VALUES ('kept')");
     first.exec('DROP TABLE limit_samples');
-    // The programme lifecycle's migration (127, W1) landed after this one: undo it too, so the reopen replays both from
-    // the version before this one, which is this entry's slot.
+    // The programme lifecycle's migration (127, W1), the Overlord's timers (128) and the invariant monitor's findings (129,
+    // Overlord W1 sequence B2) landed after this one: undo them too, so the reopen replays all four from the version before
+    // this one, which is this entry's slot.
+    first.exec("DROP TABLE overlord_invariant_findings; DELETE FROM lane_arm_settings WHERE lane = 'invariants'");
+    first.exec('DROP TABLE continuity_timer_refusals; ALTER TABLE continuity_timers DROP COLUMN setRestoreGeneration;');
     first.exec(`DROP INDEX programs_one_per_coordinator; DROP TABLE programme_picks; DROP TABLE programme_events;
       ALTER TABLE programs DROP COLUMN filedInto; ALTER TABLE programs DROP COLUMN placeholder; ALTER TABLE programs DROP COLUMN coordinatorSince;
       ALTER TABLE programs DROP COLUMN coordinatorUuid; ALTER TABLE programs DROP COLUMN coordinator;`);
     const slot = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE limit_samples'));
-    expect(slot).toBe(COORD_SCHEMA_VERSION - 2);
+    expect(slot).toBe(COORD_SCHEMA_VERSION - 4);
     first.exec(`PRAGMA user_version = ${slot}`);
     first.close();
     const db = openCoordDb(file);

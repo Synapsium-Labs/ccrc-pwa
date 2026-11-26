@@ -235,12 +235,12 @@ import { mailNudgeOf, sweepDesignationOf } from './coord/envelope.js';
 import { operatorNudgeFor } from './operatorModel/operatorNudge.js';
 import { finishFixedLineAck, settleNudge } from './operatorModel/nudgeLane.js';
 import { createInboxWakeLane } from './coord/overlordInboxWake.js';
-import type { overlordReadGate } from './coord/overlordGateRun.js';
+import { timerLineHold, type overlordReadGate } from './coord/overlordGateRun.js';
 import { isInboxWakeMail } from '../../shared/overlordInbox.js';
 import { isProviderRetryMail } from '../../shared/provider-retry.js';
 import { isOperatorMessageMail } from '../../shared/operatorMessages.js';
 import { mailPaceOf } from './coord/mailPace.js';
-import { roleFactsOf, roleOf } from './roleOf.js';
+import { identityOf, roleFactsOf, roleOf } from './roleOf.js';
 import { DesignationEpisode } from './continuity/designationEpisode.js';
 import { configDirFor } from './config.js';
 import { refusalSentence } from './wsaudit.js';
@@ -2026,6 +2026,9 @@ export class FleetWatcher {
   /** The radar lane's map, for the two one-shot assemblies of `server.ts` (the REST fleet and the cold frame): a copy. */
   currentLandings(): Map<string, SessionLanding> { return new Map(this.landings); }
 
+  /** What the provider-failure ladder says of each session, for every assembly of the fleet. */
+  currentProviderRetries(): ReturnType<ProviderRetryLane['wire']> { return this.providerRetry.wire(); }
+
   /** The latest pass's control bundle of one project, a copy, or `undefined` when none was measured or (on a remote box) the
    *  agent link is down: a prior connection's bundle is never handed out. Values only; the binding's freshness is the decider's. */
   currentLandingControl(project: string, nowMs = Date.now()): LandingControlRead | undefined {
@@ -2989,6 +2992,7 @@ export class FleetWatcher {
       // NEVER awaited, the same reasons: the TIMERS lane (Overlord §3.3.12, W1a): cleanup, then each due timer fired with its one mail.
       void this.sweepTimers(records, registryRead.listedIds, listedAt, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
       void this.sweepSequenceRetention().catch(() => { /* one bad sweep must not kill the poll */ }); // the sequence's 90 days (§10.4)
+      void this.sweepInvariants().catch(() => { /* one bad sweep must not kill the poll */ }); // the invariant monitor, shadow until armed (§10.4)
       void this.sweepPushOutbox().catch(() => { /* one bad sweep must not kill the poll */ });
       void this.sweepResponses().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the weekly replay QUIZ lane (Overlord §3.3.9 C52, W1a): at most one operator item a week.
@@ -3068,7 +3072,7 @@ export class FleetWatcher {
       const { sessions, panePids } = await timed(this.deps.perf, 'assemble', assembleFleetWithPanePids(this.deps.io, this.deps.cfg, this.deps.tmux, liveStateReaderOver(this.deps.io), fleetNow(), {
         pendingDialogs: pending, statuslines: this.statuslines, taskProgress: this.taskProgress, prStates: this.prStates,
         hookStates: this.hookStates, records, coord: this.deps.coord, usageReadings: this.usage,
-        headBranches: this.currentHeadBranches(), landings: this.landings, paneListing, limitsRead: limits,
+        headBranches: this.currentHeadBranches(), landings: this.landings, paneListing, limitsRead: limits, providerRetries: this.currentProviderRetries(),
       }));
       // The frame leaves first (console speed S1): the fleet frame follows assembly directly; pools, "Finished" pushes, claims,
       // the lanes, the state cache and the runs frame all wait behind it.
@@ -6479,8 +6483,12 @@ export class FleetWatcher {
                     names: readonly string[]): Promise<void> {
     const coord = this.deps.coord;
     if (!coord) return;
+    // The Overlord's timers (W1): the authority guard's state and the restore generation, through the lane's own ports.
+    const guard = this.deps.overlordAuthorityGuard; const restore = this.deps.overlordRestore;
     await this.runLane('timers', () => runTimersLane({ coord, clock: this.deps.time.clock, io: this.deps.io,
-      registryDir: this.deps.cfg.registryDir, log: (line) => console.warn(line) }, timerListingOf(records, listedIds, listedAt, names)));
+      registryDir: this.deps.cfg.registryDir, log: (line) => console.warn(line),
+      authority: () => (guard?.state().kind === 'coherent' ? 'coherent' : 'not-coherent'),
+      restoreGeneration: () => restore?.restoreGeneration() ?? { kind: 'unmeasured' } }, timerListingOf(records, listedIds, listedAt, names)));
   }
 
   /** The sequence's retention lane (Overlord §10.4, Table 11.5b; `coord/sequenceRetentionLane.ts`): one prune pass. */
@@ -6488,6 +6496,13 @@ export class FleetWatcher {
     const coord = this.deps.coord;
     if (!coord) return;
     await this.runLane('sequenceRetention', () => { runSequenceRetentionLane({ coord, clock: this.deps.time.clock, log: (line) => console.warn(line) }); });
+  }
+
+  /** The invariant monitor (Overlord §10.4, Table 11.1c; `coord/invariantLane.ts`): one pass, shadow until its Shadow lanes row is Live. */
+  async sweepInvariants(): Promise<void> {
+    const monitor = this.deps.invariantMonitor;
+    if (!monitor) return;
+    await this.runLane('invariants', () => { monitor.pass(this.itemReach); });
   }
 
   /** The weekly replay quiz lane (Overlord §3.3.9 C52, W1a; `continuity/quizLane.ts`): one read-and-raise pass on the wall clock. */
@@ -7156,8 +7171,8 @@ export class FleetWatcher {
       const r = this.stallResolveNow(store, names, names.includes(MAIL_DISABLED_MARKER));
       const arming: StallArming = { ...r.arming, ...stallBusyClock(r.arming.mailMode, this.lastApplied, this.busySince) };
       // D-8285: a disabled watch reads no marker, so the heartbeat is cleared rather than left to age into a false quiet.
-      if (arming.disabled) { this.workerSeen.replace(new Map()); return; }
       this.providerRetry.begin(arming, r.levelSource);
+      if (arming.disabled) { this.workerSeen.replace(new Map()); return; }
       const paused = names.includes(COORDINATOR_PAUSE_MARKER);
       let candidates: ReturnType<WatcherCoordPort['stallCandidates']>;
       try {
@@ -8950,11 +8965,6 @@ export class FleetWatcher {
           const notIdle = turn.gate === 'not-idle'; gated(d, notIdle ? 'not-idle' : 'not-quiet'); continue;
         }
 
-        // `seen` is added only HERE, once every gate above has passed and the
-        // send is actually about to be attempted — it means "one message per
-        // session per sweep", not "one row considered per sweep", and moving
-        // the claim earlier must not change that.
-        seen.add(d.toId);
         // The REFERENCE NUDGE (robust-mail-delivery spec §1), not `d.envelope`
         // — the lane no longer types the whole stored envelope into the pane.
         // `renderMailNudge` is a pure, ID-AGNOSTIC function of `d.toId` alone
@@ -8986,8 +8996,14 @@ export class FleetWatcher {
         // mail branch); every other mail is the id-agnostic line above, as before.
         const origin = store.mailOrigin(d.mailId);
         const nudge = await operatorNudgeFor((id) => readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, id), d.toId, origin, sweepDesignationOf(designation), now);
-        // A fixed line delivered once whose ack never landed is acked, never typed twice (review 3389 F1).
-        if (finishFixedLineAck({ coord: store, now, warn: (l) => { console.warn(l); } }, d, nudge)) continue;
+        // A fixed line delivered once whose ack never landed is acked, never typed twice (review 3389 F1). The Overlord's timer
+        // line waits until its live generation has read its card (W1, C62): no attempt is spent while it holds.
+        if (finishFixedLineAck({ coord: store, now, warn: (l) => { console.warn(l); } }, d, nudge) || (nudge.waitsForCard === true && !timerLineHold(gens, identityOf(d.toId, designation), (id) => store.cardReadOfStart(id), (l) => { console.warn(l); }))) continue;
+        // `seen` is added only HERE, once every gate above has passed, the nudge is chosen and neither the ack-once nor the card
+        // hold took the row, so the send is actually about to be attempted. It means "one message per session per sweep", not
+        // "one row considered per sweep": a row that types nothing claims nothing (review 3841 F1), and moving the claim
+        // earlier must not change that.
+        seen.add(d.toId);
         // `ownStrandedClear` (Task 407, operator ruling): the ONE dirty-box
         // case this lane may clear on PROOF rather than on shape.
         // `dispatch.ts` types a literal `/clear` into a resumed worker before

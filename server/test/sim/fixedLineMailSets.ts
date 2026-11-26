@@ -16,6 +16,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../.
 const L1 = path.join(ROOT, 'server/src/coord/envelope.ts');
 
 export type EnvelopeModule = typeof import('../../src/coord/envelope.js');
+/** The gate's module: the card hold lives beside step 8, the one home of its words. */
+type GateModule = typeof import('../../src/coord/overlordGate.js');
+const GATE_TS = path.join(ROOT, 'server/src/coord/overlordGate.ts');
 
 const OVERLORD = 'lane-a-project-a';
 const OTHER = 'lane-b-project-a';
@@ -40,6 +43,16 @@ export function fixedLineMailOfCases(m: EnvelopeModule): Record<string, SuiteCas
       }
     },
 
+    'the timer row (Overlord W1): a mail from timer whose MAIL ROW is to overlord, delivered to the designated session; never a session-keyed timer mail': () => {
+      const role = (deliveredTo: string, mailToId: string) => ({ fromId: 'timer', subject: 'timer: 2 due (4, 5)', toId: deliveredTo, mailToId });
+      expect(m.fixedLineMailOf(role(OVERLORD, 'overlord'), designated)).toMatchObject({ name: 'timer', firstDelivery: 'none', waitsForCard: true, designatedOnly: true });
+      expect(m.fixedLineMailOf(role(OVERLORD, OVERLORD), designated), 'a session-keyed timer mail to the designated session').toBe('generic');
+      expect(m.fixedLineMailOf(role(OTHER, 'overlord'), designated), 'delivered to another session').toBe('generic');
+      expect(m.fixedLineMailOf(role(OTHER, OTHER), designated)).toBe('generic');
+      expect(m.fixedLineMailOf({ ...role(OVERLORD, 'overlord'), fromId: 'operator' }, designated), 'another sender').toBe('generic');
+      expect(m.fixedLineMailOf({ fromId: 'timer', subject: 'timer: 1 due (4)', toId: OVERLORD }, designated), 'no mail row recipient').toBe('generic');
+    },
+
     'answers generic for every other mail': () => {
       expect(m.fixedLineMailOf(mailTo(OVERLORD, 'operator', 'handover'), designated)).toBe('generic');
       expect(m.fixedLineMailOf(mailTo(OVERLORD, OTHER, 'hi'), designated)).toBe('generic');
@@ -48,7 +61,8 @@ export function fixedLineMailOfCases(m: EnvelopeModule): Record<string, SuiteCas
 
     'answers generic for every designatedOnly row under an unmeasured designation, and keeps the operator message\'s row': () => {
       const only = m.FIXED_LINE_MAIL.filter((r) => r.designatedOnly);
-      expect(only.map((r) => r.name).sort()).toEqual(['inbox-wake', 'spot-probe']);
+      expect(only.map((r) => r.name).sort()).toEqual(['inbox-wake', 'spot-probe', 'timer']);
+      expect(m.fixedLineMailOf({ ...mailTo(OVERLORD, 'timer', 'timer: 1 due (4)'), mailToId: 'overlord' }, { kind: 'unmeasured' })).toBe('generic');
       for (const subject of [SPOT_PROBE_SUBJECT, INBOX_WAKE_SUBJECT]) {
         expect(m.fixedLineMailOf(mailTo(OVERLORD, 'operator', subject), { kind: 'unmeasured' })).toBe('generic');
       }
@@ -72,10 +86,24 @@ export function fixedLineMailOfCases(m: EnvelopeModule): Record<string, SuiteCas
     },
 
     'names each row once, and a row that matches a mail is the only one that does': () => {
-      expect(m.FIXED_LINE_MAIL.map((r) => r.name)).toEqual(['operator-message', 'spot-probe', 'inbox-wake', 'provider-retry']);
+      expect(m.FIXED_LINE_MAIL.map((r) => r.name)).toEqual(['operator-message', 'spot-probe', 'inbox-wake', 'provider-retry', 'timer']);
+      expect(m.FIXED_LINE_MAIL.filter((r) => r.matches({ fromId: 'timer', subject: 'timer: 1 due (4)', mailToId: 'overlord' })).map((r) => r.name)).toStrictEqual(['timer']);
+      // Only the timer row waits for the card (C62): the other rows each name a door that itself refuses card-unread.
+      expect(m.FIXED_LINE_MAIL.filter((r) => r.waitsForCard).map((r) => r.name)).toStrictEqual(['timer']);
       for (const x of [{ fromId: 'operator', subject: providerRetrySubject(1_800_000_000_000) }, { fromId: 'operator', subject: operatorMessageSubject(1) }, { fromId: 'operator', subject: SPOT_PROBE_SUBJECT }, { fromId: 'operator', subject: INBOX_WAKE_SUBJECT }]) {
         expect(m.FIXED_LINE_MAIL.filter((r) => r.matches(x))).toHaveLength(1);
       }
+    },
+
+    'the provider-retry row and the timer row never take each other\'s mail, whichever recipient the mail row names': () => {
+      const names = (x: { fromId: string; subject: string; mailToId?: string }) => m.FIXED_LINE_MAIL.filter((r) => r.matches(x)).map((r) => r.name);
+      const retry = providerRetrySubject(1_800_000_000_000);
+      // A provider-retry mail is the operator sender's: even addressed to the role, it is the provider-retry row's alone.
+      expect(names({ fromId: 'operator', subject: retry, mailToId: 'overlord' })).toStrictEqual(['provider-retry']);
+      // The timer sender's mail to the role is the timer row's alone, even under a provider-retry subject.
+      expect(names({ fromId: 'timer', subject: retry, mailToId: 'overlord' })).toStrictEqual(['timer']);
+      // And the timer sender's mail to a session, with that subject, is neither's: the generic nudge.
+      expect(names({ fromId: 'timer', subject: retry, mailToId: OVERLORD })).toStrictEqual([]);
     },
 
     'the spot-probe row needs both the operator sender and its subject': () => {
@@ -142,6 +170,11 @@ const FIXED_LINE_MAIL_OF_SET: MutantSet<EnvelopeModule> = {
     { id: 'F17 the operator message first delivery lost', old: "designatedOnly: false, firstDelivery: 'message-delivered'", new: "designatedOnly: false, firstDelivery: 'none'" },
     { id: 'F18 the spot-probe first delivery moves a message', old: "designatedOnly: true, firstDelivery: 'none',\n    line: () => renderSpotProbeLine()", new: "designatedOnly: true, firstDelivery: 'message-delivered',\n    line: () => renderSpotProbeLine()" },
     { id: 'F19 the wake first delivery moves a message', old: "matches: isInboxWakeMail, designatedOnly: true, firstDelivery: 'none'", new: "matches: isInboxWakeMail, designatedOnly: true, firstDelivery: 'message-delivered'" },
+    // Overlord W1, the Overlord's timers (question 3): the timer row.
+    { id: 'F20 the timer row matched on the sender alone', old: "m.fromId === TIMER_MAIL_SENDER && m.mailToId === OVERLORD_IDENTITY", new: 'm.fromId === TIMER_MAIL_SENDER' },
+    { id: 'F21 the timer row open to every session', old: "m.mailToId === OVERLORD_IDENTITY, designatedOnly: true,", new: 'm.mailToId === OVERLORD_IDENTITY, designatedOnly: false,' },
+    { id: 'F22 the timer row types before the card', old: "firstDelivery: 'none', waitsForCard: true,", new: "firstDelivery: 'none', waitsForCard: false," },
+    { id: 'F24 the timer row never matched', old: "m.fromId === TIMER_MAIL_SENDER && m.mailToId === OVERLORD_IDENTITY", new: 'false' },
   ],
   suite: fixedLineMailOfCases,
 };
@@ -200,9 +233,66 @@ const FIXED_LINE_REPLAY_OF_SET: MutantSet<EnvelopeModule> = {
   suite: fixedLineReplayOfCases,
 };
 
+// ------------------------------------------------------------------------- the timer line and its hold (Overlord W1)
+
+export function timerLineCases(m: EnvelopeModule): Record<string, SuiteCase> {
+  const nudge = (subject: string) => m.mailNudgeOf(OVERLORD, { fromId: 'timer', subject, body: 'the notes', toId: 'overlord' }, designated, 0);
+  return {
+    'the line counts the timers from the subject, names the list door, and never ccrc-api or a note': () => {
+      expect(m.renderTimerFiredLine('timer: 3 due (4, 5, 6)')).toBe('ccrc-mail: you have new mail. 3 of your timers came due: read them with your timer list door.');
+      expect(m.renderTimerFiredLine('timer: 12 due (1, 2, …)')).toContain('12 of your timers came due');
+      expect(m.renderTimerFiredLine('something else')).toBe('ccrc-mail: you have new mail. Your timers came due: read them with your timer list door.');
+      expect(m.renderTimerFiredLine('timer: 0 due ()')).not.toContain('0 of');
+      for (const subject of ['timer: 3 due (4, 5, 6)', 'x']) expect(m.renderTimerFiredLine(subject)).not.toContain('ccrc-api');
+      expect(nudge('timer: 1 due (4)').line).not.toContain('the notes');
+    },
+    'the role\'s timer mail types its own line, acked on first delivery, waiting for the card; a session-keyed one keeps the generic nudge': () => {
+      expect(nudge('timer: 1 due (4)')).toStrictEqual({ line: m.renderTimerFiredLine('timer: 1 due (4)'), operatorMessageId: null, firstDelivery: 'none', waitsForCard: true });
+      const keyed = m.mailNudgeOf(OVERLORD, { fromId: 'timer', subject: 'timer: 1 due (4)', body: '', toId: OVERLORD }, designated, 0);
+      expect(keyed).toStrictEqual({ line: m.renderMailNudge(OVERLORD), operatorMessageId: null });
+      expect(m.mailNudgeOf(OVERLORD, { fromId: 'operator', subject: SPOT_PROBE_SUBJECT, body: '' }, designated, 0).waitsForCard).toBeUndefined();
+    },
+  };
+}
+
+export function cardHoldVerdictCases(m: Pick<GateModule, 'cardHoldVerdict'>): Record<string, SuiteCase> {
+  return {
+    'delivers only on read-current; none and read-stale hold card-unread; unmeasured holds unmeasured': () => {
+      expect(m.cardHoldVerdict('read-current')).toStrictEqual({ deliver: true });
+      expect(m.cardHoldVerdict('read-stale')).toStrictEqual({ deliver: false, why: 'card-unread' });
+      expect(m.cardHoldVerdict('none')).toStrictEqual({ deliver: false, why: 'card-unread' });
+      expect(m.cardHoldVerdict({ kind: 'unmeasured', why: 'x' })).toStrictEqual({ deliver: false, why: 'unmeasured' });
+    },
+  };
+}
+
+const TIMER_LINE_SET: MutantSet<EnvelopeModule> = {
+  modulePath: L1,
+  mutants: [
+    { id: 'T1 no count', old: "${n === undefined ? 'Your timers' : `${n} of your timers`}", new: 'Your timers' },
+    { id: 'T2 a zero counted', old: '/^timer: ([1-9][0-9]*) due/', new: '/^timer: ([0-9]+) due/' },
+    { id: 'T3 the generic head lost', old: "return `${INJECTED_PROMPTS['mail-nudge'].text} ${n === undefined", new: "return `${n === undefined" },
+    { id: 'T4 the hold not carried', old: "...(row.waitsForCard ? { waitsForCard: true as const } : {})", new: '' },
+    { id: 'T5 the timer row matched on the delivery', old: "mailToId: origin.toId, toId }", new: 'mailToId: toId, toId }' },
+  ],
+  suite: timerLineCases,
+};
+
+const CARD_HOLD_SET: MutantSet<GateModule> = {
+  modulePath: GATE_TS,
+  mutants: [
+    { id: 'C1 a stale card delivers', old: "if (card === 'read-current') return { deliver: true };", new: "if (card !== 'none' && typeof card !== 'object') return { deliver: true };" },
+    { id: 'C2 unmeasured read as unread', old: "why: typeof card === 'object' ? 'unmeasured' : 'card-unread'", new: "why: 'card-unread'" },
+    { id: 'C3 every card delivers', old: "if (card === 'read-current') return { deliver: true };", new: 'return { deliver: true };' },
+  ],
+  suite: cardHoldVerdictCases,
+};
+
 /** This piece's sets, keyed as `mutation-floors.json` keys them (`<file>#<decider>`). */
 export const FIXED_LINE_MAIL_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'server/src/coord/envelope.ts#fixedLineMailOf': FIXED_LINE_MAIL_OF_SET as MutantSet<never>,
   'server/src/coord/envelope.ts#sweepDesignationOf': SWEEP_DESIGNATION_OF_SET as MutantSet<never>,
   'server/src/coord/envelope.ts#fixedLineReplayOf': FIXED_LINE_REPLAY_OF_SET as MutantSet<never>,
+  'server/src/coord/envelope.ts#renderTimerFiredLine': TIMER_LINE_SET as MutantSet<never>,
+  'server/src/coord/overlordGate.ts#cardHoldVerdict': CARD_HOLD_SET as MutantSet<never>,
 };

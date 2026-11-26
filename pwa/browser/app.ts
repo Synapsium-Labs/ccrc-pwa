@@ -83,6 +83,14 @@ export interface AppFixture {
   readonly api: Readonly<Record<string, unknown>>;
   readonly fleetFrames: readonly unknown[];
   readonly socketFrames?: Readonly<Record<string, readonly unknown[]>>;
+  /** Opt-in, default off (absent: every socket is answered as above). For a session socket (`/ws/session/<id>`, never the
+   *  fleet's), the case answers each connect itself: the hook is called in place of `socketFrames`, with the routed
+   *  socket (`ws.send`, `ws.onMessage`) and what the connect was: `n`, how many sockets this pathname has opened so far
+   *  (1 for the first), and `resuming`, whether its URL carries the resume position the store sends (`?since=`), which
+   *  a first open or a chat reopened with its older edge `expired` does not. A case answers a resuming connect with no
+   *  backlog and a fresh one with one, as the server does. A session socket needs a `socketFrames` entry to be answered
+   *  at all when this is absent; with it, only the hook answers. */
+  readonly onSessionSocket?: (ws: WebSocketRoute, connect: { readonly pathname: string; readonly n: number; readonly resuming: boolean }) => void;
 }
 
 export interface AppView {
@@ -222,6 +230,7 @@ export async function openApp(browser: Browser, view: AppView, fixture: AppFixtu
   // Every routed socket, per pathname, in the order it opened: `send` talks to the newest one, and a socket that closed
   // (a reconnect replaced it) leaves the list.
   const sockets = new Map<string, WebSocketRoute[]>();
+  const opened = new Map<string, number>();
   await ctx.routeWebSocket(/\/ws\//, (ws) => {
     const pathname = new URL(ws.url()).pathname;
     if (offline) {
@@ -230,6 +239,12 @@ export async function openApp(browser: Browser, view: AppView, fixture: AppFixtu
     }
     sockets.set(pathname, [...(sockets.get(pathname) ?? []), ws]);
     ws.onClose(() => { sockets.set(pathname, (sockets.get(pathname) ?? []).filter((x) => x !== ws)); });
+    if (pathname !== '/ws/fleet' && fixture.onSessionSocket !== undefined) {
+      const n = (opened.get(pathname) ?? 0) + 1;
+      opened.set(pathname, n);
+      fixture.onSessionSocket(ws, { pathname, n, resuming: new URL(ws.url()).searchParams.has('since') });
+      return;
+    }
     const frames = pathname === '/ws/fleet' ? fixture.fleetFrames : (fixture.socketFrames?.[pathname] ?? []);
     for (const frame of frames) ws.send(JSON.stringify(frame));
   });

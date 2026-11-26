@@ -7,15 +7,14 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { INJECTED_PROMPTS } from '../../shared/injected-prompts.mjs';
-import {
-  PROVIDER_RETRY_BODY, PROVIDER_RETRY_PREFIX, isProviderRetryMail, providerRetryDueOf, providerRetrySubject, renderProviderRetryLine,
-} from '../../shared/provider-retry.js';
+import { PROVIDER_RETRY_BODY, PROVIDER_RETRY_PREFIX, isProviderRetryMail, providerRetryDueOf, providerRetrySubject, renderProviderRetryLine } from '../../shared/provider-retry.js';
+import { providerRetryOf } from '../../shared/provider-retry-wire.js';
 import { MAIL_TURN_HOLD_MS, decideSendFailure } from '../src/coord/delivery.js';
 import { mailNudgeOf, renderMailNudge, resumeRuleOf } from '../src/coord/envelope.js';
 import { PROVIDER_FAILURE_ERRORS, STOP_FAILURE_ERRORS, stallFailedVerdict } from '../src/coord/stopFailure.js';
 import {
   PROVIDER_RETRY_DELAYS_MS, PROVIDER_RETRY_REPEAT_MS, providerRetryArmed, providerRetryFirstDue, providerRetryHoldsQuiet,
-  providerRetryMailSince, providerRetryOwed, providerRetryVerdict, type ProviderRetryInput, type ProviderRetryVerdict,
+  providerRetryMailSince, providerRetryOwed, providerRetryShown, providerRetryVerdict, providerRetryWire, type ProviderRetryInput, type ProviderRetryVerdict,
 } from '../src/coord/providerRetry.js';
 import {
   BACKLOG_HORIZON_MS, type StallArming, type StallDeliveryRow, type StallMailRow, type StallSessionInput, type StallWorker, type TurnMark,
@@ -303,6 +302,75 @@ describe('the mail', () => {
       expect(decideSendFailure(d, 'draft-present', NOW)).toEqual({ gate: null,
         action: { kind: 'hold', why: 'draft-present', until: NOW + MAIL_TURN_HOLD_MS, tellSender: false } });
     }
+  });
+});
+
+// Wave 2: what the console is told (`FleetSession.providerRetry`), from the marker and the schedule above.
+describe('what the console is told: the wire, off the same schedule', () => {
+  const said = (over: Partial<StallSessionInput> = {}, rest: Partial<ProviderRetryInput> = {}, now = NOW) => providerRetryWire(input(over, rest), now);
+  const AT_DUE = { err: 'server_error', since: T, attempts: 1, nextAt: T + MIN, phase: 'retrying' };
+  it('a session that owes a retry: the token, the count, since when, and the nudge\'s own due time, before and at it', () => {
+    expect(said({}, {}, T + 1)).toEqual(AT_DUE);
+    expect(said()).toEqual(AT_DUE);
+    const fails = [T - 10 * MIN, T - 5 * MIN, T];
+    expect(said({ mark: mark({ err: 'overloaded', failAts: fails }) }, {}, T + 1))
+      .toEqual({ err: 'overloaded', since: fails[0], attempts: 3, nextAt: T + 15 * MIN, phase: 'retrying' });
+  });
+  it('the time it says is the time the verdict nudges at, one schedule, for every count and after a nudge that started no turn', () => {
+    const landed = { mail: [mail(1, T + MIN)], deliveries: [delivery(1, { deliveredAt: T + MIN, ackedAt: T + 2 * MIN })] };
+    for (const over of [{}, landed, { mark: mark({ failAts: [T - MIN, T] }) }, { mark: mark({ failAts: [T - 2 * MIN, T - MIN, T] }) }]) {
+      const at = said(over, {}, T + 1)!.nextAt!;
+      expect(verdict(input(over), at)).toEqual(nudge(at));
+      expect(verdict(input(over), at - 1)).toEqual(NONE);
+    }
+    expect(said(landed)!.nextAt).toBe(T + 2 * MIN + 15 * MIN);
+  });
+  it('a nudge queued and not typed (a person\'s draft in the box, any gate of the mail lane) promises no time', () => {
+    const queued = { mail: [mail(1, T + MIN)], deliveries: [delivery(1, { state: 'queued' })] };
+    expect(said(queued, {}, T + 2 * MIN)).toEqual({ ...AT_DUE, nextAt: null });
+    const typed = { mail: [mail(1, T + MIN)], deliveries: [delivery(1, { state: 'delivered', deliveredAt: T + 2 * MIN })] };
+    expect(said(typed, {}, T + 3 * MIN)!.nextAt, 'typed: the next one').toBe(T + 17 * MIN);
+  });
+  const waits: [string, Partial<StallWorker & object>][] = [
+    ['an open dialog (the live word)', worker('waiting')], ['an open dialog (the pane)', worker('idle', { dialogPending: true })],
+    ['a held ask', worker('idle', { askRow: { kind: 'row', state: 'held', at: T } })], ['a hook ask', worker('idle', { hookAsk: { kind: 'ask', at: T } })],
+    ['an account at its ceiling', worker('idle', { limits: { five: 100, seven: 1 } })],
+  ];
+  it.each(waits)('%s promises no time, before the due time too', (_n, w) => {
+    for (const now of [T + 1, NOW]) expect(said({ worker: w as StallWorker }, {}, now)).toEqual({ ...AT_DUE, nextAt: null });
+  });
+  it('nothing is said of a session the ladder is not waiting on: a running turn, no pane, asleep, archived, a dead or unmeasured row', () => {
+    for (const w of [worker('busy'), worker('idle', { lifecycle: 'stopped' }), worker('idle', { lifecycle: 'restarting' }), worker('idle', { unmeasured: true }),
+      worker('idle', { live: { ok: false, reason: 'no-pane' } })] as StallWorker[]) expect(said({ worker: w })).toBeNull();
+    expect(said({ worker: { present: false } })).toBeNull();
+    expect(said({}, { archived: true })).toBeNull();
+    expect(said({}, { hibernated: true })).toBeNull();
+  });
+  it('nothing is said when nothing is owed, when the marker says nothing, or when the ladder is stopped', () => {
+    expect(said({ mark: mark({ state: 'done', failAts: [] }) })).toBeNull();
+    for (const reason of ['absent', 'foreign', 'stale', 'malformed', 'unmeasured'] as const) expect(said({ mark: { ok: false, reason } })).toBeNull();
+    expect(said({ liveStartedAt: null })).toBeNull();
+    expect(said({}, { armed: false })).toBeNull();
+  });
+  it('between two passes a running turn takes it back, and any other live word, or none read, leaves it', () => {
+    const w = said()!;
+    expect(providerRetryShown(w, 'busy')).toBe(false);
+    for (const word of ['idle', 'shell', 'waiting', null]) expect(providerRetryShown(w, word), String(word)).toBe(true);
+    expect(providerRetryShown(undefined, 'idle')).toBe(false);
+  });
+});
+
+describe('the wire\'s one reader: absence permits', () => {
+  const W = { err: 'overloaded', since: T, attempts: 2, nextAt: T + MIN, phase: 'retrying' };
+  it('reads itself, a held one and one with no token', () => {
+    expect(providerRetryOf(W)).toEqual(W);
+    expect(providerRetryOf({ ...W, nextAt: null, err: null })).toEqual({ ...W, nextAt: null, err: null });
+    expect(providerRetryOf({ ...W, extra: 1 }), 'an unknown key is dropped').toEqual(W);
+  });
+  it('a phase this build does not know is absent, as is anything malformed', () => {
+    expect(providerRetryOf({ ...W, phase: 'no-lane' })).toBeNull();
+    for (const bad of [undefined, null, 'x', [], { ...W, err: 7 }, { ...W, since: '1' }, { ...W, attempts: Number.NaN }, { ...W, nextAt: undefined },
+      { ...W, nextAt: 'soon' }, { ...W, since: undefined }]) expect(providerRetryOf(bad)).toBeNull();
   });
 });
 

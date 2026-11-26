@@ -322,6 +322,9 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
     // No machine lane calls them and the PWA holds no box token, so the caps argument holds; neither is EXEMPT, so armed they sit
     // behind the session gate. Retain, the door of the lease parent, is a box-token lane (`requireMailToken`) and is not here.
     '/api/leases/:lease/operator-retain', '/api/leases/:lease/resolve',
+    // Landing order wave 5j-b (D-9049): the pause and withdraw doors of the operator on the landing line. No machine lane calls them
+    // and the PWA holds no box token, so the caps argument holds; neither is EXEMPT, so armed they sit behind the session gate.
+    '/api/landing/pause', '/api/landing/withdraw',
   ]);
 
   /** The two mechanisms that count as "the token was checked" — the shared

@@ -26,7 +26,8 @@ describe('the door table the gate reads', () => {
   // The history door (W1 PR B1) is a fenced read of class `other` too.
   it('every Overlord row but the team link (D-8809), the inbox piece\'s three and the history door is a start door today, and the fenced reads are the card recording page, the inbox\'s two and the history door', () => {
     expect(GATE_DOOR_KEYS.length).toBeGreaterThan(0);
-    const notStart = new Set(['link-team', 'inbox', 'messages', 'acknowledge', 'history']);
+    // The Overlord's timers (W1): the three timer doors are of class `other` too, and name no act kind.
+    const notStart = new Set(['link-team', 'inbox', 'messages', 'acknowledge', 'history', 'timer-set', 'timer-list', 'timer-cancel']);
     for (const k of GATE_DOOR_KEYS) expect(isStart(OVERLORD_DOORS[k] as never), k).toBe(!notStart.has(k));
     const reads = GATE_DOOR_KEYS.filter((k) => { const r = doorRow(k) as { write: boolean; act: string }; return r.write && r.act === 'read'; });
     expect(reads).toEqual(['card-record', 'inbox', 'messages', 'history']);

@@ -1,5 +1,6 @@
 import { OUTSTANDING_DELIVERY_STATES, isSessionLifecycle, lifecycleIsDead } from '../../../shared/api.js';
 import { isProviderRetryMail, providerRetryDueOf } from '../../../shared/provider-retry.js';
+import { type ProviderRetryWire } from '../../../shared/provider-retry-wire.js';
 import { isProviderFailure } from './stopFailure.js';
 import {
   BACKLOG_HORIZON_MS, isIdleWord, stallCurrentMark, stallNewestDelivery, stallSessionHold, stallSessionLive,
@@ -7,7 +8,7 @@ import {
 } from './stall.js';
 import type { StallResolved } from './stallsettings.js';
 /**
- * THE PROVIDER-FAILURE LADDER, wave 1 (operator ruling 2026-11-25, D-9085; plan
+ * THE PROVIDER-FAILURE LADDER (operator ruling 2026-11-25, D-9085; plan
  * `docs/superpowers/plans/2026-11-25-provider-retry.md`). L1, C5, pure: no clock, no I/O, no store.
  *
  * A session whose turn ended on a provider error is nudged to carry on, 1, 4 and then every 15 minutes after the n-th
@@ -109,8 +110,21 @@ function nudgeHold(input: ProviderRetryInput, now: number): StallHold | null {
   return isIdleWord(live.word) ? null : 'busy';
 }
 
+/** The nudges of the failure still owed: whether one is out (queued or delivered and unacked), whether it is queued and not
+ *  yet typed, and when the next one falls due. The next after one that started no turn is counted from when it landed. */
+interface OwedNudges { readonly out: boolean; readonly untyped: boolean; readonly dueAt: number }
+function owedNudges(sent: readonly SentNudge[], owed: { readonly at: number; readonly count: number }): OwedNudges {
+  const mine = sent.filter((n) => n.dueAt > owed.at);
+  return {
+    out: mine.some((n) => n.delivery !== null && OUTSTANDING.has(n.delivery.state)),
+    untyped: mine.some((n) => n.delivery !== null && n.delivery.state === 'queued'),
+    dueAt: mine.reduce((due, n) =>
+      Math.max(due, Math.max(n.dueAt, n.delivery?.ackedAt ?? n.delivery?.deliveredAt ?? 0) + PROVIDER_RETRY_REPEAT_MS), providerRetryFirstDue(owed)),
+  };
+}
+
 /** The ladder's answer for one session this sweep. Never two outstanding: while one nudge for this failure is queued or
- *  delivered and unacked, nothing is due. The next due time after one that started no turn is counted from when it landed. */
+ *  delivered and unacked, nothing is due. */
 export function providerRetryVerdict(input: ProviderRetryInput, now: number): ProviderRetryVerdict {
   const s = input.session;
   const m = stallCurrentMark(s);
@@ -120,13 +134,33 @@ export function providerRetryVerdict(input: ProviderRetryInput, now: number): Pr
   const stale = sent.find((n) => (owed === null || n.dueAt <= owed.at) && n.delivery !== null && n.delivery.state === 'queued');
   if (stale?.delivery) return { act: 'withdraw', deliveryId: stale.delivery.id };
   if (owed === null || !input.armed) return NONE;
-  const mine = sent.filter((n) => n.dueAt > owed.at);
-  if (mine.some((n) => n.delivery !== null && OUTSTANDING.has(n.delivery.state))) return NONE;
-  const dueAt = mine.reduce((due, n) =>
-    Math.max(due, Math.max(n.dueAt, n.delivery?.ackedAt ?? n.delivery?.deliveredAt ?? 0) + PROVIDER_RETRY_REPEAT_MS), providerRetryFirstDue(owed));
-  if (now < dueAt) return NONE;
+  const { out, dueAt } = owedNudges(sent, owed);
+  if (out || now < dueAt) return NONE;
   const why = nudgeHold(input, now);
   return why === null ? { act: 'nudge', dueAt } : hold(why);
+}
+
+/** The holds a person can read on the session and end: a dialog, a question, a usage limit. The console says the retry waits. */
+const WAITING_HOLDS: ReadonlySet<StallHold> = new Set<StallHold>(['dialog', 'ask', 'limit']);
+
+/** What the console is told of one session (wave 2, D-9100): the retry the ladder would make and when, or
+ *  null when it would make none (nothing owed, a stopped ladder, a running turn, a session that is gone, asleep or archived) or
+ *  could not be measured. `nextAt` is the verdict's own due time, and null while something keeps the nudge out: one of
+ *  `WAITING_HOLDS`, or the mail lane holding one it has not typed (a person's draft, or any gate of its own). */
+export function providerRetryWire(input: ProviderRetryInput, now: number): ProviderRetryWire | null {
+  const m = stallCurrentMark(input.session);
+  const owed = m === null ? null : providerRetryOwed(m);
+  if (m === null || owed === null || !input.armed) return null;
+  const held = nudgeHold(input, now);
+  if (held !== null && !WAITING_HOLDS.has(held)) return null;
+  const { untyped, dueAt } = owedNudges(sentNudges(input.session), owed);
+  return { err: m.err, since: owed.since, attempts: owed.count, nextAt: held !== null || untyped ? null : dueAt, phase: 'retrying' };
+}
+
+/** Whether a row still says it, by the raw live word of the assembly (null: not read). The pass judged it up to a minute ago,
+ *  and a turn that runs now is the retry, or a person's own. */
+export function providerRetryShown(w: ProviderRetryWire | undefined, liveWord: string | null): w is ProviderRetryWire {
+  return w !== undefined && liveWord !== 'busy';
 }
 
 /** Why a withdrawn nudge's delivery ended, as its row says it. */

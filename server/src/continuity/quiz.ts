@@ -15,6 +15,7 @@
 // know, a lost row, a read that failed) makes no baseline: doubt never makes one.
 import { ANCHOR_SLOT_LANE, CONTINUITY_LANE, LAUNCH_PROFILE_LANE, QUIZ_BOOTSTRAP, QUIZ_SHA_PREFIX, isQuizTickOutcome, type LaneArmLane, type LaneArmQuizTick } from '../../../shared/lane-arm.js';
 import { QUIZ_RECORD_REFUSALS, type QuizRecordRefusal } from '../../../shared/refusal.js';
+import { OVERLORD_ITEM_PROGRAMME } from '../../../shared/overlord-sequence.js';
 import type { LaneArmBaseline, LaneArmRead } from '../coord/laneArm.js';
 
 /** The W1a lane-arm rows the baseline guards, in the card's order: an arm of any of them changes what a session recalls,
@@ -445,8 +446,9 @@ export function quizRecordVerdict(i: {
 
 // ── The weekly item (plan Task 4; slugs quiz-lane-reminds-not-runs, quiz-week-is-utc, quiz-item-waits-for-the-record-path) ──
 
-/** The programme the weekly item is raised on. */
-export const QUIZ_ITEM_PROGRAMME = 'overlord';
+/** The programme the weekly item is raised on: the Overlord's own (`OVERLORD_ITEM_PROGRAMME`, one value with one home, which the
+ *  invariant monitor's items share). */
+export const QUIZ_ITEM_PROGRAMME = OVERLORD_ITEM_PROGRAMME;
 
 /** THE RECORD PATH'S GATE (ask 434; slug quiz-item-waits-for-the-record-path). The weekly item asks the operator to run the
  *  quiz and record it with `ccrc quiz-record`; while that verb and its door were absent the lane raised nothing. They ship

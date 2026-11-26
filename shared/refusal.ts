@@ -438,6 +438,10 @@ export const LANDING_REFUSAL_STATUS: Readonly<Record<LandingInfrastructureCode |
   'landing-entry-exists': 409, 'landing-entry-missing': 404, 'landing-after-missing': 409, 'landing-after-cross-project': 409,
   'landing-cycle': 409, 'landing-dependencies-unreadable': 503, 'landing-recovery-unresolved': 409, 'landing-identity-conflict': 409,
   'landing-id-overflow': 409, 'landing-sequence-overflow': 409,
+  // The operator's doors (landing order wave 5j-b, D-9049): CHOSEN, not measured, new words. 409 for a state that exists (a
+  // terminal entry, a pin time that moved), 404 for a project the line has never seen, 500 for a record the server built and
+  // its own journal parser refuses.
+  'landing-entry-terminal': 409, 'landing-entry-moved': 409, 'landing-project-unknown': 404, 'landing-record-unparseable': 500,
 };
 
 /** Each route refusal word's one status (D-5381). Measured from the sends on

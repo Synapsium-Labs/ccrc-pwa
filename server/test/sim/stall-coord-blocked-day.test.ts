@@ -12,7 +12,7 @@ type Row = [kind: string, id: string, state: string, actor: string, atOffset: nu
 const START = Date.parse('2026-10-12T00:00:00Z');
 const C = 'lane-a-coordinator';
 function seqOf(rows: readonly Row[]): SequenceLine[] {
-  return rows.map(([kind, id, state, actor, off], i) => ({ seq: i + 1, at: START + off, kind, id, state, actor }));
+  return rows.map(([kind, id, state, actor, off], i) => ({ seq: i + 1, at: START + off, kind, id, state, actor, actorKind: 'server' as const, known: true }));
 }
 function byName(n: string) {
   const inv = COORD_BLOCKED_INVARIANTS.find((i) => i.name === n);

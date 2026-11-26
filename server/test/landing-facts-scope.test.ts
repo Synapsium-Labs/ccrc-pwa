@@ -263,7 +263,22 @@ const EXPECTED_A = {
     }
   ],
   "terminalRepairs": [],
-  "creations": []
+  "creations": [],
+  "flagsRow": false,
+  "pinTimes": [
+    {
+      "id": 1,
+      "value": 1000
+    },
+    {
+      "id": 2,
+      "value": 2000
+    },
+    {
+      "id": 5,
+      "value": 5000
+    }
+  ]
 };
 const EXPECTED_B = {
   "project": "project-b",
@@ -429,5 +444,16 @@ const EXPECTED_B = {
     }
   ],
   "terminalRepairs": [],
-  "creations": []
+  "creations": [],
+  "flagsRow": false,
+  "pinTimes": [
+    {
+      "id": 3,
+      "value": 3000
+    },
+    {
+      "id": 4,
+      "value": 4000
+    }
+  ]
 };
