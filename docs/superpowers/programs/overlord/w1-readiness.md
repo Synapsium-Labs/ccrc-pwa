@@ -86,8 +86,9 @@ The plan's own slugs stand as written (questions 1 to 14, and `strand-cause-from
 - **`readiness-item-levels`** (fix round 1, F2, ruled). What differs from the plan's question 9 is the `count` and `hold`
   items only: they are `later`, not `soon`, because each stands beside a running Overlord (one account short of a spare, or
   one account held out of its list) and nothing it does waits on them. The `stranded` item is the plan's `soon` with no label,
-  so it pushes nothing; no item of this piece is `blocking`, none takes a push-outbox reach, and the store imports nothing from
-  the push outbox. The one push of this piece is the dead push, once per episode.
+  so it pushes nothing. No item of this piece is `blocking`. Each still takes its push-outbox reach, as before fix round 1
+  (round 2, R4, ruled): the reach writes the item's response record, which has a reader of its own; what keeps the outbox row
+  silent is the item's level, never a missing reach. The one push of this piece is the dead push, once per episode.
 - **`restart-under-way-until-minted`** (fix round 1, F1). The plan's restart in progress counts only while the body is
   `down`. `restartsSince` counts minted generations, and the generations lane mints on its own 30 s cadence while this lane
   passes every 10 s, so from the body coming back up to its generation minting a third restart read below the bound,
@@ -97,7 +98,15 @@ The plan's own slugs stand as written (questions 1 to 14, and `strand-cause-from
   is not counted). Why this and not holding the episode open: it keeps the rule in the count, where question 3 puts it, so
   `dead` reads from the down sighting to the end of the hour with no other word between, and the episode break rule stays
   one rule. The decider case "2 completed and the body up is not dead" stands unchanged, with no down sighting; new cases pin
-  the stretch, and a lane case runs down, up and not yet minted, minted, with one push.
+  the stretch, and a lane case runs down, up and not yet minted, minted, with one push. The sighting ends only on a measured
+  nobody designated: an unreadable designation keeps it (round 2, R1), and the dialog's sighting likewise.
+  The overlap with renewing (round 2, R3, ruled: the plan's table stands): an unproven generation reads `renewing`, and the
+  restart under way is not added while renewing, for any unproven generation, because no producer tells a renewal the lane
+  started from a crash's fresh mint, and counting on an unproven generation would read a real renewal `dead` and push. So in a
+  crash loop whose previous generation never proved, a third restart reads `restarting` or `renewing` until its generation
+  mints, then `dead`: late by the mint window, never `ready`, one push. A lane case pins those words.
+  With the body up and the live generation unreadable, a down sighting inside the hour counts as under way, so two completed
+  restarts read `dead` (doubt lowers, the ruled direction), as the down half already did; a case pins each half.
 - **`readiness-ready-clock-per-binding`** (fix round 1, F10, ruled). The plan's `readySince` is the newest `ready` row of any
   session. It is now the current binding's: `readinessNow` also answers that row's session, and the decider starts the deaf
   clock only when it is the subject's, so a new Overlord that was never ready has no deaf clock from its predecessor. The row
@@ -138,7 +147,7 @@ to score otherwise). After: each mutant red in at least one case. Floor 1 for ea
 | `#servedReadiness` | 9 | 9 | serve the stored word before the first pass; serve it past the limit |
 | `#readinessCountOf` (fix round 1, F8) | 4 | 4 | the unmeasured-candidate guard deleted (CO-1); every candidate counted; no list or an unmeasured list counting none |
 
-The extra mutants (37 of the 58) are listed by id in the set file. One extra (`FA-19`, an unproven generation read as proven)
+The extra mutants (37 of the first 58; 46 of the 67 after fix round 1) are listed by id in the set file. One extra (`FA-19`, an unproven generation read as proven)
 first survived; a generation-mapping case was added and it is now killed. The push and item-text deciders were mutated by
 hand while their tests were written (13 mutants, each red): the Restart action dropped, the bodies swapped, a constant dedupe
 key, every cause given one text, the detail sentence dropped, the hold's lane dropped, the count's plural, the latest reset
@@ -156,22 +165,42 @@ Each fix ships with a case that is red without it, measured by putting the old l
 
 | Finding | Fix | Red without it |
 |---|---|---|
-| F1 | the restart under way until its generation mints (slug `restart-under-way-until-minted`) | the up half set to `false`: three decider cases and the lane sequence (down, up and not yet minted, minted: dead throughout, one push); the window made exclusive; the minted check made `>=`; `!renewing` dropped |
+| F1 | the restart under way until its generation mints (slug `restart-under-way-until-minted`) | the up half set to `false` (measured again in round 2, A2): four decider cases red (the third dead with an older generation, the sighting an hour old, a generation started exactly at the sighting, the generation unreadable) and three lane cases (the sequence down, up and not yet minted, minted: dead throughout, one push; and round 2's two unreadable-designation sequences); the window made exclusive; the minted check made `>=`; `!renewing` dropped |
 | F2 | the stranded item `soon` with no label, no reach, no outbox import (slug `readiness-item-levels`, reworded) | the level put back to `blocking`: the store's level case and the lane's "no outbox row" case |
 | F3 | the boot flag set only once the first row is recorded | the flag set before the record: a refused first row, and a refused first stamp, each read a stored `ready` |
 | F4 | a pass token checked after the awaits | the check disabled: an overtaken pass held at the turn marker, and at the hook state, writes a row |
-| F5 | the item-state lists imported from `shared/ledgers.ts`; the unused closed-by list removed | NO-15, retargeted to the imported list, killed |
+| F5 | the item-state lists imported from `shared/ledgers.ts`; the unused closed-by list removed | NO-15, retargeted to the imported list, killed. The item kinds' two spellings, the shared list and the migration's `CHECK` text, are held by round 2's A4 case, which raises every kind of `READINESS_ITEM_KINDS` on a migrated database (a fourth kind in the shared map alone is red); the level map is held by its `Record` type |
 | F6 | (tests only) down, up, down; dialog, none, dialog; nobody designated between sightings | each reset and each `clear` deleted alone |
-| F7 | (tests only) `overlord-readiness-wiring.test.ts`: the sweep passes the tick on a listed tick and a failed listing; text pins of the two calls, the sweep and the root's assignment | each call, the sweep's body and the assignment deleted |
+| F7 | (tests only) `overlord-readiness-wiring.test.ts`: the sweep passes the tick on a listed tick and a failed listing; pins read through the parser (not text) of the root's assignment, the watcher's two calls and the sweep's lane name; the watchers quieted | measured in round 2 (A1), each line deleted in turn and restored: the root's assignment, 1 red; the failed-listing call, 1 red; the listed call, 1 red; the sweep's lane name, 3 red |
 | F8 | `readinessCountOf` in a mutation set, floor 1 | CO-1 to CO-4, all killed |
 | F9 | the prune keeps an open dead episode's first row by the break rule, whatever the newest word | the keep list put back to the newest row's episode |
 | F10 | the ready clock is the current binding's (slug `readiness-ready-clock-per-binding`) | FA-24, and the decider case over a predecessor's ready row |
 | F11 | "Rows added" corrected: one row and one line ever with nobody designated; two a start with a designation; about fifteen producers a designated pass | (note) |
-| F12 | migration 131 everywhere; the spec-amendment sentence removed | (note) |
+| F12 | the migration number everywhere (131 then; 132 since round 2's merge); the spec-amendment sentence removed | (note) |
 | F13 | the L0 comment names the lane's `read()`; slug `readiness-read-is-the-lane-read` | (comment) |
 | F14 | an unreadable identity reads the generation and the restarts unmeasured | the fallback to the session id put back |
 | F15 | (test only) two passes within a day prune once, a pass a day later prunes again | the throttle removed, and made never to repeat |
 | F16 | the restart-count suite copies a migrated template, as its two siblings do | (setup only) |
+
+## Fix round 2 (review 3941, call 1474)
+
+The merge of main `aac570d3d1` came first (the Docs settings table took 131, so this migration is 132; the gate reads 332
+declarations, 329 HTTP, 212 gated, 117 exempt), then the fixes on the merged tree.
+
+| Point | Fix | Red without it |
+|---|---|---|
+| R1 | the sightings (down, dialog, the last down) end only on a measured nobody designated; an unreadable designation keeps them. The dialog's sighting had the same hole, through the same clear | the condition removed: three lane cases (the restart sequence across an unreadable designation, read and thrown, and the dialog's clock across one) |
+| R2 | (tests only) a store case for the ready row's session, and a lane case reaching `deaf` through the real store | the store's read answering null for the session: the two new cases red (the decider suite alone stayed green) |
+| R3 | (ruled; a case and words) a crash loop whose previous generation never proved | pinned as observed: `renewing`, `restarting`, `renewing`, `renewing`, `renewing`, then `dead` (`third-restart`) after the mint, one push, never `ready` or `unproved` |
+| R4 | the item reach restored for all three kinds; the level keeps each outbox row silent | the reach dropped: one lane case per kind (the response row, not blocking, no push), two store cases (a silent row, `silentWhy: level`, nothing sent; a refused record rolls the reach back), and the watcher handing the lane its reach |
+| A1 | the F7 row measured for the parser pins | above |
+| A2 | the F1 row's count measured | above |
+| A3 | a decider case: a generation started exactly at the sighting is not minted since | `>` made `>=`: red |
+| A4 | a store case raising every item kind on a migrated database | a fourth kind in the shared map: red |
+| A5 | Known limits: a server restart inside a third restart's mint window | (note) |
+| A6 | Known limits: the hook clock against the server's clock; no server-side receive time is on the reading | (note) |
+| A7 | a decider case beside the down half's: body up, generation unreadable, a sighting in the hour, two counted: `dead` | the up half forced false: red |
+| A8 | the lane header: an overtaken pass writes nothing to the store | (comment) |
 
 ## What runs from the merge
 
@@ -200,10 +229,18 @@ of a day past the prune.
 ## Known limits
 
 - The holds port is `not-wired` until renewal readings PR H passes `accountHolds`: no hold item is raised before it.
-- The migration number (131) and the gate's route counts are provisional: both are settled at this pull request's last merge
+- The migration number (132, since the merge of main aac570d3d1, where the Docs settings table took 131) and the gate's route
+  counts are provisional: both are settled at this pull request's last merge
   of `main` before the queue (the coordinators' rule, call 1369).
 - A crash restart whose generation mints in a new term is not counted: a new term starts a new chain of restarts, and only an
   operator act raises the term (review 3922, recorded, not filed).
 - The dead push's Restart action reflects the episode's first row: a body that moves from `down` to `gone` inside one episode
   updates the row in place with no new push, so the push can lack a Restart the door would now accept; the tap opens the place
   either way (review 3922, by design).
+- A server restart inside a third restart's mint window splits the episode: the down sighting is the lane's memory, so the new
+  process does not know a restart is under way until the generation mints, the episode can break in between, and a second dead
+  push can go out (round 2, A5).
+- The minted check compares the generation's `startReportedAt` (the fleet box's hook clock) with the lane's down sighting (the
+  server's clock). The generation row carries no server-side receive time of its start, and reading one would need a new
+  producer or a wider port, so a skew between the two clocks moves the moment the restart stops counting as under way by that
+  skew (round 2, A6).
