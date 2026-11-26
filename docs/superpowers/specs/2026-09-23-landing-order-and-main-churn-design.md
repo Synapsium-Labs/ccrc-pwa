@@ -439,6 +439,7 @@ also include `labels`, so the form makes at most one `gh pr view` of its own, an
 train record's own `gh` reads (measured: a second `gh pr view` of the PR, for its comments, and one of the train PR;
 also a search when no named train proves the claim), and the form keeps the proofs it makes, as `pr-state --session` does (D-7595); a train claim
 the proof refused or could not read is `unmeasured` (D-7596); gated by the `pr-state-pr-v1` capability.)
+(Amended 2026-11-26, wave 5l, D-9112: a train claim the proof refused is still `unmeasured` on the PR-keyed form, but the landed reader reads it as GitHub's CLOSED, so the entry is `closed`, its `detail` naming `train-unproven`, and it stays `closed` if a proof appears later; a claim the proof could not read stays `unmeasured` and is read again. A terminal-repair candidate is not retired on such a claim: it is read again, since amendment B retires a row only on a fresh PR-keyed `merged`, `closed` or `absent` observation, and the PR-keyed form's word for this claim is `unmeasured`.)
 
 **Bounded terminal repair (amendment B, 2026-11-14, item 312; D-8626).** “A fresh PR-keyed
 merged/closed/absent observation may retire an exact existing row whose pin-only metadata is unreadable,
