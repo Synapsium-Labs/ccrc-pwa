@@ -96,7 +96,7 @@ export async function landedPass(deps: LandedLaneDeps): Promise<LandedPassResult
     }
     result.read++;
     const read = call.act === 'parse' ? readPrStatePrLine(call.stdout, cand.pr) : { state: 'call-failed' as const };
-    const answer = landedAnswerOf(read);
+    const answer = landedAnswerOf(read, cand);
     if (answer.act === 'wait' || answer.act === 'retry') {
       const next = landedNext(deps.memory.get(cand.id), cand, answer, at);
       deps.memory.set(cand.id, next);

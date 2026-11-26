@@ -88,12 +88,20 @@ describe('decideLandingLand', () => {
       mergeCommit: null, train: 12, trainMergeCommit: TRAIN });
   });
   it('closed and absent mark closed and carry only v, by, at and word', () => {
-    for (const word of ['closed', 'absent'] as const) {
-      const d = decideLandingLand({ land: land({ word }, { by: 'close', expect: null }), current: entry(), projection: READABLE });
+    const outcomes: LandingOutcome[] = [{ word: 'closed', reason: null }, { word: 'absent' }];
+    for (const outcome of outcomes) {
+      const d = decideLandingLand({ land: land(outcome, { by: 'close', expect: null }), current: entry(), projection: READABLE });
       if (d.act !== 'land') throw new Error('expected a mark');
       expect(d.state).toBe('closed');
-      expect(JSON.parse(d.detail)).toEqual({ v: 1, by: 'close', at: 5000, word });
+      expect(JSON.parse(d.detail)).toEqual({ v: 1, by: 'close', at: 5000, word: outcome.word });
     }
+  });
+  it('a train-unproven close records its reason in the detail (D-9112)', () => {
+    const d = decideLandingLand({ land: land({ word: 'closed', reason: 'train-unproven' }, { by: 'close', expect: null }),
+      current: entry(), projection: READABLE });
+    if (d.act !== 'land') throw new Error('expected a mark');
+    expect(d.state).toBe('closed');
+    expect(JSON.parse(d.detail)).toEqual({ v: 1, by: 'close', at: 5000, word: 'closed', reason: 'train-unproven' });
   });
 });
 

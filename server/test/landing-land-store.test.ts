@@ -1,7 +1,7 @@
 // Landing order wave 5h (Task 2): the land arm of the one writer, `CoordStore.advanceLanding({ kind: 'land', … })`, and
 // `landingReadProjects`. Real runs and pins in a temporary coord.db; fixture HOME only.
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
-import { copyFileSync, rmSync } from 'node:fs';
+import { copyFileSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { openCoordDb } from '../src/coord/db.js';
@@ -93,7 +93,7 @@ describe('the land arm marks the entry and nothing else', () => {
   it('closed and absent mark closed', () => {
     pinned(coord, 7, P, 1);
     pinned(coord, 8, P, 2);
-    expect(coord.advanceLanding(land({ outcome: { word: 'closed' } }))).toMatchObject({ ok: true, landing: { kind: 'closed', entry: { pr: 7, state: 'closed' } } });
+    expect(coord.advanceLanding(land({ outcome: { word: 'closed', reason: null } }))).toMatchObject({ ok: true, landing: { kind: 'closed', entry: { pr: 7, state: 'closed' } } });
     expect(coord.advanceLanding(land({ pr: 8, outcome: { word: 'absent' } }))).toMatchObject({ ok: true, landing: { kind: 'closed' } });
     expect(entryOf(coord, 8).state).toBe('closed');
     expect(detailOf(coord, 8)).toEqual({ v: 1, by: 'reader', at: 5000, word: 'absent' });
@@ -228,6 +228,27 @@ describe('refusals and failures of the land arm', () => {
   });
 });
 
+describe('a train-unproven close is one row change and no journal record (D-9112)', () => {
+  it('a plain closed and a train-unproven closed both mark closed; only the second detail names the reason', () => {
+    const f = boot();
+    const journal = path.join(f.home, '.ccrc', 'landing.log');
+    pinned(f.store, 7, P, 1);
+    pinned(f.store, 8, P, 2);
+    create(f.store, 1, Q); // a no-run creation in another project, so the journal has bytes to compare
+    const bytes = readFileSync(journal);
+    expect(bytes.length).toBeGreaterThan(0);
+    const cursor = f.db.prepare('SELECT * FROM landing_journal_cursor').all();
+    expect(f.store.advanceLanding(land({ outcome: { word: 'closed', reason: null } })))
+      .toMatchObject({ ok: true, landing: { kind: 'closed', entry: { pr: 7, state: 'closed' } } });
+    expect(f.store.advanceLanding(land({ pr: 8, outcome: { word: 'closed', reason: 'train-unproven' } })))
+      .toMatchObject({ ok: true, landing: { kind: 'closed', entry: { pr: 8, state: 'closed' } } });
+    expect(detailOf(f.store, 7)).toEqual({ v: 1, by: 'reader', at: 5000, word: 'closed' });
+    expect(detailOf(f.store, 8)).toEqual({ v: 1, by: 'reader', at: 5000, word: 'closed', reason: 'train-unproven' });
+    expect(readFileSync(journal)).toEqual(bytes);
+    expect(f.db.prepare('SELECT * FROM landing_journal_cursor').all()).toEqual(cursor);
+  });
+});
+
 describe('landingReadProjects', () => {
   it('lists a project with a pinned or ejected row once, sorted, and not a project whose rows are all terminal', () => {
     pinned(coord, 7, Q, 1);
@@ -358,11 +379,14 @@ describe('terminal repair: a fresh terminal answer retires an unreadable row and
     expect(after.recovery.hold).toBeNull();
   });
 
-  it.each([['closed'], ['absent']] as const)('a %s answer retires it closed, changing only state and detail', (word) => {
+  it.each([
+    ['closed', { word: 'closed', reason: null }],
+    ['absent', { word: 'absent' }],
+  ] as const)('a %s answer retires it closed, changing only state and detail', (word, outcome: LandingOutcome) => {
     pinned(coord);
     coord.db.prepare("UPDATE landing_entries SET handoffCommit = 'not-a-hash' WHERE pr = 7").run();
     const damaged = retained(coord);
-    const r = coord.advanceLanding(repairLand(coord, tokenOf(coord), { outcome: { word } }));
+    const r = coord.advanceLanding(repairLand(coord, tokenOf(coord), { outcome }));
     expect(r).toMatchObject({ ok: true, landing: { kind: 'closed', entry: { pr: 7, state: 'closed' } } });
     expect(retained(coord)).toEqual(damaged);
     expect(detailOf(coord)).toEqual({ v: 1, by: 'reader', at: 5000, word });
@@ -399,7 +423,7 @@ describe('terminal repair: a fresh terminal answer retires an unreadable row and
     pinned(coord, 7, P, 1);
     pinned(coord, 8, P, 2);
     expect(landingFactsOf(coord, P).terminalRepairs).toEqual([]);
-    coord.advanceLanding(land({ pr: 8, outcome: { word: 'closed' } }));
+    coord.advanceLanding(land({ pr: 8, outcome: { word: 'closed', reason: null } }));
     coord.db.prepare("UPDATE landing_entries SET handoffCommit = 'not-a-hash' WHERE pr = 8").run();
     expect(landingFactsOf(coord, P).terminalRepairs).toEqual([]);
   });
@@ -603,7 +627,7 @@ describe('terminal repair: a fresh terminal answer retires an unreadable row and
     ] as [string, string, unknown[]][])('repair, closed, then a verified pin over %s: kept closed, no projection or witness mutation, no metadata invented', (_n, sql, params) => {
       const run = pinned(coord);
       coord.db.prepare(sql).run(...(params as never[]));
-      expect(coord.advanceLanding(repairLand(coord, tokenOf(coord), { outcome: { word: 'closed' } })))
+      expect(coord.advanceLanding(repairLand(coord, tokenOf(coord), { outcome: { word: 'closed', reason: null } })))
         .toMatchObject({ ok: true, landing: { kind: 'closed' } });
       expect(retreatAndReview(coord, run)).toMatchObject({ ok: true, landing: { kind: 'kept', state: 'closed' } });
       const before = dump(coord);
@@ -614,7 +638,7 @@ describe('terminal repair: a fresh terminal answer retires an unreadable row and
 
     it('positive control: an ordinary readable closed row does re-pin, and writes its witness', () => {
       const run = pinned(coord);
-      expect(coord.advanceLanding(land({ outcome: { word: 'closed' } }))).toMatchObject({ ok: true, landing: { kind: 'closed' } });
+      expect(coord.advanceLanding(land({ outcome: { word: 'closed', reason: null } }))).toMatchObject({ ok: true, landing: { kind: 'closed' } });
       expect(retreatAndReview(coord, run)).toMatchObject({ ok: true, landing: { kind: 'kept', state: 'closed' } });
       const again = coord.advanceLanding({ runId: run, to: 'merging', causedBy: 'coordinator', landing: pin(7, HEAD2) });
       expect(again).toMatchObject({ ok: true, landing: { kind: 'pinned', created: false, entry: { pr: 7, state: 'pinned', pinnedSha: HEAD2 } } });

@@ -9,7 +9,7 @@ import { NotifyLog } from '../src/notifylog.js';
 import { noticeSink } from '../src/notice.js';
 import { PR_BACKOFF_MAX_MS, PR_SWEEP_MS } from '../src/laneSchedule.js';
 import { landedPass, type LandedLaneDeps, type LandedPassResult } from '../src/coord/landedLane.js';
-import { LANDED_READS_PER_SWEEP, LANDED_STANDING_BACKOFF_MS, type LandedMemory } from '../src/coord/landed.js';
+import { LANDED_READS_PER_SWEEP, LANDED_STANDING_BACKOFF_MS, landedProjectStep, type LandedMemory } from '../src/coord/landed.js';
 import type { CcdResult } from '../src/coord/ports.js';
 import type { FleetState } from '../src/fleetstate.js';
 import type { LandingAdvance, LandingLand } from '../src/coord/landingEntry.js';
@@ -89,6 +89,12 @@ const stateOf = (c: CoordStore, pr: number, project = P): string => landingFacts
 const detailOf = (c: CoordStore, pr: number): Record<string, unknown> =>
   JSON.parse((c.db.prepare('SELECT detail FROM landing_entries WHERE pr = ?').get(pr) as { detail: string }).detail) as Record<string, unknown>;
 const mergedRows = (r: Rig) => r.feed().filter((e) => e.kind === 'merged');
+/** The one-PR form's line for a PR GitHub reads CLOSED with the train label, as ccd prints it (D-9112): `unmeasured`, the
+ *  view's facts echoed, and the train flag that names why. */
+const trainLine = (pr: number, flag: 'trainUnproven' | 'trainUnread'): string => line(pr, {
+  state: 'unmeasured', reason: flag === 'trainUnproven' ? 'train-unproven' : 'train-unread',
+  landedInTrain: false, trainUnproven: flag === 'trainUnproven', trainUnread: flag === 'trainUnread', train: null, trainMergeCommit: null });
+const entryIdOf = (c: CoordStore, pr: number, project = P): number => landingFactsOf(c, project).entries.find((e) => e.pr === pr)!.id;
 
 beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(BASE_TIME); wave = 0; });
 
@@ -193,6 +199,33 @@ describe('the landed reader marks what GitHub says', () => {
     expect(await r.pass()).toMatchObject({ landed: 1 });
     expect(stateOf(r.coord, 801)).toBe('landed');
     expect(mergedRows(r)).toEqual([]);
+  });
+});
+
+describe('a CLOSED, labelled PR whose train record did not prove it leaves the line (D-9112)', () => {
+  it('train-unproven marks the entry closed, counts it, drops its memory and raises no merged record', async () => {
+    const r = await rig();
+    pinned(r.coord, 8001);
+    const id = entryIdOf(r.coord, 8001);
+    r.answer.fn = (pr) => ran(trainLine(pr, 'trainUnproven'));
+    expect(await r.pass()).toMatchObject({ read: 1, landed: 0, closed: 1, stopped: null });
+    expect(stateOf(r.coord, 8001)).toBe('closed');
+    expect(detailOf(r.coord, 8001)).toMatchObject({ word: 'closed', reason: 'train-unproven' });
+    expect(r.memory.has(id)).toBe(false);
+    expect(mergedRows(r)).toEqual([]);
+  });
+
+  it('train-unread is asked again: the entry stays pinned, nothing is marked, and it is due a doubled step later', async () => {
+    const r = await rig();
+    pinned(r.coord, 8002);
+    const id = entryIdOf(r.coord, 8002);
+    const advance = vi.spyOn(r.coord, 'advanceLanding');
+    const at = r.clock.t;
+    r.answer.fn = (pr) => ran(trainLine(pr, 'trainUnread'));
+    expect(await r.pass()).toMatchObject({ read: 1, landed: 0, closed: 0 });
+    expect(stateOf(r.coord, 8002)).toBe('pinned');
+    expect(advance).not.toHaveBeenCalled();
+    expect(r.memory.get(id)?.nextAt).toBe(at + 2 * PR_SWEEP_MS);
   });
 });
 
@@ -599,6 +632,25 @@ describe('the landed reader retires a row whose pin metadata does not read, on a
   const rawOf = (r: Rig, pr: number): Record<string, unknown> => r.coord.db.prepare('SELECT * FROM landing_entries WHERE pr = ?').get(pr) as Record<string, unknown>;
   const retainedOf = (r: Rig, pr: number): Record<string, unknown> => { const { state: _s, detail: _d, ...rest } = rawOf(r, pr); return rest; };
   const witnessOf = (r: Rig): unknown[] => r.coord.db.prepare('SELECT * FROM landing_projection_witness ORDER BY entryId').all();
+
+  it('a train-unproven answer does not retire a repair candidate: nothing is marked, and it is asked again (spec amendment B, D-9112)', async () => {
+    const r = await rig();
+    pinned(r.coord, 7901);
+    damage(r, 7901);
+    const step = landedProjectStep(r.coord.readLanding(P));
+    expect(step.act).toBe('candidates');
+    const cands = step.act === 'candidates' ? step.candidates : [];
+    expect(cands).toHaveLength(1);
+    expect(cands[0]!.repairToken).toMatch(/^[0-9a-f]{64}$/);
+    const before = rawOf(r, 7901);
+    const advance = vi.spyOn(r.coord, 'advanceLanding');
+    const at = r.clock.t;
+    r.answer.fn = (pr) => ran(trainLine(pr, 'trainUnproven'));
+    expect(await r.pass()).toMatchObject({ read: 1, landed: 0, closed: 0 });
+    expect(advance).not.toHaveBeenCalled();
+    expect(rawOf(r, 7901)).toEqual(before);
+    expect(r.memory.get(cands[0]!.id)?.nextAt).toBe(at + 2 * PR_SWEEP_MS);
+  });
 
   it('a merged answer retires the unreadable row landed, carrying its token to the line; only state and detail move', async () => {
     const r = await rig();

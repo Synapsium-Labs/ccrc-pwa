@@ -756,6 +756,7 @@ describe('the rejection table is total, in both directions', () => {
       'stale-episode-head', // coord/landingEntry.ts: the one quarantine kind, also a schema CHECK literal (landing order wave 5f), a recovery-view discriminant, not a refusal code
       'call-failed',        // coord/landed.ts#landedAnswerOf and coord/landedLane.ts#landedPass: the input word for a ran-but-failed `pr-state` call (landing order wave 5h), a reader-internal discriminant, not a refusal code
       'missing-field',      // coord/landed.ts#landedAnswerOf: compared against ccd's `pr-state` unmeasured reason, a word ccd writes (landing order wave 5h), a reader-internal discriminant, not a refusal code
+      'train-unproven',     // coord/landed.ts#landedAnswerOf and coord/landingEntry.ts#LandingOutcome: ccd's `pr-state` unmeasured reason, kept in a closed mark's detail (D-9112), a reader-internal discriminant, not a refusal code
       'not-ran',            // coord/landed.ts#landedCallStep: the act word for a `pr-state --pr` call that did not run (landing order wave 5i), a pure-decider discriminant, not a refusal code
       'main-health',        // coord/lineageRead.ts: the main-health reading's tag (landing order wave 5i), a tag on a stored value, not a mail or run refusal code
       'landing-next',       // coord/landingNext.ts: the control document kind / cue tuple tag (landing order wave 5i), a tag on a stored value, not a mail or run refusal code

@@ -110,15 +110,24 @@ type HeldWord = Extract<LandingHoldGate, { ok: false }>['error'];
 const HELD_WORDS: Record<HeldWord, true> = { 'landing-recovery-unresolved': true, 'landing-identity-conflict': true };
 export const isHeldRefusal = (error: string): error is HeldWord => Object.hasOwn(HELD_WORDS, error);
 
-export function landedAnswerOf(read: PrStatePrRead | { state: 'call-failed' }): LandedReadAnswer {
+export function landedAnswerOf(read: PrStatePrRead | { state: 'call-failed' },
+  cand: Pick<LandedCandidate, 'repairToken'>): LandedReadAnswer {
   switch (read.state) {
     case 'merged':
       return { act: 'land', outcome: { word: 'merged', head: read.facts.headRefOid, base: read.facts.baseRefName,
         mergedAt: read.facts.mergedAt, mergeCommit: read.facts.mergeCommit, train: read.train } };
-    case 'closed': return { act: 'close', outcome: { word: 'closed' } };
+    case 'closed': return { act: 'close', outcome: { word: 'closed', reason: null } };
     case 'absent': return { act: 'close', outcome: { word: 'absent' } };
     case 'open': return { act: 'wait' };
-    case 'unmeasured': return { act: 'retry', missingField: read.by === 'ccd' && read.reason === 'missing-field' };
+    case 'unmeasured':
+      // D-9112: GitHub reads the PR CLOSED with the train label and the train record was read and did not prove it. A
+      // closed PR can never be the next to land, so the entry leaves the line; `train-unread` is still asked again. A
+      // terminal-repair candidate is retired only on a fresh PR-keyed `merged`, `closed` or `absent` observation (spec
+      // amendment B); this claim's word on that form is `unmeasured`, so for it the claim stays a retry.
+      if (cand.repairToken === undefined && read.by === 'ccd' && read.reason === 'train-unproven' && read.train === 'unproven') {
+        return { act: 'close', outcome: { word: 'closed', reason: 'train-unproven' } };
+      }
+      return { act: 'retry', missingField: read.by === 'ccd' && read.reason === 'missing-field' };
     case 'call-failed': return { act: 'retry', missingField: false };
   }
 }
