@@ -257,6 +257,33 @@ describe('the cost measure is the work a run did, not the time it waited (D-8334
   });
 });
 
+/** One round of a linearity row: the CPU ms of the original at the small size, the current program at the small
+ * size, the original at the large size and the current program at the large size. */
+type Round = readonly [number, number, number, number];
+/** How many rounds a linearity row measures (D-9118). */
+const LINEARITY_ROUNDS = 4;
+/** Which program runs first at each size in round `i`: the original on even rounds, the current one on odd rounds, so
+ * neither program's large sample is always the last of a round (D-9118). */
+const linearityOrder = (i: number): 'original' | 'current' => (i % 2 === 0 ? 'original' : 'current');
+/** D-9118's verdict. The original's ratio is read off the faster of all rounds, cell by cell, as before; the bound is
+ * FD8's (that ratio plus 0.5, or 2.5 where the original is below it). The current program's ratio is the original's
+ * plus the MEDIAN of the per-round differences (current large / current small less original large / original small),
+ * each difference taken from samples measured back to back, so a change of load between rounds moves one difference,
+ * not the verdict. */
+const linearityVerdict = (rounds: readonly Round[]): {
+  referenceRatio: number; bound: number; differences: number[]; currentRatio: number; red: boolean;
+} => {
+  const fastest = (i: number): number => Math.min(...rounds.map((r) => r[i]));
+  const referenceRatio = fastest(2) / fastest(0);
+  const bound = referenceRatio > 2.5 ? referenceRatio + 0.5 : 2.5;
+  const differences = rounds.map(([rs, cs, rl, cl]) => cl / cs - rl / rs);
+  const sorted = [...differences].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  const median = sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+  const currentRatio = referenceRatio + median;
+  return { referenceRatio, bound, differences, currentRatio, red: currentRatio > bound };
+};
+
 // D-9118: the linearity rows' estimator, pinned on recorded samples with no CPU measured. `linearity-windows.json` holds
 // two windows of four rounds each, CPU ms as [original small, current small, original large, current large], measured
 // with jq 1.7.1 on the fleet box on 2026-11-26 at ambient load: `ambient` is main's program, whose first two rounds
@@ -323,10 +350,28 @@ describe('the linearity verdict is the median of the per-round differences (D-91
 // a branch-only sha from a test: vendor the baseline with a pinned hash. The sha256 is pinned in one constant, so an
 // edit of the fixture reds, and a missing or unreadable fixture reds as a failing case, never a skip.
 // No hook is executed here: both embedded jq programs receive JSON text. Each mode, shape and size is a single
-// invocation (startup included), using the faster of two interleaved measurements of the CPU it spent (D-8334, above).
-// The coordinator's FD8 ruling accepts fixed jq startup cost but pins both historical cost and doubling-size scaling;
-// it does not permit an amortized stream comparison. The CI follow-up uses 32/64 KB only for quotes/deny, whose
-// inherited normalization otherwise outlives its case.
+// invocation (startup included). The coordinator's FD8 ruling accepts fixed jq startup cost but pins both historical
+// cost and doubling-size scaling; it does not permit an amortized stream comparison. The CI follow-up uses 32/64 KB
+// only for quotes/deny, whose inherited normalization otherwise outlives its case.
+//
+// What each row can see (measured 2026-11-26 with jq 1.7.1; task note docs/superpowers/programs/desktop-polish/
+// hook-cost-row.md). The 64 KB cost rows take the faster of two interleaved measurements (D-8334) and catch any step
+// that makes the current program cost more than 1.5x the original at 64 KB: on quotes/deny main sat at about 1.03x, so
+// a step adding about 45% to it reds there, whatever its growth. The linearity rows catch only growth FASTER than the
+// programs' own: on the quote-dense deny shape both programs are already almost pure n^2 (a fixed ~0.2 s plus c n^2,
+// the n^2 term over 98% of the cost at 32 and 64 KB), so their 64/32 ratio sits near 3.9 and a quadratic step, of any
+// weight, leaves it there and stays green in the linearity row. The smallest growth the linearity row catches reliably is
+// a cubic step adding about 30% of the current program's cost at 32 KB (red in 24 of 24 windows; 20%: 15 of 24).
+//
+// D-9118 (amending D-8334 for the linearity rows only): a linearity row measures LINEARITY_ROUNDS rounds, reverses which
+// program runs first on alternate rounds, and reads the current program's ratio as the original's plus the MEDIAN of the
+// per-round differences (`linearityVerdict`). The faster of two let one change of CPU contention inside a round decide
+// the row: CPU time is not contention-proof on a shared core, and the current program's large sample was always the
+// last of a round, so contention rising just before it read as worse scaling (hosted reds of 1-2% over the bound, the
+// difference's mean -0.03 over 104 hosted runs; at ambient load on the fleet box 2 reds in 26 windows before, 0 in 24
+// after). THE LIMIT, measured, not removed: a load that switches on and off with a period near one 64 KB sample (12
+// spinners, 13 s on and 12 s off) still reds the row before and after (5 of 18 windows before, 6 of 16 after); no
+// estimator over four rounds survives it, and nothing here retries a red.
 describe('the forbidden program\'s cost on quote-dense payloads naming worktree and prune', () => {
   const extract = (src: string): string => (/^APPROVAL_FORBIDDEN_JQ='([^']*)'$/m.exec(src) ?? [])[1] ?? '';
   const prog = extract(fs.readFileSync(HOOK, 'utf8'));
@@ -366,18 +411,21 @@ describe('the forbidden program\'s cost on quote-dense payloads naming worktree 
         const reference = readBaseline();
         expect(reference).not.toBe('');
         expect(prog).not.toBe('');
-        const pairs = [0, 1].map(() => [timed(reference, mode, smallKb), timed(prog, mode, smallKb),
-          timed(reference, mode, largeKb), timed(prog, mode, largeKb)]);
-        const minima = [0, 1, 2, 3].map((i) => Math.min(...pairs.map((p) => p[i] as number)));
-        const [referenceSmall, smallMs, referenceLarge, largeMs] = minima as [number, number, number, number];
-        const referenceRatio = referenceLarge / referenceSmall;
+        // D-9118: each pair of samples back to back, the first program alternating by round (`linearityOrder`).
+        const pair = (i: number, kb: number): [number, number] => {
+          if (linearityOrder(i) === 'original') { const r = timed(reference, mode, kb); return [r, timed(prog, mode, kb)]; }
+          const c = timed(prog, mode, kb);
+          return [timed(reference, mode, kb), c];
+        };
+        const rounds = Array.from({ length: LINEARITY_ROUNDS }, (_, i): Round => [...pair(i, smallKb), ...pair(i, largeKb)]);
+        const minima = [0, 1, 2, 3].map((i) => Math.min(...rounds.map((r) => r[i])));
         // The coordinator's follow-up rules inherited super-linearity separately: retain 2.5x if the original is
         // below it; otherwise allow the original ratio plus the explicitly accepted 0.5 measurement margin.
-        const bound = referenceRatio > 2.5 ? referenceRatio + 0.5 : 2.5;
-        const currentRatio = largeMs / smallMs;
-        const measured = `${name}/${mode}: original ${referenceRatio}x, current ${currentRatio}x, bound ${bound}x; cpu ms ${minima.join(', ')}`;
+        const v = linearityVerdict(rounds);
+        const measured = `${name}/${mode}: original ${v.referenceRatio}x, current ${v.currentRatio}x, bound ${v.bound}x; cpu ms ${minima.join(', ')}; `
+          + `per-round differences ${v.differences.map((d) => d.toFixed(3)).join(', ')}`;
         console.info(measured);
-        expect(currentRatio, measured).toBeLessThanOrEqual(bound);
+        expect(v.currentRatio, measured).toBeLessThanOrEqual(v.bound);
       }, scaled(smallKb === 32 ? 600_000 : 300_000));
     }
   }

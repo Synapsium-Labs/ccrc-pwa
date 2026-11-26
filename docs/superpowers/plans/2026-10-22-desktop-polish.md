@@ -5900,6 +5900,15 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   tap was the reported fault, and the reason beside it, which a person must read, stays in the measured secondary ink.
   The coordinator's ruling in fix round 1 (review run 3876). Task note:
   `docs/superpowers/programs/desktop-polish/add-account-safari.md` §4.4.
+- **D-9118** — `linearity-median-of-four`: desktop-polish wave 183, issued on 2026-11-26. The four linearity rows of
+  `server/test/session-hook-prune-deny.test.ts` measure four rounds instead of two, reverse which program runs first
+  on alternate rounds, and read the current program's ratio as the original's plus the median of the per-round
+  differences (`linearityVerdict`), where D-8334 took the faster of two measurements cell by cell. This amends D-8334
+  for the linearity rows only: the 64 KB cost rows keep the faster of two, and FD8's 0.5 margin, the sizes and the
+  vendored baseline's hash do not move. The margin was not consumed by the program's growth (the difference's mean
+  was -0.035 on hosted runs before #3169 and -0.029 after); the reds were one change of CPU contention inside a round
+  deciding the row. A load whose period matches one 64 KB sample still reds the row, before and after. Task note:
+  `docs/superpowers/programs/desktop-polish/hook-cost-row.md`.
 
 ## Out of scope
 
