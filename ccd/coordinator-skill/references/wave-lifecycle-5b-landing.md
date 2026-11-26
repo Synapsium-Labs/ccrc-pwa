@@ -533,11 +533,13 @@ not marked yet: land nothing past it, write no train record and edit no
 train's body. While the line is paused its answer carries no `order.head`, so
 read the line without `--pr` and take the held entry from its `entries` as the
 one whose `id` is `binding.entryId`. The reader takes such an entry out of the
-line by itself, so read the line again after 20 minutes, the reader's longest
-back-off for this answer and one beat of its lane, with a timer as the wake;
-only if the same head still holds, mail the coordinator of that entry's run
-(`toId: 'coordinator'` with its `runId`) what you read, or, for an entry with
-no run, put it to the operator as an item.
+line by itself once it reads the train's record and the record does not prove,
+so read the line again after 20 minutes, the reader's longest retry step and one
+beat of its lane, with a timer as the wake; if the same head still holds (a
+record the reader cannot read and a damaged entry are asked again and never
+taken out), mail the coordinator of that entry's run (`toId: 'coordinator'` with
+its `runId`) what you read, or, for an entry with no run, put it to the operator
+as an item.
 A `held` binding, `opt-in-unknown` included, stops. A missing `binding` (a server older than wave 5i) is the only fallback to the checks
 above, and on a project whose `lander` exists it still stops; `ccrc rollout --server-first` avoids the window in which a
 server older than wave 5i answers without one. An `inert` binding on a project whose `lander` exists stops too. An `inert` binding where `lander` does not exist (the opt-in marker

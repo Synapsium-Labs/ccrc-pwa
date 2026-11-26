@@ -41,7 +41,8 @@ appended, before the case reads the journal's bytes and the cursor, so both read
 compares them only after the two marks. The two marked entries are the only rows of `project-a`; `project-b`'s entry is
 never the subject of either mark (each names `project-a` and its own PR), it is an ordinary creation and not an
 identity conflict, and the case asserts that both marks still answer `closed` with it present. So the comparison still answers exactly one question: whether either mark wrote to the journal or moved its
-cursor. Mutant MJ, which bumps the cursor inside the land arm, reds it.
+cursor. Mutant MJ, which bumps the cursor inside the land arm, reds it, and so does mutant X-journal (fix round 1), which
+appends one raw line to `landing.log` there.
 
 ## Red first
 
@@ -86,8 +87,10 @@ Each row: the mutant applied in place by a driver under the session's temp root,
 | M25 | the arm drops `cand.repairToken === undefined` | `server/src/coord/landed.ts` | landed-decide.test.ts | R-G: a terminal-repair candidate is asked again on train-unproven (spec amendment B) | `050e39c8b6df38ef193c825c102ad88978bbefac5d0ef019ba9284764e8f29df` |
 | M27 | `landedPass` calls `landedAnswerOf(read, {})` | `server/src/coord/landedLane.ts` | landed-lane.test.ts | a train-unproven answer does not retire a repair candidate: nothing is marked, and it is asked again (spec amendment B, D-9112) | `6296a0a2221254bc5105a517063d334a2e02ebfd22f84e72cb45da43bd962f2f` |
 | MJ | (the journal characterization) the land arm also bumps `landing_journal_cursor` | `server/src/coord/store.ts` | landing-land-store.test.ts (`-t train-unproven close is one row`) | a plain closed and a train-unproven closed both mark closed; only the second detail names the reason | `d09b81c2d68d18f560114a00b928850586c7dd36e4fe0b987ed023ba20c7b2f6` |
+| X-journal | (fix round 1, F3; the reviewer's mutant) the land arm appends one raw line to `landing.log` right after its `UPDATE` | `server/src/coord/store.ts` | landing-land-store.test.ts | a plain closed and a train-unproven closed both mark closed; only the second detail names the reason | `d09b81c2d68d18f560114a00b928850586c7dd36e4fe0b987ed023ba20c7b2f6` |
 
 Against the plan's predictions: every predicted case is red. M16 reds both predicted cases (the lane mark case and the
 store case) and eight more that mark an entry closed. MJ stands in for the plan's journal check: rather than a
 `landing.log` append, the scratch mutant bumps the journal cursor inside the land arm, and the store case's cursor check
-reds; the bytes check had no natural mutant in the store, so it is a characterization pin.
+reds. The bytes check is measured by X-journal (fix round 1): a raw line appended to the journal inside the land arm
+reds the same case, 1 failed and 64 passed, so it is a measured check too, not only a characterization pin.

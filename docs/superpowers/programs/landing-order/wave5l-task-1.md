@@ -20,10 +20,13 @@ was held by another session.
   `('bad', why)` with its sentences unchanged; `members_block` reads the tool's block in section 4.1's grammar, its parse
   catching `(ValueError, RecursionError)`; `train_members` is the one parser the loop calls, by section 4.2's table, and
   answers the `form` the loop's two sentences name. The `train-check` comment's description of the v1 format now points
-  at the README's "The train record" (section 4.2's budget paragraph); one python comment line names D-9111. The file
-  header and `_ws_train_record`'s header comment say what changed (bash comments, outside the growth count).
-- Growth: `ccd/lib/train-proof.sh` measured +32 net code lines against `ad52d25f4b` with `growthCheck.ts#codeLines`
-  (343 to 375), under the 40-line limit; no waiver.
+  at the README's "The train record" (section 4.2's budget paragraph); two python comment lines name D-9111 (that
+  comment's edited opening, and `train_members`'s header). The file header and `_ws_train_record`'s header comment say
+  what changed (bash comments, outside the growth count). (Fix round 1, F5: this note said one python comment line.)
+- Growth: `ccd/lib/train-proof.sh` measured +32 net against `ad52d25f4b` as the growth check counts it
+  (`growthCheck.ts#codeLines`: bash code lines plus every non-blank heredoc line, so the python's comments count and the
+  bash comments and blank lines do not; 343 to 375), under the 40-line limit; no waiver. The diff itself is +62 -25
+  lines (`git diff --numstat`), blanks and comments included.
 - `server/src/prstate.ts`: the `landedInTrain` comment names both forms of the train record. Comment only.
 - `server/test/ccdPrHelpers.ts`: `rawTrainMembers`, `trainMembers` and `toolTrainRow` (section 9).
 - `server/test/ccd-train-members.test.ts` (new): P1 to P38 and P9b, 46 cases (P4 runs four bodies, P7 four, P34 two).

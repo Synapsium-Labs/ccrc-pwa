@@ -207,6 +207,11 @@ describe('a CLOSED, labelled PR whose train record did not prove it leaves the l
     const r = await rig();
     pinned(r.coord, 8001);
     const id = entryIdOf(r.coord, 8001);
+    // Fix round 1 (review 3963, F2): a first pass that answers a retry writes the entry's memory, so the mark's drop can fail.
+    r.answer.fn = (pr) => ran(trainLine(pr, 'trainUnread'));
+    expect(await r.pass()).toMatchObject({ read: 1, closed: 0 });
+    expect(r.memory.has(id), 'the retry wrote the memory').toBe(true);
+    r.clock.t += 2 * PR_SWEEP_MS;
     r.answer.fn = (pr) => ran(trainLine(pr, 'trainUnproven'));
     expect(await r.pass()).toMatchObject({ read: 1, landed: 0, closed: 1, stopped: null });
     expect(stateOf(r.coord, 8001)).toBe('closed');

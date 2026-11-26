@@ -3,6 +3,7 @@
 // Every case asserts the WHOLE line `train-check` prints, so a refusal with the wrong sentence reds, and a malformed
 // member always sits beside a valid #42 at its head, so a mutant that stops refusing it proves #42 and reds. Cases
 // P1 to P38 and P9b are the wave 5l plan's section 9.1 (docs/superpowers/plans/2026-11-26-landing-order-wave5l-train-landings.md).
+// P39 and P40 are fix round 1's (docs/superpowers/programs/landing-order/wave5l-fix-round-1.md).
 // Every ccd call runs in a fixture HOME (`makePrHarness`); no case reads GitHub.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
@@ -166,6 +167,16 @@ describe('the train tool\'s train-members block proves a member, by the one pars
   it('P38: both blocks, equal maps, listing #42 at another sha: the sentence names both', () => {
     expect(check(toolTrainRow(50, M, `${trainMembers([[42, S]])}\n${trainBlock([[42, S]])}`)))
       .toBe(`!train #50's ${BOTH} lists #42 at ${S}, not its head ${H}`);
+  });
+  // Fix round 1 (review 3963, F1): the v1 half of `train_members`'s first row, a bad v1 block refusing with its own
+  // sentence whatever the tool block says.
+  it('P39: a doubled v1 block beside a proving tool block proves nothing, with the v1 sentence', () => {
+    const v1 = trainBlock([[42, H]]);
+    expect(check(toolTrainRow(50, M, `${trainMembers([[42, H]])}\n${v1}${v1}`))).toBe(W('carries 2 ccrc-train v1 blocks, not one'));
+  });
+  it('P40: a v1 block with a line that is not a member line, and no tool block, proves nothing, with the v1 sentence', () => {
+    expect(check(toolTrainRow(50, M, `<!-- ccrc-train v1\nmember #42 ${H}\nnot a member line\n-->\n`)))
+      .toBe(W('has a ccrc-train v1 block with a line that is not a member line'));
   });
 });
 
