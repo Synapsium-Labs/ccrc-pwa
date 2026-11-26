@@ -86,6 +86,8 @@ export interface NotBindingSite { readonly file: string; readonly text: string; 
 export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
   { file: 'server/src/coord/envelope.ts', text: 'designated.sessionId === m.toId',
     why: 'a mail\'s recipient against the designated Overlord\'s session, read once a mail sweep (the fixed-line table, Overlord W1 inbox): no run is read' },
+  { file: 'server/src/continuity/placeMark.ts', text: 'i.bound.sessionId !== i.frameSessionId',
+    why: 'a session socket frame\'s session against the designation row\'s bound session, for the place mark (`placeMarkDue`, Overlord W1 home B): the row\'s own column, no run is read' },
   { file: 'server/src/continuity/routes.ts', text: 'd.sessionId === id',
     why: 'the designation row\'s bound session against a timer door\'s caller or the operator read\'s session, for the designated term (`termOf`, Overlord W1 timers): the row\'s own columns, no run is read' },
   { file: 'server/src/coord/questions.ts', text: 'r.id === sessionId',
