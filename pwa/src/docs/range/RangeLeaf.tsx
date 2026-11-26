@@ -8,8 +8,8 @@ import { DocsAssetContext } from '../DocImage';
 import { ASSET_FAILED } from '../export/exportAssets';
 import { Button } from '@ccrc/ui';
 import {
-  DOCS_IMAGE_VIEW_MAX_PIXELS, DOCS_IMAGE_VIEW_MAX_SIDE, DOCS_RANGE_MAX_BYTES, docsRangePinText, sniffRaster, type DocContentClass,
-  type DocPin,
+  DOCS_IMAGE_VIEW_MAX_PIXELS, DOCS_IMAGE_VIEW_MAX_SIDE, DOCS_RANGE_MAX_BYTES, DOCS_RASTER_TYPES, docsRangePinText, sniffRaster,
+  type DocContentClass, type DocPin,
 } from '../../../../shared/docs';
 import { DOCS_RANGE_TEXT, DOCS_VIEW_TEXT, failureSentence, fillSentence, mib, slotSentence } from '../docsText';
 import { declaredRaster } from '../failures';
@@ -253,7 +253,7 @@ export function RangeImage(p: {
       hold?.report(ASSET_FAILED);
       return () => hold?.release();
     }
-    const mime = mimeOf(declared);
+    const mime = DOCS_RASTER_TYPES[declared].mime;
     const u = rasterObjectUrl(p.bytes, mime);
     setUrl(u);
     hold?.report({ s: 'loaded', asset: { kind: 'raster', bytes: p.bytes, mime } });
@@ -276,9 +276,3 @@ export function RangeImage(p: {
   // `msg-img` holds the image to the page's width (DocImage's own class); width and height are the aspect hint only.
   return url === null ? null : <div className="docs-raster"><img className="msg-img" src={url} alt={p.name} width={dims.w} height={dims.h} /></div>;
 }
-
-function mimeOf(t: NonNullable<ReturnType<typeof declaredRaster>>): Parameters<typeof rasterObjectUrl>[1] {
-  return RASTER_MIME[t];
-}
-
-const RASTER_MIME = { png: 'image/png', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' } as const;

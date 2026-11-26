@@ -7,6 +7,10 @@ import { CHECKS_ROW_PREFIX, CHECKS_SHADOW_ROW_PREFIX, mergingAtDetail, readCheck
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { NODE_ID_RE } from '../../../shared/agent-protocol.js';
 import { operatorMessageIdOf } from '../../../shared/operatorMessages.js';
+import {
+  docsSettingsFromStored, settingsWidening,
+  type DocsSettings, type DocsSettingsStored, type DocsSettingsStoreWrite,
+} from '../../../shared/docsTracker.js';
 import type { LandingIntentHold } from '../../../shared/landingIntents.js';
 import { tx } from './tx.js'; // D-5896: the primitive, not the db adapter
 import type { GoalsVersion, GoalsView, ItemAct, ItemActor, WrittenSource } from '../../../shared/ledgers.js';
@@ -2070,6 +2074,35 @@ export class CoordStore {
   private readonly lineageRunsWarned = new Set<number>();
   constructor(readonly db: DatabaseSync, private readonly landing: { landingJournal?: LandingJournalPort; onUnusableConnection?: () => never } = {}) {
     this.landingFence = landing.landingJournal === undefined ? null : 'replay';
+  }
+
+  readDocsSettings(): DocsSettingsStored {
+    try {
+      const statement = this.db.prepare('SELECT body, updatedAt FROM docs_settings WHERE id = 1');
+      statement.setReadBigInts(true);
+      const row = statement.get();
+      return row === undefined ? { kind: 'absent' } : { kind: 'row', body: row.body, updatedAt: row.updatedAt };
+    } catch (err) {
+      return { kind: 'unreadable', detail: err instanceof Error ? err.message : 'docs_settings read failed' };
+    }
+  }
+
+  /** Compare with the stored row, authorize a widening and persist in one synchronous transaction. */
+  writeDocsSettings(settings: DocsSettings, at: number, authorizeWidening: () => boolean): DocsSettingsStoreWrite {
+    try {
+      return tx(this.db, () => {
+        const before = docsSettingsFromStored(this.readDocsSettings());
+        if (!before.ok) return { kind: 'unreadable' };
+        if (settingsWidening(before.settings, settings) && !authorizeWidening()) return { kind: 'denied' };
+        this.db.prepare(`
+          INSERT INTO docs_settings (id, body, updatedAt) VALUES (1, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET body = excluded.body, updatedAt = excluded.updatedAt
+        `).run(JSON.stringify(settings), at);
+        return { kind: 'written' };
+      });
+    } catch {
+      return { kind: 'unreadable' };
+    }
   }
 
   // ── programs & runs ────────────────────────────────────────────────────────

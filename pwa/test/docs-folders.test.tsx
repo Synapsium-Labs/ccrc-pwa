@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import {
-  docsPageUrl, parseDocsPage,
+  DOCS_PDF_INLINE_MAX_BYTES, docsPageUrl, parseDocsPage,
   type DocsFolderEntry, type DocsFolderTreeOk, type DocsIndexOk, type DocsProjectsResponse,
 } from '../../shared/docs';
 import { DocsScreen } from '../src/screens/DocsScreen';
@@ -14,9 +14,10 @@ import {
   DOCS_FOLDER_TEXT, DOCS_HEAD_TEXT, DOCS_PAGE_INVALID_SENTENCE, DOCS_FAILURE_SENTENCE, DOCS_RANGE_TEXT, DOCS_VIEW_TEXT,
 } from '../src/docs/docsText';
 import { docsCrumbs, docsUpHref } from '../src/docs/DocsHead';
-import { folderActions, folderAskedAt, folderPathStale, folderReadPlan, folderTruthLine } from '../src/docs/folderPage';
+import { pdfOverInlineSentence } from '../src/docs/pdf/PdfLeaf';
+import { folderActions, folderAskedAt, folderPathStale, folderReadPlan, folderTruthLine, folderIndexSlot } from '../src/docs/folderPage';
 import type { DocsFolderLoaders } from '../src/docs/folderPage';
-import type { DocsAnswer } from '../src/docs/failures';
+import { DOCS_CAPS_UNKNOWN_RETRY_MS, type DocsAnswer } from '../src/docs/failures';
 import { ApiError } from '../src/lib/apiError';
 import { SETTINGS_CARDS } from '../src/fleet/settingsText';
 import { api } from '../src/lib/api';
@@ -205,6 +206,61 @@ describe('index: folders listed after projects', () => {
     expect(bodyText()).not.toContain(DOCS_FOLDER_TEXT.indexUnread);
   });
 
+  // Review 3816, carried to X2 P4: right after the agent reconnects the server answers `caps-unknown`; the projects read is
+  // read again after its wait, and the labels must be too, or an operator with folders sees no group until the next visit.
+  it('caps-unknown: the labels are read again after the same wait as the projects read, once per visit', async () => {
+    vi.useFakeTimers();
+    try {
+      let reads = 0;
+      const f = fakeFolders({
+        labels: async () => {
+          reads += 1;
+          return reads === 1 ? { s: 'failed', body: { ok: false, failure: 'caps-unknown' } } : ok({ ok: true as const, folders: [{ label: 'notes', state: 'ok' as const }] });
+        },
+      });
+      open('/docs', f);
+      const advance = (ms: number): Promise<void> => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+      await advance(10);
+      expect(reads).toBe(1);
+      expect(document.querySelector('.docs-folders')).toBeNull();
+      await advance(DOCS_CAPS_UNKNOWN_RETRY_MS - 100);
+      expect(reads, 'not before the wait').toBe(1);
+      await advance(200);
+      expect(reads).toBe(2);
+      expect(screen.getByText('~notes')).toBeTruthy();
+      // Step by step: React runs the effects a commit scheduled only when each `act` ends, so one long advance would never
+      // see a second timer that a re-read's answer set.
+      for (let i = 0; i < 6; i += 1) await advance(DOCS_CAPS_UNKNOWN_RETRY_MS + 100);
+      expect(reads, 'once per visit, never a loop').toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('caps-unknown: the wait is docsRetryPlan\'s, a body\'s own wait honoured; unsupported is never read again', () => {
+    const failed = (body: Record<string, unknown>): Parameters<typeof folderIndexSlot>[0] =>
+      ({ s: 'failed', body: { ok: false, ...body } }) as Parameters<typeof folderIndexSlot>[0];
+    expect(folderIndexSlot(failed({ failure: 'caps-unknown' }))).toEqual({ s: 'ok', rows: [], retryAfterMs: DOCS_CAPS_UNKNOWN_RETRY_MS });
+    expect(folderIndexSlot(failed({ failure: 'caps-unknown', retryAfterMs: 1200 }))).toEqual({ s: 'ok', rows: [], retryAfterMs: 1200 });
+    expect(folderIndexSlot(failed({ failure: 'unsupported' }))).toEqual({ s: 'ok', rows: [] });
+  });
+
+  it('caps-unknown twice: one re-read only, and nothing drawn', async () => {
+    vi.useFakeTimers();
+    try {
+      const f = fakeFolders({ labels: async () => ({ s: 'failed', body: { ok: false, failure: 'caps-unknown' } }) });
+      open('/docs', f);
+      const advance = (ms: number): Promise<void> => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+      // Step by step, as above: each answer's effects run when its `act` ends.
+      for (let i = 0; i < 6; i += 1) await advance(DOCS_CAPS_UNKNOWN_RETRY_MS + 100);
+      expect(f.calls.filter((c) => c === 'labels')).toHaveLength(2);
+      expect(document.querySelector('.docs-folders')).toBeNull();
+      expect(document.querySelector('.docs-folders-quiet')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('a real transient failure of the labels read keeps its one quiet line', async () => {
     const f = fakeFolders({ labels: async () => ({ s: 'failed', body: { ok: false, failure: 'helper-failed' } }) });
     open('/docs', f);
@@ -367,6 +423,42 @@ describe('folder page: truth line and actions', () => {
     expect(folderReadPlan(file('specs', 'x.png'))).toEqual({ mode: 'none', why: 'no-preview' });
   });
 
+  it('a folder PDF one byte over the inline ceiling reads only after Download is tapped', async () => {
+    const size = DOCS_PDF_INLINE_MAX_BYTES + 1;
+    const tree: DocsFolderTreeOk = { ...TREE, entries: [file('specs', 'large.pdf', { size, fp: null })] };
+    const f = fakeFolders({ tree: async () => ok({ ok: true as const, tree }) });
+    open('/docs/~notes/specs/large.pdf', f);
+    await screen.findByText(pdfOverInlineSentence(size));
+    expect(f.calls).toEqual(['tree']);
+    expect(document.querySelector('iframe')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: DOCS_VIEW_TEXT.download }));
+    await waitFor(() => expect(f.calls).toEqual(['tree', 'range-prepare']));
+  });
+
+  it('a small folder PDF saves its shown bytes as octet-stream on one Download tap', async () => {
+    const text = '%PDF-1.7\n%%EOF\n';
+    const tree: DocsFolderTreeOk = { ...TREE, entries: [file('specs', 'short.pdf', { size: text.length })] };
+    const f = fakeFolders({
+      tree: async () => ok({ ok: true as const, tree }),
+      file: async (_label, section, path) => ok({
+        ok: true as const, contentClass: 'pdf' as const,
+        show: {
+          v: 1 as const, verb: 'docs-folder-read' as const, ok: true as const, elapsedMs: 1, label: 'notes', source: 'folder' as const,
+          section, path, size: text.length, sha256: FP, fp: FP, mtimeNs: MTIME, encoding: 'base64' as const, b64: btoa(text),
+        },
+      }),
+    });
+    const createObjectURL = vi.fn((_blob: Blob) => 'blob:download');
+    vi.stubGlobal('URL', class extends URL { static createObjectURL = createObjectURL; static revokeObjectURL = vi.fn(); });
+    const downloads: string[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) { downloads.push(this.download); });
+    open('/docs/~notes/specs/short.pdf', f);
+    fireEvent.click(await screen.findByRole('button', { name: DOCS_VIEW_TEXT.download }));
+    expect(downloads).toEqual(['short.pdf']);
+    expect(createObjectURL.mock.calls.map(([b]) => [b.type, b.size])).toEqual([['application/octet-stream', text.length]]);
+    expect(f.calls).toEqual(['tree', 'file']);
+  });
+
   it('a large folder file reads through the folder range door (prepare), not the file door', async () => {
     const tree: DocsFolderTreeOk = { ...TREE, entries: [file('specs', 'big.md', { size: 3 * 1024 * 1024 })] };
     const f = fakeFolders({ tree: async () => ok({ ok: true as const, tree }) });
@@ -475,18 +567,27 @@ describe('folder leaf: rendered as a draft is, with the folder\'s own links', ()
     const f = fakeFolders({ tree: async () => { lists += 1; return ok({ ok: true as const, tree: lists === 1 ? TREE : later }); } });
     open('/docs/~notes/specs', f);
     await screen.findByText('a.md');
-    // Never shown, not even for one commit before the re-read: watch every change of the page.
+    // Never shown, not even for one commit before the re-read. The observer's callback runs after every commit inside
+    // `act()` has happened, and React reuses the paragraph and its one text node from the sentence to the loading line,
+    // so neither an added node's text nor a text node's text, read in the callback, is what that commit drew (review
+    // 3816 R1). What each record keeps is the text a change REPLACED: `characterDataOldValue` gives every text change its
+    // old value, so the sentence counts as drawn if any text node ever held it before a later commit changed it. A node
+    // that was added and then removed whole keeps the text it was removed with, so its text is checked as well.
     let seen = false;
-    // Each record's own added nodes, not the page's text when the callback runs (by then a later commit may have replaced it).
-    const watch = new MutationObserver((records) => {
+    const holds = (t: string | null | undefined): boolean => (t ?? '').includes(DOCS_FOLDER_TEXT.missing);
+    const check = (records: readonly MutationRecord[]): void => {
       for (const r of records) {
-        for (const n of r.addedNodes) if ((n.textContent ?? '').includes(DOCS_FOLDER_TEXT.missing)) seen = true;
-        if (r.type === 'characterData' && (r.target.textContent ?? '').includes(DOCS_FOLDER_TEXT.missing)) seen = true;
+        for (const n of r.addedNodes) if (holds(n.textContent)) seen = true;
+        for (const n of r.removedNodes) if (holds(n.textContent)) seen = true;
+        if (r.type === 'characterData' && holds(r.oldValue)) seen = true;
       }
-    });
-    watch.observe(document.body, { subtree: true, childList: true, characterData: true });
+    };
+    const watch = new MutationObserver(check);
+    watch.observe(document.body, { subtree: true, childList: true, characterData: true, characterDataOldValue: true });
     act(() => { navigate('/docs/~notes/specs/new.md'); });
     await screen.findByText('hello folder');
+    // Records not yet delivered are dropped by `disconnect()`: read them first.
+    check(watch.takeRecords());
     watch.disconnect();
     expect(seen, 'the sentence was drawn from the older listing').toBe(false);
     expect(lists).toBe(2);
@@ -540,7 +641,7 @@ describe('folder leaf: rendered as a draft is, with the folder\'s own links', ()
 });
 
 describe('settings: the Docs folders card sits on the Integrations section', () => {
-  it('rendering Settings › Integrations shows the Docs folders card, a level-3 card after the three that were there', async () => {
+  it('rendering Settings › Integrations shows Docs folders fourth and Docs settings fifth, both at level 3', async () => {
     const never = (): Promise<never> => new Promise(() => {});
     vi.stubGlobal('fetch', vi.fn((): Promise<never> => never()));
     for (const name of ['updates', 'stallWatch', 'collectLane', 'dispatchAbandon', 'testbox'] as const) {
@@ -553,7 +654,8 @@ describe('settings: the Docs folders card sits on the Integrations section', () 
     await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
     const levels = screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent);
     const card = SETTINGS_CARDS.integrations.docsFolders;
-    expect(levels).toEqual(['Linear', 'Project linking', 'GitHub', card.title]);
+    const settingsCard = SETTINGS_CARDS.integrations.docsSettings;
+    expect(levels).toEqual(['Linear', 'Project linking', 'GitHub', card.title, settingsCard.title]);
     const region = screen.getByRole('region', { name: card.title });
     expect(within(region).getByText(card.scope)).toBeTruthy();
     expect(within(region).getByText(card.purpose)).toBeTruthy();

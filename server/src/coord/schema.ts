@@ -4717,13 +4717,26 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 131: user_version 130 -> 131 ──────────────────────────────────────────
+  // X2 P4.3: one console-wide Docs settings row. No seed: absence means empty.
+  // RE-MEASURE the slot before merge (it must print 130 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE docs_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    body TEXT NOT NULL,
+    updatedAt INTEGER NOT NULL
+  );
+  `,
+
+  // ── 132: user_version 131 -> 132 ──────────────────────────────────────────
   // The Overlord's readiness word (spec §6.4, H20, C56, C57; plan `docs/superpowers/plans/2026-11-14-overlord-w1/
   // w1-readiness.md` Task 2): `overlord_readiness`, one row per change of word, stamped on `overlord_sequence` in its own
   // transaction, with `pushedAt` on an episode's first `dead` row; and `overlord_readiness_items`, which operator item the lane
   // raised for which cause and how it ended. ONE writer, `coord/overlordReadinessStore.ts`, called by the readiness lane alone.
   // The word is checked by the writer against `READINESS_WORDS`, never by SQL, so a new word is a row of the map. NEW TABLES
   // only: an older build opening a file at this entry's version takes rule 3 and never names them. The slot is the next free
-  // one by position on `main`; whoever lands second renumbers. RE-MEASURE the slot before merge (it must print 130 before this
+  // one by position on `main`; whoever lands second renumbers. RE-MEASURE the slot before merge (it must print 131 before this
   // entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
