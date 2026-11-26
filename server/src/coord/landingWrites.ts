@@ -1,5 +1,6 @@
-// L1, context C4 (landing order wave 5f). PURE: no clock, no fs, no store, no I/O; every import is a type
-// except the shared landing vocabulary's terminal map (D-9093). The
+// L1, context C4 (landing order wave 5f). PURE: no clock, no fs, no store, no I/O; every import is a type except
+// those from the shared landing vocabulary, `shared/landingLine.ts`, the one file the purity case admits a value
+// import from (D-9093; the wave 5j plan's section 13, C12). The
 // attributed landing writes' vocabulary and their ONE decision: `decideLandingMutation` reads the coherent facts the
 // store gathered inside its transaction and answers a refusal or the one mutation to journal. `CoordStore.
 // writeLandingAuthority` (L3) gathers, calls this, then appends and applies; nothing here acts.
@@ -50,8 +51,8 @@
 //   every release of a withdrawn hold, whoever the setter is (section 11 C1, D-9047).
 // Omitted `afterIds`/`fixesMain` keep the current value; `[]` and `false` are explicit clears.
 import type {
-  LandingBoundaryFailure, LandingEntry, LandingEntryState, LandingInfrastructureFailure, LandingLineFlags, LandingMutationCode, LandingNoticeOutcome,
-  LandingRecovery, LandingSubjectRef,
+  LandingBoundaryFailure, LandingEntry, LandingEntryState, LandingInfrastructureFailure, LandingLineFlags, LandingMutationCode,
+  LandingPauseAnswer, LandingRecovery, LandingSubjectRef, LandingWithdrawAnswer,
 } from '../../../shared/landingLine.js';
 import { LANDING_ENTRY_TERMINAL } from '../../../shared/landingLine.js';
 import type { LandingProjectionRead, LandingTerminalRepair } from './landingEntry.js';
@@ -106,14 +107,15 @@ export type LandingAuthorityWrite =
   | ({ ok: false } & LandingInfrastructureFailure)
   | { ok: false; error: LandingMutationCode | 'run-unreadable' };
 export type LandingReleased = { entryId: number; pr: number };
-/** The pause door's answer (wave 5j-b): `changed: false` with `seq: null` for a pause or resume that matched the flag. */
+/** The pause door's answer (wave 5j-b), its ok arm the shared `LandingPauseAnswer` (D-9107). */
 export type LandingPauseWrite =
-  | { ok: true; project: string; operatorPaused: boolean; changed: boolean; seq: number | null }
+  | ({ ok: true } & LandingPauseAnswer)
   | ({ ok: false } & LandingInfrastructureFailure)
   | { ok: false; error: LandingMutationCode };
-/** The withdraw door's answer (wave 5j-b): the entry after and before, the record's seq and what each notice did. */
+/** The withdraw door's answer (wave 5j-b), its ok arm the shared `LandingWithdrawAnswer` plus the run association the route
+ *  leaves off the wire (D-9107). */
 export type LandingWithdrawWrite =
-  | { ok: true; entry: LandingEntry; previous: LandingEntry; changed: true; seq: number; notices: LandingNoticeOutcome[]; coordinator: Coordinator }
+  | ({ ok: true; coordinator: Coordinator } & LandingWithdrawAnswer)
   | ({ ok: false } & LandingInfrastructureFailure)
   | { ok: false; error: LandingMutationCode | 'run-unreadable' };
 /** The writer's answer for one command arm, in `advanceLanding`'s `AdvanceLandingResultOf` style. */
