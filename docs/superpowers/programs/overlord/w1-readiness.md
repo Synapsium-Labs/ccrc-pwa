@@ -62,7 +62,7 @@ The plan's own slugs stand as written (questions 1 to 14, and `strand-cause-from
 - **`readiness-reads-only-on-coord-store`.** `CoordStore` gains read delegates only (`readinessNow`, `readinessChanges`,
   `restartsSince`, `liveGenerationOfIdentity`); the writers are called by the lane alone, so they get none.
 - **`account-failure-reads-the-stopfailure-classes`** (ruled yes, call 1319; a departure from the spec's Table 6.4a sentence
-  "only for `rate_limit`, `authentication_failed` or `billing_error`", which the coordinator amends on the ledger). The
+  "only for `rate_limit`, `authentication_failed` or `billing_error`"; the spec already carries the ruled sentence). The
   strand's `turn-failed` cause reads the stall watch's one classifier, `stopFailure.ts#stopFailureClass(err) === 'account'`,
   and the plan's L0 `ACCOUNT_FAILURE_ERRS` is not built. Measured list on `4fa87d73f8` (source: `STOP_FAILURE_ERRORS`, the
   hook's StopFailure arm records Claude Code's `error` cleaned to `[a-z_]`): `rate_limit`, `billing_error`,
@@ -83,7 +83,28 @@ The plan's own slugs stand as written (questions 1 to 14, and `strand-cause-from
 - **`readiness-settle-refused-writes-nothing`.** When the lane's settle finds the item already moved by the operator
   (dismissed or done), it writes nothing and answers `settled: false`; the next pass's reconcile closes the record as the
   operator's. No record is settled twice, and a dismissed item is closed, never settled.
-- **`readiness-item-levels`.** `stranded` is `blocking`; `count` and `hold` stand beside a running Overlord, so `later`.
+- **`readiness-item-levels`** (fix round 1, F2, ruled). What differs from the plan's question 9 is the `count` and `hold`
+  items only: they are `later`, not `soon`, because each stands beside a running Overlord (one account short of a spare, or
+  one account held out of its list) and nothing it does waits on them. The `stranded` item is the plan's `soon` with no label,
+  so it pushes nothing; no item of this piece is `blocking`, none takes a push-outbox reach, and the store imports nothing from
+  the push outbox. The one push of this piece is the dead push, once per episode.
+- **`restart-under-way-until-minted`** (fix round 1, F1). The plan's restart in progress counts only while the body is
+  `down`. `restartsSince` counts minted generations, and the generations lane mints on its own 30 s cadence while this lane
+  passes every 10 s, so from the body coming back up to its generation minting a third restart read below the bound,
+  broke the dead episode and pushed again. The lane now keeps its newest first `down` sighting within the hour after the body
+  is back up (`SubjectReadings.lastDownAt`, memory, never stored), and the decider counts the restart as under way until a
+  generation whose start is after that sighting is live, unless the generation is renewing (a renewal's own restart, which
+  is not counted). Why this and not holding the episode open: it keeps the rule in the count, where question 3 puts it, so
+  `dead` reads from the down sighting to the end of the hour with no other word between, and the episode break rule stays
+  one rule. The decider case "2 completed and the body up is not dead" stands unchanged, with no down sighting; new cases pin
+  the stretch, and a lane case runs down, up and not yet minted, minted, with one push.
+- **`readiness-ready-clock-per-binding`** (fix round 1, F10, ruled). The plan's `readySince` is the newest `ready` row of any
+  session. It is now the current binding's: `readinessNow` also answers that row's session, and the decider starts the deaf
+  clock only when it is the subject's, so a new Overlord that was never ready has no deaf clock from its predecessor. The row
+  already carries what tells bindings apart: every designation and rebind binds a new body with a session id of its own, and
+  a restart keeps it, so no schema change. `leftReadyAt` stays global, as the review found harmless.
+- **`readiness-read-is-the-lane-read`** (fix round 1, F13). The board's named read, the plan's `readinessRead()`, is built as
+  the lane's `read()` (`ReadinessLane.read`), which serves `servedReadiness`; the L0 comment says so.
 - **`readiness-item-detail-in-why`.** Each item's `how` is fixed per item and cause, as short steps; the one measured detail
   (the earliest reset, ccd's refusal, the failure word, ccd's reason, the count) closes its `why`. The earliest reset over
   the candidates is `unmeasured` when any candidate's reset is unreadable, and is written in UTC to the second. The hold item
@@ -112,15 +133,45 @@ to score otherwise). After: each mutant red in at least one case. Floor 1 for ea
 | Key | Mutants | Killed | The plan's mutants among them |
 |---|---|---|---|
 | `overlordReadiness.ts#overlordReadiness` | 14 | 14 | swap stranded and dialog-open, swap dialog-open and wedged; an unmeasured wedged or stranded read as the fault; the renewing guard on the third-restart clause; `>=` for the bound (and for the count); `not-built` read true (saturated, deaf's held half); proof equal to `leftReadyAt` |
-| `#readinessFactsOf` | 19 | 19 | drop the in-progress `+1`; add it while renewing; `limited` at the ceiling line read from one candidate, not all (the code has no chat line); an `absent` turn marker read as wedged; the deaf clock started with a null `readySince` |
+| `#readinessFactsOf` | 24 | 24 | drop the in-progress `+1`; add it while renewing; `limited` at the ceiling line read from one candidate, not all (the code has no chat line); an `absent` turn marker read as wedged; the deaf clock started with a null `readySince` |
 | `#readinessNotices` | 16 | 16 | push on a level; the count item raised under a `set-admits-none` strand; settle on an unmeasured cause (its guard is redundant behind row order, so the mutant reads an unmeasured word as measured); settle instead of close a dismissed item; raise on `absent` |
 | `#servedReadiness` | 9 | 9 | serve the stored word before the first pass; serve it past the limit |
+| `#readinessCountOf` (fix round 1, F8) | 4 | 4 | the unmeasured-candidate guard deleted (CO-1); every candidate counted; no list or an unmeasured list counting none |
 
 The extra mutants (37 of the 58) are listed by id in the set file. One extra (`FA-19`, an unproven generation read as proven)
 first survived; a generation-mapping case was added and it is now killed. The push and item-text deciders were mutated by
 hand while their tests were written (13 mutants, each red): the Restart action dropped, the bodies swapped, a constant dedupe
 key, every cause given one text, the detail sentence dropped, the hold's lane dropped, the count's plural, the latest reset
 for the earliest, the time cut to the minute, a reworded refusal, an L0 `how` replaced, the push url, a count step dropped.
+
+Fix round 1 adds the `readinessCountOf` key at floor 1 and five facts mutants: FA-20 the restart under way ends when the body
+is back up, FA-21 a sighting exactly an hour old no longer counts, FA-22 a generation started at the sighting reads minted,
+FA-23 a renewing generation counts once back up (F1), and FA-24 the ready clock of any session (F10). Three mutants were
+retargeted to the moved text, their meaning unchanged: FA-2 and FA-6 (the restart in progress) and NO-15 (a checking item
+is live, now over the ledger's own list). 67 mutants in all, every one killed.
+
+## Fix round 1 (review 3922, call 1438)
+
+Each fix ships with a case that is red without it, measured by putting the old line back, running, and restoring it.
+
+| Finding | Fix | Red without it |
+|---|---|---|
+| F1 | the restart under way until its generation mints (slug `restart-under-way-until-minted`) | the up half set to `false`: three decider cases and the lane sequence (down, up and not yet minted, minted: dead throughout, one push); the window made exclusive; the minted check made `>=`; `!renewing` dropped |
+| F2 | the stranded item `soon` with no label, no reach, no outbox import (slug `readiness-item-levels`, reworded) | the level put back to `blocking`: the store's level case and the lane's "no outbox row" case |
+| F3 | the boot flag set only once the first row is recorded | the flag set before the record: a refused first row, and a refused first stamp, each read a stored `ready` |
+| F4 | a pass token checked after the awaits | the check disabled: an overtaken pass held at the turn marker, and at the hook state, writes a row |
+| F5 | the item-state lists imported from `shared/ledgers.ts`; the unused closed-by list removed | NO-15, retargeted to the imported list, killed |
+| F6 | (tests only) down, up, down; dialog, none, dialog; nobody designated between sightings | each reset and each `clear` deleted alone |
+| F7 | (tests only) `overlord-readiness-wiring.test.ts`: the sweep passes the tick on a listed tick and a failed listing; text pins of the two calls, the sweep and the root's assignment | each call, the sweep's body and the assignment deleted |
+| F8 | `readinessCountOf` in a mutation set, floor 1 | CO-1 to CO-4, all killed |
+| F9 | the prune keeps an open dead episode's first row by the break rule, whatever the newest word | the keep list put back to the newest row's episode |
+| F10 | the ready clock is the current binding's (slug `readiness-ready-clock-per-binding`) | FA-24, and the decider case over a predecessor's ready row |
+| F11 | "Rows added" corrected: one row and one line ever with nobody designated; two a start with a designation; about fifteen producers a designated pass | (note) |
+| F12 | migration 131 everywhere; the spec-amendment sentence removed | (note) |
+| F13 | the L0 comment names the lane's `read()`; slug `readiness-read-is-the-lane-read` | (comment) |
+| F14 | an unreadable identity reads the generation and the restarts unmeasured | the fallback to the session id put back |
+| F15 | (test only) two passes within a day prune once, a pass a day later prunes again | the throttle removed, and made never to repeat |
+| F16 | the restart-count suite copies a migrated template, as its two siblings do | (setup only) |
 
 ## What runs from the merge
 
@@ -136,9 +187,11 @@ of a day past the prune.
   the item records. The change-of-word check runs inside `recordReadiness`'s `BEGIN IMMEDIATE`, which writes nothing and
   commits, so the write lock is taken once a pass. Held: 0.038 ms at the median, 0.63 ms at the worst of 364 transactions.
 - **A pass** takes 0.18 ms at the median and 0.39 ms at the 99th percentile.
-- **Rows added:** one `overlord_readiness` row and one `overlord_sequence` line per server start, while the word stays
-  `absent`; none per day after that. No `overlord_readiness_items` record, no `operator_items` row, no `push_outbox` row, and
-  no push.
+- **Rows added** (corrected in fix round 1, F11, as the review measured): with nobody designated, one `absent` row and one
+  `overlord_sequence` line ever, not one per start (a restart's pass answers the same `absent` and writes nothing), and none per
+  day. With a designation, each server start writes two rows and two sequence lines (the boot `unmeasured` row, then the
+  measured word), and a designated pass reads about fifteen producers, not five. No `overlord_readiness_items` record, no
+  `operator_items` row, no `push_outbox` row and no push before a designation.
 - **Nothing arms before a designation:** `overlord-readiness-route.test.ts`'s case "a lane over a fixture coord.db with nobody
   designated writes the absent word once, and raises no item and sends no push" fails if a pass with nobody designated writes
   a second row, a second sequence line, an item, an outbox row or a push. Mutated (a designation answered as a designated
@@ -147,5 +200,10 @@ of a day past the prune.
 ## Known limits
 
 - The holds port is `not-wired` until renewal readings PR H passes `accountHolds`: no hold item is raised before it.
-- The migration number (130) and the gate's route counts are provisional: both are settled at this pull request's last merge
+- The migration number (131) and the gate's route counts are provisional: both are settled at this pull request's last merge
   of `main` before the queue (the coordinators' rule, call 1369).
+- A crash restart whose generation mints in a new term is not counted: a new term starts a new chain of restarts, and only an
+  operator act raises the term (review 3922, recorded, not filed).
+- The dead push's Restart action reflects the episode's first row: a body that moves from `down` to `gone` inside one episode
+  updates the row in place with no new push, so the push can lack a Restart the door would now accept; the tap opens the place
+  either way (review 3922, by design).
