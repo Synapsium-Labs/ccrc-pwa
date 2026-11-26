@@ -21,7 +21,7 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, one-hundred-and-two rows, and nothing else; the
+#   * The route comes from ROUTES below, one-hundred-and-three rows, and nothing else; the
 #     four claimant rows name the question door family's template, their only
 #     door since the old ones were retired (D-7324), refused here, unsent, when a
 #     current cap file says the server lacks `questions-v1` (D-7328); `runs
@@ -108,7 +108,7 @@ SAFE_RE='^[A-Za-z0-9_-]+$'
 # (`/api/questions/<ask|approval>-{id}/<rule|release>`): from Q3j it was their
 # fifth field, sent only while the server advertised `questions-v1` (D-7325), and
 # since the old doors were retired it is their path (D-7324). Every row has four.
-# One-hundred-and-two rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
+# One-hundred-and-three rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
 # derives the count from the table below and reds if this line or the bullet at
 # the top of this file states a different one. The original rows were chosen on
 # 2026-08-26 by measuring the skill corpora; the standing executable-corpus
@@ -227,6 +227,11 @@ declare -A ROUTES=(
   # arming remote runs is the operator's act, from the Settings card.
   [testbox.status]='GET|/api/testbox|no|-'
   [testbox.tools-sync]='POST|/api/testbox/tools-sync|no|-'
+  # The box frames recipe's one read (Desktop polish wave 187; the capture owner's call 1558): one build's frames list with no
+  # text, or one frame's reduced text with `--frame`. It takes a session OR the box token. Its two query values are not
+  # SAFE_RE shapes (a build has dots, a frame id an `@`), so this row alone checks them against their own closed grammars,
+  # FRAMES_BUILD_RE and FRAMES_ID_RE below, before anything is sent, and sends the `@` percent-encoded.
+  [testbox.frames]='GET|/api/testbox/frames|no|build,frame'
   # The programme ledgers (plan PL3): the coordinator's side of the Waiting-on-you list and the Goals pin. All nine
   # are box-token gated and attribution-checked, and a coordinator may act only on its own programme's items and pin. The
   # `{id}` of the first, second and last three is the programme's slug (a `SAFE_RE` shape); of the four item-move rows, the
@@ -386,6 +391,12 @@ declare -A ROUTES=(
 # then one to nine digits. Every match also matches SAFE_RE; this is the narrower check on those rows, so `AAA12`,
 # `AAA-` and `search` are refused here, locally, as `bad-ref` (D-7685), and never sent. The server checks it again. The classes are spelled
 # out, never ranges, for the reason `_api_server_cap` gives: under a UTF-8 locale a range may collate non-ASCII letters.
+# The `testbox frames` row's two query values (Desktop polish wave 187): a Claude Code build (three dot-separated runs of
+# digits) and a box frame id (`<case>@<cols>x<rows>`, the case in lowercase letters, digits and hyphens). Narrower than any
+# URL character they might hold, no quote, `&`, `#`, `%` or space: refused here, locally, and checked again by the server.
+FRAMES_BUILD_RE='^[0123456789]{1,9}[.][0123456789]{1,9}[.][0123456789]{1,9}$'
+FRAMES_ID_RE='^[abcdefghijklmnopqrstuvwxyz0123456789-]{1,40}@[0123456789]{1,4}x[0123456789]{1,4}$'
+
 LINEAR_REF_RE='^[ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz][ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_]*-[0123456789]{1,9}$'
 
 # >>> D-8270 tmux socket lookup (copied byte for byte into each script that cannot source ccd: tmux-socket-census.test.ts)
@@ -1242,7 +1253,14 @@ main() {
         # sentinel is rejected before the membership test, never by it.
         [[ "$qkeys" != '-' && ",$qkeys," == *",$k,"* ]] \
           || refuse 'unknown-query' "$group $verb takes no --$k"
-        [[ "$v" =~ $SAFE_RE ]] || refuse 'bad-query' "--$k value is not a plain value"
+        if [[ "$key" == 'testbox.frames' && "$k" == 'build' ]]; then
+          [[ "$v" =~ $FRAMES_BUILD_RE ]] || refuse 'bad-query' "--build value is not a Claude Code build"
+        elif [[ "$key" == 'testbox.frames' && "$k" == 'frame' ]]; then
+          [[ "$v" =~ $FRAMES_ID_RE ]] || refuse 'bad-query' "--frame value is not a box frame id"
+          v="${v//@/%40}"
+        else
+          [[ "$v" =~ $SAFE_RE ]] || refuse 'bad-query' "--$k value is not a plain value"
+        fi
         if [[ "$key" == 'asks.list' && "$k" == 'parent' ]]; then
           ask_parent="$v"
         else

@@ -213,6 +213,8 @@ describe('the closed route table', () => {
     // The test box's two rows (test box plan TB9, D-7411, D-7554): its status block and the update lane's tools sync.
     [['testbox', 'status'], 'GET', '/api/testbox'],
     [['testbox', 'tools-sync'], 'POST', '/api/testbox/tools-sync'],
+    // The box frames recipe's one read (Desktop polish wave 187).
+    [['testbox', 'frames'], 'GET', '/api/testbox/frames'],
     // The programme ledgers' nine rows (plan PL3): items by programme slug, item moves by item id, Goals by slug.
     [['items', 'raise', 'prog-a'], 'POST', '/api/programmes/prog-a/items'],
     [['items', 'list', 'prog-a'], 'GET', '/api/programmes/prog-a/items'],
@@ -364,7 +366,8 @@ describe('the closed route table', () => {
     // ninety-five since `linking.confirm` (D-8809); ninety-eight since `quiz.confirm`, `quiz.live` and `quiz.status` (run 3212, the unattended quiz).
     // One hundred and one since `overlord.inbox`, `overlord.messages` and `overlord.acknowledge` (Overlord W1, the inbox piece).
     // One hundred and two since `overlord.history` (Overlord W1, PR B1, the history door).
-    expect(keys).toHaveLength(102);
+    // One hundred and three since `testbox.frames` (Desktop polish wave 187, the box frames read).
+    expect(keys).toHaveLength(103);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -379,7 +382,7 @@ describe('the closed route table', () => {
       43: 'forty-three', 44: 'forty-four', 45: 'forty-five', 46: 'forty-six', 47: 'forty-seven', 48: 'forty-eight',
       49: 'forty-nine', 50: 'fifty', 51: 'fifty-one', 52: 'fifty-two', 53: 'fifty-three', 54: 'fifty-four', 55: 'fifty-five',
       56: 'fifty-six', 57: 'fifty-seven', 58: 'fifty-eight', 59: 'fifty-nine', 60: 'sixty', 61: 'sixty-one', 62: 'sixty-two', 63: 'sixty-three', 64: 'sixty-four', 65: 'sixty-five', 66: 'sixty-six', 67: 'sixty-seven', 68: 'sixty-eight', 69: 'sixty-nine', 70: 'seventy', 71: 'seventy-one', 72: 'seventy-two', 73: 'seventy-three', 74: 'seventy-four', 75: 'seventy-five', 76: 'seventy-six', 77: 'seventy-seven', 78: 'seventy-eight',
-      79: 'seventy-nine', 80: 'eighty', 81: 'eighty-one', 82: 'eighty-two', 83: 'eighty-three', 84: 'eighty-four', 85: 'eighty-five', 86: 'eighty-six', 87: 'eighty-seven', 88: 'eighty-eight', 89: 'eighty-nine', 90: 'ninety', 91: 'ninety-one', 92: 'ninety-two', 93: 'ninety-three', 94: 'ninety-four', 95: 'ninety-five', 96: 'ninety-six', 97: 'ninety-seven', 98: 'ninety-eight', 99: 'ninety-nine', 100: 'one-hundred', 101: 'one-hundred-and-one', 102: 'one-hundred-and-two',
+      79: 'seventy-nine', 80: 'eighty', 81: 'eighty-one', 82: 'eighty-two', 83: 'eighty-three', 84: 'eighty-four', 85: 'eighty-five', 86: 'eighty-six', 87: 'eighty-seven', 88: 'eighty-eight', 89: 'eighty-nine', 90: 'ninety', 91: 'ninety-one', 92: 'ninety-two', 93: 'ninety-three', 94: 'ninety-four', 95: 'ninety-five', 96: 'ninety-six', 97: 'ninety-seven', 98: 'ninety-eight', 99: 'ninety-nine', 100: 'one-hundred', 101: 'one-hundred-and-one', 102: 'one-hundred-and-two', 103: 'one-hundred-and-three', 104: 'one-hundred-and-four', 105: 'one-hundred-and-five',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
@@ -539,7 +542,7 @@ describe('the four claimant rows send the question door family, and refuse local
       ['landing', 'entries', '--json', '-'], ['landing', 'order', '--json', '-'], ['asks', 'list'], ['feed', 'list'],
       ['coordinators', 'intent', 'set', '--session', 'demo-ws'], ['approvals', 'request', '--json', '-'],
       ['approvals', 'ruling', '41', '--nonce', '0123456789abcdef0123456789abcdef'], ['approvals', 'key'], ['approvals', 'show', '41'],
-      ['testbox', 'status'], ['testbox', 'tools-sync'], ['leases', 'retain', 'lease-7', '--json', '-'],
+      ['testbox', 'status'], ['testbox', 'tools-sync'], ['testbox', 'frames', '--build', '2.1.332'], ['leases', 'retain', 'lease-7', '--json', '-'],
       ['items', 'raise', 'prog-a', '--json', '-'], ['items', 'list', 'prog-a', '--byId', 'demo-ws', '--byUuid', 'u-demo-ws'],
       ['items', 'confirm', '7', '--json', '-'], ['items', 'return', '7', '--json', '-'], ['items', 'withdraw', '7', '--json', '-'],
       ['items', 'block', '7', '--json', '-'], ['goals', 'pin', 'prog-a', '--json', '-'], ['goals', 'modify', 'prog-a', '--json', '-'],
@@ -1333,6 +1336,24 @@ describe('a query key rides only if its row declared it', () => {
   it('the landing read carries its project', async () => {
     await run(['landing', 'show', '--project', 'project-a']);
     expect(seen[0]!.url).toBe('/api/landing?project=project-a');
+  });
+
+  // Desktop polish wave 187: the box frames read's two values are checked against their own closed grammars, never SAFE_RE.
+  it('the frames read carries a build and a frame id, the @ percent-encoded', async () => {
+    await run(['testbox', 'frames', '--build', '2.1.332', '--frame', 'rows-3@220x50']);
+    expect(seen[0]!.url).toBe('/api/testbox/frames?build=2.1.332&frame=rows-3%40220x50');
+  });
+  it.each([
+    ['--build', 'latest'], ['--build', '2.1.332&x=1'], ['--build', '2.1'], ['--frame', 'rows-3'], ['--frame', 'Rows@220x50'], ['--frame', 'rows-3@220x50#x'],
+  ])('the frames read refuses %s %s locally, unsent', async (k, v) => {
+    const r = await run(['testbox', 'frames', '--build', '2.1.332', k, v]);
+    expect(seen).toHaveLength(0);
+    expect(r.stdout).toContain('bad-query');
+  });
+  it('another row keeps SAFE_RE: a dot in its value is refused', async () => {
+    const r = await run(['landing', 'show', '--project', 'a.b']);
+    expect(seen).toHaveLength(0);
+    expect(r.stdout).toContain('bad-query');
   });
 
   it('the landing read carries its pr', async () => {
