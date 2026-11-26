@@ -40,9 +40,19 @@ const input = (over: Partial<PdfDocumentInput> = {}): PdfDocumentInput => ({
 
 /** The text of every `<script>` element of `page`, in order, with its type attribute ('' for a classic script). */
 function scriptsOf(page: string): { type: string; text: string }[] {
-  return [...page.matchAll(/<script(?: type="([^"]*)")?(?: id="[^"]*")?>([\s\S]*?)<\/script>/g)]
-    .map((m) => ({ type: m[1] ?? '', text: m[2] ?? '' }));
+  // Inspect the fixture in a detached HTML document; its scripts are not run.
+  const doc = new DOMParser().parseFromString(page, 'text/html');
+  return Array.from(doc.scripts, (script) => ({ type: script.type, text: script.text }));
 }
+
+it('reads fixture scripts in document order regardless of tag and attribute spelling', () => {
+  const page = '<SCRIPT TYPE=application/json id="seed">{"ready":true}</SCRIPT>'
+    + '<script id="boot" data-part="2">globalThis.boot();</script>';
+  expect(scriptsOf(page)).toEqual([
+    { type: 'application/json', text: '{"ready":true}' },
+    { type: '', text: 'globalThis.boot();' },
+  ]);
+});
 
 it('pdf frame: the opening status can paint before even a warm frame mounts', async () => {
   const frames: FrameRequestCallback[] = [];
