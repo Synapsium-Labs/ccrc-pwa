@@ -41,9 +41,12 @@ import { redactCommand } from './redact.js';
 import { REVIEW_CAP_SUMMARY_MAX, cutWhole, reviewCapRefuses, reviewCapStatus } from './reviewcap.js';
 import { linkTeamAuto, linkTeamOverlord, linkingAll, linkingOf, recordReading, recordTeamCandidates, recordTeamSuggestion, setLinking } from './linkingStore.js';
 import * as builds from './claudeBuildsStore.js';
+import * as deliveries from './claudeBuildDeliveriesStore.js';
 import * as limitSamples from './limitSamplesStore.js';
 import type { LimitSample } from '../poolRunway.js';
 import type { BuildCaptureResult, BuildCaptureTry, ClaudeBuildRecord } from '../../../shared/claudeBuildTrust.js';
+import type { DeliveryRow } from '../../../shared/deliveryLane.js';
+import type { DeliveryCaptureResult, DeliveryNotSent } from '../../../shared/deliveryResult.js';
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking.js';
 import { openPracticeCase, practiceCaseNewest, type PracticeCaseNewestRead, type PracticeCaseOpen } from './practiceCasesStore.js';
 import type { CaseDue } from './practiceCases.js';
@@ -6641,6 +6644,15 @@ export class CoordStore {
   recordClaudeBuildVerdict(r: BuildCaptureResult, now: number): boolean { return builds.recordClaudeBuildVerdict(this.db, r, now); }
   /** The operator's **Capture again** on a failed build. */
   requeueClaudeBuild(build: string, opts?: builds.ClaudeBuildRequeueOptions): builds.ClaudeBuildRequeue { return builds.requeueClaudeBuild(this.db, build, opts); }
+
+  // ── the paste delivery recipe's results (Desktop polish wave 178; `coord/claudeBuildDeliveriesStore.ts`) ──
+
+  /** Every `claude_build_deliveries` row, newest build first, by part. Throws when the table cannot be read. */
+  claudeBuildDeliveries(): DeliveryRow[] { return deliveries.claudeBuildDeliveries(this.db); }
+  /** The capture lane tried one part: a job went out, or why none could. Never touches `claude_builds`. */
+  markDeliveryAttempt(build: string, part: number, now: number, tried: 'sent' | DeliveryNotSent): boolean { return deliveries.markDeliveryAttempt(this.db, build, part, now, tried); }
+  /** One part's current result (the caller has judged it current), replacing an older version's. */
+  recordDelivery(r: DeliveryCaptureResult, now: number): boolean { return deliveries.recordDelivery(this.db, r, now); }
 
   // ── stall watch settings (design 2026-10-05 §8, §11) ───────────────────────
 

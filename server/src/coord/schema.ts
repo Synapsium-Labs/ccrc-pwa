@@ -4685,6 +4685,36 @@ export const MIGRATIONS: readonly string[] = [
     WHERE resolvedAt IS NULL;
   INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('invariants', 'shadow', 0);
   `,
+
+  // ── 130: user_version 129 -> 130 ──────────────────────────────────────────
+  // The paste delivery recipe's capture lane (Desktop polish wave 178; task note docs/superpowers/programs/desktop-polish/
+  // paste-delivery.md section 7): `claude_build_deliveries`, one row per (build, part), the recipe's results beside the trust
+  // table and never in it. `claude_builds` is NOT altered, and a delivery result never writes a trust row. ONE writer, the
+  // capture lane, through `coord/claudeBuildDeliveriesStore.ts`'s `markDeliveryAttempt` and `recordDelivery` (`CoordStore`
+  // keeps the delegates). `result` is the result's JSON, written only from a result the one reader accepted and the recipe
+  // judged current; `version`, `word`, `result` and `at` are set together, and null on a row that holds attempts only.
+  // A NEW TABLE only: an older build opening a file at this entry's version takes rule 3 (it warns, reads as-is and migrates
+  // nothing) and never names it. The slot is the next free one by position on `main`; whoever lands second renumbers.
+  // `release` is the release tag of the test box that ran the stored result (the result's own `release`, review 3882 F5, the
+  // coordinator's ruling), null when that box could not read it.
+  // RE-MEASURE the slot before merge (it must print 129, the count before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE claude_build_deliveries (
+    build         TEXT    NOT NULL,
+    part          INTEGER NOT NULL CHECK (part >= 0),
+    version       TEXT,
+    release       TEXT,
+    word          TEXT,
+    result        TEXT,
+    at            INTEGER,
+    attempts      INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    lastAttemptAt INTEGER,
+    notSent       TEXT,
+    PRIMARY KEY (build, part)
+  );
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
