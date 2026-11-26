@@ -11,9 +11,10 @@
 //   CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/landing-line.browser.test.ts
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from 'playwright-core';
-import { INSTRUMENT, REFINED } from '@ccrc/ui';
+import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
 import { openApp, serveDist, sharedDist, type AppFixture, type DistServer, type OpenedApp } from './app';
+import { expectStampedTheme } from './stampedTheme';
 import { GROUP_MODE_KEY } from '../src/skins/instrument/FleetTable';
 
 const NOW = Date.now();
@@ -106,6 +107,7 @@ async function open(skin: string, theme: string, width: number, c: Line): Promis
   }, [GROUP_MODE_KEY] as const);
   await routeLine(opened.ctx, c);
   await opened.page.goto(server!.origin + '/fleet');
+  await expectStampedTheme(opened.page, theme);
   await opened.page.waitForSelector('section.landing-line', { timeout: 20_000 });
   await opened.page.evaluate(async () => { await document.fonts.ready; });
   return opened;
@@ -136,7 +138,7 @@ const NOTICE = { word: 'landing-withdrawn', entryId: 1004, kind: 'queued', toId:
 
 const WIDTHS = [360, 390, 1280, 1470, 1920];
 for (const skin of [REFINED, INSTRUMENT]) {
-  for (const theme of ['light', 'dark']) {
+  for (const theme of ['light', PHOSPHOR]) {
     describe(`the landing line, ${skin} ${theme}`, () => {
       for (const width of WIDTHS) {
         it(`at ${width}px: the line as read, its fit, the pause round trip, Cancel's and Done's focus`, async () => {
