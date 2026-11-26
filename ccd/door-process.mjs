@@ -240,11 +240,12 @@ const BASE_TOOLS = [
 export const readableDoorRow = (row) => row.reader === true && row.fenced === false && row.class === 'view';
 
 /** THE READ TOOL (plan Task 7 "The read tool", question 9): the one door a reader (a subagent, whose only tool is `mcp__door__read`)
- *  may use. `door` is an enum of the rows `readableDoorRow` admits, and the call runs THAT row's argv builder and body, so it never
- *  serves a row the predicate refuses. It has no verb of its own. Board B2 marks `board` and `history` (call 1590: both unfenced
- *  views); a row marked but fenced is in no enum and every call to it refuses. */
+ *  may use. `door` is an enum of the rows marked `reader: true`, and the call runs THAT row's argv builder and body only when
+ *  `readableDoorRow` admits it, so it never serves an unmarked, fenced or non-view row. It has no verb of its own. Board B2 marks
+ *  `board` and `history` (call 1590: both unfenced views), and `door-tools.test.ts`'s readers' census holds every marked row
+ *  readable. */
 export function readToolOver(rows) {
-  const names = rows.filter(readableDoorRow).map((r) => r.name);
+  const names = rows.filter((r) => r.reader === true).map((r) => r.name);
   const readerOf = (i) => {
     need(typeof i.door === 'string', 'door is the name of a readable door');
     const row = rows.find((r) => r.reader === true && r.name === i.door);

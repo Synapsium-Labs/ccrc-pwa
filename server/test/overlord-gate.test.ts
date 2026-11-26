@@ -24,13 +24,29 @@ describe('the door table the gate reads', () => {
   // The W1 inbox piece's three doors are of class `other` too (every step runs), and its two reads are fenced, as the card's
   // recording page is (the inbox plan's question 15).
   // The history door (W1 PR B1) is a fenced read of class `other` too.
-  it('every Overlord row but the team link (D-8809), the inbox piece\'s three and the history door is a start door today, and the fenced reads are the card recording page, the inbox\'s two and the history door', () => {
+  // Board B2 (call 1590): the history door is no longer fenced, and the board joins as an unfenced read of class `other`. The title
+  // names every row the `notStart` set holds (review 3978 F5: it had left out the sequence and the three timer doors).
+  it('every Overlord row but the team link (D-8809), the inbox piece\'s three, the history door, the sequence and board reads and the three timer doors is a start door today, and the fenced reads are the card recording page and the inbox\'s two', () => {
     expect(GATE_DOOR_KEYS.length).toBeGreaterThan(0);
     // The Overlord's timers (W1): the three timer doors are of class `other` too, and name no act kind.
-    const notStart = new Set(['link-team', 'inbox', 'messages', 'acknowledge', 'history', 'sequence', 'timer-set', 'timer-list', 'timer-cancel']);
+    const notStart = new Set(['link-team', 'inbox', 'messages', 'acknowledge', 'history', 'sequence', 'board', 'timer-set', 'timer-list', 'timer-cancel']);
     for (const k of GATE_DOOR_KEYS) expect(isStart(OVERLORD_DOORS[k] as never), k).toBe(!notStart.has(k));
     const reads = GATE_DOOR_KEYS.filter((k) => { const r = doorRow(k) as { write: boolean; act: string }; return r.write && r.act === 'read'; });
-    expect(reads).toEqual(['card-record', 'inbox', 'messages', 'history']);
+    expect(reads).toEqual(['card-record', 'inbox', 'messages']);
+  });
+  // Board B2 (call 1590, ruling point 6): a reader's call never passes a fenced row directly. It carries no act key (the read tool
+  // runs unfenced), and its hook report is a reader-scope witness; each alone refuses at every fenced read row.
+  it('a call with no act key, or with only a reader-scope witness, refuses at every fenced read row', () => {
+    const fenced = GATE_DOOR_KEYS.filter((k) => { const r = doorRow(k) as { group: string; write: boolean; act: string }; return r.group === 'overlord' && r.write && r.act === 'read'; });
+    expect(fenced.length).toBeGreaterThan(0);
+    for (const k of fenced) {
+      const door = doorRow(k) as never;
+      const pass = passFacts(door) as unknown as { fence: { facts: unknown } };
+      const noKey = gate.overlordGate(passFacts(door, { fence: { presented: { generation: null, counter: null, key: false }, facts: pass.fence.facts } }));
+      expect(noKey, `${k}: no act key`).toMatchObject({ kind: 'refuse', word: 'stale-generation' });
+      const readerWitness = gate.overlordGate(passFacts(door, { witness: { kind: 'unwitnessed', why: 'reader-scope' } }));
+      expect(readerWitness, `${k}: a reader's witness`).toMatchObject({ kind: 'refuse', word: 'unwitnessed' });
+    }
   });
   it('a passing fact set passes at every row', () => {
     for (const k of GATE_DOOR_KEYS) expect(gate.overlordGate(passFacts(doorRow(k) as never)), k).toEqual({ kind: 'pass' });

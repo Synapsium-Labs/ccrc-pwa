@@ -296,15 +296,21 @@ describe('the door process: the claim and the fence', () => {
     for (const e of log()) expect(e.wit === 'cd'.repeat(32), `${e.verb} inherited the stale key`).toBe(false);
   });
 
-  it('read refuses every door while none is marked a reader, answers that none is readable, and runs nothing', async () => {
+  // Board B2 (call 1590): board and history are the readers' doors. Every other door, the fenced card and messages included, is
+  // refused by the read tool before anything runs; a readable door runs its own row, unfenced (no key, no counter).
+  it('read refuses every door that is not a reader\'s, and runs nothing; the board runs unfenced through it', async () => {
     const p = new Proc();
     const before = log().length;
-    for (const input of [{ door: 'card' }, { door: 'messages', args: {} }, { door: 'note_list' }, {}]) {
+    for (const input of [{ door: 'card' }, { door: 'messages', args: {} }, { door: 'note_list' }, { door: 'inbox' }, {}]) {
       const r = await p.call('read', input);
       expect(r.isError, JSON.stringify(input)).toBe(true);
-      expect(r.text).toMatch(/no door is readable yet|door is the name of a readable door/);
+      expect(r.text).toMatch(/not a readable door|door is the name of a readable door/);
     }
     expect(log().filter((e) => e.verb !== 'whoami' && e.verb !== 'delta').length - before).toBe(0);
+    await p.call('read', { door: 'board' });
+    const boards = log().slice(before).filter((e) => e.verb !== 'whoami' && e.verb !== 'delta');
+    expect(boards).toHaveLength(1);
+    expect([boards[0]!.argv, boards[0]!.key, boards[0]!.counter]).toEqual([['overlord', 'board'], null, null]);
   });
 
   it('read serves a row marked reader as that row\'s own argv and body, and never an unmarked, fenced or non-view one (a table with readers, in-process)', () => {

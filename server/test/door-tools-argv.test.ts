@@ -252,15 +252,51 @@ describe('every DOOR_TOOLS row, through the real ccrc-api, reaches its route', (
     expect(seen).toEqual([]);
   });
 
-  it('read: with no row marked a reader, every input is refused by the row\'s own argv builder, so nothing is run or sent', () => {
-    for (const input of [{ door: 'card' }, { door: 'note_list', args: {} }, { door: 'messages' }, {}, { door: 5 }]) {
-      expect(() => row('read').argv(input, ID), JSON.stringify(input)).toThrow(/no door is readable yet|door is the name/);
-    }
+  it('board: GET /api/overlord/board with the pane\'s pair in the query, no body', async () => {
+    const r = await door('board', {});
+    expect(r.status, r.stderr).toBe(0);
+    const s = arrived('overlord.board');
+    expect(q(s.url)).toEqual(PAIR);
+    expect(s.body).toBe('');
+  });
+
+  it('history: POST /api/overlord/history with the verb, one target, the flag and the words in the body, the pane\'s pair last', async () => {
+    const r = await door('history', { verb: 'search', project: 'project-a', agents: true, args: ['deploy failed', '--since'] });
+    expect(r.status, r.stderr).toBe(0);
+    const s = arrived('overlord.history');
+    expect(JSON.parse(s.body)).toEqual({ verb: 'search', target: { kind: 'project', project: 'project-a' }, agents: true, args: ['deploy failed', '--since'], ...PAIR });
+    seen = [];
+    expect((await door('history', { verb: 'describe', all: true })).status).toBe(0);
+    expect(JSON.parse(arrived('overlord.history').body)).toEqual({ verb: 'describe', target: { kind: 'all' }, agents: false, args: [], ...PAIR });
+  });
+
+  it('history refuses a bad verb, no target or two, and an argument that names a head flag, before anything runs', () => {
+    const bad: [unknown, RegExp][] = [
+      [{ all: true }, /verb is one of/], [{ verb: 'grep', all: true }, /verb is one of/],
+      [{ verb: 'search' }, /exactly one target/], [{ verb: 'search', all: true, project: 'project-a' }, /exactly one target/],
+      [{ verb: 'search', all: false }, /exactly one target/], [{ verb: 'search', project: '' }, /project is a project name/],
+      [{ verb: 'search', all: true, args: ['--agents'] }, /may not be --all/], [{ verb: 'search', all: true, args: ['--project'] }, /may not be --all/],
+      [{ verb: 'search', all: true, args: 'x' }, /args is a list of strings/], [{ verb: 'search', all: true, agents: 'yes' }, /agents is true or false/],
+    ];
+    for (const [input, why] of bad) expect(() => row('history').argv(input, ID), JSON.stringify(input)).toThrow(why);
     expect(seen).toEqual([]);
   });
 
+  it('read: board and history run their own row\'s builder; every other door, fenced ones included, is refused before anything runs (call 1590)', async () => {
+    expect(row('read').argv({ door: 'board' }, ID)).toEqual(row('board').argv({}, ID));
+    expect(row('read').argv({ door: 'history', args: { verb: 'search', all: true, args: ['x'] } }, ID))
+      .toEqual(['overlord', 'history', 'search', '--all', 'x']);
+    // Ruling point 6, through the read tool: a reader's call to a fenced row, or to any row not marked, never runs.
+    for (const input of [{ door: 'card' }, { door: 'inbox' }, { door: 'messages' }, { door: 'acknowledge' }, { door: 'note_list', args: {} }, { door: 'sequence' }, {}, { door: 5 }]) {
+      expect(() => row('read').argv(input, ID), JSON.stringify(input)).toThrow(/not a readable door|door is the name/);
+    }
+    const r = await door('read', { door: 'board' });
+    expect(r.status, r.stderr).toBe(0);
+    expect(q(arrived('overlord.board').url)).toEqual(PAIR);
+  });
+
   it('covers every row of the table', () => {
-    const covered = ['card', 'probe', 'probe_answer', 'note_add', 'note_close', 'note_list', 'note_handover', 'timer_set', 'timer_list', 'timer_cancel', 'inbox', 'messages', 'acknowledge', 'sequence', 'link_team', 'read'];
+    const covered = ['card', 'probe', 'probe_answer', 'note_add', 'note_close', 'note_list', 'note_handover', 'timer_set', 'timer_list', 'timer_cancel', 'inbox', 'messages', 'acknowledge', 'sequence', 'board', 'history', 'link_team', 'read'];
     expect(ROWS.map((r) => r.name)).toEqual(covered);
   });
 });

@@ -5,8 +5,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   DOOR_TOOLS, DOOR_TOOL_PREFIX as PROGRAM_PREFIX, DOOR_ONLY_TOOLS, ATTRIBUTION_FIELDS, CLAIM_RETRY_MIN_MS, CLAIM_RETRY_MAX_MS, DELTA_REFRESH_MS, DELTA_LEASE_MS, TEAM_KEY_SHAPE,
-  SEQUENCE_PAGE_MAX as PROGRAM_PAGE_MAX,
+  SEQUENCE_PAGE_MAX as PROGRAM_PAGE_MAX, HISTORY_VERBS as PROGRAM_HISTORY_VERBS, readToolOver, readableDoorRow,
 } from '../../ccd/door-process.mjs';
+import { HISTORY_VERBS } from '../../shared/overlordHistory.js';
+import { OVERLORD_DOORS } from '../src/coord/overlordDoors.js';
 import { SEQUENCE_PAGE_MAX } from '../../shared/overlord-sequence.js';
 import * as shared from '../../shared/continuity-door.js';
 import { DOOR_TOOL_PREFIX, DOOR_TOOL_NAME_RE } from '../../shared/continuity-reports.js';
@@ -46,10 +48,10 @@ const keysOf = (v: unknown): string[] => {
 };
 
 describe('DOOR_TOOLS', () => {
-  it('has sixteen uniquely named rows, the readers\' `read` last', () => {
+  it('has eighteen uniquely named rows, the readers\' `read` last', () => {
     // D-8809: `link_team`, the Overlord's confirm of a team candidate. The inbox piece (Overlord W1): `inbox`, `messages`
-    // and `acknowledge`. Sequence C (Overlord W1): `sequence`, the cursor read.
-    expect(ROWS.map((r) => r.name)).toEqual(['card', 'probe', 'probe_answer', 'note_add', 'note_close', 'note_list', 'note_handover', 'timer_set', 'timer_list', 'timer_cancel', 'inbox', 'messages', 'acknowledge', 'sequence', 'link_team', 'read']);
+    // and `acknowledge`. Sequence C (Overlord W1): `sequence`, the cursor read. Board B2: `board` and `history`.
+    expect(ROWS.map((r) => r.name)).toEqual(['card', 'probe', 'probe_answer', 'note_add', 'note_close', 'note_list', 'note_handover', 'timer_set', 'timer_list', 'timer_cancel', 'inbox', 'messages', 'acknowledge', 'sequence', 'board', 'history', 'link_team', 'read']);
   });
 
   it('every name is a legal tool name after the hook\'s prefix, and the prefix is the L0 constant', () => {
@@ -87,12 +89,11 @@ describe('DOOR_TOOLS', () => {
     expect(TEAM_KEY_SHAPE.flags).toBe(LINEAR_TEAM_KEY_SHAPE.flags);
   });
 
-  it('reader is true on no row in B1, so the read tool\'s enum is empty', () => {
-    expect(ROWS.filter((r) => r.reader)).toEqual([]);
+  it('the readers\' doors are board and history (question 9, call 1590), and the read tool\'s enum names exactly them', () => {
+    expect(ROWS.filter((r) => r.reader).map((r) => r.name)).toEqual([...READABLE_DOORS]);
     const read = ROWS.find((r) => r.name === 'read')!;
-    expect(read.class).toBe('view');
-    expect(read.fenced).toBe(false);
-    expect(JSON.stringify(read.input)).not.toContain('"enum"');
+    expect([read.class, read.fenced, read.reader]).toEqual(['view', false, false]);
+    expect(read.input).toMatchObject({ properties: { door: { type: 'string', enum: [...READABLE_DOORS] } } });
   });
 
   // The fenced view rows are those whose Overlord door row is a write (`door-tools-argv.test.ts` derives it from the door
@@ -100,7 +101,20 @@ describe('DOOR_TOOLS', () => {
   it('card, inbox and messages are the view rows that are fenced, and every operate row is fenced', () => {
     expect(ROWS.filter((r) => r.class === 'view' && r.fenced).map((r) => r.name)).toEqual(['card', 'inbox', 'messages']);
     expect(ROWS.filter((r) => r.class === 'operate' && !r.fenced).map((r) => r.name)).toEqual([]);
-    expect(ROWS.filter((r) => r.class === 'view' && !r.fenced).map((r) => r.name).sort()).toEqual(['note_list', 'probe', 'read', 'sequence', 'timer_list']);
+    expect(ROWS.filter((r) => r.class === 'view' && !r.fenced).map((r) => r.name).sort()).toEqual(['board', 'history', 'note_list', 'probe', 'read', 'sequence', 'timer_list']);
+  });
+
+  it('the board row: a view, unfenced (its door row is not a write, call 1590), a reader\'s door, no input', () => {
+    const r = ROWS.find((x) => x.name === 'board')!;
+    expect([r.verb, r.class, r.fenced, r.reader]).toEqual(['overlord.board', 'view', false, true]);
+    expect(r.input).toMatchObject({ type: 'object', additionalProperties: false, required: [], properties: {} });
+  });
+
+  it('the history row: a view, unfenced (call 1590), a reader\'s door; its verbs are shared/overlordHistory.ts\'s', () => {
+    const r = ROWS.find((x) => x.name === 'history')!;
+    expect([r.verb, r.class, r.fenced, r.reader]).toEqual(['overlord.history', 'view', false, true]);
+    expect([...PROGRAM_HISTORY_VERBS]).toEqual([...HISTORY_VERBS]);
+    expect(r.input).toMatchObject({ type: 'object', additionalProperties: false, required: ['verb'], properties: { verb: { enum: [...HISTORY_VERBS] } } });
   });
 
   it('the sequence row: a view, unfenced (its door row is not a write), never a reader\'s door, its page bound shared/overlord-sequence.ts\'s', () => {
@@ -129,5 +143,67 @@ describe('DOOR_TOOLS', () => {
     expect(DELTA_LEASE_MS).toBe(shared.DELTA_LEASE_MS);
     const hook = fs.readFileSync(path.join(ROOT, 'ccd/session-hook.sh'), 'utf8');
     expect(/^DOOR_DELTA_MAX_BYTES=(\d+)$/m.exec(hook)?.[1]).toBe(String(shared.DELTA_MAX_BYTES));
+  });
+});
+
+// THE READERS' CENSUS (board B2, call 1590, ruling point 5): every row marked reader is a view the read tool admits (unfenced), its
+// route's Overlord door row is not a write, the marked rows are exactly `READABLE_DOORS`, and the read tool's enum is exactly
+// them. A function over the tables passed in, so each mutant below reds a named check on a synthetic table, and the real
+// tables read clean. The read tool is rebuilt from the rows through the door process's own `readToolOver`, and admission is
+// asked of its own `readableDoorRow`, never a copy of their conditions.
+const READABLE_DOORS = ['board', 'history'] as const;
+type DoorLike = { group: string; method: string; path: string; write: boolean };
+/** Each client row's method and path, from ccrc-api's ROUTES (`[key]='METHOD|/path|…'`). */
+function clientRoutes(): Map<string, { method: string; path: string }> {
+  const text = fs.readFileSync(path.join(ROOT, 'ccd/ccrc-api'), 'utf8');
+  const start = text.indexOf('declare -A ROUTES=(');
+  const block = text.slice(start, text.indexOf('\n)\n', start));
+  return new Map([...block.matchAll(/^\s+\[([A-Za-z0-9_.-]+)\]='([A-Z]+)\|([^|]+)\|/gm)].map((m) => [m[1]!, { method: m[2]!, path: m[3]!.replace(/\{id\}/g, ':id') }]));
+}
+function readerCensus(rows: readonly Row[], doors: readonly DoorLike[], routes: ReadonlyMap<string, { method: string; path: string }>): string[] {
+  const out: string[] = [];
+  const marked = rows.filter((r) => r.reader === true);
+  for (const r of marked) {
+    if (r.class !== 'view') out.push(`${r.name}: a ${r.class} row marked reader`);
+    if (!readableDoorRow(r)) out.push(`${r.name}: marked reader but the read tool does not admit it (a fenced row)`);
+    const rt = r.verb === null ? undefined : routes.get(r.verb);
+    const ds = rt === undefined ? [] : doors.filter((d) => d.group === 'overlord' && d.method === rt.method && d.path === rt.path);
+    if (ds.length === 0) out.push(`${r.name}: marked reader but its route has no Overlord door row`);
+    if (ds.some((d) => d.write)) out.push(`${r.name}: marked reader but its door row is a write`);
+  }
+  const names = marked.map((r) => r.name);
+  if (JSON.stringify(names) !== JSON.stringify([...READABLE_DOORS])) out.push(`the rows marked reader are ${names.join(', ') || 'none'}, not ${READABLE_DOORS.join(', ')}`);
+  const read = readToolOver(rows.filter((r) => r.name !== 'read')) as unknown as { input: { properties: { door: { enum?: string[] } } } };
+  if (JSON.stringify(read.input.properties.door.enum ?? []) !== JSON.stringify(names)) out.push("the read tool's enum is not exactly the rows marked reader");
+  return out;
+}
+
+describe('the readers\' census (board B2, call 1590): both directions, each check red on a synthetic table', () => {
+  const doors = Object.values(OVERLORD_DOORS) as unknown as DoorLike[];
+  const routes = clientRoutes();
+  const swap = (name: string, over: Partial<Row>): Row[] => ROWS.map((r) => (r.name === name ? { ...r, ...over } as Row : r));
+
+  it('the real tables read clean', () => {
+    expect(readerCensus(ROWS, doors, routes)).toEqual([]);
+  });
+  it('mutant: a fenced row marked reader (the inbox) is named', () => {
+    expect(readerCensus(swap('inbox', { reader: true }), doors, routes)).toEqual(expect.arrayContaining([
+      'inbox: marked reader but the read tool does not admit it (a fenced row)', 'inbox: marked reader but its door row is a write',
+    ]));
+  });
+  it('mutant: a reader row whose door row is a write (the board fenced again) is named', () => {
+    const fencedBoard = doors.map((d) => (d.path === '/api/overlord/board' ? { ...d, write: true } : d));
+    expect(readerCensus(ROWS, fencedBoard, routes)).toContain('board: marked reader but its door row is a write');
+  });
+  it('mutant: a write class row marked reader (acknowledge) is named', () => {
+    expect(readerCensus(swap('acknowledge', { reader: true }), doors, routes)).toEqual(expect.arrayContaining([
+      'acknowledge: a operate row marked reader', 'acknowledge: marked reader but the read tool does not admit it (a fenced row)',
+    ]));
+  });
+  it('mutant: a readable door left unmarked (history) is named', () => {
+    expect(readerCensus(swap('history', { reader: false }), doors, routes)).toContain('the rows marked reader are board, not board, history');
+  });
+  it('mutant: a marked row the read tool would refuse (the history tool fenced) is named', () => {
+    expect(readerCensus(swap('history', { fenced: true }), doors, routes)).toContain('history: marked reader but the read tool does not admit it (a fenced row)');
   });
 });
