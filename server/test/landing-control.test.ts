@@ -357,7 +357,8 @@ const factsOf = (entries: LandingEntry[] = [entry(7)], over: Partial<LandingMuta
   stateWords: entries.map((x) => ({ id: x.id, value: isLandingEntryState(x.state) ? x.state : 'unrecognised' as const })),
   dependencies: entries.map((x) => ({ id: x.id, value: { kind: 'readable' as const, afterIds: x.afterIds } })),
   recovery: { subjects: [], hold: null }, nextId: 200, foreignIds: [],
-  coordinators: entries.map((x) => ({ id: x.id, value: { kind: 'no-run' as const } })), terminalRepairs: [], creations: [], ...over,
+  coordinators: entries.map((x) => ({ id: x.id, value: { kind: 'no-run' as const } })), terminalRepairs: [], creations: [], flagsRow: false,
+  pinTimes: entries.map((x) => ({ id: x.id, value: x.pinnedAt })), ...over,
 });
 const probeWith = (over: Record<string, unknown> = {}, headOver: Record<string, unknown> = {}) => {
   const base = controlRead();
@@ -617,6 +618,35 @@ describe('applyLandingControl: the measured health writes mainRedHold and never 
   it('M14: a pause placed between red and green is kept by the green transition', () => {
     expect(apply(redCtl)).toMatchObject({ holdChanged: true });
     pause(true);
+    expect(apply(controlRead())).toMatchObject({ holdChanged: true });
+    expect(flagsOf()).toEqual({ operatorPaused: true, mainRedHold: false });
+  });
+
+  // Wave 5j-b (Task 8): the two M14 rows again, with the pause written by the operator's door through the one authority
+  // writer (journalled), not by fixture SQL. The project is made known to the door by a run-less entry first.
+  const doorPause = (on: boolean): void => {
+    const r = store.writeLandingAuthority({ kind: 'pause', project: P, paused: on, setBy: 'operator', actor: 'flag-off' }, now);
+    if (!r.ok || !r.changed) throw new Error(`fixture door pause refused: ${JSON.stringify(r)}`);
+  };
+  const known = (): void => {
+    const r = store.writeLandingAuthority({ kind: 'entry', project: P, pr: 31, pinnedSha: 'e'.repeat(40), handoffCommit: 'f'.repeat(40), setBy: 'lane-a' }, now);
+    if (!r.ok) throw new Error('fixture entry refused');
+  };
+
+  it('M14, door-written: a pause set before red survives the red and the later green', () => {
+    known();
+    doorPause(true);
+    expect(apply(redCtl)).toMatchObject({ holdChanged: true });
+    expect(flagsOf()).toEqual({ operatorPaused: true, mainRedHold: true });
+    expect(apply(controlRead())).toMatchObject({ holdChanged: true });
+    expect(flagsOf()).toEqual({ operatorPaused: true, mainRedHold: false });
+  });
+
+  it('M14, door-written: a pause placed between red and green survives the green', () => {
+    known();
+    expect(apply(redCtl)).toMatchObject({ holdChanged: true });
+    doorPause(true);
+    expect(flagsOf()).toEqual({ operatorPaused: true, mainRedHold: true });
     expect(apply(controlRead())).toMatchObject({ holdChanged: true });
     expect(flagsOf()).toEqual({ operatorPaused: true, mainRedHold: false });
   });

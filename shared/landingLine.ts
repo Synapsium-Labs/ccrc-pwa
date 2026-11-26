@@ -213,12 +213,25 @@ export type LandingMutationCode =
   | 'landing-after-missing' | 'landing-after-cross-project'
   | 'landing-cycle' | 'landing-dependencies-unreadable'
   | 'landing-recovery-unresolved' | 'landing-identity-conflict'
-  | 'landing-id-overflow' | 'landing-sequence-overflow';
+  | 'landing-id-overflow' | 'landing-sequence-overflow'
+  // The operator's doors (wave 5j-b, D-9049): a terminal entry, a stale pin time (the compare-and-set), a project the line
+  // has never seen, and a built record the journal's own parser refuses (the parse before the append).
+  | 'landing-entry-terminal' | 'landing-entry-moved' | 'landing-project-unknown' | 'landing-record-unparseable';
 /** The runtime list of `LandingMutationCode`; `shared/refusal.ts#LANDING_REFUSAL_STATUS` maps each to its status. */
 export const LANDING_MUTATION_CODE_MAP: Record<LandingMutationCode, true> = {
   'landing-entry-exists': true, 'landing-entry-missing': true, 'landing-after-missing': true,
   'landing-after-cross-project': true, 'landing-cycle': true, 'landing-dependencies-unreadable': true,
   'landing-recovery-unresolved': true, 'landing-identity-conflict': true, 'landing-id-overflow': true,
-  'landing-sequence-overflow': true,
+  'landing-sequence-overflow': true, 'landing-entry-terminal': true, 'landing-entry-moved': true,
+  'landing-project-unknown': true, 'landing-record-unparseable': true,
 };
 export const LANDING_MUTATION_CODES = Object.keys(LANDING_MUTATION_CODE_MAP) as LandingMutationCode[];
+
+/** What a withdrawal did about one notice (wave 5j-b, D-9050): queued to a session, nobody to tell (`none`, with its
+ *  reason word), or a dependant whose own association does not read (`unreadable`, only on a `landing-held` outcome:
+ *  the withdrawn entry's own unreadable association refuses the withdrawal instead). */
+export type LandingNoticeOutcome = { word: 'landing-withdrawn' | 'landing-held'; entryId: number } & (
+  | { kind: 'queued'; toId: string; mailId: number; deliveryId: number }
+  | { kind: 'none'; reason: 'unclaimed' | 'unrecorded' }
+  | { kind: 'unreadable' }
+);
