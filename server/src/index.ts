@@ -34,7 +34,6 @@ import { witnessLinkOver } from './coord/overlordAuthorityWitnessLink.js';
 import type { PrivacyJournalHead } from './coord/privacyJournalHead.js';
 import { OverlordRestoreState } from './coord/overlordRestoreState.js';
 import { invariantMonitorOver } from './coord/invariantLane.js';
-import { designationBaseline } from './coord/overlordSequenceStore.js';
 import { bootBoxToken } from './token/boot.js';
 import { BoxTokenDriver } from './token/driver.js';
 import { fileBothRoleWriter, fileTokenStore, tokenPaths } from './token/files.js';
@@ -594,7 +593,7 @@ deps.overlordRestore = overlordRestore;
 // The invariant monitor (§10.4): its reads and its findings over the same coord.db, journal and guard; shadow until armed.
 deps.invariantMonitor = invariantMonitorOver({
   db: coordDb, coord, journal: overlordAuthority, readJournal: () => overlordAuthority.readVerified(), guardState: () => overlordAuthorityGuard.state(),
-  designationBaseline, clock: time.clock, entropy: time.entropy, log: (line) => console.warn(line),
+  clock: time.clock, entropy: time.entropy, log: (line) => console.warn(line),
 });
 deps.responseStamp = () => responseStampNow(responseBoot, overlordRestore.restoreGeneration());
 const app = await buildServer(deps, bus, watcher);
