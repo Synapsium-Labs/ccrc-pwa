@@ -1,4 +1,4 @@
-# Queue flake: the bridge's stats file one answer behind (#3462), and the card facts cases at their bound
+# Queue flake: the bridge's stats file one answer behind (#3462), the card facts cases at their bound, the palette words case
 
 Programme overlord, wave 245, run 3996. Built on `main` at `9a21a20715`. No deviation number was allocated for this
 run: departures are recorded by slug at the end, for the coordinator to fold into the ledger.
@@ -10,7 +10,8 @@ run: departures are recorded by slug at the end, for the coordinator to fold int
   write in flight; a handler's flush still never waits.
 - **Item 2** was a fixture cost: every case of the card facts suite migrated a fresh coord db. The file now migrates
   one template and copies it.
-- **Item 3** (the command registry suite's parse per word) is a diff packet with that file's holder, not in this PR yet.
+- **Item 3**, the command registry suite's palette words case, parsed the console's source tree once per word; each
+  file is now parsed once for its describe block.
 
 ## 1. The diagnosis (item 1)
 
@@ -87,6 +88,15 @@ named cases loop over three stores. The file now migrates one template in `befor
 pattern the designation store and caps suites already use; each test's directories are removed after it
 (`removeTmpFixturesEachTest`) and the template's after the file. No assertion changes, no bound changes.
 
+## 3b. Item 3: the palette words case
+
+The block "the palette's words and the session builder each have one home" parsed every file of the console's source
+tree once per palette word (two words), then once more for the session builder case; it timed out once at its 5 s
+bound on a queue shard. The block's string read is now memoized per file, so each file is parsed once for the block.
+No assertion changes. The file was held by another run's claim, so the change went to its holder as a diff packet
+first; the holder released the file and I carried it. Mutant (the memo answers an empty list for a file it has read):
+killed, both cases red.
+
 ## 4. The numbers
 
 | What | Before | After |
@@ -96,7 +106,7 @@ pattern the designation store and caps suites already use; each test's directori
 | #3462 case, injected delay on the idle thread | 7 red of 12 | 0 red of 36 |
 | New held-write case | red (`expected 1 to be 4`) | green |
 | Card facts file alone, load 11 to 12 | 356 s, both named cases red at 21.2 s and 21.3 s | 16 s, 40 of 40, the cases at 0.18 s and 0.29 s |
-| Command registry palette case (packet, not in this PR), load 18 | 3388 ms, session builder 1176 ms | 1664 ms, 4 ms |
+| Command registry palette case, load 18 | 3388 ms, session builder 1176 ms, file 9.8 s | 1664 ms, 4 ms, file 4.2 s |
 
 ## 5. Mutation rows (item 1)
 
@@ -117,7 +127,7 @@ the bridge as a subprocess that imports the package from disk, so it could not d
 
 Each file alone through the fleet test wrapper, at most two workers, load 9 to 12 on 16 cores: the bridge server suite
 (134 of 134), the stats suite (67 of 67, every in-flight pin unchanged), the proxy (123), harness (25), runtime (103, 10
-skipped), usage (71), absorb (6), backend (30) and live tools (40) suites, the card facts suite (40 of 40), the growth
+skipped), usage (71), absorb (6), backend (30) and live tools (40) suites, the card facts suite (40 of 40), the command registry suite (28 of 28), the growth
 check armed (100 of 100), single-definition (1624, 1 skipped). The type check of all the tests was killed twice by the
 test slice's memory cap, with other sessions' runs holding most of it; the two changed test files and everything they
 import type-check clean through a narrowed config (slug `typecheck-narrowed-slice-oom`). The pull request's fast run
@@ -125,9 +135,6 @@ type-checks the whole tree. The shell lint ratchet was not started, as the brief
 
 ## 7. What I left
 
-- Item 3, the command registry suite: the file is held by another run's claim, so the change went to its holder as a
-  diff packet (parse each file once for the describe block, no assertion changed). It lands with them or comes back to
-  me if they release the file.
 - A strict single waiting idle flush (row 4 above), if a reviewer wants it.
 - The new cases are Linux only (`/proc`); the macOS legs skip them.
 
