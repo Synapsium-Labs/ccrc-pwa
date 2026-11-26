@@ -639,3 +639,17 @@ The browser leg's three rows, `pwa/browser/reader-mode-lab.browser.test.ts`, on 
 - **M-7, the frame's half:** inside the frame the wake lock is refused (`NotAllowedError`); the console's window is granted one (`screen`). Line: `M-7 {"inFrame":"refused NotAllowedError","inConsole":"granted screen"}`.
 
 Not measured here: M-1's refusal without activation (FS-8) and M-5's Esc (FS-5), which the device item takes, as spec §4.5 says. The layout measurement moved to X2's P5.1 (D-8975).
+
+#### XR1.1: the decisions
+
+`pwa/src/docs/reader/readerMode.ts` and `readerModeWords.ts` (L1), tested by `pwa/test/reader-mode-policy.test.ts` (34 cases, green). As amended: `readerModeOffered` takes `{frameReady, plainView, modalMounted}` only, and `READER_LAYOUT_RULE`, `READER_REMOUNT_QUIET_MS` and the layout note are not defined (P5.1). Built beyond the task's text, each folded from XR2.1 or asked by its review:
+- the acts `start-reading` and `stop-reading` (XR2.1's `setReading` with the turn, and with `off`), so the in-place reading is decided in the table, not in delivery; the plan's `toggle-overlay` act is not defined, because the overlay is the state's own `overlay` field;
+- `frame-exit` exits as Exit does; `frame-toggle` carries the entry's facts plus `offered` (the whole of `readerModeOffered`, so the frame's `r` never starts the hiding under a closing modal, spec §4.1) and `frameFocused`; while on it exits as `r` does;
+- `leave`, the Docs screen unmounting while on: it gives the page back (full screen, the fill, the console) and steps nothing, so delivery chooses no cleanup of its own;
+- a `full-screen-granted` that arrives after the exit answers `exit-full-screen`, so a late grant cannot leave the page full screen with reader mode off;
+- `block` steps back once when placed, as Exit does, so a sign-in loss leaves no dead reader entry.
+The words file has no `menu` string: the menu control is never built.
+
+The Opus review of the diff (before the commit; it read all three files) found one important gap, no case pinning `block`'s step-back, and five minor ones; all six were fixed before the commit. One is a stated residue, not fixed: an entry within `READER_EXIT_SETTLE_MS` (100 ms) of a lost full screen is accepted, and the pending settle then finds reader mode on and does nothing, so the old reader place stays below the new one and costs one Back after the second exit. It needs a second tap or key inside 100 ms.
+
+Mutation rows, each made with the Edit tool and restored, red on the row's test as the runner printed it: X6.1 (`… then requests full screen, hides the console, focuses the frame and announces, in that order`, and `reader ops: frame toggle enters as fill …`), X6.2, X6.3, X6.4, X6.5, X6.6, X6.7 (`a fallback exits and steps back once`, `an unplaced exit steps back nothing`), X6.8 (`a block exits full screen and reader mode`, and three others), X6.9, X6.10 (two runs: `plainView` ignored, then `modalMounted` ignored), X6.11, X6.57, X6.31, X6.32; and, for the review's finding, `block` exiting with no step-back: red on `reader mode: a block exits full screen and reader mode`.
