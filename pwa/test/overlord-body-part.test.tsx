@@ -1,6 +1,6 @@
 // The Overlord place's body part (Overlord W1 home B, Task 5): Start, Open, Rebind and Restart, drawn per designation state
-// by `bodyControlsOf` (L1), with the place's one step-up. Neutral names only: the repository is public. The part's real layout
-// (44 px inputs, 320 px wide) is the browser leg's; jsdom holds the tap-floor class and the behaviour.
+// by `bodyControlsOf` (L1), with the place's one step-up. Neutral names only: the repository is public. The browser file
+// `pwa/browser/overlord-place.browser.test.ts` measures the drawn box; jsdom holds the tap-floor class and the behaviour.
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
@@ -13,7 +13,10 @@ import { useStepUp, type StepUpDeps } from '../src/accounts/useStepUp';
 import { ApiError, OVERLORD_PLACE_REFUSAL_TEXT, api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { BodyPart } from '../src/overlord/BodyPart';
-import { BODY_CONTROLS, BODY_WORDS, ATTEMPT_OUTCOME_TEXT, bodyControlsOf, startBlockedWhy } from '../src/overlord/placeWords';
+import {
+  BODY_CONTROLS, BODY_WORDS, ATTEMPT_OUTCOME_TEXT, bodyControlsOf, forceOfferOf, forceStands, offersForce, openingUntaggedOf,
+  refusalStands, startGateOf, untaggedOf,
+} from '../src/overlord/placeWords';
 import type { ReadState } from '../src/overlord/readState';
 import { useFleetStore } from '../src/stores/fleet';
 import { useOverlordStore } from '../src/stores/overlord';
@@ -61,7 +64,7 @@ beforeEach(() => {
   refresh = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
   client = stepUpClient();
   act(() => {
-    useFleetStore.setState({ roster: TEST_ROSTER.map((a, i) => ({ ...a, pool: i < 2 ? 'pool-a' : i < 4 ? 'pool-b' : null })) });
+    useFleetStore.setState({ roster: TEST_ROSTER.map((a, i) => ({ ...a, pool: i < 2 ? 'pool-a' : i < 4 ? 'pool-b' : null })), accountsHeard: true });
     navigate('/overlord');
   });
 });
@@ -137,16 +140,30 @@ describe('each state draws its controls and only those', () => {
 });
 
 describe('Start', () => {
-  it('sends the designate body: opus and every roster pool and untagged accounts by default', async () => {
+  // slug first-start-set-every-pool-untagged-off: the first start's set opens with every roster pool on and untagged accounts
+  // off (the spec's default for that field); where the roster has no pool at all untagged opens on, since nothing else serves.
+  it('sends the designate body: opus and every roster pool, untagged accounts off, by default', async () => {
     const designate = vi.spyOn(api, 'overlordDesignate').mockResolvedValue({ sessionId: ID, deadlineAt: AT, warnings: [] });
     show(answered(null));
+    expect((screen.getByRole('checkbox', { name: BODY_WORDS.untagged }) as HTMLInputElement).checked).toBe(false);
     click(BODY_WORDS.start);
     await waitFor(() => expect(designate).toHaveBeenCalledTimes(1));
-    expect(designate).toHaveBeenCalledWith({ model: 'opus', accountPools: { pools: ['pool-a', 'pool-b'], untagged: true } });
+    expect(designate).toHaveBeenCalledWith({ model: 'opus', accountPools: { pools: ['pool-a', 'pool-b'], untagged: false } });
     await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
   });
 
-  it('sends what was chosen: fable, a pool left out, no untagged accounts', async () => {
+  it('a roster with no pool at all opens with untagged accounts on, and sends them', async () => {
+    const designate = vi.spyOn(api, 'overlordDesignate').mockResolvedValue({ sessionId: ID, deadlineAt: AT, warnings: [] });
+    act(() => useFleetStore.setState({ roster: TEST_ROSTER.map((a) => ({ ...a, pool: null })) }));
+    show(answered(null));
+    expect((screen.getByRole('checkbox', { name: BODY_WORDS.untagged }) as HTMLInputElement).checked).toBe(true);
+    expect(screen.queryByText(BODY_WORDS.noAccounts)).toBeNull();
+    click(BODY_WORDS.start);
+    await waitFor(() => expect(designate).toHaveBeenCalledTimes(1));
+    expect(designate).toHaveBeenCalledWith({ model: 'opus', accountPools: { pools: [], untagged: true } });
+  });
+
+  it('sends what was chosen: fable, a pool left out, untagged accounts on', async () => {
     const designate = vi.spyOn(api, 'overlordDesignate').mockResolvedValue({ sessionId: ID, deadlineAt: AT, warnings: [] });
     show(answered(null));
     fireEvent.click(screen.getByRole('radio', { name: 'Fable' }));
@@ -154,7 +171,49 @@ describe('Start', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: BODY_WORDS.untagged }));
     click(BODY_WORDS.start);
     await waitFor(() => expect(designate).toHaveBeenCalledTimes(1));
-    expect(designate).toHaveBeenCalledWith({ model: 'fable', accountPools: { pools: ['pool-a'], untagged: false } });
+    expect(designate).toHaveBeenCalledWith({ model: 'fable', accountPools: { pools: ['pool-a'], untagged: true } });
+  });
+
+  it('Start waits for the accounts read: disabled, with its sentence, and nothing is sent until the roster is heard', async () => {
+    const designate = vi.spyOn(api, 'overlordDesignate').mockResolvedValue({ sessionId: ID, deadlineAt: AT, warnings: [] });
+    act(() => useFleetStore.setState({ roster: [], accountsHeard: false }));
+    show(answered(null));
+    const start = screen.getByRole('button', { name: BODY_WORDS.start }) as HTMLButtonElement;
+    expect(start.disabled).toBe(true);
+    expect(document.querySelector('[data-overlord-start-wait]')!.textContent).toBe(BODY_WORDS.waitsForAccounts);
+    fireEvent.click(start);
+    expect(designate).not.toHaveBeenCalled();
+    // the roster lands: the sentence goes, Start is live, and the roster's pool opens on with untagged accounts off
+    act(() => useFleetStore.setState({ roster: TEST_ROSTER.map((a, i) => ({ ...a, pool: i < 2 ? 'pool-a' : null })), accountsHeard: true }));
+    expect(document.querySelector('[data-overlord-start-wait]')).toBeNull();
+    expect((screen.getByRole('button', { name: BODY_WORDS.start }) as HTMLButtonElement).disabled).toBe(false);
+    click(BODY_WORDS.start);
+    await waitFor(() => expect(designate).toHaveBeenCalledTimes(1));
+    expect(designate).toHaveBeenCalledWith({ model: 'opus', accountPools: { pools: ['pool-a'], untagged: false } });
+  });
+
+  it('an empty roster that was heard is not waited for: untagged opens on and Start is live', () => {
+    act(() => useFleetStore.setState({ roster: [], accountsHeard: true }));
+    show(answered(null));
+    expect(document.querySelector('[data-overlord-start-wait]')).toBeNull();
+    expect((screen.getByRole('button', { name: BODY_WORDS.start }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('the opening set is decided in L1: both arms, and "not heard yet"', () => {
+    expect(openingUntaggedOf(['pool-a'], true)).toBe(false);
+    expect(openingUntaggedOf([], true)).toBe(true);
+    expect(openingUntaggedOf([], false)).toBe(false);
+    expect(openingUntaggedOf(['pool-a'], false)).toBe(false);
+    // the operator's own pick, once made, wins over the opening
+    expect(untaggedOf(null, ['pool-a'], true)).toBe(false);
+    expect(untaggedOf(true, ['pool-a'], true)).toBe(true);
+    expect(untaggedOf(false, [], true)).toBe(false);
+    expect(untaggedOf(null, [], true)).toBe(true);
+    expect(startGateOf({ pools: ['pool-a'], untagged: false }, false)).toEqual({ kind: 'waiting', text: BODY_WORDS.waitsForAccounts });
+    expect(startGateOf({ pools: [], untagged: false }, false)?.kind).toBe('waiting');
+    expect(startGateOf({ pools: [], untagged: false }, true)).toEqual({ kind: 'empty', text: BODY_WORDS.noAccounts });
+    expect(startGateOf({ pools: [], untagged: true }, true)).toBeNull();
+    expect(startGateOf({ pools: ['pool-a'], untagged: false }, true)).toBeNull();
   });
 
   it('offers opus selected and fable, and the pools come from the roster, never from source', () => {
@@ -170,7 +229,8 @@ describe('Start', () => {
     show(answered(null));
     for (const input of screen.getAllByRole('radio')) expect(input.closest('label')!.className).toContain('min-h-tap');
     // Each account box sits inside its own label, the hit area, whose rule in the place's stylesheet carries the floor (vitest
-    // loads no stylesheet, so the rule is read as text; the browser file measures the drawn box).
+    // loads no stylesheet, so the rule is read as text; the browser file `pwa/browser/overlord-place.browser.test.ts` measures
+    // the drawn box).
     const css = readFileSync(path.join(import.meta.dirname, '..', 'src', 'overlord', 'overlord.css'), 'utf8');
     expect(css).toMatch(/\.ov-account-hit\s*\{[^}]*min-height:\s*var\(--tap-min\)/);
     for (const input of screen.getAllByRole('checkbox')) expect(input.closest('label')!.className).toBe('ov-account-hit');
@@ -180,11 +240,13 @@ describe('Start', () => {
     const designate = vi.spyOn(api, 'overlordDesignate');
     show(answered(null));
     for (const pool of ['pool-a', 'pool-b']) fireEvent.click(screen.getByRole('checkbox', { name: pool }));
-    fireEvent.click(screen.getByRole('checkbox', { name: BODY_WORDS.untagged }));
     expect(screen.getByText(BODY_WORDS.noAccounts)).toBeTruthy();
+    expect(document.querySelector('[data-overlord-start-wait]')).toBeNull();
     expect((screen.getByRole('button', { name: BODY_WORDS.start }) as HTMLButtonElement).disabled).toBe(true);
-    expect(startBlockedWhy({ pools: [], untagged: false })).toBe(BODY_WORDS.noAccounts);
-    expect(startBlockedWhy({ pools: [], untagged: true })).toBeNull();
+    fireEvent.click(screen.getByRole('checkbox', { name: BODY_WORDS.untagged }));
+    expect((screen.getByRole('button', { name: BODY_WORDS.start }) as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByRole('checkbox', { name: BODY_WORDS.untagged }));
+    expect((screen.getByRole('button', { name: BODY_WORDS.start }) as HTMLButtonElement).disabled).toBe(true);
     expect(designate).not.toHaveBeenCalled();
   });
 
@@ -208,14 +270,15 @@ describe('Start', () => {
     expect(designate).toHaveBeenCalledTimes(1);
     expect(document.querySelector('[data-step-up]')).not.toBeNull();
     expect(screen.queryByRole('alert')).toBeNull();
-    expect(refresh).not.toHaveBeenCalled();
+    // slug refresh-after-every-door: a step-up refusal reads again too
+    await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
     fireEvent.change(screen.getByLabelText('Passphrase'), { target: { value: 'a passphrase' } });
     fireEvent.click(screen.getByRole('button', { name: 'Confirm with passphrase' }));
     await waitFor(() => expect(document.querySelector('[data-step-up]')).toBeNull());
     expect(designate).toHaveBeenCalledTimes(1);
     click(BODY_WORDS.start);
     await waitFor(() => expect(designate).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(refresh).toHaveBeenCalledTimes(2));
   });
 });
 
@@ -253,6 +316,7 @@ describe('every refusal renders its sentence, never swallowed', () => {
     await waitFor(() => expect(designate).toHaveBeenCalled());
     await waitFor(() => expect((screen.getByRole('button', { name: BODY_WORDS.start }) as HTMLButtonElement).disabled).toBe(false));
     expect(screen.queryByRole('alert')).toBeNull();
+    expect(refresh).not.toHaveBeenCalled();
   });
 });
 
@@ -322,6 +386,7 @@ describe('Rebind', () => {
     await waitFor(() => expect(client.stepUpStart).toHaveBeenCalled());
     expect(rebind).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('alert')).toBeNull();
+    await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
   });
 
   it('overlord-body-alive offers "Rebind anyway" with the sentence, and the forced call goes through the step-up', async () => {
@@ -347,6 +412,95 @@ describe('Rebind', () => {
     await waitFor(() => expect(rebind).toHaveBeenCalledTimes(3));
     expect(rebind.mock.calls.map((c) => c[0])).toEqual([false, true, true]);
     await waitFor(() => expect(screen.queryByText(BODY_WORDS.forceSentence)).toBeNull());
+  });
+
+  describe('"Rebind anyway" stands only while the binding it was refused for stands', () => {
+    /** Refuse a rebind with the body-alive word on a bound designation, so the offer and its sentence are up. */
+    async function refused(): Promise<void> {
+      vi.spyOn(api, 'overlordRebind').mockRejectedValue(new ApiError(409, { ok: false, error: 'overlord-body-alive', detail: 'the body is running' }));
+      show(answered(BOUND));
+      click(BODY_WORDS.rebind);
+      await screen.findByRole('alert');
+      expect(screen.getByRole('button', { name: BODY_WORDS.rebindAnyway })).toBeTruthy();
+    }
+    const move = (designation: ReadState<DesignationView | null>): void => { act(() => useOverlordStore.setState({ designation })); };
+    const gone = (): void => {
+      expect(screen.queryByRole('button', { name: BODY_WORDS.rebindAnyway })).toBeNull();
+      expect(screen.queryByText(BODY_WORDS.forceSentence)).toBeNull();
+      expect(screen.queryByRole('alert')).toBeNull();
+    };
+
+    it('the binding unchanged (a fresh read of the same session and term): the offer and its sentence stand', async () => {
+      await refused();
+      move(answered(row({ bound: { sessionId: ID, generation: 'g2' } })));
+      expect(screen.getByRole('button', { name: BODY_WORDS.rebindAnyway })).toBeTruthy();
+      expect(screen.getByText(BODY_WORDS.forceSentence)).toBeTruthy();
+      expect(screen.getByRole('alert')).toBeTruthy();
+    });
+
+    it('another session bound: the offer, its sentence and the refusal line are gone', async () => {
+      await refused();
+      move(answered(row({ bound: { sessionId: 'lane-b-overlord', generation: 'g1' } })));
+      gone();
+    });
+
+    it('the same session at a new term: gone', async () => {
+      await refused();
+      move(answered(row({ bound: { sessionId: ID, generation: 'g1' }, term: 2, designatedTerm: 2 })));
+      gone();
+    });
+
+    it('no longer bound (pending, none or unmeasured): gone, and it does not come back when the binding does', async () => {
+      await refused();
+      move(answered(PENDING));
+      gone();
+      move(answered(BOUND));
+      gone();
+      cleanup();
+      await refused();
+      move({ state: 'unmeasured', error: 'HTTP 503' });
+      gone();
+    });
+
+    it('a refusal that carries no offer stays when the binding moves', async () => {
+      vi.spyOn(api, 'overlordRebind').mockRejectedValue(new ApiError(409, { ok: false, error: 'overlord-attempt-pending' }));
+      show(answered(BOUND));
+      click(BODY_WORDS.rebind);
+      await screen.findByRole('alert');
+      move(answered(row({ bound: { sessionId: 'lane-b-overlord', generation: 'g1' } })));
+      expect(screen.getByRole('alert')).toBeTruthy();
+    });
+
+    it('the decision is L1: the kept session and term against the current read', () => {
+      const offer = forceOfferOf('overlord-body-alive', answered(BOUND));
+      expect(offer).toEqual({ sessionId: ID, term: 1 });
+      expect(forceOfferOf('overlord-attempt-pending', answered(BOUND))).toBeNull();
+      expect(forceOfferOf(null, answered(BOUND))).toBeNull();
+      expect(forceOfferOf('overlord-body-alive', answered(null))).toBeNull();
+      expect(forceOfferOf('overlord-body-alive', answered(PENDING))).toBeNull();
+      expect(forceStands(offer, answered(BOUND))).toBe(true);
+      expect(forceStands(offer, { state: 'stale', value: BOUND, at: AT, error: 'HTTP 503' })).toBe(true);
+      expect(forceStands(offer, answered(row({ bound: { sessionId: 'lane-b-overlord', generation: 'g1' } })))).toBe(false);
+      expect(forceStands(offer, answered(row({ bound: { sessionId: ID, generation: 'g1' }, term: 2 })))).toBe(false);
+      expect(forceStands(offer, answered(null))).toBe(false);
+      expect(forceStands(offer, { state: 'loading' })).toBe(false);
+      expect(forceStands(offer, { state: 'absent' })).toBe(false);
+      expect(forceStands(null, answered(BOUND))).toBe(false);
+      expect(refusalStands(true, false)).toBe(false);
+      expect(refusalStands(true, true)).toBe(true);
+      expect(refusalStands(false, false)).toBe(true);
+    });
+  });
+
+  it('the force word is read through a table, never compared to a literal (the refusal ratchet\'s blind spot, closed)', () => {
+    expect(offersForce('overlord-body-alive')).toBe(true);
+    for (const word of [null, 'overlord-attempt-pending', 'toString', '__proto__', 'constructor']) expect(offersForce(word)).toBe(false);
+    for (const file of ['placeWords.ts', 'BodyPart.tsx']) {
+      const text = readFileSync(path.join(import.meta.dirname, '..', 'src', 'overlord', file), 'utf8');
+      const compared = text.split('\n')
+        .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l) && /\b(word|error)\b\s*[!=]==\s*['"`]/.test(l.replace(/typeof\s+\w+\s*[!=]==\s*'[a-z]+'/g, '')));
+      expect(compared, file).toEqual([]);
+    }
   });
 
   it('any other refusal offers no "Rebind anyway"', async () => {

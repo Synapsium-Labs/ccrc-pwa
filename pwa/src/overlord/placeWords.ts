@@ -59,6 +59,7 @@ export const BODY_WORDS = {
   forceSentence: 'The old Overlord session does not measure dead. Rebinding anyway stops it first, then starts a replacement.',
   unmeasured: 'The designation could not be read, so nothing here can act on it until it can be.',
   noAccounts: 'Pick at least one pool, or untagged accounts: an empty set serves nothing.',
+  waitsForAccounts: 'Start waits for the accounts to load, so the set it sends is the one you see.',
 } as const;
 
 // ── Start's two inputs ──
@@ -79,9 +80,24 @@ export function accountSetOf(options: readonly string[], off: readonly string[],
   return { pools: options.filter((p) => !off.includes(p)), untagged };
 }
 
-/** Why Start cannot send this set, or null: an empty set serves nothing, and the door would refuse it. */
-export function startBlockedWhy(set: PoolSet): string | null {
-  return set.pools.length === 0 && !set.untagged ? BODY_WORDS.noAccounts : null;
+/** Whether untagged accounts open ON (slug `first-start-set-every-pool-untagged-off`): off, the spec's default for that field,
+ *  while the roster has a pool or has not been heard yet; on only where the heard roster has no pool at all, because then
+ *  nothing else could serve. */
+export function openingUntaggedOf(options: readonly string[], accountsHeard: boolean): boolean {
+  return accountsHeard && options.length === 0;
+}
+
+/** The yes or no for untagged accounts the form sends: the operator's own pick once made, else the opening. */
+export function untaggedOf(pick: boolean | null, options: readonly string[], accountsHeard: boolean): boolean {
+  return pick ?? openingUntaggedOf(options, accountsHeard);
+}
+
+/** Why Start cannot send, or null: the accounts read has not landed (the roster is not heard, so no set is the operator's
+ *  yet), or the set is empty, which serves nothing and which the door would refuse. */
+export type StartGate = { readonly kind: 'waiting' | 'empty'; readonly text: string };
+export function startGateOf(set: PoolSet, accountsHeard: boolean): StartGate | null {
+  if (!accountsHeard) return { kind: 'waiting', text: BODY_WORDS.waitsForAccounts };
+  return set.pools.length === 0 && !set.untagged ? { kind: 'empty', text: BODY_WORDS.noAccounts } : null;
 }
 
 /** The label of Start for a state: "Start again" after a failed attempt. */
@@ -150,7 +166,41 @@ export function refusalWordOf(body: unknown): string | null {
   return typeof word === 'string' ? word : null;
 }
 
-/** Whether a refused Rebind offers "Rebind anyway": only `overlord-body-alive`, the one word that force lifts. */
+/** The refusal words that force lifts: `overlord-body-alive` only. A table, read by `Object.hasOwn`, never a comparison of the
+ *  word to a literal (the refusal ratchet's rule), so a second word is a row. */
+const FORCE_WORDS: Readonly<Record<string, true>> = { 'overlord-body-alive': true };
+
+/** Whether a refused Rebind offers "Rebind anyway": only a word in `FORCE_WORDS`. */
 export function offersForce(word: string | null): boolean {
-  return word === 'overlord-body-alive';
+  return word !== null && Object.hasOwn(FORCE_WORDS, word);
+}
+
+/** The binding a refused Rebind was refused for: the session and the designation term the store held at that moment. */
+export interface ForceOffer { readonly sessionId: string; readonly term: number }
+
+/** The live binding of a designation read (an answered or stale one), or null: no row, no binding, or a read that is not
+ *  an answer. Nothing unmeasured reads as a binding. */
+function bindingOf(read: ReadState<DesignationView | null>): ForceOffer | null {
+  if (read.state !== 'answered' && read.state !== 'stale') return null;
+  const row = read.value;
+  return row === null || row.bound === null ? null : { sessionId: row.bound.sessionId, term: row.term };
+}
+
+/** The offer a refusal makes: the refusal's word is one force lifts and the designation read, as the store held it when the
+ *  Rebind was refused, names a binding. Otherwise null (no offer). */
+export function forceOfferOf(word: string | null, read: ReadState<DesignationView | null>): ForceOffer | null {
+  return offersForce(word) ? bindingOf(read) : null;
+}
+
+/** Whether the offer still stands: the current designation read binds the same session at the same term. A binding that moved
+ *  (another session, a new term, no binding, or a read that is not an answer) drops it, so a forced rebind is never offered
+ *  on a premise the console no longer holds. */
+export function forceStands(offer: ForceOffer | null, read: ReadState<DesignationView | null>): boolean {
+  const now = bindingOf(read);
+  return offer !== null && now !== null && now.sessionId === offer.sessionId && now.term === offer.term;
+}
+
+/** Whether a refusal's line is drawn: one that came with an offer goes with it. */
+export function refusalStands(cameWithOffer: boolean, offerStands: boolean): boolean {
+  return !cameWithOffer || offerStands;
 }
