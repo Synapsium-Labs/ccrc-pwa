@@ -881,8 +881,8 @@ export function renewalInputsOf(g: GenRow, r: GenReadings | undefined, wave: Rea
 /** THE LAUNCH PROFILE'S ACCOUNT HOLD (renewal readings PR H, plan Task 11; spec §3.6), in shadow and live alike, since it acts on
  *  no session: for the designated Overlord's live generation, the sandbox check's verdict of its newest `startup` or `resume`
  *  start (`newestStartVerdict`, over the workspace the settle measured, as the ladder reads it) and `holdOfStart` over it. A hold
- *  is written once per start (`holdAccount`, its answer checked); a start whose verdict is settled is not asked again
- *  (`holdsSettled`); an unmeasured verdict, a failed read and a refused write hold nothing and are asked again next pass (review
+ *  is written once per start (`holdAccount`, its answer checked); the newest start's loads report is read every pass, and once
+ *  that start is settled (`holdsSettled`) nothing is decided or written for it again; an unmeasured verdict, a failed read and a refused write hold nothing and are asked again next pass (review
  *  2183 F10). A start newer than the generation's own is not yet its account's, so it waits for its mint. Nobody designated:
  *  nothing is read or written. */
 export function holdOverlordStart(deps: Pick<GenerationsDeps, 'holdsSettled' | 'log'>

@@ -22,6 +22,7 @@ import type { FleetSession } from '../../shared/api.js';
 import type { SessionRecord } from '../src/registry.js';
 import type { GenRow } from '../src/continuity/continuityStore.js';
 import type { Candidates } from '../src/accountLoad.js';
+import { heldOutOfList } from '../../shared/renewal-readings.js';
 import { READINESS_DEAF_MS, READINESS_RESTART_BOUND_MS } from '../../shared/overlord-readiness.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
@@ -812,8 +813,13 @@ describe('the holds (renewal readings PR H): read once a pass, into the candidat
     const h = harness();
     await h.warm();
     h.s.holds = { kind: 'read', lanes: ['lane-a'] };
-    // the list the wiring builds with lane-a held out leaves lane-b, at its ceiling
-    h.s.candidates = { kind: 'candidates', list: [{ id: 'lane-b', limits: undefined, serves: 'at-ceiling' }] };
+    // the candidates are built from the holds the lane hands over, through L0's one list filter: lane-a serves, lane-b is at its
+    // ceiling, so only a real hold on lane-a leaves the Overlord stranded (F4)
+    const all = [{ id: 'lane-a', limits: undefined, serves: 'yes' }, { id: 'lane-b', limits: undefined, serves: 'at-ceiling' }] as const;
+    (h.port as { candidates: ReadinessLanePort['candidates'] }).candidates = (_d, held) => {
+      const ids = held.ok ? heldOutOfList(all.map((x) => x.id), held.lanes).list : all.map((x) => x.id);
+      return { kind: 'candidates', list: all.filter((x) => ids.includes(x.id)) };
+    };
     const r = await h.pass(UP());
     expect([r?.word, r?.why]).toEqual(['stranded', 'limited']);
   });

@@ -2,8 +2,9 @@
 // The deciders' cases are written once in `sim/renewalHoldReadingSets.ts` and run here against the real modules; the generations
 // pass's hold step (`holdOverlordStart`) runs against a real coord.db, with the designation read handed in, so a start that
 // loaded what the profile does not list holds its account once, an unmeasured verdict holds nothing and is asked again, a
-// settled start is not asked again, and nobody designated reads and writes nothing.
-import { afterEach, describe, expect, it } from 'vitest';
+// settled start's report is still read each pass but nothing is decided or written for it again, and nobody designated reads and
+// writes nothing.
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
 import * as readings from '../src/continuity/renewalReadings.js';
 import * as shared from '../../shared/renewal-readings.js';
@@ -15,10 +16,17 @@ import type { GenRow } from '../src/continuity/continuityStore.js';
 import type { StartLoadsReport } from '../src/continuity/startLoads.js';
 import type { DesignationRead, DesignationView } from '../../shared/overlord-designation.js';
 import { sourceOfSymbol } from './scan/symbols.js';
-import { heldOutOfListCases, holdOfStartCases, holdTargetCases, installBehindCases } from './sim/renewalHoldReadingSets.js';
+import { heldOutOfListCases, holdOfStartCases, holdsAppliedCases, holdTargetCases, installBehindCases } from './sim/renewalHoldReadingSets.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 import { readinessLaneOver } from '../src/coord/overlordReadinessWiring.js';
 import type { ReadinessLanePort } from '../src/coord/overlordReadinessLane.js';
+import { parseRoster } from '../../shared/roster.js';
+import { Bus } from '../src/bus.js';
+import { buildServer } from '../src/server.js';
+import { FleetWatcher } from '../src/watch.js';
+import { fakeTime } from './fakeTime.js';
+import { quietAtTestEnd } from './laneQuiet.js';
+import { testDeps } from './helpers.js';
 
 afterEach(removeTmpFixtures);
 
@@ -27,6 +35,9 @@ describe('holdOfStart (PR H)', () => {
 });
 describe('holdTargetOf (PR H)', () => {
   for (const [name, fn] of Object.entries(holdTargetCases(readings))) it(name, fn);
+});
+describe('holdsAppliedOf (PR H, fix round 1 F1)', () => {
+  for (const [name, fn] of Object.entries(holdsAppliedCases(readings))) it(name, fn);
 });
 describe('heldOutOfList (PR H, L0)', () => {
   for (const [name, fn] of Object.entries(heldOutOfListCases(shared))) it(name, fn);
@@ -86,8 +97,10 @@ describe('holdOverlordStart: the generations pass\'s account hold (PR H, Task 11
     expect(r.s.accountHolds()).toEqual({ ok: true, lanes: ['lane-a'] });
     expect(r.calls).toEqual(['designation', `loads:${BODY}`, `hold:lane-a:${r.startId}`]);
     expect(r.logs).toHaveLength(1);
-    // settled: the start is not asked again (no second read of its report, no second write)
+    // settled: its loads report is still read each pass, but the decision and the write are skipped (one write, ever)
+    expect(r.deps.holdsSettled.has(r.startId)).toBe(true);
     holdOverlordStart(r.deps, [r.gen], NOW + 30_000);
+    expect(r.calls.filter((c) => c.startsWith('loads:'))).toHaveLength(2);
     expect(r.calls.filter((c) => c.startsWith('hold:'))).toHaveLength(1);
   });
 
@@ -109,6 +122,17 @@ describe('holdOverlordStart: the generations pass\'s account hold (PR H, Task 11
     expect(r.s.accountHolds()).toEqual({ ok: true, lanes: [] });
     expect(r.calls.filter((c) => c.startsWith('loads:'))).toHaveLength(2);
     expect(r.calls.filter((c) => c.startsWith('hold:'))).toEqual([]);
+    // never settled, so the next pass decides again (a mutant that settles an unmeasured verdict goes red here)
+    expect(r.deps.holdsSettled.size).toBe(0);
+  });
+
+  it('a start that ran another launch profile holds nothing, even with a foreign hook, and is settled (F2; A2: settled with no hold)', () => {
+    const r = rig();
+    r.s.insertStartLoads(BODY, { ...report(FOREIGN_HOOK()), profileDigest: 'e'.repeat(64) }, NOW);
+    holdOverlordStart(r.deps, [r.gen], NOW);
+    expect(r.s.accountHolds()).toEqual({ ok: true, lanes: [] });
+    expect(r.calls.filter((c) => c.startsWith('hold:'))).toEqual([]);
+    expect(r.deps.holdsSettled.has(r.startId)).toBe(true);
   });
 
   it('a property the workspace loaded never holds an account', () => {
@@ -187,5 +211,58 @@ describe('the readiness wiring reads the holds from the store (PR H)', () => {
     expect(port.holds()).toEqual({ kind: 'read', lanes: ['lane-a'] });
     s.db.exec('DROP TABLE overlord_account_holds');
     expect(port.holds()).toEqual({ kind: 'unmeasured' });
+  });
+
+  it('the candidates the wiring builds leave a standing hold out (F4: the readiness wiring\'s builder)', () => {
+    const s = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-holds-readiness-c-'), 'coord.db')));
+    const lane = readinessLaneOver({ db: s.db, coord: s, operatorModel: undefined, limits: () => null,
+      deps: { cfg: { roster: TWO_LANES }, time: { clock: { wall: () => NOW, mono: () => 1 } } } as never });
+    const port = (lane as unknown as { port: ReadinessLanePort }).port;
+    const ids = (held: Parameters<ReadinessLanePort['candidates']>[1]) => {
+      const c = port.candidates(BOUND, held);
+      return c.kind === 'candidates' ? c.list.map((x) => x.id) : c.kind;
+    };
+    expect(ids({ ok: true, lanes: [] })).toEqual(['lane-a', 'lane-b']);
+    expect(ids({ ok: true, lanes: ['lane-a'] })).toEqual(['lane-b']);
+  });
+});
+
+/** Two Anthropic accounts in the designation's pool. */
+const TWO_LANES = parseRoster({ version: 1, accounts: [
+  { id: 'lane-a', label: 'lane-a', configDirSuffix: '.lane-a', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic',
+    pool: 'pool-a', fableBilling: 'included', continuity: { recordedAt: 1 } },
+  { id: 'lane-b', label: 'lane-b', configDirSuffix: '.lane-b', exec: { kind: 'generated' }, homeAble: true, hue: 'violet', telemetry: 'anthropic',
+    pool: 'pool-a', fableBilling: 'included', continuity: { recordedAt: 1 } },
+] });
+
+describe('the ladder\'s load line reads the holds (F4: the composed server\'s builder)', () => {
+  it('a hold on the one account under the line leaves only an account past it: the 95% row stands, and lifts on the clear', async () => {
+    const S = Math.floor(NOW / 1000);
+    const fixture = testDeps();
+    const db = openCoordDb(':memory:');
+    const coord = new CoordStore(db);
+    const bus = new Bus();
+    const deps = { ...fixture, cfg: { ...fixture.cfg, roster: TWO_LANES }, coord, time: fakeTime({ wallMs: NOW }).ports };
+    const watcher = quietAtTestEnd(new FleetWatcher(deps, bus, 2000));
+    const limit = (pct: number) => ({ five: pct, seven: pct, ts: S - 30, fiveResetAt: S + 9_000, sevenResetAt: S + 300_000,
+      fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false });
+    vi.spyOn(watcher, 'currentLimits').mockReturnValue({ listedAt: NOW, limits: { 'lane-a': limit(96), 'lane-b': limit(10) } });
+    try {
+      db.exec(`INSERT INTO overlord_designation (id, sessionId, generation, term, designatedTerm, model, accountPools, actor, updatedAt)
+        VALUES (1, 'overlord-a', 'generation-a', 1, 1, 'opus', '{"pools":["pool-a"],"untagged":false}', 'actor', 1)`);
+      const app = await buildServer(deps, bus, watcher);
+      try {
+        const row = async () => {
+          const res = await app.inject('/api/overlord/ladder');
+          expect(res.statusCode).toBe(200);
+          return res.json().conditions.find((c: { cause: string }) => c.cause === 'load-past-95');
+        };
+        expect(await row()).toMatchObject({ reading: 'lifted' });
+        coord.holdAccount({ lane: 'lane-b', startId: 1, at: NOW });
+        expect(await row()).toMatchObject({ reading: 'standing' });
+        coord.clearAccountHold({ lane: 'lane-b', by: 'device-1', at: NOW + 1 });
+        expect(await row()).toMatchObject({ reading: 'lifted' });
+      } finally { await app.close(); }
+    } finally { db.close(); }
   });
 });
