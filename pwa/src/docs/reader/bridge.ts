@@ -241,8 +241,20 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
   }
 
   if (faces !== undefined) {
-    const fonts = await faces;
-    if (fonts !== undefined) assets = { ...assets, fonts };
+    // The faces wait ends at the frame's own watchdog too, as the Mermaid wait above does: the library's fallback watchdog
+    // starts only inside the mount, so a face load that never settled would leave the body mounting for ever. A late load
+    // is ignored, and the mount goes on without faces exactly as after a failed one: the frame draws in the library's own
+    // faces. The timer's handle is a local of this call, cleared the moment the wait settles either way.
+    let facesTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const deadline = new Promise<undefined>((resolve) => {
+        facesTimer = setTimeout(() => resolve(undefined), watchdogMs);
+      });
+      const fonts = await Promise.race([faces, deadline]);
+      if (fonts !== undefined) assets = { ...assets, fonts };
+    } finally {
+      clearTimeout(facesTimer);
+    }
   }
 
   const port = plan.store ? (deps.store ?? enumerablePageStorage)() : null;
