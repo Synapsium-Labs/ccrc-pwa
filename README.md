@@ -5937,7 +5937,7 @@ state, `entriesScope` saying which of the two the answer is; beside them the
 operator pause (the stored flag) and the main-red hold (`mainRedHold`, and `order.paused`), which the read recomputes from the stored flag and the
 watcher's latest control snapshot, with the same pure transition the radar lane applies and without writing it, and the order the server's decider computes on that read; the line is paused
 while either flag is set, except that a dependency-eligible `fixesMain` head already selected is not paused by the main-red hold alone (D-8625). An entry leaves the line `landed` when GitHub reads its PR merged (a merge train's proved landing included), with a head other than
-the pinned one kept in its `detail`, or `closed` when GitHub reads it closed unmerged or says no such PR exists. The landed reader
+the pinned one kept in its `detail`, or `closed` when GitHub reads it closed unmerged, reads it closed with the train label while its train record was read and did not prove the landing (`train-unproven`, D-9112), or says no such PR exists. The landed reader
 (at most ten entries a sweep, oldest first) marks it, and a work run's `done` close marks it `landed` when GitHub reads the PR
 MERGED (a merge train's landing is left to the landed reader, which carries the train facts); a verified pin re-pins a `closed`
 entry only when its projection is readable and carries no quarantine marker (D-8626). A project the line has never seen answers no entries and both flags off. The line's authority (no-run creation evidence,
@@ -8165,12 +8165,17 @@ the head, base and repository it expected. A PR CLOSED with the train label is n
 `closed`: the form runs the same train proof, inside `PR_STATE_TRAIN_TIMEOUT`, and keeps a proof it
 makes. A proved one reads `merged` with `landedInTrain: true`, `train` and `trainMergeCommit`; one
 whose record was read and did not prove it, or could not be read, reads `unmeasured`
-(`train-unproven`, `train-unread`); a labelled PR from a fork is never proved and reads `unmeasured` (`train-unread`). The workspace form reads a claim whose record was read and did not prove it as `closed` (`train-unproven`); this form reads the same fact as `unmeasured`, so the two forms' words are not interchangeable. `ccd caps` lists `pr-state-pr-v1` for a ccd that has the form.
+(`train-unproven`, `train-unread`); a labelled PR from a fork is never proved and reads `unmeasured` (`train-unread`). The workspace form reads a claim whose record was read and did not prove it as `closed` (`train-unproven`); this form reads the same fact as `unmeasured`, so the two forms' words are not interchangeable.
+The landed reader reads this form's `unmeasured` line with reason `train-unproven` and `trainUnproven: true` as
+GitHub's CLOSED: it marks the entry `closed`, its detail naming `train-unproven`, so the entry leaves the
+landing line (D-9112), except a damaged row the bounded terminal repair hands it, which it asks again (spec
+amendment B); a `train-unread` line, and every other `unmeasured` one, it asks again at its back-off.
+`ccd caps` lists `pr-state-pr-v1` for a ccd that has the form.
 
-**The train record (D-7335)** is the one machine-readable block in a train PR's
-body, and a train tool writes exactly one: an HTML comment on lines of its own,
-opened by `<!-- ccrc-train v1`, one `member #<n> <40-hex head sha>` line per
-member, closed by `-->`:
+**The train record (D-7335, D-9111)** is the machine-readable part of a train PR's
+body, in either of two forms; every other part is for people. The documented form
+is an HTML comment on lines of its own, opened by `<!-- ccrc-train v1`, one
+`member #<n> <40-hex head sha>` line per member, closed by `-->`:
 
 ```
 <!-- ccrc-train v1
@@ -8182,12 +8187,35 @@ member #1800 89abcdef0123456789abcdef0123456789abcdef
 A member line is exactly `member`, one space, `#` and the PR number, one space,
 and the full 40-character head sha in lowercase hex: no tabs, no second space,
 no short or uppercase sha. Leading and trailing spaces on a line are ignored;
-nothing else is. Tables,
-lists and prose beside the block are for people and are never parsed, so a
-body with only a table proves nothing. No block, two blocks, a block that never
-closes, a line inside it that is not a member line, or a member listed twice
-proves nothing for any member, and neither does a member listed at a sha other
-than its head.
+nothing else is. No block, two blocks, a block that never closes, a line inside
+it that is not a member line, or a member listed twice proves nothing for any
+member.
+
+The other form is the one the merge train tool in use writes (D-9111): a fenced
+block opened by a line that is exactly ```` ```train-members ```` and closed by the
+next line that is exactly ```` ``` ````, holding one JSON array with one object per
+member:
+
+````
+```train-members
+[{"pr": 1797, "headSha": "0123456789abcdef0123456789abcdef01234567", "blast": 3}]
+```
+````
+
+A member is an object whose `pr` is a JSON integer of one to ten digits with no
+leading zero (never `true` or a string) and whose `headSha` is the full
+40-character head sha in lowercase hex; any other key, the tool's `blast` among
+them, is never read. Leading and trailing spaces on the two fence lines are
+ignored. No such block, two of them, a block that never closes, content that is
+not one JSON array of at least one member, a member of another shape, a key given
+twice in one member, or a member listed twice proves nothing for any member.
+
+A body with one form is read by that form alone, so a `ccrc-train v1` block added
+by hand to a body with no `train-members` block proves. A body with both proves
+only when both read and list the same members at the same heads; any difference
+proves nothing. Tables, lists and prose beside the blocks are never parsed, so a
+body with only a table proves nothing, and in either form neither does a member
+listed at a sha other than its head.
 
 A coordinator
 proves the merge before closing the run from `landedInTrain: true` on the PR's
