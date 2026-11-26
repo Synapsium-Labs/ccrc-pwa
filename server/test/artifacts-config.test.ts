@@ -341,7 +341,7 @@ describe('loadConfig carries the artifact decision', () => {
   afterEach(() => vi.restoreAllMocks());
 
   const artifactWarns = (spy: ReturnType<typeof vi.spyOn>): string[] =>
-    spy.mock.calls.map((a) => String(a[0])).filter((l) => l.startsWith('ccrc-server: artifact tier off'));
+    spy.mock.calls.map((a: readonly unknown[]) => String(a[0])).filter((l: string) => l.startsWith('ccrc-server: artifact tier off'));
 
   it('all three valid keys give cfg.artifact on, and no warning', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});

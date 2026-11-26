@@ -20,6 +20,8 @@
 // listen state `down`, and the console's own listen, which follows it in `index.ts`, still runs.
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import { artifactMethodAllowed, hostFence, namesArtifactHost, type ArtifactConfig } from './policy.js';
+import { refuseRoute } from '../refuse.js';
+import { ARTIFACT_FENCE_REFUSALS } from '../../../shared/refusal.js';
 
 /** The listen state of the artifact listener: `pending` until `listenArtifactServer` has run. Built once in `buildServer`'s body. */
 export interface ArtifactListenerState {
@@ -100,7 +102,7 @@ export function buildArtifactServer(deps: ArtifactRouteDeps): FastifyInstance {
   // then the method fence. A hook that answers must return the reply.
   app.addHook('onRequest', async (req, reply) => {
     reply.headers(HARDENING);
-    if (hostFence(req.headers.host, hosts) === 'misdirected') return answer(reply, 421, TEXT, MISDIRECTED_BODY);
+    if (hostFence(req.headers.host, hosts) === 'misdirected') return answer(reply, ARTIFACT_FENCE_REFUSALS.misdirected, TEXT, MISDIRECTED_BODY);
     if (!artifactMethodAllowed(req.method)) return answer(reply.header('allow', 'GET, HEAD'), 405, TEXT, METHOD_BODY);
     return undefined;
   });
@@ -149,7 +151,7 @@ export function installConsoleHostFence(app: FastifyInstance, cfg: ArtifactConfi
   if (cfg.state !== 'on') return;
   const hosts = [cfg.artifactHost, cfg.contentHost];
   app.addHook('onRequest', async (req, reply) => {
-    if (namesArtifactHost(req.headers.host, hosts)) return reply.code(421).send({ ok: false, error: 'misdirected' });
+    if (namesArtifactHost(req.headers.host, hosts)) return refuseRoute(reply, 'misdirected');
     return undefined;
   });
 }
