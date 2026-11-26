@@ -604,3 +604,38 @@ The review found 8 important findings (F1 to F8) and 8 minor ones (A-a to A-h). 
 - **A-g:** applied verbatim (the bold lead on spec:488 kept, by the coordinator's ruling).
 - **XR2.1's hide test renamed:** coordinator's correction at the cap, follow-on to F3. The test and mutation row X6.58 now name a tap anywhere on the top strip.
 - New mutation rows: X6.72 to X6.75. No test, typecheck or install ran: docs only.
+
+### Wave XR (run 3992, wave 54, 2026-11-26)
+
+Built ahead of publication on this workspace's own branch, over two local merges and nothing cut new: wave PH's branch at `39e4db2ca1` (Back places, X2 P5.3), then wave C's at `a042be374f` (the appearance wave, with the library pinned to the registry's `@synapsium-labs/pinax-lib` 1.2.0). Both merged with no conflict. `ui` and `pwa` were installed with `npm ci`, as their locks say; no pin, lock or pin test changed.
+
+#### XR1.1 Step 0: the facts, re-read on the installed 1.2.0
+
+Read from `pwa/node_modules/@synapsium-labs/pinax-lib` (version 1.2.0), before any reader-mode code. Every fact spec §1.1 took from 1.1.0 holds on 1.2.0, so nothing stopped the wave.
+
+| Fact (spec §1.1) | Read in | On 1.2.0 |
+|---|---|---|
+| The chrome keys, read once at mount | `dist/enhance/options.js` (`CHROME_KEYS = ['bar', 'rail', 'settings', 'topSpace']`, each true by default, read by the options parse) | Holds |
+| `settings: false` unregisters the `settings` command | `dist/enhance/settings.js#build`: it returns before it builds the tool and before `ctx.commands.register('settings', …)` | Holds |
+| The keys the frame binds | `dist/enhance/keys.js` (`SHEET_ORDER = ['/', 'j', 'k', 'w', 'i', 'n', 'p', 'm', 'o', '?']`, Mod+K, Esc); LX6 adds `r` and Esc in `dist/enhance/reader.js`, bound only when the host passed `onReader` | Holds, plus LX6's two |
+| `progress` and its 250 ms window | `dist/frame/protocol.d.ts` (`BRIDGE_LIMITS.progressWindowMs: 250`); `dist/host/mount.d.ts` (`onProgress`: at most four a second, the latest of each window at its end) | Holds |
+| `pos`, and `initialHash` wins over it | `dist/frame/doc-fields.generated.js` (`DOC_FIELDS` holds `pos`); `dist/enhance/position.js` (`SAVE_MS = 250`; "landing: initialHash wins, else the stored position") | Holds |
+| The frame's Aa with the bar off | `dist/enhance/settings.js#build` (into the bar's tray when there is one, else first in the root); `assets/frame/reader.css` (`.aa-wrap` sticky at `top: 8px`, pushed right by `margin: … auto`) | Holds |
+
+LX6's facts, which the amendment adds to Step 0:
+
+| Fact | Read in | On 1.2.0 |
+|---|---|---|
+| `setReading` hides and restores the chrome in place, with the same nonce | `dist/host/mount.js` (`setReading` posts `reading` on the current mount's port once ready, else queues it, the latest winning; it seeds every later mount of that `DocFrame`, which posts it again at its own ready, and an `off` posts nothing); `dist/enhance/reader.js#set` (the root's `data-reading`, through the journal, no remount); `assets/frame/reader.css` lines 1399 to 1404 (the running head, the Aa button, the bar's other tools, the progress line and the contents rail hidden, `--bar-h: 0`) | Holds |
+| `onReader`'s acts and their pacing | `dist/enhance/reader.js` (`READER_ACTS = ['menu', 'exit', 'toggle', 'active']`; nothing is sent unless the host passed `onReader`, which sets the seed's `bridge.reader`, `dist/host/mount.js`); `dist/frame/protocol.d.ts` (`readerWindowMs: 250`, `readerActiveMs: 60000`) | Holds |
+| The `settings` command while reading | `assets/frame/reader.css` line 1399: in a reading mode the bar stays with no height "so the settings command still opens its menu"; the command is registered whenever `chrome.settings` is on | Holds |
+| `r` and Esc | `dist/enhance/reader.js`: `r` sends `toggle` while off and `exit` while on; Esc sends `exit` only while a reading mode is on, and `dist/enhance/keys.js` gives Esc to an open overlay of the frame first | Holds |
+| Reading time | `dist/render/types.d.ts` (`RenderMeta.readingMinutes: number`) | Present (XR2.2 carries it) |
+
+The browser leg's three rows, `pwa/browser/reader-mode-lab.browser.test.ts`, on the built PWA with a ready reader frame, a wrapper around its host put full screen from the console's window (headless Chrome, Playwright, this box):
+
+- **M-3:** inside the frame `document.fullscreenEnabled` is false and `requestFullscreen` rejects (`TypeError`), at 1280 and at 412 wide; the frame's `sandbox` is exactly `allow-scripts`, with no `allow` and no `allowfullscreen`. Line: `M-3 {"width":1280,"enabled":false,"outcome":"rejected TypeError","element":null,"sandbox":"allow-scripts","allow":null,"allowFullscreen":null}` (and the same at 412).
+- **M-4:** with the wrapper full screen and the frame focused by its element's `focus()`, `?` reaches the frame and opens the library's keys sheet. Line: `M-4 {"refused":null,"focused":true,"frameHasFocus":true,"keys":["?"],"opened":true,"stillFull":true}`. A harness finding on the way: the library's mount focuses the iframe as it inserts it (step 8), and a headless page has no system focus until it is brought to the front, so the iframe was the console's active element while its document had no focus, and a second `focus()` on an element already active is a no-op. Four runs read `frameHasFocus: false` and no key arrived until the console's focus moved; a raw click on the frame's text, or a blur then a focus, gave it focus. The row blurs first. Reader mode's own focus (`ReaderMount.focus()`) follows the same rule (XR1.4).
+- **M-7, the frame's half:** inside the frame the wake lock is refused (`NotAllowedError`); the console's window is granted one (`screen`). Line: `M-7 {"inFrame":"refused NotAllowedError","inConsole":"granted screen"}`.
+
+Not measured here: M-1's refusal without activation (FS-8) and M-5's Esc (FS-5), which the device item takes, as spec §4.5 says. The layout measurement moved to X2's P5.1 (D-8975).
