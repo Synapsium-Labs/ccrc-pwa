@@ -452,7 +452,9 @@ All runs went through `ccrc test`.
 
 ### 9.3 The pushed head's red, and its fix
 
-The fast run on `7ed7ca519f`, this round's first push, was red in two places.
+The fast run on `7ed7ca519f`, this round's first push, was red in two places: the census and CodeQL. The second
+push, `010ebf63cb`, cleared the census and one of the two alerts, and was red on the other alert, the ledger guard and
+the shellcheck ratchet. The third push answers those.
 
 - **The D-3510 census, one case in server shard 10.** It finds no `chmod <mode> --` in a shipped script. This round's
   F3 code wrote it three times: the copy's `chmod 600` and the two restores of the saved mode. BSD chmod reads that
@@ -460,7 +462,13 @@ The fast run on `7ed7ca519f`, this round's first push, was red in two places.
   census was outside the guard set run here. The fix names the mode after `--`. It changes no line count, so growth
   stays +481.
 - **CodeQL, two alerts in the verb's test file.** Its 127-text case built a regular expression from a host literal and
-  escaped only the dots. The host is now escaped with the full class.
+  escaped only the dots. A full escape cleared the string-escaping alert but not the hostname one, because CodeQL
+  still traced the host literal into the pattern. So the case now matches the message's fixed words with a pattern
+  and names the host with a substring check, which needs the exact host and is stricter than the pattern was.
+- **The trailer.** The second push's head carried its `Ledger-Edit:` line in a paragraph of its own, so git did not
+  read it as a trailer, and the ledger guard was red. The third push's head puts it beside the attribution line.
+- **The shellcheck ratchet, server shard 1 of the second push.** The pinned 0.11.0 did not download within its two
+  60 s attempts, so the ratchet found the runner's 0.9.0 and failed as designed. That is the runner, not this change.
 
 The second push carries both fixes, by the coordinator's yes. Before it, every guard file CI's fast plan selects
 (`guardTests`, `.github/ci/fast-plan.mjs`) that names `ccd/` or `deploy/` was run on the fix commit: 122 files in four
