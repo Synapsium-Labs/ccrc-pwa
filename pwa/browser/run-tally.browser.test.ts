@@ -6,7 +6,7 @@
 //
 //   CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/run-tally.browser.test.ts
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { chromium, type Browser } from 'playwright-core';
+import { chromium, type Browser, type Page } from 'playwright-core';
 import { INSTRUMENT, REFINED } from '@ccrc/ui';
 import { UNCHECKED_PR } from '../../shared/api';
 import { resolveChrome } from './harness';
@@ -14,6 +14,11 @@ import { openApp, serveDist, sharedDist, type AppFixture, type DistServer } from
 import { fleetSession } from '../test/fleetFixture';
 
 const NOW = Date.now();
+/** The page's clock is the file's NOW (ticket run-tally-clock): the fixture's last-seen is five minutes before NOW and the
+ *  words read "last seen 5m ago" only if the page reads the same instant. Without the pin a case rendered more than about a
+ *  minute after the file loaded (the 1920 cases, last, on a loaded box) read 6m. `setFixedTime` fixes `Date` and leaves
+ *  the page's timers running, as frame-cost does. */
+const pinClock = (page: Page): Promise<void> => page.clock.setFixedTime(NOW);
 const H = 3_600_000;
 const WIDTHS = [360, 390, 1280, 1470, 1920] as const;
 const SKINS = [REFINED, INSTRUMENT] as const;
@@ -103,6 +108,7 @@ for (const width of WIDTHS) {
         it('the programme page\'s row draws "0/5 settled", "58 commits" and the heartbeat inside the row', async () => {
           const { ctx, page, errors } = await openApp(browser!, { skin, theme, width }, FIXTURE);
           try {
+            await pinClock(page);
             await page.goto(`${server!.origin}/programmes/prog-a`);
             await page.locator('[data-testid="programme-runs"] li.run-row .run-commits').first().waitFor({ timeout: 30_000 });
             const m = await page.evaluate(measure, { sels: ['li.run-row .run-tally', 'li.run-row .run-commits', 'li.run-row .run-seen'], within: '[data-testid="programme-runs"] li.run-row' });
@@ -122,6 +128,7 @@ for (const width of WIDTHS) {
         it('the run page header draws them too', async () => {
           const { ctx, page, errors } = await openApp(browser!, { skin, theme, width }, FIXTURE);
           try {
+            await pinClock(page);
             await page.goto(`${server!.origin}/runs/1801`);
             await page.locator('.rd-head .rd-commits').first().waitFor({ timeout: 30_000 });
             const m = await page.evaluate(measure, { sels: ['.rd-head .rd-tally', '.rd-head .rd-commits', '.rd-head .rd-seen'], within: '.rd-head' });
