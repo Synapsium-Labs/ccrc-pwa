@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { prefersReducedMotion } from '@ccrc/ui';
+import { onPop } from './popstate';
 import { reloadOnMove } from './swupdate';
 
 /** document.startViewTransition, where the platform has it. */
@@ -61,15 +62,15 @@ const read = (): string => location.pathname + location.search;
 /** The current path and search, live across push, replace, back and forward
  *  (design 2026-10-01 section 4.2). One string in state, so a change of the
  *  search alone (`?ref=a` to `?ref=b`) re-renders; the memo hands out one
- *  object per location. `useState` + `popstate`, never
+ *  object per location. `useState` + `popstate` (through `onPop`), never
  *  `useSyncExternalStore`: `navigate`'s `flushSync` and view-transition
  *  timing, and app-pane-reset-timing.test.tsx, rely on this mechanism. */
 export function useLocation(): Loc {
   const [raw, setRaw] = useState(read);
   useEffect(() => {
-    const on = (): void => setRaw(read());
-    addEventListener('popstate', on);
-    return () => removeEventListener('popstate', on);
+    // Through the one dispatcher (`popstate.ts`), which asks the decider first: a pop that is a place's or the console's
+    // own never reaches here. `navigate`'s own pop is the router's, so it still runs this before `navigate` returns.
+    return onPop(() => setRaw(read()));
   }, []);
   return useMemo(() => {
     const q = raw.indexOf('?');          // a pathname cannot contain '?'

@@ -18,6 +18,7 @@
 // keep this module free of the stores: whether a send is unresolved (the move
 // holds) and whether the block screen still stands.
 import { onPageHidden, onPageRestored, onPageVisible, onWindowBlur, onWindowFocus } from './pageClock';
+import { onPop as onHistoryPop } from './popstate';
 import { RELOAD_IDLE, reloadStep, type ReloadEvent, type ReloadState } from './reloadGate';
 
 let updater: (() => void) | null = null;
@@ -114,14 +115,14 @@ export function startReloadGate(given: Partial<ReloadActs> = {}): () => void {
     lastPath = location.pathname;
     if (stepMove(from, lastPath)) acts.reload();
   };
-  addEventListener('popstate', onPop);
+  const stopPop = onHistoryPop(onPop);
   const stop = (): void => {
     stopVisible();
     stopHidden();
     stopFocus();
     stopBlur();
     stopRestored();
-    removeEventListener('popstate', onPop);
+    stopPop();
     state = { ...state, visibleSince: null };
     if (stopGate === stop) stopGate = null;
   };

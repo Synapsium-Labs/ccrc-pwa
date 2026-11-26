@@ -1269,7 +1269,7 @@ Built ahead on X1's wave C branch (`aede492753`, merged into this workspace's br
 
 #### The characterization commit
 
-- `router-location.test.tsx` and `reload-on-move.test.ts` change as P5.3's Files paragraph words them. Their counts read `onPop` subscriptions through a module mock that wraps the real `onPop`.
+- `router-location.test.tsx` and `reload-on-move.test.ts` change as P5.3's Files paragraph words them. `router-location` counts `onPop` subscriptions through a module mock that wraps the real `onPop`. `reload-on-move` first did the same, but the test setup loads the release gate's module (through the fleet store) before a test file's mock can register, so its two cases stayed red with the dispatcher in place. In the feature commit they read the dispatcher's own count (`popSubscriberCountForTests`) instead, with the same assertions: one subscription for two starts, and none after `stop`.
 - `reader-history-adapter.test.tsx`'s case 8b changes too. The Files paragraph says that file stays green unchanged, but the programme ledger's P5.3 carry puts case 8b in this commit: the entry the router lands on is now stamped with `docsIdx`, so its state is `{docsIdx}`, not null. It still holds no filter.
 - Measured on the commit: those four cases red, the files' other 64 green.
 - One choice the plan leaves open: the dispatcher adds the window's one `popstate` listener when its first subscriber arrives and removes it when its last leaves, and `router-location.test.tsx` pins that. In the app the shell's `useLocation` is mounted for the page's life, so the listener is there on every screen.

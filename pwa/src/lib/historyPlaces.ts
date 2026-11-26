@@ -1,0 +1,325 @@
+// Back places, the decision (X2 P5.3, D-8763; parity spec 4.7). Ring L1 policy: pure. It takes everything as parameters
+// and names no browser global, no storage and no clock, so every rule here is a table row in a test. `popstate.ts` (L4)
+// asks it on every `popstate` before any subscriber runs and acts on the answer; `reader/places.ts` (L4) asks it for
+// the entries it pushes.
+//
+// What it decides. The console keeps one history entry per place the reader frame reports (the figure overlay, and a
+// jump marked to return from), tagged with the visit it belongs to. Every entry the tab visits is also numbered
+// (`docsIdx`, only ever growing), so a pop can tell Back from Forward by comparing the popped entry's number with the
+// entry last shown. A pop is then one of: the router's (a page move: every subscriber runs), the frame's (close the
+// overlay, or go back to where a jump left from), consumed (the console's own `history.back()` landing, or a place with
+// no command to give), or a skip (a place of an ended visit, or one the console cannot act on: step history once more,
+// in the direction of travel, and run nothing).
+import { isCount, isRecord } from './wire';
+
+/** The most places one doc visit pushes; the next is not pushed (the frame still works, Back just leaves the doc). */
+export const PLACES_MAX = 50;
+/** The top-level key of a history entry's state that numbers the entry. */
+export const IDX_KEY = 'docsIdx';
+/** The top-level key of a history entry's state that tags a place's entry. */
+export const PLACE_KEY = 'docsPlace';
+/** The key of the tab record in the tab's storage. */
+export const PLACES_RECORD_KEY = 'ccrc:docs:v1:places';
+
+export type PlaceKind = 'overlay' | 'jump';
+
+/** One place of the visit, as the tab record keeps it. `idx` is the `docsIdx` of its entry. */
+export interface Place {
+  readonly seq: number;
+  readonly kind: PlaceKind;
+  readonly idx: number;
+  readonly id?: string;
+  readonly from?: string;
+}
+
+/** What a place's entry carries in its state under `docsPlace`. */
+export interface EntryPlace {
+  readonly visit: string;
+  readonly seq: number;
+  readonly kind: PlaceKind;
+  readonly id?: string;
+  readonly from?: string;
+}
+
+/** The tab's record: where the visit stands and the tab's entry counter. */
+export interface TabRecord {
+  /** The current visit's id, or null when no reader is in a visit. */
+  visit: string | null;
+  /** The visit's doc: its page address less the fragment. */
+  doc: string | null;
+  /** The visit's places, in push order. */
+  places: Place[];
+  /** Places pushed in this visit: the budget's count, never down within a visit. */
+  seq: number;
+  /** The seq the console's own `history.back()` expects to land on (0 is the visit's base entry), or null. */
+  pendingSeq: number | null;
+  /** The `docsIdx` of the entry last shown, or -1 when none yet. */
+  lastIdx: number;
+  /** The next `docsIdx` to hand out. */
+  next: number;
+  /** Consecutive skips so far in one direction: the skip loop's bound. */
+  skips: number;
+  /** The direction of those skips, or null: a skip the other way starts the count again. */
+  skipDir: 'back' | 'forward' | null;
+}
+
+/** What the dispatcher does with one pop. */
+export type PopDecision =
+  | { readonly kind: 'close-overlay' }
+  | { readonly kind: 'goto'; readonly id: string; readonly from?: string }
+  | { readonly kind: 'consume' }
+  | { readonly kind: 'skip'; readonly dir: 'back' | 'forward' }
+  | { readonly kind: 'router' };
+
+/** The record of a tab that has seen nothing. Frozen: a function that needs a record of its own copies it. */
+export const EMPTY_RECORD: TabRecord = Object.freeze({
+  visit: null,
+  doc: null,
+  places: Object.freeze([] as Place[]) as Place[],
+  seq: 0,
+  pendingSeq: null,
+  lastIdx: -1,
+  next: 0,
+  skips: 0,
+  skipDir: null,
+});
+
+/** A record of its own with the empty record's values. */
+const fresh = (): TabRecord => ({ ...EMPTY_RECORD, places: [] });
+
+const isKind = (v: unknown): v is PlaceKind => v === 'overlay' || v === 'jump';
+
+/** The index and the place of a history entry's state. Tolerant: anything that is not the exact shape reads null for
+ *  its half. `idx` is a non-negative safe integer; a place is `{visit: string, seq >= 1, kind, id?, from?}` with each
+ *  optional key a string when present, and any other shape of `docsPlace` is no place at all. */
+export function readEntry(state: unknown): { idx: number | null; place: EntryPlace | null } {
+  if (!isRecord(state)) return { idx: null, place: null };
+  const rawIdx = state[IDX_KEY];
+  const idx = isCount(rawIdx) ? rawIdx : null;
+  const p = state[PLACE_KEY];
+  if (!isRecord(p)) return { idx, place: null };
+  const { visit, seq, kind, id, from } = p;
+  if (typeof visit !== 'string' || visit === '' || !isCount(seq) || seq < 1 || !isKind(kind)) return { idx, place: null };
+  if (id !== undefined && typeof id !== 'string') return { idx, place: null };
+  if (from !== undefined && typeof from !== 'string') return { idx, place: null };
+  return {
+    idx,
+    place: {
+      visit, seq, kind,
+      ...(id !== undefined ? { id } : {}),
+      ...(from !== undefined ? { from } : {}),
+    },
+  };
+}
+
+function readStoredPlace(v: unknown): Place | null {
+  if (!isRecord(v)) return null;
+  const { seq, kind, idx, id, from } = v;
+  if (!isCount(seq) || seq < 1 || !isKind(kind) || !isCount(idx)) return null;
+  if (id !== undefined && typeof id !== 'string') return null;
+  if (from !== undefined && typeof from !== 'string') return null;
+  return { seq, kind, idx, ...(id !== undefined ? { id } : {}), ...(from !== undefined ? { from } : {}) };
+}
+
+/** The tab record from its stored text. Tolerant: absent, unparsable or any field of the wrong shape reads as the empty
+ *  record, whole, never as a half-read one. */
+export function parseRecord(raw: string | null): TabRecord {
+  if (raw === null) return fresh();
+  let v: unknown;
+  try {
+    v = JSON.parse(raw);
+  } catch {
+    return fresh();
+  }
+  if (!isRecord(v)) return fresh();
+  const { visit, doc, places, seq, pendingSeq, lastIdx, next, skips, skipDir } = v;
+  if (skipDir !== null && skipDir !== 'back' && skipDir !== 'forward') return fresh();
+  if (visit !== null && typeof visit !== 'string') return fresh();
+  if (doc !== null && typeof doc !== 'string') return fresh();
+  if (!Array.isArray(places)) return fresh();
+  const read: Place[] = [];
+  for (const q of places) {
+    const p = readStoredPlace(q);
+    if (p === null) return fresh();
+    read.push(p);
+  }
+  if (!isCount(seq) || !isCount(next) || !isCount(skips)) return fresh();
+  if (pendingSeq !== null && !isCount(pendingSeq)) return fresh();
+  if (typeof lastIdx !== 'number' || !Number.isSafeInteger(lastIdx) || lastIdx < -1) return fresh();
+  return { visit, doc, places: read, seq, pendingSeq, lastIdx, next, skips, skipDir };
+}
+
+/** The page has just loaded on an entry whose state is `state` (once per page, before its first pop). The record may be
+ *  lost, or its `lastIdx` older than the entry the page loaded on (Back from another site can cross several entries), so
+ *  the entry decides: a numbered one is the entry last shown, and the counter rises above it; an unnumbered one is newer
+ *  than every entry the tab has numbered, so it counts as the next number, which the first push or routed pop onto it
+ *  then stamps. Nothing is written into the entry here. */
+export function seedPage(rec: TabRecord, state: unknown): TabRecord {
+  const { idx } = readEntry(state);
+  if (idx === null) return { ...rec, places: rec.places.slice(), lastIdx: rec.next };
+  return { ...rec, places: rec.places.slice(), lastIdx: idx, next: Math.max(rec.next, idx + 1) };
+}
+
+/** What `decidePop` reads of the tab. `host` is whether a mounted reader has registered to take close and goto. */
+export interface PopTab {
+  readonly visit: string | null;
+  readonly places: readonly Place[];
+  readonly pendingSeq: number | null;
+  readonly lastIdx: number;
+  readonly skips: number;
+  readonly skipDir: 'back' | 'forward' | null;
+  readonly host: boolean;
+}
+
+/** What one `popstate` means, decided before any subscriber runs. `popped` is the state of the entry landed on. The
+ *  rules, in order:
+ *  1. No `docsIdx` on the entry: the router's (`navigate`'s synthetic pop lands on a fresh unnumbered entry). A pending
+ *     back is not consumed by it: nothing counts "ignore the next pop".
+ *  2. The entry is the one last shown: the router's.
+ *  3. Back when its index is below the last shown, else Forward.
+ *  4. A pending back (the console's own `history.back()` after the frame closed the overlay itself) that lands on the
+ *     entry it expected (seq 0 is the visit's base entry, with no place; seq k is the visit's place k): consumed.
+ *  5. A place of another visit, or of none now: stale. Skip toward the direction of travel, unless `PLACES_MAX` skips
+ *     in a row in that direction have run, which routes instead.
+ *  6. A place of this visit with no host registered: stale, as 5.
+ *  7. Back, this visit: the places being left (the visit's places above the landing, up to the entry last shown) are the
+ *     frame's to undo, and the lowest of them says how: an overlay closes, a jump goes back to its `from` (so a Back of
+ *     several entries at once lands where the first of them left), and with no host the pop is consumed. When no place
+ *     of the visit is left and the landing is a place, consumed.
+ *  8. Forward onto a place of this visit that the record holds: a jump goes to its id again (no `from`), an overlay is
+ *     consumed (nothing reopens it). A place the record does not hold is stale, as 5.
+ *  9. Anything else (a base entry, no place): the router's. */
+export function decidePop(popped: unknown, tab: PopTab): PopDecision {
+  const { idx, place } = readEntry(popped);
+  if (idx === null) return { kind: 'router' };
+  if (idx === tab.lastIdx) return { kind: 'router' };
+  const dir = idx < tab.lastIdx ? 'back' : 'forward';
+  if (tab.pendingSeq !== null && dir === 'back') {
+    const expected = tab.pendingSeq === 0
+      ? place === null
+      : place !== null && place.visit === tab.visit && place.seq === tab.pendingSeq;
+    if (expected) return { kind: 'consume' };
+  }
+  const run = tab.skipDir === dir ? tab.skips : 0;
+  const stale = (): PopDecision => (run >= PLACES_MAX ? { kind: 'router' } : { kind: 'skip', dir });
+  if (place !== null && (tab.visit === null || place.visit !== tab.visit)) return stale();
+  if (place !== null && !tab.host) return stale();
+  if (dir === 'back') {
+    let left: Place | undefined;
+    for (const p of tab.places) {
+      if (p.idx > idx && p.idx <= tab.lastIdx && (left === undefined || p.idx < left.idx)) left = p;
+    }
+    if (left !== undefined) {
+      if (!tab.host) return { kind: 'consume' };
+      if (left.kind === 'overlay') return { kind: 'close-overlay' };
+      if (left.id === undefined) return { kind: 'consume' };
+      return { kind: 'goto', id: left.id, ...(left.from !== undefined ? { from: left.from } : {}) };
+    }
+    if (place !== null) return { kind: 'consume' };
+    return { kind: 'router' };
+  }
+  if (place !== null) {
+    const held = tab.places.find((p) => p.seq === place.seq);
+    if (held === undefined) return stale();
+    if (held.kind === 'jump' && held.id !== undefined) return { kind: 'goto', id: held.id };
+    return { kind: 'consume' };
+  }
+  return { kind: 'router' };
+}
+
+/** The record after one pop, and the index the entry landed on must be stamped with (null for none). The index rule:
+ *  - every decision sets `lastIdx` to the popped entry's index when it has one: a skip too, so a skip at the top of
+ *    history that cannot step does not trap the next Back;
+ *  - a skip counts one more consecutive skip in its direction (a skip the other way starts at one), and anything else
+ *    resets the count;
+ *  - everything but a skip clears `pendingSeq` (a real landing ends the wait);
+ *  - the router on an entry with no index stamps it with `next`, so every routed entry is numbered;
+ *  - `next` never falls to or below an index already shown: it rises to one above the popped entry's, so a lost record
+ *    never hands out a number already in use. */
+export function afterPop(rec: TabRecord, popped: unknown, d: PopDecision): { rec: TabRecord; stamp: number | null } {
+  const { idx } = readEntry(popped);
+  const out: TabRecord = {
+    ...rec,
+    places: rec.places.slice(),
+    skips: d.kind === 'skip' ? (rec.skipDir === d.dir ? rec.skips : 0) + 1 : 0,
+    skipDir: d.kind === 'skip' ? d.dir : null,
+    pendingSeq: d.kind === 'skip' ? rec.pendingSeq : null,
+  };
+  if (idx !== null) {
+    out.lastIdx = idx;
+    out.next = Math.max(rec.next, idx + 1);
+    return { rec: out, stamp: null };
+  }
+  if (d.kind === 'router') {
+    const stamp = rec.next;
+    out.lastIdx = stamp;
+    out.next = stamp + 1;
+    return { rec: out, stamp };
+  }
+  return { rec: out, stamp: null };
+}
+
+/** A reader body starts on the entry `current`. The same doc as the record's visit continues that visit (a remount, a
+ *  sign-in remount, a reload), the record untouched except that its counter rises above the entry's index. Any other
+ *  doc starts a new visit under `newVisitId` with no places and no budget spent; the entry the visit stands on is its
+ *  base entry, stamped when it has no index, and `lastIdx` is that entry's. The caller strips an ended visit's
+ *  `docsPlace` from a base entry when `continued` is false. */
+export function beginVisit(
+  rec: TabRecord, doc: string, newVisitId: string, current: { idx: number | null },
+): { rec: TabRecord; continued: boolean; stamp: number | null } {
+  const seeded = current.idx === null ? rec.next : Math.max(rec.next, current.idx + 1);
+  if (rec.visit !== null && rec.doc === doc) {
+    return { rec: { ...rec, places: rec.places.slice(), next: seeded }, continued: true, stamp: null };
+  }
+  const base: TabRecord = {
+    ...rec, visit: newVisitId, doc, places: [], seq: 0, pendingSeq: null, skips: 0, skipDir: null, next: seeded,
+  };
+  if (current.idx !== null) return { rec: { ...base, lastIdx: current.idx }, continued: false, stamp: null };
+  return { rec: { ...base, lastIdx: seeded, next: seeded + 1 }, continued: false, stamp: seeded };
+}
+
+/** The reader's body ended for another doc or a screen that is not a doc: the visit is over, its places with it. The
+ *  entry counter and the entry last shown are the tab's, and stay. */
+export function endVisit(rec: TabRecord): TabRecord {
+  return { ...rec, visit: null, doc: null, places: [], seq: 0, pendingSeq: null };
+}
+
+/** The frame reported a place. With no visit, or with `PLACES_MAX` places already pushed in this one, nothing is
+ *  pushed (`push` null). Otherwise the current entry is numbered first when it has no index, then the new place takes the
+ *  next one: `seq` is one above the count, `lastIdx` is the new entry's, and `push` is what the caller writes into the
+ *  new entry's state. The push removes every entry above the current one from history, so the places recorded above it
+ *  leave the record too: the record holds only places that are still entries. */
+export function pushPlace(
+  rec: TabRecord, p: { kind: PlaceKind; id?: string; from?: string }, current: { idx: number | null },
+): { rec: TabRecord; push: { idx: number; place: EntryPlace } | null; stamp: number | null } {
+  if (rec.visit === null || rec.seq >= PLACES_MAX) return { rec, push: null, stamp: null };
+  let next = current.idx === null ? rec.next : Math.max(rec.next, current.idx + 1);
+  let stamp: number | null = null;
+  if (current.idx === null) {
+    stamp = next;
+    next += 1;
+  }
+  const here = current.idx ?? (stamp as number);
+  const idx = next;
+  const seq = rec.seq + 1;
+  const extra = { ...(p.id !== undefined ? { id: p.id } : {}), ...(p.from !== undefined ? { from: p.from } : {}) };
+  const place: Place = { seq, kind: p.kind, idx, ...extra };
+  const kept = rec.places.filter((q) => q.idx <= here);
+  return {
+    rec: { ...rec, places: [...kept, place], seq, lastIdx: idx, next: idx + 1 },
+    push: { idx, place: { visit: rec.visit, seq, kind: p.kind, ...extra } },
+    stamp,
+  };
+}
+
+/** The frame closed its overlay itself (Esc or Close). When the entry last shown is this visit's overlay place, the
+ *  overlay's entry is still on top of its base: answer `back: true` so the console steps back once, and expect that
+ *  landing (`pendingSeq` is the seq of the place pushed just before it, or 0, the base entry, when it is the first), so
+ *  the pop is consumed and nothing else. Anything else changes nothing. */
+export function closedByFrame(rec: TabRecord): { rec: TabRecord; back: boolean } {
+  const i = rec.places.findIndex((p) => p.idx === rec.lastIdx);
+  const left = rec.places[i];
+  if (left === undefined || left.kind !== 'overlay') return { rec, back: false };
+  const before = rec.places[i - 1];
+  return { rec: { ...rec, places: rec.places.slice(), pendingSeq: before === undefined ? 0 : before.seq }, back: true };
+}
