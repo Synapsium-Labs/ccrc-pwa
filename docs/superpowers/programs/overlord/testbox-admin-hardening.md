@@ -17,8 +17,13 @@ Overlord wave 239. Two tasks in one pull request:
 
 ## 1. The properties
 
-Each property has cases in `server/test/testbox-admin-user-writes.test.ts`. Each arm of each guard has a case that goes
-red when that arm alone is removed (section 5). Verb-level cases are in the connect, retry, key-rotate and acts suites.
+Each property has cases in `server/test/testbox-admin-user-writes.test.ts`. Each reachable arm of each guard has a case
+that goes red when that arm alone is removed (section 5). Two arms have no such case:
+- the repair walk's not-a-directory arm, which nothing reaches once the folder test before it holds;
+- the token step's arm for a folder of homes that cannot be resolved, which is redundant in effect: the next step refuses
+  the same state with the same word.
+
+Verb-level cases are in the connect, retry, key-rotate and acts suites.
 
 | | Property | How it holds |
 |---|---|---|
@@ -38,10 +43,13 @@ answer as before. There are five quiet differences:
 - **A token folder that an earlier pairing made as root** is handed to the service user on the next pairing, if it holds
   nothing but the token (or nothing, after an unpair) and group and other cannot write it. Root does this by changing the
   owner of the folder it stands in. After that, the user writes the token there.
-- **The access key file is the login user's after an edit.** It keeps its mode and its modification time. Its access time
-  is that of the edit's own read. A file its owner may only read (0400 or 0444, which sshd accepts) is still edited.
-- **An edit of the access key file drops its trailing blank lines** (a named difference). The edits read the file through
-  a command substitution. sshd skips blank lines, so no login changes.
+- **The access key file is the login user's after an edit.** It keeps its mode and its modification time: before, an
+  edit set the modification time to the time of the edit; now the old time is kept. Its access time is that of the edit's
+  own read. A file its owner may only read (0400 or 0444, which sshd accepts) is still edited.
+- **An edit of the access key file drops its trailing blank lines and every NUL byte, and ends the last line with a
+  newline when it had none** (named differences). The edits read the file through a command substitution. sshd skips
+  blank lines, so no login changes there. Only the login user, or root on its own file, can put a NUL in the file, so no
+  boundary is crossed; whether sshd skips a line holding a NUL is not measured (section 6).
 - **The repair copy replaces a link at a destination name** with the staged file, rather than writing through the link.
 
 **For a box out of order: a refusal with an existing code.**
@@ -49,7 +57,7 @@ answer as before. There are five quiet differences:
 | What is out of order | Answer |
 |---|---|
 | The token's path: a link, a second name, a folder or another kind of file where the token goes; a link or a file where a folder goes; a home that is not the service user's real directory; a folder of a third user's; a folder of root's that holds anything else, or that group or other may write; a service user or group of root's | `pair-failed` |
-| The access key file or its folder: a link, a second name or another kind of file at the file; a link or a plain file where the key folder goes; a key folder the login user cannot write (one of root's); a login home that is a link | `new-key-refused` (append), `old-line-kept` (removal after the switch), `unpair-failed` or `revoked-unpair-failed` (Disconnect, key-revoke). A refused rotate's own removal logs the box's word, and its answer stays `new-key-refused`. |
+| The access key file or its folder: a link, a second name or another kind of file at the file; a link or a plain file where the key folder goes; a key folder the login user cannot write (one of root's), whether or not it may search it; a folder on the way that it cannot search, where a removal cannot prove the file absent and so refuses rather than answer that the line is gone; a login home that is a link | `new-key-refused` (append), `old-line-kept` (removal after the switch), `unpair-failed` or `revoked-unpair-failed` (Disconnect, key-revoke). A refused rotate's own removal logs the box's word, and its answer stays `new-key-refused`. |
 | The installed tree for Repair: a link on the way; a folder above it not root's, or open to group or other writes; an entry not root's, or open to them | `install-failed`, phase `install`, and no installer runs |
 
 ## 3. Consolidation
@@ -79,7 +87,7 @@ answer as before. There are five quiet differences:
 
   | State | Code |
   |---|---|
-  | A key folder the login user cannot write (one of root's) | `new-key-refused` (append), `old-line-kept` (removal after the switch), `unpair-failed` or `revoked-unpair-failed` (Disconnect, key-revoke) |
+  | A key folder the login user cannot write (one of root's), whether or not it may search it; for a removal, also a folder on the way that it cannot search, since the removal cannot then prove the file absent | `new-key-refused` (append), `old-line-kept` (removal after the switch), `unpair-failed` or `revoked-unpair-failed` (Disconnect, key-revoke) |
   | A login home that is a link | the same codes, by edit |
   | A link, a second name or another kind of file at the key file | the same codes, by edit |
   | A link or a plain file where the key folder goes | the same codes, by edit |
@@ -94,9 +102,12 @@ answer as before. There are five quiet differences:
   later hand changes cannot be proved from the installer's text, so the repair copy checks the property itself before it
   writes. The check is one walk to `/` and one `find`. The copy then replaces a link at a destination name rather than
   writing through it.
-- **`macos-scan-pin`.** The new file's box-side region holds two GNU spellings: `mv -T`, and the copy's
-  `--remove-destination`. The macOS scan cuts and pins them, as it does for the build copy's region. In the first round
-  the scan's suite was held by another run, which cleared that hunk before it was applied.
+- **`macos-scan-pin`.** The new file's box-side region holds three GNU spellings: the writer's `chmod --reference` and
+  `mv -T`, and the copy's `--remove-destination`. The macOS scan's table has a row for each. The scan cuts and pins the
+  region, as it does for the build copy's region, and its pin counts all three. The new row also matches one existing line
+  of the verb, outside its own region: the box's settings file write, which runs on the box. The scan cuts that one line
+  and pins it to that one spelling, so a second use anywhere else in the verb is a hit. The verb's code is unchanged. In
+  the first round the scan's suite was held by another run, which cleared that hunk before it was applied.
 - **`test-lane-first-run`.** The first run of the new suite went through the test wrapper's default lane. That lane is
   allowed for fixture-only runs. Every later run was `--local`.
 - **`claim-after-edit`.** The retry suite was edited a moment before it was claimed. Its claim was free and was taken
@@ -131,16 +142,17 @@ What could not go into an existing note, because a later pull request never edit
 
 Each mutant removed or weakened one arm of one guard. The case set was run once per mutant, and every file was restored
 byte for byte afterwards. Every row on the box programs and the macOS scan was run in fix round 1, against the
-user-write suite unless another is named. The verb-level and review-words rows are the first round's: their code did not
-change.
+user-write suite unless another is named; the rows marked (round 2) were run in fix round 2. The verb-level and
+review-words rows are the first round's: their code did not change.
 
 | Guard, and the arm the mutant removes | Result |
 |---|---|
 | The token written without the drop (`TBA_DROP` taken out of the exec) | red, 1 case |
 | The service user's id refused when it is root's (user arm) | red, 1 case |
 | The service user's group refused when it is root's (group arm) | red, 1 case |
-| The service user's numbers refused when they are not numbers | red, 3 cases |
-| The folder of homes that cannot be resolved | red, 1 case |
+| The service user's numbers refused when they are not numbers (whole check) | red, 4 cases (round 2) |
+| The service user's numbers: the empty group number arm alone | red, 1 case (round 2) |
+| The folder of homes that cannot be resolved | red, 1 case, only because the shell then stops with no word; an arm that does nothing stays green (section 1) |
 | A token path outside the home | red, 1 case |
 | Root's physical-path check of the home | red, 1 case |
 | Root's owner check of the home | red, 1 case |
@@ -162,6 +174,7 @@ change.
 | The writer giving the mode before the bytes (the first round's order) | red, 5 cases |
 | The writer not copying the old file's times | red, 4 cases |
 | The access key edits reading before their checks (append, removal) | red, 3 and 3 cases |
+| The removal answering a file absent where it cannot look (its proof of absence taken out) | red, 3 cases (round 2) |
 | The repair copy: the owner of the tree and of each folder above it (whole check) | red, 3 cases |
 | The repair copy: the mode of the tree and of each folder above it (whole check) | red, 3 cases |
 | The repair copy: a folder's other-write arm alone | red, 1 case |
@@ -171,6 +184,8 @@ change.
 | The repair copy: an entry's owner arm alone | red, 2 cases |
 | The repair copy: an entry's other-write arm alone | red, 2 cases |
 | The repair copy writing through a link at a destination name | red, 1 case; and the macOS scan's pin, red |
+| The macOS scan's `chmod --reference` row taken out | red, 2 cases: the region's pin and the verb's one-line exemption (round 2) |
+| The macOS scan's cut of the verb's one line taken out, the row kept | red, 2 cases: the verb's sweep and its region's outside check (round 2) |
 | Each of the four access key edit calls made under sudo (key-rotate suite) | red, each |
 | The box word's reader accepting any text (acts suite) | red, 1 case |
 | The copy's box-root set widened by one character (agent) | red, 1 case |
@@ -187,11 +202,12 @@ change.
   to its physical path first, so it is not refused. That was argued, not run.
 - That sshd accepts an access key file that the login user rewrote: the login user's owner, the mode kept, the
   modification time kept.
+- Whether sshd skips a line of the access key file that holds a NUL byte. Not measured.
 - GNU `find -quit`, `mv -T`, `cp --remove-destination`, `chmod --reference` and `ls -ldn` on the box's userland. They are
   the same tools as the fleet host's.
 - **Two exposures of the repair's proof on a box the installer accepted.** The installer proves only the tree and its own
   two folders, so either of these now ends the repair with its existing failure code (`install-failed`):
-  - a tools path under a parent folder (or mount point) that is not root's, or that its group may write;
+  - a tools path under a parent folder (or mount point) that is not root's, or that its group or others may write;
   - a tools path reached through a link on the way.
 
   On a box the installer built at its default path, every folder above the tree is root's and closed, so the proof
