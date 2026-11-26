@@ -3982,6 +3982,12 @@ button.proj-card-pool::before {
   .fleet-runs-line { flex-wrap: wrap; row-gap: var(--sp-2); }
   .fleet-runs-line .fleet-runs-row { flex: 1 0 auto; }
   .fleet-runs-line .fleet-new-project { margin-inline-start: auto; }
+  /* THE ACCOUNTS HEAD BLOCK ON ONE EDGE (desktop polish wave 182; the first review of wave 180's F10). The Add account
+     door's reason keeps its start padding, the room its tap mark draws in (the bar, and the outline under forced colours),
+     but hangs that room into the page's gutter, so its words start on the edge of every other body line rather than
+     --sp-2 inside it. The roll-up and the projection under it are one group: --sp-1 apart in the body's --sp-3 grid. */
+  .acct-door-reason { margin-inline-start: calc(-1 * var(--sp-2)); }
+  .accounts-rollup + .accounts-projection { margin-block-start: calc(var(--sp-1) - var(--sp-3)); }
   .sess-body .fit-full { display: inline; }
   .sess-body .fit-short { display: none; }
   .sess-label-fit,
@@ -4015,8 +4021,8 @@ button.proj-card-pool::before {
 /* — The Add account door and the connect sheet (accounts plan Task A18, D-5522, D-7740; spec §5, §12.1–§12.4) —
    The door is one per width: on a phone the lane list's last row, a `ListRow` at the skin's own row height (52px in
    Refined, 44px in Instrument, `--row-h`), the word and its meta on one line that wraps only between them; at ≥900 a
-   secondary button in the page header. Narrowed, it stays where it is and STANDS DOWN (desktop-polish wave 180): the
-   design system's disabled look, the ghost button's own `disabled:` stand-down (`--ink-disabled`, an `--edge-subtle`
+   secondary button in the page header. Narrowed, it stays where it is and STANDS DOWN (desktop-polish wave 180, D-9106):
+   the design system's disabled look, the ghost button's own `disabled:` stand-down (`--ink-disabled`, an `--edge-subtle`
    border at ≥900), with no lift under the mouse and no press, so it no longer reads as the live buttons beside it. It
    stays focusable and `aria-disabled`; WCAG 1.4.3 exempts an inactive control's ink, and the census registers it so
    (design/audit.mjs). The reason beneath keeps the secondary ink, which every pair clears, and a tap or Enter on the
@@ -4104,10 +4110,11 @@ button.proj-card-pool::before {
 }
 /* The sheet's field notes, a narrowed row's reason and the door's reason: the trouble card's meta sentence style, kept
    as a rule of its own because those rules are scoped under `.accounts-row[data-state]` and these sit in the sheet or
-   under the page header, outside any card. They may carry a long unbroken name, so they wrap anywhere. */
+   under the page header, outside any card. They may carry a long unbroken name, so they wrap anywhere. The door reason's
+   visually hidden live region is a paragraph too, and keeps its own `sr-only` box (wave 182; review A1 of wave 180). */
 .acct-field-note,
 .acct-narrowed,
-.acct-door-reason > p,
+.acct-door-reason > p:not(.sr-only),
 .acct-door-reason .acct-fix-hold {
   margin-block: 0;
   font-family: var(--family-ui);

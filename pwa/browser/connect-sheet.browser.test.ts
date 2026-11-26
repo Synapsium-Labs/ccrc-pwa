@@ -185,6 +185,23 @@ describe('the Add account door and the connect sheet at every width and skin (D-
         expect(n.more).toBe(DOOR_NARROWED['gate-dark'].more!.summary);
         expect(n.chevron, 'the disclosure shows that it opens: the settings folds\' chevron').toBe('"" solid');
         expect(n.below, 'the reason sits beneath the door').toBe(true);
+        // The chevron follows the disclosure's open state (desktop polish wave 182; review A3 of wave 180): it turns when
+        // the disclosure opens and turns back when it closes, read against the rotations its rules name, through a probe.
+        const turn = (open: boolean) => dark.page.waitForFunction((want) => {
+          const summary = document.querySelector('.acct-door-reason details > summary');
+          if (summary === null) return false;
+          const probe = document.createElement('span');
+          probe.style.cssText = `display:block;transform:rotate(${want ? 45 : -45}deg)`;
+          document.body.append(probe);
+          const target = getComputedStyle(probe).transform;
+          probe.remove();
+          return (summary.parentElement as HTMLDetailsElement).open === want && getComputedStyle(summary, '::before').transform === target;
+        }, open, { timeout: 5_000 });
+        await turn(false);
+        await dark.page.click('.acct-door-reason details > summary');
+        await turn(true);
+        await dark.page.click('.acct-door-reason details > summary');
+        await turn(false);
         // It stands down: the design system's disabled ink, never the live door's.
         expect(n.color, 'the narrowed door is drawn in the disabled ink').toBe(n.disabledInk);
         expect(n.color).not.toBe(n.liveInk);

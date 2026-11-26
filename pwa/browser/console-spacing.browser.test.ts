@@ -411,12 +411,14 @@ describe("a page's head-row controls: min(--row-h, --tap-min) under a mouse, the
           try {
             await page.setViewportSize({ width, height });
             let seen = 0;
+            let addAccount = 0;
             for (const p of HEAD_CONTROL_PAGES) {
               await at(page, p.path, ANCHORS.scaffoldTitle!);
               const m = await headControls(page, p.body);
               const want = touch ? m.tapMin : Math.min(m.rowH, m.tapMin);
               for (const c of m.controls) {
                 seen += 1;
+                if (p.name === 'Accounts' && /Add account/.test(c.text)) addAccount += 1;
                 const h = c.box[3] - c.box[1];
                 expect(h, `${p.name} · ${c.text}: height`).toBeCloseTo(want, 0);
                 expect(Math.abs((c.box[1] + c.box[3]) / 2 - (m.row[1] + m.row[3]) / 2), `${p.name} · ${c.text}: centred on its row`).toBeLessThan(NEAR);
@@ -433,6 +435,7 @@ describe("a page's head-row controls: min(--row-h, --tap-min) under a mouse, the
               if (m.body !== null) expect(m.body, `${p.name}: a body control keeps the tap floor`).toBeGreaterThanOrEqual(m.tapMin - 0.01);
             }
             expect(seen, 'the four screens draw head-row controls').toBeGreaterThanOrEqual(4);
+            expect(addAccount, 'Add account is one of the Accounts head row\'s controls, measured above').toBe(1);
             expect(errors).toEqual([]);
           } finally {
             await ctx.close();
@@ -572,6 +575,63 @@ describe("Refined's desk runs line: the door and New project share it, the choos
             expect(m.boxes[i]!.r, `${m.boxes[i]!.cls} inside the line`).toBeLessThanOrEqual(m.line.r + 0.5);
           }
           expect(m.lines, `"${m.words}" on one line`).toBe(1);
+          expect(errors).toEqual([]);
+        } finally {
+          await ctx.close();
+        }
+      }, 120_000);
+    }
+  }
+});
+
+describe('the Accounts head block on the merged door (#3402): one edge for its lines, the roll-up and projection one group', () => {
+  for (const skin of [INSTRUMENT, REFINED]) {
+    for (const [width, height] of DESKS) {
+      it(`${skin}, ${width}x${height}: the door's reason starts on the body's edge with its mark's room outside it; the roll-up and the projection --sp-1 apart; the live region keeps its sr-only box`, async () => {
+        const { ctx, page, errors } = await openApp(browser!, { skin, theme: PHOSPHOR, width }, FIRST);
+        try {
+          await page.setViewportSize({ width, height });
+          await at(page, '/accounts', '.acct-door-reason');
+          await page.waitForSelector('.accounts-projection', { timeout: 20_000 });
+          const m = await page.evaluate(() => {
+            const tok = (name: string): number => {
+              const probe = document.createElement('div');
+              probe.style.cssText = `position:absolute;visibility:hidden;height:var(${name})`;
+              document.body.appendChild(probe);
+              const h = probe.getBoundingClientRect().height;
+              probe.remove();
+              return h;
+            };
+            /** Where an element's first line of text starts (its ink, not its box). */
+            const inkLeft = (el: Element): number => {
+              const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+              let left = Infinity;
+              for (let n = walker.nextNode(); n !== null; n = walker.nextNode()) {
+                if ((n.textContent ?? '').trim() === '') continue;
+                const r = document.createRange();
+                r.selectNodeContents(n);
+                for (const b of r.getClientRects()) if (b.width > 0) left = Math.min(left, b.left);
+                if (left !== Infinity) break;
+              }
+              return left;
+            };
+            const reason = document.querySelector('.acct-door-reason')!;
+            const sentence = document.getElementById('acct-door-reason')!;
+            const rollup = document.querySelector('.accounts-rollup')!;
+            const projection = document.querySelector('.accounts-projection')!;
+            const live = reason.querySelector<HTMLElement>('p.sr-only');
+            return {
+              sp1: tok('--sp-1'), sp2: tok('--sp-2'),
+              reasonBox: reason.getBoundingClientRect().left, reasonInk: inkLeft(sentence), rollupInk: inkLeft(rollup),
+              rollupBottom: rollup.getBoundingClientRect().bottom, projectionTop: projection.getBoundingClientRect().top,
+              liveMargin: live === null ? null : getComputedStyle(live).margin,
+            };
+          });
+          expect(Math.abs(m.reasonInk - m.rollupInk), `the reason's text starts on the body's edge (reason ${m.reasonInk}, roll-up ${m.rollupInk})`).toBeLessThanOrEqual(0.5);
+          expect(m.reasonInk - m.reasonBox, "the mark's room (--sp-2) stays inside the reason's box, before its text").toBeCloseTo(m.sp2, 0);
+          expect(m.projectionTop - m.rollupBottom, 'the roll-up and the projection are one group, --sp-1 apart').toBeCloseTo(m.sp1, 0);
+          expect(m.liveMargin, 'the live region is drawn').not.toBeNull();
+          expect(m.liveMargin, "the reason's paragraph rule leaves the live region's sr-only margin alone").toBe('-1px');
           expect(errors).toEqual([]);
         } finally {
           await ctx.close();

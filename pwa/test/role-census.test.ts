@@ -270,7 +270,7 @@ const APP_ROLE_RULES: Readonly<Record<string, Readonly<Record<string, TypeRole>>
     // field labels, the field notes with a narrowed row's and the door's reason, and a method's consequence line.
     '.acct-door': UI,
     '.acct-field > label, .acct-secret > label': META,
-    '.acct-field-note, .acct-narrowed, .acct-door-reason > p, .acct-door-reason .acct-fix-hold': META,
+    '.acct-field-note, .acct-narrowed, .acct-door-reason > p:not(.sr-only), .acct-door-reason .acct-fix-hold': META,
     // The door reason's disclosure row (desktop-polish wave 180), in the reason's own size; its list is the compromise
     // steps' (`.acct-compromise-steps`).
     '.acct-door-more > summary': META,
