@@ -244,13 +244,13 @@ forecast (A) and one more restart word (B).
 
 ### Deviations found (wave 3b, A)
 
-- **D-TBD-provmove-fit** — the fit is at nine tenths, not at the whole window: the landing's first turn sends the whole conversation
+- **D-9119** — the fit is at nine tenths, not at the whole window: the landing's first turn sends the whole conversation
   and needs room to answer, and the figure is from the last render. It is asked of a provider move only; a limit rescue, the wake
   move and the operator's verbs are unchanged.
-- **D-TBD-provmove-floor** — the window of an Anthropic lane is stated nowhere. Between two of them the model, and so the window, is
+- **D-9120** — the window of an Anthropic lane is stated nowhere. Between two of them the model, and so the window, is
   the session's own, so nothing is compared; from another provider it is taken as 200000, which refuses some sessions a one-million
   window would take and never admits one that does not fit.
-- **D-TBD-provmove-place** — a marked lane is left out of every tier of the placement walk, the measured one included: an unmeasured
+- **D-9121** — a marked lane is left out of every tier of the placement walk, the measured one included: an unmeasured
   unmarked lane is taken before a marked one with room. Only a dead credential, or a lane whose newest spawn was refused, ranks behind.
 
 ### B. The act: what a move proves before it ends anything
@@ -286,13 +286,13 @@ Nothing dispatches the arm yet.
 
 ### Deviations found (wave 3b, B)
 
-- **D-TBD-provmove-bg** — `_swap_bg_hold` reads nothing into a `failed` line, whose `bg` the last good Stop counted. A provider move
+- **D-9122** — `_swap_bg_hold` reads nothing into a `failed` line, whose `bg` the last good Stop counted. A provider move
   holds on any count but 0, `-1` included, for 30 minutes from the episode's first failure: a subagent still running then is a client
   of the same provider, and only a good Stop would rewrite the count, so an unbounded hold would never end during an outage. A
   background shell holds without a bound, by the live status word.
-- **D-TBD-provmove-quiet** — the move does not run `notify.sh`, which every other swap does: the ruling is one operator notice per
+- **D-9123** — the move does not run `notify.sh`, which every other swap does: the ruling is one operator notice per
   outage, and the server raises it.
-- **D-TBD-provmove-cause** — a cause word of its own, where the watchdog's and the wake move's arms took existing ones: "off a blocked
+- **D-9124** — a cause word of its own, where the watchdog's and the wake move's arms took existing ones: "off a blocked
   account" is false of this move and is said to the session itself. An older server or console reads it as `unknown`.
 
 ### C. The decision
