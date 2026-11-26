@@ -158,7 +158,41 @@ const INSTALL_BEHIND_SET: MutantSet<RenewalReadingsModule> = {
   suite: installBehindCases,
 };
 
+// ------------------------------------------------------------------------------------------------------------- holdTargetOf
+
+export function holdTargetCases(m: RenewalReadingsModule): Record<string, SuiteCase> {
+  const view = { bound: { sessionId: 'lane-a-overlord', generation: 'g1' }, pending: null, term: 2, designatedTerm: 2, model: 'opus',
+    accountPools: { pools: ['pool-a'], untagged: false }, pastIds: [], actor: 'flag-off', lastAttempt: null, stopsOwed: [] } as const;
+  const bound = { kind: 'designated', sessionId: 'lane-a-overlord', term: 2, row: view } as const;
+  const g = (sessionId: string, role = 'overlord') => ({ role, sessionId });
+  const rows = [g('lane-b-overlord'), g('lane-a-overlord', 'coordinator'), g('lane-a-overlord')];
+  return {
+    'the bound session\'s Overlord generation is the target': () => {
+      expect(m.holdTargetOf(bound as never, rows)).toBe(rows[2]);
+    },
+    'nobody designated, a pending row or an unreadable one: no target': () => {
+      expect(m.holdTargetOf({ kind: 'not-designated', row: null }, rows)).toBeNull();
+      expect(m.holdTargetOf({ kind: 'not-designated', row: { ...view, bound: null } } as never, rows)).toBeNull();
+      expect(m.holdTargetOf({ kind: 'unmeasured', why: 'locked' }, rows)).toBeNull();
+    },
+    'another session\'s generation, or a coordinator generation of the bound session, is never the target': () => {
+      expect(m.holdTargetOf(bound as never, [rows[0]!, rows[1]!])).toBeNull();
+    },
+  };
+}
+
+const HOLD_TARGET_SET: MutantSet<RenewalReadingsModule> = {
+  modulePath: READINGS,
+  mutants: [
+    { id: 'T1 any role', old: "return g.role === 'overlord' && b !== false && b.kind === 'designated';", new: "return b !== false && b.kind === 'designated';" },
+    { id: 'T2 an unreadable row binds', old: "return g.role === 'overlord' && b !== false && b.kind === 'designated';", new: "return g.role === 'overlord' && b !== false;" },
+    { id: 'T3 any Overlord generation', old: "return g.role === 'overlord' && b !== false && b.kind === 'designated';", new: "return g.role === 'overlord';" },
+  ],
+  suite: holdTargetCases,
+};
+
 export const RENEWAL_HOLD_READING_SETS: Record<string, MutantSet<never>> = {
+  'server/src/continuity/renewalReadings.ts#holdTargetOf': HOLD_TARGET_SET as MutantSet<never>,
   'server/src/continuity/renewalReadings.ts#holdOfStart': HOLD_OF_START_SET as MutantSet<never>,
   'shared/renewal-readings.ts#heldOutOfList': HELD_OUT_SET as MutantSet<never>,
   'server/src/continuity/renewalReadings.ts#overlordInstallBehindOf': INSTALL_BEHIND_SET as MutantSet<never>,

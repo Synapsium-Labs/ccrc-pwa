@@ -759,7 +759,7 @@ describe('renewalReadingsOf (PR H: the holds into the account readings, and the 
   it('the Overlord\'s installBehind: a digest that differs while the builds agree is a new install; an equal one is behind as the roll says', async () => {
     const { launchDigestOf } = await import('../src/continuity/launchProfile.js');
     const d = launchDigestOf('overlord');
-    const ask = async (digest: string | null, nodes: () => unknown[], behind = FALSE) => (await renewalReadingsOf(deps(), withInstall(coordOf(), digest, nodes), [])
+    const ask = async (digest: string | null, nodes: () => unknown[], behind: GenReadings['behind'] = FALSE) => (await renewalReadingsOf(deps(), withInstall(coordOf(), digest, nodes), [])
       .w1(gen({}), { ...base(), behind })).w1?.installBehind;
     expect(await ask('0'.repeat(64), () => [BOTH])).toEqual(TRUE);
     expect(await ask(d, () => [BOTH])).toEqual(FALSE);

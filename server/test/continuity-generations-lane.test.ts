@@ -1511,7 +1511,10 @@ describe('shadow is structural: the lane imports nothing that sends', () => {
       // Designation B: the deadline sweep's decider (L1); it sends nothing, and the pass only decides with it.
       '../coord/overlordDesignation.js',
       // Renewal readings PR F: the `@overlord` mark's key (L0, imports nothing), read through `operatorQuietOf`.
-      '../../../shared/operatorMessages.js'];
+      '../../../shared/operatorMessages.js',
+      // Renewal readings PR H: the Overlord's project word (L0) and the sandbox check's verdict of a start (L1, pure); the account
+      // hold's one write is a store member, never an import, and neither import sends.
+      '../../../shared/overlord-designation.js', './sandboxCheck.js'];
     const edges = parsedFile('server/src/continuity/generationsLane.ts').imports.filter((e) =>
       e.kind !== 'type-query' && !e.typeOnly && !(e.names.length > 0 && e.names.every((n) => (e.typeNames ?? []).includes(n))));
     expect(edges.map((e) => e.specifier).sort()).toEqual([...allowed].sort());

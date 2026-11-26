@@ -153,6 +153,7 @@ export const NO_OVERLORD_STORE: { readonly coord: OverlordCoord; readonly journa
   coord: {
     designationRead: () => ({ kind: 'unmeasured', why: 'this server has no coordination store or authority journal' }),
     accountPoolEdges: () => new Map(),
+    accountHolds: () => ({ ok: false, detail: 'this server has no coordination store' }),
     designatePending: unreachable, rebindPending: unreachable, bindPendingGeneration: unreachable, failPending: unreachable, retire: unreachable,
     stopDone: unreachable, raiseItem: unreachable,
     setModelClass: unreachable, setAccountSet: unreachable,

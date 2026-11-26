@@ -433,6 +433,13 @@ export function accountLoadMoveOf(load: Reading<boolean>, turn: TurnMarkRead): R
 // set (`accountOutsideSetOf`, F7), so the hard row renews the Overlord off it. A digest that differs from the server's while the two
 // boxes run one build is a new install for the Overlord (question 5, slug digest-mismatch-rides-new-install).
 
+/** The live generation whose newest start the hold reads (PR H): the Overlord's, of the session the designation binds, by the
+ *  one binding reader (`boundTo`, so no session comparison is made by hand here); none when nobody is designated, the row is
+ *  unreadable, or no live Overlord generation is the bound session's. */
+export function holdTargetOf<G extends { readonly role: string; readonly sessionId: string }>(d: DesignationRead, rows: readonly G[]): G | null {
+  return rows.find((g) => { const b = boundTo(d, g.sessionId); return g.role === 'overlord' && b !== false && b.kind === 'designated'; }) ?? null;
+}
+
 /** What one start's sandbox verdict does to its account: `hold` the account it ran on; `settled`, nothing, and the start is not
  *  asked again (a pass, or a failure that is not the account's); `unmeasured`, nothing yet, and the pass asks again (slug
  *  hold-of-start-answers-three-arms: a pass and an unread verdict are handled differently, so they are never one null). */

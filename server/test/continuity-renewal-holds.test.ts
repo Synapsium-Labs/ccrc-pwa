@@ -15,13 +15,16 @@ import type { GenRow } from '../src/continuity/continuityStore.js';
 import type { StartLoadsReport } from '../src/continuity/startLoads.js';
 import type { DesignationRead, DesignationView } from '../../shared/overlord-designation.js';
 import { sourceOfSymbol } from './scan/symbols.js';
-import { heldOutOfListCases, holdOfStartCases, installBehindCases } from './sim/renewalHoldReadingSets.js';
+import { heldOutOfListCases, holdOfStartCases, holdTargetCases, installBehindCases } from './sim/renewalHoldReadingSets.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
 afterEach(removeTmpFixtures);
 
 describe('holdOfStart (PR H)', () => {
   for (const [name, fn] of Object.entries(holdOfStartCases(readings))) it(name, fn);
+});
+describe('holdTargetOf (PR H)', () => {
+  for (const [name, fn] of Object.entries(holdTargetCases(readings))) it(name, fn);
 });
 describe('heldOutOfList (PR H, L0)', () => {
   for (const [name, fn] of Object.entries(heldOutOfListCases(shared))) it(name, fn);
