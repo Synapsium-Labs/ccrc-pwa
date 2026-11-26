@@ -28,12 +28,20 @@ Run 3942, programme `landing-order`, wave 32. Plan sections 4.3, 4.4, 9.2 and 9.
   `landedProjectStep` that the entry is a repair candidate with a 64-hex token); two binding cases in
   `landing-control.test.ts`; the `NOT_CODES` row in `mail-routes.test.ts`.
 
-## Departure in the store case
+## Departure in the store case (D-9134)
 
 The store case reads the journal's bytes before both marks. On `boot`'s fixture, two pins through runs write no journal
 record, so `landing.log` did not exist and the read threw `ENOENT`. The case now first creates one no-run entry in
-another project (`project-b`), which journals its creation, and asserts the journal is not empty before the marks. The
-two marked entries are still the only rows of `project-a`. The plan's case did not name this step.
+another project (`project-b`, through `writeLandingAuthority`), which journals its creation, and asserts the journal is
+not empty before the marks. The plan's case did not name this step; the coordinator issued D-9134 for it, defined in the
+plan's "Deviations found".
+
+Why another project's record cannot disturb what the case measures: the creation is written, and its journal line
+appended, before the case reads the journal's bytes and the cursor, so both reads already include it, and the case then
+compares them only after the two marks. The two marked entries are the only rows of `project-a`; `project-b`'s entry is
+never the subject of either mark (each names `project-a` and its own PR), it is an ordinary creation and not an
+identity conflict, and the case asserts that both marks still answer `closed` with it present. So the comparison still answers exactly one question: whether either mark wrote to the journal or moved its
+cursor. Mutant MJ, which bumps the cursor inside the land arm, reds it.
 
 ## Red first
 

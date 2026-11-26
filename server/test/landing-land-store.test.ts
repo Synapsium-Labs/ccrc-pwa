@@ -234,7 +234,9 @@ describe('a train-unproven close is one row change and no journal record (D-9112
     const journal = path.join(f.home, '.ccrc', 'landing.log');
     pinned(f.store, 7, P, 1);
     pinned(f.store, 8, P, 2);
-    create(f.store, 1, Q); // a no-run creation in another project, so the journal has bytes to compare
+    // D-9134: a run's pin journals nothing, so one no-run creation in another project gives the journal bytes to compare;
+    // it is written before both reads, and the two marked entries stay the only rows of project-a.
+    create(f.store, 1, Q);
     const bytes = readFileSync(journal);
     expect(bytes.length).toBeGreaterThan(0);
     const cursor = f.db.prepare('SELECT * FROM landing_journal_cursor').all();
