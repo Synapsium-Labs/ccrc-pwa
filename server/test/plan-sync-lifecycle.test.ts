@@ -858,6 +858,48 @@ describe('the pass: moves and closes', () => {
     expect(mails(r)).toEqual([]);
   });
 
+  it('D-9131 (round 2 F1): a project adopted after a lost create and a key move records no trusted team: the project is written before the new ticket is created', async () => {
+    const r = await rig({ extraTeam: true, ticket: false });
+    let projectTeams: string[] = [];
+    let refused = 0;
+    let lostCreate = true;
+    let projectName = '';
+    let projectId = '';
+    r.respond.current = (ask) => {
+      if (ask.op === 'projectCreate') {
+        projectTeams = ask.input['teamIds'] as string[];
+        projectName = String(ask.input['name']);
+        projectId = String(ask.input['requestId']);
+        if (lostCreate) { lostCreate = false; return { ok: false, word: 'timeout', maybeSent: true }; }   // sent with AAA, the reply lost
+      }
+      if (ask.op === 'projectUpdate') projectTeams = ask.input['teamIds'] as string[];
+      if (ask.op === 'projectsByName') return ok({ nodes: projectId === '' ? [] : [{ id: projectId, name: projectName, creatorId: DIR.viewerId, teamKeys: ['AAA'] }] });
+      if (ask.op === 'issueCreate' && !projectTeams.includes(ask.input['teamId'] as string)) {
+        refused += 1;
+        return { ok: false, word: 'unreachable', maybeSent: true, outsideTable: true } as CcrcOpOutcome;
+      }
+      return defaultRespond(ask);
+    };
+    await tick(r);                                                       // the project create is sent with AAA and its reply is lost
+    expect(projectTeams).toEqual([WS.a.teams[0].id]);
+    expect(r.plan.bindingsOf(SLUG).find((b) => b.localKind === 'epic')).toMatchObject({ state: 'pending', linearId: null });
+    r.db.prepare("UPDATE project_linking SET teamKey = 'CCC' WHERE project = 'project-a'").run();
+    r.plan.applyPlanChanges(SLUG, changes({ tickets: { insert: [ticket('t2')], update: [], drop: [] } }), OWNER, r.t.now, null);
+    const t2 = epicRow(r, 'e1').tickets.find((t) => t.key === 't2')!.id;
+    const from = r.asks.length;
+    for (let i = 0; i < 6; i += 1) { due(r); await tick(r); r.t.now += 2_000_000; }
+    const sent = r.asks.slice(from);
+    const firstUpdate = sent.findIndex((a) => a.op === 'projectUpdate');
+    const firstCreate = sent.findIndex((a) => a.op === 'issueCreate');
+    expect(firstUpdate).toBeGreaterThanOrEqual(0);
+    expect(firstCreate).toBeGreaterThanOrEqual(0);
+    expect(firstUpdate).toBeLessThan(firstCreate);
+    expect(sent.filter((a) => a.op === 'issueCreate')).toHaveLength(1);
+    expect(refused).toBe(0);
+    expect(r.plan.bindingsOf(SLUG).find((b) => b.localKind === 'ticket' && b.localId === t2)).toMatchObject({ state: 'bound', teamKey: 'CCC' });
+    expect(mails(r)).toEqual([]);
+  });
+
   it("D-9131 (characterization): a ticket added in the project's own unchanged team is created in the first pass, with no projectUpdate before it", async () => {
     const r = await rig({ extraTeam: true });
     r.plan.applyPlanChanges(SLUG, changes({ tickets: { insert: [ticket('t2')], update: [], drop: [] } }), OWNER, r.t.now, null);

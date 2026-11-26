@@ -462,18 +462,6 @@ describe('verifyLinearKey', () => {
     }
   });
 
-  // D-9132 (round 1 A6): a refusal other than 401, 403 and 429 whose body carries an `errors` array keeps that body on the outcome
-  // (the adapter keeps a distinction it received); any other body is plain `unreachable`, as before. The bodies are constructed.
-  it('D-9132: a 400 with an errors body keeps it on the unreachable outcome; a 500 with a body that does not parse, and a 400 without errors, stay plain', async () => {
-    const errors = { data: null, errors: [{ message: 'something new', extensions: { code: 'SOMETHING_NEW' } }] };
-    const call = (status: number, json: () => Promise<unknown>, keepErrors = true) =>
-      callLinear(KEY, 'query', {}, { fetch: spyFetch(linearAnswer({ ok: false, status, json })).f, keepErrors });
-    expect(await call(400, async () => errors)).toEqual({ ok: false, reason: 'unreachable', answered: errors });
-    expect(await call(500, async () => { throw new Error('not json'); })).toEqual({ ok: false, reason: 'unreachable' });
-    expect(await call(400, async () => ({ message: 'no errors array' }))).toEqual({ ok: false, reason: 'unreachable' });
-    expect(await call(400, async () => errors, false)).toEqual({ ok: false, reason: 'unreachable' });   // no caller but runCcrcOp asks for it
-  });
-
   it('cleans and bounds the names, and never copies the rest of the answer', async () => {
     const { f } = spyFetch(viewer({ data: { viewer: { name: `a\tb${'x'.repeat(300)}`, email: 'leak@example.invalid' }, organization: { name: ' team-a\n' } } }));
     const r = await verifyLinearKey(KEY, { fetch: f });
@@ -486,6 +474,30 @@ describe('verifyLinearKey', () => {
     const text = readFileSync(path.resolve(here, '..', 'src', 'linear', 'client.ts'), 'utf8');
     expect(text.match(/\bdoFetch\(/g)).toHaveLength(1);
     expect(text.match(/\bfetch\(url, init\)/g)).toHaveLength(1);
+  });
+});
+
+describe('callLinear: the body of a refusal (D-9132)', () => {
+  // D-9132 (round 1 A6; round 2 F2 and A1): a 4xx refusal other than 401, 403 and 429 whose body carries a NON-EMPTY `errors` array keeps
+  // that body on the outcome (the adapter keeps a distinction it received); any other body is plain `unreachable`, as before. A 5xx
+  // is a service failure and keeps its hold whatever its body says. The bodies are constructed.
+  const errors = { data: null, errors: [{ message: 'something new', extensions: { code: 'SOMETHING_NEW' } }] };
+  const call = (status: number, json: () => Promise<unknown>, keepErrors = true) =>
+    callLinear(KEY, 'query', {}, { fetch: spyFetch(linearAnswer({ ok: false, status, json })).f, keepErrors });
+
+  it('D-9132: a 400 with an errors body keeps it on the unreachable outcome; a 500 with a body that does not parse, and a 400 without errors, stay plain', async () => {
+    expect(await call(400, async () => errors)).toEqual({ ok: false, reason: 'unreachable', answered: errors });
+    expect(await call(500, async () => { throw new Error('not json'); })).toEqual({ ok: false, reason: 'unreachable' });
+    expect(await call(400, async () => ({ message: 'no errors array' }))).toEqual({ ok: false, reason: 'unreachable' });
+    expect(await call(400, async () => errors, false)).toEqual({ ok: false, reason: 'unreachable' });   // no caller but runCcrcOp asks for it
+  });
+
+  it('D-9132 (round 2 F2): a 5xx with an errors body keeps no `answered`: a service incident stays a plain unreachable', async () => {
+    for (const status of [500, 502, 503, 504]) expect(await call(status, async () => errors), String(status)).toEqual({ ok: false, reason: 'unreachable' });
+  });
+
+  it('D-9132 (round 2 A1): a 400 with an empty errors array keeps no `answered`', async () => {
+    expect(await call(400, async () => ({ data: null, errors: [] }))).toEqual({ ok: false, reason: 'unreachable' });
   });
 });
 

@@ -269,6 +269,16 @@ describe('D-9131: a create waits for the project as it was last written (L1)', (
     expect(steps.some((x) => x.kind === 'update' && x.op === 'projectUpdate')).toBe(true);       // not current: the update is emitted
     expect(issueCreates(s)).toHaveLength(1);
   });
+
+  // Round 2 F1: an adopted project's record (the team planned at adoption, not the team the lost create sent) is not a fact ccrc wrote,
+  // so it counts as no recorded team until the project's first update; a link mark added after adoption does not hide that.
+  it('an adopted project binding (the adoption fingerprint) with a recorded team equal to the planned one, not current: the create waits, the project update is emitted', () => {
+    for (const fingerprint of ['adopted', `adopted+${plannedFingerprint({ link: 'init-1' })}`]) {
+      const s = snap({ tickets: [tk()], bindings: [bind({ localKind: 'epic', localId: 1, fingerprint, teamKey: 'AAA' })] });
+      expect(issueCreates(s)).toEqual([]);
+      expect(planSyncSteps(s).steps.some((x) => x.kind === 'update' && x.op === 'projectUpdate')).toBe(true);
+    }
+  });
 });
 
 describe('final-review rulings: the pure verdicts (D-8182)', () => {
