@@ -320,12 +320,15 @@ describe('the compact row (refinements (c), (e), (g))', () => {
     atWidth(412);
     const { container } = open('/docs/demo/specs/a.md', fakeLoaders(), heldReader());
     await waitFor(() => expect(container.querySelector('.doc-formatting')).not.toBeNull());
-    // docs.css: `.docs-screen:has(> .docs-compact) > .docs-leaf:has(> .docs-reader) > .doc-formatting`.
+    // docs.css: `.docs-screen:has(> .docs-compact) > .docs-reading > .docs-leaf:has(> .docs-reader) > .doc-formatting` (the
+    // reading container of reader mode, X6 XR1.2, sits between the screen and the leaf in every view).
     const formatting = container.querySelector('.doc-formatting') as HTMLElement;
     const leaf = formatting.parentElement as HTMLElement;
     expect(leaf.classList.contains('docs-leaf')).toBe(true);
     expect([...leaf.children].some((c) => c.classList.contains('docs-reader'))).toBe(true);
-    const screenEl = leaf.parentElement as HTMLElement;
+    const reading = leaf.parentElement as HTMLElement;
+    expect(reading.classList.contains('docs-reading')).toBe(true);
+    const screenEl = reading.parentElement as HTMLElement;
     expect(screenEl.classList.contains('docs-screen')).toBe(true);
     expect([...screenEl.children].some((c) => c.matches('header.docs-head.docs-compact'))).toBe(true);
   });

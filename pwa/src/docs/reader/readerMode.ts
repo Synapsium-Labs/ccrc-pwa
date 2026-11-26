@@ -10,6 +10,20 @@
 // `readerModeStep` gains XR2.1's events `frame-exit` and `frame-toggle`; and the act `toggle-overlay` is not defined
 // (the overlay is the state's `overlay` field), while XR2.1's `start-reading` and `stop-reading` are.
 
+import type { DocsFolderLocation, DocsPageLocation } from '../../../../shared/docs';
+
+/** The document reader mode is entered for (spec §4.1), as `doc-changed` compares it: a leaf path's project or folder,
+ *  section and path, with no ref, commit, view or fragment, so a new commit or a same-page link spelled another way is the
+ *  same document and another file is not. NUL joins the parts (no part can hold it). `null` has one meaning: the page is
+ *  no leaf path, so there is no document to read. */
+export function readerModeDocKey(page: DocsPageLocation | null, folderPage: DocsFolderLocation | null): string | null {
+  if (page !== null && page.kind === 'path' && !page.dirSlash) return ['project', page.project, page.section, page.path].join('\u0000');
+  if (folderPage !== null && folderPage.kind === 'folder-path' && !folderPage.dirSlash) {
+    return ['folder', folderPage.label, folderPage.section, folderPage.path].join('\u0000');
+  }
+  return null;
+}
+
 /** How the reader turns the page: the frame's own `reading` op carries it (`screens`: pages; `scroll`: continuous). */
 export type ReaderTurn = 'screens' | 'scroll';
 

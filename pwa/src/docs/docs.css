@@ -52,6 +52,16 @@
 /* — the screen — */
 .docs-screen { display: grid; gap: var(--sp-3); padding: var(--sp-2); min-width: 0; }
 .docs-screen > * { min-width: 0; }
+/* The reading container (X6 XR1.2, spec 2026-11-20 4.1) sits between the screen and the Docs body on every page, so the body is
+   its child now and the two rules the screen keeps for its children are kept for the body through it. In the normal view the
+   container has no box (`display: contents`): no z-index, transform or clip, so the layout is exactly the screen's own. Its
+   guards and live region are out of flow, and its controls and portal target are empty boxes that take no grid row. */
+.docs-reading { display: contents; }
+.docs-reading > * { min-width: 0; }
+.docs-reading-guard {
+  position: absolute; inline-size: 1px; block-size: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%);
+}
+.docs-reading-controls, .docs-reading-portal { display: contents; }
 .docs-index, .docs-project, .docs-listing, .docs-leaf, .docs-missing, .docs-invalid,
 .docs-svg, .docs-raster, .docs-standin, .docs-changing, .docs-mockup {
   display: grid; gap: var(--sp-2); min-width: 0;
@@ -426,13 +436,40 @@
   .app-shell:has(.docs-reader) > .shell-detail { flex: 1 1 auto; }
 }
 .shell-detail > .docs-screen:has(.docs-reader) { display: flex; flex-direction: column; flex: 1 1 auto; min-block-size: 0; }
-.docs-screen:has(.docs-reader) > * { flex: none; }
-.docs-screen:has(.docs-reader) > .docs-leaf { display: flex; flex-direction: column; flex: 1 1 auto; min-block-size: 0; gap: var(--sp-2); }
+.docs-screen:has(.docs-reader) > *, .docs-screen:has(.docs-reader) > .docs-reading > * { flex: none; }
+.docs-screen:has(.docs-reader) > .docs-reading > .docs-leaf { display: flex; flex-direction: column; flex: 1 1 auto; min-block-size: 0; gap: var(--sp-2); }
 .docs-leaf:has(.docs-reader) > .doc-formatting { flex: none; }
 /* The frame fills its host by position, and the host takes the room by `flex-basis: 0`, so neither a percentage height
    nor an auto flex basis has to resolve: the same in every engine. */
 .docs-reader { position: relative; flex: 1 1 0; inline-size: 100%; min-block-size: 20rem; }
 .docs-reader iframe { position: absolute; inset: 0; border: 0; inline-size: 100%; block-size: 100%; }
+/* §4.1 (reader mode, X6 XR1.2): the fill. `data-reader-mode` is set on the container before full screen is asked for, and the
+   container is then drawn fixed over the whole viewport on the reader's ground (`--bg-page`, the one the host sits on today),
+   inside the safe areas, on `--z-reading` (above the toast, below the block screen). The Docs leaf and the host take the whole
+   area, and every other child of the body is undrawn, so no focusable control sits between the frame and ccrc's own controls
+   (the focus guards' wrap, spec 6.5). The guards, the live region, the controls and the portal target keep their own rules. The
+   rules carry the screen's class so they outrank the normal view's flex rules above, which sit at the same specificity. */
+.docs-reading[data-reader-mode] {
+  display: block; position: fixed; inset: 0; z-index: var(--z-reading);
+  padding: var(--safe-top) env(safe-area-inset-right, 0px) var(--safe-bottom) env(safe-area-inset-left, 0px);
+  background: var(--bg-page);
+}
+.docs-screen > .docs-reading[data-reader-mode] > :not(.docs-leaf, .docs-reading-guard, .docs-reading-controls, .docs-reading-live, .docs-reading-portal) {
+  display: none;
+}
+.docs-screen > .docs-reading[data-reader-mode] > .docs-leaf { block-size: 100%; gap: 0; }
+/* The reader host's path through the leaf stays drawn and every other element on it is undrawn, at each level, so only the host
+   shows, in both shapes of a leaf: `.docs-leaf > .docs-reader`, and, for Markdown shown in parts (above the render gate, one part's
+   frame mounted at a time), `.docs-leaf > .docs-in-parts > … > .docs-reader`, where the part bar, its notes and "Formatting…" are
+   the host's siblings. An element is on the path when it holds the host (`:has(.docs-reader)`); the path's elements are columns that
+   hand the host the room, and the children of each that are neither the host nor on the path are the undrawn ones. (No comma inside
+   a `:not()`: test/cssRule.ts reads a rule's selector list by commas, and reader-mode.test.tsx pins these three over both shapes.) */
+.docs-screen > .docs-reading[data-reader-mode] > .docs-leaf :has(.docs-reader) {
+  display: flex; flex-direction: column; flex: 1 1 auto; min-block-size: 0; gap: 0;
+}
+.docs-screen > .docs-reading[data-reader-mode] > .docs-leaf:has(.docs-reader) > :not(.docs-reader):not(:has(.docs-reader)) { display: none; }
+.docs-screen > .docs-reading[data-reader-mode] > .docs-leaf :has(.docs-reader) > :not(.docs-reader):not(:has(.docs-reader)) { display: none; }
+.docs-screen > .docs-reading[data-reader-mode] > .docs-leaf .docs-reader { min-block-size: 0; }
 .docs-reader-sheet { display: grid; gap: var(--sp-3); min-width: 0; }
 .docs-reader-sheet-url { margin: 0; font: var(--weight-regular) var(--text-sm) / var(--leading-mono) var(--font-mono); overflow-wrap: anywhere; }
 .docs-reader-sheet-note { margin: 0; font-size: var(--text-sm); line-height: var(--leading-normal); }
@@ -569,8 +606,8 @@
 }
 /* "Formatting…" lies over the frame's host instead of taking a line above it, so the frame does not move when the
    reader is ready. It paints the page's own ground, so its registered ink (.doc-formatting, on --bg-page) holds there. */
-.docs-screen:has(> .docs-compact) > .docs-leaf:has(> .docs-reader) { position: relative; }
-.docs-screen:has(> .docs-compact) > .docs-leaf:has(> .docs-reader) > .doc-formatting {
+.docs-screen:has(> .docs-compact) > .docs-reading > .docs-leaf:has(> .docs-reader) { position: relative; }
+.docs-screen:has(> .docs-compact) > .docs-reading > .docs-leaf:has(> .docs-reader) > .doc-formatting {
   position: absolute; inset-block-start: 0; inset-inline: 0; z-index: 1;
   padding: var(--sp-2); background: var(--bg-page);
 }

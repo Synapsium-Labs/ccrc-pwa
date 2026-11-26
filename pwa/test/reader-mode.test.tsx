@@ -1,0 +1,786 @@
+// Reader mode's reading container, its hook and its wiring on the Docs screen (native Docs reader, reader-mode plan Task XR1.2 as
+// amended 2026-11-24, D-8975; spec 2026-11-20 sections 4.1, 4.2, 6.3 and 6.5). `useReaderMode` (L4) runs `readerModeStep`'s acts in
+// order and decides nothing; `DocsReading` is the container, the focus guards, the live region and the sheets' portal target;
+// `readerModeHandle` is the one outside door (`r`, the palette). jsdom: the Fullscreen and Wake Lock APIs are faked per test and
+// restored after, the page clock's visibility change is the real event, and the frame is a fake with `focus` and `setReading`.
+// Layout, `inert` and the focus order in a real engine are the browser suite's (`reader-mode.browser.test.ts`, a later task).
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
+import { Fragment, useContext, useEffect, useState, type ReactNode } from 'react';
+import { act, cleanup, render, screen } from '@testing-library/react';
+import { Sheet } from '@ccrc/ui';
+import { DocsReading } from '../src/docs/DocsReading';
+import { readerModeHandle } from '../src/docs/readerModeHandle';
+import {
+  NO_READER_PLACES, ReaderModeContext, useReaderMode,
+  type ReaderModeContextValue, type ReaderModeFrame, type ReaderModePlaces,
+} from '../src/docs/useReaderMode';
+import { READER_EXIT_SETTLE_MS, READER_WAKE_IDLE_MS } from '../src/docs/reader/readerMode';
+import { READER_MODE_TEXT } from '../src/docs/reader/readerModeWords';
+import { DocsScreen } from '../src/screens/DocsScreen';
+import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
+import { navigate, useLocation } from '../src/lib/router';
+import { useFleetStore } from '../src/stores/fleet';
+import type { ReaderDeps } from '../src/docs/ReaderFrame';
+import { parseMarkdown } from '../src/lib/markdownParse';
+import type { MarkdownParser } from '../src/lib/markdownRunner';
+import { COMMIT_B, fakeLoaders } from './docsFixtures';
+import { declValue, ruleIn } from './cssRule';
+
+// The Docs screen's reader frame, for the two screen rows: it reports itself ready to reader mode's context, as the real one
+// will (XR1.4), and draws the host element the screen's CSS selects. The real frame's mount is `reader-frame.test.tsx`'s.
+vi.mock('../src/docs/ReaderFrame', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../src/docs/ReaderFrame')>();
+  const { ReaderModeContext: Ctx } = await import('../src/docs/useReaderMode');
+  const { Sheet: BodySheet } = await import('@ccrc/ui');
+  // It also holds one `Sheet` in the Docs body, as the real frame's external-link sheet is: opened and closed by a document event.
+  function FakeReaderFrame(): ReactNode {
+    const ctx = useContext(Ctx);
+    const setFrame = ctx?.setFrame;
+    const [sheet, setSheet] = useState(false);
+    useEffect(() => {
+      setFrame?.({ ready: true, focus: () => undefined, setReading: () => undefined });
+      return () => setFrame?.(null);
+    }, [setFrame]);
+    useEffect(() => {
+      const on = (e: Event): void => setSheet((e as CustomEvent<boolean>).detail);
+      document.addEventListener('test-reader-sheet', on);
+      return () => document.removeEventListener('test-reader-sheet', on);
+    }, []);
+    return (
+      <Fragment>
+        <div className="docs-reader" data-testid="reader-host" />
+        <BodySheet open={sheet} onClose={() => setSheet(false)} title="A link"><button type="button">Inside the sheet</button></BodySheet>
+      </Fragment>
+    );
+  }
+  return { ...orig, ReaderFrame: FakeReaderFrame };
+});
+
+const parser: MarkdownParser = async (src) => parseMarkdown(src, 'docs');
+const reader = { render: () => new Promise<never>(() => undefined), mount: () => undefined, images: () => undefined } as unknown as ReaderDeps;
+
+// ─── fakes, installed per test and restored in afterEach ────────────────────────────────────────────────────────────────
+
+interface FullScreenFake {
+  /** What each `requestFullscreen` call saw: its target, its options and the container's attribute at that moment. */
+  readonly calls: Array<{ el: Element; opts: unknown; attr: string | null }>;
+  grant(): void;
+  refuse(): void;
+  /** The browser takes full screen away (Esc, the page hidden): `fullscreenElement` goes and `fullscreenchange` fires. */
+  lose(): void;
+  readonly exitFullscreen: ReturnType<typeof vi.fn>;
+}
+
+const restorers: Array<() => void> = [];
+
+function defineOwn(target: object, key: string, descriptor: PropertyDescriptor): void {
+  const before = Object.getOwnPropertyDescriptor(target, key);
+  Object.defineProperty(target, key, { configurable: true, ...descriptor });
+  restorers.push(() => {
+    if (before === undefined) Reflect.deleteProperty(target, key);
+    else Object.defineProperty(target, key, before);
+  });
+}
+
+function installFullScreen(order: string[] = []): FullScreenFake {
+  let fsEl: Element | null = null;
+  let pending: { el: Element; res(): void; rej(e: unknown): void } | null = null;
+  const calls: FullScreenFake['calls'] = [];
+  defineOwn(document, 'fullscreenEnabled', { get: () => true });
+  defineOwn(document, 'fullscreenElement', { get: () => fsEl });
+  const exitFullscreen = vi.fn(async () => { fsEl = null; document.dispatchEvent(new Event('fullscreenchange')); });
+  defineOwn(document, 'exitFullscreen', { value: exitFullscreen, writable: true });
+  defineOwn(HTMLElement.prototype, 'requestFullscreen', {
+    writable: true,
+    value(this: HTMLElement, opts?: unknown): Promise<void> {
+      calls.push({ el: this, opts, attr: this.getAttribute('data-reader-mode') });
+      order.push('request');
+      return new Promise<void>((res, rej) => { pending = { el: this, res, rej }; });
+    },
+  });
+  return {
+    calls, exitFullscreen,
+    grant: () => { const p = pending; if (p === null) throw new Error('no request'); fsEl = p.el; document.dispatchEvent(new Event('fullscreenchange')); p.res(); },
+    refuse: () => { const p = pending; if (p === null) throw new Error('no request'); p.rej(new Error('refused')); },
+    lose: () => { fsEl = null; document.dispatchEvent(new Event('fullscreenchange')); },
+  };
+}
+
+interface WakeFake { readonly request: ReturnType<typeof vi.fn>; readonly sentinels: Array<{ release: ReturnType<typeof vi.fn> }> }
+
+function installWakeLock(refuse = false): WakeFake {
+  const sentinels: WakeFake['sentinels'] = [];
+  const request = vi.fn(async (): Promise<unknown> => {
+    if (refuse) throw new Error('NotAllowedError');
+    const s = { release: vi.fn(async () => undefined), addEventListener: vi.fn(), removeEventListener: vi.fn() };
+    sentinels.push(s);
+    return s;
+  });
+  defineOwn(navigator, 'wakeLock', { value: { request } });
+  return { request, sentinels };
+}
+
+function removeWakeLock(): void {
+  defineOwn(navigator, 'wakeLock', { value: undefined });
+}
+
+let visibility: 'visible' | 'hidden' = 'visible';
+function installVisibility(): (next: 'visible' | 'hidden') => void {
+  visibility = 'visible';
+  defineOwn(document, 'visibilityState', { get: () => visibility });
+  return (next) => { visibility = next; document.dispatchEvent(new Event('visibilitychange')); };
+}
+
+interface PlacesFake extends ReaderModePlaces {
+  readonly push: ReturnType<typeof vi.fn<() => boolean>>;
+  readonly stepBack: ReturnType<typeof vi.fn<() => number>>;
+  readonly markExitPending: ReturnType<typeof vi.fn<(on: boolean) => void>>;
+  landed: boolean;
+}
+
+function fakePlaces(order: string[] = []): PlacesFake {
+  const p: PlacesFake = {
+    landed: false,
+    placeFree: () => true,
+    push: vi.fn(() => { order.push('push'); return true; }),
+    stepBack: vi.fn(() => { order.push('step-back'); return 1; }),
+    landedBelow: () => p.landed,
+    markExitPending: vi.fn(),
+  };
+  return p;
+}
+
+interface FakeFrame extends ReaderModeFrame {
+  readonly focus: Mock<() => void>;
+  readonly setReading: Mock<ReaderModeFrame['setReading']>;
+}
+
+function fakeFrame(ready = true): FakeFrame {
+  return { ready, focus: vi.fn<() => void>(), setReading: vi.fn<ReaderModeFrame['setReading']>() };
+}
+
+// ─── the harness ───────────────────────────────────────────────────────────────────────────────────────────────────────
+
+let latest: ReaderModeContextValue;
+const reading = (): HTMLElement => document.querySelector('.docs-reading') as HTMLElement;
+const attr = (): string | null => reading().getAttribute('data-reader-mode');
+
+/** The hook, the container around a body, and two console nodes standing outside it, as the head and the rail do. */
+function Harness(p: {
+  doc?: string | null; plainView?: boolean; places?: ReaderModePlaces; frame?: ReaderModeFrame | null; sheet?: boolean; closedDialog?: boolean;
+}): ReactNode {
+  const { value, container } = useReaderMode({ doc: p.doc === undefined ? 'doc-a' : p.doc, plainView: p.plainView ?? false, places: p.places });
+  latest = value;
+  const frame = p.frame === undefined ? null : p.frame;
+  const setFrame = value.setFrame;
+  useEffect(() => { setFrame(frame); }, [setFrame, frame]);
+  return (
+    <>
+      <header data-testid="console-head"><button type="button">Head control</button></header>
+      <DocsReading reading={container}>
+        <div className="docs-leaf" data-testid="body">
+          <div className="docs-reader" data-testid="host" />
+          {p.closedDialog === true && <div role="dialog" data-state="closed" />}
+          <Sheet open={p.sheet === true} onClose={() => undefined} title="A link"><button type="button">Inside the sheet</button></Sheet>
+        </div>
+      </DocsReading>
+      <aside data-testid="console-nav" />
+    </>
+  );
+}
+
+const flush = async (): Promise<void> => { await act(async () => { await Promise.resolve(); }); };
+const settle = async (): Promise<void> => { await act(async () => { await new Promise((r) => setTimeout(r, 20)); }); };
+const hiddenUp = (el: Element): boolean => {
+  for (let at: Element | null = el; at !== null; at = at.parentElement) {
+    if (at.getAttribute('aria-hidden') === 'true' || at.hasAttribute('inert')) return true;
+  }
+  return false;
+};
+
+beforeEach(() => { useFleetStore.setState({ blocked: false }); });
+
+afterEach(() => {
+  // Unmounting leaves reader mode (the hook's teardown), so a failed assertion never leaves the console suspended; the sweep
+  // below is only a net for a node a test appended to the body itself.
+  cleanup();
+  for (const el of document.querySelectorAll('[inert], [aria-hidden="true"]')) { el.removeAttribute('inert'); el.removeAttribute('aria-hidden'); }
+  clearAuthLost();
+  useFleetStore.setState({ blocked: false });
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  while (restorers.length > 0) restorers.pop()?.();
+  history.replaceState(null, '', '/');
+});
+
+/** Renders the harness with a ready frame and a places port, and returns them. */
+function setup(over: { places?: ReaderModePlaces; wake?: boolean; order?: string[] } = {}): {
+  fs: FullScreenFake; frame: ReturnType<typeof fakeFrame>; places: PlacesFake; view: ReturnType<typeof render>; props: Parameters<typeof Harness>[0];
+} {
+  const order = over.order ?? [];
+  const fs = installFullScreen(order);
+  const places = over.places === undefined ? fakePlaces(order) : (over.places as PlacesFake);
+  const frame = fakeFrame();
+  const props = { frame, places };
+  const view = render(<Harness {...props} />);
+  return { fs, frame, places, view, props };
+}
+
+// ─── the container, the fill and full screen ───────────────────────────────────────────────────────────────────────────
+
+describe('reader mode: the fill, the request and the exits (X6 XR1.2)', () => {
+  it('reader mode: enter sets data-reader-mode to fill before requestFullscreen resolves', () => {
+    const { fs } = setup();
+    expect(attr(), 'CONTROL: no attribute before entering').toBeNull();
+    act(() => { latest.enter('button'); });
+    expect(fs.calls).toHaveLength(1);
+    expect(fs.calls[0]?.attr, 'the fill was not drawn when the request was made').toBe('fill');
+    expect(attr(), 'still fill while the request is pending').toBe('fill');
+  });
+
+  it('reader mode: requestFullscreen is called on the container with navigationUI hide, in the same task as enter, after the place is pushed', () => {
+    const order: string[] = [];
+    const { fs, places } = setup({ order });
+    act(() => { latest.enter('key'); });
+    // Synchronously after the enter call: no await between the tap and the request (user activation).
+    expect(fs.calls).toHaveLength(1);
+    expect(fs.calls[0]?.el).toBe(reading());
+    expect(fs.calls[0]?.opts).toEqual({ navigationUI: 'hide' });
+    expect(places.push).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(['push', 'request']);
+  });
+
+  it('reader mode: granted sets full-screen, refused keeps fill', async () => {
+    const granted = setup();
+    act(() => { latest.enter('button'); });
+    await act(async () => { granted.fs.grant(); });
+    expect(attr()).toBe('full-screen');
+    cleanup();
+    while (restorers.length > 0) restorers.pop()?.();
+
+    const refused = setup();
+    act(() => { latest.enter('button'); });
+    await act(async () => { refused.fs.refuse(); });
+    expect(attr(), 'a refusal must leave reader mode on as fill').toBe('fill');
+    expect(refused.frame.setReading).toHaveBeenCalledWith('screens');
+    expect(refused.frame.setReading).not.toHaveBeenCalledWith('off');
+  });
+
+  it('reader mode: fullscreenchange to no element ends reader mode once', async () => {
+    vi.useFakeTimers();
+    const { fs, frame, places } = setup();
+    act(() => { latest.enter('button'); });
+    await act(async () => { fs.grant(); });
+    expect(attr()).toBe('full-screen');
+    await act(async () => { fs.lose(); });
+    expect(attr(), 'reader mode did not end').toBeNull();
+    expect(latest.state.on).toBe(false);
+    // A second change with no element, and the settle wait, add no second exit.
+    await act(async () => { fs.lose(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(READER_EXIT_SETTLE_MS + 50); });
+    expect(frame.setReading.mock.calls.filter(([m]) => m === 'off')).toHaveLength(1);
+    expect(places.stepBack).toHaveBeenCalledTimes(1);
+    expect(places.markExitPending).toHaveBeenCalledWith(true);
+    expect(fs.exitFullscreen, 'the browser took full screen away: nothing to leave').not.toHaveBeenCalled();
+  });
+
+  it('reader mode: exitFullscreen is called only when the container is the full-screen element', async () => {
+    const refused = setup();
+    act(() => { latest.enter('button'); });
+    await act(async () => { refused.fs.refuse(); });
+    act(() => { latest.exit('exit-tap'); });
+    expect(refused.fs.exitFullscreen, 'the container never held full screen').not.toHaveBeenCalled();
+    cleanup();
+    while (restorers.length > 0) restorers.pop()?.();
+
+    const held = setup();
+    act(() => { latest.enter('button'); });
+    await act(async () => { held.fs.grant(); });
+    act(() => { latest.exit('exit-tap'); });
+    expect(held.fs.exitFullscreen).toHaveBeenCalledTimes(1);
+    expect(attr()).toBeNull();
+  });
+
+  it('reader mode: a block or sign-in screen appearing ends reader mode', async () => {
+    setup();
+    act(() => { latest.enter('button'); });
+    expect(latest.state.on).toBe(true);
+    await act(async () => { useFleetStore.setState({ blocked: true }); });
+    expect(latest.state.on, 'the block screen did not end reader mode').toBe(false);
+    expect(attr()).toBeNull();
+    useFleetStore.setState({ blocked: false });
+    cleanup();
+
+    setup();
+    act(() => { latest.enter('button'); });
+    expect(latest.state.on).toBe(true);
+    await act(async () => { raiseAuthLost('expired'); });
+    expect(latest.state.on, 'the sign-in screen did not end reader mode').toBe(false);
+    expect(attr()).toBeNull();
+  });
+
+  it('reader mode: losing full screen with a sheet open keeps the sheet usable', async () => {
+    const { fs, view, props } = setup();
+    act(() => { latest.enter('button'); });
+    await act(async () => { fs.grant(); });
+    view.rerender(<Harness {...props} sheet />);
+    await settle();
+    const dialog = screen.getByRole('dialog');
+    expect(reading().querySelector('.docs-reading-portal')?.contains(dialog), 'the sheet is not in the container\'s portal').toBe(true);
+    await act(async () => { fs.lose(); });
+    expect(latest.state.on).toBe(false);
+    const still = screen.getByRole('dialog');
+    expect(still, 'the sheet was remounted').toBe(dialog);
+    expect(still.getAttribute('data-state')).toBe('open');
+    expect(reading().querySelector('.docs-reading-portal')?.contains(still)).toBe(true);
+    expect(hiddenUp(still), 'the sheet or an ancestor is aria-hidden or inert').toBe(false);
+  });
+
+  it('reader mode: everything outside the container is inert and aria-hidden while on, and restored after', () => {
+    setup();
+    const nodes = [screen.getByTestId('console-head'), screen.getByTestId('console-nav')];
+    for (const n of nodes) expect(n.hasAttribute('inert') || n.getAttribute('aria-hidden') === 'true', 'CONTROL: not hidden before').toBe(false);
+    act(() => { latest.enter('button'); });
+    for (const n of nodes) {
+      expect(n.hasAttribute('inert'), 'not inert while on').toBe(true);
+      expect(n.getAttribute('aria-hidden'), 'not aria-hidden while on').toBe('true');
+      expect(n.hasAttribute('data-aria-hidden'), 'a data-aria-hidden mark was written').toBe(false);
+    }
+    expect(hiddenUp(reading()), 'the container itself was hidden').toBe(false);
+    expect(hiddenUp(document.querySelector('.docs-reading-live') as Element), 'the live region is inside a hidden node').toBe(false);
+    act(() => { latest.exit('exit-tap'); });
+    for (const n of nodes) {
+      expect(n.hasAttribute('inert'), 'still inert after').toBe(false);
+      expect(n.hasAttribute('aria-hidden'), 'still aria-hidden after').toBe(false);
+    }
+  });
+
+  it('reader mode: not offered while a sheet is animating closed', () => {
+    const fs = installFullScreen();
+    const places = fakePlaces();
+    render(<Harness frame={fakeFrame()} places={places} closedDialog />);
+    expect(latest.offered, 'CONTROL: the frame is ready and the view is rich').toBe(true);
+    act(() => { latest.enter('key'); });
+    expect(latest.state.on, 'reader mode started under a modal layer').toBe(false);
+    expect(attr()).toBeNull();
+    expect(places.push).not.toHaveBeenCalled();
+    expect(fs.calls).toHaveLength(0);
+  });
+
+  it('reader mode: the entry is announced in the polite live region, which sits in the container', async () => {
+    setup();
+    act(() => { latest.enter('button'); });
+    await flush();
+    const live = document.querySelector('.docs-reading-live') as HTMLElement;
+    expect(live.getAttribute('aria-live')).toBe('polite');
+    expect(reading().contains(live)).toBe(true);
+    expect(live.textContent).toBe(READER_MODE_TEXT.live);
+  });
+});
+
+// ─── the wake lock (spec 6.3) ──────────────────────────────────────────────────────────────────────────────────────────
+
+describe('wake lock (X6 XR1.2)', () => {
+  it('wake lock: requested on enter, released on exit', async () => {
+    const wake = installWakeLock();
+    setup();
+    expect(wake.request, 'CONTROL: nothing requested before entering').not.toHaveBeenCalled();
+    act(() => { latest.enter('button'); });
+    await flush();
+    expect(wake.request).toHaveBeenCalledWith('screen');
+    expect(wake.request).toHaveBeenCalledTimes(1);
+    expect(wake.sentinels[0]?.release).not.toHaveBeenCalled();
+    act(() => { latest.exit('exit-tap'); });
+    await flush();
+    expect(wake.sentinels[0]?.release, 'the lock was not released on exit').toHaveBeenCalledTimes(1);
+  });
+
+  it('wake lock: released after 300000 ms with no activity and requested again on the next activity', async () => {
+    vi.useFakeTimers();
+    const wake = installWakeLock();
+    setup();
+    act(() => { latest.enter('button'); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(wake.request).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(READER_WAKE_IDLE_MS - 1); });
+    expect(wake.sentinels[0]?.release, 'released a millisecond early').not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(wake.sentinels[0]?.release, 'not released after the idle time').toHaveBeenCalledTimes(1);
+    expect(latest.state.on, 'idle release does not end reader mode').toBe(true);
+    act(() => { latest.activity(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(wake.request, 'not requested again on the next activity').toHaveBeenCalledTimes(2);
+    // The new activity re-armed the one idle timer: it is released again a full idle time after it.
+    await act(async () => { await vi.advanceTimersByTimeAsync(READER_WAKE_IDLE_MS); });
+    expect(wake.sentinels[1]?.release).toHaveBeenCalledTimes(1);
+  });
+
+  it('wake lock: re-requested on visible, released when reader mode ended while hidden', async () => {
+    const wake = installWakeLock();
+    const fire = installVisibility();
+    const { fs } = setup();
+    act(() => { latest.enter('button'); });
+    await act(async () => { fs.grant(); });
+    await flush();
+    expect(wake.request).toHaveBeenCalledTimes(1);
+    // Hidden: the browser drops the lock itself, and ccrc forgets the sentinel. Visible again: asked for again.
+    await act(async () => { fire('hidden'); });
+    await act(async () => { fire('visible'); });
+    await flush();
+    expect(wake.request, 'not requested again when the page was visible again').toHaveBeenCalledTimes(2);
+    // Reader mode ends while the page is hidden (the browser dropped full screen): nothing is asked for on return.
+    await act(async () => { fire('hidden'); });
+    await act(async () => { fs.lose(); });
+    expect(latest.state.on).toBe(false);
+    await act(async () => { fire('visible'); });
+    await flush();
+    expect(wake.request, 'requested again after reader mode had ended').toHaveBeenCalledTimes(2);
+    for (const s of wake.sentinels) expect(s.release.mock.calls.length, 'a sentinel was released twice').toBeLessThanOrEqual(1);
+  });
+
+  it('wake lock: a missing API or a refusal changes nothing', async () => {
+    removeWakeLock();
+    setup();
+    act(() => { latest.enter('button'); });
+    await flush();
+    expect(latest.state.on).toBe(true);
+    expect(attr()).toBe('fill');
+    act(() => { latest.exit('exit-tap'); });
+    expect(latest.state.on).toBe(false);
+    cleanup();
+    while (restorers.length > 0) restorers.pop()?.();
+
+    const refusing = installWakeLock(true);
+    setup();
+    act(() => { latest.enter('button'); });
+    await flush();
+    expect(refusing.request).toHaveBeenCalledTimes(1);
+    expect(latest.state.on, 'a refused lock ended reader mode').toBe(true);
+    expect(attr()).toBe('fill');
+    act(() => { latest.activity(); });
+    await flush();
+    act(() => { latest.exit('exit-tap'); });
+    expect(latest.state.on).toBe(false);
+  });
+});
+
+// ─── the focus guards (spec 6.5) ───────────────────────────────────────────────────────────────────────────────────────
+
+describe('focus (X6 XR1.2)', () => {
+  it('focus: the guards take focus only while reader mode is on, and the leading one sends focus to the frame when no control is drawn', () => {
+    const { frame } = setup();
+    const guards = [...document.querySelectorAll<HTMLElement>('.docs-reading-guard')];
+    expect(guards).toHaveLength(2);
+    const [leading, trailing] = guards as [HTMLElement, HTMLElement];
+    for (const g of guards) expect(g.getAttribute('tabindex'), 'a guard is in the tab order while reader mode is off').toBe('-1');
+    act(() => { leading.focus(); });
+    act(() => { trailing.focus(); });
+    expect(frame.focus, 'a guard moved focus while reader mode was off').not.toHaveBeenCalled();
+
+    act(() => { latest.enter('button'); });
+    for (const g of guards) expect(g.getAttribute('tabindex')).toBe('0');
+    frame.focus.mockClear();
+    (document.activeElement as HTMLElement | null)?.blur();
+    act(() => { leading.focus(); });
+    expect(frame.focus, 'no control drawn: the leading guard sends focus to the frame').toHaveBeenCalledTimes(1);
+
+    frame.focus.mockClear();
+    (document.activeElement as HTMLElement | null)?.blur();
+    act(() => { trailing.focus(); });
+    expect(frame.focus, 'the trailing guard sends focus into the frame').toHaveBeenCalledTimes(1);
+
+    // A control drawn in `.docs-reading-controls` takes the leading guard's focus instead of the frame.
+    const control = document.createElement('button');
+    document.querySelector('.docs-reading-controls')?.append(control);
+    frame.focus.mockClear();
+    (document.activeElement as HTMLElement | null)?.blur();
+    act(() => { leading.focus(); });
+    expect(document.activeElement, 'the leading guard did not wrap to the last ccrc control').toBe(control);
+    expect(frame.focus).not.toHaveBeenCalled();
+  });
+});
+
+// ─── the Docs screen ───────────────────────────────────────────────────────────────────────────────────────────────────
+
+describe('docs screen (X6 XR1.2)', () => {
+  function screenAt(url: string): ReturnType<typeof render> {
+    navigate(url);
+    return render(<DocsScreen path={location.pathname} search={location.search} loaders={fakeLoaders().loaders} parser={parser} reader={reader} />);
+  }
+
+  it('docs screen: the container wraps the body in every view and remounts nothing', async () => {
+    screenAt('/docs/demo/specs/a.md');
+    const host = await screen.findByTestId('reader-host');
+    const container = reading();
+    expect(container, 'no reading container on a leaf').not.toBeNull();
+    expect(container.contains(host)).toBe(true);
+    expect(container.querySelector('.docs-leaf')?.contains(host)).toBe(true);
+    await flush();
+    expect(readerModeHandle()?.offered(), 'CONTROL: the frame is ready').toBe(true);
+
+    act(() => { readerModeHandle()?.toggle(); });
+    expect(reading().getAttribute('data-reader-mode')).toBe('fill');
+    expect(readerModeHandle()?.on()).toBe(true);
+    expect(screen.getByTestId('reader-host'), 'the reader host was remounted entering').toBe(host);
+    expect(reading(), 'the container was remounted entering').toBe(container);
+    act(() => { readerModeHandle()?.toggle(); });
+    expect(reading().getAttribute('data-reader-mode')).toBeNull();
+    expect(readerModeHandle()?.on()).toBe(false);
+    expect(screen.getByTestId('reader-host'), 'the reader host was remounted leaving').toBe(host);
+    expect(reading(), 'the container was remounted leaving').toBe(container);
+    cleanup();
+
+    // A page with no reader (the index, a section) still has the container, in the normal view.
+    screenAt('/docs/demo/specs');
+    await screen.findByRole('button', { name: /share/i });
+    expect(document.querySelector('.docs-screen > .docs-reading'), 'no container on a non-leaf page').not.toBeNull();
+    expect(reading().getAttribute('data-reader-mode')).toBeNull();
+  });
+
+  it('handle: empty on every other screen', async () => {
+    expect(readerModeHandle(), 'CONTROL: nothing mounted').toBeNull();
+    const view = screenAt('/docs/demo/specs/a.md');
+    await screen.findByTestId('reader-host');
+    expect(readerModeHandle(), 'the Docs screen sets no handle').not.toBeNull();
+    view.unmount();
+    expect(readerModeHandle(), 'the handle outlived the Docs screen').toBeNull();
+    render(<p>Another screen</p>);
+    expect(readerModeHandle()).toBeNull();
+  });
+
+  it('docs screen: unmounting while reader mode is on gives the console back, without a step back', async () => {
+    const view = screenAt('/docs/demo/specs/a.md');
+    await screen.findByTestId('reader-host');
+    await flush();
+    const outside = document.createElement('aside');
+    document.body.appendChild(outside);
+    try {
+      act(() => { readerModeHandle()?.toggle(); });
+      expect(outside.hasAttribute('inert')).toBe(true);
+      view.unmount();
+      expect(outside.hasAttribute('inert'), 'the console stayed hidden after the screen left').toBe(false);
+      expect(outside.hasAttribute('aria-hidden')).toBe(false);
+    } finally {
+      outside.remove();
+    }
+  });
+
+  /** Opens or closes the Docs body's sheet (the fake frame's, standing for the reader's external-link sheet). */
+  const sheetOpen = async (open: boolean): Promise<void> => {
+    await act(async () => { document.dispatchEvent(new CustomEvent('test-reader-sheet', { detail: open })); });
+    await settle();
+  };
+  /** Leaves reader mode if a failed assertion left it on, so no console node stays inert for the next case. */
+  const leaveReaderMode = (): void => {
+    act(() => { if (readerModeHandle()?.on() === true) readerModeHandle()?.toggle(); });
+  };
+
+  it('reader mode: sheets on a Docs page portal into the container in both views and survive entering and leaving', async () => {
+    screenAt('/docs/demo/specs/a.md');
+    await screen.findByTestId('reader-host');
+    await flush();
+    const portal = (): Element | null => reading().querySelector('.docs-reading-portal');
+    try {
+      // The normal view: the sheet the body opens is drawn in the container's portal target.
+      await sheetOpen(true);
+      expect(portal()?.contains(screen.getByRole('dialog')), 'the sheet is not drawn in the reading container (normal view)').toBe(true);
+      await sheetOpen(false);
+      expect(screen.queryByRole('dialog')).toBeNull();
+
+      // Reader mode: the same, and a sheet open as reader mode ends is not moved or remounted.
+      act(() => { readerModeHandle()?.toggle(); });
+      expect(readerModeHandle()?.on()).toBe(true);
+      await sheetOpen(true);
+      const dialog = screen.getByRole('dialog');
+      expect(portal()?.contains(dialog), 'the sheet is not drawn in the reading container (reader mode)').toBe(true);
+      act(() => { readerModeHandle()?.toggle(); });
+      expect(readerModeHandle()?.on()).toBe(false);
+      await settle();
+      expect(screen.getByRole('dialog'), 'the sheet was remounted by leaving').toBe(dialog);
+      expect(portal()?.contains(dialog), 'the sheet left the container by leaving').toBe(true);
+    } finally {
+      leaveReaderMode();
+    }
+  });
+
+  it('reader mode: the entry announcement is not inside any aria-hidden or inert node', async () => {
+    screenAt('/docs/demo/specs/a.md');
+    await screen.findByTestId('reader-host');
+    await flush();
+    const outside = document.createElement('aside');
+    document.body.appendChild(outside);
+    try {
+      act(() => { readerModeHandle()?.toggle(); });
+      await flush();
+      expect(outside.hasAttribute('inert'), 'CONTROL: the console is suspended').toBe(true);
+      const live = [...document.querySelectorAll('.docs-reading-live')].find((el) => el.textContent === READER_MODE_TEXT.live);
+      expect(live, 'the announcement was not made').toBeDefined();
+      expect(hiddenUp(live as Element), 'the announcement is inside an aria-hidden or inert node').toBe(false);
+    } finally {
+      leaveReaderMode();
+      outside.remove();
+    }
+  });
+});
+
+describe('the default places port', () => {
+  it('NO_READER_PLACES places nothing, steps nothing and lands nowhere', () => {
+    expect(NO_READER_PLACES.placeFree()).toBe(false);
+    expect(NO_READER_PLACES.push()).toBe(false);
+    expect(NO_READER_PLACES.stepBack()).toBe(0);
+    expect(NO_READER_PLACES.landedBelow()).toBe(false);
+    expect(() => NO_READER_PLACES.markExitPending(true)).not.toThrow();
+  });
+});
+
+describe('the context', () => {
+  it('ReaderModeContext defaults to null outside a Docs screen', () => {
+    let seen: ReaderModeContextValue | null | undefined;
+    function Probe(): ReactNode { seen = useContext(ReaderModeContext); return null; }
+    render(<Probe />);
+    expect(seen).toBeNull();
+  });
+});
+
+// ─── late answers, the document's identity and the settle timer (fix round 1) ───────────────────────────────────────────
+
+describe('reader mode: answers that arrive late, and what ends it (X6 XR1.2, fix round 1)', () => {
+  it('reader mode: a grant that lands after the exit leaves full screen', async () => {
+    const { fs } = setup();
+    act(() => { latest.enter('button'); });
+    expect(fs.calls).toHaveLength(1);
+    act(() => { latest.exit('exit-tap'); });
+    expect(fs.exitFullscreen, 'CONTROL: full screen was not held yet, so the exit left nothing').not.toHaveBeenCalled();
+    await act(async () => { fs.grant(); });
+    expect(fs.exitFullscreen, 'the late grant kept full screen').toHaveBeenCalledTimes(1);
+    expect(document.fullscreenElement).toBeNull();
+    expect(attr()).toBeNull();
+  });
+
+  it('wake lock: a lock that resolves after it is no longer wanted is released at once', async () => {
+    let resolve: (s: unknown) => void = () => undefined;
+    const sentinel = { release: vi.fn(async () => undefined), addEventListener: vi.fn() };
+    const request = vi.fn(() => new Promise((r) => { resolve = r; }));
+    defineOwn(navigator, 'wakeLock', { value: { request } });
+    setup();
+    act(() => { latest.enter('button'); });
+    expect(request).toHaveBeenCalledTimes(1);
+    act(() => { latest.exit('exit-tap'); });
+    await act(async () => { resolve(sentinel); });
+    expect(sentinel.release, 'a lock granted after reader mode ended was kept').toHaveBeenCalledTimes(1);
+  });
+
+  it('reader mode: the settle timer is cleared when the screen leaves', async () => {
+    vi.useFakeTimers();
+    const { fs, places, view } = setup();
+    act(() => { latest.enter('button'); });
+    await act(async () => { fs.grant(); });
+    await act(async () => { fs.lose(); });
+    expect(places.markExitPending, 'CONTROL: the exit is waiting on its settle').toHaveBeenCalledWith(true);
+    const landed = vi.spyOn(places, 'landedBelow');
+    view.unmount();
+    await act(async () => { await vi.advanceTimersByTimeAsync(READER_EXIT_SETTLE_MS + 100); });
+    expect(landed, 'the settle ran after the screen left').not.toHaveBeenCalled();
+    expect(places.stepBack).not.toHaveBeenCalled();
+  });
+
+  it('reader mode: a re-entry during the settle cancels it', async () => {
+    vi.useFakeTimers();
+    const { fs, places } = setup();
+    act(() => { latest.enter('button'); });
+    await act(async () => { fs.grant(); });
+    await act(async () => { fs.lose(); });
+    act(() => { latest.enter('key'); });
+    expect(latest.state.on).toBe(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(READER_EXIT_SETTLE_MS + 100); });
+    expect(places.stepBack, 'the old settle stepped back the new reading\'s place').not.toHaveBeenCalled();
+    expect(places.markExitPending).toHaveBeenLastCalledWith(false);
+    expect(latest.state.on).toBe(true);
+  });
+
+  it('reader mode: a change of document ends it, and the same document at another commit or fragment does not', async () => {
+    const f = fakeLoaders();
+    function Routed(): ReactNode {
+      const { path, search } = useLocation();
+      return <DocsScreen path={path} search={search} loaders={f.loaders} parser={parser} reader={reader} />;
+    }
+    navigate('/docs/demo/specs/a.md');
+    render(<Routed />);
+    await screen.findByTestId('reader-host');
+    await flush();
+    try {
+      act(() => { readerModeHandle()?.toggle(); });
+      expect(readerModeHandle()?.on()).toBe(true);
+      await act(async () => { navigate('/docs/demo/specs/a.md#elsewhere'); });
+      await settle();
+      expect(readerModeHandle()?.on(), 'another fragment of the same document ended reader mode').toBe(true);
+      await act(async () => { navigate(`/docs/demo/specs/a.md?at=${COMMIT_B}`); });
+      await settle();
+      expect(readerModeHandle()?.on(), 'the same document at another commit ended reader mode').toBe(true);
+      await act(async () => { navigate('/docs/demo/specs/b.md'); });
+      await settle();
+      expect(readerModeHandle()?.on(), 'another document did not end reader mode').toBe(false);
+      expect(reading().getAttribute('data-reader-mode')).toBeNull();
+    } finally {
+      act(() => { if (readerModeHandle()?.on() === true) readerModeHandle()?.toggle(); });
+    }
+  });
+});
+
+// ─── the fill's rules over both shapes of a leaf (spec 4.1; the browser suite pins the pixels) ──────────────────────────
+
+describe('docs.css: the fill keeps the reader host\'s path drawn in both shapes of a leaf (X6 XR1.2, fix round 1)', () => {
+  const docsCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'docs', 'docs.css'), 'utf8');
+  const LEAF = '.docs-screen > .docs-reading[data-reader-mode] > .docs-leaf';
+  const UNDRAWN_LEAF = `${LEAF}:has(.docs-reader) > :not(.docs-reader):not(:has(.docs-reader))`;
+  const UNDRAWN_DEEP = `${LEAF} :has(.docs-reader) > :not(.docs-reader):not(:has(.docs-reader))`;
+  const ON_PATH = `${LEAF} :has(.docs-reader)`;
+
+  const shape = (leaf: string): HTMLElement => {
+    const root = document.createElement('div');
+    root.innerHTML = `<div class="docs-screen"><div class="docs-reading" data-reader-mode="fill"><div class="docs-leaf">${leaf}</div></div></div>`;
+    document.body.appendChild(root);
+    restorers.push(() => root.remove());
+    return root;
+  };
+  const idsOf = (root: HTMLElement, selector: string): string[] =>
+    [...root.querySelectorAll(selector)].map((el) => el.id).filter((id) => id !== '').sort();
+
+  it('the undrawing rules say display none and the path rule makes a column that hands the host the room', () => {
+    expect(declValue(ruleIn(docsCss, UNDRAWN_LEAF), 'display')).toBe('none');
+    expect(declValue(ruleIn(docsCss, UNDRAWN_DEEP), 'display')).toBe('none');
+    const column = ruleIn(docsCss, ON_PATH);
+    expect(declValue(column, 'display')).toBe('flex');
+    expect(declValue(column, 'flex-direction')).toBe('column');
+    expect(declValue(column, 'min-block-size')).toBe('0');
+  });
+
+  it('a leaf that holds the host directly: its siblings are undrawn, the host and its frame are not', () => {
+    const root = shape(
+      '<p id="fmt" class="doc-formatting">Formatting</p><div id="host" class="docs-reader"><iframe id="frame"></iframe></div><p id="note">n</p>',
+    );
+    expect(idsOf(root, `${UNDRAWN_LEAF}, ${UNDRAWN_DEEP}`)).toEqual(['fmt', 'note']);
+    expect(idsOf(root, ON_PATH), 'no wrapper stands between the leaf and the host').toEqual([]);
+  });
+
+  it('a leaf shown in parts: the path to the current part\'s host stays drawn and every sibling at each level is undrawn', () => {
+    const root = shape(
+      '<div id="actions" class="docs-leaf-actions"><button type="button">Download</button></div>'
+      + '<div id="parts" class="docs-in-parts"><nav id="bar" class="docs-parts"><button id="prev" type="button">Previous</button></nav>'
+      + '<p id="pnote" class="docs-note">Continued</p><p id="pfmt" class="doc-formatting">Formatting</p>'
+      + '<div id="host" class="docs-reader"><iframe id="frame"></iframe></div></div>',
+    );
+    expect(idsOf(root, `${UNDRAWN_LEAF}, ${UNDRAWN_DEEP}`)).toEqual(['actions', 'bar', 'pfmt', 'pnote']);
+    expect(idsOf(root, ON_PATH), 'the wrapper holding the host is on the path').toEqual(['parts']);
+  });
+
+  it('a wrapper two levels down is on the path too, and a sibling beside it is undrawn', () => {
+    const root = shape(
+      '<div id="outer"><div id="inner"><div id="host" class="docs-reader"></div><p id="deep-note">n</p></div><p id="outer-note">n</p></div>',
+    );
+    expect(idsOf(root, `${UNDRAWN_LEAF}, ${UNDRAWN_DEEP}`)).toEqual(['deep-note', 'outer-note']);
+    expect(idsOf(root, ON_PATH)).toEqual(['inner', 'outer']);
+  });
+});

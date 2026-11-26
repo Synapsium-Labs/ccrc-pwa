@@ -54,3 +54,80 @@ export function recordModalLayer(panel: Element): ReadonlySet<Element> {
   layers.set(panel, own);
   return own;
 }
+
+// THE CONSOLE HIDDEN AS THE PAGE'S OWN (reader mode, X6 XR1.2; spec 2026-11-20 §4.1).
+//
+// Reader mode draws the Docs reading container over the console and suspends the console: everything outside the container is
+// `inert` and hidden from assistive technology. That hiding is the PAGE'S OWN, which no closing modal lifts. A node hidden
+// with `aria-hidden="true"` and no `data-aria-hidden` mark is exactly what `recordModalLayer` records as the page's, and a
+// sheet's `useHidingFollowsOpen` lifts every mark but the page's own, so a sheet opened and closed inside reader mode (the
+// external-link or copy sheet) leaves the console hidden. A hiding made through Radix's `hideOthers` would write the mark, and
+// the closing sheet would lift it with its own. So these two functions are the one owner of that hiding, and neither writes a
+// `data-aria-hidden` mark.
+//
+// A node the page had already hidden (it carries `aria-hidden="true"`) is made inert but its `aria-hidden` is not touched, and
+// it is not in `hidden`: it is the page's before reader mode and after it. A node that was already `inert` is not recorded
+// either, so leaving never makes it focusable.
+//
+// LEAVING reader mode while a modal is open: a node in `hidden` that a modal marked (`data-aria-hidden`) while a
+// `[role="dialog"][data-state="open"]` stands (the open-modal test `sheet.tsx` uses) keeps its `aria-hidden`: the console stays
+// hidden behind the open modal. It is deleted from every layer's record, so it is no longer the page's own and that modal's
+// close lifts it like any other mark. A marked node with no open dialog (a sheet still animating closed, `data-state="closed"`,
+// has already made its one lift) is un-hidden at once, so the console is announced and focusable from the moment reader mode
+// ends.
+//
+// TWO PRECONDITIONS. The hiding is entered with no modal layer in the document (reader mode is not offered while any
+// `[role="dialog"]` is mounted, open or closing): under one, a node a modal hid would read as the page's own and never be
+// recorded, so that modal's close would announce the console behind reader mode. And there is ONE live hiding: a second
+// `hideAsPage` before its `releaseAsPage` answers the live record itself, never a new one that recorded nothing (everything
+// being inert and hidden already) and so would release nothing. The hiding is a snapshot taken at entry: a node mounted
+// outside `keep` afterwards (a toast host that appears) is neither inert nor hidden (spec §4.1 accepts that toasts draw behind
+// reader mode).
+let live: PageHiding | null = null;
+
+/** What `hideAsPage` set, for `releaseAsPage` to undo: the nodes it made `inert` and the nodes it gave `aria-hidden`. */
+export interface PageHiding {
+  readonly inerted: readonly Element[];
+  readonly hidden: readonly Element[];
+}
+
+const NOT_CONTENT = new Set(['SCRIPT', 'STYLE', 'TEMPLATE']);
+
+/** Hide everything outside `keep` as the page's own: each sibling of `keep` and of each ancestor of `keep` up to `body` is made
+ *  `inert` and, when it is not hidden already, `aria-hidden="true"`, with no `data-aria-hidden` mark. Scripts, styles,
+ *  templates and any node that contains `keep` are left alone. While a hiding is live, it is answered again (above). */
+export function hideAsPage(keep: Element): PageHiding {
+  if (live !== null) return live;
+  const inerted: Element[] = [];
+  const hidden: Element[] = [];
+  for (let at: Element | null = keep; at !== null && at !== document.body && at.parentElement !== null; at = at.parentElement) {
+    for (const sibling of [...at.parentElement.children]) {
+      if (sibling === at || NOT_CONTENT.has(sibling.tagName) || sibling.contains(keep)) continue;
+      if (!sibling.hasAttribute('inert')) {
+        sibling.setAttribute('inert', '');
+        inerted.push(sibling);
+      }
+      if (sibling.getAttribute('aria-hidden') !== 'true') {
+        sibling.setAttribute('aria-hidden', 'true');
+        hidden.push(sibling);
+      }
+    }
+  }
+  live = { inerted, hidden };
+  return live;
+}
+
+/** Undo `hideAsPage` (above): remove `inert` from every node it made inert, and `aria-hidden` from every node it hid, except a
+ *  node a modal marks while a modal is open, which that modal's close lifts. */
+export function releaseAsPage(h: PageHiding): void {
+  if (h === live) live = null;
+  for (const node of h.inerted) node.removeAttribute('inert');
+  const modalOpen = document.querySelector('[role="dialog"][data-state="open"]') !== null;
+  for (const node of h.hidden) {
+    if (modalOpen && node.hasAttribute('data-aria-hidden')) {
+      for (const recorded of layers.values()) recorded.delete(node);
+    } else {
+      node.removeAttribute('aria-hidden');
+    }
+  }
+}

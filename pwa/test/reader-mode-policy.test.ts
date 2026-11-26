@@ -6,6 +6,7 @@ import {
   READER_EXIT_SETTLE_MS,
   READER_MODE_OFF,
   READER_WAKE_IDLE_MS,
+  readerModeDocKey,
   readerModeOffered,
   readerModeStep,
   timeLeftMinutes,
@@ -15,6 +16,7 @@ import {
   type ReaderModeState,
 } from '../src/docs/reader/readerMode';
 import { READER_MODE_TEXT, timeLeftText } from '../src/docs/reader/readerModeWords';
+import type { DocsFolderLocation, DocsPageLocation } from '../../shared/docs';
 
 type On = Extract<ReaderModeState, { on: true }>;
 
@@ -29,6 +31,23 @@ const toggle = (over: Partial<Extract<ReaderModeEvent, { kind: 'frame-toggle' }>
   offered: true, frameFocused: true, ...over,
 });
 const count = (acts: readonly ReaderModeAct[], act: ReaderModeAct): number => acts.filter((a) => a === act).length;
+
+describe('reader mode: the document it is entered for', () => {
+  it('doc key: a leaf path or folder path names one document across commits and fragments; anything else is none', () => {
+    const leaf = { kind: 'path', project: 'demo', section: 'specs', path: 'a.md', dirSlash: false, ref: null } as unknown as DocsPageLocation;
+    const otherCommit = { ...leaf, ref: { kind: 'commit', sha: 'c'.repeat(40) } } as unknown as DocsPageLocation;
+    const other = { ...leaf, path: 'b.md' } as DocsPageLocation;
+    const dir = { ...leaf, dirSlash: true } as DocsPageLocation;
+    const folder = { kind: 'folder-path', label: 'notes', section: 'specs', path: 'a.md', dirSlash: false } as unknown as DocsFolderLocation;
+    expect(readerModeDocKey(leaf, null)).toBe(['project', 'demo', 'specs', 'a.md'].join('\u0000'));
+    expect(readerModeDocKey(otherCommit, null), 'a new commit is the same document').toBe(readerModeDocKey(leaf, null));
+    expect(readerModeDocKey(other, null), 'another file is another document').not.toBe(readerModeDocKey(leaf, null));
+    expect(readerModeDocKey(dir, null)).toBeNull();
+    expect(readerModeDocKey(null, folder)).toBe(['folder', 'notes', 'specs', 'a.md'].join('\u0000'));
+    expect(readerModeDocKey(null, folder), 'a folder is never a project of the same name').not.toBe(readerModeDocKey(leaf, null));
+    expect(readerModeDocKey(null, null)).toBeNull();
+  });
+});
 
 describe('reader mode: the constants', () => {
   it('holds the measured values', () => {

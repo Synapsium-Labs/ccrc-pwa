@@ -3,7 +3,7 @@
 // spring-up panel with r-xl top corners, grabber, safe-area padded. From 900
 // it is a centred dialog instead (D-5933): the same Root, re-placed by CSS.
 import { Drawer } from 'vaul';
-import { useCallback, useEffect, useRef } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode, RefObject } from 'react';
 import { cn } from '../lib/cn';
 import { recordModalLayer } from '../lib/modal-layers';
@@ -11,6 +11,12 @@ import { EYEBROW } from '../lib/text';
 import { SHEET_DESK_MOTION_VARS, SHEET_MOTION_VARS, VAUL_MOTION } from '../lib/motion';
 import { useDesk } from '../lib/use-media-query';
 import { CloseButton } from './close-button';
+
+/** Where a `Sheet` draws its portal (reader mode, X6 XR1.2). On a Docs page it is the reading container's portal target, so
+ *  a sheet is drawn inside the element that goes full screen, in the normal view and in reader mode alike, and is never moved
+ *  or remounted as reader mode starts or ends. `null`, the default and everywhere else, keeps the portal on the body as
+ *  Radix does today. */
+export const SheetPortalContext = createContext<HTMLElement | null>(null);
 
 interface SheetBaseProps {
   open: boolean;
@@ -281,6 +287,7 @@ export function Sheet({
   size = 'md',
   titleScroll = true,
 }: SheetProps): ReactNode {
+  const portalContainer = useContext(SheetPortalContext);
   const focusRef = useSheetFocus(open, initialFocus);
   const hidingRef = useHidingFollowsOpen(open);
   const panelRef = useCallback((el: HTMLElement | null): void => { focusRef(el); hidingRef(el); }, [focusRef, hidingRef]);
@@ -342,7 +349,7 @@ export function Sheet({
         if (!next) onClose();
       }}
     >
-      <Drawer.Portal>
+      <Drawer.Portal container={portalContainer}>
         <Drawer.Overlay
           // The scrim fades on vaul's keyframes at the panel's pace (D-5930).
           className={cn('sheet-scrim fixed inset-0 z-sheet bg-scrim', VAUL_MOTION, SHEET_MOTION_VARS, !full && SHEET_DESK_MOTION_VARS)}

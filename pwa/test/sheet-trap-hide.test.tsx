@@ -29,7 +29,7 @@ import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { CommandPalette, QuickConfirm, Sheet } from '@ccrc/ui';
+import { CommandPalette, QuickConfirm, Sheet, SheetPortalContext, hideAsPage, releaseAsPage, type PageHiding } from '@ccrc/ui';
 
 afterEach(() => {
   cleanup();
@@ -1101,5 +1101,224 @@ describe('3. a sheet closed without a write gives the focus back to the radio gr
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     await settle();
     expect(document.activeElement, 'an enabled control the focus left by itself was focused again').toBe(document.body);
+  });
+});
+
+// X6 XR1.2 (reader mode, spec 2026-11-20 §4.1): reader mode hides the console as the PAGE'S OWN hiding (`hideAsPage`, no
+// `data-aria-hidden` mark), which the modal layers record as the page's and never lift, and a sheet on a Docs page portals
+// into the reading container (`SheetPortalContext`). The console is a header and a nav standing beside the container, as ccrc's
+// head and rail do.
+describe('reader mode: the console hidden as the page\'s own, and sheets in the reading container (X6 XR1.2)', () => {
+  /** The console (two siblings of the container), the container with its portal target and an announcement region, and a
+   *  sheet whose portal target is the container's. The sheet is opened and closed through `open`, as `sheet.tsx` is used. */
+  function ReadingHarness({ open }: { open: boolean }): ReactNode {
+    const [portal, setPortal] = useState<HTMLElement | null>(null);
+    return (
+      <div data-testid="wrapper">
+        <header data-testid="console-head"><button type="button">Console button</button></header>
+        <nav data-testid="console-nav"><a href="#console">Console link</a></nav>
+        <div data-testid="reading-container">
+          <div className="docs-reading-portal" ref={setPortal} />
+          <p aria-live="polite" data-testid="announce">Reading.</p>
+        </div>
+        <SheetPortalContext value={portal}>
+          <Sheet open={open} onClose={() => undefined} title="A link">
+            <button type="button">Inside the sheet</button>
+          </Sheet>
+        </SheetPortalContext>
+      </div>
+    );
+  }
+  const consoleNodes = (): [HTMLElement, HTMLElement] => [screen.getByTestId('console-head'), screen.getByTestId('console-nav')];
+  const reading = (): HTMLElement => screen.getByTestId('reading-container');
+  const isHidden = (el: Element): boolean => el.getAttribute('aria-hidden') === 'true';
+  const isInert = (el: Element): boolean => el.hasAttribute('inert');
+  const isMarked = (el: Element): boolean => el.hasAttribute('data-aria-hidden');
+  /** Every hiding a case made: released after the case whatever it did, so a red never leaves body-level siblings inert for
+   *  the next case, nor a live hiding that the next `hideAsPage` would answer. */
+  const made: PageHiding[] = [];
+  const hide = (keep: Element): PageHiding => {
+    const h = hideAsPage(keep);
+    made.push(h);
+    return h;
+  };
+  afterEach(() => {
+    for (const h of made.splice(0)) releaseAsPage(h);
+  });
+
+  it('modal layers: hideAsPage makes a node the page hid already inert without touching its aria-hidden, and releaseAsPage leaves it hidden', () => {
+    render(<ReadingHarness open={false} />);
+    const [head, nav] = consoleNodes();
+    nav.setAttribute('aria-hidden', 'true');   // the page hid it itself, before reader mode
+    const already = document.createElement('div');
+    already.setAttribute('inert', '');          // inert before reader mode: not reader mode's to lift
+    screen.getByTestId('wrapper').appendChild(already);
+
+    const hiding = hide(reading());
+    expect(isHidden(head) && isInert(head), 'CONTROL: a plain sibling is hidden and inert').toBe(true);
+    expect(isInert(nav), 'a node the page hid already was not made inert').toBe(true);
+    expect(isHidden(nav), 'its aria-hidden was touched').toBe(true);
+    expect(isMarked(nav) || isMarked(head), 'a data-aria-hidden mark was written').toBe(false);
+    expect(hiding.hidden, 'a node the page hid already is not reader mode\'s to un-hide').not.toContain(nav);
+    expect(hiding.hidden).toContain(head);
+    expect(hiding.inerted).toContain(nav);
+    expect(hiding.inerted, 'a node already inert is not recorded').not.toContain(already);
+
+    releaseAsPage(hiding);
+    expect(isHidden(nav), 'releaseAsPage un-hid what the page hid').toBe(true);
+    expect(isInert(nav), 'releaseAsPage left the node inert').toBe(false);
+    expect(isHidden(head) || isInert(head), 'CONTROL: a plain sibling is restored').toBe(false);
+    expect(isInert(already), 'a node inert before reader mode was made focusable').toBe(true);
+  });
+
+  it('modal layers: hideAsPage suspends every node outside keep, with no data-aria-hidden mark, leaves keep, its ancestors and non-content nodes untouched, and releaseAsPage restores them', () => {
+    render(<ReadingHarness open={false} />);
+    const outside = document.createElement('aside');   // a sibling of the render root, a child of body
+    document.body.appendChild(outside);
+    const wrapper = screen.getByTestId('wrapper');
+    const style = document.createElement('style');
+    const template = document.createElement('template');
+    wrapper.append(style, template);
+    try {
+      const hiding = hide(reading());
+      const suspended = [...consoleNodes(), outside];
+      for (const node of suspended) {
+        expect(isHidden(node), 'not aria-hidden while on').toBe(true);
+        expect(isInert(node), 'not inert while on').toBe(true);
+        expect(isMarked(node), 'a data-aria-hidden mark was written').toBe(false);
+      }
+      for (const node of [reading(), wrapper, screen.getByTestId('announce'), style, template]) {
+        expect(isHidden(node) || isInert(node), 'the container, its ancestors and non-content nodes stay as they were').toBe(false);
+      }
+      releaseAsPage(hiding);
+      for (const node of suspended) {
+        expect(isHidden(node), 'still aria-hidden after').toBe(false);
+        expect(isInert(node), 'still inert after').toBe(false);
+        expect(isMarked(node)).toBe(false);
+      }
+    } finally { outside.remove(); }
+  });
+
+  it('sheet: a Sheet under SheetPortalContext portals into that element and stays mounted while the page is hidden and released', async () => {
+    const view = render(<ReadingHarness open={false} />);
+    view.rerender(<ReadingHarness open />);
+    await settle();
+    const dialog = screen.getByRole('dialog');
+    const portal = reading().querySelector('.docs-reading-portal');
+    expect(portal?.contains(dialog), 'the sheet is not drawn in the reading container (normal view)').toBe(true);
+    const sameDialog = (): void => {
+      const all = document.querySelectorAll('[role="dialog"]');
+      expect(all.length).toBe(1);
+      expect(all[0], 'the sheet was remounted').toBe(dialog);
+      expect(portal?.contains(dialog)).toBe(true);
+    };
+    const hiding = hide(reading());
+    await settle();
+    sameDialog();
+    releaseAsPage(hiding);
+    await settle();
+    sameDialog();
+  });
+
+  it('reader mode: a sheet opened and closed inside reader mode leaves the console hidden and inert', async () => {
+    const release = holdClosingContent();
+    try {
+      const view = render(<ReadingHarness open={false} />);
+      const hiding = hide(reading());
+      view.rerender(<ReadingHarness open />);
+      await settle();
+      const dialog = screen.getByRole('dialog');
+      view.rerender(<ReadingHarness open={false} />);
+      await settle();
+      expect(dialog.getAttribute('data-state'), 'CONTROL: the closing panel is still mounted').toBe('closed');
+      for (const node of consoleNodes()) {
+        expect(isHidden(node), 'the closing sheet lifted the console\'s hiding').toBe(true);
+        expect(isInert(node)).toBe(true);
+      }
+      await finishExit(dialog);
+      expect(document.querySelector('[role="dialog"]'), 'CONTROL: the sheet is gone').toBeNull();
+      for (const node of consoleNodes()) {
+        expect(isHidden(node), 'the console is announced after the sheet left, inside reader mode').toBe(true);
+        expect(isInert(node), 'the console is focusable after the sheet left, inside reader mode').toBe(true);
+        expect(isMarked(node), 'a mark is left on the console').toBe(false);
+      }
+      releaseAsPage(hiding);
+      for (const node of consoleNodes()) expect(isHidden(node) || isInert(node), 'CONTROL: leaving restores it').toBe(false);
+    } finally { release(); }
+  });
+
+  it('reader mode: leaving with a sheet open keeps the console hidden until the sheet closes, then announced', async () => {
+    const release = holdClosingContent();
+    try {
+      const view = render(<ReadingHarness open={false} />);
+      const hiding = hide(reading());
+      view.rerender(<ReadingHarness open />);
+      await settle();
+      const dialog = screen.getByRole('dialog');
+      releaseAsPage(hiding);
+      for (const node of consoleNodes()) {
+        expect(isInert(node), 'the console is not focusable again').toBe(false);
+        expect(isHidden(node), 'the console is announced behind an open modal').toBe(true);
+        expect(isMarked(node), 'CONTROL: the open modal marks it').toBe(true);
+      }
+      view.rerender(<ReadingHarness open={false} />);
+      await settle();
+      await finishExit(dialog);
+      expect(document.querySelector('[role="dialog"]'), 'CONTROL: the sheet is gone').toBeNull();
+      for (const node of consoleNodes()) {
+        expect(isHidden(node), 'the console stayed hidden after the sheet closed').toBe(false);
+        expect(isInert(node)).toBe(false);
+        expect(isMarked(node)).toBe(false);
+      }
+    } finally { release(); }
+  });
+
+  it('reader mode: leaving during a sheet\'s exit animation announces the console at once and leaves it focusable', async () => {
+    const release = holdClosingContent();
+    try {
+      const view = render(<ReadingHarness open={false} />);
+      const hiding = hide(reading());
+      view.rerender(<ReadingHarness open />);
+      await settle();
+      const dialog = screen.getByRole('dialog');
+      view.rerender(<ReadingHarness open={false} />);
+      await settle();
+      expect(dialog.getAttribute('data-state'), 'CONTROL: the panel is mounted, closed').toBe('closed');
+      for (const node of consoleNodes()) expect(isMarked(node), 'CONTROL: its marks are in place').toBe(true);
+      releaseAsPage(hiding);
+      for (const node of consoleNodes()) {
+        expect(isHidden(node), 'the console is still hidden during the exit').toBe(false);
+        expect(isInert(node), 'the console is still inert during the exit').toBe(false);
+      }
+      await finishExit(dialog);
+      expect(document.querySelector('[role="dialog"]'), 'CONTROL: the sheet is gone').toBeNull();
+      for (const node of consoleNodes()) {
+        expect(isHidden(node), 'the console is hidden after the exit').toBe(false);
+        expect(isInert(node), 'the console is inert after the exit').toBe(false);
+      }
+    } finally { release(); }
+  });
+
+  it('modal layers: hideAsPage leaves a live region inside keep announced', () => {
+    render(<ReadingHarness open={false} />);
+    const hiding = hide(reading());
+    for (const node of consoleNodes()) expect(isHidden(node) && isInert(node), 'CONTROL: the console is suspended').toBe(true);
+    for (let at: Element | null = screen.getByTestId('announce'); at !== null; at = at.parentElement) {
+      expect(isHidden(at), `${at.tagName} is aria-hidden: the announcement is not read`).toBe(false);
+      expect(isInert(at), `${at.tagName} is inert`).toBe(false);
+    }
+    releaseAsPage(hiding);
+  });
+
+  it('modal layers: a second hideAsPage before its release answers the live hiding, so one release restores everything', () => {
+    render(<ReadingHarness open={false} />);
+    const first = hide(reading());
+    const second = hide(reading());
+    expect(second, 'a second record that recorded nothing').toBe(first);
+    releaseAsPage(second);
+    for (const node of consoleNodes()) expect(isHidden(node) || isInert(node), 'the console stayed suspended').toBe(false);
+    const third = hide(reading());
+    expect(third, 'CONTROL: after the release a new hiding is made').not.toBe(first);
+    expect(third.hidden, 'CONTROL: and it records the console').toEqual(expect.arrayContaining(consoleNodes()));
   });
 });
