@@ -2,7 +2,8 @@
 // refreshes the `@overlord-place` operator mark when it is the bound session's, at most once a minute. Two layers:
 //  1. `placeMarkReporter`, the one function the handler calls, over stubbed ports (the designation reader, the marks read and
 //     the mark writer) and a clock the case moves;
-//  2. the real handler of `/ws/session/:id` over a real socket, a real coord.db in a fixture HOME and the real wall clock:
+//  2. the real handler of `/ws/session/:id` over a real socket, a real coord.db in a fixture HOME and the server's own clock,
+//     a fake time the case moves (`fakeTime`):
 //     the frames of one minute write once, a hidden frame or another session's frame writes nothing, and a reader that
 //     throws still lets the frame's visibility land.
 // The frame vocabulary is unchanged: `asSessionClientMsg` answers null for a frame type it did not know before.
@@ -77,6 +78,23 @@ describe('placeMarkReporter: the function the session socket calls after a visib
     report(BOUND, false);
     report(OTHER, true);
     report(OTHER, false);
+    expect(state.writes).toEqual([]);
+  });
+
+  // Review 3998 M11: every session's socket sends a frame every 15 s, hidden tabs included; a hidden frame can never write, so
+  // it is ruled on before any read and costs none (and a standing read fault is never warned from a frame that could not write).
+  it('a hidden frame reads nothing and warns nothing, even over readers that throw', () => {
+    let reads = 0;
+    const { p, state } = ports({
+      designation: () => { reads += 1; throw new Error('boom'); },
+      marks: () => { reads += 1; throw new Error('boom'); },
+    });
+    const warnings: string[] = [];
+    const report = placeMarkReporter(p, () => T0, (l) => warnings.push(l));
+    report(BOUND, false);
+    report(OTHER, false);
+    expect(reads, 'no read for a hidden frame').toBe(0);
+    expect(warnings).toEqual([]);
     expect(state.writes).toEqual([]);
   });
 
@@ -244,7 +262,9 @@ describe('/ws/session/:id: a visible frame of the bound session refreshes @overl
       ws.send(JSON.stringify({ type: 'visible', visible: true }));
       ws.send(JSON.stringify({ type: 'visible', visible: true }));
       await vi.waitFor(() => expect(r.viewers.isVisible(BOUND)).toBe(true), wait);
-      await vi.waitFor(() => expect(warn.mock.calls.filter((c) => String(c[0]).startsWith('ccrc-server: ')).length).toBeGreaterThan(0), wait);
+      // The reporter's own sentence, with the reader's fault in it (review 3998 M9): other paths warn with the server's prefix too.
+      const own = 'ccrc-server: the Overlord place mark was not refreshed (fixture: the designation reader failed)';
+      await vi.waitFor(() => expect(warn.mock.calls.filter((c) => String(c[0]).startsWith(own)).length).toBe(1), wait);
       expect(r.writes()).toBe(0);
       expect(ws.readyState).toBe(WebSocket.OPEN);
     } finally { ws.close(); }

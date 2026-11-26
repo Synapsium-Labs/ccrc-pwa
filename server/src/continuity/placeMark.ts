@@ -27,6 +27,13 @@ export interface PlaceMarkFacts {
   readonly nowMs: number;
 }
 
+/** Whether a frame could refresh the mark at all, asked before any read (review 3998 M11): every session's socket sends a frame
+ *  every 15 s, hidden tabs included, and a hidden frame never writes, so it costs no read and never warns of a read fault.
+ *  `placeMarkDue` still rules on the whole frame. */
+export function placeMarkReadsFor(visible: boolean): boolean {
+  return visible;
+}
+
 /** Whether this frame refreshes the place mark. */
 export function placeMarkDue(i: PlaceMarkFacts): 'write' | 'skip' {
   if (!i.visible) return 'skip';

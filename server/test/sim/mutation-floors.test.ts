@@ -194,7 +194,8 @@ const PEER_SET: MutantSet<PeerBoundModule> = {
 };
 
 // Overlord W1 home B, Task 7 (plan w1-home.md): the place mark's decider, against the cases `continuity-place-mark.test.ts`
-// asserts, written out here as suite cases over the loaded module. P1 to P4 are the plan's; P5 to P7 pin the edges.
+// asserts, written out here as suite cases over the loaded module. P1 to P4 are the plan's; P5 to P9 pin the edges (the minute's
+// edge, an unread mark, a future mark, no session designated and an absent mark).
 type PlaceMarkModule = typeof import('../../src/continuity/placeMark.js');
 const PLACE_MARK_KEY = 'server/src/continuity/placeMark.ts#placeMarkDue';
 const PLACE_MARK_SET: MutantSet<PlaceMarkModule> = {

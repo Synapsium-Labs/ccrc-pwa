@@ -1,5 +1,6 @@
 // L4, context C3 (Session Conversation): the session socket's one call after a parsed `visible` frame (Overlord W1 home B, plan
-// w1-home.md question 4 and Task 7). It reads the designation's bound session and the `@overlord-place` mark's `at`, reads the
+// w1-home.md question 4 and Task 7). A hidden frame stops at `placeMarkReadsFor` before any read (review 3998 M11). For a visible
+// one it reads the designation's bound session and the `@overlord-place` mark's `at`, reads the
 // wall clock through the `now` it is handed (the server's own `deps.time.clock.wall()`; this directory is in the time-port scope, so no ambient clock is read here), asks the pure
 // `placeMarkDue`, and on `write` calls the mark's one writer, `putOperatorMark`, with `OVERLORD_PLACE_MARK`. It decides nothing.
 //
@@ -9,7 +10,7 @@
 import { OVERLORD_PLACE_MARK } from '../../../shared/continuity.js';
 import type { DesignationRead } from '../../../shared/overlord-designation.js';
 import type { OperatorMarksRead } from './continuityStore.js';
-import { placeMarkDue, type PlaceBound, type PlaceMarkAt } from './placeMark.js';
+import { placeMarkDue, placeMarkReadsFor, type PlaceBound, type PlaceMarkAt } from './placeMark.js';
 
 /** The two reads and the one write the report needs: `CoordStore` carries all three. */
 export interface PlaceMarkPorts {
@@ -40,7 +41,7 @@ export function placeMarkReporter(
     warn(`ccrc-server: the Overlord place mark was not refreshed (${what}); the mark ages, so a renewal may read the place as hidden`);
   };
   return (frameSessionId, visible) => {
-    if (ports === undefined) return;
+    if (ports === undefined || !placeMarkReadsFor(visible)) return;
     try {
       const nowMs = now();
       const bound = boundOf(ports.designationRead());
