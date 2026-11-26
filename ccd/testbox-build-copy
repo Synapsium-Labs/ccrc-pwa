@@ -42,11 +42,14 @@
 #           would copy and refuse again); the name can change during the stream, and the answer reports what the check saw.
 #           The stage is removed before the hash, and on every exit the box's shell sees, a hangup and a termination
 #           delivered to that shell included: the shell stands ready for one before it makes the stage, so for those no
-#           instant from the stage's making on leaves it. The clean-up names the stage and nothing else at every instant:
-#           the stage's name is cleared before that readiness stands, and forgotten as soon as the stage is removed on
-#           purpose, so a later exit removes nothing. A kill, or a signal that also reaches the tool making the stage, can
-#           leave one directory only root can enter, in root's temporary folder. Each refusal says one word, which this
-#           host's log keeps.
+#           instant from the stage's making on leaves it. The clean-up names the stage and nothing else: the stage's name
+#           is cleared before that readiness stands, and forgotten as soon as the stage is removed on purpose, so a later
+#           exit removes nothing. One window stays: a hangup, interrupt or termination delivered to the shell alone while it
+#           removes the stage on purpose waits until that removal returns, and the clean-up then runs once more on the
+#           freed name before the shell forgets it (the stage's own random name, under a parent the program checked, which
+#           no longer exists then). A kill, or a signal that also reaches the tool making the stage, can leave one directory
+#           only root can enter, in root's temporary folder, holding as much of the build as was streamed. Each refusal says
+#           one word, which this host's log keeps.
 # Nothing here writes this host's versions directory or Claude Code's launcher, and the box side writes only under the box's
 # own root and its own stage. Short (one box call), under the verb's lock, recorded in no ledger row (the build's own row
 # says what the copy came to). Its answer is `{"ok":true,"build":"<version>","sha256":"<hex>"}`, with `"replaced":"link"`
@@ -118,7 +121,7 @@ _tba_run_build-copy() {
     return 0
   fi
   if [ "${CX_OUT%$'\n'}" = installed-over-link ]; then
-    _tba_log "build-copy: ok ($v; the box replaced a link at the build's name)"
+    _tba_log "build-copy: ok ($v; the box's check before the stream saw a link at the build's name)"
     _tba_ok "\"build\":\"$v\",\"sha256\":\"$sum\",\"replaced\":\"link\""
     return 0
   fi

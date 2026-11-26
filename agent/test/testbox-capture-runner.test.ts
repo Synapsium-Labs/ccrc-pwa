@@ -57,6 +57,11 @@ function runner(root: string, over: Partial<CaptureRunnerDeps> = {}): CaptureRun
 }
 
 const freshRoot = (): string => realpathSync(mkTmp('ccrc-caprun-'));
+// The path set the launcher accepts for a pane's binary (`CAPTURE_PATH_CHARS`, captureRunner.ts), read from its one source so
+// this file holds no copy of it (review 3789 E); the copy's own set for the box root is held equal to it below.
+const RUNNER_SRC = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'testbox', 'captureRunner.ts'), 'utf8');
+const CAPTURE_PATH_CLASS = /^const CAPTURE_PATH_CHARS = \/\^(\[[^\]\n]+\])\+\$\/;$/m.exec(RUNNER_SRC)?.[1] ?? '';
+const CAPTURE_PATH_SET = new RegExp(`^${CAPTURE_PATH_CLASS}+$`);
 const gone = (root: string, id: string, build: string): boolean => !existsSync(capturePaths(root, id, build, root).dir) && !existsSync(capturePaths(root, id, build, root).tmux);
 
 describe('a capture of a good build', () => {
@@ -230,7 +235,8 @@ function paneStartReading(report: string | null, start: string, binary: string):
 
 /** One read of a process: the file its image runs and its environment's entries; null when it cannot be read. */
 type ProcRead = () => { readonly exe: string; readonly vars: readonly string[] } | null;
-/** The process's environment once its image is no longer `tmuxExe` (the pane's exec has happened) and it lists at least one
+/** The process's environment once its image is no longer `tmuxExe` (the pane's exec has happened: the start program, then the
+ *  build it execs, which keeps the environment as it was) and it lists at least one
  *  variable, asked every `stepMs` until `boundMs` has passed; past the bound, a failure that says what was last seen
  *  (review 3765 F4). The clock and the sleep are the caller's, so a unit case runs it without waiting. */
 async function environOnceExecuted(read: ProcRead, tmuxExe: string, o: { boundMs?: number; stepMs?: number; now?: () => number; sleep?: (ms: number) => Promise<void> } = {}): Promise<{ readonly vars: readonly string[] } | { readonly unread: string }> {
@@ -243,7 +249,7 @@ async function environOnceExecuted(read: ProcRead, tmuxExe: string, o: { boundMs
     const r = read();
     if (r !== null && r.exe !== tmuxExe && r.vars.length > 0) return { vars: r.vars };
     if (r !== null) last = r.exe === tmuxExe ? 'still the multiplexer\'s own image' : 'an empty environment';
-    if (now() >= until) return { unread: `the pane did not become the build within ${bound} ms (last seen: ${last})` };
+    if (now() >= until) return { unread: `the pane did not leave the multiplexer's image within ${bound} ms (last seen: ${last})` };
     await sleep(o.stepMs ?? 20);
   }
 }
@@ -261,7 +267,7 @@ const procOf = (pid: number): ProcRead => () => {
 // The two helpers the real-tmux case below feeds (review 3765 F3, F4), measured here without tmux. The three reports are the
 // shapes tmux 3.6 printed for a pane started from two words, from one word, and from the two joined into one word
 // (measured on a private server; the measured path is replaced by a neutral one here).
-describe('reading how a pane was started, and waiting for the pane to become the build', () => {
+describe('reading how a pane was started, and waiting for the pane to leave the multiplexer\'s image', () => {
   const START = '/usr/bin/env';
   const BIN = '/srv/box/captures/builds/2.1.100';
   it('two plain words, the start program then the build, read as no shell', () => {
@@ -287,12 +293,23 @@ describe('reading how a pane was started, and waiting for the pane to become the
     expect(await environOnceExecuted(() => seq[Math.min(i++, seq.length - 1)]!, '/usr/bin/tmux', { now, sleep })).toEqual({ vars: ['SHELL=/bin/bash'] });
     expect(i).toBe(4);
   });
-  it('a pane that never becomes the build ends at the bound with a failure that says so, without hanging', async () => {
+  it('a pane that never leaves the multiplexer\'s image ends at the bound with a failure that says so, without hanging', async () => {
     const { c, now, sleep } = clock();
     const r = await environOnceExecuted(() => ({ exe: '/usr/bin/tmux', vars: ['A=1'] }), '/usr/bin/tmux', { now, sleep, boundMs: 1000, stepMs: 20 });
-    expect(r).toEqual({ unread: 'the pane did not become the build within 1000 ms (last seen: still the multiplexer\'s own image)' });
+    expect(r).toEqual({ unread: 'the pane did not leave the multiplexer\'s image within 1000 ms (last seen: still the multiplexer\'s own image)' });
     expect([c.t, c.sleeps]).toEqual([1000, 50]);
   }, 5000);
+});
+
+// Review 3789 E: the build copy accepts a box root only in a set (ccd/testbox-build-copy), and the capture's launcher a pane path
+// only in its own; a root the copy takes must be one the launcher takes, so the two literals are read here and held equal.
+describe('the copy\'s box-root set and the launcher\'s path set are one set', () => {
+  it('both literals are found, and their character classes are the same', () => {
+    const copySrc = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'ccd', 'testbox-build-copy'), 'utf8');
+    const copyClass = /\[\[ "\$root" =~ \^\/(\[[^\]\n]+\])\+\$ \]\]/.exec(copySrc)?.[1] ?? '';
+    expect(CAPTURE_PATH_CLASS).toBe('[A-Za-z0-9._/-]');
+    expect(copyClass).toBe(CAPTURE_PATH_CLASS);
+  });
 });
 
 describe('the tmux launcher', () => {
@@ -304,6 +321,7 @@ describe('the tmux launcher', () => {
     const sockDir = mkTmp('tx-');
     const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
     if (path.join(sockDir, 'ccrc-capture-tmx', `tmux-${uid}`, 'ccrc-capture').length > 100) ctx.skip();
+    if (!CAPTURE_PATH_SET.test(root)) ctx.skip();   // review 3789 F7: the launcher refuses a pane path outside its set
     const real = tmuxLauncher(REAL_TMUX!);
     try {
       place(root, GOOD);
@@ -328,6 +346,7 @@ describe('the tmux launcher', () => {
     const sockDir = mkTmp('tx-');
     const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
     if (path.join(sockDir, 'ccrc-capture-nol', `tmux-${uid}`, 'ccrc-capture').length > 100) ctx.skip();
+    if (!CAPTURE_PATH_SET.test(root)) ctx.skip();   // review 3789 F7: the launcher refuses a pane path outside its set
     const refuser = path.join(mkTmp('nologin-'), 'nologin');
     writeFileSync(refuser, '#!/bin/sh\necho "This account is currently not available."\nexit 1\n', { mode: 0o755 });
     // The fixture shell does refuse: a one-word pane under it is gone at once, its server with it.
@@ -359,7 +378,9 @@ describe('the tmux launcher', () => {
         const shown = spawnSync(REAL_TMUX!, ['-L', spec.socket, 'display-message', '-p', '-t', tmuxTarget(spec.session), '#{pane_start_command}'],
           { timeout: 10_000, env: Object.fromEntries(spec.env), encoding: 'utf8' });
         paneStart = paneStartReading(shown.status === 0 ? shown.stdout.replace(/\n$/, '') : null, CAPTURE_START, spec.binary);
-        // Review 3765 F4: the pane's environment is read once the pane has become the build, never before its exec.
+        // Review 3765 F4: the pane's environment is read once the pane's image is no longer the multiplexer's, never before its
+        // exec. That image is the start program first, which execs the build and passes the environment through unchanged, so
+        // the SHELL read there is the build's (review 3789 F4).
         if (panePid !== null && existsSync('/proc/self/environ')) {
           const seen = await environOnceExecuted(procOf(panePid), realpathSync(REAL_TMUX!));
           paneShell = 'unread' in seen ? seen.unread : seen.vars.find((l) => l.startsWith('SHELL='))?.slice(6) ?? 'unset';
