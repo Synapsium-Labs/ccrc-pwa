@@ -541,6 +541,7 @@ describe('the visit\'s own filter (history.state, rich-docs spec M8.22)', () => 
     const state = history.state as Record<string, unknown> | null;
     expect(state?.[READER_ONLY_STATE_KEY], 'the new entry holds no filter').toBeUndefined();
     expect(Object.keys(state ?? {}), 'only the index the dispatcher stamped').toEqual(['docsIdx']);
+    expect(typeof state?.docsIdx, 'a number').toBe('number');
     const probed: Array<string | null> = [];
     function Probe(): ReactNode { probed.push(useReaderOnly()); return null; }
     render(<Probe />);

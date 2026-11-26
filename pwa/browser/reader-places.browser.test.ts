@@ -87,34 +87,52 @@ async function lapse(page: Page): Promise<void> {
 }
 
 describe('lab E16 (P5.3 Step 0): a tap in the frame and the console\'s activation, desktop Chromium', () => {
-  it('E16: with no tap the console\'s activation lapses and stays lapsed; a tap in the frame activates the console; an entry it pushes then is one Back', async () => {
+  it('E16: with no tap the console\'s activation lapses and stays lapsed, and a raw tap in the frame activates the console', async () => {
     const app = await open('places.md');
-    const page = app.page;
-    const frame = await frameOf(page);
-    // The harness's navigation leaves the console activated for a few seconds; the baseline is that activation lapsed.
-    await lapse(page);
-    await page.waitForTimeout(1500);
-    const before = await activeNow(page);
-    // The browser's own Back (its toolbar button or Alt+Left) is the one Chromium's skip applies to, and headless Chromium
-    // has neither: measured on 2026-11-26, Alt+Left left the page on the entry pushed last. So this lab measures the
-    // activation the skip reads, and the device stage measures the skip itself.
-    // A trusted tap (Playwright's input goes through the browser, as a finger does) on the document's text, in the frame.
-    await frame.getByText('A short document with a figure.').click();
-    const afterTap = await activeNow(page);
-    // The console pushes an entry now, as a place does, with no gesture of its own; history's Back then leaves it.
-    const url = page.url();
-    const length = await quietEval<number>(page, 'history.length');
-    await quietEval(page, 'history.pushState({ ...(history.state ?? {}), e16: 1 }, "", location.href)');
-    const pushed = await quietEval<number>(page, 'history.length');
-    await quietEval(page, 'new Promise((r) => { addEventListener("popstate", () => r(null), { once: true }); history.back(); })');
-    const back = await quietEval<{ e16: number | null; href: string }>(page, '({ e16: history.state?.e16 ?? null, href: location.href })');
-    console.log(`E16-FIGURES ${JSON.stringify({ before, afterTap, length, pushed, back })}`);
-    expect(before, 'no transient activation 1.5 s after it lapsed, with no tap').toBe(false);
-    expect(afterTap, 'the tap in the frame activates the console (an ancestor of the frame)').toBe(true);
-    expect(pushed, 'the push added one entry').toBe(length + 1);
-    expect(back.e16, 'one Back left the pushed entry').toBeNull();
-    expect(back.href, 'and stayed on the doc').toBe(url);
-    expect(app.errors, 'no uncaught error').toEqual([]);
-    await app.ctx.close();
+    try {
+      const page = app.page;
+      const frame = await frameOf(page);
+      const text = frame.getByText('A short document with a figure.');
+      // The tap's point, in the page's coordinates, taken before the baseline: Playwright's locator calls run their own
+      // checks in the frame with a gesture, which would activate the frame and so the console.
+      const box = await text.boundingBox();
+      if (box === null) throw new Error('the text has no box');
+      // The harness's navigation leaves the console activated for a few seconds; the baseline is that activation lapsed.
+      await lapse(page);
+      await page.waitForTimeout(1500);
+      const before = await activeNow(page);
+      // Why the tap below is raw: Playwright's checks for a click, with no click (`trial`), run in the frame with a gesture
+      // and activate the console by themselves (measured 2026-11-26: `afterChecks` true), so a locator click's reading
+      // would not tell the tap apart from them. Logged, not asserted: it is the harness's behaviour, not the console's.
+      await text.click({ trial: true });
+      const afterChecks = await activeNow(page);
+      await lapse(page);
+      await page.waitForTimeout(1500);
+      const beforeTap = await activeNow(page);
+      // The browser's own Back (its toolbar button or Alt+Left) is the one Chromium's skip applies to, and headless
+      // Chromium has neither: measured on 2026-11-26, Alt+Left left the page on the entry pushed last. So this lab reads
+      // the console's transient activation, the stand-in for what the skip reads; the device stage measures the skip.
+      // A raw tap: only the input events, through the browser, as a finger's are, on the text inside the frame.
+      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+      const afterTap = await activeNow(page);
+      // A sanity check of the push and the pop, with no gesture of the console's own. Script's `history.back()` steps one
+      // entry whatever the activation, so this proves no skip rule.
+      const url = page.url();
+      const length = await quietEval<number>(page, 'history.length');
+      await quietEval(page, 'history.pushState({ ...(history.state ?? {}), e16: 1 }, "", location.href)');
+      const pushed = await quietEval<number>(page, 'history.length');
+      await quietEval(page, 'new Promise((r) => { addEventListener("popstate", () => r(null), { once: true }); history.back(); })');
+      const back = await quietEval<{ e16: number | null; href: string }>(page, '({ e16: history.state?.e16 ?? null, href: location.href })');
+      console.log(`E16-FIGURES ${JSON.stringify({ before, afterChecks, beforeTap, afterTap, length, pushed, e16: back.e16 })}`);
+      expect(before, 'no transient activation 1.5 s after it lapsed, with no tap').toBe(false);
+      expect(beforeTap, 'and none again, 1.5 s after the checks\' activation lapsed, just before the tap').toBe(false);
+      expect(afterTap, 'the raw tap in the frame activates the console (an ancestor of the frame)').toBe(true);
+      expect(pushed, 'the push added one entry').toBe(length + 1);
+      expect(back.e16, 'script\'s Back left the pushed entry').toBeNull();
+      expect(back.href, 'and stayed on the doc').toBe(url);
+      expect(app.errors, 'no uncaught error').toEqual([]);
+    } finally {
+      await app.ctx.close();
+    }
   }, 120_000);
 });
