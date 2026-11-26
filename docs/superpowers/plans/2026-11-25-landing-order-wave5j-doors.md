@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task, as the dispatch specifies. Steps use checkbox (`- [ ]`) syntax for tracking. This plan dispatches nothing itself: each half is built by a worker the coordinator dispatches.
 
-**Status: revised on 2026-11-25 after review run 3743 (fix round 2, the last), with the coordinator's rulings on its findings, over round 1's revision after review run 3735.** Drafted for run 3729 from the brief's eight decisions. **Corrected by the coordinator on 2026-11-25 after review run 3748 (round 3, the last): section 11 lists each correction, and where it and a task disagree, section 11 wins.** No implementation exists. The wave is built as two halves, **5j-a** then **5j-b**, each its own run and pull request (section 2 says where the seam is and why). Wave 5k (the console) follows 5j-b and is not planned here.
+**Status: revised on 2026-11-25 after review run 3743 (fix round 2, the last), with the coordinator's rulings on its findings, over round 1's revision after review run 3735.** Drafted for run 3729 from the brief's eight decisions. **Corrected by the coordinator on 2026-11-25 after review run 3748 (round 3, the last): section 11 lists each correction, and where it and a task disagree, section 11 wins.** **Built and merged: 5j-a as #3375 (`31d5d9ae26`) and 5j-b as #3397 (`83c1ed227f`); sections 12 and 13 record what their reviews changed, and each wins over a task.** The wave was built as two halves, **5j-a** then **5j-b**, each its own run and pull request (section 2 says where the seam is and why). Wave 5k (the console) follows 5j-b and is not planned here.
 
 **Goal:** The operator can pause and resume one project's landing line, and withdraw one entry from it with a notice to that entry's coordinator, from two session-only routes. Pause, resume and withdraw work alike: with sign-in armed the gate demands a session for each, and with sign-in dark each works and records `flag-off`. Both facts are journalled and survive replay. Neither door chooses, reorders or brings forward which entry lands next: a withdrawal frees nothing that waited on the withdrawn entry. The console can read the line with its session.
 
@@ -560,7 +560,7 @@ Neither handler consults the box token, calls `requireAttribution` or names eith
 - [ ] **Step 1: Write the suite.** It goes red on the mutations of section 8.
   - **Table diff, withdraw.**
     - Fixture lines: a head A, an entry B `after` A, an entry C `after` B, an entry D with `fixesMain` `after` B, an ejected entry and a quarantined `unknown` entry, in run-bound and run-less forms.
-    - For every non-terminal entry X: snapshot every row of `landing_entries`, `landing_projects`, `landing_subjects`, `landing_authority`, `landing_projection_witness` and `landing_journal_cursor`; withdraw X through the route; snapshot again.
+    - For every non-terminal entry X: snapshot every row of `landing_entries`, `landing_projects`, `landing_subjects`, `landing_authority`, `landing_projection_witness`, `landing_journal_cursor` and `landing_intents` (the seventh, added by the fix round; section 13, C13); withdraw X through the route; snapshot again.
     - The only differences are X's `state`, `detail` and `quarantineKind`, X's subject row (inserted or its observation replaced) and the cursor. The journal grew by exactly one `withdraw` record.
   - **Table diff, pause.** Pause, then resume. The only differences after each are that project's `operatorPaused` and the cursor. The journal grew by one `pause` record each.
   - **Nothing brought forward** (the F8 ruling's three cases):
@@ -641,6 +641,10 @@ Each row is one change to the built code, measured red by the named test, then r
 | B31 | the doors' feed events carry the actor as `sessionId` instead of `''` | `landing-writes`' feed event cases |
 | B32 | a dependant's unreadable association refuses the whole withdrawal `run-unreadable` (the operator's stop failing on another entry's damage) | `landing-writes`' dependant-unreadable case; `landing-journal-store`'s dependant-unreadable case; `landing-subtractive`'s dependants-told case |
 | B33 | a release of a withdrawn hold by the run's own claimant owes no feed event (today's rule kept for it) | `landing-writes`' release-by-the-claimant case |
+| B34 | `landingWrites.ts` takes a value import from a sibling module, the store (fix round 1; section 13, C12) | `landing-writes`' purity case |
+| B35 | the withdraw apply arm also writes a `landing_intents` row (fix round 1; section 13, C13) | `landing-subtractive`'s withdraw table diff |
+| B36 | `landingFactsOf` folds a stored pin time that does not read into `0` (fix round 1; section 13, C14) | `landing-journal-store`'s unreadable-pin-time case |
+| B37 | the pause apply arm also writes a `landing_intents` row (measured by review run 3887; section 13, C13) | `landing-subtractive`'s pause table diff |
 
 ## 9. CLAUDE.md and README lines for the operator to read
 
@@ -878,9 +882,34 @@ Review run 3806 read the first fix round at `621932e57e`: no critical or importa
   - Section 9 is unchanged: its sentence that an entry re-enters at its run's next verified pin stays true; the wider rule adds a case it does not name, and section 9 waits for the operator's reading (item 665).
 - **The 5j-a notes are corrected** on the ledger pull request after #3380: the holder line came three commits after the file, not one (F1); a bad stored run id leaves the snapshot readable and the row displays `unknown`, so it never reaches the withdrawn branch (F3); and the fix round's R1 cites C9 (F6). F2, the stale test comment, is carried to 5j-b as above; F5 and F7 are facts the review recorded, and nothing changes for them.
 
+## 13. Corrections after review runs 3864 and 3887
+
+Review run 3864 read wave 5j-b's branch at `511f196a96` (pull request #3397): no critical or important finding, six minor ones, and its panel confirmed none. One fix round followed (call 1324). Review run 3887 read that round at `cb9c75735c`: no critical or important finding, five minor ones. The wave was accepted there (call 1367) and merged as #3397 at `83c1ed227f`. Where this section and a task disagree, this section wins.
+
+- **C12, the terminal classification is written once (review run 3864's F6; D-9093).**
+  - The fact as first built: the withdraw arm of `decideLandingMutation` needs to know which stored state words are terminal, and `landingWrites.ts`'s own purity case allowed no value import, so the file carried a second copy of the map.
+  - The ruling: one copy. `landingWrites.ts` imports `LANDING_ENTRY_TERMINAL` from `shared/landingLine.ts`, as `landingEntry.ts` and `coord/landingLine.ts` already did, and the copy is deleted. The purity case admits a value import from that one file and refuses any other (row B34).
+  - Review run 3887's F2 asked whether the case should admit one name from that file or the file. Ruled: the file. The shared vocabulary imports nothing, so no value from it can bring a clock, a file read or a store into the decider, and that is all the case guards. Naming one constant would make the next constant the decider needs a test edit with no gain.
+- **C13, the subtractive suite compares every landing table (review run 3864's F5).** Task 10 Step 1 listed six tables, and the schema has seven: `landing_intents`, the run-keyed landing holds, was outside the list. It joins both table diffs, with a seeded row whose presence each case asserts before its diff, and nothing in it may change (rows B35 and B37). Nothing checks the suite's list against the schema, so an eighth table could be missed the same way (review run 3887's F1); wave 5k carries that check.
+- **C14, two guards that had no failing case have one (review run 3864's F4 and F3).**
+  - The strict read of a stored pin time in `landingFactsOf`: a stored time that does not read is never `0`, so a withdraw that carries `pinnedAt: 0` over such a row answers `landing-entry-moved` and appends nothing (a store case; row B36).
+  - Task 9 Step 2 asks for each refusal of section 4.5 at the route. `landing-record-unparseable` (500) and `landing-sequence-overflow` (409) can only be answered by the writer itself, so their route cases spy the real store's writer; no seam was added to source.
+- **C15, the pull request landed with the `ledger guard` check red, and why (call 1368).**
+  - The fact: the fix round rewrote D-9093 in this plan on the wave's branch, at the coordinator's ruling. The head commit's message gives the reason on a `Ledger-Edit` line, but a blank line separates that line from the last paragraph, and git reads trailers from the last paragraph only. The guard therefore found no trailer and read red on `cb9c75735c`.
+  - The guard is not a required check, and the merge queue does not run it. Turning it green needed a new head commit after the review, and a new head needs a review of its own; the landing binds the commit the review read.
+  - The ruling: land at the reviewed commit, and record the red here. For every later wave: both trailer lines stand in the last paragraph of the head commit's message, and the worker reads them back with git's own trailer reader before the push.
+- **Section 9 is approved as written.** The operator read it and answered "The lines are fine as written" (item 665, confirmed 2026-11-25). Blocks 3 to 5 and README blocks R4 and R5 were on the landed commit byte for byte. Blocks 2 and R3 no longer match `main` exactly, for a reason outside this wave: #3353 later added its own two reads to the same two lists. No word of either block was changed or removed.
+- **The landing gate was met.** The server box's `/health` read `v0.0.1476`, built from `5b14086b57`, which contains 5j-a's merge `31d5d9ae26`, before #3397 was enqueued.
+- **The 5j-b notes are corrected** on this section's pull request: the Task 7 note still described the copy (review run 3887's F4). Section 8 gains rows B34 to B37 and Task 10 Step 1 names the seventh table.
+- **Carried to wave 5k's plan:**
+  - a check that the subtractive suite's table list equals the schema's `landing_*` tables;
+  - the header comment of `landingWrites.ts`, which says "the terminal map" where C12 rules the shared file;
+  - the comment above the spied-writer route case, which says "once" where the spy answers every call;
+  - mutation rows for three guards the wave built without one: the pause feed event's null run, the withdrawal feed event's empty session id, and the time formatter.
+
 ## Deviations found
 
-Eight numbers were issued for this plan on 2026-11-25 (D-9045 to D-9052), and all eight are defined below. D-9052 is used only if Task 9 measures `routes.ts` over the growth limit; the 5j-b wave-done says which. Two more were issued the same day, for departures wave 5j-a's build and its first review found (D-9071 and D-9072); they are defined last.
+Eight numbers were issued for this plan on 2026-11-25 (D-9045 to D-9052), and all eight are defined below. D-9052 is used only if Task 9 measures `routes.ts` over the growth limit; the 5j-b wave-done says which. Two more were issued the same day, for departures wave 5j-a's build and its first review found (D-9071 and D-9072); they are defined last. Two more were issued for departures wave 5j-b's build found (D-9093 and D-9094), defined after them. Wave 5j-b measured `routes.ts` under the growth limit, so D-9052 was not used and no waiver was added.
 
 - **D-9045 (2026-11-25)** — `landing-journal-door-kinds`: the authority journal gains two record kinds, `pause` (project-level, no subject) and `withdraw` (a subject), under `v: 1`.
   - Each new record carries `setBy: 'operator'` and the actor text the existing device actor owner records (`flag-off` dark). The parser accepts that owner's untrimmed output grammar.
@@ -916,3 +945,9 @@ Eight numbers were issued for this plan on 2026-11-25 (D-9045 to D-9052), and al
 - **D-9072 (2026-11-25)** — `landing-doors-holder-pin-order`: Task 2's commit on the branch does not pass the single-definition directory alone.
   - `landingDoorsTx.ts` imports the database handle's type, so `core-vocab.test.ts`'s `HANDLE_HOLDERS` must name it. That test file was under another session's recently lapsed claim when Task 2 was committed, so its line came in a later commit of the same push.
   - The plan asks each task's commit to pass its named files. The branch tip passes, and only that one commit in between does not. History is not rewritten, and the landing squashes the branch, so no commit on `main` carries it.
+- **D-9093 (2026-11-25)** — `withdraw-terminal-mirror`: the withdraw arm of `landingWrites.ts#decideLandingMutation` needs `LANDING_ENTRY_TERMINAL`'s classification of the stored state word, and `landingWrites.ts`'s purity test admitted no value import at all.
+  - Built first as a mirror: an exhaustive `Record<LandingEntryState, boolean>` in `landingWrites.ts`.
+  - Ruled to one copy by review run 3864's F6 (fix round 1): `landingWrites.ts` imports `LANDING_ENTRY_TERMINAL` from `shared/landingLine.ts`, as `landingEntry.ts` and `coord/landingLine.ts` already do, and the mirror is deleted. The purity case in `landing-writes.test.ts` admits that one shared file, spelled exactly, and still refuses any other value import (row B34).
+  - `landing-writes.test.ts` drives the withdraw arm over every state in `LANDING_ENTRY_STATES` against the L0 map, for the withdrawn entry and for a dependant; it now pins the arm, not a copy.
+- **D-9094 (2026-11-25)** — `landing-doors-gate-count-prose`: Task 9's file list named `auth-gate.test.ts`'s two route tallies only. The same suite also checks four prose counts against the routes it derives: its scanner-meta comment, its property loop's and third probe's HTTP counts, and `server/src/auth/gate.ts`'s docstring.
+  - Wave 5j-b raised all four by two with the doors, and `gate.ts` (its docstring count only) joined the wave's files.

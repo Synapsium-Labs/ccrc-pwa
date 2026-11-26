@@ -73,6 +73,10 @@ export interface Deps {
   cfg: CcrcConfig;
   /** Draft review's fixture seam: hand in the open store or the filesystem with which to open it. */
   review?: { store?: ReviewStore; fs?: ReviewFs };
+  /** The PWA root's seam (draft review X3 R2.2): absent means `findPwaRoot()`, the built `dist-pwa/` beside the
+   *  server; `null` means API-only (no static files, and `GET /review` answers 404); a string is a test's built tree
+   *  or a fixture root holding a stand-in `review.html`. Type-only: nothing reads it from the environment. */
+  pwaRoot?: string | null;
   /** The timing recorder (console speed S1): absent in tests; `index.ts` builds one. It changes no behaviour. */
   perf?: PerfRecorder;
   /** The deploy's build stamp (buildinfo.ts, read once at boot from
