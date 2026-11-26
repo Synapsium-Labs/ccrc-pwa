@@ -2655,7 +2655,7 @@ carries it (spec §5.1, amended 2026-09-24).
   - **The plan** (`docs/superpowers/plans/2026-11-26-landing-order-wave5k-console.md`, run 3891) is the console of
     the operator's two doors: the landing line on the fleet screen's project card, one control to pause and resume
     it, and a sheet to withdraw one entry. It adds no route. It defines D-9107 to D-9110; six numbers were issued
-    for it, and the last two stay unused.
+    for it, and the coordinator holds the last two, unused.
   - **Three review rounds** (runs 3895, 3906 and 3911), two fix rounds. Round 1 found one critical point: the
     withdraw sheet closed with its result when the last entry left the line. Rulings of call 1388: the card reads
     every known project's line once a minute through the console's one poll; a card with no open entry draws a
