@@ -1984,21 +1984,32 @@ describe('W8a reader frame in Chrome', () => {
       expect(s.app.errors, 'no page error').toEqual([]);
     }, 120_000);
 
-    it('a bare #id link scrolls in the frame, remounts nothing, updates the fragment, adds no history entry and reads nothing', async () => {
+    // A bare #id link is a jump, a place to return to (X2 P5.3, D-8763; parity spec 4.7): the console pushes one entry at
+    // the doc's URL unchanged, fragment included, tagged as the jump's place, so Back returns. Before D-8763 the jump replaced
+    // the fragment and added no entry.
+    it('a bare #id link scrolls in the frame, remounts nothing, pushes one place at the same URL and reads nothing', async () => {
       const { s, frame } = await openSelf();
       const handle = await s.page.locator('.docs-reader iframe').elementHandle();
       const entries = await s.page.evaluate(() => history.length);
+      const href = (): Promise<string> => s.page.evaluate(() => location.href);
+      const url = await href();
       const reads = s.apiHits.length;
       await frame.getByRole('link', { name: 'the bare link' }).click();
       await expect.poll(async () => inView(await topIn(frame, FAR_ID)), {
         timeout: 30_000, message: 'the target is not in the frame\'s viewport after the bare link (the frame did not scroll to it)',
       }).toBe(true);
-      await s.page.waitForFunction((h) => location.hash === h, `#${FAR_ID}`, { timeout: 10_000 });
+      await expect.poll(() => s.page.evaluate(() => history.length), {
+        timeout: 10_000, message: 'the jump pushed no history entry',
+      }).toBe(entries + 1);
+      const place = await s.page.evaluate(() => (history.state as { docsPlace?: { kind?: string; id?: string; seq?: number; from?: unknown } } | null)?.docsPlace);
+      expect(place, 'the new entry is the jump\'s place, the visit\'s first').toMatchObject({ kind: 'jump', id: FAR_ID, seq: 1 });
+      expect(typeof place?.from, 'with the position it left, so Back can return there').toBe('string');
+      expect(await href(), 'at the doc\'s URL unchanged').toBe(url);
       expect(await framesCount(s), 'still one iframe').toBe(1);
       expect(await handle!.evaluate((e) => e.isConnected), 'the same frame element').toBe(true);
-      expect(await s.page.evaluate(() => history.length), 'no history entry').toBe(entries);
       expect(s.apiHits.length, 'no request at all').toBe(reads);
       expect((await postsSeen(s.page)).length, 'no second hello').toBe(1);
+      expect(await s.page.evaluate(() => history.length), 'exactly one entry').toBe(entries + 1);
     }, 120_000);
 
     it('the remount keeps the persisted reader state: the width pref, the marks, the folds and the last visit survive, and the frame shows them', async () => {
