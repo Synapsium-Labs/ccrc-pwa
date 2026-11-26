@@ -172,6 +172,19 @@ describe('runCcrcOp (D-8180)', () => {
     expect(rows(r.fx)[0]).toMatchObject({ outcome: 'unknown', code: 'unreachable' });
   });
 
+  // Round 1 A6: the same closed-table read for a non-2xx answer that carries an errors body. A code in the table now answers its word.
+  it('D-9132: a write answered 400 with an errors body the closed table does not know is unreachable, marked outsideTable', async () => {
+    const r = await rig(() => Promise.resolve(linearAnswer({ ok: false, status: 400, json: async () => ({ errors: [{ message: 'something new', extensions: { code: 'SOMETHING_NEW' } }] }) })));
+    expect(await runCcrcOp(r.deps, WRITE)).toEqual({ ok: false, word: 'unreachable', maybeSent: true, outsideTable: true });
+  });
+
+  it('D-9132: a write answered 500 with no parseable body is unreachable, maybe sent, and not outsideTable', async () => {
+    const r = await rig(() => Promise.resolve(linearAnswer({ ok: false, status: 500, json: async () => { throw new Error('not json'); } })));
+    const out = await runCcrcOp(r.deps, WRITE);
+    expect(out).toEqual({ ok: false, word: 'unreachable', maybeSent: true });
+    expect('outsideTable' in out).toBe(false);
+  });
+
   it('D-9132: a transport failure on a write is unreachable and never carries outsideTable', async () => {
     const r = await rig(() => { throw new Error('boom'); });
     const out = await runCcrcOp(r.deps, WRITE);

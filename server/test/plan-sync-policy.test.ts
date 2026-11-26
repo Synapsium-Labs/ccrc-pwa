@@ -258,6 +258,17 @@ describe('D-9131: a create waits for the project as it was last written (L1)', (
       expect(steps.some((x) => x.kind === 'update' && x.op === 'projectUpdate')).toBe(false);
     }
   });
+
+  // Round 1 A3: the pin above has a current project, so `projectHasTeams` makes the create ready whatever the compare says. Here the
+  // project is NOT current (its epic was renamed), so only the case-insensitive compare of the recorded team decides.
+  it('the project not current, its recorded team differing from the planned one in case only: the create is still emitted', () => {
+    const s = snapBound({ tickets: [tk()] });
+    s.bindings.find((b) => b.localKind === 'epic')!.teamKey = 'aaa';
+    s.plan.epics[0]!.title = 'Epic renamed';
+    const steps = planSyncSteps(s).steps;
+    expect(steps.some((x) => x.kind === 'update' && x.op === 'projectUpdate')).toBe(true);       // not current: the update is emitted
+    expect(issueCreates(s)).toHaveLength(1);
+  });
 });
 
 describe('final-review rulings: the pure verdicts (D-8182)', () => {

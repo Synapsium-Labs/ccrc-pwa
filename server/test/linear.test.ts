@@ -13,7 +13,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   LINEAR_API_ORIGIN, LINEAR_API_PATH, LINEAR_TIMEOUT_MS,
-  lookupLinearIssue, verifyLinearKey, type FetchLike, type LinearLookup,
+  callLinear, lookupLinearIssue, verifyLinearKey, type FetchLike, type LinearLookup,
 } from '../src/linear/client.js';
 import { LINEAR_KEY_FILE, linearKeyPath, readLinearKey, type LinearKeyRead } from '../src/linear/connection.js';
 import { ticketTitle } from '../src/linear/title.js';
@@ -460,6 +460,18 @@ describe('verifyLinearKey', () => {
       expect(await verifyLinearKey(KEY, { fetch: f }), String(ans.status))
         .toEqual({ ok: false, reason: 'rate-limited', keyDigest: valueDigestHex(KEY), retryAfterS: 90 });
     }
+  });
+
+  // D-9132 (round 1 A6): a refusal other than 401, 403 and 429 whose body carries an `errors` array keeps that body on the outcome
+  // (the adapter keeps a distinction it received); any other body is plain `unreachable`, as before. The bodies are constructed.
+  it('D-9132: a 400 with an errors body keeps it on the unreachable outcome; a 500 with a body that does not parse, and a 400 without errors, stay plain', async () => {
+    const errors = { data: null, errors: [{ message: 'something new', extensions: { code: 'SOMETHING_NEW' } }] };
+    const call = (status: number, json: () => Promise<unknown>, keepErrors = true) =>
+      callLinear(KEY, 'query', {}, { fetch: spyFetch(linearAnswer({ ok: false, status, json })).f, keepErrors });
+    expect(await call(400, async () => errors)).toEqual({ ok: false, reason: 'unreachable', answered: errors });
+    expect(await call(500, async () => { throw new Error('not json'); })).toEqual({ ok: false, reason: 'unreachable' });
+    expect(await call(400, async () => ({ message: 'no errors array' }))).toEqual({ ok: false, reason: 'unreachable' });
+    expect(await call(400, async () => errors, false)).toEqual({ ok: false, reason: 'unreachable' });   // no caller but runCcrcOp asks for it
   });
 
   it('cleans and bounds the names, and never copies the rest of the answer', async () => {

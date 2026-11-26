@@ -813,6 +813,51 @@ describe('the pass: moves and closes', () => {
     expect(r.asks.slice(from).findIndex((a) => a.op === 'projectUpdate')).toBeLessThan(r.asks.slice(from).findIndex((a) => a.op === 'issueCreate'));
   });
 
+  it('D-9131 (round 1 F1): a key moved away and back: the project is written with the team again before the new ticket is created, and no create is refused', async () => {
+    const r = await rig({ extraTeam: true });
+    let projectTeams: string[] = [];
+    let refused = 0;
+    let moved = 100;
+    const teamOfIssue = new Map<string, string>();
+    r.respond.current = (ask) => {
+      if (ask.op === 'projectCreate' || ask.op === 'projectUpdate') projectTeams = ask.input['teamIds'] as string[];
+      if (ask.op === 'issueCreate' && !projectTeams.includes(ask.input['teamId'] as string)) {
+        refused += 1;
+        return { ok: false, word: 'unreachable', maybeSent: true, outsideTable: true } as CcrcOpOutcome;
+      }
+      if (ask.op === 'issueOwned') return ok({ issue: { id: ask.input['id'], stateType: 'unstarted', teamKey: teamOfIssue.get(String(ask.input['id'])) ?? 'AAA' } });
+      if (ask.op === 'issueUpdate') {
+        const b = r.plan.bindingsOf(SLUG).find((x) => x.localKind === 'ticket' && x.identifier === ask.target)!;
+        teamOfIssue.set(b.linearId!, ask.input['teamId'] === CCC_TEAM.id ? 'CCC' : 'AAA');
+        return ok({ id: ask.target, identifier: `${teamOfIssue.get(b.linearId!)}-${moved++}` });
+      }
+      return defaultRespond(ask);
+    };
+    const settleAll = async (): Promise<void> => { for (let i = 0; i < 6; i += 1) { due(r); await tick(r); r.t.now += 2_000_000; } };
+    r.plan.applyPlanChanges(SLUG, changes({ tickets: { insert: [ticket('t2')], update: [], drop: [] } }), OWNER, r.t.now, null);
+    await tick(r);
+    r.db.prepare("UPDATE project_linking SET teamKey = 'CCC' WHERE project = 'project-a'").run();
+    await settleAll();
+    expect(projectTeams).toEqual([CCC_TEAM.id]);                       // the fixture really reaches it: the project holds CCC only
+    expect(r.plan.bindingsOf(SLUG).filter((b) => b.localKind === 'ticket').every((b) => b.teamKey === 'CCC')).toBe(true);
+    r.db.prepare("UPDATE project_linking SET teamKey = 'AAA' WHERE project = 'project-a'").run();
+    r.plan.applyPlanChanges(SLUG, changes({ tickets: { insert: [ticket('t3')], update: [], drop: [] } }), OWNER, r.t.now, null);
+    const t3 = epicRow(r, 'e1').tickets.find((t) => t.key === 't3')!.id;
+    const from = r.asks.length;
+    await settleAll();
+    const sent = r.asks.slice(from);
+    const firstUpdate = sent.findIndex((a) => a.op === 'projectUpdate');
+    const firstCreate = sent.findIndex((a) => a.op === 'issueCreate');
+    expect(firstUpdate).toBeGreaterThanOrEqual(0);
+    expect(firstCreate).toBeGreaterThanOrEqual(0);
+    expect(firstUpdate).toBeLessThan(firstCreate);
+    expect(sent[firstUpdate]!.input['teamIds']).toContain(WS.a.teams[0].id);
+    expect(sent.filter((a) => a.op === 'issueCreate')).toHaveLength(1);
+    expect(refused).toBe(0);                                           // no create was ever sent into a project without its team
+    expect(r.plan.bindingsOf(SLUG).find((b) => b.localKind === 'ticket' && b.localId === t3)).toMatchObject({ state: 'bound', teamKey: 'AAA' });
+    expect(mails(r)).toEqual([]);
+  });
+
   it("D-9131 (characterization): a ticket added in the project's own unchanged team is created in the first pass, with no projectUpdate before it", async () => {
     const r = await rig({ extraTeam: true });
     r.plan.applyPlanChanges(SLUG, changes({ tickets: { insert: [ticket('t2')], update: [], drop: [] } }), OWNER, r.t.now, null);
