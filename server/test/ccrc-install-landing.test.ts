@@ -752,6 +752,23 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     expect(line).not.toContain('systemctl');
   });
 
+  // Review 3934 F5 and A5: install names `ccrc auth on` only where the verb would act. The unit arm is not reachable
+  // here: install writes ccrc.service itself before its gate line.
+  it.each([
+    ['CCRC_ROLE=fleet recorded in ccrc.env', 'CCRC_ROLE=fleet\n'],
+    ['a CCRC_HOST the unit reader cannot decide', 'CCRC_HOST ="127.0.0.1"\n'],
+    ['a foreign CCRC_ORIGIN', 'CCRC_ORIGIN=https://box.example.com\n'],
+    ['a foreign CCRC_RP_ID', 'CCRC_RP_ID=example.com\n'],
+  ])('wave 181: where ccrc auth refuses, the gate line does not offer it: %s', (_name, env) => {
+    const home = freshBox('ccrc-install-gate-notverb-');
+    preexisting(home, 'ccrc.env', env);
+    const r = runInstall(home);
+    const line = gateLine(r.stdout);
+    expect(line, r.stdout).toContain('NO PWA passphrase');
+    expect(line).toContain('CCRC_AUTH=on');
+    expect(line).not.toContain('ccrc auth on');
+  });
+
   it('G2c: an absolute CCRC_AUTH_SECRET_PATH, with the file present there and absent at the default — the present arm, naming the redirected path', () => {
     const home = freshBox('ccrc-install-gate-redirect-');
     const elsewhere = join(home, 'secrets', 'gate.scrypt');

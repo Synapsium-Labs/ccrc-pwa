@@ -146,6 +146,25 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     expect(b).toMatch(/^PASS auth: .*holds a usable passphrase .*no request is gated yet; to arm it: ccrc auth on$/);
   });
 
+  // Review 3934 F5 and A5: the helper that says whether `ccrc auth` is this box's remedy declines wherever the verb
+  // refuses — CCRC_ROLE=fleet recorded, no ccrc.service, a CCRC_HOST the unit reader cannot decide, and a CCRC_ORIGIN or
+  // CCRC_RP_ID other than what `on` writes (a gate-off box behind a proxy of its own) — so doctor offers the hand route.
+  it.each([
+    ['CCRC_ROLE=fleet in ccrc.env', 'CCRC_FLEET=local\nCCRC_HOST=127.0.0.1\nCCRC_PORT=7788\nCCRC_ROLE=fleet\n', false],
+    ['no ccrc.service installed', undefined, true],
+    ['a CCRC_HOST the unit reader cannot decide', 'CCRC_FLEET=local\nCCRC_HOST ="127.0.0.1"\nCCRC_PORT=7788\n', false],
+    ['a foreign CCRC_ORIGIN', 'CCRC_FLEET=local\nCCRC_HOST=127.0.0.1\nCCRC_PORT=7788\nCCRC_ORIGIN=https://box.example.com\n', false],
+    ['a foreign CCRC_RP_ID', 'CCRC_FLEET=local\nCCRC_HOST=127.0.0.1\nCCRC_PORT=7788\nCCRC_RP_ID=example.com\n', false],
+  ] as const)('wave 181: where ccrc auth refuses, the dark remedy does not offer it: %s', (_name, env, noUnit) => {
+    const home = env === undefined ? unexposedBox('ccrc-doctor-auth-notverb-') : unexposedBox('ccrc-doctor-auth-notverb-', env);
+    rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
+    if (noUnit) removeUnitFile(home, 'ccrc.service');
+    const line = authLine(runDoctor(home).stdout);
+    expect(line).toMatch(/^PASS auth: /);
+    expect(line).toContain('CCRC_AUTH=on');
+    expect(line).not.toContain('ccrc auth on');
+  });
+
   it('FAILS when the gate is ARMED and there is no passphrase — the fail-shut state, made visible', () => {
     // `readAuthSecret` returning null with the flag on is Task 5's fail-SHUT
     // polarity: every route answers 401 `'unconfigured'` and no login can
