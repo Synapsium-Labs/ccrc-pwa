@@ -5907,7 +5907,8 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   for the linearity rows only: the 64 KB cost rows keep the faster of two, and FD8's 0.5 margin, the sizes and the
   vendored baseline's hash do not move. The margin was not consumed by the program's growth (the difference's mean
   was -0.035 on hosted runs before #3169 and -0.029 after); the reds were one change of CPU contention inside a round
-  deciding the row. A load whose period matches one 64 KB sample still reds the row, before and after. Task note:
+  deciding the row. A load whose period matches one 64 KB sample still reds the row, before and after. The order and
+  each sample's cell go through `pairCells`, which a case pins with no CPU measured (review 4009 F2). Task note:
   `docs/superpowers/programs/desktop-polish/hook-cost-row.md`.
 - **D-9141** — `cost-rows-own-baseline`: desktop-polish wave 183, issued on 2026-11-26, the hook owner's ruling (its
   call 1562). The four 64 KB cost rows of `server/test/session-hook-prune-deny.test.ts` read a baseline of their own,
@@ -5916,11 +5917,21 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   The two files answer two rulings: inherited scaling against the program the deny was added to, and today's accepted
   cost; each is frozen by its own hash and named by its commit; a test cannot read a commit through git. Why: the
   gated program costs 0.75 of the original at 64 KB, so 1.5 x the original let the deny path's cost about double
-  before the row went red (a quadratic step adding about 80% read 1.37 of the original, green; about 105%, at the
-  bound); on the new baseline the 80% step reads red (15.5 s against 13.4 s). The deny rows keep the 25 ms floor; the
-  class rows, whose program costs about one jq start-up, take a floor of their own, 250 ms (`COST_FLOOR_MS`), taken
-  because their worst loaded reading stayed under half of the bound. Each cost row prints its figures on green. The
-  file is replaced only on the owner's next ruling on accepted cost, never to turn a row green.
+  before the row went red (a quadratic step adding about 80% read 1.34 of the original in the bracket runs and 1.30
+  through the real test file, green; about 105%, at the bound); on the new baseline the 80% step reads red (15.5 s
+  against 13.4 s). The deny rows keep the 25 ms floor; the class rows, whose program costs about one jq start-up, take
+  a floor of their own, 250 ms (`COST_FLOOR_MS`), taken because their worst loaded reading stayed under half of the
+  bound. That value is a chosen allowance: the condition holds for any class path under about 250 ms. Each cost row
+  prints its figures on green. Which row reads which file is one table, `ROW_BASELINE`, pinned by a case that
+  measures nothing (review 4009 F2). What is pinned now: the linearity rows pin doubling-size scaling against the
+  original, the cost rows pin cost against the program at the gate, and no row bounds cost against the original, so
+  FD8's historical-cost half no longer holds for any row. The ruling tightened two bounds (hosted: quotes/deny about
+  27 s to 20.7 s, quotes/class about 6.7 s to 316 ms) and widened two (dqsub/class 81 to 318 ms; dqsub/deny 310.5 to
+  352.5 ms, because the gated program costs more than the original on the dqsub shape). What the rows cannot see: a
+  class cost row sees a class step of 250 ms and up and nothing under it (a class path 5.5 times dearer read green,
+  the edge about 4.8 times hosted); neither quotes/class row sees a quadratic step of any weight, because the
+  original's class path is itself quadratic on that input, while dqsub/class linearity does. The file is replaced only
+  on the owner's next ruling on accepted cost, never to turn a row green.
 
 ## Out of scope
 

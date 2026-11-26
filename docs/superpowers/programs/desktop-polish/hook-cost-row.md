@@ -13,8 +13,9 @@ not in the tree, and the tables below are copied from them.
   the hook's program: the difference (current ratio less the original's) averaged -0.035 over 45 hosted full runs before
   #3169 and -0.029 over 104 after it (§3). The two reds in the issue were the tail of that spread.
 - **This row cannot see a quadratic step,** because on this input the program is already quadratic: both programs cost
-  about 0.2 s plus c·n², the n² term over 98% of the cost at 32 and 64 KB, so their 64/32 ratio sits near 3.9 whatever
-  is added in n² (§4). The linearity rows catch growth faster than n²; the 64 KB cost rows catch a cost of any shape.
+  about 0.2 s plus c·n², the n² term about 98% of the fitted cost at 32 and 64 KB, so their 64/32 ratio sits near 3.9
+  whatever is added in n² (§4). The linearity rows catch growth faster than n²; the 64 KB cost rows catch a cost of any
+  shape.
 - **What made the reds:** one change of CPU contention inside a round. CPU time is not contention-proof on a shared
   core, and the current program's 64 KB sample was always the last of a round (§5).
 - **The repair (D-9118):** the four linearity rows measure four rounds, reverse which program runs first on alternate
@@ -26,6 +27,11 @@ not in the tree, and the tables below are copied from them.
 - **The limit, measured and not removed:** a load that switches on and off with a period near one 64 KB sample still
   reds the row, before and after; on a box at load 20 to 40 the row reads red on about 1 to 3 runs in 100 with nothing
   wrong (§7). Nothing retries a red.
+- **Fix round 1 (review 4009):** which baseline each of the eight rows reads is one table, `ROW_BASELINE`, and a round's
+  order and cells go through `pairCells`; each is pinned by a case that measures nothing, red first, and four mutants
+  of the test file read red by case name (§9). What the rows cannot see, and what D-9141 tightened and widened, are
+  stated in the test's comment, the plan's entry and §8; the figures review 4009 could not reproduce are corrected
+  (§3, §4, §5, §9, §10).
 
 ## 2. Where and how it was measured
 
@@ -134,15 +140,18 @@ issue #3418's two reds (pull request full runs, not in the sample above): diff +
 **History of the program** (§3 of the brief): the forbidden program at #2692's merge and at each merge since that
 changed it. The ratio did not move at any merge beyond noise; the COST did, at one: #3169 (fbbf15a03a, the replay
 quiz, which ran a new matcher over the command and its normalised form) raised the deny path's cost on this input by
-about a third at both sizes. Measured locally, each program's 32 and 64 KB samples adjacent, the order rotated:
+about 30% at both sizes. Measured locally, each program's 32 and 64 KB samples adjacent, the order rotated. The cost
+column is the median of the per-round ratios, each program against the original in the same round. The proposal's
+table divided two medians taken from different rounds, which the load moved (it read main at 0.85 and 0.99), and
+review 4009 could not reproduce it from §4. Corrected in fix round 1; the ratio column is unchanged:
 
 ```text
-base   own 64/32 ratio median 3.819 (range 3.32..3.93), minus original's +0.000; cpu vs original median at 32 KB 1.00, 64 KB 1.00
-p2692  own 64/32 ratio median 3.834 (range 3.53..4.03), minus original's +0.015; cpu vs original median at 32 KB 0.75, 64 KB 0.84
-p1171  own 64/32 ratio median 3.666 (range 3.39..4.37), minus original's -0.153; cpu vs original median at 32 KB 0.75, 64 KB 0.74
-pa51a  own 64/32 ratio median 3.700 (range 3.31..3.93), minus original's -0.119; cpu vs original median at 32 KB 0.67, 64 KB 0.69
-pfbbf  own 64/32 ratio median 3.987 (range 3.33..4.25), minus original's +0.168; cpu vs original median at 32 KB 0.90, 64 KB 0.96
-main   own 64/32 ratio median 3.983 (range 3.38..4.35), minus original's +0.164; cpu vs original median at 32 KB 0.85, 64 KB 0.99
+base   own 64/32 ratio median 3.819 (range 3.32..3.93), minus original's +0.000; cpu vs original, median of the per-round ratios, at 32 KB 1.00, 64 KB 1.00
+p2692  own 64/32 ratio median 3.834 (range 3.53..4.03), minus original's +0.015; cpu vs original, median of the per-round ratios, at 32 KB 0.77, 64 KB 0.78
+p1171  own 64/32 ratio median 3.666 (range 3.39..4.37), minus original's -0.153; cpu vs original, median of the per-round ratios, at 32 KB 0.78, 64 KB 0.77
+pa51a  own 64/32 ratio median 3.700 (range 3.31..3.93), minus original's -0.119; cpu vs original, median of the per-round ratios, at 32 KB 0.75, 64 KB 0.75
+pfbbf  own 64/32 ratio median 3.987 (range 3.33..4.25), minus original's +0.168; cpu vs original, median of the per-round ratios, at 32 KB 0.96, 64 KB 0.98
+main   own 64/32 ratio median 3.983 (range 3.38..4.35), minus original's +0.164; cpu vs original, median of the per-round ratios, at 32 KB 0.97, 64 KB 0.99
 ```
 
 The other rows of the block on hosted runners after #3169 and before the gate (the 64 KB cost figures read off the samples the linearity rows print):
@@ -173,14 +182,17 @@ main-pa51a     70    361    598   1102   2151   3998
 fits: original a=219 c=3.588 (64/32 fitted 3.90); pa51a a=171 c=2.790 (3.98); main a=228 c=3.740 (3.94); the n^2 term is over 98% of the cost at 32 and 64 KB in all three.
 ```
 
-All three programs are almost pure n² on the quote-dense deny input. #3169 multiplied c by about 1.34 and left the
+"Over 98%" in the fits line is the fitted line's share, 97.8%; of the original's measured 3 868 ms at 32 KB the n²
+term is about 95% (the fit has a small negative linear term). All three programs are almost pure n² on the quote-dense
+deny input. #3169 multiplied c by about 1.34 and left the
 exponent, so the 64/32 ratio stayed near 3.9 (the n² limit is 4.0). A ratio row therefore cannot see a quadratic step,
 of any weight; it sees a step that grows faster than n². The 64 KB cost row sees any step once it is large enough.
 
 ## 5. What made the reds
 
-- Steady extra load doubled every sample (3.4 s to 6.4 s at 32 KB) and moved the difference by at most ±0.03 (§3,
-  loaded): uniform contention cancels in a ratio.
+- Steady extra load doubled every sample (3.4 s to 6.4 s at 32 KB). In 7 of the 10 loaded runs it moved the difference
+  by at most ±0.03 (§3, loaded), because uniform contention cancels in a ratio. The other three read −0.90, −0.19 and
+  −0.05; they are the next bullet's case, load that changed inside the run.
 - Load that changes inside a run moves the four samples differently: bursty load gave an sd of 0.74 and 2 reds in 10;
   one loaded run whose spinners ended between samples read -0.90.
 - In the old order the current program's 64 KB sample was always the fourth of a round, so contention that rose just
@@ -212,8 +224,10 @@ about 18% of main's cost at 32 KB:
 ```
 
 The median of the four per-round differences was chosen: at ambient load no false red in 24 windows (today's 2 in 26)
-and the cubic mutant caught 23 in 24 (today's 18 in 26). The detection curve, a step added to main at its own
-contention, as a share of main's cost at 32 KB:
+and the cubic mutant caught 23 in 24 (today's 18 in 26). The windows slide over 27 and 19 rounds, so they share rounds:
+about six of them are independent, and the same rounds both chose the estimator and judged it. Read the counts as a
+comparison of estimators on one sample, not as rates. The detection curve, a step added to main at its own contention,
+as a share of main's cost at 32 KB:
 
 ```text
 cubic step (x7.7 per doubling)
@@ -253,7 +267,20 @@ definitions.
 - **Bursty load** (12 spinners, 13 s on and 12 s off): 5 of 18 windows red before, 6 of 16 after. No estimator over four
   rounds survives a load whose period matches one 64 KB sample.
 - **At load 20 to 40** one round's difference has an sd of about 0.4, which predicts the median of four over the margin
-  on about 1% of runs (jq 1.7.1's pool) to 3% (jq 1.8.1's). Six rounds would give about 0.3% to 1.4% at 1.5 times the
+  on about 1% of runs (jq 1.7.1's pool) to 3% (jq 1.8.1's). That rate is for independent rounds. Where one contention
+  episode spans rounds, as in run 54 below, the rounds are not independent, and the rate is a lower bound.
+- **What the median and the alternation cannot do** (review 4009, computed on the recorded `ambient` window with the
+  real `linearityVerdict`):
+  - By design the median hides a spike in one round of four: the current program's large sample ×3 in one round left
+    the median at −0.017.
+  - It sees a spike in two of the four rounds only above about 1.25×: ×1.5 in two rounds read red (0.92, 1.13); ×1.25
+    read 0.45 or 0.69, by which two rounds.
+  - A program slowed only when it runs second is seen at half strength, because the alternation halves it: a penalty
+    of 4 s on the current program's large sample in the rounds where it runs second moved the median by +0.57, and
+    2 s by +0.28.
+  - The 64 KB cost rows still run the baseline first and the current program second in both of their pairs, the order
+    D-9118 found at fault in the linearity rows. Against a 1.5× bound and a worst loaded reading of 0.79, it is a
+    limit, not a cause of reds measured here. Six rounds would give about 0.3% to 1.4% at 1.5 times the
   time, past the timeout on this box; the coordinator ruled four rounds (option a).
 - **The worked example**, the one red in step 3: run 54, jq 1.8.1, load 13 to 18 with 6 spinners: original 3.594,
   current 4.298, bound 4.094; per-round differences 1.148, 0.189, 0.845, 0.563, three of the four rounds inside one
@@ -286,7 +313,36 @@ added to, and today's accepted cost; each is frozen by its own hash and named by
 through git. The file is replaced only on the owner's next ruling on accepted cost, never to turn a row green. The deny
 rows keep the 25 ms floor; the class rows, whose program costs about one jq start-up, take a floor of their own, 250 ms,
 which the owner made conditional on their worst loaded reading staying under half the bound (§9). Each cost row now
-prints its current, baseline and bound on green.
+prints its current, baseline and bound on green. Which row reads which file is one table in the test, `ROW_BASELINE`,
+and the measuring cases read their baseline only through it. A case that measures nothing pins it: the four cost rows
+read the program at the gate, the four linearity rows the original (review 4009 F2, §9).
+
+**What is pinned now, and what D-9141 changed in each bound** (review 4009 F1):
+
+- FD8 pinned historical cost and doubling-size scaling against the original. Now the four linearity rows pin scaling
+  against the original, and the four cost rows pin cost against the program at the gate. No row bounds cost against
+  the original any more.
+- D-9141 **tightened** two bounds (hosted figures): quotes/deny from about 27 s (1.5 × 18 104) to 20.7 s; quotes/class
+  from about 6.7 s (1.5 × the original's quadratic class path, which the row read 0.01 of) to 316 ms.
+- It **widened** two: dqsub/class from 81 to 318 ms, and dqsub/deny from 310.5 to 352.5 ms, because the gated program
+  costs more than the original on the dqsub shape (238 against 207 ms).
+- **What the class rows cannot see** (review 4009, jq 1.8.1 on the fleet box):
+  - A class cost row's bound is its baseline (about 35 to 70 ms, one jq start-up) plus 250 ms. It sees a class step of
+    250 ms and up and nothing under it: a fixed burn of about 180 ms, a class path 5.5 times dearer, read green on both
+    class cost rows; about 250 ms read red. Hosted, the edge is about 4.8 times the class path's cost.
+  - Neither quotes/class row sees a quadratic step of any weight. The original's class path is itself quadratic on the
+    quotes input, so the linearity bound is 4.40×, above n²'s 4.0. A step that made the class path 6 times dearer read
+    green on both quotes/class rows.
+  - dqsub/class linearity does see it: 3.86× against 2.5×.
+  - So what the suite does not see on the class path is a step under 250 ms, and on the quotes shape a quadratic one of
+    any weight.
+- **The 250 ms floor is a chosen allowance, not a measured one.** Its condition, the worst loaded reading under half
+  the bound, holds for any class path under about 250 ms at this size, and a floor of 100 to 150 ms would meet it too.
+  On the original with 25 ms, hosted dqsub/class read up to 0.95 of its bound (§3), which is a reason to raise the
+  floor; how far is the owner's call.
+- On a loaded box one program's own 64 KB CPU spread about 30% across review 4009's runs (6.9 to 10.6 s). There a
+  quotes/deny step of 50 to 60% can read green when the baseline sample reads high. Hosted, the two samples agreed to
+  0.3%, so the edge there is near +50%.
 
 ## 9. Step 3: the mutants and the runs
 
@@ -301,9 +357,27 @@ jq 1.7.1:
 | the same | quotes/deny 64 KB cost, old baseline | - | RED, 19816 against 18247.5 |
 | cubic step (n/150)^3, on the gated program | quotes/deny linearity | RED, 5.330 against 4.341 | RED, 5.121 against 4.314; differences 1.536, 1.613, 1.076, 1.023 |
 | quadratic step (n/8)^2, about 80% of the gated cost | quotes/deny linearity | - | green, 3.857 against 4.454 |
-| the same | quotes/deny 64 KB cost, OLD baseline | - | green, 16272 against 18842 (the finding of §8) |
+| the same | quotes/deny 64 KB cost, OLD baseline | - | green; the case passed, and the cost row printed no figures then: 16272 against 1.5 x 12561 = 18842 is RECONSTRUCTED from the 64 KB samples the linearity row printed (the finding of §8) |
 | the same | quotes/deny 64 KB cost, NEW baseline (D-9141) | - | RED, 15545 against 13410 (the owner's red-before, green-after case) |
 | quadratic steps adding about 80% and 105% of the gated cost | quotes/deny 64 KB cost, old baseline | - | green, green (§8) |
+
+One cell in the table above is not a printed figure; it says so. Through the real test file, the case passed or
+failed as shown, and the cost rows printed no figures before D-9141.
+
+**Fix round 1: the mutants of the test file itself** (review 4009 F2). Each was applied to a scratch copy of this
+branch's test file and run by name with the cases that pin the order and the baselines, all four measuring nothing:
+
+| mutant of the test file | case that reads red | its message |
+|---|---|---|
+| none (the file as committed) | none: 4 passed, 31 skipped (35) | - |
+| ROW_BASELINE: 'quotes/deny cost' reads the original | “each row reads the baseline its ruling names: the four cost rows the program at the gate (D-9141), the four linearity rows the original (FD8)” | quotes/deny cost: expected 'original' to be 'gate' |
+| ROW_BASELINE: 'quotes/deny linearity' reads the program at the gate | “each row reads the baseline its ruling names: the four cost rows the program at the gate (D-9141), the four linearity rows the original (FD8)” | quotes/deny linearity: expected 'gate' to be 'original' |
+| pairCells ignores the order (the original always first) | “runs each round's pair in that round's order and puts each sample in its own program's cell, in both orders (pairCells)” | round 1 runs current first: expected [ 'original', 'current' ] to deeply equal [ 'current', 'original' ] |
+| pairCells puts the samples in run order, the wrong cells in the odd rounds | “runs each round's pair in that round's order and puts each sample in its own program's cell, in both orders (pairCells)” | round 1's cells are [original, current]: expected [ 21, 12 ] to deeply equal [ 12, 21 ] |
+
+Before this round, the two mutants of `ROW_BASELINE` had no table to edit: a cost case reverted to read the original
+stayed green, and so did a linearity case reading the cost baseline. The two mutants of `pairCells` stayed green too,
+because the order case tested `linearityOrder` alone.
 
 **Fifty consecutive runs of the repaired row under load, before the gate** (main 44f2b15a3b; ambient load plus 6
 spinners), and **ten at jq 1.8.1**: 50 of 50 green at 1.7.1; 9 of 10 green at 1.8.1 (run 54, §7):
@@ -443,10 +517,13 @@ dqsub: class stays within the startup-adjusted 06aed21ff bound at 64 KB         
 dqsub: class linearity from 64 to 128 KB stays within the inherited-cost bound         median    0.9 s, max    2.3 s of 300 s
 ```
 
-Both maxima of the quotes/deny linearity row pass two thirds of its timeout on this box at load 20 or more; the coordinator allowed it as measured, and the timeouts are unchanged. The hosted figures are read in the full run after the push.
+After the gate, the row nearest its timeout is quotes/class linearity, which four rounds doubled too: at most 227 s of its 300 s under load here (0.76), about 90 s hosted (0.30 in the full run at the first head). The quotes/deny linearity row took at most 440 s of its 600 s here (0.73) and 168 s hosted (0.28). Under load both pass two thirds of their timeouts on this box; the coordinator allowed it as measured, and the timeouts are unchanged. Hosted, every row stays under a third of its timeout.
 
 ## 11. Left for the owner
 
 - The cost suite's factor and floors are the hook owner's; this wave changed the deny rows' baseline and the class rows'
   floor only as it ruled.
-- The class rows were moved to the new baseline with the 250 ms floor, as the owner allowed only if their worst loaded reading stayed under half of the bound: quotes/class worst 0.19, dqsub/class worst 0.19. The hosted run reads them too.
+- The class rows were moved to the new baseline with the 250 ms floor, as the owner allowed only if their worst loaded reading stayed under half of the bound: quotes/class worst 0.19, dqsub/class worst 0.19. The hosted run reads them too. The floor's value is a chosen allowance (review 4009: the condition holds for any class path under about 250 ms, and 100 to 150 ms would meet it too); the coordinator has put the value to the hook owner, and the floor is one constant, `COST_FLOOR_MS.class`.
+- A mechanical gate on refreshing either vendored baseline (review 4009 F6): today the fixture, its hash and the
+  hook's program can change together in one diff with every case green. What holds the baseline is words, the test's
+  comment and D-9141's last sentence. Left for the owner's ticket, not this wave.
