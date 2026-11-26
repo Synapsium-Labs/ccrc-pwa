@@ -7326,15 +7326,16 @@ _ws_least_loaded() {   # [project] [class] -> the home-able account with the mos
   # `_limit_score`'s `:=0` defaults, which used to be cited beside it, are gone
   # — they were the mechanism of the gap, not a defence against it.)
   #
-  # THE FIVE CANDIDATE WALKS DO NOT AGREE, AND THE DISAGREEMENT IS ON PURPOSE
+  # THE SIX CANDIDATE WALKS DO NOT AGREE, AND THE DISAGREEMENT IS ON PURPOSE
   # (PR #61, 2026-09-07; the count is corrected at the wave-2b merge, which
   # added the fourth, and at routing slice 4, which added the fifth). Measured,
   # so the number stops drifting: `grep -cE 'for
   # (w|cand) in (\$\(_pool_for|"\$\{CCRC_HOME_ABLE\[@\]\}")' ccd/ccd` finds
-  # 6 matching LINES, 5 of them walks — the sixth is prose, `_default_pool`'s
-  # own comment quoting the pattern. The five are `_ws_least_loaded`,
-  # `cmd_ws_add`'s refusal-reason builder, `_swap_target`, `_strand_why` and
-  # `_place_for_class`. The fifth walks CCRC_HOME_ABLE for the same reason the
+  # 7 matching LINES, 6 of them walks — the seventh is prose, `_default_pool`'s
+  # own comment quoting the pattern. The six are `_ws_least_loaded`,
+  # `cmd_ws_add`'s refusal-reason builder, `_swap_target`, `_strand_why`,
+  # `_place_for_class` and `_watchdog_provider` (the provider-failure ladder's
+  # tiers, which only build `_swap_target`'s skip list from the same walk). The fifth walks CCRC_HOME_ABLE for the same reason the
   # builder does — it is COUNTING how many in-pool lanes measured unable to
   # serve a class, which is a question about placement's own candidate set, and
   # an overflow lane is not in it.
@@ -19800,7 +19801,7 @@ _dispatch_swap() {   # id target [arm prev decided dfrom dto tx txbytes orgnear 
   done
   _svc_run_detached \
     bash -c "sleep $jitter; ${env}CCD_SWAP_AUTO=1 exec '$HOME/.local/bin/ccd' swap '$1' '$2' >>'$REG/swap.log' 2>&1" \
-    || { echo "$(date '+%F %T') dispatch FAILED for $1 -> $2" >> "$REG/swap.log"; rm -f -- "$__dc"; }   # no unit will run, so none is pending
+    || { echo "$(date '+%F %T') dispatch FAILED for $1 -> $2" >> "$REG/swap.log"; rm -f -- "$__dc"; return 1; }   # no unit will run, so none is pending, and the caller may count none
 }
 
 _limit_json_num() {   # file key -> that key's number, or "" when absent, null or non-numeric.
@@ -33085,7 +33086,7 @@ _wd_operator_hold_to() {   # var id wrapper -> rc 0 iff the operator's own hold 
 
 _watchdog_one() {   # id now minutes -> a forced rescue bumps WD_FORCED; everything else is a record and at most one log line. Always 0.
   local id="$1" now="$2" n="$3" sign="" wrapper="" home="" hrc project="" last="" bts="" rw="" target="" trc dfrom="" dto="" tx="" txb="" lw="" why="" m age since orgnear=""
-  if [[ -e "$REG/$id.hibernated" || -e "$REG/$id.stopped" ]]; then _watchdog_clear "$id"; return 0; fi
+  if [[ -e "$REG/$id.hibernated" || -e "$REG/$id.stopped" ]]; then _watchdog_clear "$id"; [[ ! -e "$REG/$id.provwait" ]] || rm -f -- "$REG/$id.provwait"; return 0; fi
   _session_probe "$id"
   case "$PROBE_VERDICT" in
     live) ;;
@@ -33094,7 +33095,7 @@ _watchdog_one() {   # id now minutes -> a forced rescue bumps WD_FORCED; everyth
   esac
   _reg_read_to wrapper "$id" wrapper && [[ -n "$wrapper" ]] || return 0
   _watchdog_sign_to sign "$id"
-  if [[ -z "$sign" ]]; then _watchdog_clear "$id"; return 0; fi
+  if [[ -z "$sign" ]]; then _watchdog_clear "$id"; _watchdog_provider "$id" "$now" "$wrapper"; return 0; fi   # a limit sign is the limit rescue's
   # THE EPISODE'S RECORD: `since` is the first pass that saw any sign; a different sign keeps it, with ONE exception. An
   # account-only sign is not a block: the session may be mid-turn on a reading of 98, with a draft being typed after it. When
   # a pane, banner, menu or transcript sign (a session that HAS stopped on the limit) replaces it, `since` restarts at now
@@ -33215,6 +33216,51 @@ _watchdog_one() {   # id now minutes -> a forced rescue bumps WD_FORCED; everyth
   return 0
 }
 
+_watchdog_provider() {   # id now wrapper -> a provider move bumps WD_FORCED; with no lane, `$REG/<id>.provwait`. Always 0.
+  # THE PROVIDER-FAILURE LADDER'S LAST RUNG (wave 3b): a session whose third counted failure on this lane is owed a retry
+  # (`_provfail_owed`) moves to another by itself, through `cmd_swap` under the arm `provider`, whose own gate asks all of it again.
+  # THE HOLDS: the pass's cap, SWAP_COOLDOWN, a swap the box just refused, and `_provider_hold_to`. A programme hold and a manual pin
+  # do not hold it, as they do not hold a limit rescue. A held session writes nothing and is asked again next pass.
+  # THE TARGET is the rescue's (`_rescue_target`: pools, continuity, the class, the kill switch, do-not-bounce, spread), with
+  # MEASURED room, as every forced move of this section, asked once per tier of `_provider_move_rank_to` with every other lane on
+  # its skip list, and every lane the session does not fit. Only rc 0 is a target: a move for a provider never steps a class down.
+  # NO LANE: the session stays, and wave 1's retries go on there. `provwait` (an epoch; one writer, this pass; a malformed one is
+  # none) says since when. It ends when the count does, at a good Stop or a move, or with the row's sleep. NEVER `_strand_mark`,
+  # which notifies once per session. rc 2-5, 7 and 8 are NOBODY CAN SAY, so nothing is moved and nothing is claimed.
+  local id="$1" now="$2" w="$3" r t cand skip ok target="" rc none=1 home hrc prev bts why
+  if ! _provfail_owed "$id" "$now"; then
+    [[ -e "$REG/$id.provwait" ]] && _provfail_row "$id" $(( now * 1000 )) && (( PF_N == 0 )) && rm -f -- "$REG/$id.provwait"
+    return 0
+  fi
+  _reg_get_to prev "$id" lastswap; _reg_get_to bts "$id" swapblocked; bts="${bts%% *}"
+  (( WD_FORCED < WATCHDOG_PER_PASS )) || return 0
+  [[ "$prev" =~ ^[0-9]{1,12}$ ]] && (( now - 10#$prev < SWAP_COOLDOWN )) && return 0
+  [[ "$bts" =~ ^[0-9]{1,12}$ ]] && (( now - 10#$bts < SWAPBLOCK_COOLDOWN )) && return 0
+  _provider_hold_to why "$id" "$now" && return 0
+  _home_measured_to home "$id"; hrc=$?; [[ "$hrc" -ne 2 ]] || home=""
+  for r in 0 1 2; do
+    skip="" ok=""
+    for cand in $(_pool_for "$id") $home; do
+      _provider_move_rank_to t "$cand" "$w" "$PF_FIRST" "$PROVFAIL_MARKED" "$PROVFAIL_GOODS" && [[ "$t" == "$r" ]] && _provider_move_fits "$id" "$w" "$cand" && ok=1 || skip+=" $cand"
+    done
+    [[ -n "$ok" ]] || continue
+    target=$(CCD_RESCUE_MEASURED_ONLY=1 SWAP_TARGET_SKIP="$skip" _rescue_target "$id" "$w" "$home" 1 "$hrc"); rc=$?
+    (( rc == 0 )) && [[ -n "$target" ]] && break
+    (( rc <= 1 || rc == 6 )) || none=""
+    target=""
+  done
+  if [[ -z "$target" ]]; then
+    _reg_get_to why "$id" provwait
+    [[ -z "$none" || "$why" =~ ^[0-9]{1,12}$ ]] || { _reg_set "$id" provwait "$now" && echo "$(date '+%F %T') provider-wait $id: $w answers with provider errors and no other lane can take it; it is retried there" >> "$REG/swap.log"; }
+    return 0
+  fi
+  _reg_set "$id" lastswap "$now"
+  echo "$(date '+%F %T') provider-rescue $id: $w -> $target [home=$home] fails=$PF_N" >> "$REG/swap.log"
+  if _dispatch_swap "$id" "$target" provider "$prev" "$now" "" "" "" "" "" "$PF_LAST"; then WD_FORCED=$(( WD_FORCED + 1 ))
+  else CCD_SWAP_PREV="$prev" _swap_lastswap_restore "$id"; fi   # no unit: the failures must still count, or the next try is three failures away
+  return 0
+}
+
 # THE LANE-FAILING MARK (the provider-failure ladder, wave 3a, D-9095; docs/superpowers/plans/2026-11-25-provider-retry.md).
 # `$REG/<lane>-provfail` holds `<epoch> <err>`, `_authdead`'s shape: several sessions' turn markers say the provider answers this
 # lane's turns with errors. A PREFERENCE of an AUTOMATIC move and nothing else (`_swap_target`'s home arm and its ranking,
@@ -33225,7 +33271,9 @@ _watchdog_one() {   # id now minutes -> a forced rescue bumps WD_FORCED; everyth
 # The seconds: TTL, how long a mark means anything after its write, and how old a lane's newest failure may be at the write;
 # SPAN, how far back one session's consecutive failures are counted; FRESH, how old a failure that is still owed may be to
 # count beside another session's (the server's outage notice uses the same 10 minutes).
-PROVFAIL_TTL=1800 PROVFAIL_SPAN=7200 PROVFAIL_FRESH=600
+# MARKED and GOODS are the pass's own answer to the moves it decides (`_watchdog_provider`): the marked lanes, and `<lane>=<ms>`
+# words, each lane's newest good Stop.
+PROVFAIL_TTL=1800 PROVFAIL_SPAN=7200 PROVFAIL_FRESH=600 PROVFAIL_MARKED="" PROVFAIL_GOODS=""
 _provfail() {   # lane [now] -> rc 0 iff a well-formed mark younger than PROVFAIL_TTL stands (PROVFAIL_AT = its epoch) | 1
   # `-f` before the open and `! -L`, `_authdead`'s rungs and reasons. Anything but `<epoch> <word>` is no mark, and one written
   # more than a minute AHEAD of this clock is none either, or a clock set back would keep it for ever.
@@ -33323,6 +33371,10 @@ _provfail_pass() {   # now -> each lane's mark set or cleared from every row's t
     f="$REG/.provfail.$$.tmp"; printf '%s %s' "$1" "${err[$w]:-unknown}" > "$f" && _plat_mv_notdir "$f" "$REG/$w-provfail" || { rm -f -- "$f"; continue; }
     echo "$(date '+%F %T') lane-failing $w: its provider answers with errors (${err[$w]:-unknown}); automatic moves prefer other lanes for at most $(( PROVFAIL_TTL / 60 )) min" >> "$REG/swap.log"
   done
+  PROVFAIL_MARKED="" PROVFAIL_GOODS=""; for w in "${CCRC_ACCOUNTS[@]}"; do
+    _provfail "$w" "$1" && PROVFAIL_MARKED+=" $w"
+    [[ -z "${good[$w]:-}" ]] || PROVFAIL_GOODS+=" $w=${good[$w]}"
+  done
 }
 
 _lane_provider_to() {   # var lane -> var = anthropic | codex | lane:<lane>: `server/src/coord/providerOutage.ts#outageProviderOf`'s rule over the roster's arrays
@@ -33331,7 +33383,7 @@ _lane_provider_to() {   # var lane -> var = anthropic | codex | lane:<lane>: `se
 }
 
 _provider_move_rank_to() {   # var cand cur first marked goods -> rc 0 and var = 0 proved | 1 another provider | 2 unproved, same provider; rc 1 and var empty = never
-  # A PROVIDER MOVE'S ORDER, AND ITS REFUSALS (wave 3b; nothing calls it yet). PURE over its arguments and the roster's arrays:
+  # A PROVIDER MOVE'S ORDER, AND ITS REFUSALS (wave 3b). PURE over its arguments and the roster's arrays:
   # `first` is the episode's first failure, `marked` the marked lanes, `goods` `<lane>=<newest good Stop>` words, one clock for
   # both. Never the lane it is on, a marked lane, or a lane of a provider with two marked lanes. Pools, class, room and the
   # operator's holds are the caller's, before this and unchanged.
