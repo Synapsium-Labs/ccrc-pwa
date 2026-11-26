@@ -319,11 +319,11 @@ Nothing dispatches the arm yet.
 
 ### Deviations found (wave 3b, C)
 
-- **D-TBD-provmove-measured** — measured room only, as the watchdog's other forced moves and unlike the tick's limit rescue, which
+- **D-9125** — measured room only, as the watchdog's other forced moves and unlike the tick's limit rescue, which
   ranks an unmeasured lane last. A lane with a good Stop since the failure has rendered a status line, so it is measured.
-- **D-TBD-provmove-dispatch** — `_dispatch_swap` answers 1 when its unit did not start (it answered 0). The limit watchdog then does
+- **D-9126** — `_dispatch_swap` answers 1 when its unit did not start (it answered 0). The limit watchdog then does
   not count that dispatch toward the pass's cap; nothing else reads it.
-- **D-TBD-provmove-silent** — a held decision writes no line. The one record such a line could use, the affinity arm's stand-down
+- **D-9127** — a held decision writes no line. The one record such a line could use, the affinity arm's stand-down
   episode, would change its reason every few seconds beside that arm's own.
-- **D-TBD-provmove-undecided** — "no lane" is claimed only from measured answers. Where a pool side or a class window could not be
+- **D-9128** — "no lane" is claimed only from measured answers. Where a pool side or a class window could not be
   read the session stays and `.provwait` is not written.
