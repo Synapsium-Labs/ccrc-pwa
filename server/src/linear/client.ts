@@ -193,11 +193,15 @@ export async function callLinear(
       // request (a scope, a team the key cannot see): its own arm, which no caller
       // may treat as a verdict on the key. Everything else is the service. The
       // body of a refusal is read for the rate-limit code above and, D-9132 (an adapter keeps a distinction it received), kept ONLY
-      // on an `unreachable` answer, only when it carries an `errors` array and only for a caller that asked (`keepErrors`): `answered`,
-      // which `runCcrcOp` reads against the closed error table as it reads a 200. It is never logged, journaled or sent on a wire.
+      // on an `unreachable` answer, only on a 4xx (Linear refused the request: a Linear incident's 5xx must not fail every binding in
+      // flight, so it keeps its hold whatever its body says), only when it carries a NON-EMPTY `errors` array (an empty one says nothing)
+      // and only for a caller that asked (`keepErrors`): `answered`, which `runCcrcOp` reads against the closed error table as it
+      // reads a 200. It is never logged, journaled or sent on a wire.
       if (res.status === 401) return { ok: false, reason: 'unauthorised' };
       if (res.status === 403) return { ok: false, reason: 'forbidden' };
-      return deps.keepErrors === true && read && isRecord(body) && Array.isArray(body['errors']) ? { ok: false, reason: 'unreachable', answered: body } : { ok: false, reason: 'unreachable' };
+      const refusal = res.status >= 400 && res.status < 500;
+      return deps.keepErrors === true && refusal && read && isRecord(body) && Array.isArray(body['errors']) && body['errors'].length > 0
+        ? { ok: false, reason: 'unreachable', answered: body } : { ok: false, reason: 'unreachable' };
     }
     // The deadline can fire while the body is still arriving; that is a
     // timeout, not a shape fault.
