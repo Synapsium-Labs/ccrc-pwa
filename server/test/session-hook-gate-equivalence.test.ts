@@ -1,18 +1,24 @@
 /**
- * The quiz row's literal gate (issue #3418's cost; programme overlord, wave 240). Every pattern of the session hook's
- * `qzmatch` holds the literal `quiz`, so the row cannot match a string without it. The forbidden program therefore asks
- * two linear gates before the row's quadratic work: `QZANC`, asked of the command as written BEFORE `norm` is computed
- * (`q`, `u`, `i`, `z` with only the characters `norm` removes between them, `QCH`: the prune row's `PANC` form), and
- * `quiz` itself, asked inside `qzmatch` of each form, the written and the normalised one, separately.
+ * The quiz row's literal gate (programme overlord, wave 240; the red of issue #3418 prompted it). Every pattern of the
+ * session hook's `qzmatch` holds the literal `quiz`, so the row cannot match a string without it, and `norm` only
+ * deletes characters. The forbidden program therefore asks one linear gate before the row's quadratic work: `QZANC`,
+ * asked of the command as written BEFORE `norm` is computed (`q`, `u`, `i`, `z` with any run of `QCH` between them, the
+ * prune row's `PANC` form: a superset of what `norm` removes, since it reads any `$` and any newline).
  *
  * What is held here:
- *  - EQUIVALENCE: the gated program answers exactly what the same program with both gates cut out answers (the row as
- *    it stood before the gate), in every mode, over every command of `session-hook-quiz-deny.test.ts`'s lists (copied,
- *    built by the same builders) and spellings where only the normalised form holds the literal.
+ *  - EQUIVALENCE: the gated program answers exactly what the same program with the gate cut out answers (the row as it
+ *    stood before the gate), in every mode, over every command of `session-hook-quiz-deny.test.ts`'s lists (copied,
+ *    built by the same builders) and spellings where only the normalised form holds the literal, one at least for each
+ *    member of `QCH` placed between two of the letters. The cut must find the gate in both modes, so a respelled or
+ *    removed gate reds the first case rather than comparing the gated program with itself.
  *  - THE CLAIM, sampled: the ungated row answers nothing once the literal is respelled out of a refused command.
  *  - COST: on a quote-dense command with no such literal, the gated program costs what the program with the quiz row
  *    deleted costs, at 32 and 64 KB, measured as the prune-deny suite measures (the CPU of the jq child, the faster of
- *    two interleaved runs). Without the gate the row adds about a third (#3418), well past this bound.
+ *    interleaved runs, here three rounds). This PR's own measurement put the ungated row at about a third more than the
+ *    program without it on that shape (1.27x at 32 KB, 1.48x at 64 KB), well past this bound.
+ *
+ * What remains: the saving exists only while the anchor fails. A command that holds the four letters in order, or
+ * really names the quiz, costs what it cost without the gate.
  *
  * The jq program runs directly (no hook, no HOME): the shell-side prefilter is not under test here.
  */
@@ -34,26 +40,25 @@ const hookProgram = (): string => {
 };
 
 /**
- * `src` with every match of `cut` (a global pattern) removed; throws unless it matched a count in `allowed`, so a gate
- * that moved, or a row asked from a third place, reds here rather than leaving the comparison vacuous or partial.
+ * `src` with every match of `cut` (a global pattern) removed; throws unless it matched exactly `count` times, so a gate
+ * that moved, was respelled or was removed, or a row asked from a third place, reds here rather than leaving the
+ * comparison vacuous (gated against gated) or partial.
  */
-const cutOut = (src: string, cut: RegExp, allowed: readonly number[]): string => {
+const cutOut = (src: string, cut: RegExp, count: number): string => {
   const found = (src.match(cut) ?? []).length;
-  if (!allowed.includes(found)) throw new Error(`expected ${allowed.join(' or ')} of ${String(cut)}, found ${found}`);
+  if (found !== count) throw new Error(`expected ${count} of ${String(cut)}, found ${found}`);
   return src.replace(cut, '');
 };
 
-/** The anchor before `norm`, in each of the two modes that ask the row; absent once the gate is removed. */
+/** The anchor before `norm`, in each of the two modes that ask the row. */
 const ANCHOR = /select\(test\(QZANC\)\) \| (?=\(\., norm\) \| qzmatch\))/g;
-/** The row's own gate, whatever literal it asks: a wrong literal then reds on behaviour, not on this cut. */
-const LITERAL = /(?<=def qzmatch:) select\(test\("[^"]*"\)\) \|/g;
 /** The row in each mode that asks it, gated or not. */
 const ROW = / \/\/ first\((?:select\(test\(QZANC\)\) \| )?\(\., norm\) \| qzmatch\)/g;
 const gated = hookProgram();
-/** The row as it stood before the gate: both gates cut out, nothing else touched. With no gate, the program itself. */
-const ungated = (): string => cutOut(cutOut(gated, ANCHOR, [0, 2]), LITERAL, [0, 1]);
+/** The row as it stood before the gate: the gate cut out of both modes, nothing else touched. */
+const ungated = (): string => cutOut(gated, ANCHOR, 2);
 /** The program with the quiz row deleted from both modes that ask it: the cost floor. */
-const rowless = (): string => cutOut(gated, ROW, [2]);
+const rowless = (): string => cutOut(gated, ROW, 2);
 
 type Mode = 'deny' | 'account' | 'class';
 const MODES: readonly Mode[] = ['deny', 'account', 'class'];
@@ -120,13 +125,22 @@ const QUIZ_DENY_LISTS: readonly string[] = [
   ...VERBS.flatMap((v) => PROGRAMS.map((b) => b(v))), ...SHELL_FORMS, ...SPELLINGS, ...TEXT_ONLY, ...OPEN,
 ];
 
-/** Spellings whose literal appears only once `norm` has removed quotes, backslashes and `$`: each is refused. */
+/**
+ * Spellings whose literal appears only once `norm` has removed quotes, backslashes and `$`: each is refused. Each
+ * member of `QCH` stands between two of the letters at least once, so an anchor whose class drops one reds here: the
+ * single quote, the double quote, the backslash, the newline (after a backslash, the only place `norm` removes one) and
+ * the dollar (before a quote, the only place `norm` removes one) in three shapes: with a single quote, with a double
+ * quote, and in the shell script's form.
+ */
 const NORM_ONLY: readonly string[] = [
   'ccrc-api qu\'i\'z record --id 1',
   'ccrc-api "qu"iz confirm',
   'ccrc-api qu\\iz status',
   'ccrc-api q\\\nuiz record',
   'ccrc-api $\'qu\'iz status',
+  'ccrc-api q$\'u\'iz record --id 1',
+  'ccrc-api qu$"i"z confirm',
+  'ccrc-qui$\'z\'-record --confirm',
   '"$API" qu\'\'iz record',
   'ccrc q\'\'uiz-record --report r.json',
   'ccrc-q"uiz"-record --confirm',
@@ -143,7 +157,6 @@ const OTHERS: readonly string[] = [
 describe('the quiz row\'s literal gate changes no answer', () => {
   it('the control and the floor are derived from the hook: no gate left in the one, no quiz row in the other', () => {
     expect(ungated()).not.toMatch(/test\(QZANC\)/);
-    expect(ungated()).not.toMatch(/def qzmatch: select/);
     expect(ungated()).toMatch(/def qzmatch:\n/);
     expect(rowless()).not.toMatch(/\| qzmatch\)/);
   });
@@ -184,7 +197,7 @@ describe('the quiz row\'s literal gate changes no answer', () => {
 // The prune-deny suite's cost measure (D-8334, D-8354), restated for this suite: CPU, not wall time, of one jq run that
 // reads its input from a regular file.
 type CpuRun = { status: number | null; stdout: string; stderr: string; cpuMs: number };
-const childCpu = (argv: readonly string[], input: string, timeoutMs = scaled(120_000)): CpuRun => {
+const childCpu = (argv: readonly string[], input: string, timeoutMs: number): CpuRun => {
   const dir = mkTmp('ccrc-quizgate-cpu-');
   const file = path.join(dir, 'stdin');
   fs.writeFileSync(file, input);
@@ -209,9 +222,20 @@ const childCpu = (argv: readonly string[], input: string, timeoutMs = scaled(120
  * The bound: the gated program within 15% (or 25 ms) of the program with the row deleted. Measured at load 13 to 18
  * (deny mode, quote-dense, faster of interleaved runs): gated against rowless 0.98 to 1.08 in single runs and 1.00 and
  * 1.01 as this case reads it; the gate removed against rowless 1.27 to 1.40 at 32 KB and 1.48 to 1.75 at 64 KB in single
- * runs, and 1.23 and 1.39 as this case reads it, so the 64 KB row is the one that always catches a removed gate.
+ * runs, and 1.23 and 1.39 as this case reads it, so the 64 KB row is the one that always catches a removed gate. A
+ * review lens read 1.19 for a removed gate, so the bound is not widened; the faster of three rounds keeps a gated
+ * run's noise under it instead.
  */
 const BOUND = 1.15;
+/** Interleaved rounds of (gated, row deleted); each case reads the faster run of each. */
+const ROUNDS = 3;
+/**
+ * One jq run's time bound, by size: about five times the slowest single run measured (about 5 s at 32 KB and 18 s at
+ * 64 KB on a test box at load 25; a hosted runner is faster). A case's bound is its 2 x ROUNDS runs plus a minute for
+ * the rest, scaled like every budget in this suite.
+ */
+const RUN_MS: Readonly<Record<number, number>> = { 32: 30_000, 64: 90_000 };
+const caseMs = (kb: number): number => 2 * ROUNDS * (RUN_MS[kb] as number) + 60_000;
 
 describe('the quiz row costs nothing on a quote-dense command that holds no literal', () => {
   const unit = 'a "b c" \'d\' \\e ';
@@ -220,7 +244,7 @@ describe('the quiz row costs nothing on a quote-dense command that holds no lite
     const command = `git worktree list --porcelain; echo prune ${dense}`;
     expect(command).not.toMatch(/q[^u]*u[^i]*i[^z]*z/);
     const r = childCpu(['jq', '-r', '--arg', 'q', "'", '--arg', 'mode', 'deny', prog],
-      JSON.stringify({ tool_name: 'Bash', tool_input: { command } }));
+      JSON.stringify({ tool_name: 'Bash', tool_input: { command } }), scaled(RUN_MS[kb] as number));
     expect(r.status, r.stderr).toBe(0);
     expect(r.stdout.trim()).toBe('');
     return r.cpuMs;
@@ -228,12 +252,12 @@ describe('the quiz row costs nothing on a quote-dense command that holds no lite
   for (const kb of [32, 64]) {
     it(`deny mode at ${kb} KB: the gated program within ${BOUND}x of the program with the row deleted`, () => {
       const floor = rowless();
-      const pairs = [0, 1].map(() => [timed(gated, kb), timed(floor, kb)]);
+      const pairs = Array.from({ length: ROUNDS }, () => [timed(gated, kb), timed(floor, kb)]);
       const gatedMs = Math.min(...pairs.map((p) => p[0] as number));
       const floorMs = Math.min(...pairs.map((p) => p[1] as number));
       const measured = `quotes/deny ${kb} KB: gated ${gatedMs} cpu ms, row deleted ${floorMs} cpu ms, ratio ${(gatedMs / floorMs).toFixed(3)}x, bound ${BOUND}x`;
       console.info(measured);
       expect(gatedMs, measured).toBeLessThanOrEqual(Math.max(BOUND * floorMs, floorMs + 25));
-    }, scaled(600_000));
+    }, scaled(caseMs(kb)));
   }
 });

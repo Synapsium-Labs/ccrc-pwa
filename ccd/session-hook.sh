@@ -5631,9 +5631,11 @@ fi
 # with an assembled string, another interpreter or a script file runs past it. The prefilter of both branches reads
 # `quiz` followed by a blank, a stripped tab or newline (`t`, `n`) or a backslash, or `quiz-record`, never `quiz` alone,
 # so a session whose working directory or transcript path names `quiz` forks no jq on every call. Inside the program the
-# row is gated on its literal (#3418's cost): every pattern of `qzmatch` holds `quiz`, so `QZANC` (its four letters with
-# only what `norm` removes between them, `PANC`'s form) is asked of the command as written before `norm` is computed,
-# and `quiz` itself is asked inside `qzmatch` of each form. `session-hook-gate-equivalence.test.ts` holds both.
+# row is gated on its literal (the red of #3418 prompted it): every pattern of `qzmatch` holds `quiz` and `norm` only
+# deletes characters, so `QZANC` (the four letters with any run of `QCH` between them, a superset of what `norm`
+# removes: any `$`, any newline; `PANC`'s form) is asked of the command as written before `norm` is computed. The saving
+# exists only while the anchor fails: a command that holds the four letters in order, or names the quiz, costs what it
+# cost without the gate. `session-hook-gate-equivalence.test.ts` holds the equivalence and the cost.
 # THE PRUNE ROW ON EVERY SESSION (cleanup un-wedge, Task R3; spec 2026-11-04 §5, D9 to D11). A repository-wide
 # `git worktree prune` deletes git's record of every gone worktree of the repository at once, and ccd's cleanup reads
 # those records, so one session's prune holds the cleanup of every lane on the box. `pmatch` answers the category
@@ -5803,7 +5805,7 @@ def QZR: "quiz-record(?![A-Za-z0-9_.-])";
 def QZH: "ccrc-quiz-record(?![A-Za-z0-9_.-])";
 def QZCMD: "(?:^|[\n;&|(`]|\\$\\()" + SP + "*(?:env(?:" + SP + "+(?:-" + NS + "+(?:" + SP + "+[A-Za-z_][A-Za-z0-9_]*)?|[A-Za-z_][A-Za-z0-9_]*=" + NS + "*))*" + SP + "+)?(?:(?:bash|sh)" + SP + "+" + FLAGS + ")?[" + $q + "\"]?";
 def QZANC: "q" + QCH + "u" + QCH + "i" + QCH + "z";
-def qzmatch: select(test("quiz")) |
+def qzmatch:
   (QZV as $v | select(test(QZP + $v + NW)) | "quiz\tccrc-api quiz \($v)"),
   (select(test(QZP + EXP)) | "quiz\tccrc-api quiz with its act in a variable"),
   (select(test(WB + "ccrc[" + $q + "\"]?" + SP + "+" + FLAGS + QZR) or (test(WB + "ccrc" + NW) and test(EXPV + QZR))) | "quiz\tccrc quiz-record"),
