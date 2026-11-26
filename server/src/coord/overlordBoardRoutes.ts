@@ -23,6 +23,19 @@ import { TOKEN_DETAIL, callerOf, overlordRow } from './overlordInboxRoutes.js';
 import type { ReadComposed, runOverlordRead } from './overlordRead.js';
 import { boardProgrammeCount, composeBoard } from './overlordBoard.js';
 import { gatherBoard, type BoardGatherPorts } from './overlordBoardRead.js';
+import type { CcrcConfig } from '../config.js';
+import type { FleetIO } from '../io.js';
+import type { ProjectWalkCache } from '../lifecycle.js';
+import type { FleetWatcher } from '../watch.js';
+import type { ReadinessLane } from './overlordReadinessLane.js';
+import type { IsolationReader } from '../isolationFacts.js';
+import type { LadderRead } from './overlordLadderRead.js';
+import type { LiveAskRead } from './ports.js';
+import type { CoordStore } from './store.js';
+import { createRunVerdicts } from './runVerdicts.js';
+import { portfolioFor } from './portfolio.js';
+import { programmesWithLifecycle } from './programmeLifecycleRoutes.js';
+import { coordinatorReadingOf } from './programmeCoordinatorReading.js';
 
 export interface OverlordBoardRoutesDeps {
   /** The box token, read at request time as every lane reads it; null is a server never given one (refuses every call). */
@@ -63,4 +76,41 @@ export function registerOverlordBoardRoutes(app: FastifyInstance, deps: Overlord
       },
     });
   });
+}
+
+/** What the composition root holds that the board reads, as it holds it. */
+export interface BoardWiring {
+  readonly coord: CoordStore | undefined;
+  readonly io: FleetIO;
+  readonly cfg: CcrcConfig;
+  /** The server's one project-walk cache, the projects route's own, so a board read does not walk the projects again; read when a
+   *  board is gathered, since the composition root declares it after the doors are registered. */
+  readonly cache: () => ProjectWalkCache;
+  readonly watcher: Pick<FleetWatcher, 'runVerdicts' | 'currentFleetListing' | 'liveSpendReading'> | undefined;
+  /** The live signal for an ask, the one the ledger routes take. */
+  readonly liveAsk: LiveAskRead;
+  readonly ladder: (() => LadderRead) | undefined;
+  readonly readiness: Pick<ReadinessLane, 'read'> | undefined;
+  readonly isolation: Pick<IsolationReader, 'read'> | undefined;
+  readonly now: () => number;
+}
+
+/** The gatherer's ports over the composition root's readers, each the reader the console's own read already calls: the programmes
+ *  with their lifecycle and the watcher's verdicts (`GET /api/programmes`), the portfolio's one composition (`GET /api/portfolio`),
+ *  the ladder's read, the readiness lane's and the isolation word's. Built here so `server.ts` hands over what it holds. */
+export function boardPortsOf(w: BoardWiring): BoardGatherPorts {
+  const coord = w.coord;
+  return {
+    coord, now: w.now, projects: { io: w.io, cfg: w.cfg, get cache() { return w.cache(); } },
+    verdicts: () => w.watcher?.runVerdicts ?? createRunVerdicts(),
+    lifecycle: (a) => (coord === undefined ? Promise.resolve(a) : programmesWithLifecycle(coord, a, (s) => coordinatorReadingOf(w.io, w.cfg, s))),
+    listing: () => w.watcher?.currentFleetListing() ?? null,
+    portfolio: coord === undefined ? undefined : () => {
+      const now = w.now();
+      return portfolioFor(coord.portfolioFacts(now, w.liveAsk, (sid) => (w.watcher === undefined ? { kind: 'not-ready' as const } : w.watcher.liveSpendReading(sid))), now);
+    },
+    ladder: w.ladder,
+    readiness: w.readiness === undefined ? undefined : () => w.readiness!.read(),
+    isolation: w.isolation === undefined ? undefined : () => w.isolation!.read(),
+  };
 }
