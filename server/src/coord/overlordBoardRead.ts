@@ -17,6 +17,7 @@ import type { IsolationRead } from '../../../shared/isolation.js';
 import type { PortfolioView } from '../../../shared/portfolio.js';
 import type { ReadinessWire } from '../../../shared/overlord-readiness.js';
 import type { BoardUnmeasured } from '../../../shared/overlordBoard.js';
+import type { CoordCapNow } from '../../../shared/runCap.js';
 import type { CoordStore } from './store.js';
 import type { RunVerdicts } from './runVerdicts.js';
 import type { LadderRead } from './overlordLadderRead.js';
@@ -27,7 +28,7 @@ import type { BoardInputs, BoardRead } from './overlordBoard.js';
 export const BOARD_PROGRAMMES_SINCE_MS = 24 * 3_600_000;
 
 /** The store reads the board takes, named (plan Task 6: the members, never the whole store). */
-export type BoardStore = Pick<CoordStore, 'readProgrammes' | 'goalsFor' | 'itemsFor' | 'stallObservationsSince' | 'caps' | 'capsUsage' | 'pendingTimers'>;
+export type BoardStore = Pick<CoordStore, 'readProgrammes' | 'goalsFor' | 'itemsFor' | 'stallObservationsSince' | 'capsUsage' | 'pendingTimers'>;
 
 export interface BoardGatherPorts {
   /** The coordination store; undefined on a server that opened none (every store input reads `no-store`). */
@@ -42,6 +43,9 @@ export interface BoardGatherPorts {
   readonly projects: { readonly io: FleetIO; readonly cfg: CcrcConfig; readonly cache: ProjectWalkCache };
   /** The portfolio's one composition (`portfolioFor` over the store's facts), as `GET /api/portfolio` composes it. */
   readonly portfolio: (() => PortfolioView) | undefined;
+  /** The cap in force, `dispatch.ts#capNow` over the store and the watcher's host reading, as the caps view composes it (an
+   *  automatic cap is the derived one, never the stored number); undefined on a server that opened no store. */
+  readonly capNow: (() => CoordCapNow) | undefined;
   /** The ladder's composed read, or undefined where it is not built. */
   readonly ladder: (() => LadderRead) | undefined;
   /** The readiness lane's read, or undefined where no lane runs. */
@@ -87,13 +91,17 @@ export async function gatherBoard(p: BoardGatherPorts): Promise<BoardInputs> {
     return read.ok ? { ok: true, value: { since, windowMs: STALL_NOTICE_WINDOW_MS, counts: stallNoticeCounts(read.rows) } } : fail('read-failed');
   });
   const portfolio = once(() => (p.portfolio === undefined ? fail('not-wired') : { ok: true, value: p.portfolio() }));
-  const capacity = once(() => (coord === undefined ? noStore
-    : { ok: true, value: { maxConcurrentWorkers: coord.caps().maxConcurrentWorkers, running: coord.capsUsage().running } }));
+  const capacity = once(() => (coord === undefined ? noStore : p.capNow === undefined ? fail('not-wired')
+    : { ok: true, value: { maxConcurrentWorkers: p.capNow().cap, running: coord.capsUsage().running } }));
   const projects = await onceAsync(async () => {
     const l = await listProjects(p.projects.io, p.projects.cfg, undefined, p.projects.cache);
     return { ok: true, value: { registry: l.registry, names: l.projects.map((r) => r.name) } };
   });
-  const switches = await onceAsync(async () => ({ ok: true, value: readSwitches(await p.projects.io.readdir(p.projects.cfg.registryDir)) }));
+  // The measured listing: one that cannot be read is the part's `read-failed`, never a row of `unmeasurable` switches.
+  const switches = await onceAsync(async () => {
+    const l = await p.projects.io.readdirMeasured(p.projects.cfg.registryDir);
+    return l.ok ? { ok: true, value: readSwitches(l.entries) } : fail('read-failed');
+  });
   const ladder = once(() => {
     if (p.ladder === undefined) return fail('not-wired');
     const r = p.ladder();

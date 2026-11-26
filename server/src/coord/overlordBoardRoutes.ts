@@ -33,6 +33,7 @@ import type { LadderRead } from './overlordLadderRead.js';
 import type { LiveAskRead } from './ports.js';
 import type { CoordStore } from './store.js';
 import { createRunVerdicts } from './runVerdicts.js';
+import { capNow } from './dispatch.js';
 import { portfolioFor } from './portfolio.js';
 import { programmesWithLifecycle } from './programmeLifecycleRoutes.js';
 import { coordinatorReadingOf } from './programmeCoordinatorReading.js';
@@ -86,7 +87,7 @@ export interface BoardWiring {
   /** The server's one project-walk cache, the projects route's own, so a board read does not walk the projects again; read when a
    *  board is gathered, since the composition root declares it after the doors are registered. */
   readonly cache: () => ProjectWalkCache;
-  readonly watcher: Pick<FleetWatcher, 'runVerdicts' | 'currentFleetListing' | 'liveSpendReading'> | undefined;
+  readonly watcher: Pick<FleetWatcher, 'runVerdicts' | 'currentFleetListing' | 'liveSpendReading' | 'hostMachine'> | undefined;
   /** The live signal for an ask, the one the ledger routes take. */
   readonly liveAsk: LiveAskRead;
   readonly ladder: (() => LadderRead) | undefined;
@@ -97,7 +98,8 @@ export interface BoardWiring {
 
 /** The gatherer's ports over the composition root's readers, each the reader the console's own read already calls: the programmes
  *  with their lifecycle and the watcher's verdicts (`GET /api/programmes`), the portfolio's one composition (`GET /api/portfolio`),
- *  the ladder's read, the readiness lane's and the isolation word's. Built here so `server.ts` hands over what it holds. */
+ *  the cap in force (`dispatch.ts#capNow`, the caps view's reader), the ladder's read, the readiness lane's and the isolation
+ *  word's. Built here so `server.ts` hands over what it holds. */
 export function boardPortsOf(w: BoardWiring): BoardGatherPorts {
   const coord = w.coord;
   return {
@@ -109,6 +111,7 @@ export function boardPortsOf(w: BoardWiring): BoardGatherPorts {
       const now = w.now();
       return portfolioFor(coord.portfolioFacts(now, w.liveAsk, (sid) => (w.watcher === undefined ? { kind: 'not-ready' as const } : w.watcher.liveSpendReading(sid))), now);
     },
+    capNow: coord === undefined ? undefined : () => capNow(coord, w.watcher === undefined ? undefined : () => w.watcher!.hostMachine()),
     ladder: w.ladder,
     readiness: w.readiness === undefined ? undefined : () => w.readiness!.read(),
     isolation: w.isolation === undefined ? undefined : () => w.isolation!.read(),

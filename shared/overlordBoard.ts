@@ -123,6 +123,8 @@ export interface OverlordBoard {
     readonly stallNotices: Measured<{ readonly since: number; readonly windowMs: number; readonly counts: readonly BoardStallNoticeCount[] }>;
   }>;
   readonly portfolio: Measured<{ readonly revision: number; readonly programmes: readonly BoardPortfolioRow[] }>;
+  /** `maxConcurrentWorkers` is the cap in force (the caps view's `capNow.cap`: an automatic cap is the derived one, never the
+   *  stored number); `running` the active runs it counts. */
   readonly capacity: Measured<{ readonly maxConcurrentWorkers: number; readonly running: number }>;
   readonly projects: Measured<{ readonly registry: 'listed' | 'unlistable'; readonly names: readonly string[] }>;
   readonly brakes: Measured<{

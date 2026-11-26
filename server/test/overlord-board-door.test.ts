@@ -132,7 +132,6 @@ function gatherer(f: Fixture): Gathered {
     })),
     itemsFor: (slug: string) => guard('itemsFor', () => ({ open: f.items[slug] ?? [], cleared: [] })),
     stallObservationsSince: () => guard('stallObservationsSince', () => ({ ok: true, rows: [] })),
-    caps: () => guard('caps', () => ({ maxConcurrentWorkers: 3 })),
     capsUsage: () => guard('capsUsage', () => ({ running: 1 })),
     pendingTimers: () => guard('pendingTimers', () => ({
       ok: true, rows: [{ id: 1, setter: COORD_A, dueAt: NOW + 60_000, note: SENT.timer }, { id: 2, setter: COORD_A, dueAt: NOW + 30_000, note: SENT.timer }],
@@ -154,6 +153,7 @@ function gatherer(f: Fixture): Gathered {
       return { at: NOW, revision: 4, programmes: f.programmes.map((p, i) => ({ slug: p.slug, title: p.title, rank: { position: i + 1, cls: 'standard', fixedDate: null },
         cls: 'standard', wip: { working: 1, waiting: 0, queued: 0 }, oldestOpenMs: null })) } as never;
     },
+    capNow: () => { hit(); return { mode: 'override', cap: 3, derived: { kind: 'unmeasured', why: 'no-reading' } }; },
     ladder: () => { hit(); return { kind: 'measured', effective: { rung: 'full', operatorRung: 'full' } } as never; },
     readiness: () => { hit(); return { ok: true, wire: { word: 'unmeasured', since: NOW, why: null, until: null, questionsGo: 'no' } } as never; },
     isolation: () => { hit(); return { kind: 'measured', word: 'shared-user', cause: 'same-user' } as never; },
@@ -306,8 +306,8 @@ describe('GET /api/overlord/board: one line a read past the gates', () => {
     expect(calls.sort()).toEqual(['prog-a', 'prog-b']);
   });
 
-  it('a store reader that throws (caps) is that part unmeasured threw, never a 5xx: still 200 and exactly one line', async () => {
-    const r = await rig({ fixture: { ...defaultFixture(), throws: new Set(['caps']) } });
+  it('a store reader that throws (capsUsage) is that part unmeasured threw, never a 5xx: still 200 and exactly one line', async () => {
+    const r = await rig({ fixture: { ...defaultFixture(), throws: new Set(['capsUsage']) } });
     const res = await board(r);
     expect(res.statusCode, res.body).toBe(200);
     const b = (json(res) as unknown as OverlordBoardAnswer).board;
@@ -330,7 +330,7 @@ describe('GET /api/overlord/board: one line a read past the gates', () => {
   });
 
   it('every store reader throwing at once is still a 200 board of closed words and one line', async () => {
-    const all = new Set<keyof BoardStore>(['readProgrammes', 'goalsFor', 'itemsFor', 'stallObservationsSince', 'caps', 'capsUsage', 'pendingTimers']);
+    const all = new Set<keyof BoardStore>(['readProgrammes', 'goalsFor', 'itemsFor', 'stallObservationsSince', 'capsUsage', 'pendingTimers']);
     const r = await rig({ fixture: { ...defaultFixture(), throws: all } });
     const res = await board(r);
     expect(res.statusCode, res.body).toBe(200);

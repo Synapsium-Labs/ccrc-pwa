@@ -13,6 +13,10 @@ import type { IsolationRead } from '../../shared/isolation.js';
 import type { RunVerdicts } from '../src/coord/runVerdicts.js';
 import type { LadderRead } from '../src/coord/overlordLadderRead.js';
 import { STALL_NOTICE_WINDOW_MS } from '../src/coord/stallsettings.js';
+import { boardPortsOf } from '../src/coord/overlordBoardRoutes.js';
+import { capNowOf } from '../src/coord/caps.js';
+import type { CoordStore } from '../src/coord/store.js';
+import type { HostMachineReading } from '../../shared/pressure.js';
 import { mkdirSync } from 'node:fs';
 import { testDeps } from './helpers.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
@@ -50,14 +54,14 @@ const answerOf = (slugs: string[]): ProgrammesAnswer =>
 const goalsOf = (slug: string) =>
   ({ program: slug, specPath: null, inShort: `${slug} in short`, inShortAt: 1, modifications: [], doneWhen: null });
 
-/** A store of spies: each member answers from literals, so a call count and its arguments are what a case reads. */
-function fakeStore(over: Partial<Record<keyof BoardStore, unknown>> = {}) {
+/** A store of spies: each member answers from literals, so a call count and its arguments are what a case reads. `caps`, the
+ *  stored number, is no member of the board's store; a case may plant it to show it is never asked. */
+function fakeStore(over: Partial<Record<keyof BoardStore | 'caps', unknown>> = {}) {
   const base = {
     readProgrammes: vi.fn((_o: { since: number; now: number }, _v: RunVerdicts) => answerOf(['prog-a', 'prog-b'])),
     goalsFor: vi.fn((slug: string) => goalsOf(slug)),
     itemsFor: vi.fn((_slug: string | null, _now: number) => ({ open: [], cleared: [] }) as unknown),
     stallObservationsSince: vi.fn((_since: number) => ({ ok: true, rows: [] }) as unknown),
-    caps: vi.fn(() => ({ maxConcurrentWorkers: 6 })),
     capsUsage: vi.fn(() => ({ running: 2 })),
     pendingTimers: vi.fn(() => ({ ok: true, rows: [{ setter: 'lane-a-project-a', dueAt: 10, note: SENTINEL }] }) as unknown),
   };
@@ -91,6 +95,7 @@ function fixturePorts(over: Partial<BoardGatherPorts> = {}, store: FakeStore | u
     listing: () => ({ sessions: [{ id: 'lane-a-project-a', status: 'busy' }] }),
     projects: { io, cfg, cache: new ProjectWalkCache() },
     portfolio: () => portfolioView,
+    capNow: vi.fn(() => ({ mode: 'override' as const, cap: 6, derived: { kind: 'unmeasured' as const, why: 'no-reading' as const } })),
     ladder: () => ({ kind: 'measured', effective: { rung: 'chat', operatorRung: 'advise' } }) as unknown as LadderRead,
     readiness: () => ({ ok: true, wire: { word: 'ready', since: 1, why: null, until: null } }) as unknown as ReturnType<NonNullable<BoardGatherPorts['readiness']>>,
     isolation: () => ({ kind: 'measured', word: 'separate-user', cause: 'other-user' }) as IsolationRead,
@@ -103,8 +108,8 @@ function fixturePorts(over: Partial<BoardGatherPorts> = {}, store: FakeStore | u
 describe('gatherBoard (each reader once, inside its own try)', () => {
   it('a store method that throws is that input\'s threw, every other input still reads, and composeBoard still answers a board', async () => {
     const goalsFor = vi.fn((slug: string) => { if (slug === 'prog-a') throw new Error('SQLITE_CORRUPT a-store-fault'); return goalsOf(slug); });
-    const caps = vi.fn((): { maxConcurrentWorkers: number } => { throw new Error('caps broke'); });
-    const { ports } = fixturePorts({}, fakeStore({ goalsFor, caps }));
+    const capNow = (): never => { throw new Error('caps broke'); };
+    const { ports } = fixturePorts({ capNow }, fakeStore({ goalsFor }));
     const g = await gatherBoard(ports);
     expect(g.goals.get('prog-a')).toEqual({ ok: false, reason: 'threw' });
     expect(g.goals.get('prog-b')).toMatchObject({ ok: true });
@@ -161,9 +166,10 @@ describe('gatherBoard (each reader once, inside its own try)', () => {
   it('goalsFor and itemsFor are each called exactly once per programme slug, itemsFor with now', async () => {
     const { ports, store } = fixturePorts();
     await gatherBoard(ports);
+    expect(ports.capNow).toHaveBeenCalledTimes(1);
     expect(store.goalsFor.mock.calls).toEqual([['prog-a'], ['prog-b']]);
     expect(store.itemsFor.mock.calls).toEqual([['prog-a', NOW], ['prog-b', NOW]]);
-    for (const m of [store.caps, store.capsUsage, store.pendingTimers, store.stallObservationsSince]) expect(m).toHaveBeenCalledTimes(1);
+    for (const m of [store.capsUsage, store.pendingTimers, store.stallObservationsSince]) expect(m).toHaveBeenCalledTimes(1);
     expect(store.stallObservationsSince).toHaveBeenCalledWith(NOW - STALL_NOTICE_WINDOW_MS);
   });
 
@@ -201,9 +207,9 @@ describe('gatherBoard (each reader once, inside its own try)', () => {
   it('switches are read from the registry directory\'s own listing, once', async () => {
     const { ports, io, cfg } = fixturePorts();
     const seen: string[] = [];
-    const spyIo = Object.assign(Object.create(io) as FleetIO, { readdir: async (p: string) => { seen.push(p); return io.readdir(p); } });
+    const spyIo = Object.assign(Object.create(io) as FleetIO, { readdirMeasured: async (p: string) => { seen.push(p); return io.readdirMeasured(p); } });
     const g = await gatherBoard({ ...ports, projects: { ...ports.projects, io: spyIo } });
-    expect(seen.filter((p) => p === cfg.registryDir).length).toBeGreaterThanOrEqual(1);
+    expect(seen.filter((p) => p === cfg.registryDir).length).toBe(1);
     expect(g.switches.ok).toBe(true);
     if (g.switches.ok) expect(Object.values(g.switches.value).every((v) => v === 'clear')).toBe(true);
   });
@@ -252,5 +258,57 @@ describe('gatherBoard (each reader once, inside its own try)', () => {
     expect(g.isolation).toEqual({ ok: true, value: { kind: 'unmeasured', why: 'link-down' } });
     const board = composeBoard(g);
     expect(board.itself.state === 'measured' && board.itself.isolation).toEqual({ state: 'unmeasured', reason: 'read-failed', why: 'link-down' });
+  });
+});
+
+describe('the capacity part reads the cap in force, and the switches part a measured listing (fast run of #3463)', () => {
+  const GiB = 1024 ** 3;
+  const HOST: HostMachineReading = { kind: 'measured', machine: { memTotalBytes: 64 * GiB, cores: 16, sessionMemLimit: 'none' } };
+  const STORED = 3;
+
+  it('boardPortsOf answers capNow over the store and the watcher\'s host reading: an automatic cap is the derived one, never the stored number', async () => {
+    const derived = capNowOf({ maxConcurrentWorkers: STORED }, 'automatic', HOST);
+    expect(derived.cap).not.toBe(STORED);
+    const coord = { caps: () => ({ maxConcurrentWorkers: STORED }), capMode: () => 'automatic' } as unknown as CoordStore;
+    const deps = testDeps(mkTmp('ccrc-board-cap-'));
+    const ports = boardPortsOf({
+      coord, io: deps.io, cfg: deps.cfg, cache: () => new ProjectWalkCache(), liveAsk: (() => null) as never,
+      watcher: { hostMachine: () => HOST } as never, ladder: undefined, readiness: undefined, isolation: undefined, now: () => NOW,
+    });
+    expect(ports.capNow?.()).toEqual(derived);
+    // An override is the stored number, through the same reader.
+    const over = boardPortsOf({
+      coord: { caps: () => ({ maxConcurrentWorkers: STORED }), capMode: () => 'override' } as unknown as CoordStore, io: deps.io, cfg: deps.cfg,
+      cache: () => new ProjectWalkCache(), liveAsk: (() => null) as never, watcher: { hostMachine: () => HOST } as never,
+      ladder: undefined, readiness: undefined, isolation: undefined, now: () => NOW,
+    });
+    expect(over.capNow?.().cap).toBe(STORED);
+    // No store: no cap reader, so the part reads no-store.
+    expect(boardPortsOf({ coord: undefined, io: deps.io, cfg: deps.cfg, cache: () => new ProjectWalkCache(), liveAsk: (() => null) as never,
+      watcher: undefined, ladder: undefined, readiness: undefined, isolation: undefined, now: () => NOW }).capNow).toBeUndefined();
+  });
+
+  it('the gatherer\'s capacity is the cap reader\'s cap with the store\'s running, and asks the stored number nothing', async () => {
+    const caps = vi.fn(() => ({ maxConcurrentWorkers: STORED }));
+    const capNow = vi.fn(() => capNowOf({ maxConcurrentWorkers: STORED }, 'automatic', HOST));
+    const { ports } = fixturePorts({ capNow }, fakeStore({ caps }));
+    const g = await gatherBoard(ports);
+    expect(g.capacity).toEqual({ ok: true, value: { maxConcurrentWorkers: capNow.mock.results[0]!.value.cap, running: 2 } });
+    expect(capNow).toHaveBeenCalledTimes(1);
+    expect(caps).not.toHaveBeenCalled();
+    const throwing = await gatherBoard(fixturePorts({ capNow: () => { throw new Error('a cap fault'); } }).ports);
+    expect(throwing.capacity).toEqual({ ok: false, reason: 'threw' });
+  });
+
+  it('a registry listing that cannot be read is the switches part\'s read-failed, never a row of unmeasurable switches', async () => {
+    const { ports, io, cfg } = fixturePorts();
+    const failing = Object.assign(Object.create(io) as FleetIO, {
+      readdirMeasured: async (p: string, t?: number, s?: AbortSignal) => (p === cfg.registryDir ? { ok: false, reason: 'unreadable' } : io.readdirMeasured(p, t, s)),
+      readdir: async (p: string) => (p === cfg.registryDir ? null : io.readdir(p)),
+    });
+    const g = await gatherBoard({ ...ports, projects: { ...ports.projects, io: failing } });
+    expect(g.switches).toEqual({ ok: false, reason: 'read-failed' });
+    const board = composeBoard(g);
+    expect(board.brakes.state === 'measured' && board.brakes.switches).toEqual({ state: 'unmeasured', reason: 'read-failed' });
   });
 });

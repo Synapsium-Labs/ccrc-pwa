@@ -89,7 +89,8 @@ The ones left:
 - **A programme's home project.** No reader carries it (`ProgrammeRow` has none), so identity's `home` is `unmeasured`,
   `no-reader`.
 - **A per-programme active-run reader.** None on main (question 18). Work carries the wave buckets as the programmes read answers
-  them, and Capacity carries the fleet's `running` (`CoordStore.capsUsage`).
+  them, and Capacity carries the fleet's `running` (`CoordStore.capsUsage`) beside the cap in force (`dispatch.ts#capNow`, the
+  caps view's reader, over the watcher's host reading; see "The fast run's two reds" below).
 - **The stall watch's window.** `STALL_NOTICE_WINDOW_MS` (48 hours, `stallsettings.ts`), the stall-watch view's notice window.
   `stallObservationsSince` answers run events with run ids, not programmes, so the per-programme stall fact is the stuck pass's
   count, which the programmes read carries through the watcher's `RunVerdicts` (`stuck`). The fleet's notice counts
@@ -182,6 +183,31 @@ counting rows) was dropped, because a setter is always a string.
 reader row whose door row is a write (the board fenced again); a write-class row marked reader (acknowledge); a readable door left
 unmarked (history); a marked row fenced (history). The gate census (`overlord-gate-census.test.ts`) adds the route-side mutant: a
 board read that skips the gate call is found, as the history read's control already finds it.
+
+## The fast run's two reds
+
+The pull request's first fast run (head 510db1df5d) was red in two server shards, each on a guard over the whole tree, and each a
+real defect of the gatherer, fixed before the wave-done:
+
+- **The run cap's one reader** (`run-cap-derived.test.ts`, "no other module of the server reads the mode or decides the cap now").
+  The gatherer read `CoordStore.caps()`, the STORED number, and named it the board's `maxConcurrentWorkers`. Since the cap became
+  automatic, the cap in force is derived from the host, and the stored number is only its fallback. The board now takes a
+  `capNow` port, built in `boardPortsOf` as `dispatch.ts#capNow` over the store and the watcher's `hostMachine()`, exactly as the
+  caps view composes it; `caps` left `BoardStore`. The wire's field keeps its name and now carries the cap in force.
+- **The plain listing ratchet** (`fleetio-contract.test.ts`, D-5969: at most 39 plain `io.readdir(` sites). The switches part read
+  the registry directory through the collapsing `readdir`, so a listing that failed became a row of `unmeasurable` switches. It
+  reads `readdirMeasured` now, and a failed listing is the part's `read-failed` (the rule that a failed reader is that part's
+  unmeasured, never a filled part).
+
+Red first (`overlord-board.test.ts`, the describe "the capacity part reads the cap in force"), against the code at 510db1df5d:
+
+| Case | Before | After |
+|---|---|---|
+| `boardPortsOf` answers the derived cap for an automatic mode, the stored one for an override, no reader without a store | red (no `capNow`) | green |
+| the gatherer's capacity is `capNow`'s cap, once, and the stored number is never asked; a throwing reader is `threw` | red | green |
+| a registry listing that cannot be read is the switches part's `read-failed` | red (a measured row of `unmeasurable`) | green |
+
+Both guards are green on the fix, and so are the board's suites, the wiring suite, the rings and the server typecheck.
 
 ## What a merge arms
 
