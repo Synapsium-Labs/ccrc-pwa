@@ -228,6 +228,30 @@ describe('every DOOR_TOOLS row, through the real ccrc-api, reaches its route', (
     }
   });
 
+  it('sequence: GET /api/overlord/sequence with the cursor\'s two keys, then the pane\'s pair, in the query, no body', async () => {
+    const r = await door('sequence', { after: 1200, limit: 50 });
+    expect(r.status, r.stderr).toBe(0);
+    const s = arrived('overlord.sequence');
+    expect(q(s.url)).toEqual({ after: '1200', limit: '50', ...PAIR });
+    expect(s.body).toBe('');
+    seen = [];
+    expect((await door('sequence', {})).status).toBe(0);
+    expect(q(arrived('overlord.sequence').url)).toEqual(PAIR);
+    seen = [];
+    expect((await door('sequence', { after: 0 })).status).toBe(0);
+    expect(q(arrived('overlord.sequence').url)).toEqual({ after: '0', ...PAIR });
+  });
+
+  it('sequence refuses a cursor or limit outside its bounds before anything runs', () => {
+    for (const after of [-1, 1.5, '7', null, Number.MAX_SAFE_INTEGER + 1, 1e21]) {
+      expect(() => row('sequence').argv({ after }, ID), `after ${String(after)}`).toThrow('after is a non-negative integer');
+    }
+    for (const limit of [0, -1, 501, 1.5, '5', null]) {
+      expect(() => row('sequence').argv({ limit }, ID), `limit ${String(limit)}`).toThrow('limit is an integer from 1 to 500');
+    }
+    expect(seen).toEqual([]);
+  });
+
   it('read: with no row marked a reader, every input is refused by the row\'s own argv builder, so nothing is run or sent', () => {
     for (const input of [{ door: 'card' }, { door: 'note_list', args: {} }, { door: 'messages' }, {}, { door: 5 }]) {
       expect(() => row('read').argv(input, ID), JSON.stringify(input)).toThrow(/no door is readable yet|door is the name/);
@@ -236,7 +260,7 @@ describe('every DOOR_TOOLS row, through the real ccrc-api, reaches its route', (
   });
 
   it('covers every row of the table', () => {
-    const covered = ['card', 'probe', 'probe_answer', 'note_add', 'note_close', 'note_list', 'note_handover', 'timer_set', 'timer_list', 'timer_cancel', 'inbox', 'messages', 'acknowledge', 'link_team', 'read'];
+    const covered = ['card', 'probe', 'probe_answer', 'note_add', 'note_close', 'note_list', 'note_handover', 'timer_set', 'timer_list', 'timer_cancel', 'inbox', 'messages', 'acknowledge', 'sequence', 'link_team', 'read'];
     expect(ROWS.map((r) => r.name)).toEqual(covered);
   });
 });

@@ -300,6 +300,8 @@ describe('the closed route table', () => {
     [['overlord', 'acknowledge', '12'], 'POST', '/api/overlord/messages/12/acknowledge'],
     // The Overlord's history read (Overlord W1, PR B1): parsed whole by `parse_overlord_history`, the pane's pair last in the body it builds.
     [['overlord', 'history', 'search', '--all', 'deploy'], 'POST', '/api/overlord/history'],
+    // The Overlord's cursor read of the sequence (Overlord W1, sequence C): the pane's pair in the query, after the cursor's keys.
+    [['overlord', 'sequence', '--after', '7'], 'GET', '/api/overlord/sequence'],
   ];
 
   it.each(ROWS)('%s -> %s %s', async (args, method, url, family) => {
@@ -366,8 +368,9 @@ describe('the closed route table', () => {
     // ninety-five since `linking.confirm` (D-8809); ninety-eight since `quiz.confirm`, `quiz.live` and `quiz.status` (run 3212, the unattended quiz).
     // One hundred and one since `overlord.inbox`, `overlord.messages` and `overlord.acknowledge` (Overlord W1, the inbox piece).
     // One hundred and two since `overlord.history` (Overlord W1, PR B1, the history door).
-    // One hundred and three since `testbox.frames` (Desktop polish wave 187, the box frames read).
-    expect(keys).toHaveLength(103);
+    // One hundred and three since `overlord.sequence` (Overlord W1, sequence C, the cursor read).
+    // One hundred and four since `testbox.frames` (Desktop polish wave 187, the box frames read).
+    expect(keys).toHaveLength(104);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -563,6 +566,7 @@ describe('the four claimant rows send the question door family, and refuse local
       ['note', 'list', 'lane-a-project-a'], ['note', 'handover', 'lane-a-project-a', '--json', '-'],
       ['timer', 'set', '2h', 'check the checks'], ['timer', 'list'], ['timer', 'cancel', '12'],
       ['overlord', 'inbox'], ['overlord', 'messages', '12'], ['overlord', 'acknowledge', '12'], ['overlord', 'history', 'search', '--all', 'deploy'],
+      ['overlord', 'sequence', '--after', '7', '--limit', '50'],
       ['sessions', 'probe', 'lane-a-project-a'], ['probe', 'answer', '--json', '-'],
       ['programme', 'remaining', 'prog-a', '--json', '-'],
       ['quiz', 'record', '--json', '-'], ['quiz', 'confirm', '12', '--json', '-'], ['quiz', 'live', '--json', '-'], ['quiz', 'status', '--json', '-'],
@@ -2322,6 +2326,55 @@ describe('the Overlord inbox rows fill identity from the pane and send nothing e
       const r = await run(a);
       expect(r.status, a.join(' ')).not.toBe(0);
     }
+    expect(seen).toEqual([]);
+  });
+});
+
+describe('the Overlord sequence row: the cursor\'s two integers, then the pane\'s pair (Overlord W1, sequence C)', () => {
+  const pane = { TMUX_PANE: '%7' };
+  const errorOf = (r: Run): string => (JSON.parse(r.stdout) as { error: string }).error;
+
+  it('the row: a GET with no id, taking after and limit', () => {
+    const r = clientRoutes().find((x) => x.key === 'overlord.sequence')!;
+    expect([r.method, r.path, r.needsId, r.query]).toEqual(['GET', '/api/overlord/sequence', false, ['after', 'limit']]);
+  });
+
+  it.each([
+    [['overlord', 'sequence'], '/api/overlord/sequence?byId=demo-ws&byUuid=uuid-7'],
+    [['overlord', 'sequence', '--after', '0'], '/api/overlord/sequence?after=0&byId=demo-ws&byUuid=uuid-7'],
+    [['overlord', 'sequence', '--after', '1200', '--limit', '50'], '/api/overlord/sequence?after=1200&limit=50&byId=demo-ws&byUuid=uuid-7'],
+    [['overlord', 'sequence', '--limit', '500', '--after', '9'], '/api/overlord/sequence?limit=500&after=9&byId=demo-ws&byUuid=uuid-7'],
+  ])('%j: GET with the cursor keys, then the pane\'s pair, the token off argv, no body', async (args, url) => {
+    plantPane('demo-ws', 'uuid-7');
+    const r = await run(args, undefined, pane);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(seen).toHaveLength(1);
+    expect([seen[0]!.method, seen[0]!.url, seen[0]!.auth, seen[0]!.body]).toEqual(['GET', url, TOKEN, '']);
+  });
+
+  it('a cursor or limit that is not a canonical non-negative integer is refused bad-query, unsent', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    for (const [k, v] of [['after', '-1'], ['after', '01'], ['after', 'x'], ['limit', '1_0'], ['limit', 'all'], ['after', '12345678901234567']]) {
+      const r = await run(['overlord', 'sequence', `--${k}`, v!], undefined, pane);
+      expect([r.status, errorOf(r)], `${k} ${v}`).toEqual([2, 'bad-query']);
+    }
+    expect(seen).toEqual([]);
+  });
+
+  it('an undeclared flag, a typed identity, an id or a body is refused, unsent', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    for (const a of [['overlord', 'sequence', '--cursor', '1'], ['overlord', 'sequence', '--byId', 'x'], ['overlord', 'sequence', '--byUuid', 'x']]) {
+      const r = await run(a, undefined, pane);
+      expect([r.status, errorOf(r)], a.join(' ')).toEqual([2, 'unknown-query']);
+    }
+    expect(errorOf(await run(['overlord', 'sequence', '12'], undefined, pane))).toBe('unexpected-id');
+    expect(errorOf(await run(['overlord', 'sequence', '--after'], undefined, pane))).toBe('bad-args');
+    expect(seen).toEqual([]);
+  });
+
+  it('a pane with no identity is refused, nothing sent', async () => {
+    const r = await run(['overlord', 'sequence', '--after', '3']);
+    expect(r.status).not.toBe(0);
     expect(seen).toEqual([]);
   });
 });
