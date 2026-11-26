@@ -80,15 +80,20 @@ export const LANDING_PAUSE_BY = { operator: 'operatorPaused', 'main-red': 'mainR
 export type LandingPauseBy = keyof typeof LANDING_PAUSE_BY;
 export const LANDING_PAUSE_BYS = Object.keys(LANDING_PAUSE_BY) as LandingPauseBy[];
 
+/** Why a pinned entry waits (wave 5j, D-9047): a direct `after` edge to an entry the operator withdrew. Each target is
+ *  named by its entry id and its PR, `on` sorted by entry id ascending. Absent from an older server. */
+export interface LandingWait { entryId: number; reason: 'withdrawn'; on: { entryId: number; pr: number }[] }
+
 /** The decider's answer (`coord/landingLine.ts#landingOrder`). `order` is every `pinned` entry in the order they may
  *  land, a blocked remainder last. Not paused: `head` is the entry that may land next, or `null` when the line is
- *  empty or every entry waits on an `ejected` or `unknown` target or on a cycle. Paused: `by` names the flags, and
+ *  empty or every entry waits on an `ejected`, `unknown` or `withdrawn` target or on a cycle. `waits` (wave 5j, additive,
+ *  present only when non-empty) lists each pinned entry held behind a withdrawn target. Paused: `by` names the flags, and
  *  there is no head. Amendment A (D-8625): with `mainRedHold` alone, a selected head that has `fixesMain` is NOT paused,
  *  so `mainRedHold: true` can sit beside `paused: false` and a fixesMain head; an ordinary head, an `operatorPaused`
  *  line and a recovery hold are unchanged. */
 export type LandingOrder =
-  | { paused: false; order: LandingEntry[]; head: LandingEntry | null; held?: LandingHold }
-  | { paused: true; by: LandingPauseBy[]; order: LandingEntry[]; held?: LandingHold };
+  | { paused: false; order: LandingEntry[]; head: LandingEntry | null; held?: LandingHold; waits?: LandingWait[] }
+  | { paused: true; by: LandingPauseBy[]; order: LandingEntry[]; held?: LandingHold; waits?: LandingWait[] };
 /** Why the line is held by recovery (5f): subjects of the authority journal whose projection or association is not
  *  measured. Not a pause: neither flag is touched. */
 export interface LandingHold { reason: 'landing-recovery-unresolved'; subjectIds: number[] }
@@ -137,12 +142,19 @@ export interface LandingCreationClaim {
 export interface LandingAuthority {
   afterIds: number[]; fixesMain: boolean; setBy: string; seq: number;
 }
-export type LandingJournalRecord = {
-  v: 1; seq: number; at: number; setBy: string; subject: LandingSubjectRef;
-} & (
+interface LandingJournalHead { v: 1; seq: number; at: number; setBy: string }
+/** A record about one entry. `withdraw` (wave 5j, D-9045) is the operator's withdrawal: `setBy` is `'operator'` and
+ *  `actor` is the text the device actor owner records (`flag-off` while sign-in is dark). */
+export type LandingJournalSubjectRecord = LandingJournalHead & { subject: LandingSubjectRef } & (
   | { kind: 'entry'; claim: { pinnedSha: string; handoffCommit: string } }
   | { kind: 'order'; after: LandingSubjectRef[]; fixesMain: boolean }
+  | { kind: 'withdraw'; actor: string }
 );
+/** The operator's pause or resume of one project's line (wave 5j, D-9045): it names a project and no subject. */
+export type LandingJournalPauseRecord = LandingJournalHead & {
+  kind: 'pause'; project: string; paused: boolean; actor: string;
+};
+export type LandingJournalRecord = LandingJournalSubjectRecord | LandingJournalPauseRecord;
 export type LandingJournalInvalidReason =
   | 'empty' | 'blank' | 'torn' | 'json' | 'version' | 'kind'
   | 'fields' | 'sequence' | 'identity';
@@ -201,12 +213,25 @@ export type LandingMutationCode =
   | 'landing-after-missing' | 'landing-after-cross-project'
   | 'landing-cycle' | 'landing-dependencies-unreadable'
   | 'landing-recovery-unresolved' | 'landing-identity-conflict'
-  | 'landing-id-overflow' | 'landing-sequence-overflow';
+  | 'landing-id-overflow' | 'landing-sequence-overflow'
+  // The operator's doors (wave 5j-b, D-9049): a terminal entry, a stale pin time (the compare-and-set), a project the line
+  // has never seen, and a built record the journal's own parser refuses (the parse before the append).
+  | 'landing-entry-terminal' | 'landing-entry-moved' | 'landing-project-unknown' | 'landing-record-unparseable';
 /** The runtime list of `LandingMutationCode`; `shared/refusal.ts#LANDING_REFUSAL_STATUS` maps each to its status. */
 export const LANDING_MUTATION_CODE_MAP: Record<LandingMutationCode, true> = {
   'landing-entry-exists': true, 'landing-entry-missing': true, 'landing-after-missing': true,
   'landing-after-cross-project': true, 'landing-cycle': true, 'landing-dependencies-unreadable': true,
   'landing-recovery-unresolved': true, 'landing-identity-conflict': true, 'landing-id-overflow': true,
-  'landing-sequence-overflow': true,
+  'landing-sequence-overflow': true, 'landing-entry-terminal': true, 'landing-entry-moved': true,
+  'landing-project-unknown': true, 'landing-record-unparseable': true,
 };
 export const LANDING_MUTATION_CODES = Object.keys(LANDING_MUTATION_CODE_MAP) as LandingMutationCode[];
+
+/** What a withdrawal did about one notice (wave 5j-b, D-9050): queued to a session, nobody to tell (`none`, with its
+ *  reason word), or a dependant whose own association does not read (`unreadable`, only on a `landing-held` outcome:
+ *  the withdrawn entry's own unreadable association refuses the withdrawal instead). */
+export type LandingNoticeOutcome = { word: 'landing-withdrawn' | 'landing-held'; entryId: number } & (
+  | { kind: 'queued'; toId: string; mailId: number; deliveryId: number }
+  | { kind: 'none'; reason: 'unclaimed' | 'unrecorded' }
+  | { kind: 'unreadable' }
+);

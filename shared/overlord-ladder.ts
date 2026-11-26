@@ -70,6 +70,11 @@ export const LADDER_CAUSE_MAP = {
     kind: 'condition', effect: { kind: 'cap', cap: 'advise' }, notice: 'none',
     spec: '`server-isolation` is `shared-user` or `unmeasured` (Table 7.5a, §7.4)',
   },
+  // Serviceability PR B (plan w1-serviceability.md Task 7): an unmeasured line caps by this table's rule (ruled F3).
+  'load-past-95': {
+    kind: 'condition', effect: { kind: 'cap', cap: 'chat' }, notice: 'none',
+    spec: 'the Overlord\'s accounts past the 95% load line (Table 7.5a, §6.8)',
+  },
   'unwitnessed-third': {
     kind: 'latch', effect: { kind: 'cap', cap: 'advise' }, notice: 'push',
     spec: 'the third unwitnessed write in a day (Table 7.5a)',
@@ -83,6 +88,19 @@ export const LADDER_CAUSE_MAP = {
   'launch-profile-unengaged': {
     kind: 'condition', effect: { kind: 'read-by', reader: 'launch-profile-unmet' }, notice: 'none',
     spec: 'the launch profile is not engaged (Table 7.5a, §3.6 H4)',
+  },
+  'restore-detected': {
+    kind: 'latch', effect: { kind: 'cap', cap: 'chat' }, notice: 'none',
+    spec: 'a restore detected; the operator clears it once the restore is confirmed (Table 7.5a, §7.6)',
+  },
+  // The invariant monitor (sequence plan Task 6): raised as the server's `invariants` lane, once per new live finding's episode.
+  'invariant-violation': {
+    kind: 'latch', effect: { kind: 'cap', cap: 'advise' }, notice: 'item',
+    spec: 'an invariant-monitor violation (Table 7.5a, §10.4)',
+  },
+  'no-witness-since-boot': {
+    kind: 'condition', effect: { kind: 'cap', cap: 'advise' }, notice: 'none',
+    spec: "since boot, no witness off the server's volume has answered (Table 7.5a, §7.6)",
   },
 } as const satisfies Readonly<Record<string, LadderCauseRow>>;
 export type LadderCause = keyof typeof LADDER_CAUSE_MAP;

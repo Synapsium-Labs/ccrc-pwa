@@ -80,6 +80,9 @@ describe('docs L0 single definitions (docs reader W1a, row 48)', () => {
       // X2 P1: the listed modified time. A plain decimal run that unrelated ccd code already spells, so it is pinned by
       // DEF alone, as the commit and fingerprint bodies are; docs-parity.test.ts holds ccd's copy to it from P1.2.
       'DOCS_MTIME_NS_RE_BODY',
+      // X2 P2.3: the outside-folder label. Pinned by DEF and by its body's text (below): no other file of the four roots
+      // may spell the grammar, since the server's L1 and the PWA both read `DOCS_FOLDER_LABEL_RE`.
+      'DOCS_FOLDER_LABEL_RE_BODY',
     ];
     const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     /** [what, fingerprint, the files that may hold it, a planted copy it must see, a near miss it must not]. */
@@ -92,6 +95,8 @@ describe('docs L0 single definitions (docs reader W1a, row 48)', () => {
         "new RegExp('^(?:refs/heads/|refs/remotes/origin/)')", "s.startsWith('refs/heads/')"],
       ['max-bytes', new RegExp(esc('[1-9][0-9]{0,7}')), ['shared/docs.ts'],
         'const N = /^[1-9][0-9]{0,7}$/;', 'const N = /^[0-9]+$/;'],
+      ['folder label', new RegExp(esc('[a-z0-9][a-z0-9-]{0,31}')), ['shared/docs.ts'],
+        'const L = /^[a-z0-9][a-z0-9-]{0,31}$/;', 'const L = /^[a-z0-9-]+$/;'],
       ['rel path', new RegExp(esc('(?!/)(?!.*/$)(?!.*//)')), ['shared/docs.ts'],
         'const X = String.raw`(?!/)(?!.*/$)(?!.*//)`;', "const X = '(?!/)';"],
       ['section map', /(['"`])docs\/product-design\1/, ['shared/docs.ts'],
@@ -462,4 +467,39 @@ describe('logLineRedactors() equals [ccd/ccrc#_upd_redact], may only shrink (C5i
   it('inlineUserinfoStrips() is empty: doctor\'s release-base row goes through _upd_url_origin (D-7918)', () => {
     expect(c5iInlineUserinfoStrips().map((s) => s.name)).toEqual([]);
   });
+});
+
+// X2 P4.4, M11.23: no tracker address ships in these three source roots or the pinned reader's defaults.
+// Hosted server jobs install the PWA dependency tree too (`.github/actions/server-deps/action.yml`).
+import { EMPTY_DOCS_SETTINGS } from '../../../shared/docsTracker.js';
+import { containsTrackerAddress, trackerAddressFiles } from './docsTrackerHostScan.js';
+
+describe('Docs tracker defaults (X2 P4.4)', () => {
+  it('CONTROL: finds a hard-coded issue URL and a template; permits an unrelated link', () => {
+    expect(containsTrackerAddress('const link = "https://tracker-fixture.invalid/browse/EXAMPLE-1";')).toBe(true);
+    expect(containsTrackerAddress('const template = "https://tracker-fixture.invalid/path/{1}";')).toBe(true);
+    expect(containsTrackerAddress('const web = "https://project-fixture.invalid/docs/readme";')).toBe(false);
+  });
+
+  it('no tracker host in pwa/src, server/src or shared, and no default rule', () => {
+    expect(EMPTY_DOCS_SETTINGS).toEqual({ rules: [], defaultBranches: {} });
+    expect(trackerAddressFiles(ccrcRoot, ['pwa/src', 'server/src', 'shared'])).toEqual([]);
+  });
+
+  const pwaRoot = path.join(ccrcRoot, 'pwa');
+  // A server-only local install can run the shipped-source guard above. CI must also prove the installed bytes.
+  it.skipIf(!process.env.CI && statSync(path.join(pwaRoot, 'node_modules'), { throwIfNoEntry: false }) === undefined)(
+    'no tracker host ships in the pinned reader library defaults', () => {
+      const lock = JSON.parse(readFileSync(path.join(pwaRoot, 'package-lock.json'), 'utf8')) as { packages: Record<string, { version?: string }> };
+      // The library rename is an independent pin wave. Scan whichever single reader the lock actually pins.
+      const pins = Object.entries(lock.packages).filter(([name]) => /^node_modules\/@synapsium-labs\/(?:docserver|pinax-lib)$/.test(name));
+      expect(pins.map(([name]) => name), 'exactly one reader pin').toHaveLength(1);
+      const [name, pin] = pins[0]!;
+      const reader = path.join(pwaRoot, name);
+      const installed = JSON.parse(readFileSync(path.join(reader, 'package.json'), 'utf8')) as { version?: string };
+      expect(installed.version).toBeTypeOf('string');
+      expect(installed.version).toBe(pin.version);
+      expect(trackerAddressFiles(reader, ['dist', 'assets'], (f) => f.startsWith('dist/conformance/'))).toEqual([]);
+    },
+  );
 });

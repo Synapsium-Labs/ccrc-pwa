@@ -16,7 +16,7 @@ import { isRecordedActor } from '../auth/attributionIdentity.js';
 import type { RecordedActor } from '../auth/callerIdentity.js';
 import { tx } from '../coord/tx.js';
 import {
-  MESSAGE_STATES, READ_OUTCOME_MAX_CHARS, READ_SCOPE_MAX_CHARS, isGenerationRead, isMessageState, isReadCaller, isReadDoor,
+  MESSAGE_STATES, READ_DOORS, READ_OUTCOME_MAX_CHARS, READ_SCOPE_MAX_CHARS, isGenerationRead, isMessageState, isReadCaller, isReadDoor,
   isReadTurnState, isSettledBy,
   type MessageActor, type MessageEvent, type MessageState, type OperatorMessageRow, type ReadCaller, type ReadDoor, type ReadLine,
 } from '../../../shared/operatorMessages.js';
@@ -48,7 +48,9 @@ export type PrivacyIssue =
 /** The privacy journal as the store uses it: an issuer of message ids that appends the issued record and answers the id
  *  from the same verified read, or the refusal its open read. Task 3 binds the real journal; a test hands a double. */
 export type PrivacyIssuer =
-  | { readonly kind: 'ready'; issue(storeHighest: number | null, at: number): PrivacyIssue; head?(): StoreRead<PrivacyJournalHead> }
+  | { readonly kind: 'ready'; issue(storeHighest: number | null, at: number): PrivacyIssue; head?(): StoreRead<PrivacyJournalHead>;
+    /** The digest of the record at a sequence (`null`: none there), for the witness's heads check. */
+    digestAt?(sequence: number): StoreRead<string | null> }
   | { readonly kind: 'refused'; readonly code: string; readonly detail: string };
 /** The privacy journal's head, for authority journal B's witness epoch: the last record's digest and sequence, and the
  *  highest message id the journal names. `empty` when it holds no record. */
@@ -127,8 +129,13 @@ class StoreStop extends Error {
   constructor(readonly answer: { error: StoreWriteError; detail: string }) { super(answer.detail); }
 }
 
+/** An independently held lower bound on id issuance; absent or unmeasured contributes no id. */
+export interface WitnessedMessageIds {
+  witnessHighestIds(): { message: number | null } | 'unmeasured';
+}
+
 export class OperatorModelStore {
-  constructor(private readonly db: DatabaseSync, private readonly privacy: PrivacyIssuer) {}
+  constructor(private readonly db: DatabaseSync, private readonly privacy: PrivacyIssuer, private readonly witnessedIds?: WitnessedMessageIds) {}
 
   /** Records one message: its text capped, its id issued by the privacy journal inside this transaction, before the
    *  row. A send key this session already recorded answers that record (`replay`), and writes nothing; the same key with
@@ -155,7 +162,10 @@ export class OperatorModelStore {
         }
         if (!this.db.isTransaction) throw new Error('OperatorModelStore: the privacy record must be appended inside the insert\'s transaction');
         const highest = (this.db.prepare('SELECT max(id) AS m FROM operator_messages').get() as { m: number | null }).m;
-        const issued = this.privacy.issue(highest, m.at);
+        const witnessed = this.witnessedIds?.witnessHighestIds();
+        const floor = witnessed === undefined || witnessed === 'unmeasured' || witnessed.message === null
+          ? highest : Math.max(highest ?? 0, witnessed.message);
+        const issued = this.privacy.issue(floor, m.at);
         if (!issued.ok) throw new StoreStop({ error: issued.error, detail: issued.detail });
         const state: MessageState = m.mark ? 'settled' : 'recorded';
         this.db.prepare(
@@ -173,9 +183,10 @@ export class OperatorModelStore {
 
   /** The one writer of a message's state and stamps: asks `messageMove`, and writes the next state, the event's stamp
    *  when it is null, and the settlement pair, in one statement. A refused move changes nothing and says why; an absent
-   *  id is refused. `changed` is false when the move was accepted and wrote no new value. */
+   *  id is refused. `changed` is false when the move was accepted and wrote no new value; `from` is the state it moved from, so a
+   *  caller can tell a moved state word from a stamp (the sequence's message line, `messageLine.ts`). */
   moveMessage(id: number, event: MessageEvent, actor: MessageActor, at: number):
-    StoreWrite<{ readonly changed: boolean; readonly state: MessageState }> {
+    StoreWrite<{ readonly changed: boolean; readonly state: MessageState; readonly from: MessageState | 'unknown' }> {
     if (!isCount(at)) return { ok: false, error: 'refused', detail: 'at: not a non-negative safe integer' };
     if (!this.db.isOpen) return { ok: false, error: 'not-open', detail: 'the private store is not open' };
     try {
@@ -199,7 +210,7 @@ export class OperatorModelStore {
             + 'settledAt = ?, settledBy = ?, spentAt = ? WHERE id = ?')
             .run(v.next, next.queuedAt, next.deliveredAt, next.pickedUpAt, next.settledAt, next.settledBy, next.spentAt, id);
         }
-        return { ok: true as const, value: { changed, state: v.next } };
+        return { ok: true as const, value: { changed, state: v.next, from: row.state } };
       });
     } catch (err) {
       if (err instanceof StoreStop) return { ok: false, ...err.answer };
@@ -235,6 +246,19 @@ export class OperatorModelStore {
     return this.read(() => (this.db.prepare(`SELECT count(*) AS c FROM read_ledger WHERE caller IN (${callers.map(() => '?').join(', ')}) AND at >= ? AND at <= ? `
       + 'AND door <> ? AND outcome = ?')
       .get(...callers, from, to, 'inbox', READ_SERVED_OUTCOME) as { c: number }).c);
+  }
+
+  /** The newest SERVED line of this generation after `sinceMs` by any caller but the console, any door, or `none` (the readiness
+   *  plan, Task 2, question 7: the Overlord's proof of the current generation; `sinceMs` is the generation's start, so each door's
+   *  range reads `read_ledger_door_at` and never scans the ledger). An empty inbox read writes a served line (`rows`, count 0),
+   *  so it counts. Reads no text column. */
+  lastServedReadAt(generation: number, sinceMs: number): StoreRead<number | 'none'> {
+    if (!isCount(generation) || !isCount(sinceMs)) return { kind: 'unmeasured', why: 'generation and sinceMs: non-negative safe integers' };
+    return this.read(() => {
+      const r = this.db.prepare(`SELECT max(at) AS at FROM read_ledger WHERE door IN (${READ_DOORS.map(() => '?').join(', ')}) AND at > ? `
+        + "AND generation = ? AND outcome = ? AND caller <> 'operator'").get(...READ_DOORS, sinceMs, generation, READ_SERVED_OUTCOME) as { at: number | null };
+      return r.at ?? 'none';
+    });
   }
 
   /** The read ceiling's counter (the inbox plan, Task 2): a door's served lines after `sinceMs` by any caller but the console,
@@ -387,6 +411,13 @@ export class OperatorModelStore {
     return this.privacy.head?.() ?? { kind: 'unmeasured', why: 'this issuer reads no head' };
   }
 
+  /** The digest of the privacy journal's record at `sequence`, `null` when none is there; `unmeasured` for a refused issuer, one
+   *  that reads no digest, or a journal that could not be read. */
+  privacyJournalDigestAt(sequence: number): StoreRead<string | null> {
+    if (this.privacy.kind === 'refused') return { kind: 'unmeasured', why: `${this.privacy.code}: ${this.privacy.detail}` };
+    return this.privacy.digestAt?.(sequence) ?? { kind: 'unmeasured', why: 'this issuer reads no digest' };
+  }
+
   private read<T>(fn: () => T): StoreRead<T> {
     if (!this.db.isOpen) return { kind: 'unmeasured', why: 'the private store is not open' };
     try {
@@ -498,6 +529,13 @@ export function privacyIssuerOf(file: ChainedJournalFile<PrivacyJournalEntry>): 
       const last = r.records[r.records.length - 1]!;
       return { kind: 'measured', value: { digest: last.digest, sequence: last.sequence, highestId: privacyHighestId(r.records) } };
     },
+    digestAt(sequence) {
+      const r = file.read();
+      if (r.kind === 'unmeasured') return { kind: 'unmeasured', why: r.why };
+      if (r.kind === 'malformed') return { kind: 'unmeasured', why: `${r.code}: ${r.detail}` };
+      if (r.kind === 'absent') return { kind: 'measured', value: null };
+      return { kind: 'measured', value: r.records.find((x) => x.sequence === sequence)?.digest ?? null };
+    },
   };
 }
 
@@ -511,7 +549,7 @@ export function privacyIssuerOf(file: ChainedJournalFile<PrivacyJournalEntry>): 
  *   - `refuse`: every record of a message answers `journal-unreadable`, and reads and the read ledger still work.
  * `at` is the composition root's clock reading, for the anchor's time; this module reads no clock.
  */
-export function openOperatorModelStore(dbPath: string, journalDir: string, at: number): OperatorModelOpen {
+export function openOperatorModelStore(dbPath: string, journalDir: string, at: number, witnessedIds?: WitnessedMessageIds): OperatorModelOpen {
   const db = openOperatorModelDb(dbPath);
   const file = chainedJournalFileAt(PRIVACY_JOURNAL_FORMAT, journalDir, PRIVACY_JOURNAL_BASENAME);
   const journalPath = path.join(journalDir, PRIVACY_JOURNAL_BASENAME);
@@ -529,7 +567,7 @@ export function openOperatorModelStore(dbPath: string, journalDir: string, at: n
   const seen = seenOf(first);
   const verdict = privacyCoherence(seen.kind === 'refused' ? { ...seen, detail: seen.detail + cutFailed } : seen, storeHighest);
   const done = (privacy: PrivacyOpenReport, issuer: PrivacyIssuer): OperatorModelOpen =>
-    ({ store: new OperatorModelStore(db, issuer), db, journalPath, healed, privacy });
+    ({ store: new OperatorModelStore(db, issuer, witnessedIds), db, journalPath, healed, privacy });
   if (verdict.verdict === 'refuse') {
     return done({ verdict: 'refuse', code: verdict.code, detail: verdict.detail }, { kind: 'refused', code: verdict.code, detail: verdict.detail });
   }

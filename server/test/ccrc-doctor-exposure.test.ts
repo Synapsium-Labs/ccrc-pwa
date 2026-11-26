@@ -2431,10 +2431,11 @@ describe('ccrc doctor: docs', () => {
     expect(r.stdout).not.toMatch(/^FAIL docs: /m);
   });
 
-  it('a ccd that lists both tokens PASSes', () => {
+  it('a ccd that lists every token PASSes', () => {
     const { n, k } = docsCounts(DOCS_INDEX_READY);
     const home = healthy('ccrc-doctor-docs-caps-both-');
-    plantDocsCcd(home, docsIndexStubScript(JSON.stringify(DOCS_INDEX_READY), ['docs-log-v1', 'docs-sections-v2']));
+    plantDocsCcd(home, docsIndexStubScript(JSON.stringify(DOCS_INDEX_READY),
+      ['docs-log-v1', 'docs-sections-v2', 'docs-range-v1', 'docs-folders-v1']));
     const r = runDoctor(home);
     expect(docsVerdict(r.stdout).line, r.stdout)
       .toBe(`PASS docs: ${n} projects under ccd's projects root, ${k} served by Docs`);
@@ -2443,13 +2444,13 @@ describe('ccrc doctor: docs', () => {
   it('a ccd without docs-log-v1 WARNs naming it, remedy ccrc update', () => {
     const { n, k } = docsCounts(DOCS_INDEX_READY);
     const home = healthy('ccrc-doctor-docs-caps-no-log-');
-    // CONTROL: docs-sections-v2 is listed, so only the missing word is named.
-    plantDocsCcd(home, docsIndexStubScript(JSON.stringify(DOCS_INDEX_READY), ['docs-sections-v2']));
+    // CONTROL: the other three words are listed, so only the missing word is named.
+    plantDocsCcd(home, docsIndexStubScript(JSON.stringify(DOCS_INDEX_READY), ['docs-sections-v2', 'docs-range-v1', 'docs-folders-v1']));
     const r = runDoctor(home);
     const v = docsVerdict(r.stdout);
     expect(v.line, r.stdout).toBe(
       `WARN docs: ${n} projects under ccd's projects root, ${k} served by Docs; this ccd does not list docs-log-v1, `
-      + 'so Docs here has no per-doc history or no vision and promise sections');
+      + 'so Docs here lacks per-doc history, the vision and promise sections, large-file reads or outside folders');
     expect(v.line).not.toContain('docs-sections-v2');
     expect(v.next).toBe('  remedy: ccrc update');
     expect(r.stdout).not.toMatch(/^FAIL docs: /m);
@@ -2458,13 +2459,14 @@ describe('ccrc doctor: docs', () => {
   it('a ccd whose caps hold only a longer word starting with docs-log-v1 still WARNs naming docs-log-v1', () => {
     const { n, k } = docsCounts(DOCS_INDEX_READY);
     const home = healthy('ccrc-doctor-docs-caps-longer-word-');
-    // docs-log-v10 starts with the wanted word and is not it; docs-sections-v2 is listed, so only docs-log-v1 is named.
-    plantDocsCcd(home, docsIndexStubScript(JSON.stringify(DOCS_INDEX_READY), ['docs-log-v10', 'docs-sections-v2']));
+    // docs-log-v10 starts with the wanted word and is not it; the other three are listed, so only docs-log-v1 is named.
+    plantDocsCcd(home, docsIndexStubScript(JSON.stringify(DOCS_INDEX_READY),
+      ['docs-log-v10', 'docs-sections-v2', 'docs-range-v1', 'docs-folders-v1']));
     const r = runDoctor(home);
     const v = docsVerdict(r.stdout);
     expect(v.line, r.stdout).toBe(
       `WARN docs: ${n} projects under ccd's projects root, ${k} served by Docs; this ccd does not list docs-log-v1, `
-      + 'so Docs here has no per-doc history or no vision and promise sections');
+      + 'so Docs here lacks per-doc history, the vision and promise sections, large-file reads or outside folders');
     expect(v.next).toBe('  remedy: ccrc update');
   });
 
@@ -2473,7 +2475,7 @@ describe('ccrc doctor: docs', () => {
     plantDocsCcd(home, `#!/bin/sh\ncase "$1" in\n  caps) exit 1 ;;\n  *) printf '%s\\n' '${JSON.stringify(DOCS_INDEX_READY)}' ;;\nesac\n`);
     const r = runDoctor(home);
     const v = docsVerdict(r.stdout);
-    expect(v.line, r.stdout).toMatch(/^WARN docs: .*; ccd caps did not answer, so whether this ccd lists docs-log-v1 docs-sections-v2 was not measured$/);
+    expect(v.line, r.stdout).toMatch(/^WARN docs: .*; ccd caps did not answer, so whether this ccd lists docs-log-v1 docs-sections-v2 docs-range-v1 docs-folders-v1 was not measured$/);
     expect(v.line).not.toContain('does not list');
     expect(v.next).toMatch(/^ {2}remedy: run \$HOME\/\.local\/bin\/ccd caps by hand to see why; /);
   });

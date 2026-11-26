@@ -12,7 +12,7 @@ import { responseOutcome, type SealRow } from '../src/responses.js';
 import type { ResponseStamp } from '../../shared/responses.js';
 import { CoordStore } from '../src/coord/store.js';
 import { itemBoundOf, type SenderDeps } from '../src/pushSender.js';
-import { OverlordRestoreState, preWitnessFacts } from '../src/coord/overlordRestoreState.js';
+import { OverlordRestoreState } from '../src/coord/overlordRestoreState.js';
 import { fakeTime } from './fakeTime.js';
 import { GEN1, NOW, S1, confirm, designateLive, restoreRigHooks, rig } from './overlordRestoreRig.js';
 
@@ -80,7 +80,7 @@ describe('restoreGeneration (Task 9)', () => {
       readRows: (db: Parameters<typeof r.journal.readRows>[0]) => r.journal.readRows(db),
       appendConfirmInTx: r.journal.appendConfirmInTx.bind(r.journal), healTornTail: r.journal.healTornTail.bind(r.journal),
     };
-    const state = new OverlordRestoreState({ db: r.db, journal, guard: r.guard, witness: preWitnessFacts(r.journal) });
+    const state = new OverlordRestoreState({ db: r.db, journal, guard: r.guard, witness: r.exchange });
     expect(r.guard.state()).toEqual({ kind: 'coherent' });
     expect(state.restoreGeneration()).toEqual({ kind: 'unmeasured', why: 'journal' });
   });

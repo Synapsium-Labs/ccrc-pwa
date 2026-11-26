@@ -100,6 +100,19 @@ export function raiseItem(
   return tx(db, () => raiseItemInTx(db, input, now, actor, reach));
 }
 
+/** `raiseItem`'s in-transaction form, for a caller that already holds the transaction (programme lifecycle W2: the end
+ *  proposal raises its item with its programme event in one transaction; the invariant monitor's finding writes its row in the
+ *  same one): `checkRaise` first, then the insert, so `operator_items` keeps its one writer behind three
+ *  checked entries. A refused input throws `RangeError` inside the caller's `tx()`, which rolls it back. Its settle is
+ *  `settleItemCheckedInTx`. */
+export function raiseItemCheckedInTx(
+  db: DatabaseSync, input: RaiseItemInput, now: number, actor: 'coordinator' | 'ccrc', reach?: ItemReach,
+): number {
+  if (!db.isTransaction) throw new Error('raiseItemCheckedInTx: no transaction is open');
+  checkRaise(input);
+  return raiseItemInTx(db, input, now, actor, reach);
+}
+
 /** The push outbox's write beside a raise (Overlord W1, `pushOutboxStore.ts#reachInTx`), handed in by `CoordStore` so this
  *  file imports no outbox code: called inside the raise's transaction, with the new id, only for an item the operator is
  *  shown at its raise (`operatorWasShown`, the hold's one rule); a held item's reach is the held drain's (I2). */
@@ -174,7 +187,7 @@ export function operatorWasShown(row: Pick<ItemRow, 'raisedAt' | 'heldUntil' | '
  *  writes the state, the timestamps and one event, or writes nothing and answers its word. THE ONLY WRITER of
  *  `operator_items.state`. `fields.answer` is kept on a tick; `fields.note` is kept on the row only for a return (the
  *  coordinator's note) and is recorded on the event for every act. */
-function moveItemInTx(
+export function moveItemInTx(
   db: DatabaseSync, id: number, act: ItemAct, actor: ItemActor, fields: { answer?: string | null; note?: string | null },
   now: number, ctx: { programmeHasOpenRun: boolean },
 ): ItemMoveResult {
@@ -326,6 +339,15 @@ export function settleEndRequestsInTx(db: DatabaseSync, runId: number, note: str
     if (res.ok) settled += 1;
   }
   return settled;
+}
+
+/** A server-raised item's cause cleared, so the item moves `settle` (ccrc, open or checking to done) with `note`, inside a
+ *  transaction the CALLER holds (the Overlord readiness lane stamps its record in the same one). The settle beside
+ *  `raiseItemCheckedInTx`: it throws when no transaction is open, and the move is `moveItemInTx`'s, the only writer of the
+ *  state, so a dismissed or done item answers its refusal and nothing is written. */
+export function settleItemCheckedInTx(db: DatabaseSync, id: number, note: string, now: number): ItemMoveResult {
+  if (!db.isTransaction) throw new Error('settleItemCheckedInTx: no transaction is open');
+  return moveItemInTx(db, id, 'settle', 'ccrc', { note }, now, { programmeHasOpenRun: true });
 }
 
 /** The mend for a death between the operator's act and its item (spec 2026-11-04 §10, "The act", step 3): the abandon committed

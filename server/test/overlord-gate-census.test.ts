@@ -9,7 +9,7 @@
 // its `insertCardRead` calls), and stops on `refused` the same way (review 2803 F3, N7). A new Overlord door that forgets the
 // call, names another row, goes on after a refusal or reads the store first turns this red.
 //
-// The scan reads every file an `overlord` row may name (the six files `overlord-doors-census.test.ts` lists) and refuses a row
+// The scan reads every file an `overlord` row may name (the seven files `overlord-doors-census.test.ts` lists) and refuses a row
 // naming any other (review 2803 F5). The runner call is told from the account gate's `deps.gate(req, reply, { … })` by its
 // third argument: a string literal is the runner's row key, an object literal is the account gate's, which is not scanned.
 //
@@ -18,7 +18,7 @@
 // (an identifier is refused, not followed), a gate call reached through a helper inside the handler (the call must be a
 // top-level `const g = await gate(…)` statement of the handler), and a store reached through a name other than `coord`
 // (every door reads the store through the `coord` local or `deps.coord`; a differently named alias would pass the
-// "before the store" arm), and a row naming a file outside the six (refused by the subset test, not followed). It reads literal `app.get|post|put|delete('<path>', …)` calls with the repo's one parser wrapper
+// "before the store" arm), and a row naming a file outside the seven (refused by the subset test, not followed). It reads literal `app.get|post|put|delete('<path>', …)` calls with the repo's one parser wrapper
 // (`scan/parse.ts`), as the other censuses do.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -34,8 +34,10 @@ const LEDGERS_ROUTES = 'server/src/coord/ledgersRoutes.ts';
 const NAME_LIST_ROUTES = 'server/src/operatorModel/nameListRoutes.ts';
 const LINKING_ROUTES = 'server/src/linking/routes.ts';
 const INBOX_ROUTES = 'server/src/coord/overlordInboxRoutes.ts';
-/** The files an `overlord` row may name: the same six `overlord-doors-census.test.ts` reads (D-8809 added the linking file, the inbox piece its own). */
-const SCANNED = [OVERLORD_ROUTES, CONTINUITY, LEDGERS_ROUTES, NAME_LIST_ROUTES, LINKING_ROUTES, INBOX_ROUTES] as const;
+const HISTORY_ROUTES = 'server/src/coord/overlordHistoryRoutes.ts';
+/** The files an `overlord` row may name: the same seven `overlord-doors-census.test.ts` reads (D-8809 added the linking file, the inbox
+ *  piece its own, the history door (W1, PR B1) its own). */
+const SCANNED = [OVERLORD_ROUTES, CONTINUITY, LEDGERS_ROUTES, NAME_LIST_ROUTES, LINKING_ROUTES, INBOX_ROUTES, HISTORY_ROUTES] as const;
 const sourceOf = (rel: string): string => readFileSync(path.join(REPO, rel), 'utf8');
 const VERBS = new Set(['get', 'post', 'put', 'delete']);
 
@@ -198,10 +200,11 @@ function mutate(text: string, from: RegExp, to: string): string {
 }
 
 describe('every overlord door asks the one gate, with its own row, before the store', () => {
-  it('the scan finds the six start-door registrations, the card one carrying two rows (a zero would make the rest vacuous)', () => {
+  it('the scan finds the six start-door registrations and the three timer doors, the card one carrying two rows (a zero would make the rest vacuous)', () => {
     expect([...rowsOfContinuity.keys()].sort()).toEqual([
-      'GET /api/sessions/:id/card', 'GET /api/sessions/:id/notes', 'GET /api/sessions/:id/probe',
-      'POST /api/sessions/:id/handover', 'POST /api/sessions/:id/notes', 'POST /api/sessions/:id/probe',
+      'GET /api/sessions/:id/card', 'GET /api/sessions/:id/notes', 'GET /api/sessions/:id/probe', 'GET /api/timers',
+      'POST /api/sessions/:id/handover', 'POST /api/sessions/:id/notes', 'POST /api/sessions/:id/probe', 'POST /api/timers',
+      'POST /api/timers/:id/cancel',
     ]);
     expect(rowsOfContinuity.get('GET /api/sessions/:id/card')).toEqual(['card', 'card-record']);
     const regs = registrationsIn(CONTINUITY_TEXT, CONTINUITY).map((r) => r.reg);
@@ -224,7 +227,7 @@ describe('every overlord door asks the one gate, with its own row, before the st
     expect(record[0]!.getStart()).toBeLessThan(calls[0]!.getStart());
   });
 
-  it('every overlord row names a scanned file, and the scan covers the six files a row may name (F5)', () => {
+  it('every overlord row names a scanned file, and the scan covers the seven files a row may name (F5)', () => {
     const files = new Set(Object.values(OVERLORD_DOORS).filter((r) => r.group === 'overlord').map((r) => r.file));
     expect(files.size).toBeGreaterThan(0);
     for (const f of files) expect(SCANNED as readonly string[], f).toContain(f);
@@ -264,6 +267,17 @@ describe('every overlord door asks the one gate, with its own row, before the st
       ['GET /api/overlord/inbox', ['inbox']], ['GET /api/overlord/messages/:id', ['messages']], ['POST /api/overlord/messages/:id/acknowledge', ['acknowledge']],
     ]);
     expect(violationsOf(sourceOf(INBOX_ROUTES), INBOX_ROUTES)).toEqual([]);
+  });
+
+  it('the history file registers the history door, which holds the form (a zero would make its loop case vacuous)', () => {
+    const rows = overlordRowsOf(HISTORY_ROUTES);
+    expect([...rows.entries()]).toEqual([['POST /api/overlord/history', ['history']]]);
+    expect(violationsOf(sourceOf(HISTORY_ROUTES), HISTORY_ROUTES)).toEqual([]);
+  });
+
+  it('CONTROL: a history door that skips the gate call is found', () => {
+    const t = mutate(sourceOf(HISTORY_ROUTES), /const g = await deps\.gate\(req, reply, 'history'[^\n]*\n\s*if \(g\.kind === 'refused'\) return reply;\n/, '');
+    expect(violationsOf(t, HISTORY_ROUTES).join('\n')).toMatch(/history: the handler never calls gate\(/);
   });
 
   it('the whole continuity file is clean, over every overlord row', () => {

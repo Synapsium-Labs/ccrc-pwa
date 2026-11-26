@@ -14,6 +14,7 @@ import {
   REFUSAL_DOORS, REFUSAL_REASONS, refusalDoors, refusalRoute, refusedCloseDoors, type BranchFacts, type DoorFacts, type RefusalReason,
 } from '../src/coord/runClose.js';
 import { untoldPass } from '../src/coord/untold.js';
+import { closePlan } from '../src/coord/planStore.js';
 import { ASK_GRACE_MS } from '../src/askwindow.js';
 import { RUNS_EXPIRE_NEVER_STARTED_MARKER } from '../../shared/switches.js';
 import { COORDINATOR_PAUSE_MARKER } from '../src/coord/rundefs.js';
@@ -378,7 +379,8 @@ describe('the lane: a gone coordinator gets the item at once, raised by ccrc', (
     const doors = two.r.items().filter((i) => isCloseRefusedAction(i.action)).map((i) => (i.action as unknown as { doors: string[] }).doors);
     for (const d of doors) expect(d).not.toContain('end-programme');
     expect(doors.length).toBeGreaterThan(0);
-    const closed = await undelivered(FORGOTTEN, (r) => { r.coord.db.prepare("UPDATE programs SET planEnd = 'done' WHERE slug = 'programme-a'").run(); });
+    // Programme lifecycle W1 (D-8983): the plan's close is the programme's one end fact, written by its one writer.
+    const closed = await undelivered(FORGOTTEN, (r) => { closePlan(r.coord.db, 'programme-a', 'done', null, T0); });
     expect(closed.r.items().map((i) => (i.action as unknown as { doors: string[] }).doors)).toEqual([['close-run', 'end-programme']]);
   });
 

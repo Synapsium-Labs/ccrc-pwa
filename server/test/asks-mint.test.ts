@@ -331,9 +331,11 @@ describe('the ask mint point (D-2172, D-2173)', () => {
       wave: 1, waveOf: null, claimedBy: 'coord-1', coordProject: 'ccrc-pwa',
     }) as { id: number };
     f.coord.setSession(runA.id, 'cc-a'); f.child('cc-a', runA.id);
+    // R11 (programme lifecycle W1): one coordinator owns one live programme, so coord-1's
+    // second child works wave 2 of the same programme rather than the first run of another.
     const runB = f.coord.openRun({
-      program: 'prog-b', title: 'B', project: 'ccrc-pwa',
-      wave: 1, waveOf: null, claimedBy: 'coord-1', coordProject: 'ccrc-pwa',
+      program: 'prog-a', title: 'A', project: 'ccrc-pwa',
+      wave: 2, waveOf: null, claimedBy: 'coord-1', coordProject: 'ccrc-pwa',
     }) as { id: number };
     f.coord.setSession(runB.id, 'cc-b'); f.child('cc-b', runB.id);
 

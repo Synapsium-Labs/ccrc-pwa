@@ -3,8 +3,8 @@
 // model (`captureStub.ts`) act on it.
 //
 // - THE PATHS of one capture, all under `<CCRC_TESTBOX_ROOT>/captures/`: the build's bytes in `builds/<version>` (placed by
-//   the admin lane's copy, spec §2.2), and per capture a scratch directory with its home, config directory, tmux
-//   directory, temporary directory, work folder and recording. The build runs from the builds store directly; nothing is placed in the home.
+//   the admin lane's copy, spec §2.2), and per capture a scratch directory with its home, config directory, temporary
+//   directory, work folder and recording; its tmux directory alone sits under the service's temporary directory. The build runs from the builds store directly; nothing is placed in the home.
 // - THE SEEDED CONFIG: onboarding done, the work folder trusted, every hook ccrc installs and the statusline pointed at
 //   the recorder.
 // - THE ENVIRONMENT, built from empty (the probe desk's rule): the stand-in model's address and a placeholder token, the
@@ -13,29 +13,30 @@
 // - THE STAND-IN'S REPLIES: one rule per request, keyed on what the request carries, never on a model.
 import path from 'node:path';
 import { TESTBOX_CAPTURE_DEADLINE_MS, UPDATE_SPAWN_DRAIN_MS } from '../../../shared/agent-protocol.js';
-import { CAPTURE_EVENTS, CAPTURE_WRITE_COMMAND } from '../../../shared/claudeBuildCapture.js';
+import { CAPTURE_EVENTS, CAPTURE_SOCKET, CAPTURE_TMUX_SESSION, CAPTURE_WRITE_COMMAND, captureTmuxDirName } from '../../../shared/claudeBuildCapture.js';
 import { compareClaudeVersions, isClaudeVersion } from '../../../shared/claudeVersion.js';
 import type { HookEvent } from '../../../shared/hook-events.js';
 import { SYSTEM_PATH } from './spec.js';
 
 // ── the paths ────────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** The capture's own tmux server's `-L` name: never `default`, the fleet's own server. */
-export const CAPTURE_SOCKET = 'ccrc-capture';
-
-/** The tmux session the build runs in, on {@link CAPTURE_SOCKET}. */
-export const CAPTURE_TMUX_SESSION = 'capture';
+/** The capture's own tmux server's `-L` name, and the session the build runs in on it: never `default`, the fleet's own
+ *  server. Their one definition is the capture contract's (`shared/claudeBuildCapture.ts`, Desktop polish wave 178), so the
+ *  delivery driver in the server package can refuse anything else; re-exported here for this package's readers. */
+export { CAPTURE_SOCKET, CAPTURE_TMUX_SESSION };
 
 /** The folder the drive's first tool call moves the shell into, inside the work folder. */
 export const CAPTURE_CD_DIR = 'sub';
 
 export interface CapturePaths {
-  /** `<root>/captures/builds/<build>`: the build's bytes, read-only. */
+  /** `<root>/captures/builds/<build>`: the build's bytes, read only. */
   readonly buildFile: string;
   /** `<root>/captures/<captureId>`: everything the capture writes. */
   readonly dir: string;
   readonly home: string;
   readonly config: string;
+  /** The capture's tmux directory (its `TMUX_TMPDIR`), OUTSIDE `dir`: {@link captureTmuxDir} under the service's temporary
+   *  directory, so the socket path fits under any box root (review 3226 F8). */
   readonly tmux: string;
   /** The build's `TMPDIR`: its temporary files stay inside the scratch directory the runner removes. */
   readonly tmp: string;
@@ -53,13 +54,28 @@ export const captureDirsRoot = (root: string): string => path.join(root, 'captur
 /** The builds store, `<root>/captures/builds`. */
 export const captureBuildsDir = (root: string): string => path.join(captureDirsRoot(root), 'builds');
 
-export function capturePaths(root: string, captureId: string, build: string): CapturePaths {
+/** One capture's paths. `tmuxBase` is the service's temporary directory, where the capture's tmux directory goes. */
+export function capturePaths(root: string, captureId: string, build: string, tmuxBase: string): CapturePaths {
   const dir = path.join(captureDirsRoot(root), captureId);
   const work = path.join(dir, 'work');
   return {
     buildFile: path.join(captureBuildsDir(root), build), dir, home: path.join(dir, 'home'), config: path.join(dir, 'config'),
-    tmux: path.join(dir, 'tmux'), tmp: path.join(dir, 'tmp'), work, cdDir: path.join(work, CAPTURE_CD_DIR), recording: path.join(dir, 'recording.jsonl'),
+    tmux: captureTmuxDir(tmuxBase, captureId), tmp: path.join(dir, 'tmp'), work, cdDir: path.join(work, CAPTURE_CD_DIR), recording: path.join(dir, 'recording.jsonl'),
   };
+}
+
+/** What the desk reads of the build's file: its own kind (never through a link), its hard-link count, and its path with
+ *  every link resolved. `null` when it cannot be read. */
+export interface BuildFileFacts { readonly regular: boolean; readonly link: boolean; readonly links: number; readonly real: string }
+
+/** Whether the build's file is one the capture may run (review 3623, carried by PR 2's note): a regular file, not a link,
+ *  with no second hard link, reached through no link on its path below the box root's real path (`realBuildFile`, the
+ *  builds store under the box root with only the root resolved). Any
+ *  other answer reads as the build absent, so the lane's next pass copies a fresh one, which the copy's writer places as a
+ *  file of its own. Without this, a link or a hard link would let the capture run, and a build under capture write, the
+ *  bytes of another version. */
+export function capturedBuildUsable(f: BuildFileFacts | null, realBuildFile: string): boolean {
+  return f !== null && f.regular && !f.link && f.links === 1 && f.real === realBuildFile;
 }
 
 /** Every path the runner writes, for the write guard (`probes.ts#writeRefusal`). */
@@ -212,64 +228,84 @@ export function standInReply(body: unknown): StandInReply {
   return { kind: 'text', text: text.includes(CAPTURE_MARK.subagent) ? 'ok' : 'ccrc capture summary' };
 }
 
-// ── the timing target (review 3226 F8; review 3316 F1, A3) ───────────────────────────────────────────────────────
+// ── the timing contract (review 3226 F8; review 3316 F1, A3; gate G1) ─────────────────────────────────────────────
 //
-// A TARGET, NOT YET THE RUNNER'S. Nothing passes these values to `captureRunner.ts#CaptureRunner` or `#tmuxLauncher`
-// yet: the runner is unwired until PR 3b, its step, exit and poll timeouts are deps nothing sets in production, and
-// `tmuxLauncher`'s bound defaults to 15 s, not the target below. The only production reader today is the desk's late
-// check, `captureStartsLate`. PR 3b's acceptance gate binds them (task note `capture-runner-pr3.md`): the desk and the
-// launched runner read one timing contract, and a test through the production composition goes red when the launched
-// capture, with its queue wait, its teardown and door B2's step, no longer fits `TESTBOX_CAPTURE_DEADLINE_MS`.
+// ONE CONTRACT, READ BY EVERY BOUND OF A CAPTURE. The entry point builds the runner and the launcher from
+// `CAPTURE_TIMINGS` (`main.ts#captureRunnerFor`): the runner's step, exit and poll timeouts, its stop wait and the stand-in's
+// close bound, and the launcher's bound per tmux call, and the delivery recipe's driver, kill grace, settle and quiet bounds
+// (`captureDelivery.ts#deliveryWorstCaseMs`). The desk's late check reads the same object, for either recipe. `captureWorstCaseMs`
+// is the worst case of one capture by that runner, and `testbox-capture-deadline.test.ts` runs the composed runner on a
+// virtual clock, every tmux call at its bound, to hold that the runner never takes longer than it says.
 
-/** The target for each part of one capture. The fleet agent waits `TESTBOX_CAPTURE_DEADLINE_MS` for the verdict and then
- *  closes its connection, so a verdict sent after that is lost; the target is chosen so that two captures, one waiting
- *  behind the other, fit that deadline under {@link captureWorstCaseMs} (pinned by `testbox-capture-deadline.test.ts`). */
+/** The timings of one capture. The fleet agent waits `TESTBOX_CAPTURE_DEADLINE_MS` for the verdict and then closes its
+ *  connection, so a verdict sent after that is lost; the timings are chosen so that two captures, one waiting behind the
+ *  other, fit that deadline under {@link captureWorstCaseMs} (pinned by `testbox-capture-deadline.test.ts`). */
 export interface CaptureTimings {
-  /** The target for the runner's `stepTimeoutMs`: how long one step may take to raise its events. */
+  /** The runner's `stepTimeoutMs`: how long one step may take to raise its events. */
   readonly stepMs: number;
-  /** The target for the runner's `exitTimeoutMs`: how long the build may take to exit after the last step. */
+  /** The runner's `exitTimeoutMs`: how long the build may take to exit after the last step. */
   readonly exitMs: number;
-  /** The target for the runner's `pollMs`: the recording's poll. */
+  /** The runner's `pollMs`: the recording's poll, and the poll of every wait on the build. */
   readonly pollMs: number;
-  /** The target bound of one tmux call, for PR 3b to pass as `tmuxLauncher`'s `boundMs` (whose default is 15 s). A call
-   *  answers within its bound plus the bounded spawner's drain (`exec.ts#boundedExec`, `UPDATE_SPAWN_DRAIN_MS`). */
+  /** The bound of one tmux call, `tmuxLauncher`'s `boundMs`. A call answers within its bound plus the bounded spawner's
+   *  drain (`exec.ts#boundedExec`, `UPDATE_SPAWN_DRAIN_MS`). */
   readonly tmuxCallMs: number;
+  /** The runner's `stopWaitMs` (PR 2's stop wait): how long, after `stop`, it waits for the build to be gone. */
+  readonly stopWaitMs: number;
+  /** The runner's `standInCloseMs`: how long it waits for the stand-in model to close. */
+  readonly standInCloseMs: number;
   /** An ALLOWANCE, not a bound: the scratch directory, the seeded config and the stand-in's start, which nothing bounds. */
   readonly setupMs: number;
+  /** An ALLOWANCE, not a bound: the removal of the scratch directory and the tmux directory at the end. */
+  readonly removeMs: number;
+  /** The delivery recipe's (Desktop polish wave 178): how long the driver child may take for one case (its node start, and
+   *  `sendPrompt` with its own echo, clear and submit budgets); past it the child is killed and the capture answers no
+   *  verdict. */
+  readonly deliveryDriveMs: number;
+  /** The delivery recipe's: how long the driver child's process group has between SIGTERM and SIGKILL once its bound has
+   *  passed (then one drain), so a case's driver can take its bound, this grace and the drain (the capture owner's call
+   *  1208). */
+  readonly deliveryKillGraceMs: number;
+  /** The delivery recipe's: how long, after a case's send, its turn may take to end (a Stop recorded). */
+  readonly deliverySettleMs: number;
+  /** The delivery recipe's: how long a case's window stays open after its turn ended (or the settle bound passed), so a
+   *  late second submit still falls in that case's window. */
+  readonly deliveryQuietMs: number;
 }
 
-/** The target. A step of the drive against the stand-in takes seconds; 35 s each leaves room on a slow box. */
+/** The contract. A step of the drive against the stand-in takes seconds; 35 s each leaves room on a slow box. */
 export const CAPTURE_TIMINGS: CaptureTimings = Object.freeze({
-  stepMs: 35_000, exitMs: 30_000, pollMs: 500, tmuxCallMs: 5_000, setupMs: 10_000,
+  stepMs: 35_000, exitMs: 30_000, pollMs: 500, tmuxCallMs: 5_000, stopWaitMs: 5_000, standInCloseMs: 2_000, setupMs: 10_000, removeMs: 5_000,
+  deliveryDriveMs: 25_000, deliveryKillGraceMs: 1_000, deliverySettleMs: 15_000, deliveryQuietMs: 2_000,
 });
 
 /** The slack kept beside the worst case: the frames' travel and the clocks of two processes. */
 export const CAPTURE_DEADLINE_MARGIN_MS = 30_000;
 
-/** The worst case of ONE capture by the runner as it stands on main (`captureRunner.ts#CaptureRunner`), if it were run
- *  under the target `t`, each tmux call counted at its bound plus the drain: the start (one call, after the setup
- *  allowance); each typed step's two calls (the text, then Enter); each step's wait, which can overrun by one poll; the
- *  exit wait, which can overrun by one call and one poll; and the stop (one call).
- *
- *  WHAT IT DOES NOT BOUND: the setup is an allowance, not a bound; the stand-in's close and the scratch directory's
- *  removal are not counted at all, and a hung stand-in can outlast both; and any teardown or liveness call a later
- *  runner adds (PR 2's stop wait among them) is not counted until PR 3b's gate counts the runner it wires. */
+/** The worst case of ONE capture by the runner the entry point wires (`captureRunner.ts#CaptureRunner` with
+ *  `#tmuxLauncher`), under `t`, each tmux call counted at its bound plus the drain: the setup allowance; the start (one
+ *  call, which also reads the build's process); each typed step's two calls (the text, then Enter); each step's wait, which
+ *  can overrun by one poll; the exit wait, which can overrun by one poll (the build's life is read from its process, not by
+ *  a tmux call); the stop (one call, the kill of the private server), then the stop wait, which can overrun by one poll;
+ *  the stand-in's close bound; and the removal allowance. The setup and the removal are allowances, not bounds. */
 export function captureWorstCaseMs(t: CaptureTimings, steps: readonly CaptureStep[] = CAPTURE_STEPS): number {
   const call = t.tmuxCallMs + UPDATE_SPAWN_DRAIN_MS;
   const start = t.setupMs + call;
   const drive = steps.reduce((ms, s) => ms + (s.type === null ? 0 : 2 * call) + t.stepMs + t.pollMs, 0);
-  const exit = t.exitMs + call + t.pollMs;
-  const stop = call;
-  return start + drive + exit + stop;
+  const exit = t.exitMs + t.pollMs;
+  const teardown = call + t.stopWaitMs + t.pollMs + t.standInCloseMs + t.removeMs;
+  return start + drive + exit + teardown;
 }
 
 /** What a capture that started too late to answer in time is told: no verdict, and why. */
 export const CAPTURE_LATE_DETAIL = 'the capture waited in the queue too long to finish before the fleet agent stops waiting: not run, no verdict';
 
-/** Whether a capture that has waited `waitedMs` since its submission must not start, by the TARGET: its worst case under
- *  {@link CAPTURE_TIMINGS} and the margin would end past the fleet agent's deadline, so its verdict would be lost. The
- *  desk ends it with {@link CAPTURE_LATE_DETAIL}. Until PR 3b binds the runner to the target, this is the target's worst
- *  case, not a measured bound on the runner. */
+/** What a capture that waited while the box admits no work is told (gate G2): no verdict, and why. */
+export const CAPTURE_CLOSED_DETAIL = 'the test box admits no work now (a tool sync is taking over, or a drain stands): not run, no verdict';
+
+/** Whether a capture that has waited `waitedMs` since its submission must not start: its worst case under `t` and the
+ *  margin would end past the fleet agent's deadline, so its verdict would be lost. The desk ends it with
+ *  {@link CAPTURE_LATE_DETAIL}. */
 export function captureStartsLate(waitedMs: number, t: CaptureTimings = CAPTURE_TIMINGS, deadlineMs: number = TESTBOX_CAPTURE_DEADLINE_MS): boolean {
   return waitedMs + captureWorstCaseMs(t) + CAPTURE_DEADLINE_MARGIN_MS > deadlineMs;
 }
@@ -282,14 +318,14 @@ export const CAPTURE_SOCKET_PATH_MAX = 103;
 /** The capture's tmux directory (its `TMUX_TMPDIR`): a directory of its own under `base`, the service's temporary
  *  directory (`/tmp`, private to the unit), named by the whole capture id. Under `<CCRC_TESTBOX_ROOT>/captures/<id>` a long
  *  root made every socket path too long and every capture fail to start. */
-export const captureTmuxDir = (base: string, captureId: string): string => path.join(base, `ccrc-capture-${captureId}`);
+export const captureTmuxDir = (base: string, captureId: string): string => path.join(base, captureTmuxDirName(captureId));
 
 /** Where tmux puts the capture server's socket: `<TMUX_TMPDIR>/tmux-<uid>/<-L name>`. */
 export const captureSocketPath = (base: string, captureId: string, uid: number): string =>
   path.join(captureTmuxDir(base, captureId), `tmux-${uid}`, CAPTURE_SOCKET);
 
 /** Whether every capture's socket path under `base` fits {@link CAPTURE_SOCKET_PATH_MAX} for `uid` (every id is 32
- *  characters, so one stands for all). When it does not, the service wires no runner, so the box answers `no-runner`. */
+ *  characters, so one stands for all). When it does not, the entry point wires no runner, so the box answers `no-runner`. */
 export function captureSocketFits(base: string, uid: number): boolean {
   return new TextEncoder().encode(captureSocketPath(base, '0'.repeat(32), uid)).length <= CAPTURE_SOCKET_PATH_MAX;
 }

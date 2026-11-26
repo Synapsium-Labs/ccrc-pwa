@@ -1591,6 +1591,15 @@ describe('the desk head (desk-nav Part B)', () => {
       expect(got.head!.top, 'the head is under the bar').toBeGreaterThanOrEqual(got.bar!.bottom - 0.5);
       expect(got.pane!.left, 'the pane is the window\'s width').toBeLessThanOrEqual(0.5);
       expect(got.pane!.right, 'the pane is the window\'s width').toBeGreaterThanOrEqual(got.innerW - 0.5);
+      // The ruled header (desktop polish wave 177): the bar sits at the top, a tap tall at least, since it holds the link back;
+      // the head runs across the window with one gutter on each side, and the gap under the bar is that gutter.
+      expect(got.bar!.top, 'the bar is at the top').toBeLessThanOrEqual(0.5);
+      expect(got.bar!.bottom - got.bar!.top, 'the bar holds a tap-tall link').toBeGreaterThanOrEqual(TAP - 0.5);
+      const gutter = got.head!.left;
+      expect(gutter, 'a gutter at the left').toBeGreaterThan(0);
+      expect(Math.abs(got.innerW - got.head!.right - gutter), `the same gutter at the right ${JSON.stringify(got)}`).toBeLessThanOrEqual(1);
+      expect(Math.abs(got.head!.top - got.bar!.bottom - gutter), `the gap under the bar is the gutter ${JSON.stringify(got)}`).toBeLessThanOrEqual(1);
+      expect(r.words, 'the action words are shown: a Docs tab gives the head the whole window (ruled right)').toBe(true);
       expect(r.nameWhole, "the page's whole name").toBe(true);
       expect(r.folded, 'every crumb is drawn').toBe(false);
       expect(r.actionsOnLine, 'one row').toBe(true);

@@ -13,6 +13,8 @@ import type { BackupRead } from '../../shared/backup.js';
 import { captureTestbox, measureTestbox, realTestboxSeams, syncTestboxTools } from '../../agent/src/testboxOp.js';
 import { makeModelsSpawn, modelsEnv, runModelsOp } from '../../agent/src/modelsop.js';
 import type { ModelClass } from '../../shared/models.js';
+import type { OverlordHistoryRequest } from '../../shared/overlordHistory.js';
+import type { OverlordHistoryAsked } from './coord/overlordHistory.js';
 import { readHostMachine, type HostMachineReading, type HostPsi } from '../../shared/pressure.js';
 import { isReadFromRange, LANE_STATE_DIR_NAME, laneStateOpenHolds } from '../../shared/agent-protocol.js';
 
@@ -296,8 +298,11 @@ export interface FleetIO {
    *  Failure contract: never rejects. Three answers say no job went out: `no-op` is an agent too old to list the op (never
    *  sent it), `not-started` a frame that never left (the link was down), and `busy` the agent's one capture gate held by
    *  another capture. `unanswered` is an ask that failed after the send, the deadline, or a reply in no shape
-   *  `readTestboxCaptureReply` knows (a job may have gone out). None is ever `ok`. */
-  testboxCapture(build: string): Promise<CaptureAsked>;
+   *  `readTestboxCaptureReply` knows (a job may have gone out). None is ever `ok`. `recipe: 'delivery'` with its `part`
+   *  (Desktop polish wave 178) asks for one part of the paste delivery recipe and reads the reply as one; absent, the job is
+   *  a build-trust capture. One member whose arguments are either ask, so a delivery ask with no part cannot be written
+   *  (call 1253); an untyped caller's is never sent, and answers `not-started`: no job went out. */
+  testboxCapture(...ask: [build: string] | [build: string, recipe: 'delivery', part: number]): Promise<CaptureAsked>;
   /** The `testbox-admin` op (test box connect spec §2.1, plan TC12, D-8166): runs `ccrc testbox-admin <sub>` on ITS box with
    *  the builder's argv and the agent's own `--from agent`. Failure contract: never rejects. The builder's refusal is
    *  `refused` (nothing sent), an agent that does not list the op is `unsupported` (never sent it), a frame that never left
@@ -312,6 +317,13 @@ export interface FleetIO {
    *  a frame that never left, or a launcher that could not start, is `not-started`; a held agent gate is `busy`; a fault
    *  after the send, the deadline, or a reply off `readModelsOpAnswer`'s grammar is `lost` (UNKNOWN). */
   models(lane: string, action: ModelsAction, cls?: ModelClass): Promise<ModelsAsked>;
+  /** The `overlord-history` op (Overlord W1, PR B1; plan w1-board-history.md Task 5): one read of `ccrc history`'s read
+   *  verbs over every project, answered by the agent's worker thread. Failure contract: never rejects; `OverlordHistoryAsked`
+   *  (`coord/overlordHistory.ts`, the door's port) is the whole of it: `unsupported` (an agent that does not list the op, an
+   *  older agent's `bad-request`, and every local fleet, which has no agent link), `not-started`, `timeout` (this server's
+   *  own wait), `lost` (anything after the send, an abort, the agent's own `timeout`, or a reply off
+   *  `readOverlordHistoryAnswer`'s grammar), or the agent's answer. */
+  overlordHistory(req: OverlordHistoryRequest, signal?: AbortSignal): Promise<OverlordHistoryAsked>;
 }
 
 /** The `testbox` op as a seam answers it, or why there is none (D-7411). */
@@ -610,12 +622,15 @@ export const localIO: FleetIO = {
   // The agent's own op bodies on this box (D-7411), as `statfsMeasured` calls `measureDisk`; neither ever rejects.
   testboxMeasured: () => localTestbox(os.homedir()),
   testboxToolsSync: () => localTestboxSync(os.homedir()),
-  testboxCapture: (build) => localTestboxCapture(build, os.homedir()),
+  testboxCapture: (build: string, recipe?: 'delivery', part?: number) => localTestboxCapture(build, os.homedir(), recipe, part),
   // The server's local arm spawns the verb itself (`testboxAdmin.ts#localTestboxAdminOps`); this seam is the agent arm's.
   testboxAdmin: async () => ({ kind: 'unsupported' }),
   // The bare localIO has no configured home: `localIOFor(home)` runs the local arm, so nothing here ever spawns against
   // the process home.
   models: async () => ({ kind: 'unsupported' }),
+  // A local fleet has no agent link, so no Overlord history in W1 (question 10): a stated re-check the door never reaches,
+  // because `historyAgentFor` reads local mode's fleet state, which carries no agent ops, and answers `no-agent` first.
+  overlordHistory: async () => ({ kind: 'unsupported' }),
 };
 
 /** The `testbox` op's body on `home` (D-7411): the one implementation, so the two adapters cannot disagree. */
@@ -630,8 +645,9 @@ export async function localTestboxSync(home: string): Promise<TestboxSyncAsked> 
 /** The `testbox-capture` op's body on `home` (build capture runner spec §2.5): the agent's own `captureTestbox` with the
  *  real seams, as `localTestbox` runs the `testbox` op's; it reads the host's settings through `home`'s launcher. No gate
  *  here: the capture lane sends one job at a time. */
-export async function localTestboxCapture(build: string, home: string): Promise<CaptureAsked> {
-  try { return { ok: true, reply: await captureTestbox(build, realTestboxSeams(), home) }; } catch { return { ok: false, reason: 'unanswered' }; }
+export async function localTestboxCapture(build: string, home: string, recipe?: 'delivery', part?: number): Promise<CaptureAsked> {
+  if (recipe === 'delivery' && part === undefined) return { ok: false, reason: 'not-started' };
+  try { return { ok: true, reply: await captureTestbox(build, realTestboxSeams(), home, recipe ?? 'build-trust', part) }; } catch { return { ok: false, reason: 'unanswered' }; }
 }
 
 /** The `models` op's local arm on `home` (D-8687, D-8693): the agent's own body (`runModelsOp`, the builder again, the
@@ -656,7 +672,7 @@ export function localIOFor(home: string): FleetIO {
   return {
     ...localIO, statfsMeasured: () => measureLocalDisk(home),
     testboxMeasured: () => localTestbox(home), testboxToolsSync: () => localTestboxSync(home),
-    testboxCapture: (build) => localTestboxCapture(build, home),
+    testboxCapture: (build: string, recipe?: 'delivery', part?: number) => localTestboxCapture(build, home, recipe, part),
     models: (lane, action, cls) => localModels(home, lane, action, cls),
   };
 }

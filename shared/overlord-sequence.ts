@@ -9,6 +9,13 @@ import { GENERATION_STATES } from './continuity.js';
 import { DESIGNATION_SEQUENCE_STATES } from './overlord-designation.js';
 import { ACTOR_SUBJECT_MAX, type ActorKind } from './overlord-identity.js';
 import { MESSAGE_STATES } from './operatorMessages.js';
+import { RUNGS } from './overlord-ladder.js';
+import { READINESS_WORDS } from './overlord-readiness.js';
+
+/** A latch's two moves: its row inserted standing, and its clear stamped. The ladder's latch rows carry no state column (a latch
+ *  stands while its clear is unset), so these words are named here, beside the one kind that stamps them (slug
+ *  `ladder-stamps-ride-pr-b`). A cap narrowed by Confirm the restore is a value, not one of these, and stamps nothing. */
+export const LADDER_LATCH_SEQUENCE_STATES = ['raised', 'cleared'] as const;
 
 /** One line of the one sequence. `known` is false for a line whose kind or state this build lacks: its text is served as
  *  stored, opaque, never a failed page (slug `unknown-lines-are-served-opaque`). `actorKind` is `unknown` only on such a
@@ -29,6 +36,9 @@ export const SEQUENCE_KIND_MAP = {
     spec: '§10.4 "the designation"',
   },
   message: { states: MESSAGE_STATES, id: 'the operator message id', spec: '§10.4 "a message"' },
+  'ladder-rung': { states: RUNGS, id: 'the fixed id operator: the one rung row', spec: '§10.4 "the ladder"' },
+  'ladder-latch': { states: LADDER_LATCH_SEQUENCE_STATES, id: 'the latch cause', spec: '§10.4 "the ladder"' },
+  readiness: { states: READINESS_WORDS, id: 'the session the word concerns, or none for absent', spec: '§10.4 "the readiness word"' },
 } as const satisfies Readonly<Record<string, { readonly states: readonly string[]; readonly id: string; readonly spec: string }>>;
 export type SequenceKind = keyof typeof SEQUENCE_KIND_MAP;
 export const SEQUENCE_KINDS = Object.keys(SEQUENCE_KIND_MAP) as SequenceKind[];
@@ -61,3 +71,7 @@ export type SequencePageWire =
   | { readonly kind: 'unmeasured'; readonly why: string };
 /** The most lines one page serves. */
 export const SEQUENCE_PAGE_MAX = 500;
+
+/** The programme an Overlord-side server item is raised under: the weekly replay quiz's and the invariant monitor's (plan
+ *  w1-sequence-monitor.md question 14, slug `invariant-items-sit-under-overlord`). One value, one home. */
+export const OVERLORD_ITEM_PROGRAMME = 'overlord';

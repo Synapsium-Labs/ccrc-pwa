@@ -12,6 +12,12 @@
 //     throws if any of them moved). A throw rolls back that mail and its timers alone; the next mail's transaction runs.
 //  4. Purge once: fired and cancelled rows older than `TIMER_KEEP_MS`.
 //
+// THE ROLE `overlord` (Overlord W1, the Overlord's timers): its timers are rows of the same table, fired from the same sender.
+// The gather awaits no incarnation for them; the synchronous pass opens with the designation and the authority guard's reads
+// (after every await, so a rebind cannot slip between the read and the fire) and the restore generation. They wait while the
+// guard is not coherent or the designation is unmeasured, cancel `retired` once it binds no session or another term, and their
+// mail goes to the role (`mail.toId` `overlord`), delivered to the bound session.
+//
 // A TIMER NEVER ACTS (I17). The lane's only effects are its rows' moves and its mail, from the role `timer`, never
 // `operator`. It starts no session and queues no wake of its own; the mail wakes a sleeping setter as any mail does. A
 // fact it cannot measure (a bound run or programme it cannot read, the listing, the stamp, a row the listing named but
@@ -27,11 +33,13 @@ import type { SessionRecord } from '../registry.js';
 import { MAIL_DISABLED_MARKER } from '../../../shared/switches.js';
 import type { Clock } from '../time/ports.js';
 import type { TimerRow, TimersRead } from './continuityStore.js';
-import { packTimerMail, timerCleanupVerdict, type CleanupFacts, type DueTimer } from './timers.js';
+import { packTimerMail, timerCleanupVerdict, timerRestoreFact, type CleanupFacts, type DueTimer, type SessionSetterFacts, type SetterFacts } from './timers.js';
+import { OVERLORD_IDENTITY } from '../roleOf.js';
+import type { DesignationRead } from '../../../shared/overlord-designation.js';
 
 /** What `incarnationOf` answers. */
 export type IncarnationRead = Awaited<ReturnType<typeof incarnationOf>>;
-export type SetterIncarnation = CleanupFacts['incarnation'];
+export type SetterIncarnation = SessionSetterFacts['incarnation'];
 
 /** The one place a reason of `incarnationOf` is compared (slug incarnation-reason-is-a-string): `absent` alone is the
  *  absence that can cancel (`setter-gone`, when the listing did not name the row); every other reason is unmeasured. */
@@ -75,7 +83,8 @@ export async function gatherTimerFacts(coord: Pick<WatcherCoordPort, 'pendingTim
                                        incarnation: (id: string) => Promise<IncarnationRead>): Promise<TimerFacts> {
   const pending = coord.pendingTimers();
   if (!pending.ok) return { pending, incarnations: new Map() };
-  const setters = [...new Set(pending.rows.map((t) => t.setter))];
+  // The role's timers carry the designation's term, read in the pass, never a registry incarnation (`overlord` is no row).
+  const setters = [...new Set(pending.rows.map((t) => t.setter))].filter((id) => id !== OVERLORD_IDENTITY);
   const reads = await Promise.all(setters.map(async (id) => {
     try { return setterIncarnationOf(await incarnation(id)); } catch { return { kind: 'unmeasured' } as const; }
   }));
@@ -95,10 +104,33 @@ export interface TimersPassResult {
 
 type BoundRun = { readonly row: RunRow } | 'none' | 'unmeasured';
 
+/** The lane's two reads of C5 (Overlord W1), ports its consumer declares: the authority guard's state, narrowed (`rolled-back`
+ *  and `unmeasured` are `not-coherent`), and the restore generation. Absent, or throwing: not coherent, and unmeasured. */
+export interface TimerAuthorityPorts {
+  readonly authority?: () => 'coherent' | 'not-coherent';
+  readonly restoreGeneration?: () => { readonly kind: 'measured'; readonly n: number } | { readonly kind: 'unmeasured' };
+}
+
+/** The designation as the `overlord` arm takes it (question 10's narrow facts), with the bound session kept for the delivery. */
+function roleFactsOf(d: DesignationRead): { readonly fact: Extract<SetterFacts, { kind: 'overlord' }>['designation']; readonly bound: string | null } {
+  if (d.kind === 'unmeasured') return { fact: { kind: 'unmeasured' }, bound: null };
+  if (d.kind === 'not-designated') return { fact: { kind: 'unbound' }, bound: null };
+  return { fact: { kind: 'bound', designatedTerm: d.row.designatedTerm }, bound: d.sessionId };
+}
+
 /** Steps 2 to 4, synchronous: every write is the store's compare-and-set, and each mail is its own transaction. */
-export function timersPass(d: { coord: WatcherCoordPort; now: number; log: (line: string) => void },
+export function timersPass(d: { coord: WatcherCoordPort; now: number; log: (line: string) => void } & TimerAuthorityPorts,
                            listing: TimerListing, facts: TimerFacts): TimersPassResult {
   const { coord, now } = d;
+  // Question 10: the designation, the guard and the restore generation, read first in this synchronous pass, after the
+  // gather's awaits, so no await sits between these reads and the fire's transaction.
+  let designation: DesignationRead;
+  try { designation = coord.designationRead(); } catch (e) { designation = { kind: 'unmeasured', why: e instanceof Error ? e.message : String(e) }; }
+  let authority: 'coherent' | 'not-coherent';
+  try { authority = d.authority?.() ?? 'not-coherent'; } catch { authority = 'not-coherent'; }
+  let restore: ReturnType<NonNullable<TimerAuthorityPorts['restoreGeneration']>>;
+  try { restore = d.restoreGeneration?.() ?? { kind: 'unmeasured' }; } catch { restore = { kind: 'unmeasured' }; }
+  const role = roleFactsOf(designation);
   const cancelled: { id: number; reason: TimerCancelReason }[] = [];
   const fired: { mailId: number; ids: number[] }[] = [];
   let failed = 0;
@@ -118,7 +150,8 @@ export function timersPass(d: { coord: WatcherCoordPort; now: number; log: (line
   };
   const programmeOf = (slug: string | null): CleanupFacts['boundProgramme'] => {
     if (slug === null) return 'none';
-    try { return { planEnded: !coord.programmeLive(slug) }; } catch { return 'unmeasured'; }
+    // Programme lifecycle W1 (W1 review, C1): a DECIDED end only, never a D-51 end the migration kept for the operator.
+    try { return { planEnded: coord.programmeEndDecided(slug) }; } catch { return 'unmeasured'; }
   };
   const due: DueTimer[] = [];
   for (const t of facts.pending.ok ? facts.pending.rows : []) {
@@ -126,10 +159,12 @@ export function timersPass(d: { coord: WatcherCoordPort; now: number; log: (line
     const verdict = timerCleanupVerdict({
       boundRun: typeof run === 'string' ? run : { state: run.row.state },
       boundProgramme: programmeOf(t.programme),
-      setAt: t.setAt, listedAt: listing.listedAt,
-      listing: listing.listedIds === null || listing.unmeasuredIds.has(t.setter) ? 'unmeasured'
-        : { listed: listing.listedIds.has(t.setter), archived: listing.archivedIds.has(t.setter) },
-      incarnation: facts.incarnations.get(t.setter) ?? { kind: 'unmeasured' },
+      setter: t.setter === OVERLORD_IDENTITY ? { kind: 'overlord', authority, designation: role.fact } : {
+        kind: 'session', setAt: t.setAt, listedAt: listing.listedAt,
+        listing: listing.listedIds === null || listing.unmeasuredIds.has(t.setter) ? 'unmeasured'
+          : { listed: listing.listedIds.has(t.setter), archived: listing.archivedIds.has(t.setter) },
+        incarnation: facts.incarnations.get(t.setter) ?? { kind: 'unmeasured' },
+      },
       stamp: t.setterIncarnation,
     });
     if (verdict.act === 'cancel') {
@@ -142,7 +177,7 @@ export function timersPass(d: { coord: WatcherCoordPort; now: number; log: (line
     } else if (verdict.act === 'wait') {
       waited += 1;
     } else if (t.dueAt <= now) {
-      due.push(dueOf(t));
+      due.push(dueOf(t, timerRestoreFact(t.setRestoreGeneration, restore), restore.kind === 'measured' ? restore.n : null));
     }
   }
   if (!listing.mailDisabled) {
@@ -150,8 +185,11 @@ export function timersPass(d: { coord: WatcherCoordPort; now: number; log: (line
       const run = runOf(m.runId);
       try {
         const mailId = tx(coord.db, () => {
+          // The role's mail keeps `overlord` on the mail row and is delivered to the bound session (a role timer reaches `keep`
+          // only under a bound designation, so `role.bound` is that session).
+          const deliverTo = m.setter === OVERLORD_IDENTITY && role.bound !== null ? { deliverTo: role.bound } : {};
           const q = insertSystemMailTx(coord, typeof run === 'string' ? null : run.row,
-            { fromId: TIMER_MAIL_SENDER, toId: m.setter, runId: m.runId, kind: 'status', subject: m.subject, body: m.body });
+            { fromId: TIMER_MAIL_SENDER, toId: m.setter, runId: m.runId, kind: 'status', subject: m.subject, body: m.body, ...deliverTo });
           coord.markTimersFired(m.ids, q.mailId, now);
           return q.mailId;
         });
@@ -172,6 +210,10 @@ export function timersPass(d: { coord: WatcherCoordPort; now: number; log: (line
   try { purged = coord.purgeTimers(now - TIMER_KEEP_MS).removed; } catch (err) {
     d.log(`ccrc-server: the timers lane could not purge: ${err instanceof Error ? err.message : String(err)}`);
   }
+  // M36's refusal counts are kept as long as the rows they count (`TIMER_KEEP_MS`), by UTC day.
+  try { coord.purgeTimerRefusals(new Date(now - TIMER_KEEP_MS).toISOString().slice(0, 10)); } catch (err) {
+    d.log(`ccrc-server: the timers lane could not purge the refusal counts: ${err instanceof Error ? err.message : String(err)}`);
+  }
   return { unread, cancelled, fired, failed, skipped, waited, purged };
 }
 
@@ -186,13 +228,13 @@ function cancelledSince(coord: Pick<WatcherCoordPort, 'pendingTimers'>, ids: rea
   } catch { return false; }
 }
 
-const dueOf = (t: TimerRow): DueTimer => ({ id: t.id, setter: t.setter, dueAt: t.dueAt, note: t.note, setAt: t.setAt,
-  setById: t.setById, runId: t.runId, programme: t.programme });
+const dueOf = (t: TimerRow, restore: DueTimer['restore'], restoreNow: number | null): DueTimer => ({ id: t.id, setter: t.setter,
+  dueAt: t.dueAt, note: t.note, setAt: t.setAt, setById: t.setById, runId: t.runId, programme: t.programme, restore, restoreNow });
 
 /** One whole pass, as the watcher's `timers` row runs it: the gather on the fleet's `.generation` reads, then the pass at
  *  the clock's wall time (§11.5: the lane takes `Clock` from the composition root). */
 export async function runTimersLane(d: { coord: WatcherCoordPort; clock: Pick<Clock, 'wall'>; io: FleetIO; registryDir: string;
-                                         log: (line: string) => void }, listing: TimerListing): Promise<TimersPassResult> {
+                                         log: (line: string) => void } & TimerAuthorityPorts, listing: TimerListing): Promise<TimersPassResult> {
   const facts = await gatherTimerFacts(d.coord, (id) => incarnationOf(d, id));
-  return timersPass({ coord: d.coord, now: d.clock.wall(), log: d.log }, listing, facts);
+  return timersPass({ coord: d.coord, now: d.clock.wall(), log: d.log, authority: d.authority, restoreGeneration: d.restoreGeneration }, listing, facts);
 }

@@ -99,6 +99,7 @@ import { TmpCensusBeat } from './tmpSweepLane.js';
 import type { BoxSettingsHeld } from './update/boxSettings.js';
 import { BoxSettingsLane } from './update/boxSettingsLane.js';
 import { DiskAlarmLane } from './diskAlarmLane.js';
+import { ProviderRetryLane } from './providerRetryLane.js';
 import { DiskLaneStallLane } from './diskLaneStallLane.js';
 import { PressureLane } from './pressureLane.js';
 import { VisibilityLane, type TeamLinkInputs } from './linking/visibilityLane.js';
@@ -157,14 +158,15 @@ import { buildDigest, digestDayFor, digestPushCopy, digestWindow, readDigestHour
 import {
   BACKLOG_HORIZON_MS, STALL_CHECK_PREFIX, STALL_QUIET_MS, STALL_REPLY_PREFIX, parseStallDetail, stallArmingOf,
   stallCheckMail, stallCitedCheck, stallCoordinatorSubjects, stallDeadShaped, stallDetail, stallFacts,
-  stallCoordBlockedPushText, stallCoordBlockedStep, stallFailedVerdict, stallRestartedVerdicts, stallLastCheck, stallMailClass, stallMailStuckVerdicts, stallMarkUnreadable,
+  stallCoordBlockedPushText, stallCoordBlockedStep, stallRestartedVerdicts, stallLastCheck, stallMailClass, stallMailStuckVerdicts, stallMarkUnreadable,
   stallNotifyDelivery, stallOrphanDCandidate, stallOrphanDVerdict, stallOrphanEVerdict, stallPushRoute, stallPushText, stallReportKind, stallReportMail, stallReportTitle,
-  stallRunMail, stallSessionMail, stallNewestDelivery, stallSessionMarkerVerdict, stallSessionPushText, stallSubjects,
+  stallRunMail, stallNewestDelivery, stallSessionMarkerVerdict, stallSessionPushText, stallSubjects,
   stallReactivation, stallTimerFiredSince, stallTimersOf, stallVerdict, stallW2ReportMail, turnMarkStale,
   type AskRowFact, type HookAskFact, type HookRawFact, type LiveWordRead, type StallArming,
   type StallCoordBlockedInput, type StallCoordEpisode, type StallInput, type StallNotice, type StallNotify, type StallRunRow, type StallSessionInput, type StallSubject,
   type StallVerdict, type StallWorker, type TurnMarkRead,
 } from './coord/stall.js';
+import { stallFailedVerdict, stallSessionMail } from './coord/stopFailure.js';
 import {
   parseStallSettings, resolveStallWatch, stallBoxArmingOf, stallBusyClock, stallQuietOf,
   type StallBoxArming, type StallResolved, type StallSettingsParsed, type StallSettingsRead,
@@ -186,11 +188,13 @@ import { gatherGenerationReadings, generationsPass, type CompactionsMemo, type E
 import { iso } from './continuity/card.js';
 import { renewalHoldsMail } from './continuity/renewalFeed.js';
 import { renewalActsOf } from './continuity/renewalWiring.js';
+import { runOverlordAttempt, type OverlordLanePort } from './continuity/renewalActs.js';
 import { renewalReadingsOf } from './continuity/renewalReadingsWiring.js';
 import { runTimersLane, timerListingOf } from './continuity/timerLane.js';
 import { runQuizLane } from './continuity/quizLane.js';
 import { runSequenceRetentionLane } from './coord/sequenceRetentionLane.js';
 import { runForecastLane, spendReadingOf } from './coord/forecastLane.js';
+import { limitSamplePass } from './limitSampler.js';
 import { runDecisionAnchorLane } from './coord/decisionModelLane.js';
 import { TIMER_MAIL_SENDER } from '../../shared/continuity-timers.js';
 import { LAUNCH_PROFILE_LANE_ROW, profilePass, steerMarkerOf, type ProfileLaneMemory } from './continuity/profileLane.js';
@@ -231,11 +235,12 @@ import { mailNudgeOf, sweepDesignationOf } from './coord/envelope.js';
 import { operatorNudgeFor } from './operatorModel/operatorNudge.js';
 import { finishFixedLineAck, settleNudge } from './operatorModel/nudgeLane.js';
 import { createInboxWakeLane } from './coord/overlordInboxWake.js';
-import type { overlordReadGate } from './coord/overlordGateRun.js';
+import { timerLineHold, type overlordReadGate } from './coord/overlordGateRun.js';
 import { isInboxWakeMail } from '../../shared/overlordInbox.js';
+import { isProviderRetryMail } from '../../shared/provider-retry.js';
 import { isOperatorMessageMail } from '../../shared/operatorMessages.js';
 import { mailPaceOf } from './coord/mailPace.js';
-import { roleFactsOf, roleOf } from './roleOf.js';
+import { identityOf, roleFactsOf, roleOf } from './roleOf.js';
 import { DesignationEpisode } from './continuity/designationEpisode.js';
 import { configDirFor } from './config.js';
 import { refusalSentence } from './wsaudit.js';
@@ -318,6 +323,7 @@ import { liveRowFor, liveWordFor, processStartedAtFor, turnMarkFor, turnReadDeps
 import { rollPass, type ReleaseRead, type RollSweepMemory } from './rollLane.js';
 import { readLaneModels } from './laneModels.js';
 import { longLivedOf, rollTargetsOf } from './coord/rollTarget.js';
+import type { ReadinessTick } from './coord/overlordReadinessLane.js';
 import { NODE_FILES } from '../../shared/agent-protocol.js';
 import {
   COLLECT_AUDITS_PER_PASS, COLLECT_FEED_TITLE, collectAfterAct, collectFeedTitle, collectAfterAudit, collectAfterFoldFailed, collectAfterHold,
@@ -1127,6 +1133,8 @@ export class FleetWatcher {
    *  `readiness: null` on the wire rather than omitting the key. */
   /** The disk alarm (D-6615) and the tmp sweep census lane (D-6624): each holds its memory, and each clock is its row (D-7895). */
   private readonly diskAlarm = new DiskAlarmLane(() => this.deps);
+  /** The provider-failure ladder, run inside the stall pass on the facts that pass read (`providerRetryLane.ts`). */
+  private readonly providerRetry = new ProviderRetryLane(() => this.deps);
   /** D-8955: a cleanup lane that stops finishing anything while the disk is under pressure raises one item and one push. */
   private readonly diskLaneStall = new DiskLaneStallLane(() => this.deps);
   /** The host-pressure beat (#1170): its last reading classifies a stalled link. */
@@ -1306,6 +1314,7 @@ export class FleetWatcher {
   /** The inbox wake lane, made at its first pass (its ports read `deps`), and the read gate `buildServer` hands over. */
   private inboxWake: ReturnType<typeof createInboxWakeLane> | undefined;
   private inboxReadGate: ReturnType<typeof overlordReadGate> | undefined;
+  private overlordLane: OverlordLanePort | undefined;
   /** D-5838: when each PARKED delivery's box was last probed, so the probe runs
    *  at most every `MAIL_PARK_PROBE_MS` per row. In memory: a restart probes once
    *  more, which costs one capture. */
@@ -2018,6 +2027,9 @@ export class FleetWatcher {
   /** The radar lane's map, for the two one-shot assemblies of `server.ts` (the REST fleet and the cold frame): a copy. */
   currentLandings(): Map<string, SessionLanding> { return new Map(this.landings); }
 
+  /** What the provider-failure ladder says of each session, for every assembly of the fleet. */
+  currentProviderRetries(): ReturnType<ProviderRetryLane['wire']> { return this.providerRetry.wire(); }
+
   /** The latest pass's control bundle of one project, a copy, or `undefined` when none was measured or (on a remote box) the
    *  agent link is down: a prior connection's bundle is never handed out. Values only; the binding's freshness is the decider's. */
   currentLandingControl(project: string, nowMs = Date.now()): LandingControlRead | undefined {
@@ -2393,6 +2405,8 @@ export class FleetWatcher {
     return this.deadCoordinatorState;
   }
 
+  /** Designation B: the designation's lane port, built by the composition root over the doors' store, body and settle step. */
+  useOverlordLane(port: OverlordLanePort): void { this.overlordLane = port; }
   /** `buildServer` hands the inbox wake lane the Overlord read gate (`overlordReadGate`, the gate runner's own readers); until it
    *  does, the wake holds `unmeasured`. */
   useInboxReadGate(gate: ReturnType<typeof overlordReadGate>): void {
@@ -2831,6 +2845,7 @@ export class FleetWatcher {
         await this.emitPools(null, listedAt); // an unlistable registry: nobody may decide a pool, so `listed:false` reaches the wire now (free: no io)
         this.registryTick = { listed: false, at: listedAt };            // D-6436: `lastFleet` is kept, but not as a listing
         this.withdrawDelegation();                                      // wave 4: no lane runs below, so the frame is withdrawn here
+        void this.sweepOverlordReadiness({ listed: false })?.catch(() => { /* one bad sweep must not kill the poll */ }); // F2: the registry fact is unmeasured
         // Retain, don't erase, at fleet scale: `this.hookStates`/
         // `this.taskProgress`/`this.prevStatus`/`this.frameLatch` are all left
         // exactly as the prior successful tick set them. Nothing is broadcast
@@ -2979,6 +2994,7 @@ export class FleetWatcher {
       // NEVER awaited, the same reasons: the TIMERS lane (Overlord §3.3.12, W1a): cleanup, then each due timer fired with its one mail.
       void this.sweepTimers(records, registryRead.listedIds, listedAt, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
       void this.sweepSequenceRetention().catch(() => { /* one bad sweep must not kill the poll */ }); // the sequence's 90 days (§10.4)
+      void this.sweepInvariants().catch(() => { /* one bad sweep must not kill the poll */ }); // the invariant monitor, shadow until armed (§10.4)
       void this.sweepPushOutbox().catch(() => { /* one bad sweep must not kill the poll */ });
       void this.sweepResponses().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the weekly replay QUIZ lane (Overlord §3.3.9 C52, W1a): at most one operator item a week.
@@ -2987,6 +3003,8 @@ export class FleetWatcher {
       void this.sweepForecasts().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the decision model's ANCHOR-SET lane (Overlord W2): a daily pass of asks, each on the 2 s deadline.
       void this.sweepDecisionAnchors().catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, the same reasons: the AUTHORITY WITNESS lane (Overlord W1 §7.6): a nudge of the exchange, which keeps its one flight.
+      void this.runLane('authorityWitness', () => this.deps.overlordAuthorityExchange?.nudge())?.catch(() => { /* one bad nudge must not kill the poll */ });
       // NEVER awaited, the same reasons: the LINEAR PLAN SYNC (D-8182): one tick of due programmes, joining any pass in flight.
       void this.runLane('linearPlanSync', () => this.deps.planSync?.tick(this.deps.time.clock.wall()))?.catch(() => { /* one bad tick must not kill the poll */ });
       // NEVER awaited, the same reasons: the LINEAR DRIFT PASS (D-8183): at most one managed workspace's pass, due once in thirty minutes.
@@ -3056,7 +3074,7 @@ export class FleetWatcher {
       const { sessions, panePids } = await timed(this.deps.perf, 'assemble', assembleFleetWithPanePids(this.deps.io, this.deps.cfg, this.deps.tmux, liveStateReaderOver(this.deps.io), fleetNow(), {
         pendingDialogs: pending, statuslines: this.statuslines, taskProgress: this.taskProgress, prStates: this.prStates,
         hookStates: this.hookStates, records, coord: this.deps.coord, usageReadings: this.usage,
-        headBranches: this.currentHeadBranches(), landings: this.landings, paneListing, limitsRead: limits,
+        headBranches: this.currentHeadBranches(), landings: this.landings, paneListing, limitsRead: limits, providerRetries: this.currentProviderRetries(),
       }));
       // The frame leaves first (console speed S1): the fleet frame follows assembly directly; pools, "Finished" pushes, claims,
       // the lanes, the state cache and the runs frame all wait behind it.
@@ -3067,6 +3085,7 @@ export class FleetWatcher {
         this.bus.emit('fleet', sessions);
       }
       this.tickFacts = { listedAt, limits, records: new Map(records.map((r) => [r.id, r])), listing: paneListing, panePids };
+      void this.sweepLimitSamples(limits).catch(() => { /* one bad sweep must not kill the poll */ });   // the LIMIT SAMPLER (W1 serviceability B): this listed tick's own reading
       const sigs = rowSignatures(records, paneListing, this.rowSigs);
       for (const id of changedRows(this.rowSigs, sigs)) this.bus.emit(`row:${id}`, { listedAt });
       this.rowSigs = sigs;
@@ -3207,6 +3226,8 @@ export class FleetWatcher {
       // the claim pair's synchronous try-block. It gates itself on `primed`, which is set below, so the priming tick
       // never judges.
       void this.sweepStalls(sessions, registryRead.names, { panePids, records, refused: registryRead.refused }).catch(() => { /* one bad sweep must not kill the poll */ });
+      // The Overlord's readiness word (§6.4, C23, H20), never awaited: this tick's assembled fleet and its listing (F4, F6).
+      void this.sweepOverlordReadiness({ listed: true, sessions, records, listedIds: registryRead.listedIds, names: registryRead.names })?.catch(() => { /* one bad sweep must not kill the poll */ });
       // Block wakes (P7) are their own lane, never awaited: the stall watch's switch and its run read do not gate them.
       void this.sweepBlockWakes(sessions, registryRead.names, { panePids, records, refused: registryRead.refused }).catch(() => { /* one bad sweep must not kill the poll */ });
       // D-6095: the admission wake, its own lane, never awaited; it reads the tick's listing for the two switches.
@@ -3512,8 +3533,9 @@ export class FleetWatcher {
         runId: m.runId,
         tag: `mail-${m.toId}-${m.mailId}`,
         recordAlways: true,
-        // A fired timer is the session's own reminder, never news for the operator (review 2053 F2): recorded, never pushed.
-        ...(isAskNudgeMail(m) || isApprovalNudgeMail(m) || isOperatorMessageMail(m) || isInboxWakeMail(m) || stall === 'check' || stall === 'reply' || stall === 'self-wake' || isUntoldNotice(m.subject) || isRunCloseWarning(m.subject) || isSkillRolloutMail(m) || m.fromId === TIMER_MAIL_SENDER ? { recordOnly: true } : {}),
+        // A fired timer is the session's own reminder, never news for the operator (review 2053 F2): recorded, never pushed. A
+        // provider retry is another: the outage has one notice of its own (`providerRetryLane.ts`).
+        ...(isAskNudgeMail(m) || isApprovalNudgeMail(m) || isOperatorMessageMail(m) || isInboxWakeMail(m) || isProviderRetryMail(m) || stall === 'check' || stall === 'reply' || stall === 'self-wake' || isUntoldNotice(m.subject) || isRunCloseWarning(m.subject) || isSkillRolloutMail(m) || m.fromId === TIMER_MAIL_SENDER ? { recordOnly: true } : {}),
       }, projects);
       this.lastMailNotifyId = m.deliveryId;
     }
@@ -6348,8 +6370,11 @@ export class FleetWatcher {
       const { io, cfg } = this.deps;
       const reads = turnReadDeps(this.deps, this);
       const rec = (id: string): SessionRecord | undefined => records.find((r) => r.id === id);
-      const acts = renewalActsOf(this.deps, coord, records, reads, (r) => this.rowAtAct(r), this.stopDoneSerial, this.renewalMemo);
-      const w1 = renewalReadingsOf(this.deps, coord, records);   // W1's renewal readings, one wiring (and its memo) per pass
+      const lane = this.overlordLane;   // designation B: the write-set before each Overlord renewal, and the deadline sweep's facts
+      const acts = renewalActsOf(this.deps, coord, records, reads, (r) => this.rowAtAct(r), this.stopDoneSerial, this.renewalMemo, lane && ((t) => lane.beforeRenew(t.sessionId)));
+      const attempt = await lane?.facts().catch((e: unknown) => { console.warn(`ccrc-server: overlord attempt: facts unread: ${String(e)}`); return undefined; });
+      // W1's renewal readings, one wiring (and its memo) per pass; `notLocal` asks the watcher's one memoized resolver (PR B).
+      const w1 = renewalReadingsOf({ ...this.deps, transcript: (o) => this.transcripts.resolve(o) }, coord, records);
       const readings = await gatherGenerationReadings(coord, {
         usage: (id) => readUsageMeasured(io, cfg.registryDir, id, Math.floor(this.deps.time.clock.wall() / 1000)),
         eventsStamp: (id) => io.statMeasured(compactionsPaths(cfg.registryDir, id).pre),
@@ -6371,9 +6396,10 @@ export class FleetWatcher {
         readings,
         canRenew: acts.canRenew,
         // The roster this server holds now (`reloadRoster` swaps it): an account's organization label, or null.
-        orgOf: (account) => cfg.roster.byId.get(account)?.org ?? null,
+        orgOf: (account) => cfg.roster.byId.get(account)?.org ?? null, attempt,
       });
       if (pass.live && pass.planned.length > 0) await acts.run(pass.planned);
+      if (lane !== undefined && pass.attempt !== null) await runOverlordAttempt(lane, pass.attempt, (line) => console.warn(line));
       // The PreCompact field's retraction runs live or shadow (ruling F2 on review 2312): a `refuse` never outlives its reason.
       if (pass.retract.length > 0) await acts.retract(pass.retract);
     });
@@ -6461,8 +6487,12 @@ export class FleetWatcher {
                     names: readonly string[]): Promise<void> {
     const coord = this.deps.coord;
     if (!coord) return;
+    // The Overlord's timers (W1): the authority guard's state and the restore generation, through the lane's own ports.
+    const guard = this.deps.overlordAuthorityGuard; const restore = this.deps.overlordRestore;
     await this.runLane('timers', () => runTimersLane({ coord, clock: this.deps.time.clock, io: this.deps.io,
-      registryDir: this.deps.cfg.registryDir, log: (line) => console.warn(line) }, timerListingOf(records, listedIds, listedAt, names)));
+      registryDir: this.deps.cfg.registryDir, log: (line) => console.warn(line),
+      authority: () => (guard?.state().kind === 'coherent' ? 'coherent' : 'not-coherent'),
+      restoreGeneration: () => restore?.restoreGeneration() ?? { kind: 'unmeasured' } }, timerListingOf(records, listedIds, listedAt, names)));
   }
 
   /** The sequence's retention lane (Overlord §10.4, Table 11.5b; `coord/sequenceRetentionLane.ts`): one prune pass. */
@@ -6470,6 +6500,20 @@ export class FleetWatcher {
     const coord = this.deps.coord;
     if (!coord) return;
     await this.runLane('sequenceRetention', () => { runSequenceRetentionLane({ coord, clock: this.deps.time.clock, log: (line) => console.warn(line) }); });
+  }
+
+  /** The invariant monitor (Overlord §10.4, Table 11.1c; `coord/invariantLane.ts`): one pass, shadow until its Shadow lanes row is Live. */
+  async sweepInvariants(): Promise<void> {
+    const monitor = this.deps.invariantMonitor;
+    if (!monitor) return;
+    await this.runLane('invariants', () => { monitor.pass(this.itemReach); });
+  }
+
+  /** The Overlord's readiness word (§6.4, C23, H20; `coord/overlordReadinessLane.ts`): one pass on this tick, with the watcher's
+   *  item reach. Absent (a test, a script): no pass runs and nothing is written. */
+  sweepOverlordReadiness(tick: ReadinessTick): Promise<unknown> | null {
+    const lane = this.deps.overlordReadiness;
+    return lane ? this.runLane('overlordReadiness', () => lane.pass(tick, this.itemReach)) : null;
   }
 
   /** The weekly replay quiz lane (Overlord §3.3.9 C52, W1a; `continuity/quizLane.ts`): one read-and-raise pass on the wall clock. */
@@ -6503,6 +6547,13 @@ export class FleetWatcher {
       if (pass.failed.length > 0) console.warn(`ccrc-server: the forecast lane recorded nothing for: ${pass.failed.join('; ')}`);
       if (pass.missed > 0) console.warn(`ccrc-server: the forecast lane missed ${pass.missed} close(s) in a gap it was down for; they are never sealed`);
     });
+  }
+
+  /** The limit sampler (Overlord W1 serviceability PR B, `limitSampler.ts`): every `LIMIT_SAMPLE_MS`, the listed tick's own reading into
+   *  `limit_samples`. It adds no read and reads the wall clock through the time port; a store that throws is the row's warn. */
+  async sweepLimitSamples(limits: TickFacts['limits']): Promise<void> {
+    const store = this.deps.limitSamples;
+    if (store) await this.runLane('limitSamples', () => { limitSamplePass(store, limits, this.deps.cfg.roster, Math.floor(this.deps.time.clock.wall() / 1000)); });
   }
 
   /** The decision model's anchor-set lane (Overlord W2; `coord/decisionModelLane.ts`): anchors, admission and canary through the one caller. */
@@ -7090,7 +7141,8 @@ export class FleetWatcher {
    * - a run COORDINATOR (`stallCoordinatorSubjects`, minus the workers): orphan E, failed, each mail stuck, its
    *   marker and orphan D (slug `coordinators-draw-orphan-d` (D-3749)), all RUN-LESS (slug `coordinator-notices-are-run-less` (D-3653)),
    *   so none can stand in a worker's proof (b);
-   * - every other registry row: orphan D only, and only once its marker records a restart that lost tasks.
+   * - every other registry row: orphan D, only once its marker records a restart that lost tasks; and the
+   *   provider-failure ladder (`providerRetryLane.ts`), which judges every kind above too.
    *
    * Reads (slug `three-reads-per-candidate` (D-3642)): at most three agent reads per worker — the live file, the turn
    * marker and the raw hookstate — and two per coordinator. The pane pid and the registry uuid are the tick's
@@ -7130,6 +7182,7 @@ export class FleetWatcher {
       const r = this.stallResolveNow(store, names, names.includes(MAIL_DISABLED_MARKER));
       const arming: StallArming = { ...r.arming, ...stallBusyClock(r.arming.mailMode, this.lastApplied, this.busySince) };
       // D-8285: a disabled watch reads no marker, so the heartbeat is cleared rather than left to age into a false quiet.
+      this.providerRetry.begin(arming, r.levelSource);
       if (arming.disabled) { this.workerSeen.replace(new Map()); return; }
       const paused = names.includes(COORDINATOR_PAUSE_MARKER);
       let candidates: ReturnType<WatcherCoordPort['stallCandidates']>;
@@ -7185,6 +7238,7 @@ export class FleetWatcher {
           console.warn(`ccrc-server: stall-watch session ${r.id} failed (${err instanceof Error ? err.message : String(err)}) — the next subject still runs`);
         }
       }
+      this.providerRetry.end((id) => tick.panePids.has(id), now);
     } catch (err) {
       // A throw outside the per-subject catches (a listing's `includes`, `stallSubjects`, `stallCoordinatorSubjects`, `pruneStallMemory`)
       // would reach the tick's silent `.catch`, and the lane would die every minute with no trace. One line per bad sweep instead.
@@ -7325,7 +7379,7 @@ export class FleetWatcher {
       w2: {
         mark, hook: stallHookFactOf(raw), deliveries: read.deliveries,
         absentSince: this.stallAbsentSince.get(id) ?? null, deadSince: this.stallDeadSince.get(id) ?? null,
-        markUnreadableSince,
+        markUnreadableSince, providerRetryOwed: this.providerRetry.holdsQuiet(mark),
       },
     };
     let v = stallVerdict(input, now);
@@ -7344,6 +7398,7 @@ export class FleetWatcher {
     for (const sv of [...stallRestartedVerdicts(si, now), stallOrphanEVerdict(si, now), stallFailedVerdict(si, now), ...stallMailStuckVerdicts(si, now), stallOrphanDVerdict(si, now)]) {
       this.applyStallSession(store, si, primary.project, sv, now);
     }
+    this.providerRetry.judge(store, si, s, tick.records.find((x) => x.id === id), now);
   }
 
   /** One run coordinator, judged RUN-LESS (slug `coordinator-notices-are-run-less` (D-3653)): its notices are keyed on
@@ -7402,6 +7457,7 @@ export class FleetWatcher {
     for (const sv of [...stallRestartedVerdicts(si, now), stallOrphanEVerdict(si, now), stallFailedVerdict(si, now), ...stallMailStuckVerdicts(si, now), stallSessionMarkerVerdict(si, now), stallOrphanDVerdict(si, now)]) {
       this.applyStallSession(store, si, project, sv, now);
     }
+    this.providerRetry.judge(store, si, s, tick.records.find((x) => x.id === id), now);
     // coord-blocked (D-6942): the same session facts, with the claimant's child marker from this tick's rows
     // (`unlisted` when none), the active runs it claims and the episode remembered from the last sweep. L1 decides
     // the verdict and the next episode; this only keeps the episode and applies the verdict, run-less.
@@ -7449,8 +7505,8 @@ export class FleetWatcher {
     if (input !== null) this.applyStallSession(store, si, project, stallCoordBallMailStep(input, now), now);
   }
 
-  /** A registry row that is no run's worker or coordinator: orphan D only (spec §5.2, "Candidates are the registry
-   *  rows whose marker reads done with lostBg > 0"). ONE read, the marker judged with no live file, and the live
+  /** A registry row that is no run's worker or coordinator: orphan D (spec §5.2, "Candidates are the registry
+   *  rows whose marker reads done with lostBg > 0") and the provider-failure ladder (`providerRetryLane.ts`), no other arm. ONE read, the marker judged with no live file, and the live
    *  file only for a marker that records a restart which lost background tasks. That gate is L1's
    *  (`stallOrphanDCandidate`, the mark alone), spent here on the read budget; this method asks it and spells no
    *  conjunct. `stallOrphanDVerdict` asks the same predicate again with the live facts, and re-judges the marker
@@ -7468,7 +7524,7 @@ export class FleetWatcher {
     // registry rows are long-dead sessions, so they cost no agent read.
     if (!tick.panePids.get(r.id)) return;
     const mark = await readTurnMarkMeasured(this.deps.io, this.deps.cfg.registryDir, r.id, ident.uuid, null);
-    if (!mark.ok || !stallOrphanDCandidate(mark)) return;
+    if (!mark.ok || !(stallOrphanDCandidate(mark) || this.providerRetry.candidate(r.id, mark))) return;
     const s = sessions.find((x) => x.id === r.id);
     const lr = s === undefined ? null : await this.stallLiveRead(r.id, s.wrapper, tick);
     // A row of `records` is never refused: the listing builds no refused row.
@@ -7484,6 +7540,7 @@ export class FleetWatcher {
       coordinationPaused: paused,
     };
     this.applyStallSession(store, si, s?.project ?? r.project, stallOrphanDVerdict(si, now), now);
+    this.providerRetry.judge(store, si, s, r, now);
   }
 
   /** The registry uuid this sweep reads a marker and a hookstate against, off the tick's own rows. No row: `null`
@@ -8919,11 +8976,6 @@ export class FleetWatcher {
           const notIdle = turn.gate === 'not-idle'; gated(d, notIdle ? 'not-idle' : 'not-quiet'); continue;
         }
 
-        // `seen` is added only HERE, once every gate above has passed and the
-        // send is actually about to be attempted — it means "one message per
-        // session per sweep", not "one row considered per sweep", and moving
-        // the claim earlier must not change that.
-        seen.add(d.toId);
         // The REFERENCE NUDGE (robust-mail-delivery spec §1), not `d.envelope`
         // — the lane no longer types the whole stored envelope into the pane.
         // `renderMailNudge` is a pure, ID-AGNOSTIC function of `d.toId` alone
@@ -8955,8 +9007,14 @@ export class FleetWatcher {
         // mail branch); every other mail is the id-agnostic line above, as before.
         const origin = store.mailOrigin(d.mailId);
         const nudge = await operatorNudgeFor((id) => readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, id), d.toId, origin, sweepDesignationOf(designation), now);
-        // A fixed line delivered once whose ack never landed is acked, never typed twice (review 3389 F1).
-        if (finishFixedLineAck({ coord: store, now, warn: (l) => { console.warn(l); } }, d, nudge)) continue;
+        // A fixed line delivered once whose ack never landed is acked, never typed twice (review 3389 F1). The Overlord's timer
+        // line waits until its live generation has read its card (W1, C62): no attempt is spent while it holds.
+        if (finishFixedLineAck({ coord: store, now, warn: (l) => { console.warn(l); } }, d, nudge) || (nudge.waitsForCard === true && !timerLineHold(gens, identityOf(d.toId, designation), (id) => store.cardReadOfStart(id), (l) => { console.warn(l); }))) continue;
+        // `seen` is added only HERE, once every gate above has passed, the nudge is chosen and neither the ack-once nor the card
+        // hold took the row, so the send is actually about to be attempted. It means "one message per session per sweep", not
+        // "one row considered per sweep": a row that types nothing claims nothing (review 3841 F1), and moving the claim
+        // earlier must not change that.
+        seen.add(d.toId);
         // `ownStrandedClear` (Task 407, operator ruling): the ONE dirty-box
         // case this lane may clear on PROOF rather than on shape.
         // `dispatch.ts` types a literal `/clear` into a resumed worker before

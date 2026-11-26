@@ -7,7 +7,9 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { MIGRATIONS } from '../src/coord/schema.js';
 import { tx } from '../src/coord/tx.js';
-import type { TimerInsert } from '../src/continuity/continuityStore.js';
+import {
+  firedTimersOf, purgeTimerRefusals, recordTimerRefusal, timerRefusalCounts, type TimerInsert,
+} from '../src/continuity/continuityStore.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
 afterEach(removeTmpFixtures);
@@ -18,7 +20,7 @@ const ID = 'lane-a-project-a';
 const store = (): CoordStore => new CoordStore(openCoordDb(path.join(mkTmp('ccrc-timers-'), '.ccrc', 'coord.db')));
 const row = (over: Partial<TimerInsert> = {}): TimerInsert => ({
   setter: ID, setterIncarnation: '11111111-2222-3333-4444-555555555555', setById: ID, setByUuid: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
-  role: 'worker', note: 'check the checks', runId: 7, programme: null, setAt: NOW, dueAt: NOW + 2 * 3_600_000, ...over,
+  role: 'worker', note: 'check the checks', runId: 7, programme: null, setAt: NOW, dueAt: NOW + 2 * 3_600_000, setRestoreGeneration: null, ...over,
 });
 const set = (s: CoordStore, over: Partial<TimerInsert> = {}): number => {
   const r = s.insertTimer(row(over));
@@ -32,7 +34,10 @@ describe('continuity_timers: the table and its writers (Overlord §3.3.12, C61)'
   it('the migration\'s slot is found by its DDL, after the card\'s tables', () => {
     const slot = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_timers')) + 1;
     expect(slot).toBeGreaterThan(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_card_reads')) + 1);
-    expect(MIGRATIONS.filter((m) => m.includes('continuity_timers'))).toHaveLength(1);
+    // Two entries name it: the one that creates it, and the Overlord's timers' restore column (migration 128), which alters it.
+    expect(MIGRATIONS.filter((m) => m.includes('CREATE TABLE continuity_timers ('))).toHaveLength(1);
+    expect(MIGRATIONS.filter((m) => m.includes('continuity_timers')).map((m) => m.includes('CREATE TABLE continuity_timers (') || m.includes('ALTER TABLE continuity_timers ADD COLUMN setRestoreGeneration')))
+      .toStrictEqual([true, true]);
   });
 
   it('insert then read back: a pending row with every column as set', () => {
@@ -43,6 +48,7 @@ describe('continuity_timers: the table and its writers (Overlord §3.3.12, C61)'
       id, setter: ID, setterIncarnation: '11111111-2222-3333-4444-555555555555', setById: ID,
       setByUuid: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', role: 'worker', note: 'check the checks', runId: 7, programme: null,
       setAt: NOW, dueAt: NOW + 2 * 3_600_000, state: 'pending', firedAt: null, mailId: null, cancelledAt: null, cancelReason: null,
+      setRestoreGeneration: null,
     }] });
   });
 
@@ -216,5 +222,102 @@ describe('continuity_timers: the table and its writers (Overlord §3.3.12, C61)'
     expect(s.purgeTimers(before)).toStrictEqual({ removed: 2 });
     expect(states(s).map((r) => r.id)).toEqual([firedNew, cancelledNew, pendingOld]);
     expect(s.purgeTimers(before)).toStrictEqual({ removed: 0 });
+  });
+});
+
+// Overlord W1, the Overlord's timers (plan w1-overlord-timers.md Task 2): the restore generation at the set, the role's fired
+// list and the refusal count (M36), on a fixture coord.db at the new version.
+describe('the restore column, the fired list and the refusal count (Overlord W1, migration 128)', () => {
+  const W1A_COLUMNS = 'id, setter, setterIncarnation, setById, setByUuid, role, note, runId, programme, setAt, dueAt, state, '
+    + 'firedAt, mailId, cancelledAt, cancelReason';
+  /** One mail and its one delivery, as the lane queues them, with the delivery's ack time (null: not acked). */
+  const mailFor = (s: CoordStore, ackedAt: number | null, state = ackedAt === null ? 'delivered' : 'acked'): number => {
+    const m = s.db.prepare("INSERT INTO mail (fromId, fromUuid, toId, kind, subject, body, artifacts, at) VALUES ('timer', 'timer', 'overlord', 'status', 's', 'b', '[]', 1) RETURNING id")
+      .get() as { id: number };
+    s.db.prepare("INSERT INTO mail_deliveries (mailId, toId, state, envelope, ackedAt) VALUES (?, 'lane-a-project-a', ?, '', ?)").run(m.id, state, ackedAt);
+    return m.id;
+  };
+  const fire = (s: CoordStore, id: number, mailId: number, at: number): void => { s.markTimersFired([id], mailId, at); };
+  const ROLE = { setter: 'overlord', setterIncarnation: '7', role: 'overlord' as const, runId: null };
+
+  it('the migration\'s slot holds the column and the table, once each', () => {
+    expect(MIGRATIONS.filter((m) => m.includes('ADD COLUMN setRestoreGeneration'))).toHaveLength(1);
+    expect(MIGRATIONS.filter((m) => m.includes('CREATE TABLE continuity_timer_refusals'))).toHaveLength(1);
+    expect(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_timer_refusals')))
+      .toBeGreaterThan(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_timers')));
+  });
+
+  it('insertTimer stores the restore generation, 2 or null, and it reads back through timerById', () => {
+    const s = store();
+    const two = set(s, { setRestoreGeneration: 2 });
+    const none = set(s, { setRestoreGeneration: null });
+    const a = s.timerById(two); const b = s.timerById(none);
+    expect(a.ok && a.row?.setRestoreGeneration).toBe(2);
+    expect(b.ok && b.row !== null && b.row.setRestoreGeneration).toBeNull();
+  });
+
+  it('a row whose restore column holds text fails the read with a detail, never reads as unmeasured', () => {
+    const s = store();
+    const id = set(s);
+    s.db.prepare("UPDATE continuity_timers SET setRestoreGeneration = 'two' WHERE id = ?").run(id);
+    const r = s.timerById(id);
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.detail).toContain('restore generation');
+    expect(s.pendingTimersOf(ID).ok).toBe(false);
+  });
+
+  it("an older build's read through W1a's column list reads every row: the column is extra, never required", () => {
+    const s = store();
+    set(s, { setRestoreGeneration: 3 }); set(s, { setRestoreGeneration: null });
+    const rows = s.db.prepare(`SELECT ${W1A_COLUMNS} FROM continuity_timers WHERE state = 'pending' AND setter = ? ORDER BY dueAt, id`).all(ID);
+    expect(rows).toHaveLength(2);
+    for (const r of rows) expect(Object.keys(r as object)).not.toContain('setRestoreGeneration');
+  });
+
+  it("firedTimersOf: the setter's fired rows of the stamp only, by the window, newest first", () => {
+    const s = store();
+    const since = NOW - DAY;
+    const queued = set(s, ROLE); fire(s, queued, mailFor(s, null, 'queued'), NOW - 10 * DAY);
+    const parked = set(s, ROLE); fire(s, parked, mailFor(s, null, 'rejected'), NOW - 9 * DAY);
+    const unacked = set(s, ROLE); fire(s, unacked, mailFor(s, null), NOW - 8 * DAY);
+    const inside = set(s, ROLE); fire(s, inside, mailFor(s, since), NOW - 7 * DAY);
+    const before = set(s, ROLE); fire(s, before, mailFor(s, since - 1), NOW - 6 * DAY);
+    const oldTerm = set(s, { ...ROLE, setterIncarnation: '6' }); fire(s, oldTerm, mailFor(s, null), NOW - 5 * DAY);
+    const other = set(s); fire(s, other, mailFor(s, null), NOW - 4 * DAY);
+    set(s, ROLE); // pending
+    const cancelled = set(s, ROLE); s.cancelTimer(cancelled, 'cleanup', 'retired', NOW);
+    const r = firedTimersOf(s.db, 'overlord', '7', since);
+    expect(r.ok && r.rows.map((t) => t.id)).toStrictEqual([inside, unacked, parked, queued]);
+    expect(firedTimersOf(s.db, 'overlord', '6', since)).toMatchObject({ ok: true, rows: [{ id: oldTerm }] });
+  });
+
+  it('firedTimersOf on a dropped table answers ok: false, never an empty list', () => {
+    const s = store();
+    s.db.exec('DROP TABLE continuity_timers');
+    expect(firedTimersOf(s.db, 'overlord', '7', 0).ok).toBe(false);
+  });
+
+  it('recordTimerRefusal: one row a day, door and word; twice reads n 2; a dropped table answers ok: false without a throw', () => {
+    const s = store();
+    expect(recordTimerRefusal(s.db, { day: '2026-11-25', door: 'set', word: 'timer-cap' })).toStrictEqual({ ok: true });
+    recordTimerRefusal(s.db, { day: '2026-11-25', door: 'set', word: 'timer-cap' });
+    recordTimerRefusal(s.db, { day: '2026-11-25', door: 'list', word: 'timer-cap' });
+    recordTimerRefusal(s.db, { day: '2026-11-26', door: 'set', word: 'timer-cap' });
+    expect(timerRefusalCounts(s.db, '2026-11-25')).toStrictEqual({ ok: true, rows: [
+      { day: '2026-11-25', door: 'list', word: 'timer-cap', n: 1 },
+      { day: '2026-11-25', door: 'set', word: 'timer-cap', n: 2 },
+      { day: '2026-11-26', door: 'set', word: 'timer-cap', n: 1 },
+    ] });
+    expect(timerRefusalCounts(s.db, '2026-11-26')).toMatchObject({ ok: true, rows: [{ day: '2026-11-26' }] });
+    s.db.exec('DROP TABLE continuity_timer_refusals');
+    expect(recordTimerRefusal(s.db, { day: '2026-11-25', door: 'set', word: 'timer-cap' })).toStrictEqual({ ok: false });
+    expect(timerRefusalCounts(s.db, '2026-11-25').ok).toBe(false);
+  });
+
+  it('purgeTimerRefusals removes only the days before its day', () => {
+    const s = store();
+    for (const day of ['2026-08-26', '2026-08-27', '2026-11-25']) recordTimerRefusal(s.db, { day, door: 'cancel', word: 'timer-not-yours' });
+    expect(purgeTimerRefusals(s.db, '2026-08-27')).toStrictEqual({ removed: 1 });
+    expect(timerRefusalCounts(s.db, '2000-01-01')).toMatchObject({ ok: true, rows: [{ day: '2026-08-27' }, { day: '2026-11-25' }] });
   });
 });

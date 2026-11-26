@@ -130,7 +130,7 @@ describe('landedCandidatesOf', () => {
     dependencies: o.entries.map((e) => ({ id: e.id, value: { kind: 'readable' as const, afterIds: [] } })),
     recovery: o.recovery, nextId: Math.max(0, ...o.entries.map((e) => e.id)) + 1, foreignIds: [],
     coordinators: o.entries.map((e) => ({ id: e.id, value: { kind: 'no-run' as const } })),
-    terminalRepairs: o.terminalRepairs ?? [], creations: [],
+    terminalRepairs: o.terminalRepairs ?? [], creations: [], flagsRow: false, pinTimes: o.entries.map((e) => ({ id: e.id, value: e.pinnedAt })),
   });
   const entry = (id: number, state: LandingEntryState): LandingEntry => ({ id, project: 'project-a', pr: 100 + id, pinnedSha: HEAD, handoffCommit: HEAD,
     runId: id, state, baseSha: null, ejectionKind: null, ejections: 0, afterIds: [], fixesMain: false, setBy: 'lane-a', pinnedAt: id * 10 });
@@ -180,7 +180,8 @@ describe('landedCandidatesOf: the terminal-repair alternative (wave 5i, D-8626)'
     projections: entries.map((e) => ({ id: e.id, value: { kind: 'unreadable' } as LandingProjectionRead })),
     stateWords: entries.map((e) => ({ id: e.id, value: e.state })),
     dependencies: entries.map((e) => ({ id: e.id, value: { kind: 'readable' as const, afterIds: [] } })), recovery, nextId: 99, foreignIds: [],
-    coordinators: entries.map((e) => ({ id: e.id, value: { kind: 'no-run' as const } })), terminalRepairs, creations: [],
+    coordinators: entries.map((e) => ({ id: e.id, value: { kind: 'no-run' as const } })), terminalRepairs, creations: [], flagsRow: false,
+    pinTimes: entries.map((e) => ({ id: e.id, value: e.pinnedAt })),
   });
   const entry = (id: number, state: LandingEntryState): LandingEntry => ({ id, project: 'project-a', pr: 100 + id, pinnedSha: HEAD, handoffCommit: HEAD,
     runId: id, state, baseSha: null, ejectionKind: null, ejections: 0, afterIds: [], fixesMain: false, setBy: 'lane-a', pinnedAt: id * 10 });

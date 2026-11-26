@@ -256,7 +256,11 @@ describe('one KeyedQueue for the process', () => {
   it('is constructed in exactly one file under server/src, and that file is the composition root', () => {
     const holders = ALL.filter((f) => f.includes(`${path.sep}server${path.sep}src${path.sep}`))
       .filter((f) => CONSTRUCTS.test(readFileSync(f, 'utf8'))).map(rel);
-    expect(holders).toEqual(['server/src/index.ts']);
+    // The paste delivery recipe's driver (Desktop polish wave 178) is a composition root of its own, LEGITIMATELY
+    // DIFFERENT (another process, on another host): the test box runs it, compiled, as a bounded child for one case at a
+    // time, on a capture's private tmux server, and nothing in the server imports it (`delivery-drive.test.ts`), so it
+    // shares no lock with the server's sessions and has nothing to race.
+    expect(holders).toEqual(['server/src/index.ts', 'server/src/inject/deliveryDrive.ts']);
   });
 
   it('both consumers take it from Deps rather than making their own', () => {
@@ -852,14 +856,33 @@ describe('Build 7 nouns', () => {
     // The admission wake (D-6095, capacity Task 4): `admissionWakeTx.ts` is its one write, the observation row, the mail and
     // the woken stamp in one transaction, in `rundefsTx.ts`' idiom (`queueStallNotice`), beside it while that file is frozen.
     // The one sequence (Overlord W1, §10.4): `overlordSequenceStore.ts` is `overlord_sequence`'s SQL, in the same idiom.
-    const HANDLE_HOLDERS = new Set(['store.ts', 'rundefsTx.ts', 'routes.ts', 'db.ts', 'schema.ts', 'tx.ts', 'ledgersStore.ts', 'reviewCapStore.ts', 'linkingStore.ts', 'coordCallsStore.ts', 'practiceCasesStore.ts', 'planStore.ts', 'claudeBuildsStore.ts', 'pushOutboxStore.ts', 'portfolioStore.ts', 'answerMarkStore.ts', 'overlordAuthorityJournal.ts', 'overlordLadderStore.ts',
+    const HANDLE_HOLDERS = new Set(['store.ts', 'rundefsTx.ts', 'routes.ts', 'db.ts', 'schema.ts', 'tx.ts', 'ledgersStore.ts', 'reviewCapStore.ts', 'linkingStore.ts', 'coordCallsStore.ts', 'practiceCasesStore.ts', 'planStore.ts', 'claudeBuildsStore.ts', 'claudeBuildDeliveriesStore.ts', 'pushOutboxStore.ts', 'portfolioStore.ts', 'answerMarkStore.ts', 'overlordAuthorityJournal.ts', 'overlordLadderStore.ts',
       'responsesStore.ts', 'claimCollisions.ts', 'programmePairsStore.ts', 'decisionModelStore.ts',
       'programmeFactsStore.ts', 'overlordDesignationStore.ts', 'approvalCensusStore.ts', 'overlordGateStore.ts', 'approvalParkStore.ts', 'admissionWakeTx.ts', 'skillRolloutTx.ts', 'overlordSequenceStore.ts',
       'overlordRestoreState.ts', 'lifecycleLaneRows.ts',
       // Wave 5i: `landingControlTx.ts` runs the main-red hold UPSERT inside `CoordStore.applyLandingControl`'s owned transaction, so it names the handle.
       'landingControlTx.ts',
+      // Wave 5j-a (D-9046): `landingDoorsTx.ts` runs the operator's pause and withdraw statements inside `CoordStore.applyLandingRecord`, so it names the handle type.
+      'landingDoorsTx.ts',
       // The coordinator advisor (D-8967): `advisorStore.ts` is its three tables' SQL, `coordCallsStore.ts`'s idiom.
-      'advisorStore.ts']);
+      'advisorStore.ts',
+      // The history of limits (Overlord W1 serviceability B): the sampler's SQL takes a handle by argument.
+      'limitSamplesStore.ts',
+      // The programme lifecycle (W1, D-8983): `programmeLifecycleStore.ts` is the decision's, the binding's and the events' one
+      // writer, inside its caller's transaction; it names the handle by `import type`, and every function takes it as an argument.
+      'programmeLifecycleStore.ts',
+      // Programme lifecycle W2: `programmeLifecycleActs.ts` composes the doors' acts (an item and its programme event, an end and
+      // its item) inside `CoordStore`'s transactions, through the two writers' in-transaction functions; `import type` alone.
+      'programmeLifecycleActs.ts',
+      // The invariant monitor (Overlord W1, sequence B2): Confirm's database side as one read (`overlordRestoreRows.ts`), the
+      // gatherer (`invariantFacts.ts`) and the findings' SQL (`invariantFindingsStore.ts`) take the handle as an argument, and
+      // the runner's factory (`invariantLane.ts#invariantMonitorOver`) binds them to it once for `index.ts`; each names it by
+      // `import type`.
+      'overlordRestoreRows.ts', 'invariantFacts.ts', 'invariantFindingsStore.ts', 'invariantLane.ts',
+      // The Overlord's readiness word (Overlord W1, §6.4): the store's SQL takes the handle as an argument, and the lane's port
+      // carries it from the composition root (`overlordReadinessWiring.ts` passes the one it is given); each names it by
+      // `import type`.
+      'overlordReadinessStore.ts', 'overlordReadinessLane.ts']);
     const coordFiles = sources(coordDir);
 
     it('visits the whole directory — a moved directory must turn this red, not disarm it', () => {

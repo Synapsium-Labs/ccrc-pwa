@@ -78,7 +78,7 @@ let wave = 0;
 function pinned(c: CoordStore, pr: number, project = P): number {
   vi.setSystemTime(Date.now() + 10);
   wave++;
-  const o = c.openRun({ program: `prog-${wave}`, title: 't', project, wave, waveOf: 99, claimedBy: 'coord-a' });
+  const o = c.openRun({ program: 'prog-coord-a', title: 't', project, wave, waveOf: null, claimedBy: 'coord-a' });   // one programme per coordinator (R11)
   if (!('id' in o)) throw new Error('fixture openRun refused');
   c.setSession(o.id, `lane-a-ws${wave}`);
   for (const to of ['dispatched', 'working', 'awaiting-review'] as const) if (!c.advance(o.id, to, 'test').ok) throw new Error(`advance to ${to}`);

@@ -24,6 +24,8 @@ import type { CoordCapNow } from './runCap.js';
 import type { ApprovalParkWord, ApprovalRulingAuthority, ApprovalRulingFamily } from './approval-park.js';
 import type { LandingWrite } from './landingLine.js';
 import { hookEventIs, type HookEvent } from './hook-events.js';
+import { providerRetryOf, type ProviderRetryWire } from './provider-retry-wire.js';
+import { PROGRAMME_RUN_REFUSAL_MAP, PROGRAMME_STORED_STATES, type ProgrammeLifecycleFields, type ProgrammeRunRefuseCode, type ProgrammesLifecycleAnswer, type ProgrammeStoredState } from './programmeLifecycle.js';
 
 export type SessionStatus = 'busy' | 'idle' | 'dead';
 
@@ -116,11 +118,8 @@ export function isSessionRole(v: unknown): v is SessionRole {
 
 /** `FleetSession.limitWait`'s value (D-8123; `waitingBy`, D-8173): see the field's own doc. */
 export interface LimitWait {
-  readonly since: number;
-  readonly reset: number | null;
-  readonly account: string;
-  readonly waiting: boolean;
-  readonly waitingBy: 'operator' | 'auto' | null;
+  readonly since: number; readonly reset: number | null; readonly account: string;
+  readonly waiting: boolean; readonly waitingBy: 'operator' | 'auto' | null;
 }
 
 export interface FleetSession {
@@ -496,6 +495,9 @@ export interface FleetSession {
    *  this build cannot read → null, because it is a display line that gates nothing server-side. An older server's value
    *  without `waitingBy` revives as `'operator'` when waiting (the only chooser it knew) and null otherwise. */
   readonly limitWait: LimitWait | null;
+  /** The provider-failure ladder's retry of this session (`ProviderRetryWire`), off the stall pass (`coord/providerRetry.ts`).
+   *  Absent: none is known. Read ONLY through `providerRetryOf`, live frames being cast. ADDITIVE: no `FLEET_PROTO` bump. */
+  readonly providerRetry?: ProviderRetryWire | null;
   /** The supervisor's standing substrate fault — `$REG/<id>.substrate`, the
    *  decision record `cmd_supervise` writes while tmux answers neither `live`
    *  nor `gone` (spec §2). Epoch MS (converted from the registry's seconds in
@@ -934,9 +936,7 @@ export function withCoordinatorWords(wc: WithCoordinator, project: string): { te
  * from one this build never measured, and folding the two to one value is
  * the overloaded-null this project's CLAUDE.md forbids.
  */
-export function ctxPressure(s: { ctxPct?: number | null }): number | null {
-  return tolerantCount(s.ctxPct);
-}
+export function ctxPressure(s: { ctxPct?: number | null }): number | null { return tolerantCount(s.ctxPct); }
 
 /** Tolerant read of `FleetSession.paneCols` off a cast live frame — the same
  *  ladder as `ctxPressure`: absent (an older server), null, or unusable all
@@ -3578,6 +3578,7 @@ export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnW
       swapBlocked: reviveSwapBlocked(o, 'swapBlocked'),
       stranded: reviveStranded(o, 'stranded'),
       limitWait: reviveLimitWait(o, 'limitWait'),
+      ...((p) => (p === null ? {} : { providerRetry: p }))(providerRetryOf(o['providerRetry'])),
       substrate: reviveSubstrate(o, 'substrate'),
       // THE DEGRADE, DOCUMENTED: absent reads TRUE, not false. Every session a
       // pre-Wave-1 build persisted had a claim, and `false` would light
@@ -4731,6 +4732,7 @@ export const RESTART_CAUSE_WORDS = {
   exited: 'process exited',
   'swap-auto-home': 'swapped home',
   'swap-auto-rescue': 'swapped off a blocked account',
+  'swap-auto-provider': 'moved off a failing provider',
   'swap-auto': 'swapped automatically',   // D-5348: an automatic swap whose arm is not named
   'swap-manual': 'swapped by hand',
   'limit-resume': 'restarted after a limit reset',   // D-8123: the fleet watchdog's in-place restart once an awaited reset passed
@@ -5442,10 +5444,9 @@ export function isWorkItemState(v: unknown): v is WorkItemState {
  *  enum column, and this was one of the two it did not actually give one to.
  *  Closed here, on the READ side, rather than reproduced on the wire —
  *  `CoordStore.programs()` reads through `isProgramState`, never a cast. */
-export type ProgramState = 'active' | 'paused' | 'done' | 'abandoned' | 'unknown';
-const PROGRAM_STATES: readonly ProgramState[] = ['active', 'paused', 'done', 'abandoned', 'unknown'];
+export type ProgramState = ProgrammeStoredState;   // spelled once, in `shared/programmeLifecycle.ts` (W1 review, A7)
 export function isProgramState(v: unknown): v is ProgramState {
-  return typeof v === 'string' && (PROGRAM_STATES as readonly string[]).includes(v);
+  return typeof v === 'string' && (PROGRAMME_STORED_STATES as readonly string[]).includes(v);
 }
 
 /** An agent-to-agent message. `artifact` carries PATHS, NEVER PAYLOADS
@@ -6803,7 +6804,8 @@ export type RunRefuseCode =
   // Programme work map WM1 (D-8727, spec 2026-11-16 §4.1 D10): in a plan that declares a phase, a work run with no ticket
   // into an epic with an open declared ticket no run holds must name one.
   // D-6096: `self-dispatch`, a plain dispatch of a run onto the session that claims it; bind it in place instead.
-  | 'ticket-required' | 'self-dispatch';
+  // Programme lifecycle W1 (D-8983, D-8993): the lifecycle's open refusals, spelled in `shared/programmeLifecycle.ts`.
+  | 'ticket-required' | 'self-dispatch' | ProgrammeRunRefuseCode;
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
@@ -6816,7 +6818,7 @@ const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'status-unmeasurable': true, 'worker-starting': true, 'attribution-required': true, 'not-a-child': true,
   'cap-review-rounds': true, 'ejection-not-merging': true, 'intent-held': true,
   'wave-epic-mismatch': true, 'plan-missing': true, 'reserved-programme': true, 'ticket-unavailable': true, 'plan-closed': true,
-  'ticket-required': true, 'self-dispatch': true,
+  'ticket-required': true, 'self-dispatch': true, ...PROGRAMME_RUN_REFUSAL_MAP,
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
 
@@ -7278,7 +7280,7 @@ export interface ProgrammeEnding {
 
 /** One programme of `GET /api/programmes` (D-8075, spec §11.6). `stuck` and `pendingClose` are absent before the stuck
  *  pass has run; `coordinatorGone` is absent when the server has no reading (A60). */
-export interface ProgrammeRow {
+export interface ProgrammeRow extends ProgrammeLifecycleFields {   // programme lifecycle W2: the lifecycle fields (spec §15)
   slug: string;
   title: string;
   currentWave: number | null;
@@ -7294,7 +7296,7 @@ export interface ProgrammeRow {
 }
 
 /** `GET /api/programmes`'s answer: the rows, and the runs closed since the operator's local midnight, by who closed them (A32). */
-export interface ProgrammesAnswer {
+export interface ProgrammesAnswer extends ProgrammesLifecycleAnswer {
   ok: true;
   programmes: ProgrammeRow[];
   closedToday: { operator: number; sweep: number; coordinator: number };
@@ -10924,6 +10926,7 @@ export const BOX_SETTING_TABLE = {
   CCRC_TESTBOX_PROBE_CONFIG_DIR: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
   CCRC_TESTBOX_PROBE_SOCKET: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
   CCRC_TESTBOX_PROBES_PER_DAY: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  CCRC_TESTBOX_REGISTRY_KEEP: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
   CCRC_CARRY_COPY_WARN_BYTES: { cls: 'value', family: 'carry-copies', roles: ['fleet', 'both'], applies: 'run' },
   CCRC_BROWSER_MCP_DEFAULT: { cls: 'value', family: 'browser-tools', roles: ['fleet', 'both'], applies: 'run' },
   CCRC_BROWSER_MCP_SERVERS: { cls: 'is-set', family: 'browser-tools', roles: ['fleet', 'both'], applies: 'run' },
@@ -13350,7 +13353,7 @@ export const DELEGATION_SPOOL_BOUNDS = {
  *  it by `ccd-spawn-child-settings.test.ts`. One `|`-joined string, not eight quoted literals, for the reason that
  *  list gives: the verb censuses count a quoted verb as a composer of it, and this list composes nothing. */
 const CHILD_DENY_CCD_VERBS: readonly string[] =
-  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|keep-awake|ws-lease-mark|delegation-adopt|roll|claude'.split('|');
+  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|keep-awake|ws-lease-mark|delegation-adopt|docs-folder|roll|claude'.split('|');
 
 /** The `ccd` verbs a dispatched child never runs that are NOT SAFETY verbs (D-8978): a top-level session, the operator's
  *  shell and the server's own composition may run them, so they stay off `FORBIDDEN_CCD_VERBS` and the classifier. Today
@@ -14073,14 +14076,14 @@ export const ACCOUNT_DENY_SUBS: readonly string[] =
   'add|auth-start|auth-code|auth-cancel|set|check|enable|disable|credential|remove|seed|openrouter-management'.split('|');
 
 /** The account paths the guard covers (spec §3.1; the Linear slot store and legacy key, D-7675; the operator's pasted
- *  secrets, programme ledgers plan PL6; the Overlord's private store, W1; the door process's directory, which holds its launch nonce, W1 door process A1), `~`-anchored: Read (and Bash) of every one of these fourteen, writes under `ACCOUNT_WRITE_DIRS`' three. Exact, never a parent: a session confirming a move reads `~/.cc-sessions/swap.log`
+ *  secrets, programme ledgers plan PL6; the Overlord's private store, W1; the door process's directory, which holds its launch nonce, W1 door process A1), `~`-anchored: Read (and Bash) of every one of these fourteen, writes under `ACCOUNT_WRITE_DIRS`' four. Exact, never a parent: a session confirming a move reads `~/.cc-sessions/swap.log`
  *  and `~/.cc-sessions/<id>.wrapper`; a read of `.accounts/<id>.json` (spec §3.1 lists writes only) or `~/.ccrc/linear.json` is not refused. */
 export const ACCOUNT_SECRET_PATHS: readonly string[] =
   ['~/.cc-secrets/**', '~/.ccrc/auth-scratch/**', '~/.ccrc/codex/*/runtime.env', '~/.ccrc/agent.env', '~/.ccrc/linear/**', '~/.ccrc/linear.key', '~/.ccrc/operator-secrets/**',
    // Overlord W1 private store A (spec §9.4): the operator's private store, its journal, quarantine, backup copy and restore leftovers
    '~/.ccrc/operator-model.db*', '~/.ccrc/privacy-journal.log', '~/.ccrc/privacy-journal.torn/**', '~/ccrc-backups/*/operator-model.db*',
    '~/.ccrc/coordination-restore.stage/*/operator-model.db*', '~/.ccrc/coordination-restore.foreign/*/operator-model.db*', '~/.cc-sessions/.door/**'];
-export const ACCOUNT_WRITE_DIRS: readonly string[] = ['~/.cc-sessions/.auth/**', '~/.cc-sessions/.accounts/**', '~/.cc-sessions/.door/**'];
+export const ACCOUNT_WRITE_DIRS: readonly string[] = ['~/.cc-sessions/.auth/**', '~/.cc-sessions/.accounts/**', '~/.cc-sessions/.door/**', '~/.ccrc/authority-witness.json'];
 /** The roster and its generated mirror: the files that carry an account's placement, pool and billing and continuity
  *  facts (`set-facts` writes them, behind the door's step-up). Writes only; a read stays open. Exact files, as above. */
 export const ACCOUNT_ROSTER_FILES: readonly string[] = ['~/.ccrc/accounts.json', '~/.ccrc/accounts.sh'];

@@ -118,7 +118,8 @@ describe('the slot is freed by everything else (spec §5.10)', () => {
   it('an open-run hold composes nothing, frees the slot and CLEARS THE PAIR: once it releases, the act follows two observations composed after it, a ceiling later', async () => {
     const f = await live();
     const program = 'w9-collect-held';
-    const r = f.coord.openRun({ program, title: program, project: 'demo', wave: 1, waveOf: null, claimedBy: 'demo-coord' });
+    // R11 (programme lifecycle W1): the rig's minting run left `demo-coord` owning its Idle programme, so this one has its own.
+    const r = f.coord.openRun({ program, title: program, project: 'demo', wave: 1, waveOf: null, claimedBy: 'demo-coord-held' });
     if (!('id' in r)) throw new Error(`openRun refused: ${JSON.stringify(r)}`);
     f.coord.bindSession(r.id, 'demo-a');                    // an open run names demo-a: the hold's (d)
     f.next(); await f.pass(); await f.settled();            // demo-a's act job: held at step 4

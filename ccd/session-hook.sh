@@ -3634,6 +3634,10 @@ fi
 # (alias-list-fits-whole-aliases (D-3658)). `fiti` keeps at most 8 ids.
 # restart: a same-session done or failed moves bg* into lost* (a union, lost-kinds-accumulate (D-3660)); clear: a fresh line.
 # `crons` (D-5242): set on done, carried on every other kind for the same session, -1 on clear and for a foreign line.
+# `failAts` (D-9086): the last 8 epochs of CONSECUTIVE provider failures. A failed whose token is a
+# provider's appends its own stamp; another token leaves the list; done and clear empty it; working and restart carry it
+# (a restart relabels a failed line done, so the list is what still says a retry is owed). The tokens are
+# `server/src/coord/stopFailure.ts#PROVIDER_FAILURE_ERRORS`; session-hook-turnmark.test.ts holds the two equal.
 TURN_MARK_PROGRAM='
 def csv: split(",") | map(select(length > 0));
 def fitk: reduce .[] as $k (""; if (length + (if length > 0 then 1 else 0 end) + ($k|length)) <= 200 then (if length > 0 then . + "," + $k else $k end) else . end);
@@ -3652,14 +3656,16 @@ def fiti: .[0:8] | join(",");
    lostBg: (if $same then ($p.lostBg // 0) else 0 end),
    lostKinds: (if $same then ($p.lostKinds // "") else "" end),
    lostIds: (if $same then ($p.lostIds // "") else "" end),
-   crons: (if $same then ($p.crons // -1) else -1 end)} as $b
+   crons: (if $same then ($p.crons // -1) else -1 end),
+   failAts: (if $same and ($p.failAts | type) == "array" then ($p.failAts | map(numbers) | .[-8:]) else [] end)} as $b
 | if $kind == "working" then $b + {state: "working", turnAt: $at, lostBg: 0, lostKinds: "", lostIds: ""}
-  elif $kind == "done" then $b + {stopAt: $at, bg: $bg, bgKinds: ($bgk | csv | unique | fitk), bgIds: ($bgi | csv | fiti), crons: $crons}
+  elif $kind == "done" then $b + {stopAt: $at, bg: $bg, bgKinds: ($bgk | csv | unique | fitk), bgIds: ($bgi | csv | fiti), crons: $crons, failAts: []}
   elif $kind == "failed" then $b + {state: "failed", stopAt: $at, err: $err}
+    + (if $err == "server_error" or $err == "overloaded" then {failAts: (($b.failAts + [$at]) | .[-8:])} else {} end)
   elif $kind == "restart" then $b
     + (if $same and ($p.state == "done" or $p.state == "failed") then {lostBg: (($p.lostBg // 0) + ([($p.bg // -1), 0] | max)), lostKinds: ((($p.lostKinds // "") + "," + ($p.bgKinds // "")) | csv | unique | fitk), lostIds: ((($p.lostIds // "") + "," + ($p.bgIds // "")) | csv | fiti)} else {} end)
     + {restartAt: $at, bg: 0, bgKinds: "", bgIds: ""}
-  elif $kind == "clear" then {v: 1, sessionId: $sid, state: "done", event: $ev, at: $at, turnAt: null, stopAt: null, bg: -1, bgKinds: "", bgIds: "", err: null, restartAt: null, lostBg: 0, lostKinds: "", lostIds: "", crons: -1}
+  elif $kind == "clear" then {v: 1, sessionId: $sid, state: "done", event: $ev, at: $at, turnAt: null, stopAt: null, bg: -1, bgKinds: "", bgIds: "", err: null, restartAt: null, lostBg: 0, lostKinds: "", lostIds: "", crons: -1, failAts: []}
   else empty end'
 _hook_turn_mark() {   # <kind: working|done|failed|restart|clear> -> 0 written; 1 not written (never fatal)
   local kind="$1" mf="$REG/$id.turn.json" prev="" out
@@ -4601,7 +4607,7 @@ fi
 # A Bash call that merges, pulls or rebases `main` into the current branch —
 # or asks GitHub to do the same from its side (the Update branch button's
 # `gh pr` verb, its REST route or its GraphQL mutation) — gets
-# `additionalContext` naming the three triggers worker clause 16 licenses an
+# `additionalContext` naming the four triggers worker clause 16 licenses an
 # absorption on, and the probe that measures the first. ADVICE, NEVER A
 # DECISION: 27% of the fleet's sync episodes (spec §1, item 8) came from
 # sessions that load no ccrc skill, and this text is the only thing those
@@ -4705,10 +4711,11 @@ if [[ "$event" == PreToolUse && -z "$pre_json" && "${tool:-}" == Bash ]] \
   lcmd=$(jq -r '.tool_input.command // "" | tostring' \
     <<<"$payload" 2>/dev/null) || lcmd=""
   if [[ -n "$lcmd" ]] && { [[ "$lcmd" =~ $LANDING_SYNC_RE ]] || [[ "$lcmd" =~ $LANDING_UB_RE ]]; }; then
-    lreason='ccrc landing advisory: this command brings main into the current branch. Absorb main only on one of three triggers:'
+    lreason='ccrc landing advisory: this command brings main into the current branch. Absorb main only on one of four triggers:'
     lreason+=' (1) the branch conflicts — probe with `git fetch origin && git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD`: exit 1 with a tree id on the first line is a conflict, exit 0 is clean, and any other answer is unmeasured and licenses nothing;'
     lreason+=' (2) a required check on the PR is red while main passes the same tests: re-run its failing test files on a clean checkout of `origin/HEAD` in scratch, and a red there too is a red main also shows (report it once as main-red and leave main alone);'
     lreason+=" (3) the coordinator's fix-round mail names this PR ejected from the landing line with a base sha, or next to land in a strict-protection repository."
+    lreason+=" (4) the coordinator's mail whose subject begins \`conflict-sync:\` names this PR and a base sha for a conflict it measured, and your own probe of that commit agrees: absorb exactly that commit, once per mail, before this round's wave-done only."
     lreason+=' Otherwise leave main alone: a clean branch lands as it is, and every needless sync restarts CI.'
     lreason+=' When you do absorb: `git merge` only — never a rebase, a force-push or the Update branch of GitHub (its button, `gh pr` verb or API) — and on a conflict in a `# ccrc:generated` stamp line, take either side of that line only, resolve the rest of the file as source, then run `~/.local/bin/ccrc restamp <file>` (`ccd/ccd` carries no committed stamp, so it never has one).'
     pre_json=$(_hook_nudge_json "$lreason") || pre_json=""
@@ -5483,12 +5490,15 @@ fi
 # tool, as the row lists `Agent`) whose `subagent_type` is not a declared reader type (`--agents`'s keys), one naming none
 # included; and a `Skill` call whose name, read by SKILL_NAME_JQ and compared WHOLE, the row does not stage (`stagedSkills`),
 # so `x:ccrc-overlord` is refused. It judges no digest: a mismatch is the server's (question 5), and under skew the running
-# session's argv is the row it was spawned with, so this can only be stricter.
+# session's argv is the row it was spawned with; the arm has no allow path, so it can only deny more, never grant.
 # FAIL-CLOSED, AGAINST THIS FILE'S HEADER, for a recorded reason: the variable says the session runs under a surface, so a row
-# that cannot be read (an absent role, a malformed variable, a file that is not JSON, a row without its flags, or flags that
+# that cannot be read (an absent role, a role word outside the grammar: only the text before the variable's first colon is
+# judged, so `overlord:x:y` reads the overlord row; a file that is not JSON, a row without its flags, or flags that
 # lack `--tools` or `--agents`: malformed, never a usable surface) denies. Before its arms the hook still fails open (an
-# unreadable id, registry or jq exits 0 first), and a timeout lets the call run: this is defence in depth, and the
-# enforcement is Claude Code's own (`--tools` and the deny rules).
+# unreadable id, registry or jq exits 0 first), and a timeout lets the call run. For a tool this is defence in depth behind
+# Claude Code's own `--tools` and deny rules; for an `Agent` call's agent type and a `Skill` name it is the only refusal at
+# the call, since Claude Code offers its built-in agent types and bundled skills whatever the profile (the server's check of
+# the loaded lists is the other cover).
 SURFACE_ARM_JQ='($rows[0][$r] // null) as $row | (.tool_name // "" | tostring) as $t | (.tool_input.subagent_type? // "" | tostring) as $at | skillname as $sk
   | ($row.flags | index("--tools")) as $ti | ($row.flags | index("--agents")) as $ai
   | if $ti == null or $ai == null then error("row") else . end
@@ -5672,7 +5682,7 @@ def hbt($sep; $head; $tail): any(split($sep; null)[];
   ([match("^[\\s\\S]*(?=" + $tail + ")")] | if length == 0 then -1 else .[0].length end) as $last
   | $last >= 0 and (.[0:$last] | test($head)));
 def fmatch:
-  (("ws-rm", "ws-reap", "ws-archive", "ws-restore", "ws-reclaim", "ws-expire", "ws-collect", "ws-orphan", "scratch-rescue", "ws-shed-deps", "keep-awake", "ws-lease-mark", "delegation-adopt", "roll", "claude") as $v
+  (("ws-rm", "ws-reap", "ws-archive", "ws-restore", "ws-reclaim", "ws-expire", "ws-collect", "ws-orphan", "scratch-rescue", "ws-shed-deps", "keep-awake", "ws-lease-mark", "delegation-adopt", "docs-folder", "roll", "claude") as $v
      | select(test(CCD + $v + NW)) | "verb\tccd \($v)"),
   (select(hbt("[;&|]"; CCD + "ws-gc(?=" + SP + "|$)"; SP + "--prune" + NW)) | "verb\tccd ws-gc --prune"),
   (select(test(WB + "tmux(?=$|" + SP + "|[;&|)" + $q + "\"])")) | "other\ttmux"),
@@ -5777,7 +5787,7 @@ def pmatch: select(any(split("[;&|]"; null)[]; test(PANC) and test(WANC))) | sel
 def EXP: "(?:\\$\\{[^}]*\\}|\\$\\([^)]*\\)|\\$[A-Za-z_][A-Za-z0-9_]*|`[^`]*`)";
 def EXPV: WB + EXP + SP + "+" + FLAGS;
 def xmatch:
-  (("ws-rm", "ws-reap", "ws-archive", "ws-restore", "ws-reclaim", "ws-expire", "ws-collect", "ws-orphan", "scratch-rescue", "ws-shed-deps", "keep-awake", "ws-lease-mark", "delegation-adopt", "roll", "claude") as $v
+  (("ws-rm", "ws-reap", "ws-archive", "ws-restore", "ws-reclaim", "ws-expire", "ws-collect", "ws-orphan", "scratch-rescue", "ws-shed-deps", "keep-awake", "ws-lease-mark", "delegation-adopt", "docs-folder", "roll", "claude") as $v
      | select(test(EXPV + $v + NW)) | "verb\tccd \($v)"),
   (select(hbt("[;&|]"; EXPV + "ws-gc(?=" + SP + "|$)"; SP + "--prune" + NW)) | "verb\tccd ws-gc --prune"),
   (select(test(WB + "ccrc" + NW) and test(EXPV + "(?:update|rollback|rollout)" + NW)) | "verb\tccrc update, rollback or rollout"),

@@ -20,10 +20,14 @@
 //   LoginScreen / BlockScreen kept in the branch ..... "still draws the sign-in screen and the block screen"
 //   `docsSoFar` in `App` (history, not width) ........ "narrowed below the desk width and widened again, it stays a Docs tab",
 //                                                      "a console widened while it shows a document … is the console throughout"
-//   the fold's fall in `App` ......................... "… and its link back moves in place" (the tab is the console after)
+//   the fold's fall in `App` ......................... "a narrow Docs tab that went Back to the console, then opened a
+//                                                      document in the app, is the console"
 //   `wasConsoleTab()` at the start (R4) .............. "a console reloaded on a Docs address is the console", and the release case
 //   `markConsoleTab()` for a console (R4) ............ the same cases
 //   `useFollowLink` in the reader's Back (F1) ........ "the reader's Back at the Docs index"
+//   the gated witness exchange (Overlord W1) ......... "a Docs tab starts no witness exchange, and starts one once it is the console"
+//   the witness exchange's sign-in term .............. "on a console tab, sign-in lost stops the witness exchange …"
+//   the effect returning the exchange's stop .......... the same case (no ask in a repeat while signed out)
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
@@ -63,6 +67,7 @@ const { navigate } = await import('../src/lib/router');
 const { initSkin, setSkin } = await import('../src/lib/skin');
 const { useFleetStore } = await import('../src/stores/fleet');
 const { clearAuthLost, raiseAuthLost } = await import('../src/lib/auth');
+const { WITNESS_EVERY_MS } = await import('../src/lib/witness');
 const { noteActivated, resetReloadGateForTests, startReloadGate } = await import('../src/lib/swupdate');
 
 const DOC = '/docs/project-a/specs/2026-11-18-native-docs-parity-design.md';
@@ -283,6 +288,72 @@ describe('the console at a desk, for comparison', () => {
     expect(shell().querySelector('.shell-nav')).not.toBeNull();
     expect(sockets.length).toBeGreaterThan(0);
     expect(mounted.has('CommandLayer')).toBe(true);
+  });
+});
+
+// THE AUTHORITY WITNESS (Overlord W1 authority journal, programme call 1060): a Docs tab is not the console and starts no
+// witness exchange; a console tab does, and so does a tab that stops being a Docs tab.
+describe('the authority witness exchange', () => {
+  const witnessAsks = (): number => requests.map(pathOf).filter((p) => p === '/api/overlord/witness').length;
+
+  it('a Docs tab starts no witness exchange, and starts one once it is the console', async () => {
+    stubWidth(true);
+    await mount(DOC);
+    expect(shell()).toHaveAttribute('data-tab', 'docs');
+    expect(witnessAsks()).toBe(0);
+    act(() => { navigate('/fleet'); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    expect(shell()).not.toHaveAttribute('data-tab');
+    expect(witnessAsks()).toBe(1);
+  });
+
+  it('a console tab starts the witness exchange at once', async () => {
+    stubWidth(true);
+    await mount('/fleet');
+    expect(witnessAsks()).toBe(1);
+  });
+
+  /** One repeat of the exchange's interval (these cases fake `setInterval` only, so the page's timeouts stay real), then the
+   *  effects that follow. */
+  async function oneRepeat(): Promise<void> {
+    act(() => { vi.advanceTimersByTime(WITNESS_EVERY_MS); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+  }
+
+  /** Lose sign-in and let one repeat pass, then regain it, letting the effects that follow each run. */
+  async function signOutAndIn(): Promise<{ out: number; back: number }> {
+    act(() => { raiseAuthLost('no-session'); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    expect(document.querySelector('.login-screen'), 'the sign-in screen').not.toBeNull();
+    await oneRepeat();
+    const out = witnessAsks();
+    act(() => { clearAuthLost(); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    return { out, back: witnessAsks() };
+  }
+
+  it('on a console tab, sign-in lost stops the witness exchange and sign-in regained starts it again', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      stubWidth(true);
+      await mount('/fleet');
+      expect(shell()).not.toHaveAttribute('data-tab');
+      expect(witnessAsks()).toBe(1);
+      await oneRepeat();
+      expect(witnessAsks(), 'the faked clock drives the repeat').toBe(2);
+      expect(await signOutAndIn(), 'no ask in a repeat while signed out; one at once on sign-in').toEqual({ out: 2, back: 3 });
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('on a Docs tab, sign-in lost and regained starts no witness exchange', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      stubWidth(true);
+      await mount(DOC);
+      expect(shell()).toHaveAttribute('data-tab', 'docs');
+      expect(witnessAsks()).toBe(0);
+      expect(await signOutAndIn()).toEqual({ out: 0, back: 0 });
+    } finally { vi.useRealTimers(); }
   });
 });
 
@@ -525,5 +596,21 @@ describe('the reader’s Back at the Docs index', () => {
     expect(open).not.toHaveBeenCalled();
     expect(location.pathname).toBe('/fleet');
     expect(shell()).not.toHaveAttribute('data-tab');
+  });
+
+  // The fold's fall (`App`'s `setDocsSoFar(false)`, desktop polish wave 177): a tab that has left Docs is the console for
+  // good, so a document it opens in the app later is drawn inside the console, with no click that said otherwise.
+  it('a narrow Docs tab that went Back to the console, then opened a document in the app, is the console', async () => {
+    stubWidth(false);
+    await mount('/docs');
+    expect(shell()).toHaveAttribute('data-tab', 'docs');
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Up one level' })); await new Promise((r) => setTimeout(r, 30)); });
+    expect(location.pathname).toBe('/fleet');
+    expect(shell()).not.toHaveAttribute('data-tab');
+    await act(async () => { navigate(DOC); await new Promise((r) => setTimeout(r, 30)); });
+    expect(location.pathname).toBe(DOC);
+    expect(shell(), 'still the console').not.toHaveAttribute('data-tab');
+    expect(shell().querySelector('.shell-phone-nav'), "the console's phone bar").not.toBeNull();
+    expect(screen.getByRole('main').querySelector('.docs-screen'), 'the document inside the console').not.toBeNull();
   });
 });

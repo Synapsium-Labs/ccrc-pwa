@@ -23,6 +23,9 @@ import { withBindingsOf } from './bindingsFake.js';
 
 const job: CollectJob = { id: ID, epoch: 0 };   // the rig's cell starts at epoch 0 (`r.job()` builds the same); no case here moves it
 const AUDIT = ['ws-audit', '--session', ID, '--collect'];
+/** Programme lifecycle W1 (R11): the rig's minting run leaves `demo-coord` owning its Idle programme, and one coordinator
+ *  owns one programme, so a case's own open run binding the id is claimed by a second coordinator. */
+const HOLDER = { sessionId: ID, claimedBy: 'demo-coord-2' } as const;
 const actOf = (token: string): string[] =>
   ['ws-collect', '--expect', token, '--session', ID, '--surface', 'agent', '--actor', 'collect sweep'];
 const without = (cap: string): string[] => FULL_CAPS.filter((c) => c !== cap);
@@ -177,14 +180,14 @@ describe('step 4 — observation 2 against observation 1', () => {
 describe('step 4 — the open-run hold, judged on observation 2’s document', () => {
   it('a run bound to the id DURING the audit holds it at step 4, and nothing is composed', async () => {
     const r = rig();
-    r.hooks.audit = () => { r.openRun({ sessionId: ID }); };
+    r.hooks.audit = () => { r.openRun(HOLDER); };
     expect(await collectTempRoot(r.deps, job)).toMatchObject({ kind: 'held', step: 4, hold: { why: 'id-in-open-run' } });
     expect(r.attempts).toEqual([AUDIT]);
   });
 
   it('the hold is judged on every collectable observation 2, licensed or not, so a held id never seeds a pair', async () => {
     const r = rig({ obs1: null });
-    r.openRun({ sessionId: ID });
+    r.openRun(HOLDER);
     expect(await collectTempRoot(r.deps, job)).toMatchObject({ kind: 'held', step: 4, hold: { why: 'id-in-open-run' } });
   });
 
@@ -196,7 +199,7 @@ describe('step 4 — the open-run hold, judged on observation 2’s document', (
 
   it('a re-bound child: an open run naming the id, which is not the witness’s run, holds it', async () => {
     const r = rig();
-    r.openRun({ sessionId: ID });
+    r.openRun(HOLDER);
     expect(await collectTempRoot(r.deps, job)).toMatchObject({ kind: 'held', step: 4, hold: { why: 'id-in-open-run' } });
     expect(r.attempts).toEqual([AUDIT]);
   });
@@ -214,7 +217,7 @@ describe('step 4 — the open-run hold, judged on observation 2’s document', (
 
   it('a resume document with no witness is held by an open run naming the id, and by nothing else', async () => {
     const held = rig({ witness: null, resume: 'moved' });
-    held.openRun({ sessionId: ID });
+    held.openRun(HOLDER);
     expect(await collectTempRoot(held.deps, job)).toMatchObject({ kind: 'held', step: 4, hold: { why: 'id-in-open-run' } });
     const free = rig({ witness: null, resume: 'moved' });
     expect(await collectTempRoot(free.deps, job), 'it finishes an act begun under these gates').toMatchObject({ kind: 'acted' });
@@ -311,7 +314,7 @@ describe('step 6 — synchronous from the last await to the argv', () => {
   });
 
   it('a run bound during the last await holds it: the hold’s store reads are made again at the act', async () => {
-    for (const over of [{ sessionId: ID }, { claimedBy: ID }]) {
+    for (const over of [HOLDER, { claimedBy: ID }]) {
       const r = rig();
       r.hooks.listing = (n) => { if (n === 2) r.openRun(over); };
       expect(await collectTempRoot(r.deps, job), JSON.stringify(over))

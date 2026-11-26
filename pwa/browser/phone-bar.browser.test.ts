@@ -151,6 +151,13 @@ async function open(skin: string, width: number, path: string, ready: string, in
   }
   await opened.page.goto(server!.origin + path);
   await opened.page.waitForSelector(ready, { timeout: 20_000 });
+  if (asConsole) {
+    // The harness's console mark guards itself (desktop polish wave 177): a page opened with it is the console, never a Docs
+    // tab. It runs only where the mark is asked for, the cases that load a Docs address (eight: both skins, 360 and 390,
+    // two cases each), so a mark the harness stopped setting turns those red at their opener.
+    const tab = await opened.page.evaluate(() => document.querySelector('.app-shell')?.getAttribute('data-tab') ?? null);
+    expect(tab, `opened with the console mark, ${path} is the console`).toBeNull();
+  }
   await opened.page.evaluate(async () => { await document.fonts.ready; });
   await opened.page.waitForTimeout(250); // the first paint's transitions settle
   return opened;
@@ -277,12 +284,16 @@ describe.each(SKINS)('the phone bar in %s', (skin) => {
           tab: document.querySelector('.app-shell')?.getAttribute('data-tab') ?? null,
           bars: document.querySelectorAll('nav.shell-phone-nav, header.shell-tab-bar, .shell-accounts').length,
           headTop: document.querySelector('.docs-head')!.getBoundingClientRect().top,
+          // What may stand above the head inside the Docs screen: the screen's own top padding and the head's own margin.
+          inset: parseFloat(getComputedStyle(document.querySelector('.docs-screen')!).paddingTop)
+            + parseFloat(getComputedStyle(document.querySelector('.docs-head')!).marginTop),
           screenTop: document.querySelector('.docs-screen')!.getBoundingClientRect().top,
           sideways: document.documentElement.scrollWidth - document.documentElement.clientWidth,
         }));
         expect(got.tab, 'a Docs tab').toBe('docs');
         expect(got.bars, 'no bar of the console and no tab bar').toBe(0);
         expect(got.screenTop, `nothing above the Docs screen ${JSON.stringify(got)}`).toBe(0);
+        expect(Math.abs(got.headTop - got.screenTop - got.inset), `the reader's head is the top of the page, only the screen's inset above it ${JSON.stringify(got)}`).toBeLessThanOrEqual(0.5);
         expect(got.sideways, 'sideways scroll').toBe(0);
         expect(errors).toEqual([]);
       } finally {

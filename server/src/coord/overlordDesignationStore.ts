@@ -1,9 +1,9 @@
 // The Overlord's designation row and its writers (Overlord spec §3.1, §3.2 C2, §3.4 C45, C46; plan
 // `docs/superpowers/plans/2026-11-14-overlord-w1/w1-designation.md` Task 1, questions 1 and 8, rulings X2, X3, X3b, X5, X7).
 // Ring L3, context C5. ONE table, `overlord_designation` (migration 83), its ONE row (`id = 1`), and the only functions that
-// write it: `designatePending`, `bindPendingGeneration`, `goLive`, `failPending`, `retire`, `applyDesignationRestoreInTx`,
-// `stopDone`, and the Settings doors' `setModelClass` and `setAccountSet` (designation C). `designationRead` is the one
-// reader. Writes are synchronous, each in one `tx(db, …)` (the caller's transaction for Confirm).
+// write it: `designatePending`, `rebindPending` (designation B), `bindPendingGeneration`, `goLive`, `failPending`, `retire`,
+// `applyDesignationRestoreInTx`, `stopDone`, and the Settings doors' `setModelClass` and `setAccountSet` (designation C).
+// `designationRead` is the one reader. Writes are synchronous, each in one `tx(db, …)` (the caller's transaction for Confirm).
 //
 // THE AUTHORITY DUTIES (the journal's "THE CALLER'S DUTIES", `overlordAuthorityJournal.ts#OverlordAuthorityJournal`): a writer
 // that records an authority move calls `appendInTx` BEFORE it writes the row, checks the answer, and on `{ok:false}` writes no
@@ -11,8 +11,9 @@
 // appends nothing. Every `from` it states is the row's own value read in the same transaction. A refusal RETURNS from the
 // transaction (it never throws), so a record already appended in it keeps its head row.
 //
-// THE SEQUENCE (Overlord §10.4; sequence plan Task 2): `designatePending`, `goLive`, `failPending`, `retire` and
-// `applyDesignationRestoreInTx` stamp designation state changes after the row write, in the same transaction. A refused stamp
+// THE SEQUENCE (Overlord §10.4; sequence plan Task 2): `designatePending`, `rebindPending` (designation B), `goLive` (its rebind
+// arm too), `failPending`, `retire` and `applyDesignationRestoreInTx` stamp designation state changes after the row write, in
+// the same transaction. A refused stamp
 // throws `SequenceStampRefused`. Ordinary stamped writers check their lines before appending; after a durable append, any
 // throw calls the receipt after rollback is attempted, without replacing the original error. Confirm's append precedes this
 // store's restore writer; Confirm's own catch fences after rollback if that append succeeded. In both paths the durable record
@@ -21,7 +22,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { tx } from './tx.js';
 import { sequenceLineVerdict } from './overlordSequence.js';
 import { stampSequenceInTx, type SequenceLineInput } from './overlordSequenceStore.js';
-import type { OverlordAuthorityJournal, AuthorityAppendError } from './overlordAuthorityJournal.js';
+import { txWithAuthorityReceipt, type OverlordAuthorityJournal, type AuthorityAppendError } from './overlordAuthorityJournal.js';
 import type { OverlordAuthorityMove } from './overlordAuthority.js';
 import { endOverlordGeneration, restampOverlordGeneration } from '../continuity/continuityStore.js';
 import {
@@ -149,20 +150,10 @@ function append(db: DatabaseSync, journal: AuthorityAppender, entry: OverlordAut
     : { ok: true, journalled: false };
 }
 
-/** A stamped writer's transaction: only a durable append arms the fence. An ordinary refusal still returns and commits. */
+/** A stamped writer's transaction: only a durable append arms the fence (the journal's `txWithAuthorityReceipt`). An ordinary
+ *  refusal still returns and commits. */
 function txWithAuthorityStamp<T>(db: DatabaseSync, journal: AuthorityAppender, write: (add: (entry: OverlordAuthorityMove) => Appended) => T): T {
-  let postAppendFailed: (() => void) | undefined;
-  try {
-    return tx(db, () => write((entry) => {
-      const a = append(db, journal, entry);
-      if (a.ok && a.journalled) postAppendFailed = a.postAppendFailed;
-      return a;
-    }));
-  } catch (error) {
-    // Like tx's rollback, notification is best effort: a faulty receipt must not replace the transaction error.
-    try { postAppendFailed?.(); } catch { /* preserve the first error */ }
-    throw error;
-  }
+  return txWithAuthorityReceipt(db, journal, (held) => write((entry) => append(db, held, entry)));
 }
 
 /** The live actor's four columns, set together from one `RecordedActor` (`actorCols`' order). */
@@ -249,21 +240,59 @@ export function bindPendingGeneration(db: DatabaseSync, sessionId: string, gener
   });
 }
 
+// ── rebindPending ─────────────────────────────────────────────────────────────────────────────────────────────────────
+
+export interface RebindInput { sessionId: string; deadlineAt: number; actor: RecordedActor; at: number }
+export type RebindResult =
+  | { ok: true; changed: true } | { ok: false; reason: 'not-found' | 'attempt-pending' } | RowUnreadable | ActorRefused;
+
+/** Write a pending `rebind` attempt beside the live binding, which stands while the new body is checked (plan Task 6). The slot
+ *  is read again in this transaction: no live binding is `not-found`, and an attempt already pending is `attempt-pending`, so
+ *  two racing rebinds are safe (question 9). The class and the set are the row's (`rebind-keeps-the-class-and-set`), and it
+ *  appends nothing: the rebind record is `goLive`'s (X2). */
+export function rebindPending(db: DatabaseSync, i: RebindInput): RebindResult {
+  if (actorRefused(i.actor)) return ACTOR_REFUSED;
+  return tx(db, (): RebindResult => {
+    const h = held(db);
+    if ('ok' in h) return h;
+    if (h.row === null || h.row.bound === null) return { ok: false, reason: 'not-found' };
+    if (h.row.pending !== null) return { ok: false, reason: 'attempt-pending' };
+    const lines = [designationLine(i.sessionId, 'pending', i.actor, i.at)];
+    checkLines(lines);
+    db.prepare("UPDATE overlord_designation SET pendingId = ?, pendingGeneration = NULL, pendingKind = 'rebind', pendingSince = ?, "
+      + `pendingDeadlineAt = ?, ${PENDING_ACTOR_COLUMNS.map((c) => `${c} = ?`).join(', ')}, updatedAt = ? WHERE id = 1`)
+      .run(i.sessionId, i.at, i.deadlineAt, ...actorCols(i.actor), i.at);
+    stampLines(db, lines);
+    return { ok: true, changed: true };
+  });
+}
+
 // ── goLive ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-export type GoLiveResult = { ok: true; changed: true; term: number } | { ok: true; changed: false } | AuthorityRefused | RowUnreadable;
+export type GoLiveResult =
+  | { ok: true; changed: true; term: number; previous: string | null } | { ok: true; changed: false } | AuthorityRefused | RowUnreadable;
 
-/** The pending designate attempt becomes the binding. Only for the pending id; anything else changes nothing. Appends
- *  `authority-designate` with the raised term first (its opKey is the term: `go-live-op-key-is-the-term`), then binds, sets
- *  `designatedTerm`, clears the pending slot and the last attempt (`golive-clears-last-attempt`), and re-stamps the body's live
- *  generation (X5) inside this transaction. PR B adds the rebind arm; until then a pending `rebind` is left untouched. */
-export function goLive(db: DatabaseSync, journal: AuthorityAppender, sessionId: string, generation: string, at: number): GoLiveResult {
+/** Moves the queued deliveries of `overlord` mail from the old body to the new one, inside `goLive`'s transaction (the store's
+ *  private member, through its one delivery writer; question 7). Declared here by its consumer, so this module never reaches it. */
+export type OverlordMailRepoint = (to: string, from: string) => { changed: number };
+
+/** The pending attempt becomes the binding. Only for the pending id; anything else changes nothing. Appends the go-live record
+ *  with the raised term first (its opKey is the term: `go-live-op-key-is-the-term`), then binds, clears the pending slot and the
+ *  last attempt (`golive-clears-last-attempt`), re-stamps the body's live generation (X5) and stamps its designation lines, all
+ *  in this transaction. `designate`: `authority-designate`, `designatedTerm` takes the term, and the body's line is `live`.
+ *  `rebind` (plan Task 6): `authority-rebind` naming the old body, `designatedTerm` kept (§3.3.12), the old id onto `pastIds`
+ *  and `stopsOwed`, its live generation ended before the new body's is re-stamped, its queued `overlord` mail repointed, and two
+ *  lines, the old body `retired` then the new one `live`; `previous` names it for the caller's drain. A refused append, or a step
+ *  that throws, rolls the whole move back and the attempt stays pending (question 10). */
+export function goLive(db: DatabaseSync, journal: AuthorityAppender, sessionId: string, generation: string, at: number,
+  repoint?: OverlordMailRepoint): GoLiveResult {
   return txWithAuthorityStamp(db, journal, (add): GoLiveResult => {
     const h = held(db);
     if ('ok' in h) return h;
     const p = h.row?.pending ?? null;
-    if (h.row === null || p === null || p.sessionId !== sessionId || p.kind !== 'designate') return { ok: true, changed: false };
+    if (h.row === null || p === null || p.sessionId !== sessionId) return { ok: true, changed: false };
     const term = h.row.term + 1;
+    if (p.kind === 'rebind') return goLiveRebind(db, add, h.row, p.actorDetail, sessionId, generation, term, at, repoint);
     const lines = [designationLine(sessionId, 'live', p.actorDetail, at)]; // the attempt's actor, which the binding copies
     checkLines(lines);
     const a = add({ kind: 'authority-designate', opKey: `go-live-term-${term}`, term, sessionId, generation });
@@ -277,8 +306,32 @@ export function goLive(db: DatabaseSync, journal: AuthorityAppender, sessionId: 
     ).run(sessionId, generation, term, term, at);
     restampOverlordGeneration(db, sessionId, term);
     stampLines(db, lines);
-    return { ok: true, changed: true, term };
+    return { ok: true, changed: true, term, previous: null };
   });
+}
+
+/** `goLive`'s rebind arm, inside its transaction (the CHECK keeps a pending rebind beside a binding; a row without one changes
+ *  nothing). A repoint that throws throws out of the transaction, which rolls the record and the row back together. */
+function goLiveRebind(db: DatabaseSync, add: (entry: OverlordAuthorityMove) => Appended, row: DesignationView, actor: ActorWire | undefined,
+  sessionId: string, generation: string, term: number, at: number, repoint: OverlordMailRepoint | undefined): GoLiveResult {
+  const old = row.bound?.sessionId;
+  if (old === undefined) return { ok: true, changed: false };
+  // The attempt's actor on both lines: the binding copies it, and the old body is retired by the same move. The old body's
+  // `retired` comes first, so the newest designation line is the standing binding's `live` (review 3740 F2).
+  const lines = [designationLine(old, 'retired', actor, at), designationLine(sessionId, 'live', actor, at)];
+  checkLines(lines);
+  const a = add({ kind: 'authority-rebind', opKey: `go-live-term-${term}`, term, sessionId, generation, previousSessionId: old });
+  if (!a.ok) return a;
+  db.prepare(
+    'UPDATE overlord_designation SET sessionId = ?, generation = ?, term = ?, pastIds = ?, stopsOwed = ?, actor = pendingActor, '
+    + `actorKind = pendingActorKind, actorIssuer = pendingActorIssuer, actorStrength = pendingActorStrength, ${CLEAR_PENDING}, `
+    + 'attemptId = NULL, attemptOutcome = NULL, attemptAt = NULL, updatedAt = ? WHERE id = 1',
+  ).run(sessionId, generation, term, JSON.stringify(withId(row.pastIds, old)), JSON.stringify(withId(row.stopsOwed, old)), at);
+  endOverlordGeneration(db, old, at); // first, so the new body's re-stamp finds no other live `overlord` row (X5)
+  restampOverlordGeneration(db, sessionId, term);
+  repoint?.(sessionId, old);
+  stampLines(db, lines);
+  return { ok: true, changed: true, term, previous: old };
 }
 
 // ── failPending ───────────────────────────────────────────────────────────────────────────────────────────────────────

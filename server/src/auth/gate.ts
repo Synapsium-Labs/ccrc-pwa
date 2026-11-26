@@ -5,7 +5,7 @@ import { SESSION_COOKIE, expireCookie, parseCookies } from './cookie.js';
 import type { SessionStore } from './sessions.js';
 
 /**
- * THE GATE. One `onRequest` hook stands in front of all 302 routes, the static
+ * THE GATE. One `onRequest` hook stands in front of all 329 routes, the static
  * wildcard, the SPA fallback and all three websocket upgrades.
  *
  * ONE HOOK, NOT A PER-ROUTE CHECK, and that is the whole design: a route added
@@ -72,16 +72,17 @@ import type { SessionStore } from './sessions.js';
  *     the moment the operator arms the flag. It publishes an `ok` and a build
  *     stamp and nothing about the fleet.
  *
- *  2. The ninety-nine box-token machine lanes (the coordination routes, the Linear proxy's routes, #1444, and the programme
+ *  2. The one hundred and three box-token machine lanes (the coordination routes, the Linear proxy's routes, #1444, and the programme
  *     ledgers' coordinator lanes, the coordinator call record's one, the remaining-work door's one, the plan verbs', the linking standard's read, suggestion and confirm, the hook's start report and its
  *     loads report, the door process's act-key claim, the hook's reports, the card door, the note door's lanes, the timer doors, the probe door's lanes, the replay quiz's record
- *     door, its unattended confirmation, the timer's tick report and the coordinator's Live on its baseline, the Overlord's inbox doors) plus
+ *     door, its unattended confirmation, the timer's tick report and the coordinator's Live on its baseline, the Overlord's inbox doors,
+ *     its history door, and the programme lifecycle's end proposal and its reads) plus
  *     `/api/notify`, `/api/pools/epoch`
  *     and `/api/updates/intent/:nodeId` — the fleet host's ingress. These callers
  *     are `curl` inside a Claude Code session, ccd's `notify.sh`, `ccd-pool-sync.timer`
  *     (account-pool-membership wave 1, T7, D-3084), from update-management W4,
  *     `ccd-update-sync.timer`, the operator's own shell on the fleet box (`ccrc quiz-record`, through `ccrc-api`), and `ccd-quiz-weekly.timer`;
- *     none of them has a cookie jar and never will. All one hundred and two CHECK the box token (`checkMailToken`), and the mail pair
+ *     none of them has a cookie jar and never will. All one hundred and six CHECK the box token (`checkMailToken`), and the mail pair
  *     records every refusal — but "checks" is not "requires", and the difference is
  *     worth stating rather than rounding off, in BOTH directions rather than only
  *     one (D-1242: this paragraph used to say it in one, and was wrong in kind
@@ -89,7 +90,7 @@ import type { SessionStore } from './sessions.js';
  *     verdict but `'ok'`. The exempt-but-authenticated GETs
  *     (`GET /api/runs`, `/api/runs/:id/items`, `/api/runs/:id/signals`, `/api/feed`,
  *     `/api/lifecycle`, `/api/peers`, `/api/claims`, `/api/asks`, `/api/pools/epoch`,
- *     `/api/updates/intent/:nodeId`) do NOT: they take a live session cookie OR the token
+ *     `/api/updates/intent/:nodeId`, `/api/landing`) do NOT: they take a live session cookie OR the token
  *     (D-149), which is why the coordinator can read its own wave ledger
  *     cookieless from the fleet host — and, for the newest members, why
  *     `ccd-pool-sync.timer` can pull the account-pool projection cookieless too, and
@@ -209,8 +210,11 @@ import type { SessionStore } from './sessions.js';
  *     refuses (a frame's WebSocket upgrade, origin `null`) is still counted, and the
  *     decision, with its journal line, stays here.
  *
- *  9. `POST /api/review/open` — draft review by capability: the token in the
- *     body is the credential, and the read door reads no session.
+ *  9. `POST /api/review/open` and `GET /review` — draft review by capability:
+ *     the token in the body is the credential, and the read door reads no
+ *     session. `GET /review` is the one fixed page that posts it, on a tap; it
+ *     holds no snapshot and reads no session. `GET /review.html` and
+ *     `GET /review/` are not exempt (X3 R2).
  *
  * NOT EXEMPT, and worth saying out loud because their absence is a decision:
  *  - `POST /api/token/rotate` — the console's "Rotate now". Session-only, like
@@ -386,9 +390,11 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     "the allocation record and a project's floor, read cookieless from the fleet host — " +
     'box-token gated (requireMailToken), the GET /api/mail convention: no attribution to check'],
   ['GET /api/landing',
-    "a project's landing line — its entries, its flags and the decider's order — read cookieless from the fleet host " +
-    'before the coordinator enqueues (landing order wave 5e) — box-token gated (requireMailToken), the GET /api/ledger ' +
-    'convention: no attribution to check'],
+    'EXEMPT-BUT-AUTHENTICATED (landing order wave 5j-a, D-9048), the same dual-credential arrangement as `GET /api/feed`: ' +
+    "a project's landing line (its entries, its flags and the decider's order) is read COOKIELESS from the fleet host by " +
+    '`ccrc-api landing show` before the coordinator enqueues, and the console reads it with a session. The handler ' +
+    'requires one of those credentials before revealing even `501 not-configured`, so this entry gives the console its ' +
+    'read without making the line anonymous; there is no attribution to check'],
   ['POST /api/landing/entries',
     'a session records a landing entry it is about to enqueue (landing order wave 5f) — box-token gated (the mandatory ' +
     'requireMailToken, no cookie fallback), attribution checked against the registry as the claim lanes check it; the ' +
@@ -511,8 +517,22 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     'box-token machine lane, box token and attribution checked. The coordinator records a ticket finished another way, with ' +
     'a run or a landed pull request as its evidence (`plan ticket-done`, programme work map WM1)'],
   ['POST /api/programmes/:slug/plan/close',
-    'box-token machine lane, box token and attribution checked. The coordinator ends the programme\'s plan, done or abandoned with a ' +
-    'reason (`plan close`), once no run of the programme is open'],
+    'box-token machine lane, box token and attribution checked. The coordinator proposes the programme\'s end, done or abandoned with a ' +
+    'reason and its evidence (`plan close`), once no run of the programme is open; the operator or the Overlord confirms it (programme lifecycle W2)'],
+  ['POST /api/programmes/:slug/end-proposal',
+    'box-token machine lane, box token and attribution checked (programme lifecycle W2, D-8987). The programme\'s bound coordinator ' +
+    'proposes its end with evidence against the definition of done (`requireMailToken`, `requireAttribution`, then `claimsProgramme`, the ' +
+    'binding); it raises one Waiting-on-you item and ends nothing: the confirm is the operator\'s, behind a step-up'],
+  ['GET /api/programmes/:slug/history',
+    "EXEMPT-BUT-AUTHENTICATED (D-149's pattern, programme lifecycle W2), the goals read's shape: the PWA's console reads a programme's " +
+    'story with a session, and a coordinator reads it COOKIELESS from the fleet host. The route\'s own `onRequest` ' +
+    '(coord/ledgersRoutes.ts) requires a live session OR a valid box token before anything is read; the token arm is then ' +
+    'attributed (`byId`/`byUuid`) and reads only the programme its caller coordinates (spec §14); nothing is written'],
+  ['GET /api/sessions/:id/programme',
+    "EXEMPT-BUT-AUTHENTICATED (D-149's pattern, programme lifecycle W2), the goals read's shape: a coordinator reads its own one " +
+    'programme COOKIELESS from the fleet host at its start, and the console with a session. The route\'s own `onRequest` ' +
+    '(coord/ledgersRoutes.ts) requires a live session OR a valid box token before anything is read; the token arm is then ' +
+    'attributed (`byId`/`byUuid`) and reads only its caller\'s own programme (spec §14); nothing is written'],
   ['POST /api/programmes/:slug/plan/take',
     'box-token machine lane, box token and attribution checked. The programme\'s coordinator takes an inbound issue handed to it, or an ' +
     'Upkeep ticket, into an epic of its plan, closes it with a reason, or returns it to the team\'s Linear owner (`plan take`); the ' +
@@ -608,6 +628,10 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     'then the gate order with the fence, then one read-ledger line'],
   ['POST /api/overlord/messages/:id/acknowledge',
     'the Overlord settles an operator message: the box token and attribution, then the gate order with the fence and the witness'],
+  // The Overlord's history door (Overlord W1, PR B1), from `coord/overlordHistoryRoutes.ts`: a box-token machine lane behind the gate.
+  ['POST /api/overlord/history',
+    "the Overlord's read of every project's history, a POST only so free text rides the body, a read by its row: the box token and " +
+    'attribution, then the gate order with the fence, then the read ceiling and one read-ledger line'],
 
   // The continuity routes (Overlord §3.3.11, W1a): the hook reports every SessionStart of a session that is not a child.
   ['POST /api/sessions/:id/start',
@@ -730,6 +754,9 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
 
   ['POST /api/review/open',
     'draft review by capability, reason 9: the token in the body is the credential; the door reads no session'],
+  ['GET /review',
+    'draft review by capability, reason 9: the one fixed review page, which holds no snapshot, reads no session and ' +
+    'posts the token only on a tap'],
 
   ['GET /*',
     'the static/SPA shell: the login screen must be able to load. @fastify/static serves only ' +
@@ -1127,8 +1154,8 @@ export function originVerdict(origin: unknown, expected: string): OriginVerdict 
  * clause. Checking reads would additionally refuse `<img>`/`<link>` style
  * same-site loads of the SPA shell for no gain.
  *
- * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the ninety-nine box-token machine
- * lanes plus `/api/notify`, `/api/pools/epoch` and `/api/updates/intent/:nodeId` — one hundred and two in all — are `curl` inside a Claude Code session (no `Origin`
+ * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the one hundred and three box-token machine
+ * lanes plus `/api/notify`, `/api/pools/epoch` and `/api/updates/intent/:nodeId` — one hundred and six in all — are `curl` inside a Claude Code session (no `Origin`
  * at all, hence `'absent'`, hence permitted even if they were checked), and
  * their real guard is a header a cross-site page cannot add without triggering a
  * preflight it will fail. (ORDER-PINNED, like reason 2 above and for the same

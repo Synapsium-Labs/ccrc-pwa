@@ -143,6 +143,15 @@ describe('every moving rule honours prefers-reduced-motion', () => {
     expect(total).toBeGreaterThanOrEqual(12);
   });
 
+  it("reads the draft review page's sheet too: a separate document for the palette audit, not for the motion gate", () => {
+    // src/review/review.css is in SEPARATE_DOCUMENTS (design/audit.mjs), which exempts it from the console-palette
+    // measurement only. The census reads it, and a transition added there would be seen.
+    const review = all.find((s) => s.rel === 'src/review/review.css');
+    expect(review, 'stylesheets() lists the review sheet').toBeDefined();
+    const text = stripComments(readFileSync(path.join(PWA_ROOT as string, 'src/review/review.css'), 'utf8'));
+    expect(moving(`${text}\n.review-x { transition: opacity 1s; }`, 'review.css').map((m) => m.key)).toContain('review.css .review-x');
+  });
+
   it('and the components that took that motion honour the preference too', () => {
     // THE OTHER HALF, and the one the floor above cannot see. Every press,
     // glow and shimmer the design system carries as a utility must name

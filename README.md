@@ -1377,8 +1377,8 @@ naming the file when it is not that shape. Sixteen are the fleet host's, read fr
 alone, into `~/.ccrc/testbox.env` (D-8166), which ccrc's one reader reads after `ccrc.env` and only for a key `ccrc.env` does not name;
 its lines are read by the same rules as `ccrc.env`'s, so a line it cannot decide refuses that key alone, and a value from it
 reads as `file`. The other
-thirty-one are the test box's own, read on the box from its root-owned `/etc/ccrc-testbox/ccrc.env` alone
-(`deploy/testbox/ccrc.env.example` documents them): `CCRC_TESTBOX_RUNS`, `CCRC_TESTBOX_WORKERS`, `CCRC_TESTBOX_RUN_TMPDIR`, `CCRC_TESTBOX_RUN_MEMORY_MAX`, `CCRC_TESTBOX_RUN_SWAP_MAX`, `CCRC_TESTBOX_RUN_CPU_QUOTA`, `CCRC_TESTBOX_ROOT`, `CCRC_TESTBOX_REPOS`, `CCRC_TESTBOX_FETCH_EVERY`, `CCRC_TESTBOX_RETENTION`, `CCRC_TESTBOX_PRISTINE_KEEP`, `CCRC_TESTBOX_PRISTINE_RETRY`, `CCRC_TESTBOX_REPORT_MAX`, `CCRC_TESTBOX_TOOLS_DIR`, `CCRC_TESTBOX_OS_MIRROR`, `CCRC_TESTBOX_EGRESS_ALLOW`, `CCRC_TESTBOX_PUSH_USER`, `CCRC_TESTBOX_ENV_FORWARD`, `CCRC_TESTBOX_RUN_USER_PREFIX`, `CCRC_TESTBOX_REGISTRY_PROXY`, `CCRC_TESTBOX_REGISTRY_UPSTREAM`, `CCRC_TESTBOX_TMPFS`, `CCRC_TESTBOX_LOG_TAIL`, `CCRC_TESTBOX_SESSION_RUNS`, `CCRC_TESTBOX_SERVICE_USER`, `CCRC_TESTBOX_LISTEN`, `CCRC_TESTBOX_SERVICE_TOKEN_FILE`, `CCRC_TESTBOX_UNIT_MAX`, and the live probes' three (D-8290): `CCRC_TESTBOX_PROBE_CONFIG_DIR`, `CCRC_TESTBOX_PROBE_SOCKET` and `CCRC_TESTBOX_PROBES_PER_DAY`. `ccrc test --testbox-knobs host|box` prints either table, one
+thirty-two are the test box's own, read on the box from its root-owned `/etc/ccrc-testbox/ccrc.env` alone
+(`deploy/testbox/ccrc.env.example` documents them): `CCRC_TESTBOX_RUNS`, `CCRC_TESTBOX_WORKERS`, `CCRC_TESTBOX_RUN_TMPDIR`, `CCRC_TESTBOX_RUN_MEMORY_MAX`, `CCRC_TESTBOX_RUN_SWAP_MAX`, `CCRC_TESTBOX_RUN_CPU_QUOTA`, `CCRC_TESTBOX_ROOT`, `CCRC_TESTBOX_REPOS`, `CCRC_TESTBOX_FETCH_EVERY`, `CCRC_TESTBOX_RETENTION`, `CCRC_TESTBOX_PRISTINE_KEEP`, `CCRC_TESTBOX_PRISTINE_RETRY`, `CCRC_TESTBOX_REPORT_MAX`, `CCRC_TESTBOX_TOOLS_DIR`, `CCRC_TESTBOX_OS_MIRROR`, `CCRC_TESTBOX_EGRESS_ALLOW`, `CCRC_TESTBOX_PUSH_USER`, `CCRC_TESTBOX_ENV_FORWARD`, `CCRC_TESTBOX_RUN_USER_PREFIX`, `CCRC_TESTBOX_REGISTRY_PROXY`, `CCRC_TESTBOX_REGISTRY_UPSTREAM`, `CCRC_TESTBOX_TMPFS`, `CCRC_TESTBOX_LOG_TAIL`, `CCRC_TESTBOX_SESSION_RUNS`, `CCRC_TESTBOX_SERVICE_USER`, `CCRC_TESTBOX_LISTEN`, `CCRC_TESTBOX_SERVICE_TOKEN_FILE`, `CCRC_TESTBOX_UNIT_MAX`, and the live probes' three (D-8290): `CCRC_TESTBOX_PROBE_CONFIG_DIR`, `CCRC_TESTBOX_PROBE_SOCKET` and `CCRC_TESTBOX_PROBES_PER_DAY`, and the registry proxy cache's keep time (D-9007): `CCRC_TESTBOX_REGISTRY_KEEP`. `ccrc test --testbox-knobs host|box` prints either table, one
 line per key, and is how every other reader (the fleet agent's `testbox` op, the test service) gets them.
 One more is read by `ccrc doctor` alone, in `file` mode: `CCRC_CARRY_COPY_WARN_BYTES`, the `carry-copies` check's warn
 bound in bytes (default 10737418240, 10 GiB; see **Swap-carry copies and the dedupe sweep**).
@@ -1505,7 +1505,7 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the one hundred and two machine lanes the
+liveness gate reads the shipped sha out of it), the one hundred and six machine lanes the
 fleet host reaches (thirty-nine box-token-consulting coordination routes plus
 the Linear proxy's routes under `/api/linear/proxy/`, which a session's `ccrc-api linear`
 verbs call and which refuse any call without the token whatever `CCRC_AUTH` says,
@@ -1513,6 +1513,8 @@ the programme ledgers' item and goal routes (`/api/programmes/:slug/{items,spec,
 and `/api/items/:id/{confirm,return,withdraw,blocking}`),
 the programme doors (`POST /api/coord/programmes/:slug/calls`, the coordinator's call record, and
 `POST /api/coord/programmes/:slug/remaining`, what a programme says is left),
+the programme lifecycle's end proposal (`POST /api/programmes/:slug/end-proposal`, the bound coordinator's, attributed and owned)
+and its reads (`GET /api/programmes/:slug/history` and `GET /api/sessions/:id/programme`),
 the plan verbs' routes (`POST /api/programmes/:slug/plan` and `/api/programmes/:slug/plan/{met,tickets,tickets/move,tickets/done,phases/refs,epics/drop,close,take}`, and the inbound triage `POST /api/teams/:team/plan/triage`),
 the hook's start report (`POST /api/sessions/:id/start`) and its loads report (`POST /api/sessions/:id/start/loads`), the door process's act-key claim (`POST /api/sessions/:id/act-key`), the hook's report door (`POST /api/sessions/:id/report`: the witness, readers and picked-up reports), the card door (`GET /api/sessions/:id/card`), the note door
 (`POST /api/sessions/:id/notes`, `GET /api/sessions/:id/notes`, `POST /api/sessions/:id/handover`), the timer doors
@@ -1526,13 +1528,15 @@ refuses otherwise) and its tick report
 (`POST /api/continuity/quiz-status`, which the Shadow lanes card shows), the coordinator's Live on the quiz's baseline
 (`POST /api/continuity/quiz-baseline/live`, attributed and owned, W1a lanes only),
 the Overlord's inbox doors (`GET /api/overlord/inbox`, `GET /api/overlord/messages/:id` and
-`POST /api/overlord/messages/:id/acknowledge`, attributed, then behind the Overlord gate and its fence),
+`POST /api/overlord/messages/:id/acknowledge`, attributed, then behind the Overlord gate and its fence), the Overlord's
+history door (`POST /api/overlord/history`, a read whose search words ride the body, behind the same gate and fence),
 `/api/notify`, which refuses an absent token like every lane,
 `/api/pools/epoch` and `/api/updates/intent/:nodeId` — the callers are `curl` inside a
 Claude Code session, `ccd-pool-sync.timer` and, from update-management W4, `ccd-update-sync.timer`, none with a cookie jar, though the
 exempt-but-authenticated GETs among them (`/api/runs`, `/api/runs/:id/items`,
 `/api/runs/:id`, `/api/runs/:id/record`, `/api/runs/:id/signals`, `/api/feed`, `/api/lifecycle`, `/api/peers`, `/api/claims`,
-`/api/asks`, `/api/pools/epoch`, `/api/updates/intent/:nodeId`, `/api/testbox`, `/api/programmes/:slug/goals`, `/api/programmes/:slug/plan`, and the
+`/api/asks`, `/api/pools/epoch`, `/api/updates/intent/:nodeId`, `/api/testbox`, `/api/programmes/:slug/goals`, `/api/programmes/:slug/plan`, `/api/landing`,
+`/api/programmes/:slug/history`, `/api/sessions/:id/programme`, and the
 one POST of the kind, `/api/testbox/tools-sync`) take a live session
 cookie **or** the token, which is how a coordinator reads its own wave ledger from
 the fleet host), `POST /api/token/claim` (the box token's claim door, which
@@ -2581,12 +2585,25 @@ window less `min(max_tokens, 20000)` less 13,000, measured on Claude Code 2.1.30
 every 15 seconds, and the upstream idle bound is 300 seconds, as in Codex. A context overflow is answered as Claude
 Code's own `prompt is too long: N tokens > M maximum`, so it compacts; N is the bridge's estimate, because the backend's
 overflow message carries no counts. A usage limit is a 429 `billing_error` and a policy refusal a 400 `policy_blocked`,
-each with `x-should-retry: false`. Retries are Claude Code's: the bridge never retries an upstream request, except once
-after it refreshed a token the upstream answered 401, and once without the request markers' additions after a 400
-(below; a reply the upstream marks unfinished is continued inside the same message, at most three times).
+each with `x-should-retry: false`. Retries are Claude Code's, except three: the bridge sends an upstream request again
+once after it refreshed a token the upstream answered 401, once without the request markers' additions after a 400
+(below), and, for a short provider failure, as the next paragraph says (a reply the upstream marks unfinished is
+continued inside the same message, at most three times).
 `count_tokens` is answered locally, from an estimate seeded at 3.5 bytes per token and
 calibrated on the lane's own replies, for any model. A `/v1/messages` request for a model the lane's catalogue does not
 list is answered 404 locally and never sent upstream.
+**A short provider failure is absorbed** (D-9078). The lane's launcher gives Claude Code two retries, because a
+retry of a request that timed out costs 870 seconds, so without this a provider overloaded for a few seconds ended the
+turn. While nothing of the message has reached Claude Code, the bridge tries again itself when the upstream answered
+overloaded (529) or unavailable (503), or could not be reached: after about 1 second, then doubling to 20, each wait
+spread by a quarter, until 120 seconds after the message's first attempt. An upstream `retry-after` is waited out when it
+fits in that time; one that does not, and any attempt that itself took 30 seconds or more, is answered at once, so a slow
+request is never sent again. Rate limits, plan limits, policy refusals, overflows, ineligible plans, refused tokens and
+every other 4xx are answered at once as before, and so is a response that reached its end. When the time is spent, the
+client gets the error it always got. The wait ends as soon as the client closes or the bridge is stopped. Only a request
+carrying Claude Code's beta is held, so another caller of the lane (the models canary) keeps its own deadline. An absorbed
+failure is no `5xx` outcome and is not written to the credential's status file; the stats file's `parity` row counts it in
+`absorbed`, by `overloaded`, `unavailable` and `transport`.
 The credential's refresher is the bridge: it checks every minute and refreshes at about half the token's lifetime,
 through the library's lock.
 
@@ -2693,8 +2710,8 @@ started), `session` (the session id when it has the shape of one, at most 128 ch
 for a subagent's request, never its id), `message` and `post` (the client message's number in this process, and the
 request's index within it: continuations and retries count on), `route` and `model` (the `parity` row's), `status`
 (null when no answer came), `outcome` (the word the stats file counts for what the bridge did with the answer: `2xx`,
-`continuations`, `continuation-cap`, `refresh-after-401`, `4xx`, `5xx`, `client-gone`, `drain-cut`, or `fallback` for the
-400 that started a fallback), `served`, `servedTier` (the `parity` row's word for the tier the response named, or
+`continuations`, `continuation-cap`, `refresh-after-401`, `4xx`, `5xx`, `client-gone`, `drain-cut`, `fallback` for the
+400 that started a fallback, or `absorbed` for a failure the bridge tried again), `served`, `servedTier` (the `parity` row's word for the tier the response named, or
 `absent`), `effort`, the four token counts, `firstOutputMs`, `reasoningMs` (null when no reasoning item finished before
 the first output) and `totalMs` (whole milliseconds, from the same instants the `parity` histograms bucket), `inputTransformations`, `replay` (the message's
 reasoning-store lookups, on its first request only), `markers`, `fallback` and, when set, `turnState`. A field the
@@ -2780,8 +2797,11 @@ its own `resetAt` — and `_limit_score` answers `""` unless both windows are me
 declares `fiveWindowMinutes: 0` is scored on `seven` alone). `_ws_least_loaded` skips an account with no
 score, and falls back only when nothing was scored: to the first eligible account the roster says can report
 (`telemetry: "anthropic"`), then to the first eligible account at all, and — only when the health probe has
-condemned every eligible lane — to the first auth-dead one. `_swap_target` ranks an unscored candidate at
-`100`, below every scored one, and an auth-dead one at `101`, below that. So an account nobody has heard from
+condemned every eligible lane — to the first auth-dead one. A lane whose provider is failing
+(`~/.cc-sessions/<id>-provfail`, below) is left out of all of that until no unmarked lane with a live credential is
+eligible; then the same rule runs over the marked ones, so it is tried last and never refused. `_swap_target` ranks an unscored candidate at
+`100`, below every scored one, a lane whose provider is failing at `101`, and an
+auth-dead one at `102`, below that. So an account nobody has heard from
 in a week takes work only when nothing measured can, and the server's `projectHome` forecasts the same
 tiers (with one difference: it scores a `telemetry: "codex"` lane, which ccd's placement leaves out of its
 measured tier). The accounts screen's "last reported *age*" line still tells you which case a pick was, and
@@ -2802,7 +2822,12 @@ operator intent: `touch`/`rm` by hand, or `ccrc account disable --id <id>` / `en
 the placement lock — and `disable` refuses to switch off the last placeable home-able lane
 (`last-enabled-home`); `ccrc account add` and `declare` write it for every lane they create. A dead
 credential is a different file, `~/.cc-sessions/<id>-authdead`, written by the health probe or by a rescue
-off a 401; it costs a lane preference, never eligibility, and `_account_ok` never reads it. The probe is
+off a 401; it costs a lane preference, never eligibility, and `_account_ok` never reads it. A lane whose provider answers
+turns with errors is a third file, `~/.cc-sessions/<id>-provfail` (`"<epoch> <word>"`), written once a minute by the fleet
+limit watchdog's pass when three consecutive provider failures of one session, or a fresh owed one of each of two, stand on
+that lane with no newer good Stop there. It ends at a newer good Stop and means nothing 30 minutes after it was written. An
+automatic move does not return a session to a home that is marked and ranks a marked lane behind every other but an auth-dead
+one, never ineligible, and a new workspace is placed on one only when no other lane can take it; `ccd swap`, `ccd swap-self` and `ccd prefer` never read it. The probe is
 described under "Account health and the telemetry keepalive" below; `ccrc account check` is how you measure a
 `login` lane.
 
@@ -3110,8 +3135,8 @@ none per supervise tick). When tmux pronounces the session `gone`, the supervise
 end: `oom` when that scope's journal names an OOM kill in the last 120 s (`journalctl --user -u
 <scope>`, bounded by `timeout 5`), `tmux-server` when `tmux list-sessions` fails, `exited`
 otherwise, and `unknown` when the journal read fails or no scope was recorded on Linux. `cmd_swap`
-records `swap-manual`, `swap-auto-home`, `swap-auto-rescue` or `swap-auto` after its act-time gates
-and before it stops the unit, so a refused swap records no end. Each goes to `$REG/<id>.lastend`
+records `swap-manual`, `swap-auto-home`, `swap-auto-rescue`, `swap-auto-provider` or `swap-auto` after its
+act-time gates and before it stops the unit, so a refused swap records no end. Each goes to `$REG/<id>.lastend`
 (`<epoch> <cause>`; an `oom` also appends to `$REG/<id>.oomends`, kept to the last 10 minutes) and
 to `swap.log` as `ended <id>: <cause>`. `_resume_prompt_for` composes the prompt per spawn: a
 `lastend` at most 10 minutes old replaces RESUME_PROMPT's "an account swap or a supervisor revival"
@@ -5812,15 +5837,18 @@ names every measured build. `$REG/hibernate-disabled` stops it too. `ccrc update
 restarts supervisors, never Claude Code.
 
 **Landing order (landing-order wave 1).** Every merge of `main` into a branch restarts that branch's
-CI, so a session absorbs `main` only on a licence. Worker clause 16 names three, each read after one
+CI, so a session absorbs `main` only on a licence. Worker clause 16 names four, each read after one
 `git fetch origin`: the branch conflicts —
 `git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD` exits 1 with a tree id on its
 first line (exit 0 is clean; any other answer is unmeasured and licenses nothing); a required check on
 its PR is red while `main` passes the same tests, measured by re-running the failing test files on a
 clean checkout of `origin/HEAD` in scratch (a red that `main` shows too is reported once as `main-red`
-and left alone); or a `fix-round` mail from the coordinator names the PR ejected from the landing line,
-or next to land in a strict-protection repository. The first two license at most one absorption per
-PR. An absorption is `git merge` and nothing else — never a rebase, a force-push, or GitHub's branch
+and left alone); a `fix-round` mail from the coordinator names the PR ejected from the landing line,
+or next to land in a strict-protection repository; or a `conflict-sync:` mail from the coordinator
+names the PR and a base commit for a conflict the coordinator measured, and the worker's own probe of
+that commit agrees. The first two license at most one absorption per PR. The fourth licenses one
+absorption of exactly the named commit per mail, before the wave-done of the round the worker is in. An
+absorption is `git merge` and nothing else — never a rebase, a force-push, or GitHub's branch
 update by any route (its button, `gh pr update-branch`, the API) — and a conflict in a
 `# ccrc:generated` stamp line (the session hook's generated region carries one; `ccd/ccd` does not) is never hand-resolved:
 take either side of that one line, resolve every other hunk as the source it is, then run
@@ -5901,8 +5929,9 @@ the rest) is listed in the hook's header, and a jq failure or a hook timeout fai
 (`server/test/session-hook-merge-deny.test.ts`). This tree changes no repository setting: requiring
 the queue is the operator's act.
 
-**The landing line (landing-order stage 5).** `GET /api/landing?project=<p>` (box token; `ccrc-api landing show --project <p>`)
-is the coordinator's read of one project's line before it enqueues: the entries still in the line (`pinned`, `ejected`,
+**The landing line (landing-order stage 5).** `GET /api/landing?project=<p>` (a session or the box token since wave 5j-a, D-9048, and open
+while sign-in is dark, like every dual-credential read; `ccrc-api landing show --project <p>`) is the coordinator's read of one project's
+line before it enqueues, and the console's: the entries still in the line (`pinned`, `ejected`,
 `unknown`) — the PR, its `pinnedSha` (the head the line
 pinned when the run entered `merging`, which the coordinator requires to equal the head it binds and passes to
 `--match-head-commit`), its `handoffCommit`, its state and its ejections — and, with `&pr=<n>` (`--pr <n>`), that PR's entry in any
@@ -5914,7 +5943,8 @@ the pinned one kept in its `detail`, or `closed` when GitHub reads it closed unm
 (at most ten entries a sweep, oldest first) marks it, and a work run's `done` close marks it `landed` when GitHub reads the PR
 MERGED (a merge train's landing is left to the landed reader, which carries the train facts); a verified pin re-pins a `closed`
 entry only when its projection is readable and carries no quarantine marker (D-8626). A project the line has never seen answers no entries and both flags off. The line's authority (no-run creation evidence,
-order edges, `fixesMain` and setter attribution) is journalled in `~/.ccrc/landing.log`, which a restored `coord.db` leaves in
+order edges, `fixesMain`, setter attribution, and since wave 5j the operator's pause of the line and withdrawals of entries) is
+journalled in `~/.ccrc/landing.log`, which a restored `coord.db` leaves in
 place (no backup copies it) and which the server replays before it serves anything. Replay never fabricates a measured pin or a
 current run association: a project whose projection is missing or whose binding evidence contradicts is reported as unmeasured
 and held, and invalid history refuses startup. An uncertain journal append or landing database commit fences every landing read
@@ -5928,10 +5958,19 @@ read answers a `binding` (`inert`, `held` with a reason, or `ready` for the sele
 fence and a `restart` fence alike clear only when the server restarts: the replay is the only thing that reopens the line, and only
 the boot calls it, so there is no retry timer and nothing reopens the line while the server runs; a restart whose replay refuses
 does not start. A retreat refused `landing-projection-unreadable` (its projection does not read, whether its pin names the
-episode's head or another) answers `recovery: 'repair'` (D-8627) and is not cured by a restart, because replay never writes a projection: the run
+episode's head or another) answers `recovery: 'repair'` (D-8627) and is not cured by a restart, because replay writes no projection other than
+the operator's withdrawal (D-9046) and so repairs none: the run
 stays at `merging` and goes to the operator, and this build has no repair route for it. `POST /api/landing/entries` and `POST /api/landing/order` (box token and measured
 `byId`/`byUuid` attribution, `ccrc-api landing entries|order --json -`) record an entry and its order edges; the attributed `byId` is
-the setter, and an omitted `afterIds` or `fixesMain` keeps its value while an explicit `[]` or `false` clears it.
+the setter, and an omitted `afterIds` or `fixesMain` keeps its value while an explicit `[]` or `false` clears it. Since wave 5j the
+operator has two session-only doors on the line (D-9049), with no box token and no `ccrc-api` verb: `POST /api/landing/pause`
+(`{project, paused}`) pauses or resumes one project's line, and `POST /api/landing/withdraw` (`{project, pr, pinnedAt}`, the pin
+time the console read) withdraws one entry that is not terminal, with a notice to its coordinator and to the coordinator of each
+entry whose order names it directly, where one is recorded and reads; the answer names anyone who could not be told. Both are
+journalled, and both work while sign-in is dark, recording `flag-off`. Neither chooses, reorders or brings forward the head: an
+order edge to a withdrawn entry stays outstanding, so its dependant waits, named in the read's `order.waits` with each target's
+entry id and PR, until a session declares its order again without that entry, which the feed records whoever does it, or the
+entry re-enters at its run's next verified pin and then lands or is closed; a run-less entry cannot re-enter (D-9047).
 
 The main-red hold has one writer: a fresh, same-base `main-health` measurement applied through the radar lane. A next-to-land mail
 is sent once per exact episode, base and recipient; it tells a coordinator to re-read the line and is not merge permission. The
@@ -6188,7 +6227,8 @@ next before the turn ends.
 session, `$REG/<id>.turn.json`, written on the main thread only: an event that
 carries a subagent's `agent_id` never touches it. It reads `working` from a
 turn's first event, `done` at its Stop (with the Stop's background-task count,
-kinds and ids), and `failed` at a `StopFailure` (with the API error's token).
+kinds and ids), and `failed` at a `StopFailure` (with the API error's token),
+and it keeps the times of the last consecutive provider failures (`failAts`).
 Every SessionStart but a `clear` or `compact` records the restart, and its lost
 lists name only what that restart cut short: the background tasks the last
 `done` turn left running. The lane reads the marker, the raw hookstate and the
@@ -6233,9 +6273,10 @@ unreadable (ahead of every wave-1 rung and cap), coordinator deaf (ahead of the
   reading `idle` or `shell`, and no more than about 22 h ago (the 24 h mail
   read less the 2 h repeat window), so a repeat is never re-read as a first
   failure.
-  - A retry-class error (`server_error`, `overloaded`, `max_output_tokens`,
-    `unknown`) draws a `failed:` mail to the session, and a second within 2 h
-    goes to the coordinator.
+  - A provider error (`server_error`, `overloaded`) is not this arm's: the
+    provider-failure ladder below owns it, and no coordinator is told.
+  - A retry-class error (`max_output_tokens`, `unknown`) draws a `failed:` mail
+    to the session, and a second within 2 h goes to the coordinator.
   - A request-class error (`invalid_request`, `model_not_found`) goes to the
     coordinator at once.
   - Those two reach the operator as a `⚠ failed` push instead when the failing
@@ -6244,6 +6285,59 @@ unreadable (ahead of every wave-1 rung and cap), coordinator deaf (ahead of the
   - An account-class error holds, because the limit and swap machinery owns it.
   - A token this build does not know holds with one `ccrc-server: stall-watch
     unknown StopFailure` line. It is never guessed into a self-wake.
+
+**A session on a failing provider moves by itself**, the last rung of the
+provider-failure ladder below (`ccd/ccd#_watchdog_provider`, in the fleet limit
+watchdog's pass). On the third counted failure since its last move, still owed,
+it goes to another lane by itself: the limit rescue's act, with the
+arm `provider`, and no key is sent. Every gate of a rescue stands (the pool side,
+the class, `<lane>-disabled`, measured room, the 15 minutes after a move, do not
+bounce, three moves a pass), never one class down, and never a lane that is marked
+failing, one of a provider with two marked lanes, or one the session's measured
+context does not fit. A lane with a good turn since the first failure comes first,
+then another provider, then an unproved lane of its own. It waits for a running
+turn, background work, a dialog, a question and unsent text in the box, at the
+decision and again at the act. With no lane it stays, the nudges go on, and
+`~/.cc-sessions/<id>.provwait` (an epoch) says since when, until a good turn or a
+move. It raises no notice. `ccd swap`, `ccd swap-self` and `ccd prefer` are never
+held by any of it, and `CCRC_LIMIT_WATCHDOG_MIN=0` stops it.
+
+**The provider-failure ladder** (`server/src/coord/providerRetry.ts`, run inside
+the stall watch's pass by `server/src/providerRetryLane.ts`). Any live session
+whose turn ended on a provider error is told to continue by itself: a worker, a
+reviewer, a coordinator, the designated Overlord, or a session of the
+operator's own. One mail to the session, typed as one line (`Your turn ended on
+a provider error; continue where you stopped.`), falls due 1 minute after the
+first consecutive failure, 4 after the second and 15 after the third and every
+later one. One that started no turn is repeated 15 minutes after it landed, and
+two are never out at once. What is owed is the marker's `failAts`, which a real
+Stop and a `clear` empty and a restart carries, so a restart that relabels the
+marker `done` silences nothing; the 22 h cutoff does not apply. It does not
+nudge a running turn, an open dialog or question, a session with no pane, one
+that is stopped, hibernated or archived, one held by a usage limit, or anything
+it could not measure. A person's unsent text in the box is refused, not stashed:
+nothing is typed, and the mail waits for the box. A queued nudge the session has
+moved past is taken back. No coordinator is asked to mend a provider, and a
+worker that owes a retry holds the quiet ladder, so none is mailed `stall:`
+about it. When three sessions owe a retry on one provider (the Anthropic lanes,
+the Codex lanes, or any other lane by itself) within 10 minutes, or one session has
+got past none of its failures for an hour, one notice with
+no session goes to the operator, and one record-only row says when none has owed
+one for 10 minutes; the standing outages are kept in
+`~/.ccrc/provider-outages.json`, so a restart repeats no notice. It ships armed
+and has no marker of its own: `stall-watch-disabled`, a level of Off or Log only
+chosen in Settings, and `mail-disabled` each stop it.
+
+While a session owes a retry the console says so (`FleetSession.providerRetry`,
+optional; computed by the same pass, off the ladder's own schedule, and left out
+of a row whose turn runs now): `Provider overloaded, retrying 14:52` or `Provider
+error, retrying 14:52` by the token, in the viewer's own time, `retrying now` past
+the due time, and `retry waiting`, with no time, while a question, a dialog, a
+usage limit or a nudge the mail lane has not typed (unsent text in the box) holds
+it. The words (`pwa/src/fleet/providerRetryWords.ts`) take the place of the row's
+and the session header's status word, of the `stalled` marker, and of `turn
+failed` and `quiet` on a run; a row that waits on you keeps its word, and its
+header says both.
 
 The `orphaned:` and `failed:` mails are class `self-wake`: recorded, never
 pushed, and they move neither the quiet clock nor the episode. With a current
@@ -7530,8 +7624,13 @@ nothing, so the row counts no attempt and records why, and the card says that no
 "sent N times". A failed capture stays untrusted and pushes one notice. Child approvals read the record: a child on a build that is not trusted is refused `version-unverified`, with
 `trust` naming why (`not-captured`, `capture-queued`, `capture-failed`, `unread` or `record-unreadable`). The card lists
 every build with its verdict, under the rest at every width. A failed build carries its replay output behind a disclosure
-and **Capture again** (`POST /api/testbox/builds/capture`, the operator's). The box-side capture runner is not built yet
-(plan `docs/superpowers/plans/2026-11-11-new-build-capture.md`, Open), so every new build stays queued until it lands.
+and **Capture again** (`POST /api/testbox/builds/capture`, the operator's). The box captures a build with no credential,
+no new egress and no model spend (spec `docs/superpowers/specs/2026-11-22-build-capture-runner-design.md`): the build runs
+in a scratch home of its own, through a tmux server of its own, against a scripted stand-in model on the capture's
+loopback, and the replay of what it recorded is the verdict. A box that holds no copy of the build answers `build-absent`;
+the server then copies the fleet host's own copy of that build over the admin lane, checked by hash at both ends, and sends
+the job again, so nothing downloads a build. One capture runs at a time, none starts while the box admits no work (a tool
+sync's takeover or a drain), and a fault of the box is never a failed verdict: the build stays queued.
 
 **The settings.** The fleet host's keys are in `~/.ccrc/ccrc.env`, the box's in its own `/etc/ccrc-testbox/ccrc.env`;
 **ccrc's own settings** names every one, and `deploy/testbox/ccrc.env.example` documents the box's with their defaults.
@@ -8593,7 +8692,14 @@ browser suite there and `test (server)` a red node floor, so either stops the me
 Nothing reaches `main` through the queue without it. The one way around it is a bypass actor's direct merge
 (`gh pr merge --admin`, which the ruleset's admin bypass still allows): the required checks are then satisfied by the
 fast run, so such a merge lands only what the fast run tested. Don't do it here (ccrc's admin-merge door, D-8124, refuses any repository with a merge queue, so it never lands this one); the daily `full-suite` is the next run that
-would catch what it skipped. The **macOS legs** (`test-macos`, `probe-macos`) live in `.github/workflows/macos.yml`: they run on every
+would catch what it skipped. A server shard's deadline is 45 minutes on every run, not 30: a full queue shard
+measured from 15m47 to 29m53 by runner, and a green one was cancelled at 30m00 and its entry removed (D-9014). The long
+jobs of a queue run first ask `.github/ci/queue-live.mjs`, fetched from the default branch, whether their group still
+stands (a job whose leg skips, such as a docs-only group's node floor, skips this step too), and end with exit 1 only
+when the queue branch is gone and the group's commit is not on `main`; an unmeasured read lets the job run, and a job
+already running when its group is superseded runs to its end (D-9015). The growth check measures a queue entry against
+the group's parent commit (`merge_group.base_sha`, when it is an ancestor of HEAD), not the merge base with
+`origin/main`, so a stack is judged entry by entry at the same per-PR limit (D-9016). The **macOS legs** (`test-macos`, `probe-macos`) live in `.github/workflows/macos.yml`: they run on every
 push to `main` (coalesced) and nightly, block no pull request and no queue entry, and a red one is a failing run on
 `main`. A refresh **every three hours** runs no test legs: it re-traces what every merge since the last one affected and
 refreshes the map, and traces nothing when `main` has not moved since the newest map. The **daily** run runs every leg in full, macOS included, ending in `full-suite` — skipped when

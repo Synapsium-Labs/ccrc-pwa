@@ -357,7 +357,8 @@ const factsOf = (entries: LandingEntry[] = [entry(7)], over: Partial<LandingMuta
   stateWords: entries.map((x) => ({ id: x.id, value: isLandingEntryState(x.state) ? x.state : 'unrecognised' as const })),
   dependencies: entries.map((x) => ({ id: x.id, value: { kind: 'readable' as const, afterIds: x.afterIds } })),
   recovery: { subjects: [], hold: null }, nextId: 200, foreignIds: [],
-  coordinators: entries.map((x) => ({ id: x.id, value: { kind: 'no-run' as const } })), terminalRepairs: [], creations: [], ...over,
+  coordinators: entries.map((x) => ({ id: x.id, value: { kind: 'no-run' as const } })), terminalRepairs: [], creations: [], flagsRow: false,
+  pinTimes: entries.map((x) => ({ id: x.id, value: x.pinnedAt })), ...over,
 });
 const probeWith = (over: Record<string, unknown> = {}, headOver: Record<string, unknown> = {}) => {
   const base = controlRead();
@@ -621,6 +622,35 @@ describe('applyLandingControl: the measured health writes mainRedHold and never 
     expect(flagsOf()).toEqual({ operatorPaused: true, mainRedHold: false });
   });
 
+  // Wave 5j-b (Task 8): the two M14 rows again, with the pause written by the operator's door through the one authority
+  // writer (journalled), not by fixture SQL. The project is made known to the door by a run-less entry first.
+  const doorPause = (on: boolean): void => {
+    const r = store.writeLandingAuthority({ kind: 'pause', project: P, paused: on, setBy: 'operator', actor: 'flag-off' }, now);
+    if (!r.ok || !r.changed) throw new Error(`fixture door pause refused: ${JSON.stringify(r)}`);
+  };
+  const known = (): void => {
+    const r = store.writeLandingAuthority({ kind: 'entry', project: P, pr: 31, pinnedSha: 'e'.repeat(40), handoffCommit: 'f'.repeat(40), setBy: 'lane-a' }, now);
+    if (!r.ok) throw new Error('fixture entry refused');
+  };
+
+  it('M14, door-written: a pause set before red survives the red and the later green', () => {
+    known();
+    doorPause(true);
+    expect(apply(redCtl)).toMatchObject({ holdChanged: true });
+    expect(flagsOf()).toEqual({ operatorPaused: true, mainRedHold: true });
+    expect(apply(controlRead())).toMatchObject({ holdChanged: true });
+    expect(flagsOf()).toEqual({ operatorPaused: true, mainRedHold: false });
+  });
+
+  it('M14, door-written: a pause placed between red and green survives the green', () => {
+    known();
+    expect(apply(redCtl)).toMatchObject({ holdChanged: true });
+    doorPause(true);
+    expect(flagsOf()).toEqual({ operatorPaused: true, mainRedHold: true });
+    expect(apply(controlRead())).toMatchObject({ holdChanged: true });
+    expect(flagsOf()).toEqual({ operatorPaused: true, mainRedHold: false });
+  });
+
   it('M13: pending and unmeasured health never clear red, and a clear flag stays clear', () => {
     const unmeasured = controlRead({ health: healthWith({ state: 'unmeasured', why: 'pending', failing: [], pending: ['required-a'] }) });
     expect(apply(redCtl)).toMatchObject({ holdChanged: true });
@@ -644,5 +674,30 @@ describe('applyLandingControl: the measured health writes mainRedHold and never 
     const foreign = controlRead({ health: healthWith({ ...RED_HEALTH, project: 'project-b' }) });
     expect(apply(foreign)).toMatchObject({ holdChanged: false });
     expect(flagsOf().mainRedHold).toBe(true);
+  });
+});
+
+// Landing order wave 5j-a (D-9047): the binding selects its head through `landingOrder`'s walk, so a dependant held behind a
+// withdrawn target is never a binding head, and nothing is cued to land it.
+describe('landingBindingOf never selects a dependant held behind a withdrawn target (wave 5j-a, D-9047)', () => {
+  it('the only pinned entry waits on a withdrawn one: held empty-or-blocked, no entry named', () => {
+    const facts = factsOf([entry(5, { state: 'withdrawn' }), entry(7, { afterIds: [105], fixesMain: true })]);
+    expect(landingBindingOf(facts, controlRead(), now)).toEqual({ mode: 'held', reason: 'empty-or-blocked', entryId: null });
+  });
+  it('beside an independent entry, the selected head is the independent one, never the held dependant', () => {
+    const facts = factsOf([entry(5, { state: 'withdrawn' }), entry(7, { afterIds: [105], fixesMain: true }), entry(8)]);
+    const b = landingBindingOf(facts, controlRead(), now);
+    expect(b).toMatchObject({ mode: 'held', entryId: 108 });
+    expect(b).not.toMatchObject({ entryId: 107 });
+  });
+  it('a stored withdrawn behind display unknown holds the same way', () => {
+    const facts = factsOf([entry(5, { state: 'unknown' }), entry(7, { afterIds: [105] })], {
+      stateWords: [{ id: 105, value: 'withdrawn' }, { id: 107, value: 'pinned' }],
+    });
+    expect(landingBindingOf(facts, controlRead(), now)).toMatchObject({ mode: 'held', entryId: null });
+  });
+  it('CONTROL: the same dependant behind a landed target is the ready head', () => {
+    const facts = factsOf([entry(5, { state: 'landed' }), entry(7, { afterIds: [105] })]);
+    expect(landingBindingOf(facts, controlRead(), now)).toMatchObject({ mode: 'ready', entryId: 107, pr: 7 });
   });
 });

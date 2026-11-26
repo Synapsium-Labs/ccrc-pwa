@@ -21,11 +21,12 @@ import { designationFactFrom, identityOf } from '../roleOf.js';
 import type { AuthorityState } from './overlordAuthorityCoherence.js';
 import { doorRow, type OverlordDoorRow } from './overlordDoors.js';
 import {
-  callerStandingOf, counterVerdict, fenceVerdict, gateReads, incarnationNeeded, overlordGate, spendVerdict, standingVerdict, witnessRecordOf,
+  callerStandingOf, cardFactFrom, cardHoldVerdict, counterVerdict, fenceVerdict, gateReads, incarnationNeeded, overlordGate, spendVerdict, standingVerdict, witnessRecordOf,
   type CallerStanding, type FenceFacts, type FencePresented, type FenceVerdict, type FenceWhy, type GateFacts, type GateStep, type GateVerdict, type WitnessRecord,
   type WitnessVerdict,
 } from './overlordGate.js';
 import type { ActKeyFact, CounterAnswer, FenceRefusalRow } from './overlordGateStore.js';
+import type { CallerProfileRead } from './otherLanes.js';
 
 /** One witness check, as door process B's `recordWitnessCheck` records it: what `witnessRecordOf` (L1) decided, the used
  *  witness on a pass or the reason of a refusal at step 7a, with where and when; an unmeasured witness records nothing. */
@@ -66,6 +67,10 @@ export interface OverlordGateDeps {
   readonly serverWords: () => readonly string[];
   /** The `Clock` port's wall time. */
   readonly now: () => number;
+  /** The caller's launch profile (the other-lane refusals' reader, `otherLaneReadsOf(...).profile`), asked only when the
+   *  designation is unmeasured at a `by-profile` door, so a measured designation costs no read. Absent: `not-read`, which
+   *  refuses (unmeasured) as gates B did. */
+  readonly profile?: (sessionId: string) => Promise<Exclude<CallerProfileRead, 'not-read'>>;
 }
 
 export type GateRun =
@@ -117,14 +122,36 @@ export function callerGenerationOf(
   return { gens, fact, live, generation };
 }
 
-/** Step 1's reads: the designation, then the incarnation only for the bound or a pending designate id. */
-async function standingRead(deps: OverlordGateDeps, sessionId: string): Promise<{ designation: DesignationRead; standing: CallerStanding }> {
+/** The timer line's card hold (Overlord W1, the Overlord's timers; C62): the live generation of `identity` (the designated
+ *  session's, `identityOf`) among the sweep's one generations read, its card read mapped by the gate's own `cardFactFrom` and
+ *  judged by `cardHoldVerdict`. A hold's reason is logged once when it changes, and read again next sweep. */
+let timerHoldLogged: string | null = null;
+export function timerLineHold(gens: GenerationsRead, identity: string, cardRead: (startId: number) => CardReadRead,
+                              log: (line: string) => void): boolean {
+  const live = gens.ok ? gens.rows.find((g) => g.identity === identity) ?? null : null;
+  const card = !gens.ok ? { kind: 'unmeasured' as const, why: gens.detail }
+    : live === null ? 'none' as const : cardFactFrom(attempt<CardReadRead>(() => cardRead(live.startId), (detail) => ({ ok: false, detail })));
+  const hold = cardHoldVerdict(card);
+  const why = hold.deliver ? null : typeof card === 'object' ? `${hold.why}: ${card.why}` : hold.why;
+  if (why !== null && why !== timerHoldLogged) log(`ccrc-server: the timer line to the Overlord holds: ${why}`);
+  timerHoldLogged = why;
+  return hold.deliver;
+}
+
+/** Step 1's reads: the designation, then the incarnation only for the bound or a pending designate id, and the launch profile
+ *  only when the designation is unmeasured at a `by-profile` door. */
+async function standingRead(deps: OverlordGateDeps, sessionId: string, door: OverlordDoorRow):
+  Promise<{ designation: DesignationRead; standing: CallerStanding }> {
   const designation = attempt<DesignationRead>(() => deps.designation(), (why) => ({ kind: 'unmeasured', why }));
   let incarnation: Parameters<typeof callerStandingOf>[0]['incarnation'] = 'not-asked';
   if (incarnationNeeded(sessionId, designation)) {
     try { incarnation = await deps.identity.incarnation(sessionId); } catch (e) { incarnation = { kind: 'unmeasured', reason: whyOf(e) }; }
   }
-  return { designation, standing: callerStandingOf({ sessionId, incarnation }, designation) };
+  let profile: CallerProfileRead = 'not-read';
+  if (designation.kind === 'unmeasured' && door.unmeasuredDesignation === 'by-profile' && deps.profile !== undefined) {
+    try { profile = await deps.profile(sessionId); } catch (e) { profile = { kind: 'unreadable', why: whyOf(e) }; }
+  }
+  return { designation, standing: callerStandingOf({ sessionId, incarnation, profile }, designation, door.unmeasuredDesignation) };
 }
 
 /** The facts past step 1 that no fence or witness touches, read once, each port's throw its unmeasured arm. */
@@ -135,7 +162,7 @@ function plainFacts(deps: OverlordGateDeps, door: OverlordDoorRow, live: GenRow 
   let card: GateFacts['card'] = 'none';
   if (reads.card) {
     const c = live === null ? { ok: true as const, read: null } : attempt<CardReadRead>(() => deps.cardRead(live.startId), (detail) => ({ ok: false, detail }));
-    card = !c.ok ? { kind: 'unmeasured', why: c.detail } : c.read === null ? 'none' : c.read.current ? 'read-current' : 'read-stale';
+    card = cardFactFrom(c);
   }
   const authority: GateFacts['authority'] = reads.authority
     ? attempt<AuthorityState>(() => deps.authority(), () => ({ kind: 'unmeasured', why: 'journal' })) : 'start-door';
@@ -152,7 +179,7 @@ export function overlordReadGate(deps: OverlordGateDeps): (sessionId: string, ke
       const row = doorRow(key);
       if (row.group !== 'overlord') throw new Error(`overlordReadGate: ${key} is not an Overlord door`);
       const door: OverlordDoorRow = { ...row, write: false };
-      const { designation, standing } = await standingRead(deps, sessionId);
+      const { designation, standing } = await standingRead(deps, sessionId, door);
       const early = standingVerdict(door, standing);
       if (early !== null) return early;
       const g = callerGenerationOf(deps, sessionId, designation);
@@ -205,7 +232,7 @@ export function overlordGateRun(deps: OverlordGateDeps):
     }
     const caller = who;
     // Step 1, standing: the designation, then the incarnation only for the bound or a pending designate id.
-    const { designation, standing } = await standingRead(deps, claim.sessionId);
+    const { designation, standing } = await standingRead(deps, claim.sessionId, door);
     const early = standingVerdict(door, standing);
     if (early !== null) return early.kind === 'refuse' ? refused(reply, early) : { kind: 'hook', caller };
 

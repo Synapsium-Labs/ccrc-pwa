@@ -18,9 +18,10 @@ merges, workers never do, and an unattended landing is the goal when every safeg
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
 | 1 | 1 | worker clause 16 and coordinator clause 15 with their pins and count words; the PreToolUse advisory on syncs of `main`; `ccrc restamp`; `update-branch` pinned absent from executable source and counted in the skills | skills, hook (fleet box) | — | #231 | merged 2026-10-02 (`10f32755`); run 218 closed; deploy AGENT-FIRST by the update mechanism |
-| 1c | 1, the fourth trigger | worker clause 16 gains the coordinator's conflict-sync mail as a fourth trigger, bounded to one named commit per mail before a wave-done; the hook's advisory, one README paragraph and the coordinator's run-care reference say the same; the coordinator skill's contract is not reworded | skills, hook (fleet box first) | — | — | ruled by the operator 2026-11-24 (item 641); planned the same day (`docs/superpowers/plans/2026-11-24-landing-order-wave1c-conflict-sync.md`, D-9011 to D-9013; Decisions, 2026-11-24 20:04); the plan merged (#3341, `45329e5b`) and run 3698 was dispatched on 2026-11-25; built at `052169a2` (PR #3357, a draft); review run 3727, the first round, sent it back for one fix round (Decisions, 2026-11-25 04:30) |
-| 1d | 2, the queue's own CI | a server shard's deadline clears its slow-runner case; a superseded queue group's jobs end when they start; in a queue group the growth check measures an entry against its parent | CI (the repository's workflow and tests) | — | — | planned 2026-11-25 (`docs/superpowers/plans/2026-11-25-landing-order-wave1d-queue-ci.md`, D-9014 to D-9016; Decisions, 2026-11-25 01:40); to dispatch after wave 1e, which changes the same workflow file |
-| 1e | 2, the queue's own CI | no browser shard of a queue run expects more than about 12 minutes: the file-time table is refreshed, one 870 s file runs as two, the leg runs as four shards, and its deadline goes from 20 to 30 | CI (the workflow, the browser leg's sequencer and one browser test file) | — | — | planned 2026-11-25 (`docs/superpowers/plans/2026-11-25-landing-order-wave1e-browser-shards.md`, D-9026, and D-9055 for the deadline, which goes to 30; Decisions, 2026-11-25 02:40 and 04:30); built before 1d; the plan merged (#3355, `4e17ac96`) and run 3728 was dispatched on 2026-11-25; building |
+| 1c | 1, the fourth trigger | worker clause 16 gains the coordinator's conflict-sync mail as a fourth trigger, bounded to one named commit per mail before a wave-done; the hook's advisory, one README paragraph and the coordinator's run-care reference say the same; the coordinator skill's contract is not reworded | skills, hook (fleet box first) | — | #3357 (plan #3341) | ruled by the operator 2026-11-24 (item 641); planned the same day (`docs/superpowers/plans/2026-11-24-landing-order-wave1c-conflict-sync.md`, D-9011 to D-9013; Decisions, 2026-11-24 20:04); the plan merged (#3341, `45329e5b`) and run 3698 was dispatched on 2026-11-25; built at `052169a2` (PR #3357, a draft); review run 3727, the first round, sent it back for one fix round (Decisions, 2026-11-25 04:30); review run 3738, the second, confirmed no defect and a last round made the worker's own words say this round's wave-done; review run 3751, the third, found nothing critical or important and the wave was accepted with seven minor known limits; **merged** in #3357 on 2026-11-25 (`6ac066f5`), run 3698 closed; its as-built departures are D-9057 to D-9064 in the plan (Decisions, 2026-11-25 07:10 and 08:42) |
+| 1d | 2, the queue's own CI | a server shard's deadline clears its slow-runner case; a superseded queue group's jobs end when they start; in a queue group the growth check measures an entry against its parent | CI (the repository's workflow and tests) | — | #3365 (plan #3355) | planned 2026-11-25 (`docs/superpowers/plans/2026-11-25-landing-order-wave1d-queue-ci.md`, D-9014 to D-9016; Decisions, 2026-11-25 01:40); dispatched as run 3739 while 1e was in review, its workflow hunks sent to 1e's holder as a packet; built at `c62318f0` (PR #3365, a draft); review run 3753, the first round, found no defect in the script or its decisions and two guards missing, and sent it back for one fix round; the round was built at `e094d86a`; review run 3762, the second, found nothing critical or important and the wave was accepted with seven minor known limits; **merged** in #3365 on 2026-11-25 (`ba0b0f40`); its as-built departures are D-9069 and D-9070 in the plan (Decisions, 2026-11-25 07:10, 08:42 and 09:30) |
+| 1e | 2, the queue's own CI | no browser shard of a queue run expects more than about 12 minutes: the file-time table is refreshed, one 870 s file runs as two, the leg runs as four shards, and its deadline goes from 20 to 30 | CI (the workflow, the browser leg's sequencer and one browser test file) | — | #3362 (plan #3355) | planned 2026-11-25 (`docs/superpowers/plans/2026-11-25-landing-order-wave1e-browser-shards.md`, D-9026, and D-9055 for the deadline, which goes to 30; Decisions, 2026-11-25 02:40 and 04:30); built before 1d; the plan merged (#3355, `4e17ac96`) and run 3728 was dispatched on 2026-11-25; built at `62a74ab5` (PR #3362); review run 3750 accepted it on the first round; the queue removed it once for a server test that is not this wave's and it landed on its second entry; **merged** in #3362 on 2026-11-25 (`cb973d69`); its as-built departure is D-9065 in the plan (Decisions, 2026-11-25 07:10 and 08:42) |
+| 1f | 1 and 2, the known limits | the conflict-sync measure step reads the probe's own exit status; the text guards the last reviews found missing; three comments and one README sentence say what was measured; a failed liveness script lets the job run; two whole-tree scan cases run under a measured budget | skills (one reference file; fleet box), CI | 1c, 1d and 1e | — | planned 2026-11-25 (`docs/superpowers/plans/2026-11-25-landing-order-wave1f-known-limits.md`, D-9066 to D-9068; Decisions, 2026-11-25 09:30); dispatched as run 3776 (the run's wave 27) once the plan was on `main`; its first review (run 3793) found ten minor points, and one fix round corrected comments, notes and one test case (the plan's "Corrections after review run 3793"; D-9073 to D-9076); its second review (run 3809) found four minor points, all in notes; **merged** as #3380 (`861cd777`) on its first queue entry (Decisions, 2026-11-25 12:06, 12:59 and 14:51) |
 | 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1; child-reclamation wave 3 | #234 | merged 2026-10-03 (`0087a045`); run 238 closed; deploy via ccrc's updater (fleet-first measured safe); Task 7's proof run 2026-10-20 stopped by stop rule 3 (Decisions, 2026-10-20 13:00); its re-run on 2026-10-21 turned the queue on, and it stays on by the operator's ruling after stop rule 6 (Decisions, 2026-10-21 12:15) |
 | 2b | 2, the bypass deny | the hook denies `--admin` and a `gh api` merge call in every fleet session | hook | the operator's queue ruleset, approvals at 0, and the proof run; wave 3d; wave 3e | plan #1678 | planned 2026-10-27 (`docs/superpowers/plans/2026-10-27-landing-order-wave2b-bypass-deny.md`, D-7111 to D-7116; amended by #1753 with the operator's per-project allowance, D-7249); run 1144 (the run's wave 8) dispatched 2026-10-29, once wave 3e had merged and another programme's worker, on the operator's instruction, released its claim on `ccd/session-hook.sh`; block 7309–7318; PR #1863; fix round 1 after review 1184; accepted on `e0a57a94` after review run 1195 and merged through the native queue as `d3250900` (Decisions, 2026-10-29 09:41); D-7309–D-7315 defined after the merge; deploy and live check wait (Next-wave brief) |
 | 3 | — | Task 7's preconditions (the payload cap, the quote-dense timing pin), wave 2's residue, Task 7's runbook text | hook, ccd, doctor | wave 2 | #248 | merged 2026-10-07 (`9a255a74`); run 250 closed; deploy AGENT-FIRST via ccrc's updater, then Task 7; run 250 (`ccrc-pwa-still-delta`); block 3906–3915 + 3916–3920 |
@@ -42,8 +43,9 @@ merges, workers never do, and an unattended landing is the goal when every safeg
 | 5g | 5, intents | dispatch's `intents[]` and `intent-held`, in a table of their own | server, skills | 5e | — | planned 2026-11-06 (`docs/superpowers/plans/2026-11-06-landing-order-wave5g-landing-intents.md`, D-8080 to D-8089; Decisions, 2026-11-06 22:15); item 60 answered as proposed (Decisions, 2026-11-07 14:33); approved as written (item 74), the plan merged (#2408 `67db632c`) and run 1427 dispatched 2026-11-07 (Decisions, 2026-11-07 23:08); wave-done verified at `e8c92d065`, review 1654, fix round 1; its wave-done verified at `f9b65a028`, accepted by review 1660, departures D-8117 to D-8119; MERGED 2026-11-08 02:23 UTC (#2453 `12ce1ba7`), run 1427 closed (Decisions, 2026-11-08 02:25) |
 | 5h | 5, the landed reader | the lane that walks the entries with 5c's form, apart from `sweepMerged` | server | 5c on the fleet box, and 5e | #2688 (plan #2671) | merged; run 1661 (the run's wave 20) opened 2026-11-08, planned, before run 1427 closed (Decisions, 2026-11-08 02:25); planned 2026-11-11 (`docs/superpowers/plans/2026-11-11-landing-order-wave5h-landed-reader.md`, D-8294 to D-8314; Decisions, 2026-11-11 16:15); approved as written (item 173), the plan merged (#2671 `f517128c`) and run 1661 dispatched 2026-11-12 (Decisions, 2026-11-12 00:14); accepted by review 1848 after three rounds, departures D-8355 to D-8360; MERGED 2026-11-12 06:37 UTC (#2688 `58bd5591`), run 1850 opened for 5i, then run 1661 closed (Decisions, 2026-11-12 06:41) |
 | 5i | 5, the line's head | `mainRedHold` from the radar's `main-health`, the next-to-land mail, and the reader of 5d's marker | server, skills | 5d on the fleet box, 5e and 5h | plan #2801 | plan approved as written 2026-11-14 (item 312; `docs/superpowers/plans/2026-11-14-landing-order-wave5i-line-head.md`, D-8625 to D-8629), seven tasks, P1–P6 and amendments A/B (Decisions, 2026-11-14 22:16); the plan merged (#2801) and run 1850 was dispatched (`ccrc-pwa-landing-order-5i`), PR #2837; two review rounds (review runs 2123 and 2152); fix round 2 complete locally at `3c432734d`, not pushed; parked from 2026-11-16 to 2026-11-24 on a second merge of `main`, which the operator allowed (item 641; Decisions, 2026-11-24 20:04); that merge was made and pushed with the round's fixes (tip `1ce1b9cc`); review run 3685, the third, confirmed no finding, and the coordinator accepted the wave on 2026-11-25 (Decisions, 2026-11-25 01:40); **merged** in #2837 on 2026-11-25 (`7fdd6a80`), run 1850 closed; its as-built departures are D-9031 to D-9044 in the plan (Decisions, 2026-11-25 03:10) |
-| 5j | 5, the doors (server) | the two session-only routes, pause the line and withdraw an entry, and `landing-subtractive.test.ts` | server, skills | 5e and 5i | — | the plan is written (planning run 3729, PR #3360, a draft) and under review (run 3735); it proposes two build waves, 5j-a and 5j-b (Decisions, 2026-11-25 04:30) |
-| 5k | 5, the doors (PWA) | the line on the project card, the pause control and the withdraw sheet | pwa | 5j | — | to plan |
+| 5j | 5, the doors (server) | the two session-only routes, pause the line and withdraw an entry, and `landing-subtractive.test.ts` | server, skills | 5e and 5i | — | the plan is on `main` (`docs/superpowers/plans/2026-11-25-landing-order-wave5j-doors.md`, #3360, `39fbd18f`, D-9045 to D-9052), accepted at the review cutoff after three rounds and corrected by the coordinator in its section 11; two build waves, 5j-a then 5j-b; 5j-a is dispatched as run 3759 (the run's wave 26), and the operator's reading of the plan's section 9 is asked as item 665, which holds nothing; 5j-a's first review (run 3781) found five minor points, and one fix round kept a withdrawn entry with no run at a pin, which the plan's Task 3 got wrong (the plan's section 12, C9; D-9071 and D-9072); its second review (run 3806) found seven minor points, one ruled (section 12, C11); 5j-a **merged** as #3375 (`31d5d9ae`); 5j-b's two reviews (runs 3864 and 3887) found six and five minor points, and one fix round made the terminal states one shared copy and widened the subtractive suite to all seven landing tables (the plan's section 13; D-9093, D-9094); 5j-b **merged** as #3397 (`83c1ed22`) (Decisions, 2026-11-25 04:30, 07:10, 08:42, 12:06 and 14:51, and 2026-11-26 02:10) |
+| 5k | 5, the doors (PWA) | the line on the project card, the pause control and the withdraw sheet | pwa | 5j | — | the plan is **merged** as #3410 (`44f2b15a`) after three review rounds (runs 3895, 3906 and 3911); its section 11 is the coordinator's corrections and wins over the tasks; D-9107 to D-9110 are defined there, and the two numbers issued after them, D-9111 and D-9112, are defined in wave 5l's plan; the build is run 3914 (the run's wave 30), dispatched 2026-11-26 06:55Z; it carries four points from 5j-b's reviews (the 5j plan's section 13) (Decisions, 2026-11-26 02:10 and 06:20) |
+| 5l | 5, the line | a merge-train landing must not hold the landing line: the train record's one parser reads the train tool's own member list, the landed reader marks a closed, labelled, unproven entry `closed`, and the coordinator references keep a waiting pull request a draft | ccd (fleet box first), server, skills | 5h, 5i | — | the plan is **merged** as #3423 (`aac570d3`) after three review rounds (runs 3935, 3936 and 3939); its section 12 is the coordinator's corrections and wins over the tasks; D-9111, D-9112 and D-9115 are defined there; the spec's §5.5 carries the amended line for D-9112; the build is run 3942 (the run's wave 32), not yet dispatched (issue #3422; Decisions, 2026-11-26 11:10) |
 
 **A fresh workspace per wave (R4) is child-reclamation's.** The spec first drew it as step 6 of the wave lifecycle,
 gated on #166 wave 3. #166 wave 2 (#178) made it live on `main` as "One PR per child", so wave 1 no longer
@@ -2422,6 +2424,310 @@ carries it (spec §5.1, amended 2026-09-24).
     journal records first and the writers and doors second, because an older server refuses a record kind it
     does not know and exits before it serves. Four questions wait for the coordinator's ruling after the review.
     The operator reads the plan's `CLAUDE.md` lines before the build, as the entry of 2026-10-30 23:24 rules.
+- **2026-11-25 07:10 — wave 5j's plan has landed, corrected after its third review; wave 1e is accepted and in the queue; wave 1c is in its third review; wave 1d is built and under review.**
+  - **Wave 5j's plan, three review rounds (runs 3735, 3743, 3748).** Round 1 found one critical defect (a
+    session's device label could put a record in the journal that the journal's own reader refuses, which stops
+    the server box at its next boot) and six important ones. Round 2: none critical, five important. Round 3:
+    none critical, two important, both in the text; the reviewer's answer to the deciding question was that a
+    builder can build 5j-a as written and 5j-b with one gap. Accepted at the review cutoff and landed as reviewed
+    (#3360, `39fbd18f`). The coordinator corrected the rest on this pull request, in the plan's section 11; no
+    review run read those corrections.
+  - **Ruled on the plan,** each recorded as a call the operator can overturn:
+    - A withdrawal brings nothing forward. An order edge to a withdrawn entry stays outstanding, and the
+      coordinators of its direct dependants are told (D-9047, D-9050). Before, withdrawing the middle of a stack
+      freed the entry above it to land the withdrawn commits.
+    - Resume works wherever pause works (D-9049). It was first ruled stricter, a signed-in session, and reversed
+      on the second review's finding: with sign-in dark, anyone could pause a line and nobody could resume it,
+      and nothing automatic clears a pause.
+    - A withdrawal goes through when a dependant's association does not read. That dependant is named in the
+      answer as not told; the operator's stop does not fail on damage in another entry.
+    - Freeing a held dependant is always in the feed, its own coordinator's release included (the third review's
+      first finding; the plan's section 11, C1). The feed skipped that case before.
+    - The judge marks the plan's pull request because its lane for a programme's first pull request expects a
+      spec. The spec has been on `main` since September; landed with a recorded call.
+  - **The spec is amended** in two places on this pull request: the "PWA doors" paragraph (a withdrawal brings
+    nothing forward; the three acts work alike with sign-in dark), and the Coordinator row of section 4 (the
+    pause is the operator's alone).
+  - **The operator's reading** of the plan's section 9 (five `CLAUDE.md` blocks and five README blocks) is asked
+    as one item once this pull request is on `main`. The build's lines are compared to that text byte for byte
+    at each landing, as the entry of 2026-10-30 23:24 rules.
+  - **Wave 1e, review run 3750 (round 1): accepted.** No critical or important finding. The split loses no test
+    (seven blocks byte for byte, 22 titles each once), the table equals the source run's three job logs for 117
+    of 117 unsplit entries, and every mutation row was red and restored. The pull request's own run ran the
+    browser suite for real across four shards: 630, 592, 743 and 632 seconds of test time, 120 files each once.
+    At twice the slowest, a shard still fits 30 minutes with about four to spare. In the merge queue since
+    07:02Z. Five minor findings stay open: two sentences of the workflow comment (the six runs are those created
+    from 00:17Z to 01:58Z, not all of that night's; and at 1.7 times the measured shard would stand over 20
+    minutes, not under it, which makes the case for 30 stronger than the sentence says), which wave 1d corrects
+    in the same file; stale sentences and job ids in the notes, corrected when they are folded; and one stale
+    pointer in another browser test file's header, a later wave's.
+  - **Wave 1c, review run 3738 (round 2):** no defect confirmed, six minor points. Sent back for a last round on
+    one of them. The worker's own clause said "before your wave-done only", so a worker in a fix round, which is
+    the case the wave exists for, could decline the mail on its own words. The clause, the hook and the README
+    now say this round's wave-done, and three guards were added. Review run 3751, the third, is reading it.
+  - **Wave 1d is built** (run 3739, #3365, a draft) and under its first review (run 3753). The judge marks it,
+    and wave 1e, for changing the workflow file together with other files. Each stays one pull request, because
+    the workflow lines and the code and pins they depend on are not correct apart; the mark is weighed at
+    landing, after the wave's own review.
+  - **Two corrections to the coordinator's own method,** both measured this night. A claims row carries a list
+    of paths, so a filter on a single path answers empty for every row. And the required-checks listing exits 0
+    while a required check has not started, so the four names are read, never the exit code.
+- **2026-11-25 08:42 — waves 1c and 1e have landed; wave 1d is in its second review; wave 5j-a is dispatched.**
+  - **Wave 1c, review run 3751 (round 3, the last): accepted and merged.** No critical or important finding, and
+    the reviewer's answer was that nothing stands in the way of landing. #3357 merged at the reviewed tip
+    `fc826567` (`6ac066f5`); its worker released its claims and run 3698 closed `done`. The judge's mark for
+    changing rules files together with other files did not hold it (call 1098); the four required checks passed.
+    Its departures are D-9057 to D-9064 in the plan. Seven minor points stay open as known limits, for the
+    follow-up wave below:
+    - the coordinator's own measure step runs the probe and the rev-parse in one call, so the exit status it
+      reads is the rev-parse line's; the sender reads the output's shape, and the worker's own probe refuses a
+      wrong mail, so the cost is a wasted round at worst;
+    - two statements of the bound have no guard (the README's "The first two license at most one absorption per
+      PR", and the run-care lead-in's "this round's");
+    - the case that runs the hook does not read the printed advisory for the wave-done limit or the own-probe
+      condition;
+    - the README says "of that round" with nothing before it that the words point at;
+    - two pushes were made in the build round, where the rule is one (a fact, recorded).
+  - **Wave 1e: removed from the queue once, then merged.** #3362 entered the queue at 07:02Z and was removed at
+    07:34Z. Its own four browser shards passed in about eleven minutes each. The one failure was a server test
+    that is not this wave's: the harness integrity suite's scan of the test tree for function overrides ran past
+    its 20-second limit. That file took 17.1 seconds in the passing group just before and 22.6 seconds here, on
+    a shard that ran a fifth slower. The coordinator enqueued the same reviewed head again, once (call 1105), and
+    it merged at 08:38Z (`cb973d69`). Its departure is D-9065 in the plan, and the review's corrections to its
+    notes (three stale sentences; the job ids of one run, measured again) are made on this pull request.
+  - **That scan sits at 17 of its 20 seconds on an ordinary queue shard,** so it will remove other green pull
+    requests at some rate. It goes to the follow-up wave. A second removal of one pull request for it would not
+    have been answered by a third enqueue.
+  - **Correction to the entry of 07:10.** It said wave 1d corrects two sentences of wave 1e's comment in the
+    workflow file. It cannot: those lines were not in its branch, and nothing licenses a worker to merge `main`
+    for them without a conflict. They go to the follow-up wave.
+  - **Wave 1d, review run 3753 (round 1): one fix round** (call 1101). The review found no defect in the new
+    script or its decisions: a live or a landed group is never ended, and only a superseded one exits non-zero.
+    It found two guards missing. Nothing tested the request that tells a landed group from a superseded one, so
+    reversing it left every case green and would end the late jobs of a group that had already merged. And
+    nothing tested that the growth check uses its new base, so undoing that one line would bring back the
+    removals the wave exists to stop. The round is built at `e094d86a` with a mutation row for each, and review
+    run 3762, the second of three, is reading it. Its two departures are numbered when it lands.
+  - **Wave 5j-a is dispatched** (run 3759, the run's wave 26) on the corrected plan: its Tasks 1 to 5. Each of
+    the ten old blocks of the plan's section 9 was measured on `main` at `531bdb86` and occurs exactly once in
+    its file. The operator's reading of that section is asked as item 665; it holds nothing, since a pull
+    request whose lines equal the plan's lands and any difference waits.
+  - **A follow-up wave, 1f, is to be planned** for what the last reviews left: wave 1c's four open points above;
+    wave 1e's two comment sentences (the six runs are those created from 00:17Z to 01:58Z; at 1.7 times the
+    measured shard stands over 20 minutes) and the same sentence in the pin suite's comment; the stale pointer
+    in `add-project-sheet.browser.test.ts`'s header; the two residuals of the conflict-sync procedure (where the
+    branch tip is read from; a path with a space); and the margin of the harness integrity scan.
+- **2026-11-25 09:30 — wave 1d has landed; wave 1f is planned; wave 5j-a is at its last task.**
+  - **Wave 1d, review run 3762 (round 2): accepted and merged.** No critical or important finding, and the
+    reviewer's answer was that nothing should hold the landing. Both guards the first round asked for are in and
+    each turned a case red under its mutation: the exact compare request, and the base resolution moved into the
+    helper module. The pin suites passed on the branch merged with wave 1e and with `main`. The judge's mark for
+    changing the workflow file together with tests did not hold it (call 1113; the same ruling as call 1087);
+    the four required checks passed. #3365 merged at the reviewed tip `e094d86a` (`ba0b0f40`) on its first queue
+    entry. Its own queue run met the liveness step in the fail-open arm, as planned: the script was not on the
+    default branch yet, and each long job printed that the script could not be fetched and ran. Its departures
+    are D-9069 and D-9070 in the plan, the plan's slow-shard figure is corrected to the measured 29m53, and two
+    sentences of its notes are corrected on this pull request.
+  - **What the second review left open,** all minor, all planned as wave 1f:
+    - one line that decides what the growth check measures in a real queue run is unpinned (the reviewer
+      replaced its body and all 99 cases stayed green), and so is the placement of the queue base line in the
+      step that runs the suite;
+    - the closure case admits a third script line in the liveness step, which only the whole-step pin catches;
+    - the liveness step runs the script bare, so a script that could not run would end the job exactly as a
+      superseded group does. The script is fetched from the default branch, so such a script would end every
+      long job of every queue group, and its fix would have to land through that same queue. The suite runs
+      the script on every pull request, which is what stands in the way today;
+    - one comment reads as claiming a pin for the 45-minute deadline, and the README's sentence reads as if
+      other runs keep 30.
+  - **Wave 1f is planned** (`docs/superpowers/plans/2026-11-25-landing-order-wave1f-known-limits.md`, D-9066 to
+    D-9068), one small pull request for the known limits of waves 1c, 1d and 1e, with two additions the
+    coordinator measured on 2026-11-25:
+    - the harness integrity scan's one heavy case took 16.9 seconds alone against a limit of 20, and removed
+      wave 1e's pull request from the queue once (Decisions, 08:42);
+    - the cross-tree deviation scan's first case timed out at 20 seconds four times that day on the fleet's
+      boxes, for the coordinator and for a reviewer, and passed at a longer limit. Its file took 16.0 and 24.9
+      seconds in two queue runs. It runs on every pull request.
+
+    Each case gets its own measured budget, and the deviation scan reads each tree's plans in one git process.
+    The plan was written by the coordinator and read by no review run; the wave's own review reads the result.
+  - **Wave 5j-a** (run 3759) has built its Tasks 1 to 4 and written Task 5's cases. Task 5's remaining edits are
+    in four files other sessions hold, so it sent each holder its hunks as a packet and edits on their yes. The
+    README's holder, wave 1d's worker, has said yes.
+- **2026-11-25 12:06 — wave 5j-a is in its first fix round; wave 1f is dispatched.**
+  - **Wave 5j-a, its wave-done and review run 3781 (round 1).** The worker built Tasks 1 to 5 in 26 files as
+    pull request #3375, a draft. Its first run was red in one server shard: a census that counts the call sites
+    naming their lane expected 18, and the read's block is a nineteenth. The plan had not named that file. The
+    worker moved the count in one test edit, a second push (D-9071). The coordinator compared the plan's
+    section 9 with the tip itself: `CLAUDE.md` blocks 1 and 2 and README blocks R1 to R3 are there once each,
+    as written, and the next half's blocks are untouched. The review found nothing critical or important, and
+    its panel confirmed no finding. It measured the half inert on a live box apart from the read's credential
+    rule, ran eleven mutations red, three of them rows the plan lacks, and confirmed section 9's lines by its
+    own read.
+  - **Its five minor findings, and the ruling (call 1166): one short fix round.**
+    - A withdrawn entry with no run would be taken over by any run's verified pin of the same pull request.
+      The plan's decision 7, and the lines the next half writes for the operator, say such an entry cannot
+      re-enter, which the operator ruled. The plan's Task 3 caused it: it moved main's kept case, whose row has
+      no run, out with the rest. The plan's section 12 now says the rule: a withdrawn row re-pins only when it
+      is run-bound. It is fixed in this half, not the next, because this half is the build a box falls back to
+      once withdrawals exist. Section 9 does not change.
+    - Two test titles promise more than they test. One refusal case seeds no entry, so nothing measures that
+      a refused read answers nothing of the line. Two figures in the notes are corrected.
+    - Task 2's commit does not pass one guard directory alone, because the guard's file was under another
+      session's claim at that commit. It is recorded (D-9072); the tip passes, and the landing squashes.
+  - **Left to the next half's review:** the withdrawal statement's guard is written as a list of terminal
+    words, so a stored word this build does not know would be overwritten. The panel read that as the plan's
+    design, since the next half's decider refuses such a word before the statement runs.
+  - **Wave 1f is dispatched** as run 3776 (the run's wave 27), on the plan merged in #3374. Its pull request
+    is #3380, a draft.
+- **2026-11-25 12:59 — wave 1f is in its first fix round; the ledger pull request for wave 5j-a's review has landed.**
+  - **Wave 1f, its wave-done and review run 3793 (round 1).** The worker built the five tasks in 18 files as
+    pull request #3380, a draft, in one push. The review found nothing critical or important, and its panel
+    confirmed no finding. It ran the measure block on four tips, worked the liveness step through both mixed
+    orders under the runner's shell options, found the step line the same in all eleven jobs, reproduced all
+    ten mutation rows, and recomputed the plan read's recorded hash with the old read.
+  - **One browser job was red on that tip,** in a Docs reader case. Nothing on the branch can reach that case
+    (the wave's only browser change is a comment in another file), and the case passed alone and in two
+    whole-file runs at the tip. It reads as a flake, seen once. The fix round's push changes the workflow file,
+    so the whole suite runs again on the pull request: a second measurement before the queue's own.
+  - **Its ten minor findings, and the ruling (call 1185): one short fix round, the second and last.**
+    - The plan told the worker to write that six queue runs in a named window ran the browser suite. Ten did;
+      the coordinator measured them again. The plan is corrected and the three places follow.
+    - Node's own exit codes run to 14, not 13; two adjacent comments contradict each other; one budget comment
+      and its note disagree on two figures.
+    - The case that proves the new plan read equals the old one also pinned a list that may only shrink. It is
+      made independent of that list.
+    - Four text pins had no mutation row. They get rows 1F-11 to 1F-14.
+  - **The worker's three departures are numbered** (D-9073 to D-9075, in the plan): a mutation run on a copy of
+    the hook, a stronger end anchor than the plan asked for, and a fixed commit where the plan said the head.
+    The plan's text for the budget departure now says what was built: one case under 60 seconds, the other back
+    on the suite's limit after its read became one process.
+  - **The ledger pull request #3383 merged** (`a51d7042`): the correction to wave 5j's plan (its section 12)
+    and that wave's two departures are on `main`. Wave 5j-a is still in its first fix round.
+- **2026-11-25 14:51 — waves 5j-a and 1f are merged; wave 5j-b is building.**
+  - **Wave 5j-a, review run 3806 (round 2).** It read the fix round at `621932e5`: nothing critical or important,
+    seven minor points. One asked for a ruling: a withdrawn entry bound to one run re-pins at a verified pin of
+    the same pull request by another run, and no case told that from "its own run only". Ruled (call 1199):
+    that is the rule, as for a closed entry; the operator's door takes an entry off the line, it does not bind
+    it to one run. The plan's section 12 records it as C11. Three points were wrong sentences in the wave's
+    notes (a commit count, why a bad run id cannot reach the withdrawn branch, and a missing citation); this
+    pull request corrects them. The stale test comment and the missing different-run case are carried to 5j-b.
+  - **5j-a merged** as #3375 (`31d5d9ae`) at 14:21Z on its first queue entry. The plan's section 9 lines it
+    carries were compared byte for byte with the plan's and were identical, so they landed with no hold.
+  - **Wave 5j-b is dispatched** as run 3819 (the run's wave 28), Tasks 6 to 10, with the two carries above. Three
+    files it needs were held by other sessions at dispatch (the routes file, an auth test, and the README, held
+    by wave 1f until its merge); it builds the unheld tasks first. It is enqueued only once the server box's
+    `/health` version contains `31d5d9ae`.
+  - **Wave 1f, review run 3809 (round 2).** It read the fix round at `744f9cef`: four minor points, all in the
+    wave's notes, and every browser shard green (the earlier red did not repeat). Accepted (call 1209). The
+    notes are corrected here: a row pointed at the wrong note, one line was too wide, rows 1F-11 to 1F-14 were
+    measured with mutations worded unlike the plan's table (the reviewer re-ran them as the table words them,
+    red each), and the characterization case no longer guards the legacy list's wiring (another case does).
+    The fix round's own departure, the plan read's filter argument, is D-9076.
+  - **1f merged** as #3380 (`861cd777`) at 14:46Z on its first queue entry.
+- **2026-11-26 02:10 — wave 5j-b is merged; the operator's two doors are on `main`.**
+  - **Wave 5j-b, review run 3864 (round 1).** It read the branch at `511f196a`: nothing critical or important,
+    six minor points. It confirmed that no path through either door changes another entry or names a successor.
+    One fix round (call 1324): the list of terminal entry states, written a second time in the decision file,
+    became one shared copy; the suite that proves a door changes nothing else compared six landing tables and
+    now compares all seven; a guard with no failing case got one; two refusal words got their route cases; two
+    notes were corrected.
+  - **Review run 3887 (round 2, narrow).** It read the fix round at `cb9c7573`: nothing critical or important,
+    five minor points. Accepted (call 1367). The two test points and two comments are carried to wave 5k's
+    plan; the stale plan and note lines are corrected on this pull request. The plan's section 13 records
+    every ruling.
+  - **The landing gate was met.** The server box's `/health` read `v0.0.1476`, built from `5b14086b`, which
+    contains 5j-a's merge.
+  - **5j-b merged** as #3397 (`83c1ed22`) at 02:04Z on its first queue entry, at the commit the review read. The
+    `CLAUDE.md` and README lines it carries were compared with the plan's section 9 on the pull request's tip
+    and on the landed commit, and were identical. The operator read section 9 and answered "The lines are fine
+    as written" (item 665, confirmed).
+  - **It landed with the `ledger guard` check red** (call 1368). The fix round edited the wave's plan on the
+    wave's branch at the coordinator's ruling, and the head commit gives the reason, but in a paragraph git does
+    not read as trailers. The guard is not a required check and the merge queue does not run it; a new head
+    commit to turn it green would have needed a review of its own. From now on a worker reads its trailer lines
+    back with git's own trailer reader before the push.
+  - **Two conflict-syncs.** Other waves added routes while 5j-b was building, and each such merge moves the
+    route counts in the auth gate file and its test. 5j-b absorbed `main` once on its own probe and once at the
+    coordinator's request, and the Native Docs reader programme's folders wave was let through first by
+    agreement with its coordinator.
+  - **Wave 5k is next**: the console for the two doors. Run 3891 is open for it (the run's wave 29), not yet
+    dispatched; its plan comes first.
+- **2026-11-26 06:20 — wave 5k's plan is merged; the build is next.**
+  - **The plan** (`docs/superpowers/plans/2026-11-26-landing-order-wave5k-console.md`, run 3891) is the console of
+    the operator's two doors: the landing line on the fleet screen's project card, one control to pause and resume
+    it, and a sheet to withdraw one entry. It adds no route. It defines D-9107 to D-9110; six numbers were issued
+    for it, and the coordinator holds the last two, unused.
+  - **Three review rounds** (runs 3895, 3906 and 3911), two fix rounds. Round 1 found one critical point: the
+    withdraw sheet closed with its result when the last entry left the line. Rulings of call 1388: the card reads
+    every known project's line once a minute through the console's one poll; a card with no open entry draws a
+    line only while the operator's own pause is set; the binding is not shown.
+  - **A ruling of mine was wrong and is reversed.** In round 1 I ruled that an entry the read marks `unknown` gets
+    no `Withdraw…` button, on the first review's claim that the server refuses every such withdrawal. I had not
+    read the decider. It accepts such a row, as the 5j plan's decision 3 says. Round 2 found it; call 1400
+    reverses it: every open row has the button and the server answers. Since then I read the cited code on `main`
+    before ruling on a claim about what the server does.
+  - **Call 1400's other rulings:** a failed read is drawn only over a line the card already drew (one damaged
+    identity or authority record fails every project's read, so a per-card alarm would show on every card); the
+    sheet withdraws the entry as the operator saw it when the sheet opened; the page reads again when the project
+    list arrives; the "may have applied" note is read from the server's answer. The worker held its push to say
+    one sentence of that call did not match the code, and was right: both doors can answer the damaged-record
+    word through the write path's fact read, so it has one sentence on every door.
+  - **Round 3 said a builder can start** and left two important and seven minor points, all wording and rows.
+    Accepted there (call 1411), with no fourth round: the plan's section 11 is the coordinator's corrections,
+    made on this pull request, and it wins over the tasks. It rules the last open point: the server's answer is
+    the one source of the "may have applied" note on screen.
+  - **Merged** as #3410 (`44f2b15a`) at 06:12Z on its first queue entry, at the commit the review read. The review
+    judge marked it for its first-pull-request lane, which expects a spec beside a plan (call 1410).
+  - **Two flaky tests met on the way,** neither this programme's: the installer suites' multi-install cases run at
+    their 20-second limit and removed this programme's previous ledger pull request from the queue once (#3408;
+    another programme is fixing it), and one child-reclaim case pins Node 22's handling of a NUL in a stored text
+    and is red on a box that runs Node 24 (#3412; carried by workspace lifecycle).
+  - **Wave 5k's build is next,** as run 3914 (the run's wave 30), not yet dispatched.
+- **2026-11-26 11:10 — a merge-train landing held the line; wave 5l's plan is merged; its build is next.**
+  - **The case** (issue #3422). Another programme's pull request, #3400, was pinned in the line and left ready while
+    it waited its turn. A merge train boarded it, merged as #3415 and closed it with the train label. The train's
+    body carried the train tool's own member list and not the documented train record, which is the only form the
+    prover reads, so the landing read as unproven. The landed reader asks again on that reading for ever, the entry
+    stayed pinned, the binding held on it with `head-mismatch`, and it never looks at a later entry. Every run's
+    landing in the project stopped on a pull request GitHub says is closed. Ending the entry's run would not have
+    freed it.
+  - **What I did for the one case** (call 1440, a big call). I checked in git that the train's merged tree equals
+    its first parent merged with #3400's reviewed head, then added the documented record to #3415's body by hand,
+    copied from the tool's own list, with a paragraph in the body that says so. The entry read `landed` a few
+    minutes later, and its coordinator closed its run on its own re-measurement. A proof the box keeps is not
+    undone, and this one is true.
+  - **Practice until the wave is live.** I told every coordinator with an open run in the project: read the line
+    with the pull request's number first, mark it ready only when the binding is ready for your own run's entry,
+    and take the mark back while you wait. One coordinator had landed a pull request while the stuck entry held
+    the head, because its own check read the line's flags and not the binding. A held binding that names an entry
+    whose pull request is closed with the train label comes to this programme's coordinator, who checks the tree
+    and repairs the record.
+  - **The plan** (`docs/superpowers/plans/2026-11-26-landing-order-wave5l-train-landings.md`, run 3930) repairs the
+    three defects in one wave of five tasks. It defines D-9111 (the one parser also reads the tool's member list;
+    both forms in one body prove only when they agree), D-9112 (the reader marks such an entry `closed`, with the
+    reason in its detail) and D-9115 (the references: what to read before landing, the ready mark, and the stop on
+    a train-closed head). The tree changes, not the train tool, which is the operator's and outside the tree.
+  - **Three review rounds** (runs 3935, 3936 and 3939), two fix rounds, no critical finding in any.
+    - Call 1453 (big): `closed` is right and final for such an entry. No later re-mark to `landed` is built. A
+      ticket whose evidence names that pull request is refused, and is closed by naming its run. With the fleet
+      box updated first, a real train landing proves and reads `landed`; in a window where the server runs this
+      wave beside an older `ccd`, every train landing is recorded `closed` for good.
+    - Call 1459: the bounded terminal repair (the spec's amendment B, approved as written by item 312) is not
+      widened. For a damaged entry the reading stays a retry, as it is today.
+    - The spec's §5.5 said a train claim the proof refused stays unmeasured. It gains a dated line for D-9112 on
+      this pull request; a claim the proof could not read stays unmeasured.
+  - **Round 3 said a builder can start** once one test file is named, and left four important and seven minor
+    points, each with the right text. Accepted there (calls 1470 and 1471), with no fourth round: the plan's
+    section 12 is the coordinator's corrections, made on this pull request after reading the cited code on `main`,
+    and it wins over the tasks.
+  - **Merged** as #3423 (`aac570d3`) at 11:00Z on its first queue entry, at the commit the review read. I read the
+    line before marking it ready, as the plan's own rule says. The review judge marked it for its
+    first-pull-request lane (call 1470).
+  - **Also:** #3408 is closed (the installer cases' bounds merged as #3414), so a red installer case in the queue
+    is no longer a known flake. A session hook refused a read-only search whose pattern held the word `env`, as
+    if it printed the environment (#3424).
+  - **Wave 5l's build is next,** as run 3942 (the run's wave 32), not yet dispatched. Wave 5k's build (run 3914)
+    is in flight and holds the README.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -3092,17 +3398,39 @@ Deploy: ccrc's updater carries the server, the PWA and the skill text.
 - **Wave 1c is planned** (the same entry): the conflict-sync trigger. Dispatch it once its plan is on `main`. Its
   README hunk needs run 1850's consent while that run holds the file, and the session hook had another programme's
   claim on it when the plan was written.
-- **5i has landed** (Decisions, 2026-11-25 03:10). **5j and 5k** are planned next, each against `main` as it
-  then stands.
-- **Wave 1c is in fix round 1** (work run 3698; Decisions, 2026-11-25 04:30). Its next wave-done gets a fresh
-  review run, the second of three. On its landing, number its departure
-  slugs and fold its four task notes. Its review reads the worker's one merge of `main` against both parents: the
-  clause's file changed on `main` while the wave was building.
-- **Wave 1e is building** (run 3728; Decisions, 2026-11-25 02:40 and 04:30): the browser shards, four of them,
-  with a 30-minute deadline. Its pull request changes `.github/`, so it runs the full suite; the wave-done names the four
-  browser shards' durations if they ran. The file-time table is still refreshed by hand: a source the leg
-  derives for itself is a later wave's.
-- **Wave 1d is planned** (Decisions, 2026-11-25 01:40): the merge queue's own CI. Dispatch it once 1e's workflow
-  hunk is fixed, and name that hunk's commit in its brief. It
-  changes `.github/`, so its pull request runs the full suite, and its own queue run is the first to meet its
-  liveness step in the fail-open arm, because the script is fetched from the default branch.
+- **5i has landed** (Decisions, 2026-11-25 03:10). **5j's plan is on `main`** (Decisions, 2026-11-25 07:10):
+  build 5j-a (its Tasks 1 to 5), then 5j-b (Tasks 6 to 10), each its own run and pull request. Enqueue 5j-b only
+  once the server box's `/health` version contains 5j-a's merge. The plan's section 11 wins over its tasks. At
+  each landing compare the pull request's `CLAUDE.md` and README lines to the plan's section 9 byte for byte;
+  identical lands with no hold. **5k** is planned after 5j-b, against `main` as it then stands. **5j-a is
+  merged** (#3375 `31d5d9ae`; Decisions, 2026-11-25 14:51). **5j-b is merged** (#3397 `83c1ed22`; Decisions,
+  2026-11-26 02:10), so the operator's two doors are on `main`; the operator approved section 9 as written
+  (item 665). **5k's plan is merged** (#3410 `44f2b15a`; Decisions,
+  2026-11-26 06:20). **Build 5k now**, as run 3914 (the run's wave 30): the console for the two doors, from
+  `docs/superpowers/plans/2026-11-26-landing-order-wave5k-console.md`, whose section 11 wins over its tasks. It
+  is one wave of eight tasks, with a seam after Task 5 if the builder's context runs short. Its first task
+  carries four points from 5j-b's reviews, listed in the 5j plan's section 13: a check that the subtractive
+  suite's table list equals the schema's landing tables, two comment wordings, and mutation rows for three
+  guards. The builder claims the existing files the plan's section 3 lists before it starts, derives every
+  route count from `main`, and runs the whole browser suite locally before its wave-done. A worker reads
+  its trailer lines back with git's own trailer reader before a push that edits a plan.
+- **5l's plan is merged** (#3423 `aac570d3`; Decisions, 2026-11-26 11:10). **Build 5l**, as run 3942 (the run's
+  wave 32), from `docs/superpowers/plans/2026-11-26-landing-order-wave5l-train-landings.md`, whose section 12
+  wins over its tasks. One wave of five tasks; the seam, if the builder's context runs short, is between the
+  prover (`ccd`) and the reader with the references (server and docs). The README is held by wave 5k's builder,
+  so its change goes to that holder as a diff first. At rollout the fleet box moves first. Until the wave is live
+  on both boxes, the practice of the 11:10 entry stands: a coordinator marks a pull request ready only on a ready
+  binding for its own entry, and a held binding on a train-closed pull request comes to this programme's
+  coordinator.
+- **Waves 1c and 1e are merged** (#3357 `6ac066f5`, #3362 `cb973d69`; Decisions, 2026-11-25 08:42). Their
+  departures are D-9057 to D-9064 and D-9065, each in its wave's plan. The spec's section 5.1 says the fourth
+  trigger holds until that round's wave-done.
+- **Wave 1d is merged** (#3365 `ba0b0f40`; Decisions, 2026-11-25 09:30): the merge queue's own CI. Its
+  departures are D-9069 and D-9070 in its plan. From its merge on, each long job of a queue run asks the
+  liveness script first, and a server shard's deadline is 45 minutes.
+- **Wave 1f is merged** (#3380 `861cd777`; plan
+  `docs/superpowers/plans/2026-11-25-landing-order-wave1f-known-limits.md`, D-9066 to D-9068 and D-9073 to
+  D-9076; Decisions, 2026-11-25 14:51). From its merge on, the conflict-sync measure step reads the probe's own
+  exit status, and a queue job whose liveness script fails runs on rather than ending. The browser file-time
+  table is still refreshed by hand and drifts within hours; a source the leg derives for itself is a later
+  wave's.

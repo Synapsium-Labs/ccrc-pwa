@@ -22,7 +22,8 @@
 // entry never exempts that PR. The PR number comes from `GITHUB_REF`, paired
 // with its event (`prNumberFromEnv`). An entry waives its own file for its own
 // PR while the measured delta stays at or below its cap, and only when the diff
-// the run measures (merge-base(origin/main, HEAD)..HEAD) leaves the check's own
+// the run measures (base..HEAD, the base from `armedBase`: the merge-base with origin/main, or a merge-queue group's
+// parent, D-9016) leaves the check's own
 // files (`GROWTH_MACHINERY`) untouched (`matchExemptions`).
 // `armedGrowth` is the armed rows' whole read and decision, and `growthVerdicts`
 // the pure decision inside it.
@@ -446,6 +447,41 @@ export function prNumberFromEnv(env: NodeJS.ProcessEnv): number | null {
   return m === null ? null : Number(m[1]);
 }
 
+/** D-9016 (landing-order wave 1d): the sha the armed rows measure HEAD against. In a merge-queue group it is the
+ *  group's parent commit (`QUEUE_BASE`, the workflow's `merge_group.base_sha`), when that is 40 lower-case hex naming
+ *  an ancestor of HEAD, so a stacked entry is measured alone, not summed with the entries ahead of it. Everywhere else,
+ *  and whenever that read fails, it is `merge-base(origin/main, HEAD)`, as before. */
+export function growthBase(env: Record<string, string | undefined>, git: (args: readonly string[]) => string):
+  { base: string; from: 'queue-parent' | 'merge-base' } {
+  const queueBase = env['QUEUE_BASE'] ?? '';
+  if (env['GITHUB_EVENT_NAME'] === 'merge_group' && /^[0-9a-f]{40}$/.test(queueBase)) {
+    try {
+      git(['merge-base', '--is-ancestor', queueBase, 'HEAD']);
+      return { base: queueBase, from: 'queue-parent' };
+    } catch { /* not an ancestor, or unreadable: the merge-base, as on any other run */ }
+  }
+  return { base: git(['merge-base', 'origin/main', 'HEAD']).trim(), from: 'merge-base' };
+}
+
+/** The armed rows' base in `root`, or why they cannot measure (review F3 of wave 1d: the suite's armed rows and the
+ *  stacked-entry case call this one function, so the case that proves the queue-parent base runs what CI runs). They
+ *  measure in CI or under GROWTH_CHECK, with an `origin/main` and a base `growthBase` can resolve. */
+export function armedBase(env: Record<string, string | undefined>, root: string,
+  git: (args: readonly string[]) => string = (args) => gitRead(args, root)):
+  { base: string; from: 'queue-parent' | 'merge-base' } | { skip: string } {
+  if (!env['CI'] && !env['GROWTH_CHECK']) return { skip: 'not in CI (set GROWTH_CHECK=1 to run locally)' };
+  try {
+    git(['rev-parse', '--verify', '--quiet', 'origin/main^{commit}']);
+  } catch {
+    return { skip: 'no origin/main in this checkout' };
+  }
+  try {
+    return growthBase(env, git);
+  } catch {
+    return { skip: 'no merge-base between origin/main and HEAD' };
+  }
+}
+
 const isLine = (v: unknown): boolean => typeof v === 'string' && v.trim() !== '' && !/\n/.test(v);
 
 /** `text` as an exemption list. Any problem (not JSON, a wrong shape, a key
@@ -499,7 +535,7 @@ export function exemptionsOnMain(files: readonly string[], cwd: string, today: D
 
 /** The growth check's own files: this module and every module it imports, the
  *  rows that decide, the list, and the list's stamp and its test. When the diff
- *  the run measures (merge-base(origin/main, HEAD)..HEAD) touches any of them,
+ *  the run measures (base..HEAD, the base from `armedBase`, D-9016) touches any of them,
  *  no exemption applies, its own entry included, so a PR cannot reach the code
  *  that judges it and keep its exemption. */
 export const GROWTH_MACHINERY: readonly string[] = [
@@ -1030,6 +1066,8 @@ export function methodCounts(file: string, cls: string, base: string, head: stri
 
 export interface GrowthSummaryInput {
   base: string;
+  /** D-9016: which base `base` is; the merge-base when not given. */
+  from?: 'queue-parent' | 'merge-base';
   rows: readonly GrowthRow[];
   over: readonly string[];
   methods: { base: number; head: number };
@@ -1048,7 +1086,7 @@ export function growthSummary(i: GrowthSummaryInput): string {
   return [
     '### God-file growth check (D-5848, D-6119)',
     '',
-    `Net code lines against the merge-base \`${i.base.slice(0, 7)}\`${i.armed ? '' : '; reporting only until OA-C2'}.`,
+    `Net code lines against the ${i.from === 'queue-parent' ? 'queue group\'s parent' : 'merge-base'} \`${i.base.slice(0, 7)}\`${i.armed ? '' : '; reporting only until OA-C2'}.`,
     '',
     '| File | Base | Head | Delta |',
     '| --- | ---: | ---: | ---: |',

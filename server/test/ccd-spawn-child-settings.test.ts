@@ -99,6 +99,16 @@ describe('CHILD_DENY_RULES (spec §6.6)', () => {
     expect(CHILD_DENY_RULES.filter((r) => r.startsWith('Bash(ccd ')).map((r) => r.slice('Bash(ccd '.length, -':*)'.length)))
       .toEqual([...FORBIDDEN_CCD_VERBS, 'ws-add']);
   });
+  it('X2 P2.3: `docs-folder` is forbidden and child-denied, whole verb, right after `delegation-adopt`, and the two lists stay equal', () => {
+    expect(FORBIDDEN_CCD_VERBS).toContain('docs-folder');
+    expect(FORBIDDEN_CCD_VERBS.indexOf('docs-folder')).toBe(FORBIDDEN_CCD_VERBS.indexOf('delegation-adopt') + 1);
+    expect(CHILD_DENY_RULES).toContain('Bash(ccd docs-folder:*)');
+    expect(childDenyRules('upstream-a')).toContain('Bash(ccd docs-folder:*)');
+    expect(CHILD_DENY_RULES.indexOf('Bash(ccd docs-folder:*)')).toBe(CHILD_DENY_RULES.indexOf('Bash(ccd delegation-adopt:*)') + 1);
+    expect(CHILD_DENY_RULES.filter((r) => r.startsWith('Bash(ccd ')).map((r) => r.slice('Bash(ccd '.length, -':*)'.length)))
+      .toEqual([...FORBIDDEN_CCD_VERBS, 'ws-add']);
+    expect(CHILD_DENY_RULES, 'the read verb is no deny rule').not.toContain('Bash(ccd docs-folder-read:*)');
+  });
   it('D-8978: `ws-add` is child-denied but is no SAFETY verb, so the classifier\'s forbidden list never names it', () => {
     expect(CHILD_DENY_RULES).toContain('Bash(ccd ws-add:*)');
     expect(childDenyRules('upstream-a')).toContain('Bash(ccd ws-add:*)');

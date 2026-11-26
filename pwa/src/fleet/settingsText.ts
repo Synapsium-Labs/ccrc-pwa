@@ -44,7 +44,7 @@ export const SETTINGS_INDEX_TEXT = {
     automation: 'What the server does to the fleet by itself: checking on quiet workers, abandoning dispatches that never '
       + 'came back, and clearing what dead sessions leave behind.',
     security: 'Who can open this console, and the key the fleet box uses to call this server.',
-    integrations: 'The services ccrc works with: the Linear keys, the Linear team each project is linked to, and GitHub.',
+    integrations: 'Linear keys and project linking, GitHub, and the folders, item links and default branches used by Docs.',
   } satisfies Record<SettingsSectionId, string>,
   /** The two diagnostic rows under the five sections (library 1.1 take-up, Task 9): pages under Settings that are not
    *  sections, so they are not `purpose` keys. */
@@ -460,6 +460,17 @@ export const SETTINGS_CARDS = {
     github: {
       scope: SETTINGS_SCOPE.fleet, title: 'GitHub',
       purpose: 'How ccrc reaches GitHub.',
+    },
+    // The Docs folders card (X2 P2.4, spec 4.1 "Settings"): the folders outside the projects that Docs may read. They are
+    // registered on the fleet box and apply to the whole console, so the scope is the box's. Its body is
+    // `DocsFoldersSection.tsx`'s.
+    docsFolders: {
+      scope: SETTINGS_SCOPE.box, title: 'Docs folders',
+      purpose: 'Folders outside your projects that Docs may read: only the six docs sections of each, read-only.',
+    },
+    docsSettings: {
+      scope: SETTINGS_SCOPE.box, title: 'Docs settings',
+      purpose: 'Set item links and project default branches.',
     },
   },
 } as const satisfies Record<SettingsSectionId, Record<string, SettingsCardText>>;

@@ -1,0 +1,820 @@
+// X2 P2.4 (native Docs parity plan, Task P2.4): outside folders in the console. The page grammar (`~<label>` is a folder,
+// never a project), the index group, the folder pages and their reads, Settings' Docs folders section, and the one place
+// a folder's absolute path may be drawn. Neutral fixtures only: labels `notes` and `team-a`, paths `/home/user/notes`.
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { ReactNode } from 'react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import {
+  DOCS_PDF_INLINE_MAX_BYTES, docsPageUrl, parseDocsPage,
+  type DocsFolderEntry, type DocsFolderTreeOk, type DocsIndexOk, type DocsProjectsResponse,
+} from '../../shared/docs';
+import { DocsScreen } from '../src/screens/DocsScreen';
+import { DocsFoldersSection } from '../src/screens/settings/DocsFoldersSection';
+import {
+  DOCS_FOLDER_TEXT, DOCS_HEAD_TEXT, DOCS_PAGE_INVALID_SENTENCE, DOCS_FAILURE_SENTENCE, DOCS_RANGE_TEXT, DOCS_VIEW_TEXT,
+} from '../src/docs/docsText';
+import { docsCrumbs, docsUpHref } from '../src/docs/DocsHead';
+import { pdfOverInlineSentence } from '../src/docs/pdf/PdfLeaf';
+import { folderActions, folderAskedAt, folderPathStale, folderReadPlan, folderTruthLine, folderIndexSlot } from '../src/docs/folderPage';
+import type { DocsFolderLoaders } from '../src/docs/folderPage';
+import { DOCS_CAPS_UNKNOWN_RETRY_MS, type DocsAnswer } from '../src/docs/failures';
+import { ApiError } from '../src/lib/apiError';
+import { SETTINGS_CARDS } from '../src/fleet/settingsText';
+import { api } from '../src/lib/api';
+import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
+import { renderSettings } from './settingsHost';
+import { navigate, useLocation } from '../src/lib/router';
+import { COMMIT_B, fakeLoaders, failedAnswer } from './docsFixtures';
+
+const FP = 'f'.repeat(64);
+const MTIME = '1700000000000000000';
+const MTIME_TEXT = '2023-11-14 22:13 UTC';
+/** The time of the bytes the show read: an hour after the listing's, so a page that wrongly shows the listing's is seen. */
+const SHOW_MTIME = '1700003600000000000';
+const SHOW_MTIME_TEXT = '2023-11-14 23:13 UTC';
+const FOLDER_PATH = '/home/user/notes';
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  history.replaceState(null, '', '/');
+});
+
+describe('parseDocsPage: ~label is a folder, never a project', () => {
+  it('a folder root, a folder section and a folder leaf parse to folder locations and round-trip', () => {
+    const root = parseDocsPage('/docs/~notes', '');
+    expect(root).toEqual({ ok: true, loc: { kind: 'folder', label: 'notes' }, canonical: '/docs/~notes' });
+    const section = parseDocsPage('/docs/~notes/specs', '');
+    expect(section).toEqual({ ok: true, loc: { kind: 'folder-section', label: 'notes', section: 'specs' }, canonical: '/docs/~notes/specs' });
+    const leaf = parseDocsPage('/docs/~notes/specs/a/b.md', '');
+    expect(leaf).toEqual({
+      ok: true, loc: { kind: 'folder-path', label: 'notes', section: 'specs', path: 'a/b.md', dirSlash: false },
+      canonical: '/docs/~notes/specs/a/b.md',
+    });
+    const dir = parseDocsPage('/docs/~notes/specs/a/', '');
+    expect(dir).toEqual({
+      ok: true, loc: { kind: 'folder-path', label: 'notes', section: 'specs', path: 'a', dirSlash: true },
+      canonical: '/docs/~notes/specs/a/',
+    });
+    for (const p of [root, section, leaf, dir]) {
+      if (!p.ok) throw new Error('unreachable');
+      expect(parseDocsPage(p.canonical, '')).toEqual(p);
+      expect(docsPageUrl(p.loc)).toBe(p.canonical);
+    }
+  });
+
+  it('a tilde page has no project: the project grammar never admits it', () => {
+    const p = parseDocsPage('/docs/~notes', '');
+    expect(p.ok && p.loc.kind).toBe('folder');
+    expect(p.ok && 'project' in p.loc).toBe(false);
+  });
+
+  it('a label outside the grammar is page-invalid with its own word and sentence', () => {
+    for (const bad of ['/docs/~', '/docs/~Notes', '/docs/~-a', '/docs/~a.b', '/docs/~' + 'a'.repeat(33), '/docs/~a%20b']) {
+      expect(parseDocsPage(bad, ''), bad).toEqual({ ok: false, why: 'bad-label' });
+    }
+    expect(DOCS_PAGE_INVALID_SENTENCE['bad-label']).toMatch(/label/);
+  });
+
+  it('?ref= on a folder page is refused as an unknown key, as the index refuses it', () => {
+    expect(parseDocsPage('/docs/~notes', '?ref=main')).toEqual({ ok: false, why: 'unknown-param' });
+    expect(parseDocsPage('/docs/~notes/specs/a.md', '?ref=main')).toEqual({ ok: false, why: 'unknown-param' });
+    expect(parseDocsPage('/docs/~notes/specs/a.md', '?view=committed')).toEqual({ ok: false, why: 'unknown-param' });
+    expect(parseDocsPage('/docs', '?ref=main')).toEqual({ ok: false, why: 'unknown-param' });
+  });
+
+  it('a bad section or path under a folder keeps the project grammar words', () => {
+    expect(parseDocsPage('/docs/~notes/nope', '')).toEqual({ ok: false, why: 'bad-section' });
+    expect(parseDocsPage('/docs/~notes/specs/../x', '')).toEqual({ ok: false, why: 'bad-path' });
+  });
+});
+
+// ---- fixtures ------------------------------------------------------------------------------------------------------
+
+const file = (section: DocsFolderEntry['section'], path: string, over: Partial<DocsFolderEntry> = {}): DocsFolderEntry =>
+  ({ section, path, kind: 'file', size: 5, mtimeNs: MTIME, fp: FP, ...over });
+
+const TREE: DocsFolderTreeOk = {
+  v: 1, verb: 'docs-folder-read', ok: true, elapsedMs: 2, label: 'notes',
+  entries: [
+    file('specs', 'a.md'),
+    file('specs', 'd/x.md'),
+    { section: 'plans', path: 'link.md', kind: 'symlink', size: null, mtimeNs: null, fp: null },
+  ],
+  unlisted: { count: 0, byReason: {} },
+};
+
+const ok = <T,>(value: T): DocsAnswer<T> => ({ s: 'ok', value });
+
+interface FakeFolders {
+  readonly folders: DocsFolderLoaders;
+  readonly calls: string[];
+}
+
+/** Folder loaders that answer from `over`, recording every call by name (so a test sees the paths door is never called). */
+function fakeFolders(over: Partial<DocsFolderLoaders> = {}): FakeFolders {
+  const calls: string[] = [];
+  const named = <A extends unknown[], R>(name: string, fn: (...a: A) => R) => (...a: A): R => { calls.push(name); return fn(...a); };
+  const folders: DocsFolderLoaders = {
+    labels: named('labels', async () => ok({ ok: true as const, folders: [{ label: 'notes', state: 'ok' as const }, { label: 'team-a', state: 'unreadable' as const }] })),
+    paths: named('paths', async () => ok({ ok: true as const, folders: [
+      { label: 'notes', path: FOLDER_PATH, state: 'ok' as const }, { label: 'team-a', path: null, state: 'unreadable' as const }] })),
+    add: named('add', async (label: string) => ok({ ok: true as const, label })),
+    remove: named('remove', async (label: string) => ok({ ok: true as const, label, removed: true as const })),
+    tree: named('tree', async () => ok({ ok: true as const, tree: TREE })),
+    file: named('file', async (_l: string, section, path) => ok({
+      ok: true as const, contentClass: 'markdown' as const,
+      show: {
+        v: 1 as const, verb: 'docs-folder-read' as const, ok: true as const, elapsedMs: 1, label: 'notes', source: 'folder' as const,
+        section, path, size: 5, sha256: FP, fp: FP, mtimeNs: SHOW_MTIME, encoding: 'utf8' as const, text: 'hello folder',
+      },
+    })),
+    range: {
+      prepare: named('range-prepare', () => new Promise(() => undefined)),
+      frame: named('range-frame', () => new Promise(() => undefined)),
+    },
+  };
+  // An override is recorded by name too, so a test sees which doors a page asked.
+  const wrapped: Record<string, unknown> = { ...folders };
+  for (const [name, fn] of Object.entries(over)) {
+    if (typeof fn === 'function') wrapped[name] = (...a: unknown[]) => { calls.push(name); return (fn as (...x: unknown[]) => unknown)(...a); };
+    else wrapped[name] = fn;
+  }
+  return { folders: wrapped as unknown as DocsFolderLoaders, calls };
+}
+
+function indexAnswer(): DocsProjectsResponse {
+  const index: DocsIndexOk = {
+    v: 1, verb: 'docs-index', ok: true, elapsedMs: 5, unlisted: 0, duplicates: [],
+    projects: [{
+      project: 'demo', state: 'ready', github: { state: 'none' }, default: { name: 'main', via: 'default:origin-head', commit: COMMIT_B },
+      sections: { specs: 1, plans: 1, 'product-design': 1, conventions: 1 },
+    }],
+  };
+  return { ok: true, index, cacheAgeMs: 1 };
+}
+
+function Routed(p: { readonly folders: DocsFolderLoaders; readonly loaders: ReturnType<typeof fakeLoaders>['loaders'] }): ReactNode {
+  const { path, search } = useLocation();
+  return <DocsScreen path={path} search={search} loaders={p.loaders} folders={p.folders} parser={async () => ({ kind: 'worker-unavailable' }) as never} reader={null} />;
+}
+
+function open(url: string, f: FakeFolders): ReturnType<typeof render> {
+  const base = fakeLoaders();
+  base.projects.mockResolvedValue({ s: 'ok', value: indexAnswer() });
+  navigate(url);
+  return render(<Routed folders={f.folders} loaders={base.loaders} />);
+}
+
+const bodyText = (): string => document.body.textContent ?? '';
+
+// ---- the index ------------------------------------------------------------------------------------------------------
+
+describe('index: folders listed after projects', () => {
+  it('lists the labels in a group after the project rows, each linking to its folder page, from the labels read alone', async () => {
+    const f = fakeFolders();
+    open('/docs', f);
+    await screen.findByText('~notes');
+    const rows = [...document.querySelectorAll('.docs-rows .docs-row-name')].map((n) => n.textContent);
+    expect(rows).toEqual(['demo', '~notes', '~team-a']);
+    const group = document.querySelector('.docs-folders');
+    expect(group).not.toBeNull();
+    expect(within(group as HTMLElement).getByText('~team-a').closest('.docs-row')?.getAttribute('data-state')).toBe('unreadable');
+    fireEvent.click(screen.getByText('~notes'));
+    await waitFor(() => expect(location.pathname).toBe('/docs/~notes'));
+    expect(f.calls).not.toContain('paths');
+  });
+
+  it('a refused labels read draws one quiet line, no group and no error banner', async () => {
+    const f = fakeFolders({ labels: async () => ({ s: 'failed', body: { ok: false, failure: 'auth-off' } }) });
+    open('/docs', f);
+    await screen.findByText(DOCS_FOLDER_TEXT.indexNeedsSignIn);
+    expect(document.querySelector('.docs-folders')).toBeNull();
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    await screen.findByText('demo');
+  });
+
+  // Review 3783 A4: a box that cannot do folders has none, so it draws neither a group nor a line on every visit.
+  it.each(['unsupported', 'caps-unknown'] as const)('a box answering %s draws no folder group and no line', async (word) => {
+    const f = fakeFolders({ labels: async () => ({ s: 'failed', body: { ok: false, failure: word } }) });
+    open('/docs', f);
+    await screen.findByText('demo');
+    await waitFor(() => expect(f.calls).toContain('labels'));
+    expect(document.querySelector('.docs-folders')).toBeNull();
+    expect(document.querySelector('.docs-folders-quiet')).toBeNull();
+    expect(bodyText()).not.toContain(DOCS_FOLDER_TEXT.indexUnread);
+  });
+
+  // Review 3816, carried to X2 P4: right after the agent reconnects the server answers `caps-unknown`; the projects read is
+  // read again after its wait, and the labels must be too, or an operator with folders sees no group until the next visit.
+  it('caps-unknown: the labels are read again after the same wait as the projects read, once per visit', async () => {
+    vi.useFakeTimers();
+    try {
+      let reads = 0;
+      const f = fakeFolders({
+        labels: async () => {
+          reads += 1;
+          return reads === 1 ? { s: 'failed', body: { ok: false, failure: 'caps-unknown' } } : ok({ ok: true as const, folders: [{ label: 'notes', state: 'ok' as const }] });
+        },
+      });
+      open('/docs', f);
+      const advance = (ms: number): Promise<void> => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+      await advance(10);
+      expect(reads).toBe(1);
+      expect(document.querySelector('.docs-folders')).toBeNull();
+      await advance(DOCS_CAPS_UNKNOWN_RETRY_MS - 100);
+      expect(reads, 'not before the wait').toBe(1);
+      await advance(200);
+      expect(reads).toBe(2);
+      expect(screen.getByText('~notes')).toBeTruthy();
+      // Step by step: React runs the effects a commit scheduled only when each `act` ends, so one long advance would never
+      // see a second timer that a re-read's answer set.
+      for (let i = 0; i < 6; i += 1) await advance(DOCS_CAPS_UNKNOWN_RETRY_MS + 100);
+      expect(reads, 'once per visit, never a loop').toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('caps-unknown: the wait is docsRetryPlan\'s, a body\'s own wait honoured; unsupported is never read again', () => {
+    const failed = (body: Record<string, unknown>): Parameters<typeof folderIndexSlot>[0] =>
+      ({ s: 'failed', body: { ok: false, ...body } }) as Parameters<typeof folderIndexSlot>[0];
+    expect(folderIndexSlot(failed({ failure: 'caps-unknown' }))).toEqual({ s: 'ok', rows: [], retryAfterMs: DOCS_CAPS_UNKNOWN_RETRY_MS });
+    expect(folderIndexSlot(failed({ failure: 'caps-unknown', retryAfterMs: 1200 }))).toEqual({ s: 'ok', rows: [], retryAfterMs: 1200 });
+    expect(folderIndexSlot(failed({ failure: 'unsupported' }))).toEqual({ s: 'ok', rows: [] });
+  });
+
+  it('caps-unknown twice: one re-read only, and nothing drawn', async () => {
+    vi.useFakeTimers();
+    try {
+      const f = fakeFolders({ labels: async () => ({ s: 'failed', body: { ok: false, failure: 'caps-unknown' } }) });
+      open('/docs', f);
+      const advance = (ms: number): Promise<void> => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+      // Step by step, as above: each answer's effects run when its `act` ends.
+      for (let i = 0; i < 6; i += 1) await advance(DOCS_CAPS_UNKNOWN_RETRY_MS + 100);
+      expect(f.calls.filter((c) => c === 'labels')).toHaveLength(2);
+      expect(document.querySelector('.docs-folders')).toBeNull();
+      expect(document.querySelector('.docs-folders-quiet')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a real transient failure of the labels read keeps its one quiet line', async () => {
+    const f = fakeFolders({ labels: async () => ({ s: 'failed', body: { ok: false, failure: 'helper-failed' } }) });
+    open('/docs', f);
+    await screen.findByText(DOCS_FOLDER_TEXT.indexUnread);
+    expect(document.querySelector('.docs-folders')).toBeNull();
+  });
+
+  it('an empty registry draws nothing', async () => {
+    const f = fakeFolders({ labels: async () => ok({ ok: true as const, folders: [] }) });
+    open('/docs', f);
+    await screen.findByText('demo');
+    await waitFor(() => expect(f.calls).toContain('labels'));
+    expect(document.querySelector('.docs-folders')).toBeNull();
+    expect(document.querySelector('.docs-folders-quiet')).toBeNull();
+  });
+});
+
+// ---- the folder pages -----------------------------------------------------------------------------------------------
+
+describe('folder page: truth line and actions', () => {
+  const truth = (): string | null | undefined => document.querySelector('[data-truth="folder"]')?.textContent;
+
+  it('truth line says Not in a repository with the file\'s modified time, the time of the read that gave the bytes', async () => {
+    const f = fakeFolders();
+    open('/docs/~notes/specs/a.md', f);
+    await screen.findByText('hello folder');
+    // The listing says one time and the show another: the page shows the show's.
+    expect(truth()).toBe(`Not in a repository · modified ${SHOW_MTIME_TEXT}`);
+    expect(document.body.textContent).not.toContain(MTIME_TEXT);
+    expect(folderTruthLine(MTIME)).toBe(`Not in a repository · modified ${MTIME_TEXT}`);
+    expect(folderTruthLine(null)).toBe('Not in a repository');
+  });
+
+  it('the truth line says its first clause alone until the bytes arrive, and after a failed read', async () => {
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((r) => { release = r; });
+    const base = fakeFolders();
+    const f = fakeFolders({
+      file: async (...a: Parameters<DocsFolderLoaders['file']>) => { await held; return base.folders.file(...a); },
+    });
+    open('/docs/~notes/specs/a.md', f);
+    await waitFor(() => expect(f.calls).toContain('file'));
+    expect(truth()).toBe('Not in a repository');
+    release?.();
+    await screen.findByText('hello folder');
+    expect(truth()).toBe(`Not in a repository · modified ${SHOW_MTIME_TEXT}`);
+    cleanup();
+    const bad = fakeFolders({ file: async () => failedAnswer('unreadable-path') });
+    open('/docs/~notes/specs/a.md', bad);
+    await screen.findByRole('alert');
+    expect(truth()).toBe('Not in a repository');
+  });
+
+  it('a range read says its first clause alone: its prepare answer carries no time, so the listing\'s is never shown as the read\'s', async () => {
+    const tree: DocsFolderTreeOk = { ...TREE, entries: [file('specs', 'big.md', { size: 3 * 1024 * 1024 })] };
+    const f = fakeFolders({ tree: async () => ok({ ok: true as const, tree }) });
+    open('/docs/~notes/specs/big.md', f);
+    await waitFor(() => expect(f.calls).toContain('range-prepare'));
+    expect(truth()).toBe('Not in a repository');
+  });
+
+  it('history, changes, versions, GitHub and Share are off with their reasons', async () => {
+    const f = fakeFolders();
+    open('/docs/~notes/specs/a.md', f);
+    await screen.findByText('hello folder');
+    for (const a of folderActions()) {
+      const button = document.querySelector(`button[data-action="${a.action}"]`) as HTMLButtonElement;
+      expect(button.disabled, a.action).toBe(true);
+      expect(screen.getByText(a.reason)).toBeTruthy();
+      expect(a.reason).toMatch(/outside a repository/);
+    }
+    expect(folderActions().map((a) => a.action)).toEqual(['history', 'changes', 'versions', 'github', 'share']);
+  });
+
+  it('one head: the crumbs and Back are DocsHead\'s, widened to folders, and nothing with no folder meaning is drawn', async () => {
+    const leaf = { kind: 'folder-path', label: 'notes', section: 'specs', path: 'd/x.md', dirSlash: false } as const;
+    expect(docsCrumbs(leaf).map((c) => [c.label, c.href])).toEqual([
+      ['Docs', '/docs'], ['~notes', '/docs/~notes'], ['specs', '/docs/~notes/specs'],
+      ['d', '/docs/~notes/specs/d/'], ['x.md', '/docs/~notes/specs/d/x.md'],
+    ]);
+    expect(docsUpHref(leaf)).toBe('/docs/~notes/specs/d/');
+    expect(docsUpHref({ ...leaf, path: 'a.md' })).toBe('/docs/~notes/specs');
+    expect(docsUpHref({ kind: 'folder-section', label: 'notes', section: 'specs' })).toBe('/docs/~notes');
+    expect(docsUpHref({ kind: 'folder', label: 'notes' })).toBe('/docs');
+    const f = fakeFolders();
+    open('/docs/~notes/specs/a.md', f);
+    await screen.findByText('hello folder');
+    const head = document.querySelector('.docs-head') as HTMLElement;
+    expect(document.querySelectorAll('.docs-head')).toHaveLength(1);
+    expect(within(head).getByRole('button', { name: DOCS_HEAD_TEXT.back })).toBeTruthy();
+    expect(within(head).getByRole('navigation', { name: DOCS_HEAD_TEXT.crumbs })).toBeTruthy();
+    for (const sel of ['.docs-export', '.docs-more', '[data-plain-note]', '.docs-share', '.docs-fresh']) {
+      expect(head.querySelector(sel), sel).toBeNull();
+    }
+  });
+
+  it('the folder pages read the tree and the file doors only: never the paths door, never a project door', async () => {
+    const f = fakeFolders();
+    const base = fakeLoaders();
+    navigate('/docs/~notes/specs/a.md');
+    render(<Routed folders={f.folders} loaders={base.loaders} />);
+    await screen.findByText('hello folder');
+    expect(f.calls).toEqual(['tree', 'file']);
+    expect(base.tree).not.toHaveBeenCalled();
+    expect(base.file).not.toHaveBeenCalled();
+  });
+
+  it('the absolute path is drawn on no page outside Settings: not on the index, the root, a listing or a leaf', async () => {
+    for (const url of ['/docs', '/docs/~notes', '/docs/~notes/specs', '/docs/~notes/specs/d/', '/docs/~notes/specs/a.md']) {
+      const f = fakeFolders();
+      open(url, f);
+      await waitFor(() => expect(f.calls.length).toBeGreaterThan(0));
+      await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+      expect(bodyText(), url).not.toContain(FOLDER_PATH);
+      expect(bodyText(), url).not.toContain('/home/user');
+      expect(f.calls, url).not.toContain('paths');
+      cleanup();
+    }
+  });
+
+  it('a folder root lists its sections and a section lists its rows, with links under /docs/~label', async () => {
+    const f = fakeFolders();
+    open('/docs/~notes', f);
+    await screen.findByText('specs');
+    fireEvent.click(screen.getByText('specs'));
+    await waitFor(() => expect(location.pathname).toBe('/docs/~notes/specs'));
+    await screen.findByText('a.md');
+    fireEvent.click(screen.getByText('d/'));
+    await waitFor(() => expect(location.pathname).toBe('/docs/~notes/specs/d/'));
+    await screen.findByText('x.md');
+  });
+
+  it('an entry that is no regular file is listed with its kind and opens nothing', async () => {
+    const f = fakeFolders();
+    open('/docs/~notes/plans/link.md', f);
+    await screen.findByText(DOCS_FOLDER_TEXT.notAFile);
+    expect(f.calls).toEqual(['tree']);
+  });
+
+  it('folder: removed while open: the next read says the folder is gone', async () => {
+    const f = fakeFolders({ tree: async () => failedAnswer('unknown-folder') });
+    open('/docs/~notes/specs/a.md', f);
+    await screen.findByText(DOCS_FAILURE_SENTENCE['unknown-folder']);
+  });
+
+  it('a bad label in the address is page-invalid, with a link to the index and no read', async () => {
+    const f = fakeFolders();
+    open('/docs/~Bad', f);
+    await screen.findByText(DOCS_PAGE_INVALID_SENTENCE['bad-label']);
+    expect(f.calls).toEqual([]);
+  });
+
+  it('a file above the class cap or with no fingerprint is read by range, pinned by fp or by size and time', () => {
+    const big = file('specs', 'big.md', { size: 3 * 1024 * 1024 });
+    expect(folderReadPlan(big)).toEqual({ mode: 'range', range: { kind: 'fp', sha: FP }, size: 3 * 1024 * 1024 });
+    const noFp = file('specs', 'nofp.md', { fp: null });
+    expect(folderReadPlan(noFp)).toEqual({ mode: 'range', range: { kind: 'stat', size: 5, mtimeNs: MTIME }, size: 5 });
+    expect(folderReadPlan(file('specs', 'x.md', { fp: null, mtimeNs: null }))).toEqual({ mode: 'none', why: 'unpinned' });
+    expect(folderReadPlan(file('specs', 'x.md', { size: 80 * 1024 * 1024, fp: null }))).toEqual({ mode: 'none', why: 'too-large' });
+    expect(folderReadPlan(file('specs', 'x.png'))).toEqual({ mode: 'none', why: 'no-preview' });
+  });
+
+  it('a folder PDF one byte over the inline ceiling reads only after Download is tapped', async () => {
+    const size = DOCS_PDF_INLINE_MAX_BYTES + 1;
+    const tree: DocsFolderTreeOk = { ...TREE, entries: [file('specs', 'large.pdf', { size, fp: null })] };
+    const f = fakeFolders({ tree: async () => ok({ ok: true as const, tree }) });
+    open('/docs/~notes/specs/large.pdf', f);
+    await screen.findByText(pdfOverInlineSentence(size));
+    expect(f.calls).toEqual(['tree']);
+    expect(document.querySelector('iframe')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: DOCS_VIEW_TEXT.download }));
+    await waitFor(() => expect(f.calls).toEqual(['tree', 'range-prepare']));
+  });
+
+  it('a small folder PDF saves its shown bytes as octet-stream on one Download tap', async () => {
+    const text = '%PDF-1.7\n%%EOF\n';
+    const tree: DocsFolderTreeOk = { ...TREE, entries: [file('specs', 'short.pdf', { size: text.length })] };
+    const f = fakeFolders({
+      tree: async () => ok({ ok: true as const, tree }),
+      file: async (_label, section, path) => ok({
+        ok: true as const, contentClass: 'pdf' as const,
+        show: {
+          v: 1 as const, verb: 'docs-folder-read' as const, ok: true as const, elapsedMs: 1, label: 'notes', source: 'folder' as const,
+          section, path, size: text.length, sha256: FP, fp: FP, mtimeNs: MTIME, encoding: 'base64' as const, b64: btoa(text),
+        },
+      }),
+    });
+    const createObjectURL = vi.fn((_blob: Blob) => 'blob:download');
+    vi.stubGlobal('URL', class extends URL { static createObjectURL = createObjectURL; static revokeObjectURL = vi.fn(); });
+    const downloads: string[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) { downloads.push(this.download); });
+    open('/docs/~notes/specs/short.pdf', f);
+    fireEvent.click(await screen.findByRole('button', { name: DOCS_VIEW_TEXT.download }));
+    expect(downloads).toEqual(['short.pdf']);
+    expect(createObjectURL.mock.calls.map(([b]) => [b.type, b.size])).toEqual([['application/octet-stream', text.length]]);
+    expect(f.calls).toEqual(['tree', 'file']);
+  });
+
+  it('a large folder file reads through the folder range door (prepare), not the file door', async () => {
+    const tree: DocsFolderTreeOk = { ...TREE, entries: [file('specs', 'big.md', { size: 3 * 1024 * 1024 })] };
+    const f = fakeFolders({ tree: async () => ok({ ok: true as const, tree }) });
+    open('/docs/~notes/specs/big.md', f);
+    // The leaf is a range leaf (RangeLeaf), which reads by prepare and frames; the file door is never asked.
+    await waitFor(() => expect(f.calls).toContain('range-prepare'));
+    expect(f.calls).not.toContain('file');
+  });
+});
+
+describe('folder leaf: rendered as a draft is, with the folder\'s own links', () => {
+  const mdFile = (text: string): Partial<DocsFolderLoaders> => ({
+    file: async (_l, section, path) => ok({
+      ok: true as const, contentClass: 'markdown' as const,
+      show: {
+        v: 1 as const, verb: 'docs-folder-read' as const, ok: true as const, elapsedMs: 1, label: 'notes', source: 'folder' as const,
+        section, path, size: text.length, sha256: FP, fp: FP, mtimeNs: MTIME, encoding: 'utf8' as const, text,
+      },
+    }),
+  });
+
+  it('a folder .md leaf renders its heading as a heading, not as source', async () => {
+    const f = fakeFolders(mdFile('# The Title\n\nSome *words*.\n'));
+    open('/docs/~notes/specs/a.md', f);
+    const h = await screen.findByRole('heading', { name: 'The Title' });
+    expect(h.tagName).toBe('H1');
+    expect(document.querySelector('.docs-folder-body pre.doc-plain')).toBeNull();
+    expect(document.querySelector('.docs-folder-body article')).not.toBeNull();
+  });
+
+  it('a relative link resolves under /docs/~label/, and a link out of the six sections is not followed', async () => {
+    const f = fakeFolders(mdFile('# T\n\n[sibling](b.md) [deep](d/x.md#top) [out](../../elsewhere.md) [web](https://example.com/x)\n'));
+    open('/docs/~notes/specs/a.md', f);
+    const sibling = await screen.findByRole('link', { name: 'sibling' });
+    expect(sibling.getAttribute('href')).toBe('/docs/~notes/specs/b.md');
+    expect(screen.getByRole('link', { name: 'deep' }).getAttribute('href')).toBe('/docs/~notes/specs/d/x.md#top');
+    expect(screen.queryByRole('link', { name: 'out' })).toBeNull();
+    expect(document.querySelector('.doc-link-inert')?.textContent).toBe('out');
+    fireEvent.click(sibling);
+    await waitFor(() => expect(location.pathname).toBe('/docs/~notes/specs/b.md'));
+  });
+
+  it('a relative image in folder Markdown is refused, never a crash: the text around it still renders', async () => {
+    const f = fakeFolders(mdFile('# Pics\n\nbefore ![x](fig.png) and ![y](d.svg) after\n'));
+    open('/docs/~notes/specs/a.md', f);
+    await screen.findByRole('heading', { name: 'Pics' });
+    expect(screen.getByText(/before/)).toBeTruthy();
+    expect(screen.getByText(/after/)).toBeTruthy();
+    expect(document.querySelector('.docs-folder-body img')).toBeNull();
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    expect(f.calls).toEqual(['tree', 'file']);
+  });
+
+  it('a changed file recovers on Retry: the tree is read again and the file opens on the second try', async () => {
+    let reads = 0;
+    const base = fakeFolders();
+    const f = fakeFolders({
+      file: async (...a: Parameters<DocsFolderLoaders['file']>) => {
+        reads += 1;
+        return reads === 1 ? failedAnswer('draft-changed', { now: 'present' }) : base.folders.file(...a);
+      },
+    });
+    open('/docs/~notes/specs/a.md', f);
+    fireEvent.click(await screen.findByRole('button', { name: DOCS_FOLDER_TEXT.retry }));
+    await screen.findByText('hello folder');
+    expect(f.calls.filter((c) => c === 'tree')).toHaveLength(2);
+    expect(reads).toBe(2);
+  });
+
+  it('a range read of a file that keeps changing re-lists once on its own, then says it is changing with a Retry, and reads no more', async () => {
+    const tree: DocsFolderTreeOk = { ...TREE, entries: [file('specs', 'big.md', { size: 3 * 1024 * 1024 })] };
+    const prepare = vi.fn(async () => failedAnswer('draft-changed', { now: 'present' }));
+    const base = fakeFolders();
+    const f = fakeFolders({
+      // A listing takes time on the wire, so its loading state is drawn (and the leaf under it goes) on every re-read.
+      tree: async () => { await new Promise((r) => setTimeout(r, 15)); return ok({ ok: true as const, tree }); },
+      range: { prepare, frame: base.folders.range.frame },
+    });
+    open('/docs/~notes/specs/big.md', f);
+    await screen.findByText(DOCS_VIEW_TEXT.changing);
+    expect(screen.getByRole('button', { name: DOCS_RANGE_TEXT.readAgain })).toBeTruthy();
+    // Let anything still scheduled run: nothing more may be read.
+    await act(async () => { await new Promise((r) => setTimeout(r, 100)); });
+    expect(f.calls.filter((c) => c === 'tree'), 'one automatic re-list, never more').toHaveLength(2);
+    expect(prepare).toHaveBeenCalledTimes(2);
+  });
+
+  it('a file URL with a trailing slash still shows the leaf', async () => {
+    const f = fakeFolders();
+    open('/docs/~notes/specs/a.md/', f);
+    await screen.findByText('hello folder');
+  });
+
+  it('plain text stays source, as the project leaf shows it', async () => {
+    const tree: DocsFolderTreeOk = { ...TREE, entries: [file('specs', 'n.txt')] };
+    const f = fakeFolders({ tree: async () => ok({ ok: true as const, tree }), ...mdFile('plain words') });
+    open('/docs/~notes/specs/n.txt', f);
+    await waitFor(() => expect(document.querySelector('pre.doc-plain')?.textContent).toBe('plain words'));
+  });
+
+  // Review 3783 F1: a folder page keeps its listing while it stays on one folder, so a file a session wrote after that
+  // listing, reached by an in-app link, must not be called absent from the older listing.
+  it('a file made after the listing opens by an in-app move: the tree is read again before a path is called absent', async () => {
+    let lists = 0;
+    const later: DocsFolderTreeOk = { ...TREE, entries: [...TREE.entries, file('specs', 'new.md')] };
+    const f = fakeFolders({ tree: async () => { lists += 1; return ok({ ok: true as const, tree: lists === 1 ? TREE : later }); } });
+    open('/docs/~notes/specs', f);
+    await screen.findByText('a.md');
+    // Never shown, not even for one commit before the re-read. The observer's callback runs after every commit inside
+    // `act()` has happened, and React reuses the paragraph and its one text node from the sentence to the loading line,
+    // so neither an added node's text nor a text node's text, read in the callback, is what that commit drew (review
+    // 3816 R1). What each record keeps is the text a change REPLACED: `characterDataOldValue` gives every text change its
+    // old value, so the sentence counts as drawn if any text node ever held it before a later commit changed it. A node
+    // that was added and then removed whole keeps the text it was removed with, so its text is checked as well.
+    let seen = false;
+    const holds = (t: string | null | undefined): boolean => (t ?? '').includes(DOCS_FOLDER_TEXT.missing);
+    const check = (records: readonly MutationRecord[]): void => {
+      for (const r of records) {
+        for (const n of r.addedNodes) if (holds(n.textContent)) seen = true;
+        for (const n of r.removedNodes) if (holds(n.textContent)) seen = true;
+        if (r.type === 'characterData' && holds(r.oldValue)) seen = true;
+      }
+    };
+    const watch = new MutationObserver(check);
+    watch.observe(document.body, { subtree: true, childList: true, characterData: true, characterDataOldValue: true });
+    act(() => { navigate('/docs/~notes/specs/new.md'); });
+    await screen.findByText('hello folder');
+    // Records not yet delivered are dropped by `disconnect()`: read them first.
+    check(watch.takeRecords());
+    watch.disconnect();
+    expect(seen, 'the sentence was drawn from the older listing').toBe(false);
+    expect(lists).toBe(2);
+  });
+
+  it('a move while a listing is on its way: that listing started before the move, so it cannot call the path absent', async () => {
+    let lists = 0;
+    const later: DocsFolderTreeOk = { ...TREE, entries: [...TREE.entries, file('specs', 'new.md')] };
+    const f = fakeFolders({
+      tree: async () => {
+        lists += 1;
+        const n = lists;
+        await new Promise((r) => setTimeout(r, 20));
+        return ok({ ok: true as const, tree: n === 1 ? TREE : later });
+      },
+    });
+    open('/docs/~notes/specs', f);
+    act(() => { navigate('/docs/~notes/specs/new.md'); });
+    await screen.findByText('hello folder');
+    expect(bodyText()).not.toContain(DOCS_FOLDER_TEXT.missing);
+    expect(lists).toBe(2);
+  });
+
+  it('a path that is truly absent says so after one more listing, and reads no more', async () => {
+    const f = fakeFolders();
+    open('/docs/~notes/specs', f);
+    await screen.findByText('a.md');
+    act(() => { navigate('/docs/~notes/specs/gone.md'); });
+    await screen.findByText(DOCS_FOLDER_TEXT.missing);
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    expect(f.calls.filter((c) => c === 'tree'), 'one more listing, never a loop').toHaveLength(2);
+    expect(screen.queryByRole('button', { name: DOCS_FOLDER_TEXT.retry })).toBeNull();
+  });
+
+  it('folderAskedAt and folderPathStale: a listing on its way at the move does not count, and each path re-reads once', () => {
+    expect(folderAskedAt(3, false)).toBe(3);
+    expect(folderAskedAt(3, true), 'the listing in flight started before the move').toBe(4);
+    expect(folderPathStale(true, 3, 3), 'no listing since the move').toBe(true);
+    expect(folderPathStale(true, 4, 4), 'the in-flight one answered: still not newer').toBe(true);
+    expect(folderPathStale(true, 5, 4), 'a newer listing decides').toBe(false);
+    expect(folderPathStale(false, 3, 3), 'a path the listing holds is never stale').toBe(false);
+  });
+
+  it('an absent path opened first is judged by the listing that page read: no second listing', async () => {
+    const f = fakeFolders();
+    open('/docs/~notes/specs/gone.md', f);
+    await screen.findByText(DOCS_FOLDER_TEXT.missing);
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    expect(f.calls.filter((c) => c === 'tree')).toHaveLength(1);
+  });
+});
+
+describe('settings: the Docs folders card sits on the Integrations section', () => {
+  it('rendering Settings › Integrations shows Docs folders fourth and Docs settings fifth, both at level 3', async () => {
+    const never = (): Promise<never> => new Promise(() => {});
+    vi.stubGlobal('fetch', vi.fn((): Promise<never> => never()));
+    for (const name of ['updates', 'stallWatch', 'collectLane', 'dispatchAbandon', 'testbox'] as const) {
+      vi.spyOn(api, name).mockImplementation(never);
+    }
+    vi.spyOn(api, 'linearWorkspaces').mockResolvedValue({ store: 'ok', workspaces: [], legacy: null });
+    vi.spyOn(api, 'projects').mockResolvedValue({ roots: ['/w'], projects: [] });
+    vi.spyOn(api, 'hierarchy').mockRejectedValue(new ApiError(404, { ok: false }));
+    renderSettings('integrations');
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    const levels = screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent);
+    const card = SETTINGS_CARDS.integrations.docsFolders;
+    const settingsCard = SETTINGS_CARDS.integrations.docsSettings;
+    expect(levels).toEqual(['Linear', 'Project linking', 'GitHub', card.title, settingsCard.title]);
+    const region = screen.getByRole('region', { name: card.title });
+    expect(within(region).getByText(card.scope)).toBeTruthy();
+    expect(within(region).getByText(card.purpose)).toBeTruthy();
+  });
+});
+
+// ---- Settings -------------------------------------------------------------------------------------------------------
+
+describe('settings: Docs folders section', () => {
+  it('lists each folder by label with its path, an unreadable one by that word with no path, still removable', async () => {
+    const f = fakeFolders();
+    render(<DocsFoldersSection folders={f.folders} />);
+    await screen.findByText(FOLDER_PATH);
+    const bad = document.querySelector('li[data-folder="team-a"]') as HTMLElement;
+    expect(bad.textContent).toContain(DOCS_FOLDER_TEXT.unreadableState);
+    expect(within(bad).getByRole('button', { name: DOCS_FOLDER_TEXT.remove })).toBeTruthy();
+  });
+
+  it('add and remove round trip, refusal reason shown', async () => {
+    let rows = [{ label: 'notes', path: FOLDER_PATH, state: 'ok' as const }];
+    const add = vi.fn(async (label: string, path: string): Promise<DocsAnswer<{ ok: true; label: string }>> => {
+      if (label === 'taken') return { s: 'failed', body: { ok: false, failure: 'label-exists' } };
+      rows = [...rows, { label, path, state: 'ok' }];
+      return ok({ ok: true, label });
+    });
+    const remove = vi.fn(async (label: string): Promise<DocsAnswer<{ ok: true; label: string; removed: true }>> => {
+      rows = rows.filter((r) => r.label !== label);
+      return ok({ ok: true, label, removed: true });
+    });
+    const f = fakeFolders({ paths: async () => ok({ ok: true as const, folders: rows }), add, remove });
+    render(<DocsFoldersSection folders={f.folders} />);
+    await screen.findByText(FOLDER_PATH);
+    fireEvent.change(screen.getByLabelText(DOCS_FOLDER_TEXT.labelField), { target: { value: 'team-a' } });
+    fireEvent.change(screen.getByLabelText(DOCS_FOLDER_TEXT.pathField), { target: { value: '/home/user/team' } });
+    fireEvent.click(screen.getByRole('button', { name: DOCS_FOLDER_TEXT.add }));
+    await screen.findByText('/home/user/team');
+    expect(add).toHaveBeenCalledWith('team-a', '/home/user/team');
+    expect(screen.getByText(DOCS_FOLDER_TEXT.added)).toBeTruthy();
+    // A refusal says its reason.
+    fireEvent.change(screen.getByLabelText(DOCS_FOLDER_TEXT.labelField), { target: { value: 'taken' } });
+    fireEvent.change(screen.getByLabelText(DOCS_FOLDER_TEXT.pathField), { target: { value: '/home/user/other' } });
+    fireEvent.click(screen.getByRole('button', { name: DOCS_FOLDER_TEXT.add }));
+    await screen.findByText(DOCS_FAILURE_SENTENCE['label-exists']);
+    // Remove.
+    const row = document.querySelector('li[data-folder="notes"]') as HTMLElement;
+    fireEvent.click(within(row).getByRole('button', { name: DOCS_FOLDER_TEXT.remove }));
+    await waitFor(() => expect(document.querySelector('li[data-folder="notes"]')).toBeNull());
+    expect(remove).toHaveBeenCalledWith('notes');
+  });
+
+  it('an account gate refusal of Add is its own fixed sentence', async () => {
+    const add = vi.fn(async () => { throw new ApiError(403, { ok: false, error: 'insecure-origin' }); });
+    const f = fakeFolders({ add });
+    render(<DocsFoldersSection folders={f.folders} />);
+    await screen.findByText(FOLDER_PATH);
+    fireEvent.change(screen.getByLabelText(DOCS_FOLDER_TEXT.labelField), { target: { value: 'team-a' } });
+    fireEvent.change(screen.getByLabelText(DOCS_FOLDER_TEXT.pathField), { target: { value: '/home/user/team' } });
+    fireEvent.click(screen.getByRole('button', { name: DOCS_FOLDER_TEXT.add }));
+    await screen.findByText(DOCS_FOLDER_TEXT.gateRefusal['insecure-origin']!);
+  });
+
+  it('a label outside the grammar cannot be added: the button stays off', async () => {
+    const f = fakeFolders();
+    render(<DocsFoldersSection folders={f.folders} />);
+    await screen.findByText(FOLDER_PATH);
+    fireEvent.change(screen.getByLabelText(DOCS_FOLDER_TEXT.labelField), { target: { value: 'Bad Label' } });
+    fireEvent.change(screen.getByLabelText(DOCS_FOLDER_TEXT.pathField), { target: { value: '/home/user/team' } });
+    expect((screen.getByRole('button', { name: DOCS_FOLDER_TEXT.add }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('sign-in dark: auth-off says what to do, with no list, no Add form and no spinner', async () => {
+    for (const [failure, sentence] of [['auth-off', DOCS_FOLDER_TEXT.signInNeeded], ['unauthenticated', DOCS_FOLDER_TEXT.signInAgain]] as const) {
+      const f = fakeFolders({ paths: async () => ({ s: 'failed', body: { ok: false, failure } }) });
+      render(<DocsFoldersSection folders={f.folders} />);
+      await screen.findByText(sentence);
+      expect(document.querySelector('[data-docs-folders="list"]')).toBeNull();
+      expect(document.querySelector('[data-docs-folders="empty"]')).toBeNull();
+      expect(document.querySelector('[data-docs-folders="add"]')).toBeNull();
+      expect(document.querySelector('[data-docs-folders="loading"]')).toBeNull();
+      expect(screen.queryByText(DOCS_FOLDER_TEXT.settingsEmpty)).toBeNull();
+      expect(screen.queryByText(DOCS_FOLDER_TEXT.settingsReading)).toBeNull();
+      expect(document.querySelector('[role="progressbar"], .spinner')).toBeNull();
+      cleanup();
+    }
+    expect(DOCS_FOLDER_TEXT.signInNeeded).toBe('Turn sign-in on to see and add folders.');
+    expect(DOCS_FOLDER_TEXT.signInAgain).toBe('Sign in to see and add folders.');
+  });
+
+  it('the client auth slot says sign in (sign-in is on then), and a sign-in again reads the list again', async () => {
+    let answer: 'auth' | 'ok' = 'auth';
+    const f = fakeFolders({
+      paths: async () => (answer === 'auth' ? { s: 'auth' as const } : ok({ ok: true as const, folders: [{ label: 'notes', path: FOLDER_PATH, state: 'ok' as const }] })),
+    });
+    render(<DocsFoldersSection folders={f.folders} />);
+    await screen.findByText(DOCS_FOLDER_TEXT.signInAgain);
+    answer = 'ok';
+    act(() => { raiseAuthLost('expired'); });
+    act(() => { clearAuthLost(); });
+    await screen.findByText(FOLDER_PATH);
+    expect(f.calls.filter((c) => c === 'paths')).toHaveLength(2);
+  });
+
+  it('a refused Remove says why, in the refusal\'s own sentence, never "could not be read"', async () => {
+    const f = fakeFolders({ remove: async () => failedAnswer('unknown-folder') });
+    render(<DocsFoldersSection folders={f.folders} />);
+    await screen.findByText(FOLDER_PATH);
+    fireEvent.click(within(document.querySelector('li[data-folder="notes"]') as HTMLElement).getByRole('button', { name: DOCS_FOLDER_TEXT.remove }));
+    await screen.findByText(DOCS_FAILURE_SENTENCE['unknown-folder']);
+    expect(bodyText()).not.toMatch(/could not be read/);
+    cleanup();
+    const gate = fakeFolders({ remove: async () => { throw new ApiError(403, { ok: false, error: 'unauthenticated' }); } });
+    render(<DocsFoldersSection folders={gate.folders} />);
+    await screen.findByText(FOLDER_PATH);
+    fireEvent.click(within(document.querySelector('li[data-folder="notes"]') as HTMLElement).getByRole('button', { name: DOCS_FOLDER_TEXT.remove }));
+    await screen.findByText(DOCS_FOLDER_TEXT.gateRefusal.unauthenticated);
+  });
+
+  it('api.docs.folders: a gate refusal (403 {error:"step-up-required"}) rejects as an ApiError; a docs word (4xx {failure:"label-exists"}) resolves failed', async () => {
+    const reply = (status: number, body: unknown): Response =>
+      new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+    const fetchStub = vi.fn(async (_url: string, _init?: RequestInit) => reply(403, { ok: false, error: 'step-up-required' }));
+    vi.stubGlobal('fetch', fetchStub);
+    const refused = await api.docs.folders.add('notes', FOLDER_PATH).catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(ApiError);
+    expect((refused as ApiError).status).toBe(403);
+    expect(((refused as ApiError).body as { error: string }).error).toBe('step-up-required');
+    // The write carried the docs marker header and a JSON body of the label and path.
+    const init = fetchStub.mock.calls[0]?.[1] ?? {};
+    expect(new Headers(init.headers).get('x-ccrc-docs')).toBe('1');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(String(init.body))).toEqual({ label: 'notes', path: FOLDER_PATH });
+    fetchStub.mockImplementation(async () => reply(409, { ok: false, failure: 'label-exists' }));
+    const word = await api.docs.folders.add('notes', FOLDER_PATH);
+    expect(word.s).toBe('failed');
+    expect(word.s === 'failed' && word.body.failure).toBe('label-exists');
+  });
+
+  it('Add refused step-up-required through the real client shows the "Confirm it\'s you" step, and does not claim success', async () => {
+    const reply = (status: number, body: unknown): Response =>
+      new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/api/docs-folders/paths')) return reply(200, { ok: true, folders: [{ label: 'notes', path: FOLDER_PATH, state: 'ok' }] });
+      if (url.endsWith('/api/docs-folders') && init?.method === 'POST') return reply(403, { ok: false, error: 'step-up-required' });
+      return reply(500, { ok: false });
+    }));
+    render(<DocsFoldersSection />);
+    await screen.findByText(FOLDER_PATH);
+    expect(document.querySelector('[data-step-up]')).toBeNull();
+    fireEvent.change(screen.getByLabelText(DOCS_FOLDER_TEXT.labelField), { target: { value: 'team-a' } });
+    fireEvent.change(screen.getByLabelText(DOCS_FOLDER_TEXT.pathField), { target: { value: '/home/user/team' } });
+    fireEvent.click(screen.getByRole('button', { name: DOCS_FOLDER_TEXT.add }));
+    await waitFor(() => expect(document.querySelector('[data-step-up]')).not.toBeNull());
+    expect(screen.queryByText(DOCS_FOLDER_TEXT.added)).toBeNull();
+  });
+
+  it('any other failed read says so with a Retry, never an empty list', async () => {
+    const f = fakeFolders({ paths: async () => ({ s: 'unreachable' }) });
+    render(<DocsFoldersSection folders={f.folders} />);
+    await screen.findByRole('button', { name: DOCS_FOLDER_TEXT.retry });
+    expect(document.querySelector('[data-docs-folders="empty"]')).toBeNull();
+  });
+});

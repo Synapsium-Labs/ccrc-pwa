@@ -36,14 +36,16 @@ THE ROW (`row`), ROW_VERSION 1, its keys in this order, every value bounded:
 - `session`: the `x-claude-code-session-id` the client sent when it matches SESSION_RE, else null; `subagent`: true
   when the client sent `x-claude-code-agent-id`, never the id itself.
 - `message`: the client message's sequence number in this process, from 1, taken at its first POST; `post`: this POST's
-  index in that message, from 0 (continuations, the 401 retry and the fallback's retry each add one).
+  index in that message, from 0 (continuations, the 401 retry, the fallback's retry and each retry of an absorbed
+  failure add one).
 - `route`, `model`: the parity row's `<route>` and `<model>`, each bounded by `stats.NAME_RE` as its key is.
 - `status`: the upstream's HTTP status, or null when the POST got no answer (a connect failure, a transport error).
 - `outcome`: the word the bridge counted for what it did with this answer, from the stats file's own outcome keys:
   `2xx` (the message's last answer, answered), `continuations` and `continuation-cap`, `refresh-after-401` (the 401 it
   refreshed for), and for an answer whose failure reached the client the word `server._count_failure` counted
   (`4xx`, `5xx`, `client-gone`, or `drain-cut`); and FALLBACK for the 400 that started Task 5's fallback, which the
-  stats file counts in the parity row's `fallbacks`, never as an outcome. Bounded by NAME_RE.
+  stats file counts in the parity row's `fallbacks`, never as an outcome; and ABSORBED for a failure the bridge tried
+  again (absorb.py), which it counts in the parity row's `absorbed`, never as an outcome. Bounded by NAME_RE.
 - `served`, the four token counts, `inputTransformations`: from the terminal `response.completed` or
   `response.incomplete` the parity section counted (`stats.served_word`, `stats.count_transformations`); null when
   this answer reached none (a non-2xx, a stream that broke: `Answer.measured` false), and a token count null when the
@@ -88,6 +90,7 @@ FILE_MODE = 0o600
 ROW_VERSION = 1
 SESSION_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")  # a Claude Code session id's shape (a UUID), bounded
 FALLBACK = "fallback"  # the outcome of the 400 that started Task 5's fallback (the parity row's `fallbacks`)
+ABSORBED = "absorbed"  # the outcome of a failure the bridge tried again (the parity row's `absorbed`)
 WRITE_FAILED = "requests:write-failed"  # the stats file's outcome key for a row that could not be written
 WRITE_FAILED_LOG = "write-failed"  # the once-only key of the write-failure log line: one line per process, any cause
 UNNAMED = ("record-requests unnamed: lane.json names no bridgeFiles.requests, so no request record is written; run "

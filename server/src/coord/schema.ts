@@ -63,6 +63,7 @@
  * coordinator per program, and a second one refuses rather than arbitrating.
  */
 import { TERMINAL_RUN_STATES } from '../../../shared/api.js';
+import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
 
 // The close-columns fill (entry 44) reads RunState's terminal set from its one home, never spelled as a literal tuple.
 const TERMINAL_STATES_SQL = `('${TERMINAL_RUN_STATES.join("','")}')`;
@@ -4465,6 +4466,294 @@ export const MIGRATIONS: readonly string[] = [
     one     INTEGER PRIMARY KEY CHECK (one = 1),
     through INTEGER NOT NULL CHECK (through >= 1) -- the highest seq any prune has deleted
   );
+  `,
+
+  // ── 126: user_version 125 -> 126 ──────────────────────────────────────────
+  // Overlord W1 serviceability PR B (run 3296; spec C57 "A history of limits", Table 11.1a): `limit_samples`, one row per
+  // Anthropic account reading, keyed on the reading's own time, so one reading is one row however many beats see it. ONE
+  // writer, the sampler (`limitSampler.ts`) through `coord/limitSamplesStore.ts`'s insert and prune; kept 30 days. A NEW
+  // TABLE only: an older build opening a file at this entry's version takes rule 3 (it warns, reads as-is and migrates
+  // nothing) and never names it; a restored older file has a gap, which `poolRunway` reads as `thin` or `no-sample`. The
+  // slot is the next free one by position on `main`; whoever lands second renumbers. RE-MEASURE the slot before merge (it
+  // must print 125 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE limit_samples (
+    account TEXT NOT NULL, ts INTEGER NOT NULL,        -- the reading's own time, from its limits file (epoch s)
+    five REAL, seven REAL, five_reset_at INTEGER, seven_reset_at INTEGER,
+    five_rolled INTEGER NOT NULL, seven_rolled INTEGER NOT NULL, five_window_minutes INTEGER,
+    sampled_at INTEGER NOT NULL,                       -- the beat's time (epoch s)
+    PRIMARY KEY (account, ts)
+  ) WITHOUT ROWID;
+  CREATE INDEX limit_samples_ts ON limit_samples(ts);
+  `,
+
+  // ── 127: user_version 126 -> 127 ──────────────────────────────────────────
+  // The programme lifecycle (spec docs/superpowers/specs/2026-11-24-programme-lifecycle-design.md §3, §13; D-8983, D-8985,
+  // D-8989, D-8990, D-8993). Step 1 adds the binding (`coordinator`, `coordinatorUuid`, `coordinatorSince`), the
+  // placeholder columns, the partial unique index that makes a second binding of one incarnation a constraint failure
+  // (`IFNULL`, because SQLite treats NULLs as distinct in a unique index), and the tables `programme_events` and
+  // `programme_picks`. Step 2 writes one `started` event per row. Step 4 (before step 3, so an ended programme binds
+  // nothing) rewrites the stored state by one rule: a set `planEnd` is the decision; a `done`/`abandoned` over an open run
+  // becomes `active` (D-51's side effect); any other D-51 end is kept and recorded. Step 3 seeds a binding only for an
+  // unambiguous pair, or for a live programme with no open run the unambiguous claimant `main`'s `openRun` admits, with a
+  // null uuid; every other claimant of a live programme's open runs is named in a `migrated` event as a conflict. It names
+  // no programme and skips the reserved row (`LINEAR_SYNC_PROGRAMME`); `programme-lifecycle-migration.test.ts` scans this
+  // entry for any other string literal that could be a slug. An older build opening a file at this entry's version takes
+  // rule 3 (it warns, reads as-is and migrates nothing): it names none of the new columns or tables. The slot is the next
+  // free one by position on `main` (25ed1ee2d holds 126: 125 and 126 landed first, so this entry moved from 125 to 127).
+  // RE-MEASURE the slot before merge (it must print 126, the count before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE programs ADD COLUMN coordinator TEXT;
+  ALTER TABLE programs ADD COLUMN coordinatorUuid TEXT;
+  ALTER TABLE programs ADD COLUMN coordinatorSince INTEGER;
+  ALTER TABLE programs ADD COLUMN placeholder TEXT;
+  ALTER TABLE programs ADD COLUMN filedInto TEXT;
+  CREATE UNIQUE INDEX programs_one_per_coordinator ON programs (coordinator, IFNULL(coordinatorUuid, ''))
+    WHERE coordinator IS NOT NULL;
+  CREATE TABLE programme_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    program     TEXT    NOT NULL,
+    at          INTEGER NOT NULL,
+    edge        TEXT    NOT NULL,
+    fromState   TEXT,
+    toState     TEXT,
+    actorKind   TEXT    NOT NULL,
+    actor       TEXT    NOT NULL,
+    why         TEXT    NOT NULL,
+    session     TEXT,
+    sessionUuid TEXT,
+    detail      TEXT
+  );
+  CREATE INDEX programme_events_by_program ON programme_events (program, at);
+  CREATE INDEX programme_events_by_session ON programme_events (session, sessionUuid);
+  CREATE TABLE programme_picks (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    session TEXT,
+    program TEXT    NOT NULL,
+    at      INTEGER NOT NULL
+  );
+  CREATE INDEX programme_picks_by_program ON programme_picks (program);
+
+  CREATE TEMP TABLE m127_now AS SELECT CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) AS at;
+
+  INSERT INTO programme_events (program, at, edge, fromState, toState, actorKind, actor, why)
+    SELECT slug, createdAt, 'started', NULL, state, 'migration', 'unmeasured',
+      'who started it was not recorded before this build'
+    FROM programs WHERE slug != '${LINEAR_SYNC_PROGRAMME}' ORDER BY slug;
+
+  CREATE TEMP TABLE m127_open AS
+    SELECT program, COUNT(*) AS n FROM runs WHERE state NOT IN ${TERMINAL_STATES_SQL} GROUP BY program;
+
+  INSERT INTO programme_events (program, at, edge, fromState, toState, actorKind, actor, why, detail)
+    SELECT p.slug, (SELECT at FROM m127_now), 'migrated', p.state, p.planEnd, 'migration', 'unmeasured',
+      'the plan''s end is the decision', json_object('rule', 'plan-end')
+    FROM programs p WHERE p.slug != '${LINEAR_SYNC_PROGRAMME}' AND p.planEnd IN ('done', 'abandoned') AND p.state != p.planEnd
+    ORDER BY p.slug;
+  UPDATE programs SET state = planEnd
+    WHERE slug != '${LINEAR_SYNC_PROGRAMME}' AND planEnd IN ('done', 'abandoned') AND state != planEnd;
+
+  INSERT INTO programme_events (program, at, edge, fromState, toState, actorKind, actor, why, detail)
+    SELECT p.slug, (SELECT at FROM m127_now), 'migrated', p.state, 'active', 'migration', 'unmeasured',
+      'ended by the auto-retire while a run was open; its runs say it is live', json_object('rule', 'ended-over-open-runs')
+    FROM programs p JOIN m127_open o ON o.program = p.slug
+    WHERE p.slug != '${LINEAR_SYNC_PROGRAMME}' AND p.planEnd IS NULL AND p.state IN ('done', 'abandoned') AND o.n > 0
+    ORDER BY p.slug;
+  INSERT INTO programme_events (program, at, edge, fromState, toState, actorKind, actor, why, detail)
+    SELECT p.slug, (SELECT at FROM m127_now), 'migrated', p.state, p.state, 'migration', 'unmeasured',
+      'ended by the auto-retire before this build; kept until the operator''s decision', json_object('rule', 'auto-retire-kept')
+    FROM programs p
+    WHERE p.slug != '${LINEAR_SYNC_PROGRAMME}' AND p.planEnd IS NULL AND p.state IN ('done', 'abandoned')
+      AND NOT EXISTS (SELECT 1 FROM m127_open o WHERE o.program = p.slug AND o.n > 0)
+    ORDER BY p.slug;
+  UPDATE programs SET state = 'active'
+    WHERE slug != '${LINEAR_SYNC_PROGRAMME}' AND planEnd IS NULL AND state IN ('done', 'abandoned')
+      AND slug IN (SELECT program FROM m127_open WHERE n > 0);
+
+  CREATE TEMP TABLE m127_live AS
+    SELECT slug FROM programs WHERE slug != '${LINEAR_SYNC_PROGRAMME}' AND state NOT IN ('done', 'abandoned');
+  CREATE TEMP TABLE m127_claims AS
+    SELECT DISTINCT program, claimedBy AS s FROM runs WHERE state NOT IN ${TERMINAL_STATES_SQL} AND claimedBy IS NOT NULL;
+  CREATE TEMP TABLE m127_pairs AS
+    SELECT c.program, c.s FROM m127_claims c
+    WHERE c.program IN (SELECT slug FROM m127_live)
+      AND (SELECT COUNT(*) FROM m127_claims c2 WHERE c2.program = c.program) = 1
+      AND (SELECT COUNT(*) FROM m127_claims c3 WHERE c3.s = c.s) = 1;
+  CREATE TEMP TABLE m127_past AS
+    SELECT l.slug AS program,
+      (SELECT r.claimedBy FROM runs r WHERE r.program = l.slug AND r.claimedBy IS NOT NULL ORDER BY r.id LIMIT 1) AS s
+    FROM m127_live l WHERE NOT EXISTS (SELECT 1 FROM m127_open o WHERE o.program = l.slug AND o.n > 0);
+  DELETE FROM m127_past WHERE s IS NULL;
+  CREATE TEMP TABLE m127_seeds AS
+    SELECT program, s, 'the one claimant of its open runs; incarnation not recorded' AS why FROM m127_pairs
+    UNION ALL
+    SELECT p.program, p.s, 'the claimant main admitted; incarnation not recorded' FROM m127_past p
+    WHERE (SELECT COUNT(*) FROM m127_past p2 WHERE p2.s = p.s) = 1
+      AND p.s NOT IN (SELECT s FROM m127_claims);
+
+  UPDATE programs SET
+    coordinator = (SELECT s FROM m127_seeds WHERE program = programs.slug),
+    coordinatorUuid = NULL,
+    coordinatorSince = (SELECT at FROM m127_now)
+    WHERE slug IN (SELECT program FROM m127_seeds);
+  INSERT INTO programme_events (program, at, edge, fromState, toState, actorKind, actor, why, session, sessionUuid)
+    SELECT program, (SELECT at FROM m127_now), 'coordinator', NULL, NULL, 'migration', 'unmeasured', why, s, NULL
+    FROM m127_seeds ORDER BY program;
+
+  INSERT INTO programme_events (program, at, edge, fromState, toState, actorKind, actor, why, session, sessionUuid, detail)
+    SELECT c.program, (SELECT at FROM m127_now), 'migrated', NULL, NULL, 'migration', 'unmeasured',
+      CASE WHEN (SELECT COUNT(*) FROM m127_claims c2 WHERE c2.program = c.program) > 1
+        THEN 'its open runs are claimed by more than one session: hand it to one'
+        ELSE 'its claimant also claims open runs in another programme: hand each programme to one coordinator' END,
+      c.s, NULL,
+      json_object('rule', CASE WHEN (SELECT COUNT(*) FROM m127_claims c2 WHERE c2.program = c.program) > 1
+          THEN 'programme-several-claimants' ELSE 'session-in-several' END,
+        'others', (SELECT json_group_array(x) FROM (
+          SELECT c4.s AS x FROM m127_claims c4 WHERE c4.program = c.program AND c4.s != c.s
+          UNION SELECT c5.program FROM m127_claims c5 WHERE c5.s = c.s AND c5.program != c.program ORDER BY 1)))
+    FROM m127_claims c
+    WHERE c.program IN (SELECT slug FROM m127_live) AND c.program NOT IN (SELECT program FROM m127_pairs)
+    ORDER BY c.program, c.s;
+  INSERT INTO programme_events (program, at, edge, fromState, toState, actorKind, actor, why, session, sessionUuid, detail)
+    SELECT p.program, (SELECT at FROM m127_now), 'migrated', NULL, NULL, 'migration', 'unmeasured',
+      'its past claimant is also the claimant of another programme: hand it to one coordinator', p.s, NULL,
+      json_object('rule', 'past-claimant-in-several')
+    FROM m127_past p WHERE p.program NOT IN (SELECT program FROM m127_seeds) ORDER BY p.program;
+
+  DROP TABLE m127_now;
+  DROP TABLE m127_open;
+  DROP TABLE m127_live;
+  DROP TABLE m127_claims;
+  DROP TABLE m127_pairs;
+  DROP TABLE m127_past;
+  DROP TABLE m127_seeds;
+  `,
+
+  // ── 128: user_version 127 -> 128 ──────────────────────────────────────────
+  // The Overlord's timers (Overlord spec §3.3.12 C61 to C65, M36; plan `docs/superpowers/plans/2026-11-14-overlord-w1/
+  // w1-overlord-timers.md` Task 2): `continuity_timers.setRestoreGeneration`, the restore generation read at the set (NULL:
+  // not measured then, or a row an older build or this migration left), written by `insertTimer` alone on every set; and
+  // `continuity_timer_refusals`, one count per UTC day, timer door and refusal word, raised by `recordTimerRefusal` and
+  // pruned by `purgeTimerRefusals`. A COLUMN ON AN EXISTING TABLE AND A NEW TABLE: an older build opening a file at this
+  // entry's version takes rule 3 (it warns, reads as-is and migrates nothing), names its columns in every timer SELECT and
+  // never names the new table, so it boots and reads every timer as before. The slot is the next free one by position on
+  // `main`; whoever lands second renumbers. RE-MEASURE the slot before merge (it must print 127 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE continuity_timers ADD COLUMN setRestoreGeneration INTEGER;  -- restoreGeneration() at the set; NULL: unmeasured
+  CREATE TABLE continuity_timer_refusals (
+    day  TEXT NOT NULL,     -- the UTC date of the refusal, YYYY-MM-DD
+    door TEXT NOT NULL,     -- a TimerDoor (shared/continuity-timers.ts)
+    word TEXT NOT NULL,     -- the refusal word the door answered
+    n    INTEGER NOT NULL,  -- how many times that day
+    PRIMARY KEY (day, door, word)
+  ) WITHOUT ROWID;
+  `,
+
+  // ── 129: user_version 128 -> 129 ──────────────────────────────────────────
+  // The invariant monitor's findings (Overlord spec §10.4 "One invariant monitor", §12 M24; plan
+  // `docs/superpowers/plans/2026-11-14-overlord-w1/w1-sequence-monitor.md` Task 6, question 12): one row per episode of a
+  // violation, written only by `invariantFindingsStore.ts` (`recordFinding` inserts, `resolveFindings` stamps `resolvedAt`); at
+  // most one open row per invariant, subject and mode (the partial unique index), so a row is the deduplication and M24's count.
+  // A live row carries its item and its latch answer, a shadow row neither. Rows are never deleted in W1. And the Shadow lanes
+  // card's `invariants` row, seeded `shadow`: the monitor records and raises nothing until the operator sets it Live. A NEW TABLE
+  // AND ONE SEED ROW: an older build opening a file at this entry's version takes rule 3 (it warns, reads as-is and migrates
+  // nothing), never names the table, and its `isLaneArmLane` refuses the row's word. The slot is the next free one by position on
+  // `main`; whoever lands second renumbers. RE-MEASURE the slot before merge (it must print 128 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE overlord_invariant_findings (
+    id         INTEGER PRIMARY KEY,
+    invariant  TEXT NOT NULL,
+    subject    TEXT NOT NULL,
+    mode       TEXT NOT NULL CHECK (mode IN ('shadow', 'live')),
+    seq        INTEGER,                  -- the line that showed it; NULL for a finding over a table (I2, I7, I17)
+    message    TEXT NOT NULL,            -- ids, kinds and states only, never a body (§10.4)
+    foundAt    INTEGER NOT NULL,
+    itemId     INTEGER,                  -- the live finding's item; NULL in shadow
+    latched    TEXT CHECK (latched IN ('raised', 'standing', 'row-only')),   -- NULL in shadow
+    resolvedAt INTEGER,
+    CHECK ((mode = 'live') = (itemId IS NOT NULL)),
+    CHECK ((mode = 'live') = (latched IS NOT NULL))
+  );
+  CREATE UNIQUE INDEX overlord_invariant_findings_open ON overlord_invariant_findings (invariant, subject, mode)
+    WHERE resolvedAt IS NULL;
+  INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('invariants', 'shadow', 0);
+  `,
+
+  // ── 130: user_version 129 -> 130 ──────────────────────────────────────────
+  // The paste delivery recipe's capture lane (Desktop polish wave 178; task note docs/superpowers/programs/desktop-polish/
+  // paste-delivery.md section 7): `claude_build_deliveries`, one row per (build, part), the recipe's results beside the trust
+  // table and never in it. `claude_builds` is NOT altered, and a delivery result never writes a trust row. ONE writer, the
+  // capture lane, through `coord/claudeBuildDeliveriesStore.ts`'s `markDeliveryAttempt` and `recordDelivery` (`CoordStore`
+  // keeps the delegates). `result` is the result's JSON, written only from a result the one reader accepted and the recipe
+  // judged current; `version`, `word`, `result` and `at` are set together, and null on a row that holds attempts only.
+  // A NEW TABLE only: an older build opening a file at this entry's version takes rule 3 (it warns, reads as-is and migrates
+  // nothing) and never names it. The slot is the next free one by position on `main`; whoever lands second renumbers.
+  // `release` is the release tag of the test box that ran the stored result (the result's own `release`, review 3882 F5, the
+  // coordinator's ruling), null when that box could not read it.
+  // RE-MEASURE the slot before merge (it must print 129, the count before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE claude_build_deliveries (
+    build         TEXT    NOT NULL,
+    part          INTEGER NOT NULL CHECK (part >= 0),
+    version       TEXT,
+    release       TEXT,
+    word          TEXT,
+    result        TEXT,
+    at            INTEGER,
+    attempts      INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    lastAttemptAt INTEGER,
+    notSent       TEXT,
+    PRIMARY KEY (build, part)
+  );
+  `,
+
+  // ── 131: user_version 130 -> 131 ──────────────────────────────────────────
+  // X2 P4.3: one console-wide Docs settings row. No seed: absence means empty.
+  // RE-MEASURE the slot before merge (it must print 130 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE docs_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    body TEXT NOT NULL,
+    updatedAt INTEGER NOT NULL
+  );
+  `,
+
+  // ── 132: user_version 131 -> 132 ──────────────────────────────────────────
+  // The Overlord's readiness word (spec §6.4, H20, C56, C57; plan `docs/superpowers/plans/2026-11-14-overlord-w1/
+  // w1-readiness.md` Task 2): `overlord_readiness`, one row per change of word, stamped on `overlord_sequence` in its own
+  // transaction, with `pushedAt` on an episode's first `dead` row; and `overlord_readiness_items`, which operator item the lane
+  // raised for which cause and how it ended. ONE writer, `coord/overlordReadinessStore.ts`, called by the readiness lane alone.
+  // The word is checked by the writer against `READINESS_WORDS`, never by SQL, so a new word is a row of the map. NEW TABLES
+  // only: an older build opening a file at this entry's version takes rule 3 and never names them. The slot is the next free
+  // one by position on `main`; whoever lands second renumbers. RE-MEASURE the slot before merge (it must print 131 before this
+  // entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE overlord_readiness (
+    id INTEGER PRIMARY KEY, sessionId TEXT, word TEXT NOT NULL, why TEXT, untilAt INTEGER, strandCause TEXT,
+    restartable INTEGER NOT NULL DEFAULT 0, at INTEGER NOT NULL,
+    seq INTEGER,       -- the overlord_sequence line stamped in the same transaction
+    pushedAt INTEGER   -- set only on an episode's first dead row, in the transaction that writes it
+  );
+  CREATE INDEX overlord_readiness_at ON overlord_readiness (at);
+  CREATE TABLE overlord_readiness_items (
+    id INTEGER PRIMARY KEY, item TEXT NOT NULL CHECK (item IN ('stranded', 'count', 'hold')),
+    key TEXT NOT NULL, itemId INTEGER NOT NULL, raisedAt INTEGER NOT NULL, settledAt INTEGER,
+    closedBy TEXT CHECK (closedBy IN ('lane', 'operator'))
+  );
+  CREATE UNIQUE INDEX overlord_readiness_items_open ON overlord_readiness_items (item, key) WHERE settledAt IS NULL;
   `,
 ];
 

@@ -29,7 +29,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } f
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
-  INHERITED_GROUNDS, KEYFRAME_TROUGHS, PWA_ROOT, audit, blockBody, customProps, loadThemes,
+  INHERITED_GROUNDS, KEYFRAME_TROUGHS, PWA_ROOT, SEPARATE_DOCUMENTS, audit, blockBody, customProps, loadThemes,
   ratio, resolveColor, rulesOf, stylesheets, subjectCompound,
 } from '../design/audit.mjs';
 
@@ -187,6 +187,73 @@ describe('a registry entry whose rule is gone', () => {
     const said = problemsOf(dir).filter((p) => p.includes(INHERITED_KEY ?? '!'));
     expect(said.length, 'one sentence per theme, not one for both').toBeGreaterThanOrEqual(2);
     expect(said.every((p) => /ink-that-no-palette-defines/.test(p))).toBe(true);
+  });
+}, 30_000);
+
+describe('SEPARATE_DOCUMENTS, the sheets exempt from the console-palette measurement only', () => {
+  const REVIEW = 'src/review/review.css';
+  /** Run `fn` with the live table changed, and put it back whatever happens: the table is the real module's, shared. */
+  const withTable = <T,>(change: (t: Record<string, string>) => void, fn: () => T): T => {
+    const table = SEPARATE_DOCUMENTS as Record<string, string>;
+    const before = { ...table };
+    try {
+      change(table);
+      return fn();
+    } finally {
+      for (const k of Object.keys(table)) delete table[k];
+      Object.assign(table, before);
+    }
+  };
+
+  it('the review sheet is exempt with a reason, and a clean copy raises no problem', () => {
+    expect(Object.keys(SEPARATE_DOCUMENTS)).toEqual([REVIEW]);
+    expect(SEPARATE_DOCUMENTS[REVIEW]?.length).toBeGreaterThan(100);
+    // Still a discovered sheet: every structural reader (the reduced-motion census, the opacity registry, keyframe troughs,
+    // one-selector-one-sheet) keeps reading it. Only the colour stage skips it.
+    expect(stylesheets(PWA_ROOT)).toContain(REVIEW);
+    expect(problemsOf(sheetTree())).toEqual([]);
+  });
+
+  it('the exemption is the colour stage only: the review sheet is still in the report and its rules still count', () => {
+    const tree = sheetTree();
+    const r = audit(tree);
+    expect(r.sheets as string[]).toContain(REVIEW);
+    // counts.rules is exactly the rules of every discovered sheet (audit() sums rulesOf over `sheets`, keyframe stops included).
+    const total = (r.sheets as string[]).reduce((n, rel) => n + rulesOf(tree, rel).length, 0);
+    expect(r.counts.rules).toBe(total);
+    expect(r.counts.rules).toBeGreaterThan(rulesOf(tree, REVIEW).length);
+    // None of its selectors enters the console's uncovered census (keyed by the sheet's own rules, not by a name
+    // fragment: `review-` also sits inside the console's `.opt-preview-toggle`).
+    const own = new Set(rulesOf(PWA_ROOT, REVIEW).map((rule) => rule.selector));
+    expect(own.size).toBeGreaterThan(5);
+    expect((r.uncovered as string[]).filter((k) => own.has(k))).toEqual([]);
+  });
+
+  it('a structural check still reads the review sheet: a second sheet declaring one of its selectors is reported', () => {
+    const dir = sheetTree();
+    const selector = rulesOf(PWA_ROOT, REVIEW).find((x) => x.selector.startsWith('.review-'))?.selector;
+    expect(selector, 'the review sheet has a rule').toBeDefined();
+    writeFileSync(path.join(dir, 'src', 'review', 'twin.css'), `${selector} { margin: 0; }\n`);
+    expect(problemsOf(dir).some((p) => p.includes(`${selector}: declared in`))).toBe(true);
+  });
+
+  it('without its entry the review sheet is measured against the console palettes and the audit refuses it', () => {
+    // Not vacuous: the page's own --review-* properties are unknown to the console's palettes, so the audit reports
+    // the review sheet's rules in every palette.
+    const dir = sheetTree();
+    withTable((t) => { delete t[REVIEW]; }, () => {
+      expect(stylesheets(PWA_ROOT)).toContain(REVIEW);
+      const said = problemsOf(dir).filter((p) => /unknown custom property --review-/.test(p));
+      expect(said.length, 'the review sheet raised nothing without its entry').toBeGreaterThan(0);
+    });
+  });
+
+  it('an entry naming a path that is no sheet is reported stale, a pattern included', () => {
+    const dir = sheetTree();
+    for (const key of ['src/review/gone.css', 'src/review/*.css', 'src/review']) {
+      const problems = withTable((t) => { t[key] = 'a forged reason'; }, () => problemsOf(dir));
+      expect(problems, key).toContain(`stale SEPARATE_DOCUMENTS entry: no sheet ${key}`);
+    }
   });
 }, 30_000);
 

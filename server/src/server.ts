@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import fastifyWebsocket from '@fastify/websocket';
 import fastifyMultipart from '@fastify/multipart';
@@ -12,6 +13,8 @@ import type { Deps } from './deps.js';
 import { assembleFleet, dropStaleLandings, fleetNow } from './fleet.js';
 import { liveStateReaderOver, readLiveState } from './livestate.js';
 import { readLaneStates, readLimits, projectHome, projectPlacement } from './limits.js';
+import { loadFactsOf } from './accountLoad.js';
+import { registerPoolRunwayRoute } from './poolRunwayRoute.js';
 import { accountsConnect, lanesWire } from './accounts/lanes.js';
 import { accountOriginClass } from './accounts/gate.js';
 import { readSharesMeasured } from './shares.js';
@@ -73,6 +76,7 @@ import { registerDecisionModelRoutes } from './coord/decisionModelRoutes.js';
 import { registerNameListRoutes } from './operatorModel/nameListRoutes.js';
 import { promptTargetVerdict, type PromptTargetVerdict } from './operatorModel/messages.js';
 import { NO_DESIGNATION, promptRecheck, recordOperatorPrompt } from './operatorModel/promptRecord.js';
+import { moveOperatorMessage } from './operatorModel/messageLine.js';
 import { readOperatorSecretMeta } from './coord/ledgersSecrets.js';
 import { coordinatorPresenceIn, type WaitingView } from '../../shared/ledgers.js';
 import { attributionVerdict } from './coord/attribution.js';
@@ -80,8 +84,11 @@ import { queueSystemMail } from './coord/rundefsTx.js';
 import { createQuestions, type OperatorDoorDeps, type Questions } from './coord/questions.js';
 import { heldFor } from './coord/heldFor.js';
 import { registerUpdateRoutes } from './update/routes.js';
-import { composeDocs, readTree, registerDocsReadRoutes, registerDocsRefreshRoute } from './docs/routes.js';
-import { registerReviewOpenRoute } from './review/routes.js';
+import {
+  composeDocs, readTree, registerDocsFolderReadRoutes, registerDocsFolderRegistryRoutes, registerDocsReadRoutes,
+  registerDocsRefreshRoute, registerDocsSettingsRoutes,
+} from './docs/routes.js';
+import { registerReviewOpenRoute, registerReviewPageRoutes } from './review/routes.js';
 import { installDocsRequestPolicy, installDocsResponsePolicy } from './docs/hooks.js';
 import { openReviewStore } from './review/store.js';
 import { startReviewSweep } from './review/sweep.js';
@@ -97,7 +104,7 @@ import { readLaneModels } from './laneModels.js';
 import { registerLinearRoutes, registerLinearWorkspaceRoutes } from './linear/routes.js';
 import { registerLinearProxyRoutes } from './linear/proxyRoutes.js';
 import { registerLinkingRoutes } from './linking/routes.js';
-import { registerContinuityRoutes } from './continuity/routes.js';
+import { registerContinuityRoutes, settleFactOf, settleLoads, type SandboxSettlePort } from './continuity/routes.js';
 import { expectedSurfaceOf } from './continuity/sandboxCheck.js';
 import { registerQuizRoutes } from './continuity/quizRoutes.js';
 import { witnessPorts } from './continuity/witnessPorts.js';
@@ -112,14 +119,16 @@ import { incarnationOf } from './coord/delegationLeaseDoor.js';
 import { attributionIdentity, consoleSubject } from './auth/attributionIdentity.js';
 import { registerPlanRoutes } from './coord/planRoutes.js';
 import { otherLaneReadsOf } from './coord/otherLaneReads.js';
+import { coordinatorReadingOf } from './coord/programmeCoordinatorReading.js';
 import { registerHierarchyRoutes } from './coord/hierarchyRoutes.js';
 import { registerFaceRoutes } from './face/routes.js';
 import { ccdOverlordBody, stopCreatedOf } from './coord/overlordBody.js';
-import { NO_OVERLORD_STORE, drainOwedStops, registerOverlordRoutes } from './coord/overlordRoutes.js';
+import { NO_OVERLORD_STORE, drainOwedStops, overlordLanePortOf, registerOverlordRoutes } from './coord/overlordRoutes.js';
 import { NO_WITNESS_YET, ladderConditionInputs, ladderRead } from './coord/overlordLadderRead.js';
 import { overlordGateRun, overlordReadGate, type OverlordGateDeps } from './coord/overlordGateRun.js';
 import { registerOverlordInboxRoutes } from './coord/overlordInboxRoutes.js';
 import { runOverlordRead } from './coord/overlordRead.js';
+import { registerOverlordHistoryRoutes } from './coord/overlordHistoryRoutes.js';
 import { readTurnMarkMeasured } from './turnmark.js';
 import { actKeyFact, advanceCounterGuarded, recordFenceRefusal } from './coord/overlordGateStore.js';
 import { CONTINUITY_LANE } from '../../shared/lane-arm.js';
@@ -179,7 +188,9 @@ import {
   busyReadFailsClosed, decideArchive, decideStopClaims, frameRowVerdict, stopFlags, worktreeOf, type ArchiveMeasure,
   type ClaimsCoordPort, type TurnVerdict,
 } from './coord/archiveDoor.js';
-import { moveClaims } from './coord/reclaim.js';
+import { measureClaimant, moveClaims } from './coord/reclaim.js';
+import { overlordBodyOf } from './coord/overlordDesignation.js';
+import { OPERATOR_UNMEASURED } from './coord/programmeLifecycleStore.js';
 import { admitArchive } from './coord/archiveAdmission.js';
 import { actArchive, replyArchiveRefused } from './archiveAct.js';
 import { liveRowFor, liveRowWithHookFor, liveWordFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
@@ -284,6 +295,8 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/fleet', '/api/digest', '/api/sessions/:id/pr', '/api/sessions/:id/workspace/audit', '/api/coord/stall-watch',
   '/api/runs', '/api/runs/find', '/api/programmes', '/api/runs/:id', '/api/runs/:id/record', '/api/runs/:id/signals', '/api/lifecycle', '/api/peers', '/api/claims', '/api/ledger', '/api/landing', '/api/asks',
   '/api/approvals/:id', '/api/coord/review-cap/:id',
+  // Programme lifecycle W2: a programme's story carries every act's why, written by the operator, a coordinator or the Overlord.
+  '/api/programmes/:slug/history',
   // The approval census's read (approvals PR 1): each row's summary is a prompt's command text, masked and redacted at
   // write; the hook masks the answer again with the masker's current fingerprints.
   '/api/approvals/census',
@@ -308,9 +321,11 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   // A session's pending timers, its own read and the operator's (Overlord W1a, the timers piece): each note a session wrote.
   '/api/timers', '/api/sessions/:id/timers',
   // The portfolio (Overlord W1): programme titles a coordinator wrote, and blocking items' titles a session wrote.
-  '/api/portfolio', '/api/overlord/ladder',
+  '/api/portfolio', '/api/overlord/ladder', '/api/overlord/readiness',
   // The operator's messages, one by its id (W1 inbox piece): the text is the operator's own words, masked by the one answer hook.
   '/api/overlord/inbox', '/api/overlord/messages/:id',
+  // Docs settings (X2 P4.3): the link rules are operator-entered text, not fixed server vocabulary.
+  '/api/docs/settings',
 ]);
 /** Whether the one answer hook masks a route's answer (D-5995). */
 export const answerMasked = (method: string, url: string | undefined): boolean =>
@@ -1334,7 +1349,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         pendingDialogs: watcher?.currentPending(), statuslines: watcher?.currentStatuslines(),
         taskProgress: watcher?.currentTaskProgress(), prStates: watcher?.currentPrStates(),
         hookStates: watcher?.currentHookStates(), records: reg.records, coord: deps.coord,
-        usageReadings: watcher?.currentUsage(), headBranches: watcher?.currentHeadBranches(), landings: watcher?.currentLandings(),
+        usageReadings: watcher?.currentUsage(), headBranches: watcher?.currentHeadBranches(), landings: watcher?.currentLandings(), providerRetries: watcher?.currentProviderRetries(),
       }),
       pools: poolsWire(
         poolsRead,
@@ -1804,7 +1819,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
           pendingDialogs: watcher?.currentPending(), statuslines: watcher?.currentStatuslines(),
           taskProgress: watcher?.currentTaskProgress(), prStates: watcher?.currentPrStates(),
           hookStates: watcher?.currentHookStates(), records: reg.records, coord: deps.coord,
-          usageReadings: watcher?.currentUsage(), headBranches: watcher?.currentHeadBranches(), landings: watcher?.currentLandings(),
+          usageReadings: watcher?.currentUsage(), headBranches: watcher?.currentHeadBranches(), landings: watcher?.currentLandings(), providerRetries: watcher?.currentProviderRetries(),
         })
         : null));
     }
@@ -2256,7 +2271,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const consoleActor = (req: FastifyRequest): string =>
     consoleSubject(identity.console(deps.cfg.authEnabled, deps.cfg.authEnabled ? sessionAuth(req).device : null)) ?? 'unmeasured';
   // The ladder's composed read, built once for its doors and the gate.
-  const ladderDeps = deps.coord === undefined ? undefined : { coord: deps.coord, inputs: deps.ladderInputs ?? ladderConditionInputs({ coord: deps.coord, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, sidecar: (id) => watcher?.currentUsage().get(id), isolation: deps.isolation }), witness: deps.ladderWitness, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, journal: deps.overlordAuthority ?? NO_LADDER_AUTHORITY };
+  const ladderDeps = deps.coord === undefined ? undefined : { coord: deps.coord, inputs: deps.ladderInputs ?? ladderConditionInputs({ coord: deps.coord, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, sidecar: (id) => watcher?.currentUsage().get(id), isolation: deps.isolation, accountFacts: () => { const l = watcher?.currentLimits(); return l === null || l === undefined ? null : loadFactsOf(deps.cfg.roster, l.limits, deps.coord!.accountPoolEdges(), Math.floor(deps.time.clock.wall() / 1000)); }, noWitnessSinceBoot: () => deps.overlordAuthorityExchange?.noWitnessSinceBoot() ?? 'unmeasured' }), witness: deps.ladderWitness ?? deps.overlordAuthorityExchange, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, journal: deps.overlordAuthority ?? NO_LADDER_AUTHORITY };
   // THE OVERLORD GATE (W1 gates B, §11.2): its one runner, each fact read through its owner's reader. The witness ports are
   // door process B's (`continuity/witnessPorts.ts`): `unmeasured` (502) until the fleet's ccd advertises `door-witness-v1`.
   const noCoord = 'no coordination store';
@@ -2273,6 +2288,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     counter: (g, c) => (deps.coord === undefined ? 'unmeasured' : advanceCounterGuarded(deps.coord.db, g, c)),
     ...witnessPorts({ coord: deps.coord, fleetState: () => deps.fleetState, journal: deps.overlordAuthority ?? NO_LADDER_AUTHORITY, clock: { wall: () => deps.time.clock.wall() }, entropy: { hex: (n) => deps.time.entropy.hex(n) }, push: (p) => notifyPushOnly(deps, p, 'ccrc-server: the unwitnessed-latch push was rejected') }),
     recordFenceRefusal: (row) => { if (deps.coord === undefined || !recordFenceRefusal(deps.coord.db, row).ok) console.warn(`ccrc-server: a fence refusal at ${row.door} (${row.why}) could not be recorded`); },
+    // The timer doors' profile read (Overlord W1): the other-lane refusals' one reader; asking its designation first notes the
+    // unmeasured episode on their one module-scope latch, so the whole server logs one line an episode.
+    profile: (id) => { otherLaneReads.designation(); return otherLaneReads.profile(id); },
   };
   const gate = overlordGateRun(gateDeps);
   // The inbox wake asks the same readers as a read (no fence, no witness, nothing recorded), through its own handle.
@@ -2292,8 +2310,15 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const designationStore = deps.coord !== undefined && deps.overlordAuthority !== undefined ? { coord: deps.coord, journal: deps.overlordAuthority } : undefined;
   const overlordStore = designationStore ?? NO_OVERLORD_STORE;
   if (overlordStore === NO_OVERLORD_STORE) console.warn('ccrc-server: the Overlord designation doors answer unavailable (no coordination store or authority journal)');
+  // D-5242: waking a hibernated row is an ASKED wake, recorded in the wake budget's window so the mail lane's automatic wakes do
+  // not land on top of it; read from the listing alone, an unlistable registry records nothing. The ensure route and Restart's.
+  const askedWake = async (id: string): Promise<void> => {
+    if (watcher?.admitWake === undefined) return;
+    const names = await deps.io.readdir(deps.cfg.registryDir);
+    if (names !== null && names.includes(`${id}.hibernated`)) watcher.admitWake('asked', id);
+  };
   const overlordBody = ccdOverlordBody({
-    runCcd: deps.runCcd, fleetState: () => deps.fleetState, rowOf: (id) => readSessionRecord(deps.io, deps.cfg, id),
+    runCcd: deps.runCcd, fleetState: () => deps.fleetState, rowOf: (id) => readSessionRecord(deps.io, deps.cfg, id), askedWake,
     generationOf: (id) => childReclaimGenerationRead(deps.io, deps.cfg.registryDir, id),
     // The stop route's own identity measurement, pair refusal and argv, handed over: the route and this lane share one of each.
     stop: stopCreatedOf({
@@ -2303,26 +2328,39 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     projects: async () => { const l = await listProjects(deps.io, deps.cfg, undefined, projectWalk); return l.registry === 'listed' ? l.projects.map((p) => p.name) : null; },
     projectsChanged: () => projectWalk.drop(),
   });
-  // The Overlord's inbox doors (W1 inbox piece): box-token lanes behind the gate above, each read counted and recorded by the one runner.
+  // The Overlord's inbox doors (W1 inbox piece) and its history door (W1 PR B1): box-token lanes behind the gate above, each read
+  // counted and recorded by the one runner; the history door's link is the fleet state's, the one agent link this server holds.
+  const readRunner = runOverlordRead({ ledger: deps.operatorModel, now: () => deps.time.clock.wall(),
+    turn: (id, uuid) => readTurnMarkMeasured(deps.io, deps.cfg.registryDir, id, uuid, null).then((r) => (r.ok ? r.state : r.reason), () => 'unmeasured' as const) });
   registerOverlordInboxRoutes(app, {
-    mailToken: () => deps.mailToken ?? null, gate, inboxStore: deps.operatorModel, reads: deps.coord, continuityLive, now: () => deps.time.clock.wall(),
-    readRunner: runOverlordRead({ ledger: deps.operatorModel, now: () => deps.time.clock.wall(),
-      turn: (id, uuid) => readTurnMarkMeasured(deps.io, deps.cfg.registryDir, id, uuid, null).then((r) => (r.ok ? r.state : r.reason), () => 'unmeasured' as const) }),
+    mailToken: () => deps.mailToken ?? null, gate, inboxStore: deps.operatorModel, reads: deps.coord, continuityLive, now: () => deps.time.clock.wall(), readRunner,
   });
-  // The continuity routes (Overlord §3.3.11, W1a): the hook's start report, a box-token lane in a file of its own.
-  registerContinuityRoutes(app, {
-    // The loads door's settle step (W1 sandbox B, Task 9): the designation's writers and its one drain, on the serialiser.
-    settle: designationStore === undefined ? undefined : { serial: coordRoutes.serial, read: () => designationStore.coord.designationRead(),
+  registerOverlordHistoryRoutes(app, { mailToken: () => deps.mailToken ?? null, gate, readRunner, io: deps.io, links: () => (deps.fleetState === undefined ? [] : [deps.fleetState]) });
+  // The Overlord's account reads, one object for the designation doors and the designation's lane port.
+  const overlordAccountReads = { roster: () => deps.cfg.roster, limits: () => readLimits(deps.io, deps.cfg), shares: () => readSharesMeasured(deps.io, deps.cfg.registryDir) };
+  // The loads door's settle step (W1 sandbox B, Task 9): the designation's writers and its one drain, on the serialiser.
+  const settlePort: SandboxSettlePort | undefined = designationStore === undefined ? undefined : { serial: coordRoutes.serial, read: () => designationStore.coord.designationRead(),
       expected: () => expectedSurfaceOf('overlord', deps.overlordSandbox?.ownLists), settled: deps.overlordSandbox?.settled,
-      goLive: (id, g, at) => { const r = designationStore.coord.goLive(designationStore.journal, id, g, at); return r.ok ? { ok: true } : { ok: false, detail: r.detail }; },
+      goLive: (id, g, at) => { const r = designationStore.coord.goLive(designationStore.journal, id, g, at); return r.ok ? { ok: true, previous: r.changed ? r.previous : null } : { ok: false, detail: r.detail }; },
       failPending: (id, at) => designationStore.coord.failPending(id, 'overlord-sandbox-unmet', at, true),
       drain: async (id, unrecorded) => { await drainOwedStops({ body: overlordBody, coord: designationStore.coord }, [id], new Set(unrecorded ? [id] : [])); },
-      workspaceOf: async (id) => { const p = measuredProjectOf(await readSessionRecord(deps.io, deps.cfg, id)); return p === null ? { kind: 'unmeasured', reason: 'the registry did not measure its project' } : { kind: 'measured', project: p }; } },
+      workspaceOf: async (id) => { const p = measuredProjectOf(await readSessionRecord(deps.io, deps.cfg, id)); return p === null ? { kind: 'unmeasured', reason: 'the registry did not measure its project' } : { kind: 'measured', project: p }; } };
+  // Designation B: the watcher's one port into the designation (the deadline sweep, the write-set before each renewal).
+  if (settlePort !== undefined && designationStore !== undefined) {
+    const sc = designationStore.coord;
+    watcher?.useOverlordLane?.(overlordLanePortOf({ serial: coordRoutes.serial, coord: sc, body: overlordBody, clock: { wall: () => deps.time.clock.wall() }, facts: overlordAccountReads,
+      settle: { fact: (id) => settleFactOf(settlePort, sc, id), again: (id, startId) => settleLoads(settlePort, sc, id, startId, () => deps.time.clock.wall()) } }));
+  }
+  // The continuity routes (Overlord §3.3.11, W1a): the hook's start report, a box-token lane in a file of its own.
+  registerContinuityRoutes(app, {
+    settle: settlePort,
     coord: deps.coord, mailToken: () => deps.mailToken ?? null, wall: () => deps.time.clock.wall(), operatorModel: () => deps.operatorModel,
     entropy: { hex: (n) => deps.time.entropy.hex(n) },
     pickUp: { sessionOf: (m) => deps.operatorModel?.messageSessionOf(m) ?? { kind: 'unmeasured', why: 'no private store' },
       stateOf: (m) => deps.operatorModel?.messageStateOf(m) ?? { kind: 'unmeasured', why: 'no private store' },
-      pickUp: (m, at) => deps.operatorModel?.moveMessage(m, 'pick-up', 'hook', at) ?? { ok: false, error: 'not-open', detail: 'no private store' } },
+      // The pick-up's move and its sequence line, in one synchronous segment (call 1218).
+      pickUp: (m, at) => deps.operatorModel === undefined ? { ok: false, error: 'not-open', detail: 'no private store' }
+        : moveOperatorMessage({ store: deps.operatorModel, coordDb: deps.coord?.db, warn: (l) => { console.warn(l); } }, m, 'pick-up', 'hook', at) },
     attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'fromUuid'),
     attributeReader: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid'),
     // The card's registry reads (the row's child mark, or that the registry could not say; its incarnation) and declared
@@ -2337,6 +2375,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     },
     // The timer set door's stamp: two agreeing reads of `.generation` (slug setter-stamp-is-a-double-read).
     setterStamp: (id) => incarnationOf({ io: deps.io, registryDir: deps.cfg.registryDir }, id),
+    restoreGeneration: () => deps.overlordRestore?.restoreGeneration() ?? { kind: 'unmeasured' },
     operatorActor: consoleActor, gate,
     notice,
     masker: deps.masker,
@@ -2413,12 +2452,31 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // place, and a replaced one too. Registered UNCONDITIONALLY: before the handshake, and in local mode with no
   // measured caps, the adapter itself refuses every call before any exec. The read registration is never handed a
   // fetcher; only the refresh is.
-  const docs = composeDocs({ runCcd: deps.runCcd, get fleetState() { return deps.fleetState; } });
+  const docsCoord = deps.coord;
+  const docs = composeDocs({ runCcd: deps.runCcd, get fleetState() { return deps.fleetState; } }, {
+    settings: docsCoord == null ? undefined : {
+      // Call at use, like the neighbouring ports: a partial store in an unrelated fixture need not implement these.
+      read: () => docsCoord.readDocsSettings(),
+      write: (...args) => docsCoord.writeDocsSettings(...args),
+    },
+  });
   await app.register(async (app) => {
     installDocsRequestPolicy(app);
     installDocsResponsePolicy(app);
     registerDocsReadRoutes(app, docs.readers, docs.lanes);
     registerDocsRefreshRoute(app, docs.readers, docs.fetchers, docs.lanes);
+    // The outside folders (X2 P2.3, spec 2026-11-18 §4.1 and §7): the reads never see the registry's writes, and both
+    // ask L1 with the sign-in state and whether the request carries a session; Add also takes the account gate.
+    const folderSignIn = (): 'armed' | 'dark' => (deps.cfg.authEnabled ? 'armed' : 'dark');
+    const folderSession = (req: FastifyRequest): boolean => { const d = sessionAuth(req); return d.allow && d.reason === 'session'; };
+    registerDocsFolderReadRoutes(app, docs.folderReaders, docs.lanes, { signIn: folderSignIn, hasSession: folderSession });
+    registerDocsFolderRegistryRoutes(app, docs.folderRegistries, docs.lanes,
+      { gate: accountGate, signIn: folderSignIn, hasSession: folderSession });
+    registerDocsSettingsRoutes(app, {
+      ...docs.settings, gate: accountGate, signIn: folderSignIn, hasSession: folderSession,
+      now: () => deps.time.clock.wall(),
+      maskChanges: (answer) => !isDeepStrictEqual((deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(answer), answer),
+    });
   });
   registerReaderLabRoutes(app, readerLab);
   // The operator's character choice (the Overlord face plan, Task 6), from its own file: two session-gated routes, no box token.
@@ -2426,15 +2484,18 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // The Overlord's designation doors (Overlord W1 designation A, plan Tasks 4 and 5): the body over ccd, with the stop route's own
   // path as `stopCreated`, and the first prompt through the renewal lane's `SessionHost`.
   registerOverlordRoutes(app, {
-    gate: accountGate, identity, serial: coordRoutes.serial, ...overlordStore, consoleFacts: (req) => ({ armed: deps.cfg.authEnabled, device: deps.cfg.authEnabled ? sessionAuth(req).device : null }), host: renewalHostOf(deps, deps.coord ?? { startsOf: () => ({ ok: false, detail: 'no coordination store' }) }, null),
-    ladder: ladderDeps, restore: deps.overlordRestore,
+    gate: accountGate, identity, serial: coordRoutes.serial, ...overlordStore, exchange: deps.overlordAuthorityExchange, consoleFacts: (req) => ({ armed: deps.cfg.authEnabled, device: deps.cfg.authEnabled ? sessionAuth(req).device : null }), host: renewalHostOf(deps, deps.coord ?? { startsOf: () => ({ ok: false, detail: 'no coordination store' }) }, null),
+    ladder: ladderDeps, restore: deps.overlordRestore, readiness: () => deps.overlordReadiness?.read() ?? null,
     // Read at call time, as the continuity routes read `deps.time`: a test server may hand none.
     clock: { wall: () => deps.time.clock.wall() }, entropy: { uuid: () => deps.time.entropy.uuid(), hex: (n) => deps.time.entropy.hex(n) }, dec: pwaDec,
     body: overlordBody,
     facts: {
       ccdWords: () => deps.fleetState?.ccdVerbs ?? null, serverWords: SERVER_CAPS, builds: () => inventoryBuildAgreement(deps.coord ?? { nodes: () => [] }),
-      roster: () => deps.cfg.roster, limits: () => readLimits(deps.io, deps.cfg), shares: () => readSharesMeasured(deps.io, deps.cfg.registryDir),
+      ...overlordAccountReads,
       authority: deps.overlordAuthorityGuard === undefined ? undefined : () => deps.overlordAuthorityGuard!.state(),
+      // Designation B: Rebind's re-measurement is the reclaim door's own; Restart reads the watcher's last listing and fleet.
+      oldBody: async (id) => (deps.coord === undefined ? 'unmeasurable' : (await measureClaimant({ coord: deps.coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux }, id, deps.time.clock.wall())).state),
+      body: (id) => overlordBodyOf({ sessionId: id, listedIds: watcher?.currentRegistryIds() ?? null, session: watcher?.currentFleet()?.find((x) => x.id === id) ?? null }),
     },
   });
   registerResponseRoutes(app, { coord: deps.coord, time: deps.time, gate: accountGate, notice, actorOf: consoleActor });
@@ -2481,6 +2542,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   };
 
   const drawerInterrupts = new DrawerInterruptThrottle();   // D-5237: one lone ESC / Ctrl-C row per session per 2 s
+  const drawerMarks = new DrawerInterruptThrottle(undefined, { earlierAdmits: true });   // the drawer's input marks as a typed prompt does, once per session per 2 s; a wall clock stepped back admits
   app.get('/ws/pty/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };
     const q = req.query as { cols?: string; rows?: string };
@@ -2568,6 +2630,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
           p.write(m.data);   // D-5237: the bytes pass through unchanged; a lone ESC or Ctrl-C is also recorded
           const src = drawerInterruptSource(m.data);
           if (src !== null && drawerInterrupts.admit(id, Date.now())) recordInterrupt({ notice }, id, src, 'sent');
+          if (deps.coord !== undefined && drawerMarks.admit(id, deps.time.clock.wall())) markOperatorPrompt(deps.coord, id, deps.time.clock.wall(), (l) => console.warn(l));
         } else if (m.type === 'resize' && typeof m.cols === 'number' && typeof m.rows === 'number') {
           p.resize(m.cols, m.rows);
         }
@@ -2809,7 +2872,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // The launch-profile lane owns `compact` while it and `continuity` are live (`compactRefusal`, review 2024 F3, 2149 F11).
     const owned = compactRefusal(field, (lane) => deps.coord !== undefined && laneArmRowViewOf(lane, deps.coord.laneArmSetting(lane)).live);
     if (owned !== null) return refuseRoute(reply, 'bad-request', { detail: owned });
-    return runCcdOr502(reply, CCD_ARGV.routeApply(id, field, value, pwaDec(req)));
+    const applied = await runCcdOr502(reply, CCD_ARGV.routeApply(id, field, value, pwaDec(req)));
+    // The pick was applied (a ccd failure has already sent its 502): marks as a typed prompt does.
+    if (!reply.sent && deps.coord !== undefined) markOperatorPrompt(deps.coord, id, deps.time.clock.wall(), (l) => console.warn(l));
+    return applied;
   });
 
   /**
@@ -2858,6 +2924,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     retireSecret: (laneId) => { deps.masker?.retireSecret(laneId); },
     ...(deps.plan === undefined ? {} : { plan: deps.plan }),
     liveAsk, liveSpend: (sid) => (watcher === undefined ? { kind: 'not-ready' as const } : watcher.liveSpendReading(sid)),
+    // Programme lifecycle W2: the start naming a session and the hand-over run the reclaim ladder on the serialiser.
+    ...(deps.coord === undefined ? {} : { lifecycle: { reclaim: { coord: deps.coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux, otherLaneReads },
+      serial: coordRoutes.serial, readingOf: (s: string) => coordinatorReadingOf(deps.io, deps.cfg, s),
+      attribute: (id: string, uuid: string) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid') } }),
   });
 
   /**
@@ -3008,6 +3078,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
     const res = await moveDialogTab(sendDeps, id, req.body ?? null);
     answeredFrame(id, 'dialog/tab', res);
+    if (res.ok && deps.coord !== undefined) markOperatorPrompt(deps.coord, id, deps.time.clock.wall(), (l) => console.warn(l));   // the pane moved: marks as a typed prompt does
     if (res.ok) return res;
     return reply.code(res.error === 'bad-request' ? 400 : 409).send(res);
   });
@@ -3039,6 +3110,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     });
     // D-5237: every answer is recorded with the client's source (anything else is `unknown`) and its outcome; never pushed.
     recordInterrupt({ notice }, id, interruptRouteSource((req.body as { source?: unknown } | null)?.source), res.ok ? 'sent' : res.error);
+    if (res.ok && deps.coord !== undefined) markOperatorPrompt(deps.coord, id, deps.time.clock.wall(), (l) => console.warn(l));   // Escape was sent: marks as a typed prompt does
     return res.ok ? res : reply.code(409).send(res);
   });
 
@@ -3055,6 +3127,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
     const res = await submitEnter(sendDeps, id, body.expect);
+    if (res.ok && deps.coord !== undefined) markOperatorPrompt(deps.coord, id, deps.time.clock.wall(), (l) => console.warn(l));   // marks as a typed prompt does
     return res.ok ? res : reply.code(409).send(res);
   });
 
@@ -3397,13 +3470,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // literally and dies on an absent row, so this is no redirect today; the
     // check keeps a name ccd could read as a flag from ever reaching the argv.
     if (!isRegistryId(id)) return refuseRoute(reply, 'bad-session-id');
-    // D-5242: waking a hibernated row is an ASKED wake — never refused for the fleet-wide wake budget (the operator
-    // asked), but recorded in its window so the mail lane's automatic wakes do not land on top of it. Read from the
-    // listing alone; an unlistable registry records nothing and the call goes ahead exactly as before.
-    if (watcher?.admitWake !== undefined) {
-      const names = await deps.io.readdir(deps.cfg.registryDir);
-      if (names !== null && names.includes(`${id}.hibernated`)) watcher.admitWake('asked', id);
-    }
+    // D-5242: an ASKED wake, never refused for the fleet-wide wake budget (the operator asked); `askedWake` above.
+    await askedWake(id);
     return runCcdOr502(reply, CCD_ARGV.ensure(id));
   });
 
@@ -3757,6 +3825,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       accounts,
     };
   });
+  // The operator's runway read (serviceability PR B; the home plan's question 6): session-gated, masked, read-only.
+  registerPoolRunwayRoute(app, { roster: () => deps.cfg.roster, limits: () => readLimits(deps.io, deps.cfg), coord: deps.coord, clock: { wall: () => deps.time.clock.wall() } });
 
   /**
    * The wrapper a legacy stop names: the ORIGINAL one baked into the id when the id ends in `-<project>`, else the
@@ -4353,6 +4423,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         ...claimsPort(coord, id),
         abandonRefusal,
         abandon,
+        boundProgramme: (sid) => { const own = coord.programmeOf(sid, null); return own !== null && own.placeholder === null ? own.slug : null; },
+        endProgramme: (slug) => { coord.decideProgramme({ slug, to: 'abandoned', edge: 'ended', actor: OPERATOR_UNMEASURED,
+          why: 'archived with programme end' }, Date.now()); },
       }, id, flags, measure));
     if (!plan.ok) return replyArchiveRefused(reply, id, plan);
     return actArchive(reply, plan, flags, archiveArgv, {
@@ -4592,7 +4665,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   // Static PWA (populated by Plan 2's build): serve dist-pwa/ at / with SPA
   // fallback to index.html; absent -> skip (API-only mode).
-  const pwaRoot = findPwaRoot();
+  const pwaRoot = deps.pwaRoot !== undefined ? deps.pwaRoot : findPwaRoot();
   if (pwaRoot) {
     // No size/mtime validators: a release's sw.js kept the same weak ETag, so no deploy reached a
     // browser with the worker installed (pwaStatic.ts).
@@ -4622,6 +4695,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     ? { store: review.store, wall: () => reviewClock.wall() }
     : null;
   registerReviewOpenRoute(app, reviewAccess);
+  registerReviewPageRoutes(app, pwaRoot);
   const reviewAbort = new AbortController();
   const node = docs.readers.primary;
   const reviewSweep = reviewAccess === null ? null : startReviewSweep(reviewAccess.store, {

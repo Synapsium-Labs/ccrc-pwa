@@ -134,14 +134,20 @@ describe('states', () => {
     expect(epicIsDone([{ state: 'open' }], [])).toBe(false);
     expect(epicIsDone([{ state: 'met' }], [{ state: 'started' }])).toBe(false);
   });
-  it('programmeEnd: state done with a planned epic is live; abandoned with no planEnd is live; planEnd wins', () => {
-    const base = { planEnd: null, programState: 'done' as const, epics: [{ state: 'planned' as const }], openTickets: 0 };
+  // Programme lifecycle W1 (D-8983): a RECORDED decision syncs as itself, Abandoned never as completed. W1 review (C5): a D-51
+  // end the migration kept for the operator (state ended, `planEnd` unset) syncs exactly as on `main`, so nothing nobody
+  // decided closes in Linear: red with the kept arm reading the state alone (`abandoned` with no planEnd would cancel).
+  it('programmeEnd: a recorded decision syncs as itself, Abandoned never as completed; a kept D-51 end syncs as on main', () => {
+    const base = { planEnd: null, programState: 'done', epics: [{ state: 'planned' as const }], openTickets: 0 };
+    expect(programmeEnd({ ...base, planEnd: 'done' })).toBe('done');
+    expect(programmeEnd({ ...base, programState: 'abandoned', planEnd: 'abandoned', epics: [{ state: 'done' as const }] })).toBe('abandoned');
+    for (const live of ['active', 'paused', 'unknown', 'archived']) expect(programmeEnd({ ...base, programState: live })).toBeNull();
+    // the kept rows, `main`'s rule row by row
     expect(programmeEnd(base)).toBeNull();
     expect(programmeEnd({ ...base, programState: 'abandoned', epics: [{ state: 'done' }] })).toBeNull();
     expect(programmeEnd({ ...base, epics: [{ state: 'done' }, { state: 'dropped' }] })).toBe('done');
     expect(programmeEnd({ ...base, epics: [] })).toBeNull();
     expect(programmeEnd({ ...base, epics: [{ state: 'done' }], openTickets: 1 })).toBeNull();
-    expect(programmeEnd({ ...base, planEnd: 'abandoned' })).toBe('abandoned');
   });
   it('ticketIsHeld: started, or open with a run (a planned run); a done ticket keeps its runId and is not held', () => {
     expect(ticketIsHeld({ state: 'started', runId: 1 })).toBe(true);

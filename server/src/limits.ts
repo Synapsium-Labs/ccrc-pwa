@@ -75,10 +75,18 @@ export interface AccountLimits {
    *  `authDead` it leaves SCORING and the preferred fallback and never leaves `live`; ccd's `_ws_lane_cannot_spawn`
    *  is the twin, and `projected-home.test.ts` drives both over one seeded registry. */
   spawnBlocked?: true;
+  /** The limit watchdog's mark stands on this lane (`~/.cc-sessions/<wrapper>-provfail`): its provider answers several
+   *  turns with errors (`provFailMarkStands`). Emitted ONLY when true, and absent means placeable. A PREFERENCE of
+   *  PLACEMENT and nothing else: `projectHome` uses a marked lane when no unmarked, uncondemned one can take the work. */
+  providerFailing?: true;
 }
 
-const FIVE_WINDOW = 18000;      // ccd: a five reading older than its own 5h window has rolled over
-const SEVEN_WINDOW = 604800;
+/** The five-hour window: a five reading older than this has rolled over (ccd's rule). Exported for the runway's reading of
+ *  a stored sample (`poolRunway.ts`), which applies `readLimits`' two rolled-over rules again at read time. */
+export const FIVE_WINDOW = 18000;
+/** The weekly window: a seven-day reading older than this has rolled over. Exported for the runway read's span and its
+ *  stored-sample rule (`poolRunway.ts`). */
+export const SEVEN_WINDOW = 604800;
 
 const numOrNull = (v: unknown): number | null => (typeof v === 'number' ? v : null);
 
@@ -112,6 +120,17 @@ const authDeadMarkerOk = (raw: string): boolean => {
   const sp = trimmed.indexOf(' ');
   const first = sp === -1 ? trimmed : trimmed.slice(0, sp);
   return /^[0-9]+$/.test(first);
+};
+
+/** How long a lane-failing mark means anything after its write: ccd's `PROVFAIL_TTL` is the twin. */
+const PROVFAIL_TTL_S = 1800;
+/** Mirrors ccd's `_provfail` over a mark's bytes: exactly `<epoch> <word>`, younger than `PROVFAIL_TTL_S` and dated at most
+ *  a minute ahead of this clock (one further ahead would never age out). FAIL-OPEN on anything else. */
+const provFailMarkStands = (raw: string, now: number): boolean => {
+  const m = /^([0-9]{1,12}) [a-z_]+$/.exec(raw.replace(/\n+$/, ''));
+  if (m === null) return false;
+  const at = Number(m[1]);
+  return at <= now + 60 && now - at < PROVFAIL_TTL_S;
 };
 
 const SPAWN_REFUSED_RC = new Set([2, 5]);
@@ -379,7 +398,7 @@ export function projectHome(
   // `default` skips the clause, so every caller that passes no class gets the
   // pre-slice-3 answer byte for byte. ccd's `_ws_least_loaded project [class]`
   // is the twin; `projected-home.test.ts` drives both over one fixture table.
-  const live = cls === 'default' ? eligible : eligible.filter((a) =>
+  const able = cls === 'default' ? eligible : eligible.filter((a) =>
     // `anthropic` is `telemetry === 'anthropic'`: an `openrouter` lane and a `none` compatible lane (D-5521)
     // are not Anthropic backends, so `fable` is `unservable` (`backend`) there.
     // A project side asks as `other`, byte for byte as before; a set side asks as `set-side` (the Overlord's arms).
@@ -391,12 +410,7 @@ export function projectHome(
   // seam ccd's `""` already has — kept identical on purpose rather than split,
   // because a second value here would make this function disagree with the
   // authority it forecasts. The caller is where they are told apart.
-  if (live.length === 0) return null;
-  // WHO COULD REPORT (D-5754): the lanes with a `~/.cc-limits` writer, `anthropic` (the statusline, through
-  // CCRC_MEASURED) and `codex` (its own publisher). `none` never reports, and neither does `openrouter`
-  // (D-5521; its meter is the key's credit), which `_account_measured` already skips for `firstm`. Spelled as
-  // a switch so a fifth telemetry value is a compile error here, not a lane that silently counts as reporting.
-  const scorable = live.filter((a) => reportsLimits(a.telemetry));
+  if (able.length === 0) return null;
   // ONE PREDICATE, TWO CONSUMERS, AND THAT IS THE MIRROR. `_ws_least_loaded`
   // reads `_authdead` once per candidate and spends the answer twice: a
   // condemned lane never enters the scored comparison, and it lands in the
@@ -411,6 +425,15 @@ export function projectHome(
   // last tier, exactly as ccd's `_ws_least_loaded` folds `_ws_lane_cannot_spawn` into its `condemned` variable.
   const notCondemned = (a: { id: string }): boolean =>
     limits[a.id]?.authDead !== true && limits[a.id]?.spawnBlocked !== true;
+  // ccd's `_ws_least_loaded` walks its lanes without the marked ones first, and again with them only when that walk found
+  // no lane that is not condemned: a lane whose provider is failing is tried last, never refused.
+  const live = able.some((a) => notCondemned(a) && limits[a.id]?.providerFailing !== true)
+    ? able.filter((a) => limits[a.id]?.providerFailing !== true) : able;
+  // WHO COULD REPORT (D-5754): the lanes with a `~/.cc-limits` writer, `anthropic` (the statusline, through
+  // CCRC_MEASURED) and `codex` (its own publisher). `none` never reports, and neither does `openrouter`
+  // (D-5521; its meter is the key's credit), which `_account_measured` already skips for `firstm`. Spelled as
+  // a switch so a fifth telemetry value is a compile error here, not a lane that silently counts as reporting.
+  const scorable = live.filter((a) => reportsLimits(a.telemetry));
   const scored = scorable
     .filter(notCondemned)
     .map((a) => ({ wrapper: a.id, score: measured(limits[a.id]) }))
@@ -579,6 +602,15 @@ export async function readLimits(
       return content !== null && authDeadMarkerOk(content) ? wrapper : null;
     }))).filter((w): w is string => w !== null),
   );
+  // The same listing, a third suffix: the limit watchdog's lane-failing mark, type then content like the one above.
+  const provFailLanes = new Set(
+    (await Promise.all(regNames.filter((n) => n.endsWith('-provfail')).map(async (n) => {
+      const kind = await io.lstatMeasured(path.join(cfg.registryDir, n));
+      if (!kind.ok || kind.kind !== 'regular') return null;
+      const content = await io.readFile(path.join(cfg.registryDir, n));
+      return content !== null && provFailMarkStands(content, now) ? n.slice(0, -'-provfail'.length) : null;
+    }))).filter((w): w is string => w !== null),
+  );
   // A7-3: the demotion is decided over the caller's registry rows; a caller with none (a request-time read) carries
   // no demotion: absence permits (the coordinator's ruling F2 (a), run 2785).
   const spawnBlockedLanes = records === undefined ? new Set<string>() : spawnBlockedLanesOf(records, now);
@@ -641,12 +673,14 @@ export async function readLimits(
       out[wrapper] = { five, seven, ts, fiveResetAt, sevenResetAt, fiveRolledOver, sevenRolledOver,
                        ...(fiveWindowMinutes === null ? {} : { fiveWindowMinutes }),
                        disabled: disabledLanes.has(wrapper), authDead: authDeadLanes.has(wrapper),
-                       ...(spawnBlockedLanes.has(wrapper) ? { spawnBlocked: true as const } : {}) };
+                       ...(spawnBlockedLanes.has(wrapper) ? { spawnBlocked: true as const } : {}),
+                       ...(provFailLanes.has(wrapper) ? { providerFailing: true as const } : {}) };
     } catch {
       out[wrapper] = { five: null, seven: null, ts: null, fiveResetAt: null,
                        sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false,
                        disabled: disabledLanes.has(wrapper), authDead: authDeadLanes.has(wrapper),
-                       ...(spawnBlockedLanes.has(wrapper) ? { spawnBlocked: true as const } : {}) };
+                       ...(spawnBlockedLanes.has(wrapper) ? { spawnBlocked: true as const } : {}),
+                       ...(provFailLanes.has(wrapper) ? { providerFailing: true as const } : {}) };
     }
   }
   // A lane can be markered off before it ever writes telemetry (fresh
@@ -673,13 +707,14 @@ export async function readLimits(
   // the fleet — the exact self-reinforcing hole `disabled` exists to close, and
   // an auth-dead lane falls into it identically. `inRoster` is doing the same
   // job for both: the registry also holds dotless markers that name no account.
-  for (const wrapper of new Set([...disabledLanes, ...authDeadLanes, ...spawnBlockedLanes])) {
+  for (const wrapper of new Set([...disabledLanes, ...authDeadLanes, ...spawnBlockedLanes, ...provFailLanes])) {
     if (wrapper in out) continue;
     if (!inRoster(cfg.roster, wrapper)) continue;
     out[wrapper] = { five: null, seven: null, ts: null, fiveResetAt: null,
                      sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false,
                      disabled: disabledLanes.has(wrapper), authDead: authDeadLanes.has(wrapper),
-                     ...(spawnBlockedLanes.has(wrapper) ? { spawnBlocked: true as const } : {}) };
+                     ...(spawnBlockedLanes.has(wrapper) ? { spawnBlocked: true as const } : {}),
+                     ...(provFailLanes.has(wrapper) ? { providerFailing: true as const } : {}) };
   }
   return out;
 }

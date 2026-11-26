@@ -24,7 +24,9 @@ const NAME_LIST_ROUTES = 'server/src/operatorModel/nameListRoutes.ts';
 const LINKING_ROUTES = 'server/src/linking/routes.ts';
 // The Overlord's inbox doors (W1 inbox piece): a routes file of its own, beside `overlordRoutes.ts`, which holds only the operator's doors.
 const INBOX_ROUTES = 'server/src/coord/overlordInboxRoutes.ts';
-const FILES = [OVERLORD_ROUTES, CONTINUITY_ROUTES, LEDGERS_ROUTES, NAME_LIST_ROUTES, LINKING_ROUTES, INBOX_ROUTES] as const;
+// The Overlord's history door (W1, PR B1): a routes file of its own beside the inbox's.
+const HISTORY_ROUTES = 'server/src/coord/overlordHistoryRoutes.ts';
+const FILES = [OVERLORD_ROUTES, CONTINUITY_ROUTES, LEDGERS_ROUTES, NAME_LIST_ROUTES, LINKING_ROUTES, INBOX_ROUTES, HISTORY_ROUTES] as const;
 /** Table 11.1d's server words (the later waves' words join here when their pieces land). */
 const SERVER_WORDS = ['continuity-v1', 'timers-v1', 'overlord-v1'];
 const VERBS = new Set(['get', 'post', 'put', 'delete']);
@@ -59,7 +61,7 @@ describe('the door table against the routes files', () => {
       expect(regs[r.file], key).toContain(rowRegistration(r));
     }
   });
-  for (const f of [OVERLORD_ROUTES, CONTINUITY_ROUTES, NAME_LIST_ROUTES, INBOX_ROUTES]) {
+  for (const f of [OVERLORD_ROUTES, CONTINUITY_ROUTES, NAME_LIST_ROUTES, INBOX_ROUTES, HISTORY_ROUTES]) {
     it(`${f}: every registration has a row or a NOT_OVERLORD_DOORS entry`, () => {
       expect(unaccounted(f, regs[f]!)).toEqual([]);
     });
@@ -75,7 +77,7 @@ describe('the door table against the routes files', () => {
     }
   });
   it('CONTROL: a planted registration with no row or entry is found, in each exhaustively scanned file', () => {
-    for (const f of [OVERLORD_ROUTES, CONTINUITY_ROUTES, NAME_LIST_ROUTES, INBOX_ROUTES]) {
+    for (const f of [OVERLORD_ROUTES, CONTINUITY_ROUTES, NAME_LIST_ROUTES, INBOX_ROUTES, HISTORY_ROUTES]) {
       const planted = `${sourceOf(f)}\napp.post('/api/planted/door', async () => 1);\n`;
       expect(unaccounted(f, registrationsOf(planted, f)), f).toEqual(['POST /api/planted/door']);
     }
@@ -116,7 +118,7 @@ describe('the table itself', () => {
   });
   it('the rows on landing include the ratify and designation C Settings doors already on main', () => {
     expect(rows.map(([k]) => k)).toEqual([
-      'designate', 'retire', 'designation', 'model', 'account-set', 'ladder', 'rung', 'pause', 'latch-clear',
+      'designate', 'retire', 'rebind', 'restart', 'designation', 'model', 'account-set', 'ladder', 'readiness', 'rung', 'pause', 'latch-clear', 'witness',
       // Confirm the restore (authority journal C): the guard's state, and the door.
       'restore-read', 'restore-confirm',
       'portfolio-rank', 'goals-ratify', 'private-names-read', 'private-names-write',
@@ -125,6 +127,10 @@ describe('the table itself', () => {
       'link-team',
       // The Overlord's inbox doors (W1 inbox piece): the inbox, one message and its acknowledge.
       'inbox', 'messages', 'acknowledge',
+      // The Overlord's history door (W1, PR B1).
+      'history',
+      // The timer doors (W1, the Overlord's timers): every other session keeps W1a's path.
+      'timer-set', 'timer-list', 'timer-cancel',
     ]);
   });
 });
@@ -199,7 +205,7 @@ describe('every operator door that writes records its actor through the identity
 
   it('there are admin operator rows to check (a zero would make the rest vacuous), and read rows are not among them', () => {
     expect(adminRows.map(([k]) => k)).toEqual([
-      'designate', 'retire', 'model', 'account-set', 'rung', 'pause', 'latch-clear', 'restore-confirm', 'portfolio-rank', 'goals-ratify',
+      'designate', 'retire', 'rebind', 'restart', 'model', 'account-set', 'rung', 'pause', 'latch-clear', 'restore-confirm', 'portfolio-rank', 'goals-ratify',
       'private-names-write',
     ]);
     for (const [k, r] of rows) if (r.group === 'operator' && r.verbClass === 'view') expect(adminRows.map(([x]) => x), k).not.toContain(k);

@@ -119,6 +119,7 @@ real values: `deploy/reference-fleet.md` (gitignored).
   **`ws-lease-mark` is forbidden to every session too**: it is the SERVER's act on a delegation lease's carrier only (`ccd ws-lease-mark --lease <id> …`), composed after the server has journalled the generation it writes, behind `lease-mark-v1` and the installed direct entry — never a session's verb, and never run against the live host from a shell or a test.
   **`delegation-adopt` is forbidden to every session too** (D-8112): it is the SERVER's act on the delegation lane's adoption switch only (`ccd delegation-adopt --state on|off`, the one writer of `$REG/delegation-adopt`), composed by `POST /api/coord/delegation-adopt`, the operator's session-gated door, behind the installed direct entry, past its refusal rule (D-8113), which refuses `on` without a signed-in operator — never a session's verb, coordinators and workers included, and never run against the live host from a shell or a test. The child hook and the child deny file stop a child; for a top-level session it is a convention, as it is for `ws-lease-mark`.
   **`keep-awake` is forbidden to every session too** (Overlord W1 ccd arms): it is the SERVER's act on one session's two sleep markers (`ccd keep-awake --session <id> --state on|off`, the one writer of `$REG/<id>.no-hibernate` and `$REG/<id>.no-roll` in the tree), composed by the designation's doors, behind the installed direct entry. It removes only markers holding its own stamp, and it stops no session — never a session's verb, and never run against the live host from a shell or a test. The child hook and the child deny file stop a child; for a top-level session it is a convention, as it is for `ws-lease-mark`.
+  **`docs-folder` is forbidden to every session too** (X2 P2, spec 2026-11-18 §7): it is the SERVER's act on the Docs reader's outside-folder registry only (`ccd docs-folder --list`, `--add <label> --path <abs>` and `--remove <label>`, the one writer of `$REG/docs-folders/<label>`), composed by the docs plugin's folder doors (Add behind the account gate's step-up, so it refuses while sign-in is dark; Remove works dark), behind `docs-folders-v1` and the installed direct entry, in every form, `--list` included — never a session's verb, and never run against the live host from a shell or a test. `docs-folder-read`, the folder read, stays an ordinary verb. The child hook and the child deny file stop a child; for a top-level session it is a convention, as it is for `ws-lease-mark`.
   **`limit-watchdog` and `limit-wait` are no session's verbs either** (D-8123): `ccd limit-watchdog` is the fleet limit watchdog's one pass, run once a minute by `ccd-limit-watchdog.timer` (its own timer, never a supervisor tick), and `ccd limit-wait <id>` records the operator's "Wait until reset" choice behind the session-gated route beside the swap route. Neither is run by hand against the live host from a shell or a test, and neither ever sends a key: the rescue ends the session and resumes it on another account, and the rate-limit menu ("What do you want to do?") is never typed into, because an Enter or a digit there can pick "Switch to usage credits" (`ccd-limit-no-keys.test.ts` cuts the function bodies out of `ccd/ccd` and refuses a key sender in any of them).
 - **Rolling, installing and selecting a Claude Code build are never a session's** (D-5696, spec 2026-10-18 §7.6):
   `ccd roll`, every `ccd claude …` verb (the operator's switches) and any write into `~/.local/share/claude/versions/`
@@ -153,7 +154,7 @@ real values: `deploy/reference-fleet.md` (gitignored).
   `~/.ccrc/linear.key` (D-7675) or the operator's secret slots `~/.ccrc/operator-secrets/` (D-7714), or the Overlord's private store and every copy of it (`~/.ccrc/operator-model.db*`, `~/.ccrc/privacy-journal.log`, `~/.ccrc/privacy-journal.torn/`, `~/ccrc-backups/*/operator-model.db*`, `~/.ccrc/coordination-restore.stage/*/operator-model.db*`, `~/.ccrc/coordination-restore.foreign/*/operator-model.db*`); writes under `~/.cc-sessions/.auth/` or `~/.cc-sessions/.accounts/`; or prints the
   whole environment (bare `env`, `printenv`). They are the operator's, from
   the PWA's Accounts screen or their own shell. `~/.cc-sessions/.door/` is the Overlord's door process directory (its
-  tool-server config holds the launch nonce): no session reads or writes it. `ACCOUNT_DENY_RULES` (`shared/api.ts`) is passed to every session's
+  tool-server config holds the launch nonce): no session reads or writes it. `~/.ccrc/authority-witness.json` is the agent's held authority witness tuple: no session edits it (a read stays open). `ACCOUNT_DENY_RULES` (`shared/api.ts`) is passed to every session's
   spawn in `~/.cc-sessions/account-deny.settings.json`, the session hook's account arm refuses the path-qualified,
   quoted and `$VAR` forms, and the classifier marks the verbs forbidden, so no approval can rule one. It is an
   accident guard: `bash -c` with an assembled string, another interpreter or a script file runs past it. The same three
@@ -543,7 +544,10 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   settings choice, the collector switch — is gone without the snapshot every `ccrc update` (and `ccrc backup`) takes into
   `~/ccrc-backups/<ts>/` (`pool-edges.log` is never replayed). The landing line has an authority-recovery exception:
   `~/.ccrc/landing.log` restores no-run creation evidence, order edges, `fixesMain` and setter attribution before
-  service starts. Leave it in place when restoring coord.db; no backup copies it or restores an older copy over it.
+  service starts. Since landing order wave 5j it also restores the operator's pause of a project's line and the operator's
+  withdrawal of an entry (D-9045, D-9046), and a server older than wave 5j-a refuses to start on a journal that holds
+  either record, so once either door has been used a rollback below wave 5j-a leaves the server down until it rolls
+  forward. Leave it in place when restoring coord.db; no backup copies it or restores an older copy over it.
   The privacy journal, `~/.ccrc/privacy-journal.log` (the Overlord's private store, `operator-model.db`, which every backup
   snapshots and every restore puts back with coord.db as one set), is never copied into a snapshot or restored with one
   either: leave it in place, so a restored store never reissues a message id.
@@ -593,7 +597,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   question door family's claimant pair `POST
   /api/questions/:id/rule` and `POST /api/questions/:id/release` (W3 Q3f, D-7030), `POST /api/claims`, `POST
   /api/claims/:id/release`,
-  `POST /api/coordinators/:session/intent`, `POST /api/leases/:lease/retain`, `POST /api/ledger/deviations`, `GET /api/ledger`, `GET /api/landing`,
+  `POST /api/coordinators/:session/intent`, `POST /api/leases/:lease/retain`, `POST /api/ledger/deviations`, `GET /api/ledger`,
   `POST /api/landing/entries` and `POST /api/landing/order` (setter attribution, not coordinator authorisation), and the approvals lane's
   four (`POST /api/approvals`, `GET /api/approvals/:id/ruling`, `GET /api/approvals/key` and
   `GET /api/approvals/:id`, coordinator-first routing D-5298) and the programme ledgers' coordinator routes (plan PL3; their handlers
@@ -606,16 +610,24 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `POST /api/coord/programmes/:slug/calls` (D-8126; its handler is in `server/src/coord/coordCallsRoute.ts`, a lane source of its own
   for the census, attribution- then ownership-checked the same way, and in the EXEMPT table) and the remaining-work door
   `POST /api/coord/programmes/:slug/remaining` (Overlord W2; its handler is in `server/src/coord/programmeRemainingRoute.ts`,
-  a lane source of its own, checked the same way and in the EXEMPT table) all call
+  a lane source of its own, checked the same way and in the EXEMPT table) and the programme lifecycle's end proposal
+  `POST /api/programmes/:slug/end-proposal` (W2, D-8987: the bound coordinator proposes its programme's end with evidence;
+  registered in `server/src/coord/ledgersRoutes.ts`, attribution- then ownership-checked by the binding, and in the EXEMPT
+  table) all call
   `requireMailToken` outside both (the intent door, where a session declares its own coordinator
   intent through `ccrc-api`, is attribution-checked and sits in `auth/gate.ts`'s EXEMPT table like the claim lanes: its only
   caller holds the token and has no cookie). The Overlord's inbox doors, `GET /api/overlord/inbox`,
   `GET /api/overlord/messages/:id` and `POST /api/overlord/messages/:id/acknowledge` (Overlord W1 inbox; their handlers are in
   `server/src/coord/overlordInboxRoutes.ts`, a lane source of its own for the census), each check the box token in their own
   `onRequest`, then ask the Overlord gate with their own row's key, and sit in `auth/gate.ts`'s EXEMPT table like the linking
-  confirm. The dual-credential reads, including `GET /api/feed`,
+  confirm. So does the Overlord's history door, `POST /api/overlord/history` (Overlord W1 PR B1: a read whose search words ride the
+  body; its handler is in `server/src/coord/overlordHistoryRoutes.ts`, a lane source of its own for the census). The dual-credential reads, including `GET /api/feed`,
   the programme goals read `GET /api/programmes/:slug/goals` (D-8126: a coordinator reads the pin, its definition of done and
-  the open items cookieless through `ccrc-api`, the console with a session)
+  the open items cookieless through `ccrc-api`, the console with a session), the landing line's read `GET /api/landing`
+  (landing order wave 5j, D-9048: a coordinator reads it cookieless through `ccrc-api landing show`, the console with a session),
+  the programme lifecycle's two reads
+  `GET /api/programmes/:slug/history` and `GET /api/sessions/:id/programme` (W2: a programme's story and a session's one
+  programme; the token arm is attributed, and reads the bound coordinator's own programme or the session's own)
   and the update projection read `GET /api/updates/intent/:nodeId` (a fleet node's timer pulls it cookieless from
   update-management W4), call `checkMailToken` only after a session check; `auth/gate.ts`'s EXEMPT reasons — route by route, each
   with its own argument — are the census, not this bullet. What does need saying here are the
@@ -635,12 +647,18 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   the operator's Shadow lanes card, one switch per shadow lane, which also refuses `live` while sign-in is dark), `POST /api/testbox/switch` (test box plan TB9, D-7411,
   the operator's remote switch for test runs; the test box's read and sync take a session or the box token, D-7554), `POST /api/testbox/builds/capture` (D-8289,
   the operator's Capture again on a Claude Code build whose capture failed, which puts it back in the capture queue),
-  `POST /api/questions/:id/answer` (W3 Q3f, D-7030, the operator's answer door of the question family) and
+  `POST /api/questions/:id/answer` (W3 Q3f, D-7030, the operator's answer door of the question family),
+  `POST /api/landing/pause` and `POST /api/landing/withdraw` (landing order wave 5j, D-9049: the operator's pause and resume
+  of one project's landing line, and the operator's withdrawal of one entry from it, with a notice to its coordinator and to
+  the coordinator of each direct dependant where one is recorded and reads; neither chooses, reorders or brings forward the
+  head, a dependant stays held until a session declares its order again without the withdrawn entry, which the feed records
+  whoever does it, or that entry re-enters through its run and then lands or is closed, and the pause, the resume and the
+  withdrawal all work while sign-in is dark and record `flag-off` then) and
   `POST /api/leases/:lease/operator-retain` and `POST /api/leases/:lease/resolve` (delegation wave 5 PR8, the operator's
   keep, attach and "not delegated" for a delegated worktree) are session-gated only — armed, they sit behind the auth gate like every other PWA-surface write. The first
   needs prose because no scanner can see it: `coord-pause-route.test.ts` reads
   `server/src/coord/routes.ts` alone, and that route is registered in `server.ts`, so a door opened outside
-  that one file is invisible to the set that pins the doors. The other eighteen are in that file's `SESSION_ONLY`
+  that one file is invisible to the set that pins the doors. The other twenty-one are in that file's `SESSION_ONLY`
   set, and `box-token-census.test.ts` checks this sentence against it in both directions (D-1231). The update
   control plane's routes are session-only by design (the box token never writes intent — design 2026-09-20,
   decision 15): `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh`, `POST
@@ -657,12 +675,19 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   session-gated when armed, and is registered in `server.ts`, so the census names it beside the kickoff literal too. So does `POST /api/sessions/:id/prompt` (Overlord W1 private store B): for the designated session it records the operator's message in the private store, then queues the nudge as system mail and writes the `@overlord` operator mark in one `coord.db` transaction, and types nothing; it consults no box token, is session-gated when armed, and is registered in `server.ts`, so the census names it beside the kickoff literal as well. The programme ledgers' operator doors (plan PL4), `GET /api/waiting`, `GET /api/items/:id` (one item by its id, whatever its state and age, D-8194), `GET /api/programmes/:slug/goals`,
   `POST /api/items/:id/tick`, `POST /api/items/:id/dismiss`, `POST /api/items/:id/act` and `POST /api/items/:id/decline` (the operator's
   Abandon run and Keep the run on an end-request item: body-less, the act running the abandon arm inside the coordination hold as
-  the operator and closing its item, the decline mailing the asker), `POST /api/calls/:id/seen` (D-8126: the operator's Seen on a big call a coordinator made in their name), `PUT /api/items/:id/secret` (plan PL6), and
+  the operator and closing its item, the decline mailing the asker; on a programme end proposal, programme lifecycle W2, the act
+  confirms the end behind the step-up and the decline keeps the programme open, working while sign-in is dark and recording
+  `flag-off`, and the dismiss refuses it; a refused close's act that also ends the programme takes the step-up), `POST /api/calls/:id/seen` (D-8126: the operator's Seen on a big call a coordinator made in their name), `PUT /api/items/:id/secret` (plan PL6), and
   `GET /api/programmes/:slug/secrets` and `DELETE /api/programmes/:slug/secrets/:slot` (the PL6 follow-up), `GET /api/portfolio`
   and `POST /api/portfolio/rank` (Overlord W1: the operator's portfolio read and the rank door, which works while sign-in is dark
   and records `flag-off` then), and `POST /api/answer-marks` (Overlord W1: the operator's answer marks on a Waiting on you row,
   which work while sign-in is dark and record `flag-off` then), and `POST /api/programmes/:slug/goals/ratify` (Overlord W1
-  portfolio B: the operator ratifies one goals version, behind the account gate, so it refuses while sign-in is dark), consult no box token
+  portfolio B: the operator ratifies one goals version, behind the account gate, so it refuses while sign-in is dark), and the
+  programme lifecycle's doors (W2, D-8987, D-8992, D-8993) `POST /api/programmes` (the start, behind the account gate),
+  `POST /api/programmes/:slug/state` (pause works while sign-in is dark and records `flag-off`; resume, end, reopen and repair
+  take the step-up) and `POST /api/programmes/:slug/coordinator` (the hand-over, behind the step-up), and its backfill door
+  `POST /api/programmes/decisions` (W3, D-8990: previews the operator's private decisions file, and applies it behind the
+  step-up), consult no box token
   either: the tick queues the operator's answer as system mail to the programme's coordinator in the move's own transaction,
   the secret door stores a pasted one-line value in its protected slot and ticks with "set" and when, and the last four
   characters only for a value the masker catches (at its 20-byte floor or longer, as one run), behind a step-up, the read
@@ -684,12 +709,14 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   (Overlord W1 designation A), `GET /api/overlord/designation` and `POST` and `DELETE /api/overlord/designate` (Start the Overlord and
   its retire), consult no box token either: each asks the account gate first, the two writes with a step-up, and runs on the
   coordination serialiser, so they are session-gated when armed and refuse `auth-off` dark. So do its two Settings doors (designation C),
-  `POST /api/overlord/model` (a step-up for `fable`) and `POST /api/overlord/account-set` (a step-up for a widening). `GET /api/overlord/ladder`,
+  `POST /api/overlord/model` (a step-up for `fable`) and `POST /api/overlord/account-set` (a step-up for a widening). So do
+  designation B's `POST /api/overlord/rebind` (a step-up) and `POST /api/overlord/restart` (a recovery, with no step-up). `GET /api/overlord/ladder`, `GET /api/overlord/readiness` (the readiness word),
   `POST /api/overlord/rung`, `POST /api/overlord/pause` and `POST /api/overlord/latches/:cause/clear` consult no box token and are
   session-gated when armed. A rung lowering and Pause work dark, a raise takes the account gate's step-up, and a latch clear always
   takes the step-up. Confirm the restore (authority journal C), `GET /api/overlord/restore` (the guard's state) and
   `POST /api/overlord/restore/confirm` (behind the step-up), consults no box token either and is session-gated when armed, and
-  refuses `auth-off` dark. All three sets of doors register from `server/src/coord/overlordRoutes.ts`
+  refuses `auth-off` dark. `POST /api/overlord/witness` (the console's authority witness exchange) consults no box token and
+  is session-gated when armed with no step-up; it refuses `auth-off` dark. These doors all register from `server/src/coord/overlordRoutes.ts`
   and the census keeps their names in a hand-kept `OVERLORD_OPERATOR_DOORS`, checked against that file in both directions. The operator's decision-model doors (Overlord W2, decision model B), `GET /api/decision-model`, `POST /api/decision-model/rows/:id/arm`, `POST /api/decision-model/rows/:id/off`, `POST /api/decision-model/rows/:id/ceiling`, and `PUT` and `DELETE /api/decision-model/key`, consult no box token either and are session-gated when armed: the five writes refuse `auth-off` while sign-in is dark and ask the account gate's step-up for a widening only (arming and setting a key always; switching an armed gate off and raising a ceiling; never a narrowing, so an emergency off is one tap), and the read never answers any part of the key; they register from `server/src/coord/decisionModelRoutes.ts`, which the census reads as a lane source of its own and checks against a hand-kept `DECISION_MODEL_DOORS` in both directions. The Models sheet's write door, `POST /api/models/:lane` (Revert of a class only, behind a fresh read that the fleet box ends a revert's hold by itself; the answer re-read, never inferred), consults no box token either and is session-gated when armed, its audit line naming the device; it registers from `server/src/laneModelsRoutes.ts` (the read beside it, `GET /api/models/:lane`, is in `server.ts`), which the census reads as a lane source of its own and checks against a hand-kept `MODELS_DOORS` in both directions. The approval census's read, `GET /api/approvals/census` (approvals PR 1: counts by path, state, class, thread, deny currency, programme and authority, M38 and the redacted rows, never an input), consults no box token either and is session-gated when armed; it registers from `server/src/coord/approvalCensusRoutes.ts`, which the census reads as a lane source of its own and checks against a hand-kept `APPROVAL_CENSUS_DOORS` in both directions. The door of the one-time pass over the delegation broker's unmeasured records (session helpers S2, D-8874), `GET /api/coord/delegation-backfill` (the dry run, which writes nothing) and `POST /api/coord/delegation-backfill` (the pass, which carries the dry run's count and refuses `count-changed` on any other, or its undo), consults no box token either and is session-gated when armed: the pass refuses `sign-in-unarmed` while sign-in is dark or the caller holds no session; it registers from `server/src/coord/delegationBackfillRoutes.ts`, which the census reads as a lane source of its own and checks against a hand-kept `DELEGATION_BACKFILL_DOORS` in both directions. The replay quiz's
 rule door (Overlord W1a quiz record), `POST /api/continuity/quiz-runs/:id/rule` (the operator's Confirm or Discard of a recorded
 run on the Shadow lanes card, behind the account gate's step-up, so it refuses while sign-in is dark), consults no box token
@@ -733,7 +760,10 @@ while sign-in is dark) consults no box token and is session-gated when armed. Al
   stuck, marker unreadable, and D5's `restarted`: a run worker respawned over lost background tasks is mailed a re-check
   notice at once and its coordinator one heads-up, at most one per worker on its run per 10 minutes, with no restart and no push)
   record shadow only until `stall-watch-w2-live` exists, and while `mail-disabled` stands every
-  rung that would send mail holds. `stall-watch-disabled`, `stall-watch-live`, `stall-watch-escalate`,
+  rung that would send mail holds. A provider error (`server_error`, `overloaded`) is not the `failed` arm's: the
+  provider-failure ladder (`coord/providerRetry.ts`, armed by its own rule since D-9085, stopped by
+  `stall-watch-disabled`, a chosen Off or Log only, and `mail-disabled`) mails any live session itself at 1, 4 and 15 min,
+  asks no coordinator, and raises one operator notice per provider outage. `stall-watch-disabled`, `stall-watch-live`, `stall-watch-escalate`,
   `stall-watch-w2-live`, `mail-gate-busy-shadow` and `mail-gate-busy` arm them (no `stall-watch-live`: shadow only) and,
   like `mail-gate-strict`, have **no writer in the tree** — `single-definition/*.test.ts` pins that. A level chosen in
   Settings (`/api/coord/stall-watch`, the operator's control) overrides the arming markers, but never
@@ -745,10 +775,11 @@ while sign-in is dark) consults no box token and is session-gated when armed. Al
   tip that the conflict radar's lineage carries to the live tip through clean base merges, and the landing then binds
   that live tip; anything it cannot read answers as before, or `lineage-unmeasured`.
 - **One run row per wave; wave N+1 is a NEW `POST /api/runs`, not a reopen. Open wave N+1's run BEFORE closing
-  wave N's** — close-first leaves zero open runs and the server retires the program, breaking
-  `toId:'coordinator'` mail that carries NO `runId`. Mail naming a `runId` still resolves
-  (`resolveCoordinator(runId)` reads that run's `claimedBy`, no program-state predicate) — which is the
-  documented recovery for an already-retired program.
+  wave N's** — `toId:'coordinator'` mail that carries NO `runId` resolves only over a programme that shows Active
+  (`lifecycleOf`: an open run and a run ever dispatched), and the open `planned` run keeps it Active; close-first leaves
+  it Idle and such mail unresolvable until the next run is dispatched. Nothing retires a programme any more (programme
+  lifecycle W1, D-8983: D-51 is deleted; only a decision ends one). Mail naming a `runId` still resolves
+  (`resolveCoordinator(runId)` reads that run's `claimedBy`, no program-state predicate).
 - The coordinator is an ordinary fleet session running the `ccrc-coordinator` skill
   (`ccd/coordinator-skill/SKILL.md`); its twenty-four clauses are pinned VERBATIM by
   `server/test/coordinator-skill.test.ts` — a softened clause is a red suite. Pause kill-switches are FILES

@@ -33,7 +33,7 @@ A run is refused at `runs open` when the plan does not allow it:
 - `ticket-unavailable`: the ticket you named is done, dropped, held by another run (started, or open with a run
   attached, a planned run included), or an Upkeep ticket. Name
   another ticket, or open with none: the run gets a new one unless `ticket-required` refuses it.
-- `plan-closed`: the plan was ended with `plan close`; nothing opens under it.
+- `plan-closed`: the programme has ended (its end, proposed with `plan close`, was confirmed); nothing opens under it.
 - `reserved-programme`: `linear-sync` is ccrc's own and never a run's programme.
 
 An older programme, one that existed before the plan model, opens as it always did, with no plan and no ticket.
@@ -128,17 +128,22 @@ Refusals: `not-plan-owner`, `unknown-epic`, `plan-bad-body`, `dropped-needs-reas
 
 ## plan close
 
-Ends the plan: `done`, or `abandoned` with a reason. This is the programme's explicit end; a wave gap or a failed last run
-is never one. After it, `runs open` is refused `plan-closed`.
+Proposes the programme's end: `done`, or `abandoned` with a reason, with `evidence`, one line for each line of the pinned
+definition of done (free lines when none was pinned). It ends nothing itself: it raises one Waiting-on-you item, and the
+operator or the Overlord confirms the end or keeps the programme open; you are mailed either way. The answer carries the
+item's id as `proposal`. A wave gap or a failed last run is never an end. Once the end is confirmed, `runs open` is
+refused `plan-closed`; a run you open before then withdraws the proposal.
 
 ```bash
 "$API" plan close <slug> --json - <<JSON
-{"outcome":"done"}
+{"outcome":"done","evidence":["<one line for each line of the definition of done>"]}
 JSON
 ```
 
-Refusals: `not-plan-owner`, `plan-runs-open` (a run of the programme has not ended; close after it), `plan-closed` (the
-plan was already closed), `plan-bad-body`, `dropped-needs-reason` and `linear-text-public` (the reason).
+Refusals: `not-plan-owner`, `plan-runs-open` (a run of the programme has not ended; close after it), `programme-runs-open`
+(the same, from the proposal), `already-asked` (the end is already proposed; the answer names its item), `evidence-required`
+(no evidence), `programme-ended` and `plan-closed` (the programme has already ended), `programme-unknown`,
+`plan-bad-body`, `dropped-needs-reason` and `linear-text-public` (the reason).
 
 Every `plan` verb is refused `no-plan-door` by the client when the server is older than the plan verbs, and `unavailable`
 when the box has no plan store.

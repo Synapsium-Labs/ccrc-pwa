@@ -24,6 +24,7 @@ export const FASTIFY_L4_ALLOWLIST: EntrySet = {
   'server/src/coord/planRoutes.ts': { reason: "the plan verbs' HTTP routes (Linear hierarchy, D-8181): put, show, met, ticket-add, ticket-move, epic-drop and close", since: '2026-11-10' },
   'server/src/coord/hierarchyRoutes.ts': { reason: "the per-project hierarchy settings' HTTP routes (Linear hierarchy, D-8181): a project's settings, the owner for all, and the read", since: '2026-11-10' },
   'server/src/coord/endRequest.ts': { reason: "the end-request route's handler (D-8076), a session's ask to the operator", since: '2026-11-08' },
+  'server/src/coord/programmeLifecycleRoutes.ts': { reason: "the programme lifecycle's door handlers (W2), registered from ledgersRoutes.ts", since: '2026-11-24' },
   'server/src/coord/coordCallsRoute.ts': { reason: "the coordinator call record's HTTP route (D-8126)", since: '2026-11-09' },
   'server/src/coord/programmeRemainingRoute.ts': { reason: "the coordinator's remaining-work door (Overlord W2 remaining work A)", since: '2026-11-16' },
   'server/src/coord/delegationBackfillRoutes.ts': { reason: "the one-time pass's door over the broker's unmeasured records: the dry run's GET and the pass's or undo's POST, session-gated (session helpers S2, D-8874)", since: '2026-11-21' },
@@ -46,8 +47,10 @@ export const FASTIFY_L4_ALLOWLIST: EntrySet = {
   'server/src/coord/overlordGateRun.ts': { reason: "the Overlord gate's runner: every Overlord door's one call, which refuses through the reply (Overlord W1 gates B, §11.2)", since: '2026-11-19' },
   'server/src/coord/overlordRead.ts': { reason: "the Overlord's one read runner: takes a door's Fastify request and reply, counts, records the ledger line and answers through refuseRoute (Overlord W1 inbox, Task 2)", since: '2026-11-22' },
   'server/src/coord/overlordInboxRoutes.ts': { reason: "the Overlord's inbox doors: the inbox, one operator message and its acknowledge, each a box-token lane behind the gate (Overlord W1 inbox, Task 3)", since: '2026-11-22' },
+  'server/src/coord/overlordHistoryRoutes.ts': { reason: "the Overlord's history door: one box-token lane behind the gate, a read of every project's history through the one agent that advertises it (Overlord W1, PR B1)", since: '2026-11-24' },
   'server/src/laneModelsRoutes.ts': { reason: "the Models sheet's write door, POST /api/models/:lane (revert of one class; model-class-advance R4)", since: '2026-11-18' },
   'server/src/coord/approvalCensusRoutes.ts': { reason: "the approval census's read, its one session-gated GET (approvals PR 1, Task 1.4)", since: '2026-11-18' },
   'server/src/coord/approvalParkDoor.ts': { reason: "the operator door's approval arm, its step-up ladder over the request and reply (approvals PR 3)", since: '2026-11-19' },
   'server/src/responses/routes.ts': { reason: 'the receipts door, POST /api/responses/receipts (Overlord W1 responses A)', since: '2026-11-16' },
+  'server/src/poolRunwayRoute.ts': { reason: "the operator's runway read, GET /api/pools/runway (Overlord W1 serviceability B)", since: '2026-11-22' },
 };

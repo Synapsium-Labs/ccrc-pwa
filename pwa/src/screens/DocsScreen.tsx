@@ -9,9 +9,10 @@
 // also holds the fleet header's Docs door: this static import, through app.tsx's, puts it in the main stylesheet.
 import { useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
-  DOCS_PAGE_PREFIX, docsPageUrl, parseDocsPage, parseDocsRef,
+  DOCS_PAGE_PREFIX, docsPageUrl, docsResolvedRefLocation, isDocsFolderLocation, parseDocsPage, parseDocsRef,
   type DocPin, type DocsPageLocation, type DocsProjectsResponse, type DocsRefSpec, type DocsTreeOk,
 } from '../../../shared/docs';
+import { parseDocsSettings, type DocsSettings, type DocsSettingsResponse } from '../../../shared/docsTracker';
 import { DocsAssetContext, type DocsAssetContextValue } from '../docs/DocImage';
 import { DocsBanners } from '../docs/DocsBanners';
 import { DOCS_COMPACT_QUERY, DocsHead, soonUntil, type FreshChipState } from '../docs/DocsHead';
@@ -21,18 +22,20 @@ import { DocsLeaf } from '../docs/DocsLeaf';
 import { lazyMountReader, type ReaderDeps } from '../docs/ReaderFrame';
 import { loadReaderImages } from '../docs/reader/images';
 import { DocsPageLink, DocsTreeView } from '../docs/DocsTreeView';
+import { FolderPage } from '../docs/FolderPages';
 import { createFetchQueue } from '../docs/fetchQueue';
 import { createExportAssets } from '../docs/export/exportAssets';
 import { ExportBodyContext, type ExportBody } from '../docs/exportBody';
 import { ReaderBarContext, type ReaderBar, type ReaderBarSlot } from '../docs/readerBar';
 import { readerChromeFor } from '../docs/reader/policy';
-import { docsRetryPlan, type DocsLoaders, type DocsNotOk } from '../docs/failures';
-import { docsLocation } from '../docs/docsLinks';
+import { docsRetryPlan, type DocsAnswer, type DocsLoaders, type DocsNotOk } from '../docs/failures';
+import { docsDefaultBranchFallback, docsLocation } from '../docs/docsLinks';
+import { folderIndexSlot, type DocsFolderLoaders, type FolderIndexSlot } from '../docs/folderPage';
 import {
   DOCS_HEAD_TEXT, DOCS_PAGE_INVALID_SENTENCE, DOCS_VIEW_TEXT, failureSentence, fillSentence, slotSentence,
 } from '../docs/docsText';
 import { docsPathKind } from '../docs/docsTree';
-import { useDocsVisit, type Freshness, type TreeSlot } from '../docs/useDocsVisit';
+import { canFetchUnresolvedRef, useDocsVisit, type Freshness, type TreeSlot } from '../docs/useDocsVisit';
 import { api } from '../lib/api';
 import { onAuthRegained } from '../lib/auth';
 import { HighlighterContext, type HighlighterContextValue } from '../lib/highlighterContext';
@@ -47,6 +50,7 @@ import '../docs/docs.css';
  *  renders: a new `loaders` would reload every image on the page (`DocsAssetContext`'s contract). */
 const DEFAULT_DOCS_LOADERS: DocsLoaders = api.docs;
 const DEFAULT_DOCS_PARSER: MarkdownParser = (src, o) => docsRunner.parse(src, o);
+const DEFAULT_DOCS_FOLDERS: DocsFolderLoaders = api.docs.folders;
 /** The rich reader's defaults: the runner's render job, the lazily loaded mount, and the page's image loader. The
  *  screen takes them only where a `Worker` exists (the render job needs one); without it a Markdown leaf is the plain
  *  view, exactly as before the reader. */
@@ -166,14 +170,21 @@ export function DocsScreen(p: {
   path: string; search: string; loaders?: DocsLoaders; parser?: MarkdownParser;
   /** The rich reader's deps. Absent: the default where this browser has a `Worker`, else none. `null`: none. */
   reader?: ReaderDeps | null;
+  /** The outside folders' loaders (X2 P2.4): the labels read the index makes and every folder page's reads. */
+  folders?: DocsFolderLoaders;
+  /** Console settings read. Fixture loaders can opt in without making a network request. */
+  readSettings?: (signal: AbortSignal) => Promise<DocsAnswer<DocsSettingsResponse>>;
 }): ReactNode {
   const {
     path, search, loaders = DEFAULT_DOCS_LOADERS, parser = DEFAULT_DOCS_PARSER,
-    reader = typeof Worker === 'function' ? DEFAULT_READER : null,
+    reader = typeof Worker === 'function' ? DEFAULT_READER : null, folders = DEFAULT_DOCS_FOLDERS,
   } = p;
   const here = path + search;
   const parsed = useMemo(() => parseDocsPage(path, search), [path, search]);
-  const page = parsed.ok ? parsed.loc : null;
+  // An outside folder's page (X2 P2.4) is no project page: it has its own head and reads through the folder loaders, so
+  // the visit, the banners and `DocsHead` see `null` there, exactly as they do for a page that did not parse.
+  const folderPage = parsed.ok && isDocsFolderLocation(parsed.loc) ? parsed.loc : null;
+  const page = parsed.ok && !isDocsFolderLocation(parsed.loc) ? parsed.loc : null;
   const visit = useDocsVisit(page, loaders);
 
   // The image queue and the drafted-asset count, one each per visit, stable across renders (DocsAssetContext).
@@ -241,6 +252,45 @@ export function DocsScreen(p: {
     if (isIndex && index === null) loadIndex();
   }, [isIndex, index, loadIndex]);
   useEffect(() => onAuthRegained(() => setIndex((s) => (s?.s === 'auth' ? null : s))), []);
+  // One parallel settings read for index links or a possible configured-branch fallback. An absent or unreadable
+  // door leaves the Git defaults intact. A version pin or direct Git-default page never needs this read.
+  const readSettings = p.readSettings ?? (loaders === DEFAULT_DOCS_LOADERS ? api.docs.settings.read : undefined);
+  const needsSettings = page !== null && (page.kind === 'index'
+    || (page.ref?.kind === 'bare' && (page.kind !== 'path' || page.at === null)));
+  const [settings, setSettings] = useState<{ value?: DocsSettings } | null>(null);
+  useEffect(() => {
+    if (!needsSettings || readSettings === undefined || settings !== null) return undefined;
+    const abort = new AbortController();
+    void readSettings(abort.signal).then((a) => {
+      if (abort.signal.aborted) return;
+      const checked = a.s === 'ok' ? parseDocsSettings(a.value.settings) : null;
+      setSettings(checked?.ok ? { value: checked.settings } : {});
+    }, () => { if (!abort.signal.aborted) setSettings({}); });
+    return () => abort.abort();
+  }, [needsSettings, readSettings, settings]);
+  useEffect(() => onAuthRegained(() => setSettings(null)), []);
+  // The outside folders' labels (X2 P2.4): one read per visit of the index, after a sign-in again when it was refused. It is
+  // the ONLY folder read the index makes (the paths door is Settings'), and a refusal is one quiet line, never a banner.
+  const [folderIdx, setFolderIdx] = useState<FolderIndexSlot | null>(null);
+  useEffect(() => {
+    if (!isIndex || folderIdx !== null) return undefined;
+    let live = true;
+    void folders.labels().then((a) => { if (live) setFolderIdx(folderIndexSlot(a)); }, () => undefined);
+    return () => { live = false; };
+  }, [isIndex, folderIdx, folders]);
+  useEffect(() => onAuthRegained(() => setFolderIdx((s) => (s?.s === 'quiet' ? null : s))), []);
+  // A labels read answered `caps-unknown` is read once more after the wait `docsRetryPlan` gives it (the slot carries it;
+  // the projects read below follows the same rule), once per visit, so a folder group appears without another visit once
+  // the server has learned the fleet box's caps (review 3816, carried to X2 P4). The timer ends with the page or the screen.
+  const foldersRetried = useRef(false);
+  useEffect(() => {
+    if (!isIndex || folderIdx?.s !== 'ok' || folderIdx.retryAfterMs === undefined || foldersRetried.current) return undefined;
+    const t = setTimeout(() => {
+      foldersRetried.current = true;
+      setFolderIdx((s) => (s === folderIdx ? null : s));
+    }, folderIdx.retryAfterMs);
+    return () => clearTimeout(t);
+  }, [isIndex, folderIdx]);
   // An auto-class word (`docs-busy` and its kind) is read once more after its wait, like the tree's and the file's
   // (`useDocsVisit`): once per visit, and only if the index is still that same failure when the wait ends. The second
   // failure shows Retry. The timer ends with the page or the screen.
@@ -276,23 +326,40 @@ export function DocsScreen(p: {
   }, [here]);
   const owned = page === null ? null : ownerRedirect(page, visit.tree);
   const looped = owned !== null && page !== null && leadsBack(owned, page, here, trail);
+  const failure = visit.tree?.s === 'failed' ? visit.tree.body : null;
+  const waitingSettings = needsSettings && readSettings !== undefined && settings === null;
+  const fallback = page === null ? null : docsDefaultBranchFallback(page, failure?.failure ?? null, settings?.value);
+  // An unresolved bare name can also resolve as a tag or commit. Wait for settings before choosing between that
+  // legacy destination and the Git default for a configured branch that disappeared.
+  const resolved = page === null || waitingSettings ? null : docsResolvedRefLocation(page, failure);
+  const refRedirect: Redirect | null = fallback !== null
+    ? { href: fallback.href, note: fillSentence(DOCS_VIEW_TEXT.configuredBranchGone, { branch: fallback.branch }) }
+    : resolved === null ? null : { href: docsPageUrl(resolved), note: null };
+  const slash = page !== null && tree !== null ? slashRedirect(page, tree) : null;
   let redirect: Redirect | null = null;
   if (parsed.ok && parsed.canonical !== here) redirect = { href: parsed.canonical, note: null };
-  else if (page !== null && tree !== null) redirect = slashRedirect(page, tree);
+  else if (refRedirect !== null) redirect = refRedirect;
+  else if (slash !== null) redirect = slash;
   else if (!looped) redirect = owned;
   const viaOwner = redirect !== null && redirect === owned;
+  const viaRef = redirect !== null && redirect === refRedirect;
   const target = redirect?.href ?? null;
-  const targetNote = redirect?.note ?? null;
+  const targetNote = redirect?.note ?? (slash !== null && redirect === slash && note?.at === here ? note.text : null);
   useEffect(() => {
     if (target === null || target === here) return;
-    if (targetNote !== null) setNote({ at: target, text: targetNote, arrived: false });
-    if (viaOwner) setTrail((t) => ({ from: [...t.from, here], next: target }));
-    // The reader's #fragment rides along: the router never reads it, so a replace would otherwise drop it. An owner
-    // redirect moves the page to another project, so the direct load's fragment (held under the old page's key) is
-    // handed to the owner's page too, honoured once there (refinement (o)).
-    if (viaOwner && location.hash.length > 1) setFragment(location.hash.slice(1), target);
-    navigate(target + location.hash, { replace: true });
-  }, [target, targetNote, viaOwner, here, setFragment]);
+    let live = true;
+    // On mount the parent router subscribes after this effect; let it install its popstate listener first.
+    queueMicrotask(() => {
+      if (!live || location.pathname + location.search !== here) return;
+      if (targetNote !== null) setNote({ at: target, text: targetNote, arrived: false });
+      if (viaOwner) setTrail((t) => ({ from: [...t.from, here], next: target }));
+      // The router never reads the fragment. A new project, ref or pin changes the key the visit holds it under,
+      // so hand it to the replacement page as well (refinement (o)).
+      if ((viaOwner || viaRef) && location.hash.length > 1) setFragment(location.hash.slice(1), target);
+      navigate(target + location.hash, { replace: true, from: here });
+    });
+    return () => { live = false; };
+  }, [target, targetNote, viaOwner, viaRef, here, setFragment]);
 
   let body: ReactNode;
   if (!parsed.ok) {
@@ -302,13 +369,17 @@ export function DocsScreen(p: {
         <DocsPageLink className="docs-hint-link" href={DOCS_PAGE_PREFIX}>{DOCS_VIEW_TEXT.indexLink}</DocsPageLink>
       </div>
     );
+  } else if (folderPage !== null) {
+    // Keyed by the label: another folder is another read, with its own slot.
+    body = <FolderPage key={folderPage.label} loc={folderPage} folders={folders} parser={parser} />;
   } else if (page === null || page.kind === 'index') {
-    if (index === null || index.s === 'loading') body = <p className="docs-loading">{DOCS_VIEW_TEXT.loading}</p>;
-    else if (index.s === 'ok') body = <DocsIndexView answer={index.answer} />;
+    if (index === null || index.s === 'loading' || (index.s === 'ok' && waitingSettings)) {
+      body = <p className="docs-loading">{DOCS_VIEW_TEXT.loading}</p>;
+    } else if (index.s === 'ok') body = <DocsIndexView answer={index.answer} folders={folderIdx} settings={settings?.value} />;
     else body = <DocsFailureView answer={index} onRetry={() => { setIndex(null); }} />;
   } else {
     const slot = visit.tree;
-    if (slot === null || slot.s === 'loading') {
+    if (slot === null || slot.s === 'loading' || viaRef || (waitingSettings && failure?.failure === 'unresolved-ref')) {
       body = <p className="docs-loading">{DOCS_VIEW_TEXT.loading}</p>;
     } else if (slot.s === 'ok') {
       const t = slot.answer.tree;
@@ -327,7 +398,8 @@ export function DocsScreen(p: {
       body = (
         <>
           <DocsFailureView
-            answer={slot} onRetry={visit.retryTree} onFetchFromOrigin={visit.fetchFromOrigin} suggestHref={suggestHref}
+            answer={slot} onRetry={visit.retryTree} suggestHref={suggestHref}
+            onFetchFromOrigin={canFetchUnresolvedRef(page.ref) ? visit.fetchFromOrigin : undefined}
             fetching={visit.freshness.s === 'fetching'} fetchNote={fetchNoteOf(visit.freshness, soon === null ? clock : Date.now())}
           />
           {looped && <p className="docs-note">{DOCS_VIEW_TEXT.redirectLoop}</p>}
@@ -345,7 +417,7 @@ export function DocsScreen(p: {
             readerBar={readerBar}
           />
         )}
-        {note !== null && <p className="docs-note docs-redirect-note" role="status">{note.text}</p>}
+        {note?.at === here && <p className="docs-note docs-redirect-note" role="status">{note.text}</p>}
         {page !== null && page.kind !== 'index' && tree !== null && (
           <DocsBanners page={page} tree={tree} file={visit.file} draftAssets={draftAssets} onRelist={visit.retryTree} />
         )}

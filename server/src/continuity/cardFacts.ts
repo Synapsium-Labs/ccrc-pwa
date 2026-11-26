@@ -34,7 +34,7 @@ import type { CoordStore } from '../coord/store.js';
 import { operatorWasShown, type ItemRow } from '../coord/ledgersStore.js';
 import { designationFactFrom, identityOf, roleFactsOf, type DesignationFact } from '../roleOf.js';
 import { CARD_REGISTRY_UNREAD, cardRoleOf, type CardRole } from './card.js';
-import { noteKeyReader, type NoteKeysMessages } from './noteKeys.js';
+import { noteKeyReader, type NoteKeysCaller, type NoteKeysMessages } from './noteKeys.js';
 import { noteKeyFact } from './notes.js';
 import { timerPreview } from './timers.js';
 
@@ -134,8 +134,10 @@ export async function sessionRoleRead(deps: RoleReadDeps, id: string): Promise<S
 /** One session's card facts, and the renderer its role is drawn by. `now` is the server's time of rendering: it is
  *  `CardFacts.at`, and the hold filter of `itemsFor` (an item still held is not yet shown to anyone). The role and the
  *  intent fact are `sessionRoleRead`'s. */
-export async function gatherCardFacts(deps: CardFactsDeps, id: string, now: number):
+export async function gatherCardFacts(deps: CardFactsDeps, who: NoteKeysCaller, now: number):
   Promise<{ readonly facts: CardFacts; readonly renderer: CardRenderer }> {
+  // The incarnation reads its own notes' programme keys (programme lifecycle W1 review, S3); a bare id compares the id alone.
+  const id = typeof who === 'string' ? who : who.id;
   const { coord } = deps;
   const role = await sessionRoleRead(deps, id);
   const { intent, designation } = role;
@@ -210,7 +212,7 @@ export async function gatherCardFacts(deps: CardFactsDeps, id: string, now: numb
   const mailMore = mailRead.kind === 'read' && mailRead.value.length > CARD_MAIL_MAX;
 
   // The notes: the identity's live ones (the identity is the session id: notes stay keyed by it, slug notes-keyed-by-session-id), each with what its key's row is now.
-  const keyOf = noteKeyReader(coord, id, deps.messages?.() ?? undefined);
+  const keyOf = noteKeyReader(coord, who, deps.messages?.() ?? undefined);
   const notes = attempt<readonly CardNote[]>('the notes', () => {
     const r = coord.liveNotes(id);
     return !r.ok ? null : r.notes.map((n) => ({
@@ -247,9 +249,12 @@ export async function gatherCardFacts(deps: CardFactsDeps, id: string, now: numb
     }
   })();
 
-  // The pending timers: the session's own, oldest due first, each note cut to its preview (the one cut, `timerPreview`).
+  // The pending timers: the identity's, oldest due first, each note cut to its preview (the one cut, `timerPreview`). The
+  // bound session's identity is the role, so its card lists the role's timers (Overlord W1); a rebind's pending body keeps its
+  // own id. An unmeasured designation leaves the identity unknown, so the fact is unmeasured, as the checkpoint's is.
   const timers = attempt<readonly CardTimer[]>('your pending timers', () => {
-    const r = coord.pendingTimersOf(id);
+    if (designation === 'unmeasured') return null;
+    const r = coord.pendingTimersOf(identityOf(id, designation));
     return !r.ok ? null : r.rows.map((t) => ({ id: t.id, dueAt: t.dueAt, preview: timerPreview(t.note), runId: t.runId, programme: t.programme }));
   });
 

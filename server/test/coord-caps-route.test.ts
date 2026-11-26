@@ -381,7 +381,7 @@ describe('POST /api/coord/caps', () => {
       throw new Error(`timed out waiting for ${what}`);
     };
 
-    seedLegacyProgramme(coord.db, 'p', 'demo');
+    seedLegacyProgramme(coord.db, 'p', 'demo', 'the-coordinator');   // its coordinator (programme lifecycle W1, R11)
     const opening = app.inject({ method: 'POST', url: '/api/runs',
       headers: { 'x-ccrc-mail-token': TOKEN },
       payload: { program: 'p', title: 'P', project: 'demo', wave: 1, waveOf: 8,

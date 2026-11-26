@@ -66,7 +66,7 @@ describe('the section', () => {
     expect(matchRoute('/settings/integrations/')?.route.id).toBe('settings-integrations');
   });
 
-  it('/settings/integrations is its page: the h2, the title, and the three cards in order, each a level-3 card with its scope', async () => {
+  it('/settings/integrations is its page: the h2, the title, and the five cards in order, each a level-3 card with its scope', async () => {
     reads();
     renderSettings('integrations');
     await settle();
@@ -74,7 +74,8 @@ describe('the section', () => {
     const h2 = screen.getByRole('heading', { level: 2, name: 'Integrations' });
     expect(document.activeElement, 'opening a section moves focus to its heading').toBe(h2);
     expect(document.title).toBe('Integrations · Settings · ccrc');
-    expect(screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent)).toEqual(['Linear', 'Project linking', 'GitHub']);
+    expect(screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent)).toEqual(['Linear', 'Project linking', 'GitHub', 'Docs folders', 'Docs settings']);
+    expect(within(screen.getByRole('region', { name: 'Docs settings' })).getByText(SETTINGS_SCOPE.box)).toBeInTheDocument();
     expect(within(screen.getByRole('region', { name: 'Linear' })).getByText(SETTINGS_SCOPE.box)).toBeInTheDocument();
     expect(within(screen.getByRole('region', { name: 'Project linking' })).getByText(SETTINGS_SCOPE.box)).toBeInTheDocument();
     expect(within(github()).getByText(SETTINGS_SCOPE.fleet)).toBeInTheDocument();
@@ -106,7 +107,7 @@ describe('its entry on the Settings index', () => {
     expect(entry()).toHaveAttribute('href', '/settings/integrations');
     expect(entry().querySelector('.settings-index-name')?.textContent).toBe('Integrations');
     expect(entry().querySelector('.settings-index-purpose')?.textContent).toBe(SETTINGS_INDEX_TEXT.purpose.integrations);
-    expect(SETTINGS_INDEX_TEXT.purpose.integrations).toBe('The services ccrc works with: the Linear keys, the Linear team each project is linked to, and GitHub.');
+    expect(SETTINGS_INDEX_TEXT.purpose.integrations).toBe('Linear keys and project linking, GitHub, and the folders, item links and default branches used by Docs.');
     expect(SECTION_ICON.integrations).toBe('network');
     expect(entry().querySelectorAll('svg')).toHaveLength(2);
     expect(entry().querySelector('.settings-index-status')?.textContent).toBe(`Linear: no key yet · ${INTEGRATIONS_GITHUB_STATUS}`);

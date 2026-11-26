@@ -28,13 +28,20 @@ import { KeyedQueue } from './inject/queue.js';
 import { systemTimePorts } from './time/system.js';
 import { OverlordAuthorityJournal, overlordAuthorityFileAt } from './coord/overlordAuthorityJournal.js';
 import { OverlordAuthorityGuard, runOverlordAuthorityBoot, type AuthorityBootPort } from './coord/overlordAuthorityGuard.js';
-import { OverlordRestoreState, preWitnessFacts } from './coord/overlordRestoreState.js';
+import { raiseRestoreDetectedOn } from './coord/overlordRestoreLatch.js';
+import { OverlordAuthorityExchange } from './coord/overlordAuthorityExchange.js';
+import { witnessLinkOver } from './coord/overlordAuthorityWitnessLink.js';
+import type { PrivacyJournalHead } from './coord/privacyJournalHead.js';
+import { OverlordRestoreState } from './coord/overlordRestoreState.js';
+import { invariantMonitorOver } from './coord/invariantLane.js';
+import { designationBaseline } from './coord/overlordSequenceStore.js';
+import { readinessLaneOver } from './coord/overlordReadinessWiring.js';
 import { bootBoxToken } from './token/boot.js';
 import { BoxTokenDriver } from './token/driver.js';
 import { fileBothRoleWriter, fileTokenStore, tokenPaths } from './token/files.js';
 import { gateRowsOver, generationReaderOver, tokenSyncLinkOver } from './token/link.js';
 import { coordinationRestoreRefusal, openCoordDb } from './coord/db.js';
-import { openOperatorModelStore, operatorModelBootLines } from './operatorModel/store.js';
+import { openOperatorModelStore, operatorModelBootLines, type WitnessedMessageIds } from './operatorModel/store.js';
 import { bootPassSummary, runOperatorModelBootPass, w1Citations } from './operatorModel/bootPass.js';
 import { readPrivateNameList } from './operatorModel/nameListRead.js';
 import { COORDINATION_RESTORE_MARKER_FILE } from './coord/delegation-checkpoint.js';
@@ -151,10 +158,24 @@ if (!landingReplay.ok) {
   try { coordDb.close(); } catch { /* the process stops either way */ }
   process.exit(1);
 }
+// Programme lifecycle W1 (spec §15, D-8983): the boot re-measure, before any door opens, so an end or a claim an older build
+// wrote after a rollback is recorded and put through the migration's rules. A second boot writes nothing. It is a
+// re-measurement, not a migration (W1 review, A5): its transaction rolls back whole on a throw, and the server starts on
+// the rows as they are, saying so, rather than refusing every boot until a rollback.
+try {
+  const rm = coord.remeasureProgrammesAtBoot(time.clock.wall());
+  if (rm.started + rm.states + rm.released + rm.bound > 0) {
+    console.warn(`ccrc-server: programme lifecycle re-measure: ${rm.started} started, ${rm.states} states, ${rm.released} released, ${rm.bound} bound`);
+  }
+} catch (err) {
+  console.warn(`ccrc-server: programme lifecycle re-measure failed and wrote nothing (${err instanceof Error ? err.message : String(err)}); the rows are served as they are`);
+}
 // The Overlord's private store (context C11; Overlord W1 private store A): opened after coord.db and before the watcher, and
 // its throw (`PrivateStoreUnmigratable`) stops the process as coord.db's does. Its privacy journal never stops it: a journal
 // the open cannot trust leaves every message record refused (`journal-unreadable`), and `operatorModelBootLines` says what to do.
-const operatorModel = openOperatorModelStore(cfg.operatorModelDbPath, cfg.ccrcDir, time.clock.wall());
+let readWitnessedMessageIds: WitnessedMessageIds['witnessHighestIds'] = () => 'unmeasured';
+const operatorModel = openOperatorModelStore(cfg.operatorModelDbPath, cfg.ccrcDir, time.clock.wall(),
+  { witnessHighestIds: () => readWitnessedMessageIds() });
 for (const line of operatorModelBootLines(operatorModel, cfg.home)) console.warn(`ccrc-server: ${line}`);
 // I8, once, with both stores open and before the watcher: re-derive what a crash left (counts only, never a text).
 { const bp = runOperatorModelBootPass({ operatorModel: operatorModel.store, coord, citations: w1Citations, now: () => time.clock.wall() });
@@ -177,14 +198,10 @@ const overlordAuthorityPort: AuthorityBootPort = {
 const overlordAuthorityGuard: OverlordAuthorityGuard = new OverlordAuthorityGuard(overlordAuthorityPort);
 const overlordAuthority: OverlordAuthorityJournal = new OverlordAuthorityJournal(
   overlordAuthorityFileAt(cfg.ccrcDir), { clock: time.clock }, overlordAuthorityGuard);
+// The ladder's `restore-detected` latch is raised on the guard's report, registered BEFORE the boot step so a non-coherent boot
+// verdict raises too (ruling F4; `coord/overlordRestoreLatch.ts`).
+raiseRestoreDetectedOn(overlordAuthorityGuard, { coord, journal: overlordAuthority, clock: time.clock, entropy: time.entropy, inTransaction: () => coordDb.isTransaction, warn: (line) => console.warn(line) });
 runOverlordAuthorityBoot(overlordAuthorityPort, overlordAuthorityGuard, (line) => console.warn(line));
-// Confirm the restore, the restore generation and `termRaised` (authority journal C, `coord/overlordRestoreState.ts`): one
-// instance over the same `coord.db`, journal and guard. Its witness facts are `preWitnessFacts` until the witness exchange
-// (authority journal B) lands; whichever of the two lands second puts B's exchange here.
-const overlordRestore = new OverlordRestoreState({
-  db: coordDb, journal: overlordAuthority, guard: overlordAuthorityGuard, witness: preWitnessFacts(overlordAuthority),
-});
-
 // The process's ONE `PoolEdgeLog` — beside `coord`, same reason as
 // `routes.ts`'s `LedgerLog`: `CoordStore.setAccountPools` calls `log.append`
 // INSIDE its transaction, so every caller needs to share this one instance
@@ -410,6 +427,8 @@ deps.plan = planStorePort(coord.db);
 deps.quiz = quizLanePortOf(coord, QUIZ_RECORD_READY);
 // The forecast lane's port (Overlord W2 forecasts A): the store's own delegates, over the same coord.db.
 deps.forecasts = coord;
+// The limit sampler's store (Overlord W1 serviceability PR B): `limit_samples` over the same coord.db.
+deps.limitSamples = coord;
 // The decision model's anchor-set lane and its ports (Overlord W2, plan `w2-decision-model.md` Task 9), over the same coord.db and
 // authority journal. Every row ships `off`, so the lane asks nothing until the operator switches one on.
 /** The hosted egress screen (question 9; review 2418 F2): the private-name list through its one reader. */
@@ -528,7 +547,6 @@ const masker = new SecretMasker({
   },
 });
 deps.masker = masker;
-deps.responseStamp = () => responseStampNow(responseBoot, overlordRestore.restoreGeneration());
 push?.setMasker(masker);
 deps.operatorModel = operatorModel.store;
 // The audit's 365-day retention, at boot and then daily on its own unref'd timer (D-5620). The Linear journal's 365 days
@@ -541,7 +559,46 @@ setInterval(() => { accountAudit.sweep(Date.now()); testboxAudit.sweep(Date.now(
 
 deps.overlordAuthority = overlordAuthority;
 deps.overlordAuthorityGuard = overlordAuthorityGuard;
+// The authority witness exchange (Overlord W1, Task 6, §7.6): built after the guard and the agent link. Its privacy port reads the
+// private store's head and digests (`empty` is a wired journal with no record); its boot nonce is the collector switch's.
+// The Isolation reader measures the agent's relation against the live link facts, never against a configured fleet mode.
+const privacyHead: PrivacyJournalHead = {
+  read: () => {
+    const h = operatorModel.store.privacyJournalHead();
+    if (h.kind === 'unmeasured') return { kind: 'unmeasured', why: h.why };
+    if (h.value === 'empty') return { kind: 'empty' };
+    return {
+      kind: 'head', sequence: h.value.sequence, digest: h.value.digest, highestMessageId: h.value.highestId,
+      digestAt: (n) => { const d = operatorModel.store.privacyJournalDigestAt(n); return d.kind === 'unmeasured' ? 'unmeasured' : d.value; },
+    };
+  },
+};
+const overlordAuthorityExchange = new OverlordAuthorityExchange({
+  journal: overlordAuthority, guard: overlordAuthorityGuard, privacy: privacyHead, boot: collectLane.bootNonce,
+  committedRows: () => coordDb.isTransaction ? { kind: 'unmeasured' } : overlordAuthority.readRows(coordDb),
+  agent: fleetClient === null ? null : { held: () => fleetClient!.state.authorityWitness, link: witnessLinkOver(fleetClient) },
+  relationOf: () => {
+    const isolation = deps.isolation;
+    return fleetClient === null || isolation === undefined ? 'unmeasured' : isolation.relationOf(isolation.linkOf(fleetClient.state));
+  },
+  warn: (line) => console.warn(line),
+});
+fleetClient?.onConnected(() => overlordAuthorityExchange.nudge());
+overlordAuthorityGuard.onAppended(() => overlordAuthorityExchange.nudge());
+deps.overlordAuthorityExchange = overlordAuthorityExchange;
+readWitnessedMessageIds = () => overlordAuthorityExchange.witnessHighestIds();
+// Confirm reads the same journal and guard, using the real exchange for its witness facts.
+const overlordRestore = new OverlordRestoreState({
+  db: coordDb, journal: overlordAuthority, guard: overlordAuthorityGuard, witness: overlordAuthorityExchange,
+});
 deps.overlordRestore = overlordRestore;
+// The invariant monitor (§10.4): its reads and its findings over the same coord.db, journal and guard; shadow until armed.
+deps.invariantMonitor = invariantMonitorOver({
+  db: coordDb, coord, journal: overlordAuthority, readJournal: () => overlordAuthority.readVerified(), guardState: () => overlordAuthorityGuard.state(),
+  designationBaseline, clock: time.clock, entropy: time.entropy, log: (line) => console.warn(line),
+});
+deps.overlordReadiness = readinessLaneOver({ db: coordDb, coord, deps, operatorModel: operatorModel.store, limits: () => watcher.currentLimits() });   // the readiness word (§6.4)
+deps.responseStamp = () => responseStampNow(responseBoot, overlordRestore.restoreGeneration());
 const app = await buildServer(deps, bus, watcher);
 watcher.start();
 perf.start();

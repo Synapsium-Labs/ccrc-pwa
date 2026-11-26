@@ -6,7 +6,7 @@
 // The spec's own sentences are copied verbatim (docs-failures.test.tsx pins them); the rest fill its
 // silences in the same register: what happened, in the operator's words, and nothing the page cannot know.
 import type {
-  DocRefResolution, DocsFailure, DocsFailureBody, DocsFailureContext, DocsNotAFileKind, DocsPageParseFailure,
+  DocRefResolution, DocsFailure, DocsFailureBody, DocsFailureContext, DocsFolderEntryKind, DocsNotAFileKind, DocsPageParseFailure,
   DocsTreeOk, EntryBadge, GithubLink, WithheldReason,
 } from '../../../shared/docs';
 import { isDocsFailureWord, type DocsClientSlot } from './failures';
@@ -52,6 +52,15 @@ export const DOCS_FAILURE_SENTENCE: Record<DocsFailure, string> = {
   'snapshot-gone': 'The saved copy Docs was reading this file from went away twice, so Docs stopped; read it again in a moment.',
   'range-too-large': 'This file is {size}; Docs reads files up to {cap}.',
   'prepare-busy': 'The fleet box is busy preparing other large files right now; try again in a moment.',
+  // Outside folders (X2 P2): the registry's and admission's words. None names the folder's path.
+  'bad-label': 'That folder label is not one Docs can address: lower-case letters, digits and dashes, up to 32.',
+  'unknown-folder': 'There is no outside folder by that label on the fleet box.',
+  'label-exists': 'An outside folder already has that label; choose another or remove that one first.',
+  'absent': 'There is no folder at that path on the fleet box.',
+  'not-a-directory': 'That path on the fleet box is not a folder.',
+  'foreign-owner': 'That folder belongs to another user on the fleet box, so Docs will not read it.',
+  'protected': 'That folder is, holds or sits inside a protected place on the fleet box ({reason}), so Docs will not read it.',
+  'unreadable': 'That folder could not be read on the fleet box ({reason}).',
   'remote-absent': 'This repository has no origin remote to fetch from.',
   'remote-branch-absent': 'Origin has no branch by this name.',
   'fetch-auth-failed': "Fetching from origin was refused: the fleet box's credentials were not accepted.",
@@ -83,6 +92,8 @@ export const DOCS_FAILURE_SENTENCE: Record<DocsFailure, string> = {
   'bad-query': "The server refused this request's parameters.",
   'raster-mismatch': 'These bytes are not a {declared} image.',
   'response-type-refused': 'The server refused to send an answer of an unexpected type.',
+  'auth-off': 'Outside folders are read only with a signed-in session, and sign-in is off on this console.',
+  'unauthenticated': 'Outside folders are read only with a signed-in session; sign in and try again.',
 };
 
 /** The sentences a failure word falls back to when its answer omits a field the sentence above names (absent means
@@ -110,6 +121,8 @@ export const DOCS_FAILURE_FALLBACK_SENTENCE: Partial<Record<DocsFailure, readonl
   ],
   'too-many-entries': ['This repository has more entries than Docs lists at once.'],
   'unreadable-path': ['That path could not be read on the fleet box.'],
+  'protected': ['That folder is, holds or sits inside a protected place on the fleet box, so Docs will not read it.'],
+  'unreadable': ['That folder could not be read on the fleet box.'],
   'untrusted-worktree': ['The worktree holding this draft failed the ownership check.'],
   'git-failed': ['A git command failed on the fleet box.'],
   'ccd-killed': ["The fleet box's ccd was stopped before it answered."],
@@ -133,6 +146,7 @@ export const HELPER_UNAVAILABLE_DETAIL_SENTENCE: Readonly<Record<string, string>
 export const DOCS_PAGE_INVALID_SENTENCE: Record<DocsPageParseFailure, string> = {
   'not-docs': 'This address is not a Docs page.',
   'bad-project': 'This address names a project Docs cannot address.',
+  'bad-label': 'This address names an outside folder label Docs cannot address: lower-case letters, digits and dashes, up to 32.',
   'bad-section': 'This address names a section that is not one of the Docs sections.',
   'bad-path': 'This address holds a path Docs cannot address.',
   'bad-ref': "This address's ref is not a branch name Docs can read.",
@@ -147,6 +161,65 @@ export const DOCS_PAGE_INVALID_SENTENCE: Record<DocsPageParseFailure, string> = 
   'repeated-param': 'This address carries the same query key twice.',
   'reserved-node': 'This address names a fleet node, which Docs does not serve yet.',
 };
+
+/** The words the account gate refuses the folder Add door with (`{ok: false, error}`, no docs word). */
+export type DocsFolderGateWord = 'auth-off' | 'insecure-origin' | 'unauthenticated' | 'unsupported';
+
+/** The outside folders' words (X2 P2.4, spec 4.1): the index group, a folder page's truth line and the five actions' off
+ *  reasons (`folderPage.ts` decides which, `DocsHead` draws them), and Settings' Docs folders
+ *  section. No sentence names an absolute path: the path is Settings' alone, and only as the operator typed or the box listed it. */
+export const DOCS_FOLDER_TEXT = {
+  indexGroup: 'Outside folders',
+  /** The index's one quiet line when the labels read was refused or failed: no group, no banner. */
+  indexNeedsSignIn: 'Outside folders need sign-in.',
+  indexUnread: 'Outside folders could not be read right now.',
+  notInRepo: 'Not in a repository',
+  truth: 'Not in a repository · modified {time}',
+  off: {
+    history: 'A folder outside a repository keeps no history.',
+    changes: 'A folder outside a repository has no earlier version to compare with.',
+    versions: 'A folder outside a repository keeps no versions.',
+    github: 'A folder outside a repository has no page on GitHub.',
+    share: 'A folder outside a repository has no link to share.',
+  },
+  actionLabel: { history: 'History', changes: 'Changes since', versions: 'Versions', github: 'GitHub', share: 'Share' },
+  emptyFolder: 'This folder has none of the Docs sections.',
+  missing: 'That path is not in this folder.',
+  noPreview: 'No preview for this kind of file.',
+  notAFile: 'This entry is not a regular file, so Docs does not open it.',
+  tooLarge: 'This file is larger than Docs reads.',
+  unpinned: 'This file cannot be opened: its listing carries no time to pin it by.',
+  loading: 'Reading the folder…',
+  retry: 'Retry',
+  // Settings' section.
+  /** What to do while sign-in is dark: the two listing doors refuse then, and the section shows this and no list. */
+  signInNeeded: 'Turn sign-in on to see and add folders.',
+  /** Sign-in is on but this device has no session (`unauthenticated`, or the client's `auth` slot). */
+  signInAgain: 'Sign in to see and add folders.',
+  removeFailed: 'The folder could not be removed. Try again.',
+  settingsReading: 'Reading the folders…',
+  settingsEmpty: 'No outside folders yet.',
+  unreadableState: 'unreadable',
+  labelField: 'Label',
+  pathField: 'Absolute path on the fleet box',
+  add: 'Add folder',
+  remove: 'Remove',
+  added: 'Folder added.',
+  removed: 'Folder removed.',
+  stepUpSubject: 'the Docs folders',
+  /** Account-gate refusals of the Add door, by the gate's own word; the box's text never reaches the screen. */
+  gateRefusal: {
+    'auth-off': 'Turn sign-in on to see and add folders.',
+    'insecure-origin': 'This console is not served over HTTPS, so folders cannot be added from here.',
+    'unauthenticated': 'Sign in, then add the folder again.',
+    'unsupported': "The fleet box does not support outside folders yet. Update it, then try again.",
+  } satisfies Record<DocsFolderGateWord, string>,
+  gateRefusalOther: 'The box refused that change to the Docs folders. Try again.',
+  entryKind: {
+    file: 'file', symlink: 'symbolic link', special: 'special file', hardlink: 'hard link',
+    'foreign-owner': "another user's file", 'other-device': 'another file system', unreadable: 'unreadable',
+  } satisfies Record<DocsFolderEntryKind, string>,
+} as const;
 
 /** `not-a-file {kind}` (spec 4.7: "renders kindText[kind]"), shown beside the word's sentence. */
 export const NOT_A_FILE_KIND_TEXT: Record<DocsNotAFileKind, string> = {
@@ -253,7 +326,7 @@ export const TRIED_RESULT_TEXT: Record<TriedResult, string> = {
 };
 
 /** `unresolved-ref {hint: 'tag'}` (spec 4.7). */
-export const UNRESOLVED_TAG_HINT = 'A tag has that name; tags are not served.';
+export const UNRESOLVED_TAG_HINT = 'A tag has that name but does not point to a commit.';
 
 /** A word this build does not know, from a newer server (spec 4.7, verbatim): never folded into a known one. */
 export function unknownWordSentence(word: string): string {
@@ -428,6 +501,8 @@ export const DOCS_SHOW_NOT_SVG = 'an SVG path was answered as another class';
  *  which replaces spec 4.7's "that checkout is detached" because `branch: null` also covers an unmeasured read. */
 export const DOCS_VIEW_TEXT = {
   indexHead: "Each project's default branch, read from the fleet box.",
+  indexConfiguredBranch: 'Opens {branch}',
+  configuredBranchGone: 'Configured branch {branch} is unavailable. Showing the Git default branch.',
   filterProjects: 'Filter projects',
   filterEntries: 'Filter this listing',
   noDocs: 'Projects with no docs ({n})',
@@ -466,6 +541,13 @@ export const DOCS_VIEW_TEXT = {
   redirectBadBranch: "That checkout's branch {branch} is not one Docs can address; showing {owner}'s default branch.",
   redirectLoop: 'Docs did not follow it: the owner named for this folder leads back to this folder.',
   indexLink: 'Docs index',
+  /** X2 P4.1: the index's newest names. `{n}` is the docs beyond the names shown. */
+  newestMore: '{n} more',
+  /** The "N more" link's accessible name: the section and the project it opens. */
+  newestMoreLabel: '{n} more {section} in {project}',
+  /** The accessible name of one project's list of a section's newest docs. */
+  newestListLabel: '{project}: {section}',
+  newestTruncated: 'Some newest names were left out to keep this index small; the counts are whole.',
 } as const;
 
 /** A count's plural suffix for `{s}`. */

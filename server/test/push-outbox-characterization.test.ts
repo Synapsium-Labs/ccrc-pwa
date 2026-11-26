@@ -911,7 +911,8 @@ function driftRig(e: Env) {
   let n = 0;
   const quietRun = (now: number, agoMs: number): number => {
     n += 1;
-    const r = coord.openRun({ program: `prog-${n}`, title: 'T', project: PROJECT, wave: 1, waveOf: 1, claimedBy: 'lane-b-project-a' });
+    // Programme lifecycle W1 (R11, D-8993): one coordinator owns one programme, so each programme has its own claimant.
+    const r = coord.openRun({ program: `prog-${n}`, title: 'T', project: PROJECT, wave: 1, waveOf: 1, claimedBy: `lane-b${n}-project-a` });
     if (!('id' in r)) throw new Error('fixture openRun refused');
     db.prepare("UPDATE runs SET state = 'working' WHERE id = ?").run(r.id);
     db.prepare('INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (?, ?, ?, ?, ?, ?)')

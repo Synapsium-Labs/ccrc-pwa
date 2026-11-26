@@ -144,6 +144,14 @@ export const DOCS_MAX_BYTES_RE_BODY = '[1-9][0-9]{0,7}';
  *  no sign and no leading zero, at most 19 digits, the widest a signed 64-bit `st_mtime_ns` prints. A time before 1970
  *  is negative and matches nothing, so such a file gets no stat pin and stays withheld: it fails closed. */
 export const DOCS_MTIME_NS_RE_BODY = '0|[1-9][0-9]{0,18}';
+/** An outside folder's label (X2 P2, spec 4.1): a lower-case letter or digit, then up to 31 more of those or `-`. No dot,
+ *  slash, space or control character, so a label can never leave the registry directory, change a URL's shape or break a
+ *  log line. The server's L1 checks it before composing any verb, and ccd checks its parity copy (`FOLDER_LABEL_RE`)
+ *  again before any path join. */
+export const DOCS_FOLDER_LABEL_RE_BODY = '[a-z0-9][a-z0-9-]{0,31}';
+/** The anchored matcher of `DOCS_FOLDER_LABEL_RE_BODY`, built the one way every grammar body is (`fullMatcher`). It has no
+ *  `g` or `y` flag, so `.test` carries no state between calls. */
+export const DOCS_FOLDER_LABEL_RE: RegExp = fullMatcher(DOCS_FOLDER_LABEL_RE_BODY);
 /** A section slug, generated from `DOC_SECTIONS`. */
 export const DOCS_SECTION_RE_BODY = DOC_SECTION_SLUGS.join('|');
 /** A section-relative path: not absolute, no trailing or doubled `/`, no `.` or `..` component, no C0 or C1
@@ -244,7 +252,9 @@ export type DocsRefSpec = { kind: 'bare'; name: string } | { kind: 'qualified'; 
 
 /** `null` has ONE meaning: `s` is in neither grammar. */
 export function parseDocsRef(s: string): DocsRefSpec | null {
-  if (isDocsQualifiedRef(s)) return { kind: 'qualified', ref: s };
+  if (isDocsQualifiedRef(s) || (typeof s === 'string' && s.startsWith('refs/tags/') && isDocsBareRef(s.slice('refs/tags/'.length)))) {
+    return { kind: 'qualified', ref: s };
+  }
   if (isDocsBareRef(s)) return { kind: 'bare', name: s };
   return null;
 }
@@ -310,6 +320,16 @@ export const DOCS_FAILURES = {
   'snapshot-gone': 'ccd',
   'range-too-large': 'ccd',
   'prepare-busy': 'ccd',
+  // Outside folders (X2 P2, `docs-folder` and `docs-folder-read`): the label grammar, the registry, and admission of a
+  // folder's path. A refusal names its word (and, for `protected` and `unreadable`, a `reason`) and never the path.
+  'bad-label': 'ccd',
+  'unknown-folder': 'ccd',
+  'label-exists': 'ccd',
+  'absent': 'ccd',
+  'not-a-directory': 'ccd',
+  'foreign-owner': 'ccd',
+  'protected': 'ccd',
+  'unreadable': 'ccd',
   // Fetch.
   'remote-absent': 'ccd',
   'remote-branch-absent': 'ccd',
@@ -343,6 +363,9 @@ export const DOCS_FAILURES = {
   'bad-query': 'server',
   'raster-mismatch': 'server',
   'response-type-refused': 'server',
+  // The outside-folder reads' sign-in gate (X2 P2.3, spec 4.1): a folder is a live working tree, read only with a session.
+  'auth-off': 'server',
+  'unauthenticated': 'server',
 } as const satisfies Record<string, 'ccd' | 'server'>;
 
 export type DocsFailure = keyof typeof DOCS_FAILURES;
@@ -400,6 +423,16 @@ export const DOCS_FAILURE_RETRY: Record<DocsFailure, DocsRetryClass> = {
   'snapshot-gone': 'auto',
   'range-too-large': 'none',
   'prepare-busy': 'manual',
+  // A label the request got wrong, a folder the registry does not hold, a label already taken, and an admission refusal
+  // never succeed by repeating; an unreadable registry, directory or cache may (a lock held, a disk hiccup).
+  'bad-label': 'none',
+  'unknown-folder': 'none',
+  'label-exists': 'none',
+  'absent': 'none',
+  'not-a-directory': 'none',
+  'foreign-owner': 'none',
+  'protected': 'none',
+  'unreadable': 'manual',
   'remote-absent': 'none',
   'remote-branch-absent': 'none',
   'fetch-auth-failed': 'none',
@@ -429,6 +462,9 @@ export const DOCS_FAILURE_RETRY: Record<DocsFailure, DocsRetryClass> = {
   'bad-query': 'none',
   'raster-mismatch': 'none',
   'response-type-refused': 'none',
+  // Sign-in is the operator's to arm or to do; repeating a refused read cannot.
+  'auth-off': 'none',
+  'unauthenticated': 'none',
 };
 
 /** The words a `ccd docs-*` answer may carry, in `DOCS_FAILURES` order. DERIVED from the table, never hand-listed:
@@ -492,6 +528,8 @@ type DocsTriedRef = { ref: string; result: 'resolved' | 'absent' | 'dangling' | 
  * - `step`, `rc`, `stderrHead`: git-failed, git-timeout. `signal`: ccd-killed. `code`, `stderrHead`: ccd-fault.
  * - `cause`: link-failed. `word`: unknown-failure. `lane`: docs-busy. `declared`, `size`: raster-mismatch.
  *   `key`: bad-query. `site`: foreign-request.
+ * - `reason`: protected (the protected directory's own name) and unreadable (an errno name, or `registry-entry`,
+ *   `registry-busy`, `range-cache`, `lock-not-regular`, `timeout`), the outside-folder verbs' words; never a path.
  */
 export interface DocsFailureContext {
   root?: string;
@@ -500,6 +538,7 @@ export interface DocsFailureContext {
   tried?: DocsTriedRef[];
   suggest?: string;
   hint?: 'tag';
+  resolved?: { commit: string; via: 'tag' | 'commit' };
   ref?: string;
   type?: string;
   kind?: DocsNotAFileKind;
@@ -527,6 +566,7 @@ export interface DocsFailureContext {
   declared?: string;
   key?: string;
   site?: string;
+  reason?: string;
 }
 
 /** Every failure the server answers over HTTP (section 3.5, verbatim). Success is 200 only. */
@@ -558,11 +598,13 @@ export function redactDocsText(s: string): string {
 // Spec 2026-10-01 section 2 (b) "Types", with section 3.5's additive amendments (`onRef`, `github`) folded in.
 // Additive only: no FLEET_PROTO bump. Every ccd answer is one JSON line: `{v:1, verb, ok, elapsedMs, ...}`.
 
-export type DocsVerb = 'docs-index' | 'docs-tree' | 'docs-show' | 'docs-fetch' | 'docs-log' | 'docs-show-range';
+export type DocsVerb = 'docs-index' | 'docs-tree' | 'docs-show' | 'docs-fetch' | 'docs-log' | 'docs-show-range'
+  | 'docs-folder' | 'docs-folder-read';
 
 /** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
 const DOCS_VERB_MAP: Record<DocsVerb, true> = {
   'docs-index': true, 'docs-tree': true, 'docs-show': true, 'docs-fetch': true, 'docs-log': true, 'docs-show-range': true,
+  'docs-folder': true, 'docs-folder-read': true,
 };
 export const DOCS_VERBS: readonly DocsVerb[] = Object.keys(DOCS_VERB_MAP) as DocsVerb[];
 
@@ -720,6 +762,64 @@ export interface DocsRangeFrameOk extends DocsRangeFrame {
   v: 1; verb: 'docs-show-range'; ok: true; elapsedMs: number;
 }
 
+// ---- The outside folders' wire (X2 spec section 4.1; plan Tasks P2.1 and P2.2) -------------------------------------
+
+/** One registered folder as `ccd docs-folder --list` answers it: `state: 'ok'` carries the admitted `path`; `unreadable`
+ *  (its registry file holds no one admissible path) carries `path: null` and is listed so Settings can still remove it.
+ *  `path: null` has one meaning: the entry is unreadable. */
+export interface DocsFolderListRow { label: string; path: string | null; state: 'ok' | 'unreadable' }
+
+/** `docs-folder --list`'s ok line: the envelope and every registered folder, labels in the registry's order. */
+export interface DocsFolderListOk { v: 1; verb: 'docs-folder'; ok: true; elapsedMs: number; folders: DocsFolderListRow[] }
+
+/** `docs-folder --add`'s ok line: the label that now names the folder. It carries no path. */
+export interface DocsFolderAddOk { v: 1; verb: 'docs-folder'; ok: true; elapsedMs: number; label: string }
+
+/** `docs-folder --remove`'s ok line: the label gone, its range snapshots purged. */
+export interface DocsFolderRemoveOk { v: 1; verb: 'docs-folder'; ok: true; elapsedMs: number; label: string; removed: true }
+
+/** What a folder listing says a leaf is: only `file` carries `size`, `mtimeNs` and (within the hash ceiling and the shared
+ *  budget) `fp`; every other kind carries none of the three, and `unreadable` names its errno. */
+export type DocsFolderEntryKind =
+  | 'file' | 'symlink' | 'special' | 'hardlink' | 'foreign-owner' | 'other-device' | 'unreadable';
+
+/** The list of the kinds, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const DOCS_FOLDER_ENTRY_KIND_MAP: Record<DocsFolderEntryKind, true> = {
+  file: true, symlink: true, special: true, hardlink: true, 'foreign-owner': true, 'other-device': true, unreadable: true,
+};
+export const DOCS_FOLDER_ENTRY_KINDS: readonly DocsFolderEntryKind[] =
+  Object.keys(DOCS_FOLDER_ENTRY_KIND_MAP) as DocsFolderEntryKind[];
+
+/** One row of a folder's tree. `mtimeNs` is a decimal string exactly when `kind` is `file`, and `null` otherwise (it is
+ *  a string because a nanosecond time does not fit a JSON number); `size` likewise; `fp` is a sha256, or `null` past the
+ *  4 MiB hash ceiling or the 32 MiB shared budget (such a file is pinned by `statPin` at open). `errno` names an
+ *  `unreadable` row's error and is absent on every other row. */
+export interface DocsFolderEntry {
+  section: DocSectionSlug; path: string; kind: DocsFolderEntryKind;
+  size: number | null; mtimeNs: string | null; fp: Sha | null; errno?: string;
+}
+
+/** `docs-folder-read --op tree`'s ok line: the label echoed, the rows (docs-tree's order), and what the walk left
+ *  unlisted. No path of the folder is in it. */
+export interface DocsFolderTreeOk {
+  v: 1; verb: 'docs-folder-read'; ok: true; elapsedMs: number; label: string;
+  entries: DocsFolderEntry[];
+  unlisted: { count: number; byReason: Partial<Record<'invalid-utf8' | 'unsafe-char' | 'too-long' | 'too-deep', number>> };
+}
+
+/** `docs-folder-read --op show`'s ok line: a show of one leaf read only while its bytes hash to the fingerprint asked, with
+ *  `source: 'folder'` and the modified time of the descriptor that was read (`mtimeNs`, a decimal string), so the page's
+ *  time is the time of the bytes it shows. `fp === sha256`. */
+export interface DocsFolderShowOk {
+  v: 1; verb: 'docs-folder-read'; ok: true; elapsedMs: number; label: string; source: 'folder';
+  section: DocSectionSlug; path: string; size: number; sha256: Sha; fp: Sha; mtimeNs: string;
+  encoding: 'utf8' | 'base64'; text?: string; b64?: string;
+}
+
+/** `docs-folder-read --op prepare`'s and `--op range`'s ok lines: the range verb's answers under the folder verb's name. */
+export type DocsFolderPreparedOk = Omit<DocsRangePreparedOk, 'verb'> & { verb: 'docs-folder-read' };
+export type DocsFolderFrameOk = Omit<DocsRangeFrameOk, 'verb'> & { verb: 'docs-folder-read' };
+
 export interface DocsFetchOk {
   v: 1; verb: 'docs-fetch'; ok: true; elapsedMs: number;
   branch: string; trackedRef: string; defaultVia?: string /* iff no --branch */;
@@ -742,8 +842,20 @@ export interface DocsIndexOk {
     sections?: Partial<Record<DocSectionSlug, number | null>>;
     sectionsOnDisk?: DocSectionSlug[] /* non-git dirs: one lstat per section */; owner?: string | null; branch?: string | null;
     fetch?: { okAgeMs: number | null; lastOutcome: string };
+    /** X2 P4.1 (spec section 5.1, I1): per section of `sections` with a count above 0, its newest names, at most
+     *  `DOCS_INDEX_NEWEST_PER_SECTION`, each a path relative to the section, newest first (name descending, code-unit
+     *  order; names are date-prefixed). Additive: an older ccd sends none, and a project's whole `newest` is left out once
+     *  the wire cap dropped it (`newestTruncated`). Read through `pwa/src/docs/docsTree.ts#indexNewest` alone. */
+    newest?: Partial<Record<DocSectionSlug, string[]>>;
   }[];
+  /** X2 P4.1: set when the listing wire cap made ccd drop projects' `newest`, whole, from the last project backwards; the counts in
+   *  `sections` are kept whole. Absent when nothing was dropped. */
+  newestTruncated?: true;
 }
+
+/** How many newest names `docs-index` carries per section (spec section 5.1, the standalone index's five). ccd holds a parity
+ *  copy (`docs-parity.test.ts`). */
+export const DOCS_INDEX_NEWEST_PER_SECTION = 5;
 
 export type DocsIndexRow = DocsIndexOk['projects'][number];
 
@@ -778,20 +890,22 @@ export type DocsCcdFailure = {
 // the PWA picks its renderer and its "too large" sentence from the same ones.
 // ---------------------------------------------------------------------------
 
-export type DocContentClass = 'markdown' | 'raster' | 'svg' | 'html' | 'text' | 'other';
+export type DocContentClass = 'markdown' | 'raster' | 'svg' | 'html' | 'pdf' | 'text' | 'other';
 
 /** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
 const DOC_CONTENT_CLASS_MAP: Record<DocContentClass, true> = {
-  markdown: true, raster: true, svg: true, html: true, text: true, other: true,
+  markdown: true, raster: true, svg: true, html: true, pdf: true, text: true, other: true,
 };
 export const DOC_CONTENT_CLASSES: readonly DocContentClass[] = Object.keys(DOC_CONTENT_CLASS_MAP) as DocContentClass[];
 
-/** The extension table, spec 5.1 verbatim. `xml`, `xsl` and `xhtml` are TEXT: shown as source, never as a
- *  document. Anything unlisted (`pdf`, `mht`, `svgz`, fonts) is `other`, download only. */
+/** The extension table, spec 5.1 verbatim, plus `pdf` (X2 spec 4.4, wave P3: drawn in the PDF frame). `xml`, `xsl` and
+ *  `xhtml` are TEXT: shown as source, never as a document. Anything unlisted (`mht`, `svgz`, fonts) is `other`, download
+ *  only. */
 export const DOC_CONTENT_CLASS_BY_EXT = {
   md: 'markdown', markdown: 'markdown',
   png: 'raster', jpg: 'raster', jpeg: 'raster', gif: 'raster', webp: 'raster',
-  svg: 'svg', html: 'html', htm: 'html',
+  svg: 'svg', html: 'html', htm: 'html', pdf: 'pdf',
+  ico: 'raster',
   txt: 'text', json: 'text', yaml: 'text', yml: 'text', toml: 'text', csv: 'text', tsv: 'text', log: 'text',
   ts: 'text', tsx: 'text', js: 'text', mjs: 'text', cjs: 'text', css: 'text', py: 'text', sh: 'text',
   sql: 'text', diff: 'text', patch: 'text', xml: 'text', xsl: 'text', xhtml: 'text',
@@ -840,9 +954,25 @@ export const DOCS_CLASS_CAP: Record<DocContentClass, number> = {
   raster: DOCS_MAX_IMAGE_BYTES,
   svg: DOCS_MAX_IMAGE_BYTES,
   html: DOCS_MAX_DOC_BYTES,
+  pdf: DOCS_MAX_DOC_BYTES,
   text: DOCS_MAX_DOC_BYTES,
   other: DOCS_MAX_DOC_BYTES,
 };
+
+/** A PDF's magic (X2 spec 4.4): `%PDF-` at offset 0, checked before the bytes reach the PDF frame, as a raster's are
+ *  before they are drawn. */
+export const DOCS_PDF_MAGIC: readonly number[] = [0x25, 0x50, 0x44, 0x46, 0x2d];
+
+/** Whether `bytes` begin with `%PDF-` at offset 0. Input too short to hold it is a `mismatch`. */
+export function sniffPdf(bytes: Uint8Array): 'match' | 'mismatch' {
+  return DOCS_PDF_MAGIC.every((b, i) => bytes[i] === b) ? 'match' : 'mismatch';
+}
+
+/** Whether a PDF of `size` bytes opens inline in the PDF frame or is offered as a Download only (X2 spec 4.4, C4): at
+ *  most `DOCS_PDF_INLINE_MAX_BYTES` opens inline. A size that is not a whole byte count opens nothing. */
+export function pdfVerdict(size: number): 'inline' | 'download' {
+  return Number.isSafeInteger(size) && size >= 0 && size <= DOCS_PDF_INLINE_MAX_BYTES ? 'inline' : 'download';
+}
 
 /** The raster types the file route answers as bytes, each with its MIME type and its magic: a type matches when
  *  EVERY run of ANY ONE of its alternatives is present at its offset (spec 5.1). */
@@ -851,11 +981,12 @@ export const DOCS_RASTER_TYPES = {
   jpeg: { mime: 'image/jpeg', magic: [[{ at: 0, bytes: [0xff, 0xd8, 0xff] }]] },
   gif:  { mime: 'image/gif',  magic: [[{ at: 0, bytes: [0x47, 0x49, 0x46, 0x38, 0x37, 0x61] }], [{ at: 0, bytes: [0x47, 0x49, 0x46, 0x38, 0x39, 0x61] }]] },
   webp: { mime: 'image/webp', magic: [[{ at: 0, bytes: [0x52, 0x49, 0x46, 0x46] }, { at: 8, bytes: [0x57, 0x45, 0x42, 0x50] }]] },
+  ico:  { mime: 'image/x-icon', magic: [[{ at: 0, bytes: [0, 0, 1, 0] }]] },
 } as const;
 export type RasterType = keyof typeof DOCS_RASTER_TYPES;
 export type RasterMime = (typeof DOCS_RASTER_TYPES)[RasterType]['mime'];
-export const DOCS_RASTER_EXT: Record<'png' | 'jpg' | 'jpeg' | 'gif' | 'webp', RasterType> =
-  { png: 'png', jpg: 'jpeg', jpeg: 'jpeg', gif: 'gif', webp: 'webp' };
+export const DOCS_RASTER_EXT: Record<'png' | 'jpg' | 'jpeg' | 'gif' | 'webp' | 'ico', RasterType> =
+  { png: 'png', jpg: 'jpeg', jpeg: 'jpeg', gif: 'gif', webp: 'webp', ico: 'ico' };
 
 /** One run of magic bytes at an offset: the shape every alternative in the table above has. */
 type MagicRun = { readonly at: number; readonly bytes: readonly number[] };
@@ -864,6 +995,15 @@ type MagicRun = { readonly at: number; readonly bytes: readonly number[] };
  *  bytes, so a `.png` holding JPEG bytes is a `mismatch`; so is input too short to hold the magic. */
 export function sniffRaster(declared: RasterType, bytes: Uint8Array): 'match' | 'mismatch' {
   const alternatives: readonly (readonly MagicRun[])[] = DOCS_RASTER_TYPES[declared].magic;
+  if (declared === 'ico') {
+    if (bytes.length < 22) return 'mismatch';
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const count = view.getUint16(4, true);
+    const size = view.getUint32(14, true);
+    const offset = view.getUint32(18, true);
+    const tableEnd = 6 + count * 16;
+    if (count < 1 || count > 64 || tableEnd > bytes.length || size === 0 || offset < tableEnd || offset + size > bytes.length) return 'mismatch';
+  }
   for (const runs of alternatives) {
     if (runs.every((run) => run.bytes.every((b, i) => bytes[run.at + i] === b))) return 'match';
   }
@@ -899,6 +1039,19 @@ export interface DocsHistoryResponse { ok: true; log: DocsLogOk }
  *  fields of ccd's answer that the PWA reads, never ccd's envelope. */
 export interface DocsRangePrepareResponse { ok: true; prepared: DocsRangePrepared }
 export interface DocsRangeFrameResponse { ok: true; frame: DocsRangeFrame }
+
+/** The outside-folder doors' 200s (X2 P2.3, spec 4.1). `GET /api/docs-folders` answers `DocsFoldersLabelsResponse`: labels
+ *  and each folder's state, never a path. `GET /api/docs-folders/paths`, the one door whose answer carries an absolute path,
+ *  answers `DocsFoldersPathsResponse` (Settings only). A folder's tree is ccd's answer as it came; its file is the project
+ *  file route's JSON with a folder show; its range answers are the project range route's `DocsRangePrepareResponse` and
+ *  `DocsRangeFrameResponse`, which carry no label and no path. */
+export interface DocsFolderLabelRow { label: string; state: 'ok' | 'unreadable' }
+export interface DocsFoldersLabelsResponse { ok: true; folders: DocsFolderLabelRow[] }
+export interface DocsFoldersPathsResponse { ok: true; folders: DocsFolderListRow[] }
+export interface DocsFolderAddResponse { ok: true; label: string }
+export interface DocsFolderRemoveResponse { ok: true; label: string; removed: true }
+export interface DocsFolderTreeResponse { ok: true; tree: DocsFolderTreeOk }
+export interface DocsFolderFileResponse { ok: true; contentClass: Exclude<DocContentClass, 'raster'>; show: DocsFolderShowOk }
 
 // ---------------------------------------------------------------------------
 // (G) resolveDocRef (spec 4.11): where a link or an image reference inside a
@@ -1276,6 +1429,9 @@ export function githubPermalink(
 export const DOCS_PAGE_PREFIX = '/docs';
 /** The docs API routes live under this prefix (spec 3.4; the history route, rich-docs spec G4). */
 export const DOCS_API_PREFIX = '/api/docs';
+/** The outside-folder doors (X2 P2.3, spec 4.1) live under this prefix, a sibling of the project routes' so a folder's label
+ *  can never be read as a project. Derived from `DOCS_API_PREFIX`, never spelled a second time. */
+export const DOCS_FOLDERS_API_PREFIX = DOCS_API_PREFIX + '-folders';
 /** The marker header every PWA docs fetch carries (spec 3.8, clause 3). An img, iframe, script, link or
  *  navigation cannot attach it, and a cross-origin fetch can only after a preflight the server never answers. */
 export const DOCS_REQUEST_HEADER = 'x-ccrc-docs';
@@ -1296,13 +1452,36 @@ export type DocsPageLocation =
       /** The version view's commit (rich-docs spec G6); `null` has one meaning, the latest at `ref`. */
       at: string | null;
       view: 'effective' | 'committed'; frame: 'inline' | 'full' };
-export type DocsPageParseFailure = 'not-docs' | 'bad-project' | 'bad-section' | 'bad-path' | 'bad-ref' | 'bad-at'
+/** Canonicalise a validated legacy-ref hint, without trusting the failure's optional context. */
+export function docsResolvedRefLocation(page: DocsPageLocation, body: unknown): DocsPageLocation | null {
+  if (page.kind === 'index' || page.ref === null || typeof body !== 'object' || body === null) return null;
+  const failure = body as { ok?: unknown; failure?: unknown; resolved?: unknown };
+  if (failure.ok !== false || failure.failure !== 'unresolved-ref' || typeof failure.resolved !== 'object'
+      || failure.resolved === null || Array.isArray(failure.resolved)) return null;
+  const resolved = failure.resolved as { commit?: unknown; via?: unknown };
+  if (typeof resolved.commit !== 'string' || !isDocsCommit(resolved.commit)
+      || (resolved.via !== 'tag' && resolved.via !== 'commit')) return null;
+  if (page.kind === 'path' && !page.dirSlash) return { ...page, ref: null, at: page.at ?? resolved.commit, view: 'effective' };
+  return { ...page, ref: null };
+}
+
+/** An outside folder's page (X2 P2.4, spec 4.1): `/docs/~<label>`, `/docs/~<label>/<section>`, `/docs/~<label>/<section>/<path>`.
+ *  A SEPARATE union beside `DocsPageLocation`, never a kind of it: every project page carries a `project` and a `ref`, a folder
+ *  page has neither (a folder is no repository, so nothing names a ref), and `DocsHead`, `share.ts` and the project views narrow
+ *  `DocsPageLocation` by `kind !== 'index'` and then read `page.project`. A folder page takes no query key at all: `ref`, `at`,
+ *  `view` and `frame` are the project page's, and are refused here as `unknown-param`. */
+export type DocsFolderLocation =
+  | { kind: 'folder'; label: string }
+  | { kind: 'folder-section'; label: string; section: DocSectionSlug }
+  | { kind: 'folder-path'; label: string; section: DocSectionSlug; path: string; dirSlash: boolean };
+export type DocsPageParseFailure = 'not-docs' | 'bad-project' | 'bad-label' | 'bad-section' | 'bad-path' | 'bad-ref' | 'bad-at'
   | 'bad-view' | 'bad-frame' | 'bad-escape' | 'encoded-slash' | 'commit-in-page' | 'unknown-param'
   | 'repeated-param' | 'reserved-node';
 
 /** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
 const DOCS_PAGE_PARSE_FAILURE_MAP: Record<DocsPageParseFailure, true> = {
-  'not-docs': true, 'bad-project': true, 'bad-section': true, 'bad-path': true, 'bad-ref': true, 'bad-at': true, 'bad-view': true,
+  'not-docs': true, 'bad-project': true, 'bad-label': true, 'bad-section': true, 'bad-path': true, 'bad-ref': true, 'bad-at': true,
+  'bad-view': true,
   'bad-frame': true, 'bad-escape': true, 'encoded-slash': true, 'commit-in-page': true, 'unknown-param': true,
   'repeated-param': true, 'reserved-node': true,
 };
@@ -1310,8 +1489,13 @@ export const DOCS_PAGE_PARSE_FAILURES: readonly DocsPageParseFailure[] =
   Object.keys(DOCS_PAGE_PARSE_FAILURE_MAP) as DocsPageParseFailure[];
 
 export type DocsPageParse =
-  | { ok: true; loc: DocsPageLocation; canonical: string }
+  | { ok: true; loc: DocsPageLocation | DocsFolderLocation; canonical: string }
   | { ok: false; why: DocsPageParseFailure };
+
+/** Whether a parsed page is an outside folder's (X2 P2.4): the narrowing every caller of `parseDocsPage` makes first. */
+export function isDocsFolderLocation(loc: DocsPageLocation | DocsFolderLocation): loc is DocsFolderLocation {
+  return loc.kind === 'folder' || loc.kind === 'folder-section' || loc.kind === 'folder-path';
+}
 
 type DocsPageKey = (typeof DOCS_PAGE_KEYS)[number];
 type DocsPathLocation = Extract<DocsPageLocation, { kind: 'path' }>;
@@ -1411,7 +1595,10 @@ export function parseDocsPage(pathname: string, search: string): DocsPageParse {
   if (segs.some((s) => s.includes('/'))) return { ok: false, why: 'encoded-slash' };
   const [project, sectionText] = segs;
   if (project !== undefined && project.startsWith('@')) return { ok: false, why: 'reserved-node' };
-  if (project !== undefined && !isDocsProject(project)) return { ok: false, why: 'bad-project' };
+  // An outside folder (X2 P2.4): `~` is a character the project grammar never admits, so `~<label>` can be no project.
+  const folder = project !== undefined && project.startsWith('~');
+  if (folder && !DOCS_FOLDER_LABEL_RE.test(project.slice(1))) return { ok: false, why: 'bad-label' };
+  if (!folder && project !== undefined && !isDocsProject(project)) return { ok: false, why: 'bad-project' };
   let section: DocSectionSlug | undefined;
   if (sectionText !== undefined) {
     if (!isDocsSection(sectionText)) return { ok: false, why: 'bad-section' };
@@ -1419,6 +1606,17 @@ export function parseDocsPage(pathname: string, search: string): DocsPageParse {
   }
   const path = segs.slice(2).join('/');
   if (segs.length > 2 && !isDocsRelPath(path)) return { ok: false, why: 'bad-path' };
+  if (folder) {
+    // A folder page carries no query key: the keys are the project page's (`PAGE_KEYS_BY_KIND`), never the folder's.
+    const fq = pageQuery(search, []);
+    if (!fq.ok) return fq;
+    const label = project.slice(1);
+    let floc: DocsFolderLocation;
+    if (section === undefined) floc = { kind: 'folder', label };
+    else if (segs.length === 2) floc = { kind: 'folder-section', label, section };
+    else floc = { kind: 'folder-path', label, section, path, dirSlash };
+    return { ok: true, loc: floc, canonical: docsPageUrl(floc) };
+  }
   const kind: DocsPageLocation['kind'] =
     project === undefined ? 'index' : section === undefined ? 'project' : segs.length === 2 ? 'section' : 'path';
   const q = pageQuery(search, PAGE_KEYS_BY_KIND[kind]);
@@ -1468,8 +1666,17 @@ export function parseDocsPage(pathname: string, search: string): DocsPageParse {
  *  values in their grammars, as every parseDocsPage answer does; encodeURIComponent throws URIError on a lone
  *  surrogate, which isDocsRelPath refuses.
  *  parseDocsPage(docsPageUrl(l)) returns l for every canonical l. */
-export function docsPageUrl(loc: DocsPageLocation): string {
+export function docsPageUrl(loc: DocsPageLocation | DocsFolderLocation): string {
   if (loc.kind === 'index') return DOCS_PAGE_PREFIX;
+  if (isDocsFolderLocation(loc)) {
+    // A folder page: the label behind its `~`, then the section and path as a project page writes them, and no query.
+    let url = DOCS_PAGE_PREFIX + '/~' + loc.label;
+    if (loc.kind !== 'folder') url += '/' + loc.section;
+    if (loc.kind === 'folder-path') {
+      url += '/' + loc.path.split('/').map((s) => encodeURIComponent(s)).join('/') + (loc.dirSlash ? '/' : '');
+    }
+    return url;
+  }
   let url = DOCS_PAGE_PREFIX + '/' + encodeURIComponent(loc.project);
   if (loc.kind !== 'project') url += '/' + loc.section;
   if (loc.kind === 'path') {
@@ -1548,6 +1755,7 @@ function rangePlace(pin: DocListPin): (readonly [string, string])[] {
  *  validates nothing; the server's L1 query parser does, with the same predicates. */
 export const docsApi = {
   projects: (): string => DOCS_API_PREFIX + '/projects',
+  settings: (): string => DOCS_API_PREFIX + '/settings',
   tree: (project: string, ref: DocsRefSpec | null): string =>
     apiProjectPath(project) + '/tree' + (ref === null ? '' : apiQuery([['ref', docsRefText(ref)]])),
   // The file route's pin is the opened one, which always names its bytes by `fp`: the file URL never carries `stat`.
@@ -1568,5 +1776,29 @@ export const docsApi = {
   rangeFrame: (project: string, pin: DocListPin, range: DocsRangePin, snapshot: string, offset: number, length: number): string =>
     apiProjectPath(project) + '/range' + apiQuery([
       ...rangePlace(pin), ['pin', docsRangePinText(range)],
+      ['snapshot', snapshot], ['offset', String(offset)], ['length', String(length)]]),
+  // ---- Outside folders (X2 P2.3, spec 4.1 and 7): the seven doors' URLs, each built here once. `folders` is the labels-only
+  // read (the index and every page) and also the Add door's URL (POST); `folderPaths` is the ONE URL whose answer carries an
+  // absolute path, called only from Settings' Docs folders section. A label goes through encodeURIComponent like a project.
+  folders: (): string => DOCS_FOLDERS_API_PREFIX,
+  folderPaths: (): string => DOCS_FOLDERS_API_PREFIX + '/paths',
+  folderAdd: (): string => DOCS_FOLDERS_API_PREFIX,
+  folderRemove: (label: string): string => DOCS_FOLDERS_API_PREFIX + '/' + encodeURIComponent(label),
+  folderTree: (label: string): string => DOCS_FOLDERS_API_PREFIX + '/' + encodeURIComponent(label) + '/tree',
+  /** One leaf of a folder: its section, path and the fingerprint its listing row carried (a folder file is read only while
+   *  its bytes hash to it). A file the listing could not fingerprint is read by range alone. */
+  folderFile: (label: string, section: DocSectionSlug, path: string, fp: string): string =>
+    DOCS_FOLDERS_API_PREFIX + '/' + encodeURIComponent(label) + '/file'
+    + apiQuery([['section', section], ['path', path], ['fp', fp]]),
+  /** A folder file's range prepare: its section and path, the range pin's wire form (`fp:` or `stat:`, never `blob:`), then
+   *  `prepare=1`. */
+  folderRangePrepare: (label: string, section: DocSectionSlug, path: string, range: DocsRangePin): string =>
+    DOCS_FOLDERS_API_PREFIX + '/' + encodeURIComponent(label) + '/range'
+    + apiQuery([['section', section], ['path', path], ['pin', docsRangePinText(range)], ['prepare', '1']]),
+  /** One frame of a prepared folder snapshot: the same place and pin, then `snapshot`, `offset` and `length`. */
+  folderRangeFrame: (label: string, section: DocSectionSlug, path: string, range: DocsRangePin, snapshot: string,
+    offset: number, length: number): string =>
+    DOCS_FOLDERS_API_PREFIX + '/' + encodeURIComponent(label) + '/range'
+    + apiQuery([['section', section], ['path', path], ['pin', docsRangePinText(range)],
       ['snapshot', snapshot], ['offset', String(offset)], ['length', String(length)]]),
 };

@@ -32,10 +32,14 @@ import type { ClaudeCodeOwnLists } from '../../shared/overlord-sandbox.js';
 import type { SettleOutcome } from './continuity/routes.js';
 import type { QuizLanePort } from './continuity/quizLane.js';
 import type { ForecastLanePort } from './coord/forecastLane.js';
+import type { LimitSampleStore } from './limitSampler.js';
 import type { DecisionDeps } from './coord/decisionModelLane.js';
 import type { OverlordAuthorityJournal } from './coord/overlordAuthorityJournal.js';
 import type { OverlordAuthorityGuard } from './coord/overlordAuthorityGuard.js';
+import type { OverlordAuthorityExchange } from './coord/overlordAuthorityExchange.js';
 import type { OverlordRestoreState } from './coord/overlordRestoreState.js';
+import type { InvariantMonitor } from './coord/invariantLane.js';
+import type { ReadinessLane } from './coord/overlordReadinessLane.js';
 import type { LadderConditionInputs, NarrowingWitness } from './coord/overlordLadderRead.js';
 import type { WatcherCoordPort } from './coord/ports.js';
 import type { PoolEdgeLog } from './coord/pooledgelog.js';
@@ -69,6 +73,10 @@ export interface Deps {
   cfg: CcrcConfig;
   /** Draft review's fixture seam: hand in the open store or the filesystem with which to open it. */
   review?: { store?: ReviewStore; fs?: ReviewFs };
+  /** The PWA root's seam (draft review X3 R2.2): absent means `findPwaRoot()`, the built `dist-pwa/` beside the
+   *  server; `null` means API-only (no static files, and `GET /review` answers 404); a string is a test's built tree
+   *  or a fixture root holding a stand-in `review.html`. Type-only: nothing reads it from the environment. */
+  pwaRoot?: string | null;
   /** The timing recorder (console speed S1): absent in tests; `index.ts` builds one. It changes no behaviour. */
   perf?: PerfRecorder;
   /** The deploy's build stamp (buildinfo.ts, read once at boot from
@@ -225,6 +233,9 @@ export interface Deps {
   /** The forecast lane's port (Overlord W2 forecasts A, `coord/forecastLane.ts`): the coordination store itself, set in
    *  `index.ts`. Absent: the lane does not run. */
   forecasts?: ForecastLanePort;
+  /** The limit sampler's store (Overlord W1 serviceability PR B, `limitSampler.ts`): the coordination store, set in `index.ts`.
+   *  Absent: the `limitSamples` lane does not run. */
+  limitSamples?: LimitSampleStore;
   /** The decision model's anchor-set lane and its ports (Overlord W2, `coord/decisionModelLane.ts`), built once in `index.ts` over
    *  coord.db and the authority journal. Absent (a test, a script): the lane does not run. */
   decisions?: DecisionDeps;
@@ -244,9 +255,19 @@ export interface Deps {
    *  Absent (a test, a script): nothing appends an authority record, and a door that needs one refuses. */
   overlordAuthority?: OverlordAuthorityJournal;
   overlordAuthorityGuard?: OverlordAuthorityGuard;
+  /** The authority witness exchange (Overlord W1, Task 6), built in `index.ts` after the guard and the agent link: the console door's
+   *  `exchange`, the watcher's `authorityWitness` lane's nudge, and PR C's Confirm reads. Absent (a test, a script): the door answers 503 and the lane does nothing. */
+  overlordAuthorityExchange?: OverlordAuthorityExchange;
   /** Confirm the restore, the restore generation and `termRaised` (authority journal C, `coord/overlordRestoreState.ts`), built
    *  once in `index.ts` over the same journal and guard. Absent (a test, a script): the Confirm door answers `unavailable`. */
   overlordRestore?: OverlordRestoreState;
+  /** The invariant monitor (Overlord W1, §10.4, `coord/invariantLane.ts`), built once in `index.ts` over `coord.db`, the same
+   *  journal and guard and the ladder; the watcher's `invariants` lane runs its pass. Absent (a test, a script): the lane does nothing. */
+  invariantMonitor?: InvariantMonitor;
+  /** The Overlord's readiness word (§6.4, C23, H20; `coord/overlordReadinessLane.ts`), built once in `index.ts` over `coord.db`
+   *  and each producer's reader; the watcher's `overlordReadiness` lane runs its pass, and `GET /api/overlord/readiness` serves its
+   *  read. Absent (a test, a script): no pass runs, and the read door answers `unavailable`. */
+  overlordReadiness?: ReadinessLane;
   /** Optional future authority witness and condition seams; absence uses the W1 defaults. */
   ladderWitness?: NarrowingWitness;
   ladderInputs?: LadderConditionInputs;

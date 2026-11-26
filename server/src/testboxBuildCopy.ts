@@ -13,6 +13,8 @@
 //   - every other refusal (`build-hash-mismatch`, `build-store-refused`, `build-copy-failed`, `busy`, the lane's own
 //     ssh codes such as `unreachable` or `host-key-changed`), an exit off the verb's grammar,
 //     a builder refusal, a frame that never left, a deadline or a lost answer ................. `copy-failed`
+// A copy whose answer says the box replaced a link at the build's name (`"replaced":"link"`, capture runner PR 3b's fix
+// round 1) is `copied` like any other, and this adapter writes one server log line saying so.
 // A lost answer may have placed the build after all: the next capture finds out, since the box answers `build-absent` only
 // for a build it does not hold.
 // THE FOLD, and why it is safe: the lane needs only whether to try again within the hour, which every not-sent word answers
@@ -28,7 +30,7 @@ const NO_LANE: ReadonlySet<string> = new Set(['not-connected', 'no-access-key'])
 const codeWord = (code: string): string => (/^[a-z0-9-]{1,64}$/.test(code) ? code : 'unreadable');
 
 /** The verb's last line: null if it does not describe this copy or a typed refusal. */
-function answerLine(stdout: string, build: string): { readonly ok: true } | { readonly ok: false; readonly code: string } | null {
+function answerLine(stdout: string, build: string): { readonly ok: true; readonly replacedLink: boolean } | { readonly ok: false; readonly code: string } | null {
   const text = stdout.trim();
   const last = text.slice(text.lastIndexOf('\n') + 1);
   try {
@@ -36,7 +38,7 @@ function answerLine(stdout: string, build: string): { readonly ok: true } | { re
     if (typeof j !== 'object' || j === null || Array.isArray(j)) return null;
     const o = j as Record<string, unknown>;
     if (o['ok'] === true && o['build'] === build && typeof o['sha256'] === 'string' && /^[0-9a-f]{64}$/.test(o['sha256'])) {
-      return { ok: true };
+      return { ok: true, replacedLink: o['replaced'] === 'link' };
     }
     if (o['ok'] === false && typeof o['code'] === 'string') return { ok: false, code: o['code'] };
   } catch { /* not the verb's line */ }
@@ -55,7 +57,11 @@ export function testboxBuildCopy(ops: () => Pick<TestboxAdminOps, 'run'> | undef
         if (ran.kind !== 'exited') return 'copy-failed';
         const line = answerLine(ran.stdout, job.build);
         if (line === null) return 'copy-failed';
-        if (line.ok) return ran.code === 0 ? 'copied' : 'copy-failed';
+        if (line.ok) {
+          if (ran.code !== 0) return 'copy-failed';
+          if (line.replacedLink) console.warn(`ccrc-server: build copy of ${job.build}: the test box replaced a link at the build's name with the build`);
+          return 'copied';
+        }
         const word: BuildCopyAnswer = REFUSED.has(line.code) ? 'copy-refused' : NO_LANE.has(line.code) ? 'no-admin-lane' : 'copy-failed';
         // The fold keeps the lane's one not-sent word; the verb's own code survives in this one line (and the admin log).
         console.warn(`ccrc-server: build copy of ${job.build} refused by the test box admin lane: ${codeWord(line.code)} (recorded as ${word})`);

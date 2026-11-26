@@ -11,8 +11,26 @@ import {
   DOCS_MAX_LISTING_WIRE_BYTES, DOCS_MAX_ENTRIES, DOCS_DRAFT_HASH_BUDGET, DOCS_MAX_DRAFTS, DOCS_MAX_IMAGES_PER_PAGE,
   DOCS_FETCH_MIN_INTERVAL_MS, DOCS_STALE_MS, DOCS_RETRY_FLOOR_MS,
   DOCS_LOG_MAX_ENTRIES, DOCS_LOG_SUBJECT_MAX_CHARS, DOCS_LOG_AUTHOR_MAX_CHARS, DOCS_LOG_MAX_WIRE_BYTES,
-  DOCS_PATH_MAX_BYTES, type DocsLogEntry, type DocsLogOk,
+  DOCS_PATH_MAX_BYTES, contentClass, sniffRaster, type DocsLogEntry, type DocsLogOk,
 } from '../../shared/docs.js';
+
+describe('ico structural validation', () => {
+  it('accepts an icon with a complete table and first image', () => {
+    const icon = Uint8Array.from([0, 0, 1, 0, 1, 0, 16, 16, 0, 0, 1, 0, 32, 0, 1, 0, 0, 0, 22, 0, 0, 0, 42]);
+    expect(contentClass('favicon.ico')).toBe('raster');
+    expect(sniffRaster('ico', icon)).toBe('match');
+  });
+
+  it('rejects bad counts, incomplete tables, and first images outside the file', () => {
+    const icon = Uint8Array.from([0, 0, 1, 0, 1, 0, 16, 16, 0, 0, 1, 0, 32, 0, 1, 0, 0, 0, 22, 0, 0, 0, 42]);
+    for (const [index, value] of [[4, 0], [4, 65], [4, 2], [14, 0], [14, 2], [18, 21], [18, 23]] as const) {
+      const bad = icon.slice();
+      bad[index] = value;
+      expect(sniffRaster('ico', bad), `byte ${index} = ${value}`).toBe('mismatch');
+    }
+    expect(sniffRaster('ico', icon.slice(0, 21))).toBe('mismatch');
+  });
+});
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const DOCS = path.resolve(here, '..', '..', 'shared', 'docs.ts');
@@ -193,6 +211,15 @@ describe('docs failure vocabulary', () => {
     ['snapshot-gone', 'ccd', 'auto'],
     ['range-too-large', 'ccd', 'none'],
     ['prepare-busy', 'ccd', 'manual'],
+    // Outside folders (X2 P2): the registry and admission words of `docs-folder` and `docs-folder-read`
+    ['bad-label', 'ccd', 'none'],
+    ['unknown-folder', 'ccd', 'none'],
+    ['label-exists', 'ccd', 'none'],
+    ['absent', 'ccd', 'none'],
+    ['not-a-directory', 'ccd', 'none'],
+    ['foreign-owner', 'ccd', 'none'],
+    ['protected', 'ccd', 'none'],
+    ['unreadable', 'ccd', 'manual'],
     // Fetch
     ['remote-absent', 'ccd', 'none'],
     ['remote-branch-absent', 'ccd', 'none'],
@@ -226,17 +253,20 @@ describe('docs failure vocabulary', () => {
     ['bad-query', 'server', 'none'],
     ['raster-mismatch', 'server', 'none'],
     ['response-type-refused', 'server', 'none'],
+    // The outside-folder reads' sign-in gate (X2 P2.3)
+    ['auth-off', 'server', 'none'],
+    ['unauthenticated', 'server', 'none'],
   ];
 
   const sorted = (xs: readonly string[]): string[] => [...xs].sort();
 
   describe('DOCS_FAILURES and DOCS_FAILURE_RETRY (row 53, L0 half)', () => {
-    it('the hand table is whole: 61 distinct words, 45 ccd and 16 server', () => {
+    it('the hand table is whole: 71 distinct words, 53 ccd and 18 server', () => {
       const words = SPEC_WORDS.map(([w]) => w);
-      expect(new Set(words).size).toBe(61);
-      expect(words).toHaveLength(61);
-      expect(SPEC_WORDS.filter(([, o]) => o === 'ccd')).toHaveLength(45);
-      expect(SPEC_WORDS.filter(([, o]) => o === 'server')).toHaveLength(16);
+      expect(new Set(words).size).toBe(71);
+      expect(words).toHaveLength(71);
+      expect(SPEC_WORDS.filter(([, o]) => o === 'ccd')).toHaveLength(53);
+      expect(SPEC_WORDS.filter(([, o]) => o === 'server')).toHaveLength(18);
     });
 
     it('DOCS_FAILURE_RETRY and DOCS_FAILURES name the same words, in both directions', () => {
@@ -273,10 +303,10 @@ describe('docs failure vocabulary', () => {
   });
 
   describe('DOCS_CCD_FAILURES', () => {
-    it('is exactly the 45 ccd words of the hand table, each once', () => {
+    it('is exactly the 53 ccd words of the hand table, each once', () => {
       const ccd = SPEC_WORDS.filter(([, o]) => o === 'ccd').map(([w]) => w);
-      expect(DOCS_CCD_FAILURES).toHaveLength(45);
-      expect(new Set(DOCS_CCD_FAILURES).size).toBe(45);
+      expect(DOCS_CCD_FAILURES).toHaveLength(53);
+      expect(new Set(DOCS_CCD_FAILURES).size).toBe(53);
       expect(sorted(DOCS_CCD_FAILURES)).toEqual(sorted(ccd));
     });
 
@@ -567,7 +597,9 @@ describe('(F) contentClass (spec 5.1; M5.3, L0 cases)', () => {
     ['a/b.c/README', 'other'],
     ['a.md/README', 'other'],
     ['x.abcdefghijk', 'other'],
-    ['x.pdf', 'other'],
+    ['x.pdf', 'pdf'],
+    ['dir/Report.PDF', 'pdf'],
+    ['x.pdf.txt', 'text'],
     ['x.woff2', 'other'],
     ['x.tar.gz', 'other'],
     ['dir/Notes.MarkDown', 'markdown'],
@@ -580,11 +612,12 @@ describe('(F) contentClass (spec 5.1; M5.3, L0 cases)', () => {
     expect('x.mar\u212Adown'.toLowerCase()).toBe('x.markdown');
   });
 
-  it('the table is spec 5.1 verbatim', () => {
+  it('the table is spec 5.1 verbatim, plus pdf (X2 spec 4.4)', () => {
     expect(DocsFG.DOC_CONTENT_CLASS_BY_EXT).toEqual({
       md: 'markdown', markdown: 'markdown',
       png: 'raster', jpg: 'raster', jpeg: 'raster', gif: 'raster', webp: 'raster',
-      svg: 'svg', html: 'html', htm: 'html',
+      svg: 'svg', html: 'html', htm: 'html', pdf: 'pdf',
+      ico: 'raster',
       txt: 'text', json: 'text', yaml: 'text', yml: 'text', toml: 'text', csv: 'text', tsv: 'text', log: 'text',
       ts: 'text', tsx: 'text', js: 'text', mjs: 'text', cjs: 'text', css: 'text', py: 'text', sh: 'text',
       sql: 'text', diff: 'text', patch: 'text', xml: 'text', xsl: 'text', xhtml: 'text',
@@ -602,7 +635,7 @@ describe('(F) contentClass (spec 5.1; M5.3, L0 cases)', () => {
 describe('(F) DOCS_CLASS_CAP (spec 6.1)', () => {
   it('holds each class to its cap', () => {
     expect(DocsFG.DOCS_CLASS_CAP).toEqual({
-      markdown: 2097152, raster: 2097152, svg: 2097152, html: 2097152, text: 2097152, other: 2097152,
+      markdown: 2097152, raster: 2097152, svg: 2097152, html: 2097152, pdf: 2097152, text: 2097152, other: 2097152,
     });
   });
 
@@ -610,7 +643,7 @@ describe('(F) DOCS_CLASS_CAP (spec 6.1)', () => {
     for (const cls of ['raster', 'svg'] as const) {
       expect(DocsFG.DOCS_CLASS_CAP[cls], cls).toBe(DocsFG.DOCS_MAX_IMAGE_BYTES);
     }
-    for (const cls of ['markdown', 'html', 'text', 'other'] as const) {
+    for (const cls of ['markdown', 'html', 'pdf', 'text', 'other'] as const) {
       expect(DocsFG.DOCS_CLASS_CAP[cls], cls).toBe(DocsFG.DOCS_MAX_DOC_BYTES);
     }
   });
@@ -624,8 +657,37 @@ describe('(F) DOCS_CLASS_CAP (spec 6.1)', () => {
     const named = Object.fromEntries([...(decl?.[1] ?? '').matchAll(/(\w+): (\w+),/g)].map((m) => [m[1], m[2]]));
     expect(named).toEqual({
       markdown: 'DOCS_MAX_DOC_BYTES', raster: 'DOCS_MAX_IMAGE_BYTES', svg: 'DOCS_MAX_IMAGE_BYTES',
-      html: 'DOCS_MAX_DOC_BYTES', text: 'DOCS_MAX_DOC_BYTES', other: 'DOCS_MAX_DOC_BYTES',
+      html: 'DOCS_MAX_DOC_BYTES', pdf: 'DOCS_MAX_DOC_BYTES', text: 'DOCS_MAX_DOC_BYTES', other: 'DOCS_MAX_DOC_BYTES',
     });
+  });
+});
+
+describe('(F) the pdf class: sniffPdf and pdfVerdict (X2 spec 4.4; P3.1, M11.54)', () => {
+  it('pdfVerdict: 4194303 and 4194304 bytes inline, 4194305 download only', () => {
+    expect(DocsFG.DOCS_PDF_INLINE_MAX_BYTES).toBe(4194304);
+    expect(DocsFG.pdfVerdict(4194303)).toBe('inline');
+    expect(DocsFG.pdfVerdict(4194304)).toBe('inline');
+    expect(DocsFG.pdfVerdict(4194305)).toBe('download');
+  });
+
+  it('pdfVerdict: a size that is not a whole byte count opens nothing', () => {
+    for (const s of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) expect(DocsFG.pdfVerdict(s), String(s)).toBe('download');
+    expect(DocsFG.pdfVerdict(0)).toBe('inline');
+  });
+
+  it('contentClass: .pdf is pdf', () => {
+    expect(DocsFG.contentClass('specs/x.pdf')).toBe('pdf');
+    expect(DocsFG.contentClass('specs/X.Pdf')).toBe('pdf');
+  });
+
+  it('sniffPdf: %PDF- at 0 matches, else mismatch', () => {
+    expect(DocsFG.sniffPdf(bytesFG('%PDF-1.7\n%\xe2\xe3\xcf\xd3'))).toBe('match');
+    expect(DocsFG.sniffPdf(bytesFG('%PDF-'))).toBe('match');
+    expect(DocsFG.sniffPdf(bytesFG('%PDF')), 'truncated at 4 bytes').toBe('mismatch');
+    expect(DocsFG.sniffPdf(bytesFG(' %PDF-1.7')), '%PDF- at offset 1').toBe('mismatch');
+    expect(DocsFG.sniffPdf(bytesFG('%pdf-1.7')), 'lower case').toBe('mismatch');
+    expect(DocsFG.sniffPdf(new Uint8Array(0)), 'empty input').toBe('mismatch');
+    expect(DocsFG.sniffPdf(bytesFG('\x89PNG\r\n\x1a\n')), 'PNG bytes').toBe('mismatch');
   });
 });
 
@@ -635,20 +697,21 @@ describe('(F) the raster table and sniffRaster (spec 5.1)', () => {
     jpeg: bytesFG('\xff\xd8\xff\xe0\x00\x10JFIF\x00'),
     gif: bytesFG('GIF89a\x01\x00\x01\x00'),
     webp: bytesFG('RIFF\x1a\x00\x00\x00WEBPVP8 '),
+    ico: Uint8Array.from([0, 0, 1, 0, 1, 0, 16, 16, 0, 0, 1, 0, 32, 0, 1, 0, 0, 0, 22, 0, 0, 0, 42]),
   };
-  const TYPES = ['png', 'jpeg', 'gif', 'webp'] as const;
+  const TYPES = ['png', 'jpeg', 'gif', 'webp', 'ico'] as const;
 
   it('names each type its MIME, and every raster extension of the class table its type', () => {
     expect(Object.fromEntries(TYPES.map((t) => [t, DocsFG.DOCS_RASTER_TYPES[t].mime]))).toEqual({
-      png: 'image/png', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp',
+      png: 'image/png', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', ico: 'image/x-icon',
     });
     expect(Object.keys(DocsFG.DOCS_RASTER_TYPES)).toEqual([...TYPES]);
-    expect(DocsFG.DOCS_RASTER_EXT).toEqual({ png: 'png', jpg: 'jpeg', jpeg: 'jpeg', gif: 'gif', webp: 'webp' });
+    expect(DocsFG.DOCS_RASTER_EXT).toEqual({ png: 'png', jpg: 'jpeg', jpeg: 'jpeg', gif: 'gif', webp: 'webp', ico: 'ico' });
     const rasterExts = Object.entries(DocsFG.DOC_CONTENT_CLASS_BY_EXT).filter(([, c]) => c === 'raster').map(([e]) => e);
     expect(Object.keys(DocsFG.DOCS_RASTER_EXT).sort()).toEqual(rasterExts.sort());
   });
 
-  it('matches only on the diagonal of the 4x4 (declared, actual) matrix', () => {
+  it('matches only on the diagonal of the 5x5 (declared, actual) matrix', () => {
     for (const declared of TYPES) {
       for (const actual of TYPES) {
         expect(DocsFG.sniffRaster(declared, SAMPLE[actual]), `${declared} declared, ${actual} bytes`)
@@ -696,9 +759,9 @@ describe('(F) the docs response headers (spec 5.3)', () => {
     });
   });
 
-  it('allows JSON and the four raster types, and nothing a browser would render as a document', () => {
+  it('allows JSON and the five raster types, and nothing a browser would render as a document', () => {
     expect(DocsFG.DOCS_ALLOWED_CONTENT_TYPES)
-      .toEqual(['application/json; charset=utf-8', 'image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+      .toEqual(['application/json; charset=utf-8', 'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/x-icon']);
     for (const t of ['text/html', 'text/html; charset=utf-8', 'image/svg+xml', 'text/plain', 'application/octet-stream', 'application/xml']) {
       expect(DocsFG.DOCS_ALLOWED_CONTENT_TYPES, t).not.toContain(t);
     }
@@ -1787,5 +1850,48 @@ describe('X2 P1: the range ceilings, the stat pin and the range wire types', () 
     expect(docsR.docListPinKey({ ...place, fp: 'f'.repeat(64) })).toContain('f'.repeat(64));
     expect(docsR.docListPinKey({ kind: 'committed', commit: 'c'.repeat(40), servedRef: 'refs/remotes/origin/main', section: 'specs', path: 'a.md' }))
       .toContain('c'.repeat(40));
+  });
+});
+
+// ===== X2 P2.3: the outside-folder grammar, wire kinds and URLs (spec 2026-11-18 section 4.1 and 7) =====
+describe('outside folders (L0)', () => {
+  const FP = 'c'.repeat(64);
+
+  it('DOCS_FOLDER_LABEL_RE is the anchored matcher of DOCS_FOLDER_LABEL_RE_BODY, with no state between calls', () => {
+    expect(docsR.DOCS_FOLDER_LABEL_RE_BODY).toBe('[a-z0-9][a-z0-9-]{0,31}');
+    expect(docsR.DOCS_FOLDER_LABEL_RE.flags).not.toMatch(/[gy]/);
+    for (const ok of ['a', '9', 'team-a', 'a'.repeat(32)]) expect(docsR.DOCS_FOLDER_LABEL_RE.test(ok), ok).toBe(true);
+    for (const bad of ['', '-a', '.a', 'a.b', 'a/b', 'A', 'a b', 'a\n', 'a'.repeat(33), '..']) {
+      expect(docsR.DOCS_FOLDER_LABEL_RE.test(bad), JSON.stringify(bad)).toBe(false);
+    }
+    expect(docsR.DOCS_FOLDER_LABEL_RE.test('a')).toBe(true);
+    expect(docsR.DOCS_FOLDER_LABEL_RE.test('a')).toBe(true);
+  });
+
+  it('the folder failure words are ccd\'s, the two gate words are the server\'s, and the verbs name both folder verbs', () => {
+    for (const w of ['bad-label', 'absent', 'not-a-directory', 'foreign-owner', 'protected', 'unreadable', 'label-exists', 'unknown-folder'] as const) {
+      expect(docsR.DOCS_FAILURES[w], w).toBe('ccd');
+    }
+    for (const w of ['auth-off', 'unauthenticated'] as const) expect(docsR.DOCS_FAILURES[w], w).toBe('server');
+    expect(docsR.DOCS_VERBS).toEqual(expect.arrayContaining(['docs-folder', 'docs-folder-read']));
+  });
+
+  it('the entry kinds are the seven ccd lists, derived from the type', () => {
+    expect([...docsR.DOCS_FOLDER_ENTRY_KINDS].sort())
+      .toEqual(['file', 'foreign-owner', 'hardlink', 'other-device', 'special', 'symlink', 'unreadable']);
+  });
+
+  it('docsApi builds the seven doors\' URLs, each label through encodeURIComponent, and the paths URL once', () => {
+    expect(docsR.docsApi.folders()).toBe('/api/docs-folders');
+    expect(docsR.docsApi.folderPaths()).toBe('/api/docs-folders/paths');
+    expect(docsR.docsApi.folderAdd()).toBe('/api/docs-folders');
+    expect(docsR.docsApi.folderRemove('team-a')).toBe('/api/docs-folders/team-a');
+    expect(docsR.docsApi.folderRemove('a/b')).toBe('/api/docs-folders/a%2Fb');
+    expect(docsR.docsApi.folderTree('notes')).toBe('/api/docs-folders/notes/tree');
+    expect(docsR.docsApi.folderFile('notes', 'specs', 'a/b c.md', FP)).toBe(`/api/docs-folders/notes/file?section=specs&path=a%2Fb%20c.md&fp=${FP}`);
+    expect(docsR.docsApi.folderRangePrepare('notes', 'plans', 'a.md', { kind: 'fp', sha: FP }))
+      .toBe(`/api/docs-folders/notes/range?section=plans&path=a.md&pin=${encodeURIComponent('fp:' + FP)}&prepare=1`);
+    expect(docsR.docsApi.folderRangeFrame('notes', 'plans', 'a.md', { kind: 'stat', size: 3, mtimeNs: '4' }, 'e'.repeat(32), 5, 6))
+      .toBe(`/api/docs-folders/notes/range?section=plans&path=a.md&pin=${encodeURIComponent('stat:3:4')}&snapshot=${'e'.repeat(32)}&offset=5&length=6`);
   });
 });

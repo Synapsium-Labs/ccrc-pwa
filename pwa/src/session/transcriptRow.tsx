@@ -40,10 +40,15 @@ export interface AnswerControl {
   readonly askBelow?: boolean;
 }
 
-/** The reader's open or closed choice per tool-activity row, by the row's key. It lives in the list, not in a row: the
- *  virtual list unmounts a row scrolled out of reach, and the row's choice must outlive that. */
+/** The reader's open or closed choice per row (a tool-activity row; a mail card or prompt line, desktop polish wave
+ *  176), by the row's key. It lives in the list, not in a row: the virtual list unmounts a row scrolled out of reach,
+ *  and the row's choice must outlive that. */
 export interface ExpansionMemo {
+  /** Whether the reader left the row open: false when they closed it or never chose. */
   get(key: string): boolean;
+  /** The reader's choice, or undefined when they never made one: what a row that is not closed by default reads, so a
+   *  row the reader closed stays closed. */
+  choice(key: string): boolean | undefined;
   set(key: string, open: boolean): void;
 }
 
@@ -56,12 +61,13 @@ export function useExpansionMemo(id: string): ExpansionMemo {
   return next.memo;
 }
 
-/** A fresh memo: every row closed until the reader opens it. */
+/** A fresh memo: no choice made, so every row is in its default form until the reader opens or closes it. */
 export function expansionMemo(): ExpansionMemo {
-  const open = new Set<string>();
+  const chosen = new Map<string, boolean>();
   return {
-    get: (key) => open.has(key),
-    set: (key, o) => { if (o) open.add(key); else open.delete(key); },
+    get: (key) => chosen.get(key) === true,
+    choice: (key) => chosen.get(key),
+    set: (key, o) => { chosen.set(key, o); },
   };
 }
 

@@ -382,15 +382,16 @@ describe('no call site outside the platform block runs a GNU-only command bare',
   });
 
   // The build copy's box programs (capture runner spec 2026-11-22 §2.2) run on the test box too, in one marked region of
-  // ccd/testbox-build-copy cut by the same BOX_SIDE expression: exactly its two programs, and exactly one GNU line (the hash
-  // the copy takes of the bytes it hands over, in the same root step), so the region cannot grow quietly.
-  it('ccd/testbox-build-copy\'s box-side region holds exactly its two programs and one GNU line, and the cut leaves none outside it', () => {
+  // ccd/testbox-build-copy cut by the same BOX_SIDE expression: exactly its two programs, and exactly two GNU lines (the hash
+  // the copy takes of the bytes it hands over, in the same root step; and the writer's rename that never treats the build's
+  // name as a directory, capture runner PR 3b's fix round 1), so the region cannot grow quietly.
+  it('ccd/testbox-build-copy\'s box-side region holds exactly its two programs and two GNU lines, and the cut leaves none outside it', () => {
     const src = readFileSync(path.join(ccdRoot, 'testbox-build-copy'), 'utf8');
     const region = BOX_SIDE.exec(src)?.[0] ?? '';
     expect(region, 'the BOX-SIDE COMMANDS region is not in ccd/testbox-build-copy').not.toBe('');
     expect([...region.matchAll(/^([A-Z_]+)=/gm)].map((m) => m[1])).toEqual(['TBA_BUILD_COPY_SH', 'TBA_BUILD_WRITE_SH']);
     expect([...region.matchAll(/^(\w+)\(\) \{/gm)]).toEqual([]);
-    expect(gnuHits(executableText(region)).map((h) => h.split(':')[0])).toEqual(['sha256sum']);
+    expect(gnuHits(executableText(region)).map((h) => h.split(':')[0]).sort()).toEqual(['mv -T', 'sha256sum']);
     expect(gnuHits(executableText(src.replace(BOX_SIDE, '')))).toEqual([]);
   });
 
@@ -1683,8 +1684,23 @@ describe('a platform-asserting test title owes the other platform an answer (D-2
   // merely happens to run on one platform is not, which is why this matches the
   // name-then-punctuation shape ("BSD:", "GNU —") rather than any mention.
   const ASSERTS_PLATFORM = /\b(BSD|macOS|darwin|GNU|util-linux|Linux|launchd|systemd)\b\s*[:—-]/i;
-  const CASE = /\b(itDarwin|itLinux|describeDarwin|describeLinux)\(\s*(['"`])([\s\S]*?)\2/g;
+  // A case opened through the installer wrapper with a platform runner (`itInstalls(2, itLinux)('title', …)`,
+  // ccrc-installFixture.ts) is the same claim as the bare runner's. What admits it is the closing form: `)(` after the
+  // runner's name, where a bare opener has `(`. The optional `itInstalls(<n>, ` prefix only spells the whole opener; the
+  // match would begin at the runner's name without it, and it keeps nothing (#3408, review 3912 F5, review 3917 F4).
+  const CASE = /\b(?:itInstalls\(\s*\d+\s*,\s*)?(itDarwin|itLinux|describeDarwin|describeLinux)(?:\)\(|\()\s*(['"`])([\s\S]*?)\2/g;
   const MARKER = 'PLATFORM-ONLY:';
+
+  it('control: a title opened through the installer wrapper with a Linux-only runner is found and scanned like a bare one (#3408)', () => {
+    // Built in pieces: this very scan reads this file, and a literal `itLinux('GNU: …` here would be a case of it.
+    const open = (head: string, tail: string, title: string): string => `${head}${tail}('${title}', () => {});\n`;
+    const wrapped = open('itInstalls(2, ', 'itLinux)', 'GNU: the second run keeps the first')
+      + open('', 'itLinux', 'GNU: a bare case')
+      + open('', 'itInstalls(3)', 'GNU: a wrapper with the default runner is no platform claim');
+    const found = [...wrapped.matchAll(CASE)].map((m) => [m[1], m[3]]);
+    expect(found).toEqual([['itLinux', 'GNU: the second run keeps the first'], ['itLinux', 'GNU: a bare case']]);
+    for (const [, title] of found) expect(ASSERTS_PLATFORM.test(title!)).toBe(true);
+  });
 
   it('every one of them is a platformContrast, or says why it cannot be', () => {
     const files = readdirSync(TEST_DIR).filter((f) => f.endsWith('.test.ts')).sort();

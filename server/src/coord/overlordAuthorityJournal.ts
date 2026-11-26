@@ -20,6 +20,7 @@ import type { AppendOnlyFsOps } from '../appendOnlyFile.js';
 import { chainedJournalFileAt, type ChainedCutError, type ChainedJournalFile } from '../chainedJournalFile.js';
 import type { Clock } from '../time/ports.js';
 import { appendThenApply, type JournalPhase } from '../journalKernel.js';
+import { tx } from './tx.js';
 import {
   OVERLORD_AUTHORITY_BASENAME, OVERLORD_AUTHORITY_FORMAT, OVERLORD_AUTHORITY_KINDS, OVERLORD_AUTHORITY_TORN_DIR, OverlordAuthorityError,
   authorityAgainstFold, authorityDirection, authorityEntry, authorityFold, canonicalAuthorityMove,
@@ -62,6 +63,8 @@ export interface AuthorityGuardPort {
   state(): AuthorityState;
   /** The writer's failure at or after the append (`trailing`), or the verdict of a head mismatch it measured. */
   writerFailed(cause: AuthorityWriterFailure): void;
+  /** The writer's report after a successful append and head-row apply (never on `row-only` or a refusal). */
+  appended?(): void;
 }
 
 /** `appendInTx`'s answer. None is an HTTP refusal: a door maps them (X2's door mapping). */
@@ -73,6 +76,29 @@ export type AuthorityAppend =
   | { ok: false; error: AuthorityAppendError; detail: string };
 /** `bad-entry` is a caller's error, as `not-in-transaction` is: the entry the grammar refuses, never a journal state. */
 export type AuthorityAppendError = 'not-in-transaction' | 'bad-entry' | 'authority-rolled-back' | 'authority-unmeasured' | 'journal-append';
+
+/** THE post-append receipt, honoured (review 3646 F4, call 1216): `write` runs inside one `tx()` with an appender that remembers the
+ *  receipt of each durable append; if the transaction throws, the receipt is called after rollback is attempted (best effort: a
+ *  faulty receipt never replaces the transaction's error), and the error propagates. An ordinary refusal returns and commits. Every
+ *  writer of a table in `OVERLORD_AUTHORITY_TABLES` that appends opens its transaction here: the designation's writers, the
+ *  ladder's three door writers and the decision-model writer. */
+export function txWithAuthorityReceipt<T>(db: DatabaseSync, journal: Pick<OverlordAuthorityJournal, 'appendInTx'>,
+  write: (journal: Pick<OverlordAuthorityJournal, 'appendInTx'>) => T): T {
+  let postAppendFailed: (() => void) | undefined;
+  const held: Pick<OverlordAuthorityJournal, 'appendInTx'> = {
+    appendInTx: (d, entry) => {
+      const a = journal.appendInTx(d, entry);
+      if (a.ok && a.kind === 'appended') postAppendFailed = a.postAppendFailed;
+      return a;
+    },
+  };
+  try {
+    return tx(db, () => write(held));
+  } catch (error) {
+    try { postAppendFailed?.(); } catch { /* preserve the first error */ }
+    throw error;
+  }
+}
 
 /** Ladder fallback when the authority journal is unavailable. Narrowings land as unjournalled rows; widenings fail closed.
  *  The designation fallback remains separate: its doors require the designation store and journal together. */
@@ -232,8 +258,9 @@ export class OverlordAuthorityJournal {
    * residual; the ladder and designation PRs pin the duty with a test). Append before writing any row of a table in
    * `OVERLORD_AUTHORITY_TABLES` in the same transaction: a listed table's row with no record before it reads `missing` (review
    * F9). An account set's pool lists are sorted and de-duplicated here, so their order is the row's, never the journal's.
-   * The stamped designation writers call `postAppendFailed` after rollback is attempted if their transaction throws after
-   * `appended`, then propagate the original error. The receipt fences the guard while the durable record outlives its head row.
+   * A writer whose transaction throws after `appended` calls `postAppendFailed` after rollback is attempted, then propagates the
+   * original error: the designation's writers, the ladder's three door writers and the decision-model writer do it by opening their
+   * transaction through `txWithAuthorityReceipt`. The receipt fences the guard while the durable record outlives its head row.
    *
    * The ONE retained-origin exception (ladder Q20): `journalPendingInTx` may state the retained `recordFrom` when recording
    * an already-applied narrowing. The fold must see the chain from its last recorded value. Catch-up only stamps the record's
@@ -319,6 +346,7 @@ export class OverlordAuthorityJournal {
           const rec = appended;
           if (rec === null) throw new Error('apply reached with no appended record');
           writeHeadRow(db, rec);
+          this.guard.appended?.();
           return { ok: true, kind: 'appended', record: rec, postAppendFailed: () => this.guard.writerFailed('trailing') };
         },
       }, phase);

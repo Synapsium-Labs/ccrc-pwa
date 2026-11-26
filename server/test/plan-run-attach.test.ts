@@ -70,7 +70,7 @@ describe('runs attach to tickets (D-8181)', () => {
 
   it('an older programme (planRequired 0) with no plan opens as today', async () => {
     const w = await world();
-    seedLegacyProgramme(w.coord.db, 'prog-a', 'project-a');
+    seedLegacyProgramme(w.coord.db, 'prog-a', 'project-a', OPEN.claimedBy);
     const res = await open(w);
     expect(res.statusCode, res.body).toBe(200);
     expect(ticketsOf(w)).toEqual([]);
@@ -101,7 +101,7 @@ describe('runs attach to tickets (D-8181)', () => {
 
   it('a named ticket in a programme with no epics (planRequired 0) is ticket-unavailable', async () => {
     const w = await world();
-    seedLegacyProgramme(w.coord.db, 'prog-a', 'project-a');
+    seedLegacyProgramme(w.coord.db, 'prog-a', 'project-a', OPEN.claimedBy);
     expect(refused(await open(w, { ...OPEN, ticket: 't1' }))).toEqual([409, 'ticket-unavailable']);
   });
 
@@ -141,7 +141,11 @@ describe('runs attach to tickets (D-8181)', () => {
   it('runs open after plan close is plan-closed', async () => {
     const w = await world();
     await declare(w, FIRST);
-    expect((await declare(w, { outcome: 'done' }, 'prog-a', '/close')).statusCode).toBe(200);
+    // Programme lifecycle W2 (D-8987): the close proposes the end, with evidence; the operator's confirm ends it.
+    const closed = await declare(w, { outcome: 'done', evidence: ['both epics landed'] }, 'prog-a', '/close');
+    expect(closed.statusCode, closed.body).toBe(200);
+    expect(w.coord.confirmProgrammeEnd((closed.json() as { proposal: number }).proposal, { kind: 'operator', id: 'device:test' }, Date.now(), () => undefined))
+      .toMatchObject({ ok: true });
     expect(refused(await open(w))).toEqual([409, 'plan-closed']);
   });
 

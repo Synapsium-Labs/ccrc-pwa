@@ -319,7 +319,9 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'continuity_renew_requests', 'operator_marks', 'operator_mark_quiet',
   'decision_rows', 'decision_host', 'decision_lines', 'programme_health', 'run_spend',
   'continuity_act_keys', 'approval_census', 'approval_parks', 'overlord_fence_refusals',
-  'continuity_hook_reports', 'continuity_witness_checks', 'coordinator_state', 'overlord_sequence', 'overlord_sequence_pruned'] as const;
+  'continuity_hook_reports', 'continuity_witness_checks', 'coordinator_state', 'overlord_sequence', 'overlord_sequence_pruned', 'limit_samples',
+  'programme_events', 'programme_picks', 'continuity_timer_refusals',
+  'overlord_invariant_findings', 'overlord_readiness', 'overlord_readiness_items'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique, read off the one scan (`sqlStatements.ts#sqlWrites`). `tables`
  *  is the table list to read: coord.db's by default, and the private store's for its own describe (Overlord W1 private store A). */
@@ -384,6 +386,7 @@ describe(TABLES_PIN, () => {
       continuity_card_reads: ['server/src/continuity/continuityStore.ts#insertCardRead'],
       // The timers (Overlord W1a): one writer per move of `TIMER_TRANSITIONS`, and the purge of terminal rows.
       continuity_timers: ['cancelTimer', 'insertTimer', 'markTimersFired', 'purgeTimers'].map((f) => `server/src/continuity/continuityStore.ts#${f}`),
+      continuity_timer_refusals: ['purgeTimerRefusals', 'recordTimerRefusal'].map((f) => `server/src/continuity/continuityStore.ts#${f}`),
       continuity_notes: ['server/src/continuity/continuityStore.ts#appendNote'],
       continuity_handovers: ['server/src/continuity/continuityStore.ts#putHandover'],
       // The probes (Overlord W1a): one writer per fact, the lane's round and the door's answers; the card and note GETs' stamp.
@@ -411,11 +414,19 @@ describe(TABLES_PIN, () => {
       // which alone raises the prune floor in the same transaction.
       overlord_sequence: ['pruneSequenceThrough', 'stampSequenceInTx'].map((f) => `server/src/coord/overlordSequenceStore.ts#${f}`),
       overlord_sequence_pruned: ['server/src/coord/overlordSequenceStore.ts#pruneSequenceThrough'],
+      // The invariant monitor's findings (Overlord W1, sequence B2): one module, two writers: the insert of an episode (with its
+      // item, in one transaction) and the stamp of its end.
+      overlord_invariant_findings: ['recordFinding', 'resolveFindings'].map((f) => `server/src/coord/invariantFindingsStore.ts#${f}`),
+      // The Overlord's readiness word (§6.4, H20): one module. Its rows: the change of word (inserted, and stamped with its push mark,
+      // in one transaction) and the guarded prune; its item records: the lane's raise and settle (each with its operator item, through
+      // the ledger's checked entries, in one transaction) and the operator's close.
+      overlord_readiness: ['pruneReadiness', 'recordReadinessInTx'].map((f) => `server/src/coord/overlordReadinessStore.ts#${f}`),
+      overlord_readiness_items: ['closeReadinessItem', 'raiseReadinessItem', 'settleReadinessItem'].map((f) => `server/src/coord/overlordReadinessStore.ts#${f}`),
       // The designation (Overlord W1, C2): one writer per move of the row, each appending its authority record first where one is owed.
       // The migration's one-time pending-actor backfill is SQL in MIGRATIONS' string, so the scanner names its module.
       // Confirm the restore's inner writer (authority journal C, `applyDesignationRestoreInTx`): Table 11.1a names Confirm among the
       // row's writers.
-      overlord_designation: [...['applyDesignationRestoreInTx', 'bindPendingGeneration', 'designatePending', 'failPending', 'goLive', 'retire', 'setAccountSet', 'setModelClass', 'stopDone']
+      overlord_designation: [...['applyDesignationRestoreInTx', 'bindPendingGeneration', 'designatePending', 'failPending', 'goLive', 'goLiveRebind', 'rebindPending', 'retire', 'setAccountSet', 'setModelClass', 'stopDone']
         .map((f) => `server/src/coord/overlordDesignationStore.ts#${f}`), 'server/src/coord/schema.ts#(module)'],
       // The ladder (Overlord W1, C5): the rung row's two writers (the doors' and Confirm's) and the catch-up's stamp; each latch row's
       // raise, clear, Confirm's insert and stamp, and the catch-up's stamp.
@@ -478,6 +489,12 @@ describe(TABLES_PIN, () => {
       // caller). A second method that writes the mode reds here. The seed row and migration 121's upgrade rule are SQL in
       // MIGRATIONS' string, so the scanner names its module.
       coordinator_state: ['server/src/coord/schema.ts#(module)', `${S}setCaps`],
+      // The history of limits (Overlord W1 serviceability PR B, plan w1-serviceability.md Task 5): the sampler's insert and prune.
+      limit_samples: ['insertLimitSamples', 'pruneLimitSamples'].map((f) => `server/src/coord/limitSamplesStore.ts#${f}`),
+      // The programme lifecycle (W1, D-8989): append-only events and the picks, one writer each in the lifecycle store; the
+      // migration's seed events are SQL in MIGRATIONS' string, so the scanner names its module.
+      programme_events: ['server/src/coord/programmeLifecycleStore.ts#appendEventInTx', 'server/src/coord/schema.ts#(module)'],
+      programme_picks: ['server/src/coord/programmeLifecycleStore.ts#pickInTx'],
     });
   });
 

@@ -24,19 +24,31 @@
 //     is already queued, running or ended, so a job DID go out
 //   - outcome `answered` with a result ..................................................... answered, the result unread
 //   - outcome `answered` with no result (the box ended with no verdict) .................... unavailable `unanswered`
+//   - A DELIVERY job (`recipe: 'delivery'`, a part; Desktop polish wave 178) maps every row above the same way, save that
+//     what an `answered` reply carries is its `delivery` field: outcome `answered` with a delivery result ... answered,
+//     the result unread; with `delivery` null .............................................. unavailable `unanswered`.
+//     Its `not-taken` (the box was REACHED and closed the connection on the frame: a box, or a driver, that predates the
+//     recipe) is `recipe-not-run`, a not-sent word of the delivery lane's own, told from `no-test-box` (a box not reached)
+//     for a reader; a trust job's `not-taken` stays `no-runner`.
 //   - outcome `unanswered` ................................................................. unavailable `unanswered`
 //   - a thrown io call (the member never rejects, and the lane catches too) ............... unavailable `unanswered`
 //   - a `refused` reply with no refusal word (the op's reader forbids it) ................. unavailable `unanswered`
+//
+// THE DROPPED DETAIL (review 3226 F9, capture runner PR 3b): the port carries a word, never the op's `detail`. A refusal's
+// detail is its word's own sentence, so nothing is lost there; every other reply that brings back no verdict (the box
+// ended with none, the job went unanswered, no box or no hello) is the one place its `detail` says why, so it is written to
+// the server's log, one line naming the build and the outcome, before the word is answered.
 import type { FleetIO } from './io.js';
 import type { BuildCaptureAnswer, BuildCaptureTransport, BuildCaptureUnavailable } from './buildCaptureLane.js';
 import type { TestboxCaptureReply } from '../../shared/agent-protocol.js';
 
 const gone = (why: BuildCaptureUnavailable): BuildCaptureAnswer => ({ kind: 'unavailable', why });
 
-function answerOf(r: TestboxCaptureReply): BuildCaptureAnswer {
+function answerOf(r: TestboxCaptureReply, delivery: boolean): BuildCaptureAnswer {
   switch (r.outcome) {
     case 'unconfigured': case 'unreachable': case 'bad-answer': return gone('no-test-box');
-    case 'not-taken': return gone('no-runner');
+    // A delivery job's not-taken carries what was measured to the lane, which writes its one line (review 3898 F6).
+    case 'not-taken': return delivery ? { kind: 'unavailable', why: 'recipe-not-run', ...(r.detail === null ? {} : { detail: r.detail }) } : gone('no-runner');
     case 'refused':
       switch (r.refusal) {
         case 'not-test-box': return gone('no-test-box');
@@ -44,9 +56,21 @@ function answerOf(r: TestboxCaptureReply): BuildCaptureAnswer {
         case 'build-absent': case 'path-refused': return gone(r.refusal);
         case 'capture-id-used': default: return gone('unanswered');
       }
-    case 'answered': return r.result === null ? gone('unanswered') : { kind: 'answered', result: r.result };
+    case 'answered': {
+      const got = delivery ? r.delivery ?? null : r.result;
+      return got === null ? gone('unanswered') : { kind: 'answered', result: got };
+    }
     case 'unanswered': return gone('unanswered');
   }
+}
+
+/** The log line of a reply whose `detail` the port's word drops (a refusal's detail is its word's sentence, and a verdict is
+ *  kept, so neither is logged). */
+function logDropped(build: string, r: TestboxCaptureReply, delivery: boolean): void {
+  if (r.detail === null || r.outcome === 'refused' || (r.outcome === 'answered' && (delivery ? (r.delivery ?? null) !== null : r.result !== null))) return;
+  // A delivery job's not-taken: its detail rides the answer, and the lane's one line says it (review 3898 F6).
+  if (delivery && r.outcome === 'not-taken') return;
+  console.warn(`ccrc-server: build capture ${build}: ${r.outcome}, no verdict: ${r.detail}`);
 }
 
 /** The production adapter: `io` is read at each call, so a rebuilt connection is the one used. */
@@ -54,7 +78,10 @@ export function testboxCaptureTransport(io: () => Pick<FleetIO, 'testboxCapture'
   return {
     capture: async (job) => {
       try {
-        const asked = await io().testboxCapture(job.build);
+        const delivery = job.recipe === 'delivery';
+        // A delivery job carries its part; one that does not is never asked (`not-started`: no job went out).
+        if (delivery && job.part === undefined) return gone('not-started');
+        const asked = delivery ? await io().testboxCapture(job.build, 'delivery', job.part!) : await io().testboxCapture(job.build);
         if (!asked.ok) {
           switch (asked.reason) {
             case 'no-op': return gone('no-runner');
@@ -62,7 +89,8 @@ export function testboxCaptureTransport(io: () => Pick<FleetIO, 'testboxCapture'
             case 'unanswered': return gone('unanswered');
           }
         }
-        return answerOf(asked.reply);
+        logDropped(job.build, asked.reply, delivery);
+        return answerOf(asked.reply, delivery);
       } catch {
         return gone('unanswered');
       }

@@ -1,6 +1,7 @@
 // D-8183 (Linear hierarchy plan, Task 4.3): the inbound path, the Upkeep epic and the Linear owner item. A real coord.db and a real
 // Linear store on a tmp dir; Linear faked at the drift pass's and the sync's `call` port; the routes on a bare Fastify with the real
 // plan store. Nothing here reaches a network, and every Linear text is a made-up one.
+import { seedLegacyProgramme } from './helpers/plan.js';
 import { UNTRUSTED_PREFACE } from '../src/coord/untrusted.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { rmSync } from 'node:fs';
@@ -103,7 +104,9 @@ async function rig(o: { named?: string | null; progs?: boolean; mode?: 'public' 
     };
     declare('prog-a', 'e1', 'c1', OWNER, 'project-a', T - 3000);
     declare('prog-b', 'e-b', 'c-b', OTHER, 'project-a', T - 2000);
-    if (o.twoWs === true) declare('prog-c', 'e-c', 'c-c', OTHER, 'project-b', T - 1000);
+    // Programme lifecycle W1 (R11, D-8993): OTHER owns prog-b, so its put on a new prog-c would be refused; prog-c is a
+    // legacy row nobody was ever bound to (as the migration leaves one it could not seed), whose plan owner is its putter.
+    if (o.twoWs === true) { seedLegacyProgramme(db, 'prog-c', 'project-b'); declare('prog-c', 'e-c', 'c-c', OTHER, 'project-b', T - 1000); }
   }
   db.prepare('DELETE FROM plan_sync_due').run();      // the two programmes' declarations are not what these tests sync
   const named = o.named === undefined ? OWNER : o.named;
@@ -1696,7 +1699,9 @@ describe('the take door chooses between two handed rows of one identifier (revie
 
   it('when the home does not decide, nothing is chosen: issue-not-inbound, no binding, no row moved, no mail', async () => {
     const r = await rig({ twoWs: true });
-    // a programme whose home project has no team linked reads no workspace, so no row is the home's
+    // a programme whose home project has no team linked reads no workspace, so no row is the home's (a legacy row: OTHER
+    // owns prog-b, so under R11 its put could not start prog-d)
+    seedLegacyProgramme(r.db, 'prog-d', 'project-x');
     applyPlanChanges(r.db, 'prog-d', changes({
       epics: { insert: [{ key: 'e-d', project: 'project-x', waves: [1], ordinal: 0, title: 'Epic d', summary: 'Summary' }], update: [], drop: [] },
       checkpoints: { insert: [], update: [], drop: [] },
@@ -2114,6 +2119,7 @@ describe('plan take never reaches another workspace\'s Upkeep ticket (review 252
   });
   it('with handed rows the home does not decide, the refusal is at once and the ticket is neither taken nor closed', async () => {
     const r = await rig({ twoWs: true });
+    seedLegacyProgramme(r.db, 'prog-d', 'project-x');   // a legacy row: OTHER owns prog-b (R11)
     applyPlanChanges(r.db, 'prog-d', changes({
       epics: { insert: [{ key: 'e-d', project: 'project-x', waves: [1], ordinal: 0, title: 'Epic d', summary: 'Summary' }], update: [], drop: [] },
       checkpoints: { insert: [], update: [], drop: [] },
@@ -2142,6 +2148,7 @@ describe('plan take with no handed row and an unmeasured home fails closed (revi
     expect([t.program, t.state]).toEqual([null, 'open']);
   };
   const epicOf = (slug: string, home: string | null) => (r: Rig): void => {
+    if (home !== null) seedLegacyProgramme(r.db, slug, home);   // a legacy row: its putter owns another programme (R11)
     applyPlanChanges(r.db, slug, changes({
       epics: { insert: [{ key: 'e-z', project: 'project-a', waves: [1], ordinal: 0, title: 'Epic z', summary: 'Summary' }], update: [], drop: [] },
       checkpoints: { insert: [], update: [], drop: [] },

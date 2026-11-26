@@ -20,13 +20,14 @@ import {
   RESTART_GRACE_MS, TURN_MARK_STATES, turnMarkGraceUntil, turnMarkStale,
   type StallArming, type StallBind, type StallRunRow,
 } from '../src/coord/stall.js';
+import { FAILED_IDLE_MS, STOP_FAILURE_ERRORS, stallFailedSubject, stopFailureClass } from '../src/coord/stopFailure.js';
 import {
-  STALL_ORPHANED_PREFIX, STALL_FAILED_PREFIX, STOP_FAILURE_ERRORS, STALL_WAKE_KINDS, STALL_RESUMING_KINDS, STALL_PLUMBING_EVENTS,
+  STALL_ORPHANED_PREFIX, STALL_FAILED_PREFIX, STALL_WAKE_KINDS, STALL_RESUMING_KINDS, STALL_PLUMBING_EVENTS,
   STALL_BOUND_MS, DELEGATE_WINDOW_MS, DELEGATE_CAP_MS, FROZEN_NO_EVENT_MS, DEAD_GRACE_MS, COORD_DEAF_MS, MAIL_STUCK_MS,
-  ORPHAN_D_IDLE_MS, ORPHAN_E_IDLE_MS, FAILED_IDLE_MS, FAILED_REPEAT_MS, CHECK_UNDELIVERED_MS, BACKLOG_HORIZON_MS,
+  ORPHAN_D_IDLE_MS, ORPHAN_E_IDLE_MS, FAILED_REPEAT_MS, CHECK_UNDELIVERED_MS, BACKLOG_HORIZON_MS,
   ORPHAN_PUSH_MS, MARKER_UNREADABLE_MS,
-  rungRecipient, stallFailedSubject, stallFrozenSince, stallNotifyDelivery, stallOrphanDSubject, stallOrphanESubject, stallPushRoute,
-  stallDeadShaped, stallMarkUnreadable, stallReportKind, stallReportTitle, stopFailureClass,
+  rungRecipient, stallFrozenSince, stallNotifyDelivery, stallOrphanDSubject, stallOrphanESubject, stallPushRoute,
+  stallDeadShaped, stallMarkUnreadable, stallReportKind, stallReportTitle,
   type HookRawFact, type StallArm, type StallRecipient, type TurnMarkRead,
 } from '../src/coord/stall.js';
 
@@ -67,10 +68,11 @@ describe('the arms, holds and markers are derived from their Records', () => {
       'coord-blocked',
     ]);
   });
-  it('waves 1 and 2 have fifteen holds, wave 1 first, and the timer hold (Overlord §3.3.12, C65) is the sixteenth, once', () => {
+  it('waves 1 and 2 have fifteen holds, wave 1 first, and the timer hold (Overlord §3.3.12, C65) is the sixteenth, once; a provider retry owed is the seventeenth', () => {
     expect(STALL_HOLDS).toEqual([
       'run-unnamed', 'absent', 'unmeasured', 'lifecycle', 'ask', 'dialog', 'limit', 'busy', 'coordinator-unmeasurable',
       'restart-grace', 'delegates', 'lifecycle-stopped', 'mail-disabled', 'failed-account', 'failed-unknown', 'timer',
+      'provider-retry',
     ]);
     expect(STALL_HOLDS.filter((h) => h === 'timer')).toHaveLength(1);
   });
@@ -443,9 +445,9 @@ describe('wave 2: rungRecipient is one total per-arm table (planning departure r
 });
 
 describe('wave 2: STOP_FAILURE_ERRORS classifies the thirteen StopFailure tokens (§5.2)', () => {
-  it('is the spec’s three groups, and nothing else', () => {
+  it('is the spec’s three groups and the provider’s own, and nothing else', () => {
     expect(STOP_FAILURE_ERRORS).toEqual({
-      server_error: 'retry', overloaded: 'retry', max_output_tokens: 'retry', unknown: 'retry',
+      server_error: 'provider', overloaded: 'provider', max_output_tokens: 'retry', unknown: 'retry',
       rate_limit: 'account', billing_error: 'account', authentication_failed: 'account', oauth_org_not_allowed: 'account',
       account_on_hold: 'account', verification_required: 'account', cloud_credential_error: 'account',
       invalid_request: 'request', model_not_found: 'request',

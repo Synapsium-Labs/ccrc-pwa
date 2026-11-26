@@ -1,6 +1,6 @@
 // D-5848 (ARCH-01, #526; consolidation spec §5.2): the god-file growth check.
 // Net code-line growth of the listed files (`growthFiles`) against the merge-base with
-// `origin/main`, one stripper per language (`growthCheck.ts`). It reported only
+// `origin/main` (in a merge-queue group, against the group's parent: `armedBase`, D-9016), one stripper per language (`growthCheck.ts`). It reported only
 // (`console.warn` and the `GROWTH_OVER` list) until the operator armed it on
 // 2026-10-21 (OA-C2, D-6178); a listed file that grows by more than
 // GROWTH_LIMIT net code lines now fails its row. No per-file absolute constant
@@ -43,7 +43,7 @@ import {
   prNumberFromEnv, parseExemptions, exemptionsOnMain, matchExemptions, GROWTH_EXEMPTIONS_FILE,
   GROWTH_EXEMPTIONS_STAMP, GROWTH_MACHINERY, overLine, growthVerdicts, armedGrowth, gitRead, type GrowthRow, type GrowthExemption,
   GROWTH_WAIVERS_DIR, GROWTH_WAIVERS_LEGACY_FILE, parseWaiverFiles, waiversAdded, waiversAt, waiversInDiff, type GrowthWaiver,
-  definedDNumbers, PROGRAM_ROW, isProgramMember, programRow, parseCapFiles, parseFrozenFiles, stageFileName, stageFor, SPINE_LIMIT,
+  definedDNumbers, armedBase, PROGRAM_ROW, isProgramMember, programRow, parseCapFiles, parseFrozenFiles, stageFileName, stageFor, SPINE_LIMIT,
   type Stage, type StageOf,
 } from './growthCheck.js';
 import { EXEMPTION_SET_STAMPS } from './rings/exemption-age.data.js';
@@ -1225,23 +1225,66 @@ describe('growthCheck: the program row, ccd/ccd and its libraries as one total (
   });
 });
 
-/** The base, or why the growth rows cannot measure. */
-function resolveBase(): { base: string } | { skip: string } {
-  if (!process.env['CI'] && !process.env['GROWTH_CHECK']) {
-    return { skip: 'not in CI (set GROWTH_CHECK=1 to run locally)' };
-  }
-  try {
-    gitRead(['rev-parse', '--verify', '--quiet', 'origin/main^{commit}'], ROOT);
-  } catch {
-    return { skip: 'no origin/main in this checkout' };
-  }
-  try {
-    const base = gitRead(['merge-base', 'origin/main', 'HEAD'], ROOT).trim();
-    return { base };
-  } catch {
-    return { skip: 'no merge-base between origin/main and HEAD' };
-  }
-}
+describe('growthCheck: in a merge-queue group an entry is measured against its parent (D-9016)', () => {
+  const today = new Date('2026-11-25T12:00:00Z');
+  const FILE = 'server/src/server.ts';
+  it('a stacked entry is measured alone under merge_group, and against the merge-base everywhere else', (ctx) => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'growth-queue-'));
+    ctx.onTestFinished(() => rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    const git = (...a: string[]) => execFileSync('git', a, { cwd: dir, encoding: 'utf8', stdio: 'pipe' }).trim();
+    const grow = (from: number, to: number, m: string) => {
+      mkdirSync(path.join(dir, 'server/src'), { recursive: true });
+      writeFileSync(path.join(dir, FILE), Array.from({ length: to }, (_, i) => `export const a${i} = ${i};\n`).join(''));
+      git('add', '-A');
+      git('commit', '-q', '-m', `${m}: ${from} to ${to}`);
+      return git('rev-parse', 'HEAD');
+    };
+    git('init', '-q');
+    git('config', 'user.name', 'fixture');
+    git('config', 'user.email', 'fixture@example.invalid');
+    git('config', 'gc.auto', '0');
+    git('config', 'maintenance.auto', 'false');
+    const m = grow(0, 10, 'M');
+    git('update-ref', 'refs/remotes/origin/main', m);
+    const a = grow(10, 40, 'A');
+    const b = grow(40, 70, 'B');
+    // The function the armed rows call (review F3), with CI set as on a runner.
+    const resolve = (env: Record<string, string | undefined>) => armedBase({ CI: 'true', ...env }, dir);
+    const measure = (env: Record<string, string | undefined>) => {
+      const r = resolve(env);
+      if ('skip' in r) throw new Error(`the armed rows would skip: ${r.skip}`);
+      const head = git('rev-parse', 'HEAD');
+      const armed = armedGrowth(growthFiles(r.base, head, dir), dir, r.base, head, {}, today);
+      return { ...r, delta: armed.rows.find((row) => row.file === FILE)!.delta, over: armed.over.includes(FILE) };
+    };
+    // The control: a pull request's run at B holds both commits and is measured against M.
+    expect(measure({ GITHUB_EVENT_NAME: 'pull_request', QUEUE_BASE: a })).toEqual({ base: m, from: 'merge-base', delta: 60, over: true });
+    // The queue group for B, whose parent is A's group: B alone, +30.
+    expect(measure({ GITHUB_EVENT_NAME: 'merge_group', QUEUE_BASE: a })).toEqual({ base: a, from: 'queue-parent', delta: 30, over: false });
+    // The per-entry limit is unchanged: C grows the file by 41 alone and is over against its parent B.
+    grow(70, 111, 'C');
+    expect(measure({ GITHUB_EVENT_NAME: 'merge_group', QUEUE_BASE: b })).toEqual({ base: b, from: 'queue-parent', delta: 41, over: true });
+    // Every QUEUE_BASE the resolver cannot trust falls back to the merge-base.
+    git('checkout', '-q', '-b', 'side', m);
+    const side = grow(10, 11, 'side');
+    git('checkout', '-q', '-');
+    for (const queueBase of [undefined, '', b.slice(0, 39), b.toUpperCase(), side]) {
+      expect(resolve({ GITHUB_EVENT_NAME: 'merge_group', QUEUE_BASE: queueBase }), String(queueBase))
+        .toEqual({ base: m, from: 'merge-base' });
+    }
+    // Outside CI and without GROWTH_CHECK the armed rows skip, as before.
+    expect(armedBase({ GITHUB_EVENT_NAME: 'merge_group', QUEUE_BASE: b }, dir)).toEqual({ skip: 'not in CI (set GROWTH_CHECK=1 to run locally)' });
+  });
+
+  it('the armed rows take their base from armedBase, read from this file as text (review 3762 F1)', () => {
+    // A text pin, on purpose: the line runs once, at module load, from the real environment, so no case can run it
+    // again under another one. It holds the line against a replacement by a plain merge-base read, which the
+    // stacked-entry case above would not see. A whole line, so the needle in this case does not count itself.
+    const LINE = 'const resolved = armedBase(process.env, ROOT);';
+    const own = readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n');
+    expect(own.filter((l) => l === LINE), 'growth-check.test.ts resolves its base once, through armedBase').toHaveLength(1);
+  });
+});
 
 /** The names `node:module` exports that load no module (D-8563: ring.ts reads `builtinModules`). */
 const LOADS_NOTHING: ReadonlySet<string> = new Set(['builtinModules', 'isBuiltin']);
@@ -1288,7 +1331,8 @@ function importClosure(roots: readonly string[]): { modules: string[]; unfollowa
 const AGED = agedWaivers(waiverItemsAtHead());
 console.log(`growth-check: waivers older than ${WAIVER_AGE_DAYS} days (a report, not a failure): ${agedLine(AGED)}`);
 
-const resolved = resolveBase();
+/** The base, or why the growth rows cannot measure: `armedBase`, which the stacked-entry case runs too (D-9016). */
+const resolved = armedBase(process.env, ROOT);
 const measured = 'base' in resolved
   ? (() => {
       const head = gitRead(['rev-parse', 'HEAD'], ROOT).trim();
@@ -1298,7 +1342,7 @@ const measured = 'base' in resolved
       // D-6119: absolute numbers go to the job summary only, never an assertion.
       const methods = methodCounts(METHOD_COUNT_FILE, METHOD_COUNT_CLASS, resolved.base, head, ROOT);
       const summaryWritten = appendJobSummary(growthSummary({ base: resolved.base, rows: armed.rows, over: armed.over,
-        methods, armed: GROWTH_ARMED, exemptions: armed.exemptions, waivers: armed.waivers, aged: AGED, caps: armed.caps }));
+        methods, armed: GROWTH_ARMED, from: resolved.from, exemptions: armed.exemptions, waivers: armed.waivers, aged: AGED, caps: armed.caps }));
       return { ...armed, files, summaryWritten };
     })()
   : null;
@@ -1306,7 +1350,7 @@ const measured = 'base' in resolved
 if (measured === null) {
   console.log(`growth-check: skipped, ${'skip' in resolved ? resolved.skip : ''}`);
 } else {
-  console.log(['growth-check: net code lines against the merge-base',
+  console.log([`growth-check: net code lines against the ${'from' in resolved && resolved.from === 'queue-parent' ? 'queue group\'s parent' : 'merge-base'}`,
     ...measured.rows.map((r) => `  ${r.file.padEnd(42)} base ${String(r.base).padStart(6)}  head ${String(r.head).padStart(6)}  delta ${r.delta >= 0 ? '+' : ''}${r.delta}`),
     `GROWTH_OVER: ${overLine(measured.over, measured.exemptions, (f) => f, measured.waivers)}`,
     `Caps (D-8635): ${measured.caps.map((c) => `${c.file} ${c.head} of ${c.cap}`).join(', ') || '(none)'}`,

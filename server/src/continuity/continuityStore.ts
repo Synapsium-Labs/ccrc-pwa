@@ -13,8 +13,9 @@ import {
   type ProbeGrade, type ProbeRoundKind, type RenewalTrigger, type StartRow, type TriggerClass,
 } from '../../../shared/continuity.js';
 import { isFleetRole, type FleetRole } from '../../../shared/fleetRoles.js';
+import { RESTART_OUTCOMES } from '../../../shared/overlord-readiness.js';
 import {
-  TIMER_STATES, cancelActorOf, isTimerCancelReason, timerMoveAllowed, type TimerActor, type TimerCancelReason, type TimerState,
+  TIMER_STATES, cancelActorOf, isTimerCancelReason, timerMoveAllowed, type TimerActor, type TimerCancelReason, type TimerDoor, type TimerState,
 } from '../../../shared/continuity-timers.js';
 import type { Observed } from '../time/observed.js';
 import { isTickMailSubject } from '../coord/ledgersMail.js';
@@ -140,6 +141,22 @@ export function startsSince(db: DatabaseSync, sinceId: number, limit = -1): Star
     ).all(sinceId, limit) as unknown as (Omit<StartRow, 'source'> & { source: string })[];
     // The table has no CHECK, so a word a newer build wrote reads through the same rule as the writer (review 1911, F10).
     return { ok: true, rows: rows.map((r) => ({ ...r, source: startSourceOf(r.source) })) };
+  } catch (e) {
+    return { ok: false, detail: `continuity_starts read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/** One recorded start, or why it could not be read: `row: null` is no row with that id (renewal readings PR B). */
+export type StartRead = { ok: true; row: StartRow | null } | { ok: false; detail: string };
+
+/** The start with this id, by primary key: the read `notLocal` takes of a generation's own start, which never goes through
+ *  `startsOf`'s newest-N window, where later `/clear` or compact starts would push it out (review 2183, F16). */
+export function startById(db: DatabaseSync, id: number): StartRead {
+  try {
+    const row = stmt(db,
+      'SELECT id, sessionId, reportId, uuid, source, model, rowIncarnation, reportedAt, receivedAt FROM continuity_starts WHERE id = ?',
+    ).get(id) as unknown as (Omit<StartRow, 'source'> & { source: string }) | undefined;
+    return { ok: true, row: row === undefined ? null : { ...row, source: startSourceOf(row.source) } };
   } catch (e) {
     return { ok: false, detail: `continuity_starts read failed: ${e instanceof Error ? e.message : String(e)}` };
   }
@@ -385,6 +402,42 @@ export function liveGenerations(db: DatabaseSync): GenerationsRead {
   }
 }
 
+/** The identity's one live generation row, parsed alone (Overlord readiness, plan `w1-readiness.md` Task 2, fix round 1 F21):
+ *  `null` for none, the row, or `ok: false` for that row only, so another identity's unreadable row never hides this one. The
+ *  same columns and row parser as `liveGenerations`; the newest when the live-identity index would hold more than one. */
+export function liveGenerationOfIdentity(db: DatabaseSync, identity: string): { ok: true; row: GenRow | null } | { ok: false; detail: string } {
+  try {
+    const raw = stmt(db, `SELECT ${GEN_COLUMNS} FROM continuity_generations WHERE identity = ? AND state <> 'ended' ORDER BY id DESC LIMIT 1`)
+      .get(identity) as Record<string, unknown> | undefined;
+    if (raw === undefined) return { ok: true, row: null };
+    const r = genRowOf(raw);
+    return typeof r === 'string' ? { ok: false, detail: `continuity_generations row ${String(raw.id)}: ${r}` } : { ok: true, row: r };
+  } catch (e) {
+    return { ok: false, detail: `continuity_generations read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/** How many generations of `identity` were minted (started) at or after `sinceMs` whose predecessor in the same term ended with
+ *  an outcome `RESTART_OUTCOME_MAP` names `restart` (the readiness plan's question 3). Completed restarts only:
+ *  the one in progress is the decider's. A predecessor whose outcome is missing or a word this build does not know is
+ *  unreadable, never a zero. */
+export function restartsSince(db: DatabaseSync, identity: string, sinceMs: number):
+  { ok: true; count: number } | { ok: false; detail: string } {
+  try {
+    const rows = stmt(db, 'SELECT p.id AS id, p.outcome AS outcome FROM continuity_generations g JOIN continuity_generations p '
+      + 'ON p.identity = g.identity AND p.term = g.term AND p.n = g.n - 1 WHERE g.identity = ? AND g.startReportedAt >= ?')
+      .all(identity, sinceMs) as { id: unknown; outcome: unknown }[];
+    let count = 0;
+    for (const r of rows) {
+      if (!isGenerationOutcome(r.outcome)) return { ok: false, detail: `continuity_generations row ${String(r.id)}: outcome unreadable` };
+      if (RESTART_OUTCOMES.includes(r.outcome)) count += 1;
+    }
+    return { ok: true, count };
+  } catch (e) {
+    return { ok: false, detail: `continuity_generations read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
 /** The WHERE clause of every compare-and-set, and its arguments. */
 const CAS = 'id = ? AND term = ? AND n = ? AND state = ? AND shadowState IS ? AND walk IS ?';
 const casArgs = (id: number, e: GenExpect): (number | string | null)[] => [id, e.term, e.n, e.state, e.shadowState, e.walk];
@@ -484,12 +537,13 @@ export function restampOverlordGeneration(db: DatabaseSync, sessionId: string, t
 }
 
 /** Retire's writer (Overlord designation A, F4): end the live `overlord` generation of `sessionId` with outcome `retired`, as a mint
- *  ends one (state, outcome, walk and deadlines), so a later designate's first mint finds no live `overlord` row. It runs INSIDE
- *  the caller's transaction and opens none, and stamps each generation it ends `ended` at `at` there (a refused stamp throws,
- *  so the caller's transaction rolls back). */
+ *  ends one (state, outcome, walk and deadlines), so a later designate's first mint finds no live `overlord` row. A pending rebind's
+ *  body mints under its own id until it goes live (`roleOf.ts#identityOf`), so that identity is ended too when its attempt fails
+ *  or is cancelled (designation B). It runs INSIDE the caller's transaction and opens none, and stamps each generation it ends
+ *  `ended` at `at` there (a refused stamp throws, so the caller's transaction rolls back). */
 export function endOverlordGeneration(db: DatabaseSync, sessionId: string, at: number): { changed: boolean } {
   const ended = stmt(db, "UPDATE continuity_generations SET state = 'ended', outcome = 'retired', walk = NULL, deadlineAt = NULL, "
-    + "shadowDeadlineAt = NULL WHERE identity = 'overlord' AND sessionId = ? AND state <> 'ended' RETURNING id").all(sessionId) as { id: number }[];
+    + "shadowDeadlineAt = NULL WHERE identity IN ('overlord', ?) AND sessionId = ? AND state <> 'ended' RETURNING id").all(sessionId, sessionId) as { id: number }[];
   for (const g of ended) stampGeneration(db, Number(g.id), 'ended', at);
   return { changed: ended.length > 0 };
 }
@@ -734,6 +788,9 @@ export interface TimerInsert {
   readonly programme: string | null;
   readonly setAt: number;
   readonly dueAt: number;
+  /** The restore generation read at the set (`restoreGeneration()`, Overlord W1 migration 128); null when it read unmeasured, or
+   *  for a row an older build set. `timerRestoreFact` reads every null the same way. */
+  readonly setRestoreGeneration: number | null;
 }
 
 /** One row as read. `role` is the stored word: a newer build may have written a role this one does not know. */
@@ -753,7 +810,7 @@ export type TimerHoldRead =
   | { ok: false; detail: string };
 
 const TIMER_COLUMNS = 'id, setter, setterIncarnation, setById, setByUuid, role, note, runId, programme, setAt, dueAt, state, '
-  + 'firedAt, mailId, cancelledAt, cancelReason';
+  + 'firedAt, mailId, cancelledAt, cancelReason, setRestoreGeneration';
 
 /** A stored row, or the reason it does not read (a state or cancel reason outside this build's vocabulary included). */
 function timerRowOf(raw: Record<string, unknown>): TimerRow | string {
@@ -773,10 +830,15 @@ function timerRowOf(raw: Record<string, unknown>): TimerRow | string {
   if (cancelReason !== null && (typeof cancelReason !== 'string' || !isTimerCancelReason(cancelReason))) {
     return `continuity_timers row ${id} has cancel reason ${String(cancelReason)}`;
   }
+  // A restore generation that does not read fails the read, as a bad run does: read as null it would say "not measured".
+  const setRestoreGeneration = intOrNull(raw.setRestoreGeneration);
+  if (raw.setRestoreGeneration !== null && (setRestoreGeneration === null || !Number.isSafeInteger(setRestoreGeneration))) {
+    return `continuity_timers row ${id} has restore generation ${String(raw.setRestoreGeneration)}`;
+  }
   return {
     id, setter, setterIncarnation, setById, setByUuid, role, note, runId, programme: strOrNull(raw.programme),
     setAt, dueAt, state: state as TimerState, firedAt: intOrNull(raw.firedAt), mailId: intOrNull(raw.mailId),
-    cancelledAt: intOrNull(raw.cancelledAt), cancelReason: cancelReason as TimerCancelReason | null,
+    cancelledAt: intOrNull(raw.cancelledAt), cancelReason: cancelReason as TimerCancelReason | null, setRestoreGeneration,
   };
 }
 
@@ -798,8 +860,9 @@ export function insertTimer(db: DatabaseSync, row: TimerInsert): { ok: true; id:
   if (!timerMoveAllowed(null, 'pending', 'set-door')) return { ok: false, kind: 'write-failed' };
   try {
     const res = stmt(db, 'INSERT INTO continuity_timers (setter, setterIncarnation, setById, setByUuid, role, note, runId, programme, '
-      + "setAt, dueAt, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')")
-      .run(row.setter, row.setterIncarnation, row.setById, row.setByUuid, row.role, row.note, row.runId, row.programme, row.setAt, row.dueAt);
+      + "setAt, dueAt, state, setRestoreGeneration) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)")
+      .run(row.setter, row.setterIncarnation, row.setById, row.setByUuid, row.role, row.note, row.runId, row.programme, row.setAt, row.dueAt,
+        row.setRestoreGeneration);
     return { ok: true, id: Number(res.lastInsertRowid) };
   } catch {
     return { ok: false, kind: 'write-failed' };
@@ -889,6 +952,55 @@ export function purgeTimers(db: DatabaseSync, before: number): { removed: number
   const res = stmt(db, "DELETE FROM continuity_timers WHERE (state = 'fired' AND firedAt < ?) OR (state = 'cancelled' AND cancelledAt < ?)")
     .run(before, before);
   return { removed: Number(res.changes) };
+}
+
+/** The role's fired timers of one term (Overlord W1, question 2): `state = 'fired'`, `setter`, `setterIncarnation = stamp`,
+ *  and a delivery of its mail that is not acked (`ackedAt IS NULL`: queued, delivered or parked) or one acked at or after
+ *  `since`. Newest first. A read join on `mail_deliveries` by `mailId`; it writes nothing there. A failed read is
+ *  `{ ok: false, detail }`, never an empty list. */
+export function firedTimersOf(db: DatabaseSync, setter: string, stamp: string, since: number): TimersRead {
+  try {
+    const cols = TIMER_COLUMNS.split(', ').map((c) => `t.${c}`).join(', ');
+    return timersOf(stmt(db, `SELECT ${cols} FROM continuity_timers t WHERE t.state = 'fired' AND t.setter = ? AND t.setterIncarnation = ? `
+      + 'AND EXISTS (SELECT 1 FROM mail_deliveries d WHERE d.mailId = t.mailId AND (d.ackedAt IS NULL OR d.ackedAt >= ?)) '
+      + 'ORDER BY t.firedAt DESC, t.id DESC').all(setter, stamp, since) as Record<string, unknown>[]);
+  } catch (e) { return readFailed(e); }
+}
+
+// `continuity_timer_refusals` (M36; migration 128): one count per UTC day, timer door and word, raised by the timer doors'
+// one refusal helper and pruned by the timers lane beside `purgeTimers`. M36's report reads `timerRefusalCounts`.
+
+/** One refusal to count: the UTC day of the door's wall clock, the door, and the word it answered. */
+export interface TimerRefusalCount { readonly day: string; readonly door: TimerDoor; readonly word: string }
+export type TimerRefusalCountsRead =
+  | { ok: true; rows: { day: string; door: string; word: string; n: number }[] } | { ok: false; detail: string };
+
+/** Raises one (day, door, word) count by one, in one statement. Never throws: a failed statement answers `{ ok: false }`,
+ *  which the door ignores, so a failed count never changes an answer. */
+export function recordTimerRefusal(db: DatabaseSync, r: TimerRefusalCount): { ok: boolean } {
+  try {
+    stmt(db, 'INSERT INTO continuity_timer_refusals (day, door, word, n) VALUES (?, ?, ?, 1) '
+      + 'ON CONFLICT (day, door, word) DO UPDATE SET n = n + 1').run(r.day, r.door, r.word);
+    return { ok: true };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/** Every count from `sinceDay` on, by day, door and word. */
+export function timerRefusalCounts(db: DatabaseSync, sinceDay: string): TimerRefusalCountsRead {
+  try {
+    const rows = stmt(db, 'SELECT day, door, word, n FROM continuity_timer_refusals WHERE day >= ? ORDER BY day, door, word')
+      .all(sinceDay) as { day: string; door: string; word: string; n: number | bigint }[];
+    return { ok: true, rows: rows.map((x) => ({ day: x.day, door: x.door, word: x.word, n: Number(x.n) })) };
+  } catch (e) {
+    return { ok: false, detail: `continuity_timer_refusals read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/** Removes the days before `beforeDay`. The timers lane calls it beside `purgeTimers`. */
+export function purgeTimerRefusals(db: DatabaseSync, beforeDay: string): { removed: number } {
+  return { removed: Number(stmt(db, 'DELETE FROM continuity_timer_refusals WHERE day < ?').run(beforeDay).changes) };
 }
 
 // ------------------------------------------------------------------------------------------------- the notes

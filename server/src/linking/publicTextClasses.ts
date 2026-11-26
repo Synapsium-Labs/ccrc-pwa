@@ -102,7 +102,13 @@ export const PUBLIC_TEXT_CLASSES: readonly PublicTextClass[] = [
     // ranges (192.0.2/24, 198.51.100/24, 203.0.113/24 — the ONLY ranges a
     // doc example may speak), and 0/8. A public address in this tree is
     // somebody's real box.
-    pattern: /\b(?!(?:10|127|192\.168|172\.(?:1[6-9]|2\d|3[01])|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])|203\.0\.113|198\.51\.100|192\.0\.2|0)\.)\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g,
+    //
+    // One more exclusion, decided at the token (X3 R2, 2026-11-25): a quad of the form N.0.0.0 directly after a
+    // browser product token and its slash (`Chrome/`, `HeadlessChrome/`, `Chromium/`, `Edg/`) is a browser version,
+    // because the reduced user agent spells its major that way (`Chrome/130.0.0.0`). Only that match is let through:
+    // the rest of the line is still read, so a real address beside a user agent still scores, and so does the same
+    // token with any non-zero part. A private host is never N.0.0.0 behind a browser name.
+    pattern: /\b(?!(?:10|127|192\.168|172\.(?:1[6-9]|2\d|3[01])|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])|203\.0\.113|198\.51\.100|192\.0\.2|0)\.)(?!(?<=\b(?:HeadlessChrome|Chromium|Chrome|Edg)\/)\d{1,3}\.0\.0\.0\b)\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g,
     why: 'a public IP names a reachable machine — examples speak RFC 5737, fixtures speak RFC 1918',
     // package-lock.json's "version"/"resolved" lines carry npm's own dotted
     // strings, none of them addresses; nothing else gets the line skip.
@@ -153,7 +159,12 @@ export const PUBLIC_TEXT_CLASSES: readonly PublicTextClass[] = [
     // one below, which says them without spelling them.
     // Case-insensitive (D-206, whole-branch review): DNS is case-blind, so an
     // upper-cased `.ts.net` name locates the same real box.
-    pattern: /[a-z0-9-]+\.ts\.net/gi,
+    // A match starts only where a run of label characters starts, or right where a previous `.ts.net` ends (the two
+    // lookbehinds): the same matches as the bare pattern, a name glued behind another included, but read in linear
+    // time. Unanchored, the engine retried from every position of a long run, quadratic in its length: a
+    // 124 000-character base64 run in one committed line took this pattern about 23 s alone (X3 R2, 2026-11-25), and
+    // the server reads the same pattern over text a plan sends it.
+    pattern: /(?:(?<![a-z0-9-])|(?<=\.ts\.net))[a-z0-9-]+\.ts\.net/gi,
     why: 'a tailnet DNS name locates somebody\'s real box — examples speak mybox.example.com or <tailnet>.ts.net',
     // Task 4 landed this class scoped to the runtime tree (D-193's reason,
     // restated at the CGNAT class); Task 8 dropped the scope.
@@ -166,7 +177,10 @@ export const PUBLIC_TEXT_CLASSES: readonly PublicTextClass[] = [
     // case-blind). The `allowed` vocabulary stays EXACT-lowercase on purpose:
     // the docs speak the canonical placeholder spelling, so a case-variant
     // placeholder is a vocabulary drift the ratchet flags, not admits.
-    pattern: /[a-z0-9-]+\.duckdns\.org/gi,
+    // Anchored like the tailnet class's (a run's start, or right after a previous `.duckdns.org`), for the same
+    // reason: the same matches in linear time over a long run. The second lookbehind matters here: a real name glued
+    // straight behind an allowed placeholder's `.duckdns.org` still scores (pinned in the fixtures' `catches`).
+    pattern: /(?:(?<![a-z0-9-])|(?<=\.duckdns\.org))[a-z0-9-]+\.duckdns\.org/gi,
     why: 'a duckdns subdomain outside the placeholder set resolves to somebody\'s real box',
     allowed: (token) => DUCKDNS_PLACEHOLDERS.has(token.replace(/\.duckdns\.org$/, '')),
   },

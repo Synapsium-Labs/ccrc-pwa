@@ -24,7 +24,7 @@ steps 1 and 2.
 | Step 5, the boundary between waves | `wave-lifecycle-5-boundary.md` |
 | Step 5b, the landing route | `wave-lifecycle-5b-landing.md` |
 | Step 6, the final merge | `wave-lifecycle-6-final-merge.md` |
-| A workspace that is gone, a run that cannot finish, the run's signals, the routing door, peers and claims | `wave-lifecycle-run-care.md` |
+| A workspace that is gone, a run that cannot finish, a conflict mid-round (the conflict-sync mail), the run's signals, the routing door, peers and claims | `wave-lifecycle-run-care.md` |
 | The ask lane and the approval lane | `wave-lifecycle-asks.md` |
 | Mutation testing | `wave-lifecycle-mutation.md` |
 

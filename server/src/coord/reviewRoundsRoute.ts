@@ -61,7 +61,7 @@ export function registerReviewRoundsRoute(app: FastifyInstance, deps: ReviewRoun
     // The run's coordinator through the one binding reader (ARCH-62), never a hand comparison of the claimant.
     let owns = coordinatorOfRun(coord, id) === byId;
     if (!owns) {
-      try { owns = coord.claimsProgramme(byId, program); }
+      try { owns = coord.claimsProgramme(byId, program, byUuid); }
       catch (err) { return refuseRoute(reply, 'run-unreadable', { detail: err instanceof Error ? err.message : String(err) }); }
     }
     if (!owns) {

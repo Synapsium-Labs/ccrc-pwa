@@ -16,6 +16,8 @@
 import { RENEWAL_LANE_PERIOD_MS } from '../../shared/continuity.js';
 import { TIMER_LANE_PERIOD_MS } from '../../shared/continuity-timers.js';
 import { OUTBOX_SEND_DEADLINE_MS } from '../../shared/push-outbox.js';
+import { LIMIT_SAMPLE_MS } from '../../shared/loadLines.js';
+import { OVERLORD_READINESS_SWEEP_MS } from '../../shared/overlord-readiness.js';
 
 /** The push outbox lane's beat: a refused row's first retry lands 30 to 60 s after the refusal (plan Task 2). */
 export const OUTBOX_LANE_PERIOD_MS = 30_000;
@@ -37,6 +39,10 @@ export const QUIZ_LANE_PERIOD_MS = 86_400_000;
 /** The forecast lane's look (Overlord W2 forecasts A): once a minute, so a seal lands within a minute of its boundary, and
  *  forecasts B's spend arm reads a closed run's session before its workspace is reclaimed. */
 export const FORECAST_LANE_PERIOD_MS = 60_000;
+/** The invariant monitor's cadence (Overlord spec §10.4; `invariants` row): a minute, and the table invariants' own sweep, ten
+ *  minutes, for the rows whose tables stamp no line. Starting values. */
+export const INVARIANT_SWEEP_MS = 60_000;
+export const INVARIANT_TABLE_SWEEP_MS = 10 * 60_000;
 /** The decision model's anchor-set lane's look (Overlord W2, the decision model PR B): once a day, the quiz lane's period by
  *  reference. The anchors are re-asked daily because drift is counted in days (question 10: 4 of 20 moved against the line's
  *  baseline), and the maintenance cap that bounds a pass is a UTC day's, so a pass that runs short resumes the next day. */
@@ -215,7 +221,7 @@ export type LaneName =
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'blockWakes' | 'admissionWake' | 'idleNudge' | 'mail' | 'mailHold' | 'inboxWake' | 'asks' | 'approvalPrune' | 'digestBeat' | 'pushOutbox'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
   | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'diskLaneStall' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases' | 'overlaps' | 'generations'
-  | 'launchProfile' | 'advisorCount' | 'timers' | 'sequenceRetention' | 'quiz' | 'responses' | 'linearPlanSync' | 'linearDrift' | 'linearMigration' | 'forecasts' | 'decisionAnchors' | 'skillInstall' | 'skillRollout';
+  | 'launchProfile' | 'advisorCount' | 'timers' | 'sequenceRetention' | 'quiz' | 'responses' | 'linearPlanSync' | 'linearDrift' | 'linearMigration' | 'forecasts' | 'decisionAnchors' | 'skillInstall' | 'skillRollout' | 'limitSamples' | 'authorityWitness' | 'invariants' | 'overlordReadiness';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -438,6 +444,14 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   // one pass at a time, hourly; a pass deletes at most SEQUENCE_PRUNE_BATCH lines, so a long-stopped server catches up over a
   // few passes. The throttle is monotonic, as every row's is; the verdict reads the wall clock through the time port.
   { name: 'sequenceRetention', cadenceMs: 60 * 60_000, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the sequence retention lane failed' },
+  // `invariants`: the invariant monitor's runner (Overlord spec §10.4, Table 11.1c; `coord/invariantLane.ts`). One pass at a time,
+  // a minute; a pass gathers only when the sequence head moved, or at INVARIANT_TABLE_SWEEP_MS for the table invariants (I2, I7,
+  // I17 read tables that stamp no line). Shadow until its row of the Shadow lanes card is Live.
+  { name: 'invariants', cadenceMs: INVARIANT_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the invariant monitor failed' },
+  // `overlordReadiness`: the Overlord's readiness word (Overlord spec §6.4, C23, H20; `coord/overlordReadinessLane.ts`). One pass at a
+  // time, ten seconds (the mail and asks lanes' cadence, plan question 5); a pass stuck past a minute is abandoned, so a hung producer
+  // read never freezes the word: the read door serves `stale` after READINESS_FRESH_MS with no pass.
+  { name: 'overlordReadiness', cadenceMs: OVERLORD_READINESS_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', staleAfterMs: 60_000, warnKey: 'ccrc-server: the Overlord readiness lane failed' },
   // The weekly replay quiz lane (Overlord spec §3.3.9 C52, Table 11.1c; W1a, plan `w1a-replay-quiz.md` Task 4): it looks once a
   // day and raises at most one operator item an ISO week, keyed by the week (`quiz.ts#quizLaneVerdict`); a thrown pass is
   // caught here. It raises nothing while the record path is absent (`QUIZ_RECORD_READY`).
@@ -465,6 +479,9 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   // once a minute, on the monotonic clock (no row is on the wall clock; review 2265, F4). It seals each closed work run at its
   // boundary and scores each seal at its 85% date (`coord/forecastLane.ts`); a thrown pass is caught here.
   { name: 'forecasts', cadenceMs: FORECAST_LANE_PERIOD_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the forecast lane failed', derivedFrom: null },
+  // The limit sampler (Overlord W1 serviceability PR B, `limitSampler.ts`; index question 8): every five minutes, the tick's own
+  // reading of every Anthropic account into `limit_samples`, one row per reading; it adds no read. A thrown pass is caught here.
+  { name: 'limitSamples', cadenceMs: LIMIT_SAMPLE_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the limit sampler failed' },
   // The decision model's anchor-set lane (Overlord W2, plan `w2-decision-model.md` Task 9, Table 11.1c): one pass at a time, once a
   // day on the quiz lane's period by reference. It re-asks the anchors, admits lines and runs the canary through `gatherDecisions`
   // on the maintenance count, holds an armed row that drifted, and asks nothing of a row that is off, so every row ships quiet.
@@ -473,6 +490,10 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
     name: 'decisionAnchors', cadenceMs: DECISION_ANCHOR_PERIOD_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the decision anchors lane failed',
     derivedFrom: { name: 'QUIZ_LANE_PERIOD_MS', reason: 'drift is counted in days against a UTC-day maintenance cap, so the lane looks once a day, as the quiz lane does' },
   },
+  // The authority witness lane (Overlord W1 authority journal, plan Task 6, question 8): once a minute, one exchange with the agent
+  // at a time (the exchange coalesces its own callers; the lane only nudges it). `staleAfterMs` is twice the witness op's 15 s
+  // deadline, so a flight that outlived two deadlines is abandoned. The exchange never rejects; a thrown nudge is caught here.
+  { name: 'authorityWitness', cadenceMs: 60_000, derivedFrom: null, clock: 'mono', flight: 'skip', staleAfterMs: 30_000, warnKey: 'ccrc-server: authority witness lane failed' },
 ];
 
 export function laneRow(name: string): LaneRow {

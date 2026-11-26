@@ -283,7 +283,7 @@ describe('PR7: the lane adopts a changed worktree with terminal evidence behind 
     const first = Date.parse(lease.firstObservedAt);
     let k = 0;
     const open = (claimedBy: string): number => {
-      const r = w.coord.openRun({ program: `program-${k++}`, title: 'run-a', project: 'demo', wave: 1, waveOf: 1, claimedBy });
+      const r = w.coord.openRun({ program: `program-${claimedBy}`, title: 'run-a', project: 'demo', wave: ++k, waveOf: null, claimedBy });   // one programme per coordinator (R11)
       if (!('id' in r)) throw new Error(`openRun refused: ${JSON.stringify(r)}`);
       return r.id;
     };

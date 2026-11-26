@@ -100,8 +100,9 @@ describe('the programme ledgers’ tables are one new entry that seeds nothing (
     const programs = colsOf(db, 'programs');
     // The definition of done is a later entry's column (D-8126; its own pin is the describe below).
     // The plan model's six columns come after it (D-8181, migration 59; its own pin is plan-store.test.ts), then the
-    // goals versions' four ratification columns (Overlord W1, portfolio B; its own pin is coord-db.test.ts).
-    expect(programs.slice(-14, -10)).toEqual([
+    // goals versions' four ratification columns (Overlord W1, portfolio B; its own pin is coord-db.test.ts), then the
+    // programme lifecycle's five (W1, D-8985: the binding and the placeholder; its own pin is programme-lifecycle-migration).
+    expect(programs.slice(-19, -15)).toEqual([
       ['specPath', 'TEXT', 0, null, 0], ['inShort', 'TEXT', 0, null, 0], ['inShortAt', 'INTEGER', 0, null, 0],
       ['doneWhen', 'TEXT', 0, null, 0]]);
     db.close();

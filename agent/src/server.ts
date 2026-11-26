@@ -39,6 +39,7 @@ import type {
 } from '../../shared/agent-protocol.js';
 import {
   ACCOUNT_OP, TESTBOX_ADMIN_OP, CCRC_DIR_NAME, NODE_FILE_BASENAMES, NODE_FILES, parseCcdCaps, parseObservedEpochDoc, POOL_EPOCH_FILE_NAME, TOKEN_SYNC_OP, DISK_OP, PRESSURE_OP, BACKUP_OP, READDIR_MTIMES_OP,
+  WITNESS_OP, type WitnessReq,
   TESTBOX_OP, TESTBOX_TOOLS_SYNC_OP, TESTBOX_CAPTURE_OP, type TestboxReq, type TestboxToolsSyncReq, type TestboxCaptureReq,
   TOKEN_SYNC_SPAWN_TIMEOUT_MS, UPDATE_OP, UPDATE_SPAWN_DRAIN_MS, UPDATE_SPAWN_TIMEOUT_MS, decideKilledSpawn, firstStderrLine,
   inFlightBusyDetail, isClaimCode, isReadFromRange, isUpdateLockHeldLine, lockHeldBusyDetail, tokenSyncSpawnArgv, updateLauncherPath,
@@ -51,6 +52,9 @@ import { measurePressure, measureSessions, type PressureSeams } from './pressure
 import { measureBackup, type BackupSeams } from './backup.js';
 import { captureTestbox, measureTestbox, realTestboxSeams, syncTestboxTools, type TestboxCaptureSeams, type TestboxOpSeams } from './testboxOp.js';
 import { isClaudeVersion } from '../../shared/claudeVersion.js';
+import { isDeliveryPart } from '../../shared/deliveryResult.js';
+import { answerWitness, readHeldWitness } from './witness.js';
+import { parseWitnessTuple } from '../../shared/authorityWitness.js';
 import { createHistoryOp, realHistoryOpSeams, type HistoryOp, type HistoryOpSeams } from './historyOp.js';
 import { readOverlordHistoryRequest, type OverlordHistoryRequestRefusal } from '../../shared/overlordHistory.js';
 import { OVERLORD_HISTORY_OP, type OverlordHistoryReq, type PressureOpReply, type PressureOpSizeOnly } from '../../shared/agent-protocol.js';
@@ -799,7 +803,7 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
       ctx.testboxCaptureGate.spawning = true;
       let reply: Awaited<ReturnType<typeof captureTestbox>>;
       try {
-        reply = await captureTestbox(req.build, { ...realTestboxSeams(), ...ctx.testboxSeams }, ctx.cfg.home);
+        reply = await captureTestbox(req.build, { ...realTestboxSeams(), ...ctx.testboxSeams }, ctx.cfg.home, req.recipe ?? 'build-trust', req.part);
       } finally {
         ctx.testboxCaptureGate.spawning = false;
       }
@@ -899,6 +903,11 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
       }
       console.warn(`ccrc-agent: models ${req.action} ${req.lane}${'class' in req ? ` ${req.class}` : ''} -> ${outcome.kind}`);
       send(ws, ok(req.id, { ...outcome, fleetIdentity: readFleetIdentity(ctx.cfg.home) } satisfies ModelsOpAnswer));
+      return;
+    }
+    case 'witness': {
+      // Overlord W1 Task 6: keep the higher epoch in the node's own file and answer what it holds (agent/src/witness.ts).
+      send(ws, ok(req.id, answerWitness(ctx.cfg.home, req.offer)));
       return;
     }
     case 'overlord-history': {
@@ -1091,8 +1100,15 @@ function validateReq(msg: Record<string, unknown>): AgentReq | ReqRefusal | Acco
     case 'testbox-capture': {
       // The ONE build guard (`isClaudeVersion`, never a regex here). A missing or malformed build is a `ReqRefusal`
       // carrying `bad-build`; any other field is malformed (`null`, `bad-request`: an agent that predates the op).
-      if (Object.keys(msg).some((k) => k !== 't' && k !== 'id' && k !== 'op' && k !== 'build')) return null;
+      // `recipe` and `part` (Desktop polish wave 178; the capture owner's calls 1148 and 1159) are additive and travel
+      // together: absent, build trust; present, only `delivery` with a part this side's recipe has; either one alone, or
+      // off its shape, is malformed.
+      if (Object.keys(msg).some((k) => k !== 't' && k !== 'id' && k !== 'op' && k !== 'build' && k !== 'recipe' && k !== 'part')) return null;
+      const hasRecipe = Object.prototype.hasOwnProperty.call(msg, 'recipe');
+      if (hasRecipe !== Object.prototype.hasOwnProperty.call(msg, 'part')) return null;
+      if (hasRecipe && (msg.recipe !== 'delivery' || !isDeliveryPart(msg.part))) return null;
       if (!isClaudeVersion(msg.build)) return { refuse: 'bad-build', id };
+      if (msg.recipe === 'delivery') return { t: 'req', id, op: 'testbox-capture', build: msg.build, recipe: 'delivery', part: msg.part as number } satisfies TestboxCaptureReq;
       return { t: 'req', id, op: 'testbox-capture', build: msg.build } satisfies TestboxCaptureReq;
     }
     case 'token-sync': {
@@ -1143,6 +1159,14 @@ function validateReq(msg: Record<string, unknown>): AgentReq | ReqRefusal | Acco
       return {
         t: 'req', id, op: 'models', lane, action: msg.action as Exclude<ModelsReq['action'], 'show'>, class: msg.class as ModelClass,
       } satisfies ModelsReq;
+    }
+    case 'witness': {
+      // The offer must be a tuple `parseWitnessTuple` accepts, and the frame carries no other key; anything else is
+      // `bad-request` (the word that means "this agent predates the op" is never produced by a good frame).
+      if (Object.keys(msg).some((k) => k !== 't' && k !== 'id' && k !== 'op' && k !== 'offer')) return null;
+      const p = parseWitnessTuple(msg.offer);
+      if (!p.ok) return null;
+      return { t: 'req', id, op: 'witness', offer: p.tuple } satisfies WitnessReq;
     }
     case 'overlord-history': {
       // The ONE reader (shared/overlordHistory.ts), handed the request's body: the frame less its envelope keys, so its
@@ -1513,7 +1537,7 @@ function handleConnection(
       // only when it is listed here), and `testbox-capture` (build capture runner spec 2026-11-22 §2.5: one field, the
       // build). It is required in `ReadyFrame`, so it cannot be dropped silently.
       const frame: ReadyFrame = {
-        t: 'ready', v: 1, ccdVerbs: verbCache.verbs, observedEpoch: readObservedEpoch(opts.home), ops: [UPDATE_OP, TOKEN_SYNC_OP, ACCOUNT_OP, DISK_OP, PRESSURE_OP, TESTBOX_OP, TESTBOX_TOOLS_SYNC_OP, TESTBOX_ADMIN_OP, BACKUP_OP, READDIR_MTIMES_OP, MODELS_OP, TESTBOX_CAPTURE_OP],
+        t: 'ready', v: 1, ccdVerbs: verbCache.verbs, observedEpoch: readObservedEpoch(opts.home), ops: [UPDATE_OP, TOKEN_SYNC_OP, ACCOUNT_OP, DISK_OP, PRESSURE_OP, TESTBOX_OP, TESTBOX_TOOLS_SYNC_OP, TESTBOX_ADMIN_OP, BACKUP_OP, READDIR_MTIMES_OP, MODELS_OP, TESTBOX_CAPTURE_OP, WITNESS_OP],
         // `host` (Overlord W1, the isolation word, §7.4): this process's uid and its host ids digested under the bearer this
         // connection just proved, measured on every ready; the raw ids never leave this process.
         host: hostReportOf(readHostIds(opts.hostRoots), process.getuid?.(), opts.token),
@@ -1521,6 +1545,10 @@ function handleConnection(
       // `overlord-history` (Overlord W1, Task 4) goes last, and only where this agent can serve the history store
       // (historyOp.ts#servable: the worker's entry found, not macOS), so a server never counts an agent that cannot.
       if (historyOp.servable) frame.ops!.push(OVERLORD_HISTORY_OP);
+      // Overlord W1 Task 6: what this node holds of the authority witness, read fresh at each ready (a tuple, `null` for none,
+      // or `'unmeasured'` for an unreadable or malformed file).
+      const heldWitness = readHeldWitness(opts.home);
+      frame.authorityWitness = heldWitness.kind === 'held' ? heldWitness.tuple : 'unmeasured';
       const rosterFp = readRosterFp(opts.home);
       if (rosterFp !== undefined) frame.rosterFp = rosterFp;
       const build = readBuildStamp(opts.home);

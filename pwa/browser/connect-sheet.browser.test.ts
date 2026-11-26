@@ -6,7 +6,9 @@
 // names, and nothing scrolls sideways (the page, or the sheet).
 //  - The door: exactly one, the lane list's last row on a phone (the skin's row height, 52px in Refined and 44px in
 //    Instrument) and the page header's action at ≥900; narrowed (a dark gate's answer, in a second context), it stays,
-//    aria-disabled, with its reason and its command beneath it.
+//    aria-disabled, with its reason and its command beneath it. Narrowed, it stands down (desktop-polish wave 180): the
+//    disabled ink, at ≥900 the subtle edge and no hover ground, its sentence at most two lines on a phone; a tap brings
+//    the reason into view and marks it for a moment, and opens nothing.
 //  - The sheet at 1280 and 1920 is the centred dialog (D-5933's desktop arm, measured here), and a bottom sheet below 900.
 //  - Name it: the hue swatches are one row of six, each at least 44px wide; the derived folder line is one mono line that
 //    ellipsises rather than wraps when the name is long.
@@ -27,6 +29,7 @@ import { resolveChrome } from './harness';
 import { openApp, serveDist, sharedDist, type AppFixture, type AppView, type DistServer } from './app';
 import { fleetSession } from '../test/fleetFixture';
 import { PROVIDERS } from '../../shared/providers';
+import { DOOR_COMMAND_LABEL, DOOR_NARROWED } from '../src/fleet/accountWords';
 
 const THEMES = [PHOSPHOR, 'light'];
 const SKINS = [REFINED, INSTRUMENT];
@@ -140,20 +143,117 @@ describe('the Add account door and the connect sheet at every width and skin (D-
         const n = await dark.page.evaluate(() => {
           const doors = [...document.querySelectorAll<HTMLElement>('.acct-door, .acct-door-action')];
           const door = doors[0]!;
-          const reason = document.getElementById(door.getAttribute('aria-describedby') ?? '')!;
+          const reason = document.getElementById('acct-door-reason')!;
+          // A token's computed colour, read through a probe so the comparison is the engine's own.
+          const ink = (token: string): string => {
+            const probe = document.createElement('span');
+            probe.style.color = `var(${token})`;
+            document.body.append(probe);
+            const c = getComputedStyle(probe).color;
+            probe.remove();
+            return c;
+          };
+          // The sentence's lines: the distinct tops of its text's line boxes.
+          const range = document.createRange();
+          range.selectNodeContents(reason);
+          const lines = new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size;
+          const field = document.querySelector<HTMLElement>('.acct-door-reason .acct-fix-field');
+          const cs = getComputedStyle(door);
+          const summary = document.querySelector('.acct-door-reason details > summary');
+          const marker = summary === null ? null : getComputedStyle(summary, '::before');
           return {
             doors: doors.length,
             disabled: door.getAttribute('aria-disabled'),
+            describedBy: door.getAttribute('aria-describedby'),
+            chevron: marker === null ? '' : `${marker.content} ${marker.borderRightStyle}`,
             reason: reason?.textContent ?? '',
-            command: document.querySelector('.acct-door-reason .acct-fix-field')?.textContent ?? '',
+            command: field?.textContent ?? '',
+            commandLabel: field?.getAttribute('aria-label') ?? '',
+            more: document.querySelector('.acct-door-reason details > summary')?.textContent ?? '',
             below: reason.getBoundingClientRect().top >= door.getBoundingClientRect().bottom - 1,
+            color: cs.color, border: cs.borderTopColor, disabledInk: ink('--ink-disabled'), edgeSubtle: ink('--edge-subtle'),
+            liveInk: ink('--ink-primary'),
+            lines,
           };
         });
         expect(n.doors, 'one door, narrowed in place').toBe(1);
         expect(n.disabled).toBe('true');
-        expect(n.reason).toContain('Turn on sign-in for this PWA first');
-        expect(n.command).toBe('ccrc auth on');
+        expect(n.describedBy, 'the door names no description: the press says the reason, once').toBeNull();
+        expect(n.reason).toBe(DOOR_NARROWED['gate-dark'].text);
+        expect(n.command).toBe(DOOR_NARROWED['gate-dark'].fix);
+        expect(n.commandLabel).toBe(DOOR_COMMAND_LABEL);
+        expect(n.more).toBe(DOOR_NARROWED['gate-dark'].more!.summary);
+        expect(n.chevron, 'the disclosure shows that it opens: the settings folds\' chevron').toBe('"" solid');
         expect(n.below, 'the reason sits beneath the door').toBe(true);
+        // It stands down: the design system's disabled ink, never the live door's.
+        expect(n.color, 'the narrowed door is drawn in the disabled ink').toBe(n.disabledInk);
+        expect(n.color).not.toBe(n.liveInk);
+        if (desk) {
+          expect(n.border, 'at ≥900 its edge is the subtle one').toBe(n.edgeSubtle);
+          await dark.page.hover('.acct-door-action');
+          const ground = await dark.page.evaluate(() => getComputedStyle(document.querySelector('.acct-door-action')!).backgroundColor);
+          expect(ground, 'no hover ground on a narrowed door').toBe('rgba(0, 0, 0, 0)');
+        } else {
+          expect(n.lines, 'the sentence is at most two lines on a phone').toBeLessThanOrEqual(2);
+        }
+        // A tap brings the reason into view and marks it for a moment; it opens nothing.
+        await dark.page.evaluate(() => window.scrollTo(0, 0));
+        // `force`: Playwright waits for an `aria-disabled` element to become enabled, which a narrowed door never does. It
+        // is still a real click at the door's centre.
+        await dark.page.click('.acct-door, .acct-door-action', { force: true });
+        await dark.page.waitForSelector('.acct-door-reason[data-marked="true"]', { timeout: 5_000 });
+        await dark.page.waitForFunction(() => {
+          const r = document.querySelector('.acct-door-reason')!.getBoundingClientRect();
+          return r.top >= 0 && r.bottom <= innerHeight;
+        }, undefined, { timeout: 5_000 });
+        expect(await dark.page.locator('[data-frame="provider"]').count(), 'a narrowed door opens nothing').toBe(0);
+        await dark.page.waitForSelector('.acct-door-reason:not([data-marked])', { timeout: 5_000 });
+        // No press (fix round 1): held down under the mouse, the door neither sinks nor grounds. The primitives' press is
+        // the individual `scale` property, so it is read beside `transform`.
+        const box = (await dark.page.locator('.acct-door, .acct-door-action').boundingBox())!;
+        await dark.page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        await dark.page.mouse.down();
+        const held = await dark.page.evaluate(() => {
+          const door = document.querySelector<HTMLElement>('.acct-door, .acct-door-action')!;
+          const cs = getComputedStyle(door);
+          return { active: door.matches(':active'), scale: cs.scale, transform: cs.transform, ground: cs.backgroundColor };
+        });
+        await dark.page.mouse.up();
+        expect(held.active, 'the mouse is held on the door').toBe(true);
+        expect(held.scale, 'a held narrowed door does not sink').toBe('none');
+        expect(held.transform).toBe('none');
+        expect(held.ground, 'nor grounds').toBe('rgba(0, 0, 0, 0)');
+        await dark.page.waitForSelector('.acct-door-reason:not([data-marked])', { timeout: 5_000 });
+        // Forced colours (fix round 1): the door keeps the system's disabled colour, never the live button's, and the mark
+        // is drawn by an outline, which forced colours keep.
+        await dark.page.emulateMedia({ forcedColors: 'active' });
+        try {
+          const forced = await dark.page.evaluate(() => {
+            const sys = (c: string): string => {
+              const probe = document.createElement('span');
+              probe.style.color = c;
+              document.body.append(probe);
+              const v = getComputedStyle(probe).color;
+              probe.remove();
+              return v;
+            };
+            const door = document.querySelector<HTMLElement>('.acct-door, .acct-door-action')!;
+            return { forced: matchMedia('(forced-colors: active)').matches, color: getComputedStyle(door).color, gray: sys('GrayText'), button: sys('ButtonText') };
+          });
+          expect(forced.forced, 'forced colours are emulated').toBe(true);
+          expect(forced.color, 'under forced colours the narrowed door is in GrayText').toBe(forced.gray);
+          expect(forced.color).not.toBe(forced.button);
+          await dark.page.click('.acct-door, .acct-door-action', { force: true });
+          await dark.page.waitForSelector('.acct-door-reason[data-marked="true"]', { timeout: 5_000 });
+          const mark = await dark.page.evaluate(() => {
+            const cs = getComputedStyle(document.querySelector('.acct-door-reason')!);
+            return `${cs.outlineStyle} ${cs.outlineWidth}`;
+          });
+          expect(mark, 'under forced colours the mark is an outline').toBe('solid 2px');
+          await dark.page.waitForSelector('.acct-door-reason:not([data-marked])', { timeout: 5_000 });
+        } finally {
+          await dark.page.emulateMedia({ forcedColors: 'none' });
+        }
         await step(dark.page, 'narrowed door');
         expect(dark.errors).toEqual([]);
       } finally {
@@ -353,7 +453,7 @@ const readOffline = (page: Page): Promise<{
   return {
     door: {
       disabled: door.getAttribute('aria-disabled'),
-      reason: document.getElementById(door.getAttribute('aria-describedby') ?? '')?.textContent ?? '',
+      reason: document.getElementById('acct-door-reason')?.textContent ?? '',
     },
     cards: [...document.querySelectorAll<HTMLElement>('.accounts-row')].map((c) => ({
       lane: c.dataset['lane'],

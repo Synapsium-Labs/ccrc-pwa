@@ -8,7 +8,7 @@ import { OUTBOX_SEND_DEADLINE_MS } from '../../shared/push-outbox.js';
 import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { LANE_SCHEDULE, OUTBOX_LANE_PERIOD_MS, RESPONSES_LANE_PERIOD_MS, laneRow, type LaneRow } from '../src/laneSchedule.js';
+import { INVARIANT_TABLE_SWEEP_MS, LANE_SCHEDULE, OUTBOX_LANE_PERIOD_MS, RESPONSES_LANE_PERIOD_MS, laneRow, type LaneRow } from '../src/laneSchedule.js';
 import { LaneRunner } from '../src/laneRunner.js';
 import { callsIn, symbolOf } from './scan/symbols.js';
 import { CATALOGUE_POLL_INTERVAL_MS, SERVER_CAPS_WRITE_MS, CHILD_RECLAIM_SWEEP_MS } from '../src/laneSchedule.js';
@@ -524,9 +524,9 @@ describe('the four reclaim lanes (D-5862, PR 3)', () => {
 });
 
 describe('every throttle is on the monotonic clock (OA-C4, ruled (a) on #803)', () => {
-  it('no row of LANE_SCHEDULE is on the wall clock: 62 of 62 are monotonic (the sequence retention lane, Overlord §10.4; the Overlord inbox wake, W1 inbox Task 4; the coordinator advisor count lane, D-8971; the disk-lane stall alert, D-8955; the coordinator skill rollout mail, D-8126 A9-3; the block-wake lane, D-8126; the Linear plan sync, D-8182; the Linear drift pass, D-8183; the Linear migration, D-8186; the disk alarm, the tmp census and the stale-archive arm are rows, D-7895; the stuck verdict pass, D-8071; the run-close lane, D-8077; the case lane, Overlord §10.5; the generations lane, Overlord §3.3.11; the launch-profile lane, Overlord §3.6; the timers lane, Overlord §3.3.12; the quiz lane, Overlord §3.3.9; the push outbox lane, Overlord §6.7; the response lane, Overlord §4.3; the overlaps arm, Overlord §5.5; the forecast lane, Overlord §5.6; the decision anchors lane, Overlord W2; the skill self-install lane, D-8126; the mailhold projection, mid-turn mail PR 4; the admission wake, D-6095)', () => {
+  it('no row of LANE_SCHEDULE is on the wall clock: 66 of 66 are monotonic (the Overlord readiness lane, Overlord §6.4; the authority witness lane, Overlord W1 §7.6; the limit sampler, Overlord W1 serviceability B; the sequence retention lane, Overlord §10.4; the Overlord inbox wake, W1 inbox Task 4; the coordinator advisor count lane, D-8971; the disk-lane stall alert, D-8955; the coordinator skill rollout mail, D-8126 A9-3; the block-wake lane, D-8126; the Linear plan sync, D-8182; the Linear drift pass, D-8183; the Linear migration, D-8186; the disk alarm, the tmp census and the stale-archive arm are rows, D-7895; the stuck verdict pass, D-8071; the run-close lane, D-8077; the case lane, Overlord §10.5; the generations lane, Overlord §3.3.11; the launch-profile lane, Overlord §3.6; the timers lane, Overlord §3.3.12; the quiz lane, Overlord §3.3.9; the push outbox lane, Overlord §6.7; the response lane, Overlord §4.3; the overlaps arm, Overlord §5.5; the forecast lane, Overlord §5.6; the decision anchors lane, Overlord W2; the skill self-install lane, D-8126; the mailhold projection, mid-turn mail PR 4; the admission wake, D-6095)', () => {
     expect(LANE_SCHEDULE.filter((r) => r.clock === 'wall').map((r) => r.name), 'a throttle on Date.now()').toEqual([]);
-    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(62);
+    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(66);
   });
 
   it('the runner throttles a monotonic row on the monotonic reading: a wall step back runs it at its cadence, a step forward never early', () => {
@@ -681,6 +681,25 @@ describe('the sequence retention lane row (Overlord spec §10.4, Table 11.5b)', 
   });
 });
 
+describe('the invariant monitor\'s row (Overlord spec §10.4, Table 11.1c)', () => {
+  it('runs each minute, one pass at a time, on the monotonic throttle, and names its warning; the table sweep is ten minutes', () => {
+    expect(laneRow('invariants')).toEqual({
+      name: 'invariants', cadenceMs: 60_000, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the invariant monitor failed', derivedFrom: null,
+    });
+    expect(INVARIANT_TABLE_SWEEP_MS).toBe(600_000);
+  });
+});
+
+describe('the Overlord readiness lane\'s row (Overlord spec §6.4, C23, H20; plan w1-readiness.md Task 3)', () => {
+  // Literals, not the constant: a test reading OVERLORD_READINESS_SWEEP_MS would move with a mutation of it.
+  it('runs every ten seconds, one pass at a time, abandons a pass stuck past a minute, on the monotonic throttle, and names its warning', () => {
+    expect(laneRow('overlordReadiness')).toEqual({
+      name: 'overlordReadiness', cadenceMs: 10_000, derivedFrom: null, clock: 'mono', flight: 'skip', staleAfterMs: 60_000,
+      warnKey: 'ccrc-server: the Overlord readiness lane failed',
+    });
+  });
+});
+
 describe('the overlaps arm row (Overlord spec §5.5 and §5.6, Table 11.1c; W2 plan w2-overlaps.md Task 4)', () => {
   // The radar's minute as a literal, the radar row's reason above: a test reading the constant would move with a mutation of it.
   it('rides the landing radar\'s cadence, skips an overlap, abandons a stuck pass and names its warning', () => {
@@ -720,7 +739,16 @@ describe('the decision anchors lane row (Overlord W2, plan w2-decision-model.md 
     expect(DECISION_ANCHOR_PERIOD_MS).toBe(86_400_000);
     expect(DECISION_ANCHOR_PERIOD_MS).toBe(QUIZ_LANE_PERIOD_MS);
   });
-  it('is the last row of the table', () => {
-    expect(LANE_SCHEDULE[LANE_SCHEDULE.length - 1]!.name).toBe('decisionAnchors');
+  it('ends the lane table with limitSamples, decisionAnchors and authorityWitness in that order', () => {
+    expect(LANE_SCHEDULE.slice(-3).map((row) => row.name)).toEqual(['limitSamples', 'decisionAnchors', 'authorityWitness']);
+  });
+});
+
+describe('the authority witness lane row (Overlord W1 authority journal, plan Task 6)', () => {
+  it('looks once a minute on the monotonic clock, skips an overlap, abandons a pass older than 30 s (twice the 15 s deadline of the op), and names its warning', () => {
+    expect(laneRow('authorityWitness')).toEqual({
+      name: 'authorityWitness', cadenceMs: 60_000, derivedFrom: null, clock: 'mono', flight: 'skip',
+      staleAfterMs: 30_000, warnKey: 'ccrc-server: authority witness lane failed',
+    });
   });
 });

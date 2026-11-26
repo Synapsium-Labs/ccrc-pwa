@@ -72,7 +72,11 @@ const EXEMPT_BUT_AUTHENTICATED = new Set(
    // D-8126: the goals read, `ccrc-api goals show` cookieless from the fleet host, the console with a session.
    'GET /api/programmes/:slug/goals',
    // D-8181: the plan read, `ccrc-api plan show` cookieless from the fleet host, the console with a session.
-   'GET /api/programmes/:slug/plan']);
+   'GET /api/programmes/:slug/plan',
+   // D-9048 (landing order wave 5j-a): the landing line's read, `ccrc-api landing show` cookieless, the console with a session.
+   'GET /api/landing',
+   // Programme lifecycle W2: a programme's history and a session's one programme, cookieless from the fleet host or with a session.
+   'GET /api/programmes/:slug/history', 'GET /api/sessions/:id/programme']);
 
 /** DERIVED from `EXEMPT`'s own reason strings, and asserted equal to the
  *  hand-written set above (review round 1, I3+I4): a NINTH entry — `GET
@@ -102,7 +106,9 @@ function scanRoutes(file: string): ScannedRoute[] {
     .map((m) => ({ method: m[1]!.toUpperCase(), routePath: m[2]!, file }));
 }
 
-/** TWENTY-NINE files register routes since the draft review's read door (`server/src/review/routes.ts`, X3 R1: its one capability route,
+/** THIRTY-ONE files register routes since the runway read (`server/src/poolRunwayRoute.ts`, Overlord W1 serviceability B: its one session-gated route);
+ *  THIRTY since the Overlord's history door (`server/src/coord/overlordHistoryRoutes.ts`, Overlord W1 PR B1: its one box-token route);
+ *  TWENTY-NINE since the draft review's read door (`server/src/review/routes.ts`, X3 R1: its one capability route,
  *  gate reason 9); TWENTY-EIGHT since the Overlord's inbox doors (`server/src/coord/overlordInboxRoutes.ts`, Overlord W1 inbox: its three box-token routes); TWENTY-SEVEN since the one-time pass's door (`server/src/coord/delegationBackfillRoutes.ts`, session helpers S2, D-8874: its two session-gated routes on one path); TWENTY-SIX since the approval census's read (`server/src/coord/approvalCensusRoutes.ts`, approvals PR 1, Task 1.4: its one session-gated route); TWENTY-FIVE since the replay quiz's record path (`server/src/continuity/quizRoutes.ts`, Overlord W1a quiz record); TWENTY-FOUR since the Models sheet's write door (`server/src/laneModelsRoutes.ts`, model-class-advance R4: its one session-gated route); TWENTY-THREE since the decision-model doors (`server/src/coord/decisionModelRoutes.ts`, Overlord W2 decision model B: six routes on five paths, session-gated, registered from `server.ts`); TWENTY-TWO since the Overlord's designation doors (`server/src/coord/overlordRoutes.ts`, Overlord W1 designation A: three session-gated routes; designation C adds its two Settings doors to the same file); TWENTY-ONE since the remaining-work door (`server/src/coord/programmeRemainingRoute.ts`, Overlord W2: its one
  *  box-token route, registered from `registerCoordRoutes` and written in a file of its own); THIRTEEN since the test box connect routes (`server/src/testboxAdmin.ts`, plan TC12, D-8166: its two session-only routes); TWELVE since the coordinator call record's door (`server/src/coord/coordCallsRoute.ts`, D-8126: its one box-token route, registered from
  *  `registerCoordRoutes` and written in a file of its own); ELEVEN since the review-rounds door (`server/src/coord/reviewRoundsRoute.ts`, D-8125); TEN since the reader lab's door (`server/src/readerLab/routes.ts`, the reader lab plan Task 3: its three run routes and the probe pair); NINE since the programme ledgers' PL3 (`server/src/coord/ledgersRoutes.ts`, the coordinator's nine, registered from
@@ -138,6 +144,7 @@ const ROUTES: ScannedRoute[] = [
   ...scanRoutes('continuity/routes.ts'),
   ...scanRoutes('coord/overlordRoutes.ts'),
   ...scanRoutes('coord/overlordInboxRoutes.ts'),
+  ...scanRoutes('coord/overlordHistoryRoutes.ts'),
   ...scanRoutes('continuity/quizRoutes.ts'),
   ...scanRoutes('operatorModel/nameListRoutes.ts'),
   ...scanRoutes('coord/decisionModelRoutes.ts'),
@@ -145,6 +152,7 @@ const ROUTES: ScannedRoute[] = [
   ...scanRoutes('coord/delegationBackfillRoutes.ts'),
   ...scanRoutes('coord/approvalCensusRoutes.ts'),
   ...scanRoutes('review/routes.ts'),
+  ...scanRoutes('poolRunwayRoute.ts'),
 ];
 
 /** The three websocket upgrades — the same registrations, told apart by their
@@ -365,7 +373,9 @@ describe('the scanner is looking at something', () => {
     // 76 since `GET`/`POST /api/coord/plain-auto-memory` (Overlord W1a launch profiles PR B, Settings › Automation › Auto memory for
     // plain sessions): session-gated, NOT EXEMPT, no box token.
     // 78 since `GET`/`POST /api/coord/coordinator-advisor` (the coordinator advisor, D-8967): session-gated, NOT EXEMPT, no box token.
-    expect(scanRoutes('coord/routes.ts').length).toBe(78);
+    // 80 since landing order wave 5j-b (2026-11-25, D-9049): `POST /api/landing/pause` and `POST /api/landing/withdraw`, the
+    // operator's, session-gated, NOT EXEMPT, no box token.
+    expect(scanRoutes('coord/routes.ts').length).toBe(80);
     // 5 in `update/routes.ts` (update-management W2, design 2026-09-20 §12):
     // `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh`
     // and `POST /api/updates/ack`, session-only and NOT EXEMPT, plus the
@@ -389,7 +399,12 @@ describe('the scanner is looking at something', () => {
     // first.
     // 5 since the history route (docs W5b-1, rich-docs spec G4): `GET /api/docs/:project/history`, the same class.
     // 6 since the range route (X2 P1.3): `GET /api/docs/:project/range`, the same class.
-    expect(scanRoutes('docs/routes.ts').length, 'auth-gate: docs/routes.ts registers 6').toBe(6);
+    // 13 since the outside-folder doors (X2 P2.3, spec 2026-11-18 §7): `GET /api/docs-folders`, `GET /api/docs-folders/paths`,
+    // `POST /api/docs-folders`, `DELETE /api/docs-folders/:label` and `GET /api/docs-folders/:label/{tree,file,range}`, the
+    // same class on the docs plugin's own instance, so with no marker header they answer 403 `foreign-request` too. Past the
+    // marker, every read and the add refuse `auth-off` while sign-in is dark; the add takes the account gate's step-up.
+    // 15 with the two settings doors (X2 P4.3): session-gated, and on the same request-marker check.
+    expect(scanRoutes('docs/routes.ts').length, 'auth-gate: docs/routes.ts registers 15').toBe(15);
     // 1 in `linear/routes.ts` (named workspaces S4, design 2026-10-20 §4.2): `GET /api/linear/resolve`, the
     // ticket-title preview read. Session-gated and NOT EXEMPT, no box token, `Cache-Control: no-store`.
     // 5 since S4b (design §5.1): the connection's `GET`, `PUT`, `POST …/check` and `DELETE /api/linear/connection`, all
@@ -419,7 +434,15 @@ describe('the scanner is looking at something', () => {
     // 24 since the ratify door (Overlord W1, portfolio B): `POST /api/programmes/:slug/goals/ratify`, the same registration,
     // session-gated and NOT EXEMPT, no box token; it takes the account gate (`auth-off` dark), and with no store both its dark
     // and its signed-in answers are 501, so it is not in FLAG_AWARE.
-    expect(scanRoutes('coord/ledgersRoutes.ts').length).toBe(24);
+    // 30 since programme lifecycle W2: `POST /api/programmes`, `POST /api/programmes/:slug/state` and `POST
+    // /api/programmes/:slug/coordinator`, session-gated and NOT EXEMPT, no box token (the start takes the account gate, the
+    // state door's pause works dark, the rest take the step-up); `POST /api/programmes/:slug/end-proposal`, a box-token
+    // machine lane IN EXEMPT; and `GET /api/programmes/:slug/history` and `GET /api/sessions/:id/programme`, session-or-token
+    // reads IN EXEMPT.
+    // 31 since programme lifecycle W3: `POST /api/programmes/decisions`, the backfill door, session-gated and NOT EXEMPT, no
+    // box token; its apply takes the step-up, and it reads its body first, so a bodiless request answers the same dark or
+    // signed in and it is not in FLAG_AWARE.
+    expect(scanRoutes('coord/ledgersRoutes.ts').length).toBe(31);
     // 1 in `coord/coordCallsRoute.ts` (D-8126, wave A3): `POST /api/coord/programmes/:slug/calls`, a box-token machine lane IN EXEMPT.
     expect(scanRoutes('coord/coordCallsRoute.ts').length).toBe(1);
     // 1 in `coord/programmeRemainingRoute.ts` (Overlord W2 remaining work A): `POST /api/coord/programmes/:slug/remaining`, a
@@ -782,8 +805,35 @@ describe('the scanner is looking at something', () => {
     // machine lanes IN EXEMPT: the HTTP half 298 -> 301, the gated count stays 190 (301 - 111), the exempt-HTTP count 108 -> 111.
     // 305 with the draft-review read door (X3 R1), in `review/routes.ts`: class 9, not a box-token lane. The HTTP half 301 -> 302,
     // the gated count stays 190 (302 - 112), the exempt-HTTP count 111 -> 112.
-    expect(scanRoutes('review/routes.ts').map(key)).toEqual(['POST /api/review/open']);
-    expect(ROUTES.length).toBe(305);
+    // 306 with the Overlord's history door (Overlord W1, PR B1), in `coord/overlordHistoryRoutes.ts`, a routes file of its own:
+    // `POST /api/overlord/history`, one box-token machine lane IN EXEMPT: the HTTP half 302 -> 303, the gated count stays 190
+    // (303 - 113), the exempt-HTTP count 112 -> 113.
+    expect(scanRoutes('coord/overlordHistoryRoutes.ts').length).toBe(1);
+    // 307 since the runway read, `GET /api/pools/runway`, session-gated and NOT EXEMPT, no box token:
+    // the HTTP half 303 -> 304, the gated count 190 -> 191, the exempt-HTTP count stays 113.
+    // 309 since Rebind and Restart the Overlord (Overlord W1 designation B), in `coord/overlordRoutes.ts`: `POST /api/overlord/rebind`
+    // and `POST /api/overlord/restart`, each session-gated (the account gate, Rebind with a step-up) and NOT EXEMPT, no box token:
+    // the HTTP half 304 -> 306, the gated count 191 -> 193, the exempt-HTTP count stays 113.
+    // 310 since the authority witness door, `POST /api/overlord/witness` in `coord/overlordRoutes.ts`, session-gated with no step-up
+    // and NOT EXEMPT (in FLAG_AWARE): the HTTP half 306 -> 307, the gated count 193 -> 194, the exempt-HTTP count stays 113.
+    expect(scanRoutes('poolRunwayRoute.ts').length).toBe(1);
+    // 316 since programme lifecycle W2's six in `coord/ledgersRoutes.ts` (three operator doors, session-gated and NOT EXEMPT; the
+    // end proposal and the two session-or-token reads IN EXEMPT): the HTTP half 307 -> 313, the gated count 194 -> 197 (313 - 116),
+    // the exempt-HTTP count 113 -> 116.
+    // 323 with the seven outside-folder doors (X2 P2.3), in `docs/routes.ts`, session-gated and NOT EXEMPT, no box token: the
+    // HTTP half 313 -> 320, the gated count 197 -> 204, the exempt-HTTP count stays 116.
+    // 324 since programme lifecycle W3's backfill door in `coord/ledgersRoutes.ts`, session-gated and NOT EXEMPT: the HTTP half
+    // 320 -> 321, the gated count 204 -> 205 (321 - 116), the exempt-HTTP count stays 116.
+    // 326 since landing order wave 5j-b (2026-11-25, D-9049): the operator's pause and withdraw doors in `coord/routes.ts`,
+    // session-gated and NOT EXEMPT, no box token: the HTTP half 321 -> 323, the gated count 205 -> 207, the exempt-HTTP count stays 116.
+    // 329 with the review page's three routes (X3 R2), in `review/routes.ts`: `GET /review` EXEMPT as class 9, `GET /review.html`
+    // and `GET /review/` gated 404s. The HTTP half 323 -> 326, the gated count 207 -> 209, the exempt-HTTP count 116 -> 117.
+    expect(scanRoutes('review/routes.ts').map(key)).toEqual(['POST /api/review/open', 'GET /review', 'GET /review.html', 'GET /review/']);
+    // 331 with both Docs settings doors (X2 P4.3): session-gated and NOT EXEMPT, no box token. The HTTP half
+    // 326 -> 328, gated 209 -> 211 (328 - 117); the exempt-HTTP count stays 117.
+    // 332 since the Overlord's readiness read, `GET /api/overlord/readiness` in `coord/overlordRoutes.ts`, session-gated and NOT
+    // EXEMPT, no box token: the HTTP half 328 -> 329, the gated count 211 -> 212 (329 - 117), the exempt-HTTP count stays 117.
+    expect(ROUTES.length).toBe(332);
     expect(scanRoutes('laneModelsRoutes.ts').length).toBe(1);
     expect(scanRoutes('coord/delegationBackfillRoutes.ts').length).toBe(2);
     expect(scanRoutes('coord/approvalCensusRoutes.ts').length).toBe(1);
@@ -843,6 +893,7 @@ describe('the scanner is looking at something', () => {
       'POST /api/docs/:project/refresh',
       'GET /api/docs/:project/history',
       'GET /api/docs/:project/range',
+      'GET /api/docs/settings', 'PUT /api/docs/settings',
       // The sixth file's one (named workspaces S4): a scanner that stopped reading `linear/routes.ts` would lose it.
       'GET /api/linear/resolve',
       // …and its four Settings routes for workspace keys (#1444, plan task LK11), lost with it.
@@ -974,7 +1025,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 305 scanned + the static wildcard when the bundle is built.
+    // 332 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1102,6 +1153,7 @@ describe('EXEMPT is complete in both directions', () => {
       'GET /api/peers',
       'GET /api/pools/epoch',
       'GET /api/programmes/:slug/goals',
+      'GET /api/programmes/:slug/history',
       'GET /api/programmes/:slug/items',
       'GET /api/programmes/:slug/plan',
       'GET /api/reader-lab/probe/:nonce/:name',
@@ -1113,10 +1165,12 @@ describe('EXEMPT is complete in both directions', () => {
       'GET /api/sessions/:id/card',
       'GET /api/sessions/:id/notes',
       'GET /api/sessions/:id/probe',
+      'GET /api/sessions/:id/programme',
       'GET /api/testbox',
       'GET /api/timers',
       'GET /api/updates/intent/:nodeId',
       'GET /health',
+      'GET /review',
       'POST /api/approvals',
       'POST /api/auth/login',
       'POST /api/auth/passkey/assert/finish',
@@ -1148,7 +1202,9 @@ describe('EXEMPT is complete in both directions', () => {
       'POST /api/mail',
       'POST /api/mail/:id/ack',
       'POST /api/notify',
+      'POST /api/overlord/history',
       'POST /api/overlord/messages/:id/acknowledge',
+      'POST /api/programmes/:slug/end-proposal',
       'POST /api/programmes/:slug/items',
       'POST /api/programmes/:slug/modifications',
       'POST /api/programmes/:slug/modifications/merged',
@@ -1214,7 +1270,7 @@ describe('EXEMPT is complete in both directions', () => {
     expect([...EXEMPT_BUT_AUTHENTICATED].sort()).toEqual([...EXEMPT_BUT_AUTHENTICATED_DERIVED].sort());
   });
 
-  it('the thirty-nine box-token lanes in EXEMPT are those coord routes, and one hundred and two with notify, pools/epoch, updates/intent, the Linear proxy, the ledgers, the linking lanes, the call record, the remaining-work door, the plan lanes, the start report, the loads report, the act-key claim, the report door, the card door, the note door, the timer doors, the probe door, the quiz record door, its confirmation, its tick report, the coordinator\'s Live and the Overlord\'s inbox doors', () => {
+  it('the thirty-nine box-token lanes in EXEMPT are those coord routes, and one hundred and six with notify, pools/epoch, updates/intent, the Linear proxy, the ledgers, the linking lanes, the call record, the remaining-work door, the plan lanes, the start report, the loads report, the act-key claim, the report door, the card door, the note door, the timer doors, the probe door, the quiz record door, its confirmation, its tick report, the coordinator\'s Live, the Overlord\'s inbox doors and its history door', () => {
     // ORDER-PINNED TITLE. `box-token-census.test.ts` reads the number words in the
     // line above IN SEQUENCE — lanes first, total second — so rewording the title
     // the other way round is a red suite until that expectation moves with it
@@ -1389,10 +1445,13 @@ describe('the landing write doors: exempt from the session gate, and the route s
       expect(EXEMPT.get(k), k).not.toContain('EXEMPT-BUT-AUTHENTICATED');
       expect(EXEMPT_BUT_AUTHENTICATED.has(k), k).toBe(false);
     }
+    // Since landing order wave 5j-b (D-9049) `SESSION_ONLY` holds the operator's two doors, `/api/landing/pause` and
+    // `/api/landing/withdraw`; neither literal may hold these two box-token lanes.
     for (const name of ['UNGATED', 'SESSION_ONLY']) {
       const m = new RegExp(`const ${name} = new Set\\(\\[([^\\]]*)\\]\\)`).exec(pause);
       expect(m, `the ${name} literal moved`).not.toBeNull();
-      expect(m![1]).not.toContain('/api/landing/');
+      expect(m![1]).not.toContain('/api/landing/entries');
+      expect(m![1]).not.toContain('/api/landing/order');
     }
   });
 
@@ -1669,6 +1728,10 @@ describe('with CCRC_AUTH off — the shipped default', () => {
     // refusal is `auth-off` (501) dark and whose step-up refusal is `step-up-required` (403) armed with a session
     // that has not stepped up, so dark and authenticated differ BY DESIGN, as they do for the step-up routes.
     'PUT /api/linear/connection', 'DELETE /api/linear/connection',
+    // Programme lifecycle W2: the hand-over door takes the account gate's step-up before it reads its body, so dark it answers
+    // `auth-off` (501) and armed with a session that has not stepped up `step-up-required` (403), which differ BY DESIGN. The
+    // start and the state door read their body first (or answer `not-configured` past the gate), so they stay in the comparison.
+    'POST /api/programmes/:slug/coordinator',
     // The revoke checklist's tick (N6, D-7738; accounts plan Task A17): it takes the account gate with `cap: null`, as it
     // runs no ccd verb, so dark it answers `auth-off` (501) and armed with a session it reads its body (400 for none),
     // which differ BY DESIGN. The other write routes ask the `account-v2` cap, which the sweep's fixture fleet does not
@@ -1694,11 +1757,16 @@ describe('with CCRC_AUTH off — the shipped default', () => {
     // Its two Settings doors (Overlord W1 designation C): the same gate with `cap: null` (a step-up for `fable` and for a
     // widening), so the same two answers: BY DESIGN.
     'POST /api/overlord/account-set', 'POST /api/overlord/model',
+    // Rebind and Restart the Overlord (Overlord W1 designation B): the same gate with `cap: null` (Rebind with a step-up), so the
+    // same two answers: BY DESIGN.
+    'POST /api/overlord/rebind', 'POST /api/overlord/restart',
     // Clearing a latch always asks the account gate, unlike lowering or Pause.
     'POST /api/overlord/latches/:cause/clear',
     // Confirm the restore (authority journal C): the read and the door each ask the account gate with `cap: null` (the door with a
     // step-up), so dark each answers `auth-off` (501): BY DESIGN.
     'GET /api/overlord/restore', 'POST /api/overlord/restore/confirm',
+    // The witness door asks the account gate with no step-up, and also answers auth-off when dark.
+    'POST /api/overlord/witness',
     // The decision-model doors' five writes (Overlord W2, decision model B): each takes the account gate with `cap: null`, so dark
     // each answers `auth-off` (501); armed with a session the arm, key PUT, and a widening off or ceiling ask the step-up first, and
     // the rest reach their handler, which with no coordination store answers `not-configured`: BY DESIGN. The read is not here.
@@ -1712,7 +1780,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
     'POST /api/continuity/quiz-runs/:id/withdraw',
   ]);
 
-  it('FLAG_AWARE is exactly those thirty-five — joining it is how a route leaves the sweep', () => {
+  it('FLAG_AWARE is exactly those thirty-nine — joining it is how a route leaves the sweep', () => {
     // Review F2. The set is self-checking in ONE direction (a member is held to an
     // exact 501 dark) and nothing pinned its size, so a future route — Task 8's
     // passkey endpoints plausibly 501 when the gate is dark — could join it and
@@ -1757,7 +1825,11 @@ describe('with CCRC_AUTH off — the shipped default', () => {
       'POST /api/overlord/designate',
       'POST /api/overlord/latches/:cause/clear',
       'POST /api/overlord/model',
+      'POST /api/overlord/rebind',
+      'POST /api/overlord/restart',
       'POST /api/overlord/restore/confirm',
+      'POST /api/overlord/witness',
+      'POST /api/programmes/:slug/coordinator',
       'PUT /api/decision-model/key',
       'PUT /api/items/:id/secret',
       'PUT /api/linear/connection',
@@ -1770,7 +1842,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 302 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 329 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1834,7 +1906,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 302 HTTP routes, not the 112 exempt.
+          //    is not itself flag-aware — the assertion that covers all 329 HTTP routes, not the 117 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

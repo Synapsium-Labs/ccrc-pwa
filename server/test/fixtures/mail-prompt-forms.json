@@ -1,0 +1,15 @@
+{
+  "_note": "Every form of the mail lane's prompt the server types today, rendered by its own renderers for the recipient `self`. Pinned to those renderers by server/test/mail-prompt-forms.test.ts; read by the console's tests (pwa/test/mail-rows.test.tsx, pwa/browser/mail-rows.browser.test.ts), which may read server/test/fixtures/ but not server source (.github/ci/reach.mjs READS).",
+  "self": "lane-a-project-a",
+  "forms": {
+    "generic": "ccrc-mail: you have new mail. Use the client, never curl or raw HTTP: ~/.local/bin/ccrc-api mail list --to lane-a-project-a ; then per row use its deliveryId, NOT id: ~/.local/bin/ccrc-api mail fetch <deliveryId> and ~/.local/bin/ccrc-api mail ack <deliveryId> --json - with body {\"fromId\":\"lane-a-project-a\",\"fromUuid\":\"<your uuid>\"}. Invoke by that exact path — ~/.local/bin is not on this unit's PATH. The client resolves the server address and reads the box token itself, so you handle neither, and it works in a repo whose settings deny curl.",
+    "operatorMessage": "ccrc-mail: you have new mail. Operator message 42: read it with your messages door.",
+    "inboxWake": "ccrc-mail: you have new mail. 2 waiting in your inbox, the first lapses in 90 s: read it with your inbox door.",
+    "inboxWakeLapsed": "ccrc-mail: you have new mail. 1 waiting in your inbox, the first has lapsed: read it with your inbox door.",
+    "inboxWakeUnreadable": "ccrc-mail: you have new mail. Something waits in your inbox: read it with your inbox door.",
+    "spotProbe": "ccrc-mail: you have new mail. A probe round is open: answer it with your probe door.",
+    "timerFired": "ccrc-mail: you have new mail. 2 of your timers came due: read them with your timer list door.",
+    "timerFiredUncounted": "ccrc-mail: you have new mail. Your timers came due: read them with your timer list door.",
+    "providerRetry": "ccrc-mail: you have new mail. Your turn ended on a provider error; continue where you stopped."
+  }
+}

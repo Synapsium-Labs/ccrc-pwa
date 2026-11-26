@@ -28,8 +28,8 @@ import { tx } from './db.js';
 import { LEDGER_ALLOC_MAX } from './ledger.js';
 import { landingViewOf } from './landingLine.js';
 import { landingReadView } from './landingReadView.js';
-import { landingCommandOf, parseLandingReadQuery, parseLandingWrite } from './landingWrites.js';
-import { actLandingWrite } from './landingWritesAct.js';
+import { landingCommandOf, parseLandingDoor, parseLandingReadQuery, parseLandingWrite } from './landingWrites.js';
+import { actLandingWrite, type LandingWritePorts } from './landingWritesAct.js';
 import type { LandingLineView } from '../../../shared/landingLine.js';
 import { measureLedgerFloor, type FloorMeasurement } from './ledgerseed.js';
 import { LedgerLog, defaultLedgerLogPath } from './ledgerlog.js';
@@ -68,6 +68,8 @@ import { capCountsWorkingArmed, capNow, sendBackCapCheck, workerReadings, type C
 import { waitOnSendBackRefusal } from './dispatch.js';   // D-6095: a send-back the cap refused waits (capacity Task 4)
 import { abandonDetail, abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type SweepCloseGuard } from './close.js';
 import { childReclaimSessions, reclaimChild, withChildReclaim, type ChildReclaimRequest } from './childReclaim.js';
+import { programmesWithLifecycle } from './programmeLifecycleRoutes.js';
+import { coordinatorReadingOf } from './programmeCoordinatorReading.js';
 import { reclaimRun, type ReclaimRunDeps } from './reclaim.js';
 import { settleItems, type SettleItemsOutcome } from './items.js';
 import { MAIL_DISABLED_MARKER } from './rundefs.js';
@@ -162,10 +164,13 @@ import {
   CHILD_DENY_SETTINGS_FILE, type ApprovalKeyAnswer, type ApprovalRequestAccepted, type ApprovalRulingAnswer,
   type ApprovalView,
 } from '../../../shared/api.js';
+import { deliveryStandingAnswerOf, deliveryViewsOf } from '../../../shared/deliveryLane.js';
+import type { DeliveryStandingAnswer } from '../../../shared/deliveryResult.js';
 import { CLAUDE_ROLL_TARGETS, CLAUDE_ROLL_TARGETS_DEFAULT, isClaudeRollTargets, isClaudeVersion, type ClaudeRollTargets } from '../../../shared/claudeVersion.js';
 import { rollTargetsOf } from './rollTarget.js';
 import { plainAutoMemoryOf } from '../continuity/profileFor.js';
 import { coordinatorAdvisorOf } from '../continuity/advisorPolicy.js';
+import { markOperatorPrompt } from '../continuity/promptHandoffs.js';
 import {
   ADVISOR_CAP_MAX, ADVISOR_CAP_MIN, ADVISOR_CHOICES, ADVISOR_SCOPE_MAX_IDS, COORDINATOR_ADVISOR_DEFAULT, advisorScopeOf, isAdvisorCap,
   isAdvisorChoice, type CoordinatorAdvisorView,
@@ -177,6 +182,7 @@ import {
 import { planStorePort } from './planStore.js';
 import { planFactsOf } from './planRunFacts.js';
 import { settleAckedOperatorNudge } from '../operatorModel/nudgeLane.js';
+import { OVERLORD_IDENTITY } from '../roleOf.js';
 
 /** The approval request's id shapes (plan Task 16): a registry id as `ccrc-api`'s `SAFE_RE` admits it, a lowercase
  *  sha256, and the hook's 128-bit nonce. */
@@ -1082,6 +1088,11 @@ export function registerCoordRoutes(
     //
     // Raw session-id addressing is untouched and stays the ad-hoc lane: a role
     // follows the chair, a session id names a session.
+    // The Overlord's identity word is reserved (Overlord W1, the Overlord's timers, question 4): only the timer lane writes
+    // mail to it, so a session's mail to it is refused by rule, before the registry is asked, whatever row exists.
+    if (toId === OVERLORD_IDENTITY) {
+      return refuse(reply, 'unknown-recipient', { fromId, fromUuid, toId, kind, subject, runId }, "the Overlord's role takes no mail in W1");
+    }
     if (toId !== 'coordinator' && toId !== 'worker' && !registry.some((r) => r.id === toId)) {
       if (names.includes(`${toId}.uuid`)) {
         return refuse(reply, 'registry-unmeasurable', { fromId, fromUuid, toId, kind, subject, runId },
@@ -1754,7 +1765,7 @@ export function registerCoordRoutes(
       kind: open.kind, reviews: open.reviews,
       ...(open.homeProject !== undefined ? { homeProject: open.homeProject } : {}),
       ...(open.programmeTitle !== undefined ? { programmeTitle: open.programmeTitle } : {}),
-      coordProject, unattributed: open.unattributed, ticket: open.ticket });
+      coordProject, unattributed: open.unattributed, claimedByUuid: open.claimedByUuid, ticket: open.ticket });
     if ('kind' in opened) {
       return reply.code(opened.kind === 'hold-oversize' ? 413 : 400).send({
         ok: false,
@@ -2024,6 +2035,9 @@ export function registerCoordRoutes(
         return reply.code(409).send({ ok: false, refused: 'claimant-alive', by: r.by, detail: r.detail });
       case 'heir-is-a-worker':
         return reply.code(409).send({ ok: false, refused: 'heir-is-a-worker', by: r.by });
+      // Programme lifecycle W1 (R11 rule 4, D-8993): the heir owns another programme; nothing was re-pointed.
+      case 'owns-another-programme':
+        return refuseRun(reply, 'owns-another-programme', { by: r.by });
       // Overlord W1 other lanes (C48): the heir is the Overlord's body (403), or the designation could not be read and
       // the heir's launch profile could not rule that out (502). `error` words; nothing was re-pointed or measured.
       case 'overlord-not-a-coordinator': case 'unmeasured':
@@ -2429,18 +2443,32 @@ export function registerCoordRoutes(
   });
 
   /** Test box plan TB9 (D-7411; spec 2026-10-28 §2.7): the test box's three doors.
-   *  - `GET /api/testbox` answers the block the poll last decided (`testbox.ts`), `null` before its first pass.
+   *  - `GET /api/testbox` answers the block the poll last decided (`testbox.ts`), `null` before its first pass, and beside it
+   *    `delivery`, the newest trusted build's paste delivery standing (words, counts, a release tag and a time per part, never a
+   *    case or its text; `deliveryResult.ts#readDeliveryStandingAnswer` reads it).
    *  - `POST /api/testbox/switch` takes `{on: boolean}` and nothing else, and runs `ccd testbox-remote --state on|off`
    *    through the agent's whitelist, the marker's one writer. SESSION-ONLY (`coord-pause-route.test.ts`'s
    *    `SESSION_ONLY`): the operator's switch, never the box token's, so no coordinator can arm remote runs.
    *  - `POST /api/testbox/tools-sync` takes no body: the release and the versions it sends are the fleet host's own.
    *  D-7554: the read and the sync ALSO take the box token (EXEMPT-BUT-AUTHENTICATED in `auth/gate.ts`, the `GET
    *  /api/runs` pattern), because `ccrc-api testbox status|tools-sync` is a cookieless fleet-host caller (the update
-   *  lane's signal). No `coordMutex` and no `notConfigured` arm: none of them touches the coordination database. */
+   *  lane's signal). No `coordMutex` and no `notConfigured` arm: the switch and the sync touch no coordination database.
+   *  The read does since wave 184: two synchronous store reads for its `delivery` key (the builds and the deliveries
+   *  tables), outside the serialiser, as a read needs; with no store the key is absent and the block is answered alone. */
+  const deliveryStandingRead = (coord: NonNullable<typeof deps.coord>): DeliveryStandingAnswer => {
+    try { return deliveryStandingAnswerOf(coord.claudeBuilds(), coord.claudeBuildDeliveries()); } catch (err) {
+      console.warn(`ccrc-server: GET /api/testbox: the delivery standing could not be read (${err instanceof Error ? err.message : String(err)})`);
+      return { kind: 'unreadable' };
+    }
+  };
   app.get('/api/testbox', async (req, reply) => {
     if (deps.cfg.authEnabled && sessionAuth(req).reason !== 'session'
       && checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/testbox') !== 'ok') return reply.code(401).send(TESTBOX_UNAUTHENTICATED);
-    return reply.code(200).send({ ok: true, testbox: watcher?.testboxLane.block() ?? null });
+    // Wave 184 (option A, the capture owner's calls 1446 and 37541): `delivery`, the newest trusted build's delivery standing,
+    // decided by `deliveryLane.ts#deliveryStandingAnswerOf`. A store read that throws answers `unreadable` and leaves the block
+    // answered; with no coordination store the key is absent, which a reader takes as unknown.
+    const coord = deps.coord;
+    return reply.code(200).send({ ok: true, testbox: watcher?.testboxLane.block() ?? null, ...(coord ? { delivery: deliveryStandingRead(coord) } : {}) });
   });
   app.post('/api/testbox/switch', async (req, reply) => {
     // D-8166 (TC13): every request writes one `switch` ledger row, by the session that asked.
@@ -2492,10 +2520,11 @@ export function registerCoordRoutes(
 
   /** D-8289: Settings › Automation › Test box's build list (`GET`, the record as `CoordStore.claudeBuilds` reads it) and the
    *  operator's **Capture again** (`POST`, `{build}` and nothing else: a FAILED build goes back to the queue, which sends it on
-   *  its next pass). Both session-gated, no box token: no machine lane reads or moves the trusted set. A record that cannot be
+   *  its next pass). The GET also carries `deliveries`, the paste delivery recipe's standing per build (Desktop polish wave 178;
+   *  `shared/deliveryLane.ts#deliveryViewsOf`, additive, no console surface reads it yet). Both session-gated, no box token: no machine lane reads or moves the trusted set. A record that cannot be
    *  read is `unavailable`, never an empty list. */
   const buildsAnswer = (reply: FastifyReply, coord: NonNullable<typeof deps.coord>): FastifyReply => {
-    try { return reply.code(200).send({ ok: true, claudeBuilds: coord.claudeBuilds() }); } catch (err) {
+    try { return reply.code(200).send({ ok: true, claudeBuilds: coord.claudeBuilds(), deliveries: deliveryViewsOf(coord.claudeBuildDeliveries()) }); } catch (err) {
       return refuseRoute(reply, 'unavailable', { detail: `the build record could not be read (${err instanceof Error ? err.message : String(err)})` });
     }
   };
@@ -3571,7 +3600,9 @@ export function registerCoordRoutes(
       since = n;
     }
     try {
-      return deps.coord.readProgrammes({ since, now }, watcher?.runVerdicts ?? createRunVerdicts());
+      // Programme lifecycle W2 (spec §15): the lifecycle fields, the bound sessions read once each.
+      return await programmesWithLifecycle(deps.coord, deps.coord.readProgrammes({ since, now }, watcher?.runVerdicts ?? createRunVerdicts()),
+        (s) => coordinatorReadingOf(deps.io, deps.cfg, s));
     } catch (err) {
       return refuseRoute(reply, 'runs-unreadable', { detail: err instanceof Error ? err.message : String(err) });
     }
@@ -4522,14 +4553,25 @@ export function registerCoordRoutes(
   /**
    * `GET /api/landing?project=[&pr=]`: the landing line (wave 5h: `entries` are the ones still in the line, or with
    * `?pr=` that PR's entry in any state; `entriesScope` says which), read cookieless from the fleet host before the coordinator
-   * enqueues. It follows the `GET /api/ledger` convention: box token, a read with no attribution to check, per-project
-   * and REQUIRED. The order is computed on this read by `landingLine.ts#landingOrder` and never stored. A project with
+   * enqueues. Since landing order wave 5j-a (D-9048) it takes a live session OR the box token, the `GET /api/feed`
+   * arrangement, checked before `501 not-configured`, and it opens on a dark box like every dual-credential read: the
+   * console reads it with a session and `ccrc-api landing show` cookieless. It has no attribution to check, and
+   * `?project=` is per-project and REQUIRED. The order is computed on this read by `landingLine.ts#landingOrder` and never stored. A project with
    * no `landing_projects` row answers both flags `false`. `binding` (wave 5i) is decided on this read from the current facts and the watcher's
    * latest control snapshot, never stored; the top-level `mainRedHold` is the hold as recomputed on this read from that snapshot, not the stored flag. The read is advisory in 5e (D-7626). The handler decides nothing: decide in L1, act here.
    */
   app.get('/api/landing', async (req, reply) => {
+    // EXEMPT-BUT-AUTHENTICATED (landing order wave 5j-a, D-9048), the `GET /api/feed` shape: authenticate before
+    // `not-configured`, preserving the global gate's information boundary on an armed box.
+    if (deps.cfg.authEnabled) {
+      const session = sessionAuth(req);
+      if (session.reason !== 'session'
+        && checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/landing') !== 'ok') {
+        return refuseRoute(reply, 'unauthenticated', { verdict: session.verdict, detail: 'GET /api/landing takes a session cookie OR the box token ' +
+          `(${MAIL_TOKEN_HEADER}); ccrc-api reads it cookieless from the fleet host` });
+      }
+    }
     if (!deps.coord) return notConfigured(reply);
-    if (!requireMailToken(req, reply, 'GET /api/landing')) return;
     const query = parseLandingReadQuery(req.query);
     if (!query.ok) return refuseRoute(reply, 'bad-request', { detail: query.detail });
     const { project, pr } = query;
@@ -4552,7 +4594,7 @@ export function registerCoordRoutes(
     return coordMutex.run(async () => {
       const r = actLandingWrite(landingCommandOf(parsed), Date.now(), { write: (c, at) => deps.coord!.writeLandingAuthority(c, at), notice });
       if (!r.ok) { const { ok: _ok, error, ...extra } = r; return refuseRoute(reply, error, extra); }
-      const { ok: _ok, coordinator: _c, ...answer } = r;
+      const { ok: _ok, coordinator: _c, released: _r, ...answer } = r;
       return reply.code(200).send({ ok: true, ...answer });
     });
   };
@@ -4565,6 +4607,38 @@ export function registerCoordRoutes(
     if (!deps.coord) return notConfigured(reply);
     if (!requireMailToken(req, reply, 'POST /api/landing/order')) return;
     return await landingWrite(req, reply, 'order', 'landingOrder');
+  });
+
+  /** `POST /api/landing/pause` and `POST /api/landing/withdraw` (landing order wave 5j-b, D-9049): the operator's two doors on
+   *  the line, session-gated only. Armed, the global gate demands a session; dark, each works and records `flag-off`. The
+   *  actor is this file's one expression, and no sign-in decision is made here. The L1 decider and the one authority writer
+   *  decide and journal; neither door chooses, reorders or brings forward an entry, and the answer names no head. */
+  const landingDoor = async (req: FastifyRequest, reply: FastifyReply, kind: 'pause' | 'withdraw') => {
+    const parsed = parseLandingDoor(kind, req.body);
+    if (!parsed.ok) return refuseRoute(reply, 'bad-request', { detail: `the landing ${kind} body is not a closed, well-formed request` });
+    const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
+    const ports = { write: (c, at) => deps.coord!.writeLandingAuthority(c, at), notice } satisfies LandingWritePorts;
+    return coordMutex.run(async () => {
+      if (parsed.kind === 'pause') {
+        const r = actLandingWrite({ kind: 'pause', project: parsed.project, paused: parsed.paused, setBy: 'operator', actor }, Date.now(), ports);
+        if (!r.ok) { const { ok: _ok, error, ...extra } = r; return refuseRoute(reply, error, extra); }
+        const { ok: _ok, ...answer } = r;
+        return reply.code(200).send({ ok: true, ...answer });
+      }
+      const r = actLandingWrite({ kind: 'withdraw', project: parsed.project, pr: parsed.pr, pinnedAt: parsed.pinnedAt, setBy: 'operator', actor },
+        Date.now(), ports);
+      if (!r.ok) { const { ok: _ok, error, ...extra } = r; return refuseRoute(reply, error, extra); }
+      const { ok: _ok, coordinator: _c, ...answer } = r;
+      return reply.code(200).send({ ok: true, ...answer });
+    });
+  };
+  app.post('/api/landing/pause', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    return await landingDoor(req, reply, 'pause');
+  });
+  app.post('/api/landing/withdraw', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    return await landingDoor(req, reply, 'withdraw');
   });
 
   /* ── asks (ask pre-emption lane, Task 9) ─────────────────────────────── */
@@ -4940,7 +5014,10 @@ export function registerCoordRoutes(
     } else {
       return refuseRoute(reply, 'bad-request');
     }
-    return sendAnswer(reply, await questions.answer(answer, wiring.answerDeps));
+    const answered = await questions.answer(answer, wiring.answerDeps);
+    // The answer went through (every form answers 200 only once its keys landed): marks as a typed prompt does.
+    if (answered.status === 200 && deps.coord !== undefined) markOperatorPrompt(deps.coord, qid.sessionId, deps.time.clock.wall(), (l) => console.warn(l));
+    return sendAnswer(reply, answered);
   });
 
   /**

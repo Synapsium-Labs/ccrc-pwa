@@ -324,7 +324,11 @@ describe('an invited reply (#2726 (a))', () => {
 
   it('review 1907 F2: a mail asked through the coordinator role is answered by the coordinator session', async () => {
     const w = await sessions(); app = w.app;
-    w.coord.openRun({ program: 'build9b', title: 'role', project: 'demo', wave: 1, waveOf: 1, claimedBy: 'demo-quiet-mesa' });
+    const opened = w.coord.openRun({ program: 'build9b', title: 'role', project: 'demo', wave: 1, waveOf: 1, claimedBy: 'demo-quiet-mesa' });
+    if (!('id' in opened)) throw new Error(`fixture openRun refused: ${JSON.stringify(opened)}`);
+    // Programme lifecycle W1 (D-8984): run-less coordinator mail resolves over the programme that SHOWS Active, which
+    // needs a run that was dispatched; a programme whose only run is still planned shows Open.
+    expect(w.coord.advance(opened.id, 'dispatched', 'coordinator').ok).toBe(true);
     await fillPair(app);
     const res0 = await send(app, { ...ASKER, toId: 'coordinator', subject: 'to the chair' });
     expect(res0.statusCode).toBe(202);

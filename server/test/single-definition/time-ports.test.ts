@@ -50,6 +50,12 @@ const TIME_PORT_FILES: readonly string[] = [
   'server/src/coord/sequenceRetentionLane.ts',
   'server/src/coord/overlordSequence.ts',
   'server/src/coord/overlordSequenceStore.ts',
+  // The invariant monitor (Overlord W1, sequence B2): its runner reads the clock only through the port it is handed; its deciders,
+  // its gatherer and its findings store read none (each pass's `now` is an argument).
+  'server/src/coord/invariantLane.ts',
+  'server/src/coord/invariants.ts',
+  'server/src/coord/invariantFacts.ts',
+  'server/src/coord/invariantFindingsStore.ts',
   // Overlord W1, the renewal readings: the backstop's vocabulary reads no clock; its instant takes `now` as an argument.
   'shared/renewal-readings.ts',
   // Overlord W2, the decision-model port (plan w2-decision-model.md question 14): `coord/` is not a time-port family, so each

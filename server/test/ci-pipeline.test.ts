@@ -82,9 +82,15 @@ function needs(block: string): string[] {
   return v.replace(/^\[|\]$/g, '').split(',').map((s) => s.trim()).filter(Boolean).sort();
 }
 
-/** Each step of a job, as the text from its `      - ` line to the next. */
+/** The merge queue's liveness step (D-9015), first in each long job. `queue-live.test.ts` pins it whole (its name,
+ *  condition, token and script), so the pins here read a job without it. */
+const QUEUE_LIVE_STEP = '      - name: queue group still live\n';
+const withoutQueueLive = (block: string): string =>
+  block.split(/^(?= {6}- )/m).filter((p) => !p.startsWith(QUEUE_LIVE_STEP)).join('');
+
+/** Each step of a job, as the text from its `      - ` line to the next, the queue's liveness step set aside. */
 function steps(block: string): string[] {
-  const parts = block.split(/^(?= {6}- )/m);
+  const parts = withoutQueueLive(block).split(/^(?= {6}- )/m);
   return parts.filter((p) => /^ {6}- /.test(p));
 }
 
@@ -1667,22 +1673,26 @@ describe('the node-floor leg runs every history test file on the floor interpret
 // rules it shares with the required legs (pinned above). Here: its one name,
 // its runner and deadline, and exactly what it runs.
 describe('ci.yml: the browser leg (native Docs reader spec 2026-10-01 §5.7)', () => {
-  it('is one job, `browser-pwa`, named `browser (pwa) i/n` over a shard matrix, on ubuntu-24.04 with a 20-minute deadline (D-7746)', () => {
+  it('is one job, `browser-pwa`, named `browser (pwa) i/n` over a shard matrix, on ubuntu-24.04 with a 30-minute deadline (D-7746, D-9055)', () => {
     const b = job('browser-pwa');
     expect(jobKey(b, 'name')).toBe('browser (pwa) ${{ matrix.shard }}/${{ matrix.total }}');
     const named = [...jobs(read(CI)).values()].map((x) => jobKey(x, 'name'));
     expect(named.filter((n) => n?.startsWith('browser (pwa)')), 'two jobs report `browser (pwa)`').toHaveLength(1);
     expect(jobKey(b, 'runs-on')).toBe('ubuntu-24.04');
-    expect(jobKey(b, 'timeout-minutes')).toBe('20');
+    // 30 minutes (D-9055): a shard expects about eleven, and a slow runner ran a green shard past 20 at about 1.7
+    // times a fast runner's time. The limit is for a wedged job, with room for a runner at about twice the usual time.
+    expect(jobKey(b, 'timeout-minutes')).toBe('30');
     // The shards are exactly 1..total, so `--shard=i/n` covers the whole browser config.
     const total = /^ {8}total: \[(\d+)\]$/m.exec(b)?.[1];
     const list = /^ {8}shard: \[([\d, ]+)\]$/m.exec(b)?.[1];
     expect(total, 'the shard matrix names no total').toBeDefined();
     expect(list!.split(',').map((x) => Number(x.trim()))).toEqual(Array.from({ length: Number(total) }, (_, i) => i + 1));
-    // THREE shards (D-8167): at two, both shards took 14 to 19 minutes in the merge queue and a loaded runner was
-    // cancelled at the 20-minute limit while its tests still passed. The count is a measured choice, and the limit
-    // stays 20: a change to either is a deliberate edit with new times in the job's comment.
-    expect(Number(total), 'the browser leg runs as three shards (D-8167)').toBe(3);
+    // FOUR shards (D-9026): at three (D-8167, after two shards took 14 to 19 minutes), the second shard took 916 s to
+    // 1,211 s in the ten merge-queue runs created from 00:17Z to 01:58Z on 2026-11-25 and was cancelled twice at the
+    // 20-minute limit while its tests still passed, with the file-time table 36 files behind and one file grown from
+    // 360 s to 870 s. The count is a measured choice, and so is the limit (D-9055): a change to either is a deliberate
+    // edit with new times in the job's comment.
+    expect(Number(total), 'the browser leg runs as four shards (D-9026)').toBe(4);
     expect(b).toMatch(/^ {6}fail-fast: false$/m);
   });
 
@@ -2202,7 +2212,8 @@ describe('M8.16: build-pwa verifies the shared Markdown library before it builds
       }
     }
     expect(block.split('\n').filter((l) => !/^\s*#/.test(l)).filter((l) => /^ {4}env:/.test(l)).length).toBe(1);
-    expect(code(block).match(/GH_TOKEN/g) ?? []).toHaveLength(1);
+    // The queue's liveness step carries the job's own token too, pinned by queue-live.test.ts.
+    expect(code(withoutQueueLive(block)).match(/GH_TOKEN/g) ?? []).toHaveLength(1);
   });
 
   it('the provenance script pins the library repo, its release workflow, the tag ref and hosted runners by exact text', () => {

@@ -67,9 +67,13 @@ export function decideLandingWrite(f: { landing: LandingAdvance; from: RunState;
     // Wave 5i (D-8626): only over a projection that reads with no marker. A closed row whose pin metadata does not read (a
     // terminal repair retired it without restoring anything) stays closed: a re-pin would write a witness and a pinned row
     // over a setter or a handoff nobody can read, inventing the metadata that was never there.
-    if (current.state === 'closed') {
+    // Wave 5j-a (decision 7, D-9047): a run-bound `withdrawn` row re-pins the same way. A withdrawal is not a ban: the
+    // run's next verified pin brings it back, and an unreadable withdrawn row keeps its own word. A withdrawn row with no
+    // run (a run field that is not a number) cannot re-enter (decision 7, section 4.3): it is kept under its own word and
+    // the run still advances. A closed row re-pins with or without a run: closed is GitHub's word, withdrawn the operator's.
+    if (current.state === 'closed' || (current.state === 'withdrawn' && typeof current.runId === 'number')) {
       return f.projection?.kind === 'readable' && f.projection.quarantine === null ? { act: 'repin', id: current.id }
-        : { act: 'none', write: { kind: 'kept', state: 'closed' } };
+        : { act: 'none', write: { kind: 'kept', state: current.state } };
     }
     // Wave 5f: `projection` is the single row reader's verdict on `current`. A quarantined row (literal unknown with exactly
     // the stale-head marker and every retained field readable) re-pins; every other unknown row stays kept.
@@ -508,6 +512,10 @@ export function landingFactsOf(project: string, rows: LandingStoreRows): Landing
       const e = facts.entry; const c = subjects.find((s) => s.id === e.id && s.project === e.project && s.pr === e.pr)?.creation;
       return c?.kind === 'recorded' ? [{ id: e.id, seq: c.seq, setBy: c.claim.setBy }] : [];
     }),
+    // Wave 5j-b: the pause door's "has the line seen this project" fact, and each row's stored pin time read strictly
+    // from the raw row (the display turns an unreadable one into 0), the withdraw door's compare-and-set.
+    flagsRow: rows.flags !== undefined,
+    pinTimes: mine.map((m) => ({ id: m.facts.entry.id, value: safeIntOf(m.row.pinnedAt, 0) })),
   } };
 }
 
@@ -541,15 +549,27 @@ export function landingHoldGate(recovery: LandingRecovery, kind: 'pin' | 'retrea
   return { ok: false, error: 'landing-recovery-unresolved' };
 }
 
-/** The journal record one decided (non-noop) mutation becomes. An order's source binding is the CURRENT association the
- *  decision read and carried (review 1413 A2): never re-read from the facts, so an unreadable one cannot become no-run. */
+/** The journal record one decided mutation becomes (a no-op and an unchanged pause append nothing). An order's source
+ *  binding is the CURRENT association the decision read and carried (review 1413 A2): never re-read from the facts, so an
+ *  unreadable one cannot become no-run. The operator's two door records (wave 5j-b, D-9045) carry `setBy: 'operator'` and
+ *  the command's actor text; a withdrawal's subject binding is the association its decision read, like an order's. */
 export function landingRecordOf(command: LandingAuthorityCommand,
-  mutation: Extract<Extract<LandingMutationDecision, { ok: true }>['mutation'], { kind: 'entry' | 'order' }>,
+  mutation: Extract<Extract<LandingMutationDecision, { ok: true }>['mutation'], { kind: 'entry' | 'order' | 'withdraw' | 'pause' }>,
   seq: number, at: number): LandingJournalRecord {
   if (mutation.kind === 'entry') {
     return { v: 1, seq, at, setBy: mutation.setBy, subject: { id: mutation.id, project: mutation.project, pr: mutation.pr, binding: { kind: 'no-run' } },
       kind: 'entry', claim: { pinnedSha: mutation.pinnedSha, handoffCommit: mutation.handoffCommit } };
   }
+  if (mutation.kind === 'pause' && command.kind === 'pause') {
+    return { v: 1, seq, at, setBy: 'operator', kind: 'pause', project: mutation.project, paused: mutation.paused, actor: command.actor };
+  }
+  if (mutation.kind === 'withdraw' && command.kind === 'withdraw') {
+    const e = mutation.entry;
+    return { v: 1, seq, at, setBy: 'operator', subject: { id: e.id, project: e.project, pr: e.pr, binding: mutation.binding }, kind: 'withdraw',
+      actor: command.actor };
+  }
+  // A door decision is built only from its own command (the decider answers each arm from the command it was given).
+  if (mutation.kind !== 'order') throw new Error(`landingRecordOf: a ${mutation.kind} decision from a ${command.kind} command`);
   return { v: 1, seq, at, setBy: command.setBy, subject: { id: mutation.entry.id, project: mutation.entry.project, pr: mutation.entry.pr, binding: mutation.binding },
     kind: 'order', after: mutation.after, fixesMain: mutation.fixesMain };
 }

@@ -1060,7 +1060,45 @@ export const CCD_ARGV = {
                          '--section', section, '--path', path, '--pin', pin,
                          ...(step === 'prepare' ? ['--prepare']
                            : ['--snapshot', step.snapshot, '--offset', String(step.offset), '--length', String(step.length)])]),
+
+  /** The registered outside folders, as `{ folders: { label, path }[] }` (X2 spec 2026-11-18 section 4.1 and section 7, plan
+   *  P2.1), under the grant `['docs-folder','--list']`, behind `DOCS_FOLDERS_CAP`. `docs-folder` is a multi-flag verb, not
+   *  enrolled in `REQUIRED_VERB_FLAG` (as `ws-audit` and `pr-state`): each of its three builders crosses its own grant. */
+  docsFolderList: () => argv(['docs-folder', '--list']),
+
+  /** Registers the folder `path` (absolute) under `label`, grant `['docs-folder','--add']`, behind `DOCS_FOLDERS_CAP`. The
+   *  registry's one writer. Both values reach ccd UNVALIDATED: ccd checks the label grammar before any path join and runs
+   *  its own admission over the path, legitimately a second decider on another host (spec section 7). */
+  docsFolderAdd: (label: string, path: string) => argv(['docs-folder', '--add', label, '--path', path]),
+
+  /** Removes the folder `label` and purges its range snapshots, grant `['docs-folder','--remove']`, behind
+   *  `DOCS_FOLDERS_CAP`. The label reaches ccd UNVALIDATED. */
+  docsFolderRemove: (label: string) => argv(['docs-folder', '--remove', label]),
+
+  /** One read of a registered folder (X2 spec 2026-11-18 section 4.1 and section 7, plan P2.2), under its own grant
+   *  `['docs-folder-read','--label']` (enrolled in `REQUIRED_VERB_FLAG` on `--label`), behind `DOCS_FOLDERS_CAP`. ONE builder
+   *  for its four argv shapes, as `docsShowRange` is for its four: `read.op` is `'tree'`, `'show'` (the class cap read of one
+   *  file, read only while its bytes hash to `fingerprint`), `'prepare'` (a snapshot prepare of a file above the show caps) or
+   *  `'range'` (one frame of a prepared snapshot). `pin` is the pin's wire form, as for `docsShowRange`. ccd resolves the
+   *  label from its registry, never from the wire; every value reaches ccd UNVALIDATED. */
+  docsFolderRead: (label: string, read: DocsFolderRead) =>
+                    argv(['docs-folder-read', '--label', label, '--op', read.op,
+                          ...(read.op === 'tree' ? []
+                            : read.op === 'show'
+                              ? ['--section', read.section, '--path', read.path, '--fingerprint', read.fingerprint,
+                                 '--max-bytes', String(read.maxBytes)]
+                            : read.op === 'prepare'
+                              ? ['--section', read.section, '--path', read.path, '--pin', read.pin]
+                              : ['--section', read.section, '--path', read.path, '--pin', read.pin,
+                                 '--snapshot', read.snapshot, '--offset', String(read.offset), '--length', String(read.length)])]),
 } as const;
+
+/** The four reads `CCD_ARGV.docsFolderRead` writes, discriminated by `op` (the argv's own `--op` word). */
+export type DocsFolderRead =
+  | { op: 'tree' }
+  | { op: 'show'; section: DocSectionSlug; path: string; fingerprint: string; maxBytes: number }
+  | { op: 'prepare'; section: DocSectionSlug; path: string; pin: string }
+  | { op: 'range'; section: DocSectionSlug; path: string; pin: string; snapshot: string; offset: number; length: number };
 
 /**
  * Whether the DEPLOYED ccd on the fleet host implements this argv's verb, per
@@ -1381,6 +1419,13 @@ export const DOCS_LOG_CAP = 'docs-log-v1';
  *  inside the docs gate's tri-state. */
 export const DOCS_RANGE_CAP = 'docs-range-v1';
 
+/** The `ccd caps` token that says this box's ccd has `docs-folder` (`--list`, `--add`, `--remove`) and `docs-folder-read`
+ *  at exactly the argv `docsFolderList`, `docsFolderAdd`, `docsFolderRemove` and `docsFolderRead` build (X2 spec
+ *  2026-11-18 section 7, P2.1 and P2.2). Spelled ONCE in `server/src`; ccd's `echo docs-folders-v1` and `ccdCapTokens.ts`
+ *  are the other two spellings. Read through `ccdCan`'s four `docsFolder*` rows (each refuses on no evidence), inside the
+ *  docs gate's tri-state. */
+export const DOCS_FOLDERS_CAP = 'docs-folders-v1';
+
 /** The `ccd caps` token that says this box has the child temp-root collector (child reclamation spec 2026-09-22 §5.10,
  *  §8's wave 7): `ws-audit --collect`, `ws-collect`, the `collect` journal act and the quarantine record — one ccd
  *  inode. Spelled ONCE in `server/src`; ccd's `echo collect-v1` and `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS`
@@ -1646,6 +1691,8 @@ export const CCD_CAN = {
   docsFetch: capRow(DOCS_CAP),
   docsLog: capRow(DOCS_LOG_CAP),
   docsShowRange: capRow(DOCS_RANGE_CAP),
+  docsFolderList: capRow(DOCS_FOLDERS_CAP), docsFolderAdd: capRow(DOCS_FOLDERS_CAP), docsFolderRemove: capRow(DOCS_FOLDERS_CAP),
+  docsFolderRead: capRow(DOCS_FOLDERS_CAP),
 } as const satisfies Record<keyof typeof CCD_ARGV, CanRow>;
 
 /** A `CCD_ARGV` row name: what `ccdCan` is asked about. */

@@ -22,8 +22,9 @@ const ADD = /ALTER TABLE runs ADD COLUMN hadChild\b/;
 const SLOT = MIGRATIONS.findIndex((m) => ADD.test(m)) + 1;
 
 const store = (): CoordStore => new CoordStore(openCoordDb(path.join(mkTmp('ccrc-had-child-'), '.ccrc', 'coord.db')));
-const open = (s: CoordStore, program: string): number => {
-  const r = s.openRun({ program, title: program, project: 'demo', wave: 1, waveOf: null, claimedBy: 'coord-a' });
+/** R11: one coordinator owns one live programme, so a run in a second programme names a claimant of its own. */
+const open = (s: CoordStore, program: string, claimedBy = 'coord-a'): number => {
+  const r = s.openRun({ program, title: program, project: 'demo', wave: 1, waveOf: null, claimedBy });
   if (!('id' in r)) throw new Error(`fixture openRun refused: ${JSON.stringify(r)}`);
   return r.id;
 };
@@ -116,10 +117,10 @@ describe('the store: what a run had, on the wire', () => {
     const first = open(s, 'p1');
     s.markHadChild(first);
     s.setSession(first, 'child-a', 5);
-    const handed = open(s, 'p2');
+    const handed = open(s, 'p2', 'coord-b');
     s.setSession(handed, 'child-a');
     expect(wire(s, handed)).toBe(true);
-    const other = open(s, 'p3');
+    const other = open(s, 'p3', 'coord-c');
     s.setSession(other, 'manual-b');
     expect(wire(s, other)).toBe(false);
   });

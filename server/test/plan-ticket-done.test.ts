@@ -15,7 +15,7 @@ import type { CoordStore } from '../src/coord/store.js';
 import type { LandingOutcome } from '../src/coord/landingEntry.js';
 import type { PlanView } from '../../shared/plan.js';
 import { DONE_CASES } from './planTicketDoneCases.js';
-import { charWorld, CHAR_COORD, CHAR_TOKEN, openRun, planVerb, SIX, type CharWorld } from './helpers/planPhasesFixture.js';
+import { charWorld, CHAR_COORD, CHAR_COORD_B, CHAR_TOKEN, closeAndConfirm, openRun, planVerb, SIX, type CharWorld } from './helpers/planPhasesFixture.js';
 import { mkTmp } from './tmpHelpers.js';
 import { gateActorOf } from '../src/accounts/audit.js';
 import { attributionIdentity } from '../src/auth/attributionIdentity.js';
@@ -57,7 +57,7 @@ const HC = 'c'.repeat(40);
 const MERGED: LandingOutcome = { word: 'merged', head: HEAD, base: 'd'.repeat(40), mergedAt: '2026-11-11T10:00:00Z', mergeCommit: 'e'.repeat(40), train: null };
 /** A pull request the landing line marks `landed` for `project`: another programme's run pinned at merging, then landed. */
 const landPr = (c: CoordStore, pr: number, project = 'project-a'): void => {
-  const o = c.openRun({ program: `prog-z-${pr}`, title: 't', project, wave: 1, waveOf: 9, claimedBy: 'coord-z' });
+  const o = c.openRun({ program: `prog-z-${pr}`, title: 't', project, wave: 1, waveOf: 9, claimedBy: `coord-z-${pr}` });   // one coordinator per programme (R11)
   if (!('id' in o)) throw new Error('fixture openRun refused');
   c.setSession(o.id, `${project}-ws${pr}`);
   step(c, o.id, 'dispatched', 'working', 'awaiting-review');
@@ -194,11 +194,11 @@ describe('plan ticket-done (POST /api/programmes/:slug/plan/tickets/done)', () =
   it('refuses a run that is not done or not this programme\'s', async () => {
     const x = await world();
     await planVerb(x, 'prog-a', '', SIX);
-    await planVerb(x, 'prog-b', '', SIX);
+    await planVerb(x, 'prog-b', '', SIX, CHAR_COORD_B);   // one coordinator per programme (R11)
     const working = await openRun(x, { ...BASE, wave: 1 });
     step(x.coord, idOf(working), 'dispatched');
     expect(refusal(await done(x, { ticket: 'w0-t2', evidence: { runId: idOf(working) } }))).toEqual([409, 'evidence-unverified']);
-    const other = await openRun(x, { ...BASE, program: 'prog-b', wave: 2 });
+    const other = await openRun(x, { ...BASE, program: 'prog-b', wave: 2, claimedBy: CHAR_COORD_B, claimedByUuid: `u-${CHAR_COORD_B}` });
     step(x.coord, idOf(other), 'dispatched', 'closing', 'done');
     expect(refusal(await done(x, { ticket: 'w0-t2', evidence: { runId: idOf(other) } }))).toEqual([409, 'evidence-unverified']);
     expect(refusal(await done(x, { ticket: 'w0-t2', evidence: { runId: 999 } }))).toEqual([409, 'evidence-unverified']);
@@ -437,7 +437,7 @@ describe('plan ticket-done (POST /api/programmes/:slug/plan/tickets/done)', () =
     const x = await world();
     await planVerb(x, 'prog-a', '', SIX);
     const run = await doneBareRun(x);
-    expect((await planVerb(x, 'prog-a', '/close', { outcome: 'done' })).statusCode).toBe(200);
+    expect((await closeAndConfirm(x, 'prog-a')).statusCode).toBe(200);
     expect(refusal(await done(x, { ticket: 'w0-t2', evidence: { runId: run } }))).toEqual([409, 'plan-closed']);
   });
 

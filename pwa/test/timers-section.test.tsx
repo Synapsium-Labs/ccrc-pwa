@@ -47,12 +47,12 @@ describe('the words', () => {
 
   it('reads a partial row field by field', () => {
     const r = readTimers(answer([{ id: 4 }, 'not a row', null, { dueAt: NOW, note: 5, runId: '9', programme: 'prog-a' }]));
-    const unread = { id: null, dueAt: null, note: null, runId: null, programme: null };
+    const unread = { id: null, dueAt: null, note: null, runId: null, programme: null, owner: 'session' };
     expect(r).toEqual({
       kind: 'listed',
       timers: [
-        { id: null, dueAt: NOW, note: null, runId: null, programme: 'prog-a' },
-        { id: 4, dueAt: null, note: null, runId: null, programme: null },
+        { id: null, dueAt: NOW, note: null, runId: null, programme: 'prog-a', owner: 'session' },
+        { id: 4, dueAt: null, note: null, runId: null, programme: null, owner: 'session' },
         unread,
         unread,
       ],
@@ -64,6 +64,23 @@ describe('the words', () => {
     const edge = Date.UTC(275760, 8, 13);
     const r = readTimers(answer([view({ id: 1, dueAt: 1e20 }), view({ id: 2, dueAt: -edge - 1 }), view({ id: 3, dueAt: edge })]));
     expect(r.kind === 'listed' ? r.timers.map((t) => [t.id, t.dueAt]) : null).toEqual([[3, edge], [1, null], [2, null]]);
+  });
+
+  it('reads each row\'s owner and the answer\'s overlordTimers through the lists, trusting no other word', () => {
+    const r = readTimers({
+      ok: true, overlordTimers: 'unmeasured',
+      timers: [view({ id: 1, owner: 'overlord' }), view({ id: 2, owner: 'session' }), view({ id: 3, owner: 'robot' }), view({ id: 4 })],
+    });
+    expect(r.kind === 'listed' ? r.timers.map((t) => t.owner) : null).toEqual(['overlord', 'session', 'session', 'session']);
+    expect(r.kind === 'listed' ? r.overlordTimers : null).toBe('unmeasured');
+    for (const word of ['included', 'not-this-session']) {
+      const k = readTimers({ ok: true, timers: [], overlordTimers: word });
+      expect(k.kind === 'listed' ? k.overlordTimers : null).toBe(word);
+    }
+    for (const word of ['robot', 5, null, undefined]) {
+      const k = readTimers({ ok: true, timers: [], overlordTimers: word });
+      expect(k.kind === 'listed' ? k.overlordTimers : 'x').toBeUndefined();
+    }
   });
 
   it('says how long until a timer comes due', () => {
@@ -121,6 +138,37 @@ describe('the section', () => {
     await waitFor(() => expect(within(section()).getAllByRole('listitem')).toHaveLength(1));
     expect(read).toHaveBeenCalledTimes(2);
     expect(read).toHaveBeenCalledWith('lane-a-project-a');
+  });
+
+  it("a row owned by the Overlord says it is the Overlord's; a session's own row and an unknown owner word do not", async () => {
+    spyRead(answer([
+      view({ id: 1, owner: 'overlord' }), view({ id: 2, owner: 'session', dueAt: NOW + 100 * MIN }),
+      view({ id: 3, owner: 'robot', dueAt: NOW + 110 * MIN }), view({ id: 4, dueAt: NOW + 120 * MIN }),
+    ]));
+    render(<TimersSection sessionId="lane-a-project-a" />);
+    const items = await within(section()).findAllByRole('listitem');
+    expect(items).toHaveLength(4);
+    expect(within(items[0]!).getByText(W.overlordOwner)).toBeTruthy();
+    for (const i of [1, 2, 3]) expect(within(items[i]!).queryByText(W.overlordOwner)).toBeNull();
+  });
+
+  it('overlordTimers unmeasured shows its one sentence; included, not-this-session and a body without the field show none', async () => {
+    spyRead({ ok: true, timers: [view()], overlordTimers: 'unmeasured' });
+    const { unmount } = render(<TimersSection sessionId="lane-a-project-a" />);
+    expect(await within(section()).findByText(W.overlordUnmeasured)).toBeTruthy();
+    unmount();
+    for (const body of [
+      { ok: true, timers: [view()], overlordTimers: 'included' },
+      { ok: true, timers: [view()], overlordTimers: 'not-this-session' },
+      answer([view()]),
+    ]) {
+      spyRead(body);
+      const r = render(<TimersSection sessionId="lane-a-project-a" />);
+      await within(section()).findAllByRole('listitem');
+      expect(within(section()).queryByText(W.overlordUnmeasured)).toBeNull();
+      expect(within(section()).queryByText(W.overlordOwner)).toBeNull();
+      r.unmount();
+    }
   });
 
   it('says "No pending timers." for an empty list', async () => {

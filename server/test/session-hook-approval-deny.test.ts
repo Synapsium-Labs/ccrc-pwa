@@ -272,6 +272,20 @@ describe('the forbidden-verb deny: a child never runs a SAFETY verb or ccrc upda
       expect(bash(c, extra), c).toContain('ccd ws-gc --prune');
     }
   });
+  // X2 P2.3 (M11.56: dropping `docs-folder` from the hook's jq verb lists, both, reds this case). The whole verb, every
+  // spelling of its head and tail; the read verb beside it, which a session does run, is matched as a different word.
+  it.each(THREADS)('session hook: docs-folder in every form is denied in a child, docs-folder-read is not ($0)', (_t, extra) => {
+    const tails = ['', ' --list', ' --add a --path /p', ' --remove a'];
+    const denied = tails.flatMap((t) => [
+      `ccd docs-folder${t}`, `~/.local/bin/ccd docs-folder${t}`, `cd x && ccd docs-folder${t}`, `P=ccd; $P docs-folder${t}`,
+      // A flag before the verb (the hook's FLAGS arm), which the generic loop over every verb does not spell.
+      `ccd --json docs-folder${t}`,
+    ]).concat(forms('ccd docs-folder').slice(0, 12));
+    const missed = denied.filter((c) => { const why = bash(c, extra); return why === null || !why.includes('ccd docs-folder'); });
+    expect(missed).toEqual([]);
+    expect(bash('ccd docs-folder-read --label a --op tree', extra)).toBeNull();
+    expect(bash('~/.local/bin/ccd docs-folder-read', extra)).toBeNull();
+  }, BATCH_TIMEOUT_MS);
   it('the reason names the verb', () => {
     expect(bash('ccd ws-rm x')).toContain('ccd ws-rm');
     expect(bash('ccrc rollback')).toContain('ccrc update, rollback or rollout');

@@ -11,6 +11,7 @@
 // `shared/update-move.ts` (UPDATE_OP; D-4266), so the rule is now also a fact
 // about a bundled file — this repo reads its comments as history.
 import type { BuildInfo } from './buildinfo.js';
+import { parseWitnessTuple, type WitnessTuple } from './authorityWitness.js';
 import type { DiskMeasured } from './disk.js';
 import type { HostReport } from './isolation.js';
 import {
@@ -106,8 +107,11 @@ export interface AgentReady {
   t: 'ready'; v: 1; ccdVerbs?: string[]; rosterFp?: string; build?: BuildInfo;
   observedEpoch?: number | null;
   /** The op words defined for this list are `UPDATE_OP` (`'update'`), which programme wave 5's agent sends, and
-   *  `TOKEN_SYNC_OP` (`'token-sync'`, box-token lifecycle wave 1) and `MODELS_OP` (`'models'`, auto-advance W4); `readReadyOps` reads them. */
+   *  `TOKEN_SYNC_OP` (`'token-sync'`, box-token lifecycle wave 1), `MODELS_OP` (`'models'`, auto-advance W4) and `WITNESS_OP` (`'witness'`, Overlord W1); `readReadyOps` reads them. */
   ops?: string[];   // ADDITIVE (design 2026-09-20 §8/§10): the ops this agent answers; absent from every agent before W4
+  /** ADDITIVE (Overlord W1, §7.6): the authority witness tuple this agent holds (`AUTHORITY_WITNESS_FILE_NAME`). `null` = it holds
+   *  nothing; `'unmeasured'` = its file is unreadable or malformed; absent = an older agent. Its one reader is `readReadyWitness`. */
+  authorityWitness?: WitnessTuple | null | 'unmeasured';
   /** ADDITIVE (Overlord W1, the isolation word, §7.4): the agent's uid and two keyed digests of its host ids. Its one reader
    *  is `readHostReport` (`shared/isolation.ts`), called only by the client's ready handler; an older agent omits it. */
   host?: HostReport;
@@ -140,6 +144,8 @@ export interface AgentReady {
  * dangerous, but the whole feature silently stops with no red anywhere.
  */
 export const POOL_EPOCH_FILE_NAME = 'pool-epoch';
+/** The agent's held authority witness tuple, `<home>/.ccrc/authority-witness.json` (`CCRC_DIR_NAME`); written only by `agent/src/witness.ts`. */
+export const AUTHORITY_WITNESS_FILE_NAME = 'authority-witness.json';
 
 /**
  * The `~/.ccrc` NODE FILES — design 2026-09-20 §8's EXACT-BASENAME set, the
@@ -427,7 +433,7 @@ export interface DiskReq { t: 'req'; id: number; op: 'disk' }
  *  Every argument failure is answered `ok: true` with `kind: 'refused'` and the node's `fleetIdentity`, never
  *  `bad-request`, which from this op means "the agent predates it". */
 export interface TestboxAdminReq { t: 'req'; id: number; op: 'testbox-admin'; sub: TestboxAdminSub; fields: TestboxAdminFields }
-export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|LstatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq|UpdateReq|TokenSyncReq|AccountOpReq|DiskReq|PressureReq|TestboxReq|TestboxToolsSyncReq|TestboxAdminReq|BackupReq|OverlordHistoryReq|ModelsReq|TestboxCaptureReq;
+export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|LstatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq|UpdateReq|TokenSyncReq|AccountOpReq|DiskReq|PressureReq|TestboxReq|TestboxToolsSyncReq|TestboxAdminReq|BackupReq|OverlordHistoryReq|ModelsReq|TestboxCaptureReq|WitnessReq;
 export interface ResOk  { t: 'res'; id: number; ok: true;  [k: string]: unknown } // op-specific payload fields below
 /** `detail` is ADDITIVE (design 2026-09-20 §10, D-3373): what an
  *  agent can say beyond the word — the `--detach` parent's first stderr line,
@@ -1319,8 +1325,11 @@ export type ModelsAsked = ModelsOpOutcome | { kind: 'unsupported' } | { kind: 'l
 // `FLEET_PROTO` bump; an agent that predates it answers `bad-request` and is never sent it (the server reads `ready.ops`
 // first).
 
-/** ONE member of the `req` envelope. A frame with any other extra field is a malformed frame (`bad-request`). */
-export interface TestboxCaptureReq { t: 'req'; id: number; op: 'testbox-capture'; build: string }
+/** ONE member of the `req` envelope. A frame with any other extra field is a malformed frame (`bad-request`). `recipe`
+ *  (Desktop polish wave 178) is additive: absent is build trust; present, only `delivery`, which an agent that predates it
+ *  refuses `bad-request` as it refuses any extra field. `part` is present exactly with `recipe`: which part of the delivery
+ *  cases (`deliveryResult.ts#deliveryParts`, the capture owner's call 1148). */
+export interface TestboxCaptureReq { t: 'req'; id: number; op: 'testbox-capture'; build: string; recipe?: 'delivery'; part?: number }
 
 /** The op's name, and the word an agent that answers it lists in `ready.ops`. */
 export const TESTBOX_CAPTURE_OP = 'testbox-capture';
@@ -1349,12 +1358,34 @@ export interface TestboxCaptureReply {
   readonly refusal: CaptureRefusal | null;
   readonly result: BuildCaptureResult | null;
   readonly detail: string | null;
+  /** A delivery request's reply only, and always on it (Desktop polish wave 178): its result on `answered`, null when the
+   *  box had no verdict and on every other outcome. A delivery reply's `result` is always null. */
+  readonly delivery?: DeliveryCaptureResult | null;
 }
 
 /** THE ONE READER of a `testbox-capture` op's reply (the `res` frame itself: its envelope fields `t`, `id` and `ok` are not
  *  read, as `readTestboxOpReply` reads its own), for the build the request named. `null` is "no answer to trust". Each of
- *  the four fields must be present; the verdict is read by the verdict's one reader. */
-export function readTestboxCaptureReply(raw: unknown, build: string): TestboxCaptureReply | null {
+ *  the four fields must be present; the verdict is read by the verdict's one reader. For a delivery request
+ *  (`recipe: 'delivery'`) the reply must also carry `delivery`, read by its one reader, and no build-trust verdict. A
+ *  build-trust request is read as before, save that a reply naming `delivery` is no answer to trust: read as a trust
+ *  capture with no verdict, it would count against the trust lane's retry for that build (the capture owner's call 1135). A
+ *  delivery request names its `part`, and its result must echo it (call 1148); with no part there is no answer. */
+export function readTestboxCaptureReply(raw: unknown, build: string, recipe: CaptureRecipe = 'build-trust', part?: number): TestboxCaptureReply | null {
+  if (recipe === 'delivery') {
+    // A reply with no `delivery` field does not echo the recipe: `d` is then undefined, which the two checks below refuse
+    // (on an answered reply the result's reader refuses it; on any other, it is not null).
+    if (!isObj(raw)) return null;
+    const { delivery: d, ...rest } = raw;
+    const base = readTestboxCaptureReply(rest, build);
+    if (base === null || base.result !== null) return null;
+    if (base.outcome !== 'answered' && d !== null) return null;
+    // The result must echo the part asked (call 1148); a delivery request with no part has no answer.
+    if (part === undefined) return null;
+    const delivery = d === null ? null : readDeliveryCaptureResult(d, build, part);
+    if (d !== null && delivery === null) return null;
+    return { ...base, delivery };
+  }
+  if (isObj(raw) && Object.prototype.hasOwnProperty.call(raw, 'delivery')) return null;
   if (!isObj(raw) || !['outcome', 'refusal', 'result', 'detail'].every((k) => Object.prototype.hasOwnProperty.call(raw, k))) return null;
   const { outcome, refusal, result, detail } = raw;
   if (typeof outcome !== 'string' || !Object.prototype.hasOwnProperty.call(TESTBOX_CAPTURE_OUTCOME_MAP, outcome)) return null;
@@ -1366,5 +1397,50 @@ export function readTestboxCaptureReply(raw: unknown, build: string): TestboxCap
   if (result !== null && read === null) return null;
   return { outcome: outcome as TestboxCaptureOutcome, refusal: refusal as CaptureRefusal | null, result: read, detail };
 }
-import { CAPTURE_REFUSAL_MAP, type CaptureRefusal } from './claudeBuildCapture.js';
+import { CAPTURE_REFUSAL_MAP, type CaptureRecipe, type CaptureRefusal } from './claudeBuildCapture.js';
 import { readBuildCaptureResult, type BuildCaptureResult } from './claudeBuildTrust.js';
+import { readDeliveryCaptureResult, type DeliveryCaptureResult } from './deliveryResult.js';
+
+// ── the `witness` op (Overlord W1, w1-authority-journal.md Task 6; spec §7.6) ──
+// The server offers the agent its current authority tuple; the agent keeps the higher epoch in its own file
+// (`agent/src/witness.ts`) and answers what it holds. ADDITIVE: no `FLEET_PROTO` bump; an agent that predates it never lists
+// the word in `ready.ops`, so the server never sends it, and `bad-request` from it means "this agent predates the op".
+
+/** The op's name, and the word an agent that answers it lists in `ready.ops`. */
+export const WITNESS_OP = 'witness';
+
+/** ONE member of the `req` envelope; `offer` passes `parseWitnessTuple` in the agent's `validateReq`, else `bad-request`. */
+export interface WitnessReq { t: 'req'; id: number; op: 'witness'; offer: WitnessTuple }
+
+/** What the agent holds after the offer: `held` (its tuple, `null` for none) or why it cannot say (its file is never overwritten). */
+export type WitnessOpAnswer =
+  | { kind: 'held'; tuple: WitnessTuple | null }
+  | { kind: 'unmeasured'; why: 'unreadable' | 'malformed' | 'unwritable' };
+
+/** THE ONE reader of a `witness` answer on `ResOk`: anything off the grammar is `'malformed'`, never a partial answer. */
+export function readWitnessOpAnswer(raw: unknown): WitnessOpAnswer | 'malformed' {
+  if (typeof raw !== 'object' || raw === null) return 'malformed';
+  const r = raw as Record<string, unknown>;
+  if (r.kind === 'held') {
+    if (r.tuple === null) return { kind: 'held', tuple: null };
+    const p = parseWitnessTuple(r.tuple);
+    return p.ok ? { kind: 'held', tuple: p.tuple } : 'malformed';
+  }
+  if (r.kind === 'unmeasured' && (r.why === 'unreadable' || r.why === 'malformed' || r.why === 'unwritable')) {
+    return { kind: 'unmeasured', why: r.why };
+  }
+  return 'malformed';
+}
+
+/** What the server reads of `AgentReady.authorityWitness`: `absent` (field missing: an older agent) is never `nothing` (it holds none). */
+export type ReadyWitness =
+  | { kind: 'tuple'; tuple: WitnessTuple } | { kind: 'nothing' } | { kind: 'unmeasured' } | { kind: 'absent' } | { kind: 'malformed' };
+
+/** THE ONE reader of the ready frame's `authorityWitness`. */
+export function readReadyWitness(raw: unknown): ReadyWitness {
+  if (raw === undefined) return { kind: 'absent' };
+  if (raw === null) return { kind: 'nothing' };
+  if (raw === 'unmeasured') return { kind: 'unmeasured' };
+  const p = parseWitnessTuple(raw);
+  return p.ok ? { kind: 'tuple', tuple: p.tuple } : { kind: 'malformed' };
+}

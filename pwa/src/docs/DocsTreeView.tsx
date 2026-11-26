@@ -11,7 +11,9 @@ import {
 import { navigate } from '../lib/router';
 import { docsLocation } from './docsLinks';
 import { DOCS_VIEW_TEXT, ENTRY_BADGE_TEXT, fillSentence, kib, pluralS, shortCommit } from './docsText';
-import { CLASS_GLYPH, FOLDER_GLYPH, SECTION_LABEL, docsPathKind, leafName, listDir, sectionFacts } from './docsTree';
+import {
+  CLASS_GLYPH, FOLDER_GLYPH, SECTION_LABEL, docTitle, docsPathKind, leafName, listDir, sectionDocs, sectionFacts,
+} from './docsTree';
 
 /** An in-app link to a Docs page: a real `href` (a modifier or middle click opens a new tab), and a plain left click
  *  navigates in place with a history entry. */
@@ -31,8 +33,50 @@ export function DocsPageLink(p: {
 }
 
 /** One `.docs-row` button (spec 4.4: one `<button>` per row); a tap navigates with a history entry. */
-function RowButton(p: { readonly href: string; readonly children: ReactNode }): ReactNode {
-  return <button type="button" className="docs-row" onClick={() => navigate(p.href)}>{p.children}</button>;
+export function RowButton(p: { readonly href: string; readonly children: ReactNode; readonly title?: string }): ReactNode {
+  return <button type="button" className="docs-row" title={p.title} onClick={() => navigate(p.href)}>{p.children}</button>;
+}
+
+/** A doc's title and its date label, the words every listing of docs draws (X2 P4.1): the title is `docTitle`'s, the date its
+ *  own quiet label when the name carried one. The raw name stays in the row's details (its `title`). */
+function DocTitleWords(p: { readonly name: string; readonly nested?: true }): ReactNode {
+  const { title, date } = docTitle(p.name);
+  return (
+    <>
+      <span className={p.nested ? 'min-w-0 [overflow-wrap:anywhere]' : 'docs-row-name'}>{title}</span>
+      {date !== null && <> <span className="docs-row-note">{date}</span></>}
+    </>
+  );
+}
+
+/** Indent the index and project page's child lists without changing a row's tap height. */
+export const DOC_CHILD_LIST = 'min-w-0 ps-[var(--sp-4)]';
+
+/** One doc of a section as a link row (the project page's and the index's lists): its title and date, and its draft badge. */
+export function DocLinkRow(p: {
+  readonly href: string; readonly name: string; readonly badge?: string | null;
+  /** The raw name kept in the row's details: the section-relative path (two nested docs can share a leaf name); absent: `name`. */
+  readonly detail?: string;
+}): ReactNode {
+  return (
+    <DocsPageLink href={p.href} className="docs-row" title={p.detail ?? p.name}>
+      <DocTitleWords name={p.name} nested />
+      {p.badge != null && <> <span className="docs-badge">{p.badge}</span></>}
+    </DocsPageLink>
+  );
+}
+
+/** One directory's list item in a listing: its glyph, its name with a trailing slash, and how many entries lie under it. The
+ *  project pages' listing and an outside folder's (`FolderPages.tsx`) draw their directories through this one. */
+export function DirRow(p: { readonly href: string; readonly name: string; readonly count: number }): ReactNode {
+  return (
+    <li>
+      <RowButton href={p.href}>
+        <span className="docs-row-glyph" aria-hidden="true">{FOLDER_GLYPH}</span>
+        <span className="docs-row-name">{p.name}/</span> <span className="docs-row-count">{p.count}</span>
+      </RowButton>
+    </li>
+  );
 }
 
 function modeOf(page: DocsPageLocation): EntryMode {
@@ -74,6 +118,7 @@ function ProjectPage(p: { readonly tree: DocsTreeOk; readonly page: DocsPageLoca
             }
           }
           const href = docsPageUrl(docsLocation(page, { kind: 'section', section: slug }));
+          const docs = sectionDocs(tree.entries, slug, mode, drafts);
           return (
             <li key={slug}>
               <RowButton href={href}>
@@ -85,6 +130,20 @@ function ProjectPage(p: { readonly tree: DocsTreeOk; readonly page: DocsPageLoca
                   </span>
                 )}
               </RowButton>
+              {docs.length > 0 && (
+                <div className={DOC_CHILD_LIST}>
+                  <ul className="docs-rows" aria-label={SECTION_LABEL[slug]}>
+                    {docs.map(({ entry, view }) => (
+                      <li key={entry.path}>
+                        <DocLinkRow
+                          name={leafName(entry.path)} detail={entry.path} badge={view.badge === null ? null : ENTRY_BADGE_TEXT[view.badge]}
+                          href={docsPageUrl(docsLocation(page, { kind: 'path', section: slug, path: entry.path, dirSlash: false }))}
+                        />
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </li>
           );
         })}
@@ -112,7 +171,7 @@ function ListingPage(p: {
   const shown = (name: string): boolean => needle === '' || name.toLowerCase().includes(needle);
   const prefix = dir === '' ? '' : dir + '/';
   const folders = listing.folders.filter((f) => shown(f.name));
-  const files = listing.files.filter((f) => shown(leafName(f.entry.path)));
+  const files = listing.files.filter((f) => shown(leafName(f.entry.path)) || shown(docTitle(leafName(f.entry.path)).title));
   return (
     <div className="docs-listing">
       <input
@@ -124,12 +183,10 @@ function ListingPage(p: {
         : listing.folders.length + listing.files.length === 0 && <p className="docs-note">{DOCS_VIEW_TEXT.emptyListing}</p>}
       <ul className="docs-rows">
         {folders.map((f) => (
-          <li key={'d:' + f.name}>
-            <RowButton href={docsPageUrl(docsLocation(page, { kind: 'path', section, path: prefix + f.name, dirSlash: true }))}>
-              <span className="docs-row-glyph" aria-hidden="true">{FOLDER_GLYPH}</span>
-              <span className="docs-row-name">{f.name}/</span> <span className="docs-row-count">{f.count}</span>
-            </RowButton>
-          </li>
+          <DirRow
+            key={'d:' + f.name} name={f.name} count={f.count}
+            href={docsPageUrl(docsLocation(page, { kind: 'path', section, path: prefix + f.name, dirSlash: true }))}
+          />
         ))}
         {files.map(({ entry, view }) => {
           const href = docsPageUrl(docsLocation(page, { kind: 'path', section, path: entry.path, dirSlash: false }));
@@ -137,9 +194,9 @@ function ListingPage(p: {
           const mark = view.committedKind === 'symlink' || view.committedKind === 'submodule' ? view.committedKind : null;
           return (
             <li key={'f:' + entry.path}>
-              <RowButton href={href}>
+              <RowButton href={href} title={leafName(entry.path)}>
                 <span className="docs-row-glyph" aria-hidden="true">{CLASS_GLYPH[contentClass(entry.path)]}</span>
-                <span className="docs-row-name">{leafName(entry.path)}</span>
+                <DocTitleWords name={leafName(entry.path)} />
                 {view.badge !== null && <> <span className="docs-badge">{ENTRY_BADGE_TEXT[view.badge]}</span></>}
                 {mark !== null && <> <span className="docs-row-mark">{mark}</span></>}
                 {typeof size === 'number' && <> <span className="docs-row-size">{kib(size)}</span></>}

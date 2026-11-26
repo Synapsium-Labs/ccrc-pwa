@@ -227,8 +227,10 @@ const lane = (opts: LaneOpts = {}) => {
   };
   let progN = 0;
   const openRun = (): { id: number; program: string } => {
-    const program = `stale-prog-${++progN}`;
-    const r = coord.openRun({ program, title: program, project: 'demo', wave: 1, waveOf: null, claimedBy: 'demo-coord' });
+    // Programme lifecycle W1 (R11, D-8993): one coordinator owns one programme, so each run is the next WAVE of its one
+    // programme, never the first run of another (a distinct wave keeps `openRun`'s reuse of a planned row from folding).
+    const program = 'stale-prog';
+    const r = coord.openRun({ program, title: program, project: 'demo', wave: ++progN, waveOf: null, claimedBy: 'demo-coord' });
     if (!('id' in r)) throw new Error(`openRun refused: ${JSON.stringify(r)}`);
     return { id: r.id, program };
   };

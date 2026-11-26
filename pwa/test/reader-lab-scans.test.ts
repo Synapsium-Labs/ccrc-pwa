@@ -8,9 +8,12 @@
 //      read `api` only as `api.readerLab`, and spell no URL but the SVG namespace. The frame scripts' TEXT names several
 //      of these on purpose; it runs only inside opaque frames, and a string is not an identifier.
 //   2. Outside `pwa/src/docs` (whose own clause W8a holds that tree), an iframe or a srcdoc is built in
-//      `readerLab/frames.ts` alone.
+//      `readerLab/frames.ts` and in the draft review page's entry, `review/main.ts` (X3 R2.1, D-8767), by exact path
+//      and never the directory: the same frame in `review/other.ts` is red.
 //   3. No string in `pwa/src` holds a sandbox token beyond `allow-scripts`, and `frames.ts` sets `sandbox` only from
-//      `LAB_SANDBOX`.
+//      `LAB_SANDBOX`. The review page's `main.ts` sets it to the empty string literal only,
+//      `setAttribute('sandbox', '')` (the strictest sandbox, so no frame gains a permission): any other value there,
+//      and the empty string anywhere else in `review/`, is red.
 //   4. `'lab-draw'` is spelled only in `docs/reader/policy.ts` and `readerLab/run.ts`.
 // NOT EXHAUSTIVE. Dynamically computed members, `globalThis[…]`, `eval` and names built from pieces can evade these
 // checks; the held-out review reads for them, and the browser case checks what the frames do.
@@ -23,6 +26,13 @@ const PWA = path.join(import.meta.dirname, '..');
 const SRC = path.join(PWA, 'src');
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const FRAME_HOME = 'src/readerLab/frames.ts';
+/** The draft review page's entry (X3 R2.1, D-8767): the one other file that builds a frame, by exact path. */
+const REVIEW_HOME = 'src/review/main.ts';
+/** The measurement fixture's data module (X3 R2.3, D-8767): Export's own copies as string constants, whose TEXT holds
+ *  `<iframe sandbox="" srcdoc=...>` (the mockup wrapper's nested frame). It is generated and lives in `pwa/generated/`,
+ *  outside the authored `src/` tree this scan walks, so it takes no allowance here: the scan never reads it. */
+const LAB_FIXTURE_FILE = 'generated/reviewLabFixture.ts';
+const FRAME_HOMES: readonly string[] = [FRAME_HOME, REVIEW_HOME];
 const LAB_DRAW_HOMES: readonly string[] = ['src/docs/reader/policy.ts', 'src/readerLab/run.ts'];
 const FORBIDDEN_SANDBOX = /\ballow-(?:same-origin|popups|top-navigation|forms|modals|downloads|pointer-lock|presentation|orientation-lock|storage-access)/;
 
@@ -95,7 +105,7 @@ function labFindings(source: string, file: string): string[] {
 
 /** Rule 2, on any file outside `src/docs`; `ignoreHome` reads the frame home too (the anti-vacuity half). */
 function frameFindings(source: string, file: string, ignoreHome = false): string[] {
-  if (file.startsWith('src/docs/') || (file === FRAME_HOME && !ignoreHome)) return [];
+  if (file.startsWith('src/docs/') || (FRAME_HOMES.includes(file) && !ignoreHome)) return [];
   const out = new Set<string>();
   walk(parse(source, file), (n) => {
     if (ts.isIdentifier(n) && n.text.toLowerCase() === 'srcdoc') out.add('srcdoc');
@@ -118,7 +128,10 @@ function sandboxFindings(source: string, file: string): string[] {
     if (ts.isCallExpression(n) && memberName(unwrap(n.expression)) === 'setAttribute' && n.arguments[0] !== undefined
       && stringText(n.arguments[0]) === 'sandbox') {
       const v = n.arguments[1];
-      if (v === undefined || !ts.isIdentifier(v) || v.text !== 'LAB_SANDBOX') out.add('sandbox-value');
+      const allowed = file === REVIEW_HOME
+        ? v !== undefined && ts.isStringLiteral(v) && v.text === ''
+        : v !== undefined && ts.isIdentifier(v) && v.text === 'LAB_SANDBOX';
+      if (!allowed) out.add('sandbox-value');
     }
     if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken && memberName(unwrap(n.left)) === 'sandbox') out.add('sandbox-value');
   });
@@ -227,6 +240,7 @@ describe('what the reader lab never does (reader lab plan, Task 11)', () => {
   it('rule 2: outside the Docs reader, only readerLab/frames.ts builds an iframe or a srcdoc, and it does (M10.9)', () => {
     expect(ALL().flatMap((f) => frameFindings(read(f), f))).toEqual([]);
     expect(frameFindings(read(FRAME_HOME), FRAME_HOME, true)).toEqual([`${FRAME_HOME} iframe`, `${FRAME_HOME} srcdoc`]);
+    expect(frameFindings(read(REVIEW_HOME), REVIEW_HOME, true)).toEqual([`${REVIEW_HOME} iframe`, `${REVIEW_HOME} srcdoc`]);
   });
 
   it('rule 2 planted: an iframe or a srcdoc anywhere else is red', () => {
@@ -236,9 +250,34 @@ describe('what the reader lab never does (reader lab plan, Task 11)', () => {
       .toEqual(['src/screens/ReaderLab.tsx iframe', 'src/screens/ReaderLab.tsx srcdoc']);
   });
 
+  it('rule 2 planted: the review page allowance is main.ts by exact path, so the same iframe in review/other.ts is red (M10, F10)', () => {
+    const frame = "export const planted = (d: Document, t: string) => { const f = d.createElement('iframe'); f.srcdoc = t; return f; };";
+    expect(frameFindings(frame, 'src/review/other.ts')).toEqual(['src/review/other.ts iframe', 'src/review/other.ts srcdoc']);
+    expect(frameFindings(frame, 'src/review/main.tsx')).toEqual(['src/review/main.tsx iframe', 'src/review/main.tsx srcdoc']);
+    expect(frameFindings(frame, REVIEW_HOME)).toEqual([]);
+  });
+
+  it('rule 2: the measurement fixture holds the nested iframe text, and it lives only in pwa/generated/, which this scan never reads (R2.3)', () => {
+    // The fixture really holds the text (so the scan WOULD flag it, were it in the tree), and the scan's tree has no such file.
+    expect(frameFindings(read(LAB_FIXTURE_FILE), LAB_FIXTURE_FILE, true)).toEqual([`${LAB_FIXTURE_FILE} iframe`, `${LAB_FIXTURE_FILE} srcdoc`]);
+    expect(ALL().filter((f) => /labfixture/i.test(f))).toEqual([]);
+    expect(ALL().every((f) => f.startsWith('src/'))).toBe(true);
+    // No file the scan reads holds the nested text but the two homes: the only copy of it outside them is the generated module.
+    const nestedText = /<iframe sandbox=""/;
+    expect(ALL().filter((f) => !FRAME_HOMES.includes(f) && !f.startsWith('src/docs/') && nestedText.test(read(f)))).toEqual([]);
+  });
+
+  it('rule 2 planted: the same nested iframe text anywhere under src/ is red, the old fixture path included (R2.3)', () => {
+    const nested = "export const LAB_PLANTED = '<iframe sandbox=\"\" srcdoc=\"&lt;p&gt;x&lt;/p&gt;\"></iframe>';";
+    for (const other of ['src/review/other.ts', 'src/review/labFixture.ts', 'src/review/lab/labFixture.ts', 'src/readerLab/labFixture.ts']) {
+      expect(frameFindings(nested, other), other).toEqual([`${other} iframe`, `${other} srcdoc`]);
+    }
+  });
+
   it('rule 3: no sandbox token beyond allow-scripts anywhere in pwa/src, and frames.ts sets sandbox only from LAB_SANDBOX (M10.9)', () => {
     expect(ALL().flatMap((f) => sandboxFindings(read(f), f))).toEqual([]);
     expect(read(FRAME_HOME)).toContain("el.setAttribute('sandbox', LAB_SANDBOX);");
+    expect(read(REVIEW_HOME)).toContain("setAttribute('sandbox', '')");
   });
 
   it('rule 3 planted: a widened token or a sandbox set from anything else is red', () => {
@@ -247,6 +286,24 @@ describe('what the reader lab never does (reader lab plan, Task 11)', () => {
     expect(planted(FRAME_HOME, "export const planted = (el: HTMLIFrameElement) => el.setAttribute('sandbox', 'allow-scripts');", sandboxFindings))
       .toEqual([`${FRAME_HOME} sandbox-value`]);
     expect(planted(FRAME_HOME, "export const planted2 = (el: HTMLIFrameElement) => { (el as unknown as { sandbox: string }).sandbox = 'x'; };", sandboxFindings))
+      .toEqual([`${FRAME_HOME} sandbox-value`]);
+  });
+
+  it("rule 3 planted: the review page sets sandbox to the empty string only, in main.ts only (M5, M15)", () => {
+    // The page's own call is the one allowed shape; the strictest sandbox widens nothing.
+    expect(planted(REVIEW_HOME, "export const planted = (el: HTMLIFrameElement) => el.setAttribute('sandbox', '');", sandboxFindings)).toEqual([]);
+    // Any other value in main.ts is red, the widened token and an assignment included.
+    expect(planted(REVIEW_HOME, "export const planted = (el: HTMLIFrameElement) => el.setAttribute('sandbox', 'allow-scripts');", sandboxFindings))
+      .toEqual([`${REVIEW_HOME} sandbox-value`]);
+    expect(planted(REVIEW_HOME, "export const planted = (el: HTMLIFrameElement) => el.setAttribute('sandbox', LAB_SANDBOX);", sandboxFindings))
+      .toEqual([`${REVIEW_HOME} sandbox-value`]);
+    expect(planted(REVIEW_HOME, "export const planted = (el: HTMLIFrameElement) => { el.sandbox = ''; };", sandboxFindings))
+      .toEqual([`${REVIEW_HOME} sandbox-value`]);
+    // The empty string anywhere else in review/ is red: the allowance is the file, not the directory.
+    expect(sandboxFindings("export const planted = (el: HTMLIFrameElement) => el.setAttribute('sandbox', '');", 'src/review/other.ts'))
+      .toEqual(['src/review/other.ts sandbox-value']);
+    // And the lab's own file does not gain the empty string.
+    expect(planted(FRAME_HOME, "export const planted = (el: HTMLIFrameElement) => el.setAttribute('sandbox', '');", sandboxFindings))
       .toEqual([`${FRAME_HOME} sandbox-value`]);
   });
 

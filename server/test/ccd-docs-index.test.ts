@@ -187,7 +187,7 @@ describe('docs verbs: advertised, dispatched, and every well-shaped call is one 
     const r = runCcdDocs(h, ['docs-nope']);
     expect(r.code).toBe(1);
     expect(r.stdout).toBe('');
-    expect(r.stderr).toContain('|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|docs-log|docs-show-range|version}');
+    expect(r.stderr).toContain('|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|docs-log|docs-show-range|docs-folder|docs-folder-read|version}');
   });
 
   it.each(DOCS_T6_WELL_SHAPED.map(([label, args]) => [label, args] as const))(
@@ -431,7 +431,7 @@ out({'line': line.decode('utf-8'), 'framed': H.framed_len(line), 'framedAscii': 
     // The agent's own measure of the same line: JSON.stringify of it, in UTF-8 bytes.
     expect(got.framed).toBe(bytes(JSON.stringify(got.line)));
     expect(got.framedAscii).toBe(9 + 2 + 4);
-    expect(got.verbs).toEqual(['docs-fetch', 'docs-index', 'docs-log', 'docs-show', 'docs-show-range', 'docs-tree']);
+    expect(got.verbs).toEqual(['docs-fetch', 'docs-folder', 'docs-folder-read', 'docs-index', 'docs-log', 'docs-show', 'docs-show-range', 'docs-tree']);
   });
 });
 
@@ -527,7 +527,7 @@ describe('docs argv grammar through the dispatcher: refused before any git call 
     return o;
   };
 
-  it.each(['-x', 'main~1', 'main:docs', 'a..b', 'x.lock/y', 'HEAD', 'refs/tags/v', '\u{00e9}', '@{-1}'])(
+  it.each(['-x', 'main~1', 'main:docs', 'a..b', 'x.lock/y', 'HEAD', 'refs/tags/v..x', '\u{00e9}', '@{-1}'])(
     'row 1: docs-tree --ref %j answers bad-ref', (ref) => {
       refused(['docs-tree', '--project', 'demo', '--ref', ref], 'bad-ref');
     });
@@ -610,6 +610,17 @@ describe('docs argv grammar through the dispatcher: refused before any git call 
   ])('row 63: a path holding %s answers bad-path', (_label, p) => {
     refused(committed({ path: p }), 'bad-path');
     refused(draft({ path: p }), 'bad-path');
+  });
+
+  it('X2 P4: a well-formed explicit tag reaches Git resolution', () => {
+    rec.reset();
+    const ref = 'refs/tags/v';
+    const r = runArgv(h, ['docs-tree', '--project', 'demo', '--ref', ref]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(oneLineOfArgv(r)).toMatchObject({
+      v: 1, verb: 'docs-tree', ok: false, failure: 'unresolved-ref', tried: [{ ref, result: 'absent' }],
+    });
+    expect(rec.calls().some(({ argv }) => argv.includes('for-each-ref') && argv.includes(ref))).toBe(true);
   });
 
   it.each([
@@ -821,7 +832,7 @@ rdVitest.describe('docs runner: the hardened git runner (spec section 2 (a))', (
   rdVitest.it('pins the four budget literals, each on one line, where the budget test will read them', () => {
     const src = rdPy.docsHelperSource();
     rdVitest.expect(rdPy.pyLiteral(src, 'HELPER_DEADLINE_S'))
-      .toBe("{'docs-index':12,'docs-tree':12,'docs-show':7,'docs-fetch':45,'docs-log':10,'docs-show-range':20}");
+      .toBe("{'docs-index':12,'docs-tree':12,'docs-show':7,'docs-fetch':45,'docs-log':10,'docs-show-range':20,'docs-folder':12,'docs-folder-read':20}");
     rdVitest.expect(rdPy.pyLiteral(src, 'CALL_S'))
       .toBe("{'ref':5,'list':8,'count':2,'show':5,'onref':2,'fetch':40,'index':5,'log':8}");
     rdVitest.expect(rdPy.pyLiteral(src, 'KILL_GRACE_S')).toBe('2');
@@ -2240,5 +2251,127 @@ t11v.describe('T11: docs-index, the 12 s helper deadline (F1)', () => {
     t11v.expect(o['ok']).toBe(true);
     t11v.expect(t11rows(o).map((r) => [r.project, r.state])).toEqual([['a', 'repo-unreadable'], ['b', 'ready'], ['c', 'ready']]);
     t11v.expect(o).not.toHaveProperty('unwalked');
+  });
+});
+
+// X2 P4.1 (spec 2026-11-18 §5.1, I1): docs-index carries the newest names per section, and drops them at the wire
+// cap. Imports are namespace imports under a `p41` prefix, as the blocks above do.
+import * as p41v from 'vitest';
+import * as p41ws from './ccdWsHelpers.js';
+import * as p41dh from './ccdDocsHelpers.js';
+import * as p41py from './docsHelperPy.js';
+import { DOCS_INDEX_NEWEST_PER_SECTION as P41_NEWEST, DOCS_MAX_LISTING_WIRE_BYTES as P41_WIRE_CAP } from '../../shared/docs.js';
+
+p41v.describe('P4.1: docs-index newest names', () => {
+  let h: p41ws.CcdHarness;
+  p41v.beforeEach(() => { h = p41ws.makeCcdHarness('ccd-docs-'); });
+  p41v.afterEach(() => h.cleanup());
+
+  p41v.it('index: at most five newest per section', () => {
+    const specs = 'docs/superpowers/specs';
+    const files: Record<string, string> = {};
+    for (let n = 1; n <= 7; n++) files[`${specs}/2026-11-0${n}-topic-${n}.md`] = `# ${n}\n`;
+    files[`${specs}/sub/2026-12-01-nested.md`] = '# nested\n';
+    // A name listing_admit refuses (U+200B is Cf): it is neither counted nor named, though it would sort in.
+    files[`${specs}/2026-11-09-zero​width.md`] = '# refused\n';
+    files['docs/superpowers/plans/2026-11-01-plan-a.md'] = '# pa\n';
+    files['docs/superpowers/plans/2026-11-02-plan-b.md'] = '# pb\n';
+    p41dh.docsRepo(h, 'project-a', files);
+    p41dh.docsRepo(h, 'project-b', { 'docs/vision/v.md': '# v\n' });
+    p41dh.docsRepo(h, 'project-c', { 'README.md': 'no docs\n' });
+    // The console's order is UTF-16 code units, not code points: U+FF5E sorts above U+1F600 in code units (0xFF5E against
+    // 0xD83D) and below it in code points, so a sort by code point would name these two the other way round.
+    p41dh.docsRepo(h, 'project-d', { 'docs/superpowers/specs/a-～.md': '# w\n', 'docs/superpowers/specs/a-\u{1F600}.md': '# e\n' });
+    const r = p41dh.runCcdDocs(h, ['docs-index', '--all']);
+    p41v.expect(r.code, r.stderr).toBe(0);
+    const o = p41dh.parseOneLine(r) as { projects: { project: string; sections: Record<string, number | null>; newest?: Record<string, string[]> }[] };
+    const row = (name: string) => o.projects.find((p) => p.project === name)!;
+    const a = row('project-a');
+    p41v.expect(P41_NEWEST).toBe(5);
+    p41v.expect(a.newest).toEqual({
+      specs: ['sub/2026-12-01-nested.md', `2026-11-07-topic-7.md`, '2026-11-06-topic-6.md', '2026-11-05-topic-5.md', '2026-11-04-topic-4.md'],
+      plans: ['2026-11-02-plan-b.md', '2026-11-01-plan-a.md'],
+    });
+    // The counts are what they were: the whole admitted set, not the five.
+    p41v.expect(a.sections).toEqual({ specs: 8, plans: 2, 'product-design': null, conventions: null, vision: null, promise: null });
+    p41v.expect(row('project-b').newest).toEqual({ vision: ['v.md'] });
+    const d = ['a-～.md', 'a-\u{1F600}.md'];
+    p41v.expect(row('project-d').newest).toEqual({ specs: d });
+    p41v.expect([...d].sort().reverse(), 'the same order as the console sorts').toEqual(d);
+    // A project with no section holding a doc carries no newest key at all.
+    p41v.expect(row('project-c')).not.toHaveProperty('newest');
+  });
+
+  const WIRE_ROWS = [
+    'cap = H.DOCS_MAX_LISTING_WIRE_BYTES',
+    'def row(i, names):',
+    "    r = {'project': 'project-%04d' % i, 'state': 'ready', 'github': {'state': 'none'}, 'sections': {'specs': 5, 'plans': None}}",
+    "    if names:",
+    "        r['newest'] = {'specs': ['2026-11-0%d-n%04d-' % (j, i) + 'x' * 240 for j in range(5, 0, -1)]}",
+    '    return r',
+    'def body(rows):',
+    "    return {'v': 1, 'verb': 'docs-index', 'ok': True, 'elapsedMs': 3, 'unlisted': 0, 'duplicates': [], 'projects': rows}",
+  ];
+  type Cut = {
+    ok: boolean; failure?: string; framed: number; truncated: unknown; kept: number; firstDropped: number; lastKept: number;
+    sectionsKept: boolean; namesKept: boolean; nextWouldFit: boolean | null;
+  };
+
+  p41v.it('index: at the wire cap names drop from the last project, counts kept, newestTruncated set', () => {
+    const got = p41py.unitJson<Cut>(h.home, [
+      'import json', ...WIRE_ROWS,
+      'rows = [row(i, True) for i in range(1000)]',
+      'obj = body(rows)',
+      'line = H.line_of(obj)',
+      'g = H.guard_listing(obj, line)',
+      "a = json.loads(g.decode('utf-8'))",
+      "ps = a.get('projects', [])",
+      "kept = [i for i, p in enumerate(ps) if 'newest' in p]",
+      'def with_k(k):',
+      "    rs = [r if i < k else row(i, False) for i, r in enumerate(rows)]",
+      "    return H.framed_len(H.line_of(dict(body(rs), newestTruncated=True)))",
+      "out({'ok': a['ok'], 'failure': a.get('failure'), 'framed': H.framed_len(g), 'truncated': a.get('newestTruncated'),",
+      "     'kept': len(kept), 'firstDropped': (len(kept) if kept == list(range(len(kept))) else -1), 'lastKept': (kept[-1] if kept else -1),",
+      "     'sectionsKept': [p['sections'] for p in ps] == [r['sections'] for r in rows] and [p['project'] for p in ps] == [r['project'] for r in rows],",
+      "     'namesKept': all(p['newest'] == rows[i]['newest'] for i, p in enumerate(ps) if 'newest' in p),",
+      "     'nextWouldFit': (with_k(len(kept) + 1) <= cap) if 0 < len(kept) < len(rows) else None,",
+      "     'rawFits': len(line) < cap, 'framedOver': H.framed_len(line) > cap})",
+    ].join('\n'));
+    // CONTROL: the untrimmed line is over the wire cap (and under 5000 entries), so only the trim can save it.
+    p41v.expect(got.framed).toBeLessThanOrEqual(P41_WIRE_CAP);
+    p41v.expect(got).toMatchObject({ ok: true, truncated: true, sectionsKept: true, namesKept: true, rawFits: false, framedOver: true });
+    p41v.expect(got.failure).toBeNull();
+    // The first project keeps its names, the last loses them, and what is kept is a prefix of the projects.
+    p41v.expect(got.kept).toBeGreaterThan(0);
+    p41v.expect(got.kept).toBeLessThan(1000);
+    p41v.expect(got.firstDropped).toBe(got.kept);
+    p41v.expect(got.lastKept).toBe(got.kept - 1);
+    // As many projects keep names as fit: one more would pass the cap.
+    p41v.expect(got.nextWouldFit).toBe(false);
+  });
+
+  p41v.it('index: a body that fits the wire cap is returned byte-identical, with no newestTruncated', () => {
+    const got = p41py.unitJson<{ same: boolean; has: boolean }>(h.home, [
+      'import json', ...WIRE_ROWS,
+      'obj = body([row(i, True) for i in range(10)])',
+      'line = H.line_of(obj)',
+      "out({'same': H.guard_listing(obj, line) == line, 'has': b'newestTruncated' in line})",
+    ].join('\n'));
+    p41v.expect(got).toEqual({ same: true, has: false });
+  });
+
+  p41v.it('index: a body over the wire cap with every newest gone is still too-many-entries', () => {
+    const got = p41py.unitJson<{ bare: number; answer: Record<string, unknown> }>(h.home, [
+      'import json',
+      `rows = [{'project': '"' * 1000, 'state': 'ready', 'github': {'state': 'none'}, 'sections': {'specs': 5}, 'newest': {'specs': ['2026-11-01-a.md']}} for _ in range(400)]`,
+      "obj = {'v': 1, 'verb': 'docs-index', 'ok': True, 'elapsedMs': 3, 'unlisted': 0, 'duplicates': [], 'projects': rows}",
+      "bare = dict(obj, projects=[dict((k, v) for k, v in r.items() if k != 'newest') for r in rows])",
+      "g = H.guard_listing(obj, H.line_of(obj))",
+      "out({'bare': H.framed_len(H.line_of(bare)), 'answer': json.loads(g.decode('utf-8'))})",
+    ].join('\n'));
+    // CONTROL: without a single name the index is still over the cap.
+    p41v.expect(got.bare).toBeGreaterThan(P41_WIRE_CAP);
+    p41v.expect(got.answer).toMatchObject({ v: 1, verb: 'docs-index', ok: false, failure: 'too-many-entries', count: 400, elapsedMs: 3 });
+    p41v.expect(got.answer).not.toHaveProperty('projects');
   });
 });

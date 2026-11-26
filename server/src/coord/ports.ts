@@ -59,12 +59,12 @@ export interface FleetWatcherView {
  *  needs a new member adds it here, in its sorted place, in the same PR. Never split it per lane or per callee (the
  *  ruling of 2026-10-30, the plan's Rejected list): one port, one member list. */
 export type WatcherCoordMember =
-  | 'absorbParkEscalation' | 'activeClaims' | 'admissionWaiters' | 'advanceCursor' | 'advanceLanding' | 'advanceMarkQuiet'
+  | 'absorbParkEscalation' | 'accountPoolEdges' | 'activeClaims' | 'admissionWaiters' | 'advanceCursor' | 'advanceLanding' | 'advanceMarkQuiet'
   | 'advanceObserved' | 'advisorDayCounts' | 'advisorReadState' | 'answerRenewCall' | 'applyLandingControl' | 'applyPairMoves' | 'approvalById' | 'approvalPark' | 'approvalPushSources'
   | 'approvalRowsForCensus' | 'approvalsForChild' | 'approvalsInState' | 'approvalsUnfetchedLive' | 'askById'
   | 'askForCorrection' | 'autoContinueHeldUntil' | 'backOff' | 'backstopRead' | 'baselineParkBox' | 'bigCallsIn' | 'bindingRunsOf' | 'bindingsOf' | 'blockClaimants' | 'blocksToWake' | 'bumpReplayCount'
   | 'callById' | 'cancelDeliveriesTo' | 'cancelTimer' | 'capMode' | 'caps' | 'capsCountedRuns' | 'capsUpdatedAt' | 'cardReadOfStart' | 'censusRowsIn' | 'censusRunSpans' | 'checksRows' | 'childReclaimCoordinatorClaims' | 'childReclaimSessionIds'
-  | 'childStaleActivity' | 'claimDigestDay' | 'claimHistory' | 'claimRenewCall' | 'claudeBuilds' | 'clearShadowWalk' | 'closeRun' | 'closedProgrammeClaimants' | 'closedSpotProbes' | 'collectLaneRow' | 'collisionsSince' | 'commitDeadCoordinatorBreakerState'
+  | 'childStaleActivity' | 'claimDigestDay' | 'claimHistory' | 'claimRenewCall' | 'claudeBuildDeliveries' | 'claudeBuilds' | 'clearShadowWalk' | 'closeRun' | 'closedProgrammeClaimants' | 'closedSpotProbes' | 'collectLaneRow' | 'collisionsSince' | 'commitDeadCoordinatorBreakerState'
   | 'coordPlacementStamps' | 'coordinatorAdvisorSettings' | 'countDelegationEventsAtOrBelow' | 'currentAskFor' | 'currentAsksFor' | 'currentEpisode'
   | 'db' | 'deadAnchors' | 'deadCoordinatorBreakerHeldLatest' | 'deadCoordinatorBreakerState' | 'deadCoordinatorJournalRows'
   | 'declineApproval' | 'declineAsk' | 'delegationEventStats' | 'delegationRunStamps' | 'deleteDelegationEventsBetween' | 'deleteGoneSince' | 'deleteResponsesThrough' | 'deleteRunCloseAnchor' | 'deleteRunCloseWarning'
@@ -80,13 +80,13 @@ export type WatcherCoordMember =
   | 'lifecycleFor' | 'lifecycleGapGens' | 'lifecycleLaneRowsSince' | 'lifecycleLeafEndsFor' | 'lifecycleReclaimRowsSince' | 'lifecycleStats' | 'linkTeamAuto' | 'linkingAll' | 'liveBlocksOf' | 'liveGenerations' | 'liveNotes'
   | 'mailForRecipient' | 'mailOrigin' | 'mailQueuedSince' | 'markAcked' | 'markAdmissionWoken' | 'markApprovalFetched'
   | 'markApprovalOperator' | 'markApprovalOperatorRows' | 'markBlockWoken' | 'markClaudeBuildAttempt'
-  | 'markDeadCoordinatorBreakerDirty' | 'markDelivered' | 'markDriftPushed' | 'markDriftShadowed' | 'markIngested'
+  | 'markDeadCoordinatorBreakerDirty' | 'markDelivered' | 'markDeliveryAttempt' | 'markDriftPushed' | 'markDriftShadowed' | 'markIngested'
   | 'markLanded' | 'markParkEscalated' | 'markReleaseNotified' | 'markTimersFired' | 'markUnreachable' | 'maxMailDeliveryId'
-  | 'maxRunEventId' | 'meetApprovalParkRuling' | 'mergingRuns' | 'mintGeneration' | 'moveItem' | 'newestEpisodes' | 'node' | 'nodeByLabel' | 'nodes' | 'noteClaudeBuildsSeen' | 'noteDispatchRefusal' | 'noteGate' | 'noteLeaseDetail'
+  | 'maxRunEventId' | 'meetApprovalParkRuling' | 'mergingRuns' | 'mintGeneration' | 'modelSwitchesOf' | 'moveItem' | 'newestEpisodes' | 'node' | 'nodeByLabel' | 'nodes' | 'noteClaudeBuildsSeen' | 'noteDispatchRefusal' | 'noteGate' | 'noteLeaseDetail'
   | 'openAllocations' | 'openCloseRefusedItems' | 'openCoordinatorIds' | 'openPracticeCase' | 'openProbeRound' | 'openReleaseReviewItems' | 'openResponseRows' | 'openRound' | 'operatorMarks' | 'outstandingMailFor' | 'parkApprovalRow' | 'parkDelivery' | 'parkedDeliveries' | 'pendingTimers'
-  | 'plainAutoMemorySettings' | 'poolEpoch' | 'practiceCaseNewest' | 'probeRows' | 'programOpenRunCount' | 'programmeActivity' | 'programmeHasBlockingItem' | 'programmeHasOpenRun' | 'programmeLeftPlannedAt' | 'programmeLive' | 'projectDelegationCheckpoint'
-  | 'projectDelegationCheckpointChanges' | 'pruneApprovalInputs' | 'pruneApprovalParks' | 'pruneAskQuestions' | 'pruneCensusSummaries' | 'pruneSequenceThrough' | 'purgeTimers' | 'putCheckpoint' | 'queueDelivery' | 'queueRunCloseWarning'
-  | 'raiseItem' | 'raiseItemWithMail' | 'raiseLatch' | 'raiseLedgerFloor' | 'readLanding' | 'recentProvenance' | 'recordAdvisorRead' | 'recordApprovalParkRuling' | 'recordClaudeBuildVerdict' | 'recordDriftPass' | 'recordFeedEvent' | 'recordGap' | 'recordLinkingReading'
+  | 'plainAutoMemorySettings' | 'poolEpoch' | 'practiceCaseNewest' | 'probeRows' | 'programOpenRunCount' | 'programmeActivity' | 'programmeEndDecided' | 'programmeHasBlockingItem' | 'programmeHasOpenRun' | 'programmeLeftPlannedAt' | 'programmeLive' | 'projectDelegationCheckpoint'
+  | 'projectDelegationCheckpointChanges' | 'pruneApprovalInputs' | 'pruneApprovalParks' | 'pruneAskQuestions' | 'pruneCensusSummaries' | 'pruneSequenceThrough' | 'purgeTimerRefusals' | 'purgeTimers' | 'putCheckpoint' | 'queueDelivery' | 'queueRunCloseWarning'
+  | 'raiseItem' | 'raiseItemWithMail' | 'raiseLatch' | 'raiseLedgerFloor' | 'readLanding' | 'readerEventsOf' | 'recentProvenance' | 'recordAdvisorRead' | 'recordApprovalParkRuling' | 'recordClaudeBuildVerdict' | 'recordDelivery' | 'recordDriftPass' | 'recordFeedEvent' | 'recordGap' | 'recordLinkingReading'
   | 'recordObservation' | 'recordRejection' | 'recordRunCloseRefusal' | 'recordRunEvent' | 'recordShadowVerdict' | 'recordSoftRenewal' | 'recordStallObservation'
   | 'recordTeamCandidates'
   | 'refusalsFor' | 'refuseRelease' | 'rejectDelivery' | 'rekeyNode' | 'releaseAsk' | 'releaseLease' | 'releaseReviewItemRaised' | 'releases'
@@ -94,7 +94,7 @@ export type WatcherCoordMember =
   | 'runCloseAnchors' | 'runCloseChoice' | 'runCloseRuns' | 'runCloseWarning' | 'runCloseWarningProgrammes' | 'runEvents' | 'runEventsSince' | 'runLastMoves' | 'runs' | 'runsNamingSession' | 'sealDeadCoordinatorBreakerState'
   | 'sealResponse' | 'sequenceOldest' | 'setCollectLane' | 'setDeliveryEnvelope' | 'setGenerationDue' | 'setGoneSince' | 'setHoldOff' | 'setRunCloseAnchor' | 'setSession' | 'settleAsk' | 'settleNode' | 'snapshotFacts' | 'softRenewalsOf' | 'staleAllocations'
   | 'staleApproval' | 'staleAsk' | 'stallCandidates' | 'stallMailFor' | 'stallObservationsSince' | 'stallSettings' | 'stalledDispatchRunIds' | 'standingPairs'
-  | 'startRunsOnTakenBrief' | 'startsOf' | 'startsSince' | 'stepGeneration' | 'strandedClear' | 'sweepClosesBetween' | 'takeApprovalForRule' | 'takeAskForAnswer' | 'tellRefusal' | 'timerHoldFacts' | 'unlandedBriefs'
+  | 'startById' | 'startRunsOnTakenBrief' | 'startsOf' | 'startsSince' | 'stepGeneration' | 'strandedClear' | 'sweepClosesBetween' | 'takeApprovalForRule' | 'takeAskForAnswer' | 'tellRefusal' | 'timerHoldFacts' | 'unlandedBriefs'
   | 'unsealDeadCoordinatorBreakerState' | 'untakeAsk' | 'untoldRows' | 'updateEpoch' | 'upsertNodeMeasurement' | 'urgentHolds' | 'wakeBlockTx' | 'wakeParked';
 
 /** D-7579: the watcher's narrow view of the coordination store, the one `Pick` of `CoordStore` the series uses. A

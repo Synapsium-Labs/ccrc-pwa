@@ -176,7 +176,9 @@ describe('the entry is written by advanceLanding, in the run\'s own transaction 
     expect(coord.currentEpisode(id)).toMatchObject({ pr: null });
   });
 
-  it.each(['landed', 'withdrawn'])('a %s row is kept, and the run still advances', (state) => {
+  // Wave 5j-a (D-9047), inverted: this case ran for `landed` and `withdrawn`. The withdrawn row has cases of its own below,
+  // because a run-less one is kept and a run-bound one re-pins, so the each keeps `landed` alone.
+  it.each(['landed'])('a %s row is kept, and the run still advances', (state) => {
     const id = atReview();
     insertRaw(7, state, null);
     expect(coord.advanceLanding({ runId: id, to: 'merging', causedBy: 'coordinator', landing: pin() }))
@@ -193,6 +195,79 @@ describe('the entry is written by advanceLanding, in the run\'s own transaction 
     expect(coord.advanceLanding({ runId: id, to: 'merging', causedBy: 'coordinator', landing: pin() }))
       .toMatchObject({ ok: true, landing: { kind: 'pinned', created: false, entry: { state: 'pinned', pinnedSha: HEAD, pinnedAt: 1_784_600_000_000, runId: id } } });
     expect((coord.db.prepare('SELECT detail FROM landing_entries WHERE pr = 7').get() as { detail: string | null }).detail).toBeNull();
+  });
+
+  it('a withdrawn row re-enters (5j-a, D-9047): a retreat keeps it, and the run\'s next verified pin re-pins it, with a witness, into the line', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(1_784_600_000_000);
+    const id = atMerging();
+    const first = lineEntries()[0]!;
+    coord.db.prepare("UPDATE landing_entries SET state = 'withdrawn', detail = ? WHERE id = ?")
+      .run(JSON.stringify({ v: 1, by: 'operator', at: 1, word: 'withdrawn', seq: 1 }), first.id);
+    coord.db.prepare('DELETE FROM landing_projection_witness').run();
+    expect(coord.advanceLanding({ runId: id, to: 'working', causedBy: 'coordinator', landing: eject() }))
+      .toMatchObject({ ok: true, from: 'merging', to: 'working', landing: { kind: 'kept', state: 'withdrawn' } });
+    expect(lineEntries()[0]).toMatchObject({ id: first.id, state: 'withdrawn' });
+    step(id, 'awaiting-review');
+    vi.setSystemTime(1_784_600_500_000);
+    expect(coord.advanceLanding({ runId: id, to: 'merging', causedBy: 'coordinator', landing: pin(HEAD2) }))
+      .toMatchObject({ ok: true, landing: { kind: 'pinned', created: false,
+        entry: { id: first.id, state: 'pinned', pinnedSha: HEAD2, pinnedAt: 1_784_600_500_000, runId: id } } });
+    expect((coord.db.prepare('SELECT detail FROM landing_entries WHERE id = ?').get(first.id) as { detail: string | null }).detail).toBeNull();
+    expect(coord.db.prepare('SELECT entryId, runId, pinnedSha FROM landing_projection_witness').all())
+      .toEqual([{ entryId: first.id, runId: id, pinnedSha: HEAD2 }]);
+    const f = landingFactsOf(coord, P);
+    expect(landingOrder(f.entries, f.flags, f.recovery).order.map((e) => e.id)).toEqual([first.id]);
+  });
+
+  it('wave 5j-b carry (review run 3806): a withdrawn row bound to run A re-pins at run B\'s verified pin of its pull request, under run B, with a witness', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(1_784_600_000_000);
+    const other = coord.openRun({ program: 'p', title: 't', project: P, wave: 2, waveOf: 2, claimedBy: 'coord-a' });
+    if (!('id' in other)) throw new Error('fixture openRun refused');
+    const id = atReview();
+    insertRaw(7, 'withdrawn', other.id, HEAD2, 1);
+    coord.db.prepare('UPDATE landing_entries SET detail = ? WHERE pr = 7')
+      .run(JSON.stringify({ v: 1, by: 'operator', at: 1, word: 'withdrawn', seq: 1 }));
+    expect(coord.advanceLanding({ runId: id, to: 'merging', causedBy: 'coordinator', landing: pin() }))
+      .toMatchObject({ ok: true, to: 'merging', landing: { kind: 'pinned', created: false,
+        entry: { pr: 7, state: 'pinned', pinnedSha: HEAD, pinnedAt: 1_784_600_000_000, runId: id } } });
+    expect(coord.db.prepare('SELECT entryId, runId, pinnedSha FROM landing_projection_witness').all())
+      .toEqual([{ entryId: lineEntries()[0]!.id, runId: id, pinnedSha: HEAD }]);
+    expect((coord.db.prepare('SELECT detail FROM landing_entries WHERE pr = 7').get() as { detail: string | null }).detail).toBeNull();
+  });
+
+  it('fix round 1, R1: a withdrawn row with no run is kept at a verified pin of its pull request, unchanged, with no witness, and the run still advances (decision 7)', () => {
+    const detail = JSON.stringify({ v: 1, by: 'operator', at: 1, word: 'withdrawn', seq: 1 });
+    const id = atReview();
+    insertRaw(7, 'withdrawn', null, HEAD2, 1);
+    coord.db.prepare('UPDATE landing_entries SET detail = ? WHERE pr = 7').run(detail);
+    const before = coord.db.prepare('SELECT * FROM landing_entries WHERE pr = 7').get();
+    expect(coord.advanceLanding({ runId: id, to: 'merging', causedBy: 'coordinator', landing: pin() }))
+      .toMatchObject({ ok: true, from: 'awaiting-review', to: 'merging', landing: { kind: 'kept', state: 'withdrawn' } });
+    expect(coord.db.prepare('SELECT * FROM landing_entries WHERE pr = 7').get()).toEqual(before);
+    expect(coord.db.prepare('SELECT state, runId, pinnedSha, pinnedAt, detail FROM landing_entries WHERE pr = 7').get())
+      .toEqual({ state: 'withdrawn', runId: null, pinnedSha: HEAD2, pinnedAt: 1, detail });
+    expect(coord.db.prepare('SELECT COUNT(*) AS n FROM landing_projection_witness').get()).toEqual({ n: 0 });
+    expect(coord.run(id)).toMatchObject({ ok: true, run: { state: 'merging' } });
+  });
+
+  it('fix round 1, R1 (the store case the review found lost): an unreadable run-bound withdrawn row is kept under its own word at a pin, and the run still advances', () => {
+    const id = atMerging();
+    const first = lineEntries()[0]!;
+    coord.db.prepare("UPDATE landing_entries SET state = 'withdrawn', detail = ? WHERE id = ?")
+      .run(JSON.stringify({ v: 1, by: 'operator', at: 1, word: 'withdrawn', seq: 1 }), first.id);
+    expect(coord.advanceLanding({ runId: id, to: 'working', causedBy: 'coordinator', landing: eject() }))
+      .toMatchObject({ ok: true, landing: { kind: 'kept', state: 'withdrawn' } });
+    step(id, 'awaiting-review');
+    coord.db.prepare("UPDATE landing_entries SET handoffCommit = 'not-a-hash' WHERE id = ?").run(first.id);
+    const witnesses = coord.db.prepare('SELECT * FROM landing_projection_witness').all();
+    const before = coord.db.prepare('SELECT * FROM landing_entries WHERE id = ?').get(first.id);
+    expect(coord.advanceLanding({ runId: id, to: 'merging', causedBy: 'coordinator', landing: pin(HEAD2) }))
+      .toMatchObject({ ok: true, from: 'awaiting-review', to: 'merging', landing: { kind: 'kept', state: 'withdrawn' } });
+    expect(coord.db.prepare('SELECT * FROM landing_entries WHERE id = ?').get(first.id)).toEqual(before);
+    expect(coord.db.prepare('SELECT * FROM landing_projection_witness').all()).toEqual(witnesses);
+    expect(coord.run(id)).toMatchObject({ ok: true, run: { state: 'merging' } });
   });
 
   it('a pin onto a row this build cannot read keeps it untouched, and the run still advances (the rollback case)', () => {
@@ -615,7 +690,26 @@ describe('decideLandingWrite: the owned-pin projection check and the closed-row 
       expect(pinAgain(row({ state: 'closed' }), projection)).toEqual({ act: 'none', write: { kind: 'kept', state: 'closed' } });
     }
   });
-  it('a pinned and an ejected row re-pin as before, whatever their projection says (the gate is the closed row\'s alone)', () => {
+  it('a withdrawn row re-pins only over a readable, unquarantined projection, and otherwise keeps its own word (5j-a, D-9047)', () => {
+    expect(pinAgain(row({ state: 'withdrawn' }), readable)).toEqual({ act: 'repin', id: 3 });
+    for (const projection of [unreadable, null, { kind: 'readable', quarantine: 'stale-episode-head' } as LandingProjectionRead]) {
+      expect(pinAgain(row({ state: 'withdrawn' }), projection)).toEqual({ act: 'none', write: { kind: 'kept', state: 'withdrawn' } });
+    }
+    // a retreat over a withdrawn row keeps it, whoever owns it
+    expect(retreat({ current: row({ state: 'withdrawn' }), projection: readable })).toEqual({ act: 'none', write: { kind: 'kept', state: 'withdrawn' } });
+  });
+  it('fix round 1, R1: a withdrawn row with no run is kept at a pin, a run-bound one re-pins, and a closed row re-pins in both forms (decision 7)', () => {
+    expect(pinAgain(row({ state: 'withdrawn', runId: null }), readable)).toEqual({ act: 'none', write: { kind: 'kept', state: 'withdrawn' } });
+    expect(pinAgain(row({ state: 'withdrawn', runId: 5 }), readable)).toEqual({ act: 'repin', id: 3 });
+    expect(pinAgain(row({ state: 'closed', runId: null }), readable)).toEqual({ act: 'repin', id: 3 });
+    expect(pinAgain(row({ state: 'closed', runId: 5 }), readable)).toEqual({ act: 'repin', id: 3 });
+  });
+  it('a landed row is still kept at a pin, readable or not', () => {
+    for (const projection of [readable, unreadable]) {
+      expect(pinAgain(row({ state: 'landed' }), projection)).toEqual({ act: 'none', write: { kind: 'kept', state: 'landed' } });
+    }
+  });
+  it('a pinned and an ejected row re-pin as before, whatever their projection says (the gate is the closed and withdrawn rows\' alone)', () => {
     for (const state of ['pinned', 'ejected'] as const) expect(pinAgain(row({ state }), unreadable)).toEqual({ act: 'repin', id: 3 });
   });
 });

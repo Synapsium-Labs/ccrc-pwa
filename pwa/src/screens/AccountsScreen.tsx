@@ -52,7 +52,7 @@ import { ACCOUNT_AUTH_CAP, ACCOUNT_CODEX_CAP, isArchivedRow, type AccountPoolsUn
 import type { AccountStateAnswer } from '../../../shared/accounts';
 import type { AccountPoolWire } from '../../../shared/poolrule';
 import { Button, PageScaffold, Skeleton, toast, useDesk, useNow } from '@ccrc/ui';
-import { AddAccountDoor, ConnectSheet, DoorReason } from '../accounts/ConnectSheet';
+import { AddAccountDoor, ConnectSheet, DoorReason, type DoorAnswer } from '../accounts/ConnectSheet';
 import { ModelsSheet } from '../accounts/ModelsSheet';
 import { MODELS_ACT, modelsActOffered, modelsSheetAnthropic } from '../accounts/modelsSheetWords';
 import { RemoveSheet } from '../accounts/RemoveSheet';
@@ -344,14 +344,38 @@ export function AccountsScreen(): ReactNode {
   const desk = useDesk();
   const narrowing = offline !== null ? null : doorNarrowing(accounts !== null, connect);
   const doorReason = offline !== null ? { text: offline } : narrowing === null ? null : DOOR_NARROWED[narrowing];
-  const doorReasonId = 'acct-door-reason';
   const [connectOpen, setConnectOpen] = useState(false);
   const [connectGen, setConnectGen] = useState(0);
   const openConnect = (): void => { setConnectGen((g) => g + 1); setConnectOpen(true); };
+  // A tap or Enter on the narrowed door (desktop-polish wave 180): the tap's answer, a snapshot of the reason as it read
+  // then (`DoorAnswer`). It belongs to the narrowing it was given under: when the narrowing changes or ends, the answer
+  // and the disclosure's open state are dropped here, during the render, so nothing of the old one is said or replayed.
+  const doorNarrowedBy = offline !== null ? 'offline' : narrowing;
+  const doorTaps = useRef(0);
+  const [doorAnswer, setDoorAnswer] = useState<DoorAnswer | null>(null);
+  const [doorMoreOpen, setDoorMoreOpen] = useState(false);
+  const [doorAnswerFor, setDoorAnswerFor] = useState(doorNarrowedBy);
+  if (doorAnswerFor !== doorNarrowedBy) {
+    setDoorAnswerFor(doorNarrowedBy);
+    setDoorAnswer(null);
+    setDoorMoreOpen(false);
+  }
   const door = (
-    <AddAccountDoor desk={desk} narrowedBy={doorReason === null ? null : doorReasonId} onOpen={openConnect} />
+    <AddAccountDoor
+      desk={desk} narrowed={doorReason !== null} onOpen={openConnect}
+      onNarrowedTap={() => {
+        if (doorReason === null) return;
+        doorTaps.current += 1;
+        setDoorAnswer({ n: doorTaps.current, text: doorReason.text });
+      }}
+    />
   );
-  const reason = doorReason === null ? null : <DoorReason id={doorReasonId} text={doorReason.text} fix={'fix' in doorReason ? doorReason.fix : undefined} />;
+  const reason = doorReason === null ? null : (
+    <DoorReason
+      reason={doorReason} answer={doorAnswer}
+      moreOpen={doorMoreOpen} onMoreToggle={setDoorMoreOpen}
+    />
+  );
 
   // Remove and Replace token (accounts plan Task A19, D-7742): the fold's two sheets, hosted here rather than on a card,
   // because a removed lane's card goes with it and its ledger must stay. Each is keyed per opening.

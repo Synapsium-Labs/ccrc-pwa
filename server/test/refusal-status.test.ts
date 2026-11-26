@@ -90,8 +90,9 @@ function refusalSends(text: string): Send[] {
   return out;
 }
 /** A computed status that IS a table: the helpers' own one send each —
- *  `refuseRun`'s `RUN_REFUSAL_STATUS` (D-5384) and `refuseAdvance`'s `ADVANCE_REJECT_STATUS` (ARCH-33) included. */
-const TABLE_STATUS = /^(?:(?:RUN_)?REFUSAL_STATUS|ADVANCE_REJECT_STATUS)\[/;
+ *  `refuseRun`'s `RUN_REFUSAL_STATUS` (D-5384), `refuseAdvance`'s `ADVANCE_REJECT_STATUS` (ARCH-33) and `refuseReclaim`'s
+ *  `RECLAIM_REFUSAL_STATUS` (programme lifecycle W2) included. */
+const TABLE_STATUS = /^(?:(?:RUN_|RECLAIM_)?REFUSAL_STATUS|ADVANCE_REJECT_STATUS)\[/;
 /** A `refuseRoute` call naming its word as a literal. */
 const HELPER_WORD = /\brefuseRoute\(\s*reply\s*,\s*'([^']+)'/g;
 /** A word a pure decider answers as `refused('<word>'` (`coord/route.ts`): the route sends it through `refuseRoute(reply, decision.refused, …)`. */
@@ -483,7 +484,9 @@ describe("the landing line's words (landing order wave 5f, shared contract §5)"
     'landing-db-apply', 'landing-db-commit', 'landing-fenced', 'landing-projection-unreadable'] as const;
   const MUTATION: Record<string, number> = { 'landing-entry-exists': 409, 'landing-entry-missing': 404, 'landing-after-missing': 409,
     'landing-after-cross-project': 409, 'landing-cycle': 409, 'landing-dependencies-unreadable': 503, 'landing-recovery-unresolved': 409,
-    'landing-identity-conflict': 409, 'landing-id-overflow': 409, 'landing-sequence-overflow': 409 };
+    'landing-identity-conflict': 409, 'landing-id-overflow': 409, 'landing-sequence-overflow': 409,
+    // The operator's doors (landing order wave 5j-b, D-9049): CHOSEN, not measured, new words.
+    'landing-entry-terminal': 409, 'landing-entry-moved': 409, 'landing-project-unknown': 404, 'landing-record-unparseable': 500 };
   it('every infrastructure word is 503 and each mutation word has its one status, in one submap', () => {
     for (const w of INFRA) expect(LANDING_REFUSAL_STATUS[w], w).toBe(503);
     for (const [w, status] of Object.entries(MUTATION)) expect(LANDING_REFUSAL_STATUS[w as keyof typeof LANDING_REFUSAL_STATUS], w).toBe(status);
