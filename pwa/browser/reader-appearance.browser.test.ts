@@ -11,7 +11,7 @@ import { READER_STORE_PREFIX } from '../src/lib/readerLimits';
 import { COMMIT_A, entry, treeOk, treeResponse } from '../test/docsFixtures';
 import { openApp, serveDist, sharedDist, type DistServer, type OpenedApp } from './app';
 import { resolveChrome } from './harness';
-import { MEASURE, readerTimingLoad } from './measurement';
+import { MEASURE, readerCeilingReading, readerTimingLoad } from './measurement';
 import { readRedraws, REDRAW_FIGURE, setRedrawGate, traceRedrawTasks, waitForRedrawDrain, waitForRedraws, watchRedraws } from './reader-redraw';
 
 const SECTION = DOC_SECTION_SLUGS[0]!;
@@ -574,11 +574,7 @@ describe('Docs hosted appearance', () => {
   }, 180_000);
 
   it.each(['light', 'dark'] as const)('AP-5: palette and skin transitions in place with device %s', async (device) => {
-    const start = MEASURE ? readerTimingLoad() : undefined;
-    if (start?.quiet === false) {
-      console.log(`AP-5-TIMING ${JSON.stringify({ device, startLoad: start.oneMinute, endLoad: null, verdict: 'not measured: box not quiet' })}`);
-      return;
-    }
+    const startLoad = MEASURE ? readerTimingLoad() : undefined;
     expect(THEMES.length).toBeGreaterThan(1);
     expect(SKINS.length).toBeGreaterThanOrEqual(2);
     type Timed = Awaited<ReturnType<typeof checkTransition>> & { latencyMs: number };
@@ -588,7 +584,7 @@ describe('Docs hosted appearance', () => {
     let noops = 0;
     let app: OpenedApp | undefined;
     let complete = false;
-    let end: ReturnType<typeof readerTimingLoad> | undefined;
+    const ceiling = APPEARANCE_FOLLOW_MAX_MS;
     try {
       app = await open(SKINS[0]!.id, THEMES[0]!.id, device);
       const { page } = app;
@@ -599,7 +595,7 @@ describe('Docs hosted appearance', () => {
         const sample = await checkTransition(page, frame, cursor, device, transition, action);
         if (sample.effective) effective += 1;
         else noops += 1;
-        if (start && sample.effective) {
+        if (MEASURE && sample.effective) {
           const { hostStampMs, operationSendMs, frameWriteMs, latencyMs } = sample;
           allClocksOrdered &&= hostStampMs !== null && operationSendMs !== null && frameWriteMs !== null
             && hostStampMs <= operationSendMs && operationSendMs <= frameWriteMs;
@@ -625,28 +621,24 @@ describe('Docs hosted appearance', () => {
       expect(app.errors).toEqual([]);
       complete = true;
     } finally {
-      if (start) {
-        end = readerTimingLoad();
-        const verdict = !end.quiet ? 'not measured: box not quiet'
-          : !complete ? 'not measured: transition did not complete'
-          : worst && allClocksOrdered && worst.latencyMs <= APPEARANCE_FOLLOW_MAX_MS ? 'pass' : 'fail';
-        console.log(`AP-5-TIMING ${JSON.stringify({ device, startLoad: start.oneMinute, endLoad: end.oneMinute, verdict, worst })}`);
+      if (MEASURE) {
+        const reading = complete && worst && allClocksOrdered
+          ? readerCeilingReading(worst.latencyMs, ceiling, 'AP-M27').reading : 'incomplete';
+        console.log(`AP-5-TIMING ${JSON.stringify({ device, startLoad, endLoad: readerTimingLoad(), ceiling, reading, worst })}`);
       }
       await app?.ctx.close();
     }
-    if (end?.quiet) {
+    if (MEASURE) {
       expect(worst, `${device}: measured an applied appearance write`).toBeDefined();
       expect(allClocksOrdered, `${device}: host stamp, operation send and frame write are ordered`).toBe(true);
-      expect(worst!.latencyMs, `${device}: ${worst!.transition} appearance latency in ms`).toBeLessThanOrEqual(APPEARANCE_FOLLOW_MAX_MS);
+      if (readerCeilingReading(worst!.latencyMs, ceiling, 'AP-M27').assertCeiling) {
+        expect(worst!.latencyMs, `${device}: ${worst!.transition} appearance latency in ms`).toBeLessThanOrEqual(ceiling);
+      }
     }
   }, 1_200_000);
 
   it('D-9054: drawn figures redraw nearest first in separate tasks and cancel the old queue', async () => {
-    const start = MEASURE ? readerTimingLoad() : undefined;
-    if (start?.quiet === false) {
-      console.log(`AP-REDRAW-GAPS ${JSON.stringify({ startLoad: start.oneMinute, endLoad: null, verdict: 'not measured: box not quiet' })}`);
-      return;
-    }
+    const startLoad = MEASURE ? readerTimingLoad() : undefined;
     const count = 4;
     const spacer = 'A paragraph keeps the next figure at a distinct distance.\n\n'.repeat(24);
     const text = `# Redraw order\n\n${Array.from({ length: count }, (_, i) => `## Figure ${i + 1}\n\n\`\`\`mermaid\nflowchart LR\n  A[Start ${i + 1}] --> B[Finish]\n\`\`\`\n\n${spacer}`).join('')}`;
@@ -688,14 +680,14 @@ describe('Docs hosted appearance', () => {
       expect(firstRun.starts, 'nearest-first redraw starts').toEqual(order);
       expect(firstRun.writes.map(({ figure }) => figure), 'nearest-first redraw writes').toEqual(order);
       expect(firstRun.writes.map(({ paint }) => paint), 'every drawing was repainted exactly once').toEqual(Array<string>(count).fill(firstPaint!));
-      if (start) {
-        const end = readerTimingLoad();
+      if (MEASURE) {
         const gapsMs = firstRun.writes.slice(1).map(({ at }, i) => at - firstRun.writes[i]!.at);
         const ceiling = 200;
         const worstMs = Math.max(...gapsMs);
-        const verdict = !end.quiet ? 'not measured: box not quiet' : worstMs > ceiling ? 'fail' : 'pass';
-        console.log(`AP-REDRAW-GAPS ${JSON.stringify({ startLoad: start.oneMinute, endLoad: end.oneMinute, gapsMs, worstMs, verdict })}`);
-        if (end.quiet) expect(worstMs, 'consecutive figure redraw gap in ms').toBeLessThanOrEqual(ceiling);
+        expect(gapsMs.every((ms) => Number.isFinite(ms) && ms >= 0), 'finite, ordered redraw times').toBe(true);
+        const { reading, assertCeiling } = readerCeilingReading(worstMs, ceiling, 'AP-M31');
+        console.log(`AP-REDRAW-GAPS ${JSON.stringify({ startLoad, endLoad: readerTimingLoad(), gapsMs, worstMs, ceiling, reading })}`);
+        if (assertCeiling) expect(worstMs, 'consecutive figure redraw gap in ms').toBeLessThanOrEqual(ceiling);
       }
 
       await setRedrawGate(frame, 'holdAfterNextWrite');

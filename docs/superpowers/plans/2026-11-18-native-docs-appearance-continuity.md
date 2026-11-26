@@ -502,7 +502,25 @@ Run 3639's block (8994 to 8996) is defined.
   - Retain every attempt in Results, with raw rows, one-minute load at start and end, and validity and verdict per row. Attempt 1 below is not a measurement in any row; its start and end loads were not captured. Identical BASE bytes gave medians from 113.0 to 203.4 ms and a sample of 844.8 ms, versus quiet medians around 80 ms. Hosted deltas reversed sign per skin between rounds. The coordinator observed one-minute load of 9 to 11 on a 16-core box during the run; a reference that moves by 90 ms cannot decide a 30 ms budget.
   - For paired open timing, start at most three further attempts, only with one-minute load below 4. The first valid result decides its row; a valid red stops and returns to the coordinator, without optimisation or retry of that row. If three further attempts leave any row unmeasured, stop and report it; the coordinator chooses where to measure next. If no exact per-skin quiet figure is identifiable in D-9017, refer the recorded evidence back before a new attempt.
   - For a wall-clock ceiling without a reference arm, the one-minute load must be below 4 at both the start and end of the row. Otherwise the row reads **not measured: box not quiet**, whether its raw time was above or below the ceiling. This applies to AP-5's stamp-to-write ceiling in both emulated modes. Keep the 100 ms ceiling and fixtures unchanged. The one diagnostic replay counts as the next attempt if valid; name every transition and record its host stamp, operation send and frame write times. A valid red stops that row; report the worst transition without optimisation.
-  - The ordinary AP-5 browser rows check matching writes in order, exactly one per applied transition and none at all for a no-op, under their existing liveness wait. Only `CCRC_MEASURE=1` asserts the 100 ms ceiling; this is the same switch as for the paired open budgets. Record verdicts and loads separately by emulated mode. AP-M25 and AP-M26 are ordinary-mode mutations; AP-M27 is a quiet measurement-mode mutation.
+  - The ordinary AP-5 browser rows check matching writes in order, exactly one per applied transition and none at all for a no-op, under their existing liveness wait. Only `CCRC_MEASURE=1` measures the 100 ms ceiling; this is the same switch as for the paired open budgets. Record verdicts and loads separately by emulated mode. AP-M25 and AP-M26 are ordinary-mode mutations.
+  - **Amendment (2026-11-25):** after four scheduled checks found no quiet window, start irrespective of one-minute load. The reason is directional: box load can add time, so an absolute reading at or below its ceiling still proves the budget, but an overrun does not by itself distinguish the reader from the box. The rules below replace the original start gate, absolute-row validity and attempt limits above; fixtures, sampling and budgets stay unchanged.
+    - **Absolute ceilings:** AP-5 light and dark at 100 ms and D-9054 at 200 ms pass at any load when the reading is at or below the ceiling. An overrun is red only from a quiet sitting, otherwise record **over, box busy** and leave the row unsettled. A sitting is quiet if its start and end one-minute loads are both below 4, or if the paired readings bracketing the ceiling block are both valid by the BASE median and IQR rule.
+    - **Paired open speed:** the BASE median (at most 101.75 ms Refined or 108.25 ms Instrument) and IQR (at most 20 ms) alone decide whether the row is valid. Log the one-minute load at both ends; it no longer gates the reading. The first valid result decides the row.
+    - **Delay controls:** AP-M27 and AP-M31 must fail on their own ceiling assertions at any load, not on startup, liveness or timeout. A control that completes without tripping its ceiling is a finding at any load. In a measurement run, `CCRC_READER_DELAY_CONTROL` names the exact control whose ceiling must assert without a quietness check.
+    - **Sittings:** take the first sitting in order: paired rows, ceiling rows and gap, delay controls, paired rows again. Take up to five more sittings, at least 45 minutes apart by timer, only for unsettled rows; do not watch the load between sittings. Record each sitting's readings, start and end loads, and rows settled in Results. Stop when all rows are settled. Report a valid red immediately without retry or optimisation. If six sittings leave rows unsettled, report those rows and the BASE figures and stop for a ruling on the next venue.
+  - **Second amendment (2026-11-25; paired rows only):** this rule changed after sitting 1, before any further reading. A quiet BASE arm does not show that the candidate arm escaped a load burst. Mode-only Instrument round 1 read 1.0168× and 1.1272× while the two eligible BASE medians differed by only 0.1 ms (95.0 and 95.1 ms). Both are readings, neither is a verdict. The first-valid-reading rule above is superseded. Both AP-5 ceilings, the four-figure gap and the two delay controls settled in sitting 1; do not take them again.
+    - Count a paired reading only if its BASE meets the same median and IQR bounds. Keep both medians from each counted reading. Load can add time to either arm, so with at least three counted readings take the lowest candidate median over the lowest BASE median, independently even if they come from different brackets. Compare those minima with the unchanged budget: hosted candidate ≤ BASE + 30 ms, mode-only candidate ≤ 1.10 × BASE. Fewer than three counted readings leave the row undecided. An aggregate red returns immediately with every reading, without retry or optimisation.
+    - Show every reading's own ratio and the median of the counted ratios. For the hosted diagnostic, express BASE + 30 ms as a ratio using the lowest counted BASE. If that median ratio exceeds the ceiling but the aggregate passes, mark the disagreement and leave the pass in place; the coordinator names the row to the reviewer.
+    - Keep the existing alternating BASE/candidate samples and reverse the lead in round two. The opt-in browser bracket reports each requested reading without asserting a timing budget on it; its fixture and size controls and the ordinary CI checks are unchanged. The cumulative rule has its own focused cases in `pwa/test/reader-paired-verdict.test.ts`.
+    - Use opening and closing paired brackets only in up to five more sittings, at least 45 minutes apart by timer. Take only rows still undecided, evaluate after each bracket, and stop when all eight are decided or an aggregate is red. After the sixth sitting, report any undecided rows and their readings and stop for the coordinator's decision on acceptance or a window.
+  - **Final form for paired rows (2026-11-25):** the quiet-BASE rule and lowest-of-three rule above were tried and withdrawn on the same day. In sitting 1, nearly identical eligible BASE medians (95.0 and 95.1 ms) accompanied ratios of 1.0168× and 1.1272× for the same comparison. In sitting 2, hosted BASE medians rose to 204.8–315.8 ms against the earlier quiet references of 81.4 and 86.6 ms, and a 90 s ready wait expired before a mode-only row completed. Sitting 2 is a recorded attempt, not a counted sitting or a timing red. None of the earlier paired readings counts under the final method. The two AP-5 ceilings, four-figure gap and both delay controls remain settled; do not retake them.
+    - Within each comparison take 20 adjacent BASE/candidate pairs in one Chromium session, flipping which arm leads each pair (`BASE, candidate, candidate, BASE, …` in round one; the inverse in round two). This retains the original sampling order and makes the pairing explicit. Compute each statistic on the pairs before taking its median; do not compare independent arm medians. Fix the count for all rows before taking the first sitting. Keep the fixture, open-to-ready witness and ordinary CI unchanged.
+    - Before the comparisons and again after them, take one BASE/BASE row in each skin using the same 20-pair sampler. All four control medians must be in [0.97, 1.03], inclusive. An out-of-range control excludes the entire sitting; neither load nor a BASE median or spread determines whether a completed reading counts. Record each pair and all four controls, without a timing budget assertion in the browser run. A ready timeout ends the sitting without a verdict; retain its completed pairs.
+    - Mode-only uses the median of candidate/BASE for each pair against 1.10×. Hosted uses the median of candidate minus BASE for each pair against 30 ms, with no ratio conversion. Record the BASE/BASE controls' median differences in milliseconds beside their ratios; only the ratios determine validity. A counted reading at or under its ceiling passes. A counted mode-only overrun is red. A counted hosted overrun is referred for a ruling, with its pairs, median BASE time and median per-pair ratio: a busy box stretching the measured time makes the 30 ms comparison stricter, not looser, so a pass stands but an overrun alone does not distinguish the reader from stretch. Return either kind of overrun immediately, without retry or optimisation.
+    - For the initial sequence, read one-minute load once immediately before a sitting. Above 16, defer by timer for 45 minutes without starting a browser; do not poll. Record endpoint loads for started sittings as observations. Take at most four sittings in this form, taking only undecided comparisons with all four controls. Stop when all eight rows are decided and report the table, or report remaining rows and control readings after four sittings for acceptance.
+  - **Close-out disposition (2026-11-25):** none of the four final-form sittings counted: two ended at the ready wait and two completed with BASE/BASE controls outside [0.97, 1.03]. All eight rows are undecided, not passed and not red. They no longer hold Wave C. At programme close-out, take the same eight rows and four controls in the same form, with the same verdict rules, before calling the programme done.
+    - Sitting 4 is evidence only and decides nothing. Hosted medians were 16.60–20.55 ms over BASE against the 30 ms budget; the absolute median differences of the BASE/BASE controls were at most 5.60 ms. Three mode-only ratios were 1.003–1.027×; Instrument round two was 1.112× against 1.10×, in a sitting whose Instrument closing control was 0.960×. The coordinator will flag that comparison to the reviewer.
+    - **While awaiting publication:** at most eight timer checks of one-minute load, at least 90 minutes apart. Start only at load ≤6, with at most four more sittings. This changes the start gate and cap only; use the same method and verdict rules. Record every further sitting in Results whether it counted or not. Stop at the first counted sitting and send the table; report any counted red immediately with its pairs, and refer any counted hosted overrun as above. Stop altogether on publication authority or after the eighth check; record the number of checks and sittings in Results. If none counted, the close-out disposition stands and no further sitting is owed by Wave C. Publication, the final dependency/lock/pin and push remain on hold pending separate authority.
 
 - **D-9053 (2026-11-25)**: hosted-Aa-row-floor-and-ceiling. Issued to run 3639 (wave C, wave 43). It departs from Task 6 Step 2's equality of rendered row height with the host probe. Under a fine pointer at default text size, the Aa row's minimum height must exactly equal the host's height; the rendered height may be between that floor and 2 px above it, inclusive. A row at larger text size may grow and is not compared. Shadow and radius comparisons remain exact.
   - Refined measured 52 px for the host probe, minimum and rendered height. Instrument measured 32 px for the host probe and minimum, and 33.0469 px rendered. The label has a computed 21.06 px line box and 6 px padding above and below, with no block border; in Instrument, those are the full row height to layout rounding (0.0131 px). The row itself adds no block padding or border and its container has no explicit row gap. The label's own content and padding exceed Instrument's floor by about 1.05 px. The library intentionally uses `min-height` so text size and zoom can grow the row.
@@ -1304,3 +1322,253 @@ Raw samples, in open order, milliseconds displayed to a tenth; the harness log r
 | Mode-only, Instrument, 1 | 221.6, 189.8, 102.1, 107.6, 94.4, 134.8, 94.4, 208.0, 288.7 | 97.3, 111.7, 109.7, 265.4, 194.8, 132.6, 295.5, 375.5, 123.3 |
 | Mode-only, Refined, 2 | 321.8, 135.9, 138.5, 110.5, 111.2, 114.2, 134.8, 190.9, 103.8 | 186.8, 138.5, 134.9, 89.8, 93.8, 153.3, 123.4, 109.7, 143.8 |
 | Mode-only, Instrument, 2 | 210.9, 130.4, 115.8, 98.4, 305.2, 270.6, 203.4, 102.8, 238.2 | 122.0, 142.4, 172.5, 237.2, 96.7, 192.9, 204.8, 499.6, 313.5 |
+
+#### D-9030 amended timing, sitting 1 (2026-11-25)
+
+The four scheduled pre-amendment checks (5.81, 4.19, 6.76 and 9.18) started no tests. Under the amendment, sitting 1 ran from 11:50:03 to 11:58:37 UTC, one-minute load 6.87 → 11.15. The opening paired bracket ran at 7.14 → 15.12 (exit 0), the ceiling block passed three selected browser cases, both delay controls hit their intended assertions, and the closing bracket ran at 8.08 → 10.98 (exit 1 on an eligible BASE comparison). Neither bracket was quiet overall. The ceiling passes stand independently of its load.
+
+| Measurement | Start → end load | Reading | Outcome |
+|---|---:|---|---|
+| AP-5 light | 13.72 → 13.88 | Worst 49.5999 ms (`skin refined → instrument`), ceiling 100 ms | Pass |
+| AP-5 dark | 13.88 → 17.63 | Worst 19.5999 ms (`skin refined → instrument`), ceiling 100 ms | Pass |
+| Four-figure redraw | 17.63 → 19.02 | Consecutive gaps 49.2, 23.4, 23.2 ms, ceiling 200 ms | Pass |
+| AP-M27 | 18.12 → 11.24 | Worst 213.3999 ms (`Follow system → phosphor`), ceiling 100 ms | Intended assertion red |
+| AP-M31 | 8.74 → 10.40 | Consecutive gaps 286.9, 22.3, 20.8 ms, ceiling 200 ms | Intended assertion red |
+
+AP-5 logged 41 named transitions in each mode and 41 in AP-M27. In the worst normal light transition, the host stamp, operation send and frame write read 1795607586633.1, 1795607586681.0 and 1795607586682.7 ms; in dark they read 1795607637375.4, 1795607637394.4 and 1795607637395.0 ms. Each control ran with the measured 4 096 process cap and 900 s browser deadline and exited 1 on its named ceiling assertion. AP-M27 delayed the real port send; AP-M31 delayed the second real redraw timer by 250 ms in a scratch producer build with matching manifests. Both inputs were restored and SHA-256 checked before the closing paired run.
+
+| Paired row | Opening BASE → candidate median (ms); BASE IQR (ms); verdict | Closing BASE → candidate median (ms); BASE IQR (ms); verdict |
+|---|---|---|
+| `hosted:refined:1` | 106.3 → 133.0; IQR 45.8; invalid | 181.6 → 211.2; IQR 23.1; invalid |
+| `hosted:instrument:1` | 127.3 → 144.5; IQR 11.4; invalid | 194.7 → 214.6; IQR 10.9; invalid |
+| `hosted:refined:2` | 135.4 → 144.2; IQR 27.3; invalid | 191.9 → 228.2; IQR 36.7; invalid |
+| `hosted:instrument:2` | 208.9 → 329.0; IQR 273.0; invalid | 176.1 → 204.5; IQR 61.2; invalid |
+| `mode-only:refined:1` | 218.0 → 140.4; IQR 40.9; invalid | 101.2 → 105.2; IQR 6.8; **pass** |
+| `mode-only:instrument:1` | 95.0 → 96.6; IQR 9.0; **pass** | 95.1 → 107.2; IQR 11.5; **red** |
+| `mode-only:refined:2` | 138.5 → 157.6; IQR 33.1; invalid | Not reached |
+| `mode-only:instrument:2` | 125.9 → 120.4; IQR 80.9; invalid | Not reached |
+
+Under the rule in force at the sitting, the opening Instrument round 1 reading was an eligible 1.0168× pass. The closing reading also had an eligible BASE, but its 1.1272× exceeded the 1.10× ceiling (107.20 vs 104.61 ms). Both readings were reported immediately for a ruling. Closing also recorded an eligible Refined round 1 pass under that rule. No further timing, optimisation or release action followed the stop before the rule changed.
+
+The second D-9030 amendment sets aside the historical pass/red labels above, not the readings. **No paired row is yet decided.** The three eligible readings carry forward: two for mode-only Instrument round 1 and one for mode-only Refined round 1. The five non-paired results above are final and will not be repeated. BASE and candidate samples already alternated in both brackets with the lead reversed in round two; no sampling-order change was needed.
+
+| Paired row | Opening ratio | Closing ratio | Counted readings | Median counted ratio | Lowest counted BASE → candidate (ms) |
+|---|---:|---:|---:|---:|---:|
+| `hosted:refined:1` | 1.2512× (excluded) | 1.1630× (excluded) | 0 | — | — |
+| `hosted:instrument:1` | 1.1351× (excluded) | 1.1022× (excluded) | 0 | — | — |
+| `hosted:refined:2` | 1.0650× (excluded) | 1.1892× (excluded) | 0 | — | — |
+| `hosted:instrument:2` | 1.5749× (excluded) | 1.1613× (excluded) | 0 | — | — |
+| `mode-only:refined:1` | 0.6440× (excluded) | 1.0395× | 1 | 1.0395× | 101.20 → 105.20 |
+| `mode-only:instrument:1` | 1.0168× | 1.1272× | 2 | 1.0720× | 95.00 → 96.60 |
+| `mode-only:refined:2` | 1.1379× (excluded) | — | 0 | — | — |
+| `mode-only:instrument:2` | 0.9563× (excluded) | — | 0 | — | — |
+
+Raw paired samples, in open order, in milliseconds to a tenth:
+
+| Bracket | Row | BASE samples | Candidate samples |
+|---|---|---|---|
+| Opening | `hosted:refined:1` | 88.2, 87.6, 106.3, 99.2, 89.1, 231.8, 134.8, 196.0, 134.9 | 118.5, 111.4, 115.5, 119.1, 133.0, 222.0, 176.9, 193.0, 207.5 |
+| Opening | `hosted:instrument:1` | 163.6, 130.9, 135.5, 125.9, 124.1, 153.3, 122.7, 127.3, 98.4 | 282.5, 143.8, 281.7, 144.5, 212.1, 139.1, 172.8, 129.1, 143.9 |
+| Opening | `hosted:refined:2` | 133.0, 139.2, 137.6, 137.4, 144.6, 135.4, 110.3, 94.0, 82.0 | 198.2, 190.7, 266.1, 113.2, 144.2, 100.7, 152.7, 92.7, 106.5 |
+| Opening | `hosted:instrument:2` | 85.5, 108.2, 90.0, 114.7, 208.9, 365.3, 499.7, 381.2, 400.0 | 104.2, 105.6, 101.1, 275.7, 426.3, 390.4, 622.2, 329.0, 374.7 |
+| Opening | `mode-only:refined:1` | 312.0, 218.0, 194.5, 223.1, 207.5, 235.4, 250.3, 103.4, 151.9 | 280.0, 210.2, 140.4, 138.2, 296.6, 211.5, 117.5, 124.8, 103.8 |
+| Opening | `mode-only:instrument:1` | 95.0, 94.4, 85.3, 97.1, 84.1, 96.2, 101.0, 125.5, 88.1 | 96.6, 84.5, 97.0, 88.1, 88.5, 100.6, 100.5, 96.6, 99.8 |
+| Opening | `mode-only:refined:2` | 120.1, 138.5, 153.2, 128.7, 99.3, 222.6, 146.7, 233.2, 113.4 | 98.9, 173.8, 139.8, 152.3, 157.6, 253.4, 133.5, 293.0, 175.1 |
+| Opening | `mode-only:instrument:2` | 115.3, 101.3, 125.9, 262.5, 142.3, 182.2, 88.8, 183.7, 90.6 | 119.4, 101.2, 114.2, 193.1, 114.7, 132.2, 120.4, 194.4, 167.4 |
+| Closing | `hosted:refined:1` | 208.8, 154.0, 181.8, 183.7, 161.4, 160.6, 155.8, 249.6, 181.6 | 239.8, 205.6, 271.8, 154.9, 211.2, 209.5, 262.3, 201.4, 220.6 |
+| Closing | `hosted:instrument:1` | 192.3, 202.0, 146.5, 224.2, 208.9, 202.7, 191.8, 187.3, 194.7 | 214.6, 211.9, 208.3, 249.6, 200.3, 252.0, 280.2, 228.4, 206.6 |
+| Closing | `hosted:refined:2` | 215.2, 228.3, 191.9, 140.5, 204.4, 190.4, 227.2, 165.8, 178.5 | 203.2, 228.2, 229.9, 220.5, 306.8, 197.5, 255.8, 309.3, 219.1 |
+| Closing | `hosted:instrument:2` | 154.2, 255.3, 176.1, 182.2, 191.9, 299.3, 130.7, 82.6, 109.7 | 204.5, 270.9, 218.3, 211.6, 195.8, 217.2, 135.3, 114.2, 115.2 |
+| Closing | `mode-only:refined:1` | 225.6, 98.5, 88.6, 105.3, 103.4, 98.5, 85.6, 109.5, 101.2 | 198.1, 207.0, 95.8, 120.0, 105.8, 102.0, 96.9, 105.2, 90.2 |
+| Closing | `mode-only:instrument:1` | 99.7, 106.3, 94.8, 92.5, 93.6, 126.6, 95.1, 94.9, 119.4 | 221.1, 111.8, 97.4, 127.8, 107.2, 102.5, 96.0, 94.1, 112.2 |
+
+#### D-9030 paired timing, sitting 2 (2026-11-25)
+
+The sitting ran from 12:45:13 to 12:48:58 UTC, one-minute load 10.46 → 37.66. The opening bracket logged 9.41 → 37.66 and exited 1: a 90 s wait for the ready witness expired during `mode-only:refined:1`, after all four hosted rows logged. The log does not identify which arm or sample timed out. No mode-only row produced medians. This was not a timing-budget assertion and does not show why the witness was absent. The closing bracket was not run; none of the five settled non-paired cases was repeated.
+
+| Paired row | BASE → candidate median (ms) | BASE IQR (ms) | Reading ratio |
+|---|---:|---:|---:|
+| `hosted:refined:1` | 245.00 → 286.80 | 81.20 | 1.1706× (excluded) |
+| `hosted:instrument:1` | 275.80 → 280.30 | 149.20 | 1.0163× (excluded) |
+| `hosted:refined:2` | 204.80 → 233.30 | 81.50 | 1.1392× (excluded) |
+| `hosted:instrument:2` | 315.80 → 334.70 | 89.30 | 1.0598× (excluded) |
+
+All four recorded BASE arms missed both bounds. No counted median or ratio changed, and **all eight rows remain undecided**. Raw samples from the four completed rows, in open order, in milliseconds to a tenth:
+
+| Paired row | BASE samples | Candidate samples |
+|---|---|---|
+| `hosted:refined:1` | 245.0, 207.0, 332.2, 120.6, 290.8, 266.7, 204.9, 235.9, 288.2 | 479.4, 317.9, 301.7, 265.0, 266.6, 286.8, 218.2, 221.9, 314.5 |
+| `hosted:instrument:1` | 275.8, 401.3, 311.8, 297.5, 282.3, 112.4, 204.5, 148.3, 128.1 | 396.4, 275.3, 280.3, 514.3, 236.1, 155.3, 195.6, 290.1, 293.0 |
+| `hosted:refined:2` | 224.9, 244.0, 162.5, 119.0, 204.8, 317.4, 194.0, 93.3, 291.3 | 303.6, 233.4, 233.3, 106.5, 129.4, 315.2, 188.7, 235.2, 197.5 |
+| `hosted:instrument:2` | 315.8, 319.7, 297.9, 393.6, 244.2, 340.0, 211.0, 250.7, 480.6 | 384.6, 294.3, 399.8, 227.4, 334.7, 287.4, 334.7, 491.3, 308.2 |
+
+#### D-9030 final method, sitting 1 of at most 4 (2026-11-25)
+
+The start check was 12.53 at 13:08:54 UTC; the sitting ended at 13:14:24 UTC at 11.68. The browser bracket ran at 11.76 → 11.68 and exited 0 with all 12 rows, 20 pairs apiece. The BASE/BASE control excluded the sitting: three of the four control ratios were outside [0.97, 1.03]. **All eight comparisons remain undecided.** In particular, the below-budget figures in the table are not passes. All decisions used the full-precision receipt, not the displayed rounding.
+
+| Row | Median BASE (ms) | Median paired difference (ms) | Median paired ratio | Outcome |
+|---|---:|---:|---:|---|
+| `control:opening:refined` | 288.90 | −47.05 | 0.845492× | Outside |
+| `control:opening:instrument` | 191.80 | +10.10 | 1.055437× | Outside |
+| `hosted:refined:1` | 168.80 | −7.65 | 0.954181× | Not counted |
+| `hosted:instrument:1` | 96.35 | +28.80 | 1.344848× | Not counted |
+| `hosted:refined:2` | 86.90 | +14.05 | 1.157013× | Not counted |
+| `hosted:instrument:2` | 113.45 | +14.85 | 1.146395× | Not counted |
+| `mode-only:refined:1` | 104.70 | +1.65 | 1.016526× | Not counted |
+| `mode-only:instrument:1` | 91.40 | −2.05 | 0.982281× | Not counted |
+| `mode-only:refined:2` | 91.00 | −0.40 | 0.995056× | Not counted |
+| `mode-only:instrument:2` | 99.35 | −0.25 | 1.001976× | Not counted |
+| `control:closing:refined` | 147.15 | +2.00 | 1.015249× | Within |
+| `control:closing:instrument` | 161.45 | −5.60 | 0.969605× | Outside |
+
+Raw pairs are shown in sampling order, always `BASE/second arm` in milliseconds to a tenth, regardless of which arm led:
+
+| Row | Open-to-ready pairs |
+|---|---|
+| `control:opening:refined` | 202.0/203.6, 399.0/150.6, 290.8/215.9, 318.5/291.5, 220.9/281.4, 143.4/199.6, 318.2/303.4, 224.7/272.0, 317.0/126.1, 255.5/188.4, 230.3/210.5, 197.9/226.9, 186.0/197.1, 396.0/300.4, 317.5/211.2, 291.3/131.8, 402.6/304.9, 277.1/294.2, 393.2/305.5, 287.0/203.2 |
+| `control:opening:instrument` | 230.2/352.0, 169.7/198.0, 131.9/219.2, 225.2/93.8, 133.6/138.8, 184.2/134.3, 108.3/104.2, 153.5/199.0, 176.1/206.8, 155.2/135.5, 244.5/301.2, 143.8/208.5, 154.7/131.2, 249.9/189.9, 199.4/287.7, 347.8/308.2, 218.2/233.9, 305.3/170.3, 366.2/309.0, 201.9/216.9 |
+| `hosted:refined:1` | 144.9/254.5, 283.9/170.3, 438.8/260.1, 178.5/208.9, 288.6/215.8, 114.5/225.2, 171.2/119.9, 196.6/282.9, 286.6/172.5, 175.7/257.5, 218.3/174.5, 119.8/278.4, 166.4/150.6, 150.9/151.4, 82.5/125.2, 194.2/100.2, 135.7/214.1, 121.5/156.0, 135.2/100.3, 127.1/103.5 |
+| `hosted:instrument:1` | 118.1/255.2, 88.4/151.1, 90.6/145.7, 201.8/200.4, 180.9/248.5, 163.8/249.6, 84.5/107.0, 146.7/130.9, 150.4/104.2, 85.7/137.3, 89.4/108.0, 115.0/157.8, 133.4/145.1, 100.1/143.9, 82.7/118.7, 92.7/109.0, 83.1/108.3, 100.0/102.8, 82.8/115.2, 75.9/100.0 |
+| `hosted:refined:2` | 83.3/100.2, 81.2/92.5, 86.4/112.5, 80.3/101.8, 93.9/103.1, 89.1/104.0, 97.9/96.0, 80.0/101.9, 89.6/97.2, 83.3/94.1, 107.7/94.5, 87.4/92.8, 81.7/96.5, 90.6/103.9, 82.4/102.6, 83.9/94.0, 83.7/93.6, 95.8/113.6, 92.1/154.8, 105.1/149.5 |
+| `hosted:instrument:2` | 134.2/144.8, 102.6/135.7, 141.0/118.1, 102.1/115.5, 112.4/117.9, 109.7/118.0, 100.9/117.2, 112.2/105.3, 94.1/128.5, 87.8/174.4, 135.6/135.7, 146.1/155.2, 114.5/193.3, 128.7/179.7, 128.8/156.4, 163.7/156.7, 91.3/111.5, 126.3/131.5, 96.4/128.8, 115.2/136.8 |
+| `mode-only:refined:1` | 110.7/122.2, 144.4/112.7, 108.1/93.6, 134.7/175.3, 128.6/133.8, 95.4/132.6, 79.0/96.8, 84.9/100.9, 102.9/84.2, 106.5/100.3, 100.4/102.3, 86.6/100.9, 90.6/85.1, 119.0/84.4, 117.0/130.4, 93.7/88.3, 107.8/90.7, 107.4/92.2, 84.9/89.2, 99.1/100.5 |
+| `mode-only:instrument:1` | 85.4/97.1, 79.1/96.8, 90.0/102.3, 134.0/99.9, 120.1/90.8, 110.3/85.9, 111.9/107.2, 145.0/97.2, 120.7/98.4, 92.5/93.5, 89.7/90.6, 85.5/86.4, 91.4/92.0, 125.1/86.4, 95.5/85.0, 82.5/85.5, 85.9/87.6, 91.4/84.4, 78.0/101.8, 89.9/80.4 |
+| `mode-only:refined:2` | 91.1/86.1, 83.3/87.5, 83.4/88.5, 96.6/106.1, 92.3/92.2, 90.9/82.9, 95.7/93.9, 104.2/88.1, 81.0/82.0, 78.7/87.5, 91.4/86.9, 87.4/88.9, 79.5/78.8, 92.1/95.9, 85.5/85.6, 96.3/83.5, 77.3/91.1, 94.7/85.0, 92.8/84.1, 87.1/80.8 |
+| `mode-only:instrument:2` | 82.2/78.4, 78.2/91.0, 82.9/87.7, 88.3/84.7, 88.8/92.9, 99.9/82.3, 82.6/83.8, 75.6/95.6, 98.8/86.0, 116.1/87.7, 93.3/96.7, 91.5/94.4, 122.5/124.0, 195.5/152.5, 205.0/203.3, 195.3/211.7, 100.2/195.5, 141.2/116.8, 195.1/154.0, 207.3/197.2 |
+| `control:closing:refined` | 174.5/182.6, 159.9/169.4, 124.7/126.6, 137.6/139.7, 147.8/174.3, 176.5/150.8, 141.9/130.4, 90.7/121.7, 111.6/126.5, 179.4/107.3, 130.1/129.3, 146.5/222.5, 154.0/149.8, 150.9/145.1, 171.6/142.2, 115.4/112.6, 231.7/413.3, 158.9/131.6, 130.1/137.5, 137.7/520.7 |
+| `control:closing:instrument` | 709.6/289.1, 292.9/220.2, 110.7/1618.9, 162.1/127.8, 118.7/147.5, 157.2/119.6, 136.2/142.1, 123.7/494.9, 297.3/294.5, 309.1/494.9, 706.0/288.9, 142.2/226.7, 213.7/197.4, 213.7/206.2, 225.9/203.5, 186.3/195.9, 119.7/145.9, 142.6/132.5, 144.0/140.3, 160.8/120.1 |
+
+#### D-9030 final method, sitting 2 of at most 4 (2026-11-25)
+
+The start check was 8.99 at 14:01:27 UTC; the sitting ended at 14:04:52 UTC at 14.56. The browser bracket ran at 9.44 → 14.56 and exited 1. The candidate arm of pair 9 in `hosted:instrument:1` hit the 90 s ready-witness timeout after eight complete pairs. Both opening controls were within range, but neither closing control ran. The timeout excludes this sitting: **all eight comparisons remain undecided**. The completed hosted Refined row is evidence only; the load observations do not establish the cause of the timeout.
+
+| Completed row | Median BASE (ms) | Median paired difference (ms) | Median paired ratio | Outcome |
+|---|---:|---:|---:|---|
+| `control:opening:refined` | 96.75 | +1.10 | 1.011476× | Within |
+| `control:opening:instrument` | 89.05 | +1.15 | 1.013338× | Within |
+| `hosted:refined:1` | 116.00 | +24.05 | 1.165747× | Not counted |
+
+Completed pairs, in sampling order (`BASE/second arm`, milliseconds to a tenth). The interrupted row has no 20-pair statistic.
+
+| Row | Open-to-ready pairs |
+|---|---|
+| `control:opening:refined` | 92.9/87.9, 96.3/99.6, 97.5/105.6, 83.4/142.5, 116.1/98.9, 144.7/86.7, 108.0/122.6, 85.5/92.9, 86.7/130.2, 84.3/81.4, 87.4/81.0, 97.2/96.1, 112.8/111.1, 103.3/127.8, 127.9/103.6, 264.3/95.5, 182.1/146.9, 90.0/102.4, 87.7/104.0, 84.0/94.8 |
+| `control:opening:instrument` | 115.1/81.1, 94.9/87.6, 86.1/88.3, 91.5/94.2, 105.1/78.3, 89.0/89.1, 130.8/109.6, 88.9/98.5, 79.6/122.0, 76.9/79.2, 181.6/96.3, 81.7/92.4, 92.6/90.9, 75.1/116.2, 82.1/79.7, 77.0/81.0, 81.6/84.3, 104.1/111.3, 89.1/78.6, 91.1/81.7 |
+| `hosted:refined:1` | 113.5/93.7, 95.6/104.6, 106.8/134.3, 108.1/194.7, 82.2/144.6, 108.4/120.6, 118.5/135.9, 101.3/204.7, 137.9/133.2, 89.8/175.9, 94.3/217.9, 128.0/94.2, 107.9/204.5, 212.2/155.1, 279.5/301.6, 140.8/166.8, 311.8/198.7, 269.3/174.4, 137.2/413.9, 148.2/198.9 |
+| `hosted:instrument:1` | 514.9/418.4, 216.7/572.5, 299.9/494.4, 397.3/6785.1, 393.5/587.0, 372.4/487.8, 494.9/688.7, 687.2/499.5 |
+
+#### D-9030 final method, sitting 3 of at most 4 (2026-11-25)
+
+The start check was 9.59 at 14:52:41 UTC; the sitting ended at 14:56:15 UTC at 12.71. The browser bracket ran at 8.29 → 12.71 and exited 1. The candidate arm of pair 5 in `mode-only:refined:1` hit the 90 s ready-witness timeout after four complete pairs. Both opening controls were within range, but neither closing control ran. The timeout excludes this sitting: **all eight comparisons remain undecided**. All four hosted rows completed, but their below-budget figures are evidence only, not passes. The cause of the timeout was not established.
+
+| Completed row | Median BASE (ms) | Median paired difference (ms) | Median paired ratio | Outcome |
+|---|---:|---:|---:|---|
+| `control:opening:refined` | 95.65 | −0.50 | 1.000598× | Within |
+| `control:opening:instrument` | 80.05 | +1.00 | 1.011291× | Within |
+| `hosted:refined:1` | 82.80 | +15.50 | 1.176311× | Not counted |
+| `hosted:instrument:1` | 85.30 | +15.85 | 1.171510× | Not counted |
+| `hosted:refined:2` | 90.70 | +14.20 | 1.170265× | Not counted |
+| `hosted:instrument:2` | 101.50 | +15.00 | 1.133921× | Not counted |
+
+Completed pairs in sampling order (`BASE/second arm`, milliseconds to a tenth). The interrupted row has no 20-pair statistic.
+
+| Row | Open-to-ready pairs |
+|---|---|
+| `control:opening:refined` | 122.8/129.0, 114.2/120.4, 116.2/112.8, 79.6/117.1, 132.7/122.7, 94.9/114.5, 97.6/109.2, 115.2/97.2, 106.9/93.0, 96.4/149.3, 141.9/89.7, 78.8/81.2, 89.3/85.1, 92.3/78.8, 88.9/103.7, 91.9/77.8, 73.3/104.0, 75.7/86.6, 93.7/89.2, 98.9/81.1 |
+| `control:opening:instrument` | 76.6/90.8, 78.8/77.3, 79.9/76.3, 79.3/84.5, 79.1/75.7, 79.4/91.5, 76.7/85.8, 86.8/79.0, 78.6/85.8, 74.3/81.1, 116.0/93.4, 85.5/78.8, 86.0/81.4, 84.3/80.1, 84.1/87.6, 81.7/79.6, 76.7/88.5, 80.2/85.4, 107.3/79.6, 81.3/88.0 |
+| `hosted:refined:1` | 109.9/100.1, 80.4/99.3, 81.4/102.9, 82.7/97.2, 77.0/105.0, 86.9/92.4, 99.2/101.8, 85.4/109.7, 87.8/96.7, 81.7/94.1, 79.8/97.2, 82.9/104.1, 86.3/101.6, 102.2/120.0, 120.4/100.8, 82.1/102.9, 78.3/94.0, 85.3/94.9, 81.2/94.9, 76.1/105.4 |
+| `hosted:instrument:1` | 89.1/106.2, 113.6/130.4, 85.1/95.0, 80.0/105.0, 85.9/92.5, 84.8/103.7, 78.6/97.0, 100.4/127.2, 108.3/102.9, 80.0/93.5, 91.6/100.7, 87.1/89.7, 83.5/94.0, 79.5/109.1, 133.2/104.0, 81.0/106.1, 80.1/103.5, 76.1/107.8, 85.5/100.4, 119.7/95.5 |
+| `hosted:refined:2` | 90.3/105.5, 88.3/94.2, 105.2/106.9, 97.5/174.4, 80.1/106.3, 108.8/121.6, 88.2/103.8, 185.7/101.4, 91.1/99.8, 92.3/126.8, 81.9/101.8, 82.6/182.9, 96.6/150.9, 85.5/95.9, 81.5/95.9, 115.6/95.2, 82.0/143.8, 106.8/98.9, 94.2/99.1, 81.3/95.3 |
+| `hosted:instrument:2` | 167.9/101.0, 85.3/120.5, 100.0/96.9, 79.9/113.3, 84.7/93.9, 94.4/97.2, 103.1/157.1, 123.3/107.3, 114.4/100.8, 83.6/121.4, 103.0/119.4, 84.5/160.8, 75.9/114.2, 87.0/147.1, 91.7/183.2, 128.0/141.6, 146.7/114.9, 121.8/216.8, 163.8/146.7, 164.0/122.2 |
+| `mode-only:refined:1` | 84.1/103.3, 104.4/111.9, 92.1/80.7, 138.1/187.5 |
+
+#### D-9030 final method, sitting 4 of 4 (2026-11-25)
+
+The start check was 8.10 at 15:43:25 UTC; the sitting ended at 15:47:10 UTC at 14.87. The browser bracket ran at 9.03 → 14.87 and completed all 240 pairs (exit 0). Three of four BASE/BASE controls were outside the inclusive [0.97, 1.03] band. The opening Instrument control was below the band at 0.9679959724328056×; rounding to two decimal places would hide the miss. The four hosted figures were below 30 ms, and the mode-only Instrument round-two figure was above 1.10×, but neither is a timing verdict without valid controls.
+
+**All eight comparisons remained undecided at the initial four-sitting cap.** Sittings 1 and 4 completed with out-of-band controls; sittings 2 and 3 ended at the ready wait without closing controls. The separate live-follow and redraw results are unchanged.
+
+| Completed row | Median BASE (ms) | Median paired difference (ms) | Median paired ratio | Outcome |
+|---|---:|---:|---:|---|
+| `control:opening:refined` | 92.20 | +1.85 | 1.019391× | Within |
+| `control:opening:instrument` | 101.65 | −2.80 | 0.967996× | Outside |
+| `hosted:refined:1` | 100.65 | +17.70 | 1.183288× | Not counted |
+| `hosted:instrument:1` | 96.35 | +20.55 | 1.220365× | Not counted |
+| `hosted:refined:2` | 86.20 | +17.75 | 1.205767× | Not counted |
+| `hosted:instrument:2` | 84.40 | +16.60 | 1.204474× | Not counted |
+| `mode-only:refined:1` | 87.20 | +0.25 | 1.002860× | Not counted |
+| `mode-only:instrument:1` | 80.30 | +0.25 | 1.003176× | Not counted |
+| `mode-only:refined:2` | 82.25 | +2.20 | 1.026554× | Not counted |
+| `mode-only:instrument:2` | 84.45 | +8.95 | 1.111888× | Not counted |
+| `control:closing:refined` | 83.30 | +5.60 | 1.067639× | Outside |
+| `control:closing:instrument` | 87.35 | −3.30 | 0.960134× | Outside |
+
+Completed pairs in sampling order (`BASE/second arm`, milliseconds to a tenth).
+
+| Row | Open-to-ready pairs |
+|---|---|
+| `control:opening:refined` | 98.8/100.6, 99.1/85.3, 83.5/170.1, 83.6/89.6, 89.3/86.8, 83.3/80.5, 83.9/93.0, 85.2/91.6, 91.3/90.0, 92.9/90.2, 89.2/144.5, 123.6/133.9, 135.9/135.8, 145.3/111.7, 92.0/116.5, 92.4/94.3, 89.1/100.6, 120.4/101.9, 106.9/121.0, 150.9/112.0 |
+| `control:opening:instrument` | 127.4/107.4, 150.6/138.4, 120.5/95.6, 157.1/129.5, 147.5/201.6, 104.6/324.2, 98.7/187.4, 127.9/115.8, 170.7/157.9, 114.4/163.1, 88.1/80.7, 98.0/79.1, 123.7/81.3, 87.8/83.1, 85.4/87.5, 85.9/85.0, 81.3/84.0, 82.0/81.8, 83.6/93.4, 83.5/99.0 |
+| `hosted:refined:1` | 92.0/110.0, 87.9/107.5, 92.5/103.3, 76.6/99.8, 100.0/121.9, 101.3/137.9, 88.6/110.5, 112.2/116.2, 99.4/126.6, 136.8/106.8, 111.5/116.0, 84.9/130.3, 271.0/132.7, 94.8/100.5, 104.2/198.6, 110.5/108.2, 101.8/119.2, 107.3/109.5, 86.1/111.3, 108.3/116.8 |
+| `hosted:instrument:1` | 106.8/112.3, 83.4/102.0, 112.5/107.2, 78.2/117.6, 88.9/128.0, 119.7/113.4, 106.2/113.1, 90.8/126.0, 109.2/129.4, 82.4/173.7, 123.0/100.9, 79.2/91.6, 104.0/166.6, 96.0/116.9, 96.7/112.4, 95.0/113.4, 92.7/120.6, 108.1/184.2, 98.1/186.5, 79.2/136.8 |
+| `hosted:refined:2` | 89.6/192.6, 99.2/126.6, 100.0/106.5, 121.0/137.7, 86.0/102.8, 82.8/104.2, 94.3/103.3, 75.8/106.6, 126.1/102.6, 92.5/102.8, 90.3/98.9, 81.8/108.5, 83.8/113.9, 79.1/132.7, 79.8/100.6, 81.4/96.0, 86.5/105.2, 86.4/98.5, 82.2/142.5, 79.6/93.5 |
+| `hosted:instrument:2` | 87.7/102.8, 77.6/107.2, 84.7/100.2, 95.5/97.0, 79.3/99.9, 114.7/152.3, 81.8/119.9, 90.5/99.6, 74.9/116.1, 84.1/101.2, 102.5/101.2, 87.1/93.5, 77.8/98.4, 101.2/108.8, 82.9/100.8, 78.3/94.4, 90.8/126.2, 81.9/113.0, 85.3/97.2, 80.5/96.5 |
+| `mode-only:refined:1` | 100.8/78.6, 126.4/79.4, 87.0/77.3, 85.1/92.6, 82.1/75.3, 97.9/81.5, 77.9/93.8, 81.2/79.7, 89.5/78.6, 87.4/87.9, 83.5/83.5, 74.1/83.9, 95.5/90.2, 84.4/88.5, 85.1/87.5, 84.0/103.2, 123.8/135.0, 127.7/120.8, 98.7/118.0, 94.0/103.7 |
+| `mode-only:instrument:1` | 78.5/78.4, 80.9/81.8, 83.2/77.1, 84.3/80.3, 99.8/82.4, 78.3/89.2, 78.1/78.7, 86.4/80.7, 81.9/130.9, 80.2/79.3, 79.9/80.6, 80.8/82.3, 82.9/78.1, 126.8/78.6, 78.7/79.3, 80.0/78.0, 80.4/102.0, 77.7/84.6, 75.4/87.2, 78.6/78.5 |
+| `mode-only:refined:2` | 75.6/83.1, 79.7/89.2, 80.3/82.3, 80.5/91.8, 82.1/85.1, 89.2/87.7, 87.4/82.7, 81.2/104.5, 82.8/79.0, 83.6/79.2, 198.7/85.8, 97.9/84.9, 80.3/85.3, 85.1/87.5, 82.1/86.4, 82.7/73.9, 86.9/88.3, 80.3/98.1, 80.2/83.9, 82.4/82.9 |
+| `mode-only:instrument:2` | 78.5/87.9, 89.7/87.9, 76.9/84.9, 85.6/115.6, 101.6/89.3, 101.1/79.7, 83.5/90.2, 92.9/122.3, 78.5/102.8, 82.7/83.0, 85.9/97.1, 74.5/117.0, 82.1/137.8, 85.5/110.4, 82.0/106.9, 75.7/118.1, 119.6/128.1, 85.4/77.6, 101.5/85.6, 82.3/75.2 |
+| `control:closing:refined` | 83.1/85.7, 75.3/91.8, 117.6/119.2, 79.7/87.5, 164.5/106.0, 169.6/140.0, 82.0/91.1, 92.8/78.4, 83.5/89.8, 79.0/113.2, 80.4/137.0, 78.7/86.0, 82.2/137.9, 84.7/83.2, 130.3/88.3, 82.4/97.2, 81.9/86.8, 154.3/79.4, 125.1/89.5, 106.9/132.9 |
+| `control:closing:instrument` | 148.0/207.1, 88.5/88.2, 114.9/107.3, 218.9/170.6, 83.7/123.6, 86.2/101.7, 79.3/130.9, 83.0/75.3, 84.3/76.5, 78.3/83.0, 90.0/76.2, 103.9/81.7, 85.8/100.5, 72.9/74.8, 89.5/93.7, 126.7/76.4, 83.3/78.7, 137.1/88.6, 81.6/79.6, 126.3/78.8 |
+
+#### D-9030 close-out disposition (2026-11-25)
+
+None of the four final-form sittings counted: two ended at the ready wait and two completed with controls outside [0.97, 1.03]. **All eight comparisons are undecided, not passed and not red.** They no longer hold Wave C and carry to programme acceptance. At close-out, take the same eight rows and four BASE/BASE controls again in the same form and apply the same verdict rules before calling the programme done.
+
+Sitting 4 is evidence only and decides nothing. The four hosted rows were 16.60–20.55 ms over BASE against the 30 ms budget, while the BASE/BASE controls' median paired differences were at most 5.60 ms in absolute value. Three mode-only ratios were 1.003–1.027×; Instrument round two was 1.112× against 1.10×, in a sitting whose Instrument closing control was 0.960×. The coordinator will flag that comparison to the reviewer.
+
+While waiting for publication, D-9030 permits at most eight timer checks at least 90 minutes apart and at most four more sittings, with a preflight of 6 or under. The sampling and verdict rules are unchanged, as is the publication and final-pin hold.
+
+#### D-9030 publication wait, check 1 of 8 and optional sitting 1 of 4 (2026-11-25)
+
+The one-minute preflight was 5.27 at 17:22:06 UTC. The sitting started at 17:22:18 UTC, with an opening bracket load of 5.04, and ended at 17:25:15 UTC at a process endpoint load of 16.35. The test runner exited 1 after its worker received `SIGKILL`. There was no ready-timeout record, closing bracket load, or closing control. The last completed comparison was mode-only Refined round one; the interrupted pair and arm, and the cause of the signal, were not established. This uses one optional sitting but is not counted. **All eight comparisons remain undecided.**
+
+| Completed row | Median BASE (ms) | Median paired difference (ms) | Median paired ratio | Outcome |
+|---|---:|---:|---:|---|
+| `control:opening:refined` | 79.70 | +0.90 | 1.011513× | Within |
+| `control:opening:instrument` | 83.25 | −0.55 | 0.993007× | Within |
+| `hosted:refined:1` | 80.90 | +17.55 | 1.224925× | Not counted |
+| `hosted:instrument:1` | 81.55 | +16.20 | 1.214072× | Not counted |
+| `hosted:refined:2` | 86.00 | +14.30 | 1.162276× | Not counted |
+| `hosted:instrument:2` | 94.55 | +16.30 | 1.186129× | Not counted |
+| `mode-only:refined:1` | 139.40 | −5.75 | 0.932133× | Not counted |
+
+Completed pairs in sampling order (`BASE/second arm`, milliseconds to a tenth).
+
+| Row | Open-to-ready pairs |
+|---|---|
+| `control:opening:refined` | 83.6/85.1, 76.0/80.1, 78.7/79.1, 79.5/79.3, 79.9/78.3, 93.6/83.2, 76.7/74.1, 77.3/74.1, 74.1/84.3, 77.3/80.0, 81.1/75.0, 74.9/77.0, 75.4/76.8, 81.3/77.4, 80.2/72.8, 85.7/89.1, 93.6/92.4, 83.1/106.4, 80.2/83.8, 78.3/94.4 |
+| `control:opening:instrument` | 87.3/78.3, 78.7/78.2, 79.5/90.4, 80.3/78.8, 83.0/78.7, 79.4/85.1, 83.6/78.5, 87.7/79.7, 98.6/83.0, 76.5/80.2, 84.2/78.0, 83.5/81.8, 87.5/90.5, 76.3/81.5, 78.1/80.3, 78.6/78.0, 83.7/104.5, 78.8/88.1, 97.6/90.6, 92.3/102.3 |
+| `hosted:refined:1` | 86.2/106.3, 80.4/98.3, 95.9/104.0, 83.1/95.6, 76.7/95.3, 86.6/99.9, 82.2/99.0, 76.5/95.0, 77.1/97.1, 74.2/95.4, 78.7/93.9, 80.6/91.2, 81.2/101.9, 81.4/101.7, 87.6/93.5, 74.4/93.0, 82.3/90.8, 73.8/92.4, 89.4/88.6, 75.7/92.9 |
+| `hosted:instrument:1` | 74.8/89.3, 90.8/90.0, 75.3/98.3, 74.5/96.8, 77.2/98.7, 84.2/89.7, 73.0/92.7, 86.4/96.4, 78.2/88.7, 76.4/94.3, 88.5/124.9, 123.8/93.9, 96.2/105.9, 89.3/113.6, 81.4/95.8, 106.5/103.6, 81.7/102.5, 81.2/109.5, 85.2/98.9, 80.5/99.6 |
+| `hosted:refined:2` | 82.7/94.8, 84.4/98.3, 85.7/99.4, 94.3/109.0, 79.2/96.6, 86.0/107.5, 77.5/92.8, 117.6/99.4, 91.8/100.7, 92.6/112.6, 83.9/101.8, 96.7/109.2, 82.2/104.4, 79.9/104.5, 89.6/99.1, 87.5/103.0, 91.6/95.4, 86.0/96.8, 83.9/109.2, 89.5/102.8 |
+| `hosted:instrument:2` | 84.9/116.8, 93.0/102.5, 96.4/108.7, 89.1/127.2, 82.8/113.8, 89.4/100.1, 109.0/109.2, 97.6/99.2, 102.0/110.5, 89.1/121.7, 83.8/99.3, 91.3/108.4, 96.8/111.7, 93.3/101.5, 91.7/103.2, 142.4/292.9, 95.8/116.7, 210.8/427.5, 222.8/401.3, 130.6/390.2 |
+| `mode-only:refined:1` | 210.7/220.5, 155.6/300.6, 198.3/164.1, 226.2/99.8, 193.1/480.7, 176.8/225.8, 176.6/120.8, 117.0/88.8, 103.4/90.1, 100.5/114.6, 117.8/86.5, 84.0/84.1, 81.7/76.6, 78.7/79.3, 87.3/80.9, 130.6/93.2, 299.2/138.9, 148.2/184.6, 201.2/176.9, 85.7/130.5 |
+
+#### D-9030 publication wait, final optional totals (2026-11-26)
+
+Eight one-minute load checks yielded 5.27, 14.90, 8.75, 28.27, 13.09, 11.20, 22.20 and 8.75, in order. The final check at 04:05:31 UTC was above 6, so no browser started. Only the first check qualified. Its interrupted run was the only optional sitting and did not count: **eight checks, one sitting, zero counted**. No further optional check or sitting is planned. All eight comparisons remain undecided, not passed and not red; they carry to programme acceptance under the unchanged method and no longer hold Wave C. The separate publication and final-pin hold remains.
+
+#### Wave C local main absorption (2026-11-26)
+
+- Merged `86a8c90390fda4cc388c07bb5b3342adf610a1bc` once, locally, at `5081e50dc0fa4335a5aecf9fc2fe83b1c4d92b67`. The only conflict was the rich-reader spec's M8.10 row: the resolution keeps main's review-page guard clause and Wave C's package rename. Main's PDF dependency (`pdfjs-dist` 6.5.438) stays intact; the committed reader pin is still `@synapsium-labs/docserver` 1.1.0. The corrected `@synapsium-labs/pinax-lib` 1.2.0 candidate remains installed unsaved.
+- The new offered-command guard reproduced one failure (five other checks passed): Wave C's static Aa label was read as a CLI verb. Ask 594 fixes those words. A separate test-only commit, `2baae355cdcedbef12cfbe4d7b016d80faab5653`, adds the documented allowance for that sentence, not for the word everywhere. The guard then passed all six checks. No label or scan rule changed.
+- The first preflight measured a one-minute load of 18.90; no browser started. At the next wake, both AP-3 cases passed in one isolated built-PWA run (light over stale dark and Phosphor over stale light), with one-minute load 5.52 → 4.51. The first-ready mismatch did not reproduce; its cause is unestablished.
+- AP-1/2 passed its complete palette and skin matrix in a separate one-worker run, with one-minute load 4.31 → 15.17. The test exited 0 without a ready timeout; the wrapper separately reported five kills in the shared test slice during the run, not which processes were killed. The case passed even as load rose, but this is not an unloaded bracket and does not establish why the earlier timeout happened. No AP code, assertion or timeout changed.
+- The first typecheck and scoped unit attempts did not start: both foreground waits expired in the test queue. On the next wake the one-minute load was 20.91, so no browser was started. The test wrapper's remote route refused the combined command's multiline argument and the wrapper itself fell back to the local queue. The slot opened after 493 seconds. The PWA typecheck exited 0; the scoped unit run printed the five expected held-pin failures but was cut off by the outer deadline (exit 124) before it printed a suite summary. That invocation produced no scoped-suite verdict. After the coordinator cleared the refusal, a separate invocation with the package runner named directly finished at `2baae355cdcedbef12cfbe4d7b016d80faab5653`: **2,327 passed, five failed** across eight files, with no type errors (exit 1). Only the five deliberately held checks in `reader-pin` failed: manifest, lock, installed version, asset manifest version and pinned hashes. No paired timing was retaken.
+
+#### Published 1.2.0: final pin verification (2026-11-26)
+
+- The final local merge took `595d9c5c0f9e1b4721c184a50bb65425678865de` at `a58175327b3274327e3b95cd143130e7e352aa74`. The sentence allowance remains intact. Tag `v1.2.0` is the annotated object `4f47315a512f5438b686ed67f6494181f1ca5dcf` on the corrected producer commit `59d4d18a98e14b9edc6fbe9f64d3d39793347502`. GitHub did not recognize the SSH key. Against the producer's release signers file on `main`, SSH verification exited 0: `Good "git" signature for release-signer with ED25519 key SHA256:+t7W33ECSXbsX0w4muCbYQ5o1Xvp23h9VMJHmnBv8nU`.
+- Registry SRI: `sha512-V4QhSgY5HwSQ/yhy2G/I6VB9gO/3LEGrv+bJUd+6+E7dnaBEqWCK4iXN309h+7G7y/T5N1JEhI26tO29hFkJ4g==`. Registry tarball SHA-256: `c8cfafcf0537a642d0d87d0f1f6d1e254e2880f56b1691d269bc1cbf32b39d8b`. The packed bytes match the lock's integrity and verify against the producer's release workflow at `refs/tags/v1.2.0`, with the provenance script unchanged. The clean lockfile install replaced the unsaved candidate. Installed `assets/assets.json` SHA-256: `179a330da49ad4fefc8ba51a00f6f0eb0da9464c0868178fe18a7150d430dfa9`; it also compared byte-for-byte with the tested candidate's manifest. `npm audit signatures` exited 0: 1,224 verified registry signatures and 327 verified attestations.
+- Offered-command guard: 6/6 after the merge. The first registry-pin scoped run passed 2,335 cases, including all five previously held pin cases, and failed one incoming warm-cache planted control. The fixture planted the retired package name while the scanner looks for the renamed package. Re-anchoring the fixture to the current specifier, without changing its assertion or the scan, gave **2,336/2,336** across eight files with no type errors. The separate PWA compile check exited 0.
+- The five-file ordinary Chromium gate has no verdict yet. A wrong-package startup did not run any cases. The two corrected attempts reached the sealed PWA build but ran out of the foreground deadline before a browser summary (both exit 124); the second also reported five kills in the shared test slice. No individual browser case is declared red on those receipts. Firefox, phone-device evidence and the eight paired timing comparisons remain unmeasured here; paired timing stays with programme acceptance.
