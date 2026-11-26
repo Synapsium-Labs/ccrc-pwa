@@ -117,11 +117,11 @@ describe('readDriveInput: refused before any tmux call', () => {
 });
 
 describe('captureTmuxRunner: the capture\'s own server, never the fleet\'s', () => {
-  /** A stand-in `tmux` on PATH that prints its argv and environment as JSON. */
-  function fakeTmuxBin(): string {
+  /** A stand-in `tmux` on PATH that prints its argv and environment as JSON, or runs `body` instead. */
+  function fakeTmuxBin(body = 'process.stdout.write(JSON.stringify({ argv: process.argv.slice(2), env: process.env }));'): string {
     const dir = mkTmp('ccrc-delivery-tmux-');
     const bin = path.join(dir, 'tmux');
-    writeFileSync(bin, `#!${process.execPath}\nprocess.stdout.write(JSON.stringify({ argv: process.argv.slice(2), env: process.env }));\n`);
+    writeFileSync(bin, `#!${process.execPath}\n${body}\n`);
     chmodSync(bin, 0o755);
     return dir;
   }
@@ -148,6 +148,30 @@ describe('captureTmuxRunner: the capture\'s own server, never the fleet\'s', () 
   it('a tmux that cannot be found is a spawn failure, not an exit', async () => {
     const r = await captureTmuxRunner(TMUX, mkTmp('ccrc-delivery-empty-'))('tmux', ['has-session']);
     expect(r).toMatchObject({ ran: false, reason: 'spawn' });
+  });
+  // THE REAL BOUND-KILL ARM (review 3898 F3b): a tmux that hangs past the runner's bound is killed by the bounded spawner,
+  // and the runner answers not run, with the timeout reason, never the killed client's status as the product's word.
+  it('a tmux that hangs past the bound is killed there and answered not run, with the timeout reason', async () => {
+    const bound = 300;
+    const t0 = Date.now();
+    const r = await captureTmuxRunner(TMUX, fakeTmuxBin('setTimeout(() => {}, 30_000);'), bound)('tmux', ['capture-pane', '-p']);
+    expect(r).toMatchObject({ ran: false, reason: 'timeout' });
+    expect(r.ran === false && r.detail).toContain(`${bound} ms`);
+    // Within the bound and one drain (`UPDATE_SPAWN_DRAIN_MS`, 2 s), never the stand-in's 30 s.
+    expect(Date.now() - t0).toBeLessThan(10_000);
+  }, 20_000);
+  // A SIGNAL THAT WAS NOT THE BOUND'S (wave 184's ruling F5): a client a signal ended answers `128 + signo` with no kill
+  // flag, and that is a fault of the box too, not a status the send reads.
+  it('a tmux a signal ended, not at the bound, is answered not run', async () => {
+    const r = await captureTmuxRunner(TMUX, fakeTmuxBin('process.kill(process.pid, "SIGTERM"); setTimeout(() => {}, 30_000);'))('tmux', ['send-keys', '-t', '=cc-capture:', 'Enter']);
+    expect(r).toMatchObject({ ran: false, reason: 'spawn' });
+    expect(r.ran === false && r.detail).toContain('exit 143');
+  }, 20_000);
+  // A TMUX THAT RAN AND EXITED NON-ZERO ON ITS OWN is the product's own answer (the ruling's other half, section 10): the
+  // send reads it, as it reads the fleet's tmux.
+  it('a tmux that ran and exited 1 on its own is answered as run, with its status', async () => {
+    const r = await captureTmuxRunner(TMUX, fakeTmuxBin('process.stderr.write("can\'t find session"); process.exitCode = 1;'))('tmux', ['has-session', '-t', '=cc-capture']);
+    expect(r).toMatchObject({ ran: true, code: 1 });
   });
 });
 
@@ -227,8 +251,6 @@ describe('driveCase: the product\'s own send, with the prompt route\'s options',
     const out = await driveCase(input('c5'), failsOnFirstType, async () => {});
     expect(out).toMatchObject({ kind: 'fault', reason: 'timeout' });
     // The failed type was the case's last tmux call: no key after it (no M-Enter, no clear, no Enter) reached the pane.
-    const typedAt = p.calls.length;
-    expect(p.calls.slice(typedAt).length).toBe(0);
     expect(p.calls.filter((c) => c[1] === 'send-keys')).toEqual([]);
     expect(p.submitted).toEqual([]);
     expect(typed).toBe(1);
