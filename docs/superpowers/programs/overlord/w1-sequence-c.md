@@ -93,8 +93,8 @@ Measured at `main` `ad35cf5538`.
   `sequence-page-line-is-served-rows`: above.
 - `sequence-limit-is-positive`: the plan says `limit` is a non-negative integer. The door admits 1 to `SEQUENCE_PAGE_MAX`. A
   limit of 0 reads no line from the store (`sequenceAfter`'s `LIMIT 0`), while `sequencePage` serves at least one, so it would
-  answer a reader that is behind with an empty page and an unmoved cursor, the thing §10.4 rules out. Raised in the stage-1
-  status for the coordinator to rule on before stage 2.
+  answer a reader that is behind with an empty page and an unmoved cursor, the thing §10.4 rules out. The coordinator ruled
+  it after stage 1: 1 to 500, and a zero is refused like any other bad limit, with no ledger line, never read as a limit.
 - `sequence-query-is-closed`: a key other than the caller's pair, `after` and `limit` is refused 400, and so is a repeated key;
   the plan names only the two values' bounds.
 - `invariants-read-carries-both-modes`: the read answers the arming mode now (`mode`) and the mode the last pass ran in
@@ -169,4 +169,5 @@ routes.
   slice's memory cap, so it ran narrowed over the changed test files and what they import: its one error is the route suite's
   missing stage-2 module, by design.
 - One red that `main` shows too, on the same box, run alone: the containment suite's loopback `curl` case
-  (`--url=` exits 7 where the case expects 2), with the box's curl 8.18.0. Not this branch's; left alone.
+  (`--url=` exits 7 where the case expects 2), with the box's curl 8.18.0. Not this branch's; left alone, by the
+  coordinator's ruling, who has ticketed it on its own.
