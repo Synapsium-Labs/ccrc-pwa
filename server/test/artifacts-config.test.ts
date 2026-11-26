@@ -127,6 +127,22 @@ describe('artifactConfig', () => {
       .toBe('invalid');
   });
 
+  it('config: a port of zero is refused in the words of port 0, a leading zero in the words of a leading zero', () => {
+    const zero = off(artifactConfig(
+      { origin: 'https://art.example.invalid', content: 'https://content.example.invalid:0', port: '7790' }, consoleOrigin, CONSOLE_PORT));
+    expect(zero.why).toBe('invalid');
+    expect(zero.detail).toContain('CCRC_ARTIFACT_CONTENT_ORIGIN');
+    expect(zero.detail).toContain('port 0');
+    expect(zero.detail).not.toContain('leading zero');
+    const zeros = off(artifactConfig(
+      { origin: 'https://art.example.invalid:00', content: 'https://content.example.invalid', port: '7790' }, consoleOrigin, CONSOLE_PORT));
+    expect(zeros.detail).toContain('port 0');
+    const lead = off(artifactConfig(
+      { origin: 'https://art.example.invalid', content: 'https://content.example.invalid:0443', port: '7790' }, consoleOrigin, CONSOLE_PORT));
+    expect(lead.detail).toContain('leading zero');
+    expect(lead.detail).not.toContain('port 0');
+  });
+
   it('a duckdns pair under the accept list is on', () => {
     const c = artifactConfig(
       { origin: `https://${genLabel()}.duckdns.org`, content: `https://${genLabel()}.duckdns.org`, port: '7790' },
@@ -324,10 +340,13 @@ describe('artifactConfig', () => {
       .toBe('by-address');
   });
 
-  it('never throws on hostile values', () => {
+  it('never throws on hostile values, and a hostile console origin never turns the tier on', () => {
+    const good = { origin: 'https://art.example.invalid', content: 'https://c.example.invalid', port: '7790' };
     for (const v of ['', ' ', '\u0000', 'https://', 'https://:', 'https://a:b:c', '://', 'http://127.0.0.1:99999', 'x'.repeat(5000)]) {
       expect(() => artifactConfig({ origin: v, content: v, port: v }, v, 0)).not.toThrow();
       expect(() => artifactConfig({ origin: v, content: 'https://c.example.invalid', port: '7790' }, consoleOrigin, CONSOLE_PORT)).not.toThrow();
+      expect(() => artifactConfig(good, v, CONSOLE_PORT)).not.toThrow();
+      expect(artifactConfig(good, v, CONSOLE_PORT).state, `console origin ${JSON.stringify(v.slice(0, 20))}`).toBe('off');
     }
   });
 });

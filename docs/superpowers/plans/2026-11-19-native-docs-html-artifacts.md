@@ -555,3 +555,53 @@ Built on this workspace's branch, one commit per task. The plan was written on 2
 Each mutation was an edit to the source, run against its test file, then reverted; the coordinator's mutation runner drives Python modules only. **Not measured locally:** the whole tests typecheck (`test/tsconfig.tests.json`), which the test slice's 6 GiB memory cap killed three times on this box (the changed test files were typechecked under a narrower config that extends the server's, clean); the whole server, agent and console suites and the whole browser folder, which the hosted full run arbitrates. At the A1.2 commit alone `rings/totality` is red, by design: the map row arrives with A1.3.
 
 - **The fix round (one commit after the first push).** The first hosted full run on `75b98bf800` (run 45794733778) was red on two causes, both this wave's and both static passes not run locally; the pull request's own run showed the same two, and every other job passed. (1) `refusal-status.test.ts`, the D-5381 inline-send ratchet: the console's host fence answered with an inline `reply.code(421).send({ ok: false, error: 'misdirected' })`, a word in no route refusal vocabulary. The word is now declared once as `ARTIFACT_FENCE_REFUSALS` (`misdirected: 421`), joined to `RouteRefusal` and spread into `REFUSAL_STATUS`, and the fence answers through `refuseRoute`. It sits in `shared/refusal.ts`, not with the artifact vocabulary in `shared/artifacts.ts`, because `single-definition/refusal-table.test.ts` accepts a spread into `REFUSAL_STATUS` only from a fixed list of modules, and `refusal.ts` is one of them. The artifact listener's own fence reads its 421 from the same constant, so the two fences share one status. The wire answer is unchanged: 421 with `{ ok: false, error: 'misdirected' }`. (2) The tests-inclusive typecheck (`typecheck-tests.test.ts`): two lambdas in `artifacts-config.test.ts` had implicit `any` parameters; they are typed. The narrower config this Results section names as clean did not cover that line when it ran; run again over the changed test files, it reports both errors with the types removed and none with them. After the fix: `refusal-status` 28/28, `refusal-table` 24/24, `vocabularies` 169, the listener 21, the config 56, `auth-gate` 419, the ring files green, and the server and console typechecks clean.
+- **Review fix round 1 (review run 3947 on `a738b9d749`).** One finding ruled in, six small items riding along. Each code item was measured red with its change removed, then green.
+  1. **The console's fence and a ported artifact host.** The grammar admits an https artifact origin that states a port (`https://<artifact-host>:8443`). The console's fence matched such a host exactly, so the bare name, the name on 443 or on another port reached the gate and the routes. It was the bypass A1.3's review closed for hosts without a port, open again for hosts with one. `namesArtifactHost` now refuses every https artifact host by hostname in any port spelling. The exact match stays only for the loopback pair (hostname `127.0.0.1`), where the console and the artifact origins share an address and differ by port alone. The grammar is not narrowed. The A1.3 bullet above, which says a host configured without a port is matched by hostname, describes the code before this round.
+  2. **Port 0.** `https://<host>:0` is refused as port 0, no longer as a leading zero.
+  3. **Hostile console origin.** The never-throws case now passes a hostile console origin beside valid keys, and asserts the tier stays off.
+  4. **Three answers the runtime wrote bare.** The A1.3 bullet's "the hardening headers on every answer" was not true for three of them, and the listener now answers each itself:
+     - A request with no `Host`: Node's own Host check is off on the artifact instance (`http.requireHostHeader: false`), so the host fence answers its 421 with the headers.
+     - An `Expect` other than `100-continue`: a `checkExpectation` listener answers 417 with fixed words and the headers, and closes the connection.
+     - The request timeout: 408, as both defaults answer it, no longer 400. The status is decided by `clientErrorStatus` in `policy.ts`.
+  5. **Cases that could not go red.** The GET-with-a-body case now asserts that the instance has no content-type parser, and its exact 404. A wrong `Host` on an unregistered path is a 421.
+  6. **The tier scan** pins the artifact side's members by name, so an empty list cannot pass.
+  7. **The task note.** The note's `index.ts` carry now says the check is redundant at run time only: the typechecker needs it, since the port exists only on the `on` arm. Beside the carry about the console's early 400 for a malformed escape, it adds what the review measured: on the console that answer comes before the fence. The fix stays with A3.
+
+  One process slip: the implementer wrote its first edits with short scripts instead of the file tools. Every later mutation and restore used the file tools, and the result was reviewed like the rest.
+
+  One Opus (high) review of the round's diff found nothing blocking. It confirmed that no Host spelling reaches the console's routes while the tier is on, and that the `127.0.0.1` branch is reachable only for the loopback pair: an https origin can never have that hostname, because an address-like host is refused. It raised five nits, and four were taken:
+  - the 408 answers its own fixed words ("Request timeout."), and a case asserts them;
+  - the member pin that could not fail (`shared/artifacts.ts`, always appended) is dropped;
+  - the handler's comment and the note's decision row now name the 408, the no-Host 421 and the 417;
+  - `clientErrorStatus`'s comment says which of Node's codes it folds to 400.
+
+  The fifth is left: here a chunk-extension overflow answers 400, where Node answers 413.
+
+  | Item | Mutation | Red | Green |
+  |---|---|---|---|
+  | 1 | the old exact match for a ported host | the ported-host console case, the `namesArtifactHost` unit case | 27/27 |
+  | 1 | hostname match for the loopback pair too | the loopback console case, the loopback-pair case, the unit case | 27/27 |
+  | 2 | the port-0 words reverted | the port-0 words case | 57/57 |
+  | 3 | the console-origin guard disabled | the hostile-console-origin case, plus an existing one | 57/57 |
+  | 4 | `requireHostHeader` back on | the no-Host raw-socket case (a bare 400) | 27/27 |
+  | 4 | no `checkExpectation` listener | the Expect raw-socket case (a bare 417) | 27/27 |
+  | 4 | `clientErrorStatus` unused, or no 408 branch | the 408 wiring case, the unit case | 27/27 |
+  | 5 | `removeAllContentTypeParsers()` removed | the GET-with-a-body case | 27/27 |
+  | 5 | the host fence skipped on a 404 | the unregistered-path case, plus an existing one | 27/27 |
+  | 6 | the artifact-tier list emptied | the member-names case | 5/5 |
+
+  After the round, one file at a time, all green:
+
+  | Area | Tests |
+  |---|---|
+  | The listener and the config | 27, 57 |
+  | `artifacts-vocabulary` and the tier scan | 7, 5 |
+  | `refusal-status` and `refusal-table` | 28, 24 |
+  | The six ring files | 5, 11, 7, 6, 6, 10 |
+  | `secret-mask` | 98 + 1 skipped |
+  | `box-token-census` | 90 |
+  | `auth-gate` | 419 (route count unchanged) |
+  | `config` and `boot` | 66, 9 |
+  | `anchors` and `citations` | 9, 4 |
+
+  The server typecheck is clean. So is the narrower tests-inclusive typecheck over this round's changed test files (the listener, the config, the tier scan), the config that caught the first round's error. The round touches no file the console imports.

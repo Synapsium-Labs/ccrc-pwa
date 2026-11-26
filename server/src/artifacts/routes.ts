@@ -19,7 +19,7 @@
 // A FAILED LISTEN TURNS THE TIER OFF, NEVER THE CONSOLE: `listenArtifactServer` never throws. It writes one warning, marks the
 // listen state `down`, and the console's own listen, which follows it in `index.ts`, still runs.
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
-import { artifactMethodAllowed, hostFence, namesArtifactHost, type ArtifactConfig } from './policy.js';
+import { artifactMethodAllowed, clientErrorStatus, hostFence, namesArtifactHost, type ArtifactConfig } from './policy.js';
 import { refuseRoute } from '../refuse.js';
 import { ARTIFACT_FENCE_REFUSALS } from '../../../shared/refusal.js';
 
@@ -51,6 +51,8 @@ const MISDIRECTED_BODY = 'Misdirected request.';
 const METHOD_BODY = 'Method not allowed.';
 const ERROR_BODY = 'Something went wrong.';
 const BAD_REQUEST_BODY = 'Bad request.';
+const TIMEOUT_BODY = 'Request timeout.';
+const EXPECTATION_BODY = 'Expectation failed.';
 
 const HTML = 'text/html; charset=utf-8';
 const TEXT = 'text/plain; charset=utf-8';
@@ -71,8 +73,8 @@ function answer(reply: FastifyReply, status: number, contentType: string, body: 
 
 /** A whole HTTP/1.1 answer for a socket no request object reached: the status, the hardening headers, a fixed text body, and
  *  `connection: close`. */
-function rawAnswer(status: 400 | 431, body: string): string {
-  const reason = status === 431 ? 'Request Header Fields Too Large' : 'Bad Request';
+function rawAnswer(status: 400 | 408 | 431, body: string): string {
+  const reason = status === 431 ? 'Request Header Fields Too Large' : status === 408 ? 'Request Timeout' : 'Bad Request';
   const headers = { ...HARDENING, 'content-type': TEXT, 'content-length': String(Buffer.byteLength(body)), connection: 'close' };
   return `HTTP/1.1 ${status} ${reason}\r\n${Object.entries(headers).map(([k, v]) => `${k}: ${v}\r\n`).join('')}\r\n${body}`;
 }
@@ -83,20 +85,31 @@ export function buildArtifactServer(deps: ArtifactRouteDeps): FastifyInstance {
   // hook, with a body that ECHOES the request path, and the path holds a capability token. Answered here with fixed words and
   // the same headers instead; the host fence has not run for these two, which reach no route.
   // `clientErrorHandler`: a request Node cannot parse (a bad request line, an unknown method, Transfer-Encoding beside
-  // Content-Length, an oversized header) is answered on the socket before Fastify sees it; here with the same fixed words and
-  // headers, never the default bare answer. Nothing is logged and nothing of the request is echoed.
+  // Content-Length, an oversized header) or one that outlives Node's request timeout is answered on the socket before Fastify
+  // sees it; here with fixed words and the same headers (the status from `clientErrorStatus`), never the default bare answer. Nothing is logged and nothing of the request is echoed.
+  // `http.requireHostHeader: false`: Node answers a request with no `Host` line with a bare 400 before Fastify runs; without
+  // the check the request reaches the host fence, which answers its 421 with the hardening headers. Node's own default
+  // handling of an `Expect` other than 100-continue is a bare 417, so a `checkExpectation` listener (below) answers it.
   const app = Fastify({
     logger: false,
+    http: { requireHostHeader: false },
     frameworkErrors: (err, _req, reply) =>
       answer(reply, (err as { code?: unknown }).code === 'FST_ERR_MAX_PARAM_LENGTH' ? 414 : 400, TEXT, BAD_REQUEST_BODY),
     clientErrorHandler: (err, socket) => {
       const code = (err as { code?: unknown }).code;
       if (code === 'ECONNRESET' || !socket.writable) { socket.destroy(); return; }
-      socket.end(rawAnswer(code === 'HPE_HEADER_OVERFLOW' ? 431 : 400, BAD_REQUEST_BODY));
+      const status = clientErrorStatus(code);
+      socket.end(rawAnswer(status, status === 408 ? TIMEOUT_BODY : BAD_REQUEST_BODY));
     },
   });
   const hosts = [deps.cfg.artifactHost, deps.cfg.contentHost];
   app.removeAllContentTypeParsers();
+  // An `Expect` header other than `100-continue` (a bare 417 by Node's default): the same fixed words and headers as every
+  // other answer, no request detail, no log line. The body is never read; the connection closes.
+  app.server.on('checkExpectation', (_req, res) => {
+    res.writeHead(417, { ...HARDENING, 'content-type': TEXT, 'content-length': String(Buffer.byteLength(EXPECTATION_BODY)), connection: 'close' });
+    res.end(EXPECTATION_BODY);
+  });
 
   // The one hook, first: the hardening headers go on before any answer (so a refusal carries them too), then the host fence,
   // then the method fence. A hook that answers must return the reply.

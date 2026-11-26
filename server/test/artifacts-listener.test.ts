@@ -9,7 +9,9 @@ import net from 'node:net';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildServer, type Deps } from '../src/server.js';
-import { artifactConfig, artifactMethodAllowed, hostFence, hostMatches, type ArtifactConfig } from '../src/artifacts/policy.js';
+import {
+  artifactConfig, artifactMethodAllowed, clientErrorStatus, hostFence, hostMatches, namesArtifactHost, type ArtifactConfig,
+} from '../src/artifacts/policy.js';
 import {
   ARTIFACT_NOT_FOUND_BODY, buildArtifactServer, createArtifactListenerState, listenArtifactServer,
 } from '../src/artifacts/routes.js';
@@ -98,6 +100,18 @@ afterEach(async () => {
   netServers = [];
 });
 
+/** Send `text` to 127.0.0.1:`port` over a raw socket and resolve with everything the server writes before it closes. */
+function rawRequest(port: number, text: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const s = net.connect(port, '127.0.0.1', () => s.end(text));
+    let got = '';
+    s.setEncoding('utf8');
+    s.on('data', (d: string) => { got += d; });
+    s.on('close', () => resolve(got));
+    s.on('error', reject);
+  });
+}
+
 const artifactApp = (): FastifyInstance => {
   const a = buildArtifactServer({ cfg: onConfig() });
   toClose.push(a);
@@ -135,6 +149,29 @@ describe('policy: the host and method decisions (L1)', () => {
     for (const m of ['POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'TRACE', 'CONNECT', 'get', '']) {
       expect(artifactMethodAllowed(m), m).toBe(false);
     }
+  });
+});
+
+describe('policy: the status of a request Node could not parse (L1)', () => {
+  it('clientErrorStatus: an oversized header is 431, a request timeout is 408, anything else is 400', () => {
+    expect(clientErrorStatus('HPE_HEADER_OVERFLOW')).toBe(431);
+    expect(clientErrorStatus('ERR_HTTP_REQUEST_TIMEOUT')).toBe(408);
+    for (const other of ['HPE_INVALID_METHOD', 'HPE_INVALID_CONSTANT', 'ECONNRESET', '', undefined, null, 431, {}]) {
+      expect(clientErrorStatus(other), String(other)).toBe(400);
+    }
+  });
+
+  it('the instance\'s clientError handler words a request timeout as 408 with the hardening headers', () => {
+    const app = artifactApp();
+    const handler = app.server.listeners('clientError')[0] as (err: Error, socket: unknown) => void;
+    expect(typeof handler).toBe('function');
+    const answers: string[] = [];
+    const socket = { writable: true, end: (t: string) => { answers.push(t); }, destroy: () => { throw new Error('destroyed'); } };
+    handler(Object.assign(new Error('timeout'), { code: 'ERR_HTTP_REQUEST_TIMEOUT' }), socket);
+    expect(answers).toHaveLength(1);
+    expect(answers[0]!.startsWith('HTTP/1.1 408 Request Timeout\r\n')).toBe(true);
+    for (const [k, v] of Object.entries(SECURITY_HEADERS)) expect(answers[0]!.toLowerCase()).toContain(`${k}: ${v}`.toLowerCase());
+    expect(answers[0]!.endsWith('\r\n\r\nRequest timeout.')).toBe(true);
   });
 });
 
@@ -203,10 +240,12 @@ describe('listener: methods', () => {
     }
   });
 
-  it('a GET with a body and a content type never reaches a parser', async () => {
+  it('a GET with a body and a content type never reaches a parser, because the instance has none', async () => {
     const app = artifactApp();
+    expect(app.hasContentTypeParser('application/json'), 'json').toBe(false);
+    expect(app.hasContentTypeParser('text/plain'), 'text').toBe(false);
     const res = await app.inject({ method: 'GET', url: '/', headers: { host: ART, 'content-type': 'application/json' }, payload: '{"a":1}' });
-    expect([404, 400, 415, 500]).toContain(res.statusCode);
+    expect(res.statusCode).toBe(404);
     expect(res.body).not.toContain('"a"');
     expectHardened(res.headers, 'GET with a body');
   });
@@ -228,6 +267,18 @@ describe('listener: console host on the artifact instance is 421', () => {
     // The fence runs before the method check: a POST to the wrong host is 421, not 405.
     const post = await app.inject({ method: 'POST', url: '/', headers: { host: CONSOLE_HOST } });
     expect(post.statusCode).toBe(421);
+  });
+
+  it('a wrong Host on an unregistered path is 421, never 404', async () => {
+    const app = artifactApp();
+    for (const host of [CONSOLE_HOST, `${ART}:443`, 'other.example.test']) {
+      for (const method of ['GET', 'HEAD'] as const) {
+        const res = await app.inject({ method, url: '/nope/x', headers: { host } });
+        expect(res.statusCode, `${method} ${host}`).toBe(421);
+        expectHardened(res.headers, `${method} ${host}`);
+      }
+    }
+    expect((await app.inject({ method: 'GET', url: '/nope/x', headers: { host: ART } })).statusCode, 'the right host is the 404').toBe(404);
   });
 
   it('either artifact host, in any case and with one trailing dot, is served (404), never 421', async () => {
@@ -274,6 +325,64 @@ describe('listener: an artifact host on the console instance is 421', () => {
     toClose.push(app);
     expect((await app.inject({ method: 'GET', url: '/api/auth/status', headers: { host: '127.0.0.1:7790' } })).statusCode).toBe(421);
     expect((await app.inject({ method: 'GET', url: '/api/auth/status', headers: { host: '127.0.0.1:7788' } })).statusCode).not.toBe(421);
+  });
+
+  it('a PORTED https artifact host is 421 on the console by hostname, in any port spelling, before the gate', async () => {
+    const ported = artifactConfig(
+      { origin: `https://${ART}:8443`, content: `https://${CONTENT}`, port: '7790' }, `https://${CONSOLE_HOST}`, 7788);
+    expect(ported.state).toBe('on');
+    const app = await openConsole(ported, true);
+    toClose.push(app);
+    const own = await app.inject({ method: 'GET', url: '/api/fleet/health', headers: { host: CONSOLE_HOST } });
+    expect(own.statusCode, 'the armed gate answers the console\'s own host').toBe(401);
+    for (const host of [ART, `${ART}:443`, `${ART}:9999`, `${ART}:8443`, `${ART.toUpperCase()}.:`, CONTENT, `${CONTENT}:8443`]) {
+      const res = await app.inject({ method: 'GET', url: '/api/fleet/health', headers: { host } });
+      expect(res.statusCode, host).toBe(421);
+      expect(res.json(), host).toEqual({ ok: false, error: 'misdirected' });
+    }
+    const lookalike = await app.inject({ method: 'GET', url: '/api/fleet/health', headers: { host: `x.${ART}:8443` } });
+    expect(lookalike.statusCode).toBe(401);
+  });
+
+  it('namesArtifactHost: a name is refused in any port spelling, and only the loopback pair is matched exactly', () => {
+    expect(namesArtifactHost(ART, [`${ART}:8443`])).toBe(true);
+    expect(namesArtifactHost(`${ART}:443`, [`${ART}:8443`])).toBe(true);
+    expect(namesArtifactHost(`${ART}:9999`, [`${ART}:8443`])).toBe(true);
+    expect(namesArtifactHost(`${ART}:8443`, [`${ART}:8443`])).toBe(true);
+    expect(namesArtifactHost(`${ART.toUpperCase()}.:`, [`${ART}:8443`])).toBe(true);
+    expect(namesArtifactHost(`x.${ART}:8443`, [`${ART}:8443`])).toBe(false);
+    expect(namesArtifactHost(CONSOLE_HOST, [`${ART}:8443`, CONTENT])).toBe(false);
+    expect(namesArtifactHost(undefined, [`${ART}:8443`])).toBe(false);
+    expect(namesArtifactHost('', [`${ART}:8443`])).toBe(false);
+    expect(namesArtifactHost(ART, [''])).toBe(false);
+    // The loopback pair: exact, so the console's own port on the same address is not named.
+    const pair = ['127.0.0.1:7790', '127.0.0.1:7791'];
+    expect(namesArtifactHost('127.0.0.1:7790', pair)).toBe(true);
+    expect(namesArtifactHost('127.0.0.1.:7791', pair)).toBe(true);
+    expect(namesArtifactHost('127.0.0.1:7788', pair)).toBe(false);
+    expect(namesArtifactHost('127.0.0.1', pair)).toBe(false);
+    expect(namesArtifactHost('localhost:7788', pair)).toBe(false);
+  });
+
+  it('a loopback pair works both ways: the console answers its own host, and the artifact instance serves the loopback hosts', async () => {
+    const lo = artifactConfig({ origin: 'http://127.0.0.1:7790', content: 'http://127.0.0.1:7791', port: '7792' }, 'http://localhost:7788', 7788);
+    if (lo.state !== 'on') throw new Error('the loopback fixture is not on');
+    const app = await openConsole(lo, false);
+    toClose.push(app);
+    for (const host of ['localhost:7788', '127.0.0.1:7788']) {
+      expect((await app.inject({ method: 'GET', url: '/api/auth/status', headers: { host } })).statusCode, host).not.toBe(421);
+    }
+    for (const host of ['127.0.0.1:7790', '127.0.0.1:7791']) {
+      expect((await app.inject({ method: 'GET', url: '/api/auth/status', headers: { host } })).statusCode, host).toBe(421);
+    }
+    const inst = buildArtifactServer({ cfg: lo });
+    toClose.push(inst);
+    for (const host of ['127.0.0.1:7790', '127.0.0.1:7791']) {
+      expect((await inst.inject({ method: 'GET', url: '/', headers: { host } })).statusCode, host).toBe(404);
+    }
+    for (const host of ['127.0.0.1:7788', 'localhost:7788']) {
+      expect((await inst.inject({ method: 'GET', url: '/', headers: { host } })).statusCode, host).toBe(421);
+    }
   });
 
   it('with the tier off, the same Host is not 421', async () => {
@@ -382,17 +491,14 @@ describe('listener: a taken port leaves the console up', () => {
     expect(await listenArtifactServer(app, 0)).toBe('listening');
     const { port } = app.artifactServer!.server.address() as net.AddressInfo;
     const spies = CONSOLE_METHODS.map((m) => vi.spyOn(console, m).mockImplementation(() => {}));
-    const raw = async (text: string): Promise<string> => new Promise((resolve, reject) => {
-      const s = net.connect(port, '127.0.0.1', () => s.end(text));
-      let got = '';
-      s.setEncoding('utf8');
-      s.on('data', (d: string) => { got += d; });
-      s.on('close', () => resolve(got));
-      s.on('error', reject);
-    });
+    const raw = (text: string): Promise<string> => rawRequest(port, text);
     const cases: [string, string][] = [
       [`GARBAGE /c/${TOKEN}/x HTTP/1.1\r\nHost: ${ART}\r\n\r\n`, '400'],
       [`GET /c/${TOKEN}/x HTTP/1.1\r\nHost: ${ART}\r\nX-Big: ${'a'.repeat(20000)}\r\n\r\n`, '431'],
+      // No Host line at all: Node would answer a bare 400 itself unless the server lets the host fence answer.
+      [`GET /c/${TOKEN}/x HTTP/1.1\r\n\r\n`, '421'],
+      // An Expect other than 100-continue: Node would write a bare 417 unless the server has an expectation listener.
+      [`GET /c/${TOKEN}/x HTTP/1.1\r\nHost: ${ART}\r\nExpect: something-else\r\n\r\n`, '417'],
     ];
     for (const [req, status] of cases) {
       const got = await raw(req);

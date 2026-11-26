@@ -32,6 +32,12 @@ describe('single-definition: no shared policy between tiers', () => {
     return [...(existsSync(dir) ? sources(dir) : []), path.join(ccrcRoot, 'shared', 'artifacts.ts')];
   };
 
+  it('the scanned artifact tier names its members, so the scans below never pass on an empty list', () => {
+    const members = artifactTier().map(rel);
+    expect(members).toContain('server/src/artifacts/policy.ts');
+    expect(members).toContain('server/src/artifacts/routes.ts');
+  });
+
   it('no artifact-tier file names a MOCKUP_ identifier', () => {
     const holders = artifactTier().filter((f) => MOCKUP_IDENT.test(readFileSync(f, 'utf8'))).map(rel);
     expect(holders).toEqual([]);

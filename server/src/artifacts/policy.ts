@@ -67,6 +67,13 @@ function portOf(digits: string): number | null {
   return n >= 1 && n <= 65535 ? n : null;
 }
 
+/** Why `digits` fails `portOf`, in the words of the detail line (a failure of the origin's grammar; `portOf` stays the one test). */
+function badPortWords(digits: string): string {
+  if (/^0+$/.test(digits)) return 'names port 0, which is not a port';
+  if (/^0\d+$/.test(digits)) return 'writes its port with a leading zero';
+  return 'is not a port (1 to 65535)';
+}
+
 const CONSOLE_LOOPBACK_RE = /^http:\/\/localhost:(\d+)$/;
 const ARTIFACT_LOOPBACK_RE = /^http:\/\/127\.0\.0\.1:(\d+)$/;
 
@@ -107,7 +114,7 @@ function checkOrigin(key: string, value: string, consoleLoopback: boolean, conso
     // One spelling per origin: a leading zero names the same port as without it, and a browser drops the default port from
     // its `Host` header and its serialized origin, so `:443` written out would meet the host fence's 421 on every request.
     const p = portOf(host.slice(colon + 1));
-    if (p === null) return { ok: false, detail: `${key}=${shown(value)} writes its port with a leading zero` };
+    if (p === null) return { ok: false, detail: `${key}=${shown(value)} ${badPortWords(host.slice(colon + 1))}` };
     if (p === 443) return { ok: false, detail: `${key}=${shown(value)} names the default port; write it without :443` };
   }
   const problem = siteRuleProblem(consoleHostname, hostname);
@@ -185,10 +192,13 @@ export function hostMatches(host: string | undefined, hosts: readonly string[]):
   return hosts.some((h) => h !== '' && normalizeHost(h) === want);
 }
 
-/** The console's side of the fence, which REFUSES, so it reads wider than `hostMatches`: an artifact host configured with no
- *  port (an https name) is matched by hostname whatever port the request writes (`host:443`, `host:`, `HOST.:8443`), because a
- *  reverse proxy's host matcher ignores the port and a refusal list must refuse too much, never too little. An artifact host
- *  configured with a port (the loopback pair) is matched exactly, so the console's own `127.0.0.1:<port>` still answers. */
+/** The console's side of the fence, which REFUSES, so it reads wider than `hostMatches`: an https artifact host is matched by
+ *  HOSTNAME whatever port the request writes (`host`, `host:443`, `host:9999`, `host:`, `HOST.:8443`), also when the origin was
+ *  configured with a port of its own (`https://host:8443`), because a reverse proxy's host matcher ignores the port and a
+ *  refusal list must refuse too much, never too little. Only the loopback pair (a configured host whose hostname is
+ *  `127.0.0.1`, the one loopback form the config admits) is matched exactly, `host:port` against `host:port`: beside a loopback
+ *  console the console and the artifact origins share an address and differ by port alone, so the console's own
+ *  `127.0.0.1:<port>` must still answer. */
 export function namesArtifactHost(host: string | undefined, artifactHosts: readonly string[]): boolean {
   if (host === undefined || host === '') return false;
   const want = normalizeHost(host);
@@ -196,9 +206,12 @@ export function namesArtifactHost(host: string | undefined, artifactHosts: reado
   return artifactHosts.some((h) => {
     if (h === '') return false;
     const n = normalizeHost(h);
-    return n.includes(':') ? n === want : n === wantName;
+    const name = hostnameOf(n);
+    return name === LOOPBACK_HOSTNAME ? n === want : name === wantName;
   });
 }
+
+const LOOPBACK_HOSTNAME = '127.0.0.1';
 
 /** The hostname part of a normalized `Host` (the text before a `:port`, if any). */
 function hostnameOf(normalized: string): string {
@@ -215,4 +228,14 @@ export function hostFence(host: string | undefined, allowed: readonly string[]):
 /** The artifact listener serves reads only: GET, and HEAD, which Fastify adds beside every GET route. */
 export function artifactMethodAllowed(method: string): boolean {
   return method === 'GET' || method === 'HEAD';
+}
+
+/** The status of an answer for a request Node could not parse (its `clientError` code): an oversized header is 431, a request
+ *  that outlived Node's request timeout is 408 (both of Node's own defaults answer so), anything else is 400. Node's own
+ *  default maps a few more codes to other statuses (a chunk-extension overflow to 413, for one); here those are 400, with the
+ *  same fixed words. */
+export function clientErrorStatus(code: unknown): 400 | 408 | 431 {
+  if (code === 'HPE_HEADER_OVERFLOW') return 431;
+  if (code === 'ERR_HTTP_REQUEST_TIMEOUT') return 408;
+  return 400;
 }
