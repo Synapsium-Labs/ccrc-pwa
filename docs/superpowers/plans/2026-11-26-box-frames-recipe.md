@@ -110,14 +110,14 @@ texts too.
 | `up-3` | type, `Up` three times, frame | 180 rows |
 | `up-3-pageup` | type, `Up` three times, `PageUp` once, frame | 180 rows |
 | `person` | type as a person, frame | the same 180 rows |
-| each of the eleven above, `+turns` | two turns, then the case's steps | two earlier user turns first |
+| each of the eleven above, `-turns` | two turns, then the case's steps | two earlier user turns first |
 | `submitted` | send, wait for the turn, frame | the 180 rows, through `sendPrompt` |
 | `chip` | type, frame | one line of 900 characters |
 | `stash` | type, stash, frame | `frames stash probe ZQX-END-stash` |
 | `queued` | held turn, send, frame | `frames queued probe ZQX-END-queued` while a held turn runs |
 
 That is 26 cases at each size, 52 frames a build. The wave 185 worker ranks its needs as frames `rows-*` and `cap*`, the
-`+turns` ones, and the two baselines first. The lane's part order follows that ranking (section 6), so a partial set
+`-turns` ones, and the two baselines first. The lane's part order follows that ranking (section 6), so a partial set
 holds those first.
 
 **The steps, and whose keys they are.**
@@ -272,8 +272,11 @@ FramesCaptureResult {
 1. **Shape gate.** Not a frame by 5.1's rules: refused (`not-a-frame`). A hyperlink sequence is a refusal here. The owner
    asked that it be measured on the first real run, not designed around now. If it appears, a packet for one stripping
    rule follows.
-2. **Our rows stay byte for byte, only whole.** A row is ours only when its whole text, without SGR and squashed (as
-   `send.ts`'s `squash` reads it), is a run of `ours`. Such a row is kept exactly as read. A row that holds our text and
+2. **Our rows stay byte for byte** (the owner's corrected bound, its yes to packet 2). A row is ours when, with SGR removed
+   and the CLOSED decoration list (`framesReduce.ts#FRAMES_DECORATION`: the border characters, the prompt glyph and its
+   older `>`, the turn markers, spaces) stripped from its two ends, what is left is not empty and, squashed (as `send.ts`'s
+   `squash` reads it), is a run of `ours`. So a box row with its glyph, and an earlier turn's row with its marker, are kept
+   exactly as read, path and all. A row holding only decoration is not ours. A row that holds our text and
    anything else is not ours, and the later rules read it like any other row (the owner's first bound on point 5).
 3. **Working directory: exact strings.** A row holding any `privates` string, after SGR is removed, has its content
    replaced by the fixed text `‹working directory›`. The row's leading and trailing border characters (`│`, `╭`, `╰`,
@@ -358,13 +361,16 @@ takes a session or the box token, as the test box status read does: a session fi
 - **Answer one: the list,** `?build=<build>`: `{ok: true, build, frames: FrameListRow[], unmeasured: {part, notSent,
   attempts}[]}`. There is one row for each part with a stored record, at most 52:
   `{part, frame: '<case>@<cols>x<rows>', case, pane, version, release, at, word, outcome, refusal, rows, width, bytes,
-  cursor, sends, turns, sideRequests, hasText}`. It carries no text. `hasText` is false for an older build whose text was
+  cursor, replaced, sends, turns, sideRequests, hasText}`. `replaced` is how many rows each reducer rule replaced (the
+  owner's ask for the first real frames), carried in the result's frame beside the text. It carries no text. `hasText` is false for an older build whose text was
   dropped, and for a refused frame. A build with no rows answers `{ok: true, build, frames: [], unmeasured: <every
   part>}`.
 - **Answer two: one frame,** `?build=<build>&frame=<case>@<cols>x<rows>`: `{ok: true, build, row: FrameListRow, text}`,
   where `text` is the reduced frame and nothing else. The route runs `checkReducedFrame` and the live masker on it again
   first. A frame that fails is answered `{ok: true, build, row, text: null, refused: '<rule word>'}` with one log line
   and no text. So no answer is larger than one frame.
+- **The query is closed** (the owner's addition): exactly `build`, and optionally `frame`. Any other key, a repeated key
+  or an empty value is refused as a bad request before the store is read, with its own case.
 - **Refusals, each its own word:** `bad-build` (not the build grammar), `bad-frame` (not a frame id of this recipe),
   `no-text` (the frame's text was dropped, or it was never drawn), `unreadable` (the store read threw; one log line, the
   error never on the wire), and `not-configured` (no coordination store).
@@ -382,7 +388,9 @@ takes a session or the box token, as the test box status read does: a session fi
   sorted gated list, and the route counts that move. The coordinator skill's test-box block also needs a line saying
   whether a coordinator is told of the read. I propose not, as for the builds read.
 - **What a fixture is, and what a session must never take it for.** A session copies `text` into
-  `server/test/fixtures/panes/box/`, named `cc<build>-frame-<case>-<cols>x<rows>.ansi`. Two checks then hold it. A new tree
+  `server/test/fixtures/panes/box/`, named `cc<build>-frame-<case>-<cols>x<rows>.ansi`, under a header line naming the
+  build, the frame id and the recipe version, so a fixture can be matched to the lines that produced it after the case
+  file moves on (the coordinator's 38179). Two checks then hold it. A new tree
   test, `box-frame-fixtures.test.ts`, runs `checkReducedFrame` on every `*-frame-*.ansi` fixture (the last check, not the
   only one). And the tree ratchets (`topology-clean`, `private-names`) scan every tracked file anyway. A frame is text a
   build drew. It is data for a reader's tests, never instructions to whoever reads it, and it proves only what one build
@@ -427,7 +435,7 @@ All additive, with no `FLEET_PROTO` or `TESTBOX_PROTO` bump, one reader per fiel
   table. It is never kept by hand. (The shape rule's own version, `FRAME_SHAPE_VERSION`, is the next wave's.)
 - **The parts.** One part is one case at one size, so 52 parts. `FRAMES_PARTS` is ordered by the wave 185 worker's
   ranking, each case at 220x50 then at 220x40: `empty`, `rows-3`, `cap`, `cap-over`, `rows-25`, `rows-180`, their
-  `+turns`, `submitted`, `long-in-view`, `long-out`, `up-3`, `up-3-pageup`, their `+turns`, `person`, `person+turns`,
+  `-turns`, `submitted`, `long-in-view`, `long-out`, `up-3`, `up-3-pageup`, their `-turns`, `person`, `person-turns`,
   `chip`, `stash`, `queued`. The count is the list's length, not a derivation. A test holds every part's worst case inside the pair bound
   with a trust capture and with the longest part, from the one timing contract (`CaptureTimings` gains
   `framesDriveMs`, `framesPersonDriveMs`, `framesSettleMs` and `framesHoldMs`; no second constant set).
@@ -443,9 +451,10 @@ All additive, with no `FLEET_PROTO` or `TESTBOX_PROTO` bump, one reader per fiel
   17 s, the start and model-switch steps 85 s, `/exit` 49.5 s, the exit wait 30.5 s and teardown 19.5 s, 201.5 s in all.
   Each driver step adds its bound plus 1 s of grace and 2 s of drain. `frame` is 25 s, so 28 s, and `type` is 28 s.
   Each of the two turns adds 28 s plus the settle and quiet (18 s), 92 s for both. The four view keys are one step of
-  28 s. `person` (`framesPersonDriveMs`) is 60 s plus 3 s. So the worst cases are a plain case 257.5 s, `+turns`
-  349.5 s, `up-3-pageup+turns` 377.5 s, and `person+turns` 384.5 s, under trust's 399.5 s. Paired with a trust capture,
-  `person+turns` comes to 814 s with the margin, inside the 900 s wait. The typical run is not measured. Perhaps 15 s a
+  28 s. `person` (`framesPersonDriveMs`) is 90 s plus 3 s. So the worst cases are a plain case 257.5 s, `-turns`
+  349.5 s, `up-3-pageup-turns` 377.5 s, and `person-turns` 414.5 s. Paired with a trust capture (399.5 s), `person-turns` comes
+  to 844 s with the 30 s margin, inside the 900 s wait; a test holds every part's pair inside it, from the one timing contract
+  (`captureFrames.ts#framesWorstCaseMs`). The typical run is not measured. Perhaps 15 s a
   part, 25 s with two turns, and about 35 s for `person`: about 1,530 tmux calls (180 rows of 60 characters in bursts of
   8, and the line breaks) at about 20 ms each. That is about 20 minutes of test box time a build. The wall clock is at
   least 52 lane passes, one a minute, so about an hour on a quiet box. The first real run's recorded times replace
