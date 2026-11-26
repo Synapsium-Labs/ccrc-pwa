@@ -489,6 +489,32 @@ describe('every outcome has one handling', () => {
     expect(mails(r).filter((m) => m.subject.includes('programme'))).toHaveLength(row.mails);
   });
 
+  // D-9132: a plain `unreachable` (a transport failure, nothing answered) only holds: it never fails the binding, however many
+  // passes run. The same word with `outsideTable` (Linear answered, outside the closed table) is the malformed row's.
+  it('D-9132: a plain unreachable, maybe sent, only holds however many passes run, and mails nothing', async () => {
+    const r = await rig();
+    r.respond.current = (ask) => (ask.op === 'initiativeCreate' ? fail('unreachable', true) : defaultRespond(ask, 0));
+    for (let i = 0; i < PLAN_SYNC_BACKOFF_MS.length + 3; i += 1) {
+      await r.sync.passFor(SLUG, r.t.now + 60_000);
+      r.db.prepare('UPDATE plan_sync_due SET dueAt = 0').run();
+      r.t.now += PLAN_SYNC_BACKOFF_MS[PLAN_SYNC_BACKOFF_MS.length - 1]! + 1;
+    }
+    expect(bindingOfKind(r, 'programme')).toMatchObject({ state: 'pending', failedWord: null });
+    expect(mails(r)).toEqual([]);
+  });
+
+  it('D-9132: unreachable outside the closed table is failed malformed after the last backoff step, mailed once', async () => {
+    const r = await rig();
+    r.respond.current = (ask) => (ask.op === 'initiativeCreate' ? { ok: false, word: 'unreachable', maybeSent: true, outsideTable: true } : defaultRespond(ask, 0));
+    for (let i = 0; i < PLAN_SYNC_BACKOFF_MS.length + 2; i += 1) {
+      await r.sync.passFor(SLUG, r.t.now + 60_000);
+      r.db.prepare('UPDATE plan_sync_due SET dueAt = 0').run();
+      r.t.now += PLAN_SYNC_BACKOFF_MS[PLAN_SYNC_BACKOFF_MS.length - 1]! + 1;
+    }
+    expect(bindingOfKind(r, 'programme')).toMatchObject({ state: 'failed', failedWord: 'malformed' });
+    expect(mails(r).filter((m) => m.subject.includes('malformed'))).toHaveLength(1);
+  });
+
   it('the first outcome that defers ends the pass: no later step is sent', async () => {
     const r = await rig();
     r.respond.current = () => fail('unreachable');
@@ -1073,6 +1099,34 @@ describe('end to end through runCcrcOp, Linear faked at FetchLike (recorded answ
     await sync.tick(afterDebounce(r));
     expect(docs.filter((d) => d === D.initiativeCreate)).toHaveLength(1);
     expect(bindingOfKind(r, 'programme')).toMatchObject({ state: 'bound', linearId: requestId });
+  });
+
+  // D-9132: CONSTRUCTED, not recorded (no live answer of this kind was recorded): an errors body whose code no row of the closed
+  // table knows. runCcrcOp answers it `unreachable` with `outsideTable`, and the plan sync must not hold on it for ever.
+  it("D-9132: an initiative create refused with an error outside the closed table every time: its binding fails malformed, mailed once, and the other objects are written", async () => {
+    const r = await rig();
+    const fx = linearServicesFake({ clock: () => r.t.now, db: r.db });
+    let sentInitiative = 0;
+    const fetch: FetchLike = async (_u, init) => {
+      const q = (JSON.parse(init.body) as { query: string }).query;
+      if (q === D.initiativeCreate) {
+        sentInitiative += 1;
+        return linearAnswer({ ok: true, status: 200, json: async () => ({ data: null, errors: [{ message: 'something new', extensions: { code: 'SOMETHING_NEW' } }] }) });
+      }
+      const name = ANSWERS.get(q);
+      if (name === undefined) throw new Error('no recorded answer for this document');
+      return recordedAnswer(name);
+    };
+    const sync = r.build({ call: (ask) => runCcrcOp({ ccrcDir: r.ccrcDir, rate: fx.rate, journal: fx.journal, policy: fx.policy, fetch, now: () => r.t.now }, ask) });
+    for (let i = 0; i < PLAN_SYNC_BACKOFF_MS.length + 3; i += 1) {
+      await sync.passFor(SLUG, r.t.now + 60_000);
+      r.db.prepare('UPDATE plan_sync_due SET dueAt = 0').run();
+      r.t.now += PLAN_SYNC_BACKOFF_MS[PLAN_SYNC_BACKOFF_MS.length - 1]! + 1;   // past the workspace's hold
+    }
+    expect(sentInitiative).toBeGreaterThan(0);
+    expect(bindingOfKind(r, 'programme')).toMatchObject({ state: 'failed', failedWord: 'malformed' });
+    expect(mails(r).filter((m) => m.subject.includes('malformed'))).toHaveLength(1);
+    for (const kind of ['epic', 'checkpoint', 'ticket']) expect(bindingOfKind(r, kind)?.state, kind).toBe('bound');
   });
 });
 

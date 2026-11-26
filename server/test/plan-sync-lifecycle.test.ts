@@ -750,6 +750,82 @@ describe('the pass: moves and closes', () => {
     expect(sentInput(r, 'issueCreate', from)['teamId']).toBe(CCC_TEAM.id);
   });
 
+  /** D-9131's rig: the epic's project `project-a` was written with team AAA and holds two bound tickets (issues in AAA), then its key is
+   *  changed by hand to CCC (same workspace) and a third ticket is added to the epic. Linear is modelled as it refuses today: an
+   *  `issueCreate` whose team is not among the teams of the project's LAST sent `projectCreate` or `projectUpdate` is answered with an
+   *  error outside the closed table (`unreachable`, `outsideTable`). `issueOwned` reads answer AAA; a move answers a new `CCC-n` identifier. */
+  async function keyMoved(o: { pendingCreate?: boolean } = {}): Promise<{ r: Rig; from: number; boundBefore: BindingRow[]; t3: number }> {
+    const r = await rig({ extraTeam: true });
+    let projectTeams: string[] = [];
+    let moved = 100;
+    r.respond.current = (ask) => {
+      if (ask.op === 'projectCreate' || ask.op === 'projectUpdate') projectTeams = ask.input['teamIds'] as string[];
+      if (ask.op === 'issueCreate' && !projectTeams.includes(ask.input['teamId'] as string)) {
+        return { ok: false, word: 'unreachable', maybeSent: true, outsideTable: true } as CcrcOpOutcome;
+      }
+      if (ask.op === 'issueOwned') return ok({ issue: { id: ask.input['id'], stateType: 'unstarted', teamKey: 'AAA' } });
+      if (ask.op === 'issueUpdate') return ok({ id: ask.target, identifier: `CCC-${moved++}` });
+      return defaultRespond(ask);
+    };
+    r.plan.applyPlanChanges(SLUG, changes({ tickets: { insert: [ticket('t2')], update: [], drop: [] } }), OWNER, r.t.now, null);
+    await tick(r);
+    const boundBefore = r.plan.bindingsOf(SLUG).filter((b) => b.localKind === 'ticket' && b.state === 'bound');
+    expect(boundBefore).toHaveLength(2);
+    expect(boundBefore.every((b) => b.teamKey === 'AAA')).toBe(true);
+    r.db.prepare("UPDATE project_linking SET teamKey = 'CCC' WHERE project = 'project-a'").run();
+    r.plan.applyPlanChanges(SLUG, changes({ tickets: { insert: [ticket('t3')], update: [], drop: [] } }), OWNER, r.t.now, null);
+    const t3 = epicRow(r, 'e1').tickets.find((t) => t.key === 't3')!.id;
+    if (o.pendingCreate === true) r.plan.ensurePending('ticket', t3, WS.a.id, 'CCC');   // what a refused create left behind
+    const from = r.asks.length;
+    for (let i = 0; i < 6; i += 1) { due(r); await tick(r); r.t.now += 2_000_000; }       // past every hold
+    return { r, from, boundBefore, t3 };
+  }
+
+  it('D-9131: a team-key move with a ticket added after: the project gains the team first, each bound ticket is moved by its id, the new one is created once', async () => {
+    const { r, from, boundBefore, t3 } = await keyMoved();
+    const sent = r.asks.slice(from);
+    const firstUpdate = sent.findIndex((a) => a.op === 'projectUpdate');
+    const firstCreate = sent.findIndex((a) => a.op === 'issueCreate');
+    expect(firstUpdate).toBeGreaterThanOrEqual(0);
+    expect(firstCreate).toBeGreaterThanOrEqual(0);
+    expect(firstUpdate).toBeLessThan(firstCreate);
+    expect(sent[firstUpdate]!.input['teamIds']).toEqual([WS.a.teams[0].id, CCC_TEAM.id].sort());
+    expect(sent.filter((a) => a.op === 'issueCreate')).toHaveLength(1);                   // exactly one, for the new ticket only
+    expect(sent.find((a) => a.op === 'issueCreate')!.input).toMatchObject({ title: 'Ticket t3', teamId: CCC_TEAM.id });
+    for (const b of boundBefore) {
+      const move = sent.filter((a) => a.op === 'issueUpdate' && a.target === b.identifier);
+      expect(move, `move of ${b.identifier}`).toHaveLength(1);
+      expect(move[0]).toMatchObject({ destinationTeamKey: 'CCC' });
+      const now = r.plan.bindingsOf(SLUG).find((x) => x.id === b.id)!;
+      expect(now).toMatchObject({ state: 'bound', teamKey: 'CCC' });
+      expect(now.identifier).toMatch(/^CCC-\d+$/);
+    }
+    expect(r.plan.bindingsOf(SLUG).find((b) => b.localKind === 'ticket' && b.localId === t3)).toMatchObject({ state: 'bound', teamKey: 'CCC' });
+    expect(mails(r)).toEqual([]);
+  });
+
+  it('D-9131: a refused create already left a pending binding: the later pass sends exactly one create with the same request id, and it binds', async () => {
+    const { r, from, t3 } = await keyMoved({ pendingCreate: true });
+    const creates = r.asks.slice(from).filter((a) => a.op === 'issueCreate');
+    expect(creates).toHaveLength(1);
+    expect(creates[0]!.input['requestId']).toBe(requestIdOf('ticket', t3, WS.a.id));
+    expect(r.plan.bindingsOf(SLUG).find((b) => b.localKind === 'ticket' && b.localId === t3)).toMatchObject({ state: 'bound', teamKey: 'CCC' });
+    expect(r.asks.slice(from).findIndex((a) => a.op === 'projectUpdate')).toBeLessThan(r.asks.slice(from).findIndex((a) => a.op === 'issueCreate'));
+  });
+
+  it("D-9131 (characterization): a ticket added in the project's own unchanged team is created in the first pass, with no projectUpdate before it", async () => {
+    const r = await rig({ extraTeam: true });
+    r.plan.applyPlanChanges(SLUG, changes({ tickets: { insert: [ticket('t2')], update: [], drop: [] } }), OWNER, r.t.now, null);
+    await tick(r);
+    r.plan.applyPlanChanges(SLUG, changes({ tickets: { insert: [ticket('t3')], update: [], drop: [] } }), OWNER, r.t.now, null);
+    const from = r.asks.length;
+    await tick(r);
+    const sent = opsOf(r, from);
+    expect(sent).toContain('issueCreate');
+    expect(sent.slice(0, sent.indexOf('issueCreate'))).not.toContain('projectUpdate');
+    expect(sentInput(r, 'issueCreate', from)).toMatchObject({ title: 'Ticket t3', teamId: WS.a.teams[0].id });
+  });
+
   it('D-8183 (round 1 A11): a create lost under the old team key is adopted under the changed key, then the next pass sends the move', async () => {
     const r = await rig({ extraTeam: true });
     r.db.prepare("UPDATE project_linking SET teamKey = 'AAA' WHERE project = 'project-b'").run();

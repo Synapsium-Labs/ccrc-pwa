@@ -217,6 +217,49 @@ describe('planSyncSteps rulings (D-8182)', () => {
   });
 });
 
+describe('D-9131: a create waits for the project as it was last written (L1)', () => {
+  const BBB = U(2);
+  /** The epic's project as a first create wrote it while its key read `key`, bound with that team: what Linear holds. */
+  const written = (key: string): { fingerprint: string; teamKey: string } => {
+    const s = snap({ teamKey: key });
+    s.workspaces[0]!.teams.push({ id: BBB, key: 'BBB' });
+    const first = planSyncSteps(s).steps.find((x) => x.kind === 'create' && x.op === 'projectCreate');
+    if (first?.kind !== 'create') throw new Error('no project create');
+    return { fingerprint: first.fingerprint, teamKey: key };
+  };
+  /** The project's key moved from BBB to AAA by hand: its bound ticket's issue sits in BBB, and a new ticket was added after. */
+  const moved = (eb: { fingerprint: string; teamKey: string | null }): SyncSnapshot => {
+    const s = snap({ tickets: [tk({ id: 2, key: 't2' }), tk({ id: 3, key: 't3' })], bindings: [
+      bind({ localKind: 'epic', localId: 1, fingerprint: eb.fingerprint, teamKey: eb.teamKey }),
+      bind({ localKind: 'ticket', localId: 2, teamKey: 'BBB', identifier: 'BBB-1' })] });
+    s.workspaces[0]!.teams.push({ id: BBB, key: 'BBB' });
+    return s;
+  };
+  const issueCreates = (s: SyncSnapshot) => planSyncSteps(s).steps.filter((x) => x.kind === 'create' && x.op === 'issueCreate');
+
+  it('the project last written with another team: the unbound ticket is not created, the project update is emitted, the bound ticket moves', () => {
+    const s = moved(written('BBB'));
+    const steps = planSyncSteps(s).steps;
+    expect(issueCreates(s)).toEqual([]);
+    expect(steps.find((x) => x.kind === 'update' && x.op === 'projectUpdate')).toMatchObject({ input: { teamIds: [TEAM, BBB].sort() } });
+    expect(steps.find((x) => x.kind === 'update' && x.op === 'issueUpdate')).toMatchObject({ local: { kind: 'ticket', id: 2 } });
+  });
+
+  it('a binding that recorded no team cannot tell: the create waits too', () => {
+    expect(issueCreates(moved({ ...written('BBB'), teamKey: null }))).toEqual([]);
+  });
+
+  it('the project last written with the planned team (any case), and current: the create is emitted with no project update before it', () => {
+    for (const recorded of ['AAA', 'aaa']) {
+      const s = snapBound({ tickets: [tk()] });
+      s.bindings.find((b) => b.localKind === 'epic')!.teamKey = recorded;
+      const steps = planSyncSteps(s).steps;
+      expect(issueCreates(s)).toHaveLength(1);
+      expect(steps.some((x) => x.kind === 'update' && x.op === 'projectUpdate')).toBe(false);
+    }
+  });
+});
+
 describe('final-review rulings: the pure verdicts (D-8182)', () => {
   const RID = requestIdOf('epic', 1, WS);
   const VIEWER = U(9);

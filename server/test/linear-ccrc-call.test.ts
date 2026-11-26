@@ -164,6 +164,21 @@ describe('runCcrcOp (D-8180)', () => {
     expect(await runCcrcOp(r.deps, READ)).toEqual({ ok: false, word: 'unreachable', maybeSent: false });
   });
 
+  // D-9132: Linear answered, with an error the closed table does not know. The word stays `unreachable` (spec §6.8, for every
+  // other reader); `outsideTable` tells it from a transport failure. The body is constructed: no live answer was recorded.
+  it('D-9132: a write answered with an errors body the closed table does not know is unreachable, marked outsideTable, and journaled unknown', async () => {
+    const r = await rig(() => ok({ data: null, errors: [{ message: 'something new', extensions: { code: 'SOMETHING_NEW' } }] }));
+    expect(await runCcrcOp(r.deps, WRITE)).toEqual({ ok: false, word: 'unreachable', maybeSent: true, outsideTable: true });
+    expect(rows(r.fx)[0]).toMatchObject({ outcome: 'unknown', code: 'unreachable' });
+  });
+
+  it('D-9132: a transport failure on a write is unreachable and never carries outsideTable', async () => {
+    const r = await rig(() => { throw new Error('boom'); });
+    const out = await runCcrcOp(r.deps, WRITE);
+    expect(out).toEqual({ ok: false, word: 'unreachable', maybeSent: true });
+    expect('outsideTable' in out).toBe(false);
+  });
+
   it('the key is read per call and never appears in an outcome or a log', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
