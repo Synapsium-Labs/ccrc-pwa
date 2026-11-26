@@ -98,8 +98,9 @@ The ones left:
 - **The readers by their merged names.**
   - Portfolio B: `portfolioFor(coord.portfolioFacts(now, liveAsk, liveSpend), now)`, as `GET /api/portfolio` composes it.
   - Readiness: `ReadinessLane.read()` (`deps.overlordReadiness`).
-  - The ladder: `ladderRead(coord, inputs, witness, serverCaps)` (`overlordLadderRead.ts`), whose effective rung the board
-    carries.
+  - The ladder: `ladderRead(coord, inputs, witness, serverCaps)` (`overlordLadderRead.ts`), projected through its own
+    `ladderWire`. The board carries the effective rung, the operator's rung, the standing latches and the live conditions (fix
+    round 1, F2).
   - The isolation word: `IsolationReader.read()` (`deps.isolation`).
   - Sandbox B: no reader a read door can call. The settle fact is read inside the loads door's settle step
     (`continuity/routes.ts#settleFactOf`). So `itself.sandbox` is `unmeasured`, `no-reader`.
@@ -144,6 +145,22 @@ The ones left:
 - `read-tool-enum-stays-reader-marked`: `readableDoorRow` is exported and the read tool's call asks it. The enum still lists the
   rows marked reader (the read tool's rule is untouched), and the census holds every marked row readable.
 - `history-tool-refuses-head-flags`: the history tool refuses an argument equal to one of the client's head flags.
+- `board-latch-detail-not-carried` (fix round 1): a latch is carried by its cause, cap, raise time, known word and narrowing. Its
+  `detail` is server prose that can name a subject (the invariant lane writes the invariant, its subject and its message), so it
+  stays on the ladder's own session-gated read.
+- `board-brakes-armed-kinds-later` (fix round 1): spec Table 5.2a's "armed kinds of answer" are W3's, as the plan's question 3
+  says. Carried now: the operator's rung, the latched caps with their causes, the live conditions and the effective rung.
+- `board-portfolio-later-wave-fields` (fix round 1): a portfolio row carries every W1 field of the view (rank and
+  `rankUnreadable`, class, WIP, the oldest open wave's age and `oldestOpenUnmeasured`, closed waves, cycle and
+  `cycleUnmeasured`, review rounds, the 28-day endings, the time waiting on the operator, `itemsUnmeasured`, `asksUnmeasured`, and
+  what blocks). It leaves out the view's later-wave fields: the health word, the forecast's median and 85% dates, spend, the edge
+  list and the critical path. `blocking.edges` is carried as a count, or null when the view did not count it.
+- `board-work-no-last-move-time` (fix round 1): spec Table 5.2a lists a programme's time of last movement. The plan's work row
+  is wave buckets, open items and stalls (question 18), so the board does not carry it; adding it later is additive.
+- `board-projects-unmeasured-walk` (fix round 1, F1): `listProjects` returns its own walk flag (`walk`, additive), and the
+  projects part reads `read-failed` when the walk was not measured, that is when the root could not be listed or a probe under it
+  could not answer. The flag is the one that already decided caching; there is no second probe of the root. The projects route
+  still folds it (its own ticket); its answer now carries `walk` as one more field, which no caller reads.
 
 ## Mutation rows
 
@@ -152,7 +169,7 @@ Before: no key for either function. After:
 
 | Decider | Mutants | Killed |
 |---|---|---|
-| `composeBoard` | 30 (the plan's four: C1a/C1b/C1c an unratified goal trusted, C2 a coordinator's ratification trusted, C3a/C3b a failed reader read as an empty or measured part; and C3c–C3h, C4a–C4d, C5a–C5l) | 30 |
+| `composeBoard` | 54: the plan's four (C1a/C1b/C1c an unratified goal trusted, C2 a coordinator's ratification trusted, C3a/C3b a failed reader read as an empty or measured part), C3c–C3h, C4a–C4d, C5a–C5l, and fix round 1's 24: P1–P15 (each portfolio field: the two flags, each measure, what blocks, a later-wave field riding) and L1–L9 (each latch and condition field, a latch carrying its detail) | 54 |
 | `timersByProgramme` | 6 (the plan's two: T1 the latest due time, T2 another coordinator's timer; T3 a timer's note in the row; T4, T6, T7) | 6 |
 
 T3, "put a timer's note in the part", is on `timersByProgramme`, where the note arrives. One equivalent mutant (a null coordinator
@@ -209,6 +226,27 @@ Red first (`overlord-board.test.ts`, the describe "the capacity part reads the c
 
 Both guards are green on the fix, and so are the board's suites, the wiring suite, the rings and the server typecheck.
 
+## Fix round 1 (review 4010, call 1641)
+
+**F1, the projects walk.** `listProjects` answers its walk flag, and the projects part reads `read-failed` on an unmeasured walk
+(`board-projects-unmeasured-walk`). Red first: two cases (the lister's flag over a readable root, from a kept walk and over an
+unreadable root; the part's `read-failed` with the root listed once), red without the lister's flag, green with it.
+
+**F2, the brakes.** The ladder part carries the standing latches and the live conditions through `ladderWire`, the ladder read's
+own projection (`board-latch-detail-not-carried`, `board-brakes-armed-kinds-later`). **F3, the portfolio.** A row carries the
+view's W1 fields, with `rankUnreadable` and `oldestOpenUnmeasured` beside the nulls they qualify
+(`board-portfolio-later-wave-fields`). The composer fixture now holds two programmes with every field distinct: prog-b's stored rank
+cannot be read and its two started waves have no known age. Red first against the composer at 7c01981c8e: six composer cases red
+(the full row, the two nulls kept apart, the latches and conditions, the field census, the readers' own answers, the untrusted
+blocking title); a seventh, that no later-wave field rides, holds on both.
+
+**Advisories.** A1: the read runner's header says how a reader reaches the unfenced rows and that its read is attributed; its fifth
+sentence says "served"; the gate census says nine. The gate's lane list and the gate suite's title name the board in the merge
+packet to their holder. A2: the comment on `readableDoorRow` says only the call asks it; the census reads the read row's enum off
+the shipped table against `READABLE_DOORS`, with a mutant that widens the enum (red when the check is removed). A3: the size
+fixture's comment says what catches a leaked body or note. Residues: the coordinator test title, the work part's slug, and the
+Known limits sentence on the unfenced history read.
+
 ## What a merge arms
 
 - A new read door, `GET /api/overlord/board`, behind the box token and the Overlord gate. In production it answers
@@ -230,7 +268,10 @@ Both guards are green on the fix, and so are the board's suites, the wiring suit
   passes the board unmasked, as it would any masked read. The door suite pins a secret held as a whole token.
 - `shell`, a programme's home project and the sandbox check read `unmeasured`, `no-reader`, until a reader exists.
 - A session that coordinates two programmes counts its timers in both.
-- A 50-programme board measures about 82 KB of JSON (the size case bounds it at 95 KB).
+- With the history read unfenced, whoever can present the Overlord's identity with the box token is served what the history door
+  serves, for every project, up to the ceiling. That is the text the Overlord itself reads; what changed is who can obtain it.
+- A 50-programme board measures 103,424 bytes of JSON (the size case bounds it at 120,000; it measured 81,988 under a bound of
+  95,000 before fix round 1 added the portfolio's measures and the ladder's latches and conditions).
 
 ## The gate's counts
 
