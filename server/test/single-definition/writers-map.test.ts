@@ -321,7 +321,7 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'continuity_act_keys', 'approval_census', 'approval_parks', 'overlord_fence_refusals',
   'continuity_hook_reports', 'continuity_witness_checks', 'coordinator_state', 'overlord_sequence', 'overlord_sequence_pruned', 'limit_samples',
   'programme_events', 'programme_picks', 'continuity_timer_refusals',
-  'overlord_invariant_findings'] as const;
+  'overlord_invariant_findings', 'overlord_readiness', 'overlord_readiness_items'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique, read off the one scan (`sqlStatements.ts#sqlWrites`). `tables`
  *  is the table list to read: coord.db's by default, and the private store's for its own describe (Overlord W1 private store A). */
@@ -417,6 +417,11 @@ describe(TABLES_PIN, () => {
       // The invariant monitor's findings (Overlord W1, sequence B2): one module, two writers: the insert of an episode (with its
       // item, in one transaction) and the stamp of its end.
       overlord_invariant_findings: ['recordFinding', 'resolveFindings'].map((f) => `server/src/coord/invariantFindingsStore.ts#${f}`),
+      // The Overlord's readiness word (§6.4, H20): one module. Its rows: the change of word (inserted, and stamped with its push mark,
+      // in one transaction) and the guarded prune; its item records: the lane's raise and settle (each with its operator item, through
+      // the ledger's checked entries, in one transaction) and the operator's close.
+      overlord_readiness: ['pruneReadiness', 'recordReadinessInTx'].map((f) => `server/src/coord/overlordReadinessStore.ts#${f}`),
+      overlord_readiness_items: ['closeReadinessItem', 'raiseReadinessItem', 'settleReadinessItem'].map((f) => `server/src/coord/overlordReadinessStore.ts#${f}`),
       // The designation (Overlord W1, C2): one writer per move of the row, each appending its authority record first where one is owed.
       // The migration's one-time pending-actor backfill is SQL in MIGRATIONS' string, so the scanner names its module.
       // Confirm the restore's inner writer (authority journal C, `applyDesignationRestoreInTx`): Table 11.1a names Confirm among the

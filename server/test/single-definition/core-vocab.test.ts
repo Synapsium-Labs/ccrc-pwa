@@ -878,7 +878,11 @@ describe('Build 7 nouns', () => {
       // gatherer (`invariantFacts.ts`) and the findings' SQL (`invariantFindingsStore.ts`) take the handle as an argument, and
       // the runner's factory (`invariantLane.ts#invariantMonitorOver`) binds them to it once for `index.ts`; each names it by
       // `import type`.
-      'overlordRestoreRows.ts', 'invariantFacts.ts', 'invariantFindingsStore.ts', 'invariantLane.ts']);
+      'overlordRestoreRows.ts', 'invariantFacts.ts', 'invariantFindingsStore.ts', 'invariantLane.ts',
+      // The Overlord's readiness word (Overlord W1, §6.4): the store's SQL takes the handle as an argument, and the lane's port
+      // carries it from the composition root (`overlordReadinessWiring.ts` passes the one it is given); each names it by
+      // `import type`.
+      'overlordReadinessStore.ts', 'overlordReadinessLane.ts']);
     const coordFiles = sources(coordDir);
 
     it('visits the whole directory — a moved directory must turn this red, not disarm it', () => {
