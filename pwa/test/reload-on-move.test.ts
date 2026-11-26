@@ -11,6 +11,20 @@ import {
   type ReloadActs,
 } from '../src/lib/swupdate';
 
+/** Every `onPop` subscription, with the unsubscribe it handed back (X2 P5.3: the gate subscribes through the dispatcher). */
+const pops = vi.hoisted(() => ({ subscribed: [] as { listener: () => void; unsubscribe: ReturnType<typeof vi.fn> }[] }));
+vi.mock('../src/lib/popstate', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../src/lib/popstate')>();
+  return {
+    ...real,
+    onPop: (listener: () => void) => {
+      const unsubscribe = vi.fn(real.onPop(listener));
+      pops.subscribed.push({ listener, unsubscribe });
+      return unsubscribe;
+    },
+  };
+});
+
 const T0 = 1_000_000;
 let now = T0;
 let vis: DocumentVisibilityState = 'visible';
@@ -387,25 +401,32 @@ describe('the gate starts once and stops whole (Task C3)', () => {
     expect(reloadOnMove('/runs', false)).toBe(false);
   });
 
+  // Changed by X2 P5.3 (D-8763), an intended behaviour change: the gate's back and forward arm subscribes through the one
+  // `popstate` dispatcher (`lib/popstate.ts#onPop`) instead of adding a window listener of its own.
   it('starting twice is starting once', () => {
     const add = vi.spyOn(window, 'addEventListener');
+    pops.subscribed.length = 0;
     start();
     const again = startReloadGate(acts as ReloadActs);
     expect(again).toBe(stop);
-    expect(add.mock.calls.filter((c) => c[0] === 'popstate')).toHaveLength(1);
+    expect(pops.subscribed, 'one onPop subscription').toHaveLength(1);
     expect(add.mock.calls.filter((c) => c[0] === 'vite:preloadError'), 'no chunk arm').toHaveLength(0);
   });
 
-  it('stop removes the popstate listener and the page-clock subscriptions', () => {
+  it('stop ends the onPop subscription and removes the page-clock subscriptions', () => {
     const winAdd = vi.spyOn(window, 'addEventListener');
     const winRemove = vi.spyOn(window, 'removeEventListener');
     const docAdd = vi.spyOn(document, 'addEventListener');
     const docRemove = vi.spyOn(document, 'removeEventListener');
+    pops.subscribed.length = 0;
     start();
     expect(docAdd.mock.calls.filter((c) => c[0] === 'visibilitychange')).toHaveLength(1);
+    expect(pops.subscribed, 'the gate subscribed once').toHaveLength(1);
+    expect(pops.subscribed[0]!.unsubscribe).not.toHaveBeenCalled();
     stop?.();
     stop = null;
-    for (const kind of ['popstate', 'focus', 'blur', 'pageshow']) {
+    expect(pops.subscribed[0]!.unsubscribe, 'stop ended it').toHaveBeenCalledTimes(1);
+    for (const kind of ['focus', 'blur', 'pageshow']) {
       const added = winAdd.mock.calls.find((c) => c[0] === kind);
       expect(added, kind).toBeDefined();
       expect(winRemove.mock.calls.some((c) => c[0] === kind && c[1] === added?.[1]), kind).toBe(true);
