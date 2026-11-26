@@ -577,8 +577,8 @@ number from `POST /api/ledger/deviations`.
   once per address. A cleared call's notice never outlives its row (review 3222): Show all opens its group and the folded
   trail keeps its row. Record: the wave 8 note.
 - **D-9131 (2026-11-26)** — w8-team-move-create-order: after a team-key move, a new ticket's create waits until its epic's
-  project carries the ticket's team as last written to Linear (the team the project binding records at every successful
-  project write: create, adoption and update), not as planned now.
+  project carries the ticket's team as last written to Linear (the team the project binding records at a write ccrc made:
+  create and update; an adopted project's record is not trusted until its first update), not as planned now.
   Record: `docs/superpowers/programs/linear-hierarchy/w8-team-move-create-order.md`.
 - **D-9132 (2026-11-26)** — w8-team-move-create-order: a write or a read Linear answered with an error outside the closed table fails
   its binding `malformed` after the last backoff step, never a silent, permanent hold. Record: the same note.

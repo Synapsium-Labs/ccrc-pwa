@@ -28,16 +28,24 @@ compared without regard to case:
 - the ticket's team is the epic's planned team; and
 - that team is the one the epic's project binding recorded at its last successful write (`teamKey` on the binding).
 
-The binding records the planned team at every successful project write: its create, its adoption and every `projectUpdate`
+The binding records the planned team at every project write ccrc made: its create and every `projectUpdate`
 (`PlanSync.bind` through `markBound`, still the one writer). The planned team is always among the teams that write sends.
-Before fix round 1 an update recorded nothing, so the recorded team was that of the create or adoption, and a key moved away
-and back could send a create into a project that no longer held the team.
+Before fix round 1 an update recorded nothing, so the recorded team was that of the create, and a key moved away and back
+could send a create into a project that no longer held the team.
+
+An ADOPTED project is the exception. Adoption binds with the team planned at adoption, which is not the team the lost create
+sent (a key may have moved between the lost reply and the adoption), and it is not a write ccrc made. So the check reads an
+epic binding whose stored fingerprint base is the adoption fingerprint (`linkMarkOf(...).base`, so a link mark added later
+does not hide it) as having no recorded team. Its create waits for the project's update, which is emitted because the
+adopted fingerprint is never current, and the update records the team. The decision is in L1; the store and the adoption
+binds are unchanged. Issue adoption is unchanged: an adopted issue records the team Linear answered.
 
 Otherwise the create waits until the project's stored fingerprint is current (`projectHasTeams`). A binding that recorded
 no team cannot tell what Linear holds, so its create waits too.
 
 The decision is in L1 (`planSyncSteps`). Nothing else changes: `projectHasTeams`, the project step, `heldTeam`, the phase
-order, what a write records on a binding, and when a bound ticket's update or move is ready all stay as they were.
+order, and when a bound ticket's update or move is ready all stay as they were. What a project update records on its
+binding is the one change (the planned team, above).
 
 **Why the recorded team.** After a move, the planned key is not what Linear holds. The binding's recorded team is the
 last fact ccrc wrote. When the project's update is not current, it is emitted in the same pass. So the wait costs one pass
@@ -82,21 +90,26 @@ per-binding counter. After the last step, its binding fails with the word `malfo
 
 - **Reads.** The plan sync sends every read failure through the same handling, so a read answered outside the table (the
   issue read before an update, a recovery or an adoption read) follows the rule too. One pin drives the issue read.
-- **Non-2xx answers.** `callLinear` keeps the parsed body of a refusal other than 401, 403 and 429 when it has an `errors`
-  array and the caller asked (`keepErrors`, which only `runCcrcOp` does), as `answered` on the `unreachable` failure.
-  `runCcrcOp` reads it through the same table as a 200 body. So an unknown code on a 400 or a 500 is marked `outsideTable`,
-  and a code that is in the table now answers its table word on a non-2xx. A body that does not parse, or has no `errors`
-  array, is a plain `unreachable` as before. The body is never logged, journaled or sent on a wire.
-- **Consecutive answers.** The counter counts consecutive answers for one binding. A good answer for the binding clears it
-  (`bind`), as does the programme going clean and the failure itself, so a requeued binding counts again from one. This also
-  changes the true `malformed` word, for the better: its count used to run over the life of the server.
+- **Non-2xx answers: a 4xx only.** `callLinear` keeps the parsed body of a 4xx refusal other than 401, 403 and 429 when it has a
+  non-empty `errors` array and the caller asked (`keepErrors`, which only `runCcrcOp` does), as `answered` on the `unreachable`
+  failure. `runCcrcOp` reads it through the same table as a 200 body. So an unknown code on a 400 is marked `outsideTable`, and a
+  code that is in the table now answers its table word on a 4xx. A 5xx is a service failure: a Linear incident must not fail every
+  binding in flight, so it is a plain `unreachable` that keeps its hold whatever its body says. A body that does not parse, has no
+  `errors` array or has an empty one (it says nothing) is a plain `unreachable` as before. The body is never logged, journaled or
+  sent on a wire.
+- **Consecutive answers.** The counter counts consecutive answers for one binding. What clears it: a good WRITE for the binding
+  (`bind`, which a create, an update, a link and an adoption all reach), the programme going clean, and the failure itself, so a
+  requeued binding counts again from one. A good READ does not clear it: answers outside the table that a read splits still count.
+  This also changes the true `malformed` word, for the better: its count used to run over the life of the server.
 
 - **Word.** `malformed` is an existing word. The console shows it as "Linear answered in a form ccrc could not read",
   which is true of this answer. No word, deferral cause or table row is added.
 - **Carrier.** `runCcrcOp` (`server/src/linear/ccrcCall.ts`) gives its failure outcome an optional field,
-  `outsideTable: true`. It is set only when a body arrived and was read as `unreachable`. The word stays `unreachable`, so
-  the spec's rule (§6.8) is unchanged for every other reader. A thrown fetch, a timeout and a rate limit never carry the
-  field, and the journal is unchanged.
+  `outsideTable: true`. It is set only when a body arrived on a 200 or a 4xx and was read as `unreachable`. For that answer the
+  word stays `unreachable`, so the spec's rule (§6.8) is unchanged for every other reader; only an outside-table code keeps it
+  (marked). A code IN the table on a 4xx now answers its table word (`linear-invalid`, `not-found`), settles the journal row
+  `failed` with that word, and is not maybe sent: Linear refused the write. A thrown fetch, a timeout, a rate limit and a 5xx
+  never carry the field, and their journal outcome is unchanged.
 - **Handling.** `onFailure` in `planSync.ts` sends an `unreachable` that carries the field through the `malformed`
   handling it already had. A plain `unreachable`, a `timeout`, a `rate-limited`, a `policy-unavailable` and a
   `journal-unavailable` keep their current holds.
@@ -125,6 +138,16 @@ Fixtures only, with neutral team keys AAA, BBB and CCC. None calls Linear.
 | `plan-sync.test.ts` | characterization: a plain `unreachable`, maybe sent, only holds however many passes run, and mails nothing | green | green |
 | `linear-ccrc-call.test.ts` | an unknown-code errors body is `unreachable`, carries `outsideTable`, journaled `unknown` | red | green |
 | `linear-ccrc-call.test.ts` | a transport failure is `unreachable` without `outsideTable` | green | green |
+| `plan-sync-lifecycle.test.ts` | round 2 F1: a project create sent with AAA and its reply lost, the key moved to CCC, the pending project adopted, a new ticket added: the project update comes before the one create, no create is refused, no mail | red (the create goes first: update at 7, create at 2) | green |
+| `plan-sync-policy.test.ts` | round 2 F1: an epic binding with the adoption fingerprint (also with a link mark) and a recorded team equal to the planned one, the project not current: no create, the project update is emitted | red (the create is emitted) | green |
+| `linear-ccrc-call.test.ts` | round 2 F2: a 502 with an unknown-code `errors` body is a plain `unreachable`, maybe sent, no `outsideTable` | red (marked `outsideTable`) | green |
+| `linear.test.ts` | round 2 F2: a 5xx (500, 502, 503, 504) with an `errors` body keeps no `answered` | red | green |
+| `plan-sync.test.ts` | round 2 F3: the programme dirty after the good write (renamed while the create is in flight), four answers outside the table, a good write, four more: not failed; the fifth fails it (red when only `bind`'s clear is removed: measured, 1 failed of 89, `expected 1 to be 4`) | green | green |
+| `plan-sync.test.ts` | round 2 F4: a binding failed `malformed` and requeued by the time sweep holds on its next answer outside the table, pending, no second mail (red when only the failure-time reset is removed: measured, 1 failed of 89, the binding is `failed` again) | green | green |
+| `linear-ccrc-call.test.ts` | round 2 A1: a 400 with an empty `errors` array is a plain `unreachable`, not `malformed`, no `outsideTable` | red (`malformed`) | green |
+| `linear.test.ts` | round 2 A1: a 400 with an empty `errors` array keeps no `answered` | red | green |
+| `linear-ccrc-call.test.ts` | round 2 A3a: a 400 whose `errors` code is in the table (`INVALID_INPUT`) answers `linear-invalid`, not maybe sent, no `outsideTable`, the journal row `failed` with that word (red when a known code is made to stay `unreachable`: measured, 1 failed of 26) | green | green |
+| `linear-ccrc-call.test.ts` | round 2 A3b: a 400 with a `success` payload beside a non-empty `errors` array is never ok, a plain `unreachable` marked `outsideTable`, journaled `unknown` (every shaper reads `errors` before `data`, so a kept body cannot read as success today: the guard `!answered.ok` is a defence, and the pin stayed green when it was mutated to return ok: measured, 26 of 26) | green | green |
 
 Red first: on the base, 7 of the 282 cases in the four changed test files failed (the rows marked red), and the rest
 passed. With the fix, all of them pass. The round 1 rows were measured against the head the review read: of the five test
@@ -135,6 +158,10 @@ commit: it gained an `initiativesByName` answer with no nodes. The pending bindi
 without an answer the fake threw, which is a transport-shaped `unreachable` that holds, so the case never reached the
 `malformed` path. The case as first committed stays red on the fixed source for that reason, and it was re-measured red on
 the base in its amended form.
+
+The round 2 rows were measured against the head the review read (4527a4c0's source, tests at the round's tests commit): of the
+five test files, 7 of 343 cases failed (the rows marked red); F3, F4 and A3a are mutation pins, green on the base by
+construction and measured red under the one deletion each names.
 
 ## Limits
 
