@@ -11,11 +11,11 @@
 // stand in where a box differs (the build copy's suite does the same, server/test/testbox-admin-acts.test.ts): `id` names the
 // service user as this test's own user (or as root, when told); `setpriv` records how it was asked to drop privilege and starts
 // what follows `--` as this user, marked dropped; `ls` can read a folder as another owner's; `chown` records what it was asked,
-// where, and changes nothing; `find` reads root's owner as this user; the tools that write record whether they ran dropped and
+// where, and changes nothing; `find` reads root's owner as this user (but for the one path TB_NOT_ROOT names); the tools that write record whether they ran dropped and
 // then run the real tool. What only a real box shows is in the task note.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
@@ -31,7 +31,7 @@ const SVC = 'ccrc-tb-svc';
 const TOKEN = 'f0'.repeat(32);
 const VICTIM = 'NOT-YOURS\n';
 const real = (t: string): string => spawnSync('bash', ['-c', `command -v ${t}`], { encoding: 'utf8' }).stdout.trim();
-const REAL = Object.fromEntries(['mkdir', 'mktemp', 'mv', 'chmod', 'cat', 'cp', 'ls', 'find', 'ln', 'rm'].map((t) => [t, real(t)]));
+const REAL = Object.fromEntries(['mkdir', 'mktemp', 'mv', 'chmod', 'cat', 'cp', 'touch', 'ls', 'find', 'ln', 'rm'].map((t) => [t, real(t)]));
 
 interface Box { dir: string; shims: string; log: string; owners: string; victim: string; victimDir: string; sealed: string }
 
@@ -52,12 +52,12 @@ function box(): Box {
   writeFileSync(sealed, VICTIM, { mode: 0o000 });
   const sh = (name: string, body: string): void => writeFileSync(join(shims, name), `#!/bin/sh\n${body}`, { mode: 0o755 });
   const rec = (tool: string): string => `printf '%s %s %s\\n' ${tool} "\${TB_DROPPED:-0}" "$*" >> '${log}'\nexec '${REAL[tool]}' "$@"\n`;
-  for (const t of ['mkdir', 'mv', 'chmod', 'cat', 'cp']) sh(t, rec(t));
+  for (const t of ['mkdir', 'mv', 'chmod', 'cat', 'cp', 'touch']) sh(t, rec(t));
   // The user's own temporary file; with TB_PLANT_AT the user then plants a link to the victim folder at that name, between the
   // writer's checks and its rename.
   sh('mktemp', `o=$('${REAL['mktemp']}' "$@") || exit $?\nprintf 'mktemp %s %s\\n' "\${TB_DROPPED:-0}" "$*" >> '${log}'\n`
     + `if [ -n "\${TB_PLANT_AT-}" ]; then '${REAL['rm']}' -f -- "$TB_PLANT_AT"; '${REAL['ln']}' -s '${victimDir}' "$TB_PLANT_AT"; echo planted >> '${log}'; fi\nprintf '%s\\n' "$o"\n`);
-  sh('id', `case "$1 $3" in "-u ${SVC}") echo "\${TB_SVC_UID:-${UID}}" ;; "-g ${SVC}") echo "\${TB_SVC_GID:-${GID}}" ;; *) exit 1 ;; esac\n`);
+  sh('id', `case "$1 $3" in "-u ${SVC}") echo "\${TB_SVC_UID-${UID}}" ;; "-g ${SVC}") echo "\${TB_SVC_GID-${GID}}" ;; *) exit 1 ;; esac\n`);
   sh('setpriv', `printf 'setpriv %s\\n' "$*" >> '${log}'\nwhile [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done; shift\nTB_DROPPED=1 exec "$@"\n`);
   sh('chown', `printf 'chown %s %s in %s\\n' "\${TB_DROPPED:-0}" "$*" "$(pwd -P)" >> '${log}'\nexit 0\n`);
   // `ls -ldn <path>` for a path the owner map names (by its physical path): that owner, a plain directory's mode (or the map's).
@@ -71,7 +71,11 @@ function box(): Box {
     + `if [ -z "$o" ] && [ -n "\${TB_ALL_ROOT-}" ] && [ -d "$p" ] && [ ! -L "$p" ]; then o="0\tdrwxr-xr-x"; fi\n`
     + `if [ -n "$o" ]; then u=\${o%%\t*}; m=\${o#*\t}; [ -n "$m" ] || m=drwxr-xr-x; printf '%s 2 %s %s 4096 Jan  1 00:00 %s\\n' "$m" "$u" "$u" "$p"; exit 0; fi\n`
     + `exec '${REAL['ls']}' "$@"\n`);
-  sh('find', `n=; for a; do if [ "$n" = 1 ] && [ "$a" = 0 ]; then a=${UID}; fi; n=; [ "$a" != -user ] || n=1; set -- "$@" "$a"; shift; done\nexec '${REAL['find']}' "$@"\n`);
+  // `find`: `-user 0` reads as this user's; with TB_NOT_ROOT, the one path it names reads as not root's.
+  sh('find', 'n=; for a; do\n'
+    + `if [ "$n" = 1 ]; then n=; if [ "$a" = 0 ] && [ -n "\${TB_NOT_ROOT-}" ]; then set -- "$@" "(" -user ${UID} ! -path "$TB_NOT_ROOT" ")"; elif [ "$a" = 0 ]; then set -- "$@" -user ${UID}; else set -- "$@" -user "$a"; fi\n`
+    + 'elif [ "$a" = -user ]; then n=1; else set -- "$@" "$a"; fi; shift; done\n'
+    + `exec '${REAL['find']}' "$@"\n`);
   return { dir, shims, log, owners, victim, victimDir, sealed };
 }
 /** The owner map: this physical path reads as owned by <uid> (and with <mode>, an `ls -l` mode string). */
@@ -159,7 +163,7 @@ describe.skipIf(UID === 0)('the service token is written as the service user (TB
     const log = shimLog(b);
     expect(log.filter((l) => l.startsWith('setpriv '))).toEqual([expect.stringMatching(new RegExp(`^${DROP.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`))]);
     const writes = log.filter((l) => /^(mkdir|mktemp|mv|chmod|cat|cp) /.test(l));
-    expect(writes.map((l) => l.split(' ')[0])).toEqual(['mkdir', 'mktemp', 'chmod', 'cat', 'mv']);
+    expect(writes.map((l) => l.split(' ')[0])).toEqual(['mkdir', 'mktemp', 'cat', 'chmod', 'mv']);
     for (const l of writes) expect(l, l).toMatch(/^\w+ 1 /);
     expect(log.filter((l) => l.startsWith('chown '))).toEqual([]);
     // the drop is the one the build copy's writer runs under: the same words, from the same definition
@@ -176,6 +180,34 @@ describe.skipIf(UID === 0)('the service token is written as the service user (TB
     expect([none.rc, none.out]).toEqual([5, 'token-user\n']);
     expect(tree(h.home)).toEqual([]);
     expect(shimLog(b).filter((l) => l.startsWith('setpriv '))).toEqual([]);
+  });
+
+  it('P1: a service user whose group is root\'s is refused token-user too, as the build copy refuses it', () => {
+    const b = box();
+    const h = homes(b);
+    const r = put(b, h.homes, undefined, { TB_SVC_GID: '0' });
+    expect([r.rc, r.out]).toEqual([5, 'token-user\n']);
+    expect(tree(h.home)).toEqual([]);
+    expect(shimLog(b).filter((l) => l.startsWith('setpriv ') || l.startsWith('chown '))).toEqual([]);
+  });
+
+  it.each<[string, NodeJS.ProcessEnv]>([['a user number that is a word', { TB_SVC_UID: '1000x' }], ['an empty user number', { TB_SVC_UID: '' }],
+    ['a group number that is a word', { TB_SVC_GID: 'g1' }]])(
+    'P1: a service user with %s is refused token-user before any write', (_n, env) => {
+      const b = box();
+      const h = homes(b);
+      const r = put(b, h.homes, undefined, env);
+      expect([r.rc, r.out]).toEqual([5, 'token-user\n']);
+      expect(tree(h.home)).toEqual([]);
+      expect(shimLog(b).filter((l) => l.startsWith('setpriv ') || l.startsWith('chown '))).toEqual([]);
+    });
+
+  it('P2: a folder of homes that cannot be resolved refuses token-home before any write', () => {
+    const b = box();
+    const r = run(b, 'TBA_TOKEN_PUT_SH', ['~/t', SVC, helper('TBA_TOKEN_WRITE_SH'), join(b.dir, 'no-such-homes')], { input: TOKEN });
+    expect([r.rc, r.out]).toEqual([5, 'token-home\n']);
+    expect(existsSync(join(b.dir, 'no-such-homes'))).toBe(false);
+    expect(shimLog(b).filter((l) => l.startsWith('setpriv ') || l.startsWith('chown '))).toEqual([]);
   });
 
   it.each([
@@ -273,6 +305,18 @@ describe.skipIf(UID === 0)('the service token is written as the service user (TB
     expect(shimLog(b).filter((l) => l.startsWith('chown ') || l.startsWith('setpriv '))).toEqual([]);
   });
 
+  it.each([['its group', 'drwxrwxr-x'], ['others', 'drwxr-xrwx']])(
+    'P1: a token folder of root\'s that %s may write is never handed over: token-dir-owner, and no owner changes', (_n, mode) => {
+      const b = box();
+      const h = homes(b);
+      mkdirSync(h.ccrc);
+      own(b, h.ccrc, 0, mode);
+      const was = tree(h.home);
+      expect(put(b, h.homes).out).toBe('token-dir-owner\n');
+      expect(tree(h.home)).toEqual(was);
+      expect(shimLog(b).filter((l) => l.startsWith('chown ') || l.startsWith('setpriv '))).toEqual([]);
+    });
+
   // P3 for the writer: a link the user plants at the token's name after the checks is replaced by the token, in the one rename;
   // the folder it names gains nothing.
   it('P3: a link planted at the token\'s name after the writer\'s checks is replaced by the token; nothing is put through it', () => {
@@ -361,6 +405,62 @@ describe.skipIf(UID === 0)('the access key file\'s edits (TBA_AK_ADD, TBA_AK_DRO
     expect(existsSync(l.ak)).toBe(false);
   });
 
+  // A key file its owner may only read (sshd takes 0400 and 0444): the writer writes its own temporary file first and only then
+  // gives it the old file's mode and times, so every edit still lands, and the file keeps its mode and its modification time.
+  const PAST = 1_600_000_000;
+  it.each<[string, string[], (b: Box) => { rc: number; out: string }, string]>([
+    ['ADD (key-rotate\'s append)', [OTHER, OURS], (b) => add(b), `${OTHER}\n${OURS}\n${NEW}\n`],
+    ['DROP drop (a refused rotate\'s removal)', [OTHER, OURS, NEW], (b) => drop(b, 'drop', 'AAAAnew'), `${OTHER}\n${OURS}\n`],
+    ['DROP keep (the removal after the switch)', [OTHER, OURS, NEW], (b) => drop(b, 'keep', 'AAAAnew', 'AAAAours'), `${OTHER}\n${NEW}\n`],
+    ['DROP all (Disconnect, key-revoke)', [OTHER, OURS], (b) => drop(b, 'all', ''), `${OTHER}\n`],
+  ])('P4: %s edits a key file its owner may only read, and keeps its mode and its modification time', (_n, lines, edit, want) => {
+    for (const mode of [0o400, 0o444]) {
+      const b = box();
+      const l = login(b, lines);
+      chmodSync(l.ak, mode);
+      utimesSync(l.ak, PAST, PAST);
+      const r = edit(b);
+      expect([r.rc, r.out], `mode ${mode.toString(8)}`).toEqual([0, '']);
+      // the modification time is the old file's (its access time is that of the edit's own read, as it would be for any reader)
+      const st = statSync(l.ak);
+      expect(Math.floor(st.mtimeMs / 1000)).toBe(PAST);
+      expect(st.mode & 0o7777).toBe(mode);
+      expect(readFileSync(l.ak, 'utf8')).toBe(want);
+      expect(readdirSync(join(l.home, '.ssh'))).toEqual(['authorized_keys']);
+    }
+  });
+
+  it('P4, a named difference: an edit drops the file\'s trailing blank lines (sshd skips blank lines)', () => {
+    const b = box();
+    const l = login(b);
+    writeFileSync(l.ak, `${OTHER}\n${OURS}\n\n\n`);
+    expect(drop(b, 'all', '').rc).toBe(0);
+    expect(readFileSync(l.ak, 'utf8')).toBe(`${OTHER}\n`);
+  });
+
+  it('P4: with no key folder, ADD is exit 3 and DROP exit 0, and neither makes the folder (the checks make nothing)', () => {
+    const b = box();
+    const l = login(b);
+    spawnSync(REAL['rm']!, ['-rf', join(l.home, '.ssh')]);
+    expect(add(b).rc).toBe(3);
+    expect(drop(b, 'all', '').rc).toBe(0);
+    expect(readdirSync(l.home)).toEqual([]);
+    expect(shimLog(b).filter((x) => x.startsWith('mkdir '))).toEqual([]);
+  });
+
+  it('P2: a plain file where the key folder goes: both edits refuse put-dir-kind and change nothing', () => {
+    for (const edit of [add, (b: Box) => drop(b, 'all', '')]) {
+      const b = box();
+      const l = login(b);
+      spawnSync(REAL['rm']!, ['-rf', join(l.home, '.ssh')]);
+      writeFileSync(join(l.home, '.ssh'), `${OURS}\n`);
+      const was = tree(l.home);
+      const r = edit(b);
+      expect([r.rc, r.out]).toEqual([5, 'put-dir-kind\n']);
+      expect(tree(l.home)).toEqual(was);
+    }
+  });
+
   it.each([
     // the link names a file this user may not read, so an edit that read through it before its check would fail otherwise
     ['a link to a file of root\'s', (b: Box, ak: string) => { spawnSync(REAL['rm']!, ['-f', ak]); symlinkSync(b.sealed, ak); }, 'put-link'],
@@ -399,6 +499,44 @@ describe.skipIf(UID === 0)('the access key file\'s edits (TBA_AK_ADD, TBA_AK_DRO
     symlinkSync(b.victimDir, join(l.home, '.ssh'));
     for (const r of [add(b), drop(b, 'all', '')]) expect([r.rc, r.out]).toEqual([5, 'put-dir-link\n']);
     expect(readFileSync(join(b.victimDir, 'authorized_keys'), 'utf8')).toBe(`${OURS}\n`);
+  });
+});
+
+// ── the writer's own contract ─────────────────────────────────────────────────────────────────────────────────────────
+// Refusals no caller reaches today (each names a file below a real base it has proved), held so the function keeps its contract.
+describe.skipIf(UID === 0)('the one writer refuses a file outside its base, and a base that is not a real directory (tba_put)', () => {
+  const putFn = (b: Box, base: string, file: string): { rc: number; out: string } => {
+    const r = spawnSync(BASH, ['-c', '. "$1"; shift; exec sh -c "$TBA_PUT_FN; tba_put \\"\\$@\\"" sh "$@"', '_', HELPERS, base, file, '0600'], {
+      env: { PATH: `${b.shims}:/usr/bin:/bin`, HOME: b.dir, LANG: 'C' }, encoding: 'utf8', cwd: b.dir, input: 'BYTES',
+    });
+    return { rc: r.status ?? -1, out: r.stdout ?? '' };
+  };
+
+  it('P2: a file that is not below the base refuses put-outside, and nothing is written', () => {
+    const b = box();
+    const base = join(b.dir, 'base');
+    mkdirSync(base);
+    expect(putFn(b, base, join(b.dir, 'beside'))).toEqual({ rc: 5, out: 'put-outside\n' });
+    expect(putFn(b, base, base)).toEqual({ rc: 5, out: 'put-outside\n' });
+    expect(existsSync(join(b.dir, 'beside'))).toBe(false);
+    expect(shimLog(b).filter((l) => l.startsWith('mktemp ') || l.startsWith('mkdir '))).toEqual([]);
+  });
+
+  it('P2: a base that is a plain file refuses put-base, and nothing is made below it', () => {
+    const b = box();
+    const base = join(b.dir, 'base');
+    writeFileSync(base, VICTIM);
+    expect(putFn(b, base, join(base, 'd', 'f'))).toEqual({ rc: 5, out: 'put-base\n' });
+    expect(readFileSync(base, 'utf8')).toBe(VICTIM);
+    expect(shimLog(b).filter((l) => l.startsWith('mktemp ') || l.startsWith('mkdir '))).toEqual([]);
+  });
+
+  it('P4: a file below a real base is written (the same call shape the refusals use)', () => {
+    const b = box();
+    const base = join(b.dir, 'base');
+    mkdirSync(base);
+    expect(putFn(b, base, join(base, 'f'))).toEqual({ rc: 0, out: '' });
+    expect(readFileSync(join(base, 'f'), 'utf8')).toBe('BYTES');
   });
 });
 
@@ -443,6 +581,7 @@ describe.skipIf(UID === 0)('the repair\'s copy over the installed tree runs only
     ['the tools folder may be written by its group', (b: Box, t: { tools: string }) => { own(b, t.tools, 0, 'drwxrwxr-x'); }, 'tree-mode'],
     ['a folder above the tools folder may be written by others', (b: Box) => { own(b, b.dir, 0, 'drwxrwxrwt'); }, 'tree-mode'],
     ['a folder above the tools folder is not root\'s', (b: Box) => { own(b, b.dir, UID); }, 'tree-owner'],
+    ['a folder above the tools folder may be written by others only', (b: Box) => { own(b, b.dir, 0, 'drwxr-xrwx'); }, 'tree-mode'],
   ])('P1, P2: %s: refused %s with exit 4 before anything is written', (_n, arrange, word) => {
     const b = box();
     const t = tools(b);
@@ -464,7 +603,7 @@ describe.skipIf(UID === 0)('the repair\'s copy over the installed tree runs only
     expect(readFileSync(join(realTools, 'release', TAG, 'deploy', 'a'), 'utf8')).toBe('OLD\n');
   });
 
-  it('P2: an entry of the tree that is not root\'s, or that group or other may write, refuses tree-entry', () => {
+  it('P2: an entry of the tree that group (and other) may write refuses tree-entry', () => {
     for (const arrange of [(t: { tree: string }) => { chmodSync(join(t.tree, 'deploy', 'a'), 0o666); }, (t: { tree: string }) => { chmodSync(join(t.tree, 'deploy'), 0o775); }]) {
       const b = box();
       const t = tools(b);
@@ -472,11 +611,40 @@ describe.skipIf(UID === 0)('the repair\'s copy over the installed tree runs only
       expect(copy(b, t).out).toBe('tree-entry\n');
       expect(readFileSync(join(t.tree, 'deploy', 'a'), 'utf8')).toBe('OLD\n');
     }
-    // a link inside the tree is not an entry the check reads: its own mode is every bit, and the copy never follows it
+  });
+
+  it.each<[string, (t: { tree: string }) => NodeJS.ProcessEnv]>([
+    ['a file that is not root\'s', (t) => ({ TB_NOT_ROOT: join(t.tree, 'deploy', 'a') })],
+    ['a folder that is not root\'s', (t) => ({ TB_NOT_ROOT: join(t.tree, 'deploy') })],
+    ['a file only others may write', (t) => { chmodSync(join(t.tree, 'deploy', 'a'), 0o646); return {}; }],
+    ['a folder only others may write', (t) => { chmodSync(join(t.tree, 'deploy'), 0o757); return {}; }],
+  ])('P1, P2: an entry of the tree that is %s refuses tree-entry with exit 4, and nothing is copied', (_n, arrange) => {
+    const b = box();
+    const t = tools(b);
+    const env = { TB_ALL_ROOT: '1', ...arrange(t) };
+    const r = copy(b, t, env);
+    expect([r.rc, r.out]).toEqual([4, 'tree-entry\n']);
+    expect(readFileSync(join(t.tree, 'deploy', 'a'), 'utf8')).toBe('OLD\n');
+    expect(shimLog(b).filter((l) => l.startsWith('cp ') || l.startsWith('chown ') || l.startsWith('chmod '))).toEqual([]);
+  });
+
+  it('P4: a link inside the tree is not an entry the check reads (its own mode is every bit), and the copy follows none', () => {
+    // no staging entry at the link's name: the copy leaves it as it is
     const b = box();
     const t = tools(b);
     symlinkSync(b.victim, join(t.tree, 'deploy', 'link'));
     expect(copy(b, t).rc).toBe(0);
+    expect(readlinkSync(join(t.tree, 'deploy', 'link'))).toBe(b.victim);
     victimAsWas(b);
+    // a regular file in the staging at a name where the tree holds a link: the copy replaces the link with the file, and writes
+    // nothing through it
+    const c = box();
+    const u = tools(c);
+    symlinkSync(c.victim, join(u.tree, 'deploy', 'link'));
+    writeFileSync(join(u.stg, 'deploy', 'link'), 'STAGED\n');
+    expect(copy(c, u).rc).toBe(0);
+    expect(lstatSync(join(u.tree, 'deploy', 'link')).isSymbolicLink()).toBe(false);
+    expect(readFileSync(join(u.tree, 'deploy', 'link'), 'utf8')).toBe('STAGED\n');
+    victimAsWas(c);
   });
 });

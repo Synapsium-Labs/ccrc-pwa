@@ -397,16 +397,17 @@ describe('no call site outside the platform block runs a GNU-only command bare',
 
   // The admin verb's box-side writes in a less privileged user's place (ccd/testbox-user-write) run on the test box too, in one
   // marked region cut by the same BOX_SIDE expression: exactly its seven strings (the privilege drop, the one writer, the token's
-  // two programs, the access key file's two edits and the repair's copy) and exactly one GNU line (the writer's rename that never
-  // treats the name as a directory), so the region cannot grow quietly.
-  it('ccd/testbox-user-write\'s box-side region holds exactly its seven strings and one GNU line, and the cut leaves none outside it', () => {
+  // two programs, the access key file's two edits and the repair's copy) and exactly two GNU lines (the writer's rename that never
+  // treats the name as a directory, and the repair's copy that replaces a link at a destination name rather than writing through
+  // it), so the region cannot grow quietly.
+  it('ccd/testbox-user-write\'s box-side region holds exactly its seven strings and two GNU lines, and the cut leaves none outside it', () => {
     const src = readFileSync(path.join(ccdRoot, 'testbox-user-write'), 'utf8');
     const region = BOX_SIDE.exec(src)?.[0] ?? '';
     expect(region, 'the BOX-SIDE COMMANDS region is not in ccd/testbox-user-write').not.toBe('');
     expect([...region.matchAll(/^([A-Z_]+)=/gm)].map((m) => m[1])).toEqual(
       ['TBA_DROP', 'TBA_PUT_FN', 'TBA_TOKEN_PUT_SH', 'TBA_TOKEN_WRITE_SH', 'TBA_AK_ADD', 'TBA_AK_DROP', 'TBA_TREE_COPY_SH']);
     expect([...region.matchAll(/^(\w+)\(\) \{/gm)]).toEqual([]);
-    expect(gnuHits(executableText(region)).map((h) => h.split(':')[0]).sort()).toEqual(['mv -T']);
+    expect(gnuHits(executableText(region)).map((h) => h.split(':')[0]).sort()).toEqual(['cp --remove-destination', 'mv -T']);
     expect(gnuHits(executableText(src.replace(BOX_SIDE, '')))).toEqual([]);
   });
 
