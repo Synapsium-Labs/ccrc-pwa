@@ -1849,6 +1849,10 @@ describe('the post-merge audit\'s follow-ups: what the answer hook did not see (
     // X3 R2: the file became a route file here when the review page's `app.get` routes joined it.
     'review/routes.ts': 'the draft review read door has a plugin and an error handler of its own (draft-review design '
       + '§3.5, R1), which answers only its fixed refusal bodies and echoes no error text, so it reveals nothing to mask',
+    // X5 A1.3: the file became a route file when the artifact listener's four routes joined it, on an instance of its own.
+    'artifacts/routes.ts': 'the artifact listener is a second Fastify instance with no console route (html-artifacts design '
+      + '§2.2, §3.4); its error handler answers only the fixed 500 page, with no request detail and no log line, so it reveals '
+      + 'nothing to mask (pinned by artifacts-listener.test.ts)',
   };
 
   it('every OWN_ERROR_HANDLER entry gives its reason', () => {

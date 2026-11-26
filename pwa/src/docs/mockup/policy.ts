@@ -3,6 +3,7 @@
 // only L0 tables from `shared/docs.ts`, so the pre-scan, the planner and the loader all read the same values and nothing
 // restates them.
 import { DOCS_MAX_DOC_BYTES, DOCS_RASTER_EXT, DOCS_RASTER_TYPES } from '../../../../shared/docs';
+import { isExactHttpsHost, isExactHttpsOrigin } from '../../../../shared/httpsOrigin';
 import type { HttpsOrigin } from './ports';
 
 /** The most bytes of HTML the viewer renders on open, inclusive (base 5.6.2 step 3): half of `DOCS_MAX_DOC_BYTES`, so
@@ -137,23 +138,11 @@ const MOCKUP_ORIGIN_DIRECTIVES: ReadonlySet<string> = new Set(['script-src', 'st
  *  keeps it (`https://a.example.` is its own origin), but a CSP host-source has no such form, so it would break the
  *  directive. `parseMockupOrigin` (the validator) and `mockupCsp` (the policy builder) both ask this ONE function, so an
  *  origin the first accepts can never make the second throw. */
-export function isMockupHost(host: string): boolean {
-  if (host.length > 253) return false;
-  const labels = host.split('.');
-  if (labels.length < 2) return false;
-  return labels.every((l) => l.length >= 1 && l.length <= 63 && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(l));
-}
+export const isMockupHost = isExactHttpsHost;
 
 /** Whether `raw` is exactly `https://<host>` or `https://<host>:<port>` with a host `isMockupHost` accepts and a port of
  *  1 to 5 digits. The shape of an origin as a CSP source: nothing here can end or widen a directive. */
-export function isMockupOrigin(raw: string): boolean {
-  if (!raw.startsWith('https://')) return false;
-  const rest = raw.slice('https://'.length);
-  const colon = rest.indexOf(':');
-  if (colon < 0) return isMockupHost(rest);
-  const port = rest.slice(colon + 1);
-  return /^\d{1,5}$/.test(port) && Number(port) <= 65535 && isMockupHost(rest.slice(0, colon));
-}
+export const isMockupOrigin = isExactHttpsOrigin;
 
 /** The policy with each confirmed origin appended to `script-src`, `style-src`, `img-src` and `font-src` only, never to
  *  `connect-src`, `default-src`, `worker-src` or `frame-src`, an origin given twice once. With none it is `MOCKUP_CSP`.
