@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. This plan dispatches nothing itself: the wave is built by a worker the coordinator dispatches.
 
-**Status:** drafted on 2026-11-26 for run 3891 (programme `landing-order`, the run's wave 29) from the brief's nine decisions; **revised the same day in fix round 1, after review run 3895, with the coordinator's rulings (call 1388), and again in fix round 2, after review run 3906, with the rulings of call 1400, which reverse Q-B and amend D-9108 and D-9109 (section 10 lists each and where it went).** One build wave; section 2 says why it is not split and where the seam would be.
+**Status:** drafted on 2026-11-26 for run 3891 (programme `landing-order`, the run's wave 29) from the brief's nine decisions; **revised the same day in fix round 1, after review run 3895, with the coordinator's rulings (call 1388), and again in fix round 2, after review run 3906, with the rulings of call 1400, which reverse Q-B and amend D-9108 and D-9109 (section 10 lists each and where it went).** **Corrected by the coordinator on 2026-11-26 after review run 3911 (round 3, the last): section 11 lists each correction, and where it and another section or a task disagree, section 11 wins.** One build wave; section 2 says why it is not split and where the seam would be.
 
 **Goal:** The operator sees one project's landing line on its card on the fleet screen, and can pause and resume that line with one tap and withdraw one entry through a sheet, all through the server's existing read and two doors.
 
@@ -138,13 +138,13 @@ export function landingNoticeText(o: LandingNoticeOutcome, withdrawnPr: number, 
 
 `landingFailureOf`'s rules, first match wins:
 1. An `ApiError` whose body's `error` is a word of the table: the text is `refusalText(err, LANDING_ROUTE_TEXT)`; the scope comes from the same word, read off the body and checked with `Object.hasOwn(LANDING_ROUTE_WORDS, word)` (no literal comparison); `outcomeUnknown` = `door !== 'read' && body.mayApply === true` (R5: the body's field, never a list of words).
-2. An `ApiError` whose body's `error` is another string: `UNKNOWN_WORD_TEXT(word)`, scope `box`, `outcomeUnknown` = `door !== 'read' && (body.mayApply === true || status >= 500)`.
-3. An `ApiError` with no readable word: `UNWORDED_TEXT(status)`, scope `box`, `outcomeUnknown` = `door !== 'read' && writeOutcomeUnknown(err)`.
+2. An `ApiError` whose body's `error` is another string: `UNKNOWN_WORD_TEXT(word)`, or `UNKNOWN_WORD_READ_TEXT(word)` on `read`, scope `box`, `outcomeUnknown` = `door !== 'read' && (body.mayApply === true || status >= 500)`.
+3. An `ApiError` with no readable word: `UNWORDED_TEXT(status)`, or `UNWORDED_READ_TEXT(status)` on `read`, scope `box`, `outcomeUnknown` = `door !== 'read' && writeOutcomeUnknown(err)`.
 4. Anything else (a timeout, a dropped connection): the read's or the write's unreachable sentence, scope `box`, `outcomeUnknown` = `door !== 'read'`.
 
-A rule-2, rule-3 or rule-4 write sentence ends with `OUTCOME_UNKNOWN_TAIL` exactly when `outcomeUnknown` is true.
+Every write sentence, a rule-1 known word's included, ends with `OUTCOME_UNKNOWN_TAIL` exactly when `outcomeUnknown` is true (section 11, C1). The tail is the one place the screen says it, and the function returns it inside `text`. A read's sentence never carries it.
 
-**The full words table.** Every sentence the wave ships is here; a builder may not add, drop or reword one without a deviation. The table holds text and scope only (R5). The three words whose sentences say the outcome is not known are the ones the server's failure arm answers with `mayApply: true` today; a door answers `landing-journal-durability` nowhere (only replay does), so its sentence carries no outcome claim. Each sentence is true on every door that can answer its word: `landing-projection-unreadable` reaches the read and both doors from a damaged row anywhere on the box, and the withdraw door also from the entry's own stored word, so its one sentence names neither a project nor an entry.
+**The full words table.** Every sentence the wave ships is here; a builder may not add, drop or reword one without a deviation. The table holds text and scope only (R5). No sentence of the table says whether a change took effect: `OUTCOME_UNKNOWN_TAIL` says it, appended from the body's `mayApply` (section 11, C1). Today the server's failure arm sends that field with `landing-journal-append`, `landing-db-apply` and `landing-db-commit`; a door answers `landing-journal-durability` nowhere (only replay does). Each sentence is true on every door that can answer its word: `landing-projection-unreadable` reaches the read and both doors from a damaged row anywhere on the box, and the withdraw door also from the entry's own stored word, so its one sentence names neither a project nor an entry.
 
 | Word | Scope | Sentence |
 |---|---|---|
@@ -155,10 +155,10 @@ A rule-2, rule-3 or rule-4 write sentence ends with `OUTCOME_UNKNOWN_TAIL` exact
 | `landing-journal-cursor` | box | The landing database and its journal disagree about how far the journal was applied, so nothing was read or changed. A restart replays the journal. |
 | `landing-journal-changed` | box | The landing line's journal changed while the server read it, so nothing was changed. Try again. |
 | `landing-journal-durability` | box | The server could not confirm its journal reached its disk, so the line stays stopped until the server replays the journal. |
-| `landing-journal-append` | box | The server could not finish writing the journal. Whether it took effect is not known; the line is read again to show what stands. |
+| `landing-journal-append` | box | The server could not finish writing the journal. |
 | `landing-db-unavailable` | box | The coordination database is not available, so the landing line was not read or changed. Try again in a minute. |
-| `landing-db-apply` | box | The server wrote the journal but could not apply it. Whether it took effect is not known until the server replays its journal; the line is read again. |
-| `landing-db-commit` | box | The server could not commit the change. Whether it took effect is not known until the server replays its journal; the line is read again. |
+| `landing-db-apply` | box | The server wrote the journal but could not apply it. The server's next replay of its journal settles it. |
+| `landing-db-commit` | box | The server could not commit the change. The server's next replay of its journal settles it. |
 | `landing-fenced` | box | The landing line is stopped after an earlier failure. It reads and changes nothing until the server replays its journal or restarts. |
 | `landing-projection-unreadable` | box | A record of the landing line does not read, so nothing was read or changed. A replay or a restart does not fix it; the record needs repair. |
 | `landing-entry-exists` | box | That pull request already has an entry in the line, so nothing was changed. |
@@ -175,16 +175,18 @@ A rule-2, rule-3 or rule-4 write sentence ends with `OUTCOME_UNKNOWN_TAIL` exact
 | `landing-entry-moved` | box | The server's record of that entry does not match what this screen read, so nothing was withdrawn. The line is read again; look at it and confirm again if you still mean to. |
 | `landing-project-unknown` | box | The landing line has never seen this project, so there is nothing to pause. Nothing was changed. |
 | `landing-record-unparseable` | box | The server built a journal record its own reader refuses, so it wrote nothing. Nothing was changed; this is a server defect worth reporting. |
-| `run-unreadable` | box | The run behind this entry could not be read, so the server could not tell who to notify and withdrew nothing. Try again in a minute. |
+| `run-unreadable` | box | The run behind this entry could not be read, so the server could not tell who to notify and withdrew nothing. Trying again does not help until the run or the entry's record is repaired. |
 | `bad-request` | box | The server refused the request as malformed, so nothing was changed. This page and the server may be out of step; reload the page. |
 | `not-configured` | absent | This box runs no coordination, so it has no landing line. |
 | `unauthenticated` | box | Your sign-in has lapsed, so nothing was changed. Sign in again and retry. |
 
 | Constant | Sentence |
 |---|---|
-| `UNKNOWN_WORD_TEXT(word)` | ``The server refused this with a word this page does not know (`${word}`). Nothing here assumes it worked; the line is read again.`` |
-| `UNWORDED_TEXT(status)` | ``The server answered ${status} without a word this page can read. Nothing here assumes it worked; the line is read again.`` |
-| `UNREACHABLE_READ_TEXT` | The server could not be reached, so the line was not read again. |
+| `UNKNOWN_WORD_TEXT(word)` | ``The server refused this with a word this page does not know (`${word}`). Nothing here assumes it worked.`` |
+| `UNKNOWN_WORD_READ_TEXT(word)` | ``The server answered with a word this page does not know (`${word}`), so the line was not read again.`` |
+| `UNWORDED_TEXT(status)` | ``The server answered ${status} without a word this page can read. Nothing here assumes it worked.`` |
+| `UNWORDED_READ_TEXT(status)` | ``The server answered ${status} without a word this page can read, so the line was not read again.`` |
+| `UNREACHABLE_READ_TEXT` | The server could not be reached or did not answer in time, so the line was not read again. |
 | `UNREACHABLE_WRITE_TEXT` | The server could not be reached or did not answer. |
 | `OUTCOME_UNKNOWN_TAIL` | ` Whether this change took effect is not known; the line is read again to show what stands.` |
 | `UNREADABLE_ANSWER_TEXT` | The server answered with a line this page cannot read. Reload the page; if it stays, this page and the server are out of step. |
@@ -233,7 +235,7 @@ The kinds and reasons are read through `Record`s over `LandingNoticeOutcome['kin
 | `SHEET_FREES_NOTHING` | `Nothing that waits on it is freed. An entry declared after it keeps waiting until a session declares its order again without it, or until it comes back and then lands or is closed.` |
 | `SHEET_DEPENDANTS(prs)` | `As this page read the line, these open entries wait on it directly: ` + `#<pr>` joined with `, ` + `.`; with none: `As this page read the line, no open entry waits on it directly.` |
 | `SHEET_AS_READ` | `After you confirm, the server names everyone it told.` |
-| `SHEET_TOLD` | `Its coordinator, and the coordinator of each entry that waits on it, are told by mail where one is recorded.` |
+| `SHEET_TOLD` | `Its coordinator, and the coordinator of each entry that waits on it, are told by mail where one is recorded and reads.` |
 | `SHEET_COMES_BACK` | `It comes back if its run is pinned at merging again.` |
 | `SHEET_NO_RUN` | `It has no run, so it cannot come back into the line.` |
 | `SHEET_GITHUB` | `It does not stop a merge GitHub has already queued.` |
@@ -443,7 +445,7 @@ The pinned entries come first, in the order the server says they may land; the e
 │ everyone it told.                        │
 │ Its coordinator, and the coordinator of  │
 │ each entry that waits on it, are told by │
-│ mail where one is recorded.              │
+│ mail where one is recorded and reads.    │
 │ It comes back if its run is pinned at    │
 │ merging again.                           │
 │ It does not stop a merge GitHub has      │
@@ -460,7 +462,7 @@ For an entry with no run, `It has no run, so it cannot come back into the line.`
 - **It already left the line:** `That entry has already left the line: … Nothing was changed; the line is read again.` The sheet then says `#104 is no longer in the line as last read, so there is nothing to withdraw.`, with the confirm button off, and stays until you close it, even if the line now has nothing else to show.
 - **Its records are being recovered:** `This entry's records are still being recovered, so it cannot be withdrawn yet. Nothing was changed.`
 - **The server could not be reached:** `The server could not be reached or did not answer. Whether this change took effect is not known; the line is read again to show what stands.`
-- **A word this page does not know** (a newer server): ``The server refused this with a word this page does not know (`…`). Nothing here assumes it worked; the line is read again.``
+- **A word this page does not know** (a newer server): ``The server refused this with a word this page does not know (`…`). Nothing here assumes it worked.``
 
 When you tap `Done` after a withdrawal, focus goes to the line's pause button, or, if the whole block has gone, to the project's card. When you cancel, focus goes back to the row's `Withdraw…` button, or, if that row has gone, to the pause button, or to the card. If `Resume line` on a line with no entries makes the block disappear, focus goes to the card.
 
@@ -485,7 +487,7 @@ pause: each open entry by pull request in the read's order, which one is next to
 why the line is paused. It reads `GET /api/landing` for every known project, at once when the list of projects changes, every 60
 seconds, when the page is shown again and after each door's answer (D-9108). A read that fails is shown only over a line already
 drawn, as not read again (D-9109). Pause and resume are one tap; a withdrawal is a sheet that sends the pin time of the entry it
-showed when it opened, and then names who was told and who could not be.
+shows, and then names who was told and who could not be.
 ```
 
 No test on `origin/main` reads the replaced sentence's end. `landing-entry-census.test.ts`'s journal phrases sit in other paragraphs.
@@ -599,7 +601,7 @@ No test on `origin/main` reads the replaced sentence's end. `landing-entry-censu
   - Every word in `LANDING_INFRASTRUCTURE_CODES`, `LANDING_MUTATION_CODES` and the four route words has a sentence that is non-empty, ends with a full stop, does not contain its own word, and differs from every other word's sentence; `not-configured` is `absent` and every other word `box`, `landing-projection-unreadable` included; no entry of `LANDING_ROUTE_WORDS` has a `mayApply` key (R5).
   - `LANDING_ROUTE_TEXT` has exactly `LANDING_ROUTE_WORDS`' keys, each with its text.
   - Each sentence of section 4.2's table, byte for byte (one `it.each` over the table).
-  - `landingFailureOf`: a known word answers its text; `outcomeUnknown` follows the body's `mayApply` (R5): `{ error: 'landing-db-commit', mayApply: true }` is `true` on `withdraw` and `pause` and `false` on `read`; `{ error: 'landing-db-commit' }` with no `mayApply` is `false` on every door; `{ error: 'landing-entry-moved', mayApply: true }` is `true` on `withdraw` (the body decides, not the word) and `{ error: 'landing-entry-moved' }` `false`; an unknown word with `mayApply: true` at 409 is `true` on a write; an unknown word answers `UNKNOWN_WORD_TEXT` naming it, with `OUTCOME_UNKNOWN_TAIL` on a write at 500 and above and never on a read; an `ApiError` with a non-object body answers `UNWORDED_TEXT` with its status; a plain `Error` answers the unreachable sentence, with the tail on `pause` and `withdraw` and not on `read`.
+  - `landingFailureOf`: a known word answers its text, ending with `OUTCOME_UNKNOWN_TAIL` exactly when `outcomeUnknown` is true (section 11, C1); `outcomeUnknown` follows the body's `mayApply` (R5): `{ error: 'landing-db-commit', mayApply: true }` is `true` on `withdraw` and `pause` and `false` on `read`; `{ error: 'landing-db-commit' }` with no `mayApply` is `false` on every door; `{ error: 'landing-entry-moved', mayApply: true }` is `true` on `withdraw` (the body decides, not the word) and `{ error: 'landing-entry-moved' }` `false`; an unknown word with `mayApply: true` at 409 is `true` on a write; an unknown word answers `UNKNOWN_WORD_TEXT` naming it (`UNKNOWN_WORD_READ_TEXT` on `read`), with `OUTCOME_UNKNOWN_TAIL` on a write at 500 and above and never on a read; an `ApiError` with a non-object body answers `UNWORDED_TEXT` with its status (`UNWORDED_READ_TEXT` on `read`); a plain `Error` answers the unreachable sentence, with the tail on `pause` and `withdraw` and not on `read`.
   - `landingNoticeText`: each kind and reason, a dependant's PR from `prOf`, and `entry <id>` when `prOf` answers `null`.
 
   Run red.
@@ -758,7 +760,7 @@ Each row is one change to the built code, measured red by the named test, then r
 | M39 | `FleetCards`' hold key leaves out the landing part | `landing-line-hold`'s `~5r` case |
 | M40 | a door's answer does not call `reload` | `landing-line`'s pause case; `landing-withdraw-sheet`'s answer case |
 | M41 | `landingCardOf` draws a line for main red alone (Q2) | `landing-line-view`'s main-red-alone case |
-| M42 | `landingFailureOf` ignores the body's `mayApply` and decides from the word (a second writer of the fact, R5) | `landing-words`' `mayApply` cases (`landing-db-commit` without `mayApply`, `landing-entry-moved` with it) |
+| M42 | `landingFailureOf` ignores the body's `mayApply` and decides from the word, or leaves the tail off a known word's sentence (a second writer of the fact, or a fact no screen shows; R5 and section 11, C1) | `landing-words`' `mayApply` cases (`landing-db-commit` without `mayApply` has no tail; `landing-entry-moved` with it has the tail) |
 | M43 | a line paused and held says only the pause | `landing-line-view`'s paused-and-held case |
 | M44 | `LandingLine` draws no `Withdraw…` on an `unknown` row (a withdrawal the server accepts hidden, R1) | `landing-line`'s every-row-has-a-button case; the browser `#109` check |
 | M45 | the sheet never adopts a read after a refusal (it resends the refused `pinnedAt`, R3) | `landing-withdraw-sheet`'s moved case (the next confirm sends the new `pinnedAt`); the browser moved case |
@@ -834,6 +836,43 @@ Round 1's Q1 is amended by R4 (the project-set trigger), m2 by R5 (the fact is r
 | F14 | `landing-fenced` says "after an earlier failure" | Section 4.2's table, section 5 |
 | M20 | Reworded to a mutation the code can express | Section 8 |
 | The request's result | A per-project map of outcomes | Section 4.4, Task 6 |
+
+## 11. Corrections after review run 3911
+
+Review run 3911 read this plan at `30d0d64456` (round 3, the last the cap allows): no critical finding, two important, seven minor, and "a builder can start". The plan was accepted there (call 1411) and merged as #3410 (`44f2b15a3b`). There was no fourth round: the coordinator made the corrections below on the ledger's pull request, after reading the code each rests on at `origin/main` `44c1126b70`. **Where this section and another section or a task disagree, this section wins.** The corrections marked "edited in place" changed the sentence where it stands, so the words table is still the one copy of every shipped sentence.
+
+- **C1, the "may have applied" note has one writer on screen (review run 3911's F1; ruled).**
+  - The fact as reviewed: rule 1 read the body's `mayApply` into `outcomeUnknown`, but no component drew that flag, and three table sentences said "Whether it took effect is not known" by word. So the fact had two writers, and row M42 guarded a field no screen showed.
+  - The ruling: the body is the one writer. Every write sentence, a known word's included, ends with `OUTCOME_UNKNOWN_TAIL` exactly when `outcomeUnknown` is true, and no table sentence makes that claim itself. A read's sentence never carries the tail.
+  - Edited in place: the sentence under the four rules; the paragraph above the table; the sentences of `landing-journal-append`, `landing-db-apply` and `landing-db-commit`; Task 3's `landingFailureOf` case; row M42.
+  - For the builder: `landingFailureOf` returns the tail inside `text`, so the components keep drawing `text` only. Task 3's case for a known word asserts the tail on a write with `mayApply: true` and its absence without it, for `landing-db-commit` and for `landing-entry-moved`.
+- **C2, the sentence for an unreadable run, and what a set-aside row is (F2).**
+  - `run-unreadable` said "Try again in a minute". On `main` the facts are read in one transaction, and the word answers for a run id that does not read or a run missing from the runs table, so it stays until the record is repaired. Edited in place.
+  - The measured fact "a display `unknown` has three sources … only the last is refused" is one case of several. `landingEntryFactsOfRow` shows `unknown` for a row whose stored word is not a word, or whose ejection kind, order, `fixesMain`, pin time, ejection count, id, pull request or run id does not read. The withdraw door then answers by cause: `landing-projection-unreadable` for a stored word that is not a word, `run-unreadable` for a run that does not read, `landing-entry-terminal` for a row whose stored word is terminal behind a damaged field, and `landing-entry-moved` for a pin time that does not read. Read the three places that say otherwise (the measured facts, section 1's choice on `Withdraw…`, and "What this does not claim") with this list.
+  - A row that is terminal behind a damaged field stays listed as a set-aside row after its refusal, because the read still holds it. So the sheet does not reach `SHEET_GONE` there: it keeps the refusal's sentence and the same snapshot. Task 7 gains one sheet case: a refusal after which the next read still holds the entry unchanged keeps the snapshot, the sentence and an enabled confirm.
+  - `ROLE_TEXT.unknown` is true of every source above and is unchanged.
+- **C3, a failed read has its own generic sentences (F3).**
+  - "Not read again:" was followed by "the line is read again", and "Nothing here assumes it worked" means nothing for a read. A proxy's 502 during a server restart would have drawn it over every line.
+  - Edited in place: `UNKNOWN_WORD_READ_TEXT` and `UNWORDED_READ_TEXT` are added and rules 2 and 3 use them on `read`. The two write sentences lose "; the line is read again", which the tail already says, so a write no longer says it twice. Section 5's example follows.
+- **C4, every read already has a time limit (F4).**
+  - "Nothing aborts or bounds them" is false: `lib/readLimit.ts` gives every GET 20 seconds (`READ_TIMEOUT_MS`) and rejects with `ApiTimeout`. So a timer read never outlives the next tick, and reads overlap only inside 20 seconds, between a tick and a `reload()` or a page return. The accepted risk in "What this does not claim" (R9) is smaller than stated.
+  - A server slower than 20 seconds shows every drawn line as not read again. `UNREACHABLE_READ_TEXT` now says "or did not answer in time", so that is true of a timeout. Edited in place. No import of the limit's module into the words file: rule 4 stays "anything else".
+- **C5, which damaged record fails every read (F5).** It is an identity or authority record: a bad subject or authority row, or another project's entry with a bad id, pull request or project. A damaged witness row is skipped, and any other damaged field of an entry shows as that project's own set-aside row. Read "a damaged row anywhere on the box" in section 1, section 5 and D-9109 as that. The design (box scope, one sentence) is unchanged.
+- **C6, leftovers of amended rulings (F6).**
+  - Decision 5's "says the entry changed": the `landing-entry-moved` sentence asserts no cause (R1).
+  - Section 10's round 1 row for F5: `mayApply` is read from the body (R5), not from the word.
+  - Row M25: the mutation is "`LANDING_LINE_POLL_MS` is `null` (no timer)".
+  - Row M16: with the scope `absent` the reducer answers `none`, so the mutation makes a drawn line vanish on a failed read. The named cases still go red.
+  - Task 4's "no row carries a withdrawable field" cannot go red, because the type has no such field. Row M44 is the guard of R1.
+  - The README block and Decision 4: the sheet sends the pin time of the entry it shows, which after a refusal is the next read's. The README block is edited in place.
+- **C7, the run-less fact has one reader (F7).** The done phase chose its last sentence by `answer.entry.runId === null` inside the component. `landingLineView.ts` gains the one reader of that fact, used for the preview and for the answer, and the component branches on its result.
+- **C8, who is told (F8).** `SHEET_TOLD` ends "where one is recorded and reads", as the server does: a dependant whose run does not read gets no mail. Edited in place, with section 5's sketch.
+- **C9, row M20's second case (F9).** Task 6's changed-answer case differs from the first answer only in one entry's `pinnedAt`.
+- **Smaller points for the builder, none a new decision.**
+  - The hook records its project-set key before the request's first `await`, so a full list at mount reads once.
+  - The pause button is not `disabled` while busy (it ignores a second tap), so focus stays on it. Task 8 adds a browser case that taps `Resume line` on a line with no entries and reads focus on the card.
+  - Section 5's sketch shows the pause button on the title row. In the document the status and the stale sentence come before the pause button, as section 4.5 lists them.
+  - Two guards have a case and no mutation row; add the rows: the sheet adopts at once when the view was already new at the refusal, and a card with no block keeps today's hold key byte for byte.
 
 ## Deviations found
 
