@@ -257,6 +257,64 @@ describe('the cost measure is the work a run did, not the time it waited (D-8334
   });
 });
 
+// D-9118: the linearity rows' estimator, pinned on recorded samples with no CPU measured. `linearity-windows.json` holds
+// two windows of four rounds each, CPU ms as [original small, current small, original large, current large], measured
+// with jq 1.7.1 on the fleet box on 2026-11-26 at ambient load: `ambient` is main's program, whose first two rounds
+// read red under the faster-of-two that D-8334 used and are green under the median; `cubic` is main's program plus a
+// cubic step (about 18% of its cost at 32 KB), red under both. Numbers only.
+describe('the linearity verdict is the median of the per-round differences (D-9118)', () => {
+  const WINDOWS: Record<'ambient' | 'cubic', Round[]> = JSON.parse(fs.readFileSync(path.join(FIX, 'linearity-windows.json'), 'utf8'));
+  /** D-8334's reading: the faster of the first two rounds, cell by cell, and the same bound. */
+  const fasterOfTwo = (rounds: readonly Round[]): { currentRatio: number; bound: number } => {
+    const [rs, cs, rl, cl] = [0, 1, 2, 3].map((i) => Math.min(...rounds.slice(0, 2).map((r) => r[i]))) as [number, number, number, number];
+    const referenceRatio = rl / rs;
+    return { currentRatio: cl / cs, bound: referenceRatio > 2.5 ? referenceRatio + 0.5 : 2.5 };
+  };
+
+  it('both windows hold four rounds of four positive numbers', () => {
+    for (const w of Object.values(WINDOWS)) {
+      expect(w).toHaveLength(LINEARITY_ROUNDS);
+      for (const r of w) { expect(r).toHaveLength(4); for (const ms of r) expect(ms).toBeGreaterThan(0); }
+    }
+  });
+
+  it('an ambient window the faster of two reads red is green under the median', () => {
+    const old = fasterOfTwo(WINDOWS.ambient);
+    expect(old.currentRatio, 'the recorded window is red under the faster of two').toBeGreaterThan(old.bound);
+    const v = linearityVerdict(WINDOWS.ambient);
+    expect(v.red).toBe(false);
+    expect(v.currentRatio).toBeLessThanOrEqual(v.bound);
+  });
+
+  it('a cubic step is red under both', () => {
+    const old = fasterOfTwo(WINDOWS.cubic);
+    expect(old.currentRatio).toBeGreaterThan(old.bound);
+    const v = linearityVerdict(WINDOWS.cubic);
+    expect(v.red).toBe(true);
+    expect(v.currentRatio).toBeGreaterThan(v.bound);
+  });
+
+  it('reads the original ratio off the faster of all rounds, the bound as FD8 set it, and the median of an even count as the mean of the middle two', () => {
+    const rounds: Round[] = [[100, 100, 400, 410], [90, 100, 380, 600], [100, 90, 400, 360], [120, 100, 500, 420]];
+    const v = linearityVerdict(rounds);
+    expect(v.referenceRatio).toBeCloseTo(380 / 90, 12);
+    expect(v.bound).toBeCloseTo(380 / 90 + 0.5, 12);
+    expect(v.differences.map((d) => +d.toFixed(6))).toEqual([0.1, 1.777778, 0, 0.033333]);
+    expect(v.currentRatio).toBeCloseTo(v.referenceRatio + (1 / 30 + 0.1) / 2, 12);
+    const low = linearityVerdict([[100, 100, 200, 240], [100, 100, 200, 240], [100, 100, 200, 240], [100, 100, 200, 240]]);
+    expect(low.bound, 'an original below 2.5x keeps the 2.5x bound').toBe(2.5);
+    expect(low.red).toBe(false);
+    expect(linearityVerdict([[100, 100, 200, 260], [100, 100, 200, 260], [100, 100, 200, 260], [100, 100, 200, 260]]).red).toBe(true);
+  });
+
+  it('alternates which program runs first, so across the rounds each is last at a size as often as the other', () => {
+    const order = Array.from({ length: LINEARITY_ROUNDS }, (_, i) => linearityOrder(i));
+    expect(order).toEqual(['original', 'current', 'original', 'current']);
+    const lastCurrent = order.filter((first) => first === 'original').length;
+    expect(lastCurrent).toBe(LINEARITY_ROUNDS - lastCurrent);
+  });
+});
+
 // Review 1493, FD8/R3/R4: compare the actual original program, not a synthetic reference or the presence of pmatch.
 // The original is VENDORED, byte for byte, in `fixtures/prune-deny/forbidden-jq-33e521e07.jq`: it is the
 // APPROVAL_FORBIDDEN_JQ of the hook as it stood before this deny, extracted with `extract` below. It was first read by
