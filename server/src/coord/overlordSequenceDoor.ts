@@ -80,6 +80,14 @@ export function sequenceDoorAnswer(
 
 // ------------------------------------------------------------------------------------------------- the operator's invariants read
 
+/** The operator's read's own answer words, enumerated once: what `kind` names besides the verdict words (`invariants.ts`). */
+const INVARIANTS_READ_KIND_MAP = {
+  'no-pass-yet': 'the monitor has run no pass since this server started, so no verdict is claimed',
+  pass: 'the last pass, its findings and the counts',
+} as const;
+/** The sequence doors' own words, for the coordination kebab census: each rides a 200's `kind`, never a refusal. */
+export const isSequenceDoorKebab = (word: string): boolean => Object.hasOwn(INVARIANTS_READ_KIND_MAP, word);
+
 /** The most findings rows of each list (open, resolved) the read serves, newest first; M24's counts carry the totals. */
 export const INVARIANTS_READ_ROWS_MAX = 200;
 
