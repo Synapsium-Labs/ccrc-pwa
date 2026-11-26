@@ -604,7 +604,7 @@ describe('folder leaf: rendered as a draft is, with the folder\'s own links', ()
 });
 
 describe('settings: the Docs folders card sits on the Integrations section', () => {
-  it('rendering Settings › Integrations shows the Docs folders card, a level-3 card after the three that were there', async () => {
+  it('rendering Settings › Integrations shows Docs folders fourth and Docs settings fifth, both at level 3', async () => {
     const never = (): Promise<never> => new Promise(() => {});
     vi.stubGlobal('fetch', vi.fn((): Promise<never> => never()));
     for (const name of ['updates', 'stallWatch', 'collectLane', 'dispatchAbandon', 'testbox'] as const) {
@@ -617,7 +617,7 @@ describe('settings: the Docs folders card sits on the Integrations section', () 
     await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
     const levels = screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent);
     const card = SETTINGS_CARDS.integrations.docsFolders;
-    expect(levels).toEqual(['Linear', 'Project linking', 'GitHub', card.title]);
+    expect(levels).toEqual(['Linear', 'Project linking', 'GitHub', card.title, 'Docs settings']);
     const region = screen.getByRole('region', { name: card.title });
     expect(within(region).getByText(card.scope)).toBeTruthy();
     expect(within(region).getByText(card.purpose)).toBeTruthy();
