@@ -31,13 +31,13 @@
    apart, the scaffold's head-to-body and body gaps. The head row and the rhythm are the list's alone (the `.wl` that holds a
    `.wl-head`); the screens that share its root (a programme, an epic, upkeep, the item route's notes and side list) take
    the inset and the column rule only, and keep their own heads. The item view and its strip take the inset and the column
-   rule. */
+   rule. A column with an auto margin is given its full width, as the scaffold's `w-full` is: an auto margin on a grid or
+   flex child would otherwise shrink it to its content (the item view did, in Refined). */
 @media (min-width: 900px) {
-  .wl { margin-inline: var(--page-margin-inline); }
+  .wl { width: 100%; margin-inline: var(--page-margin-inline); }
   .wl:has(> .wl-head) { padding-block-start: 0; row-gap: var(--sp-3); }
   .wl > .wl-head { min-height: var(--head-h); margin-block-end: calc(var(--sp-2) - var(--sp-3)); }
-  .wi { padding-inline: var(--gutter); margin-inline: var(--page-margin-inline); }
-  .wi-nav { padding-inline: var(--gutter); margin-inline: var(--page-margin-inline); }
+  .wi { width: 100%; padding-inline: var(--gutter); margin-inline: var(--page-margin-inline); }
 }
 .wl .wl-title { font: var(--weight-medium) var(--fs-base) / var(--lh-tight) var(--family-mono); color: var(--ink-primary); }
 .wl .wl-note { font-size: var(--fs-meta); color: var(--ink-secondary); overflow-wrap: anywhere; }
@@ -295,6 +295,10 @@
    top on its own ground; at a desk the item scrolls in its pane beside the list, where the strip has always been in reach. In
    reach is below the status bar: an installed app draws under it, so the strip's own opaque ground covers the top inset and its
    controls sit under it, at rest and stuck (review 1466 F2). */
+/* At a desk the strip takes the item's inset and column rule (wave 182): after its own pad above, which it overrides. */
+@media (min-width: 900px) {
+  .wi-nav { width: 100%; padding-inline: var(--gutter); margin-inline: var(--page-margin-inline); }
+}
 @media (max-width: 899.98px) {
   .wi-nav {
     position: sticky; top: 0; z-index: var(--z-header);

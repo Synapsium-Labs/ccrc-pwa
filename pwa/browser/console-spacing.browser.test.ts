@@ -311,7 +311,7 @@ describe('Refined at a desk: its detail screens agree with each other; its list 
   for (const [width, height] of DESKS) {
     for (const theme of THEMES) {
       const view = `refined, ${theme}, ${width}x${height}`;
-      it(`${view}: the page screens share one left, the wide screens (Runs, Waiting on you) another at --gutter, the session header --gutter`, async () => {
+      it(`${view}: the page screens share one left, the wide screens (Runs, Waiting on you) another at --gutter, the session header the transcript's 16`, async () => {
         const { ctx, page, errors } = await openApp(browser!, { skin: REFINED, theme, width }, FIRST);
         try {
           await page.setViewportSize({ width, height });
@@ -323,7 +323,8 @@ describe('Refined at a desk: its detail screens agree with each other; its list 
             lefts[p.name] = { left: need(m, p.pad)[0] - m.detail!.left, kind: p.kind };
           }
           const s = await at(page, '/s/project-a', '.chat-head');
-          expect(need(s, 'chatHeadPad')[0] - s.detail!.left, 'the session header at --gutter').toBeCloseTo(gutter, 0);
+          // The session screen's edge is the transcript's own inset (--sp-4, 16), not the gutter (the amendment for that screen).
+          expect(need(s, 'chatHeadPad')[0] - s.detail!.left, 'the session header at the transcript\'s inset').toBeCloseTo(16, 0);
           expect(need(s, 'fleetPad')[0] - s.nav!.left, 'the list column keeps its 16 (--sp-4)').toBeCloseTo(16, 0);
           const pages = Object.entries(lefts).filter(([, v]) => v.kind === 'page');
           for (const [name, v] of pages) expect(v.left, `${name} against Accounts`).toBeCloseTo(lefts['Accounts']!.left, 0);
@@ -438,6 +439,114 @@ describe("a page's head-row controls: min(--row-h, --tap-min) under a mouse, the
           }
         }, 120_000);
       }
+    }
+  }
+});
+
+/** A session's socket: a short transcript and its status, so the transcript's column and the composer are drawn. */
+const sessionFrames = (status: 'idle' | 'busy'): object[] => [
+  {
+    type: 'backlog', uuid: 'u-1', offset: 1, file: '/w/t.jsonl', missing: false, searchComplete: true, fileMeasured: true,
+    events: [
+      { kind: 'user', uuid: 'q1', ts: new Date(NOW - 10 * MIN).toISOString(), text: 'Measure the two panes.' },
+      { kind: 'assistant', uuid: 'a1', ts: new Date(NOW - 9 * MIN).toISOString(), text: 'Both panes start at one inset now.' },
+    ],
+  },
+  { type: 'status', status, statusUpdatedAt: null },
+];
+const WITH_TRANSCRIPTS: AppFixture = {
+  ...BUSY,
+  socketFrames: { '/ws/session/prog-a-w1': sessionFrames('idle'), '/ws/session/prog-b-w1': sessionFrames('busy') },
+};
+
+describe("a session screen has one edge: its header, its transcript and its composer (the ruling's amendment for the session screen)", () => {
+  for (const skin of [INSTRUMENT, REFINED]) {
+    for (const [width, height] of DESKS) {
+      for (const [state, id] of [['idle', 'prog-a-w1'], ['busy', 'prog-b-w1']] as const) {
+        it(`${skin}, ${width}x${height}, ${state}: the header's text, the transcript's column and the composer start on one left edge; the header's last control ends on the composer's right edge`, async () => {
+          const { ctx, page, errors } = await openApp(browser!, { skin, theme: PHOSPHOR, width }, WITH_TRANSCRIPTS);
+          try {
+            await page.setViewportSize({ width, height });
+            await page.goto(server!.origin + `/s/${id}`);
+            await page.waitForSelector('.shell-detail .chat-item', { timeout: 20_000 });
+            await page.waitForSelector('.shell-detail .composer', { timeout: 20_000 });
+            await page.waitForTimeout(300);
+            const e = await page.evaluate(() => {
+              const content = (sel: string): [number, number] => {
+                const el = document.querySelector<HTMLElement>(sel)!;
+                const r = el.getBoundingClientRect();
+                const cs = getComputedStyle(el);
+                return [r.left + parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft), r.right - parseFloat(cs.borderRightWidth) - parseFloat(cs.paddingRight)];
+              };
+              const head = document.querySelector('.shell-detail .chat-head')!;
+              // The header's text edge: the leftmost text it draws outside its controls (each skin has its own header markup).
+              const walker = document.createTreeWalker(head, NodeFilter.SHOW_TEXT);
+              let textLeft = Infinity;
+              for (let n = walker.nextNode(); n !== null; n = walker.nextNode()) {
+                if ((n.textContent ?? '').trim() === '' || n.parentElement?.closest('button, a[href]') !== null) continue;
+                const range = document.createRange();
+                range.selectNodeContents(n);
+                for (const r of range.getClientRects()) if (r.width > 0) textLeft = Math.min(textLeft, r.left);
+              }
+              const title = { left: textLeft };
+              const lastRight = Math.max(...[...head.querySelectorAll('button, a[href]')].map((b) => b.getBoundingClientRect())
+                .filter((r) => r.width > 0).map((r) => r.right));
+              return { head: content('.shell-detail .chat-head'), title: title.left, lastRight, item: content('.shell-detail .chat-item'), composer: content('.shell-detail .composer') };
+            });
+            expect(Math.abs(e.title - e.composer[0]), `the header's text (${e.title}) on the composer's left edge (${e.composer[0]})`).toBeLessThan(NEAR);
+            expect(Math.abs(e.item[0] - e.composer[0]), `the transcript's column (${e.item[0]}) on the composer's left edge`).toBeLessThan(NEAR);
+            expect(Math.abs(e.head[0] - e.composer[0]), 'the header\'s side on the same edge').toBeLessThan(NEAR);
+            expect(Math.abs(e.lastRight - e.composer[1]), `the header's last control (${e.lastRight}) ends on the composer's right edge (${e.composer[1]})`).toBeLessThan(NEAR);
+            expect(errors).toEqual([]);
+          } finally {
+            await ctx.close();
+          }
+        }, 120_000);
+      }
+    }
+  }
+});
+
+describe("Refined's desk runs line wraps rather than crush (the ruling's point 5)", () => {
+  for (const [width, height] of DESKS) {
+    for (const [name, fixture] of [['first run', FIRST], ['busy', BUSY]] as const) {
+      it(`refined, ${width}x${height}, ${name}: the Runs door, the chooser and New project never overlap, and the door's words are one line`, async () => {
+        const { ctx, page, errors } = await openApp(browser!, { skin: REFINED, theme: PHOSPHOR, width }, fixture);
+        try {
+          await page.setViewportSize({ width, height });
+          await page.goto(server!.origin + '/fleet');
+          await page.waitForSelector('.shell-nav .fleet-runs-line .fleet-new-project', { timeout: 20_000 });
+          await page.waitForTimeout(300);
+          const m = await page.evaluate(() => {
+            const line = document.querySelector('.shell-nav .fleet-runs-line')!;
+            const boxes = [...line.children].map((k) => {
+              const r = k.getBoundingClientRect();
+              return { cls: (k.getAttribute('class') ?? '').split(' ')[0] ?? '', l: r.left, t: r.top, r: r.right, b: r.bottom };
+            });
+            const row = line.querySelector<HTMLElement>('.fleet-runs-row')!;
+            const range = document.createRange();
+            range.selectNodeContents(row);
+            const tops = [...new Set([...range.getClientRects()].filter((r) => r.width > 0).map((r) => Math.round(r.top)))];
+            const lr = line.getBoundingClientRect();
+            return { boxes, lines: tops.length, words: row.textContent ?? '', line: { l: lr.left, r: lr.right } };
+          });
+          expect(m.boxes.length, 'the three controls').toBe(3);
+          for (let i = 0; i < m.boxes.length; i += 1) {
+            for (let j = i + 1; j < m.boxes.length; j += 1) {
+              const a = m.boxes[i]!;
+              const b = m.boxes[j]!;
+              const apart = a.r <= b.l + 0.5 || b.r <= a.l + 0.5 || a.b <= b.t + 0.5 || b.b <= a.t + 0.5;
+              expect(apart, `${a.cls} and ${b.cls} do not overlap`).toBe(true);
+            }
+            expect(m.boxes[i]!.l, `${m.boxes[i]!.cls} inside the line`).toBeGreaterThanOrEqual(m.line.l - 0.5);
+            expect(m.boxes[i]!.r, `${m.boxes[i]!.cls} inside the line`).toBeLessThanOrEqual(m.line.r + 0.5);
+          }
+          expect(m.lines, `"${m.words}" on one line`).toBe(1);
+          expect(errors).toEqual([]);
+        } finally {
+          await ctx.close();
+        }
+      }, 120_000);
     }
   }
 });
