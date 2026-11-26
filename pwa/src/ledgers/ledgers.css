@@ -22,22 +22,25 @@
 }
 .wl-route { display: grid; gap: var(--sp-1); min-width: 0; background: var(--bg-page); color: var(--ink-primary); }
 .wl-head { display: flex; align-items: center; gap: var(--sp-2); }
-/* ONE INSET (desktop polish wave 182, the operator's ruling 6): the list's side pad is the skin's `--gutter`, the one every
-   page scaffold reads, at every width, so Waiting on you starts where Accounts, Settings and Mail do, on a phone too. */
-.wl { padding-inline: var(--gutter); }
+/* ONE INSET (desktop polish wave 182, the coordinator's rulings 6 and 1): every ledgers root (Waiting on you, a programme,
+   an epic, upkeep, the item route's wrappers) and the item view's body pad their sides with the skin's `--gutter`, the one
+   every page scaffold reads, at every width, so they start where Accounts, Settings and Mail do, on a phone too, and the
+   item route's wrappers and its body share one edge. The item's step strip takes the same inset in its own rule below. */
+.wl,
+.wi { padding-inline: var(--gutter); }
 /* At a desk the list and the item take the page column's rules too (wave 182): the head is a `--head-h` row with the title
    centred in it, as the scaffold's is, so every detail screen's title sits on one line; the column starts at the gutter or
    centres as the skin's `--page-margin-inline` says; the title is `--sp-2` above the first line and the groups are `--sp-3`
    apart, the scaffold's head-to-body and body gaps. The head row and the rhythm are the list's alone (the `.wl` that holds a
    `.wl-head`); the screens that share its root (a programme, an epic, upkeep, the item route's notes and side list) take
-   the inset and the column rule only, and keep their own heads. The item view and its strip take the inset and the column
-   rule. A column with an auto margin is given its full width, as the scaffold's `w-full` is: an auto margin on a grid or
-   flex child would otherwise shrink it to its content (the item view did, in Refined). */
+   the column rule only, and keep their own heads. The item view and its strip take the column rule. A column with an auto
+   margin is given its full width, as the scaffold's `w-full` is: an auto margin on a grid or flex child would otherwise
+   shrink it to its content (the item view did, in Refined). */
 @media (min-width: 900px) {
   .wl { width: 100%; margin-inline: var(--page-margin-inline); }
   .wl:has(> .wl-head) { padding-block-start: 0; row-gap: var(--sp-3); }
   .wl > .wl-head { min-height: var(--head-h); margin-block-end: calc(var(--sp-2) - var(--sp-3)); }
-  .wi { width: 100%; padding-inline: var(--gutter); margin-inline: var(--page-margin-inline); }
+  .wi { width: 100%; margin-inline: var(--page-margin-inline); }
 }
 .wl .wl-title { font: var(--weight-medium) var(--fs-base) / var(--lh-tight) var(--family-mono); color: var(--ink-primary); }
 .wl .wl-note { font-size: var(--fs-meta); color: var(--ink-secondary); overflow-wrap: anywhere; }
@@ -288,16 +291,17 @@
    item does. */
 .wi-nav {
   display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); min-width: 0; max-width: var(--wl-measure);
-  padding: var(--sp-2) var(--sp-2) 0; background: var(--bg-page); color: var(--ink-primary);
+  padding: var(--sp-2) var(--gutter) 0; background: var(--bg-page); color: var(--ink-primary);
 }
 /* On a phone the strip stays in view while the operator reads a long item, so stepping through the decisions never needs a
    scroll back up (desktop-polish PL10, D-7952; D25). The page scrolls the document there, so the strip sticks to the viewport's
    top on its own ground; at a desk the item scrolls in its pane beside the list, where the strip has always been in reach. In
    reach is below the status bar: an installed app draws under it, so the strip's own opaque ground covers the top inset and its
    controls sit under it, at rest and stuck (review 1466 F2). */
-/* At a desk the strip takes the item's inset and column rule (wave 182): after its own pad above, which it overrides. */
+/* The strip's sides are the item's `--gutter` at every width (wave 182, rulings 6 and 1, in its pad above); at a desk it takes
+   the item's column rule too. */
 @media (min-width: 900px) {
-  .wi-nav { width: 100%; padding-inline: var(--gutter); margin-inline: var(--page-margin-inline); }
+  .wi-nav { width: 100%; margin-inline: var(--page-margin-inline); }
 }
 @media (max-width: 899.98px) {
   .wi-nav {

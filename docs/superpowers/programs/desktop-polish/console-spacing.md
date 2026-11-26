@@ -22,7 +22,9 @@ throwaway browser file that was never committed.
   desk runs line no longer crushes the Runs label onto three or four lines: the door and New project share the line, and
   the chooser has a line of its own under it, as in Instrument's Project mode (ruling A, condition 3).
 - **The session screen** has one edge: header, banners, transcript and composer read one `--chat-inset` (16) in both skins.
-- **The phone** holds its figures, except Waiting on you, which joins its scaffold's inset (ruling 6).
+- **The phone** holds its figures except on the ledger screens: Waiting on you, Programme, Epic, Upkeep and the item route
+  (its body and its step strip) sit at the scaffold's inset, 12 in Instrument and 16 in Refined (rulings 6 and 1, fix
+  round 1, §15.1).
 - **The Accounts head block**, built on merged main after #3402: the door's reason starts on the body's edge, the roll-up
   and the projection are one group, and four points of that PR's review are closed here; see §10.
 
@@ -100,10 +102,12 @@ BUSY's run; Overlord with BUSY's designation). The Docs reader is out of scope.
 | Session | header 8 → 16, 7 | 8 → 16 | 8 → 16, 14 | 8 → 16 | its own bar (header, transcript and composer on one 16 edge; §9) |
 
 At 390x844 (measured, same run): Waiting on you moved 8 → 12 (Instrument) and 8 → 16 (Refined), its scaffold's inset (ruling
-6); every other phone figure is as before: scaffold 12 / 16, list column 16, session 8, and the phone bar's own back row
-(Digest, a Waiting item) at 8.
+6). Programme, Epic and Upkeep, which share its root, moved with it, and in fix round 1 the item route's body and step strip
+joined them (ruling 1; the figures at 360 and 390 are in §15.1). The scaffold (12 / 16), the list column (16), the session
+(8) and the Digest's phone back row (8) are as before.
 
-The Epic screen shares Upkeep's root (`wl ep`) and so its inset; it was not opened by the measure (inferred).
+Fix round 1 also moved the first line under the head row to `--sp-2` on the list column, Runs, a run and Runs advanced
+(ruling 4; §15.4), so the "top" figures above for those screens are the reviewed head's.
 
 ## 5. What changed, by file
 
@@ -113,9 +117,13 @@ The Epic screen shares Upkeep's root (`wl ep`) and so its inset; it was not open
 - `ui/src/primitives/page-scaffold.tsx` (ruling 2 (b), the coordinator's word for this one ui change): the head row, the
   body and the nav grid read `mx-(--page-margin-inline)` instead of `mx-auto`; the head row carries `PAGE_HEAD_CONTROLS`.
   No primitive's own padding changed. Its story and the token census say the same.
-- `pwa/src/ledgers/ledgers.css`: `.wl` reads `--gutter` at every width; at a desk `.wl`, `.wi` and `.wi-nav` take their
-  full width, `--gutter` and the page margin role, and a `.wl` with a head starts with a `--head-h` head row. `.wl` is also
+- `pwa/src/ledgers/ledgers.css`: `.wl` and `.wi` read `--gutter` at every width, and so do the step strip's sides (fix round
+  1, ruling 1; this round's head had `.wi` and the strip at the gutter at a desk only); at a desk `.wl`, `.wi` and `.wi-nav`
+  take their full width and the page margin role, and a `.wl` with a head starts with a `--head-h` head row. `.wl` is also
   the root of Programme, Epic and Upkeep and of the item route's notes, so they move with it.
+- `pwa/src/screens/run-find.css`, `pwa/src/screens/run-detail.css` (fix round 1, ruling 4): at a desk the find box and the
+  run pages' Back strip drop their own space above when they open their column, so the first line is the scaffold's
+  `--sp-2` under the head row; the Back strip's no-side-pad rule names the item strip's class too, so it wins in any order.
 - `pwa/src/screens/digest.css`: the digest screen takes the gutter and the page margin role at a desk.
 - `pwa/src/session/chat.css`: `--chat-inset` on `.chat`, read by the header (at a desk, in the file's existing desk block),
   the banner, the transcript items, the composer and the card's measure.
@@ -200,9 +208,10 @@ scroll box, so the Back chevron's glyph overhang does not read as a cut.
 
 One rule, `pointer-fine:[&_:is(button,select)]:min-h-[min(var(--row-h),var(--tap-min))]` on the scaffold's head row. Under
 a mouse it is `@media (pointer: fine)`, the same condition as Instrument's density rule that already gives the Status /
-Project switch its 32. A touch laptop gets whatever its browser reports as its primary pointer: with a trackpad or mouse as
-the primary pointer it reports `fine` and the head controls are 32 (Instrument) in a 40 row; a touch-only screen reports
-`coarse` and keeps 44 in a 44 row (inferred from the media query's definition; no touch laptop was measured).
+Project switch its 32. The condition asks the primary pointer, as the whole console does, and the coordinator ruled that is
+right (fix round 1, ruling 2): a device whose primary pointer is fine (a laptop's trackpad) takes the mouse size, 32 in
+Instrument's 40 row, even with a touchscreen; a device whose primary pointer is coarse keeps 44 in a 44 row, with or
+without a mouse attached. The Accounts disclosure's summary follows the same rule (§15.3).
 
 What stays 44, and why:
 
@@ -279,9 +288,7 @@ built:
 
 Unmeasured:
 
-- **A touch laptop** (§8): what a real one reports as its primary pointer was not measured; the 32 / 44 split follows the
-  media query's definition.
-- **The Epic screen** was not opened by the measure (it shares Upkeep's root; inferred).
+- **A touch laptop** is ruled, no longer open (§8, §15.2): the primary pointer decides. No real one was measured.
 - **Widths between the two desk sizes, and above 1440**: the pins and the measure ran at 1280x800 and 1440x900 only. Every
   rule reads tokens that change at 900, and none reads the window's width otherwise, so 900 to 1279 and above 1440 are
   inferred to hold, not measured.
@@ -312,11 +319,19 @@ keeps images out of the notes folder):
 | Refined, 1280x800, home | [before](../../../design/2026-10-22-desktop-polish/console-spacing/before-first-refined-1280-home.png) | [after](../../../design/2026-10-22-desktop-polish/console-spacing/after-first-refined-1280-home.png) |
 | Instrument, 1280x800, Project mode (ruling A, condition 4) | [before](../../../design/2026-10-22-desktop-polish/console-spacing/before-first-instrument-1280-project.png) | [after](../../../design/2026-10-22-desktop-polish/console-spacing/after-first-instrument-1280-project.png) |
 | Refined, 1280x800, home, BUSY fixture (Refined has no Project mode: its list is always by project, so this is its Project view, with "Runs · 2 active") | [before](../../../design/2026-10-22-desktop-polish/console-spacing/before-busy-refined-1280-home.png) | [after](../../../design/2026-10-22-desktop-polish/console-spacing/after-busy-refined-1280-home.png) |
+| Refined, 1280x800, Accounts (fix round 1, ruling 3) | the reviewed head: [reviewed head](../../../design/2026-10-22-desktop-polish/console-spacing/reviewed-head-first-refined-1280-accounts.png) | [after](../../../design/2026-10-22-desktop-polish/console-spacing/after-first-refined-1280-accounts.png) |
 
 Each was viewed after it was taken (measured). In the Instrument after pictures the switch, New project and the Accounts
 title share one band, Add account is 32 tall inside its row, and both panes start at 16; in Project mode the head row is
 the same as in Status mode, with the chooser on its own line under it. In Refined's, "Runs · —" and "Runs · 2 active" are
 one line beside New project, with the chooser on the line under them (before: four lines in a 27 px box).
+
+Fix round 1 retook the Instrument home and Accounts after pictures and added Refined's Accounts (the Project mode picture
+came out the same). The reviewed head's Accounts in both skins is kept beside them as that round's before
+([Instrument](../../../design/2026-10-22-desktop-polish/console-spacing/reviewed-head-first-instrument-1280-accounts.png),
+[Refined](../../../design/2026-10-22-desktop-polish/console-spacing/reviewed-head-first-refined-1280-accounts.png)). In the new pictures the disclosure "How to turn sign-in on" is
+32 tall in Instrument (44 in Refined) with the command field 4 below it, as the reason's sentence is 4 above it, and the
+Instrument list column's lag line sits 8 under the head row.
 
 ## 14. Evidence runs
 
@@ -342,3 +357,123 @@ met), and the landing hook advised on the one merge of main, which the brief (th
 main) and the coordinator's word after #3402's merge licensed (§10).
 
 The pull request's own fast run does not run the browser leg; its result is in the wave-done mail.
+
+## 15. Fix round 1 (review run 3943, the coordinator's rulings 1 to 6)
+
+The review read the head a8b151596e and found nothing unsafe; its five questions were about how far "even everywhere"
+reaches. The coordinator ruled each from that sentence: where two neighbouring screens, or two states of one screen, sit at
+different figures, the wave is not finished. Before is the reviewed head (a8b151596e) unless named; after is this round's
+head. All figures are measured in Chrome on the sealed production build with a throwaway browser file (never committed),
+PHOSPHOR, the FIRST fixture for Accounts and the lag line and the BUSY fixture otherwise.
+
+### 15.1 Ruling 1: the ledger screens on the phone
+
+Every ledgers root (Waiting on you, Programme, Epic, Upkeep, the item route's wrappers) and the item view's body and its
+step strip pad their sides with `--gutter` at every width, so on the phone they sit at the scaffold's inset and the item
+route's wrapper and body share one edge. `pwa/src/ledgers/ledgers.css`: `.wl, .wi { padding-inline: var(--gutter) }` outside
+any media query, and the strip's own pad reads `var(--sp-2) var(--gutter) 0`. The run pages' Back strip, which shares the
+strip's class (`.wi-nav.rd-strip`), keeps no side pad of its own (it sits inside the scaffold's body), now by a selector that
+wins whatever order the sheets load in.
+
+| Phone, both skins | Main (f97f102979) | Reviewed head | After |
+|---|---|---|---|
+| Programme, Epic, Upkeep: the root's text edge from the screen's edge | 8 | 12 Instrument, 16 Refined | 12 Instrument, 16 Refined |
+| Waiting on you | 8 | 12 / 16 | 12 / 16 |
+| The item route's body (`.wi`) and step strip | 8 and 8 | 8 and 8 | 12 / 16 and 12 / 16 |
+| Sideways scroll, every screen above, at 360 and 390 | 0 | 0 | 0 |
+
+The same at 360 and 390 (measured both). With this fixture the item route draws no `.wl` wrapper on the phone; where it
+draws one, the wrapper takes the same rule as the body. The Epic screen was opened this time (it was inferred in §4). Nothing scrolls
+sideways and no line was seen cut in the pictures of the throwaway file; the browser files that hold "nothing cut, nothing
+scrolls sideways" at 360 and 390 for these screens (`epic-page`, `programme-page`, `item-wrap`, `item-nav`) are in the
+final evidence run (§15.8). §1 and §4 are corrected: the phone is not otherwise unchanged.
+
+### 15.2 Ruling 2: a device with a fine primary pointer and a touchscreen
+
+Ruled: the primary pointer decides, as everywhere in this repository; such a laptop takes the mouse size, and a device whose
+primary pointer is coarse keeps 44, with or without a mouse. No change to the condition. The page scaffold's comment now
+says exactly that (it had said "a touch screen keeps 44 everywhere"), and §8 and §11 say it as ruled, no longer unmeasured.
+
+### 15.3 Ruling 3: the Accounts disclosure
+
+Under a mouse the summary is `min(--row-h, --tap-min)` (`@media (pointer: fine)`, the head row's condition); touch keeps 44.
+A closed disclosure drew a hidden `--sp-1` track under its summary (the details' grid gap before its hidden content), which
+made the gap under it 8 against 4 above; closed, its gap is now 0. Both rules in `pwa/src/fleet/fleet.css`.
+
+| 1280 and 1440 (same figures) | Reviewed head | After |
+|---|---|---|
+| Instrument, mouse: summary height; box gap above / below | 44; 4 / 8 | 32; 4 / 4 |
+| Instrument, touch | 44; 4 / 8 | 44; 4 / 4 |
+| Refined, mouse and touch (its `min(56, 44)` is 44) | 44; 4 / 8 | 44; 4 / 4 |
+| Ink: the reason's last line to the summary's words / the summary's words to the command field's edge, Instrument mouse | 20.3 / 23.3 | 14.3 / 13.3 |
+| The same, Refined | 19 / 22 | 19 / 18 |
+
+The two box gaps are equal and each is `--sp-1`; the ink gaps differ by the reason's own line leading (1 px), not by a
+gap. `fleet.css` stays under its cap with no waiver (§15.8). Fresh pictures of Accounts at 1280 in both skins (§13).
+
+### 15.4 Ruling 4: under the head row
+
+The gap from the head row to the first line is the scaffold's `--sp-2` on every screen of §4:
+
+| At 1280 and 1440, both skins where drawn | Reviewed head | After | Rule |
+|---|---|---|---|
+| Instrument list column, Status mode, first group (BUSY) | 4 | 8 | `instrument.css`, desk: the row's next sibling takes `--sp-2 - --sp-1` above it |
+| Instrument list column, Status mode, the lag line (FIRST) | 12 | 8 | the same, and the lag line drops its pad above when it follows the row |
+| Instrument list column, Project mode, the chooser | 8 | 8 | unchanged (its line pads itself to `--sp-2`) |
+| Runs: the find box (its label inside it) | 16 (20) | 8 (12) | `run-find.css`, desk: `.rf-box:first-child` drops its margin above |
+| A run, Runs advanced: the Back control | 16 | 8 | `run-detail.css`, desk: the Back strip drops its pad above |
+
+Pressing the switch no longer moves anything under the row. The find box's label sits 4 inside its box, the box's own pad
+on its sticky ground; the box is the line. The phone keeps every one of these as before (each rule is in a desk block).
+
+### 15.5 Ruling 5: the unpinned insets
+
+The item view, its step strip and the coordinator digest each have a case now (`console-spacing`, "at a desk: the item view,
+its step strip and the coordinator digest …"): their padding is `--gutter`, and their column starts at the pane's edge in
+Instrument and centres in Refined. The describes and case titles name the screens they visit.
+
+### 15.6 Ruling 6: small things
+
+- Stale comments corrected: the Refined runs-line wrap guard in `fleet.css` (the door and New project now fit at 1280 and
+  1440; the rules act from 900 to under 1280), `FleetTable.tsx`'s chooser paragraph (it is on a line of its own, not the
+  toggle's row), `page-scaffold.tsx` (Refined's row is 56, not 52; the primary pointer, ruling 2) and `skins.ts`'s role
+  comment (the page margin role is read outside the scaffold too).
+- The chevron case in `connect-sheet.browser.test.ts` fails with a message naming the state it waited for and what it read
+  (an `expect.poll` with a message, in place of a bare `waitForFunction` timeout). #3405 edits the same file beside it; the
+  second of the two to land absorbs main and re-runs the file, taking #3405's line as it stands on main.
+- `console-spacing`'s fixed 300 ms pauses (three of them) are a wait for a condition: the fonts loaded and every measured box
+  the same on three polls in a row, 100 ms apart.
+
+### 15.7 New cases, red first, and the mutants
+
+New cases in `pwa/browser/console-spacing.browser.test.ts` (now 70 cases), each run against the reviewed head's source
+before its fix:
+
+| Case | Red first | Why it was red |
+|---|---|---|
+| The phone: Programme, Epic and Upkeep's roots, and the item route's body and step strip, at `--gutter`; nothing sideways (both skins, 360 and 390) | 4 of 4 | the item body 8 against 12 / 16 |
+| At a desk: the item view, its step strip and the digest (both skins, both desk sizes) | 0 of 4 on the source (the rules were there, unpinned); red under the review's mutant, below | |
+| Under the head row: Runs, a run, Runs advanced at `--sp-2`, on the body's edge (both skins, both desk sizes) | 4 of 4 | the find box 16 against 8 |
+| The Accounts disclosure under a mouse and under touch (both skins, both desk sizes) | 8 of 8 | Instrument's summary 44 against 32 under a mouse; 8 below against 4 above in every cell |
+| Changed pins in this file's own cases (ruling 4): the list column's head row to the lag line (`--sp-3` → `--sp-2`) and to the first group (`--sp-1` → `--sp-2`), and Project mode's chooser added to the gaps case | 8 of 8 | the lag line 12, the first group 4 |
+
+Mutants on this round's source, each restored from a saved copy and compared with `cmp` (measured):
+
+| Mutant | Who named it | Result |
+|---|---|---|
+| `.wi`, `.wi-nav` and `.digest-screen` back to `--sp-2` at a desk | the review's Own 1b (0 red of 128 on the reviewed head) | 4 red (the desk insets case, at the item view) |
+| `.digest-screen` alone back to `--sp-2` | mine | 4 red (the digest, 8 against 16 / 24) |
+| The strip's side pad back to `--sp-2` | mine | 8 red (phone 4 and desk 4, at the strip) |
+| `.wi` out of the every-width inset | mine | 4 red (phone, the item body) |
+| The find box's desk rule removed | mine | 4 red (Runs, 16) |
+| The Back strip's desk rule removed | mine | 4 red (a run, 16) |
+| The list column's two desk rules removed | mine | 8 red (the lag line 12; the first group 4) |
+| The summary's mouse rule removed | mine | 2 red (Instrument under a mouse, 44 against 32; Refined's 44 is its `min` either way) |
+| The closed disclosure's gap rule removed | mine | 8 red (8 below against 4 above) |
+| `.acct-door-more[open]` dropped from the chevron's shared selector | the review's M4 | connect-sheet 16 red, 4 green (the offline cells never open it), each naming the open state, e.g. it read the disclosure open and its chevron at -45 degrees against +45 |
+
+The review's other mutants (M1 to M3, M5 to M7, Own 1 to 3) touch rules this round did not change; their cases are
+unchanged and green on this round's head.
+
+Ledger-Edit: not needed. This note is new in this pull request (no file under the programme notes folder exists on main
+with this name), so the head commit edits no existing file there.

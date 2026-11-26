@@ -49,6 +49,11 @@
   .ins-frame .shell-nav .fleet:has(> .banner-slot:not([hidden]) > *, > .banner-more) {
     padding-top: var(--sp-3);
   }
+  /* Under the head row the first line is the scaffold's --sp-2 down, in both modes (wave 182, ruling 4): the first group or
+     the lag line in Status mode (the table's --sp-1 gap plus this margin; the lag line drops its own pad above), and the
+     chooser's line in Project mode, which pads itself to the same --sp-2. Pressing the switch moves nothing under the row. */
+  .ins-frame .shell-nav .ins-head-row + :not(.ins-chooser-line) { margin-block-start: calc(var(--sp-2) - var(--sp-1)); }
+  .ins-frame .shell-nav .ins-head-row + .ins-lag { padding-block-start: 0; }
   .ins-frame .shell-status {
     grid-column: 1 / -1;
     grid-row: 3;

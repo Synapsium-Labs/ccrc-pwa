@@ -3973,12 +3973,12 @@ button.proj-card-pool::before {
    hyphens and spaces) wrap inside the box rather than run out of it sideways with no `…`. Below 900px nothing
    changes. */
 @media (min-width: 900px) {
-  /* AT A DESK THE RUNS LINE WRAPS RATHER THAN CRUSH (desktop polish wave 182). Refined's desk column carries the Runs
-     door, the class chooser and New project on that line, and at 1280 and 1440 the three do not fit (measured: the line
-     is 287 and 313 wide; the door's words are 73 to 124, the chooser 113, New project 130, with two 8 px gaps), so the
-     door's words were squeezed onto three and four lines in a 27 px box. Now the door is never narrower than its words,
-     and New project takes a second line, at its end, only where the three do not fit; the phone keeps its one line (its
-     height budget is pinned). In this block, the sheet's first desk block, beside the other desk rules. */
+  /* AT A DESK THE RUNS LINE WRAPS RATHER THAN CRUSH (desktop polish wave 182). Refined's desk runs line carries the Runs
+     door and New project (the chooser has a line of its own under it, ruling A). Measured before that move, the line was
+     287 and 313 wide at 1280 and 1440 and the door's words were squeezed onto three and four lines in a 27 px box; now
+     the two fit there on one line, and these rules act only where they do not (from 900 to under 1280): the door is never
+     narrower than its words, and New project takes a second line at its end. The phone keeps its one line (its height
+     budget is pinned). In this block, the sheet's first desk block, beside the other desk rules. */
   .fleet-runs-line { flex-wrap: wrap; row-gap: var(--sp-2); }
   .fleet-runs-line .fleet-runs-row { flex: 1 0 auto; }
   .fleet-runs-line .fleet-new-project { margin-inline-start: auto; }
@@ -4096,6 +4096,11 @@ button.proj-card-pool::before {
   font-size: var(--fs-meta);
   font-weight: var(--weight-medium);
 }
+/* Under a mouse the summary is min(--row-h, --tap-min), as a page's head-row controls are (desktop polish wave 182, ruling
+   3); touch keeps the tap floor. Closed, the disclosure draws no gap under its summary (its hidden content was a --sp-1
+   track), so the gaps above and below the summary are the reason's one --sp-1. */
+@media (pointer: fine) { .acct-door-more > summary { min-height: min(var(--row-h), var(--tap-min)); } }
+.acct-door-more:not([open]) { gap: 0; }
 /* The sheet's body: every frame a stack, nothing wider than the sheet at 360. */
 .acct-connect,
 .acct-frame { display: grid; gap: var(--sp-3); min-width: 0; }

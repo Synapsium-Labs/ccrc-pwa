@@ -56,12 +56,12 @@
 // Released fold holds archive-all, and the rollup's rules hold unchanged. A card mixes statuses, so there each row
 // shows its word beside its lamp (spec §3.1), which `SessionLine` always does.
 //
-// THE CLASS CHOOSER sits on the toggle's row in project mode at a desk only (T2f, D-6371): its readers are the project
-// cards' placement forecast and Add workspace, so in status mode it would do nothing. Below 900 it stays on the screen's
-// runs line. It is the shared `ClassChooser`, a sibling of the radiogroup and never inside it; the radiogroup grows (`flex-auto`, so its
-// basis stays its content and the row wraps the chooser under it at large text sizes, which `flex-1`'s 0% basis never did)
-// to the space the chooser leaves, so the toggle keeps the row's width in both modes. `.ins-toggle` already sets
-// `min-width: 0`, so no utility repeats it.
+// THE CLASS CHOOSER is drawn in project mode at a desk only (T2f, D-6371): its readers are the project cards' placement
+// forecast and Add workspace, so in status mode it would do nothing. Below 900 it stays on the screen's runs line. At a desk
+// it has a line of its own under the head row (desktop polish wave 182, ruling A), never on the row: the switch, the
+// chooser and New project do not fit the column's one line, so the head row is the same box in both modes. It is the
+// shared `ClassChooser`. The radiogroup grows (`flex-auto`, so its basis stays its content, which `flex-1`'s 0% basis never
+// kept). `.ins-toggle` already sets `min-width: 0`, so no utility repeats it.
 //
 // THE TOGGLE is remembered per device under `ccrc-fleet-group`; storage that is absent, unreadable or holds an unknown
 // value answers status. The phone tabs (below the desk query) are a view over the status groups, not a mode: Needs you,

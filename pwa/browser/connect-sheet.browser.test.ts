@@ -187,16 +187,23 @@ describe('the Add account door and the connect sheet at every width and skin (D-
         expect(n.below, 'the reason sits beneath the door').toBe(true);
         // The chevron follows the disclosure's open state (desktop polish wave 182; review A3 of wave 180): it turns when
         // the disclosure opens and turns back when it closes, read against the rotations its rules name, through a probe.
-        const turn = (open: boolean) => dark.page.waitForFunction((want) => {
-          const summary = document.querySelector('.acct-door-reason details > summary');
-          if (summary === null) return false;
-          const probe = document.createElement('span');
-          probe.style.cssText = `display:block;transform:rotate(${want ? 45 : -45}deg)`;
-          document.body.append(probe);
-          const target = getComputedStyle(probe).transform;
-          probe.remove();
-          return (summary.parentElement as HTMLDetailsElement).open === want && getComputedStyle(summary, '::before').transform === target;
-        }, open, { timeout: 5_000 });
+        // On a timeout it fails naming the state it waited for, with what it last read: the disclosure's open state, the
+        // chevron's transform and the transform that state's rule names.
+        const turn = async (open: boolean): Promise<void> => {
+          await expect.poll(() => dark.page.evaluate((want) => {
+            const summary = document.querySelector('.acct-door-reason details > summary');
+            if (summary === null) return { open: null, chevron: null, target: null };
+            const probe = document.createElement('span');
+            probe.style.cssText = `display:block;transform:rotate(${want ? 45 : -45}deg)`;
+            document.body.append(probe);
+            const target = getComputedStyle(probe).transform;
+            probe.remove();
+            return { open: (summary.parentElement as HTMLDetailsElement).open, chevron: getComputedStyle(summary, '::before').transform, target };
+          }, open), {
+            timeout: 5_000,
+            message: `the chevron turns to the ${open ? 'open' : 'closed'} state, rotate(${open ? 45 : -45}deg), when the disclosure ${open ? 'opens' : 'closes'}`,
+          }).toSatisfy((r: { open: boolean | null; chevron: string | null; target: string | null }) => r.open === open && r.chevron === r.target);
+        };
         await turn(false);
         await dark.page.click('.acct-door-reason details > summary');
         await turn(true);

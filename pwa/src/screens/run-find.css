@@ -2,6 +2,12 @@
    `instrument.css` or `refined.css`. The box is sticky under the header on a phone. Every link keeps the tap floor, text wraps,
    nothing is ellipsised. */
 .rf-box { display: grid; gap: var(--sp-1); margin: var(--sp-2) 0 var(--sp-3); position: sticky; top: var(--head-h); z-index: 1; background: var(--bg-page); padding-block: var(--sp-1); }
+/* Under a page's head row the first line is the scaffold's --sp-2 down (desktop polish wave 182, ruling 4): at a desk, where
+   the box opens its column (the page body, or the broad board's list pane), its own margin above gives way. The phone keeps
+   its sticky box's margin. */
+@media (min-width: 900px) {
+  .rf-box:first-child { margin-block-start: 0; }
+}
 .rf-label { font-size: var(--fs-xs); color: var(--ink-secondary); }
 .rf-results { display: grid; gap: var(--sp-3); min-width: 0; }
 .rf-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-1); }

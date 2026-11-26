@@ -146,7 +146,7 @@ const ANCHORS: Readonly<Record<string, string>> = {
   firstGroup: '.shell-nav .ins-group-head',
 };
 
-async function measure(page: Page): Promise<Measured> {
+async function measure(page: Page, anchorSet: Readonly<Record<string, string>> = ANCHORS): Promise<Measured> {
   return page.evaluate((anchors) => {
     const root = getComputedStyle(document.documentElement);
     const px = (t: string): number => parseFloat(root.getPropertyValue(t));
@@ -176,18 +176,33 @@ async function measure(page: Page): Promise<Measured> {
       tokens: { gutter: px('--gutter'), headH: px('--head-h'), rowH: px('--row-h'), tapMin: px('--tap-min'), sp1: px('--sp-1'), sp2: px('--sp-2'), sp3: px('--sp-3') },
       detail: inner('.shell-detail'), nav: inner('.shell-nav'), boxes,
     };
-  }, ANCHORS);
+  }, anchorSet);
 }
 
-const at = async (page: Page, path: string, ready: string): Promise<Measured> => {
+/** Waits for the layout to settle, a condition and never a fixed pause: the fonts are loaded and every box the selectors
+ *  match has read the same on three polls in a row, 100 ms apart. The accounts poll and the fleet frames land after the
+ *  first paint and can move the head block, so a loaded box waits as long as that takes and an idle one no longer. */
+const settle = (page: Page, selectors: readonly string[] = Object.values(ANCHORS)): Promise<unknown> =>
+  page.waitForFunction((list) => {
+    const w = window as unknown as { spacingSig?: string; spacingSame?: number };
+    const sig = list.map((s) => [...document.querySelectorAll(s)].map((e) => {
+      const r = e.getBoundingClientRect();
+      return `${r.left},${r.top},${r.width},${r.height}`;
+    }).join(';')).join('|');
+    if (w.spacingSig === sig) w.spacingSame = (w.spacingSame ?? 0) + 1;
+    else { w.spacingSig = sig; w.spacingSame = 0; }
+    return document.fonts.status === 'loaded' && w.spacingSame >= 2;
+  }, selectors, { polling: 100, timeout: 20_000 });
+
+const at = async (page: Page, path: string, ready: string, anchorSet: Readonly<Record<string, string>> = ANCHORS): Promise<Measured> => {
   await page.goto(server!.origin + path);
   await page.waitForSelector(ready, { timeout: 20_000 });
-  await page.waitForTimeout(300); // the accounts poll and the fleet frames settle the head block
-  return measure(page);
+  await settle(page, Object.values(anchorSet));
+  return measure(page, anchorSet);
 };
 const need = (m: Measured, name: string): readonly [number, number, number, number] => {
   const b = m.boxes[name];
-  if (b === null || b === undefined) throw new Error(`${name} (${ANCHORS[name]}) is not drawn`);
+  if (b === null || b === undefined) throw new Error(`${name} is not drawn`);
   return b;
 };
 const centreY = (b: readonly [number, number, number, number]): number => (b[1] + b[3]) / 2;
@@ -205,11 +220,11 @@ const PAGES = [
 const DESKS = [[1280, 800], [1440, 900]] as const;
 const THEMES = [PHOSPHOR, 'light'] as const;
 
-describe('Instrument at a desk: one inset and one head line in both panes', () => {
+describe('Instrument at a desk: one inset and one head line in both panes (Accounts, Settings, Mail, Archive, Runs, Waiting on you, a session, the list column)', () => {
   for (const [width, height] of DESKS) {
     for (const theme of THEMES) {
       const view = `instrument, ${theme}, ${width}x${height}`;
-      it(`${view}: every detail screen and the list column start --gutter from their pane, and --gutter is --sp-4`, async () => {
+      it(`${view}: Accounts, Settings, Mail, Archive, Runs, Waiting on you, a session's header and the list column start --gutter from their pane, and --gutter is --sp-4`, async () => {
         const { ctx, page, errors } = await openApp(browser!, { skin: INSTRUMENT, theme, width }, FIRST);
         try {
           await page.setViewportSize({ width, height });
@@ -238,7 +253,7 @@ describe('Instrument at a desk: one inset and one head line in both panes', () =
         }
       }, 120_000);
 
-      it(`${view}: every detail title and the list column's head row are centred in one --head-h band from the pane's top`, async () => {
+      it(`${view}: the titles of Accounts, Settings, Mail, Archive, Runs and Waiting on you, and the list column's head row, are centred in one --head-h band from the pane's top`, async () => {
         const { ctx, page, errors } = await openApp(browser!, { skin: INSTRUMENT, theme, width }, FIRST);
         try {
           await page.setViewportSize({ width, height });
@@ -260,12 +275,12 @@ describe('Instrument at a desk: one inset and one head line in both panes', () =
         }
       }, 120_000);
 
-      it(`${view}: New project rides the toggle's line at --row-h, ending at the column's inset, and the lag line sits under that row`, async () => {
+      it(`${view}: New project rides the toggle's line at --row-h, ending at the column's inset, and the lag line sits --sp-2 under that row`, async () => {
         const { ctx, page, errors } = await openApp(browser!, { skin: INSTRUMENT, theme, width }, FIRST);
         try {
           await page.setViewportSize({ width, height });
           const m = await at(page, '/waiting', '.shell-nav .fleet-new-project');
-          const { rowH, sp3 } = m.tokens;
+          const { rowH, sp2, sp3 } = m.tokens;
           const door = need(m, 'door');
           const toggle = need(m, 'toggle');
           const row = need(m, 'headRow');
@@ -275,7 +290,7 @@ describe('Instrument at a desk: one inset and one head line in both panes', () =
           expect(Math.abs(centreY(door) - centreY(toggle)), 'the door is on the toggle\'s line').toBeLessThan(NEAR);
           expect(Math.abs(door[2] - need(m, 'fleetPad')[2]), 'the door ends at the column\'s right inset').toBeLessThan(NEAR);
           expect(door[0] - toggle[2], 'the door follows the toggle, not over it').toBeGreaterThanOrEqual(0);
-          expect(lag[1] - row[3], 'head row to the lag line: --sp-3').toBeCloseTo(sp3, 0);
+          expect(lag[1] - row[3], 'head row to the lag line, its first line: --sp-2, the scaffold\'s value (ruling 4)').toBeCloseTo(sp2, 0);
           expect(group[1] - lag[3], 'the lag line to the first group: --sp-3').toBeCloseTo(sp3, 0);
           expect(lag[0] - m.nav!.left, 'the lag line starts at the inset').toBeCloseTo(m.tokens.gutter, 0);
           expect(errors).toEqual([]);
@@ -284,18 +299,24 @@ describe('Instrument at a desk: one inset and one head line in both panes', () =
         }
       }, 120_000);
 
-      it(`${view}: the head blocks' gaps are tokens (head row then --sp-2; groups --sp-3; the list's rows --sp-1 under its head row)`, async () => {
+      it(`${view}: the head blocks' gaps are tokens (head row then --sp-2, in the list column in both modes too; groups --sp-3)`, async () => {
         const { ctx, page, errors } = await openApp(browser!, { skin: INSTRUMENT, theme, width }, BUSY);
         try {
           await page.setViewportSize({ width, height });
           const w = await at(page, '/waiting', '.shell-detail .wl-summary');
-          const { sp1, sp2, sp3, headH } = w.tokens;
+          const { sp2, sp3, headH } = w.tokens;
           const head = need(w, 'waitingHead');
           expect(head[3] - head[1], 'Waiting\'s head is a --head-h row').toBeCloseTo(headH, 0);
           expect(head[1] - w.detail!.top, 'its row starts at the pane\'s top').toBeCloseTo(0, 0);
           expect(need(w, 'waitingSummary')[1] - head[3], 'head row to the first line: --sp-2').toBeCloseTo(sp2, 0);
           expect(need(w, 'waitingGrid')[1] - need(w, 'waitingSummary')[3], 'between groups: --sp-3').toBeCloseTo(sp3, 0);
-          expect(need(w, 'firstGroup')[1] - need(w, 'headRow')[3], 'the list\'s head row to its first group: --sp-1').toBeCloseTo(sp1, 0);
+          expect(need(w, 'firstGroup')[1] - need(w, 'headRow')[3], 'status mode: the list\'s head row to its first group: --sp-2 (ruling 4)').toBeCloseTo(sp2, 0);
+          // Pressing the switch moves nothing under the head row: Project mode's first line, the chooser, is --sp-2 down too.
+          await page.click('.shell-nav .ins-head-row [role="radio"]:not([aria-checked="true"])');
+          await page.waitForSelector('.shell-nav .ins-chooser-line > *', { timeout: 20_000 });
+          await settle(page, ['.shell-nav .ins-head-row', '.shell-nav .ins-chooser-line > *']);
+          const p = await measure(page, { ...ANCHORS, chooser: '.shell-nav .ins-chooser-line > *' });
+          expect(need(p, 'chooser')[1] - need(p, 'headRow')[3], 'project mode: the list\'s head row to the chooser: --sp-2 (ruling 4)').toBeCloseTo(sp2, 0);
           const a = await at(page, '/mail', ANCHORS.scaffoldTitle!);
           expect(need(a, 'scaffoldBody')[1] - need(a, 'scaffoldRow')[3], 'a page\'s head row to its first line: --sp-2').toBeCloseTo(sp2, 0);
           expect(errors).toEqual([]);
@@ -307,7 +328,7 @@ describe('Instrument at a desk: one inset and one head line in both panes', () =
   }
 });
 
-describe('Refined at a desk: its detail screens agree with each other; its list column and centred page column stay', () => {
+describe('Refined at a desk: Accounts, Settings, Mail, Archive, Runs, Waiting on you and a session agree with each other; its list column and centred page column stay', () => {
   for (const [width, height] of DESKS) {
     for (const theme of THEMES) {
       const view = `refined, ${theme}, ${width}x${height}`;
@@ -336,7 +357,7 @@ describe('Refined at a desk: its detail screens agree with each other; its list 
         }
       }, 120_000);
 
-      it(`${view}: every detail title is centred in one --head-h band from the pane's top`, async () => {
+      it(`${view}: the titles of Accounts, Settings, Mail, Archive, Runs and Waiting on you are centred in one --head-h band from the pane's top`, async () => {
         const { ctx, page, errors } = await openApp(browser!, { skin: REFINED, theme, width }, FIRST);
         try {
           await page.setViewportSize({ width, height });
@@ -473,7 +494,7 @@ describe("a session screen has one edge: its header, its transcript and its comp
             await page.goto(server!.origin + `/s/${id}`);
             await page.waitForSelector('.shell-detail .chat-item', { timeout: 20_000 });
             await page.waitForSelector('.shell-detail .composer', { timeout: 20_000 });
-            await page.waitForTimeout(300);
+            await settle(page, ['.shell-detail .chat-head', '.shell-detail .chat-item', '.shell-detail .composer']);
             const e = await page.evaluate(() => {
               const content = (sel: string): [number, number] => {
                 const el = document.querySelector<HTMLElement>(sel)!;
@@ -519,7 +540,7 @@ describe("Refined's desk runs line: the door and New project share it, the choos
           await page.setViewportSize({ width, height });
           await page.goto(server!.origin + '/fleet');
           await page.waitForSelector('.shell-nav .fleet-runs-line .fleet-new-project', { timeout: 20_000 });
-          await page.waitForTimeout(300);
+          await settle(page, ['.shell-nav .fleet-runs-line', '.shell-nav .fleet-runs-line > *', '.shell-nav .fleet-chooser-line']);
           const m = await page.evaluate(() => {
             const line = document.querySelector('.shell-nav .fleet-runs-line')!;
             const boxes = [...line.children].map((k) => {
@@ -637,6 +658,43 @@ describe('the Accounts head block on the merged door (#3402): one edge for its l
           await ctx.close();
         }
       }, 120_000);
+
+      for (const touch of [false, true]) {
+        const pointer = touch ? 'touch' : 'mouse';
+        it(`${skin}, ${width}x${height}, ${pointer}: the disclosure is min(--row-h, --tap-min) under a mouse and the tap floor under touch, with equal --sp-1 gaps above and below it (ruling 3)`, async () => {
+          const { ctx, page, errors } = await openApp(browser!, { skin, theme: PHOSPHOR, width, touch }, FIRST);
+          try {
+            await page.setViewportSize({ width, height });
+            await at(page, '/accounts', '.acct-door-reason details > summary');
+            await settle(page, ['.acct-door-reason', '.acct-door-reason > *', '.acct-door-reason details > summary']);
+            const m = await page.evaluate(() => {
+              const tok = (name: string): number => {
+                const probe = document.createElement('div');
+                probe.style.cssText = `position:absolute;visibility:hidden;height:var(${name})`;
+                document.body.appendChild(probe);
+                const h = probe.getBoundingClientRect().height;
+                probe.remove();
+                return h;
+              };
+              const details = document.querySelector('.acct-door-reason details')!;
+              const summary = details.querySelector('summary')!.getBoundingClientRect();
+              const before = details.previousElementSibling!.getBoundingClientRect();
+              const after = details.nextElementSibling!.getBoundingClientRect();
+              return {
+                rowH: tok('--row-h'), tapMin: tok('--tap-min'), sp1: tok('--sp-1'),
+                height: summary.height, above: summary.top - before.bottom, below: after.top - summary.bottom,
+              };
+            });
+            const want = touch ? m.tapMin : Math.min(m.rowH, m.tapMin);
+            expect(m.height, `the summary under ${pointer}: ${m.height}, against ${want}`).toBeCloseTo(want, 0);
+            expect(m.above, `above the disclosure: ${m.above}, against --sp-1 ${m.sp1}`).toBeCloseTo(m.sp1, 0);
+            expect(m.below, `below the closed disclosure: ${m.below}, against the gap above it, --sp-1 ${m.sp1}`).toBeCloseTo(m.sp1, 0);
+            expect(errors).toEqual([]);
+          } finally {
+            await ctx.close();
+          }
+        }, 120_000);
+      }
     }
   }
 });
@@ -663,5 +721,135 @@ describe('the phone holds its figures; Waiting on you joins its scaffold\'s inse
         await ctx.close();
       }
     }, 120_000);
+  }
+});
+
+// ---- Fix round 1 (the coordinator's rulings on review run 3943) ----
+
+const EPIC = {
+  key: 'e-1', title: 'Epic one', summary: 'The epic summary, a sentence that wraps on a phone screen at either width.',
+  project: 'project-a', waves: [1], state: 'active', url: null, sync: 'none', syncWord: null,
+  checkpoints: [{ key: 'c-1', title: 'First checkpoint', kind: 'acceptance', state: 'open', proves: [], metAt: null, evidence: null,
+    url: null, sync: 'none', syncWord: null }],
+  tickets: [{ key: 't-1', kind: 'work', title: 'A ticket', project: 'project-a', checkpoint: 'c-1', source: 'plan', state: 'open',
+    runId: null, identifier: null, url: null, sync: 'none', syncWord: null }],
+};
+/** The busy fleet with what the run pages, the programme, its epic and Upkeep read. */
+const SCREENS: AppFixture = {
+  api: {
+    ...BUSY.api,
+    '/api/runs': { runs: RUNS, nextBefore: null },
+    '/api/runs/100': { ok: true, run: RUNS[0], spend: { measured: false, reason: 'no-sweep' } },
+    '/api/runs/100/items': { ok: true, items: [] },
+    '/api/runs/100/record': { ok: true, run: RUNS[0], events: [], reviewedBy: [], olderEvents: 0 },
+    '/api/runs/100/signals': { ok: true, signals: { signals: { suite: { ok: false, why: 'absent' }, failure: { ok: false, why: 'absent' } } } },
+    '/api/coord/caps': { ok: true, caps: { maxConcurrentWorkers: 4 }, usage: { running: 1 }, updatedAt: null },
+    '/api/runs/find': { ok: true, exact: null, runs: [], reviewsOf: [], next: null },
+    '/api/programmes/prog-b/plan': { ok: true, plan: { program: 'prog-b', planned: true, initiatives: [], epics: [EPIC], doneWhen: [] } },
+    '/api/projects/project-a/upkeep': { ok: true, epic: { ...EPIC, key: 'upkeep', title: 'Upkeep', checkpoints: [] }, notClosed: [] },
+  },
+  fleetFrames: BUSY.fleetFrames,
+};
+
+/** The ledger screens and the item route's three parts: each root's content box (inside its padding) and its border box. */
+const LEDGER_ANCHORS: Readonly<Record<string, string>> = {
+  ledgerPad: '.shell-detail .wl', ledgerBox: '.shell-detail .wl',
+  itemPad: '.shell-detail .wi', itemBox: '.shell-detail .wi',
+  stripPad: '.shell-detail .wi-nav:not(.rd-strip)', stripBox: '.shell-detail .wi-nav:not(.rd-strip)',
+  digestPad: '.shell-detail .digest-screen', digestBox: '.shell-detail .digest-screen',
+};
+const sidewaysScroll = (page: Page): Promise<number> =>
+  page.evaluate(() => document.scrollingElement!.scrollWidth - document.scrollingElement!.clientWidth);
+
+describe('the phone: every ledger root and the item route sit at the scaffold\'s inset (ruling 1, which widens ruling 6)', () => {
+  const LEDGERS = [
+    { name: 'Programme', path: '/programmes/prog-b', parts: ['ledger'] },
+    { name: 'Epic', path: '/programmes/prog-b/epics/e-1', parts: ['ledger'] },
+    { name: 'Upkeep', path: '/projects/project-a/upkeep', parts: ['ledger'] },
+    { name: 'the item route', path: '/waiting/1', parts: ['item', 'strip'] },
+  ] as const;
+  for (const skin of [INSTRUMENT, REFINED]) {
+    for (const width of [360, 390]) {
+      it(`${skin}, ${width}x844: Programme, Epic and Upkeep's roots, and the item route's body and step strip, start --gutter from the screen's edge; nothing scrolls sideways`, async () => {
+        const { ctx, page, errors } = await openApp(browser!, { skin, theme: PHOSPHOR, width }, SCREENS);
+        try {
+          for (const l of LEDGERS) {
+            const m = await at(page, l.path, `.shell-detail ${l.parts[0] === 'ledger' ? '.wl' : '.wi'}`, LEDGER_ANCHORS);
+            const g = m.tokens.gutter;
+            for (const part of l.parts) {
+              const left = need(m, `${part}Pad`)[0] - m.detail!.left;
+              expect(Math.abs(left - g), `${l.name}, ${part}: its text starts ${left} from the edge, against --gutter ${g}`).toBeLessThan(NEAR);
+            }
+            expect(await sidewaysScroll(page), `${l.name}: nothing scrolls sideways`).toBeLessThanOrEqual(0);
+          }
+          expect(errors).toEqual([]);
+        } finally {
+          await ctx.close();
+        }
+      }, 120_000);
+    }
+  }
+});
+
+describe('at a desk: the item view, its step strip and the coordinator digest start --gutter inside their column, which starts at the pane or centres in it as the skin says', () => {
+  const PARTS = [
+    { name: 'the item view', path: '/waiting/1', part: 'item' },
+    { name: 'its step strip', path: '/waiting/1', part: 'strip' },
+    { name: 'the coordinator digest', path: '/digest', part: 'digest' },
+  ] as const;
+  for (const skin of [INSTRUMENT, REFINED]) {
+    for (const [width, height] of DESKS) {
+      it(`${skin}, ${width}x${height}: the item view, its step strip and the digest: --gutter of padding; Instrument's column at the pane's edge, Refined's centred`, async () => {
+        const { ctx, page, errors } = await openApp(browser!, { skin, theme: PHOSPHOR, width }, SCREENS);
+        try {
+          await page.setViewportSize({ width, height });
+          for (const p of PARTS) {
+            const m = await at(page, p.path, LEDGER_ANCHORS[`${p.part}Box`]!, LEDGER_ANCHORS);
+            const g = m.tokens.gutter;
+            const box = need(m, `${p.part}Box`);
+            const pad = need(m, `${p.part}Pad`)[0] - box[0];
+            expect(Math.abs(pad - g), `${p.name}: its padding ${pad}, against --gutter ${g}`).toBeLessThan(NEAR);
+            const before = box[0] - m.detail!.left;
+            const after = m.detail!.right - box[2];
+            if (skin === INSTRUMENT) {
+              expect(Math.abs(before), `${p.name}: Instrument's column starts at the pane's edge (${before})`).toBeLessThan(NEAR);
+            } else {
+              expect(Math.abs(before - after), `${p.name}: Refined's column centres (${before} and ${after})`).toBeLessThan(1);
+            }
+          }
+          expect(errors).toEqual([]);
+        } finally {
+          await ctx.close();
+        }
+      }, 120_000);
+    }
+  }
+});
+
+describe('under the head row, the first line is --sp-2 down on every screen outside the list (ruling 4)', () => {
+  const FIRSTS = [
+    { name: 'Runs (its find box)', path: '/runs', first: '.shell-detail [data-page-body] .rf-box' },
+    { name: 'a run (its Back control)', path: '/runs/100', first: '.shell-detail .rd-strip .wi-back' },
+    { name: 'Runs advanced (its Back control)', path: '/runs/advanced', first: '.shell-detail .rd-strip .wi-back' },
+  ] as const;
+  for (const skin of [INSTRUMENT, REFINED]) {
+    for (const [width, height] of DESKS) {
+      it(`${skin}, ${width}x${height}: Runs, a run and Runs advanced: the head row to the first line is --sp-2, and that line starts on the body's edge`, async () => {
+        const { ctx, page, errors } = await openApp(browser!, { skin, theme: PHOSPHOR, width }, SCREENS);
+        try {
+          await page.setViewportSize({ width, height });
+          for (const f of FIRSTS) {
+            const m = await at(page, f.path, f.first, { ...ANCHORS, first: f.first });
+            const gap = need(m, 'first')[1] - need(m, 'scaffoldRow')[3];
+            expect(gap, `${f.name}: ${gap} under the head row, against --sp-2 ${m.tokens.sp2}`).toBeCloseTo(m.tokens.sp2, 0);
+            const edge = need(m, 'first')[0] - need(m, 'scaffoldRowPad')[0];
+            expect(Math.abs(edge), `${f.name}: it starts ${edge} from the head row's text edge`).toBeLessThan(NEAR);
+          }
+          expect(errors).toEqual([]);
+        } finally {
+          await ctx.close();
+        }
+      }, 120_000);
+    }
   }
 });

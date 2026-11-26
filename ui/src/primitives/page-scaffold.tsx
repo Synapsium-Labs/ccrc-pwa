@@ -40,9 +40,11 @@ import { BackButton } from './back-button';
 export const PAGE_HEAD = 'sticky top-0 z-10 bg-page';
 /** Under a mouse, every control in the header's row (Back and the actions) is `min(--row-h, --tap-min)` tall, centred in
  *  the row: Instrument's 32 in its 40 row, where at the tap floor it was 44 and stretched the row past `--head-h`;
- *  Refined's stays 44 (its row is 52). `pointer-fine:` is `@media (pointer: fine)`, the one condition Instrument's dense
- *  rows and toggle already read, so a touch screen keeps 44 everywhere. Nothing outside the row changes (desktop polish
- *  wave 182, the coordinator's word for this one rule). */
+ *  Refined's stays 44 (its row is 56). `pointer-fine:` is `@media (pointer: fine)`, the one condition Instrument's dense
+ *  rows and toggle already read: it asks the PRIMARY pointer, as the whole console does. A device whose primary pointer is
+ *  coarse keeps 44, with or without a mouse attached; one whose primary pointer is fine (a laptop's trackpad) takes the
+ *  mouse size, even with a touchscreen. Nothing outside the row changes (desktop polish wave 182, the coordinator's word
+ *  for this one rule and its ruling on such a laptop). */
 export const PAGE_HEAD_CONTROLS = 'pointer-fine:[&_:is(button,select)]:min-h-[min(var(--row-h),var(--tap-min))]';
 /** The header's row: as wide as the body's column, at the header's height. */
 export const PAGE_HEAD_ROW = `mx-(--page-margin-inline) flex w-full min-h-head items-center gap-2 px-gutter ${PAGE_HEAD_CONTROLS}`;
