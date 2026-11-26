@@ -2452,7 +2452,9 @@ export function registerCoordRoutes(
    *  - `POST /api/testbox/tools-sync` takes no body: the release and the versions it sends are the fleet host's own.
    *  D-7554: the read and the sync ALSO take the box token (EXEMPT-BUT-AUTHENTICATED in `auth/gate.ts`, the `GET
    *  /api/runs` pattern), because `ccrc-api testbox status|tools-sync` is a cookieless fleet-host caller (the update
-   *  lane's signal). No `coordMutex` and no `notConfigured` arm: none of them touches the coordination database. */
+   *  lane's signal). No `coordMutex` and no `notConfigured` arm: the switch and the sync touch no coordination database.
+   *  The read does since wave 184: two synchronous store reads for its `delivery` key (the builds and the deliveries
+   *  tables), outside the serialiser, as a read needs; with no store the key is absent and the block is answered alone. */
   const deliveryStandingRead = (coord: NonNullable<typeof deps.coord>): DeliveryStandingAnswer => {
     try { return deliveryStandingAnswerOf(coord.claudeBuilds(), coord.claudeBuildDeliveries()); } catch (err) {
       console.warn(`ccrc-server: GET /api/testbox: the delivery standing could not be read (${err instanceof Error ? err.message : String(err)})`);

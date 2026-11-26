@@ -523,3 +523,22 @@ census do not move.
   Measured by a case: at 64-character names, the largest counts, times and tallies, the answer is under 1 KiB. The status
   read's callers that cut what they read (the admin script and the doctor's check, at 65536 bytes) keep that headroom
   unless a build name runs to tens of thousands of digits.
+- **What it costs each call** (measured; the capture owner's yes to the packet, point 2). The console's test box card asks
+  the status read every 30 seconds while it is open, and the doctor asks it too. Each call now reads the builds table and
+  the deliveries table whole and parses every stored result, through two synchronous store reads outside the serialiser.
+  On a year of rows, generously counted (369 builds, each with the largest kept capture output, 8 KiB, and three full
+  delivery results for every one of them, 1,095 rows), the standing took a median of 12.6 ms, 17.1 ms at the 90th
+  percentile and 18.4 ms at most over 30 runs, on the fleet box at a load of 16. The answer was 333 bytes. A read of one
+  build's rows would be a store change, another wave; at this cost it is not needed.
+- **A reader at another recipe version refuses a standing, never reads it as unknown** (point 3). The reader checks a
+  part's two counts against its own build's split of the cases. A reader built at a recipe version that splits them
+  otherwise refuses the whole answer. This assumes what is true today: every reader of the key is on the server's own
+  build, or is a test.
+- **Why the optional `other` count is safe for the closed result reader** (point 4). The count reaches a server only from
+  a test box whose tools are at most as new as the server's, because the box's tools come from the server's release, and
+  a server that knows the count reads it. An older server meeting a newer box would refuse that result whole, so the
+  part would be asked again, not misread.
+- **The driver's fault status is held equal on both sides** (the capture owner's advisory). The driver's
+  `DRIVE_FAULT_EXIT` (3) and the agent's reader of its answer line spell the number apart, since the agent cannot import
+  the driver; a text pin in the driver's test file reads the reader's fault arm and fails if its number is not the
+  constant's (red when the constant is changed, measured).

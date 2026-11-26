@@ -289,6 +289,16 @@ describe('driveCase: the product\'s own send, with the prompt route\'s options',
   });
 });
 
+// The driver's fault status is spelled twice: its constant here, and the agent's reader of the answer line, which cannot import
+// the driver (the capture owner's advisory, wave 184). This pin holds the two equal.
+describe('the agent reads the driver\'s fault line by the driver\'s own status', () => {
+  it('the reader\'s fault arm names DRIVE_FAULT_EXIT\'s number, once', () => {
+    const src = readFileSync(path.join(ROOT, 'agent/src/testbox/captureDeliveryRun.ts'), 'utf8');
+    const arms = [...src.matchAll(/code === (\d+) && typeof o\['fault'\]/g)].map((m) => Number(m[1]));
+    expect(arms).toEqual([DRIVE_FAULT_EXIT]);
+  });
+});
+
 describe('nothing in the server imports the driver, and no route reaches it', () => {
   const files = (dir: string): string[] => readdirSync(dir).flatMap((n) => {
     const p = path.join(dir, n);
