@@ -100,6 +100,7 @@ const COMMAND_LIKE: Readonly<Record<string, readonly string[]>> = {
   runs: ['Each machine ccrc runs on.'],
   sends: ['is not one ccrc sends'],
   sets: ['ccrc sets it up over ssh'],
+  Settings: ['Appearance follows ccrc Settings'], // Static label naming the console's Settings screen; nothing to run.
   stops: ['ccrc stops keeping it for run'],
 };
 

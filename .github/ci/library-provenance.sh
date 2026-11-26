@@ -29,20 +29,20 @@
 set -euo pipefail
 
 bounded="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bounded.sh"
-REPO=Synapsium-Labs/docserver
-SIGNER=Synapsium-Labs/docserver/.github/workflows/release.yml
+REPO=Synapsium-Labs/pinax-lib
+SIGNER=Synapsium-Labs/pinax-lib/.github/workflows/release.yml
 
 lock=pwa/package-lock.json
 read -r version integrity < <(node -e '
-  const p = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).packages["node_modules/@synapsium-labs/docserver"];
+  const p = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).packages["node_modules/@synapsium-labs/pinax-lib"];
   if (!p || !p.version || !p.integrity) process.exit(1);
   console.log(p.version + " " + p.integrity);
 ' "$lock") || { echo "library-provenance: $lock does not record the library's version and integrity" >&2; exit 1; }
 
 # Under the runner's temp directory (or the system's), never inside the work tree. Left for the runner to reap.
 dest=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/lib-prov.XXXXXX")
-"$bounded" 90 npm pack "@synapsium-labs/docserver@$version" --pack-destination "$dest" --silent || { echo "library-provenance: npm pack failed or passed its deadline twice" >&2; exit 1; }
-tgz="$dest/synapsium-labs-docserver-$version.tgz"
+"$bounded" 90 npm pack "@synapsium-labs/pinax-lib@$version" --pack-destination "$dest" --silent || { echo "library-provenance: npm pack failed or passed its deadline twice" >&2; exit 1; }
+tgz="$dest/synapsium-labs-pinax-lib-$version.tgz"
 
 actual="sha512-$(openssl dgst -sha512 -binary "$tgz" | base64 -w0)"
 if [ "$actual" = "$integrity" ]; then
@@ -55,4 +55,4 @@ else
 fi
 
 "$bounded" 90 gh attestation verify "$tgz" --repo "$REPO" --signer-workflow "$SIGNER" --source-ref "refs/tags/v$version" --deny-self-hosted-runners
-echo "library-provenance: @synapsium-labs/docserver@$version was built by $SIGNER at refs/tags/v$version"
+echo "library-provenance: @synapsium-labs/pinax-lib@$version was built by $SIGNER at refs/tags/v$version"

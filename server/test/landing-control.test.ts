@@ -701,3 +701,18 @@ describe('landingBindingOf never selects a dependant held behind a withdrawn tar
     expect(landingBindingOf(facts, controlRead(), now)).toMatchObject({ mode: 'ready', entryId: 107, pr: 7 });
   });
 });
+
+describe('landingBindingOf: a train-closed entry before and after the landed reader marks it (D-9112)', () => {
+  const a = entry(41);
+  const b = entry(42);
+  const onlyB = (): ReturnType<typeof controlRead> => controlRead({ probe: probeWith({}, { pr: 42 }) });
+  it('before the mark: the pinned entry the probe no longer lists holds the head (the defect, pinned)', () => {
+    expect(landingBindingOf(factsOf([a, b]), onlyB(), now)).toEqual({ mode: 'held', reason: 'head-mismatch', entryId: a.id });
+  });
+  it('after the mark: a closed entry is neither in the line nor outstanding, and the next entry binds', () => {
+    expect(landingBindingOf(factsOf([{ ...a, state: 'closed' }, b]), onlyB(), now)).toEqual({
+      mode: 'ready', entryId: b.id, pr: 42, pinnedSha: CONTROL_HEAD_SHA, baseSha: CONTROL_BASE_SHA,
+      landerAt: '2026-11-14T11:59:58Z', probeAt: '2026-11-14T11:59:59Z', healthAt: '2026-11-14T12:00:00Z', fixesMain: false,
+    });
+  });
+});

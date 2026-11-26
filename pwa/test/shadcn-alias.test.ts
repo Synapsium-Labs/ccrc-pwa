@@ -24,8 +24,9 @@
 // refuses on the design system's own standing ruling. This is the mechanical
 // half — the file lands in the right directory with imports that resolve.
 import { describe, expect, it } from 'vitest';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 
 const ROOT = path.join(import.meta.dirname, '..', '..');
 const read = (...seg: string[]): string => readFileSync(path.join(ROOT, ...seg), 'utf8');
@@ -37,6 +38,16 @@ const read = (...seg: string[]): string => readFileSync(path.join(ROOT, ...seg),
  *  which is all tsconfig here carries; a `/* *\/` block would need more. */
 const readJsonc = <T,>(...seg: string[]): T =>
   JSON.parse(read(...seg).replace(/^\s*\/\/.*$/gm, '')) as T;
+
+function aliasUsers(root: string): string[] {
+  const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    const p = path.join(dir, e.name);
+    return e.isDirectory() ? walk(p) : /\.tsx?$/.test(e.name) ? [p] : [];
+  });
+  return [...walk(path.join(root, 'ui', 'src')), ...walk(path.join(root, 'pwa', 'src'))]
+    .filter((f) => /(?:(?:from|import)\s+|import\s*\(\s*)['"]@\//.test(readFileSync(f, 'utf8')))
+    .map((f) => path.relative(root, f));
+}
 
 describe('the shadcn `@/` alias resolves the same way everywhere', () => {
   it('ui/components.json points at directories that exist', () => {
@@ -66,26 +77,17 @@ describe('the shadcn `@/` alias resolves the same way everywhere', () => {
       .toMatch(/'@':\s*fileURLToPath\(new URL\('\.\.\/ui\/src', import\.meta\.url\)\)/);
   });
 
-  it('nothing in the tree imports `@/` yet, so the alias is plumbing and not a dependency', () => {
-    // HONEST SCOPE. No ccrc file uses this prefix today; it exists for files
-    // the CLI will write. If that changes, this assertion is the place to
-    // notice — an alias with real consumers deserves a stronger guard than a
-    // text match on two configs.
-    const walk = (dir: string): string[] => {
-      const out: string[] = [];
-      for (const e of readdirSync(dir, { withFileTypes: true })) {
-        const p = path.join(dir, e.name);
-        if (e.isDirectory()) out.push(...walk(p));
-        else if (/\.tsx?$/.test(e.name)) out.push(p);
+  it('only the reader assets import the alias, including dynamic imports', () => {
+    expect(aliasUsers(ROOT)).toEqual(['pwa/src/docs/reader/assets.ts']);
+    const copy = mkdtempSync(path.join(os.tmpdir(), 'alias-scan-'));
+    try {
+      cpSync(path.join(ROOT, 'ui', 'src'), path.join(copy, 'ui', 'src'), { recursive: true });
+      cpSync(path.join(ROOT, 'pwa', 'src'), path.join(copy, 'pwa', 'src'), { recursive: true });
+      const planted = path.join(copy, 'pwa', 'src', 'alias-control.ts');
+      for (const source of ["import x from '@/lib/cn';", "const x = import('@/fonts/x.woff2?inline');", 'import x from "@/lib/cn";']) {
+        writeFileSync(planted, source);
+        expect(aliasUsers(copy)).toEqual(['pwa/src/alias-control.ts', 'pwa/src/docs/reader/assets.ts']);
       }
-      return out;
-    };
-    const users = [...walk(path.join(ROOT, 'ui', 'src')), ...walk(path.join(ROOT, 'pwa', 'src'))]
-      // BOTH IMPORT FORMS. `from '@/…'` and a bare side-effect `import
-      // '@/…'` — measured: with only the first, adding `import '@/lib/cn'`
-      // to a file left all three green.
-      .filter((f) => /(?:from|import)\s+'@\//.test(readFileSync(f, 'utf8')))
-      .map((f) => path.relative(ROOT, f));
-    expect(users).toEqual([]);
+    } finally { rmSync(copy, { recursive: true, force: true }); }
   });
 });

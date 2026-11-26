@@ -196,6 +196,16 @@ describe.each(['run-bound', 'run-less'] as const)('nothing is brought forward (t
   });
 });
 
+describe('the table list (D-9110)', () => {
+  it('the table list is every landing table the schema creates', async () => {
+    const w = await world('run-bound');
+    // `type = 'table'` leaves out the landing indexes; the escaped underscore matches itself, not any one character.
+    const names = (w.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'landing\\_%' ESCAPE '\\' ORDER BY name").all() as { name: string }[])
+      .map((r) => r.name);
+    expect(names).toEqual([...TABLES].sort());
+  });
+});
+
 describe('the dependants are told (D-9050)', () => {
   it('run-bound: each direct dependant one landing-held, a transitive one none, an unreadable one none while the withdrawal applies', async () => {
     const w = await world('run-bound');

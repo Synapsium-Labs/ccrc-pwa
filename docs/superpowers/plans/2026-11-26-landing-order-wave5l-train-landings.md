@@ -736,7 +736,7 @@ Review run 3939 (round 3, the last) read this plan at `8935fd2736d8c886b2becf26c
 
 ## Deviations found
 
-Three numbers are defined below. D-9111 and D-9112 were issued on 2026-11-26 with wave 5k's block, left unused there, and given to this plan by the coordinator; D-9115 was issued for this plan the same day.
+Four numbers are defined below. D-9111 and D-9112 were issued on 2026-11-26 with wave 5k's block, left unused there, and given to this plan by the coordinator; D-9115 was issued for this plan the same day; D-9134 was issued on 2026-11-26 for a departure found while building.
 
 - **D-9111 (2026-11-26)** — `train-members-second-grammar`: the train record's one parser (`_pr_train_py`'s `train-check`, `ccd/lib/train-proof.sh`) reads the merge train tool's `train-members` block beside the documented `ccrc-train v1` block.
   - The grammar: exactly one block; one JSON array of at least one member; every member an integer `pr` of the PR grammar (never a boolean) and a full lowercase 40-hex `headSha`; no key given twice; no member listed twice; other keys never read. Anything else proves nothing.
@@ -756,3 +756,6 @@ Three numbers are defined below. D-9111 and D-9112 were issued on 2026-11-26 wit
 - **D-9115 (2026-11-26)** — `ready-mark-waits-for-the-line`: on a project positively opted in to the binding head, the coordinator reads the landing line with the PR's number, lands only on a `ready` binding for its own run's entry at its head, keeps the PR a draft while it waits (taken back right after the advance to `merging`, marked ready again only on a read whose binding is ready, then the verdict, the checks gate and the landing in one sitting), and on a held binding whose head (`order.head`, or while the line is paused the entry whose `id` is `binding.entryId`) is another run's entry whose PR is closed with the train label lands nothing past it, writes no train record, reads the line once more after 20 minutes (the landed reader's longest back-off for that answer, 15 minutes, plus one beat of its lane, rounded up), and only if the same head still holds mails the coordinator of that entry's run, or, for an entry with no run, puts it to the operator as an item.
   - Why: a merge train boards any ready PR, so a PR left ready while it waits its turn is exposed for as long as it waits (issue #3422's third defect); and a coordinator that read only the line's flags landed past a held head.
   - The ready mark still precedes the advance (D-8999); the probe lists drafts, so a drafted entry still binds. No `SKILL.md` clause changes: clause 15 already defers the ready mark to §4, which now says it.
+- **D-9134 (2026-11-26)** — `store-case-journal-seed`: the store case of section 9.3 first journals one no-run creation in another project, then reads the journal's bytes and the cursor.
+  - Why: on the `boot` fixture a run's pin writes no journal record, so no journal file existed to compare, and the plan's case as written could not read one.
+  - What it still proves: both marks leave the journal's bytes and the cursor exactly as they were.

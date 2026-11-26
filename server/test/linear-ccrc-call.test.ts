@@ -164,6 +164,72 @@ describe('runCcrcOp (D-8180)', () => {
     expect(await runCcrcOp(r.deps, READ)).toEqual({ ok: false, word: 'unreachable', maybeSent: false });
   });
 
+  // D-9132: Linear answered, with an error the closed table does not know. The word stays `unreachable` (spec §6.8, for every
+  // other reader); `outsideTable` tells it from a transport failure. The body is constructed: no live answer was recorded.
+  it('D-9132: a write answered with an errors body the closed table does not know is unreachable, marked outsideTable, and journaled unknown', async () => {
+    const r = await rig(() => ok({ data: null, errors: [{ message: 'something new', extensions: { code: 'SOMETHING_NEW' } }] }));
+    expect(await runCcrcOp(r.deps, WRITE)).toEqual({ ok: false, word: 'unreachable', maybeSent: true, outsideTable: true });
+    expect(rows(r.fx)[0]).toMatchObject({ outcome: 'unknown', code: 'unreachable' });
+  });
+
+  // Round 1 A6: the same closed-table read for a non-2xx answer that carries an errors body. A code in the table now answers its word.
+  it('D-9132: a write answered 400 with an errors body the closed table does not know is unreachable, marked outsideTable', async () => {
+    const r = await rig(() => Promise.resolve(linearAnswer({ ok: false, status: 400, json: async () => ({ errors: [{ message: 'something new', extensions: { code: 'SOMETHING_NEW' } }] }) })));
+    expect(await runCcrcOp(r.deps, WRITE)).toEqual({ ok: false, word: 'unreachable', maybeSent: true, outsideTable: true });
+  });
+
+  it('D-9132: a write answered 500 with no parseable body is unreachable, maybe sent, and not outsideTable', async () => {
+    const r = await rig(() => Promise.resolve(linearAnswer({ ok: false, status: 500, json: async () => { throw new Error('not json'); } })));
+    const out = await runCcrcOp(r.deps, WRITE);
+    expect(out).toEqual({ ok: false, word: 'unreachable', maybeSent: true });
+    expect('outsideTable' in out).toBe(false);
+  });
+
+  // Round 2 F2: only a 4xx is an answer. A Linear incident's 5xx must not fail every binding in flight; it keeps its hold.
+  it('D-9132 (round 2 F2): a write answered 502 with an errors body the closed table does not know is a plain unreachable, maybe sent, without outsideTable', async () => {
+    const r = await rig(() => Promise.resolve(linearAnswer({ ok: false, status: 502, json: async () => ({ data: null, errors: [{ message: 'x', extensions: { code: 'SOMETHING_NEW' } }] }) })));
+    const out = await runCcrcOp(r.deps, WRITE);
+    expect(out).toEqual({ ok: false, word: 'unreachable', maybeSent: true });
+    expect('outsideTable' in out).toBe(false);
+  });
+
+  // Round 2 A1: an empty `errors` array is no errors: it is neither a body of the table's nor `malformed`.
+  it('D-9132 (round 2 A1): a write answered 400 with an empty errors array is a plain unreachable, not malformed, without outsideTable', async () => {
+    const r = await rig(() => Promise.resolve(linearAnswer({ ok: false, status: 400, json: async () => ({ data: null, errors: [] }) })));
+    const out = await runCcrcOp(r.deps, WRITE);
+    expect(out).toEqual({ ok: false, word: 'unreachable', maybeSent: true });
+    expect('outsideTable' in out).toBe(false);
+  });
+
+  // Round 2 A3a: a code IN the table on a 4xx answers its table word: Linear refused the write, so it is not maybe sent, the journal row
+  // settles `failed` with that word, and the answer is not marked.
+  it('D-9132 (round 2 A3a): a write answered 400 with an errors body whose code is in the closed table answers its table word, not maybe sent, journaled failed', async () => {
+    const r = await rig(() => Promise.resolve(linearAnswer({ ok: false, status: 400, json: async () => ({ data: null, errors: [{ message: 'bad', extensions: { code: 'INVALID_INPUT' } }] }) })));
+    const out = await runCcrcOp(r.deps, WRITE);
+    expect(out).toEqual({ ok: false, word: 'linear-invalid', maybeSent: false });
+    expect('outsideTable' in out).toBe(false);
+    expect(rows(r.fx)[0]).toMatchObject({ outcome: 'failed', code: 'linear-invalid' });
+  });
+
+  // Round 2 A3b, corrected in round 3: a kept 4xx body is read for its `errors` before its `data`, so a success payload beside an
+  // unknown code is the marked `unreachable`, never an ok. (The `!answered.ok` in `run` is the narrowing `refused` needs, not a branch
+  // of its own: a kept body always has a non-empty `errors` array, so it never shapes as ok, and that case would fall through to
+  // the plain `unreachable` a missing body takes.)
+  it('D-9132 (round 2 A3b): a write answered 400 with a success payload beside an unknown-code errors array reads the errors first: marked unreachable, never ok', async () => {
+    const r = await rig(() => Promise.resolve(linearAnswer({ ok: false, status: 400, json: async () => ({
+      data: { projectCreate: { success: true, project: { id: CREATED } } }, errors: [{ message: 'x', extensions: { code: 'SOMETHING_NEW' } }] }) })));
+    const out = await runCcrcOp(r.deps, WRITE);
+    expect(out).toEqual({ ok: false, word: 'unreachable', maybeSent: true, outsideTable: true });
+    expect(rows(r.fx)[0]).toMatchObject({ outcome: 'unknown' });
+  });
+
+  it('D-9132: a transport failure on a write is unreachable and never carries outsideTable', async () => {
+    const r = await rig(() => { throw new Error('boom'); });
+    const out = await runCcrcOp(r.deps, WRITE);
+    expect(out).toEqual({ ok: false, word: 'unreachable', maybeSent: true });
+    expect('outsideTable' in out).toBe(false);
+  });
+
   it('the key is read per call and never appears in an outcome or a log', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
