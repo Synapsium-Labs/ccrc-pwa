@@ -261,7 +261,7 @@ const sub = (over: Partial<SubjectReadings> = {}): SubjectReadings => ({
   candidates: { kind: 'candidates', list: [{ id: 'lane-a', limits: undefined, serves: 'yes' }, { id: 'lane-b', limits: undefined, serves: 'yes' }] },
   resets: { ok: true, value: {} }, strand: { kind: 'none' }, swapBlocked: null, turnMark: ABSENT_MARK, hookState: NO_HOOK, sessionStatus: 'idle',
   dialogSince: null, unsettled: { kind: 'measured', value: [] }, servedReadAt: { kind: 'measured', value: 'none' },
-  continuityReadAt: { ok: true, value: null }, ...over,
+  continuityReadAt: { ok: true, value: null }, holds: { kind: 'read', lanes: [] }, ...over,
 });
 const row = (over: Partial<ReadinessNowRow> = {}): ReadinessNowRow => ({
   id: 5, sessionId: ME, word: 'ready', why: null, until: null, strandCause: null, restartable: false, at: 2_000, readySince: 2_000, readySessionId: ME,
@@ -481,6 +481,13 @@ export function readinessFactsOfCases(mod: M): Record<string, SuiteCase> {
       expect(stranded({ ...all, candidates: list(cand('lane-a', 'yes')), swapBlocked: null, turnMark: ABSENT_MARK })).toEqual(m('unread'));
       const a = mod.overlordReadiness(mod.readinessFactsOf(readings({ candidates: list() }), NOW), NOW);
       expect([a.word, a.strandCause]).toEqual(['stranded', 'set-admits-none']);
+    },
+    'strand (renewal readings PR H): unread holds leave "a candidate serves" unproven, never "no holds"; a measured cause still wins': () => {
+      expect(stranded({ holds: { kind: 'unmeasured' } })).toEqual({ kind: 'unmeasured', why: 'stranded: holds unread' });
+      expect(stranded({ holds: { kind: 'read', lanes: ['lane-c'] } })).toEqual(m(null));
+      expect(stranded({ holds: { kind: 'not-wired' } })).toEqual(m(null));
+      expect(stranded({ holds: { kind: 'unmeasured' }, candidates: list(cand('lane-a', 'at-ceiling')) })).toEqual(m('limited'));
+      expect(stranded({ holds: { kind: 'unmeasured' }, swapBlocked: { at: 1, reason: 'x' } })).toEqual(m('swap-blocked'));
     },
     'the brakes: mail-disabled reads off, the rung off reads off, and no subject reads absent': () => {
       expect(wordOf(readings(null, { mailDisabled: 'set', designation: { kind: 'not-designated', row: null } }))).toBe('absent');
@@ -737,6 +744,8 @@ export const READINESS_FACTS_OF_SET = set(readinessFactsOfCases, [
     old: '(start === null || at > start)', new: '(start === null || at >= start)' },
   { id: 'FA-13 boot and registry swapped',
     old: "unmeasured(raw.registry === 'boot' ? 'boot' : 'registry')", new: "unmeasured(raw.registry === 'boot' ? 'registry' : 'boot')" },
+  { id: 'FA-H1 unread holds read as no holds', old: "  if (s.holds.kind === 'unmeasured') unread.push('holds');\n", new: '' },
+  { id: 'FA-H2 any holds answer doubts the strand', old: "if (s.holds.kind === 'unmeasured') unread.push('holds');", new: "if (s.holds.kind !== 'read') unread.push('holds');" },
   { id: 'FA-14 a blocked swap strands nothing',
     old: 'if (s.swapBlocked !== null) return measured(\'swap-blocked\');', new: '' },
   { id: 'FA-15 any classified failure strands turn-failed',
