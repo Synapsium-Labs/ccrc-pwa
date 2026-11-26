@@ -37,6 +37,10 @@
 // over the body's own pin and text and answer nothing once the body ends. The document carries no version of its own: the
 // seed is the one carrier. Without `opened` there is no history read and no version list, and the seed is the served hash alone.
 //
+// A body also owns its visit's places (X2 P5.3, D-8763, `reader/places.ts`): it starts the visit as it starts, hands the frame
+// `onPlace` and `onHash`, registers the mounted frame as the host of the pops that close its overlay or return from a jump,
+// and ends the visit with its cleanup when the page has moved to another doc or to a screen that is not a doc.
+//
 // The library's host and the frame's asset texts reach the main bundle only through the two literal dynamic imports in
 // `lazyMountReader`; this file names the adapter's types with `import type` only.
 import { THEMES } from '@ccrc/ui';
@@ -63,6 +67,7 @@ import type { ReaderImages, loadReaderImages } from './reader/images';
 import type { ReaderMount, ReaderMountInput, ReaderThemePref } from './reader/bridge';
 import { readerServedHash, readerVersionSeed } from './reader/history';
 import { startReaderHistory } from './readerHistory';
+import { docNow, startPlaces } from './reader/places';
 import {
   copyDecision, readerBarTitle, readerBodyReducer, readerDocKey, readerPrefsOf, routeReaderLink,
   type ReaderBodyState, type ReaderLink,
@@ -240,6 +245,8 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
   useEffect(() => {
     if (overGate) return undefined;
     const ac = new AbortController();
+    // The visit's places (D-8763): started before the frame mounts, for the doc this body shows, and ended with the body.
+    const places = startPlaces({ doc: docNow(), scope: p.bodyKey });
     let mount: ReaderMount | null = null;
     let landed = false;
     let counted = 0;
@@ -250,6 +257,7 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
     let reopened: string | null = null;
 
     const drop = (): void => {
+      places.host(null);
       mount?.destroy();
       mount = null;
       mountRef.current = null;
@@ -441,7 +449,8 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
         prefs: { theme: cur.prefs },
         appearanceRoot: document.documentElement,
         onLink,
-        onHash: replaceFragment,
+        onHash: places.onHash,
+        onPlace: places.onPlace,
         copy: onCopy,
         onReady: () => {
           if (ac.signal.aborted || landed) return;
@@ -477,6 +486,7 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
       }
       mount = m;
       mountRef.current = m;
+      places.host(m);
       if (progress !== null) {
         setBar({
           title: readerBarTitle(outcome.result.meta.title, leafName(cur.props.show.path)),
@@ -503,6 +513,7 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
       unwatch();
       drop();
       giveBack();
+      places.end();
     };
   }, [overGate, text, bytes]);
 

@@ -48,9 +48,14 @@ export function writePlaces(rec: TabRecord): void {
   writeKey(PLACES_RECORD_KEY, JSON.stringify(rec), tabStorage);
 }
 
-/** The mounted reader's: it takes the pops that close the overlay or return from a jump. `null` when none is mounted. */
-export function setPlaceHost(next: PlaceHost | null): void {
+/** The mounted reader's: it takes the pops that close the overlay or return from a jump. `null` when none is mounted.
+ *  Returns the unregister, which clears the host only while it is still `next` (a later host is left alone) and is
+ *  idempotent. */
+export function setPlaceHost(next: PlaceHost | null): () => void {
   host = next;
+  return () => {
+    if (next !== null && host === next) host = null;
+  };
 }
 
 /** Run every subscriber, in subscription order, each one even when an earlier one threw; the first throw is rethrown

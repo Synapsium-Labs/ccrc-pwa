@@ -13,13 +13,24 @@ import { createElement, Fragment, type ReactNode } from 'react';
 import { act, cleanup, render, waitFor } from '@testing-library/react';
 import {
   EMPTY_RECORD, IDX_KEY, PLACES_MAX, PLACES_RECORD_KEY, PLACE_KEY, afterPop, beginVisit, closedByFrame, decidePop,
-  endVisit, parseRecord, pushPlace, readEntry, seedPage, type PopDecision, type Place, type PopTab, type TabRecord,
+  endVisit, parseRecord, pushPlace, readEntry, seedPage, visitEnds, visitKey, type PopDecision, type Place, type PopTab, type TabRecord,
 } from '../src/lib/historyPlaces';
 import { onPop, readPlaces, resetPopstateForTests, setPlaceHost, writePlaces } from '../src/lib/popstate';
 import { navigate, useLocation, type Loc } from '../src/lib/router';
 import { useReaderOnly } from '../src/docs/readerHistory';
 import { noteActivated, resetReloadGateForTests, startReloadGate, type ReloadActs } from '../src/lib/swupdate';
 import { tabStorage, writeKey } from '../src/lib/storage';
+import { mountDocFrame } from '@synapsium-labs/pinax-lib/host';
+import { DocsAssetContext, type DocsAssetContextValue } from '../src/docs/DocImage';
+import type { DocLinkContextValue } from '../src/docs/DocLink';
+import { ReaderFrame, type ReaderDeps, type ReaderFrameProps } from '../src/docs/ReaderFrame';
+import { createFetchQueue } from '../src/docs/fetchQueue';
+import { mountReader, type ReaderMount, type ReaderMountInput } from '../src/docs/reader/bridge';
+import { startPlaces } from '../src/docs/reader/places';
+import { parseMarkdown, type ParseOutcome } from '../src/lib/markdownParse';
+import type { MarkdownParser } from '../src/lib/markdownRunner';
+import type { ReaderRenderOutcome } from '../src/lib/readerRenderJob';
+import { fakeLoaders, fileResponse, treeOk } from './docsFixtures';
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Fixtures.
@@ -209,6 +220,27 @@ describe('popstate: the one dispatcher', () => {
     expect(host.goto).toHaveBeenCalledWith('sec-2', 'tok');
     expect(m.ran).not.toHaveBeenCalled();
     expect(renders(m)).toEqual(before);
+  });
+
+  it('popstate: a host\'s unregister clears only its own host', () => {
+    const a = { closeOverlay: vi.fn(), goto: vi.fn() };
+    const b = { closeOverlay: vi.fn(), goto: vi.fn() };
+    const offA = setPlaceHost(a);
+    const offB = setPlaceHost(b);
+    onPop(() => {});
+    const closeOnce = (): void => {
+      writePlaces(rec({ visit: 'now', doc: '/docs/a', places: [{ seq: 1, kind: 'overlay', idx: 1 }], seq: 1, lastIdx: 1, next: 2 }));
+      at(entry(0), '/docs/a');
+      firePop();
+    };
+    offA();
+    offA();
+    closeOnce();
+    expect(b.closeOverlay, 'A\'s unregister left B').toHaveBeenCalledTimes(1);
+    expect(a.closeOverlay).not.toHaveBeenCalled();
+    offB();
+    closeOnce();
+    expect(b.closeOverlay, 'B\'s unregister cleared it: no host to tell').toHaveBeenCalledTimes(1);
   });
 
   it('popstate: only lib/popstate.ts adds a popstate listener in pwa/src', () => {
@@ -675,6 +707,18 @@ describe('historyPlaces: visits, pushes and the frame closing its overlay', () =
     expect(closedByFrame(pushed.rec).rec.pendingSeq, 'Esc expects the base, not the dropped jump').toBe(0);
   });
 
+  it('visitKey and visitEnds: a visit is one body, and only a change of address ends it', () => {
+    expect(visitKey('/docs/a', '')).toBe('/docs/a\u0000');
+    expect(visitKey('/docs/a', 'k\u0000part:1')).toBe('/docs/a\u0000k\u0000part:1');
+    const open = rec({ visit: 'v', doc: visitKey('/docs/a', 'k\u0000part:0') });
+    expect(visitEnds(open, 'v', '/docs/a'), 'same address, another scope: the next part ends nothing').toBe(false);
+    expect(visitEnds(open, 'v', '/docs/b'), 'another address ends it').toBe(true);
+    expect(visitEnds(open, 'w', '/docs/b'), 'a visit that is not the record\'s ends nothing').toBe(false);
+    expect(visitEnds(open, null, '/docs/b'), 'a body with no visit ends nothing').toBe(false);
+    expect(visitEnds(rec({ visit: 'v', doc: '/docs/a' }), 'v', '/docs/a'), 'a doc with no separator, same address').toBe(false);
+    expect(visitEnds(rec({ visit: 'v', doc: '/docs/a' }), 'v', '/docs/b'), 'a doc with no separator, another address').toBe(true);
+  });
+
   it('closedByFrame: only from the visit\'s overlay place, expecting the place pushed before it, or the base', () => {
     const jump: Place = { seq: 1, kind: 'jump', idx: 1, id: 'a' };
     const ovl: Place = { seq: 2, kind: 'overlay', idx: 2 };
@@ -687,5 +731,518 @@ describe('historyPlaces: visits, pushes and the frame closing its overlay', () =
     const onBase = { ...two, lastIdx: 0 };
     expect(closedByFrame(onBase)).toEqual({ rec: onBase, back: false });
     expect(closedByFrame(rec())).toEqual({ rec: rec(), back: false });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Part B: the reader's places (`docs/reader/places.ts`), through the real `ReaderFrame` and the real history.
+//
+// Each case renders the real `ReaderFrame` under a small shell that routes with the real `useLocation` (a path under
+// `/docs/` is a doc, any other path is a screen that is not one), over an injected `reader.mount` that records every
+// mount's input and hands back a mount whose `closeOverlay` and `goto` are spies. The frame's own reports are made by
+// calling the recorded `input.onPlace` and `input.onHash` as the frame's adapters would. A Back is a real traversal (jsdom
+// fires its `popstate` a task later), so a case waits for what the traversal should leave.
+
+const DOC_A = '/docs/demo/specs/a.md';
+const DOC_B = '/docs/demo/specs/b.md';
+
+const RENDERED: ReaderRenderOutcome = {
+  kind: 'rendered',
+  result: { outcome: 'rendered', html: '<p>x</p>', meta: { title: null, frontList: null, headings: [], figures: 0, mermaidKinds: [] } },
+  mermaid: { fences: 0, largestBytes: 0, totalBytes: 0, largestChars: 0, totalChars: 0 },
+  images: [],
+  imagesTruncated: false,
+};
+
+const LINK: Omit<DocLinkContextValue, 'urls'> = {
+  project: 'demo', pageRef: null, pageAt: null, view: 'effective', section: 'specs', path: 'a.md', tree: treeOk(),
+  pageSource: 'committed', onFragment: () => {},
+};
+
+interface Mounted {
+  readonly input: ReaderMountInput;
+  readonly handle: { readonly closeOverlay: ReturnType<typeof vi.fn>; readonly goto: ReturnType<typeof vi.fn>; readonly destroy: ReturnType<typeof vi.fn> };
+}
+interface PlacesRig {
+  readonly mounts: Mounted[];
+  readonly assets: DocsAssetContextValue;
+  readonly parser: MarkdownParser;
+  readonly reader: ReaderDeps;
+}
+
+function placesRig(): PlacesRig {
+  const mounts: Mounted[] = [];
+  const mount = vi.fn<ReaderDeps['mount']>(async (_el, input) => {
+    const handle = {
+      seed: { hosted: false as const }, follow: vi.fn(), destroy: vi.fn(), setPrefs: vi.fn(), command: vi.fn(),
+      closeOverlay: vi.fn(), goto: vi.fn(),
+    };
+    mounts.push({ input, handle });
+    return handle as unknown as ReaderMount;
+  });
+  const files = fakeLoaders();
+  return {
+    mounts,
+    assets: { loaders: files.loaders, queue: createFetchQueue(), onDraftAsset: () => {} },
+    parser: vi.fn<MarkdownParser>(async (): Promise<ParseOutcome> => parseMarkdown('# Formatted', 'docs')),
+    reader: { render: async () => RENDERED, mount, images: async () => ({ urls: {}, drafts: 0, auth: 0 }) },
+  };
+}
+
+const SHOWN = fileResponse('# A\n').show;
+
+/** The shell: a doc under `/docs/` is the real `ReaderFrame`, keyed by its address (and `epoch`, so a re-render with a new
+ *  epoch is a remount of the same doc, whose `bodyKey`, and so whose visit's scope, is the same); any other address is a screen that is not a doc. */
+function PlacesApp(p: { readonly rig: PlacesRig; readonly epoch: number }): ReactNode {
+  const loc = useLocation();
+  if (!loc.path.startsWith('/docs/')) return createElement('p', null, `screen ${loc.path}`);
+  const key = `${loc.path}${loc.search}:${p.epoch}`;
+  const props: ReaderFrameProps = {
+    show: SHOWN, bodyKey: `${loc.path}${loc.search}`, link: LINK, parser: p.rig.parser, reader: p.rig.reader,
+    pendingFragment: null, onFragmentConsumed: () => {},
+  };
+  return createElement(DocsAssetContext, { value: p.rig.assets }, createElement(ReaderFrame, { key, ...props }));
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => { setTimeout(r, ms); });
+/** Lets every settled promise and every queued traversal run, inside `act`. */
+const quiet = async (ms = 40): Promise<void> => { await act(async () => { await sleep(ms); }); };
+/** Waits for a condition, then for a little more, so an event the condition does not name would show too. */
+async function until(cond: () => void): Promise<void> {
+  await waitFor(cond, { timeout: 4000 });
+  await quiet();
+}
+
+interface Started { readonly rig: PlacesRig; readonly ran: ReturnType<typeof vi.fn>; readonly view: ReturnType<typeof render> }
+
+/** The page: one subscriber that counts the router's pops (it also seeds the dispatcher from the entry the page loaded on,
+ *  as the shell's own `useLocation` does in the app), the shell, and, by default, the first reader mount. */
+async function start(waitForMount = true): Promise<Started> {
+  const rig = placesRig();
+  const ran = vi.fn();
+  onPop(ran);
+  const view = render(createElement(PlacesApp, { rig, epoch: 1 }));
+  if (waitForMount) await mountedAt(rig, 1);
+  return { rig, ran, view };
+}
+async function mountedAt(rig: PlacesRig, n: number): Promise<Mounted> {
+  await waitFor(() => expect(rig.mounts.length).toBeGreaterThanOrEqual(n), { timeout: 4000 });
+  await quiet(10);
+  return rig.mounts[n - 1] as Mounted;
+}
+const latest = (rig: PlacesRig): Mounted => rig.mounts[rig.mounts.length - 1] as Mounted;
+
+const stateNow = (): Record<string, unknown> => (history.state ?? {}) as Record<string, unknown>;
+const placeNow = (): { visit: string; seq: number; kind: string; id?: string; from?: string } | undefined =>
+  stateNow().docsPlace as { visit: string; seq: number; kind: string; id?: string; from?: string } | undefined;
+const idxNow = (): number | undefined => stateNow().docsIdx as number | undefined;
+/** How many times any mount of the rig was told to close its overlay or to go to a place. */
+const commands = (rig: PlacesRig): { close: number; goto: number } => ({
+  close: rig.mounts.reduce((n, m) => n + m.handle.closeOverlay.mock.calls.length, 0),
+  goto: rig.mounts.reduce((n, m) => n + m.handle.goto.mock.calls.length, 0),
+});
+const pushPlaces = (m: Mounted, n: number): void => { for (let i = 0; i < n; i += 1) m.input.onPlace!('overlay'); };
+
+describe('places: the reader\'s places through the real frame and history', () => {
+  beforeEach(() => {
+    // A screen that is not a doc below the doc, so a Back out of the doc has somewhere known to go.
+    history.replaceState(null, '', '/before');
+    history.pushState(null, '', DOC_A);
+  });
+
+  it('places: overlay Back closes it', async () => {
+    const s = await start();
+    const m = latest(s.rig);
+    const length = history.length;
+    m.input.onPlace!('overlay');
+    expect(history.length, 'one entry pushed').toBe(length + 1);
+    expect(placeNow()).toMatchObject({ kind: 'overlay', seq: 1 });
+    expect(location.pathname).toBe(DOC_A);
+    history.back();
+    await until(() => expect(m.handle.closeOverlay).toHaveBeenCalledTimes(1));
+    expect(m.handle.closeOverlay, 'told once').toHaveBeenCalledTimes(1);
+    expect(m.handle.goto).not.toHaveBeenCalled();
+    expect(placeNow(), 'the page stands on the doc\'s base entry').toBeUndefined();
+    expect(location.pathname).toBe(DOC_A);
+    expect(s.ran, 'no screen heard the pop').not.toHaveBeenCalled();
+    expect(s.rig.mounts, 'the frame stayed').toHaveLength(1);
+  });
+
+  it('places: Esc then exactly one Back consumed', async () => {
+    const s = await start();
+    const m = latest(s.rig);
+    m.input.onPlace!('overlay');
+    // Esc or Close in the frame: it closes its overlay itself and reports it; the console steps back by itself.
+    m.input.onPlace!('overlay-closed');
+    await until(() => expect(placeNow()).toBeUndefined());
+    expect(idxNow(), 'back on the base entry').toBe(0);
+    expect(m.handle.closeOverlay, 'nothing to close: the frame did it').not.toHaveBeenCalled();
+    expect(s.ran).not.toHaveBeenCalled();
+    expect(location.pathname).toBe(DOC_A);
+    // The next Back is the user's, and it leaves the doc.
+    history.back();
+    await until(() => expect(location.pathname).toBe('/before'));
+    expect(s.ran, 'the router heard that one').toHaveBeenCalledTimes(1);
+    expect(commands(s.rig)).toEqual({ close: 0, goto: 0 });
+  });
+
+  it('places: a hash with push pushes an entry, and Back sends goto with its id and its from token', async () => {
+    const s = await start();
+    const m = latest(s.rig);
+    const length = history.length;
+    m.input.onHash('sec-2', { push: true, from: 'tok-1' });
+    expect(history.length).toBe(length + 1);
+    expect(placeNow()).toMatchObject({ kind: 'jump', seq: 1, id: 'sec-2', from: 'tok-1' });
+    history.back();
+    await until(() => expect(m.handle.goto).toHaveBeenCalledTimes(1));
+    expect(m.handle.goto).toHaveBeenCalledWith('sec-2', 'tok-1');
+    expect(m.handle.closeOverlay).not.toHaveBeenCalled();
+    expect(s.ran).not.toHaveBeenCalled();
+    expect(location.pathname).toBe(DOC_A);
+  });
+
+  it('places: a hash without push still replaces', async () => {
+    const s = await start();
+    const m = latest(s.rig);
+    const length = history.length;
+    const before = stateNow();
+    m.input.onHash('sec-3', { push: false, from: null });
+    m.input.onHash('sec-4');
+    expect(history.length, 'no entry pushed').toBe(length);
+    expect(location.hash, 'the fragment replaced').toBe('#sec-4');
+    expect(stateNow()).toEqual(before);
+  });
+
+  it('places: 51 places push 50', async () => {
+    const s = await start();
+    const m = latest(s.rig);
+    const length = history.length;
+    pushPlaces(m, 51);
+    expect(history.length, 'fifty entries, not fifty-one').toBe(length + 50);
+    expect(placeNow()?.seq).toBe(50);
+    // A jump past the budget pushes nothing either.
+    m.input.onHash('sec-9', { push: true, from: 'tok' });
+    expect(history.length).toBe(length + 50);
+    expect(location.hash, 'the jump that was not pushed replaced the fragment instead').toBe('#sec-9');
+  });
+
+  it('places: a doc shown in parts keeps each part\'s places to that part', async () => {
+    const ran = vi.fn();
+    onPop(ran);
+    const goto = vi.fn();
+    const closeOverlay = vi.fn();
+    const part0 = startPlaces({ doc: DOC_A, scope: 'k\u0000part:0' });
+    part0.host({ goto, closeOverlay });
+    part0.onHash('sec', { push: true, from: 'tok' });
+    expect(placeNow(), 'part 0 pushed its place').toMatchObject({ kind: 'jump', id: 'sec' });
+    // Next part: the address is unchanged, so part 0's body ends without ending anything, and part 1 starts its own visit.
+    part0.end();
+    const part1 = startPlaces({ doc: DOC_A, scope: 'k\u0000part:1' });
+    part1.host({ goto, closeOverlay });
+    expect(readPlaces().places, 'part 1 starts with no places of part 0\'s').toEqual([]);
+    history.back();
+    await until(() => expect(idxNow()).toBe(0));
+    expect(goto, 'part 0\'s jump is never sent into part 1\'s frame').not.toHaveBeenCalled();
+    expect(closeOverlay).not.toHaveBeenCalled();
+    expect(ran, 'the one Back was the router\'s').toHaveBeenCalledTimes(1);
+    part1.end();
+  });
+
+  it('places: a newer visit survives an older body\'s end', () => {
+    onPop(vi.fn());
+    const older = startPlaces({ doc: DOC_A });
+    const first = readPlaces().visit;
+    const newer = startPlaces({ doc: DOC_B });
+    const second = readPlaces().visit;
+    expect(second).not.toBe(first);
+    older.end();
+    expect(readPlaces().visit, 'B\'s visit is not the older body\'s to end').toBe(second);
+    expect(readPlaces().doc).toBe(visitKey(DOC_B, ''));
+    newer.end();
+  });
+
+  it('places: a frame that falls back is no longer the host', async () => {
+    const s = await start();
+    const m = latest(s.rig);
+    m.input.onPlace!('overlay');
+    m.input.onFallback('assets');
+    await quiet();
+    history.back();
+    await until(() => expect(placeNow()).toBeUndefined());
+    expect(m.handle.closeOverlay, 'a frame that fell back is told nothing').not.toHaveBeenCalled();
+    expect(location.pathname, 'the one Back left the place and the doc stayed').toBe(DOC_A);
+    expect(commands(s.rig)).toEqual({ close: 0, goto: 0 });
+  });
+
+  it('places: a remount of the same doc keeps the visit\'s budget', async () => {
+    const s = await start();
+    pushPlaces(latest(s.rig), 25);
+    const length = history.length;
+    const visit = placeNow()?.visit;
+    s.view.rerender(createElement(PlacesApp, { rig: s.rig, epoch: 2 }));
+    const second = await mountedAt(s.rig, 2);
+    pushPlaces(second, 26);
+    expect(history.length, 'fifty in all: the second body shared the first one\'s budget').toBe(length + 25);
+    expect(placeNow()?.seq).toBe(50);
+    expect(placeNow()?.visit, 'one visit throughout').toBe(visit);
+  });
+
+  it('places: stale places after navigating away cost no extra Back', async () => {
+    const s = await start();
+    const a = latest(s.rig);
+    a.input.onPlace!('overlay');
+    a.input.onPlace!('overlay');
+    a.input.onHash('sec', { push: true, from: 'tok' });
+    act(() => { navigate(DOC_B); });
+    await mountedAt(s.rig, 2);
+    expect(location.pathname).toBe(DOC_B);
+    expect(s.ran, 'navigate ran the subscribers').toHaveBeenCalledTimes(1);
+    // One Back: A's three places are stepped over and A shows.
+    history.back();
+    await until(() => expect(location.pathname).toBe(DOC_A));
+    await mountedAt(s.rig, 3);
+    expect(s.ran, 'one run for the whole move').toHaveBeenCalledTimes(2);
+    expect(placeNow()).toBeUndefined();
+    expect(commands(s.rig), 'nothing was told to close or to go').toEqual({ close: 0, goto: 0 });
+    // A second Back leaves A.
+    history.back();
+    await until(() => expect(location.pathname).toBe('/before'));
+    expect(s.ran).toHaveBeenCalledTimes(3);
+  });
+
+  it('places: leaving a doc by a link navigates at once, and one Back shows it', async () => {
+    const s = await start();
+    const a = latest(s.rig);
+    a.input.onPlace!('overlay');
+    const length = history.length;
+    act(() => { a.input.onLink({ kind: 'relative', path: 'b.md', fragment: null }); });
+    expect(location.pathname, 'the move was synchronous, nothing unwound first').toBe(DOC_B);
+    expect(history.length, 'one entry pushed, on top of the place').toBe(length + 1);
+    await mountedAt(s.rig, 2);
+    history.back();
+    await until(() => expect(location.pathname).toBe(DOC_A));
+    expect(placeNow(), 'on the doc\'s base entry').toBeUndefined();
+    expect(commands(s.rig)).toEqual({ close: 0, goto: 0 });
+  });
+
+  it('places: from a doc with places, navigate to a screen that is not a doc, then one Back shows the doc and nothing closes or jumps', async () => {
+    const s = await start();
+    const a = latest(s.rig);
+    a.input.onPlace!('overlay');
+    a.input.onHash('sec', { push: true, from: 'tok' });
+    act(() => { navigate('/runs'); });
+    expect(location.pathname).toBe('/runs');
+    expect(s.ran).toHaveBeenCalledTimes(1);
+    history.back();
+    await until(() => expect(location.pathname).toBe(DOC_A));
+    await mountedAt(s.rig, 2);
+    expect(s.ran, 'one run for the whole move').toHaveBeenCalledTimes(2);
+    expect(commands(s.rig), 'neither place acted').toEqual({ close: 0, goto: 0 });
+    // What only the visit's end decides: the visit that had those places ended when its reader unmounted for the screen,
+    // so Forward steps over them (they are stale) and reaches the screen in one step. A visit kept across the screen
+    // (the end's rule mutated to never end it) goes red earlier than this step: the first Back is consumed at the doc's
+    // base entry, so the reader never mounts again and `mountedAt(s.rig, 2)` above times out.
+    history.forward();
+    await until(() => expect(location.pathname).toBe('/runs'));
+    expect(s.ran).toHaveBeenCalledTimes(3);
+    expect(commands(s.rig), 'and still nothing closed or jumped').toEqual({ close: 0, goto: 0 });
+    expect(placeNow()).toBeUndefined();
+  });
+
+  it('places: a reload on a place continues the visit', async () => {
+    const first = await start();
+    latest(first.rig).input.onPlace!('overlay');
+    const saved = readPlaces();
+    const visit = saved.visit;
+    expect(visit).not.toBeNull();
+    // The reload: nothing mounted, this page's module state gone, the tab's session-stored record kept, the history too.
+    cleanup();
+    resetPopstateForTests();
+    writeKey(PLACES_RECORD_KEY, JSON.stringify(saved), tabStorage);
+    expect(placeNow(), 'the page stands on the place\'s entry').toMatchObject({ kind: 'overlay', seq: 1 });
+    const second = await start();
+    expect(readPlaces().visit, 'the visit is unchanged').toBe(visit);
+    expect(placeNow(), 'and the entry kept its place').toMatchObject({ kind: 'overlay', seq: 1 });
+    const m = latest(second.rig);
+    history.back();
+    await until(() => expect(m.handle.closeOverlay).toHaveBeenCalledTimes(1));
+    expect(location.pathname).toBe(DOC_A);
+    expect(second.ran).not.toHaveBeenCalled();
+  });
+
+  it('places: a new visit\'s base entry drops an ended visit\'s docsPlace', async () => {
+    history.replaceState({ docsIdx: 5, docsPlace: { visit: 'ended', seq: 1, kind: 'overlay' }, other: 1 }, '', DOC_A);
+    await start();
+    expect(stateNow().docsPlace, 'the ended visit\'s place is gone').toBeUndefined();
+    expect(stateNow(), 'the rest of the entry is kept').toMatchObject({ docsIdx: 5, other: 1 });
+    expect(readPlaces().visit).not.toBe('ended');
+    expect(readPlaces().visit).not.toBeNull();
+  });
+
+  it('places: Forward after Back from B reaches B', async () => {
+    const s = await start();
+    const a = latest(s.rig);
+    a.input.onPlace!('overlay');
+    a.input.onHash('sec', { push: true, from: 'tok' });
+    act(() => { navigate(DOC_B); });
+    await mountedAt(s.rig, 2);
+    history.back();
+    await until(() => expect(location.pathname).toBe(DOC_A));
+    await mountedAt(s.rig, 3);
+    expect(s.ran).toHaveBeenCalledTimes(2);
+    // Forward: A's two places are stale and are stepped over toward B, never back toward where the user came from.
+    history.forward();
+    await until(() => expect(location.pathname).toBe(DOC_B));
+    expect(s.ran, 'one run for the way forward').toHaveBeenCalledTimes(3);
+    expect(placeNow()).toBeUndefined();
+    expect(commands(s.rig)).toEqual({ close: 0, goto: 0 });
+  });
+
+  it('places: Back from a screen that is not a doc into stale places costs one Back', async () => {
+    // A doc's base, two places of a visit that has ended, and a screen: the shape a reload on the screen leaves.
+    history.replaceState(entry(0), '', DOC_A);
+    history.pushState(entry(1, { visit: 'old', seq: 1, kind: 'overlay' }), '', DOC_A);
+    history.pushState(entry(2, { visit: 'old', seq: 2, kind: 'jump', id: 'j', from: 'f' }), '', DOC_A);
+    history.pushState(entry(3), '', '/runs');
+    resetPopstateForTests();
+    writeKey(PLACES_RECORD_KEY, JSON.stringify(rec({ lastIdx: 3, next: 4 })), tabStorage);
+    const s = await start(false);
+    expect(location.pathname).toBe('/runs');
+    const back = vi.spyOn(history, 'back');
+    history.back();
+    await until(() => expect(location.pathname).toBe(DOC_A));
+    await mountedAt(s.rig, 1);
+    expect(back, 'the user\'s one Back and one step over each place').toHaveBeenCalledTimes(3);
+    expect(s.ran, 'one run for the whole move').toHaveBeenCalledTimes(1);
+    expect(commands(s.rig)).toEqual({ close: 0, goto: 0 });
+    expect(placeNow()).toBeUndefined();
+  });
+
+  it('places: the pushed entry\'s URL is the doc\'s current URL', async () => {
+    history.replaceState(null, '', `${DOC_A}?ref=feature#sec-3`);
+    const s = await start();
+    const m = latest(s.rig);
+    const url = (): string => location.pathname + location.search + location.hash;
+    m.input.onPlace!('overlay');
+    expect(url(), 'path, search and fragment unchanged').toBe(`${DOC_A}?ref=feature#sec-3`);
+    m.input.onHash('sec-9', { push: true, from: 'tok' });
+    expect(url()).toBe(`${DOC_A}?ref=feature#sec-3`);
+    // The doc's current URL is what the frame's own scroll reports left in it.
+    m.input.onHash('sec-4');
+    expect(url()).toBe(`${DOC_A}?ref=feature#sec-4`);
+    m.input.onPlace!('overlay');
+    expect(url(), 'the next entry carries the fragment as it now stands').toBe(`${DOC_A}?ref=feature#sec-4`);
+    expect(placeNow()).toMatchObject({ kind: 'overlay', seq: 3 });
+  });
+
+  it('places: pushed entry keeps only', async () => {
+    history.replaceState({ ccrcReaderOnly: 'day-1', other: 'kept' }, '', DOC_A);
+    const s = await start();
+    const m = latest(s.rig);
+    m.input.onPlace!('overlay');
+    expect(stateNow()).toMatchObject({ ccrcReaderOnly: 'day-1', other: 'kept', docsPlace: { kind: 'overlay' } });
+    m.input.onHash('sec', { push: true, from: 'tok' });
+    expect(stateNow()).toMatchObject({ ccrcReaderOnly: 'day-1', other: 'kept', docsPlace: { kind: 'jump' } });
+  });
+
+  it('places: router synthetic popstate not consumed while the frame\'s own close is pending', async () => {
+    const s = await start();
+    const m = latest(s.rig);
+    m.input.onPlace!('overlay');
+    // The frame closes the overlay itself: places.ts calls the real `history.back()` and records what it expects.
+    m.input.onPlace!('overlay-closed');
+    expect(readPlaces().pendingSeq, 'the console expects the base entry').toBe(0);
+    // While that back is pending, the router moves: its own synthetic `popstate` must reach every subscriber.
+    act(() => { navigate('/runs'); });
+    expect(s.ran, 'the synthetic pop ran the subscribers').toHaveBeenCalledTimes(1);
+    expect(location.pathname).toBe('/runs');
+    expect(screenText()).toBe('screen /runs');
+    await quiet(80);
+  });
+
+  it('places: Back into a doc\'s base entry keeps its docsIdx, with the reader mounted', async () => {
+    history.replaceState(null, '', '/before');
+    const s = await start(false);
+    act(() => { navigate(DOC_A); });
+    await mountedAt(s.rig, 1);
+    const idxA = idxNow();
+    expect(typeof idxA).toBe('number');
+    const nextBefore = readPlaces().next;
+    // A place on top of the base, and Back to the base with the reader mounted.
+    latest(s.rig).input.onPlace!('overlay');
+    expect(idxNow()).toBeGreaterThan(idxA as number);
+    history.back();
+    await until(() => expect(latest(s.rig).handle.closeOverlay).toHaveBeenCalledTimes(1));
+    expect(idxNow(), 'the base entry\'s number is what it was before the push').toBe(idxA);
+    expect(readPlaces().lastIdx).toBe(idxA);
+    // And when its reader mounts afresh on the base entry (the doc reached again by Back from another one).
+    act(() => { navigate(DOC_B); });
+    await mountedAt(s.rig, 2);
+    history.back();
+    await until(() => expect(location.pathname).toBe(DOC_A));
+    await mountedAt(s.rig, 3);
+    expect(idxNow(), 'not restamped when the doc is reached again').toBe(idxA);
+    expect(readPlaces().lastIdx, 'and it is the entry last shown').toBe(idxA);
+    expect(readPlaces().next, 'the counter only grew').toBeGreaterThanOrEqual(nextBefore);
+  });
+});
+
+function screenText(): string | null {
+  return document.body.querySelector('p')?.textContent ?? null;
+}
+
+describe('places: the port nonce', () => {
+  it('places: the port nonce never reaches history.state', async () => {
+    // Entries a traversal of an earlier case left above this one would be dropped by the first push: start at the top.
+    history.pushState(null, '', DOC_B);
+    history.replaceState({ ccrcReaderOnly: 'day-1' }, '', DOC_A);
+    const places = startPlaces({ doc: location.pathname + location.search });
+    const el = document.createElement('div');
+    document.body.append(el);
+    const caught: { adapters: Parameters<typeof mountDocFrame>[1]['adapters'] | null } = { adapters: null };
+    const input: ReaderMountInput = {
+      document: { result: { outcome: 'rendered', html: '<p>x</p>', meta: { title: 'T', frontList: null } } },
+      bytes: 100, docKey: null, title: 'b.md', prefs: { theme: 'auto' },
+      onLink: vi.fn(), copy: vi.fn(), onReady: vi.fn(), onFallback: vi.fn(),
+      onHash: places.onHash, onPlace: places.onPlace,
+    };
+    const m = await mountReader(el, input, {
+      store: () => null,
+      mount: ((target, o) => { caught.adapters = o.adapters; return mountDocFrame(target, o); }) as typeof mountDocFrame,
+    });
+    try {
+      const frameEl = el.querySelector('iframe');
+      expect(frameEl, 'the installed library mounted its frame').not.toBeNull();
+      const parsed = new DOMParser().parseFromString(frameEl!.getAttribute('srcdoc')!, 'text/html');
+      const seedEl = [...parsed.querySelectorAll('script')].find((s) => s.getAttribute('type') === 'application/json');
+      const seed = JSON.parse(seedEl!.textContent ?? '{}') as { nonce?: unknown; bridge?: { places?: unknown } };
+      expect(seed.bridge?.places, 'the seed asks the frame for places').toBe(true);
+      const nonce = seed.nonce;
+      expect(typeof nonce, 'the seed carries the port\'s nonce').toBe('string');
+      expect((nonce as string).length).toBeGreaterThan(8);
+      // The real adapters' own `onPlace` and `onHash`, as the library calls them when the frame reports.
+      const { adapters } = caught;
+      expect(adapters).not.toBeNull();
+      const length = history.length;
+      const holds = (v: unknown, needle: string): boolean => {
+        if (typeof v === 'string') return v.includes(needle);
+        if (typeof v === 'object' && v !== null) return Object.entries(v).some(([k, x]) => k.includes(needle) || holds(x, needle));
+        return false;
+      };
+      expect(holds({ a: [`x${nonce as string}`] }, nonce as string), 'the walk sees a nonce planted in it').toBe(true);
+      adapters!.onPlace!('overlay');
+      expect(holds(history.state, nonce as string), 'nowhere in the first pushed entry').toBe(false);
+      adapters!.onHash!('sec', { push: true, from: 'tok' });
+      expect(history.length, 'both pushed').toBe(length + 2);
+      expect(holds(history.state, nonce as string), 'nowhere in the second pushed entry').toBe(false);
+      expect(holds(readPlaces(), nonce as string), 'nor in the tab\'s record').toBe(false);
+      expect(readPlaces().visit, 'the visit id is not the nonce').not.toBe(nonce);
+      expect(placeNow()?.visit).not.toBe(nonce);
+      expect(placeNow()).toMatchObject({ kind: 'jump', seq: 2, id: 'sec', from: 'tok' });
+      places.end();
+    } finally {
+      m.destroy();
+      el.remove();
+    }
   });
 });

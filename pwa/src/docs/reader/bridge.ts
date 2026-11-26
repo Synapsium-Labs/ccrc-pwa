@@ -6,7 +6,10 @@
 // `ready`, and `features` (the frame's bar off, its top space trimmed) with `onProgress` for a mount on ccrc's bar (the
 // take-up plan, refinements (c) and (g)). A Docs mount with history (`policy.ts#readerMountPlan`'s `history`) also
 // passes `changes` and `openVersion` and the version seed (completion plan Task 12), when the input has them; the reader
-// lab's mounts never do. It never passes `mermaidGate`, so the Mermaid gate runs at the library's own caps.
+// lab's mounts never do. A mount whose input has `onPlace` (the Docs reader's Back places, X2 P5.3, D-8763) hands it to the
+// library, which then gives `onHash` its second argument (passed on as it came), and the mount's `closeOverlay` and `goto`
+// call the live frame's; a mount made without `onPlace` passes none and does neither (the library throws for such a host).
+// It never passes `mermaidGate`, so the Mermaid gate runs at the library's own caps.
 //
 // It decides nothing a policy file decides: the watchdog, the doc key and the prefs arrive already measured. It
 // does three things of its own. It unwraps the library's callback shapes into ccrc's (the copy check's `hidden`
@@ -29,7 +32,7 @@
 // timed mounts: the reader lab plan, refinement (k)), its `chrome`, and the recorded E17 reading.
 import * as frameLibrary from '@synapsium-labs/pinax-lib/frame';
 import {
-  mermaidGate, type FrameAssets, type RenderInput,
+  mermaidGate, type FrameAssets, type PlaceKind, type RenderInput,
 } from '@synapsium-labs/pinax-lib/frame';
 import {
   mountDocFrame, type FallbackReason, type HiddenChar, type HostAdapters, type HostLink,
@@ -63,7 +66,14 @@ export interface ReaderMountInput {
   readonly prefs: ReaderThemePref;
   readonly appearanceRoot?: HTMLElement;
   readonly onLink: (l: ReaderLink) => void;
-  readonly onHash: (id: string) => void;
+  /** The frame went to the place `id`. With `onPlace` given the library says how: `entry.push` is true for a move that is a
+   *  new place in the console's history, and `entry.from` is the library's own position token for the place left (or null).
+   *  Without `onPlace` the library calls it with the id alone. */
+  readonly onHash: (id: string, entry?: { readonly push: boolean; readonly from: string | null }) => void;
+  /** The frame reports its full-screen figure: `overlay` when it opened, `overlay-closed` when it closed. Giving it asks the
+   *  frame for places (the seed's `bridge.places`) and makes `closeOverlay` and `goto` of the mount live. The reader lab
+   *  passes none. */
+  readonly onPlace?: (kind: PlaceKind) => void;
   readonly copy: (text: string, hidden: readonly HiddenChar[]) => void;
   readonly onReady: () => void;
   readonly onFallback: (r: FallbackReason) => void;
@@ -114,6 +124,13 @@ export interface ReaderMount {
    *  name (completion plan Task 13): a new mount of the same document with `initialHash: id`, so no body is read again.
    *  Does nothing after `destroy`. Absent: this mount has no frame (the assets did not load). */
   openAt?(id: string): void;
+  /** Closes the frame's full-screen figure, if one is open (a Back that pops its place), through the live frame's
+   *  `closeOverlay()`. Does nothing after `destroy`, on a mount made without `onPlace` (the library throws for a host with
+   *  none), or when the frame refuses. Absent: this mount has no frame (the assets did not load). */
+  closeOverlay?(): void;
+  /** Takes the frame to the place `id`, from the position token `from` an `onHash` entry gave (a Back that pops a jump's
+   *  place), through the live frame's `goto()`. Does nothing, as `closeOverlay` does nothing. */
+  goto?(id: string, from?: string): void;
 }
 
 /** Whether an element outside the reader holds focus right now: `el`'s document has an active element that is connected
@@ -231,6 +248,7 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
     if (forMount) seed = { hosted: true, stamp: reading.stamp };
     return reading.outcome.value;
   };
+  const onPlace = input.onPlace;
   const adaptersNow = (): HostAdapters => ({
     assets,
     watchdogMs,
@@ -252,7 +270,9 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
     title: input.title,
     focus: readerMountFocusFor(input.profile, hostOwnsFocus(el)),
     onLink: (l) => input.onLink(readerLinkOf(l)),
-    onHash: (id) => input.onHash(id),
+    // The library gives the second argument only to a host that passed `onPlace`; it goes on only when it came.
+    onHash: (id, entry) => (entry === undefined ? input.onHash(id) : input.onHash(id, { push: entry.push, from: entry.from })),
+    ...(onPlace === undefined ? {} : { onPlace: (kind: PlaceKind) => onPlace(kind) }),
     copy: (text, check) => input.copy(text, check.hidden),
     onReady: () => input.onReady(),
     onFallback: (r) => input.onFallback(r),
@@ -291,6 +311,23 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
       // The library runs host code while it mounts (a focus or insertion handler, a fallback): one that destroyed this
       // mount then reached the frame before it, so the new frame goes too.
       if (destroyed) next.destroy();
+    },
+    closeOverlay() {
+      if (destroyed || onPlace === undefined) return;
+      try {
+        frame.closeOverlay();
+      } catch (e) {
+        console.warn('ccrc-reader: the frame refused closeOverlay', e);
+      }
+    },
+    goto(id, from) {
+      if (destroyed || onPlace === undefined) return;
+      try {
+        if (from === undefined) frame.goto(id);
+        else frame.goto(id, from);
+      } catch (e) {
+        console.warn('ccrc-reader: the frame refused goto', e);
+      }
     },
   };
 }

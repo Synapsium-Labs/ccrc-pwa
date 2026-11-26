@@ -9,9 +9,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Frame, type Page } from 'playwright-core';
 import { SKINS } from '@ccrc/ui';
 import { DOC_SECTION_SLUGS, DOCS_RESPONSE_HEADERS } from '../../shared/docs';
+import { docsDrawFor, READER_E17_MERMAID } from '../src/docs/reader/policy';
 import { COMMIT_A, entry, treeOk, treeResponse } from '../test/docsFixtures';
 import { openApp, serveDist, sharedDist, type DistServer, type OpenedApp } from './app';
 import { resolveChrome } from './harness';
+// The library's own position token (`tokenOf` makes one from an anchor, `parseToken` reads one): its enhance entry does not
+// export them, so this file imports the installed library file by its path.
+import { parseToken, tokenOf } from '../node_modules/@synapsium-labs/pinax-lib/dist/enhance/nav.js';
 
 const SECTION = DOC_SECTION_SLUGS[0]!;
 const BLOB = 'b'.repeat(40);
@@ -28,8 +32,20 @@ beforeAll(async () => {
 }, 180_000);
 afterAll(async () => { await browser?.close(); await server?.close(); });
 
-/** Serves every doc under the section with `text`, and opens `name` in the console. */
-async function open(name: string, text = DOC, others: readonly string[] = []): Promise<OpenedApp> {
+/** Runs in every frame of the page and, in a sandboxed reader frame, keeps the frame's end of the port the console hands it with
+ *  its hello (the `else` branch of `reader-frame.browser.test.ts`'s `hookScript`): a row can then speak on the port as the
+ *  frame's own script would. The console's own window is left alone. */
+const PORT_HOOK = `(() => {
+  if (window.top === window) return;
+  window.addEventListener('message', (e) => {
+    const d = e.data;
+    if (!d || d.t !== 'hello' || !e.ports || e.ports.length !== 1) return;
+    window.__ccrcPort = e.ports[0];
+  }, true);
+})();`;
+
+/** Serves every doc under the section with `text`, and opens `name` in the console. `hookPort` installs `PORT_HOOK` first. */
+async function open(name: string, text = DOC, others: readonly string[] = [], hookPort = false): Promise<OpenedApp> {
   const size = Buffer.byteLength(text);
   const tree = treeOk({ entries: [name, ...others].map((n) => entry(SECTION, n, { committed: { kind: 'file', blob: BLOB, size } })) });
   const app = await openApp(browser, { width: 1280, skin: SKINS[0]!.id, theme: 'light', tab: 'console' }, { api: {}, fleetFrames: [] });
@@ -45,6 +61,7 @@ async function open(name: string, text = DOC, others: readonly string[] = []): P
     };
     await route.fulfill({ status: 200, headers: { ...DOCS_RESPONSE_HEADERS, 'content-type': 'application/json; charset=utf-8' }, body: JSON.stringify(payload) });
   });
+  if (hookPort) await app.ctx.addInitScript(PORT_HOOK);
   await app.page.goto(`${server.origin}/docs/demo/${SECTION}/${name}`, { waitUntil: 'domcontentloaded' });
   await ready(app.page);
   return app;
@@ -135,4 +152,167 @@ describe('lab E16 (P5.3 Step 0): a tap in the frame and the console\'s activatio
       await app.ctx.close();
     }
   }, 120_000);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The rows (P5.3 Step 1), on the built app. Back is `page.goBack()`; the console's state is read with `quietEval`.
+
+interface PlaceState { readonly kind: string; readonly seq: number; readonly visit: string; readonly id?: string; readonly from?: string }
+const placeOf = (page: Page): Promise<PlaceState | null> => quietEval<PlaceState | null>(page, 'history.state?.docsPlace ?? null');
+const lengthOf = (page: Page): Promise<number> => quietEval<number>(page, 'history.length');
+
+/** Polls `read` until it answers `want`, or fails with the last answer. */
+async function becomes<T>(read: () => Promise<T>, want: T, what: string, page: Page): Promise<void> {
+  const until = Date.now() + 15_000;
+  let got = await read();
+  while (JSON.stringify(got) !== JSON.stringify(want)) {
+    if (Date.now() > until) throw new Error(`${what}: wanted ${JSON.stringify(want)}, got ${JSON.stringify(got)}`);
+    await page.waitForTimeout(100);
+    got = await read();
+  }
+}
+
+/** Draws the first figure when the reader draws on request, then opens it full screen through its "Full screen" button. */
+async function openOverlay(page: Page): Promise<Frame> {
+  const frame = await frameOf(page);
+  const figure = frame.locator('figure.mermaid-figure').first();
+  if (docsDrawFor(READER_E17_MERMAID) === 'on-request') await figure.locator('.fig-render-btn').click();
+  await frame.waitForFunction(() => document.querySelector('figure.mermaid-figure')?.getAttribute('data-docreader-draw') === 'drawn',
+    undefined, { timeout: 90_000 });
+  await figure.getByRole('button', { name: 'Full screen' }).click();
+  await frame.locator('.fig-overlay.open').waitFor({ timeout: 10_000 });
+  return frame;
+}
+const overlayOpen = async (frame: Frame): Promise<boolean> => (await frame.locator('.fig-overlay.open').count()) > 0;
+
+describe('P5.3 rows: Back places in the built app, desktop Chromium', () => {
+  it('places: overlay Back closes it, and the page stays', async () => {
+    const app = await open('places.md');
+    try {
+      const page = app.page;
+      const url = page.url();
+      const length = await lengthOf(page);
+      const frame = await openOverlay(page);
+      expect(await lengthOf(page), 'opening the overlay pushed one entry').toBe(length + 1);
+      expect(await placeOf(page), 'tagged as the visit\'s first place, an overlay').toMatchObject({ kind: 'overlay', seq: 1 });
+      expect(page.url(), 'the entry\'s URL is the doc\'s').toBe(url);
+      await page.goBack();
+      await becomes(() => overlayOpen(frame), false, 'the overlay after Back', page);
+      expect(page.url(), 'the page stays').toBe(url);
+      expect(await placeOf(page), 'on the base entry').toBeNull();
+      expect(await frame.locator('figure.mermaid-figure').count(), 'in the same frame').toBeGreaterThan(0);
+      expect(app.errors, 'no uncaught error').toEqual([]);
+    } finally {
+      await app.ctx.close();
+    }
+  }, 180_000);
+
+  it('places: Esc then exactly one Back consumed', async () => {
+    const app = await open('places.md');
+    try {
+      const page = app.page;
+      const url = page.url();
+      const frame = await openOverlay(page);
+      expect(await placeOf(page)).toMatchObject({ kind: 'overlay' });
+      await page.keyboard.press('Escape');
+      await becomes(() => overlayOpen(frame), false, 'the overlay after Esc', page);
+      // The console steps back by itself, onto the base entry: history.state is no longer the place's.
+      await becomes(() => placeOf(page), null, 'the entry after the frame\'s own close', page);
+      expect(page.url(), 'still on the doc').toBe(url);
+      // The next Back is the user's own and leaves the doc.
+      await page.goBack();
+      await becomes(() => Promise.resolve(page.url() !== url), true, 'the page after one more Back', page);
+      expect(app.errors, 'no uncaught error').toEqual([]);
+    } finally {
+      await app.ctx.close();
+    }
+  }, 180_000);
+
+  it('places: a real jump\'s from token passes the parser', async () => {
+    const app = await open('places.md');
+    try {
+      const page = app.page;
+      const frame = await frameOf(page);
+      const scrollY = (): Promise<number> => frame.evaluate(() => Math.round(document.scrollingElement?.scrollTop ?? window.scrollY));
+      const y0 = await scrollY();
+      const length = await lengthOf(page);
+      // The body's own link (its text is lower case; the contents' entry for the same heading reads "Part 20", and is hidden).
+      await frame.getByRole('link', { name: 'part 20', exact: true }).click();
+      await becomes(() => lengthOf(page), length + 1, 'history after an in-document link', page);
+      const place = await placeOf(page);
+      expect(place, 'a jump place').toMatchObject({ kind: 'jump', seq: 1, id: 'part-20' });
+      expect(typeof place?.from, 'with the library\'s position token').toBe('string');
+      const anchor = parseToken(place?.from ?? null);
+      expect(anchor, 'a token the library itself reads').not.toBeNull();
+      expect(tokenOf(anchor), 'and the form its own tokenOf makes').toBe(place?.from);
+      expect(await scrollY(), 'the frame went to the heading').toBeGreaterThan(y0 + 100);
+      await page.goBack();
+      await becomes(() => placeOf(page), null, 'the entry after Back', page);
+      await becomes(() => scrollY().then((y) => Math.abs(y - y0) < 40), true, 'the frame\'s position after Back', page);
+      expect(app.errors, 'no uncaught error').toEqual([]);
+    } finally {
+      await app.ctx.close();
+    }
+  }, 180_000);
+
+  /** Speaks on the frame's own port, as the frame's script would. */
+  const speak = (frame: Frame, msg: unknown): Promise<void> => frame.evaluate((m) => {
+    (window as unknown as { __ccrcPort: MessagePort }).__ccrcPort.postMessage(m);
+  }, msg);
+
+  it('places: place with a URL refused by the parser', async () => {
+    const app = await open('places.md', DOC, [], true);
+    try {
+      const page = app.page;
+      const frame = await frameOf(page);
+      const length = await lengthOf(page);
+      const state = await quietEval<string>(page, 'JSON.stringify(history.state)');
+      await speak(frame, { t: 'place', kind: 'overlay', url: 'https://example.invalid/' });
+      await speak(frame, { t: 'place', kind: 'other' });
+      await page.waitForTimeout(600);
+      expect(await lengthOf(page), 'nothing pushed').toBe(length);
+      expect(await quietEval<string>(page, 'JSON.stringify(history.state)'), 'and nothing changed').toBe(state);
+      // The control, the same way: a well-formed place does push one.
+      await speak(frame, { t: 'place', kind: 'overlay' });
+      await becomes(() => lengthOf(page), length + 1, 'history after a well-formed place', page);
+      expect(await placeOf(page)).toMatchObject({ kind: 'overlay', seq: 1 });
+    } finally {
+      await app.ctx.close();
+    }
+  }, 180_000);
+
+  it('places: a hash whose from fails the library\'s anchor grammar or passes 4096 characters is refused by the parser', async () => {
+    const app = await open('places.md', DOC, [], true);
+    try {
+      const page = app.page;
+      const frame = await frameOf(page);
+      const length = await lengthOf(page);
+      const state = await quietEval<string>(page, 'JSON.stringify(history.state)');
+      const token = tokenOf({ line: 'a', offset: 0, y: 0 });
+      if (token === null) throw new Error('tokenOf made no token');
+      // Valid-looking JSON padded with white space: at 4096 characters the library reads it as a token, at 4097 it does not.
+      const atLimit = token + ' '.repeat(4096 - token.length);
+      const long = token + ' '.repeat(4097 - token.length);
+      expect(atLimit.length).toBe(4096);
+      expect(long.length).toBe(4097);
+      expect(parseToken(atLimit), 'the library reads 4096 characters as a token').not.toBeNull();
+      expect(parseToken(long), 'and 4097 as none').toBeNull();
+      const url = page.url();
+      await speak(frame, { t: 'hash', id: 'part-1', push: 'true', from: 'not a token' });
+      await speak(frame, { t: 'hash', id: 'part-1', push: 'true', from: long });
+      await page.waitForTimeout(600);
+      expect(await lengthOf(page), 'nothing pushed').toBe(length);
+      expect(await quietEval<string>(page, 'JSON.stringify(history.state)'), 'and nothing changed').toBe(state);
+      expect(page.url(), 'a push downgraded to a fragment move would change the address').toBe(url);
+      // The controls: a token of the library's own pushes one, and so does one of exactly 4096 characters.
+      await speak(frame, { t: 'hash', id: 'part-1', push: 'true', from: token });
+      await becomes(() => lengthOf(page), length + 1, 'history after a well-formed jump', page);
+      expect(await placeOf(page)).toMatchObject({ kind: 'jump', id: 'part-1', from: token });
+      await speak(frame, { t: 'hash', id: 'part-2', push: 'true', from: atLimit });
+      await becomes(() => lengthOf(page), length + 2, 'history after a jump whose token is 4096 characters', page);
+      expect((await placeOf(page))?.from?.length).toBe(4096);
+    } finally {
+      await app.ctx.close();
+    }
+  }, 180_000);
 });

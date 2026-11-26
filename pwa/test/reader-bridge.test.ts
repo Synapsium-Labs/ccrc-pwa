@@ -56,7 +56,10 @@ const STUB_ASSETS = { guard: 'g', bootstrap: 'b', enhance: 'e', css: 'c' };
 
 interface Rig {
   readonly input: { [K in keyof ReaderMountInput]: ReaderMountInput[K] };
-  readonly frame: { update: ReturnType<typeof vi.fn>; setPrefs: ReturnType<typeof vi.fn>; setAppearance: ReturnType<typeof vi.fn>; destroy: ReturnType<typeof vi.fn>; command: ReturnType<typeof vi.fn> };
+  readonly frame: {
+    update: ReturnType<typeof vi.fn>; setPrefs: ReturnType<typeof vi.fn>; setAppearance: ReturnType<typeof vi.fn>;
+    destroy: ReturnType<typeof vi.fn>; command: ReturnType<typeof vi.fn>; closeOverlay: ReturnType<typeof vi.fn>; goto: ReturnType<typeof vi.fn>;
+  };
   readonly mount: ReturnType<typeof vi.fn>;
   readonly mermaid: ReturnType<typeof vi.fn>;
   readonly options: () => { document: RenderInput; adapters: HostAdapters };
@@ -85,11 +88,16 @@ function rig(o: {
   strictOld?: boolean;
   validateAppearance?: boolean;
   onMount?: () => void;
+  /** The place callback a mount is given (default: none, as the reader lab's mounts). */
+  onPlace?: ReaderMountInput['onPlace'];
 } = {}): Rig {
   const order: string[] = [];
   const newFrame = (): Rig['frame'] => {
     const n = frames.length;
-    const f = { update: vi.fn(), setPrefs: vi.fn(), setAppearance: vi.fn(), destroy: vi.fn(() => { order.push(`destroy ${n}`); }), command: vi.fn() };
+    const f = {
+      update: vi.fn(), setPrefs: vi.fn(), setAppearance: vi.fn(), destroy: vi.fn(() => { order.push(`destroy ${n}`); }), command: vi.fn(),
+      closeOverlay: vi.fn(), goto: vi.fn(),
+    };
     frames.push(f);
     return f;
   };
@@ -123,6 +131,7 @@ function rig(o: {
     ...(o.changes === undefined ? {} : { changes: o.changes }),
     ...(o.openVersion === undefined ? {} : { openVersion: o.openVersion }),
     ...(o.appearanceRoot === undefined ? {} : { appearanceRoot: o.appearanceRoot }),
+    ...(o.onPlace === undefined ? {} : { onPlace: o.onPlace }),
   };
   const store = o.store === undefined ? fakeStore() : o.store;
   const run = () => mountReader(o.el ?? document.createElement('div'), input, {
@@ -1045,6 +1054,111 @@ describe('openAt', () => {
     const r = rig({ assets: () => Promise.reject(new Error('chunk failed')) });
     const m = await r.run();
     expect('openAt' in m).toBe(false);
+  });
+});
+
+// Back places (X2 P5.3, D-8763): the library's `onPlace`, `onHash`'s second argument, and the frame's `closeOverlay` and `goto`.
+describe('places (X2 P5.3)', () => {
+  it('onPlace reaches the library\'s adapters only when the input has it; the reader lab\'s input has none, its adapters unchanged', async () => {
+    const without = rig();
+    await without.run();
+    expect(Object.keys(without.options().adapters)).not.toContain('onPlace');
+    const lab = rig({ profile: 'lab-draw' });
+    await lab.run();
+    expect(Object.keys(lab.options().adapters)).not.toContain('onPlace');
+    // The lab's adapters are exactly what they were before this change: the same keys, none of them new.
+    expect(Object.keys(lab.options().adapters).sort()).toEqual(
+      ['assets', 'copy', 'docKey', 'focus', 'mermaidDraw', 'onFallback', 'onHash', 'onLink', 'onReady', 'prefs', 'storePrefix', 'title', 'watchdogMs'],
+    );
+
+    const onPlace = vi.fn();
+    const withIt = rig({ onPlace });
+    await withIt.run();
+    const a = withIt.options().adapters;
+    expect(typeof a.onPlace).toBe('function');
+    a.onPlace!('overlay');
+    a.onPlace!('overlay-closed');
+    expect(onPlace.mock.calls).toEqual([['overlay'], ['overlay-closed']]);
+  });
+
+  it('onHash hands on the library\'s second argument, and only when the library gave one', async () => {
+    const r = rig({ onPlace: vi.fn() });
+    await r.run();
+    const a = r.options().adapters;
+    a.onHash!('sec-1');
+    expect((r.input.onHash as ReturnType<typeof vi.fn>).mock.lastCall, 'no second argument invented').toEqual(['sec-1']);
+    a.onHash!('sec-2', { push: true, from: 'tok' });
+    expect(r.input.onHash).toHaveBeenLastCalledWith('sec-2', { push: true, from: 'tok' });
+    a.onHash!('sec-3', { push: false, from: null });
+    expect(r.input.onHash).toHaveBeenLastCalledWith('sec-3', { push: false, from: null });
+  });
+
+  it('closeOverlay and goto call the live frame\'s, and goto without a from passes none', async () => {
+    const r = rig({ onPlace: vi.fn() });
+    const m = await r.run();
+    m.closeOverlay!();
+    expect(r.frame.closeOverlay).toHaveBeenCalledTimes(1);
+    m.goto!('sec-4', 'tok');
+    expect(r.frame.goto).toHaveBeenLastCalledWith('sec-4', 'tok');
+    m.goto!('sec-5');
+    expect((r.frame.goto as ReturnType<typeof vi.fn>).mock.lastCall).toEqual(['sec-5']);
+  });
+
+  it('closeOverlay and goto do nothing after destroy', async () => {
+    const r = rig({ onPlace: vi.fn() });
+    const m = await r.run();
+    m.destroy();
+    m.closeOverlay!();
+    m.goto!('sec-4', 'tok');
+    expect(r.frame.closeOverlay).not.toHaveBeenCalled();
+    expect(r.frame.goto).not.toHaveBeenCalled();
+  });
+
+  it('closeOverlay and goto do nothing on a mount made without onPlace (the library throws a TypeError for a host with none)', async () => {
+    const r = rig();
+    r.frame.closeOverlay.mockImplementation(() => { throw new TypeError('no onPlace'); });
+    r.frame.goto.mockImplementation(() => { throw new TypeError('no onPlace'); });
+    const m = await r.run();
+    expect(() => m.closeOverlay!()).not.toThrow();
+    expect(() => m.goto!('sec-4')).not.toThrow();
+    expect(r.frame.closeOverlay).not.toHaveBeenCalled();
+    expect(r.frame.goto).not.toHaveBeenCalled();
+  });
+
+  it('a frame that throws on closeOverlay or goto is contained', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const r = rig({ onPlace: vi.fn() });
+    r.frame.closeOverlay.mockImplementation(() => { throw new TypeError('refused'); });
+    r.frame.goto.mockImplementation(() => { throw new TypeError('refused'); });
+    const m = await r.run();
+    expect(() => m.closeOverlay!()).not.toThrow();
+    expect(() => m.goto!('sec-4', 'tok')).not.toThrow();
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it('openAt keeps onPlace and the commands follow the new frame', async () => {
+    const el = document.createElement('div');
+    document.body.append(el);
+    const onPlace = vi.fn();
+    const r = rig({ el, onPlace });
+    const m = await r.run();
+    m.openAt!('far');
+    expect(r.mount).toHaveBeenCalledTimes(2);
+    expect(Object.keys(r.optionsAt(1).adapters).sort()).toEqual(Object.keys(r.optionsAt(0).adapters).sort());
+    r.optionsAt(1).adapters.onPlace!('overlay');
+    expect(onPlace).toHaveBeenCalledWith('overlay');
+    r.optionsAt(1).adapters.onHash!('x', { push: true, from: 'tok' });
+    expect(r.input.onHash).toHaveBeenLastCalledWith('x', { push: true, from: 'tok' });
+    m.closeOverlay!();
+    expect(r.frames[0]!.closeOverlay).not.toHaveBeenCalled();
+    expect(r.frames[1]!.closeOverlay).toHaveBeenCalledTimes(1);
+  });
+
+  it('a mount whose assets did not load has neither closeOverlay nor goto', async () => {
+    const r = rig({ assets: () => Promise.reject(new Error('chunk failed')), onPlace: vi.fn() });
+    const m = await r.run();
+    expect('closeOverlay' in m).toBe(false);
+    expect('goto' in m).toBe(false);
   });
 });
 

@@ -284,6 +284,20 @@ export function endVisit(rec: TabRecord): TabRecord {
   return { ...rec, visit: null, doc: null, places: [], seq: 0, pendingSeq: null };
 }
 
+/** The key of one body's visit: its address, then a NUL, then its scope (a body shown in parts has one scope per part, so
+ *  each part is a visit of its own; a body with no parts has the empty scope). */
+export const visitKey = (address: string, scope: string): string => `${address}\u0000${scope}`;
+
+/** Whether a body's end ends the visit: the visit is still the record's, and the record's address (the key's text before
+ *  its first NUL, or the whole key when it has none) is not `address`, the address the page is on now. A change of scope
+ *  on the same address (the next part of a doc) ends nothing: the next body's start sees another key. */
+export function visitEnds(rec: TabRecord, visit: string | null, address: string): boolean {
+  if (visit === null || rec.visit !== visit) return false;
+  const doc = rec.doc ?? '';
+  const cut = doc.indexOf('\u0000');
+  return (cut < 0 ? doc : doc.slice(0, cut)) !== address;
+}
+
 /** The frame reported a place. With no visit, or with `PLACES_MAX` places already pushed in this one, nothing is
  *  pushed (`push` null). Otherwise the current entry is numbered first when it has no index, then the new place takes the
  *  next one: `seq` is one above the count, `lastIdx` is the new entry's, and `push` is what the caller writes into the
