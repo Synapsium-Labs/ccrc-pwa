@@ -13,8 +13,9 @@
 //     pass mark is not moved, so the read goes `stale` if writes keep failing. One log line per failure kind.
 //  4. Tell: the notices for the written answer: the dead push (after the commit that marked it, its payload `readinessPushOf`'s),
 //     then each item's close, settle or raise in the decider's order, through the readiness store on the port's own database
-//     (a raise carries `readinessItemTextOf`'s words; no item is `blocking`, so none pushes). A raise or settle the store refuses
-//     is logged once per kind and never throws.
+//     (a raise carries `readinessItemTextOf`'s words and, when the pass was given an `itemReach`, its push-outbox reach in the
+//     same transaction: the response record the reach writes has its own reader; no item is `blocking`, so its outbox row stays
+//     silent and none pushes). A raise or settle the store refuses is logged once per kind and never throws.
 //  5. Mark the pass on the monotonic clock; once a day, prune.
 //
 // ITS MEMORY (never stored, so no second writer of any fact): whether this process has recorded its first pass (`boot`, set
@@ -24,7 +25,7 @@
 // reads `unmeasured` (`boot`), and a bound restarts from the next sighting (question 4).
 //
 // TWO PASSES ARE ORDERED (F4). The runner abandons a pass past its stale bound and may start the next while the first still
-// awaits; each pass takes a token, and a pass whose token is no longer the newest after its awaits writes nothing.
+// awaits; each pass takes a token, and a pass whose token is no longer the newest after its awaits writes nothing to the store.
 import type { DatabaseSync } from 'node:sqlite';
 import type { Clock } from '../time/ports.js';
 import type { DesignationRead } from '../../../shared/overlord-designation.js';
@@ -44,6 +45,7 @@ import type { Candidates } from '../accountLoad.js';
 import type { TurnMarkRead } from './stall.js';
 import type { HookStateRead } from '../hookstate.js';
 import type { MessageFacts } from './overlordInbox.js';
+import type { ItemReachOf } from './pushOutboxStore.js';
 import type { SessionRecord } from '../registry.js';
 import type { GenRow } from '../continuity/continuityStore.js';
 
@@ -119,8 +121,9 @@ export class ReadinessLane {
   }
 
   /** One pass. Never throws: a failure is logged once per kind and leaves the previous word standing. A pass that a newer one
-   *  overtook while it awaited writes nothing and answers null (F4). */
-  async pass(tick: ReadinessTick): Promise<ReadinessAnswer | null> {
+   *  overtook while it awaited writes nothing to the store and answers null (F4). `itemReach` is the push outbox's item reach
+   *  (`pushSender.ts#itemBoundOf`), handed to each raise so its bound row commits with the item. */
+  async pass(tick: ReadinessTick, itemReach?: ItemReachOf): Promise<ReadinessAnswer | null> {
     const p = this.port;
     const token = ++this.passToken;
     const registry = !this.booted ? 'boot' : tick.listed ? 'listed' : 'failed';
@@ -128,7 +131,10 @@ export class ReadinessLane {
     const sessionId = readinessSubjectOf(designation);
     const subject = sessionId !== null && tick.listed ? await this.gather(sessionId, designation, tick) : null;
     if (token !== this.passToken) { this.once('overtaken', 'ccrc-server: an Overlord readiness pass finished after a newer one began, and wrote nothing'); return null; }
-    if (sessionId === null) { this.downSince.clear(); this.dialogSince.clear(); this.lastDownAt.clear(); }
+    // The sightings end only on a MEASURED nobody designated (review 3941 R1): an unreadable designation also answers no
+    // subject, and clearing then would let the word rise on a missing input (a restart under way forgotten, a dialog's clock
+    // restarted). An unreadable designation keeps every sighting.
+    if (sessionId === null && designation.kind === 'not-designated') { this.downSince.clear(); this.dialogSince.clear(); this.lastDownAt.clear(); }
     const now = p.clock.wall();
     const stored = safe(() => readinessNow(p.db), (detail) => ({ ok: false as const, detail }));
     const facts = readinessFactsOf({
@@ -139,7 +145,7 @@ export class ReadinessLane {
     const written = recordReadiness(p.db, { ...answer, sessionId }, now);
     if (!written.ok) { this.once(`record-${written.why}`, `ccrc-server: the Overlord readiness lane could not record the word ${answer.word} (${written.why})`); return null; }
     this.booted = true;   // only once this process's first row is recorded, so a failed first write is still `boot` (F3)
-    this.tell(answer, written, subject);
+    this.tell(answer, written, subject, itemReach);
     this.lastPassMono = p.clock.mono();
     this.prune(now);
     return answer;
@@ -196,7 +202,8 @@ export class ReadinessLane {
   }
 
   /** Step 4: the notices for the written answer, acted in the decider's order, each act in its own catch. */
-  private tell(answer: ReadinessAnswer, written: { rowId: number | null; episodeFirst: boolean }, s: SubjectReadings | null): void {
+  private tell(answer: ReadinessAnswer, written: { rowId: number | null; episodeFirst: boolean }, s: SubjectReadings | null,
+    itemReach: ItemReachOf | undefined): void {
     const p = this.port;
     const at = p.clock.wall();
     const records = safe(() => openReadinessItems(p.db), (detail) => ({ ok: false as const, detail }));
@@ -215,7 +222,7 @@ export class ReadinessLane {
           const r = settleReadinessItem(p.db, n.recordId, n.note, at);
           if (!r.ok) this.once('notice-settle', `ccrc-server: the Overlord readiness lane could not settle an item (${r.error})`);
         } else {
-          const r = raiseReadinessItem(p.db, { item: n.item, key: n.key, text: readinessItemTextOf(n, { readings: s, count }) }, at);
+          const r = raiseReadinessItem(p.db, { item: n.item, key: n.key, text: readinessItemTextOf(n, { readings: s, count }) }, at, itemReach);
           if (!r.ok) this.once('notice-raise', `ccrc-server: the Overlord readiness lane could not raise an item (${r.error})`);
         }
       }, (detail) => { this.once(`notice-${n.kind}`, `ccrc-server: the Overlord readiness lane could not ${n.kind === 'dead-push' ? 'send the dead push' : `${n.kind} an item`} (${detail})`); });

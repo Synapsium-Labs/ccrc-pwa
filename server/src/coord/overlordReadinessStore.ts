@@ -7,7 +7,7 @@
 // state), and the guarded prune. Nothing here decides a word: `overlordReadiness.ts` (L1) does, and this file records it.
 //
 // WRITERS (the census names them): `overlord_readiness` is written by `recordReadinessInTx` (insert and in-place update) and
-// `pruneReadiness` (delete); `overlord_readiness_items` by `raiseReadinessItem` (insert, with its item in one
+// `pruneReadiness` (delete); `overlord_readiness_items` by `raiseReadinessItem` (insert, with its item and reach in one
 // transaction), `settleReadinessItem` (the lane's settle: the item's move and the record's stamp, one transaction) and
 // `closeReadinessItem` (the operator's move, the record alone). `operator_items` is never written here but through the ledger's
 // checked entries, `raiseItemCheckedInTx` and `settleItemCheckedInTx`.
@@ -19,6 +19,7 @@ import { OVERLORD_ITEM_PROGRAMME } from '../../../shared/overlord-sequence.js';
 import { ITEM_STATES, type ItemState, type NeededBy } from '../../../shared/ledgers.js';
 import { stampSequenceInTx, type SequenceLineInput } from './overlordSequenceStore.js';
 import { raiseItemCheckedInTx, settleItemCheckedInTx } from './ledgersStore.js';
+import { reachInTx, type ItemReachOf } from './pushOutboxStore.js';
 import { tx } from './tx.js';
 import type { ReadinessAnswer, ReadinessItemRecord, ReadinessNowRow } from './overlordReadiness.js';
 
@@ -179,16 +180,19 @@ export function openReadinessItems(db: DatabaseSync): { ok: true; rows: Readines
 /** How soon each kind of item is needed. The stranded item is `soon` with no label, as the plan's question 9 and C56 say, so it
  *  pushes nothing: in W1 nothing waits on the Overlord, and the one push of this piece is the dead push, once per episode. The
  *  count item (one account short of a spare) and a held account stand beside a running Overlord, so they wait: `later` (slug
- *  readiness-item-levels). No item here is `blocking`, so none takes a push-outbox reach. */
+ *  readiness-item-levels). No item here is `blocking`: each still takes its reach (its response record has a reader of its
+ *  own), and its level, not a missing reach, keeps its outbox row silent (review 3941 R4). */
 const NEEDED_BY_OF_ITEM: Readonly<Record<ReadinessItemKind, NeededBy>> = { stranded: 'soon', count: 'later', hold: 'later' };
 
 const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 /** The item for (item, key) and its record, in ONE transaction: `raiseItemCheckedInTx` (programme `OVERLORD_ITEM_PROGRAMME`,
- *  raised by `ccrc`, kind `do`), then the record. A second open record for the same (item, key) is refused by the partial unique index, and a refused raise
+ *  raised by `ccrc`, kind `do`), its reach when `itemReach` is given (as `invariantFindingsStore.ts#recordFinding` writes it),
+ *  then the record. A second open record for the same (item, key) is refused by the partial unique index, and a refused raise
  *  or record rolls both back: nothing is written. Never throws. */
 export function raiseReadinessItem(
   db: DatabaseSync, r: { readonly item: ReadinessItemKind; readonly key: string; readonly text: ReadinessItemText }, at: number,
+  itemReach?: ItemReachOf,
 ): { ok: true; recordId: number; itemId: number } | { ok: false; error: string } {
   const neededBy = NEEDED_BY_OF_ITEM[r.item];
   try {
@@ -197,7 +201,7 @@ export function raiseReadinessItem(
       const itemId = raiseItemCheckedInTx(db, {
         program: OVERLORD_ITEM_PROGRAMME, runId: null, raisedBy: 'ccrc', kind: 'do', title: r.text.title, why: r.text.why, how,
         options: null, neededBy, soonLabel: null, secretSlot: null,
-      }, at, 'ccrc');
+      }, at, 'ccrc', itemReach && ((id) => { reachInTx(db, 'item', id, itemReach({ title: r.text.title, neededBy })(id), at); }));
       const res = db.prepare('INSERT INTO overlord_readiness_items (item, key, itemId, raisedAt) VALUES (?, ?, ?, ?)')
         .run(r.item, r.key, itemId, at);
       return { ok: true as const, recordId: Number(res.lastInsertRowid), itemId };
