@@ -601,6 +601,7 @@ _watchdog_resume_here	C1
 _watchdog_hold	C1
 _wd_operator_hold_to	C1
 _watchdog_one	C1
+_watchdog_provider	C1
 _provfail	C1
 _provfail_holds_home	C1
 _provfail_row	C1

@@ -58,6 +58,10 @@ function decodeCanonicalBase64(text: string): Uint8Array | null {
 /** A bounded read's `ident` as the agent writes it (`agent/src/fileops.ts#readIdentOf`, a sha256 in hex). */
 const READ_IDENT = /^[0-9a-f]{64}$/;
 
+/** What the capture arm measured when the fleet agent answers a delivery job `bad-request` (review 3882 A1): the detail of
+ *  the `not-taken` it answers, which the capture lane's one line carries (review 3898 F6). */
+export const DELIVERY_BAD_REQUEST_DETAIL = 'the fleet agent answered bad-request to a delivery job (likely an agent older than the recipe\'s fields)';
+
 /** The `readdir` answer's names, exactly as `readdirMeasured` has always read them (one reader; the times arm reuses it). */
 function readdirAnswer(res: unknown): { read: MeasuredDirectoryRead } {
   const r = res as { names?: unknown; absent?: unknown } | null;
@@ -382,10 +386,10 @@ export function createIo(client: FleetClient): FleetIO {
         // `not-taken`, which the lane counts as no attempt, never an `unanswered` one every hour with no cause logged.
         // A build-trust job never carries the fields, so its `bad-request` stays `unanswered`.
         if (recipe === 'delivery' && e instanceof AgentOpError && e.code === 'bad-request') {
-          // The line says what was measured; the older agent is the likely cause, not a measured one (a current agent that
-          // refused a malformed delivery ask would land here too; the capture owner's answer to the round's packet).
-          console.warn(`ccrc-server: delivery capture: ${build}: the fleet agent answered bad-request to a delivery job, so the part was not sent (likely an agent older than the recipe's fields)`);
-          return { ok: true, reply: { outcome: 'not-taken', refusal: null, result: null, detail: null, delivery: null } };
+          // The detail says what was measured; the older agent is the likely cause, not a measured one (a current agent that
+          // refused a malformed delivery ask would land here too; the capture owner's answer to the round's packet). This arm
+          // logs nothing: the lane writes the one line, with this detail (review 3898 F6, the coordinator's ruling).
+          return { ok: true, reply: { outcome: 'not-taken', refusal: null, result: null, detail: DELIVERY_BAD_REQUEST_DETAIL, delivery: null } };
         }
         return { ok: false, reason: 'unanswered' };
       }

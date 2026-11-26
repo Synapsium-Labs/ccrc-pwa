@@ -177,7 +177,11 @@ export function deliveryCaseResult(id: DeliveryCaseId, observed: DeliveryObserve
   return {
     id, verdict: deliveryCaseVerdict(expected, o), send: o.send, sentChars: cps(deliveryCaseText(id)),
     receivedChars: o.turns.map((t) => capped(cps(t))), divergence: unequal < 0 ? null : firstDivergence(expected, o.turns[unequal]!, unequal),
-    sideRequests: Object.fromEntries(DELIVERY_ROUTES.map((r) => [r, capped(o.sideRequests[r])])) as DeliverySideRequests, hook,
+    sideRequests: {
+      ...(Object.fromEntries(DELIVERY_ROUTES.map((r) => [r, capped(o.sideRequests[r])])) as Record<DeliveryRoute, number>),
+      // A request on a route the stand-in does not script, written only when there is one (review 3898 A3).
+      ...(o.sideRequests.other !== undefined && o.sideRequests.other > 0 ? { other: capped(o.sideRequests.other) } : {}),
+    }, hook,
   };
 }
 

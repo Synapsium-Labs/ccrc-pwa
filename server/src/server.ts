@@ -94,6 +94,7 @@ import { openReviewStore } from './review/store.js';
 import { startReviewSweep } from './review/sweep.js';
 import { createReaderLabRuns } from './readerLab/runs.js';
 import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/routes.js';
+import { buildArtifactServer, createArtifactListenerState, installConsoleHostFence } from './artifacts/routes.js';
 import { operatorActRoute, servedFleetReads, servedFromWatcher, servedProjectReads, takenAfter } from './servedRead.js';
 import { registerTokenRoutes } from './token/routes.js';
 import { registerLaneModelsRoutes } from './laneModelsRoutes.js';
@@ -605,6 +606,17 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     authStore.startSweep();
     app.addHook('onClose', async () => { authStore.stopSweep(); await authStore.flush(); });
   }
+  // The artifact tier (X5 A1.3, html-artifacts design section 2.2): the second listener, built HERE for `authStore`'s
+  // reason (one per server, made once, never on `Deps`). Its routes, hooks and handlers are all in `artifacts/routes.ts`;
+  // this body only builds it, hands it out as the `artifactServer` decoration (null when the tier is off) with its
+  // listen state, and closes it with the console. The console's host fence is an onRequest hook added before every
+  // other, so a request naming an artifact host answers 421 before the gate runs; with the tier off it adds nothing.
+  const artifactCfg = deps.cfg.artifact;
+  const artifactApp = artifactCfg.state === 'on' ? buildArtifactServer({ cfg: artifactCfg }) : null;
+  app.decorate('artifactServer', artifactApp);
+  app.decorate('artifactListener', artifactApp === null ? null : createArtifactListenerState());
+  if (artifactApp !== null) app.addHook('onClose', async () => { await artifactApp.close(); });
+  installConsoleHostFence(app, artifactCfg);
   // The reader lab's door (the reader lab design, section 4): its counter is an onRequest hook added HERE, before the
   // gate's, so a probe the gate refuses (a sandboxed frame's WebSocket upgrade on an armed box) is still counted. It only
   // counts, for a run a session opened, and never answers: the gate below still decides every request. Its routes are

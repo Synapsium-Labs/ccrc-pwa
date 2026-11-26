@@ -1268,7 +1268,7 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/coord/scope-sweep': "the sweep's two switches, each a marker state word (D-7994)",
     '/api/coord/delegation-adopt': "the adoption switch's marker state, two capability words, refusal words, and the lane's counts and kept worktrees' projects, names and parent sessions: no session text (D-8112, D-8114)",
     '/api/coord/delegation-backfill': "the one-time pass's dry run: counts by kind and age, a mode word, an instant and the basis's fixed words: no session text, no record id (D-8874)",
-    '/api/testbox': "the test box's state and reasons, the two hosts' tool versions and the run counts: no session text (D-7411)",
+    '/api/testbox': "the test box's state and reasons, the two hosts' tool versions and the run counts, and the newest trusted build's delivery standing (fixed words, counts, a release tag and a time per part, never a case or its text): no session text (D-7411; wave 184)",
     '/api/testbox/admin': "the test box's connection state, pin fingerprint and act ledger: no address, no secret, no session text (D-8166)",
     '/api/testbox/builds': "each Claude Code build's capture verdict, its times and counts and the test box's replay output: no session text (D-8289)",
     '/api/approvals/:id/ruling': 'a signed ruling read by the fleet box (a mask would break the signature); its input is shape-redacted at write',
@@ -1852,6 +1852,10 @@ describe('the post-merge audit\'s follow-ups: what the answer hook did not see (
     // X3 R2: the file became a route file here when the review page's `app.get` routes joined it.
     'review/routes.ts': 'the draft review read door has a plugin and an error handler of its own (draft-review design '
       + '§3.5, R1), which answers only its fixed refusal bodies and echoes no error text, so it reveals nothing to mask',
+    // X5 A1.3: the file became a route file when the artifact listener's four routes joined it, on an instance of its own.
+    'artifacts/routes.ts': 'the artifact listener is a second Fastify instance with no console route (html-artifacts design '
+      + '§2.2, §3.4); its error handler answers only the fixed 500 page, with no request detail and no log line, so it reveals '
+      + 'nothing to mask (pinned by artifacts-listener.test.ts)',
   };
 
   it('every OWN_ERROR_HANDLER entry gives its reason', () => {
