@@ -135,15 +135,38 @@ async function frameIn(scope: Page | Frame, selector: string): Promise<Frame> {
   return frame;
 }
 
-/** Seed `html` as a snapshot, open it through the real flow (the fragment, then a tap on Open draft) and return the copy's frame. */
+/** How long `openDraft` waits for the copy frame's own first `load`: well under every caller's test bound. */
+const COPY_LOAD_MS = 30_000;
+
+/** Seed `html` as a snapshot, open it through the real flow (the fragment, then a tap on Open draft) and return the copy's frame
+ *  once the frame element has fired its first `load`. A row that taps the copy before that load would race the page's own
+ *  restore watch, which takes the first `load` as its own draw's (the named tap-before-load residual): a local run at load
+ *  about 9 lost the fast-tap row's first tap that way. The load is counted from the top
+ *  page's side, as the tap-before-load row counts it; that row opens its draft by hand, so it never waits here. */
 async function openDraft(s: Session, html: string): Promise<{ readonly frame: Frame; readonly tok: string }> {
   const tok = token();
   server.seed(tok, { bytes: html, sharedAt: SHARED_AT, version: 1 });
   await s.page.goto(`/review#${tok}`);
   await s.page.getByRole('button', { name: 'Open draft' }).waitFor({ timeout: 30_000 });
   expect(new URL(s.page.url()).hash, 'the page cleared the fragment before anything else').toBe('');
+  await s.page.evaluate(() => {
+    const w = window as unknown as { __copyLoads: number };
+    w.__copyLoads = 0;
+    new MutationObserver((records) => {
+      for (const r of records) {
+        for (const n of r.addedNodes) {
+          if (!(n instanceof Element)) continue;
+          const frames = n.matches('iframe.review-frame') ? [n] : [...n.querySelectorAll('iframe.review-frame')];
+          for (const f of frames) f.addEventListener('load', () => { w.__copyLoads += 1; });
+        }
+      }
+    }).observe(document.getElementById('review-root')!, { childList: true, subtree: true });
+  });
   await s.page.getByRole('button', { name: 'Open draft' }).click();
-  return { frame: await frameIn(s.page, 'iframe.review-frame'), tok };
+  const frame = await frameIn(s.page, 'iframe.review-frame');
+  await s.page.waitForFunction(() => (window as unknown as { __copyLoads: number }).__copyLoads >= 1, undefined, { timeout: COPY_LOAD_MS })
+    .catch(() => { throw new Error(`the copy frame did not fire its first load within ${COPY_LOAD_MS / 1000}s of Open draft`); });
+  return { frame, tok };
 }
 
 /** Pause the page's clock (a session made with `pinClock`), so no real time passes for the restore bound: every tap that follows is "fast". */
@@ -844,7 +867,12 @@ describe('installed PWA does not answer /review (Review Focus)', () => {
     const mark = server.requests.length;
     const shell = await s.page.goto('/settings');
     expect(shell?.fromServiceWorker(), 'CONTROL: the worker answered /settings').toBe(true);
-    expect(await s.page.title(), 'CONTROL: with the shell').toBe('ccrc');
+    // The answer's own bytes, not the live title: the Settings frame retitles the page in an effect after mount
+    // (`Settings · ccrc`), so a title read straight after the load races it (the merge queue's run 45726896293 read the
+    // retitled page). The bytes cannot move; beside the check above that the worker answered, they show its answer is the shell.
+    const shellHtml = await shell!.text();
+    expect(shellHtml, 'CONTROL: the worker answered with the shell').toContain('<div id="root">');
+    expect(shellHtml, 'CONTROL: the shell\'s own title').toContain('<title>ccrc</title>');
     expect(documentNavigations(mark, '/settings'), 'CONTROL: the server saw no navigation for /settings').toEqual([]);
 
     // The row: `/review`, bare and with a link tracker's query, reaches the server and is answered under the page's policy.
