@@ -90,8 +90,12 @@ export function buildArtifactServer(deps: ArtifactRouteDeps): FastifyInstance {
   // `http.requireHostHeader: false`: Node answers a request with no `Host` line with a bare 400 before Fastify runs; without
   // the check the request reaches the host fence, which answers its 421 with the hardening headers. Node's own default
   // handling of an `Expect` other than 100-continue is a bare 417, so a `checkExpectation` listener (below) answers it.
+  // `return503OnClosing: false`: while the instance closes, Fastify's default answers a request still arriving on an open
+  // connection with its own bare 503 and a JSON body, before any hook. Off, such a request meets the hook and the routes
+  // like any other, so it too carries the hardening headers and the fixed words (X5 A2, the A1 review's item 3).
   const app = Fastify({
     logger: false,
+    return503OnClosing: false,
     http: { requireHostHeader: false },
     frameworkErrors: (err, _req, reply) =>
       answer(reply, (err as { code?: unknown }).code === 'FST_ERR_MAX_PARAM_LENGTH' ? 414 : 400, TEXT, BAD_REQUEST_BODY),

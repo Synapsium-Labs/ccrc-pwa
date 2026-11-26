@@ -1,7 +1,8 @@
 // The artifact tier's L0 vocabulary (native Docs HTML artifacts X5, plan Task A1.1).
 import { describe, it, expect } from 'vitest';
 import { DOCS_RASTER_EXT, DOCS_RASTER_TYPES } from '../../shared/docs.js';
-import { CAPABILITY_TOKEN_CHARS, isCapabilityToken } from '../../shared/capabilityToken.js';
+import { CAPABILITY_TOKEN_CHARS, CAPABILITY_TOKEN_RE, isCapabilityToken } from '../../shared/capabilityToken.js';
+import { CLAIM_CODE_RE, isClaimCode } from '../../shared/agent-protocol.js';
 import {
   ARTIFACT_MIME, ARTIFACT_OFF_WHYS, ARTIFACT_PUBLIC_SUFFIXES, ARTIFACT_REFUSALS, ARTIFACT_SANDBOX_BASE, ARTIFACT_SANDBOX_WINDOWS, artifactMime,
 } from '../../shared/artifacts.js';
@@ -14,6 +15,13 @@ describe('artifact L0 vocabulary (X5 A1.1)', () => {
     expect(isCapabilityToken('A'.repeat(42))).toBe(false);
     expect(isCapabilityToken('A'.repeat(44))).toBe(false);
     for (const c of ['+', '/', '=']) expect(isCapabilityToken('A'.repeat(42) + c)).toBe(false);
+  });
+
+  it('the box-token claim code is the same grammar, defined once (X5 A2)', () => {
+    // The same object, not an equal copy: a literal regex back in `shared/agent-protocol.ts` is red here.
+    expect(CLAIM_CODE_RE).toBe(CAPABILITY_TOKEN_RE);
+    expect(isClaimCode('A'.repeat(43))).toBe(true);
+    expect(isClaimCode('A'.repeat(42))).toBe(false);
   });
 
   it('artifactMime answers from the table, and attaches what it does not know', () => {

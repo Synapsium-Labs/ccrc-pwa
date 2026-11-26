@@ -782,11 +782,13 @@ export function readTokenTransport(raw: unknown): TokenTransport | 'unmeasured' 
 /** The verb's ONE stdout line on success: `synced <generation> <transport>`. */
 export const TOKEN_SYNC_SYNCED_RE = new RegExp(`^synced (${GENERATION_ID_HEX}) (${TOKEN_TRANSPORTS.join('|')})$`);
 
-/** 32 random bytes as unpadded base64url = 43 characters. */
-export const CLAIM_CODE_RE = /^[A-Za-z0-9_-]{43}$/;
+/** 32 random bytes as unpadded base64url = 43 characters: the capability token's grammar, defined once in
+ *  `capabilityToken.ts` and kept here under the claim code's own name (X5 A2, the fold of A1's carry). */
+export { CAPABILITY_TOKEN_RE as CLAIM_CODE_RE } from './capabilityToken.js';
+import { CAPABILITY_TOKEN_RE } from './capabilityToken.js';
 /** The ONE code guard: the agent's `validateReq` and the server's claim door both call it. */
 export function isClaimCode(v: unknown): v is string {
-  return typeof v === 'string' && CLAIM_CODE_RE.test(v);
+  return typeof v === 'string' && CAPABILITY_TOKEN_RE.test(v);
 }
 
 /** The `--from` word the agent's spawn carries; the verb refuses any other at exit 2. */

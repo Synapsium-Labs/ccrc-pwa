@@ -569,7 +569,7 @@ Each mutation was an edit to the source, run against its test file, then reverte
 
   One process slip: the implementer wrote its first edits with short scripts instead of the file tools. Every later mutation and restore used the file tools, and the result was reviewed like the rest.
 
-  One Opus (high) review of the round's diff found nothing blocking. It confirmed that no Host spelling reaches the console's routes while the tier is on, and that the `127.0.0.1` branch is reachable only for the loopback pair: an https origin can never have that hostname, because an address-like host is refused. It raised five nits, and four were taken:
+  One Opus (high) review of the round's diff found nothing blocking. It confirmed that no Host spelling it tried reaches the console's routes while the tier is on (the wave's second review then found one it had not tried, a bracketed name such as `[<artifact-host>]` or `[<artifact-host>]:443`, which reached them; wave A2 closed it, below), and that the `127.0.0.1` branch is reachable only for the loopback pair: an https origin can never have that hostname, because an address-like host is refused. It raised five nits, and four were taken:
   - the 408 answers its own fixed words ("Request timeout."), and a case asserts them;
   - the member pin that could not fail (`shared/artifacts.ts`, always appended) is dropped;
   - the handler's comment and the note's decision row now name the 408, the no-Host 421 and the 417;
@@ -577,18 +577,21 @@ Each mutation was an edit to the source, run against its test file, then reverte
 
   The fifth is left: here a chunk-extension overflow answers 400, where Node answers 413.
 
-  | Item | Mutation | Red | Green |
+  Each label is unique, and each red test is named as the runner prints it, `describe > it`, in the file the row names (wave A2 relabelled the table and split the merged 408 row; rows FR1-3, FR1-4c, FR1-4d and FR1-5b were measured again on 2026-11-26 at `main` `11acd37e20`, to name what their "plus an existing one" or merged cell left out):
+
+  | Label | Mutation | Red (`artifacts-listener.test.ts` unless named) | Green |
   |---|---|---|---|
-  | 1 | the old exact match for a ported host | the ported-host console case, the `namesArtifactHost` unit case | 27/27 |
-  | 1 | hostname match for the loopback pair too | the loopback console case, the loopback-pair case, the unit case | 27/27 |
-  | 2 | the port-0 words reverted | the port-0 words case | 57/57 |
-  | 3 | the console-origin guard disabled | the hostile-console-origin case, plus an existing one | 57/57 |
-  | 4 | `requireHostHeader` back on | the no-Host raw-socket case (a bare 400) | 27/27 |
-  | 4 | no `checkExpectation` listener | the Expect raw-socket case (a bare 417) | 27/27 |
-  | 4 | `clientErrorStatus` unused, or no 408 branch | the 408 wiring case, the unit case | 27/27 |
-  | 5 | `removeAllContentTypeParsers()` removed | the GET-with-a-body case | 27/27 |
-  | 5 | the host fence skipped on a 404 | the unregistered-path case, plus an existing one | 27/27 |
-  | 6 | the artifact-tier list emptied | the member-names case | 5/5 |
+  | FR1-1a | the old exact match for a ported host | `listener: an artifact host on the console instance is 421 > a PORTED https artifact host is 421 on the console by hostname, in any port spelling, before the gate`; `listener: an artifact host on the console instance is 421 > namesArtifactHost: a name is refused in any port spelling, and only the loopback pair is matched exactly` | 27/27 |
+  | FR1-1b | hostname match for the loopback pair too | `listener: an artifact host on the console instance is 421 > a loopback artifact host is matched with its port, so the console's own 127.0.0.1 port still answers`; `listener: an artifact host on the console instance is 421 > a loopback pair works both ways: the console answers its own host, and the artifact instance serves the loopback hosts`; `listener: an artifact host on the console instance is 421 > namesArtifactHost: a name is refused in any port spelling, and only the loopback pair is matched exactly` | 27/27 |
+  | FR1-2 | the port-0 words reverted | `artifacts-config.test.ts`: `artifactConfig > config: a port of zero is refused in the words of port 0, a leading zero in the words of a leading zero` | 57/57 |
+  | FR1-3 | the console-origin guard disabled | `artifacts-config.test.ts`: `artifactConfig > never throws on hostile values, and a hostile console origin never turns the tier on`; `artifactConfig > off/invalid names the key > a console origin that is neither https nor loopback names CCRC_ORIGIN` | 57/57 |
+  | FR1-4a | `requireHostHeader` back on | `listener: a taken port leaves the console up > a request Node cannot parse is answered with fixed words and the hardening headers, echoing nothing` (the no-Host request, a bare 400) | 27/27 |
+  | FR1-4b | no `checkExpectation` listener | `listener: a taken port leaves the console up > a request Node cannot parse is answered with fixed words and the hardening headers, echoing nothing` (the Expect request, a bare 417) | 27/27 |
+  | FR1-4c | `clientErrorStatus` unused (the handler answers 400 for every code) | `policy: the status of a request Node could not parse (L1) > the instance's clientError handler words a request timeout as 408 with the hardening headers`; `listener: a taken port leaves the console up > a request Node cannot parse is answered with fixed words and the hardening headers, echoing nothing` (the 431 request) | 27/27 |
+  | FR1-4d | no 408 branch in `clientErrorStatus` | `policy: the status of a request Node could not parse (L1) > clientErrorStatus: an oversized header is 431, a request timeout is 408, anything else is 400`; `policy: the status of a request Node could not parse (L1) > the instance's clientError handler words a request timeout as 408 with the hardening headers` | 27/27 |
+  | FR1-5a | `removeAllContentTypeParsers()` removed | `listener: methods > a GET with a body and a content type never reaches a parser, because the instance has none` | 27/27 |
+  | FR1-5b | the host fence skipped on a 404 (the hook returns before the fences when no route matched) | `listener: console host on the artifact instance is 421 > a wrong Host on an unregistered path is 421, never 404`; `listener: console host on the artifact instance is 421 > the console host, a missing Host, an unrelated host and a port variant are all misdirected`; `listener: methods > POST, PUT, DELETE, PATCH and OPTIONS are 405 with Allow, and a body is never read`; `listener: no cookie > no artifact answer sets a cookie`; `listener: logs no path > 404s, a 405 and 421s on paths carrying a token call no console method` | 27/27 |
+  | FR1-6 | the artifact-tier list emptied | `single-definition/docs-artifact-tiers.test.ts`: `single-definition: no shared policy between tiers > the scanned artifact tier names its members, so the scans below never pass on an empty list` | 5/5 |
 
   After the round, one file at a time, all green:
 
@@ -605,3 +608,22 @@ Each mutation was an edit to the source, run against its test file, then reverte
   | `anchors` and `citations` | 9, 4 |
 
   The server typecheck is clean. So is the narrower tests-inclusive typecheck over this round's changed test files (the listener, the config, the tier scan), the config that caught the first round's error. The round touches no file the console imports.
+
+### Wave A2 (run 3967, 2026-11-26, base `main` at `11acd37e20`)
+
+Built on this workspace's branch. The plan was written on 2026-11-19; every step was re-anchored by content on the base. Every test and typecheck ran through `ccrc test`, one named file at a time.
+
+**The first items, from the two reviews of wave A1** (one commit of their own, before A2.1). Each code item was measured red with its change removed, then green.
+
+1. **The fixed words of the early answers.** The raw-socket case in `artifacts-listener.test.ts` now asserts each early answer's body as well as its status and headers: `Bad request.` for the 400 and the 431, `Misdirected request.` for the no-Host 421 and `Expectation failed.` for the 417, each written in the test, never imported.
+2. **A bracketed name on the console's fence.** `hostnameOf` returns a bracketed value whole, so `[<artifact-host>]` and `[<artifact-host>]:443` matched no artifact host and reached the console's routes. On the console's side only, `namesArtifactHost` now takes one pair of surrounding brackets off the request's `Host` first (`withoutBrackets`). This only widens the refusal: no configured artifact host is bracketed, so a bracketed `Host` matched nothing before. The artifact side's allow list does not call it, so a bracketed `Host` there is still `misdirected`. The A1 fix round's sentence above, that no Host spelling reaches the console, now says which spellings it tried.
+3. **The framework's 503 at shutdown.** While an instance closes, Fastify answers a request arriving on a busy connection with its own 503 and a JSON body, before any hook (`return503OnClosing`, on by default). It is off on the artifact instance, so such a request meets the hook and the routes like any other and carries the hardening headers. A case holds a connection half-sent, starts the close, then finishes the request: it gets the fixed 404 page with the headers. The task note's sentence that every answer carries the hardening headers stands.
+4. **The fix round's mutation table** (record only). The labels are unique, the red tests are named as the runner prints them, and the merged 408 row is two rows, FR1-4c and FR1-4d. Rows FR1-3, FR1-4c, FR1-4d and FR1-5b were measured again to name what their cells left out.
+5. **The second copy of the token grammar.** `shared/agent-protocol.ts`'s `CLAIM_CODE_RE` is now a re-export of `CAPABILITY_TOKEN_RE` under its own name, and `isClaimCode` tests against it, so the 43-character grammar is defined once in TypeScript. The bash copy in `ccd/ccrc-token-sync` (`CODE_RE`) stays: it is another process, and `ccrc-token-sync.test.ts` already holds it equal to `CLAIM_CODE_RE.source`. `token-shared.test.ts` (40), `ccrc-token-sync.test.ts` (93) and `review-shared.test.ts` are unchanged and green after the fold. A new case in `artifacts-vocabulary.test.ts` holds the two names to one object, so a literal regex put back is red.
+
+| Label | Mutation | Red | Green |
+|---|---|---|---|
+| A2-F1 | the 417's words changed in `routes.ts` | `listener: a taken port leaves the console up > a request Node cannot parse is answered with fixed words and the hardening headers, echoing nothing` | 29/29 |
+| A2-F2 | `namesArtifactHost` without `withoutBrackets` | `listener: an artifact host on the console instance is 421 > a bracketed artifact host is refused on the console like the bare one; the artifact side still allows only the exact host` | 29/29 |
+| A2-F5 | `CLAIM_CODE_RE` a literal regex again in `shared/agent-protocol.ts` | `artifacts-vocabulary.test.ts`: `artifact L0 vocabulary (X5 A1.1) > the box-token claim code is the same grammar, defined once (X5 A2)` | 8/8 |
+| A2-F3 | `return503OnClosing: true` on the artifact instance | `listener: a taken port leaves the console up > a request that arrives while the instance closes is answered by the hook and routes, never the framework's bare 503` | 29/29 |

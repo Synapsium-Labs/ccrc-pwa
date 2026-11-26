@@ -364,6 +364,29 @@ describe('listener: an artifact host on the console instance is 421', () => {
     expect(namesArtifactHost('localhost:7788', pair)).toBe(false);
   });
 
+  it('a bracketed artifact host is refused on the console like the bare one; the artifact side still allows only the exact host', async () => {
+    // L1: one pair of brackets comes off before the console's match; the loopback pair keeps its exact port compare.
+    for (const host of [`[${ART}]`, `[${ART}]:443`, `[${CONTENT.toUpperCase()}.]:8443`, `[${ART}]:`]) {
+      expect(namesArtifactHost(host, [ART, CONTENT]), host).toBe(true);
+    }
+    expect(namesArtifactHost(`[${ART}]:9999`, [`${ART}:8443`])).toBe(true);
+    expect(namesArtifactHost('[127.0.0.1]:7790', ['127.0.0.1:7790', '127.0.0.1:7791'])).toBe(true);
+    expect(namesArtifactHost('[127.0.0.1]:7788', ['127.0.0.1:7790', '127.0.0.1:7791'])).toBe(false);
+    expect(namesArtifactHost(`[x.${ART}]`, [ART, CONTENT])).toBe(false);
+    expect(namesArtifactHost(`[[${ART}]]`, [ART, CONTENT])).toBe(false);
+    expect(namesArtifactHost(`[${CONSOLE_HOST}]`, [ART, CONTENT])).toBe(false);
+    // The artifact side's allow list is untouched: a bracketed spelling of its own host is still misdirected.
+    expect(hostFence(`[${ART}]`, [ART, CONTENT])).toBe('misdirected');
+    // L4: through the console instance with the gate armed, before the gate.
+    const app = await openConsole(onConfig(), true);
+    toClose.push(app);
+    for (const host of [`[${ART}]`, `[${CONTENT}]:443`]) {
+      const res = await app.inject({ method: 'GET', url: '/api/fleet/health', headers: { host } });
+      expect(res.statusCode, host).toBe(421);
+      expect(res.json(), host).toEqual({ ok: false, error: 'misdirected' });
+    }
+  });
+
   it('a loopback pair works both ways: the console answers its own host, and the artifact instance serves the loopback hosts', async () => {
     const lo = artifactConfig({ origin: 'http://127.0.0.1:7790', content: 'http://127.0.0.1:7791', port: '7792' }, 'http://localhost:7788', 7788);
     if (lo.state !== 'on') throw new Error('the loopback fixture is not on');
@@ -492,23 +515,57 @@ describe('listener: a taken port leaves the console up', () => {
     const { port } = app.artifactServer!.server.address() as net.AddressInfo;
     const spies = CONSOLE_METHODS.map((m) => vi.spyOn(console, m).mockImplementation(() => {}));
     const raw = (text: string): Promise<string> => rawRequest(port, text);
-    const cases: [string, string][] = [
-      [`GARBAGE /c/${TOKEN}/x HTTP/1.1\r\nHost: ${ART}\r\n\r\n`, '400'],
-      [`GET /c/${TOKEN}/x HTTP/1.1\r\nHost: ${ART}\r\nX-Big: ${'a'.repeat(20000)}\r\n\r\n`, '431'],
+    // Each early answer's fixed words, written here and never imported from the source, so a changed body is red.
+    const cases: [string, string, string][] = [
+      [`GARBAGE /c/${TOKEN}/x HTTP/1.1\r\nHost: ${ART}\r\n\r\n`, '400', 'Bad request.'],
+      [`GET /c/${TOKEN}/x HTTP/1.1\r\nHost: ${ART}\r\nX-Big: ${'a'.repeat(20000)}\r\n\r\n`, '431', 'Bad request.'],
       // No Host line at all: Node would answer a bare 400 itself unless the server lets the host fence answer.
-      [`GET /c/${TOKEN}/x HTTP/1.1\r\n\r\n`, '421'],
+      [`GET /c/${TOKEN}/x HTTP/1.1\r\n\r\n`, '421', 'Misdirected request.'],
       // An Expect other than 100-continue: Node would write a bare 417 unless the server has an expectation listener.
-      [`GET /c/${TOKEN}/x HTTP/1.1\r\nHost: ${ART}\r\nExpect: something-else\r\n\r\n`, '417'],
+      [`GET /c/${TOKEN}/x HTTP/1.1\r\nHost: ${ART}\r\nExpect: something-else\r\n\r\n`, '417', 'Expectation failed.'],
     ];
-    for (const [req, status] of cases) {
+    for (const [req, status, body] of cases) {
       const got = await raw(req);
       expect(got.startsWith(`HTTP/1.1 ${status} `), got.slice(0, 40)).toBe(true);
-      const head = got.slice(0, got.indexOf('\r\n\r\n')).toLowerCase();
+      const split = got.indexOf('\r\n\r\n');
+      const head = got.slice(0, split).toLowerCase();
       for (const [k, v] of Object.entries(SECURITY_HEADERS)) expect(head, `${status}: ${k}`).toContain(`${k}: ${v}`.toLowerCase());
       expect(head).not.toContain('set-cookie');
+      expect(got.slice(split + 4), `${status}: the body`).toBe(body);
       expect(got).not.toContain(TOKEN);
     }
     for (const s of spies) expect(s).not.toHaveBeenCalled();
+  });
+
+  it('a request that arrives while the instance closes is answered by the hook and routes, never the framework\'s bare 503', async () => {
+    const inst = buildArtifactServer({ cfg: onConfig() });
+    await inst.listen({ host: '127.0.0.1', port: 0 });
+    const { port } = inst.server.address() as net.AddressInfo;
+    // The server has taken the connection off its queue before the close starts, so the close never resets it.
+    const accepted = new Promise<void>((r) => { inst.server.once('connection', () => r()); });
+    const answered = new Promise<string>((resolve, reject) => {
+      const s = net.connect(port, '127.0.0.1', () => {
+        // Half a request first, so the connection is busy, not idle, when the close starts.
+        s.write(`GET / HTTP/1.1\r\nHost: ${ART}\r\n`);
+        void accepted.then(() => {
+          void inst.close();
+          // The close marks the instance closing on a later tick; the rest of the request arrives after it.
+          setTimeout(() => { s.end('\r\n'); }, 100);
+        });
+      });
+      let got = '';
+      s.setEncoding('utf8');
+      s.on('data', (d: string) => { got += d; });
+      s.on('close', () => resolve(got));
+      s.on('error', reject);
+    });
+    const got = await answered;
+    expect(got.startsWith('HTTP/1.1 404 '), got.slice(0, 40)).toBe(true);
+    const split = got.indexOf('\r\n\r\n');
+    const head = got.slice(0, split).toLowerCase();
+    for (const [k, v] of Object.entries(SECURITY_HEADERS)) expect(head, k).toContain(`${k}: ${v}`.toLowerCase());
+    expect(got.slice(split + 4)).toBe(ARTIFACT_NOT_FOUND_BODY);
+    await inst.close().catch(() => {});
   });
 
   it('a free port is listening, marked so, and answers over real HTTP', async () => {

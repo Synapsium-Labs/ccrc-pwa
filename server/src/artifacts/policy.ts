@@ -198,10 +198,12 @@ export function hostMatches(host: string | undefined, hosts: readonly string[]):
  *  refusal list must refuse too much, never too little. Only the loopback pair (a configured host whose hostname is
  *  `127.0.0.1`, the one loopback form the config admits) is matched exactly, `host:port` against `host:port`: beside a loopback
  *  console the console and the artifact origins share an address and differ by port alone, so the console's own
- *  `127.0.0.1:<port>` must still answer. */
+ *  `127.0.0.1:<port>` must still answer. A bracketed request (`[host]`, `[host]:443`) is read without its one pair of
+ *  brackets first (`withoutBrackets`), because `hostnameOf` returns a bracketed value whole: before X5 A2 such a spelling of
+ *  an artifact host matched nothing here and reached the console. */
 export function namesArtifactHost(host: string | undefined, artifactHosts: readonly string[]): boolean {
   if (host === undefined || host === '') return false;
-  const want = normalizeHost(host);
+  const want = normalizeHost(withoutBrackets(host));
   const wantName = hostnameOf(want);
   return artifactHosts.some((h) => {
     if (h === '') return false;
@@ -212,6 +214,15 @@ export function namesArtifactHost(host: string | undefined, artifactHosts: reado
 }
 
 const LOOPBACK_HOSTNAME = '127.0.0.1';
+
+/** The console's side only: one pair of surrounding brackets taken off a request's `Host`, so `[host]` reads as `host` and
+ *  `[host]:<port>` as `host:<port>`. It only widens the refusal: no configured artifact host is bracketed (the origin grammar
+ *  admits none), so a bracketed `Host` matched no artifact host before, and now matches the one its inside names. The artifact
+ *  side's allow list never calls it, so a bracketed `Host` there still fails shut. */
+function withoutBrackets(host: string): string {
+  const m = /^\[([^\]]*)\](:[^:]*)?$/.exec(host);
+  return m === null ? host : m[1]! + (m[2] ?? '');
+}
 
 /** The hostname part of a normalized `Host` (the text before a `:port`, if any). */
 function hostnameOf(normalized: string): string {
