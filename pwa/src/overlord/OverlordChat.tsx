@@ -14,6 +14,7 @@
 // stream), and that stream's frames through `subscribe`. The place mounts it.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
+import { Button } from '@ccrc/ui';
 import type { SessionStreamMsg } from '../../../shared/api';
 import type { ChatEntry } from '../../../shared/overlordChat';
 import { Composer } from '../session/Composer';
@@ -64,7 +65,7 @@ function EarlierPage({ state, onMore, sessionId }: { state: EarlierState; onMore
   return (
     <div className="oc-earlier">
       {state.kind === 'rows' && state.next !== null && (
-        <button type="button" className="oc-divider-show" onClick={onMore}>Show earlier</button>
+        <Button variant="ghost" size="fit" className="justify-self-center" onClick={onMore}>Show earlier</Button>
       )}
       {state.rows.map((r) => <Row key={r.key} row={r} sessionId={sessionId} />)}
       {state.kind === 'loading' && <p className="oc-quiet" role="status">{READING_WORDS}</p>}
@@ -128,10 +129,10 @@ export function OverlordChat({ port, live, subscribe }: OverlordChatProps): Reac
   };
 
   const toggle = (
-    <button type="button" className="oc-off-record" aria-pressed={offRecord} disabled={!designated}
-      onClick={() => setOffRecord((v) => !v)}>
+    <Button variant={offRecord ? 'primary' : 'ghost'} size="fit" className="flex-none whitespace-nowrap" aria-pressed={offRecord}
+      disabled={!designated} onClick={() => setOffRecord((v) => !v)}>
       Off the record
-    </button>
+    </Button>
   );
 
   return (

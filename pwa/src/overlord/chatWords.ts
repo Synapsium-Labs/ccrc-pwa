@@ -227,11 +227,19 @@ export const THREAD_NO_ANSWER_WORDS = 'No answer from the server; this is the co
 export const THREAD_OFF_SHAPE_WORDS = "This server's answer could not be read; this is the conversation as last read.";
 export const READING_WORDS = 'Reading the conversation';
 
+/** The two refusal words the chat acts on beyond showing them: the designation moved (keep the draft, drop its key and term,
+ *  read again at once), and the console's read ceiling (keep the thread, wait). Read by lookup, so no branch spells a word. */
+const CHAT_REFUSAL_ROLE_MAP = { 'stale-designation': 'moved', 'read-ceiling': 'ceiling' } as const;
+export type ChatRefusalRole = (typeof CHAT_REFUSAL_ROLE_MAP)[keyof typeof CHAT_REFUSAL_ROLE_MAP];
+export function chatRefusalRole(error: string): ChatRefusalRole | null {
+  return Object.hasOwn(CHAT_REFUSAL_ROLE_MAP, error) ? CHAT_REFUSAL_ROLE_MAP[error as keyof typeof CHAT_REFUSAL_ROLE_MAP] : null;
+}
+
 /** What the chat says after a send beside the refusal's own words (`apiErrorText`'s), or null for nothing more. A toggled send
  *  whose answer carries no `offRecord` echo was recorded on the record by a server that does not know the toggle (question 4). */
 export function sendNotice(a: ChatSendAnswer, toggled: boolean): string | null {
   if (a.kind === 'recorded') return toggled && !a.offRecord ? 'Recorded on the record: this server does not know the toggle' : null;
   if (a.kind === 'off-shape') return 'This server did not record the message; it may have been typed into the pane.';
   if (a.kind === 'no-answer') return 'No answer from the server. Your message is kept; send it again.';
-  return a.error === 'stale-designation' ? 'The Overlord changed. Your message was not sent; send it again.' : null;
+  return chatRefusalRole(a.error) === 'moved' ? 'The Overlord changed. Your message was not sent; send it again.' : null;
 }

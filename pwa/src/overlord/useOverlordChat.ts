@@ -17,8 +17,9 @@ import type { SessionStatus, SessionStreamMsg } from '../../../shared/api';
 import type { ChatEarlierAnswer, ChatSendAnswer, ChatThread, GenerationKey } from '../../../shared/overlordChat';
 import { ApiError } from '../lib/apiError';
 import { apiErrorText, sendErrorText } from '../lib/api';
+import { onPageVisible } from '../lib/pageClock';
 import {
-  awaitsPickUp, chatReadTrigger, draftAfterSend, historyItemsToChat, nextReadAt, sendNotice, type ChatRow,
+  awaitsPickUp, chatReadTrigger, chatRefusalRole, draftAfterSend, historyItemsToChat, nextReadAt, sendNotice, type ChatRow,
 } from './chatWords';
 
 /** The thread door's answer as the chat reads it. `no-answer` is a transport failure; `off-shape` a body in no shape known. */
@@ -122,7 +123,7 @@ export function useOverlordChat(port: OverlordChatPort): OverlordChat {
       threadNow.current = r.thread;
       setThread(r.thread);
       setTrouble(null);
-    } else if (r.kind === 'refused' && r.error === 'read-ceiling') {
+    } else if (r.kind === 'refused' && chatRefusalRole(r.error) === 'ceiling') {
       notBefore.current = Date.now() + (r.retryAfterS ?? 0) * 1000;
       setTrouble({ kind: 'ceiling' });
     } else {
@@ -150,15 +151,14 @@ export function useOverlordChat(port: OverlordChatPort): OverlordChat {
   useEffect(() => {
     alive.current = true;
     ask.current();
-    const onVisible = (): void => {
-      if (!visible() || !stale.current) return;
+    const stop = onPageVisible(() => {
+      if (!stale.current) return;
       stale.current = false;
       ask.current();
-    };
-    document.addEventListener('visibilitychange', onVisible);
+    });
     return () => {
       alive.current = false;
-      document.removeEventListener('visibilitychange', onVisible);
+      stop();
       if (timer.current !== null) clearTimeout(timer.current);
       timer.current = null;
     };
@@ -186,7 +186,7 @@ export function useOverlordChat(port: OverlordChatPort): OverlordChat {
       a = { kind: 'no-answer' };
     }
     if (!alive.current) return draftAfterSend(a);
-    const moved = a.kind === 'refused' && a.error === 'stale-designation';
+    const moved = a.kind === 'refused' && chatRefusalRole(a.error) === 'moved';
     if (a.kind === 'recorded' || moved) binding.current = null;
     setNotice(sendNotice(a, offRecord) ?? (a.kind === 'refused' ? refusalWords(a.error) : null));
     if (a.kind !== 'no-answer') ask.current(moved);
