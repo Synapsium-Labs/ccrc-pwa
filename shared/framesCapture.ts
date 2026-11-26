@@ -10,7 +10,7 @@
 // No case text travels on any wire: a case is named by its id, and the driver builds the text from this file.
 import { asciiRun } from './deliveryCapture.js';
 import { reducerFingerprint } from './framesReduce.js';
-import { FRAMES_CASE_IDS, FRAMES_PARTS, type FramesCaseId, type FramesPane } from './framesResult.js';
+import { FRAMES_CASE_IDS, FRAMES_PARTS, framesFrameId, framesPartOfId, type FramesCaseId, type FramesPane } from './framesResult.js';
 
 // ── the texts ────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -148,6 +148,57 @@ export const FRAMES_PERSON = Object.freeze({ burst: 8, pauseMs: 15, newline: 'C-
 
 /** The pause between two view keys. */
 export const FRAMES_VIEW_KEY_PAUSE_MS = 250;
+
+// ── the driver's steps (the one grammar the runner writes and the driver reads) ──────────────────────────────────
+
+/** One call of the driver child (`server/src/inject/deliveryDrive.ts`'s frames form). A step that types a part's draft names
+ *  the part by its frame id, so the driver builds the text at the part's own pane from this file: no text crosses. */
+export type FramesDriveStep =
+  | { readonly kind: 'turn'; readonly which: 1 | 2 }
+  | { readonly kind: 'type' | 'person' | 'keys' | 'send' | 'queued'; readonly part: number }
+  | { readonly kind: 'held' | 'stash' | 'frame' };
+
+const PART_STEPS = ['type', 'person', 'keys', 'send', 'queued'] as const;
+
+/** A drive step's word: `turn:1`, `type:<frame id>`, `held`, `stash`, `frame`. */
+export function framesStepWord(s: FramesDriveStep): string {
+  if (s.kind === 'turn') return `turn:${s.which}`;
+  if ('part' in s) return `${s.kind}:${framesFrameId(FRAMES_PARTS[s.part]!)}`;
+  return s.kind;
+}
+
+/** THE reader of a step word, or null: only a word {@link framesStepWord} writes for a part this recipe has. */
+export function readFramesStepWord(w: unknown): FramesDriveStep | null {
+  if (typeof w !== 'string') return null;
+  if (w === 'turn:1' || w === 'turn:2') return { kind: 'turn', which: w === 'turn:1' ? 1 : 2 };
+  if (w === 'held' || w === 'stash' || w === 'frame') return { kind: w };
+  const at = w.indexOf(':');
+  const kind = w.slice(0, at) as (typeof PART_STEPS)[number];
+  if (at < 0 || !PART_STEPS.includes(kind)) return null;
+  const part = framesPartOfId(w.slice(at + 1));
+  return part === null ? null : { kind, part };
+}
+
+/** The drive steps of a part's case, in order: each case step as the driver's call (plan section 3). */
+export function framesDriveSteps(part: number): readonly FramesDriveStep[] {
+  const p = FRAMES_PARTS[part];
+  if (p === undefined) return [];
+  return framesSteps(p.case).map((s): FramesDriveStep => {
+    switch (s.kind) {
+      case 'turn': return { kind: 'turn', which: s.which };
+      case 'type': return { kind: s.shape === 'person' ? 'person' : 'type', part };
+      case 'keys': return { kind: 'keys', part };
+      case 'send': return { kind: 'send', part };
+      case 'queued': return { kind: 'queued', part };
+      case 'held': return { kind: 'held' };
+      case 'stash': return { kind: 'stash' };
+      case 'frame': return { kind: 'frame' };
+    }
+  });
+}
+
+/** A case's view keys (its `keys` step's), or none. */
+export const framesViewKeys = (c: FramesCaseId): readonly FramesViewKey[] => framesSteps(c).flatMap((s) => (s.kind === 'keys' ? s.keys : []));
 
 // ── the version ──────────────────────────────────────────────────────────────────────────────────────────────────
 

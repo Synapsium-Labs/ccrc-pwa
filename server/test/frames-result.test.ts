@@ -22,7 +22,7 @@ function result(part = 0, over: Record<string, unknown> = {}, frame: Record<stri
   return {
     recipe: 'frames', version: '0123456789abcdef', build: BUILD, part, case: p.case, pane: { cols: p.pane.cols, rows: p.pane.rows },
     release: RELEASE, unmeasured: [], word: 'framed', sends: [], turns: 0, sideRequests: 0,
-    frame: { outcome: 'drawn', refusal: null, ...frameSize(text), cursor: [2, 1], text, ...frame },
+    frame: { outcome: 'drawn', refusal: null, ...frameSize(text), cursor: [2, 1], replaced: { cwd: 0, path: 0, model: 0, account: 0 }, text, ...frame },
     ...over,
   };
 }
@@ -87,8 +87,8 @@ describe('readFramesCaptureResult: the one reader', () => {
     expect(r.frame.cursor).toEqual([2, 1]);
   });
   it('reads an over-cap and a refused result, each with no text', () => {
-    expect(readFramesCaptureResult(result(0, { word: 'gaps' }, { outcome: 'over-cap', rows: 60, width: 220, bytes: 9000, text: null }), BUILD, 0)).not.toBeNull();
-    expect(readFramesCaptureResult(result(0, { word: 'gaps' }, { outcome: 'refused', refusal: 'private-shape', text: null }), BUILD, 0)).not.toBeNull();
+    expect(readFramesCaptureResult(result(0, { word: 'gaps' }, { outcome: 'over-cap', rows: 60, width: 220, bytes: 9000, replaced: null, text: null }), BUILD, 0)).not.toBeNull();
+    expect(readFramesCaptureResult(result(0, { word: 'gaps' }, { outcome: 'refused', refusal: 'private-shape', replaced: null, text: null }), BUILD, 0)).not.toBeNull();
     expect(readFramesCaptureResult(result(0, { word: 'gaps' }, { outcome: 'unsettled' }), BUILD, 0)).not.toBeNull();
   });
   const refuse: readonly [string, Record<string, unknown>, Record<string, unknown>?][] = [
@@ -121,6 +121,10 @@ describe('readFramesCaptureResult: the one reader', () => {
     ['a cursor outside the pane', {}, { cursor: [220, 0] }],
     ['a cursor not a pair', {}, { cursor: [1] }],
     ['a frame with a key added', {}, { extra: 1 }],
+    ['counts without a text', { word: 'gaps' }, { outcome: 'refused', refusal: 'masked', text: null }],
+    ['a text without counts', {}, { replaced: null }],
+    ['a count not a count', {}, { replaced: { cwd: -1, path: 0, model: 0, account: 0 } }],
+    ['a count key not named', {}, { replaced: { cwd: 0, path: 0, model: 0, plan: 0 } }],
   ];
   for (const [name, over, frame] of refuse) {
     it(`refuses ${name}`, () => {

@@ -3,6 +3,7 @@
 // frame's `frames`, each read by its one reader. Build trust and delivery read exactly as before, and a frame never names
 // both recipes' fields.
 import { describe, expect, it } from 'vitest';
+import { readTestboxCaptureReply } from '../../shared/agent-protocol.js';
 import { CAPTURE_RECIPE_MAP, captureRecipeOf } from '../../shared/claudeBuildCapture.js';
 import { FRAMES_PARTS, FRAMES_PART_COUNT, frameSize } from '../../shared/framesResult.js';
 import { readTestboxFrame } from '../../shared/testbox.js';
@@ -17,7 +18,7 @@ const result = (part: number): Record<string, unknown> => {
   const p = FRAMES_PARTS[part]!;
   return {
     recipe: 'frames', version: '0123456789abcdef', build: BUILD, part, case: p.case, pane: { ...p.pane }, release: null, unmeasured: [],
-    word: 'framed', sends: [], turns: 0, sideRequests: 0, frame: { outcome: 'drawn', refusal: null, ...frameSize(TEXT), cursor: null, text: TEXT },
+    word: 'framed', sends: [], turns: 0, sideRequests: 0, frame: { outcome: 'drawn', refusal: null, ...frameSize(TEXT), cursor: null, replaced: { cwd: 0, path: 0, model: 0, account: 0 }, text: TEXT },
   };
 };
 
@@ -68,5 +69,28 @@ describe('the state frame: frames on a frames capture\'s frames only', () => {
     ['frames beside delivery', { frames: null, delivery: null }],
   ])('refuses %s', (_why, over) => {
     expect(read(state(over)).ok).toBe(false);
+  });
+});
+
+describe('the op reply: frames on a frames request\'s reply only (the reader in agent-protocol.ts)', () => {
+  const base = { outcome: 'answered', refusal: null, result: null, detail: null };
+  it('reads a frames reply with its result, for the part asked', () => {
+    const r = readTestboxCaptureReply({ ...base, frames: result(5) }, BUILD, 'frames', 5);
+    expect(r?.frames?.part).toBe(5);
+  });
+  it('reads a not-answered frames reply with frames: null', () => {
+    expect(readTestboxCaptureReply({ ...base, outcome: 'unanswered', frames: null }, BUILD, 'frames', 0)).not.toBeNull();
+  });
+  it.each<[string, Record<string, unknown>, number | undefined]>([
+    ['no frames field', { ...base }, 0],
+    ['a result on a reply not answered', { ...base, outcome: 'unanswered', frames: result(0) }, 0],
+    ['a result for another part', { ...base, frames: result(1) }, 0],
+    ['no part asked', { ...base, frames: result(0) }, undefined],
+    ['frames beside delivery', { ...base, frames: null, delivery: null }, 0],
+  ])('refuses %s', (_why, raw, part) => {
+    expect(readTestboxCaptureReply(raw, BUILD, 'frames', part)).toBeNull();
+  });
+  it('a trust reply naming frames is no answer to trust', () => {
+    expect(readTestboxCaptureReply({ ...base, frames: null }, BUILD)).toBeNull();
   });
 });

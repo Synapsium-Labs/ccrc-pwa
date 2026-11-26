@@ -131,8 +131,16 @@ export interface FramesFrame {
   readonly bytes: number;
   /** The cursor as tmux reported it, column then row, or null when it could not be read. */
   readonly cursor: readonly [number, number] | null;
+  /** How many rows each reducer rule replaced (the working directory by exact string, a path-like run, a model, an account
+   *  or plan): present exactly with a text, so the first real frames show whether the reducer ate the form (the capture
+   *  owner's ask). */
+  readonly replaced: FramesReplaced | null;
   readonly text: string | null;
 }
+
+/** Rows replaced per reducer rule, each a count. */
+export interface FramesReplaced { readonly cwd: number; readonly path: number; readonly model: number; readonly account: number }
+const REPLACED_KEYS = ['cwd', 'path', 'model', 'account'] as const;
 
 /** One send a case made and the send's word for it. */
 export interface FramesSend { readonly step: FramesSendStep; readonly send: string }
@@ -192,20 +200,26 @@ function readSends(v: unknown): FramesSend[] | null {
   return out;
 }
 
-const FRAME_KEYS = ['outcome', 'refusal', 'rows', 'width', 'bytes', 'cursor', 'text'];
+const FRAME_KEYS = ['outcome', 'refusal', 'rows', 'width', 'bytes', 'cursor', 'replaced', 'text'];
 
 /** One frame, for `pane`: its outcome and refusal agreeing, its sizes counts, its cursor inside the pane, its text present
  *  exactly with `drawn` or `unsettled` and then fitting the shape rule, and `over-cap` exactly when the measured sizes pass
  *  the cap. */
 export function readFramesFrame(v: unknown, pane: FramesPane): FramesFrame | null {
   if (!isObj(v) || !keysAre(v, FRAME_KEYS)) return null;
-  const { outcome, refusal, rows, width, bytes, cursor, text } = v;
+  const { outcome, refusal, rows, width, bytes, cursor, replaced, text } = v;
   if (!has(FRAMES_OUTCOME_MAP, outcome) || !isCount(rows) || !isCount(width) || !isCount(bytes)) return null;
   if ((outcome === 'refused') !== (refusal !== null) || (refusal !== null && !isFramesRefusal(refusal))) return null;
   if ((outcome === 'over-cap') !== frameOverCap({ rows, width, bytes }, pane)) return null;
   const carried = outcome === 'drawn' || outcome === 'unsettled';
   if (carried !== (text !== null)) return null;
   if (text !== null && (typeof text !== 'string' || !frameTextFits(text, pane))) return null;
+  if ((text !== null) !== (replaced !== null)) return null;
+  let rep: FramesReplaced | null = null;
+  if (replaced !== null) {
+    if (!isObj(replaced) || !keysAre(replaced, REPLACED_KEYS) || !REPLACED_KEYS.every((k) => isCount(replaced[k]))) return null;
+    rep = { cwd: replaced['cwd'] as number, path: replaced['path'] as number, model: replaced['model'] as number, account: replaced['account'] as number };
+  }
   let cur: readonly [number, number] | null = null;
   if (cursor !== null) {
     if (!Array.isArray(cursor) || cursor.length !== 2) return null;
@@ -213,7 +227,7 @@ export function readFramesFrame(v: unknown, pane: FramesPane): FramesFrame | nul
     if (typeof x !== 'number' || typeof y !== 'number' || !Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x >= pane.cols || y >= pane.rows) return null;
     cur = [x, y];
   }
-  return { outcome, refusal: refusal as FramesRefusal | null, rows, width, bytes, cursor: cur, text: text as string | null };
+  return { outcome, refusal: refusal as FramesRefusal | null, rows, width, bytes, cursor: cur, replaced: rep, text: text as string | null };
 }
 
 const RESULT_KEYS = ['recipe', 'version', 'build', 'part', 'case', 'pane', 'release', 'unmeasured', 'word', 'sends', 'turns', 'sideRequests', 'frame'];
