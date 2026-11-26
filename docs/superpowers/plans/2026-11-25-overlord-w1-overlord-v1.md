@@ -168,7 +168,7 @@ as recommended with entry row E11 widened. None of them changed what W1 is for, 
      `history-readable-through-the-read-tool`.
    - **This piece carries one door-process edit, and no tool.** All three tools are entry conditions (Table 3, E1, E3,
      Figure 1). Task 2's census holds them strictly, both ways:
-     - every row of the word has a client row and a tool, and every such tool has a row;
+     - every row of the word has a client row and a tool;
      - among the word's doors, the tools with the reader flag set are exactly the names in `READABLE_DOORS`
        (`board`, `history`), an equality, so a `sequence` or `messages` tool marked readable is red;
      - for each name in `READABLE_DOORS`, the read tool's own admit condition holds. The census asks it through one
@@ -260,12 +260,15 @@ Measured on `main` at `4fa87d73f8`, with `git grep` and by reading the named fil
     session's snapshot id at deploy, and the probe rounds keyed on it would be drawn again. The test and simulator
     fixtures that build the literal: `server/test/sim/cardMutants.ts`, `anchorSets.ts`, `checkpointSets.ts`,
     `generationDay.ts`, `probeDoorSets.ts`, `probeSets.ts`, and `continuity-generations-lane.test.ts`,
-    `continuity-renewal-acts.test.ts` and `continuity-anchor.test.ts`.
+    `continuity-renewal-acts.test.ts` and `continuity-anchor.test.ts` (nine, beside the card's own render test, which
+    this piece edits).
   - The card's `Fact<T>` (`shared/continuity-card.ts`) has two arms: `{ kind: 'read', value }` and
     `{ kind: 'unmeasured', what }`, and the card prints it as `couldNotRead(what)`, "Could not read <what>.", so every
     `what` is a noun phrase. The private store's `StoreRead` carries `why`, a sentence or a raw error, so the gatherer
-    never puts it in `what` (A3 of review 3885): `what` is the fixed phrase "the private store", and the reason rides
-    the messages fact's own optional `why`, printed on a line of its own.
+    never puts it in `what` (A3 of review 3885), and never in the fact at all (F1 of review 3889, call 1374):
+    `snapshotFactsJson` stores a fact whole and the snapshot id is its sha256, so a reason inside the fact would put a
+    raw store error into the stored snapshot and move its id. `what` is one of two fixed noun phrases, and the store's
+    reason goes to one server log line at the gather.
   - `card.ts#holds` and `#nothingSections` read `f[k].kind` for each fact of a role's `BODY_FACTS` row, and the
     never-empty mutants R1 and R2 (`CARD_NEVER_EMPTY_SET`, `server/test/sim/cardMutants.ts`) anchor on that exact
     `silent` line. The mutant runner (`server/test/sim/mutate.ts#runMutants`) runs only a set's own `suite(m)` on the
@@ -619,7 +622,8 @@ unguarded but the review-rounds loop.
 
 - **Completeness.** Every row of Table 1 is either changed or shown to need no change, and every red case exists. A
   door with the word and no client row, a client row with no door tool, a readable tool outside `READABLE_DOORS` or a
-  name in it whose tool is not readable, or a readable door the read tool would refuse, reds Task 2's census.
+  name in it whose tool is not readable, or a readable door the read tool would refuse, reds Task 2's census, and the
+  census's two reader checks each go red on a synthetic table.
 - **Reversibility.** The runbook (Retire, then revert) is in the PR body. The bound-Overlord revert is described, not
   hidden.
 - **The card.** The unsettled list is never trimmed, carries no text, and lists ids with a count past its cap. Every
@@ -640,7 +644,9 @@ unguarded but the review-rounds loop.
   gains its row and doc comment, after `continuity-v1`).
 - Modify: `shared/continuity-card.ts` (`CardMessage`, and the optional `CardFacts.messages?`).
 - Modify: `server/src/continuity/cardFacts.ts` (the port `CardMessagesPort`, declared here; the gather for the
-  `overlord` renderer only: an unmeasured read becomes `what: 'the private store'` with the store's `why` beside it).
+  `overlord` renderer only: an unmeasured read becomes one of two fixed noun phrases, `CARD_MESSAGES_UNREAD_WHAT` or
+  `CARD_MESSAGES_NO_STORE_WHAT`, and the store's `why` goes to one `console.warn('ccrc-server: …')` line, never into the
+  fact; call 1374).
 - Modify: `server/src/continuity/routes.ts` (one type-only edit: the deps field `operatorModel` takes
   `CardMessagesPort & Partial<ReadLedgerCount>`; no logic line changes).
 - Modify: `server/src/continuity/card.ts` (`CARD_OVERLORD_LINE` removed; `CARD_OVERLORD_NOTHING_LINE` and
@@ -652,7 +658,7 @@ unguarded but the review-rounds loop.
   `messages` absent); seven of the nine test and simulator fixtures that build the `CardFacts` literal (the field is
   optional, so they type-check unchanged). The other two are modified below: `cardMutants.ts` and `probeDoorSets.ts`.
 - Test: `server/test/overlord-v1-word.test.ts` (new); `server/test/continuity-card-render.test.ts`;
-  `server/test/continuity-card-facts.test.ts`; `server/test/sim/cardMutants.ts` (`CARD_NEVER_EMPTY_SET`: four mutants,
+  `server/test/continuity-card-facts.test.ts`; `server/test/sim/cardMutants.ts` (`CARD_NEVER_EMPTY_SET`: five mutants,
   their cases in its suite, R1 and R2 re-anchored); `server/test/sim/probeDoorSets.ts` (`SNAPSHOT_FACTS_SET`: one
   mutant, its case in `snapshotFactsOfCases`).
 - Modify: `server/test/overlord-gate-doors.test.ts` (its stale "one fixed line today" comment only).
@@ -667,20 +673,20 @@ export interface CardMessage {
   readonly id: number; readonly at: number; readonly term: number; readonly state: string; readonly cut: boolean;
 }
 // CardFacts gains:
-/** The messages fact: a `Fact` whose unmeasured arm may also carry the store's reason, printed on its own line under
- *  "Could not read the private store." (A3 of review 3885). Assignable to `Fact<readonly CardMessage[]>`. */
-export type CardMessagesFact =
-  | { readonly kind: 'read'; readonly value: readonly CardMessage[] }
-  | { readonly kind: 'unmeasured'; readonly what: string; readonly why?: string };
-/** The private store's unsettled messages. Present on the Overlord's card only, read or unmeasured; absent on every
- *  other card, so no other snapshot's JSON or id moves (ruled, F5). */
-readonly messages?: CardMessagesFact;
+/** The private store's unsettled messages, a plain `Fact`: its unmeasured arm carries `what` and nothing else, because
+ *  `snapshotFactsJson` stores a fact whole (review 3889 F1, call 1374). Present on the Overlord's card only, read or
+ *  unmeasured; absent on every other card, so no other snapshot's JSON or id moves (ruled, F5). */
+readonly messages?: Fact<readonly CardMessage[]>;
 
 // server/src/continuity/cardFacts.ts
 /** The private store's reads the card makes: a `message` note key's owner, and the Overlord's unsettled list. */
 export type CardMessagesPort = Pick<OperatorModelStore, 'messageSessionOf' | 'unsettledFacts'>;
 // CardFactsDeps.messages becomes:
 readonly messages?: () => CardMessagesPort | null | undefined;
+/** The two noun phrases an unmeasured messages fact may carry, and no other (call 1374): the store could not be read;
+ *  this server has no private store. The store's reason is logged at the gather, never carried. */
+export const CARD_MESSAGES_UNREAD_WHAT = 'the private store';
+export const CARD_MESSAGES_NO_STORE_WHAT = 'the private store, which this server does not have';
 
 // server/src/continuity/card.ts
 /** The Overlord's never-empty line (C51): what its renderer reads, never runs, claims or coordinator intent (F8). */
@@ -690,7 +696,7 @@ export const CARD_OVERLORD_NOTHING_LINE = 'No unsettled operator messages, notes
 export const MESSAGES_CAP_BYTES: number;
 /** The one reader of `f.messages` on the card's side: an absent field reads `{ kind: 'unmeasured', what: 'the unsettled
  *  messages' }`, never read and empty (review 3885 F2). `holds`, `nothingSections` and `messagesSections` read through it. */
-export function messagesFactOf(f: CardFacts): CardMessagesFact;
+export function messagesFactOf(f: CardFacts): Fact<readonly CardMessage[]>;
 export function messagesSections(f: CardFacts, capBytes?: number): readonly CardSection[];
 ```
 
@@ -718,8 +724,9 @@ export function messagesSections(f: CardFacts, capBytes?: number): readonly Card
     role line, the authority line, the constitution line, the messages section (one line per message: id, time, state,
     and "(cut)" when `cut`), the timers section, the notes section and the history line;
   - no card text contains "ships with W1";
-  - `messages: { kind: 'unmeasured', what: 'the private store', why: 'the store is locked' }` renders exactly
-    "Could not read the private store." and, on the next line, the reason through `oneLine`; never "no messages" (A3);
+  - `messages: { kind: 'unmeasured', what: CARD_MESSAGES_UNREAD_WHAT }` renders exactly "Could not read the private
+    store." and no reason line after it; the absent-store phrase renders "Could not read the private store, which this
+    server does not have."; never "no messages" (A3; review 3889 F1);
   - **absent on the Overlord:** facts with no `messages` key render "Could not read the unsettled messages." on the
     Overlord's card, never `CARD_OVERLORD_NOTHING_LINE` and never a throw (F2 of review 3885);
   - read and empty everywhere renders `CARD_OVERLORD_NOTHING_LINE`, and never `CARD_NOTHING_LINE`;
@@ -750,8 +757,14 @@ export function messagesSections(f: CardFacts, capBytes?: number): readonly Card
   - a non-Overlord snapshot without `messages` reads it absent.
 - [ ] **Step 7: Write the failing gather cases.** In `continuity-card-facts.test.ts`:
   - a session whose renderer is `overlord` gets `messages` from `unsettledFacts()`, each row mapped field for field;
-  - a store read that answers `{ kind: 'unmeasured', why }` gives `{ kind: 'unmeasured', what: 'the private store', why }`;
-  - an absent store gives `{ kind: 'unmeasured', what: 'the private store', why: 'this server has no private store' }`;
+  - a store read that answers `{ kind: 'unmeasured', why }` gives exactly
+    `{ kind: 'unmeasured', what: CARD_MESSAGES_UNREAD_WHAT }`, and one `console.warn` line carries `oneLine(why)` (a spy);
+  - an absent store gives exactly `{ kind: 'unmeasured', what: CARD_MESSAGES_NO_STORE_WHAT }` and no warn line;
+  - **the reason never reaches the snapshot (review 3889 F1):** two store reads that fail with two different reasons
+    give the same fact, the same `snapshotFactsJson` and so the same snapshot id. The builder measures the guard red by
+    hand (the gatherer writing the reason into `what`), before and after in the note; if a mutant set covers
+    `cardFacts.ts` at the build's base, the mutant joins it. If the gather runs on a poll, the builder bounds the warn
+    line and says how;
   - every other renderer gets no `messages` field, and the store is not asked (a spy counts zero calls).
 - [ ] **Step 8: Write the mutants.** The runner runs only a set's own suite on the mutated copy, so each killing case
   goes inside that set's suite; Steps 5 and 6 hold the same behaviours in the ordinary suites (A4 of review 3885).
@@ -780,8 +793,8 @@ export function messagesSections(f: CardFacts, capBytes?: number): readonly Card
     `messages` on the Overlord's renderer reads unmeasured (`what: 'the unsettled messages'`), the card carries
     "Could not read the unsettled messages." and no nothing line, as the snapshot rule already does. Never a type error,
     never "no messages".
-  - The unmeasured messages line is `couldNotRead(what)`; when the fact carries `why`, a second kept line follows,
-    "The private store said: <oneLine(why)>.". `renderCard`'s Overlord arm: the role section, the authority line rule, a stable constitution
+  - The unmeasured messages line is `couldNotRead(what)` and nothing follows it: the card has no reason line
+    (call 1374). `renderCard`'s Overlord arm: the role section, the authority line rule, a stable constitution
     line, then `messagesSections`, `timersSections`, `notesSections`, `checkpointSections` and `historySections`.
   - `messagesSections(f, capBytes = MESSAGES_CAP_BYTES)` emits `keep: true` sections only. Past the cap it emits the ids
     on one kept line and the left-out count. `MESSAGES_CAP_BYTES` is sized as the timers cap is: one message line's
@@ -789,8 +802,9 @@ export function messagesSections(f: CardFacts, capBytes?: number): readonly Card
     the figure in the constant's comment).
   - `snapshotFactsOf`: when `messages` is present, read it with `fact('messages', …)`; when absent, leave it absent for
     a non-Overlord role, and read `{ kind: 'unmeasured', what: "the snapshot's messages" }` for the `overlord` role.
-    Like every other fact, a stored unmeasured `messages` is read back with its `what` only: the store's `why` is a
-    line of the live card, not a fact the snapshot keeps.
+    `snapshotFactsJson` stores a fact whole and the snapshot id is its sha256, which is why the messages fact carries
+    no reason (review 3889 F1): a stored unmeasured `messages` holds one of the two fixed phrases and nothing a store
+    error could vary.
 - [ ] **Step 11: Run every card suite and the floor.** `continuity-card-render`, `continuity-card-facts`,
   `continuity-anchor`, `continuity-card-route`, the test typecheck
   (`ccrc test -- npx tsc --noEmit -p test/tsconfig.tests.json`), and the mutant floors
@@ -801,7 +815,9 @@ export function messagesSections(f: CardFacts, capBytes?: number): readonly Card
 
 **Files:**
 - Modify: `ccd/door-process.mjs` (the read tool's admit condition moves out of `readToolOver`'s `readerOf` into the
-  exported `readableDoorRow(row)`, which `readerOf` calls; no change of behaviour, held by `door-process.test.ts` and
+  exported `readableDoorRow(row)`, which `readerOf` calls: the tool's list of names and its lookup stay as they are,
+  and only the separate check becomes `need(readableDoorRow(row), <the same refusal text>)`; no change of behaviour,
+  held by `door-process.test.ts` and
   `door-tools-argv.test.ts`. Skipped if the door process already exports such a predicate at the build's base).
 - Modify: `ccd/ccrc-api` (the gated table's rows; the check's condition becomes `[[ -n "$gate" ]]`; the header comment's
   list of gates, in a line that does not start with `# <word> rows`).
@@ -827,6 +843,11 @@ export function messagesSections(f: CardFacts, capBytes?: number): readonly Card
   - The reader check is an equality: the set of `DOOR_TOOLS` names among the word's doors whose row has
     `reader: true` equals `READABLE_DOORS`.
   - The admit check calls `readableDoorRow` on each `READABLE_DOORS` tool; it never restates `fenced` or `class`.
+  - **Both checks have a measured red (review 3889 F2, call 1374).** Each is a function over a table passed in, so
+    the census file also runs them on synthetic tables: a `sequence` tool with `reader: true` is red; a `board` tool
+    with the flag unset is red; a readable row that is fenced, and one that is not a view, are red through
+    `readableDoorRow`. The build's note records two mutants red: the equality weakened to a subset test, and
+    `readableDoorRow` answering true for every row.
   - First, if the door process does not yet export the predicate, move the condition out of `readerOf` into
     `export function readableDoorRow(row)` and have `readerOf` call it; run `door-process.test.ts` and
     `door-tools-argv.test.ts` before and after, green both times (a move, no behaviour change).
@@ -874,7 +895,7 @@ plan's (merged before it), so it is not docs-only. The builder pushes once, afte
 | `shared/api.ts` | yes, capped at 5,140 code lines | +1 code line (0 on the fallback) | 5,139 by the growth check's own stripper (plan review 3877), so +1 reaches the cap exactly and passes. The union line is edited in place |
 | `shared/continuity-card.ts` | no | +6 | |
 | `server/src/continuity/card.ts` | no | +60 | the renderer arm, the nothing line, the messages section and its cap, the snapshot rule |
-| `server/src/continuity/cardFacts.ts` | no | +10 | the port and the gather |
+| `server/src/continuity/cardFacts.ts` | no | +14 | the port, the gather, the two noun phrases and the one log line |
 | `server/src/continuity/routes.ts` | no | 0 | one type edited in place |
 | `ccd/door-process.mjs` | no | +3 | the read tool's admit condition moved into the exported `readableDoorRow` (0 if it already exists) |
 | `ccd/ccrc-api` | no (not in `GROWTH_FILES`, not a `ccd/lib` library) | +20 | seven case rows of two lines, one condition, one comment line |
@@ -966,9 +987,14 @@ numbers.
   predicate, so E3 stays red until board B2 settles the fenced history; the reader-flag census is an equality; the
   sequence's tool is not readable. F1, F2 and A1 to A4 applied in edit round 2.
 
+- Plan review 3889 (the third and final round) and call 1374, folded by the coordinator in the ledger edit of
+  2026-11-26, because the review cap was spent: the messages fact carries no store reason (one of two fixed noun
+  phrases; the reason goes to one server log line; the card has no reason line); the census's two reader checks are
+  functions with synthetic red cases; five never-empty mutants; question 8's clause about a tool-to-row check is
+  dropped; the export keeps the read tool's list and lookup and replaces only the separate check.
+
 **Waiting on the coordinator:**
-- The last narrow review, of edit round 2.
-- The index changes above.
+- Nothing: the index changes above were folded with the same ledger edit.
 
 **Later:**
 - The build, once every row of Table 3 has merged.
