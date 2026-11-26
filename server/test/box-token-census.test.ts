@@ -118,10 +118,14 @@ const OVERLORD_INBOX_LANES = lanesIn(OVERLORD_INBOX_SRC);
  *  the Overlord gate. */
 const OVERLORD_HISTORY_SRC = read('server/src/coord/overlordHistoryRoutes.ts');
 const OVERLORD_HISTORY_LANES = lanesIn(OVERLORD_HISTORY_SRC);
-const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC), ...UPDATE_LANES, ...TOKEN_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...PLAN_LANES, ...CONTINUITY_LANES, ...QUIZ_LANES, ...OVERLORD_INBOX_LANES, ...OVERLORD_HISTORY_LANES];
+/** The Overlord's cursor read of the sequence (Overlord W1, sequence C), a routes file of its own beside the history's: one box-token
+ *  machine lane behind the Overlord gate. */
+const OVERLORD_SEQUENCE_SRC = read('server/src/coord/overlordSequenceRoutes.ts');
+const OVERLORD_SEQUENCE_LANES = lanesIn(OVERLORD_SEQUENCE_SRC);
+const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC), ...UPDATE_LANES, ...TOKEN_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...PLAN_LANES, ...CONTINUITY_LANES, ...QUIZ_LANES, ...OVERLORD_INBOX_LANES, ...OVERLORD_HISTORY_LANES, ...OVERLORD_SEQUENCE_LANES];
 /** The box-token machine lanes gate.ts counts first (#1444, PL3): the coordination routes, the Linear proxy's and the programme
  *  ledgers', before `/api/notify`, `/api/pools/epoch` and the update projection read join them in the total. */
-const MACHINE_LANES = [...COORD_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...PLAN_LANES, ...CONTINUITY_LANES, ...QUIZ_LANES, ...OVERLORD_INBOX_LANES, ...OVERLORD_HISTORY_LANES];
+const MACHINE_LANES = [...COORD_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...PLAN_LANES, ...CONTINUITY_LANES, ...QUIZ_LANES, ...OVERLORD_INBOX_LANES, ...OVERLORD_HISTORY_LANES, ...OVERLORD_SEQUENCE_LANES];
 
 /** The one session-only write that cannot be harvested, with the reason stated so
  *  it is a recorded exception rather than a retyped list. `SESSION_ONLY` lives in
@@ -212,7 +216,10 @@ const OVERLORD_OPERATOR_DOORS = ['/api/overlord/designation', '/api/overlord/des
   '/api/overlord/model', '/api/overlord/account-set',
   // designation B: Rebind (a step-up) and Restart (a recovery, no step-up)
   '/api/overlord/rebind', '/api/overlord/restart',
-  '/api/overlord/ladder', '/api/overlord/readiness', '/api/overlord/rung', '/api/overlord/pause', '/api/overlord/latches/:cause/clear',
+  '/api/overlord/ladder', '/api/overlord/readiness',
+  // the operator's read of the invariant monitor (Overlord W1 sequence C): the session gate, no box token, no step-up
+  '/api/overlord/invariants',
+  '/api/overlord/rung', '/api/overlord/pause', '/api/overlord/latches/:cause/clear',
   // the console's witness exchange (Overlord W1 authority journal, Task 6): the account gate, no step-up, no box token
   '/api/overlord/witness',
   // Confirm the restore (authority journal C): the guard's state, and the door behind the step-up
@@ -343,7 +350,9 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   'one hundred and three',
   // Programme lifecycle W2: POST /api/programmes/:slug/end-proposal, a box-token lane, and the two session-or-token reads
   // GET /api/programmes/:slug/history and GET /api/sessions/:id/programme, in the ledgers file: one hundred and six in all.
-  'one hundred and four', 'one hundred and five', 'one hundred and six'];
+  'one hundred and four', 'one hundred and five', 'one hundred and six',
+  // The Overlord's cursor read of the sequence (W1 sequence C): GET /api/overlord/sequence, a box-token lane in the sequence routes file: one hundred and seven in all.
+  'one hundred and seven'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`
@@ -520,7 +529,10 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     // …and the history door's one (Overlord W1, PR B1).
     expect(OVERLORD_HISTORY_LANES, 'coord/overlordHistoryRoutes.ts lost its box-token lane, or gained a door with no census row')
       .toEqual(['POST /api/overlord/history']);
-    expect(ALL_LANES.length).toBe(COORD_LANES.length + 3 + LINEAR_PROXY_LANES.length + LEDGER_LANES.length + LINKING_LANES.length + CALLS_LANES.length + REMAINING_LANES.length + PLAN_LANES.length + CONTINUITY_LANES.length + QUIZ_LANES.length + OVERLORD_INBOX_LANES.length + OVERLORD_HISTORY_LANES.length);
+    // …and the cursor read's one (Overlord W1, sequence C).
+    expect(OVERLORD_SEQUENCE_LANES, 'coord/overlordSequenceRoutes.ts lost its box-token lane, or gained a door with no census row')
+      .toEqual(['GET /api/overlord/sequence']);
+    expect(ALL_LANES.length).toBe(COORD_LANES.length + 3 + LINEAR_PROXY_LANES.length + LEDGER_LANES.length + LINKING_LANES.length + CALLS_LANES.length + REMAINING_LANES.length + PLAN_LANES.length + CONTINUITY_LANES.length + QUIZ_LANES.length + OVERLORD_INBOX_LANES.length + OVERLORD_HISTORY_LANES.length + OVERLORD_SEQUENCE_LANES.length);
     expect(UNGATED_DOORS.length, 'the door list collapsed').toBeGreaterThan(3);
   });
 
@@ -549,7 +561,7 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     expect([...new Set(regs.map((k) => k.slice(k.indexOf(' ') + 1)))].sort(),
       'overlordRoutes.ts and OVERLORD_OPERATOR_DOORS disagree — a door was registered, or a name listed, on one side only')
       .toEqual([...OVERLORD_OPERATOR_DOORS].sort());
-    expect(regs.length, 'the Overlord doors file registers fifteen routes (seven designation, four ladder, two restore, the witness exchange and the readiness read)').toBe(15);
+    expect(regs.length, 'the Overlord doors file registers sixteen routes (seven designation, four ladder, two restore, the witness exchange, the readiness read and the invariants read)').toBe(16);
     expect(lanesIn(OVERLORD_SRC), 'a designation door consults the box token — they are the operator\'s').toEqual([]);
     for (const key of regs) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
     for (const door of OVERLORD_OPERATOR_DOORS) {

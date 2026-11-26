@@ -21,7 +21,7 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, one-hundred-and-two rows, and nothing else; the
+#   * The route comes from ROUTES below, one-hundred-and-three rows, and nothing else; the
 #     four claimant rows name the question door family's template, their only
 #     door since the old ones were retired (D-7324), refused here, unsent, when a
 #     current cap file says the server lacks `questions-v1` (D-7328); `runs
@@ -108,7 +108,7 @@ SAFE_RE='^[A-Za-z0-9_-]+$'
 # (`/api/questions/<ask|approval>-{id}/<rule|release>`): from Q3j it was their
 # fifth field, sent only while the server advertised `questions-v1` (D-7325), and
 # since the old doors were retired it is their path (D-7324). Every row has four.
-# One-hundred-and-two rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
+# One-hundred-and-three rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
 # derives the count from the table below and reds if this line or the bullet at
 # the top of this file states a different one. The original rows were chosen on
 # 2026-08-26 by measuring the skill corpora; the standing executable-corpus
@@ -380,6 +380,9 @@ declare -A ROUTES=(
   # advertises them. A POST only so the search words ride the body, never a URL. Parsed whole by `parse_overlord_history`, which
   # builds the body and puts the pane's pair LAST; a `--json` or a typed identity is refused, unsent.
   [overlord.history]='POST|/api/overlord/history|no|-'
+  # The Overlord's cursor read of the one sequence (Overlord W1, sequence C): `--after <n>` and `--limit <m>`, each a canonical
+  # non-negative integer (`bad-query` otherwise, unsent), and the pane's pair in the query after them, as the inbox's reads.
+  [overlord.sequence]='GET|/api/overlord/sequence|no|after,limit'
 )
 
 # A Linear issue identifier, the `<REF>` of the five issue rows (D-7669): a team key that starts with a letter, a hyphen,
@@ -1243,6 +1246,10 @@ main() {
         [[ "$qkeys" != '-' && ",$qkeys," == *",$k,"* ]] \
           || refuse 'unknown-query' "$group $verb takes no --$k"
         [[ "$v" =~ $SAFE_RE ]] || refuse 'bad-query' "--$k value is not a plain value"
+        # The sequence's cursor and page size are canonical decimal integers: no sign, no leading zero (the server bounds them).
+        if [[ "$key" == 'overlord.sequence' ]]; then
+          [[ "$v" =~ ^(0|[123456789][0123456789]{0,15})$ ]] || refuse 'bad-query' "--$k value is not a non-negative integer"
+        fi
         if [[ "$key" == 'asks.list' && "$k" == 'parent' ]]; then
           ask_parent="$v"
         else
@@ -1466,10 +1473,10 @@ main() {
     append_body_field 'byId' "$DERIVED_ID" 'the statement body is not a JSON object; byId cannot be added'
     append_body_field 'byUuid' "$DERIVED_UUID" 'the statement body is not a JSON object; byUuid cannot be added'
   fi
-  # THE OVERLORD INBOX ROWS' IDENTITY: the pane's, derived here, never typed. The two reads carry the pair in the query after
+  # THE OVERLORD INBOX ROWS' IDENTITY (and the sequence read's): the pane's, derived here, never typed. The reads carry the pair in the query after
   # any declared key (`--byId` is `unknown-query`); `acknowledge` is attributed to this pane and carries nothing else, so a
   # `--json` of any kind is refused `bad-body`, unsent, and the body is built here over `{}`, byId then byUuid, LAST.
-  if [[ "$key" == 'overlord.inbox' || "$key" == 'overlord.messages' ]]; then
+  if [[ "$key" == 'overlord.inbox' || "$key" == 'overlord.messages' || "$key" == 'overlord.sequence' ]]; then
     derive_identity
     query+="${query:+&}byId=$DERIVED_ID&byUuid=$DERIVED_UUID"
   fi
