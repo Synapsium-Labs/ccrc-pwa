@@ -97,14 +97,12 @@ const READINESS_ITEM_KIND_MAP = {
 } as const;
 export type ReadinessItemKind = keyof typeof READINESS_ITEM_KIND_MAP;
 export const READINESS_ITEM_KINDS = Object.keys(READINESS_ITEM_KIND_MAP) as readonly ReadinessItemKind[];
-/** Who ended an item's record: the lane's settle, or the operator's move (F8). */
-export const READINESS_CLOSED_BY = ['lane', 'operator'] as const;
-export type ReadinessClosedBy = (typeof READINESS_CLOSED_BY)[number];
 
 /** Where questions go meanwhile. W1 has no holds, so always the operator; W3 adds `overlord` for `ready`. */
 export type QuestionsGo = 'operator';
 
-/** What `GET /api/overlord/readiness` serves and `readinessRead()` returns, both through `servedReadiness`. */
+/** What `GET /api/overlord/readiness` serves and the board reads, both through the lane's `read()` (`ReadinessLane.read`, the
+ *  plan's `readinessRead()` under its built name), which serves `servedReadiness`. */
 export interface ReadinessWire {
   readonly word: ReadinessWord;
   /** When the word last changed (epoch ms, server wall); for a served `unmeasured` (`boot` or `stale`), the moment this

@@ -15,13 +15,14 @@
 // classifier (`stopFailureClass`, L1); every other import is a type.
 import {
   READINESS_DEAF_MS, READINESS_DIALOG_MS, READINESS_FRESH_MS, READINESS_HOOK_QUIET_MS, READINESS_ITEM_TEXT,
-  READINESS_LONG_TURN_MS, READINESS_PUSH_TEXT, READINESS_RESTART_BOUND_MS, READINESS_RESTARTS_PER_HOUR, READINESS_SERVED_WHY,
+  READINESS_LONG_TURN_MS, READINESS_PUSH_TEXT, READINESS_RESTART_BOUND_MS, READINESS_RESTART_WINDOW_MS, READINESS_RESTARTS_PER_HOUR,
+  READINESS_SERVED_WHY,
   READINESS_WORDS, isReadinessWord, isStrandCause,
   type ReadinessItemKind, type ReadinessItemText, type ReadinessWire, type ReadinessWord, type StrandCause,
 } from '../../../shared/overlord-readiness.js';
 import type { DesignationRead } from '../../../shared/overlord-designation.js';
 import type { GenerationState } from '../../../shared/continuity.js';
-import type { ItemState } from '../../../shared/ledgers.js';
+import { OPEN_ITEM_STATES, type ItemState } from '../../../shared/ledgers.js';
 import type { EarliestReset } from '../../../shared/loadLines.js';
 import type { Rung } from '../../../shared/overlord-ladder.js';
 import type { MarkerState, SessionStatus } from '../../../shared/api.js';
@@ -151,6 +152,9 @@ export interface SubjectReadings {
   readonly ladder: { readonly kind: 'read'; readonly operatorRung: Rung } | { readonly kind: 'unmeasured'; readonly why: string };
   /** Designation B's `overlordBodyOf`, with `down.since` filled from the lane's first sighting. */
   readonly body: OverlordBodyState;
+  /** The lane's newest first sighting of this body `down` within the restart window, kept after the body is back up; null when
+   *  none (slug restart-under-way-until-minted). */
+  readonly lastDownAt: number | null;
   readonly generation: Read<GenerationReading | null>;
   readonly restarts: Read<number>;
   /** Serviceability B's candidates (renewal readings' `overlordCandidatesOf`). */
@@ -179,6 +183,8 @@ export interface ReadinessNowRow {
   readonly until: number | null; readonly strandCause: StrandCause | null; readonly restartable: boolean; readonly at: number;
   /** The newest `ready` row's `at`, or null. */
   readonly readySince: number | null;
+  /** That `ready` row's session, or null: the decider keeps the ready clock to the current binding's (F10). */
+  readonly readySessionId: string | null;
   /** The `at` of the first row after the newest `ready` row, or null. */
   readonly leftReadyAt: number | null;
   /** While the word is `dead`: its episode's first row id and that row's `pushedAt`; otherwise null. */
@@ -300,7 +306,11 @@ export function readinessFactsOf(raw: ReadinessReadings, now: number): Readiness
   const mail = raw.mailDisabled === 'set' ? 'mail-disabled' : raw.mailDisabled === 'unmeasurable' ? 'unmeasurable' : null;
   const stored = raw.stored;
   const leftReadyAt = stored.ok && stored.value !== 'none' ? stored.value.leftReadyAt : null;
-  const readySince: Read<number | null> = stored.ok ? { ok: true, value: stored.value === 'none' ? null : stored.value.readySince } : stored;
+  // The ready clock is the current binding's (F10): a `ready` row of another session starts no clock for this one. Every
+  // designation and rebind binds a new body with its own session id, and a restart keeps it, so the session tells them apart.
+  const subjectId = subject.kind === 'measured' && subject.value !== null ? subject.value.sessionId : null;
+  const readySince: Read<number | null> = !stored.ok ? stored
+    : { ok: true, value: stored.value === 'none' || stored.value.readySessionId !== subjectId ? null : stored.value.readySince };
   const s = raw.subject;
   const d = raw.designation;
   const empty: Pick<ReadinessFacts, 'body' | 'restarts' | 'generation' | 'stranded' | 'wedged' | 'deaf' | 'proofAt'> = {
@@ -320,8 +330,16 @@ export function readinessFactsOf(raw: ReadinessReadings, now: number): Readiness
   const pending = d.kind !== 'unmeasured' ? d.row?.pending ?? null : null;
   const generation = generationOf(s.generation, subject.value.bound, subject.value.bound ? null : pending?.deadlineAt ?? null);
   const genRow = s.generation.ok ? s.generation.value : null;
-  // The restart in progress: while the body is down and the generation is not renewing (a doubt about the generation counts).
-  const inProgress = s.body.kind === 'down' && !(generation.kind === 'measured' && generation.value.kind === 'renewing') ? 1 : 0;
+  // The restart in progress (question 3; slug restart-under-way-until-minted): while the body is down and the generation is not
+  // renewing (a doubt about the generation counts), and, once it is back up, until a generation started after the lane's last
+  // down sighting is live, within the hour. `restartsSince` counts minted generations only, and the generations lane mints on
+  // its own cadence, so without the second half a third restart would read below the bound from up to mint (review 3922 F1).
+  const renewing = generation.kind === 'measured' && generation.value.kind === 'renewing';
+  const downAt = s.lastDownAt;
+  const mintedSince = downAt !== null && genRow !== null && genRow.startReportedAt > downAt;
+  const underWay = s.body.kind === 'down' ? !renewing
+    : downAt !== null && now - downAt <= READINESS_RESTART_WINDOW_MS && !renewing && !mintedSince;
+  const inProgress = underWay ? 1 : 0;
   const restarts: Fact<number> = s.restarts.ok ? measured(s.restarts.value + inProgress) : unmeasured(`restarts: ${s.restarts.detail}`);
   const binding = d.kind === 'designated'
     ? { sessionId: d.sessionId, pending: pending === null ? null : { sessionId: pending.sessionId, deadlineAt: pending.deadlineAt } } : null;
@@ -373,7 +391,8 @@ const READINESS_KEBAB_MAP = {
 export const isReadinessKebab = (word: string): boolean =>
   isReadinessWord(word) || isStrandCause(word) || Object.prototype.hasOwnProperty.call(READINESS_KEBAB_MAP, word);
 const COUNT_KEY = 'count';
-const LIVE_ITEM_STATES: ReadonlySet<string> = new Set(['open', 'checking']);
+/** The states an item still waits in: the ledger's own list (`shared/ledgers.ts#OPEN_ITEM_STATES`), never a copy (F5). */
+const LIVE_ITEM_STATES: ReadonlySet<string> = new Set(OPEN_ITEM_STATES);
 const STRANDED_AT = READINESS_WORDS.indexOf('stranded');
 
 /** What the operator is told, total and pure. Reconcile first (F8), so the item rules see only live records. */

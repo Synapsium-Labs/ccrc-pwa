@@ -7,7 +7,7 @@
 // state), and the guarded prune. Nothing here decides a word: `overlordReadiness.ts` (L1) does, and this file records it.
 //
 // WRITERS (the census names them): `overlord_readiness` is written by `recordReadinessInTx` (insert and in-place update) and
-// `pruneReadiness` (delete); `overlord_readiness_items` by `raiseReadinessItem` (insert, with its item and reach in one
+// `pruneReadiness` (delete); `overlord_readiness_items` by `raiseReadinessItem` (insert, with its item in one
 // transaction), `settleReadinessItem` (the lane's settle: the item's move and the record's stamp, one transaction) and
 // `closeReadinessItem` (the operator's move, the record alone). `operator_items` is never written here but through the ledger's
 // checked entries, `raiseItemCheckedInTx` and `settleItemCheckedInTx`.
@@ -16,10 +16,9 @@ import {
   isReadinessWord, isStrandCause, READINESS_ITEM_KINDS, type ReadinessItemKind, type ReadinessItemText,
 } from '../../../shared/overlord-readiness.js';
 import { OVERLORD_ITEM_PROGRAMME } from '../../../shared/overlord-sequence.js';
-import type { ItemState, NeededBy } from '../../../shared/ledgers.js';
+import { ITEM_STATES, type ItemState, type NeededBy } from '../../../shared/ledgers.js';
 import { stampSequenceInTx, type SequenceLineInput } from './overlordSequenceStore.js';
 import { raiseItemCheckedInTx, settleItemCheckedInTx } from './ledgersStore.js';
-import { reachInTx, type ItemReachOf } from './pushOutboxStore.js';
 import { tx } from './tx.js';
 import type { ReadinessAnswer, ReadinessItemRecord, ReadinessNowRow } from './overlordReadiness.js';
 
@@ -110,7 +109,8 @@ export function recordReadiness(db: DatabaseSync, a: ReadinessWrite, at: number)
   }
 }
 
-/** The one reader of the current word: the newest row, `readySince` (the newest `ready` row's `at`), `leftReadyAt` (the `at` of
+/** The one reader of the current word: the newest row, `readySince` (the newest `ready` row's `at`) with that row's session
+ *  (`readySessionId`, so the decider keeps the ready clock to the current binding, F10), `leftReadyAt` (the `at` of
  *  the first row after the newest `ready` row), and, while the word is `dead`, its episode's first row id and `pushedAt`; `none`
  *  before the first pass. */
 export function readinessNow(db: DatabaseSync): { ok: true; now: ReadinessNowRow | 'none' } | { ok: false; detail: string } {
@@ -119,7 +119,7 @@ export function readinessNow(db: DatabaseSync): { ok: true; now: ReadinessNowRow
     if (raw === undefined) return { ok: true, now: 'none' };
     const row = rowOf(raw);
     if (typeof row === 'string') return { ok: false, detail: `overlord_readiness row ${String(raw.id)}: ${row}` };
-    const ready = db.prepare("SELECT id, at FROM overlord_readiness WHERE word = 'ready' ORDER BY id DESC LIMIT 1").get() as { id: number; at: number } | undefined;
+    const ready = db.prepare("SELECT id, at, sessionId FROM overlord_readiness WHERE word = 'ready' ORDER BY id DESC LIMIT 1").get() as { id: number; at: number; sessionId: string | null } | undefined;
     const left = ready === undefined ? undefined
       : db.prepare('SELECT at FROM overlord_readiness WHERE id > ? ORDER BY id LIMIT 1').get(ready.id) as { at: number } | undefined;
     const first = row.word === 'dead' ? episodeFirstRow(db, row.sessionId) : undefined;
@@ -127,7 +127,8 @@ export function readinessNow(db: DatabaseSync): { ok: true; now: ReadinessNowRow
       ok: true,
       now: {
         id: row.id, sessionId: row.sessionId, word: row.word, why: row.why, until: row.until, strandCause: row.strandCause,
-        restartable: row.restartable, at: row.at, readySince: ready?.at ?? null, leftReadyAt: left?.at ?? null,
+        restartable: row.restartable, at: row.at, readySince: ready?.at ?? null, readySessionId: ready?.sessionId ?? null,
+        leftReadyAt: left?.at ?? null,
         episodeFirstId: first === undefined ? null : Number(first.id), pushedAt: first === undefined ? null : num(first.pushedAt),
       },
     };
@@ -154,7 +155,8 @@ export function readinessChanges(db: DatabaseSync, sinceMs: number, untilMs: num
   }
 }
 
-const ITEM_STATES_KNOWN: ReadonlySet<string> = new Set(['open', 'checking', 'done', 'withdrawn', 'dismissed']);
+/** The item states this build knows: the ledger's own list (`shared/ledgers.ts#ITEM_STATES`), never a copy (F5). */
+const ITEM_STATES_KNOWN: ReadonlySet<string> = new Set(ITEM_STATES);
 
 /** The open records (not yet settled or closed), each joined to its item's own state; `missing` when the item row is gone. */
 export function openReadinessItems(db: DatabaseSync): { ok: true; rows: ReadinessItemRecord[] } | { ok: false; detail: string } {
@@ -174,19 +176,19 @@ export function openReadinessItems(db: DatabaseSync): { ok: true; rows: Readines
   }
 }
 
-/** How soon each kind of item is needed. A stranded Overlord cannot serve a question, so its item blocks; the count item (one
- *  account short of a spare) and a held account stand beside a running Overlord, so they wait: `later`. */
-const NEEDED_BY_OF_ITEM: Readonly<Record<ReadinessItemKind, NeededBy>> = { stranded: 'blocking', count: 'later', hold: 'later' };
+/** How soon each kind of item is needed. The stranded item is `soon` with no label, as the plan's question 9 and C56 say, so it
+ *  pushes nothing: in W1 nothing waits on the Overlord, and the one push of this piece is the dead push, once per episode. The
+ *  count item (one account short of a spare) and a held account stand beside a running Overlord, so they wait: `later` (slug
+ *  readiness-item-levels). No item here is `blocking`, so none takes a push-outbox reach. */
+const NEEDED_BY_OF_ITEM: Readonly<Record<ReadinessItemKind, NeededBy>> = { stranded: 'soon', count: 'later', hold: 'later' };
 
 const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 /** The item for (item, key) and its record, in ONE transaction: `raiseItemCheckedInTx` (programme `OVERLORD_ITEM_PROGRAMME`,
- *  raised by `ccrc`, kind `do`), its reach when `itemReach` is given (as `invariantFindingsStore.ts#recordFinding` writes it),
- *  then the record. A second open record for the same (item, key) is refused by the partial unique index, and a refused raise
+ *  raised by `ccrc`, kind `do`), then the record. A second open record for the same (item, key) is refused by the partial unique index, and a refused raise
  *  or record rolls both back: nothing is written. Never throws. */
 export function raiseReadinessItem(
   db: DatabaseSync, r: { readonly item: ReadinessItemKind; readonly key: string; readonly text: ReadinessItemText }, at: number,
-  itemReach?: ItemReachOf,
 ): { ok: true; recordId: number; itemId: number } | { ok: false; error: string } {
   const neededBy = NEEDED_BY_OF_ITEM[r.item];
   try {
@@ -195,7 +197,7 @@ export function raiseReadinessItem(
       const itemId = raiseItemCheckedInTx(db, {
         program: OVERLORD_ITEM_PROGRAMME, runId: null, raisedBy: 'ccrc', kind: 'do', title: r.text.title, why: r.text.why, how,
         options: null, neededBy, soonLabel: null, secretSlot: null,
-      }, at, 'ccrc', itemReach && ((id) => { reachInTx(db, 'item', id, itemReach({ title: r.text.title, neededBy })(id), at); }));
+      }, at, 'ccrc');
       const res = db.prepare('INSERT INTO overlord_readiness_items (item, key, itemId, raisedAt) VALUES (?, ?, ?, ?)')
         .run(r.item, r.key, itemId, at);
       return { ok: true as const, recordId: Number(res.lastInsertRowid), itemId };
@@ -230,12 +232,21 @@ export function closeReadinessItem(db: DatabaseSync, recordId: number, at: numbe
   return { changed: Number(r.changes) === 1 };
 }
 
-/** Remove rows before `beforeMs`, never the newest row, the newest `ready` row, or an open episode's first row (F17). */
+/** The first row of the open dead episode, by the episode's own break rule, whatever word the newest row holds (F9): the newest
+ *  row that is not `unmeasured` is `dead`, so the episode is open across a boot's `unmeasured` row; undefined otherwise. */
+function openEpisodeFirstId(db: DatabaseSync): number | undefined {
+  const last = db.prepare("SELECT word, sessionId FROM overlord_readiness WHERE word <> 'unmeasured' ORDER BY id DESC LIMIT 1").get() as Raw | undefined;
+  if (last === undefined || last.word !== 'dead') return undefined;
+  const first = episodeFirstRow(db, typeof last.sessionId === 'string' ? last.sessionId : null);
+  return first === undefined ? undefined : Number(first.id);
+}
+
+/** Remove rows before `beforeMs`, never the newest row, the newest `ready` row, or an open episode's first row (F17, F9). */
 export function pruneReadiness(db: DatabaseSync, beforeMs: number): { removed: number } {
   return tx(db, () => {
     const now = readinessNow(db);
     if (!now.ok || now.now === 'none') return { removed: 0 };
-    const keep = [now.now.id, now.now.episodeFirstId ?? now.now.id];
+    const keep = [now.now.id, openEpisodeFirstId(db) ?? now.now.id];
     const ready = db.prepare("SELECT max(id) AS id FROM overlord_readiness WHERE word = 'ready'").get() as { id: number | null };
     if (ready.id !== null) keep.push(ready.id);
     const r = db.prepare(`DELETE FROM overlord_readiness WHERE at < ? AND id NOT IN (${keep.map(() => '?').join(', ')})`).run(beforeMs, ...keep);

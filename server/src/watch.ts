@@ -6509,11 +6509,11 @@ export class FleetWatcher {
     await this.runLane('invariants', () => { monitor.pass(this.itemReach); });
   }
 
-  /** The Overlord's readiness word (§6.4, C23, H20; `coord/overlordReadinessLane.ts`): one pass on this tick, with the watcher's
-   *  item reach. Absent (a test, a script): no pass runs and nothing is written. */
+  /** The Overlord's readiness word (§6.4, C23, H20; `coord/overlordReadinessLane.ts`): one pass on this tick.
+   *  Absent (a test, a script): no pass runs and nothing is written. */
   sweepOverlordReadiness(tick: ReadinessTick): Promise<unknown> | null {
     const lane = this.deps.overlordReadiness;
-    return lane ? this.runLane('overlordReadiness', () => lane.pass(tick, this.itemReach)) : null;
+    return lane ? this.runLane('overlordReadiness', () => lane.pass(tick)) : null;
   }
 
   /** The weekly replay quiz lane (Overlord §3.3.9 C52, W1a; `continuity/quizLane.ts`): one read-and-raise pass on the wall clock. */

@@ -89,7 +89,7 @@ export function readinessLaneOver(i: ReadinessWiringInputs): ReadinessLane {
     mailDisabled: (names) => readSwitches(names)[MAIL_DISABLED_MARKER],
     identityOf: (sessionId, d) => {
       const fact = designationFactFrom(d);
-      if (fact === 'unmeasured') throw new Error('designation unreadable');   // the lane's catch answers the session's own id
+      if (fact === 'unmeasured') throw new Error('designation unreadable');   // the lane reads the generation and restarts unmeasured
       return identityOf(sessionId, fact);
     },
     liveGeneration: (identity) => coord.liveGenerationOfIdentity(identity),
