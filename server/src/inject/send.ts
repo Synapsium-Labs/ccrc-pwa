@@ -1021,6 +1021,10 @@ const isStrandedClear = (ansiPane: string): boolean =>
 const STASH_POLL_MS = 150;
 export const STASH_TRIES = 12;
 
+/** Claude Code's prompt stash key: one press stashes the box's draft, and a second press pops it back (D-5911). The one
+ *  spelling, read by `stashDraft` and `popHeldStash`, and by the box frames recipe's `stash` step. */
+export const STASH_KEY = 'C-s';
+
 /**
  * D-5911. Does the pane show Claude Code's HELD-STASH INDICATOR? Measured (plan Task P1b Step 0, 2.1.303,
  * `fixtures/panes/box/stash-*.ansi`): while a stash is held, the notification row reads ` › stashed ·`, on an empty
@@ -1083,7 +1087,7 @@ async function stashDraft(
   // budget) is handed to `giveBackStash`. No stash was held a line above, so one held afterwards is this draft.
   carry.held = { text, turnWasRunning };
   // Step 3.
-  await d.tmux.sendKey(id, 'C-s');
+  await d.tmux.sendKey(id, STASH_KEY);
   // Step 4. `stash()` either ran whole or did not run, so a box that never reads empty still holds the draft.
   for (let i = 0; i < STASH_TRIES; i++) {
     await sleep(STASH_POLL_MS);
@@ -1195,7 +1199,7 @@ async function popHeldStash(
   if (fresh !== null && boxHolds(fresh, stash.text)) return 'restored';
   if (fresh === null || !boxEmptyAndFree(fresh)) return 'the box was not empty to pop it into';
   if (!stashHeld(fresh)) return 'no stash is held to pop'; // D-6009
-  await d.tmux.sendKey(id, 'C-s');
+  await d.tmux.sendKey(id, STASH_KEY);
   return await stashRestored(d, id, sleep, stash) ? 'restored' : 'one pop did not bring it back';
 }
 
@@ -1270,6 +1274,19 @@ async function giveBackStash(
  *    The lanes take this one (plan Task P1c).
  */
 export type OnDraft = 'refuse' | 'replace' | 'stash';
+
+/** THE SEND'S LINE LOOP (D-5046), the one copy: each composed line as one checked literal, `M-Enter` between lines (the
+ *  newline inside Claude Code's input box), stopping at the first line tmux refused, with what was typed so far left in
+ *  the box. `false`: a line was refused. `sendPrompt` types every message through it, and the box frames recipe's driver
+ *  (`deliveryDrive.ts`) types its drafts through it, so the recipe draws the box from the send's own keys and no second
+ *  copy of them exists. It presses no Enter. */
+export async function typeComposedLines(tmux: Tmux, id: string, parts: readonly string[]): Promise<boolean> {
+  for (let i = 0; i < parts.length; i++) {
+    if (i > 0) await tmux.sendKey(id, 'M-Enter');
+    if (!(await tmux.sendLiteral(id, parts[i]!))) return false;
+  }
+  return true;
+}
 
 /**
  * Inject a prompt into the session's Claude Code input box, serialized per
@@ -1570,10 +1587,7 @@ export function sendPrompt(
     // make tmux refuse a literal is the session or the link failing (inferred,
     // not measured), and a clear would meet the same failure.
     if (carry.held !== null) carry.typed = parts;   // D-6010: from here on the box holds our text over the stash
-    for (let i = 0; i < parts.length; i++) {
-      if (i > 0) await d.tmux.sendKey(id, 'M-Enter');
-      if (!(await d.tmux.sendLiteral(id, parts[i]!))) return { ok: false, error: 'type-failed' };
-    }
+    if (!(await typeComposedLines(d.tmux, id, parts))) return { ok: false, error: 'type-failed' };
 
     // Wait for the box to echo what we typed. This POLLS rather than taking one
     // capture 200ms in: the single shot raced the TUI's re-render, and losing

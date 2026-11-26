@@ -4,7 +4,7 @@
 // message is typed with, up to its first Enter: each line as one literal, `M-Enter` between lines.
 import { describe, expect, it } from 'vitest';
 import { KeyedQueue } from '../src/inject/queue.js';
-import { sendPrompt } from '../src/inject/send.js';
+import { STASH_KEY, sendPrompt, typeComposedLines } from '../src/inject/send.js';
 import { Tmux, type Runner } from '../src/exec.js';
 
 const RULE = '─'.repeat(40);
@@ -45,5 +45,22 @@ describe('the send\'s line loop (characterization)', () => {
     const { tmux, calls } = fake([EMPTY, [RULE, '❯ only line', RULE].join('\n') + '\n']);
     await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: async () => {} }, 'cc-x', 'only line', { onDraft: 'refuse', attachments: [] });
     expect(typingKeys(calls)).toEqual(['lit:only line']);
+  });
+});
+
+describe('typeComposedLines: the loop, exported once (the box frames recipe types its drafts through it)', () => {
+  it('types each line, M-Enter between, and presses no Enter', async () => {
+    const { tmux, calls } = fake([EMPTY]);
+    expect(await typeComposedLines(tmux, 'cc-x', ['a', 'b'])).toBe(true);
+    expect(calls.filter((c) => c[1] === 'send-keys').map((c) => c[c.length - 1])).toEqual(['a', 'M-Enter', 'b']);
+  });
+  it('stops at the first line tmux refused, and answers false', async () => {
+    const calls: string[][] = [];
+    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { ran: true, code: args.includes('b') ? 1 : 0, stdout: '', stderr: '' }; };
+    expect(await typeComposedLines(new Tmux(run), 'cc-x', ['a', 'b', 'c'])).toBe(false);
+    expect(calls.filter((c) => c[1] === 'send-keys').map((c) => c[c.length - 1])).toEqual(['a', 'M-Enter', 'b']);
+  });
+  it('the stash key is the one spelling', () => {
+    expect(STASH_KEY).toBe('C-s');
   });
 });
