@@ -1,6 +1,6 @@
 // The capacity line on the Overlord's place (Overlord W1 home B, Task 6; plan question 6, slug `runway-read-is-serviceabilitys`).
 // L4 (context C5): it reads `GET /api/pools/runway` once on mount, keeps it as a `ReadState` through `nextReadState`, and draws
-// what `capacityView` (L1) answers. It decides nothing: a read that is absent (404) or still loading draws NOTHING, a failure
+// what `capacityView` (L1) answers; whether a 2xx body is an answer is `runwayOutcomeOf`'s (L1). It decides nothing: a read that is absent (404) or still loading draws NOTHING, a failure
 // draws "Capacity unmeasured", and every sentence is `runwayWords.ts`'s.
 //
 // CLASS NAMES for the place's one stylesheet: `ov-capacity` (the section), `ov-capacity-title`, `ov-capacity-note` (the stale
@@ -10,7 +10,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { api, ApiError, ApiTimeout } from '../lib/api';
 import { nextReadState, type ReadOutcome } from './readOutcome';
 import type { ReadState } from './readState';
-import { CAPACITY_WORDS, capacityView } from './runwayWords';
+import { CAPACITY_WORDS, capacityView, runwayOutcomeOf } from './runwayWords';
 import type { PoolRunwayWire } from '../../../shared/loadLines';
 
 /** A failure's words, as the line prints them. */
@@ -24,8 +24,7 @@ async function readRunway(): Promise<ReadOutcome<PoolRunwayWire>> {
   try {
     const body = await api.poolRunway();
     if ('absent' in body) return { kind: 'absent' };
-    // A 2xx body without its list is not an answer: a failure the line prints, never an empty list.
-    return Array.isArray(body.pools) && typeof body.nowS === 'number' ? { kind: 'value', value: body } : { kind: 'failed', error: 'unreadable answer' };
+    return runwayOutcomeOf(body);   // L1 decides whether the body is an answer
   } catch (err) {
     return { kind: 'failed', error: failureWords(err) };
   }

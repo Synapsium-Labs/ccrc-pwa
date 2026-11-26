@@ -7,7 +7,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import type { EarliestReset, PoolRunwayAnswer, PoolRunwayWire } from '../../shared/loadLines';
 import { api, ApiError } from '../src/lib/api';
 import { CapacityLine } from '../src/overlord/CapacityLine';
-import { CAPACITY_WORDS, CROSSING_WHY, capacityView, resetText, runwayText, spanWords } from '../src/overlord/runwayWords';
+import { CAPACITY_WORDS, CROSSING_WHY, capacityView, resetText, runwayOutcomeOf, runwayText, spanWords } from '../src/overlord/runwayWords';
 
 const NOW_S = 1_800_000_000;
 const MIN = 60;
@@ -38,6 +38,26 @@ describe('runwayWords: every arm has its own sentence', () => {
     expect(runwayText({ kind: 'at', atS: NOW_S }, NOW_S)).toBe(`runway: ${CAPACITY_WORDS.outNow}`);
     expect(runwayText({ kind: 'not-before-reset', resetS: NOW_S + 5 * HOUR }, NOW_S)).toBe('runway: not out before its reset, in about 5 h');
     expect(runwayText({ kind: 'unmeasured', why: 'thin' }, NOW_S)).toBe(`runway: unmeasured (${CROSSING_WHY.thin})`);
+  });
+  it('a reason or a kind this build does not know is drawn raw, never "undefined" and never nothing', () => {
+    // A newer server's word: cast, because the types do not allow it.
+    expect(runwayText({ kind: 'unmeasured', why: 'future-reason' } as never, NOW_S)).toBe('runway: unmeasured (future-reason)');
+    expect(resetText({ kind: 'unmeasured', why: 'future-reason' } as never, NOW_S)).toBe('earliest reset: unmeasured (future-reason)');
+    expect(runwayText({ kind: 'future-kind' } as never, NOW_S)).toBe('runway: future-kind');
+    expect(resetText({ kind: 'future-kind' } as never, NOW_S)).toBe('reset: future-kind');
+    // A word that is a property of every object is not a known reason.
+    expect(runwayText({ kind: 'unmeasured', why: 'toString' } as never, NOW_S)).toBe('runway: unmeasured (toString)');
+    for (const said of [runwayText({ kind: 'nothing' } as never, NOW_S), resetText({ kind: 'nothing' } as never, NOW_S)]) {
+      expect(said).not.toMatch(/undefined/);
+      expect(said).not.toBe('');
+    }
+  });
+  it('a 2xx body without its list or its clock is not an answer, and a whole one is a value', () => {
+    expect(runwayOutcomeOf({ ok: true } as unknown as PoolRunwayWire)).toEqual({ kind: 'failed', error: CAPACITY_WORDS.unreadable });
+    expect(runwayOutcomeOf({ ok: true, nowS: 'soon', pools: [] } as unknown as PoolRunwayWire)).toEqual({ kind: 'failed', error: CAPACITY_WORDS.unreadable });
+    expect(runwayOutcomeOf({ ok: true, nowS: NOW_S, pools: {} } as unknown as PoolRunwayWire)).toEqual({ kind: 'failed', error: CAPACITY_WORDS.unreadable });
+    const whole = wire([{ pool: 'pool-a', runway: answer() }]);
+    expect(runwayOutcomeOf(whole)).toEqual({ kind: 'value', value: whole });
   });
   it('a span is never negative, and a weekly span is in days', () => {
     expect(spanWords(-5000)).toBe('0 min');

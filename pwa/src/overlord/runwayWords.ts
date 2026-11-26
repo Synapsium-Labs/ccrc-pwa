@@ -9,10 +9,12 @@
 // untagged accounts; every other pool name is the read's own, never a list in this source.
 import type { CrossingUnmeasured, PoolRunwayAnswer, PoolRunwayWire } from '../../../shared/loadLines';
 import { stallDurationText } from '../../../shared/stall-watch';
+import type { ReadOutcome } from './readOutcome';
 import type { ReadState } from './readState';
 
 export const CAPACITY_WORDS = {
   title: 'Capacity',
+  unreadable: 'unreadable answer',
   untagged: 'untagged accounts',
   noPools: 'no pools to read',
   unmeasured: 'Capacity unmeasured',
@@ -39,22 +41,36 @@ export function spanWords(ms: number): string {
 
 const inWords = (atS: number, nowS: number): string => spanWords((atS - nowS) * 1000);
 
-/** The `out` crossing as a sentence. */
+/** An unmeasured crossing's reason in words. A reason this build does not know (a newer server's) is drawn raw, as the word it
+ *  came with: never "undefined". `Object.hasOwn`, so a word every object has (`toString`) is not a reason either. */
+const whyWords = (why: string): string => (Object.hasOwn(CROSSING_WHY, why) ? (CROSSING_WHY as Record<string, string>)[why]! : String(why));
+
+/** The `out` crossing as a sentence. A kind this build does not know (a newer server's) is drawn raw, never as nothing. */
 export function runwayText(out: PoolRunwayAnswer['out'], nowS: number): string {
   switch (out.kind) {
     case 'at': return out.atS <= nowS ? `runway: ${CAPACITY_WORDS.outNow}` : `runway: runs out in about ${inWords(out.atS, nowS)}`;
     case 'not-before-reset': return `runway: not out before its reset, in about ${inWords(out.resetS, nowS)}`;
-    case 'unmeasured': return `runway: unmeasured (${CROSSING_WHY[out.why]})`;
+    case 'unmeasured': return `runway: unmeasured (${whyWords(out.why)})`;
+    default: return `runway: ${String((out as { kind?: unknown }).kind)}`;
   }
 }
 
-/** The earliest reset as a sentence. */
+/** The earliest reset as a sentence. A kind this build does not know is drawn raw, never as nothing. */
 export function resetText(reset: PoolRunwayAnswer['earliestReset'], nowS: number): string {
   switch (reset.kind) {
     case 'none-exhausted': return `reset: ${CAPACITY_WORDS.noneExhausted}`;
     case 'at': return reset.atS <= nowS ? `reset: ${CAPACITY_WORDS.resetDue}` : `earliest reset in about ${inWords(reset.atS, nowS)}`;
-    case 'unmeasured': return `earliest reset: unmeasured (${CROSSING_WHY[reset.why]})`;
+    case 'unmeasured': return `earliest reset: unmeasured (${whyWords(reset.why)})`;
+    default: return `reset: ${String((reset as { kind?: unknown }).kind)}`;
   }
+}
+
+/** What one runway call's 2xx body is: a value when it carries its clock and its list, else a failure the line prints (never an
+ *  empty list). The capacity line's answer-shape guard, decided here so the component only acts on it. */
+export function runwayOutcomeOf(body: PoolRunwayWire): ReadOutcome<PoolRunwayWire> {
+  return Array.isArray(body.pools) && typeof body.nowS === 'number'
+    ? { kind: 'value', value: body }
+    : { kind: 'failed', error: CAPACITY_WORDS.unreadable };
 }
 
 export interface PoolLine {
