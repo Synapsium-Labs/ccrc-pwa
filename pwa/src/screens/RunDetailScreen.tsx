@@ -145,7 +145,7 @@ function Header({ run, worker, nowMs, quietMs }: {
   const degraded = worker === null ? [] : unmeasuredFields(worker);
   const graphReads = worker === null ? null : graphReadCount(worker);
   const waitLine = runWaitLine(run, nowMs);
-  const seen = workerSeenNote(run, nowMs, quietMs);
+  const seen = workerSeenNote(run, nowMs, quietMs, worker);
   const commits = branchCommitsNote(run, worker);
   return (
     <header className="rd-head">

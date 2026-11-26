@@ -6301,6 +6301,17 @@ one for 10 minutes; the standing outages are kept in
 and has no marker of its own: `stall-watch-disabled`, a level of Off or Log only
 chosen in Settings, and `mail-disabled` each stop it.
 
+While a session owes a retry the console says so (`FleetSession.providerRetry`,
+optional; computed by the same pass, off the ladder's own schedule, and left out
+of a row whose turn runs now): `Provider overloaded, retrying 14:52` or `Provider
+error, retrying 14:52` by the token, in the viewer's own time, `retrying now` past
+the due time, and `retry waiting`, with no time, while a question, a dialog, a
+usage limit or a nudge the mail lane has not typed (unsent text in the box) holds
+it. The words (`pwa/src/fleet/providerRetryWords.ts`) take the place of the row's
+and the session header's status word, of the `stalled` marker, and of `turn
+failed` and `quiet` on a run; a row that waits on you keeps its word, and its
+header says both.
+
 The `orphaned:` and `failed:` mails are class `self-wake`: recorded, never
 pushed, and they move neither the quiet clock nor the episode. With a current
 marker, r2 no longer waits a flat hour. It follows at the first of:

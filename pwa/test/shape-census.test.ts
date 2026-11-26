@@ -306,11 +306,6 @@ const REGISTERED: Record<string, string> = {
     + 'the ground and three declarations are left, under this census\'s own '
     + 'floor. The shape moves, the ground stays — so here the shape is the '
     + 'ground, and it stays.',
-  'chat.css .tool-activity-row + ui/mail-card.css .mail-card .mail-card-head':
-    'GROUND, NOT CHROME. One disclosure row in two packages (desktop polish wave 176): the tool-activity '
-    + 'row is the transcript\'s own chrome in chat.css, and the mail card\'s head is the card\'s one control, '
-    + 'scoped to its self-grounded host (`.mail-card`), which is how the contrast gate measures it. One '
-    + 'shared rule would have no host in the design system, and the app sheet cannot reach into the card.',
   'ui/mail-card.css .mail-card .mail-card-kind + ui/mail-strip.css .mail-strip .mail-strip-kind':
     'GROUND, NOT CHROME. One label on two surfaces — the mail kind word, on the card and on the '
     + 'strip row. It is the EYEBROW at `--weight-regular` rather than medium, '
