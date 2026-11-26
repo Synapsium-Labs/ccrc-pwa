@@ -255,10 +255,12 @@ describe('cmd_swap under the provider arm', () => {
     expect(h.sh(`_provfail_owed ${ID} ${T0 + 60} && echo yes || echo no`)).toBe('no');
   });
 
-  it('no dispatch names the arm yet, and every other one still reaches its own gate', () => {
-    const src = ccdSource();
+  it('one function dispatches the arm, and `cmd_swap` sends it to its own gate', () => {
+    const src = ccdSource().split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
     expect(src).toMatch(/provider\) +_swap_provider_act_gate "\$id" "\$target" \|\| return 0 ;;/);
-    expect(src).not.toMatch(/_dispatch_swap [^\n]* provider /);
+    expect(src.match(/_dispatch_swap [^\n]* provider /g)).toHaveLength(1);
+    const at = src.indexOf('\n_watchdog_provider() {');
+    expect(src.slice(at, src.indexOf('\n}\n', at))).toMatch(/_dispatch_swap [^\n]* provider /);
   });
 
   it('the dispatch carries the failure it was decided for', () => {
@@ -289,5 +291,196 @@ describe('_rescue_target keeps a skip list its caller set', () => {
     expect(go('claude-a'), 'spread passes over claude-b, the caller\'s list over claude-a').toBe('claude-d');
     fs.writeFileSync(regFile('swap.log'), `${stamp} auto-rescue other: x (blocked) -> claude-b [home=claude]\n${stamp} auto-rescue other: x (blocked) -> claude-d [home=claude]\n`);
     expect(go('claude-a'), 'the pass after it').toBe('claude-b');
+  });
+});
+
+// ── the decision: the watchdog's pass ───────────────────────────────────────
+
+describe('the pass moves a session on its third provider failure', () => {
+  const limits = (w: string, five: number, seven = five): void => fs.writeFileSync(path.join(h.home, '.cc-limits', `${w}.json`), JSON.stringify({ five, seven, ts: T0 }));
+  /** Every Anthropic lane of the fixture roster with room; `gpt`, its Codex lane, off unless a test lets it in. */
+  const fleet = (): void => { limits('claude', 20); limits('claude-a', 10); limits('claude-b', 30); limits('claude-d', 40); };
+  const codex = (window: string, score = 5): void => {
+    limits('gpt', score);
+    fs.writeFileSync(path.join(h.home, '.local', 'bin', 'gpt'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    const d = h.sh('_cfg_dir_to d gpt; echo "$d"');
+    fs.mkdirSync(d, { recursive: true });
+    fs.writeFileSync(path.join(d, 'settings.json'), JSON.stringify({ env: { CLAUDE_CODE_MAX_CONTEXT_TOKENS: window } }));
+  };
+  const context = (tokens: number | null, id = ID): void => {
+    fs.mkdirSync(regFile('usage'), { recursive: true });
+    fs.writeFileSync(regFile(`usage/${id}.json`), `{"ts":${T0 - 60},"uuid":"${uuidOf(id)}","account":"claude","ctxTokens":${tokens},"ctxWindow":1000000,"cost":1}\n`);
+  };
+  const pass = (o: { pane?: string; now?: number; extra?: string; env?: Record<string, string> } = {}): string =>
+    h.sh(`${STUBS(o.pane ?? FAILED_PANE)} _dispatch_swap() { echo "dispatch $*" >> "$HOME/ccd-calls"; }; ${o.extra ?? ''} cmd_limit_watchdog`, { ...ENV(o.now ?? T0), ...o.env });
+  const dispatches = (): string[] => h.calls().filter((l) => l.startsWith('dispatch '));
+  const to = (): string[] => dispatches().map((d) => d.split(' ').slice(1, 4).join(' '));
+  /** A session on `lane` whose last turn ended well there this many seconds before `T0`. */
+  const goodOn = (lane: string, ago: number, id: string): void =>
+    { for (const [f, v] of [['uuid', uuidOf(id)], ['wrapper', lane]] as const) put(id, f, v); marker({ state: 'done', event: 'Stop', err: null, turnAt: T0 - ago - 5, stopAt: T0 - ago }, id); };
+
+  it('the third failure, owed: it goes to the least loaded lane, recorded as a rescue is, with the failure it was decided for', () => {
+    seed(); fleet(); put(ID, 'lastswap', String(T0 - 5000));
+    pass();
+    expect(dispatches()).toEqual([`dispatch ${ID} claude-a provider ${T0 - 5000} ${T0}      ${(T0 - MIN) * 1000}`]);
+    expect(lines('provider-rescue')).toEqual([expect.stringMatching(new RegExp(` provider-rescue ${ID}: claude -> claude-a \\[home=claude\\] fails=3$`))]);
+    expect(field(ID, 'lastswap')).toBe(String(T0));
+    expect(field(ID, 'stranded')).toBeNull(); expect(field(ID, 'limitwait')).toBeNull(); expect(field(ID, 'provwait')).toBeNull();
+    expect(h.calls().some((l) => /kill-session/.test(l))).toBe(false);
+  });
+
+  it.each<[string, Mark]>([
+    ['two failures', failing(5 * MIN, MIN)], ['a turn is running', { ...THREE, state: 'working', turnAt: T0 - 5 }],
+    ['`unknown`', { ...THREE, err: 'unknown' }], ['`max_output_tokens`', { ...THREE, err: 'max_output_tokens' }],
+  ])('%s: it stays, and nothing is written', (_why, m) => {
+    seed(m); fleet(); pass(); expect(dispatches()).toEqual([]); expect(field(ID, 'provwait')).toBeNull(); expect(field(ID, 'lastswap')).toBeNull();
+  });
+
+  it('a session that moved is not moved again by the same failures, and its new lane needs three of its own', () => {
+    seed(); fleet(); pass(); pass({ now: T0 + 1200 });
+    expect(dispatches()).toHaveLength(1);
+  });
+
+  describe('the target', () => {
+    it('a lane with a good Stop since the first failure comes before a less loaded one', () => {
+      seed(); fleet(); goodOn('claude-d', 2 * MIN, 'x-d'); pass(); expect(to()).toEqual([`${ID} claude-d provider`]);
+    });
+    it('a good Stop from before the first failure proves nothing', () => {
+      seed(); fleet(); goodOn('claude-d', 7 * MIN, 'x-d'); pass(); expect(to()).toEqual([`${ID} claude-a provider`]);
+    });
+    it('then another provider, when the session fits there, before an unproved lane of its own', () => {
+      seed(); fleet(); codex('272000', 60); context(100_000); pass(); expect(to()).toEqual([`${ID} gpt provider`]);
+    });
+    it('a session too large for it, or of unmeasured size, takes the unproved lane instead', () => {
+      seed(); fleet(); codex('272000'); context(400_000); pass(); expect(to()).toEqual([`${ID} claude-a provider`]);
+    });
+    it('a proved lane it does not fit is passed over too', () => {
+      seed(); fleet(); codex('272000'); context(400_000); goodOn('gpt', MIN, 'x-g'); pass(); expect(to()).toEqual([`${ID} claude-a provider`]);
+    });
+    it('never a marked lane, and none of a provider with two marked lanes', () => {
+      seed(); fleet(); mark('claude-a'); pass(); expect(to()).toEqual([]);
+      // `claude` is marked by this very pass, so two Anthropic lanes are: the whole provider is failing.
+      expect(field(ID, 'provwait')).toBe(String(T0));
+      codex('272000'); context(100_000); pass({ now: T0 + MIN }); expect(to()).toEqual([`${ID} gpt provider`]);
+    });
+    it('the home it would return to is judged like any other lane', () => {
+      seed(THREE, ID, 'claude-b', 'claude'); fleet(); mark('claude'); goodOn('claude-d', MIN, 'x-d');
+      marker(THREE); pass(); expect(to()).toEqual([]);
+      fs.rmSync(regFile('claude-provfail')); fs.rmSync(regFile(`${ID}.provwait`)); pass(); expect(to()).toEqual([`${ID} claude-d provider`]);
+    });
+    it('a home outside its pool list is still judged by its tier, so the home arm cannot take it out of order', () => {
+      seed(THREE, ID, 'claude', 'claude-d'); fleet(); put(ID, 'pool', 'claude claude-b'); goodOn('claude-b', MIN, 'x-b');
+      pass(); expect(to()).toEqual([`${ID} claude-b provider`]);
+    });
+    it('existing gates: switched off, at its ceiling, unmeasured', () => {
+      seed(); fleet(); fs.writeFileSync(regFile('claude-a-disabled'), ''); pass(); expect(to()).toEqual([`${ID} claude-b provider`]);
+    });
+    it('at its ceiling', () => { seed(); fleet(); limits('claude-a', 99); pass(); expect(to()).toEqual([`${ID} claude-b provider`]); });
+    it('never onto a lane whose room nobody measured', () => {
+      seed(); limits('claude', 20); pass(); expect(to()).toEqual([]); expect(field(ID, 'provwait')).toBe(String(T0));
+    });
+    it('the pool: a set or a tag the lane is outside of', () => {
+      seed(); fleet(); pass({ extra: '_pool_ok() { [[ "$1" == claude || "$1" == claude-b ]]; };' }); expect(to()).toEqual([`${ID} claude-b provider`]);
+    });
+    it('the class gate, as today: no lane that cannot serve it, and never one rung down', () => {
+      seed(); fleet(); put(ID, 'class', 'opus');
+      pass({ extra: '_serviceable() { [[ "$1" == claude-d ]]; };' }); expect(to()).toEqual([`${ID} claude-d provider`]);
+      put(ID, 'lastswap', '0'); pass({ extra: '_serviceable() { [[ "$2" == sonnet ]]; };', now: T0 + 1 });
+      expect(dispatches()).toHaveLength(1); expect(field(ID, 'degraded')).toBeNull(); expect(field(ID, 'provwait')).toBe(String(T0 + 1));
+    });
+    it('do not bounce: not a lane this session left inside the hour; and spread: one no other session was just sent to first', () => {
+      seed(); fleet(); goodOn('claude-a', MIN, 'x-a'); goodOn('claude-b', MIN, 'x-b'); goodOn('claude-d', MIN, 'x-d');
+      const at = h.sh(`command date -r ${T0 - 1200} '+%F %T' 2>/dev/null || command date -d @${T0 - 1200} '+%F %T'`), near = h.sh(`command date -r ${T0 - 60} '+%F %T' 2>/dev/null || command date -d @${T0 - 60} '+%F %T'`);
+      fs.writeFileSync(regFile('swap.log'), `${at} provider-rescue ${ID}: claude-a -> claude [home=claude] fails=3\n${at} swap ${ID}: claude-a -> claude (uuid u)\n${near} provider-rescue other: x -> claude-b [home=x] fails=3\n`);
+      pass(); expect(to()).toEqual([`${ID} claude-d provider`]);
+    });
+    it('nobody can say (the pool side cannot be read): no move, and no claim that there is no lane', () => {
+      seed(); fleet(); pass({ extra: '_rescue_target() { return 4; };' }); expect(to()).toEqual([]); expect(field(ID, 'provwait')).toBeNull();
+    });
+  });
+
+  describe('what it waits for', () => {
+    it.each([['a draft', DRAFT_PANE], ['a dialog', DIALOG_PANE], ['a running turn', BUSY_PANE]])('%s: nothing is written, not even a wait', (_w, pane) => {
+      seed(); fleet(); pass({ pane }); expect(dispatches()).toEqual([]); expect(field(ID, 'provwait')).toBeNull(); expect(field(ID, 'lastswap')).toBeNull();
+    });
+    it('background work', () => { seed({ ...THREE, bg: 1 }); fleet(); pass(); expect(dispatches()).toEqual([]); });
+    it('the cooldown since its last move', () => {
+      seed(failing(5 * MIN, 3 * MIN, MIN)); fleet(); put(ID, 'lastswap', String(T0 - 899)); pass(); expect(dispatches()).toEqual([]);
+      put(ID, 'lastswap', String(T0 - 900)); pass(); expect(dispatches()).toHaveLength(1);
+    });
+    it('a swap the box just refused', () => {
+      seed(); fleet(); put(ID, 'swapblocked', `${T0 - 1799} claude-a why`); pass(); expect(dispatches()).toEqual([]);
+      put(ID, 'swapblocked', `${T0 - 1800} claude-a why`); pass(); expect(dispatches()).toHaveLength(1);
+    });
+    it.each(['stopped', 'hibernated'])('a row that is %s', (f) => { seed(); fleet(); put(ID, f, '1'); pass(); expect(dispatches()).toEqual([]); });
+    it('a probe that does not say live', () => {
+      seed(); fleet(); pass({ extra: '_session_probe() { PROBE_VERDICT=unknown; PROBE_SUBSTRATE=present; };' }); expect(dispatches()).toEqual([]);
+    });
+    it('a limit sign: that is the limit rescue\'s session, not this one\'s', () => {
+      seed(); fleet(); pass({ pane: `  ⎿  You've hit your session limit · resets 9:10pm (UTC)\n${box()}` }); expect(dispatches()).toEqual([]); expect(field(ID, 'limitsign')).toBe(`${T0} banner`);
+    });
+    it('`CCRC_LIMIT_WATCHDOG_MIN=0` stops it', () => { seed(); fleet(); pass({ env: { CCRC_LIMIT_WATCHDOG_MIN: '0' } }); expect(dispatches()).toEqual([]); expect(field(ID, 'provwait')).toBeNull(); });
+    it('a programme hold and a manual pin do not hold it: a limit rescue passes both', () => {
+      seed(); fleet(); put(ID, 'hold', 'program:p wave:1'); put(ID, 'swappin', 'claude'); pass(); expect(dispatches()).toHaveLength(1);
+    });
+  });
+
+  it('three moves leave one pass, forced limit rescues counted with them; the rest go in the next', () => {
+    fleet();
+    for (const n of ['a', 'b', 'c', 'd']) seed(THREE, `lane-a-project-${n}`);
+    pass(); expect(dispatches()).toHaveLength(3);
+    pass({ now: T0 + 1 }); expect(to().sort().map((t) => t.split(' ')[0])).toEqual(['a', 'b', 'c', 'd'].map((n) => `lane-a-project-${n}`));
+  });
+
+  it('a pass whose cap a limit rescue has used moves none', () => {
+    seed(); fleet(); pass({ extra: 'WATCHDOG_PER_PASS=0;' }); expect(dispatches()).toEqual([]);
+  });
+
+  it('a dispatch that did not start puts `lastswap` back, so the failures still count and the next pass tries again', () => {
+    seed(); fleet(); put(ID, 'lastswap', String(T0 - 5000));
+    h.sh(`${STUBS(FAILED_PANE)} _svc_run_detached() { return 1; }; cmd_limit_watchdog`, ENV());
+    expect(lines('dispatch')).toEqual(expect.arrayContaining([expect.stringContaining(`dispatch FAILED for ${ID} -> claude-a`)]));
+    expect(field(ID, 'lastswap')).toBe(String(T0 - 5000));
+    expect(fs.existsSync(regFile(`${ID}.dispatching`))).toBe(false);
+    pass({ now: T0 + MIN }); expect(dispatches()).toHaveLength(1);
+  });
+
+  it('a dispatch already pending for the session is left alone', () => {
+    seed(); fleet(); put(ID, 'dispatching', String(T0 - 5));
+    h.sh(`${STUBS(FAILED_PANE)} _svc_run_detached() { echo "detached" >> "$HOME/ccd-calls"; return 0; }; cmd_limit_watchdog`, ENV());
+    expect(h.calls()).not.toContain('detached'); expect(field(ID, 'lastswap')).toBeNull(); expect(lines('dispatch-dup')).toHaveLength(1);
+  });
+
+  describe('no lane: `.provwait`', () => {
+    const none = (): void => { seed(); limits('claude', 20); };
+    it('an epoch, written once and said once; never a strand and never a notice', () => {
+      none(); fs.writeFileSync(regFile('notify.sh'), '#!/bin/sh\necho "$1" >> "$HOME/notify-log"\n', { mode: 0o755 });
+      pass(); pass({ now: T0 + MIN }); pass({ now: T0 + 2 * MIN });
+      expect(field(ID, 'provwait')).toBe(String(T0)); expect(lines('provider-wait')).toHaveLength(1);
+      expect(field(ID, 'stranded')).toBeNull(); expect(field(ID, 'limitwait')).toBeNull(); expect(field(ID, 'lastswap')).toBeNull();
+      expect(fs.existsSync(path.join(h.home, 'notify-log'))).toBe(false);
+    });
+    it('a malformed one is no record: it is written again', () => { none(); put(ID, 'provwait', 'soon'); pass(); expect(field(ID, 'provwait')).toBe(String(T0)); });
+    it('a good Stop ends it', () => {
+      none(); pass(); marker({ state: 'done', event: 'Stop', err: null, failAts: [], stopAt: T0 + 30, turnAt: T0 + 10 }); pass({ now: T0 + MIN }); expect(field(ID, 'provwait')).toBeNull();
+    });
+    it('a move ends it, whoever made it: the failures were the old lane\'s', () => {
+      none(); pass(); put(ID, 'wrapper', 'claude-a'); put(ID, 'lastswap', String(T0 + 30)); pass({ now: T0 + MIN }); expect(field(ID, 'provwait')).toBeNull();
+    });
+    it('a running turn, and a marker that cannot be read, do not', () => {
+      none(); pass(); marker({ ...THREE, state: 'working', turnAt: T0 + 10 }); pass({ now: T0 + MIN }); expect(field(ID, 'provwait')).toBe(String(T0));
+      fs.rmSync(regFile(`${ID}.turn.json`)); pass({ now: T0 + 2 * MIN }); expect(field(ID, 'provwait')).toBe(String(T0));
+    });
+    it('a row that sleeps or is stopped waits for nothing', () => { none(); pass(); put(ID, 'stopped', ''); pass({ now: T0 + MIN }); expect(field(ID, 'provwait')).toBeNull(); });
+    it('it goes with the row', () => { none(); pass(); h.sh(`_reg_purge ${ID}`); expect(field(ID, 'provwait')).toBeNull(); });
+    it('one writer: the pass', () => {
+      const src = ccdSource().split('\n').filter((l) => !/^\s*#/.test(l));
+      expect(src.filter((l) => /_reg_set [^;]*provwait/.test(l))).toHaveLength(1);
+    });
+  });
+
+  it('the pass records what the lanes of this fleet read as, for the decisions of the same pass only', () => {
+    seed(); fleet(); goodOn('claude-d', MIN, 'x-d'); mark('gpt');
+    expect(h.sh(`${STUBS(FAILED_PANE)} shopt -s nullglob; _provfail_pass ${T0}; echo "$PROVFAIL_MARKED|$PROVFAIL_GOODS"`, ENV()).split('\n').at(-1)).toBe(`claude gpt| claude-d=${(T0 - MIN) * 1000}`);
   });
 });

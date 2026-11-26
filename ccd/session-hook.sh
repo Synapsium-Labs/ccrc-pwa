@@ -5630,7 +5630,12 @@ fi
 # guards it). Text that only names one is refused too, as the account arm's is. An accident guard, not a wall: `bash -c`
 # with an assembled string, another interpreter or a script file runs past it. The prefilter of both branches reads
 # `quiz` followed by a blank, a stripped tab or newline (`t`, `n`) or a backslash, or `quiz-record`, never `quiz` alone,
-# so a session whose working directory or transcript path names `quiz` forks no jq on every call.
+# so a session whose working directory or transcript path names `quiz` forks no jq on every call. Inside the program the
+# row is gated on its literal (the red of #3418 prompted it): every pattern of `qzmatch` holds `quiz` and `norm` only
+# deletes characters, so `QZANC` (the four letters with any run of `QCH` between them, a superset of what `norm`
+# removes: any `$`, any newline; `PANC`'s form) is asked of the command as written before `norm` is computed. The saving
+# exists only while the anchor fails: a command that holds the four letters in order, or names the quiz, costs what it
+# cost without the gate. `session-hook-gate-equivalence.test.ts` holds the equivalence and the cost.
 # THE PRUNE ROW ON EVERY SESSION (cleanup un-wedge, Task R3; spec 2026-11-04 §5, D9 to D11). A repository-wide
 # `git worktree prune` deletes git's record of every gone worktree of the repository at once, and ccd's cleanup reads
 # those records, so one session's prune holds the cleanup of every lane on the box. `pmatch` answers the category
@@ -5799,6 +5804,7 @@ def QZP: "(?:" + WB + "ccrc-api[" + $q + "\"]?" + SP + "+" + FLAGS + "|" + EXPV 
 def QZR: "quiz-record(?![A-Za-z0-9_.-])";
 def QZH: "ccrc-quiz-record(?![A-Za-z0-9_.-])";
 def QZCMD: "(?:^|[\n;&|(`]|\\$\\()" + SP + "*(?:env(?:" + SP + "+(?:-" + NS + "+(?:" + SP + "+[A-Za-z_][A-Za-z0-9_]*)?|[A-Za-z_][A-Za-z0-9_]*=" + NS + "*))*" + SP + "+)?(?:(?:bash|sh)" + SP + "+" + FLAGS + ")?[" + $q + "\"]?";
+def QZANC: "q" + QCH + "u" + QCH + "i" + QCH + "z";
 def qzmatch:
   (QZV as $v | select(test(QZP + $v + NW)) | "quiz\tccrc-api quiz \($v)"),
   (select(test(QZP + EXP)) | "quiz\tccrc-api quiz with its act in a variable"),
@@ -5947,12 +5953,12 @@ def pathwhy($t):
 (.tool_name | if type == "string" then . else "" end) as $t
 | (.tool_input | if type == "object" then . else {} end) as $i
 | if $mode == "deny" then
-    (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("verb\t") or startswith("surface\t") or startswith("account\t"))) // first(pmatch) // first((., norm) | apmatch) // first((., norm) | qzmatch) // first((., norm) | bmatch) // "" else "" end)
+    (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("verb\t") or startswith("surface\t") or startswith("account\t"))) // first(pmatch) // first((., norm) | apmatch) // first(select(test(QZANC)) | (., norm) | qzmatch) // first((., norm) | bmatch) // "" else "" end)
      elif ($t | edittool) then (first(($i.file_path, $i.notebook_path) | select(type == "string" and test("approval-signing|approval-verify\\.mjs")) | "surface\ta write to the approval surface") // acctpath($t; $i) // first(($i.file_path, $i.notebook_path) | select(type == "string") | pnorm | select(test(BUILDX)) | BW) // first(($i.file_path, $i.notebook_path) | select(type == "string") | pnorm | select(test(TRUST)) | BTR) // "")
      elif $t == "Read" or $t == "Grep" or $t == "Glob" then (first(($i.file_path, $i.path, (if $t == "Glob" then $i.pattern else empty end)) | select(type == "string" and test("approval-signing")) | "surface\ta read of a signing key") // acctpath($t; $i) // "")
      else "" end)
   elif $mode == "account" then
-    (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("account\t"))) // first(pmatch) // first((., norm) | apmatch) // first((., norm) | qzmatch) // "" else "" end)
+    (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("account\t"))) // first(pmatch) // first((., norm) | apmatch) // first(select(test(QZANC)) | (., norm) | qzmatch) // "" else "" end)
      else acctpath($t; $i) // "" end)
   elif $t == "Bash" then ($i.command | if type == "string" then first(fmatch, pmatch) // "" else "" end)
   elif ($t | startswith("mcp__")) and any($i | .. | strings; first(fmatch, pmatch) != null) then "other\tan MCP call naming a forbidden act"

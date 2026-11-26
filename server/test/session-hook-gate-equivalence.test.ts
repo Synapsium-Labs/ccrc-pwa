@@ -1,0 +1,263 @@
+/**
+ * The quiz row's literal gate (programme overlord, wave 240; the red of issue #3418 prompted it). Every pattern of the
+ * session hook's `qzmatch` holds the literal `quiz`, so the row cannot match a string without it, and `norm` only
+ * deletes characters. The forbidden program therefore asks one linear gate before the row's quadratic work: `QZANC`,
+ * asked of the command as written BEFORE `norm` is computed (`q`, `u`, `i`, `z` with any run of `QCH` between them, the
+ * prune row's `PANC` form: a superset of what `norm` removes, since it reads any `$` and any newline).
+ *
+ * What is held here:
+ *  - EQUIVALENCE: the gated program answers exactly what the same program with the gate cut out answers (the row as it
+ *    stood before the gate), in every mode, over every command of `session-hook-quiz-deny.test.ts`'s lists (copied,
+ *    built by the same builders) and spellings where only the normalised form holds the literal, one at least for each
+ *    member of `QCH` placed between two of the letters. The cut must find the gate in both modes, so a respelled or
+ *    removed gate reds the first case rather than comparing the gated program with itself.
+ *  - THE CLAIM, sampled: the ungated row answers nothing once the literal is respelled out of a refused command.
+ *  - COST: on a quote-dense command with no such literal, the gated program costs what the program with the quiz row
+ *    deleted costs, at 32 and 64 KB, measured as the prune-deny suite measures (the CPU of the jq child, the faster of
+ *    interleaved runs, here three rounds). This PR's own measurement put the ungated row at about a third more than the
+ *    program without it on that shape (1.27x at 32 KB, 1.48x at 64 KB), well past this bound.
+ *
+ * What remains: the saving exists only while the anchor fails. A command that holds the four letters in order, or
+ * really names the quiz, costs what it cost without the gate.
+ *
+ * The jq program runs directly (no hook, no HOME): the shell-side prefilter is not under test here.
+ */
+import { describe, it, expect } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import { mkTmp } from './tmpHelpers.js';
+import { spawnSyncGroup } from './spawnGroup.js';
+import { scaled } from './timeScale.js';
+
+const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
+
+/** The hook's jq program, read out of the hook (one single-quoted assignment), never respelled here. */
+const hookProgram = (): string => {
+  const m = /^APPROVAL_FORBIDDEN_JQ='([^']*)'$/m.exec(fs.readFileSync(HOOK, 'utf8'));
+  if (m === null) throw new Error('APPROVAL_FORBIDDEN_JQ is not one single-quoted assignment in the hook');
+  return m[1] as string;
+};
+
+/**
+ * `src` with every match of `cut` (a global pattern) removed; throws unless it matched exactly `count` times, so a gate
+ * that moved, was respelled or was removed, or a row asked from a third place, reds here rather than leaving the
+ * comparison vacuous (gated against gated) or partial.
+ */
+const cutOut = (src: string, cut: RegExp, count: number): string => {
+  const found = (src.match(cut) ?? []).length;
+  if (found !== count) throw new Error(`expected ${count} of ${String(cut)}, found ${found}`);
+  return src.replace(cut, '');
+};
+
+/** The anchor before `norm`, in each of the two modes that ask the row. */
+const ANCHOR = /select\(test\(QZANC\)\) \| (?=\(\., norm\) \| qzmatch\))/g;
+/** The row in each mode that asks it, gated or not. */
+const ROW = / \/\/ first\((?:select\(test\(QZANC\)\) \| )?\(\., norm\) \| qzmatch\)/g;
+const gated = hookProgram();
+/** The row as it stood before the gate: the gate cut out of both modes, nothing else touched. */
+const ungated = (): string => cutOut(gated, ANCHOR, 2);
+/** The program with the quiz row deleted from both modes that ask it: the cost floor. */
+const rowless = (): string => cutOut(gated, ROW, 2);
+
+type Mode = 'deny' | 'account' | 'class';
+const MODES: readonly Mode[] = ['deny', 'account', 'class'];
+
+/** Runs `prog` over a stream of Bash payloads in `mode`: one JSON-encoded answer per command. */
+const answers = (prog: string, mode: Mode, commands: readonly string[]): string[] => {
+  const input = commands.map((command) => JSON.stringify({ tool_name: 'Bash', tool_input: { command } })).join('\n');
+  const r = spawnSync('jq', ['-c', '--arg', 'q', "'", '--arg', 'mode', mode, prog],
+    { input, encoding: 'utf8', maxBuffer: 1 << 26, env: { ...process.env, LC_ALL: 'C' }, timeout: scaled(120_000) });
+  expect(r.status, r.stderr).toBe(0);
+  const lines = r.stdout.replace(/\n$/, '').split('\n');
+  expect(lines, 'one answer per command').toHaveLength(commands.length);
+  return lines.map((l) => JSON.parse(l) as string);
+};
+
+// The lists of session-hook-quiz-deny.test.ts, copied with their builders (a test file's constants are not importable
+// without registering its cases). They are the floor of what the row refuses and lets through.
+const VERBS = ['record', 'confirm', 'status'] as const;
+const PROGRAMS: ReadonlyArray<(v: string) => string> = [
+  (v) => `ccrc-api quiz ${v} --id 12`,
+  (v) => `~/.local/bin/ccrc-api quiz ${v} --id 12`,
+  (v) => `/opt/tools/.local/bin/ccrc-api quiz ${v} --id 12`,
+  (v) => `./ccrc-api quiz ${v}`,
+  (v) => `"ccrc-api" quiz ${v}`,
+  (v) => `'ccrc-api' quiz ${v}`,
+  (v) => `API=x; $API quiz ${v}`,
+  (v) => `\${CLIENT} quiz ${v}`,
+  (v) => `"$API" quiz ${v}`,
+  (v) => `ccrc-api --json quiz --x ${v}`,
+  (v) => `cd work && ccrc-api quiz ${v}`,
+];
+const SHELL_FORMS: readonly string[] = [
+  'ccrc quiz-record --report r.json --sha abc --confirm',
+  'env -u CLAUDECODE -u TMUX_PANE ccrc quiz-record --report r.json --sha abc --confirm',
+  '~/.local/bin/ccrc quiz-record --report r.json',
+  '"ccrc" quiz-record --report r.json',
+  'C=ccrc; $C quiz-record --report r.json',
+  'ccrc-quiz-record --report r.json --confirm',
+  '\'ccrc-quiz-record\' --confirm',
+  '~/.local/bin/ccrc-quiz-record --report r.json',
+  '"$HOME/.local/bin/ccrc-quiz-record" --confirm',
+  './ccd/ccrc-quiz-record --report r.json',
+  'env -u CLAUDECODE -u TMUX_PANE ./ccd/ccrc-quiz-record --confirm',
+  'bash ccd/ccrc-quiz-record --confirm',
+  'cd work && ccd/ccrc-quiz-record --confirm',
+  'Q=ccrc-quiz-record; $Q --confirm',
+];
+const SPELLINGS: readonly string[] = [
+  'ccrc-api quiz\trecord --id 1',
+  'ccrc-api\tquiz confirm --id 1',
+  'ccrc-api quiz \\\nstatus --json -',
+  'V=record; ccrc-api quiz $V --id 1',
+  'ccrc-api quiz "$V" --id 1',
+  'ccrc-api quiz ${ACT} --id 1',
+];
+const TEXT_ONLY: readonly string[] = ['git commit -m "note ccrc-api quiz record"'];
+const OPEN: readonly string[] = [
+  'ccrc-api quiz live', '~/.local/bin/ccrc-api quiz live --id 12', 'ccrc-api mail send --json -',
+  'grep -n quiz somefile', 'cat quiz-notes.md', 'ccrc-api quizzes status', 'echo record confirm status',
+  'cat ccd/ccrc-quiz-record', 'git add ccd/ccrc-quiz-record server/test/ccrc-quiz-record.test.ts',
+  './node_modules/.bin/vitest run test/ccrc-quiz-record.test.ts', 'git diff -- ccd/ccrc-quiz-record',
+];
+const QUIZ_DENY_LISTS: readonly string[] = [
+  ...VERBS.flatMap((v) => PROGRAMS.map((b) => b(v))), ...SHELL_FORMS, ...SPELLINGS, ...TEXT_ONLY, ...OPEN,
+];
+
+/**
+ * Spellings whose literal appears only once `norm` has removed quotes, backslashes and `$`: each is refused. Each
+ * member of `QCH` stands between two of the letters at least once, so an anchor whose class drops one reds here: the
+ * single quote, the double quote, the backslash, the newline (after a backslash, the only place `norm` removes one) and
+ * the dollar (before a quote, the only place `norm` removes one) in three shapes: with a single quote, with a double
+ * quote, and in the shell script's form.
+ */
+const NORM_ONLY: readonly string[] = [
+  'ccrc-api qu\'i\'z record --id 1',
+  'ccrc-api "qu"iz confirm',
+  'ccrc-api qu\\iz status',
+  'ccrc-api q\\\nuiz record',
+  'ccrc-api $\'qu\'iz status',
+  'ccrc-api q$\'u\'iz record --id 1',
+  'ccrc-api qu$"i"z confirm',
+  'ccrc-qui$\'z\'-record --confirm',
+  '"$API" qu\'\'iz record',
+  'ccrc q\'\'uiz-record --report r.json',
+  'ccrc-q"uiz"-record --confirm',
+];
+/** Near misses and other rows: each answers the same with and without the gate. */
+const OTHERS: readonly string[] = [
+  'ccrc-api QUIZ record', 'ccrc-api qu iz record', 'ccrc-api quix record', 'echo q u i z', 'ccrc-api qu\'i\'z live',
+  'ccd ws-rm x; ccrc-api quiz record', 'git worktree prune; ccrc-api quiz record', 'printenv; ccrc-api qu"i"z status',
+  `echo ${'a "b c" \'d\' \\e '.repeat(400)}; ccrc-api quiz record`,
+  `echo ${'a "b c" \'d\' \\e '.repeat(400)}; ccrc-api q'ui'z confirm`,
+  '', 'ls -la',
+];
+
+describe('the quiz row\'s literal gate changes no answer', () => {
+  it('the control and the floor are derived from the hook: no gate left in the one, no quiz row in the other', () => {
+    expect(ungated()).not.toMatch(/test\(QZANC\)/);
+    expect(ungated()).toMatch(/def qzmatch:\n/);
+    expect(rowless()).not.toMatch(/\| qzmatch\)/);
+  });
+
+  it('the copied lists still say what the quiz deny suite says: refusals refused, the open list open (deny mode)', () => {
+    const out = answers(gated, 'deny', QUIZ_DENY_LISTS);
+    QUIZ_DENY_LISTS.forEach((c, i) => {
+      if (OPEN.includes(c)) expect(out[i], c).toBe('');
+      else expect(out[i], c).toMatch(/^quiz\t/);
+    });
+  });
+
+  it('a literal only the normalised form holds is still refused, in deny and account modes', () => {
+    for (const mode of ['deny', 'account'] as const) {
+      const out = answers(gated, mode, NORM_ONLY);
+      NORM_ONLY.forEach((c, i) => expect(out[i], `${mode}: ${c}`).toMatch(/^quiz\t/));
+    }
+  });
+
+  it.each(MODES)('%s mode: the gated program answers every command exactly as the ungated one', (mode) => {
+    const all = [...QUIZ_DENY_LISTS, ...NORM_ONLY, ...OTHERS];
+    const before = answers(ungated(), mode, all);
+    const after = answers(gated, mode, all);
+    all.forEach((c, i) => expect(after[i], `${mode}: ${JSON.stringify(c.slice(0, 80))}`).toBe(before[i]));
+  });
+
+  it('the claim, sampled: with the literal respelled out of each refused command, the ungated row refuses nothing', () => {
+    const refused = QUIZ_DENY_LISTS.filter((c) => !OPEN.includes(c));
+    const respelled = refused.map((c) => c.split('quiz').join('qu1z'));
+    for (const c of respelled) expect(c).not.toContain('quiz');
+    for (const mode of ['deny', 'account'] as const) {
+      const out = answers(ungated(), mode, respelled);
+      respelled.forEach((c, i) => expect(out[i], `${mode}: ${c}`).not.toMatch(/^quiz\t/));
+    }
+  });
+});
+
+// The prune-deny suite's cost measure (D-8334, D-8354), restated for this suite: CPU, not wall time, of one jq run that
+// reads its input from a regular file.
+type CpuRun = { status: number | null; stdout: string; stderr: string; cpuMs: number };
+const childCpu = (argv: readonly string[], input: string, timeoutMs: number): CpuRun => {
+  const dir = mkTmp('ccrc-quizgate-cpu-');
+  const file = path.join(dir, 'stdin');
+  fs.writeFileSync(file, input);
+  const fd = fs.openSync(file, 'r');
+  let r: ReturnType<typeof spawnSyncGroup>;
+  try {
+    r = spawnSyncGroup('bash', ['-c', '"$@"; s=$?; times >&2; exit $s', 'bash', ...argv],
+      { stdio: [fd, 'pipe', 'pipe'], encoding: 'utf8', maxBuffer: 1 << 26, timeout: timeoutMs, env: { ...process.env, LC_ALL: 'C' } });
+  } finally {
+    fs.closeSync(fd);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  const lines = (r.stderr ?? '').replace(/\n$/, '').split('\n');
+  const m = /^(\d+)m(\d+(?:\.\d+)?)s (\d+)m(\d+(?:\.\d+)?)s$/.exec(lines.at(-1) ?? '');
+  expect(m, `bash's times line, after ${JSON.stringify(r.stderr)}${r.error === undefined ? '' : `: ${String(r.error)}`}`).not.toBeNull();
+  const [, um, us, sm, ss] = m as RegExpExecArray;
+  const cpuMs = Math.round((Number(um) * 60 + Number(us) + Number(sm) * 60 + Number(ss)) * 1000);
+  return { status: r.status, stdout: r.stdout ?? '', stderr: lines.slice(0, -2).join('\n'), cpuMs };
+};
+
+/**
+ * The bound: the gated program within 15% (or 25 ms) of the program with the row deleted. Measured at load 13 to 18
+ * (deny mode, quote-dense, faster of interleaved runs): gated against rowless 0.98 to 1.08 in single runs and 1.00 and
+ * 1.01 as this case reads it; the gate removed against rowless 1.27 to 1.40 at 32 KB and 1.48 to 1.75 at 64 KB in single
+ * runs, and 1.23 and 1.39 as this case reads it, so the 64 KB row is the one that always catches a removed gate. A
+ * review lens read 1.19 for a removed gate, so the bound is not widened; the faster of three rounds keeps a gated
+ * run's noise under it instead.
+ */
+const BOUND = 1.15;
+/** Interleaved rounds of (gated, row deleted); each case reads the faster run of each. */
+const ROUNDS = 3;
+/**
+ * One jq run's time bound, by size: about five times the slowest single run measured (about 5 s at 32 KB and 18 s at
+ * 64 KB on a test box at load 25; a hosted runner is faster). A case's bound is its 2 x ROUNDS runs plus a minute for
+ * the rest, scaled like every budget in this suite.
+ */
+const RUN_MS: Readonly<Record<number, number>> = { 32: 30_000, 64: 90_000 };
+const caseMs = (kb: number): number => 2 * ROUNDS * (RUN_MS[kb] as number) + 60_000;
+
+describe('the quiz row costs nothing on a quote-dense command that holds no literal', () => {
+  const unit = 'a "b c" \'d\' \\e ';
+  const timed = (prog: string, kb: number): number => {
+    const dense = unit.repeat(Math.floor((kb * 1024) / unit.length));
+    const command = `git worktree list --porcelain; echo prune ${dense}`;
+    expect(command).not.toMatch(/q[^u]*u[^i]*i[^z]*z/);
+    const r = childCpu(['jq', '-r', '--arg', 'q', "'", '--arg', 'mode', 'deny', prog],
+      JSON.stringify({ tool_name: 'Bash', tool_input: { command } }), scaled(RUN_MS[kb] as number));
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout.trim()).toBe('');
+    return r.cpuMs;
+  };
+  for (const kb of [32, 64]) {
+    it(`deny mode at ${kb} KB: the gated program within ${BOUND}x of the program with the row deleted`, () => {
+      const floor = rowless();
+      const pairs = Array.from({ length: ROUNDS }, () => [timed(gated, kb), timed(floor, kb)]);
+      const gatedMs = Math.min(...pairs.map((p) => p[0] as number));
+      const floorMs = Math.min(...pairs.map((p) => p[1] as number));
+      const measured = `quotes/deny ${kb} KB: gated ${gatedMs} cpu ms, row deleted ${floorMs} cpu ms, ratio ${(gatedMs / floorMs).toFixed(3)}x, bound ${BOUND}x`;
+      console.info(measured);
+      expect(gatedMs, measured).toBeLessThanOrEqual(Math.max(BOUND * floorMs, floorMs + 25));
+    }, scaled(caseMs(kb)));
+  }
+});

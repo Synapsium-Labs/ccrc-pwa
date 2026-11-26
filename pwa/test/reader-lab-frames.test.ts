@@ -5,7 +5,7 @@
 // probe path; the battery is L0's 27 channels in order.
 import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
-import { frameCsp } from '@synapsium-labs/docserver/frame';
+import { frameCsp } from '@synapsium-labs/pinax-lib/frame';
 import { LAB_BATTERY_CHANNELS, LAB_PROBE_NAMES, readerLabProbeBase } from '../../shared/readerLab';
 import { LAB_BATTERY_CHANNELS_JS } from '../src/readerLab/battery';
 import {

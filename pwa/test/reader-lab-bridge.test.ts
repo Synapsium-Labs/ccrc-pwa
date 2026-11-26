@@ -1,7 +1,7 @@
 // The lab-only Mermaid drop signal; the ordinary reader's bridge tests live in reader-bridge.test.ts.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { DocFrame, HostAdapters, mountDocFrame } from '@synapsium-labs/docserver/host';
-import type { RenderInput } from '@synapsium-labs/docserver/frame';
+import type { DocFrame, HostAdapters, mountDocFrame } from '@synapsium-labs/pinax-lib/host';
+import type { RenderInput } from '@synapsium-labs/pinax-lib/frame';
 import { mountReader, type ReaderMountInput } from '../src/docs/reader/bridge';
 import type { ReaderE17Reading } from '../src/docs/reader/policy';
 import { READER_LAB_DRAW_WATCHDOG_MS } from '../src/lib/readerLimits';

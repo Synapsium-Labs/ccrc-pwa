@@ -81,7 +81,11 @@ export const isDeliveryRoute = (v: unknown): v is DeliveryRoute => typeof v === 
 
 /** One case's side requests (every request in its window that was not a turn), counted by the route it came by, so the
  *  first real run shows what a real build asks beside a turn (review 3882 F4). */
-export type DeliverySideRequests = Readonly<Record<DeliveryRoute, number>>;
+export type DeliverySideRequests = Readonly<Record<DeliveryRoute, number>> & {
+  /** Requests on a route the stand-in does not script (it answers them 404): the count only, written only when above zero,
+   *  so a result with none is as before. Not a route of {@link DELIVERY_ROUTES}, which is inside the recipe's version (review 3898 A3). */
+  readonly other?: number;
+};
 
 /** What a part's result could not measure as the product has it, by name (review 3882 A3). `fleet-tmux-config`: the release
  *  tree held no fleet tmux configuration (`ccd/tmux.conf`), so the pane started without it and is not the product's pane. */
@@ -128,8 +132,10 @@ export interface DeliveryCaptureResult {
   readonly word: DeliveryWord;
   readonly cases: readonly DeliveryCaseResult[];
   /** The release tag of the test box that ran the send (its tree's stamp, the one its status answer carries); null when
-   *  that box could not read it, and when the field is absent (an older box): unknown (review 3882 F5, the coordinator's
-   *  ruling). The send measured is that release's. */
+   *  that box could not read it: unknown (review 3882 F5, the coordinator's ruling). The reader also takes the field absent
+   *  as null, but only inside this shape: a box built before the field came in also lacks `unmeasured` and counts side
+   *  requests as one number, so its whole result is refused, never read as release unknown (review 3898 F2; no such box
+   *  shipped). The send measured is that release's. */
   readonly release: string | null;
   /** What this part did not measure as the product has it, each name once, in {@link DELIVERY_UNMEASURED} order. */
   readonly unmeasured: readonly DeliveryUnmeasured[];
@@ -145,6 +151,9 @@ type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
 const has = <T extends string>(map: Record<T, true>, v: unknown): v is T => typeof v === 'string' && Object.prototype.hasOwnProperty.call(map, v);
 const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= DELIVERY_COUNT_MAX;
+/** A stored time (the lane's millisecond clock reading, a part's `at`; review 3898 F1) or a tally the lane only adds to (an
+ *  unmeasured part's `attempts`): a non-negative safe integer, never under the count bound, which is a case's. */
+const isSafeCount = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
 const keysAre = (o: Obj, keys: readonly string[]): boolean => Object.keys(o).sort().join() === [...keys].sort().join();
 const cps = (s: string): number => Array.from(s).length;
 const shortText = (v: unknown): v is string => typeof v === 'string' && cps(v) <= 2 * DELIVERY_CONTEXT;
@@ -173,9 +182,12 @@ function verdictFits(verdict: DeliveryCaseVerdict, n: number, divergence: Delive
 
 /** A case's side requests: exactly one count per route. */
 function readSideRequests(v: unknown): DeliverySideRequests | null {
-  if (!isObj(v) || !keysAre(v, DELIVERY_ROUTES)) return null;
-  const out: Partial<Record<DeliveryRoute, number>> = {};
+  if (!isObj(v)) return null;
+  const hasOther = Object.prototype.hasOwnProperty.call(v, 'other');
+  if (!keysAre(v, hasOther ? [...DELIVERY_ROUTES, 'other'] : DELIVERY_ROUTES)) return null;
+  const out: Partial<Record<DeliveryRoute, number>> & { other?: number } = {};
   for (const r of DELIVERY_ROUTES) { const n = v[r]; if (!isCount(n)) return null; out[r] = n; }
+  if (hasOther) { const n = v['other']; if (!isCount(n) || n === 0) return null; out.other = n; }
   return out as DeliverySideRequests;
 }
 
@@ -208,7 +220,8 @@ function readUnmeasured(v: unknown): DeliveryUnmeasured[] | null {
   return [...v] as DeliveryUnmeasured[];
 }
 
-/** A result's or a view's `release`: a release tag, or null; ABSENT (an older box) reads as null, unknown. */
+/** A result's or a view's `release`: a release tag, or null; ABSENT reads as null, unknown (a result otherwise of this shape;
+ *  review 3898 F2). */
 const releaseOf = (o: Obj): string | null | undefined => {
   if (!Object.prototype.hasOwnProperty.call(o, 'release') || o['release'] === null) return null;
   return isReleaseTag(o['release']) ? o['release'] : undefined;
@@ -274,6 +287,11 @@ export const DELIVERY_NOT_SENT_MAP: Record<DeliveryNotSent, true> = { ...BUILD_C
 export interface DeliveryUnmeasuredPart {
   readonly part: number;
   readonly notSent: DeliveryNotSent | null;
+  /** How many delivery jobs went out for this part (the row's `attempts`; 0 with no row), so a part a box faults on again and
+   *  again is told from one never asked. All time for the (build, part): never reset by a result of another version, or by
+   *  a release of the box. How many times, never when. `null`: unknown, a view from a server older than the field (wave 184,
+   *  the capture owner's call 1444). */
+  readonly attempts: number | null;
 }
 
 /** One case as the build list carries it: the verdict, the counts (the sent text's length and each turn's length) and the
@@ -329,7 +347,7 @@ function readPartView(v: unknown): DeliveryPartView | null {
   if (!isObj(v) || !keysWithin(v, ['part', 'version', 'at', 'word', 'cases'], ['release'])) return null;
   const { part, version, at, word, cases } = v;
   const release = releaseOf(v);
-  if (!isDeliveryPart(part) || typeof version !== 'string' || !DELIVERY_VERSION_SHAPE.test(version) || !isCount(at) || !has(DELIVERY_WORD_MAP, word) || release === undefined) return null;
+  if (!isDeliveryPart(part) || typeof version !== 'string' || !DELIVERY_VERSION_SHAPE.test(version) || !isSafeCount(at) || !has(DELIVERY_WORD_MAP, word) || release === undefined) return null;
   if (!Array.isArray(cases) || cases.length === 0 || cases.length > DELIVERY_CASE_IDS.length) return null;
   const read: DeliveryCaseView[] = [];
   let after = -1;
@@ -342,6 +360,39 @@ function readPartView(v: unknown): DeliveryPartView | null {
   }
   if (deliveryWord(read.map((c) => c.verdict)) !== word) return null;
   return { part, version, release, at, word, cases: read };
+}
+
+/** An unmeasured part: its part, its last not-sent word or null, and its attempts, a tally; ABSENT attempts read as `null`,
+ *  unknown (a server older than the field), never as 0. */
+function readUnmeasuredPart(raw: unknown): DeliveryUnmeasuredPart | null {
+  if (!isObj(raw) || !keysWithin(raw, ['part', 'notSent'], ['attempts']) || !isDeliveryPart(raw['part'])) return null;
+  if (!(raw['notSent'] === null || has(DELIVERY_NOT_SENT_MAP, raw['notSent']))) return null;
+  const hasAttempts = Object.prototype.hasOwnProperty.call(raw, 'attempts');
+  if (hasAttempts && !isSafeCount(raw['attempts'])) return null;
+  return { part: raw['part'], notSent: raw['notSent'], attempts: hasAttempts ? raw['attempts'] as number : null };
+}
+
+/** A build's unmeasured list: each entry well formed, each part once and in order. */
+function readUnmeasuredList(v: unknown): DeliveryUnmeasuredPart[] | null {
+  if (!Array.isArray(v) || v.length > DELIVERY_PART_COUNT) return null;
+  const out: DeliveryUnmeasuredPart[] = [];
+  let last = -1;
+  for (const raw of v as unknown[]) {
+    const u = readUnmeasuredPart(raw);
+    if (u === null || u.part <= last) return null;
+    last = u.part;
+    out.push(u);
+  }
+  return out;
+}
+
+/** Every part of the recipe exactly once, measured or not, and the build's word the join of what is listed: a part both
+ *  measured and unmeasured, a missing part, or an `intact` or `refused` beside an unmeasured part is refused (call 1253). The
+ *  view reader and the standing's reader both ask it. */
+function coversAndJoins(word: DeliveryJoinWord, parts: readonly { readonly part: number; readonly word: DeliveryWord }[], unmeasured: readonly DeliveryUnmeasuredPart[]): boolean {
+  const listed = [...parts.map((p) => p.part), ...unmeasured.map((u) => u.part)].sort((a, b) => a - b);
+  if (listed.length !== DELIVERY_PART_COUNT || listed.some((p, i) => p !== i)) return false;
+  return word === deliveryJoinWord(listed.map((i) => parts.find((p) => p.part === i)?.word ?? null));
 }
 
 /** How many builds the build list's `deliveries` carries at most, newest first (review 3882 A5: a reader-side bound on
@@ -369,22 +420,115 @@ export function readDeliveryViews(v: unknown): DeliveryBuildView[] | null {
       after = p.part;
       parts.push(p);
     }
-    if (!Array.isArray(x['unmeasured'])) return null;
-    const unmeasured: DeliveryUnmeasuredPart[] = [];
-    let last = -1;
-    for (const raw of x['unmeasured'] as unknown[]) {
-      if (!isObj(raw) || !keysAre(raw, ['part', 'notSent']) || !isDeliveryPart(raw['part']) || raw['part'] <= last) return null;
-      if (!(raw['notSent'] === null || has(DELIVERY_NOT_SENT_MAP, raw['notSent']))) return null;
-      last = raw['part'];
-      unmeasured.push({ part: raw['part'], notSent: raw['notSent'] });
-    }
+    const unmeasured = readUnmeasuredList(x['unmeasured']);
+    if (unmeasured === null) return null;
     if (out.some((b) => b.build === x['build'])) return null;
-    // Every part of the recipe exactly once, measured or not, and the word the join of what is listed: a part both measured
-    // and unmeasured, a missing part, or an `intact` or `refused` beside an unmeasured part is refused (call 1253).
-    const listed = [...parts.map((p) => p.part), ...unmeasured.map((u) => u.part)].sort((a, b) => a - b);
-    if (listed.length !== DELIVERY_PART_COUNT || listed.some((p, i) => p !== i)) return null;
-    if (x['word'] !== deliveryJoinWord(listed.map((i) => parts.find((p) => p.part === i)?.word ?? null))) return null;
+    if (!coversAndJoins(x['word'], parts, unmeasured)) return null;
     out.push({ build: x['build'], word: x['word'], parts, unmeasured });
   }
   return out;
+}
+
+// ── what the test box status read carries (Desktop polish wave 184; option A, the capture owner's calls 1446 and 37541, the
+// coordinator's 37537) ──────────────────────────────────────────────────────────────────────────────────────────────────────
+// The status read (`GET /api/testbox`) takes the box token, which every session holds, so it carries the STANDING of the newest
+// trusted build and never its cases: a case's divergence holds up to 80 code points of the build's own turn text, which stays
+// on the signed-in builds read. Every value here is a fixed word, a count, a release tag, a build name or a time.
+
+/** One measured part as the status read carries it: its word, the release of the box that ran it (null: unknown), when it was
+ *  recorded, and how many of its cases read intact and how many did not. No case id, no verdict, no text. */
+export interface DeliveryStandingPart {
+  readonly part: number;
+  readonly word: DeliveryWord;
+  readonly release: string | null;
+  readonly at: number;
+  readonly intact: number;
+  readonly notIntact: number;
+}
+
+/** The newest trusted build's delivery standing: its join word, each measured part, each unmeasured part. */
+export interface DeliveryStanding {
+  readonly build: string;
+  readonly word: DeliveryJoinWord;
+  readonly parts: readonly DeliveryStandingPart[];
+  readonly unmeasured: readonly DeliveryUnmeasuredPart[];
+}
+
+/** The status read's `delivery`, three answers kept apart: the standing; no build has passed its trust capture yet; or the
+ *  record could not be read (the server's log has why; the wire carries the word only). The neighbouring block's convention,
+ *  `counts: null` for a runs log it could not read, is NOT followed: a null here would also be how "no trusted build" reads,
+ *  so each answer is a kind word of its own. */
+export type DeliveryStandingAnswer =
+  | { readonly kind: 'standing'; readonly standing: DeliveryStanding }
+  | { readonly kind: 'no-trusted-build' }
+  | { readonly kind: 'unreadable' };
+
+/** What a reader of the status read can learn: one of the three answers, or `unknown`, a server older than the key. */
+export type DeliveryStandingRead = DeliveryStandingAnswer | { readonly kind: 'unknown' };
+
+/** THE ONE CUT of the standing from a build's view, pure: each value named, field by field, so nothing of a case, and no key
+ *  the view grows later, reaches the status read unless it is written here. */
+export function deliveryStandingOf(view: DeliveryBuildView): DeliveryStanding {
+  return {
+    build: view.build,
+    word: view.word,
+    parts: view.parts.map((p): DeliveryStandingPart => {
+      const intact = p.cases.filter((c) => c.verdict === 'intact').length;
+      return { part: p.part, word: p.word, release: p.release, at: p.at, intact, notIntact: p.cases.length - intact };
+    }),
+    unmeasured: view.unmeasured.map((u): DeliveryUnmeasuredPart => ({ part: u.part, notSent: u.notSent, attempts: u.attempts })),
+  };
+}
+
+const NOT_INTACT_VERDICTS: readonly DeliveryCaseVerdict[] = DELIVERY_CASE_VERDICTS.filter((v) => v !== 'intact');
+
+/** Whether {@link deliveryWord} could give `word` over a part with `intact` intact cases and `notIntact` others: asked of the
+ *  word's own function, over `intact` intact verdicts and `notIntact` copies of one not-intact verdict, for some such verdict.
+ *  One verdict repeated reaches every word a mix of them can, because the word reads only whether any verdict is outside
+ *  intact and refused, and whether any is refused. So `intact` holds exactly when `notIntact` is 0, and `refused` and `fault`
+ *  each need `notIntact` above 0: the function never gives `refused` with every case intact, so the reader refuses that. */
+export function deliveryWordFitsCounts(word: DeliveryWord, intact: number, notIntact: number): boolean {
+  const ofOne = (v: DeliveryCaseVerdict | null): boolean =>
+    deliveryWord([...Array<DeliveryCaseVerdict>(intact).fill('intact'), ...(v === null ? [] : Array<DeliveryCaseVerdict>(notIntact).fill(v))]) === word;
+  return notIntact === 0 ? ofOne(null) : NOT_INTACT_VERDICTS.some(ofOne);
+}
+
+/** A standing's measured part: exactly its six keys, the part, a word, a release tag or null, a time, and two counts that sum
+ *  to the part's case count in the recipe's split and that the word's own function could give with that word. */
+function readStandingPart(v: unknown): DeliveryStandingPart | null {
+  if (!isObj(v) || !keysAre(v, ['part', 'word', 'release', 'at', 'intact', 'notIntact'])) return null;
+  const { part, word, at, intact, notIntact } = v;
+  const release = releaseOf(v);
+  if (!isDeliveryPart(part) || !has(DELIVERY_WORD_MAP, word) || release === undefined || !isSafeCount(at) || !isCount(intact) || !isCount(notIntact)) return null;
+  if (intact + notIntact !== deliveryParts()[part]!.length || !deliveryWordFitsCounts(word, intact, notIntact)) return null;
+  return { part, word, release, at, intact, notIntact };
+}
+
+/** The standing itself: exactly its four keys, the build a Claude Code build, the join word, each measured part once and in
+ *  order, the unmeasured list as the view reader reads it, every recipe part once, and the word the join of them. */
+function readStanding(v: unknown): DeliveryStanding | null {
+  if (!isObj(v) || !keysAre(v, ['build', 'word', 'parts', 'unmeasured']) || !isClaudeVersion(v['build']) || !has(DELIVERY_JOIN_WORD_MAP, v['word'])) return null;
+  if (!Array.isArray(v['parts']) || v['parts'].length > DELIVERY_PART_COUNT) return null;
+  const parts: DeliveryStandingPart[] = [];
+  let after = -1;
+  for (const raw of v['parts'] as unknown[]) {
+    const p = readStandingPart(raw);
+    if (p === null || p.part <= after) return null;
+    after = p.part;
+    parts.push(p);
+  }
+  const unmeasured = readUnmeasuredList(v['unmeasured']);
+  if (unmeasured === null || !coversAndJoins(v['word'], parts, unmeasured)) return null;
+  return { build: v['build'], word: v['word'], parts, unmeasured };
+}
+
+/** THE ONE READER of the status read's `delivery`. ABSENT (`undefined`, a server older than the key, or one with no
+ *  coordination store) reads as `unknown`; each of the three answers with exactly its own keys; `null` for anything else. */
+export function readDeliveryStandingAnswer(v: unknown): DeliveryStandingRead | null {
+  if (v === undefined) return { kind: 'unknown' };
+  if (!isObj(v)) return null;
+  if (v['kind'] === 'no-trusted-build' || v['kind'] === 'unreadable') return keysAre(v, ['kind']) ? { kind: v['kind'] } : null;
+  if (v['kind'] !== 'standing' || !keysAre(v, ['kind', 'standing'])) return null;
+  const standing = readStanding(v['standing']);
+  return standing === null ? null : { kind: 'standing', standing };
 }

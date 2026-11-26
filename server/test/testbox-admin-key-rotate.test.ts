@@ -174,16 +174,47 @@ describe.skipIf(!HAS_KEYGEN)('ccrc testbox-admin key-rotate (D-8337)', () => {
     expect(readFileSync(h.lg, 'utf8')).toContain('key-rotate: the access key was rotated');
   });
 
-  it('a sudo login runs every box command under sudo -n, the new key\'s login included', () => {
+  // The access key file is the login user's own, in that user's home: its edits run as that user and never become root
+  // (testbox-admin-hardening, P1); every other command runs under sudo -n, the new key's login included.
+  it('a sudo login edits its access key file as itself, and runs every other box command under sudo -n, the new key\'s login included', () => {
     const h = fixture();
     connected(h, 'deploy');
     expect(json(verb(h, 'key-rotate'))['ok']).toBe(true);
     const cmds = sshCalls(h).map((c) => c.filter((l) => !l.startsWith('as ')).slice(-1)[0]!);
     expect(cmds).toHaveLength(4);
-    for (const c of cmds) expect(c.startsWith('sudo -n -- ')).toBe(true);
+    for (const i of [0, 2]) {
+      expect(cmds[i]).toContain('authorized_keys');
+      expect(cmds[i]!.startsWith('sudo ')).toBe(false);
+    }
     expect(cmds[1]).toBe('sudo -n -- true');
     expect(cmds[3]).toBe('sudo -n -- true');
     expect(sshCalls(h).every((c) => c.includes('deploy@10.0.0.9'))).toBe(true);
+  });
+
+  it('a sudo login whose box does not take the new key takes the new line out again as itself', () => {
+    const h = fixture();
+    connected(h, 'deploy');
+    writeFileSync(h.trust, `${pubB64(`${h.key}.pub`)}\n`);
+    h.env['FAKE_BOX_TRUST'] = h.trust;
+    expect(json(verb(h, 'key-rotate'))).toEqual({ ok: false, code: 'new-key-refused' });
+    const cmds = sshCalls(h).map((c) => c.filter((l) => !l.startsWith('as ')).slice(-1)[0]!);
+    expect(cmds).toHaveLength(3);
+    for (const i of [0, 2]) {
+      expect(cmds[i]).toContain('authorized_keys');
+      expect(cmds[i]!.startsWith('sudo ')).toBe(false);
+    }
+    expect(cmds[1]).toBe('sudo -n -- true');
+  });
+
+  it('a sudo login\'s revoke takes ccrc\'s line out as the login user itself', () => {
+    const h = fixture();
+    connected(h, 'deploy');
+    expect(json(verb(h, 'key-revoke', '--from', 'pwa'))).toEqual({ ok: true });
+    const edits = sshCalls(h).map((c) => c.filter((l) => !l.startsWith('as ')).slice(-1)[0]!).filter((c) => c.includes('authorized_keys'));
+    expect(edits).toHaveLength(1);
+    expect(edits[0]!.startsWith('sudo ')).toBe(false);
+    expect(ccrcLines(h)).toEqual([]);
+    expect(akLines(h)).toEqual([OTHER_LINE]);
   });
 
   it('a box that does not take the new key keeps the old key in place and working, and its own line as it was', () => {
@@ -215,7 +246,7 @@ describe.skipIf(!HAS_KEYGEN)('ccrc testbox-admin key-rotate (D-8337)', () => {
     connected(h);
     const before = readFileSync(h.key);
     const akBefore = readFileSync(h.ak, 'utf8');
-    h.env['FAKE_BOX_FAIL_RE'] = 'ccrc-ak-add';
+    h.env['FAKE_BOX_FAIL_RE'] = 'END';   // the append's own awk program; the removal's has none
     expect(json(verb(h, 'key-rotate'))).toEqual({ ok: false, code: 'new-key-refused' });
     expect(sshCalls(h)).toHaveLength(1);
     expect(readFileSync(h.key).equals(before)).toBe(true);

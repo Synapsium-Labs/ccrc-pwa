@@ -54,6 +54,7 @@ const LEDGERS = 'server/src/coord/ledgersRoutes.ts';
 const LINKING = 'server/src/linking/routes.ts';
 const INBOX = 'server/src/coord/overlordInboxRoutes.ts';
 const HISTORY = 'server/src/coord/overlordHistoryRoutes.ts';
+const SEQUENCE = 'server/src/coord/overlordSequenceRoutes.ts';
 
 const operator = (method: HttpMethod, path: string, file: string, verbClass: VerbClass): OperatorDoorRow =>
   ({ group: 'operator', method, path, file, verbClass });
@@ -78,6 +79,9 @@ export const OVERLORD_DOORS: Readonly<Record<string, DoorRow>> = {
   ladder: operator('GET', '/api/overlord/ladder', OVERLORD, 'view'),
   // The readiness word (§6.4, C23, H20): the operator's read of whether the Overlord can take a question; no act, no box token.
   readiness: operator('GET', '/api/overlord/readiness', OVERLORD, 'view'),
+  // The operator's read of the invariant monitor (sequence C, §10.4, question 18): the last pass, the findings of both modes and
+  // the counts, where the shadow record is read before the row is armed; session-gated, no box token, no step-up.
+  invariants: operator('GET', '/api/overlord/invariants', OVERLORD, 'view'),
   rung: operator('POST', '/api/overlord/rung', OVERLORD, 'admin'),
   pause: operator('POST', '/api/overlord/pause', OVERLORD, 'admin'),
   'latch-clear': operator('POST', '/api/overlord/latches/:cause/clear', OVERLORD, 'admin'),
@@ -122,6 +126,13 @@ export const OVERLORD_DOORS: Readonly<Record<string, DoorRow>> = {
   // forger of the attribution reads no history and spends no ceiling; a POST only so free text rides the body (ruled R7).
   history: {
     group: 'overlord', method: 'POST', path: '/api/overlord/history', file: HISTORY, verbClass: 'view', write: true,
+    word: 'overlord-v1', others: 'refuse', ladderClass: 'other', act: 'read', unmeasuredDesignation: 'refuse',
+  },
+  // The Overlord's cursor read of the sequence (W1, sequence C; plan Task 7's table): a read, verb class `view`, and NOT fenced
+  // (`write: false`): its lines are server words and ids, so its read runner says `unfenced` and its ceiling counts every
+  // attributed line (question 18); a fence is a later piece's. Others refused: no session but the Overlord reads the cursor.
+  sequence: {
+    group: 'overlord', method: 'GET', path: '/api/overlord/sequence', file: SEQUENCE, verbClass: 'view', write: false,
     word: 'overlord-v1', others: 'refuse', ladderClass: 'other', act: 'read', unmeasuredDesignation: 'refuse',
   },
   // The timer doors (Overlord W1, the Overlord's timers): the set and the cancel are writes (the fence, the witness and the
