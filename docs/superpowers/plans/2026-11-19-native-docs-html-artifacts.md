@@ -712,3 +712,44 @@ MX5.15's mutant first returned without answering, which also hung the tier-off a
 **The counts, after `main`.** Another programme's pull request #3456 edited the gate's count files while this wave built, and held them. On the coordinator's word, once it merged, `main` (`87c64a957a`) was absorbed by merge, with no conflict, and every count was derived from the merged tree, in one commit of its own: `docs/routes.ts` registers 20 (was 15); the gate's scanned routes 334 → 339, the HTTP half 331 → 336, the gated count 213 → 218, the exempt count stays 118; `DOCS_DOORS` in `box-token-census.test.ts` gains the five; and the two new GETs join `secret-mask.test.ts`'s inventory as repository content, never `MASKED_GET_ROUTES`. With the doors wired, `docs-headers.test.ts`'s walk of the real server's table found thirteen docs routes; each of the five has a recipe, with the statuses it answers dark (the scope read and the mint answer the account gate's `auth-off`, 501, on every arm; the list read, Revoke and Revoke all 200). `server.ts`'s hunks were the packet its holder approved, unchanged by the merge.
 
 After the merge, one file at a time or in named groups, all green: the artifact files (mint 40, store 28, liveness 7, listener 29, vocabulary 8, config 57), `auth-sessions` and its liveness file, `auth-gate` (429), `secret-mask`, `box-token-census`, `docs-headers` (65), `docs-routes`, `docs-policy`, `docs-folder-routes`, `docs-settings-routes`, `docs-ring`, `docs-artifact-tiers`, `refusal-table`, `refusal-status`, `account-gate`, `workspace-refusal-census`, `linear-rate`, `linear-journal`, `landing-entry-census`, `boot`, `config`, `token-shared`, `review-shared`, `deviation-refs`, `anchors`, `citations`, `rings/totality` and `rings/outward-edges`. The server, console and agent typechecks are clean, and so is a tests-inclusive typecheck over every test file this wave changed (a config that extends `test/tsconfig.tests.json` and includes those ten files). **Not measured locally:** the whole server, agent and console suites, the browser folder and the whole tests typecheck, which the hosted full run arbitrates.
+
+#### Fix round 1, review 3997 (at `02dbccc8bb`)
+
+The review read the wave with security weight and found nothing critical: one finding, F1, which the coordinator ruled Important for this wave, and four minors. A1, A3 and A4 were fixed here. A2 is carried to A3 (below).
+
+- **F1, the session binding where the server builds it.** No test reached the line in `server.ts` that hands the store its liveness port (`createArtifactStore(Date.now, sessionLiveness(authStore, () => secretNow()))`). Every binding test built its own store, its own session store or an always-live port. The new `artifacts-binding.test.ts` runs the real `buildServer` with the tier on and sign-in armed over a fixture passphrase file. It marks the artifact listener `listening` through its decorated state, signs in, mints one committed page, then ends the session two ways:
+  - a sign-out;
+  - a passphrase rewritten at generation 2.
+
+  The list is box-wide, so a list that then holds no row proves the store dropped the record as dead. A mint sent with the dead session's cookie answers 401 `unauthenticated` from the account gate, before the store; the case says the list, not that 401, is the proof.
+- **A1, a mint whose client left during the tree read.** A read that has started resolves `ran` whatever the signal does, so the mint went on to store a record whose token nobody received. `scoped` now hands back its abort signal. The mint checks it after the read's success arm, before `store.mint`, and abandons the reply as the failure arm does. Nothing between that check and the mint awaits.
+- **A4, the headers on the mint's 200.** The mint's own test now asserts the docs headers, `cache-control: no-store` and the JSON content type on a real 200, the one answer that carries the token. Two layers write that `no-store`: the account gate as the mint's first step, and `docsSendPolicy`'s default for a 200 that set none. The case pins what the client receives, not which layer wrote it. The two header-walk cases in `docs-headers.test.ts` are retitled for what they walk: the scope read and the mint answer 501 `auth-off` there.
+- **A3, the redraw's comment** (my choice: correct the comment, not the code). The route reads its clock for a provisional expiry and the store reads its own clock again when it makes the record, so the two can differ by the milliseconds between the reads. The answer sent carries the store's `expiresAt`. The mask alters strings only, never a number, so that difference cannot change its verdict.
+- **Known, carried to A3 (review 3997's A2).** An artifact origin whose label has a secret's shape (`sk-` and eight or more characters) is altered by the answer mask, so every mint draws eight times and answers `unmeasured` with nothing saying why. It fails shut, needs an unusual operator choice, and belongs with the site rule, which the setup command mirrors in another language.
+
+Built by a Sonnet implementer. The Opus review (high), which read the uncommitted diff before the commit, found one important item, now fixed: the header case's comment named the wrong writer of `no-store`. It also found five minors, all taken:
+- case (b) also tries the dead session's mint;
+- the comments say what the 401 proves and that the list is box-wide;
+- the content type comes from `DOCS_JSON_CONTENT_TYPE`;
+- the titles are plainer.
+
+The rows marked *scratch* were made in a detached scratch worktree at the round's commit, because `server.ts` is another session's claimed file. They were reverted there; its status read clean after.
+
+| Label | Mutation | Red | Green |
+|---|---|---|---|
+| A2-FR1-1a | `sessionLiveness` answers `live` always (`liveness.ts`) | `artifact capabilities end with the console session that minted them (X5 A2 review F1, through buildServer) > binding: a sign-out ends the capability, and the dead session cannot mint`, `> binding: a passphrase change moves the generation and ends the capability` | 2/2 |
+| A2-FR1-1b | `sessionLiveness` reads the secret once, on its first call, and reuses it (`liveness.ts`) | `… > binding: a passphrase change moves the generation and ends the capability` | 2/2 |
+| A2-FR1-1c (*scratch*) | `server.ts`'s wiring given an always-live port, `{ of: () => 'live' }` | both binding cases, as A2-FR1-1a | 2/2 |
+| A2-FR1-1d (*scratch*) | `server.ts`'s wiring given a secret read once on first use, then reused | `… > binding: a passphrase change moves the generation and ends the capability` | 2/2 |
+| A2-FR1-2 | the new abort check removed from the mint | `artifact mint doors: the scope read and the mint (X5 A2.3) > mint: a client that left during the tree read stores nothing` | 42/42 |
+| A2-FR1-3a | `docsSendPolicy`'s `no-store` removed alone | not red on the mint case (the account gate also writes it); `docs-headers` 32 of 65 red | 42/42 |
+| A2-FR1-3b (*scratch*) | both writers removed: the account gate's `no-store` and `docsSendPolicy`'s | `artifact mint doors: the scope read and the mint (X5 A2.3) > mint: the 200 that carries the token has the docs headers and \`no-store\`` | 42/42 |
+
+A secret read once *when the store is built* cannot be written at that line: `secretNow` is declared below it, so the mutant stops `buildServer` with a `ReferenceError`. The lazy variant above is the constant reading that can be written there.
+
+All green after the round:
+- `artifacts-binding` 2, `artifacts-mint` 42, `docs-headers` 65;
+- `docs-routes`, `docs-ring`, `artifacts-store` 28, `artifacts-liveness` 7, `artifacts-listener` 29 and `auth-sessions-liveness` 8 (324 in those six);
+- the server typecheck, and the tests-inclusive typecheck over the changed test files, `artifacts-binding.test.ts` now among them.
+
+The merge probe against `main` at `aba5845760` was clean, and `main` had changed no route or count file since `87c64a957a`, so nothing was absorbed. The counts stand: 339, 336, 218, 118, docs 20. **Not measured locally:** the whole suites, the browser folder and the whole tests typecheck.
