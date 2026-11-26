@@ -11,6 +11,10 @@ import {
   type ReloadActs,
 } from '../src/lib/swupdate';
 
+// X2 P5.3: the gate subscribes through the one dispatcher. Its module is loaded by the test setup (through the fleet
+// store) before any mock of this file could register, so its subscriptions are counted by the dispatcher's own count.
+import { popSubscriberCountForTests } from '../src/lib/popstate';
+
 const T0 = 1_000_000;
 let now = T0;
 let vis: DocumentVisibilityState = 'visible';
@@ -387,25 +391,31 @@ describe('the gate starts once and stops whole (Task C3)', () => {
     expect(reloadOnMove('/runs', false)).toBe(false);
   });
 
+  // Changed by X2 P5.3 (D-8763), an intended behaviour change: the gate's back and forward arm subscribes through the one
+  // `popstate` dispatcher (`lib/popstate.ts#onPop`) instead of adding a window listener of its own.
   it('starting twice is starting once', () => {
     const add = vi.spyOn(window, 'addEventListener');
+    const base = popSubscriberCountForTests();
     start();
     const again = startReloadGate(acts as ReloadActs);
     expect(again).toBe(stop);
-    expect(add.mock.calls.filter((c) => c[0] === 'popstate')).toHaveLength(1);
+    expect(popSubscriberCountForTests() - base, 'one onPop subscription').toBe(1);
     expect(add.mock.calls.filter((c) => c[0] === 'vite:preloadError'), 'no chunk arm').toHaveLength(0);
   });
 
-  it('stop removes the popstate listener and the page-clock subscriptions', () => {
+  it('stop ends the onPop subscription and removes the page-clock subscriptions', () => {
     const winAdd = vi.spyOn(window, 'addEventListener');
     const winRemove = vi.spyOn(window, 'removeEventListener');
     const docAdd = vi.spyOn(document, 'addEventListener');
     const docRemove = vi.spyOn(document, 'removeEventListener');
+    const base = popSubscriberCountForTests();
     start();
     expect(docAdd.mock.calls.filter((c) => c[0] === 'visibilitychange')).toHaveLength(1);
+    expect(popSubscriberCountForTests() - base, 'the gate subscribed once').toBe(1);
     stop?.();
     stop = null;
-    for (const kind of ['popstate', 'focus', 'blur', 'pageshow']) {
+    expect(popSubscriberCountForTests(), 'stop ended it').toBe(base);
+    for (const kind of ['focus', 'blur', 'pageshow']) {
       const added = winAdd.mock.calls.find((c) => c[0] === kind);
       expect(added, kind).toBeDefined();
       expect(winRemove.mock.calls.some((c) => c[0] === kind && c[1] === added?.[1]), kind).toBe(true);
