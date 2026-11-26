@@ -358,6 +358,29 @@ describe('readDeliveryCaptureResult: the one reader', () => {
       casesOf(o)[0]!['sideRequests'] = { messages: 2, count_tokens: 5 };
       expect(readDeliveryCaptureResult(o, BUILD, 0)?.cases[0]!.sideRequests).toEqual({ messages: 2, count_tokens: 5 });
     });
+    it('reads an optional other count when it is above zero (review 3898 A3)', () => {
+      const o = good();
+      casesOf(o)[0]!['sideRequests'] = { messages: 0, count_tokens: 1, other: 1 };
+      expect(readDeliveryCaptureResult(o, BUILD, 0)?.cases[0]!.sideRequests).toEqual({ messages: 0, count_tokens: 1, other: 1 });
+    });
+    it('the producer writes other only when its count is above zero, capped like the routes', () => {
+      expect(deliveryCaseResult('c0', { send: 'ok', turns: [deliveryExpected('c0')], sideRequests: NO_SIDE, hookPrompts: [] }).sideRequests).toEqual({ messages: 0, count_tokens: 0 });
+      expect(deliveryCaseResult('c0', { send: 'ok', turns: [deliveryExpected('c0')], sideRequests: { ...NO_SIDE, other: 0 }, hookPrompts: [] }).sideRequests).toEqual({ messages: 0, count_tokens: 0 });
+      expect(deliveryCaseResult('c0', { send: 'ok', turns: [deliveryExpected('c0')], sideRequests: { ...NO_SIDE, other: 2 }, hookPrompts: [] }).sideRequests).toEqual({ messages: 0, count_tokens: 0, other: 2 });
+      expect(deliveryCaseResult('c0', { send: 'ok', turns: [deliveryExpected('c0')], sideRequests: { ...NO_SIDE, other: DELIVERY_COUNT_MAX + 5 }, hookPrompts: [] }).sideRequests.other).toBe(DELIVERY_COUNT_MAX);
+    });
+    it.each<[string, unknown]>([
+      ['other: 0', { messages: 0, count_tokens: 0, other: 0 }],
+      ['other: -1', { messages: 0, count_tokens: 0, other: -1 }],
+      ['other: a string', { messages: 0, count_tokens: 0, other: 'x' }],
+      ['other past its ceiling', { messages: 0, count_tokens: 0, other: DELIVERY_COUNT_MAX + 1 }],
+      ['an unknown key beside other', { messages: 0, count_tokens: 0, other: 1, models: 1 }],
+      ['other with a route missing', { messages: 0, other: 1 }],
+    ])('refuses %s', (_why, bad) => {
+      const o = good();
+      casesOf(o)[0]!['sideRequests'] = bad;
+      expect(readDeliveryCaptureResult(o, BUILD, 0)).toBeNull();
+    });
     it.each<[string, unknown]>([
       ['a missing route', { messages: 1 }],
       ['an extra key', { messages: 1, count_tokens: 1, models: 1 }],

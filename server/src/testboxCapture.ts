@@ -47,7 +47,8 @@ const gone = (why: BuildCaptureUnavailable): BuildCaptureAnswer => ({ kind: 'una
 function answerOf(r: TestboxCaptureReply, delivery: boolean): BuildCaptureAnswer {
   switch (r.outcome) {
     case 'unconfigured': case 'unreachable': case 'bad-answer': return gone('no-test-box');
-    case 'not-taken': return gone(delivery ? 'recipe-not-run' : 'no-runner');
+    // A delivery job's not-taken carries what was measured to the lane, which writes its one line (review 3898 F6).
+    case 'not-taken': return delivery ? { kind: 'unavailable', why: 'recipe-not-run', ...(r.detail === null ? {} : { detail: r.detail }) } : gone('no-runner');
     case 'refused':
       switch (r.refusal) {
         case 'not-test-box': return gone('no-test-box');
@@ -67,6 +68,8 @@ function answerOf(r: TestboxCaptureReply, delivery: boolean): BuildCaptureAnswer
  *  kept, so neither is logged). */
 function logDropped(build: string, r: TestboxCaptureReply, delivery: boolean): void {
   if (r.detail === null || r.outcome === 'refused' || (r.outcome === 'answered' && (delivery ? (r.delivery ?? null) !== null : r.result !== null))) return;
+  // A delivery job's not-taken: its detail rides the answer, and the lane's one line says it (review 3898 F6).
+  if (delivery && r.outcome === 'not-taken') return;
   console.warn(`ccrc-server: build capture ${build}: ${r.outcome}, no verdict: ${r.detail}`);
 }
 
