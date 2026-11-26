@@ -504,6 +504,8 @@ Each row ships with the task that owns it; the row is red when the guard is remo
   - **Conditions (the coordinator's).** Re-measured at the wave's tip before the push; a fix round past 940 is an ask with the new figure. The wave-done states the final net growth beside the waiver. The held-out review is asked whether any of these lines repeat logic the range verb already has.
   - The coordinator ruled it (mail 34526). Issued to run 3656 in its block 9001 to 9003; 9002 and 9003 are unspent so far.
 
+- **D-9079 (2026-11-25)** — pdf-firefox-unmeasured-locally. P3.3 Step 1 says to run PDF-L1–L3 on desktop Chromium and Firefox. Chromium was measured; the Firefox engine could not start on the test host, so its lab and frame rows are unmeasured, not failed or passed. The coordinator ruled to carry Firefox to F’s device item beside the phone engines, to be measured before programme close-out. No browser install or CI engine expansion is part of this wave. Issued to run 3846.
+
 ## Results
 
 ### What was read and measured (2026-11-18)
@@ -1027,3 +1029,63 @@ Review run 3816 read the fix round at `92749f7a63`: F1 closed in behaviour; A1, 
 - **Main absorbed by merge three times more (R4):** the fourth, in fix round 1 and licensed by the merge probe, merged `b61cbe6f51` after #3346 (Rebind and Restart the Overlord) had moved the gate counts, with the gate files taken in turn from run 3744: 316 routes, 313 HTTP, 200 gated, 113 exempt (`92749f7a63`). The fifth, the land sync, on the coordinator's word once #3370 (the authority witness door) and #3375 had landed, merged `861cd77728`, which conflicted on the same two gate files, taken in turn from run 3726: 317 routes, 314 HTTP, 201 gated, 113 exempt (`01425f38fe`). The sixth, on the coordinator's word when main moved again before the push (#3377, #3353 programme lifecycle W2 and #3386), merged `8886cf49c3`, which conflicted on the same two files: 323 routes, 320 HTTP, 204 gated, 116 exempt (`b8827ffddd`). `docs/routes.ts` stays at 13 throughout. Each merge commit resolves the counts and nothing else, and the gate, both censuses and the folder door suites read green on each merged tree.
 - **Carried to the next parity wave, bound (the coordinator's ruling):** R1's case, so that the loading-line guard has a row that reds; the folder labels re-read on the same retry as the projects read when capabilities are unknown (today an operator with folders sees no group and no hint until the next visit); the registry's answer to a missing directory at the lock open, worded the same as the unlinked case (R2); and a preview for folder rasters (A5), beside A3, as later hardening.
 - The land sync changed no code and no test after the review: its two merge commits resolve the counts only, and its two Results commits touch only the plan.
+
+### Wave P3 — the isolated PDF view (2026-11-25)
+
+**P3.1 — class and pin.** `.pdf` (case-insensitive) lists as PDF. The ordinary file lane still caps at 2 MiB and replies with JSON, not raw PDF. Above 2 MiB the existing checked range read supplies the original bytes; the PDF preview ceiling is 4,194,304 bytes inclusive. The viewer checks for `%PDF-` at byte zero; the Download path does not alter the file. The folder reader uses the same decision: short PDFs offer Download, and an above-ceiling PDF does not start a read before the tap. The folder patch was serialised with P4 by exact packet.
+
+- Exact `pdfjs-dist` pin: **6.5.438**. Registry tarball SHA-1 `e7f8986ec4ea04057b5d9d2f0e5b63ea94d2303f`; integrity `sha512-vg8Pw1x+AFKy4AMDvhuWl5cOYV8d698UoEANoFFhc79hqXDnZQqnOXoxw3HG907WHOg1JYOvLhP756boddFxpA==`; registry `gitHead` `0a4153349dc473ba950fc17941c5ca7eda43c1de`. npm reports SLSA v1 provenance from GitHub Actions. `npm audit signatures` verified 1,224 registry signatures and 327 attestations, with zero invalid or missing entries in the JSON report; the PDF.js record is included.
+- The only application import site is the lazy `pdfAssets.ts` adapter: `build/pdf.min.mjs?raw`, `build/pdf.worker.min.mjs?raw`, `standard_fonts/*.{pfb,ttf}` and `cmaps/*.bcmap`, the last two via `?inline`. The package licence, CMap licence, Foxit notice and Liberation notice ship verbatim. PDF assets are not in the service worker precache. The shell policy and Markdown frame are unchanged.
+
+**P3.2 — frame and lifecycle.** The frame is an opaque `srcdoc`, sandboxed with `allow-scripts` only. The attribute and first meta name the same exact hash-only script policy. There is no console message channel; the only readiness listener is on the frame's own worker object. The named 2,000 ms worker-start deadline is a bound on the worker's local hello, not on parsing: it limits the wait for a silent engine while allowing a cold start. A startup error falls back immediately; a ready worker keeps its parse path. The fallback uses the same hashed parser text on the frame's own thread. PDF.js 6.5.438 no longer has the `isEvalSupported` option; neither an ignored setting nor a CSP eval source is added. Scripting is not installed. The browser actions case observed no dialog, popup, navigation or request; that is containment evidence, not on its own evidence that a PDF action never began.
+
+The view retains at most four canvases, each at most 4,194,304 backing pixels and 4,096 pixels a side. On eviction it cancels unfinished painting and zeroes the backing dimensions before reuse of a slot; returning redraws. This bounds the viewer's canvases, not all PDF.js caches. The 52-page scroll evicted page one and redrew it on return. A link tapped on page 52 selected its inert target text in the sticky header without leaving the frame. Resizing the iframe while on a later page, two rapid zoom inputs, Fit width, and a two-finger spread via Chromium CDP passed. The CDP row does not substitute for phone gestures or rotation. The console opening feedback was given a paint opportunity before mounting the frame, measured at 174 ms from the listing tap in the focused run below.
+
+**Named ownership exception.** The coordinator granted a one-branch edit in `DocsHead.tsx#exportStateFor`: `pdf` answers absent beside `other`, instead of leaving Export on “Formatting…”. The file was claimed first. Share, the leaf-image path and the phone head did not need a second edit. This exception is for held-out review; no other reader host code was changed.
+
+| Pin | Deliberately broken change | Observed red |
+|---|---|---|
+| M11.16 | Add `allow-popups` | Two exact-sandbox assertions |
+| M11.17 | Add `'wasm-unsafe-eval'` | Two policy assertions |
+| M11.18 | Omit the click guard in the built page | One Chromium loopback hit assertion |
+| M11.19 | Reset the load count instead of tearing down on the second load | One teardown assertion |
+| M11.54 | Lower the inclusive ceiling by one byte | Two server verdict cases and one leaf case |
+| M11.114, P3.2 Step 6 extension | Restore the page-key equality check in `DocsLeaf.tsx` rather than checking the identity of the current callback | The delayed A → B → A answer saved once instead of zero times; the fresh tap still saves once |
+| Worker-start deadline | Remove the deadline scheduling | The silent-worker case alone failed; ready/error remained distinct |
+| Canvas eviction | Drop release of stores outside the keep set | The old first-page canvas still owned 440,920 pixels |
+| PDF Export | Omit the PDF branch in `DocsHead.tsx` | Loading and settled PDF cases both showed the Export wait instead of absence |
+| Over-ceiling routing | Always answer false from the over-ceiling PDF branch | The above-ceiling leaf no longer stayed Download-only |
+
+The mutations were reverted. The combined exact-sandbox, eval and teardown mutants gave five reds; the click-guard and deadline mutants were run separately. A later-page link first showed the correct text outside the viewport; the width and touch cases first stayed at 884 px. These three cases passed after their respective changes. The first no-policy worker control could not read its loopback reply because the reply lacked a CORS header for an opaque origin. With that header in the fixture, the control reached loopback and the walled worker did not.
+
+**P3.3 — Chromium 153.0.8010.12, scoped production build (22/22).** PDF-L1 timings in ms: mount-to-bootstrap, bootstrap-to-parser (including seed and worker startup/fallback), library parse, parsed-to-first-paint. The max gap is from the host's 16 ms timer while opening, not tap latency. The one-page cases are padded to measure `srcdoc` size, not dense parse work.
+
+| Fixture | Bytes | Max host gap | Mount | Setup | Parse | First paint |
+|---|---:|---:|---:|---:|---:|---:|
+| One page, 256 KiB | 262,144 | 77 | 287 | 203 | 9 | 96 |
+| One page, 1 MiB | 1,048,576 | 91 | 389 | 190 | 4 | 26 |
+| One page, 4 MiB | 4,194,304 | 179 | 695 | 300 | 11 | 175 |
+| 52 pages, embedded TrueType with generated prose | 382,243 | 80 | 475 | 136 | 57 | 104 |
+
+Two of 52 canvases were present after opening settled; the 80 ms gap is below the 200 ms reporting threshold. A separate earlier focused run measured 79 ms and two canvases. The production parser took the own-thread fallback and the standard PDF made no non-blob request and raised no frame policy refusal. In a separate test the classic blob worker inherited the frame policy; the otherwise identical no-policy control reached loopback. Chromium did not start the opaque-origin module blob worker. This is not a production module-worker success or a Firefox result.
+
+- **PDF-L2:** 4,194,303 and 4,194,304 bytes drew text ink, in `srcdoc` pages of 9,997,973 and 9,997,977 characters. Observed elapsed times 2,482 ms and 2,830 ms include harness overhead. Viewer, parser, fonts and CMaps were inline; the Helvetica fixture does not prove a CMap lookup. The ceiling stays **4 MiB**.
+- **PDF-L3:** the JPEG 2000 sample read `[255, 255, 255]` (page background) while its note and other text drew. JPEG 2000 and JBIG2 remain known limits in this viewer with WebAssembly and dynamic imports unavailable; only the named JPEG 2000 fixture was measured. Download keeps the original file.
+- **AR-4, desktop half measured:** the built console under Chromium listed PDFs one byte below, at and one byte above the ceiling from fixture API replies. The two in range drew inline and saved the already-read bytes; the third neither drew nor began a range read until Download. Each saved file matched its original SHA-256. All Firefox PDF lab and frame rows are **unmeasured locally** (D-9079); Firefox and actual phone engines, including responsive gestures, belong to F's device close-out.
+
+**Process.** A browser install briefly pruned shared cached builds. The prior browser revisions were restored and Chromium startup verified; no further install used the shared cache. A read-only per-task review was rerun after a session restart.
+
+#### Final local browser gate (2026-11-26)
+
+The full hosted run on the exact pull-request head arbitrates the browser folder. The local gate below passed **369/369 cases in 12 files** on the final browser candidate; each file has a final result. The other local batches were interrupted or incomplete; 31 of 125 files in all reported a final pass, and the rest of the folder has no local green result. The manifest and lock change require the hosted full run, including all four browser shards, before handoff.
+
+| Local browser gate | Files (passed cases per file; omit the `.browser.test.ts` suffix) |
+|---|---|
+| New PDF cases | `pdf-frame` (11), `pdf-labs` (11) |
+| Existing Docs navigation, frames, headers and export | `chat-links` (14), `docs-compact-head` (117), `docs-export` (18), `docs-headers` (13), `docs-mockup-export` (20), `docs-mockup` (23), `docs-own-tab` (12), `phone-bar` (58), `reader-frame` (60), `reader-history` (12) |
+
+The first broader run exposed a CDP pinch fixture issue: Chromium delivered the first movement of the emulated contacts, but no second before the assertion. The case now starts two contacts, holds one stationary and injects a 50 px change to the other (100 px to 150 px apart); it verifies exactly 150% zoom before lifting the contacts. Production touch handling is unchanged by this correction. The isolated case and its full browser file then passed, and the 52-page row in that run measured two canvases and a 41 ms host timer gap. Review the emulation correction explicitly; repeated physical-phone gestures remain a device item.
+
+`chat-history` was not cleared locally: the two context-reset rows asked for four pages instead of three in a batch. They passed 2/2 when filtered; the whole file run alone passed 33/34, with the same desktop assertion and two memory-cap kills reported. The file and chat code are unchanged by this wave. The coordinator has the assertion for the chat owner; the hosted run is the gate. Separately, a chat-width navigation timeout in a memory-cap run passed 46/46 when run alone.
+
+The PWA type pass caught a parameter property in the worker test fixture. A plain field and constructor assignment fixed it; the full PWA type pass then exited zero.
