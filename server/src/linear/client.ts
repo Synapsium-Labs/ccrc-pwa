@@ -140,11 +140,12 @@ const isRateLimitedBody = (body: unknown): boolean =>
 export type LinearCall =
   | { ok: true; body: unknown }
   | { ok: false; reason: 'rate-limited'; retryAfterS: number }
-  | { ok: false; reason: Exclude<LinearFailure, 'not-configured' | 'not-found' | 'rate-limited'> };
+  | { ok: false; reason: Exclude<LinearFailure, 'not-configured' | 'not-found' | 'rate-limited'>; /** D-9132: a non-2xx body with an `errors` array. */ answered?: unknown };
 
 /** The seams of one Linear call: the network, the deadline, and the clock a rate-limited answer's reset time is read
- *  against. Absent in production (`fetch`, eight seconds, `Date.now`). */
-export interface LinearNet { fetch?: FetchLike; timeoutMs?: number; now?: () => number }
+ *  against. Absent in production (`fetch`, eight seconds, `Date.now`). `keepErrors` (D-9132) asks for the `errors` body of a non-2xx
+ *  refusal to come back as `answered`: only `runCcrcOp` asks, so no other caller's failure (several return it whole) carries a body. */
+export interface LinearNet { fetch?: FetchLike; timeoutMs?: number; now?: () => number; keepErrors?: boolean }
 
 export async function callLinear(
   token: string,
@@ -191,8 +192,12 @@ export async function callLinear(
       // ONLY a 401 says the key is bad (spec 5.1). A 403 is Linear refusing this
       // request (a scope, a team the key cannot see): its own arm, which no caller
       // may treat as a verdict on the key. Everything else is the service. The
-      // body of a refusal is read only for the rate-limit code above, never kept.
-      return { ok: false, reason: res.status === 401 ? 'unauthorised' : res.status === 403 ? 'forbidden' : 'unreachable' };
+      // body of a refusal is read for the rate-limit code above and, D-9132 (an adapter keeps a distinction it received), kept ONLY
+      // on an `unreachable` answer, only when it carries an `errors` array and only for a caller that asked (`keepErrors`): `answered`,
+      // which `runCcrcOp` reads against the closed error table as it reads a 200. It is never logged, journaled or sent on a wire.
+      if (res.status === 401) return { ok: false, reason: 'unauthorised' };
+      if (res.status === 403) return { ok: false, reason: 'forbidden' };
+      return deps.keepErrors === true && read && isRecord(body) && Array.isArray(body['errors']) ? { ok: false, reason: 'unreachable', answered: body } : { ok: false, reason: 'unreachable' };
     }
     // The deadline can fire while the body is still arriving; that is a
     // timeout, not a shape fault.
