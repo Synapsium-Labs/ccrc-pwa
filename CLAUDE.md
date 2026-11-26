@@ -197,11 +197,6 @@ real values: `deploy/reference-fleet.md` (gitignored).
   walls** (`env -u CLAUDECODE` defeats the first). Never run one from a session to turn a test or a doctor line
   green: `~/.ccrc/history` holds verbatim session text, secrets sessions printed included, and once Claude Code's
   retention passes it is that text's only copy.
-- **Turning the console's sign-in on or off with `ccrc auth on|off` is the OPERATOR's, never a session's** (desktop
-  polish wave 181): it rewrites the server box's `ccrc.env` and restarts `ccrc.service`, from the operator's own
-  terminal. It refuses inside a Claude Code session (`CLAUDECODE` set), without a terminal and inside a `cc-*` pane
-  (`_ccrc_operator_only`, `ccd/ccrc`): **speed bumps, not walls** (`env -u CLAUDECODE`, a script file or another
-  interpreter runs past them). Never run it from a session, and never against the live host from a test.
 
 ## Build / test / deploy
 **No root `package.json`, no root runner.** FIVE packages, each `"type":"module"`, run cd'd in:

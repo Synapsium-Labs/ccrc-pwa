@@ -141,7 +141,17 @@ All 4 killed.
 
 - README ("The session gate": the Safari sentence beside the hand route, the verb's paragraph; the verb table's row) and
   the root CLAUDE.md's SAFETY bullet were sent as peer packets against main `9220429c2f` to their holder, who said yes
-  as written; applied unchanged.
+  as written (mail 36724). The README part is applied unchanged.
+- The CLAUDE.md SAFETY bullet follows in a pull request of its own, one file, straight after this one merges (a small
+  wave the coordinator opens on this workspace). Why: the review judge's `rules-mixed` rule holds that a pull request
+  changing a rules file, which the root CLAUDE.md is, changes nothing else, so the bullet left this pull request. No
+  test here pins it. The approved text, word for word, to go in SAFETY after the `ccrc history` bullet:
+
+  > - **Turning the console's sign-in on or off with `ccrc auth on|off` is the OPERATOR's, never a session's** (desktop
+  >   polish wave 181): it rewrites the server box's `ccrc.env` and restarts `ccrc.service`, from the operator's own
+  >   terminal. It refuses inside a Claude Code session (`CLAUDECODE` set), without a terminal and inside a `cc-*` pane
+  >   (`_ccrc_operator_only`, `ccd/ccrc`): **speed bumps, not walls** (`env -u CLAUDECODE`, a script file or another
+  >   interpreter runs past them). Never run it from a session, and never against the live host from a test.
 - `deploy/ccrc.env.example`: one paragraph under the localhost worked set.
 - Left for the wave's last step, after wave 180's PR (#3402) merges and the coordinator's mail: the accounts design's
   gate-dark places (its holder asked to wait, since #3402 rewrites both; the swap is "the README's hand route" to
