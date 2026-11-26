@@ -36,6 +36,7 @@ It must be **reversible**: the way back is written down, both with nobody design
 | L4 delivery | `server/src/continuity/routes.ts`: ONE type-only edit, the deps field `operatorModel` widened from `NoteKeysMessages` to `CardMessagesPort` (it already passes `deps.operatorModel` to the gatherer) | No decision in delivery code: the edit is a type, and no line of logic changes |
 | L5 | None. `index.ts` and `server.ts` are not edited | |
 | ccd (bash) | `ccd/ccrc-api`: the gated-rows table gains the Overlord's rows; its check no longer reads only `plan.*` | One table and one check (the table's own comment: "One table (row key, word, refusal text), one check that reads it") |
+| ccd (node) | `ccd/door-process.mjs`: the read tool's admit condition becomes the exported `readableDoorRow`, which the read tool calls and Task 2's census asks (call 1358) | One owner of "a reader can read this door": the read tool's own condition, never a copy in a test |
 | Docs | `CLAUDE.md`: one bullet | Public repo: no private name |
 
 **Tech Stack:** TypeScript (ESM), vitest, bash 5 (`ccd/ccrc-api`), React (no component change).
@@ -118,8 +119,9 @@ as recommended with entry row E11 widened. None of them changed what W1 is for, 
    - The check drops its `plan.*` condition, so it reads every row of the table.
    - The timers' gate and the older gates stay as they are, because this piece leaves those rows alone.
    - A census test holds the table to `OVERLORD_DOORS` strictly, in both directions: every Overlord row of word
-     `overlord-v1` has a client row, a table row and a door tool; every table row of that word is such a row; and every
-     door the door-process plan marks readable has its tool's reader flag set (ruled, F1; "The client" below).
+     `overlord-v1` has a client row, a table row and a door tool; every table row of that word is such a row; the tools
+     with the reader flag set are exactly the doors the door-process plan marks readable; and the read tool admits each
+     of those (ruled, F1, and call 1358; "The client" below).
    - **Alternative:** a `[[ "$key" == overlord.* ]]` prefix gate. That would miss `linking.confirm`, and it would miss
      the sequence row, whose key the sequence plan names bare `sequence`.
 
@@ -154,12 +156,26 @@ as recommended with entry row E11 widened. None of them changed what W1 is for, 
      meets a missing tool at the board, the third step of the skill's start order ("card, then the probe round, then
      the board"). History is not in that order; it is reached when the Overlord needs it.
    - **`sequence`:** sequence C adds the door and its client row `sequence`. Its tool rides sequence C, the sequence's
-     door pull request (the coordinator carries it into that brief).
-   - The door-process plan (its question 9) marks `board` and `history` readable, `reader: true`. The history door's
-     row is fenced and the read tool serves only unfenced views; that conflict is the ticket's, settled in board B2.
-   - **This piece carries no door-process edit.** All three tools are entry conditions (Table 3, E1, E3, Figure 1), and
-     Task 2's census holds them, strictly: every row of the word has a client row and a tool, and a door the
-     door-process plan marks readable has its reader flag set, so E3 cannot go green on a tool nobody can read through.
+     door pull request (the coordinator carries it into that brief). **The sequence's tool is not readable:** its
+     reader flag is unset, as `messages`' is.
+   - The door-process plan (its question 9) marks `board` and `history` readable, `reader: true`, and no other door.
+   - **(Ruled, call 1358: E3 means a reader can read through the tool.)** On `main` the history door is a write
+     (`OVERLORD_DOORS.history`), its tool is fenced (`server/test/door-tools-argv.test.ts` pins every tool on an Overlord
+     write door as fenced), and the read tool refuses a fenced row (`ccd/door-process.mjs#readToolOver` admits a row
+     only when it is `reader: true`, `fenced: false` and `class: 'view'`). So E3 stays red until board B2 settles that
+     conflict, by whichever mechanism it builds. What board B2 owes: a reader can read the board and the history
+     through the read tool. The coordinator carries it into board B2's brief, ticket
+     `history-readable-through-the-read-tool`.
+   - **This piece carries one door-process edit, and no tool.** All three tools are entry conditions (Table 3, E1, E3,
+     Figure 1). Task 2's census holds them strictly, both ways:
+     - every row of the word has a client row and a tool, and every such tool has a row;
+     - among the word's doors, the tools with the reader flag set are exactly the names in `READABLE_DOORS`
+       (`board`, `history`), an equality, so a `sequence` or `messages` tool marked readable is red;
+     - for each name in `READABLE_DOORS`, the read tool's own admit condition holds. The census asks it through one
+       predicate the door process exports and its read tool uses, `readableDoorRow(row)`, never a copy of its
+       conditions in the test. On `main` that condition sits inline in `readToolOver`'s `readerOf`; Task 2 moves it
+       into the exported predicate with no change of behaviour (if the door process already exports one at the build's
+       base, the census uses that one and the move is skipped).
 
 9. **What does the console show after a revert while an Overlord is bound?** Reverting the word hides every Overlord
    door, including Retire, Pause and the ladder, while the designation and its body stand. The server's operator doors
@@ -246,7 +262,15 @@ Measured on `main` at `4fa87d73f8`, with `git grep` and by reading the named fil
     `generationDay.ts`, `probeDoorSets.ts`, `probeSets.ts`, and `continuity-generations-lane.test.ts`,
     `continuity-renewal-acts.test.ts` and `continuity-anchor.test.ts`.
   - The card's `Fact<T>` (`shared/continuity-card.ts`) has two arms: `{ kind: 'read', value }` and
-    `{ kind: 'unmeasured', what }`. The private store's `StoreRead` carries `why`, so the gatherer maps `why` to `what`.
+    `{ kind: 'unmeasured', what }`, and the card prints it as `couldNotRead(what)`, "Could not read <what>.", so every
+    `what` is a noun phrase. The private store's `StoreRead` carries `why`, a sentence or a raw error, so the gatherer
+    never puts it in `what` (A3 of review 3885): `what` is the fixed phrase "the private store", and the reason rides
+    the messages fact's own optional `why`, printed on a line of its own.
+  - `card.ts#holds` and `#nothingSections` read `f[k].kind` for each fact of a role's `BODY_FACTS` row, and the
+    never-empty mutants R1 and R2 (`CARD_NEVER_EMPTY_SET`, `server/test/sim/cardMutants.ts`) anchor on that exact
+    `silent` line. The mutant runner (`server/test/sim/mutate.ts#runMutants`) runs only a set's own `suite(m)` on the
+    mutated copy, so a mutant's killing case lives inside its set's suite. The snapshot reader's set is
+    `SNAPSHOT_FACTS_SET` in `server/test/sim/probeDoorSets.ts` (suite `snapshotFactsOfCases`, floor 1).
   - `timersSections` caps its block at a named constant, `TIMERS_CAP_BYTES`. `renderCard(role, f)` takes no budget; the
     budget enters only through `trimCard(sections, budgetTokens)`, which never drops a `keep: true` section.
   - `renderCard`, `trimCard` and `oneLine` are in `server/test/sim/mutation-floors.json`, each at floor 1. The mutant
@@ -307,7 +331,7 @@ red if the flip misses it. "Not on main" rows come from the pieces in Table 3 an
 | H8 | `GET /api/overlord/board` | board B2, row `board` (not on main) | step 2 | same | Task 1's case iterates every row, so B2's row is included |
 | H9 | `GET /api/overlord/sequence` | sequence C, row `sequence` (not on main) | step 2 | same | same |
 | H10 | The client sends the Overlord's rows | `ccd/ccrc-api`, the gated-rows table | no hold | the table gains the rows and the check covers them | Task 2: a current cap file without the word refuses each row, unsent; the census |
-| H11 | The door process serves the Overlord's tools | `ccd/door-process.mjs#DOOR_TOOLS` | through H10 and the server | nothing; each tool runs its `ccrc-api` verb (the `history` and `board` tools ride board B2, the `sequence` tool rides sequence C) | Task 2: every row of the word has a client row and a door tool, and `board` and `history` are readable |
+| H11 | The door process serves the Overlord's tools | `ccd/door-process.mjs#DOOR_TOOLS` | through H10 and the server | nothing; each tool runs its `ccrc-api` verb (the `history` and `board` tools ride board B2, the `sequence` tool rides sequence C) | Task 2: every row of the word has a client row and a door tool; the readable tools are exactly `board` and `history`, and the read tool admits both |
 | H12 | The Overlord's card | `card.ts#renderCard`, `CARD_OVERLORD_LINE` | a constant the renderer returns | the W1 renderer | Task 1: the render cases; the old pin is removed |
 | H13 | The card lists every unsettled message (I8's second half) | `CardFacts.messages?` (new), `gatherCardFacts` | no field | the field, its gather and its never-trimmed section, capped at `MESSAGES_CAP_BYTES` | Task 1: past a small cap, the section lists every id and the left-out count, and every id survives `trimCard` at a small budget |
 | H14 | The card lists the role's pending timers | `CardFacts.timers`, `timersSections` | not rendered for `overlord` | rendered (timers are not body facts, so a card holding only timers also carries the Overlord's nothing line) | Task 1: the timers case and the timers-only case |
@@ -355,10 +379,10 @@ Each row is re-measured at build: the builder checks that the piece merged and t
 
 | Piece | Plan | Open PR at writing | What this piece needs from it, by that plan's symbols | Re-measure at build |
 |---|---|---|---|---|
-| Sequence B (the invariant monitor) | `w1-sequence-monitor.md`, Tasks 4 to 6 | #3394 (draft) | `server/src/coord/invariants.ts` with the W1 predicates (I2, I5's term arm, I7, I17), `overlord_invariant_findings`, the runner on its `LANE_SCHEDULE` row `invariants` (shadow until armed), the Shadow lanes card's `invariants` row, and the ladder's cause row `invariant-violation`. The entry checklist reads its findings (E9) | yes |
-| Sequence C (the read doors) | `w1-sequence-monitor.md`, Task 7 | none | `GET /api/overlord/sequence` with its `OVERLORD_DOORS` row (word `overlord-v1`), the operator's `GET /api/overlord/invariants`, the `ccrc-api` row the plan names `sequence`, and the door-process tool `sequence` (ruled, F1: it rides sequence C; the coordinator carries it into that brief). Its rows join Task 2's table and census | yes |
+| Sequence B (the invariant monitor) | `w1-sequence-monitor.md`, Tasks 4 to 6 | #3394 (merged after writing) | `server/src/coord/invariants.ts` with the W1 predicates (I2, I5's term arm, I7, I17), `overlord_invariant_findings`, the runner on its `LANE_SCHEDULE` row `invariants` (shadow until armed), the Shadow lanes card's `invariants` row, and the ladder's cause row `invariant-violation`. The entry checklist reads its findings (E9) | yes |
+| Sequence C (the read doors) | `w1-sequence-monitor.md`, Task 7 | none | `GET /api/overlord/sequence` with its `OVERLORD_DOORS` row (word `overlord-v1`), the operator's `GET /api/overlord/invariants`, the `ccrc-api` row the plan names `sequence`, and the door-process tool `sequence`, which is not readable (its reader flag unset) (ruled, F1: it rides sequence C; the coordinator carries it into that brief). Its rows join Task 2's table and census | yes |
 | Readiness | `w1-readiness.md` | none | `shared/overlord-readiness.ts`'s words, the `overlordReadiness` lane, `readinessRead()` and `GET /api/overlord/readiness`. With nobody designated the lane writes `absent` and pushes nothing. The entry checklist reads the word (E8) | yes |
-| Board and history B2 (the board) | `w1-board-history.md`, Task 6 | none | `GET /api/overlord/board` (row `board`, word `overlord-v1`), `composeBoard`, the `ccrc-api` row `overlord.board`, and the door-process tools `board` and `history`, each `reader: true` as the door-process plan's question 9 marks them (ruled, F1; the `history` tool is ticket `history-door-process-row`). Its rows join Task 2's table and census | yes |
+| Board and history B2 (the board) | `w1-board-history.md`, Task 6 | none | `GET /api/overlord/board` (row `board`, word `overlord-v1`), `composeBoard`, the `ccrc-api` row `overlord.board`, and the door-process tools `board` and `history`, each `reader: true` as the door-process plan's question 9 marks them (ruled, F1; the `history` tool is ticket `history-door-process-row`), and each admitted by the read tool, so a reader can read the board and the history through it (call 1358, ticket `history-readable-through-the-read-tool`: on `main` the history door is a write and its tool fenced, which the read tool refuses; board B2 settles that by whichever mechanism it builds). Its rows join Task 2's table and census | yes |
 | Home B (the place) | `w1-home.md`, Tasks 4 to 7 | none | `OverlordPlace` and `BodyPart` (Start, Open, Rebind, Restart), Pause, the ladder controls, the readiness lines on Fleet health and Waiting on you, `useOverlordSessionStream`, the `@overlord-place` mark. Start the Overlord lives here | yes |
 | Home C (Settings) | `w1-home.md`, Tasks 8 and 9 | none | Settings › Overlord (`OverlordSection`): Retire, the model class, the account set, the backstop, retention, the account facts and the account-hold Clear | yes |
 | Chat A | `w1-chat.md`, Tasks 1 to 4 | none | The chat part of the place, its thread and earlier-generation doors, and `offRecord` | yes |
@@ -407,7 +431,7 @@ Each row says where to read it, and whether a test holds it or the coordinator r
 |---|---|---|---|
 | E1 | Every piece of Table 3 is merged, the door tools `board` and `history` (board B2) and `sequence` (sequence C) among them | `gh pr view <n> --json state,mergeCommit` for each; `git grep` of each symbol on `origin/main` | the coordinator |
 | E2 | Every Overlord door row that carries `overlord-v1` has a client row and a row in the gated table, and every table row of that word is such a door | Task 2's census | a test |
-| E3 | Every such row has a door tool whose `verb` is its client row's key, and the `board` and `history` tools are `reader: true` | Task 2's census | a test |
+| E3 | Every such row has a door tool whose `verb` is its client row's key. Among the word's doors the tools with `reader: true` are exactly `board` and `history`, and a reader can read through each: the door process's exported `readableDoorRow` admits it, as the read tool does (ruled, call 1358). On `main` the history door is a write and its tool fenced, so E3 stays red until board B2 settles that | Task 2's census | a test |
 | E4 | Every W1 word on a door row is in `SERVER_CAPS` | Task 1's case | a test |
 | E5 | `shared/api.ts` stays within its cap | the growth check (`growth-caps.test.ts`) | a test |
 | E6 | Past `MESSAGES_CAP_BYTES` the messages section lists every id and the left-out count, and every id survives `trimCard` at a small budget | Task 1's case | a test |
@@ -476,8 +500,10 @@ Start the Overlord (home B), behind the account gate's step-up:
   messages, the journals' lines, the sequence lines, and the readiness and response rows. Nothing reads them as live.
 - **A revert with a bound Overlord** (question 9). The body keeps running: its sleep markers stand, so it is never
   hibernated or rolled, and the renewal lane keeps renewing it. Its card, note, probe and timer doors still answer
-  (`continuity-v1`, `timers-v1`). The board, inbox, messages, acknowledge, history, sequence and team-link doors refuse
-  `capability-missing` at step 2, and the client refuses them first. The inbox wake holds. The console hides every
+  (`continuity-v1`, `timers-v1`), but the card is the placeholder line again: the revert removes the W1 renderer, so
+  the bound Overlord's card loses its messages list. The board, inbox, messages, acknowledge, history, sequence and
+  team-link doors refuse `capability-missing` at step 2, at the server only: the revert removes Task 2's client gate
+  too, so a fleet box on the reverted build sends them and the server refuses. The inbox wake holds. The console hides every
   Overlord door, Retire and Pause among them, though the operator doors still answer at the server. The operator's
   prompts are still recorded as messages and stay unsettled. The remedy is to roll forward and Retire.
 - **A rollback to an older server build** (`ccrc rollback`). This is everything in the case above, plus Table 11.5's
@@ -537,9 +563,15 @@ and `OVERLORD_DOORS` and `DOOR_TOOLS` from their modules, and checks strictly, w
   `:id`) are that door's;
 - every such row is in the block with word `overlord-v1`, and every row of the block with that word is such a row;
 - every such row has a `DOOR_TOOLS` row whose `verb` is the client row's key;
-- every door the door-process plan marks readable (its question 9: `board` and `history`) has a tool with
-  `reader: true`. These two names are the census's one hand list, `READABLE_DOORS`, so E3 cannot go green on a tool
-  nobody can read through.
+- among the word's doors, the tools with `reader: true` are exactly the doors the door-process plan marks readable
+  (its question 9: `board` and `history`). This is an equality: a `sequence` or `messages` tool marked readable is red,
+  and so is a `board` or `history` tool left unmarked. These two names are the census's one hand list,
+  `READABLE_DOORS`;
+- for each name in `READABLE_DOORS`, a reader can read through the tool (ruled, call 1358). The census asks the read
+  tool's own admit condition through the predicate the door process exports, `readableDoorRow(row)` (`reader: true`,
+  `fenced: false`, `class: 'view'` on `main`), which the read tool's `readerOf` calls; the test never copies those
+  conditions. On `main` the history door is a write and its tool is fenced, so this check stays red until board B2
+  settles that conflict, by whichever mechanism it builds.
 
 W2's band-3 settle door (`POST /api/overlord/inbox/settle`, word `overlord-v1`) is bound by the same census: its piece
 adds its client row, its table row and its tool in its own pull request.
@@ -560,14 +592,20 @@ unguarded but the review-rounds loop.
   with no new door.
 - **No overloaded null.** `CardFacts.messages?` has three readings (ruled, F5): absent (this card is not the Overlord's,
   and its renderer does not ask), read (a list, possibly empty) and `unmeasured` (the store could not be read, the
-  server has none, or a stored Overlord snapshot lacks the field). On the Overlord's card it is always present.
+  server has none, or a stored Overlord snapshot lacks the field). The gatherer always sets it on the Overlord's facts,
+  but the Overlord's renderer never assumes so: an absent `messages` there reads unmeasured, through one reader
+  (`messagesFactOf`), never a type error and never "no messages" (review 3885 F2).
 - **No operator text on the card** (question 2).
 - **Wire discipline.** Additive only. `FLEET_PROTO` is not touched.
-- **Mutation floors.** `renderCard` stays in `MUTANT_SETS`. Task 1 adds mutants to `server/test/sim/cardMutants.ts`,
-  each with a killing case: the Overlord's arm answering the old one line; the Overlord's `BODY_FACTS` row gaining
-  `timers`; the messages lines written `keep: false`; the cap's ids-and-count arm removed; and the snapshot reader
-  reading an absent `messages` on an Overlord snapshot as read and empty. Its floor in `mutation-floors.json` stays 1.
-  No new L1 module.
+- **Mutation floors.** `renderCard` stays in `MUTANT_SETS`. The runner runs only a set's own suite on the mutated
+  copy, so each killing case lives inside that set's suite (A4 of review 3885). `CARD_NEVER_EMPTY_SET`
+  (`server/test/sim/cardMutants.ts`) gains five mutants, with their killing cases in its suite: the Overlord's arm
+  answering the old one line; the Overlord's `BODY_FACTS` row gaining `timers`; the messages lines written
+  `keep: false`; the cap's ids-and-count arm removed; and an absent `messages` read as read and empty by the renderer.
+  `SNAPSHOT_FACTS_SET` (`server/test/sim/probeDoorSets.ts`) gains one, with its killing case in
+  `snapshotFactsOfCases`: the snapshot reader reading an absent `messages` on an Overlord snapshot as read and empty.
+  R1 and R2 are re-anchored on the `silent` line's new text. Every floor in `mutation-floors.json` stays 1. No new L1
+  module.
 - **Growth.** Only one growth-checked file changes: `shared/api.ts`, by at most 1 code line (Table 5). Measured by the
   growth check's own stripper, it stands at 5,139 code lines (plan review 3877), so the +1 reaches the cap of 5,140
   exactly and passes (the check is "at or under"). If `main` grows before the build, the row goes on `continuity-v1`'s
@@ -580,8 +618,8 @@ unguarded but the review-rounds loop.
 ## Review Focus
 
 - **Completeness.** Every row of Table 1 is either changed or shown to need no change, and every red case exists. A
-  door with the word and no client row, a client row with no door tool, or a readable door whose tool is not
-  `reader: true`, reds Task 2's census.
+  door with the word and no client row, a client row with no door tool, a readable tool outside `READABLE_DOORS` or a
+  name in it whose tool is not readable, or a readable door the read tool would refuse, reds Task 2's census.
 - **Reversibility.** The runbook (Retire, then revert) is in the PR body. The bound-Overlord revert is described, not
   hidden.
 - **The card.** The unsettled list is never trimmed, carries no text, and lists ids with a count past its cap. Every
@@ -602,18 +640,21 @@ unguarded but the review-rounds loop.
   gains its row and doc comment, after `continuity-v1`).
 - Modify: `shared/continuity-card.ts` (`CardMessage`, and the optional `CardFacts.messages?`).
 - Modify: `server/src/continuity/cardFacts.ts` (the port `CardMessagesPort`, declared here; the gather for the
-  `overlord` renderer only, mapping the store's `why` to the card's `what`).
+  `overlord` renderer only: an unmeasured read becomes `what: 'the private store'` with the store's `why` beside it).
 - Modify: `server/src/continuity/routes.ts` (one type-only edit: the deps field `operatorModel` takes
   `CardMessagesPort & Partial<ReadLedgerCount>`; no logic line changes).
 - Modify: `server/src/continuity/card.ts` (`CARD_OVERLORD_LINE` removed; `CARD_OVERLORD_NOTHING_LINE` and
   `CARD_CONSTITUTION_LINE` added; `MESSAGES_CAP_BYTES` and `messagesSections`; the Overlord's `BODY_FACTS` row and its
-  arm in `renderCard`, `nothingSections` and `bodyOf`; `snapshotFactsOf`'s rule for `messages`).
+  arm in `renderCard`, `nothingSections` and `bodyOf`; `messagesFactOf`, the one reader of the optional field;
+  `snapshotFactsOf`'s rule for `messages`).
 - Not modified: `server/src/continuity/noteKeys.ts` (`NoteKeysMessages` stays as narrow as it is);
   `server/src/continuity/probeSchedule.ts#spotFactsOf` (its facts are never rendered as a card, so they leave
-  `messages` absent); the nine test and simulator fixtures that build the `CardFacts` literal (the field is optional, so
-  they type-check unchanged).
+  `messages` absent); seven of the nine test and simulator fixtures that build the `CardFacts` literal (the field is
+  optional, so they type-check unchanged). The other two are modified below: `cardMutants.ts` and `probeDoorSets.ts`.
 - Test: `server/test/overlord-v1-word.test.ts` (new); `server/test/continuity-card-render.test.ts`;
-  `server/test/continuity-card-facts.test.ts`; `server/test/sim/cardMutants.ts`.
+  `server/test/continuity-card-facts.test.ts`; `server/test/sim/cardMutants.ts` (`CARD_NEVER_EMPTY_SET`: four mutants,
+  their cases in its suite, R1 and R2 re-anchored); `server/test/sim/probeDoorSets.ts` (`SNAPSHOT_FACTS_SET`: one
+  mutant, its case in `snapshotFactsOfCases`).
 - Modify: `server/test/overlord-gate-doors.test.ts` (its stale "one fixed line today" comment only).
 - Unchanged but re-run: `server/test/sim/mutation-floors.json` (the floor of `renderCard` stays 1).
 
@@ -626,9 +667,14 @@ export interface CardMessage {
   readonly id: number; readonly at: number; readonly term: number; readonly state: string; readonly cut: boolean;
 }
 // CardFacts gains:
+/** The messages fact: a `Fact` whose unmeasured arm may also carry the store's reason, printed on its own line under
+ *  "Could not read the private store." (A3 of review 3885). Assignable to `Fact<readonly CardMessage[]>`. */
+export type CardMessagesFact =
+  | { readonly kind: 'read'; readonly value: readonly CardMessage[] }
+  | { readonly kind: 'unmeasured'; readonly what: string; readonly why?: string };
 /** The private store's unsettled messages. Present on the Overlord's card only, read or unmeasured; absent on every
  *  other card, so no other snapshot's JSON or id moves (ruled, F5). */
-readonly messages?: Fact<readonly CardMessage[]>;
+readonly messages?: CardMessagesFact;
 
 // server/src/continuity/cardFacts.ts
 /** The private store's reads the card makes: a `message` note key's owner, and the Overlord's unsettled list. */
@@ -642,6 +688,9 @@ export const CARD_OVERLORD_NOTHING_LINE = 'No unsettled operator messages, notes
 /** The messages block's cap, as `TIMERS_CAP_BYTES` caps the timers block: past it the block lists the ids and how many
  *  lines it left out (I8). An input of `messagesSections`, so a case can pass a small one. */
 export const MESSAGES_CAP_BYTES: number;
+/** The one reader of `f.messages` on the card's side: an absent field reads `{ kind: 'unmeasured', what: 'the unsettled
+ *  messages' }`, never read and empty (review 3885 F2). `holds`, `nothingSections` and `messagesSections` read through it. */
+export function messagesFactOf(f: CardFacts): CardMessagesFact;
 export function messagesSections(f: CardFacts, capBytes?: number): readonly CardSection[];
 ```
 
@@ -669,8 +718,10 @@ export function messagesSections(f: CardFacts, capBytes?: number): readonly Card
     role line, the authority line, the constitution line, the messages section (one line per message: id, time, state,
     and "(cut)" when `cut`), the timers section, the notes section and the history line;
   - no card text contains "ships with W1";
-  - `messages: { kind: 'unmeasured', what: 'the private store could not be read' }` renders a line that names the read
-    as unmeasured, never "no messages";
+  - `messages: { kind: 'unmeasured', what: 'the private store', why: 'the store is locked' }` renders exactly
+    "Could not read the private store." and, on the next line, the reason through `oneLine`; never "no messages" (A3);
+  - **absent on the Overlord:** facts with no `messages` key render "Could not read the unsettled messages." on the
+    Overlord's card, never `CARD_OVERLORD_NOTHING_LINE` and never a throw (F2 of review 3885);
   - read and empty everywhere renders `CARD_OVERLORD_NOTHING_LINE`, and never `CARD_NOTHING_LINE`;
   - **timers only:** an Overlord card holding only pending timers carries `CARD_OVERLORD_NOTHING_LINE` and its timers
     section (timers are not body facts, F8);
@@ -678,9 +729,19 @@ export function messagesSections(f: CardFacts, capBytes?: number): readonly Card
     left out; under the cap it lists one line per message. Both outputs are `keep: true`;
   - **the trim:** `trimCard` over the Overlord's sections at a small budget keeps every message id;
   - every other renderer's text is unchanged for the existing fixtures, which carry no `messages`.
-  Update the two other cases that pin the one-line Overlord card (A4): the case "every renderer but the Overlord's one
-  line carries the section…" now expects the timers section on the Overlord's card too, and the never-silent sweep no
-  longer filters `overlord` out, so the Overlord's C51 behaviour is swept with the others.
+  Update the existing cases that the Overlord's renderer now reaches (A4 of review 3877, F2 of review 3885):
+  - the case "every renderer but the Overlord's one line carries the section…" now expects the timers section on the
+    Overlord's card too;
+  - the never-silent sweep ("never silent, for every role and every combination of failed reads") no longer filters
+    `overlord` out. Its `FACT_KEYS` gains `messages`; its facts are built as
+    `empty({ messages: read([]), ...over })`, so a mask bit can make `messages` unmeasured (the shared `empty()` stays
+    without the key, so every other case keeps its non-Overlord facts); and its accepted lines widen:
+    `CARD_NOTHING_LINE` or `CARD_OVERLORD_NOTHING_LINE`, or a "Could not read the …" line whose alternation gains
+    `messages`. A non-Overlord role does not read `messages`, so its bit leaves that role's card as it was;
+  - the clock case ("a card's text depends on its rows alone, never on the clock") already loops over every renderer,
+    the Overlord's included: its `rows(at)` gains one unsettled message (`messages: read([…])`, its `at` fixed), and the
+    case must hold for the Overlord's renderer as for the others, the same text at every clock. Without the row it
+    would only test the absent-field line.
 - [ ] **Step 6: Write the failing snapshot cases.** In the same file:
   - a non-Overlord card's `snapshotFactsJson` has no `messages` key, and its snapshot id equals the id it had on `main`
     for the same fixture (a pinned sha256);
@@ -689,13 +750,24 @@ export function messagesSections(f: CardFacts, capBytes?: number): readonly Card
   - a non-Overlord snapshot without `messages` reads it absent.
 - [ ] **Step 7: Write the failing gather cases.** In `continuity-card-facts.test.ts`:
   - a session whose renderer is `overlord` gets `messages` from `unsettledFacts()`, each row mapped field for field;
-  - a store read that answers `{ kind: 'unmeasured', why }` gives `{ kind: 'unmeasured', what: why }`;
-  - an absent store gives `{ kind: 'unmeasured', what: 'no private store on this server' }`;
+  - a store read that answers `{ kind: 'unmeasured', why }` gives `{ kind: 'unmeasured', what: 'the private store', why }`;
+  - an absent store gives `{ kind: 'unmeasured', what: 'the private store', why: 'this server has no private store' }`;
   - every other renderer gets no `messages` field, and the store is not asked (a spy counts zero calls).
-- [ ] **Step 8: Write the mutants.** In `server/test/sim/cardMutants.ts`, add a mutant for each of: the Overlord's arm
-  answering the old one line; the Overlord's `BODY_FACTS` row gaining `timers`; the messages lines written
-  `keep: false`; the cap's ids-and-count arm removed; and the snapshot reader reading an absent `messages` on an
-  Overlord snapshot as read and empty. Each is killed by a case of Steps 5 and 6.
+- [ ] **Step 8: Write the mutants.** The runner runs only a set's own suite on the mutated copy, so each killing case
+  goes inside that set's suite; Steps 5 and 6 hold the same behaviours in the ordinary suites (A4 of review 3885).
+  - `CARD_NEVER_EMPTY_SET` (`server/test/sim/cardMutants.ts`): a mutant for each of the Overlord's arm answering the
+    old one line; the Overlord's `BODY_FACTS` row gaining `timers`; the messages lines written `keep: false`; the cap's
+    ids-and-count arm removed; and `messagesFactOf` reading an absent field as read and empty. Its `suite(m)` gains the
+    killing cases (the Overlord's populated card, the timers-only card, the small-cap card through `trimCard`, and the
+    absent field).
+  - **R1 and R2 are re-anchored.** Both search for the exact text
+    `const silent = facts.every((k) => f[k].kind === 'read' && !holds(f, k));`. Step 10 changes that line (the fact is
+    read through the one reader of the optional field, and the role is no longer `Exclude<CardRenderer, 'overlord'>`),
+    so each mutant's `old` becomes the new line's text and its `new` keeps its meaning (R1: `silent` is always false; R2:
+    the `kind === 'read'` test is dropped). R3 to R10 anchor on lines Step 10 does not change; the builder confirms each
+    still finds its text (the runner reds a mutant whose `old` is not found).
+  - `SNAPSHOT_FACTS_SET` (`server/test/sim/probeDoorSets.ts`): one mutant, the snapshot reader reading an absent
+    `messages` on an Overlord snapshot as read and empty. `snapshotFactsOfCases` gains its killing case.
 - [ ] **Step 9: Run them and see them fail.** Run both suites through `ccrc test`.
 - [ ] **Step 10: Implement.**
   - `CardMessage` and the optional field.
@@ -703,7 +775,13 @@ export function messagesSections(f: CardFacts, capBytes?: number): readonly Card
     `unsettledFacts()` only once the renderer reads `overlord`.
   - In `card.ts`: remove `CARD_OVERLORD_LINE`. The Overlord's `BODY_FACTS` row is `messages`, `notes` and `checkpoint`
     (`BodyFact` gains `messages`); `nothingSections` gives the Overlord `CARD_OVERLORD_NOTHING_LINE` and every other role
-    `CARD_NOTHING_LINE`. `renderCard`'s Overlord arm: the role section, the authority line rule, a stable constitution
+    `CARD_NOTHING_LINE`. `holds` and `nothingSections` read each fact through one small reader that answers
+    `messagesFactOf(f)` for `messages` and `f[k]` otherwise, so the optional field is never read bare: an absent
+    `messages` on the Overlord's renderer reads unmeasured (`what: 'the unsettled messages'`), the card carries
+    "Could not read the unsettled messages." and no nothing line, as the snapshot rule already does. Never a type error,
+    never "no messages".
+  - The unmeasured messages line is `couldNotRead(what)`; when the fact carries `why`, a second kept line follows,
+    "The private store said: <oneLine(why)>.". `renderCard`'s Overlord arm: the role section, the authority line rule, a stable constitution
     line, then `messagesSections`, `timersSections`, `notesSections`, `checkpointSections` and `historySections`.
   - `messagesSections(f, capBytes = MESSAGES_CAP_BYTES)` emits `keep: true` sections only. Past the cap it emits the ids
     on one kept line and the left-out count. `MESSAGES_CAP_BYTES` is sized as the timers cap is: one message line's
@@ -711,6 +789,8 @@ export function messagesSections(f: CardFacts, capBytes?: number): readonly Card
     the figure in the constant's comment).
   - `snapshotFactsOf`: when `messages` is present, read it with `fact('messages', …)`; when absent, leave it absent for
     a non-Overlord role, and read `{ kind: 'unmeasured', what: "the snapshot's messages" }` for the `overlord` role.
+    Like every other fact, a stored unmeasured `messages` is read back with its `what` only: the store's `why` is a
+    line of the live card, not a fact the snapshot keeps.
 - [ ] **Step 11: Run every card suite and the floor.** `continuity-card-render`, `continuity-card-facts`,
   `continuity-anchor`, `continuity-card-route`, the test typecheck
   (`ccrc test -- npx tsc --noEmit -p test/tsconfig.tests.json`), and the mutant floors
@@ -720,6 +800,9 @@ export function messagesSections(f: CardFacts, capBytes?: number): readonly Card
 ### Task 2: The client, the console's constant and the skill's bullet
 
 **Files:**
+- Modify: `ccd/door-process.mjs` (the read tool's admit condition moves out of `readToolOver`'s `readerOf` into the
+  exported `readableDoorRow(row)`, which `readerOf` calls; no change of behaviour, held by `door-process.test.ts` and
+  `door-tools-argv.test.ts`. Skipped if the door process already exports such a predicate at the build's base).
 - Modify: `ccd/ccrc-api` (the gated table's rows; the check's condition becomes `[[ -n "$gate" ]]`; the header comment's
   list of gates, in a line that does not start with `# <word> rows`).
 - Modify: `server/test/census-w3/claimant.ts` (`capReaderCalls`' guard rule counts the table's own non-empty test) and
@@ -738,10 +821,18 @@ export function messagesSections(f: CardFacts, capBytes?: number): readonly Card
   - a current file with the word sends;
   - an absent file sends, and so does a stale one;
   - a `plan.*` row's refusal is unchanged (the check now reads the whole table).
-- [ ] **Step 2: Write the failing census.** In the same file, the four checks of "The client": parse `ROUTES` and the
-  gated `case` block from `ccd/ccrc-api`'s text, import `OVERLORD_DOORS` and `DOOR_TOOLS`, and hold `READABLE_DOORS`
-  (`board`, `history`). No exception list. At the build's base every Table 3 piece has merged, so the census is green
-  only once the client rows are added (Step 4); before Step 4 the second check is red on all seven rows.
+- [ ] **Step 2: Write the failing census.** In the same file, the five checks of "The client": parse `ROUTES` and the
+  gated `case` block from `ccd/ccrc-api`'s text, import `OVERLORD_DOORS`, `DOOR_TOOLS` and `readableDoorRow`, and hold
+  `READABLE_DOORS` (`board`, `history`). No exception list.
+  - The reader check is an equality: the set of `DOOR_TOOLS` names among the word's doors whose row has
+    `reader: true` equals `READABLE_DOORS`.
+  - The admit check calls `readableDoorRow` on each `READABLE_DOORS` tool; it never restates `fenced` or `class`.
+  - First, if the door process does not yet export the predicate, move the condition out of `readerOf` into
+    `export function readableDoorRow(row)` and have `readerOf` call it; run `door-process.test.ts` and
+    `door-tools-argv.test.ts` before and after, green both times (a move, no behaviour change).
+  - At the build's base every Table 3 piece has merged, so the census is green only once the client rows are added
+    (Step 4); before Step 4 the second check is red on all seven rows. If board B2 has not made the history readable
+    through the read tool, the admit check is red on `history`: that is E3 holding, never a case to relax.
 - [ ] **Step 3: Update the cap-reader census.** In `claimant.ts`, the guard rule also counts `[[ -n "$gate" ]]` before
   the call; in `claimant.test.ts`, the pinned sixth line becomes
   `[true, 'if [[ -n "$gate" ]] && ! _api_server_cap "$gate" && _api_server_cap \'\'; then']`, and the comment above it
@@ -750,7 +841,8 @@ export function messagesSections(f: CardFacts, capBytes?: number): readonly Card
   - Add the Overlord rows to the `case` block, each setting `gate='overlord-v1'` and the one detail text.
   - Change the check's condition from `[[ "$key" == plan.* && -n "$gate" ]]` to `[[ -n "$gate" ]]`.
   - Add one line to the header comment's list of gated rows, not starting with `# <word> rows`.
-- [ ] **Step 5: Run them and see them pass.** `ccrc-api-overlord-word.test.ts`, `census-w3/claimant.test.ts`,
+- [ ] **Step 5: Run them and see them pass.** `ccrc-api-overlord-word.test.ts`, `door-process.test.ts`,
+  `door-tools-argv.test.ts`, `census-w3/claimant.test.ts`,
   `ccrc-api.test.ts` (its header anchor is still unique), `ccrc-api-closed.test.ts`, `ccrc-api-inbox.test.ts` and
   `ccrc-api-timer.test.ts`.
 - [ ] **Step 6: The console's constant.** Type `OVERLORD_CAP` as `ServerCap` through a type-only import, and rewrite
@@ -784,10 +876,11 @@ plan's (merged before it), so it is not docs-only. The builder pushes once, afte
 | `server/src/continuity/card.ts` | no | +60 | the renderer arm, the nothing line, the messages section and its cap, the snapshot rule |
 | `server/src/continuity/cardFacts.ts` | no | +10 | the port and the gather |
 | `server/src/continuity/routes.ts` | no | 0 | one type edited in place |
+| `ccd/door-process.mjs` | no | +3 | the read tool's admit condition moved into the exported `readableDoorRow` (0 if it already exists) |
 | `ccd/ccrc-api` | no (not in `GROWTH_FILES`, not a `ccd/lib` library) | +20 | seven case rows of two lines, one condition, one comment line |
 | `pwa/src/overlord/homePlace.ts` | no | +1 | |
 | `CLAUDE.md` | no | +4 | |
-| Tests | no | about +340 | two new files; `continuity-card-render`, `continuity-card-facts`, `cardMutants`, `claimant.ts`, `claimant.test.ts`, `overlord-skill.test.ts`, `overlord-home-place.test.ts` and one comment in `overlord-gate-doors.test.ts` edited |
+| Tests | no | about +380 | two new files; `continuity-card-render`, `continuity-card-facts`, `sim/cardMutants.ts` (five mutants and their suite cases, R1 and R2 re-anchored), `sim/probeDoorSets.ts` (one mutant and its case), `claimant.ts`, `claimant.test.ts`, `overlord-skill.test.ts`, `overlord-home-place.test.ts` and one comment in `overlord-gate-doors.test.ts` edited |
 
 No other growth-checked file changes: `server/src/server.ts`, `index.ts`, `watch.ts`, `coord/store.ts`, `schema.ts`,
 `coord/routes.ts`, `pwa/src/lib/api.ts` and `ccd/session-hook.sh` are untouched. No migration.
@@ -814,6 +907,9 @@ numbers.
   whose check now reads every row; the client's cap-reader census counts the table's own non-empty test as its guard.
 - **`overlord-v1-waits-for-the-door-tools`** (question 8, ruled F1): the index's needs for this piece gain the door
   tools `board` and `history` (riding board B2) and `sequence` (riding sequence C).
+- **`overlord-v1-waits-for-a-readable-history`** (question 8, ruled call 1358): the door-process plan marks `history`
+  readable while its door is a fenced write the read tool refuses. E3 holds the read tool's own admit condition, so this
+  piece waits until board B2 makes the board and the history readable through the read tool.
 - **`overlord-v1-waits-for-chat-b`** (question 7, ruled F3): the chat plan says this piece need not wait for chat B.
   It waits, as the index says, so every reply is recorded from the Overlord's first turn.
 - **`plan-at-the-dated-path`**: the index names this plan `2026-11-14-overlord-w1/w1-overlord-v1.md`. It is
@@ -829,8 +925,12 @@ numbers.
   `docs/superpowers/plans/` under a dated name, as the Overlord clause's plan did. Its needs gain the door tools `board`
   and `history` (board B2) and `sequence` (sequence C), and chat B (ruled, F1 and F3).
 - Table W1, rows "Board and history door" and "Sequence and monitor": B2 ships the `board` and `history` door-process
-  tools, each `reader: true` (the history tool is ticket `history-door-process-row`); sequence C ships the `sequence`
-  tool.
+  tools, each `reader: true` (the history tool is ticket `history-door-process-row`), and owes that a reader can read
+  the board and the history through the read tool (call 1358, ticket `history-readable-through-the-read-tool`: on
+  `main` the history door is a write and its tool fenced, which the read tool refuses; B2 settles it by whichever
+  mechanism it builds). Sequence C ships the `sequence` tool, which is not readable (its reader flag unset).
+- This piece moves the read tool's admit condition into one exported predicate of the door process,
+  `readableDoorRow`, which its census asks; a later piece that changes what the read tool admits changes it there.
 - W2's band-3 settle door (`POST /api/overlord/inbox/settle`, word `overlord-v1`) is bound by this piece's client census:
   its piece adds its client row, its gated-table row and its door tool.
 - Question 33: add "Question 33's 'no separate server-side gate' is the operator's doors. The Overlord's own doors
@@ -862,9 +962,12 @@ numbers.
 - The plan's dated top-level path (the judge's layout) and the judge's editorial bound on a one-file plan are accepted.
 - Plan review 3877 and call 1340: every question ruled (1 to 6 and 9 to 11 as recommended; 7, 8 and 12 as stated);
   F1 to F8 and A1 to A7 applied in edit round 1.
+- Plan review 3885 and call 1358: E3 means a reader can read through the tool, asked through the door process's own
+  predicate, so E3 stays red until board B2 settles the fenced history; the reader-flag census is an equality; the
+  sequence's tool is not readable. F1, F2 and A1 to A4 applied in edit round 2.
 
 **Waiting on the coordinator:**
-- The narrow review of edit round 1.
+- The last narrow review, of edit round 2.
 - The index changes above.
 
 **Later:**
