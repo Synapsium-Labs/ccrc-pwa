@@ -56,6 +56,7 @@ import { framesTextToDrop, nextFramesJob } from '../../shared/framesLane.js';
 import { checkReducedFrame } from '../../shared/framesReduce.js';
 import { FRAMES_PARTS, readFramesCaptureResult } from '../../shared/framesResult.js';
 import { framesScan } from '../../shared/framesScan.mjs';
+import type { SecretMasker } from './accounts/mask.js';
 import type { WatcherCoordPort } from './coord/ports.js';
 import {
   openUntrustedBuildItems, UNTRUSTED_BUILD_ITEM_PROGRAMME, untrustedBuildItemsToRaise, untrustedBuildItemsToSettle,
@@ -94,9 +95,9 @@ export interface BuildCaptureLaneDeps extends NoticeDeps {
   readonly coord?: Pick<WatcherCoordPort, 'claudeBuilds' | 'noteClaudeBuildsSeen' | 'markClaudeBuildAttempt'
     | 'recordClaudeBuildVerdict' | 'requeueClaudeBuild' | 'claudeBuildDeliveries' | 'markDeliveryAttempt' | 'recordDelivery'
     | 'claudeBuildFrames' | 'markFramesAttempt' | 'recordFrames' | 'hasNotice' | 'recordFeedEvent' | 'itemsFor' | 'moveItem' | 'raiseItem'> | undefined;
-  /** Whether the product's live masker would change a text (`SecretMasker`): the receiver's check runs it beside the
-   *  reducer's own shapes. Absent: the shapes alone. */
-  readonly framesMasked?: ((text: string) => boolean) | undefined;
+  /** The product's live masker (`SecretMasker`, `index.ts`'s one): the frames receiver's check refuses a text it would
+   *  change, beside the reducer's own shapes. Absent: the shapes alone. */
+  readonly masker?: Pick<SecretMasker, 'maskText'> | undefined;
   /** Absent (a test, a script): rows are recorded and no job is sent. */
   readonly buildCapture?: BuildCaptureTransport | undefined;
   /** Absent: a `build-absent` refusal is answered `no-admin-lane`, and nothing is copied. */
@@ -249,9 +250,9 @@ export class BuildCaptureLane {
     // The receiver checks again (the capture owner's condition 1): the reducer's own check, and the live masker beside it.
     const p = FRAMES_PARTS[part]!;
     const text = result.frame.text;
-    const masked = d.framesMasked;
+    const mk = d.masker;
     const check = text === null ? { ok: true as const }
-      : checkReducedFrame(text, p.pane, framesOurs(p.case, p.pane), framesScan, masked === undefined ? undefined : (t) => masked(t));
+      : checkReducedFrame(text, p.pane, framesOurs(p.case, p.pane), framesScan, mk === undefined ? undefined : (t) => mk.maskText(t, { rows: true }) !== t);
     const checked = check.ok ? 'clear' as const : check.refusal;
     if (!check.ok) console.warn(`ccrc-server: frames capture: ${build} frame ${part} refused by the server's check (${check.refusal}); its text is not stored`);
     if (!coord.recordFrames(result, checked, this.now(), framesTextToDrop(rows, build))) {

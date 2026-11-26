@@ -149,6 +149,7 @@ import type { AccountGate } from '../accounts/gate.js';
 import { APPROVAL_RULED_GRACE_MS } from '../askwindow.js';
 import { itemBoundOf, outboxSettledOf } from '../pushSender.js';
 import { registerLedgerCoordinatorRoutes } from './ledgersRoutes.js';
+import { registerTestboxFramesRoute } from '../testboxFramesRoutes.js';
 import { registerReviewRoundsRoute } from './reviewRoundsRoute.js';
 import { endRequestHandler } from './endRequest.js';
 import { registerCoordCallsRoute } from './coordCallsRoute.js';
@@ -2469,6 +2470,14 @@ export function registerCoordRoutes(
     // answered; with no coordination store the key is absent, which a reader takes as unknown.
     const coord = deps.coord;
     return reply.code(200).send({ ok: true, testbox: watcher?.testboxLane.block() ?? null, ...(coord ? { delivery: deliveryStandingRead(coord) } : {}) });
+  });
+  // Desktop polish wave 187: the box frames recipe's one read (`testboxFramesRoutes.ts`), a session or the box token, checked
+  // even while sign-in is dark, its query closed, its text checked again before it is served.
+  registerTestboxFramesRoute(app, {
+    frames: deps.coord ? () => deps.coord!.claudeBuildFrames() : undefined,
+    session: (req) => sessionAuth(req).reason === 'session',
+    boxToken: (req) => checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/testbox/frames') === 'ok',
+    masker: deps.masker ?? SHAPE_ONLY_MASKER,
   });
   app.post('/api/testbox/switch', async (req, reply) => {
     // D-8166 (TC13): every request writes one `switch` ledger row, by the session that asked.
