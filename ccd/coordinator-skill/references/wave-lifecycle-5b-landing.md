@@ -10,7 +10,12 @@ run fresh each time, never from memory, because the operator can change any of
 them between two PRs. They are the block below, the **landing verdict**: run it
 from your own session, in a checkout of the PR's repository, with `<pr>` and
 `<handoffCommit>` filled in. It makes GETs only, prints exactly one line, and
-never merges, enqueues or writes a setting.
+never merges, enqueues or writes a setting. Besides the verdict, on a project
+positively opted in to the binding head, this session reads the landing line
+with the PR's number, `ccrc-api landing show --project <project> --pr <pr>`,
+and lands only when that read's `binding` is `ready` for this run's own entry
+at the head it binds: any other answer lands nothing (**The landing line**,
+below).
 
 ```bash
 ( # The landing verdict (spec 2026-09-23 §5.7). GETs only: it never merges, enqueues or writes a setting.
@@ -512,6 +517,27 @@ anything but `inert`, or when `$REG/landing/<project>/lander` exists; that is no
 lineage `enabled` marker, and the two are independent. On a project that is positively opted in, a `held` binding, a `binding` naming a
 PR that is not this run's, an answer you cannot read, or no entry for this PR
 means stop and report what you read to the operator; never choose a successor.
+On such a project the PR is a draft while it waits its turn, because a merge
+train boards any ready PR: read the line as soon as the advance to `merging`
+answers `ok`, and unless that read's `binding` is `ready` for this run's own
+entry at the head you bind, turn the PR back into a draft with
+`gh pr ready <pr> --undo` before your turn ends (D-9115). When that first
+read's `binding` is already `ready`, go on to land in the same sitting.
+Otherwise mark it ready again with `gh pr ready <pr>` only on a later read
+whose `binding` is, and run the verdict, the checks gate, this read and the
+landing in that same sitting. A `held` binding whose head, `order.head` of the
+same answer with its `pr` and `runId`, is another run's entry whose PR GitHub
+reads CLOSED with the train label (`landed-in-train` by default;
+`gh pr view <pr> --json state,labels`) is a train landing the landed reader has
+not marked yet: land nothing past it, write no train record and edit no
+train's body. While the line is paused its answer carries no `order.head`, so
+read the line without `--pr` and take the held entry from its `entries` as the
+one whose `id` is `binding.entryId`. The reader takes such an entry out of the
+line by itself, so read the line again after 20 minutes, the reader's longest
+back-off for this answer and one beat of its lane, with a timer as the wake;
+only if the same head still holds, mail the coordinator of that entry's run
+(`toId: 'coordinator'` with its `runId`) what you read, or, for an entry with
+no run, put it to the operator as an item.
 A `held` binding, `opt-in-unknown` included, stops. A missing `binding` (a server older than wave 5i) is the only fallback to the checks
 above, and on a project whose `lander` exists it still stops; `ccrc rollout --server-first` avoids the window in which a
 server older than wave 5i answers without one. An `inert` binding on a project whose `lander` exists stops too. An `inert` binding where `lander` does not exist (the opt-in marker
@@ -545,10 +571,11 @@ after `github-refused`, `changes-requested` or any other stop, and never in
 place of route Q: a repository with a merge queue lands through it.
 
 **A stop.** A stop enqueues nothing and merges nothing. It leaves the run where
-it is (at `merging` or `awaiting-review`) and changes nothing, with one
-exception, the new-head route below. Say in your turn's text which stop fired
-and what it read, for the operator: every stop goes to the operator, and only
-that exception goes on to the new-head route as well. The verdict stops with one
+it is (at `merging` or `awaiting-review`) and changes nothing, with two
+exceptions: the new-head route below, and the draft that **The landing line**
+turns a waiting PR back into. Say in your turn's text which stop fired and what
+it read, for the operator: every stop goes to the operator, and only the first
+exception goes on to the new-head route as well. The verdict stops with one
 of these reasons: `unreadable`, `read-3b-unknowable`, `not-at-head`,
 `unknown-rule-type`, `method-set-empty`, `rebase-only`,
 `queue-method-not-allowed`, `two-queue-methods`, `auto-merge-off`,

@@ -104,7 +104,13 @@ same, and shows as `absent`.
   is still at `awaiting-review`, and a ready PR there is landable. On every
   send-back to `working`, from `merging` or from `awaiting-review`, turn it
   back into a draft first (`gh pr ready <pr> --undo`; on a PR already a
-  draft it changes nothing). A
+  draft it changes nothing). On a project positively opted in to the
+  binding head, also turn it back into a draft once the advance to
+  `merging` answers `ok` while the landing line's `binding` is not `ready`
+  for this run's own entry, and mark it ready again only on a read whose
+  `binding` is, as §5b's **The landing line** says (D-9115); a `checks:`
+  mail whose `left` names `draft` for that run is this act and needs
+  nothing. A
   mismatch answers
   `{"ok":false,"reject":{"code":"<code>","detail":"<why>"}}` and leaves the
   run state untouched:

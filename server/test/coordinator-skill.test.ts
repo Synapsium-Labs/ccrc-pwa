@@ -3351,9 +3351,9 @@ describe('the landing route from the repository\'s own rules (landing-order wave
   });
 
   it('says what a stop does, and what is not one (spec §5.7.5)', () => {
-    expect(prose).toContain('A stop enqueues nothing and merges nothing. It leaves the run where it is (at `merging` or `awaiting-review`) and changes nothing, with one exception, the new-head route below.');
+    expect(prose).toContain('A stop enqueues nothing and merges nothing. It leaves the run where it is (at `merging` or `awaiting-review`) and changes nothing, with two exceptions: the new-head route below, and the draft that **The landing line** turns a waiting PR back into.');
     expect(prose).toContain('which stop fired and what it read');
-    expect(prose).toContain('every stop goes to the operator, and only that exception goes on to the new-head route as well');
+    expect(prose).toContain('every stop goes to the operator, and only the first exception goes on to the new-head route as well');
     expect(prose).toContain('Not a stop: a required check red on the head that is the PR\'s own');
   });
 
@@ -3510,6 +3510,7 @@ describe('the landing route from the repository\'s own rules (landing-order wave
       'Once its review is clean and wave N+1 is open — or, on the programme\'s LAST wave, which has no wave N+1, once its review is clean (its close is SKILL.md step 7\'s and §6\'s) — read `gh pr view <pr> --json headRefOid` as `handoffCommit`, mark its PR ready for review with `gh pr ready <pr>`, then advance the producer\'s run to `merging` (§4 — from `awaiting-review`, re-measured).',
       'Every worker opens its PR as a draft and it stays one until this moment (SKILL.md clause 15, D-8997): marked ready first, the advance measures it `open`, so the landing\'s checks lane reads it, where a draft at the advance leaves that lane off (D-8999).',
       'A refused advance turns the PR back into a draft at once (`gh pr ready <pr> --undo`, §4), and a head other than `handoffCommit` is never marked ready.',
+      'On a project positively opted in to the binding head, read the landing line as soon as the advance answers `ok` (§5b, **The landing line**): when its `binding` is `ready` for this run\'s own entry, the gate below, the enqueue and the read-back run in this sitting; otherwise turn the PR back into a draft, and they run only in the later sitting that marks it ready again (D-9115).',
       'Enqueue only a PR whose required checks have all passed — every required name the verdict discovered passes on the head, and `gh pr checks <pr> --required` exits 0: for any other PR gh arms auto-merge instead of queueing it, and prints the same "will be added to the merge queue … when ready" line either way.',
       'The `--required` exit decides, and a `ROUTE Q` answer does not waive it.',
       'On `0`, go on under this gate and the read-back below.',
@@ -3648,8 +3649,8 @@ describe('the landing route from the repository\'s own rules (landing-order wave
     const from = prose.indexOf('**A stop.**');
     expect(from, '§5b lost its stop paragraph').toBeGreaterThanOrEqual(0);
     const whole = [
-      '**A stop.** A stop enqueues nothing and merges nothing. It leaves the run where it is (at `merging` or `awaiting-review`) and changes nothing, with one exception, the new-head route below.',
-      'Say in your turn\'s text which stop fired and what it read, for the operator: every stop goes to the operator, and only that exception goes on to the new-head route as well.',
+      '**A stop.** A stop enqueues nothing and merges nothing. It leaves the run where it is (at `merging` or `awaiting-review`) and changes nothing, with two exceptions: the new-head route below, and the draft that **The landing line** turns a waiting PR back into.',
+      'Say in your turn\'s text which stop fired and what it read, for the operator: every stop goes to the operator, and only the first exception goes on to the new-head route as well.',
       'The verdict stops with one of these reasons: `unreadable`, `read-3b-unknowable`, `not-at-head`, `unknown-rule-type`, `method-set-empty`, `rebase-only`, `queue-method-not-allowed`, `two-queue-methods`, `auto-merge-off`, `unverifiable`, `not-reported`, `changes-requested`, `approval-missing`.',
       'A `changes-requested` stop is read before `WAIT` and `RED` on every route and is the operator\'s to decide, as **A requested change** above says.',
       'An `approval-missing` stop goes to the admin-merge door first, once (**The admin-merge door (D-8124)**, above): a `MERGED` line leaves no stop, and a `REFUSED` one is reported to the operator with the door\'s line.',
@@ -3686,6 +3687,7 @@ describe('the landing route from the repository\'s own rules (landing-order wave
       'The reads run fresh each time, never from memory, because the operator can change any of them between two PRs.',
       'They are the block below, the **landing verdict**: run it from your own session, in a checkout of the PR\'s repository, with `<pr>` and `<handoffCommit>` filled in.',
       'It makes GETs only, prints exactly one line, and never merges, enqueues or writes a setting.',
+      'Besides the verdict, on a project positively opted in to the binding head, this session reads the landing line with the PR\'s number, `ccrc-api landing show --project <project> --pr <pr>`, and lands only when that read\'s `binding` is `ready` for this run\'s own entry at the head it binds: any other answer lands nothing (**The landing line**, below).',
     ].join(' ');
     expect(prose.slice(0, to).trim()).toBe(whole);
   });
@@ -4149,6 +4151,12 @@ describe('landing order wave 5e: the landing line read before every landing', ()
     'On `binding.mode: \'ready\'`, land only when its `entryId`, `pr` and full `pinnedSha` identify this run\'s own pinned entry and the head you bind; on a ready `fixesMain` exception, still run the unchanged canonical required-checks gate above.',
     'A project is positively opted in to the binding head when its `binding` is present and anything but `inert`, or when `$REG/landing/<project>/lander` exists; that is not the lineage `enabled` marker, and the two are independent.',
     'On a project that is positively opted in, a `held` binding, a `binding` naming a PR that is not this run\'s, an answer you cannot read, or no entry for this PR means stop and report what you read to the operator; never choose a successor.',
+    'On such a project the PR is a draft while it waits its turn, because a merge train boards any ready PR: read the line as soon as the advance to `merging` answers `ok`, and unless that read\'s `binding` is `ready` for this run\'s own entry at the head you bind, turn the PR back into a draft with `gh pr ready <pr> --undo` before your turn ends (D-9115).',
+    'When that first read\'s `binding` is already `ready`, go on to land in the same sitting.',
+    'Otherwise mark it ready again with `gh pr ready <pr>` only on a later read whose `binding` is, and run the verdict, the checks gate, this read and the landing in that same sitting.',
+    'A `held` binding whose head, `order.head` of the same answer with its `pr` and `runId`, is another run\'s entry whose PR GitHub reads CLOSED with the train label (`landed-in-train` by default; `gh pr view <pr> --json state,labels`) is a train landing the landed reader has not marked yet: land nothing past it, write no train record and edit no train\'s body.',
+    'While the line is paused its answer carries no `order.head`, so read the line without `--pr` and take the held entry from its `entries` as the one whose `id` is `binding.entryId`.',
+    'The reader takes such an entry out of the line by itself, so read the line again after 20 minutes, the reader\'s longest back-off for this answer and one beat of its lane, with a timer as the wake; only if the same head still holds, mail the coordinator of that entry\'s run (`toId: \'coordinator\'` with its `runId`) what you read, or, for an entry with no run, put it to the operator as an item.',
     'A `held` binding, `opt-in-unknown` included, stops. A missing `binding` (a server older than wave 5i) is the only fallback to the checks above, and on a project whose `lander` exists it still stops; `ccrc rollout --server-first` avoids the window in which a server older than wave 5i answers without one.',
     'An `inert` binding on a project whose `lander` exists stops too.',
     'An `inert` binding where `lander` does not exist (the opt-in marker proven absent) leaves the checks above in force exactly as before: nothing here removes a project\'s earlier line and pause checks.',
