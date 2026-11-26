@@ -1,0 +1,130 @@
+/* The Overlord's place (Overlord W1 home B; spec 2026-11-09 §4, Table 4a): one column, read from the top, laid out for a
+   360 px phone first. Every colour is a token of tokens.css, never a literal, and no generated palette is edited.
+
+   GROUNDS. The place's root paints the page's own ground and ink, each card paints the surface, and every rule that sets an
+   ink states the ground it is drawn on beside it, so the contrast audit measures every pair in every palette through this
+   stylesheet and nothing here enters the uncovered census. A status label carries its meaning in WORDS (the readiness word,
+   "unmeasured"), so no state is read out of colour alone.
+
+   WIDTHS. Every grid and flex row lets its text tracks shrink (`min-width: 0`) and wraps its words anywhere, so 320 px
+   holds with no horizontal scroll; every control keeps the tap minimum. */
+
+.ov-place {
+  display: grid; gap: var(--sp-3); padding: var(--sp-2); min-width: 0; max-width: 56rem;
+  background: var(--bg-page); color: var(--ink-primary);
+}
+.ov-place-head { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+.ov-place-word {
+  margin: 0; font-size: var(--fs-meta); overflow-wrap: anywhere; background: var(--bg-page); color: var(--ink-secondary);
+}
+.ov-face { flex: none; display: inline-flex; align-items: center; justify-content: center; }
+
+/* The parts: a card each, on the surface ground, with its own ink. */
+.ovl-readiness,
+.ovl-ladder,
+.overlord-body,
+.ov-since,
+.ov-portfolio,
+.ov-capacity {
+  display: grid; gap: var(--sp-2); min-width: 0; padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--edge-subtle); border-radius: var(--r-md);
+  background: var(--bg-surface); color: var(--ink-primary); overflow-wrap: anywhere;
+}
+
+/* The secondary lines inside a card: the surface's ground, the secondary ink. */
+.ovl-readiness-meta,
+.ovl-readiness-detail,
+.ovl-note,
+.ovl-rung-needs,
+.ovl-ladder-facts,
+.overlord-body-note,
+.ov-since-text,
+.ov-since-reading,
+.ov-portfolio-facts,
+.ov-portfolio-class,
+.ov-portfolio-flag,
+.ov-portfolio-note,
+.ov-portfolio-said,
+.ov-capacity-runway,
+.ov-capacity-reset,
+.ov-capacity-note { background: var(--bg-surface); color: var(--ink-secondary); }
+
+/* A refusal inside a card: the danger ink on the surface. */
+.ovl-note[role='alert'],
+.overlord-body-refusal { background: var(--bg-surface); color: var(--status-dead-text); }
+
+/* The names and headings inside a card: the primary ink on the surface. */
+.ov-since-title,
+.ov-portfolio-title,
+.ov-capacity-title,
+.ov-since-label,
+.ov-portfolio-name,
+.ov-capacity-name { background: var(--bg-surface); color: var(--ink-primary); }
+
+/* ── the readiness word (part 1) ─────────────────────────────────────────────────────────────────────────────── */
+.ovl-readiness-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-width: 0; }
+.ovl-readiness-meta,
+.ovl-readiness-detail,
+.ovl-note { margin: 0; font-size: var(--fs-meta); }
+.ovl-pause { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+
+/* The status label: the readiness word's tone, each on its own ground, so each pair is measured. */
+.ovl-status { background: var(--bg-raised); color: var(--ink-secondary); }
+.ovl-status--ok { background: var(--bg-raised); color: var(--status-done-text); }
+.ovl-status--quiet { background: var(--bg-raised); color: var(--ink-secondary); }
+.ovl-status--attention { background: var(--status-attention-tint); color: var(--status-attention-text); }
+.ovl-status--dead { background: var(--status-dead-tint-solid); color: var(--status-dead-text); }
+
+/* The one-line form, on the Fleet's health row and in Waiting on you's head (a flex row: it wraps under the title). Its
+   tone class paints its ground and ink. */
+.ovl-line {
+  flex: 1 1 100%; min-width: 0; margin: 0; padding: 2px var(--sp-2); border-radius: var(--r-sm);
+  font-size: var(--fs-meta); overflow-wrap: anywhere;
+}
+
+/* ── the ladder, beside Pause ───────────────────────────────────────────────────────────────────────────────── */
+.ovl-rungs { display: flex; flex-wrap: wrap; gap: var(--sp-2); min-width: 0; }
+.ovl-rung-cell { display: grid; gap: var(--sp-1); min-width: 0; }
+.ovl-rung { min-height: var(--tap-min); }
+.ovl-rung-needs { font-size: var(--fs-xs); }
+.ovl-ladder-facts { display: grid; gap: var(--sp-1); margin: 0; font-size: var(--fs-meta); }
+.ovl-ladder-list { display: grid; gap: var(--sp-2); margin: 0; padding: 0; list-style: none; min-width: 0; }
+.ovl-ladder-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); min-width: 0;
+  padding: var(--sp-1) 0; border-top: 1px solid var(--edge-subtle); font-size: var(--fs-meta);
+}
+.ovl-ladder-row-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-left: auto; }
+
+/* ── the Overlord's session: Start, Open, Rebind and Restart ────────────────────────────────────────────────── */
+.overlord-body-form { display: grid; gap: var(--sp-2); min-width: 0; width: 100%; }
+.overlord-body-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); min-width: 0; }
+.overlord-body-note { margin: 0; padding: 0; list-style: none; font-size: var(--fs-meta); overflow-wrap: anywhere; }
+.overlord-body-refusal { margin: 0; font-size: var(--fs-meta); overflow-wrap: anywhere; }
+
+/* ── "Since you were last here" (part 2), the portfolio strip (4) and the capacity line (5) ────────────────── */
+.ov-since-title,
+.ov-portfolio-title,
+.ov-capacity-title { margin: 0; font: var(--weight-medium) var(--fs-base) / var(--lh-tight) var(--family-mono); }
+.ov-since-lines,
+.ov-portfolio-rows,
+.ov-capacity-pools { display: grid; gap: var(--sp-1); margin: 0; padding: 0; list-style: none; min-width: 0; }
+.ov-since-line,
+.ov-capacity-pool { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-2); min-width: 0; font-size: var(--fs-meta); }
+.ov-since-label,
+.ov-portfolio-name,
+.ov-capacity-name { font-weight: var(--weight-medium); min-width: 0; }
+.ov-since-text,
+.ov-since-reading,
+.ov-capacity-runway,
+.ov-capacity-reset,
+.ov-capacity-note { min-width: 0; }
+
+.ov-portfolio-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-width: 0; }
+.ov-portfolio-row { display: grid; gap: var(--sp-1); min-width: 0; padding: var(--sp-1) 0; border-top: 1px solid var(--edge-subtle); }
+.ov-portfolio-facts,
+.ov-portfolio-class,
+.ov-portfolio-flag,
+.ov-portfolio-note,
+.ov-portfolio-said { margin: 0; font-size: var(--fs-meta); }
+.ov-portfolio-controls,
+.ov-portfolio-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-width: 0; }

@@ -1,8 +1,13 @@
 // The console's root and the Overlord's route (Overlord W1 home, Task 2; plan question 1): `/` replaces itself with the place
 // `homePlace` answers once it is decided, and leaves no `/` in history; `/overlord` without `overlord-v1` replaces to `/fleet`.
 import type { ReactNode } from 'react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
+
+// The place's face reads the shell's chrome (`useMood`), and its session stream opens a socket: neither is this file's
+// subject, so both are stood in for (`overlord-face-part.test.tsx` and `overlord-session-stream.test.tsx` pin them).
+vi.mock('../src/face/useMood', () => ({ useMood: () => ({ mood: 'sleeping', cause: 'nothing needs anyone' }) }));
+vi.mock('../src/overlord/useOverlordSessionStream', () => ({ useOverlordSessionStream: () => undefined }));
 
 /** Let the route's deferred replace run (it waits for the whole commit, `useReplaceWhen`). */
 const flush = (): Promise<void> => act(async () => {});
@@ -16,14 +21,22 @@ import { useOverlordStore } from '../src/stores/overlord';
 import { navigate, useLocation } from '../src/lib/router';
 
 afterEach(() => { cleanup(); });
+/** The place's head word (`designationWordOf`): the place draws other status lines beside it. */
+const designationWord = (): string | null | undefined => document.querySelector('[data-designation-word]')?.textContent;
 
 const AT = 1_700_000_000_000;
 const ROW: DesignationView = {
   bound: { sessionId: 'lane-a-overlord', generation: 'g1' }, pending: null, term: 1, designatedTerm: 1, model: 'opus',
   accountPools: { pools: ['pool-a'], untagged: false }, pastIds: [], actor: 'operator', lastAttempt: null, stopsOwed: [],
 };
-const ladder = (operatorRung: string): ReadState<LadderWire> =>
-  ({ state: 'answered', value: { ok: true, operatorRung } as unknown as LadderWire, at: AT });
+/** A whole ladder read (the place draws every field of it), at the operator's rung. */
+const ladder = (operatorRung: string): ReadState<LadderWire> => ({
+  state: 'answered', at: AT,
+  value: {
+    ok: true, operatorRung, operatorRungSource: 'set', effectiveRung: operatorRung, binding: [], latches: [], conditions: [],
+    readBy: [], lastChange: null, rungs: [],
+  } as unknown as LadderWire,
+});
 const caps = (words: readonly string[]): ReadState<readonly string[]> => ({ state: 'answered', value: words, at: AT });
 const WORD = caps(['overlord-v1']);
 
@@ -227,16 +240,41 @@ describe('OverlordRoute, `/overlord`', () => {
     await flush();
     expect(location.pathname).toBe('/overlord');
     expect(screen.getByRole('heading', { name: 'Overlord' })).toBeTruthy();
-    expect(screen.getByText('The Overlord is running.')).toBeTruthy();
+    expect(designationWord()).toBe('The Overlord is running.');
+    expect(document.querySelector('[data-overlord-place]'), 'home B draws the whole place').not.toBeNull();
   });
   // Review 3319 A3: a read in flight is not a failure.
   it('while the designation loads it says Loading…, and only a failed read says it could not be read', async () => {
     setReads({ caps: WORD });
     render(<OverlordRoute />);
     await flush();
-    expect(screen.getByRole('status').textContent).toBe('Loading…');
+    expect(designationWord()).toBe('Loading…');
     expect(screen.queryByText('The designation could not be read.')).toBeNull();
     act(() => { useOverlordStore.setState({ designation: { state: 'unmeasured', error: 'HTTP 503' } }); });
-    expect(screen.getByRole('status').textContent).toBe('The designation could not be read.');
+    expect(designationWord()).toBe('The designation could not be read.');
+  });
+  // Carried from home A's review 3613 (ticket home-a-review-carries): the place waits on the capability read. While the caps
+  // load it draws nothing of the Overlord's and replaces nothing; the answer then decides, the place with the word and the
+  // Fleet without it, and only then.
+  it('waits on the capability read: nothing drawn and no replace while the caps load, then the answer decides', async () => {
+    setReads({ designation: { state: 'answered', value: ROW, at: AT }, ladder: ladder('chat') });
+    render(<OverlordRoute />);
+    await flush();
+    expect(location.pathname, 'no replace while the caps load').toBe('/overlord');
+    expect(screen.getByRole('status').textContent).toBe('Loading…');
+    expect(document.querySelector('[data-overlord-place]'), 'nothing of the Overlord drawn before the word').toBeNull();
+    act(() => { useOverlordStore.setState({ caps: WORD }); });
+    await flush();
+    expect(location.pathname).toBe('/overlord');
+    expect(document.querySelector('[data-overlord-place]')).not.toBeNull();
+    cleanup();
+    setReads({ designation: { state: 'answered', value: ROW, at: AT }, ladder: ladder('chat') });
+    render(<OverlordRoute />);
+    await flush();
+    expect(location.pathname).toBe('/overlord');
+    act(() => { useOverlordStore.setState({ caps: caps([]) }); });
+    await flush();
+    expect(location.pathname, 'the answer without the word replaces to the Fleet').toBe('/fleet');
+    expect(document.querySelector('[data-overlord-place]')).toBeNull();
   });
 });
