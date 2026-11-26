@@ -16,7 +16,7 @@
 import {
   READINESS_DEAF_MS, READINESS_DIALOG_MS, READINESS_FRESH_MS, READINESS_HOOK_QUIET_MS, READINESS_ITEM_TEXT,
   READINESS_LONG_TURN_MS, READINESS_PUSH_TEXT, READINESS_RESTART_BOUND_MS, READINESS_RESTARTS_PER_HOUR, READINESS_SERVED_WHY,
-  READINESS_WORDS, isStrandCause,
+  READINESS_WORDS, isReadinessWord, isStrandCause,
   type ReadinessItemKind, type ReadinessItemText, type ReadinessWire, type ReadinessWord, type StrandCause,
 } from '../../../shared/overlord-readiness.js';
 import type { DesignationRead } from '../../../shared/overlord-designation.js';
@@ -358,6 +358,20 @@ export type ReadinessNotice =
 
 /** The settle notes: the cause cleared, or the Overlord was retired (F9). */
 export const READINESS_SETTLE_NOTE = { cleared: 'cleared', retired: 'retired' } as const;
+
+/** The readiness module's own words, each a fact's or a notice's kind, a dead or unread cause, a push field or a log kind; none
+ *  is a refusal or a `reject.code`. With the fourteen words and the strand causes, the coordination kebab census admits them. */
+const READINESS_KEBAB_MAP = {
+  'not-built': 'a fact this build has no input for', 'not-wired': 'the holds port before renewal readings PR H',
+  'no-record': 'no registry record for the subject', 'no-state': 'no hook state yet', 'dead-push': 'the dead push notice',
+  'restart-bound': 'down past the restart bound', 'third-restart': 'a third restart in the hour',
+  'strand-marker': 'the strand marker unread', 'turn-marker': 'the turn marker unread', 'notice-raise': 'a refused raise, logged once',
+  'notice-settle': 'a refused settle, logged once', 'overlord-readiness': 'the push tag', 'overlord-restart': 'the push\'s Restart action',
+  'none-exhausted': 'no candidate reads exhausted', 'at-ceiling': 'a candidate at its ceiling', 'mail-disabled': 'the mail switch',
+  'designation-unreadable': 'the candidates of an unreadable designation',
+} as const;
+export const isReadinessKebab = (word: string): boolean =>
+  isReadinessWord(word) || isStrandCause(word) || Object.prototype.hasOwnProperty.call(READINESS_KEBAB_MAP, word);
 const COUNT_KEY = 'count';
 const LIVE_ITEM_STATES: ReadonlySet<string> = new Set(['open', 'checking']);
 const STRANDED_AT = READINESS_WORDS.indexOf('stranded');

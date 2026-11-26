@@ -80,6 +80,7 @@ import { isOverlordInboxKebab } from '../src/coord/overlordInbox.js';
 import { isOverlordHistoryKebab } from '../src/coord/overlordHistory.js';
 import { isLadderKebab } from '../src/coord/overlordLadder.js';
 import { isInvariantKebab } from '../src/coord/invariants.js';
+import { isReadinessKebab } from '../src/coord/overlordReadiness.js';
 import { isOverlapsKebab } from '../src/coord/overlaps.js';
 import { isDoneTestKebab } from '../src/coord/doneTests.js';
 import { isSequenceStampKebab } from '../src/coord/overlordSequenceStore.js';
@@ -1383,8 +1384,12 @@ describe('the rejection table is total, in both directions', () => {
         // why a row is not applicable (`'tables-absent'`, `'predicate-not-built'`) and how a live finding's latch stood
         // (`'row-only'`) as literals. Each rides a verdict or a findings row, never a `refused` or `reject.code`. Admitted
         // through the module's guard, derived from its maps, never NOT_CODES.
-        || isInvariantKebab(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, edge state, health word, edge kind, spend state, service class, Overlord door word, actor issuer, Overlord refusal, designation word, unforecastable reason, approval census word, untrusted-build reason, Overlord gate word, Overlord inbox word, Overlord history word, linking refusal, block-wake word, sequence stamp word or invariant monitor word`).toBe(true);
+        || isInvariantKebab(tok)
+        // THE READINESS WORD (Overlord W1, §6.4): `coord/overlordReadiness*.ts` name the fourteen words, the strand causes, a fact's
+        // and a notice's kinds, the dead causes, the push's tag and action and the lane's log kinds as literals. None rides a
+        // `refused` or a `reject.code`. Admitted through the module's guard, derived from its maps and L0's, never NOT_CODES.
+        || isReadinessKebab(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, edge state, health word, edge kind, spend state, service class, Overlord door word, actor issuer, Overlord refusal, designation word, unforecastable reason, approval census word, untrusted-build reason, Overlord gate word, Overlord inbox word, Overlord history word, linking refusal, block-wake word, sequence stamp word, invariant monitor word or readiness word`).toBe(true);
     }
   });
 });
