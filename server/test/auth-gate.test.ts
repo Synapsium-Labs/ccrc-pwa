@@ -406,7 +406,10 @@ describe('the scanner is looking at something', () => {
     // same class on the docs plugin's own instance, so with no marker header they answer 403 `foreign-request` too. Past the
     // marker, every read and the add refuse `auth-off` while sign-in is dark; the add takes the account gate's step-up.
     // 15 with the two settings doors (X2 P4.3): session-gated, and on the same request-marker check.
-    expect(scanRoutes('docs/routes.ts').length, 'auth-gate: docs/routes.ts registers 15').toBe(15);
+    // 20 with the artifact tier's five console doors (X5 A2.3): `GET` and `POST /api/docs/artifacts` (the list read and the mint),
+    // `GET /api/docs/artifacts/scope`, `POST /api/docs/artifacts/:id/revoke` and `POST /api/docs/artifacts/revoke-all`, the same
+    // class on the same request-marker check; the scope read and the mint also take the account gate.
+    expect(scanRoutes('docs/routes.ts').length, 'auth-gate: docs/routes.ts registers 20').toBe(20);
     // 1 in `linear/routes.ts` (named workspaces S4, design 2026-10-20 §4.2): `GET /api/linear/resolve`, the
     // ticket-title preview read. Session-gated and NOT EXEMPT, no box token, `Cache-Control: no-store`.
     // 5 since S4b (design §5.1): the connection's `GET`, `PUT`, `POST …/check` and `DELETE /api/linear/connection`, all
@@ -839,8 +842,10 @@ describe('the scanner is looking at something', () => {
     // a routes file of its own, one box-token machine lane IN EXEMPT; and `GET /api/overlord/invariants`, the operator's read of the
     // invariant monitor in `coord/overlordRoutes.ts`, session-gated and NOT EXEMPT, no box token. The HTTP half 329 -> 331, the
     // gated count 212 -> 213 (331 - 118), the exempt-HTTP count 117 -> 118.
+    // 339 with the artifact tier's five console doors (X5 A2.3), in `docs/routes.ts`: session-gated and NOT EXEMPT, no box token.
+    // The HTTP half 331 -> 336, the gated count 213 -> 218 (336 - 118), the exempt-HTTP count stays 118.
     expect(scanRoutes('coord/overlordSequenceRoutes.ts').length).toBe(1);
-    expect(ROUTES.length).toBe(334);
+    expect(ROUTES.length).toBe(339);
     expect(scanRoutes('laneModelsRoutes.ts').length).toBe(1);
     expect(scanRoutes('coord/delegationBackfillRoutes.ts').length).toBe(2);
     expect(scanRoutes('coord/approvalCensusRoutes.ts').length).toBe(1);
@@ -1032,7 +1037,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 334 scanned + the static wildcard when the bundle is built.
+    // 339 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1850,7 +1855,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 331 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 336 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1914,7 +1919,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 331 HTTP routes, not the 118 exempt.
+          //    is not itself flag-aware — the assertion that covers all 336 HTTP routes, not the 118 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

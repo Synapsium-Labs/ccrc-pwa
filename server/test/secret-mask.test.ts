@@ -1280,6 +1280,9 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/docs/:project/file': 'repository content, not session text',
     '/api/docs/:project/history': 'repository content (commit subjects and author names), not session text',
     '/api/docs/:project/range': 'repository content (one file in frames, base64), not session text',
+    // The artifact tier's two reads (X5 A2.3): never a token or a URL, which only the mint (a POST, masked) answers, once.
+    '/api/docs/artifacts': "the tier's availability word and the live capabilities' rows: random ids, project, section, path, a short commit or a branch, times, and the origins the operator confirmed; repository content, not session text",
+    '/api/docs/artifacts/scope': "one page's manifest counts (files, uncommitted, unsized, bytes): repository content, not session text",
     // The outside-folder reads (X2 P2.3): operator data and file text read from a folder the operator registered, never
     // session text. Only the paths door answers an absolute path, and it answers it to Settings alone.
     '/api/docs-folders': "each outside folder's label and state word: no path, no session text (X2 P2.3)",

@@ -1332,21 +1332,21 @@ describe('the draft review read surface', () => {
 
 // ── the docs surface (the native Docs reader's W3, design 2026-10-01 §3.13) ───
 //
-// `server/src/docs/routes.ts` is the FIFTH file that registers routes. Its fifteen are session-gated, NOT EXEMPT and
+// `server/src/docs/routes.ts` is the FIFTH file that registers routes. Its twenty are session-gated, NOT EXEMPT and
 // consult no box token at all (§3.4: "No box token is used"), so the census here is the update surface's, minus the
 // one lane: every registration it reads is a door in `DOCS_DOORS`, in both directions, and no docs file consults the
 // token. EVERY file under `server/src/docs/` is read, not `routes.ts` alone: a box-token call in the plugin's own
-// hooks would gate all fifteen routes as surely as one in a handler. `DOCS_DOORS` joins neither `SESSION_ONLY_ALL` nor
+// hooks would gate all twenty routes as surely as one in a handler. `DOCS_DOORS` joins neither `SESSION_ONLY_ALL` nor
 // `ALL_LANES`: a docs read or refresh is not a coordination write, so CLAUDE.md's box-token bullet owes it no
 // sentence and no number word moves. And the page grammar's prefix is never a SERVER route (§3.13's new scan): a
 // `/docs/...` URL is the PWA's page, answered by the SPA shell, under every file in `server/src`.
-describe('the docs surface: fifteen session-gated doors, no box token, no /docs route (spec 2026-10-01 §3.13)', () => {
+describe('the docs surface: twenty session-gated doors, no box token, no /docs route (spec 2026-10-01 §3.13)', () => {
   const DOCS_SRC = read('server/src/docs/routes.ts');
   /** Every source file of the docs surface, by listing the directory, so a file added there is read without an edit
    *  here. */
   const DOCS_FILES = readdirSync(path.join(REPO, 'server', 'src', 'docs'))
     .filter((f) => f.endsWith('.ts')).sort().map((f) => `server/src/docs/${f}`);
-  /** The fifteen doors, by path (§3.4; the history door, rich-docs spec G4; the range door, X2 P1; the outside folders' seven, X2 P2; the settings pair, X2 P4.3). Hand-kept for the NAMES only: the cases below derive the same set from the file
+  /** The twenty doors, by path (§3.4; the history door, rich-docs spec G4; the range door, X2 P1; the outside folders' seven, X2 P2; the settings pair, X2 P4.3; the artifact tier's five, X5 A2.3). Hand-kept for the NAMES only: the cases below derive the same set from the file
    *  and compare in both directions, so a route there cannot join or leave without this literal moving. */
   const DOCS_DOORS = ['/api/docs/projects', '/api/docs/:project/tree', '/api/docs/:project/file',
     '/api/docs/:project/history',
@@ -1357,7 +1357,11 @@ describe('the docs surface: fifteen session-gated doors, no box token, no /docs 
     '/api/docs-folders', '/api/docs-folders', '/api/docs-folders/paths', '/api/docs-folders/:label',
     '/api/docs-folders/:label/tree', '/api/docs-folders/:label/file', '/api/docs-folders/:label/range',
     // The docs settings (X2 P4.3, spec 2026-11-18 §7): one path, GET and PUT; session-gated, no box token, like the thirteen above.
-    '/api/docs/settings', '/api/docs/settings'];
+    '/api/docs/settings', '/api/docs/settings',
+    // The artifact tier's console doors (X5 A2.3, spec 2026-11-19 §3.2): the list read and the mint share a path (GET and POST),
+    // the scope read, Revoke and Revoke all; session-gated by the account gate or by the root gate, no box token, like the fifteen above.
+    '/api/docs/artifacts', '/api/docs/artifacts', '/api/docs/artifacts/scope', '/api/docs/artifacts/:id/revoke',
+    '/api/docs/artifacts/revoke-all'];
   const REGISTERED = registrationsIn(DOCS_SRC).map((r) => r.key);
   const pathOf = (k: string): string => k.slice(k.indexOf(' ') + 1);
   /** The registration lines the planted-call controls anchor on (the plan's fixed registration text). */
