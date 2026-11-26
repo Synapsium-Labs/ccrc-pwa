@@ -18,6 +18,7 @@ import type {
   BoardGoalsRow, BoardIdentityRow, BoardItem, BoardPortfolioRow, BoardStallNoticeCount, BoardText, BoardTextSource,
   BoardTimersRow, BoardUnmeasured, BoardWorkRow, Measured, OverlordBoard, UntrustedText,
 } from '../../../shared/overlordBoard.js';
+import { BOARD_TEXT_SOURCES, BOARD_UNMEASURED } from '../../../shared/overlordBoard.js';
 
 /** One reader's answer, as the gatherer hands it over: its value, or why it could not be read (a closed word). */
 export type BoardRead<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly reason: BoardUnmeasured };
@@ -143,6 +144,11 @@ export function composeBoard(i: BoardInputs): OverlordBoard {
       : partOf(i.timers, (rows) => ({ programmes: timersByProgramme(rows, programmes.value.map((p) => ({ slug: p.slug, coordinator: coordinatorOf(p) }))) })),
   };
 }
+
+/** The board's own words, for the coordination kebab census: its closed unmeasured reasons, its text sources, the ratified trust
+ *  and the listing's `not-listed`. Each rides a 200's part, never a refusal or a reject code. Derived from the wire's lists. */
+const BOARD_WORDS: ReadonlySet<string> = new Set<string>([...BOARD_UNMEASURED, ...BOARD_TEXT_SOURCES, 'operator-ratified', 'not-listed']);
+export const isBoardKebab = (word: string): boolean => BOARD_WORDS.has(word);
 
 /** The ledger line's count: the programmes the board names, or 0 when the programmes read failed. */
 export const boardProgrammeCount = (b: OverlordBoard): number => (b.identity.state === 'measured' ? b.identity.programmes.length : 0);

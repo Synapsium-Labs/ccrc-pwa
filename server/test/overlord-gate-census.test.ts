@@ -36,9 +36,10 @@ const LINKING_ROUTES = 'server/src/linking/routes.ts';
 const INBOX_ROUTES = 'server/src/coord/overlordInboxRoutes.ts';
 const HISTORY_ROUTES = 'server/src/coord/overlordHistoryRoutes.ts';
 const SEQUENCE_ROUTES = 'server/src/coord/overlordSequenceRoutes.ts';
+const BOARD_ROUTES = 'server/src/coord/overlordBoardRoutes.ts';
 /** The files an `overlord` row may name: the same eight `overlord-doors-census.test.ts` reads (D-8809 added the linking file, the inbox
  *  piece its own, the history door (W1, PR B1) its own, the cursor read of the sequence (W1 sequence C) its own). */
-const SCANNED = [OVERLORD_ROUTES, CONTINUITY, LEDGERS_ROUTES, NAME_LIST_ROUTES, LINKING_ROUTES, INBOX_ROUTES, HISTORY_ROUTES, SEQUENCE_ROUTES] as const;
+const SCANNED = [OVERLORD_ROUTES, CONTINUITY, LEDGERS_ROUTES, NAME_LIST_ROUTES, LINKING_ROUTES, INBOX_ROUTES, HISTORY_ROUTES, SEQUENCE_ROUTES, BOARD_ROUTES] as const;
 const sourceOf = (rel: string): string => readFileSync(path.join(REPO, rel), 'utf8');
 const VERBS = new Set(['get', 'post', 'put', 'delete']);
 
@@ -290,6 +291,18 @@ describe('every overlord door asks the one gate, with its own row, before the st
   it('CONTROL: a cursor read that skips the gate call is found', () => {
     const t = mutate(sourceOf(SEQUENCE_ROUTES), /const g = await deps\.gate\(req, reply, 'sequence'[^\n]*\n\s*if \(g\.kind === 'refused'\) return reply;\n/, '');
     expect(violationsOf(t, SEQUENCE_ROUTES).join('\n')).toMatch(/sequence: the handler never calls gate\(/);
+  });
+
+  it('the board file registers the board read, which holds the form (board B2)', () => {
+    const rows = overlordRowsOf(BOARD_ROUTES);
+    expect([...rows.entries()]).toEqual([['GET /api/overlord/board', ['board']]]);
+    expect(violationsOf(sourceOf(BOARD_ROUTES), BOARD_ROUTES)).toEqual([]);
+  });
+
+  // Call 1590, ruling point 5: the history and board reads are unfenced, so the gate call is all that stands before them.
+  it('CONTROL: a board read that skips the gate call is found', () => {
+    const t = mutate(sourceOf(BOARD_ROUTES), /const g = await deps\.gate\(req, reply, 'board'[^\n]*\n\s*if \(g\.kind === 'refused'\) return reply;\n/, '');
+    expect(violationsOf(t, BOARD_ROUTES).join('\n')).toMatch(/board: the handler never calls gate\(/);
   });
 
   it('the whole continuity file is clean, over every overlord row', () => {
