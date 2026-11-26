@@ -34,9 +34,10 @@ import { mkTmp } from './tmpHelpers.js';
 const T: CaptureTimings = {
   stepMs: 1000, exitMs: 100, pollMs: 10, tmuxCallMs: 20, stopWaitMs: 50, standInCloseMs: 30, setupMs: 5, removeMs: 7,
   deliveryDriveMs: 300, deliveryKillGraceMs: 60, deliverySettleMs: 200, deliveryQuietMs: 40,
+  framesDriveMs: 250, framesPersonDriveMs: 900, framesHoldMs: 600,
 };
 /** The delivery recipe's bounds in the contract (Desktop polish wave 178): build trust's worst case never reads them. */
-const DELIVERY_KEYS: readonly (keyof CaptureTimings)[] = ['deliveryDriveMs', 'deliveryKillGraceMs', 'deliverySettleMs', 'deliveryQuietMs'];
+const DELIVERY_KEYS: readonly (keyof CaptureTimings)[] = ['deliveryDriveMs', 'deliveryKillGraceMs', 'deliverySettleMs', 'deliveryQuietMs', 'framesDriveMs', 'framesPersonDriveMs', 'framesHoldMs'];
 
 describe('the worst case of one capture by the wired runner (capture.ts#captureWorstCaseMs)', () => {
   it('adds the setup allowance, the start, each typed step\'s two calls, each step\'s wait and a poll, the exit wait and a poll, the stop, the stop wait and a poll, the stand-in\'s close and the removal allowance', () => {
