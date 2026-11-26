@@ -513,3 +513,147 @@ describe('the operator\'s own verbs never read the mark (ruling 2026-10-19)', ()
     expect(target()).toBe('');
   });
 });
+
+// ── wave 3b's predicate: pure, and called by nothing yet ────────────────────
+
+describe('_provider_move_rank_to: which lanes a provider move may take, and in what order', () => {
+  /** `claude*` are the fixture roster's Anthropic lanes, `gpt` its Codex lane. */
+  const rank = (cand: string, o: { cur?: string; first?: number; marked?: string; goods?: string } = {}): string =>
+    h.sh(`r=unset; _provider_move_rank_to r ${cand} ${o.cur ?? 'claude'} ${o.first ?? 1000} '${o.marked ?? ''}' '${o.goods ?? ''}' && echo "$r" || echo "never[$r]"`);
+
+  it('0: a lane with a good Stop newer than the episode\'s first failure, on either provider', () => {
+    expect(rank('claude-a', { goods: 'claude-a=1001' })).toBe('0');
+    expect(rank('gpt', { goods: 'claude-a=5 gpt=1001' })).toBe('0');
+  });
+
+  it('1: a lane on another provider', () => {
+    expect(rank('gpt')).toBe('1');
+    expect(rank('claude-a', { cur: 'gpt' })).toBe('1');
+  });
+
+  it('2: an unproved lane on the same provider, an old good Stop included', () => {
+    expect(rank('claude-a')).toBe('2');
+    expect(rank('claude-a', { goods: 'claude-a=1000' })).toBe('2');
+    expect(rank('claude-a', { goods: 'claude-b=1001' })).toBe('2');
+  });
+
+  it('never: the lane it is on, a marked lane, any lane of a provider with two marked lanes', () => {
+    expect(rank('claude', { goods: 'claude=1001' })).toBe('never[]');
+    expect(rank('claude-a', { marked: 'claude-a', goods: 'claude-a=1001' })).toBe('never[]');
+    expect(rank('claude-d', { marked: 'claude claude-a', goods: 'claude-d=1001' })).toBe('never[]');
+  });
+
+  it('a provider with one marked lane is not failing, and another provider\'s marks do not count against this one', () => {
+    expect(rank('claude-a', { marked: 'claude' })).toBe('2');
+    expect(rank('gpt', { marked: 'claude claude-a' })).toBe('1');
+    expect(rank('claude-a', { cur: 'gpt', marked: 'gpt claude' })).toBe('1');
+  });
+
+  it('a lane outside both arrays is a provider of its own', () => {
+    const own = (cand: string, o: Parameters<typeof rank>[1] = {}): string => h.sh(`CCRC_CODEX_BACKEND=(); CCRC_ANTHROPIC_BACKEND=(claude claude-a)
+      r=unset; _provider_move_rank_to r ${cand} ${o.cur ?? 'claude-b'} 1000 '${o.marked ?? ''}' '' && echo "$r" || echo "never[$r]"`);
+    expect(own('claude-d')).toBe('1');
+    expect(own('claude-d', { marked: 'gpt claude-b' })).toBe('1');
+    expect(own('claude-a', { cur: 'claude' })).toBe('2');
+  });
+
+  it('two Codex lanes are one provider', () => {
+    expect(h.sh(`CCRC_CODEX_BACKEND=(gpt claude-d); CCRC_ANTHROPIC_BACKEND=(claude claude-a)
+      _provider_move_rank_to r claude-d gpt 1000 '' '' && echo "$r"`)).toBe('2');
+  });
+
+  it('nothing calls it or its sibling, and it reads no file (this wave moves nobody)', () => {
+    const src = ccdSource().split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect([...src.matchAll(/\b_provider_move_rank_to\b/g)]).toHaveLength(1);
+    expect([...src.matchAll(/\b_provider_move_fits\b/g)]).toHaveLength(1);
+    const open = src.indexOf('\n_provider_move_rank_to() {');
+    const body = src.slice(open, src.indexOf('\n}\n', open)).replace(/^.*\n.*\n/, '');   // without the header and its comment
+    expect(body).not.toMatch(/\$REG|\$HOME|[<>]{1,2} ?"|\$\((?!\()/);
+  });
+});
+
+// ── wave 3b's other predicate: does the session fit there ────────────────────
+
+describe('_provider_move_fits: the session\'s measured context against the window of the lane it would land on', () => {
+  const ID = 's-a';
+  const FIT_NOW = T0;
+  /** The statusline's sidecar, in its own key order, compact as `jq -c` writes it. */
+  const sidecar = (tokens: number | null, o: { uuid?: string; ts?: number; raw?: string } = {}): void => {
+    fs.mkdirSync(regFile('usage'), { recursive: true });
+    fs.writeFileSync(regFile(`usage/${ID}.json`), o.raw ?? `${JSON.stringify({
+      ts: o.ts ?? FIT_NOW - 60, uuid: o.uuid ?? uuidOf(ID), account: 'claude', model: 'm', effort: 'high', ctxPct: 40, ctxTokens: tokens, ctxWindow: 1_000_000,
+      cost: 1, cacheExpiresAt: null, agent: null, limits: {},
+    })}\n`);
+  };
+  const settings = (lane: string, body: string): void => {
+    const dir = h.sh(`_cfg_dir_to d ${lane}; echo "$d"`);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'settings.json'), body);
+  };
+  const windowOf = (lane: string, tokens: string): void => settings(lane, JSON.stringify({ model: 'opus', env: { A: 'b', CLAUDE_CODE_MAX_CONTEXT_TOKENS: tokens }, hooks: {} }, null, 2));
+  const fits = (cur: string, cand: string): boolean =>
+    h.sh(`CCRC_CODEX_BACKEND=(gpt gpt-b); date() { [[ "$1" == +%s ]] && echo ${FIT_NOW} || command date "$@"; }; _provider_move_fits ${ID} ${cur} ${cand} && echo yes || echo no`) === 'yes';
+  beforeEach(() => { row(ID, 'claude', null); });
+
+  it('onto a Codex lane: inside nine tenths of its window, as its settings state it', () => {
+    windowOf('gpt', '272000');
+    sidecar(244_800); expect(fits('claude', 'gpt')).toBe(true);
+    sidecar(244_801); expect(fits('claude', 'gpt')).toBe(false);
+    windowOf('gpt', '400000');
+    expect(fits('claude', 'gpt')).toBe(true);
+    sidecar(698_000); expect(fits('claude', 'gpt')).toBe(false);
+  });
+
+  it('onto a lane of another provider with no stated window: never, whatever its settings file is', () => {
+    sidecar(10);
+    expect(fits('claude', 'gpt'), 'no settings file').toBe(false);
+    settings('gpt', '{"env":{}}'); expect(fits('claude', 'gpt'), 'no key').toBe(false);
+    windowOf('gpt', 'lots'); expect(fits('claude', 'gpt'), 'not a number').toBe(false);
+    const f = path.join(h.sh('_cfg_dir_to d gpt; echo "$d"'), 'settings.json');
+    fs.rmSync(f); fs.mkdirSync(f); expect(fits('claude', 'gpt'), 'a directory').toBe(false);
+    fs.rmdirSync(f); execFileSync('mkfifo', [f]); expect(fits('claude', 'gpt'), 'a FIFO never blocks it').toBe(false);
+  });
+
+  it('a window written as a number is read too', () => {
+    sidecar(10); settings('gpt', '{"env":{"CLAUDE_CODE_MAX_CONTEXT_TOKENS":272000}}');
+    expect(fits('claude', 'gpt')).toBe(true);
+  });
+
+  it('from a Codex lane onto an Anthropic one: 200000, the smallest window a Claude model has, unless its settings state one', () => {
+    sidecar(180_000); expect(fits('gpt', 'claude-a')).toBe(true);
+    sidecar(180_001); expect(fits('gpt', 'claude-a')).toBe(false);
+    windowOf('claude-a', '1000000'); expect(fits('gpt', 'claude-a')).toBe(true);
+    const f = path.join(h.sh('_cfg_dir_to d claude-a; echo "$d"'), 'settings.json');
+    fs.rmSync(f); fs.mkdirSync(f); sidecar(10);
+    expect(fits('gpt', 'claude-a'), 'settings that cannot be read state nothing, not the floor').toBe(false);
+  });
+
+  it('a session whose context nobody measured never crosses providers', () => {
+    windowOf('gpt', '272000');
+    expect(fits('claude', 'gpt'), 'no sidecar').toBe(false);
+    for (const [why, put] of [
+      ['null', () => sidecar(null)], ['zero: a resumed session that has run no turn', () => sidecar(0)],
+      ['another conversation\'s', () => sidecar(10, { uuid: 'uuid-other' })], ['over two hours old', () => sidecar(10, { ts: FIT_NOW - 7201 })],
+      ['no clock', () => sidecar(10, { raw: `{"uuid":"${uuidOf(ID)}","ctxTokens":10,"cost":1}` })], ['torn', () => sidecar(10, { raw: '{"ts":19' })],
+    ] as const) { put(); expect(fits('claude', 'gpt'), why).toBe(false); }
+    sidecar(10); expect(fits('claude', 'gpt'), 'control').toBe(true);
+    fs.rmSync(regFile(`${ID}.uuid`)); expect(fits('claude', 'gpt'), 'a row with no uuid').toBe(false);
+    row(ID, 'claude', null); fs.renameSync(regFile(`usage/${ID}.json`), regFile('elsewhere')); fs.symlinkSync(regFile('elsewhere'), regFile(`usage/${ID}.json`));
+    expect(fits('claude', 'gpt'), 'a symlink').toBe(false);
+  });
+
+  it('between two Anthropic lanes: no floor, so a session larger than 200000 still moves; a stated window is kept to', () => {
+    expect(fits('claude', 'claude-a'), 'nothing measured').toBe(true);
+    sidecar(698_000); expect(fits('claude', 'claude-a')).toBe(true);
+    windowOf('claude-a', '200000'); expect(fits('claude', 'claude-a')).toBe(false);
+    windowOf('claude-a', '1000000'); expect(fits('claude', 'claude-a')).toBe(true);
+  });
+
+  it('between two Codex lanes: refused when both sides are measured and it does not fit, allowed when one is not', () => {
+    const own = (): boolean => fits('gpt-b', 'gpt');
+    expect(own(), 'neither').toBe(true);
+    windowOf('gpt', '272000'); expect(own(), 'no sidecar').toBe(true);
+    sidecar(300_000); expect(own()).toBe(false);
+    sidecar(200_000); expect(own()).toBe(true);
+  });
+});
