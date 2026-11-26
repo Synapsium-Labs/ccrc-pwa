@@ -5,7 +5,7 @@
 // are built with `String.fromCharCode`.
 import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { FRAME_MANIFEST, frameCsp, mermaidGate, type RenderInput } from '@synapsium-labs/pinax-lib/frame';
+import { FRAME_MANIFEST, frameCsp, isAnchorToken, mermaidGate, type RenderInput } from '@synapsium-labs/pinax-lib/frame';
 import type { DocFrame, HostAdapters, HostLink, mountDocFrame, HiddenChar } from '@synapsium-labs/pinax-lib/host';
 import { READER_STORE_PREFIX } from '../src/lib/readerLimits';
 import type { EnumerableStoragePort } from '../src/lib/storage';
@@ -19,7 +19,7 @@ import { READER_APPEARANCE_MAP } from '../src/docs/reader/appearance';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { parseAppearance } from '@synapsium-labs/pinax-lib/frame';
-import { mountReader, type ReaderMountInput } from '../src/docs/reader/bridge';
+import { mountReader, TOP_TOKEN, type ReaderMountInput } from '../src/docs/reader/bridge';
 import type { ReaderVersionSeed } from '../src/docs/reader/history';
 
 afterEach(() => {
@@ -1113,6 +1113,7 @@ describe('places (X2 P5.3)', () => {
   it('closeOverlay and goto call the live frame\'s, and goto without a from passes none', async () => {
     const r = rig({ onPlace: vi.fn() });
     const m = await r.run();
+    r.optionsAt(0).adapters.onReady!();
     m.closeOverlay!();
     expect(r.frame.closeOverlay).toHaveBeenCalledTimes(1);
     m.goto!('sec-4', 'tok');
@@ -1148,9 +1149,122 @@ describe('places (X2 P5.3)', () => {
     r.frame.closeOverlay.mockImplementation(() => { throw new TypeError('refused'); });
     r.frame.goto.mockImplementation(() => { throw new TypeError('refused'); });
     const m = await r.run();
+    r.optionsAt(0).adapters.onReady!();
     expect(() => m.closeOverlay!()).not.toThrow();
     expect(() => m.goto!('sec-4', 'tok')).not.toThrow();
-    expect(warn).toHaveBeenCalled();
+    expect(() => m.gotoTop!('sec-4')).not.toThrow();
+    expect(warn).toHaveBeenCalledTimes(3);
+  });
+
+  it('a command held until ready that the frame then refuses is contained too', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const r = rig({ onPlace: vi.fn() });
+    r.frame.goto.mockImplementation(() => { throw new TypeError('refused'); });
+    const m = await r.run();
+    m.goto!('sec-4', 'tok');
+    expect(() => r.optionsAt(0).adapters.onReady!()).not.toThrow();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(r.input.onReady).toHaveBeenCalledTimes(1);
+  });
+
+  it('bridge: a goto before ready is held and sent at ready', async () => {
+    const r = rig({ onPlace: vi.fn() });
+    const m = await r.run();
+    m.goto!('sec-4', 'tok');
+    m.closeOverlay!();
+    expect(r.frame.goto, 'nothing is sent before ready').not.toHaveBeenCalled();
+    m.destroy();
+    const s = rig({ onPlace: vi.fn() });
+    const n = await s.run();
+    n.goto!('sec-4', 'tok');
+    expect(s.frame.goto).not.toHaveBeenCalled();
+    s.optionsAt(0).adapters.onReady!();
+    expect(s.frame.goto).toHaveBeenCalledTimes(1);
+    expect(s.frame.goto).toHaveBeenCalledWith('sec-4', 'tok');
+    expect(s.input.onReady, 'the input still hears ready').toHaveBeenCalledTimes(1);
+    // Sent once: a second ready sends nothing more, and a command after ready goes at once.
+    s.optionsAt(0).adapters.onReady!();
+    expect(s.frame.goto).toHaveBeenCalledTimes(1);
+    n.goto!('sec-5');
+    expect(s.frame.goto).toHaveBeenCalledTimes(2);
+  });
+
+  it('bridge: a later command before ready replaces the held one', async () => {
+    const r = rig({ onPlace: vi.fn() });
+    const m = await r.run();
+    m.goto!('sec-1', 'tok');
+    m.closeOverlay!();
+    m.gotoTop!('sec-2');
+    r.optionsAt(0).adapters.onReady!();
+    expect(r.frame.closeOverlay, 'the earlier ones are gone').not.toHaveBeenCalled();
+    expect(r.frame.goto).toHaveBeenCalledTimes(1);
+    expect(r.frame.goto).toHaveBeenCalledWith('sec-2', TOP_TOKEN);
+  });
+
+  it('bridge: a close before ready is dropped and leaves a held goto in place', async () => {
+    const r = rig({ onPlace: vi.fn() });
+    const m = await r.run();
+    m.goto!('sec-1', 'tok');
+    m.closeOverlay!();
+    r.optionsAt(0).adapters.onReady!();
+    expect(r.frame.closeOverlay, 'a fresh frame has no overlay to close').not.toHaveBeenCalled();
+    expect(r.frame.goto, 'the held position still reaches the frame').toHaveBeenCalledWith('sec-1', 'tok');
+    m.closeOverlay!();
+    expect(r.frame.closeOverlay, 'after ready a close is sent').toHaveBeenCalledTimes(1);
+  });
+
+  it('bridge: openAt\'s new frame holds a command until its own ready', async () => {
+    const el = document.createElement('div');
+    document.body.append(el);
+    const r = rig({ el, onPlace: vi.fn() });
+    const m = await r.run();
+    r.optionsAt(0).adapters.onReady!();
+    m.openAt!('far');
+    m.goto!('sec-4', 'tok');
+    expect(r.frames[1]!.goto, 'the new frame is not ready').not.toHaveBeenCalled();
+    expect(r.frames[0]!.goto).not.toHaveBeenCalled();
+    r.optionsAt(0).adapters.onReady!();
+    expect(r.frames[1]!.goto, 'the old frame\'s ready does not release it').not.toHaveBeenCalled();
+    r.optionsAt(1).adapters.onReady!();
+    expect(r.frames[1]!.goto).toHaveBeenCalledWith('sec-4', 'tok');
+    expect(r.frames[0]!.goto).not.toHaveBeenCalled();
+  });
+
+  it('bridge: nothing is held after destroy', async () => {
+    const r = rig({ onPlace: vi.fn() });
+    const m = await r.run();
+    m.goto!('sec-4', 'tok');
+    m.destroy();
+    r.optionsAt(0).adapters.onReady!();
+    expect(r.frame.goto, 'a command held before destroy is dropped').not.toHaveBeenCalled();
+    m.goto!('sec-5');
+    m.closeOverlay!();
+    m.gotoTop!('sec-6');
+    r.optionsAt(0).adapters.onReady!();
+    expect(r.frame.goto).not.toHaveBeenCalled();
+    expect(r.frame.closeOverlay).not.toHaveBeenCalled();
+    // And with no onPlace nothing is held, so a ready sends nothing.
+    const q = rig();
+    const n = await q.run();
+    n.goto!('sec-4');
+    n.gotoTop!('sec-4');
+    n.closeOverlay!();
+    q.optionsAt(0).adapters.onReady!();
+    expect(q.frame.goto).not.toHaveBeenCalled();
+    expect(q.frame.closeOverlay).not.toHaveBeenCalled();
+  });
+
+  it('bridge: gotoTop sends the id with the top token', async () => {
+    const r = rig({ onPlace: vi.fn() });
+    const m = await r.run();
+    r.optionsAt(0).adapters.onReady!();
+    m.gotoTop!('part-20');
+    expect(r.frame.goto).toHaveBeenCalledTimes(1);
+    expect(r.frame.goto).toHaveBeenCalledWith('part-20', TOP_TOKEN);
+  });
+
+  it('bridge: the top token is a position token the library reads', () => {
+    expect(isAnchorToken(TOP_TOKEN)).toBe(true);
   });
 
   it('openAt keeps onPlace and the commands follow the new frame', async () => {
@@ -1160,6 +1274,7 @@ describe('places (X2 P5.3)', () => {
     const r = rig({ el, onPlace });
     const m = await r.run();
     m.openAt!('far');
+    r.optionsAt(1).adapters.onReady!();
     expect(r.mount).toHaveBeenCalledTimes(2);
     expect(Object.keys(r.optionsAt(1).adapters).sort()).toEqual(Object.keys(r.optionsAt(0).adapters).sort());
     r.optionsAt(1).adapters.onPlace!('overlay');

@@ -18,7 +18,8 @@
 // keep this module free of the stores: whether a send is unresolved (the move
 // holds) and whether the block screen still stands.
 import { onPageHidden, onPageRestored, onPageVisible, onWindowBlur, onWindowFocus } from './pageClock';
-import { onPop as onHistoryPop } from './popstate';
+import { markReplace } from './historyPlaces';
+import { onPop as onHistoryPop, readPlaces, writePlaces } from './popstate';
 import { RELOAD_IDLE, reloadStep, type ReloadEvent, type ReloadState } from './reloadGate';
 
 let updater: (() => void) | null = null;
@@ -88,6 +89,14 @@ export function reloadOnMove(href: string, replace: boolean): boolean {
   const q = href.indexOf('?');
   const to = q < 0 ? href : href.slice(0, q);
   if (!stepMove(location.pathname, to)) return false;
+  // A replace loads the new page into this very entry, whose state the load drops: leave a mark so the new page's entry
+  // takes this entry's number back (D-9116 for a full-page replace). A push (assign) makes an entry above and needs none.
+  // The target as the new page's `location` will spell it (percent-encoding included), so the seed's match holds unless
+  // the load lands at another address (a redirect), where the mark is cleared and the entry takes the next number.
+  if (replace) {
+    const at = new URL(href, location.href);
+    writePlaces(markReplace(readPlaces(), history.state, at.pathname + at.search));
+  }
   acts.go(href, replace);
   return true;
 }

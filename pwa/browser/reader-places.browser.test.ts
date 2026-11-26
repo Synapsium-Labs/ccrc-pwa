@@ -130,8 +130,15 @@ describe('lab E16 (P5.3 Step 0): a tap in the frame and the console\'s activatio
       // Chromium has neither: measured on 2026-11-26, Alt+Left left the page on the entry pushed last. So this lab reads
       // the console's transient activation, the stand-in for what the skip reads; the device stage measures the skip.
       // A raw tap: only the input events, through the browser, as a finger's are, on the text inside the frame.
-      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+      const tapX = box.x + box.width / 2;
+      const tapY = box.y + box.height / 2;
+      // The tap must land on the reader's iframe (read with no gesture): a raw tap on anything else would prove nothing.
+      const hit = await quietEval<string | null>(page, `document.elementFromPoint(${tapX}, ${tapY})?.tagName ?? null`);
+      const hitInReader = await quietEval<boolean>(page, `document.elementFromPoint(${tapX}, ${tapY}) === document.querySelector('.docs-reader iframe')`);
+      const everBefore = await quietEval<boolean>(page, 'navigator.userActivation.hasBeenActive');
+      await page.mouse.click(tapX, tapY);
       const afterTap = await activeNow(page);
+      const everAfter = await quietEval<boolean>(page, 'navigator.userActivation.hasBeenActive');
       // A sanity check of the push and the pop, with no gesture of the console's own. Script's `history.back()` steps one
       // entry whatever the activation, so this proves no skip rule.
       const url = page.url();
@@ -140,7 +147,8 @@ describe('lab E16 (P5.3 Step 0): a tap in the frame and the console\'s activatio
       const pushed = await quietEval<number>(page, 'history.length');
       await quietEval(page, 'new Promise((r) => { addEventListener("popstate", () => r(null), { once: true }); history.back(); })');
       const back = await quietEval<{ e16: number | null; href: string }>(page, '({ e16: history.state?.e16 ?? null, href: location.href })');
-      console.log(`E16-FIGURES ${JSON.stringify({ before, afterChecks, beforeTap, afterTap, length, pushed, e16: back.e16 })}`);
+      console.log(`E16-FIGURES ${JSON.stringify({ before, afterChecks, beforeTap, afterTap, hit, everBefore, everAfter, length, pushed, e16: back.e16 })}`);
+      expect(hitInReader, `the tap point is the reader's iframe (it is a ${hit})`).toBe(true);
       expect(before, 'no transient activation 1.5 s after it lapsed, with no tap').toBe(false);
       expect(beforeTap, 'and none again, 1.5 s after the checks\' activation lapsed, just before the tap').toBe(false);
       expect(afterTap, 'the raw tap in the frame activates the console (an ancestor of the frame)').toBe(true);
@@ -248,6 +256,32 @@ describe('P5.3 rows: Back places in the built app, desktop Chromium', () => {
       expect(await scrollY(), 'the frame went to the heading').toBeGreaterThan(y0 + 100);
       await page.goBack();
       await becomes(() => placeOf(page), null, 'the entry after Back', page);
+      await becomes(() => scrollY().then((y) => Math.abs(y - y0) < 40), true, 'the frame\'s position after Back', page);
+      expect(app.errors, 'no uncaught error').toEqual([]);
+    } finally {
+      await app.ctx.close();
+    }
+  }, 180_000);
+
+  it('places: Back from a jump made at the top of the document returns to the top', async () => {
+    const app = await open('places.md');
+    try {
+      const page = app.page;
+      const frame = await frameOf(page);
+      const scrollY = (): Promise<number> => frame.evaluate(() => Math.round(document.scrollingElement?.scrollTop ?? window.scrollY));
+      const y0 = await scrollY();
+      const length = await lengthOf(page);
+      // No scrolling first: the reader is at the top when it jumps.
+      await frame.getByRole('link', { name: 'part 20', exact: true }).click();
+      await becomes(() => lengthOf(page), length + 1, 'history after an in-document link', page);
+      const place = await placeOf(page);
+      expect(place, 'a jump place').toMatchObject({ kind: 'jump', id: 'part-20' });
+      // What the library answers for `from` at the top, logged: a token (the place had a block or a scroll offset) or none.
+      console.log(`TOP-JUMP-FROM ${JSON.stringify({ y0, from: place?.from ?? null })}`);
+      expect(await scrollY(), 'the frame went to the heading').toBeGreaterThan(y0 + 100);
+      await page.goBack();
+      await becomes(() => placeOf(page), null, 'the entry after Back', page);
+      // With or without a `from`, Back returns the reader to where it was: the top.
       await becomes(() => scrollY().then((y) => Math.abs(y - y0) < 40), true, 'the frame\'s position after Back', page);
       expect(app.errors, 'no uncaught error').toEqual([]);
     } finally {

@@ -33,7 +33,7 @@ export interface Places {
    *  replaces the page's fragment, as the scroll report always has. */
   onHash(id: string, entry?: { readonly push: boolean; readonly from: string | null; readonly inGrammar: boolean }): void;
   /** The mounted frame, for the pops that are its: `null` when it is dropped or fell back. */
-  host(mount: { closeOverlay?(): void; goto?(id: string, from?: string): void } | null): void;
+  host(mount: { closeOverlay?(): void; goto?(id: string, from?: string): void; gotoTop?(id: string): void } | null): void;
   /** The body ended: the visit ends when the page is on another doc or a screen that is not a doc now. */
   end(): void;
 }
@@ -81,13 +81,25 @@ export function startPlaces(o: { doc: string; scope?: string; newVisitId?: () =>
    *  was pushed (the visit's budget is spent, or the history call was refused). */
   const push = (p: { kind: PlaceKind; id?: string; from?: string }, url: string = location.href): boolean => {
     const rec = readPlaces();
-    const pushed = pushPlace(rec, p, { idx: readEntry(history.state).idx });
+    const here = readEntry(history.state);
+    const pushed = pushPlace(rec, p, { idx: here.idx, place: here.place });
     if (pushed.push === null) return false;
+    let numbered = false;
     try {
-      if (pushed.stamp !== null) history.replaceState({ ...currentState(), [IDX_KEY]: pushed.stamp }, '');
+      if (pushed.stamp !== null || pushed.strip) {
+        // The entry pushed from is rewritten in place: numbered when it had no number, and without another visit's place
+        // when it holds one (as a new visit's start does), so one Back from the new place lands on a live entry.
+        const next = currentState();
+        if (pushed.strip) delete next[PLACE_KEY];
+        if (pushed.stamp !== null) next[IDX_KEY] = pushed.stamp;
+        history.replaceState(next, '');
+      }
+      numbered = pushed.stamp !== null;
       history.pushState({ ...currentState(), [IDX_KEY]: pushed.push.idx, [PLACE_KEY]: pushed.push.place }, '', url);
     } catch (e) {
       console.warn('ccrc: the history entry for a place could not be pushed', e);
+      // A refused push after the number was written leaves the entry numbered: keep that number taken.
+      if (numbered && pushed.numbered !== null) writePlaces(pushed.numbered);
       return false;
     }
     writePlaces(pushed.rec);
@@ -98,7 +110,11 @@ export function startPlaces(o: { doc: string; scope?: string; newVisitId?: () =>
     unregister?.();
     unregister = null;
     if (mount === null) return;
-    unregister = setPlaceHost({ closeOverlay: () => mount.closeOverlay?.(), goto: (id, from) => mount.goto?.(id, from) });
+    unregister = setPlaceHost({
+      closeOverlay: () => mount.closeOverlay?.(),
+      goto: (id, from) => mount.goto?.(id, from),
+      gotoTop: (id) => mount.gotoTop?.(id),
+    });
   };
 
   return {

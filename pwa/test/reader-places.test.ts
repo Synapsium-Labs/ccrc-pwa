@@ -12,13 +12,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createElement, Fragment, type ReactNode } from 'react';
 import { act, cleanup, render, waitFor } from '@testing-library/react';
 import {
-  EMPTY_RECORD, IDX_KEY, PLACES_MAX, PLACES_RECORD_KEY, PLACE_KEY, afterPop, beginVisit, closedByFrame, decidePop,
-  endVisit, jumpEntryUrl, parseRecord, pushPlace, readEntry, replacedState, seedPage, visitEnds, visitKey, type PopDecision, type Place, type PopTab, type TabRecord,
+  EMPTY_RECORD, IDX_KEY, PLACES_MAX, PLACES_RECORD_KEY, PLACE_KEY, SKIPS_MAX, afterPop, beginVisit, closedByFrame, decidePop,
+  endVisit, jumpEntryUrl, markReplace, parseRecord, pushPlace, readEntry, replacedState, seedPage, visitEnds, visitKey, type PopDecision, type Place, type PopTab, type TabRecord,
 } from '../src/lib/historyPlaces';
 import { onPop, readPlaces, resetPopstateForTests, setPlaceHost, writePlaces } from '../src/lib/popstate';
 import { navigate, useLocation, type Loc } from '../src/lib/router';
 import { useReaderOnly } from '../src/docs/readerHistory';
-import { noteActivated, resetReloadGateForTests, startReloadGate, type ReloadActs } from '../src/lib/swupdate';
+import { noteActivated, reloadOnMove, resetReloadGateForTests, startReloadGate, type ReloadActs } from '../src/lib/swupdate';
 import { tabStorage, writeKey } from '../src/lib/storage';
 import { mountDocFrame } from '@synapsium-labs/pinax-lib/host';
 import { DocsAssetContext, type DocsAssetContextValue } from '../src/docs/DocImage';
@@ -204,7 +204,7 @@ describe('popstate: the one dispatcher', () => {
   });
 
   it('popstate: a place\'s pop acts on the host and runs no listener', () => {
-    const host = { closeOverlay: vi.fn(), goto: vi.fn() };
+    const host = { closeOverlay: vi.fn(), goto: vi.fn(), gotoTop: vi.fn() };
     setPlaceHost(host);
     const m = mountEverything();
     const before = renders(m);
@@ -223,8 +223,8 @@ describe('popstate: the one dispatcher', () => {
   });
 
   it('popstate: a host\'s unregister clears only its own host', () => {
-    const a = { closeOverlay: vi.fn(), goto: vi.fn() };
-    const b = { closeOverlay: vi.fn(), goto: vi.fn() };
+    const a = { closeOverlay: vi.fn(), goto: vi.fn(), gotoTop: vi.fn() };
+    const b = { closeOverlay: vi.fn(), goto: vi.fn(), gotoTop: vi.fn() };
     const offA = setPlaceHost(a);
     const offB = setPlaceHost(b);
     onPop(() => {});
@@ -278,7 +278,7 @@ describe('popstate: the one dispatcher', () => {
 
 describe('places: the dispatcher over real history', () => {
   it('places: an entry with no docsPlace goes to the router', () => {
-    const host = { closeOverlay: vi.fn(), goto: vi.fn() };
+    const host = { closeOverlay: vi.fn(), goto: vi.fn(), gotoTop: vi.fn() };
     setPlaceHost(host);
     const m = mountEverything();
     // With a record that holds places and a host, an unnumbered entry and a numbered one with no place are still the router's.
@@ -372,7 +372,7 @@ describe('places: the dispatcher over real history', () => {
     // A fresh page: this module state is new and the tab's record is read from storage.
     resetPopstateForTests();
     writeKey(PLACES_RECORD_KEY, JSON.stringify(rec({ visit: 'now', doc: '/docs/b', lastIdx: 3, next: 4 })), tabStorage);
-    setPlaceHost({ closeOverlay: vi.fn(), goto: vi.fn() });
+    setPlaceHost({ closeOverlay: vi.fn(), goto: vi.fn(), gotoTop: vi.fn() });
     const m = mountEverything();
     const back = vi.spyOn(history, 'back');
     const forward = vi.spyOn(history, 'forward');
@@ -402,7 +402,7 @@ describe('places: the dispatcher over real history', () => {
     expect((history.state as Record<string, unknown>).docsIdx).toBe(0);
     resetPopstateForTests();
     writeKey(PLACES_RECORD_KEY, JSON.stringify(rec({ visit: 'now', doc: '/docs/a', lastIdx: 0, next: 3 })), tabStorage);
-    setPlaceHost({ closeOverlay: vi.fn(), goto: vi.fn() });
+    setPlaceHost({ closeOverlay: vi.fn(), goto: vi.fn(), gotoTop: vi.fn() });
     const m = mountEverything();
     const forward = vi.spyOn(history, 'forward');
     const back = vi.spyOn(history, 'back');
@@ -420,36 +420,36 @@ describe('places: the dispatcher over real history', () => {
     expect(m.ran).toHaveBeenCalledTimes(1);
   });
 
-  it('places: the skip loop stops after PLACES_MAX skips in a row and routes', () => {
+  it('places: the skip loop stops after SKIPS_MAX skips in a row and routes', () => {
     // The pure loop: a run of stale places longer than the bound. Each pop is one entry lower than the last.
     let r = rec({ visit: 'now', lastIdx: 1000, next: 1001 });
     const kinds: string[] = [];
-    for (let i = 1; i <= PLACES_MAX + 5; i += 1) {
+    for (let i = 1; i <= SKIPS_MAX + 5; i += 1) {
       const popped = entry(1000 - i, { visit: 'old', seq: 1, kind: 'overlay' });
       const d = decidePop(popped, { visit: r.visit, places: r.places, pendingSeq: r.pendingSeq, lastIdx: r.lastIdx, skips: r.skips, skipDir: r.skipDir, host: true });
       kinds.push(d.kind);
       r = afterPop(r, popped, d).rec;
       if (d.kind === 'router') break;
     }
-    expect(kinds.filter((k) => k === 'skip')).toHaveLength(PLACES_MAX);
+    expect(kinds.filter((k) => k === 'skip')).toHaveLength(SKIPS_MAX);
     expect(kinds[kinds.length - 1]).toBe('router');
-    expect(kinds).toHaveLength(PLACES_MAX + 1);
+    expect(kinds).toHaveLength(SKIPS_MAX + 1);
     expect(r.skips, 'a routed pop ends the run').toBe(0);
 
     // And through the dispatcher: at the bound the pop runs the listeners and steps nothing.
     const back = vi.spyOn(history, 'back').mockImplementation(() => undefined);
     const m = mountEverything();
-    writePlaces(rec({ visit: 'now', doc: '/docs/a', lastIdx: 9, next: 10, skips: PLACES_MAX, skipDir: 'back' }));
+    writePlaces(rec({ visit: 'now', doc: '/docs/a', lastIdx: 9, next: 10, skips: SKIPS_MAX, skipDir: 'back' }));
     at(stale(8), '/docs/b');
     firePop();
     expect(back).not.toHaveBeenCalled();
     expect(m.ran).toHaveBeenCalledTimes(1);
     expect(readPlaces().skips).toBe(0);
-    writePlaces(rec({ visit: 'now', doc: '/docs/a', lastIdx: 9, next: 10, skips: PLACES_MAX - 1, skipDir: 'back' }));
+    writePlaces(rec({ visit: 'now', doc: '/docs/a', lastIdx: 9, next: 10, skips: SKIPS_MAX - 1, skipDir: 'back' }));
     at(stale(8), '/docs/b');
     firePop();
     expect(back, 'one short of the bound still skips').toHaveBeenCalledTimes(1);
-    expect(readPlaces().skips).toBe(PLACES_MAX);
+    expect(readPlaces().skips).toBe(SKIPS_MAX);
   });
 
   it('places: a lost record seeds next above the shown entry\'s docsIdx', () => {
@@ -467,10 +467,16 @@ describe('places: the dispatcher over real history', () => {
   });
 
   it('places: a page that loads on a numbered entry reads it as the entry last shown, record lost or older', () => {
-    // Pure: a numbered entry sets lastIdx and raises the counter; an unnumbered one counts as the next number.
-    expect(seedPage(rec({ lastIdx: 9, next: 12 }), entry(3))).toEqual(rec({ lastIdx: 3, next: 12 }));
-    expect(seedPage(rec(), entry(3))).toEqual(rec({ lastIdx: 3, next: 4 }));
-    expect(seedPage(rec({ lastIdx: 2, next: 6 }), null)).toEqual(rec({ lastIdx: 6, next: 6 }));
+    // Pure: a numbered entry sets lastIdx and raises the counter; an unnumbered one takes the next number now (A2).
+    expect(seedPage(rec({ lastIdx: 9, next: 12 }), entry(3), '/docs/b')).toEqual({ rec: rec({ lastIdx: 3, next: 12 }), stamp: null });
+    expect(seedPage(rec(), entry(3), '/docs/b')).toEqual({ rec: rec({ lastIdx: 3, next: 4 }), stamp: null });
+    expect(seedPage(rec({ lastIdx: 2, next: 6 }), null, '/docs/b')).toEqual({ rec: rec({ lastIdx: 6, next: 7, top: 6 }), stamp: 6 });
+    // A numbered entry above the recorded top (a store that refused the write that raised it, then a reload) raises it;
+    // an unknown top stays unknown.
+    expect(seedPage(rec({ lastIdx: 5, next: 6, top: 5 }), entry(7), '/docs/b').rec.top, 'top rises to the entry').toBe(7);
+    expect(seedPage(rec({ lastIdx: 5, next: 9, top: 8 }), entry(7), '/docs/b').rec.top, 'never lowered').toBe(8);
+    expect(seedPage(rec({ lastIdx: 5, next: 6, top: null }), entry(7), '/docs/b').rec.top, 'unknown stays unknown').toBeNull();
+    expect(afterPop(rec({ lastIdx: 4, next: 6, top: 5 }), entry(7), { kind: 'router' }).rec.top, 'a pop onto a higher entry raises top').toBe(7);
     // Through the dispatcher: the record is gone, the page stands on entry 3, and Back pops a stale place numbered 2.
     const back = vi.spyOn(history, 'back').mockImplementation(() => undefined);
     const forward = vi.spyOn(history, 'forward').mockImplementation(() => undefined);
@@ -550,21 +556,31 @@ const TABLE: Row[] = [
   { name: '5: a place of another visit, going Forward: skip forward (M11.57)', popped: entry(3, here('old', 1)), want: { kind: 'skip', dir: 'forward' } },
   { name: '5: a place when no visit stands: skip, toward the direction of travel', popped: entry(3, here('v', 1)), tab: { visit: null }, want: { kind: 'skip', dir: 'forward' } },
   { name: '5: a place when no visit stands, going Back', popped: entry(1, here('v', 1)), tab: { visit: null }, want: { kind: 'skip', dir: 'back' } },
-  { name: '5: the skip bound: PLACES_MAX in a row routes', popped: entry(1, here('old', 1)), tab: { skips: PLACES_MAX, skipDir: 'back' }, want: ROUTER },
-  { name: '5: one short of the bound still skips', popped: entry(1, here('old', 1)), tab: { skips: PLACES_MAX - 1, skipDir: 'back' }, want: { kind: 'skip', dir: 'back' } },
-  { name: '5: the bound applies going Forward too', popped: entry(3, here('old', 1)), tab: { skips: PLACES_MAX, skipDir: 'forward' }, want: ROUTER },
-  { name: '5: the bound counts one direction: a run of skips back does not stop a skip forward', popped: entry(3, here('old', 1)), tab: { skips: PLACES_MAX, skipDir: 'back' }, want: { kind: 'skip', dir: 'forward' } },
+  { name: '5: the skip bound: SKIPS_MAX in a row routes', popped: entry(1, here('old', 1)), tab: { skips: SKIPS_MAX, skipDir: 'back' }, want: ROUTER },
+  { name: '5: one short of the bound still skips', popped: entry(1, here('old', 1)), tab: { skips: SKIPS_MAX - 1, skipDir: 'back' }, want: { kind: 'skip', dir: 'back' } },
+  { name: '5: the bound applies going Forward too', popped: entry(3, here('old', 1)), tab: { skips: SKIPS_MAX, skipDir: 'forward' }, want: ROUTER },
+  { name: '5: the bound counts one direction: a run of skips back does not stop a skip forward', popped: entry(3, here('old', 1)), tab: { skips: SKIPS_MAX, skipDir: 'back' }, want: { kind: 'skip', dir: 'forward' } },
   // 6: a place of the visit with no host
   { name: '6: a place of the visit with no host registered is stale, going Back', popped: entry(1, here('v', 1)), tab: { host: false }, want: { kind: 'skip', dir: 'back' } },
   { name: '6: a place of the visit with no host registered is stale, going Forward', popped: entry(3, here('v', 1)), tab: { host: false }, want: { kind: 'skip', dir: 'forward' } },
-  { name: '6: the bound applies to it too', popped: entry(1, here('v', 1)), tab: { host: false, skips: PLACES_MAX, skipDir: 'back' }, want: ROUTER },
+  { name: '6: the bound applies to it too', popped: entry(1, here('v', 1)), tab: { host: false, skips: SKIPS_MAX, skipDir: 'back' }, want: ROUTER },
   // 7: Back inside the visit
   { name: '7: Back off an overlay onto the base: close the overlay', popped: entry(0), tab: { lastIdx: 1 }, want: { kind: 'close-overlay' } },
   { name: '7: Back off a jump onto a lower place: go to its from', popped: entry(1, here('v', 1)), want: { kind: 'goto', id: 'j2', from: 'f2' } },
   { name: '7: Back off a jump onto the base: go to its from', popped: entry(0), tab: { places: [JMP], lastIdx: 2 }, want: { kind: 'goto', id: 'j2', from: 'f2' } },
   { name: '7: Back of several entries at once undoes the lowest place left: two jumps, the first one\'s from', popped: entry(0), tab: { places: [{ seq: 1, kind: 'jump', idx: 1, id: 'j1', from: 'f1' }, JMP], lastIdx: 2 }, want: { kind: 'goto', id: 'j1', from: 'f1' } },
   { name: '7: Back of several entries at once over an overlay and a jump: the lowest, the overlay, closes', popped: entry(0), want: { kind: 'close-overlay' } },
-  { name: '7: a jump with no from goes to its id with no from', popped: entry(0), tab: { places: [{ seq: 1, kind: 'jump', idx: 2, id: 'j1' }] }, want: { kind: 'goto', id: 'j1' } },
+  { name: '7: a jump with no from: Back goes to the top', popped: entry(0), tab: { places: [{ seq: 1, kind: 'jump', idx: 2, id: 'j1' }] }, want: { kind: 'goto', id: 'j1', toTop: true } },
+  { name: '7: Back of two entries from a figure opened over a jump closes the figure and returns to the jump\'s from', popped: entry(1), tab: { places: [{ seq: 1, kind: 'jump', idx: 2, id: 'j1', from: 'f1' }, { seq: 2, kind: 'overlay', idx: 3 }], lastIdx: 3 }, want: { kind: 'goto', id: 'j1', from: 'f1', close: true } },
+  { name: '7: Back of two entries from a figure opened over a jump with no from closes the figure and goes to the top', popped: entry(1), tab: { places: [{ seq: 1, kind: 'jump', idx: 2, id: 'j1' }, { seq: 2, kind: 'overlay', idx: 3 }], lastIdx: 3 }, want: { kind: 'goto', id: 'j1', toTop: true, close: true } },
+  { name: '7: Back of one entry off a figure opened over a jump only closes the figure', popped: entry(2, here('v', 1, 'jump')), tab: { places: [{ seq: 1, kind: 'jump', idx: 2, id: 'j1', from: 'f1' }, { seq: 2, kind: 'overlay', idx: 3 }], lastIdx: 3 }, want: { kind: 'close-overlay' } },
+  { name: '7: an overlay of the visit above the span does not close the figure', popped: entry(1), tab: { places: [{ seq: 1, kind: 'jump', idx: 2, id: 'j1', from: 'f1' }, { seq: 2, kind: 'overlay', idx: 5 }], lastIdx: 3 }, want: { kind: 'goto', id: 'j1', from: 'f1' } },
+  // 5 and the top: a Forward skip that has nothing above it to step to routes instead (A1)
+  { name: '5: a Forward skip over a stale place that is the newest entry routes', popped: entry(3, here('old', 1)), tab: { lastIdx: 0, top: 3 }, want: ROUTER },
+  { name: '5: a Forward skip over a stale place with entries above it still skips', popped: entry(2, here('old', 1)), tab: { lastIdx: 0, top: 3 }, want: { kind: 'skip', dir: 'forward' } },
+  { name: '5: a Forward skip with the newest entry unknown still skips (an older record)', popped: entry(3, here('old', 1)), tab: { lastIdx: 0, top: null }, want: { kind: 'skip', dir: 'forward' } },
+  { name: '5: a Back skip is not routed by the newest entry', popped: entry(3, here('old', 1)), tab: { lastIdx: 5, top: 3 }, want: { kind: 'skip', dir: 'back' } },
+  { name: '6: a place of the visit with no host, Forward, at the newest entry: routes', popped: entry(3, here('v', 1)), tab: { host: false, lastIdx: 0, top: 3 }, want: ROUTER },
   { name: '7: with no host the base landing is consumed (nothing to undo)', popped: entry(0), tab: { lastIdx: 1, host: false }, want: CONSUME },
   { name: '7: no place of the visit left, landing on a place of the visit: consumed', popped: entry(1, here('v', 1)), tab: { places: [OVL], lastIdx: 5 }, want: CONSUME },
   { name: '7: no place of the visit left (the visit\'s places are above), landing on the base: the router\'s', popped: entry(0), tab: { places: [{ seq: 1, kind: 'overlay', idx: 6 }], lastIdx: 5 }, want: ROUTER },
@@ -573,7 +589,7 @@ const TABLE: Row[] = [
   { name: '8: Forward onto a jump place: go to its id again, with no from', popped: entry(2, here('v', 2, 'jump')), tab: { lastIdx: 0 }, want: { kind: 'goto', id: 'j2' } },
   { name: '8: Forward onto an overlay place: consumed, nothing reopens it', popped: entry(1, here('v', 1)), tab: { lastIdx: 0 }, want: CONSUME },
   { name: '8: Forward onto a place the record does not hold: stale, skip forward', popped: entry(3, here('v', 9)), tab: { lastIdx: 0 }, want: { kind: 'skip', dir: 'forward' } },
-  { name: '8: that skip stops at the bound', popped: entry(3, here('v', 9)), tab: { lastIdx: 0, skips: PLACES_MAX, skipDir: 'forward' }, want: ROUTER },
+  { name: '8: that skip stops at the bound', popped: entry(3, here('v', 9)), tab: { lastIdx: 0, skips: SKIPS_MAX, skipDir: 'forward' }, want: ROUTER },
   // 9: the rest
   { name: '9: Forward onto a base entry: the router\'s', popped: entry(3), tab: { lastIdx: 0 }, want: ROUTER },
   { name: '9: Forward onto a base entry with a pending back: the router\'s, and not consumed', popped: entry(3), tab: { lastIdx: 0, pendingSeq: 0 }, want: ROUTER },
@@ -593,7 +609,15 @@ describe('decidePop: the table', () => {
 
   it('a goto never carries an undefined from (the key is absent)', () => {
     const d = decidePop(entry(0), { ...base, places: [{ seq: 1, kind: 'jump', idx: 2, id: 'j1' }] });
-    expect(Object.keys(d)).toEqual(['kind', 'id']);
+    expect(Object.keys(d)).toEqual(['kind', 'id', 'toTop']);
+    const withFrom = decidePop(entry(0), { ...base, places: [{ seq: 1, kind: 'jump', idx: 2, id: 'j1', from: 'f' }] });
+    expect(Object.keys(withFrom)).toEqual(['kind', 'id', 'from']);
+  });
+
+  it('a jump with no from: Back goes to the top, Forward to its id', () => {
+    const jump: Place = { seq: 1, kind: 'jump', idx: 2, id: 'j1' };
+    expect(decidePop(entry(0), { ...base, places: [jump], lastIdx: 2 })).toEqual({ kind: 'goto', id: 'j1', toTop: true });
+    expect(decidePop(entry(2, here('v', 1, 'jump')), { ...base, places: [jump], lastIdx: 0 })).toEqual({ kind: 'goto', id: 'j1' });
   });
 });
 
@@ -658,7 +682,8 @@ describe('historyPlaces: readEntry and parseRecord are tolerant', () => {
   });
 
   it('the exported limits and keys', () => {
-    expect(PLACES_MAX).toBe(50);
+    expect(PLACES_MAX, 'the per-visit budget').toBe(20);
+    expect(SKIPS_MAX, 'the skip loop\'s own bound').toBe(50);
     expect([IDX_KEY, PLACE_KEY, PLACES_RECORD_KEY]).toEqual(['docsIdx', 'docsPlace', 'ccrc:docs:v1:places']);
   });
 });
@@ -680,7 +705,7 @@ describe('historyPlaces: afterPop, the index rule', () => {
 
   it('the router on an entry with no index stamps it with next, and everything else on one stamps nothing', () => {
     const a = afterPop(rec({ lastIdx: 3, next: 4 }), null, { kind: 'router' });
-    expect(a).toEqual({ rec: rec({ lastIdx: 4, next: 5 }), stamp: 4 });
+    expect(a).toEqual({ rec: rec({ lastIdx: 4, next: 5, top: 4 }), stamp: 4 });
     const b = afterPop(rec({ lastIdx: 3, next: 4 }), { other: 1 }, { kind: 'consume' });
     expect(b.stamp).toBeNull();
     expect(b.rec).toMatchObject({ lastIdx: 3, next: 4 });
@@ -713,7 +738,7 @@ describe('historyPlaces: visits, pushes and the frame closing its overlay', () =
     expect(endVisit(open)).toEqual(rec({ lastIdx: 1, next: 2, skips: 2 }));
   });
 
-  it('pushPlace: stamps an unnumbered current entry, numbers the new one, and 51 pushes are 50 places', () => {
+  it('pushPlace: stamps an unnumbered current entry, numbers the new one, and 21 pushes are 20 places', () => {
     const open = rec({ visit: 'v1', doc: '/docs/a', lastIdx: 0, next: 1 });
     const first = pushPlace(open, { kind: 'jump', id: 'a', from: 'f' }, { idx: 0 });
     expect(first.stamp).toBeNull();
@@ -776,6 +801,56 @@ describe('historyPlaces: visits, pushes and the frame closing its overlay', () =
   });
 });
 
+describe('historyPlaces: stale entries, the newest entry, the release gate\'s mark (fix round 1)', () => {
+  const mine = { visit: 'v1', seq: 1, kind: 'overlay' as const };
+  const theirs = { visit: 'old', seq: 3, kind: 'jump' as const, id: 'x' };
+
+  it('pushPlace: strip is true only when the entry pushed from holds a place of another visit', () => {
+    const open = rec({ visit: 'v1', doc: '/docs/a', lastIdx: 2, next: 3 });
+    expect(pushPlace(open, { kind: 'overlay' }, { idx: 2, place: theirs }).strip, 'another visit\'s place').toBe(true);
+    expect(pushPlace(open, { kind: 'overlay' }, { idx: 2, place: mine }).strip, 'this visit\'s own place').toBe(false);
+    expect(pushPlace(open, { kind: 'overlay' }, { idx: 2, place: null }).strip, 'no place').toBe(false);
+    expect(pushPlace(open, { kind: 'overlay' }, { idx: 2 }).strip, 'no place given').toBe(false);
+    expect(pushPlace(open, { kind: 'overlay' }, { idx: null, place: theirs }).strip, 'an unnumbered entry with a place').toBe(true);
+    expect(pushPlace(rec(), { kind: 'overlay' }, { idx: 2, place: theirs }).strip, 'nothing pushed, nothing stripped').toBe(false);
+  });
+
+  it('pushPlace: numbered is the record after the numbering alone, and the push is the newest entry', () => {
+    const open = rec({ visit: 'v1', doc: '/docs/a', lastIdx: 2, next: 3, top: 2 });
+    const un = pushPlace(open, { kind: 'overlay' }, { idx: null });
+    expect(un.stamp).toBe(3);
+    expect(un.numbered, 'next raised above the stamp, lastIdx the stamp, nothing else moved').toEqual({ ...open, lastIdx: 3, next: 4 });
+    expect(un.rec).toMatchObject({ lastIdx: 4, next: 5, top: 4 });
+    const numbered = pushPlace(open, { kind: 'overlay' }, { idx: 2 });
+    expect(numbered.numbered, 'an entry that had a number needs no record of its own').toBeNull();
+    expect(numbered.rec.top, 'the push is the newest entry').toBe(3);
+  });
+
+  it('markReplace and seedPage: the loaded entry takes the replaced entry\'s number, and the mark is cleared either way', () => {
+    const marked = markReplace(rec({ lastIdx: 4, next: 9, top: 8 }), entry(4), '/runs?q=1#frag');
+    expect(marked.carry, 'the target is a path and query, no fragment').toEqual({ idx: 4, to: '/runs?q=1' });
+    expect(markReplace(rec({ carry: { idx: 1, to: '/old' } }), null, '/runs').carry, 'an entry with no number leaves no mark, and clears an older one').toBeNull();
+    const hit = seedPage(marked, null, '/runs?q=1');
+    expect(hit.stamp).toBe(4);
+    expect(hit.rec).toMatchObject({ lastIdx: 4, next: 9, top: 8, carry: null });
+    const miss = seedPage(marked, null, '/waiting');
+    expect(miss.stamp, 'a mark that does not match is ignored: the next number').toBe(9);
+    expect(miss.rec).toMatchObject({ lastIdx: 9, next: 10, top: 9, carry: null });
+    expect(seedPage(marked, entry(2), '/runs?q=1').rec.carry, 'a numbered entry clears the mark too').toBeNull();
+    expect(marked.carry, 'the input is not changed').toEqual({ idx: 4, to: '/runs?q=1' });
+  });
+
+  it('parseRecord: top and carry round-trip; an older record without them reads unknown and no mark', () => {
+    const full = rec({ visit: 'v', doc: '/docs/a', lastIdx: 2, next: 3, top: 2, carry: { idx: 1, to: '/x?y=1' } });
+    expect(parseRecord(JSON.stringify(full))).toEqual(full);
+    const { top: _t, carry: _c, ...older } = full;
+    expect(parseRecord(JSON.stringify(older))).toEqual({ ...full, top: null, carry: null });
+    for (const broken of [{ ...full, top: -1 }, { ...full, top: 'x' }, { ...full, carry: 3 }, { ...full, carry: { idx: 1 } }, { ...full, carry: { idx: -1, to: '/x' } }]) {
+      expect(parseRecord(JSON.stringify(broken)), JSON.stringify(broken)).toEqual(EMPTY_RECORD);
+    }
+  });
+});
+
 // ---------------------------------------------------------------------------------------------------------------------
 // Part B: the reader's places (`docs/reader/places.ts`), through the real `ReaderFrame` and the real history.
 //
@@ -803,7 +878,7 @@ const LINK: Omit<DocLinkContextValue, 'urls'> = {
 
 interface Mounted {
   readonly input: ReaderMountInput;
-  readonly handle: { readonly closeOverlay: ReturnType<typeof vi.fn>; readonly goto: ReturnType<typeof vi.fn>; readonly destroy: ReturnType<typeof vi.fn> };
+  readonly handle: { readonly closeOverlay: ReturnType<typeof vi.fn>; readonly goto: ReturnType<typeof vi.fn>; readonly gotoTop: ReturnType<typeof vi.fn>; readonly destroy: ReturnType<typeof vi.fn> };
 }
 interface PlacesRig {
   readonly mounts: Mounted[];
@@ -817,7 +892,7 @@ function placesRig(): PlacesRig {
   const mount = vi.fn<ReaderDeps['mount']>(async (_el, input) => {
     const handle = {
       seed: { hosted: false as const }, follow: vi.fn(), destroy: vi.fn(), setPrefs: vi.fn(), command: vi.fn(),
-      closeOverlay: vi.fn(), goto: vi.fn(),
+      closeOverlay: vi.fn(), goto: vi.fn(), gotoTop: vi.fn(),
     };
     mounts.push({ input, handle });
     return handle as unknown as ReaderMount;
@@ -1054,16 +1129,16 @@ describe('places: the reader\'s places through the real frame and history', () =
     expect(stateNow()).toEqual(before);
   });
 
-  it('places: 51 places push 50', async () => {
+  it('places: 21 places push 20', async () => {
     const s = await start();
     const m = latest(s.rig);
     const length = history.length;
-    pushPlaces(m, 51);
-    expect(history.length, 'fifty entries, not fifty-one').toBe(length + 50);
-    expect(placeNow()?.seq).toBe(50);
+    pushPlaces(m, 21);
+    expect(history.length, 'twenty entries, not twenty-one').toBe(length + 20);
+    expect(placeNow()?.seq).toBe(20);
     // A jump past the budget pushes nothing either.
     m.input.onHash('sec-9', { push: true, from: 'tok', inGrammar: true });
-    expect(history.length).toBe(length + 50);
+    expect(history.length).toBe(length + 20);
     expect(location.hash, 'the jump that was not pushed replaced the fragment instead').toBe('#sec-9');
   });
 
@@ -1117,14 +1192,14 @@ describe('places: the reader\'s places through the real frame and history', () =
 
   it('places: a remount of the same doc keeps the visit\'s budget', async () => {
     const s = await start();
-    pushPlaces(latest(s.rig), 25);
+    pushPlaces(latest(s.rig), 10);
     const length = history.length;
     const visit = placeNow()?.visit;
     s.view.rerender(createElement(PlacesApp, { rig: s.rig, epoch: 2 }));
     const second = await mountedAt(s.rig, 2);
-    pushPlaces(second, 26);
-    expect(history.length, 'fifty in all: the second body shared the first one\'s budget').toBe(length + 25);
-    expect(placeNow()?.seq).toBe(50);
+    pushPlaces(second, 11);
+    expect(history.length, 'twenty in all: the second body shared the first one\'s budget').toBe(length + 10);
+    expect(placeNow()?.seq).toBe(20);
     expect(placeNow()?.visit, 'one visit throughout').toBe(visit);
   });
 
@@ -1356,6 +1431,217 @@ describe('places: the reader\'s places through the real frame and history', () =
 function screenText(): string | null {
   return document.body.querySelector('p')?.textContent ?? null;
 }
+
+// Fix round 1 (review of run 3937): the stale entries, the numbering, the budget and the release gate's replace. Each case
+// builds its own stack from a page that loaded on `/runs`, through the real `navigate`, the real frame rig and the real
+// traversals (the cases that cannot be a traversal say so).
+describe('places: stale entries and numbering through the real frame and history (fix round 1)', () => {
+  beforeEach(() => {
+    history.replaceState(null, '', '/runs');
+  });
+
+  /** The page loaded on `/runs`, then a doc A with its reader mounted: /runs (0), A's base (1). */
+  async function docStack(): Promise<{ s: Started; m: Mounted }> {
+    const s = await start(false);
+    act(() => { navigate(DOC_A); });
+    return { s, m: await mountedAt(s.rig, 1) };
+  }
+  /** The report's stack: /runs (0), A's base (1), a jump of A's first visit (2). */
+  async function jumpStack(): Promise<{ s: Started; first: Mounted; jumpIdx: number }> {
+    const { s, m } = await docStack();
+    m.input.onHash('j1', { push: true, from: 'tok', inGrammar: true });
+    return { s, first: m, jumpIdx: idxNow() as number };
+  }
+  /** The report's walk: Back, Back, Forward, Forward. The second reader stands on the first visit's jump (another visit's
+   *  place, nothing above it), and it is the entry last shown. */
+  async function standOnStaleJump(): Promise<{ s: Started; second: Mounted }> {
+    const { s, first, jumpIdx } = await jumpStack();
+    history.back();
+    await until(() => expect(first.handle.goto).toHaveBeenCalledTimes(1));
+    history.back();
+    await until(() => expect(location.pathname).toBe('/runs'));
+    history.forward();
+    await until(() => expect(location.pathname).toBe(DOC_A));
+    const second = await mountedAt(s.rig, 2);
+    history.forward();
+    await until(() => expect(idxNow()).toBe(jumpIdx));
+    expect(placeNow(), 'the entry holds the first visit\'s place').toMatchObject({ kind: 'jump', id: 'j1' });
+    return { s, second };
+  }
+
+  it('places: a figure opened on a stale entry closes with one Back', async () => {
+    const { s, second } = await standOnStaleJump();
+    second.input.onPlace!('overlay');
+    history.back();
+    await quiet(150);
+    expect(second.handle.closeOverlay, 'the figure closed').toHaveBeenCalledTimes(1);
+    expect(location.pathname, 'the page stayed').toBe(DOC_A);
+    expect(s.rig.mounts).toHaveLength(2);
+  });
+
+  it('places: a jump made on a stale entry returns with one Back', async () => {
+    const { s, second } = await standOnStaleJump();
+    second.input.onHash('sec-9', { push: true, from: 'tok-2', inGrammar: true });
+    history.back();
+    await quiet(150);
+    expect(second.handle.goto, 'the frame went back to where the jump left').toHaveBeenCalledWith('sec-9', 'tok-2');
+    expect(location.pathname).toBe(DOC_A);
+    expect(s.rig.mounts).toHaveLength(2);
+  });
+
+  it('places: a place pushed on a stale entry at the bottom of history undoes with one Back', async () => {
+    // The mirror, not a traversal: a Back skip that cannot step leaves the page on a stale entry at the bottom of the tab's
+    // history. The entry the reader stands on holds another visit's place, and it is the entry last shown.
+    const { m } = await docStack();
+    history.replaceState({ ...stateNow(), docsPlace: { visit: 'old', seq: 1, kind: 'overlay' } }, '', DOC_A);
+    m.input.onPlace!('overlay');
+    history.back();
+    await quiet(150);
+    expect(m.handle.closeOverlay, 'the figure closed').toHaveBeenCalledTimes(1);
+    expect(location.pathname).toBe(DOC_A);
+    expect(placeNow(), 'the stale place is gone from the entry it stood on').toBeUndefined();
+  });
+
+  it('places: a frame\'s own close whose landing never comes does not hang', async () => {
+    const { s, m } = await docStack();
+    m.input.onPlace!('overlay');
+    // The base entry is gone from a full history: the console's own history.back() cannot step, and no pop comes.
+    const back = vi.spyOn(history, 'back').mockImplementation(() => undefined);
+    m.input.onPlace!('overlay-closed');
+    expect(back).toHaveBeenCalledTimes(1);
+    expect(readPlaces().pendingSeq, 'the wait is set and nothing pops').toBe(0);
+    // The next real pop going Back: another figure opens, and Back from it lands on the old figure's entry, which is a
+    // place and not the base the wait expects: not consumed (the frame is told), and the wait ends there.
+    m.input.onPlace!('overlay');
+    back.mockRestore();
+    history.back();
+    await until(() => expect(m.handle.closeOverlay).toHaveBeenCalledTimes(1));
+    expect(readPlaces().pendingSeq, 'a Back that was not the awaited landing ended the wait').toBeNull();
+    // The next real pop going Forward: the wait is not consumed by it either, and it ends there.
+    const stub = vi.spyOn(history, 'back').mockImplementation(() => undefined);
+    m.input.onPlace!('overlay-closed');
+    expect(readPlaces().pendingSeq).toBe(0);
+    stub.mockRestore();
+    const ranBefore = s.ran.mock.calls.length;
+    at(entry(500), '/docs/zz');
+    firePop();
+    expect(s.ran, 'a Forward pop is the router\'s, never the awaited landing').toHaveBeenCalledTimes(ranBefore + 1);
+    expect(readPlaces().pendingSeq, 'and it ended the wait').toBeNull();
+  });
+
+  it('places: a page loaded on an unnumbered entry numbers it first, so travel two entries Forward reads Forward', async () => {
+    await jumpStack();                       // /runs (0), A's base (1), a jump (2): the page loaded on /runs unnumbered
+    act(() => { navigate('/accounts'); });   // the reader leaves: its jump goes stale; /accounts (3)
+    history.back();
+    await until(() => expect(location.pathname).toBe(DOC_A));
+    history.back();
+    await until(() => expect(location.pathname).toBe('/runs'));
+    const back = vi.spyOn(history, 'back');
+    history.go(2);                           // from /runs onto the stale jump: Forward, and on to /accounts
+    await until(() => expect(location.pathname).toBe('/accounts'));
+    expect(back, 'read as Forward: nothing was stepped back').not.toHaveBeenCalled();
+    expect(idxNow()).toBe(3);
+  });
+
+  it('places: a Back of two entries from a figure opened over a jump closes the figure and returns', async () => {
+    const { m } = await docStack();
+    m.input.onHash('sec-2', { push: true, from: 'tok', inGrammar: true });
+    m.input.onPlace!('overlay');
+    history.go(-2);
+    await until(() => expect(m.handle.goto).toHaveBeenCalledTimes(1));
+    expect(m.handle.goto).toHaveBeenCalledWith('sec-2', 'tok');
+    expect(m.handle.closeOverlay, 'the figure closed too').toHaveBeenCalledTimes(1);
+    expect(m.handle.closeOverlay.mock.invocationCallOrder[0], 'close first').toBeLessThan(m.handle.goto.mock.invocationCallOrder[0] as number);
+  });
+
+  it('places: Back from a jump made from the very top goes to the top', async () => {
+    const { m } = await docStack();
+    m.input.onHash('sec-2', { push: true, from: null, inGrammar: true });
+    history.back();
+    await until(() => expect(m.handle.gotoTop).toHaveBeenCalledTimes(1));
+    expect(m.handle.gotoTop).toHaveBeenCalledWith('sec-2');
+    expect(m.handle.goto, 'not to the jump\'s own target again').not.toHaveBeenCalled();
+  });
+
+  it('places: a push that throws after the numbering keeps every number unique', async () => {
+    const { m } = await docStack();
+    history.replaceState({ other: 1 }, '', DOC_A);          // the current entry has no number
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const push = vi.spyOn(history, 'pushState').mockImplementationOnce(() => { throw new DOMException('too fast', 'SecurityError'); });
+    m.input.onPlace!('overlay');
+    push.mockRestore();
+    const taken = idxNow();
+    expect(typeof taken, 'the numbering write landed').toBe('number');
+    expect(placeNow(), 'the place was not pushed').toBeUndefined();
+    expect(readPlaces().next, 'the number taken is not handed out again').toBeGreaterThan(taken as number);
+    at(null, '/docs/zz');                                   // another entry with no number, routed
+    firePop();
+    expect(idxNow(), 'it takes a number no entry holds').not.toBe(taken);
+  });
+
+  it('places: a two-entry Forward onto a stale place at the top shows its page', async () => {
+    const { s, first } = await jumpStack();
+    history.back();
+    await until(() => expect(first.handle.goto).toHaveBeenCalledTimes(1));
+    history.back();
+    await until(() => expect(location.pathname).toBe('/runs'));
+    history.go(2);                           // from /runs onto the ended visit's jump: nothing above it
+    await until(() => expect(location.pathname).toBe(DOC_A));
+    await quiet(100);
+    expect(s.rig.mounts, 'the screen follows the address: the doc\'s reader mounted again').toHaveLength(2);
+    expect(screenText(), 'and Runs is not what is drawn').not.toMatch(/^screen /);
+  });
+
+  it('places: a Forward onto a stale place at the top after a replace shows its page', async () => {
+    const { s, first } = await jumpStack();
+    history.back();
+    await until(() => expect(first.handle.goto).toHaveBeenCalledTimes(1));
+    act(() => { navigate('/accounts', { replace: true }); });   // D-9116: A's base entry becomes /accounts, the jump above it
+    expect(location.pathname).toBe('/accounts');
+    history.forward();
+    await until(() => expect(location.pathname).toBe(DOC_A));
+    await quiet(100);
+    expect(s.rig.mounts, 'the doc\'s reader mounted for the address').toHaveLength(2);
+    expect(screenText(), 'and the accounts screen is not what is drawn').not.toMatch(/^screen /);
+  });
+
+  it('places: Forward after the release gate\'s replace reads Forward', async () => {
+    // Four numbered entries, the third a stale place; the page stands on the second.
+    history.replaceState(entry(0), '', '/accounts');
+    history.pushState(entry(1), '', '/runs');
+    history.pushState(entry(2, { visit: 'old', seq: 1, kind: 'overlay' }), '', '/runs');
+    history.pushState(entry(3), '', '/waiting');
+    const landed = new Promise<void>((resolve) => window.addEventListener('popstate', () => resolve(), { once: true }));
+    history.go(-2);
+    await landed;
+    expect(idxNow()).toBe(1);
+    resetPopstateForTests();
+    writeKey(PLACES_RECORD_KEY, JSON.stringify(rec({ lastIdx: 1, next: 4, top: 3 })), tabStorage);
+    // The armed gate loads `/new` in place of this entry, and leaves its mark.
+    vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => 'visible');
+    startReloadGate(acts as ReloadActs);
+    noteActivated();
+    now = T0 + 20_000;
+    expect(reloadOnMove('/new?a=1', true)).toBe(true);
+    expect(acts.go).toHaveBeenCalledWith('/new?a=1', true);
+    expect(readPlaces().carry, 'the mark').toEqual({ idx: 1, to: '/new?a=1' });
+    // The new page: no state in the entry, the new address, a fresh page's module state, the tab's record kept.
+    const saved = readPlaces();
+    resetReloadGateForTests();
+    resetPopstateForTests();
+    writeKey(PLACES_RECORD_KEY, JSON.stringify(saved), tabStorage);
+    history.replaceState(null, '', '/new?a=1');
+    const ran = vi.fn();
+    onPop(ran);                              // the page's first subscriber seeds from the entry it loaded on
+    expect(idxNow(), 'the entry took its old number back').toBe(1);
+    expect(readPlaces()).toMatchObject({ lastIdx: 1, top: 3, carry: null });
+    const back = vi.spyOn(history, 'back');
+    history.forward();                       // onto the stale place, and on to /waiting
+    await waitFor(() => expect(location.pathname).toBe('/waiting'));
+    expect(back, 'read as Forward: nothing was stepped back').not.toHaveBeenCalled();
+    expect(ran).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('places: the port nonce', () => {
   it('places: the port nonce never reaches history.state', async () => {

@@ -8,7 +8,10 @@
 // passes `changes` and `openVersion` and the version seed (completion plan Task 12), when the input has them; the reader
 // lab's mounts never do. A mount whose input has `onPlace` (the Docs reader's Back places, X2 P5.3, D-8763) hands it to the
 // library, which then gives `onHash` its second argument (passed on as it came), and the mount's `closeOverlay` and `goto`
-// call the live frame's; a mount made without `onPlace` passes none and does neither (the library throws for such a host).
+// call the live frame's (and `gotoTop`, Back to the top of the document); a `goto` called before the frame's `ready` is
+// held, the latest only, and sent at `ready`, since the library drops such a command (a close then is dropped: a fresh
+// frame has no overlay open); a mount made without `onPlace` passes none and does none of them (the library throws for
+// such a host).
 // It never passes `mermaidGate`, so the Mermaid gate runs at the library's own caps.
 //
 // It decides nothing a policy file decides: the watchdog, the doc key and the prefs arrive already measured. It
@@ -135,7 +138,16 @@ export interface ReaderMount {
   /** Takes the frame to the place `id`, from the position token `from` an `onHash` entry gave (a Back that pops a jump's
    *  place), through the live frame's `goto()`. Does nothing, as `closeOverlay` does nothing. */
   goto?(id: string, from?: string): void;
+  /** Takes the frame to the top of the document, as Back from a jump whose reader was at the top (no `from`): `goto(id,
+   *  TOP_TOKEN)`. Does nothing, as `goto` does nothing. */
+  gotoTop?(id: string): void;
 }
+
+/** The position token for "the top of the document". The library's host refuses an empty id, and its reader restores a
+ *  token whose `line` is null by scrolling to `y`: the shape the library's own `anchor()` writes for a place with no block.
+ *  Exported for the test that asserts the library still reads it (`isAnchorToken`): if the library changes, that test
+ *  fails, not the console at run time. */
+export const TOP_TOKEN = '{"line":null,"offset":0,"y":0}';
 
 /** Whether an element outside the reader holds focus right now: `el`'s document has an active element that is connected
  *  and is neither the body, the document element, `el` nor anything inside `el`. The one fact the mount-focus decision
@@ -253,6 +265,12 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
     return reading.outcome.value;
   };
   const onPlace = input.onPlace;
+  // The library drops a command sent before its frame's `ready` and queues nothing, so a Back decided in that window is held
+  // here (the latest only) and sent at `ready`. `mountGen` names the live frame: a stale frame's ready changes nothing.
+  type Held = { readonly what: string; readonly run: (f: ReturnType<typeof mountDocFrame>) => void };
+  let mountGen = 0;
+  let isReady = false;
+  let held: Held | null = null;
   const adaptersNow = (): HostAdapters => ({
     assets,
     watchdogMs,
@@ -280,13 +298,37 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
       : input.onHash(id, { push: entry.push, from: entry.from, inGrammar: frameLibrary.isFragmentId(id) })),
     ...(onPlace === undefined ? {} : { onPlace: (kind: PlaceKind) => onPlace(kind) }),
     copy: (text, check) => input.copy(text, check.hidden),
-    onReady: () => input.onReady(),
+    onReady: readyOf(mountGen),
     onFallback: (r) => input.onFallback(r),
   });
 
   const mountFrame = deps.mount ?? mountDocFrame;
-  let frame = mountFrame(el, { document, adapters: adaptersNow() });
   let destroyed = false;
+  const deliver = (h: Held): void => {
+    try {
+      h.run(frame);
+    } catch (e) {
+      console.warn(`ccrc-reader: the frame refused ${h.what}`, e);
+    }
+  };
+  /** The adapter for frame number `gen`'s `ready`: it releases the held command, then tells the input. */
+  const readyOf = (gen: number) => (): void => {
+    if (gen === mountGen) {
+      isReady = true;
+      const h = held;
+      held = null;
+      if (h !== null && !destroyed) deliver(h);
+    }
+    input.onReady();
+  };
+  /** Sends `h` to the live frame, or holds it (replacing any held one) until the frame's `ready`. */
+  const send = (h: Held): void => {
+    if (destroyed || onPlace === undefined) return;
+    if (!isReady) { held = h; return; }
+    deliver(h);
+  };
+  mountGen += 1;
+  let frame = mountFrame(el, { document, adapters: adaptersNow() });
   return {
     get seed() { return seed; },
     follow(nextTheme) {
@@ -312,6 +354,9 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
     openAt(id) {
       if (destroyed) return;
       frame.destroy();
+      mountGen += 1;
+      isReady = false;
+      held = null;
       const next = mountFrame(el, { document: { ...document, initialHash: id }, adapters: adaptersNow() });
       frame = next;
       // The library runs host code while it mounts (a focus or insertion handler, a fallback): one that destroyed this
@@ -319,21 +364,16 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
       if (destroyed) next.destroy();
     },
     closeOverlay() {
-      if (destroyed || onPlace === undefined) return;
-      try {
-        frame.closeOverlay();
-      } catch (e) {
-        console.warn('ccrc-reader: the frame refused closeOverlay', e);
-      }
+      // Before `ready` the frame is a fresh one with no overlay open, so there is nothing to close: the close is dropped,
+      // never held, and so never replaces a held `goto`, which names a position the fresh frame does need.
+      if (!isReady) return;
+      send({ what: 'closeOverlay', run: (f) => f.closeOverlay() });
     },
     goto(id, from) {
-      if (destroyed || onPlace === undefined) return;
-      try {
-        if (from === undefined) frame.goto(id);
-        else frame.goto(id, from);
-      } catch (e) {
-        console.warn('ccrc-reader: the frame refused goto', e);
-      }
+      send({ what: 'goto', run: (f) => { if (from === undefined) f.goto(id); else f.goto(id, from); } });
+    },
+    gotoTop(id) {
+      send({ what: 'goto', run: (f) => f.goto(id, TOP_TOKEN) });
     },
   };
 }

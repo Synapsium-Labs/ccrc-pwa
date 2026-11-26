@@ -8,7 +8,8 @@
 //
 // The window's listener is added when the first subscriber arrives and removed when the last leaves. The reader's places
 // module (`docs/reader/places.ts`) registers the mounted frame as the place host (`setPlaceHost`) and reads and writes the
-// tab record through `readPlaces` and `writePlaces`: nobody else writes the record.
+// tab record through `readPlaces` and `writePlaces`, as the release gate does for the one mark it leaves before a
+// full-page replace (`swupdate.ts#reloadOnMove`); every record they write is one `historyPlaces.ts` built.
 import {
   PLACES_RECORD_KEY, afterPop, decidePop, parseRecord, seedPage, type PopDecision, type TabRecord,
 } from './historyPlaces';
@@ -18,6 +19,9 @@ import { readKey, removeKey, tabStorage, UNREADABLE, writeKey } from './storage'
 export interface PlaceHost {
   closeOverlay(): void;
   goto(id: string, from?: string): void;
+  /** Back to the top of the doc, from the jump to `id` that was made from the very top (it has no `from`): the frame
+   *  restores the top position, and `id` only names the jump (the library's `goto` wants one). */
+  gotoTop(id: string): void;
 }
 
 interface Subscription {
@@ -90,11 +94,32 @@ function act(d: PopDecision, at: PlaceHost | null): void {
     else history.forward();
     return;
   }
+  const run = (command: () => void): void => {
+    try {
+      command();
+    } catch (e) {
+      console.warn('ccrc: the reader frame refused a history command', e);
+    }
+  };
+  if (d.kind === 'close-overlay') {
+    run(() => at?.closeOverlay());
+  } else if (d.kind === 'goto') {
+    // A Back of several entries from a figure opened over a jump: the figure closes first, each command on its own.
+    if (d.close === true) run(() => at?.closeOverlay());
+    if (d.toTop === true) run(() => at?.gotoTop(d.id));
+    else run(() => at?.goto(d.id, d.from));
+  }
+}
+
+/** Write a number into the entry the page stands on: its state and URL kept, `docsIdx` added. A browser that refuses the
+ *  history call (one made too fast) leaves the entry unnumbered. */
+function stampEntry(stamp: number): void {
+  const state: unknown = history.state;
+  const kept = typeof state === 'object' && state !== null && !Array.isArray(state) ? state : {};
   try {
-    if (d.kind === 'close-overlay') at?.closeOverlay();
-    else if (d.kind === 'goto') at?.goto(d.id, d.from);
+    history.replaceState({ ...kept, docsIdx: stamp }, '');
   } catch (e) {
-    console.warn('ccrc: the reader frame refused a history command', e);
+    console.warn('ccrc: the history entry could not be numbered', e);
   }
 }
 
@@ -103,20 +128,12 @@ function onWindowPop(): void {
   const rec = readPlaces();
   const d = decidePop(state, {
     visit: rec.visit, places: rec.places, pendingSeq: rec.pendingSeq, lastIdx: rec.lastIdx, skips: rec.skips,
-    skipDir: rec.skipDir, host: host !== null,
+    skipDir: rec.skipDir, host: host !== null, top: rec.top,
   });
   const after = afterPop(rec, state, d);
   writePlaces(after.rec);
-  if (after.stamp !== null) {
-    // The entry keeps its state and its URL; only its number is added. A browser that refuses the history call (one
-    // made too fast) leaves the entry unnumbered, and the pop still routes.
-    const kept = typeof state === 'object' && state !== null && !Array.isArray(state) ? state : {};
-    try {
-      history.replaceState({ ...kept, docsIdx: after.stamp }, '');
-    } catch (e) {
-      console.warn('ccrc: the history entry could not be numbered', e);
-    }
-  }
+  // The entry keeps its state and its URL; only its number is added, and the pop still routes if the browser refuses.
+  if (after.stamp !== null) stampEntry(after.stamp);
   if (d.kind === 'router') runSubscribers();
   else act(d, host);
 }
@@ -135,7 +152,9 @@ export function onPop(listener: () => void): () => void {
   if (!seeded) {
     // Once per page, before its first pop: the entry the page loaded on says where the tab stands.
     seeded = true;
-    writePlaces(seedPage(readPlaces(), history.state));
+    const seed = seedPage(readPlaces(), history.state, location.pathname + location.search);
+    writePlaces(seed.rec);
+    if (seed.stamp !== null) stampEntry(seed.stamp);
   }
   if (!installed) {
     window.addEventListener('popstate', onWindowPop);
