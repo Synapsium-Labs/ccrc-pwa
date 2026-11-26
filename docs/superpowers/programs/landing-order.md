@@ -43,8 +43,8 @@ merges, workers never do, and an unattended landing is the goal when every safeg
 | 5g | 5, intents | dispatch's `intents[]` and `intent-held`, in a table of their own | server, skills | 5e | — | planned 2026-11-06 (`docs/superpowers/plans/2026-11-06-landing-order-wave5g-landing-intents.md`, D-8080 to D-8089; Decisions, 2026-11-06 22:15); item 60 answered as proposed (Decisions, 2026-11-07 14:33); approved as written (item 74), the plan merged (#2408 `67db632c`) and run 1427 dispatched 2026-11-07 (Decisions, 2026-11-07 23:08); wave-done verified at `e8c92d065`, review 1654, fix round 1; its wave-done verified at `f9b65a028`, accepted by review 1660, departures D-8117 to D-8119; MERGED 2026-11-08 02:23 UTC (#2453 `12ce1ba7`), run 1427 closed (Decisions, 2026-11-08 02:25) |
 | 5h | 5, the landed reader | the lane that walks the entries with 5c's form, apart from `sweepMerged` | server | 5c on the fleet box, and 5e | #2688 (plan #2671) | merged; run 1661 (the run's wave 20) opened 2026-11-08, planned, before run 1427 closed (Decisions, 2026-11-08 02:25); planned 2026-11-11 (`docs/superpowers/plans/2026-11-11-landing-order-wave5h-landed-reader.md`, D-8294 to D-8314; Decisions, 2026-11-11 16:15); approved as written (item 173), the plan merged (#2671 `f517128c`) and run 1661 dispatched 2026-11-12 (Decisions, 2026-11-12 00:14); accepted by review 1848 after three rounds, departures D-8355 to D-8360; MERGED 2026-11-12 06:37 UTC (#2688 `58bd5591`), run 1850 opened for 5i, then run 1661 closed (Decisions, 2026-11-12 06:41) |
 | 5i | 5, the line's head | `mainRedHold` from the radar's `main-health`, the next-to-land mail, and the reader of 5d's marker | server, skills | 5d on the fleet box, 5e and 5h | plan #2801 | plan approved as written 2026-11-14 (item 312; `docs/superpowers/plans/2026-11-14-landing-order-wave5i-line-head.md`, D-8625 to D-8629), seven tasks, P1–P6 and amendments A/B (Decisions, 2026-11-14 22:16); the plan merged (#2801) and run 1850 was dispatched (`ccrc-pwa-landing-order-5i`), PR #2837; two review rounds (review runs 2123 and 2152); fix round 2 complete locally at `3c432734d`, not pushed; parked from 2026-11-16 to 2026-11-24 on a second merge of `main`, which the operator allowed (item 641; Decisions, 2026-11-24 20:04); that merge was made and pushed with the round's fixes (tip `1ce1b9cc`); review run 3685, the third, confirmed no finding, and the coordinator accepted the wave on 2026-11-25 (Decisions, 2026-11-25 01:40); **merged** in #2837 on 2026-11-25 (`7fdd6a80`), run 1850 closed; its as-built departures are D-9031 to D-9044 in the plan (Decisions, 2026-11-25 03:10) |
-| 5j | 5, the doors (server) | the two session-only routes, pause the line and withdraw an entry, and `landing-subtractive.test.ts` | server, skills | 5e and 5i | — | the plan is on `main` (`docs/superpowers/plans/2026-11-25-landing-order-wave5j-doors.md`, #3360, `39fbd18f`, D-9045 to D-9052), accepted at the review cutoff after three rounds and corrected by the coordinator in its section 11; two build waves, 5j-a then 5j-b; 5j-a is dispatched as run 3759 (the run's wave 26), and the operator's reading of the plan's section 9 is asked as item 665, which holds nothing; 5j-a's first review (run 3781) found five minor points, and one fix round kept a withdrawn entry with no run at a pin, which the plan's Task 3 got wrong (the plan's section 12, C9; D-9071 and D-9072); its second review (run 3806) found seven minor points, one ruled (section 12, C11); 5j-a **merged** as #3375 (`31d5d9ae`); 5j-b is dispatched as run 3819 (the run's wave 28) (Decisions, 2026-11-25 04:30, 07:10, 08:42, 12:06 and 14:51) |
-| 5k | 5, the doors (PWA) | the line on the project card, the pause control and the withdraw sheet | pwa | 5j | — | to plan |
+| 5j | 5, the doors (server) | the two session-only routes, pause the line and withdraw an entry, and `landing-subtractive.test.ts` | server, skills | 5e and 5i | — | the plan is on `main` (`docs/superpowers/plans/2026-11-25-landing-order-wave5j-doors.md`, #3360, `39fbd18f`, D-9045 to D-9052), accepted at the review cutoff after three rounds and corrected by the coordinator in its section 11; two build waves, 5j-a then 5j-b; 5j-a is dispatched as run 3759 (the run's wave 26), and the operator's reading of the plan's section 9 is asked as item 665, which holds nothing; 5j-a's first review (run 3781) found five minor points, and one fix round kept a withdrawn entry with no run at a pin, which the plan's Task 3 got wrong (the plan's section 12, C9; D-9071 and D-9072); its second review (run 3806) found seven minor points, one ruled (section 12, C11); 5j-a **merged** as #3375 (`31d5d9ae`); 5j-b's two reviews (runs 3864 and 3887) found six and five minor points, and one fix round made the terminal states one shared copy and widened the subtractive suite to all seven landing tables (the plan's section 13; D-9093, D-9094); 5j-b **merged** as #3397 (`83c1ed22`) (Decisions, 2026-11-25 04:30, 07:10, 08:42, 12:06 and 14:51, and 2026-11-26 02:10) |
+| 5k | 5, the doors (PWA) | the line on the project card, the pause control and the withdraw sheet | pwa | 5j | — | to plan; run 3891 is open for it (the run's wave 29), not yet dispatched; it carries four points from 5j-b's reviews (the 5j plan's section 13) (Decisions, 2026-11-26 02:10) |
 
 **A fresh workspace per wave (R4) is child-reclamation's.** The spec first drew it as step 6 of the wave lifecycle,
 gated on #166 wave 3. #166 wave 2 (#178) made it live on `main` as "One PR per child", so wave 1 no longer
@@ -2623,6 +2623,34 @@ carries it (spec §5.1, amended 2026-09-24).
     red each), and the characterization case no longer guards the legacy list's wiring (another case does).
     The fix round's own departure, the plan read's filter argument, is D-9076.
   - **1f merged** as #3380 (`861cd777`) at 14:46Z on its first queue entry.
+- **2026-11-26 02:10 — wave 5j-b is merged; the operator's two doors are on `main`.**
+  - **Wave 5j-b, review run 3864 (round 1).** It read the branch at `511f196a`: nothing critical or important,
+    six minor points. It confirmed that no path through either door changes another entry or names a successor.
+    One fix round (call 1324): the list of terminal entry states, written a second time in the decision file,
+    became one shared copy; the suite that proves a door changes nothing else compared six landing tables and
+    now compares all seven; a guard with no failing case got one; two refusal words got their route cases; two
+    notes were corrected.
+  - **Review run 3887 (round 2, narrow).** It read the fix round at `cb9c7573`: nothing critical or important,
+    five minor points. Accepted (call 1367). The two test points and two comments are carried to wave 5k's
+    plan; the stale plan and note lines are corrected on this pull request. The plan's section 13 records
+    every ruling.
+  - **The landing gate was met.** The server box's `/health` read `v0.0.1476`, built from `5b14086b`, which
+    contains 5j-a's merge.
+  - **5j-b merged** as #3397 (`83c1ed22`) at 02:04Z on its first queue entry, at the commit the review read. The
+    `CLAUDE.md` and README lines it carries were compared with the plan's section 9 on the pull request's tip
+    and on the landed commit, and were identical. The operator read section 9 and answered "The lines are fine
+    as written" (item 665, confirmed).
+  - **It landed with the `ledger guard` check red** (call 1368). The fix round edited the wave's plan on the
+    wave's branch at the coordinator's ruling, and the head commit gives the reason, but in a paragraph git does
+    not read as trailers. The guard is not a required check and the merge queue does not run it; a new head
+    commit to turn it green would have needed a review of its own. From now on a worker reads its trailer lines
+    back with git's own trailer reader before the push.
+  - **Two conflict-syncs.** Other waves added routes while 5j-b was building, and each such merge moves the
+    route counts in the auth gate file and its test. 5j-b absorbed `main` once on its own probe and once at the
+    coordinator's request, and the Native Docs reader programme's folders wave was let through first by
+    agreement with its coordinator.
+  - **Wave 5k is next**: the console for the two doors. Run 3891 is open for it (the run's wave 29), not yet
+    dispatched; its plan comes first.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -3298,10 +3326,13 @@ Deploy: ccrc's updater carries the server, the PWA and the skill text.
   once the server box's `/health` version contains 5j-a's merge. The plan's section 11 wins over its tasks. At
   each landing compare the pull request's `CLAUDE.md` and README lines to the plan's section 9 byte for byte;
   identical lands with no hold. **5k** is planned after 5j-b, against `main` as it then stands. **5j-a is
-  merged** (#3375 `31d5d9ae`; Decisions, 2026-11-25 14:51). **5j-b is building** as run 3819: the plan's
-  sections 11 and 12 win over its tasks (C11: a run-bound withdrawn entry re-pins at any run's verified pin),
-  and it carries a different-run store case and a reworded test comment. Item 665 asks the operator to read
-  section 9 and holds nothing; section 9 did not change.
+  merged** (#3375 `31d5d9ae`; Decisions, 2026-11-25 14:51). **5j-b is merged** (#3397 `83c1ed22`; Decisions,
+  2026-11-26 02:10), so the operator's two doors are on `main`; the operator approved section 9 as written
+  (item 665). **Plan 5k now**, as run 3891
+  (the run's wave 29): the console for the two doors, against `main` as it stands. Its plan carries four points
+  from 5j-b's reviews, listed in the 5j plan's section 13: a check that the subtractive suite's table list
+  equals the schema's landing tables, two comment wordings, and mutation rows for three guards. A worker reads
+  its trailer lines back with git's own trailer reader before a push that edits a plan.
 - **Waves 1c and 1e are merged** (#3357 `6ac066f5`, #3362 `cb973d69`; Decisions, 2026-11-25 08:42). Their
   departures are D-9057 to D-9064 and D-9065, each in its wave's plan. The spec's section 5.1 says the fourth
   trigger holds until that round's wave-done.
