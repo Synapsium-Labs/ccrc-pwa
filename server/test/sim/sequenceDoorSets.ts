@@ -116,9 +116,10 @@ export function sequenceDoorAnswerCases(m: M): Record<string, SuiteCase> {
         kind: 'answer', scope: 'after=12', outcome: 'ahead', body: { ok: true, kind: 'ahead', after: 12, head: 9, restoreGeneration: 2 },
       });
     },
-    'an unreadable sequence is unavailable with an unmeasured line, never a page': () => {
-      expect(a({ kind: 'unmeasured', why: 'the sequence could not be read: x' }, { after: 0, limit: 10 }, 1)).toEqual({
-        kind: 'refuse', word: 'unavailable', detail: 'the sequence could not be read: x', scope: 'after=0', outcome: 'unmeasured',
+    'an unreadable sequence is unavailable with an unmeasured line, never a page, and its detail is a fixed phrase': () => {
+      // Review 3978 F4: the store's caught error text never rides the 503 (the door is exempt from the answer mask).
+      expect(a({ kind: 'unmeasured', why: 'the sequence could not be read: SQLITE_CORRUPT a-store-fault' }, { after: 0, limit: 10 }, 1)).toEqual({
+        kind: 'refuse', word: 'unavailable', detail: 'the sequence could not be read', scope: 'after=0', outcome: 'unmeasured',
       });
     },
   };
@@ -197,7 +198,7 @@ const RESTORE_SET = set(restoreGenerationOfCases, [
 ]);
 
 const ANSWER_SET = set(sequenceDoorAnswerCases, [
-  { id: 'S1 an unreadable sequence is an empty page', old: "if (read.kind === 'unmeasured') return { kind: 'refuse', word: 'unavailable', detail: read.why, scope, outcome: 'unmeasured' };",
+  { id: 'S1 an unreadable sequence is an empty page', old: "if (read.kind === 'unmeasured') return { kind: 'refuse', word: 'unavailable', detail: SEQUENCE_UNREADABLE, scope, outcome: 'unmeasured' };",
     new: "if (read.kind === 'unmeasured') return { kind: 'rows', body: { ok: true, kind: 'page', lines: [], next: q.after, head: q.after, restoreGeneration }, scope, count: 0 };" },
   { id: 'S2 a gap is written as ahead', old: "case 'gap': return { kind: 'answer', body: { ok: true, ...page }, scope, outcome: 'gap' };", new: "case 'gap': return { kind: 'answer', body: { ok: true, ...page }, scope, outcome: 'ahead' };" },
   { id: 'S3 a gap is served as rows', old: "case 'gap': return { kind: 'answer', body: { ok: true, ...page }, scope, outcome: 'gap' };", new: "case 'gap': return { kind: 'rows', body: { ok: true, kind: 'page', lines: [], next: q.after, head: page.head, restoreGeneration }, scope, count: 0 };" },
@@ -205,6 +206,9 @@ const ANSWER_SET = set(sequenceDoorAnswerCases, [
   { id: 'S5 the scope loses the cursor', old: 'const scope = `after=${q.after}`;', new: "const scope = 'sequence';" },
   { id: 'S6 the restore generation is dropped', old: 'read.value.lines, restoreGeneration);', new: "read.value.lines, 'unmeasured');" },
   { id: 'S7 ahead is written as gap', old: "case 'ahead': return { kind: 'answer', body: { ok: true, ...page }, scope, outcome: 'ahead' };", new: "case 'ahead': return { kind: 'answer', body: { ok: true, ...page }, scope, outcome: 'gap' };" },
+  // Review 3978 F4: the store's caught text forwarded on the 503 (the case above names the fixed phrase).
+  { id: 'S8 the store\'s text rides the 503', old: "if (read.kind === 'unmeasured') return { kind: 'refuse', word: 'unavailable', detail: SEQUENCE_UNREADABLE, scope, outcome: 'unmeasured' };",
+    new: "if (read.kind === 'unmeasured') return { kind: 'refuse', word: 'unavailable', detail: read.why as typeof SEQUENCE_UNREADABLE, scope, outcome: 'unmeasured' };" },
 ]);
 
 const INVARIANTS_SET = set(invariantsReadAnswerCases, [

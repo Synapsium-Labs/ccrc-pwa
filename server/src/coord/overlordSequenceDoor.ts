@@ -59,7 +59,11 @@ type Served<K extends SequencePageWire['kind']> = { readonly ok: true } & Extrac
 export type SequenceDoorAnswer =
   | { readonly kind: 'rows'; readonly body: Served<'page'>; readonly scope: string; readonly count: number }
   | { readonly kind: 'answer'; readonly body: Served<'gap'> | Served<'ahead'>; readonly scope: string; readonly outcome: 'gap' | 'ahead' }
-  | { readonly kind: 'refuse'; readonly word: 'unavailable'; readonly detail: string; readonly scope: string; readonly outcome: 'unmeasured' };
+  | { readonly kind: 'refuse'; readonly word: 'unavailable'; readonly detail: typeof SEQUENCE_UNREADABLE; readonly scope: string; readonly outcome: 'unmeasured' };
+
+/** The 503's one detail: a fixed phrase, never the store's caught error text, as the inbox, messages and history doors answer
+ *  (review 3978 F4; the door is exempt from the answer mask, so nothing it sends may carry a producer's words). */
+export const SEQUENCE_UNREADABLE = 'the sequence could not be read';
 
 /** The cursor read's answer over one read of the facts and the lines (`sequenceAfter`), first match: unreadable, then
  *  `sequencePage`'s own order (`ahead`, `gap`, a page). Total over every arm. */
@@ -68,13 +72,13 @@ export function sequenceDoorAnswer(
   q: { readonly after: number; readonly limit: number }, restoreGeneration: RestoreGeneration,
 ): SequenceDoorAnswer {
   const scope = `after=${q.after}`;
-  if (read.kind === 'unmeasured') return { kind: 'refuse', word: 'unavailable', detail: read.why, scope, outcome: 'unmeasured' };
+  if (read.kind === 'unmeasured') return { kind: 'refuse', word: 'unavailable', detail: SEQUENCE_UNREADABLE, scope, outcome: 'unmeasured' };
   const page = sequencePage(q.after, q.limit, read.value.facts, read.value.lines, restoreGeneration);
   switch (page.kind) {
     case 'page': return { kind: 'rows', body: { ok: true, ...page }, scope, count: page.lines.length };
     case 'gap': return { kind: 'answer', body: { ok: true, ...page }, scope, outcome: 'gap' };
     case 'ahead': return { kind: 'answer', body: { ok: true, ...page }, scope, outcome: 'ahead' };
-    default: return { kind: 'refuse', word: 'unavailable', detail: page.why, scope, outcome: 'unmeasured' };
+    default: return { kind: 'refuse', word: 'unavailable', detail: SEQUENCE_UNREADABLE, scope, outcome: 'unmeasured' };
   }
 }
 

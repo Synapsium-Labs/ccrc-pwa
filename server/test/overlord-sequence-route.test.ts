@@ -250,7 +250,8 @@ describe('GET /api/overlord/sequence: the answers, each with its ledger line', (
     const r = await seqRig({ unreadable: true });
     const res = await read(r, '&after=4');
     expect(res.statusCode).toBe(REFUSAL_STATUS.unavailable);
-    expect(json(res)).toMatchObject({ ok: false, error: 'unavailable', detail: 'the sequence could not be read: a fixture fault' });
+    expect(json(res)).toMatchObject({ ok: false, error: 'unavailable', detail: 'the sequence could not be read' });
+    expect(res.body).not.toContain('a fixture fault');   // review 3978 F4: the store's text never rides the 503
     expect(r.lines()).toEqual([line({ scope: 'after=4', outcome: 'unmeasured' })]);
   });
 

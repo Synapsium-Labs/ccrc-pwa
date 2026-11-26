@@ -11,7 +11,7 @@
 // served or the arm's word) and answers; a line that could not be written refuses the read.
 //
 // The row is not fenced (`write: false`, the plan's table), so it says `unfenced` to the runner and its ceiling counts every
-// attributed line (question 18). It decides nothing: the query is `readSequenceQuery`, the restore generation's word
+// attributed served line (question 18). It decides nothing: the query is `readSequenceQuery`, the restore generation's word
 // `restoreGenerationOf` and every answer, status and line word `sequenceDoorAnswer` (all L1, `overlordSequenceDoor.ts`).
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { refuseRoute } from '../refuse.js';
