@@ -104,7 +104,44 @@ strands the Overlord.
 
 ## Mutation table
 
-MUTATION_TABLE_PLACEHOLDER
+**Before:** each set's baseline (the real module) passes its suite; `mutation-floors.test.ts` refuses a set whose baseline
+fails. **After:** every mutant below is applied in memory by the floors harness and killed. Five new sets join `MUTANT_SETS`
+at floor 1 (`holdOfStart`, `holdTargetOf`, `overlordInstallBehindOf`, `heldOutOfList`, `newestStartVerdict`), and four existing
+sets gain mutants (`sandboxVerdict`, `overlordAccounts`, `designateVerdict`, `readinessFactsOf`); no floor was lowered. On the
+first floors run one new mutant survived (FA4, a `User` file inside the workspace read as the account's); its case was added and
+the set re-run killed every mutant.
+
+| Set | Mutant | Killed by |
+|---|---|---|
+| `holdOfStart` | H1 hold on an unmeasured property (the plan's) | "an unmeasured property never holds an account" |
+| | H2 hold on a workspace-loaded property (the plan's) | "a property the workspace loaded ... never holds an account (H2)" |
+| | H3 an unmeasured property settles | "an unmeasured property never holds an account" |
+| | H4 no verdict settles | "no verdict yet holds nothing and asks again" |
+| | H5 an unknown account settles | "an account load on a start whose account is unknown" |
+| `heldOutOfList` | L1 drop the empty-list arm (the plan's) | "holds that would leave none keep the list as it was" |
+| | L2 an empty list overridden; L3 the holds kept; L4 an override that empties | the four `heldOutOfList` cases |
+| `overlordInstallBehindOf` | I1 read skew as agreement (the plan's); I2 unknown builds read as agreement | "every combination" |
+| | I3 the digest ignored; I4 an unmeasured digest read as no; I5 `and` for `or` | "every combination", "an unmeasured behind keeps its own reason" |
+| | D1, D2 (`startDigestDiffersOf`), B1 (`buildsAgreeOf`) | the digest and build-agreement cases |
+| `holdTargetOf` | T1 any role; T2 an unreadable row binds; T3 any Overlord generation | the three `holdTargetOf` cases |
+| `newestStartVerdict` | N1 another start's report read; N2 no start read as unmeasured; N3 the carry dropped | the `newestStartVerdict` case |
+| `sandboxVerdict` | FA1 a missing skill is the account's; FA2 an extra skill is not; FA3 any outside file is; FA4 a `User` file in the workspace is; FA5 an extra tool is not; FA6 a foreign hook is not; FA7 only the door server is | the `fromAccount` case |
+| `overlordAccounts` | A14 the holds ignored; A15 held accounts not counted; A16 unread holds read as none; A17 unread holds empty the list | the four "PR H" `overlordAccounts` cases |
+| `designateVerdict` | D4 (re-pinned to the new pick); D14 a held account picked; D15 a hold strands the pick | the two "PR H" designate cases |
+| `readinessFactsOf` | FA-H1 unread holds read as no holds; FA-H2 any holds answer doubts the strand | "strand (renewal readings PR H) ..." |
+
+**By hand** (each applied to the committed source, the named file run alone through the test wrapper, the source restored).
+Before: every named file green. After:
+
+| Mutation | File run | Red |
+|---|---|---|
+| drop rule 3 of `accountOutsideSetOf`, the held check (the plan's) | `continuity-renewal-readings-wiring.test.ts` | 1 of 57 (and the F7 unit cases) |
+| stop asking after the first pass (the plan's) | `continuity-renewal-holds.test.ts` | 1 of 28 (the late verdict case) |
+| the pass never asks the hold step | `continuity-renewal-holds.test.ts` | 1 of 28 (the source pin) |
+| the readiness wiring's holds back to `not-wired` | `continuity-renewal-holds.test.ts` | 1 of 28 |
+| the readings wiring hands the account readings `'not-wired'` again | `continuity-renewal-readings-wiring.test.ts` | 2 of 57 |
+| the facts carry no holds (the list unfiltered) | `continuity-renewal-readings-wiring.test.ts` | 1 of 57 |
+| the clear records `flag-off` whatever the actor | `account-holds-route.test.ts` | 2 of 15 |
 
 ## What a merge arms
 

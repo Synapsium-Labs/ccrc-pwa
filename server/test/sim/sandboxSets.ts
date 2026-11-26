@@ -144,6 +144,7 @@ export function sandboxCases(m: SandboxModule): Record<string, SuiteCase> {
       expect(acct(heldReport(e, {}, { instructions: [con, user] }), 'instructions')).toBe(true);
       expect(acct(heldReport(e, {}, { instructions: [user] }), 'instructions')).toBe(true);
       expect(acct(heldReport(e, {}, { instructions: [con, parent] }), 'instructions')).toBe(false);
+      expect(acct(heldReport(e, {}, { instructions: [con, { ...user, inWorkspace: true }] }), 'instructions')).toBe(false);
       expect(acct(heldReport(e, {}, { instructions: [parent] }), 'instructions')).toBe(false);
       expect(acct(heldReport(e, {}, { instructions: [{ ...con, sha256: 'e'.repeat(64) }] }), 'instructions')).toBe(false);
       expect(acct(heldReport(e, {}, { instructions: [con, { ...con, name: 'AGENTS.md' }] }), 'instructions')).toBe(false);

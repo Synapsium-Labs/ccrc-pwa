@@ -17,6 +17,8 @@ import type { DesignationRead, DesignationView } from '../../shared/overlord-des
 import { sourceOfSymbol } from './scan/symbols.js';
 import { heldOutOfListCases, holdOfStartCases, holdTargetCases, installBehindCases } from './sim/renewalHoldReadingSets.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
+import { readinessLaneOver } from '../src/coord/overlordReadinessWiring.js';
+import type { ReadinessLanePort } from '../src/coord/overlordReadinessLane.js';
 
 afterEach(removeTmpFixtures);
 
@@ -165,5 +167,25 @@ describe('holdOverlordStart: the generations pass\'s account hold (PR H, Task 11
     const body = sourceOfSymbol('server/src/continuity/generationsLane.ts', 'generationsPass');
     expect(body.match(/holdOverlordStart\(/g)).toHaveLength(1);
     expect(body).toContain('if (gens.ok) holdOverlordStart(deps, gens.rows, now);');
+  });
+});
+
+describe('the readiness wiring reads the holds from the store (PR H)', () => {
+  /** The lane's port as the composition builds it over a real store (read through the lane's private field). */
+  const portOver = (s: CoordStore): ReadinessLanePort => {
+    const roster = { accounts: [] as never[], byId: new Map() };
+    const lane = readinessLaneOver({ db: s.db, coord: s, operatorModel: undefined, limits: () => null,
+      deps: { cfg: { roster }, time: { clock: { wall: () => NOW, mono: () => 1 } } } as never });
+    return (lane as unknown as { port: ReadinessLanePort }).port;
+  };
+
+  it('the standing holds read, never not-wired; an unreadable table reads unmeasured', () => {
+    const s = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-holds-readiness-'), 'coord.db')));
+    const port = portOver(s);
+    expect(port.holds()).toEqual({ kind: 'read', lanes: [] });
+    s.holdAccount({ lane: 'lane-a', startId: 1, at: NOW });
+    expect(port.holds()).toEqual({ kind: 'read', lanes: ['lane-a'] });
+    s.db.exec('DROP TABLE overlord_account_holds');
+    expect(port.holds()).toEqual({ kind: 'unmeasured' });
   });
 });
