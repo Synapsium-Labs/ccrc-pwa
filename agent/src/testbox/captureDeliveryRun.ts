@@ -35,7 +35,9 @@ export interface DriverPlace { readonly path: string; readonly tmpBase: string }
 export interface DeliveryDriver { drive(input: DeliveryDriveInput, place: DriverPlace): Promise<DriverAnswer> }
 
 /** The send words that are a fault of the box, never the product's answer. `not-alive`: the capture's own tmux session is
- *  not alive, so nothing was sent to a build and the product refused nothing. (A driver whose own tmux call could not
+ *  not alive. The product's send answers it too: before it typed anything, but also after it typed the case text when every
+ *  later echo read failed, and after its clear keys (`server/src/inject/send.ts`), so text may have reached the pane; in the
+ *  capture's own tmux it means the pane is gone, and the part ends with no verdict either way (review 3898 F4). (A driver whose own tmux call could not
  *  complete exits non-zero, which is a fault below whatever send word its line carries.) */
 export const DRIVER_BOX_FAULT_SENDS: readonly string[] = Object.freeze(['not-alive']);
 
@@ -48,6 +50,10 @@ export function readDriverAnswer(code: number, stdout: string): DriverAnswer {
   const o = typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
   if (code === 0 && Object.keys(o).join() === 'send' && typeof o['send'] === 'string' && DELIVERY_SEND_WORD.test(o['send']) && !DRIVER_BOX_FAULT_SENDS.includes(o['send'])) {
     return { kind: 'sent', send: o['send'] };
+  }
+  if (code === 3 && typeof o['fault'] === 'string' && typeof o['detail'] === 'string') {
+    // A fault of the box: its reason and tmux's detail, never the send word, which is not the product's here (review 3898 A1).
+    return { kind: 'fault', detail: `the driver exited 3: a fault of the box (${o['fault'].slice(0, 40)}): ${o['detail'].slice(0, 120)}` };
   }
   const word = typeof o['refused'] === 'string' ? `refused ${o['refused']}` : typeof o['send'] === 'string' ? o['send'] : 'an answer off its shape';
   return { kind: 'fault', detail: `the driver exited ${code}: ${word.slice(0, 80)}` };
@@ -80,6 +86,9 @@ export interface DeliveryDriveContext {
   readonly requests: readonly unknown[];
   /** The route each of `requests` came by, same index (the stand-in's own list, read live). */
   readonly routes: readonly DeliveryRoute[];
+  /** The position of each request on a route the stand-in does not script (`captureStub.ts`'s `others`), read live; absent: none
+   *  (review 3898 A3). */
+  readonly others?: readonly number[];
   /** The recording so far, read fresh. */
   readonly records: () => readonly CaptureRecord[];
   readonly input: Omit<DeliveryDriveInput, 'case'>;
@@ -139,6 +148,7 @@ export async function runDeliveryDrive(c: DeliveryDriveContext): Promise<Deliver
     const life = await c.life();
     if (life !== 'alive') return noVerdict(`the build is ${life === 'gone' ? 'gone' : 'of unknown life'} before case ${id}: a fault of the box, not a verdict`);
     const reqAt = c.requests.length;
+    const othersAt = c.others?.length ?? 0;
     const recAt = c.records().length;
     const answer = await c.driver.drive({ ...c.input, case: id }, c.place);
     if (answer.kind === 'fault') return noVerdict(`case ${id}: ${answer.detail}: a fault of the box, not a verdict`);
@@ -156,7 +166,7 @@ export async function runDeliveryDrive(c: DeliveryDriveContext): Promise<Deliver
       const trailing = c.now() + c.settleMs;
       while (c.now() < trailing) await c.sleep(c.pollMs);
     }
-    const observed = observeWindow(answer.send, c.requests.slice(reqAt), c.routes.slice(reqAt, c.requests.length), c.records().slice(recAt));
+    const observed = observeWindow(answer.send, c.requests.slice(reqAt), c.routes.slice(reqAt, c.requests.length), c.records().slice(recAt), Math.max(0, (c.others?.length ?? 0) - othersAt));
     if (observed === null) return noVerdict(`case ${id}: a request of its window has no route: a fault of the box, not a verdict`);
     results.push(deliveryCaseResult(id, observed));
   }

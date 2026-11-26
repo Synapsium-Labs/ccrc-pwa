@@ -443,6 +443,19 @@ describe('the driver child', () => {
     expect(readDriverAnswer(3, '{"send":"ok"}')).toMatchObject({ kind: 'fault' });
   });
 
+  it('an exit-3 fault line names its reason and tmux\'s detail, never the send word, which is not the product\'s in that case (review 3898 A1)', () => {
+    const a = readDriverAnswer(3, '{"fault":"tmux-call","send":"not-alive","detail":"the pane is gone"}');
+    expect(a.kind).toBe('fault');
+    const detail = a.kind === 'fault' ? a.detail : '';
+    expect(detail).toMatch(/^the driver exited 3: /);
+    expect(detail).toContain('tmux-call');
+    expect(detail).toContain('the pane is gone');
+    expect(detail).not.toContain('not-alive');
+    // The detail stays bounded as the other arms' words are.
+    const long = readDriverAnswer(3, JSON.stringify({ fault: 'tmux-call', send: 'not-alive', detail: 'x'.repeat(500) }));
+    expect(long.kind === 'fault' ? long.detail.length : 0).toBeLessThan(250);
+  });
+
   it('not-alive at exit 0 is a fault of the box (the capture\'s own session is not alive), never the product\'s refusal', () => {
     expect(readDriverAnswer(0, '{"send":"not-alive"}')).toMatchObject({ kind: 'fault', detail: expect.stringMatching(/not-alive/) });
     expect(DRIVER_BOX_FAULT_SENDS).toContain('not-alive');
@@ -520,10 +533,11 @@ describe('the drive on a scripted window', () => {
 
   /** A drive context over a fake build that is always alive. `onCase` scripts what each case's send does to the window;
    *  `late` is a request that arrives `after` virtual ms past the last case's driver answer (the quiet period is 40). */
-  function scripted(part: number, o: { onCase?: (id: string, k: number) => DriverAnswer; late?: { after: number; route: DeliveryRoute }; release?: string | null; unmeasured?: boolean } = {}) {
+  function scripted(part: number, o: { onCase?: (id: string, k: number) => DriverAnswer; late?: { after: number; route: DeliveryRoute }; other?: number; release?: string | null; unmeasured?: boolean } = {}) {
     const clock = { now: 0 };
     const requests: unknown[] = [];
     const routes: DeliveryRoute[] = [];
+    const others: number[] = [];
     const records: { kind: 'hook'; event: string; payload: Record<string, unknown>; status: null }[] = [];
     const hook = (event: string): void => { records.push({ kind: 'hook', event, payload: {}, status: null }); };
     const cases = deliveryParts()[part]!;
@@ -535,6 +549,7 @@ describe('the drive on a scripted window', () => {
         const k = asked.length - 1;
         const answer = o.onCase?.(input.case, k) ?? { kind: 'sent' as const, send: 'ok' };
         if (answer.kind === 'fault') return answer;
+        if (o.other === k) others.push(requests.length);
         requests.push(bodyOf(input.case)); routes.push('messages'); hook('Stop');
         if (k === cases.length - 1 && o.late !== undefined) lateAt = clock.now + o.late.after;
         return answer;
@@ -542,7 +557,7 @@ describe('the drive on a scripted window', () => {
     };
     const ctx: DeliveryDriveContext = {
       launched: { type: async (text) => { if (text.startsWith('/model')) { hook('PreModelSwitch'); hook('PostModelSwitch'); } if (text === '/exit') hook('SessionEnd'); }, life: async () => 'alive', stop: async () => undefined },
-      life: async () => 'alive', requests, routes, records: () => records, input: { capture: '/c', tmux: '/t' }, place: { path: '', tmpBase: '' },
+      life: async () => 'alive', requests, routes, others, records: () => records, input: { capture: '/c', tmux: '/t' }, place: { path: '', tmpBase: '' },
       build: GOOD, part, driver, settleMs: SETTLE, quietMs: QUIET, stepTimeoutMs: 1000, exitTimeoutMs: 100, pollMs: POLL,
       release: o.release ?? null, unmeasured: o.unmeasured === true ? ['fleet-tmux-config'] : [],
       sleep: async (ms) => {
@@ -572,6 +587,18 @@ describe('the drive on a scripted window', () => {
     const { ctx } = scripted(0, { late: { after: QUIET + 100, route: 'count_tokens' } });
     const run = await runDeliveryDrive(ctx);
     expect(run.delivery!.cases.at(-1)).toMatchObject({ verdict: 'intact', sideRequests: { messages: 0, count_tokens: 1 } });
+  });
+
+  it('a case whose window holds one request on a route the stand-in does not script carries sideRequests.other 1; the others carry no other key (review 3898 A3)', async () => {
+    const { ctx } = scripted(0, { other: 1 });
+    const cases = (await runDeliveryDrive(ctx)).delivery!.cases;
+    expect(cases[1]!.sideRequests).toEqual({ messages: 0, count_tokens: 0, other: 1 });
+    for (const [i, c] of cases.entries()) if (i !== 1) expect(Object.keys(c.sideRequests).sort()).toEqual(['count_tokens', 'messages']);
+  });
+
+  it('a window with no such request is byte for byte today\'s: no other key', async () => {
+    const { ctx } = scripted(0);
+    for (const c of (await runDeliveryDrive(ctx)).delivery!.cases) expect(c.sideRequests).toEqual({ messages: 0, count_tokens: 0 });
   });
 
   it('the trailing window is one settle past the quiet period, no more: a request after it is nobody\'s window', async () => {
