@@ -15,13 +15,14 @@ recorded as design-level calls, which the owner sees and may overturn.
 - **Tests, by call 1494.** A behaviour that only shows after a Revert or a fault is accepted from the merged tests at
   the installed commit, plus a live reading of the installed check, or of the fact the installed build reports about
   it. It is not staged on the live fleet. A fault warning cannot occur on a healthy fleet, and a live Revert holds real
-  sessions on an older model until a newer one appears.
+  sessions on an older model until a newer one appears. The other choices were one supervised live Revert on a Codex
+  lane, and waiting for a natural event for every line.
 - **Tests, by call 1499.** The Models sheet is drawn only on a signed-in device, which no session can read. Its
   display is accepted from the merged browser tests on the commit the server box serves, plus a live reading on every
   lane of the data the sheet draws from. The other choices were to ask the owner for one look, or to leave line 5
   open.
-- **A real release.** A behaviour that a real release shows stays a live wait. That is the move itself: lines 2, 6
-  and 7.
+- **A real release.** A behaviour that only a real model release or alias change shows stays a live wait. That is
+  the move itself: lines 2, 6 and 7.
 
 Line 8 was proved on 2026-11-23 and is carried.
 
@@ -117,8 +118,8 @@ properties of that code.
   path: nothing on the server reads model files", and both mixed pairs of old and new server and agent. Also
   `server/test/lane-models-op.test.ts`, `server/test/lane-models.test.ts`, `agent/test/models-op.test.ts` and
   `agent/test/whitelist.test.ts`.
-- Unmeasured: a read through the op over the agent link, which only the signed-in console makes, and a refused file
-  read on the live agent.
+- Unmeasured: a read through the op over the agent link, which the console's Models route and the server's idle
+  relaunch pass make, and a refused file read on the live agent.
 
 ### Line 5: the Models sheet, Revert, and the hold ending
 
