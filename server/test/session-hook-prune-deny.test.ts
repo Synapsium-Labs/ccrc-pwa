@@ -384,6 +384,27 @@ describe('the forbidden program\'s cost on quote-dense payloads naming worktree 
     expect(createHash('sha256').update(bytes).digest('hex'), 'the vendored baseline was edited').toBe(BASELINE_SHA256);
     return bytes.toString('utf8');
   };
+  // D-9141 (the hook owner's ruling, its call 1562): the 64 KB cost rows read a baseline of their own, the hook's
+  // forbidden program as main had it at the gate's merge, 06aed21ff7 (the quiz row asked one linear anchor first); the
+  // linearity rows keep the original above. The two files answer two rulings: inherited scaling against the program the
+  // deny was added to (FD8), and today's accepted cost; each is frozen by its own hash and named by its commit, and a
+  // test cannot read a commit through git (D-8001). Replace this file only on the owner's next ruling on accepted cost,
+  // with the program at the commit that ruling names, never to turn a row green.
+  const COST_BASELINE_FIXTURE = path.join(FIX, 'forbidden-jq-06aed21ff.jq');
+  /** The sha256 of `APPROVAL_FORBIDDEN_JQ` extracted with `extract` from `ccd/session-hook.sh` at 06aed21ff7. */
+  const COST_BASELINE_SHA256 = '9a8a7a7a89536aeac1e7e056b4c75b7ec734493031d505eae529f53cc68aa595';
+  /** The cost rows' vendored baseline: a missing, unreadable or edited fixture throws inside the case that reads it. */
+  const readCostBaseline = (): string => {
+    const bytes = fs.readFileSync(COST_BASELINE_FIXTURE);
+    expect(createHash('sha256').update(bytes).digest('hex'), 'the vendored cost baseline was edited').toBe(COST_BASELINE_SHA256);
+    return bytes.toString('utf8');
+  };
+  it('the cost baseline is the hook\'s forbidden program at 06aed21ff7, held by its hash, and is not the original (D-9141)', () => {
+    const cost = readCostBaseline();
+    expect(cost).not.toBe('');
+    expect(cost, 'the two baselines answer two rulings').not.toBe(readBaseline());
+    expect(cost.startsWith('def WS:'), 'a forbidden program, as `extract` returns it').toBe(true);
+  });
   for (const [name, unit, quoted] of [['quotes', 'a "b c" \'d\' \\e ', false], ['dqsub', '$(x) `y` ', true]] as const) {
     const timed = (p: string, mode: string, kb: number): number => {
       const dense = unit.repeat(Math.floor((kb * 1024) / unit.length));
