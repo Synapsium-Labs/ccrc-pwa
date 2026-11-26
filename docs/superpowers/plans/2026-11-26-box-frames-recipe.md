@@ -2,13 +2,16 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or
 > superpowers:executing-plans to implement this plan task by task. Steps use checkbox (`- [ ]`) syntax for tracking.
-> **STEP 1 OF THE WAVE: no code before the coordinator's yes and the capture owner's yes to section 5 (the packet).**
+> **Revised after the rulings** (the coordinator's 38159 and 38164; the capture owner's call 1558 and its answer on the
+> delta). Section 5 carries three packets to the owner, each before the code it covers. The alarm (section 7) is the next
+> wave.
 
 **Goal:** every build the capture lane trusts has its input box drawn on record in fixed shapes: an empty box, tall
 drafts around the row cap, a long line in view and scrolled out, a draft typed as a person types, a held stash and a
-queued message, each with and without an earlier turn. Each shape is recorded at 220x50 and 220x40. A session can turn a
-recorded frame into a test fixture with no file carried by hand. When a new build draws the box in another FORM, the lane
-says so in one word on the status read, and the frame itself is not on that read.
+queued message, each with and without earlier turns. Each shape is recorded at 220x50 and 220x40. A session fetches a
+recorded frame through the closed client and makes it a test fixture, with no file carried by hand. The next wave adds
+the alarm: when a new build draws the box in another FORM, the lane says so in one word on the status read, and the
+frame itself is not on that read.
 
 **Why now (desktop-polish wave 187).** The console's send presses Enter only on a box it can prove holds its own text, and
 those proofs are built from panes of one build, 2.1.300 (`docs/superpowers/plans/2026-10-15-paste-chip-send.md`). The
@@ -23,8 +26,8 @@ was (`docs/superpowers/programs/desktop-polish/paste-delivery.md`).
 its result and its one reader in a file of their own (no case text in the capture contract's module graph), the
 reducer in `shared/` (pure), the drive in `agent/src/testbox/`, and the product's own driver
 (`server/src/inject/deliveryDrive.ts`) for every key typed. A lane decider in `shared/`, the server lane acting on it, a
-table of its own, a signed-in read, and a status-read word. Decide in L1, act in L4. No door: nothing starts a capture
-but the lane.
+table of its own, and one read that takes a session or the box token, with a client verb. Decide in L1, act in L4. No
+door: nothing starts a capture but the lane.
 
 **Tech stack:** TypeScript, vitest, `node:sqlite`; `shared/`, `agent/`, `server/`.
 
@@ -45,19 +48,17 @@ build (`agent/test/fixtures/fake-delivery-build.mjs`'s pattern), never Claude Co
   (`person`) and the view moved up inside the box (`view-up`).
 - **A frame is reduced on the test box, before it leaves the capture.** No raw frame leaves the test box. It is not
   written to disk there either: it lives in the runner's memory between the screen read and the reducer. The result, the
-  stored row, the signed-in read and the fixture files all carry the REDUCED frame only. A frame the reducer cannot clear
-  is refused whole, with its rule word: never cut.
-- **Where frames are read.** On the server, through a new signed-in read that checks no box token and refuses while
-  sign-in is dark. On the fleet box, as files under one fixed directory that the fleet agent writes when it relays an
-  answered frames capture. That directory is how a session gets a fixture without the operator carrying a file (section
-  5.4, the owner's approval asked). No box-token read carries any frame text.
-- **The alarm.** A pure SHAPE rule turns a frame into a signature that keeps its structure and drops the build's own text.
-  The rule keeps the row classes, our rows in view, the rule rows' label skeletons, chips, the glyph and the cursor. The
-  status read carries one word, `same-form`, `new-form`, `first-form` or `incomplete`, with the ids of the frames that
-  differ, and never a frame (section 7).
+  stored row, the one read and the fixtures all carry the REDUCED frame only. A frame the reducer cannot clear
+  is refused whole, with its rule word: never cut. The server runs the reducer's own check again before it stores a
+  frame and before it serves one.
+- **Where frames are read** (the owner's call 1558). One server read, `GET /api/testbox/frames`, takes a session or the
+  box token, as the status read does. It answers a build's list without text, or one frame's text by id, and a session
+  fetches it with `ccrc-api testbox frames`. Text is kept for the newest 4 framed builds. There is no fleet-box directory.
+- **The alarm is the next wave.** A pure SHAPE rule keeps a frame's structure and drops the build's own words (section 7,
+  agreed in substance). The status read will carry one word and the ids of the frames that differ, never a frame.
 - **Nothing that exists moves.** The trust recipe, its verdict and its record are untouched. So are the delivery recipe and
   `DELIVERY_RECIPE_VERSION`, which printed `da16fe2f55551e0b` before the first edit. A migration is needed: a table of its
-  own (section 5.3).
+  own, whose number is the first free one at my last merge of `main` (section 5.3).
 
 ## 2. What is read today (read)
 
@@ -194,7 +195,8 @@ turns the stand-in received (by the delivery recipe's one request rule, `deliver
 
 ## 5. Storage, readers and reduction (THE CAPTURE OWNER'S PACKET)
 
-This section and the contract change in 5.6 go to the capture owner as a packet before any code.
+The owner ruled on this section (call 1558): 5.1 and 5.6 stand as written, and 5.5 is redrawn for the one read; 5.2 (packet 2) and 5.3 with 5.4 (packet 1)
+are revised for its rulings and go back to it before the code they cover, and the gate rows (packet 3) come by diff.
 
 ### 5.1 The result and its one reader
 
@@ -240,108 +242,168 @@ FramesCaptureResult {
 - **One reader**, `readFramesCaptureResult(v, build, part)`, with a case per refusal. A result's whole size is bounded by
   its frame: about 66 KiB at most.
 
-### 5.2 The reducer (pure, L0, with its own cases)
+### 5.2 The reducer, and the receiver's check (pure, L0, with its own cases; packet 2 to the owner)
 
-`shared/framesReduce.ts#reduceFrame(frame, ours, privates, scan)`. It runs **on the test box**, in the runner, on the frame
-the driver read, before the result is built. The raw frame then goes out of scope, and nothing writes it anywhere.
-- `ours`: the case's own typed lines and the fixed texts of its turns and the stand-in's reply (all ours, fixed).
+`shared/framesReduce.ts` holds two pure functions, `reduceFrame(frame, ours, privates, scan)` and
+`checkReducedFrame(text, ours, scan)`. The second is the first's own check, not a copy: it runs every refusing rule of
+`reduceFrame`, and `reduceFrame(text, ours, [], scan)` must equal `text`.
+
+**Where each runs.**
+- `reduceFrame` runs **on the test box**, in the runner, on the frame the driver read, before the result is built. The
+  raw frame then goes out of scope, and nothing writes it anywhere.
+- `checkReducedFrame` runs **on the server, twice** (the owner's call 1558, condition 1). The lane runs it before it
+  stores a frame, and the read runs it before it serves one. A text that fails is stored or served as `refused`, with
+  the rule word and no text, and the store counts it. The lane writes one log line naming the build, the frame id and
+  the rule word, with no text. The test box is the producer, and the server does not take its word.
+
+**The inputs.**
+- `ours`: the case's own typed lines, the fixed texts of its turns, and the stand-in's reply. All are fixed text from
+  this repository. The mail notice turn is `server/src/coord/envelope.ts#renderMailNudge` with the neutral session id
+  `lane-a-project-a`. That id is named in the shared case file, and no real session, account or host name can appear
+  in it. A case pins this (the owner's bound on point 5).
 - `privates`: the exact strings this capture knows. They are the home directory and its `~` form, the user name, the host
   name (short and full), the capture's scratch directory, its tmux directory, the release tree's path, the build's file
-  path, and the stand-in's `127.0.0.1:<port>`.
-- `scan`: the committed private-name matcher (`shared/private-names.mjs#hitsIn` over the committed list), composed by the
-  runner, so the reducer stays pure.
+  path, and the stand-in's `127.0.0.1:<port>`. The server's check has none, so it passes `[]`.
+- `scan`: the committed private-name matcher (`shared/private-names.mjs#hitsIn` over the committed list). The caller
+  composes it: the runner on the test box, and the lane and the read on the server. So the reducer stays pure, and its
+  file imports no `node:*` module.
 
-The rules, in order. Each has its own case:
-1. **Shape gate.** Not a frame by 5.1's rules: refused (`not-a-frame`).
-2. **Our rows stay byte for byte.** A row whose text without SGR is a run of `ours` (whitespace squashed, as `send.ts`'s
-   `squash` reads it) is kept as read.
-3. **Working directory.** A row holding any `privates` string, after SGR is removed, has its content replaced by the fixed
-   text `‹working directory›`. The row's leading and trailing border characters (`│`, `╭`, `╰`, spaces) are kept, and the
-   text is padded or cut to the content's width, so every row keeps its width. The row's SGR goes with its content.
-4. **Model line.** A row naming a model (`opus`, `sonnet`, `haiku`, `fable`, `claude-…`, or the stand-in's
-   `ccrc-capture-stand-in`, case-insensitive, as words) becomes `‹model›` by rule 3's layout.
-5. **Account and plan line.** A row naming an account or plan (`api usage billing`, `claude pro|max|team|enterprise`,
+**The rules, in order.** Each has its own case.
+1. **Shape gate.** Not a frame by 5.1's rules: refused (`not-a-frame`). A hyperlink sequence is a refusal here. The owner
+   asked that it be measured on the first real run, not designed around now. If it appears, a packet for one stripping
+   rule follows.
+2. **Our rows stay byte for byte, only whole.** A row is ours only when its whole text, without SGR and squashed (as
+   `send.ts`'s `squash` reads it), is a run of `ours`. Such a row is kept exactly as read. A row that holds our text and
+   anything else is not ours, and the later rules read it like any other row (the owner's first bound on point 5).
+3. **Working directory: exact strings.** A row holding any `privates` string, after SGR is removed, has its content
+   replaced by the fixed text `‹working directory›`. The row's leading and trailing border characters (`│`, `╭`, `╰`,
+   spaces) are kept, and the text is padded or cut to the content's width, so every row keeps its width. The row's SGR
+   goes with its content.
+4. **Working directory: path-like runs, whole or cut short** (the owner's condition 2). Outside our rows, a row holding a
+   path-like run also becomes `‹working directory›` by rule 3's layout. A path-like run is two or more components around
+   a `/`, a leading `/` before two components, or an ellipsis (`…` or `...`) or a home mark (`~`) followed by a `/`. That
+   catches a path the build drew cut short, with an ellipsis in the middle or at the head, which no exact string and no
+   absolute shape matches.
+5. **Model line.** A row naming a model, as words and case-insensitive (`opus`, `sonnet`, `haiku`, `fable`, `claude-…`,
+   or the stand-in's `ccrc-capture-stand-in`), becomes `‹model›` by rule 3's layout.
+6. **Account and plan line.** A row naming an account or plan (`api usage billing`, `claude pro|max|team|enterprise`,
    `organization`, `account`, `plan`, an `@` followed by a dotted name) becomes `‹account›`.
-6. **Status line.** The capture's own settings configure no status line, and a case pins that. So there is no status line
-   to replace. A row that rules 3 to 5 catch below the box is replaced like any other row.
-7. **The scan, then refuse.** On the reduced text, less the rows rule 2 kept as ours. Those are fixed texts from this
-   repository, and the mail notice turn names a home-relative path by design. The frame is refused when `scan` hits
-   anything (`private-name`), or when a private shape remains
-   (`private-shape`). A private shape is an absolute path under `/home/`, `/Users/`, `/root` or `/mnt/`, a `~/` path, an
-   email shape, an IPv4 address other than `127.0.0.1`, a dotted host name with a public suffix, or a run of 32 or more
-   hex characters (an id or a token). A hit refuses the whole frame (`outcome: 'refused'`, `text: null`, the rule word).
-   Nothing is cut out to make it pass.
-8. **Idempotent.** `reduceFrame(reduceFrame(f)) = reduceFrame(f)` on every case's fixture, pinned.
+7. **A rule row's label is never touched** (the coordinator's condition 2). A rule row is a run of 10 or more `─`. Its
+   label is kept byte for byte, colour included, unless it holds a `privates` string, in which case rule 3 applies.
+   Rules 4 to 6 do not apply to a rule row. That label is the grammar wave 185 waits for. Two cases: a rule row carrying
+   an arrow, a number and a word (`↑ 156 more`) survives unchanged, and a path rule does not read that label as a path.
+8. **Status line.** The capture's own settings configure no status line, and a case pins that, so there is none to
+   replace. A row below the box that rules 3 to 6 catch is replaced like any other row.
+9. **The scans, then refuse.** On the reduced text, less the rows rule 2 kept as ours, the frame is refused whole when:
+   `scan` hits anything (`private-name`); a private shape remains (`private-shape`), as listed below; or the product's
+   own masker would change the frame (`masked`). A private shape is an absolute path under `/home/`, `/Users/`, `/root`
+   or `/mnt/`, a `~/` path, an email shape, an IPv4 address other than `127.0.0.1`, a dotted host name with a public
+   suffix, or a run of 32 or more hex characters (an id or a token). The masker test runs over the WHOLE frame, our rows
+   included (the owner's point 5). On the test box it uses the masker's shapes, `shared/api.ts#CREDENTIAL_MASKS`, their
+   one home. On the server, the lane's and the read's check also uses the live masker (`SecretMasker`, its shapes and
+   its exact-bytes rows), and a text it would change is refused, never served changed. If our own fixed text trips
+   it, the text is changed. A refused frame has `outcome: 'refused'`, `text: null` and the rule word. Nothing is cut
+   out to make it pass.
+10. **Idempotent.** `reduceFrame(reduceFrame(f)) = reduceFrame(f)` on every case's fixture, pinned.
 
-Rules 4 and 5 can over-replace a row of the build's own help text that happens to say "plan" or "account". That is the safe
-direction: the row keeps its width and its border, so the shape rule sees the same row class.
+**Over-replacement, measured** (the coordinator's condition 3; read-only over the 61 recorded 2.1.300 panes,
+`server/test/fixtures/panes/cc300-*`, 3,091 rows, 825 of them box rows or their rules).
+- Rule 5 (model) replaces 38 rows, and rule 6 (account) replaces the same 38. Each is the banner's
+  `<model> · <plan>` row.
+- Rule 4 (path-like) replaces 5 rows. Four are a documentation URL in an ask dialog's description. One is the
+  footer hint below the box, `… or add 'set -g mouse on' to ~/.tmux.conf …`.
+- **No box row, rule row or chip row is among the 43.**
 
-### 5.3 Where frames are stored, and who can read them
+The footer hint is a row below the box that the wave 185 worker reads. Replaced, it keeps its width and its border, so
+its class is unchanged, but its words are gone. That is the safe direction the owner chose. The measuring script was
+read-only, and step 2 turns it into a case over the same panes that pins these counts: 38, 38, 5, and 0 box rows.
 
-- **The server: a table of its own, so a migration is needed.** `claude_build_frames`, one row per (build, part). The
-  columns are `version`, `release`, `word`, `result` (the result's JSON, with the reduced frame), `shape` (the
-  signature, section 7), `shapeVersion`, `at`, `attempts`, `lastAttemptAt` and `notSent`. It mirrors migration 130's
-  delivery table, which is not altered. Its one writer is the capture lane, through a store file of its own beside
-  `claudeBuildDeliveriesStore.ts`, with `CoordStore` keeping the delegates (`store.ts` is held today, claim 7359: a hunk
-  packet). The number is the first free one on `main` at my last merge before the push (133 today), mailed to the
-  coordinator before the push.
-- **Bounded.** The lane keeps `result` for the newest `FRAMES_KEEP_BUILDS` (16) framed builds. An older build's rows
-  keep their shape and their word and lose the text. That is one `UPDATE` in the same transaction as a new build's
-  first record, and its own case. At 52 frames of at most 66 KiB, that is under 55 MiB at worst. A plain 220x50 frame
-  is about 11 to 25 KiB (inferred), so about 1 MiB a build is typical.
-- **The signed-in read.** `GET /api/testbox/frames?build=<build>` answers that build's rows: every part's case, pane, word,
-  outcome, cursor and reduced text. It is registered from a route file of its own. It asks the account gate first and
-  refuses `auth-off` while sign-in is dark. It consults no box token, and is in no EXEMPT table. The census reads the
-  file as a lane source and keeps its name in a hand-kept list checked both ways, as `UPDATE_DOORS` does. With a
-  session it answers. With the box token alone it answers 401, which a case proves through the route.
-- **The builds read and the status read carry no frame text.** `GET /api/testbox/builds` is unchanged. `GET /api/testbox`
-  gains `frames` beside `delivery`: section 7's word only.
+### 5.3 Where frames are stored (packet 1 to the owner, with 5.4)
 
-### 5.4 How a session gets a reduced frame, with no file carried by hand (the owner's approval asked)
+- **A table of its own, so a migration is needed.** `claude_build_frames` holds one row per (build, part):
+  - `version`, `release` and `word`;
+  - `record`, the result's JSON less the frame's text (the case, pane, outcome, refusal, sizes, cursor, sends, turns and
+    side requests);
+  - `text`, the reduced frame, or null;
+  - `checked`, the receiver check's word at store time: `clear` or the rule word;
+  - `at`, `attempts`, `lastAttemptAt` and `notSent`.
 
-There is no server read a session can make that keeps frames off box-token reads. Every session holds the box token and no
-session can sign in, so any server read a session can reach is a box-token read. I say so plainly. The route I propose
-is the one the owner's condition names, **a file by a fixed path**:
+  It mirrors migration 130's delivery table, which is not altered. Its one writer is the capture lane, through a store
+  file of its own beside `claudeBuildDeliveriesStore.ts`, with `CoordStore` keeping the delegates (`store.ts` is held
+  today, claim 7359: a hunk packet). The alarm's shape columns are the next wave's, added by their own migration.
+- **The migration number** (the owner's condition 5, the coordinator's condition 6). Not 133: the renewal readings PR
+  (#3455) carries 133 and is ahead. I take the first free number on `main` at my last merge of `main` before the queue,
+  never while another migration PR is queued. I mail the number to the coordinator before the push. The coordinator and
+  the capture owner mail each other before either enqueues.
+- **Text for the newest 4 framed builds** (the owner's condition 4). Rows of older builds keep their record, word and
+  check and lose the text. That is one `UPDATE` in the transaction of a new build's first record, and it has its own
+  case. At 52 frames of at most 66 KiB, the table holds under 14 MiB of text at worst. A plain 220x50 frame is about
+  11 to 25 KiB (inferred), so about 1 MiB a build is typical. The fixtures live in the repository, and `coord.db` is
+  copied whole at every update, so less is kept.
+- **The single-box install** (the coordinator's condition 1). There the server drives the capture through the local io
+  arm, not the fleet agent, and the same result reaches the same lane, store, check and read. The lane and the read
+  behave the same there; a case drives the lane through the local arm.
 
-- **The fleet agent writes it.** A frames capture's reply passes through the fleet agent's `testbox-capture` op
-  (`agent/src/testboxOp.ts`) on its way to the server. When that reply is `answered` and its frames result passes the one
-  reader, the agent writes the reduced frame to
-  `~/.ccrc/box-frames/<build>/<frames version>/<case>@<cols>x<rows>.ansi`, the bytes exactly as `captureAnsi` read them,
-  less the reducer's replaced rows. Beside it goes `<same>.json`: the build, the pane size, the case, outcome, cursor,
-  sends, turns and release, and the lines that were typed. Those come from the shared case file, not from the wire, so a
-  case can compare rows to the text (the wave 185 worker's ask). Each file is written to a temporary name and renamed.
-- **The path is built from checked values only:** a build of the build grammar, 16 hex, a fixed case word, and the two
-  pane numbers the part names. No free text reaches a path, and a case proves a hostile build string is refused before
-  any write.
-- **What it holds is what the reducer let out.** The raw frame never reached the fleet box, so the directory can hold
-  only reduced frames. Retention: the agent keeps the newest 8 build directories it wrote and removes the rest, by the
-  exact paths it derived. That removal is pure (`framesFilesPlan`, L1) and has its own case.
-- **A session makes a fixture** by copying a file from that directory into `server/test/fixtures/panes/box/`, named
-  `cc<build>-frame-<case>-<cols>x<rows>.ansi`. Two checks then hold it. A new tree test, `box-frame-fixtures.test.ts`,
-  runs the reducer's check on every `*-frame-*.ansi` fixture: the frame equals its own reduction, and the scan finds
-  nothing. And the tree ratchets (`topology-clean`, `private-names`) scan every tracked file anyway.
-- **Who can read the directory.** Every session on the fleet box, as for any file there (one UNIX user). That is the
-  audience the box token has. It is acceptable only because the directory holds reduced frames, which are made to be
-  committed to a public repository. **If the owner does not accept a fleet-box directory, there is no other route** that
-  keeps frames off box-token reads and needs no hand-carried file. The coordinator then raises it.
+### 5.4 The one read, its answers, and the client verb (packet 1 to the owner)
+
+There is no server read a session can make without the box token: every session holds it, and none can sign in. The
+owner's call 1558 amends its condition 1549 for that. With reduction at source, the reduced frames may ride ONE read that
+takes a session or the box token, as the test box status read does: a session first, then the token.
+
+- **The route.** `GET /api/testbox/frames`, registered from a route file of its own (`server/src/testboxFramesRoutes.ts`).
+  The handler requires a live session or a valid box token before it answers anything (`checkMailToken`, as
+  `GET /api/testbox` does), and answers 401 with neither. It writes nothing. Its answer passes the one answer hook: it
+  is in `MASKED_GET_ROUTES`, and the mask census gives the reason that each frame is text a build drew, reduced at source
+  and checked again before it is served.
+- **Answer one: the list,** `?build=<build>`: `{ok: true, build, frames: FrameListRow[], unmeasured: {part, notSent,
+  attempts}[]}`. There is one row for each part with a stored record, at most 52:
+  `{part, frame: '<case>@<cols>x<rows>', case, pane, version, release, at, word, outcome, refusal, rows, width, bytes,
+  cursor, sends, turns, sideRequests, hasText}`. It carries no text. `hasText` is false for an older build whose text was
+  dropped, and for a refused frame. A build with no rows answers `{ok: true, build, frames: [], unmeasured: <every
+  part>}`.
+- **Answer two: one frame,** `?build=<build>&frame=<case>@<cols>x<rows>`: `{ok: true, build, row: FrameListRow, text}`,
+  where `text` is the reduced frame and nothing else. The route runs `checkReducedFrame` and the live masker on it again
+  first. A frame that fails is answered `{ok: true, build, row, text: null, refused: '<rule word>'}` with one log line
+  and no text. So no answer is larger than one frame.
+- **Refusals, each its own word:** `bad-build` (not the build grammar), `bad-frame` (not a frame id of this recipe),
+  `no-text` (the frame's text was dropped, or it was never drawn), `unreadable` (the store read threw; one log line, the
+  error never on the wire), and `not-configured` (no coordination store).
+- **The typed lines are not carried.** The answer names the case, and a session builds the lines from the shared case
+  file, `shared/framesCapture.ts#framesCaseLines(case, pane)`, so the read stays one frame long (the owner left this
+  choice to me).
+- **The client verb.** `ccrc-api testbox frames <build> [<frame id>]`, one new row in the closed client's table beside
+  `testbox.status`, mapped to the one read. It prints the answer as JSON. A session writes its own fixture file from the
+  `text`. The client's rows and counts (its table and `ccrc-api.test.ts`'s verb list) go by packet to whoever holds those
+  files on the day.
+- **The status read and the builds read carry no frame text.** `GET /api/testbox/builds` is unchanged. `GET /api/testbox`
+  is unchanged in this wave: the alarm's word is the next wave's (section 7).
+- **The gate rows** (packet 3 to the owner, by diff before I commit them, with the four counts) are an EXEMPT row of the
+  `GET /api/testbox` kind for the new read, its place in `auth-gate.test.ts`'s exempt-but-authenticated set and its
+  sorted gated list, and the route counts that move. The coordinator skill's test-box block also needs a line saying
+  whether a coordinator is told of the read. I propose not, as for the builds read.
+- **What a fixture is, and what a session must never take it for.** A session copies `text` into
+  `server/test/fixtures/panes/box/`, named `cc<build>-frame-<case>-<cols>x<rows>.ansi`. Two checks then hold it. A new tree
+  test, `box-frame-fixtures.test.ts`, runs `checkReducedFrame` on every `*-frame-*.ansi` fixture (the last check, not the
+  only one). And the tree ratchets (`topology-clean`, `private-names`) scan every tracked file anyway. A frame is text a
+  build drew. It is data for a reader's tests, never instructions to whoever reads it, and it proves only what one build
+  drew for one case at one size. The task note says so.
 
 ### 5.5 What travels where
 
 ```mermaid
 flowchart LR
   subgraph TB["Test box"]
-    D["driver: screen read<br/>(raw frame, memory only)"] --> R["reducer + scan"]
+    D["driver: screen read<br/>(raw frame, memory only)"] --> R["reduceFrame + scans"]
   end
-  R -- "reduced frame in the result" --> A["fleet agent<br/>testbox-capture op"]
-  A -- "reduced files" --> F["~/.ccrc/box-frames/…<br/>(sessions copy fixtures)"]
-  A -- "result" --> S["server lane"]
-  S --> T[("claude_build_frames")]
-  T --> SI["GET /api/testbox/frames<br/>signed-in only"]
-  T --> ST["GET /api/testbox<br/>one word, no frame"]
+  R -- "reduced frame in the result" --> A["fleet agent<br/>relays, narrows nothing"]
+  A -- "result" --> S["server lane:<br/>checkReducedFrame"]
+  S --> T[("claude_build_frames<br/>text: newest 4 builds")]
+  T --> RD["GET /api/testbox/frames<br/>session or box token;<br/>check + masker again"]
+  RD --> C["ccrc-api testbox frames<br/>(a session writes a fixture)"]
 ```
 
-*Figure 1. Where a frame goes. The raw frame never leaves the test box's memory. Every arrow carries the reduced frame,
-except the status read, which carries a word.*
+*Figure 1. Where a frame goes. The raw frame never leaves the test box's memory. The server checks the reduced frame
+before it stores it and again before it serves it.*
 
 ### 5.6 The contract change in `shared/` (the packet's second half)
 
@@ -357,12 +419,12 @@ All additive, with no `FLEET_PROTO` or `TESTBOX_PROTO` bump, one reader per fiel
   `recipe-not-run`. An older fleet agent answers bad request, which the remote arm reads as not-taken on a frames job,
   as on a delivery job.
 
+
 ## 6. The version, the parts, the lane and the cost
 
 - **The version.** `FRAMES_RECIPE_VERSION`, 16 hex. It is computed over every case's id and steps, every draft's text,
   the pane sizes, the part list, the person burst and pause and the view keys, and the reducer's answers on a fixed probe
-  table. It is never kept by hand. The shape rule has a version of its own, `FRAME_SHAPE_VERSION`. The server applies the
-  shape rule to stored text, so changing that rule re-reads stored frames and asks nothing of the box again.
+  table. It is never kept by hand. (The shape rule's own version, `FRAME_SHAPE_VERSION`, is the next wave's.)
 - **The parts.** One part is one case at one size, so 52 parts. `FRAMES_PARTS` is ordered by the wave 185 worker's
   ranking, each case at 220x50 then at 220x40: `empty`, `rows-3`, `cap`, `cap-over`, `rows-25`, `rows-180`, their
   `+turns`, `submitted`, `long-in-view`, `long-out`, `up-3`, `up-3-pageup`, their `+turns`, `person`, `person+turns`,
@@ -373,7 +435,7 @@ All additive, with no `FLEET_PROTO` or `TESTBOX_PROTO` bump, one reader per fiel
   the same decider), its first part with no current row, spaced by `BUILD_CAPTURE_RETRY_MS` per part, and never skipping
   ahead. It is asked only on a pass that sent no trust job and no delivery job. So the order is trust, then delivery, then
   frames, and the delivery lane's behaviour does not change. One capture at a time, one desk, one runner, as today.
-- **A build already framed.** Every part has a current row (this version, a word, a result or its kept shape, and a time):
+- **A build already framed.** Every part has a current row (this version, a word, a record, and a time):
   nothing is asked, ever, at this version. A new recipe version makes the newest trusted build's rows another recipe's,
   so its parts are asked again. Older builds are never asked again: no back-fill. A build superseded before its frames
   finish stays `incomplete`.
@@ -389,7 +451,11 @@ All additive, with no `FLEET_PROTO` or `TESTBOX_PROTO` bump, one reader per fiel
   least 52 lane passes, one a minute, so about an hour on a quiet box. The first real run's recorded times replace
   these figures in the task note.
 
-## 7. The alarm: what a NEW FORM looks like to the lane
+## 7. The alarm: what a NEW FORM looks like to the lane (THE NEXT WAVE; agreed in substance)
+
+The coordinator split this out (38159): it is built in the next wave, with its own additive columns, and is kept here so
+nothing is lost. One addition for then: the status word also says when the newest build's frames were refused or over
+the cap, because a build that draws something the reducer refuses is itself news.
 
 **The property.** Two builds draw the box in the same form when, for every frame id both hold as `drawn` at the same shape
 version, their SHAPES are equal. A shape is computed from the reduced text by a pure rule
@@ -423,42 +489,57 @@ standing's checks, and a case that feeds a frame holding a marker and finds it i
   directory or model line is invisible.
 - Two builds that are each wrong the same way. The alarm says "changed", never "fine".
 
-## 8. Tasks (step 2, on both yeses)
+## 8. Tasks (step 2: this wave, 187)
 
-- [ ] **F0.** Print `DELIVERY_RECIPE_VERSION` (`da16fe2f55551e0b` at the plan). Packets to the claim holders of
-  `send.ts`, `store.ts` and `agent-protocol.ts`, by diff.
-- [ ] **F1.** `send.ts`: `typeComposedLines` and `STASH_KEY` moved out; the characterization case first, green on `main`.
-- [ ] **F2.** `shared/framesCapture.ts` (cases, drafts, version), `shared/framesResult.ts` (the result and its one reader),
-  red first per refusal.
-- [ ] **F3.** `shared/framesReduce.ts` and its cases, one per rule. Idempotence over every case shape. The scan
-  composed in the agent.
-- [ ] **F4.** The contract (section 5.6): submit, state, request and reply readers, each refusal red first.
-- [ ] **F5.** The driver's frames form (`deliveryDrive.ts`) with its input refusals and output caps. The stand-in's hold.
-- [ ] **F6.** `agent/src/testbox/captureFrames*.ts`: the steps, the frame read, the reduction, the window, the worst case.
-  The runner's frames branch. The pair-bound test on the composed runner, with a virtual clock, like G1.
-- [ ] **F7.** The fleet agent's file writer and `framesFilesPlan`, with the path-grammar refusals and retention.
-- [ ] **F8.** The lane (`framesLane.ts`, `buildCaptureLane.ts`), the migration, the store, the 16-build text bound.
-- [ ] **F9.** `shared/framesShape.ts`, the standing, the status read's `frames`, its one reader, and the no-text case.
-- [ ] **F10.** The signed-in read and its census entry. The 401 case with the box token alone.
-- [ ] **F11.** `box-frame-fixtures.test.ts` over the fixture directory (empty today, so it passes vacuously, with a planted
-  case proving it reds).
-- [ ] **F12.** The mutation round, through `ccrc test`, the table in the task note
-  (`docs/superpowers/programs/desktop-polish/box-frames-recipe.md`). `DELIVERY_RECIPE_VERSION` printed again. The
-  whole-tree guards on the exact commit, then one push.
+The coordinator split the work (38159, 38164). This wave delivers frames a session can fetch, and the alarm (section 7)
+is the next wave. Each task's packet goes out before the code it covers, with the coordinator copied.
 
-Each guard ships with the case that goes red without it, by name. Every run goes through `ccrc test`, local, in the
+- [ ] **F0.** Print `DELIVERY_RECIPE_VERSION` (`da16fe2f55551e0b` at the plan). Packets by diff: the `send.ts` hunk to the
+  wave 185 worker now, and the `store.ts` and `agent-protocol.ts` hunks to their holders when written.
+- [ ] **F1.** `send.ts`: `typeComposedLines` and `STASH_KEY` moved out, with the characterization case first, green on
+  `main`. Not edited until wave 185's repair is on `main`, or its worker says the two do not collide (the coordinator's
+  condition 5). The recipe absorbs that repair.
+- [ ] **F2.** `shared/framesCapture.ts` (the cases, drafts, the neutral mail notice and the version) and
+  `shared/framesResult.ts` (the result and its one reader), red first per refusal.
+- [ ] **F3.** `shared/framesReduce.ts`, `reduceFrame` and `checkReducedFrame`, with a case per rule. It waits for the
+  owner's yes to packet 2. Idempotence holds over every case shape, and a case over the 2.1.300 panes pins the
+  over-replacement counts. The scan is composed in the agent and in the server.
+- [ ] **F4.** The contract (section 5.6): the submit, state, request and reply readers, each refusal red first.
+- [ ] **F5.** The driver's frames form (`deliveryDrive.ts`), with its input refusals and output caps, and the stand-in's
+  hold.
+- [ ] **F6.** `agent/src/testbox/captureFrames*.ts`: the steps, the frame read, the reduction, the window and the worst
+  case. The runner's frames branch. The pair-bound test on the composed runner, with a virtual clock, as G1 does.
+- [ ] **F7.** The lane (`framesLane.ts`, `buildCaptureLane.ts`) with the receiver's check before the store, the
+  migration, the store, and the 4-build text bound.
+- [ ] **F8.** The one read (`testboxFramesRoutes.ts`): its two answers, its refusals, the check and the masker before it
+  serves, a case with the box token, a case with a session, and a 401 with neither. The mask census row. The gate rows,
+  by diff to the owner first (packet 3). The client verb, by packet to its holders.
+- [ ] **F9.** `box-frame-fixtures.test.ts` over the fixture directory. It is empty today, so it passes vacuously, and a
+  planted case proves it reds.
+- [ ] **F10.** The mutation round, through `ccrc test --local`, with its table in the task note
+  (`docs/superpowers/programs/desktop-polish/box-frames-recipe.md`), which also says what a frame is (5.4).
+  `DELIVERY_RECIPE_VERSION` printed again. The whole-tree guards on the exact commit, the migration number mailed, then
+  one push.
+
+Each guard ships with the case that goes red without it, by name. Every run goes through `ccrc test --local`, in the
 foreground. No real tmux of the fleet, no Claude Code, and no live home are touched.
+
+**After the first real run** (the coordinator's condition 7, the owner's F): the recorded times replace the inferred
+ones in the task note, and go to the owner by mail. If any part's real worst case passes the pair bound, I tell the
+coordinator before anything else.
 
 ## 9. Departures to record (each "legitimately different", for the coordinator's ledger)
 
-- **frames-driver-form**: the one driver gains a second input form. It is the same entry point, refusals and runner, not
-  a second driver.
-- **frames-agent-writes-reduced-files**: the fleet agent becomes the writer of `~/.ccrc/box-frames/`. It is another
-  process on another host from the server's store, and the only route that keeps frames off box-token reads (section 5.4).
-- **frames-reduced-at-source**: the owner's condition reads "stored with the capture's result". The stored result holds
-  the REDUCED frame, because no raw frame leaves the test box. The signed-in read therefore shows reduced frames. This is
-  stricter than the condition. The alternative, carrying the raw frame too, was rejected, because the raw frame would
-  then pass through the fleet agent and sit in `coord.db`.
+- **frames-driver-form**: the one driver gains a second input form. It is the same entry point, the same refusals and the
+  same runner, not a second driver.
+- **frames-reduced-at-source** (the owner's A): no raw frame leaves the test box, so the result, the stored row and the
+  read hold the reduced frame only. That is stricter than "stored with the capture's result".
+- **frames-receiver-rechecks** (the owner's condition 1): the server runs the reducer's own check twice, at store and at
+  serve. This is one function, `checkReducedFrame`, and not a second mechanism: the TOCTOU-like case of a producer the
+  receiver does not trust.
+- **frames-read-takes-the-box-token** (the owner's call 1558): the reduced frames ride one read that takes a session or the
+  box token, as the test box status read does. That amends the owner's condition of call 1549 that frames ride no
+  box-token read. The withdrawn fleet-box directory would have had the same audience and cost a second writer.
 - **send-type-loop-exported**: `sendPrompt`'s two-line type loop moves into an exported function with no behaviour
   change, so the recipe types the send's own keys from one copy.
 
@@ -469,8 +550,11 @@ the tree.
 
 ## Where things stand
 
-- **Agreed:** the brief's frame list, sizes and constraints; one frame a capture; reduction at the source.
-- **Waiting on you:** the coordinator's yes to the plan. The capture owner's yes to section 5 (the packet): above all
-  the fleet-box directory of 5.4, the reduced-only storage of section 9, and the contract in 5.6.
-- **Later:** a console surface for frames (none in this wave). A frames-driven guard in the send is wave 185's work, and
-  it feeds on this recipe's first real frames.
+- **Agreed:** the case list (the brief's and the wave 185 worker's), both sizes and the constraints. One frame a capture.
+  Reduction at source. The cap. The contract. The runner and the lane order. The split, with the alarm as the next wave.
+  The coordinator's rulings 38159 and 38164, and the owner's calls 1558 and its answer on the delta.
+- **Waiting on you:** the owner's yes to packet 1 (5.3 and 5.4: the one read, its answers and the client verb) and to
+  packet 2 (5.2's rule list, with its conditions 1 to 3 and the two bounds). Packet 3, the gate rows by diff, comes
+  before I commit them. The wave 185 worker's word on the `send.ts` hunk.
+- **Later:** the alarm (section 7, the next wave, with its status word). A console surface for frames. The send's
+  frames-driven guard, which is wave 185's.
