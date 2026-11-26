@@ -1088,9 +1088,26 @@ describe('places (X2 P5.3)', () => {
     a.onHash!('sec-1');
     expect((r.input.onHash as ReturnType<typeof vi.fn>).mock.lastCall, 'no second argument invented').toEqual(['sec-1']);
     a.onHash!('sec-2', { push: true, from: 'tok' });
-    expect(r.input.onHash).toHaveBeenLastCalledWith('sec-2', { push: true, from: 'tok' });
+    expect(r.input.onHash).toHaveBeenLastCalledWith('sec-2', { push: true, from: 'tok', inGrammar: true });
     a.onHash!('sec-3', { push: false, from: null });
-    expect(r.input.onHash).toHaveBeenLastCalledWith('sec-3', { push: false, from: null });
+    expect(r.input.onHash).toHaveBeenLastCalledWith('sec-3', { push: false, from: null, inGrammar: true });
+  });
+
+  it('onHash tells whether the id is inside the fragment grammar (D-9117), only with the library\'s second argument', async () => {
+    const r = rig({ onPlace: vi.fn() });
+    await r.run();
+    const a = r.options().adapters;
+    const last = (): unknown => (r.input.onHash as ReturnType<typeof vi.fn>).mock.lastCall;
+    for (const [id, inGrammar] of [['part-20', true], ['a.b:c_d-e', true], ['bad id', false], ['a/b', false], ['x#y', false], ['é-ü', true]] as const) {
+      a.onHash!(id, { push: true, from: 'tok' });
+      expect(last(), id).toEqual([id, { push: true, from: 'tok', inGrammar }]);
+    }
+    // 257 code units are outside the grammar's length.
+    a.onHash!('a'.repeat(257), { push: true, from: null });
+    expect(last()).toEqual(['a'.repeat(257), { push: true, from: null, inGrammar: false }]);
+    // Without the second argument the id goes alone, whatever it is.
+    a.onHash!('bad id');
+    expect(last()).toEqual(['bad id']);
   });
 
   it('closeOverlay and goto call the live frame\'s, and goto without a from passes none', async () => {
@@ -1148,7 +1165,7 @@ describe('places (X2 P5.3)', () => {
     r.optionsAt(1).adapters.onPlace!('overlay');
     expect(onPlace).toHaveBeenCalledWith('overlay');
     r.optionsAt(1).adapters.onHash!('x', { push: true, from: 'tok' });
-    expect(r.input.onHash).toHaveBeenLastCalledWith('x', { push: true, from: 'tok' });
+    expect(r.input.onHash).toHaveBeenLastCalledWith('x', { push: true, from: 'tok', inGrammar: true });
     m.closeOverlay!();
     expect(r.frames[0]!.closeOverlay).not.toHaveBeenCalled();
     expect(r.frames[1]!.closeOverlay).toHaveBeenCalledTimes(1);

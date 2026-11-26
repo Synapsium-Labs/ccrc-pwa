@@ -1985,9 +1985,9 @@ describe('W8a reader frame in Chrome', () => {
     }, 120_000);
 
     // A bare #id link is a jump, a place to return to (X2 P5.3, D-8763; parity spec 4.7): the console pushes one entry at
-    // the doc's URL unchanged, fragment included, tagged as the jump's place, so Back returns. Before D-8763 the jump replaced
-    // the fragment and added no entry.
-    it('a bare #id link scrolls in the frame, remounts nothing, pushes one place at the same URL and reads nothing', async () => {
+    // the doc's path and query unchanged and the jump's id as its fragment (D-9117), tagged as the jump's place, so Back
+    // returns. Before D-8763 the jump replaced the fragment and added no entry.
+    it('a bare #id link scrolls in the frame, remounts nothing, pushes one place whose address names the id and reads nothing', async () => {
       const { s, frame } = await openSelf();
       const handle = await s.page.locator('.docs-reader iframe').elementHandle();
       const entries = await s.page.evaluate(() => history.length);
@@ -2004,7 +2004,7 @@ describe('W8a reader frame in Chrome', () => {
       const place = await s.page.evaluate(() => (history.state as { docsPlace?: { kind?: string; id?: string; seq?: number; from?: unknown } } | null)?.docsPlace);
       expect(place, 'the new entry is the jump\'s place, the visit\'s first').toMatchObject({ kind: 'jump', id: FAR_ID, seq: 1 });
       expect(typeof place?.from, 'with the position it left, so Back can return there').toBe('string');
-      expect(await href(), 'at the doc\'s URL unchanged').toBe(url);
+      expect(await href(), 'the URL before with its fragment replaced by the id: path and search unchanged').toBe(`${url.split('#')[0]}#${FAR_ID}`);
       expect(await framesCount(s), 'still one iframe').toBe(1);
       expect(await handle!.evaluate((e) => e.isConnected), 'the same frame element').toBe(true);
       expect(s.apiHits.length, 'no request at all').toBe(reads);

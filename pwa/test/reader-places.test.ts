@@ -13,7 +13,7 @@ import { createElement, Fragment, type ReactNode } from 'react';
 import { act, cleanup, render, waitFor } from '@testing-library/react';
 import {
   EMPTY_RECORD, IDX_KEY, PLACES_MAX, PLACES_RECORD_KEY, PLACE_KEY, afterPop, beginVisit, closedByFrame, decidePop,
-  endVisit, parseRecord, pushPlace, readEntry, seedPage, visitEnds, visitKey, type PopDecision, type Place, type PopTab, type TabRecord,
+  endVisit, jumpEntryUrl, parseRecord, pushPlace, readEntry, replacedState, seedPage, visitEnds, visitKey, type PopDecision, type Place, type PopTab, type TabRecord,
 } from '../src/lib/historyPlaces';
 import { onPop, readPlaces, resetPopstateForTests, setPlaceHost, writePlaces } from '../src/lib/popstate';
 import { navigate, useLocation, type Loc } from '../src/lib/router';
@@ -329,6 +329,23 @@ describe('places: the dispatcher over real history', () => {
     expect(history.state).toEqual(kept);
   });
 
+  it('navigate: a replaced entry keeps its number', () => {
+    const m = mountEverything();
+    at({ docsIdx: 3, docsPlace: { visit: 'v', seq: 1, kind: 'overlay' }, other: 1 }, '/docs/a?ref=b');
+    writePlaces(rec({ lastIdx: 3, next: 4 }));
+    act(() => { navigate('/runs?q=1', { replace: true }); });
+    expect(location.pathname + location.search, 'the URL is the new one').toBe('/runs?q=1');
+    expect(history.state, 'the number alone is carried: no place, no other key').toEqual({ docsIdx: 3 });
+    expect(m.ran, 'the subscribers ran once').toHaveBeenCalledTimes(1);
+    expect(readPlaces().lastIdx).toBe(3);
+    // An entry with no number is still numbered by the pop, as before.
+    at(null, '/docs/b');
+    writePlaces(rec({ lastIdx: 3, next: 7 }));
+    act(() => { navigate('/runs', { replace: true }); });
+    expect(typeof (history.state as Record<string, unknown>).docsIdx, 'numbered by the pop').toBe('number');
+    expect(m.ran).toHaveBeenCalledTimes(2);
+  });
+
   it('places: Back into a doc\'s base entry keeps its docsIdx', async () => {
     const m = mountEverything();
     act(() => { navigate('/docs/a'); });
@@ -615,6 +632,31 @@ describe('historyPlaces: readEntry and parseRecord are tolerant', () => {
     expect(EMPTY_RECORD.places).toHaveLength(0);
   });
 
+  it('replacedState: the entry\'s valid number alone, else null', () => {
+    const rows: readonly [string, unknown, { docsIdx: number } | null][] = [
+      ['null', null, null],
+      ['undefined', undefined, null],
+      ['a string', 'x', null],
+      ['an array', [1], null],
+      ['an empty record', {}, null],
+      ['a number', { docsIdx: 3 }, { docsIdx: 3 }],
+      ['zero', { docsIdx: 0 }, { docsIdx: 0 }],
+      ['a number, a place and another key', { docsIdx: 3, docsPlace: { visit: 'v', seq: 1, kind: 'overlay' }, other: 1 }, { docsIdx: 3 }],
+      ['a negative number', { docsIdx: -1 }, null],
+      ['a fractional number', { docsIdx: 1.5 }, null],
+      ['a numeric string', { docsIdx: '3' }, null],
+      ['a place with no number', { docsPlace: { visit: 'v', seq: 1, kind: 'overlay' } }, null],
+    ];
+    for (const [name, prev, want] of rows) expect(replacedState(prev), name).toEqual(want);
+  });
+
+  it('jumpEntryUrl: an id in the grammar becomes the fragment of the doc\'s path and query; any other keeps the address and is reported', () => {
+    const here = { pathname: '/docs/demo/specs/a.md', search: '?ref=feature', href: 'http://h/docs/demo/specs/a.md?ref=feature#sec-3' };
+    expect(jumpEntryUrl(here, 'sec-9', true)).toEqual({ url: '/docs/demo/specs/a.md?ref=feature#sec-9', report: false });
+    expect(jumpEntryUrl({ ...here, search: '' }, 'é-ü', true)).toEqual({ url: '/docs/demo/specs/a.md#é-ü', report: false });
+    expect(jumpEntryUrl(here, 'bad id', false)).toEqual({ url: here.href, report: true });
+  });
+
   it('the exported limits and keys', () => {
     expect(PLACES_MAX).toBe(50);
     expect([IDX_KEY, PLACE_KEY, PLACES_RECORD_KEY]).toEqual(['docsIdx', 'docsPlace', 'ccrc:docs:v1:places']);
@@ -890,7 +932,7 @@ describe('places: the reader\'s places through the real frame and history', () =
     const s = await start();
     const m = latest(s.rig);
     const length = history.length;
-    m.input.onHash('sec-2', { push: true, from: 'tok-1' });
+    m.input.onHash('sec-2', { push: true, from: 'tok-1', inGrammar: true });
     expect(history.length).toBe(length + 1);
     expect(placeNow()).toMatchObject({ kind: 'jump', seq: 1, id: 'sec-2', from: 'tok-1' });
     history.back();
@@ -901,12 +943,111 @@ describe('places: the reader\'s places through the real frame and history', () =
     expect(location.pathname).toBe(DOC_A);
   });
 
+  // A jump's entry names its id (D-9117): the document's path and query unchanged, the jump's id as the fragment.
+  const urlNow = (): string => location.pathname + location.search + location.hash;
+  const FEATURE = `${DOC_A}?ref=feature`;
+
+  it('places: after a jump the address names the id', async () => {
+    history.replaceState(null, '', `${FEATURE}#sec-3`);
+    const s = await start();
+    const m = latest(s.rig);
+    m.input.onHash('sec-9', { push: true, from: 'tok', inGrammar: true });
+    expect(placeNow()).toMatchObject({ kind: 'jump', id: 'sec-9' });
+    expect(urlNow(), 'path and query unchanged, the fragment the id').toBe(`${FEATURE}#sec-9`);
+  });
+
+  it('places: Back from a jump restores the earlier address and place', async () => {
+    history.replaceState(null, '', `${FEATURE}#sec-3`);
+    const s = await start();
+    const m = latest(s.rig);
+    m.input.onHash('sec-9', { push: true, from: 'tok', inGrammar: true });
+    expect(urlNow(), 'the jump\'s entry names its id').toBe(`${FEATURE}#sec-9`);
+    history.back();
+    await until(() => expect(m.handle.goto).toHaveBeenCalledTimes(1));
+    expect(m.handle.goto).toHaveBeenCalledWith('sec-9', 'tok');
+    expect(urlNow(), 'the earlier fragment is back in the address').toBe(`${FEATURE}#sec-3`);
+    expect(placeNow(), 'on the base entry').toBeUndefined();
+    expect(s.ran).not.toHaveBeenCalled();
+  });
+
+  it('places: Forward returns to the jump\'s id', async () => {
+    history.replaceState(null, '', `${FEATURE}#sec-3`);
+    const s = await start();
+    const m = latest(s.rig);
+    m.input.onHash('sec-9', { push: true, from: 'tok', inGrammar: true });
+    history.back();
+    await until(() => expect(m.handle.goto).toHaveBeenCalledTimes(1));
+    history.forward();
+    await until(() => expect(m.handle.goto).toHaveBeenCalledTimes(2));
+    expect(urlNow(), 'the address names the id again').toBe(`${FEATURE}#sec-9`);
+    expect(m.handle.goto.mock.lastCall, 'the id, and no from').toEqual(['sec-9', undefined]);
+    expect(placeNow()).toMatchObject({ kind: 'jump', id: 'sec-9' });
+    expect(s.ran).not.toHaveBeenCalled();
+  });
+
+  it('places: a reload on the jump\'s entry opens at the id and continues the visit', async () => {
+    history.replaceState(null, '', `${FEATURE}#sec-3`);
+    const first = await start();
+    latest(first.rig).input.onHash('sec-9', { push: true, from: 'tok', inGrammar: true });
+    const saved = readPlaces();
+    const visit = saved.visit;
+    expect(visit).not.toBeNull();
+    // The reload, as the case of a reload on a place makes it.
+    cleanup();
+    resetPopstateForTests();
+    writeKey(PLACES_RECORD_KEY, JSON.stringify(saved), tabStorage);
+    // The jsdom rig hands the reader no pending fragment of its own (`pendingFragment` is null, and the Docs screen that
+    // reads `location.hash` on a direct load is not mounted here), so what is asserted is what that read would find: the
+    // address's fragment is the id, on the entry that still holds the jump's place, and the body's start continues the
+    // same visit.
+    expect(location.hash.slice(1), 'a direct load reads the id from the address').toBe('sec-9');
+    const second = await start();
+    expect(readPlaces().visit, 'the visit continues').toBe(visit);
+    expect(placeNow(), 'the entry kept its place').toMatchObject({ kind: 'jump', id: 'sec-9' });
+    expect(urlNow()).toBe(`${FEATURE}#sec-9`);
+    history.back();
+    await until(() => expect(latest(second.rig).handle.goto).toHaveBeenCalledTimes(1));
+    expect(urlNow(), 'Back after the reload restores the earlier address').toBe(`${FEATURE}#sec-3`);
+  });
+
+  it('places: a jump id outside the fragment grammar pushes at the current URL and is reported', async () => {
+    history.replaceState(null, '', `${FEATURE}#sec-3`);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const s = await start();
+    const m = latest(s.rig);
+    const length = history.length;
+    m.input.onHash('bad id/x', { push: true, from: 'tok', inGrammar: false });
+    expect(history.length, 'the place is still pushed').toBe(length + 1);
+    expect(placeNow()).toMatchObject({ kind: 'jump', id: 'bad id/x' });
+    expect(urlNow(), 'nothing new in the address').toBe(`${FEATURE}#sec-3`);
+    const reported = warn.mock.calls.filter((c) => typeof c[0] === 'string' && c[0].startsWith('ccrc:'));
+    expect(reported, 'reported, not swallowed').toHaveLength(1);
+  });
+
+  it('places: a jump id outside the fragment grammar that pushes nothing never reaches the address', async () => {
+    history.replaceState(null, '', `${FEATURE}#sec-3`);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const s = await start();
+    const m = latest(s.rig);
+    const length = history.length;
+    const refuse = vi.spyOn(history, 'pushState').mockImplementation(() => { throw new Error('refused'); });
+    try {
+      m.input.onHash('bad id/x', { push: true, from: 'tok', inGrammar: false });
+    } finally {
+      refuse.mockRestore();
+    }
+    expect(history.length, 'nothing pushed').toBe(length);
+    expect(urlNow(), 'no fragment replace either').toBe(`${FEATURE}#sec-3`);
+    const reported = warn.mock.calls.filter((c) => typeof c[0] === 'string' && c[0].includes('outside the fragment grammar'));
+    expect(reported, 'reported, not swallowed').toHaveLength(1);
+  });
+
   it('places: a hash without push still replaces', async () => {
     const s = await start();
     const m = latest(s.rig);
     const length = history.length;
     const before = stateNow();
-    m.input.onHash('sec-3', { push: false, from: null });
+    m.input.onHash('sec-3', { push: false, from: null, inGrammar: true });
     m.input.onHash('sec-4');
     expect(history.length, 'no entry pushed').toBe(length);
     expect(location.hash, 'the fragment replaced').toBe('#sec-4');
@@ -921,7 +1062,7 @@ describe('places: the reader\'s places through the real frame and history', () =
     expect(history.length, 'fifty entries, not fifty-one').toBe(length + 50);
     expect(placeNow()?.seq).toBe(50);
     // A jump past the budget pushes nothing either.
-    m.input.onHash('sec-9', { push: true, from: 'tok' });
+    m.input.onHash('sec-9', { push: true, from: 'tok', inGrammar: true });
     expect(history.length).toBe(length + 50);
     expect(location.hash, 'the jump that was not pushed replaced the fragment instead').toBe('#sec-9');
   });
@@ -933,7 +1074,7 @@ describe('places: the reader\'s places through the real frame and history', () =
     const closeOverlay = vi.fn();
     const part0 = startPlaces({ doc: DOC_A, scope: 'k\u0000part:0' });
     part0.host({ goto, closeOverlay });
-    part0.onHash('sec', { push: true, from: 'tok' });
+    part0.onHash('sec', { push: true, from: 'tok', inGrammar: true });
     expect(placeNow(), 'part 0 pushed its place').toMatchObject({ kind: 'jump', id: 'sec' });
     // Next part: the address is unchanged, so part 0's body ends without ending anything, and part 1 starts its own visit.
     part0.end();
@@ -992,7 +1133,7 @@ describe('places: the reader\'s places through the real frame and history', () =
     const a = latest(s.rig);
     a.input.onPlace!('overlay');
     a.input.onPlace!('overlay');
-    a.input.onHash('sec', { push: true, from: 'tok' });
+    a.input.onHash('sec', { push: true, from: 'tok', inGrammar: true });
     act(() => { navigate(DOC_B); });
     await mountedAt(s.rig, 2);
     expect(location.pathname).toBe(DOC_B);
@@ -1029,7 +1170,7 @@ describe('places: the reader\'s places through the real frame and history', () =
     const s = await start();
     const a = latest(s.rig);
     a.input.onPlace!('overlay');
-    a.input.onHash('sec', { push: true, from: 'tok' });
+    a.input.onHash('sec', { push: true, from: 'tok', inGrammar: true });
     act(() => { navigate('/runs'); });
     expect(location.pathname).toBe('/runs');
     expect(s.ran).toHaveBeenCalledTimes(1);
@@ -1083,7 +1224,7 @@ describe('places: the reader\'s places through the real frame and history', () =
     const s = await start();
     const a = latest(s.rig);
     a.input.onPlace!('overlay');
-    a.input.onHash('sec', { push: true, from: 'tok' });
+    a.input.onHash('sec', { push: true, from: 'tok', inGrammar: true });
     act(() => { navigate(DOC_B); });
     await mountedAt(s.rig, 2);
     history.back();
@@ -1096,6 +1237,31 @@ describe('places: the reader\'s places through the real frame and history', () =
     expect(s.ran, 'one run for the way forward').toHaveBeenCalledTimes(3);
     expect(placeNow()).toBeUndefined();
     expect(commands(s.rig)).toEqual({ close: 0, goto: 0 });
+  });
+
+  it('navigate: a replace above forward entries, then a skip over stale places, reads the right direction', async () => {
+    const s = await start();
+    const a = latest(s.rig);
+    a.input.onPlace!('overlay');
+    a.input.onHash('sec', { push: true, from: 'tok', inGrammar: true });
+    act(() => { navigate('/runs'); });
+    expect(location.pathname).toBe('/runs');
+    // Back over the two stale places to A's base entry; the reader shows A again.
+    history.back();
+    await until(() => expect(location.pathname).toBe(DOC_A));
+    await mountedAt(s.rig, 2);
+    expect(placeNow()).toBeUndefined();
+    const idxBase = idxNow();
+    expect(typeof idxBase).toBe('number');
+    // A replace on A's base entry keeps its number (D-9116): it is not renumbered above the forward entries.
+    act(() => { navigate('/accounts', { replace: true }); });
+    expect(location.pathname).toBe('/accounts');
+    expect(idxNow(), 'the replaced entry kept its number').toBe(idxBase);
+    // Forward steps over the stale places to the screen, never back toward where the user came from.
+    history.forward();
+    await until(() => expect(location.pathname).toBe('/runs'));
+    expect(commands(s.rig), 'nothing was told to close or to go').toEqual({ close: 0, goto: 0 });
+    expect(placeNow()).toBeUndefined();
   });
 
   it('places: Back from a screen that is not a doc into stale places costs one Back', async () => {
@@ -1118,20 +1284,20 @@ describe('places: the reader\'s places through the real frame and history', () =
     expect(placeNow()).toBeUndefined();
   });
 
-  it('places: the pushed entry\'s URL is the doc\'s current URL', async () => {
+  it('places: an overlay\'s entry keeps the URL, and a jump\'s entry names its id', async () => {
     history.replaceState(null, '', `${DOC_A}?ref=feature#sec-3`);
     const s = await start();
     const m = latest(s.rig);
     const url = (): string => location.pathname + location.search + location.hash;
     m.input.onPlace!('overlay');
     expect(url(), 'path, search and fragment unchanged').toBe(`${DOC_A}?ref=feature#sec-3`);
-    m.input.onHash('sec-9', { push: true, from: 'tok' });
-    expect(url()).toBe(`${DOC_A}?ref=feature#sec-3`);
+    m.input.onHash('sec-9', { push: true, from: 'tok', inGrammar: true });
+    expect(url(), 'a jump\'s entry: path and search unchanged, the id as the fragment (D-9117)').toBe(`${DOC_A}?ref=feature#sec-9`);
     // The doc's current URL is what the frame's own scroll reports left in it.
     m.input.onHash('sec-4');
     expect(url()).toBe(`${DOC_A}?ref=feature#sec-4`);
     m.input.onPlace!('overlay');
-    expect(url(), 'the next entry carries the fragment as it now stands').toBe(`${DOC_A}?ref=feature#sec-4`);
+    expect(url(), 'an overlay\'s entry carries the fragment as it now stands').toBe(`${DOC_A}?ref=feature#sec-4`);
     expect(placeNow()).toMatchObject({ kind: 'overlay', seq: 3 });
   });
 
@@ -1141,7 +1307,7 @@ describe('places: the reader\'s places through the real frame and history', () =
     const m = latest(s.rig);
     m.input.onPlace!('overlay');
     expect(stateNow()).toMatchObject({ ccrcReaderOnly: 'day-1', other: 'kept', docsPlace: { kind: 'overlay' } });
-    m.input.onHash('sec', { push: true, from: 'tok' });
+    m.input.onHash('sec', { push: true, from: 'tok', inGrammar: true });
     expect(stateNow()).toMatchObject({ ccrcReaderOnly: 'day-1', other: 'kept', docsPlace: { kind: 'jump' } });
   });
 
@@ -1233,6 +1399,7 @@ describe('places: the port nonce', () => {
       adapters!.onPlace!('overlay');
       expect(holds(history.state, nonce as string), 'nowhere in the first pushed entry').toBe(false);
       adapters!.onHash!('sec', { push: true, from: 'tok' });
+      // (the real library adapters: `inGrammar` is added by the bridge, as the library gives no such field)
       expect(history.length, 'both pushed').toBe(length + 2);
       expect(holds(history.state, nonce as string), 'nowhere in the second pushed entry').toBe(false);
       expect(holds(readPlaces(), nonce as string), 'nor in the tab\'s record').toBe(false);

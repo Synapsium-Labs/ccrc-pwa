@@ -10,11 +10,13 @@
 // starts a new one, whose base entry is the entry the page stands on. The frame then reports: `onPlace('overlay')` and
 // a `hash` with `push` each push one entry, tagged with the visit; `onPlace('overlay-closed')` asks the decider whether
 // the frame closed its overlay over that entry's place, and if so steps back once. A pushed entry carries the page's
-// current URL unchanged and the current history state (so the reader's day filter survives) and nothing from the frame
-// but the id and the position token it gave: the port's nonce is the port's alone and never reaches the state. When the
-// body ends, the visit ends only if the page has moved to another doc or to a screen that is not a doc.
+// current URL (a jump's with its id as the fragment instead, D-9117) and the current history state (so the reader's day
+// filter survives) and nothing from the frame but the id and the position token it gave: the port's nonce is the
+// port's alone and never reaches the state. When the body ends, the visit ends only if the page has moved to another
+// doc or to a screen that is not a doc.
 import {
-  IDX_KEY, PLACE_KEY, beginVisit, closedByFrame, endVisit, pushPlace, readEntry, visitEnds, visitKey, type PlaceKind,
+  IDX_KEY, PLACE_KEY, beginVisit, closedByFrame, endVisit, jumpEntryUrl, pushPlace, readEntry, visitEnds, visitKey,
+  type PlaceKind,
 } from '../../lib/historyPlaces';
 import { readPlaces, setPlaceHost, writePlaces } from '../../lib/popstate';
 import { replaceFragment } from '../../lib/router';
@@ -29,7 +31,7 @@ export interface Places {
   onPlace(kind: FramePlace): void;
   /** The frame went to the place `id`. A move marked `push` is a place to return to (an entry is pushed); any other
    *  replaces the page's fragment, as the scroll report always has. */
-  onHash(id: string, entry?: { readonly push: boolean; readonly from: string | null }): void;
+  onHash(id: string, entry?: { readonly push: boolean; readonly from: string | null; readonly inGrammar: boolean }): void;
   /** The mounted frame, for the pops that are its: `null` when it is dropped or fell back. */
   host(mount: { closeOverlay?(): void; goto?(id: string, from?: string): void } | null): void;
   /** The body ended: the visit ends when the page is on another doc or a screen that is not a doc now. */
@@ -75,15 +77,15 @@ export function startPlaces(o: { doc: string; scope?: string; newVisitId?: () =>
   /** Clears this body's host from the dispatcher, only while that host is still the dispatcher's. */
   let unregister: (() => void) | null = null;
 
-  /** Pushes one place's entry, at the page's current URL, over the current state. False when nothing was pushed (the
-   *  visit's budget is spent, or the history call was refused). */
-  const push = (p: { kind: PlaceKind; id?: string; from?: string }): boolean => {
+  /** Pushes one place's entry over the current state, at `url` (the page's current URL by default). False when nothing
+   *  was pushed (the visit's budget is spent, or the history call was refused). */
+  const push = (p: { kind: PlaceKind; id?: string; from?: string }, url: string = location.href): boolean => {
     const rec = readPlaces();
     const pushed = pushPlace(rec, p, { idx: readEntry(history.state).idx });
     if (pushed.push === null) return false;
     try {
       if (pushed.stamp !== null) history.replaceState({ ...currentState(), [IDX_KEY]: pushed.stamp }, '');
-      history.pushState({ ...currentState(), [IDX_KEY]: pushed.push.idx, [PLACE_KEY]: pushed.push.place }, '', location.href);
+      history.pushState({ ...currentState(), [IDX_KEY]: pushed.push.idx, [PLACE_KEY]: pushed.push.place }, '', url);
     } catch (e) {
       console.warn('ccrc: the history entry for a place could not be pushed', e);
       return false;
@@ -111,7 +113,20 @@ export function startPlaces(o: { doc: string; scope?: string; newVisitId?: () =>
       history.back();
     },
     onHash(id, hashEntry) {
-      if (hashEntry?.push === true && push({ kind: 'jump', id, ...(hashEntry.from === null ? {} : { from: hashEntry.from }) })) return;
+      if (hashEntry?.push === true) {
+        const place = { kind: 'jump' as const, id, ...(hashEntry.from === null ? {} : { from: hashEntry.from }) };
+        // The entry's address is `jumpEntryUrl`'s (D-9117). An id outside the fragment grammar never reaches the address,
+        // not even through the fragment replace below, and the frame's report is not swallowed.
+        const at = jumpEntryUrl(location, id, hashEntry.inGrammar);
+        const pushed = push(place, at.url);
+        if (at.report) {
+          console.warn(pushed
+            ? 'ccrc: a jump\'s id is outside the fragment grammar, so its history entry keeps the current address'
+            : 'ccrc: a jump\'s id is outside the fragment grammar, and no history entry was pushed for it');
+          return;
+        }
+        if (pushed) return;
+      }
       replaceFragment(id);
     },
     host,

@@ -45,7 +45,7 @@ const PORT_HOOK = `(() => {
 })();`;
 
 /** Serves every doc under the section with `text`, and opens `name` in the console. `hookPort` installs `PORT_HOOK` first. */
-async function open(name: string, text = DOC, others: readonly string[] = [], hookPort = false): Promise<OpenedApp> {
+async function open(name: string, text = DOC, others: readonly string[] = [], hookPort = false, fragment = ''): Promise<OpenedApp> {
   const size = Buffer.byteLength(text);
   const tree = treeOk({ entries: [name, ...others].map((n) => entry(SECTION, n, { committed: { kind: 'file', blob: BLOB, size } })) });
   const app = await openApp(browser, { width: 1280, skin: SKINS[0]!.id, theme: 'light', tab: 'console' }, { api: {}, fleetFrames: [] });
@@ -62,7 +62,7 @@ async function open(name: string, text = DOC, others: readonly string[] = [], ho
     await route.fulfill({ status: 200, headers: { ...DOCS_RESPONSE_HEADERS, 'content-type': 'application/json; charset=utf-8' }, body: JSON.stringify(payload) });
   });
   if (hookPort) await app.ctx.addInitScript(PORT_HOOK);
-  await app.page.goto(`${server.origin}/docs/demo/${SECTION}/${name}`, { waitUntil: 'domcontentloaded' });
+  await app.page.goto(`${server.origin}/docs/demo/${SECTION}/${name}${fragment}`, { waitUntil: 'domcontentloaded' });
   await ready(app.page);
   return app;
 }
@@ -254,6 +254,66 @@ describe('P5.3 rows: Back places in the built app, desktop Chromium', () => {
       await app.ctx.close();
     }
   }, 180_000);
+
+  it('places: a jump puts its id in the address, Back restores it, Forward returns', async () => {
+    const app = await open('places.md');
+    try {
+      const page = app.page;
+      const frame = await frameOf(page);
+      const scrollY = (): Promise<number> => frame.evaluate(() => Math.round(document.scrollingElement?.scrollTop ?? window.scrollY));
+      const y0 = await scrollY();
+      const before = page.url();
+      const base = before.split('#')[0]!;
+      const length = await lengthOf(page);
+      await frame.getByRole('link', { name: 'part 20', exact: true }).click();
+      await becomes(() => lengthOf(page), length + 1, 'history after an in-document link', page);
+      expect(page.url(), 'path and query unchanged, the fragment the id').toBe(`${base}#part-20`);
+      const y1 = await scrollY();
+      expect(y1).toBeGreaterThan(y0 + 100);
+      await page.goBack();
+      await becomes(() => placeOf(page), null, 'the entry after Back', page);
+      expect(page.url(), 'Back restores the earlier address').toBe(before);
+      await becomes(() => scrollY().then((y) => Math.abs(y - y0) < 40), true, 'the frame\'s position after Back', page);
+      await page.goForward();
+      await becomes(() => Promise.resolve(page.url()), `${base}#part-20`, 'the address after Forward', page);
+      expect(await placeOf(page), 'the jump\'s place again').toMatchObject({ kind: 'jump', id: 'part-20' });
+      await becomes(() => scrollY().then((y) => Math.abs(y - y1) < 40), true, 'the frame\'s position after Forward', page);
+      expect(app.errors, 'no uncaught error').toEqual([]);
+    } finally {
+      await app.ctx.close();
+    }
+  }, 180_000);
+
+  it('places: a copied jump address opened in a fresh tab opens at the id', async () => {
+    const app = await open('places.md');
+    let fresh: OpenedApp | null = null;
+    try {
+      const frame0 = await frameOf(app.page);
+      await frame0.getByRole('link', { name: 'part 20', exact: true }).click();
+      await becomes(() => Promise.resolve(app.page.url().endsWith('#part-20')), true, 'the address after the jump', app.page);
+      const copied = app.page.url();
+      // A new browser context: nothing of the first tab's history or storage is shared.
+      expect(copied.endsWith('#part-20')).toBe(true);
+      fresh = await open('places.md', DOC, [], false, '#part-20');
+      const page = fresh.page;
+      const frame = await frameOf(page);
+      await becomes(
+        () => frame.evaluate(() => {
+          const el = document.getElementById('part-20');
+          if (el === null) return false;
+          const r = el.getBoundingClientRect();
+          return r.top >= 0 && r.top < window.innerHeight;
+        }),
+        true, 'the heading in view', page,
+      );
+      expect(page.url(), 'the fresh tab stands on the copied address itself').toBe(copied);
+      expect(await placeOf(page), 'no place in the fresh entry\'s state').toBeNull();
+      expect(fresh.errors, 'no uncaught error').toEqual([]);
+    } finally {
+      await fresh?.ctx.close();
+      await app.ctx.close();
+    }
+  }, 240_000);
 
   /** Speaks on the frame's own port, as the frame's script would. */
   const speak = (frame: Frame, msg: unknown): Promise<void> => frame.evaluate((m) => {

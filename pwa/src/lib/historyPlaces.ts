@@ -112,6 +112,24 @@ export function readEntry(state: unknown): { idx: number | null; place: EntryPla
   };
 }
 
+/** The state a replaced entry is written with (D-9116): the replaced entry's own valid `docsIdx` carried alone, so the
+ *  entry keeps its place in the tab's numbering; `null` when it has none, exactly as a replace wrote before. Its place,
+ *  and every other key, are not carried. */
+export function replacedState(prev: unknown): { docsIdx: number } | null {
+  const { idx } = readEntry(prev);
+  return idx === null ? null : { [IDX_KEY]: idx };
+}
+
+/** The address a jump's entry is pushed at (D-9117): the doc's path and query unchanged and the jump's id as the
+ *  fragment, joined as a fragment replace joins it, when the id is in the fragment grammar (`inGrammar`, the library's
+ *  own check, asked by the bridge). An id outside it never reaches the address: the entry keeps the current one, and
+ *  `report` says the caller tells the console so. An overlay's entry always keeps the current address. */
+export function jumpEntryUrl(
+  here: { readonly pathname: string; readonly search: string; readonly href: string }, id: string, inGrammar: boolean,
+): { url: string; report: boolean } {
+  return inGrammar ? { url: `${here.pathname}${here.search}#${id}`, report: false } : { url: here.href, report: true };
+}
+
 function readStoredPlace(v: unknown): Place | null {
   if (!isRecord(v)) return null;
   const { seq, kind, idx, id, from } = v;

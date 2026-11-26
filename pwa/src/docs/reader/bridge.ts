@@ -68,8 +68,12 @@ export interface ReaderMountInput {
   readonly onLink: (l: ReaderLink) => void;
   /** The frame went to the place `id`. With `onPlace` given the library says how: `entry.push` is true for a move that is a
    *  new place in the console's history, and `entry.from` is the library's own position token for the place left (or null).
+   *  `entry.inGrammar` is the library's own `isFragmentId(id)`, asked here so the main bundle never imports the library
+   *  (D-9117): a pushed jump names its id in the address only when it is true.
    *  Without `onPlace` the library calls it with the id alone. */
-  readonly onHash: (id: string, entry?: { readonly push: boolean; readonly from: string | null }) => void;
+  readonly onHash: (id: string, entry?: {
+    readonly push: boolean; readonly from: string | null; readonly inGrammar: boolean;
+  }) => void;
   /** The frame reports its full-screen figure: `overlay` when it opened, `overlay-closed` when it closed. Giving it asks the
    *  frame for places (the seed's `bridge.places`) and makes `closeOverlay` and `goto` of the mount live. The reader lab
    *  passes none. */
@@ -271,7 +275,9 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
     focus: readerMountFocusFor(input.profile, hostOwnsFocus(el)),
     onLink: (l) => input.onLink(readerLinkOf(l)),
     // The library gives the second argument only to a host that passed `onPlace`; it goes on only when it came.
-    onHash: (id, entry) => (entry === undefined ? input.onHash(id) : input.onHash(id, { push: entry.push, from: entry.from })),
+    onHash: (id, entry) => (entry === undefined
+      ? input.onHash(id)
+      : input.onHash(id, { push: entry.push, from: entry.from, inGrammar: frameLibrary.isFragmentId(id) })),
     ...(onPlace === undefined ? {} : { onPlace: (kind: PlaceKind) => onPlace(kind) }),
     copy: (text, check) => input.copy(text, check.hidden),
     onReady: () => input.onReady(),
