@@ -1537,7 +1537,7 @@ fenced),
 Claude Code session, `ccd-pool-sync.timer` and, from update-management W4, `ccd-update-sync.timer`, none with a cookie jar, though the
 exempt-but-authenticated GETs among them (`/api/runs`, `/api/runs/:id/items`,
 `/api/runs/:id`, `/api/runs/:id/record`, `/api/runs/:id/signals`, `/api/feed`, `/api/lifecycle`, `/api/peers`, `/api/claims`,
-`/api/asks`, `/api/pools/epoch`, `/api/updates/intent/:nodeId`, `/api/testbox`, `/api/programmes/:slug/goals`, `/api/programmes/:slug/plan`, `/api/landing`,
+`/api/asks`, `/api/pools/epoch`, `/api/updates/intent/:nodeId`, `/api/testbox`, `/api/testbox/frames`, `/api/programmes/:slug/goals`, `/api/programmes/:slug/plan`, `/api/landing`,
 `/api/programmes/:slug/history`, `/api/sessions/:id/programme`, and the
 one POST of the kind, `/api/testbox/tools-sync`) take a live session
 cookie **or** the token, which is how a coordinator reads its own wave ledger from

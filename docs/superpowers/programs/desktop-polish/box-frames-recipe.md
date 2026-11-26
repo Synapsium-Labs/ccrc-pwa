@@ -140,5 +140,20 @@ fails) and was replaced by `v in map`, which the own-property cases kill.
   path; a mail that quoted the secrets directory's path; a subagent's test loop through a shell variable; two mail heredocs
   that named a compile step; and an edit's search text that named the approval surface's route. Mail bodies are now
   written with the file tools.
+- **What the whole-tree guards caught before the push** (each a place the next recipe will trip on, so check them first):
+  - `rings/fastify-l4`: a new route file that imports fastify's types needs its allowlist row (`fastify-l4.data.ts`).
+  - `rings/totality`: every new `server/src` file needs its context in the architecture spec's table (C2 for the test box).
+  - `rings/wire-totality`: an exported literal union needs a sibling `Record<X, true>` map (`FramesViewKey`).
+  - `box-token-census`: an exempt-but-authenticated route must be named in the README's auth paragraph list.
+  - `single-definition/injected-prompts`: every typer site (`sendPrompt`'s text, a computed key, a literal outside the
+    two primitives) is named in its lists, a moved loop and a named key constant included.
+  - `single-definition/late-census`: `CREDENTIAL_MASKS` has named readers only; a second one gives its reason.
+  - `single-definition/roster-bash`: the four model classes are never spelled again; derive from `shared/models.ts`.
+  - `tmux-socket-census`: no raw `'tmux'` call outside the adapter; the frame's cursor is read through
+    `Tmux.cursor` (`list-panes`, a granted verb, the active row).
+  - `single-definition/core-vocab`: a new coordination store file joins the handle holders.
+- **Not run here:** the pin suite whose name names the approval signing (the approval-surface guard refuses a command
+  naming it), and the test projects' compile guard (it needs the console's packages, not installed in this tree). Both
+  are read from the exact head's CI run.
 - **Packets:** one went to each holder of a file this wave edits (`send.ts`, `agent-protocol.ts`, the coordination store,
   port and schema, the gate and its suite, `server.ts`), and three to the capture owner. Each edit followed its yes.

@@ -41,6 +41,7 @@ export const FASTIFY_L4_ALLOWLIST: EntrySet = {
   'server/src/linking/routes.ts': { reason: "the linking standard's HTTP routes: the operator's team key and override per project (D-8147)", since: '2026-11-09' },
   'server/src/continuity/routes.ts': { reason: "the continuity routes: the hook's start report, its loads report (the loads door, Overlord W1 sandbox Task 5), the door process's act-key claim (Overlord W1 door process A1), the hook's report door (Overlord W1 door process B1), the card door, the note door, the timer doors, the probe door (Overlord W1a, spec §3.3.11, §3.3.3, §3.3.2, §3.3.12, §3.3.5) and the renewal backstop's doors (Overlord W1 renewal readings A, R19)", since: '2026-11-13' },
   'server/src/testboxAdmin.ts': { reason: "the test box connect routes (D-8166): the status read and the act behind the account gate, with the TestboxAdminOps port they run", since: '2026-11-10' },
+  'server/src/testboxFramesRoutes.ts': { reason: "the box frames read, GET /api/testbox/frames: a session or the box token, as the test box status read takes them (Desktop polish wave 187)", since: '2026-11-26' },
   'server/src/update/routes.ts': { reason: "the update control plane's HTTP routes", since: '2026-10-20' },
   'server/src/readerLab/routes.ts': { reason: "the reader lab door's counter hook and HTTP routes (the reader lab plan, Task 3)", since: '2026-11-04' },
   'server/src/face/routes.ts': { reason: "the character choice's two HTTP routes (the face plan, Task 6)", since: '2026-11-13' },
