@@ -67,6 +67,7 @@ export const FRAMES_REPLY_TEXT = 'ccrc frames: ok';
 
 /** A view key: the recipe's own `view-up` shape. */
 export type FramesViewKey = 'Up' | 'PageUp';
+export const FRAMES_VIEW_KEY_MAP: Record<FramesViewKey, true> = { Up: true, PageUp: true };
 
 /** One step of a case, after the model switch. `turn`: the product's send of an earlier turn, then its Stop. `type`: the
  *  draft through the send's own line loop (`send`), or as a person types (`person`, the recipe's own shape). `keys`: view

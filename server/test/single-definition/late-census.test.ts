@@ -73,7 +73,10 @@ describe('the credential shapes and the egress mask each have one home (D-5513)'
   it("maskSecretAssigns's file and mask.ts read the shapes from CREDENTIAL_MASKS, and no other file spells one", () => {
     expect(holders(/\bcredentialMaskSource\('genericSk'\)/)).toEqual(['server/src/coord/redact.ts']);
     expect(holders(/\bcredentialMaskSource\('jwt'\)/)).toEqual(['server/src/coord/redact.ts']);
-    expect(holders(/\bCREDENTIAL_MASKS\b/).filter((f) => f !== 'shared/api.ts')).toEqual(['server/src/accounts/shapes.ts']);   // D-7513
+    // D-7513. The second reader is legitimately different (another host): the box frames reducer (Desktop polish wave
+    // 187) runs on the test box, which cannot import `shapes.ts`, and asks only whether a frame holds a shape, to refuse it
+    // whole; it masks nothing and spells no shape (the line below still holds it to that).
+    expect(holders(/\bCREDENTIAL_MASKS\b/).filter((f) => f !== 'shared/api.ts')).toEqual(['server/src/accounts/shapes.ts', 'shared/framesReduce.ts']);
     // A second copy of a shape's source: the Anthropic family's prefix, the generic rule, or the JWT header pair.
     expect(holders(/sk-ant-\[|sk-\[A-Za-z0-9_-\]\{8,\}|eyJ\[A-Za-z0-9_-\]\+\\\.eyJ/)).toEqual(['shared/api.ts']);
   });

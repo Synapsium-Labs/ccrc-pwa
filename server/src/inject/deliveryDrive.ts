@@ -43,7 +43,7 @@ import { deliveryCaseText } from '../../../shared/deliveryCapture.js';
 import { isDeliveryCaseId, type DeliveryCaseId } from '../../../shared/deliveryResult.js';
 import { boundedSpawn } from '../../../shared/spawn.mjs';
 import { RUN_ID } from '../../../shared/testbox.js';
-import { tmuxCommand, tmuxTarget } from '../../../shared/tmux-target.js';
+import { tmuxCommand } from '../../../shared/tmux-target.js';
 import { renderMailNudge } from '../coord/envelope.js';
 import { Tmux, type ExecResult, type Runner } from '../exec.js';
 import { KeyedQueue } from './queue.js';
@@ -247,9 +247,8 @@ export async function driveFramesStep(input: FramesDriveInput, runner: Runner, s
       if (next === prev) { settled = true; break; }
       prev = next;
     }
-    const cur = prev === null ? null : await halt.run('tmux', ['display-message', '-p', '-t', tmuxTarget(S), '#{cursor_x} #{cursor_y}']);
-    const m = cur !== null && cur.ran && cur.code === 0 ? /^(\d+) (\d+)\s*$/.exec(cur.stdout) : null;
-    out = { kind: 'frame', frame: prev, cursor: m === null ? null : [Number(m[1]), Number(m[2])], settled };
+    const cursor = prev === null ? null : await tmux.cursor(S);
+    out = { kind: 'frame', frame: prev, cursor, settled };
   } else if ('part' in step) {
     const p = FRAMES_PARTS[step.part]!;
     const lines = framesDraftLines(p.case, p.pane);

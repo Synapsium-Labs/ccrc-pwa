@@ -27,7 +27,8 @@ function fakeRunner(pane: () => string = () => EMPTY, failOn?: (args: readonly s
     calls.push([cmd, ...args]);
     if (failOn?.(args)) return { ran: false, reason: 'timeout', detail: 'tmux did not answer', code: 1, stdout: '', stderr: '' };
     if (args.includes('capture-pane')) return { ran: true, code: 0, stdout: pane(), stderr: '', killed: false, signal: null };
-    if (args.includes('display-message')) return { ran: true, code: 0, stdout: '3 7\n', stderr: '', killed: false, signal: null };
+    // The active pane's row is the second: the cursor is read from it, never the first row (exec.ts#cursor).
+    if (args.includes('#{pane_active} #{cursor_x} #{cursor_y}')) return { ran: true, code: 0, stdout: '0 9 9\n1 3 7\n', stderr: '', killed: false, signal: null };
     return { ran: true, code: 0, stdout: '', stderr: '', killed: false, signal: null };
   };
   return { run, calls };

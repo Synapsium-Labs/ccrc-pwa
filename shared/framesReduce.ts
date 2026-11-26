@@ -13,6 +13,7 @@
 // A frame the reducer cannot clear is REFUSED WHOLE with its rule word. Nothing is ever cut out to make one pass.
 import { CREDENTIAL_MASKS } from './api.js';
 import { frameTextFits, type FramesPane, type FramesRefusal } from './framesResult.js';
+import { CLASSES } from './models.js';
 
 /** An SGR sequence (a frame's only escape, by the shape rule). */
 const SGR = /\x1b\[[0-9;:]*m/g;
@@ -54,8 +55,9 @@ export const isRuleRow = (plainRow: string): boolean => RULE_RUN.test(plainRow);
  *  leading `/` before two components, or an ellipsis or a home mark followed by `/`. */
 export const PATH_LIKE = /(?:[\w.-]+\/){2,}|(?:\/[\w.-]+){2,}|(?:…|\.\.\.|~)\//;
 
-/** RULE 5: a model's name, as a word, case-insensitive (the stand-in's own model name included). */
-export const MODEL_WORD = /\b(?:opus|sonnet|haiku|fable|claude-[a-z0-9.-]+|ccrc-capture-stand-in)\b/i;
+/** RULE 5: a model's name, as a word, case-insensitive (the stand-in's own model name included). The classes are
+ *  `shared/models.ts`'s `CLASSES`, never a second list of them. */
+export const MODEL_WORD = new RegExp(String.raw`\b(?:${CLASSES.join('|')}|claude-[a-z0-9.-]+|ccrc-capture-stand-in)\b`, 'i');
 
 /** RULE 6: an account or a plan. */
 export const ACCOUNT_WORD = /api usage billing|\bclaude (?:pro|max|team|enterprise)\b|\borganization\b|\baccount\b|\bplan\b|@[a-z0-9-]+\.[a-z]/i;
