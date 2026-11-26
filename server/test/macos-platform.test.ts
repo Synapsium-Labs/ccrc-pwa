@@ -330,11 +330,11 @@ describe('no call site outside the platform block runs a GNU-only command bare',
    *  hit and the region cannot grow quietly. */
   const BOX_SIDE = /^# ── BOX-SIDE COMMANDS \(begin\)[^\n]*\n[\s\S]*?^# ── BOX-SIDE COMMANDS \(end\)[^\n]*\n/m;
 
-  /** `ccd/ccrc-testbox-admin`'s ONE exempted GNU spelling outside its box-side region: the box's settings file write, one
-   *  line that `_tba_cx_out` sends to the test box over ssh, where `chmod --reference` copies the old file's mode. It runs on
-   *  the box's GNU userland, never on this host. Cut as `_ws_collect_mv` is, one line pinned below to exactly that one
-   *  spelling, so a second `chmod --reference` anywhere else in the file is a hit. */
-  const BOX_ENV_WRITE = /^[ \t]*_tba_cx_out sh -c 'umask 077; p=\$1; [^\n]*' sh "\$TBA_BOX_ENV_PATH" <"\$1"\n/m;
+  /** `ccd/ccrc-testbox-admin`'s ONE counted GNU line outside its box-side region: a write that `_tba_cx_out` sends to the
+   *  test box over ssh, where `chmod --reference` copies the old file's mode. It runs on the box's GNU userland, never on this
+   *  host. Cut as `_ws_collect_mv` is, and counted below: exactly one such line outside the region, holding exactly that one
+   *  spelling, so a second one anywhere else in the file is a hit. */
+  const BOX_LINE = /^[ \t]*_tba_cx_out sh -c 'umask 077; p=\$1; [^\n]*' sh "\$TBA_BOX_ENV_PATH" <"\$1"\n/m;
 
   /** One file's scanned text: the platform block cut where the file carries
    *  one, the pinned epoch copy cut out of the hook, and the pinned rename cut
@@ -343,7 +343,7 @@ describe('no call site outside the platform block runs a GNU-only command bare',
     // `ccd` is scanned WITH its library (D-6913): the moved disk-retention code is still ccd's.
     const src = name === 'ccd' ? ccdSource() : readFileSync(path.join(ccdRoot, name), 'utf8');
     if (name === HOOK) return executableText(src.replace(HOOK_EPOCH_COPY, ''));
-    if (name === 'ccrc-testbox-admin') return executableText(src.replace(BOX_SIDE, '').replace(BOX_ENV_WRITE, ''));
+    if (name === 'ccrc-testbox-admin') return executableText(src.replace(BOX_SIDE, '').replace(BOX_LINE, ''));
     if (name === 'testbox-build-copy' || name === 'testbox-user-write') return executableText(src.replace(BOX_SIDE, ''));
     return executableText(name === 'ccd' ? src.replace(COLLECT_MV, '').replace(LIB_LOAD, '').replace(LIB_HASH_TOOLS, '') : src);
   }
@@ -386,16 +386,19 @@ describe('no call site outside the platform block runs a GNU-only command bare',
     expect(region, 'the BOX-SIDE COMMANDS region is not in ccd/ccrc-testbox-admin').not.toBe('');
     expect([...region.matchAll(/^(_tba_[a-z_]+)\(\) \{/gm)].map((m) => m[1])).toEqual(['_tba_box_manifest_ok', '_tba_box_file_sha', '_tba_box_tcp']);
     expect(gnuHits(executableText(region)).map((h) => h.split(':')[0]).sort()).toEqual(['bare timeout', 'sha256sum', 'sha256sum']);
-    expect(gnuHits(executableText(src.replace(BOX_SIDE, '').replace(BOX_ENV_WRITE, '')))).toEqual([]);
+    expect(gnuHits(executableText(src.replace(BOX_SIDE, '').replace(BOX_LINE, '')))).toEqual([]);
   });
 
-  it('ccd/ccrc-testbox-admin\'s one exemption outside its region is the box\'s settings file write: one line, sent to the box, one spelling', () => {
+  it('ccd/ccrc-testbox-admin has exactly one GNU line outside its region: one write that runs on the box, with one spelling', () => {
     const src = readFileSync(path.join(ccdRoot, 'ccrc-testbox-admin'), 'utf8');
     const outside = src.replace(BOX_SIDE, '');
-    expect([...outside.matchAll(new RegExp(BOX_ENV_WRITE.source, 'gm'))].length, 'the exemption is meant to be exact').toBe(1);
-    const cut = BOX_ENV_WRITE.exec(outside)![0]!;
+    // the count: one GNU line outside the region, before the cut, and it is the one the cut takes
+    const hits = gnuHits(executableText(outside));
+    expect(hits.map((h) => h.split(':')[0]), 'exactly one GNU line outside the region').toEqual(['chmod --reference']);
+    expect([...outside.matchAll(new RegExp(BOX_LINE.source, 'gm'))].length, 'the cut takes exactly one line').toBe(1);
+    const cut = BOX_LINE.exec(outside)![0]!;
     expect(cut.trimStart().startsWith("_tba_cx_out sh -c '"), 'it runs on the box, over the verb\'s one way there').toBe(true);
-    expect(gnuHits(executableText(cut)).map((h) => h.split(':')[0]), 'the exemption buys exactly one spelling').toEqual(['chmod --reference']);
+    expect(gnuHits(executableText(cut)), 'the counted line is the one the cut takes').toEqual(hits);
   });
 
   // The build copy's box programs (capture runner spec 2026-11-22 §2.2) run on the test box too, in one marked region of
