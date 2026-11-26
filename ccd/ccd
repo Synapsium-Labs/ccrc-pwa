@@ -33415,6 +33415,44 @@ _provider_move_fits() {   # id cur cand -> rc 0 the session's context fits cand'
   if [[ -n "$tok" && -n "$win" ]]; then (( tok * 10 <= 10#$win * 9 )); else [[ "$p" == "$q" ]]; fi
 }
 
+_lane_provider_to() {   # var lane -> var = anthropic | codex | lane:<lane>: `server/src/coord/providerOutage.ts#outageProviderOf`'s rule over the roster's arrays
+  if _is_anthropic_backend "$2"; then printf -v "$1" '%s' anthropic
+  elif _is_codex_backend "$2"; then printf -v "$1" '%s' codex; else printf -v "$1" '%s' "lane:$2"; fi
+}
+
+_provider_move_rank_to() {   # var cand cur first marked goods -> rc 0 and var = 0 proved | 1 another provider | 2 unproved, same provider; rc 1 and var empty = never
+  # A PROVIDER MOVE'S ORDER, AND ITS REFUSALS (wave 3b; nothing calls it yet). PURE over its arguments and the roster's arrays:
+  # `first` is the episode's first failure, `marked` the marked lanes, `goods` `<lane>=<newest good Stop>` words, one clock for
+  # both. Never the lane it is on, a marked lane, or a lane of a provider with two marked lanes. Pools, class, room and the
+  # operator's holds are the caller's, before this and unchanged.
+  local __p __q __m __n=0 __r=2
+  printf -v "$1" ''; _lane_provider_to __p "$2"
+  for __m in $5; do _lane_provider_to __q "$__m"; [[ "$__m" != "$2" ]] || return 1; [[ "$__q" != "$__p" ]] || __n=$(( __n + 1 )); done
+  [[ "$2" != "$3" ]] && (( __n < 2 )) || return 1
+  _lane_provider_to __q "$3"; [[ "$__q" == "$__p" ]] || __r=1
+  for __m in $6; do if [[ "${__m%%=*}" == "$2" ]] && (( ${__m##*=} > $4 )); then __r=0; fi; done
+  printf -v "$1" '%s' "$__r"
+}
+
+_provider_move_fits() {   # id cur cand -> rc 0 the session's context fits cand's window | 1 it does not, or nobody measured it and cand is on another provider
+  # THE CONTEXT: `ctxTokens` of the statusline's sidecar, when it names this conversation, is at most PROVFAIL_SPAN old and is not
+  # zero (a resumed session that has run no turn). THE WINDOW: `CLAUDE_CODE_MAX_CONTEXT_TOKENS` as the lane's own settings state
+  # it (`shared/modelenv.mjs#contextWindowFor` decides it and writes it there). With none stated an Anthropic lane entered from
+  # another provider has 200000, the smallest window a Claude model has (its `CLIENT_DEFAULT_CONTEXT_TOKENS`); any other lane has
+  # no window anybody measured, and settings that cannot be read state nothing. The landing's first turn sends the whole
+  # conversation and still needs room to answer, so it fits at nine tenths.
+  local p q uuid d t="" tok="" win="" now re='"CLAUDE_CODE_MAX_CONTEXT_TOKENS"[[:space:]]*:[[:space:]]*"?([0-9]{1,8})"?[[:space:]]*[,}]'
+  _lane_provider_to p "$2"; _lane_provider_to q "$3"; _cfg_dir_to d "$3"; _now_s_to now
+  [[ "$q" == anthropic && "$p" != "$q" ]] && win=200000
+  if [[ -f "$d/settings.json" ]] && _file_read_to t "$d/settings.json"; then [[ "$t" =~ $re ]] && win="${BASH_REMATCH[1]}"
+  elif [[ -e "$d/settings.json" || -L "$d/settings.json" ]]; then win=""; fi
+  d="$REG/usage/$1.json"; re='"ctxTokens":([1-9][0-9]{0,8})[,}]'
+  if _reg_read_to uuid "$1" uuid && [[ -n "$uuid" && -f "$d" && ! -L "$d" ]] && _file_read_to t "$d" && [[ "$t" == *"\"uuid\":\"$uuid\""* && "$t" =~ \"ts\":([0-9]{1,12})[,}] ]]; then
+    (( now - 10#${BASH_REMATCH[1]} <= PROVFAIL_SPAN )) && [[ "$t" =~ $re ]] && tok="${BASH_REMATCH[1]}"
+  fi
+  if [[ -n "$tok" && -n "$win" ]]; then (( tok * 10 <= 10#$win * 9 )); else [[ "$p" == "$q" ]]; fi
+}
+
 cmd_limit_watchdog() {   # (no args) — one pass over every live session; exits 0 unless the registry is unreadable
   [[ $# -eq 0 ]] || die "usage: ccd limit-watchdog"
   local n="" f id now t0=$SECONDS
