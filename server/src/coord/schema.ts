@@ -4755,6 +4755,35 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE UNIQUE INDEX overlord_readiness_items_open ON overlord_readiness_items (item, key) WHERE settledAt IS NULL;
   `,
+
+  // ── 133: user_version 132 -> 133 ──────────────────────────────────────────
+  // The box frames recipe's capture lane (Desktop polish wave 187; plan docs/superpowers/plans/2026-11-26-box-frames-recipe.md
+  // section 5.3): `claude_build_frames`, one row per (build, part), beside the trust and delivery tables and never in them.
+  // ONE writer, the capture lane, through `coord/claudeBuildFramesStore.ts` (`CoordStore` keeps the delegates). `record` is
+  // the result's JSON with its frame text set to null, and `text` that frame's reduced text, kept for the newest four framed
+  // builds and set aside for older ones; `checked` is the receiver's word at store time (`clear` or a refusal word, and then
+  // no text). `version`, `word`, `record`, `checked` and `at` are set together, and null on a row that holds attempts only.
+  // A NEW TABLE only: an older build opening a file at this entry's version takes rule 3 and never names it. The slot is the
+  // first free one by position on `main` at this branch's push; another branch carries the same number, and whichever queues
+  // second renumbers. RE-MEASURE the slot before merge (it must print 132 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE claude_build_frames (
+    build         TEXT    NOT NULL,
+    part          INTEGER NOT NULL CHECK (part >= 0),
+    version       TEXT,
+    word          TEXT,
+    record        TEXT,
+    text          TEXT,
+    checked       TEXT,
+    at            INTEGER,
+    attempts      INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    lastAttemptAt INTEGER,
+    notSent       TEXT,
+    PRIMARY KEY (build, part)
+  );
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

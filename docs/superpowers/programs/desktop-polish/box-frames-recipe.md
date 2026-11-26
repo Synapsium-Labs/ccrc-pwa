@@ -104,6 +104,10 @@ removed, so a colour change inside a key cannot split it past the shapes.
 
 ## 7. Evidence
 
+**The migration number** (133, `claude_build_frames`) is the first free on main at this push, and it is re-taken at queue
+time if another migration lands first: the renewal readings branch (#3455) carries 133 too, and whichever of the two
+queues second renumbers in its absorb and re-derives the count suites (the coordinator's ruling).
+
 Every run went through `ccrc test --local`, in the foreground, one file per command.
 - `DELIVERY_RECIPE_VERSION`: `da16fe2f55551e0b` before the first edit and after the last.
 - The send's own suite passes 158 of 158 after the line loop moved. The characterization case was green before the move
