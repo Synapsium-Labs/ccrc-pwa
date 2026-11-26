@@ -314,8 +314,9 @@ Codex lanes marked as Codex lanes in its roster, the fleet box on v0.0.1288 or l
   from the provider's own figure, because three of their models have no measured window. That value is kept, and
   doctor's WARN records it, rather than a hand `set-window`.
 - **How the definition of done is proved (2026-11-26, call 1494, a design-level call the owner may overturn).** A
-  behaviour that only shows after a Revert or a fault is proved by the merged tests at the installed commit plus a live
-  reading of the installed check or surface. It is not staged on the live fleet: a fault warning cannot occur on a
+  behaviour that only shows after a Revert or a fault is accepted from the merged tests at the installed commit plus a
+  live reading of the installed check, or of the fact the installed build reports about it. It is not staged on the
+  live fleet: a fault warning cannot occur on a
   healthy fleet, and a live Revert holds real sessions on an older model until a newer one appears. A behaviour that a
   real release shows stays a live wait. The other choices were one supervised live Revert on a Codex lane, and waiting
   for a natural event for every line. The evidence, line by line, is in
@@ -353,6 +354,6 @@ evidence is in `docs/superpowers/programs/model-class-advance/acceptance-evidenc
   sessions-behind warning 24 hours later, doctor's evidence.
 - The renewal programme's evaluation evidence, which owns any claim about session renewal.
 
-No feature build is left in the plan. Two tickets stay open there without one: `entry-comment-seven` rides the
-launcher's next change of substance, and `doctor-land` is bookkeeping for #2943, which merged. The three open lines wait
-for the providers, and the acceptance worker reads again on its timer. Nothing here moves the fleet or asks the owner for a step.
+No feature build is left in the plan. Three tickets stay open there without one: `natural-move` is the wait itself,
+`entry-comment-seven` rides the launcher's next change of substance, and `doctor-land` is bookkeeping for #2943, which
+merged. The three open lines wait for the providers, and the acceptance worker reads again on its timer. Nothing here moves the fleet or asks the owner for a step.
