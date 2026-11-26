@@ -347,6 +347,8 @@ describe('the helper parity block equals shared/docs.ts, by value and in both di
     ['MTIME_NS_RE', parityL0.DOCS_MTIME_NS_RE_BODY],
     // X2 P2.1: the outside-folder label grammar, which ccd checks before any path join.
     ['FOLDER_LABEL_RE', parityL0.DOCS_FOLDER_LABEL_RE_BODY],
+    // X2 P4.1: how many newest names docs-index carries per section.
+    ['DOCS_INDEX_NEWEST_PER_SECTION', parityL0.DOCS_INDEX_NEWEST_PER_SECTION],
   ];
   /** The block's other names, each compared in its own shape: SECTIONS as ordered pairs (below), FAILURES as a set
    *  and REDACT_RULES rule by rule (Task 6's row-48 cases above). */
@@ -356,7 +358,7 @@ describe('the helper parity block equals shared/docs.ts, by value and in both di
     'DOCS_MAX_ANSWER_BYTES', 'DOCS_MAX_LISTING_WIRE_BYTES', 'DOCS_MAX_ENTRIES', 'DOCS_DRAFT_HASH_BUDGET',
     'DOCS_MAX_DRAFTS', 'DOCS_FETCH_MIN_INTERVAL_MS', 'DOCS_LOG_MAX_ENTRIES', 'DOCS_LOG_SUBJECT_MAX_CHARS',
     'DOCS_LOG_AUTHOR_MAX_CHARS', 'DOCS_LOG_MAX_WIRE_BYTES', 'DOCS_RANGE_FRAME_BYTES', 'DOCS_RANGE_MAX_BYTES',
-    'DOCS_RANGE_PREPARE_BUDGET_MS'];
+    'DOCS_RANGE_PREPARE_BUDGET_MS', 'DOCS_INDEX_NEWEST_PER_SECTION'];
   /** Read per case, never at collection: a missing marker reds these cases, not the whole file. */
   const src = (): string => helperSourceForParity();
   const home = harnessForParity('ccd-docs-parity-').home;

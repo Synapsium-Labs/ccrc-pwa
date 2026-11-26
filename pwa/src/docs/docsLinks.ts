@@ -14,8 +14,9 @@ import { urlAttributes } from 'html-url-attributes';
 import type { FleetSession } from '../../../shared/api';
 import {
   DOC_SECTIONS, DOC_SECTION_SLUGS, admitDraft, docsPageUrl, entryView, isDocsBareRef, isDocsProject, isDocsRelPath,
-  type DocPin, type DocsEntry, type DocsPageLocation, type DocsRefSpec, type DocsTreeOk,
+  type DocPin, type DocsEntry, type DocsFailure, type DocsPageLocation, type DocsRefSpec, type DocsTreeOk,
 } from '../../../shared/docs';
+import { defaultBranchOf, type DocsSettings } from '../../../shared/docsTracker';
 import { docsLocation } from './docLinkTarget';
 import { pinFor } from './useDocsVisit';
 
@@ -23,6 +24,23 @@ import { pinFor } from './useDocsVisit';
 // `docLinkTarget.ts` (pure, no hook module, so the reader's policy can ask them) and re-exported here: every importer keeps this path.
 export { docLinkTarget, docsLocation } from './docLinkTarget';
 export type { DocLinkTarget, DocsPageTarget } from './docLinkTarget';
+
+/** Index links choose the configured branch, if any. Other sources can still link the Git default or an explicit ref. */
+export function docsListingHome(project: string, settings?: DocsSettings): Extract<DocsPageLocation, { kind: 'project' }> {
+  const branch = settings === undefined ? undefined : defaultBranchOf(settings, project);
+  return { kind: 'project', project, ref: branch === undefined ? null : { kind: 'bare', name: branch } };
+}
+
+/** Only an unresolved configured branch falls back. A failed fetch, an explicit different ref, or a version pin does not. */
+export function docsDefaultBranchFallback(
+  page: DocsPageLocation, failure: DocsFailure | null, settings?: DocsSettings,
+): { href: string; branch: string } | null {
+  if (failure !== 'unresolved-ref' || settings === undefined || page.kind === 'index' || page.ref?.kind !== 'bare'
+    || (page.kind === 'path' && page.at !== null)) return null;
+  const branch = defaultBranchOf(settings, page.project);
+  if (branch !== page.ref.name) return null;
+  return { branch, href: docsPageUrl(docsLocation(page, { kind: 'same-page', project: page.project, ref: null })) };
+}
 
 /** What `detachUrls` recorded for one element of the copy. `attrs` holds every URL property moved off it (empty when it
  *  carried none), keyed by its hast property name, its value as text. `imageIndex: null` means the element is not an

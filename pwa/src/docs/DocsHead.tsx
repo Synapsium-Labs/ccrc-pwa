@@ -290,7 +290,7 @@ export function exportStateFor(page: DocsPageLocation, tree: DocsTreeOk, file: F
   const expected = pinFor(tree, page);
   if (k.kind !== 'leaf' || expected === null) return EXPORT_ABSENT;
   const cls = contentClass(page.path);
-  if (cls === 'other') return EXPORT_ABSENT;
+  if (cls === 'other' || cls === 'pdf') return EXPORT_ABSENT;
   const updating: ExportState = { s: 'updating', to: pinCommit(expected) };
   if (cls === 'raster') {
     const size = expected.kind === 'draft' ? k.entry.draft?.size : k.entry.committed?.size;

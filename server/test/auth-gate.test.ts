@@ -403,7 +403,8 @@ describe('the scanner is looking at something', () => {
     // `POST /api/docs-folders`, `DELETE /api/docs-folders/:label` and `GET /api/docs-folders/:label/{tree,file,range}`, the
     // same class on the docs plugin's own instance, so with no marker header they answer 403 `foreign-request` too. Past the
     // marker, every read and the add refuse `auth-off` while sign-in is dark; the add takes the account gate's step-up.
-    expect(scanRoutes('docs/routes.ts').length, 'auth-gate: docs/routes.ts registers 13').toBe(13);
+    // 15 with the two settings doors (X2 P4.3): session-gated, and on the same request-marker check.
+    expect(scanRoutes('docs/routes.ts').length, 'auth-gate: docs/routes.ts registers 15').toBe(15);
     // 1 in `linear/routes.ts` (named workspaces S4, design 2026-10-20 §4.2): `GET /api/linear/resolve`, the
     // ticket-title preview read. Session-gated and NOT EXEMPT, no box token, `Cache-Control: no-store`.
     // 5 since S4b (design §5.1): the connection's `GET`, `PUT`, `POST …/check` and `DELETE /api/linear/connection`, all
@@ -828,7 +829,11 @@ describe('the scanner is looking at something', () => {
     // 329 with the review page's three routes (X3 R2), in `review/routes.ts`: `GET /review` EXEMPT as class 9, `GET /review.html`
     // and `GET /review/` gated 404s. The HTTP half 323 -> 326, the gated count 207 -> 209, the exempt-HTTP count 116 -> 117.
     expect(scanRoutes('review/routes.ts').map(key)).toEqual(['POST /api/review/open', 'GET /review', 'GET /review.html', 'GET /review/']);
-    expect(ROUTES.length).toBe(329);
+    // 331 with both Docs settings doors (X2 P4.3): session-gated and NOT EXEMPT, no box token. The HTTP half
+    // 326 -> 328, gated 209 -> 211 (328 - 117); the exempt-HTTP count stays 117.
+    // 332 since the Overlord's readiness read, `GET /api/overlord/readiness` in `coord/overlordRoutes.ts`, session-gated and NOT
+    // EXEMPT, no box token: the HTTP half 328 -> 329, the gated count 211 -> 212 (329 - 117), the exempt-HTTP count stays 117.
+    expect(ROUTES.length).toBe(332);
     expect(scanRoutes('laneModelsRoutes.ts').length).toBe(1);
     expect(scanRoutes('coord/delegationBackfillRoutes.ts').length).toBe(2);
     expect(scanRoutes('coord/approvalCensusRoutes.ts').length).toBe(1);
@@ -888,6 +893,7 @@ describe('the scanner is looking at something', () => {
       'POST /api/docs/:project/refresh',
       'GET /api/docs/:project/history',
       'GET /api/docs/:project/range',
+      'GET /api/docs/settings', 'PUT /api/docs/settings',
       // The sixth file's one (named workspaces S4): a scanner that stopped reading `linear/routes.ts` would lose it.
       'GET /api/linear/resolve',
       // …and its four Settings routes for workspace keys (#1444, plan task LK11), lost with it.
@@ -1019,7 +1025,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 329 scanned + the static wildcard when the bundle is built.
+    // 332 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1836,7 +1842,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 326 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 329 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1900,7 +1906,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 326 HTTP routes, not the 117 exempt.
+          //    is not itself flag-aware — the assertion that covers all 329 HTTP routes, not the 117 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

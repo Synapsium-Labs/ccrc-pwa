@@ -714,6 +714,36 @@ describe('docs-folder: what a refusal leaves behind (X2 P2.1)', () => {
     expect(got[0]).toBe('unknown-folder');
   });
 
+  // Review 3816 R2, carried to X2 P4: the same take-back can remove the registry directory after a call opened it and before
+  // it opens the lock in it; that open then finds no directory to create the lock in. It answers what the unlinked-lock case
+  // answers, never an errno word. No race: the lock's own open removes the (empty) directory first.
+  it.each([
+    ['add', 'alpha', ['unreadable', { reason: 'registry-busy' }]],
+    ['remove', 'alpha', ['unknown-folder', null]],
+  ] as const)('folder %s: the registry directory gone at the lock open answers as the taken-back lock does', (op, label, want) => {
+    const got = unitJson<[string | null, unknown, boolean]>(h.home, [
+      ctxPy(),
+      "reg = home + '/.cc-sessions/docs-folders'",
+      'os.makedirs(reg, 0o700, exist_ok=True)',
+      'H.folder_admit = lambda ctx, path, cfg: (os.open("/", os.O_RDONLY), None)',
+      'real_open = os.open',
+      'def op_en(p, flags, mode=0o777, *, dir_fd=None):',
+      "    if p == '.lock' and dir_fd is not None:",
+      '        os.rmdir(reg)',
+      '    return real_open(p, flags, mode, dir_fd=dir_fd)',
+      'os.open = op_en',
+      `a = H.FolderArgs('${op}', '${label}', ${op === 'add' ? "'/zq/dir'" : 'None'}, [])`,
+      'word = ctx_ = None',
+      'try:',
+      '    H.verb_folder(ctx, a)',
+      'except H.Fail as f:',
+      '    word, ctx_ = f.word, (f.ctx or None)',
+      'os.open = real_open',
+      'out([word, ctx_, os.path.exists(reg)])',
+    ].join('\n'));
+    expect(got).toEqual([...want, false]);
+  });
+
   it('folder add: a refused first add leaves the lock and the registry when another add wrote into it meanwhile', () => {
     // Review 3783 (the round's own review, #2): three first adds; another one wrote its label before this one won the lock
     // and refused. Taking the lock's name away then would make a later waiter refuse for nothing.

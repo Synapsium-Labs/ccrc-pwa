@@ -7326,15 +7326,16 @@ _ws_least_loaded() {   # [project] [class] -> the home-able account with the mos
   # `_limit_score`'s `:=0` defaults, which used to be cited beside it, are gone
   # — they were the mechanism of the gap, not a defence against it.)
   #
-  # THE FIVE CANDIDATE WALKS DO NOT AGREE, AND THE DISAGREEMENT IS ON PURPOSE
+  # THE SIX CANDIDATE WALKS DO NOT AGREE, AND THE DISAGREEMENT IS ON PURPOSE
   # (PR #61, 2026-09-07; the count is corrected at the wave-2b merge, which
   # added the fourth, and at routing slice 4, which added the fifth). Measured,
   # so the number stops drifting: `grep -cE 'for
   # (w|cand) in (\$\(_pool_for|"\$\{CCRC_HOME_ABLE\[@\]\}")' ccd/ccd` finds
-  # 6 matching LINES, 5 of them walks — the sixth is prose, `_default_pool`'s
-  # own comment quoting the pattern. The five are `_ws_least_loaded`,
-  # `cmd_ws_add`'s refusal-reason builder, `_swap_target`, `_strand_why` and
-  # `_place_for_class`. The fifth walks CCRC_HOME_ABLE for the same reason the
+  # 7 matching LINES, 6 of them walks — the seventh is prose, `_default_pool`'s
+  # own comment quoting the pattern. The six are `_ws_least_loaded`,
+  # `cmd_ws_add`'s refusal-reason builder, `_swap_target`, `_strand_why`,
+  # `_place_for_class` and `_watchdog_provider` (the provider-failure ladder's
+  # tiers, which only build `_swap_target`'s skip list from the same walk). The fifth walks CCRC_HOME_ABLE for the same reason the
   # builder does — it is COUNTING how many in-pool lanes measured unable to
   # serve a class, which is a question about placement's own candidate set, and
   # an overflow lane is not in it.
@@ -7432,7 +7433,10 @@ _ws_least_loaded() {   # [project] [class] -> the home-able account with the mos
   # measurement that can be wrong.
   local pps; pps=$(_project_pool_state "${1-}")
   local cls="${2:-}"
-  local best="" bs=1000 first="" firstm="" condemned="" w sc
+  local best="" bs=1000 first="" firstm="" condemned="" w sc failing
+  # TWICE AT MOST: without the lanes whose provider is failing (`_provfail`), and again with them only when that walk found no
+  # lane that is not condemned. So a marked lane is tried after every unmarked one and is never refused.
+  for failing in "" 1; do
   for w in "${CCRC_HOME_ABLE[@]}"; do
     _account_ok "$w" || continue
     # AFTER `_account_ok`, BEFORE EITHER FALLBACK: both must land on an IN-POOL
@@ -7475,6 +7479,7 @@ _ws_least_loaded() {   # [project] [class] -> the home-able account with the mos
       [[ -z "$condemned" ]] && condemned="$w"
       continue
     fi
+    [[ -z "$failing" ]] && _provfail "$w" && continue
     [[ -z "$first" ]] && first="$w"
     # AFTER `first`, BEFORE the score: a lane the roster says will never report
     # must not be SKIPPED out of the fallback — it is still placeable — but it
@@ -7485,6 +7490,8 @@ _ws_least_loaded() {   # [project] [class] -> the home-able account with the mos
     [[ -z "$firstm" ]] && firstm="$w"
     sc=$(_limit_score "$w"); [[ -z "$sc" ]] && continue
     (( sc < bs )) && { bs=$sc; best="$w"; }
+  done
+  [[ -n "$first" ]] && break
   done
   # THREE TIERS, WIDENING, and the widest is a lane rather than "". Prefer the
   # cheapest MEASURED lane nobody condemned; then the first lane that COULD
@@ -19703,7 +19710,7 @@ _rescue_jitter_max() {   # id arm -> RESCUE_JITTER_MAX
   return 0
 }
 
-_dispatch_swap() {   # id target [arm prev decided dfrom dto tx txbytes orgnear] — run `ccd swap` in ITS OWN transient systemd unit.
+_dispatch_swap() {   # id target [arm prev decided dfrom dto tx txbytes orgnear fail] — run `ccd swap` in ITS OWN transient systemd unit.
   # setsid is NOT enough: it detaches the tty but stays in the caller's CGROUP, so the
   # swap's own `systemctl stop` half-kills it mid-swap (left-over processes, dead session
   # never respawned — bit us 2026-07-05). systemd-run escapes the cgroup entirely.
@@ -19782,19 +19789,19 @@ _dispatch_swap() {   # id target [arm prev decided dfrom dto tx txbytes orgnear]
   # row's `lastswap` from before the caller stamped it (restored by a refusal),
   # the decision's epoch (the `ts` of a rescue's limits row), the degrade rung
   # (stamped at the act now, `_route_degrade_at_move`), and for a rescue the
-  # transcript and its size (output since then backs the rescue off), and a rescue's organization near miss. Each
+  # transcript and its size (output since then backs the rescue off), a rescue's organization near miss, and a provider move's newest failure. Each
   # value is `%q`-quoted, so a path cannot break out of the `bash -c` string.
   # Positional, all optional: a caller passing two arguments composes exactly
   # the old line plus empty words, which the act reads as "no gate" (an older
   # caller's dispatch) and so proceeds as it always did.
   local env="" k v i=3
-  for k in ARM PREV DECIDED DFROM DTO TX TX_BYTES ORGNEAR; do
+  for k in ARM PREV DECIDED DFROM DTO TX TX_BYTES ORGNEAR FAIL; do
     printf -v v '%q' "${!i-}"; i=$((i + 1))
     env+="CCD_SWAP_$k=$v "
   done
   _svc_run_detached \
     bash -c "sleep $jitter; ${env}CCD_SWAP_AUTO=1 exec '$HOME/.local/bin/ccd' swap '$1' '$2' >>'$REG/swap.log' 2>&1" \
-    || { echo "$(date '+%F %T') dispatch FAILED for $1 -> $2" >> "$REG/swap.log"; rm -f -- "$__dc"; }   # no unit will run, so none is pending
+    || { echo "$(date '+%F %T') dispatch FAILED for $1 -> $2" >> "$REG/swap.log"; rm -f -- "$__dc"; return 1; }   # no unit will run, so none is pending, and the caller may count none
 }
 
 _limit_json_num() {   # file key -> that key's number, or "" when absent, null or non-numeric.
@@ -25963,7 +25970,7 @@ _end_note_gone() {   # id — the supervise loop's `gone` exit: classify and rec
   _end_record "$id" "$(_end_cause "$id")"
   _inflight_write "$id" revival
 }
-_swap_end_cause() {   # -> this swap's cause word: swap-manual | swap-auto-home | swap-auto-rescue | swap-auto
+_swap_end_cause() {   # -> this swap's cause word: swap-manual | swap-auto-home | swap-auto-rescue | swap-auto-provider | swap-auto
   # CCD_SWAP_AUTO=1 is `_dispatch_swap`'s mark; CCD_SWAP_ARM names its arm
   # (D-5240, Task 11): `affinity` (the move home) or `rescue`, the same two
   # words `cmd_swap`'s act-time gates read. An automatic swap whose arm is not
@@ -25973,6 +25980,7 @@ _swap_end_cause() {   # -> this swap's cause word: swap-manual | swap-auto-home 
     affinity) printf 'swap-auto-home' ;;
     rescue)   printf 'swap-auto-rescue' ;;
     watchdog) printf 'swap-auto-rescue' ;;   # D-8123: the fleet watchdog's forced move is a rescue; the existing word, so no server contract changes
+    provider) printf 'swap-auto-provider' ;;
     wake)     printf 'swap-auto' ;;   # D-8123: the wake move is named by its arm but takes the generic word; a new cause word would be a server contract
     *)        printf 'swap-auto' ;;
   esac
@@ -26003,6 +26011,7 @@ _resume_prompt_for() {   # id -> the resume prompt this spawn submits (D-5237). 
     exited)           what="a supervisor revival after the process exited on its own" ;;
     swap-auto-home)   what="an automatic account swap back to its home account" ;;
     swap-auto-rescue) what="an automatic account swap off a blocked account" ;;
+    swap-auto-provider) what="an automatic account swap off a lane whose provider answered with errors" ;;
     swap-auto)        what="an automatic account swap" ;;
     swap-manual)      what="an account swap asked for by hand" ;;
     limit-resume)     what="a restart on the same account after its usage limit reset" ;;   # D-8123: `_watchdog_resume_here`
@@ -30864,6 +30873,7 @@ _rescue_history() {   # id -> 0 measured (RESCUE_COUNT, RESCUE_SKIP_LEFT, RESCUE
   # up on one full account, must see the targets the earlier ones took (the spread list), and a session moved off A by the
   # watchdog while A's telemetry still read under the ceiling must not be rescued back onto A (do not bounce). Both land
   # through the same `swap <id>:` line.
+  # SO IS A PROVIDER MOVE (`provider-rescue <id>: A -> B …`, the provider-failure ladder's): do not bounce, and spread.
   # UNMEASURABLE IS TODAY'S BEHAVIOUR: no chain wait, no skip. A log that does
   # not exist yet is a MEASURED empty history (rc 0), not an unreadable one, and
   # so is a tail with no rescue in it (`grep` rc 1). A forged line cannot crash
@@ -30874,11 +30884,11 @@ _rescue_history() {   # id -> 0 measured (RESCUE_COUNT, RESCUE_SKIP_LEFT, RESCUE
   [[ -e "$REG/swap.log" ]] || return 0
   [[ -f "$REG/swap.log" && -r "$REG/swap.log" ]] || return 2
   command -v python3 >/dev/null 2>&1 || return 2
-  out=$(tail -c "$RESCUE_LOG_TAIL_BYTES" "$REG/swap.log" 2>/dev/null | { grep -F -e ' auto-rescue ' -e ' watchdog-rescue ' -e ' wake-rescue ' -e ' swap ' || (( $? == 1 )); } | python3 -c '
+  out=$(tail -c "$RESCUE_LOG_TAIL_BYTES" "$REG/swap.log" 2>/dev/null | { grep -F -e ' auto-rescue ' -e ' watchdog-rescue ' -e ' provider-rescue ' -e ' wake-rescue ' -e ' swap ' || (( $? == 1 )); } | python3 -c '
 import re, sys, time
 sid, now, chain, spread = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
 pat = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) auto-rescue (\S+): (\S+) \(blocked\) -> (\S+)(.*)$")
-wd = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) watchdog-rescue (\S+): (\S+) -> (\S+)(.*)$")
+wd = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) (?:watchdog|provider)-rescue (\S+): (\S+) -> (\S+)(.*)$")
 wake = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) wake-rescue (\S+): (\S+) \(ceiling [^)]*\) -> (\S+)(.*)$")
 land = re.compile(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d swap (\S+): (\S+) -> (\S+) \(uuid ")
 count, left, recent, in_left, in_recent, pending = 0, [], [], set(), set(), None
@@ -30936,6 +30946,7 @@ _rescue_target() {   # id cur home hard-blocked hrc -> `_swap_target`'s stdout a
   # just-left-only pass below then decides, as it does for everything else.
   # NOR WITH A LANE WHOSE PROVIDER IS FAILING (`_provfail`): the spread pass's name is not taken when it is marked, and the
   # just-left-only pass, which ranks a marked lane behind the rest, decides.
+  # A SKIP LIST THE CALLER SET stands in every pass (a provider move's: the lanes it never takes, or not in this tier).
   # SPREAD NEVER PASSES OVER HOME: a recovered home another session was just
   # rescued onto would only be returned to by the affinity path at the next
   # idle tick — two moves where one does (do-not-bounce still skips a home the
@@ -30949,14 +30960,14 @@ _rescue_target() {   # id cur home hard-blocked hrc -> `_swap_target`'s stdout a
   fi
   recent=" $RESCUE_SKIP_RECENT "; [[ -n "$3" ]] && recent="${recent// "$3" / }"   # spread never passes over HOME: the affinity path would only move it back
   if [[ -n "${recent// /}" ]]; then
-    out=$(SWAP_TARGET_SKIP="$RESCUE_SKIP_LEFT $recent" _swap_target "$@"); rc=$?
+    out=$(SWAP_TARGET_SKIP="${SWAP_TARGET_SKIP:-} $RESCUE_SKIP_LEFT $recent" _swap_target "$@"); rc=$?
     [[ -n "$out" && "$rc" -eq 0 ]] && ! _provfail "${out%%$'\n'*}" && { printf '%s\n' "$out"; return 0; }
     # …and ITS undecidable answer is never returned: the unskipped probe above
     # already answered every question the skip cannot change (rc 2-4 are asked
     # before the walk), so an rc 5 here means the skip removed every measured
     # candidate and left only an unmeasured lane — the just-left-only pass decides.
   fi
-  SWAP_TARGET_SKIP="$RESCUE_SKIP_LEFT" _swap_target "$@"
+  SWAP_TARGET_SKIP="${SWAP_TARGET_SKIP:-} $RESCUE_SKIP_LEFT" _swap_target "$@"
 }
 
 _rescue_strand_cause() {   # id cur home hard-blocked hrc -> rc 0 prints a strand cause when rule 3's do-not-bounce alone left this rescue nowhere to go | rc 1 prints nothing
@@ -32185,6 +32196,7 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
       rescue)
         _swap_rescue_act_gate "$id" "$cur" || return 0 ;;
       watchdog) _swap_watchdog_act_gate "$id" "$cur" || return 0 ;;   # D-8123: the fleet watchdog's forced rescue re-asks its own sign at the act
+      provider) _swap_provider_act_gate "$id" "$target" || return 0 ;;   # the provider-failure ladder: the owed failure re-proved, the box empty
       wake) ;;   # D-8123: nothing is running to back off from or to re-queue, so no act gate; the carry's own pre-flights still apply
     esac
     if ! _route_degrade_at_move "$id" "${CCD_SWAP_DFROM:-}" "${CCD_SWAP_DTO:-}"; then
@@ -32392,7 +32404,8 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
   # Optional user notification (swap kills any attached remote session — give them a ping).
   # Drop an executable ~/.cc-sessions/notify.sh taking the message as its LAST argument (the models
   # step passes a leading --push; curl to a Discord webhook / ntfy topic / anything); absent hook = silent.
-  [[ -x "$REG/notify.sh" ]] && "$REG/notify.sh" "cc swap: $id moved $cur -> $target (limits) — reopen it on claude.ai under the $target account" >/dev/null 2>&1
+  # A provider move is silent: the ruling is one notice per outage, and the server raises it.
+  [[ "${CCD_SWAP_ARM:-}" != provider && -x "$REG/notify.sh" ]] && "$REG/notify.sh" "cc swap: $id moved $cur -> $target (limits) — reopen it on claude.ai under the $target account" >/dev/null 2>&1
   echo "swapped $id: $cur -> $target (discover on claude.ai under the $target account)"
 }
 
@@ -33073,7 +33086,7 @@ _wd_operator_hold_to() {   # var id wrapper -> rc 0 iff the operator's own hold 
 
 _watchdog_one() {   # id now minutes -> a forced rescue bumps WD_FORCED; everything else is a record and at most one log line. Always 0.
   local id="$1" now="$2" n="$3" sign="" wrapper="" home="" hrc project="" last="" bts="" rw="" target="" trc dfrom="" dto="" tx="" txb="" lw="" why="" m age since orgnear=""
-  if [[ -e "$REG/$id.hibernated" || -e "$REG/$id.stopped" ]]; then _watchdog_clear "$id"; return 0; fi
+  if [[ -e "$REG/$id.hibernated" || -e "$REG/$id.stopped" ]]; then _watchdog_clear "$id"; [[ ! -e "$REG/$id.provwait" ]] || rm -f -- "$REG/$id.provwait"; return 0; fi
   _session_probe "$id"
   case "$PROBE_VERDICT" in
     live) ;;
@@ -33082,7 +33095,7 @@ _watchdog_one() {   # id now minutes -> a forced rescue bumps WD_FORCED; everyth
   esac
   _reg_read_to wrapper "$id" wrapper && [[ -n "$wrapper" ]] || return 0
   _watchdog_sign_to sign "$id"
-  if [[ -z "$sign" ]]; then _watchdog_clear "$id"; return 0; fi
+  if [[ -z "$sign" ]]; then _watchdog_clear "$id"; _watchdog_provider "$id" "$now" "$wrapper"; return 0; fi   # a limit sign is the limit rescue's
   # THE EPISODE'S RECORD: `since` is the first pass that saw any sign; a different sign keeps it, with ONE exception. An
   # account-only sign is not a block: the session may be mid-turn on a reading of 98, with a draft being typed after it. When
   # a pane, banner, menu or transcript sign (a session that HAS stopped on the limit) replaces it, `since` restarts at now
@@ -33203,6 +33216,51 @@ _watchdog_one() {   # id now minutes -> a forced rescue bumps WD_FORCED; everyth
   return 0
 }
 
+_watchdog_provider() {   # id now wrapper -> a provider move bumps WD_FORCED; with no lane, `$REG/<id>.provwait`. Always 0.
+  # THE PROVIDER-FAILURE LADDER'S LAST RUNG (wave 3b): a session whose third counted failure on this lane is owed a retry
+  # (`_provfail_owed`) moves to another by itself, through `cmd_swap` under the arm `provider`, whose own gate asks all of it again.
+  # THE HOLDS: the pass's cap, SWAP_COOLDOWN, a swap the box just refused, and `_provider_hold_to`. A programme hold and a manual pin
+  # do not hold it, as they do not hold a limit rescue. A held session writes nothing and is asked again next pass.
+  # THE TARGET is the rescue's (`_rescue_target`: pools, continuity, the class, the kill switch, do-not-bounce, spread), with
+  # MEASURED room, as every forced move of this section, asked once per tier of `_provider_move_rank_to` with every other lane on
+  # its skip list, and every lane the session does not fit. Only rc 0 is a target: a move for a provider never steps a class down.
+  # NO LANE: the session stays, and wave 1's retries go on there. `provwait` (an epoch; one writer, this pass; a malformed one is
+  # none) says since when. It ends when the count does, at a good Stop or a move, or with the row's sleep. NEVER `_strand_mark`,
+  # which notifies once per session. rc 2-5, 7 and 8 are NOBODY CAN SAY, so nothing is moved and nothing is claimed.
+  local id="$1" now="$2" w="$3" r t cand skip ok target="" rc none=1 home hrc prev bts why
+  if ! _provfail_owed "$id" "$now"; then
+    [[ -e "$REG/$id.provwait" ]] && _provfail_row "$id" $(( now * 1000 )) && (( PF_N == 0 )) && rm -f -- "$REG/$id.provwait"
+    return 0
+  fi
+  _reg_get_to prev "$id" lastswap; _reg_get_to bts "$id" swapblocked; bts="${bts%% *}"
+  (( WD_FORCED < WATCHDOG_PER_PASS )) || return 0
+  [[ "$prev" =~ ^[0-9]{1,12}$ ]] && (( now - 10#$prev < SWAP_COOLDOWN )) && return 0
+  [[ "$bts" =~ ^[0-9]{1,12}$ ]] && (( now - 10#$bts < SWAPBLOCK_COOLDOWN )) && return 0
+  _provider_hold_to why "$id" "$now" && return 0
+  _home_measured_to home "$id"; hrc=$?; [[ "$hrc" -ne 2 ]] || home=""
+  for r in 0 1 2; do
+    skip="" ok=""
+    for cand in $(_pool_for "$id") $home; do
+      _provider_move_rank_to t "$cand" "$w" "$PF_FIRST" "$PROVFAIL_MARKED" "$PROVFAIL_GOODS" && [[ "$t" == "$r" ]] && _provider_move_fits "$id" "$w" "$cand" && ok=1 || skip+=" $cand"
+    done
+    [[ -n "$ok" ]] || continue
+    target=$(CCD_RESCUE_MEASURED_ONLY=1 SWAP_TARGET_SKIP="$skip" _rescue_target "$id" "$w" "$home" 1 "$hrc"); rc=$?
+    (( rc == 0 )) && [[ -n "$target" ]] && break
+    (( rc <= 1 || rc == 6 )) || none=""
+    target=""
+  done
+  if [[ -z "$target" ]]; then
+    _reg_get_to why "$id" provwait
+    [[ -z "$none" || "$why" =~ ^[0-9]{1,12}$ ]] || { _reg_set "$id" provwait "$now" && echo "$(date '+%F %T') provider-wait $id: $w answers with provider errors and no other lane can take it; it is retried there" >> "$REG/swap.log"; }
+    return 0
+  fi
+  _reg_set "$id" lastswap "$now"
+  echo "$(date '+%F %T') provider-rescue $id: $w -> $target [home=$home] fails=$PF_N" >> "$REG/swap.log"
+  if _dispatch_swap "$id" "$target" provider "$prev" "$now" "" "" "" "" "" "$PF_LAST"; then WD_FORCED=$(( WD_FORCED + 1 ))
+  else CCD_SWAP_PREV="$prev" _swap_lastswap_restore "$id"; fi   # no unit: the failures must still count, or the next try is three failures away
+  return 0
+}
+
 # THE LANE-FAILING MARK (the provider-failure ladder, wave 3a, D-9095; docs/superpowers/plans/2026-11-25-provider-retry.md).
 # `$REG/<lane>-provfail` holds `<epoch> <err>`, `_authdead`'s shape: several sessions' turn markers say the provider answers this
 # lane's turns with errors. A PREFERENCE of an AUTOMATIC move and nothing else (`_swap_target`'s home arm and its ranking,
@@ -33213,7 +33271,9 @@ _watchdog_one() {   # id now minutes -> a forced rescue bumps WD_FORCED; everyth
 # The seconds: TTL, how long a mark means anything after its write, and how old a lane's newest failure may be at the write;
 # SPAN, how far back one session's consecutive failures are counted; FRESH, how old a failure that is still owed may be to
 # count beside another session's (the server's outage notice uses the same 10 minutes).
-PROVFAIL_TTL=1800 PROVFAIL_SPAN=7200 PROVFAIL_FRESH=600
+# MARKED and GOODS are the pass's own answer to the moves it decides (`_watchdog_provider`): the marked lanes, and `<lane>=<ms>`
+# words, each lane's newest good Stop.
+PROVFAIL_TTL=1800 PROVFAIL_SPAN=7200 PROVFAIL_FRESH=600 PROVFAIL_MARKED="" PROVFAIL_GOODS=""
 _provfail() {   # lane [now] -> rc 0 iff a well-formed mark younger than PROVFAIL_TTL stands (PROVFAIL_AT = its epoch) | 1
   # `-f` before the open and `! -L`, `_authdead`'s rungs and reasons. Anything but `<epoch> <word>` is no mark, and one written
   # more than a minute AHEAD of this clock is none either, or a clock set back would keep it for ever.
@@ -33230,26 +33290,74 @@ _provfail_holds_home() {   # id home -> rc 0 iff home is marked and the operator
   [[ "$REG/$1.home" -nt "$REG/$2-provfail" ]] || return 0
   _reg_get_to sw "$1" lastswap; at=$(_plat_mtime "$REG/$1.home") && [[ "$sw" =~ ^[0-9]{1,12}$ ]] && (( 10#$sw > at ))
 }
+_provfail_row() {   # id now-ms [lastswap] -> rc 0 and PF_LANE, PF_GOOD and the counted failures PF_N, PF_FIRST, PF_LAST: what the row's marker says of the lane it is on | 1 evidence of nothing (every PF_* is emptied first)
+  # ONE ROW'S EVIDENCE. The lane is the row's `wrapper`, and a stamp counts for it only when it is newer than the row's
+  # `lastswap` (or the one the caller names: an act gate's, whose own dispatch has just stamped the field): what a session did
+  # before its last move it did on another lane. A field that is absent, unreadable or not this conversation's is evidence of
+  # NOTHING, neither failure nor health (`_turn_mark_read`'s rc, the uuid test, a `lastswap` that is no epoch), and so is a stamp
+  # more than a minute ahead of this clock.
+  #   PF_GOOD, the newest good Stop. A `done` line whose event is Stop; or, on the lines a later event wrote, an empty `failAts`
+  #   beside no failure or a provider's: the hook empties the list at a Stop and a clear alone, and a clear writes no `stopAt`.
+  #   Beside any other word the `stopAt` may be that failure's own, so it says nothing.
+  #   PF_N, PF_FIRST, PF_LAST: how many counted failures inside PROVFAIL_SPAN, the first and the newest, in ms.
+  local uuid sw="${3:-}" lo t
+  PF_LANE="" PF_N=0 PF_FIRST=0 PF_LAST=0 PF_GOOD=0
+  _reg_read_to PF_LANE "$1" wrapper && _is_valid_wrapper "$PF_LANE" && _reg_read_to uuid "$1" uuid && [[ -n "$uuid" ]] || return 1
+  [[ -n "$sw" ]] || _reg_read_to sw "$1" lastswap || { (( $? == 1 )) || return 1; sw=0; }
+  [[ "$sw" =~ ^[0-9]{1,12}$ ]] && _turn_mark_read "$1" && [[ "$TM_SID" == "\"$uuid\"" ]] || return 1
+  lo=$(( 10#$sw * 1000 )) t=$(( 10#${TM_STOP:-0} ))
+  [[ "$TM_STATE.$TM_EVENT" == done.Stop || "$TM_FAILS$TM_ERR" =~ ^\[\](null|\"server_error\"|\"overloaded\")$ ]] && (( t > lo && t <= $2 + 60000 )) && PF_GOOD=$t
+  for t in ${TM_FAILS//[][,]/ }; do
+    (( 10#$t > lo && 10#$t > $2 - PROVFAIL_SPAN * 1000 && 10#$t <= $2 + 60000 )) && PF_N=$(( PF_N + 1 )) PF_LAST=$(( 10#$t )) PF_FIRST=$(( PF_FIRST ? PF_FIRST : 10#$t ))
+  done
+  return 0
+}
+_provfail_owed() {   # id now [lastswap] -> rc 0 iff its third counted failure since its last move, or a later one, still owes a retry (the PF_* are `_provfail_row`'s) | 1
+  # Counted from the marker alone, as wave 1 counts (`server/src/coord/providerRetry.ts#providerRetryOwed`): no turn newer than the
+  # newest failure. A line whose own word is not a provider's (a limit, `unknown`, `max_output_tokens`) owes none: what stopped it
+  # last was something else.
+  _provfail_row "$1" $(( $2 * 1000 )) "${3:-}" && (( PF_N >= 3 && PF_LAST > 10#${TM_TURN:-0} )) && [[ "$TM_ERR" =~ ^\"(server_error|overloaded)\"$ ]]
+}
+_provider_hold_to() {   # var id now -> rc 0 and var = idle-gate | background | draft | no-box, what a provider move waits for | 1 and var empty: nothing (asked after `_provfail_owed`)
+  # `_swap_idle_gate` is the affinity move's own question (a turn, a shell, a touch, a pane too narrow to tell, a live status other
+  # than idle, which an open question is). It reads nothing into the `bg` of a `failed` line, which the last good Stop counted, so
+  # that is asked here: any count but 0 holds, for the 30 minutes from the first failure in which such work may still be running.
+  # A draft is a person about to continue the session; no box is a dialog. The box is READ, never written.
+  local __r=""
+  if ! _swap_idle_gate "$2"; then __r=idle-gate
+  elif [[ "$TM_BG" != 0 ]] && (( $3 * 1000 - PF_FIRST < PROVFAIL_TTL * 1000 )); then __r=background
+  else case "$(_pane_box_read "$("${_TMX_ARGV[@]}" capture-pane -t "$(_tmux_t "$2")" -p -e 2>/dev/null)")" in empty) ;; draft) __r=draft ;; *) __r=no-box ;; esac; fi
+  printf -v "$1" '%s' "$__r"; [[ -n "$__r" ]]
+}
+_swap_provider_act_gate() {   # id target -> rc 0 proceed as decided | 1 cancelled (logged, `lastswap` restored, nothing stopped)
+  # `_swap_rescue_act_gate` would cancel this move as no longer blocked: a provider error is no limit sign. So its own questions,
+  # after the jitter: the operator may have stopped the session; the failure the decision read (CCD_SWAP_FAIL) is still the newest
+  # and still owed, counted since the `lastswap` the decision saw (the dispatch has stamped the field since, and a stamp that is no
+  # longer the dispatch's is a move that landed meanwhile, the operator's own: nothing is undone and its stamp stays); the target
+  # still takes work; and `_provider_hold_to`. NO KEY IS SENT, here or after.
+  local id="$1" now why="" sw
+  _reg_get_to sw "$id" lastswap
+  if [[ -z "$sw" || "$sw" != "${CCD_SWAP_DECIDED:-}" ]]; then echo "$(date '+%F %T') provider-cancel $id: it moved meanwhile" >> "$REG/swap.log"; return 1; fi
+  _now_s_to now; _session_probe "$id"
+  if [[ -e "$REG/$id.stopped" || -e "$REG/$id.hibernated" ]]; then why="stopped or asleep"
+  elif [[ "$PROBE_VERDICT" != live ]]; then why="not live ($PROBE_VERDICT)"
+  elif ! _provfail_owed "$id" "$now" "${CCD_SWAP_PREV:-0}" || [[ "$PF_LAST" != "${CCD_SWAP_FAIL:-}" ]]; then why="its newest failure changed or is no longer owed"
+  elif _provfail "$2" || ! _account_ok "$2" || ! _avail "$2"; then why="$2 no longer takes it"
+  else _provider_hold_to why "$id" "$now" || return 0; fi
+  echo "$(date '+%F %T') provider-cancel $id: $why" >> "$REG/swap.log"
+  _swap_lastswap_restore "$id"
+  return 1
+}
 _provfail_pass() {   # now -> each lane's mark set or cleared from every row's turn marker; its rc says nothing
-  # THE EVIDENCE, one row at a time. The lane is the row's `wrapper`, and a stamp counts for it only when it is newer than the
-  # row's `lastswap`: what a session did before its last move it did on another lane. A field that is absent, unreadable or not
-  # this conversation's is evidence of NOTHING, neither failure nor health (`_turn_mark_read`'s rc, the uuid test, a `lastswap`
-  # that is no epoch), and so is a stamp more than a minute ahead of this clock.
-  #   HEALTH (`good`): the newest good Stop. A `done` line whose event is Stop; or, on the lines a later event wrote, an empty
-  #   `failAts` beside no failure or a provider's: the hook empties the list at a Stop and a clear alone, and a clear writes no
-  #   `stopAt`. Beside any other word the `stopAt` may be that failure's own, so it says nothing.
-  #   FAILURE: three counted failures of one session inside PROVFAIL_SPAN, the newest inside PROVFAIL_TTL (2), or one still owed
-  #   inside PROVFAIL_FRESH (1). A lane at 2 is failing, unless its good Stop is newer than the newest of those failures.
-  local now=$(( $1 * 1000 )) f id w uuid sw lo n l t h; local -A good=() last=() hits=() err=()
+  # HEALTH (`good`): the lane's newest good Stop. FAILURE: three counted failures of one session inside PROVFAIL_SPAN, the newest
+  # inside PROVFAIL_TTL (2), or one still owed inside PROVFAIL_FRESH (1). A lane at 2 is failing, unless its good Stop is newer
+  # than the newest of those failures. Each row's own evidence is `_provfail_row`'s.
+  local now=$(( $1 * 1000 )) f id w l h; local -A good=() last=() hits=() err=()
   for f in "$REG"/*.uuid; do id="${f##*/}"; id="${id%.uuid}"
-    _reg_read_to w "$id" wrapper && _is_valid_wrapper "$w" && _reg_read_to uuid "$id" uuid && [[ -n "$uuid" ]] || continue
-    _reg_read_to sw "$id" lastswap || { (( $? == 1 )) || continue; sw=0; }
-    [[ "$sw" =~ ^[0-9]{1,12}$ ]] && _turn_mark_read "$id" && [[ "$TM_SID" == "\"$uuid\"" ]] || continue
-    lo=$(( 10#$sw * 1000 )) n=0 l=0 h=0 t=$(( 10#${TM_STOP:-0} ))
-    [[ "$TM_STATE.$TM_EVENT" == done.Stop || "$TM_FAILS$TM_ERR" =~ ^\[\](null|\"server_error\"|\"overloaded\")$ ]] \
-      && (( t > lo && t <= now + 60000 && t > ${good[$w]:-0} )) && good[$w]=$t
-    for t in ${TM_FAILS//[][,]/ }; do (( 10#$t > lo && 10#$t > now - PROVFAIL_SPAN * 1000 && 10#$t <= now + 60000 )) && n=$(( n + 1 )) l=$(( 10#$t )); done
-    if (( n >= 3 && l > now - PROVFAIL_TTL * 1000 )); then h=2; elif (( n && l > now - PROVFAIL_FRESH * 1000 && l > 10#${TM_TURN:-0} )); then h=1; else continue; fi
+    _provfail_row "$id" "$now" || continue
+    w="$PF_LANE" l=$PF_LAST
+    (( PF_GOOD > ${good[$w]:-0} )) && good[$w]=$PF_GOOD
+    if (( PF_N >= 3 && l > now - PROVFAIL_TTL * 1000 )); then h=2; elif (( PF_N && l > now - PROVFAIL_FRESH * 1000 && l > 10#${TM_TURN:-0} )); then h=1; else continue; fi
     hits[$w]=$(( ${hits[$w]:-0} + h )); (( l <= ${last[$w]:-0} )) || { last[$w]=$l; err[$w]="${TM_ERR//\"/}"; }
   done
   # CLEARED FIRST, so a failure newer than the good Stop that ends a mark sets a new one in the same pass. A standing mark is
@@ -33263,6 +33371,48 @@ _provfail_pass() {   # now -> each lane's mark set or cleared from every row's t
     f="$REG/.provfail.$$.tmp"; printf '%s %s' "$1" "${err[$w]:-unknown}" > "$f" && _plat_mv_notdir "$f" "$REG/$w-provfail" || { rm -f -- "$f"; continue; }
     echo "$(date '+%F %T') lane-failing $w: its provider answers with errors (${err[$w]:-unknown}); automatic moves prefer other lanes for at most $(( PROVFAIL_TTL / 60 )) min" >> "$REG/swap.log"
   done
+  PROVFAIL_MARKED="" PROVFAIL_GOODS=""; for w in "${CCRC_ACCOUNTS[@]}"; do
+    _provfail "$w" "$1" && PROVFAIL_MARKED+=" $w"
+    [[ -z "${good[$w]:-}" ]] || PROVFAIL_GOODS+=" $w=${good[$w]}"
+  done
+}
+
+_lane_provider_to() {   # var lane -> var = anthropic | codex | lane:<lane>: `server/src/coord/providerOutage.ts#outageProviderOf`'s rule over the roster's arrays
+  if _is_anthropic_backend "$2"; then printf -v "$1" '%s' anthropic
+  elif _is_codex_backend "$2"; then printf -v "$1" '%s' codex; else printf -v "$1" '%s' "lane:$2"; fi
+}
+
+_provider_move_rank_to() {   # var cand cur first marked goods -> rc 0 and var = 0 proved | 1 another provider | 2 unproved, same provider; rc 1 and var empty = never
+  # A PROVIDER MOVE'S ORDER, AND ITS REFUSALS (wave 3b). PURE over its arguments and the roster's arrays:
+  # `first` is the episode's first failure, `marked` the marked lanes, `goods` `<lane>=<newest good Stop>` words, one clock for
+  # both. Never the lane it is on, a marked lane, or a lane of a provider with two marked lanes. Pools, class, room and the
+  # operator's holds are the caller's, before this and unchanged.
+  local __p __q __m __n=0 __r=2
+  printf -v "$1" ''; _lane_provider_to __p "$2"
+  for __m in $5; do _lane_provider_to __q "$__m"; [[ "$__m" != "$2" ]] || return 1; [[ "$__q" != "$__p" ]] || __n=$(( __n + 1 )); done
+  [[ "$2" != "$3" ]] && (( __n < 2 )) || return 1
+  _lane_provider_to __q "$3"; [[ "$__q" == "$__p" ]] || __r=1
+  for __m in $6; do if [[ "${__m%%=*}" == "$2" ]] && (( ${__m##*=} > $4 )); then __r=0; fi; done
+  printf -v "$1" '%s' "$__r"
+}
+
+_provider_move_fits() {   # id cur cand -> rc 0 the session's context fits cand's window | 1 it does not, or nobody measured it and cand is on another provider
+  # THE CONTEXT: `ctxTokens` of the statusline's sidecar, when it names this conversation, is at most PROVFAIL_SPAN old and is not
+  # zero (a resumed session that has run no turn). THE WINDOW: `CLAUDE_CODE_MAX_CONTEXT_TOKENS` as the lane's own settings state
+  # it (`shared/modelenv.mjs#contextWindowFor` decides it and writes it there). With none stated an Anthropic lane entered from
+  # another provider has 200000, the smallest window a Claude model has (its `CLIENT_DEFAULT_CONTEXT_TOKENS`); any other lane has
+  # no window anybody measured, and settings that cannot be read state nothing. The landing's first turn sends the whole
+  # conversation and still needs room to answer, so it fits at nine tenths.
+  local p q uuid d t="" tok="" win="" now re='"CLAUDE_CODE_MAX_CONTEXT_TOKENS"[[:space:]]*:[[:space:]]*"?([0-9]{1,8})"?[[:space:]]*[,}]'
+  _lane_provider_to p "$2"; _lane_provider_to q "$3"; _cfg_dir_to d "$3"; _now_s_to now
+  [[ "$q" == anthropic && "$p" != "$q" ]] && win=200000
+  if [[ -f "$d/settings.json" ]] && _file_read_to t "$d/settings.json"; then [[ "$t" =~ $re ]] && win="${BASH_REMATCH[1]}"
+  elif [[ -e "$d/settings.json" || -L "$d/settings.json" ]]; then win=""; fi
+  d="$REG/usage/$1.json"; re='"ctxTokens":([1-9][0-9]{0,8})[,}]'
+  if _reg_read_to uuid "$1" uuid && [[ -n "$uuid" && -f "$d" && ! -L "$d" ]] && _file_read_to t "$d" && [[ "$t" == *"\"uuid\":\"$uuid\""* && "$t" =~ \"ts\":([0-9]{1,12})[,}] ]]; then
+    (( now - 10#${BASH_REMATCH[1]} <= PROVFAIL_SPAN )) && [[ "$t" =~ $re ]] && tok="${BASH_REMATCH[1]}"
+  fi
+  if [[ -n "$tok" && -n "$win" ]]; then (( tok * 10 <= 10#$win * 9 )); else [[ "$p" == "$q" ]]; fi
 }
 
 cmd_limit_watchdog() {   # (no args) — one pass over every live session; exits 0 unless the registry is unreadable
@@ -45465,6 +45615,7 @@ DOCS_MAX_FILE_BYTES=4194304
 DOCS_MAX_ANSWER_BYTES=6291456
 DOCS_MAX_LISTING_WIRE_BYTES=1048576
 DOCS_MAX_ENTRIES=5000
+DOCS_INDEX_NEWEST_PER_SECTION=5
 DOCS_DRAFT_HASH_BUDGET=33554432
 DOCS_MAX_DRAFTS=1000
 DOCS_FETCH_MIN_INTERVAL_MS=10000
@@ -45586,7 +45737,8 @@ def valid_qualified_ref(s):
 
 def valid_ref(s):
     # The two grammars are disjoint: a bare name may not start with refs/.
-    return valid_bare_ref(s) or valid_qualified_ref(s)
+    return (valid_bare_ref(s) or valid_qualified_ref(s)
+            or (s.startswith('refs/tags/') and valid_bare_ref(s[len('refs/tags/'):])))
 
 
 def valid_sha(s):
@@ -46693,11 +46845,31 @@ def resolve_qualified(repo, q, dl):
                       rows.get(other), dl)
 
 
+def legacy_ref(repo, name, row, tried, dl):
+    """Return a canonical version hint, or the existing unresolved refusal."""
+    ctx = {'tried': tried}
+    if row is not None:
+        commit = usable_commit(row)
+        if commit is not None:
+            ctx['resolved'] = {'commit': commit, 'via': 'tag'}
+        else:
+            ctx['hint'] = 'tag'
+    elif re.fullmatch(r'[0-9a-f]{7,64}', name):
+        # Disambiguate across all object types before asking whether the one object is a commit.
+        result = ref_git(repo, ['rev-parse', '--disambiguate=' + name], dl)
+        ids = result.out.decode('ascii', 'replace').splitlines()
+        if result.rc == 0 and len(ids) == 1 and valid_sha(ids[0]):
+            kind = ref_git(repo, ['rev-parse', '--verify', '--end-of-options', ids[0] + '^{commit}'], dl)
+            if kind.rc == 0 and kind.out.strip() == ids[0].encode('ascii'):
+                ctx['resolved'] = {'commit': ids[0], 'via': 'commit'}
+    raise fail('unresolved-ref', **ctx)
+
+
 def resolve_bare(repo, b, dl):
     """Section 2 (c) 3, Q2: the newer side wins. One for-each-ref covers L, R,
-    the tag (read only for the hint) and, for a name starting origin/, the
-    remote-tracking ref of the remainder (read only for suggest). A candidate
-    that does not peel to a commit is excluded exactly as if it were absent."""
+    a possible legacy tag and, for a name starting origin/, the remote-tracking
+    ref of the remainder (served if there is no literal local branch). A side
+    that does not peel to a commit cannot win."""
     local, origin, tag = REF_HEADS + b, REF_ORIGIN + b, REF_TAGS + b
     refs = [local, origin, tag]
     suggest = None
@@ -46707,13 +46879,12 @@ def resolve_bare(repo, b, dl):
     rows = for_each_ref(repo, refs, dl)
     lrow, orow = rows.get(local), rows.get(origin)
     tried = [{'ref': local, 'result': ref_result(lrow)}, {'ref': origin, 'result': ref_result(orow)}]
+    if lrow is None and suggest is not None and usable_commit(rows.get(suggest)) is not None:
+        answer = resolve_qualified(repo, suggest, dl)
+        answer['requested'] = b
+        return answer
     if lrow is None and orow is None:
-        ctx = {'tried': tried}
-        if suggest is not None and usable_commit(rows.get(suggest)) is not None:
-            ctx['suggest'] = suggest
-        if tag in rows:
-            ctx['hint'] = 'tag'
-        raise fail('unresolved-ref', **ctx)
+        return legacy_ref(repo, b, rows.get(tag), tried, dl)
     lc, oc = usable_commit(lrow), usable_commit(orow)
     if lc is None and oc is None:
         bad = local if lrow is not None else origin
@@ -46730,13 +46901,16 @@ def resolve_bare(repo, b, dl):
 
 def resolve(repo, requested, dl):
     """Section 2 (c): the DocsTreeOk ref object for --ref `requested`, None
-    being the default view. It raises unresolved-ref {tried, suggest?, hint?},
+    being the default view. It raises unresolved-ref {tried, resolved?, hint?},
     ref-not-commit {ref, type} or no-default-branch {tried}. read_args has
     already applied the grammar, so the last line is a contract assertion."""
     if requested is None:
         return resolve_default(repo, dl)
     if valid_qualified_ref(requested):
         return resolve_qualified(repo, requested, dl)
+    if requested.startswith(REF_TAGS) and valid_bare_ref(requested[len(REF_TAGS):]):
+        row = for_each_ref(repo, [requested], dl).get(requested)
+        return legacy_ref(repo, '', row, [{'ref': requested, 'result': ref_result(row)}], dl)
     if valid_bare_ref(requested):
         return resolve_bare(repo, requested, dl)
     raise fail('bad-ref')
@@ -46898,6 +47072,35 @@ def list_committed(repo, commit, dl, stdout_cap=GIT_STDOUT_CAP):
     return sections, entries, unlisted, blobs
 
 
+def trim_newest(obj):
+    """The docs-index answer `obj` with `newest` dropped from the LAST projects
+    backwards, as few as the wire bound needs, and newestTruncated: true; None
+    when it is over the bound even with every `newest` gone. The rule: the
+    projects that carry names keep them in order from the front, and the
+    largest such prefix whose framed line fits is kept whole (a project's names
+    go together, never name by name). Fitting only gets easier as the prefix
+    shrinks, so it is found by bisection, a few serialisations. Every
+    `sections` count is kept."""
+    rows = obj['projects']
+    have = [i for i, r in enumerate(rows) if 'newest' in r]
+
+    def cut(k):
+        drop = set(have[k:])
+        return dict(obj, newestTruncated=True, projects=[
+            dict((x, v) for x, v in r.items() if x != 'newest') if i in drop else r for i, r in enumerate(rows)])
+
+    def fits(k):
+        return framed_len(line_of(cut(k))) <= DOCS_MAX_LISTING_WIRE_BYTES
+
+    if not have or not fits(0):
+        return None
+    lo, hi = 0, len(have) - 1
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        lo, hi = (mid, hi) if fits(mid) else (lo, mid - 1)
+    return cut(lo)
+
+
 def guard_listing(obj, line):
     """The tree and index final guard (section 2 (b), section 6.1): `line`, or
     the too-many-entries line in its place.
@@ -46910,6 +47113,10 @@ def guard_listing(obj, line):
     costs 2 bytes in the line and 4 once framed (M6.8). Either bound over
     gives too-many-entries {count, bytes}, carrying the answer's own
     elapsedMs. A failure answer is not a listing and passes through untouched.
+
+    docs-index only, a line over the wire bound with the entry count in bound
+    is first trimmed by trim_newest: the projects' `newest` names go, never a
+    count, and the answer is refused only if it is still over without them.
     """
     if obj.get('ok') is not True:
         return line
@@ -46917,6 +47124,10 @@ def guard_listing(obj, line):
     size = framed_len(line)
     if count <= DOCS_MAX_ENTRIES and size <= DOCS_MAX_LISTING_WIRE_BYTES:
         return line
+    if count <= DOCS_MAX_ENTRIES and obj['verb'] == 'docs-index':
+        trimmed = trim_newest(obj)
+        if trimmed is not None:
+            return line_of(trimmed)
     return line_of({'v': 1, 'verb': obj['verb'], 'ok': False, 'elapsedMs': obj['elapsedMs'],
                     'failure': 'too-many-entries', 'count': count, 'bytes': size})
 
@@ -47088,20 +47299,33 @@ def index_section_counts(repo, commit, dl):
     under the section at commit: it is absent there, or it is itself a
     symlink, a gitlink or a file (docs-tree's absent and not-a-directory).
     An expiry, an overflow or a non-zero rc raises, which index_row reads as
-    repo-unreadable."""
+    repo-unreadable.
+
+    Returns (counts, newest). newest is {slug: names} for every section with a
+    count above 0: the section-relative paths listing_admit admitted, from
+    this same listing, the first DOCS_INDEX_NEWEST_PER_SECTION in DESCENDING
+    UTF-16 code-unit order of the full path (the console's string order, which
+    its project page's newest-first list uses too, in every section); a section
+    with no admitted name has no key."""
     argv = ['ls-tree', '-r', '-z', '--name-only', '--full-tree', '--end-of-options', commit, '--']
     argv.extend(SECTIONS.values())
     s = docs_git(repo.path, argv, call_s=CALL_S['index'], dl=dl, ceiling=ceiling_of(repo.path))
     if s.rc != 0:
         raise fail('git-failed', step='ls-tree', rc=s.rc, stderrHead=stderr_head(s.err))
     counts = {}
+    names = {}
     for name in s.out.split(b'\0'):
         for slug, sb in LS_SECTION_BYTES:
             if name.startswith(sb + b'/'):
-                listed = listing_admit(name[len(sb) + 1:])[1] is None
-                counts[slug] = counts.get(slug, 0) + (1 if listed else 0)
+                rel = listing_admit(name[len(sb) + 1:])[0]
+                counts.setdefault(slug, 0)
+                if rel is not None:
+                    counts[slug] += 1
+                    names.setdefault(slug, []).append(rel)
                 break
-    return dict((slug, counts.get(slug)) for slug in SECTIONS)
+    newest = dict((slug, sorted(names[slug], key=lambda r: r.encode('utf-16-be'), reverse=True)[:DOCS_INDEX_NEWEST_PER_SECTION])
+                  for slug in SECTIONS if slug in names)
+    return dict((slug, counts.get(slug)) for slug in SECTIONS), newest
 
 
 def index_failed_row(ctx, row, f):
@@ -47148,7 +47372,7 @@ def index_row(ctx, name, dl, now):
             row['state'] = 'no-default-branch'
             return row
         branch = ref_side(served)[0]
-        sections = index_section_counts(repo, commit, dl)
+        sections, newest = index_section_counts(repo, commit, dl)
     except Fail as f:
         if index_budget_spent(f, dl):
             return INDEX_UNWALKED
@@ -47156,6 +47380,8 @@ def index_row(ctx, name, dl, now):
         return row
     row['default'] = {'name': branch, 'via': via, 'commit': commit}
     row['sections'] = sections
+    if newest:
+        row['newest'] = newest
     st = stamp_for(ctx.reg, repo.key, branch)
     if st is not None:
         ages = stamp_ages(st, now)
@@ -50078,7 +50304,14 @@ def folder_registry_write(ctx, op, label, body=None, guard=None, purge=None, dl=
             raise Fail('unreadable', {'reason': 'foreign-owner'})
         if stat.S_IMODE(st.st_mode) != 0o700:
             os.fchmod(reg_fd, 0o700)
-        lock_fd = os.open(FOLDER_LOCK_NAME, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, 0o600, dir_fd=reg_fd)
+        # A registry a refused first add took back (its lock, then its directory) stands no more: a remove has nothing to
+        # remove, and an add retries (review 3783 A1). The directory can go before the lock's open (review 3816 R2), so
+        # that open's ENOENT answers the same.
+        taken_back = lambda: Fail('unknown-folder') if op == 'remove' else Fail('unreadable', {'reason': 'registry-busy'})
+        try:
+            lock_fd = os.open(FOLDER_LOCK_NAME, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, 0o600, dir_fd=reg_fd)
+        except FileNotFoundError:
+            raise taken_back()
         try:
             if not stat.S_ISREG(os.fstat(lock_fd).st_mode):
                 raise Fail('unreadable', {'reason': 'lock-not-regular'})
@@ -50095,7 +50328,7 @@ def folder_registry_write(ctx, op, label, body=None, guard=None, purge=None, dl=
                 time.sleep(0.02)
             locked = True
             if os.fstat(lock_fd).st_nlink == 0:   # taken back with its empty registry by a refused first add: nothing stands
-                raise Fail('unknown-folder') if op == 'remove' else Fail('unreadable', {'reason': 'registry-busy'})
+                raise taken_back()
             closer = guard() if guard is not None else None
             try:
                 os.lstat(label, dir_fd=reg_fd)

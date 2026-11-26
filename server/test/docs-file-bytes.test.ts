@@ -69,7 +69,7 @@ describe('M5.1 — the representation is a function of the path\'s class: only a
 
   const CLASSES: readonly (readonly [string, string])[] = [
     ['a.md', 'markdown'], ['a.svg', 'svg'], ['a.html', 'html'], ['a.json', 'text'], ['a.woff2', 'other'],
-    ['a.pdf', 'other'], ['a', 'other'],
+    ['a.pdf', 'pdf'], ['a', 'other'],
   ];
 
   it.each(CLASSES)('%s answers 200 JSON {ok, contentClass: %s, show, from: ccd}, no-store', async (path, cls) => {

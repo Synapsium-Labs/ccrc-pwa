@@ -80,6 +80,9 @@ const MODELS_SRC = read('server/src/laneModelsRoutes.ts');
 /** The approval census's read (approvals PR 1, Task 1.4): `GET /api/approvals/census`, a routes file of its own with NO box-token
  *  lane. The operator's read, session-gated: `APPROVAL_CENSUS_DOORS`. */
 const APPROVAL_CENSUS_SRC = read('server/src/coord/approvalCensusRoutes.ts');
+/** The artifact tier's listener (native Docs HTML artifacts X5, A1.3): four `GET` doors on an instance of its own, NEVER the console's.
+ *  No box token, no cookie and no session: `ARTIFACT_DOORS`. */
+const ARTIFACT_SRC = read('server/src/artifacts/routes.ts');
 
 /** The one-time pass over the delegation broker's unmeasured records (session helpers S2, D-8874): `GET` and `POST
  *  /api/coord/delegation-backfill`, a routes file of its own with NO box-token lane. The operator's, session-gated:
@@ -209,7 +212,7 @@ const OVERLORD_OPERATOR_DOORS = ['/api/overlord/designation', '/api/overlord/des
   '/api/overlord/model', '/api/overlord/account-set',
   // designation B: Rebind (a step-up) and Restart (a recovery, no step-up)
   '/api/overlord/rebind', '/api/overlord/restart',
-  '/api/overlord/ladder', '/api/overlord/rung', '/api/overlord/pause', '/api/overlord/latches/:cause/clear',
+  '/api/overlord/ladder', '/api/overlord/readiness', '/api/overlord/rung', '/api/overlord/pause', '/api/overlord/latches/:cause/clear',
   // the console's witness exchange (Overlord W1 authority journal, Task 6): the account gate, no step-up, no box token
   '/api/overlord/witness',
   // Confirm the restore (authority journal C): the guard's state, and the door behind the step-up
@@ -236,6 +239,13 @@ const MODELS_DOORS = ['/api/models/:lane'];
  *  derives the file's registrations and compares in both directions. The operator's, behind the session gate, no box token, in no
  *  EXEMPT table. */
 const APPROVAL_CENSUS_DOORS = ['/api/approvals/census'];
+
+/** The artifact listener's four doors (X5 A1.3, spec 3.4), registered from `server/src/artifacts/routes.ts` on the artifact tier's OWN
+ *  Fastify instance, never the console's: the console's auth gate never sees them, so they are in no EXEMPT table and no
+ *  `SESSION_ONLY_ALL` list. They take no box token, no cookie and no session: a path's capability token is the whole credential, and
+ *  A1 answers the identical 404 on every one. Hand-kept for the NAME only, like `MODELS_DOORS`: the describe below derives the file's
+ *  registrations and compares in both directions. */
+const ARTIFACT_DOORS = ['/', '/a/:token', '/c/:token/*', '/clear'];
 
 /** The one-time pass's door (session helpers S2, D-8874), registered from `server/src/coord/delegationBackfillRoutes.ts`, which no harvest
  *  above can see: the dry run (`GET`) and the pass or its undo (`POST`), one path registered twice, so listed once per registration and
@@ -539,7 +549,7 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     expect([...new Set(regs.map((k) => k.slice(k.indexOf(' ') + 1)))].sort(),
       'overlordRoutes.ts and OVERLORD_OPERATOR_DOORS disagree — a door was registered, or a name listed, on one side only')
       .toEqual([...OVERLORD_OPERATOR_DOORS].sort());
-    expect(regs.length, 'the Overlord doors file registers fourteen routes (seven designation, four ladder, two restore and the witness exchange)').toBe(14);
+    expect(regs.length, 'the Overlord doors file registers fifteen routes (seven designation, four ladder, two restore, the witness exchange and the readiness read)').toBe(15);
     expect(lanesIn(OVERLORD_SRC), 'a designation door consults the box token — they are the operator\'s').toEqual([]);
     for (const key of regs) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
     for (const door of OVERLORD_OPERATOR_DOORS) {
@@ -594,6 +604,27 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     for (const key of keys) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
     for (const door of APPROVAL_CENSUS_DOORS) {
       expect(ALL_LANES.map((k) => k.slice(k.indexOf(' ') + 1)), `${door} consults the box token — it is the operator's door`).not.toContain(door);
+    }
+  });
+
+  it('ARTIFACT_DOORS is exactly what the artifact listener\'s file registers, in both directions, all GET; none is a lane or EXEMPT (X5 A1.3)', () => {
+    const keys = registrationsIn(ARTIFACT_SRC).map((r) => r.key);
+    expect(keys.map((k) => k.slice(k.indexOf(' ') + 1)).sort(),
+      'artifacts/routes.ts and ARTIFACT_DOORS disagree — a door was registered, or a name listed, on one side only').toEqual([...ARTIFACT_DOORS].sort());
+    expect(keys.filter((k) => !k.startsWith('GET ')), 'the artifact listener serves reads only').toEqual([]);
+    expect(lanesIn(ARTIFACT_SRC), 'an artifact door consults the box token — the capability in its path is the whole credential').toEqual([]);
+    for (const key of keys) expect(GATE_SRC, `${key} is EXEMPT — the artifact listener's instance is never the gated one`).not.toContain(`  ['${key}',`);
+    for (const door of ARTIFACT_DOORS) {
+      expect(ALL_LANES.map((k) => k.slice(k.indexOf(' ') + 1)), `${door} consults the box token — the artifact listener takes none`).not.toContain(door);
+    }
+  });
+
+  it('a box-token call planted in the artifact listener\'s file is SEEN — the lane source is live (the control)', () => {
+    const LINE = "app.get('/clear', notFound);";
+    expect(ARTIFACT_SRC, 'the registration line moved — re-point this control at it').toContain(LINE);
+    for (const call of ['requireMailToken(req, reply);', 'checkMailToken(null, undefined);']) {
+      const planted = ARTIFACT_SRC.replace(LINE, `${LINE}\n  ${call}`);
+      expect(lanesIn(planted), `a planted ${call} went unseen`).toEqual(['GET /clear']);
     }
   });
 
@@ -1289,21 +1320,21 @@ describe('the draft review read surface', () => {
 
 // ── the docs surface (the native Docs reader's W3, design 2026-10-01 §3.13) ───
 //
-// `server/src/docs/routes.ts` is the FIFTH file that registers routes. Its thirteen are session-gated, NOT EXEMPT and
+// `server/src/docs/routes.ts` is the FIFTH file that registers routes. Its fifteen are session-gated, NOT EXEMPT and
 // consult no box token at all (§3.4: "No box token is used"), so the census here is the update surface's, minus the
 // one lane: every registration it reads is a door in `DOCS_DOORS`, in both directions, and no docs file consults the
 // token. EVERY file under `server/src/docs/` is read, not `routes.ts` alone: a box-token call in the plugin's own
-// hooks would gate all thirteen routes as surely as one in a handler. `DOCS_DOORS` joins neither `SESSION_ONLY_ALL` nor
+// hooks would gate all fifteen routes as surely as one in a handler. `DOCS_DOORS` joins neither `SESSION_ONLY_ALL` nor
 // `ALL_LANES`: a docs read or refresh is not a coordination write, so CLAUDE.md's box-token bullet owes it no
 // sentence and no number word moves. And the page grammar's prefix is never a SERVER route (§3.13's new scan): a
 // `/docs/...` URL is the PWA's page, answered by the SPA shell, under every file in `server/src`.
-describe('the docs surface: thirteen session-gated doors, no box token, no /docs route (spec 2026-10-01 §3.13)', () => {
+describe('the docs surface: fifteen session-gated doors, no box token, no /docs route (spec 2026-10-01 §3.13)', () => {
   const DOCS_SRC = read('server/src/docs/routes.ts');
   /** Every source file of the docs surface, by listing the directory, so a file added there is read without an edit
    *  here. */
   const DOCS_FILES = readdirSync(path.join(REPO, 'server', 'src', 'docs'))
     .filter((f) => f.endsWith('.ts')).sort().map((f) => `server/src/docs/${f}`);
-  /** The thirteen doors, by path (§3.4; the history door, rich-docs spec G4; the range door, X2 P1; the outside folders' seven, X2 P2). Hand-kept for the NAMES only: the cases below derive the same set from the file
+  /** The fifteen doors, by path (§3.4; the history door, rich-docs spec G4; the range door, X2 P1; the outside folders' seven, X2 P2; the settings pair, X2 P4.3). Hand-kept for the NAMES only: the cases below derive the same set from the file
    *  and compare in both directions, so a route there cannot join or leave without this literal moving. */
   const DOCS_DOORS = ['/api/docs/projects', '/api/docs/:project/tree', '/api/docs/:project/file',
     '/api/docs/:project/history',
@@ -1312,7 +1343,9 @@ describe('the docs surface: thirteen session-gated doors, no box token, no /docs
     // The outside folders (X2 P2.3, spec 2026-11-18 §7): the labels read and Add share a path (GET and POST), the
     // `:label` door is Remove (DELETE), and the three folder reads; session-gated, no box token, like the six above.
     '/api/docs-folders', '/api/docs-folders', '/api/docs-folders/paths', '/api/docs-folders/:label',
-    '/api/docs-folders/:label/tree', '/api/docs-folders/:label/file', '/api/docs-folders/:label/range'];
+    '/api/docs-folders/:label/tree', '/api/docs-folders/:label/file', '/api/docs-folders/:label/range',
+    // The docs settings (X2 P4.3, spec 2026-11-18 §7): one path, GET and PUT; session-gated, no box token, like the thirteen above.
+    '/api/docs/settings', '/api/docs/settings'];
   const REGISTERED = registrationsIn(DOCS_SRC).map((r) => r.key);
   const pathOf = (k: string): string => k.slice(k.indexOf(' ') + 1);
   /** The registration lines the planted-call controls anchor on (the plan's fixed registration text). */

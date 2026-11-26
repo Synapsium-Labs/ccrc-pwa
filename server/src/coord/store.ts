@@ -7,6 +7,10 @@ import { CHECKS_ROW_PREFIX, CHECKS_SHADOW_ROW_PREFIX, mergingAtDetail, readCheck
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { NODE_ID_RE } from '../../../shared/agent-protocol.js';
 import { operatorMessageIdOf } from '../../../shared/operatorMessages.js';
+import {
+  docsSettingsFromStored, settingsWidening,
+  type DocsSettings, type DocsSettingsStored, type DocsSettingsStoreWrite,
+} from '../../../shared/docsTracker.js';
 import type { LandingIntentHold } from '../../../shared/landingIntents.js';
 import { tx } from './tx.js'; // D-5896: the primitive, not the db adapter
 import type { GoalsVersion, GoalsView, ItemAct, ItemActor, WrittenSource } from '../../../shared/ledgers.js';
@@ -41,9 +45,12 @@ import { redactCommand } from './redact.js';
 import { REVIEW_CAP_SUMMARY_MAX, cutWhole, reviewCapRefuses, reviewCapStatus } from './reviewcap.js';
 import { linkTeamAuto, linkTeamOverlord, linkingAll, linkingOf, recordReading, recordTeamCandidates, recordTeamSuggestion, setLinking } from './linkingStore.js';
 import * as builds from './claudeBuildsStore.js';
+import * as deliveries from './claudeBuildDeliveriesStore.js';
 import * as limitSamples from './limitSamplesStore.js';
 import type { LimitSample } from '../poolRunway.js';
 import type { BuildCaptureResult, BuildCaptureTry, ClaudeBuildRecord } from '../../../shared/claudeBuildTrust.js';
+import type { DeliveryRow } from '../../../shared/deliveryLane.js';
+import type { DeliveryCaptureResult, DeliveryNotSent } from '../../../shared/deliveryResult.js';
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking.js';
 import { openPracticeCase, practiceCaseNewest, type PracticeCaseNewestRead, type PracticeCaseOpen } from './practiceCasesStore.js';
 import type { CaseDue } from './practiceCases.js';
@@ -61,6 +68,7 @@ import * as probes from '../continuity/continuityStore.js';
 import { modelSwitchesSinceStart, readerEventsSinceStart, type HookStoreRead, type ModelSwitchRow, type ReaderEvent } from '../continuity/hookReportStore.js';
 import * as designation from './overlordDesignationStore.js';
 import * as ladder from './overlordLadderStore.js';
+import * as readiness from './overlordReadinessStore.js';
 import { txWithAuthorityReceipt } from './overlordAuthorityJournal.js';
 import * as sequence from './overlordSequenceStore.js';
 import * as outbox from './pushOutboxStore.js';
@@ -2066,6 +2074,35 @@ export class CoordStore {
   private readonly lineageRunsWarned = new Set<number>();
   constructor(readonly db: DatabaseSync, private readonly landing: { landingJournal?: LandingJournalPort; onUnusableConnection?: () => never } = {}) {
     this.landingFence = landing.landingJournal === undefined ? null : 'replay';
+  }
+
+  readDocsSettings(): DocsSettingsStored {
+    try {
+      const statement = this.db.prepare('SELECT body, updatedAt FROM docs_settings WHERE id = 1');
+      statement.setReadBigInts(true);
+      const row = statement.get();
+      return row === undefined ? { kind: 'absent' } : { kind: 'row', body: row.body, updatedAt: row.updatedAt };
+    } catch (err) {
+      return { kind: 'unreadable', detail: err instanceof Error ? err.message : 'docs_settings read failed' };
+    }
+  }
+
+  /** Compare with the stored row, authorize a widening and persist in one synchronous transaction. */
+  writeDocsSettings(settings: DocsSettings, at: number, authorizeWidening: () => boolean): DocsSettingsStoreWrite {
+    try {
+      return tx(this.db, () => {
+        const before = docsSettingsFromStored(this.readDocsSettings());
+        if (!before.ok) return { kind: 'unreadable' };
+        if (settingsWidening(before.settings, settings) && !authorizeWidening()) return { kind: 'denied' };
+        this.db.prepare(`
+          INSERT INTO docs_settings (id, body, updatedAt) VALUES (1, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET body = excluded.body, updatedAt = excluded.updatedAt
+        `).run(JSON.stringify(settings), at);
+        return { kind: 'written' };
+      });
+    } catch {
+      return { kind: 'unreadable' };
+    }
   }
 
   // ── programs & runs ────────────────────────────────────────────────────────
@@ -5867,6 +5904,12 @@ export class CoordStore {
   closedSpotProbes(modelClass: string): ReturnType<typeof probes.closedSpotProbes> { return probes.closedSpotProbes(this.db, modelClass); }
   backstopRead(): ReturnType<typeof probes.backstopRead> { return probes.backstopRead(this.db); }
   setBackstop(b: { hour: number; zone: string; at: number }): { ok: boolean } { return probes.setBackstop(this.db, b); }
+  /** Overlord W1, the readiness word: its reads (the rows' one writer, `overlordReadinessStore.ts`, is called by the readiness lane
+   *  alone, so the writers have no delegate) and the two generation readers it gathers through. */
+  readinessNow(): ReturnType<typeof readiness.readinessNow> { return readiness.readinessNow(this.db); }
+  readinessChanges(sinceMs: number, untilMs: number): ReturnType<typeof readiness.readinessChanges> { return readiness.readinessChanges(this.db, sinceMs, untilMs); }
+  restartsSince(identity: string, sinceMs: number): ReturnType<typeof probes.restartsSince> { return probes.restartsSince(this.db, identity, sinceMs); }
+  liveGenerationOfIdentity(identity: string): ReturnType<typeof probes.liveGenerationOfIdentity> { return probes.liveGenerationOfIdentity(this.db, identity); }
   /** Overlord W1 (the push outbox, `pushOutboxStore.ts`): the sender's moves and the reads. The bound-row writers and the
    *  reach stamp run inside a caller's transaction, so they take the handle and have no delegate. */
   insertUnboundRow(row: { pushId: string; payload: outbox.OutboxPayload; at: number; pushSource?: string }, response?: responses.PushResponseOf): ReturnType<typeof outbox.insertUnboundRow> { return outbox.insertUnboundRow(this.db, row, response); }
@@ -6641,6 +6684,15 @@ export class CoordStore {
   recordClaudeBuildVerdict(r: BuildCaptureResult, now: number): boolean { return builds.recordClaudeBuildVerdict(this.db, r, now); }
   /** The operator's **Capture again** on a failed build. */
   requeueClaudeBuild(build: string, opts?: builds.ClaudeBuildRequeueOptions): builds.ClaudeBuildRequeue { return builds.requeueClaudeBuild(this.db, build, opts); }
+
+  // ── the paste delivery recipe's results (Desktop polish wave 178; `coord/claudeBuildDeliveriesStore.ts`) ──
+
+  /** Every `claude_build_deliveries` row, newest build first, by part. Throws when the table cannot be read. */
+  claudeBuildDeliveries(): DeliveryRow[] { return deliveries.claudeBuildDeliveries(this.db); }
+  /** The capture lane tried one part: a job went out, or why none could. Never touches `claude_builds`. */
+  markDeliveryAttempt(build: string, part: number, now: number, tried: 'sent' | DeliveryNotSent): boolean { return deliveries.markDeliveryAttempt(this.db, build, part, now, tried); }
+  /** One part's current result (the caller has judged it current), replacing an older version's. */
+  recordDelivery(r: DeliveryCaptureResult, now: number): boolean { return deliveries.recordDelivery(this.db, r, now); }
 
   // ── stall watch settings (design 2026-10-05 §8, §11) ───────────────────────
 

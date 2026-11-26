@@ -89,7 +89,8 @@ export function DocsFailureView(p: DocsFailureViewProps): ReactNode {
   const sentence = answer.s === 'failed' ? failureSentence(answer.body) : slotSentence(answer);
   const retry = p.onRetry !== undefined && allowsRetry(answer) ? p.onRetry : undefined;
   const fetchFromOrigin =
-    answer.s === 'failed' && answer.body.failure === 'unresolved-ref' ? p.onFetchFromOrigin : undefined;
+    answer.s === 'failed' && answer.body.failure === 'unresolved-ref' && answer.body.hint !== 'tag'
+      ? p.onFetchFromOrigin : undefined;
   return (
     <section
       className="docs-fail"

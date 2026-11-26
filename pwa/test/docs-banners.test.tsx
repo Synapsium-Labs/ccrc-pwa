@@ -62,7 +62,8 @@ describe('the default view never overlays; its hint is qualified (M4.T2, row 67)
     render(<Routed loaders={f.loaders} />);
     expect(await screen.findByText('3 uncommitted docs in main checkout on ws/a')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open the draft view' })).toHaveAttribute('href', '/docs/demo/specs?ref=refs/heads/ws/a');
-    expect([...document.querySelectorAll('.docs-listing .docs-row-name')].map((n) => n.textContent)).toEqual(['a.md']);
+    // X2 P4.1: a row shows the readable title, not the file name.
+    expect([...document.querySelectorAll('.docs-listing .docs-row-name')].map((n) => n.textContent)).toEqual(['a']);
     expect(document.querySelector('.docs-badge')).toBeNull();
     expect(banner('default-hint')).toHaveAttribute('data-tone', 'info');
     expect(banner('default-hint')).toHaveAttribute('role', 'status');
@@ -104,7 +105,8 @@ describe('a ref view overlays only when the base is equal (M4.T3, row 67)', () =
     expect(await screen.findByText(
       '3 uncommitted docs in main checkout are based on local ws/a at bbbbbbbb; this page shows origin/main')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open the local view' })).toHaveAttribute('href', '/docs/demo/specs?ref=refs/heads/ws/a');
-    expect([...document.querySelectorAll('.docs-listing .docs-row-name')].map((n) => n.textContent)).toEqual(['a.md']);
+    // X2 P4.1: a row shows the readable title, not the file name.
+    expect([...document.querySelectorAll('.docs-listing .docs-row-name')].map((n) => n.textContent)).toEqual(['a']);
     expect(document.querySelector('.docs-badge')).toBeNull();
     expect(banner('default-hint')).toBeNull();
   });

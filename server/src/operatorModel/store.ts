@@ -16,7 +16,7 @@ import { isRecordedActor } from '../auth/attributionIdentity.js';
 import type { RecordedActor } from '../auth/callerIdentity.js';
 import { tx } from '../coord/tx.js';
 import {
-  MESSAGE_STATES, READ_OUTCOME_MAX_CHARS, READ_SCOPE_MAX_CHARS, isGenerationRead, isMessageState, isReadCaller, isReadDoor,
+  MESSAGE_STATES, READ_DOORS, READ_OUTCOME_MAX_CHARS, READ_SCOPE_MAX_CHARS, isGenerationRead, isMessageState, isReadCaller, isReadDoor,
   isReadTurnState, isSettledBy,
   type MessageActor, type MessageEvent, type MessageState, type OperatorMessageRow, type ReadCaller, type ReadDoor, type ReadLine,
 } from '../../../shared/operatorMessages.js';
@@ -246,6 +246,19 @@ export class OperatorModelStore {
     return this.read(() => (this.db.prepare(`SELECT count(*) AS c FROM read_ledger WHERE caller IN (${callers.map(() => '?').join(', ')}) AND at >= ? AND at <= ? `
       + 'AND door <> ? AND outcome = ?')
       .get(...callers, from, to, 'inbox', READ_SERVED_OUTCOME) as { c: number }).c);
+  }
+
+  /** The newest SERVED line of this generation after `sinceMs` by any caller but the console, any door, or `none` (the readiness
+   *  plan, Task 2, question 7: the Overlord's proof of the current generation; `sinceMs` is the generation's start, so each door's
+   *  range reads `read_ledger_door_at` and never scans the ledger). An empty inbox read writes a served line (`rows`, count 0),
+   *  so it counts. Reads no text column. */
+  lastServedReadAt(generation: number, sinceMs: number): StoreRead<number | 'none'> {
+    if (!isCount(generation) || !isCount(sinceMs)) return { kind: 'unmeasured', why: 'generation and sinceMs: non-negative safe integers' };
+    return this.read(() => {
+      const r = this.db.prepare(`SELECT max(at) AS at FROM read_ledger WHERE door IN (${READ_DOORS.map(() => '?').join(', ')}) AND at > ? `
+        + "AND generation = ? AND outcome = ? AND caller <> 'operator'").get(...READ_DOORS, sinceMs, generation, READ_SERVED_OUTCOME) as { at: number | null };
+      return r.at ?? 'none';
+    });
   }
 
   /** The read ceiling's counter (the inbox plan, Task 2): a door's served lines after `sinceMs` by any caller but the console,
