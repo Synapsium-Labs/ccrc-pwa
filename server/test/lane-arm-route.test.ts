@@ -141,6 +141,8 @@ describe('GET/POST /api/coord/lane-arm (D-8274)', () => {
       lane: 'working-idle-sleep', stored: 'shadow', detail: null, live: false, updatedAt: 0, imported: null, marker: null,
     }, {
       lane: 'cap-counts-working', stored: 'shadow', detail: null, live: false, updatedAt: 0, imported: null, marker: null,
+    }, {
+      lane: 'invariants', stored: 'shadow', detail: null, live: false, updatedAt: 0, imported: null, marker: null,
     }], quizBaseline: { baseline: { state: 'not-yet' }, pending: { ok: true, runs: [] }, unattended: { state: 'none' } } });
   });
 
@@ -208,7 +210,7 @@ describe('GET/POST /api/coord/lane-arm (D-8274)', () => {
     expect(coord.laneArmSetting('continuity')).toMatchObject({ choice: 'live' });
     expect((await post(app, { lane: 'continuity', choice: 'shadow' })).statusCode).toBe(200);
     // The gate mechanism stays for a row that needs one; approvals PR 3's park row has one until PR 3v.
-    for (const lane of ['roster-card', 'continuity', 'launch-profile', 'anchor-slot', 'working-idle-sleep', 'cap-counts-working'] as const) expect(laneArmGate(lane)).toBeNull();
+    for (const lane of ['roster-card', 'continuity', 'launch-profile', 'anchor-slot', 'working-idle-sleep', 'cap-counts-working', 'invariants'] as const) expect(laneArmGate(lane)).toBeNull();
     expect(laneArmGate('approval-park')).not.toBeNull();
     expect(LANE_ARM_REFUSALS).toContain('lane-gated');
     expect(REFUSAL_STATUS['lane-gated']).toBe(409);

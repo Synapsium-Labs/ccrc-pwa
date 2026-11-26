@@ -4655,6 +4655,38 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 129: user_version 128 -> 129 ──────────────────────────────────────────
+  // The invariant monitor's findings (Overlord spec §10.4 "One invariant monitor", §12 M24; plan
+  // `docs/superpowers/plans/2026-11-14-overlord-w1/w1-sequence-monitor.md` Task 6, question 12): one row per episode of a
+  // violation, written only by `invariantFindingsStore.ts` (`recordFinding` inserts, `resolveFindings` stamps `resolvedAt`); at
+  // most one open row per invariant, subject and mode (the partial unique index), so a row is the deduplication and M24's count.
+  // A live row carries its item and its latch answer, a shadow row neither. Rows are never deleted in W1. And the Shadow lanes
+  // card's `invariants` row, seeded `shadow`: the monitor records and raises nothing until the operator sets it Live. A NEW TABLE
+  // AND ONE SEED ROW: an older build opening a file at this entry's version takes rule 3 (it warns, reads as-is and migrates
+  // nothing), never names the table, and its `isLaneArmLane` refuses the row's word. The slot is the next free one by position on
+  // `main`; whoever lands second renumbers. RE-MEASURE the slot before merge (it must print 128 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE overlord_invariant_findings (
+    id         INTEGER PRIMARY KEY,
+    invariant  TEXT NOT NULL,
+    subject    TEXT NOT NULL,
+    mode       TEXT NOT NULL CHECK (mode IN ('shadow', 'live')),
+    seq        INTEGER,                  -- the line that showed it; NULL for a finding over a table (I2, I7, I17)
+    message    TEXT NOT NULL,            -- ids, kinds and states only, never a body (§10.4)
+    foundAt    INTEGER NOT NULL,
+    itemId     INTEGER,                  -- the live finding's item; NULL in shadow
+    latched    TEXT CHECK (latched IN ('raised', 'standing', 'row-only')),   -- NULL in shadow
+    resolvedAt INTEGER,
+    CHECK ((mode = 'live') = (itemId IS NOT NULL)),
+    CHECK ((mode = 'live') = (latched IS NOT NULL))
+  );
+  CREATE UNIQUE INDEX overlord_invariant_findings_open ON overlord_invariant_findings (invariant, subject, mode)
+    WHERE resolvedAt IS NULL;
+  INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('invariants', 'shadow', 0);
+  `,
+
+  // ── 130: user_version 129 -> 130 ──────────────────────────────────────────
   // The paste delivery recipe's capture lane (Desktop polish wave 178; task note docs/superpowers/programs/desktop-polish/
   // paste-delivery.md section 7): `claude_build_deliveries`, one row per (build, part), the recipe's results beside the trust
   // table and never in it. `claude_builds` is NOT altered, and a delivery result never writes a trust row. ONE writer, the
@@ -4663,7 +4695,9 @@ export const MIGRATIONS: readonly string[] = [
   // judged current; `version`, `word`, `result` and `at` are set together, and null on a row that holds attempts only.
   // A NEW TABLE only: an older build opening a file at this entry's version takes rule 3 (it warns, reads as-is and migrates
   // nothing) and never names it. The slot is the next free one by position on `main`; whoever lands second renumbers.
-  // RE-MEASURE the slot before merge (it must print 128, the count before this entry):
+  // `release` is the release tag of the test box that ran the stored result (the result's own `release`, review 3882 F5, the
+  // coordinator's ruling), null when that box could not read it.
+  // RE-MEASURE the slot before merge (it must print 129, the count before this entry):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `
@@ -4671,6 +4705,7 @@ export const MIGRATIONS: readonly string[] = [
     build         TEXT    NOT NULL,
     part          INTEGER NOT NULL CHECK (part >= 0),
     version       TEXT,
+    release       TEXT,
     word          TEXT,
     result        TEXT,
     at            INTEGER,

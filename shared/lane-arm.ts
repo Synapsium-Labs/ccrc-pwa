@@ -41,9 +41,14 @@ export const WORKING_IDLE_SLEEP_LANE = 'working-idle-sleep';
  *  send-back to a live or sleeping worker, or a resume of a live one, is never refused at the cap. Shadow is its off
  *  switch. */
 export const CAP_COUNTS_WORKING_LANE = 'cap-counts-working';
+/** The invariant monitor's row (Overlord W1, sequence plan Task 6, question 18; spec §10.4 "It ships in shadow"): in shadow the
+ *  monitor records each finding with the mode `shadow` and raises nothing; live, each new finding raises the ladder's
+ *  `invariant-violation` latch and one blocking item. */
+export const INVARIANTS_LANE = 'invariants';
 /** The lanes the Shadow lanes card has a row for, in the card's order. */
 export const LANE_ARM_LANES = [
   ROSTER_CARD_LANE, CONTINUITY_LANE, LAUNCH_PROFILE_LANE, ANCHOR_SLOT_LANE, APPROVAL_PARK_LANE, WORKING_IDLE_SLEEP_LANE, CAP_COUNTS_WORKING_LANE,
+  INVARIANTS_LANE,
 ] as const;
 export type LaneArmLane = (typeof LANE_ARM_LANES)[number];
 export function isLaneArmLane(v: unknown): v is LaneArmLane {
@@ -289,6 +294,15 @@ export const LANE_ARM_TEXT = {
         + 'the cap. A worker '
         + 'that wakes counts again at once. A coordinator the cap refused is told of a freed slot only when one can be handed '
         + 'out, so it is not told again every minute.',
+      gate: null,
+    },
+    [INVARIANTS_LANE]: {
+      legend: 'Invariant monitor',
+      shadowNote: 'The monitor runs a pass once a minute. It reads the Overlord\'s invariants again when the sequence moves, the '
+        + 'mode changes or ten minutes pass, and records each violation it finds, marked shadow; it raises no latch and no item. '
+        + 'Read its record at GET /api/overlord/invariants once that door ships, at least seven days of it, before setting this Live.',
+      liveNote: 'Each new violation the monitor finds raises the ladder\'s invariant-violation latch, which caps the Overlord '
+        + 'at advise, and one blocking item on Waiting on you; a violation already open raises neither again.',
       gate: null,
     },
   },
