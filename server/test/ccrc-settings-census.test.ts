@@ -209,6 +209,9 @@ const SERVER_SETTINGS: Record<string, string> = {
   CCRC_DDNS_PROVIDER: 'the exposure file\'s DDNS provider, written by `ccrc expose`',
   CCRC_DDNS_DOMAIN: 'the exposure file\'s DDNS domain, written by `ccrc expose`',
   CCRC_CADDY_BIND: 'the exposure file\'s Caddy bind, written by `ccrc expose`',
+  CCRC_ARTIFACT_ORIGIN: 'the exposure file\'s artifact origin, written by `ccrc expose artifacts`',
+  CCRC_ARTIFACT_CONTENT_ORIGIN: 'the exposure file\'s artifact content origin, written by `ccrc expose artifacts`',
+  CCRC_ARTIFACT_PORT: 'the exposure file\'s artifact listener port, written by `ccrc expose artifacts`',
 };
 
 /** The bodies that may hand `_box_env_value`, `_box_unit_env` or `_box_unit_env_shell` a key in a variable. */
