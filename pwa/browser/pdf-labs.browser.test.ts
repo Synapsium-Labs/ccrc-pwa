@@ -26,7 +26,7 @@ import { PDF_SANDBOX } from '../src/docs/pdf/pdfPolicy';
 import { buildPdfSrcdoc, pdfCspOfPage, pdfUndrawnImages } from '../src/docs/pdf/pdfSrcdoc';
 import { sharedDist } from './app';
 import { resolveChrome, startOrigins, type Origins } from './harness';
-import { buildFixturePdf, buildTextFixturePdf } from './pdfFixture';
+import { buildFixturePdf, buildScanFixturePdf, buildTextFixturePdf } from './pdfFixture';
 
 const SHELL_META = /<meta[^>]*http-equiv="Content-Security-Policy"[^>]*>/i;
 let browser: Browser;
@@ -278,6 +278,19 @@ describe('PDF-L2: a srcdoc at the ceiling, with the viewer, the parser, the font
     expect(run.state).toBe('shown');
     expect(await titlePainted(run.frame), 'the fixture title left ink on the first page').toBe(true);
   });
+});
+
+it('a 300 dpi grayscale scan paints without an omission note', async () => {
+  const bytes = buildScanFixturePdf();
+  expect(bytes.length).toBeLessThan(DOCS_PDF_INLINE_MAX_BYTES);
+  const run = await draw(pageFor(bytes));
+  expect(run.state).toBe('shown');
+  const pixel = await run.frame.evaluate(() => {
+    const canvas = document.querySelector<HTMLCanvasElement>('.pdf-page canvas')!;
+    return Array.from(canvas.getContext('2d')!.getImageData(Math.floor(canvas.width / 2), Math.floor(canvas.height / 2), 1, 1).data);
+  });
+  expect(pixel).toEqual([80, 80, 80, 255]);
+  expect(await run.frame.locator('#pdf-note').isHidden()).toBe(true);
 });
 
 describe('PDF-L3: an image that needs WebAssembly', () => {

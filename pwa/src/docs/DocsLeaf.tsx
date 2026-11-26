@@ -175,8 +175,6 @@ export function SvgImage(p: { readonly bytes: Uint8Array; readonly name: string 
   return <img className="docs-svg-img" src={svgDataUrl(p.bytes)} alt={p.name} />;
 }
 
-/** An `svg` leaf (spec 5.5): the bytes as the same `data:` image Markdown gets (never a `blob:`, never `/api/`),
- *  with Source and Download. */
 /** The `pdf` leaf (X2 spec 4.4): the PDF frame over the file route's bytes (at most the class cap), with Download beside
  *  it. An answer that holds no bytes is the same client-built failure an SVG's is. The view is keyed by the caller. */
 function PdfBody(p: { readonly show: DocsShowOk; readonly download: ReactNode; readonly name: string }): ReactNode {
@@ -190,6 +188,8 @@ function PdfBody(p: { readonly show: DocsShowOk; readonly download: ReactNode; r
   );
 }
 
+/** An `svg` leaf (spec 5.5): the bytes as the same `data:` image Markdown gets (never a `blob:`, never `/api/`),
+ *  with Source and Download. */
 function SvgBody(p: { readonly show: DocsShowOk; readonly answered: string; readonly download: ReactNode; readonly name: string }): ReactNode {
   const [source, setSource] = useState(false);
   const bytes = p.answered === 'svg' ? showBytes(p.show) : null;

@@ -4,6 +4,7 @@
 // a document-level JavaScript open action that would show an alert and submit a form, and, on request, a 16 x 16 JPEG 2000
 // image or an exact total size. Every word in them is a placeholder; every address is under `example.invalid`.
 import { Buffer } from 'node:buffer';
+import { deflateSync } from 'node:zlib';
 
 /** A 16 x 16 JPEG 2000 codestream (a blue square with a white diagonal), made for this file with Pillow's encoder. */
 export const JPX_16 = Buffer.from(
@@ -77,6 +78,24 @@ function build(o: PdfFixtureOptions, padLen: number): Uint8Array {
   objs[pages - 1] = `<< /Type /Pages /Kids [${page} 0 R] /Count 1 >>`;
   if (padLen >= 0) add({ dict: `<< /Length ${padLen} >>`, stream: Buffer.alloc(padLen, 0x20) });
   return writePdf(objs, catalog);
+}
+
+/** An ordinary grayscale page image, 2500 × 3500 pixels (about A4 at 300 dpi), with a known gray tone. */
+export function buildScanFixturePdf(): Uint8Array {
+  const width = 2500;
+  const height = 3500;
+  const scan = deflateSync(Buffer.alloc(width * height, 80));
+  const paint = Buffer.from('q 468 0 0 655 72 68 cm /Scan Do Q\n', 'ascii');
+  return writePdf([
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /Scan 4 0 R >> >> /Contents 5 0 R >>',
+    {
+      dict: `<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode /Length ${scan.length} >>`,
+      stream: scan,
+    },
+    { dict: `<< /Length ${paint.length} >>`, stream: paint },
+  ], 1);
 }
 
 /** L1's parser/drawing workload: 52 distinct pages of synthetic prose with a real embedded TrueType face, not padding. */

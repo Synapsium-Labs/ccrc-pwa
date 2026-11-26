@@ -15,6 +15,27 @@ const read = (...p: string[]): string => readFileSync(path.join(...p), 'utf8');
 /** The pinned release and the registry's integrity for its tarball (recorded in X2's plan, Results, wave P3). */
 const PDFJS_VERSION = '6.5.438';
 const PDFJS_INTEGRITY = 'sha512-vg8Pw1x+AFKy4AMDvhuWl5cOYV8d698UoEANoFFhc79hqXDnZQqnOXoxw3HG907WHOg1JYOvLhP756boddFxpA==';
+const NATIVE_CANVAS = '@napi-rs/canvas';
+const NATIVE_VERSION = '1.2.1';
+const NATIVE_BUILDS = [
+  'android-arm64', 'darwin-arm64', 'darwin-x64', 'linux-arm-gnueabihf', 'linux-arm64-gnu', 'linux-arm64-musl',
+  'linux-riscv64-gnu', 'linux-x64-gnu', 'linux-x64-musl', 'win32-arm64-msvc', 'win32-x64-msvc',
+].map((platform) => `${NATIVE_CANVAS}-${platform}`);
+
+interface LockEntry {
+  readonly version?: string;
+  readonly integrity?: string;
+  readonly dependencies?: Record<string, string>;
+  readonly optionalDependencies?: Record<string, string>;
+  readonly peerDependencies?: Record<string, string>;
+  readonly bundleDependencies?: string[];
+  readonly hasInstallScript?: boolean;
+  readonly optional?: boolean;
+}
+
+function lockPackages(): Record<string, LockEntry> {
+  return (JSON.parse(read(PWA, 'package-lock.json')) as { packages: Record<string, LockEntry> }).packages;
+}
 
 describe('pdf dependency', () => {
   it('pdf dependency: exact pin, no caret', () => {
@@ -22,12 +43,31 @@ describe('pdf dependency', () => {
     expect(pkg.dependencies['pdfjs-dist']).toBe(PDFJS_VERSION);
     expect(pkg.dependencies['pdfjs-dist']).toMatch(/^\d+\.\d+\.\d+$/);
     expect(pkg.devDependencies['pdfjs-dist']).toBeUndefined();
-    const lock = JSON.parse(read(PWA, 'package-lock.json')) as {
-      packages: Record<string, { version?: string; integrity?: string; dependencies?: Record<string, string> }>;
-    };
-    expect(lock.packages['']!.dependencies!['pdfjs-dist']).toBe(PDFJS_VERSION);
-    expect(lock.packages['node_modules/pdfjs-dist']).toMatchObject({ version: PDFJS_VERSION, integrity: PDFJS_INTEGRITY });
+    const packages = lockPackages();
+    expect(packages['']!.dependencies!['pdfjs-dist']).toBe(PDFJS_VERSION);
+    expect(packages['node_modules/pdfjs-dist']).toMatchObject({ version: PDFJS_VERSION, integrity: PDFJS_INTEGRITY });
     expect((JSON.parse(read(PKG, 'package.json')) as { version: string }).version).toBe(PDFJS_VERSION);
+  });
+
+  it('pdf dependency: the lock admits only the optional native canvas tree', () => {
+    const packages = lockPackages();
+    const pdfjs = 'node_modules/pdfjs-dist';
+    const canvas = `node_modules/${NATIVE_CANVAS}`;
+    const builds = NATIVE_BUILDS.map((name) => `node_modules/${name}`);
+    const allowed = [pdfjs, canvas, ...builds];
+    expect(Object.keys(packages).filter((key) => key === pdfjs || key.startsWith(`${pdfjs}/`)
+      || key === canvas || key.startsWith(`${canvas}/`) || key.startsWith(`${canvas}-`)).sort()).toEqual(allowed.sort());
+    expect(packages[pdfjs]!.optionalDependencies).toEqual({ [NATIVE_CANVAS]: '^1.0.13' });
+    expect(packages[canvas]!.optionalDependencies).toEqual(Object.fromEntries(NATIVE_BUILDS.map((name) => [name, NATIVE_VERSION])));
+    for (const key of [canvas, ...builds]) expect(packages[key], key).toMatchObject({ version: NATIVE_VERSION, optional: true });
+    for (const key of builds) expect(packages[key]!.optionalDependencies ?? {}, key).toEqual({});
+    for (const key of allowed) {
+      const entry = packages[key]!;
+      expect(entry.dependencies ?? {}, key).toEqual({});
+      expect(entry.peerDependencies ?? {}, key).toEqual({});
+      expect(entry.bundleDependencies ?? [], key).toEqual([]);
+      expect(entry.hasInstallScript, key).not.toBe(true);
+    }
   });
 
   it('pdf dependency: notice present', () => {

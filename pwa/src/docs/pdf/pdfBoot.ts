@@ -1,6 +1,6 @@
 // The PDF frame's bootstrap (X2 spec 2026-11-18 section 4.4; plan Task P3.2): the one script of ccrc's own that runs
 // INSIDE the frame, after the viewer (pdf.js's display layer, its `build/pdf.min.mjs`, which sets
-// `globalThis.pdfjsLib`). Ring L1: a constant, its text hashed into the frame's policy by `buildPdfDocument`.
+// `globalThis.pdfjsLib`). Ring L1: a constant, its text hashed by the assets loader for the frame's policy.
 //
 // What it does, and what it never does:
 //   - It reads the seed (the PDF's bytes, the parser's text, the standard fonts and the CMaps, all inline) and draws
@@ -20,7 +20,12 @@
 // which the browser tests read; so does `data-refused`, the count of the frame's own policy refusals (a later pdf.js
 // that needs a source the policy lacks reds the browser row that reads it).
 
-/** The bootstrap's text. Plain ES2017 in one IIFE; no template substitution, so its bytes are exactly what is hashed. */
+import { DOCS_IMAGE_VIEW_MAX_PIXELS } from '../../../../shared/docs';
+
+/** Inert seed marker for the pixel-limit reason, not an image codec. */
+export const PDF_IMAGE_OVER_LIMIT = 'over-limit';
+
+/** Plain ES2017 in one IIFE. The assets loader hashes the final text, including the shared image limit. */
 export const PDF_BOOT_JS = `(function () {
   'use strict';
   // Frame-local marks for the browser lab; they are never sent to the host.
@@ -52,9 +57,13 @@ export const PDF_BOOT_JS = `(function () {
   if (!lib) { state('failed'); note('The PDF viewer did not start.'); return; }
   var data = fromB64(seed.pdf);
   seed.pdf = '';
-  if (seed.undrawn.length > 0) {
-    note('Some images in this PDF (' + seed.undrawn.join(', ') + ') are not shown here: this viewer keeps WebAssembly off, '
-      + 'and those images need it. Download the file to see them.');
+  var overLimit = ${JSON.stringify(PDF_IMAGE_OVER_LIMIT)};
+  var codecs = seed.undrawn.filter(function (kind) { return kind !== overLimit; });
+  var imageReasons = [];
+  if (seed.undrawn.includes(overLimit)) imageReasons.push('one or more are larger than the reader’s image limit');
+  if (codecs.length > 0) imageReasons.push(codecs.join(', ') + ' images need WebAssembly, which this viewer keeps off');
+  if (imageReasons.length > 0) {
+    note('Some images in this PDF are not shown here: ' + imageReasons.join('; ') + '. Download the file to see them.');
   }
   function SeedFactory() {}
   SeedFactory.prototype.fetch = function (req) {
@@ -68,6 +77,10 @@ export const PDF_BOOT_JS = `(function () {
       data: data.slice(), useWasm: false, useWorkerFetch: false, disableWorkerRendering: true, enableXfa: false,
       isOffscreenCanvasSupported: false, cMapUrl: 'cmaps/', cMapPacked: true, standardFontDataUrl: 'fonts/',
       BinaryDataFactory: SeedFactory, stopAtErrors: false, useSystemFonts: false,
+      maxImageSize: ${DOCS_IMAGE_VIEW_MAX_PIXELS},
+      // Eligible RGB JPEGs can still take the native ImageDecoder path without off-screen canvas rendering.
+      // This is its resize target, not an allocation limit.
+      canvasMaxAreaInBytes: 4 * MAX_CANVAS_PIXELS,
     };
   }
   var doc = null;
@@ -142,6 +155,7 @@ export const PDF_BOOT_JS = `(function () {
   function release(box, store) {
     stores.delete(box);
     if (store.task) store.task.cancel();
+    if (store.page) store.page.cleanup();
     if (store.canvas) {
       // Release the backing pixels now, even while pdf.js or the browser still holds the element.
       store.canvas.width = 0;
@@ -151,10 +165,11 @@ export const PDF_BOOT_JS = `(function () {
   }
   function drawPage(box, i) {
     if (stores.has(box)) return Promise.resolve();
-    var store = { canvas: null, task: null };
+    var store = { canvas: null, task: null, page: null };
     stores.set(box, store);
     return doc.getPage(i + 1).then(function (page) {
       if (stores.get(box) !== store) return;
+      store.page = page;
       var vp = page.getViewport({ scale: Number(box.getAttribute('data-scale')) });
       if (!(vp.width > 0 && vp.height > 0 && Number.isFinite(vp.width * vp.height))) throw new Error('invalid page size');
       var ratio = Math.min(window.devicePixelRatio || 1, 2, MAX_CANVAS_SIDE / Math.max(vp.width, vp.height),

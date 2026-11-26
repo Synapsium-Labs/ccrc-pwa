@@ -10,7 +10,8 @@
 // Everything the frame uses is inline: nothing is fetched. The parser's text is in the seed, never a script of the page:
 // the bootstrap starts it as a `blob:` worker, or, where the engine will not start that worker, as an inline script
 // whose hash is the fourth one in the policy.
-import { PDF_BOOT_JS } from './pdfBoot';
+import { DOCS_IMAGE_VIEW_MAX_PIXELS } from '../../../../shared/docs';
+import { PDF_BOOT_JS, PDF_IMAGE_OVER_LIMIT } from './pdfBoot';
 import { PDF_CLICK_GUARD_JS, pdfCsp, pdfMeta, type PdfScriptHashes } from './pdfPolicy';
 
 /** What the frame is built from, all from the installed package (the assets loader's answer) but the PDF. */
@@ -101,19 +102,50 @@ export function pdfCspOfPage(page: string): string {
 /** The image filters pdf.js draws only with WebAssembly, which the frame keeps off, each with the name the note uses.
  *  A stream's filter is a name in its dictionary, and a stream is never inside an object stream, so the name's bytes
  *  are in the file as written; a name spelled with a `#` escape is not found (the note is a courtesy, not a wall). */
-const UNDRAWN_FILTERS: ReadonlyArray<readonly [string, string]> = [['/JPXDecode', 'JPEG 2000'], ['/JBIG2Decode', 'JBIG2']];
+const UNDRAWN_FILTERS: ReadonlyArray<readonly [string, readonly string[]]> = [
+  ['JPEG 2000', ['/JPXDecode']], ['JBIG2', ['/JBIG2Decode']], ['CCITT fax', ['/CCITTFaxDecode', '/CCF']],
+];
 
-/** The kinds of image in `bytes` this frame cannot draw, in the table's order, each once. */
+/** The reasons some images may not draw: each named codec once, followed by the pixel-limit marker if detected. */
 export function pdfUndrawnImages(bytes: Uint8Array): string[] {
   const out: string[] = [];
-  for (const [filter, name] of UNDRAWN_FILTERS) {
-    if (indexOfAscii(bytes, filter) >= 0) out.push(name);
+  for (const [name, filters] of UNDRAWN_FILTERS) {
+    if (filters.some((filter) => hasPdfName(bytes, filter))) out.push(name);
   }
+  if (hasOversizeImageDictionary(bytes)) out.push(PDF_IMAGE_OVER_LIMIT);
   return out;
 }
 
-/** The first index of the ASCII `needle` in `bytes`, or -1. */
-function indexOfAscii(bytes: Uint8Array, needle: string): number {
+// Read only literal image dictionaries and their direct integer dimensions. Exclude indirect value references. This
+// is reader feedback, not validation or a PDF parser: compressed objects and escaped names are outside the scan.
+const IMAGE_DICTIONARY_TOKEN = /<<|>>|\/Subtype[\0\t\n\f\r ]*\/Image(?=[\0\t\n\f\r ()<>[\]{}\/%]|$)|\/(Width|Height|W|H)[\0\t\n\f\r ]+(\+?[0-9]+)(?=[\0\t\n\f\r ()<>[\]{}\/%]|$)(?![\0\t\n\f\r ]+[0-9]+[\0\t\n\f\r ]+R(?=[\0\t\n\f\r ()<>[\]{}\/%]|$))/g;
+const IMAGE_SCAN_DEPTH = 32;
+
+function hasOversizeImageDictionary(bytes: Uint8Array): boolean {
+  if (!hasPdfName(bytes, '/Image')) return false;
+  const dicts: { image: boolean; width: number; height: number }[] = [];
+  let depth = 0;
+  for (const [token, key, value] of new TextDecoder('latin1').decode(bytes).matchAll(IMAGE_DICTIONARY_TOKEN)) {
+    if (token === '<<') {
+      depth += 1;
+      if (depth <= IMAGE_SCAN_DEPTH) dicts.push({ image: false, width: 0, height: 0 });
+    } else if (token === '>>' && depth > 0) {
+      const dict = depth <= IMAGE_SCAN_DEPTH ? dicts.pop() : undefined;
+      depth -= 1;
+      if (dict?.image && dict.width * dict.height > DOCS_IMAGE_VIEW_MAX_PIXELS) return true;
+    } else {
+      const dict = dicts[depth - 1];
+      if (dict === undefined) continue;
+      if (key === undefined) dict.image = true;
+      else if (key === 'W' || key === 'Width') dict.width = Number(value);
+      else dict.height = Number(value);
+    }
+  }
+  return false;
+}
+
+/** Match a literal ASCII name through its end, so `/CCF` does not also match a longer name. */
+function hasPdfName(bytes: Uint8Array, needle: string): boolean {
   const first = needle.charCodeAt(0);
   const last = bytes.length - needle.length;
   outer: for (let i = 0; i <= last; i += 1) {
@@ -121,7 +153,8 @@ function indexOfAscii(bytes: Uint8Array, needle: string): number {
     for (let j = 1; j < needle.length; j += 1) {
       if (bytes[i + j] !== needle.charCodeAt(j)) continue outer;
     }
-    return i;
+    const next = bytes[i + needle.length];
+    if (next === undefined || '\0\t\n\f\r ()<>[]{}/%'.includes(String.fromCharCode(next))) return true;
   }
-  return -1;
+  return false;
 }

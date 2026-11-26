@@ -170,8 +170,20 @@ describe('the images the frame cannot draw, named for its note', () => {
     ['none', '%PDF-1.7 << /Filter /DCTDecode >>', []],
     ['JPEG 2000', '%PDF-1.7 << /Filter /JPXDecode >>', ['JPEG 2000']],
     ['JBIG2', '%PDF-1.7 << /Filter [/FlateDecode /JBIG2Decode] >>', ['JBIG2']],
-    ['both, in the table order', '%PDF /JBIG2Decode /JPXDecode', ['JPEG 2000', 'JBIG2']],
+    ['CCITT fax', '%PDF-1.7 << /Filter /CCITTFaxDecode >>', ['CCITT fax']],
+    ['abbreviated CCITT fax', '%PDF-1.7 << /F /CCF >>', ['CCITT fax']],
+    ['all, in the table order and without duplicates', '%PDF /CCF /JBIG2Decode /CCITTFaxDecode /JPXDecode', ['JPEG 2000', 'JBIG2', 'CCITT fax']],
+    ['a longer PDF name is not the fax abbreviation', '%PDF /CCFox', []],
     ['a filter cut short is none', '%PDF /JPXDecod', []],
+    ['an ordinary scan', '%PDF << /Subtype/Image /Width 2500 /Height 3500 >>', []],
+    ['an image at the limit', '%PDF << /Subtype/Image /Width 8192 /Height 8192 >>', []],
+    ['an image above the limit', '%PDF << /Height 8193 /Subtype/Image /Width 8192 >>', ['over-limit']],
+    ['short dimensions and another reason', '%PDF << /Subtype /Image /W 8192 /H 8193 /Filter /CCF >>', ['CCITT fax', 'over-limit']],
+    ['dimensions on distinct dictionaries', '%PDF << /Subtype/Image /Width 8192 >> << /Height 8193 >>', []],
+    ['dimensions from a non-image dictionary', '%PDF << /Subtype/Other /Width 8192 /Height 8193 >>', []],
+    ['nested dictionaries do not supply the outer dimensions', '%PDF << /Subtype/Image /Meta << /Width 8192 /Height 8193 >> >>', []],
+    ['outer dimensions survive a nested dictionary', '%PDF << /Subtype/Image /Width 8192 /Meta << /Width 10 >> /Height 8193 >>', ['over-limit']],
+    ['an indirect width is not a literal dimension', '%PDF << /Subtype/Image /Width 8192 0 R /Height 8193 >>', []],
   ] as const)('%s', (_n, text, want) => {
     expect(pdfUndrawnImages(b(text))).toEqual(want);
   });
@@ -205,14 +217,21 @@ describe('pdf frame: forced navigation tears down once (M11.19)', () => {
 });
 
 describe('pdf frame parser startup', () => {
-  function start(documentResult = new Promise<unknown>(() => undefined)) {
+  interface ParserOptions {
+    readonly worker?: { readonly options: { port: EventTarget } };
+    readonly maxImageSize?: number;
+    readonly canvasMaxAreaInBytes?: number;
+  }
+
+  function start(documentResult: (options: ParserOptions) => Promise<unknown> = () => new Promise(() => undefined), undrawn: string[] = []) {
     const frameDoc = document.implementation.createHTMLDocument();
     for (const id of ['pdf-pages', 'pdf-note', 'pdf-link', 'pdf-fit', 'pdf-smaller', 'pdf-larger', 'pdf-zoom', 'pdf-seed']) {
       const element = frameDoc.createElement('div');
       element.id = id;
+      if (id === 'pdf-note') element.hidden = true;
       frameDoc.body.append(element);
     }
-    frameDoc.getElementById('pdf-seed')!.textContent = JSON.stringify({ pdf: base64Of(PDF), worker: WORKER, undrawn: [] });
+    frameDoc.getElementById('pdf-seed')!.textContent = JSON.stringify({ pdf: base64Of(PDF), worker: WORKER, undrawn });
     class Port extends EventTarget {
       static current: Port;
       terminate = vi.fn();
@@ -222,7 +241,7 @@ describe('pdf frame parser startup', () => {
       readonly options: { port: Port };
       constructor(options: { port: Port }) { this.options = options; }
     }
-    const getDocument = vi.fn((_params: { worker?: PdfWorker }) => ({ promise: documentResult }));
+    const getDocument = vi.fn((options: ParserOptions) => ({ promise: documentResult(options) }));
     const revokeObjectURL = vi.fn();
     let firstVisible = 1;
     const frameWindow = Object.assign(new EventTarget(), {
@@ -255,13 +274,67 @@ describe('pdf frame parser startup', () => {
     };
   }
 
+  const pageFixture = () => ({
+    getViewport: ({ scale }: { scale: number }) => ({ width: 612 * scale, height: 792 * scale }),
+    render: vi.fn(() => ({ promise: Promise.resolve(), cancel: vi.fn() })),
+    getAnnotations: () => Promise.resolve([]),
+    cleanup: vi.fn(),
+  });
+
+  it.each(['fallback', 'worker'] as const)('%s parser receives the image pixel limit and resize area', (path) => {
+    const { port, getDocument } = start();
+    if (path === 'fallback') port.dispatchEvent(new Event('error'));
+    else port.dispatchEvent(new MessageEvent('message', {
+      data: { sourceName: 'worker', targetName: 'main', action: 'ready', data: new Uint8Array() },
+    }));
+    expect(getDocument.mock.calls[0]?.[0]).toMatchObject({ maxImageSize: 67_108_864, canvasMaxAreaInBytes: 16_777_216 });
+  });
+
+  it('a page with an image omitted by the parser still draws and explains the image limit', async () => {
+    const page = pageFixture();
+    const bytes = Uint8Array.from('%PDF << /Subtype/Image /W 8192 /H 8193 /F /CCF >>', (c) => c.charCodeAt(0));
+    // Only dictionary text is scanned. The parser stub paints the rest of the page without any image allocation.
+    const { frameDoc, port } = start(() => Promise.resolve({ numPages: 1, getPage: () => Promise.resolve(page) }), pdfUndrawnImages(bytes));
+    port.dispatchEvent(new Event('error'));
+    await vi.waitFor(() => expect(frameDoc.body.getAttribute('data-state')).toBe('shown'));
+    expect(frameDoc.querySelector('canvas')).not.toBeNull();
+    const note = frameDoc.getElementById('pdf-note')!;
+    expect(note.hasAttribute('hidden')).toBe(false);
+    expect(note.textContent).toContain('larger than the reader’s image limit');
+    expect(note.textContent).toContain('CCITT fax');
+    expect(note.textContent).toContain('WebAssembly');
+    expect(note.textContent).toContain('Download');
+  });
+
+  it('a PDF with no detected image omissions has no standing note', () => {
+    const { frameDoc, port } = start();
+    port.dispatchEvent(new Event('error'));
+    const note = frameDoc.getElementById('pdf-note')!;
+    expect(note.hasAttribute('hidden')).toBe(true);
+    expect(note.textContent).toBe('');
+  });
+
+  it('an evicted page cancels an unfinished paint before releasing its page cache', async () => {
+    const first = pageFixture();
+    const last = pageFixture();
+    const cancel = vi.fn();
+    last.render.mockReturnValue({ promise: new Promise(() => undefined), cancel });
+    const { frameDoc, port, view } = start(() => Promise.resolve({
+      numPages: 6, getPage: (n: number) => Promise.resolve(n === 6 ? last : first),
+    }));
+    port.dispatchEvent(new Event('error'));
+    await vi.waitFor(() => expect(frameDoc.body.getAttribute('data-state')).toBe('shown'));
+    view(6);
+    await vi.waitFor(() => expect(last.render).toHaveBeenCalledTimes(1));
+    view(1);
+    await vi.waitFor(() => expect(last.cleanup).toHaveBeenCalledTimes(1));
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(cancel.mock.invocationCallOrder[0]!).toBeLessThan(last.cleanup.mock.invocationCallOrder[0]!);
+  });
+
   it('a distant page releases its canvas backing store even if a caller still holds that canvas', async () => {
-    const rendered = {
-      getViewport: ({ scale }: { scale: number }) => ({ width: 612 * scale, height: 792 * scale }),
-      render: () => ({ promise: Promise.resolve(), cancel: vi.fn() }),
-      getAnnotations: () => Promise.resolve([]),
-    };
-    const { frameDoc, port, view } = start(Promise.resolve({ numPages: 6, getPage: () => Promise.resolve(rendered) }));
+    const rendered = pageFixture();
+    const { frameDoc, port, view } = start(() => Promise.resolve({ numPages: 6, getPage: () => Promise.resolve(rendered) }));
     port.dispatchEvent(new Event('error'));
     const canvasFor = (page: number) => frameDoc.querySelector<HTMLCanvasElement>(`[data-page="${page}"] canvas`);
     await vi.waitFor(() => expect(frameDoc.body.getAttribute('data-state')).toBe('shown'));
