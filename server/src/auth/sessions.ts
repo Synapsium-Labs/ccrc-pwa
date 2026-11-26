@@ -76,6 +76,8 @@ const FILE_MODE = 0o600;
  *  long, which {@link parseRecords} pins so a garbled row is dropped rather than fed
  *  to `timingSafeEqual`. */
 const SHA256_HEX_LEN = 64;
+/** A session id as the store writes it (`sha256hex`) and `parseRecords` keeps it: 64 lower-case hex digits. */
+const SESSION_ID_RE = /^[0-9a-f]{64}$/;
 
 /** One persisted session. `idHash` is `sha256(token)` in hex — NEVER the token. */
 export interface SessionRecord {
@@ -242,8 +244,7 @@ export class SessionStore {
       // such a row, do not crash.
       if (stored.length !== presented.length) continue;
       if (!timingSafeEqual(stored, presented)) continue;
-      if (rec.generation !== currentGeneration) return { verdict: 'expired', label: null };
-      if (isExpired(rec, now)) return { verdict: 'expired', label: null };
+      if (!isLive(rec, currentGeneration, now)) return { verdict: 'expired', label: null };
       rec.lastSeenAt = now;
       this.dirty = true;
       return { verdict: 'ok', label: rec.label };
@@ -277,7 +278,21 @@ export class SessionStore {
     return this.verifyMeasured(token, currentGeneration, now).verdict;
   }
 
-  /** The live row whose `idHash` this is, compared as `verifyMeasured` compares (length first, then
+  /**
+   * Whether the session `idHash` names is live at `currentGeneration` as of `now` (X5 A2.1): the same row compare,
+   * generation and TTL rules `verifyMeasured` applies (`isLive`, the one predicate both call), asked by id rather than
+   * by token, for the artifact tier's capabilities, which keep only their minting session's id. READ-ONLY: it never
+   * touches `lastSeenAt` or `dirty`, so a capability's request never keeps its session awake. No row, an id outside the
+   * lower-case hex the store writes (`SESSION_ID_RE`, so one id has one spelling), a stale generation or a passed TTL all
+   * answer `ended`. Like `verify`, it needs a prior `load`: an unloaded store has no rows and answers `ended`.
+   */
+  livenessOf(idHash: string, currentGeneration: number, now: number): 'live' | 'ended' {
+    if (!SESSION_ID_RE.test(idHash)) return 'ended';
+    const rec = this.rowOf(idHash);
+    return rec !== undefined && isLive(rec, currentGeneration, now) ? 'live' : 'ended';
+  }
+
+  /** The stored row whose `idHash` this is, compared as `verifyMeasured` compares (length first, then
    *  `timingSafeEqual`). Liveness (generation, TTLs) is the gate's question and is not asked again here. */
   private rowOf(idHash: string): SessionRecord | undefined {
     const presented = Buffer.from(idHash, 'hex');
@@ -399,6 +414,12 @@ export class SessionStore {
       this.dirty = false;
     } catch { /* best effort, by design — a lost session just means log in again */ }
   }
+}
+
+/** THE liveness predicate (X5 A2.1, extracted from `verifyMeasured`): the row's generation is the current one and
+ *  neither TTL has passed. `verifyMeasured` and `livenessOf` both call it, so the two can never disagree. */
+function isLive(rec: SessionRecord, currentGeneration: number, now: number): boolean {
+  return rec.generation === currentGeneration && !isExpired(rec, now);
 }
 
 /** True iff `rec` is past either TTL as of `now`. */
