@@ -54,8 +54,23 @@ interface PlacesModule {
   phoneDoorsFit(widthPx: number, places: readonly Place[]): readonly Place[];
 }
 
+// `sinceWords.ts` (Overlord W1 home B, Task 6): "Since you were last here", Table 4.1b's order, its cap of seven, and the rule that a
+// failed read is "unmeasured" and never "quiet".
+interface SinceLine { key: string; section: string; text: string; measured: boolean }
+type SinceRead<T> = { state: 'answered'; value: T } | { state: 'failed' };
+interface SinceProgrammes {
+  closedToday: { operator: number; sweep: number; coordinator: number };
+  programmes: { slug: string; title: string; stuck?: number; waves: { working: number; waiting: number; queued: number } }[];
+}
+interface SinceFacts { waiting: SinceRead<{ items: { state: string }[] }>; programmes: SinceRead<SinceProgrammes> }
+interface SinceModule {
+  SINCE_MAX_LINES: number;
+  UNMEASURED_TEXT: string;
+  sinceLines(facts: SinceFacts, lastHereMs: number | null, nowMs: number): readonly SinceLine[];
+}
+
 const AT = 1_700_000_000_000;
-const row = (over: Partial<Row> = {}): Row => ({ bound: null, pending: null, lastAttempt: null, ...over });
+const row =(over: Partial<Row> = {}): Row => ({ bound: null, pending: null, lastAttempt: null, ...over });
 const answered = (value: Row | null): Read => ({ state: 'answered', value, at: AT });
 const S: Readonly<Record<DesignationState['kind'], DesignationState>> = {
   unmeasured: { kind: 'unmeasured', why: 'loading' },
@@ -282,9 +297,50 @@ export function phoneCases(m: PlacesModule): Record<string, SuiteCase> {
   };
 }
 
+const HOUR = 3_600_000;
+const waves = { working: 0, waiting: 0, queued: 0 };
+const stalled = (slug: string) => ({ slug, title: `Programme ${slug}`, stuck: 1, waves });
+const sinceFacts = (over: Partial<SinceFacts> = {}): SinceFacts => ({
+  waiting: { state: 'answered', value: { items: [{ state: 'open' }, { state: 'open' }, { state: 'done' }] } },
+  programmes: { state: 'answered', value: { closedToday: { operator: 0, sweep: 1, coordinator: 2 }, programmes: [] } }, ...over,
+});
+
+export function sinceCases(m: SinceModule): Record<string, SuiteCase> {
+  return {
+    "Table 4.1b's order: Needs you, then Changed that matters": () => {
+      const lines = m.sinceLines(sinceFacts(), AT - HOUR, AT);
+      expect(lines.map((l) => [l.key, l.section])).toEqual([['needs-you', 'needs-you'], ['closed', 'changed'], ['stalled', 'changed']]);
+      expect(lines.map((l) => l.text)).toEqual(['2 items waiting on you', '3 runs closed since you were last here', 'no programme stalled']);
+    },
+    'a failed read is unmeasured on every line it feeds, never quiet and never 0': () => {
+      const both = m.sinceLines({ waiting: { state: 'failed' }, programmes: { state: 'failed' } }, AT - HOUR, AT);
+      expect(both.map((l) => l.text)).toEqual([m.UNMEASURED_TEXT, m.UNMEASURED_TEXT, m.UNMEASURED_TEXT]);
+      expect(both.every((l) => !l.measured)).toBe(true);
+      const waitingOnly = m.sinceLines(sinceFacts({ waiting: { state: 'failed' } }), AT - HOUR, AT);
+      expect(waitingOnly.map((l) => l.text)).toEqual([m.UNMEASURED_TEXT, '3 runs closed since you were last here', 'no programme stalled']);
+      const programmesOnly = m.sinceLines(sinceFacts({ programmes: { state: 'failed' } }), AT - HOUR, AT);
+      expect(programmesOnly.map((l) => l.text)).toEqual(['2 items waiting on you', m.UNMEASURED_TEXT, m.UNMEASURED_TEXT]);
+    },
+    'the cap of seven: the sixth line is kept, the rest are counted': () => {
+      const many = { closedToday: { operator: 0, sweep: 0, coordinator: 0 }, programmes: Array.from({ length: 9 }, (_, i) => stalled(`prog-${i}`)) };
+      const lines = m.sinceLines(sinceFacts({ programmes: { state: 'answered', value: many } }), AT - HOUR, AT);
+      expect(m.SINCE_MAX_LINES).toBe(7);
+      expect(lines).toHaveLength(7);
+      expect(lines.slice(0, 6).map((l) => l.key)).toEqual(['needs-you', 'closed', 'stalled:prog-0', 'stalled:prog-1', 'stalled:prog-2', 'stalled:prog-3']);
+      expect(lines[6]).toMatchObject({ key: 'more', text: '5 more not shown' });
+    },
+    'a device with no stamp, or a stamp from the future, reads the last 24 hours': () => {
+      for (const stamp of [null, AT + HOUR]) {
+        expect(m.sinceLines(sinceFacts(), stamp, AT)[1]!.text).toBe('3 runs closed in the last 24 hours');
+      }
+    },
+  };
+}
+
 const HOME = path.join(ROOT, 'pwa/src/overlord/homePlace.ts');
 const READ_OUTCOME = path.join(ROOT, 'pwa/src/overlord/readOutcome.ts');
 const PLACES = path.join(ROOT, 'pwa/src/lib/places.ts');
+const SINCE = path.join(ROOT, 'pwa/src/overlord/sinceWords.ts');
 
 const DESIGNATION_SET: MutantSet<HomeModule> = {
   modulePath: HOME,
@@ -365,6 +421,16 @@ const PHONE_SET: MutantSet<PlacesModule> = {
   suite: phoneCases,
 };
 
+const SINCE_SET: MutantSet<SinceModule> = {
+  modulePath: SINCE,
+  mutants: [
+    { id: 'S1', old: 'text: UNMEASURED_TEXT', new: "text: 'quiet'" },
+    { id: 'S2', old: 'ordered.length <= SINCE_MAX_LINES', new: 'true' },
+    { id: 'S3', old: "'needs-you': 1, changed: 2,", new: "'needs-you': 2, changed: 1," },
+  ],
+  suite: sinceCases,
+};
+
 /** This piece's sets, keyed as `mutation-floors.json` keys them (`<file>#<decider>`). */
 export const HOME_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'pwa/src/overlord/homePlace.ts#designationStateOf': DESIGNATION_SET as MutantSet<never>,
@@ -378,4 +444,5 @@ export const HOME_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'pwa/src/lib/places.ts#placesFor': PLACES_SET as MutantSet<never>,
   'pwa/src/lib/places.ts#deskPlacesFor': DESK_SET as MutantSet<never>,
   'pwa/src/lib/places.ts#phoneDoorsFit': PHONE_SET as MutantSet<never>,
+  'pwa/src/overlord/sinceWords.ts#sinceLines': SINCE_SET as MutantSet<never>,
 };
