@@ -494,6 +494,80 @@ describe('ccrc install: the fixture tree', () => {
       expect(close?.[1], `'${title}' runs under the default bound again`).toBe('60_000');
     }
   });
+
+  // #3408 (review 3912, F3): the installer wrapper is a guard, and a guard owes a red when it is deleted. The wrapper
+  // (`itInstalls`, ccrc-installFixture.ts) gives a case that runs `ccrc install` a bound derived from its install count
+  // and fails the case when the measured count differs. Three things keep that from going quietly: the wrapper still
+  // passes the one bound function and still asserts the count, and each converted case still opens through it, with the
+  // count it was written from (a case reverted to a bare `it` would sit on the 20 s default again).
+  it('the installer wrapper: it passes the one bound, it asserts the count, and the converted cases still open through it (#3408)', () => {
+    const fixture = read(join(here, 'ccrc-installFixture.ts'));
+    const wrapper = /export const itInstalls = [\s\S]*?\n\};\n/.exec(fixture)?.[0] ?? '';
+    expect(wrapper, 'no `itInstalls` definition this pin can read — re-anchor it').not.toBe('');
+    expect(wrapper, 'every opener must pass the one bound function as its timeout').toMatch(/\},\s*installBudgetMs\(runs\)\);/);
+    expect(wrapper, 'the count assertion is gone').toMatch(/expect\(installerRuns - before, [^\n]*\)\.toBe\(runs\);/);
+    expect(fixture, 'runInstall no longer counts the install verb').toMatch(/if \(args\[0\] === 'install'\) installerRuns\+\+;/);
+    expect(fixture, 'the bound is no longer held at the suite default').toMatch(/Math\.max\(platformDeadline\([^\n]*SUITE_CASE_MS\)/);
+    const dflt = "scaled(process.platform === 'darwin' ? 90_000 : 20_000)";
+    expect(fixture, 'the fixture spells the suite default differently from vitest.config.ts').toContain(`const SUITE_CASE_MS = ${dflt};`);
+    expect(read(join(REPO, 'server', 'vitest.config.ts')), 'vitest.config.ts spells testTimeout differently from the fixture').toContain(`testTimeout: ${dflt},`);
+    const converted: Array<[string, Array<[string, number]>]> = [
+    ['ccrc-install-tree.test.ts', [
+      ['replaces a file whose size and mtime are unchanged but whose content is not', 2],
+      ['a second run keeps the runtime deps the first one installed', 2],
+      ['keeps a remote-control flag the box already had, byte for byte, on every re-run', 2],
+      ['leaves the two seeded files alone and does not rewrite accounts.sh', 2],
+      ['DOES rewrite accounts.sh when the operator has edited the roster', 2],
+      ['the DARWIN arm of _inst_bins, forced on Linux (OSTYPE=darwin23): the five GPT-la', 3],
+      ['a second run rewrites none of them, and leaves no temp file behind', 2],
+      ['repairs a mode someone changed — without rewriting the file', 3],
+      ['a second run makes no second copy — the file it would save is its own', 2],
+    ]],
+    ['ccrc-install-versioned.test.ts', [
+      ['a fresh box: the tree lands in ~/ccrc-versions/<name>/, never at the live name, ', 1],
+      ['a new name while ~/ccrc points at another version: rsync into ~/ccrc-versions/<n', 1],
+      ['a re-run from the version ~/ccrc points at: the pre-W6 sentence, no copy, no npm', 1],
+      ['a run of ANOTHER placed version\'s own ccrc flips to it without copying; a comple', 2],
+      ['a re-placement that dies leaves its version INCOMPLETE — the kept record goes be', 2],
+      ['the kept record is written LAST: a run killed at the stamp copy leaves no record', 2],
+      ['the kept DIGEST is written before the record: a run killed at the digest copy le', 2],
+      ['a run that PLACES the tree (how=copy) records a fresh digest: `1:<64 hex>`, mode', 1],
+      ['`ccrc install` from the launcher over a WRITTEN-THROUGH pointed-at version: its ', 1],
+      ['`ccrc install` from the launcher over a version kept BEFORE digests existed: the', 1],
+      ['a run of ANOTHER placed version\'s ccrc, that version written through: it is flip', 1],
+      ['the other refusal: a source tree that is NOT a placed version but carries a stra', 1],
+      ['the digest is an install-path tool now: with `sha256sum` (`shasum` on macOS) ABS', 1],
+      ['a run of ANOTHER placed version\'s ccrc, that version written through, from a box', 1],
+      ['control: the same flip onto a version that IS kept installs that version\'s kept ', 1],
+      ['control: `ccrc install` from the LAUNCHER (how=running) over a written-through p', 1],
+      ['a skipped stamp over a box stamp that STAYS says so — the launcher run, no build', 1],
+      ['a hand repair onto a digestless version whose box stamp ALREADY names it (a kill', 1],
+      ['the same hand repair onto a version that is WRITTEN THROUGH (its digest re-measu', 1],
+      ['a launcher migration of a real ~/ccrc whose target directory holds a LEFTOVER ke', 1],
+      ['a stamp with NO `version` names `untagged-<sha12>`: flipped onto that very name ', 2],
+      ['after an install whose doctor passed, the GC keeps the newest CCRC_VERSIONS_KEEP', 1],
+    ]],
+    ];
+    // A title as the source spells it: the literal's own text, its escapes read.
+    const titleAt = (q: string, rest: string): string => {
+      let out = '';
+      for (let i = 0; i < rest.length && rest[i] !== q; i++) {
+        if (rest[i] === '\\') i++;
+        out += rest[i];
+      }
+      return out;
+    };
+    for (const [file, cases] of converted) {
+      const src = read(join(here, file));
+      const wrapped = [...src.matchAll(/^\s*itInstalls\((\d+)(?:, itLinux)?\)\((['"`])(.*)$/gm)].map((m) => [titleAt(m[2]!, m[3]!), Number(m[1])] as const);
+      const bare = [...src.matchAll(/^\s*(?:it|itLinux)\((['"`])(.*)$/gm)].map((m) => titleAt(m[1]!, m[2]!));
+      for (const [stem, runs] of cases) {
+        expect(bare.filter((t) => t.startsWith(stem)), `${file}: '${stem}' is a bare case again`).toEqual([]);
+        const at = wrapped.filter(([t]) => t.startsWith(stem));
+        expect(at.map(([, n]) => n), `${file}: '${stem}' does not open through itInstalls(${runs})`).toEqual([runs]);
+      }
+    }
+  });
 });
 
 describe('ccrc install: a fresh box', () => {
