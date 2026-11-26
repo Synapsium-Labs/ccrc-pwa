@@ -6,11 +6,13 @@
 // WHAT W1 FILLS, from the two reads the console already makes:
 //   Needs you             what waits now: `GET /api/waiting`'s open items and its parked approvals. The Waiting door's own
 //                         number also counts sessions' questions, which this read does not carry.
-//   Changed that matters  the runs closed since the stamp (`GET /api/programmes?since=`'s `closedToday`, which counts from the
-//                         `since` it was asked for) and one line per programme that read shows stalled (`stuck`).
+//   Changed that matters  the runs closed (`GET /api/programmes?since=`'s `closedToday`, counted from the `since` the server
+//                         APPLIED, which it says in `appliedSince` and which may differ from the stamp asked: the line is worded
+//                         by the window applied, and an answer without the field draws no count) and one line per programme that read shows stalled (`stuck`).
 //
 // AN UNMEASURED READER SAYS SO (§4.1): a read that failed is `unmeasured` on each line it feeds, never `quiet` and never 0.
-// A measured zero says what is true ("nothing waiting on you"). A programme whose stuck pass has not run (no `stuck` field while
+// A measured zero says what is true ("nothing waiting on you"); the parked approvals are part of that zero, so an answer without
+// its `approvals` field (their read failed) says "parked approvals not read" and never "nothing waiting". A programme whose stuck pass has not run (no `stuck` field while
 // it has open waves) is one `unmeasured` line, never a programme that is not stalled.
 //
 // ORDER AND CAP: the lines sort by Table 4.1b's `SINCE_ORDER` (a stable sort, so a section keeps the order its lines were built
@@ -50,6 +52,8 @@ export type SinceWaiting = Pick<WaitingView, 'items' | 'approvals'>;
  *  stuck pass has run. */
 export interface SinceProgrammes {
   readonly closedToday: { readonly operator: number; readonly sweep: number; readonly coordinator: number };
+  /** The `since` the server counted `closedToday` from, epoch ms; absent from an older server. */
+  readonly appliedSince?: number;
   readonly programmes: readonly {
     readonly slug: string; readonly title: string; readonly stuck?: number;
     readonly waves: { readonly working: number; readonly waiting: number; readonly queued: number };
@@ -77,6 +81,7 @@ export function sinceOf(lastHereMs: number | null, nowMs: number): number {
   return usable(lastHereMs, nowMs) ? lastHereMs : nowMs - SINCE_DEFAULT_WINDOW_MS;
 }
 
+const APPROVALS_NOT_READ = 'parked approvals not read';
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
 
 const unmeasured = (section: SinceSection, key: string): SinceLine =>
@@ -86,16 +91,48 @@ const measured = (section: SinceSection, key: string, text: string): SinceLine =
 
 function needsYouLines(read: SinceRead<SinceWaiting>): SinceLine[] {
   if (read.state === 'failed') return [unmeasured('needs-you', 'needs-you')];
-  const n = waitingCount(read.value.items) + (read.value.approvals?.length ?? 0);
+  const { items, approvals } = read.value;
+  const open = waitingCount(items);
+  // The parked approvals are absent from the answer when their read failed, and the place draws only under `overlord-v1`, so no
+  // older server explains the absence: it is unmeasured, never zero. The items count stays measured.
+  if (approvals === undefined) {
+    return [measured('needs-you', 'needs-you', open === 0 ? `no open items; ${APPROVALS_NOT_READ}` : `${plural(open, 'item', 'items')} waiting on you; ${APPROVALS_NOT_READ}`)];
+  }
+  const n = open + approvals.length;
   return [measured('needs-you', 'needs-you', n === 0 ? 'nothing waiting on you' : `${plural(n, 'item', 'items')} waiting on you`)];
 }
 
-function changedLines(read: SinceRead<SinceProgrammes>, window: string): SinceLine[] {
+/** The window the programmes read counted over, in words. The server holds the asked `since` to a window of its own and says which
+ *  it applied (`appliedSince`): the one reader of that field. Same as the asked window, the words the block always used; a different
+ *  one is worded by the window applied, its length read off the two numbers (the server's bound is never written here); a window
+ *  with no length is `none`, and an answer without the field (an older server) is `unknown`: never the asked window, never zero. */
+type CountedWindow = { readonly kind: 'words'; readonly words: string } | { readonly kind: 'none' } | { readonly kind: 'unknown' };
+
+/** An applied window shorter than this has no length worth counting over: the server's own `now` is at most a clock's skew from ours. */
+const NO_WINDOW_MS = 60_000;
+const MINUTE_MS = 60_000;
+
+function countedWindow(applied: number | undefined, asked: number, askedWords: string, nowMs: number): CountedWindow {
+  if (applied === undefined || !Number.isFinite(applied)) return { kind: 'unknown' };
+  if (applied === asked) return { kind: 'words', words: askedWords };
+  const lengthMs = nowMs - applied;
+  if (lengthMs < NO_WINDOW_MS) return { kind: 'none' };
+  const minutes = Math.round(lengthMs / MINUTE_MS);
+  return { kind: 'words', words: `in the last ${minutes % 60 === 0 || minutes >= 120 ? plural(Math.round(minutes / 60), 'hour', 'hours') : plural(minutes, 'minute', 'minutes')}` };
+}
+
+function closedLine(win: CountedWindow, closed: number): SinceLine {
+  const label = SINCE_LABEL.changed;
+  if (win.kind === 'unknown') return { key: 'closed', section: 'changed', label, text: 'runs closed: the window counted is unknown', measured: false };
+  if (win.kind === 'none') return { key: 'closed', section: 'changed', label, text: 'no window to count runs closed in', measured: false };
+  return measured('changed', 'closed', closed === 0 ? `no run closed ${win.words}` : `${plural(closed, 'run', 'runs')} closed ${win.words}`);
+}
+
+function changedLines(read: SinceRead<SinceProgrammes>, asked: number, askedWords: string, nowMs: number): SinceLine[] {
   if (read.state === 'failed') return [unmeasured('changed', 'closed'), unmeasured('changed', 'stalled')];
   const { closedToday: c, programmes } = read.value;
-  const closed = c.operator + c.sweep + c.coordinator;
   const out: SinceLine[] = [
-    measured('changed', 'closed', closed === 0 ? `no run closed ${window}` : `${plural(closed, 'run', 'runs')} closed ${window}`),
+    closedLine(countedWindow(read.value.appliedSince, asked, askedWords, nowMs), c.operator + c.sweep + c.coordinator),
   ];
   const stalled = programmes.filter((p) => (p.stuck ?? 0) > 0);
   for (const p of stalled) {
@@ -109,11 +146,14 @@ function changedLines(read: SinceRead<SinceProgrammes>, window: string): SinceLi
 
 /** The block: at most `SINCE_MAX_LINES` lines in Table 4.1b's order. `lastHereMs` is this device's stamp, `null` for none. */
 export function sinceLines(facts: SinceFacts, lastHereMs: number | null, nowMs: number): readonly SinceLine[] {
-  const window = usable(lastHereMs, nowMs) ? SINCE_WINDOW_WORDS.stamped : SINCE_WINDOW_WORDS.default;
+  const askedWords = usable(lastHereMs, nowMs) ? SINCE_WINDOW_WORDS.stamped : SINCE_WINDOW_WORDS.default;
   // Built out of table order on purpose: the sort below, not the building, is what puts a line in Table 4.1b's place.
-  const built = [...changedLines(facts.programmes, window), ...needsYouLines(facts.waiting)];
+  const built = [...changedLines(facts.programmes, sinceOf(lastHereMs, nowMs), askedWords, nowMs), ...needsYouLines(facts.waiting)];
   const ordered = built.sort((a, b) => SINCE_ORDER[a.section] - SINCE_ORDER[b.section]);
   if (ordered.length <= SINCE_MAX_LINES) return ordered;
   const shown = ordered.slice(0, SINCE_MAX_LINES - 1);
-  return [...shown, measured('routine', 'more', `${ordered.length - shown.length} more not shown`)];
+  // The count stands for the lines it hides, so it takes the section of the first of them: the order above holds (the shown
+  // lines sort at or before it) and it reads beside what it hides, never as a routine line.
+  const hidden = ordered[shown.length]!;
+  return [...shown, measured(hidden.section, 'more', `${ordered.length - shown.length} more not shown`)];
 }

@@ -60,9 +60,10 @@ interface SinceLine { key: string; section: string; text: string; measured: bool
 type SinceRead<T> = { state: 'answered'; value: T } | { state: 'failed' };
 interface SinceProgrammes {
   closedToday: { operator: number; sweep: number; coordinator: number };
+  appliedSince?: number;
   programmes: { slug: string; title: string; stuck?: number; waves: { working: number; waiting: number; queued: number } }[];
 }
-interface SinceFacts { waiting: SinceRead<{ items: { state: string }[] }>; programmes: SinceRead<SinceProgrammes> }
+interface SinceFacts { waiting: SinceRead<{ items: { state: string }[]; approvals?: unknown[] }>; programmes: SinceRead<SinceProgrammes> }
 interface SinceModule {
   SINCE_MAX_LINES: number;
   UNMEASURED_TEXT: string;
@@ -70,7 +71,7 @@ interface SinceModule {
 }
 
 const AT = 1_700_000_000_000;
-const row =(over: Partial<Row> = {}): Row => ({ bound: null, pending: null, lastAttempt: null, ...over });
+const row = (over: Partial<Row> = {}): Row => ({ bound: null, pending: null, lastAttempt: null, ...over });
 const answered = (value: Row | null): Read => ({ state: 'answered', value, at: AT });
 const S: Readonly<Record<DesignationState['kind'], DesignationState>> = {
   unmeasured: { kind: 'unmeasured', why: 'loading' },
@@ -301,8 +302,8 @@ const HOUR = 3_600_000;
 const waves = { working: 0, waiting: 0, queued: 0 };
 const stalled = (slug: string) => ({ slug, title: `Programme ${slug}`, stuck: 1, waves });
 const sinceFacts = (over: Partial<SinceFacts> = {}): SinceFacts => ({
-  waiting: { state: 'answered', value: { items: [{ state: 'open' }, { state: 'open' }, { state: 'done' }] } },
-  programmes: { state: 'answered', value: { closedToday: { operator: 0, sweep: 1, coordinator: 2 }, programmes: [] } }, ...over,
+  waiting: { state: 'answered', value: { items: [{ state: 'open' }, { state: 'open' }, { state: 'done' }], approvals: [] } },
+  programmes: { state: 'answered', value: { closedToday: { operator: 0, sweep: 1, coordinator: 2 }, programmes: [], appliedSince: AT - HOUR } }, ...over,
 });
 
 export function sinceCases(m: SinceModule): Record<string, SuiteCase> {
@@ -327,12 +328,27 @@ export function sinceCases(m: SinceModule): Record<string, SuiteCase> {
       expect(m.SINCE_MAX_LINES).toBe(7);
       expect(lines).toHaveLength(7);
       expect(lines.slice(0, 6).map((l) => l.key)).toEqual(['needs-you', 'closed', 'stalled:prog-0', 'stalled:prog-1', 'stalled:prog-2', 'stalled:prog-3']);
-      expect(lines[6]).toMatchObject({ key: 'more', text: '5 more not shown' });
+      // The count sits with the lines it hides (here Changed that matters), never in Routine.
+      expect(lines[6]).toMatchObject({ key: 'more', section: 'changed', text: '5 more not shown' });
+    },
+    'a missing approvals field is not zero: the approvals are said to be unread': () => {
+      const noItems = m.sinceLines(sinceFacts({ waiting: { state: 'answered', value: { items: [] } } }), AT - HOUR, AT);
+      expect(noItems[0]!.text).toBe('no open items; parked approvals not read');
+      const items = m.sinceLines(sinceFacts({ waiting: { state: 'answered', value: { items: [{ state: 'open' }] } } }), AT - HOUR, AT);
+      expect(items[0]!.text).toBe('1 item waiting on you; parked approvals not read');
     },
     'a device with no stamp, or a stamp from the future, reads the last 24 hours': () => {
       for (const stamp of [null, AT + HOUR]) {
-        expect(m.sinceLines(sinceFacts(), stamp, AT)[1]!.text).toBe('3 runs closed in the last 24 hours');
+        const applied = { state: 'answered' as const, value: { closedToday: { operator: 0, sweep: 1, coordinator: 2 }, programmes: [], appliedSince: AT - 24 * HOUR } };
+        expect(m.sinceLines(sinceFacts({ programmes: applied }), stamp, AT)[1]!.text).toBe('3 runs closed in the last 24 hours');
       }
+    },
+    'the closed line is worded by the window the server applied, and draws no count when it is unknown': () => {
+      const closed = (appliedSince: number | undefined) => m.sinceLines(
+        sinceFacts({ programmes: { state: 'answered', value: { closedToday: { operator: 0, sweep: 1, coordinator: 2 }, programmes: [], appliedSince } } }), AT - 100 * HOUR, AT)[1]!;
+      expect(closed(AT - 48 * HOUR).text).toBe('3 runs closed in the last 48 hours');
+      expect(closed(AT).text).toBe('no window to count runs closed in');
+      expect(closed(undefined)).toMatchObject({ text: 'runs closed: the window counted is unknown', measured: false });
     },
   };
 }

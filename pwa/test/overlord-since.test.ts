@@ -11,7 +11,7 @@ import { api, ApiError } from '../src/lib/api';
 import { LAST_HERE_KEY, readLastHere, writeLastHere } from '../src/overlord/lastHere';
 import { SincePart } from '../src/overlord/SincePart';
 import {
-  SINCE_DEFAULT_WINDOW_MS, SINCE_MAX_LINES, SINCE_ORDER, SINCE_WINDOW_WORDS, UNMEASURED_TEXT, sinceLines, sinceOf,
+  SINCE_DEFAULT_WINDOW_MS, SINCE_LABEL, SINCE_MAX_LINES, SINCE_ORDER, SINCE_WINDOW_WORDS, UNMEASURED_TEXT, sinceLines, sinceOf,
   type SinceFacts, type SinceProgrammes, type SinceRead,
 } from '../src/overlord/sinceWords';
 import { memoryStorage } from '../src/lib/storage';
@@ -24,15 +24,15 @@ const ok = <T,>(value: T): SinceRead<T> => ({ state: 'answered', value });
 const FAILED: SinceRead<never> = { state: 'failed' };
 const waves = { working: 0, waiting: 0, queued: 0 };
 const programmes = (over: Partial<SinceProgrammes> = {}): SinceProgrammes => ({
-  closedToday: { operator: 0, sweep: 0, coordinator: 0 }, programmes: [], ...over,
+  closedToday: { operator: 0, sweep: 0, coordinator: 0 }, programmes: [], appliedSince: NOW - HOUR, ...over,
 });
-const facts = (over: Partial<SinceFacts> = {}): SinceFacts => ({ waiting: ok({ items: [] }), programmes: ok(programmes()), ...over });
+const facts = (over: Partial<SinceFacts> = {}): SinceFacts => ({ waiting: ok({ items: [], approvals: [] }), programmes: ok(programmes()), ...over });
 const openItems = (n: number): ItemView[] => Array.from({ length: n }, (_, i) => itemView({ id: i + 1 }));
 const stalled = (slug: string, stuck: number, title = `Programme ${slug}`) => ({ slug, title, stuck, waves });
 
 describe('sinceLines: the order, the cap and the failure contract', () => {
   it('Table 4.1b: Needs you first, then Changed that matters', () => {
-    const lines = sinceLines(facts({ waiting: ok({ items: openItems(2) }), programmes: ok(programmes({ closedToday: { operator: 1, sweep: 0, coordinator: 2 } })) }), NOW - HOUR, NOW);
+    const lines = sinceLines(facts({ waiting: ok({ items: openItems(2), approvals: [] }), programmes: ok(programmes({ closedToday: { operator: 1, sweep: 0, coordinator: 2 } })) }), NOW - HOUR, NOW);
     expect(lines.map((l) => l.section)).toEqual(['needs-you', 'changed', 'changed']);
     expect(lines.map((l) => l.text)).toEqual(['2 items waiting on you', '3 runs closed since you were last here', 'no programme stalled']);
     const order = lines.map((l) => SINCE_ORDER[l.section]);
@@ -42,9 +42,28 @@ describe('sinceLines: the order, the cap and the failure contract', () => {
 
   it('counts only open items, and the parked approvals beside them', () => {
     const items = [itemView({ id: 1 }), itemView({ id: 2, state: 'checking' }), itemView({ id: 3, state: 'done' })];
-    expect(sinceLines(facts({ waiting: ok({ items }) }), NOW - HOUR, NOW)[0]!.text).toBe('1 item waiting on you');
+    expect(sinceLines(facts({ waiting: ok({ items, approvals: [] }) }), NOW - HOUR, NOW)[0]!.text).toBe('1 item waiting on you');
     const approvals = [{}, {}] as unknown as ParkedApprovalView[];
     expect(sinceLines(facts({ waiting: ok({ items, approvals }) }), NOW - HOUR, NOW)[0]!.text).toBe('3 items waiting on you');
+  });
+
+  // F7: the parked-approvals field is absent when its read failed, and the place draws only under `overlord-v1`, so no older
+  // server explains the absence: it is unmeasured, never zero.
+  it('a missing approvals field is not zero: with no items the line never says nothing is waiting', () => {
+    const line = sinceLines(facts({ waiting: ok({ items: [] }) }), NOW - HOUR, NOW)[0]!;
+    expect(line.key).toBe('needs-you');
+    expect(line.text).toBe('no open items; parked approvals not read');
+    expect(line.text).not.toMatch(/nothing waiting/i);
+  });
+
+  it('a missing approvals field with open items keeps the items count and says the approvals were not read', () => {
+    const line = sinceLines(facts({ waiting: ok({ items: openItems(2) }) }), NOW - HOUR, NOW)[0]!;
+    expect(line.text).toBe('2 items waiting on you; parked approvals not read');
+    expect(line.measured).toBe(true);
+  });
+
+  it('a present, empty approvals field is a measured zero: nothing waiting on you', () => {
+    expect(sinceLines(facts({ waiting: ok({ items: [], approvals: [] }) }), NOW - HOUR, NOW)[0]!.text).toBe('nothing waiting on you');
   });
 
   it('a measured zero says what is true, and is a measured line', () => {
@@ -99,6 +118,16 @@ describe('sinceLines: the order, the cap and the failure contract', () => {
     expect(fit).toHaveLength(7);
     expect(fit.map((l) => l.key)).not.toContain('more');
   });
+
+  // M8: the overflow line stands for the lines it hides, so it sits in their section, directly after the six shown.
+  it('an overflow of changed-that-matters lines keeps its line in that section, right after the six shown', () => {
+    const many = Array.from({ length: 9 }, (_, i) => stalled(`prog-${i}`, 1));
+    const lines = sinceLines(facts({ programmes: ok(programmes({ programmes: many })) }), NOW - HOUR, NOW);
+    expect(lines[5]!.section).toBe('changed');
+    expect(lines[6]).toMatchObject({ key: 'more', section: 'changed', label: SINCE_LABEL.changed });
+    const order = lines.map((l) => SINCE_ORDER[l.section]);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+  });
 });
 
 describe('the window: a device with no stamp reads the last 24 hours', () => {
@@ -109,10 +138,57 @@ describe('the window: a device with no stamp reads the last 24 hours', () => {
     expect(sinceOf(NOW + HOUR, NOW)).toBe(NOW - 24 * HOUR);
   });
   it('the lines say which window they cover', () => {
-    const closed = (stamp: number | null) => sinceLines(facts(), stamp, NOW).find((l) => l.key === 'closed')!.text;
+    // The server applied the window that was asked (`appliedSince` equals it), so the line words the asked window.
+    const closed = (stamp: number | null) =>
+      sinceLines(facts({ programmes: ok(programmes({ appliedSince: sinceOf(stamp, NOW) })) }), stamp, NOW).find((l) => l.key === 'closed')!.text;
     expect(closed(null)).toBe(`no run closed ${SINCE_WINDOW_WORDS.default}`);
     expect(closed(NOW - HOUR)).toBe(`no run closed ${SINCE_WINDOW_WORDS.stamped}`);
     expect(closed(NOW + HOUR)).toBe(`no run closed ${SINCE_WINDOW_WORDS.default}`);
+  });
+
+  // F6: the server holds the asked `since` to a window of its own and says which it applied (`appliedSince`); the line words the
+  // window the count was taken over, never the stamp when the two differ. The bound's length is the server's: it is read off the
+  // field here, never written in the console.
+  describe('the window applied by the server, not the one asked', () => {
+    const closedLine = (stamp: number | null, over: Partial<SinceProgrammes>) =>
+      sinceLines(facts({ programmes: ok(programmes({ closedToday: { operator: 1, sweep: 1, coordinator: 1 }, ...over })) }), stamp, NOW).find((l) => l.key === 'closed')!;
+
+    it('the same window: the line reads as it always did', () => {
+      expect(closedLine(NOW - 5 * HOUR, { appliedSince: NOW - 5 * HOUR }).text).toBe('3 runs closed since you were last here');
+      expect(closedLine(null, { appliedSince: NOW - 24 * HOUR }).text).toBe('3 runs closed in the last 24 hours');
+    });
+
+    it('a stamp older than the server\'s bound: worded by the window applied, never "since you were last here"', () => {
+      const line = closedLine(NOW - 100 * HOUR, { appliedSince: NOW - 48 * HOUR });
+      expect(line.text).toBe('3 runs closed in the last 48 hours');
+      expect(line.measured).toBe(true);
+      // Whatever length the server applied is what is said: nothing here knows 48.
+      expect(closedLine(NOW - 100 * HOUR, { appliedSince: NOW - 36 * HOUR }).text).toBe('3 runs closed in the last 36 hours');
+      expect(closedLine(NOW - 100 * HOUR, { appliedSince: NOW - 90 * 60_000 }).text).toBe('3 runs closed in the last 90 minutes');
+    });
+
+    it('a stamp ahead of the server\'s clock: the applied window is empty, and it says there was no window, not a measured zero', () => {
+      for (const appliedSince of [NOW, NOW + 5_000, NOW - 20_000]) {
+        const line = closedLine(NOW - HOUR, { appliedSince, closedToday: { operator: 0, sweep: 0, coordinator: 0 } });
+        expect(line.text).toBe('no window to count runs closed in');
+        expect(line.measured).toBe(false);
+        expect(line.text).not.toMatch(/\bno run closed\b|\b0\b/);
+      }
+    });
+
+    it('an answer without the field (an older server): the window is unknown and no count is drawn, never zero', () => {
+      for (const closedToday of [{ operator: 0, sweep: 0, coordinator: 0 }, { operator: 1, sweep: 1, coordinator: 1 }]) {
+        const line = closedLine(NOW - HOUR, { appliedSince: undefined, closedToday });
+        expect(line.text).toBe('runs closed: the window counted is unknown');
+        expect(line.measured).toBe(false);
+        expect(line.text).not.toMatch(/\d|no run closed/);
+      }
+    });
+
+    it('the stalled lines do not depend on the window', () => {
+      const lines = sinceLines(facts({ programmes: ok(programmes({ appliedSince: undefined, programmes: [stalled('prog-a', 1)] })) }), NOW - HOUR, NOW);
+      expect(lines.map((l) => l.text)).toContain('Programme prog-a stalled: 1 run stuck');
+    });
   });
 });
 
@@ -158,12 +234,12 @@ describe('lastHere: the one reader and writer of the stamp', () => {
 describe('SincePart: reads on mount, reads the stamp before it writes the new one', () => {
   afterEach(() => { cleanup(); vi.restoreAllMocks(); window.localStorage.clear(); });
   const programmesAnswer = (over: Partial<ProgrammesAnswer> = {}): ProgrammesAnswer =>
-    ({ ok: true, programmes: [], closedToday: { operator: 0, sweep: 1, coordinator: 1 }, ...over });
+    ({ ok: true, programmes: [], closedToday: { operator: 0, sweep: 1, coordinator: 1 }, appliedSince: NOW - 5 * HOUR, ...over });
   const mount = () => render(createElement(SincePart, { now: () => NOW }));
 
   it('asks the programmes read from the stamp it read, and then keeps this visit as the stamp', async () => {
     window.localStorage.setItem(LAST_HERE_KEY, String(NOW - 5 * HOUR));
-    vi.spyOn(api, 'waiting').mockResolvedValue({ ok: true, waiting: waitingView({ items: openItems(1) }) });
+    vi.spyOn(api, 'waiting').mockResolvedValue({ ok: true, waiting: waitingView({ items: openItems(1), approvals: [] }) });
     const programmes = vi.spyOn(api, 'programmes').mockResolvedValue(programmesAnswer());
     mount();
     await screen.findByText('1 item waiting on you');
@@ -173,8 +249,8 @@ describe('SincePart: reads on mount, reads the stamp before it writes the new on
   });
 
   it('a device with no stamp reads the last 24 hours, and says so', async () => {
-    vi.spyOn(api, 'waiting').mockResolvedValue({ ok: true, waiting: waitingView() });
-    const programmes = vi.spyOn(api, 'programmes').mockResolvedValue(programmesAnswer());
+    vi.spyOn(api, 'waiting').mockResolvedValue({ ok: true, waiting: waitingView({ approvals: [] }) });
+    const programmes = vi.spyOn(api, 'programmes').mockResolvedValue(programmesAnswer({ appliedSince: NOW - 24 * HOUR }));
     mount();
     await screen.findByText('2 runs closed in the last 24 hours');
     expect(programmes).toHaveBeenCalledWith(NOW - 24 * HOUR);
@@ -195,7 +271,7 @@ describe('SincePart: reads on mount, reads the stamp before it writes the new on
   it('a storage that throws is no stamp: the block still draws, and the write is lost without a throw', async () => {
     vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('blocked'); });
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('blocked'); });
-    vi.spyOn(api, 'waiting').mockResolvedValue({ ok: true, waiting: waitingView() });
+    vi.spyOn(api, 'waiting').mockResolvedValue({ ok: true, waiting: waitingView({ approvals: [] }) });
     const programmes = vi.spyOn(api, 'programmes').mockResolvedValue(programmesAnswer());
     mount();
     await screen.findByText('nothing waiting on you');
