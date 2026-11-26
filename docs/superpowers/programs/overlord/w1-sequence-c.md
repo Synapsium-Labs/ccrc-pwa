@@ -161,8 +161,8 @@ routes.
 
 - Commits on `ws/overlord-w1-sequence-c`, nothing pushed.
 - Packets, each sent before any edit of a file another worker holds: `server/src/index.ts` (two lines) and the kebab census arm
-  in `server/test/mail-routes.test.ts` were answered yes and applied as sent; the two mutation floor files wait on their
-  holder's answer, untouched here.
+  in `server/test/mail-routes.test.ts` were answered yes and applied as sent, and so were the two mutation floor files (the four
+  sequence door rows at floor 1), after their holder's yes; that holder appends its own rows beside these.
 - Runs, each through the fleet test wrapper, at most two workers: the Task 0 and Task 7 suites; the rings and single-definition
   suites; the client, door process, containment, skill, census and growth suites that read the changed files; the doc suites
   for this note; the server's source type check. The tests' type check over the whole test tree was killed by the test
