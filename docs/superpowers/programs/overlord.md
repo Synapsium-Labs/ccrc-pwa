@@ -1067,6 +1067,7 @@ the subsections above, these are the rule now.
   | #3403 | This ledger, to 2026-11-25 22:45Z | 9220429c2f, 23:36:49Z | none (documents) | the coordinator |
   | #3394 | Sequence B2, the invariant monitor, in shadow | ad35cf5538, 00:55:35Z | 3843, 3878 | call 1343 |
   | #3401 | The `overlord-v1` plan | 3b55d40019, 02:22:53Z | 3877, 3885, 3889 | call 1374 |
+  | #3407 | This ledger, to 2026-11-26 02:30Z, with the plan's five corrections and the W1 index | 6889cdcf40, 02:51:40Z | none (documents) | the coordinator |
 
 - **The monitor (#3394).** The second review (3878) read the fix round, two merges of main and the I5 wiring, and
   found no behaviour defect: one reader of the kept line, one span that writes nothing, both merges equal to the
@@ -1152,10 +1153,12 @@ the subsections above, these are the rule now.
   in the board's and the sequence's rows; `continuity-v1` merged; the Overlord clause merged as clause 24; question
   33's sentence on the Overlord's own doors; the `anchor-slot` lane and sign-in in "What a merge arms"; the
   checkpoint's reader of the Overlord's replies as later work with no owner.
-- **Still owed, for the spec-fixes run.** §7.5 and §11.5's "the hook's card arm" becomes "the card door's Overlord
-  renderer"; §3.3.3's "lists every unsettled message" becomes "lists every unsettled message's id and facts", and its
-  never-empty rule names the Overlord's own nothing line; the W1 row of §14 names the `history`, `board` and
-  `sequence` door tools.
+- **The spec fixes the plan lists: made (2026-11-26, the ledger PR after #3407).** §7.5 and §11.5 name the card
+  door's Overlord renderer where they named a hook arm. §3.3.3 says the card lists each unsettled message's id and
+  facts and no text. C51, where the never-empty rule lives (§3.3.9, not §3.3.3), names the Overlord's own nothing
+  line. The W1 row of Table 14 names the `history`, `board` and `sequence` door tools. Table B7 keeps the trail in
+  four rows. I8's own sentence ("lists every unsettled message and open hold", §3.3.11 and Table 11.7a) is left as
+  written: the monitor's map quotes it, and it stays true of a list of ids and facts.
 
 #### The W1 map of what is buildable (2026-11-26 02:30Z)
 
@@ -1309,8 +1312,8 @@ State as of 2026-11-26 02:30Z, with main at 3b55d40019. #3394 merged at 00:55:35
   board and history plan's lines that still read the history row as unfenced, and the door-process plan's reading of
   history against the read tool's rule (tickets `history-door-process-row` and
   `history-readable-through-the-read-tool`). The I5 plan text for the kept designation line (call 1077), and the
-  readiness plan's index changes with its fix round 1, F5 (the Restart section of the designation plan). The spec
-  fixes the `overlord-v1` plan lists (above, "Still owed, for the spec-fixes run"). The W2 entry step bumps the coordinator skill's
+  readiness plan's index changes with its fix round 1, F5 (the Restart section of the designation plan). The W2 entry
+  step bumps the coordinator skill's
   rollout revision word with the first build that can send a coordinator a relay (call 1025, D-9024). The capture
   runner spec's as-built corrections (§2.2's copy steps, Figure 2's caption, §2.3's environment) were made in #3376;
   decision D3's "a new sub in the repair sub's phases" is left as the decision was worded.
