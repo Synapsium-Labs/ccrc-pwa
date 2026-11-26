@@ -62,6 +62,7 @@ import {
   openUntrustedBuildItems, UNTRUSTED_BUILD_ITEM_PROGRAMME, untrustedBuildItemsToRaise, untrustedBuildItemsToSettle,
 } from './coord/untrustedBuildItem.js';
 import { notify, type NoticeDeps } from './notice.js';
+import type { PayloadMasker } from './push.js';
 
 /** The lane's clock: once a minute. A new build is sent on the first pass after a session runs it. */
 export const BUILD_CAPTURE_SWEEP_MS = 60_000;
@@ -96,8 +97,9 @@ export interface BuildCaptureLaneDeps extends NoticeDeps {
     | 'recordClaudeBuildVerdict' | 'requeueClaudeBuild' | 'claudeBuildDeliveries' | 'markDeliveryAttempt' | 'recordDelivery'
     | 'claudeBuildFrames' | 'markFramesAttempt' | 'recordFrames' | 'hasNotice' | 'recordFeedEvent' | 'itemsFor' | 'moveItem' | 'raiseItem'> | undefined;
   /** The product's live masker (`SecretMasker`, `index.ts`'s one): the frames receiver's check refuses a text it would
-   *  change, beside the reducer's own shapes. Absent: the shapes alone. */
-  readonly masker?: Pick<SecretMasker, 'maskText'> | undefined;
+   *  change, beside the reducer's own shapes. Absent: the shapes alone. The notices' `maskDeep` (`NoticeDeps`) rides the same
+   *  object, so the member is the two together. */
+  readonly masker?: (PayloadMasker & Pick<SecretMasker, 'maskText'>) | undefined;
   /** Absent (a test, a script): rows are recorded and no job is sent. */
   readonly buildCapture?: BuildCaptureTransport | undefined;
   /** Absent: a `build-absent` refusal is answered `no-admin-lane`, and nothing is copied. */
