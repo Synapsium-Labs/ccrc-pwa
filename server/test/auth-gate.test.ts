@@ -69,6 +69,8 @@ const EXEMPT_BUT_AUTHENTICATED = new Set(
    'GET /api/pools/epoch', 'GET /api/updates/intent/:nodeId',
    // D-7554: the test box's read and its tools sync, `ccrc-api testbox status|tools-sync` cookieless, the PWA with a session.
    'GET /api/testbox', 'POST /api/testbox/tools-sync',
+   // Desktop polish wave 187: the box frames read, `ccrc-api testbox frames` cookieless, a session too.
+   'GET /api/testbox/frames',
    // D-8126: the goals read, `ccrc-api goals show` cookieless from the fleet host, the console with a session.
    'GET /api/programmes/:slug/goals',
    // D-8181: the plan read, `ccrc-api plan show` cookieless from the fleet host, the console with a session.
@@ -106,7 +108,8 @@ function scanRoutes(file: string): ScannedRoute[] {
     .map((m) => ({ method: m[1]!.toUpperCase(), routePath: m[2]!, file }));
 }
 
-/** THIRTY-TWO files register routes since the Overlord's cursor read of the sequence (`server/src/coord/overlordSequenceRoutes.ts`,
+/** THIRTY-THREE files register routes since the box frames read (`server/src/testboxFramesRoutes.ts`, Desktop polish wave 187:
+ *  its one box-token route, registered from `registerCoordRoutes`); THIRTY-TWO since the Overlord's cursor read of the sequence (`server/src/coord/overlordSequenceRoutes.ts`,
  *  Overlord W1 sequence C: its one box-token route); THIRTY-ONE since the runway read (`server/src/poolRunwayRoute.ts`, Overlord W1 serviceability B: its one session-gated route);
  *  THIRTY since the Overlord's history door (`server/src/coord/overlordHistoryRoutes.ts`, Overlord W1 PR B1: its one box-token route);
  *  TWENTY-NINE since the draft review's read door (`server/src/review/routes.ts`, X3 R1: its one capability route,
@@ -155,6 +158,7 @@ const ROUTES: ScannedRoute[] = [
   ...scanRoutes('coord/approvalCensusRoutes.ts'),
   ...scanRoutes('review/routes.ts'),
   ...scanRoutes('poolRunwayRoute.ts'),
+  ...scanRoutes('testboxFramesRoutes.ts'),
 ];
 
 /** The three websocket upgrades — the same registrations, told apart by their
@@ -839,8 +843,12 @@ describe('the scanner is looking at something', () => {
     // a routes file of its own, one box-token machine lane IN EXEMPT; and `GET /api/overlord/invariants`, the operator's read of the
     // invariant monitor in `coord/overlordRoutes.ts`, session-gated and NOT EXEMPT, no box token. The HTTP half 329 -> 331, the
     // gated count 212 -> 213 (331 - 118), the exempt-HTTP count 117 -> 118.
+    // 335 with the box frames read (Desktop polish wave 187): `GET /api/testbox/frames` in `testboxFramesRoutes.ts`, a routes
+    // file of its own, a box-token machine lane IN EXEMPT (a session or the box token). The HTTP half 331 -> 332, the gated
+    // count stays 213 (332 - 119), the exempt-HTTP count 118 -> 119.
     expect(scanRoutes('coord/overlordSequenceRoutes.ts').length).toBe(1);
-    expect(ROUTES.length).toBe(334);
+    expect(scanRoutes('testboxFramesRoutes.ts').length).toBe(1);
+    expect(ROUTES.length).toBe(335);
     expect(scanRoutes('laneModelsRoutes.ts').length).toBe(1);
     expect(scanRoutes('coord/delegationBackfillRoutes.ts').length).toBe(2);
     expect(scanRoutes('coord/approvalCensusRoutes.ts').length).toBe(1);
@@ -1032,7 +1040,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 334 scanned + the static wildcard when the bundle is built.
+    // 335 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1175,6 +1183,7 @@ describe('EXEMPT is complete in both directions', () => {
       'GET /api/sessions/:id/probe',
       'GET /api/sessions/:id/programme',
       'GET /api/testbox',
+      'GET /api/testbox/frames',
       'GET /api/timers',
       'GET /api/updates/intent/:nodeId',
       'GET /health',
@@ -1850,7 +1859,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 331 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 332 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1914,7 +1923,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 331 HTTP routes, not the 118 exempt.
+          //    is not itself flag-aware — the assertion that covers all 332 HTTP routes, not the 119 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

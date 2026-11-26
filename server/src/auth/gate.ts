@@ -5,7 +5,7 @@ import { SESSION_COOKIE, expireCookie, parseCookies } from './cookie.js';
 import type { SessionStore } from './sessions.js';
 
 /**
- * THE GATE. One `onRequest` hook stands in front of all 331 routes, the static
+ * THE GATE. One `onRequest` hook stands in front of all 332 routes, the static
  * wildcard, the SPA fallback and all three websocket upgrades.
  *
  * ONE HOOK, NOT A PER-ROUTE CHECK, and that is the whole design: a route added
@@ -724,6 +724,12 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     'block with a session, and `ccrc-api testbox status` reads the same block COOKIELESS from the fleet host. The ' +
     'handler requires a live session OR a valid box token (coord/routes.ts) before it answers anything, and nothing ' +
     "here is written. The switch route beside it is NOT exempt: arming remote runs is the operator's act alone"],
+  ['GET /api/testbox/frames',
+    "EXEMPT-BUT-AUTHENTICATED (D-149's pattern; Desktop polish wave 187, the box frames plan's section 5.4): the box frames " +
+    "recipe's one read. `ccrc-api testbox frames` reads a build's reduced frames COOKIELESS from the fleet host, and a " +
+    'session reads them too. The handler (testboxFramesRoutes.ts) requires a live session OR a valid box token before it ' +
+    "reads anything, as the status read does, and its query is closed. It writes nothing, and every text it serves was " +
+    "reduced on the test box and is checked again before it leaves (the reducer's own check and the live masker)"],
   ['POST /api/testbox/tools-sync',
     "EXEMPT-BUT-AUTHENTICATED (D-149's pattern; test box plan TB9, D-7554): the card's Bring tools up to date with a " +
     'session, and the update lane on the fleet host COOKIELESS through `ccrc-api testbox tools-sync` once a roll ' +
