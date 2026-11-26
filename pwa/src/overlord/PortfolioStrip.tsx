@@ -55,6 +55,9 @@ async function readPortfolio(): Promise<ReadOutcome<PortfolioView>> {
   }
 }
 
+/** The two moves of a row's rank control, one button each. */
+const MOVES = [{ by: -1, word: 'up', label: 'Up' }, { by: 1, word: 'down', label: 'Down' }] as const;
+
 const refusalWords = (err: unknown): string => refusalText(err, LEDGER_REFUSAL_TEXT) ?? apiErrorText(err);
 
 export function PortfolioStrip({ now = Date.now }: { readonly now?: () => number }): ReactNode {
@@ -143,18 +146,14 @@ export function PortfolioStrip({ now = Date.now }: { readonly now?: () => number
                     ))}
                   </dl>
                   <div className="ov-portfolio-controls">
-                    <Button
-                      variant="ghost" size="fit" className="min-w-tap justify-center" disabled={saving || !canMove(draft, row.slug, -1)}
-                      aria-label={`Move ${row.title} up`} onClick={() => { change(moveRow(draft, row.slug, -1)); }}
-                    >
-                      Up
-                    </Button>
-                    <Button
-                      variant="ghost" size="fit" className="min-w-tap justify-center" disabled={saving || !canMove(draft, row.slug, 1)}
-                      aria-label={`Move ${row.title} down`} onClick={() => { change(moveRow(draft, row.slug, 1)); }}
-                    >
-                      Down
-                    </Button>
+                    {MOVES.map((m) => (
+                      <Button
+                        key={m.by} variant="ghost" size="fit" className="min-w-tap justify-center" disabled={saving || !canMove(draft, row.slug, m.by)}
+                        aria-label={`Move ${row.title} ${m.word}`} onClick={() => { change(moveRow(draft, row.slug, m.by)); }}
+                      >
+                        {m.label}
+                      </Button>
+                    ))}
                     <Select
                       className="w-auto" value={row.cls} disabled={saving} aria-label={`Class of ${row.title}`}
                       onChange={(e) => { change(setClass(draft, row.slug, e.target.value as ServiceClass)); }}

@@ -16,7 +16,7 @@ export const CAPACITY_WORDS = {
   untagged: 'untagged accounts',
   noPools: 'no pools to read',
   unmeasured: 'Capacity unmeasured',
-  stale: 'Showing the last answer; the latest read failed.',
+  stale: 'Showing the last runway read; the newest read failed.',
   noneExhausted: 'no account is exhausted',
   outNow: 'at its ceiling now',
   resetDue: 'its earliest reset is due',
@@ -24,11 +24,11 @@ export const CAPACITY_WORDS = {
 
 /** Why a window could not be projected, in words: the crossing's reasons, which also name an unmeasured reset's four. */
 export const CROSSING_WHY: Readonly<Record<CrossingUnmeasured, string>> = {
-  'no-sample': 'no sample of the current window',
+  'no-sample': 'no limit sample yet in this window',
   stale: 'the newest sample is too old to project from',
   rolled: 'the window has reset since the newest sample',
   thin: 'too few samples to project from',
-  'no-reset': 'the window carries no reset time',
+  'no-reset': 'no reset time is known for the window',
 };
 
 /** A span as "2 h 5 min" under two days and "3 d" from there on (a weekly window runs for days). Never negative. */

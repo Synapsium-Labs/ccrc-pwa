@@ -29,7 +29,7 @@ export const PORTFOLIO_WORDS = {
   noData: 'no data',
   rankUnreadable: 'rank unreadable',
   unranked: 'not ranked',
-  stale: 'Showing the last answer; the latest read failed.',
+  stale: 'Showing the last portfolio read; the newest read failed.',
   rankMoved: 'The order moved meanwhile, so yours was not saved. This is the new order.',
   needsDate: 'A fixed-date programme needs its date (YYYY-MM-DD) before the order can be saved.',
   save: 'Save order',

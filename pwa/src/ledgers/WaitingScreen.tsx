@@ -506,6 +506,11 @@ export function NotCurrentLine({ words }: { words: string }): ReactNode {
   return <p className="wl-note" role="status" data-current="false">{words}</p>;
 }
 
+/** The list's head, in both of its drawings: the title, and the Overlord's readiness line (drawn only under `overlord-v1`). */
+function WaitingHead(): ReactNode {
+  return <header className="wl-head"><h1 className="wl-title">Waiting on you</h1><ReadinessLine /></header>;
+}
+
 export function WaitingScreen(props: WaitingScreenProps): ReactNode {
   const { view, sessions, runs, now } = props;
   const { acts, sheets } = useItemActs(sessions);
@@ -517,7 +522,7 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
   if (view === null || sessions === null) {
     return (
       <div className="wl">
-        <header className="wl-head"><h1 className="wl-title">Waiting on you</h1><ReadinessLine /></header>
+        <WaitingHead />
         {typeof props.unavailable === 'string'
           ? <p className="wl-note" role="alert">{props.unavailable}</p>
           : <p className="wl-note" role="status">{NO_FRAME_WORD}</p>}
@@ -564,7 +569,7 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
   const clearedCalls = clearedCallsOf(view, callFilter);
   return (
     <div className="wl">
-      <header className="wl-head"><h1 className="wl-title">Waiting on you</h1><ReadinessLine /></header>
+      <WaitingHead />
       {target !== null && target.at !== 'open' && <p className="wl-note" role="status" data-call-target={target.at}>{CALL_TARGET_WORDS[target.at]}</p>}
       {props.notCurrent !== undefined && <NotCurrentLine words={props.notCurrent} />}
       <ParkedApprovals approvals={view.approvals} />

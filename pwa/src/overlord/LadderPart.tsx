@@ -24,6 +24,35 @@ import { clockOf } from './readinessWords';
 import type { LadderDoors } from './useLadderDoors';
 
 const has = (o: object, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
+/** A condition reading in words, or the raw word for one this build does not know. */
+const readingWords = (r: string): string => (has(conditionReadingWords, r) ? conditionReadingWords[r as keyof typeof conditionReadingWords] : r);
+
+/** One list of the ladder's fact rows, the bindings and the conditions: each row its cells, with its own data hook. */
+function FactRows({ label, rows }: {
+  readonly label: string;
+  readonly rows: readonly { readonly key: string; readonly hook: Readonly<Record<string, string>>; readonly cells: readonly string[] }[];
+}): ReactNode {
+  return (
+    <ul className="ovl-ladder-list" aria-label={label}>
+      {rows.map((r) => (
+        <li key={r.key} className="ovl-ladder-row" {...r.hook}>
+          {r.cells.map((text, i) => <span key={i}>{text}</span>)}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** A door's two lines, the "taking effect" line and its sentence, as the readiness part (for Pause) and the ladder part (for a
+ *  rung and Clear) each draw them. */
+export function DoorLines({ line, said }: { readonly line: string | null; readonly said: string | null }): ReactNode {
+  return (
+    <>
+      {line !== null && <p className="ovl-note" role="status" data-taking-effect>{line}</p>}
+      {said !== null && <p className="ovl-note" role="status" data-said>{said}</p>}
+    </>
+  );
+}
 
 function Answered({ l, doors, lastRead }: { readonly l: LadderWire; readonly doors: LadderDoors; readonly lastRead: string | null }): ReactNode {
   return (
@@ -52,18 +81,10 @@ function Answered({ l, doors, lastRead }: { readonly l: LadderWire; readonly doo
         })}
       </div>
       {l.binding.length > 0 && (
-        <ul className="ovl-ladder-list" aria-label="What binds the rung">
-          {l.binding.map((b) => {
-            const cause = causeWords(b.cause);
-            return (
-              <li key={`${b.kind}:${b.cause}`} className="ovl-ladder-row" data-binding={b.cause}>
-                <span>{cause.text}</span>
-                <span>{`caps at ${b.cap}`}</span>
-                <span>{has(conditionReadingWords, b.reading) ? conditionReadingWords[b.reading] : b.reading}</span>
-              </li>
-            );
-          })}
-        </ul>
+        <FactRows label="What binds the rung" rows={l.binding.map((b) => ({
+          key: `${b.kind}:${b.cause}`, hook: { 'data-binding': b.cause },
+          cells: [causeWords(b.cause).text, `caps at ${b.cap}`, readingWords(b.reading)],
+        }))} />
       )}
       {l.latches.length > 0 && (
         <ul className="ovl-ladder-list" aria-label="Standing latches">
@@ -89,18 +110,13 @@ function Answered({ l, doors, lastRead }: { readonly l: LadderWire; readonly doo
         </ul>
       )}
       {l.conditions.length > 0 && (
-        <ul className="ovl-ladder-list" aria-label="Conditions">
-          {l.conditions.map((c) => {
-            const cause = causeWords(c.cause);
-            return (
-              <li key={c.cause} className="ovl-ladder-row" data-condition={c.cause} data-known={cause.known}>
-                <span>{cause.text}</span>
-                <span>{has(conditionReadingWords, c.reading) ? conditionReadingWords[c.reading] : c.reading}</span>
-                <span>{effectWords(c.effect)}</span>
-              </li>
-            );
-          })}
-        </ul>
+        <FactRows label="Conditions" rows={l.conditions.map((c) => {
+          const cause = causeWords(c.cause);
+          return {
+            key: c.cause, hook: { 'data-condition': c.cause, 'data-known': String(cause.known) },
+            cells: [cause.text, readingWords(c.reading), effectWords(c.effect)],
+          };
+        })} />
       )}
     </>
   );
@@ -120,8 +136,7 @@ export function LadderPart({ doors }: { readonly doors: LadderDoors }): ReactNod
       {(read.state === 'answered' || read.state === 'stale') && (
         <Answered l={read.value} doors={doors} lastRead={read.state === 'stale' ? `last read ${clockOf(read.at)}` : null} />
       )}
-      {line !== null && <p className="ovl-note" role="status" data-taking-effect>{line}</p>}
-      {said !== null && <p className="ovl-note" role="status" data-said>{said}</p>}
+      <DoorLines line={line} said={said} />
     </section>
   );
 }

@@ -4,6 +4,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import type { DesignationView } from '../../shared/overlord-designation';
 import type { ReadinessWire } from '../../shared/overlord-readiness';
 import { ConfirmItsYou } from '../src/accounts/ConfirmItsYou';
@@ -166,9 +168,12 @@ describe('Start', () => {
 
   it('every input is a 44 px row (the tap floor)', () => {
     show(answered(null));
-    for (const input of screen.getAllByRole('radio').concat(screen.getAllByRole('checkbox'))) {
-      expect(input.closest('label')!.className).toContain('min-h-tap');
-    }
+    for (const input of screen.getAllByRole('radio')) expect(input.closest('label')!.className).toContain('min-h-tap');
+    // Each account box sits inside its own label, the hit area, whose rule in the place's stylesheet carries the floor (vitest
+    // loads no stylesheet, so the rule is read as text; the browser file measures the drawn box).
+    const css = readFileSync(path.join(import.meta.dirname, '..', 'src', 'overlord', 'overlord.css'), 'utf8');
+    expect(css).toMatch(/\.ov-account-hit\s*\{[^}]*min-height:\s*var\(--tap-min\)/);
+    for (const input of screen.getAllByRole('checkbox')) expect(input.closest('label')!.className).toBe('ov-account-hit');
   });
 
   it('an empty account set cannot be sent, and says so', () => {

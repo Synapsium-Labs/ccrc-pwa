@@ -13,7 +13,7 @@
 // The class names below are the place's one stylesheet's: `overlord-body` (the part), `overlord-body-form` (Start's inputs, one
 // column), `overlord-body-actions` (the control row, wrapping), `overlord-body-note` (a status line), `overlord-body-refusal`.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Button, useNow, RADIO_FIELDSET, RADIO_INPUT, RADIO_LEGEND, RADIO_OPTION, RADIO_SENTENCE, RadioFieldset } from '@ccrc/ui';
+import { Button, useNow, RadioFieldset } from '@ccrc/ui';
 import type { OverlordModelClass } from '../../../shared/overlord-designation';
 import type { StepUp } from '../accounts/useStepUp';
 import { ApiError, api, overlordRefusalText } from '../lib/api';
@@ -105,18 +105,17 @@ export function BodyPart({ stepUp }: { readonly stepUp: StepUp }): ReactNode {
             legend={BODY_WORDS.model} name="overlord-model" options={MODEL_CLASS_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
             value={model} onPick={setModel} disabled={busy !== null}
           />
-          <fieldset className={RADIO_FIELDSET} disabled={busy !== null} data-overlord-account-set>
-            <legend className={RADIO_LEGEND}>{BODY_WORDS.accounts}</legend>
-            {options.map((pool) => (
-              <label key={pool} className={RADIO_OPTION}>
-                <input type="checkbox" className={RADIO_INPUT} checked={!off.includes(pool)} onChange={(e) => flip(pool, e.currentTarget.checked)} />
-                <span className={RADIO_SENTENCE}>{pool}</span>
+          <fieldset className="ov-account-set" disabled={busy !== null} data-overlord-account-set>
+            <legend className="ov-account-legend">{BODY_WORDS.accounts}</legend>
+            {[
+              ...options.map((pool) => ({ key: pool, label: pool, on: !off.includes(pool), set: (v: boolean) => flip(pool, v) })),
+              { key: '(untagged)', label: BODY_WORDS.untagged, on: untagged, set: setUntagged },
+            ].map((box) => (
+              <label key={box.key} className="ov-account-hit">
+                <input type="checkbox" checked={box.on} onChange={(e) => box.set(e.currentTarget.checked)} />
+                {box.label}
               </label>
             ))}
-            <label className={RADIO_OPTION}>
-              <input type="checkbox" className={RADIO_INPUT} checked={untagged} onChange={(e) => setUntagged(e.currentTarget.checked)} />
-              <span className={RADIO_SENTENCE}>{BODY_WORDS.untagged}</span>
-            </label>
           </fieldset>
           {blocked !== null && <p className="overlord-body-note" role="status">{blocked}</p>}
         </div>

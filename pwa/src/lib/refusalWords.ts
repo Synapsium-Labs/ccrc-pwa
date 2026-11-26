@@ -892,17 +892,25 @@ export const OVERLORD_PLACE_REFUSAL_TEXT: Readonly<Record<
  *  `unmeasured`, and the ladder's `unavailable`). */
 const OVERLORD_DETAIL_WORDS: ReadonlySet<string> = new Set(['authority-rolled-back', 'journal-unreadable', 'overlord-body-alive', 'unavailable']);
 
+/** The words whose answer names one more fact, each with the sentence that adds it, or null when the answer lacks it. Keyed by
+ *  word and read by `Object.hasOwn`, never a literal branch (the refusal-branch ratchet). */
+const OVERLORD_NAMED_TEXT: Readonly<Record<string, (body: Record<string, unknown>) => string | null>> = {
+  'capability-missing': (b) => (typeof b.needs === 'string' ? `It needs ${b.needs}.` : null),
+  'overlord-single-account': (b) => (typeof b.count === 'number' ? `It counts ${b.count}.` : null),
+};
+
 /** A failed Overlord door in words: its word's sentence, with the capability word a raise `needs`, the accounts counted, or the
  *  answer's detail where the word names one; a word this build does not know is drawn raw; a failure with no word (a network
  *  failure, a timeout) is its message. */
 export function overlordRefusalText(err: unknown): string {
   if (!(err instanceof ApiError) || typeof err.body !== 'object' || err.body === null) return err instanceof Error ? err.message : String(err);
-  const body = err.body as { error?: unknown; needs?: unknown; count?: unknown; detail?: unknown };
-  if (typeof body.error !== 'string') return err.message;
+  const body = err.body as Record<string, unknown>;
+  const word = body.error;
+  if (typeof word !== 'string') return err.message;
   const said = refusalText(err, OVERLORD_PLACE_REFUSAL_TEXT);
-  if (said === null) return `Refused: ${body.error}`;
-  if (body.error === 'capability-missing' && typeof body.needs === 'string') return `${said} It needs ${body.needs}.`;
-  if (body.error === 'overlord-single-account' && typeof body.count === 'number') return `${said} It counts ${body.count}.`;
-  if (OVERLORD_DETAIL_WORDS.has(body.error) && typeof body.detail === 'string' && body.detail.length > 0) return `${said} (${body.detail})`;
+  if (said === null) return `Refused: ${word}`;
+  const named = Object.hasOwn(OVERLORD_NAMED_TEXT, word) ? OVERLORD_NAMED_TEXT[word]!(body) : null;
+  if (named !== null) return `${said} ${named}`;
+  if (OVERLORD_DETAIL_WORDS.has(word) && typeof body.detail === 'string' && body.detail.length > 0) return `${said} (${body.detail})`;
   return said;
 }

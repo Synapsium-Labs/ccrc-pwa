@@ -16,6 +16,7 @@ import type { ReactNode } from 'react';
 import { Button, Chip, useNow } from '@ccrc/ui';
 import { useLadder, useReadiness } from '../stores/overlord';
 import { takingEffectLine } from './ladderWords';
+import { DoorLines } from './LadderPart';
 import { READINESS_ABSENT, READINESS_LOADING, readinessUnmeasuredWords, readinessViewOf } from './readinessWords';
 import type { LadderDoors } from './useLadderDoors';
 
@@ -58,8 +59,7 @@ export function ReadinessPart({ doors }: { readonly doors: LadderDoors }): React
       <div className="ovl-pause">
         <Button variant="ghost" size="fit" disabled={doors.busy} onClick={() => { void doors.pause(); }}>Pause</Button>
       </div>
-      {line !== null && <p className="ovl-note" role="status" data-taking-effect>{line}</p>}
-      {said !== null && <p className="ovl-note" role="status" data-said>{said}</p>}
+      <DoorLines line={line} said={said} />
     </section>
   );
 }

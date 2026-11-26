@@ -550,6 +550,10 @@ const CONTROLS: Record<string, string> = {
   'ledgers/AnswerMarkBox.tsx <input> (none)':
     'SELECTOR .wl-mark-hit. One of the operator\'s two answer marks on a Waiting on you question: a checkbox inside its '
     + 'label, whose rule carries the floor, so the whole label line toggles it.',
+  // Overlord W1 home B: Start's account set, each box inside its own label, the hit area.
+  'overlord/BodyPart.tsx <input> (none)':
+    'SELECTOR .ov-account-hit. One account pool, or untagged accounts, in the set the Overlord is started on: a checkbox inside '
+    + 'its label, whose rule carries the floor, so the whole label line toggles it.',
   'docs/export/exportMarkdown.tsx <a> (none)':
     'INLINE. The links inside an exported document, `EXPORT_COMPONENTS.a` (docs W5 Export): drawn into the saved file, '
     + 'never into the app, and in a sentence or block of text, as for `docs/DocLink.tsx <a> (none)`.',

@@ -1168,6 +1168,7 @@ describe('every stylesheet under src/ is audited', () => {
       'src/ledgers/ledgers.css',  // the Waiting on you list and the item view (desktop-polish PL5a, D-7712): pills and the programme band
       'src/ledgers/migration.css',  // the migration map and report bodies' structure lists (D-8186): spacing and wrapping only, no colour
       'src/inspector/inspector.css', // the inspector's shared sections (W2 Task S8, D-5474); layout only
+      'src/overlord/overlord.css', // the Overlord's place (Overlord W1 home B): every ink beside its ground, the page's or a card's --bg-surface
       'src/readerLab/readerLab.css', // the reader lab page (reader lab plan, Task 10): layout only, no colour of its own
       'src/screens/run-find.css', // the run board's search (D-8072): layout and ink only, grounded on --bg-page
       'src/screens/run-detail.css', // one run's page (D-8072): layout and ink only, grounded on --bg-page
