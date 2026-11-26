@@ -354,14 +354,18 @@ describe('the linearity verdict is the median of the per-round differences (D-91
 // cost and doubling-size scaling; it does not permit an amortized stream comparison. The CI follow-up uses 32/64 KB
 // only for quotes/deny, whose inherited normalization otherwise outlives its case.
 //
-// What each row can see (measured 2026-11-26 with jq 1.7.1; task note docs/superpowers/programs/desktop-polish/
-// hook-cost-row.md). The 64 KB cost rows take the faster of two interleaved measurements (D-8334) and catch any step
-// that makes the current program cost more than 1.5x the original at 64 KB: on quotes/deny main sat at about 1.03x, so
-// a step adding about 45% to it reds there, whatever its growth. The linearity rows catch only growth FASTER than the
-// programs' own: on the quote-dense deny shape both programs are already almost pure n^2 (a fixed ~0.2 s plus c n^2,
+// What each row can see (measured 2026-11-26 with jq 1.7.1 on main c435573bc4, after the quiz row's gate 06aed21ff7;
+// task note docs/superpowers/programs/desktop-polish/hook-cost-row.md). The 64 KB cost rows take the faster of two
+// interleaved measurements (D-8334) and catch a cost of ANY shape once the deny path costs about 1.5x its baseline,
+// today's program (D-9141): a quadratic step adding about 80% of the gated program's cost at 64 KB reads 15.5 s against
+// a 13.4 s bound, red. (Against the original, which the gated program costs 0.75x of, the same row let the cost about
+// double: that step read green, and one adding about 105% sat at the bound.) The linearity rows catch only growth FASTER
+// than the programs' own: on the quote-dense deny shape both programs are almost pure n^2 (a fixed ~0.2 s plus c n^2,
 // the n^2 term over 98% of the cost at 32 and 64 KB), so their 64/32 ratio sits near 3.9 and a quadratic step, of any
-// weight, leaves it there and stays green in the linearity row. The smallest growth the linearity row catches reliably is
-// a cubic step adding about 30% of the current program's cost at 32 KB (red in 24 of 24 windows; 20%: 15 of 24).
+// weight, leaves it there. The smallest growth the linearity row catches reliably is a cubic step adding about 30% of
+// the current program's cost at 32 KB (red in 24 of 24 windows; 20%: 15 of 24; a third: red, 5.12 against 4.31).
+// Between the two lies what the suite does not see: a quadratic step on the deny path adding less than about half of
+// its cost at 64 KB.
 //
 // D-9118 (amending D-8334 for the linearity rows only): a linearity row measures LINEARITY_ROUNDS rounds, reverses which
 // program runs first on alternate rounds, and reads the current program's ratio as the original's plus the MEDIAN of the
@@ -371,7 +375,13 @@ describe('the linearity verdict is the median of the per-round differences (D-91
 // difference's mean -0.03 over 104 hosted runs; at ambient load on the fleet box 2 reds in 26 windows before, 0 in 24
 // after). THE LIMIT, measured, not removed: a load that switches on and off with a period near one 64 KB sample (12
 // spinners, 13 s on and 12 s off) still reds the row before and after (5 of 18 windows before, 6 of 16 after); no
-// estimator over four rounds survives it, and nothing here retries a red.
+// estimator over four rounds survives it, and nothing here retries a red. On a box at load 20 to 40 the row reads red
+// on about 1 to 3 runs in 100 with nothing wrong (one round's difference has an sd of about 0.4 there; one such red, at
+// jq 1.8.1, read 1.148, 0.189, 0.845, 0.563); on hosted runners that rate is predicted far lower, which a hosted run
+// can bound but not prove. A red is re-run alone on a quiet box before it is believed.
+// TIME: four rounds double the linearity rows' time. The quotes/deny row took a median of 266 s and at most 416 s over
+// 50 runs on the fleet box at load 13 to 49 (two rounds: about 100 to 200 s), so a run on a box at load 20 or more may
+// pass two thirds of its 600 s timeout; the timeouts are unchanged.
 describe('the forbidden program\'s cost on quote-dense payloads naming worktree and prune', () => {
   const extract = (src: string): string => (/^APPROVAL_FORBIDDEN_JQ='([^']*)'$/m.exec(src) ?? [])[1] ?? '';
   const prog = extract(fs.readFileSync(HOOK, 'utf8'));
@@ -399,6 +409,11 @@ describe('the forbidden program\'s cost on quote-dense payloads naming worktree 
     expect(createHash('sha256').update(bytes).digest('hex'), 'the vendored cost baseline was edited').toBe(COST_BASELINE_SHA256);
     return bytes.toString('utf8');
   };
+  /** The allowance a 64 KB cost row grants over the baseline beside its factor of 1.5: the bound is
+   * max(1.5 x baseline, baseline + floor). The deny path keeps FD8's 25 ms. The class path costs about one jq start-up
+   * (about 50 ms on the gated program), so 25 ms of start-up jitter would decide its row: the owner's ruling (D-9141)
+   * gives it a floor of its own, 250 ms. */
+  const COST_FLOOR_MS = { deny: 25, class: 250 } as const;
   it('the cost baseline is the hook\'s forbidden program at 06aed21ff7, held by its hash, and is not the original (D-9141)', () => {
     const cost = readCostBaseline();
     expect(cost).not.toBe('');
@@ -415,16 +430,18 @@ describe('the forbidden program\'s cost on quote-dense payloads naming worktree 
       expect(r.stdout.trim()).toBe('');
       return r.cpuMs;
     };
-    for (const mode of ['deny', 'class']) {
-      it(`${name}: ${mode} stays within the startup-adjusted 33e521e07 bound at 64 KB`, () => {
-        const reference = readBaseline();
+    for (const mode of ['deny', 'class'] as const) {
+      it(`${name}: ${mode} stays within the startup-adjusted 06aed21ff bound at 64 KB`, () => {
+        const reference = readCostBaseline();
         expect(reference).not.toBe('');
         expect(prog).not.toBe('');
         const pairs = [0, 1].map(() => [timed(reference, mode, 64), timed(prog, mode, 64)]);
         const referenceMs = Math.min(...pairs.map((p) => p[0] as number));
         const currentMs = Math.min(...pairs.map((p) => p[1] as number));
-        expect(currentMs, `${name}/${mode}: current ${currentMs} cpu ms, original ${referenceMs} cpu ms`)
-          .toBeLessThanOrEqual(Math.max(1.5 * referenceMs, referenceMs + 25));
+        const bound = Math.max(1.5 * referenceMs, referenceMs + COST_FLOOR_MS[mode]);
+        const measured = `${name}/${mode} 64 KB: current ${currentMs} cpu ms, baseline ${referenceMs} cpu ms, bound ${bound} cpu ms`;
+        console.info(measured);
+        expect(currentMs, measured).toBeLessThanOrEqual(bound);
       }, scaled(300_000));
       const smallKb = name === 'quotes' && mode === 'deny' ? 32 : 64;
       const largeKb = smallKb * 2;

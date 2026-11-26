@@ -5909,6 +5909,18 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   was -0.035 on hosted runs before #3169 and -0.029 after); the reds were one change of CPU contention inside a round
   deciding the row. A load whose period matches one 64 KB sample still reds the row, before and after. Task note:
   `docs/superpowers/programs/desktop-polish/hook-cost-row.md`.
+- **D-9141** — `cost-rows-own-baseline`: desktop-polish wave 183, issued on 2026-11-26, the hook owner's ruling (its
+  call 1562). The four 64 KB cost rows of `server/test/session-hook-prune-deny.test.ts` read a baseline of their own,
+  `fixtures/prune-deny/forbidden-jq-06aed21ff.jq`: the hook's forbidden program at the quiz row's gate, 06aed21ff7,
+  pinned by its own sha256; the factor stays 1.5. The linearity rows keep `forbidden-jq-33e521e07.jq` and its hash.
+  The two files answer two rulings: inherited scaling against the program the deny was added to, and today's accepted
+  cost; each is frozen by its own hash and named by its commit; a test cannot read a commit through git. Why: the
+  gated program costs 0.75 of the original at 64 KB, so 1.5 x the original let the deny path's cost about double
+  before the row went red (a quadratic step adding about 80% read 1.37 of the original, green; about 105%, at the
+  bound); on the new baseline the 80% step reads red (15.5 s against 13.4 s). The deny rows keep the 25 ms floor; the
+  class rows, whose program costs about one jq start-up, take a floor of their own, 250 ms (`COST_FLOOR_MS`), taken
+  because their worst loaded reading stayed under half of the bound. Each cost row prints its figures on green. The
+  file is replaced only on the owner's next ruling on accepted cost, never to turn a row green.
 
 ## Out of scope
 
