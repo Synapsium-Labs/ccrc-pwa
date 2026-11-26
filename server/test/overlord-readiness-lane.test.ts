@@ -8,6 +8,12 @@ import { copyFileSync, mkdirSync } from 'node:fs';
 import { openCoordDb } from '../src/coord/db.js';
 import { ReadinessLane, type ReadinessLanePort, type ReadinessTick } from '../src/coord/overlordReadinessLane.js';
 import type { ReadinessPush } from '../src/coord/overlordReadiness.js';
+import type { MessageFacts } from '../src/coord/overlordInbox.js';
+import { itemBoundOf, type SenderDeps } from '../src/pushSender.js';
+import type { ItemReachOf } from '../src/coord/pushOutboxStore.js';
+import type { ResponseStamp } from '../../shared/responses.js';
+import { fakeTime } from './fakeTime.js';
+import { pushSeam } from './pushSeam.js';
 import { itemById, moveItemInTx } from '../src/coord/ledgersStore.js';
 import { OVERLORD_ITEM_PROGRAMME } from '../../shared/overlord-sequence.js';
 import { readinessNow, recordReadiness } from '../src/coord/overlordReadinessStore.js';
@@ -16,6 +22,7 @@ import type { FleetSession } from '../../shared/api.js';
 import type { SessionRecord } from '../src/registry.js';
 import type { GenRow } from '../src/continuity/continuityStore.js';
 import type { Candidates } from '../src/accountLoad.js';
+import { READINESS_DEAF_MS, READINESS_RESTART_BOUND_MS } from '../../shared/overlord-readiness.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
 let template = '';
@@ -63,7 +70,9 @@ function harness(db: DatabaseSync = openDb()) {
   const s = {
     wall: W0, mono: 5_000,
     designation: designated() as DesignationRead,
-    ladderThrows: false, unsettledThrows: false,
+    ladderThrows: false, unsettledThrows: false, designationThrows: false,
+    inbox: [] as MessageFacts[],
+    holds: { kind: 'not-wired' } as ReturnType<ReadinessLanePort['holds']>,
     gen: genRow() as GenRow | null,
     restarts: 0,
     candidates: twoYes as Candidates,
@@ -78,7 +87,7 @@ function harness(db: DatabaseSync = openDb()) {
   const port: ReadinessLanePort = {
     db,
     clock: { wall: () => s.wall, mono: () => s.mono },
-    designation: () => s.designation,
+    designation: () => { if (s.designationThrows) throw new Error('designation boom'); return s.designation; },
     ladder: () => { if (s.ladderThrows) throw new Error('ladder boom'); return { kind: 'read', operatorRung: 'on' as never }; },
     mailDisabled: (names) => (names === null ? 'unmeasurable' : 'clear'),
     identityOf: (id) => { if (s.identityThrows) throw new Error('identity boom'); return id; },
@@ -90,10 +99,10 @@ function harness(db: DatabaseSync = openDb()) {
     turnMark: async () => { const gate = s.turnGate; s.turnGate = null; if (gate !== null) await gate; return { ok: false, reason: 'absent' }; },
     hookState: async () => { const gate = s.hookGate; s.hookGate = null; if (gate !== null) await gate; return { ok: false, reason: 'no-state' }; },
     strandUnreadable: () => false,
-    unsettled: () => { if (s.unsettledThrows) throw new Error('inbox boom'); return { kind: 'measured', value: [] }; },
+    unsettled: () => { if (s.unsettledThrows) throw new Error('inbox boom'); return { kind: 'measured', value: s.inbox }; },
     lastServedReadAt: () => ({ kind: 'measured', value: s.served }),
     lastContinuityRead: () => ({ ok: true, at: null }),
-    holds: () => ({ kind: 'not-wired' }),
+    holds: () => s.holds,
     push: (p) => { pushes.push(p); },
     log: (l) => { logs.push(l); },
   };
@@ -618,5 +627,149 @@ describe('the daily prune (F15)', () => {
     h.advance(DAY);
     await h.pass(UP());                   // a day later: prunes
     expect(staleRows(h)).toBe(0);
+  });
+});
+
+// ── The fix round of review 3941 ────────────────────────────────────────────────────────────────────────────────────────
+
+describe('an unreadable designation keeps every sighting (R1)', () => {
+  const unreadable = (h: ReturnType<typeof harness>, how: 'read' | 'throws'): void => {
+    if (how === 'throws') h.s.designationThrows = true;
+    else h.s.designation = { kind: 'unmeasured', why: 'designation store busy' };
+  };
+  const readable = (h: ReturnType<typeof harness>): void => { h.s.designationThrows = false; h.s.designation = designated(); };
+
+  for (const how of ['read', 'throws'] as const) {
+    it(`a restart under way is not forgotten across a pass whose designation is unreadable (${how}): dead or unmeasured, never better, one push`, async () => {
+      const h = harness();
+      await h.warm();
+      h.s.restarts = 2; // two restarts already counted in the hour, a proven generation that started 100 s before W0
+      expect(await h.pass(downTick(), 1_000)).toMatchObject({ word: 'dead', why: 'third-restart' });
+      expect(h.pushes).toHaveLength(1);
+
+      unreadable(h, how);
+      const blind = await h.pass(UP(), 1_000);
+      expect(blind?.word).toBe('unmeasured'); // never better than what it was
+      expect(h.pushes).toHaveLength(1);
+
+      // Readable again, the body up, and no generation minted yet (it started before the down sighting): still the third.
+      readable(h);
+      expect(await h.pass(UP(), 1_000)).toMatchObject({ word: 'dead', why: 'third-restart' });
+      expect(h.pushes).toHaveLength(1);
+
+      // The mint lands: restartsSince counts the restart itself.
+      h.s.gen = genRow({ n: 2, startReportedAt: h.s.wall });
+      h.s.restarts = 3;
+      expect(await h.pass(UP(), 1_000)).toMatchObject({ word: 'dead', why: 'third-restart' });
+      expect(h.pushes).toHaveLength(1);
+      // One episode across the blind pass: the first dead row carries the push mark, the second (after `unmeasured`) none.
+      const marks = h.db.prepare("SELECT pushedAt FROM overlord_readiness WHERE word = 'dead' ORDER BY id").all() as { pushedAt: number | null }[];
+      expect(marks.map((m) => m.pushedAt !== null)).toEqual([true, false]);
+    });
+  }
+
+  it('a dialog sighting keeps its first clock across a pass whose designation is unreadable', async () => {
+    const h = harness();
+    await h.warm();
+    const dlg = tickOf(session({ dialogPending: true }));
+    expect((await h.pass(dlg, 20_000))?.word).not.toBe('dialog-open'); // the sighting
+    unreadable(h, 'read');
+    expect((await h.pass(dlg, 20_000))?.word).toBe('unmeasured');
+    readable(h);
+    // 40 s since the sighting: on the original clock it is open; with the sighting forgotten it would restart at 0.
+    expect((await h.pass(dlg, 1_000))?.word).toBe('dialog-open');
+  });
+});
+
+describe('the ready clock is the ready row\'s own session (R2)', () => {
+  it('a designated session that became ready hears an operator message left unanswered past the deaf bound: deaf', async () => {
+    const h = harness();
+    await h.warm(); // ready, recorded for A at W0 + 10 s
+    const ready = readinessNow(h.db);
+    expect(ready.ok && ready.now !== 'none' && [ready.now.word, ready.now.readySessionId, ready.now.readySince]).toEqual(['ready', A, W0 + 10_000]);
+    h.s.inbox = [{ id: 1, at: W0, term: 1, state: 'recorded', cut: false }];
+    // Within the bound of the later of the arrival and readySince: not deaf yet.
+    expect((await h.pass(UP(), 1_000))?.word).toBe('ready');
+    h.advance(READINESS_DEAF_MS);
+    expect((await h.pass(UP()))?.word).toBe('deaf');
+  });
+});
+
+describe('a crash loop whose generation never proved (R3)', () => {
+  it('two restarts counted over an unproved generation: restarting, then renewing, never ready; the third mint reads dead with one push', async () => {
+    const h = harness();
+    h.s.gen = genRow({ state: 'active', proven: false, startReportedAt: W0 - 1_000 }); // minted, never proved: read as renewing
+    h.s.restarts = 2;
+    await h.pass(UP());
+    const seen: string[] = [];
+    const note = async (t: ReadinessTick, ms: number): Promise<void> => { seen.push((await h.pass(t, ms))?.word ?? 'null'); };
+    await note(UP(), 1_000);
+    await note(downTick(), READINESS_RESTART_BOUND_MS + 1_000); // the first sighting
+    await note(downTick(), 1_000); // down past the bound, but the generation reads renewing
+    await note(UP(), 1_000);
+    await note(UP(), 1_000);
+    expect(seen).toEqual(['renewing', 'restarting', 'renewing', 'renewing', 'renewing']);
+    expect(seen).not.toContain('ready');
+    expect(seen).not.toContain('unproved');
+    expect(h.pushes).toEqual([]);
+
+    h.s.gen = genRow({ n: 3, state: 'active', proven: false, startReportedAt: h.s.wall });
+    h.s.restarts = 3;
+    expect(await h.pass(UP(), 1_000)).toMatchObject({ word: 'dead', why: 'third-restart' });
+    expect(h.pushes).toHaveLength(1);
+    expect(await h.pass(UP(), 1_000)).toMatchObject({ word: 'dead', why: 'third-restart' });
+    expect(h.pushes).toHaveLength(1);
+  });
+});
+
+describe('an item raised with the push outbox reach (R4)', () => {
+  /** The watcher's item reach, as `pushSender.ts#itemBoundOf` builds it: a push service that records, a stamp for the response record. */
+  const reachRig = () => {
+    const seam = pushSeam();
+    const stamp: ResponseStamp = { boot: { kind: 'measured', epoch: 3 }, restore: { kind: 'unmeasured' } };
+    const deps: SenderDeps = { push: seam.push, time: fakeTime({ wallMs: W0 }).ports, responseStamp: () => stamp };
+    const itemReach: ItemReachOf = (item) => itemBoundOf(deps, item, 'reach');
+    return { seam, itemReach };
+  };
+  const outbox = (db: DatabaseSync) => db.prepare('SELECT sourceKind, sourceId, state, silentWhy, tag FROM push_outbox ORDER BY id').all();
+  const waiting = (db: DatabaseSync) => db.prepare("SELECT refKind, refId FROM operator_responses WHERE kind = 'waiting' ORDER BY id").all();
+  const reachStamp = (db: DatabaseSync, id: number) => (db.prepare('SELECT reachedOperatorAt AS r FROM operator_items WHERE id = ?').get(id) as { r: number | null }).r;
+
+  const cases: { kind: 'stranded' | 'count' | 'hold'; neededBy: string; arrange: (h: ReturnType<typeof harness>) => void }[] = [
+    { kind: 'stranded', neededBy: 'soon', arrange: (h) => { h.s.candidates = { kind: 'candidates', list: [] }; } },
+    { kind: 'count', neededBy: 'later', arrange: (h) => { h.s.candidates = ONE_YES; } },
+    { kind: 'hold', neededBy: 'later', arrange: (h) => { h.s.holds = { kind: 'read', lanes: ['lane-a'] }; } },
+  ];
+  for (const c of cases) {
+    it(`a ${c.kind} raise writes its reach (stamp, response record, one silent outbox row) in the raise, is not blocking and sends nothing`, async () => {
+      const h = harness();
+      const { seam, itemReach } = reachRig();
+      await h.warm();
+      c.arrange(h);
+      await h.lane.pass(UP(), itemReach);
+      const its = items(h.db);
+      expect(its).toMatchObject([{ neededBy: c.neededBy, state: 'open' }]);
+      expect(records(h.db)).toMatchObject([{ item: c.kind, settledAt: null }]);
+      const id = its[0]!.id;
+      expect(reachStamp(h.db, id)).not.toBeNull();
+      expect(outbox(h.db)).toEqual([{ sourceKind: 'item', sourceId: id, state: 'silent', silentWhy: 'level', tag: `item-${id}` }]);
+      expect(waiting(h.db)).toEqual([{ refKind: 'item', refId: id }]);
+      expect(seam.sent).toEqual([]);
+      expect(h.pushes).toEqual([]);
+      // A standing cause raises once and still sends nothing on the next pass.
+      await h.lane.pass(UP(), itemReach);
+      expect(items(h.db)).toHaveLength(1);
+      expect(outbox(h.db)).toHaveLength(1);
+      expect(seam.sent).toEqual([]);
+    });
+  }
+
+  it('the pass given no reach (a script, a test) still raises the item and writes no outbox row', async () => {
+    const h = harness();
+    await h.warm();
+    h.s.candidates = { kind: 'candidates', list: [] };
+    await h.pass(UP());
+    expect(items(h.db)).toHaveLength(1);
+    expect(outbox(h.db)).toEqual([]);
   });
 });

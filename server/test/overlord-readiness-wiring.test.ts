@@ -21,10 +21,11 @@ const FAILED: ReadinessTick = { listed: false };
 function build(withLane: boolean) {
   let mono = 1_000_000;
   const passes: ReadinessTick[] = [];
-  const lane = { pass: async (tick: ReadinessTick) => { passes.push(tick); return null; } } as unknown as ReadinessLane;
+  const reaches: unknown[] = [];
+  const lane = { pass: async (tick: ReadinessTick, reach?: unknown) => { passes.push(tick); reaches.push(reach); return null; } } as unknown as ReadinessLane;
   const deps = { ...testDeps(mkTmp('ccrc-readiness-wiring-')), monotonicMs: () => mono, ...(withLane ? { overlordReadiness: lane } : {}) };
   const watcher = quietAtTestEnd(new FleetWatcher(deps as never, new Bus(), 10_000));
-  return { watcher, passes, advance: (ms: number) => { mono += ms; } };
+  return { watcher, passes, reaches, advance: (ms: number) => { mono += ms; } };
 }
 
 describe('the watcher runs the readiness lane (F7)', () => {
@@ -34,6 +35,15 @@ describe('the watcher runs the readiness lane (F7)', () => {
     f.advance(OVERLORD_READINESS_SWEEP_MS + 1);
     await f.watcher.sweepOverlordReadiness(FAILED);
     expect(f.passes).toEqual([LISTED, FAILED]);
+  });
+
+  it('hands the lane the watcher\'s item reach (R4): a function that builds an item\'s bound write, silent for a soon item', async () => {
+    const f = build(true);
+    await f.watcher.sweepOverlordReadiness(LISTED);
+    const reach = f.reaches[0] as ((item: { title: string; neededBy: 'soon' }) => (id: number) => { due: { due: string; why?: string } }) | undefined;
+    expect(typeof reach).toBe('function');
+    const bound = reach!({ title: 'An item', neededBy: 'soon' })(7);
+    expect(bound.due.due).toBe('silent'); // never `now`: a soon item does not push
   });
 
   it('with no lane wired it runs nothing and answers null', () => {

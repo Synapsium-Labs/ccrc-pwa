@@ -323,6 +323,29 @@ describe('the restart count through readinessFactsOf (F1: restartsSince counts c
     it('no down sighting (lastDownAt null) adds nothing: the case above stays as it was', () => {
       expect(upAfter({ lastDownAt: null }).restarts).toEqual(m(2));
     });
+    // Review 3941 A3: the minted test is strict. A generation that started at the very instant of the sighting is the one the
+    // down sighting belongs to, not a replacement, so the restart is still under way; one millisecond later it is minted.
+    it('a generation started exactly at the down sighting is not minted since: the restart counts, the third, dead', () => {
+      const f = upAfter({ lastDownAt: NOW - 5_000, generation: { ok: true, value: gen({ proven: true, startReportedAt: NOW - 5_000 }) } });
+      expect(f.restarts).toEqual(m(3));
+      expect(overlordReadiness(f, NOW)).toMatchObject({ word: 'dead', why: 'third-restart' });
+    });
+    it('a generation started one millisecond after the down sighting is minted: not added', () => {
+      const f = upAfter({ lastDownAt: NOW - 5_000, generation: { ok: true, value: gen({ proven: true, startReportedAt: NOW - 5_000 + 1 }) } });
+      expect(f.restarts).toEqual(m(2));
+    });
+    // Review 3941 A7: doubt lowers on the up half too. An unreadable generation is neither renewing nor minted since, so a down
+    // sighting inside the hour is still a restart under way: with two counted, the third, dead.
+    it('the generation unreadable, the body up, a down sighting inside the hour and two counted: the restart counts, dead', () => {
+      const f = upAfter({ lastDownAt: NOW - 5_000, generation: { ok: false, detail: 'db busy' } });
+      expect(f.restarts).toEqual(m(3));
+      expect(overlordReadiness(f, NOW)).toMatchObject({ word: 'dead', why: 'third-restart' });
+    });
+    it('the generation unreadable and the body down (the down half): the same restart counts, dead', () => {
+      const f = completed(2, { body: down(1_000), generation: { ok: false, detail: 'db busy' } });
+      expect(f.restarts).toEqual(m(3));
+      expect(overlordReadiness(f, NOW)).toMatchObject({ word: 'dead', why: 'third-restart' });
+    });
   });
   it('3 completed, the body up and the generation proven: dead', () => {
     expect(overlordReadiness(completed(3, { body: { kind: 'up' }, generation: { ok: true, value: gen({ proven: true }) } }), NOW).word).toBe('dead');

@@ -11,7 +11,12 @@ import {
   recordReadinessInTx, settleReadinessItem, READINESS_NO_SESSION, type ReadinessWrite,
 } from '../src/coord/overlordReadinessStore.js';
 import { itemById, settleItemCheckedInTx } from '../src/coord/ledgersStore.js';
-import type { ReadinessItemText } from '../../shared/overlord-readiness.js';
+import { READINESS_ITEM_KINDS, type ReadinessItemText } from '../../shared/overlord-readiness.js';
+import { itemBoundOf, type SenderDeps } from '../src/pushSender.js';
+import type { ItemReachOf } from '../src/coord/pushOutboxStore.js';
+import type { ResponseStamp } from '../../shared/responses.js';
+import { fakeTime } from './fakeTime.js';
+import { pushSeam } from './pushSeam.js';
 import { OVERLORD_ITEM_PROGRAMME } from '../../shared/overlord-sequence.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
@@ -189,6 +194,22 @@ describe('readinessNow', () => {
     rec(db, 'deaf', AT + 30);
     rec(db, 'wedged', AT + 40);
     expect(nowOf(db)).toMatchObject({ word: 'wedged', readySince: AT + 20, leftReadyAt: AT + 30 });
+  });
+
+  it('names the newest ready row\'s session beside its time, whatever the newest word is (R2)', () => {
+    const db = openDb();
+    rec(db, 'ready', AT, { sessionId: B });
+    rec(db, 'ready', AT + 10, { sessionId: A }); // a rebind: the other session's own ready row is the newest
+    rec(db, 'wedged', AT + 20, { sessionId: A });
+    expect(nowOf(db)).toMatchObject({ word: 'wedged', readySessionId: A, readySince: AT + 10, leftReadyAt: AT + 20 });
+  });
+
+  it('a ready row with no session answers readySessionId null; never ready answers null', () => {
+    const db = openDb();
+    rec(db, 'unproved', AT);
+    expect(nowOf(db)).toMatchObject({ readySessionId: null });
+    rec(db, 'ready', AT + 10, { sessionId: null });
+    expect(nowOf(db)).toMatchObject({ readySessionId: null, readySince: AT + 10 });
   });
 
   it('while dead, episodeFirstId and pushedAt name the episode\'s first row', () => {
@@ -401,13 +422,59 @@ describe('raiseReadinessItem', () => {
     expect(db.isTransaction).toBe(false);
   });
 
-  it('a raise takes no reach: no push-outbox row is written for any kind of item (F2)', () => {
+  it('a raise given no reach writes no push-outbox row (a script, a test): the item and its record only', () => {
     const db = openDb();
     expect(raise(db, 'stranded', 'limited').ok).toBe(true);
     expect(raise(db, 'count', 'count', AT + 1).ok).toBe(true);
     expect(raise(db, 'hold', 'lane-a', AT + 2).ok).toBe(true);
     expect(count(db, 'push_outbox')).toBe(0);
     expect(count(db, 'operator_items')).toBe(3);
+  });
+
+  describe('with the push outbox reach (review 3941 R4)', () => {
+    const rig = () => {
+      const seam = pushSeam();
+      const stamp: ResponseStamp = { boot: { kind: 'measured', epoch: 3 }, restore: { kind: 'unmeasured' } };
+      const deps: SenderDeps = { push: seam.push, time: fakeTime({ wallMs: AT }).ports, responseStamp: () => stamp };
+      const reach: ItemReachOf = (item) => itemBoundOf(deps, item, 'reach');
+      return { seam, reach };
+    };
+    it('every kind writes its reach stamp, its response record and one silent outbox row, in the raise; nothing is sent', () => {
+      const db = openDb();
+      const { seam, reach } = rig();
+      const ids: number[] = [];
+      for (const [item, key] of [['stranded', 'limited'], ['count', 'count'], ['hold', 'lane-a']] as const) {
+        const r = raiseReadinessItem(db, { item, key, text: TEXT }, AT, reach);
+        expect(r.ok).toBe(true);
+        if (r.ok) ids.push(r.itemId);
+      }
+      expect(db.prepare('SELECT sourceKind, sourceId, state, silentWhy, tag FROM push_outbox ORDER BY id').all())
+        .toEqual(ids.map((id) => ({ sourceKind: 'item', sourceId: id, state: 'silent', silentWhy: 'level', tag: `item-${id}` })));
+      expect(db.prepare('SELECT reachedOperatorAt AS r FROM operator_items ORDER BY id').all()).toEqual(ids.map(() => ({ r: AT })));
+      expect(db.prepare("SELECT refKind, refId FROM operator_responses WHERE kind = 'waiting' ORDER BY id").all())
+        .toEqual(ids.map((id) => ({ refKind: 'item', refId: id })));
+      expect(seam.sent).toEqual([]);
+    });
+
+    it('a refused record rolls the reach back with the item: no outbox row, no stamp', () => {
+      const db = openDb();
+      const { reach } = rig();
+      expect(raiseReadinessItem(db, { item: 'stranded', key: 'limited', text: TEXT }, AT, reach).ok).toBe(true);
+      const again = raiseReadinessItem(db, { item: 'stranded', key: 'limited', text: TEXT }, AT + 1, reach);
+      expect(again).toMatchObject({ ok: false });
+      expect(count(db, 'push_outbox')).toBe(1);
+      expect(count(db, 'operator_items')).toBe(1);
+    });
+  });
+
+  it('every item kind the shared list names can be raised: the schema\'s own list of kinds has them all (A4)', () => {
+    const db = openDb();
+    expect(READINESS_ITEM_KINDS.length).toBeGreaterThan(0);
+    for (const item of READINESS_ITEM_KINDS) {
+      const r = raiseReadinessItem(db, { item, key: `k-${item}`, text: TEXT }, AT);
+      expect(r, `kind ${item}`).toMatchObject({ ok: true });
+    }
+    expect(count(db, 'overlord_readiness_items')).toBe(READINESS_ITEM_KINDS.length);
   });
 
   it('a closed database answers not ok and does not throw', () => {
