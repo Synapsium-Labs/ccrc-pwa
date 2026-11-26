@@ -35,6 +35,7 @@ import {
   type TestboxBoxRead, type TestboxCaptureReply, type TestboxHostMeasure, type TestboxHostTools, type TestboxOpReply, type TestboxToolsSyncReply,
 } from '../../shared/agent-protocol.js';
 import { isReleaseTag } from '../../shared/api.js';
+import type { CaptureRecipe } from '../../shared/claudeBuildCapture.js';
 import { parseBuildInfo } from '../../shared/buildinfo.js';
 import { readTestboxFrame, TESTBOX_TOOLS, type StatusAnswer, type TestboxTool, type ToolsSync } from '../../shared/testbox.js';
 import { absPath, durationMs, parseKnobLines, type KnobLine } from './testbox/config.js';
@@ -277,7 +278,7 @@ const freshCaptureId = (): string => randomBytes(16).toString('hex');
 
 /** One connection for a capture: the hello, the status answer, one `capture.submit`, then that capture's states until
  *  `refused` or `ended`. Frames of another type or for another capture id are not this call's and are ignored. */
-function callBoxCapture(t: BoxTarget, build: string, captureId: string, deadlineMs: number): Promise<TestboxCaptureReply> {
+function callBoxCapture(t: BoxTarget, build: string, captureId: string, deadlineMs: number, recipe: CaptureRecipe = 'build-trust', part?: number): Promise<TestboxCaptureReply> {
   return new Promise((resolve) => {
     let done = false;
     let submitted = false;
@@ -288,10 +289,12 @@ function callBoxCapture(t: BoxTarget, build: string, captureId: string, deadline
       done = true;
       clearTimeout(timer);
       try { ws.close(); } catch { /* closed */ }
-      const reply: TestboxCaptureReply = { outcome, refusal: rest.refusal ?? null, result: rest.result ?? null, detail: rest.detail ?? null };
+      // A delivery request's reply always carries `delivery` (Desktop polish wave 178); a build-trust reply never does.
+      const delivery = recipe === 'delivery' ? { delivery: rest.delivery ?? null } : {};
+      const reply: TestboxCaptureReply = { outcome, refusal: rest.refusal ?? null, result: rest.result ?? null, detail: rest.detail ?? null, ...delivery };
       // The server's reader is the judge of a reply: one it would refuse is an unanswered capture, never sent on.
-      if (readTestboxCaptureReply(reply, build) === null) {
-        resolve({ outcome: submitted ? 'unanswered' : 'bad-answer', refusal: null, result: null, detail: 'the reply was off its shape' });
+      if (readTestboxCaptureReply(reply, build, recipe, part) === null) {
+        resolve({ outcome: submitted ? 'unanswered' : 'bad-answer', refusal: null, result: null, detail: 'the reply was off its shape', ...(recipe === 'delivery' ? { delivery: null } : {}) });
         return;
       }
       resolve(reply);
@@ -313,7 +316,7 @@ function callBoxCapture(t: BoxTarget, build: string, captureId: string, deadline
         submitted = true;
         clearTimeout(timer);
         timer = setTimeout(() => finish('unanswered', { detail: `no verdict within ${deadlineMs} ms` }), deadlineMs);
-        ws.send(JSON.stringify({ t: 'capture.submit', captureId, build }));
+        ws.send(JSON.stringify(recipe === 'delivery' ? { t: 'capture.submit', captureId, build, recipe, part } : { t: 'capture.submit', captureId, build }));
         return;
       }
       // Whether a frame is this capture's is read off its own fields, so a frame the reader refuses is still told apart.
@@ -325,8 +328,20 @@ function callBoxCapture(t: BoxTarget, build: string, captureId: string, deadline
       if (r.value.t !== 'capture.state') return;
       const f = r.value;
       if (f.build !== build) { finish('unanswered', { detail: 'a state for another build' }); return; }
+      // A state frame has its submission's shape (the capture owner's call 1135): a delivery capture's frames carry
+      // `delivery`, a build-trust capture's never do; either one off it is no answer to trust.
+      if ((recipe === 'delivery') !== Object.prototype.hasOwnProperty.call(f, 'delivery')) {
+        finish('unanswered', { detail: `a state frame off its ${recipe} submission's shape` });
+        return;
+      }
+      // The state frame's reader reads a result for the part it carries; this check alone binds it to the part submitted
+      // (the capture owner's call 1159).
+      if (recipe === 'delivery' && f.delivery !== undefined && f.delivery !== null && f.delivery.part !== part) {
+        finish('unanswered', { detail: `a result for part ${f.delivery.part}, not the part ${String(part)} submitted` });
+        return;
+      }
       if (f.state === 'refused') finish('refused', { refusal: f.refusal, detail: f.detail });
-      else if (f.state === 'ended') finish('answered', { result: f.result, detail: f.detail });
+      else if (f.state === 'ended') finish('answered', { result: f.result, detail: f.detail, ...(recipe === 'delivery' ? { delivery: f.delivery ?? null } : {}) });
     });
     ws.addEventListener('close', (e) => {
       if (!submitted) {
@@ -345,12 +360,12 @@ function callBoxCapture(t: BoxTarget, build: string, captureId: string, deadline
 /** The `testbox-capture` op: one `capture.submit` for `build` on the box named by the fleet host's settings, and the
  *  capture's verdict, refusal or silence. Spawns only the settings printer; reads only the token file. Never throws. */
 export async function captureTestbox(
-  build: string, seams: TestboxOpSeams & TestboxCaptureSeams, home: string = os.homedir(),
+  build: string, seams: TestboxOpSeams & TestboxCaptureSeams, home: string = os.homedir(), recipe: CaptureRecipe = 'build-trust', part?: number,
 ): Promise<TestboxCaptureReply> {
   const knobs = await readKnobs(home, seams.agentPath, seams);
   const target = boxTarget(home, knobs);
   if (!('url' in target)) {
-    return { outcome: target.failure, refusal: null, result: null, detail: target.detail };
+    return { outcome: target.failure, refusal: null, result: null, detail: target.detail, ...(recipe === 'delivery' ? { delivery: null } : {}) };
   }
-  return callBoxCapture(target, build, (seams.randomId ?? freshCaptureId)(), seams.deadlineMs ?? TESTBOX_CAPTURE_DEADLINE_MS);
+  return callBoxCapture(target, build, (seams.randomId ?? freshCaptureId)(), seams.deadlineMs ?? TESTBOX_CAPTURE_DEADLINE_MS, recipe, part);
 }

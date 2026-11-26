@@ -9,6 +9,7 @@
 // with, never a guess. The same file holds the queue's two pure choices (`unrecordedBuilds`, `nextCaptureJob`) and the
 // capture answer's one reader (`readBuildCaptureResult`), so the lane decides nothing of its own.
 import { compareClaudeVersions, isClaudeVersion } from './claudeVersion.js';
+import type { DeliveryBuildView } from './deliveryResult.js';
 
 // ── the record ───────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -222,7 +223,13 @@ export function captureBlockedBy(records: readonly ClaudeBuildRecord[]): BuildCa
 // ── the job and its answer ───────────────────────────────────────────────────────────────────────────────────────
 
 /** The job sent to the test box: the build to capture. */
-export interface BuildCaptureJob { readonly build: string }
+export interface BuildCaptureJob {
+  readonly build: string;
+  /** Absent: a build-trust capture. `delivery`: one part of the paste delivery recipe (Desktop polish wave 178), named by
+   *  `part`; its result is never a verdict and never touches a trust row. Additive: a job without either is a trust job. */
+  readonly recipe?: 'delivery';
+  readonly part?: number;
+}
 
 /** A capture's answer as the box-side runner states it: the build, whether the replay tests passed, whether they proved
  *  the `cwd` fact, and the replay output. */
@@ -251,8 +258,13 @@ export function readBuildCaptureResult(v: unknown, build: string): BuildCaptureR
 
 // ── the wire ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** `GET /api/testbox/builds`'s body. */
-export interface ClaudeBuildsView { readonly ok: true; readonly claudeBuilds: readonly ClaudeBuildRecord[] }
+/** `GET /api/testbox/builds`'s body. `deliveries` is additive (Desktop polish wave 178): absent from a server that predates
+ *  it, and read by `deliveryResult.ts#readDeliveryViews`, which permits the absence. */
+export interface ClaudeBuildsView {
+  readonly ok: true;
+  readonly claudeBuilds: readonly ClaudeBuildRecord[];
+  readonly deliveries?: readonly DeliveryBuildView[];
+}
 
 const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
 const isStamp = (v: unknown): v is number | null => v === null || isCount(v);

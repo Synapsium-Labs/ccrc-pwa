@@ -93,7 +93,7 @@ describe('the capture lane raises the item only when it gives up, and settles ev
   it('three failed captures, spaced: nothing is raised until the third; then one item, and a later pass raises no second', async () => {
     f = await standardFixture();
     const jobs: string[] = [];
-    const failing: BuildCaptureTransport = { capture: async (job) => { jobs.push(job.build); return { kind: 'answered', result: { build: job.build, pass: false, cwd: false, output: 'replay: 1 failed' } }; } };
+    const failing: BuildCaptureTransport = { capture: async (job) => { if (job.recipe === 'delivery') return { kind: 'unavailable', why: 'no-runner' }; jobs.push(job.build); return { kind: 'answered', result: { build: job.build, pass: false, cwd: false, output: 'replay: 1 failed' } }; } };
     let t = NOW;
     const l = lane(f, () => t, failing);
     await l.sweep(['2.1.330']);
