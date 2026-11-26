@@ -333,6 +333,9 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/overlord/invariants',
   // Docs settings (X2 P4.3): the link rules are operator-entered text, not fixed server vocabulary.
   '/api/docs/settings',
+  // The box frames read (Desktop polish wave 187): a frame is text a build drew, reduced at source and checked again before it
+  // is served; a text the masker would change is refused there, so this hook never changes a frame it passes.
+  '/api/testbox/frames',
 ]);
 /** Whether the one answer hook masks a route's answer (D-5995). */
 export const answerMasked = (method: string, url: string | undefined): boolean =>
