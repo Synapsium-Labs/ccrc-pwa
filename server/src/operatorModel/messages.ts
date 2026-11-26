@@ -72,9 +72,11 @@ export type PromptTargetVerdict =
  *  typed unrecorded into what is about to be the Overlord (the fact is `roleOf.ts#designationFactOf`'s, as `identityOf` reads
  *  it, review 2550 F1). An `overlordTerm` that is present but not a non-negative safe integer is `bad-request`; one that
  *  does not name THIS session at THIS term is `stale-designation`. Without one, the designated session records and any other
- *  session is typed to. */
+ *  session is typed to. LAST, an `offRecord: true` (only `true` counts) on what would be typed is `bad-request`: the chat's
+ *  off-the-record toggle is a fact of a RECORDED message, and a typed prompt records nothing, so it is refused with nothing
+ *  typed rather than sent as if it were off the record (the chat plan, question 4). */
 export function promptTargetVerdict(
-  designation: DesignationRead, sessionId: string, body: { readonly overlordTerm?: unknown },
+  designation: DesignationRead, sessionId: string, body: { readonly overlordTerm?: unknown; readonly offRecord?: unknown },
 ): PromptTargetVerdict {
   if (designation.kind === 'unmeasured') return { kind: 'refuse', word: 'unmeasured', detail: designation.why };
   const fact = designationFactFrom(designation);
@@ -89,6 +91,7 @@ export function promptTargetVerdict(
   if (term !== undefined && !(bound && designation.term === term)) {
     return { kind: 'refuse', word: 'stale-designation', detail: 'the designation moved since this message was composed' };
   }
+  if (!bound && body.offRecord === true) return { kind: 'refuse', word: 'bad-request', detail: 'offRecord: only a message to the designated session is recorded' };
   return bound ? { kind: 'record', term: designation.term } : { kind: 'type' };
 }
 

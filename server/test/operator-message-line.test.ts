@@ -51,7 +51,7 @@ function world(): World {
   return w;
 }
 const rec = (w: World, mark = false): number => {
-  const r = w.store.recordMessage({ at: 1_000, sessionId: S, term: 1, actor: ACTOR, text: 'hello', mark, composedKey: null });
+  const r = w.store.recordMessage({ at: 1_000, sessionId: S, term: 1, actor: ACTOR, text: 'hello', mark, composedKey: null, offRecord: false });
   if (!r.ok) throw new Error(`${r.error}: ${r.detail}`);
   return r.value.id;
 };

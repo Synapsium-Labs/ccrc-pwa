@@ -401,7 +401,7 @@ describe('witnessed counter raises', () => {
     const dir = mkTmp('ccrc-witness-counter-');
     const { db, store } = openOperatorModelStore(path.join(dir, 'operator-model.db'), dir, 1000, r.ex);
     const issue = (at: number): number => {
-      const result = store.recordMessage({ at, actor: OPERATOR, sessionId: 'lane-a-project-a', term: 1, text: 'fixture', mark: false, composedKey: null });
+      const result = store.recordMessage({ at, actor: OPERATOR, sessionId: 'lane-a-project-a', term: 1, text: 'fixture', mark: false, composedKey: null, offRecord: false });
       if (!result.ok) throw new Error(`message issuance refused: ${result.error}`);
       const head = store.privacyJournalHead();
       if (head.kind !== 'measured' || head.value === 'empty') throw new Error('no fixture privacy head');

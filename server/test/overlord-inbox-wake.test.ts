@@ -135,7 +135,7 @@ function rig(o: Opts = {}, coord: WatcherCoordPort = s as unknown as WatcherCoor
     pass: (input = { mailDisabled: 'clear' }) => lane.pass(input, NOW),
     record: (text = MSG_TEXT) => {
       n += 1;
-      const r = store.recordMessage({ at: NOW - 100_000 + n, sessionId: BODY, term: 1, actor: ACTOR, text, mark: false, composedKey: null });
+      const r = store.recordMessage({ at: NOW - 100_000 + n, sessionId: BODY, term: 1, actor: ACTOR, text, mark: false, composedKey: null, offRecord: false });
       if (!r.ok) throw new Error(`${r.error}: ${r.detail}`);
       return r.value.id;
     },

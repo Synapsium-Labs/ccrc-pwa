@@ -8,7 +8,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import type { DatabaseSync } from 'node:sqlite';
 import { defaultOperatorModelDbPath, openOperatorModelDb } from '../src/operatorModel/db.js';
 import { OperatorModelStore, type PrivacyIssuer } from '../src/operatorModel/store.js';
-import { runOverlordRead, type OverlordReadDeps, type ReadComposed } from '../src/coord/overlordRead.js';
+import { runOverlordRead, type OperatorReadArgs, type OverlordReadDeps, type ReadComposed } from '../src/coord/overlordRead.js';
 import { doorRow, type OverlordDoorRow } from '../src/coord/overlordDoors.js';
 import type { GateRun } from '../src/coord/overlordGateRun.js';
 import { READ_TURN_STATES, type ReadDoor, type ReadLine, type ReadTurnState } from '../../shared/operatorMessages.js';
@@ -53,13 +53,15 @@ interface Rig { app: FastifyInstance; log: string[]; composes: () => number }
 interface RigOpts {
   door?: ReadDoor; ledger?: OverlordReadDeps['ledger']; turn?: OverlordReadDeps['turn']; row?: OverlordDoorRow; unfenced?: true;
   pass?: Extract<GateRun, { kind: 'pass' }>; compose?: () => ReadComposed | Promise<ReadComposed>;
+  /** The operator's console mode: no pass, no row, no turn read. */
+  operator?: true;
 }
 async function rig(o: RigOpts): Promise<Rig> {
   const log: string[] = [];
   let composes = 0;
   const base = o.ledger;
   const ledger: OverlordReadDeps['ledger'] = base === undefined ? undefined : {
-    servedReadsSince: (d, s) => { log.push('count'); return base.servedReadsSince(d, s); },
+    servedReadsSince: (d, s, c) => { log.push(`count:${c}`); return base.servedReadsSince(d, s, c); },
     recordRead: (l) => { log.push(`record:${l.outcome}`); return base.recordRead(l); },
   };
   const run = runOverlordRead({
@@ -70,10 +72,15 @@ async function rig(o: RigOpts): Promise<Rig> {
   const app = Fastify({ logger: false });
   apps.push(app);
   app.get('/r', async (req, reply) => {
-    const r = await run(req, reply, {
-      door: o.door ?? 'history', pass: o.pass ?? PASS, row: o.row ?? FENCED, ...(o.unfenced ? { unfenced: true as const } : {}),
-      compose: () => { composes += 1; log.push('compose'); return o.compose === undefined ? { kind: 'rows', body: { ok: true, marker: MARKER }, scope: 'history', count: 2 } : o.compose(); },
-    });
+    const compose = (): ReadComposed | Promise<ReadComposed> => {
+      composes += 1; log.push('compose');
+      return o.compose === undefined ? { kind: 'rows', body: { ok: true, marker: MARKER }, scope: o.operator ? 'chat' : 'history', count: 2 } : o.compose();
+    };
+    const r = await run(req, reply, o.operator
+      ? ({ door: o.door ?? 'chat', caller: 'operator', compose } satisfies OperatorReadArgs)
+      : {
+        door: o.door ?? 'history', pass: o.pass ?? PASS, row: o.row ?? FENCED, ...(o.unfenced ? { unfenced: true as const } : {}), compose,
+      });
     log.push('sent');
     return r;
   });
@@ -90,7 +97,7 @@ describe('the runner\'s order', () => {
     const res = await get(r);
     expect(res.statusCode).toBe(200);
     expect(json(res)).toEqual({ ok: true, marker: MARKER });
-    expect(r.log).toEqual(['turn', 'count', 'compose', 'record:rows', 'sent']);
+    expect(r.log).toEqual(['turn', 'count:overlord', 'compose', 'record:rows', 'sent']);
     expect(lines(db)).toEqual([{ at: NOW, door: 'history', caller: 'overlord', scope: 'history', count: 2, outcome: 'rows', generation: 3, generationRead: 'measured', turnState: 'done' }]);
   });
 
@@ -102,7 +109,7 @@ describe('the runner\'s order', () => {
     expect(json(res)).toMatchObject({ ok: false, error: 'unmeasured' });
     expect(res.body).not.toContain('the store is gone');
     expect(r.composes()).toBe(0);
-    expect(r.log).toEqual(['turn', 'count', 'sent']);
+    expect(r.log).toEqual(['turn', 'count:overlord', 'sent']);
     expect(lines(db)).toEqual([]);
   });
 
@@ -115,14 +122,14 @@ describe('the runner\'s order', () => {
     expect(res.statusCode).toBe(REFUSAL_STATUS['read-ceiling']);
     expect(json(res)).toMatchObject({ ok: false, error: 'read-ceiling', retryAfterS: 3000 });   // the oldest line leaves in (3600 - 600) s
     expect(r.composes()).toBe(0);
-    expect(r.log).toEqual(['turn', 'count', 'record:read-ceiling', 'sent']);
+    expect(r.log).toEqual(['turn', 'count:overlord', 'record:read-ceiling', 'sent']);
     const after = lines(db);
     expect(after.length).toBe(before + 1);
     expect(after.at(-1)).toEqual({ at: NOW, door: 'history', caller: 'overlord', scope: 'history', count: 0, outcome: 'read-ceiling', generation: 3, generationRead: 'measured', turnState: 'working' });
     const again = await rig({ ledger: store });
     const res2 = await get(again);
     expect(res2.statusCode).toBe(REFUSAL_STATUS['read-ceiling']);
-    expect(again.log).toEqual(['turn', 'count', 'sent']);
+    expect(again.log).toEqual(['turn', 'count:overlord', 'sent']);
     expect(lines(db).length).toBe(before + 1);
   });
 
@@ -243,7 +250,7 @@ describe('the other 200, and a refusal\'s own fields (Overlord W1, PR B1)', () =
     const res = await get(r);
     expect(res.statusCode).toBe(200);
     expect(json(res)).toEqual({ ok: true, outcome: 'busy' });
-    expect(r.log).toEqual(['turn', 'count', 'compose', 'record:busy', 'sent']);
+    expect(r.log).toEqual(['turn', 'count:overlord', 'compose', 'record:busy', 'sent']);
     expect(lines(db)).toEqual([{ at: NOW, door: 'history', caller: 'overlord', scope: 'all', count: 0, outcome: 'busy', generation: 3, generationRead: 'measured', turnState: 'done' }]);
   });
 
@@ -282,5 +289,75 @@ describe('the other 200, and a refusal\'s own fields (Overlord W1, PR B1)', () =
     const res = await get(r);
     expect(res.statusCode).toBe(REFUSAL_STATUS['write-failed']);
     expect(res.body).not.toContain(MARKER);
+  });
+});
+
+// Overlord W1, chat piece, Task 2 (question 9): the operator's console is a caller of the same runner. It holds no session, so it has no
+// fence row, no turn state and no generation; its counter is its own, so the console never spends the Overlord's ceilings and the
+// Overlord never spends the console's.
+describe('the operator\'s console mode (the chat plan, question 9)', () => {
+  const OPERATOR_LINE: ReadLine = { ...SERVED, caller: 'operator', generation: null, generationRead: 'not-a-session', turnState: null };
+  const fillOperator = (store: OperatorModelStore, door: ReadDoor, n: number): void => {
+    for (let i = 0; i < n; i += 1) store.recordRead({ ...OPERATOR_LINE, door, scope: door, at: NOW - 600_000 + i });
+  };
+
+  it('runs with no pass and no row, never reads the turn, counts as the operator, composes, records a console line, then sends', async () => {
+    const { store, db } = storeOnFile();
+    const r = await rig({ ledger: store, operator: true, turn: async () => { throw new Error('the turn must not be read'); } });
+    const res = await get(r);
+    expect(res.statusCode).toBe(200);
+    expect(json(res)).toEqual({ ok: true, marker: MARKER });
+    expect(r.log).toEqual(['count:operator', 'compose', 'record:rows', 'sent']);
+    expect(lines(db)).toEqual([{ at: NOW, door: 'chat', caller: 'operator', scope: 'chat', count: 2, outcome: 'rows', generation: null, generationRead: 'not-a-session', turnState: null }]);
+  });
+
+  it('writes the console line on an answer and a refuse too, and the ceiling line', async () => {
+    const { store, db } = storeOnFile();
+    await get(await rig({ ledger: store, operator: true, compose: () => ({ kind: 'answer', body: { ok: true }, scope: 'chat', outcome: 'busy' }) }));
+    await get(await rig({ ledger: store, operator: true, compose: () => ({ kind: 'refuse', word: 'unmeasured', detail: 'a source', scope: 'chat', outcome: 'unmeasured' }) }));
+    fillOperator(store, 'chat-history', READ_CEILINGS['chat-history'].perHour);
+    const before = lines(db).length;
+    const limited = await rig({ ledger: store, operator: true, door: 'chat-history' });
+    const res = await get(limited);
+    expect(res.statusCode).toBe(REFUSAL_STATUS['read-ceiling']);
+    expect(limited.composes()).toBe(0);
+    expect(limited.log).toEqual(['count:operator', 'record:read-ceiling', 'sent']);
+    const all = lines(db);
+    expect(all.slice(0, 2).map((l) => [l.outcome, l.caller, l.generation, l.generationRead, l.turnState])).toEqual([
+      ['busy', 'operator', null, 'not-a-session', null], ['unmeasured', 'operator', null, 'not-a-session', null]]);
+    expect(all.length).toBe(before + 1);
+    expect(all.at(-1)).toEqual({ at: NOW, door: 'chat-history', caller: 'operator', scope: 'chat-history', count: 0, outcome: 'read-ceiling', generation: null, generationRead: 'not-a-session', turnState: null });
+  });
+
+  it('keeps the shared rules: no store is unavailable, an unmeasured counter refuses with no line, a compose throw writes no line, a failed write sends nothing', async () => {
+    const none = await rig({ ledger: undefined, operator: true });
+    expect((await get(none)).statusCode).toBe(REFUSAL_STATUS.unavailable);
+    expect(none.log).toEqual(['sent']);
+    const { store, db } = storeOnFile();
+    const blind = await rig({ ledger: { servedReadsSince: () => ({ kind: 'unmeasured', why: 'x' }), recordRead: store.recordRead.bind(store) }, operator: true });
+    expect((await get(blind)).statusCode).toBe(REFUSAL_STATUS.unmeasured);
+    expect(blind.composes()).toBe(0);
+    const thrown = await rig({ ledger: store, operator: true, compose: () => { throw new Error('the composer broke'); } });
+    const res = await get(thrown);
+    expect(res.statusCode).toBe(REFUSAL_STATUS.unmeasured);
+    expect(res.body).not.toContain('the composer broke');
+    expect(lines(db)).toEqual([]);
+    const failing = await rig({ ledger: { servedReadsSince: store.servedReadsSince.bind(store), recordRead: () => ({ ok: false, error: 'write-failed', detail: 'disk' }) }, operator: true });
+    const sent = await get(failing);
+    expect(sent.statusCode).toBe(REFUSAL_STATUS['write-failed']);
+    expect(sent.body).not.toContain(MARKER);
+  });
+
+  it('the console\'s served lines never bring an Overlord read to its ceiling, and the Overlord\'s never bring the console\'s', async () => {
+    const { store } = storeOnFile();
+    fillOperator(store, 'chat', READ_CEILINGS.chat.perHour);
+    fillOperator(store, 'history', READ_CEILINGS.history.perHour);
+    expect((await get(await rig({ ledger: store, door: 'history' }))).statusCode).toBe(200);
+    const { store: other } = storeOnFile();
+    fill(other, 'chat', READ_CEILINGS.chat.perHour);
+    expect((await get(await rig({ ledger: other, operator: true }))).statusCode).toBe(200);
+    // and each is held by its own lines
+    expect((await get(await rig({ ledger: store, operator: true }))).statusCode).toBe(REFUSAL_STATUS['read-ceiling']);
+    expect((await get(await rig({ ledger: other, door: 'chat' }))).statusCode).toBe(REFUSAL_STATUS['read-ceiling']);
   });
 });

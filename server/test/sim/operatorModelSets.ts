@@ -364,6 +364,12 @@ export function promptTargetCases(m: Pick<OperatorModelDeciders, 'promptTargetVe
       expect(m.promptTargetVerdict(designated(OTHER, 2), S, {})).toEqual({ kind: 'type' });
       expect(m.promptTargetVerdict(NOT_DESIGNATED, S, {})).toEqual({ kind: 'type' });
     },
+    'offRecord true on what would be typed refuses bad-request; on the designated session it records; only true counts (the chat, question 4)': () => {
+      expect(word(m.promptTargetVerdict(designated(OTHER, 2), S, { offRecord: true }))).toBe('refuse bad-request');
+      expect(word(m.promptTargetVerdict(NOT_DESIGNATED, S, { offRecord: true }))).toBe('refuse bad-request');
+      expect(m.promptTargetVerdict(designated(S, 2), S, { offRecord: true })).toEqual({ kind: 'record', term: 2 });
+      for (const v of ['yes', 1, false, null]) expect(m.promptTargetVerdict(designated(OTHER, 2), S, { offRecord: v }), String(v)).toEqual({ kind: 'type' });
+    },
     'a term present but not a non-negative safe integer is bad-request': () => {
       for (const t of [-1, 1.5, '1', null, Number.NaN, Number.MAX_SAFE_INTEGER + 2, {}, true]) {
         expect(word(m.promptTargetVerdict(designated(S, 1), S, { overlordTerm: t })), String(t)).toBe('refuse bad-request');
@@ -533,6 +539,8 @@ export const PROMPT_TARGET_SET: MutantSet<OperatorModelDeciders> = {
     { id: 'PT9 other session recorded', old: "return bound ? { kind: 'record', term: designation.term } : { kind: 'type' };", new: "return designation.kind === 'designated' ? { kind: 'record', term: designation.term } : { kind: 'type' };" },
     { id: 'PT10 pending body typed', old: "if (fact !== 'unmeasured' && designationFactOf(sessionId, fact) === 'pending') {", new: 'if (false) {' },
     { id: 'PT11 pending word is unmeasured', old: "return { kind: 'refuse', word: 'renewing',", new: "return { kind: 'refuse', word: 'unmeasured'," },
+    { id: 'PT13 offRecord on a typed prompt types', old: '  if (!bound && body.offRecord === true) return', new: '  if (false) return' },
+    { id: 'PT14 any offRecord value counts', old: '!bound && body.offRecord === true', new: '!bound && body.offRecord !== undefined' },
     { id: 'PT12 pending read for any session', old: "designationFactOf(sessionId, fact) === 'pending'", new: "designationFactOf(sessionId, fact) !== 'none'" },
   ],
 };

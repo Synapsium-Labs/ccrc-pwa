@@ -34,7 +34,7 @@ const open = (dir: string): OperatorModelOpen => {
   return o;
 };
 const record = (o: OperatorModelOpen, text = 'hello') =>
-  o.store.recordMessage({ at: NOW, sessionId: 'lane-a-project-a', term: 1, actor: ACTOR, text, mark: false, composedKey: null });
+  o.store.recordMessage({ at: NOW, sessionId: 'lane-a-project-a', term: 1, actor: ACTOR, text, mark: false, composedKey: null, offRecord: false });
 const idOf = (r: ReturnType<typeof record>): number => { if (!r.ok) throw new Error(`${r.error}: ${r.detail}`); return r.value.id; };
 const journalLines = (dir: string): Record<string, unknown>[] => {
   const p = path.join(dir, PRIVACY_JOURNAL_BASENAME);

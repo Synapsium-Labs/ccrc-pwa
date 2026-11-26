@@ -57,7 +57,7 @@ function world(): World {
   return w;
 }
 const rec = (w: World, over: Partial<Parameters<OperatorModelStore['recordMessage']>[0]> = {}): number => {
-  const r = w.store.recordMessage({ at: 1_000, sessionId: S, term: 1, actor: ACTOR, text: 'hello', mark: false, composedKey: null, ...over });
+  const r = w.store.recordMessage({ at: 1_000, sessionId: S, term: 1, actor: ACTOR, text: 'hello', mark: false, composedKey: null, offRecord: false, ...over });
   if (!r.ok) throw new Error(`${r.error}: ${r.detail}`);
   return r.value.id;
 };

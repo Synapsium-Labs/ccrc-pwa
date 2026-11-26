@@ -4,13 +4,18 @@
 // the gate. It READS the turn state and the ceiling's counter, ASKS `readCeilingVerdict` (L1), RECORDS the read-ledger line
 // through the private store's one writer, and ANSWERS through `refuseRoute`; it decides nothing itself.
 //
-// NO LINE, NO READ: the turn state is read first, so every line carries one (the ledger's `CHECK` refuses a session's line
-// without it); a counter that cannot count refuses 502 `unmeasured` before anything is read, and writes no line; a ceiling
+// NO LINE, NO READ: the turn state is read first (a session caller's), so every line carries one (the ledger's `CHECK` refuses a
+// session's line without it); a counter that cannot count refuses 502 `unmeasured` before anything is read, and writes no line; a ceiling
 // refusal writes one line for each door and window (the counter answers the newest), so a caller held at the ceiling cannot grow
 // the store; a composed answer is sent only when its line landed. A failed write answers 503 `write-failed` and sends nothing.
 //
-// `caller` is always `overlord`: readers never reach these doors. A row whose `write` is false is not fenced, so its ceiling
-// would count a forger's reads (question 18): the runner refuses to run for it unless the caller says `unfenced`.
+// TWO CALLERS, ONE RUNNER (the chat plan, question 9). The Overlord's doors pass `OverlordReadArgs`: its `caller` is `overlord`
+// (readers never reach these doors), and a row whose `write` is false is not fenced, so its ceiling would count a forger's reads
+// (question 18): the runner refuses to run for it unless the caller says `unfenced`. The operator's signed-in console, past the
+// account gate, passes `OperatorReadArgs` (the chat's doors): it holds no session, so there is no fence row, no turn state and no
+// generation; its counter is its own (`servedReadsSince(door, since, 'operator')`), so the console never spends the Overlord's
+// ceilings and the Overlord never spends the console's, and every line it writes carries `caller: 'operator'`, a null `generation`,
+// `generationRead: 'not-a-session'` and a null `turnState`, which is exactly what the ledger's `CHECK`s require of the console.
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { refuseRoute } from '../refuse.js';
 import type { RouteRefusal } from '../../../shared/refusal.js';
@@ -52,22 +57,42 @@ export interface OverlordReadArgs {
   readonly compose: () => ReadComposed | Promise<ReadComposed>;
 }
 
-export function runOverlordRead(deps: OverlordReadDeps): (req: FastifyRequest, reply: FastifyReply, a: OverlordReadArgs) => Promise<FastifyReply> {
+export interface OperatorReadArgs {
+  readonly door: ReadDoor;
+  /** The operator's signed-in console, past the account gate (the chat's doors). */
+  readonly caller: 'operator';
+  readonly compose: () => ReadComposed | Promise<ReadComposed>;
+}
+
+/** The ledger's side of a line that is not a read's own: who read it and what the caller's session, if any, measured. */
+type LineHead =
+  | { readonly caller: 'overlord'; readonly generation: number | null; readonly generationRead: 'measured' | 'unmeasured'; readonly turnState: ReadTurnState }
+  | { readonly caller: 'operator'; readonly generation: null; readonly generationRead: 'not-a-session'; readonly turnState: null };
+const OPERATOR_HEAD: LineHead = { caller: 'operator', generation: null, generationRead: 'not-a-session', turnState: null };
+
+export function runOverlordRead(deps: OverlordReadDeps): (req: FastifyRequest, reply: FastifyReply, a: OverlordReadArgs | OperatorReadArgs) => Promise<FastifyReply> {
   return async (_req, reply, a) => {
-    // 1. A row that is not fenced says so, or this is a programming error the census catches.
-    if (!a.row.write && a.unfenced !== true) throw new Error(`runOverlordRead: ${a.door} is not a fenced door and did not say unfenced`);
+    const operator = 'caller' in a;
+    // 1. A row that is not fenced says so, or this is a programming error the census catches. The console has no row.
+    if (!('caller' in a) && !a.row.write && a.unfenced !== true) throw new Error(`runOverlordRead: ${a.door} is not a fenced door and did not say unfenced`);
     // 2. No store, no read.
     const ledger = deps.ledger;
     if (ledger === undefined) return refuseRoute(reply, 'unavailable', { detail: 'the private store is not open' });
-    // 3. The turn state, before any line, so every line carries one.
-    let turnState: ReadTurnState;
-    try { turnState = await deps.turn(a.pass.caller.sessionId, a.pass.caller.uuid); } catch { turnState = 'unmeasured'; }
+    // 3. The turn state, before any line, so every line carries one. The console holds no session and reads none.
+    let head: LineHead;
+    if ('caller' in a) head = OPERATOR_HEAD;
+    else {
+      let turnState: ReadTurnState;
+      try { turnState = await deps.turn(a.pass.caller.sessionId, a.pass.caller.uuid); } catch { turnState = 'unmeasured'; }
+      head = a.pass.generation === null
+        ? { caller: 'overlord', generation: null, generationRead: 'unmeasured', turnState }
+        : { caller: 'overlord', generation: a.pass.generation.n, generationRead: 'measured', turnState };
+    }
     const at = deps.now();
-    // 4. The ceiling's counter: a ceiling that cannot count cannot allow.
-    const counted = ledger.servedReadsSince(a.door, at - READ_CEILING_WINDOW_MS);
+    // 4. The ceiling's counter: a ceiling that cannot count cannot allow. Each side counts its own lines.
+    const counted = ledger.servedReadsSince(a.door, at - READ_CEILING_WINDOW_MS, operator ? 'operator' : 'overlord');
     if (counted.kind === 'unmeasured') return refuseRoute(reply, 'unmeasured', { detail: 'the read ceiling could not be counted' });
-    const generation = a.pass.generation === null ? { generation: null, generationRead: 'unmeasured' as const } : { generation: a.pass.generation.n, generationRead: 'measured' as const };
-    const line = { at, door: a.door, caller: 'overlord' as const, ...generation, turnState };
+    const line = { at, door: a.door, ...head };
     // 5. The ceiling: one line a door and window, and the refusal is answered whether or not that line landed.
     const verdict = readCeilingVerdict(a.door, counted.value, at);
     if (verdict.kind === 'refuse') {

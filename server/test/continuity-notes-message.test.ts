@@ -31,7 +31,7 @@ function store(): { store: OperatorModelStore; db: DatabaseSync } {
 const ACTOR = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) })
   .operator(gateActorOf('Fixture browser', 'abcdef0123456789'));
 function record(s: OperatorModelStore): number {
-  const r = s.recordMessage({ at: 1_000, sessionId: OVERLORD, term: 1, actor: ACTOR, text: 'the radar is red', mark: false, composedKey: null });
+  const r = s.recordMessage({ at: 1_000, sessionId: OVERLORD, term: 1, actor: ACTOR, text: 'the radar is red', mark: false, composedKey: null, offRecord: false });
   if (!r.ok) throw new Error(`${r.error}: ${r.detail}`);
   return r.value.id;
 }

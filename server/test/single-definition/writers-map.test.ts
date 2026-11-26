@@ -863,6 +863,59 @@ describe('the private store\'s tables: every SQL write is an OperatorModelStore 
   });
 });
 
+// The private store's two single-writer COLUMNS (Overlord W1 chat, Task 2, question 4; the table check above is per table, so a second
+// statement that writes one column of `operator_messages` is a different fact and needs its own check): `offRecord`, the chat's
+// off-the-record fact, and `sendKey`, the composed message's dedupe key, are each written by `recordMessage`'s INSERT alone. A column
+// is written by an INSERT that lists it (or lists no columns) and by an UPDATE that assigns it. MAY ONLY SHRINK. KNOWN WIDTH: a
+// statement split from its verb across string pieces is not seen, as in the censuses above.
+describe('operator_messages.offRecord and .sendKey: each written only in recordMessage\'s INSERT', () => {
+  const columnWrites = (files: readonly string[], table: string, col: string): string[] => {
+    const insert = new RegExp(`\\b(INSERT|REPLACE)(?:\\s+OR\\s+\\w+)?\\s+INTO\\s+${tableRefSource(table)}\\s*(?:\\(([^)]*)\\))?`, 'i');
+    const column = new RegExp(`^["\`\\[]?${col}["\`\\]]?$`, 'i');
+    const assignment = new RegExp(`(?:\\bSET\\s+|,\\s*)["\`\\[]?${col}["\`\\]]?\\s*=`, 'i');
+    return sqlWrites(files, [table]).flatMap(({ writer, sql }) => {
+      const m = insert.exec(sql);
+      const sites: string[] = [];
+      if (m !== null && (m[3] === undefined || m[3].split(',').some((c) => column.test(c.trim())))) sites.push(`${writer} ${m[1]!.toUpperCase()}`);
+      if ((m === null ? /^UPDATE\b/i.test(sql) : /\bDO\s+UPDATE\s+SET\b/i.test(sql)) && assignment.test(sql)) sites.push(`${writer} SET`);
+      return sites;
+    }).sort();
+  };
+  const plant = async (text: string, check: (f: string) => void): Promise<void> => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const d = mkdtempSync(path.join(tmpdir(), 'writers-private-col-'));
+    try {
+      const f = path.join(d, 'a.ts');
+      writeFileSync(f, text);
+      check(f);
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  };
+  const SAMPLE = [
+    'export class OperatorModelStore {',
+    "  recordMessage(): void { this.db.prepare('INSERT INTO operator_messages (id, sendKey, offRecord) VALUES (?, ?, ?)'); }",
+    "  moveMessage(): void { this.db.prepare('UPDATE operator_messages SET state = ? WHERE id = ?'); }",
+    '}',
+    "export function second(): void { db.prepare('INSERT INTO operator_messages (id, offRecord) VALUES (?, ?)'); }",
+    "export function third(): void { db.prepare('UPDATE operator_messages SET state = ?, [sendKey] = ? WHERE id = ?'); }",
+    "export function look(): void { db.prepare('SELECT offRecord, sendKey FROM operator_messages'); }",
+    "export function other(): void { db.prepare('UPDATE operator_messages SET text = ? WHERE offRecord = 0'); }",
+  ].join('\n');
+  it('CONTROL: an INSERT that lists the column and an UPDATE that sets it are found; a read, a WHERE and another column are not', async () => {
+    await plant(SAMPLE, (f) => {
+      const names = (col: string) => columnWrites([f], 'operator_messages', col).map((x) => x.replace(/^.*#/, ''));
+      expect(names('offRecord')).toEqual(['OperatorModelStore.recordMessage INSERT', 'second INSERT']);
+      expect(names('sendKey')).toEqual(['OperatorModelStore.recordMessage INSERT', 'third SET']);
+    });
+  });
+  it('the offRecord and sendKey columns are each written by recordMessage\'s INSERT alone', () => {
+    const files = ALL.filter((f) => !rel(f).startsWith('pwa/'));
+    const only = ['server/src/operatorModel/store.ts#OperatorModelStore.recordMessage INSERT'];
+    expect(columnWrites(files, 'operator_messages', 'offRecord')).toEqual(only);
+    expect(columnWrites(files, 'operator_messages', 'sendKey')).toEqual(only);
+  });
+});
+
 // THE COORDINATOR CALL RECORD (D-8126, migration 55). Its table has one writer per column, all in `coordCallsStore.ts`:
 // `insertCall` the only INSERT, `markCallSeen` the only writer of `seenAt`, `overturnCallTx` of `overturnedAt` and
 // `overturnNote`, `markBlockWoken` of `wokenAt`. MAY ONLY SHRINK: a statement from another function, or a SET naming one

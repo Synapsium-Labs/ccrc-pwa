@@ -164,7 +164,7 @@ describe('the prompt route, to the designated session', () => {
     const r = await rig();
     const res = await post(r, OVERLORD, { text: 'move the portfolio forward, password hunter2hunter2' });
     expect(res.statusCode, res.body).toBe(200);
-    expect(res.json()).toEqual({ ok: true, messageId: 1, cut: false, state: 'queued', replay: false });
+    expect(res.json()).toEqual({ ok: true, messageId: 1, cut: false, state: 'queued', replay: false, offRecord: false });
     expect(r.journal.records).toEqual([1]);
     expect(rowOf(r, 1)).toMatchObject({ id: 1, at: FAKE_T0, term: 1, state: 'queued', queuedAt: FAKE_T0, cut: false });
     expect(actorOf(r, 1)).toMatch(/ [0-9a-f]{8}$/);
@@ -274,11 +274,11 @@ describe('the prompt route, to the designated session', () => {
   it('the same sendKey sent twice records one row and queues one nudge; the second answer carries the first id, replay: true and the current state', async () => {
     const r = await rig();
     const first = await post(r, OVERLORD, { text: 'hello', sendKey: KEY });
-    expect(first.json()).toEqual({ ok: true, messageId: 1, cut: false, state: 'queued', replay: false });
+    expect(first.json()).toEqual({ ok: true, messageId: 1, cut: false, state: 'queued', replay: false, offRecord: false });
     r.order.length = 0;
     const second = await post(r, OVERLORD, { text: 'hello', sendKey: KEY });
     expect(second.statusCode).toBe(200);
-    expect(second.json()).toEqual({ ok: true, messageId: 1, cut: false, state: 'queued', replay: true });
+    expect(second.json()).toEqual({ ok: true, messageId: 1, cut: false, state: 'queued', replay: true, offRecord: false });
     expect(r.order).toEqual(['record']);                 // no mail, no move
     expect(r.journal.records).toEqual([1]);
     expect(mails(r)).toHaveLength(1);
@@ -841,5 +841,77 @@ describe('sweepMail: the operator-message branch (open question 3)', () => {
     // The control: the ordinary mail beside it is pushed, so the tick read both; the wake is not (a host-pressure push, if the disk is full, is not this test's).
     expect(sent.map((p) => p.body)).toContain('ordinary news');
     expect(sent.map((p) => p.body)).not.toContain(INBOX_WAKE_SUBJECT);
+  });
+});
+
+// The chat's off-the-record toggle (the chat plan, question 4; §9.4 rule 9): a message sent under it is still recorded and answered,
+// and the store says so. It has no meaning for a prompt that is typed to another session, which records nothing, so that is refused
+// rather than sent as if it were off the record.
+describe('the prompt route and the off-the-record flag (the chat plan, question 4)', () => {
+  it('a prompt to the designated session with offRecord: true records true and the answer echoes it', async () => {
+    const r = await rig();
+    const res = await post(r, OVERLORD, { text: 'hello', offRecord: true });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toEqual({ ok: true, messageId: 1, cut: false, state: 'queued', replay: false, offRecord: true });
+    expect(rowOf(r, 1)).toMatchObject({ id: 1, offRecord: true });
+    expect(typed(r)).toEqual([]);
+  });
+
+  it('offRecord with any other value, or absent, records false and the answer echoes false', async () => {
+    const r = await rig();
+    for (const [i, extra] of [{ offRecord: 'yes' }, {}, { offRecord: 1 }, { offRecord: false }].entries()) {
+      const res = await post(r, OVERLORD, { text: `hello ${i}`, ...extra });
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json()).toMatchObject({ ok: true, messageId: i + 1, offRecord: false });
+      expect(rowOf(r, i + 1), JSON.stringify(extra)).toMatchObject({ offRecord: false });
+    }
+  });
+
+  it('a replay answers the first record\'s offRecord, whatever the retry says', async () => {
+    const r = await rig();
+    await post(r, OVERLORD, { text: 'hello', sendKey: KEY, offRecord: true });
+    const again = await post(r, OVERLORD, { text: 'hello', sendKey: KEY });
+    expect(again.json()).toMatchObject({ ok: true, messageId: 1, replay: true, offRecord: true });
+  });
+
+  it('a prompt to another session with offRecord: true answers 400 bad-request, types nothing and records nothing', async () => {
+    const r = await rig();
+    const res = await post(r, OTHER, { text: 'hello', offRecord: true });
+    expect([res.statusCode, res.json().error]).toEqual([400, 'bad-request']);
+    expect(typed(r)).toEqual([]);
+    expect(r.order).toEqual([]);
+    expect(mails(r)).toEqual([]);
+    expect(marks(r)).toEqual({ ok: true, rows: [] });
+    // and the same prompt without it types as today
+    expect((await post(r, OTHER, { text: 'hello' })).statusCode).toBe(200);
+    expect(typed(r).length).toBeGreaterThan(0);
+  });
+
+  it('with nobody designated, offRecord: true is refused and nothing is typed', async () => {
+    const r = await rig({ designation: NOT_DESIGNATED });
+    const res = await post(r, OVERLORD, { text: 'hello', offRecord: true });
+    expect([res.statusCode, res.json().error]).toEqual([400, 'bad-request']);
+    expect(typed(r)).toEqual([]);
+  });
+
+  describe('promptTargetVerdict', () => {
+    const REFUSE = { kind: 'refuse', word: 'bad-request', detail: 'offRecord: only a message to the designated session is recorded' };
+    it('refuses offRecord: true when the verdict would be type, for another session and for none designated', () => {
+      expect(deciders.promptTargetVerdict(designated(OVERLORD, 1), OTHER, { offRecord: true })).toEqual(REFUSE);
+      expect(deciders.promptTargetVerdict(NOT_DESIGNATED, OVERLORD, { offRecord: true })).toEqual(REFUSE);
+    });
+    it('only true counts: any other value is today\'s verdict', () => {
+      for (const offRecord of [false, 'true', 1, null, undefined]) {
+        expect(deciders.promptTargetVerdict(designated(OVERLORD, 1), OTHER, { offRecord }), String(offRecord)).toEqual({ kind: 'type' });
+      }
+    });
+    it('records for the designated session whatever offRecord says', () => {
+      expect(deciders.promptTargetVerdict(designated(OVERLORD, 1), OVERLORD, { offRecord: true })).toEqual({ kind: 'record', term: 1 });
+    });
+    it('keeps every earlier refusal ahead of it', () => {
+      expect(deciders.promptTargetVerdict({ kind: 'unmeasured', why: 'fixture' }, OTHER, { offRecord: true })).toMatchObject({ word: 'unmeasured' });
+      expect(deciders.promptTargetVerdict(designated(OVERLORD, 1), OTHER, { offRecord: true, overlordTerm: -1 })).toMatchObject({ word: 'bad-request', detail: 'overlordTerm: not a non-negative safe integer' });
+      expect(deciders.promptTargetVerdict(designated(OVERLORD, 2), OVERLORD, { offRecord: true, overlordTerm: 1 })).toMatchObject({ word: 'stale-designation' });
+    });
   });
 });

@@ -44,7 +44,7 @@ function privateStore(): { db: DatabaseSync; store: OperatorModelStore; say(at: 
   const store = new OperatorModelStore(db, issuer());
   const say = (at: number, n = 1): void => {
     for (let i = 0; i < n; i++) {
-      const r = store.recordMessage({ at, sessionId: OVERLORD, term: 1, actor: ACTOR, text: 'hello', mark: false, composedKey: null });
+      const r = store.recordMessage({ at, sessionId: OVERLORD, term: 1, actor: ACTOR, text: 'hello', mark: false, composedKey: null, offRecord: false });
       if (!r.ok) throw new Error(`${r.error}: ${r.detail}`);
     }
   };
