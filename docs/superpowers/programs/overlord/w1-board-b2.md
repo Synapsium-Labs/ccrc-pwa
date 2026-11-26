@@ -241,8 +241,8 @@ cannot be read and its two started waves have no known age. Red first against th
 blocking title); a seventh, that no later-wave field rides, holds on both.
 
 **Advisories.** A1: the read runner's header says how a reader reaches the unfenced rows and that its read is attributed; its fifth
-sentence says "served"; the gate census says nine. The gate's lane list and the gate suite's title name the board in the merge
-packet to their holder. A2: the comment on `readableDoorRow` says only the call asks it; the census reads the read row's enum off
+sentence says "served"; the gate census says nine. The gate's lane list and the gate suite's title name the board, sent to their holder
+as a packet (claim 7410) and applied as sent on its yes. A2: the comment on `readableDoorRow` says only the call asks it; the census reads the read row's enum off
 the shipped table against `READABLE_DOORS`, with a mutant that widens the enum (red when the check is removed). A3: the size
 fixture's comment says what catches a leaked body or note. Residues: the coordinator test title, the work part's slug, and the
 Known limits sentence on the unfenced history read.
