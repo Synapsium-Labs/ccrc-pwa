@@ -358,6 +358,9 @@ describe('every ccrc command the console shows is one the CLI has (desktop-polis
     const cli = (body: string): string => `\ncmd_zz() {\n${body}\n}\n`;
     expect(() => requiredSubsOf(cli('  echo "zz: missing subcommand" >&2; exit 2'), 'zz')).toThrow(/no `case "\$sub" in`/);
     expect(requiredSubsOf(cli('  # a bare `ccrc zz` exits 2 (missing subcommand)\n  echo ok'), 'zz')).toBeNull();
+    // A refusal whose `case` names no subcommand (only help and the catch-all) throws too.
+    const empty = '  case "$sub" in\n    -h|--help) usage ;;\n    *) echo "zz: missing subcommand" >&2; exit 2 ;;\n  esac';
+    expect(() => requiredSubsOf(cli(empty), 'zz')).toThrow(/names no subcommand/);
   });
 
   it('no sentence of the second list is stale', () => {

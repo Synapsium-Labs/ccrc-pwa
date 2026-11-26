@@ -153,10 +153,7 @@ All 4 killed.
   >   (`_ccrc_operator_only`, `ccd/ccrc`): **speed bumps, not walls** (`env -u CLAUDECODE`, a script file or another
   >   interpreter runs past them). Never run it from a session, and never against the live host from a test.
 - `deploy/ccrc.env.example`: one paragraph under the localhost worked set.
-- Left for the wave's last step, after wave 180's PR (#3402) merges and the coordinator's mail: the accounts design's
-  gate-dark places (its holder asked to wait, since #3402 rewrites both; the swap is "the README's hand route" to
-  `ccrc auth on`, and "a verb ccrc never had" becomes "did not have until desktop-polish wave 181"), and the console's
-  `LOCAL_ARMING` line in `pwa/src/fleet/accountWords.ts`.
+- The wave's last step, after wave 180's PR (#3402) merged as `277d443e63`, is section 8.
 - Growth (D-9105): `ccd/ccrc` grows by the verb, and the waiver
   `server/test/growth-waivers/D-9105-ccd-ccrc.json` carries the measured delta. `passwd`, `expose` and `auth` sit
   inline together and `auth` calls the other two's helpers (`_box_auth_path`, `_box_unit_env`, the shadow-key read), so
@@ -167,3 +164,82 @@ All 4 killed.
   before the first push.
 - `shellcheck`: `ccd/ccrc` now reports one SC2034 fewer than its pin (14 of 15). The ratchet prints that as lowerable
   and passes; the baseline file is left alone to avoid a conflict-prone edit.
+
+## 8. The last step (after #3402)
+
+Main absorbed once, `44f2b15a3b` (it carries #3402): the one conflict was the plan's deviation section, where D-9106
+and D-9105 both followed D-8749; D-9105 now follows D-9106, as main has it, and no line of main's was dropped. The
+coordinator's go (mail 37301) folded the second review of #3402 (run 3901) into this step.
+
+**The console's sentence.** `LOCAL_ARMING` (`pwa/src/fleet/accountWords.ts`), one string literal so the command scan
+reads it whole: "once a passphrase is set (ccrc passwd sets it), run ccrc auth on there: it turns sign-in on, restarts
+the server and prints the address to open". Only the gate-dark reason says it, as its localhost line. It is prose, not
+backticked: a disclosure line renders as plain text, beside `ccrc passwd` there, and after F1 below a verb that needs a
+subcommand is checked in prose too ("Then run ccrc auth now." is red). What the swap fixes, in one line: on a localhost
+box the hand route could end at a sign-in that bounces in Safari (section 2); the README's Safari sentence is the
+answer by hand, and the console's sentence now points at the verb, which writes the cookie key itself.
+
+**The insecure-origin reason** (review run 3901 F3, A5, A8). It does not take `LOCAL_ARMING`: that box is armed with a
+plain-HTTP origin that is not localhost, where the verb refuses (a foreign `CCRC_ORIGIN`, and usually a reach reason
+too). Its lines are now true there: the origin can come from `ccrc.env`, `exposure.env` (read second, so it wins) or the
+unit; `CCRC_COOKIE_INSECURE=on`, which such a box usually has, comes out when the origin becomes https (otherwise the
+boot warning's real downgrade); the localhost line is the hand route, keeping the cookie key for Safari. The copy line
+reads the four keys from both files, each line with its file, an indented line included:
+`grep -sHE '^[[:space:]]*CCRC_(ORIGIN|RP_ID|AUTH|COOKIE_INSECURE)=' ~/.ccrc/ccrc.env ~/.ccrc/exposure.env`.
+`server/test/door-origin-read.test.ts` reads that literal from the source and runs it in a fixture HOME: the four keys
+from both files, canary secret lines (`CCRC_AUTH_SECRET_PATH`, agent, DDNS and auth tokens) never printed, both files'
+bytes unchanged, nothing on stderr with one file or none. The comment that had the files' precedence backwards is
+corrected, and so is wave 180's note (4.1).
+
+**The guard** (`server/test/single-definition/offered-commands.test.ts`; review run 3901 F1, F2, F4, A4, A10, carry 3).
+Its header is the full statement of what it checks; in short:
+- after a verb that needs a subcommand, prose without one is excused only inside a sentence `AFTER_VERB_PROSE` lists for
+  that verb ("(ccrc expose writes all three)"), so "Run ccrc expose now to fix it." is red (F1); `writes` left
+  `PLAIN_WORDS`, which is 40 words now, all of them in use;
+- any white space separates the product name and the word: a tab, U+202F, U+2009 and a line wrap in JSX text (F2);
+- anything inside a `<code>`, `<kbd>`, `<pre>` or `<samp>`, at any depth, is a command: a string in an expression and a
+  nested element's text (F4);
+- a command-like word is excused per hit, only where its listed sentence covers that hit, and "ccrc operator" is an
+  exact literal of `pwa/src/lib/passkey.ts` with its reason, not a two-word sentence (A4);
+- the CLI reader leaves comment lines out (this wave's own install comment says "missing subcommand", which made the
+  reader throw on `ccrc install` at the merged head), is asked of every verb of the dispatch, and throws on a refusal it
+  cannot read or a `case` that names no subcommand; it reads `ccrc auth`'s `on` and `off` the way it reads expose's
+  (carry 3);
+- the positive control's dead arm is gone (A10).
+Each new case was red on the guard before the change (7 of 12 cases red; the seventh, "each one the console shows", was
+the install comment above). At this head the scan sees 164 hits, 38 naming a verb, at 151 sites over 66 words; the
+command-like list's 18 entries cover 23 prose hits of its 15 words at 22 sites (wave 180's note said 25; corrected there,
+A7).
+
+**The door's description** (item 4). Narrowed, both forms name the visible reason (`acct-door-reason`) as their
+`aria-describedby` again, so focusing the door says why before any press; the tap's one announcement is as it was, and
+a press after focus repeats it (accepted). The jsdom cases that asserted no description are changed claims. The browser
+file's assert (`pwa/browser/connect-sheet.browser.test.ts`) belongs to the spacing wave's claim: sent as a peer packet
+(mail 37311), applied only on its holder's yes.
+
+**Small.** The sign-in-start form of the sign-in-off sentence ends "Nothing was started." again, as its siblings do
+(A6). The CLAUDE.md SAFETY bullet left this pull request (section 7). Not this wave's: the stylesheet items A1 to A3 and
+A9, which go to the spacing wave.
+
+**Mutants of the last step** (each applied alone, the guarding file run, restored from HEAD):
+
+| Mutant | Caught by |
+|---|---|
+| G0 `auth)` removed from the CLI's dispatch | the guard's "each one the console shows" (the console's `ccrc auth on` is then no verb) and carry 3 |
+| D1 no description on either form of the narrowed door | "one door per width, and it narrows in place" and "a tap or Enter on a narrowed door" (jsdom) |
+| D2 no description on the desk form only | "a tap or Enter on a narrowed door" (it walks both widths) |
+| O1 the old copy line (`ccrc.env` only, three keys, column 0) | all three cases of `door-origin-read.test.ts` |
+| O2 the copy line reads `ccrc.env` only | "is a read" and "shows the four keys from both files" |
+| O3 the copy line drops the cookie key | "is a read" and "shows the four keys from both files" |
+| L1 `LOCAL_ARMING` says to set it up by hand and restart | the jsdom words case "the localhost route names ccrc auth on" |
+| L2 the insecure-origin reason takes `LOCAL_ARMING` again | the same words case |
+| A6 the sign-in-start form loses "Nothing was started." | the same words case |
+| G1 the separator back to a space or U+00A0 | the guard's F2 case |
+| G2 a command-like word excused by its sentence anywhere in the text | the guard's A4 case |
+| G3 a code tag read at its own text only | the guard's F4 case |
+| G4 comment lines read as the verb's body | "each one the console shows" (`ccrc install` then throws) and carry 3 |
+| G5 any plain word after a verb that needs a subcommand excused | the guard's F1 case and carry 3 |
+| G6 a `case` that names no subcommand accepted | carry 3's empty-case assert (it survived the first run; the assert was added, then it was caught) |
+
+All 15 caught. Each was applied alone, the guarding file run through `ccrc test`, and the file restored from HEAD.
+
