@@ -68,8 +68,10 @@ server"), and both reasons say it through that constant, so the coming verb (wav
 insecure-origin reason names no future verb.
 
 **The insecure-origin copy line** (fix round 1, review F5). The first round offered `ccrc expose status`, which is
-untrue on the one box that sees this reason. Read: an armed box's origin is `CCRC_ORIGIN` from `ccrc.env`, else from
-`exposure.env`, else the default `http://localhost:<port>` (`server/src/config.ts`); `ccrc expose` writes only an
+untrue on the one box that sees this reason. Read: an armed box's origin is `CCRC_ORIGIN` from `exposure.env`, else
+from `ccrc.env`, since the unit reads `exposure.env` second and the later file wins for a key both set
+(`deploy/ccrc.service`; corrected in desktop-polish wave 181, review run 3901 A8, which this note first had backwards),
+else the default `http://localhost:<port>` (`server/src/config.ts`); `ccrc expose` writes only an
 `https://` origin (both arms of `cmd_expose`); the default is loopback, which the account gate accepts. So a plain-HTTP
 origin there was set in `ccrc.env` (or the unit's own environment), where `ccrc expose status` prints "not configured"
 and the other expose forms refuse first while that file sets any of the three keys. No `ccrc` command shows that origin
@@ -120,8 +122,10 @@ prose, in one of two lists, as ruled (36889):
    (40 measured at this head, "tells" from a sentence `main` added since).
 2. `COMMAND_LIKE`, words that could be read as a command after the product's name (`access`, `close`, `connect`,
    `managed`, `moves`, `next`, `on`, `operator`, `push`, `release`, `restarts`, `runs`, `sends`, `sets`, `stops`), each
-   excused only inside the sentences it stands in today. All 25 sites were read: each is prose and offers nothing to
-   run, so none was a finding.
+   excused only inside the sentences it stands in today. All its sites were read, 23 prose hits at 22 sites over 18
+   listed sentences (corrected in desktop-polish wave 181: review run 3901 A7 measured these at this wave's head, where
+   this note first said 25, counting two comments the scan leaves out): each is prose and offers nothing to run, so
+   none was a finding.
 
 A listed word excuses prose, never a command: inside backticks, in a `<code>`, `<kbd>`, `<pre>` or `<samp>`, or in a
 command position (a `fix`, a `command`, or anything a name with "command" in it holds, such as `fixCommands`), only a
