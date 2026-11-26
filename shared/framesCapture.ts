@@ -9,6 +9,7 @@
 //
 // No case text travels on any wire: a case is named by its id, and the driver builds the text from this file.
 import { asciiRun } from './deliveryCapture.js';
+import { reducerFingerprint } from './framesReduce.js';
 import { FRAMES_CASE_IDS, FRAMES_PARTS, type FramesCaseId, type FramesPane } from './framesResult.js';
 
 // ── the texts ────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -171,3 +172,6 @@ export function framesRecipeVersionOf(extra = ''): string {
   const hex = (n: number): string => n.toString(16).padStart(8, '0');
   return hex(fnv1a(text, 0x811c9dc5)) + hex(fnv1a(text, 0x9e3779b9));
 }
+
+/** THE recipe version: the cases with the reducer's answers on its probe table. */
+export const FRAMES_RECIPE_VERSION: string = framesRecipeVersionOf(reducerFingerprint());
