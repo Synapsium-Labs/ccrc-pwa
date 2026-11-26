@@ -554,6 +554,10 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
       expect(warnLines[0]).toContain(join(home, '.ccrc', 'exposure.env'));
       expect(warnLines[0]).toMatch(/was not measured/);
       expect(r.stdout).not.toMatch(/^PASS auth: /m);
+      // Wave 181 (review of wave 180): a bare `ccrc expose` exits 2 (missing subcommand); the file cannot be read, so
+      // the remedy names every arm and leaves the choice to the operator, who knows which one exposed this box.
+      expect(remedyFor(r.stdout, 'auth')).toContain('re-run the arm this box was exposed with: ccrc expose duckdns, ccrc expose byo or ccrc expose ip;');
+      expect(remedyFor(r.stdout, 'auth')).not.toMatch(/ccrc expose(?! (?:duckdns|byo|ip|status)\b)/);
     });
 
   it.skipIf(process.getuid?.() === 0)(

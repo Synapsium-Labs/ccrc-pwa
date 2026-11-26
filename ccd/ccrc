@@ -6252,8 +6252,8 @@ cmd_passwd() {
 #   1. CLAUDECODE is set: a Claude Code session's own shell, the Bash tool included.
 #   2. stdin is not a terminal: a session's tool, a pipe, a script, `curl … | bash`.
 #   3. this terminal is a fleet session's pane: TMUX_PANE names a pane (`%<n>`) whose tmux session is `cc-<id>`, read
-#      with `tmux display-message -p -t "$TMUX_PANE" '#S'`, bounded at 2 s as the history verbs bound it. A read that
-#      fails, times out or answers anything else refuses nothing.
+#      with `tmux display-message -p -t "$TMUX_PANE" '#S'` on the fleet's server (D-8270's lookup, `_TMX_ARGV`), bounded
+#      at 2 s as the history verbs bound it. A read that fails, times out or answers anything else refuses nothing.
 # SPEED BUMPS, NOT WALLS. `env -u CLAUDECODE`, a terminal made with `script`, an unset TMUX_PANE, a script file or another
 # interpreter each run past them. They stop a session doing this by accident, never one that sets out to.
 _ccrc_operator_only() {   # <the verb's words, e.g. "auth on">
@@ -6263,7 +6263,7 @@ _ccrc_operator_only() {   # <the verb's words, e.g. "auth on">
   [ -t 0 ] \
     || _ccrc_die "'ccrc $what' is the operator's, typed in their own terminal, and stdin here is not a terminal (a session's tool, a pipe or a script). Nothing was changed."
   if [ -n "${TMUX_PANE:-}" ] && [[ "$TMUX_PANE" =~ ^%[0-9]+$ ]] && command -v tmux >/dev/null 2>&1; then
-    pane="$(_plat_timeout 2 tmux display-message -p -t "$TMUX_PANE" '#S' 2>/dev/null)" || pane=""
+    pane="$(_plat_timeout 2 "${_TMX_ARGV[@]}" display-message -p -t "$TMUX_PANE" '#S' 2>/dev/null)" || pane=""
     case "$pane" in
       cc-?*) _ccrc_die "'ccrc $what' is the operator's, and this terminal is a fleet session's pane (${pane//[![:print:]]/?}), where it refuses. Run it from your own shell. Nothing was changed." ;;
     esac
@@ -17125,8 +17125,9 @@ cmd_install() {
     elif [ "$BUE_VAL" = on ]; then
       echo "install: gate: CCRC_AUTH=on in $BUE_SRC, and a PWA passphrase file is at $gsec (arming also needs CCRC_RP_ID and CCRC_ORIGIN beside the flag; ccrc doctor's auth check measures whether the file is usable)"
     else
-      local gate_how="set CCRC_AUTH=on together with CCRC_RP_ID and CCRC_ORIGIN in $BOX_ENV_FILE (or run ccrc expose)"
-      [ "$fits" -eq 0 ] || gate_how="ccrc auth on (it writes the localhost lines and restarts the server itself)"
+      # Wave 181: a bare `ccrc expose` exits 2 (missing subcommand), so the remedy names the arms, as `_exp_status` does.
+      local gate_how="set CCRC_AUTH=on together with CCRC_RP_ID and CCRC_ORIGIN in $BOX_ENV_FILE (or run ccrc expose duckdns, or ccrc expose byo)"
+      [ "$fits" -eq 0 ] || gate_how="ccrc auth on (it writes the sign-in lines and restarts the server itself)"
       [ "$BUE_SRC" != "$CCRC_EXPOSURE_FILE" ] || gate_how="set CCRC_AUTH=on in $CCRC_EXPOSURE_FILE, which overrides $BOX_ENV_FILE (ccrc expose writes it with CCRC_RP_ID and CCRC_ORIGIN)"
       if [ "$fits" -eq 1 ] && [ "$BUE_SRC" != "$CCRC_EXPOSURE_FILE" ]; then
         echo "install: gate: a PWA passphrase file is at $gsec, but the gate is OFF. To arm it: $gate_how"
@@ -17145,7 +17146,7 @@ cmd_install() {
     elif [ "$BUE_SRC" = "$CCRC_EXPOSURE_FILE" ]; then
       echo "install: gate: this box has NO PWA passphrase — install never writes one. To arm the gate: ccrc passwd, then set CCRC_AUTH=on in $CCRC_EXPOSURE_FILE, which overrides $BOX_ENV_FILE (ccrc expose writes it with CCRC_RP_ID and CCRC_ORIGIN), then: $(_svc_restart_hint ccrc.service)"
     elif [ "$fits" -eq 1 ]; then
-      echo "install: gate: this box has NO PWA passphrase — install never writes one. To arm the gate: ccrc passwd, then ccrc auth on (it writes the localhost lines and restarts the server itself)"
+      echo "install: gate: this box has NO PWA passphrase — install never writes one. To arm the gate: ccrc passwd, then ccrc auth on (it writes the sign-in lines and restarts the server itself)"
     else
       echo "install: gate: this box has NO PWA passphrase — install never writes one. To arm the gate: ccrc passwd, then set CCRC_AUTH=on together with CCRC_RP_ID and CCRC_ORIGIN in $BOX_ENV_FILE, then: $(_svc_restart_hint ccrc.service)"
     fi

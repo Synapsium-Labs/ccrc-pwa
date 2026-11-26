@@ -562,7 +562,9 @@ describe('ccrc doctor: update-exposure (design §12 — armed and reachable, eac
     // about a route it cannot even reach.
     expect(l).toContain('the update routes');
     expect(l).not.toContain('/api/updates/apply');
-    expect(remedyFor(r.stdout, 'update-exposure')).toMatch(/^ {2}remedy: arm the gate: ccrc expose /);
+    // Wave 181 (review of wave 180): a bare `ccrc expose` exits 2 (missing subcommand), so the remedy names the arms.
+    expect(remedyFor(r.stdout, 'update-exposure')).toMatch(/^ {2}remedy: arm the gate: ccrc expose duckdns, ccrc expose byo or ccrc expose ip \(each writes CCRC_AUTH=on and CCRC_ORIGIN into /);
+    expect(remedyFor(r.stdout, 'update-exposure')).not.toMatch(/ccrc expose(?! (?:duckdns|byo|ip|status)\b)/);
     noRunnerBugLine(r.stdout, 'update-exposure');
     expect(r.code).toBe(1);
   });
@@ -646,6 +648,9 @@ describe('ccrc doctor: update-exposure (design §12 — armed and reachable, eac
     const r = runDoctor(home);
     expect(line(r.stdout)).toMatch(/^WARN update-exposure: .*exposure\.env is there and cannot be read, so whether CCRC_AUTH is on — and so whether the update routes are gated — was not measured$/);
     expect(line(r.stdout)).not.toContain('/api/updates/apply');
+    // Wave 181 (review of wave 180): a bare `ccrc expose` exits 2 (missing subcommand), so the re-run names the arms.
+    expect(remedyFor(r.stdout, 'update-exposure')).toContain('then re-run the arm this box was exposed with: ccrc expose duckdns, ccrc expose byo or ccrc expose ip — it rewrites the file 0600');
+    expect(remedyFor(r.stdout, 'update-exposure')).not.toMatch(/ccrc expose(?! (?:duckdns|byo|ip|status)\b)/);
     noRunnerBugLine(r.stdout, 'update-exposure');
   });
 

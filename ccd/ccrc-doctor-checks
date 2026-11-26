@@ -1644,8 +1644,9 @@ _check_auth() {
       # file EITHER, whether the gate is armed (and failing shut) is the one
       # fact this box needs and the one this check cannot give it.
       if [ "$unmeasured" -ne 0 ]; then
-        # This arm's own rc-2 remedy (D-3596), byte-identical; every other cause keeps `unfix`.
-        [ "$unmeasured" -ne 2 ] || unfix="look at what is really there (ls -ld $CCRC_EXPOSURE_FILE) and re-run ccrc expose; if the gate is meant to be armed, run: ccrc passwd"
+        # This arm's own rc-2 remedy (D-3596); every other cause keeps `unfix`. Wave 181: a bare `ccrc expose` exits 2
+        # (missing subcommand), and the file cannot be read, so the remedy names every arm and the operator picks theirs.
+        [ "$unmeasured" -ne 2 ] || unfix="look at what is really there (ls -ld $CCRC_EXPOSURE_FILE) and re-run the arm this box was exposed with: ccrc expose duckdns, ccrc expose byo or ccrc expose ip; if the gate is meant to be armed, run: ccrc passwd"
         _dr_warn auth "there is no passphrase file at $secret$via, and $unwhy, so whether the gate is armed (and failing shut) was not measured" \
           "$unfix"
         return 2
@@ -2102,7 +2103,7 @@ _check_update-exposure() {
 
   if [ "$expunread" -eq 1 ]; then
     _dr_warn update-exposure "$CCRC_EXPOSURE_FILE is there and cannot be read, so whether CCRC_AUTH is on — and so whether the update routes are gated — was not measured" \
-      "look at what is really there (ls -ld $CCRC_EXPOSURE_FILE; the exposure check above says what it found), then re-run ccrc expose — it rewrites the file 0600"
+      "look at what is really there (ls -ld $CCRC_EXPOSURE_FILE; the exposure check above says what it found), then re-run the arm this box was exposed with: ccrc expose duckdns, ccrc expose byo or ccrc expose ip — it rewrites the file 0600"
     return 2
   fi
   # An undecidable CCRC_AUTH WARNs only where its answer could matter: a box PROVABLY loopback-only (CCRC_HOST
@@ -2124,7 +2125,7 @@ _check_update-exposure() {
   fi
   if [ "${#reach[@]}" -gt 0 ]; then
     _dr_fail update-exposure "this box is reachable ($(_dr_join "${reach[@]}")) and CCRC_AUTH is not on in $BOX_ENV_FILE or $CCRC_EXPOSURE_FILE — the update routes, and every other write route, answer anyone who can reach it" \
-      "arm the gate: ccrc expose (writes CCRC_AUTH=on with CCRC_RP_ID and CCRC_ORIGIN into $CCRC_EXPOSURE_FILE), or set all three in $BOX_ENV_FILE, then restart: $(_dr_restart_hint ccrc.service)"
+      "arm the gate: ccrc expose duckdns, ccrc expose byo or ccrc expose ip (each writes CCRC_AUTH=on and CCRC_ORIGIN into $CCRC_EXPOSURE_FILE, and CCRC_RP_ID beside them for a name), or set CCRC_AUTH=on with CCRC_RP_ID and CCRC_ORIGIN in $BOX_ENV_FILE, then restart: $(_dr_restart_hint ccrc.service)"
     return 1
   fi
   _dr_pass update-exposure "loopback only — no exposure artifact and CCRC_HOST=${bindhost:-127.0.0.1 (the default)}"

@@ -737,6 +737,9 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     expect(line).toContain('the gate is OFF');
     expect(line).toContain(join(home, '.ccrc', 'ccrc.env'));
     expect(line).not.toContain('NO PWA passphrase');
+    // Wave 181 (review of wave 180): a bare `ccrc expose` exits 2 (missing subcommand), so the remedy names the arms.
+    expect(line).toContain('(or run ccrc expose duckdns, or ccrc expose byo)');
+    expect(line).not.toMatch(/ccrc expose(?! (?:duckdns|byo|ip|status)\b)/);
   });
 
   it('G2b (wave 181): the same on a loopback-only server box — the OFF remedy is ccrc auth on, with no restart line', () => {
