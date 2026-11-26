@@ -621,10 +621,13 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `server/src/coord/overlordInboxRoutes.ts`, a lane source of its own for the census), each check the box token in their own
   `onRequest`, then ask the Overlord gate with their own row's key, and sit in `auth/gate.ts`'s EXEMPT table like the linking
   confirm. So does the Overlord's history door, `POST /api/overlord/history` (Overlord W1 PR B1: a read whose search words ride the
-  body; its handler is in `server/src/coord/overlordHistoryRoutes.ts`, a lane source of its own for the census). So does the Overlord's cursor
+  body; its row not fenced since board B2, so a reader reads it through the door process's read tool and a read is attributed to the
+  Overlord, not proven its own; its handler is in `server/src/coord/overlordHistoryRoutes.ts`, a lane source of its own for the census). So does the Overlord's cursor
   read of the sequence, `GET /api/overlord/sequence` (Overlord W1 sequence C: server words and ids only, its row not fenced, so its read
-  ceiling counts every attributed line; its handler is in `server/src/coord/overlordSequenceRoutes.ts`, a lane source of its own for the
-  census). The dual-credential reads, including `GET /api/feed`,
+  ceiling counts every attributed served line; its handler is in `server/src/coord/overlordSequenceRoutes.ts`, a lane source of its own for the
+  census). So does the Overlord's board, `GET /api/overlord/board` (Overlord W1 PR B2: one composed read of the fleet, ids, counts and
+  marked one-liners, its row not fenced, so its read ceiling counts every attributed served line; its handler is in
+  `server/src/coord/overlordBoardRoutes.ts`, a lane source of its own for the census). The dual-credential reads, including `GET /api/feed`,
   the programme goals read `GET /api/programmes/:slug/goals` (D-8126: a coordinator reads the pin, its definition of done and
   the open items cookieless through `ccrc-api`, the console with a session), the landing line's read `GET /api/landing`
   (landing order wave 5j, D-9048: a coordinator reads it cookieless through `ccrc-api landing show`, the console with a session),
