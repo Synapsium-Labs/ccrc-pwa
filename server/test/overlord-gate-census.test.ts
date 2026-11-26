@@ -37,8 +37,9 @@ const INBOX_ROUTES = 'server/src/coord/overlordInboxRoutes.ts';
 const HISTORY_ROUTES = 'server/src/coord/overlordHistoryRoutes.ts';
 const SEQUENCE_ROUTES = 'server/src/coord/overlordSequenceRoutes.ts';
 const BOARD_ROUTES = 'server/src/coord/overlordBoardRoutes.ts';
-/** The files an `overlord` row may name: the same eight `overlord-doors-census.test.ts` reads (D-8809 added the linking file, the inbox
- *  piece its own, the history door (W1, PR B1) its own, the cursor read of the sequence (W1 sequence C) its own). */
+/** The files an `overlord` row may name: the same nine `overlord-doors-census.test.ts` reads (D-8809 added the linking file, the inbox
+ *  piece its own, the history door (W1, PR B1) its own, the cursor read of the sequence (W1 sequence C) its own, the board (W1, PR B2)
+ *  its own). */
 const SCANNED = [OVERLORD_ROUTES, CONTINUITY, LEDGERS_ROUTES, NAME_LIST_ROUTES, LINKING_ROUTES, INBOX_ROUTES, HISTORY_ROUTES, SEQUENCE_ROUTES, BOARD_ROUTES] as const;
 const sourceOf = (rel: string): string => readFileSync(path.join(REPO, rel), 'utf8');
 const VERBS = new Set(['get', 'post', 'put', 'delete']);

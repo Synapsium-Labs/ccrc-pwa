@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   DOOR_TOOLS, DOOR_TOOL_PREFIX as PROGRAM_PREFIX, DOOR_ONLY_TOOLS, ATTRIBUTION_FIELDS, CLAIM_RETRY_MIN_MS, CLAIM_RETRY_MAX_MS, DELTA_REFRESH_MS, DELTA_LEASE_MS, TEAM_KEY_SHAPE,
-  SEQUENCE_PAGE_MAX as PROGRAM_PAGE_MAX, HISTORY_VERBS as PROGRAM_HISTORY_VERBS, readToolOver, readableDoorRow,
+  SEQUENCE_PAGE_MAX as PROGRAM_PAGE_MAX, HISTORY_VERBS as PROGRAM_HISTORY_VERBS, readableDoorRow,
 } from '../../ccd/door-process.mjs';
 import { HISTORY_VERBS } from '../../shared/overlordHistory.js';
 import { OVERLORD_DOORS } from '../src/coord/overlordDoors.js';
@@ -149,8 +149,9 @@ describe('DOOR_TOOLS', () => {
 // THE READERS' CENSUS (board B2, slug history-and-board-reads-attributed-not-proven, the coordinator's point 5): every row marked reader is a view the read tool admits (unfenced), its
 // route's Overlord door row is not a write, the marked rows are exactly `READABLE_DOORS`, and the read tool's enum is exactly
 // them. A function over the tables passed in, so each mutant below reds a named check on a synthetic table, and the real
-// tables read clean. The read tool is rebuilt from the rows through the door process's own `readToolOver`, and admission is
-// asked of its own `readableDoorRow`, never a copy of their conditions.
+// tables read clean. Admission is asked of the door process's own `readableDoorRow`, never a copy of its conditions; the read
+// row's enum is read off the table as shipped and compared with the hand-kept `READABLE_DOORS`, never rebuilt through the
+// function that builds it (review 4010 A2).
 const READABLE_DOORS = ['board', 'history'] as const;
 type DoorLike = { group: string; method: string; path: string; write: boolean };
 /** Each client row's method and path, from ccrc-api's ROUTES (`[key]='METHOD|/path|…'`). */
@@ -173,8 +174,8 @@ function readerCensus(rows: readonly Row[], doors: readonly DoorLike[], routes: 
   }
   const names = marked.map((r) => r.name);
   if (JSON.stringify(names) !== JSON.stringify([...READABLE_DOORS])) out.push(`the rows marked reader are ${names.join(', ') || 'none'}, not ${READABLE_DOORS.join(', ')}`);
-  const read = readToolOver(rows.filter((r) => r.name !== 'read')) as unknown as { input: { properties: { door: { enum?: string[] } } } };
-  if (JSON.stringify(read.input.properties.door.enum ?? []) !== JSON.stringify(names)) out.push("the read tool's enum is not exactly the rows marked reader");
+  const read = rows.find((r) => r.name === 'read') as unknown as { input?: { properties?: { door?: { enum?: string[] } } } } | undefined;
+  if (JSON.stringify(read?.input?.properties?.door?.enum ?? []) !== JSON.stringify([...READABLE_DOORS])) out.push("the read tool's enum is not exactly the readable doors");
   return out;
 }
 
@@ -199,6 +200,11 @@ describe('the readers\' census (board B2, slug history-and-board-reads-attribute
     expect(readerCensus(swap('acknowledge', { reader: true }), doors, routes)).toEqual(expect.arrayContaining([
       'acknowledge: a operate row marked reader', 'acknowledge: marked reader but the read tool does not admit it (a fenced row)',
     ]));
+  });
+  it('mutant: a read tool whose enum lists a door the readable list does not (the inbox) is named', () => {
+    const read = ROWS.find((r) => r.name === 'read')! as unknown as { input: { properties: Record<string, unknown> } };
+    const widened = { ...read.input, properties: { ...read.input.properties, door: { type: 'string', enum: ['board', 'history', 'inbox'] } } };
+    expect(readerCensus(swap('read', { input: widened } as unknown as Partial<Row>), doors, routes)).toEqual(["the read tool's enum is not exactly the readable doors"]);
   });
   it('mutant: a readable door left unmarked (history) is named', () => {
     expect(readerCensus(swap('history', { reader: false }), doors, routes)).toContain('the rows marked reader are board, not board, history');

@@ -236,7 +236,9 @@ const BASE_TOOLS = [
 ];
 
 /** Whether the read tool admits a row: marked `reader: true`, an unfenced `view`. The one owner of "a reader can read this door":
- *  the read tool's enum and its call both ask it, and the overlord-v1 census asks it too, never a copy of its conditions. */
+ *  the read tool's call asks it before it runs a row, and the readers' census asks it too, never a copy of its conditions. The
+ *  tool's enum lists the rows marked reader without asking it, so a marked row it would refuse is still listed; the census holds
+ *  every marked row readable, so none is. */
 export const readableDoorRow = (row) => row.reader === true && row.fenced === false && row.class === 'view';
 
 /** THE READ TOOL (plan Task 7 "The read tool", question 9): the one door a reader (a subagent, whose only tool is `mcp__door__read`)

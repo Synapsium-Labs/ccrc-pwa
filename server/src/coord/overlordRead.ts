@@ -9,8 +9,11 @@
 // refusal writes one line for each door and window (the counter answers the newest), so a caller held at the ceiling cannot grow
 // the store; a composed answer is sent only when its line landed. A failed write answers 503 `write-failed` and sends nothing.
 //
-// `caller` is always `overlord`: readers never reach these doors. A row whose `write` is false is not fenced, so its ceiling
-// would count a forger's reads (question 18): the runner refuses to run for it unless the caller says `unfenced`.
+// `caller` is always `overlord`: the line names the identity the gate passed. Since board B2 a reader reaches the unfenced
+// rows (the board and history) through the door process's read tool, as the Overlord, so its read is recorded as the
+// Overlord's: attributed, not proven (slug `history-and-board-reads-attributed-not-proven`). A row whose `write` is false is
+// not fenced, so its ceiling counts a forger's served reads too (question 18): the runner refuses to run for it unless the
+// caller says `unfenced`.
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { refuseRoute } from '../refuse.js';
 import type { RouteRefusal } from '../../../shared/refusal.js';
@@ -48,7 +51,7 @@ export interface OverlordReadArgs {
   readonly pass: Extract<GateRun, { kind: 'pass' }>;
   /** Its row: `write` must be true (the fence), unless `unfenced`. */
   readonly row: OverlordDoorRow;
-  /** Question 18: a door not yet fenced says so, and its ceiling counts every attributed line. */
+  /** Question 18: a door not yet fenced says so, and its ceiling counts every attributed served line. */
   readonly unfenced?: true;
   readonly compose: () => ReadComposed | Promise<ReadComposed>;
 }
