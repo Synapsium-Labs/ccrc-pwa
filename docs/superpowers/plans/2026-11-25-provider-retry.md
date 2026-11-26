@@ -286,11 +286,11 @@ Nothing dispatches the arm yet.
 
 ### Deviations found (wave 3b, B)
 
-- **D-TBD-provmove-bg** — `_swap_bg_hold` reads nothing into a `failed` line, whose `bg` the last good Stop counted. A provider move
+- **D-9122** — `_swap_bg_hold` reads nothing into a `failed` line, whose `bg` the last good Stop counted. A provider move
   holds on any count but 0, `-1` included, for 30 minutes from the episode's first failure: a subagent still running then is a client
   of the same provider, and only a good Stop would rewrite the count, so an unbounded hold would never end during an outage. A
   background shell holds without a bound, by the live status word.
-- **D-TBD-provmove-quiet** — the move does not run `notify.sh`, which every other swap does: the ruling is one operator notice per
+- **D-9123** — the move does not run `notify.sh`, which every other swap does: the ruling is one operator notice per
   outage, and the server raises it.
-- **D-TBD-provmove-cause** — a cause word of its own, where the watchdog's and the wake move's arms took existing ones: "off a blocked
+- **D-9124** — a cause word of its own, where the watchdog's and the wake move's arms took existing ones: "off a blocked
   account" is false of this move and is said to the session itself. An older server or console reads it as `unknown`.
