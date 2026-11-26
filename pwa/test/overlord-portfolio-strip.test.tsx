@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { PortfolioEntry, PortfolioView } from '../../shared/portfolio';
 import { api, ApiError } from '../src/lib/api';
+import { LEDGER_REFUSAL_TEXT } from '../src/lib/refusalWords';
 import { PortfolioStrip } from '../src/overlord/PortfolioStrip';
 import {
   PORTFOLIO_WORDS, canMove, cycleText, draftOf, moveRow, rankWriteOf, setClass, setFixedDate, stripView,
@@ -104,10 +105,28 @@ describe('portfolioWords: the draft and the rank door\'s body', () => {
     const touched = rankWriteOf(7, setClass(draftOf(rows()), 'prog-d', 'background'));
     expect(touched.ok && touched.write.order.map((e) => e.slug)).toContain('prog-d');
   });
-  it('a row whose rank is unreadable is written as drawn; a fixed-date row with no date is not written', () => {
-    const v = view([entry('prog-a', { rankUnreadable: true }), entry('prog-b')]);
-    const d = draftOf(rowsOfView(v));
-    expect(rankWriteOf(1, moveRow(d, 'prog-b', -1))).toMatchObject({ ok: true, write: { order: [{ slug: 'prog-b' }, { slug: 'prog-a', cls: 'standard' }] } });
+  // Slug `unreadable-ranks-left-out-of-the-write` (a departure from "seen is every drawn slug"): the server draws an unreadable
+  // stored rank as the standard class, so writing it back would replace a newer build's class and date. The store keeps a row
+  // that is in neither list, so an untouched unreadable row is left out of both.
+  describe('a row whose stored rank is unreadable', () => {
+    // The server draws an unreadable stored rank as the standard class with no rank, and flags it.
+    const unreadable = () => view([entry('prog-x', { rankUnreadable: true }), ranked('prog-b', 1), ranked('prog-c', 2), entry('prog-d')]);
+    it('an unrelated move leaves it out of `seen` and `order`, so the store keeps its class and date; every other drawn slug is still in `seen`', () => {
+      const a = rankWriteOf(7, moveRow(draftOf(rowsOfView(unreadable())), 'prog-c', -1));
+      expect(a).toEqual({ ok: true, write: {
+        basedOn: 7, seen: ['prog-c', 'prog-b', 'prog-d'],
+        order: [{ slug: 'prog-c', cls: 'standard', fixedDate: null }, { slug: 'prog-b', cls: 'standard', fixedDate: null }],
+      } });
+    });
+    it('moving the unreadable row itself, or changing its class, saves it as drawn', () => {
+      const moved = rankWriteOf(7, moveRow(draftOf(rowsOfView(unreadable())), 'prog-x', 1));
+      expect(moved).toMatchObject({ ok: true, write: { seen: ['prog-b', 'prog-x', 'prog-c', 'prog-d'], order: [{ slug: 'prog-b' }, { slug: 'prog-x', cls: 'standard' }, { slug: 'prog-c' }] } });
+      const changed = rankWriteOf(7, setClass(draftOf(rowsOfView(unreadable())), 'prog-x', 'background'));
+      expect(changed).toMatchObject({ ok: true, write: { order: expect.arrayContaining([{ slug: 'prog-x', cls: 'background', fixedDate: null }]) } });
+      expect(changed.ok && changed.write.seen).toContain('prog-x');
+    });
+  });
+  it('a fixed-date row with no date is not written', () => {
     const undated = setClass(draftOf(rows()), 'prog-d', 'fixed-date');
     expect(rankWriteOf(7, undated)).toEqual({ ok: false, why: 'needs-date', slug: 'prog-d' });
     expect(rankWriteOf(7, setFixedDate(undated, 'prog-d', '2026-02-30'))).toMatchObject({ ok: false, why: 'needs-date' });
@@ -190,6 +209,20 @@ describe('PortfolioStrip', () => {
     expect(screen.queryByRole('button', { name: 'Save order' })).toBeNull();
   });
 
+  it('an unrelated move leaves an unreadable-rank row out of the write, so the store keeps its stored rank', async () => {
+    vi.spyOn(api, 'portfolio').mockResolvedValue(answered(view([entry('prog-x', { rankUnreadable: true }), ranked('prog-b', 1), ranked('prog-c', 2)])));
+    const rank = vi.spyOn(api, 'rankPortfolio').mockResolvedValue({ revision: 8, portfolio: BASE() });
+    render(<PortfolioStrip />);
+    await screen.findByText('Programme prog-x');
+    fireEvent.click(screen.getByRole('button', { name: 'Move Programme prog-c up' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save order' }));
+    await waitFor(() => expect(rank).toHaveBeenCalledTimes(1));
+    expect(rank.mock.calls[0]![0]).toEqual({
+      basedOn: 7, seen: ['prog-c', 'prog-b'],
+      order: [{ slug: 'prog-c', cls: 'standard', fixedDate: null }, { slug: 'prog-b', cls: 'standard', fixedDate: null }],
+    });
+  });
+
   it('a class change writes the class; fixed-date asks for its date, and Save waits for it', async () => {
     vi.spyOn(api, 'portfolio').mockResolvedValue(answered(BASE()));
     const rank = vi.spyOn(api, 'rankPortfolio').mockResolvedValue({ revision: 8, portfolio: BASE() });
@@ -212,7 +245,9 @@ describe('PortfolioStrip', () => {
     await screen.findByText('Programme prog-a');
     fireEvent.click(screen.getByRole('button', { name: 'Move Programme prog-c up' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save order' }));
-    await screen.findByText(PORTFOLIO_WORDS.rankMoved);
+    // The sentence is the refusal table's own (`rank-changed`), not a second one of the strip's.
+    await screen.findByText(LEDGER_REFUSAL_TEXT['rank-changed']);
+    expect('rankMoved' in PORTFOLIO_WORDS).toBe(false);
     await waitFor(() => expect(rowsShown(container)).toEqual(['prog-d', 'prog-a', 'prog-b', 'prog-c']));
     expect(rank).toHaveBeenCalledTimes(1);
     expect(read).toHaveBeenCalledTimes(2);

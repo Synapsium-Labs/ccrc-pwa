@@ -10,9 +10,15 @@
 // THE RANK DRAFT. The server orders by class band, then by position inside the band, and an unranked programme sits at the end
 // of `standard`. The strip keeps that shape: a row moves up or down inside its band only, and a class change takes the row to the
 // end of its new band. The draft remembers which rows the operator touched. `rankWriteOf` writes `order` for every row that is
-// ranked (or whose rank is unreadable, so what is saved is what is drawn) or touched, in strip order, and `seen` is EVERY slug
-// the strip drew: the server's merge deletes the rank row of any `seen` slug that is not in `order`, and keeps every ranked row
-// the console did not list, so a `seen` of only the moved rows would let the merge keep a stale position for a drawn one.
+// ranked or touched, in strip order, and `seen` is every slug the strip drew: the server's merge deletes the rank row of any
+// `seen` slug that is not in `order`, and keeps every ranked row the console did not list, so a `seen` of only the moved rows
+// would let the merge keep a stale position for a drawn one.
+//
+// ONE DEPARTURE from the plan's "seen is every drawn slug" (slug `unreadable-ranks-left-out-of-the-write`; plan Task 6): a row
+// whose stored rank is unreadable (`rankUnreadable`: a class word this build does not know) is drawn as the standard class,
+// which is not what is stored. So an UNTOUCHED unreadable row is left out of BOTH `seen` and `order`: the store keeps a rank row
+// that is in neither list exactly as it stands (its class, date and setter), so a save of an unrelated move loses nothing of it.
+// One the operator moved or changed is saved as drawn: that is the operator's own choice for it.
 import {
   SERVICE_CLASSES, isCalendarDate, type Measure, type PortfolioEntry, type PortfolioView, type RankWrite, type ServiceClass,
 } from '../../../shared/portfolio';
@@ -30,7 +36,6 @@ export const PORTFOLIO_WORDS = {
   rankUnreadable: 'rank unreadable',
   unranked: 'not ranked',
   stale: 'Showing the last portfolio read; the newest read failed.',
-  rankMoved: 'The order moved meanwhile, so yours was not saved. This is the new order.',
   needsDate: 'A fixed-date programme needs its date (YYYY-MM-DD) before the order can be saved.',
   save: 'Save order',
   saving: 'Saving…',
@@ -148,17 +153,19 @@ export type RankWriteAnswer =
   | { readonly ok: true; readonly write: RankWrite }
   | { readonly ok: false; readonly why: 'needs-date'; readonly slug: string };
 
-/** The rank door's body for a draft read at `basedOn`: `seen` is every slug the strip drew; `order` the new order of the rows
- *  that are ranked or touched. A `fixed-date` row with no calendar date is not written (the door would refuse the whole body). */
+/** The rank door's body for a draft read at `basedOn`: `seen` is every slug the strip drew, less an untouched unreadable-rank row
+ *  (see the header: the store then keeps its stored rank as it stands); `order` the new order of the rows that are ranked or
+ *  touched, again less that row. A `fixed-date` row with no calendar date is not written (the door would refuse the whole body). */
 export function rankWriteOf(basedOn: number, d: StripDraft): RankWriteAnswer {
-  const listed = d.rows.filter((r) => r.ranked || r.rankUnreadable || d.touched.includes(r.slug));
+  const kept = (r: StripRow): boolean => r.rankUnreadable && !d.touched.includes(r.slug);
+  const listed = d.rows.filter((r) => !kept(r) && (r.ranked || d.touched.includes(r.slug)));
   const undated = listed.find((r) => r.cls === 'fixed-date' && !isCalendarDate(r.fixedDate));
   if (undated !== undefined) return { ok: false, why: 'needs-date', slug: undated.slug };
   return {
     ok: true,
     write: {
       basedOn,
-      seen: d.rows.map((r) => r.slug),
+      seen: d.rows.filter((r) => !kept(r)).map((r) => r.slug),
       order: listed.map((r) => ({ slug: r.slug, cls: r.cls, fixedDate: r.cls === 'fixed-date' ? r.fixedDate : null })),
     },
   };

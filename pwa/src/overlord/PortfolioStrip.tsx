@@ -106,7 +106,7 @@ export function PortfolioStrip({ now = Date.now }: { readonly now?: () => number
       const word = err instanceof ApiError && typeof err.body === 'object' && err.body !== null ? (err.body as { error?: unknown }).error : undefined;
       if (isRankChanged(word)) {
         setEdit(null);
-        setSaid(PORTFOLIO_WORDS.rankMoved);
+        setSaid(refusalWords(err));   // the refusal table's own `rank-changed` sentence
         await load();
       } else if (!(err instanceof ApiError && err.status === 401)) {
         setSaid(refusalWords(err));
