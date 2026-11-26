@@ -1,4 +1,4 @@
-# Wave 181: `ccrc auth on|off` (desktop polish run 3869, D-TBD-auth-on)
+# Wave 181: `ccrc auth on|off` (desktop polish run 3869, D-9105)
 
 The note for wave 181, written by its worker for the coordinator to fold into the ledger. Each claim says whether it was
 **measured** (in a test run by this wave, in a browser, or read on the tree) or **inferred**. The design was mailed to the
@@ -31,7 +31,7 @@ coordinator before any code and approved with seven additions; this note records
 the marker, the `CCRC_AUTH` line and each other line holding exactly that value; a value it did not write stays, named.
 Already in the asked state, either says so and writes and restarts nothing.
 
-## 2. D-TBD-auth-on: the cookie line, measured
+## 2. D-9105: the cookie line, measured
 
 The brief named three keys. The fourth is the coordinator's ruling A, from this measurement. A fixture server built
 from this tree was armed (rpId `localhost`, origin `http://localhost:<port>`, listening on 127.0.0.1), and real browsers
@@ -72,6 +72,9 @@ digest for every child.
   units, and ccd creates the tmux server in its own `ccrc-tmux-server.scope` (`ccd/ccd`), so neither is in
   `ccrc.service`'s cgroup; on a two-box fleet they are on the other box.
 - On macOS without `flock` the lock cannot be taken and the verb refuses, as `ccrc coordination-snapshot` does.
+- The fleet-pane guard asks tmux through D-8270's socket lookup (`"${_TMX_ARGV[@]}"`), so with a socket setting the pane
+  id is asked of the fleet's server. A pane id of the operator's own tmux that collides with a fleet session's pane
+  there refuses wrongly. That is the safe direction, and running the verb outside tmux clears it.
 
 ## 5. Doctor, install and expose
 
@@ -79,6 +82,14 @@ digest for every child.
   ccrc auth on", and the passphrase-set dark PASS ends "to arm it: ccrc auth on". Elsewhere unchanged.
 - install's gate line names `ccrc auth on` on such a box.
 - `expose`'s shadow refusal names `ccrc auth off` when the keys it found are the ones `ccrc auth on` writes.
+- install's arming words say the verb "writes the sign-in lines", not "the localhost lines": a remote-mode box's
+  transcript names no localhost (`ccrc-install-tree`'s kept-env case).
+- Four remedies offered a bare `ccrc expose`, which exits 2 (missing subcommand); wave 180's review named two, and two
+  more of the same shape were in doctor's update-exposure check. Install, on a box reached from elsewhere: "ccrc expose
+  duckdns, or ccrc expose byo", as expose's own status line words it. doctor's auth check (no passphrase, an exposure
+  file it cannot read) and update-exposure's unreadable-file remedy: re-run the arm this box was exposed with, "ccrc
+  expose duckdns, ccrc expose byo or ccrc expose ip". update-exposure's reachable-box FAIL: those three, each of which
+  writes `CCRC_AUTH=on` and `CCRC_ORIGIN` (and `CCRC_RP_ID` for a name). Each string has a case, measured red first.
 
 ## 6. Mutants
 
@@ -136,5 +147,13 @@ All 4 killed.
   gate-dark places (its holder asked to wait, since #3402 rewrites both; the swap is "the README's hand route" to
   `ccrc auth on`, and "a verb ccrc never had" becomes "did not have until desktop-polish wave 181"), and the console's
   `LOCAL_ARMING` line in `pwa/src/fleet/accountWords.ts`.
+- Growth (D-9105): `ccd/ccrc` grows by the verb, and the waiver
+  `server/test/growth-waivers/D-9105-ccd-ccrc.json` carries the measured delta. `passwd`, `expose` and `auth` sit
+  inline together and `auth` calls the other two's helpers (`_box_auth_path`, `_box_unit_env`, the shadow-key read), so
+  the three are one family: a candidate to leave the file together when `ccd/ccrc` is split, never one alone.
+- CI round 1 (fast run on `cdc8e600e0`, red): the D-TBD scan, the growth check, the settings census (C8: `cmd_auth`'s
+  `AUTH_KEYS` loops, now a `VAR_KEY_BODIES` row beside `cmd_expose`'s), the tmux socket census (the pane read, now
+  through the lookup) and `ccrc-install-tree`'s kept-env case (the word above). All were whole-tree guards not run
+  before the first push.
 - `shellcheck`: `ccd/ccrc` now reports one SC2034 fewer than its pin (14 of 15). The ratchet prints that as lowerable
   and passes; the baseline file is left alone to avoid a conflict-prone edit.

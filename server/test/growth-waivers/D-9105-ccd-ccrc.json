@@ -1,0 +1,8 @@
+{
+  "file": "ccd/ccrc",
+  "maxDelta": 298,
+  "d": "D-9105",
+  "reason": "the console's sign-in verb `ccrc auth on|off` for a box used at localhost (`cmd_auth`, its key rewrite `_auth_rewrite`, the restart-and-prove loop `_auth_restart_prove`, the server read `_auth_read_server`, `_auth_fits_here`, the operator-only guard `_ccrc_operator_only`, and the reach reader `_box_reach` moved out of doctor); measured against the merge-base; kept inline because `passwd`, `expose` and `auth` are one family whose helpers (`_box_auth_path`, `_box_unit_env`, the shadow-key read) they share, a candidate to leave the file together when ccd/ccrc is split, never one alone",
+  "added": "2026-11-26",
+  "createdAt": "2026-11-26"
+}

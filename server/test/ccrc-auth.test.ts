@@ -1,4 +1,4 @@
-// `ccrc auth on|off` — the console's sign-in for a box used at localhost (desktop polish wave 181, D-TBD-auth-on).
+// `ccrc auth on|off` — the console's sign-in for a box used at localhost (desktop polish wave 181, D-9105).
 //
 // What this file owns: every refusal (each leaves ccrc.env byte for byte as it was and restarts nothing), the write's
 // exactness, idempotence, the restart and its proof, the restore on a failed proof, `off`, the usage line, and the

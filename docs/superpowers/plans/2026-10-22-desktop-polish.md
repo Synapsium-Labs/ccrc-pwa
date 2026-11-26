@@ -5892,6 +5892,16 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   back from its second CR whenever a LF comes before it, blanks between or none, so a CR LF right before it no longer
   stops the cap's step back at the blank row (`crcrlf-arm-after-crlf`, review 2644 F1: the round-2 guard left that form,
   the whole key past the cap where `main` showed 360 bytes). Sizes and runs in `c45.md`.
+- **D-9105** — `auth-on-verb`: wave 181, issued on 2026-11-26. The accounts design's gate-dark remedy named a verb ccrc
+  did not have; the operator ruled on 2026-11-25 to build it for a local box, so `ccrc auth on|off` arms or disarms the
+  console's sign-in on a server box used only at http://localhost. `on` refuses without a usable passphrase, on a box
+  reached from elsewhere (that is `ccrc expose`), while an update holds the lock, inside a session, without a terminal
+  and in a fleet pane, and otherwise writes `CCRC_AUTH=on`, `CCRC_RP_ID=localhost`, `CCRC_ORIGIN=http://localhost:<port>`
+  and `CCRC_COOKIE_INSECURE=on` into `ccrc.env` (the cookie line because WebKit drops a Secure cookie on plain-http
+  localhost, measured), restarts `ccrc.service` and proves the mode, restoring the file if the proof fails; `off`
+  removes exactly those lines. `ccd/ccrc` grows by the verb past the per-PR limit, waived as
+  `growth-waivers/D-9105-ccd-ccrc.json`: `passwd`, `expose` and `auth` are one family kept inline together. Measurements,
+  guards, residuals and mutants in `programs/desktop-polish/auth-on-verb.md`.
 
 ## Out of scope
 

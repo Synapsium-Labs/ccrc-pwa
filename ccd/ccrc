@@ -6278,7 +6278,7 @@ _ccrc_operator_only() {   # <the verb's words, e.g. "auth on">
 # that route, measured at every step:
 #   on   writes the four lines of deploy/ccrc.env.example's "localhost dev box" set into ccrc.env —
 #          CCRC_AUTH=on, CCRC_RP_ID=localhost, CCRC_ORIGIN=http://localhost:<port>, CCRC_COOKIE_INSECURE=on.
-#        The cookie line is measured, not taste (D-TBD-auth-on): WebKit, Safari's engine, does not keep a Secure
+#        The cookie line is measured, not taste (D-9105): WebKit, Safari's engine, does not keep a Secure
 #        cookie on plain-http localhost, so a login answers 204 and the next request is 401. Chromium keeps either.
 #        A cookie is not port-scoped with or without Secure, and loopback traffic never leaves the machine.
 #   off  removes the CCRC_AUTH line and each other line holding exactly the value `on` writes, which is the shipped
