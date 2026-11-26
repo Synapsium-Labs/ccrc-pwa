@@ -1246,6 +1246,7 @@ and the answer was bad, 2 a usage error — `update` adds 3 and 4, and `rollback
 | `coordination-snapshot validate\|restore\|recover` | classify a backup's coordination snapshot, restore it as one set, finish an interrupted restore; exits 0 (`v1`, `legacy`), 1 (`none`, `thinned`), 2 (`invalid`), 70 (usage or a helper that cannot run), below |
 | `expose duckdns\|byo\|ip\|status` | a public name and a certificate ("Exposure", above) |
 | `passwd` | set or rotate the PWA passphrase ("The session gate", below) |
+| `auth on\|off` | turn the console's sign-in on or off on a box used only at localhost: writes or removes the four localhost lines in `ccrc.env`, restarts `ccrc.service` and proves the result ("The session gate", below) |
 | `adopt`, `wrappers` | rediscover the roster from `~/.local/bin`; write the wrappers the roster marks generated ("Accounts", below) |
 | `account <subcommand>` | connect, check and remove account lanes: `add`, `candidates`, `check`, `credential`, `declare`, `disable`, `enable`, `remove`, `roster` |
 | `memory [--apply]` | census each project's memory, then converge it into one store ("One memory store per project", below) |
@@ -1457,6 +1458,23 @@ ccrc passwd                       # prompts twice, echo off, 12-char floor,
 $EDITOR ~/.ccrc/ccrc.env          # CCRC_AUTH=on  +  CCRC_RP_ID  +  CCRC_ORIGIN
 systemctl --user restart ccrc.service   # macOS: launchctl kickstart -k gui/$UID/app.ccrc.ccrc
 ```
+
+At `http://localhost`, put `CCRC_COOKIE_INSECURE=on` in the same edit: Safari (WebKit) does not keep a `Secure` cookie
+on a plain-http localhost origin, and the session cookie is `Secure` unless that key says otherwise, so without it a
+Safari login answers 204 and the login screen comes straight back (Chromium keeps the cookie either way).
+
+**On a box used only at localhost, one verb does all of it: `ccrc passwd`, then `ccrc auth on`.** It refuses unless
+the passphrase file is usable, writes `CCRC_AUTH=on`, `CCRC_RP_ID=localhost`, `CCRC_ORIGIN=http://localhost:<port>` and
+`CCRC_COOKIE_INSECURE=on` into `ccrc.env` (every other line byte for byte as it was, the file's mode kept), restarts
+`ccrc.service`, and proves that the server answers with sign-in on; if it does not, the file goes back as it was and the
+unit is restarted again. Open `http://localhost:<port>/` exactly: `http://127.0.0.1:<port>` is a different origin, where
+the console signs in and loads but every change is refused. `ccrc auth off` removes those lines (a value it did not
+write stays, named) and proves sign-in off. Both refuse, changing nothing, on a box reached from elsewhere (an exposure
+file, a Caddyfile, the ddns unit, or a `CCRC_HOST` bind off loopback: that box arms with `ccrc expose`), while an update
+or rollback holds `~/.ccrc/update.lock`, and inside a Claude Code session, without a terminal or in a fleet session's
+pane. The hand edit above stays the route for a box behind a TLS-terminating proxy of your own. Such a box that has not
+yet set `CCRC_ORIGIN` looks loopback-only to the verb; armed for localhost, it signs in through the proxy but cannot
+act, so run `ccrc auth off` there and use the hand edit.
 
 **On a box exposed with `ccrc expose`, skip the edit.** The verb writes `CCRC_AUTH=on` and
 `CCRC_ORIGIN` into `~/.ccrc/exposure.env` itself — and `CCRC_RP_ID` too, on every arm but
