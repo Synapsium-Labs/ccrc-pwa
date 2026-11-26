@@ -1,17 +1,25 @@
 // X2 P4.3: the settings doors over Fastify, a stateful store fake and the real account gate.
+import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import { createAccountGate, type AccountGate, type AccountGateAsk } from '../src/accounts/gate.js';
+import { fingerprintGeneration, fingerprintRow, SecretMasker } from '../src/accounts/mask.js';
 import { NO_SESSION, type GateDecision } from '../src/auth/gate.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
 import { installDocsRequestPolicy, installDocsResponsePolicy } from '../src/docs/hooks.js';
 import type { DocsSignIn } from '../src/docs/policy.js';
 import { registerDocsSettingsRoutes } from '../src/docs/routes.js';
 import { refuseRoute } from '../src/refuse.js';
+import { buildServer } from '../src/server.js';
+import { SECRET_MASK } from '../../shared/api.js';
 import {
   EMPTY_DOCS_SETTINGS, settingsWidening, type DocsSettings, type DocsSettingsStoreWrite,
   type DocsSettingsStored, type TrackerRule,
 } from '../../shared/docsTracker.js';
 import { FOLDER_COOKIE, FOLDER_STEP_UP_HEADER, folderHeaders } from './docsRouteHelpers.js';
+import { testDeps } from './helpers.js';
+import { mkTmp } from './tmpHelpers.js';
 
 const URL_SETTINGS = '/api/docs/settings';
 const NOW = 1_700_000_000_000;
@@ -72,7 +80,7 @@ async function open(start: Start, signIn: DocsSignIn = 'armed', write?: () => Do
   await app.register(async (app) => {
     installDocsRequestPolicy(app);
     installDocsResponsePolicy(app);
-    registerDocsSettingsRoutes(app, { read: store.read, write: write ?? store.write, now: () => NOW, gate, signIn: () => signIn, hasSession });
+    registerDocsSettingsRoutes(app, { read: store.read, write: write ?? store.write, now: () => NOW, gate, signIn: () => signIn, hasSession, maskChanges: () => false });
   });
   const put = (payload: unknown, headers: Record<string, string> = folderHeaders({ stepUp: true })) =>
     app.inject({ method: 'PUT', url: URL_SETTINGS, headers, payload: payload as never });
@@ -244,5 +252,66 @@ describe('settings: PUT', () => {
     const res = await t.put({ settings: settings() });
     expect(res.statusCode).toBe(500);
     expect(res.body).not.toContain('coord.db');
+  });
+});
+
+describe('settings round-trip through the real server masker', () => {
+  const matched = ['fixture', 'opaque', 'matching', 'value'].join('-');
+  const secretRule = rule({ template: `https://tracker.example/{0}?note=${matched}` });
+  const before = settings([A, secretRule]);
+  const headers = folderHeaders({ session: false });
+
+  async function openMasked() {
+    const home = mkTmp('ccrc-docs-mask-');
+    const deps = testDeps(home);
+    const db = openCoordDb(path.join(home, '.ccrc', 'coord.db'));
+    const coord = new CoordStore(db);
+    expect(coord.writeDocsSettings(before, NOW, () => true)).toEqual({ kind: 'written' });
+    const token = 'c2'.repeat(32);
+    const masker = new SecretMasker({ db, token: () => token });
+    masker.ingest({ gen: fingerprintGeneration(token), rows: [fingerprintRow(token, 'lane-a', matched)] });
+    const app = await buildServer({ ...deps, coord, masker });
+    app.addHook('onClose', async () => { db.close(); });
+    apps.push(app);
+    const get = () => app.inject({ method: 'GET', url: URL_SETTINGS, headers });
+    const put = (value: DocsSettings) => app.inject({ method: 'PUT', url: URL_SETTINGS, headers, payload: { settings: value } });
+    return { coord, get, put };
+  }
+
+  it('masks a stored rule on GET without rewriting the stored row', async () => {
+    const { coord, get } = await openMasked();
+    const row = coord.readDocsSettings();
+    const res = await get();
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, settings: settings([A, rule({ template: `https://tracker.example/{0}?note=${SECRET_MASK}` })]) });
+    expect(coord.readDocsSettings()).toEqual(row);
+  });
+
+  it('refuses a rule the same masker would change, even in an otherwise removal-only PUT', async () => {
+    const { coord, put } = await openMasked();
+    const row = coord.readDocsSettings();
+    const res = await put(settings([secretRule]));
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ ok: false, failure: 'bad-query', why: 'settings-masked', key: 'settings' });
+    expect(coord.readDocsSettings()).toEqual(row);
+  });
+
+  it('does not accept the displayed mask back as settings when the masker now recognizes a stored rule', async () => {
+    const { coord, get, put } = await openMasked();
+    const row = coord.readDocsSettings();
+    const shown = (await get()).json<{ settings: DocsSettings }>().settings;
+    const res = await put(shown);
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ ok: false, failure: 'bad-query', why: 'settings-masked', key: 'settings' });
+    expect(coord.readDocsSettings()).toEqual(row);
+  });
+
+  it('permits removing the offending rule while sign-in is off and returns the kept rule unchanged', async () => {
+    const { get, put } = await openMasked();
+    const next = settings([A]);
+    const res = await put(next);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, settings: next });
+    expect((await get()).json()).toEqual({ ok: true, settings: next });
   });
 });

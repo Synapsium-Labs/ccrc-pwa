@@ -19,7 +19,7 @@ import type {
   DocsRangePrepareResponse, DocsRefreshFetch, DocsRefSpec, DocsTreeOk, DocsTreeResponse,
 } from '../../../shared/docs.js';
 import {
-  DOCS_SETTINGS_UNAVAILABLE, docsSettingsFromStored, docsSettingsUnreadableBody, parseDocsSettingsPut,
+  DOCS_SETTINGS_UNAVAILABLE, docsSettingsFromStored, docsSettingsMaskRefusal, docsSettingsUnreadableBody, parseDocsSettingsPut,
   type DocsSettings, type DocsSettingsResponse, type DocsSettingsStoreWrite, type DocsSettingsStored,
 } from '../../../shared/docsTracker.js';
 import type { AccountGate } from '../accounts/gate.js';
@@ -781,6 +781,8 @@ interface DocsSettingsPorts {
 }
 export interface DocsSettingsDeps extends DocsFolderRegistryDeps, DocsSettingsPorts {
   now: () => number;
+  /** Would the existing egress masker change this answer? Measured before trying to store it. */
+  maskChanges: (answer: DocsSettingsResponse) => boolean;
 }
 
 /**
@@ -789,8 +791,8 @@ export interface DocsSettingsDeps extends DocsFolderRegistryDeps, DocsSettingsPo
  * checks are L0's `parseDocsSettingsPut`, and what a stored row means is `docsSettingsFromStored`. Refusal bodies are
  * built by L0 or L1 and sent as they came.
  * - GET: settings, with no row meaning empty. The session verdict is L1's `folderRemoveGate`.
- * - PUT: the session verdict and body precede the synchronous store write. The store compares with its current row inside
- *   the transaction and calls the account gate only for widening; removal works dark. Later writes win.
+ * - PUT: the session verdict, body and egress mask check precede the synchronous store write. The store compares with
+ *   its current row inside the transaction and calls the account gate only for widening; removal works dark. Later writes win.
  */
 export function registerDocsSettingsRoutes(app: FastifyInstance, deps: DocsSettingsDeps): void {
   /** The session verdict: `null` lets the door go on, otherwise the refusal is already sent. */
@@ -816,13 +818,15 @@ export function registerDocsSettingsRoutes(app: FastifyInstance, deps: DocsSetti
     if (refused !== null) return refused;
     const put = parseDocsSettingsPut(req.body);
     if (!put.ok) return sendDocsFailure(reply, put);
+    const sent: DocsSettingsResponse = { ok: true, settings: put.settings };
+    const masked = docsSettingsMaskRefusal(put.settings, deps.maskChanges(sent));
+    if (masked !== null) return sendDocsFailure(reply, masked);
     const wrote = deps.write(put.settings, deps.now(), () => deps.gate(req, reply, { cap: null, stepUp: true }).pass);
     if (wrote.kind === 'denied') return reply;
     if (wrote.kind !== 'written') {
       console.warn('ccrc-server: docs settings store unreadable');
       return sendDocsFailure(reply, docsSettingsUnreadableBody());
     }
-    const sent: DocsSettingsResponse = { ok: true, settings: put.settings };
     return reply.send(sent);
   });
 }

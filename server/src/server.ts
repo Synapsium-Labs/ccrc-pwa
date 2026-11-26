@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import fastifyWebsocket from '@fastify/websocket';
 import fastifyMultipart from '@fastify/multipart';
@@ -323,6 +324,8 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/portfolio', '/api/overlord/ladder',
   // The operator's messages, one by its id (W1 inbox piece): the text is the operator's own words, masked by the one answer hook.
   '/api/overlord/inbox', '/api/overlord/messages/:id',
+  // Docs settings (X2 P4.3): the link rules are operator-entered text, not fixed server vocabulary.
+  '/api/docs/settings',
 ]);
 /** Whether the one answer hook masks a route's answer (D-5995). */
 export const answerMasked = (method: string, url: string | undefined): boolean =>
@@ -2472,6 +2475,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     registerDocsSettingsRoutes(app, {
       ...docs.settings, gate: accountGate, signIn: folderSignIn, hasSession: folderSession,
       now: () => deps.time.clock.wall(),
+      maskChanges: (answer) => !isDeepStrictEqual((deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(answer), answer),
     });
   });
   registerReaderLabRoutes(app, readerLab);

@@ -22,6 +22,7 @@ const RULE_REASONS: Readonly<Record<string, string>> = {
   'template-scheme': 'The URL template must use HTTPS.',
   'template-host': 'The URL template needs a fixed host; placeholders belong after the host.',
   'too-many': 'There are too many rules.',
+  'settings-masked': 'Remove credential-like text or masked placeholders before saving.',
   'default-branch-name': 'Enter a valid bare branch name.',
   'default-branch-project': 'The project name is invalid.',
 };

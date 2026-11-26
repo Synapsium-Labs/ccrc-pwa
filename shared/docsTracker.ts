@@ -11,6 +11,7 @@
 // (`pwa/src/lib/trackerLinkJob.ts`, a later wave), which runs in the parse worker under its own 250 ms budget, may
 // import it. The checkers compile a pattern and test it against the EMPTY STRING only, never against a document value.
 
+import { SECRET_MASK, SECRET_MASK_TOO_LARGE } from './api.js';
 import { DOCS_REF_MAX_CHARS, isDocsBareRef, isDocsProject, type DocsFailureBody } from './docs.js';
 
 /** One tracker rule. `projects`, when present and not empty, names the projects the rule applies to. */
@@ -328,6 +329,16 @@ export function parseDocsSettingsPut(body: unknown): DocsSettingsPutParse {
   const checked = checkTrackerRules(parsed.settings.rules);
   if (!checked.ok) return badSettings(checked.why, checked.index === undefined ? undefined : `rules.${checked.index}`);
   return { ok: true, settings: parsed.settings };
+}
+
+/** Refuse to store settings that would read differently through egress. Also refuse the masker's own notice if
+ *  it comes back from a row whose text became recognized after it was stored. Neither reply echoes the text. */
+export function docsSettingsMaskRefusal(settings: DocsSettings, changedByMask: boolean): DocsFailureBody | null {
+  if (!changedByMask) {
+    const text = JSON.stringify(settings);
+    if (!text.includes(SECRET_MASK) && !text.includes(SECRET_MASK_TOO_LARGE)) return null;
+  }
+  return badSettings('settings-masked', 'settings');
 }
 
 /** The refusal for a store that cannot be read, or a row that is not settings: the word of an unreadable registry, with
