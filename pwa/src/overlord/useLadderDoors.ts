@@ -15,7 +15,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { NarrowingState, Rung } from '../../../shared/overlord-ladder';
 import type { StepUp } from '../accounts/useStepUp';
-import { ApiError, api, overlordRefusalText } from '../lib/api';
+import { ApiError, api, overlordRefusalText, type OverlordDoorAct } from '../lib/api';
 import { nudgeWitness } from '../lib/witness';
 import { refreshOverlord, useLadder } from '../stores/overlord';
 import { rungMovesUp } from './ladderWords';
@@ -60,7 +60,9 @@ export function useLadderDoors(stepUp: StepUp): LadderDoors {
   const stepUpRef = useRef(stepUp);
   stepUpRef.current = stepUp;
 
-  const run = useCallback(async (which: LadderDoor, call: () => Promise<unknown>, opts: { stepped: boolean; narrows: boolean }): Promise<void> => {
+  const run = useCallback(async (
+    which: LadderDoor, call: () => Promise<unknown>, opts: { stepped: boolean; narrows: boolean; act: OverlordDoorAct },
+  ): Promise<void> => {
     if (inFlight.current) return;
     inFlight.current = true;
     setBusy(true);
@@ -83,7 +85,7 @@ export function useLadderDoors(stepUp: StepUp): LadderDoors {
       }
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) return;
-      if (mounted.current) setSaid(overlordRefusalText(err));
+      if (mounted.current) setSaid(overlordRefusalText(err, opts.act));
     } finally {
       inFlight.current = false;
       if (mounted.current) setBusy(false);
@@ -91,12 +93,12 @@ export function useLadderDoors(stepUp: StepUp): LadderDoors {
     }
   }, []);
 
-  const pause = useCallback(() => run('pause', () => api.overlordPause(), { stepped: false, narrows: true }), [run]);
+  const pause = useCallback(() => run('pause', () => api.overlordPause(), { stepped: false, narrows: true, act: 'pause' }), [run]);
   const setRung = useCallback((rung: Rung) => {
     const raise = currentRung.current === null ? true : rungMovesUp(currentRung.current, rung);
-    return run('rung', () => api.overlordRung(rung), { stepped: raise, narrows: !raise });
+    return run('rung', () => api.overlordRung(rung), { stepped: raise, narrows: !raise, act: raise ? 'raise' : 'lower' });
   }, [run]);
-  const clear = useCallback((cause: string) => run('clear', () => api.clearLatch(cause), { stepped: true, narrows: false }), [run]);
+  const clear = useCallback((cause: string) => run('clear', () => api.clearLatch(cause), { stepped: true, narrows: false, act: 'clear' }), [run]);
 
   return { busy, said, narrowing, door, pause, setRung, clear };
 }

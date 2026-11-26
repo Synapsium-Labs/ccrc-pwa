@@ -888,6 +888,23 @@ export const OVERLORD_PLACE_REFUSAL_TEXT: Readonly<Record<
   'not-found': 'No Overlord is designated, so there is nothing to act on.',
 };
 
+/** The place's doors, by the act the operator pressed (review 3998 M3): a word whose sentence depends on the act reads it here. */
+export type OverlordDoorAct = 'start' | 'rebind' | 'restart' | 'pause' | 'lower' | 'raise' | 'clear';
+
+/** The words whose sentence names the act, one sentence per act: `auth-off` refuses every stepped door while sign-in is off, and
+ *  "to start the Overlord" is true of Start alone. Keyed by word and read by `Object.hasOwn`, never a literal branch. */
+const OVERLORD_ACT_TEXT: Readonly<Record<string, Readonly<Record<OverlordDoorAct, string>>>> = {
+  'auth-off': {
+    start: OVERLORD_PLACE_REFUSAL_TEXT['auth-off'],
+    rebind: 'Sign-in must be on to rebind the Overlord.',
+    restart: 'Sign-in must be on to restart the Overlord.',
+    pause: 'Sign-in must be on to pause the Overlord.',
+    lower: "Sign-in must be on to lower the Overlord's rung.",
+    raise: "Sign-in must be on to raise the Overlord's rung.",
+    clear: "Sign-in must be on to clear a latch of the Overlord's ladder.",
+  },
+};
+
 /** The words whose answer's `detail` is drawn beside the sentence (the plan: the authority words, `overlord-body-alive`'s
  *  `unmeasured`, and the ladder's `unavailable`). */
 const OVERLORD_DETAIL_WORDS: ReadonlySet<string> = new Set(['authority-rolled-back', 'journal-unreadable', 'overlord-body-alive', 'unavailable']);
@@ -900,13 +917,15 @@ const OVERLORD_NAMED_TEXT: Readonly<Record<string, (body: Record<string, unknown
 };
 
 /** A failed Overlord door in words: its word's sentence, with the capability word a raise `needs`, the accounts counted, or the
- *  answer's detail where the word names one; a word this build does not know is drawn raw; a failure with no word (a network
- *  failure, a timeout) is its message. */
-export function overlordRefusalText(err: unknown): string {
+ *  answer's detail where the word names one; a word whose sentence depends on the act (`OVERLORD_ACT_TEXT`) says the act that
+ *  was refused; a word this build does not know is drawn raw; a failure with no word (a network failure, a timeout) is its
+ *  message. */
+export function overlordRefusalText(err: unknown, act: OverlordDoorAct): string {
   if (!(err instanceof ApiError) || typeof err.body !== 'object' || err.body === null) return err instanceof Error ? err.message : String(err);
   const body = err.body as Record<string, unknown>;
   const word = body.error;
   if (typeof word !== 'string') return err.message;
+  if (Object.hasOwn(OVERLORD_ACT_TEXT, word)) return OVERLORD_ACT_TEXT[word]![act];
   const said = refusalText(err, OVERLORD_PLACE_REFUSAL_TEXT);
   if (said === null) return `Refused: ${word}`;
   const named = Object.hasOwn(OVERLORD_NAMED_TEXT, word) ? OVERLORD_NAMED_TEXT[word]!(body) : null;

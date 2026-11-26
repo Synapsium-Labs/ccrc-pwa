@@ -66,7 +66,7 @@ export function BodyPart({ stepUp }: { readonly stepUp: StepUp }): ReactNode {
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) return;
       if (mounted.current) {
-        setRefusal(overlordRefusalText(err));
+        setRefusal(overlordRefusalText(err, door));
         setForceOffered(door === 'rebind' && offersForce(err instanceof ApiError ? refusalWordOf(err.body) : null));
       }
     } finally {
