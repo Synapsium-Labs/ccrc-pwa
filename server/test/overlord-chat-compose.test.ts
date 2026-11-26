@@ -14,6 +14,10 @@ import {
   readinessFact,
 } from '../src/coord/overlordChatDoor.js';
 import { historyDoorAnswer } from '../src/coord/overlordHistory.js';
+import * as l1Module from '../src/coord/overlordChat.js';
+import { composeChatCases, earlierPagePlanCases, readinessAtCases } from './sim/chatSets.js';
+
+const run = (cases: Record<string, () => void | Promise<void>>): void => { for (const [name, c] of Object.entries(cases)) it(name, c); };
 
 const msg = (id: number, at: number, over: Partial<OperatorMessageRow> = {}): OperatorMessageRow => ({
   id, at, term: 1, state: 'queued', text: `fixture message ${id}`, cut: false, sha256: 'a'.repeat(64),
@@ -33,84 +37,27 @@ const facts = (over: Partial<ChatFacts> = {}): ChatFacts => ({
 const shape = (entries: readonly ChatEntry[]): string[] => entries.map((e) =>
   e.kind === 'message' ? `m${e.row.id}` : e.kind === 'server-line' ? `s${e.messageId}:${e.word}` : `d${e.gen.term}.${e.gen.n}${e.current ? '*' : ''}${e.newTerm ? '+' : ''}`);
 
-describe('readinessAt: the word in force at a time', () => {
-  const changes: ReadinessChange[] = [{ at: 100, word: 'unproved' }, { at: 200, word: 'ready' }, { at: 300, word: 'renewing' }];
-  it('before the oldest kept row is not on record; at a change, that change; between two, the earlier; no rows, not on record', () => {
-    expect(readinessAt(changes, 99)).toBe(NOT_ON_RECORD);
-    expect(readinessAt(changes, 100)).toBe('unproved');
-    expect(readinessAt(changes, 200)).toBe('ready');
-    expect(readinessAt(changes, 250)).toBe('ready');
-    expect(readinessAt(changes, 10_000)).toBe('renewing');
-    expect(readinessAt([], 500)).toBe(NOT_ON_RECORD);
-  });
-  it('a stored unmeasured word is that word, never folded into not on record', () => {
-    expect(readinessAt([{ at: 0, word: 'unmeasured' }], 5)).toBe('unmeasured');
-  });
-});
+describe('readinessAt: the word in force at a time (sim/chatSets.ts)', () => run(readinessAtCases(l1Module)));
 
-describe('composeChat', () => {
-  it('messages oldest first, a server line right after each message whose word was not ready, none after a ready one', () => {
+describe('composeChat (sim/chatSets.ts)', () => run(composeChatCases(l1Module)));
+
+describe('composeChat, beyond the set', () => {
+  it('a server line carries its readiness word\'s line; the not-on-record line is its own', () => {
     const t = composeChat(facts({
-      messages: { kind: 'rows', rows: [msg(3, 350), msg(1, 150), msg(2, 250)], more: false },
-      readiness: { kind: 'rows', rows: [{ at: 100, word: 'renewing' }, { at: 200, word: 'ready' }, { at: 300, word: 'dead' }], oldest: 100 },
+      messages: { kind: 'rows', rows: [msg(1, 150), msg(2, 50)], more: false },
+      readiness: { kind: 'rows', rows: [{ at: 100, word: 'renewing' }], oldest: 100 },
     }));
-    expect(shape(t.entries)).toEqual(['m1', 's1:renewing', 'm2', 'm3', 's3:dead']);
-    const line = t.entries[1];
-    expect(line).toEqual({ kind: 'server-line', messageId: 1, text: CHAT_SERVER_LINE_MAP.renewing, word: 'renewing' });
-    expect(t.entries[0]).toMatchObject({ kind: 'message', ticks: chatTicksOf(msg(1, 150)) });
+    expect(t.entries.filter((e) => e.kind === 'server-line')).toEqual([
+      { kind: 'server-line', messageId: 2, text: CHAT_SERVER_LINE_UNMEASURED, word: NOT_ON_RECORD },
+      { kind: 'server-line', messageId: 1, text: CHAT_SERVER_LINE_MAP.renewing, word: 'renewing' },
+    ]);
+    expect(t.entries[1]).toMatchObject({ kind: 'server-line', messageId: 2 });
+  });
+
+  it('a message entry carries its ticks; a designated thread carries its session and term', () => {
+    const t = composeChat(facts({ messages: { kind: 'rows', rows: [msg(1, 150)], more: false } }));
+    expect(t.entries[0]).toEqual({ kind: 'message', row: msg(1, 150), ticks: chatTicksOf(msg(1, 150)) });
     expect([t.designation, t.sessionId, t.term]).toEqual(['designated', 'lane-a-overlord', 1]);
-  });
-
-  it('a message older than every kept readiness row draws the not-on-record line', () => {
-    const t = composeChat(facts({ messages: { kind: 'rows', rows: [msg(1, 50)], more: false }, readiness: { kind: 'rows', rows: [{ at: 100, word: 'ready' }], oldest: 100 } }));
-    expect(t.entries[1]).toEqual({ kind: 'server-line', messageId: 1, text: CHAT_SERVER_LINE_UNMEASURED, word: NOT_ON_RECORD });
-  });
-
-  it('a divider before the first message of each generation, by startReportedAt; a divider first on a tie; the live one current', () => {
-    const t = composeChat(facts({
-      messages: { kind: 'rows', rows: [msg(1, 150), msg(2, 200), msg(3, 450)], more: false },
-      generations: { kind: 'rows', rows: [gen(1, 2, 200, { live: true }), gen(1, 1, 100)] },
-    }));
-    expect(shape(t.entries)).toEqual(['d1.1', 'm1', 'd1.2*', 'm2', 'm3']);
-  });
-
-  it('the first divider of a new term sets newTerm (a rebind); a generation with no message still draws its divider', () => {
-    const t = composeChat(facts({
-      messages: { kind: 'rows', rows: [msg(1, 150)], more: false },
-      generations: { kind: 'rows', rows: [gen(1, 1, 100), gen(1, 2, 300), gen(2, 1, 400, { live: true, sessionId: 'lane-b-overlord' }), gen(2, 2, 500)] },
-    }));
-    expect(shape(t.entries)).toEqual(['d1.1', 'm1', 'd1.2', 'd2.1*+', 'd2.2']);
-  });
-
-  it('every divider is not-pageable when pageable is false; a non-live one is readable when it is true, the live one never', () => {
-    const rows = [gen(1, 1, 100), gen(1, 2, 200, { live: true })];
-    const off = composeChat(facts({ generations: { kind: 'rows', rows } }));
-    expect(off.entries.map((e) => e.kind === 'divider' && e.earlier)).toEqual(['not-pageable', 'not-pageable']);
-    const on = composeChat(facts({ generations: { kind: 'rows', rows }, pageable: true }));
-    expect(on.entries.map((e) => e.kind === 'divider' && e.earlier)).toEqual(['readable', 'not-pageable']);
-  });
-
-  it('unreadable messages give no message entries and messages unmeasured, never an empty read', () => {
-    const t = composeChat(facts({ messages: { kind: 'unmeasured', why: 'closed' }, generations: { kind: 'rows', rows: [gen(1, 1, 100)] } }));
-    expect(shape(t.entries)).toEqual(['d1.1']);
-    expect(t.messages).toEqual({ kind: 'unmeasured', why: 'closed' });
-  });
-
-  it('unreadable generations give no dividers and generations unmeasured, never a count', () => {
-    const t = composeChat(facts({ messages: { kind: 'rows', rows: [msg(1, 150)], more: true }, generations: { kind: 'unmeasured', why: 'x' } }));
-    expect(shape(t.entries)).toEqual(['m1']);
-    expect([t.generations, t.messages]).toEqual([{ kind: 'unmeasured', why: 'x' }, { kind: 'read', value: { more: true } }]);
-  });
-
-  it('an unreadable readiness history draws the not-on-record line under every message, never ready', () => {
-    const t = composeChat(facts({ messages: { kind: 'rows', rows: [msg(1, 150), msg(2, 250)], more: false }, readiness: { kind: 'unmeasured', why: 'y' } }));
-    expect(shape(t.entries)).toEqual([`m1`, `s1:${NOT_ON_RECORD}`, 'm2', `s2:${NOT_ON_RECORD}`]);
-    expect(t.readiness).toEqual({ kind: 'unmeasured', why: 'y' });
-  });
-
-  it('no designation is designation none and no entries, whatever the other facts', () => {
-    const t = composeChat(facts({ designation: { kind: 'none' }, messages: { kind: 'rows', rows: [msg(1, 1)], more: false } }));
-    expect([t.designation, t.sessionId, t.term, t.entries]).toEqual(['none', null, null, []]);
   });
 
   it('what it composes, readChatThread reads back unchanged', () => {
@@ -119,33 +66,20 @@ describe('composeChat', () => {
       generations: { kind: 'rows', rows: [gen(1, 1, 100, { live: true })] },
       readiness: { kind: 'rows', rows: [{ at: 0, word: 'renewing' }], oldest: 0 },
     }));
-    const back = readChatThread(JSON.parse(JSON.stringify(t)));
-    expect(back).toEqual({ ok: true, thread: t, skipped: 0 });
+    expect(readChatThread(JSON.parse(JSON.stringify(t)))).toEqual({ ok: true, thread: t, skipped: 0 });
   });
 });
 
-describe('earlierPagePlan', () => {
-  it('the live generation refuses current; no row refuses no-generation; pageable false refuses not-pageable', () => {
-    expect(earlierPagePlan(gen(1, 2, 200, { live: true }), null, true)).toEqual({ kind: 'refuse', why: 'current' });
-    expect(earlierPagePlan(null, null, true)).toEqual({ kind: 'refuse', why: 'no-generation' });
-    expect(earlierPagePlan(gen(1, 1, 100), null, false)).toEqual({ kind: 'refuse', why: 'not-pageable' });
-  });
+describe('earlierPagePlan (sim/chatSets.ts)', () => run(earlierPagePlanCases(l1Module)));
 
-  it('a first page expands the conversation; an older page is expand --around <uuid> --before 40 --after 0; each passes the request reader', () => {
+describe('earlierPagePlan, beyond the set', () => {
+  it('every request it makes passes the history request\'s one reader, and the window is 40 entries', () => {
     const g = gen(1, 1, 100);
-    const first = earlierPagePlan(g, null, true);
-    const around = 'a1a1a1a1-0000-4000-8000-000000000006';
-    const older = earlierPagePlan(g, around, true);
-    expect(first).toEqual({ kind: 'request', request: { verb: 'expand', target: { kind: 'session', session: 'lane-a-overlord' }, agents: false, args: [g.conversation] } });
-    expect(older).toEqual({ kind: 'request', request: { verb: 'expand', target: { kind: 'session', session: 'lane-a-overlord' }, agents: false, args: ['--around', around, '--before', String(EARLIER_PAGE_BEFORE), '--after', '0'] } });
+    for (const around of [null, 'a1a1a1a1-0000-4000-8000-000000000006']) {
+      const p = earlierPagePlan(g, around, true);
+      expect(p.kind === 'request' && readOverlordHistoryRequest(p.request)).toEqual({ ok: true, request: p.kind === 'request' ? p.request : null });
+    }
     expect(EARLIER_PAGE_BEFORE).toBe(40);
-    for (const p of [first, older]) if (p.kind === 'request') expect(readOverlordHistoryRequest(p.request)).toEqual({ ok: true, request: p.request });
-  });
-
-  it('the target is the row\'s own session: a generation run by a rebound body\'s old session names that old session', () => {
-    const old = gen(1, 1, 100, { sessionId: 'lane-a-overlord' });
-    const p = earlierPagePlan(old, 'a1a1a1a1-0000-4000-8000-000000000006', true);
-    expect(p.kind === 'request' && p.request.target).toEqual({ kind: 'session', session: 'lane-a-overlord' });
   });
 });
 
