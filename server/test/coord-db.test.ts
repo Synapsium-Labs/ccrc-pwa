@@ -786,9 +786,11 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[124] (overlord_sequence and overlord_sequence_pruned, the Overlord sequence),
     // and MIGRATIONS[125] (limit_samples, the history of each account's limits, Overlord W1 serviceability PR B, run 3296),
     // and MIGRATIONS[126] (the programme lifecycle: the binding, the placeholder, programme_events and programme_picks, W1),
-    // and MIGRATIONS[127] (the Docs settings singleton, X2 P4.3).
-    expect(COORD_SCHEMA_VERSION).toBe(128);
-    expect(MIGRATIONS.length).toBe(128);
+    // and MIGRATIONS[127] (continuity_timers.setRestoreGeneration and continuity_timer_refusals, the Overlord's timers),
+    // and MIGRATIONS[128] (overlord_invariant_findings and the invariants lane-arm row, the Overlord invariant monitor),
+    // and MIGRATIONS[129] (docs_settings, the console-wide Docs settings row).
+    expect(COORD_SCHEMA_VERSION).toBe(130);
+    expect(MIGRATIONS.length).toBe(130);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -942,8 +944,10 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[124] (overlord_sequence and overlord_sequence_pruned, Overlord W1 sequence A),
     // and MIGRATIONS[125] (limit_samples, run 3296),
     // and MIGRATIONS[126] (the programme lifecycle, W1),
-    // and MIGRATIONS[127] (the Docs settings singleton); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(128);
+    // and MIGRATIONS[127] (the Overlord's timers' restore column and refusal counts),
+    // and MIGRATIONS[128] (the invariant monitor's findings, Overlord W1 sequence B2),
+    // and MIGRATIONS[129] (docs_settings); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(130);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -2728,7 +2732,8 @@ describe('coord.db: continuity_generations and continuity_cursor, the generation
     expect(db.prepare('SELECT lane, choice, updatedAt FROM lane_arm_settings ORDER BY lane').all())
       .toEqual([{ lane: 'anchor-slot', choice: 'shadow', updatedAt: 0 }, { lane: 'approval-park', choice: 'shadow', updatedAt: 0 },
         { lane: 'cap-counts-working', choice: 'shadow', updatedAt: 0 },
-        { lane: 'continuity', choice: 'shadow', updatedAt: 0 }, { lane: 'launch-profile', choice: 'shadow', updatedAt: 0 },
+        { lane: 'continuity', choice: 'shadow', updatedAt: 0 }, { lane: 'invariants', choice: 'shadow', updatedAt: 0 },
+        { lane: 'launch-profile', choice: 'shadow', updatedAt: 0 },
         { lane: 'roster-card', choice: 'live', updatedAt: 7 }, { lane: 'working-idle-sleep', choice: 'shadow', updatedAt: 0 }]);
     db.close();
   });

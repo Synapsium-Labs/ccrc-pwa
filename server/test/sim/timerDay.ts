@@ -52,6 +52,10 @@ function dayDb(): DatabaseSync {
   return simDb;
 }
 
+/** The day's own `coord.db` after a run (null before the first): the production I17 predicate reads it (D-8214, the invariant
+ *  monitor's simulator case). */
+export function timerDayDb(): DatabaseSync | null { return simDb; }
+
 /** One setter's registry row as the fleet holds it. */
 interface Row { stamp: string | null; bornAt: number; unbuilt: boolean; unreadable: boolean }
 
@@ -95,7 +99,7 @@ export function timerDay(): Scenario<TimerDayEdge> {
           const stamp = r.stamp!;
           if (set || born) {
             const runBound = id === WORKER && !runClosed;
-            const t = store.insertTimer({ setter: id, setterIncarnation: stamp, setById: id, setByUuid: 'u', role: 'worker', note: 'n',
+            const t = store.insertTimer({ setRestoreGeneration: null, setter: id, setterIncarnation: stamp, setById: id, setByUuid: 'u', role: 'worker', note: 'n',
               runId: runBound ? runId : null, programme: id === COORD ? 'prog-a' : null, setAt: wall(), dueAt: wall() + due });
             if (t.ok) { stampOfTimer.set(t.id, stamp); line('set', `t${t.id}`, `setter=${id};stamp=${stamp}`, 'door'); }
           }

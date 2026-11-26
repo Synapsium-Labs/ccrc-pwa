@@ -1,4 +1,4 @@
-# The provider-failure ladder: wave 1
+# The provider-failure ladder: waves 1, 2 and 3a
 
 Programme: sessions find a working lane by themselves. Wave 1 of it: a session whose turn ended on a provider error is told to
 carry on, by itself, until a turn runs; the operator hears once per outage.
@@ -9,7 +9,8 @@ The operator, 2026-11-25: sessions should naturally find a working lane. Nudge a
 error; in a later wave, move the session to another account by itself; say in words what is happening; one operator notice per
 outage; no coordinator is asked to mend a provider. No new settings. It ships armed.
 
-**Wave 1 only:** no account moves, no change to `ccd`, no console words on the wire. Those are later waves.
+**Wave 1:** no account moves, no change to `ccd`, no console words on the wire. Wave 2, below, is the words; account moves are a
+later wave.
 
 ## W0: what a failing provider looks like to the hook
 
@@ -75,6 +76,37 @@ A real Stop or a `clear` ends it. So does any turn: what is owed is `failAts` no
 Characterization: the moved arm was already pinned by `stall-session.test.ts`, `stall-bodies.test.ts`, `stall-sweep.test.ts`
 and `stall-vocabulary.test.ts`; the move commit changes only their imports.
 
+## Wave 2: the console's words
+
+The ruling's "say in words what is happening". One optional wire field, words, and nothing else: no change to a nudge, a notice, the
+arming or `ccd`, and no setting.
+
+8. **The field** (`shared/provider-retry.ts#ProviderRetryWire`, L0; `FleetSession.providerRetry`, optional): `err`, `since`,
+   `attempts`, `nextAt`, `phase: 'retrying'`. One reader, `providerRetryOf`, for a revived row (`reviveFleetSession`) and for a live
+   frame, which is cast. A phase it does not know, and anything malformed, reads as absent. No `FLEET_PROTO` change.
+9. **Its one writer** (`providerRetry.ts#providerRetryWire`, L1), off the marker and the schedule the verdict nudges on
+   (`owedNudges`, read by both): present only while the ladder is armed, a retry is owed, and the session is one it would nudge or is
+   held by what a person can end. `providerRetryLane.ts` (L4) says it afresh each pass, so a session no pass could judge is absent,
+   and a stopped ladder clears it at once. `fleet.ts` puts it on the row unless the raw live word is `busy` now
+   (`providerRetryShown`): the pass judged up to a minute ago.
+10. **When no time is promised** (`nextAt` null): a dialog, a question, a usage limit, or a nudge queued and not typed (a person's
+    draft, or any other gate of the mail lane).
+11. **The words** (`pwa/src/fleet/providerRetryWords.ts`, L1), and whose place they take:
+
+| State | Words |
+|---|---|
+| due later | `Provider overloaded, retrying 14:52` / `Provider error, retrying 14:52` (the viewer's time; a date when not today) |
+| past due | `Provider overloaded, retrying now` / `Provider error, retrying now` |
+| held | `Provider overloaded, retry waiting` / `Provider error, retry waiting` |
+
+| Owner extended | What it says in their place |
+|---|---|
+| `sessionFacts.ts#sessionFacts`, the row's status word | idle, done, working, waiting on workers, and the `stalled` marker (context pressure is still said) |
+| `sessionFacts.ts#headerStatusWord`, `sessionHeaderView.ts`, the session screen's status line | the same; a session that waits on you reads `waiting on you · Provider overloaded, retry waiting` |
+| `runWords.ts#workerSeenNote`, the run row and the run page | `turn failed` and `quiet` |
+
+Hibernated, dead, exited and archived rows, and a question a coordinator holds, keep their own word.
+
 ## Deviations found
 
 - **D-9085** — the arm that reads a provider failure was dark by design (D-3605: a wave-2 arm is shadow
@@ -98,3 +130,81 @@ and `stall-vocabulary.test.ts`; the move commit changes only their imports.
 - **D-9092** — the outage notice shares the ladder's arming, so a stopped ladder raises none. One
   session that has got past none of its failures for an hour raises it too (the orchestrator's review): its coordinator is not
   told and the quiet ladder holds, so nobody else would hear of it.
+- **D-9100** — the field is absent, never null, when none is known, and it is not kept from one pass to the next: a
+  session whose marker, live word or mail could not be read this pass says nothing, where the outage count keeps its last reading.
+  Words are a promise, so an unread session makes none.
+- **D-9101** — wave 1's `busy` hold is absence, not "waiting": a running turn is the retry. The pass is a minute
+  apart, so the assembly takes the field off a row whose raw live word is `busy` now (`shell` is at rest and keeps it).
+- **D-9102** — a draft is read as "queued and not typed at a later pass", not as the delivery's `draft-present`
+  reason, which the watch's own mail read does not carry. Whatever gate holds a nudge, "retry waiting" is true of it.
+- **D-9103** — a row that waits on the operator keeps `waiting`: the operator's act is the one thing that
+  moves it. Its header says both, and never a time.
+- **D-9104** — a programme box's "no move 2h" and the face's mood keep reading as before: they speak of a
+  programme's movement, not of a failed turn.
+
+## Wave 3a: the lane-failing mark, and the gates that read it
+
+A lane whose provider answers turns with errors is marked, and an automatic move prefers other lanes while the mark stands. **No
+session is moved by this wave.** It lands before wave 3b (a session moves after its third failure), because a moved session
+whose home is the failing lane would otherwise be returned to it at its next idle tick. `ccd` only: nothing on the wire, no
+server reader, no setting, no key sent.
+
+### The file
+
+`$REG/<lane>-provfail` holds `<epoch> <word>`, the shape of `<lane>-authdead`: dotless and per lane, so it is in no registry
+row's glob. One writer, `ccd/ccd#_provfail_pass`, called by `ccd/ccd#cmd_limit_watchdog` (its own timer, once a minute) before
+it asks about any session. One reader, `ccd/ccd#_provfail`. It needs no purge, rename or teardown: past 30 minutes it means
+nothing to the reader, and the next pass removes it, for a lane that left the roster too.
+
+### What sets it, and what ends it
+
+The evidence is each row's turn marker, through one reader (`ccd/ccd#_turn_mark_read`, moved out of the affinity move's
+background hold in a commit of its own and extended by four fields). The lane is the row's `wrapper`. A stamp counts for a lane
+only when it is newer than the row's `lastswap`. Marker, uuid, `wrapper` or `lastswap` absent where needed, unreadable, malformed
+or another conversation's: evidence of nothing, neither failure nor health. A stamp over a minute ahead of the clock: the same.
+
+| On one lane | A newer good Stop there | Mark before the pass | After it |
+|---|---|---|---|
+| one session, 3 counted failures within 2 h since its `lastswap`, the newest within 30 min | no | none, ended or malformed | written, with this pass's epoch |
+| the same | yes | none | none |
+| two sessions, each with an owed failure (no turn since) within 10 min | no | none | written |
+| one such session, or two with one of them older, not owed, or from before its move | - | none | none |
+| anything | no | under 30 min old | left as it is, never rewritten |
+| anything | yes, newer than the mark | under 30 min old | removed |
+| a failure newer than that good Stop, and the first or third row holds | no | under 30 min old | removed and written again |
+| anything else | - | 30 min or older, or malformed | removed |
+
+A **good Stop** is a `done` line whose event is `Stop`; or, on a line a later event wrote, its `stopAt` beside an empty
+`failAts` and either no failure word or a provider's (the hook empties the list at a Stop and a clear only, and a clear writes
+no `stopAt`). Beside any other word the `stopAt` may be that failure's own, so it says nothing.
+
+### The gates
+
+1. **Home** (`ccd/ccd#_swap_target`, through `ccd/ccd#_provfail_holds_home`): the home-recovered arm does not return a session
+   to a marked home. A call that must leave keeps that home as the fallback the arm already had, so nothing is refused.
+2. **Rank** (`ccd/ccd#_swap_target`): a marked candidate scores 101, behind measured (at most 97) and unmeasured (100), ahead of
+   an auth-dead one (now 102). It stays eligible.
+3. **Spread** (`ccd/ccd#_rescue_target`): the spread preference is never bought with a marked lane.
+
+`ccd swap` in every form, `ccd swap-self` and `ccd prefer` read none of it. Pools, the class gate, the pool set, the cooldown and
+do-not-bounce are unchanged.
+
+### Left for the next pull request
+
+The order a provider move takes its target in (`_provider_move_rank_to`, pure, no caller) and the provider of a lane
+(`_lane_provider_to`). They are 14 code lines and this wave is at the growth limit (`ccd (program)` +40).
+
+### Deviations found (wave 3a)
+
+- **D-9095** — the mark is a per-lane fact with one writer in the limit watchdog's pass, so it is off with it:
+  `CCRC_LIMIT_WATCHDOG_MIN=0` reads and writes nothing, by that setting's own rule. Readers then see no mark.
+- **D-9096** — "fresh" is 10 minutes for an owed failure (the outage notice's window), and the three counted
+  failures also need their newest inside the mark's own 30 minutes. Without the second rule a session that was stopped after its
+  third failure would mark its lane again every 30 minutes for 2 h.
+- **D-9097** — the mark is last among lanes a turn can run on, not behind a dead credential: that one cannot run a
+  turn at all. Auth-dead moves from 101 to 102. Both rank inside a bracket, so a marked home-able lane still beats an unmarked
+  overflow lane, as an auth-dead one does.
+- **D-9098** — `_rescue_target`'s spread pass would have taken a marked lane as the only one no rescue had just
+  landed on, ahead of a healthy one. Its name is refused when it is marked, and the pass after it decides.
+- **D-9099** — `ccd prefer` acts through the home arm, so gate 1 alone would have held it back. A `.home` written
+  after the mark is not held, for one move: a row whose `lastswap` is newer than its `.home` is held like any other.

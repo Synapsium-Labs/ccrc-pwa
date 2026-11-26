@@ -320,7 +320,8 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'decision_rows', 'decision_host', 'decision_lines', 'programme_health', 'run_spend',
   'continuity_act_keys', 'approval_census', 'approval_parks', 'overlord_fence_refusals',
   'continuity_hook_reports', 'continuity_witness_checks', 'coordinator_state', 'overlord_sequence', 'overlord_sequence_pruned', 'limit_samples',
-  'programme_events', 'programme_picks'] as const;
+  'programme_events', 'programme_picks', 'continuity_timer_refusals',
+  'overlord_invariant_findings'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique, read off the one scan (`sqlStatements.ts#sqlWrites`). `tables`
  *  is the table list to read: coord.db's by default, and the private store's for its own describe (Overlord W1 private store A). */
@@ -385,6 +386,7 @@ describe(TABLES_PIN, () => {
       continuity_card_reads: ['server/src/continuity/continuityStore.ts#insertCardRead'],
       // The timers (Overlord W1a): one writer per move of `TIMER_TRANSITIONS`, and the purge of terminal rows.
       continuity_timers: ['cancelTimer', 'insertTimer', 'markTimersFired', 'purgeTimers'].map((f) => `server/src/continuity/continuityStore.ts#${f}`),
+      continuity_timer_refusals: ['purgeTimerRefusals', 'recordTimerRefusal'].map((f) => `server/src/continuity/continuityStore.ts#${f}`),
       continuity_notes: ['server/src/continuity/continuityStore.ts#appendNote'],
       continuity_handovers: ['server/src/continuity/continuityStore.ts#putHandover'],
       // The probes (Overlord W1a): one writer per fact, the lane's round and the door's answers; the card and note GETs' stamp.
@@ -412,6 +414,9 @@ describe(TABLES_PIN, () => {
       // which alone raises the prune floor in the same transaction.
       overlord_sequence: ['pruneSequenceThrough', 'stampSequenceInTx'].map((f) => `server/src/coord/overlordSequenceStore.ts#${f}`),
       overlord_sequence_pruned: ['server/src/coord/overlordSequenceStore.ts#pruneSequenceThrough'],
+      // The invariant monitor's findings (Overlord W1, sequence B2): one module, two writers: the insert of an episode (with its
+      // item, in one transaction) and the stamp of its end.
+      overlord_invariant_findings: ['recordFinding', 'resolveFindings'].map((f) => `server/src/coord/invariantFindingsStore.ts#${f}`),
       // The designation (Overlord W1, C2): one writer per move of the row, each appending its authority record first where one is owed.
       // The migration's one-time pending-actor backfill is SQL in MIGRATIONS' string, so the scanner names its module.
       // Confirm the restore's inner writer (authority journal C, `applyDesignationRestoreInTx`): Table 11.1a names Confirm among the

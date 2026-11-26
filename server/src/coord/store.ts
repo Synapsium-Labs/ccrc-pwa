@@ -62,6 +62,7 @@ import * as probes from '../continuity/continuityStore.js';
 import { modelSwitchesSinceStart, readerEventsSinceStart, type HookStoreRead, type ModelSwitchRow, type ReaderEvent } from '../continuity/hookReportStore.js';
 import * as designation from './overlordDesignationStore.js';
 import * as ladder from './overlordLadderStore.js';
+import { txWithAuthorityReceipt } from './overlordAuthorityJournal.js';
 import * as sequence from './overlordSequenceStore.js';
 import * as outbox from './pushOutboxStore.js';
 import * as census from './approvalCensusStore.js';
@@ -5776,20 +5777,21 @@ export class CoordStore {
   stopDone(sessionId: string): designation.StopDoneResult { return designation.stopDone(this.db, sessionId); }
   setModelClass(j: designation.AuthorityAppender, i: Parameters<typeof designation.setModelClass>[2]): designation.SettingResult { return designation.setModelClass(this.db, j, i); }
   setAccountSet(j: designation.AuthorityAppender, i: Parameters<typeof designation.setAccountSet>[2]): designation.SettingResult { return designation.setAccountSet(this.db, j, i); }
-  /** Overlord §7.5, H25 (`overlordLadderStore.ts`): the ladder's reads and writers; the three door writers open their own `tx()`. */
+  /** Overlord §7.5, H25 (`overlordLadderStore.ts`): the ladder's reads and writers; the three door writers open their own `tx()`
+   *  through the journal's `txWithAuthorityReceipt`, so a throw after a durable append fences the guard (review 3646 F4). */
   ladderRows(): ladder.LadderRowsRead { return ladder.ladderRows(this.db); }
   ladderRungRead(): ladder.LadderRungRead { return ladder.ladderRungRead(this.db); }
   setRung(j: designation.AuthorityAppender, move: ladder.RungMoveInput): ladder.LadderWrite {
     const actor = ladder.rungActorBefore(move); if (!actor.ok) return actor;
-    return tx(this.db, () => ladder.setRungInTx(this.db, j, move));
+    return txWithAuthorityReceipt(this.db, j, (held) => ladder.setRungInTx(this.db, held, move));
   }
   raiseLatch(j: designation.AuthorityAppender, latch: ladder.LatchRaiseInput): ReturnType<typeof ladder.raiseLatchInTx> {
     const actor = ladder.ladderActor(latch.raisedBy, 'brake'); if (!actor.ok) return actor;
-    return tx(this.db, () => ladder.raiseLatchInTx(this.db, j, latch));
+    return txWithAuthorityReceipt(this.db, j, (held) => ladder.raiseLatchInTx(this.db, held, latch));
   }
   clearLatch(j: designation.AuthorityAppender, clear: ladder.LatchClearInput): ladder.LadderWrite {
     const actor = ladder.ladderActor(clear.actor, 'widen'); if (!actor.ok) return actor;
-    return tx(this.db, () => ladder.clearLatchInTx(this.db, j, clear));
+    return txWithAuthorityReceipt(this.db, j, (held) => ladder.clearLatchInTx(this.db, held, clear));
   }
   /** Overlord §10.4 (`overlordSequenceStore.ts`): the sequence's reads, prune, and the Inbox's post-commit exception. */
   sequenceAfter(after: number, limit: number): ReturnType<typeof sequence.sequenceAfter> { return sequence.sequenceAfter(this.db, after, limit); }
@@ -5835,6 +5837,10 @@ export class CoordStore {
   timerHoldFacts(setter: string, firedSince: number): timers.TimerHoldRead { return timers.timerHoldFacts(this.db, setter, firedSince); }
   setsSince(setter: string, since: number): number { return timers.setsSince(this.db, setter, since); }
   purgeTimers(before: number): { removed: number } { return timers.purgeTimers(this.db, before); }
+  firedTimersOf(setter: string, stamp: string, since: number): timers.TimersRead { return timers.firedTimersOf(this.db, setter, stamp, since); }
+  recordTimerRefusal(r: timers.TimerRefusalCount): { ok: boolean } { return timers.recordTimerRefusal(this.db, r); }
+  timerRefusalCounts(sinceDay: string): timers.TimerRefusalCountsRead { return timers.timerRefusalCounts(this.db, sinceDay); }
+  purgeTimerRefusals(beforeDay: string): { removed: number } { return timers.purgeTimerRefusals(this.db, beforeDay); }
   /** Overlord §3.3.2 C37 (the notes piece, `continuityStore.ts`): the note door's two writers, append-only, and the reads
    *  the door and the card's gatherer make. */
   appendNote(n: NoteInsert): { ok: true; id: number } | { ok: false; kind: 'superseded' | 'write-failed' } { return appendNote(this.db, n); }
@@ -7620,9 +7626,9 @@ export class CoordStore {
    *  (`coordinatorOfRun`, `soleActiveCoordinator()`) because only the caller knows whether it is about
    *  to push, and resolving here would hide the unresolvable case behind a
    *  value that looks like an id. */
-  mailOrigin(mailId: number): { fromId: string; runId: number | null; subject: string; body: string } | null {
-    const row = this.db.prepare('SELECT fromId, runId, subject, body FROM mail WHERE id = ?')
-      .get(mailId) as { fromId: string; runId: number | null; subject: string; body: string } | undefined;
+  mailOrigin(mailId: number): { fromId: string; toId: string; runId: number | null; subject: string; body: string } | null {
+    const row = this.db.prepare('SELECT fromId, toId, runId, subject, body FROM mail WHERE id = ?')
+      .get(mailId) as { fromId: string; toId: string; runId: number | null; subject: string; body: string } | undefined;
     return row ?? null;
   }
 

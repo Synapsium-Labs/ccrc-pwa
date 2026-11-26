@@ -46,8 +46,10 @@ const events = (db: DatabaseSync, slug: string) =>
 const rule = (e: { detail: string | null }) => (e.detail === null ? null : (JSON.parse(e.detail) as { rule?: string }).rule ?? null);
 
 describe('migration 127: the programme lifecycle', () => {
-  it('is found in the deployed slot after future migrations append', () => {
+  it('stays in deployed slot 127, followed by the timers (128) and invariant monitor (129)', () => {
     expect(LIFECYCLE).toBe(126);
+    expect(MIGRATIONS[LIFECYCLE + 1]).toContain('CREATE TABLE continuity_timer_refusals');
+    expect(MIGRATIONS[LIFECYCLE + 2]).toContain('CREATE TABLE overlord_invariant_findings');
   });
 
   it('step 4: a D-51 done over an open run becomes active; with no open run it is kept and recorded', () => {

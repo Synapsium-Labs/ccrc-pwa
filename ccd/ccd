@@ -2019,7 +2019,7 @@ _lane_enabled() { [[ ! -f "$REG/$1-disabled" ]]; }   # operator kill-switch: tou
 # THE FOLD IS ALREADY HERE AND ITS DIRECTION IS THE FILE'S OWN RULING. An
 # unreadable marker answering "not condemned" folds "no marker" with "cannot
 # tell", exactly as a `chmod 000` marker already did; the digits gate above
-# argues that direction. Both consumers spend this on PREFERENCE only — rank 101
+# argues that direction. Both consumers spend this on PREFERENCE only — rank 102
 # in `_swap_target`, a second-tier fallback in `_ws_least_loaded` — so the fold
 # costs at most one rescue landing on a lane that may not authenticate, and "a
 # rescue must always have a destination". The opposite fold is the unsafe one.
@@ -6975,14 +6975,14 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # marker `$REG/<id>.shedding`, which no alias glob reaches, and the gate fails closed on it
 # (DEPSSHED region).
 #
-# NOT reachable this way, and this set IS the boundary — TWENTY-FOUR dot-prefixed
-# artifacts live under `$REG`; the eight above are reachable, these sixteen are
+# NOT reachable this way, and this set IS the boundary — TWENTY-FIVE dot-prefixed
+# artifacts live under `$REG`; the eight above are reachable, these seventeen are
 # not. THE CARDINAL IS MEASURED NOW, and it had to be: this paragraph said
 # EIGHT about a tree that already held nine, because `.account-placement.lock`
 # landed with `ccrc account` and nothing here reds when prose drifts.
 # `ccd-account-auth.test.ts`'s "the dot-prefixed registry inventory is a
 # census, not a memory" derives the number from the shipped bash and refuses
-# a paragraph that disagrees with it. The sixteen: `$REG/.carry.lock` (no id is the dash-free `.carry`);
+# a paragraph that disagrees with it. The seventeen: `$REG/.carry.lock` (no id is the dash-free `.carry`);
 # `$REG/.door/` (the Overlord's door process directory, ccd/lib/door.sh: a dotted DIRECTORY unreachable for `.reaped/`'s
 # reason; its per-id `<id>/` with the tool-server config and the delta cache is counted WITH it, removed by `_door_purge`);
 # `$REG/.inflight.lock` (the manifest's own slot, D-8362; no id is the dash-free `.inflight`);
@@ -7013,8 +7013,8 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # idiom again: the raise renames it onto the dot-FREE `$REG/testbox-remote-live`,
 # the test box switch, so only the transient copy carries a dot; `ccd scope-sweep-busy`'s
 # `$REG/.scope-sweep-busy-live.$$.tmp` (D-7994), that idiom a third time; `ccd delegation-adopt`'s
-# `$REG/.delegation-adopt.$$.tmp` (D-8112), a fourth; and session-hook.sh's
-# `.$id.$$.hookstate.tmp` — the last five ARE candidate glob matches when
+# `$REG/.delegation-adopt.$$.tmp` (D-8112), a fourth; the limit watchdog's `$REG/.provfail.$$.tmp` (D-9095), a fifth; and session-hook.sh's
+# `.$id.$$.hookstate.tmp` — the last six ARE candidate glob matches when
 # `<id>` is the aliasing id, but their suffix after the match carries a
 # SECOND dot, which is exactly what `_reg_purge`'s own `*.*` skip excludes.
 #
@@ -7536,7 +7536,7 @@ _ws_least_loaded() {   # [project] [class] -> the home-able account with the mos
   #
   # The ordinary health tiers below (condemned included) are computed exactly
   # as before and are untouched by this filter.
-  # `_swap_target`'s rank-101 tier is the same ruling for the rescue lane.
+  # `_swap_target`'s rank-102 tier is the same ruling for the rescue lane.
   # The server's `projectHome` (server/src/limits.ts) makes both calls the same
   # way, and `projected-home.test.ts` drives the two over one seeded HOME so the
   # day either side changes its mind is the day the suite says so.
@@ -20436,13 +20436,18 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout (asked, 
     # NEVER BACK TO AN AUTH-DEAD HOME (D-3522). A 401 writes no usage telemetry,
     # so `_avail` passes a home whose credential is dead; the rescue that moved a
     # session OFF it would move it straight back after SWAP_COOLDOWN, and a
-    # forced call would skip the candidate loop's rank-101 demotion by landing
+    # forced call would skip the candidate loop's rank-102 demotion by landing
     # here first. The probe clears the marker on a live answer, and `_authdead`
     # expires it once a credential file ccd can name changes (D-3524) — no spawn.
+    #
+    # NOR TO A HOME WHOSE PROVIDER IS FAILING (`_provfail_holds_home`, D-9095), or a session a failing lane stopped
+    # would be pulled back onto it. Only the preference is spent: a call that MUST leave (`$force`, the caller's or `pool`)
+    # keeps such a home as `hfb`, the fallback below, so no rescue is ever refused for the mark.
     if [[ "$hrc" -eq 0 && " ${SWAP_TARGET_SKIP:-} " != *" $home "* ]] \
       && _account_ok "$home" && { [[ -n "$cross_home" ]] || _pool_ok "$home" "$pps"; } \
       && ! _authdead "$home" && _avail "$home" \
       && { [[ "${CCD_RESCUE_MEASURED_ONLY:-}" != 1 ]] || [[ -n "$(_limit_score "$home")" ]]; } \
+      && { ! _provfail_holds_home "$1" "$home" || { [[ -n "$force" ]] && hfb="$home"; false; }; } \
       && { [[ -z "${4:-}" ]] || [[ -n "$(_limit_score "$home")" ]] || { hfb="$home"; false; }; }; then   # D-8123: a wake move wants MEASURED room only, and a rescue the CALLER forced (`${4:-}`, NOT the `force=pool` a wrong-pool current account sets above, which is a retag relocation and keeps its one-move affinity return) ranks an unmeasured home after every measured account with room, never ahead of it; the unforced affinity return home is unchanged. `hfb` keeps an otherwise-recovered unmeasured home as the rank-100 fallback the loop below returns when it finds nothing: the loop only walks `_pool_for` candidates that pass `_pool_ok`, so it would never rediscover a crossed home or a hand-set pool list that leaves home out
       _class_gate "$home" "$cls" "$1"; src=$?                                     # home recovered: go back — if it can serve the class
       [[ "$src" -eq 0 ]] && { echo "$home"; return 0; }
@@ -20649,7 +20654,7 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout (asked, 
       # cannot be wrong; an auth probe is a MEASUREMENT and can be, so it may cost
       # preference and must never cost eligibility.
       #
-      # 101, ONE TIER WORSE THAN UNMEASURED, and the tier is the whole point.
+      # 102, WORSE THAN UNMEASURED, and the tier is the whole point.
       # This was `sc=100` — the same number as the `:=100` above — until fix round
       # 1 measured what that costs: an auth-dead lane CANNOT REFRESH ITS OWN
       # TELEMETRY, because telemetry is written by a session rendering its
@@ -20670,12 +20675,13 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout (asked, 
       #                     ceiling (`_avail`) — see the two facts above
       #   unmeasured   100   eligible, no score: never measured, window ended, or
       #                     half-measured
-      #   auth-dead    101   eligible, and measured as not authenticating
+      #   failing      101   eligible, and its provider answered several turns with errors (`_provfail`, at most 30 min ago)
+      #   auth-dead    102   eligible, and measured as not authenticating: no turn can run there at all
       #   sentinel     999   `best_score`'s initial value
       #
-      # 101 therefore loses to every healthy candidate, MEASURED OR NOT, which is
+      # 102 therefore loses to every healthy candidate, MEASURED OR NOT, which is
       # the correction: the gap 97 -> 100 is what keeps a score ahead of silence,
-      # and the gap 100 -> 101 is what keeps silence ahead of a verdict. And 101
+      # and the gap 100 -> 101 is what keeps silence ahead of a verdict. And 102
       # is still far below the 999 sentinel, so a condemned candidate is picked
       # the moment it is the only one left — eligibility is untouched by this
       # change, only preference. That is the same rule the `:=100` above obeys and
@@ -20684,13 +20690,14 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout (asked, 
       # AND IT APPLIES WITHIN EITHER BRACKET (merge with #61, 2026-09-08). The
       # walk below now sorts candidates into two: home-able ones compete for
       # `best`, overflow ones for `obest`, and the brackets are consulted in
-      # that order. `sc=101` is assigned BEFORE the split deliberately, so a
+      # that order. The two are assigned BEFORE the split deliberately, so a
       # condemned lane ranks last IN ITS OWN bracket rather than being pushed
       # out of the rotation: a condemned overflow lane still beats no
       # destination at all, which is the same eligibility-vs-preference rule
       # the paragraph above derives. The two changes compose because one sets
       # the score and the other only chooses which bracket reads it.
-      _authdead "$cand" && sc=101
+      _provfail "$cand" && sc=101
+      _authdead "$cand" && sc=102
       # THE TIE GOES TO THE CURRENT ORGANIZATION (`_org_tie`, above), in both brackets alike: `(score, not-same-org,
       # roster position)`. `_org_note` keeps each bracket's lowest `same` score for the near miss, asked only.
       if _is_home_able "$cand"; then
@@ -22162,12 +22169,30 @@ SWAP_BG_HOLD_MAX=7200           # seconds after the last Stop that live backgrou
                                 # (`_swap_bg_hold`): past it a stuck count can no longer pin a session off its home lane
 SWAP_BG_HOLD_SKEW=60            # seconds a marker's stamp may sit AHEAD of this clock and still read as measured (else: no hold)
 
+_turn_mark_read() {   # id -> rc 0 and the TM_* globals: the hook's turn marker | 1 absent | 2 unreadable | 3 not the hook's line (every TM_* is emptied first)
+  # THE ONE READER OF A TURN MARKER'S EVIDENCE (`$REG/<id>.turn.json`, `TURN_MARK_PROGRAM` in session-hook.sh): the affinity
+  # move's background hold and the lane-failing pass (`_provfail_pass`) read it here. `cmd_hibernate` reads its own three facts
+  # inline and refuses on anything else. Builtins only; each field is its own regex, so the key order is not relied on. Nothing
+  # here decides what a fact means, and rc 1, 2 and 3 are never one answer: the hold treats them differently. Whose conversation
+  # the line is, the caller asks. A field the line does not carry, or carries as null, reads empty; `TM_SID`, `TM_ERR` and
+  # `TM_FAILS` keep their JSON spelling, so an empty one (`""`, `[]`), a `null` word and none at all stay different answers.
+  local line="" re k
+  TM_SID="" TM_STATE="" TM_AT="" TM_BG="" TM_STOP="" TM_KINDS="" TM_EVENT="" TM_TURN="" TM_ERR="" TM_FAILS=""
+  _reg_read_to line "$1" turn.json || return $?
+  re='^\{"v":1,'; { (( ${#line} > 4096 )) || [[ "$line" == *$'\n'* || ! "$line" =~ $re ]]; } && return 3
+  for re in 'SID "sessionId":("[^"]*")' 'STATE "state":"(done|working|failed)"' 'AT "at":([0-9]{1,16})[,}]' 'BG "bg":(-?[0-9]{1,9})[,}]' \
+    'STOP "stopAt":([0-9]{1,16})[,}]' 'KINDS "bgKinds":"([a-z_,-]{0,200})"' 'EVENT "event":"([A-Za-z]{1,64})"' \
+    'TURN "turnAt":([0-9]{1,16})[,}]' 'ERR "err":(null|"[a-z_]{0,64}")[,}]' 'FAILS "failAts":(\[[0-9,]{0,200}\])[,}]'; do
+    k="${re%% *}"; re="${re#* }"; [[ "$line" =~ $re ]] && printf -v "TM_$k" '%s' "${BASH_REMATCH[1]}"
+  done
+  # Malformed: no sessionId, state or `at`, or a `done` whose `bg` is not -1 or a count.
+  [[ -n "$TM_SID" && -n "$TM_STATE" && -n "$TM_AT" ]] && [[ "$TM_STATE" != done || "$TM_BG" == -1 || "$TM_BG" =~ ^[0-9]+$ ]] || return 3
+}
+
 _swap_bg_hold() {   # id now -> rc 0 iff the session's own turn marker says background work is live (the affinity move waits), 1 iff nothing holds it
-  # THE ONE READER OF THE TURN MARKER ON THE AFFINITY PATH. `$REG/<id>.turn.json` is the
-  # hook's line (`TURN_MARK_PROGRAM`, session-hook.sh; server/src/turnmark.ts reads it for
-  # the mail gate and the stall watch), and at a Stop it records `bg`, the count of
-  # background tasks Claude Code listed. Read with builtins, as `cmd_hibernate` reads it:
-  # this runs on the 5 s tick. Each field is its own regex, so the key order is not relied on.
+  # THE TURN MARKER ON THE AFFINITY PATH, read through `_turn_mark_read` (above): at a Stop the
+  # hook records `bg`, the count of background tasks Claude Code listed (server/src/turnmark.ts
+  # reads the same line for the mail gate and the stall watch). This runs on the 5 s tick.
   #
   # WHAT HOLDS, AND WHAT DOES NOT (each undecidable case decided once, here):
   #   - `done` with `bg` > 0 and a Stop inside SWAP_BG_HOLD_MAX: HOLDS. This is the case.
@@ -22190,32 +22215,20 @@ _swap_bg_hold() {   # id now -> rc 0 iff the session's own turn marker says back
   #     Today's behaviour returns.
   # The marker is not re-measured against the live process: a restart writes `bg` 0
   # (`restart` in the hook) and the bound caps a hook that did not run.
-  local id="$1" now="$2" line="" rrc re st="" sid="" at="" stop="" bg="" kinds="" uuid="" why="" anchor sig msg age
-  _reg_read_to line "$id" turn.json; rrc=$?; (( rrc == 2 )) && why=unreadable
-  (( rrc == 1 )) && { _swap_bg_release "$id"; return 1; }
-  re='^\{"v":1,'; [[ -z "$why" ]] && { (( ${#line} > 4096 )) || [[ "$line" == *$'\n'* || ! "$line" =~ $re ]]; } && why=malformed
-  if [[ -z "$why" ]]; then
-    # `sid` carries a leading `=` so a present-but-empty sessionId still reads as present.
-    re='"sessionId":"([^"]*)"';             [[ "$line" =~ $re ]] && sid="=${BASH_REMATCH[1]}"
-    re='"state":"(done|working|failed)"';   [[ "$line" =~ $re ]] && st="${BASH_REMATCH[1]}"
-    re='"at":([0-9]{1,16})[,}]';            [[ "$line" =~ $re ]] && at="${BASH_REMATCH[1]}"
-    re='"bg":(-?[0-9]{1,9})[,}]';           [[ "$line" =~ $re ]] && bg="${BASH_REMATCH[1]}"
-    re='"stopAt":([0-9]{1,16})[,}]';        [[ "$line" =~ $re ]] && stop="${BASH_REMATCH[1]}"
-    re='"bgKinds":"([a-z_,-]{0,200})"';     [[ "$line" =~ $re ]] && kinds="${BASH_REMATCH[1]}"
-    # Malformed: no sessionId, state or `at`, or a `done` whose `bg` is not -1 or a count.
-    [[ -n "$sid" && -n "$st" && -n "$at" ]] && [[ "$st" != done || "$bg" == -1 || "$bg" =~ ^[0-9]+$ ]] || why=malformed
-  fi
+  local id="$1" now="$2" uuid="" why="" anchor sig msg age
+  _turn_mark_read "$id"
+  case $? in 1) _swap_bg_release "$id"; return 1 ;; 2) why=unreadable ;; 3) why=malformed ;; esac
   if [[ -z "$why" ]]; then
     # Not a `done` line, or nothing running: no hold. Then another conversation's line: no hold.
-    { [[ "$st" != done ]] || { [[ "$bg" != -1 ]] && (( 10#$bg == 0 )); }; } && { _swap_bg_release "$id"; return 1; }
+    { [[ "$TM_STATE" != done ]] || { [[ "$TM_BG" != -1 ]] && (( 10#$TM_BG == 0 )); }; } && { _swap_bg_release "$id"; return 1; }
     _reg_read_to uuid "$id" uuid; (( $? == 2 )) && why=unreadable
-    [[ -z "$why" && ( -z "$uuid" || "$sid" != "=$uuid" ) ]] && { _swap_bg_release "$id"; return 1; }
+    [[ -z "$why" && ( -z "$uuid" || "$TM_SID" != "\"$uuid\"" ) ]] && { _swap_bg_release "$id"; return 1; }
   fi
   if [[ -n "$why" ]]; then
     anchor=$(_plat_mtime "$REG/$id.turn.json" 2>/dev/null) || anchor=""
     [[ "$anchor" =~ ^[0-9]{1,13}$ ]] || { _swap_bg_release "$id"; return 1; }
     anchor=$(( 10#$anchor * 1000 )); sig="$why:$anchor"; msg="the turn marker is $why, so what runs in the background is unknown"
-  else anchor=$(( 10#${stop:-$at} )); sig="bg:$anchor"; msg="background work (bg=${bg/#-1/unknown} kinds=${kinds:-none})"; fi
+  else anchor=$(( 10#${TM_STOP:-$TM_AT} )); sig="bg:$anchor"; msg="background work (bg=${TM_BG/#-1/unknown} kinds=${TM_KINDS:-none})"; fi
   age=$(( now * 1000 - anchor ))
   (( age < -(SWAP_BG_HOLD_SKEW * 1000) || age >= SWAP_BG_HOLD_MAX * 1000 )) && { _swap_bg_release "$id" expired; return 1; }
   _swap_bg_note "$id" "$sig" "$msg"; return 0
@@ -30921,6 +30934,8 @@ _rescue_target() {   # id cur home hard-blocked hrc -> `_swap_target`'s stdout a
   # mean the only same-class target with room is one the spread skipped — the
   # walk passes a skipped candidate before `_class_gate` counts it — and the
   # just-left-only pass below then decides, as it does for everything else.
+  # NOR WITH A LANE WHOSE PROVIDER IS FAILING (`_provfail`): the spread pass's name is not taken when it is marked, and the
+  # just-left-only pass, which ranks a marked lane behind the rest, decides.
   # SPREAD NEVER PASSES OVER HOME: a recovered home another session was just
   # rescued onto would only be returned to by the affinity path at the next
   # idle tick — two moves where one does (do-not-bounce still skips a home the
@@ -30935,7 +30950,7 @@ _rescue_target() {   # id cur home hard-blocked hrc -> `_swap_target`'s stdout a
   recent=" $RESCUE_SKIP_RECENT "; [[ -n "$3" ]] && recent="${recent// "$3" / }"   # spread never passes over HOME: the affinity path would only move it back
   if [[ -n "${recent// /}" ]]; then
     out=$(SWAP_TARGET_SKIP="$RESCUE_SKIP_LEFT $recent" _swap_target "$@"); rc=$?
-    [[ -n "$out" && "$rc" -eq 0 ]] && { printf '%s\n' "$out"; return 0; }
+    [[ -n "$out" && "$rc" -eq 0 ]] && ! _provfail "${out%%$'\n'*}" && { printf '%s\n' "$out"; return 0; }
     # …and ITS undecidable answer is never returned: the unskipped probe above
     # already answered every question the skip cannot change (rc 2-4 are asked
     # before the walk), so an rc 5 here means the skip removed every measured
@@ -33188,6 +33203,68 @@ _watchdog_one() {   # id now minutes -> a forced rescue bumps WD_FORCED; everyth
   return 0
 }
 
+# THE LANE-FAILING MARK (the provider-failure ladder, wave 3a, D-9095; docs/superpowers/plans/2026-11-25-provider-retry.md).
+# `$REG/<lane>-provfail` holds `<epoch> <err>`, `_authdead`'s shape: several sessions' turn markers say the provider answers this
+# lane's turns with errors. A PREFERENCE of an AUTOMATIC move and nothing else (`_swap_target`'s home arm and its ranking,
+# `_rescue_target`'s spread): no lane is ever ineligible for it, no session is moved for it, and the operator's own verbs never
+# read it (ruling 2026-10-19). DOTLESS AND PER-LANE, for `_authdead`'s reasons. ONE WRITER, `_provfail_pass`, run by the limit
+# watchdog once a minute, off with it (`CCRC_LIMIT_WATCHDOG_MIN=0`): the tick and the verbs read only. It needs no purge: past
+# PROVFAIL_TTL a mark means nothing to a reader whether or not anything removed it, and the next pass removes it.
+# The seconds: TTL, how long a mark means anything after its write, and how old a lane's newest failure may be at the write;
+# SPAN, how far back one session's consecutive failures are counted; FRESH, how old a failure that is still owed may be to
+# count beside another session's (the server's outage notice uses the same 10 minutes).
+PROVFAIL_TTL=1800 PROVFAIL_SPAN=7200 PROVFAIL_FRESH=600
+_provfail() {   # lane [now] -> rc 0 iff a well-formed mark younger than PROVFAIL_TTL stands (PROVFAIL_AT = its epoch) | 1
+  # `-f` before the open and `! -L`, `_authdead`'s rungs and reasons. Anything but `<epoch> <word>` is no mark, and one written
+  # more than a minute AHEAD of this clock is none either, or a clock set back would keep it for ever.
+  local f="$REG/$1-provfail" t="" re='^([0-9]{1,12}) [a-z_]+$' now="${2:-}"
+  [[ -f "$f" && ! -L "$f" ]] && _file_read_to t "$f" && [[ "$t" =~ $re ]] || return 1
+  PROVFAIL_AT=$(( 10#${BASH_REMATCH[1]} )); [[ -n "$now" ]] || _now_s_to now
+  (( PROVFAIL_AT <= now + 60 && now - PROVFAIL_AT < PROVFAIL_TTL ))
+}
+_provfail_holds_home() {   # id home -> rc 0 iff home is marked and the operator has not chosen it since | 1
+  # `ccd prefer` IS NEVER HELD BACK (ruling 2026-10-19): a `.home` written after the mark is a choice made while it stood, so the
+  # return it asks for goes ahead. Once: a row that has moved since (`lastswap`) took it, or a session that fails there and is
+  # moved off would be pulled straight back. `lastswap`'s VALUE, not its mtime: a requeue writes the old value again.
+  local at sw; _provfail "$2" || return 1
+  [[ "$REG/$1.home" -nt "$REG/$2-provfail" ]] || return 0
+  _reg_get_to sw "$1" lastswap; at=$(_plat_mtime "$REG/$1.home") && [[ "$sw" =~ ^[0-9]{1,12}$ ]] && (( 10#$sw > at ))
+}
+_provfail_pass() {   # now -> each lane's mark set or cleared from every row's turn marker; its rc says nothing
+  # THE EVIDENCE, one row at a time. The lane is the row's `wrapper`, and a stamp counts for it only when it is newer than the
+  # row's `lastswap`: what a session did before its last move it did on another lane. A field that is absent, unreadable or not
+  # this conversation's is evidence of NOTHING, neither failure nor health (`_turn_mark_read`'s rc, the uuid test, a `lastswap`
+  # that is no epoch), and so is a stamp more than a minute ahead of this clock.
+  #   HEALTH (`good`): the newest good Stop. A `done` line whose event is Stop; or, on the lines a later event wrote, an empty
+  #   `failAts` beside no failure or a provider's: the hook empties the list at a Stop and a clear alone, and a clear writes no
+  #   `stopAt`. Beside any other word the `stopAt` may be that failure's own, so it says nothing.
+  #   FAILURE: three counted failures of one session inside PROVFAIL_SPAN, the newest inside PROVFAIL_TTL (2), or one still owed
+  #   inside PROVFAIL_FRESH (1). A lane at 2 is failing, unless its good Stop is newer than the newest of those failures.
+  local now=$(( $1 * 1000 )) f id w uuid sw lo n l t h; local -A good=() last=() hits=() err=()
+  for f in "$REG"/*.uuid; do id="${f##*/}"; id="${id%.uuid}"
+    _reg_read_to w "$id" wrapper && _is_valid_wrapper "$w" && _reg_read_to uuid "$id" uuid && [[ -n "$uuid" ]] || continue
+    _reg_read_to sw "$id" lastswap || { (( $? == 1 )) || continue; sw=0; }
+    [[ "$sw" =~ ^[0-9]{1,12}$ ]] && _turn_mark_read "$id" && [[ "$TM_SID" == "\"$uuid\"" ]] || continue
+    lo=$(( 10#$sw * 1000 )) n=0 l=0 h=0 t=$(( 10#${TM_STOP:-0} ))
+    [[ "$TM_STATE.$TM_EVENT" == done.Stop || "$TM_FAILS$TM_ERR" =~ ^\[\](null|\"server_error\"|\"overloaded\")$ ]] \
+      && (( t > lo && t <= now + 60000 && t > ${good[$w]:-0} )) && good[$w]=$t
+    for t in ${TM_FAILS//[][,]/ }; do (( 10#$t > lo && 10#$t > now - PROVFAIL_SPAN * 1000 && 10#$t <= now + 60000 )) && n=$(( n + 1 )) l=$(( 10#$t )); done
+    if (( n >= 3 && l > now - PROVFAIL_TTL * 1000 )); then h=2; elif (( n && l > now - PROVFAIL_FRESH * 1000 && l > 10#${TM_TURN:-0} )); then h=1; else continue; fi
+    hits[$w]=$(( ${hits[$w]:-0} + h )); (( l <= ${last[$w]:-0} )) || { last[$w]=$l; err[$w]="${TM_ERR//\"/}"; }
+  done
+  # CLEARED FIRST, so a failure newer than the good Stop that ends a mark sets a new one in the same pass. A standing mark is
+  # never rewritten: its 30 minutes run from the write, and only a failure inside them writes the next.
+  for f in "$REG"/*-provfail; do w="${f##*/}"; w="${w%-provfail}"
+    _provfail "$w" "$1" && (( ${good[$w]:-0} < PROVFAIL_AT * 1000 )) && continue
+    rm -f -- "$f" 2>/dev/null && echo "$(date '+%F %T') lane-failing-end $w: a turn ended well there, or the mark ran out" >> "$REG/swap.log"
+  done
+  for w in "${!hits[@]}"; do
+    (( ${hits[$w]} >= 2 && ${last[$w]} > ${good[$w]:-0} )) && ! _provfail "$w" "$1" || continue
+    f="$REG/.provfail.$$.tmp"; printf '%s %s' "$1" "${err[$w]:-unknown}" > "$f" && _plat_mv_notdir "$f" "$REG/$w-provfail" || { rm -f -- "$f"; continue; }
+    echo "$(date '+%F %T') lane-failing $w: its provider answers with errors (${err[$w]:-unknown}); automatic moves prefer other lanes for at most $(( PROVFAIL_TTL / 60 )) min" >> "$REG/swap.log"
+  done
+}
+
 cmd_limit_watchdog() {   # (no args) — one pass over every live session; exits 0 unless the registry is unreadable
   [[ $# -eq 0 ]] || die "usage: ccd limit-watchdog"
   local n="" f id now t0=$SECONDS
@@ -33199,6 +33276,7 @@ cmd_limit_watchdog() {   # (no args) — one pass over every live session; exits
   _now_s_to now
   WD_FORCED=0
   shopt -s nullglob
+  _provfail_pass "$now"   # before the rows: a rescue this pass decides already reads what its markers say
   for f in "$REG"/*.uuid; do
     id="${f##*/}"; id="${id%.uuid}"
     [[ "$id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || continue   # an id is quoted into the dispatch's unit command
@@ -44842,7 +44920,7 @@ _authdead_cred_changed() {   # wrapper epoch -> 0 the lane's credential file cha
 
 _authdead_expired() {   # wrapper epoch -> success iff the lane's credential changed at or after the marker's epoch, having removed the marker. Silent. (D-3524)
   # `_authdead`'s tail, so every ccd reader — the condemned placement tier, the
-  # home-recovered arm, rank 101, the rescue's own check — revives a re-logged-in
+  # home-recovered arm, rank 102, the rescue's own check — revives a re-logged-in
   # account at its next decision, with no spawn and no probe.
   #
   # REMOVED ONLY WHILE IT IS STILL THE VERDICT THAT WAS JUDGED (round 1). Deciding

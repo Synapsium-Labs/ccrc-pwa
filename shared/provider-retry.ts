@@ -1,6 +1,6 @@
-// The provider-retry mail's vocabulary (the provider-failure ladder, wave 1; plan
-// `docs/superpowers/plans/2026-11-25-provider-retry.md`). Ring L0, context C5: it imports only its `./` siblings. Pure: the
-// subject with the due time inside, its reader, the body, and the line the mail lane types.
+// The provider-failure ladder's vocabulary (plan `docs/superpowers/plans/2026-11-25-provider-retry.md`). Ring L0, context C5:
+// it imports only its `./` siblings. Pure: the mail's subject with the due time inside, its reader, the body and the line the
+// mail lane types. What the console is told of a session's retry is `provider-retry-wire.ts`.
 //
 // The due time is in the subject because the run-less notice dedupes on the subject over every delivery state
 // (`rundefsTx.ts#queueRunlessNotice`): one due time is one mail, across restarts.

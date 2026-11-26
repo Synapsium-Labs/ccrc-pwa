@@ -102,7 +102,7 @@ describe('Settings › Automation › Shadow lanes (D-8274)', () => {
     expect((own.getByRole('radio', { name: T.live }) as HTMLInputElement).disabled).toBe(false);
   });
 
-  it('the cap-counts-working row (the dispatch cap counts only working workers) is listed last, in its own words, ungated, with no shadow record', async () => {
+  it('the cap-counts-working row (the dispatch cap counts only working workers) is listed after the sleep row, in its own words, ungated, with no shadow record', async () => {
     const A = T.rows['working-idle-sleep'];
     const C = T.rows['cap-counts-working'];
     vi.spyOn(api, 'laneArm').mockResolvedValue({ lanes: [row(), row({ lane: 'continuity', marker: null }),
@@ -116,6 +116,23 @@ describe('Settings › Automation › Shadow lanes (D-8274)', () => {
     expect(own.getByText(C.shadowNote)).toBeInTheDocument();
     expect(own.queryByText(/Shadow record:/)).toBeNull();
     expect(laneArmGate('cap-counts-working')).toBeNull();
+    expect((own.getByRole('radio', { name: T.live }) as HTMLInputElement).disabled).toBe(false);
+  });
+
+  it('the invariants row (the Overlord invariant monitor) is listed last, in its own words, ungated, with no shadow record', async () => {
+    const C = T.rows['cap-counts-working'];
+    const I = T.rows.invariants;
+    vi.spyOn(api, 'laneArm').mockResolvedValue({ lanes: [row(), row({ lane: 'continuity', marker: null }),
+      row({ lane: 'launch-profile', marker: null }), row({ lane: 'anchor-slot', marker: null }), row({ lane: 'working-idle-sleep', marker: null }),
+      row({ lane: 'cap-counts-working', marker: null }), row({ lane: 'invariants', marker: null })] });
+    mount();
+    await waitFor(() => expect(screen.getByRole('group', { name: I.legend })).toBeInTheDocument());
+    const groups = screen.getAllByRole('group').map((g) => g.getAttribute('aria-label') ?? g.querySelector('legend')?.textContent);
+    expect(groups.indexOf(I.legend)).toBeGreaterThan(groups.indexOf(C.legend));
+    const own = within(screen.getByRole('group', { name: I.legend }));
+    expect(own.getByText(I.shadowNote)).toBeInTheDocument();
+    expect(own.queryByText(/Shadow record:/)).toBeNull();
+    expect(laneArmGate('invariants')).toBeNull();
     expect((own.getByRole('radio', { name: T.live }) as HTMLInputElement).disabled).toBe(false);
   });
 

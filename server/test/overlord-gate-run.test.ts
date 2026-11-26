@@ -256,6 +256,24 @@ describe('unmeasured facts refuse unavailable, never pass', () => {
     }
     expect(fenceRows()).toEqual([]);
   });
+  it('the profile port (Overlord W1, the timer doors): never asked under a measured designation or at a refuse door; asked once at a by-profile door under an unmeasured one', async () => {
+    const asked: string[] = [];
+    const profile = async (id: string) => { asked.push(id); return { kind: 'measured', word: 'coordinator' } as const; };
+    const measured = await rig({ profile });
+    expect((await call(measured, 'timer-list', {}, COORDINATOR)).statusCode).toBe(200);
+    const un = await rig({ profile, designation: () => ({ kind: 'unmeasured', why: 'the row is unreadable' }) });
+    expect((await call(un, 'notes-read', {}, COORDINATOR)).statusCode, 'a refuse door').toBe(503);
+    expect(asked).toEqual([]);
+    const res = await call(un, 'timer-list', {}, COORDINATOR);
+    expect([res.statusCode, json(res)['gate']]).toEqual([200, 'hook']);
+    expect(asked).toEqual([COORDINATOR]);
+    const overlord = await rig({ profile: async () => ({ kind: 'measured', word: 'overlord' }), designation: () => ({ kind: 'unmeasured', why: 'x' }) });
+    expect(json(await call(overlord, 'timer-list', {}, COORDINATOR))).toMatchObject({ ok: false, error: 'unavailable', step: '1' });
+    const thrown = await rig({ profile: async () => { throw new Error('boom'); }, designation: () => ({ kind: 'unmeasured', why: 'x' }) });
+    expect(json(await call(thrown, 'timer-list', {}, COORDINATOR))).toMatchObject({ ok: false, error: 'unavailable', step: '1' });
+    const none = await rig({ designation: () => ({ kind: 'unmeasured', why: 'x' }) });
+    expect(json(await call(none, 'timer-list', {}, COORDINATOR)), 'no port: not read, refused').toMatchObject({ ok: false, error: 'unavailable' });
+  });
   it('an unreadable designation refuses 503 unavailable at step 1', async () => {
     const r = await rig({ designation: () => { throw new Error('boom'); } });
     const res = await call(r, 'notes-read', {});

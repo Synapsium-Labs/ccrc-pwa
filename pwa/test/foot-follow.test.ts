@@ -89,10 +89,23 @@ describe('prependShift: how far the rows moved, by key', () => {
     expect(prependShift(['activity-t5', 'a', 'b'], ['p', 'activity-t1', 'a', 'b'], 'activity-t5')).toBe(1);
   });
 
-  it('nothing on top (the first row the same), or no row in both lists (a new file): no shift', () => {
+  it('nothing on top (the first row the same): a shift of 0, found', () => {
     expect(prependShift(['a', 'b'], ['a', 'b', 'c'], 'b')).toBe(0);
-    expect(prependShift(['a', 'b'], ['x', 'y'], 'a')).toBe(0);
-    expect(prependShift([], ['x'], null)).toBe(0);
+  });
+
+  it('desktop polish wave 179, A1: no row in both lists (a new file) is its own answer, never a shift of 0', () => {
+    // The list adds the lead difference to a FOUND shift only: a 0 here read as "found" moved virtuoso's first index on
+    // a list nothing was put before.
+    expect(prependShift(['a', 'b'], ['x', 'y'], 'a')).toBeNull();
+    expect(prependShift([], ['x'], null)).toBeNull();
+    expect(prependShift(['a'], [], 'a')).toBeNull();
+  });
+
+  it('wave 179, fix round 1, F1: a row with no key (from no transcript file) is never the row in common', () => {
+    // The working pulse and a pending send outlive a change of file; the list hands them in as null.
+    expect(prependShift(['a', 'b', null], ['x', 'y', null], 'a')).toBeNull();
+    expect(prependShift([null, 'a'], [null, 'x', 'a'], null)).toBe(1);
+    expect(prependShift(['p', 'a', null], ['a', null], 'a')).toBe(-1);
   });
 
   it('rows taken from the top move it the other way', () => {

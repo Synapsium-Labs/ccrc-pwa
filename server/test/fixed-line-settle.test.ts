@@ -3,6 +3,7 @@
 // and that ack, the row stays outstanding and comes back as a replay: `fixedLineReplayOf` (L1, `coord/envelope.ts`) answers
 // `ack-only` for it, and `finishFixedLineAck` (`operatorModel/nudgeLane.ts`) acks it without the line being typed again. Isolated
 // state-transition assertions over a synthetic delivery writer: no process is stopped and no live delivery is made.
+import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import * as envelope from '../src/coord/envelope.js';
 import { fixedLineReplayOf, mailNudgeOf } from '../src/coord/envelope.js';
@@ -31,6 +32,8 @@ function writer() {
   const acks: number[] = [];
   const warned: string[] = [];
   const coord: NudgeLaneDeps['coord'] = {
+    // A fixed line moves no operator message, so nothing is stamped here.
+    db: new DatabaseSync(':memory:'),
     markAcked(id: number) {
       acks.push(id);
       if (state.get(id) === 'acked') return { ok: false, why: 'already-acked', state: 'acked' };

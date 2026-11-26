@@ -1,7 +1,7 @@
 import { describe, it } from 'vitest';
 import * as timers from '../src/continuity/timers.js';
 import {
-  packTimerMailCases, timerBodyCases, timerCancelCases, timerCleanupCases, timerPreviewCases, timerSetCases,
+  packTimerMailCases, timerBodyCases, timerCancelCases, timerCleanupCases, timerPreviewCases, timerRestoreFactCases, timerSetCases,
 } from './sim/timerSets.js';
 
 // The timers' deciders (Overlord W1a, the timers piece, Task 2; spec §3.3.12, C62 to C65). The cases live in
@@ -14,6 +14,7 @@ const SUITES = {
   timerCleanupVerdict: timerCleanupCases,
   timerPreview: timerPreviewCases,
   packTimerMail: packTimerMailCases,
+  timerRestoreFact: timerRestoreFactCases,
 } as const;
 
 for (const [name, cases] of Object.entries(SUITES)) {

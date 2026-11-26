@@ -18,6 +18,7 @@ import type { ChatEvent } from '../../shared/api';
 import { SkinSetProvider } from '../src/skins/frame';
 import { REFINED_SET } from '../src/skins/refined/parts';
 import { NO_PAGING, type OlderPaging } from '../src/session/olderPages';
+import type { PendingSend } from '../src/stores/session';
 
 const lay = vi.hoisted(() => ({
   scroller: null as HTMLElement | null,
@@ -140,9 +141,12 @@ function session(turns = 30): ChatEvent[] {
   }
   return events;
 }
-const view = (events: ChatEvent[], older?: OlderPaging) => (
+/** The session as the list is handed it; `tail` is what trails the rows and belongs to no transcript file: the working
+ *  pulse (`busy`) and the sends still pending (wave 179, fix round 1, F1). */
+interface Tail { readonly busy?: boolean; readonly pending?: PendingSend[] }
+const view = (events: ChatEvent[], older?: OlderPaging, tail: Tail = {}) => (
   <SkinSetProvider set={REFINED_SET}>
-    <ChatList id="s" events={events} pending={[]} busy={false} onRetry={() => {}} onDiscard={() => {}} older={older} onLoadOlder={() => {}} />
+    <ChatList id="s" events={events} pending={tail.pending ?? []} busy={tail.busy ?? false} onRetry={() => {}} onDiscard={() => {}} older={older} onLoadOlder={() => {}} />
   </SkinSetProvider>
 );
 /** Where the row `key` stands from the scroller's top, by the height model. */
@@ -154,8 +158,8 @@ const topOfRow = (key: string): number => {
 
 /** Mount, and leave a reader resting 1050px down a 100px-per-row list (the row at index 10 crossing the top of the view,
  *  50px of it above), the list's first height reported long ago. */
-function resting(events = session()) {
-  const mounted = render(view(events));
+function resting(events = session(), tail: Tail = {}) {
+  const mounted = render(view(events, undefined, tail));
   expect(rowsIn(lay.scroller!).length, 'the stand-in list drew no rows inside its scroller').toBeGreaterThan(20);
   lay.scroller!.scrollTop = 1050;
   frame();
@@ -393,6 +397,63 @@ describe('rows put before the first: an older page (desktop polish wave 175)', (
     reports(total());
     settle();
     expect(topOfRow(key), 'the anchor was read off the page\'s rows, and the reader\'s row was not held').toBeCloseTo(was, 5);
+  });
+
+  const reset: ChatEvent = { kind: 'system', uuid: 'local-reset-1', ts: TS, text: 'Session context reset' };
+  /** The same thirty turns, as another transcript file holds them: every row's own key differs. */
+  const otherFile = (): ChatEvent[] => session().map((e): ChatEvent => (e.kind === 'tool_result' ? { ...e, toolId: `x-${e.toolId}` }
+    : e.kind === 'tool_use' ? { ...e, uuid: `x-${e.uuid}`, toolId: `x-${e.toolId}` } : { ...e, uuid: `x-${e.uuid}` }));
+  const sending: PendingSend = { key: 'p1', text: 'One more thing.', state: 'sending' };
+
+  // Wave 179, fix round 1, F1: the working pulse and a pending send belong to no file, so they survive a change of
+  // transcript; they are no row in common, or the lead difference is added to a shift found on them alone.
+  for (const [name, tail] of [
+    ['idle', {}], ['busy (the working pulse trails)', { busy: true }], ['with a send pending', { pending: [sending] }],
+  ] as const satisfies readonly (readonly [string, Tail])[]) {
+    it(`desktop polish wave 179, A1: a context reset, then another transcript with no rotation notice, moves no first index (${name})`, () => {
+      // The reset row on top (the lead a page goes after), then a backlog onto another file with no row in common and no
+      // reset row: nothing was put before the first row, so virtuoso's first index stays where it was.
+      const { rerender } = resting([reset, ...session()], tail);
+      const first = lay.props!.firstItemIndex;
+      rerender(view(otherFile(), undefined, tail));
+      expect(rowsIn(lay.scroller!).some((r) => r.dataset.rowKey!.includes('reset')), 'the reset row stayed').toBe(false);
+      expect(lay.props!.firstItemIndex, 'a list nothing was put before had its first index moved').toBe(first);
+    });
+  }
+
+  it('desktop polish wave 179, fix round 1 (M1): a new list that opens with the reset row moves no first index', () => {
+    // The other way round: a list with no lead, then another file under a reset row. No row is in common, so the new
+    // lead is no rows put before the first either.
+    const { rerender } = resting(session());
+    const first = lay.props!.firstItemIndex;
+    rerender(view([reset, ...otherFile()]));
+    expect(rowsIn(lay.scroller!).slice(0, 2).some((r) => r.dataset.rowKey!.includes('reset')), 'the new list opened without its reset row').toBe(true);
+    expect(lay.props!.firstItemIndex, 'a new list\'s lead was counted as rows put before the first').toBe(first);
+  });
+
+  for (const [name, tail] of [['idle', {}], ['busy', { busy: true }]] as const satisfies readonly (readonly [string, Tail])[]) {
+    it(`wave 179, fix round 1, F2: a page under a list that is only the reset row moves no first index (${name})`, () => {
+      const { rerender } = render(view([reset], { ...NO_PAGING, edge: 'more', next: 'c' }, tail));
+      frame();
+      const first = lay.props!.firstItemIndex;
+      const keys = rowsIn(lay.scroller!).map((r) => r.dataset.rowKey!);
+      rerender(view([reset, ...session(5)], { ...NO_PAGING, edge: 'more', next: 'c', rows: 20 }, tail));
+      const now = rowsIn(lay.scroller!).map((r) => r.dataset.rowKey!);
+      expect(lay.props!.firstItemIndex, `${keys.join(' ')} -> ${now.slice(0, 4).join(' ')}`).toBe(first);
+    });
+  }
+
+  it('desktop polish wave 179, A2: a page under the reset row holds the reader\'s row (the lead read at the call site)', () => {
+    const events = [reset, ...session()];
+    const { rerender } = resting(events);
+    expect(rowsIn(lay.scroller!).map((r) => r.dataset.rowKey!).slice(0, 2).some((k) => k.includes('reset')),
+      'the list did not open with the reset row').toBe(true);
+    const key = rowsIn(lay.scroller!).find((r) => r.getBoundingClientRect().bottom > 0)!.dataset.rowKey!;
+    const was = topOfRow(key);
+    rerender(view([reset, ...paged(12), ...session()], { ...NO_PAGING, edge: 'more', rows: 12 }));
+    reports(total());
+    settle();
+    expect(topOfRow(key), 'the row the reader was reading moved when a page landed under the reset row').toBeCloseTo(was, 5);
   });
 
   it('fix round 2, A2: a height change whose frame comes after a page has landed writes nothing: the settle holds once', () => {

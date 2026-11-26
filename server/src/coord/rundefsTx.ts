@@ -99,12 +99,17 @@ export function insertSystemMailTx(
   m: { fromId: SystemMailSender; toId: string; runId: number | null;
        kind: MailKind; subject: string; body: string;
        /** `never`: the mail sweep's hibernated gate holds this delivery and asks no wake (D-8073). */
-       wake?: 'never' },
+       wake?: 'never';
+       /** The session a role-addressed mail is delivered to (Overlord W1: the timer lane's mail to `overlord`, delivered to
+        *  the bound session): the delivery and the envelope take it, and the mail row keeps `toId`, as the mail route does
+        *  for a role. Absent: `toId` is the session. */
+       deliverTo?: string },
 ): { mailId: number; deliveryId: number } {
   const inserted = coord.insertMail({ fromId: m.fromId, fromUuid: m.fromId, toId: m.toId,
     runId: m.runId, kind: m.kind, subject: m.subject, body: m.body, artifacts: [] });
-  const delivery = coord.queueDelivery(inserted.id, m.toId, '', null, m.wake ?? null);
-  const envelope = renderEnvelope({ id: delivery.id, fromId: m.fromId, toId: m.toId, runId: m.runId,
+  const to = m.deliverTo ?? m.toId;
+  const delivery = coord.queueDelivery(inserted.id, to, '', null, m.wake ?? null);
+  const envelope = renderEnvelope({ id: delivery.id, fromId: m.fromId, toId: to, runId: m.runId,
     program: run?.program ?? null, wave: run?.wave ?? null, waveOf: run?.waveOf ?? null,
     kind: m.kind, subject: m.subject, body: m.body, artifacts: [] });
   const stamped = coord.setDeliveryEnvelope(delivery.id, envelope);

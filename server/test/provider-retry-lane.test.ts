@@ -16,7 +16,9 @@ import { CoordStore } from '../src/coord/store.js';
 import { STALL_QUIET_MS } from '../src/coord/stall.js';
 import { NotifyLog } from '../src/notifylog.js';
 import { PROVIDER_RETRY_BODY, isProviderRetryMail, providerRetrySubject, renderProviderRetryLine } from '../../shared/provider-retry.js';
-import type { FleetSession } from '../../shared/api.js';
+import { reviveFleetSession, type FleetSession } from '../../shared/api.js';
+import { assembleFleet } from '../src/fleet.js';
+import { liveStateReaderOver } from '../src/livestate.js';
 import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { quietAtTestEnd } from './laneQuiet.js';
@@ -217,6 +219,63 @@ describe('the nudge, for any live session', () => {
     const rows = r.coord.db.prepare("SELECT body FROM feed_events WHERE kind = 'mail'").all() as { body: string }[];
     expect(rows.map((x) => x.body)).toEqual([providerRetrySubject(FAIL_AT + MIN)]);
   }, 60_000);
+});
+
+describe('the console\'s words on the wire: FleetSession.providerRetry (wave 2)', () => {
+  const said = (r: Rig): unknown => r.w.currentProviderRetries().get(A);
+  it('a pass publishes what the session owes, off the schedule, and a pass with a turn since takes it away', async () => {
+    const r = await one();
+    await r.sweep(FAIL_AT + 10_000);
+    expect(said(r)).toEqual({ err: 'server_error', since: FAIL_AT, attempts: 1, nextAt: FAIL_AT + MIN, phase: 'retrying' });
+    seedMark(r.home, A, { state: 'working', event: 'UserPromptSubmit', at: FAIL_AT + 30_000, turnAt: FAIL_AT + 30_000 });
+    await r.sweep(FAIL_AT + 10_000 + STALL_SWEEP_MS);
+    expect(said(r)).toBeUndefined();
+  });
+  it('the pass that queues the nudge says its due time; the next one, with it still untyped, promises none', async () => {
+    const r = await one();
+    await r.sweep(FAIL_AT + MIN);
+    expect(retries(r.coord)).toHaveLength(1);
+    expect(said(r)).toMatchObject({ nextAt: FAIL_AT + MIN });
+    await r.sweep(FAIL_AT + MIN + STALL_SWEEP_MS);
+    expect(said(r)).toMatchObject({ nextAt: null });
+  });
+  it.each([['mail-disabled', ['mail-disabled']], ['the kill switch', ['stall-watch-disabled']]])('%s takes it away at once', async (_n, names) => {
+    const r = await one();
+    await r.sweep(FAIL_AT + 10_000);
+    expect(said(r)).toBeDefined();
+    await r.sweep(FAIL_AT + 10_000 + STALL_SWEEP_MS, names);
+    expect(said(r)).toBeUndefined();
+  });
+  it('a session whose pane is gone, and one whose marker stopped reading, is not said to be retrying', async () => {
+    const r = await one();
+    await r.sweep(FAIL_AT + 10_000);
+    writeFileSync(path.join(r.home, '.cc-sessions', `${A}.turn.json`), 'torn');
+    await r.sweep(FAIL_AT + 10_000 + STALL_SWEEP_MS);
+    expect(said(r), 'not measured').toBeUndefined();
+    seedMark(r.home, A);
+    await r.sweep(FAIL_AT + 10_000 + 2 * STALL_SWEEP_MS);
+    expect(said(r)).toBeDefined();
+    at(FAIL_AT + 10_000 + 3 * STALL_SWEEP_MS);
+    await r.w.sweepStalls([fleetRow(A)], [], { panePids: new Map(), records: [regRow(A)], refused: new Set() });
+    expect(said(r)).toBeUndefined();
+  });
+  it('the assembly carries it as it is, leaves the key out for a session that owes none, and for one whose turn runs now', async () => {
+    const r = await one();
+    await r.sweep(FAIL_AT + 10_000);
+    const opts = { providerRetries: r.w.currentProviderRetries(), records: [regRow(A), regRow(B)] };
+    const rows = async (): Promise<FleetSession[]> => {
+      const d = testDeps(r.home, async (_c, args) => ({ ran: true as const, code: 0, stdout: args[0] === 'list-panes' ? `${PID}\n` : '', stderr: '' }));
+      return assembleFleet(d.io, d.cfg, d.tmux, liveStateReaderOver(d.io), undefined, opts);
+    };
+    const [a, b] = await rows();
+    expect(a!.providerRetry).toEqual({ err: 'server_error', since: FAIL_AT, attempts: 1, nextAt: FAIL_AT + MIN, phase: 'retrying' });
+    expect('providerRetry' in b!).toBe(false);
+    expect(reviveFleetSession(JSON.parse(JSON.stringify(a)))!.providerRetry).toEqual(a!.providerRetry);
+    expect('providerRetry' in reviveFleetSession(JSON.parse(JSON.stringify(b)))!, 'an older frame').toBe(false);
+    expect('providerRetry' in reviveFleetSession({ ...JSON.parse(JSON.stringify(a)), providerRetry: { ...a!.providerRetry, phase: 'no-lane' } })!, 'a later phase').toBe(false);
+    seedLive(r.home, { status: 'busy' });
+    expect('providerRetry' in (await rows())[0]!).toBe(false);
+  });
 });
 
 describe('the arming, through the lane', () => {

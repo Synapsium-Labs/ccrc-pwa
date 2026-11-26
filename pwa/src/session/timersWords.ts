@@ -6,6 +6,7 @@
 // read, never an empty one, so the section says it could not read and never "No pending timers."; a row missing a field
 // keeps its other fields and says which one it could not read. A note is the session's own words: it is shown as data,
 // never as an instruction (I17), and only as text.
+import { OVERLORD_TIMERS_READS, TIMER_OWNERS, type OverlordTimersRead, type TimerOwner } from '../../../shared/continuity-timers';
 import type { RouteRefusal, TimerRefusal } from '../../../shared/refusal';
 import { ApiError } from '../lib/apiError';
 import { resetClock } from '../lib/clock';
@@ -23,6 +24,8 @@ export const TIMERS_WORDS = {
   cancel: 'Cancel',
   cancelling: 'Cancelling…',
   gone: 'That timer had already fired, been cancelled or gone.',
+  overlordOwner: "Overlord's",
+  overlordUnmeasured: "The Overlord's timers could not be read.",
 } as const;
 
 /** One pending timer as the section shows it. `null` is a field the answer did not carry readably. */
@@ -32,12 +35,18 @@ export interface TimerRow {
   readonly note: string | null;
   readonly runId: number | null;
   readonly programme: string | null;
+  /** Who holds it. The reader always sets it; absent (an older fixture) reads as the session's own. */
+  readonly owner?: TimerOwner;
 }
 
 /** The section's read: in flight, read (the rows, soonest first), or unread. */
 export type TimersRead =
   | { readonly kind: 'loading' }
-  | { readonly kind: 'listed'; readonly timers: readonly TimerRow[] }
+  | {
+    readonly kind: 'listed'; readonly timers: readonly TimerRow[];
+    /** Whether the answer counts the Overlord's timers; absent when the server did not say (an older server) or said a word outside the list. */
+    readonly overlordTimers?: OverlordTimersRead;
+  }
   | { readonly kind: 'unread' };
 
 const intOrNull = (v: unknown): number | null => (Number.isSafeInteger(v) ? (v as number) : null);
@@ -47,12 +56,17 @@ const intOrNull = (v: unknown): number | null => (Number.isSafeInteger(v) ? (v a
 const instantOrNull = (v: unknown): number | null => (isNum(v) && !Number.isNaN(new Date(v).getTime()) ? v : null);
 const textOrNull = (v: unknown): string | null => (typeof v === 'string' ? v : null);
 
+/** An owner word outside `TIMER_OWNERS`, or none, is the session's own: the older answer carried no owner. */
+const ownerOf = (v: unknown): TimerOwner => ((TIMER_OWNERS as readonly unknown[]).includes(v) ? (v as TimerOwner) : 'session');
+const overlordTimersOf = (v: unknown): OverlordTimersRead | undefined =>
+  (OVERLORD_TIMERS_READS as readonly unknown[]).includes(v) ? (v as OverlordTimersRead) : undefined;
+
 /** One row of the answer, field by field: whatever is not there, or not of its type, reads `null`. */
 function timerRowOf(v: unknown): TimerRow {
   const r = isRecord(v) ? v : {};
   return {
     id: intOrNull(r.id), dueAt: instantOrNull(r.dueAt), note: textOrNull(r.note),
-    runId: intOrNull(r.runId), programme: textOrNull(r.programme),
+    runId: intOrNull(r.runId), programme: textOrNull(r.programme), owner: ownerOf(r.owner),
   };
 }
 
@@ -62,7 +76,11 @@ export function readTimers(body: unknown): TimersRead {
   if (!isRecord(body) || !Array.isArray(body.timers)) return { kind: 'unread' };
   const rows = body.timers.map(timerRowOf);
   const key = (t: TimerRow): number => t.dueAt ?? Number.POSITIVE_INFINITY;
-  return { kind: 'listed', timers: [...rows].sort((a, b) => key(a) - key(b)) };
+  const overlordTimers = overlordTimersOf(body.overlordTimers);
+  return {
+    kind: 'listed', timers: [...rows].sort((a, b) => key(a) - key(b)),
+    ...(overlordTimers === undefined ? {} : { overlordTimers }),
+  };
 }
 
 /** How long until `ms` from now, in the words a line uses: `in 4 min`, `in 2 h 5 min`, `in 3 d 4 h`. Under a minute is

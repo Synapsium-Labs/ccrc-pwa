@@ -2798,7 +2798,8 @@ declares `fiveWindowMinutes: 0` is scored on `seven` alone). `_ws_least_loaded` 
 score, and falls back only when nothing was scored: to the first eligible account the roster says can report
 (`telemetry: "anthropic"`), then to the first eligible account at all, and — only when the health probe has
 condemned every eligible lane — to the first auth-dead one. `_swap_target` ranks an unscored candidate at
-`100`, below every scored one, and an auth-dead one at `101`, below that. So an account nobody has heard from
+`100`, below every scored one, a lane whose provider is failing (`~/.cc-sessions/<id>-provfail`, below) at `101`, and an
+auth-dead one at `102`, below that. So an account nobody has heard from
 in a week takes work only when nothing measured can, and the server's `projectHome` forecasts the same
 tiers (with one difference: it scores a `telemetry: "codex"` lane, which ccd's placement leaves out of its
 measured tier). The accounts screen's "last reported *age*" line still tells you which case a pick was, and
@@ -2819,7 +2820,12 @@ operator intent: `touch`/`rm` by hand, or `ccrc account disable --id <id>` / `en
 the placement lock — and `disable` refuses to switch off the last placeable home-able lane
 (`last-enabled-home`); `ccrc account add` and `declare` write it for every lane they create. A dead
 credential is a different file, `~/.cc-sessions/<id>-authdead`, written by the health probe or by a rescue
-off a 401; it costs a lane preference, never eligibility, and `_account_ok` never reads it. The probe is
+off a 401; it costs a lane preference, never eligibility, and `_account_ok` never reads it. A lane whose provider answers
+turns with errors is a third file, `~/.cc-sessions/<id>-provfail` (`"<epoch> <word>"`), written once a minute by the fleet
+limit watchdog's pass when three consecutive provider failures of one session, or a fresh owed one of each of two, stand on
+that lane with no newer good Stop there. It ends at a newer good Stop and means nothing 30 minutes after it was written. An
+automatic move does not return a session to a home that is marked and ranks a marked lane behind every other but an auth-dead
+one, never ineligible; `ccd swap`, `ccd swap-self` and `ccd prefer` never read it. The probe is
 described under "Account health and the telemetry keepalive" below; `ccrc account check` is how you measure a
 `login` lane.
 
@@ -6294,6 +6300,17 @@ one for 10 minutes; the standing outages are kept in
 `~/.ccrc/provider-outages.json`, so a restart repeats no notice. It ships armed
 and has no marker of its own: `stall-watch-disabled`, a level of Off or Log only
 chosen in Settings, and `mail-disabled` each stop it.
+
+While a session owes a retry the console says so (`FleetSession.providerRetry`,
+optional; computed by the same pass, off the ladder's own schedule, and left out
+of a row whose turn runs now): `Provider overloaded, retrying 14:52` or `Provider
+error, retrying 14:52` by the token, in the viewer's own time, `retrying now` past
+the due time, and `retry waiting`, with no time, while a question, a dialog, a
+usage limit or a nudge the mail lane has not typed (unsent text in the box) holds
+it. The words (`pwa/src/fleet/providerRetryWords.ts`) take the place of the row's
+and the session header's status word, of the `stalled` marker, and of `turn
+failed` and `quiet` on a run; a row that waits on you keeps its word, and its
+header says both.
 
 The `orphaned:` and `failed:` mails are class `self-wake`: recorded, never
 pushed, and they move neither the quiet clock nor the episode. With a current

@@ -180,6 +180,7 @@ import {
 import { planStorePort } from './planStore.js';
 import { planFactsOf } from './planRunFacts.js';
 import { settleAckedOperatorNudge } from '../operatorModel/nudgeLane.js';
+import { OVERLORD_IDENTITY } from '../roleOf.js';
 
 /** The approval request's id shapes (plan Task 16): a registry id as `ccrc-api`'s `SAFE_RE` admits it, a lowercase
  *  sha256, and the hook's 128-bit nonce. */
@@ -1085,6 +1086,11 @@ export function registerCoordRoutes(
     //
     // Raw session-id addressing is untouched and stays the ad-hoc lane: a role
     // follows the chair, a session id names a session.
+    // The Overlord's identity word is reserved (Overlord W1, the Overlord's timers, question 4): only the timer lane writes
+    // mail to it, so a session's mail to it is refused by rule, before the registry is asked, whatever row exists.
+    if (toId === OVERLORD_IDENTITY) {
+      return refuse(reply, 'unknown-recipient', { fromId, fromUuid, toId, kind, subject, runId }, "the Overlord's role takes no mail in W1");
+    }
     if (toId !== 'coordinator' && toId !== 'worker' && !registry.some((r) => r.id === toId)) {
       if (names.includes(`${toId}.uuid`)) {
         return refuse(reply, 'registry-unmeasurable', { fromId, fromUuid, toId, kind, subject, runId },
