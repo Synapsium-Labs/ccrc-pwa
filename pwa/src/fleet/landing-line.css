@@ -5,7 +5,9 @@
    themselves (@ccrc/ui's Button). */
 .landing-line {
   display: grid;
-  gap: var(--sp-1);
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-1) var(--sp-2);
   min-width: 0;
   margin: 0;
   padding: var(--sp-2);
@@ -13,13 +15,20 @@
   color: var(--ink-primary);
   background: var(--bg-surface);
 }
-.landing-line-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--sp-1) var(--sp-2);
+/* Section 11: in the document the status and the stale sentence come before the pause button. The grid puts the button
+   on the title row, so it keeps its look; every other child spans the block, in document order below that row. */
+.landing-line > * {
+  grid-column: 1 / -1;
   min-width: 0;
+}
+.landing-line > .landing-line-title {
+  grid-column: 1;
+  grid-row: 1;
+}
+.landing-line > .landing-line-pause {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
 }
 .landing-line-title {
   margin: 0;

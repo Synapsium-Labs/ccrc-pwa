@@ -163,15 +163,25 @@ for (const skin of [REFINED, INSTRUMENT]) {
             expect(m.cardOverflow, 'nothing in the card runs sideways').toBeLessThanOrEqual(1);
             expect(m.pageX, 'no sideways page scroll').toBeLessThanOrEqual(0);
 
-            // Pause: one POST, then the next read is paused, and only then does the button offer Resume.
+            // Pause: one POST whose answer says paused while the re-read after it still reads running (fix round 1, F4), so
+            // the label must stay `Pause line` (row M8); only a read that says paused makes it offer Resume.
             c.next = () => ({ status: 200, body: { ok: true, project: 'project-a', operatorPaused: true, changed: true, seq: 4 } });
-            c.answers['project-a'] = () => line('project-a', FIVE(), true);
+            const reread = page.waitForResponse((r) => r.request().method() === 'GET' && r.url().includes('project=project-a') && c.posts.length === 1);
             await button(a, 'Pause line for project-a').click();
-            await button(a, 'Resume line for project-a').waitFor({ timeout: 10_000 });
+            await reread;
+            await button(a, 'Pause line for project-a').waitFor({ timeout: 10_000 });
             expect(c.posts).toEqual([{ path: '/api/landing/pause', body: { project: 'project-a', paused: true } }]);
+            expect(await button(a, 'Resume line for project-a').count(), 'the answer alone flips nothing').toBe(0);
+            c.answers['project-a'] = () => line('project-a', FIVE(), true);
+            await expect.poll(async () => {
+              await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+              return button(a, 'Resume line for project-a').count();
+            }, { timeout: 15_000 }).toBe(1);
             expect(await a.getByRole('status').textContent()).toBe('Paused by you. Nothing lands.');
-            c.answers['project-a'] = () => line('project-a', FIVE());
-            c.next = () => ({ status: 200, body: { ok: true, project: 'project-a', operatorPaused: false, changed: true, seq: 5 } });
+            c.next = () => {
+              c.answers['project-a'] = () => line('project-a', FIVE());
+              return { status: 200, body: { ok: true, project: 'project-a', operatorPaused: false, changed: true, seq: 5 } };
+            };
             await button(a, 'Resume line for project-a').click();
             await button(a, 'Pause line for project-a').waitFor({ timeout: 10_000 });
 
@@ -217,13 +227,14 @@ for (const skin of [REFINED, INSTRUMENT]) {
             const dialog = page.getByRole('dialog', { name: 'Withdraw #104?' });
             await dialog.waitFor();
             c.next = () => {
-              c.answers['project-a'] = () => line('project-a', FIVE().map((e) => (e.pr === 104 ? { ...e, pinnedAt: 7777 } : e)));
+              // Re-pinned, with a new dependant #111, so the sheet's adoption of the re-read shows (fix round 1, F6).
+              c.answers['project-a'] = () => line('project-a', [...FIVE().map((e) => (e.pr === 104 ? { ...e, pinnedAt: 7777 } : e)), entry('project-a', 111, { afterIds: [1004] })]);
               return { status: 409, body: { ok: false, error: 'landing-entry-moved' } };
             };
             await button(dialog, 'Withdraw #104').click();
             await dialog.getByRole('alert').getByText('The server\'s record of that entry does not match what this screen read', { exact: false }).waitFor();
-            // The re-read lands (the sheet adopts it in the open), then the confirm sends its pin time.
-            await page.waitForTimeout(500);
+            // The sheet adopts the re-read in the open, then the confirm sends its pin time.
+            await dialog.getByText('these open entries wait on it directly: #107, #111.', { exact: false }).waitFor({ timeout: 10_000 });
             c.next = () => ({ status: 200, body: { ok: true, entry: { ...entry('project-a', 104), state: 'withdrawn' }, previous: entry('project-a', 104), changed: true, seq: 7, notices: [] } });
             await button(dialog, 'Withdraw #104').click();
             await dialog.getByText('Withdrawn: #104 is out of the line.', { exact: false }).waitFor();

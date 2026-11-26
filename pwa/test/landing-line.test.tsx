@@ -1,6 +1,7 @@
 // Landing order wave 5k, Task 7: `LandingLine` (`fleet/LandingLine.tsx`, L4), one project's line on its card: the block,
-// the pause control, the sheet that outlives the block (F1), and where focus goes (m7, R6). The doors are fakes passed as
-// props; the card's section is a stand-in that holds the fallback ref.
+// the pause control, the sheet that outlives the block (F1), the re-read on each answer of the withdraw door (fix round 1,
+// F1), and where focus goes (m7, R6). The doors are fakes passed as props; the card's section is a stand-in that holds the
+// fallback ref.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { useRef } from 'react';
@@ -30,6 +31,10 @@ const region = (): HTMLElement => screen.getByRole('region', { name: `Landing li
 const pauseButton = (label: string): HTMLElement => screen.getByRole('button', { name: `${label} for ${P}` });
 const withdrawButton = (pr: number): HTMLElement => screen.getByRole('button', { name: `Withdraw #${pr} from ${P}'s landing line` });
 const never = (): Promise<never> => new Promise(() => {});
+/** `lineView()` after a read without #104's row. */
+const withoutRow = lineView({ entries: [e(101, { fixesMain: true }), e(102, { state: 'ejected', ejectionKind: 'new-head' }), e(107, { afterIds: [1003] }), e(109, { state: 'unknown' })] },
+  { order: [E101, e(107, { afterIds: [1003] })] });
+const confirm104 = (): void => { fireEvent.click(screen.getByRole('button', { name: 'Withdraw #104' })); };
 
 describe('the block', () => {
   it('none renders nothing', () => {
@@ -167,8 +172,6 @@ describe('the sheet outlives the line (F1)', () => {
 });
 
 describe('focus on close (m7, R6)', () => {
-  const withoutRow = lineView({ entries: [e(101, { fixesMain: true }), e(102, { state: 'ejected', ejectionKind: 'new-head' }), e(107, { afterIds: [1003] }), e(109, { state: 'unknown' })] },
-    { order: [E101, e(107, { afterIds: [1003] })] });
   const open = (pr: number): void => { withdrawButton(pr).focus(); fireEvent.click(withdrawButton(pr)); };
   const cancel = async (): Promise<void> => { fireEvent.click(screen.getByRole('button', { name: 'Cancel' })); await flush(); };
 
@@ -216,6 +219,86 @@ describe('focus on close (m7, R6)', () => {
   });
 });
 
+describe('the re-read on each answer of the withdraw door is the line\'s (fix round 1, F1)', () => {
+  const open = (pr: number): void => { withdrawButton(pr).focus(); fireEvent.click(withdrawButton(pr)); };
+
+  it('with the sheet open: one re-read on the answer, and one on a refusal', async () => {
+    const withdraw = vi.fn<LandingWithdrawer>()
+      .mockImplementationOnce(() => Promise.resolve(withdrawn(E104)))
+      .mockImplementationOnce(() => Promise.reject(new ApiError(409, { ok: false, error: 'landing-entry-moved' })));
+    const onReload = vi.fn();
+    render(<Card state={stateOf(lineView())} withdraw={withdraw} onReload={onReload} />);
+    open(104);
+    confirm104();
+    await flush();
+    expect(onReload).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    await flush();
+    open(104);
+    confirm104();
+    await flush();
+    expect(screen.getByRole('alert').textContent).toBe(LANDING_ROUTE_WORDS['landing-entry-moved'].text);
+    expect(onReload).toHaveBeenCalledTimes(2);
+  });
+
+  it('closed by Cancel while the door is in flight, then its answer: one re-read, nothing more drawn, and focus from the removed row to the pause button', async () => {
+    const d = deferred<Awaited<ReturnType<LandingWithdrawer>>>();
+    const onReload = vi.fn();
+    const { rerender } = render(<Card state={stateOf(lineView())} withdraw={() => d.promise} onReload={onReload} />);
+    open(104);
+    confirm104();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await flush();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(withdrawButton(104));
+    await act(async () => { d.resolve(withdrawn(E104)); });
+    await flush();
+    expect(onReload).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByTestId('card').textContent).not.toContain('Withdrawn:');
+    rerender(<Card state={stateOf(withoutRow)} withdraw={() => d.promise} onReload={onReload} />);
+    await flush();
+    expect(document.activeElement).toBe(pauseButton('Pause line'));
+  });
+
+  it('closed by Escape while the door is in flight, then a refusal: one re-read, no alert, no sheet', async () => {
+    const d = deferred<Awaited<ReturnType<LandingWithdrawer>>>();
+    const onReload = vi.fn();
+    render(<Card state={stateOf(lineView())} withdraw={() => d.promise} onReload={onReload} />);
+    open(104);
+    confirm104();
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    await flush();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await act(async () => { d.reject(new ApiError(409, { ok: false, error: 'landing-entry-moved' })); });
+    await flush();
+    expect(onReload).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('a sheet opened again before the earlier answer lands shows nothing of it, and its Cancel is a cancel', async () => {
+    const d = deferred<Awaited<ReturnType<LandingWithdrawer>>>();
+    const withdraw = vi.fn<LandingWithdrawer>().mockImplementationOnce(() => d.promise).mockImplementation(never);
+    const onReload = vi.fn();
+    render(<Card state={stateOf(lineView())} withdraw={withdraw} onReload={onReload} />);
+    open(104);
+    confirm104();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await flush();
+    open(104);
+    await act(async () => { d.resolve(withdrawn(E104)); });
+    await flush();
+    expect(onReload).toHaveBeenCalledTimes(1);
+    const dialog = screen.getByRole('dialog', { name: 'Withdraw #104?' });
+    expect(dialog.textContent).not.toContain('Withdrawn:');
+    expect(within(dialog).getByRole('button', { name: 'Withdraw #104' })).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await flush();
+    expect(document.activeElement).toBe(withdrawButton(104));
+  });
+});
+
 describe('the block removes itself (R6)', () => {
   it('Resume on a line with no entries, then an empty read: focus on the card', async () => {
     const pause = vi.fn<LandingPauser>(() => Promise.resolve({ ok: true, project: P, operatorPaused: false, changed: true, seq: 2 }));
@@ -224,6 +307,14 @@ describe('the block removes itself (R6)', () => {
     fireEvent.click(pauseButton('Resume line'));
     await flush();
     rerender(<Card state={NONE} pause={pause} onReload={() => {}} />);
+    await flush();
+    expect(document.activeElement).toBe(screen.getByTestId('card'));
+  });
+  it('a blur to nowhere (the window lost focus) keeps the control, so the empty read still puts focus on the card (fix round 1, F3)', async () => {
+    const { rerender } = render(<Card state={stateOf(pausedEmpty())} onReload={() => {}} />);
+    pauseButton('Resume line').focus();
+    fireEvent.blur(pauseButton('Resume line'), { relatedTarget: null });
+    rerender(<Card state={NONE} onReload={() => {}} />);
     await flush();
     expect(document.activeElement).toBe(screen.getByTestId('card'));
   });
@@ -239,6 +330,24 @@ describe('the block removes itself (R6)', () => {
 });
 
 describe('accessibility', () => {
+  it('in the document: the title, the status, the stale sentence, the pause button, then the alert and the rows (section 11; fix round 1, F2)', async () => {
+    const prev = stateOf(lineView());
+    const stale: LandingCardState = prev.kind === 'line'
+      ? { ...prev, stale: { text: LANDING_ROUTE_WORDS['landing-fenced'].text, scope: 'box', outcomeUnknown: false } } : prev;
+    const pause = vi.fn<LandingPauser>(() => Promise.reject(new ApiError(404, { ok: false, error: 'landing-project-unknown' })));
+    render(<Card state={stale} pause={pause} onReload={() => {}} />);
+    fireEvent.click(pauseButton('Pause line'));
+    await flush();
+    const kinds = [...region().children].map((el) => (
+      el.classList.contains('landing-line-title') ? 'title'
+        : el.getAttribute('role') === 'status' ? 'status'
+          : el.classList.contains('landing-line-stale') ? 'stale'
+            : el === pauseButton('Pause line') ? 'pause'
+              : el.getAttribute('role') === 'alert' ? 'alert'
+                : el.classList.contains('landing-line-rows') ? 'rows' : el.outerHTML));
+    expect(kinds).toEqual(['title', 'status', 'stale', 'pause', 'alert', 'rows']);
+  });
+
   it('the region, the status, every control\'s name, and the sheet is a dialog named by its title', () => {
     render(<Card state={stateOf(lineView())} withdraw={never} />);
     expect(region().getAttribute('aria-label')).toBe(`Landing line of ${P}`);

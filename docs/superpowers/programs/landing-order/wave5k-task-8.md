@@ -57,8 +57,9 @@ No sentence on screen differs from the plan's tables.
 
 Two layout details differ from the sketches:
 
-- The pause button sits on the title row, which the sketch also shows. In the document the status follows that row,
-  as section 11 says.
+- The pause button sits on the title row, which the sketch also shows. In the document it comes after the status and
+  the stale sentence, as section 11 says: the stylesheet places it on the title row. (Before fix round 1 the button was
+  in the document beside the title, before the status; review run 3946's F2.)
 - The sketch draws `Withdraw…` at a row's right on its own line. At phone width the role text wraps under the PR, with
   `Withdraw…` on the PR's line.
 
@@ -805,7 +806,7 @@ The two reds:
   - I claimed the file (claim 7320) and declared the attribute as one more head-only difference, like the test's others.
   - It is counted once per card before it is stripped: three cards' views hold five cards each, and Instrument's holds none.
   - Its own commit is `test(landing): the older-server baseline declares the card's focusable section (wave 5k)`.
-  - This is a departure, `older-server-card-tabindex`: the plan's list of existing tests to touch does not name this file, and the change is a declared difference, not a count.
+  - This is a departure, `older-server-card-tabindex` (D-9130, issued in fix round 1): the plan's list of existing tests to touch does not name this file, and the change is a declared difference, not a count.
 - **`command-registry`, "the palette's words have one home", is a load timeout:** `Test timed out in 5000ms`. The same run also reported two `Worker forks emitted error` lines.
 
 Both files re-run alone are green: 2 files, 29 cases.

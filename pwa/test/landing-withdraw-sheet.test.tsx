@@ -1,5 +1,6 @@
 // Landing order wave 5k, Task 7: `LandingWithdrawSheet` (`fleet/LandingWithdrawSheet.tsx`, L4): its words, the pin time it
-// sends, its snapshot (R3), its answer and its refusals. The withdraw door is a fake passed as a prop.
+// sends, its snapshot (R3), its answer and its refusals. The withdraw door is a fake passed as a prop. The re-read on each
+// answer is `LandingLine`'s act since fix round 1 (F1), so it is pinned in `landing-line.test.tsx`, not here.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { LandingLineView } from '../../shared/landingLine';
@@ -13,8 +14,8 @@ import { E101, E104, E107, E109, P, e, lineView, onlyView, withdrawn } from './l
 afterEach(cleanup);
 const flush = async (): Promise<void> => { await act(async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); }); };
 
-const sheet = (view: LandingLineView | null, entryId: number, pr: number, withdraw: LandingWithdrawer, onReload = vi.fn(), onClose = vi.fn()) =>
-  <LandingWithdrawSheet project={P} view={view} entryId={entryId} pr={pr} withdraw={withdraw} onReload={onReload} onClose={onClose} />;
+const sheet = (view: LandingLineView | null, entryId: number, pr: number, withdraw: LandingWithdrawer, onClose = vi.fn()) =>
+  <LandingWithdrawSheet project={P} view={view} entryId={entryId} pr={pr} withdraw={withdraw} onClose={onClose} />;
 const dialog = (pr = 104): HTMLElement => screen.getByRole('dialog', { name: `Withdraw #${pr}?` });
 const confirmButton = (pr = 104): HTMLButtonElement => within(dialog(pr)).getByRole('button', { name: `Withdraw #${pr}` }) as HTMLButtonElement;
 const refuse = (status: number, error: string, extra: Record<string, unknown> = {}) => Promise.reject(new ApiError(status, { ok: false, error, ...extra }));
@@ -39,6 +40,28 @@ describe('the confirm phase', () => {
     fireEvent.click(confirmButton());
     expect(withdraw.mock.calls).toEqual([[P, 104, 1104]]);
     expect(within(dialog()).getByRole('button', { name: 'Withdrawing…' })).toBeTruthy();
+  });
+
+  it('a second tap while the first call is in flight sends nothing (fix round 1, F3)', () => {
+    const withdraw = vi.fn<LandingWithdrawer>(() => new Promise(() => {}));
+    render(sheet(lineView(), 1004, 104, withdraw));
+    fireEvent.click(confirmButton());
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Withdrawing…' }));
+    expect(withdraw).toHaveBeenCalledTimes(1);
+  });
+
+  it('Cancel closes as cancel, and Done closes as done (fix round 1)', async () => {
+    const onClose = vi.fn();
+    const { unmount } = render(sheet(lineView(), 1004, 104, () => new Promise(() => {}), onClose));
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Cancel' }));
+    expect(onClose.mock.calls).toEqual([['cancel']]);
+    unmount();
+    const onDone = vi.fn();
+    render(sheet(lineView(), 1004, 104, () => Promise.resolve(withdrawn(E104)), onDone));
+    fireEvent.click(confirmButton());
+    await flush();
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Done' }));
+    expect(onDone.mock.calls).toEqual([['done']]);
   });
 
   it('a run-less entry with nothing waiting on it', () => {
@@ -70,14 +93,13 @@ describe('the snapshot (R3)', () => {
 });
 
 describe('the answer', () => {
-  it('Withdrawn, one line per notice, the line about coming back, Done, and one re-read', async () => {
-    const onReload = vi.fn();
+  it('Withdrawn, one line per notice, the line about coming back, and Done', async () => {
     const withdraw = vi.fn<LandingWithdrawer>(() => Promise.resolve(withdrawn(E104, [
       { word: 'landing-withdrawn', entryId: 1004, kind: 'queued', toId: 'lane-a-project-a', mailId: 1, deliveryId: 2 },
       { word: 'landing-held', entryId: 1007, kind: 'queued', toId: 'lane-b-project-a', mailId: 3, deliveryId: 4 },
       { word: 'landing-held', entryId: 1099, kind: 'unreadable' },
     ])));
-    render(sheet(lineView(), 1004, 104, withdraw, onReload));
+    render(sheet(lineView(), 1004, 104, withdraw));
     fireEvent.click(confirmButton());
     await flush();
     const d = dialog();
@@ -89,7 +111,6 @@ describe('the answer', () => {
     ]);
     expect(d.textContent).toContain('It comes back if its run is pinned at merging again.');
     expect(within(d).getByRole('button', { name: 'Done' })).toBeTruthy();
-    expect(onReload).toHaveBeenCalledTimes(1);
   });
 
   it('an answer whose entry has no run says it cannot come back', async () => {
@@ -102,15 +123,13 @@ describe('the answer', () => {
 });
 
 describe('the refusals', () => {
-  it('landing-entry-moved: stays in confirm, says so, re-reads, adopts the next read with the sentence above, and sends its pin time', async () => {
-    const onReload = vi.fn();
+  it('landing-entry-moved: stays in confirm, says so, adopts the next read with the sentence above, and sends its pin time', async () => {
     const withdraw = vi.fn<LandingWithdrawer>(() => refuse(409, 'landing-entry-moved'));
-    const { rerender } = render(sheet(lineView(), 1004, 104, withdraw, onReload));
+    const { rerender } = render(sheet(lineView(), 1004, 104, withdraw));
     fireEvent.click(confirmButton());
     await flush();
     expect(within(dialog()).getByRole('alert').textContent).toBe(LANDING_ROUTE_WORDS['landing-entry-moved'].text);
-    expect(onReload).toHaveBeenCalledTimes(1);
-    rerender(sheet(moved(), 1004, 104, withdraw, onReload));
+    rerender(sheet(moved(), 1004, 104, withdraw));
     await flush();
     expect(dialog().textContent).toContain('wait on it directly: #107, #111.');
     expect(within(dialog()).getByRole('alert').textContent).toBe(LANDING_ROUTE_WORDS['landing-entry-moved'].text);

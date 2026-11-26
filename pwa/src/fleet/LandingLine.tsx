@@ -2,14 +2,19 @@
 // (`landingLineView.ts`) and sends the operator's taps; it decides nothing about the line (the plan's section 4.5).
 //
 // - `none` draws no block; `line` draws a named region: the title, the status in `role="status"`, the stale sentence when
-//   the last read failed, the pause control, and one row per open entry, each with `Withdraw…` (R1).
+//   the last read failed, the pause control, and one row per open entry, each with `Withdraw…` (R1). That is also the
+//   document order (section 11); the stylesheet places the pause button on the title row, and it is the only control
+//   there, so the tab order still follows what is seen.
 // - The pause label comes only from the read: a tap shows the busy label, then re-reads; the label changes when a read
 //   does (row M8). The button is never disabled while busy, so focus stays on it; a second tap sends nothing.
 // - The sheet outlives the block (F1): while a sheet is open it is drawn whatever the state, so a withdrawal of the
 //   line's only entry, or a refusal on a line the re-read empties, keeps its sentence until the operator closes it.
+// - The re-read on every answer of the withdraw door is this component's act (fix round 1, F1): it stays mounted when
+//   the sheet is closed while the call is in flight, so it re-reads once per answer, the sheet open or not.
 // - Focus (m7, R6): after `Done` the pause button, else the card; after `Cancel` the row's `Withdraw…`, else the pause
-//   button, else the card. When the block removes itself while focus is inside it (Resume on a line with no entries),
-//   the card. Each is moved in an effect, after the sheet primitive has given the focus back to its opener.
+//   button, else the card. When a read removes the control that held focus (the row's `Withdraw…` after a sheet closed
+//   mid-flight, or the pause button when the block removes itself) and focus has fallen to the page: the pause button,
+//   else the card. Each is moved in an effect, after the sheet primitive has given the focus back to its opener.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode, RefObject } from 'react';
 import { Button, Chip } from '@ccrc/ui';
@@ -50,11 +55,8 @@ export function LandingLine({
   const pauseRef = useRef<HTMLButtonElement>(null);
   const rowButtons = useRef(new Map<number, HTMLButtonElement>());
   const sectionRef = useRef<HTMLElement>(null);
-  /** True while focus is inside the block (R6). */
-  const focusInside = useRef(false);
-  /** Whether the open sheet's withdrawal was answered, read when it closes. */
-  const answered = useRef(false);
-  const drawn = state.kind === 'line';
+  /** The control in the block that last held focus, until focus moves to an element outside the block (R6). */
+  const lastFocused = useRef<HTMLElement | null>(null);
 
   // Focus after the sheet closes (m7, R6): after the sheet primitive's own give-back, which a re-read may have removed.
   useEffect(() => {
@@ -65,16 +67,16 @@ export function LandingLine({
     firstInDocument(order)?.focus({ preventScroll: true });
   }, [closed, focusFallback]);
 
-  // The block removed itself while focus was inside it and no sheet is open (R6): focus goes to the card.
-  const wasDrawn = useRef(drawn);
+  // A read removed the control that held focus, no sheet is open, and focus fell to the page (R6; fix round 1, F1): the
+  // pause button, else the card.
   useEffect(() => {
+    const held = lastFocused.current;
+    if (sheet !== null || held === null || held.isConnected) return;
+    lastFocused.current = null;
     const active = document.activeElement;
-    if (wasDrawn.current && !drawn && sheet === null && focusInside.current && (active === null || active === document.body)) {
-      focusFallback.current?.focus({ preventScroll: true });
-    }
-    if (!drawn) focusInside.current = false;
-    wasDrawn.current = drawn;
-  }, [drawn, sheet, focusFallback]);
+    if (active !== null && active !== document.body) return;
+    firstInDocument([pauseRef.current, focusFallback.current])?.focus({ preventScroll: true });
+  }, [state, sheet, focusFallback]);
 
   const tapPause = (card: LandingLineCard): void => {
     if (busy) return;
@@ -95,17 +97,19 @@ export function LandingLine({
       },
     );
   };
-  const openSheet = (entryId: number, pr: number): void => {
-    answered.current = false;
-    setSheet({ entryId, pr });
-  };
-  const closeSheet = (): void => {
+  const openSheet = (entryId: number, pr: number): void => setSheet({ entryId, pr });
+  const closeSheet = (after: 'done' | 'cancel'): void => {
     if (sheet === null) return;
-    setClosed((c) => ({ n: (c?.n ?? 0) + 1, after: answered.current ? 'done' : 'cancel', entryId: sheet.entryId }));
+    setClosed((c) => ({ n: (c?.n ?? 0) + 1, after, entryId: sheet.entryId }));
     setSheet(null);
   };
-  const sheetWithdraw: LandingWithdrawer = (p, pr, pinnedAt) =>
-    withdraw(p, pr, pinnedAt).then((a) => { answered.current = true; return a; });
+  /** The sheet's call: one re-read per answer, refusal or not, whether the sheet is still open (F1); none once this
+   *  component has gone (the generation ref, as for the pause tap). */
+  const sheetWithdraw: LandingWithdrawer = (p, pr, pinnedAt) => {
+    const mine = gen.current;
+    const reread = (): void => { if (gen.current === mine) onReload?.(); };
+    return withdraw(p, pr, pinnedAt).then((a) => { reread(); return a; }, (err: unknown) => { reread(); throw err; });
+  };
 
   const block = state.kind === 'line' ? (() => {
     const { card, stale } = state;
@@ -115,20 +119,27 @@ export function LandingLine({
         ref={sectionRef}
         className="landing-line"
         aria-label={`Landing line of ${project}`}
-        onFocus={() => { focusInside.current = true; }}
+        onFocus={(e) => { if (e.target instanceof HTMLElement) lastFocused.current = e.target; }}
         onBlur={(e) => {
+          // Only a move to an element outside the block forgets the control: a blur to nowhere (the window lost focus,
+          // or the control was removed) keeps it, so the effect above can still put focus back.
           const next = e.relatedTarget;
-          if (next instanceof Node && !(sectionRef.current?.contains(next) ?? false)) focusInside.current = false;
+          if (next instanceof Node && !(sectionRef.current?.contains(next) ?? false)) lastFocused.current = null;
         }}
       >
-        <div className="landing-line-head">
-          <p className="landing-line-title">{LINE_TITLE}</p>
-          <Button ref={pauseRef} variant="quiet" size="fit" aria-label={PAUSE_NAME(label, project)} onClick={() => tapPause(card)}>
-            {label}
-          </Button>
-        </div>
+        <p className="landing-line-title">{LINE_TITLE}</p>
         <p className="landing-line-status" role="status" aria-live="polite">{card.statusText}</p>
         {stale !== null && <p className="landing-line-stale">{STALE_PREFIX + stale.text}</p>}
+        <Button
+          ref={pauseRef}
+          className="landing-line-pause"
+          variant="quiet"
+          size="fit"
+          aria-label={PAUSE_NAME(label, project)}
+          onClick={() => tapPause(card)}
+        >
+          {label}
+        </Button>
         {error !== null && <p className="landing-line-error" role="alert">{error}</p>}
         {card.rows.length > 0 && (
           <ul className="landing-line-rows">
@@ -169,7 +180,6 @@ export function LandingLine({
           entryId={sheet.entryId}
           pr={sheet.pr}
           onClose={closeSheet}
-          onReload={() => onReload?.()}
           withdraw={sheetWithdraw}
         />
       )}

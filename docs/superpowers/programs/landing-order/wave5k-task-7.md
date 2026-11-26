@@ -38,7 +38,7 @@ Changed:
 
 `pwa/test/contrast.test.ts` lists the app's stylesheets as a closed literal (`APP_SHEETS`), which says a new sheet is "an
 architectural event worth a test edit". The plan's section 3 does not name that file. I claimed it and added one line for
-`src/fleet/landing-line.css`, with its reason. Slug: `landing-line-css-in-app-sheets`.
+`src/fleet/landing-line.css`, with its reason. Slug: `landing-line-css-in-app-sheets` (D-9129, issued in fix round 1).
 
 ## Existing tests that render the fleet cards (R10)
 
@@ -51,7 +51,7 @@ its part. The whole pwa suite's result is in Task 8's note.
 From `pwa/`, through `ccrc test`, all green:
 
 - the pwa typecheck;
-- `landing-line`, `landing-withdraw-sheet`, `landing-line-hold` and `project-card` (116);
+- `landing-line` (18), `landing-withdraw-sheet` (18), `landing-line-hold` (1) and `project-card` (116): 153 cases in all;
 - `line-props`, `programme-box-card`, `fleet-list-memo`, `accounts-one-poll` and `fleet-screen`;
 - `refusal-literal-ratchet`, `fleet-css`, `css-vars`, `utility-pairs`, `contrast`, `hover-states`, `focus-ring` and
   `design-system-boundary`.

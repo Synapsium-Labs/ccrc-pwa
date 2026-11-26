@@ -6,7 +6,13 @@
 // the next read whose identity differs from the snapshot's view (the hook gives a new object only when the line changed,
 // a re-pin included), or `null`, as its new snapshot, in the open, with the refusal's sentence kept above it. Confirm
 // sends the snapshot's pin time, never a clock value and never a later poll's.
-import { useEffect, useRef, useState } from 'react';
+//
+// THE RE-READ IS NOT THE SHEET'S (fix round 1, F1). The sheet may be closed while its call is in flight (Cancel, Escape
+// and the backdrop stay live), and a closed sheet is unmounted. So the re-read on every answer of the door, refusal or
+// not, is the line's act: `LandingLine` passes a withdrawer that re-reads once per answer, whether this sheet is still
+// open or not. This sheet's arms set only its own state, which React drops once it has unmounted; a sheet opened again
+// is a new instance, so an earlier answer shows nothing in it.
+import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, QC_ACTIONS, Sheet } from '@ccrc/ui';
 import type { LandingLineView, LandingWithdrawAnswer } from '../../../shared/landingLine';
@@ -24,7 +30,8 @@ export interface LandingWithdrawSheetProps {
   /** The line as now read, or `null` once the line has nothing to say (the entry has then gone). The sheet reads it only
    *  when it opens and after a refusal (R3). */
   project: string; view: LandingLineView | null; entryId: number; pr: number;
-  onClose: () => void; onReload: () => void; withdraw?: LandingWithdrawer;
+  /** `done` once the door has answered (the `Done` button, Escape or the backdrop in the done phase), else `cancel`. */
+  onClose: (after: 'done' | 'cancel') => void; withdraw?: LandingWithdrawer;
 }
 
 interface Snapshot { view: LandingLineView | null; preview: WithdrawPreview | null }
@@ -33,7 +40,7 @@ const snapshotOf = (view: LandingLineView | null, entryId: number): Snapshot =>
 type Phase = { kind: 'confirm' } | { kind: 'done'; answer: LandingWithdrawAnswer; preview: WithdrawPreview };
 
 export function LandingWithdrawSheet({
-  project, view, entryId, pr, onClose, onReload, withdraw = api.landingWithdraw,
+  project, view, entryId, pr, onClose, withdraw = api.landingWithdraw,
 }: LandingWithdrawSheetProps): ReactNode {
   const [snapshot, setSnapshot] = useState<Snapshot>(() => snapshotOf(view, entryId));
   const [phase, setPhase] = useState<Phase>({ kind: 'confirm' });
@@ -41,9 +48,6 @@ export function LandingWithdrawSheet({
   const [error, setError] = useState<string | null>(null);
   /** The plan's flag (R3), set by a refusal: the next read that differs from the snapshot's view, or `null`, becomes the snapshot. */
   const [awaitingRead, setAwaitingRead] = useState(false);
-  // `LiftCapSheet`'s generation guard: an answer that lands after the sheet has gone acts on nothing.
-  const gen = useRef(0);
-  useEffect(() => () => { gen.current += 1; }, []);
   useEffect(() => {
     if (!awaitingRead || (view !== null && view === snapshot.view)) return;
     setSnapshot(snapshotOf(view, entryId));
@@ -53,37 +57,33 @@ export function LandingWithdrawSheet({
   const preview = snapshot.preview;
   const confirm = (): void => {
     if (busy || preview === null) return;   // a second tap while the first is in flight sends nothing (focus stays)
-    const mine = gen.current;
     setBusy(true);
     setError(null);
     withdraw(project, preview.entry.pr, preview.entry.pinnedAt).then(
       (answer) => {
-        if (gen.current !== mine) return;
         setBusy(false);
         setPhase({ kind: 'done', answer, preview });
-        onReload();
       },
       (err: unknown) => {
-        if (gen.current !== mine) return;
         setBusy(false);
         setError(landingFailureOf(err, 'withdraw').text);
         setAwaitingRead(true);
-        onReload();
       },
     );
   };
+  const close = (): void => onClose(phase.kind === 'done' ? 'done' : 'cancel');
 
   const footer = phase.kind === 'done'
-    ? <div className={QC_ACTIONS}><Button variant="primary" onClick={onClose}>{SHEET_DONE_BUTTON}</Button></div>
+    ? <div className={QC_ACTIONS}><Button variant="primary" onClick={close}>{SHEET_DONE_BUTTON}</Button></div>
     : (
       <div className={QC_ACTIONS}>
         <Button variant="danger" disabled={preview === null} onClick={confirm}>{busy ? SHEET_CONFIRM_BUSY : SHEET_CONFIRM(pr)}</Button>
-        <Button variant="ghost" onClick={onClose}>{SHEET_CANCEL}</Button>
+        <Button variant="ghost" onClick={close}>{SHEET_CANCEL}</Button>
       </div>
     );
 
   return (
-    <Sheet open onClose={onClose} title={SHEET_TITLE(pr)} footer={footer}>
+    <Sheet open onClose={close} title={SHEET_TITLE(pr)} footer={footer}>
       <div className="landing-withdraw-sheet">
         {phase.kind === 'done' ? <DoneBody phase={phase} pr={pr} /> : (
           <>

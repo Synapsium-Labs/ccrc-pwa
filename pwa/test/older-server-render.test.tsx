@@ -9,8 +9,8 @@
 // amended), and the New project door on each fleet screen's runs line (add-project spec 2026-11-04 §2, as redrawn), which
 // the base predates, and the console's face straight after the fleet head's wordmark (the Overlord face plan, Task 8:
 // `FaceMark`, an `svg.chr.face-mark`, grouped with the wordmark in a `span.fleet-id` so it centres on the wordmark's
-// row), which the base predates too, and the project card section's `tabindex="-1"` (landing order wave 5k, Task 7: the
-// landing block's focus falls back to the card); nothing else is removed or rewritten. The file renders the world ONCE: React's
+// row), which the base predates too, and the project card section's `tabindex="-1"` (landing order wave 5k, Task 7,
+// D-9130: the landing block's focus falls back to the card); nothing else is removed or rewritten. The file renders the world ONCE: React's
 // `useId` counter is per module graph, so a second render, or a case before this one, numbers Instrument's tab ids
 // differently from the capture's single render.
 import { createHash } from 'node:crypto';
@@ -56,8 +56,9 @@ const FACE_MARK = /<svg class="chr face-mark"[^>]*>[\s\S]*?<\/svg>/g;
 /** The group the face shares with the wordmark on the fleet head; with the face removed it holds the base's wordmark alone. */
 const FACE_GROUP = /<span class="fleet-id">(<span class="wordmark">[^<]*<\/span>)<\/span>/g;
 const TITLE_DOOR = /<a [^>]*pg-title-door[^>]*>(<span class="pg-title">[^<]*<\/span>)<\/a>/g;
-/** The project card's section is focusable from script (landing order wave 5k, Task 7: the landing block's focus falls back
- *  to the card when the block has gone, R6), so it carries `tabindex="-1"`, which the base predates. Counted per card below. */
+/** The project card's section is focusable from script (landing order wave 5k, Task 7, D-9130: the landing block's focus
+ *  falls back to the card when the block has gone, R6), so it carries `tabindex="-1"`, which the base predates. Counted per
+ *  card below, then exactly that string is stripped. */
 const CARD_TABINDEX = '<section tabindex="-1" class="proj-card';
 const BASE_CARD = '<section class="proj-card';
 /** React's `useId` values, renumbered by first appearance. The ids' NUMBERS are the counter's position, not markup: a
