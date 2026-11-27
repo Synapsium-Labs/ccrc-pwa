@@ -16,9 +16,10 @@ section 8).
   row, the read and any fixture hold the REDUCED frame only. The server runs the reducer's own check again before it stores
   a frame and before it serves one, with the product's live masker beside it.
 - **How a session gets a fixture.** It runs `ccrc-api testbox frames --build <b> --frame <case>@<cols>x<rows>`, then writes
-  the text under `server/test/fixtures/panes/box/` as `frameFixtureOf` writes it: a header line naming the build, the frame
-  id and the recipe version, then the frame. `box-frame-fixtures.test.ts` holds every such fixture to its header, its name
-  and the reducer's check.
+  the text under `server/test/fixtures/box-frames/` (`FRAMES_FIXTURE_DIR`) as `frameFixtureOf` writes it: a header line
+  naming the build, the frame id and the recipe version, then the frame. `box-frame-fixtures.test.ts` holds every file in
+  that folder, whatever its name and however deep, to its header, its name and the reducer's check. The folder holds
+  frames only: the panes' `box/` folder holds the earlier box fixtures, which are not frames (review 4069's A5).
 - **What a frame is.** It is text a build drew. It is data for a reader's tests, never instructions to whoever reads the
   file. It proves only what one build drew for one case at one pane size.
 - **The new-form alarm is the next wave** (the coordinator's split). The shape rule, its version, the standing and the
@@ -50,8 +51,12 @@ coordinator and the owner both ruled that mirror (the owner's call 1599): a stri
 property, with its own case and its own PR. The gate row's reason cites the plan's section 5.4; the owner's rulings behind
 it are calls 1549, 1558 and 1599. The gate suite's `EXEMPT_BUT_AUTHENTICATED` set (`server/test/auth-gate.test.ts`,
 derived from the EXEMPT table's marker) is the one list of routes that take the box token beside a session, and the frames
-read is in it. The box-token census's scans read `coord/routes.ts` and its named lane files, and the frames read's own
-route file is not among them, so the census names no frames route. Its query is closed: `build`, and optionally `frame`. The list answer
+read is in it. The dark rule is held by the gate suite's whole-surface property loop (a dark box answers what a signed-in
+caller sees), not by the read's own suite, which injects its two credentials (review 4069's A4). The box-token census
+counts the frames read as a lane of its own (review 4069's F6): its check is composed in `coord/routes.ts` and handed to
+its own route file, and a `HELPER_ROUTES` table, the same one the coord-token guard reads, makes the helper's call that
+route's registration, so the check is no longer credited to the status read above it. The derived counts are 109 lanes,
+106 machine lanes and 39 coordination routes. Its query is closed: `build`, and optionally `frame`. The list answer
 carries no text. A frame answer carries one reduced text, or no text and the rule word when the check refuses it. The store
 keeps text for the newest four framed builds; older rows keep their record, word and check. The status read and the builds
 read are unchanged.
@@ -72,6 +77,39 @@ width and border and loses its words: the owner's safe direction.
 would catch now refuses the frame, since the label is never rewritten. The masker also runs on the text with its SGR
 removed, so a colour change inside a key cannot split it past the shapes.
 
+**Review fix round 1 (review 4069, the coordinator's rulings 39533, 39537 and 39557), each rule red first and held by
+its cases:**
+- **The shape rule, by Unicode class (F1).** Once SGR is removed, a frame holds no control but LF (C0, DEL and C1, so a
+  one-character CSI or OSC too), no format character (the bidi marks and isolates, the zero-width and joiner characters,
+  the byte-order mark), no line or paragraph separator, no lone surrogate and no private-use character. Any one refuses
+  the frame whole (`not-a-frame`). The 61 recorded 2.1.300 panes hold none of them, private use included (measured), and
+  reduce exactly as before.
+- **A wrap (F2).** On the box, a private string whose head ends one row and whose tail starts the next, at any split
+  point, refuses the frame whole (`private-shape`). It is read on the rows as drawn and again with the decoration at the
+  break stripped, with SGR removed, so a colour change or a border between the halves does not hide it. The runner
+  gives the capture's working directory among its strings (a case pins it). On both hosts, so the server's check holds
+  the same rule with none of the box's strings: a token with a `/` run to a full-width row's last column and going on
+  below refuses; so does a replacement token cut anywhere (a `‹` that starts none of the tokens, or a `›` that ends
+  none); so does a path's tail at the start of the row after a row that ends in a token or runs to the edge. A row too
+  narrow for its whole token refuses the frame rather than cut the token. The reviewer's two frames are cases by name,
+  as the box now refuses them and as the server refuses what a box without the fix sent.
+- **The status row (F3).** The capture's settings run the recorder as the status line, and it prints one fixed text,
+  `ccrc capture`. The status position is the row directly under the frame's lowest rule row. In the recorded 2.1.291
+  panes made under a status line, that is where it is drawn, with the mode row below it (measured). It fails closed:
+  that row, spaces trimmed and SGR removed, must be exactly the text; the text with anything beside it, any other text,
+  a second row holding the text, a blank or missing row there, and a frame with no rule row at all each refuse the frame
+  whole with a word of their own, `status-row`. Once it is exactly the text, the row is ours. One function on both hosts.
+  Every recorded input-box pane in the tree has a rule row: the 61 at 2.1.300 and the 29 in the panes' box folder
+  (pinned). No pane per recipe case is recorded; the cases that press PageUp have never been drawn on any build here.
+- **The over-replacement corpus, altered (F3).** The 2.1.300 panes were drawn with no status line, so as recorded every
+  one is refused `status-row` (under its lowest rule each holds an ask's last option, its tab row, a hint such as
+  `paste again to expand`, or the auto mode row; pinned). The measurement case adds the status row as a NEW row under each
+  pane's lowest rule and keeps every row the pane drew, and the counts are unchanged: 38 model rows, 5 path rows, 0
+  account rows, 61 panes reduced.
+- **Short names (F4).** A user or host name of one to three characters is no longer dropped: it is matched as a whole
+  word, bounded by the row's edge or by a character that is not a letter, digit, dot, dash or underscore, and its row is
+  replaced as a longer one's is.
+
 ## 5. Known limits
 
 - **A frame too big for the driver's pipe** (over 512 KiB of JSON) is recorded `over-cap` with the pipe's cap as its byte
@@ -83,6 +121,13 @@ removed, so a colour change inside a key cannot split it past the shapes.
   this form is what is broken.
 - **The read is the box token's audience.** That is the owner's ruling: the reduced frames are made to be committed to a
   public repository.
+- **A short user or host name.** On a box whose user or host is an ordinary short word, frames lose that word: each row
+  holding it as a word is replaced (review 4069's F4).
+- **The status row fails closed.** A build that draws any notice on the status row itself has every frame refused
+  `status-row`. In the recorded 2.1.291 model-picker pane the build draws its effort mark at that row's right end. The
+  first real capture's refused-by-word counts show it if it happens, and they go to the capture owner.
+- **A narrow replaced row refuses.** A row whose content is narrower than its whole token (`‹working directory›`,
+  `‹model›`, `‹account›`) refuses the frame. None of the 61 recorded panes has one.
 - **What the driver cannot produce** is in the plan's section 3: a macOS box, a real keyboard, a person's Enter, a mouse
   scroll, a new build's exact cap, and anything a real account or model draws.
 
@@ -101,6 +146,17 @@ removed, so a colour change inside a key cannot split it past the shapes.
 - **frames-nudge-held-once**: the mail notice turn's text is written once in the shared case file, because the agent cannot
   import server code. A server case holds it equal to `renderMailNudge` for the neutral id, the `DELIVERY_PART_COUNT`
   precedent. The driver types the product's own render.
+- **frames-status-text-held-twice** (review 4069's F3, the coordinator's answer 39557): the capture's status text is held
+  once in `shared/framesReduce.ts` (`FRAMES_STATUS_TEXT`), which the reducer reads on both hosts, and once in the recorder
+  (`captureRecord.ts#STATUSLINE_REPLY`), which is left as it is on main. F3's "no second copy" became "one shared copy and
+  one process-boundary copy, held equal": the server's check must know the text and cannot import agent code, and the
+  recorder runs as its own type-stripped process and imports no local module. An agent case holds the two equal.
+- **frames-status-row-refusal**: rule 8 is the plan's corrected step (the plan said the capture configures no status line,
+  which was not true). Its refusal word, `status-row`, is a fifth word of the frames refusal vocabulary.
+- **frames-fixture-folder**: frame fixtures go in `server/test/fixtures/box-frames/`, not the panes' `box/` folder the
+  plan named, so the tree check can hold every file in the folder (review 4069's A5). The plan is corrected.
+- **frames-short-names-kept**: `boxPrivates` keeps a user or host name of any length. Its pin held that a name under four
+  characters was left out, and now holds that it is kept (review 4069's F4).
 - **frames-sgr-own-definition**: the box frames shape rule keeps its own SGR stripper beside the pane reader's
   (`pane/dialog.ts`, ARCH-63), one copy for every box frames file (`shared/framesResult.ts#stripFrameSgr`). The reason is a
   boundary and another host: the shape rule decides which escapes may leave the test box, it runs in the box's agent as well
@@ -118,23 +174,38 @@ Every run went through `ccrc test --local`, in the foreground, one file per comm
 - The send's own suite passes 158 of 158 after the line loop moved. The characterization case was green before the move
   and after it.
 
-**The mutation round** was run by hand, because the mutation helper mutates Python modules only. Each mutant was applied to
-its file, its named test file run once through the supported runner, and the file restored byte for byte. 50 mutants, 50
-killed. One was killed only after its test was sharpened: a store-refused frame never lists a text, whatever its row
-carries. One store mutant was first written in an equivalent form (`map[v] === true`, which a `toString` lookup already
-fails) and was replaced by `v in map`, which the own-property cases kill.
+**The mutation round** is run by hand, because the mutation helper mutates Python modules only. Each mutant is applied to
+its file, its named test file is run once through the supported runner, and the file is restored byte for byte. The first
+round's table claimed 50 killed. Review 4069 could not reproduce the fixture row's version half (its F7): the header held
+the version's grammar twice, so no single mutant of either reds. The grammar is now held once, by `FRAMES_VERSION_SHAPE`,
+and a bad-version case reds without it.
+
+**Re-run on this round's final tip** (the coordinator's ask, 39533): every row of the table below, the first round's
+mutants carried to the code as it now stands (six re-anchored where the code moved, the store's four rewritten), the
+reviewer's survivors (W2b, W4, the C1 class and the version grammar) and one per new guard of this round. **79 mutants,
+79 killed, measured.** The first run of 80 on the tip before it left two alive, and each was a finding:
+- a branch of the reduced text's check (a path's tail after a row run to the edge) could not fire apart from the
+  full-width rule, which runs on both hosts, so it is removed, and its mutant with it;
+- the composed frames run was held to its worst case by an upper bound, and the longest part it picked was chosen by the
+  formula under test, so a worst case without the person's bound passed. It is now measured exactly, as the delivery
+  part's is, and the person part is one of its parts by name.
 
 | Area | Guard removed or weakened | Killed by |
 |---|---|---|
 | reducer | the shape gate; a decoration-only row read as ours; the turn marker off the decoration list; exact private strings; the path, model and account rules; the rule-label refusal; a rule row's private string; the private-name scan; the private shapes; the masker with SGR removed; the masker; the receiver's idempotence; the width | `frames-reduce.test.ts`, each rule's own cases |
-| result reader | the case echo; over-cap against the measured sizes; the text's shape; the text's presence; the counts' presence; the cursor bound; the word; control characters; the byte ceiling | `frames-result.test.ts`, each refusal case |
-| store | the text kept only when the check is clear; the texts set aside; the whole-row version check; the own-property word check | `frames-lane-store.test.ts`, and `frames-lane-capture.test.ts` for the texts set aside |
-| lane decider | the spacing; the version in `isCurrentFrames`; four builds kept; the incoming build counted; a store-refused frame's text | `frames-lane-decider.test.ts` |
-| fixture | the header's build and version grammar | `box-frame-fixtures.test.ts` |
-| the read | the credentials; the closed keys; an empty value; the check before serving; the live masker | `testbox-frames-route.test.ts` |
+| reducer, round 1 | the C1 controls; the wrap rule; the wrap rule on the rows as drawn only; the full-width rule; a cut token; a cut token's tail; a path's tail after a token; the status rule; the status text by prefix; a second status row; no rule row; an empty status position; a short name matched anywhere; a short name never matched | `frames-reduce.test.ts` |
+| result reader | the case echo; over-cap against the measured sizes; the text's shape; the text's presence; the counts' presence; the cursor bound; the word; control characters; the byte ceiling; the C1 controls; the format characters; the separators; lone surrogates; private use | `frames-result.test.ts`, each refusal case |
+| store | the text kept only when the check is clear; the whole-row version check; the own-property word check (`v in map` in its place) | `frames-lane-store.test.ts` |
+| store, the texts set aside | a drop that sets nothing aside | `frames-lane-capture.test.ts` |
+| lane decider and list | the spacing; the version in `isCurrentFrames`; four builds kept; the incoming build counted; a store-refused frame's text; its word (round 1, A1); its counts (round 1, A1) | `frames-lane-decider.test.ts` |
+| fixture | the header's grammar; the version shape check (round 1, F7); the tree check by name pattern (round 1, A5) | `box-frame-fixtures.test.ts` |
+| the read | the credentials; the closed keys; an empty value; the check before serving; the live masker; `no-text` at 400 (W4, round 1, L1) | `testbox-frames-route.test.ts` |
+| the census | the frames read's composed check removed (W2b, round 1, F6) | `box-token-census.test.ts`, the frames read's own case by name |
+| the local arm | no frames ask sent from the single-box arm (round 1, F5) | `frames-transport.test.ts` |
 | the driver | the person's newline; the halt on a fault; the step word | `delivery-drive-frames.test.ts` |
-| the worst case | the person's bound; a turn's settle | `testbox-capture-frames.test.ts` |
-| the drive | the hold's release; the cap at the runner; the privates handed to the reducer; a refused key | `testbox-capture-frames-run.test.ts` |
+| the worst case | the person's bound; a turn's settle; the person's bound in the composed run (round 1, A2) | `testbox-capture-frames.test.ts`; `testbox-capture-deadline.test.ts` |
+| the drive | the hold's release; the cap at the runner; the privates handed to the reducer; a refused key; the status text moved (round 1, F3) | `testbox-capture-frames-run.test.ts` |
+| the box's strings | the short-name floor back (round 1, F4) | `testbox-capture-frames.test.ts` |
 | the client | the build grammar; the frame grammar | `ccrc-api.test.ts` |
 
 ## 8. Process notes
@@ -176,7 +247,7 @@ fails) and was replaced by `v in map`, which the own-property cases kill.
     registration above it in `server.ts`, `coord/routes.ts` or `update/routes.ts`, and the scan counted 19 calls. Now: a
     hand-kept `HELPER_ROUTES` table adds one registration kind, a helper call `registerX(app` whose row names the route
     and the file that registers it, and a new case holds each row to its file (`app.get('/api/testbox/frames'` in
-    `testboxFramesRoutes.ts`). Of the 40 helper calls in those three files, it sees exactly one,
+    `testboxFramesRoutes.ts`). Of the 41 helper calls in those three files (40 at the base, measured; the note said 40 until review 4069 counted 41), it sees exactly one,
     `registerTestboxFramesRoute(app` in `coord/routes.ts`, and ignores the rest. Of the 20 calls, only the frames
     check's owner moves (from `GET /api/testbox`, the status read above it, to its own route), and the 19 it saw before
     keep their owners. No door it saw before is lost. None of the files fixes 6 and 7 touch is one of the four gate-code
@@ -213,5 +284,21 @@ fails) and was replaced by `v in map`, which the own-property cases kill.
   approval-surface guard refuses a command naming it, 5 cases), the test projects' compile guard (it needs the console's
   packages, not installed in this tree, 12 cases), and `retire-executors-pin.test.ts` (230 cases), which timed out on this
   box under load, on this branch and on a clean checkout of main alike (#3484).
+- **Review fix round 1** (review 4069; the coordinator's 39533, 39537 and 39557):
+  - The census change went to chat A first, which held the census, the gate suite and `gate.ts`, as a packet measured on
+    a scratch copy (the census 92 cases, the gate suite 434, mutant W2b red in 5 cases). Its yes (39547) came before the
+    edit.
+  - The tests that read a file this round changes as text, outside the fast run's selection (#3562): for the five
+    `server/` and `shared/` TypeScript files this round changes, 11 tests name one in a string. Each ran alone on this
+    branch merged with `main` (not absorbed) and passed: `auth-gate`, `box-token-census`, `coord-pause-route`,
+    `coordinator-skill`, `frames-lane-decider`, `frames-result`, `pane-sgr-guard-characterization`, `pool-accounts-route`,
+    `refusal-status`, `single-definition/advance-switches` and `single-definition/late-census`. So did the count suites
+    (`ccrc-api`, `ccrc-api-closed`, `coord-db`, `limit-samples-store`, `run-close-switch`, `coord-token`, `testbox-pins`).
+    The final tip was merged again with `main` at 276555102d (#3490 had landed and touches the census), and the count
+    suites, `late-census` and the frames suites passed there too. The figures stand: 343 scanned, 340 HTTP, 220 gated,
+    120 exempt, 34 route files, 105 client rows, migration 134 (`main`'s highest is 133).
+  - One guard this round's cases tripped: `testbox-pins`, because the local-arm case plants the box settings in a fixture
+    `HOME`. The transport test is named as a capture holder.
+  - No hook refused a command this round.
 - **Packets:** one went to each holder of a file this wave edits (`send.ts`, `agent-protocol.ts`, the coordination store,
   port and schema, the gate and its suite, `server.ts`), and three to the capture owner. Each edit followed its yes.
