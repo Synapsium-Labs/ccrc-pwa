@@ -41,7 +41,8 @@ const EXPECTED: Readonly<Record<string, Readonly<Record<Rung, Readonly<Record<Do
 /** Every door row's act kind, written out: `operator` for an operator door, which carries none. */
 const DOOR_ACTS: Readonly<Record<string, string | null>> = {
   designate: 'operator', retire: 'operator', rebind: 'operator', restart: 'operator', designation: 'operator', model: 'operator',
-  'account-set': 'operator', ladder: 'operator', readiness: 'operator', invariants: 'operator', rung: 'operator', pause: 'operator',
+  'account-set': 'operator', ladder: 'operator', readiness: 'operator', chat: 'operator', 'chat-earlier': 'operator',
+  invariants: 'operator', rung: 'operator', pause: 'operator',
   'latch-clear': 'operator', witness: 'operator', 'restore-read': 'operator', 'restore-confirm': 'operator',
   'portfolio-rank': 'operator', 'goals-ratify': 'operator', 'private-names-read': 'operator', 'private-names-write': 'operator',
   card: 'read', 'card-record': 'read', 'notes-write': 'write-note', 'notes-read': 'read', handover: 'write-note',

@@ -74,6 +74,23 @@ Fix round 1 (review 4135, call 1874), one commit, `fix(overlord)`:
 - F7: these counts; the composition file's figure (the seam); and the characterization's header, which now says it pins
   step 10's rung half, the ceiling half being pinned by the two cases derived from the door rows (a comment only).
 
+The one merge of main (the coordinator's go, mail 40336): `main` at `07e8cc51e1`, the chat pull request #3488's merge,
+merged once with `git merge`, no rebase. The merge probe answered clean, and no file needed a hand resolution. Four files
+were changed on both sides and merged by git; each was read after the merge, and each holds both sides:
+
+- `server/src/coord/overlordDoors.ts`: main's two operator rows `chat` and `chat-earlier` beside this branch's
+  `act: OverlordActKind | null` field.
+- `server/src/server.ts`: main's chat import, its two masked routes and its chat ports beside this branch's imports, count
+  reader and latch ports. Against the merged main it is +10 and -2, as against the merge base before.
+- `server/test/sim/mutation-floors.json` and `mutation-floors.test.ts`: main's chat sets and floors beside this branch's
+  four, each at floor 1, none lowered.
+
+The pins were re-derived on the merged tree. The characterization's door list gains `chat` and `chat-earlier`, each an
+operator door with no act kind, in one commit after the merge, with this paragraph; its Overlord rows' gate answers are
+unchanged.
+The gate's count lines stay as on that main (the route census pins 345 scanned; this piece adds no route). Every server
+test file importing the gate, the ladder, the doors or the catalogue passed alone on the merged tree (38 files).
+
 Brief item 9: everything added is the product's own table and deciders, read by the server's gate and drawn by the
 console. Nothing depends on a surface one agent harness has.
 
