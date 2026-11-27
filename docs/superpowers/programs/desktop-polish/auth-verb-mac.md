@@ -334,9 +334,9 @@ restore-and-compare; the coordinator ruled that they stand (mail 39574).
 
 ### 4.4 On current main
 
-Main moved after this wave's base (`f80f47760b`) and touched none of this wave's files. This branch does not absorb it
-(the merge probe answered clean); the suites ran in the scratch worktree on this branch's tip merged with main at
-`183010ed67`, never on the branch itself:
+Main moved after this wave's base (`f80f47760b`). Up to `183010ed67` it touched none of this wave's files and the merge
+probe answered clean, so the suites ran in the scratch worktree on this branch's tip merged with main there, never on
+the branch itself:
 
 - The verb's suite on both platforms (284 rows, 269 passed, 15 skipped), expose (70, 3 skipped), doctor core-auth (83,
   10 skipped), doctor exposure (199, 4 skipped), install landing (43, 1 skipped), the platform suite (145, 11 skipped),
@@ -349,6 +349,18 @@ Main moved after this wave's base (`f80f47760b`) and touched none of this wave's
   (19). One is unmeasured here: `shellcheck-ratchet` cannot parse `ccd/ccrc` within the test slice's memory cap
   (6G), on main's file as on this wave's, so the pull request's own run of it is the measurement.
 
+### 4.5 After #3478 landed
+
+#3478 changed `ccd/ccrc` on main (`197665f6a0`), the probe then answered a conflict, and this branch absorbed main once
+(section 5). On the branch itself, after the absorption and the artifact-tier case's change:
+
+- The eight suites of section 4.4, #3478's three (the artifact tier's expose and doctor suites and its config suite),
+  `growth-check`, `deviation-refs` and `anchors`: all passed, the artifact tier's expose suite after its case's change
+  (23 of 23; red on its Mac expectation before it).
+- The 126 text readers of section 4.4 less `shellcheck-ratchet`, on the fleet test box in four runs: 122 passed, and
+  the same four failed with the same tests as on main (`session-hook` 2, `ccrc-models-advance` 6, `ccrc-codex` 2,
+  `ccd-tmux-anchor` 19). `shellcheck-ratchet` is still unmeasured here (section 4.4).
+
 ## 5. Notes
 
 - `ccd/ccrc` is held by claim 7531 for #3478. Its holder said yes (mail 39670) to this exact change of the file
@@ -356,13 +368,15 @@ Main moved after this wave's base (`f80f47760b`) and touched none of this wave's
   #3478's head `de407ecae1` has one conflict, in `cmd_expose`, where both add a comment line above the same `local`
   line; the agreed resolution keeps both comments and declares `local auth_said="" a_rp a_origin a_port`, and keeps
   #3478's guard that holds back the `auth off` hint when an artifact key is among those found. Whichever lands second
-  resolves it that way, and mails the other first if it would resolve it any other way.
-- The holder's test note, for whichever lands second: #3478's artifact-tier case that asks `ccrc auth` on a forced
-  Darwin expects the old Mac refusal (`this verb does not act on a Mac yet`). With this wave that refusal is gone where
-  the job proof can be made, and that case plants the systemd unit's bytes as the job file, so on this code it refuses
-  at the job proof instead: the same answer before and after the tier still holds, but it no longer shows that the
-  reach check was reached on a Mac. The second to land changes that case's Darwin expectation, and says whether the
-  reach refusal there needs a job the proof accepts.
+  resolves it that way, and mails the other first if it would resolve it any other way. #3478 landed first
+  (`197665f6a0`); this branch's probe then answered a conflict, so it absorbed main once by `git merge`, resolving that
+  hunk exactly so (the resolved file's sha256 equals the one the holder agreed, `d23cdfaf…`).
+- The holder's test note: #3478's artifact-tier case that asks `ccrc auth` on a forced Darwin expected the old Mac
+  refusal (`this verb does not act on a Mac yet`). Measured on the merge, the case now gets the reach refusal on a Mac
+  too (`this box is reached from elsewhere`), because the verb asks the reach before it reads the job file or launchd;
+  the planted file is never compared and `launchctl` is asked nothing. So the reach refusal there needs no job the
+  proof accepts. This branch changes that case's Darwin expectation to the reach refusal (red on the merge before the
+  change, as measured), under claim 7602, so the case now shows the Mac reach check is reached.
 - Growth: `ccd/ccrc` grows by 122 code lines against the merge-base (26 of them Part 1's), past the per-PR limit of 40,
   under D-9158's waiver (`server/test/growth-waivers/D-9158-ccd-ccrc.json`, its limit the measured 122).
 
