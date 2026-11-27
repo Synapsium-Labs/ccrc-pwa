@@ -6975,9 +6975,10 @@ cmd_expose() {
   # its own undo, said first — and only where `ccrc auth off` acts (review 3934 A7): CCRC_AUTH still `on`, and neither
   # CCRC_RP_ID nor CCRC_ORIGIN holding anything but the localhost values `on` writes. Otherwise it would answer "already
   # off", or refuse a box armed by hand for another address, and the hand removal below is the remedy.
+  # X5 A4: nor when an artifact key is among those found: `ccrc auth off` never removes one, so its re-run would refuse again.
   local auth_said="" a_rp a_origin
   if [ -n "$shadow_keys" ] && [ -r "$BOX_ENV_FILE" ] && LC_ALL=C grep -qF -- "$AUTH_MARKER_HEAD" "$BOX_ENV_FILE" \
-     && [ "$(_box_env_value "$BOX_ENV_FILE" CCRC_AUTH)" = on ]; then
+     && [ "$(_box_env_value "$BOX_ENV_FILE" CCRC_AUTH)" = on ] && [[ $shadow_keys != *CCRC_ARTIFACT_* ]]; then
     a_rp="$(_box_env_value "$BOX_ENV_FILE" CCRC_RP_ID)"; a_origin="$(_box_env_value "$BOX_ENV_FILE" CCRC_ORIGIN)"
     if { [ -z "$a_rp" ] || [ "$a_rp" = localhost ]; } && { [ -z "$a_origin" ] || [[ "$a_origin" =~ ^http://localhost:[0-9]{1,5}$ ]]; }; then
       auth_said=" These are the lines ccrc auth on writes: run ccrc auth off first, which removes them and restarts the server, then re-run this."

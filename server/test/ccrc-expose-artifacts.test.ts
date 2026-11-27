@@ -258,9 +258,17 @@ const PROMPTS = new RegExp('(DuckDNS subdomain|DuckDNS token|Public origin|Passk
 
 /** `ccrc expose <args>` on a real terminal, typing `entries` at the prompts, one per prompt seen. */
 function runTty(home: string, args: string[], entries: string[], opts: RunOpts = { rec: 'ok', extra: FORCE_LINUX }): Promise<Result> {
+  return runOnTty(home, ['expose', ...args], entries, opts);
+}
+
+/** `ccrc <argv>` on a real terminal. CLAUDECODE, TMUX and TMUX_PANE are removed, as `ccrc-auth.test.ts` removes them, so
+ *  the operator-only verb `ccrc auth` gets past its speed bumps when this suite itself runs inside a session. */
+function runOnTty(home: string, argv: string[], entries: string[], opts: RunOpts): Promise<Result> {
+  const e = env(home, opts);
+  for (const k of ['CLAUDECODE', 'TMUX', 'TMUX_PANE']) delete e[k];
   return new Promise((resolve) => {
-    const p = pty.spawn(BASH, [ccrcIn(home), 'expose', ...args], {
-      name: 'xterm-color', cols: 200, rows: 40, cwd: home, env: env(home, opts) as Record<string, string>,
+    const p = pty.spawn(BASH, [ccrcIn(home), ...argv], {
+      name: 'xterm-color', cols: 200, rows: 40, cwd: home, env: e as Record<string, string>,
     });
     let out = '';
     let sent = 0;
@@ -645,6 +653,66 @@ describe('ccrc expose artifacts: the arm', () => {
       expect(r.stderr).toMatch(/refusing to write .*already sets CCRC_ARTIFACT_PORT/);
       expect(r.stderr).toContain('Nothing was written.');
       expect(ccrcDirEntries(home)).toEqual(['ccrc.env']);
+    }
+  });
+
+  it('expose: the ccrc auth off hint is not said beside an artifact key', () => {
+    // The lines `ccrc auth on` writes, its marker line first; `ccrc auth off` removes those and never an artifact key.
+    const authLines = '# ccrc auth on: sign-in at http://localhost:7788 (\'ccrc auth off\' removes these lines)\n'
+      + 'CCRC_AUTH=on\nCCRC_RP_ID=localhost\nCCRC_ORIGIN=http://localhost:7788\nCCRC_COOKIE_INSECURE=on\n';
+    const hint = 'These are the lines ccrc auth on writes: run ccrc auth off first';
+    for (const [extra, said] of [['', true], ['CCRC_ARTIFACT_PORT=7790\n', false]] as const) {
+      const home = box('ccrc-art-hint-');
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      writeFileSync(join(home, '.ccrc', 'ccrc.env'), authLines + extra);
+      const r = runPiped(home, ['expose', 'byo']);
+      expect(r.code, r.stderr).toBe(1);
+      expect(r.stderr).toMatch(/refusing to write .*already sets CCRC_ORIGIN CCRC_RP_ID CCRC_AUTH/);
+      expect(r.stderr.includes(hint), r.stderr).toBe(said);
+      expect(ccrcDirEntries(home)).toEqual(['ccrc.env']);
+    }
+  });
+
+  it('expose: ccrc auth answers the same beside the artifact tier', async () => {
+    // The sign-in verb (#3405) refuses on a box reached from elsewhere, through the one reach reader, and on a Mac before
+    // it reads the box. Adding the artifact tier to a console exposure must change neither answer and write nothing:
+    // the tier adds no file the reader reads (the exposure file and the Caddyfile already stand), and never the server
+    // unit or job file. The verb runs on a pty with `systemctl` and `launchctl` recording, as an operator would run it.
+    const [sub, a, c] = [genLabel(), genLabel(), genLabel()];
+    for (const os of [FORCE_LINUX, FORCE_DARWIN]) {
+      const home = box('ccrc-art-auth-');
+      if (os === FORCE_LINUX) await seedDuckdns(home, sub); else seedFile(home, duckdnsEnv(sub));
+      const unitDir = join(home, os === FORCE_DARWIN ? 'Library/LaunchAgents' : '.config/systemd/user');
+      mkdirSync(unitDir, { recursive: true });
+      writeFileSync(join(unitDir, os === FORCE_DARWIN ? 'app.ccrc.ccrc.plist' : 'ccrc.service'),
+        readFileSync(join(REPO, 'deploy', 'ccrc.service')));
+      const ask = async (): Promise<string[]> => {
+        const out: string[] = [];
+        for (const sub2 of ['off', 'on']) {
+          const files = (): Array<string | null> =>
+            [bytesAt(exposurePath(home)), bytesAt(caddyfilePath(home)), bytesAt(join(home, '.ccrc', 'ccrc.env'))];
+          const before = files();
+          const r = await runOnTty(home, ['auth', sub2], [], { rec: 'ok', extra: os });
+          expect(r.code, r.stdout).toBe(1);
+          expect(files()).toEqual(before);
+          out.push(normal(home, r.stdout));
+        }
+        expect(calls(home, 'systemctl'), 'the verb restarts nothing').toEqual([]);
+        expect(calls(home, 'launchctl')).toEqual([]);
+        return out;
+      };
+      const without = await ask();
+      expect(without[0], 'the reach refusal, or the Mac one').toMatch(os === FORCE_DARWIN
+        ? /auth off: this verb does not act on a Mac yet/ : /auth off: this box is reached from elsewhere \(.*<HOME>\/\.ccrc\/exposure\.env exists/);
+      expect(without[1]).toMatch(os === FORCE_DARWIN ? /auth on: this verb does not act on a Mac yet/ : /auth on: this box is reached from elsewhere/);
+      expect((await runTty(home, ['artifacts'], [a, c], { rec: 'ok', extra: os })).code).toBe(0);
+      // The tier is set (the other cases pin the file's bytes); what it must not change is the verb's answer, below.
+      expect(bytesAt(exposurePath(home))).toContain(artKeys(`https://${a}.duckdns.org`, `https://${c}.duckdns.org`));
+      for (const name of ['systemctl', 'launchctl']) {
+        const p = join(home, `${name}-calls`);
+        if (existsSync(p)) writeFileSync(p, '');   // the arm's own DuckDNS start; the verb's calls are counted afresh
+      }
+      expect(await ask()).toEqual(without);
     }
   });
 

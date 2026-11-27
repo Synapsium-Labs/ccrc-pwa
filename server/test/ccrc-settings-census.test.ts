@@ -219,7 +219,7 @@ const VAR_KEY_BODIES: Record<string, string> = {
   _box_unit_env: 'the model itself, reading the key its caller named',
   _box_unit_env_shell: 'the macOS model, reading the key its caller named',
   _box_path_for: 'the server\'s path overrides, one key per caller',
-  cmd_expose: 'its `for k in CCRC_ORIGIN CCRC_RP_ID CCRC_AUTH` shadow-key loop',
+  cmd_expose: 'its shadow-key loop over the console\'s three keys and the three artifact keys (`for k in CCRC_ORIGIN CCRC_RP_ID CCRC_AUTH CCRC_ARTIFACT_…`)',
   cmd_auth: 'its `for k in "${AUTH_KEYS[@]}"` loops over the four keys it writes and removes (desktop polish wave 181)',
   _ccrc_knob: 'the one reader of a setting',
 };
