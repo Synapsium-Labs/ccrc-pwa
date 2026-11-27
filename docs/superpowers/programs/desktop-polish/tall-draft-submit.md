@@ -212,6 +212,58 @@ modules, so it is unmeasured locally; the exact head's CI decides it.
 The bare shape keeps one lane case of its own, new: "wave 185: a nudge on a bare marker row with no closing rule is never
 resumed: no Enter, stashed". It pins the keys (C-s only), no literal send, and the word (`stash-failed`).
 
+### The prompt-glyph guard, red in the merge queue (the coordinator's ruling, mail 39342)
+
+The merge queue ran this PR on `main` cced5ae878 and one case went red: `pane-prompt-glyph.test.ts`, "reads the prompt
+glyph through the pane export at each of its four sites" (`draftOfMeasured: expected [ 'split', 'boxMarkerIndex', … ] to
+include 'startsWithPromptGlyph'`). The guard (ARCH-24, on `main` since #1283) asserted that four functions of the sender
+call the one prompt-glyph export, `startsWithPromptGlyph`, directly. This PR's marker-row helper, `boxMarkerIndex`, now
+makes that call for three of them (`draftOfMeasured`, `boxRows`, `continuationRows`), and `stashHeld` still makes it
+itself. I changed which functions call that export and never searched the test tree for tests that read the sender's
+source as text or through the symbol scanner, so the guard that pins those call sites first ran in the merge queue.
+
+The sender does not change. The guard now says what is true, and holds more than before:
+
+- "reads the prompt glyph through the pane export at exactly two direct sites: the marker-row helper and the stash
+  reader": every call of the export in the sender, by its enclosing function, is `boxMarkerIndex` or `stashHeld`, once
+  each;
+- "finds the marker row through the helper in each of the three box readers, which never test the glyph themselves":
+  `draftOfMeasured`, `boxRows` and `continuationRows` each call `boxMarkerIndex`, and none calls the export or any
+  `startsWith`;
+- the two inline cases stay as they were (no inline `startsWith` of the glyph; the glyph in no code, only in comments).
+
+Its header says the count of direct sites is two, and why. Mutants (measured, `send.ts` restored and compared byte for
+byte after each), red by case name:
+
+| Mutant | Red |
+|---|---|
+| G1: the helper tests the glyph inline (`startsWith` of the glyph in `boxMarkerIndex`) | "exactly two direct sites", "no inline startsWith", "the glyph in no code" |
+| M4: `draftOfMeasured` finds the marker row its own way (its own loop over the export) | "exactly two direct sites", "through the helper in each of the three box readers" |
+| G3: a fifth site (a new function calling the export) | "exactly two direct sites" |
+
+Every test under `server/test/` that reads the sender's source as text or through the symbol scanner, found by a search
+for the sender's path as a string (`inject/send.ts`, `'send.ts'`, the `inject` directory), run alone on this head
+merged with `main` cced5ae878, each green:
+
+| Test | Cases |
+|---|---|
+| `answer` | 35 |
+| `ccd-pane-box-draft` | 68 |
+| `injected-prompts-characterization` | 11 |
+| `lane-draft-never-blocks` | 10 |
+| `ledgerseed` | 16 |
+| `mail-routes` | 62 |
+| `pane-prompt-glyph` (the guard, as changed) | 6 |
+| `pane-sgr-guard-characterization` | 128 |
+| `question-doors-pin` | 162 (its first run here was stopped at 79 passed by the test slice's memory cap, a worker killed with none failed; run again alone with one worker, whole) |
+| `single-definition/advance-switches` | 53 |
+| `single-definition/ask-digest` | 186 |
+| `single-definition/injected-prompts` | 55 |
+| `single-definition/vocabularies` | 169 |
+
+`askPairingStream.ts`, the search's one other hit, is a helper module with no cases of its own. The tests that walk the
+whole source tree read the sender too; they are the whole-tree guards of section 9.
+
 ## 6. The capture, and why nothing here is measured on 2.1.332
 
 The coordinator authorised one route only: the test box's capture lane, through its owner, the Overlord coordinator. The
