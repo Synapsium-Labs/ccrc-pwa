@@ -554,6 +554,15 @@ wave's last push; section 9.5 says what each push changed.
 - **Fix round 1, review 4133.** F1 (one reader of the next row; the selector and keycap rule), F2 (the fixture is the
   whole file byte for byte, the table is its one-cell lines, unknown relative to the table, the engine's emoji class a
   widener only), F3 (the box checks its own result), T1 (9.3), A6, D1 (two probes), D2, and A4 and A5 in the evidence.
+- **Fix round 1's red guard** (the coordinator's ruling on it; one more push). The PR's own fast run on fix round 1's
+  tip, not any run before that push, found a red in `single-definition/docs-l0.test.ts`: its "selector ranges" row
+  allowed the pair `0xE0100, 0xE01EF` in `shared/docs.ts` only, and the generated table has a row with that range (the
+  data file's ambiguous-class range for the variation selectors supplement). It is a different fact from the docs path
+  rule, and data regenerated from the pinned fixture, so the guard row now lists both files, with a comment that says
+  so. The fingerprint, its planted copy and near miss, and the control cases are unchanged. So that the allowance is
+  one generated row and no more, a case in the reducer suite holds `shared/framesReduce.ts` to exactly one copy of the
+  pair, inside the table. Before the earlier pushes, one file of the single-definition folder ran. Before this push,
+  every file in the folder ran, each alone, and so did every server suite that lists `shared/` as text (9.6).
 
 ### 9.6 Evidence
 
@@ -610,6 +619,15 @@ re-anchored):
 | A6 the decoration clause removed from the edge test | `if (last === undefined \|\| DECOR.has(last) \|\| last ===` → `if (last === undefined \|\| last ===` | a row whose last character is the decoration is not run to the edge, even at the full width (review 4133, A6) |
 | D1 the two new probes removed | `'x'.repeat(35) + ' /a' + String.fromCodePoint(0x2329) + '\nb rest', 'x'.repeat(35) + ' /pr \n' + String.fromCodePoint(0x6F22) + 'ject rest',⏎` → (nothing) | the probe table answers for a bare quote, a wide character at the edge, a row at the probe's width, a straddle, the stated addition at the edge, a table-only wide character at the edge and a trailing-space straddle (review 4109, F9; review 4133, D1) |
 
+The red guard's rows, run in the same scratch clone with the round's two test files in place, each red by name and the
+clone read clean by git after them:
+
+| Row | The edit (old, then new) | Red |
+|---|---|---|
+| G1 a third file spells the pair | `shared/api.ts` gains a last line `// mutant: 0xE0100, 0xE01EF` | `single-definition/docs-l0.test.ts`: the selector ranges body is spelled out only where it is declared (it receives `shared/api.ts`) |
+| G2 the width table dropped from the guard row (the PR's red at fix round 1) | `['shared/docs.ts', 'shared/framesReduce.ts'],` → `['shared/docs.ts'],` in the selector ranges row | `single-definition/docs-l0.test.ts`: the selector ranges body is spelled out only where it is declared (it receives `shared/framesReduce.ts`) |
+| G3 a second copy in the reducer file, outside the table | `shared/framesReduce.ts` gains a first line `// mutant: [0xE0100, 0xE01EF]` | `frames-reduce.test.ts`: the docs guard's allowance is one generated row: the shared file spells the selector ranges pair once, inside the table (the docs guard stays green under it, which is why the case is needed) |
+
 - **Suites at fix round 1's tip**, each alone. `main` is 8a7bcacc8b, which touches nothing under `shared/`, `server/`,
   `agent/` or `ccd/` since the branch's base, and the merge probe answered clean, so the tip is the merged head for those
   packages and nothing was absorbed. On the server: `frames-reduce` 101, `frames-result` 54, `frames-lane-decider` 9,
@@ -624,6 +642,23 @@ re-anchored):
   All pass, and the server's and the agent's own compiles pass. At the earlier pushes the same list passed, and the PR's
   own server compile job measured the test-project compile, which the box's test slice killed twice for memory (exit
   137).
+- **Suites before the red guard's push**, each alone, on the round's tree. `main` is f9cb8274f2; the merge probe
+  answered clean, and no file of the four roots on `main` spells the pair besides `shared/docs.ts`, so nothing was
+  absorbed. The class that missed the red is a test that reads every shared file as text, so the list is:
+  - every file under `server/test/single-definition/`, 49 files, all passing (`docs-l0` 159 with 1 skipped);
+  - every server suite that CI's static tree-scanner detector (`scansSourceTree`, `.github/ci/fast-plan.mjs`) marks
+    as listing a source tree, and whose scan can include `shared/`, 39 files, all passing: `ccd-line-citations`,
+    `ccd-refusal-v1`, `ccd-route-spawn`, `ccrc-account`, `ccrc-versioned-audit`, `child-reclaim-attention-arms`,
+    `child-reclaim-generation-shape`, `child-reclaim-generation`, `ci-fast-plan`, `codex-bridge-live-tools`,
+    `collect-readers`, `continued-in-parity`, `delegation-wave3.integration`, `docs-parity`, `history-replay`,
+    `landing-words`, `license`, `linear-key-containment`, `macos-platform`, `mail-revive`, `module-format`,
+    `no-default-saving-keystroke`, `no-routing-keystroke-from-server`, `notify-push`, `pane-history-route`,
+    `pane-sgr-guard-characterization`, `plain-auto-memory-route`, `prphase`, `readme-holds`, `resume-reclaim-l0`,
+    `rings/mjs-node`, `rings/pwa-one-owner`, `rings/shared-imports`, `rings/wire-totality`, `routing-env-census`,
+    `stall-settings`, `token-shared`, `update-move` and `whitelist-subset`;
+  - the reducer suite, now 102 of 102, and the frames suites, tree guards and docs guards of the list above, with the
+    same counts (`docs-grammar` 158, `anchors` 9, `citations` 4, `deviation-refs` 35, `ci-ledger-guard` 32), and the
+    agent's six frames suites.
 - **Tests that read a file this wave changes as text** (#3562): the server tests that name `shared/framesReduce.ts` in a
   string are `frames-reduce`, `box-frame-fixtures`, `frames-lane-capture`, `frames-transport`, `testbox-frames-route` and
   `single-definition/late-census`, and on the agent `testbox-capture-deadline` and `testbox-capture-frames-run`. All ran
