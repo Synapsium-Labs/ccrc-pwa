@@ -149,7 +149,7 @@ async function rig(o: RigOpts = {}): Promise<Rig> {
     act: () => { counter += 1; return { [ACT_KEY_HEADER]: key, [ACT_GENERATION_HEADER]: String(gen.n), [ACT_COUNTER_HEADER]: String(counter), [WITNESS_KEY_HEADER]: 'w-1' }; },
     record: (text = MSG_TEXT, over = {}) => {
       n += 1;
-      const r = store.recordMessage({ at: NOW - 100_000 + n, sessionId: BODY, term: 1, actor: ACTOR, text, mark: false, composedKey: null, ...over });
+      const r = store.recordMessage({ at: NOW - 100_000 + n, sessionId: BODY, term: 1, actor: ACTOR, text, mark: false, composedKey: null, offRecord: false, ...over });
       if (!r.ok) throw new Error(`${r.error}: ${r.detail}`);
       return r.value.id;
     },

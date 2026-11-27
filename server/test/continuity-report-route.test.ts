@@ -197,7 +197,7 @@ describe('POST /api/sessions/:id/report: picked-up moves the operator message', 
     const store = new RealOperatorModelStore(db, journal);
     const actor = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) })
       .operator(gateActorOf('Fixture browser', 'abcdef0123456789'));
-    const rec = store.recordMessage({ at: 1_000, sessionId: ID, term: 1, actor, text: 'hello', mark: false, composedKey: null });
+    const rec = store.recordMessage({ at: 1_000, sessionId: ID, term: 1, actor, text: 'hello', mark: false, composedKey: null, offRecord: false });
     if (!rec.ok) throw new Error('message not recorded');
     try {
       const r = await appFor(home, recorder().run, { operatorModel: store });

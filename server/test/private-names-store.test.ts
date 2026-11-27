@@ -25,22 +25,24 @@ const LIST_1 = [entry(1), entry(3, 2, 'words'), entry(5, 1, 'exact')];
 const LIST_2 = [entry(7), entry(9, 1, 'run')];
 
 describe('the private store gains the name list at its next migration', () => {
-  it('a fresh store is at schema 2 and holds both tables', () => {
+  // Migration 3 (Overlord W1 chat A) adds the chat's `offRecord` column after the list's migration 2, so a fresh store is at 3.
+  it('a fresh store is at schema 3 and holds both tables', () => {
     const { db } = fixture();
-    expect(OPERATOR_MODEL_SCHEMA_VERSION).toBe(2);
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(2);
+    expect(OPERATOR_MODEL_SCHEMA_VERSION).toBe(3);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(3);
     const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((t) => t.name);
     expect(tables).toEqual(expect.arrayContaining(['private_name_list', 'private_name_entries']));
   });
 
-  it('a store at schema 1 migrates to 2 and keeps its messages', () => {
+  it('a store at schema 1 migrates through 2 and keeps its messages', () => {
     const { p, db } = fixture();
-    db.exec('DROP TABLE private_name_list; DROP TABLE private_name_entries; PRAGMA user_version = 1');
+    // Back to schema 1: migration 3's column goes too, so the store runs both of its later migrations again.
+    db.exec('DROP TABLE private_name_list; DROP TABLE private_name_entries; ALTER TABLE operator_messages DROP COLUMN offRecord; PRAGMA user_version = 1');
     db.prepare("INSERT INTO read_ledger (at, door, caller, scope, count, outcome, generationRead) VALUES (1, 'board', 'operator', 's', 0, 'ok', 'not-a-session')").run();
     db.close();
     const again = openOperatorModelDb(p);
     opened.push(again);
-    expect((again.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(2);
+    expect((again.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(3);
     expect((again.prepare('SELECT count(*) AS c FROM read_ledger').get() as { c: number }).c).toBe(1);
     expect(new OperatorModelStore(again, issuer).privateNamesRead()).toEqual({ kind: 'measured', value: { kind: 'none' } });
   });
@@ -55,7 +57,7 @@ describe('the private store gains the name list at its next migration', () => {
       opened.push(b);
       expect((b.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(9);
       expect(warn).toHaveBeenCalledTimes(1);
-      expect(String(warn.mock.calls[0]![0])).toMatch(/is at schema 9, this build knows 2/);
+      expect(String(warn.mock.calls[0]![0])).toMatch(/is at schema 9, this build knows 3/);
     } finally { warn.mockRestore(); }
   });
 });

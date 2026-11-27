@@ -56,12 +56,12 @@ const STORE_REFUSAL: Readonly<Record<Exclude<StoreWriteError, 'refused'>, 'journ
 /** The re-ask the typed path makes INSIDE `sendPrompt`'s queue slot, right before its first key (review 2550 F1): `go` while the
  *  verdict is still `type`, `stop` when the designation moved while the call waited its turn (a `goLive` in that wait), so the words
  *  are recorded or refused by the route and never typed unrecorded into a now-live Overlord. */
-export const promptRecheck = (read: () => DesignationRead, sessionId: string, body: { readonly overlordTerm?: unknown }): (() => 'go' | 'stop') =>
+export const promptRecheck = (read: () => DesignationRead, sessionId: string, body: { readonly overlordTerm?: unknown; readonly offRecord?: unknown }): (() => 'go' | 'stop') =>
   () => (promptTargetVerdict(read(), sessionId, body).kind === 'type' ? 'go' : 'stop');
 
 /** The body's fields this act reads. The key is read by a field constant, not as a property or a literal element: `sendKey` is one of the pane typers'
  *  names, which `single-definition/injected-prompts.test.ts` reserves in `server/src` (slug `send-key-field-is-composed-key`). */
-type PromptBody = { readonly text?: unknown; readonly attachments?: unknown };
+type PromptBody = { readonly text?: unknown; readonly attachments?: unknown; readonly offRecord?: unknown };
 const SEND_KEY_FIELD = 'sendKey';
 const sendKeyOf = (body: PromptBody): unknown => (body as Record<string, unknown>)[SEND_KEY_FIELD];
 
@@ -81,14 +81,14 @@ export async function recordOperatorPrompt(
   const at = deps.wall();
   const recorded = store.recordMessage({
     at, sessionId, term, actor: deps.identity.operator(pass.actor), text, mark: settlementMarkOf(text) === 'mark',
-    composedKey: key,
+    composedKey: key, offRecord: body.offRecord === true,
   });
   if (!recorded.ok) {
     return recorded.error === 'refused'
       ? refuse('bad-request', { detail: recorded.detail })
       : refuse(STORE_REFUSAL[recorded.error], { detail: recorded.detail });
   }
-  const { id, cut, replay } = recorded.value;
+  const { id, cut, replay, offRecord } = recorded.value;
   let state: MessageState | 'unknown' = recorded.value.state;
   const lines = { store, coordDb: coord.db, warn: deps.warn };
   if (!replay) {
@@ -107,5 +107,5 @@ export async function recordOperatorPrompt(
       deps.warn(`ccrc-server: prompt: message ${id} is recorded and its nudge was not queued`);
     }
   }
-  return { kind: 'answer', status: 200, body: { ok: true, messageId: id, cut, state, replay } };
+  return { kind: 'answer', status: 200, body: { ok: true, messageId: id, cut, state, replay, offRecord } };
 }

@@ -207,7 +207,7 @@ async function rig(o: RigOpts = {}): Promise<Rig> {
     ...o.gate,
   };
   const ledger = o.ledgerFails === true
-    ? { servedReadsSince: (d: ReadDoor, t: number) => store.servedReadsSince(d, t), recordRead: () => ({ ok: false as const, error: 'write-failed' as const, detail: 'a fixture write failure' }) }
+    ? { servedReadsSince: (d: ReadDoor, t: number, c: 'operator' | 'overlord') => store.servedReadsSince(d, t, c), recordRead: () => ({ ok: false as const, error: 'write-failed' as const, detail: 'a fixture write failure' }) }
     : store;
   const g = gatherer(o.fixture ?? defaultFixture());
   const app = Fastify({ logger: false });

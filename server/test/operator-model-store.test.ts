@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { gateActorOf } from '../src/accounts/audit.js';
 import { attributionIdentity } from '../src/auth/attributionIdentity.js';
-import { OPERATOR_MODEL_SCHEMA_VERSION } from '../src/operatorModel/schema.js';
+import { OPERATOR_MODEL_MIGRATIONS, OPERATOR_MODEL_SCHEMA_VERSION } from '../src/operatorModel/schema.js';
 import { PrivateStoreUnmigratable, defaultOperatorModelDbPath, openOperatorModelDb } from '../src/operatorModel/db.js';
 import { openOperatorModelStore, OperatorModelStore, type PrivacyIssuer } from '../src/operatorModel/store.js';
 import type { MessageActor, MessageEvent, MessageState, ReadLine } from '../../shared/operatorMessages.js';
@@ -45,7 +45,7 @@ function fixture(): Fixture {
 afterEach(() => { for (const db of opened.splice(0)) if (db.isOpen) db.close(); });
 
 const record = (f: Fixture, over: Partial<Parameters<OperatorModelStore['recordMessage']>[0]> = {}) => f.store.recordMessage({
-  at: 1_000, sessionId: 'lane-a-project-a', term: 1, actor: ACTOR, text: 'hello', mark: false, composedKey: null, ...over,
+  at: 1_000, sessionId: 'lane-a-project-a', term: 1, actor: ACTOR, text: 'hello', mark: false, composedKey: null, offRecord: false, ...over,
 });
 const idOf = (r: ReturnType<OperatorModelStore['recordMessage']>): number => {
   if (!r.ok) throw new Error(`${r.error}: ${r.detail}`);
@@ -56,14 +56,14 @@ const rawRow = (f: Fixture, id: number): Record<string, unknown> =>
 const rowCount = (f: Fixture): number => (f.db.prepare('SELECT count(*) AS c FROM operator_messages').get() as { c: number }).c;
 
 describe('operator-model.db: the shared opener at 0600', () => {
-  it('a fresh open migrates to schema 2 (private names B: the name list) and creates the file at 0600 under a 0o022 umask, and its -wal and -shm too', () => {
+  it('a fresh open migrates to schema 3 (the chat\'s off-the-record column) and creates the file at 0600 under a 0o022 umask, and its -wal and -shm too', () => {
     const p = defaultOperatorModelDbPath(mkTmp('ccrc-opmodel-'));
     const old = process.umask(0o022);
     let db: DatabaseSync;
     try { db = openOperatorModelDb(p); } finally { process.umask(old); }
     opened.push(db);
-    expect(OPERATOR_MODEL_SCHEMA_VERSION).toBe(2);
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(2);
+    expect(OPERATOR_MODEL_SCHEMA_VERSION).toBe(3);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(3);
     db.prepare("INSERT INTO read_ledger (at, door, caller, scope, count, outcome, generationRead) VALUES (1, 'board', 'operator', 's', 0, 'ok', 'not-a-session')").run();
     for (const f of [p, `${p}-wal`, `${p}-shm`]) expect(statSync(f).mode & 0o777, f).toBe(0o600);
     expect(path.basename(p)).toBe('operator-model.db');
@@ -77,6 +77,40 @@ describe('operator-model.db: the shared opener at 0600', () => {
     expect(statSync(p).size).toBe(0);
   });
 
+  it('a file at schema 2 with a row in it migrates to 3: the column is added and that row reads offRecord false', () => {
+    const p = defaultOperatorModelDbPath(mkTmp('ccrc-opmodel-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const old = new DatabaseSync(p);
+    old.exec(OPERATOR_MODEL_MIGRATIONS[0]!);
+    old.exec(OPERATOR_MODEL_MIGRATIONS[1]!);
+    old.exec('PRAGMA user_version = 2');
+    old.prepare("INSERT INTO operator_messages (id, at, sessionId, term, actor, sha256, text, cut, state) VALUES (7, 1, 'lane-a-project-a', 1, 'Fixture browser abcdef01', 'h', 'old words', 0, 'recorded')").run();
+    old.close();
+    const db = openOperatorModelDb(p);
+    opened.push(db);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(3);
+    expect(db.prepare("SELECT name FROM pragma_table_info('operator_messages') WHERE name = 'offRecord'").all()).toHaveLength(1);
+    const store = new OperatorModelStore(db, issuerDouble());
+    expect(store.messageById(7)).toMatchObject({ kind: 'measured', value: { id: 7, text: 'old words', offRecord: false } });
+    expect(() => db.prepare("UPDATE operator_messages SET offRecord = 2 WHERE id = 7").run()).toThrow();
+  });
+
+  it('a higher user_version opens with no migration, and its readers still answer', () => {
+    const p = defaultOperatorModelDbPath(mkTmp('ccrc-opmodel-'));
+    const a = openOperatorModelDb(p);
+    a.exec('PRAGMA user_version = 9');
+    a.close();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const b = openOperatorModelDb(p);
+      opened.push(b);
+      expect((b.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(9);
+      const store = new OperatorModelStore(b, issuerDouble());
+      expect(idOf(store.recordMessage({ at: 1, sessionId: 's', term: 1, actor: ACTOR, text: 'x', mark: false, composedKey: null, offRecord: true }))).toBe(1);
+      expect(store.messagesPage(null, 10)).toMatchObject({ kind: 'measured', value: { more: false } });
+    } finally { warn.mockRestore(); }
+  });
+
   it('a higher user_version opens with no migration and one warning', () => {
     const p = defaultOperatorModelDbPath(mkTmp('ccrc-opmodel-'));
     const a = openOperatorModelDb(p);
@@ -88,7 +122,7 @@ describe('operator-model.db: the shared opener at 0600', () => {
       opened.push(b);
       expect((b.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(4);
       expect(warn).toHaveBeenCalledTimes(1);
-      expect(String(warn.mock.calls[0]![0])).toMatch(/^ccrc-server: operator-model\.db is at schema 4, this build knows 2/);
+      expect(String(warn.mock.calls[0]![0])).toMatch(/^ccrc-server: operator-model\.db is at schema 4, this build knows 3/);
     } finally { warn.mockRestore(); }
   });
 });
@@ -100,7 +134,7 @@ describe('recordMessage', () => {
     const f = openOperatorModelStore(defaultOperatorModelDbPath(dir), dir, 1000,
       { witnessHighestIds: () => ({ message: witnessed }) });
     opened.push(f.db);
-    const input = { at: 1001, sessionId: 'lane-a-project-a', term: 1, actor: ACTOR, text: 'fixture', mark: false, composedKey: null };
+    const input = { at: 1001, sessionId: 'lane-a-project-a', term: 1, actor: ACTOR, text: 'fixture', mark: false, composedKey: null, offRecord: false };
     expect(idOf(f.store.recordMessage(input))).toBe(1);
     witnessed = 40;
     expect(idOf(f.store.recordMessage({ ...input, at: 1002 }))).toBe(41);
@@ -110,7 +144,7 @@ describe('recordMessage', () => {
   it('records a row, recorded, with its hash and its actor, after one journal record', () => {
     const f = fixture();
     const r = record(f);
-    expect(r).toEqual({ ok: true, value: { id: 1, cut: false, state: 'recorded', replay: false } });
+    expect(r).toEqual({ ok: true, value: { id: 1, cut: false, state: 'recorded', replay: false, offRecord: false } });
     expect(f.journal.records).toEqual([1]);
     expect(rawRow(f, 1)).toMatchObject({
       id: 1, at: 1_000, sessionId: 'lane-a-project-a', term: 1, actor: 'Fixture browser abcdef01', sha256: sha('hello'),
@@ -121,7 +155,7 @@ describe('recordMessage', () => {
 
   it('the mark records the row settled by mark, stamped at its record', () => {
     const f = fixture();
-    expect(record(f, { mark: true, at: 5 })).toEqual({ ok: true, value: { id: 1, cut: false, state: 'settled', replay: false } });
+    expect(record(f, { mark: true, at: 5 })).toEqual({ ok: true, value: { id: 1, cut: false, state: 'settled', replay: false, offRecord: false } });
     expect(rawRow(f, 1)).toMatchObject({ state: 'settled', settledAt: 5, settledBy: 'mark' });
   });
 
@@ -139,7 +173,7 @@ describe('recordMessage', () => {
     const f = fixture();
     const first = record(f, { composedKey: 'key-0123456789abcdef' });
     const again = record(f, { composedKey: 'key-0123456789abcdef', at: 9_999 });
-    expect(again).toEqual({ ok: true, value: { id: idOf(first), cut: false, state: 'recorded', replay: true } });
+    expect(again).toEqual({ ok: true, value: { id: idOf(first), cut: false, state: 'recorded', replay: true, offRecord: false } });
     expect(rowCount(f)).toBe(1);
     expect(f.journal.records).toEqual([1]);
   });
@@ -149,14 +183,14 @@ describe('recordMessage', () => {
     const id = idOf(record(f, { composedKey: 'key-0123456789abcdef' }));
     expect(f.store.moveMessage(id, 'queue', 'route', 2_000).ok).toBe(true);
     const again = record(f, { composedKey: 'key-0123456789abcdef' });
-    expect(again.ok && again.value).toEqual({ id, cut: false, state: 'queued', replay: true });
+    expect(again.ok && again.value).toEqual({ id, cut: false, state: 'queued', replay: true, offRecord: false });
   });
 
   it('the same key for another session records a second row', () => {
     const f = fixture();
     record(f, { composedKey: 'key-0123456789abcdef' });
     const other = record(f, { composedKey: 'key-0123456789abcdef', sessionId: 'lane-b-project-a' });
-    expect(other).toEqual({ ok: true, value: { id: 2, cut: false, state: 'recorded', replay: false } });
+    expect(other).toEqual({ ok: true, value: { id: 2, cut: false, state: 'recorded', replay: false, offRecord: false } });
     expect(rowCount(f)).toBe(2);
   });
 
@@ -167,6 +201,24 @@ describe('recordMessage', () => {
       .toEqual({ ok: false, error: 'refused', detail: 'send-key-reused' });
     expect(rowCount(f)).toBe(1);
     expect(f.journal.records).toEqual([1]);
+  });
+
+  it('offRecord true is stored, read back through messageById, and answered', () => {
+    const f = fixture();
+    const r = record(f, { offRecord: true });
+    expect(r).toEqual({ ok: true, value: { id: 1, cut: false, state: 'recorded', replay: false, offRecord: true } });
+    expect(rawRow(f, 1).offRecord).toBe(1);
+    expect(f.store.messageById(1)).toMatchObject({ kind: 'measured', value: { id: 1, offRecord: true } });
+    record(f);
+    expect(f.store.messageById(2)).toMatchObject({ kind: 'measured', value: { id: 2, offRecord: false } });
+  });
+
+  it('a replay answers the prior row\'s offRecord, whatever the retry says', () => {
+    const f = fixture();
+    record(f, { composedKey: 'key-0123456789abcdef', offRecord: true });
+    const again = record(f, { composedKey: 'key-0123456789abcdef', offRecord: false });
+    expect(again).toEqual({ ok: true, value: { id: 1, cut: false, state: 'recorded', replay: true, offRecord: true } });
+    expect(rawRow(f, 1).offRecord).toBe(1);
   });
 
   it('a null key never dedupes', () => {
@@ -201,7 +253,7 @@ describe('recordMessage', () => {
     const db = openOperatorModelDb(p);
     opened.push(db);
     const store = new OperatorModelStore(db, { kind: 'refused', code: 'bad-digest', detail: 'record 3' });
-    const r = store.recordMessage({ at: 1, sessionId: 's', term: 1, actor: ACTOR, text: 't', mark: false, composedKey: null });
+    const r = store.recordMessage({ at: 1, sessionId: 's', term: 1, actor: ACTOR, text: 't', mark: false, composedKey: null, offRecord: false });
     expect(r).toEqual({ ok: false, error: 'journal-unreadable', detail: 'bad-digest: record 3' });
     expect((db.prepare('SELECT count(*) AS c FROM operator_messages').get() as { c: number }).c).toBe(0);
   });
@@ -211,7 +263,7 @@ describe('recordMessage', () => {
     const db = openOperatorModelDb(p);
     opened.push(db);
     const store = new OperatorModelStore(db, { kind: 'ready', issue: () => ({ ok: false, error: 'journal-unwritable', detail: 'EROFS' }) });
-    const r = store.recordMessage({ at: 1, sessionId: 's', term: 1, actor: ACTOR, text: 't', mark: false, composedKey: null });
+    const r = store.recordMessage({ at: 1, sessionId: 's', term: 1, actor: ACTOR, text: 't', mark: false, composedKey: null, offRecord: false });
     expect(r).toEqual({ ok: false, error: 'journal-unwritable', detail: 'EROFS' });
     expect((db.prepare('SELECT count(*) AS c FROM operator_messages').get() as { c: number }).c).toBe(0);
   });
@@ -222,7 +274,7 @@ describe('recordMessage', () => {
     opened.push(db);
     const seen: boolean[] = [];
     const store = new OperatorModelStore(db, { kind: 'ready', issue: () => { seen.push(db.isTransaction); return { ok: true, id: 1 }; } });
-    store.recordMessage({ at: 1, sessionId: 's', term: 1, actor: ACTOR, text: 't', mark: false, composedKey: null });
+    store.recordMessage({ at: 1, sessionId: 's', term: 1, actor: ACTOR, text: 't', mark: false, composedKey: null, offRecord: false });
     expect(seen).toEqual([true]);
   });
 });
@@ -395,6 +447,68 @@ describe('the readers', () => {
   });
 });
 
+describe('messagesPage: the chat thread door\'s words reader', () => {
+  const ids = (r: ReturnType<OperatorModelStore['messagesPage']>): number[] => {
+    if (r.kind !== 'measured') throw new Error(r.why);
+    return r.value.rows.map((x) => x.id);
+  };
+  it('answers an empty store as no rows and no more', () => {
+    const f = fixture();
+    expect(f.store.messagesPage(null, 10)).toEqual({ kind: 'measured', value: { rows: [], more: false } });
+  });
+  it('answers every row oldest first when the page holds them all, with their text and offRecord', () => {
+    const f = fixture();
+    record(f, { text: 'one' });
+    record(f, { text: 'two', offRecord: true, sessionId: 'lane-b-project-a' });
+    const r = f.store.messagesPage(null, 10);
+    expect(ids(r)).toEqual([1, 2]);
+    expect(r).toMatchObject({ value: { more: false, rows: [{ text: 'one', offRecord: false }, { text: 'two', offRecord: true }] } });
+  });
+  it('answers the newest rows below beforeId, oldest first, with more true exactly while an older row exists', () => {
+    const f = fixture();
+    for (let i = 0; i < 5; i += 1) record(f, { at: 100 + i });
+    const first = f.store.messagesPage(null, 2);
+    expect(ids(first)).toEqual([4, 5]);
+    expect(first).toMatchObject({ value: { more: true } });
+    const second = f.store.messagesPage(4, 2);
+    expect(ids(second)).toEqual([2, 3]);
+    expect(second).toMatchObject({ value: { more: true } });
+    const third = f.store.messagesPage(2, 2);
+    expect(ids(third)).toEqual([1]);
+    expect(third).toMatchObject({ value: { more: false } });
+    // an exact page: the oldest returned is the first row, so there is no more
+    expect(f.store.messagesPage(null, 5)).toMatchObject({ value: { more: false } });
+    expect(f.store.messagesPage(null, 4)).toMatchObject({ value: { more: true } });
+  });
+  it('answers no rows and no more below the first id', () => {
+    const f = fixture();
+    record(f);
+    expect(f.store.messagesPage(1, 10)).toEqual({ kind: 'measured', value: { rows: [], more: false } });
+  });
+  it('is unmeasured, with a reason, for a bad limit or a bad beforeId', () => {
+    const f = fixture();
+    record(f);
+    for (const limit of [0, -1, 501, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 2]) {
+      const r = f.store.messagesPage(null, limit);
+      expect(r.kind, `limit ${limit}`).toBe('unmeasured');
+      expect(r.kind === 'unmeasured' && r.why).toMatch(/limit/);
+    }
+    expect(f.store.messagesPage(null, 500).kind).toBe('measured');
+    expect(f.store.messagesPage(null, 1).kind).toBe('measured');
+    for (const before of [0, -3, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 2]) {
+      const r = f.store.messagesPage(before, 10);
+      expect(r.kind, `before ${before}`).toBe('unmeasured');
+      expect(r.kind === 'unmeasured' && r.why).toMatch(/beforeId/);
+    }
+  });
+  it('is unmeasured on a closed store, never an empty page', () => {
+    const f = fixture();
+    record(f);
+    f.db.close();
+    expect(f.store.messagesPage(null, 10).kind).toBe('unmeasured');
+  });
+});
+
 const LINE: ReadLine = {
   at: 1, door: 'board', caller: 'overlord', scope: 'board', count: 3, outcome: 'ok', generation: 2, generationRead: 'measured',
   turnState: 'working',
@@ -486,7 +600,7 @@ const SERVED: ReadLine = { ...LINE, outcome: 'rows' };
 const OPERATOR_LINE: ReadLine = { ...SERVED, caller: 'operator', generation: null, generationRead: 'not-a-session', turnState: null };
 
 describe('servedReadsSince: the read ceiling\'s counter', () => {
-  it('counts the door\'s served lines inside the window, with the oldest one\'s time, and leaves out the console, other outcomes, other doors and the window\'s edge', () => {
+  it('counts the door\'s served lines inside the window by every caller but the console, with the oldest one\'s time, and leaves out the console, other outcomes, other doors and the window\'s edge', () => {
     const f = fixture();
     f.store.recordRead({ ...SERVED, at: 1_000 });                                  // at the edge: not counted
     f.store.recordRead({ ...SERVED, at: 1_001 });
@@ -495,7 +609,7 @@ describe('servedReadsSince: the read ceiling\'s counter', () => {
     f.store.recordRead({ ...SERVED, at: 1_300, outcome: 'unmeasured' });           // another outcome
     f.store.recordRead({ ...SERVED, at: 1_400, door: 'messages' });                // another door
     f.store.recordRead({ ...SERVED, at: 2_000 });
-    expect(f.store.servedReadsSince('board', 1_000)).toEqual({ kind: 'measured', value: { count: 3, oldestAt: 1_001, lastRefusalAt: 'none' } });
+    expect(f.store.servedReadsSince('board', 1_000, 'overlord')).toEqual({ kind: 'measured', value: { count: 3, oldestAt: 1_001, lastRefusalAt: 'none' } });
   });
   it('answers the newest read-ceiling line\'s time for the door, in or out of the window', () => {
     const f = fixture();
@@ -503,13 +617,34 @@ describe('servedReadsSince: the read ceiling\'s counter', () => {
     f.store.recordRead({ ...SERVED, at: 100, outcome: 'read-ceiling', count: 0 });
     f.store.recordRead({ ...SERVED, at: 300, outcome: 'read-ceiling', count: 0 });
     f.store.recordRead({ ...SERVED, at: 900, outcome: 'read-ceiling', count: 0, door: 'messages' });
-    expect(f.store.servedReadsSince('board', 4_000)).toEqual({ kind: 'measured', value: { count: 1, oldestAt: 5_000, lastRefusalAt: 300 } });
+    expect(f.store.servedReadsSince('board', 4_000, 'overlord')).toEqual({ kind: 'measured', value: { count: 1, oldestAt: 5_000, lastRefusalAt: 300 } });
   });
   it('answers none and a zero count with no line, and unmeasured on a closed handle', () => {
     const f = fixture();
-    expect(f.store.servedReadsSince('inbox', 0)).toEqual({ kind: 'measured', value: { count: 0, oldestAt: 'none', lastRefusalAt: 'none' } });
+    expect(f.store.servedReadsSince('inbox', 0, 'overlord')).toEqual({ kind: 'measured', value: { count: 0, oldestAt: 'none', lastRefusalAt: 'none' } });
+    expect(f.store.servedReadsSince('chat', 0, 'operator')).toEqual({ kind: 'measured', value: { count: 0, oldestAt: 'none', lastRefusalAt: 'none' } });
     f.db.close();
-    expect(f.store.servedReadsSince('inbox', 0).kind).toBe('unmeasured');
+    expect(f.store.servedReadsSince('inbox', 0, 'overlord').kind).toBe('unmeasured');
+    expect(f.store.servedReadsSince('chat', 0, 'operator').kind).toBe('unmeasured');
+  });
+  it('for the console counts only the console\'s served lines of the door and only the console\'s refusal line, so neither side spends the other\'s ceiling', () => {
+    const f = fixture();
+    f.store.recordRead({ ...OPERATOR_LINE, door: 'chat', at: 1_100 });
+    f.store.recordRead({ ...OPERATOR_LINE, door: 'chat', at: 1_200 });
+    f.store.recordRead({ ...OPERATOR_LINE, door: 'chat', at: 1_300, outcome: 'unmeasured' });   // another outcome
+    f.store.recordRead({ ...OPERATOR_LINE, door: 'chat-history', at: 1_400 });                  // another door
+    f.store.recordRead({ ...OPERATOR_LINE, door: 'chat', at: 400, outcome: 'read-ceiling', count: 0 });
+    f.store.recordRead({ ...SERVED, door: 'chat', at: 1_500 });                                 // the Overlord's
+    f.store.recordRead({ ...SERVED, door: 'chat', at: 1_600, caller: 'reader', generation: null, generationRead: 'unmeasured', turnState: 'stale' });
+    f.store.recordRead({ ...SERVED, door: 'chat', at: 900, outcome: 'read-ceiling', count: 0 }); // the Overlord's refusal
+    expect(f.store.servedReadsSince('chat', 1_000, 'operator'))
+      .toEqual({ kind: 'measured', value: { count: 2, oldestAt: 1_100, lastRefusalAt: 400 } });
+    expect(f.store.servedReadsSince('chat', 1_000, 'overlord'))
+      .toEqual({ kind: 'measured', value: { count: 2, oldestAt: 1_500, lastRefusalAt: 900 } });
+  });
+  it('is unmeasured for a caller word that is neither', () => {
+    const f = fixture();
+    expect(f.store.servedReadsSince('chat', 0, 'reader' as never).kind).toBe('unmeasured');
   });
 });
 
