@@ -792,8 +792,9 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[130] (docs_settings, the console-wide Docs settings row).
     // and MIGRATIONS[131] (overlord_readiness and overlord_readiness_items, the Overlord's readiness word).
     // and MIGRATIONS[132] (overlord_account_holds, the Overlord's account holds, Overlord W1 renewal readings H).
-    expect(COORD_SCHEMA_VERSION).toBe(133);
-    expect(MIGRATIONS.length).toBe(133);
+    // and MIGRATIONS[133] (delegation_events_projection, the delegation events contract row, D-9167).
+    expect(COORD_SCHEMA_VERSION).toBe(134);
+    expect(MIGRATIONS.length).toBe(134);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -953,8 +954,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[130] (docs_settings),
 
     // and MIGRATIONS[131] (the Overlord's readiness word),
-    // and MIGRATIONS[132] (the Overlord's account holds); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(133);
+    // and MIGRATIONS[132] (the Overlord's account holds),
+    // and MIGRATIONS[133] (the delegation events contract row); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(134);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -1182,11 +1184,14 @@ describe('coord.db: the six delegation_* tables (delegation broker wave 3, spec 
     'delegation_lineage_by_lease', 'delegation_lineage_by_parent', 'delegation_lineage_by_run',
     'delegation_sessions_by_effective',
   ];
+  /** D-9167: the `delegation_*` tables a LATER entry adds, each its own fact beside the six (the delegation events contract row,
+   *  migration 134, describes `delegation_events` and is no broker state). Named here, so a new one is a decision, never a match. */
+  const LATER_TABLES: readonly string[] = ['delegation_events_projection'];
   interface ColumnInfo { name: string; type: string; notnull: number; pk: number }
   interface FkInfo { table: string; from: string; to: string }
   const masterNames = (db: DatabaseSync, type: 'table' | 'index'): string[] =>
     (db.prepare("SELECT name FROM sqlite_master WHERE type = ? AND name LIKE 'delegation\\_%' ESCAPE '\\' AND sql IS NOT NULL ORDER BY name")
-      .all(type) as { name: string }[]).map((r) => r.name);
+      .all(type) as { name: string }[]).map((r) => r.name).filter((n) => !LATER_TABLES.includes(n));
   const cols = (db: DatabaseSync, table: string): Array<[string, string, number, number]> =>
     (db.prepare(`SELECT name, type, "notnull", pk FROM pragma_table_info('${table}')`).all() as unknown as ColumnInfo[])
       .map((c) => [c.name, c.type, c.notnull, c.pk]);
@@ -1221,7 +1226,9 @@ describe('coord.db: the six delegation_* tables (delegation broker wave 3, spec 
     expect(PREDECESSOR, 'no MIGRATIONS entry creates dead_coordinator_breaker_state').toBeGreaterThanOrEqual(19);
     expect(SLOT, 'no MIGRATIONS entry creates delegation_sessions').toBeGreaterThan(PREDECESSOR);
     expect(SLOT).toBeLessThanOrEqual(MIGRATIONS.length);
-    expect(MIGRATIONS.filter((m) => m.includes('CREATE TABLE delegation_')), 'one migration, not several').toHaveLength(1);
+    expect(MIGRATIONS.filter((m) => /CREATE TABLE delegation_/.test(m.replace(new RegExp(`CREATE TABLE (${LATER_TABLES.join('|')})\\b`, 'g'), ''))),
+      'one migration, not several').toHaveLength(1);
+    expect(LATER_TABLES.map((t) => MIGRATIONS.filter((m) => m.includes(`CREATE TABLE ${t} `) || m.includes(`CREATE TABLE ${t}\n`)).length)).toEqual([1]);
     const ddl = MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '');
     const statements = ddl.split(';').map((s) => s.trim()).filter((s) => s !== '');
     expect(statements.every((s) => /^CREATE (UNIQUE )?(TABLE|INDEX) /.test(s)),

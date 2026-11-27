@@ -4771,6 +4771,27 @@ export const MIGRATIONS: readonly string[] = [
     heldAt INTEGER NOT NULL, clearedAt INTEGER, clearedBy TEXT
   );
   `,
+  // ── 134: user_version 133 -> 134 ──────────────────────────────────────────
+  // D-9167, D-9170 (delegation events retention, spec `2026-11-27-delegation-events-retention-design.md` §4.3, plan PR-2): the
+  // CONTRACT ROW of `delegation_events`, the one fact that says which evidence records SQLite holds: `all` (every one, the seed and
+  // what `main` held) or `thin` (the kept classes, plus the excluded rows in [sweptBelow, legacyBelow) the sweep has not reached), and
+  // the lane's AUTOMATIC STOP (when, why, the card row's write time it stopped under, when its one notice was raised). It describes
+  // repairable output, so it lives beside that output and commits with it, never in the checkpoint. `mode` carries NO CHECK, so a
+  // word a newer build writes reads as unknown, which keeps every class (`delegation-event-projection.ts#decodeDelegationEventsRow`).
+  // TWO writers, both in `CoordStore` and called only by the applier: `setDelegationEventsRow` (the whole row) and
+  // `deleteDelegationEventsAt` (a sweep batch and its `sweptBelow`, in one transaction). From this entry `delegation_events` is
+  // journal-derived OF THE KEPT CLASSES (entry 22 is frozen; this entry says it).
+  // NEW TABLE only: an older build takes rule 3, never names it, and its repair re-projects every class. RE-MEASURE the slot before
+  // merge (it must print 133 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE delegation_events_projection (
+    id INTEGER PRIMARY KEY CHECK (id = 1), mode TEXT NOT NULL, legacyBelow INTEGER, sweptBelow INTEGER,
+    stoppedAt INTEGER, stopReason TEXT, stopChoiceAt INTEGER, stopNoticedAt INTEGER, updatedAt INTEGER NOT NULL
+  );
+  INSERT INTO delegation_events_projection (id, mode, updatedAt) VALUES (1, 'all', 0);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

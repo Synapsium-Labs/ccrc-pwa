@@ -82,6 +82,16 @@ export interface DelegationEventsColumns {
   readonly stopNoticedAt: number | null;
 }
 
+/** The store's raw read of the row (`CoordStore.delegationEventsRow`), declared here by its consumer: the columns as SQLite holds
+ *  them, no row, or why the read failed. Never folded: an absent row and an unreadable one both keep every class, for two reasons. */
+export type DelegationEventsRowRead =
+  | { readonly kind: 'row'; readonly raw: Readonly<Record<string, unknown>> }
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'unreadable'; readonly detail: string };
+
+/** SQLite's page counts, for the daily line (`CoordStore.coordPageStats`). */
+export interface DelegationEventsPageStats { readonly pageCount: number; readonly freelistCount: number; readonly pageSize: number }
+
 const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
 const countOrNull = (v: unknown): boolean => v === null || isCount(v);
 
@@ -183,7 +193,7 @@ export interface DelegationEventsLineInput {
   readonly total: number;
   readonly byClass: Readonly<Record<DelegationEventClass, number>>;
   readonly legacyLeft: number;
-  readonly pages: { readonly pageCount: number; readonly freelistCount: number; readonly pageSize: number } | null;
+  readonly pages: DelegationEventsPageStats | null;
 }
 
 /** The daily counts line (D-9170: the measurement a shadow phase would have given). */
