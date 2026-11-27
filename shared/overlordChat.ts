@@ -288,10 +288,16 @@ export function readChatThreadAnswer(status: number, body: unknown): ChatThreadA
     const r = readChatThread(body);
     return r.ok ? { kind: 'thread', thread: r.thread } : { kind: 'off-shape' };
   }
-  if (status >= 400 && status <= 599 && isObj(body) && typeof body.error === 'string' && body.error !== '') {
-    return { kind: 'refused', error: body.error, ...(isCount(body.retryAfterS) ? { retryAfterS: body.retryAfterS } : {}) };
-  }
-  return { kind: 'off-shape' };
+  const refused = refusalOf(status, body);
+  return refused === 'not-refused' ? { kind: 'off-shape' } : refused;
+}
+
+/** The refusal the chat's answers read alike: a 4xx or 5xx whose body names its `error` word, with `retryAfterS` when the body
+ *  has one (the read ceiling's). One reading, so the thread and the send never word a refusal differently. */
+type ChatRefused = { readonly kind: 'refused'; readonly error: string; readonly retryAfterS?: number };
+function refusalOf(status: number, body: unknown): ChatRefused | 'not-refused' {
+  if (status < 400 || status > 599 || !isObj(body) || typeof body.error !== 'string' || body.error === '') return 'not-refused';
+  return { kind: 'refused', error: body.error, ...(isCount(body.retryAfterS) ? { retryAfterS: body.retryAfterS } : {}) };
 }
 
 // ── the prompt route's answer, as the chat reads it ───────────────────────────────────────────────────────────────────
@@ -313,8 +319,6 @@ export function readChatSendAnswer(status: number, body: unknown): ChatSendAnswe
     if (body.ok !== true || !isPositive(body.messageId)) return { kind: 'off-shape' };
     return { kind: 'recorded', messageId: body.messageId, cut: body.cut === true, replay: body.replay === true, offRecord: body.offRecord === true };
   }
-  if (status >= 400 && status <= 599 && typeof body.error === 'string' && body.error !== '') {
-    return { kind: 'refused', error: body.error, ...(isCount(body.retryAfterS) ? { retryAfterS: body.retryAfterS } : {}) };
-  }
-  return { kind: 'off-shape' };
+  const refused = refusalOf(status, body);
+  return refused === 'not-refused' ? { kind: 'off-shape' } : refused;
 }

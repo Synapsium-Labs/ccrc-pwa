@@ -14,7 +14,7 @@ import type { OperatorMessageRow } from '../../../shared/operatorMessages.js';
 import type { ReadinessWord } from '../../../shared/overlord-readiness.js';
 import type { OverlordHistoryRequest } from '../../../shared/overlordHistory.js';
 import {
-  CHAT_SERVER_LINE_MAP, CHAT_SERVER_LINE_UNMEASURED, NOT_ON_RECORD, chatTicksOf,
+  CHAT_ENTRY_KINDS, CHAT_SERVER_LINE_MAP, CHAT_SERVER_LINE_UNMEASURED, NOT_ON_RECORD, chatTicksOf,
   type ChatEntry, type ChatThread, type GenerationKey, type ServerLineWord,
 } from '../../../shared/overlordChat.js';
 
@@ -107,7 +107,16 @@ export function composeChat(f: ChatFacts): ChatThread {
 export const EARLIER_PAGE_BEFORE = 40;
 
 /** Why no request can be made for a page. */
-export type EarlierPageRefusal = 'no-generation' | 'current' | 'not-pageable';
+const EARLIER_PAGE_REFUSAL_MAP = {
+  'no-generation': 'no generation row names it',
+  current: 'the live generation streams from its transcript',
+  'not-pageable': "the history store's verbs cannot page it",
+} as const;
+export type EarlierPageRefusal = keyof typeof EARLIER_PAGE_REFUSAL_MAP;
+/** The chat's own words, for the coordination kebab census: an earlier page's refusal reasons (which the earlier door answers as
+ *  `bad-request`'s detail or a thread's `earlier` mark, never a mail or run code) and a thread entry's kinds. */
+export const isChatKebab = (word: string): boolean =>
+  Object.hasOwn(EARLIER_PAGE_REFUSAL_MAP, word) || (CHAT_ENTRY_KINDS as readonly string[]).includes(word);
 
 /** The history request for one page of `gen`, or why none can be made. The live generation streams from its transcript
  *  (`current`); no row is `no-generation`; a store whose verbs cannot name a conversation's newest entries is `not-pageable`

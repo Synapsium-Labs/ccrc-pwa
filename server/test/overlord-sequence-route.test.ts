@@ -128,7 +128,7 @@ async function seqRig(o: SeqOpts = {}): Promise<SeqRig> {
     now: () => NOW,
   };
   const ledger: OverlordReadDeps['ledger'] = o.ledgerFails === true
-    ? { servedReadsSince: (d, t) => store.servedReadsSince(d, t), recordRead: () => ({ ok: false, error: 'write-failed', detail: 'a fixture write failure' }) }
+    ? { servedReadsSince: (d, t, c) => store.servedReadsSince(d, t, c), recordRead: () => ({ ok: false, error: 'write-failed', detail: 'a fixture write failure' }) }
     : store;
   const db = o.db ?? sequenceDb([]);
   let reads = 0;

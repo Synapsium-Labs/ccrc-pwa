@@ -366,7 +366,7 @@ export const CHAT_MUTANT_SETS: Record<string, MutantSet<never>> = {
     { id: 'S1 a 200 with no messageId is recorded', old: "if (body.ok !== true || !isPositive(body.messageId)) return { kind: 'off-shape' };", new: "if (body.ok !== true) return { kind: 'off-shape' };" },
     { id: 'S2 retryAfterS dropped', old: '...(isCount(body.retryAfterS) ? { retryAfterS: body.retryAfterS } : {})', new: '...{}' },
     { id: 'S3 offRecord echo defaults true', old: 'offRecord: body.offRecord === true }', new: 'offRecord: body.offRecord !== false }' },
-    { id: 'S4 a refusal with no word is refused', old: "typeof body.error === 'string' && body.error !== ''", new: 'true' },
+    { id: 'S4 a refusal with no word is refused', old: " || typeof body.error !== 'string' || body.error === '') return 'not-refused';", new: ") return 'not-refused';" },
   ]),
   'shared/overlordChat.ts#readChatEarlierQuery': set<ChatVocabModule>(VOCAB, readChatEarlierQueryCases, [
     { id: 'Q1 extra keys admitted', old: "const extra = onlyKeys(q, ['term', 'n', 'around']);", new: 'const extra = null;' },

@@ -18,7 +18,7 @@ import { READ_SCOPE_MAX_CHARS } from '../../../shared/operatorMessages.js';
 import type { RouteRefusal } from '../../../shared/refusal.js';
 import type { ChatThread, GenerationKey } from '../../../shared/overlordChat.js';
 import { designationFactFrom, identityOf } from '../roleOf.js';
-import { composeChat, earlierPagePlan, type ChatFacts, type GenerationFact } from './overlordChat.js';
+import { composeChat, earlierPagePlan, isChatKebab, type ChatFacts, type GenerationFact } from './overlordChat.js';
 import type { HistoryDoorAnswer } from './overlordHistory.js';
 import type { OverlordHistoryRequest } from '../../../shared/overlordHistory.js';
 
@@ -84,6 +84,15 @@ export const readinessFact = (r: ReadinessChangesRead): ChatFacts['readiness'] =
 /** A door's scope: the canonical target, cut to the ledger's bound by dropping the session (never a line the ledger refuses). */
 const scopeOf = (full: string, short: string): string => (full.length <= READ_SCOPE_MAX_CHARS ? full : short);
 
+/** The ledger outcomes the chat's doors write in words of their own: each is a line's `outcome`, never a refusal word. */
+const CHAT_DOOR_OUTCOME_MAP = {
+  'messages-unmeasured': 'the thread handed no messages',
+  'generations-unmeasured': 'an earlier page found no generations to read',
+} as const;
+type ChatDoorOutcome = keyof typeof CHAT_DOOR_OUTCOME_MAP;
+/** The chat's words, for the coordination kebab census: its vocabulary's (`isChatKebab`) and its doors' ledger outcomes. */
+export const isChatDoorKebab = (word: string): boolean => isChatKebab(word) || Object.hasOwn(CHAT_DOOR_OUTCOME_MAP, word);
+
 /** The thread's answer for the runner. Its line counts the messages it hands. A thread whose messages were read is a served line
  *  (`rows`), whatever else could not be read, because it hands the operator's words, so it counts against the console's ceiling
  *  (slug `chat-line-counts-every-read-with-words`); one whose messages could not be read hands none and records
@@ -92,7 +101,7 @@ export function chatThreadComposed(thread: ChatThread): ChatComposed {
   const scope = scopeOf(`session:${thread.sessionId ?? 'none'}`, 'session');
   const count = thread.entries.filter((e) => e.kind === 'message').length;
   if (thread.messages.kind === 'read') return { kind: 'rows', body: thread, scope, count };
-  return { kind: 'answer', body: thread, scope, outcome: 'messages-unmeasured' };
+  return { kind: 'answer', body: thread, scope, outcome: 'messages-unmeasured' satisfies ChatDoorOutcome };
 }
 
 // ── the earlier door ──────────────────────────────────────────────────────────────────────────────────────────────────
@@ -112,7 +121,7 @@ export type EarlierStep =
 
 export function earlierStep(gens: ChatFacts['generations'], gen: GenerationKey, around: string | null, pageable: boolean): EarlierStep {
   if (gens.kind === 'unmeasured') {
-    return { kind: 'composed', composed: { kind: 'refuse', word: 'unmeasured', detail: 'the generations could not be read', scope: earlierScope(gen, null, around), outcome: 'generations-unmeasured' } };
+    return { kind: 'composed', composed: { kind: 'refuse', word: 'unmeasured', detail: 'the generations could not be read', scope: earlierScope(gen, null, around), outcome: 'generations-unmeasured' satisfies ChatDoorOutcome } };
   }
   const row = gens.rows.find((g) => g.term === gen.term && g.n === gen.n) ?? null;
   const scope = earlierScope(gen, row?.sessionId ?? null, around);

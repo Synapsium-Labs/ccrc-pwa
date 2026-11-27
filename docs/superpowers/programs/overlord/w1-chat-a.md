@@ -217,6 +217,21 @@ Code, and each stays behind a reader that already exists:
 Another harness changes those readers (its transcript reader, its injected lines, what the sweep ingests); the chat's doors,
 deciders and part do not change, and `chatWords.ts` keeps its rule that no transcript user turn is ever the operator's words.
 
+## The first CI runs on the tip (red), and the fixes
+
+The fast run and the dispatched full run on `bcd3d9068047` were red in five server files, all this branch's own; the browser shards
+and every pwa leg were green (the chat's browser file, 36 cases, and the place's, 128). These are tests I had not run locally:
+- `mail-routes` (the coordination kebab census): the chat's literals were undeclared. They are now admitted through guards
+  derived from their maps: `isChatKebab` (`coord/overlordChat.ts`: an earlier page's refusal reasons and a thread entry's kinds)
+  inside `isChatDoorKebab` (`coord/overlordChatDoor.ts`: the doors' two ledger outcomes), plus the read ledger's own guards
+  `isReadDoor` and `isGenerationRead` (`chat-history`, `not-a-session`).
+- `overlord-sequence-route` and `typecheck-tests`: the sequence route's rig still passed two arguments to the ceiling counter,
+  which takes the caller as its third since this branch (the `servedReadsSince` row of the table above).
+- `private-names-store`: it pinned the private store at schema 2; migration 3 (the chat's `offRecord`) makes it 3, and its
+  schema-1 case now drops that column too.
+- `mutation-floors`, the send answer's set: the thread answer's reader repeated the send's refusal lines, so two mutants' old text
+  occurred twice. Both readers now read a refusal through one helper (`refusalOf`, `shared/overlordChat.ts`), and S4 mutates it.
+
 ## Known limits (so far)
 
 - Earlier generations are not paged in W1 (the measured arm); the divider names `ccrc history` instead. The part draws a
