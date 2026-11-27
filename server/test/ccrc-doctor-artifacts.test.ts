@@ -3,7 +3,7 @@
 // Hosts here are reserved test names, or `duckdns.org` names whose label is generated per run.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
@@ -276,6 +276,58 @@ describe('ccrc doctor: artifacts', () => {
       expect(remedyFor(r.stdout, 'artifacts')).toContain('ccrc expose duckdns or ccrc expose byo');
     }
   }, SLOW);
+
+  it('doctor: a file the check reads that is a directory or unreadable is unmeasured', () => {
+    // The exposure file, ccrc.env (the console's port) and the generated Caddyfile, each a directory and each unreadable:
+    // the check reads none of them, says nothing on stderr, and WARNs naming the file (fix round 1, the hosted red on
+    // ccrc-doctor-core-state). Unreadable is skipped as root, who reads every file.
+    // The check runs alone, sourced after ccrc: older checks (exposure, auth, name) read the exposure file too, and what
+    // they print for a directory is theirs, not this check's.
+    const ROOT = process.getuid?.() === 0;
+    for (const file of ['exposure.env', 'ccrc.env', 'Caddyfile']) {
+      for (const shape of ROOT ? ['directory'] : ['directory', 'unreadable']) {
+        const n = names();
+        const home = artifactBox('ccrc-doctor-art-unread-', n);
+        const p = join(home, '.ccrc', file);
+        if (shape === 'directory') { rmSync(p, { force: true }); mkdirSync(p); } else chmodSync(p, 0o000);
+        const s = spawnSync(BASH, ['-c', '. "$1"; . "$2"; _check_artifacts', '_', ccrcIn(home), CHECKS_SRC],
+          { env: doctorEnv(home), encoding: 'utf8' });
+        const r = { stdout: s.stdout ?? '', stderr: s.stderr ?? '' };
+        const what = `${file} ${shape}`;
+        expect(artifactLine(r.stdout), `${what}\n${r.stdout}`).toBe(file === 'exposure.env'
+          ? `WARN artifacts: ${p} is not a readable regular file, so the artifact names were never read`
+          : `WARN artifacts: ${p} is not a readable regular file, so the artifact tier was never measured against it`);
+        expect(remedyFor(r.stdout, 'artifacts'), what).toBe(`  remedy: look at what is really there: ls -ld ${p}`);
+        expect(r.stderr, what).toBe('');
+        if (shape === 'unreadable') chmodSync(p, 0o600);
+      }
+    }
+  }, SLOW);
+
+  it('doctor: a file the check reads that is absent', () => {
+    // No exposure file is a skip; no ccrc.env is the server's default port, 7788, so the tier passes; no Caddyfile is the
+    // block missing. With no artifact keys, a ccrc.env that is a directory is not this check's: it skips, and only config WARNs.
+    const n = names();
+    const noExp = artifactBox('ccrc-doctor-art-absent-', n);
+    rmSync(join(noExp, '.ccrc', 'exposure.env'));
+    expect(skipLineFor(runDoctor(noExp).stdout, 'artifacts')).toContain('no exposure configured');
+    const noEnv = artifactBox('ccrc-doctor-art-absent-', n);
+    rmSync(join(noEnv, '.ccrc', 'ccrc.env'));
+    const e = runDoctor(noEnv);
+    expect(artifactLine(e.stdout), e.stdout).toMatch(/^PASS artifacts: /);
+    expect(e.stderr).toBe('');
+    const noCf = artifactBox('ccrc-doctor-art-absent-', n);
+    rmSync(join(noCf, '.ccrc', 'Caddyfile'));
+    const c = runDoctor(noCf);
+    expect(artifactLine(c.stdout), c.stdout).toMatch(/^FAIL artifacts: the generated Caddyfile \(.*\) has no site block for /);
+    expect(c.stderr).toBe('');
+    const bare = healthy('ccrc-doctor-art-absent-');
+    rmSync(join(bare, '.ccrc', 'ccrc.env'), { force: true });
+    mkdirSync(join(bare, '.ccrc', 'ccrc.env'));
+    const b = runDoctor(bare);
+    expect(skipLineFor(b.stdout, 'artifacts'), b.stdout).toContain('no artifact names set');
+    expect(b.stderr).toBe('');
+  }, 2 * SLOW);
 
   it('doctor: the fixed sentence is the listener\'s', () => {
     const m = /^_DR_ARTIFACT_FIXED='([^'\n]+)'$/m.exec(readFileSync(CHECKS_SRC, 'utf8'));

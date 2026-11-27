@@ -7162,7 +7162,7 @@ _dr_ip4_global() {
 _ART_PUBLIC_SUFFIXES='duckdns.org'
 _art_port() { [[ $1 =~ ^[1-9][0-9]{0,4}$ ]] && (( $1 <= 65535 )); }
 _art_numeric() { local l=${1##*.}; [[ $l =~ ^[0-9]+$ || $l =~ ^0[xX][0-9a-fA-F]*$ ]]; }
-_art_q() { local v=$1; (( ${#v} > 80 )) && v="${v:0:80}..."; printf '"%s"' "$v"; }
+_art_q() { local s=$1; (( ${#s} > 80 )) && s="${s:0:80}..."; printf '"%s"' "$s"; }
 _art_https() {  # isExactHttpsOrigin
   local LC_ALL=C r=${1#https://} h="" l='[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?'   # LC_ALL: [a-z] is ASCII only
   [[ $1 == https://* ]] || return 1
@@ -7390,6 +7390,11 @@ _exp_artifacts() {
     esac
   done
   [ -z "$off" ] || [ -z "$ao$co" ] || _ccrc_usage_die "--off"
+  # A file this arm reads or rewrites that stands but is not a readable regular file is never read or written over.
+  for l in "$CCRC_EXPOSURE_FILE" "$BOX_ENV_FILE" "$CCRC_CADDYFILE"; do
+    [ ! -e "$l" ] || { [ -f "$l" ] && [ -r "$l" ]; } \
+      || _ccrc_die "$l is not a readable regular file, so the artifact tier's files were never read: look at what is really there (ls -ld $l). Nothing was written."
+  done
   # The tier never stands alone: it sits beside a named console exposure that arms sign-in, or nowhere, so no
   # artifacts-only exposure can exist (and the reach proof never meets one).
   local why="" auth=""

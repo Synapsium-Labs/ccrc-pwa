@@ -14,7 +14,7 @@
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as pty from 'node-pty';
@@ -766,6 +766,34 @@ describe('ccrc expose artifacts: the arm', () => {
     expect(runPiped(home, ['expose', 'artifacts', '--off']).code).toBe(0);
     expect(runPiped(home, flags).code).toBe(0);
     expect(bytesAt(exposurePath(home))).toContain('CCRC_ARTIFACT_PORT=7790\n');
+  });
+
+  it('expose: a file the arm reads that is a directory or unreadable refuses', () => {
+    // The exposure file, ccrc.env (the console's port and the shadow keys) and the Caddyfile it rewrites, each a directory
+    // and each unreadable: the arm and --off read none of them, write nothing and name the file (fix round 1). Absent, each
+    // is already pinned: no exposure file by `the arm never stands alone`, no ccrc.env (7788) and no Caddyfile (written) by
+    // every byo case. Unreadable is skipped as root, who reads every file.
+    const ROOT = process.getuid?.() === 0;
+    const flags = ['expose', 'artifacts', '--artifact-origin', 'https://art.example.invalid', '--content-origin', 'https://content.example.invalid'];
+    for (const file of ['exposure.env', 'ccrc.env', 'Caddyfile']) {
+      for (const shape of ROOT ? ['directory'] : ['directory', 'unreadable']) {
+        const home = box('ccrc-art-unread-');
+        const p = join(home, '.ccrc', file);
+        if (!(file === 'exposure.env' && shape === 'directory')) seedFile(home, byoEnv('https://ccrc.example.test', 'example.test'));
+        if (shape === 'directory') { mkdirSync(join(home, '.ccrc'), { recursive: true }); rmSync(p, { force: true }); mkdirSync(p); }
+        else { if (!existsSync(p)) writeFileSync(p, file === 'Caddyfile' ? caddyfile('ccrc.example.test') : 'CCRC_PORT=7788\n'); chmodSync(p, 0o000); }
+        const before = { dir: ccrcDirEntries(home), env: file === 'exposure.env' ? null : bytesAt(exposurePath(home)) };
+        const what = `${file} ${shape}`;
+        for (const argv of [flags, ['expose', 'artifacts', '--off']]) {
+          const r = runPiped(home, argv);
+          expect(r.code, `${what} ${argv.join(' ')}: ${r.stderr}`).toBe(1);
+          expect(r.stderr.trim(), what).toBe(`ccrc: ${p} is not a readable regular file, so the artifact tier's files were never read: `
+            + `look at what is really there (ls -ld ${p}). Nothing was written.`);
+          expect({ dir: ccrcDirEntries(home), env: file === 'exposure.env' ? null : bytesAt(exposurePath(home)) }, what).toEqual(before);
+        }
+        if (shape === 'unreadable') chmodSync(p, 0o600);
+      }
+    }
   });
 
   it('expose: artifacts flags that do not fit are usage errors or refusals', async () => {
