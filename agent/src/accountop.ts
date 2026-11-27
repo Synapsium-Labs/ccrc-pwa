@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
-import { closeSync, constants as fsConstants, fstatSync, openSync, readSync } from 'node:fs';
+import { closeSync, constants as fsConstants, fstatSync, readSync } from 'node:fs';
+// O_NOFOLLOW is undefined on Windows (ORs in as 0); the shared kernel honours it there too (the Windows port).
+import { O_NOFOLLOW, openSync } from '../../shared/nofollow.mjs';
 import { constants as osConstants } from 'node:os';
 import path from 'node:path';
 import {
@@ -10,6 +12,7 @@ import {
 } from '../../shared/agent-protocol.js';
 import { isAccountStdin } from '../../shared/account-argv.js';
 import { boundedStdinSpawn } from '../../shared/spawn.mjs';
+import { startable, winKillTree } from '../../shared/startable.mjs';
 import type { TokenSyncEnv } from './tokensync.js';
 
 // The builder is `shared/account-argv.ts`'s, the ONE both `AccountOps` arms call (D-5620 (4), D-5622); re-exported
@@ -57,7 +60,7 @@ export function accountSpawnBounds(sub: AccountSub): AccountSpawnBounds {
 export function makeAccountOpSpawn(env: TokenSyncEnv): AccountOpSpawn {
   // Copied name by name, so a caller's object with more fields still hands the child exactly three.
   const childEnv: NodeJS.ProcessEnv = { HOME: env.HOME, PATH: env.PATH, LANG: env.LANG };
-  return (file, argv, stdin, bounds) => boundedStdinSpawn({ spawn, signals: osConstants.signals }, file, argv, stdin, {
+  return (file, argv, stdin, bounds) => boundedStdinSpawn({ spawn, signals: osConstants.signals, startable, winKillTree }, file, argv, stdin, {
     env: childEnv, timeoutMs: bounds.timeoutMs, killGraceMs: bounds.killGraceMs, maxOutputBytes: bounds.maxOutputBytes,
     drainMs: ACCOUNT_OP_DRAIN_MS,
   });
@@ -83,7 +86,7 @@ export function readFleetIdentity(home: string): string | null {
   let fd: number | undefined;
   try {
     fd = openSync(path.join(home, CCRC_DIR_NAME, NODE_FILES.nodeId),
-      fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | fsConstants.O_NOFOLLOW);
+      fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | O_NOFOLLOW);
     const st = fstatSync(fd);
     if (!st.isFile() || st.size > NODE_ID_MAX_BYTES) return null;
     const buf = Buffer.alloc(NODE_ID_MAX_BYTES + 1);

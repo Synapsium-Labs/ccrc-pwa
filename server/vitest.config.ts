@@ -1,5 +1,26 @@
 import { defineConfig } from 'vitest/config';
 import { scaled } from './test/timeScale.js';
+import path from 'node:path';
+import { resolveBash } from './src/exec.js';
+
+// ON WINDOWS THE SUITE MUST RUN ccd IN THE USERLAND PRODUCTION RUNS IT IN.
+// Every `spawnSync('bash', …)` in this tree is a bare-name PATH lookup, and on
+// a Windows box that lands on whichever bash is first — measured here, Git for
+// Windows' (`OSTYPE=msys`), which ships no `flock`. Production never uses it:
+// the server resolves bash through `resolveBash` (MSYS2 first) and the
+// supervisor hands the same one to every unit. So `ws-add`, which now REQUIRES
+// flock (D-2605's generation mint dies without it), refused in 44 tests with
+// "flock (util-linux) is unavailable" while the same verb works on the live
+// box. That red described the test's shell, not ccd.
+//
+// Fixed at the one place every worker inherits PATH from, by asking the
+// production resolver rather than naming a directory a second time — so the
+// suite and the server cannot drift onto different shells. A resolver that
+// found no installed bash answers the bare name, and then nothing is prepended.
+if (process.platform === 'win32') {
+  const bash = resolveBash('win32');
+  if (/[\\/]/.test(bash)) process.env.PATH = `${path.dirname(bash)}${path.delimiter}${process.env.PATH ?? ''}`;
+}
 
 // This suite is not a unit suite that happens to be slow: over a hundred files
 // SHELL OUT — real `bash` running `ccd`, real `git` building fixture repos,
@@ -91,8 +112,15 @@ import { scaled } from './test/timeScale.js';
 export default defineConfig({
   test: {
     include: ['test/**/*.test.ts'],
-    testTimeout: scaled(process.platform === 'darwin' ? 90_000 : 20_000),
-    hookTimeout: scaled(process.platform === 'darwin' ? 90_000 : 20_000),
+    // win32 takes darwin's budget for darwin's reason — a slow clock, not a
+    // hang. Measured on the Windows box: ONE `bash -c` start costs 300-500 ms
+    // there (MSYS2 process creation plus a 4.7k-character inherited PATH),
+    // against single-digit milliseconds on Linux, and a ccd test makes dozens.
+    // Three runs of the same 313-test ccd subset were then decided by the
+    // clock: 87-125 `Test timed out in 20000ms` apiece, varying with box load,
+    // so the failure COUNT ranked nothing. At 90s a red is an answer again.
+    testTimeout: scaled(process.platform === 'darwin' || process.platform === 'win32' ? 90_000 : 20_000),
+    hookTimeout: scaled(process.platform === 'darwin' || process.platform === 'win32' ? 90_000 : 20_000),
     // See the long comment above: a PERCENTAGE, not a fixed count, because a
     // fixed number is an absolute value under vitest 4's `resolveMaxWorkers`
     // (not a cap) and would raise CI's worker count instead of lowering it.

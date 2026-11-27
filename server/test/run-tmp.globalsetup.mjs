@@ -94,6 +94,33 @@ import {
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+
+/** WINDOWS: a killed test run (a timeout around vitest, a reboot) leaves its ccd harness shells behind, because Windows
+ *  ends a process without its children. Measured: 40 orphaned `bash -c "ccd_h_src=$CCD_HARNESS_SRC ..."` shells made
+ *  every program start on the box take 350-720 ms, native ones too; 40-60 ms once they were stopped. The decision, from
+ *  one listing of the box's processes: a harness shell whose parent is gone. A shell of a LIVE run has a live parent. */
+export function orphanHarnessPids(rows) {
+  const live = new Set(rows.map((r) => r.pid));
+  return rows.filter((r) => /^bash(\.exe)?$/i.test(r.name) && r.cmd.includes('CCD_HARNESS_SRC') && !live.has(r.ppid)).map((r) => r.pid);
+}
+
+/** The listing and the stop (win32 only): one PowerShell listing, then `taskkill` by pid. Bounded; a listing that
+ *  cannot be read stops nothing. Answers how many it stopped. */
+export function reapOrphanHarness(platform = process.platform) {
+  if (platform !== 'win32') return 0;
+  const ps = "Get-CimInstance Win32_Process | ForEach-Object { '{0}`t{1}`t{2}`t{3}' -f $_.ProcessId, $_.ParentProcessId, $_.Name, ($_.CommandLine -replace '[\\t\\r\\n]', ' ') }";
+  const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps],
+    { encoding: 'utf8', timeout: 30_000, windowsHide: true, maxBuffer: 32 * 1024 * 1024 });
+  if (r.status !== 0 || typeof r.stdout !== 'string') return 0;
+  const rows = r.stdout.split(/\r?\n/).filter(Boolean).map((l) => {
+    const [pid, ppid, name, ...cmd] = l.split('\t');
+    return { pid: Number(pid), ppid: Number(ppid), name: name ?? '', cmd: cmd.join('\t') };
+  }).filter((x) => Number.isInteger(x.pid) && x.pid > 0);
+  const pids = orphanHarnessPids(rows);
+  for (const pid of pids) spawnSync('taskkill', ['/F', '/PID', String(pid)], { stdio: 'ignore', timeout: 10_000, windowsHide: true });
+  return pids.length;
+}
 
 export const RUN_PREFIX = 'ccrc-testrun-';
 /** A run being removed: renamed to `<run>.dead` first, so an interrupted removal is recognisable and any later
@@ -118,6 +145,23 @@ export const RUN_SIGNALS = Object.freeze({ SIGHUP: 1, SIGINT: 2, SIGTERM: 15 });
 export const RUN_SUN_PATH_MAX = process.platform === 'linux' ? 108 : 104;
 /** How long a dead or unowned run must have been quiet before a later run condemns it (D-4496). */
 export const RUN_QUIET_S = 600;
+/** This process's uid. Windows has none (`getuid` is absent) and `lstat` answers 0 for every file there, so 0 is
+ *  the value that matches what this process made; -1 read every run on Windows as `foreign-uid` and reaped none. */
+const OWN_UID = process.getuid?.() ?? 0;
+
+/** The run's liveness endpoint. Windows cannot bind a socket at a filesystem path (`listen` answers EACCES, so
+ *  every run there was refused and its fixtures went loose in %TEMP%), so on win32 it is a named pipe named after
+ *  the run. A pipe goes with its process, so a missing one reads as a refusing socket (`probeRun`).
+ *  @param {string} dir @param {NodeJS.Platform} [platform] */
+export function runSocket(dir, platform = process.platform) {
+  return platform === 'win32' ? `\\\\.\\pipe\\${path.basename(dir)}` : path.join(dir, RUN_SOCKET);
+}
+
+/** The temp variables a child reads: `os.tmpdir()` reads TEMP/TMP on Windows and TMPDIR everywhere else; MSYS
+ *  bash (ccd) reads TMPDIR on Windows too. On Windows TMUX_TMPDIR as well: there a test's extensionless `tmux` stub is
+ *  never found by name (CreateProcess takes `.exe`), so a bare `tmux` reaches MSYS's real one, whose default socket
+ *  directory is the box's own (`/tmp/tmux-<uid>`); inside the run it can reach no live server. */
+const TMP_VARS = process.platform === 'win32' ? ['TMPDIR', 'TEMP', 'TMP', 'TMUX_TMPDIR'] : ['TMPDIR'];
 const PROBE_TIMEOUT_MS = 2000;
 
 /** Rename `dir` to `dir.dead`, then remove it. The rename is atomic and only one actor wins it; the loser reads
@@ -177,11 +221,13 @@ function tryConnect(sock, ms) {
  *  @param {string} dir @param {number} [timeoutMs]
  *  @returns {Promise<'live' | 'dead' | 'unowned' | `unmeasurable:${string}`>} */
 export async function probeRun(dir, timeoutMs = PROBE_TIMEOUT_MS) {
-  const sock = path.join(dir, RUN_SOCKET);
-  let isSock = false;
+  const sock = runSocket(dir);
+  const win = process.platform === 'win32';
+  let isSock = win;   // a pipe has no file to lstat: connecting is the only question there is
   let sockErr = null;
-  try { isSock = lstatSync(sock).isSocket(); } catch (e) { sockErr = e.code ?? 'lstat'; }
-  const conn = !isSock ? null : tooLong(sock) ? 'EINVAL' : await tryConnect(sock, timeoutMs);
+  if (!win) try { isSock = lstatSync(sock).isSocket(); } catch (e) { sockErr = e.code ?? 'lstat'; }
+  let conn = !isSock ? null : tooLong(sock) ? 'EINVAL' : await tryConnect(sock, timeoutMs);
+  if (win && conn === 'ENOENT') conn = 'ECONNREFUSED';   // the pipe went with its owner: a refusing socket's case
   if (conn === 'ok') return 'live';
   let owned;
   try {
@@ -214,7 +260,7 @@ export function openRun(base) {
   /** Every refusal after the `mkdtemp` goes through here, so none of them can leave the directory behind. */
   const refused = (code) => { unmake(run); return { refused: code }; };
   try { mkdirSync(path.join(run, RUN_TMP)); } catch (e) { return Promise.resolve(refused(e.code ?? 'mkdir')); }
-  const sock = path.join(run, RUN_SOCKET);
+  const sock = runSocket(run);
   if (tooLong(sock)) return Promise.resolve(refused('EINVAL'));
   return new Promise((resolve) => {
     const server = net.createServer((c) => { c.on('error', () => {}); c.destroy(); });
@@ -247,7 +293,7 @@ export function openRun(base) {
 /** Remove `dir` when it is a real directory owned by this uid: `lstat`, so a symbolic link (or anything else) at
  *  the path is left alone and never followed. Absent is fine. Never throws; vitest's `tmpDir` is a path it may
  *  not have made yet. @param {string} dir @param {number} [uid] */
-export function removeOwnedDir(dir, uid = process.getuid?.() ?? -1) {
+export function removeOwnedDir(dir, uid = OWN_UID) {
   try {
     const st = lstatSync(dir);
     if (st.isDirectory() && st.uid === uid) rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
@@ -287,7 +333,7 @@ export function armSignals(run, extra = []) {
  *  @param {string} base
  *  @param {{ now?: number, uid?: number, quietS?: number }} [opts]
  *  @returns {Promise<{ removed: [string, string][], left: [string, string][] }>} */
-export async function reapRuns(base, { now = Date.now(), uid = process.getuid?.() ?? -1, quietS = RUN_QUIET_S } = {}) {
+export async function reapRuns(base, { now = Date.now(), uid = OWN_UID, quietS = RUN_QUIET_S } = {}) {
   /** @type {[string, string][]} */ const removed = [];
   /** @type {[string, string][]} */ const left = [];
   let names;
@@ -383,6 +429,8 @@ function refuse(code, where) {
  *  opens the run, arms; the returned teardown disarms, restores TMPDIR, removes the run, and reaps again, so a
  *  dead run that was too fresh at setup is collected by this run on its way out. */
 export default async function setup(project) {
+  const reaped = reapOrphanHarness();
+  if (reaped > 0) warn(`stopped ${reaped} orphaned ccd harness shell(s) a killed test run left behind`);
   let base;
   try { base = realpathSync(os.tmpdir()); } catch (e) { return refuse(`tmpdir-${e.code ?? 'realpath'}`, os.tmpdir()); }
   const placed = runBase(base);
@@ -392,14 +440,14 @@ export default async function setup(project) {
   await reapAndReport(base, quietS);
   const opened = await openRun(base);
   if ('refused' in opened) return refuse(opened.refused, base);
-  const previous = process.env.TMPDIR;
+  const previous = TMP_VARS.map((k) => [k, process.env[k]]);
   delete process.env[RUN_REFUSED_ENV];
   process.env[RUN_DIR_ENV] = opened.run;
-  process.env.TMPDIR = path.join(opened.run, RUN_TMP);
+  for (const k of TMP_VARS) process.env[k] = path.join(opened.run, RUN_TMP);
   const vitestTmp = typeof project?.tmpDir === 'string' && path.isAbsolute(project.tmpDir) ? [project.tmpDir] : [];
   const disarm = armSignals(opened.run, vitestTmp);
   return async () => {
-    if (previous === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = previous;
+    for (const [k, v] of previous) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
     delete process.env[RUN_DIR_ENV];
     const r = condemn(opened.run);
     if (r.startsWith('left:')) {

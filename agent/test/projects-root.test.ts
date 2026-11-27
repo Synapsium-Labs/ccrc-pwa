@@ -53,7 +53,13 @@ describe('resolveProjectsRoot — refuses a dangerous root', () => {
   });
 
   it('throws when the root is the filesystem root (an ancestor of everything)', () => {
-    expect(() => resolveProjectsRoot('/', {})).toThrow(/refus/i);
+    // `/`, or on Windows the home's drive root (`C:\`, which already ends in the separator).
+    expect(() => resolveProjectsRoot(path.parse(home).root, {})).toThrow(/refus/i);
+  });
+
+  it.skipIf(process.platform !== 'win32')('on Windows, the home or an ancestor spelled in another case is refused too', () => {
+    expect(() => resolveProjectsRoot(home.toUpperCase(), {})).toThrow(/refus/i);
+    expect(() => resolveProjectsRoot(path.dirname(home).toLowerCase(), {})).toThrow(/refus/i);
   });
 
   it('throws when the root is an ancestor directory of $HOME', () => {

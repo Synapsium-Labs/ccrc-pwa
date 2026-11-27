@@ -332,7 +332,8 @@ export type MeasuredBackup =
  *  ABSENT is one condition only, an answerer that knows no size (a double written before the field): `agent-older` to
  *  the lane, its one reader (`pressure.ts#machineAfter`). */
 export type MeasuredPressure =
-  | { ok: true; psi: HostPsi; headroomBytes?: number | null; machine?: HostMachineReading }
+  // psi null: a box with no PSI to read (the Windows port) that still measured its memory headroom (D-8122's gate reads it).
+  | { ok: true; psi: HostPsi | null; headroomBytes?: number | null; machine?: HostMachineReading }
   | { ok: false; reason: 'unsupported' | 'unanswered'; machine?: HostMachineReading };
 
 /** Read byte range [start, end) of `file` (createReadStream `end` is inclusive). */
@@ -356,6 +357,17 @@ const failureFor = (err: unknown): ReadFailure =>
   (err as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'unreadable';
 
 /** node:fs implementation preserving today's exact behavior. */
+/** THE WINDOWS PORT'S ONE PATH TRANSLATION, at this adapter's edge. ccd and the registry speak MSYS (`/c/Users/...`),
+ *  and native node opens only `C:/...`: every registry path a reader handed this adapter failed (measured:
+ *  `statSync('/c/Users/<u>/worktrees')` ENOENT, `C:/Users/...` fine), so every workspace archive was refused
+ *  `worktreeGone`, `/api/projects` named a session's linked worktree as the project, and a transcript's directory never
+ *  resolved. Off Windows it is the identity. */
+export const nativePath: (p: string) => string = process.platform === 'win32'
+  // Either separator: on win32 `path.join('/c/Users/x', '.git')` is `\c\Users\x\.git` (measured: every linked
+  // worktree then read as a project, its `.git` file absent).
+  ? (p) => p.replace(/^[\\/]([a-zA-Z])(?=[\\/]|$)/, (_m, d: string) => `${d.toUpperCase()}:`)
+  : (p) => p;
+
 export const localIO: FleetIO = {
   // The agent's `read` op's rule, on this arm too (D-6058; accounts plan Task A12): open with `O_NONBLOCK`, so a FIFO
   // never waits for a writer, and answer anything that is not a regular file `unreadable`, closed unread; a name
@@ -363,6 +375,7 @@ export const localIO: FleetIO = {
   // a lane's name is `unreadable`, never its target's bytes (D-5755 (13d)), and so is a hardlink there or a `.accounts`
   // that is a symlink (`laneStateOpenHolds`, D-6058 (5)). Both arms answer one path alike.
   async readFileMeasured(p, _timeoutMs, signal) {
+    p = nativePath(p);
     const laneState = path.basename(path.dirname(p)) === LANE_STATE_DIR_NAME
       && path.basename(path.dirname(path.dirname(p))) === '.cc-sessions';
     let fh: Awaited<ReturnType<typeof open>>;
@@ -392,6 +405,7 @@ export const localIO: FleetIO = {
   },
 
   async readFileFromMeasured(p, offset) {
+    p = nativePath(p);
     // Stream only [offset, size) — never load the whole file. Transcripts reach
     // tens of MB; the old read-whole-then-slice bloated the agent's RSS and
     // blocked its event loop (base64 + JSON.stringify of the full buffer).
@@ -409,6 +423,7 @@ export const localIO: FleetIO = {
   },
 
   async readFileFromBytesMeasured(p, offset, maxBytes) {
+    p = nativePath(p);
     if (!isReadFromRange(offset, maxBytes)) return { ok: false, reason: 'unreadable' };
     let size: number;
     try { size = (await stat(p)).size; } catch (err) { return { ok: false, reason: failureFor(err) }; }
@@ -428,11 +443,13 @@ export const localIO: FleetIO = {
   },
 
   async readFileB64Measured(p) {
+    p = nativePath(p);
     try { return { ok: true, dataB64: (await readFile(p)).toString('base64') }; }
     catch (err) { return { ok: false, reason: failureFor(err) }; }
   },
 
   async readdirMeasured(p) {
+    p = nativePath(p);
     try { return { ok: true, entries: await readdir(p) }; }
     catch (err) { return { ok: false, reason: failureFor(err) }; }
   },
@@ -443,6 +460,7 @@ export const localIO: FleetIO = {
   },
 
   async statMeasured(p) {
+    p = nativePath(p);
     try {
       const s = await stat(p);
       return { ok: true, mtimeMs: s.mtimeMs, size: s.size };
@@ -457,6 +475,7 @@ export const localIO: FleetIO = {
   },
 
   async lstatMeasured(p) {
+    p = nativePath(p);
     try {
       const s = await lstat(p);
       return { ok: true, kind: s.isSymbolicLink() ? 'symlink' : s.isFile() ? 'regular' : 'other' };
@@ -466,10 +485,12 @@ export const localIO: FleetIO = {
   },
 
   async realpath(p) {
+    p = nativePath(p);
     try { return await realpath(p); } catch { return null; }
   },
 
   async writeFileB64(p, dataB64) {
+    p = nativePath(p);
     await mkdir(path.dirname(p), { recursive: true });
     await writeFile(p, Buffer.from(dataB64, 'base64'));
   },
@@ -482,6 +503,7 @@ export const localIO: FleetIO = {
    * watch/poll before calling `onReset`; the returned close() is idempotent.
    */
   async tailFile(filePath, fromOffset, onData, onReset) {
+    filePath = nativePath(filePath);
     let offset = fromOffset;
     let watcher: FSWatcher | null = null;
     let poll: NodeJS.Timeout | null = null;
@@ -565,7 +587,11 @@ export const localIO: FleetIO = {
   pressureMeasured: async () => {
     const sessions = measureSessions();
     const machine = readHostMachine({ machine: sessions.machine });
-    try { return { ok: true, psi: measurePressure(), headroomBytes: sessions.headroomBytes, machine }; } catch { return { ok: false, reason: 'unsupported', machine }; }
+    try { return { ok: true, psi: measurePressure(), headroomBytes: sessions.headroomBytes, machine }; } catch {
+      // Windows has no /proc/pressure; its free memory is still a reading the wake gate's headroom floor can use.
+      if (process.platform === 'win32') return { ok: true, psi: null, headroomBytes: sessions.headroomBytes, machine };
+      return { ok: false, reason: 'unsupported', machine };
+    }
   },
 
   // The agent's own `backup` body on this box (D-7858): this process's `CCRC_BACKUP_STATE_DIR` (D-7859). It never throws.

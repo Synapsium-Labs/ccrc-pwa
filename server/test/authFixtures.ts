@@ -47,7 +47,24 @@ export function compiledSecretJs(): string {
     // this is the build a deploy runs, not a hand-tuned approximation. A type
     // error makes `tsc` exit non-zero, which throws here — loudly, rather than
     // planting a module that silently did not compile.
-    execFileSync(join(SERVER, 'node_modules', '.bin', 'tsc'), ['--outDir', out],
+    // `node <package>/bin/tsc`, not `.bin/tsc`, and the reason is that BOTH
+    // spellings of the shim are unusable from `execFileSync` on Windows —
+    // measured, one after the other, at 267 failed tests in
+    // `ccrc-doctor.test.ts` each time:
+    //
+    //   .bin/tsc      a shell script with no extension. `execFileSync` hands
+    //                 the path to CreateProcess, which cannot run it:
+    //                 `spawnSync …\.bin\tsc ENOENT` — an error that names a
+    //                 file it just found.
+    //   .bin/tsc.cmd  refused by Node 22 itself: spawning a `.cmd` without
+    //                 `shell: true` is `EINVAL` since the CVE-2024-27980 fix.
+    //
+    // The package's own entry point is a plain JS file, so `process.execPath`
+    // runs it on every platform with no shim, no shell, and no quoting rules to
+    // get wrong. Nothing about the build changes: this is the same compiler the
+    // shim would have reached.
+    execFileSync(process.execPath,
+      [join(SERVER, 'node_modules', 'typescript', 'bin', 'tsc'), '--outDir', out],
       { cwd: SERVER, stdio: 'pipe' });
     built = join(out, 'server', 'src', 'auth', 'secret.js');
   }

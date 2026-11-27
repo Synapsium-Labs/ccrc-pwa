@@ -1877,7 +1877,8 @@ describe('ccrc uninstall: the codex step, in order and contained (Plan 2b-2 Task
     // spawns with on the line before the spawn. A literal-shape pin: an
     // inline spawn spelled this way again is red; a differently-spelled
     // one is not, and nothing here claims otherwise.
-    const launcherSpawn = /spawnSync\(BASH, \[join\(home, '\.local', 'bin', 'ccrc'\)/g;
+    // The Windows port wraps the path in `posixPath(` (bash's `$0` spelling there); the pin takes either spelling.
+    const launcherSpawn = /spawnSync\(BASH, \[(?:posixPath\()?join\(home, '\.local', 'bin', 'ccrc'\)/g;
     expect([...installFamilySrc.matchAll(launcherSpawn)].length,
       'the installed launcher is spawned somewhere other than runLauncherVersion').toBe(1);
     expect(between(installSrc, /^(?:export )?function runLauncherVersion\(/m, 'spawnSync(BASH'))

@@ -6,6 +6,7 @@ import {
 } from '../../shared/agent-protocol.js';
 import { buildTestboxAdminArgv, testboxAdminIsLong, type TestboxAdminSub } from '../../shared/testbox-admin.js';
 import { boundedStdinSpawn } from '../../shared/spawn.mjs';
+import { startable, winKillTree } from '../../shared/startable.mjs';
 import type { TokenSyncEnv } from './tokensync.js';
 
 // The builder is `shared/testbox-admin.ts`'s, the ONE both arms of the op call (the server's local arm, TC12, and
@@ -55,7 +56,7 @@ export function testboxAdminSpawnArgv(sub: unknown, fields: unknown):
 export function makeTestboxAdminSpawn(env: TokenSyncEnv): TestboxAdminSpawn {
   // Copied name by name, so a caller's object with more fields still hands the child exactly three.
   const childEnv: NodeJS.ProcessEnv = { HOME: env.HOME, PATH: env.PATH, LANG: env.LANG };
-  return (file, argv, bounds) => boundedStdinSpawn({ spawn, signals: osConstants.signals }, file, argv, null, {
+  return (file, argv, bounds) => boundedStdinSpawn({ spawn, signals: osConstants.signals, startable, winKillTree }, file, argv, null, {
     env: childEnv, timeoutMs: bounds.timeoutMs, killGraceMs: bounds.killGraceMs, maxOutputBytes: bounds.maxOutputBytes,
     drainMs: TESTBOX_ADMIN_DRAIN_MS,
   });

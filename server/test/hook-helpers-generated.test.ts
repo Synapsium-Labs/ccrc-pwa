@@ -541,7 +541,9 @@ describe('ccd/ccd-update-sync carries the log-line region (C5i)', () => {
   });
 
   it('--check ccd/ccd-update-sync ccd/ccrc answers current', () => {
-    const r = spawnSync('node', [MODULE, '--check', path.join(root, 'ccd/ccd-update-sync'), path.join(root, 'ccd/ccrc')],
+    // process.execPath, not a PATH lookup: ghContainedEnv's PATH is a POSIX list for ccd's bash, which a native
+    // Windows node cannot search, so `node` was never found there.
+    const r = spawnSync(process.execPath, [MODULE, '--check', path.join(root, 'ccd/ccd-update-sync'), path.join(root, 'ccd/ccrc')],
       { env: ghContainedEnv(work, { PATH: process.env['PATH'] ?? '' }), encoding: 'utf8' });
     expect(r.stdout.trim(), r.stderr).toBe('hook-helpers: current');
     expect(r.status).toBe(0);

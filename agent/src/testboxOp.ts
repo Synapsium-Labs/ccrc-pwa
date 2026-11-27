@@ -39,6 +39,7 @@ import { parseBuildInfo } from '../../shared/buildinfo.js';
 import { readTestboxFrame, TESTBOX_TOOLS, type StatusAnswer, type TestboxTool, type ToolsSync } from '../../shared/testbox.js';
 import { absPath, durationMs, parseKnobLines, type KnobLine } from './testbox/config.js';
 import { boundedExec, type Exec } from './testbox/exec.js';
+import { startable } from '../../shared/startable.mjs';
 
 /** The settings printer's fixed argv after the launcher (TB1's flag). */
 export const KNOBS_ARGV: readonly string[] = Object.freeze(['test', '--testbox-knobs', 'host']);
@@ -76,8 +77,23 @@ export function userBusEnv(env: Readonly<Record<string, string | undefined>>, ui
   return { XDG_RUNTIME_DIR: runtime, DBUS_SESSION_BUS_ADDRESS: env.DBUS_SESSION_BUS_ADDRESS || `unix:path=${runtime}/bus` };
 }
 
+/** `exec` as this platform can start the op's fixed files: unchanged off Windows; on Windows through the MSYS shell,
+ *  because the manager's `systemctl`, the `ccrc` launcher and `npm` are scripts CreateProcess cannot start by name
+ *  (`startable`'s rule, `shared/spawn.mjs`; CCRC_BASH is the shell the manager names). */
+export function startableExec(exec: TestboxOpSeams['exec'], platform: string = process.platform,
+  bash: string = process.env.CCRC_BASH || 'bash'): TestboxOpSeams['exec'] {
+  if (platform !== 'win32') return exec;
+  // The rule is `startable`'s (its one owner); bare names too, since `systemctl` and `npm` are scripts on a PATH here.
+  return (env, timeoutMs) => (file, args) => exec(env, timeoutMs)(...startable(file, args, { platform, bash, bare: true }));
+}
+
+/** The PATH in the manager's environment; Windows spells the name `Path`, and its names are case-insensitive. */
+export function pathOf(env: ReadonlyMap<string, string>): string | null {
+  return env.get('PATH') ?? [...env].find(([k]) => k.toUpperCase() === 'PATH')?.[1] ?? null;
+}
+
 export const realTestboxSeams = (): TestboxOpSeams => ({
-  exec: boundedExec, agentPath: process.env.PATH ?? '/usr/bin:/bin',
+  exec: startableExec(boundedExec), agentPath: process.env.PATH ?? '/usr/bin:/bin',
   userBus: userBusEnv(process.env, typeof process.getuid === 'function' ? process.getuid() : null), now: Date.now,
 });
 
@@ -149,10 +165,11 @@ async function readKnobs(home: string, pathEnv: string, s: TestboxOpSeams): Prom
 
 /** The user manager's environment, the settings and the six probes. Never throws. */
 async function readHost(home: string, s: TestboxOpSeams): Promise<HostRead> {
+  // On Windows the port's manager answers `show-environment` (win/bin/systemctl), so this is asked there too.
   const shown = await s.exec({ ...s.userBus, HOME: home, PATH: s.agentPath, LANG: 'C' }, TESTBOX_PROBE_DEADLINE_MS)('systemctl', SHOW_ENV_ARGV)
     .catch(() => null);
   const userEnv = shown !== null && shown.status === 0 && !shown.killed ? parseShowEnvironment(shown.stdout) : new Map<string, string>();
-  const userPath = userEnv.get('PATH') ?? null;
+  const userPath = pathOf(userEnv);
   const knobs = await readKnobs(home, userPath ?? s.agentPath, s);
   const tools = {} as Record<TestboxTool, string | null>;
   // No PATH from the user manager: nothing is measured, because a version found on another PATH is not the one the

@@ -76,6 +76,7 @@ import {
   decideAgentsPause, capBytes, AGENTS_PAUSE_SHARE, AGENTS_STORE_RATIO_LOW, AGENTS_STORE_RATIO_HIGH,
   // W2-1 Task 4 (W2-D30): the presence record's lib decisions.
   RECALL_OFF_KEYS, RECALL_OFF_SCAN_MAX, recallOffStateOf, planRecallOffObservation, recallOffReplayRows,
+  absoluteHome,
 } from './lib.mjs';
 import {
   MIGRATIONS, OWED_INDEX, StoreError, bump, clearDoneMarkers, closeWriter, createStore, dropPending, finishPending, getMeta,
@@ -96,6 +97,7 @@ import {
 } from './derive.mjs';
 import { cardStep, collectPurgedHistoryFiles, ensureHistoryDirs, lstatKind, withdrawCards } from './card.mjs';
 import { formatCensus, runCensus } from './census.mjs';
+import { FSYNC_OPEN } from '../../shared/fsync-open.mjs';
 
 const USAGE = 'usage: sweep.mjs [--op <verb> <op-args...>] [--roster-unreadable] [--unanswered <path>]... --secrets <file...> -- <home...>';
 
@@ -209,7 +211,7 @@ export function journalFilePath(home, storeId, writer, month) {
 
 /** fsync a directory, so a link(), rename or unlink inside it survives a power loss. */
 export function fsyncDir(dir) {
-  const fd = openSync(dir, 'r');
+  const fd = openSync(dir, FSYNC_OPEN);
   try { fsyncSync(fd); } finally { closeSync(fd); }
 }
 
@@ -4229,6 +4231,9 @@ export function migrationVerdict(db, home, P, o) {
  *  link target included, is doctor's FAIL to name through status (§9.3, §9.6), because a mode the
  *  operator set on a volume is not this writer's to undo. */
 export function fixModes(db, P) {
+  // Not on Windows, as cli.mjs's `modesWrong`: every entry reads 0666 there, so every file would be chmodded and counted
+  // mode_drift on every pass, and the store lies in the user profile, whose ACL already admits only the owner.
+  if (process.platform === 'win32') return 0;
   const files = [P.dbFile, P.wal, P.shm];
   for (const n of listNames(P.backups)) files.push(join(P.backups, n));
   for (const s of listNames(P.journalDir)) for (const n of listNames(join(P.journalDir, s))) files.push(join(P.journalDir, s, n));
@@ -4526,8 +4531,8 @@ function stdoutOut() {
  *  Task 14's rule, kept, so no caller reaches a relative or empty home (integration contract 4). The umask is
  *  set for the pass and restored after it, as Task 14 did, so an in-process caller keeps its own. */
 export async function runPass(argv, deps = {}) {
-  const home = deps.home ?? process.env.HOME;
-  if (typeof home !== 'string' || !home.startsWith('/')) {
+  const home = absoluteHome(deps.home ?? process.env.HOME);
+  if (home === null) {
     process.stderr.write('history-sweep: HOME is not an absolute path; nothing was swept\n');
     return EXIT.INTERNAL;
   }

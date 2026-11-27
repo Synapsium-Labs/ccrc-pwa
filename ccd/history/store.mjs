@@ -27,6 +27,11 @@ import { brotliCompressSync, brotliDecompressSync, constants as Z, createBrotliC
 import { FTS_STRUCTURE_ROWID, parseFtsStructure } from './fts-structure.mjs';
 import { BUSY_TIMEOUT_MS, CONTROL_FILE_MAX, MAX_INTERRUPTED_ATTEMPTS, RECOVER_PHASES, SCHEMA_VERSION, SEGMENT_HEADER_BYTES, SIDECAR_WHOLE_MAX, UUID_RE, WRITER_RE, backupNameOf, blobOverDecodeCap, FTS_REBUILD_STEP, FTS_SHADOWS, FTS_STEP, formatRecoverCursor, ftsTextOf, historyPaths, journalRecord, jsonWithinStructureBound, newSha256, orderSegmentNames, parseSegmentName, restoreNameOk, segmentName, segmentTempName, sidecarIndexText } from './lib.mjs';
 
+/** `shared/fsync-open.mjs`'s rule, restated because this L3 module reaches nothing outside ccd/history (its ring):
+ *  Windows flushes only a handle opened read-write (a read-only one answers EPERM); POSIX syncs a read-only one
+ *  and refuses O_RDWR on a directory. */
+const FSYNC_OPEN = process.platform === 'win32' ? FS.O_RDWR : FS.O_RDONLY;
+
 /** The codec word every blob row records: Brotli at quality 5 (RV6). */
 export const CODEC = 'br5';
 /** Brotli quality for every blob (§6.2, RV6: the node default is 11). Spelled once: brotli() and compressFdRange() both read it. */
@@ -521,7 +526,7 @@ export function mintWriter() {
 
 /** fsync a directory, so a rename or link inside it survives a power loss. */
 function fsyncDir(dir) {
-  const fd = openSync(dir, FS.O_RDONLY);
+  const fd = openSync(dir, FSYNC_OPEN);
   try { fsyncSync(fd); } finally { closeSync(fd); }
 }
 
@@ -910,7 +915,7 @@ export function createStore(home, opts = {}) {
     db.close();
   }
   assertWalGone(tmp);
-  const fd = openSync(tmp, FS.O_RDONLY);
+  const fd = openSync(tmp, FSYNC_OPEN);
   try { fsyncSync(fd); } finally { closeSync(fd); }
   linkSync(tmp, P.dbFile);
   unlinkSync(tmp);
@@ -1049,7 +1054,7 @@ export function runMigration(db, home, i) {
   const t0 = process.hrtime.bigint();
   db.prepare('VACUUM INTO ?').run(tmp);
   chmodSync(tmp, 0o600);
-  const fd = openSync(tmp, FS.O_RDONLY);
+  const fd = openSync(tmp, FSYNC_OPEN);
   try { fsyncSync(fd); } finally { closeSync(fd); }
   const seconds = Number(process.hrtime.bigint() - t0) / 1e9;
   const size = statSync(tmp).size;
@@ -1474,7 +1479,7 @@ export function writeBackup(db, home, i) {
   const tmpPath = `${P.backups}/.${name}.tmp`;
   const t0 = process.hrtime.bigint();
   db.prepare('VACUUM INTO ?').run(tmpPath);
-  const fd = openSync(tmpPath, FS.O_RDONLY);
+  const fd = openSync(tmpPath, FSYNC_OPEN);
   try {
     fchmodSync(fd, 0o600);
     fsyncSync(fd);
@@ -1799,7 +1804,7 @@ export function commitRestore(home, staged, { nowMs, pairs = [], belt = null }) 
     db.close();
   }
   assertWalGone(staged.tempPath);
-  const fd = openSync(staged.tempPath, FS.O_RDONLY);
+  const fd = openSync(staged.tempPath, FSYNC_OPEN);
   try { fsyncSync(fd); } finally { closeSync(fd); }
   writeFileAtomic(P.writer, `${writer}\n`);
   const needsPending = readBindingFile(P.storeId, UUID_RE).state === 'absent';
@@ -2008,7 +2013,7 @@ export function publishSegment(seg, dir, name) {
   }
   const m = tempMeta(seg.temp);
   if (name !== segmentName({ seq: m.seq, writer: m.writer })) throw new TypeError(`publishSegment: ${JSON.stringify(name)} is not segment ${m.seq} of ${m.writer}`);
-  const fd = openSync(seg.temp, FS.O_RDONLY);
+  const fd = openSync(seg.temp, FSYNC_OPEN);
   try { fsyncSync(fd); } finally { closeSync(fd); }
   try {
     linkSync(seg.temp, `${dir}/${name}`);

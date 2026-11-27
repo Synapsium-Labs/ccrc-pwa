@@ -296,6 +296,7 @@ const CCD_KEYS = new Set(['Enter', 'Escape', 'Left', 'Right', 'Up', 'Down']);
 /** A `-l` literal ccd types that is no prompt, with why. */
 const CCD_NON_PROMPT_LITERALS: Readonly<Record<string, string>> = {
   s: "a picker's select key, typed by _route_type_model and _route_type_effort after walking to the row",
+  '/exit': "Claude Code's own quit, the Windows port's graceful stop (_graceful_stop_quit): typed only into an empty box past the typing check",
 };
 
 type SpliceRule =
@@ -589,7 +590,7 @@ describe('ccd types only its rows, named literals, named keys and mapped splices
       expect(findings.length, text).toBeGreaterThan(0);
       if (plant !== null) for (const m of findings) expect(m).not.toContain(plant);
     };
-    it('a new -l literal that is no row', () => red('planted_exit() {\n  _tmx send-keys -t "$t" -l "/exit"\n}\n', '/exit'));
+    it('a new -l literal that is no row', () => red('planted_quit() {\n  _tmx send-keys -t "$t" -l "/quit"\n}\n', '/quit'));
     it('a spliced -l in a function the map does not name', () => red('planted_splice() {\n  _tmx send-keys -t "$t" -l "$x"\n}\n', '$x'));
     it('a second splice inside _redrive_after_spawn', () => red('_redrive_after_spawn() {\n  _tmx send-keys -t "$t" -l "$(_resume_prompt_for "$id")"\n  _tmx send-keys -t "$t" -l "$secret_code"\n}\n', 'secret_code'));
     it('a key outside the closed set', () => red('planted_key() {\n  _tmx send-keys -t "$t" C-c\n}\n', 'C-c'));

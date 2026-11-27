@@ -72,6 +72,12 @@ _tmx_sock() {   # [home, default $HOME] -> TMX_SOCK (empty: the default server);
 _tmx_argv() {   # [home] -> _TMX_ARGV, the argv every fleet tmux call starts with; run once below, again only when asked
   if _tmx_sock "$@"; then _TMX_ARGV=(tmux ${TMX_SOCK:+-L "$TMX_SOCK"})
   else _TMX_ARGV=(sh -c 'printf "%s\n" "$0" >&2; exit 1' "ccrc: tmux was not asked: $TMX_WHY"); fi
+  # Windows: Claude Code runs hooks and its statusline under Git Bash, whose runtime hands MSYS2's tmux neither $TMUX
+  # nor $TMUX_TMPDIR (measured: an empty `printenv TMUX` in the child, so the hook asked the default socket and wrote
+  # nothing). The socket $TMUX names is passed explicitly instead, which is what tmux itself does with $TMUX elsewhere.
+  case "${OSTYPE:-}" in msys*|cygwin*)
+    [[ -z "${TMX_SOCK:-}" && "${_TMX_ARGV[0]}" == tmux && -n "${TMUX:-}" ]] && _TMX_ARGV=(tmux -S "${TMUX%%,*}") ;;
+  esac
 }
 _tmx_argv
 _tmx() { "${_TMX_ARGV[@]}" "$@"; }   # tmux args… -> that call, on the fleet's server (a statement; see above for a capture)

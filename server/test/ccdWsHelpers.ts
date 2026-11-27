@@ -8,6 +8,8 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { mkTmp } from './tmpHelpers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers/roster.js';
+import { posixPath, posixPathList } from './helpers.js';
+import { resolveBash } from '../src/exec.js';
 import { parseRoster } from '../../shared/roster.js';
 import { generateAccountsSh } from '../../shared/generate.mjs';
 import { asManagerCalls } from './platformFixtures.js';
@@ -24,7 +26,9 @@ import { markGenerated } from '../../shared/mark.mjs';
 const HOME_ABLE_WRAPPERS: readonly string[] =
   DEFAULT_TEST_ROSTER.accounts.filter((a) => a.homeAble).map((a) => a.id);
 
-export const CCD = path.resolve(__dirname, '../../ccd/ccd');
+// Forward slashes: ccd finds its library beside `${BASH_SOURCE[0]%/*}`, and a Windows backslash path has no `/` to cut,
+// so every `source "${CCD}"` there refused `lib-missing: ./lib/...`. Node takes either spelling; a no-op off Windows.
+export const CCD = path.resolve(__dirname, '../../ccd/ccd').split(path.sep).join('/');
 
 /** The library `CCD` loads at its foot (D-6913): the fleet disk-retention code, a separate file in
  *  `ccd/lib/` that the body finds beside itself, in the repository and in the installed layout alike. */
@@ -143,6 +147,17 @@ export function spliceCcd(main: string, libs: readonly string[]): string {
   if (regions.size === 0) return main;
   return main.replace(/^# @ccd-lib:(\w+)\b.*$/gm, (line, id: string) => regions.get(id) ?? line);
 }
+/** The bash every snippet runs in — the one PRODUCTION runs ccd in, by path.
+ *
+ *  A bare `'bash'` is a PATH lottery on Windows, and it lost: libuv resolved it
+ *  to Git for Windows' bash (`OSTYPE=msys`, no `flock`), while the server
+ *  resolves through `resolveBash` (MSYS2 first) and the supervisor hands that
+ *  same shell to every unit. `ws-add` now REQUIRES flock (D-2605), so 44
+ *  `ccd-workspaces` tests refused with "flock (util-linux) is unavailable" on a
+ *  box where the live verb works. Naming the production resolver here, rather
+ *  than a directory, is what keeps the harness and the server on one shell.
+ *  Off Windows it is the bare name, exactly as before. */
+export const HARNESS_BASH = process.platform === 'win32' ? resolveBash('win32') : 'bash';
 
 /** The coordination client, beside `ccd` and installed the same way. Spelled
  *  here rather than joined at each call site for the reason
@@ -452,6 +467,35 @@ export function harnessBin(home: string): string {
   return bin;
 }
 
+/** The same directory, spelled for a `:`-separated PATH.
+ *
+ *  A native Windows path CANNOT go in one: `C:\msys64\tmp\fix\.local\bin`
+ *  carries a colon of its own, so the shell reads it as two entries — `C` and
+ *  `\msys64\tmp\fix\.local\bin` — and every tool the fixture planted becomes
+ *  unfindable. It does not fail as a broken PATH; it fails as the SUBJECT
+ *  reporting the tool missing, which is a sentence a test then asserts on.
+ *  Measured in `ccrc-doctor.test.ts`: 111 failures reading `FAIL node: not on
+ *  PATH` on a box where node is two directories away. */
+/** A native `;` TAIL naming the production bash's directory — on Windows only.
+ *
+ *  The PATH above is a POSIX `:` list, which is what bash needs. But the ~120
+ *  call sites that spawn a bare `'bash'` with this env are resolved by libuv,
+ *  which splits on `;` — so a pure `:` list holds no directory libuv can use,
+ *  and the spawn goes ENOENT or lands on whatever the system PATH offers first.
+ *  This tail gives libuv exactly one: the directory `resolveBash` chose. The
+ *  MSYS2 runtime splits a PATH on `;` at startup and converts each element, so
+ *  inside the shell the tail becomes one more `:` entry AFTER the fixture bin —
+ *  the poisons still answer first. Measured on one ccd subset (313 tests):
+ *  POSIX-only 90 failed, native-`;`-only 176 failed. */
+function lookupTail(): string {
+  if (process.platform !== 'win32' || !/[\\/]/.test(HARNESS_BASH)) return '';
+  return `;${path.dirname(HARNESS_BASH)}`;
+}
+
+function pathEntry(dir: string): string {
+  return process.platform === 'win32' ? posixPath(dir) : dir;
+}
+
 /**
  * THE SECOND ISOLATION BOUNDARY, beside HOME: a `gh` that logs its argv and
  * refuses, first on the PATH of every snippet that sources ccd.
@@ -595,7 +639,7 @@ export function ghContainedEnv(
     XDG_RUNTIME_DIR: path.join(home, 'no-runtime-dir'),
     DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(home, 'no-bus')}`,
   };
-  if (!opts.systemd && !opts.tmux && !opts.net) return { ...env, ...bus, ...containedAuthBase(env), ...containedBridgeBase(env), ...containedReleaseAnswer(env, home), PATH: `${bin}:${env['PATH'] ?? ''}` };
+  if (!opts.systemd && !opts.tmux && !opts.net) return { ...env, ...bus, ...containedAuthBase(env), ...containedBridgeBase(env), ...containedReleaseAnswer(env, home), PATH: `${pathEntry(bin)}:${posixPathList(env['PATH'] ?? '')}${lookupTail()}` };
   // THE SECOND STRUCTURAL BOUNDARY for the ccd runners, and the reason it is a
   // poison rather than an absence: `_have_systemctl` is `command -v systemctl`,
   // so REMOVING systemctl would send every ccd test down `_supervised_start`'s
@@ -658,7 +702,7 @@ export function ghContainedEnv(
   // Prepended to whatever the caller passed, never the other way round: a
   // snippet that supplies its own PATH must not be able to displace the poison,
   // which is the difference between structural and advisory.
-  return { ...env, ...bus, ...containedAuthBase(env), ...containedBridgeBase(env), ...containedReleaseAnswer(env, home), PATH: `${bin}:${env['PATH'] ?? ''}` };
+  return { ...env, ...bus, ...containedAuthBase(env), ...containedBridgeBase(env), ...containedReleaseAnswer(env, home), PATH: `${pathEntry(bin)}:${posixPathList(env['PATH'] ?? '')}${lookupTail()}` };
 }
 
 /** The one reader every append-only call log in this file goes through: absent
@@ -894,10 +938,16 @@ export function makeCcdHarness(prefix: string): CcdHarness {
   // (a) a syntax error now surfaces after ccd is sourced, prefixed `eval:` (rc 2 either way); (b) execFileSync's
   // thrown message no longer carries the snippet, so a `toThrow` can match only stderr; (c) the snippet can see the
   // two non-exported shell variables `ccd_h_src` and `ccd_h_snippet`.
+  // `HARNESS_BASH`, not `'bash'` — the shell production runs ccd in (see its docstring). And a `timeout`: execFileSync
+  // blocks the WORKER THREAD, so vitest's own clock cannot interrupt a snippet whose bash never returns — measured on
+  // Windows, two full-suite attempts stalled with `bash -c "source ccd; …"` children alive and no output at all. 120 s
+  // is far outside any legitimate snippet, so it fires only on a wedge; `CCRC_TEST_SH_TIMEOUT_MS` (the call's env first,
+  // then the process's) is the knob `ccd-harness-timeout.test.ts` drives.
   const sh = (snippet: string, extra: NodeJS.ProcessEnv = {}): string =>
-    execFileSync('bash', ['-c', 'ccd_h_src=$CCD_HARNESS_SRC ccd_h_snippet=$CCD_HARNESS_SNIPPET; '
+    execFileSync(HARNESS_BASH, ['-c', 'ccd_h_src=$CCD_HARNESS_SRC ccd_h_snippet=$CCD_HARNESS_SNIPPET; '
       + 'unset CCD_HARNESS_SRC CCD_HARNESS_SNIPPET; source "$ccd_h_src"; FLEET_SPAWN_PINS=; eval "$ccd_h_snippet"'],
       { encoding: 'utf8', cwd: home,
+        timeout: Number(extra['CCRC_TEST_SH_TIMEOUT_MS'] ?? process.env['CCRC_TEST_SH_TIMEOUT_MS'] ?? 120_000),
         env: { ...env(extra), CCD_HARNESS_SRC: CCD, CCD_HARNESS_SNIPPET: snippet } }).trim();
 
   return {

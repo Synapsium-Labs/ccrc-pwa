@@ -176,6 +176,10 @@ SELFTEST_TIMEOUT_S = 30
 
 BODY_MODE = 0o644
 ENTRY_MODE = 0o755
+# Whether this filesystem keeps a mode. MSYS2/Cygwin on an NTFS `noacl` mount (the Windows port's runtime) does not:
+# chmod is a no-op there and the mode read back is derived from the bytes (a file opening with `#!` reads 0755), so a
+# 0644 body can never re-measure as 0644. There the mode is not compared; the regular-file and exact-bytes checks stand.
+MODES_KEPT = sys.platform not in ('cygwin', 'msys')
 
 # THE PAIR'S PATHS, NAMED ONCE: the two sources relative to <tree>, the two
 # destinations relative to <home>. `install` uses these four lines and nothing
@@ -399,7 +403,7 @@ def converged(dest, data, mode):
             return 'differ'
     except (OSError, Refused):
         return 'differ'
-    return 'same' if stat.S_IMODE(st.st_mode) == mode else 'mode'
+    return 'same' if not MODES_KEPT or stat.S_IMODE(st.st_mode) == mode else 'mode'
 
 
 def repair_mode(dest, mode):
@@ -485,7 +489,7 @@ def postcondition(dest, data, mode, label):
     """The exact destination entry, re-measured after its rename: a regular
     file — not a link — of the staged mode and bytes."""
     st = os.lstat(dest)
-    if not stat.S_ISREG(st.st_mode) or stat.S_IMODE(st.st_mode) != mode or read_regular(dest) != data:
+    if not stat.S_ISREG(st.st_mode) or (MODES_KEPT and stat.S_IMODE(st.st_mode) != mode) or read_regular(dest) != data:
         raise Refused('after publishing the %s, %s is not the regular file of mode %o just staged' % (label, dest, mode))
 
 

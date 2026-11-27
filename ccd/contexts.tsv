@@ -10,6 +10,8 @@
 # ccd/lib/train-proof.sh (D-7463), ccd/lib/delegation-lease.sh (wave 5), ccd/lib/pool-set.sh (the Overlord's W1),
 # ccd/lib/long-lived.sh (the Overlord's W1 ccd arms), ccd/lib/door.sh (the Overlord's door process) and ccd/lib/model-aliases.sh (the model-class Anthropic arm), which ccd loads at its foot:
 # <function name><TAB><context>.
+_ccd_is_windows	K
+mkdir	K
 _tmx_sock	C10
 _tmx_argv	C10
 _tmx	C10
@@ -30,8 +32,15 @@ _plat_mode	K
 _plat_date_to_epoch	K
 _plat_sha256	K
 _plat_sha256_check	K
+_pane_unicode_env	C2
+_pane_shell_env	C2
 _plat_uuid	K
+_uuid_from_urandom	K
 _plat_ppid	K
+_plat_alive	K
+_plat_winpid	K
+_plat_lineage	K
+_plat_pstart	K
 _plat_cgroup	K
 _plat_timeout	K
 _plat_timeout_capability	K
@@ -142,6 +151,7 @@ _lc_refuse	C1
 _lc_refuse_return	C1
 _lc_surface_norm	C1
 _lc_dec_ok	C1
+_hook_pid	K
 _ws_status	C3
 _munge_wd	C3
 _transcript_path	C3
@@ -450,6 +460,7 @@ _pane_scope_stop	C2
 _pane_scope_reap	C2
 _graceful_stop_note	C2
 _graceful_stop_same	C2
+_graceful_stop_quit	C2
 _graceful_stop_before	C2
 _graceful_stop_after	C2
 _graceful_stop_observe	C2
@@ -701,6 +712,7 @@ _ws_reclaim_kept_read	C4
 _ws_reclaim_dropped_count	C4
 _ws_dir_physical	C4
 _ws_path_users_proc_root	C4
+_ws_win_native_users	C4
 _ws_path_users	C4
 _ws_path_users_many	C4
 cmd_path_users	C4

@@ -1,0 +1,220 @@
+#!/usr/bin/env bash
+# systemctl(1) as much of it as `ccd` actually calls — 36 call sites, four verbs
+# and one query — backed by `win/ccrc-supervisor.mjs` instead of a systemd
+# manager. Only the `--user` surface exists; there is no system manager here and
+# pretending otherwise would be a lie a caller could act on.
+#
+# THE ONE RULE THIS FILE MUST NOT BREAK: when the supervisor is not answering,
+# EXIT NON-ZERO. `ccd`'s `_ws_unit_state` reads the rc —
+#
+#     rows=$(systemctl --user list-units … 2>/dev/null) || return 0
+#
+# — and turns a refusal into the empty answer, which the JSON writer renders as
+# `null`. Exit 0 with no rows instead and every workspace on the box reports
+# `absent`: "nothing is watching this session", the F8 orphan signature, printed
+# for a fleet that is perfectly healthy. Absence of a manager is not absence of
+# a unit.
+set -uo pipefail
+
+STATE_DIR="${CCRC_SUPERVISOR_STATE:-$HOME/.ccrc/supervisor}"
+ENDPOINT="$STATE_DIR/endpoint.json"
+WANTS_DIR="$HOME/.config/systemd/user/default.target.wants"
+
+_sup_field() {   # key -> its value from endpoint.json, or empty
+  [ -f "$ENDPOINT" ] || return 1
+  sed -n "s/.*\"$1\":[[:space:]]*\"\{0,1\}\([^,\"}]*\)\"\{0,1\}.*/\1/p" "$ENDPOINT" | head -1
+}
+
+_sup() {   # METHOD PATH -> body on stdout; non-zero when the manager does not answer
+  local method="$1" p="$2" port token
+  port=$(_sup_field port) || return 1
+  token=$(_sup_field token) || return 1
+  [ -n "$port" ] && [ -n "$token" ] || return 1
+  # A stop or restart waits for the child: the manager gives a server it asked to stop 6 s before killing it, so a POST
+  # may take longer than 5 s (measured: `ccrc install`'s restart read a live manager's answer as a failure). A query
+  # stays short, so a hung manager never holds a poll.
+  curl -fsS -X "$method" -H "x-ccrc-sup-token: $token" \
+    --max-time "$([ "$method" = POST ] && echo 20 || echo 5)" "http://127.0.0.1:$port$p"
+}
+
+# `enable` is measured by ccd as a FILE, not asked of the manager
+# (`_ws_unit_state` stats `default.target.wants/<unit>` first and returns
+# `enabled` on `-L || -e`). A regular file satisfies that test and needs no
+# symlink privilege, which on Windows is not a given.
+_wants_add() { mkdir -p "$WANTS_DIR" && printf '%s\n' "$1" > "$WANTS_DIR/$1"; }
+_wants_rm()  { rm -f "$WANTS_DIR/$1"; }
+
+# ── argument scan. Real systemctl accepts these in any order; so do we.
+NOW=0; USER_SCOPE=0; VALUE_ONLY=0; VERB=""; PATTERN=""; STATES=""; declare -a UNITS=() PROPS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --user) USER_SCOPE=1 ;;
+    --now) NOW=1 ;;
+    --value) VALUE_ONLY=1 ;;              # `show -p X --value`: the value alone
+    --version) VERB=--version ;;          # the identity the slice readers ask for, below
+    # Properties are collected apart from unit names, so `show -p A -p B UNIT` and `show UNIT -p A` both read right
+    # (the second `-p` was read as the unit, and doctor's NRestarts never answered).
+    -p|--property) shift; IFS=, read -ra _p <<<"${1:-}"; PROPS+=("${_p[@]}") ;;
+    --property=*) IFS=, read -ra _p <<<"${1#*=}"; PROPS+=("${_p[@]}") ;;
+    -p?*) IFS=, read -ra _p <<<"${1#-p}"; PROPS+=("${_p[@]}") ;;
+    --state=*) STATES="${1#*=}" ;;        # list-units --state=failed|active,...: filtered as systemctl does
+    --all|--plain|--no-legend|--quiet|--no-pager|--no-ask-password) ;;
+    -*) ;;                                   # every other flag is presentation
+    *)
+      if [ -z "$VERB" ]; then VERB="$1"
+      elif [ "$VERB" = list-units ] && [ -z "$PATTERN" ]; then PATTERN="$1"
+      else UNITS+=("$1"); fi ;;
+  esac
+  shift
+done
+
+# A bare instance name is a service: `claude-session@x` -> `claude-session@x.service`.
+_qualify() { case "$1" in *.*) printf '%s' "$1" ;; *) printf '%s.service' "$1" ;; esac; }
+
+case "$VERB" in
+  # WHO IS ANSWERING. This manager has no slices (Windows has no cgroups), so `ccrc test --status` and doctor ask
+  # this line on Windows rather than read an unloaded ccrctests.slice as a box to fix. systemd says `systemd <n>`.
+  --version) echo "ccrc-supervisor: the Windows port's systemd stand-in (no slices, no cgroups)" ;;
+  list-units)
+    rows=$(_sup GET /units) || exit 1        # ← the rule above, in one line
+    [ -n "${PATTERN:-}" ] || [ -n "$STATES" ] || { printf '%s' "$rows"; exit 0; }
+    while IFS= read -r row; do
+      [ -n "$row" ] || continue
+      # shellcheck disable=SC2254 — the pattern IS a glob, that is the point
+      [ -z "${PATTERN:-}" ] || case "${row%% *}" in $PATTERN|$PATTERN.service) ;; *) continue ;; esac
+      if [ -n "$STATES" ]; then
+        read -r _u _l act sub _rest <<<"$row"
+        case ",$STATES," in *",$act,"*|*",$sub,"*) ;; *) continue ;; esac
+      fi
+      printf '%s\n' "$row"
+    done <<<"$rows"
+    ;;
+  show-environment)
+    # The environment every unit is started with (the manager's `childEnv`); `_svc_have_user_manager` asks this to
+    # learn whether a transient unit can be started, which on Windows it now can (win/bin/systemd-run).
+    _sup GET /environment || exit 1 ;;
+  # `if`, not `[ "$NOW" = 1 ] && …`: a test that is the LAST command of a loop
+  # body becomes the loop's exit status, so `enable` without `--now` would exit
+  # 1 — and every caller of this shim treats a non-zero systemctl as a refusal.
+  # Measured: it turned `disable` into a hard failure while doing its job
+  # correctly.
+  enable)
+    for u in "${UNITS[@]}"; do
+      q=$(_qualify "$u")
+      _wants_add "$q" || exit 1
+      if [ "$NOW" = 1 ]; then _sup POST "/units/$q/start" >/dev/null || exit 1; fi
+    done
+    ;;
+  disable)
+    for u in "${UNITS[@]}"; do
+      q=$(_qualify "$u")
+      _wants_rm "$q"
+      if [ "$NOW" = 1 ]; then _sup POST "/units/$q/stop" >/dev/null || exit 1; fi
+    done
+    ;;
+  start|stop|reset-failed)
+    for u in "${UNITS[@]}"; do
+      q=$(_qualify "$u")
+      _sup POST "/units/$q/$VERB" >/dev/null || exit 1
+    done
+    ;;
+  restart)
+    # ONE call, not stop-then-start from here: the manager waits for the old
+    # process to exit before spawning the new one, and only it can — this
+    # shell has no handle on the child. Two calls from here raced the socket
+    # release and produced `EADDRINUSE` on every restart.
+    for u in "${UNITS[@]}"; do
+      q=$(_qualify "$u")
+      _sup POST "/units/$q/restart" >/dev/null || exit 1
+    done
+    ;;
+  daemon-reload)
+    # Nothing to reload: this manager reads no unit files. `ccrc install` runs
+    # it after writing units and treats a non-zero answer as "systemd never
+    # read the units this run installed" — which for THIS manager is not a
+    # failure state, it is the only state.
+    ;;
+  is-active)
+    # Prints the ACTIVE column and exits 0 only for `active` — systemctl's own
+    # contract, which `ccrc status` reads by capturing stdout and treating an
+    # empty answer as `unknown`.
+    rc=0
+    for u in "${UNITS[@]}"; do
+      q=$(_qualify "$u")
+      row=$(_sup GET /units 2>/dev/null | grep -F "$q " || true)
+      state=$(printf '%s' "$row" | awk '{print $3}')
+      [ -n "$state" ] || state=inactive
+      printf '%s\n' "$state"
+      [ "$state" = active ] || rc=3
+    done
+    exit "$rc" ;;
+  is-enabled)
+    rc=0
+    for u in "${UNITS[@]}"; do
+      q=$(_qualify "$u")
+      if [ -e "$WANTS_DIR/$q" ]; then echo enabled; else echo disabled; rc=1; fi
+    done
+    exit "$rc" ;;
+  try-restart)
+    # Restart what is running, leave alone what is not — systemctl's own
+    # semantics, and the whole point of `ccrc update`'s supervisor sweep: a
+    # failed unit stays failed ("try-restart is a no-op on a failed unit (its
+    # own man page)", ccrc:4320). `claude-session@*` as a UNIT argument is a
+    # glob over the manager's rows, as it is for systemd.
+    rows=$(_sup GET /units) || exit 1
+    for u in "${UNITS[@]}"; do
+      q=$(_qualify "$u")
+      while IFS= read -r row; do
+        [ -n "$row" ] || continue
+        name="${row%% *}"
+        # shellcheck disable=SC2254
+        case "$name" in $q|$u) ;; *) continue ;; esac
+        [ "$(printf '%s' "$row" | awk '{print $3}')" = active ] || continue
+        _sup POST "/units/$name/restart" >/dev/null || exit 1
+      done <<<"$rows"
+    done
+    ;;
+  reload)
+    # No unit here has a reload action; systemd would refuse too. Exit 0 so a
+    # caller's `reload || restart` fallback is not the path taken by accident.
+    ;;
+  show)
+    # ONE property is answered, and it is answered TRUTHFULLY: `KillMode`.
+    # `ccrc update`'s supervisor sweep (R1, CLAUDE.md) refuses to `try-restart`
+    # unless every unit shows `KillMode=process`, because under systemd's
+    # default (control-group) a restart would take the tmux server — and every
+    # pane on the box — down with the supervisor. Our supervisor kills the
+    # direct child and nothing else (`Unit.stop`, ccrc-supervisor.mjs), so
+    # `process` is a description of what it does, not a value chosen to make
+    # the preflight pass. Any other property is refused rather than guessed.
+    # `-p` (and `--value`) were consumed by the flag scan above, so the
+    # property arrives as the first positional and the unit as the second. The
+    # manager answers a fixed set (`/units/<u>/props`); anything else is
+    # refused rather than guessed. `--value` prints the value alone, as
+    # systemctl does — `verify-service.sh` reads MainPID that way.
+    # Properties are now collected by the flag scan (PROPS), apart from the units, in any order and any number.
+    [ "${#PROPS[@]}" -gt 0 ] || { echo "systemctl (ccrc shim): show needs -p <MainPID|ActiveState|KillMode|LoadState|ExecStart|NRestarts>" >&2; exit 1; }
+    for prop in "${PROPS[@]}"; do
+      case "$prop" in
+        MainPID|ActiveState|KillMode|LoadState|ExecStart|NRestarts) ;;
+        *) echo "systemctl (ccrc shim): show -p $prop is not measured here" >&2; exit 1 ;;
+      esac
+    done
+    for u in "${UNITS[@]}"; do
+      q=$(_qualify "$u")
+      props=$(_sup GET "/units/$q/props") || exit 1
+      for prop in "${PROPS[@]}"; do
+        line=$(printf '%s\n' "$props" | grep "^$prop=")
+        if [ "$VALUE_ONLY" = 1 ]; then printf '%s\n' "${line#*=}"; else printf '%s\n' "$line"; fi
+      done
+    done
+    ;;
+  status)
+    # Advice-only in `ccd` ("read what it says: systemctl --user status …"),
+    # never parsed. A row from the manager is the honest minimum.
+    for u in "${UNITS[@]}"; do _sup GET /units | grep -F "$(_qualify "$u")" || true; done
+    ;;
+  *)
+    echo "systemctl (ccrc shim): unsupported verb '${VERB:-}' — this shim covers what ccd calls" >&2
+    exit 2 ;;
+esac

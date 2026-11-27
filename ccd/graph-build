@@ -117,8 +117,10 @@ def unwritable(out):
 
 
 def pre_import_checks(a, out_env):
-    if a.root is not None and os.path.realpath(os.getcwd()) != a.root:
-        refuse('setup', 'cwd: the working directory %s is not --root %s' % (os.path.realpath(os.getcwd()), a.root), 2)
+    # '/'-separated: on Windows a native python's realpath is C:\... and MSYS hands --root over as C:/...; elsewhere a no-op.
+    cwd = os.path.realpath(os.getcwd()).replace(os.sep, '/')
+    if a.root is not None and cwd != a.root:
+        refuse('setup', 'cwd: the working directory %s is not --root %s' % (cwd, a.root), 2)
     if a.out is not None:
         if not os.path.isabs(a.out):
             refuse('setup', 'out: --out %s is not an absolute path' % a.out, 2)
@@ -189,7 +191,11 @@ def saved_result_spelling(a):
 
     def spelled(v):
         real = os.path.realpath(v if os.path.isabs(v) else os.path.join(a.root, v))
-        if os.path.commonpath([real, mem]) != mem or real == mem:
+        try:
+            under = os.path.commonpath([real, mem]) == mem and real != mem
+        except ValueError:   # Windows: on another drive than memory/, so not under it
+            under = False
+        if not under:
             return v
         return 'graphify-out/memory/' + os.path.relpath(real, mem).replace(os.sep, '/')
 

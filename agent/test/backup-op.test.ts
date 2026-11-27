@@ -62,7 +62,8 @@ describe('measureBackup over a fixture directory', () => {
     expect(r.state === 'read' && r.files['last-success']!.length).toBe(BACKUP_FILE_MAX_BYTES);
   });
 
-  it.skipIf(asRoot)('a file the agent may not read (chmod 000) is unreadable: denied, never absent', () => {
+  // chmod 000 cannot take the owner's read away on NTFS, so both denial cases are POSIX-only.
+  it.skipIf(asRoot || process.platform === 'win32')('a file the agent may not read (chmod 000) is unreadable: denied, never absent', () => {
     const d = stateDir({ 'last-success': LINE, 'last-failure': LINE });
     chmodSync(path.join(d, 'last-failure'), 0o000);
     try {
@@ -72,7 +73,7 @@ describe('measureBackup over a fixture directory', () => {
     }
   });
 
-  it.skipIf(asRoot)('a directory the agent may not search (chmod 000) is unreadable: denied', () => {
+  it.skipIf(asRoot || process.platform === 'win32')('a directory the agent may not search (chmod 000) is unreadable: denied', () => {
     const d = stateDir({ 'last-success': LINE });
     chmodSync(d, 0o000);
     try {
@@ -88,6 +89,8 @@ describe('measureBackup over a fixture directory', () => {
     writeFileSync(target, LINE);
     symlinkSync(target, path.join(d, 'last-success'));
     expect(measureBackup(env(d))).toEqual({ state: 'unreadable', why: 'failed' });
+    // An MSYS FIFO is not one to native node (it reads absent there), so no read can hang on it: POSIX-only half.
+    if (process.platform === 'win32') return;
     const d2 = stateDir();
     execFileSync('mkfifo', [path.join(d2, 'stale')]);
     expect(measureBackup(env(d2))).toEqual({ state: 'unreadable', why: 'failed' });

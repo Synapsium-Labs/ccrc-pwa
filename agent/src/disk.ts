@@ -17,6 +17,7 @@
 // the op never waits for it.
 import { readFileSync } from 'node:fs';
 import { statfs, stat } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import {
   DISK_STATFS_DEADLINE_MS, type DiskOpReply,
@@ -53,6 +54,8 @@ export interface DiskSeams {
 /** The transcript-folder walk runs at most this often (D-7898): it reads every session directory of every config dir,
  *  which is far more than the `statfs` of a root, and the disk alarm asks every minute. */
 export const TRANSCRIPT_WORK_REFRESH_MS = 10 * 60_000;
+
+const WIN = process.platform === 'win32';
 
 const realStat = (p: string): Promise<{ dev: number }> => stat(p);
 
@@ -206,6 +209,8 @@ export function transcriptWorkSettled(stat: object): Promise<void> {
 /** A template, resolved to the path(s) it names. `${CONFIG_DIR}` stands for every roster config dir. */
 function resolveTemplate(t: string, home: string, tmp: string, dirs: readonly string[]): string[] {
   if (t === '${CONFIG_DIR}') return [...dirs];
+  // On Windows a bare `/tmp` resolves to `<drive of the cwd>:	mp`, a directory nothing uses: the temp dir is `tmp`.
+  if (WIN && t === '/tmp') return [tmp];
   return [t.replace('${HOME}', home).replace('${TMPDIR:-/tmp}', tmp)];
 }
 
@@ -236,7 +241,9 @@ export function measureDisk(home: string, given: Partial<DiskSeams> = {}): Promi
 
 async function measureOnce(home: string, seams: DiskSeams): Promise<DiskOpReply> {
   const tmpEnv = seams.env['TMPDIR'];
-  const tmp = tmpEnv !== undefined && tmpEnv !== '' ? tmpEnv : '/tmp';
+  // Windows: Claude Code's temp dir is the OS one (%TEMP%), and a TMPDIR the MSYS side set is a POSIX path native
+  // Node would resolve onto the cwd's drive, so the OS answer is the root.
+  const tmp = WIN ? os.tmpdir() : tmpEnv !== undefined && tmpEnv !== '' ? tmpEnv : '/tmp';
   const cfg = configDirs(home, seams);
 
   // label -> the paths it resolves to, in table order; every path measured once however many labels name it.
@@ -275,8 +282,9 @@ async function measureOnce(home: string, seams: DiskSeams): Promise<DiskOpReply>
     const { s } = first;
     filesystems.push({
       dev: String(d),
-      // Without mountinfo the mount point is unknown: name the first measured root, and the type `unknown`.
-      mount: entry?.mountPoint ?? first.path,
+      // Without mountinfo the mount point is unknown: name the first measured root, and the type `unknown`. On Windows
+      // (no mountinfo, and statfs reports no type) the volume statfs measured is the path's drive: name its root.
+      mount: entry?.mountPoint ?? (WIN ? path.parse(first.path).root : first.path),
       fsType: entry?.fsType ?? 'unknown',
       roots: DISK_WORK_ROOTS.map((r) => r.label).filter((l) => labels.includes(l)),
       sizeBytes: s.blocks * s.bsize,

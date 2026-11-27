@@ -1,5 +1,7 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { shellArgv } from './exec.js';
 import { parseCcdCaps } from '../../shared/agent-protocol.js';
+import { winKillTree } from '../../shared/startable.mjs';
 
 /** Same ceiling the agent's own `readCcdVerbs` uses for the identical
  *  operation on the identical class of box (`agent/src/server.ts`'s
@@ -25,6 +27,16 @@ const MAX_BUFFER = 8 * 1024 * 1024;
  *  hang shape nobody has actually shipped — but the mechanism exists
  *  precisely to cover shapes nobody has shipped YET. */
 export const KILL_GRACE_MS = 2_000;
+
+/** Signal the child and everything it spawned. POSIX: the child is spawned
+ *  detached, so `-pid` reaches its whole group. Windows has no process group
+ *  to signal, and the direct pid is only the bash `shellArgv` put in front of
+ *  `ccd`, so the tree is ended by `winKillTree` (shared/startable.mjs) (`taskkill /T /F`:
+ *  no TERM on Windows, so both steps of the escalation are the forced end). */
+function killTree(child: ChildProcess, pid: number, signal: 'SIGTERM' | 'SIGKILL'): void {
+  if (process.platform === 'win32') { winKillTree(spawn, child, signal); return; }
+  try { process.kill(-pid, signal); } catch { /* already gone */ }
+}
 
 /**
  * Local mode's own evidence for `stopSurfaceSupported` and every other
@@ -197,7 +209,23 @@ function execCapped(
       // the OTHER named hazard ("a ccd that merely reads stdin" hangs the
       // same way `sleep` does), closed here structurally rather than left
       // to the timeout alone to cover.
-      child = spawn(cmd, args, { detached: true, stdio: ['ignore', 'pipe', 'ignore'] });
+      // `shellArgv` (exec.ts): on Windows `cmd` is a bash script CreateProcess
+      // cannot run, so it goes through bash — the one place that spelling is
+      // decided, shared with `realRunner`.
+      const sp = shellArgv(cmd, args);
+      // `windowsHide` for the same reason as `realRunner`: `ccd caps` is a
+      // console program, and without this the one-shot boot probe flashes a
+      // console window on Windows. Ignored off Windows.
+      // `detached` ONLY off Windows. It exists for the POSIX group-kill below
+      // (`process.kill(-pid)`), which Windows has no equivalent for — and there
+      // a detached MSYS2 bash gets no console and dies at once, which is what
+      // made every boot log `ccd caps probe failed (exited 127)` while the same
+      // command run by hand answered fine.
+      child = spawn(sp.cmd, sp.args, {
+        detached: process.platform !== 'win32',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        windowsHide: true,
+      });
     } catch (err) {
       resolve({ code: 1, stdout: '', reason: `could not spawn: ${(err as Error).message}` });
       return;
@@ -216,7 +244,9 @@ function execCapped(
     const timer = setTimeout(() => {
       if (typeof child.pid === 'number') {
         const pid = child.pid;
-        try { process.kill(-pid, 'SIGTERM'); } catch { /* already gone */ }
+        // The NEGATIVE pid is a POSIX process-group signal; Windows has no
+        // such thing and ends the tree by taskkill instead (`killTree`).
+        killTree(child, pid, 'SIGTERM');
         // Escalation, scheduled independently of `finish` below: the
         // CALLER already gets its answer at the timeout regardless, but
         // this timer keeps running on its own to guarantee the group is
@@ -224,7 +254,7 @@ function execCapped(
         // alone (verified: see localcaps.test.ts's dedicated test) and
         // needs the unmaskable follow-up to actually die.
         setTimeout(() => {
-          try { process.kill(-pid, 'SIGKILL'); } catch { /* already gone */ }
+          killTree(child, pid, 'SIGKILL');
         }, KILL_GRACE_MS);
       }
       finish(1, '', `timed out after ${timeoutMs}ms`);

@@ -515,3 +515,14 @@ describe('the five readers extract the same value from the written fleet file', 
     expect(shellReaders).toHaveLength(4);   // plus the server's own: five
   });
 });
+
+describe.skipIf(process.platform !== 'win32')('writeValueFileAtomic on Windows: the token file is its owner\'s alone', () => {
+  it('leaves one ACL grant (the owner), as ccrc\'s _ccrc_lock_file does and doctor measures', async () => {
+    const dir = mkTmp('ccrc-token-acl-');
+    const p = path.join(dir, 'mail.token');
+    await writeValueFileAtomic(p, 'x\n');
+    // Doctor's own count: the `:(` grants icacls prints for the file.
+    const grants = execFileSync('icacls', [p], { encoding: 'utf8' }).split('\n').filter((l) => l.includes(':(')).length;
+    expect(grants).toBe(1);
+  });
+});

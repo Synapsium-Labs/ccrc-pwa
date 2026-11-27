@@ -11,8 +11,14 @@
 // defines neither. `process.kill`, `setTimeout`, `clearTimeout` and `Buffer` are globals, as in `shared/mark.mjs`.
 // Types live alongside in the hand-written `shared/spawn.d.mts`.
 
+
 /** Enough for any sentence a `--detach` parent prints; past it the capture stops and stdout reads as incomplete. A
  *  local capture cap, not a wire constant, so it is defined here, once. */
+/** A host with no `startable` starts the file itself (every platform but Windows needs nothing more). */
+const asIs = (file, args) => [file, [...args]];
+/** A host with no `winKillTree` ends the child alone (only Windows asks; every wrapper there passes the tree kill). */
+const childAlone = (_spawn, child, signal) => { try { child.kill(signal); } catch { /* gone */ } };
+
 const UPDATE_SPAWN_MAX_BUFFER = 1024 * 1024;
 
 /**
@@ -27,8 +33,12 @@ const UPDATE_SPAWN_MAX_BUFFER = 1024 * 1024;
  * `host` is `{ spawn, signals }`: `node:child_process`'s `spawn` and `node:os`'s `constants.signals`. Every option is
  * required: `env` the parent's whole environment, `timeoutMs` the bound, `drainMs` the drain deadline.
  */
+
+
 export function boundedSpawn(host, file, args, opts) {
   const { spawn, signals } = host;
+  const startable = host.startable ?? asIs;
+  const winKillTree = host.winKillTree ?? childAlone;
   const { env, timeoutMs, drainMs } = opts;
   return new Promise((resolve) => {
     let settled = false;
@@ -38,7 +48,7 @@ export function boundedSpawn(host, file, args, opts) {
     let drainTimer = null;
     const out = { chunks: [], bytes: 0, capped: false, broken: false, eof: false };
     const err = { chunks: [], bytes: 0, capped: false, broken: false, eof: false };
-    const child = spawn(file, [...args], { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env });
+    const child = spawn(...startable(file, args), { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env });
     const finish = (r) => {
       if (settled) return;
       settled = true;
@@ -106,7 +116,8 @@ export function boundedSpawn(host, file, args, opts) {
       killTimer = null;
       if (exited !== null || child.pid === undefined) return;
       killed = true;
-      try { process.kill(-child.pid, 'SIGKILL'); } catch (e) {
+      if (process.platform === 'win32') winKillTree(spawn, child, 'SIGKILL');
+      else try { process.kill(-child.pid, 'SIGKILL'); } catch (e) {
         // ESRCH: the group is already gone. Anything else: fall back to the parent alone rather than to nothing.
         if (e.code !== 'ESRCH') child.kill('SIGKILL');
       }
@@ -137,6 +148,8 @@ export function boundedSpawn(host, file, args, opts) {
  */
 export function boundedStdinSpawn(host, file, argv, stdin, opts) {
   const { spawn, signals } = host;
+  const startable = host.startable ?? asIs;
+  const winKillTree = host.winKillTree ?? childAlone;
   const { env, timeoutMs, killGraceMs, maxOutputBytes, drainMs } = opts;
   return new Promise((resolve) => {
     let settled = false;
@@ -152,6 +165,7 @@ export function boundedStdinSpawn(host, file, argv, stdin, opts) {
     };
     const signalGroup = (s) => {
       if (child.pid === undefined) return;
+      if (process.platform === 'win32') { winKillTree(spawn, child, s); return; }
       try { process.kill(-child.pid, s); } catch (e) {
         // ESRCH: the group is already gone. Anything else: the child alone rather than nothing.
         if (e.code !== 'ESRCH') { try { child.kill(s); } catch { /* gone */ } }
@@ -168,7 +182,7 @@ export function boundedStdinSpawn(host, file, argv, stdin, opts) {
       }, killGraceMs).unref();
     };
     try {
-      child = spawn(file, [...argv], { detached: true, stdio: ['pipe', 'pipe', 'pipe'], env });
+      child = spawn(...startable(file, argv), { detached: true, stdio: ['pipe', 'pipe', 'pipe'], env });
     } catch {
       resolve({ kind: 'not-started' });
       return;

@@ -500,7 +500,10 @@ export const UPDATE_LAUNCHER_PARTS = ['.local', 'bin', 'ccrc'] as const;
  *  (`/`-led) with no trailing `/`: that is a caller bug (the agent's
  *  `cfg.home`, the server's own `cfg.home`), never something to spawn. Joined
  *  by hand because L0 imports no `node:path`. */
-export function updateLauncherPath(home: string): string {
+export function updateLauncherPath(raw: string): string {
+  // The Windows port: its server's home is `C:\Users\<user>`, and the launcher is a bash script the MSYS shell runs
+  // (`shared/spawn.mjs`), so a drive-letter home is turned into the MSYS form that shell takes (`/c/Users/<user>`).
+  const home = /^[A-Za-z]:[\\/]/.test(raw) ? raw.replace(/\\/g, '/').replace(/^([A-Za-z]):/, (_m, d: string) => `/${d.toLowerCase()}`) : raw;
   if (!home.startsWith('/') || home.endsWith('/')) {
     throw new RangeError(`updateLauncherPath: home must be absolute with no trailing slash (got ${JSON.stringify(home)})`);
   }

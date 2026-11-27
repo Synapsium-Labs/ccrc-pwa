@@ -77,7 +77,8 @@ describe('each vocabulary: the array is the union, the guard is the array', () =
     { name: 'RequestKind', members: REQUEST_KINDS, guard: isRequestKind, spec: ['update', 'rollback'] },
     { name: 'StampRead', members: STAMP_READS, guard: isStampRead, spec: ['ok', 'absent', 'unreadable', 'malformed'] },
     { name: 'NodeRole', members: NODE_ROLES, guard: isNodeRole, spec: ['server', 'fleet', 'both'] },
-    { name: 'NodeOs', members: NODE_OSES, guard: isNodeOs, spec: ['linux', 'darwin', 'unknown'] },
+    // 'windows': the Windows port added it to the spec's `os` column (section 6) and to `NODE_OSES`.
+    { name: 'NodeOs', members: NODE_OSES, guard: isNodeOs, spec: ['linux', 'darwin', 'windows', 'unknown'] },
   ];
 
   for (const { name, members, guard, spec } of VOCABS) {

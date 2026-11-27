@@ -6,6 +6,7 @@ import {
   updateLauncherPath, type ModelsOpOutcome,
 } from '../../shared/agent-protocol.js';
 import { boundedStdinSpawn } from '../../shared/spawn.mjs';
+import { startable, winKillTree } from '../../shared/startable.mjs';
 import { tokenSyncEnv, type TokenSyncEnv } from './tokensync.js';
 
 /**
@@ -37,14 +38,15 @@ export type ModelsOpSpawn = (file: string, argv: readonly string[], bounds: Mode
 /** tokenSyncEnv's three names, PATH = `${nodeDir}:${base.PATH}` (D-5227). Still exactly HOME, PATH, LANG. */
 export function modelsEnv(home: string, from: NodeJS.ProcessEnv = process.env, nodeDir: string = path.dirname(process.execPath)): TokenSyncEnv {
   const base = tokenSyncEnv(home, from);
-  return { HOME: base.HOME, PATH: `${nodeDir}:${base.PATH}`, LANG: base.LANG };
+  // `path.delimiter`: on Windows the list is `;`-separated, and a `:` there loses every entry after the node directory.
+  return { HOME: base.HOME, PATH: `${nodeDir}${path.delimiter}${base.PATH}`, LANG: base.LANG };
 }
 
 /** The bounded verb. Answers once: when the child has closed, or at ONE drain deadline after the SIGKILL. */
 export function makeModelsSpawn(env: TokenSyncEnv): ModelsOpSpawn {
   // Copied name by name, so a caller's object with more fields still hands the child exactly three.
   const childEnv: NodeJS.ProcessEnv = { HOME: env.HOME, PATH: env.PATH, LANG: env.LANG };
-  return (file, argv, bounds) => boundedStdinSpawn({ spawn, signals: osConstants.signals }, file, argv, null, {
+  return (file, argv, bounds) => boundedStdinSpawn({ spawn, signals: osConstants.signals, startable, winKillTree }, file, argv, null, {
     env: childEnv, timeoutMs: bounds.timeoutMs, killGraceMs: bounds.killGraceMs, maxOutputBytes: bounds.maxOutputBytes,
     drainMs: MODELS_OP_DRAIN_MS,
   });

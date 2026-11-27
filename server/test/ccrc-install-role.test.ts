@@ -13,6 +13,7 @@ import { describeLinux, itLinux } from './platformFixtures.js';
 import { installFixtureTree } from './installTreeFixture.js';
 import { assertSpineFrontContained, SPINE_CONTAINMENT_PROBE, spineRunCalls, GPT_LANE_BINS } from './codexLaneFixture.js';
 import { here, REPO, LANE_BINS_IN_LINE, BASH, treeRoot, placed, freshBox, ccrcEnv, runInstall, read, dotCcrc, mtime, gitInit, unitDir, UNIT_FILES, systemctlCalls, FLEET_URL, FLEET_TOKEN, runInstallTty, type Result } from './ccrc-installFixture.js';
+import { posixPath } from './helpers.js';
 
 removeTmpFixturesEachTest();
 
@@ -537,7 +538,7 @@ describe('install.sh: the bootstrap that hands off to ccrc install', () => {
     // cheap and this is still a runner that spawns install.sh with a planted spine.
     assertSpineFrontContained(env, home);
     assertNoRealTool(env, home);
-    const r = spawnSync(BASH, [join(root, 'install.sh')], { env, encoding: 'utf8' });
+    const r = spawnSync(BASH, [posixPath(join(root, 'install.sh'))], { env, encoding: 'utf8' });
     expect(r.status ?? -1, r.stderr ?? '').toBe(0);
 
     // The build order install.sh's pinned code spells: ci in server, then ci
@@ -663,12 +664,16 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
       pick(/^CCRC_CAP_WORDS_LINUX=\(.*\)$/m, 'CCRC_CAP_WORDS_LINUX=(…)'),
       pick(/^_ccrc_cap_words\(\) \{[\s\S]*?\n\}/m, '_ccrc_cap_words'),
       pick(/^_inst_caps\(\) \{[\s\S]*?\n\}/m, '_inst_caps'),
+      // The Windows port moved the os word into `CCRC_OS_WORD`, set at load from CCD_OS: picked with its predicate
+      // and placed AFTER `CCD_OS=` below, so each arm reads its own os, as a real load does.
+      pick(/^_ccrc_is_windows\(\) \{[\s\S]*?\n\}/m, '_ccrc_is_windows'),
     ];
+    const osWord = pick(/^CCRC_OS_WORD=.*\n_ccrc_is_windows && CCRC_OS_WORD=windows$/m, 'CCRC_OS_WORD=');
     for (const [os, words] of [['linux', CAPS_LINUX], ['darwin', CAPS_ALL]] as const) {
       const home = mkTmp(`ccrc-inst-caps-arm-${os}-`);
       const caps = join(home, '.ccrc', 'ccrc-caps');
       const p = spawnSync('bash', ['-c', [
-        'set -uo pipefail', ...harness, `CCD_OS=${os}`, `BOX_CAPS_FILE=${JSON.stringify(caps)}`, '_inst_caps',
+        'set -uo pipefail', ...harness, `CCD_OS=${os}`, osWord, `BOX_CAPS_FILE=${JSON.stringify(caps)}`, '_inst_caps',
       ].join('\n')], {
         // Wave 9 R10d (D-3818): an extracted-function harness (`_inst_caps` and its helpers call builtins plus
         // mkdir/mv/rm/date), so it is exempt from assertNoRealTool — but it no longer inherits the real bus or tools.

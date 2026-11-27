@@ -62,6 +62,7 @@ import { bodyDigest } from '../../shared/mark.mjs';
 import { boundedSpawn } from '../../shared/spawn.mjs';
 import { hostReportOf, readHostIds, type HostRoots } from '../../shared/host-identity.mjs';
 import type { HostReport } from '../../shared/isolation.js';
+import { startable, winKillTree } from '../../shared/startable.mjs';
 import {
   readB64Measured,
   readFromMeasured,
@@ -140,10 +141,12 @@ const AUTH_CLOSE_CODE = 4401;
  *  either side (e.g. CCRC_PROJECTS_ROOT=/home/x/) can't slip past either
  *  branch. */
 function isHomeOrAncestorOfHome(root: string, home: string): boolean {
-  const r = path.resolve(root);
-  const h = path.resolve(home);
+  // Windows: names compare without case, and a drive root (`C:\`) already ends in the separator, as `/` does.
+  const fold = (p: string): string => (process.platform === 'win32' ? p.toLowerCase() : p);
+  const r = fold(path.resolve(root));
+  const h = fold(path.resolve(home));
   if (r === h) return true;
-  const prefix = r === path.sep ? path.sep : r + path.sep;
+  const prefix = r.endsWith(path.sep) ? r : r + path.sep;
   return h.startsWith(prefix);
 }
 
@@ -398,8 +401,12 @@ function runExec(
   args: string[],
   timeoutMs: number,
 ): Promise<{ code: number; stdout: string; stderr: string; killed: boolean; signal: string | null; ran?: false; detail?: string }> {
+  // Windows: the ccd launcher is a script CreateProcess cannot start, so it goes through the MSYS shell (`startable`,
+  // shared/spawn.mjs, the one owner of that rule); `tmux` is an .exe and is started as itself. Off Windows unchanged.
+  [cmd, args] = startable(cmd, args);
   return new Promise((resolve) => {
-    execFile(cmd, args, { maxBuffer: EXEC_MAX_BUFFER, timeout: timeoutMs }, (error, stdout, stderr) => {
+    // `windowsHide`: no console window per exec on Windows; node ignores it elsewhere.
+    execFile(cmd, args, { maxBuffer: EXEC_MAX_BUFFER, timeout: timeoutMs, windowsHide: true }, (error, stdout, stderr) => {
       const code = error
         ? (((error as NodeJS.ErrnoException & { code?: number }).code as number | undefined) ?? 1)
         : 0;
@@ -454,7 +461,7 @@ export type UpdateSpawn = (file: string, args: readonly string[], timeoutMs: num
  * Nothing resolves twice.
  */
 export function makeUpdateSpawn(env: NodeJS.ProcessEnv): UpdateSpawn {
-  return (file, args, timeoutMs) => boundedSpawn({ spawn, signals: os.constants.signals }, file, args, { env, timeoutMs, drainMs: UPDATE_SPAWN_DRAIN_MS });
+  return (file, args, timeoutMs) => boundedSpawn({ spawn, signals: os.constants.signals, startable, winKillTree }, file, args, { env, timeoutMs, drainMs: UPDATE_SPAWN_DRAIN_MS });
 }
 
 /** The agent's production spawner: the parent inherits this process's own environment. */

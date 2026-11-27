@@ -221,7 +221,7 @@ describe('the journal adapter (path-identity spec 2026-10-12 §5.2, §5.3)', () 
     expect(cut, 'the undo’s truncate').toBeGreaterThan(-1);
     expect(fsyncs[0]!.index!, 'the append’s fsync stands before the undo').toBeLessThan(cut);
     expect(code, 'the undo’s fsync follows its truncate').toMatch(/\bftruncateSync\(fd, [^;\n]*\);\s*fsyncSync\(fd\);/);
-    expect(code, 'the directory fsync on create').toMatch(/if \(created\) \{\s*const dfd = openSync\(dir, FS\.O_RDONLY\);\s*try \{ fsyncSync\(dfd\); \}/);
+    expect(code, 'the directory fsync on create').toMatch(/if \(created\) \{\s*const dfd = openSync\(dir, FSYNC_OPEN\);\s*try \{ fsyncSync\(dfd\); \}/);
     expect(code, 'the reopen after EEXIST').toMatch(/^\s*fd = openSync\(logPath, FS\.O_RDWR \| FS\.O_APPEND \| FS\.O_NOFOLLOW\);$/m);
   });
 });

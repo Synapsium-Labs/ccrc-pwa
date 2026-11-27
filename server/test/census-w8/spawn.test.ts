@@ -29,12 +29,16 @@ const BODY = KERNEL_TEXT.slice(BODY_FROM, KERNEL_TEXT.indexOf('\n}\n', BODY_FROM
 /** `boundedStdinSpawn`'s real body (D-7057), so the account-op fixture's "wrapper with the body" is the base's shape. */
 const STDIN_FROM = KERNEL_TEXT.indexOf('export function boundedStdinSpawn(');
 const STDIN_BODY = KERNEL_TEXT.slice(KERNEL_TEXT.indexOf('  return new Promise((resolve) => {', STDIN_FROM), KERNEL_TEXT.lastIndexOf('\n}'));
+/** The base's wrappers spawned `file` itself: the kernel's `startable` (the Windows port) is not the base's shape, so the
+ *  fixtures' "wrapper with the body" spells the base's call. */
+const BASE_BODY = BODY.replace('spawn(...startable(file, args),', 'spawn(file, [...args],');
+const BASE_STDIN_BODY = STDIN_BODY.replace('spawn(...startable(file, argv),', 'spawn(file, [...argv],');
 
 describe('updateSpawnBodies — every update-spawn body outside shared/spawn.mjs (D-7055)', () => {
   it('fixture: a wrapper with the body is one site; a thin wrapper, the kernel itself and a near miss are none', () => {
     const root = tree({
       // The base's shape: the body spelled in a wrapper, the drain from the protocol.
-      'agent/src/server.ts': `import { spawn } from 'node:child_process';\nexport function makeUpdateSpawn(env) {\n  const { signals } = { signals: {} };\n  const drainMs = 2000;\n  return (file, args, timeoutMs) => {\n${BODY}\n  };\n}\n`,
+      'agent/src/server.ts': `import { spawn } from 'node:child_process';\nexport function makeUpdateSpawn(env) {\n  const { signals } = { signals: {} };\n  const drainMs = 2000;\n  return (file, args, timeoutMs) => {\n${BASE_BODY}\n  };\n}\n`,
       // The tip's shape: a thin wrapper.
       'server/src/update/spawn.ts': "import { boundedSpawn } from '../../../shared/spawn.mjs';\nexport function boundedUpdateSpawn(file, args, opts = {}) {\n  return boundedSpawn({ spawn, signals: os.constants.signals }, file, args, { env: opts.env, timeoutMs: 1, drainMs: UPDATE_SPAWN_DRAIN_MS });\n}\n",
       // The kernel is the one place the body may live.
@@ -51,7 +55,7 @@ describe('updateSpawnBodies — every update-spawn body outside shared/spawn.mjs
   });
 
   it('fixture: the body in two wrappers is two sites (the base\'s count)', () => {
-    const wrapper = (name: string): string => `export function ${name}(file, args, env, timeoutMs, drainMs, signals) {\n${BODY}\n}\n`;
+    const wrapper = (name: string): string => `export function ${name}(file, args, env, timeoutMs, drainMs, signals) {\n${BASE_BODY}\n}\n`;
     const root = tree({ 'agent/src/server.ts': wrapper('makeUpdateSpawn'), 'server/src/update/spawn.ts': wrapper('boundedUpdateSpawn') });
     expect(updateSpawnBodies(root).map((s) => s.file)).toEqual(['agent/src/server.ts', 'server/src/update/spawn.ts']);
   });
@@ -65,7 +69,7 @@ describe('updateSpawnBodies — every update-spawn body outside shared/spawn.mjs
 describe('accountSpawnBodies — every account-op spawn body outside shared/spawn.mjs (D-7057, OA-C8a (a))', () => {
   it('fixture: the body in both arms is two sites (the base\'s count); thin wrappers, the kernel and the near misses are none', () => {
     const wrapper = (name: string): string =>
-      `export function ${name}(file, argv, stdin, opts, signals) {\n  const { spawn } = { spawn: null };\n  const { env, timeoutMs, killGraceMs, maxOutputBytes, drainMs } = opts;\n${STDIN_BODY}\n}\n`;
+      `export function ${name}(file, argv, stdin, opts, signals) {\n  const { spawn } = { spawn: null };\n  const { env, timeoutMs, killGraceMs, maxOutputBytes, drainMs } = opts;\n${BASE_STDIN_BODY}\n}\n`;
     const base = tree({ 'server/src/accounts/ops.ts': wrapper('localAccountOps'), 'agent/src/accountop.ts': wrapper('makeAccountOpSpawn') });
     expect(accountSpawnBodies(base).map((s) => s.file)).toEqual(['agent/src/accountop.ts', 'server/src/accounts/ops.ts']);
     expect(accountSpawnBodies(base)[0]!.text).toContain("spawn(file, [...argv], { detached: true, stdio: ['pipe', 'pipe', 'pipe'], env })");
@@ -90,7 +94,8 @@ describe('accountSpawnBodies — every account-op spawn body outside shared/spaw
 
   it('real tree: none outside the kernel (2 at the base, measured in the PR body); the kernel holds the one body', () => {
     expect(accountSpawnBodies()).toEqual([]);
-    expect(STDIN_BODY).toContain("spawn(file, [...argv], { detached: true, stdio: ['pipe', 'pipe', 'pipe'], env })");
+    // `startable` (the Windows port): a script is started through bash there; elsewhere it is `[file, argv]` itself.
+    expect(STDIN_BODY).toContain("spawn(...startable(file, argv), { detached: true, stdio: ['pipe', 'pipe', 'pipe'], env })");
   });
 });
 
@@ -174,6 +179,7 @@ describe('processSpawnSites — every process spawner in server/src, agent/src a
       'server/src/exec.ts#realRunner',
       'server/src/localcaps.ts#execCapped',
       'server/src/pty.ts#attachPty',
+      'server/src/token/files.ts#lockOwnerOnly',
       'agent/src/pty.ts#spawnFleetPty',
       'agent/src/server.ts#runExec',
       'agent/src/tokensync.ts#makeTokenSyncSpawn',

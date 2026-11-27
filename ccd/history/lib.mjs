@@ -890,9 +890,17 @@ export function readBoxEnvValue(text, key) {
  *  RECALL_OFF_DIR is joined onto a path (W2-D29). `journalFile` is SQLite's
  *  rollback journal beside the DB
  *  (`history.db-journal`), NOT the history journal: that is `journalDir`. */
+/** A HOME as the history code joins onto it: '/'-separated, no trailing '/', or null when it is not absolute.
+ *  The Windows port's node gets HOME as `C:\\Users\\<user>` from MSYS; node's fs takes `C:/Users/<user>/...` as
+ *  is, so a drive-letter path is absolute here too, with its separators turned to '/'. */
+export function absoluteHome(home) {
+  const h = String(home ?? '').replace(/\\/g, '/').replace(/\/+$/, '');
+  return h.startsWith('/') || /^[A-Za-z]:\//.test(h) ? h : null;
+}
+
 export function historyPaths(home) {
-  const h = String(home).replace(/\/+$/, '');
-  if (!h.startsWith('/')) throw new TypeError(`historyPaths: HOME must be an absolute path, got ${JSON.stringify(home)}`);
+  const h = absoluteHome(home);
+  if (h === null) throw new TypeError(`historyPaths: HOME must be an absolute path, got ${JSON.stringify(home)}`);
   const root = `${h}/${HISTORY_ROOT_REL}`;
   const dbDir = `${h}/${STORE_DB_REL}`;
   const dbFile = `${dbDir}/${STORE_DB_FILE}`;

@@ -1,6 +1,6 @@
 import { spawn, type IPty } from 'node-pty';
 import { tmuxCommand, tmuxTarget } from '../../shared/tmux-target.js';
-import { hostTmuxSocket } from './exec.js';
+import { hostTmuxSocket, resolveTool } from './exec.js';
 
 /**
  * Subset of node-pty's IPty the WS drawer bridge uses. Typing the injected
@@ -24,7 +24,11 @@ export type SpawnPty = (id: string, cols: number, rows: number) => PtyLike;
  *  with `cc-<id>` gone it attached the drawer to a live `cc-<id>-…` sibling. */
 export function attachPty(id: string, cols: number, rows: number): IPty {
   const t = tmuxCommand(hostTmuxSocket(), ['attach', '-t', tmuxTarget(id)]);   // D-8270: on the fleet's socket
-  return spawn(t.file, [...t.args], {
+  // ABSOLUTE, not `'tmux'`: node-pty's ConPTY path does no PATH lookup — it
+  // hands the file to `startProcess` verbatim, and a bare name raises
+  // `Error: File not found:` with an empty name. That killed the pty the
+  // instant the drawer opened, which the PWA showed as "connection lost".
+  return spawn(resolveTool(t.file), [...t.args], {
     name: 'xterm-256color',
     cols,
     rows,

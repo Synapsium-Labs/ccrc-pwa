@@ -8,6 +8,7 @@ import {
 } from '../../../shared/agent-protocol.js';
 import { buildAccountArgv, isAccountStdin, type AccountArgvRefusal } from '../../../shared/account-argv.js';
 import { boundedStdinSpawn } from '../../../shared/spawn.mjs';
+import { startable, winKillTree } from '../../../shared/startable.mjs';
 import type { CcrcConfig } from '../config.js';
 import type { FleetClient } from '../remote/client.js';
 import { AgentOpError, LinkNotSentError } from '../remote/errors.js';
@@ -114,7 +115,7 @@ export function localAccountOps(opts: LocalAccountOpsOpts): AccountOps {
     // gets SIGTERM at the sub's bound and SIGKILL after the grace, then one `ACCOUNT_OP_DRAIN_MS` deadline (D-5622
     // (7)); the KILL is never cancelled once the TERM went (D-5621); a non-ESRCH group kill falls back to the child
     // alone; stdout is capped, stderr drained and dropped; a signal not ours reads as `128 + signo`.
-    return boundedStdinSpawn({ spawn, signals: osConstants.signals }, launcher, argv, stdin ?? null, {
+    return boundedStdinSpawn({ spawn, signals: osConstants.signals, startable, winKillTree }, launcher, argv, stdin ?? null, {
       env: { ...env }, timeoutMs: timeoutOf(sub), killGraceMs: grace, maxOutputBytes: cap, drainMs: ACCOUNT_OP_DRAIN_MS,
     });
   };

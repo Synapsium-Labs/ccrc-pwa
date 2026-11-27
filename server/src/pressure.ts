@@ -20,7 +20,7 @@ export const PRESSURE_EVIDENCE_MS = 5 * 60_000;
 /** What the lane holds. */
 export interface PressureState {
   /** The last reading that landed, with the session slice's headroom beside it when the agent sent one (D-8122). */
-  last: { at: number; psi: HostPsi; headroomBytes?: number | null } | null;
+  last: { at: number; psi: HostPsi | null; headroomBytes?: number | null } | null;
   /** When the last ask went unanswered (a timeout, a disconnect, an error reply), or null. */
   unansweredAt: number | null;
   /** When the ask still out was sent, or null. */
@@ -83,7 +83,7 @@ export function linkStalled(s: PressureState, linkUp: boolean, now: number): boo
 export function pressureLink(s: PressureState, linkUp: boolean, now: number): PressureLink {
   if (!linkStalled(s, linkUp, now)) return 'answering';
   const ev = evidence(s, now);
-  return ev !== null && worstFull(ev.psi) >= PSI_WARN_FULL_PCT ? 'host-pressure' : 'link-down';
+  return ev !== null && ev.psi !== null && worstFull(ev.psi) >= PSI_WARN_FULL_PCT ? 'host-pressure' : 'link-down';
 }
 
 /** The last reading when it is young enough to say anything, else null. */
@@ -96,10 +96,10 @@ export function pressureBlock(s: PressureState, linkUp: boolean, now: number): H
   const fresh = evidence(s, now);
   return {
     at: s.last?.at ?? null,
-    level: fresh === null ? 'unmeasured' : pressureLevelOf(fresh.psi),
+    level: fresh === null || fresh.psi === null ? 'unmeasured' : pressureLevelOf(fresh.psi),
     link: pressureLink(s, linkUp, now),
-    memory: s.last?.psi.memory ?? null,
-    io: s.last?.psi.io ?? null,
+    memory: s.last?.psi?.memory ?? null,
+    io: s.last?.psi?.io ?? null,
   };
 }
 
@@ -118,5 +118,6 @@ export function memoryLevelOf(psi: HostPsi): 'ok' | 'warn' | 'critical' {
  *  never disagree about whether there is a reading. */
 export function memoryReadingOf(s: PressureState, now: number): { level: 'ok' | 'warn' | 'critical' | 'unmeasured'; headroomBytes: number | null } {
   const fresh = evidence(s, now);
-  return fresh === null ? { level: 'unmeasured', headroomBytes: null } : { level: memoryLevelOf(fresh.psi), headroomBytes: fresh.headroomBytes ?? null };
+  if (fresh === null) return { level: 'unmeasured', headroomBytes: null };
+  return { level: fresh.psi === null ? 'unmeasured' : memoryLevelOf(fresh.psi), headroomBytes: fresh.headroomBytes ?? null };
 }

@@ -212,7 +212,8 @@ if (startedAsScript()) {
   // its file is named `ccd`), once, before any mode renders or writes. A file with no region has no row, so nothing is
   // checked: `--restamp` prints `nothere`, and `--write` and `--check` keep the base's output through the hook row
   // below (`missing`, or the "no region" throw).
-  const base = (p) => p.slice(p.lastIndexOf('/') + 1);
+  // Either separator: a Windows caller names the file `D:\...\ccd\ccrc`, and its basename is still `ccrc`.
+  const base = (p) => p.slice(Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\')) + 1);
   if (row !== null && base(givenPath) !== base(row.file)) {
     process.stderr.write(`hook-helpers: ${targetPath} carries the ${row.label} region, whose file is ${row.file}; ${givenPath} is not that file\n`);
     process.exit(2);

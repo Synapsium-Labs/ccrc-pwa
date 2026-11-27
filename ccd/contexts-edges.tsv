@@ -66,6 +66,9 @@ _follow_continued_in -> _reg_get
 _follow_continued_in -> _reg_set
 _fresh_pick_settle -> _typed_note
 _graceful_stop_before -> _ci_proc_start
+_graceful_stop_quit -> _pane_box_read
+_graceful_stop_quit -> _pane_type_ready
+_graceful_stop_quit -> _tmx
 _graceful_stop_same -> _ci_proc_start
 _hard_block_dated -> _pane_born
 _hard_block_dated -> _transcript_path

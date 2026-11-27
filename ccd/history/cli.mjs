@@ -51,7 +51,9 @@ import * as healthPath from 'node:path';
 // decideStatusReadFailure by B1's './lib.mjs' import: importing a binding twice is a SyntaxError.
 // loadSecrets is imported statically: B1's ring census reds on any import() in a shipped module, and sweep.mjs's
 // entry guard keys on process.argv[1], so importing it runs nothing.
-import { closeSync, constants as FS, fstatSync, openSync, readSync, writeSync } from 'node:fs';
+import { closeSync, constants as FS, fstatSync, readSync, writeSync } from 'node:fs';
+// `O_NOFOLLOW` and `openSync` from the one no-follow helper: node's own off Windows, the link refusal kept on Windows.
+import { O_NOFOLLOW, openSync } from '../../shared/nofollow.mjs';
 import { spawnSync } from 'node:child_process';
 import {
   REASONS, TMUX_DEADLINE_MS, SCOPE_SOURCES, SCHEMA_ADDED, READ_VERBS, idOk, makePairIndex, redactFinalJson, redactFinalText, redactFinalLines, makeBelt, beltUnits,
@@ -466,7 +468,7 @@ const FIELD_READ_MAX = 4096;
 function presenceOf(p) {
   let fd;
   try {
-    fd = openSync(p, FS.O_RDONLY | FS.O_NOFOLLOW | FS.O_NONBLOCK);
+    fd = openSync(p, FS.O_RDONLY | O_NOFOLLOW | FS.O_NONBLOCK);
   } catch (e) {
     return e !== null && typeof e === 'object' && e.code === 'ENOENT' ? ABSENT : UNREADABLE;
   }
@@ -560,7 +562,7 @@ export function writeRecallLine(home, id, line, afterPrecheck = null, afterOpen 
     }
     if (st !== null && !st.isFile()) return;
     if (typeof afterPrecheck === 'function') afterPrecheck(p);
-    const flags = FS.O_WRONLY | FS.O_APPEND | FS.O_CREAT | FS.O_NOFOLLOW | FS.O_NONBLOCK;
+    const flags = FS.O_WRONLY | FS.O_APPEND | FS.O_CREAT | O_NOFOLLOW | FS.O_NONBLOCK;
     const fd = openSync(p, flags, 0o600);
     try {
       if (typeof afterOpen === 'function') afterOpen(fd, flags);
@@ -1266,7 +1268,10 @@ export async function readHealthExtras(home, env, nowMs) {
     ...store,
     migrationAttempts: attempts.count,
     migrationAttemptsUnmeasured: attempts.state === 'unmeasured',
-    modesWrong: healthLib.modesWrongOf(measureModeEntries(p, unreachable || env.reason === 'store-root-dangling')),
+    // Not on Windows: its noacl mount keeps no mode (every entry reads 0666), and the store lies in the user profile,
+    // whose ACL already admits only the owner, SYSTEM and the administrators.
+    modesWrong: process.platform === 'win32' ? []
+      : healthLib.modesWrongOf(measureModeEntries(p, unreachable || env.reason === 'store-root-dangling')),
     rootIsSymlink,
     spoolNotDirectory,
     spoolNodesRefused: refusedNodes ?? 0,

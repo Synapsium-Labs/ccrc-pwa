@@ -23,7 +23,8 @@ PIN="${CCRC_GRAPHIFY_PIN:-}"
 
 PKG="${CCRC_GRAPHIFY_PKG:-}"
 if [ -z "$PKG" ]; then
-  PKG="$("$VENV/bin/python" -c 'import graphify, pathlib; print(pathlib.Path(graphify.__file__).parent)')" \
+  # as_posix and no CR: a native Windows python (the Windows port's venv) prints `C:\...\r\n`; MSYS reads `C:/...`.
+  PKG="$("$VENV/bin/python" -c 'import graphify, pathlib; print(pathlib.Path(graphify.__file__).parent.as_posix())' | tr -d '\r')" \
     || { echo "install-graphify-skill: cannot resolve the graphify package from $VENV — refusing" >&2; exit 1; }
 fi
 [ -f "$PKG/skill.md" ] \

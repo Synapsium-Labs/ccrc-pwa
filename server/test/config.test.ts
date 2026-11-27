@@ -400,10 +400,30 @@ describe('DEFAULT_TEST_ROSTER', () => {
 });
 
 describe('mungePath', () => {
-  it('replaces / . _ with - (ccd cmd_swap rule)', () => {
-    expect(mungePath('/data/projects/demo-app-ts')).toBe('-data-projects-demo-app-ts');
-    expect(mungePath('/data/projects/foo/.claude/worktrees/ui')).toBe('-data-projects-foo--claude-worktrees-ui');
-    expect(mungePath('/a/b_c.d')).toBe('-a-b-c-d');
+  // THE PLATFORM IS PASSED, never inherited. The two rules differ, and a test
+  // that took `process.platform` would pin one of them per box — the POSIX
+  // rule silently unpinned on the one box where it is the wrong answer.
+  it('replaces / . _ with - (ccd cmd_swap rule) off Windows, byte-identical to the one-line rule', () => {
+    expect(mungePath('/data/projects/demo-app-ts', 'linux')).toBe('-data-projects-demo-app-ts');
+    expect(mungePath('/data/projects/foo/.claude/worktrees/ui', 'linux')).toBe('-data-projects-foo--claude-worktrees-ui');
+    // `/a/` is an ordinary directory here — reading it as a drive would invent one.
+    expect(mungePath('/a/b_c.d', 'linux')).toBe('-a-b-c-d');
+    expect(mungePath('/c/Users/x', 'darwin')).toBe('-c-Users-x');
+  });
+
+  it('on Windows reproduces what Claude Code files under — measured on a live box', () => {
+    // ccd's MSYS spelling and the native one land on ONE name, the name the
+    // box's own ~/.claude/projects/ actually holds.
+    const want = 'C--Users-u-worktrees-project-a-quiet-basin';
+    expect(mungePath('/c/Users/u/worktrees/project-a/quiet-basin', 'win32')).toBe(want);
+    expect(mungePath(['C:', 'Users', 'u', 'worktrees', 'project-a', 'quiet-basin'].join('\\'), 'win32')).toBe(want);
+    expect(mungePath('C:/Users/u/worktrees/project-a/quiet-basin', 'win32')).toBe(want);
+  });
+
+  it('on Windows reads only a SINGLE-letter first segment as a drive', () => {
+    // `/data/…` is a directory named data, not drive D followed by `ata`.
+    expect(mungePath('/data/projects/x', 'win32')).toBe('-data-projects-x');
+    expect(mungePath('/c', 'win32')).toBe('C-');
   });
 });
 

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import fs from 'node:fs';
+import fs, { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import type { PaneProbe } from '../../shared/api.js';
 import { readTmuxSocketSetting, tmuxRoute, tmuxTarget, type TmuxSocketSetting } from '../../shared/tmux-target.js';
@@ -56,11 +56,104 @@ export type Runner = (cmd: string, args: string[]) => Promise<ExecResult>;
  *  every call, so the local Tmux adapter and the local drawer follow ccd's own lookup (`_tmx_sock`). */
 export const hostTmuxSocket = (): TmuxSocketSetting => readTmuxSocketSetting(homedir(), fs);
 
+/**
+ * The bash this process must run — never the bare name on Windows.
+ *
+ * `C:\Windows\System32\bash.exe` is the WSL launcher, it is on the default
+ * PATH of every Windows box that has WSL, and it wins the bare-name lookup. It
+ * is a different operating system: `C:/Users/…/.local/bin/ccd` does not exist
+ * inside it (that tree is `/mnt/c/...` there), so the failure surfaces as
+ * `/bin/bash: C:/Users/<user>/.local/bin/ccd: No such file or directory` — a
+ * file the caller can see and bash cannot. Measured: it is what "Couldn't
+ * create workspace" in the PWA was.
+ *
+ * `CCRC_BASH` first (the supervisor sets it to the shell it was started with),
+ * then the known MSYS2/Git-for-Windows locations, and only then the bare name.
+ */
+/** Where a Windows box keeps the POSIX tools this server shells out to, in the
+ *  order they should win. MSYS2 first: it is the runtime `ccd` itself runs
+ *  under, and the one whose `tmux` is the real thing rather than a shim. */
+const WIN_TOOL_DIRS = [
+  'C:\\msys64\\usr\\bin',
+  'C:\\Program Files\\Git\\usr\\bin',
+  'C:\\Program Files\\Git\\bin',
+];
+
+/**
+ * An absolute path for a console tool on Windows; the bare name everywhere
+ * else. `CCRC_<NAME>` overrides — the supervisor sets `CCRC_BASH` this way.
+ *
+ * Two different Windows APIs need this, for two different reasons:
+ *  - PATH lookup finds the WRONG program. `bash` hits
+ *    `C:\Windows\System32\bash.exe`, the WSL launcher, which is a different OS
+ *    (see `resolveBash`).
+ *  - PATH lookup does not happen AT ALL. node-pty's ConPTY path hands the file
+ *    to `startProcess` verbatim, so a bare name raises `Error: File not found:`
+ *    with an EMPTY name — measured for `spawn('tmux', …)` in `attachPty`, which
+ *    is what the terminal drawer's "connection lost" was.
+ */
+export function resolveTool(name: string, platform: NodeJS.Platform = process.platform): string {
+  const explicit = process.env[`CCRC_${name.toUpperCase()}`];
+  if (explicit) return explicit;
+  if (platform !== 'win32') return name;
+  for (const dir of WIN_TOOL_DIRS) {
+    const p = `${dir}\\${name}.exe`;
+    if (existsSync(p)) return p;
+  }
+  return name;
+}
+
+export function resolveBash(platform: NodeJS.Platform = process.platform): string {
+  return resolveTool('bash', platform);
+}
+
+/**
+ * The argv this process must actually hand to the OS to run `cmd args`.
+ *
+ * On POSIX it is the input, untouched. On Windows, `cmd` is `cfg.ccdBin` —
+ * `$HOME/.local/bin/ccd`, a bash script with no extension — and CreateProcess
+ * cannot run a script: `execFile` answers `ENOENT` for a file it just found
+ * (or `EINVAL` for a `.cmd`, since Node 22). So a path that is not a Windows
+ * executable is run THROUGH bash, which is what the shebang would have done on
+ * a box that honours shebangs. Bare names (`tmux`) are left to PATH: they
+ * resolve to `.exe` files there.
+ *
+ * A PURE FUNCTION of (cmd, args, platform) rather than a `process.platform`
+ * branch inside the runner, so the Windows arm is testable on the Linux CI
+ * this repo runs — otherwise the guard would exist only where nobody
+ * exercises it. L3 adapter concern: nothing here decides anything about
+ * sessions; it decides how to spell a spawn.
+ */
+export function shellArgv(
+  cmd: string, args: readonly string[], platform: NodeJS.Platform = process.platform,
+): { cmd: string; args: string[] } {
+  if (platform !== 'win32') return { cmd, args: [...args] };
+  const isPath = /[\\/]/.test(cmd);
+  const isExe = /\.(exe|cmd|bat|com)$/i.test(cmd);
+  if (!isPath || isExe) return { cmd, args: [...args] };
+  // Forward slashes: bash does path arithmetic on `$0` (`${BASH_SOURCE[0]%/*}`),
+  // and a backslash path has no `/` to strip — ccd would compute its own
+  // location as `.`. MSYS2 bash accepts `C:/…` verbatim.
+  // `exec`, not `bash <file>`: ~/.local/bin/ccd is a Python launcher since D-3696, and bash would read it as shell.
+  // MSYS honours the shebang on exec, so a bash script and the launcher both run as their first line says.
+  // MSYS form (`/c/Users/...`), not `C:/Users/...`: MSYS2's python reads a drive letter as a RELATIVE path and runs
+  // `<cwd>/C:/Users/.../ccd`, so the D-3696 launcher could not find itself. Bash takes either spelling.
+  const posix = cmd.replace(/\\/g, '/').replace(/^([A-Za-z]):(?=\/|$)/, (_m, d: string) => `/${d.toLowerCase()}`);
+  return { cmd: resolveBash(platform), args: ['-c', 'exec "$0" "$@"', posix, ...args] };
+}
+
 export const realRunner: Runner = (cmd, args) =>
   new Promise((resolve) => {
     // D-8270: a tmux call runs on the socket this box's setting names (`tmuxRoute`); anything else passes untouched.
     const routed = tmuxRoute(cmd, args, hostTmuxSocket);
-    execFile(routed.file, [...routed.args], { maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
+    const sp = shellArgv(routed.file, routed.args);
+    // `windowsHide` matters here and nowhere else in this file's story:
+    // `tmux`, `ccd`, `git` are console programs, and every fleet-state read
+    // runs one — so on Windows, without this, each `/api/fleet` poll flashes a
+    // console window on the desktop. Measured: with the PWA open and polling
+    // ~once a second, windows blinked once a second. Node ignores the option
+    // off Windows, so it is unconditional.
+    execFile(sp.cmd, sp.args, { maxBuffer: 8 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
       const e = err as (NodeJS.ErrnoException & { code?: number; killed?: boolean; signal?: string }) | null;
       const code = err ? (e?.code as number | undefined ?? 1) : 0;
       const measured = {

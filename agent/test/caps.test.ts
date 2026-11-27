@@ -49,7 +49,7 @@ function writeCcd(home: string, body: string): void {
  *  marker lives HERE, not in the body, so an exec is counted even when the body
  *  is missing or broken. */
 function writeLauncher(home: string, marker: string, lines: string[] = []): void {
-  writeCcd(home, [`echo x >> ${marker}`, ...lines, `exec /bin/sh '${bodyPath(home)}' "$@"`].join('\n'));
+  writeCcd(home, [`echo x >> '${marker}'`, ...lines, `exec /bin/sh '${bodyPath(home)}' "$@"`].join('\n'));
 }
 
 /** Whole-second timestamps, so a pair's mtimes are pinned and "unchanged" is
@@ -154,7 +154,7 @@ describe('caps op', () => {
     // changes between the two calls.
     fixture = makeFixture();
     const marker = path.join(fixture.home, 'execs');
-    writeCcd(fixture.home, `echo x >> ${marker}\nexit 1`);
+    writeCcd(fixture.home, `echo x >> '${marker}'\nexit 1`);
     agent = await boot(fixture);
     client = new TestClient(agent.port);
     await client.hello();
@@ -189,7 +189,7 @@ describe('caps op', () => {
     fixture = makeFixture();
     // Appends a line per invocation, so the file's length counts execs.
     const marker = path.join(fixture.home, 'execs');
-    writeCcd(fixture.home, `echo x >> ${marker}\necho start`);
+    writeCcd(fixture.home, `echo x >> '${marker}'\necho start`);
     agent = await boot(fixture);
     client = new TestClient(agent.port);
     await client.hello();
@@ -218,7 +218,7 @@ describe('caps op', () => {
     const ccdPath = path.join(fixture.home, '.local', 'bin', 'ccd');
     // 'start' and 'begin' are both 5 letters, so these two bodies are
     // byte-identical in length — only the forced mtime differs between reads.
-    writeCcd(fixture.home, `echo x >> ${marker}\necho start`);
+    writeCcd(fixture.home, `echo x >> '${marker}'\necho start`);
     const t1 = new Date('2024-01-01T00:00:00.000Z');
     utimesSync(ccdPath, t1, t1);
     agent = await boot(fixture);
@@ -229,7 +229,7 @@ describe('caps op', () => {
     const after1 = readFileSync(marker, 'utf8').length;
     const sizeBefore = statSync(ccdPath).size;
 
-    writeCcd(fixture.home, `echo x >> ${marker}\necho begin`);
+    writeCcd(fixture.home, `echo x >> '${marker}'\necho begin`);
     expect(statSync(ccdPath).size).toBe(sizeBefore); // sanity: size really is unchanged
     const t2 = new Date('2024-01-02T00:00:00.000Z'); // a day later — mtime differs
     utimesSync(ccdPath, t2, t2);
@@ -242,7 +242,7 @@ describe('caps op', () => {
     fixture = makeFixture();
     const marker = path.join(fixture.home, 'execs');
     const ccdPath = path.join(fixture.home, '.local', 'bin', 'ccd');
-    writeCcd(fixture.home, `echo x >> ${marker}\necho start`);
+    writeCcd(fixture.home, `echo x >> '${marker}'\necho start`);
     const t1 = new Date('2024-01-01T00:00:00.000Z');
     utimesSync(ccdPath, t1, t1);
     agent = await boot(fixture);
@@ -253,7 +253,7 @@ describe('caps op', () => {
     const after1 = readFileSync(marker, 'utf8').length;
     const sizeBefore = statSync(ccdPath).size;
 
-    writeCcd(fixture.home, `echo x >> ${marker}\necho start\necho stop`); // longer body
+    writeCcd(fixture.home, `echo x >> '${marker}'\necho start\necho stop`); // longer body
     expect(statSync(ccdPath).size).not.toBe(sizeBefore); // sanity: size really did change
     utimesSync(ccdPath, t1, t1); // force mtime back to the exact same instant
 

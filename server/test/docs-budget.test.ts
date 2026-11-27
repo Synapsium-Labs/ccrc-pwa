@@ -94,7 +94,7 @@ function productOf(expr: string, what: string): number {
 
 /** The agent's exec buffer: its one `const EXEC_MAX_BUFFER = ...;` line, and the one `runExec` call that uses it. */
 function agentExecBufferIn(src: string): number {
-  exactlyOne(src, /execFile\(cmd, args, \{ maxBuffer: EXEC_MAX_BUFFER, timeout: timeoutMs \}/g,
+  exactlyOne(src, /execFile\(cmd, args, \{ maxBuffer: EXEC_MAX_BUFFER, timeout: timeoutMs(?:, windowsHide: true)? \}/g,
     "runExec's execFile with maxBuffer: EXEC_MAX_BUFFER");
   const m = exactlyOne(src, /^const EXEC_MAX_BUFFER = ([^;\n]+);$/gm, 'const EXEC_MAX_BUFFER');
   return productOf(m[1]!, 'EXEC_MAX_BUFFER');

@@ -31,6 +31,12 @@ export interface SpawnHost {
   /** A table from a signal's name to its number, read as `signals[signal]` (`os.constants.signals`; `object`, because
    *  that table is an interface with no index signature and this file names no `node:` type). */
   readonly signals: object;
+  /** How this platform starts a file (`shared/startable.mjs#startable`): on Windows a script through the MSYS shell.
+   *  Absent: the file is started as itself. */
+  readonly startable?: (file: string, args: readonly string[]) => [string, string[]];
+  /** How this platform ends a child's tree (`shared/startable.mjs#winKillTree`), asked on Windows only. Absent: the
+   *  child alone. */
+  readonly winKillTree?: (spawn: any, child: any, signal: any) => void;
 }
 
 /** Every option is required: the kernel defines no default and no copy of a wire constant. */
@@ -70,6 +76,12 @@ export interface StdinSpawnHost {
   ): SpawnedStdinChild;
   /** As `SpawnHost.signals`: read as `signals[signal]`. */
   readonly signals: object;
+  /** How this platform starts a file (`shared/startable.mjs#startable`): on Windows a script through the MSYS shell.
+   *  Absent: the file is started as itself. */
+  readonly startable?: (file: string, args: readonly string[]) => [string, string[]];
+  /** How this platform ends a child's tree (`shared/startable.mjs#winKillTree`), asked on Windows only. Absent: the
+   *  child alone. */
+  readonly winKillTree?: (spawn: any, child: any, signal: any) => void;
 }
 
 /** Every option is required, each passed by the wrapper from its one definition (D-7057): the kernel defines none. */
@@ -96,3 +108,4 @@ export type BoundedStdinSpawnOutcome = Exclude<AccountOpOutcome, { kind: 'refuse
 export function boundedStdinSpawn(
   host: StdinSpawnHost, file: string, argv: readonly string[], stdin: Uint8Array | null, opts: BoundedStdinSpawnOptions,
 ): Promise<BoundedStdinSpawnOutcome>;
+

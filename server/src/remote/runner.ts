@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type { ExecResult, NotRanReason, Runner } from '../exec.js';
 import type { FleetClient } from './client.js';
 
@@ -270,9 +271,23 @@ function asExecResult(res: unknown): ExecResult {
 /** The agent's exec whitelist accepts BARE command names only. Local call
  *  sites pass `cfg.ccdBin` (an absolute `~/.local/bin/ccd` path — correct for
  *  local exec), so normalize any `…/ccd` to bare `ccd` for the wire; the agent
- *  re-resolves it against ITS OWN home. Everything else passes unchanged. */
+ *  re-resolves it against ITS OWN home. Everything else passes unchanged.
+ *
+ *  `path.basename`, NOT `split('/')`. The separator is the one the SERVER's
+ *  platform composed `cfg.ccdBin` with, and on a Windows server that is `\`:
+ *  a slash-only split leaves the whole `C:\Users\…\.local\bin\ccd` as the
+ *  command name, `isExecAllowed` rejects any name carrying a separator, and
+ *  EVERY ccd verb the PWA sends is refused by the agent — hold, release,
+ *  archive, restore, swap, the lot. Not hypothetically: it is what
+ *  `guardRunner` (which crosses the real whitelist) answers for three route
+ *  tests on Windows today.
+ *
+ *  Platform-aware is also what keeps POSIX honest: a backslash is a legal
+ *  character in a POSIX filename, so `path.posix.basename` leaves
+ *  `/home/u/weird\ccd` alone and that path stays un-normalized, exactly as it
+ *  did before. The agent's own home is a separate question it answers itself. */
 export function wireCmd(cmd: string): string {
-  return cmd.split('/').pop() === 'ccd' ? 'ccd' : cmd;
+  return path.basename(cmd) === 'ccd' ? 'ccd' : cmd;
 }
 
 export function createRunner(client: FleetClient): Runner {

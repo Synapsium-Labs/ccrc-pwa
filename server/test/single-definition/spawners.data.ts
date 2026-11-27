@@ -38,6 +38,10 @@ export const PROCESS_SPAWNERS: EntrySet = {
     reason: "the agent's exec op: only whitelisted argv reaches it, bounded by execFile's own timeout",
     since: '2026-10-27',
   },
+  'server/src/token/files.ts#lockOwnerOnly': {
+    reason: 'the Windows port: icacls narrows the ACL of a token file to its owner before the rename (a mode is no permission on NTFS)',
+    since: '2026-11-21',
+  },
   'server/src/localcaps.ts#execCapped': {
     reason: 'KEPT by the C8d audit (D-7056): SIGTERM then SIGKILL after a 2 s grace, stderr ignored, its own reason words',
     since: '2026-10-27',

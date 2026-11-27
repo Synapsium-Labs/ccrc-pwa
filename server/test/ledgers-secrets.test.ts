@@ -14,6 +14,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs, { chmodSync, existsSync, lstatSync, mkdirSync, promises as fsp, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
+// The directory fsync's open flags (src/coord/ledgersSecrets.ts): O_RDONLY off Windows, as the `'r'` it opened with
+// before the Windows port, and O_RDWR on it. The mocks below key on this, not on the spelling `'r'`.
+import { FSYNC_OPEN } from '../../shared/fsync-open.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
@@ -727,7 +730,7 @@ describe('after the value is stored, every failure says so in one word (review 1
       const open = fsp.open.bind(fsp);
       let failed = false;
       vi.spyOn(fsp, 'open').mockImplementation(async (...args: Parameters<typeof fsp.open>) => {
-        if (!failed && String(args[0]) === dir && args[1] === 'r') { failed = true; throw Object.assign(new Error('EIO: i/o error, fsync'), { code: 'EIO' }); }
+        if (!failed && String(args[0]) === dir && args[1] === FSYNC_OPEN) { failed = true; throw Object.assign(new Error('EIO: i/o error, fsync'), { code: 'EIO' }); }
         return open(...args);
       });
     });
@@ -1335,7 +1338,7 @@ describe('the write-failed arms answer the truth (review 1391 A-4)', () => {
       const open = fsp.open.bind(fsp);
       let failed = false;
       vi.spyOn(fsp, 'open').mockImplementation(async (...args: Parameters<typeof fsp.open>) => {
-        if (!failed && String(args[0]) === dir && args[1] === 'r') { failed = true; throw Object.assign(new Error('EIO: i/o error, fsync'), { code: 'EIO' }); }
+        if (!failed && String(args[0]) === dir && args[1] === FSYNC_OPEN) { failed = true; throw Object.assign(new Error('EIO: i/o error, fsync'), { code: 'EIO' }); }
         if (failed && String(args[0]) === file) throw Object.assign(new Error('EIO: i/o error, open'), { code: 'EIO' });
         return open(...args);
       });

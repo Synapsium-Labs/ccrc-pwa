@@ -70,6 +70,8 @@ describe('ccrc install: the order is stated in one place', () => {
       '_inst_node_id',
       '_inst_tree',
       '_inst_bins',
+      // The Windows port's supervisor and shims: its first line returns 0 off Windows, so a Linux run is unchanged.
+      '_inst_win_manager',
       '_inst_files',
       '_inst_stamp',
       // §9: what THIS install can do, beside the stamp that says what it is

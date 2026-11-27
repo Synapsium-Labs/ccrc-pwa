@@ -22,7 +22,7 @@ import { makeCcdHarness, ghContainedEnv, CCD } from './ccdWsHelpers.js';
 const ID = 'demo-quiet-mesa';
 const UUID = 'a'.repeat(36);
 const WORKDIR = '/w/demo/quiet-mesa';
-const MUNGED = '-w-demo-quiet-mesa';      // mungePath: /._ -> - (munge.ts:1)
+const MUNGED = '-w-demo-quiet-mesa';      // mungePath's POSIX rule: /._ -> - (src/munge.ts)
 
 /** Registry row for a workspace still on its born branch. `readRegistry` needs
  *  wrapper+workdir+uuid or it skips the row entirely (registry.ts:124). */

@@ -116,6 +116,8 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: 'the same compare-and-set (D-8077): the session of ONE re-read run must still be the one the pass measured; no session is asked which run is its' },
   { file: 'server/src/coord/childReclaim.ts', text: 'v.id !== sessionId', count: 2,
     why: 'a ccd verb\'s JSON answer must name the session the server asked about: validation of an adapter reply, no run is read' },
+  { file: 'server/src/livestate.ts', text: 's.sessionId === uuid',
+    why: 'a Claude Code live-state file\'s own sessionId against the registry record\'s transcript uuid (the Windows port\'s identity read, where pane pids and file names are two number spaces): which file is the session\'s, no run is read' },
   { file: 'server/src/childReclaimSweep.ts', text: 'a.sessionId === sessionId',
     why: 'an attention row of the feed names the session it is about: an alert\'s subject, no run is read' },
   { file: 'server/src/coord/childReclaim.ts', text: 'v.reclaimed !== sessionId',

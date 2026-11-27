@@ -17,6 +17,7 @@ import {
   type TestboxLedgerValue, type TestboxSettingChange,
 } from '../../shared/testbox-admin.js';
 import { boundedStdinSpawn } from '../../shared/spawn.mjs';
+import { startable, winKillTree } from '../../shared/startable.mjs';
 import { accountSpawnEnv } from './accounts/ops.js';
 import { actorOf, type AccountActor } from './accounts/audit.js';
 import { parseCookies, SESSION_COOKIE } from './auth/cookie.js';
@@ -105,7 +106,7 @@ export function localTestboxAdminOps(opts: LocalTestboxAdminOpsOpts): TestboxAdm
     try { launcher = updateLauncherPath(opts.home); } catch { return { kind: 'not-started' }; }
     const long = testboxAdminIsLong(sub, fields);
     const timeoutMs = opts.timeoutMs?.(long) ?? (long ? TESTBOX_ADMIN_LONG_TIMEOUT_MS : TESTBOX_ADMIN_SHORT_TIMEOUT_MS);
-    return boundedStdinSpawn({ spawn, signals: osConstants.signals }, launcher, [...built.argv, '--from', 'pwa'], null, {
+    return boundedStdinSpawn({ spawn, signals: osConstants.signals, startable, winKillTree }, launcher, [...built.argv, '--from', 'pwa'], null, {
       env: { ...env }, timeoutMs, killGraceMs: opts.killGraceMs ?? TESTBOX_ADMIN_KILL_GRACE_MS,
       maxOutputBytes: opts.maxOutputBytes ?? TESTBOX_ADMIN_OUTPUT_MAX_BYTES, drainMs: TESTBOX_ADMIN_DRAIN_MS,
     });

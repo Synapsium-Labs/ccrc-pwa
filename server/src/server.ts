@@ -10,7 +10,7 @@ import { pwaStaticOptions } from './pwaStatic.js';
 import { configDirFor, fleetRebootTarget } from './config.js';
 import type { Deps } from './deps.js';
 import { assembleFleet, dropStaleLandings, fleetNow } from './fleet.js';
-import { liveStateReaderOver, readLiveState } from './livestate.js';
+import { liveStateReaderOver, readLiveStateFor } from './livestate.js';
 import { readLaneStates, readLimits, projectHome, projectPlacement } from './limits.js';
 import { accountsConnect, lanesWire } from './accounts/lanes.js';
 import { accountOriginClass } from './accounts/gate.js';
@@ -2678,7 +2678,17 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const attachments: string[] = [];
     for (const a of raw) {
       if (typeof a !== 'string') return reply.code(400).send({ ok: false, error: 'bad-attachment' });
-      const name = a.slice(a.lastIndexOf('/') + 1);
+      // `path.basename`, NOT `lastIndexOf('/')`. The producer of this string is
+      // `clipPath`, which composes with `path.resolve` — so on Windows it hands
+      // the client back `C:\Users\…\.cc-clips\<id>\clip-….png`, and a
+      // slash-only split finds no separator, takes the WHOLE path as the name,
+      // and fails `CLIP_NAME_RE`. Every upload the PWA staged was then refused
+      // by the route that had to accept it: `upload` answered 200 with a path,
+      // and `prompt` answered 400 `bad-attachment` for that same path.
+      // `path.basename` splits by the rules of the platform that composed it —
+      // both separators on Windows, only `/` on POSIX, where a backslash is a
+      // legal character in a filename and must NOT be treated as a separator.
+      const name = path.basename(a);
       if (!CLIP_NAME_RE.test(name)) {
         return reply.code(400).send({ ok: false, error: 'bad-attachment' });
       }
@@ -2966,7 +2976,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.get('/api/sessions/:id/commands', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    return sessionCommands(deps, id, (dir, pid) => readLiveState(deps.io, dir, pid));
+    return sessionCommands(deps, id, (dir, pid, uuid) => readLiveStateFor(deps.io, dir, pid, uuid));
   });
 
   app.post('/api/sessions/:id/interrupt', async (req, reply) => {

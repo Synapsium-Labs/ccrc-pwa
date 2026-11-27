@@ -1029,8 +1029,10 @@ export function storeReach(opts: StoreReachOptions): StoreReach {
     : readdirSync(base, { withFileTypes: true }).filter((e) => e.isFile()).map((e) => e.name);
   const files = [...new Set(opts.scope.flatMap((entry) =>
     (entry.includes('*') ? listing.filter((n) => reachGlob(entry).test(n)) : [entry])))].sort();
-  const scopeAbs = new Set(files.map((f) => path.join(base, f)));
-  const storeAbs = path.join(base, opts.store.file);
+  // The checker's file names always use `/` (on Windows too), so the paths it is compared with must as well.
+  const tsPath = (f: string): string => path.join(base, f).split(path.sep).join('/');
+  const scopeAbs = new Set(files.map(tsPath));
+  const storeAbs = tsPath(opts.store.file);
 
   const storeDecl = program.getSourceFile(storeAbs)?.statements.find((s): s is ts.ClassDeclaration =>
     ts.isClassDeclaration(s) && s.name?.text === opts.store.name);

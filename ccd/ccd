@@ -92,6 +92,33 @@ case "${OSTYPE:-}" in
   linux*)  CCD_OS=linux ;;
   *) case "$(uname -s 2>/dev/null)" in Darwin) CCD_OS=darwin ;; esac ;;
 esac
+# MSYS2's `ln -s` makes a deep COPY of its target unless the runtime is told otherwise, so `~/ccrc -> ccrc-versions/<tag>`
+# came out as a second tree and the install refused (measured on the Windows port). nativestrict makes every `ln -s`
+# this process starts a real Windows symlink, or a loud failure on a box that cannot make one, never a silent copy.
+# The Windows port (MSYS2, OSTYPE=cygwin). `CCD_OS` reads linux there; this is the question for a Windows-only arm.
+_ccd_is_windows() { case "${OSTYPE:-}" in msys*|cygwin*) return 0 ;; esac; return 1; }
+case "${OSTYPE:-}" in msys*|cygwin*) export MSYS="${MSYS:+$MSYS }winsymlinks:nativestrict" ;; esac
+# MSYS2 coreutils' `mkdir -m` makes the directory and then fails its mode change on the noacl mount, so every FIRST
+# creation answered failure (measured: `ccrc backup`, `~/.ccrc/locks`). A mode is not kept there anyway, so on MSYS
+# `mkdir` drops `-m <mode>` (and `-m<mode>`, `-pm <mode>`) and runs the real one. Twin: the same block in ccd and ccrc.
+# Defined ON MSYS ONLY, so everywhere else `mkdir` stays the real command, and at column 0 inside the case: the
+# manifest census (ccd-contexts.test.ts) reads only that shape.
+case "${OSTYPE:-}" in msys*|cygwin*)
+mkdir() {
+  local a=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --) a+=("$@"); break ;;
+      -m) shift ;;
+      -pm) a+=(-p); shift ;;
+      -m*) ;;
+      *) a+=("$1") ;;
+    esac
+    shift
+  done
+  command mkdir "${a[@]}"
+}
+;; esac
 
 # >>> D-8270 tmux socket lookup (copied byte for byte into each script that cannot source ccd: tmux-socket-census.test.ts)
 # THE ONE tmux SOCKET LOOKUP (D-8270, ruling Q8). One shared tmux server, and every tmux call starts with the argv
@@ -117,6 +144,12 @@ _tmx_sock() {   # [home, default $HOME] -> TMX_SOCK (empty: the default server);
 _tmx_argv() {   # [home] -> _TMX_ARGV, the argv every fleet tmux call starts with; run once below, again only when asked
   if _tmx_sock "$@"; then _TMX_ARGV=(tmux ${TMX_SOCK:+-L "$TMX_SOCK"})
   else _TMX_ARGV=(sh -c 'printf "%s\n" "$0" >&2; exit 1' "ccrc: tmux was not asked: $TMX_WHY"); fi
+  # Windows: Claude Code runs hooks and its statusline under Git Bash, whose runtime hands MSYS2's tmux neither $TMUX
+  # nor $TMUX_TMPDIR (measured: an empty `printenv TMUX` in the child, so the hook asked the default socket and wrote
+  # nothing). The socket $TMUX names is passed explicitly instead, which is what tmux itself does with $TMUX elsewhere.
+  case "${OSTYPE:-}" in msys*|cygwin*)
+    [[ -z "${TMX_SOCK:-}" && "${_TMX_ARGV[0]}" == tmux && -n "${TMUX:-}" ]] && _TMX_ARGV=(tmux -S "${TMUX%%,*}") ;;
+  esac
 }
 _tmx_argv
 _tmx() { "${_TMX_ARGV[@]}" "$@"; }   # tmux args… -> that call, on the fleet's server (a statement; see above for a capture)
@@ -528,13 +561,76 @@ _plat_sha256_check() {  # <sums-file> -> 0 iff every listed digest matches
   if [ "$CCD_OS" = darwin ]; then shasum -a 256 -c "$@"; else sha256sum -c "$@"; fi
 }
 
+# THE PANE'S SYMBOL SET, on a box whose terminal Claude Code does not recognise.
+# Claude Code picks its TUI symbols with `is-unicode-supported`, which on win32
+# answers yes ONLY for a terminal it knows by environment (WT_SESSION,
+# TERM=xterm-256color, …) and never for a tmux pane — so on an MSYS2/Cygwin box
+# every pane drew the ASCII fallbacks: `>` for the prompt and menu cursor `❯`,
+# `√` for `✔`. Every pane reader in this tree keys on `❯`, and
+# `shared/pane-glyph.ts` pins `>` as NOT the glyph, so the reader is right and
+# the pane is what must change. Measured on a private tmux socket, same build:
+# `> 2. Dark mode √` without this, `❯ 2. Dark mode ✔` with it.
+#
+# TERMINUS_SUBLIME because it is the one variable of that list Claude Code reads
+# NOWHERE else (two hits in the binary, both that check). WT_SESSION would also
+# switch hyperlinks, the alt-screen repaint and terminal detection.
+#
+# `$OSTYPE`, not `$CCD_OS`: MSYS2 lands on CCD_OS=linux. Off Windows this prints
+# nothing and the spawn line is byte-identical.
+_pane_unicode_env() {
+  case "${OSTYPE:-}" in msys*|cygwin*) printf 'TERMINUS_SUBLIME=1' ;; esac
+}
+
+# THE SHELL CLAUDE CODE RUNS HOOKS, THE STATUSLINE AND ITS BASH TOOL IN, on Windows. Left to itself it finds Git Bash,
+# a second MSYS runtime: there `jq` resolved to a native Windows build, MSYS2's tmux was handed neither $TMUX nor
+# $TMUX_TMPDIR, and arguments that look like paths were rewritten on the way into every MSYS2 tool, so the session hook
+# ran, exited 0 and wrote nothing (measured: no `*.hookstate.json` on a box whose sessions ran for days). Pointed at
+# MSYS2's own bash (Claude Code takes any bash at CLAUDE_CODE_GIT_BASH_PATH; measured: the hook then saw /usr/bin/jq),
+# the hook runs in the runtime tmux, flock, jq and ccd run in, as on Linux.
+_pane_shell_env() {
+  case "${OSTYPE:-}" in msys*|cygwin*) ;; *) return 0 ;; esac
+  local b; b=$(cygpath -m /usr/bin/bash.exe 2>/dev/null) || return 0
+  [[ "$b" == *"'"* ]] || printf "CLAUDE_CODE_GIT_BASH_PATH='%s'" "$b"
+}
+
 # `/proc/sys/kernel/random/uuid` -> `uuidgen`. LOWERCASED: the kernel emits
 # lowercase hex and this value is a session's identity — it lands in the
 # registry, in `--session-id`, and in the transcript filename the swap finds
 # a conversation BY. `uuidgen` emits uppercase, and two spellings of one uuid
 # is the swap looking for a file that is on disk under the other case.
+# ONE UUID OR A NON-ZERO — never an empty string, and never anything that is
+# not a uuid, at rc 0. The value becomes a registry row (`$REG/<id>.uuid`, the key
+# `_sync_uuid` follows a session by) or a node's identity, so a wrong one is worse
+# than a refusal. The Linux and Darwin arms are the original commands, tried
+# FIRST and unchanged; what follows them is for a userland where they answer
+# nothing — measured under MSYS2 on Windows: no /proc/sys, no uuidgen, and a
+# `python3` that is the Microsoft Store alias.
 _plat_uuid() {
-  if [ "$CCD_OS" = darwin ]; then uuidgen | tr 'A-F' 'a-f'; else cat /proc/sys/kernel/random/uuid; fi
+  local u
+  u=$(if [ "$CCD_OS" = darwin ]; then uuidgen | tr 'A-F' 'a-f'; else cat /proc/sys/kernel/random/uuid; fi 2>/dev/null)
+  [ -n "$u" ] || u=$(uuidgen 2>/dev/null | tr 'A-F' 'a-f')
+  [ -n "$u" ] || u=$(_uuid_from_urandom)
+  # LAST LINE ONLY, AND VALIDATED BELOW. On Windows `python3` can be the
+  # Microsoft Store app-execution alias, which installs Python on first run and
+  # prints `Downloading: ...` / `Extracting: ...` to STDOUT before the uuid.
+  [ -n "$u" ] || u=$(python3 -c 'import uuid; print(uuid.uuid4())' 2>/dev/null | tail -1)
+  if [[ ! "$u" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+    echo "${0##*/}: cannot mint a uuid on this box — none of /proc/sys/kernel/random/uuid, uuidgen, /dev/urandom (od), python3 produced one" >&2
+    return 1
+  fi
+  printf '%s\n' "$u"
+}
+
+# RFC 4122 v4 from 16 random bytes: `od` and `/dev/urandom` are present on every
+# userland ccd runs on, MSYS2 included — which has neither /proc/sys nor, as
+# installed on the Windows box this was measured on, `uuidgen`. Version nibble
+# 4; variant bits 10xx, i.e. the first hex digit of the fourth group is 8-b.
+_uuid_from_urandom() {
+  local h
+  h=$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n') || return 1
+  [ "${#h}" = 32 ] || return 1
+  printf '%s-%s-4%s-%x%s-%s\n' "${h:0:8}" "${h:8:4}" "${h:13:3}" \
+    $(( (0x${h:16:1} & 3) | 8 )) "${h:17:3}" "${h:20:12}"
 }
 
 # `/proc/<pid>/status`'s PPid line -> `ps -o ppid=`. ALWAYS rc 0 and silent on
@@ -546,6 +642,74 @@ _plat_ppid() {   # <pid> -> its parent pid, or nothing
     { sed -n 's/^PPid:[[:space:]]*//p' "/proc/${1-}/status" | head -1; } 2>/dev/null
   fi
   return 0
+}
+
+# A PID ON THE WINDOWS PORT may be a WINDOWS one. There (MSYS2) Claude Code, node and git are native Win32 programs: the
+# pid Claude Code writes in `sessions/<pid>.json` is a Windows pid, which MSYS `kill -0` does not know (measured: "No
+# such process" for a live claude.exe). There it is live when an MSYS process's /proc/<n>/winpid names it (builtins),
+# else when Windows lists it (`tasklist`, by its path in the system directory, about 0.3 s). Elsewhere `kill -0`.
+_plat_alive() {   # <pid> -> rc 0 iff a process runs at <pid> (a Windows pid on the Windows port)
+  case "${OSTYPE:-}" in msys*|cygwin*) ;; *) kill -0 "${1-}" 2>/dev/null; return ;; esac
+  local f w sys
+  [[ "${1-}" =~ ^[1-9][0-9]*$ ]] || return 1
+  for f in /proc/[0-9]*/winpid; do
+    { IFS= read -r w < "$f"; } 2>/dev/null && [[ "$w" == "$1" ]] && return 0
+  done
+  sys=$(cygpath -S 2>/dev/null) || return 1
+  MSYS2_ARG_CONV_EXCL='*' "$sys/tasklist.exe" /FI "PID eq $1" /NH /FO CSV 2>/dev/null | grep -q "^\"[^\"]*\",\"$1\","
+}
+
+# THE SAME PROCESS IN WINDOWS' NUMBERING on the Windows port (/proc/<pid>/winpid; nothing for an MSYS pid that is
+# gone); elsewhere the pid itself. Always rc 0.
+_plat_winpid() {   # <pid> -> its Windows pid there, else <pid>
+  case "${OSTYPE:-}" in msys*|cygwin*) ;; *) printf '%s\n' "${1-}"; return 0 ;; esac
+  { sed -n 1p "/proc/${1-}/winpid"; } 2>/dev/null
+  return 0
+}
+
+# A PROCESS AND ITS ANCESTORS, nearest first, one pid per line, at most 64. Elsewhere `_plat_ppid`'s chain. On the
+# Windows port an MSYS process a native program started (bash under claude.exe or node) reads PPid 1 (measured), so the
+# MSYS chain stops short of the processes above that native parent: there every line is a WINDOWS pid
+# (`_plat_winpid`), and past the MSYS chain the walk goes on through Windows parents, read from ONE Win32_Process
+# listing (about 1 s), a parent only while it was created before its child (a dead parent's pid can name another
+# process by now). Always rc 0.
+_plat_lineage() {   # <pid> -> the pid, then each ancestor's
+  local p="${1-}" n=0 w="" pp sys
+  case "${OSTYPE:-}" in msys*|cygwin*) ;; *)
+    while [[ "$p" =~ ^[1-9][0-9]*$ ]] && (( n++ < 64 )); do printf '%s\n' "$p"; p=$(_plat_ppid "$p"); done
+    return 0 ;;
+  esac
+  while [[ "$p" =~ ^[1-9][0-9]*$ ]] && (( n++ < 64 )); do
+    w=$(_plat_winpid "$p"); [[ "$w" =~ ^[1-9][0-9]*$ ]] || return 0
+    printf '%s\n' "$w"
+    pp=$(_plat_ppid "$p"); [[ "$pp" =~ ^[0-9]+$ ]] && (( pp > 1 )) || break
+    p="$pp"
+  done
+  [[ "$w" =~ ^[1-9][0-9]*$ ]] && sys=$(cygpath -S 2>/dev/null) || return 0
+  MSYS2_ARG_CONV_EXCL='*' _plat_timeout 20 "$sys/WindowsPowerShell/v1.0/powershell.exe" -NoProfile -NonInteractive -Command \
+    'Get-CimInstance Win32_Process | ForEach-Object { "{0} {1} {2}" -f $_.ProcessId, $_.ParentProcessId, $(if ($_.CreationDate) { $_.CreationDate.ToFileTimeUtc() } else { 0 }) }' \
+    2>/dev/null </dev/null | awk -v w="$w" -v n="$n" '{ sub(/\r$/, ""); pp[$1] = $2; ct[$1] = $3 }
+      END { while (n++ < 64) { p = pp[w]; if (p == "" || p == 0 || !(p in ct) || ct[p] + 0 > ct[w] + 0) exit; print p; w = p } }'
+  return 0
+}
+
+# A PROCESS'S START, SPELLED AS CLAUDE CODE SPELLS ITS `procStart` (sessions/<pid>.json), so a recycled pid reads as
+# another process. Elsewhere `ps -o lstart=` under `LC_ALL=C TZ=UTC`, trimmed. On the Windows port the pid is a WINDOWS
+# one and Claude Code records its creation time as a FILETIME (100 ns ticks since 1601, UTC; measured equal to
+# `Process.StartTime.ToFileTimeUtc()`, which Win32_Process.CreationDate is not: it drops the last digit), read here by
+# one bounded PowerShell call (about 0.3 s). Nothing and rc 1 when it cannot tell: "cannot tell" is not "dead".
+_plat_pstart() {   # <pid> -> its start as `procStart` records it
+  local s sys
+  case "${OSTYPE:-}" in msys*|cygwin*) ;; *)
+    s=$(LC_ALL=C TZ=UTC ps -o lstart= -p "${1-}" 2>/dev/null) || return 1
+    s="${s%"${s##*[![:space:]]}"}"; printf '%s\n' "${s#"${s%%[![:space:]]*}"}"; return 0 ;;
+  esac
+  [[ "${1-}" =~ ^[1-9][0-9]*$ ]] && sys=$(cygpath -S 2>/dev/null) || return 1
+  s=$(MSYS2_ARG_CONV_EXCL='*' _plat_timeout 10 "$sys/WindowsPowerShell/v1.0/powershell.exe" -NoProfile -NonInteractive \
+    -Command "try { [Diagnostics.Process]::GetProcessById($1).StartTime.ToFileTimeUtc() } catch {}" 2>/dev/null </dev/null)
+  s="${s//$'\r'/}"; s="${s//$'\n'/}"
+  [[ "$s" =~ ^[1-9][0-9]*$ ]] || return 1
+  printf '%s\n' "$s"
 }
 
 # `/proc/$$/cgroup` -> NOTHING, on purpose. macOS has no cgroups, so the
@@ -5402,6 +5566,27 @@ _lc_dec_ok() {   # text -> 0 iff it fits _LC_DEC_MAX *BYTES*. Prints nothing.
   (( ${#1} <= _LC_DEC_MAX ))
 }
 # ── end lifecycle journal ────────────────────────────────────────── LC-END ──
+# The pid the SESSION HOOK names its files by. On MSYS2 a native Windows program
+# has TWO pids: the one MSYS assigns — which is what `tmux` reports, tmux being
+# an MSYS program itself — and the Windows one the program sees for itself. The
+# hook runs inside Claude Code, which is native, so it writes
+# `sessions/<WINDOWS pid>.json`, and every lookup keyed on `pane_pid` missed.
+# Measured: tmux said 7956, the hook file was 56116, `/proc/7956/winpid` is 56116.
+#
+# It is not a cosmetic miss. `$cfg/sessions/$pid.json` is what `_ws_status`
+# reads (so `ws-archive` refused with `status-unknown`), what `_sync_uuid`
+# follows a session across a swap by, and what BOTH idle gates — auto-swap and
+# auto-compact — require. One unreadable path silently disabled all four.
+#
+# `/proc/<pid>/winpid` is MSYS's own bridge. Off MSYS the file does not exist,
+# the two numbers are the same, and this is the identity function.
+_hook_pid() {   # pane pid -> the pid the hook files are named by
+  local p="${1:-}" w=""
+  [[ -n "$p" ]] || return 0
+  [[ -r "/proc/$p/winpid" ]] && w=$(cat "/proc/$p/winpid" 2>/dev/null)
+  printf '%s' "${w:-$p}"
+}
+
 _ws_status() {   # id -> busy|idle on stdout; NON-ZERO when it cannot be read.
   # Fails closed twice over, and both halves are load-bearing.
   #
@@ -5436,6 +5621,7 @@ _ws_status() {   # id -> busy|idle on stdout; NON-ZERO when it cannot be read.
     unknown) return 1 ;;              # could not ask — say so, do not guess
   esac
   pid=$("${_TMX_ARGV[@]}" list-panes -t "$(_tmux_t "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
+  _ccd_is_windows && pid=$(_hook_pid "$pid")
   [[ "$pid" =~ ^[0-9]+$ ]] || return 1
   # D-2379: the one unguarded reader of this path family — `_sync_uuid`
   # (`-f`), `_auto_swap_check` (`-f`) and `_auto_compact_check` (a three-rung
@@ -7997,7 +8183,15 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--base <commit>] [--surface <wor
   local branch="ws/$slug"
   # The START POINT is `--base`'s commit, peeled so no ref of that name can divert it, when one was given, else `$base`;
   # `$base` is what the row records either way.
-  git -C "$main" worktree add -b "$branch" --no-track "$wt" "${lc_start:-$base}" --quiet \
+  # The Windows port: MSYS git records the two worktree links as `/c/...` paths, which Git for Windows (an IDE, the
+  # Claude desktop app, a PowerShell) cannot read: `git` in the workspace answered "not a git repository" there.
+  # Relative links (git 2.48+) read the same to both gits on ONE drive. Across drives (a repository on D:, ~/worktrees
+  # on C:) only MSYS git can walk them, through its `/` root: Git for Windows reads `../../c/Users` as D:\c\Users, as
+  # it did the absolute ones. Drive-letter links (`C:/...`) would read to both, but MSYS git then lists the tree as
+  # `C:/...`, which no registry path compares equal to; so not those.
+  local wt_rel=()
+  case "${OSTYPE:-}" in msys*|cygwin*) wt_rel=(--relative-paths) ;; esac
+  git -C "$main" worktree add "${wt_rel[@]}" -b "$branch" --no-track "$wt" "${lc_start:-$base}" --quiet \
     || die "git worktree add failed for $wt"
 
   # Shared across every worktree of this repo, local only, never committed.
@@ -8081,7 +8275,7 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--base <commit>] [--surface <wor
     die "$REG/$id.generation is present and invalid — refusing to build a workspace on it; inspect it by hand"
   fi
   _compact_lock_release "$gfd"; gfd=""
-  local uuid; uuid=$(_plat_uuid)
+  local uuid; uuid=$(_plat_uuid) || die "ws-add: no uuid"
   # ── THE PICK IS RE-TAKEN HERE, AND NOT MERELY RE-VALIDATED ────────────────
   # `$hw` was chosen in the pre-flight, above — deliberately, so that an
   # all-excluded refusal leaves the box exactly as it found it — and between
@@ -12946,15 +13140,11 @@ _am_home() {   # -> sets AM_UID, AM_HOME and AM_REG from the real uid's password
   AM_HOME="${h%/}"; AM_REG="$AM_HOME/.cc-sessions"
 }
 _am_ancestor() {   # <pid> -> rc 0 when <pid> is this process or one of its ancestors
-  local p=$$ n=0 pp
-  while (( n++ < 64 )); do
-    [[ "$p" == "$1" ]] && return 0
-    (( p > 1 )) || return 1
-    pp=$(_am_sys ps -o ppid= -p "$p" 2>/dev/null) || return 1
-    pp=${pp//[[:space:]]/}
-    [[ "$pp" =~ ^[0-9]+$ ]] || return 1
-    p=$pp
-  done
+  # `_plat_lineage`, not `ps -o ppid=` (MSYS2's ps has no -o): on the Windows port the walk crosses the native
+  # claude.exe between the pane and this process, and every pid it prints there is a Windows one, so the pane's is too.
+  local t a
+  t=$(_am_sys _plat_winpid "$1"); [[ "$t" =~ ^[1-9][0-9]*$ ]] || return 1
+  while IFS= read -r a; do [[ "$a" == "$t" ]] && return 0; done < <(_am_sys _plat_lineage "$$")
   return 1
 }
 _am_refuse() {   # <caller> <reason> <detail> -> one REFUSED line on stdout, one journal line, exit 2
@@ -18896,11 +19086,10 @@ _ci_rec_live() {   # pid -> 0 iff the process _CI_REC describes still runs at pi
   # pane's first sight, a worker's respawn, a resume and a swap; never a tick of
   # a row with no fork.
   local pid="$1" want got
-  kill -0 "$pid" 2>/dev/null || return 1
+  _plat_alive "$pid" || return 1   # a Windows pid on the Windows port: `_plat_alive`
   _ci_rec_field procStart || return 0
   want="$_CI_VAL"
-  got=$(LC_ALL=C TZ=UTC ps -o lstart= -p "$pid" 2>/dev/null) || return 0
-  got="${got%"${got##*[![:space:]]}"}"; got="${got#"${got%%[![:space:]]*}"}"
+  got=$(_plat_pstart "$pid") || return 0   # Windows: a FILETIME, as Claude Code records it there
   [[ -z "$got" || "$got" == "$want" ]]
 }
 
@@ -19060,7 +19249,7 @@ _ci_bg_follow() {   # id cfg — D-4945: move the registry to the id the followe
   local id="$1" cfg="$2" t="${_CI_BG[$id]:-}" pid job sid uuid addrs
   [[ -n "$t" ]] || return 0
   pid="${t%% *}" job="${t#* }"
-  if _ci_rec_read "$cfg/sessions/$pid.json" && kill -0 "$pid" 2>/dev/null \
+  if _ci_rec_read "$cfg/sessions/$pid.json" && _plat_alive "$pid" \
      && [[ "$_CI_REC" == *'"kind":"bg"'* ]] && _ci_rec_field jobId && [[ "$_CI_VAL" == "$job" ]]; then
     _ci_rec_field sessionId; sid="$_CI_VAL"
   elif _ci_bg_scan "$cfg" "" "$job"; then
@@ -19326,15 +19515,18 @@ _ci_hold_live() {   # pid pstart procstart -> 0 iff the worker the wait pinned s
   # own rule (`_ci_rec_live`): one fork per tick, only while waiting, only on
   # a box with no `/proc`. With neither, `kill -0` alone, as Claude Code
   # itself judges a record that carries no `procStart`.
+  # On the Windows port the worker's pid is a WINDOWS one (no start time is pinned for it there, see the wait), asked
+  # of `_plat_alive` and its record's `procStart` of `_plat_pstart`; a pinned start time is a /proc pid's, the
+  # supervisor's included, asked of `kill -0` as before.
   local pid="$1" pst="$2" want="$3" got
-  kill -0 "$pid" 2>/dev/null || return 1
   if [[ -n "$pst" ]]; then
+    kill -0 "$pid" 2>/dev/null || return 1
     _ci_proc_start "$pid" && [[ "$_CI_PSTART" == "$pst" ]]
     return
   fi
+  _plat_alive "$pid" || return 1
   [[ -n "$want" ]] || return 0
-  got=$(LC_ALL=C TZ=UTC ps -o lstart= -p "$pid" 2>/dev/null) || return 0
-  got="${got%"${got##*[![:space:]]}"}"; got="${got#"${got%%[![:space:]]*}"}"
+  got=$(_plat_pstart "$pid") || return 0   # Windows: a FILETIME, as Claude Code records it there
   [[ -z "$got" || "$got" == "$want" ]]
 }
 
@@ -19417,7 +19609,7 @@ _ci_held_wait() {   # id — before a supervised resume: no spawn while a live b
     fi
     job="$_CI_RESUME_HELD" hid="$_CI_END_HID" pid="$_CI_END_HPID" hps="$_CI_END_HPS" pst=""
     if [[ -n "$pid" ]]; then
-      _ci_proc_start "$pid" && pst="$_CI_PSTART"
+      _ccd_is_windows || { _ci_proc_start "$pid" && pst="$_CI_PSTART"; }   # Windows: a native pid; its /proc number is another process's
       # THE REGISTRY KEEPS FOLLOWING THE FORK WHILE THE PANE WAITS — D-4945's
       # follow (`_ci_bg_follow`), which `_sync_uuid` runs only while a pane
       # lives. Without it a `/clear` inside the background session (the worker
@@ -19533,7 +19725,10 @@ _sync_uuid() {   # id — mirror the live process's CURRENT sessionId into the r
   # following of any worker: the window holds the conversation again.
   local id="$1" cfg pid sid
   cfg=$(_cfg_dir "$(_reg_get "$id" wrapper)"); [[ -n "$cfg" ]] || return 0
+  # `_hook_pid` on the Windows port only: elsewhere the two pids are one, and its capture would cost a fork (on the
+  # supervise tick, `ccd-tick-budget.test.ts`).
   pid=$("${_TMX_ARGV[@]}" list-panes -t "$(_tmux_t "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
+  _ccd_is_windows && pid=$(_hook_pid "$pid")
   if [[ -n "$pid" && -f "$cfg/sessions/$pid.json" ]]; then
     sid=$(grep -oE '"sessionId":"[0-9a-f-]{36}"' "$cfg/sessions/$pid.json" | head -1 | cut -d'"' -f4)
     if [[ -n "$sid" && "$sid" != "$(_reg_get "$id" uuid)" ]] \
@@ -22117,7 +22312,10 @@ _swap_idle_gate() {   # id [pane [wrapper [now]]] -> rc 0 iff the session is at 
   echo "$pane" | grep -q "esc to interrupt" && return 1    # mid-turn: wait for the gap
   echo "$pane" | grep -q "❯" || return 1                    # not at a prompt yet
   local spid sf st sua
+  # `_hook_pid` on the Windows port only: elsewhere the two pids are one, and its capture would cost a fork (on the
+  # supervise tick, `ccd-tick-budget.test.ts`).
   spid=$("${_TMX_ARGV[@]}" list-panes -t "$(_tmux_t "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
+  _ccd_is_windows && spid=$(_hook_pid "$spid")
   _cfg_dir_to sf "$wrapper"; sf="$sf/sessions/$spid.json"   # tick-diet spec §6.2: memoised per wrapper — an exact memo, no D-number (Task 5)
   # `-f` BEFORE THE GREP, for `_authdead`'s reason (#69 review round 3, R2):
   # `grep FILE` opens by name and blocks for ever on a FIFO with no writer or on
@@ -22899,7 +23097,10 @@ _idle_for_keystroke() {   # id pane ctxnote — 0 iff this session is at a clean
   echo "$pane" | grep -q "esc to interrupt" && { KS_WHY=mid-turn; KS_DETAIL="$ctxnote"; return 1; }
   echo "$pane" | grep -q "❯" || { KS_WHY=no-prompt; KS_DETAIL="$ctxnote"; return 1; }
   wrapper=$(_reg_get "$id" wrapper)
+  # `_hook_pid` on the Windows port only: elsewhere the two pids are one, and its capture would cost a fork (on the
+  # supervise tick, `ccd-tick-budget.test.ts`).
   spid=$("${_TMX_ARGV[@]}" list-panes -t "$(_tmux_t "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
+  _ccd_is_windows && spid=$(_hook_pid "$spid")
   # D-2013 AT THE NARROWEST SEAM: "MEASURED BUSY" IS NOT "COULD NOT MEASURE". An earlier cut of
   # this function put `${st:-unreadable}` in the DETAIL and left one `not-idle` slug for both,
   # which is the same collapse one seam over — the detail is floored out of swap.log after the
@@ -25807,8 +26008,23 @@ _graceful_stop_same() {   # pid pstart — the one identity check: rc 0 the same
   [[ "$_CI_PSTART" == "$2" ]] || return 1
   return 0
 }
+# THE WINDOWS PORT'S GRACEFUL STOP. MSYS turns a signal to a native program into TerminateProcess, so a SIGTERM to
+# claude.exe IS the kill and no shutdown handler runs. Claude Code's own quit, `/exit` typed into its pane, is its
+# graceful stop there. Typed only into an EMPTY box past the one typing check (an Enter on a dialog picks its
+# highlighted row, and on the rate-limit menu that can be "Switch to usage credits", D-8123), and never at the limit
+# rescue's site, which sends no key. rc 0 typed; rc 1 nothing typed, and the caller signals as on Linux.
+_graceful_stop_quit() {   # id site
+  local t box
+  [[ "$2" != limit-resume ]] || return 1
+  t=$(_tmux_t "$1")
+  box=$(_pane_box_read "$("${_TMX_ARGV[@]}" capture-pane -t "$t" -p -e 2>/dev/null)")
+  [[ "$box" == empty ]] || return 1
+  _pane_type_ready "$1" graceful-stop || return 1
+  _tmx send-keys -t "$t" -l "/exit"; sleep 1; _tmx send-keys -t "$t" Enter
+  return 0
+}
 _graceful_stop_before() {   # id site [read] — before the pane kill. `read`: the caller just ran `_pane_scope_of`, so its PANE_SCOPE_* are used as they stand. Always rc 0.
-  local id="$1" pid ps rc=0 t0 now tick_ms n poll="$GRACEFUL_STOP_POLL_S"
+  local id="$1" pid ps rc=0 t0 now tick_ms n poll="$GRACEFUL_STOP_POLL_S" quit=""
   GRACEFUL_STOP_PID="" GRACEFUL_STOP_PSTART="" GRACEFUL_STOP_SITE="$2" GRACEFUL_STOP_MODE=shadow
   [[ -f "$REG/graceful-stop-live" ]] && GRACEFUL_STOP_MODE=live
   [[ "${3:-}" == read ]] || _pane_scope_of "$id"
@@ -25825,7 +26041,7 @@ _graceful_stop_before() {   # id site [read] — before the pane kill. `read`: t
     2) _graceful_stop_note "$id" "$2" live unmeasured=stat-unreadable; return 0 ;;
     *) _graceful_stop_note "$id" "$2" live gone-before-signal; return 0 ;;
   esac
-  kill -TERM "$pid" 2>/dev/null
+  if _ccd_is_windows && _graceful_stop_quit "$id" "$2"; then quit=typed; else kill -TERM "$pid" 2>/dev/null; fi
   t0=$(_plat_epoch_ms)
   tick_ms="${GRACEFUL_STOP_POLL_S#*.}000"; tick_ms=$(( 10#${tick_ms:0:3} ))   # the poll is "0.<fraction>" seconds: its milliseconds, by string slicing (no fork)
   (( tick_ms > 0 )) || { tick_ms=100; poll=0.1; }   # a poll that slices to 0 ms (0, 0.0005, empty): the default, tick and sleep together
@@ -25843,6 +26059,7 @@ _graceful_stop_before() {   # id site [read] — before the pane kill. `read`: t
   done
   rc=0; _graceful_stop_same "$pid" "$ps" || rc=$?   # one last poll, so a process that left in the final interval is exited=, not alive=
   now=$(_plat_epoch_ms)
+  [[ "$rc" == 0 && -n "$quit" ]] && kill -TERM "$pid" 2>/dev/null   # the quit was not obeyed in the grace: TERM, as on Linux
   case "$rc" in
     0) _graceful_stop_note "$id" "$2" live "alive=$(( GRACEFUL_STOP_TERM_WAIT_S * 1000 ))" ;;
     2) _graceful_stop_note "$id" "$2" live unmeasured=stat-unreadable ;;
@@ -26009,6 +26226,9 @@ _resume_env() {   # [id] -> one line of KEY=value assignments for `env`, switchi
 # on stderr.
 _tool_adj_env() {   # -> one line of KEY=value assignments for `env`, or nothing
   [[ "$CCD_OS" == linux ]] || return 0
+  # No oom_score_adj to raise (the Windows port: CCD_OS reads linux there, /proc/self/oom_score_adj does not exist),
+  # so no prefix: it would cost a bash per tool call for nothing, and a native Claude Code cannot exec a shebang script.
+  [[ -w /proc/self/oom_score_adj ]] || return 0
   local p="$HOME/.local/bin/ccd-tool-adj"
   case "$p" in
     *" -"*|*"'"*)
@@ -26182,6 +26402,8 @@ SETTINGS_UNION_JQ='. as $s | (reduce $s[] as $x ({}; . * $x))
       else . end'
 
 CHILD_SHELL_PIN=/bin/bash
+# Windows: Claude Code is native and has no /bin/bash; MSYS2's bash, `/`-separated (the pin is spliced unquoted).
+case "${OSTYPE:-}" in msys*|cygwin*) CHILD_SHELL_PIN=$(cygpath -m /usr/bin/bash.exe 2>/dev/null || printf /bin/bash) ;; esac
 _child_spawn_compose() {   # id launchflags -> sets CHILD_SPAWN_FLAGS, CHILD_SPAWN_ENV; writes the record
   local id="$1" flags="$2" f="$CHILD_DENY_SETTINGS" sum="" rjson merged re="--settings '([^']*)'"
   CHILD_SPAWN_FLAGS="$flags"; CHILD_SPAWN_ENV=""
@@ -27148,6 +27370,11 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # uncontained; the spawn proceeds either way.
   local tmpenv="" ctmp
   ctmp=$(_child_tmpdir "$id") && tmpenv="TMPDIR='$ctmp'"
+  # Windows: native node and Claude Code read TEMP and TMP, never TMPDIR (Claude Code writes %TEMP%\claude\<cwd-slug>),
+  # so a child's temp is contained only when they name its root too, in Windows' spelling.
+  local wtmp=""
+  [[ -n "$tmpenv" ]] && _ccd_is_windows && wtmp=$(cygpath -m "$ctmp" 2>/dev/null) && [[ "$wtmp" != *"'"* ]] \
+    && tmpenv="$tmpenv TEMP='$wtmp' TMP='$wtmp'"
   # THE OWNER'S DELEGATION SPOOL DIRECTORY (delegation broker wave 3, `_delegation_spool_dir`): made here, once per spawn, for every
   # session and not only a child; a failure has already warned and never refuses the spawn.
   _delegation_spool_dir "$id" || true
@@ -27159,7 +27386,10 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # work tree. A quote in the path would break the single-quoted splice: such a path is not exported.
   local sesstmp="${ctmp:-${TMPDIR:-/tmp}}" sesstmpenv=""
   [[ "$sesstmp" == *"'"* ]] || sesstmpenv="CCRC_SESSION_TMPDIR='$sesstmp'"
-  resenv="$resenv${adjenv:+ $adjenv}${routeenv:+ $routeenv}${tmpenv:+ $tmpenv}${sesstmpenv:+ $sesstmpenv}${heldenv:+ ${heldenv% }}"
+  # The pane's symbol set, exported on both spawn lines for `$tmpenv`'s reason — see `_pane_unicode_env`.
+  local glyphenv; glyphenv=$(_pane_unicode_env)
+  local shellenv; shellenv=$(_pane_shell_env)   # Windows: hooks in MSYS2's bash (`_pane_shell_env`)
+  resenv="$resenv${adjenv:+ $adjenv}${routeenv:+ $routeenv}${tmpenv:+ $tmpenv}${sesstmpenv:+ $sesstmpenv}${glyphenv:+ $glyphenv}${shellenv:+ $shellenv}${heldenv:+ ${heldenv% }}"
   local launchflags="$rcflag${routeflags:+${rcflag:+ }$routeflags}"
   # THE CHILD'S DENY FILE AND SHELL PIN (plan Task 15, D-5299, D-5391), composed
   # ONCE, here, into the flags and the `env` string BOTH spawn lines splice, for
@@ -28254,7 +28484,7 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
     fi
     _compact_lock_release "$gfd"; gfd=""
   fi
-  local uuid; uuid=$(_reg_get "$id" uuid); [[ -z "$uuid" ]] && uuid=$(_plat_uuid)
+  local uuid; uuid=$(_reg_get "$id" uuid); [[ -z "$uuid" ]] && { uuid=$(_plat_uuid) || die "start: no uuid"; }
   _reg_set "$id" wrapper "$wrapper"
   [[ -n "$project" ]] && _reg_set "$id" project "$project"
   _reg_set "$id" workdir "$workdir"; _reg_set "$id" uuid "$uuid"
@@ -37668,6 +37898,10 @@ _ws_reclaim_admin_entries() {   # common path recorded -> 0 with `<d>/logs/HEAD`
     # something else" was never read off it.
     [[ "$g" == *[![:space:]]* ]] \
       || { _WS_KEEP_WHY="$d/gitdir names no path on its first line — git's list leaves out an empty one and lists a blank one at no path, so whether $d is git's record of $arg was never asked"; return 1; }
+    # A RELATIVE record (`git worktree add --relative-paths`, which the Windows port's ws-add asks for) names its tree
+    # from its own admin directory; on the Windows port it is resolved from there, physically, before it is compared.
+    # Elsewhere ws-add writes none, and one is compared as written, as before the port (ccd-child-reclaim-verb-reflogs).
+    [[ "$g" == /* ]] || ! _ccd_is_windows || g=$(_ws_realpath "$d/$g")
     [[ "$g" == "$arg/.git" || "$g" == "$real/.git" ]] || continue
     [[ -d "$d" && ! -L "$d" ]] \
       || { _WS_KEEP_WHY="$d, git's record of $arg, is not a directory — what it names was never read"; return 1; }
@@ -38740,6 +38974,71 @@ WS_PATH_USERS_SCAN_S=10   # bound on the ONE python3 walk of the process table (
 _WS_PATH_USERS_PIDS=''
 _WS_PATH_USERS_WHY=''
 _WS_PATH_USERS_RCS=(); _WS_PATH_USERS_PIDS_OF=(); _WS_PATH_USERS_WHY_OF=()
+# -- Windows: the native processes /proc cannot see into --
+# Cygwin's /proc lists MSYS processes only, so a native Win32 program (Claude Code itself, the node, git and test
+# runners it starts, a Git Bash tool shell) sitting in a tree answered `nobody` (measured: a directory held by a native
+# PowerShell read `nobody`, one held by an MSYS `sleep` read `held`). This asks Windows itself: each process this user
+# may open has its current directory read from its PEB, and every process MSYS's /proc names is skipped (the walk above
+# already judged it, ccd's own chain included). An unreadable process (another user's, an elevated one, a 32-bit one)
+# is not seen, as an EACCES entry is not seen on Linux. Answers `<k>\t<winpid>\t<name>\t<cwd>` per user of path k, then
+# `.`; a probe that cannot finish is rc != 0, which every caller reads as unmeasured, never as "nobody".
+WS_WIN_NATIVE_SCAN_S=30
+_ws_win_native_users() {   # path... -> the listing on stdout; rc 0 only when the probe ran to its end
+  local p w skip='' f
+  local -a wins=()
+  for p in "$@"; do w=$(cygpath -w -- "$p" 2>/dev/null) || return 2; wins+=("$w"); done
+  for f in /proc/[0-9]*/winpid; do read -r w < "$f" 2>/dev/null && skip+="${skip:+,}$w"; done
+  # -EncodedCommand (UTF-16LE, base64): `-Command -` reads stdin as typed lines, and a here-string or a block that
+  # spans lines then runs as nothing at all (measured: an empty answer, rc 0).
+  local enc script
+  IFS= read -r -d '' script <<'PS'
+  $ErrorActionPreference = 'Stop'
+  $ProgressPreference = 'SilentlyContinue'
+  [Console]::OutputEncoding = [Text.Encoding]::UTF8
+  Add-Type -TypeDefinition @"
+  using System; using System.Runtime.InteropServices; using System.Text;
+  public static class CcdCwd {
+    [DllImport("ntdll.dll")] static extern int NtQueryInformationProcess(IntPtr h, int c, ref Pbi p, int n, out int r);
+    [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(int a, bool i, int pid);
+    [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+    [DllImport("kernel32.dll")] static extern bool IsWow64Process(IntPtr h, out bool w);
+    [DllImport("kernel32.dll")] static extern bool ReadProcessMemory(IntPtr h, IntPtr a, byte[] b, IntPtr n, out IntPtr r);
+    [StructLayout(LayoutKind.Sequential)] struct Pbi { public IntPtr A; public IntPtr Peb; public IntPtr B; public IntPtr C; public IntPtr Pid; public IntPtr D; }
+    static byte[] Read(IntPtr h, long at, int n) { var b = new byte[n]; IntPtr r; return ReadProcessMemory(h, new IntPtr(at), b, new IntPtr(n), out r) && r.ToInt64() == n ? b : null; }
+    public static string Of(int pid) {
+      IntPtr h = OpenProcess(0x1000 | 0x0010, false, pid);
+      if (h == IntPtr.Zero) return null;
+      try {
+        bool wow; if (!IsWow64Process(h, out wow) || wow) return null;
+        var p = new Pbi(); int r;
+        if (NtQueryInformationProcess(h, 0, ref p, Marshal.SizeOf(p), out r) != 0) return null;
+        var pp = Read(h, p.Peb.ToInt64() + 0x20, 8); if (pp == null) return null;
+        var us = Read(h, BitConverter.ToInt64(pp, 0) + 0x38, 16); if (us == null) return null;
+        int len = BitConverter.ToUInt16(us, 0); if (len == 0) return null;
+        var s = Read(h, BitConverter.ToInt64(us, 8), len); return s == null ? null : Encoding.Unicode.GetString(s);
+      } finally { CloseHandle(h); }
+    }
+  }
+"@
+  $paths = @($env:CCD_WIN_PATHS -split "`n" | Where-Object { $_ -ne '' } | ForEach-Object { $_.TrimEnd('\') })
+  $skip = @{}; foreach ($w in ($env:CCD_WIN_SKIP -split ',')) { if ($w) { $skip[[int]$w] = 1 } }
+  $skip[$PID] = 1
+  foreach ($proc in [Diagnostics.Process]::GetProcesses()) {
+    if ($skip.ContainsKey($proc.Id)) { continue }
+    $cwd = [CcdCwd]::Of($proc.Id); if (-not $cwd) { continue }
+    $c = $cwd.TrimEnd('\')
+    for ($k = 0; $k -lt $paths.Count; $k++) {
+      $t = $paths[$k]
+      if ($c -ieq $t -or $c.StartsWith($t + '\', [StringComparison]::OrdinalIgnoreCase)) { "$k`t$($proc.Id)`t$($proc.ProcessName)`t$cwd" }
+    }
+  }
+  '.'
+PS
+  enc=$(printf '%s' "$script" | python3 -c 'import base64, sys; print(base64.b64encode(sys.stdin.read().encode("utf-16-le")).decode())') || return 2
+  CCD_WIN_PATHS="$(printf '%s\n' "${wins[@]}")" CCD_WIN_SKIP="$skip" MSYS2_ENV_CONV_EXCL='CCD_WIN_PATHS;CCD_WIN_SKIP' \
+    _plat_timeout "$WS_WIN_NATIVE_SCAN_S" powershell.exe -NoProfile -NonInteractive -EncodedCommand "$enc" </dev/null 2>/dev/null | tr -d '\r'
+}
+
 _ws_path_users() {   # path -> 0 when no process of this uid uses it; 1 when one does (_WS_PATH_USERS_PIDS:
   #                     their pids, space-separated, each once; _WS_PATH_USERS_WHY: what each uses);
   #                     2 unmeasured (_WS_PATH_USERS_WHY says why) — never "nobody"
@@ -39067,6 +39366,25 @@ except Exception:
     (( cnt[i] <= 5 )) || shn[i]+=", and $(( cnt[i] - 5 )) more"
     _WS_PATH_USERS_RCS[i]=1; _WS_PATH_USERS_PIDS_OF[i]="${pds[i]}"; _WS_PATH_USERS_WHY_OF[i]="${shn[i]}"
   done
+  _ccd_is_windows || return 0
+  # Windows: the paths the MSYS walk found free are asked of the native processes too (`_ws_win_native_users`).
+  local -a nk=() np=()
+  for k in "${!ix[@]}"; do i=${ix[k]}; (( _WS_PATH_USERS_RCS[i] == 0 )) && { nk+=("$i"); np+=("${pa[2 * k + 1]}"); }; done
+  (( ${#nk[@]} )) || return 0
+  out=$(_ws_win_native_users "${np[@]}"); rc=$?
+  if (( rc != 0 )) || [[ "$out" != . && "$out" != *$'\n.' ]]; then
+    for k in "${!nk[@]}"; do
+      i=${nk[k]}; _WS_PATH_USERS_RCS[i]=2
+      _WS_PATH_USERS_WHY_OF[i]="the native Windows processes of this box could not be measured (exit $rc), so who uses ${np[k]} was never asked"
+    done
+    return 0
+  fi
+  while IFS=$'\t' read -r k pid what pth; do
+    [[ -n "$pid" && "$k" != . ]] || continue
+    i=${nk[k]}; _WS_PATH_USERS_RCS[i]=1
+    _WS_PATH_USERS_PIDS_OF[i]+="${_WS_PATH_USERS_PIDS_OF[i]:+ }$pid"
+    _WS_PATH_USERS_WHY_OF[i]+="${_WS_PATH_USERS_WHY_OF[i]:+, }Windows process $pid ($what) has its working directory at $pth"
+  done <<< "$out"
   return 0
 }
 
@@ -39499,7 +39817,22 @@ except Exception:
     || { _WS_CWD_USERS_WHY="the processes of this box could not be measured ($( [[ "$mode" == lsof ]] && echo lsof || echo "$root" ), exit $rc), so whether one works inside $say was never asked"; return 2; }
   [[ "$out" == . || "$out" == *$'\n.' ]] \
     || { _WS_CWD_USERS_WHY="the walk's answer did not end with its closing line, so whether a process works inside $say was never asked"; return 2; }
-  [[ "$out" != . ]] || return 0
+  if [[ "$out" == . ]]; then
+    _ccd_is_windows || return 0
+    # Windows: nobody MSYS works inside; the native processes are asked too (`_ws_win_native_users`).
+    out=$(_ws_win_native_users "$wt"); rc=$?
+    (( rc == 0 )) && [[ "$out" == . || "$out" == *$'\n.' ]] \
+      || { _WS_CWD_USERS_WHY="the native Windows processes of this box could not be measured (exit $rc), so whether one works inside $say was never asked"; return 2; }
+    [[ "$out" != . ]] || return 0
+    local wk wpid wname wcwd
+    while IFS=$'\t' read -r wk wpid wname wcwd; do
+      [[ -n "$wpid" && "$wk" != . ]] || continue
+      _WS_CWD_USERS_PIDS+="${_WS_CWD_USERS_PIDS:+ }$wpid"
+      (( ${#_WS_CWD_USERS_RECS[@]} < 5 )) && _WS_CWD_USERS_RECS+=("{\"pid\":$wpid,\"comm\":$(_json_str "$wname"),\"cwd\":$(_json_str "$wcwd")}")
+      _WS_CWD_USERS_WHY+="${_WS_CWD_USERS_WHY:+, }Windows process $wpid ($wname) has its working directory at $wcwd"
+    done <<< "$out"
+    return 1
+  fi
   out="${out%$'\n.'}"
   while IFS= read -r line; do
     case "$line" in

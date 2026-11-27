@@ -119,6 +119,33 @@ case "${OSTYPE:-}" in
   linux*)  CCD_OS=linux ;;
   *) case "$(uname -s 2>/dev/null)" in Darwin) CCD_OS=darwin ;; esac ;;
 esac
+# MSYS2's `ln -s` makes a deep COPY of its target unless the runtime is told otherwise, so `~/ccrc -> ccrc-versions/<tag>`
+# came out as a second tree and the install refused (measured on the Windows port). nativestrict makes every `ln -s`
+# this process starts a real Windows symlink, or a loud failure on a box that cannot make one, never a silent copy.
+# The Windows port (MSYS2, OSTYPE=cygwin). `CCD_OS` reads linux there; this is the question for a Windows-only arm.
+_ccd_is_windows() { case "${OSTYPE:-}" in msys*|cygwin*) return 0 ;; esac; return 1; }
+case "${OSTYPE:-}" in msys*|cygwin*) export MSYS="${MSYS:+$MSYS }winsymlinks:nativestrict" ;; esac
+# MSYS2 coreutils' `mkdir -m` makes the directory and then fails its mode change on the noacl mount, so every FIRST
+# creation answered failure (measured: `ccrc backup`, `~/.ccrc/locks`). A mode is not kept there anyway, so on MSYS
+# `mkdir` drops `-m <mode>` (and `-m<mode>`, `-pm <mode>`) and runs the real one. Twin: the same block in ccd and ccrc.
+# Defined ON MSYS ONLY, so everywhere else `mkdir` stays the real command, and at column 0 inside the case: the
+# manifest census (ccd-contexts.test.ts) reads only that shape.
+case "${OSTYPE:-}" in msys*|cygwin*)
+mkdir() {
+  local a=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --) a+=("$@"); break ;;
+      -m) shift ;;
+      -pm) a+=(-p); shift ;;
+      -m*) ;;
+      *) a+=("$1") ;;
+    esac
+    shift
+  done
+  command mkdir "${a[@]}"
+}
+;; esac
 
 # >>> D-8270 tmux socket lookup (copied byte for byte into each script that cannot source ccd: tmux-socket-census.test.ts)
 # THE ONE tmux SOCKET LOOKUP (D-8270, ruling Q8). One shared tmux server, and every tmux call starts with the argv
@@ -144,6 +171,12 @@ _tmx_sock() {   # [home, default $HOME] -> TMX_SOCK (empty: the default server);
 _tmx_argv() {   # [home] -> _TMX_ARGV, the argv every fleet tmux call starts with; run once below, again only when asked
   if _tmx_sock "$@"; then _TMX_ARGV=(tmux ${TMX_SOCK:+-L "$TMX_SOCK"})
   else _TMX_ARGV=(sh -c 'printf "%s\n" "$0" >&2; exit 1' "ccrc: tmux was not asked: $TMX_WHY"); fi
+  # Windows: Claude Code runs hooks and its statusline under Git Bash, whose runtime hands MSYS2's tmux neither $TMUX
+  # nor $TMUX_TMPDIR (measured: an empty `printenv TMUX` in the child, so the hook asked the default socket and wrote
+  # nothing). The socket $TMUX names is passed explicitly instead, which is what tmux itself does with $TMUX elsewhere.
+  case "${OSTYPE:-}" in msys*|cygwin*)
+    [[ -z "${TMX_SOCK:-}" && "${_TMX_ARGV[0]}" == tmux && -n "${TMUX:-}" ]] && _TMX_ARGV=(tmux -S "${TMUX%%,*}") ;;
+  esac
 }
 _tmx_argv
 _tmx() { "${_TMX_ARGV[@]}" "$@"; }   # tmux args… -> that call, on the fleet's server (a statement; see above for a capture)
@@ -555,13 +588,76 @@ _plat_sha256_check() {  # <sums-file> -> 0 iff every listed digest matches
   if [ "$CCD_OS" = darwin ]; then shasum -a 256 -c "$@"; else sha256sum -c "$@"; fi
 }
 
+# THE PANE'S SYMBOL SET, on a box whose terminal Claude Code does not recognise.
+# Claude Code picks its TUI symbols with `is-unicode-supported`, which on win32
+# answers yes ONLY for a terminal it knows by environment (WT_SESSION,
+# TERM=xterm-256color, …) and never for a tmux pane — so on an MSYS2/Cygwin box
+# every pane drew the ASCII fallbacks: `>` for the prompt and menu cursor `❯`,
+# `√` for `✔`. Every pane reader in this tree keys on `❯`, and
+# `shared/pane-glyph.ts` pins `>` as NOT the glyph, so the reader is right and
+# the pane is what must change. Measured on a private tmux socket, same build:
+# `> 2. Dark mode √` without this, `❯ 2. Dark mode ✔` with it.
+#
+# TERMINUS_SUBLIME because it is the one variable of that list Claude Code reads
+# NOWHERE else (two hits in the binary, both that check). WT_SESSION would also
+# switch hyperlinks, the alt-screen repaint and terminal detection.
+#
+# `$OSTYPE`, not `$CCD_OS`: MSYS2 lands on CCD_OS=linux. Off Windows this prints
+# nothing and the spawn line is byte-identical.
+_pane_unicode_env() {
+  case "${OSTYPE:-}" in msys*|cygwin*) printf 'TERMINUS_SUBLIME=1' ;; esac
+}
+
+# THE SHELL CLAUDE CODE RUNS HOOKS, THE STATUSLINE AND ITS BASH TOOL IN, on Windows. Left to itself it finds Git Bash,
+# a second MSYS runtime: there `jq` resolved to a native Windows build, MSYS2's tmux was handed neither $TMUX nor
+# $TMUX_TMPDIR, and arguments that look like paths were rewritten on the way into every MSYS2 tool, so the session hook
+# ran, exited 0 and wrote nothing (measured: no `*.hookstate.json` on a box whose sessions ran for days). Pointed at
+# MSYS2's own bash (Claude Code takes any bash at CLAUDE_CODE_GIT_BASH_PATH; measured: the hook then saw /usr/bin/jq),
+# the hook runs in the runtime tmux, flock, jq and ccd run in, as on Linux.
+_pane_shell_env() {
+  case "${OSTYPE:-}" in msys*|cygwin*) ;; *) return 0 ;; esac
+  local b; b=$(cygpath -m /usr/bin/bash.exe 2>/dev/null) || return 0
+  [[ "$b" == *"'"* ]] || printf "CLAUDE_CODE_GIT_BASH_PATH='%s'" "$b"
+}
+
 # `/proc/sys/kernel/random/uuid` -> `uuidgen`. LOWERCASED: the kernel emits
 # lowercase hex and this value is a session's identity — it lands in the
 # registry, in `--session-id`, and in the transcript filename the swap finds
 # a conversation BY. `uuidgen` emits uppercase, and two spellings of one uuid
 # is the swap looking for a file that is on disk under the other case.
+# ONE UUID OR A NON-ZERO — never an empty string, and never anything that is
+# not a uuid, at rc 0. The value becomes a registry row (`$REG/<id>.uuid`, the key
+# `_sync_uuid` follows a session by) or a node's identity, so a wrong one is worse
+# than a refusal. The Linux and Darwin arms are the original commands, tried
+# FIRST and unchanged; what follows them is for a userland where they answer
+# nothing — measured under MSYS2 on Windows: no /proc/sys, no uuidgen, and a
+# `python3` that is the Microsoft Store alias.
 _plat_uuid() {
-  if [ "$CCD_OS" = darwin ]; then uuidgen | tr 'A-F' 'a-f'; else cat /proc/sys/kernel/random/uuid; fi
+  local u
+  u=$(if [ "$CCD_OS" = darwin ]; then uuidgen | tr 'A-F' 'a-f'; else cat /proc/sys/kernel/random/uuid; fi 2>/dev/null)
+  [ -n "$u" ] || u=$(uuidgen 2>/dev/null | tr 'A-F' 'a-f')
+  [ -n "$u" ] || u=$(_uuid_from_urandom)
+  # LAST LINE ONLY, AND VALIDATED BELOW. On Windows `python3` can be the
+  # Microsoft Store app-execution alias, which installs Python on first run and
+  # prints `Downloading: ...` / `Extracting: ...` to STDOUT before the uuid.
+  [ -n "$u" ] || u=$(python3 -c 'import uuid; print(uuid.uuid4())' 2>/dev/null | tail -1)
+  if [[ ! "$u" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+    echo "${0##*/}: cannot mint a uuid on this box — none of /proc/sys/kernel/random/uuid, uuidgen, /dev/urandom (od), python3 produced one" >&2
+    return 1
+  fi
+  printf '%s\n' "$u"
+}
+
+# RFC 4122 v4 from 16 random bytes: `od` and `/dev/urandom` are present on every
+# userland ccd runs on, MSYS2 included — which has neither /proc/sys nor, as
+# installed on the Windows box this was measured on, `uuidgen`. Version nibble
+# 4; variant bits 10xx, i.e. the first hex digit of the fourth group is 8-b.
+_uuid_from_urandom() {
+  local h
+  h=$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n') || return 1
+  [ "${#h}" = 32 ] || return 1
+  printf '%s-%s-4%s-%x%s-%s\n' "${h:0:8}" "${h:8:4}" "${h:13:3}" \
+    $(( (0x${h:16:1} & 3) | 8 )) "${h:17:3}" "${h:20:12}"
 }
 
 # `/proc/<pid>/status`'s PPid line -> `ps -o ppid=`. ALWAYS rc 0 and silent on
@@ -573,6 +669,74 @@ _plat_ppid() {   # <pid> -> its parent pid, or nothing
     { sed -n 's/^PPid:[[:space:]]*//p' "/proc/${1-}/status" | head -1; } 2>/dev/null
   fi
   return 0
+}
+
+# A PID ON THE WINDOWS PORT may be a WINDOWS one. There (MSYS2) Claude Code, node and git are native Win32 programs: the
+# pid Claude Code writes in `sessions/<pid>.json` is a Windows pid, which MSYS `kill -0` does not know (measured: "No
+# such process" for a live claude.exe). There it is live when an MSYS process's /proc/<n>/winpid names it (builtins),
+# else when Windows lists it (`tasklist`, by its path in the system directory, about 0.3 s). Elsewhere `kill -0`.
+_plat_alive() {   # <pid> -> rc 0 iff a process runs at <pid> (a Windows pid on the Windows port)
+  case "${OSTYPE:-}" in msys*|cygwin*) ;; *) kill -0 "${1-}" 2>/dev/null; return ;; esac
+  local f w sys
+  [[ "${1-}" =~ ^[1-9][0-9]*$ ]] || return 1
+  for f in /proc/[0-9]*/winpid; do
+    { IFS= read -r w < "$f"; } 2>/dev/null && [[ "$w" == "$1" ]] && return 0
+  done
+  sys=$(cygpath -S 2>/dev/null) || return 1
+  MSYS2_ARG_CONV_EXCL='*' "$sys/tasklist.exe" /FI "PID eq $1" /NH /FO CSV 2>/dev/null | grep -q "^\"[^\"]*\",\"$1\","
+}
+
+# THE SAME PROCESS IN WINDOWS' NUMBERING on the Windows port (/proc/<pid>/winpid; nothing for an MSYS pid that is
+# gone); elsewhere the pid itself. Always rc 0.
+_plat_winpid() {   # <pid> -> its Windows pid there, else <pid>
+  case "${OSTYPE:-}" in msys*|cygwin*) ;; *) printf '%s\n' "${1-}"; return 0 ;; esac
+  { sed -n 1p "/proc/${1-}/winpid"; } 2>/dev/null
+  return 0
+}
+
+# A PROCESS AND ITS ANCESTORS, nearest first, one pid per line, at most 64. Elsewhere `_plat_ppid`'s chain. On the
+# Windows port an MSYS process a native program started (bash under claude.exe or node) reads PPid 1 (measured), so the
+# MSYS chain stops short of the processes above that native parent: there every line is a WINDOWS pid
+# (`_plat_winpid`), and past the MSYS chain the walk goes on through Windows parents, read from ONE Win32_Process
+# listing (about 1 s), a parent only while it was created before its child (a dead parent's pid can name another
+# process by now). Always rc 0.
+_plat_lineage() {   # <pid> -> the pid, then each ancestor's
+  local p="${1-}" n=0 w="" pp sys
+  case "${OSTYPE:-}" in msys*|cygwin*) ;; *)
+    while [[ "$p" =~ ^[1-9][0-9]*$ ]] && (( n++ < 64 )); do printf '%s\n' "$p"; p=$(_plat_ppid "$p"); done
+    return 0 ;;
+  esac
+  while [[ "$p" =~ ^[1-9][0-9]*$ ]] && (( n++ < 64 )); do
+    w=$(_plat_winpid "$p"); [[ "$w" =~ ^[1-9][0-9]*$ ]] || return 0
+    printf '%s\n' "$w"
+    pp=$(_plat_ppid "$p"); [[ "$pp" =~ ^[0-9]+$ ]] && (( pp > 1 )) || break
+    p="$pp"
+  done
+  [[ "$w" =~ ^[1-9][0-9]*$ ]] && sys=$(cygpath -S 2>/dev/null) || return 0
+  MSYS2_ARG_CONV_EXCL='*' _plat_timeout 20 "$sys/WindowsPowerShell/v1.0/powershell.exe" -NoProfile -NonInteractive -Command \
+    'Get-CimInstance Win32_Process | ForEach-Object { "{0} {1} {2}" -f $_.ProcessId, $_.ParentProcessId, $(if ($_.CreationDate) { $_.CreationDate.ToFileTimeUtc() } else { 0 }) }' \
+    2>/dev/null </dev/null | awk -v w="$w" -v n="$n" '{ sub(/\r$/, ""); pp[$1] = $2; ct[$1] = $3 }
+      END { while (n++ < 64) { p = pp[w]; if (p == "" || p == 0 || !(p in ct) || ct[p] + 0 > ct[w] + 0) exit; print p; w = p } }'
+  return 0
+}
+
+# A PROCESS'S START, SPELLED AS CLAUDE CODE SPELLS ITS `procStart` (sessions/<pid>.json), so a recycled pid reads as
+# another process. Elsewhere `ps -o lstart=` under `LC_ALL=C TZ=UTC`, trimmed. On the Windows port the pid is a WINDOWS
+# one and Claude Code records its creation time as a FILETIME (100 ns ticks since 1601, UTC; measured equal to
+# `Process.StartTime.ToFileTimeUtc()`, which Win32_Process.CreationDate is not: it drops the last digit), read here by
+# one bounded PowerShell call (about 0.3 s). Nothing and rc 1 when it cannot tell: "cannot tell" is not "dead".
+_plat_pstart() {   # <pid> -> its start as `procStart` records it
+  local s sys
+  case "${OSTYPE:-}" in msys*|cygwin*) ;; *)
+    s=$(LC_ALL=C TZ=UTC ps -o lstart= -p "${1-}" 2>/dev/null) || return 1
+    s="${s%"${s##*[![:space:]]}"}"; printf '%s\n' "${s#"${s%%[![:space:]]*}"}"; return 0 ;;
+  esac
+  [[ "${1-}" =~ ^[1-9][0-9]*$ ]] && sys=$(cygpath -S 2>/dev/null) || return 1
+  s=$(MSYS2_ARG_CONV_EXCL='*' _plat_timeout 10 "$sys/WindowsPowerShell/v1.0/powershell.exe" -NoProfile -NonInteractive \
+    -Command "try { [Diagnostics.Process]::GetProcessById($1).StartTime.ToFileTimeUtc() } catch {}" 2>/dev/null </dev/null)
+  s="${s//$'\r'/}"; s="${s//$'\n'/}"
+  [[ "$s" =~ ^[1-9][0-9]*$ ]] || return 1
+  printf '%s\n' "$s"
 }
 
 # `/proc/$$/cgroup` -> NOTHING, on purpose. macOS has no cgroups, so the
@@ -1840,6 +2004,10 @@ PROG=ccrc
 #     way. The `*/*` guard covers `bash ccrc` from inside ccd/, where
 #     BASH_SOURCE carries no directory at all and `%/*` would strip nothing.
 CCRC_HERE="${BASH_SOURCE[0]}"
+# Windows: `bash C:\…\ccd\ccrc` (or a source by that spelling) carries `\` separators, which the `*/*` guard reads as
+# no directory at all, so every helper beside ccrc was looked for in the caller's directory. MSYS reads either
+# separator, so `/` is the same path; off Windows a backslash is a file-name character and stays one.
+_ccd_is_windows && CCRC_HERE="${CCRC_HERE//\\//}"
 [[ "$CCRC_HERE" == */* ]] || CCRC_HERE="./$CCRC_HERE"
 CCRC_HERE="$(cd "${CCRC_HERE%/*}" && pwd)"
 
@@ -3037,7 +3205,10 @@ _upd_redact() {
     s="${out}${s}"
   fi
   s+="$cut"
-  printf '%s' "$s"
+  # UPD_REDACTED too, and UPD_REDACT_QUIET=1 on the call prints nothing: `_set_text_to` reads the variable and starts no
+  # subshell, which cost ~100-300 ms a call under MSYS2 (the Windows port).
+  UPD_REDACTED="$s"
+  [ -n "${UPD_REDACT_QUIET:-}" ] || printf '%s' "$s"
 }
 # `_upd_url_origin <url>` — a URL's scheme and host, nothing else (D-6914, D-7873): the RAW value is screened first by
 # the rules below, then `_upd_redact` runs (so an ordinary userinfo goes by ITS rules, none restated here), then the `<scheme>://` if
@@ -3150,6 +3321,99 @@ _tmp_guard() { _exit_add "rm -f -- $(printf '%q' "$1")"; }
 # unknown-top-level-flag paths below cannot drift onto two different
 # messages for what is, to an operator, the same mistake.
 _ccrc_usage_die() { echo "$PROG: unknown argument: $1" >&2; usage >&2; exit 2; }
+
+# ── OWNER-ONLY FILES, ON A BOX THAT MAY HAVE NO FILE MODES ─────────────────
+# Two files carry a secret this box must not share: `exposure.env`
+# (CCRC_DDNS_TOKEN) and `ccrc-agent.env` (CCRC_AGENT_TOKEN). On every POSIX box
+# `chmod 600` is the whole mechanism and these three functions are one line
+# each. On Windows it is not a weaker mechanism — it is NO MECHANISM AT ALL,
+# and it fails silently, which is the part worth the paragraph.
+#
+# Measured under MSYS2: `chmod 600 f` succeeds, and `stat -c%a f` then answers
+# 644. The ACL the file actually carries is
+#
+#     BUILTIN\Users:(I)(RX)      NT AUTHORITY\Authenticated Users:(I)(M)
+#
+# so every account on the box can read the token, while `stat` reports a number
+# that suggests otherwise. A check written against `stat` alone therefore
+# reports a locked file on a box where nothing is locked.
+#
+# `icacls /inheritance:r /grant:r <user>:(R,W,D)` is the Windows spelling of
+# 0600: inheritance dropped, one explicit grant, nobody else named. `D` is not
+# decoration — with `(R,W)` alone the OWNER CANNOT DELETE ITS OWN FILE
+# (measured: `rm` answers "Permission denied"), while POSIX leaves deletion to
+# the DIRECTORY's mode. Granting D restores the semantics every caller here was
+# written against.
+# `$OSTYPE`, NOT `uname`. OSTYPE is compiled into bash itself (`msys` under
+# MSYS2, `cygwin` under Cygwin, `linux-gnu` on the fleet), so it answers on a
+# box whose PATH holds nothing — which is not a hypothetical here: doctor's own
+# test fixture builds a PATH out of planted tools only, `uname` is not one of
+# them, and a `uname`-based probe there returned "not Windows" SILENTLY and sent
+# every locked file down the POSIX branch. The `uname` fallback stays for a
+# shell that somehow has no OSTYPE.
+_ccrc_is_windows() {
+  case "${OSTYPE:-$(uname -s 2>/dev/null)}" in
+    msys*|cygwin*|MSYS*|MINGW*|CYGWIN*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# The user manager answering is the Windows port's stand-in (win/bin/systemctl), which has no slices: Windows has no
+# cgroups. Asked of the manager, never read off the OS alone, so a systemd answering on a Windows host is still one.
+# ccd/ccrc-test asks the same line itself (another process, which sources nothing of this file).
+# THE OS WORD A PERSON READS (doctor's SKIP sentences, the install's caps line): `windows` on the port, where CCD_OS
+# reads linux so that every Linux arm still runs there. The caps file's `os` line writes it too: the server reads
+# linux|darwin|windows there (`server/src/update/inventory.ts`'s OS_LINE).
+CCRC_OS_WORD="${CCD_OS:-linux}"
+_ccrc_is_windows && CCRC_OS_WORD=windows
+
+_ccrc_sliceless_manager() {
+  _ccrc_is_windows || return 1
+  systemctl --version 2>/dev/null | grep -q '^ccrc-supervisor'
+}
+
+# `MSYS2_ARG_CONV_EXCL='*'` on every icacls call: the MSYS runtime rewrites any
+# argument that looks like a POSIX path into a Windows one before a native
+# program sees it, and `/inheritance:r` looks exactly like one. Without this it
+# arrives as `C:/inheritance:r` and icacls refuses an option it was never given.
+_ccrc_lock_file() {   # path -> readable by its owner and nobody else, or non-zero
+  local f="$1" w user
+  chmod 600 "$f" 2>/dev/null || return 1
+  _ccrc_is_windows || return 0
+  command -v icacls >/dev/null 2>&1 || return 1
+  command -v cygpath >/dev/null 2>&1 || return 1
+  w="$(cygpath -w "$f")" || return 1
+  user="$(whoami)" || return 1
+  MSYS2_ARG_CONV_EXCL='*' icacls "$w" /inheritance:r /grant:r "$user:(R,W,D)" >/dev/null 2>&1
+}
+
+# The MEASUREMENT half, and it must not be a paraphrase of the writer: prints
+# what is wrong with the file's access, or nothing at all when it is owner-only.
+# Counting `:(` occurrences rather than parsing principal names is deliberate —
+# those names contain spaces (`NT AUTHORITY\Authenticated Users`) and are
+# LOCALISED on a non-English box, while the count of grants is neither.
+_ccrc_lock_gap() {   # path -> a gap description on stdout, or nothing
+  local f="$1" mode out me total mine
+  if ! _ccrc_is_windows; then
+    # `_plat_mode`, not `stat -c%a`: GNU's spelling, which BSD `stat` on a
+    # Darwin box does not take — the same reason doctor's own check moved to it.
+    command -v stat >/dev/null 2>&1 || return 0
+    mode="$(_plat_mode -- "$f" 2>/dev/null)" || mode=""
+    [ "$mode" = 600 ] && return 0
+    printf 'its mode is %s, not 0600' "${mode:-unreadable}"
+    return 0
+  fi
+  command -v icacls >/dev/null 2>&1 && command -v cygpath >/dev/null 2>&1 || {
+    printf 'its access cannot be measured on this box (no icacls)'; return 0; }
+  out="$(MSYS2_ARG_CONV_EXCL='*' icacls "$(cygpath -w "$f")" 2>/dev/null)" || {
+    printf 'its access cannot be read'; return 0; }
+  me="$(whoami)"
+  total=$(printf '%s\n' "$out" | grep -o ':(' | grep -c .)
+  mine=$(printf '%s\n' "$out" | grep -oi "$me:(" | grep -c .)
+  { [ "$total" = "$mine" ] && [ "$total" != 0 ]; } && return 0
+  printf 'its ACL grants %s principal(s), %s of them this box'"'"'s user — it is not owner-only' \
+    "$total" "$mine"
+}
 
 # The models verbs' refusal envelope: exactly one JSON object on stdout, the
 # human sentence on stderr, on EVERY path. An exit code with an empty body is
@@ -6597,7 +6861,7 @@ _exp_env_write() {   # <arm> <origin> <rpid> <host> <token> <bind>
         printf '%s\n' "CCRC_DDNS_TOKEN=$token"
       fi
     } > "$tmp"
-  ) || ! chmod 600 "$tmp" || ! mv -f "$tmp" "$dest"; then
+  ) || ! _ccrc_lock_file "$tmp" || ! mv -f "$tmp" "$dest"; then
     rm -f "$tmp"
     _ccrc_die "writing $dest failed — nothing was installed"
   fi
@@ -7366,7 +7630,7 @@ _acct_write_secret() {   # <id> <provider> <envvar> — the 0600 file, then forg
   if ! (
     umask 077
     printf 'export %s=%q\n' "$var" "$ACCT_CREDENTIAL" > "$tmp"
-  ) || ! chmod 600 "$tmp" || ! mv -f "$tmp" "$dest"; then
+  ) || ! _ccrc_lock_file "$tmp" || ! mv -f "$tmp" "$dest"; then
     rm -f "$tmp"
     ACCT_CREDENTIAL=""
     _acct_refuse 1 secret-write "writing $dest failed — nothing was installed. Check that $ACCT_SECRETS_DIR exists and is writable by the user this box runs as; a retry overwrites the DESTINATION file, and this path has already removed its own temp. A temp left by a run that was KILLED between the create and the mv (.$id-$tag.env.tmp.<pid> in that same directory, 0600 and holding a live credential) is removed by the next 'ccrc account add', 'credential' or 'remove' on this lane, under its lock (D-5755 (4))."
@@ -11389,7 +11653,7 @@ _acct_install_sign_in() {   # <id> <scratch dir> <what-still-stands>
   # A copy beside the destination, then a rename over it: the old credential stands until the rename.
   tmp="$ACCT_CFG_DIR/.credentials.json.tmp.$$"
   _acct_own_temp "$tmp"
-  if ! ( umask 077; cp -- "$cred" "$tmp" ) || ! chmod 600 "$tmp" || ! mv -f -- "$tmp" "$dest"; then
+  if ! ( umask 077; cp -- "$cred" "$tmp" ) || ! _ccrc_lock_file "$tmp" || ! mv -f -- "$tmp" "$dest"; then
     rm -f -- "${tmp:?}"
     _acct_refuse 1 credential-write "could not move the new sign-in into $dest. $stands"
   fi
@@ -16432,6 +16696,7 @@ CCRC_INST_SPINE=(
   _inst_node_id
   _inst_tree
   _inst_bins
+  _inst_win_manager
   _inst_files
   _inst_stamp
   _inst_caps
@@ -16926,7 +17191,7 @@ _inst_agent_env() {
       printf '%s\n' "CCRC_AGENT_TOKEN=$token"
       printf '%s\n' "CCRC_SERVER_URL=$url"
     } > "$tmp"
-  ) || ! chmod 600 "$tmp" || ! mv -f "$tmp" "$dest"; then
+  ) || ! _ccrc_lock_file "$tmp" || ! mv -f "$tmp" "$dest"; then
     rm -f "$tmp"
     _ccrc_die "writing $dest failed"
   fi
@@ -17576,9 +17841,11 @@ _inst_tree() {   # place the shipped tree at ~/ccrc-versions/<name>/ and point
       # each of them and never at the destination's top level: a version
       # directory's two kept files (`$VER_STAMP_COPY`, `$VER_RECORD_COPY`)
       # are not the rsync's to remove.
+      # The Windows port's tree only when the source has one: a Linux tree without it places exactly what it did.
+      local -a INST_WIN_SRC=(); [ -d "$src/win" ] && INST_WIN_SRC=("$src/win")
       rsync -a --delete --checksum \
         --exclude node_modules --exclude .git --exclude '*.env' --exclude ccrc-mail.token \
-        "$src/server" "$src/agent" "$src/shared" "$src/deploy" "$src/ccd" "$dest/" \
+        "$src/server" "$src/agent" "$src/shared" "$src/deploy" "$src/ccd" ${INST_WIN_SRC[@]+"${INST_WIN_SRC[@]}"} "$dest/" \
         || _ccrc_die "placing the tree at $dest failed"
       INST_TREE_PLACED="$name"
       if [ "$name" = "$VER_CURRENT" ]; then
@@ -17921,6 +18188,23 @@ _inst_doctor_tail() {
 # A missing `cmp` makes every destination look different, so the file is
 # rewritten with identical bytes: the safe direction, and the reason the
 # comparison is not guarded by a `command -v`.
+_inst_win_manager() {   # the Windows port only: its systemd stand-in, which no other step places
+  _ccrc_is_windows || return 0
+  local tree="$BOX_TREE_DIR" bin="$HOME/.local/bin"
+  # The Windows port's systemd stand-in: the manager and its launchers in ~/.local/lib/ccrc, where
+  # ccrc-supervisor.cmd, loginctl's logon task and the Startup shortcut look, and its four shims in ~/.local/bin.
+  # They were placed by hand before this, and a manager left on an old copy starts sessions with an argv the D-3696
+  # launcher cannot run. A new manager copy takes effect when the manager restarts: nothing restarts the manager.
+  local wlib="$HOME/.local/lib/ccrc" wf
+  mkdir -p "$wlib" || _ccrc_die "cannot create $wlib"
+  for wf in ccrc-supervisor.mjs ccrc-supervisor.cmd ccrc-supervisor-hidden.vbs ccd-window.cmd make-app-shortcut.mjs; do
+    _inst_atomic "$tree/win/$wf" "$wlib/$wf" 644
+  done
+  for wf in systemctl systemd-run journalctl loginctl; do _inst_atomic "$tree/win/bin/$wf" "$bin/$wf" 755; done
+  for wf in ccd.cmd ccrc.cmd ccrc-shell.cmd; do _inst_atomic "$tree/win/$wf" "$bin/$wf" 644; done
+  echo "install: bins: the Windows supervisor and its launchers in \$HOME/.local/lib/ccrc (a new copy runs from the manager's next start), and its systemctl, systemd-run, journalctl and loginctl shims"
+}
+
 _inst_atomic() {   # <src> <dest> <mode>
   local src="$1" dest="$2" mode="$3" tmp
   [ -f "$src" ] \
@@ -18821,7 +19105,7 @@ _inst_caps() {   # what THIS install's ccrc can do (design 2026-09-20 §9, decis
   local -a cw=()
   while IFS= read -r w; do cw+=("$w"); done < <(_ccrc_cap_words)
   mkdir -p "${BOX_CAPS_FILE%/*}" || _ccrc_die "cannot create ${BOX_CAPS_FILE%/*}"
-  { printf 'os %s\n' "$CCD_OS"; printf '%s\n' "${cw[@]}"; } > "$tmp" \
+  { printf 'os %s\n' "$CCRC_OS_WORD"; printf '%s\n' "${cw[@]}"; } > "$tmp" \
     && chmod 644 "$tmp" && mv -f -- "$tmp" "$BOX_CAPS_FILE" \
     || { rm -f -- "$tmp"; _ccrc_die "writing $BOX_CAPS_FILE failed"; }
   # REDACTED AT THE SOURCE (W6 Task 8A, review 167's F6): this line reaches an
@@ -18836,7 +19120,7 @@ _inst_caps() {   # what THIS install's ccrc can do (design 2026-09-20 §9, decis
   # `install: next:` / `install: PWA:` / `install: gate:` lines that name
   # `$BOX_ENV_FILE`, and `_inst_node_id`'s `install: node-id:` line, which names
   # `$BOX_NODE_ID_FILE`.
-  echo "install: caps: ${cw[*]} (os $CCD_OS; $(_upd_redact "$BOX_CAPS_FILE") — what this install's ccrc can do, read by the server)"
+  echo "install: caps: ${cw[*]} (os $CCRC_OS_WORD; $(_upd_redact "$BOX_CAPS_FILE") — what this install's ccrc can do, read by the server)"
 }
 
 # ── _inst_units — the unit files, and the one this box's ROLE decides ─────
@@ -19075,7 +19359,10 @@ _inst_units() {
   local tree="$BOX_TREE_DIR" dir="$BOX_UNIT_DIR" role_unit=ccrc.service
   [ "$INST_ROLE" = fleet ] && role_unit=ccrc-agent.service
   local slice="$dir/app-claude\x2dsession.slice.d"
-  mkdir -p "$dir" "$dir/claude-session@.service.d" "$slice" \
+  # NONE ON WINDOWS. A Windows file name cannot hold a backslash, so under MSYS2 this path became the two directories
+  # `app-claude/x2dsession.slice.d/`, which nothing reads; and the port's stand-in manager has no slices to cap.
+  _ccrc_is_windows && slice=""
+  mkdir -p "$dir" "$dir/claude-session@.service.d" ${slice:+"$slice"} \
     || _ccrc_die "cannot create $dir and its drop-in directories"
   # 644 and never 755: these are read by systemd, not executed. And they land by
   # rename for a sharper version of `_inst_atomic`'s own reason — `daemon-reload`
@@ -19221,7 +19508,7 @@ _inst_units() {
   _inst_atomic "$tree/deploy/systemd/claude-session@.service.d/limits.conf" \
     "$dir/claude-session@.service.d/limits.conf" 644
   # The slice drop-in is RENDERED, not copied: its two limits are the box's own (`_inst_slice_limits`, D-7296).
-  _inst_slice_limits "$tree/deploy/systemd/app-claude-session.slice.d/limits.conf" "$slice/limits.conf"
+  [ -z "$slice" ] || _inst_slice_limits "$tree/deploy/systemd/app-claude-session.slice.d/limits.conf" "$slice/limits.conf"
   # D-5241 (spec 2026-10-16 §5.10): the victim policy's two OOMPolicy=continue
   # drop-ins, Linux only (the Darwin arm returned above) and on every role, as
   # the two limits.conf files are: a drop-in for a scope a box never creates
@@ -20153,15 +20440,42 @@ _inst_dirs() {
 # remove, so `command -v` is actively wrong here.
 _inst_graphify_engine() {
   [ "$INST_ROLE" = server ] && return 0
+  # The Windows port: graphifyy needs ~30 native extensions (numpy, rapidfuzz, the tree-sitter grammars) and PyPI has
+  # no wheel for MSYS2's python, so pip would build them from source and fail without a C toolchain (measured: numpy's
+  # meson asked for cmake). A native CPython (python.org, through the `py` launcher) has a win_amd64 wheel for every
+  # one of them (measured: 3.11 and 3.14, graphifyy 0.9.9), so on Windows the venv is that interpreter's and pip takes
+  # wheels only. Its venv keeps its programs in Scripts/; bin/ links them under the names every reader of it uses.
   local venv="$HOME/.ccrc/graphify-venv"
-  if [ ! -x "$venv/bin/python" ]; then
+  local -a only=()
+  if _ccrc_is_windows; then
+    only=(--only-binary=:all:)
+    if [ -e "$venv" ] && [ ! -e "$venv/Scripts/python.exe" ]; then
+      echo "install: graphify: $venv is not a native Python venv (no Scripts/python.exe) - left in place; remove it and re-run" >&2
+      INST_DEGRADED+=(graphify); return 0
+    fi
+    if [ ! -e "$venv/Scripts/python.exe" ] && ! py -3 -m venv "$venv"; then
+      echo "install: graphify: skipped - no native Python answers 'py -3' (install one from python.org and re-run)" >&2
+      INST_DEGRADED+=(graphify); return 0
+    fi
+    mkdir -p "$venv/bin" && ln -sfn ../Scripts/python.exe "$venv/bin/python" \
+      || _ccrc_die "cannot link $venv/bin/python to the venv's Scripts/python.exe"
+  elif [ ! -x "$venv/bin/python" ]; then
     python3 -m venv "$venv" \
       || _ccrc_die "python3 -m venv failed for $venv — install python3-venv (apt: python3.12-venv) and re-run; nothing else was changed"
   fi
-  "$venv/bin/python" -m pip install --quiet "graphifyy==$GRAPHIFY_PIN" \
+  # pip writes its own sys.executable into graphify.exe's launcher: through the bin/ link that is `bin\python`, no .exe,
+  # which Windows cannot start (measured: `graphify --version` exited 1 and printed nothing). So pip runs from Scripts/.
+  local pip_py="$venv/bin/python"
+  _ccrc_is_windows && pip_py="$venv/Scripts/python.exe"
+  "$pip_py" -m pip install --quiet ${only[@]+"${only[@]}"} "graphifyy==$GRAPHIFY_PIN" \
     || _ccrc_die "pip install graphifyy==$GRAPHIFY_PIN failed in $venv — network/index unreachable; nothing else was changed"
+  if _ccrc_is_windows; then
+    ln -sfn ../Scripts/graphify.exe "$venv/bin/graphify" \
+      || _ccrc_die "cannot link $venv/bin/graphify to the venv's Scripts/graphify.exe"
+  fi
   local got
-  got="$("$venv/bin/graphify" --version 2>/dev/null | awk '{print $2}')"
+  # awk drops a Windows CR itself: a `tr` here was a new install-path tool a Linux PATH may not carry.
+  got="$("$venv/bin/graphify" --version 2>/dev/null | awk '{sub(/\r$/, ""); print $2}')"
   [ "$got" = "$GRAPHIFY_PIN" ] \
     || _ccrc_die "graphify --version reports '${got:-nothing}' but the pin is $GRAPHIFY_PIN — the venv at $venv did not converge"
   printf '%s\n' "$GRAPHIFY_PIN" > "$HOME/.ccrc/graphify.pin"
@@ -20401,6 +20715,12 @@ _inst_skills() {
 # skill's source of truth is the installed package.
 _inst_graphify_skill() {
   [ "$INST_ROLE" = server ] && return 0
+  # Assembled from the engine's venv package: a box whose engine step degraded (Windows with no native Python) has none.
+  if [ ! -e "$HOME/.ccrc/graphify-venv/bin/python" ]; then
+    echo "install: graphify: skill skipped - the graph engine step above left no venv to assemble it from"
+    INST_DEGRADED+=(graphify-skill)
+    return 0
+  fi
   _inst_atomic "$BOX_TREE_DIR/ccd/install-graphify-skill.sh" "$HOME/.cc-sessions/install-graphify-skill.sh" 755
   bash "$HOME/.cc-sessions/install-graphify-skill.sh" \
     || _ccrc_die "install-graphify-skill.sh refused — read its lines above"
@@ -20790,9 +21110,15 @@ _inst_wrappers() {
 # than closed, because closing it would mean refusing every legacy parent —
 # the very first update those boxes need — or reading the parent's own tree.
 _inst_legacy_verified_parent() {
-  command -v ps >/dev/null 2>&1 || return 1
   local args=""
-  args="$(ps -o args= -p "$PPID" 2>/dev/null)" || return 1
+  if _ccrc_is_windows; then
+    # MSYS2's ps has no -o: the parent's argv from /proc, NUL-separated, joined by spaces as `ps -o args=` prints it.
+    args="$(tr '\0' ' ' < "/proc/$PPID/cmdline" 2>/dev/null)" || return 1
+    args="${args% }"
+  else
+    command -v ps >/dev/null 2>&1 || return 1
+    args="$(ps -o args= -p "$PPID" 2>/dev/null)" || return 1
+  fi
   [ -n "$args" ] || return 1
   [[ "$args" =~ ^(([^[:space:]]*/)?(bash|sh)[[:space:]]+)?[^[:space:]]*ccrc[[:space:]]+update([[:space:]]|$) ]]
 }
@@ -27346,21 +27672,26 @@ BOX_SETTINGS_TEXT_MAX=480   # the cut of `_set_text` and the most an `ok` value 
 # ASCII, then each byte outside 0x20-0x7E a `?` under LC_ALL=C, then a cut at <max> minus 3 bytes and `...` (D-6919: the spec's validator takes
 # printable ASCII). A subshell, so its LC_ALL never leaks. `_upd_json_str` is the 200-byte cousin of this and is held byte for byte by
 # a pin (ccrc-sweep-deliberate-stop's X0c), so it is not widened here. `_set_json <text> [<max>]` is that text, cut at <max>, as a JSON string (`""` when empty): the one call that redacts and escapes.
-_set_text() (
-  max="${2:-$BOX_SETTINGS_TEXT_MAX}"
-  s="$(_upd_redact "${1:-}")"
+# THE WINDOWS PORT: each of these ran as a subshell or inside `$(...)`, three processes per JSON field, and a process
+# start costs ~100-300 ms under MSYS2 (measured): `ccrc settings --write` took 113-148 s and passed its unit's
+# TimeoutStartSec=120. The `_to` forms set a variable and start nothing; the old names print it, byte for byte as before.
+_set_text_to() {   # <text> [max] -> SET_TEXT
+  local max="${2:-$BOX_SETTINGS_TEXT_MAX}" s
+  UPD_REDACT_QUIET=1 _upd_redact "${1:-}"; s="$UPD_REDACTED"
   s="${s//—/-}"; s="${s//…/...}"; s="${s//→/->}"
-  LC_ALL=C
+  local LC_ALL=C
   s="${s//[! -~]/?}"
   [ "${#s}" -le "$max" ] || s="${s:0:max-3}..."
-  printf '%s' "$s"
-)
-_set_json() {
-  local s bs='\' q='"'
-  s="$(_set_text "${1:-}" "${2:-$BOX_SETTINGS_TEXT_MAX}")"
-  s="${s//"$bs"/"$bs$bs"}"; s="${s//"$q"/"$bs$q"}"
-  printf '"%s"' "$s"
+  SET_TEXT="$s"
 }
+_set_text() { _set_text_to "$@"; printf '%s' "$SET_TEXT"; }
+_set_json_to() {   # <text> [max] -> SET_JSON
+  local s bs='\' q='"'
+  _set_text_to "${1:-}" "${2:-$BOX_SETTINGS_TEXT_MAX}"; s="$SET_TEXT"
+  s="${s//"$bs"/"$bs$bs"}"; s="${s//"$q"/"$bs$q"}"
+  SET_JSON="\"$s\""
+}
+_set_json() { _set_json_to "$@"; printf '%s' "$SET_JSON"; }
 # `_set_du <dir>` — (callers pass `<dir>/`: the slash makes `du` and `find` follow a command-line symlink, so a `~/ccrc-backups` that is
 # a link measures its target, A5) the apparent bytes under <dir>, from the platform block's `_plat_bytes` (GNU `du -sb` on Linux, find and awk on macOS,
 # where BSD `du` has no `-b`), under the box's 20 s deadline and at the lowest priority; rc 1 when it could not say. `_plat_timeout`
@@ -27519,15 +27850,16 @@ _set_fits() (
 # `is-set` row has none), then its source; `refused` its source and the check's words and never a value; `unmeasured` its sentence alone.
 # Each string goes through `_set_json` once and nothing is redacted before it: a why is cut at 240 bytes, a value (which `_set_fits` held to
 # 480) is not cut (D-7909, D-7913).
-_set_row_json() {
+_set_row_json_to() {   # <key> <state> <from> <value> <why> -> SET_ROW
   local r="{\"key\":\"$1\",\"state\":\"$2\""
   case "$2" in
-    ok) [ -z "$4" ] || r+=",\"value\":$(_set_json "$4")"; r+=",\"from\":\"$3\"" ;;
-    refused) r+=",\"from\":\"$3\",\"why\":$(_set_json "$5" 240)" ;;
-    *) r+=",\"why\":$(_set_json "$5" 240)" ;;
+    ok) [ -z "$4" ] || { _set_json_to "$4"; r+=",\"value\":$SET_JSON"; }; r+=",\"from\":\"$3\"" ;;
+    refused) _set_json_to "$5" 240; r+=",\"from\":\"$3\",\"why\":$SET_JSON" ;;
+    *) _set_json_to "$5" 240; r+=",\"why\":$SET_JSON" ;;
   esac
-  printf '%s}' "$r"
+  SET_ROW="$r}"
 }
+_set_row_json() { _set_row_json_to "$@"; printf '%s' "$SET_ROW"; }
 # `_set_got <KEY> <rc of _ccrc_knob>` — records one direct read in SRD_V, SRD_F and SRD_W (the caller declares the three): the value and its
 # source, or, when the reader could not decide or the value holds a unit separator (a byte no setting holds, and the one the line readers split
 # on), a sentence that names the key only.
@@ -27689,17 +28021,17 @@ cmd_settings() {
     fi
     # The human form says a source in spec 2.1's words; the JSON keeps the four tokens (A9). A literal `case`, no word declared here.
     case "$from" in "$f_env") fw=environment ;; "$f_file") fw=ccrc.env ;; "$f_empty") fw="ccrc.env (empty line)" ;; *) fw="$from" ;; esac
-    slot="$(_set_text "$val")"
+    _set_text_to "$val"; slot="$SET_TEXT"
     if [ "$cls" = is-set ]; then
       case "$from" in "$f_default") slot="unset" ;; "$f_empty") slot="set to empty" ;; *) slot="set" ;; esac
     fi
-    sj+="$sep$(_set_row_json "$k" "$st" "$from" "$val" "$why")"
+    _set_row_json_to "$k" "$st" "$from" "$val" "$why"; sj+="$sep$SET_ROW"
     if [ "$st" = "$s_ok" ]; then
-      tx+="$(printf '%-30s %s  (%s, %s)' "$k" "$slot" "$fw" "$st")"
+      printf -v o '%-30s %s  (%s, %s)' "$k" "$slot" "$fw" "$st"; tx+="$o"
     elif [ "$st" = "$s_refused" ]; then
-      tx+="$(printf '%-30s %s  (%s, %s)' "$k" "not shown" "$fw" "$st"): $(_set_text "$why")"
+      printf -v o '%-30s %s  (%s, %s)' "$k" "not shown" "$fw" "$st"; _set_text_to "$why"; tx+="$o: $SET_TEXT"
     else
-      tx+="$(printf '%-30s %s' "$k" "$st"): $(_set_text "$why")"
+      printf -v o '%-30s %s' "$k" "$st"; _set_text_to "$why"; tx+="$o: $SET_TEXT"
     fi
     [ "$ap" != update ] || tx+="; takes effect at the next ccrc update"
     tx+=$'\n'
@@ -27729,8 +28061,8 @@ cmd_settings() {
     bj="{\"state\":\"$s_ok\",\"kept\":$bk,\"withData\":$bd,\"bytes\":$bb}"
     tx+="backups: kept $bk, $bd with coordination data, $bb bytes"$'\n'
   else
-    bj="{\"state\":\"$s_unmeasured\",\"why\":$(_set_json "$bwhy")}"
-    tx+="backups: $s_unmeasured: $(_set_text "$bwhy")"$'\n'
+    _set_json_to "$bwhy"; bj="{\"state\":\"$s_unmeasured\",\"why\":$SET_JSON}"
+    _set_text_to "$bwhy"; tx+="backups: $s_unmeasured: $SET_TEXT"$'\n'
   fi
   # ── the disk holding $HOME
   local dj dfo dwhy="" avail size
@@ -27740,8 +28072,8 @@ cmd_settings() {
     dj="{\"state\":\"$s_ok\",\"availBytes\":$avail,\"sizeBytes\":$size}"
     tx+="disk: $avail bytes available of $size"$'\n'
   else
-    dj="{\"state\":\"$s_unmeasured\",\"why\":$(_set_json "$dwhy")}"
-    tx+="disk: $s_unmeasured: $(_set_text "$dwhy")"$'\n'
+    _set_json_to "$dwhy"; dj="{\"state\":\"$s_unmeasured\",\"why\":$SET_JSON}"
+    _set_text_to "$dwhy"; tx+="disk: $s_unmeasured: $SET_TEXT"$'\n'
   fi
   local doc="{\"v\":2,\"at\":$now,\"reader\":\"$reader\",\"settings\":[$sj],\"deadline\":{\"plainMs\":$dl_plain,\"minMs\":$dl_min,\"maxMs\":$dl_max},\"backups\":$bj,\"disk\":$dj}"
   if [ "$write" -eq 1 ]; then

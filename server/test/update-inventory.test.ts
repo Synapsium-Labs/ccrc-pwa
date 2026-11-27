@@ -228,6 +228,8 @@ describe('the validators (§8 "Validation", §18 "reads are bounded and validate
     expect(capsFrom(ok('os linux\nverify\nnode-id\nfloor\n'))).toEqual({ os: 'linux', caps: ['verify', 'node-id', 'floor'] });
     expect(capsFrom(ok('os darwin\r\nverify\r\n'))).toEqual({ os: 'darwin', caps: ['verify'] });
     expect(capsFrom(ok('os linux\n'))).toEqual({ os: 'linux', caps: [] });
+    // The Windows port writes `os windows`; read as any other OS, its caps kept.
+    expect(capsFrom(ok('os windows\nverify\n'))).toEqual({ os: 'windows', caps: ['verify'] });
     const refused = { os: 'unknown', caps: [] };
     expect(capsFrom(ABSENT)).toEqual(refused);
     expect(capsFrom(UNREADABLE)).toEqual(refused);
@@ -238,7 +240,7 @@ describe('the validators (§8 "Validation", §18 "reads are bounded and validate
     expect(capsFrom(ok('os linux\nver\rify\n'))).toEqual(refused);
     expect(capsFrom(ok('os linux\nver\u0000ify\n'))).toEqual(refused);
     expect(capsFrom(ok('os linux\n\nverify\n'))).toEqual(refused);
-    expect(capsFrom(ok('os windows\nverify\n'))).toEqual(refused);
+    expect(capsFrom(ok('os freebsd\nverify\n'))).toEqual(refused);
     const words = (n: number): string => Array.from({ length: n }, (_, i) => `w${i}`).join('\n');
     expect(capsFrom(ok(`os linux\n${words(32)}\n`)).caps).toHaveLength(32);
     expect(capsFrom(ok(`os linux\n${words(33)}\n`))).toEqual(refused);

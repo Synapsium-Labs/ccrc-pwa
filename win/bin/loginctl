@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# loginctl(1), for the one question `ccrc doctor` asks it:
+#
+#     loginctl show-user "$UID" --property=Linger   ->  Linger=yes | Linger=no
+#
+# On a systemd box linger means "/run/user/$UID survives logout, so the session
+# units keep running". The Windows equivalent is not a property of a login at
+# all — it is whether the supervisor is registered to come back on its own. So
+# this shim answers `yes` if and ONLY if `enable-linger` has registered the
+# scheduled task AND recorded that it succeeded.
+#
+# The marker is written AFTER registration returns 0, never before. An
+# `enable-linger` that answers `yes` on a box where nothing was registered is
+# worse than one that fails: doctor would print a green line over a fleet that
+# dies at the next logout, and the operator would have been told the opposite of
+# the truth.
+set -uo pipefail
+
+STATE_DIR="${CCRC_SUPERVISOR_STATE:-$HOME/.ccrc/supervisor}"
+LINGER_MARK="$STATE_DIR/linger"
+TASK_NAME="${CCRC_SUPERVISOR_TASK:-ccrc-supervisor}"
+
+# A .lnk in the profile's Startup folder, window minimised so a logon does not
+# leave a console on the desktop. PowerShell is the only scriptable way to write
+# a shortcut without a compiler; the folder path comes from the shell itself.
+_startup_shortcut() {   # <target .cmd, Windows path> -> 0 when the shortcut exists afterwards
+  # The shortcut runs wscript.exe on the .vbs BESIDE the .cmd, not the .cmd
+  # itself: a .lnk can only ask for a minimised console (WindowStyle 7), which
+  # still leaves an empty black window on the desktop, and the vbs starts the
+  # launcher fully hidden (SW_HIDE). If the vbs is absent — an older layout —
+  # it falls back to the .cmd directly, minimised.
+  local target="$1" dir vbs ps
+  dir="$(dirname "$target")"; vbs="$dir/ccrc-supervisor-hidden.vbs"
+  command -v powershell.exe >/dev/null 2>&1 || return 1
+  local tp winarg wstyle
+  if [ -f "$vbs" ]; then
+    tp="$(cygpath -w "$(command -v wscript.exe 2>/dev/null || echo /c/Windows/System32/wscript.exe)")"
+    winarg="$(cygpath -w "$vbs")"; wstyle=1
+  else
+    tp="$target"; winarg=""; wstyle=7
+  fi
+  ps='$s=[Environment]::GetFolderPath("Startup"); $p=Join-Path $s "'"$TASK_NAME"'.lnk";'
+  ps+='$w=New-Object -ComObject WScript.Shell; $l=$w.CreateShortcut($p);'
+  ps+='$l.TargetPath="'"$tp"'"; $l.Arguments="`"'"$winarg"'`""; $l.WindowStyle='"$wstyle"';'
+  ps+='$l.Description="ccrc supervisor (systemd stand-in)"; $l.Save();'
+  ps+='if (Test-Path $p) { exit 0 } else { exit 1 }'
+  MSYS2_ARG_CONV_EXCL='*' powershell.exe -NoProfile -NonInteractive -Command "$ps" >/dev/null 2>&1
+}
+
+_startup_shortcut_rm() {
+  command -v powershell.exe >/dev/null 2>&1 || return 0
+  MSYS2_ARG_CONV_EXCL='*' powershell.exe -NoProfile -NonInteractive -Command \
+    'Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path ([Environment]::GetFolderPath("Startup")) "'"$TASK_NAME"'.lnk")' >/dev/null 2>&1 || true
+}
+
+case "${1:-}" in
+  show-user)
+    # `Linger=` is the only property this shim answers; anything else would be a
+    # value a caller could act on and we cannot measure.
+    for a in "$@"; do
+      case "$a" in
+        --property=Linger)
+          if [ -f "$LINGER_MARK" ]; then echo "Linger=yes"; else echo "Linger=no"; fi
+          exit 0 ;;
+        --property=*)
+          echo "loginctl (ccrc shim): only --property=Linger is answered here" >&2
+          exit 1 ;;
+      esac
+    done
+    echo "loginctl (ccrc shim): show-user needs --property=Linger" >&2
+    exit 1 ;;
+
+  enable-linger)
+    command -v schtasks.exe >/dev/null 2>&1 || command -v schtasks >/dev/null 2>&1 || {
+      echo "loginctl (ccrc shim): no schtasks on PATH — this shim registers the" >&2
+      echo "  supervisor with the Windows Task Scheduler, and there is none here." >&2
+      exit 1; }
+    # The .cmd LAUNCHER, not bare `node …mjs`: the manager needs MSYS2's bash
+    # and its bin dir on PATH, and a scheduled task starts with neither.
+    sup="${CCRC_SUPERVISOR_CMD:-$(cygpath -w "$HOME/.local/lib/ccrc/ccrc-supervisor.cmd")}"
+    # Two mechanisms, tried in order, and the marker records WHICH ONE took:
+    #   task-scheduler — `schtasks /SC ONLOGON`; refused with "Access is denied"
+    #                    for a standard (non-elevated) user on the measured box.
+    #   startup-folder — a shortcut in the profile's Startup folder, which every
+    #                    user may write and which runs at interactive logon.
+    # Both bring the manager back at the next LOGON. Neither runs it with nobody
+    # logged in — that would take a Windows Service, which a standard user
+    # cannot install — and that is the one place this shim's `Linger=yes` says
+    # less than systemd's: a rebooted box waits for the operator to log in.
+    if MSYS2_ARG_CONV_EXCL='*' schtasks /Create /TN "$TASK_NAME" /SC ONLOGON /F /TR "\"$sup\"" >/dev/null 2>&1; then
+      mkdir -p "$STATE_DIR" && printf 'task-scheduler %s\n' "$TASK_NAME" > "$LINGER_MARK"
+      echo "linger: registered task '$TASK_NAME' to start the supervisor at logon"
+    elif _startup_shortcut "$sup"; then
+      mkdir -p "$STATE_DIR" && printf 'startup-folder %s\n' "$TASK_NAME" > "$LINGER_MARK"
+      echo "linger: Task Scheduler refused (standard user); placed '$TASK_NAME.lnk' in the Startup folder instead — the supervisor starts at every logon"
+    else
+      echo "loginctl (ccrc shim): neither schtasks nor the Startup folder would take '$TASK_NAME'" >&2
+      exit 1
+    fi ;;
+
+  disable-linger)
+    MSYS2_ARG_CONV_EXCL='*' schtasks /Delete /TN "$TASK_NAME" /F >/dev/null 2>&1 || true
+    _startup_shortcut_rm
+    rm -f "$LINGER_MARK" ;;
+
+  *)
+    echo "loginctl (ccrc shim): unsupported verb '${1:-}'" >&2
+    exit 2 ;;
+esac

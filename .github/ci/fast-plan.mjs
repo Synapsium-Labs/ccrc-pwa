@@ -167,7 +167,9 @@ function spellsPackageDir(value) {
 /** A file directly in a source root (`path.resolve(__dirname, '../../ccd/ccd')`, `path.join(REPO, 'ccd', 'ccd')`):
  *  the value spells a root once its last segment is dropped. `path.dirname(<it>)` is that root. */
 function spellsFileInRoot(value) {
-  const v = value.split('\n')[0].trim().replace(/;$/, '').trim();
+  // A trailing `.split(path.sep).join('/')` (the Windows port's POSIX spelling of a helper's `CCD`) names the same file.
+  const v = value.split('\n')[0].trim().replace(/;$/, '').trim()
+    .replace(/\.split\(\s*(?:path\.)?sep\s*\)\.join\(\s*(['"])\/\1\s*\)$/, '');
   const last = /,\s*(['"`])([^'"`\n]+)\1\s*\)$/.exec(v);
   if (!last || last[2] === '..' || spellsRoot(v)) return false;
   const cut = last[2].includes('/') ? `${last[1]}${last[2].slice(0, last[2].lastIndexOf('/'))}${last[1]}` : '';

@@ -105,7 +105,9 @@ const TOOLCHAIN_EXECUTABLES: readonly string[] = (() => {
  * spelling the reason rather than by mirroring `ID_RE` a fifth time.
  */
 const INST_BINS_NAMES: readonly string[] = (() => {
-  const src = readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc'), 'utf8');
+  // `_inst_bins`' body only, as install-census.test.ts reads it: the Windows port's `_inst_win_manager` places its
+  // systemctl/journalctl shims through `$bin/$wf` too, Windows only, and they are no toolchain name (that census's ruling).
+  const src = /^_inst_bins\(\) \{[\s\S]*?\n\}$/m.exec(readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc'), 'utf8'))?.[0] ?? '';
   return [...src.matchAll(/_inst_atomic\s+"[^"]*"\s+"\$bin\/([^"]+)"/g)]
     .map((m) => m[1]!)
     .filter((n) => !n.includes('.'));

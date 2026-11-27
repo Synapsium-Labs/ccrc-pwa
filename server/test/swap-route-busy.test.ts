@@ -87,12 +87,13 @@ const box = async (cfg: BoxCfg = {}) => {
   return { home, calls, app, ccd: () => calls.filter((c) => c[0] === 'swap') };
 };
 
-/** Claude Code's own live file for the pane: what `status` is read from. */
+/** Claude Code's own live file for the pane: what `status` is read from. Its `sessionId` is the row's uuid, because on
+ *  Windows the file is found by that identity, not by the pane pid (`readLiveStateMeasuredFor`, livestate.ts). */
 const liveStatus = (home: string, status: string): void => {
   const dir = path.join(home, '.lane-a', 'sessions');
   mkdirSync(dir, { recursive: true });
   writeFileSync(path.join(dir, `${PANE}.json`),
-    JSON.stringify({ pid: PANE, sessionId: 'u', status, statusUpdatedAt: Date.now() - 60_000 }));
+    JSON.stringify({ pid: PANE, sessionId: `u-${ID}`, status, statusUpdatedAt: Date.now() - 60_000 }));
 };
 
 const post = (app: FastifyInstance, payload: Record<string, unknown>) =>

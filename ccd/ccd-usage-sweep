@@ -61,7 +61,8 @@ if ! [ -r "$ACCOUNTS_SH" ] || ! . "$ACCOUNTS_SH" 2>/dev/null || ! declare -F _cc
    || [ "${#CCRC_ACCOUNTS[@]}" -eq 0 ]; then
   echo "usage-sweep: no usable roster projection at $ACCOUNTS_SH (generate it: ccrc install)" >&2; exit 1
 fi
-tokens="$(node --input-type=module -e "import { FAMILY_TOKENS } from '$MODELS_MJS'; console.log(JSON.stringify(FAMILY_TOKENS));" 2>/dev/null)" \
+# The path rides argv, never the code: MSYS2 rewrites a /c/... path in a native node's arguments, not inside a string.
+tokens="$(node --input-type=module -e "import { pathToFileURL } from 'node:url'; const { FAMILY_TOKENS } = await import(pathToFileURL(process.argv[1]).href); console.log(JSON.stringify(FAMILY_TOKENS));" "$MODELS_MJS" 2>/dev/null)" \
   || { echo "usage-sweep: could not read FAMILY_TOKENS from $MODELS_MJS" >&2; exit 1; }
 [ -n "$tokens" ] || { echo "usage-sweep: FAMILY_TOKENS read empty from $MODELS_MJS" >&2; exit 1; }
 mkdir -p "$(dirname "$LOCK")" "$OUT_DIR"

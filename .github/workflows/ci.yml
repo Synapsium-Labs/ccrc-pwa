@@ -1605,6 +1605,7 @@ jobs:
           test/history-steer.test.ts
           test/history-counters.test.ts
           test/history-replay.test.ts
+          test/history-replay-win.test.ts
           test/history-agents-ingest.test.ts
           test/history-census.test.ts
           test/history-rss-preload.test.ts

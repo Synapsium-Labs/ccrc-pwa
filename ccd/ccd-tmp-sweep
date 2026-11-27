@@ -136,7 +136,17 @@ ACCOUNTS_SH="$HOME/.ccrc/accounts.sh"
 # process title to `claude`. Overridable so the harness can name its own fake
 # claude and never be confused by a real one on the box running the suite.
 : "${CCD_TMP_SWEEP_CLAUDE_RE:=(^|/)claude\$|/claude/versions/[^/]+\$}"
-ROOT="${CCD_TMP_SWEEP_ROOT:-${TMPDIR:-/tmp}/claude-$(id -u)}"
+# WINDOWS (MSYS2). Claude Code is a native program there: it keeps its temp under %TEMP%\claude\<slug>\<uuid>, one
+# `claude` leaf for every user, never `claude-<uid>` under TMPDIR, and it is invisible to MSYS's /proc. TS_WIN marks the
+# three places that read Windows instead: this root (TS_TEMP is %TEMP% in MSYS spelling), live sessions by Windows pid
+# (_ts_collect_live), and in use by `ccd path-users`, which sees native processes (the dead pass's batch ask).
+TS_WIN=0 TS_TEMP="" CLAUDE_LEAF="claude-$(id -u)"
+TS_WIN_CLAUDE_RE='[\/]claude(\.exe)?$'   # a `ps -W` row (lowercased) whose program is a claude: counted for the fail-closed check
+case "${OSTYPE:-}" in msys*|cygwin*)
+  TS_WIN=1 CLAUDE_LEAF=claude
+  TS_TEMP="$(cygpath -u -- "${TEMP:-${TMP:-/tmp}}" 2>/dev/null)" || TS_TEMP=/tmp ;;
+esac
+ROOT="${CCD_TMP_SWEEP_ROOT:-${TS_TEMP:-${TMPDIR:-/tmp}}/$CLAUDE_LEAF}"
 ROOT_LIT="$ROOT"
 UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 UUID_ANY='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
@@ -209,7 +219,7 @@ REAL="$(realpath -e -- "$ROOT" 2>/dev/null)" \
   || _ts_die "root-unresolvable: $ROOT does not resolve"
 [ -d "$REAL" ] || _ts_die "root-not-dir: $ROOT resolves to $REAL, which is not a directory"
 allowed_ok=0
-for base in /tmp "${TMPDIR:-}"; do
+for base in /tmp "${TMPDIR:-}" "$TS_TEMP"; do
   [ -n "$base" ] || continue
   b="$(realpath -e -- "$base" 2>/dev/null)" || continue
   # `/` as a temp dir would make every path "inside" it; never an allowance.
@@ -262,13 +272,13 @@ _ts_add_root() {   # arm literal physical
   LIVE_ROOTS+="$1"$'\t'"$3"$'\t'"$2"$'\n'
 }
 _ts_add_root primary "$ROOT_LIT" "$ROOT"
-_ts_tmp="${CCD_TMP_SWEEP_TMP_BASE:-/tmp}/claude-$(id -u)"   # the base is a seam for the harness
+_ts_tmp="${CCD_TMP_SWEEP_TMP_BASE:-/tmp}/$CLAUDE_LEAF"   # the base is a seam for the harness
 _ts_add_root tmp "$_ts_tmp" "$(realpath -e -- "$_ts_tmp" 2>/dev/null)"
 _ts_cctmp="$(realpath -e -- "$HOME/.cc-tmp" 2>/dev/null)"
 if [ -n "$_ts_cctmp" ]; then
   for _w in "$HOME/.cc-sessions/tmproots"/*; do
     _id="${_w##*/}"; [[ "$_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] && [ -f "$_w" ] && [ ! -L "$_w" ] || continue
-    _ts_add_root child "$HOME/.cc-tmp/$_id/claude-$(id -u)" "$_ts_cctmp/$_id/claude-$(id -u)"
+    _ts_add_root child "$HOME/.cc-tmp/$_id/$CLAUDE_LEAF" "$_ts_cctmp/$_id/$CLAUDE_LEAF"
   done
 fi
 # Each root answers for its own filesystem: its line gains a fourth field, 1 under pressure. The dead
@@ -311,6 +321,19 @@ _ts_collect_live() {
   local p a0 comm f pid body arg v cfg home
   local -a argv envv
   LIVE=(); CLAUDE_N=0; READABLE=0; REFUSE=""
+  # Windows: a native Claude Code's sessions/<pid>.json names a WINDOWS pid, which /proc never lists, so the box's
+  # Windows pids are read once per call (one fork: the price of seeing it at all). No answer refuses, as no /proc does.
+  local -A WINPIDS=()
+  local -a wf
+  if (( TS_WIN )); then
+    while IFS= read -r p; do
+      read -ra wf <<<"$p"; [[ "${wf[0]:-}" =~ ^[0-9]+$ ]] || wf=("${wf[@]:1}")   # Cygwin's ps leads some rows with a state letter
+      [[ "${wf[3]:-}" =~ ^[0-9]+$ ]] || continue
+      WINPIDS[${wf[3]}]=1
+      [[ "${p,,}" =~ $TS_WIN_CLAUDE_RE ]] && CLAUDE_N=$((CLAUDE_N + 1))
+    done < <(ps -W 2>/dev/null)
+    (( ${#WINPIDS[@]} )) || { REFUSE="no-winpids: ps -W listed no Windows process, so no live Claude Code session can be seen"; return 1; }
+  fi
   for p in /proc/[0-9]*; do
     [ -O "$p" ] || continue
     argv=(); { mapfile -d '' -t argv < "$p/cmdline"; } 2>/dev/null || continue
@@ -335,7 +358,7 @@ _ts_collect_live() {
     READABLE=$((READABLE + 1))
     for f in "$cfg/sessions"/*.json; do
       pid="${f##*/}"; pid="${pid%.json}"
-      [[ "$pid" =~ ^[0-9]+$ ]] && [ -d "/proc/$pid" ] || continue
+      [[ "$pid" =~ ^[0-9]+$ ]] && { [ -d "/proc/$pid" ] || [ -n "${WINPIDS[$pid]+x}" ]; } || continue
       # Gone since the glob is a session that ended: nothing to protect. Present
       # but unreadable is a live session this pass cannot see, and that refuses.
       [ -e "$f" ] || continue
@@ -424,6 +447,23 @@ while IFS= read -r t; do
   first="${rel%%/*}"; INUSE[$first]=1
   [[ "$rel" == */* ]] && { rest="${rel#*/}"; INUSE[$first/${rest%%/*}]=1; }
 done < <(find /proc/[0-9]*/cwd /proc/[0-9]*/fd -maxdepth 1 -lname "$ROOT_G/*" -printf '%l\n' 2>/dev/null)
+# Windows: that /proc holds MSYS processes only. Every unit the first cut would still judge is asked of `ccd path-users`
+# (the one probe, which also reads native processes' working directories), in batches; any answer but this unit's own
+# `nobody`, a missing line or a failed call included, is in use.
+if (( TS_WIN )); then
+  _ts_ccd="${CCD_TMP_SWEEP_CCD:-$HOME/.local/bin/ccd}"
+  ask=()
+  for rel in "${UNITS[@]}"; do [ -z "${INUSE[$rel]+x}" ] && ! _ts_is_live "$rel" && ask+=("$rel"); done
+  for ((i = 0; i < ${#ask[@]}; i += 400)); do
+    chunk=("${ask[@]:i:400}"); abs=()
+    for rel in "${chunk[@]}"; do abs+=("$ROOT/$rel"); done
+    out="$("$_ts_ccd" path-users --json "${abs[@]}" 2>/dev/null)" || out=""
+    mapfile -t ans <<<"$out"
+    for j in "${!chunk[@]}"; do
+      [[ "${ans[j]:-}" == "{\"path\":\"$ROOT/${chunk[j]}\",\"verdict\":\"nobody\","* ]] || INUSE[${chunk[j]}]=1
+    done
+  done
+fi
 
 removed=0; rm_sessions=0; rm_loose=0; freed_kb=0
 sk_live=0; sk_inuse=0; sk_recent=0; sk_unreadable=0; failed=0; aborted=""

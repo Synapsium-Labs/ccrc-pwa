@@ -133,7 +133,7 @@ import { notRanSentence } from '../unmeasured.js';
 import { createHash } from 'node:crypto';
 import { appendFileSync } from 'node:fs';
 import type { SessionRecord } from '../registry.js';
-import { liveStateReaderOver, readLiveStateMeasured } from '../livestate.js';
+import { liveStateReaderOver, readLiveStateMeasuredFor } from '../livestate.js';
 import { heldFor } from './heldFor.js';
 import { CHILD_DENY_DIGESTS_FILE, denyStandingOf, type DenyStanding } from './approvalDenyFloor.js';
 import {
@@ -4703,7 +4703,7 @@ export function registerCoordRoutes(
     if (!cfgDir) return null;
     const pid = await deps.tmux.panePid(rec.id);
     if (pid === null) return null;
-    const read = await readLiveStateMeasured(deps.io, cfgDir, pid);
+    const read = await readLiveStateMeasuredFor(deps.io, cfgDir, pid, rec.uuid);
     return read.ok ? read.state.version : null;
   };
 

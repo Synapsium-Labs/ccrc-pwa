@@ -200,6 +200,10 @@ STATUS_FAIL = ('failure', 'error')
 MIN_PROJECT_S = 10
 STALE_SCRATCH_S = 3600
 SIGNALS = (signal.SIGTERM, signal.SIGINT)
+# MSYS2's (Cygwin's) Python has no pthread_sigmask: there every mask is a no-op answering the empty set, so a signal
+# between a fork and its record is not held (on_signal finds no child to kill) and exit_status sees nothing pending.
+if not hasattr(signal, 'pthread_sigmask'):
+    signal.pthread_sigmask = lambda how, mask: set()
 
 
 def knob(name, default):

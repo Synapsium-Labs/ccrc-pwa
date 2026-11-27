@@ -285,7 +285,7 @@ describe('the op reaches no exec path, and the port is called in one place (a SO
   it('modelsop.ts calls boundedStdinSpawn once with null stdin, and spawns nothing itself', () => {
     const c = code(op).join('\n');
     expect(c.match(/\bboundedStdinSpawn\(/g)).toHaveLength(1);
-    expect(c).toMatch(/boundedStdinSpawn\(\{ spawn, signals: osConstants\.signals \}, file, argv, null, \{/);
+    expect(c).toMatch(/boundedStdinSpawn\(\{ spawn, signals: osConstants\.signals, startable, winKillTree \}, file, argv, null, \{/);
     expect(c).not.toMatch(/spawn\(file/);
     expect(c).not.toMatch(/(?<![\w.])spawn\(/);
   });
@@ -337,7 +337,7 @@ describe('the real port over a stub launcher (D-5227)', () => {
     // bash itself exports nothing it was not given beyond its own shell names; these are the three handed in
     const names = readFileSync(path.join(home, 'envnames'), 'utf8').trim().split('\n').filter((n) => !['OLDPWD', 'PWD', 'SHLVL', '_'].includes(n));
     expect(names).toEqual(['HOME', 'LANG', 'PATH']);
-    expect(readFileSync(path.join(home, 'path'), 'utf8').split(':')[0]).toBe(path.dirname(process.execPath));
+    expect(readFileSync(path.join(home, 'path'), 'utf8').split(path.delimiter)[0]).toBe(path.dirname(process.execPath));
     expect(readFileSync(path.join(home, 'stdin'), 'utf8')).toBe('');
   });
 
@@ -364,7 +364,7 @@ describe('modelsEnv', () => {
     const from = { PATH: '/p/a:/p/b', LANG: 'L', CCRC_AGENT_TOKEN: 'x', HOME: '/elsewhere' };
     const env = modelsEnv('/h', from, '/n/bin');
     expect(Object.keys(env).sort()).toEqual(['HOME', 'LANG', 'PATH']);
-    expect(env).toEqual({ HOME: '/h', LANG: 'L', PATH: `/n/bin:${tokenSyncEnv('/h', from).PATH}` });
-    expect(modelsEnv('/h', {}, '/n/bin').PATH).toBe(`/n/bin:${tokenSyncEnv('/h', {}).PATH}`);
+    expect(env).toEqual({ HOME: '/h', LANG: 'L', PATH: `/n/bin${path.delimiter}${tokenSyncEnv('/h', from).PATH}` });
+    expect(modelsEnv('/h', {}, '/n/bin').PATH).toBe(`/n/bin${path.delimiter}${tokenSyncEnv('/h', {}).PATH}`);
   });
 });

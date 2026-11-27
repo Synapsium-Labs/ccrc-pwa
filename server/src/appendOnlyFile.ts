@@ -34,10 +34,13 @@
 //   journals' own classes), so the window is never entered by this tree.
 // - No answer carries a path or an error message; only the closed words below.
 import {
-  closeSync, constants as FS, fchmodSync, fstatSync, fsyncSync, ftruncateSync, mkdirSync, openSync, readSync, renameSync,
+  closeSync, constants as FS, fchmodSync, fstatSync, fsyncSync, ftruncateSync, mkdirSync, readSync, renameSync,
   writeSync, type BigIntStats,
 } from 'node:fs';
 import path from 'node:path';
+import { FSYNC_OPEN } from '../../shared/fsync-open.mjs';
+// `O_NOFOLLOW` and `openSync` from the one no-follow helper: node's own off Windows, the link refusal kept on Windows.
+import { O_NOFOLLOW, openSync } from '../../shared/nofollow.mjs';
 
 /** Single-use: an append, a cut or a release spends it, and a spent or foreign snapshot is refused. Releasing is idempotent
  *  and writes nothing. */
@@ -112,14 +115,14 @@ const errnoOf = (err: unknown): string => {
 interface Ident { readonly dev: bigint; readonly ino: bigint }
 const sameIdent = (a: Ident, b: Ident): boolean => a.dev === b.dev && a.ino === b.ino;
 
-const OPEN_LEAF = FS.O_RDONLY | FS.O_NOFOLLOW | FS.O_NONBLOCK;
-const OPEN_APPEND = FS.O_RDWR | FS.O_APPEND | FS.O_NOFOLLOW | FS.O_NONBLOCK;
-const OPEN_CREATE = FS.O_RDWR | FS.O_APPEND | FS.O_CREAT | FS.O_EXCL | FS.O_NOFOLLOW | FS.O_NONBLOCK;
-const OPEN_DIR = FS.O_RDONLY | FS.O_DIRECTORY;
-const OPEN_ASIDE_DIR = FS.O_RDONLY | FS.O_DIRECTORY | FS.O_NOFOLLOW;
-const OPEN_KEPT = FS.O_WRONLY | FS.O_CREAT | FS.O_TRUNC | FS.O_NOFOLLOW | FS.O_NONBLOCK;
-const OPEN_KEPT_READ = FS.O_RDONLY | FS.O_NOFOLLOW | FS.O_NONBLOCK;
-const OPEN_CUT = FS.O_RDWR | FS.O_NOFOLLOW | FS.O_NONBLOCK;
+const OPEN_LEAF = FS.O_RDONLY | O_NOFOLLOW | FS.O_NONBLOCK;
+const OPEN_APPEND = FS.O_RDWR | FS.O_APPEND | O_NOFOLLOW | FS.O_NONBLOCK;
+const OPEN_CREATE = FS.O_RDWR | FS.O_APPEND | FS.O_CREAT | FS.O_EXCL | O_NOFOLLOW | FS.O_NONBLOCK;
+const OPEN_DIR = FSYNC_OPEN | FS.O_DIRECTORY;
+const OPEN_ASIDE_DIR = FSYNC_OPEN | FS.O_DIRECTORY | O_NOFOLLOW;
+const OPEN_KEPT = FS.O_WRONLY | FS.O_CREAT | FS.O_TRUNC | O_NOFOLLOW | FS.O_NONBLOCK;
+const OPEN_KEPT_READ = FS.O_RDONLY | O_NOFOLLOW | FS.O_NONBLOCK;
+const OPEN_CUT = FS.O_RDWR | O_NOFOLLOW | FS.O_NONBLOCK;
 /** The kept bytes' name before the rename puts them in place. A kept name may not end in it. */
 const PARTIAL = '.partial';
 

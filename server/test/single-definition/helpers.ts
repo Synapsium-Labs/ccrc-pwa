@@ -65,7 +65,11 @@ export function sources(dir: string): string[] {
 
 export const ALL = ROOTS.flatMap(sources);
 
-export const rel = (p: string): string => path.relative(ccrcRoot, p);
+// POSIX form, always. `path.relative` answers in the platform's separator, so on Windows every finding the scanner
+// reports reads `shared\api.ts` while every expectation — and every path a human types into one — reads
+// `shared/api.ts`; the failure then names the right file with the wrong slash. Normalised HERE because this is the
+// one place a scanned path becomes a reported name, so a second copy of the rule cannot drift from it.
+export const rel = (p: string): string => path.relative(ccrcRoot, p).split(path.sep).join('/');
 
 
 /* `prose` and `passage` live at MODULE scope, not inside the one describe that

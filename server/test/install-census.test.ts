@@ -2336,6 +2336,8 @@ const OTHER_INST_ATOMIC_FNS: Readonly<Record<string, string>> = {
     + '`.local/libexec/ccrc`, wave 29) are read by `spineFilePaths` beside FILE_FNS',
   _inst_units: 'its unit files are the units describe\'s',
   _inst_units_darwin: 'launchd plists, macOS only; deploy.sh deploys only to the Linux fleet box',
+  _inst_win_manager: 'the Windows port\'s systemd stand-in (win/ccrc-supervisor.mjs and its launchers, the four shims), '
+    + 'Windows only; deploy.sh deploys only to the Linux fleet box, and no uninstall removed them before this step either',
   _exp_ddns_units: 'the opt-in public endpoint\'s DNS units, placed by its own verb, never by install',
   _inst_slice_limits: 'the session slice\'s rendered limits drop-in, inside the user unit directory the units describe\'s',
   _inst_graph_render: 'the graph sweep\'s rendered timer and service (D-7354), whose destinations the units describe reads off `_inst_units`\' RENDERED_UNIT_FNS calls',

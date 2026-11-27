@@ -160,6 +160,10 @@ export const TREE_FILES = [
   // The weekly quiz runner (run 3212): `ccd-quiz-weekly.service` runs it as `%h/ccrc/deploy/history-quiz-unattended.mjs`, so the
   // versioned audit's unit row needs it in the placed tree.
   'deploy/history-quiz-unattended.mjs',
+  // The Windows port's two helpers ccrc history imports at load (`cli.mjs` and `card.mjs` the no-follow open,
+  // `sweep.mjs` the fsync open flag): a placed tree without them fails `status --json` and doctor's history check.
+  'shared/nofollow.mjs',
+  'shared/fsync-open.mjs',
   // The node floor doctor reads out of the shipped `package.json`, for BOTH
   // box roles (`_check_node` looks for the server's, then the agent's). The
   // doctor tail arrives in Task 8; the files are cheap and their absence would

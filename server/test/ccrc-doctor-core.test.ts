@@ -8,7 +8,7 @@ import { writeFileSync, readFileSync, mkdirSync, symlinkSync, rmSync, chmodSync,
 import { join } from 'node:path';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { ghPoisonAt, plantPoolEpoch, seedAccountsSh } from './ccdWsHelpers.js';
-import { describeLinux, describeDarwin, itLinux } from './platformFixtures.js';
+import { describeDarwin, itLinux } from './platformFixtures.js';
 import { codexAuthDir } from './codexLaneFixture.js';
 import { familyClassOf } from '../../shared/models.mjs';
 import { installDoctorHooks, CHECKS_SRC, LIB_SRC, BASH, realPath, writePkg, writeRawPkg, stubBin, stub, unstubManager, unstub, linkReal, stubNode, shq, ghStub, GH_OK, writeCcrcEnv, unitDirOf, unitFileOf, writeUnitFile, removeUnitFile, containedPath, runDoctor, healthy, broken, tableNames, lineFor, anyVerdictFor, HEALTHY_SKIPS } from './ccrc-doctorFixture.js';
@@ -944,7 +944,8 @@ describe('ccrc doctor: git_email', () => {
 // uid, no loginctl at all), and none of them can arise on a box where the
 // answer is a standing property of the platform rather than a setting. macOS
 // gets its own case immediately after.
-describeLinux('ccrc doctor: linger', () => {
+// logind's arm: neither macOS nor Windows (the Windows port) has a logind, each has its own WARN arm below.
+describe.skipIf(process.platform === 'darwin' || process.platform === 'win32')('ccrc doctor: linger', () => {
   it('goes red when linger is off for this user', () => {
     const home = healthy('ccrc-doctor-linger-off-');
     writeFileSync(join(home, 'fixture-linger'), 'no\n');
@@ -976,6 +977,16 @@ describeLinux('ccrc doctor: linger', () => {
   });
 });
 
+
+describe.skipIf(process.platform !== 'win32')('ccrc doctor: linger on Windows, which has none either (the Windows port)', () => {
+  it('WARNS rather than fails, names the guarantee that is missing, and never asks logind', () => {
+    const home = healthy('ccrc-doctor-linger-win-');
+    const line = lineFor(runDoctor(home).stdout, 'linger');
+    expect(line).toMatch(/^WARN linger: not a Windows concept/);
+    expect(line).toMatch(/stop at sign-out and start again at sign-in/);
+    expect(existsSync(join(home, 'loginctl-poison'))).toBe(false);
+  }, 300_000);   // a whole doctor run, which MSYS forks slowly
+});
 
 describeDarwin('ccrc doctor: linger, on a platform that has none', () => {
   it('WARNS rather than fails, and names the guarantee that is missing', () => {

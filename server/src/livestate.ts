@@ -181,6 +181,99 @@ export async function readLiveState(io: FleetIO, configDir: string, pid: number)
  * takes the read through a parameter instead of importing it. The return type is spelled structurally, so this file
  * imports nothing from `fleet.ts`.
  */
-export function liveStateReaderOver(io: FleetIO): (configDir: string, pid: number) => Promise<LiveStateRead> {
-  return (configDir, pid) => readLiveStateMeasured(io, configDir, pid);
+export function liveStateReaderOver(io: FleetIO): (configDir: string, pid: number, uuid: string) => Promise<LiveStateRead> {
+  return (configDir, pid, uuid) => readLiveStateMeasuredFor(io, configDir, pid, uuid);
+}
+
+/**
+ * The live file for a session, addressed by the fact BOTH sides write — the
+ * session uuid — with the pid tmux reports as the fast path. The MEASURED form:
+ * same three answers as `readLiveStateMeasured`, same meaning for each.
+ *
+ * `readLiveStateMeasured` keys on the pane pid alone, which holds only where
+ * tmux and Claude Code share a pid namespace. On Windows they do not: tmux is
+ * an MSYS2 program and reports the pid the MSYS runtime assigned, while Claude
+ * Code is native and names its file by the Windows pid it sees for itself.
+ * Measured on this box: tmux said 7956, the file was `56116.json`. So the pid
+ * read answers `no-state` for EVERY session there — the arm D-115 reserves for
+ * "a pane that has published nothing yet" — and every display surface leaves
+ * the card at `idle`, unnamed, with no version, forever. That is the board this
+ * function exists to stop drawing: the pid read is a proven ENOENT, so D-115's
+ * own polarity calls it rest, and on Windows it is never true.
+ * `ccd`'s half of the same defect is fixed by `_hook_pid` (ccd/ccd), which can
+ * read MSYS's `/proc/<pid>/winpid`; native Node cannot — that path does not
+ * exist on disk (measured: ENOENT) — so this side resolves by identity instead.
+ *
+ * PID FIRST, and not merely for speed: it is one read against a name, and on
+ * every POSIX box it is also correct, so off Windows a pid read IS the answer,
+ * exactly `readLiveStateMeasured`'s, and the scan below never runs there (a
+ * stale file of an earlier pid naming the same uuid must not answer for a pane
+ * whose own pid published nothing yet). The scan is bounded by the session
+ * count of one wrapper HOME and only pays on a box where the pid cannot be the
+ * key.
+ *
+ * THE THREE ARMS SURVIVE THE SCAN — the rule is "an adapter may not narrow a
+ * distinction it received", and this function receives D-115's:
+ *
+ *   - The pid read `unmeasured` RETURNS `unmeasured`, unscanned. That file is
+ *     there and could not be read; on POSIX it IS this session's file. A scan
+ *     that then found nothing would answer `no-state` — rest — over a session
+ *     nobody looked at, which is D-115's defect reached through a side door.
+ *   - A scanned file that reads `unmeasured` may be ours. If no file MATCHES
+ *     and one of them could not be read, the honest answer is `unmeasured`,
+ *     not `no-state`: "we did not find it" is only a measurement when we could
+ *     read everywhere we looked.
+ *   - An absent `sessions/` answers `no-state`; one that cannot be listed
+ *     answers `unmeasured` (`readdirMeasured` keeps the two apart, and the
+ *     plain `readdir` ratchet in `fleetio-contract.test.ts` may only shrink).
+ *   - An EMPTY uuid never scans. A degraded registry record's uuid is `''`
+ *     (see `measuredIdentity`); it must not match a file, and it must not
+ *     become "read whatever is there".
+ */
+export async function readLiveStateMeasuredFor(
+  io: FleetIO, configDir: string, pid: number | null, uuid: string,
+): Promise<LiveStateRead> {
+  // Off Windows the pid IS the key, and the file may lawfully name another uuid: after a fork the pane keeps
+  // publishing the pre-fork id while the registry holds the new one (`_sync_uuid`, ccd/ccd), and a /clear lags the
+  // registry by a tick. So there the pid read is the whole answer, as it was before the Windows port.
+  if (pid !== null && process.platform !== 'win32') return readLiveStateMeasured(io, configDir, pid);
+  // Which live-state FILE is this session's: the file's own sessionId against the registry record's transcript uuid.
+  // No run is read (named in `runSessionCensus.ts`'s NOT_BINDING_SITES). An empty uuid (a degraded record) names none.
+  const namesUuid = (s: LiveState): boolean => s.sessionId === uuid;
+  if (pid !== null) {
+    const byPid = await readLiveStateMeasured(io, configDir, pid);
+    // On Windows the pane pid (MSYS) and the file names (Windows pids) are two number spaces, so a file under the
+    // pane's pid is ours only when it names our uuid; a collision is another session's file. An empty uuid cannot
+    // check, so it keeps the pid read's answer.
+    if (byPid.ok ? uuid === '' || namesUuid(byPid.state) : byPid.reason === 'unmeasured') return byPid;
+  }
+  if (uuid === '') return NO_STATE;
+  const listed = await io.readdirMeasured(path.join(configDir, 'sessions'));
+  if (!listed.ok) return listed.reason === 'absent' ? NO_STATE : { ok: false, reason: 'unmeasured' };
+  let sawUnmeasured = false;
+  for (const name of listed.entries) {
+    const n = /^(\d+)\.json$/.exec(name);
+    if (n === null) continue;
+    const read = await readLiveStateMeasured(io, configDir, Number(n[1]));
+    if (read.ok) {
+      if (namesUuid(read.state)) return read;
+    } else if (read.reason === 'unmeasured') {
+      sawUnmeasured = true;
+    }
+  }
+  return sawUnmeasured ? { ok: false, reason: 'unmeasured' } : NO_STATE;
+}
+
+/**
+ * `readLiveStateMeasuredFor`, folded — for the callers `LiveStateRead`'s own
+ * docstring names as correctly served by the fold (the mail gate, `commands`,
+ * `liveStatus`, `archiveSafety`). ONE resolution with a fold on top, exactly
+ * the relationship `readLiveState` has to `readLiveStateMeasured`, so the pid
+ * and uuid lookups cannot drift between the two forms.
+ */
+export async function readLiveStateFor(
+  io: FleetIO, configDir: string, pid: number | null, uuid: string,
+): Promise<LiveState | null> {
+  const read = await readLiveStateMeasuredFor(io, configDir, pid, uuid);
+  return read.ok ? read.state : null;
 }

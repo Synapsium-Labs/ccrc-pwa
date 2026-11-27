@@ -672,17 +672,20 @@ _gs_guard() {   # <key> -> 0 / 1 (GS_WHY)
 import os, sys
 from pathlib import Path
 from graphify.detect import detect
-mem = sys.argv[1].rstrip('/') + '/'
-root = os.path.realpath('.')
+# '/' throughout: a native Windows python (the Windows port's venv) answers C:\... realpaths; elsewhere a no-op.
+rp = lambda x: os.path.realpath(x).replace(os.sep, '/')
+mem = rp(sys.argv[1]).rstrip('/') + '/'
+root = rp('.')
 r = detect(Path('.'))
 for k in ('code', 'document', 'paper', 'image', 'video'):
     for f in r['files'].get(k, []):
-        p = os.path.realpath(os.path.join(root, str(f)))
-        if p.startswith(mem) or p == os.path.join(root, '.graphifyignore'):
+        p = rp(os.path.join(root, str(f)))
+        if p.startswith(mem) or p == root + '/.graphifyignore':
             continue
-        sys.stdout.write((os.path.relpath(p, root) if p.startswith(root + '/') else p) + '\n')
+        sys.stdout.write((p[len(root) + 1:] if p.startswith(root + '/') else p) + '\n')
 GFXPY
   )" || { GS_WHY="detect() failed in the store's checkout"; return 1; }
+  corpus="${corpus//$'\r'/}"   # a native Windows python writes CRLF
   tracked="$(_gs_git "$ck" ls-tree -r -z --name-only HEAD 2>/dev/null | tr '\0' '\n')"
   breach="$(comm -23 <(sort -u <<<"$corpus") <(sort -u <<<"$tracked") | grep -v '^$' || true)"
   [ -n "$breach" ] || return 0
@@ -748,9 +751,10 @@ except Exception as exc:
     except OSError:
         pass
     print('cannot stamp: %s: %s' % (name, exc)); sys.exit(1)
-print(tmp)
+print(tmp.replace(os.sep, '/'))
 GFXPY
     )"; rc=$?
+    spliced="${spliced//$'\r'/}"   # a native Windows python writes CRLF
     if [ "$rc" -ne 0 ]; then
       [ "$f" = graph.json ] || { printf 'graph-sweep: %s: GRAPH_REPORT.md not stamped (%s)\n' "$dir" "${spliced:-python refused}" >> "$LOG"; continue; }
       GS_WHY="${spliced:-cannot stamp: the stamper could not run}"; return 1
@@ -825,6 +829,8 @@ _gs_build() {   # <key>
   case "$st_line" in *"not contained"*) _gs_note "uncontained: $st_line" ;; esac
   bout="$stg/build.stdout"; berr="$stg/build.stderr"
   printf 'graph-sweep: build %s (%s) at %s\n' "$key" "$kind" "$(date -u +%FT%TZ)" >> "$LOG"
+  local -a io=()   # ionice is util-linux's: MSYS2 has none
+  command -v ionice >/dev/null 2>&1 && io=(ionice -c3)
   launched="$(date +%s)"; t0="$(_plat_epoch_ms)"
   # The call of spec §3.4, from the checkout's realpath, with the pass lock's descriptor CLOSED (9>&-): an orphaned
   # build can never hold the pass lock. `--local` (D-7648): a graph build is this box's own work, never the test box's.
@@ -832,7 +838,7 @@ _gs_build() {   # <key>
     GRAPHIFY_OUT="$stg/graphify-out" GRAPHIFY_NO_BACKUP=1 PYTHONHASHSEED=0 \
     GRAPHIFY_MAX_WORKERS="${GK[CCRC_GRAPH_MAX_WORKERS]}" GIT_TERMINAL_PROMPT=0 \
     exec timeout --kill-after=30 "$(( slot + bt ))" "$GRAPH_LIB/ccrc-test" --local --heavy -- \
-      nice -n "${GK[CCRC_GRAPH_BUILD_NICE]}" ionice -c3 timeout --kill-after=30 "$bt" \
+      nice -n "${GK[CCRC_GRAPH_BUILD_NICE]}" ${io[@]+"${io[@]}"} timeout --kill-after=30 "$bt" \
       "$VENV/bin/python" -s -P "$GRAPH_LIB/graph-build" --root "$ck" --out "$stg/graphify-out" --commit "$tip" \
         --pin "$PIN" --memory "$kd/memory" --launched "$launched" --slot-wait "$slot" ${changed[@]+"${changed[@]}"}
   ) > "$bout" 2> "$berr" 9>&-

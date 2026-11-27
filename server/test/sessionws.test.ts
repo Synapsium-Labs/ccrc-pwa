@@ -19,6 +19,7 @@ import { Tmux, type Runner } from '../src/exec.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 import { openCoordDb } from '../src/coord/db.js';
+import { mungePath } from '../src/munge.js';
 import { CoordStore } from '../src/coord/store.js';
 import type { AskQuestion, Dialog, SessionStreamMsg } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -3183,7 +3184,10 @@ describe('session WS — dead session behind a symlinked workdir', () => {
     };
     for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${ID}.${k}`), v);
     const physFile = path.join(home, '.claude-a', 'projects',
-      volumeDir.replace(/[/._]/g, '-'), `${UUID_A}.jsonl`);
+      // `mungePath`, not a fresh copy of its POSIX regex: on Windows the copy kept
+      // the drive colon and every `\`, so the fixture's own mkdir failed before
+      // the resolver was ever asked anything.
+      mungePath(volumeDir), `${UUID_A}.jsonl`);
     mkdirSync(path.dirname(physFile), { recursive: true });
     writeFileSync(physFile, userLine('u1', 'one'));
 
@@ -3223,6 +3227,12 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
   let port: number;
   let coord: CoordStore;
   let bus: Bus;
+  // The handle, kept so teardown can CLOSE it before removing the home. POSIX
+  // unlinks an open file without complaint; Windows answers EBUSY, and nine
+  // tests here failed on the teardown line alone with their assertions green.
+  // Closing before deleting is simply correct everywhere — nothing about it is
+  // a platform branch.
+  let db: ReturnType<typeof openCoordDb> | undefined;
 
   beforeEach(async () => {
     home = mkTmp('ccrc-sws-mail-');
@@ -3234,7 +3244,8 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
       return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
-    coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    db = openCoordDb(path.join(home, '.ccrc', 'coord.db'));
+    coord = new CoordStore(db);
     const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports, coord };
     bus = new Bus();
     app = await buildServer(deps, bus);
@@ -3246,6 +3257,8 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
   afterEach(async () => {
     if (app) await app.close();
     app = undefined;
+    db?.close();
+    db = undefined;
     rmSync(home, { recursive: true, force: true });
   });
 

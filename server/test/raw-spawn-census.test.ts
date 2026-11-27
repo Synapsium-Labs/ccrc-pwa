@@ -695,10 +695,13 @@ function envOf(s: Src, open: number, close: number, bs: Binding[], member: strin
  *  `'sh'`, a `'timeout'`) is a decision, never a default. */
 // `bashPath` is `ccrc-token-sync.test.ts`'s `command -v bash`, read before PATH is narrowed (D-5256 made its joined
 // command line a script spawn).
-const RUNNERS = new Set(["'bash'", 'BASH', 'DEADLINE_BIN', 'DOCTOR_DEADLINE_BIN', 'bashPath']);
+// `HARNESS_BASH` is the ccd harness's bash (`ccdWsHelpers.ts`): `'bash'` off Windows, MSYS2's on it (the Windows port).
+const RUNNERS = new Set(["'bash'", 'BASH', 'DEADLINE_BIN', 'DOCTOR_DEADLINE_BIN', 'bashPath', 'HARNESS_BASH']);
 // `git show <rev>:<path>` and `git ls-files <path>` name the script as a path; `'node'` is
 // `hook-helpers-generated.test.ts`'s `node shared/hook-helpers.mjs --check <hook> <ccd>`, which only reads ccd's text.
-const READERS = new Set(["'git'", "'node'"]);
+// `process.execPath` is that same `node`, spelled by path (the Windows port: a native node cannot search the POSIX PATH
+// `ghContainedEnv` builds).
+const READERS = new Set(["'git'", "'node'", 'process.execPath']);
 interface Spawn {
   file: string; line: number; kind: 'script' | 'sliced' | null; prog: string; placed: boolean;
   shape: Shape | null; argText: string;

@@ -349,7 +349,7 @@ CREATE TABLE nodes (
                                      --   absent (older agent); NULL = no agent by construction (a server-role row)
   highestVersion   TEXT,             -- ~/.ccrc/floor; NULL = file absent = UNCONSTRAINED (§9)
   previousVersion  TEXT,             -- ~/.ccrc/previous line 1; NULL = file absent (nothing to roll back to)
-  os               TEXT NOT NULL,    -- 'linux' | 'darwin' | 'unknown', from ~/.ccrc/ccrc-caps' first line
+  os               TEXT NOT NULL,    -- 'linux' | 'darwin' | 'windows' | 'unknown', from ~/.ccrc/ccrc-caps' first line (windows: the Windows port)
   measuredAt       INTEGER,          -- NULL = NEVER measured. Distinct from every column above.
   reachable        INTEGER NOT NULL,
   unreachableSince INTEGER,          -- NULL iff reachable
@@ -530,7 +530,7 @@ condemn: a `symlink` is what bash refuses"); a symlink or other kind reads as `u
   or the file is absent with a stamp present; `unknown` when the stamp is unreadable) and `provenance` (line 2
   `unsigned` → `unverified`; no line 2 on a marker whose `caps` include `verify` → `verified`; otherwise `unknown`).
   **No server code reads this file today** (measured) — this is a net-new read.
-- `~/.ccrc/ccrc-caps` → `os` (line 1: `os linux|darwin`) and `caps` (one word per following line; absent → `''`,
+- `~/.ccrc/ccrc-caps` → `os` (line 1: `os linux|darwin|windows`) and `caps` (one word per following line; absent → `''`,
   `os = 'unknown'`, an older build).
 - `~/.ccrc/floor` → `highestVersion` (absent → NULL); `~/.ccrc/previous` → `previousVersion` (line 1; absent →
   NULL).

@@ -13,6 +13,7 @@ import { installFixtureTree, installVersionedTree } from './installTreeFixture.j
 import { takeExpectedPoison } from './containedTools.js';
 import { BOX_SETTINGS_TIMER_S } from '../../shared/api.js';
 import { here, REPO, realPath, BASH, treeRoot, ccrcIn, treeFile, placed, freshBox, ccrcEnv, runInstall, runLauncherVersion, pathWithout, read, dotCcrc, preexisting, gitInit, unitDir, SLICE_DIR, UNIT_FILES, systemctlCalls, FLEET_URL, FLEET_TOKEN, runInstallTty, type Result } from './ccrc-installFixture.js';
+import { posixPath } from './helpers.js';
 
 removeTmpFixturesEachTest();
 
@@ -516,7 +517,7 @@ describe('ccrc install: the build stamp', () => {
         // of the same run, so a stub that refused both would make this a test
         // about two things.
         git: '#!/bin/sh\n'
-          + `case "\${1:-}" in config) exec ${realPath('git')} "$@" ;; esac\n`
+          + `case "\${1:-}" in config) exec ${posixPath(realPath('git'))} "$@" ;; esac\n`
           + 'echo "fatal: detected dubious ownership in repository at \'/home/other/ccrc\'" >&2\n'
           + 'exit 128\n',
       },
@@ -567,7 +568,7 @@ describe('ccrc install: the build stamp', () => {
       stubs: {
         // `config` to the real git, for the reason the arm above states.
         git: '#!/bin/sh\n'
-          + `case "\${1:-}" in config) exec ${realPath('git')} "$@" ;; esac\n`
+          + `case "\${1:-}" in config) exec ${posixPath(realPath('git'))} "$@" ;; esac\n`
           + 'printf \'fatal: \\033[31mred\\010\\010\\010nope\\r and more\\n'
           + 'second line nobody asked for\\n\' >&2\nexit 128\n',
       },

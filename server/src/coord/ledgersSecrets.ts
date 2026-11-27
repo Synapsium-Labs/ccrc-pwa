@@ -22,7 +22,7 @@
 // names and records only.
 //
 // NEVER LOG, RETURN OR THROW THE VALUE: every error raised here names a slot at most, and the caller answers fixed words.
-import { constants as FS, closeSync, fstatSync, lstatSync, openSync, readFileSync, readdirSync, rmSync, promises as fsp } from 'node:fs';
+import { constants as FS, closeSync, fstatSync, lstatSync, readFileSync, readdirSync, rmSync, promises as fsp } from 'node:fs';
 import path from 'node:path';
 import { shapeProgramSlug } from '../../../shared/api.js';
 import {
@@ -30,6 +30,9 @@ import {
 } from '../../../shared/ledgers.js';
 import type { FingerprintAnswer, FingerprintIn } from '../accounts/mask.js';
 import { writeValueFileAtomic } from '../token/files.js';
+import { FSYNC_OPEN } from '../../../shared/fsync-open.mjs';
+// `O_NOFOLLOW`, `openSync` and `open` from the one no-follow helper: node's own off Windows, the link refusal kept on Windows.
+import { O_NOFOLLOW, open as openNoFollow, openSync } from '../../../shared/nofollow.mjs';
 
 /** The store's directory under `ccrcDir` (`OPERATOR_SECRETS_DIR`, `shared/ledgers.ts`). */
 export { OPERATOR_SECRETS_DIR };
@@ -115,9 +118,14 @@ async function sweepSlotTemps(dir: string, slot: string): Promise<void> {
   for (const n of names) if (isTempOf(n, slot)) await fsp.rm(path.join(dir, n), { force: true }).catch(() => {});
 }
 
+/** Whether the mode bits mean anything: NTFS reports 0o666 for every entry, a directory included (measured), whatever its
+ *  ACL, so on Windows the mode part of a check is skipped, never failed.
+ *  shortcut: Windows' ACL is not measured here; measure it if the store must refuse a shared directory there. */
+const MODES_MEASURED = process.platform !== 'win32';
+
 /** Whether a store directory is a private directory of ours: not a link, not open to group or others, owned by this user. */
 const isPrivateDir = (st: { isDirectory(): boolean; mode: number; uid: number }): boolean =>
-  st.isDirectory() && (st.mode & 0o077) === 0 && (typeof process.getuid !== 'function' || st.uid === process.getuid());
+  st.isDirectory() && (!MODES_MEASURED || (st.mode & 0o077) === 0) && (typeof process.getuid !== 'function' || st.uid === process.getuid());
 
 /**
  * THE START-UP SWEEP (review 1416 A-S6): removes every slot's leftover temp files across the whole store, so a crash's 0600 copy
@@ -155,7 +163,7 @@ async function privateDir(dir: string, which: string): Promise<void> {
     if ((e as NodeJS.ErrnoException)?.code !== 'EEXIST') throw e;
   }
   const st = await fsp.lstat(dir);
-  if (!isPrivateDir(st) || (st.mode & 0o100) === 0) throw new OperatorSecretStoreUnsafe(which);
+  if (!isPrivateDir(st) || (MODES_MEASURED && (st.mode & 0o100) === 0)) throw new OperatorSecretStoreUnsafe(which);
 }
 
 /**
@@ -282,7 +290,7 @@ function refuseCaseCollision(ccrcDir: string, program: string, slot: string): vo
 async function slotHolds(file: string, value: string): Promise<'yes' | 'no' | 'unknown'> {
   let fh: Awaited<ReturnType<typeof fsp.open>>;
   try {
-    fh = await fsp.open(file, FS.O_RDONLY | FS.O_NOFOLLOW);
+    fh = await openNoFollow(file, FS.O_RDONLY | O_NOFOLLOW);
   } catch (e) {
     const code = (e as NodeJS.ErrnoException)?.code;
     return code === 'ENOENT' || code === 'ELOOP' ? 'no' : 'unknown';
@@ -436,7 +444,7 @@ export async function removeOperatorSecret(ccrcDir: string, program: string, slo
   await sweepSlotTemps(dir, slot);
   if (had) {
     try {
-      const dh = await fsp.open(dir, 'r');
+      const dh = await fsp.open(dir, FSYNC_OPEN);
       try { await dh.sync(); } finally { await dh.close(); }
     } catch {
       // The value is unlinked; its durability across a crash is unproven, and a re-run of Remove finishes it.
@@ -490,7 +498,7 @@ export function readServerSecretValue(ccrcDir: string, slot: string): ServerSecr
     } catch (e) { return absentOr(e); }
   }
   let fd: number;
-  try { fd = openSync(file, FS.O_RDONLY | FS.O_NOFOLLOW); } catch (e) { return absentOr(e); }
+  try { fd = openSync(file, FS.O_RDONLY | O_NOFOLLOW); } catch (e) { return absentOr(e); }
   try {
     if (!fstatSync(fd).isFile()) return { state: 'unreadable' };
     return { state: 'value', value: readFileSync(fd, 'utf8') };
@@ -623,7 +631,7 @@ export async function operatorSecretRows(
     try {
       const st = lstatSync(s.file);
       if (!st.isFile()) { unreadable = true; continue; }
-      const fh = await fsp.open(s.file, FS.O_RDONLY | FS.O_NOFOLLOW);
+      const fh = await openNoFollow(s.file, FS.O_RDONLY | O_NOFOLLOW);
       let value: string;
       try { value = await fh.readFile('utf8'); } finally { await fh.close(); }
       rows.push(rowOf(operatorSecretLaneId(s.program, s.slot), value));

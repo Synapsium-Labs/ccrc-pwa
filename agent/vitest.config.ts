@@ -1,4 +1,4 @@
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 // `setupFiles` is a safety mechanism here, not configuration: it puts a harmless
 // `tmux` earliest on PATH for every agent test process, so a whitelist bug can
 // never let a negative test's `tmux kill-server` reach the real server. See
@@ -24,6 +24,13 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     include: ['test/**/*.test.ts'],
+    // The Windows port: suites of what runs on a Linux host only, by design, are not run there. The test box service,
+    // its pristine store and its probe desk run on the test box (systemd units, run users, an XFS reflink root), and
+    // deploy.sh/verify-service.sh push to and verify a Linux box over ssh and systemd. A Windows fleet host runs the
+    // test box op's fleet-host arm (testbox-op*.test.ts), which stays in.
+    exclude: process.platform === 'win32'
+      ? [...configDefaults.exclude, 'test/testbox-service.test.ts', 'test/testbox-pristine.test.ts', 'test/testbox-probes.test.ts', 'test/deploy-verify.test.ts']
+      : configDefaults.exclude,
     // The server package's scrub of git's repository-redirecting variables, shared rather than copied: no agent test
     // spawns git today, so this keeps a future one from writing into the runner's checkout.
     setupFiles: ['../server/test/git-env.setup.mjs', 'test/contain-path.setup.ts'],

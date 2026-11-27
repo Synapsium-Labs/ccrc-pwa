@@ -21,6 +21,9 @@ import {
 } from '../src/coord/delegation-journal.js';
 import type { DelegationJournalEntryV1, DelegationJournalRecordV1 } from '../src/coord/delegation-model.js';
 import type { DelegationEventEnvelopeV1 } from '../../shared/api.js';
+/** On Windows the helper asks its `systemctl` shim through the MSYS shell (`probeService`), and these cases hand it a
+ *  PATH holding only the fake: the shell is named the way the port's manager names it. Empty off Windows. */
+const WIN_BASH: NodeJS.ProcessEnv = process.platform === 'win32' ? { CCRC_BASH: resolveBash('win32') } : {};
 
 const CLAUDE = '11111111-2222-3333-4444-555555555555';
 const common = {
@@ -248,6 +251,7 @@ import {
 } from '../src/coord/delegation-checkpoint.js';
 import { DELEGATION_JOURNAL_FILE } from '../src/coord/delegation-journal.js';
 import { DELEGATION_JOURNAL_ENTRY_KINDS } from '../src/coord/delegation-model.js';
+import { resolveBash } from '../src/exec.js';
 import { mkTmp } from './tmpHelpers.js';
 import { carrierCheckpointBytes, carrierCheckpoints } from './delegationCarrierCheckpoints.js';
 
@@ -1893,7 +1897,7 @@ describe('8B: restore requires the service MEASURED inactive (W3-M34)', () => {
       return b;
     };
     const restoreCli = (home: string, dir: string, env: NodeJS.ProcessEnv): { status: number | null; stdout: string; stderr: string } =>
-      spawnSync(process.execPath, ['--no-warnings', HELPER_PATH, 'restore', '--from', dir], { env: { HOME: home, ...env }, encoding: 'utf8' });
+      spawnSync(process.execPath, ['--no-warnings', HELPER_PATH, 'restore', '--from', dir], { env: { HOME: home, ...WIN_BASH, ...env }, encoding: 'utf8' });
     const rows: Array<[string, NodeJS.ProcessEnv, number]> = [
       ['inactive (exit 3)', { FAKE_STATE: 'inactive', FAKE_RC: '3' }, 0],
       ['failed (not running)', { FAKE_STATE: 'failed', FAKE_RC: '3' }, 0],
@@ -2189,7 +2193,7 @@ describe('8B: the replacement fault matrix, and the interrupted-restore table (W
     mkdirSync(bin);
     writeFileSync(path.join(bin, 'systemctl'), '#!/bin/sh\necho inactive\nexit 3\n');
     chmodSync(path.join(bin, 'systemctl'), 0o755);
-    const r = spawnSync(process.execPath, ['--no-warnings', HELPER_PATH, 'recover'], { env: { HOME: f.home, PATH: bin }, encoding: 'utf8' });
+    const r = spawnSync(process.execPath, ['--no-warnings', HELPER_PATH, 'recover'], { env: { HOME: f.home, PATH: bin, ...WIN_BASH }, encoding: 'utf8' });
     expect(r.status, r.stderr).toBe(0);
     expect(r.stdout).toBe('coordination restore recovery: rolled-back\n');
     expect(liveState(f.home)).toEqual(f.oldState);

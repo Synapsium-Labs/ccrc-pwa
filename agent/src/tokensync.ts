@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import os from 'node:os';
+import { startable, winKillTree } from '../../shared/startable.mjs';
 import {
   TOKEN_SYNC_DRAIN_MS, TOKEN_SYNC_EXIT, TOKEN_SYNC_KILL_GRACE_MS, TOKEN_SYNC_SPAWN_TIMEOUT_MS, TOKEN_SYNC_STDERR_PREFIX,
   TOKEN_SYNC_SYNCED_RE, firstStderrLine, type TokenSyncOpError, type TokenTransport,
@@ -67,7 +68,8 @@ export function makeTokenSyncSpawn(env: TokenSyncEnv): TokenSyncSpawn {
     let drainTimer: NodeJS.Timeout | null = null;
     const out = { chunks: [] as Buffer[], bytes: 0, capped: false, broken: false, eof: false };
     const err = { chunks: [] as Buffer[], bytes: 0, capped: false, broken: false, eof: false };
-    const child = spawn(file, [...args], { detached: true, stdio: ['pipe', 'pipe', 'pipe'], env: childEnv });
+    // Windows: the launcher is a script, started through the MSYS shell (`startable`, shared/spawn.mjs).
+    const child = spawn(...startable(file, args), { detached: true, stdio: ['pipe', 'pipe', 'pipe'], env: childEnv });
     const clear = (): void => {
       for (const t of [termTimer, killTimer, drainTimer]) if (t !== null) clearTimeout(t);
       termTimer = killTimer = drainTimer = null;
@@ -97,6 +99,8 @@ export function makeTokenSyncSpawn(env: TokenSyncEnv): TokenSyncSpawn {
     };
     const signalGroup = (signal: 'SIGTERM' | 'SIGKILL'): void => {
       if (child.pid === undefined) return;
+      // Windows has no process group (`kill(-pid)` is ESRCH whatever the state): end the tree (`winKillTree`).
+      if (process.platform === 'win32') { winKillTree(spawn, child, signal); return; }
       try { process.kill(-child.pid, signal); } catch (e) {
         // ESRCH: the group is already gone. Anything else: fall back to the child alone rather than to nothing.
         if ((e as NodeJS.ErrnoException).code !== 'ESRCH') child.kill(signal);

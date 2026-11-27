@@ -7,7 +7,7 @@ import type { rowFactsOf } from './tickPlan.js';
 import { servedFromWatcher } from './servedRead.js';
 import { configDirFor, type CcrcConfig } from './config.js';
 import { measuredIdentity, readSessionRecord } from './registry.js';
-import { liveSessionStatus, readLiveStateMeasured } from './livestate.js';
+import { liveSessionStatus, readLiveStateMeasuredFor } from './livestate.js';
 import { readSession } from './sessionReading.js';
 import {
   continuesInto, resumedPastMarker, rungRank, TranscriptResolver, type TranscriptResolution,
@@ -784,7 +784,7 @@ export class SessionStream implements FeedSubscriber {
         // reading `idle` for the same session in the same second leaves the operator no way to tell which to believe.
         // Each surface pins its half in its own tests (`fleet.test.ts`, `sessionws.test.ts`); the card/header pair is held to one
         // word, row by row, in `session-ladders-characterization.test.ts`, and the liveness half is the truth table.
-        const read = await readLiveStateMeasured(this.deps.io, cfgDir, pid);
+        const read = await readLiveStateMeasuredFor(this.deps.io, cfgDir, pid, identity.uuid);
         if (read.ok) {
           if (read.state.cwd) cwd = read.state.cwd;
           turn = liveSessionStatus(read.state.status) === 'idle' ? 'idle' : 'busy';

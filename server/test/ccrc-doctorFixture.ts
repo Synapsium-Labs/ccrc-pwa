@@ -45,6 +45,7 @@ import { scaled } from './timeScale.js';
 import type { ExecKind } from '../../shared/roster.js';
 import { ghContainedEnv, ghPoisonAt, seedAccountsSh } from './ccdWsHelpers.js';
 import { DOCTOR_GH_PROBE, takeExpectedPoison } from './containedTools.js';
+import { realPath, posixPath, lockOwnerOnly, unlockShared } from './helpers.js';
 import { plantAuthHelper, plantAuthModule, fixtureSecretLine, compiledSecretJs } from './authFixtures.js';
 import { IS_DARWIN } from './platformFixtures.js';
 import { plantShippedTimers } from './shippedTimers.js';
@@ -72,13 +73,10 @@ export const LIB_SRC = join(REPO, 'ccd', 'ccrc-wrapper-shape');
  *  spawn below hands the child a PATH built only from fixture directories, and
  *  libuv resolves the executable against the CHILD's environment — so spawning
  *  bare `bash` would be ENOENT. Same trick ccrc-cli.test.ts (its bash shim) uses. */
-export const BASH = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim();
-
-export const realPath = (name: string): string => {
-  const p = spawnSync('bash', ['-c', `command -v ${name}`], { encoding: 'utf8' }).stdout.trim();
-  if (!p) throw new Error(`this box has no ${name} — the fixture needs it`);
-  return p;
-};
+// `helpers.ts`'s `realPath`: on Windows it answers the NATIVE path, which is what libuv can spawn; a bare
+// `command -v` answers `/usr/bin/bash`, which it cannot.
+export { realPath };
+export const BASH = realPath('bash');
 
 export interface Result { code: number; stdout: string; stderr: string }
 
@@ -190,7 +188,8 @@ export function writeAuthSecret(home: string, text = fixtureSecretLine()): void 
   writeFileSync(join(home, '.ccrc', 'auth.scrypt'), text, { mode: 0o600 });
 }
 
-export const ccrcIn = (home: string): string => join(home, 'ccrc', 'ccd', 'ccrc');
+// POSIX form: bash does path arithmetic on `$0` (see `posixPath`).
+export const ccrcIn = (home: string): string => posixPath(join(home, 'ccrc', 'ccd', 'ccrc'));
 
 /** Replaces the symlinked check table with a hand-written one. Only the runner
  *  tests use this — it is how a table entry with no implementation, or a check
@@ -248,6 +247,15 @@ export const linkReal = (home: string, name: string): void => {
   // that re-links one it needs (the oversize-wrapper test predates that) must
   // not trip over the fixture already having it. Last caller wins.
   rmSync(join(stubBin(home), name), { force: true });
+  if (process.platform === 'win32') {
+    // A SYMLINK IS THE WRONG SHAPE HERE ON WINDOWS, in both directions: pointed at the POSIX path Windows cannot
+    // resolve the target; pointed at the native one the link is a name with no `.exe`, which the shell doing
+    // `command -v node` does not treat as executable. Either way the fixture plants a tool and the subject reports it
+    // missing — measured as 111 failures reading `FAIL node: not on PATH` on a box where node is installed. A one-line
+    // exec wrapper is what the shell is looking for, the device `stubNode` beside it already uses.
+    stub(home, name, `exec '${posixPath(realPath(name))}' "$@"`);
+    return;
+  }
   symlinkSync(realPath(name), join(stubBin(home), name));
 };
 
@@ -462,8 +470,13 @@ export function writeWrapper(home: string, id: string,
 /** The upstream account's own shape: a non-script binary. The real one is a
  *  ~300 MB ELF; a few bytes prove "not a script" without the wait. */
 export function writeBinary(home: string, id: string): void {
-  writeFileSync(join(binDir(home), id),
-    '\x7fELF\x02\x01\x01\x00not-a-real-binary-just-a-fixture-marker', { mode: 0o755 });
+  // THE MARKER IS THE PLATFORM'S. `mode: 0o755` sets no executable bit on Windows, so MSYS2 sniffs content: a `#!`
+  // or an `MZ` (PE) header is executable, an ELF header is not — measured, the ELF marker made doctor report the
+  // wrapper the fixture had just planted as not executable (8 failures whose subject was the fixture).
+  const marker = process.platform === 'win32'
+    ? 'MZ\x90\x00\x03\x00\x00\x00not-a-real-binary-just-a-fixture-marker'
+    : '\x7fELF\x02\x01\x01\x00not-a-real-binary-just-a-fixture-marker';
+  writeFileSync(join(binDir(home), id), marker, { mode: 0o755 });
 }
 
 /** An EXTERNAL account, in the shape the reference box has it: `gpt` is a
@@ -910,7 +923,11 @@ export function writeExposureEnv(home: string, o: ExposureOpts = {}): void {
   mkdirSync(join(home, '.ccrc'), { recursive: true });
   const p = join(home, '.ccrc', 'exposure.env');
   writeFileSync(p, lines.join('\n') + '\n');
-  chmodSync(p, o.mode ?? 0o600);
+  // `lockOwnerOnly` for the DEFAULT, `unlockShared` for a test that is ABOUT an open mode: the first must produce what
+  // `_ccrc_lock_file` produces (on Windows a mode is not that), the second a file that is NOT locked.
+  if (o.mode === undefined || o.mode === 0o600) lockOwnerOnly(p);
+  else if (process.platform === 'win32') unlockShared(p);
+  else chmodSync(p, o.mode);
 }
 
 /** An openssl-shaped `notAfter=` value `days` from now, in the one format
@@ -1008,7 +1025,7 @@ export const containedPathFor = new Map<string, string>();
 export function containedPath(home: string): string {
   let p = containedPathFor.get(home);
   if (p === undefined) {
-    p = ghContainedEnv(home, { PATH: stubBin(home) })['PATH'] ?? '';
+    p = ghContainedEnv(home, { PATH: posixPath(stubBin(home)) })['PATH'] ?? '';
     containedPathFor.set(home, p);
   }
   return p;
@@ -1395,6 +1412,13 @@ export function healthy(prefix: string): string {
   writeExposureEnv(home);
   linkReal(home, 'stat');
   linkReal(home, 'date');
+  if (process.platform === 'win32') {
+    // `stat`'s rule for the platform that answers this question differently: on Windows the exposure check reads an
+    // ACL, so `icacls` and `cygpath` are the real binaries under test. Left out, the check says `its access cannot be
+    // measured on this box (no icacls)` — a true sentence about the FIXTURE and a failed test about nothing.
+    linkReal(home, 'icacls');
+    linkReal(home, 'cygpath');
+  }
   writeFileSync(join(home, 'fixture-system-unit-caddy'), 'active\n');
   stubOpenssl(home);
   writeFileSync(join(home, 'fixture-cert-enddate'), `${endDateFixture(90)}\n`);

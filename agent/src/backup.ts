@@ -9,7 +9,9 @@
 // never its target's bytes), `fstat` must say a regular file, and at most `BACKUP_FILE_MAX_BYTES` are read; only the
 // first line is answered. A missing file is absent (a run that never happened); EACCES or EPERM anywhere is `denied`,
 // and any other fault on any file is `failed`, so a fault never reads as a file that is not there.
-import { closeSync, constants as fsConstants, fstatSync, openSync, readSync, statSync } from 'node:fs';
+import { closeSync, constants as fsConstants, fstatSync, readSync, statSync } from 'node:fs';
+// O_NOFOLLOW is undefined on Windows (ORs in as 0); the shared kernel honours it there too (the Windows port).
+import { O_NOFOLLOW, openSync } from '../../shared/nofollow.mjs';
 import path from 'node:path';
 import { BACKUP_FILE_MAX_BYTES, BACKUP_FILES, type BackupFile, type BackupRead, type BackupUnreadableWhy } from '../../shared/backup.js';
 
@@ -25,7 +27,7 @@ const whyOf = (e: unknown): BackupUnreadableWhy => (code(e) === 'EACCES' || code
 function readFirstLine(p: string): { ok: true; text: string | null } | { ok: false; why: BackupUnreadableWhy } {
   let fd: number | undefined;
   try {
-    fd = openSync(p, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | fsConstants.O_NOFOLLOW);
+    fd = openSync(p, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | O_NOFOLLOW);
   } catch (e) {
     return code(e) === 'ENOENT' ? { ok: true, text: null } : { ok: false, why: whyOf(e) };
   }

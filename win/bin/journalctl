@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# journalctl(1), for the one shape the shipped scripts call:
+#
+#     journalctl --user -u <unit> -n <N> --no-pager      (deploy/verify-service.sh:78)
+#
+# and `--since <@epoch|date>`, `-g/--grep PATTERN` (ccd's OOM check) and `-f` (`ccrc logs -f`).
+#
+# There is no journald here. What there is: `win/ccrc-supervisor.mjs` appends
+# every unit's stdout+stderr to `$STATE_DIR/journal/<unit>.log`, with a header
+# line per start, and answers the tail over `GET /units/<unit>/journal?n=N`.
+# That file is the whole reason a service that dies on this box can be read
+# afterwards at all; before it existed the supervisor spawned with
+# `stdio: 'ignore'` and a failed `ccrc.service` left NOTHING behind.
+set -uo pipefail
+
+STATE_DIR="${CCRC_SUPERVISOR_STATE:-$HOME/.ccrc/supervisor}"
+ENDPOINT="$STATE_DIR/endpoint.json"
+
+_sup_field() { [ -f "$ENDPOINT" ] || return 1
+  sed -n "s/.*\"$1\":[[:space:]]*\"\{0,1\}\([^,\"}]*\)\"\{0,1\}.*/\1/p" "$ENDPOINT" | head -1; }
+
+UNIT=""; N=60; SINCE=""; GREP=""; FOLLOW=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -u|--unit) UNIT="$2"; shift ;;
+    --unit=*) UNIT="${1#--unit=}" ;;
+    -n|--lines) N="$2"; shift ;;
+    -n*) N="${1#-n}" ;;
+    --lines=*) N="${1#--lines=}" ;;
+    -S|--since) SINCE="$2"; shift ;;
+    --since=*) SINCE="${1#--since=}" ;;
+    -g|--grep) GREP="$2"; shift ;;
+    --grep=*) GREP="${1#--grep=}" ;;
+    -f|--follow) FOLLOW=1 ;;
+    --user|--no-pager|-e|-x|--catalog|-q|--quiet) ;;
+    -*) ;;
+  esac
+  shift
+done
+
+[ -n "$UNIT" ] || { echo "journalctl (ccrc shim): -u <unit> is required — this journal is per unit" >&2; exit 2; }
+case "$UNIT" in *.*) ;; *) UNIT="$UNIT.service" ;; esac
+
+port=$(_sup_field port) || { echo "journalctl (ccrc shim): the supervisor is not running, so there is no journal to read" >&2; exit 1; }
+token=$(_sup_field token) || exit 1
+# GNU date reads both `@<epoch>` and a date; the manager filters by epoch seconds.
+since=0
+if [ -n "$SINCE" ]; then
+  since=$(date -d "$SINCE" +%s 2>/dev/null) || { echo "Failed to parse timestamp: $SINCE" >&2; exit 1; }
+fi
+curl -fsS -G -H "x-ccrc-sup-token: $token" --max-time 5 --data-urlencode "n=$N" --data-urlencode "since=$since"   --data-urlencode "grep=$GREP" "http://127.0.0.1:$port/units/$UNIT/journal" || exit 1
+[ "$FOLLOW" = 1 ] || exit 0
+# -f: the journal is a plain file, so follow it as `tail -F` does (new lines only; the tail above printed the rest).
+file="$STATE_DIR/journal/$UNIT.log"
+if [ -n "$GREP" ]; then
+  case "$GREP" in *[[:upper:]]*) gi="" ;; *) gi="-i" ;; esac
+  tail -n 0 -F "$file" 2>/dev/null | grep --line-buffered $gi -E -- "$GREP"
+else
+  exec tail -n 0 -F "$file" 2>/dev/null
+fi

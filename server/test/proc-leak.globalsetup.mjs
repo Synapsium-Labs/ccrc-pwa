@@ -101,6 +101,16 @@ export function leakReport(leaks) {
 }
 
 export default async function setup() {
+  // NOT ON WINDOWS, and said once rather than silently. The check is built on POSIX process groups -- a test's
+  // orphans keep this process's group when reparented -- and Windows has no process groups to keep. `ps` there is
+  // MSYS2's, which takes none of the `-A -o pid=,ppid=,pgid=` spelling, so `groupMembers` threw on the first call;
+  // a throw from a globalSetup stops vitest from running ANY file (measured under vitest 5: `No test files found`
+  // and a startup error, for every filter). Skipping is the honest answer: the leak this guards against cannot be
+  // measured there, and a red run for that reason would describe the platform, not a test.
+  if (process.platform === 'win32') {
+    process.stderr.write('ccrc-test: process-leak check skipped on win32 (no POSIX process groups to record)\n');
+    return undefined;
+  }
   const pgid = ownGroup();
   const baseline = new Set(groupMembers(pgid).map((p) => p.pid));
   return async () => {

@@ -19,6 +19,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { guardRunner, seedRoster, testDeps } from './helpers.js';
 import { unreadableField } from './ioDoubles.js';
 import { askKey } from '../src/askkey.js';
+import { clipPath } from '../src/clip.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
@@ -1079,7 +1080,17 @@ describe('prompt route attachment handling', () => {
 
   // `home` is a fresh mkdtemp dir created inside makeApp, so the clip path (which
   // must resolve under it) can only be built from the `home` the callback receives.
-  const clipOf = (home: string) => `${home}/.cc-clips/${ID}/clip-20260726-150340-a1b2.png`;
+  //
+  // THROUGH `clipPath`, not hand-spelled with forward slashes. The route accepts
+  // an attachment only if it equals what `clipPath` composes, and `clipPath`
+  // composes with `path.resolve` — so on Windows the real producer emits
+  // backslashes and a hand-built `${home}/.cc-clips/...` is a string the product
+  // never actually hands out. Written that way, these tests passed on a box
+  // where every real upload was refused: `upload` answered 200 with a path and
+  // `prompt` answered 400 `bad-attachment` for that same path, because the
+  // route split the basename on `/` alone.
+  const clipOf = (home: string) =>
+    clipPath(path.join(home, '.cc-clips'), ID, 'clip-20260726-150340-a1b2.png');
 
   it('accepts a staged attachment alongside text, typed as one turn', async () => {
     const { app, calls, home } = await makeApp((home) => [
@@ -1156,7 +1167,10 @@ describe('upload route id handling', () => {
     expect(res.statusCode).toBe(200);
     const clip = res.json().clip as { path: string; name: string; bytes: number };
     expect(clip.name).toMatch(/^clip-\d{8}-\d{6}-[0-9a-f]{8}-shot\.png$/);
-    expect(clip.path).toContain(`/.cc-clips/${ID}/`);
+    // `path.sep`, not a hard `/`: the path comes from `clipPath`'s
+    // `path.resolve`, so on Windows it is spelled with backslashes. Asserting
+    // the POSIX spelling tested the platform, not the route.
+    expect(clip.path).toContain(`${path.sep}.cc-clips${path.sep}${ID}${path.sep}`);
   });
 
   // The whole point of the document half: the path is typed into the session

@@ -9,6 +9,7 @@ import { spawn } from 'node:child_process';
 import os from 'node:os';
 import { UPDATE_SPAWN_DRAIN_MS, UPDATE_SPAWN_TIMEOUT_MS } from '../../../shared/agent-protocol.js';
 import { boundedSpawn } from '../../../shared/spawn.mjs';
+import { startable, winKillTree } from '../../../shared/startable.mjs';
 
 export interface ExecResult {
   /** The exit status; a signal is 128 plus its number; a launcher that could not start is 1. */
@@ -26,7 +27,7 @@ export const SHORT_BOUND_MS = UPDATE_SPAWN_TIMEOUT_MS;
 /** An exec with the child's WHOLE environment `env` and the bound `timeoutMs`. */
 export function boundedExec(env: Readonly<Record<string, string>>, timeoutMs: number): Exec {
   return async (file, args) => {
-    const r = await boundedSpawn({ spawn, signals: os.constants.signals }, file, [...args], { env: { ...env }, timeoutMs, drainMs: UPDATE_SPAWN_DRAIN_MS });
+    const r = await boundedSpawn({ spawn, signals: os.constants.signals, startable, winKillTree }, file, [...args], { env: { ...env }, timeoutMs, drainMs: UPDATE_SPAWN_DRAIN_MS });
     return { status: r.code, stdout: r.stdout ?? '', stderr: r.stderr, killed: r.killed };
   };
 }

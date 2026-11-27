@@ -8,6 +8,9 @@ import {
   chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, utimesSync, writeFileSync,
 } from 'node:fs';
 import { promises as fsp } from 'node:fs';
+// The directory fsync's open flags (`syncDir`, src/token/files.ts): O_RDONLY off Windows, as the `'r'` it opened with
+// before the Windows port, and O_RDWR on it. The mock below keys on this, not on the spelling `'r'`.
+import { FSYNC_OPEN } from '../../shared/fsync-open.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
@@ -806,7 +809,7 @@ describe('boot hardening around a recorded promotion, a state-unknown write and 
     const real = fsp.open.bind(fsp);
     let rejected = 0;
     vi.spyOn(fsp, 'open').mockImplementation(((p: string, flags?: unknown, ...rest: unknown[]) => {
-      if (flags === 'r' && rejected === 0) { rejected++; return Promise.reject(Object.assign(new Error('fsync'), { code: 'EIO' })); }
+      if (flags === FSYNC_OPEN && rejected === 0) { rejected++; return Promise.reject(Object.assign(new Error('fsync'), { code: 'EIO' })); }
       return (real as (...a: unknown[]) => Promise<unknown>)(p, flags, ...rest);
     }) as typeof fsp.open);
     const r = await boot(home);

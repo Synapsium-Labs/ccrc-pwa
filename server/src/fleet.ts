@@ -510,8 +510,13 @@ export function dropStaleLandings(sessions: readonly FleetSession[], nowMs: numb
 
 /** D-7512: the port the assembly reads Claude Code's live status file through, `<configDir>/sessions/<pid>.json` →
  *  the measured read. Its adapter is `livestate.ts#liveStateReaderOver`, `readLiveStateMeasured` bound to one box's
- *  io: that file is L3 (the torn-body wait), and this one is L1, so the read is handed in rather than imported. */
-export type LiveStateMeasuredReader = (configDir: string, pid: number) => Promise<LiveStateRead>;
+ *  io: that file is L3 (the torn-body wait), and this one is L1, so the read is handed in rather than imported.
+ *
+ *  `uuid` IS PART OF THE PORT, not a hint. The pane pid names the file only where tmux and Claude Code share a pid
+ *  namespace; on Windows (MSYS2 tmux, native Claude Code) they never do, so the adapter finds the file by the
+ *  session's uuid when the pid names none — see `livestate.ts#readLiveStateMeasuredFor`. A reader handed no uuid
+ *  could only ever answer `no-state` there, which this assembly paints as rest. */
+export type LiveStateMeasuredReader = (configDir: string, pid: number, uuid: string) => Promise<LiveStateRead>;
 
 /** `assembleFleet`'s inputs past the first five, by name (#2399): every one optional, so a caller names only what it
  *  carries and the many short calls (io, cfg, tmux, reader, clock) stay positional. */
@@ -700,7 +705,7 @@ export async function assembleFleetWithPanePids(
         // file over — "a status we don't recognise is far likelier to be new
         // work than new rest" — reached by a path that never got as far as a
         // status word.
-        const read = await readLive(cfgDir, pid);
+        const read = await readLive(cfgDir, pid, r.uuid);
         if (read.ok) {
           const live = read.state;
           status = liveSessionStatus(live.status);

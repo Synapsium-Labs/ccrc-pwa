@@ -180,7 +180,7 @@ describe('the update op', () => {
       expect(await c.req<Res>(1, { op: 'update', tag: 'v0.0.9', kind: 'update' }))
         .toEqual({ t: 'res', id: 1, ok: true, accepted: true });
       expect(rec.calls).toEqual([
-        { file: path.join(home, '.local', 'bin', 'ccrc'), args: TEMPLATE, timeoutMs: UPDATE_SPAWN_TIMEOUT_MS },
+        { file: updateLauncherPath(home), args: TEMPLATE, timeoutMs: UPDATE_SPAWN_TIMEOUT_MS },
       ]);
     });
 
@@ -188,7 +188,7 @@ describe('the update op', () => {
       const { c, rec, home } = await up();
       expect(await c.req<Res>(1, { op: 'update', tag: 'v0.0.8', kind: 'rollback' })).toMatchObject({ ok: true, accepted: true });
       expect(rec.calls).toEqual([{
-        file: path.join(home, '.local', 'bin', 'ccrc'),
+        file: updateLauncherPath(home),
         args: ['rollback', '--to', 'v0.0.8', '--detach', '--from', 'pwa'],
         timeoutMs: UPDATE_SPAWN_TIMEOUT_MS,
       }]);
@@ -328,7 +328,8 @@ describe('the update op', () => {
       expect(rec.calls).toHaveLength(2);
     });
 
-    it.skipIf(process.getuid?.() === 0)('an unreadable report (EACCES) is not busy', async () => {
+    // Skipped as root, and on Windows, where chmod 000 cannot take the owner's read away.
+    it.skipIf(process.getuid?.() === 0 || process.platform === 'win32')('an unreadable report (EACCES) is not busy', async () => {
       const { c, rec, home } = await up();
       const p = reportPath(home);
       writeFileSync(p, reportLine());
@@ -431,8 +432,11 @@ describe('the update op', () => {
       // D-7055: the body is shared/spawn.mjs#boundedSpawn's, `spawn` the one its host injects; makeUpdateSpawn calls it.
       const kernel = slice(readFileSync(path.resolve(here, '..', '..', 'shared', 'spawn.mjs'), 'utf8'), 'export function boundedSpawn(', /\n\}\n/);
       expect(kernel).toMatch(/const \{ spawn, signals \} = host;/);
-      expect(kernel).toMatch(/spawn\(file, \[\.\.\.args\], \{ detached: true, stdio: \['ignore', 'pipe', 'pipe'\], env \}\)/);
-      expect(spawnBody, 'makeUpdateSpawn calls boundedSpawn').toMatch(/\bboundedSpawn\(\{ spawn, signals: os\.constants\.signals \}, file, args, /);
+      // The Windows port starts the launcher through `startable`, which answers `[file, [...args]]` unchanged off Windows.
+      expect(kernel).toMatch(/spawn\(\.\.\.startable\(file, args\), \{ detached: true, stdio: \['ignore', 'pipe', 'pipe'\], env \}\)/);
+      expect(readFileSync(path.resolve(here, '..', '..', 'shared', 'startable.mjs'), 'utf8'))
+        .toMatch(/if \(platform !== 'win32' \|\| [^\n]*\) return \[file, \[\.\.\.args\]\];/);
+      expect(spawnBody, 'makeUpdateSpawn calls boundedSpawn').toMatch(/\bboundedSpawn\(\{ spawn, signals: os\.constants\.signals, startable, winKillTree \}, file, args, /);
       expect(spawnBody, 'makeUpdateSpawn spawns nothing itself').not.toMatch(/(?<![\w.])spawn\(/);
       const readBody = slice(src, 'export function readUpdateReport(', /\n\}\n/);
       expect(readBody).not.toMatch(EXEC_PATH);
@@ -462,7 +466,8 @@ describe('the update op', () => {
     // whether the case passed or threw.
     const saved = { PATH: process.env.PATH, HOME: process.env.HOME };
     function contain(home: string): void {
-      process.env.PATH = '/usr/bin:/bin';
+      // Windows: the MSYS directory alone, where the launcher's shell is found (a POSIX list finds no `bash` there).
+      process.env.PATH = process.platform === 'win32' ? 'C:\\msys64\\usr\\bin' : '/usr/bin:/bin';
       process.env.HOME = home;
     }
     afterEach(() => {
@@ -489,7 +494,7 @@ describe('the update op', () => {
       expect(await c.req<Res>(1, { op: 'update', tag: 'v0.0.9', kind: 'rollback' }))
         .toEqual({ t: 'res', id: 1, ok: true, accepted: true });
       expect(readFileSync(argvFile, 'utf8')).toBe(
-        [path.join(fixture.home, '.local', 'bin', 'ccrc'), 'rollback', '--to', 'v0.0.9', '--detach', '--from', 'pwa', '']
+        [updateLauncherPath(fixture.home), 'rollback', '--to', 'v0.0.9', '--detach', '--from', 'pwa', '']
           .join('\n'));
     });
 

@@ -6,6 +6,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { spawnSyncGroup } from './spawnGroup.js';
 import path from 'node:path';
 import fs from 'node:fs';
+import { posixPath } from './helpers.js';
 import { makeCcdHarness, ghContainedEnv, CCD, WS_ADD, SCAN_LOOKBACK_LINES, seedAccountsSh, plantPoolEpoch, type CcdHarness } from './ccdWsHelpers.js';
 import { asManagerCalls, itLinux } from './platformFixtures.js'; import { POOLED_TEST_ROSTER, POOL_BY_ID } from './fixtures/poolRule.js';
 
@@ -1526,8 +1527,11 @@ describe('gh containment is the harness\'s, not the caller\'s', () => {
   it('puts the harness bin FIRST on PATH, whatever the caller passes', () => {
     // A caller-supplied PATH must not be able to displace it — the ordering is
     // what makes this structural rather than advisory.
-    expect(h.sh('command -v gh')).toBe(path.join(h.home, '.local', 'bin', 'gh'));
-    expect(h.sh('command -v gh', { PATH: '/usr/bin:/bin' })).toBe(path.join(h.home, '.local', 'bin', 'gh'));
+    // `posixPath`: bash reports the poison in ITS spelling (`/c/…` under MSYS2),
+    // and the question is WHICH FILE answers, not how a path is written.
+    const poison = posixPath(path.join(h.home, '.local', 'bin', 'gh'));
+    expect(h.sh('command -v gh')).toBe(poison);
+    expect(h.sh('command -v gh', { PATH: '/usr/bin:/bin' })).toBe(poison);
   });
 });
 

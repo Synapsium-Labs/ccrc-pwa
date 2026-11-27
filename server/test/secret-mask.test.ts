@@ -486,7 +486,7 @@ describe('secret_fingerprints never leaves the server (D-5513)', () => {
     (e.isDirectory() ? files(path.join(dir, e.name)) : e.name.endsWith('.ts') ? [path.join(dir, e.name)] : []));
   it('`secret_fingerprints` is read by mask.ts only and is in no route\'s answer', () => {
     const holders = files(srcRoot).filter((f) => readFileSync(f, 'utf8').includes('secret_fingerprints'))
-      .map((f) => path.relative(srcRoot, f)).sort();
+      .map((f) => path.relative(srcRoot, f).split(path.sep).join('/')).sort();
     expect(holders).toEqual(['accounts/mask.ts', 'coord/schema.ts']);
     // mask.ts registers no route and answers no request
     const mask = parsedFile('server/src/accounts/mask.ts').text;

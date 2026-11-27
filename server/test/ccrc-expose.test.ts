@@ -32,14 +32,18 @@ import * as pty from 'node-pty';
 import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
 import { ledgerHitLine, takeExpectedPoison } from './containedTools.js';
+import { realPath, posixPath, ownerOnly, readableByOthers } from './helpers.js';
 import { itLinux, itDarwin } from './platformFixtures.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
 const CCRC_SRC = join(REPO, 'ccd', 'ccrc');
 
-/** bash's absolute path, resolved once under this process's real PATH. */
-const BASH = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim();
+/** bash's absolute path, resolved once under this process's real PATH — and
+ *  translated out of MSYS2's mount table on Windows, which is what `realPath`
+ *  adds over the inline `command -v` this line used to be. `pty.spawn` of a
+ *  POSIX path fails as `File not found: ` with an empty name. */
+const BASH = realPath('bash');
 
 const SUB = 'mybox';
 const HOST = `${SUB}.duckdns.org`;
@@ -48,7 +52,9 @@ const BYO_ORIGIN = 'https://box.example.com';
 const BYO_RPID = 'box.example.com';
 const IP_ADDR = '198.51.100.7';                 // TEST-NET-2 — the fixture box's "global" address
 
-const ccrcIn = (home: string): string => join(home, 'ccrc', 'ccd', 'ccrc');
+// POSIX form: this string is handed to bash as `$0`, and the script does path
+// arithmetic on it (`posixPath`'s docstring has the failure it produces).
+const ccrcIn = (home: string): string => posixPath(join(home, 'ccrc', 'ccd', 'ccrc'));
 const exposurePath = (home: string): string => join(home, '.ccrc', 'exposure.env');
 const caddyfilePath = (home: string): string => join(home, '.ccrc', 'Caddyfile');
 const envFilePath = (home: string): string => join(home, '.ccrc', 'ccrc.env');
@@ -287,9 +293,9 @@ describe('ccrc expose duckdns', () => {
     const r = await runExposeTty(home, ['duckdns'], [SUB, TOKEN, '']);
     expect(r.code, r.stdout).toBe(0);
     expect(bytesAt(exposurePath(home))).toBe(duckdnsEnv(SUB, TOKEN));
-    expect(mode(exposurePath(home)), 'exposure.env holds a token and must be 0600').toBe(0o600);
+    expect(ownerOnly(exposurePath(home)), 'exposure.env holds a token and must be owner-only').toBe(true);
     expect(bytesAt(caddyfilePath(home))).toBe(caddyfile(HOST, 7788));
-    expect(mode(caddyfilePath(home))).toBe(0o644);
+    expect(readableByOthers(caddyfilePath(home))).toBe(true);
     // …and nothing else was left in ~/.ccrc — no temp file survived the mv.
     expect(ccrcDirEntries(home)).toEqual(['Caddyfile', 'exposure.env']);
   });
@@ -435,7 +441,7 @@ describe('ccrc expose byo', () => {
     expect(r.code, r.stdout).toBe(0);
     expect(bytesAt(exposurePath(home))).toBe(byoEnv(BYO_ORIGIN, BYO_RPID));
     expect(readFileSync(exposurePath(home), 'utf8')).not.toContain('CCRC_DDNS');
-    expect(mode(exposurePath(home))).toBe(0o600);
+    expect(ownerOnly(exposurePath(home))).toBe(true);
     expect(bytesAt(caddyfilePath(home))).toBe(caddyfile(BYO_RPID, 7788));
   });
 
@@ -511,9 +517,9 @@ describe('ccrc expose ip', () => {
     const r = await runExposeTty(home, ['ip'], ['']);
     expect(r.code, r.stdout).toBe(0);
     expect(bytesAt(exposurePath(home))).toBe(ipEnv(IP_ADDR));
-    expect(mode(exposurePath(home)), 'exposure.env stays 0600 — one writer, one mode').toBe(0o600);
+    expect(ownerOnly(exposurePath(home)), 'exposure.env stays owner-only — one writer, one rule').toBe(true);
     expect(bytesAt(caddyfilePath(home))).toBe(ipCaddyfile(IP_ADDR, 7788));
-    expect(mode(caddyfilePath(home))).toBe(0o644);
+    expect(readableByOthers(caddyfilePath(home))).toBe(true);
     expect(ccrcDirEntries(home)).toEqual(['Caddyfile', 'exposure.env']);
     // No rp id and no ddns anything — the two shapes this arm must NOT have.
     const envBytes = readFileSync(exposurePath(home), 'utf8');

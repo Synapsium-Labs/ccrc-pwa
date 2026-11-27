@@ -126,6 +126,16 @@ export const FORBIDDEN_CCD_VERBS: readonly string[] =
 
 // ── roots ──────────────────────────────────────────────────────────────────
 
+/** THE WINDOWS PORT: Claude Code there reports paths as `C:\Users\...`, the registry and ccd as `/c/Users/...`, and every
+ *  pattern below is anchored on `/`. So on Windows a path is judged in the registry's MSYS spelling: an edit of
+ *  `C:\Users\u\.cc-sessions\x.json` matched no forbidden pattern and fell to the operator (measured), and a cwd or home
+ *  in drive-letter form was no absolute path, so a child had no roots. Off Windows it is the identity. */
+const WIN = process.platform === 'win32';
+const msysPath = (p: string): string => (WIN ? p.replace(/\\/g, '/').replace(/^([A-Za-z]):(?=\/|$)/, (_m, d: string) => `/${d.toLowerCase()}`) : p);
+/** A command's absolute Windows paths in MSYS spelling, for the forbidden match only (Windows): just the `X:\...` spans,
+ *  never every backslash, so a `grep '\.ccrc'` stays a pattern and is not read as a path. */
+const msysPathsIn = (cmd: string): string => cmd.replace(/[A-Za-z]:\\[^\s'"`;|&()<>]*/g, msysPath);
+
 const isAbsNormal = (p: string): boolean => p.startsWith('/') && path.posix.normalize(p) === p && (p === '/' || !p.endsWith('/'));
 const atOrInside = (p: string, root: string): boolean => p === root || p.startsWith(`${root}/`);
 const strictlyInside = (p: string, root: string): boolean => p.startsWith(`${root}/`);
@@ -145,6 +155,7 @@ export function rootsForChild(
   row: { readonly id: string; readonly workdir: string; readonly child: ChildMark }, home: string,
 ): ApprovalRoots | null {
   if (row.child.kind !== 'child') return null;
+  home = msysPath(home);
   if (!isAbsNormal(home) || home === '/' || !isTmpRootId(row.id)) return null;
   const tmpRoot = `${home}/.cc-tmp/${row.id}`;
   return {
@@ -420,8 +431,9 @@ function stringLeaves(v: unknown, out: string[] = []): string[] {
 function nonBashClass(tool: string, input: Record<string, unknown>): ApprovalClass {
   if (tool.startsWith('mcp__') && stringLeaves(input).some(isForbiddenText)) return 'forbidden';
   for (const f of PATH_FIELDS) {
-    const p = input[f];
-    if (typeof p !== 'string') continue;
+    const raw = input[f];
+    if (typeof raw !== 'string') continue;
+    const p = msysPath(raw);
     if (PATH_FORBIDDEN.test(p)) return 'forbidden';
     if (EDIT_TOOLS.has(tool) && new RegExp(`(?:^|/)${SENSITIVE_EDIT}`).test(p)) return 'forbidden';
     if (EDIT_TOOLS.has(tool) && new RegExp(CLAUDE_BUILD_PATH).test(p)) return 'forbidden';
@@ -913,14 +925,19 @@ export function approvalClass(tool: string, input: Record<string, unknown>, rawC
   const command = input.command;
   if (typeof command !== 'string') return 'escalate';
   if (Buffer.byteLength(command, 'utf8') > APPROVAL_INPUT_MAX_BYTES) return 'escalate';
-  if (isForbiddenText(command)) return 'forbidden';
+  if (isForbiddenText(command) || (WIN && isForbiddenText(msysPathsIn(command)))) return 'forbidden';
   // D-5360 round 8: any non-ASCII character anywhere in the request escalates. macOS /bin/bash 3.2 reads a byte that
   // isalnum() accepts in a UTF-8 or Latin-1 locale as part of a `$NAME` (`"$Xú/etc"` expands an unset `$Xú`), and a
   // case-insensitive filesystem folds `ſ` to `s` (`AGENTſ.md` opens `AGENTS.md`).
   if (stringLeaves(input).some((s) => NON_ASCII.test(s))) return 'escalate';
   if (CREDENTIAL_RE.test(command)) return 'escalate';
   // D-5299: a cwd that is not absolute and normal is no known directory (`<wt>/../..` passed the prefix test).
-  const ctx: ApprovalCtx = { ...rawCtx, cwd: rawCtx.cwd !== null && isAbsNormal(rawCtx.cwd) ? rawCtx.cwd : null };
+  const cwd = rawCtx.cwd === null ? null : msysPath(rawCtx.cwd);
+  const root = (r: string | null): string | null => (r === null ? null : msysPath(r));
+  const ctx: ApprovalCtx = {
+    ...rawCtx, worktree: root(rawCtx.worktree), tmpRoot: root(rawCtx.tmpRoot), scratch: root(rawCtx.scratch), home: root(rawCtx.home),
+    cwd: cwd !== null && isAbsNormal(cwd) ? cwd : null,
+  };
   if (command.includes('\0')) return 'escalate';                                // bash cannot be handed a NUL
   try {
     const script = parse(lex(command));

@@ -1270,7 +1270,8 @@ function importClosure(roots: readonly string[]): { modules: string[]; unfollowa
       if (!spec.startsWith('.')) continue;
       const target = path.resolve(path.dirname(abs), spec);
       const asTs = target.replace(/\.js$/, '.ts');
-      queue.push(path.relative(ROOT, target !== asTs && existsSync(asTs) ? asTs : target));
+      // Repo paths are spelled with '/' (as GROWTH_MACHINERY is), on Windows too.
+      queue.push(path.relative(ROOT, target !== asTs && existsSync(asTs) ? asTs : target).split(path.sep).join('/'));
     }
     for (const c of parsed.calls) {
       if (c.name === 'require' || c.name === 'createRequire') unfollowable.push(`${rel}:${c.line}: ${c.name}(…)`);

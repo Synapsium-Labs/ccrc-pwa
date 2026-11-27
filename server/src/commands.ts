@@ -115,8 +115,9 @@ async function transcriptSkills(io: FleetIO, file: string): Promise<SlashCommand
   return answerOf([...listingsIn(lines), ...seen]) ?? [];
 }
 
-/** How the command list reads a pane's live state: the caller hands it in (D-7511), so this file loads no reader. */
-export type LiveStateReader = (configDir: string, pid: number) => Promise<LiveState | null>;
+/** How the command list reads a pane's live state: the caller hands it in (D-7511), so this file loads no reader.
+ *  `uuid` is part of the port for `fleet.ts#LiveStateMeasuredReader`'s reason: on Windows the pane pid names no file. */
+export type LiveStateReader = (configDir: string, pid: number, uuid: string) => Promise<LiveState | null>;
 
 /** Built-ins plus the session's skills (from its transcript's skill_listing). */
 export async function sessionCommands(deps: Deps, id: string, readLive: LiveStateReader): Promise<{ builtins: SlashCommand[]; skills: SlashCommand[] }> {
@@ -129,7 +130,7 @@ export async function sessionCommands(deps: Deps, id: string, readLive: LiveStat
   if (cfgDir && (await deps.tmux.hasSession(id))) {
     const pid = await deps.tmux.panePid(id);
     if (pid) {
-      const live = await readLive(cfgDir, pid);
+      const live = await readLive(cfgDir, pid, rec.uuid);
       if (live?.cwd) cwd = live.cwd;
     }
   }

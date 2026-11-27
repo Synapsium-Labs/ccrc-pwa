@@ -93,8 +93,14 @@ export function spawnSyncGroup(command: string, args: readonly string[],
   const fd = input === undefined ? undefined : inputFile(input);
   // `detached` is honoured by spawnSync at runtime (node's spawn_sync reads it, and the child's pid comes back as
   // its own pgid: measured) but @types/node leaves it out of SpawnSyncOptions, hence the widened type.
+  // WINDOWS HAS NO PROCESS GROUP TO MAKE (the Windows port): there `detached` is DETACHED_PROCESS, which gives the child
+  // no console and no group a signal can reach, and a native console program so started writes nothing to its piped
+  // stdout (measured: powershell answered status 0 and an empty stdout, attached it printed the value). So on win32 the
+  // call is a plain `spawnSync` with the caller's timeout, and the group check below, which needs POSIX groups, is
+  // skipped. Every other platform is unchanged.
+  const win = process.platform === 'win32';
   const opts: SpawnSyncOptionsWithStringEncoding & { detached: boolean } =
-    { ...rest, ...(fd === undefined ? {} : { stdio: withStdin(rest.stdio, fd) }), detached: true };
+    { ...rest, ...(fd === undefined ? {} : { stdio: withStdin(rest.stdio, fd) }), detached: !win };
   let r: SpawnSyncReturns<string>;
   try {
     r = spawnSync(command, args, opts);
@@ -102,7 +108,7 @@ export function spawnSyncGroup(command: string, args: readonly string[],
     if (fd !== undefined) closeSync(fd);
   }
   const pgid = r.pid;
-  if (!pgid || !groupAlive(pgid)) return r;
+  if (win || !pgid || !groupAlive(pgid)) return r;
   if ((r.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT') {
     killGroup(pgid);
     return r;

@@ -707,6 +707,14 @@ _check_linger() {
       "for an always-on box: stay logged in, and turn off sleep (System Settings > Lock Screen, and 'Prevent automatic sleeping' in Energy/Battery)"
     return 2
   fi
+  # WINDOWS HAS NO LINGER EITHER (the Windows port): the manager that stands in for `systemd --user` starts from the
+  # Startup folder at sign-in, so it, the server and every session stop at sign-out and start again at the next
+  # sign-in. The same WARN as macOS's, for the same reason: nothing is wrong to fix, a guarantee is missing.
+  if _ccd_is_windows; then
+    _dr_warn linger "not a Windows concept — the ccrc manager starts at sign-in from the Startup folder, so this box's server and its sessions stop at sign-out and start again at sign-in. A Linux fleet host keeps them running with nobody signed in; this box does not" \
+      "for an always-on box: stay signed in (lock the screen rather than sign out), and set sleep to Never in Settings > System > Power"
+    return 2
+  fi
   if ! command -v loginctl >/dev/null 2>&1; then
     _dr_fail linger "loginctl is not on PATH — this box has no logind, but every ccd session is a systemd --user unit" \
       "install/enable systemd-logind, or do not run a fleet on this box"
@@ -1247,6 +1255,10 @@ _check_scopes() {
 _check_test-slice() {
   if [ "${CCD_OS:-linux}" = darwin ]; then
     _dr_skip test-slice "the test slice is a systemd mechanism, and this box runs launchd"
+    return 3
+  fi
+  if _ccrc_sliceless_manager; then
+    _dr_skip test-slice "the test slice is a cgroup, and Windows has none (its systemctl is the port's stand-in manager)"
     return 3
   fi
   if ! _have_systemctl; then
@@ -1906,11 +1918,22 @@ _check_exposure() {
   # symlinked secret pass silently. A false FAIL here costs a sentence; a false
   # PASS costs the token.
   if command -v stat >/dev/null 2>&1; then
-    mode="$(_plat_mode -- "$CCRC_EXPOSURE_FILE" 2>/dev/null)" || mode=""
-    if [ "$mode" = 600 ]; then
-      modesaid=", mode 0600"
+    # `_ccrc_lock_gap` (ccd/ccrc), not `stat` directly, and the difference is
+    # the whole point on a box with no file modes: there, `stat -c%a` answers
+    # 644 for a file whose ACL still lets every account on the box read the
+    # token, so a check written against the number reports a lock that is not
+    # there. The helper measures what the platform actually enforces, and the
+    # writer (`_ccrc_lock_file`) sets exactly that.
+    mode="$(_ccrc_lock_gap "$CCRC_EXPOSURE_FILE")"
+    if [ -z "$mode" ]; then
+      # The POSIX wording is UNCHANGED, deliberately: this line is a transcript
+      # an operator reads and a test pins verbatim (`runbook-holds.test.ts`),
+      # and a box with modes still has its lock spelled as a mode. Only the box
+      # that has none says something else, because on it "mode 0600" would be
+      # the very sentence this check exists to stop being printed falsely.
+      if _ccrc_is_windows; then modesaid=", owner-only ACL"; else modesaid=", mode 0600"; fi
     else
-      gaps+=("its mode is ${mode:-unreadable}, not 0600 — the DuckDNS token must never be world-readable")
+      gaps+=("$mode — the DuckDNS token must never be world-readable")
     fi
   fi
   local origin rpid expmode
@@ -4989,7 +5012,8 @@ _check_graphify() {
   # the sweep refuses a build when it is not loaded (D-7356). Its MemoryMax is what the sizing arm below compares a
   # full build's peak against. Linux with a user manager to ask; elsewhere there is no slice to measure.
   local gfx_mm=""
-  if [ "${CCD_OS:-linux}" != darwin ] && declare -F _have_systemctl >/dev/null 2>&1 && _have_systemctl; then
+  # Windows' systemctl is the port's stand-in manager, which has no slices (no cgroups): nothing to measure there either.
+  if [ "${CCD_OS:-linux}" != darwin ] && ! _ccrc_sliceless_manager && declare -F _have_systemctl >/dev/null 2>&1 && _have_systemctl; then
     local gfx_show gfx_ls=""
     gfx_show="$(systemctl --user show ccrctests.slice -p LoadState -p MemoryMax 2>/dev/null)" || gfx_show=""
     while IFS= read -r gfx_l; do
@@ -9923,7 +9947,13 @@ _bt_value_file() {
     return 0
   fi
   if [ -L "$p" ] || [ ! -f "$p" ]; then BT_TF=not-regular; return 0; fi
-  BT_TF_MODE="$(_plat_mode -- "$p" 2>/dev/null)" || BT_TF_MODE=""
+  if _ccrc_is_windows; then
+    # The Windows port: a mode is not kept on the noacl mount (every file reads 644), so the owner-only ACL is the
+    # measure, through `_ccrc_lock_gap` as the exposure check does; 600 stands for "owner-only" in the verdict below.
+    if [ -z "$(_ccrc_lock_gap "$p" 2>/dev/null)" ]; then BT_TF_MODE=600; else BT_TF_MODE=acl-not-owner-only; fi
+  else
+    BT_TF_MODE="$(_plat_mode -- "$p" 2>/dev/null)" || BT_TF_MODE=""
+  fi
   if [ ! -r "$p" ]; then BT_TF=unreadable; return 0; fi
   # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
   BT_TF=no-value
@@ -11320,13 +11350,18 @@ _dr_secret_dirs() {   # -> the secret directories that exist on this box, one `~
   return 0
 }
 
+# This box's OS word for a SKIP's sentence: ccrc's `CCRC_OS_WORD` (windows on the Windows port, else `CCD_OS`). A check
+# sourced without ccrc (its tests) has none, and reads `CCD_OS` as before. `declare -p`, not a `:-` default: the word is
+# ccrc's own variable, never an environment setting (ccrc-settings-census.test.ts reads `${CCRC_…:-` as one).
+_dr_os_word() { if declare -p CCRC_OS_WORD >/dev/null 2>&1; then printf '%s' "$CCRC_OS_WORD"; else printf '%s' "${CCD_OS:-linux}"; fi; }
+
 # `secrets-backup-excluded` (darwin): `tmutil isexcluded` answers `[Excluded]` or `[Included]` before the path. An
 # included secret directory FAILs (the verbs exclude it, so an inclusion is a gap they left: `ccd-account-auth` and
 # `ccrc-token-sync` also create `~/.cc-secrets`, D-5755 (13b)); an answer this check cannot read WARNs as not measured,
 # and so does a box whose PATH has no `tmutil`. Neither is ever a PASS.
 _check_secrets-backup-excluded() {
   if [ "${CCD_OS:-linux}" != darwin ]; then
-    _dr_skip secrets-backup-excluded "Time Machine is macOS's; this box is ${CCD_OS:-linux}, whose provider-level backups snapshot-posture states"
+    _dr_skip secrets-backup-excluded "Time Machine is macOS's; this box is $(_dr_os_word), whose provider-level backups snapshot-posture states"
     return 3
   fi
   local d out word dirs=() excluded=() included=() unread=()
@@ -11369,7 +11404,7 @@ _check_secrets-backup-excluded() {
 # check cannot read WARNs as not measured.
 _check_filevault() {
   if [ "${CCD_OS:-linux}" != darwin ]; then
-    _dr_skip filevault "FileVault is macOS's disk encryption; this box is ${CCD_OS:-linux}"
+    _dr_skip filevault "FileVault is macOS's disk encryption; this box is $(_dr_os_word)"
     return 3
   fi
   local out first d dirs=()
@@ -12272,7 +12307,9 @@ _check_playwright() {
 #     reads as PASS: the check never warns on a fleet that is doing what was asked.
 # WARN when USING is above ON, with the remedy (restart the idle ones, or fix the list); PASS otherwise; SKIP on a
 # `server`-role box and where there is no session registry. Never FAIL: the servers cost memory, not correctness.
-_dr_bmcp_ps() { ps -eo pid=,ppid=,args= 2>/dev/null; }   # THE SEAM: a test plants a process table
+# rc 3 on Windows: MSYS2's ps has no -o, and Claude Code and its MCP servers are native programs it lists without their
+# command lines, so there is no table to count.
+_dr_bmcp_ps() { _ccrc_is_windows && return 3; ps -eo pid=,ppid=,args= 2>/dev/null; }   # THE SEAM: a test plants a process table
 _dr_bmcp_is_claude() {   # args -> 0 iff the command line is a Claude Code session's, never a browser server's
   local a="$1" w="${1%% *}"
   [[ "${w##*/}" == claude ]] && return 0
@@ -12280,7 +12317,7 @@ _dr_bmcp_is_claude() {   # args -> 0 iff the command line is a Claude Code sessi
   return 1
 }
 _check_browser-mcp() {
-  local _srv_role="" reg names keys=() k n pid ppid args f on=0 using=0 procs=0
+  local _srv_role="" reg names keys=() k n pid ppid args f on=0 using=0 procs=0 table rc=0
   local -A match=() parent=() seen=()
   [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && _srv_role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
   if [ "$_srv_role" = server ]; then
@@ -12293,6 +12330,10 @@ _check_browser-mcp() {
   if ! _ccrc_knob CCRC_BROWSER_MCP_SERVERS "$(_browser_mcp_servers_default)"; then
     _dr_warn browser-mcp "$KNOB_WHY" "rewrite that line of ~/.ccrc/ccrc.env as a plain CCRC_BROWSER_MCP_SERVERS=<names> line (deploy/ccrc.env.example shows it)"
     return 2
+  fi
+  table="$(_dr_bmcp_ps)" || rc=$?
+  if [ "$rc" -eq 3 ]; then
+    _dr_skip browser-mcp "this box cannot list its processes with their command lines (Windows: MSYS2's ps has no -o, and Claude Code and its MCP servers are native programs), so there is nothing to count"; return 3
   fi
   names="$KNOB"
   [ -n "$names" ] && _browser_mcp_servers_ok "$names" || names="$(_browser_mcp_servers_default)"
@@ -12312,7 +12353,7 @@ _check_browser-mcp() {
       k="${n##*:}"
       case "$args" in *"$k"*) match["$pid"]=1; break ;; esac
     done
-  done < <(_dr_bmcp_ps)
+  done <<< "$table"
   for pid in "${!match[@]}"; do
     procs=$((procs + 1))
     ppid="${parent[$pid]}"

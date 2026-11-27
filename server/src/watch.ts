@@ -30,7 +30,7 @@ import {
   isFullLine, parsePrLines, phaseFor, queueFor, readPrLandingLine, repoCellFor, sweepFailureReason, ticketTexts, type CcdPrFailure,
   type PrLandingLine, type PrQueueRead,
 } from './prstate.js';
-import { liveStateReaderOver, readLiveState, readLiveStateMeasured } from './livestate.js';
+import { liveStateReaderOver, readLiveStateFor, readLiveStateMeasuredFor } from './livestate.js';
 import { mailTurnIdle, mailTurnModeOf, mailTurnReadsMark, type MailTurnMode } from './turnidle.js';
 import { readTurnMarkMeasured } from './turnmark.js';
 import { finishedAfter } from './coord/finished.js';
@@ -7390,7 +7390,9 @@ export class FleetWatcher {
     if (!pid) return { live: { ok: false, reason: 'no-pane' }, startedAt: null };
     const cfgDir = configDirFor(this.deps.cfg, wrapper);
     if (!cfgDir) return { live: { ok: false, reason: 'no-config-dir' }, startedAt: null };
-    const read = await readLiveStateMeasured(this.deps.io, cfgDir, pid);
+    // The row's uuid, for the read's Windows rung (`livestate.ts#readLiveStateMeasuredFor`); '' never scans.
+    const uuid = tick.records.find((r) => r.id === id)?.uuid ?? '';
+    const read = await readLiveStateMeasuredFor(this.deps.io, cfgDir, pid, uuid);
     return read.ok
       ? { live: { ok: true, word: read.state.status, since: read.state.statusUpdatedAt }, startedAt: read.state.startedAt }
       : { live: { ok: false, reason: read.reason }, startedAt: null };
@@ -7423,7 +7425,7 @@ export class FleetWatcher {
     const pid = panePids.get(id) ?? null;
     const cfgDir = configDirFor(this.deps.cfg, wrapper);
     if (!pid || !cfgDir) return { ok: false, reason: 'unmeasured' };
-    const live = await readLiveStateMeasured(this.deps.io, cfgDir, pid);
+    const live = await readLiveStateMeasuredFor(this.deps.io, cfgDir, pid, ident.uuid);
     if (!live.ok) return { ok: false, reason: 'unmeasured' };
     // As `readTurnMarkMeasured` judges it: a live file with no process start cannot vouch for the marker.
     return live.state.startedAt === null || turnMarkStale(mark, live.state.startedAt) ? { ok: false, reason: 'stale' } : mark;
@@ -7679,7 +7681,7 @@ export class FleetWatcher {
     const cfgDir = ident === null ? null : configDirFor(this.deps.cfg, ident.wrapper);
     const pid = tick.panePids.get(s.id) ?? null;
     if (ident === null || !cfgDir || !pid) return;
-    const liveRead = await readLiveStateMeasured(this.deps.io, cfgDir, pid);
+    const liveRead = await readLiveStateMeasuredFor(this.deps.io, cfgDir, pid, ident.uuid);
     const live = liveRead.ok
       ? { ok: true as const, word: liveRead.state.status, since: liveRead.state.statusUpdatedAt }
       : { ok: false as const };
@@ -8753,7 +8755,7 @@ export class FleetWatcher {
         if (!pid) { gated(d, 'no-pane'); continue; }
         const cfgDir = configDirFor(this.deps.cfg, identity.wrapper);
         if (!cfgDir) { gated(d, 'no-config-dir'); continue; }
-        const live = await readLiveState(this.deps.io, cfgDir, pid);
+        const live = await readLiveStateFor(this.deps.io, cfgDir, pid, identity.uuid);
         // ONE decision for both gates (worker stall watch §4.1, §5.1, `turnidle.ts`).
         // `idle` delivers as before. So does `shell`, an idle main loop over
         // background shell work, unless `$REG/mail-gate-strict` is listed. A

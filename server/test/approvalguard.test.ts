@@ -393,3 +393,24 @@ describe('the prune row: git worktree prune is forbidden, a dry run and every ot
     }
   });
 });
+
+describe.skipIf(process.platform !== 'win32')('the Windows port: drive-letter paths are judged as the registry spells them', () => {
+  const WIN_HOME = String.raw`C:\Users\u`;
+  const row = { id: 'project-a-quiet-basin', workdir: '/c/Users/u/ws/project-a-quiet-basin', child: { kind: 'child', runId: 7 } } as const;
+  const ctx = (): ApprovalCtx => ({ ...rootsForChild(row, WIN_HOME)!, cwd: String.raw`C:\Users\u\ws\project-a-quiet-basin` });
+
+  it('a child keeps its roots when the home is spelled C:\\...', () => {
+    expect(rootsForChild(row, WIN_HOME)).toMatchObject({ worktree: '/c/Users/u/ws/project-a-quiet-basin', home: '/c/Users/u' });
+  });
+
+  it('an edit of a backslash-spelled .cc-sessions, CLAUDE.md or launcher path is forbidden, not escalated', () => {
+    for (const p of [String.raw`C:\Users\u\.cc-sessions\x.json`, String.raw`C:\Users\u\ws\project-a-quiet-basin\CLAUDE.md`, String.raw`C:\Users\u\.local\bin\claude`]) {
+      expect(approvalClass('Edit', { file_path: p, old_string: 'a', new_string: 'b' }, ctx()), p).toBe('forbidden');
+    }
+  });
+
+  it('a Bash command naming a drive-letter forbidden path is forbidden; a backslash in a pattern is not a path', () => {
+    expect(approvalClass('Bash', { command: String.raw`cat C:\Users\u\.cc-sessions\x.json` }, ctx())).toBe('forbidden');
+    expect(approvalClass('Bash', { command: String.raw`grep -r '\.ccrc' src` }, ctx())).not.toBe('forbidden');
+  });
+});

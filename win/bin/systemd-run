@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# systemd-run(1), for the two shapes `ccd` actually runs.
+#
+#   1. `systemd-run --user --collect --quiet bash -c "sleep N; exec ccd swap …"`
+#      (`ccd:9694`) — the SWAP DISPATCH. It must return immediately and outlive
+#      the caller: the sleep runs inside the transient unit precisely so the
+#      supervise tick is not held up. Its `||` arm writes "dispatch FAILED" to
+#      swap.log, so a shim that is merely absent turns auto-swap into a logged
+#      failure on every limit hit — the feature this product exists for.
+#
+#   2. `systemd-run --user --scope --collect --unit=X --slice=Y tmux …`
+#      (`_tmux_new_session` in ccd) -- placing the tmux server in a cgroup
+#      scope. There are no cgroups here. `--unit=ccrc-tmux-server` is run by
+#      the MANAGER (see below); any other scope runs as itself. Both in the
+#      FOREGROUND, which is what `--scope` means: the caller waits for the exit
+#      code, and `ccd`'s double-checked lock around it still elects one creator.
+#
+# The slice is dropped, a real loss stated rather than hidden: the fleet's
+# aggregate memory ceiling on the reference box is a slice limit
+# (`app-claude\x2dsession.slice`), and nothing here caps the panes together.
+# A unit's own MemoryMax= is a Job Object in the manager (ccrc-supervisor.mjs).
+set -uo pipefail
+
+SCOPE=0; UNIT=""; CWD=""; RESTART=false; RUNTIME_MAX=""; OUT=""; ENVFILE=""
+declare -a SETENV=()
+_prop() {   # one -p K=V: the few a transient unit here honours; the cgroup ones (MemoryMax, Slice...) have no meaning
+  case "$1" in
+    Restart=always|Restart=on-failure) RESTART=true ;;
+    RuntimeMaxSec=*) RUNTIME_MAX="${1#*=}" ;;
+    StandardOutput=null) OUT=null ;;
+    StandardOutput=append:*) OUT="append:$(cygpath -m -- "${1#StandardOutput=append:}" 2>/dev/null || printf '%s' "${1#StandardOutput=append:}")" ;;
+    EnvironmentFile=*) ENVFILE="$(cygpath -m -- "${1#EnvironmentFile=}" 2>/dev/null || printf '%s' "${1#EnvironmentFile=}")" ;;
+  esac
+}
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --scope) SCOPE=1; shift ;;
+    --user|--collect|--quiet|--pipe|--wait|--same-dir) shift ;;
+    --unit=*) UNIT="${1#*=}"; shift ;;
+    --unit) UNIT="${2:-}"; shift 2 ;;
+    --setenv=*) SETENV+=("${1#*=}"); shift ;;
+    --setenv|-E) SETENV+=("${2:-}"); shift 2 ;;
+    --working-directory=*) CWD="${1#*=}"; shift ;;
+    --working-directory) CWD="${2:-}"; shift 2 ;;
+    --property=*) _prop "${1#*=}"; shift ;;
+    # `-p K=V` takes its value: shifted alone, `RuntimeMaxSec=660` was run as the command (exit 127, or a false 0).
+    -p|--property) _prop "${2:-}"; shift 2 ;;
+    -p?*) _prop "${1#-p}"; shift ;;
+    --slice=*|--description=*) shift ;;
+    --slice|--description) shift 2 ;;
+    --) shift; break ;;
+    -*) shift ;;
+    *) break ;;
+  esac
+done
+
+[ $# -gt 0 ] || { echo "systemd-run (ccrc shim): no command given" >&2; exit 2; }
+
+STATE_DIR="${CCRC_SUPERVISOR_STATE:-$HOME/.ccrc/supervisor}"
+WAIT=false; MAXT=10
+# One POST /transient of "$@" as unit $UNIT; prints the manager's answer. WAIT=true: the answer comes when the unit
+# ends, and is its exit code.
+_transient() {
+  local port token body
+  port=$(sed -n 's/.*"port":[[:space:]]*\([0-9]*\).*/\1/p' "$STATE_DIR/endpoint.json" | head -1)
+  token=$(sed -n 's/.*"token":[[:space:]]*"\([^"]*\)".*/\1/p' "$STATE_DIR/endpoint.json" | head -1)
+  [ -z "$CWD" ] || CWD="$(cygpath -m -- "$CWD" 2>/dev/null || printf '%s' "$CWD")"
+  body=$(jq -n --arg unit "$UNIT" --arg cwd "$CWD" --arg out "$OUT" --arg envFile "$ENVFILE" --arg rmax "$RUNTIME_MAX" \
+    --argjson restart "$RESTART" --argjson wait "$WAIT" --argjson env "$(printf '%s\n' ${SETENV[@]+"${SETENV[@]}"} | jq -R 'select(test("=")) | {(split("=")[0]): (sub("^[^=]*="; ""))}' | jq -s 'add // {}')" \
+    --argjson argv "$(printf '%s\0' "$@" | jq -Rs 'split("\u0000")[:-1]')" \
+    '{unit: $unit, argv: $argv, env: $env, cwd: $cwd, out: $out, envFile: $envFile,
+      restart: $restart, wait: $wait, runtimeMaxSec: ($rmax | tonumber? // 0)}') || return 1   # argv NUL-split: `--args` let jq read a `-c` as its own
+  printf '%s' "$body" | curl -fsS -X POST -H "x-ccrc-sup-token: $token" -H 'content-type: application/json' \
+    --data-binary @- --max-time "$MAXT" "http://127.0.0.1:$port/transient"
+}
+
+if [ "$SCOPE" = 1 ]; then
+  # THE FLEET'S ONE TMUX SERVER IS STARTED BY THE MANAGER, never as this caller's child. The manager caps a unit with
+  # MemoryMax= by a Windows Job Object, and a job holds every descendant: a capped sweep that ran `tmux new-session`
+  # here would put the server, and every pane created in it after, under that sweep's ceiling. The manager is in no
+  # such job. Still foreground, as `--scope` is: the manager answers with the exit code when the command ends. Run
+  # with the caller's exported environment and directory, which a scope keeps (`declare -px`, sourced before the
+  # exec). Only that unit: any other scope runs here, as before. A manager that is not answering (nothing listens on
+  # its port: curl exit 7) leaves today's behaviour, the command run here.
+  if [ "${UNIT%.scope}" = ccrc-tmux-server ] && [ -f "$STATE_DIR/endpoint.json" ] && command -v jq >/dev/null 2>&1 \
+     && envf=$(mktemp 2>/dev/null); then
+    declare -px > "$envf"
+    UNIT=ccrc-tmux-server.scope; CWD=$PWD; WAIT=true; MAXT=0
+    rc=$(_transient "$BASH" -c '. "$0"; rm -f -- "$0"; exec "$@"' "$envf" "$@"); crc=$?
+    [ "$crc" = 0 ] && [[ $rc =~ ^[0-9]+$ ]] && exit "$rc"
+    rm -f -- "$envf"
+    [ "$crc" = 7 ] || { echo "systemd-run (ccrc shim): the manager did not run $UNIT" >&2; exit 1; }
+  fi
+  exec "$@"
+fi
+
+# A NAMED transient unit goes to the manager, as systemd's would: `systemctl is-active/stop <unit>` then answer for
+# it (the account sign-in helper and `_svc_run_supervised` start one by name and ask after it). An unnamed run (the
+# swap dispatch, `ccrc update --detach`) keeps the detached child below, which is all they need.
+if [ -n "$UNIT" ] && [ -f "$STATE_DIR/endpoint.json" ] && command -v jq >/dev/null 2>&1; then
+  case "$UNIT" in *.service) ;; *.*) ;; *) UNIT="$UNIT.service" ;; esac
+  _transient "$@" >/dev/null || { echo "systemd-run (ccrc shim): the manager did not start $UNIT" >&2; exit 1; }
+  exit 0
+fi
+
+# Transient unit, approximated: a new session leader detached from this shell,
+# so it survives the caller exactly as the unit would. `setsid` comes from
+# util-linux, the same package that carries `flock`, which `ccd` already
+# refuses to run without.
+if command -v setsid >/dev/null 2>&1; then
+  setsid "$@" >/dev/null 2>&1 &
+else
+  nohup "$@" >/dev/null 2>&1 &
+fi
+disown 2>/dev/null || true
+exit 0

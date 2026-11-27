@@ -235,7 +235,8 @@ describe('the token-sync op', () => {
 
     it('the port names no exec path, pipes stdin, and hands the child only its explicit env', () => {
       expect(port).not.toMatch(EXEC_PATH);
-      expect(port).toMatch(/spawn\(file, \[\.\.\.args\], \{ detached: true, stdio: \['pipe', 'pipe', 'pipe'\], env: childEnv \}\)/);
+      // The Windows port starts the launcher through `startable`, which answers `[file, [...args]]` off Windows.
+      expect(port).toMatch(/spawn\(\.\.\.startable\(file, args\), \{ detached: true, stdio: \['pipe', 'pipe', 'pipe'\], env: childEnv \}\)/);
       expect(port, 'the port reads the agent environment itself').not.toMatch(/env:\s*process\.env|\.\.\.process\.env/);
       expect(port).toMatch(/child\.stdin\?\.end\(`\$\{code\}\\n`\)/);
       const factory = slice(port, 'export function makeTokenSyncSpawn(', /\n\}\n/);
@@ -294,7 +295,7 @@ describe('the token-sync op', () => {
       const c = await open(agent.port);
       expect(await c.req<Res>(1, { op: 'token-sync', code: CODE }))
         .toEqual({ t: 'res', id: 1, ok: true, synced: '0123456789abcdef', transport: 'https' });
-      expect(readFileSync(path.join(h, 'argv'), 'utf8')).toBe([path.join(h, '.local', 'bin', 'ccrc'), ...TEMPLATE, ''].join('\n'));
+      expect(readFileSync(path.join(h, 'argv'), 'utf8')).toBe([updateLauncherPath(h), ...TEMPLATE, ''].join('\n'));
       expect(readFileSync(path.join(h, 'argv'), 'utf8'), 'the code reached argv').not.toContain(CODE);
       expect(readFileSync(path.join(h, 'stdin'), 'utf8')).toBe(CODE);
       expect(existsSync(path.join(h, 'stdin-more')), 'stdin carried more than the code line').toBe(false);

@@ -96,6 +96,9 @@ function limitFile(read: (p: string) => string, file: string): number | 'none' |
 
 /** The session slice's headroom in bytes, or null when it could not be read. Never throws. */
 export function measureHeadroom(given: Partial<PressureSeams> = {}): number | null {
+  // Windows has no /proc and no session slice: the host's available physical memory (GlobalMemoryStatusEx's
+  // ullAvailPhys, standby pages included, MemAvailable's analogue) is the room. Injected reads stay the authority.
+  if (process.platform === 'win32' && given.readFile === undefined) return os.freemem();
   const read = { ...realSeams, ...given }.readFile;
   return headroomOf(read, findSessionTree(read));
 }
@@ -163,5 +166,7 @@ export function measureMachine(given: Partial<PressureSeams> = {}): HostMachine 
 export function measureSessions(given: Partial<PressureSeams> = {}): { headroomBytes: number | null; machine: HostMachine | null } {
   const seams = { ...realSeams, ...given };
   const tree = findSessionTree(seams.readFile);
-  return { headroomBytes: headroomOf(seams.readFile, tree), machine: machineOf(seams, tree) };
+  // Windows: no /proc, so the headroom is measureHeadroom's win32 reading (the port's B2).
+  const headroomBytes = process.platform === 'win32' && given.readFile === undefined ? os.freemem() : headroomOf(seams.readFile, tree);
+  return { headroomBytes, machine: machineOf(seams, tree) };
 }

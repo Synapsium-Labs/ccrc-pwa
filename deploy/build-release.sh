@@ -127,6 +127,9 @@ PATHSPEC=(install.sh shared ccd deploy
 for pkg in server agent pwa; do
   if [ -n "$(git -C "$ROOT" ls-tree -d HEAD -- "$pkg/scripts")" ]; then PATHSPEC+=("$pkg/scripts"); fi
 done
+# The Windows port's tree (its manager and shims) rides along when the commit tracks it, as a package's scripts/
+# does: a Linux box never reads it, and a commit without it still builds the tarball it always did.
+if [ -n "$(git -C "$ROOT" ls-tree -d HEAD -- win)" ]; then PATHSPEC+=(win); fi
 # THROUGH A FILE, NEVER A PIPE (D-8391). macOS's tar (bsdtar) may stop reading
 # once it has read the archive's end marker, before `git archive` has written
 # the rest of its last record: git then dies of SIGPIPE, `pipefail` fails the

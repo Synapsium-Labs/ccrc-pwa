@@ -40,6 +40,12 @@ export interface SignalHost {
   once(signal: NodeJS.Signals, listener: () => void): unknown;
   removeListener(signal: NodeJS.Signals, listener: () => void): unknown;
   kill(pid: number, signal: NodeJS.Signals): unknown;
+  /** Defined only when a parent spawned this process with an IPC channel: the Windows supervisor
+   *  (win/ccrc-supervisor.mjs), where a SIGTERM is TerminateProcess and no handler runs, so it asks for the stop as a
+   *  `{type:'shutdown'}` message instead. Under systemd there is no channel and these are never used. */
+  readonly send?: unknown;
+  on?(event: 'message', listener: (msg: unknown) => void): unknown;
+  off?(event: 'message', listener: (msg: unknown) => void): unknown;
 }
 
 const SIGNALS: readonly NodeJS.Signals[] = ['SIGTERM', 'SIGINT'];
@@ -61,7 +67,16 @@ export function installShutdownSeal(
   log: Pick<Console, 'log' | 'warn'> = console,
 ): () => void {
   const listeners = new Map<NodeJS.Signals, () => void>();
-  const removeAll = (): void => { for (const [sig, fn] of listeners) host.removeListener(sig, fn); };
+  // The supervisor's shutdown message runs the SIGTERM handler, once; a channel-less process never installs it.
+  const onMessage = (msg: unknown): void => {
+    if ((msg as { type?: unknown } | null)?.type !== 'shutdown') return;
+    host.off?.('message', onMessage);
+    handle('SIGTERM');
+  };
+  const removeAll = (): void => {
+    for (const [sig, fn] of listeners) host.removeListener(sig, fn);
+    host.off?.('message', onMessage);
+  };
   const handle = (sig: NodeJS.Signals): void => {
     void (async () => {
       let timer: NodeJS.Timeout | undefined;
@@ -86,5 +101,6 @@ export function installShutdownSeal(
     listeners.set(sig, fn);
     host.once(sig, fn);
   }
+  if (typeof host.send === 'function') host.on?.('message', onMessage);
   return removeAll;
 }

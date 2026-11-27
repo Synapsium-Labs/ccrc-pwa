@@ -399,6 +399,12 @@ function spawnGroup(launcher, argv, options) {
  *  thrown is a defect, one stderr line and EXIT.INTERNAL. Nothing is written to stdout here.
  *  @param {string[]} argv  @param {DriverEnv} env  @returns {Promise<number>} */
 export async function main(argv, env) {
+  // The Windows port (C4): the driver needs a POSIX user id (`process.getuid`, which Windows lacks, so --out's owner
+  // check would throw a TypeError) and POSIX process groups, so it refuses there in one sentence before anything else.
+  if (process.platform === 'win32') {
+    process.stderr.write('ccrc history-replay: not supported on Windows: the replay driver needs a POSIX user id and process groups; run it on a Linux or macOS node.\n');
+    return EXIT.REFUSED;
+  }
   stopping = null;   // D-5984: in-process callers (the tests) run main many times
   /** @type {Array<[string, () => void]>} */
   const installed = STOP_SIGNALS.map((sig) => [sig, () => onStopSignal(sig)]);

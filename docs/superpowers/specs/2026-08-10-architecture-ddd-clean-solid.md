@@ -394,6 +394,10 @@ needs a new operator ruling, not a PR.
 - **Rejected: runtime-sourced ccd siblings** (operator, 2026-10-26). ccd never loads sibling scripts
   chosen at run time; it loads only fixed, digest-checked libraries (the #1404 model), so what runs on
   the box stays auditable. Splitting `ccd/ccd` waits on ARCH-34's manifest (#536).
+- **Allowed: ccd's Windows twin in Node** (operator, 2026-11-22). An exception to "compiling policy
+  across languages" above, for Windows only: a process start there costs two to three orders of magnitude
+  more than on Linux. Linux keeps bash. The twin must pass the same tests as the bash it stands in for, in
+  both modes in Linux CI (`2026-11-22-ccd-windows-node-twin-design.md`).
 - **Rejected: moving ccd's rotation and reap decisions to the server** (operator, 2026-10-26). They
   stay in ccd on the box, next to the files they touch, so they still work when the server is down;
   the server only shows and arms them (CCD, #522).

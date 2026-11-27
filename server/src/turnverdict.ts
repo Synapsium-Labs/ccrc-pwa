@@ -18,7 +18,7 @@ import { assembleFleet, fleetNow } from './fleet.js';
 import type { FleetWatcherView } from './coord/ports.js';
 import { measuredIdentity, readSessionRecord, type SessionRecord } from './registry.js';
 import { readHookState } from './hookstate.js';
-import { liveStateReaderOver, readLiveStateMeasured } from './livestate.js';
+import { liveStateReaderOver, readLiveStateMeasured, readLiveStateMeasuredFor } from './livestate.js';
 import { readTurnMarkMeasured } from './turnmark.js';
 import type { TurnMarkRead } from './coord/stall.js';
 import type { FleetSession } from '../../shared/api.js';
@@ -88,7 +88,7 @@ async function readPane(d: TurnReadDeps, rec: SessionRecord): Promise<PaneReads>
   if (v.verdict !== 'live') return { configDir: 'present', pane: v.verdict };
   const pid = await d.tmux.panePid(rec.id);
   if (pid === null) return { configDir: 'present', pane: 'live', pid: 'unread' };
-  const read = await readLiveStateMeasured(d.io, cfgDir, pid);
+  const read = await readLiveStateMeasuredFor(d.io, cfgDir, pid, rec.uuid);
   const liveFile: LiveFileReading = read.ok ? { read: 'ok', status: read.state.status } : { read: read.reason };
   return { configDir: 'present', pane: 'live', pid, liveFile, since: read.ok ? read.state.statusUpdatedAt : null };
 }
@@ -142,7 +142,7 @@ export async function processStartedAtFor(d: TurnReadDeps, rec: SessionRecord): 
   if (cfgDir === undefined) return null;
   const pid = await d.tmux.panePid(rec.id);
   if (pid === null) return null;
-  const live = await readLiveStateMeasured(d.io, cfgDir, pid);
+  const live = await readLiveStateMeasuredFor(d.io, cfgDir, pid, rec.uuid);
   return live.ok ? live.state.startedAt : null;
 }
 
@@ -151,7 +151,7 @@ export async function turnMarkFor(d: TurnReadDeps, rec: SessionRecord): Promise<
   if (cfgDir === undefined) return { ok: false, reason: 'unmeasured' };
   const pid = await d.tmux.panePid(rec.id);
   if (pid === null) return { ok: false, reason: 'unmeasured' };
-  const live = await readLiveStateMeasured(d.io, cfgDir, pid);
+  const live = await readLiveStateMeasuredFor(d.io, cfgDir, pid, rec.uuid);
   if (!live.ok) return { ok: false, reason: 'unmeasured' };
   return readTurnMarkMeasured(d.io, d.cfg.registryDir, rec.id, rec.uuid, { startedAt: live.state.startedAt });
 }
@@ -178,6 +178,8 @@ export async function conversationAfterClearFor(d: TurnReadDeps, rec: SessionRec
   if (pid === null) return null;
   for (let i = 0; i < reads; i++) {
     if (i > 0) await sleep(CONVERSATION_ROTATE_STEP_MS);
+    // shortcut: the pid read, as on main; it looks for a NEW session id, so the uuid-matching Windows read cannot serve. On
+    // Windows the pane pid and the file names are two number spaces, so this finds nothing there until it reads by scan.
     const live = await readLiveStateMeasured(d.io, cfgDir, pid);
     if (!live.ok) return null;
     if (live.state.sessionId !== '' && live.state.sessionId !== prior) return live.state.sessionId;

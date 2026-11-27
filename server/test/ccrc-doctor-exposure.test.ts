@@ -681,14 +681,18 @@ describe('ccrc doctor: update-exposure (design §12 — armed and reachable, eac
     // that DID would hit "_upd_redact: command not found" rather than the
     // real refusal, so it is picked up here too.
     const redact = /^_upd_redact\(\) \{[\s\S]*?\n\}$/m.exec(src);
-    expect(fn && prog && die && redact, 'ccd/ccrc lost _exp_env_write, PROG, _ccrc_die or _upd_redact').toBeTruthy();
+    // The Windows port: the writer locks the file to its owner (`_ccrc_lock_file`, a chmod off Windows), so the
+    // harness carries the lock and its platform predicate too.
+    const lock = /^_ccrc_lock_file\(\) \{[\s\S]*?\n\}$/m.exec(src);
+    const isWin = /^_ccrc_is_windows\(\) \{[\s\S]*?\n\}$/m.exec(src);
+    expect(fn && prog && die && redact && lock && isWin, 'ccd/ccrc lost _exp_env_write, PROG, _ccrc_die, _upd_redact, _ccrc_lock_file or _ccrc_is_windows').toBeTruthy();
     for (const [arm, opts] of [
       ['duckdns', {}], ['byo', { duckdns: false }], ['ip', { ip: '203.0.113.9' }],
     ] as const) {
       const home = mkTmp(`ccrc-doctor-expwriter-${arm}-`);
       const real = join(home, '.ccrc', 'exposure.env');
       const w = spawnSync(BASH, ['-c', [
-        'set -uo pipefail', prog![0], redact![0], die![0],
+        'set -uo pipefail', prog![0], redact![0], die![0], isWin![0], lock![0],
         `CCRC_EXPOSURE_FILE=${shq(real)}`, `BOX_AUTH_FILE=${shq(join(home, '.ccrc', 'auth.scrypt'))}`,
         fn![0],
         `_exp_env_write ${arm} https://box.example.com ${arm === 'ip' ? "''" : 'box.example.com'} ${arm === 'ip' ? '203.0.113.9' : 'box.example.com'} fixture-token ''`,

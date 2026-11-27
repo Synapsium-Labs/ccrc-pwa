@@ -32,7 +32,9 @@ describe('shared/spawn.mjs is the one bounded update spawner, and its wrappers a
 
   it('the kernel holds the body: its own spawn call, with spawn read from the injected host', () => {
     const body = sourceOfSymbol(KERNEL, 'boundedSpawn');
-    expect(body).toContain("spawn(file, [...args], { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env })");
+    // The Windows port: the host says how this platform starts a file (`shared/startable.mjs`); absent, the file itself.
+    expect(body).toContain('const startable = host.startable ?? asIs;');
+    expect(body).toContain("spawn(...startable(file, args), { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env })");
     expect(body).toMatch(/const \{ spawn, signals \} = host;/);
     expect(body).toContain("process.kill(-child.pid, 'SIGKILL')");
   });
@@ -42,7 +44,7 @@ describe('shared/spawn.mjs is the one bounded update spawner, and its wrappers a
       const calls = callsIn(symbolOf(file, symbol)).filter((c) => c.name === 'boundedSpawn');
       expect(calls, `${symbol} calls boundedSpawn exactly once`).toHaveLength(1);
       expect(code(parsedFile(file).text)).not.toContain('spawn(file, [...args]');
-      expect(calls[0]!.args[0]?.text, 'the host injects spawn and the signal table').toMatch(/^\{ spawn, signals: os\.constants\.signals \}$/);
+      expect(calls[0]!.args[0]?.text, 'the host injects spawn and the signal table').toMatch(/^\{ spawn, signals: os\.constants\.signals, startable, winKillTree \}$/);
       const imp = parsedFile(file).imports.find((e) => e.names.includes('boundedSpawn'));
       expect(imp?.specifier, `${file} imports boundedSpawn from the kernel`).toMatch(/\/shared\/spawn\.mjs$/);
     });
@@ -186,7 +188,8 @@ describe('shared/spawn.mjs#boundedStdinSpawn against a stub host (D-7057)', () =
   it('the kernel holds the body: spawn read from the injected host, stdin piped, TERM to the group', () => {
     const body = sourceOfSymbol(KERNEL, 'boundedStdinSpawn');
     expect(body).toMatch(/const \{ spawn, signals \} = host;/);
-    expect(body).toContain("spawn(file, [...argv], { detached: true, stdio: ['pipe', 'pipe', 'pipe'], env })");
+    expect(body).toContain('const startable = host.startable ?? asIs;');
+    expect(body).toContain("spawn(...startable(file, argv), { detached: true, stdio: ['pipe', 'pipe', 'pipe'], env })");
     expect(body).toContain('process.kill(-child.pid, s)');
   });
 

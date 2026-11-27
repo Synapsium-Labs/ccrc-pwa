@@ -683,7 +683,7 @@ _heavy() {   # <wide> <command> [<arg>...] -> 0 heavy, 1 light
 # ── already inside ────────────────────────────────────────────────────────
 _tlocked() { ! flock -n "$1" true 2>/dev/null; }   # <file> -> 0 when another process holds its lock
 _tinside() {   # -> 0 when this process already runs inside a `ccrc test` run (ALREADY INSIDE above); never the environment
-  local line f who p d=0
+  local line f who p
   if [ -r "$PROC_ROOT/self/cgroup" ]; then
     while IFS= read -r line; do
       case "$line" in */"$SLICE"|*/"$SLICE"/*) return 0 ;; esac
@@ -695,15 +695,15 @@ _tinside() {   # -> 0 when this process already runs inside a `ccrc test` run (A
   for f in "$SLOT_DIR"/slot-*.who; do
     [ -f "$f" ] && _tlocked "${f%.who}" || continue
     who=""; IFS= read -r who < "$f" || :
-    [[ "$who" =~ ^pid\ ([0-9]+)\  ]] && holder["${BASH_REMATCH[1]}"]=1
+    [[ "$who" =~ ^pid\ ([0-9]+)\  ]] || continue
+    p=$(_plat_winpid "${BASH_REMATCH[1]}"); [ -z "$p" ] || holder["$p"]=1
   done
   [ ${#holder[@]} -gt 0 ] || return 1
-  p="$PPID"
-  while [[ "$p" =~ ^[0-9]+$ ]] && [ "$p" -gt 1 ] && [ "$d" -lt 64 ]; do
+  # `_plat_lineage` (ccrc's platform block), not `ps -o ppid=` (MSYS2's ps has no -o): on the Windows port the walk
+  # crosses native parents (node, claude.exe) and prints Windows pids, so the holders above are in that numbering.
+  while IFS= read -r p; do
     [ -z "${holder[$p]:-}" ] || return 0
-    p=$(ps -o ppid= -p "$p" 2>/dev/null) || return 1
-    p="${p//[[:space:]]/}"; d=$((d + 1))
-  done
+  done < <(_plat_lineage "$$" | tail -n +2)
   return 1
 }
 
@@ -844,6 +844,13 @@ _tstatus() {
   if [ "${CCD_OS:-linux}" = darwin ] || ! command -v systemctl >/dev/null 2>&1; then
     echo "no user manager here, so runs are not contained; $queue"; return 0
   fi
+  # Windows: the port's stand-in manager (win/bin/systemctl) has no slices, there being no cgroups. Asked of the
+  # manager, not read off the OS, so a systemd answering on a Windows host is still read as one.
+  case "${OSTYPE:-}" in msys*|cygwin*)
+    if systemctl --version 2>/dev/null | grep -q '^ccrc-supervisor'; then
+      echo "no cgroups on Windows, so runs are not contained; $queue"; return 0
+    fi ;;
+  esac
   while IFS='=' read -r k v; do [ -n "$k" ] && p["$k"]="$v"; done \
     < <(systemctl --user show "$SLICE" -p LoadState -p MemoryCurrent -p MemoryMax -p MemorySwapMax -p CPUWeight -p CPUQuotaPerSecUSec -p IOWeight 2>/dev/null)
   if [ "${p[LoadState]:-}" != loaded ]; then

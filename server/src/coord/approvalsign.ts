@@ -51,8 +51,9 @@ export function loadOrCreateApprovalSigner(ccrcDir: string): ApprovalSigner {
   if (existsSync(file)) {
     priv = createPrivateKey(readFileSync(file, 'utf8'));
     if (priv.asymmetricKeyType !== 'ed25519') throw new Error(`${file} is not an Ed25519 private key`);
-    // A key the operator copied or restored keeps the copy's mode: tighten it, never use it wider than 0600.
-    if ((statSync(file).mode & 0o077) !== 0) {
+    // A key the operator copied or restored keeps the copy's mode: tighten it, never use it wider than 0600. Not on
+    // Windows: NTFS reports 0o666 for every file whatever its ACL, so the check would chmod and warn on every boot.
+    if (process.platform !== 'win32' && (statSync(file).mode & 0o077) !== 0) {
       chmodSync(file, 0o600);
       console.warn(`ccrc-server: ${file} was readable beyond its owner; its mode is now 0600`);
     }

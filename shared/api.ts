@@ -10591,8 +10591,8 @@ export type { NodeRole } from './node-role.js';
 
 /** A node's OS, from `~/.ccrc/ccrc-caps` line 1 (`os linux|darwin`, §8).
  *  `unknown` = no caps file, or one that failed validation. */
-export type NodeOs = 'linux' | 'darwin' | 'unknown';
-export const NODE_OSES = ['linux', 'darwin', 'unknown'] as const satisfies readonly NodeOs[];
+export type NodeOs = 'linux' | 'darwin' | 'windows' | 'unknown';
+export const NODE_OSES = ['linux', 'darwin', 'windows', 'unknown'] as const satisfies readonly NodeOs[];
 /** Use THIS, never `NODE_OSES.includes(x as NodeOs)` — `isRunState`'s rule. */
 export function isNodeOs(v: unknown): v is NodeOs {
   return typeof v === 'string' && (NODE_OSES as readonly string[]).includes(v);

@@ -219,7 +219,9 @@ describe('D-8270 — no raw tmux spawn in TypeScript or JavaScript: every one go
   it('the two executors that can run a tmux request route it: the server\'s realRunner and the agent\'s exec', () => {
     const runner = sourceOfSymbol('server/src/exec.ts', 'realRunner');
     expect(runner).toContain('tmuxRoute(cmd, args, hostTmuxSocket)');
-    expect(runner).toContain('execFile(routed.file, [...routed.args]');
+    // The Windows port spells the routed call through `shellArgv`, which is `routed` itself off Windows.
+    expect(runner).toContain('shellArgv(routed.file, routed.args)');
+    expect(runner).toContain('execFile(sp.cmd, sp.args');
     const agent = read('agent/src/server.ts');
     expect(agent).toContain('tmuxRoute(req.cmd, req.args, () => fleetTmuxSocket(ctx.cfg.home))');
     expect(agent).toContain('runExec(resolveSpawnCmd(routed.file, ctx.cfg.home), [...routed.args]');

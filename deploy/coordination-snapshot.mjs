@@ -550,19 +550,32 @@ export function readCheckpointHeader(bytes) {
 // ── The file port (every operation the helper performs; a test faults any one of them) ───────────────────────────────────
 
 const C = nodeFs.constants;
+/** `shared/fsync-open.mjs`'s rule, restated because this helper imports node: modules only (W3-M40): Windows flushes only a
+ *  handle opened read-write (a read-only one answers EPERM), POSIX syncs a read-only one and refuses O_RDWR on a directory. */
+const FSYNC_OPEN = process.platform === 'win32' ? C.O_RDWR : C.O_RDONLY;
 const isEnoent = (err) => typeof err === 'object' && err !== null && err.code === 'ENOENT';
+/** `open(p, flags | O_NOFOLLOW)` of a path that exists. Windows has no O_NOFOLLOW (node leaves it undefined, so the
+ *  flag silently became 0 and a link was followed): there a symbolic link at `p` is refused by an lstat first, with
+ *  POSIX's ELOOP. shortcut: lstat and open are two calls, so a link swapped in between them is followed; a Windows
+ *  reparse-point open (FILE_FLAG_OPEN_REPARSE_POINT) would close that window if it ever matters. */
+function openNoFollow(p, flags) {
+  if (C.O_NOFOLLOW === undefined && nodeFs.lstatSync(p).isSymbolicLink()) {
+    throw Object.assign(new Error(`ELOOP: a symbolic link, refused: ${p}`), { code: 'ELOOP' });
+  }
+  return nodeFs.openSync(p, flags | (C.O_NOFOLLOW ?? 0));
+}
 
 /** The real filesystem. Absence is `null` from `lstat`, `readFile`, `openRead` and `readdir`, for ENOENT only. */
 export const realFs = {
   lstat(p) { try { return nodeFs.lstatSync(p); } catch (err) { if (isEnoent(err)) return null; throw err; } },
   readFile(p) {
     let fd;
-    try { fd = nodeFs.openSync(p, C.O_RDONLY | C.O_NOFOLLOW); } catch (err) { if (isEnoent(err)) return null; throw err; }
+    try { fd = openNoFollow(p, C.O_RDONLY); } catch (err) { if (isEnoent(err)) return null; throw err; }
     try { return new Uint8Array(nodeFs.readFileSync(fd)); } finally { nodeFs.closeSync(fd); }
   },
   openRead(p) {
     let fd;
-    try { fd = nodeFs.openSync(p, C.O_RDONLY | C.O_NOFOLLOW); } catch (err) { if (isEnoent(err)) return null; throw err; }
+    try { fd = openNoFollow(p, C.O_RDONLY); } catch (err) { if (isEnoent(err)) return null; throw err; }
     let size;
     try { size = nodeFs.fstatSync(fd).size; } catch (err) { nodeFs.closeSync(fd); throw err; }
     return {
@@ -593,11 +606,11 @@ export const realFs = {
   rmdir(p) { nodeFs.rmdirSync(p); },
   readdir(p) { try { return nodeFs.readdirSync(p); } catch (err) { if (isEnoent(err)) return null; throw err; } },
   fsyncDir(p) {
-    const fd = nodeFs.openSync(p, C.O_RDONLY);
+    const fd = nodeFs.openSync(p, FSYNC_OPEN);
     try { nodeFs.fsyncSync(fd); } finally { nodeFs.closeSync(fd); }
   },
   fsyncFile(p) {
-    const fd = nodeFs.openSync(p, C.O_RDONLY | C.O_NOFOLLOW);
+    const fd = openNoFollow(p, FSYNC_OPEN);
     try { nodeFs.fsyncSync(fd); } finally { nodeFs.closeSync(fd); }
   },
 };
@@ -665,7 +678,7 @@ const VERIFY_ESTIMATE_S = 150;
 export function inspectDb(p, { quickCheck = true } = {}) {
   let head;
   try {
-    const fd = nodeFs.openSync(p, C.O_RDONLY | C.O_NOFOLLOW);
+    const fd = openNoFollow(p, C.O_RDONLY);
     try { head = Buffer.alloc(16); nodeFs.readSync(fd, head, 0, 16, 0); } finally { nodeFs.closeSync(fd); }
   } catch (err) { return { ok: false, why: `unreadable (${err.code ?? 'error'})` }; }
   if (head.toString('latin1') !== SQLITE_MAGIC) return { ok: false, why: 'not a SQLite database (bad header)' };
@@ -1535,7 +1548,12 @@ export function thinBackups({ own = null, verified = null, dirs, keep, by, until
  * @returns {'inactive' | 'active' | 'unmeasured'}
  */
 export function probeService(env = process.env) {
-  const r = spawnSync('systemctl', ['--user', 'is-active', SERVICE_UNIT], { encoding: 'utf8', env, timeout: 10_000 });
+  // Windows: `systemctl` is the port's bash shim (win/bin), which CreateProcess cannot start, so every restore there read
+  // `unmeasured` and refused. It is asked through the MSYS shell instead (CCRC_BASH, which the port's manager sets).
+  const [cmd, args] = process.platform === 'win32'
+    ? [env.CCRC_BASH || 'bash', ['-c', 'exec systemctl "$@"', 'systemctl', '--user', 'is-active', SERVICE_UNIT]]
+    : ['systemctl', ['--user', 'is-active', SERVICE_UNIT]];
+  const r = spawnSync(cmd, args, { encoding: 'utf8', env, timeout: 10_000 });
   if (r.error || r.status === null) return 'unmeasured';
   const word = (r.stdout ?? '').trim();
   if (word === 'inactive' || word === 'failed') return 'inactive';

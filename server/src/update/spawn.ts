@@ -11,6 +11,7 @@ import { spawn } from 'node:child_process';
 import os from 'node:os';
 import { UPDATE_SPAWN_DRAIN_MS, UPDATE_SPAWN_TIMEOUT_MS, type UpdateSpawnResult } from '../../../shared/agent-protocol.js';
 import { boundedSpawn } from '../../../shared/spawn.mjs';
+import { startable, winKillTree } from '../../../shared/startable.mjs';
 
 export interface BoundedSpawnOpts {
   /** The parent's whole environment. Default `process.env`. Injected by a test that hands the child a fixture HOME. */
@@ -32,5 +33,5 @@ export interface BoundedSpawnOpts {
 export function boundedUpdateSpawn(file: string, args: readonly string[], opts: BoundedSpawnOpts = {}): Promise<UpdateSpawnResult> {
   const env = opts.env ?? process.env;
   const timeoutMs = opts.timeoutMs ?? UPDATE_SPAWN_TIMEOUT_MS;
-  return boundedSpawn({ spawn, signals: os.constants.signals }, file, args, { env, timeoutMs, drainMs: UPDATE_SPAWN_DRAIN_MS });
+  return boundedSpawn({ spawn, signals: os.constants.signals, startable, winKillTree }, file, args, { env, timeoutMs, drainMs: UPDATE_SPAWN_DRAIN_MS });
 }

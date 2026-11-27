@@ -41,7 +41,9 @@ describe('one bounded update spawner, shared/spawn.mjs (D-7055; ARCH-73)', () =>
 // in `spawners.data.ts`, and the set may only shrink. Measured: 10 spawners at ccba6f9b6, 9 once C8c folded the update
 // pair into `shared/spawn.mjs`, 8 once C8e folded the account-op pair into `shared/spawn.mjs#boundedStdinSpawn`
 // (D-7057, OA-C8a (a)).
-const PROCESS_SPAWNERS_CEILING = 8;
+// The Windows port raises it by one, a Windows-only spawner with its row: `server/src/token/files.ts#lockOwnerOnly`
+// (icacls, a mode is no permission on NTFS). A rule bend stated here and in the port's PR, not a silent one.
+const PROCESS_SPAWNERS_CEILING = 9;
 
 // D-7057 (W8 Task C8e; OA-C8a (a), D-7060): the account-op spawner is ONE body too, `shared/spawn.mjs#boundedStdinSpawn`.
 // Measured: account-op spawn bodies outside the kernel 2 at the base (`accounts/ops.ts#localAccountOps`,

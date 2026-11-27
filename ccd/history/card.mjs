@@ -27,8 +27,10 @@
 // Its IO (read, previous-leaf read, write) is steer.mjs's; its text is lib's composeSteerFile. The hook never consumes,
 // deletes or writes it (PX13): every removal here is the sweep's.
 import {
-  closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readSync, rmdirSync, unlinkSync,
+  closeSync, constants, fstatSync, lstatSync, mkdirSync, readdirSync, readSync, rmdirSync, unlinkSync,
 } from 'node:fs';
+// `O_NOFOLLOW` and `openSync` from the one no-follow helper: node's own off Windows, the link refusal kept on Windows.
+import { O_NOFOLLOW, openSync } from '../../shared/nofollow.mjs';
 import {
   CARD_ATTACHMENT_MAX_BYTES, CARD_DIR, CARD_LINE_MAX, CARD_MEASURE_ROWS, SCOPE_DIR, STEER_DIR, UUID_RE, cardDirOf, cardFileOf,
   cardGenFileOf, cardIdsIn, cardWindowComplete, composeSteerFile, consumedBoundaryTs, decideCardDelivery, decideCardFile,
@@ -132,7 +134,7 @@ function cliGenerationOf(s, id) {
 function readCard(file) {
   let fd;
   try {
-    fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    fd = openSync(file, constants.O_RDONLY | O_NOFOLLOW | constants.O_NONBLOCK);
   } catch (e) {
     return e && e.code === 'ENOENT' ? { state: 'absent' } : { state: 'unreadable' };
   }

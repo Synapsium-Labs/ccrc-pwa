@@ -80,7 +80,7 @@ import { randomBytes } from 'node:crypto';
 import { mkTmp } from './tmpHelpers.js';
 import { scaled } from './timeScale.js';
 import { FIXTURE_DF_INODES_LINES } from './fixtureDfInodes.js';
-import { DEFAULT_TEST_ROSTER } from './helpers.js';
+import { DEFAULT_TEST_ROSTER, realPath as realPathNative, posixPath } from './helpers.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { CONTAINED_TOOLS, assertNoRealTool } from './containedTools.js';
 import { describeDarwin, python3ProgramArm } from './platformFixtures.js';
@@ -119,12 +119,9 @@ export const INSTALL_FAMILY_FILES: string[] = ["tree","versioned","units","landi
  *  test-side list rather than typed again (final review F4). */
 export const LANE_BINS_IN_LINE = `(?<![\\w-])${GPT_LANE_BINS.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join(', ')}(?![\\w-])`;
 
-/** `command -v <name>` under THIS process's real PATH. */
-export function realPath(name: string): string {
-  const p = spawnSync('bash', ['-c', `command -v ${name}`], { encoding: 'utf8' }).stdout.trim();
-  if (p === '') throw new Error(`this box has no ${name} — the fixture needs it`);
-  return p;
-}
+/** `command -v <name>` under THIS process's real PATH, as `helpers.ts#realPath` answers it: on Windows the NATIVE
+ *  path, which is what libuv can spawn (a bare `command -v` answers `/usr/bin/bash`, which it cannot). */
+export const realPath = realPathNative;
 
 /** bash's absolute path, resolved ONCE, for the same reason
  *  `ccrc-doctorFixture.ts#BASH` resolves it: libuv looks the executable up in the
@@ -134,11 +131,18 @@ export function realPath(name: string): string {
  *  test is about. */
 export const BASH = realPath('bash');
 
+/** The SAME bash, spelled for a shell rather than for a spawn. `BASH` is what this process hands to libuv, which on
+ *  Windows means a native path; embedding that string INSIDE a bash command (the umask runner below does exactly
+ *  that) would feed backslashes to a parser that reads them as escapes. Two forms, because there are two consumers. */
+export const BASH_SH = posixPath(BASH);
+
 /** The real `rsync`, resolved once. Module scope, and a hard throw when the
  *  box has none, is the honest failure: `_inst_tree` REFUSES BY NAME without
  *  rsync, so a box that cannot run rsync cannot run `ccrc install` at all and
  *  there is no version of this suite that could still be measuring the verb. */
-export const RSYNC = realPath('rsync');
+// POSIX form: EMBEDDED IN A SHELL SCRIPT, not spawned. A native Windows path inside script text loses its
+// backslashes to the shell's own escaping and execs `C:msys64usrbinrsync.exe`, which exists nowhere.
+export const RSYNC = posixPath(realPath('rsync'));
 
 /** The real `python3`, resolved once — NEVER the fixture's own stub (`plant`
  *  in this file's `ccrcEnv`, which answers only `-m venv <path>` and exits 90
@@ -167,7 +171,8 @@ export const treeRoot = (home: string): string => join(home, 'checkout');
 /** The `ccrc` a test runs: the one INSIDE the fixture tree, so `CCRC_HERE`
  *  resolves to the fixture's `ccd/` and every sibling it reaches is a fixture
  *  file. */
-export const ccrcIn = (root: string): string => join(root, 'ccd', 'ccrc');
+// POSIX form: handed to bash as `$0`, and ccrc computes its tree root from it.
+export const ccrcIn = (root: string): string => posixPath(join(root, 'ccd', 'ccrc'));
 
 export const treeFile = (home: string, rel: string): string => join(treeRoot(home), rel);
 
@@ -311,8 +316,14 @@ export function healthyDoctorBox(home: string, opts: { upstream?: boolean } = {}
   // a different check with its own test elsewhere in this suite.
   mkdirSync(join(home, '.local', 'bin'), { recursive: true });
   if (opts.upstream ?? true) {
+    // The marker is the PLATFORM's (`ccrc-doctorFixture.ts#writeBinary`): `mode: 0o755` grants no executable bit on
+    // Windows, so MSYS2 decides by content and an ELF header means nothing to it — doctor, which `cmd_install`
+    // runs as its LAST STEP, then failed the wrapper this fixture had just written.
     writeFileSync(join(home, '.local', 'bin', 'claude'),
-      '\x7fELF\x02\x01\x01\x00not-a-real-binary-just-a-fixture-marker', { mode: 0o755 });
+      process.platform === 'win32'
+        ? 'MZ\x90\x00\x03\x00\x00\x00not-a-real-binary-just-a-fixture-marker'
+        : '\x7fELF\x02\x01\x01\x00not-a-real-binary-just-a-fixture-marker',
+      { mode: 0o755 });
   }
 }
 
@@ -875,7 +886,7 @@ export function runInstall(home: string, args: string[] = ['install'],
   const ccrc = opts.from ?? ccrcIn(treeRoot(home));
   const r = opts.umask === undefined
     ? spawnSync(BASH, [ccrc, ...args], { env, encoding: 'utf8' })
-    : spawnSync(BASH, ['-c', `umask ${opts.umask}; exec ${BASH} "$0" "$@"`,
+    : spawnSync(BASH, ['-c', `umask ${opts.umask}; exec ${BASH_SH} "$0" "$@"`,
       ccrc, ...args], { env, encoding: 'utf8' });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
@@ -895,7 +906,7 @@ export function runLauncherVersion(home: string): Result {
   // shape), so the real-tool check rides the spawn's own `env` argument: it still runs on the final env, before the spawn.
   const env = ccrcEnv(home);
   assertSpineFrontContained(env, home);
-  const r = spawnSync(BASH, [join(home, '.local', 'bin', 'ccrc'), 'version'],
+  const r = spawnSync(BASH, [posixPath(join(home, '.local', 'bin', 'ccrc')), 'version'],
     { env: checkedEnv(env, home), encoding: 'utf8' });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
@@ -1006,9 +1017,17 @@ export function pathWithout(home: string, missing: string): string {
     // cause and changes nothing — so the gap is this PATH, not the spine.
     ...(process.platform === 'darwin' ? ['launchctl', 'plutil', 'uname', 'uuidgen', 'tr'] : [])]) {
     if (b === missing || existsSync(join(d, b))) continue;
+    if (process.platform === 'win32') {
+      // `ccrc-doctorFixture.ts#linkReal`'s shape, for its reason: a Windows symlink named `rsync` with no `.exe` is
+      // not executable to the shell running `command -v rsync`, and one to the POSIX path is a target Windows cannot
+      // resolve. A one-line exec wrapper is what the shell is looking for.
+      writeFileSync(join(d, b), `#!/bin/sh\nexec '${posixPath(realPath(b))}' "$@"\n`, { mode: 0o755 });
+      continue;
+    }
     symlinkSync(realPath(b), join(d, b));
   }
-  return `${join(home, '.local', 'bin')}:${d}`;
+  // POSIX entries: this is a `:` list for bash, and a native entry's drive colon would split it.
+  return `${posixPath(join(home, '.local', 'bin'))}:${posixPath(d)}`;
 }
 
 export const read = (p: string): string => readFileSync(p, 'utf8');

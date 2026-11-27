@@ -67,7 +67,7 @@ export const FLEET_LABEL = 'fleet';
  *  ASCII, at most 200. `stamp_build` writes a git sha, a ref name and a
  *  `date -u`, none of which is longer or anything else. */
 const STAMP_FIELD = /^[\x20-\x7e]{1,200}$/;
-const OS_LINE = /^os (linux|darwin)$/;
+const OS_LINE = /^os (linux|darwin|windows)$/;   // windows: the Windows port (an MSYS2 box)
 
 /** The two failure words are `ReadFailure`'s, DERIVED, never restated: naming
  *  the two failure words as a spelled-out quoted union in this file would make
@@ -186,7 +186,7 @@ export function capsFrom(read: NodeFileRead): { os: NodeOs; caps: string[] } {
   if (os === null) return { os: 'unknown', caps: [] };
   const caps = validCapWords(lines.slice(1));
   if (caps === null) return { os: 'unknown', caps: [] };
-  return { os: os[1] === 'darwin' ? 'darwin' : 'linux', caps };
+  return { os: os[1] === 'darwin' ? 'darwin' : os[1] === 'windows' ? 'windows' : 'linux', caps };
 }
 
 /** installed → installState and provenance (§8). `complete` iff line 1 is the

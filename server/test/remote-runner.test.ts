@@ -240,3 +240,22 @@ describe('§1.4 — asExecResult stops narrowing a distinction it received', () 
     expect(src).not.toMatch(/catch[\s\S]{0,200}killed:\s*true/);
   });
 });
+
+describe('wireCmd — the separator is the SERVER platform\'s, not always `/`', () => {
+  it('normalizes a Windows ccdBin, which is what a Windows server composes', async () => {
+    const { wireCmd } = await import('../src/remote/runner.js');
+    // `isExecAllowed` rejects any command name carrying a separator, so leaving
+    // this path whole means the agent refuses EVERY ccd verb the PWA sends —
+    // hold, release, archive, restore, swap. Measured through `guardRunner`
+    // (which crosses the real whitelist) as three red route tests.
+    const win = ['C:', 'Users', 'u', '.local', 'bin', 'ccd'].join('\\');
+    expect(wireCmd(win)).toBe(process.platform === 'win32' ? 'ccd' : win);
+  });
+
+  it('still normalizes the POSIX form on every platform', async () => {
+    const { wireCmd } = await import('../src/remote/runner.js');
+    // `path.win32.basename` splits BOTH separators, so the POSIX spelling keeps
+    // working on a Windows server — the fix must not trade one platform away.
+    expect(wireCmd('/home/you/.local/bin/ccd')).toBe('ccd');
+  });
+});

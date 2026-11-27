@@ -291,7 +291,9 @@ const walkRoot = async (io: FleetIO, cfg: CcrcConfig): Promise<{ rows: ProjectRo
   if (names === null) return null;
   let measured = true;
   const rows = await mapBounded(names.filter((n) => !n.startsWith('.')), PROJECT_WALK_CONCURRENCY, async (name) => {
-    const workdir = path.join(cfg.projectsRoot, name);
+    // `/`-joined: this workdir leaves the server (the PWA starts a session with it, ccd reads it). On win32 path.join
+    // spelled it `\c\Users\...\<name>`, which bash cannot read; off Windows the root is POSIX and this is path.join.
+    const workdir = path.posix.join(cfg.projectsRoot.replace(/\\/g, '/'), name);
     const entries = await io.readdir(workdir);
     if (entries === null) return null; // not a directory — skip
     const probe = await probeLinkedWorktree(io, workdir, entries);

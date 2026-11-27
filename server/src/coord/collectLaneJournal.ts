@@ -28,11 +28,17 @@
 //   (spec §5.6: responses never expose the journal path).
 // - Synchronous on purpose: the store calls it inside `tx()`, and `DatabaseSync`'s no-async rule is the argument.
 import {
-  closeSync, constants as FS, fstatSync, fsyncSync, ftruncateSync, mkdirSync, openSync, readSync, unlinkSync, writeSync,
+  closeSync, constants, fstatSync, fsyncSync, ftruncateSync, mkdirSync, readSync, unlinkSync, writeSync,
 } from 'node:fs';
+// `O_NOFOLLOW` and `openSync` from the one no-follow helper: node's own off Windows, the link refusal kept on Windows.
+import { O_NOFOLLOW, openSync } from '../../../shared/nofollow.mjs';
 import path from 'node:path';
 import { isPositiveDecimalSafeInteger } from '../../../shared/api.js';
+import { FSYNC_OPEN } from '../../../shared/fsync-open.mjs';
 import { parseCollectLaneJournal, type CollectLaneJournal, type CollectLaneJournalRead } from '../collectLane.js';
+
+/** node's flags, with the helper's `O_NOFOLLOW` (the same number off Windows). */
+const FS = { ...constants, O_NOFOLLOW };
 
 /** The journal's basename, spelled once in code; every other code reference names it through this constant. */
 export const COLLECT_LANE_JOURNAL_BASENAME = 'collect-lane-generation.log';
@@ -119,7 +125,7 @@ export function collectLaneJournalAt(logPath: string): CollectLaneJournal & { re
         if (writeSync(fd, bytes) !== bytes.length) throw fault('a short write to the generation journal', 'EIO');
         fsyncSync(fd);
         if (created) {
-          const dfd = openSync(dir, FS.O_RDONLY);
+          const dfd = openSync(dir, FSYNC_OPEN);
           try { fsyncSync(dfd); } finally { try { closeSync(dfd); } catch { /* the original error stands */ } }
         }
       } catch (err) {
@@ -130,7 +136,7 @@ export function collectLaneJournalAt(logPath: string): CollectLaneJournal & { re
         try {
           if (created) {
             unlinkSync(logPath);
-            const ufd = openSync(dir, FS.O_RDONLY);
+            const ufd = openSync(dir, FSYNC_OPEN);
             try { fsyncSync(ufd); } finally { closeSync(ufd); }
           } else if (sizeBefore >= 0) {
             ftruncateSync(fd, sizeBefore);

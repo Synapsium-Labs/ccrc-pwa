@@ -5,6 +5,7 @@
 // other failure throws, so an unreadable file is never mistaken for an absent one. Files are created 0600, directories 0700.
 import { constants as fsConstants } from 'node:fs';
 import fsp from 'node:fs/promises';
+import { FSYNC_OPEN } from '../../../shared/fsync-open.mjs';
 import type { DelegationFileHandle, DelegationFilePort } from './delegation-journal.js';
 
 const isEnoent = (err: unknown): boolean => typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 'ENOENT';
@@ -21,7 +22,7 @@ export const nodeDelegationFilePort: DelegationFilePort = {
   createTemp: async (p) => wrapHandle(await fsp.open(p, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC, 0o600)),
   rename: (from, to) => fsp.rename(from, to),
   fsyncDir: async (dir) => {
-    const fh = await fsp.open(dir, fsConstants.O_RDONLY);
+    const fh = await fsp.open(dir, FSYNC_OPEN);
     try { await fh.sync(); } finally { await fh.close(); }
   },
   readFile: async (p) => {
@@ -43,7 +44,7 @@ export const nodeDelegationFilePort: DelegationFilePort = {
   mkdirp: async (dir) => { await fsp.mkdir(dir, { recursive: true, mode: 0o700 }); },
   truncate: (p, length) => fsp.truncate(p, length),
   fsyncFile: async (p) => {
-    const fh = await fsp.open(p, fsConstants.O_RDONLY);
+    const fh = await fsp.open(p, FSYNC_OPEN);
     try { await fh.sync(); } finally { await fh.close(); }
   },
   listDir: async (dir) => {

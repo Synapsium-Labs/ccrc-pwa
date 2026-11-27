@@ -81,9 +81,14 @@ describe('the two spawn argv templates (§18 "the op validates the tag with the 
     expect([...UPDATE_LAUNCHER_PARTS]).toEqual(['.local', 'bin', 'ccrc']);
     expect(updateLauncherPath('/h')).toBe('/h/.local/bin/ccrc');
     expect(updateLauncherPath('/tmp/fixture-home')).toBe('/tmp/fixture-home/.local/bin/ccrc');
-    for (const home of ['h', '', './h', '~/h', '/h/', '/']) {
+    for (const home of ['h', '', './h', '~/h', '/h/', '/', 'C:', 'C:\\Users\\u\\']) {
       expect(() => updateLauncherPath(home), JSON.stringify(home)).toThrow(RangeError);
     }
+  });
+
+  it('a Windows home (the port\'s server) names the launcher in the MSYS form its shell runs', () => {
+    expect(updateLauncherPath('C:\\Users\\u')).toBe('/c/Users/u/.local/bin/ccrc');
+    expect(updateLauncherPath('D:/fixture/home')).toBe('/d/fixture/home/.local/bin/ccrc');
   });
 });
 

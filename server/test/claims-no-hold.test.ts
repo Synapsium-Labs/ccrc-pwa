@@ -22,7 +22,7 @@ const tok = { 'x-ccrc-mail-token': TOKEN };
 const ID = 'demo-quiet-mesa';
 const UUID = 'a'.repeat(36);
 const WORKDIR = '/w/demo/quiet-mesa';
-const MUNGED = '-w-demo-quiet-mesa';      // mungePath: /._ -> - (munge.ts:1)
+const MUNGED = '-w-demo-quiet-mesa';      // mungePath's POSIX rule: /._ -> - (src/munge.ts)
 
 /** name-sweep.test.ts's fixture row: a workspace still on its born branch. */
 const seed = (home: string): void => {

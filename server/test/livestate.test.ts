@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { liveSessionStatus, liveStateReaderOver, liveStatusCoversDelegation, readLiveState, readLiveStateMeasured } from '../src/livestate.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { mkTmp } from './tmpHelpers.js';
+import { denyRead, restoreReadable } from './helpers.js';
 import { degradedReadIO } from './ioDoubles.js';
 
 /** Write `<configDir>/sessions/<pid>.json` and hand back the configDir. */
@@ -209,12 +210,14 @@ describe('readLiveStateMeasured — the distinction readLiveState folds', () => 
     async () => {
       const { configDir, pid } = seedLive(base);
       const file = path.join(configDir, 'sessions', `${pid}.json`);
-      chmodSync(file, 0o000);
+      // `denyRead`, not `chmodSync(file, 0o000)`: on Windows the chmod is a
+      // no-op, the read SUCCEEDS, and this case asserted against a readable file.
+      denyRead(file);
       try {
         expect(await readLiveStateMeasured(localIO, configDir, pid))
           .toEqual({ ok: false, reason: 'unmeasured' });
       } finally {
-        chmodSync(file, 0o644);   // let the fixture cleanup remove it without fighting perms
+        restoreReadable(file);   // let the fixture cleanup remove it without fighting perms
       }
     },
   );
@@ -369,7 +372,9 @@ describe('liveStateReaderOver: readLiveStateMeasured bound to one io (D-7512)', 
     const direct = make();
     const viaReader = make();
     const expected = await readLiveStateMeasured(direct.io, configDir, PID);
-    expect(await liveStateReaderOver(viaReader.io)(configDir, PID)).toEqual(expected);
+    // An EMPTY uuid never scans (`readLiveStateMeasuredFor`), so the reader is exactly the pid read, read for read;
+    // its Windows rung is pinned in `livestate-uuid.test.ts`.
+    expect(await liveStateReaderOver(viaReader.io)(configDir, PID, '')).toEqual(expected);
     expect(viaReader.reads()).toBe(direct.reads());
   });
 });

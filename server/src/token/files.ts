@@ -17,6 +17,23 @@ import {
 import { CCRC_DIR_NAME, NODE_FILES, TOKEN_TRANSPORTS } from '../../../shared/agent-protocol.js';
 import { PENDING_HARD_CAP, type BoxTokenState, type WriteRecord } from './policy.js';
 import type { BothRoleWriter, FileMeta, RetiredRead, StateRead, TokenPaths, TokenStore, ValueRead } from './ports.js';
+import { FSYNC_OPEN } from '../../../shared/fsync-open.mjs';
+import { execFile } from 'node:child_process';
+import os from 'node:os';
+
+/** Windows: a mode is no permission there (NTFS), so a 0600 token file kept the ACL its directory hands down, wider than
+ *  its owner (measured: doctor's box-token check failed `acl-not-owner-only` after the server rotated the token). The
+ *  same lock `ccd/ccrc`'s `_ccrc_lock_file` writes: inheritance off, its owner alone with read, write and delete. Off
+ *  Windows the 0600 open is the lock and this does nothing. */
+function lockOwnerOnly(p: string): Promise<void> {
+  if (process.platform !== 'win32') return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const user = os.userInfo().username;
+    const who = process.env['USERDOMAIN'] ? `${process.env['USERDOMAIN']}\\${user}` : user;
+    execFile('icacls', [p, '/inheritance:r', '/grant:r', `${who}:(R,W,D)`], { windowsHide: true },
+      (e) => (e ? reject(new Error(`icacls could not make ${p} its owner's alone: ${e.message}`)) : resolve()));
+  });
+}
 
 export type { FileMeta, RetiredRead, StateRead, TokenPaths, ValueRead } from './ports.js';
 
@@ -84,6 +101,7 @@ export async function writeValueFileAtomic(p: string, text: string): Promise<Wri
     } finally {
       await fh.close();
     }
+    await lockOwnerOnly(tmp);   // before the rename: the token is never at its name with a wider ACL
     await fsp.rename(tmp, p);
   } catch (e) {
     await fsp.rm(tmp, { force: true }).catch(() => {});
@@ -94,7 +112,7 @@ export async function writeValueFileAtomic(p: string, text: string): Promise<Wri
 }
 
 async function syncDir(dir: string): Promise<void> {
-  const dh = await fsp.open(dir, 'r');
+  const dh = await fsp.open(dir, FSYNC_OPEN);
   try { await dh.sync(); } finally { await dh.close(); }
 }
 

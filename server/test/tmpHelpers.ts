@@ -77,7 +77,10 @@ export function mkTmp(prefix: string): string {
 /** Remove every directory `mkTmp` made in this file, and forget them. Exported
  *  so the hook below has something a test can call: an `afterAll` cannot be
  *  observed from inside the file it runs for. */
-export function removeTmpFixtures(): void {
+export function removeTmpFixtures(): string[] {
+  // NO PARAMETER: `afterAll(removeTmpFixtures)` below is the form `tmpfixtures.test.ts` pins, and vitest refuses a
+  // hook whose first parameter is not a destructuring pattern. The platform is read at call time, so the Windows
+  // port's test (`tmp-helpers-busy.test.ts`) stubs `process.platform` rather than passing one.
   // `force` because a fixture the test already removed itself is the normal
   // case, not an error — several files own their own cleanup and this is the
   // net underneath them.
@@ -86,12 +89,30 @@ export function removeTmpFixtures(): void {
   // removed whatever the scan found, and whatever an earlier removal threw; the leak is reported first.
   let leak: unknown = null;
   try { assertNoPoisonLeft(dirs); } catch (e) { leak = e; }
+  //
+  // WINDOWS CANNOT UNLINK A FILE THIS PROCESS STILL HOLDS OPEN, and POSIX can.
+  // Suites that open `~/.ccrc/coord.db` (a `node:sqlite` DatabaseSync) inside a
+  // fixture home keep the handle for the worker's life, so there this `rmSync`
+  // answers `EBUSY`, the throw lands in `afterAll`, and vitest marks the WHOLE
+  // FILE failed with every one of its tests green — measured: `fleet.test.ts`
+  // 87/87 passed, file FAILED. That red reports the platform, not the subject.
+  // So on win32 alone, `EBUSY`/`EPERM` leave the directory for the OS temp
+  // sweep and are RETURNED rather than thrown; every other error, and every
+  // error on every other platform, still throws exactly as before.
+  const left: string[] = [];
   let rmErr: unknown = null;
   for (const dir of dirs) {
-    try { removeDir(dir); } catch (e) { rmErr ??= e; }
+    try {
+      removeDir(dir);
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (process.platform === 'win32' && (code === 'EBUSY' || code === 'EPERM')) { left.push(dir); continue; }
+      rmErr ??= e;
+    }
   }
   if (leak !== null) throw leak;
   if (rmErr !== null) throw rmErr;
+  return left;
 }
 
 /** How many directories this file's `mkTmp` has made and not yet removed: the mark `removeTmpFixturesSince`
