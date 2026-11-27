@@ -6292,8 +6292,9 @@ cmd_passwd() {
 #   3. this terminal is a fleet session's pane: TMUX_PANE names a pane (`%<n>`) whose tmux session is `cc-<id>`, read
 #      with `tmux display-message -p -t "$TMUX_PANE" '#S'` on the fleet's server (D-8270's lookup, `_TMX_ARGV`), bounded
 #      at 2 s as the history verbs bound it. A read that fails, times out or answers anything else refuses nothing.
-# SPEED BUMPS, NOT WALLS. `env -u CLAUDECODE`, a terminal made with `script`, an unset TMUX_PANE, a script file or another
-# interpreter each run past them. They stop a session doing this by accident, never one that sets out to.
+# SPEED BUMPS, NOT WALLS. Each has its way past: `env -u CLAUDECODE` runs past the first, a terminal made with `script`
+# past the second, an unset TMUX_PANE past the third (wave 190 A12). They stop a session doing this by accident, never
+# one that sets out to.
 _ccrc_operator_only() {   # <the verb's words, e.g. "auth on">
   local what="$1" pane=""
   [ -z "${CLAUDECODE:-}" ] \
