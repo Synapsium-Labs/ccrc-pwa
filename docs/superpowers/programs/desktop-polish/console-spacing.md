@@ -620,3 +620,25 @@ Mutants on this round's source, each restored from a saved copy and compared wit
 | `.wl.wl-beside`'s inset removed (the same sheet) | the review's F2 | 2 red (Refined, 1280 and 1440) |
 | The closed disclosure's gap rule removed | the review's F4 | 12 red: the 4 new phone cells and the 8 desk cells |
 | `.wl-route > .wl { padding-inline: var(--sp-2) }` added | the review's F6 | 4 red (the phone ledger case, at the wrapper) |
+
+### 16.7 Evidence for this round
+
+Every run went through `ccrc test`, one process at a time (measured). The exact head is the commit whose code this round
+pushes, 451b1f75df (this section is the commit after it). Before the push the probe against main 1f31f6133d was clean
+(exit 0), so the branch absorbed nothing; the merge runs are on a local detached merge of that head with that main, never
+committed to the branch.
+
+| Run | Where | Result |
+|---|---|---|
+| The growth check, armed | exact head | green, 100 of 100; `fleet.css` under its cap, no waiver |
+| The server's whole-tree guards (as §15.8) | exact head | 67 of 68 files green; the memory cap killed `rings/watcher-store-port` mid-run; alone, green, 23 of 23 |
+| `ui`'s and pwa's static checks | exact head | clean, both |
+| The whole pwa jsdom set, 653 files, in eight parts | the merge | 651 files green (22,128 passed, 11 skipped); in part 3, where the memory cap killed three processes, `mockup-policy` was killed and `markdown-worker-built`'s own build child died with no message |
+| `markdown-worker-built` and `mockup-policy`, each alone | the merge | green, 9 of 9 and 153 of 153 |
+| The 17 browser files the coordinator named, each alone: `console-spacing`, `item-nav`, `item-wrap`, `linear-items`, `waiting`, `waiting-controls`, `waiting-doors`, `phone-bar`, `refined-phone`, `refined-bar`, `instrument-desk`, `instrument-bar`, `connect-sheet`, `fleet-toggle-row`, `epic-page`, `programme-page`, `digest-widths` | the merge | all green: 82, 54, 16, 160, 202, 134, 28, 58, 53, 29, 33, 57, 20, 14, 5, 20, 24 |
+
+The other browser files stand on the earlier full run (§15.8) and on review 4029's 28 files on the merge with main
+a45831a795; the merge queue is their arbiter. The pull request's own fast run on the pushed head is in the wave-done mail.
+
+Ledger-Edit: not needed. This note is new in this pull request, so the head commit edits no existing file under the
+programme notes folder.
