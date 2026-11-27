@@ -38,7 +38,8 @@ describe('every exported union has its runtime list', () => {
     expect(L0.LADDER_CAUSE_MAP['no-witness-since-boot']).toMatchObject({ kind: 'condition', effect: { kind: 'cap', cap: 'advise' }, notice: 'none' });
     expect(L0.LADDER_READERS).toEqual(['launch-profile-unmet']);
     expect(L0.LADDER_NOTICES).toEqual(['none', 'push', 'item']);
-    expect(OVERLORD_ACT_KIND_LIST).toEqual(['read', 'write-note', 'acknowledge', 'link-team']);
+    // The act catalogue owns its list (`overlord-act-catalogue.test.ts` pins it whole); W1's four kinds are in it.
+    expect(OVERLORD_ACT_KIND_LIST).toEqual(expect.arrayContaining(['read', 'write-note', 'acknowledge', 'link-team']));
     expect(L0.CONDITION_READINGS).toEqual(['standing', 'lifted', 'unmeasured']);
     expect(L0.NARROWING_WHYS).toEqual(['no-witness-yet', 'witness-unmeasured', 'not-journalled']);
     expect(L0.LADDER_EFFECT_KINDS).toEqual(['cap', 'one-under-operator', 'read-by', 'server-words']);
