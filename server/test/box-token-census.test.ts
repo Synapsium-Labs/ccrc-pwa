@@ -122,10 +122,12 @@ const OVERLORD_HISTORY_LANES = lanesIn(OVERLORD_HISTORY_SRC);
  *  machine lane behind the Overlord gate. */
 const OVERLORD_SEQUENCE_SRC = read('server/src/coord/overlordSequenceRoutes.ts');
 const OVERLORD_SEQUENCE_LANES = lanesIn(OVERLORD_SEQUENCE_SRC);
-const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC), ...UPDATE_LANES, ...TOKEN_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...PLAN_LANES, ...CONTINUITY_LANES, ...QUIZ_LANES, ...OVERLORD_INBOX_LANES, ...OVERLORD_HISTORY_LANES, ...OVERLORD_SEQUENCE_LANES];
+const OVERLORD_BOARD_SRC = read('server/src/coord/overlordBoardRoutes.ts');
+const OVERLORD_BOARD_LANES = lanesIn(OVERLORD_BOARD_SRC);
+const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC), ...UPDATE_LANES, ...TOKEN_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...PLAN_LANES, ...CONTINUITY_LANES, ...QUIZ_LANES, ...OVERLORD_INBOX_LANES, ...OVERLORD_HISTORY_LANES, ...OVERLORD_SEQUENCE_LANES, ...OVERLORD_BOARD_LANES];
 /** The box-token machine lanes gate.ts counts first (#1444, PL3): the coordination routes, the Linear proxy's and the programme
  *  ledgers', before `/api/notify`, `/api/pools/epoch` and the update projection read join them in the total. */
-const MACHINE_LANES = [...COORD_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...PLAN_LANES, ...CONTINUITY_LANES, ...QUIZ_LANES, ...OVERLORD_INBOX_LANES, ...OVERLORD_HISTORY_LANES, ...OVERLORD_SEQUENCE_LANES];
+const MACHINE_LANES = [...COORD_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...PLAN_LANES, ...CONTINUITY_LANES, ...QUIZ_LANES, ...OVERLORD_INBOX_LANES, ...OVERLORD_HISTORY_LANES, ...OVERLORD_SEQUENCE_LANES, ...OVERLORD_BOARD_LANES];
 
 /** The one session-only write that cannot be harvested, with the reason stated so
  *  it is a recorded exception rather than a retyped list. `SESSION_ONLY` lives in
@@ -354,7 +356,9 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   // GET /api/programmes/:slug/history and GET /api/sessions/:id/programme, in the ledgers file: one hundred and six in all.
   'one hundred and four', 'one hundred and five', 'one hundred and six',
   // The Overlord's cursor read of the sequence (W1 sequence C): GET /api/overlord/sequence, a box-token lane in the sequence routes file: one hundred and seven in all.
-  'one hundred and seven'];
+  'one hundred and seven',
+  // The Overlord's board (W1, PR B2): GET /api/overlord/board, a box-token lane in the board routes file: one hundred and eight in all.
+  'one hundred and eight'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`
@@ -534,7 +538,10 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     // …and the cursor read's one (Overlord W1, sequence C).
     expect(OVERLORD_SEQUENCE_LANES, 'coord/overlordSequenceRoutes.ts lost its box-token lane, or gained a door with no census row')
       .toEqual(['GET /api/overlord/sequence']);
-    expect(ALL_LANES.length).toBe(COORD_LANES.length + 3 + LINEAR_PROXY_LANES.length + LEDGER_LANES.length + LINKING_LANES.length + CALLS_LANES.length + REMAINING_LANES.length + PLAN_LANES.length + CONTINUITY_LANES.length + QUIZ_LANES.length + OVERLORD_INBOX_LANES.length + OVERLORD_HISTORY_LANES.length + OVERLORD_SEQUENCE_LANES.length);
+    // …and the board's one (Overlord W1, PR B2).
+    expect(OVERLORD_BOARD_LANES, 'coord/overlordBoardRoutes.ts lost its box-token lane, or gained a door with no census row')
+      .toEqual(['GET /api/overlord/board']);
+    expect(ALL_LANES.length).toBe(COORD_LANES.length + 3 + LINEAR_PROXY_LANES.length + LEDGER_LANES.length + LINKING_LANES.length + CALLS_LANES.length + REMAINING_LANES.length + PLAN_LANES.length + CONTINUITY_LANES.length + QUIZ_LANES.length + OVERLORD_INBOX_LANES.length + OVERLORD_HISTORY_LANES.length + OVERLORD_SEQUENCE_LANES.length + OVERLORD_BOARD_LANES.length);
     expect(UNGATED_DOORS.length, 'the door list collapsed').toBeGreaterThan(3);
   });
 
