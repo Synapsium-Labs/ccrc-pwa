@@ -147,8 +147,9 @@ function pathOffTheEdge(a: string, b: string, pane: FramesPane): boolean {
 /** THE SHAPE CHECKS ON A REDUCED TEXT, on both hosts, so the server, which has none of the box's strings, refuses by shape
  *  what a wrap left (review 4069's F2, the reviewer's two measured frames and their class): a replacement token cut
  *  anywhere (a `‹` that starts none of the tokens, or a `›` that ends none), and a path's tail at the start of the row
- *  after a row that ends in a replacement token or runs to the edge. A row too narrow for its whole token leaves a cut
- *  token, so it is refused here too: a token is never cut short to fit. */
+ *  after a row that ends in a replacement token. A path's tail after a row run to the edge is the full-width rule's,
+ *  which runs on both hosts too. A row too narrow for its whole token leaves a cut token, so it is refused here too: a
+ *  token is never cut short to fit. */
 function cutToken(plain: string): boolean {
   for (let i = plain.indexOf('‹'); i !== -1; i = plain.indexOf('‹', i + 1)) if (!TOKENS.some((t) => plain.startsWith(t, i))) return true;
   for (let i = plain.indexOf('›'); i !== -1; i = plain.indexOf('›', i + 1)) if (!TOKENS.some((t) => plain.slice(0, i + 1).endsWith(t))) return true;
@@ -238,12 +239,12 @@ export function reduceFrame(
     return out ?? row;
   });
   const text = rows.join('\n');
-  // The shape checks on the reduced rows: no cut token, no path's tail after a token or a row run to the edge.
+  // The shape checks on the reduced rows: no cut token, no path's tail after a token.
   const outPlain = rows.map(stripFrameSgr);
   if (outPlain.some(cutToken)) return { kind: 'refused', refusal: 'private-shape' };
   for (let i = 0; i + 1 < outPlain.length; i++) {
     const [a, b] = [outPlain[i]!, outPlain[i + 1]!];
-    if (!ourRow[i + 1] && !isRuleRow(b) && pathTail(b) && (endsInToken(a) || runsToTheEdge(a, pane))) return { kind: 'refused', refusal: 'private-shape' };
+    if (!ourRow[i + 1] && !isRuleRow(b) && pathTail(b) && endsInToken(a)) return { kind: 'refused', refusal: 'private-shape' };
   }
   // Rule 9: the scans over every row not ours, then the masker's over the whole frame. A hit refuses it whole.
   const foreign = scanned.join('\n');

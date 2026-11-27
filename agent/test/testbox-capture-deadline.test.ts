@@ -528,8 +528,12 @@ describe('gate G1: a frames part, composed, every bound taken, ends within its w
       const r = await composedRun(part);
       expect(r.drives).toBe(framesDriveSteps(part).length);
       expect(r.ended).toMatchObject({ state: 'ended', detail: null, frames: { part, frame: { outcome: 'drawn' } } });
-      expect(r.at).toBeGreaterThan(0);
-      expect(r.at).toBeLessThanOrEqual(framesWorstCaseMs(t, part));
+      // Measured EXACTLY, as the delivery part's is: the worst case less its two allowances and the polls' overruns, which
+      // this clock never has (the steps before's and after's, two per turn or send, one per held step, the exit wait's and
+      // the stop wait's).
+      const ds = framesDriveSteps(part);
+      const polls = DELIVERY_STEPS_BEFORE.length + 1 + 2 * ds.filter((s) => s.kind === 'turn' || s.kind === 'send').length + ds.filter((s) => s.kind === 'held').length + 2;
+      expect(r.at).toBe(framesWorstCaseMs(t, part) - t.setupMs - t.removeMs - polls * t.pollMs);
     });
   }
   it('two of the longest part in a row, with the margin, fit the fleet agent\'s wait', () => {
