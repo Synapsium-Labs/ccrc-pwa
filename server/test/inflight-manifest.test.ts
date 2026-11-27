@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import { spawnSyncGroup } from './spawnGroup.js';
+import { IMPLS, runGoHook } from './hookTwin.js';
 
 const REPO = path.resolve(__dirname, '../..');
 const PROG = path.join(REPO, 'ccd', 'lib', 'inflight-manifest.py');
@@ -509,7 +510,7 @@ describe('the manifest program: the record, validation at read, compaction', () 
   });
 });
 
-describe('the launch record round trip: every row the hook writes reads clean', () => {
+describe.each(IMPLS)('the launch record round trip: every row the hook writes reads clean (%s)', (impl) => {
   const OWNER = SID;
   const GENERATION = '0189abcd-1234-5678-9abc-0123456789ab';
   const CONFIGDIR = '/rig/cfg/projects/-rig-repo';
@@ -524,10 +525,11 @@ describe('the launch record round trip: every row the hook writes reads clean', 
     fs.writeFileSync(path.join(home, 'bin', 'tmux'), `#!/bin/sh\ntrap '' TERM\necho "cc-${OWNER}"\nprintf '%s\\n' answered >> '${home}/tmux-answered'\n`, { mode: 0o755 });
     const e: NodeJS.ProcessEnv = { ...process.env };
     delete e['OSTYPE'];
-    const env = { ...e, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION, CLAUDE_CODE_EXECPATH: '' };
+    const env = { ...e, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION, CLAUDE_CODE_EXECPATH: '' };
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const before = fs.existsSync(`${home}/tmux-answered`) ? fs.readFileSync(`${home}/tmux-answered`, 'utf8').length : 0;
-      const r = spawnSyncGroup('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env, timeout: 120_000 });
+      const r = impl === 'go' ? runGoHook(home, payload, env)
+        : spawnSyncGroup('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env, timeout: 120_000 });
       expect(r.status).toBe(0);
       const after = fs.existsSync(`${home}/tmux-answered`) ? fs.readFileSync(`${home}/tmux-answered`, 'utf8').length : 0;
       if (after > before) return;

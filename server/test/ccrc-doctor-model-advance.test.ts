@@ -185,12 +185,17 @@ const TABLE_LINE = '  models codex docs history model-advance-held-back model-he
   + 'checks (A11b) after them';
 
 describe('the table and the one call (plan W3 Task 15; D-8689)', () => {
-  it('the table carries the four names after history, in place, then model-release-lookup, and their functions are the last five in the file', () => {
+  // The functions were the file's last five when they were appended (the file's rule: a check is appended, never
+  // inserted mid-file, since lines here are cited by number); a later check appended after them (`ccd-core`, Go core
+  // wave 1) keeps them in place, so what is pinned is the run of five right after `overlord-mods`, not the file's end.
+  it('the table carries the four names after history, in place, then model-release-lookup, and their functions follow overlord-mods, in order', () => {
     const lines = fs.readFileSync(join(REPO, 'ccd', 'ccrc-doctor-checks'), 'utf8').split('\n');
     const table = lines.filter((l) => l.startsWith('  models codex docs history '));
     expect(table).toEqual([TABLE_LINE]);
     const fns = lines.map((l) => /^_check_([A-Za-z0-9_-]+)\(\) \{$/.exec(l)?.[1]).filter((n): n is string => n !== undefined);
-    expect(fns.slice(-5)).toEqual([...CHECKS, 'model-release-lookup']);
+    const at = fns.indexOf('overlord-mods');
+    expect(at, 'overlord-mods is a check').toBeGreaterThanOrEqual(0);
+    expect(fns.slice(at + 1, at + 6)).toEqual([...CHECKS, 'model-release-lookup']);
   });
 
   it('the doctor reaches models-op through ccrc\'s own _models_node in a bounded child, with advance-health alone, a read-only op', () => {
@@ -1361,10 +1366,10 @@ describe('model-release-lookup (programme wave 3, release-lookup-warn)', () => {
     + 'read succeeds; check that this box reaches https://registry.npmjs.org (the reason above is the last try\'s); the '
     + 'probe tries again at the next hourly refresh\n';
 
-  it('the table names it after model-advance-blocked, and its function is the last in the file', () => {
+  it('the table names it after model-advance-blocked, and its function comes right after that one', () => {
     const lines = fs.readFileSync(join(REPO, 'ccd', 'ccrc-doctor-checks'), 'utf8').split('\n');
     const fns = lines.map((l) => /^_check_([A-Za-z0-9_-]+)\(\) \{$/.exec(l)?.[1]).filter((n): n is string => n !== undefined);
-    expect(fns.at(-1)).toBe('model-release-lookup');
+    expect(fns[fns.indexOf('model-advance-blocked') + 1]).toBe('model-release-lookup');
   });
 
   it('SKIPs when jq is unavailable', () => {

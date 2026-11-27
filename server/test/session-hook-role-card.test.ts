@@ -7,7 +7,8 @@
 // SAME registry shape — no `.child`, no hold — so one fixture stands for all
 // three; only a dispatch (`ws-add --no-rc --child <run>`) writes `.child`.
 //
-// Runs ccd/session-hook.sh for real inside a fixture HOME. The harness is
+// Runs ccd/session-hook.sh for real inside a fixture HOME, and the Go core's hook beside it through hookTwin's hookBoth
+// (Go core wave 2, Task 8a): every run compares the two stdouts and the files each leaves. The harness is
 // COPIED from session-hook-turnmark.test.ts, not imported (a test file cannot
 // import another, and session-hook.test.ts's lines are cited by audits).
 //
@@ -20,10 +21,10 @@
 // 2.1.266 (measured 2026-09-09: cwd, hook_event_name, model, prompt_id,
 // session_id, source, transcript_path).
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
+import { hookBoth } from './hookTwin.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 
@@ -70,17 +71,15 @@ const withSource = (source: string): object =>
       ? { ...startup(), source, prompt_id: 'p1' }
       : { ...startup(), source };
 
-/** The hook's stdout, with the header contract's exit 0 asserted here. */
+/** The hook's stdout, with the header contract's exit 0 asserted here: the bash and the Go core, each from the same
+ *  fixture state, answer the same and leave the same files (every name under the HOME). */
 const run = (payload: object): string => {
-  const r = spawnSync('bash', [HOOK], {
-    input: JSON.stringify(payload), encoding: 'utf8',
-    env: {
-      ...process.env, HOME: home,
-      PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: SID, CLAUDE_PID: '4242',
-      CCRC_SESSION_GENERATION: GENERATION,
-    },
-  });
+  const r = hookBoth(home, JSON.stringify(payload), {
+    ...process.env, HOME: home,
+    PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
+    TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: SID, CLAUDE_PID: '4242',
+    CCRC_SESSION_GENERATION: GENERATION,
+  }, { hook: HOOK, tree: true });
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
   return r.stdout;
 };

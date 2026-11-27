@@ -8,10 +8,11 @@
 // `ccd/session-hook.sh` that names Linear. The hook harness is COPIED from session-hook-role-card.test.ts, not
 // imported (a test file cannot import another).
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
+import { hookBoth } from './hookTwin.js';
 import { SITES, siteRelation } from './skillSiteRelations.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { seedAccountsSh } from './ccdWsHelpers.js';
@@ -38,17 +39,14 @@ describe('the start card is byte for byte as on main: no Linear line (D-7682 R6;
 
   /** The hook's whole stdout for a startup SessionStart, the exit 0 of its header contract asserted. */
   const card = (): string => {
-    const r = spawnSync('bash', [HOOK], {
-      input: JSON.stringify({
-        session_id: SID, transcript_path: path.join(home, 'cfg', 'projects', '-work', `${SID}.jsonl`),
-        cwd: path.join(home, 'work'), hook_event_name: 'SessionStart', source: 'startup', model: 'claude-model-a',
-      }),
-      encoding: 'utf8',
-      env: {
-        ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-        TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: SID, CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
-      },
-    });
+    // The bash and the Go core through hookBoth (Go core wave 2, Task 8a): the same stdout and the same files.
+    const r = hookBoth(home, JSON.stringify({
+      session_id: SID, transcript_path: path.join(home, 'cfg', 'projects', '-work', `${SID}.jsonl`),
+      cwd: path.join(home, 'work'), hook_event_name: 'SessionStart', source: 'startup', model: 'claude-model-a',
+    }), {
+      ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
+      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: SID, CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
+    }, { hook: HOOK, tree: true });
     expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
     return r.stdout;
   };
@@ -154,7 +152,8 @@ describe('install-linear-skill', () => {
     }
   }, HEAVY);
 
-  it('reports a failed home in the exit status but still processes the others', () => {
+  // Linux and macOS only: a mode of 0500 does not make a directory unwritable on Windows, so no home fails there
+  it.skipIf(process.platform === 'win32')('reports a failed home in the exit status but still processes the others', () => {
     const blocked = path.join(home, '.claude-b', 'skills');
     fs.mkdirSync(blocked, { recursive: true });
     fs.chmodSync(blocked, 0o500);

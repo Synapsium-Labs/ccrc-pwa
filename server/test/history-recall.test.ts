@@ -38,6 +38,7 @@ import { removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { agentRig, plantAgentTree, armed as agArmed, T0 as AG_RIG_T0, type AgentRig } from './historyAgentFixtures.js';
 // Every spawn that can run the auth library's code names a closed auth endpoint (codex-bridge Stage 1's rule).
 import { CLOSED_AUTH_BASE as c49AuthBase } from './codexAuthFixture.js';
+import { hookBoth } from './hookTwin.js';
 
 removeTmpFixturesEachTest();
 
@@ -6120,7 +6121,8 @@ describe('W2-1 recall-off: one reader, and RP10\'s verb half', () => {
 // pipeline: measure-history.py's raw rows, then history-gate.mjs's buildWindows, then windowTotals.
 // No recall-off file here is written by hand. B2 pinned hand-planted files before W2 wrote any (§10.7); these re-runs
 // hold the verb's own bytes, `<generation>\n` (W2-D28), which the CLI and the drain trim in JS and the hook trims of
-// ASCII whitespace. The hook and the measure are spawned and the gate is imported dynamically: no import line is added.
+// ASCII whitespace. The measure is spawned and the gate is imported dynamically; the hook runs through hookTwin's hookBoth, the
+// bash and the Go core compared (Go core wave 2, Task 8a).
 const RP_HOOK = path.join(REPO, 'ccd', 'session-hook.sh');
 const RP_MEASURE = path.join(REPO, 'deploy', 'measure-history.py');
 /** How far past the case's start G1's last row is stamped, so G1's window spans every call the case makes. */
@@ -6176,16 +6178,18 @@ function rpPredicted(box: HistoryBox, id: string, sid: string): string {
 /** SessionStart(compact) for `id`'s transcript `sid`, run as Claude Code runs the hook in that pane: the payload on
  *  stdin, the pane's identity through withPane's tmux, the session generation in the env. PreCompact's scope marker
  *  (`main <sid> <ms>`, S16's grammar) is planted first: no PreCompact is driven here. `context` is the
- *  additionalContext the hook printed, or null when it printed nothing. */
+ *  additionalContext the hook printed, or null when it printed nothing. The bash and the Go core both run, through
+ *  hookTwin's hookBoth (Go core wave 2, Task 8a: the same stdout and the same file names), and the bash's answer is the
+ *  one returned. */
 function rpCompactStart(box: HistoryBox, id: string, sid: string, gen: string, transcript: string): { code: number | null; stderr: string; context: string | null } {
   fs.mkdirSync(hist(box, 'scope'), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(hist(box, 'scope', id), `main ${sid} ${Date.now()}\n`);
-  const r = spawnSync('bash', [RP_HOOK], {
-    input: JSON.stringify({ hook_event_name: 'SessionStart', source: 'compact', cwd: box.home, transcript_path: transcript,
-      session_id: sid, prompt_id: 'p1', model: 'claude-fixture-4' }),
-    encoding: 'utf8', cwd: box.home, timeout: 60_000, killSignal: 'SIGTERM',
-    env: { ...box.env, ...withPane(box, id), CLAUDE_CODE_SESSION_ID: sid, CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: gen, CLAUDE_JOB_DIR: '' },
-  });
+  // 5 s back: the card refuses a marker from the future, and a realtime clock can step back between the plant and the hook
+  // (session-hook.test.ts's MARK_SLACK_MS, Go core wave 2 Task 8a fix round 1).
+  fs.writeFileSync(hist(box, 'scope', id), `main ${sid} ${Date.now() - 5000}\n`);
+  const r = hookBoth(box.home, JSON.stringify({ hook_event_name: 'SessionStart', source: 'compact', cwd: box.home, transcript_path: transcript,
+    session_id: sid, prompt_id: 'p1', model: 'claude-fixture-4' }),
+  { ...box.env, ...withPane(box, id), CLAUDE_CODE_SESSION_ID: sid, CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: gen, CLAUDE_JOB_DIR: '' },
+  { hook: RP_HOOK, tree: true });
   const out = (r.stdout ?? '').trim();
   if (out === '') return { code: r.status, stderr: r.stderr ?? '', context: null };
   const j = JSON.parse(out.split('\n').at(-1)!) as { hookSpecificOutput?: { additionalContext?: unknown } };

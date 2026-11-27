@@ -44,6 +44,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { scaled } from './timeScale.js';
 import type { ExecKind } from '../../shared/roster.js';
 import { ghContainedEnv, ghPoisonAt, seedAccountsSh } from './ccdWsHelpers.js';
+import { CORE_GOARCH, CORE_GOOS, coreExe, coreGoEntries, plantCore } from './coreBuild.js';
 import { DOCTOR_GH_PROBE, takeExpectedPoison } from './containedTools.js';
 import { realPath, posixPath, lockOwnerOnly, unlockShared } from './helpers.js';
 import { plantAuthHelper, plantAuthModule, fixtureSecretLine, compiledSecretJs } from './authFixtures.js';
@@ -1254,6 +1255,10 @@ export function plantSpoolDir(home: string, id: string): string {
  *  Its second arm (codex-bridge Stage 1, Task 9) hands `python3 -IS $HOME/.local/bin/ccgpt-auth.py …` to the real
  *  interpreter too: `_codex_auth`'s exact argv, so the doctor's `codex` check reads the placed library's own `status`
  *  (or a case's stand-in at that path) instead of the stub's empty answer, which `_codex_auth_status` refuses. */
+/** The launcher's self-test as `ccd-core` asks it (`python3 -IS ~/.local/bin/ccd --ccrc-entry-self-test`), answered with
+ *  the record a real launcher prints: `healthy()`'s `~/.local/bin/ccd` is a Docs stub, not a launcher. */
+export const ENTRY_SELFTEST_PY_ARM = 'if [ "$1" = "-IS" ] && [ "$2" = "$HOME/.local/bin/ccd" ] && [ "$3" = --ccrc-entry-self-test ]; then '
+  + "printf 'ccd-entry-self-test 3 1 1 1 1\\n'; exit 0; fi\n";
 export const BT_PY_ARM = ((): string => {
   const real = spawnSync('bash', ['-c', 'command -v python3'], { encoding: 'utf8' }).stdout.trim();
   if (real === '') return '';
@@ -1289,7 +1294,7 @@ export function healthy(prefix: string): string {
   // `python3` is a presence stub, except for the box-token check's two JSON readers, which go to the real interpreter
   // by EXACT program text (read from the shipped checks file): a stub that prints nothing makes them read `state-unreadable`
   // and `sync-unreadable`, which are FAIL and WARN now that the arms are on.
-  stub(home, 'python3', `${BT_PY_ARM}exit 0`);
+  stub(home, 'python3', `${BT_PY_ARM}${ENTRY_SELFTEST_PY_ARM}exit 0`);
   // jq is REAL here, not a presence stub (Stage 4, Task 9): `_check_build`
   // reads the box's stamp through ccrc's one parser (`_box_build_fields`),
   // which parses with jq — a stub that exits 0 printing nothing would make
@@ -1491,6 +1496,9 @@ export function healthy(prefix: string): string {
   // object, so this stub cannot drift from ccd.
   writeFileSync(join(home, '.local', 'bin', 'ccd'),
     docsIndexStubScript(JSON.stringify(DOCS_INDEX_READY)), { mode: 0o755 });
+  // …and the Go core the shipped tree carries, installed beside the body as the pair publisher leaves it:
+  // `ccd-core` is a check, and healthy()'s contract is that every check PASSES.
+  plantInstalledCore(home);
   // …and its PWA bundle carries the service worker every browser installs (spec 2026-10-01 §7.2): `docs-sw` is a
   // check, and healthy()'s contract is that every check PASSES. `swJs()` is the default-denylist worker in the
   // one-line shape a build emits, the same text `TREE_STUBS` and `ccrc-updateFixture.ts`'s tree plant.
@@ -1674,6 +1682,16 @@ export function broken(prefix: string): string {
   containedPath(home);   // the poison is the only `gh` this fixture has
   writePkg(home, '>=99.0.0');
   return home;
+}
+
+/** The shipped tree's core (its table, and this platform's binary when an entry runs in go here) and the binary's
+ *  installed copy under `~/.local/libexec/ccrc/core`, as the pair publisher leaves them (`ccd-core`). */
+export function plantInstalledCore(home: string): void {
+  plantCore(join(home, 'ccrc'));
+  if (coreGoEntries().length === 0) return;
+  const dest = join(home, '.local', 'libexec', 'ccrc', 'core');
+  mkdirSync(dest, { recursive: true });
+  copyFileSync(join(home, 'ccrc', 'core', 'bin', `${CORE_GOOS}-${CORE_GOARCH}`, coreExe()), join(dest, coreExe()));
 }
 
 /** The check table, read out of the shipped file rather than re-typed here —
@@ -2071,7 +2089,7 @@ export function plantDirectLane(home: string, id: string, o: { upstream?: 'backe
   const real = spawnSync('bash', ['-c', 'command -v python3'], { encoding: 'utf8' }).stdout.trim();
   const arm = real === '' ? ''
     : `if [ "$1" = "-I" ] && [ "$2" = "-c" ] && [ "$3" = '${PY_VERSION_PROG}' ]; then exec '${real}' "$@"; fi\n`;
-  stub(home, 'python3', `${BT_PY_ARM}${arm}exit 0`);
+  stub(home, 'python3', `${BT_PY_ARM}${ENTRY_SELFTEST_PY_ARM}${arm}exit 0`);
 }
 
 /** `_codex_started_json bridge` as the lane library computes it NOW in this fixture HOME (`startedJson`'s twin). */

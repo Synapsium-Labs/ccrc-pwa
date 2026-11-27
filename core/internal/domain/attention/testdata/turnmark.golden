@@ -1,0 +1,17 @@
+{"v":1,"sessionId":"u1","state":"working","event":"UserPromptSubmit","at":1764000000123,"turnAt":1764000000123,"stopAt":null,"bg":-1,"bgKinds":"","bgIds":"","err":null,"restartAt":null,"lostBg":0,"lostKinds":"","lostIds":"","crons":-1}
+{"v":1,"sessionId":"u1","state":"done","event":"Stop","at":1764000000123,"turnAt":null,"stopAt":1764000000123,"bg":3,"bgKinds":"Shell,shell,subagent","bgIds":"a1,a2,a3","err":null,"restartAt":null,"lostBg":0,"lostKinds":"","lostIds":"","crons":2}
+{"v":1,"sessionId":"u1","state":"failed","event":"StopFailure","at":1764000000123,"turnAt":null,"stopAt":1764000000123,"bg":-1,"bgKinds":"","bgIds":"","err":"rate_limit","restartAt":null,"lostBg":0,"lostKinds":"","lostIds":"","crons":-1}
+{"v":1,"sessionId":"u1","state":"done","event":"SessionStart","at":1764000000123,"turnAt":null,"stopAt":null,"bg":0,"bgKinds":"","bgIds":"","err":null,"restartAt":1764000000123,"lostBg":0,"lostKinds":"","lostIds":"","crons":-1}
+{"v":1,"sessionId":"u1","state":"done","event":"SessionStart","at":1764000000123,"turnAt":null,"stopAt":null,"bg":-1,"bgKinds":"","bgIds":"","err":null,"restartAt":null,"lostBg":0,"lostKinds":"","lostIds":"","crons":-1}
+-
+{"v":1,"sessionId":"u1","state":"done","event":"SessionStart","at":9,"turnAt":3,"stopAt":5,"bg":0,"bgKinds":"","bgIds":"","err":null,"restartAt":9,"lostBg":3.5,"lostKinds":"shell,subagent","lostIds":"z9,a1,a2","crons":4}
+{"v":1,"sessionId":"u1","state":"working","event":"PostToolUse","at":9,"turnAt":9,"stopAt":null,"bg":2,"bgKinds":"x","bgIds":"","err":"e","restartAt":7,"lostBg":0,"lostKinds":"","lostIds":"","crons":4}
+{"v":1,"sessionId":"u1","state":"done","event":"Stop","at":9,"turnAt":{"a":[1]},"stopAt":9,"bg":0,"bgKinds":"","bgIds":"","err":null,"restartAt":null,"lostBg":0,"lostKinds":"","lostIds":"","crons":-1}
+{"v":1,"sessionId":"u1","state":"done","event":"SessionStart","at":9,"turnAt":null,"stopAt":null,"bg":0,"bgKinds":"","bgIds":"","err":null,"restartAt":9,"lostBg":0,"lostKinds":"","lostIds":"","crons":-1}
+{"v":1,"sessionId":"u1","state":"done","event":"Stop","at":9,"turnAt":null,"stopAt":9,"bg":1,"bgKinds":"a","bgIds":"b","err":null,"restartAt":null,"lostBg":0,"lostKinds":"","lostIds":"","crons":0}
+{"v":1,"sessionId":"u1","state":"failed","event":"StopFailure","at":9,"turnAt":null,"stopAt":9,"bg":-1,"bgKinds":"","bgIds":"","err":"","restartAt":null,"lostBg":0,"lostKinds":"","lostIds":"","crons":-1}
+-
+-
+{"v":1,"sessionId":"u1","state":"done","event":"SessionStart","at":9,"turnAt":null,"stopAt":null,"bg":0,"bgKinds":"","bgIds":"","err":null,"restartAt":9,"lostBg":2,"lostKinds":"a,b,c","lostIds":"6,7,8,9,1,2,3,4","crons":-1}
+{"v":1,"sessionId":"u1","state":"done","event":"Stop","at":9,"turnAt":null,"stopAt":9,"bg":2,"bgKinds":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,c,é","bgIds":"1,2,3,4,5,6,7,8","err":null,"restartAt":null,"lostBg":0,"lostKinds":"","lostIds":"","crons":0}
+-

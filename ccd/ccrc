@@ -17727,6 +17727,23 @@ _inst_tree() {   # place the shipped tree at ~/ccrc-versions/<name>/ and point
   # the fix for an old one.
   [ "$INST_ROLE" != fleet ] || [ -f "$src/agent/dist/agent/src/index.js" ] \
     || _ccrc_die "no agent build at $src/agent/dist — build first: bash install.sh (or npm run build in agent/)"
+  # THE GO CORE FROM A CHECKOUT (spec 2026-11-24 §7). A release carries `core/bin/`; a checkout carries `core/build.sh`
+  # and a git-ignored `core/bin/` that may predate the source. ccd's pair installer, asked (`core-target`), names this
+  # machine's `<goos>-<goarch>` when an entry runs in go mode here — the installer owns the platform map — and with Go
+  # on PATH the binary is rebuilt into the checkout every time, before the tree is placed (the build cache makes an
+  # unchanged rebuild fast and byte-identical). Without Go an existing binary is installed with a warning that it was
+  # not rebuilt; without one the pair install refuses, naming the command to run.
+  if [ -f "$src/core/build.sh" ] && _inst_entry_python "$src/ccd/ccd-entry-install.py"; then
+    local core_t
+    core_t="$("$CCRC_ENTRY_PY" -IS "$src/ccd/ccd-entry-install.py" core-target "$src" 2>/dev/null)" || core_t=""
+    if [ -n "$core_t" ] && command -v go >/dev/null 2>&1; then
+      echo "install: core: building ccrc-core for $core_t in this checkout (bash core/build.sh core/bin $core_t)"
+      bash "$src/core/build.sh" "$src/core/bin" "$core_t" \
+        || _ccrc_die "building ccrc-core for $core_t failed (above) — nothing was placed"
+    elif [ -n "$core_t" ] && { [ -e "$src/core/bin/$core_t/ccrc-core" ] || [ -e "$src/core/bin/$core_t/ccrc-core.exe" ]; }; then
+      echo "install: core: Go is not on PATH, so ccrc-core for $core_t was not rebuilt; installing the one already in core/bin, which may be stale" >&2
+    fi
+  fi
   # ── (1) WHAT $HOME/ccrc IS, BEFORE ANYTHING IS WRITTEN (W6 Task 2) ─────
   # One reader decides (`_ver_layout`), and the three words this function
   # cannot build on refuse here, before a byte is placed. `crashed` never
@@ -17837,15 +17854,17 @@ _inst_tree() {   # place the shipped tree at ~/ccrc-versions/<name>/ and point
       # pointed at a file that no longer existed, and every load the service
       # worker did not answer was a black screen.
       #
-      # The five sources carry no trailing slash, so `--delete` works inside
+      # The sources carry no trailing slash, so `--delete` works inside
       # each of them and never at the destination's top level: a version
       # directory's two kept files (`$VER_STAMP_COPY`, `$VER_RECORD_COPY`)
       # are not the rsync's to remove.
       # The Windows port's tree only when the source has one: a Linux tree without it places exactly what it did.
       local -a INST_WIN_SRC=(); [ -d "$src/win" ] && INST_WIN_SRC=("$src/win")
+      # `core` carries the Go core's entry table and its binaries (spec 2026-11-24), which ccd's pair installer reads
+      # from the placed tree: a source without it fails here, loudly, rather than at that installer's refusal.
       rsync -a --delete --checksum \
         --exclude node_modules --exclude .git --exclude '*.env' --exclude ccrc-mail.token \
-        "$src/server" "$src/agent" "$src/shared" "$src/deploy" "$src/ccd" ${INST_WIN_SRC[@]+"${INST_WIN_SRC[@]}"} "$dest/" \
+        "$src/server" "$src/agent" "$src/shared" "$src/deploy" "$src/ccd" "$src/core" ${INST_WIN_SRC[@]+"${INST_WIN_SRC[@]}"} "$dest/" \
         || _ccrc_die "placing the tree at $dest failed"
       INST_TREE_PLACED="$name"
       if [ "$name" = "$VER_CURRENT" ]; then
@@ -18854,7 +18873,7 @@ _inst_approval_key() {
 # stray build.json beside a real repository must never outvote it.
 #
 # A PLACED VERSION'S OWN SPINE (W6 Task 2) finds no `build.json` beside it:
-# `_inst_tree`'s rsync carries server/agent/shared/deploy/ccd and nothing at
+# `_inst_tree`'s rsync carries server/agent/shared/deploy/ccd/core and nothing at
 # a tree's top level. So when the tree this script runs from has none, the
 # stamp that version KEPT when it last completed an install here
 # (`$VER_STAMP_COPY`, written by `_ver_keep_state`) is installed instead —
@@ -25438,6 +25457,7 @@ _upd_backup_set() {
   _upd_backup_copy "$HOME/.local/libexec/ccrc/shared/redact.mjs" ccd-shared-redact.mjs   # the docs redactor (D-7077): restored before the body that pins it
   _upd_backup_copy "$HOME/.local/libexec/ccrc/shared/redact-cli.mjs" ccd-shared-redact-cli.mjs
   _upd_backup_copy "$HOME/.local/libexec/ccrc/door-process.mjs" ccd-door-process.mjs   # the Overlord's door program (not a library, not a launcher): restored before the body that pins it
+  _upd_backup_copy "$HOME/.local/libexec/ccrc/core" ccd-core   # the Go core, a whole directory (spec 2026-11-24): restored before the launcher whose table names its digest
   _upd_backup_copy "$HOME/.local/libexec/ccrc/lib/disk-retention.sh" ccd-lib-disk-retention.sh   # the body's library (D-6913): restored before the body that pins it
   _upd_backup_copy "$HOME/.local/libexec/ccrc/lib/train-proof.sh" ccd-lib-train-proof.sh   # its second library (D-7463): restored before the body that pins it
   _upd_backup_copy "$HOME/.local/libexec/ccrc/lib/delegation-lease.sh" ccd-lib-delegation-lease.sh   # its third library (wave 5): restored before the body that pins it
@@ -30120,10 +30140,28 @@ _uninst_tree_bins() {
   rm -f -- "$HOME/.local/libexec/ccrc/ccd" "$HOME/.local/libexec/ccrc/lib/disk-retention.sh" "$HOME/.local/libexec/ccrc/lib/train-proof.sh" "$HOME/.local/libexec/ccrc/lib/delegation-lease.sh" \
     "$HOME/.local/libexec/ccrc/lib/pool-set.sh" "$HOME/.local/libexec/ccrc/lib/long-lived.sh" "$HOME/.local/libexec/ccrc/lib/door.sh" "$HOME/.local/libexec/ccrc/lib/model-aliases.sh" "$HOME/.local/libexec/ccrc/shared/redact.mjs" "$HOME/.local/libexec/ccrc/shared/redact-cli.mjs" "$HOME/.local/libexec/ccrc/door-process.mjs" \
     || _ccrc_die "removing ccd's body and library from \$HOME/.local/libexec/ccrc failed"
+  # The Go core (spec 2026-11-24) under core/, and the Node twin's node/ a box that ran it may still hold (spec
+  # 2026-11-22): their file names come only from the tree that installed them, so they are LISTED from the installed
+  # directory first, never through a link, then removed one by one, and their directories by rmdir, deepest first —
+  # never a recursive rm under ~/.local/libexec.
+  local core_dir core_f
+  local -a core_files=() core_dirs=()
+  for core_dir in "$HOME/.local/libexec/ccrc/core" "$HOME/.local/libexec/ccrc/node"; do
+    if [ -d "$core_dir" ] && [ ! -L "$core_dir" ]; then
+      while IFS= read -r -d '' core_f; do core_files+=("$core_f"); done < <(find -P "$core_dir" -mindepth 1 ! -type d -print0)
+      while IFS= read -r -d '' core_f; do core_dirs+=("$core_f"); done < <(find -P "$core_dir" -depth -type d -print0)
+    fi
+  done
+  # `unlink`, one listed path at a time (each absolute): the install censuses read `rm -f` operands as installed NAMES,
+  # and these are no name either installer types — the pair publisher's table names them.
+  for core_f in "${core_files[@]}"; do
+    unlink "$core_f" || _ccrc_die "removing ccd's core file $core_f failed"
+  done
+  for core_f in "${core_dirs[@]}"; do rmdir -- "$core_f" 2>/dev/null || :; done
   rmdir -- "$HOME/.local/libexec/ccrc/shared" 2>/dev/null || :
   rmdir -- "$HOME/.local/libexec/ccrc/lib" 2>/dev/null || :
   rmdir -- "$HOME/.local/libexec/ccrc" 2>/dev/null || :
-  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-scope-sweep, ccd-land-probe, ccd-testbox-times, ccd-carry-dedupe-sweep, ccd-tool-adj, ccd-history-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-auth.py, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex, ccrc-api and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; its libraries and redactor (lib/disk-retention.sh, lib/train-proof.sh, lib/delegation-lease.sh, lib/pool-set.sh, lib/long-lived.sh, lib/door.sh, lib/model-aliases.sh, shared/redact.mjs, shared/redact-cli.mjs, door-process.mjs) with it; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
+  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-scope-sweep, ccd-land-probe, ccd-testbox-times, ccd-carry-dedupe-sweep, ccd-tool-adj, ccd-history-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-auth.py, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex, ccrc-api and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; its libraries and redactor (lib/disk-retention.sh, lib/train-proof.sh, lib/delegation-lease.sh, lib/pool-set.sh, lib/long-lived.sh, lib/door.sh, lib/model-aliases.sh, shared/redact.mjs, shared/redact-cli.mjs, door-process.mjs, the Go core under core/) with it; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
   echo "uninstall: tree: the box token's node records (~/.ccrc/box-token-generation, token-sync.json) removed; its value and state files stay with ~/.ccrc/mail.token, and ~/.cc-secrets/ccrc-mail.token is not touched"
   # ── the one entry that is not ccrc's own binary ─────────────────────────
   # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the

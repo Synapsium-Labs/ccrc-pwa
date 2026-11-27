@@ -16,7 +16,7 @@
 //
 // Every directory is a FIXTURE home: nothing reads or writes the live `~/.ccrc` or `~/.cc-sessions`, no ccd verb runs, and the hook is
 // handed a stub tmux on a private PATH.
-import { afterEach, describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -55,6 +55,7 @@ import { READ_FROM_MAX_BYTES } from '../../shared/agent-protocol.js';
 import { makeCcdHarness } from './ccdWsHelpers.js';
 import * as policy from '../src/coord/delegation-policy.js';
 import { seedRoster, testDeps } from './helpers.js';
+import { IMPLS, runGoHook, type Impl } from './hookTwin.js';
 import { mkTmp } from './tmpHelpers.js';
 import { callsIn, parsedFile, sourceOfSymbol, symbolOf } from './scan/symbols.js';
 import { declaringFile, programSource, programTexts } from './scan/programView.js';
@@ -90,6 +91,9 @@ interface World {
 interface WorldOptions { home?: string; ccdVerbs?: string[] | null; bytes?: FleetIO['readFileFromBytesMeasured'] }
 
 const worlds: World[] = [];
+/** Every world's database, closed after its case: Windows refuses to unlink an open file (EBUSY; Task 9b gate round). */
+const dbs: Array<ReturnType<typeof openCoordDb>> = [];
+afterEach(() => { for (const db of dbs.splice(0)) { try { if (db.isOpen) db.close(); } catch { /* closed already */ } } });
 afterEach(async () => {
   // The lane's two standing promises hold in EVERY row of this file: it never writes through the fleet io, and it never execs.
   for (const w of worlds) {
@@ -130,7 +134,9 @@ function world(opts: WorldOptions = {}): World {
     },
     writeFileB64: async (p) => { writes.push(p); throw new Error('the lane must not write through its fleet io'); },
   };
-  const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+  const db = openCoordDb(path.join(home, '.ccrc', 'coord.db'));
+  dbs.push(db);
+  const coord = new CoordStore(db);
   const ccdVerbs = opts.ccdVerbs === undefined ? ['caps', DELEGATION_EVENTS_CAP] : opts.ccdVerbs;
   const deps = { ...testDeps(home, run), monotonicMs: () => Date.now(), cfg, io, coord, fleetState: { connected: true, downSince: null, ccdVerbs } };
   const made: World = { home, reg: cfg.registryDir, ccrcDir: cfg.ccrcDir, watcher: new FleetWatcher(deps as never, new Bus(), 10_000), coord, faults, calls, writes, run, cfg, deps };
@@ -216,6 +222,14 @@ async function healthBody(w: World): Promise<{ delegation?: DelegationObservatio
 
 const REAL_JQ = ((): string => { try { return execFileSync('sh', ['-c', 'command -v jq'], { encoding: 'utf8' }).trim(); } catch { return ''; } })();
 
+/** The implementation `fire` starts (Go core wave 2): the describes that run the real hook run once in each. */
+let hookImpl: Impl = 'bash';
+const useHookImpl = (i: Impl): void => {
+  beforeEach(() => { hookImpl = i; });
+  afterEach(() => { hookImpl = 'bash'; });
+};
+const describeJq = REAL_JQ === '' ? describe.skip : describe;
+
 interface HookWorld {
   home: string;
   reg: string;
@@ -238,7 +252,7 @@ function hookWorld(owner = OWNER): HookWorld {
   writeFileSync(path.join(reg, `${owner}.generation`), INC);
   writeFileSync(path.join(home, 'bin', 'tmux'), `#!/bin/sh\necho "cc-${owner}"\n`, { mode: 0o755 });
   const env: NodeJS.ProcessEnv = {
-    ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+    ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
     TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: INC, CLAUDE_CODE_EXECPATH: '',
   };
   const rawLines = (): string[] => readdirSync(ownerDir).filter((f) => /^\d{10}\.spool$/.test(f)).sort()
@@ -246,7 +260,7 @@ function hookWorld(owner = OWNER): HookWorld {
   return {
     home, reg, repo, ownerDir, rawLines, lines: () => rawLines().map((l) => JSON.parse(l) as Record<string, any>),
     fire: (payload) => {
-      const r = spawnSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env, timeout: 120_000 });
+      const r = hookImpl === 'go' ? runGoHook(home, payload, env) : spawnSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env, timeout: 120_000 });
       expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
     },
   };
@@ -285,8 +299,11 @@ const LATER_WAVE_NAME = /(^|\/)leases(\/|$)|lease-?(mark|audit|clean)|carrier|de
 // 1. A NEW FLEET UNDER AN OLD SERVER: spools fill and expire; no carriers, no cleanup (spec §5.13)
 // ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
-describe.skipIf(REAL_JQ === '')('1. new fleet, old server: the spool fills and expires by itself, and nothing else of the broker appears on the fleet', () => {
-  it('the real hook writes only owner-scoped spool lines the server\'s own parser accepts; no carrier, no cleanup, no server state', () => {
+describeJq.each(IMPLS)('1. new fleet, old server: the spool fills and expires by itself, and nothing else of the broker appears on the fleet (%s)', (i) => {
+  useHookImpl(i);
+  // not on Windows: the raw worktree is leased from the spool's worktree listing, which triggers on a `/`-rooted cwd, and a
+  // Windows cwd is not one in either hook (hook-core-spine's spool describe), so no raw lease exists there
+  it.skipIf(process.platform === 'win32')('the real hook writes only owner-scoped spool lines the server\'s own parser accepts; no carrier, no cleanup, no server state', () => {
     const hw = hookWorld();
     hw.fire(hookEvent(hw, 'SessionStart', { source: 'startup' }));
     hw.fire(hookEvent(hw, 'SubagentStart', { agent_id: 'a516cb53d83b231c7', agent_type: 'general-purpose' }));
@@ -363,8 +380,11 @@ async function endToEnd(): Promise<{ w: World; hw: HookWorld; at: (n: number) =>
   return { w, hw, at };
 }
 
-describe.skipIf(REAL_JQ === '')('1b. end to end: the real hook feeds the real lane, and the result is journaled, checkpointed, projected and reported', () => {
-  it('one session, one subagent and one raw worktree become records, an activity, a lease IDENTITY, SQLite rows and a health; no carrier is written', async () => {
+describeJq.each(IMPLS)('1b. end to end: the real hook feeds the real lane, and the result is journaled, checkpointed, projected and reported (%s)', (i) => {
+  useHookImpl(i);
+  // not on Windows: the raw worktree is leased from the spool's worktree listing, which triggers on a `/`-rooted cwd, and a
+  // Windows cwd is not one in either hook (hook-core-spine's spool describe), so no raw lease exists there
+  it.skipIf(process.platform === 'win32')('one session, one subagent and one raw worktree become records, an activity, a lease IDENTITY, SQLite rows and a health; no carrier is written', async () => {
     const { w, hw } = await endToEnd();
     const regAfterPasses = treeDigest(hw.reg);
     const d = disk(w.home);
@@ -390,7 +410,9 @@ describe.skipIf(REAL_JQ === '')('1b. end to end: the real hook feeds the real la
     expect(existsSync(path.join(hw.reg, 'delegation', 'leases'))).toBe(false);
   }, 120_000);
 
-  it('R95 (W5): every raw lease resolves from the JOURNAL FILE ALONE to the call that made it: its PreToolUse and PostToolUse records, one toolUseId, both listings', async () => {
+  // not on Windows: the raw worktree is leased from the spool's worktree listing, which triggers on a `/`-rooted cwd, and a
+  // Windows cwd is not one in either hook (hook-core-spine's spool describe), so no raw lease exists there
+  it.skipIf(process.platform === 'win32')('R95 (W5): every raw lease resolves from the JOURNAL FILE ALONE to the call that made it: its PreToolUse and PostToolUse records, one toolUseId, both listings', async () => {
     const { w } = await endToEnd();
     // the journal on disk, line by line: not the checkpoint, not SQLite
     const records = readFileSync(path.join(w.ccrcDir, DELEGATION_JOURNAL_FILE), 'utf8').split('\n').filter((l) => l !== '')
@@ -486,10 +508,18 @@ const ids = (cp: DelegationCheckpointV1) => ({
   activities: cp.activities.map((a) => a.activityId).sort(), leases: cp.leases.map((l) => l.leaseId).sort(),
   lineage: cp.lineage.map((l) => l.lineageId).sort(), attempts: cp.attempts.map((a) => a.attemptId).sort(), naturalKeys: cp.activityIdsByNaturalKey,
 });
-const loseDb = (home: string): void => { for (const f of ['coord.db', 'coord.db-wal', 'coord.db-shm']) rmSync(path.join(home, '.ccrc', f), { force: true }); };
+// The case's open handles go first: a lost database's handles are gone with it, and Windows refuses to unlink an open file
+// (EBUSY; Task 9b gate round).
+const loseDb = (home: string): void => {
+  for (const db of dbs.splice(0)) { try { if (db.isOpen) db.close(); } catch { /* closed already */ } }
+  for (const f of ['coord.db', 'coord.db-wal', 'coord.db-shm']) rmSync(path.join(home, '.ccrc', f), { force: true });
+};
 
-describe.skipIf(REAL_JQ === '')('3. a lost coord.db: the checkpoint and the journal give back the same IDs, the same rows and the same interval health', () => {
-  it('SQLite is rebuilt from the durable pair: every activity, lease, lineage and attempt ID is the one it was, and so is the health', async () => {
+describeJq.each(IMPLS)('3. a lost coord.db: the checkpoint and the journal give back the same IDs, the same rows and the same interval health (%s)', (i) => {
+  useHookImpl(i);
+  // not on Windows: the raw worktree is leased from the spool's worktree listing, which triggers on a `/`-rooted cwd, and a
+  // Windows cwd is not one in either hook (hook-core-spine's spool describe), so no raw lease exists there
+  it.skipIf(process.platform === 'win32')('SQLite is rebuilt from the durable pair: every activity, lease, lineage and attempt ID is the one it was, and so is the health', async () => {
     const { w, hw, at } = await endToEnd();
     const before = { cp: disk(w.home).checkpoint!, journal: disk(w.home).journal, health: w.watcher.currentDelegationHealth()!, projection: canonicalDelegationJson(w.coord.readDelegationProjection()) };
     expect(before.cp.leases).toHaveLength(1);
@@ -511,7 +541,9 @@ describe.skipIf(REAL_JQ === '')('3. a lost coord.db: the checkpoint and the jour
     expect(walk(hw.reg).filter((p) => LATER_WAVE_NAME.test(p))).toEqual([]);
   }, 120_000);
 
-  it('a lost checkpoint as well: the journal alone gives back the same activity, lease and lineage IDs, and the health says unmeasured rather than zero', async () => {
+  // not on Windows: the raw worktree is leased from the spool's worktree listing, which triggers on a `/`-rooted cwd, and a
+  // Windows cwd is not one in either hook (hook-core-spine's spool describe), so no raw lease exists there
+  it.skipIf(process.platform === 'win32')('a lost checkpoint as well: the journal alone gives back the same activity, lease and lineage IDs, and the health says unmeasured rather than zero', async () => {
     const { w, at } = await endToEnd();
     const before = disk(w.home).checkpoint!;
     loseDb(w.home);

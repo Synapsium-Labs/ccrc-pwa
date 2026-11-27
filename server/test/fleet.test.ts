@@ -15,6 +15,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { ASK_HELD_CHIP_MAX_MS } from '../src/askwindow.js';
 import { mkTmp } from './tmpHelpers.js';
+import { IMPLS, runGoHook } from './hookTwin.js';
 import { DEFAULT_TEST_ROSTER, seedRoster } from './helpers.js';
 import { degradedReadIO, unreadableField } from './ioDoubles.js';
 
@@ -1836,7 +1837,7 @@ describe('FleetSession.hibernatedAt (D-5242)', () => {
 // hookstate as it was, so the row's `bucketSince` stays the Stop's T0 (no fresh `done`, no badge). END TO END: the real
 // hook writes the file, the real reader parses it, `assembleFleet` ships the row. At base PostCompact `manual` writes a
 // fresh `done`, and `bucketSince` jumps to the compaction.
-describe('a compaction keeps bucketSince (D-5239)', () => {
+describe.each(IMPLS)('a compaction keeps bucketSince (D-5239) (%s)', (impl) => {
   const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
   const FIVE = path.resolve(__dirname, 'fixtures/hook/stop-bg-five-kinds.json');
   const ID = 'lane-a-project-a';
@@ -1865,11 +1866,10 @@ describe('a compaction keeps bucketSince (D-5239)', () => {
     mkdirSync(path.join(home, '.ccrc'), { recursive: true });
     writeFileSync(path.join(home, '.ccrc', SERVER_CAPS_FILE), renderServerCaps(['dispatch-live-gate-v1'], Math.floor(Date.now() / 1000)));
     const hook = (p: object): void => {
-      execFileSync('bash', [HOOK], {
-        input: JSON.stringify(p), encoding: 'utf8',
-        env: { ...process.env, HOME: home, PATH: `${bin}:${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1',
-          CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: '40613', CCRC_SESSION_GENERATION: GENERATION },
-      });
+      const env = { ...process.env, HOME: home, PATH: `${bin}${path.delimiter}${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1',
+        CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: '40613', CCRC_SESSION_GENERATION: GENERATION };
+      if (impl === 'go') expect(runGoHook(home, p, env).status, 'the Go hook: exit 0').toBe(0);
+      else execFileSync('bash', [HOOK], { input: JSON.stringify(p), encoding: 'utf8', env });
     };
     hook({ ...(JSON.parse(readFileSync(FIVE, 'utf8')) as Record<string, unknown>), background_tasks: [] });
     const hsFile = path.join(reg, `${ID}.hookstate.json`);

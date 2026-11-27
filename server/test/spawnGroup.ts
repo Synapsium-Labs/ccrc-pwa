@@ -41,6 +41,10 @@ import { closeSync, mkdtempSync, openSync, rmSync, writeFileSync } from 'node:fs
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
+/** winTreeKill.cjs, and the status it exits with when it killed the tree at the bound. */
+const WIN_TREE_KILL = path.join(__dirname, 'winTreeKill.cjs');
+const WIN_TIMED_OUT = 3221;
+
 /** How long a returned child's leftover group members get to exit before they are a leak. */
 export const GROUP_GRACE_MS = 500;
 const PAUSE = new Int32Array(new SharedArrayBuffer(4));
@@ -102,10 +106,19 @@ export function spawnSyncGroup(command: string, args: readonly string[],
   const opts: SpawnSyncOptionsWithStringEncoding & { detached: boolean } =
     { ...rest, ...(fd === undefined ? {} : { stdio: withStdin(rest.stdio, fd) }), detached: !win };
   let r: SpawnSyncReturns<string>;
+  // On Windows a bounded call runs under winTreeKill.cjs, which kills the whole tree at the bound (spawnSync's own
+  // timeout kills the direct child only, and its children keep the pipes open); node's bound stays as a backstop.
+  const bound = win && typeof opts.timeout === 'number' && opts.timeout > 0 ? opts.timeout : 0;
   try {
-    r = spawnSync(command, args, opts);
+    r = bound > 0
+      ? spawnSync(process.execPath, [WIN_TREE_KILL, String(bound), command, ...args], { ...opts, timeout: bound + 10_000 })
+      : spawnSync(command, args, opts);
   } finally {
     if (fd !== undefined) closeSync(fd);
+  }
+  if (bound > 0 && r.status === WIN_TIMED_OUT) {
+    const error = Object.assign(new Error(`spawnSync ${command} ETIMEDOUT`), { code: 'ETIMEDOUT' });
+    r = { ...r, status: null, signal: 'SIGTERM', error };
   }
   const pgid = r.pid;
   if (win || !pgid || !groupAlive(pgid)) return r;

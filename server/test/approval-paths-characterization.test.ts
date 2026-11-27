@@ -2,7 +2,8 @@
  * Characterization of today's approval paths (plan 2026-11-18-overlord-approvals, Task 1.1 and Table 2a). It pins what a
  * child's permission prompt does TODAY, green on `main`, so a later change is checked against it. One `describe` per path:
  *
- *  1. the hook's silent gates (`ccd/session-hook.sh#_hook_approval_wait`): no stdout and no request, in a fixture HOME;
+ *  1. the hook's silent gates (`ccd/session-hook.sh#_hook_approval_wait`): no stdout and no request, in a fixture HOME, the bash and
+ *     the Go core's `ccrc-core hook` alike;
  *  2. the mint refusals of `createQuestions(...).raiseApproval`: each verdict kind, and no row minted;
  *  3. the rows minted `released`: each release reason, state `released`;
  *  4. the lapse: a held row past its `notifyAt` moves, and the deferred push goes through the sink;
@@ -18,7 +19,8 @@ import { createHash, generateKeyPairSync } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
-import { spawnSyncGroup } from './spawnGroup.js';
+import { HARNESS_BASH } from './ccdWsHelpers.js';
+import { hookBoth } from './hookTwin.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { heldFor } from '../src/coord/heldFor.js';
@@ -59,6 +61,7 @@ let transcript: string;
 const STUB_API = `#!/usr/bin/env bash
 d="$HOME/stub"
 printf '%s\\n' "$*" >> "$d/calls"
+printf '%s %s\\n' "$1" "$2" >> "$d/verbs"   # the calls less their nonce: what both hooks must make alike
 case "$1 $2" in
   "approvals request") cat > "$d/request.body"; cat "$d/request.out"; printf 'http 201\\n' >&2 ;;
   "approvals ruling") echo '{"state":"declined"}'; printf 'http 200\\n' >&2 ;;
@@ -90,13 +93,14 @@ beforeEach(() => {
 afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
 const ENV = (): NodeJS.ProcessEnv => ({
-  ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+  ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
   TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
   CCRC_APPROVAL_TICK_S: '0.05', CCRC_APPROVAL_POLL_TICKS: '2', CCRC_APPROVAL_CEILING_S: '4',
 });
 const fire = (over: Record<string, unknown> = {}, env: NodeJS.ProcessEnv = ENV()): { stdout: string; calls: string[] } => {
   const payload = { ...MAIN, transcript_path: transcript, ...over };
-  const r = spawnSyncGroup('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env, timeout: 30_000 });
+  // the bash and the Go core, each in a HOME of its own from the same state, answer the same and leave the same calls (Go core wave 2, Task 7)
+  const r = hookBoth(home, JSON.stringify(payload), env, { hook: HOOK, watch: ['stub/verbs',`.cc-sessions/${ID}.hookstate.json`], tree: true });
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
   expect(r.stderr, 'the hook contract: silent on stderr').toBe('');
   const calls = path.join(home, 'stub', 'calls');
@@ -121,7 +125,9 @@ describe('path 1: the hook returns silently before the request (Table 2a row 1; 
     ['the managed deny file absent', () => fs.rmSync(reg('child-deny.settings.json'))],
     ['the verifier file absent', () => fs.rmSync(reg('approval-verify.mjs'))],
     ['the pinned public key absent', () => fs.rmSync(path.join(home, '.ccrc', 'approval-signing.pub'))],
-    ['the client not executable', () => fs.chmodSync(path.join(home, '.local', 'bin', 'ccrc-api'), 0o644)],
+    // Linux and macOS only: on Windows MSYS2's -x reads a `#!` head as executable whatever the mode, so both hooks send
+    // (measured in both modes, Task 9b)
+    ...(process.platform === 'win32' ? [] : [['the client not executable', () => fs.chmodSync(path.join(home, '.local', 'bin', 'ccrc-api'), 0o644)] as [string, () => void]]),
     ['the session uuid file absent', () => fs.rmSync(reg(`${ID}.uuid`))],
   ];
   it.each(gates)('%s: no output, no request', (_n, arrange) => {
@@ -133,16 +139,19 @@ describe('path 1: the hook returns silently before the request (Table 2a row 1; 
   });
   it('node missing from PATH: no output, no request', () => {
     // Every PATH directory that holds `node` is replaced by a shadow of itself without it.
-    const dirs = (ENV()['PATH'] ?? '').split(':').filter((d) => d !== '');
+    // PATH is split and joined by the platform's delimiter, and node.exe is node on Windows (a ':' split and a bare
+    // `node` left node.exe on PATH there, measured: the precondition below failed)
+    const NODE = ['node', 'node.exe'];
+    const dirs = (ENV()['PATH'] ?? '').split(path.delimiter).filter((d) => d !== '');
     const shadowed = dirs.map((d, i) => {
-      if (!fs.existsSync(path.join(d, 'node'))) return d;
+      if (!NODE.some((n) => fs.existsSync(path.join(d, n)))) return d;
       const s = path.join(home, `shadow${i}`);
       fs.mkdirSync(s, { recursive: true });
-      for (const n of fs.readdirSync(d)) if (n !== 'node') { try { fs.symlinkSync(path.join(d, n), path.join(s, n)); } catch { /* skip */ } }
+      for (const n of fs.readdirSync(d)) if (!NODE.includes(n)) { try { fs.symlinkSync(path.join(d, n), path.join(s, n)); } catch { /* skip */ } }
       return s;
     });
-    const env = { ...ENV(), PATH: shadowed.join(':') };
-    expect(spawnSync('bash', ['-c', 'command -v node'], { env }).status, 'the harness PATH really has no node').not.toBe(0);
+    const env = { ...ENV(), PATH: shadowed.join(path.delimiter) };
+    expect(spawnSync(HARNESS_BASH, ['-c', 'command -v node'], { env }).status, 'the harness PATH really has no node').not.toBe(0);
     silent(fire({}, env));
   });
   // Not pinned here: the canonical-form and nonce failures (rows of the same table). Neither can be forced from a

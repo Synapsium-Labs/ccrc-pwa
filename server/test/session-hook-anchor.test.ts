@@ -10,8 +10,9 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSyncGroup } from './spawnGroup.js';
+import { hookBoth } from './hookTwin.js';
 import { mkTmp } from './tmpHelpers.js';
+import { scaled } from './timeScale.js';   // a whole hook's time scales with the box (CCRC_TIME_SCALE): on Windows each process start costs more
 import { renderMailNudge } from '../src/coord/envelope.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
@@ -111,16 +112,20 @@ const prompt = (said = 'carry on', transcriptPath = path.join(home, 'cfg', `${UU
   session_id: UUID, transcript_path: transcriptPath, cwd: path.join(home, 'work'),
   hook_event_name: 'UserPromptSubmit', prompt: said,
 });
-/** The hook's stdout, its exit 0 asserted. Bounded: a timed shell spawn goes through spawnSyncGroup (#896). */
+/** The two runs' times of the last hookBoth run, in ms (the bash's, and the Go hook's). */
+let lastMs = 0;
+let lastGoMs = 0;
+/** The hook's stdout, its exit 0 asserted. Bounded: a timed shell spawn goes through spawnSyncGroup (#896). The Go core and the
+ *  bash, each from the same fixture state, must answer the same and leave the same files (Go core wave 2, Task 6). A
+ *  PreCompact runs both too (Task 8b): the owed mark it leaves is one of the files compared. */
 const run = (payload: object, env: Record<string, string> = {}): string => {
-  const r = spawnSyncGroup('bash', [HOOK], {
-    input: JSON.stringify(payload), encoding: 'utf8', timeout: 20_000,
-    env: {
-      ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION, ...env,
-    },
-  });
-  expect(r.error, 'the spawn itself did not fail').toBeUndefined();
+  const e = {
+    ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
+    TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION, ...env,
+  };
+  const r = hookBoth(home, JSON.stringify(payload), e, { hook: HOOK, watch: ['anchor-calls'], tree: true });
+  lastMs = r.ms;
+  lastGoMs = r.goMs;
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
   return String(r.stdout);
 };
@@ -229,10 +234,9 @@ describe('one network budget per invocation (slug one-network-budget)', () => {
       'exit 3',
     ].join('\n') + '\n', { mode: 0o755 });
   };
-  const timed = (payload: object): { out: string; ms: number } => {
-    const t0 = Date.now();
+  const timed = (payload: object): { out: string; ms: number; goMs: number } => {
     const out = run(payload);
-    return { out, ms: Date.now() - t0 };
+    return { out, ms: lastMs, goMs: lastGoMs };
   };
   const cmds = (): string[] => calls().map((c) => c.split(' ').slice(0, 2).join(' '));
 
@@ -240,27 +244,32 @@ describe('one network budget per invocation (slug one-network-budget)', () => {
     slow(30);
     for (const source of ['startup', 'resume', 'clear', 'compact']) {
       fs.rmSync(path.join(home, 'anchor-calls'), { force: true });
-      const { out, ms } = timed(start(source));
+      const { out, ms, goMs } = timed(start(source));
       expect(out, source).toBe(envelope('SessionStart', BEFORE[source]!));
-      expect(ms, source).toBeLessThan(6_500);
+      expect(ms, source).toBeLessThan(scaled(6_500));
+      expect(goMs, `${source}: the Go hook stops at the same bound`).toBeLessThan(scaled(6_500));
       expect(cmds(), `${source}: the roster read and the start report never start`).toEqual(['card --anchor']);
     }
   }, 60_000);
 
   it('a hung server costs a fork one bound, its one read', () => {
     slow(30);
-    const { out, ms } = timed(start('fork'));
+    const { out, ms, goMs } = timed(start('fork'));
     expect(out).toBe(envelope('SessionStart', REVIVED));
-    expect(ms).toBeLessThan(6_500);
+    expect(ms).toBeLessThan(scaled(6_500));
+    expect(goMs, 'the Go hook stops at the same bound').toBeLessThan(scaled(6_500));
     expect(calls()).toEqual(['card --anchor --form fork']);
   }, 20_000);
 
-  it('a slow server that answers in 3.5 s: a compact start stays inside the one 8 s budget (was 11.7 s)', () => {
+  // Linux and macOS only: the stub's answer is `sleep` seconds against the hook's fixed bounds, and on Windows an MSYS2 sleep
+  // under sh takes about half a second more with its process starts (measured: sleep 3.5 took about 4 s), past those bounds
+  it.skipIf(process.platform === 'win32')('a slow server that answers in 3.5 s: a compact start stays inside the one 8 s budget (was 11.7 s)', () => {
     slow(3.5);
     answer('start', dark('start'));
-    const { out, ms } = timed(start('compact'));
+    const { out, ms, goMs } = timed(start('compact'));
     expect(out).toBe(envelope('SessionStart', REVIVED));
     expect(ms).toBeLessThan(9_500);
+    expect(goMs, 'the Go hook stays inside the same one budget').toBeLessThan(9_500);
     expect(cmds().slice(0, 2), 'the anchor, then the roster card, each answered').toEqual(['card --anchor', 'runs list']);
   }, 20_000);
 
@@ -269,13 +278,16 @@ describe('one network budget per invocation (slug one-network-budget)', () => {
     run(preCompact('auto', transcript()));
     expect(fs.readFileSync(owed(), 'utf8')).toBe('0\n');
     fs.writeFileSync(reg(`${ID}.startpending`), `0\t0\n0\t${JSON.stringify({ fromId: ID, fromUuid: UUID, startedUuid: UUID, reportId: 'r1', source: 'startup', model: null, rowIncarnation: null, reportedAt: 1 })}\n`);
-    const { ms } = timed(prompt(renderMailNudge(ID)));
-    expect(ms).toBeLessThan(6_500);
+    const { ms, goMs } = timed(prompt(renderMailNudge(ID)));
+    expect(ms).toBeLessThan(scaled(6_500));
+    expect(goMs, 'the Go hook stops at the same bound').toBeLessThan(scaled(6_500));
     expect(cmds()).toEqual(['sessions start']);
     expect(fs.readFileSync(owed(), 'utf8'), 'no try was spent').toBe('0\n');
   }, 20_000);
 
-  it('a hung server on the wake path: the roster wake\'s read runs out, and the owed read never starts and keeps its try', () => {
+  // Linux and macOS only: the roster wake reads a /-rooted transcript_path (_hook_roster_wake, mirrored in Go), and
+  // Claude Code's on Windows is C:\..., so neither mode wakes there (measured in both modes, Task 9b)
+  it.skipIf(process.platform === 'win32')('a hung server on the wake path: the roster wake\'s read runs out, and the owed read never starts and keeps its try', () => {
     slow(30);
     const tp = transcript();
     run(preCompact('auto', tp));
@@ -286,9 +298,10 @@ describe('one network budget per invocation (slug one-network-budget)', () => {
       row({ type: 'system', subtype: 'compact_boundary', uuid: 'b1', timestamp: new Date(Date.now() - 60_000).toISOString(), compactMetadata: { trigger: 'auto' } }),
       row({ type: 'user', isCompactSummary: true, message: { role: 'user', content: 'the summary' } }),
     ].join('\n') + '\n');
-    const { out, ms } = timed(prompt(renderMailNudge(ID), tp));
+    const { out, ms, goMs } = timed(prompt(renderMailNudge(ID), tp));
     expect(out).toBe('');
-    expect(ms).toBeLessThan(6_500);
+    expect(ms).toBeLessThan(scaled(6_500));
+    expect(goMs, 'the Go hook stops at the same bound').toBeLessThan(scaled(6_500));
     expect(cmds()).toEqual(['runs list']);
     expect(fs.readFileSync(owed(), 'utf8'), 'no try was spent').toBe('0\n');
   }, 20_000);
@@ -340,11 +353,12 @@ describe('an older server\'s card page is no anchor (fix round 1, F1)', () => {
 });
 
 describe('the owed mark\'s guards (fix round 1)', () => {
-  it('F3: a FIFO at the mark is never opened inside the held lock: the PreCompact ends at once and the FIFO stands', () => {
+  // not on Windows: an MSYS2 FIFO is invisible to a native program (D-TBD-go-hook-windows-fifo)
+  it.skipIf(process.platform === 'win32')('F3: a FIFO at the mark is never opened inside the held lock: the PreCompact ends at once and the FIFO stands', () => {
     execFileSync('mkfifo', [owed()]);
-    const t0 = Date.now();
+    const t0 = performance.now();
     run(preCompact('auto', transcript()));
-    expect(Date.now() - t0).toBeLessThan(8_000);
+    expect(performance.now() - t0).toBeLessThan(8_000);
     expect(fs.lstatSync(owed()).isFIFO()).toBe(true);
     expect(fs.readFileSync(reg(`${ID}.compactevents`), 'utf8'), 'the event line was still written').toContain('"trigger":"auto","scope":"main"');
   }, 20_000);
@@ -448,7 +462,9 @@ describe('the anchor owed after an automatic compaction (Task 3)', () => {
     expect(run(prompt())).toBe('');
   });
 
-  it('the prompt\'s hookstate is written before the read: a stub that sleeps three seconds finds it already working', () => {
+  // Linux and macOS only: the stub sleeps 3 s inside the read's fixed bound, and on Windows an MSYS2 sleep under sh takes
+  // about half a second more with its process starts (measured), past that bound
+  it.skipIf(process.platform === 'win32')('the prompt\'s hookstate is written before the read: a stub that sleeps three seconds finds it already working', () => {
     run(preCompact('auto', transcript()));
     fs.rmSync(reg(`${ID}.hookstate.json`), { force: true });
     fs.writeFileSync(path.join(home, 'stub-sleep'), '3');

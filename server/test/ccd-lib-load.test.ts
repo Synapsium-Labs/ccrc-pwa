@@ -223,7 +223,9 @@ describe('a test that scans ccd reads all of it', () => {
   // built on it passes over less than it did. These files read the FILE, not the program, on purpose.
   const FILE_READERS = new Set(['ccd-lib-load.test.ts', 'ccd-entry-install.test.ts', 'ownership.test.ts', 'ccrc-restamp.test.ts', 'ccd-install-stamp.test.ts', 'ccdWsHelpers.ts',
     // W5-B8 builds an older ccd from the FILE (its `--base` arm removed) and sources it beside copies of the libraries.
-    'ccd-ws-add-base.test.ts']);
+    'ccd-ws-add-base.test.ts',
+    // The entry tests' shipped-tree copy (ccd's Windows port, wave 0), moved out of ccd-entry-install.test.ts: it plants the FILE.
+    'entryFixture.ts']);
 
   it('every region of every library is spliced back by a pointer line in ccd/ccd, and every marker is one region id', () => {
     // `ccdSource()` replaces each `# @ccd-lib:<id>` pointer in ccd/ccd with that library region and never reports a region

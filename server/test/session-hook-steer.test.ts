@@ -10,8 +10,10 @@ import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import { tl } from './compactCardFixtures.js';
 import { spawnSyncGroup } from './spawnGroup.js';
-import { itLinux, IS_DARWIN } from './platformFixtures.js';
+import { IS_DARWIN } from './platformFixtures.js';
 import { CCD } from './ccdWsHelpers.js';
+import { IMPLS, runHook, type Impl } from './hookTwin.js';
+import { coreBinary, coreExe } from './coreBuild.js';
 import {
   STEER_FIRST_LINE, STEER_GENERIC_TEXT, STEER_FILE_MAX, BACKENDS, steerFileOf, composeSteerFile, makePairIndex, parseSpoolLine, cardLine,
 } from '../../ccd/history/lib.mjs';
@@ -51,7 +53,7 @@ const histDir = (...p: string[]): string => path.join(home, '.ccrc', 'history', 
 const reg = (f: string): string => path.join(home, '.cc-sessions', f);
 const steerFile = (): string => steerFileOf(home, ID, SID);
 const hookEnv = (env: Record<string, string> = {}): NodeJS.ProcessEnv => ({
-  ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+  ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
   TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION, CLAUDE_JOB_DIR: '',
   ...SCRUB, ...env,
 });
@@ -74,11 +76,26 @@ const steerSig = (): string => {
 
 interface Ran { status: number | null; stdout: string; stderr: string }
 /** One hook run: exit 0, silent stderr, and the steer directory untouched, asserted every time (PX13, the behavioural half). */
+/** The implementation the running describe asks for (Go core wave 2, Task 8b): each behaviour describe runs once per
+ *  implementation, in its own fixture HOME. */
+let impl: Impl = 'bash';
+/** The command that runs the hook in `impl`, for a spawn that wraps it (a closed or full stdout). */
+const hookArgv = (): string[] => (impl === 'bash' ? ['bash', HOOK] : [coreBinary(), 'hook']);
+/** A copy of the hook in `impl` in `dir` (the bash script, or the core binary, whose lib/ is the dir's own), to run with
+ *  what stands beside it. */
+const hookCopy = (dir: string): string => {
+  const to = path.join(dir, impl === 'bash' ? 'session-hook.sh' : coreExe());
+  fs.copyFileSync(impl === 'bash' ? HOOK : coreBinary(), to);
+  fs.chmodSync(to, 0o755);
+  return to;
+};
+/** One run of a copy `hookCopy` made. */
+const runCopyOf = (at: string, payload: object): { status: number | null; stdout: string; stderr: string } =>
+  runHook({ home, env: (e = {}) => e }, impl, payload, hookEnv(), at);
 const run = (payload: object, env: Record<string, string> = {}, opts: { timeout?: number; stderr?: 'silent' | 'any' } = {}): Ran => {
   const before = steerSig();
-  const r = spawnSyncGroup('bash', [HOOK], {
-    input: JSON.stringify(payload), encoding: 'utf8', env: hookEnv(env), timeout: opts.timeout ?? 60_000, killSignal: 'SIGKILL',
-  });
+  // hookTwin's runHook bounds every run: a blocked hook fails the case as status null
+  const r = runHook({ home, env: (e = {}) => e }, impl, payload, hookEnv(env));
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
   if (opts.stderr !== 'any') expect(r.stderr, 'the hook is silent on stderr').toBe('');
   expect(steerSig(), 'the hook changed the steer directory (PX13)').toBe(before);
@@ -263,7 +280,8 @@ describe('PX13: the hook never consumes, writes, moves or deletes a steer file (
   });
 });
 
-describe('the print: armed, scope main, and every refusal silent (spec §7.2, §7.7; W3-1 Task 1C)', () => {
+describe.each(IMPLS)('the print: armed, scope main, and every refusal silent (spec §7.2, §7.7; W3-1 Task 1C) (%s)', (which) => {
+  beforeEach(() => { impl = which; });
   const cardOff = (): void => touch(path.join(home, '.ccrc', 'compact-card-off'));
 
   it('CONTROL: an armed, main-scope manual compaction with no steer file prints the generic text, LF first and LF last, on both scope arms', () => {
@@ -364,7 +382,7 @@ describe('the print: armed, scope main, and every refusal silent (spec §7.2, §
   it('PX12: an unreadable steer file, a directory, a link, a FIFO and a linked or unsearchable steer directory → stdout empty', () => {
     const payload = armed();
     plantSteer(composed());
-    if (!ROOT) {
+    if (!ROOT && process.platform !== 'win32') {   // Windows has no POSIX read bits: chmod 000 leaves the file readable
       fs.chmodSync(steerFile(), 0o000);
       expect(printed(run(payload)), 'an unreadable file').toBe('');
       fs.chmodSync(steerFile(), 0o600);
@@ -380,15 +398,17 @@ describe('the print: armed, scope main, and every refusal silent (spec §7.2, §
     fs.symlinkSync(path.join(home, 'nowhere'), steerFile());
     expect(printed(run(payload)), 'a dangling link').toBe('');
     fs.rmSync(steerFile());
-    execFileSync('mkfifo', [steerFile()]);
-    expect(printed(run(payload, {}, { timeout: 20_000 })), 'a FIFO is never opened').toBe('');
-    fs.rmSync(steerFile());
+    if (process.platform !== 'win32') {   // not on Windows: an MSYS2 FIFO is invisible to a native program (D-TBD-go-hook-windows-fifo)
+      execFileSync('mkfifo', [steerFile()]);
+      expect(printed(run(payload, {}, { timeout: 20_000 })), 'a FIFO is never opened').toBe('');
+      fs.rmSync(steerFile());
+    }
     fs.rmdirSync(histDir('steer', ID));
     mk(path.join(home, 'steer-real', ID)); fs.writeFileSync(path.join(home, 'steer-real', ID, `${SID}.txt`), composed());
     fs.symlinkSync(path.join(home, 'steer-real', ID), histDir('steer', ID));
     expect(printed(run(payload)), 'a linked steer/<id>').toBe('');
     fs.rmSync(histDir('steer', ID));
-    if (!ROOT) {
+    if (!ROOT && process.platform !== 'win32') {   // Windows has no POSIX mode bits: chmod 000 leaves the directory searchable
       mk(histDir('steer', ID)); fs.writeFileSync(steerFile(), composed()); fs.chmodSync(histDir('steer', ID), 0o000);
       try { expect(printed(run(payload)), 'an unsearchable steer/<id>').toBe(''); } finally { fs.chmodSync(histDir('steer', ID), 0o700); }
     }
@@ -460,7 +480,8 @@ const oneReceiptLast = (): Record<string, unknown> => {
   return (p as unknown as { rec: Record<string, unknown> }).rec;
 };
 
-describe('PX20: the steer file is read in bytes, at most 8,192 of them, and a NUL refuses it', () => {
+describe.each(IMPLS)('PX20: the steer file is read in bytes, at most 8,192 of them, and a NUL refuses it (%s)', (which) => {
+  beforeEach(() => { impl = which; });
   // Every row starts with the first line and an LF, so only its size or its NUL bytes can refuse it.
   const FIRST = Buffer.from(`${STEER_FIRST_LINE}\n`);
   const pad = (n: number, byte = 0x78): Buffer => Buffer.alloc(n, byte);
@@ -504,12 +525,13 @@ describe('PX20: the steer file is read in bytes, at most 8,192 of them, and a NU
   });
 });
 
-describe('PX22: a print that fails writes no receipt', () => {
+describe.each(IMPLS)('PX22: a print that fails writes no receipt (%s)', (which) => {
+  beforeEach(() => { impl = which; });
   const runShell = (redirect: string): { out: string; err: string } => {
     arm(); plantSpool(); plantSteer(composed());
     const payload = pre(mainTranscript());
     const before = steerSig();
-    const r = spawnSyncGroup('bash', ['-c', `bash "$0" ${redirect}; echo "rc=$?"`, HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env: hookEnv(), timeout: 60_000 });
+    const r = spawnSyncGroup('bash', ['-c', `"$@" ${redirect}; echo "rc=$?"`, '_', ...hookArgv()], { input: JSON.stringify(payload), encoding: 'utf8', env: hookEnv(), timeout: 60_000 });
     expect(steerSig()).toBe(before);
     return { out: r.stdout, err: r.stderr };
   };
@@ -517,13 +539,18 @@ describe('PX22: a print that fails writes no receipt', () => {
     expect(runShell('')).toMatchObject({ err: '' });
     expect(receipts()).toHaveLength(1);
   });
-  it('stdout closed → exit 0, silent, no ev:"steer" line', () => {
+  // The Go hook cannot see a stdout closed at its start (its runtime reopens fd 1 on /dev/null before main, as a caller's
+  // `stdio: 'ignore'` does), so its print reads as delivered and its receipt is written: D-TBD-go-hook-closed-stdout
+  // (core/cmd/ccrc-core/main.go). The full device below fails the write in both.
+  it('stdout closed → exit 0, silent, no ev:"steer" line (the Go hook: one, the recorded difference)', () => {
     const r = runShell('>&-');
     expect(r.out, 'the hook\'s own exit status, through a shell that kept its stdout').toBe('rc=0\n');
     expect(r.err).toBe('');
-    expect(spoolLines().filter((l) => l.includes('"ev":"steer"'))).toEqual([]);
+    // the recorded difference is Linux and macOS only: on Windows the core's print fails there as the bash's does (measured)
+    expect(spoolLines().filter((l) => l.includes('"ev":"steer"'))).toHaveLength(impl === 'go' && process.platform !== 'win32' ? 1 : 0);
   });
-  itLinux('stdout a full device → exit 0, silent, no ev:"steer" line', () => {
+  // Linux only: on Windows MSYS2's /dev/full is an emulation a native program never sees (its write succeeds, measured)
+  it.skipIf(process.platform !== 'linux')('stdout a full device → exit 0, silent, no ev:"steer" line', () => {
     const r = runShell('> /dev/full');
     expect(r.out).toBe('rc=0\n');
     expect(r.err).toBe('');
@@ -531,7 +558,9 @@ describe('PX22: a print that fails writes no receipt', () => {
   });
 });
 
-describe('the receipt: its grammar, its leaf, its place and its clock (O23 (d))', () => {
+describe.each(IMPLS)('the receipt: its grammar, its leaf, its place and its clock (O23 (d)) (%s)', (which) => {
+  beforeEach(() => { impl = which; });
+  const itBash = which === 'bash' ? it : it.skip;
   const stubDate = (body: string): void => fs.writeFileSync(path.join(home, 'bin', 'date'), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
   /** A BASH_ENV that strips the dynamic EPOCHREALTIME builtin and, given a value, plants a plain one. */
   const epochEnv = (value: string | null): Record<string, string> => {
@@ -588,13 +617,17 @@ describe('the receipt: its grammar, its leaf, its place and its clock (O23 (d))'
     expect(fs.existsSync(path.join(home, 'spool-target')), 'a dangling link is not created through').toBe(false);
   });
 
-  it('with no EPOCHREALTIME, the receipt carries a ts read from date', () => {
+  // BASH ONLY: the bash's own clock (EPOCHREALTIME, through BASH_ENV) and its `date` fallback; the Go hook reads one
+  // clock, held by TestSteerReceipt.
+  itBash('with no EPOCHREALTIME, the receipt carries a ts read from date', () => {
     const payload = armed();
     stubDate('echo 1700000000123');
     expect(printed(run(payload, epochEnv(null)))).not.toBe('');
     expect(oneReceipt()['ts']).toBe(1700000000123);
   });
-  it('a date that gives no valid count writes the receipt with no ts, and it still parses', () => {
+  // BASH ONLY: the bash's own clock (EPOCHREALTIME, through BASH_ENV) and its `date` fallback; the Go hook reads one
+  // clock, held by TestSteerReceipt.
+  itBash('a date that gives no valid count writes the receipt with no ts, and it still parses', () => {
     const payload = armed();
     stubDate('exit 1');
     // With no date at all the hook's own hookstate stamp (`--argjson updatedAt 000`, above the anchor) complains on stderr: not this
@@ -606,13 +639,17 @@ describe('the receipt: its grammar, its leaf, its place and its clock (O23 (d))'
     expect('ts' in rec, 'no clock could time it: the drain stamps it (ts_source received)').toBe(false);
     expect(rec).toMatchObject({ v: 1, ev: 'steer', id: ID, sid: SID, leaf: '' });
   });
-  it('an EPOCHREALTIME with no separator passes the hook\'s stamps but is no clock for the receipt: date is read instead', () => {
+  // BASH ONLY: the bash's own clock (EPOCHREALTIME, through BASH_ENV) and its `date` fallback; the Go hook reads one
+  // clock, held by TestSteerReceipt.
+  itBash('an EPOCHREALTIME with no separator passes the hook\'s stamps but is no clock for the receipt: date is read instead', () => {
     const payload = armed();
     stubDate('echo 1700000007777');
     expect(printed(run(payload, epochEnv('1700000001'))), 'the hook reaches the tail and prints').not.toBe('');
     expect(oneReceipt()['ts'], 'the stub\'s value, not 1700000001170').toBe(1700000007777);
   });
-  it('CONTROL: an EPOCHREALTIME that parses is read before date', () => {
+  // BASH ONLY: the bash's own clock (EPOCHREALTIME, through BASH_ENV) and its `date` fallback; the Go hook reads one
+  // clock, held by TestSteerReceipt.
+  itBash('CONTROL: an EPOCHREALTIME that parses is read before date', () => {
     const payload = armed();
     stubDate('echo 1700000009999');
     expect(printed(run(payload, epochEnv('1700000001.234567')))).not.toBe('');
@@ -710,7 +747,7 @@ describe('the README\'s two sentences are narrowed with the code', () => {
 });
 
 describe('the unarmed session forks nothing the steering added (Linux, strace -f; the S16 idiom)', () => {
-  itLinux('an unarmed session\'s PreCompact forks as often as a hook with no W3 print', () => {
+  it.skipIf(process.platform !== 'linux')('an unarmed session\'s PreCompact forks as often as a hook with no W3 print', () => {
     touch(path.join(home, '.ccrc', 'compact-card-off'));      // the card does not scope, so CS_SCOPE stays unset and a scope check would fork
     const { transcript } = plantSession({ lines: [tl.user('x')] });
     expect(fs.existsSync(histDir('scope')), 'no scope/ directory').toBe(false);
@@ -766,7 +803,8 @@ describe('the unarmed session forks nothing the steering added (Linux, strace -f
 // through SessionStart(compact), where the card line is served or withheld, and through PreCompact, where the print happens or not,
 // and the two must agree. The rows are the card's own (session-hook.test.ts's PARITY table, copied: a test file cannot import
 // another) plus the shapes a steer file adds: a steer file can stand where the card's `.gen` record does not (card/<id> refused).
-describe('the recall-off gate: the print and the card line withhold on the same rows (spec §7.7, O9 (a))', () => {
+describe.each(IMPLS)('the recall-off gate: the print and the card line withhold on the same rows (spec §7.7, O9 (a)) (%s)', (which) => {
+  beforeEach(() => { impl = which; });
   const NBSP_G = `${String.fromCharCode(0xa0)}${GENERATION}\n`;
   const BOM_G = `${String.fromCharCode(0xfeff)}${GENERATION}\n`;
   const EMSP_G = `${GENERATION}${String.fromCharCode(0x2003)}\n`;   // D-5064: U+2003 after G; glibc's UTF-8 [:space:] takes it
@@ -963,7 +1001,8 @@ describe('the recall-off gate: the print and the card line withhold on the same 
     ['W3 (.gen absent): an env generation decides without it, recall-off names it', GENERATION, 'absent', 'G', 'absent'],
   ];
   const LINE = cardLine({ leaf: 'L03a9c1', parent: 'N7c1e2f' });
-  const mark = (): void => fs.writeFileSync(histDir('scope', ID), `main ${SID} ${Date.now()}\n`);
+  // Stamped 5 s back: the bench's clock steps back ~650 ms every 31 s, and a marker read as future-dated is refused (Task 8a, F5).
+  const mark = (): void => fs.writeFileSync(histDir('scope', ID), `main ${SID} ${Date.now() - 5000}\n`);
   /** The card's fixture and the print's, one: both directories, a fresh main marker, the prediction, a steer-on marker, a spool. */
   const plantAll = (): void => {
     fs.rmSync(histDir('card'), { recursive: true, force: true });
@@ -1046,7 +1085,9 @@ describe('the recall-off gate: the print and the card line withhold on the same 
 // after `/compact` (ccd-auto-compact.test.ts), and both carriers use it only when the route carries `profile` AND `compactwindow`
 // (ruling R8). The section goes BEFORE the steer text, so the steer's "At the very END" stays the print's last instruction (the
 // history coordinator's request, ruled by the overlord's coordinator).
-describe('Overlord W1a compaction: the role section inside the one PreCompact print (C51, C53, R8)', () => {
+describe.each(IMPLS)('Overlord W1a compaction: the role section inside the one PreCompact print (C51, C53, R8) (%s)', (which) => {
+  beforeEach(() => { impl = which; });
+  const itBash = which === 'bash' ? it : it.skip;
   const PROJECTION = path.resolve(__dirname, '../../ccd/lib/launch-profiles.json');
   const textOf = (role: string): string => (JSON.parse(fs.readFileSync(PROJECTION, 'utf8')) as Record<string, { compactText: string }>)[role]!.compactText;
   const route = (fields: Record<string, string>): void => { for (const [f, v] of Object.entries(fields)) fs.writeFileSync(reg(`${ID}.${f}`), v); };
@@ -1090,32 +1131,30 @@ describe('Overlord W1a compaction: the role section inside the one PreCompact pr
   it('a hook with no projection beside it, and none installed, prints today\'s text', () => {
     const dir = path.join(home, 'hookcopy');
     mk(dir);
-    fs.copyFileSync(HOOK, path.join(dir, 'session-hook.sh'));
+    const at = hookCopy(dir);
     const payload = armed();
     route({ profile: 'coordinator', compactwindow: '350000' });
-    const r = spawnSyncGroup('bash', [path.join(dir, 'session-hook.sh')], { input: JSON.stringify(payload), encoding: 'utf8', env: hookEnv(), timeout: 60_000, killSignal: 'SIGKILL' });
-    expect(r.error).toBeUndefined();
+    const r = runCopyOf(at, payload);
     expect([r.status, r.stderr]).toEqual([0, '']);
     expect(r.stdout).toBe(printOf(STEER_GENERIC_TEXT));
   });
   it('a projection text with a semicolon is not one typeable line: today\'s text (review 2004 F6)', () => {
     const dir = path.join(home, 'hookcopy');
     mk(path.join(dir, 'lib'));
-    fs.copyFileSync(HOOK, path.join(dir, 'session-hook.sh'));
+    const at = hookCopy(dir);
     const payload = armed();
     route({ profile: 'coordinator', compactwindow: '350000' });
     const runCopy = (text: string): string => {
       fs.writeFileSync(path.join(dir, 'lib', 'launch-profiles.json'), JSON.stringify({ coordinator: { compactText: text } }));
       for (const f of ['compactset', 'compactcard']) fs.rmSync(reg(`${ID}.${f}`), { force: true });   // each run alone, as run() does
-      const r = spawnSyncGroup('bash', [path.join(dir, 'session-hook.sh')], { input: JSON.stringify(payload), encoding: 'utf8', env: hookEnv(), timeout: 60_000, killSignal: 'SIGKILL' });
-      expect(r.error).toBeUndefined();
+      const r = runCopyOf(at, payload);
       expect([r.status, r.stderr]).toEqual([0, '']);
       return r.stdout;
     };
     expect(runCopy('keep the run ids.'), 'CONTROL: a typeable text prints its section').toBe(`\nccrc-role-compaction: keep the run ids.\n\n${STEER_GENERIC_TEXT}\n`);
     for (const t of ['keep the run ids;', 'keep; the run ids.']) expect(runCopy(t), t).toBe(printOf(STEER_GENERIC_TEXT));
   });
-  it('parity: the hook\'s COMPACT_TEXT_JQ is ccd\'s, byte for byte (one check of the projection\'s text, two readers)', () => {
+  itBash('parity: the hook\'s COMPACT_TEXT_JQ is ccd\'s, byte for byte (one check of the projection\'s text, two readers; the Go reader is held to it by TestCompactGolden)', () => {
     const lineOf = (file: string): string => fs.readFileSync(file, 'utf8').split('\n').find((l) => l.startsWith('COMPACT_TEXT_JQ='))!;
     expect(lineOf(HOOK)).toBeDefined();
     expect(lineOf(HOOK)).toBe(lineOf(CCD));

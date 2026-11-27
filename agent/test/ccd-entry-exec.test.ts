@@ -50,6 +50,9 @@ describe('the agent’s exec of ccd crosses the installed launcher', () => {
     mkdirSync(path.join(tree, 'shared'), { recursive: true });
     for (const f of ['redact.mjs', 'redact-cli.mjs']) copyFileSync(path.join(REPO, 'shared', f), path.join(tree, 'shared', f));
     copyFileSync(path.join(REPO, 'ccd', 'door-process.mjs'), path.join(tree, 'ccd', 'door-process.mjs'));   // the door program, pinned by __CCD_DOOR_SHA256
+    // The Go core's entry table (spec 2026-11-24), which the publisher refuses a tree without: no entry, so no binary.
+    mkdirSync(path.join(tree, 'core'), { recursive: true });
+    writeFileSync(path.join(tree, 'core', 'entries.json'), '{"entries":{}}\n');
     writeFileSync(path.join(tree, 'ccd', 'ccd'),
       `#!/usr/bin/env bash\n__CCD_LIB_SHA256=stamp-at-install\n__CCD_LIB_TRAIN_SHA256=stamp-at-install\n__CCD_LIB_LEASE_SHA256=stamp-at-install\n__CCD_LIB_POOLSET_SHA256=stamp-at-install\n__CCD_LIB_LONGLIVED_SHA256=stamp-at-install\n__CCD_LIB_DOOR_SHA256=stamp-at-install\n__CCD_LIB_ALIASES_SHA256=stamp-at-install\n__CCD_REDACT_SHA256=stamp-at-install\n__CCD_REDACT_CLI_SHA256=stamp-at-install\n__CCD_DOOR_SHA256=stamp-at-install\n{ printf "%s\\0" "$-"; printf "%s\\0" "$@"; } > ${JSON.stringify(out)}\n`);
     copyFileSync(path.join(REPO, 'ccd', 'ccd-entry.py'), path.join(tree, 'ccd', 'ccd-entry.py'));

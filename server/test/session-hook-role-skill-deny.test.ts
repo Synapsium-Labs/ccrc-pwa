@@ -23,6 +23,8 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
+import { scaled } from './timeScale.js';
+import { IMPLS, runGoHook, type Impl } from './hookTwin.js';
 import { renderServerCaps, SERVER_CAPS_FILE } from '../../shared/api.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
@@ -38,6 +40,13 @@ const ROLE_SKILLS = Object.keys(SKILL_FILES) as Array<keyof typeof SKILL_FILES>;
 const COUNT = ['zero', 'one', 'two', 'three', 'four', 'five', 'six'][ROLE_SKILLS.length]!;
 const GENERATION = '0189abcd-1234-5678-9abc-0123456789ab';
 const ID = 'demo-quiet-basin';
+
+/** The implementation `fire` starts (Go core wave 2): the behavioural describes run on both; the ones that read the hook's text, and the jq-shim fork count, stay bash-only. */
+let impl: Impl = 'bash';
+const useImpl = (i: Impl): void => {
+  beforeEach(() => { impl = i; });
+  afterEach(() => { impl = 'bash'; });
+};
 
 let home: string;
 beforeEach(() => {
@@ -57,12 +66,10 @@ type Result = { deny: string | null; stdout: string; envelope: Envelope | null }
  *  the hook's standing contract, asserted on every call. `extra` is spread into
  *  the payload (the `agent_id` of a subagent's event, say). */
 const fire = (tool: string, toolInput: Record<string, unknown>, extra: Record<string, unknown> = {}): Result => {
-  const r = spawnSync('bash', [HOOK], {
-    input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: toolInput, cwd: home, ...extra }),
-    encoding: 'utf8',
-    env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION },
-  });
+  const input = JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: toolInput, cwd: home, ...extra });
+  const env = { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
+      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION };
+  const r = impl === 'go' ? runGoHook(home, input, env) : spawnSync('bash', [HOOK], { input, encoding: 'utf8', env });
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
   expect(r.stderr, 'the hook contract: silent on stderr').toBe('');
   const line = r.stdout.trim();
@@ -81,7 +88,8 @@ const subagentSkill = (skill: unknown, id: unknown = 'a1b2c3d4e5f6'): Result =>
 /** The same call on the main thread: no `agent_id` at all. */
 const mainSkill = (skill: unknown): Result => fire('Skill', { skill });
 
-describe('the role-skill deny (D-4934)', () => {
+describe.each(IMPLS)('the role-skill deny (D-4934) (%s)', (i) => {
+  useImpl(i);
   it(`refuses a subagent's load of each of the ${COUNT} role skills, in the PreToolUse deny envelope, naming the skill`, () => {
     for (const name of ROLE_SKILLS) {
       const r = subagentSkill(name);
@@ -164,7 +172,7 @@ describe('the role-skill deny (D-4934)', () => {
         expect(r.deny, `the reason for ${JSON.stringify(spelled)} names the skill`).toContain(name);
       }
     }
-  }, 60_000);  // thirty real hook runs: more than the 20 s default can promise on a loaded box
+  }, scaled(60_000));  // thirty real hook runs: more than the 20 s default can promise on a loaded box
 
   it('trims exactly the characters JavaScript\'s String.prototype.trim does, at both ends', () => {
     // U+0009-000D, U+0020, U+00A0, U+1680, U+2000-200A, U+2028, U+2029, U+202F,
@@ -182,7 +190,7 @@ describe('the role-skill deny (D-4934)', () => {
       expect(subagentSkill(`${ch}ccrc-worker`).deny, `a leading ${hex} was not trimmed`).not.toBeNull();
       expect(subagentSkill(`ccrc-worker${ch}`).deny, `a trailing ${hex} was not trimmed`).not.toBeNull();
     }
-  }, 60_000);  // fifty real hook runs
+  }, scaled(60_000));  // fifty real hook runs (scaled: on Windows a run costs most of a second)
 
   it('trims once, before the slash — a space after the slash is no longer an edge, and a slash after a prefix is no leading slash', () => {
     // Claude Code trims, THEN strips one `/`: it does not trim again, so
@@ -199,7 +207,7 @@ describe('the role-skill deny (D-4934)', () => {
     const bare = spawnSync('bash', [HOOK], {
       input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Skill', agent_id: 'a1', cwd: home }),
       encoding: 'utf8',
-      env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+      env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
         TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION },
     });
     expect(bare.status).toBe(0);
@@ -208,7 +216,7 @@ describe('the role-skill deny (D-4934)', () => {
     const str = spawnSync('bash', [HOOK], {
       input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Skill', tool_input: 'ccrc-worker', agent_id: 'a1', cwd: home }),
       encoding: 'utf8',
-      env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+      env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
         TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION },
     });
     expect(str.status).toBe(0);
@@ -226,7 +234,7 @@ describe('the role-skill deny (D-4934)', () => {
       'a subagent\'s Agent call carrying skill: \'ccrc-reviewer\' was answered').toBe('');
   });
 
-  it('costs one jq, for the skill\'s name, and only on a subagent\'s Skill call — no event of any other kind, and not the main thread, pays a fork for it', () => {
+  it.skipIf(i === 'go')('costs one jq, for the skill\'s name, and only on a subagent\'s Skill call — no event of any other kind, and not the main thread, pays a fork for it', () => {
     // A `jq` shim in front of the real one logs every call whose program reads
     // the skill field and then runs the real jq: the hot-path budget (README:
     // the hook runs on every tool call of every fleet session) measured, not
@@ -332,7 +340,8 @@ describe(`the ${COUNT} names, written once (D-4934)`, () => {
 // is printed on a session that has no file yet. The server's words are written the way Task 9b's writers write them.
 // Red at base on "writes no file", not green as the plan expects (D-5377): base writes the file; the print half is
 // held by the no-file mutant (the skip turned back into an exit).
-describe('the deny prints on a session with no hookstate file (D-5232)', () => {
+describe.each(IMPLS)('the deny prints on a session with no hookstate file (D-5232) (%s)', (i) => {
+  useImpl(i);
   it('a subagent\'s role-skill load with no hookstate file prints its deny and writes no file', () => {
     fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
     fs.writeFileSync(path.join(home, '.ccrc', SERVER_CAPS_FILE),

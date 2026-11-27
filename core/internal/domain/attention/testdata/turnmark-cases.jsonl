@@ -1,0 +1,17 @@
+{"prev":"","kind":"working","sid":"u1","ev":"UserPromptSubmit","at":1764000000123,"bg":"-1","crons":"-1","bgk":"","bgi":"","err":""}
+{"prev":"","kind":"done","sid":"u1","ev":"Stop","at":1764000000123,"bg":"3","crons":"2","bgk":"subagent,shell,subagent,,Shell","bgi":"a1,a2,,a3","err":""}
+{"prev":"","kind":"failed","sid":"u1","ev":"StopFailure","at":1764000000123,"bg":"-1","crons":"-1","bgk":"","bgi":"","err":"rate_limit"}
+{"prev":"","kind":"restart","sid":"u1","ev":"SessionStart","at":1764000000123,"bg":"-1","crons":"-1","bgk":"","bgi":"","err":""}
+{"prev":"","kind":"clear","sid":"u1","ev":"SessionStart","at":1764000000123,"bg":"-1","crons":"-1","bgk":"","bgi":"","err":""}
+{"prev":"","kind":"bogus","sid":"u1","ev":"Stop","at":1,"bg":"-1","crons":"-1","bgk":"","bgi":"","err":""}
+{"prev":"{\"v\":1,\"sessionId\":\"u1\",\"state\":\"done\",\"event\":\"Stop\",\"at\":5,\"turnAt\":3,\"stopAt\":5,\"bg\":2,\"bgKinds\":\"subagent\",\"bgIds\":\"a1,a2\",\"err\":null,\"restartAt\":null,\"lostBg\":1.5,\"lostKinds\":\"shell\",\"lostIds\":\"z9\",\"crons\":4}","kind":"restart","sid":"u1","ev":"SessionStart","at":9,"bg":"-1","crons":"-1","bgk":"","bgi":"","err":""}
+{"prev":"{\"v\":1,\"sessionId\":\"u1\",\"state\":\"working\",\"event\":\"PreToolUse\",\"at\":5,\"turnAt\":1.50,\"stopAt\":null,\"bg\":2,\"bgKinds\":\"x\",\"bgIds\":\"\",\"err\":\"e\",\"restartAt\":7,\"lostBg\":3,\"lostKinds\":\"k\",\"lostIds\":\"i\",\"crons\":4}","kind":"working","sid":"u1","ev":"PostToolUse","at":9,"bg":"-1","crons":"-1","bgk":"","bgi":"","err":""}
+{"prev":"{\"v\":1,\"sessionId\":\"u1\",\"state\":\"working\",\"crons\":4,\"turnAt\":{\"a\":[1]}}","kind":"done","sid":"u1","ev":"Stop","at":9,"bg":"0","crons":"x","bgk":"","bgi":"","err":""}
+{"prev":"{\"v\":1,\"sessionId\":\"other\",\"state\":\"done\",\"bg\":5}","kind":"restart","sid":"u1","ev":"SessionStart","at":9,"bg":"-1","crons":"-1","bgk":"","bgi":"","err":""}
+{"prev":"{\"v\":2,\"sessionId\":\"u1\",\"state\":\"done\",\"bg\":5}","kind":"done","sid":"u1","ev":"Stop","at":9,"bg":"1","crons":"0","bgk":"a","bgi":"b","err":""}
+{"prev":"{nope","kind":"failed","sid":"u1","ev":"StopFailure","at":9,"bg":"-1","crons":"-1","bgk":"","bgi":"","err":""}
+{"prev":"{\"v\":1,\"sessionId\":\"u1\",\"state\":\"failed\",\"bg\":\"str\",\"lostBg\":0}","kind":"restart","sid":"u1","ev":"SessionStart","at":9,"bg":"-1","crons":"-1","bgk":"","bgi":"","err":""}
+{"prev":"{\"v\":1,\"sessionId\":\"u1\",\"state\":\"failed\",\"bg\":null,\"lostBg\":null,\"lostKinds\":5}","kind":"restart","sid":"u1","ev":"SessionStart","at":9,"bg":"-1","crons":"-1","bgk":"","bgi":"","err":""}
+{"prev":"{\"v\":1.0,\"sessionId\":\"u1\",\"state\":\"done\",\"bg\":false,\"lostBg\":2,\"bgKinds\":\"b,a\",\"lostKinds\":\"a,c\",\"bgIds\":\"1,2,3,4,5\",\"lostIds\":\"6,7,8,9\"}","kind":"restart","sid":"u1","ev":"SessionStart","at":9,"bg":"-1","crons":"-1","bgk":"","bgi":"","err":""}
+{"prev":"","kind":"done","sid":"u1","ev":"Stop","at":9,"bg":"2","crons":"0","bgk":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,c,é","bgi":"1,2,3,4,5,6,7,8,9,10","err":""}
+{"prev":"{\"v\":1,\"sessionId\":\"u1\",\"state\":\"done\",\"bg\":3,\"lostBg\":\"s\",\"lostKinds\":\"\"}","kind":"restart","sid":"u1","ev":"SessionStart","at":9,"bg":"-1","crons":"-1","bgk":"","bgi":"","err":""}

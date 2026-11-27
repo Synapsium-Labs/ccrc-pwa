@@ -75,6 +75,10 @@ const FILES: Record<string, string> = {
   'ccd/ccd': '#!/usr/bin/env bash\n# fixture ccd body: answers caps with a short list of well-shaped lines (build-release.sh stamps it)\n[ "${1:-}" = caps ] && { printf \'%s\\n\' start ws-add pool-answer pool-set; exit 0; }\necho fixture ccd body\n',
   'deploy/gen-accounts.mjs': "process.stdout.write('CCRC_ACCOUNTS=(lane-a)\\n');\n",
   'deploy/accounts.default.json': '{ "accounts": [] }\n',
+  // The Go core's entry table (spec 2026-11-24): named in build-release.sh's pathspec.
+  'core/entries.json': '{ "entries": {} }\n',
+  // Its go.mod: build-release.sh refuses any Go but the one its toolchain line names, which the stub go answers.
+  'core/go.mod': readFileSync(join(REPO, 'core', 'go.mod'), 'utf8'),
   'shared/package.json': '{ "type": "module" }\n',
   'deploy/ccrc.service': '[Unit]\nDescription=fixture\n',
   'server/package.json': '{ "name": "s" }\n',
@@ -121,6 +125,7 @@ function fixture(home: string, opts: {
     writeFileSync(join(root, rel), body, { mode: rel.endsWith('.sh') || rel === 'ccd/ccrc' || rel === 'ccd/ccd' ? 0o755 : 0o644 });
   }
   copyFileSync(BUILDER, join(root, 'deploy', 'build-release.sh'));
+  copyFileSync(join(REPO, 'core', 'build.sh'), join(root, 'core', 'build.sh'));   // the Go core's build, which it runs
   copyFileSync(SCRIPT, join(root, 'deploy', 'release-main.sh'));
   // receive verifies the hand-over with it, as the publish job does (D-6656).
   copyFileSync(ARTIFACT, join(root, 'deploy', 'release-artifact.sh'));
@@ -216,6 +221,9 @@ function plantBin(home: string, ghExit = 0, ghView: GhView = {}): string {
   if (ghView.view !== undefined) writeFileSync(join(home, 'gh-view'), `${ghView.view}\n`);
   if (ghView.viewExit !== undefined) writeFileSync(join(home, 'gh-view-exit'), `${ghView.viewExit}\n`);
   writeFileSync(join(bin, 'curl'), '#!/bin/sh\necho "release-main tests never reach the network" >&2\nexit 97\n', { mode: 0o755 });
+  // build-release.sh cross-builds the Go core (spec 2026-11-24 §7): a `go` that writes each `-o` file with its target,
+  // the same bytes every build, as a real build of unchanged source is (build-release.test.ts runs the real one).
+  writeFileSync(join(bin, 'go'), `#!/bin/sh\nif [ "$1 $2" = 'env GOVERSION' ]; then sed -n 's/^toolchain //p' "$PWD/go.mod"; exit; fi\n` + 'if [ "$1" = build ]; then while [ $# -gt 0 ]; do if [ "$1" = -o ]; then printf \'fixture ccrc-core %s-%s\\n\' "$GOOS" "$GOARCH" > "$2"; fi; shift; done; fi\nexit 0\n', { mode: 0o755 });
   return bin;
 }
 

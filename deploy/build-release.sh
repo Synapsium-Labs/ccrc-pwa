@@ -5,7 +5,8 @@
 # installs from — prebuilt dists, the three package.json+lock pairs and each
 # package's tracked `scripts/` (for `npm ci --omit=dev` on the box, whose
 # install-time hooks name them — D-3105), `shared/`, `ccd/`, `deploy/`'s units
-# and helpers, `install.sh` — plus a MANIFEST (per-file sha256, verified by
+# and helpers, `install.sh`, the Go core's entry table and its ccrc-core
+# binaries for five platforms (core/build.sh) — plus a MANIFEST (per-file sha256, verified by
 # `ccrc update` after extraction) inside it and `SHA256SUMS` (sha256sum -c
 # compatible, guards transport) beside it. CI (`release.yml`) merely invokes
 # this script: no logic lives in YAML that the script doesn't own, and every
@@ -20,6 +21,7 @@
 #     the same shape both build.json stampers recognise — deploy.sh:90,
 #     ccd/ccrc's `_inst_stamp`). `--untagged` names the artifact
 #     `untagged-<shortsha>` instead; CI never passes it.
+# A third, of the machine: no `go` on PATH (the core is cross-built here).
 #
 # The tracked set is staged via `git archive HEAD` — tracked content ONLY, so
 # a gitignored secret (deploy/ccrc-mail.token lives in this very directory on
@@ -74,6 +76,18 @@ else
   die "HEAD carries no vX.Y.Z tag — tag the release (git tag vX.Y.Z), or pass --untagged for a dev artifact"
 fi
 
+# A third refusal, of the machine rather than the tree: the release carries ccrc-core for five platforms, cross-built
+# here from core/ (spec 2026-11-24 §7), so a builder without Go refuses before any package is installed or built.
+command -v go >/dev/null 2>&1 \
+  || die "Go is not on PATH — a release cross-builds ccrc-core from core/ for five platforms; install the Go that core/go.mod names, then re-run"
+# The exact Go, asked from core/ where the build runs (so a toolchain switch is seen as the build sees it): another patch
+# builds other bytes, and release-main.sh's compare would cut a release for a merge that changed nothing shipped.
+GO_WANT="$(sed -n 's/^toolchain //p' "$ROOT/core/go.mod" 2>/dev/null)"
+GO_HAVE="$(cd "$ROOT/core" && go env GOVERSION 2>/dev/null)" || GO_HAVE=""
+[ -n "$GO_WANT" ] || die "core/go.mod names no toolchain line, so no Go version is pinned for the release build"
+[ "$GO_HAVE" = "$GO_WANT" ] \
+  || die "Go here is ${GO_HAVE:-unknown}, and core/go.mod's toolchain line names $GO_WANT — a release builds ccrc-core with exactly that Go; install it (or put it first on PATH), then re-run"
+
 [ -n "$OUT_DIR" ] || OUT_DIR="$ROOT/release-out"
 
 # ── Build all three packages — the RELEASE machine builds, boxes don't ────
@@ -113,8 +127,10 @@ mkdir -p "$TOP"
 
 # Tracked content only (see header). The pathspec is spec §2's layout: a path
 # missing from HEAD makes git archive fail loudly, which is an incomplete
-# checkout refusing rather than a thinner tarball shipping.
-PATHSPEC=(install.sh shared ccd deploy
+# checkout refusing rather than a thinner tarball shipping. `core/entries.json`
+# is the Go core's entry table, which ccd's pair installer reads on every box
+# (spec 2026-11-24 §4); the core's source is not shipped.
+PATHSPEC=(install.sh shared ccd deploy core/entries.json
   server/package.json server/package-lock.json
   agent/package.json agent/package-lock.json
   pwa/package.json pwa/package-lock.json)
@@ -144,6 +160,13 @@ rm -f "$STAGE/tracked.tar"
 cp -a "$ROOT/server/dist"     "$TOP/server/dist"
 cp -a "$ROOT/server/dist-pwa" "$TOP/server/dist-pwa"
 cp -a "$ROOT/agent/dist"      "$TOP/agent/dist"
+
+# ── The Go core: ccrc-core for every platform a box can be (spec 2026-11-24 §7) ──
+# Build output, like the dists: core/build.sh, the one build command, writes core/bin/<goos>-<goarch>/ into the tree
+# after `go vet` passes over the module, and the MANIFEST below covers each binary like any other file. The installer
+# places the one its box runs. The core's source stays out of the tarball (the pathspec ships only core/entries.json).
+( cd "$ROOT/core" && go vet ./... ) || die "go vet ./... failed in core/ — no release is built from a core that does not vet"
+bash "$ROOT/core/build.sh" "$TOP/core/bin" || die "ccrc-core did not build (core/build.sh, above)"
 
 # ── Every install-time hook must find what it names (D-3105) ─────────────
 # The other half of the same defect: a hook that names a file the release set

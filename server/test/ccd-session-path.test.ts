@@ -175,6 +175,9 @@ describe('a started session has $HOME/.local/bin on its PATH (D-8050)', () => {
     const hook = fs.readFileSync(path.join(__dirname, '..', '..', 'ccd', 'session-hook.sh'), 'utf8');
     const run = /^GRAPH_RUN='(.*)'$/m.exec(hook)?.[1];
     expect(run, 'the hook defines the command it teaches').toBeTruthy();
+    // The Go hook teaches the same command: its constant is cut from its source as the bash's is from the hook's (Go core wave 2).
+    const goSrc = fs.readFileSync(path.join(__dirname, '..', '..', 'core', 'internal', 'domain', 'attention', 'pretool.go'), 'utf8');
+    expect(/^\s*GraphRun\s*=\s*`(.*)`$/m.exec(goSrc)?.[1], 'the Go hook teaches the command the bash hook teaches').toBe(run);
     put(path.join(bin(), 'graphify'), '#!/bin/sh\nprintf \'Traversal: %s\\n\' "$*"\n');
     put(path.join(bin(), 'claude'), `#!/bin/sh\n{ ${run} query "gate"; graphify query "bare"; } > "$HOME/session-report" 2>&1\n`);
     for (const line of spawnLines('claude')) {

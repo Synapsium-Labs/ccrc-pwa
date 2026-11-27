@@ -2,6 +2,9 @@ import { defineConfig } from 'vitest/config';
 import { scaled } from './test/timeScale.js';
 import path from 'node:path';
 import { resolveBash } from './src/exec.js';
+// The Windows harness fence (test/pathFence.ts), for its import-time effect: this process's PATH loses every directory
+// under the operator's home and every second MSYS runtime before any worker inherits it. A no-op elsewhere.
+import './test/pathFence.js';
 
 // ON WINDOWS THE SUITE MUST RUN ccd IN THE USERLAND PRODUCTION RUNS IT IN.
 // Every `spawnSync('bash', …)` in this tree is a bare-name PATH lookup, and on
@@ -136,6 +139,8 @@ export default defineConfig({
     // rig derives a run cap (or records one in the feed) from the machine that happens to run the suite; see
     // test/host-size.setup.mjs. Pinned by test/host-pressure.test.ts.
     globalSetup: ['test/git-env.setup.mjs', 'test/run-tmp.globalsetup.mjs', 'test/proc-leak.globalsetup.mjs'],
-    setupFiles: ['test/git-env.setup.mjs', 'test/host-size.setup.mjs'],
+    // On Windows every child_process spawner is wrapped by the harness fence (test/spawn-fence.setup.mjs, pathFence.ts):
+    // a child whose bash would not be MSYS2's is refused before it starts. Pinned by test/spawn-fence.test.ts.
+    setupFiles: ['test/git-env.setup.mjs', 'test/host-size.setup.mjs', 'test/spawn-fence.setup.mjs'],
   },
 });

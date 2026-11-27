@@ -169,6 +169,11 @@ jobs:
             server/package-lock.json
             agent/package-lock.json
             pwa/package-lock.json
+      # Go, as on ci.yml's server-shard (spec 2026-11-24 §7): a shard may be handed a core suite, which builds ccrc-core.
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: core/go.mod
+          cache-dependency-path: core/go.mod
       # bash, tmux, flock, jq and coreutils from Homebrew — the reasons are
       # in the action, beside the install line.
       - uses: ./.github/actions/server-deps

@@ -394,10 +394,13 @@ needs a new operator ruling, not a PR.
 - **Rejected: runtime-sourced ccd siblings** (operator, 2026-10-26). ccd never loads sibling scripts
   chosen at run time; it loads only fixed, digest-checked libraries (the #1404 model), so what runs on
   the box stays auditable. Splitting `ccd/ccd` waits on ARCH-34's manifest (#536).
-- **Allowed: ccd's Windows twin in Node** (operator, 2026-11-22). An exception to "compiling policy
-  across languages" above, for Windows only: a process start there costs two to three orders of magnitude
-  more than on Linux. Linux keeps bash. The twin must pass the same tests as the bash it stands in for, in
-  both modes in Linux CI (`2026-11-22-ccd-windows-node-twin-design.md`).
+- **Allowed, temporarily: ccd's Go core** (operator, 2026-11-24; replaces 2026-11-22's Windows twin in Node). All of
+  ccrc's bash moves to Go, entry point by entry point, on every platform: one binary, `ccrc-core`, runs the entry points
+  `core/entries.json` puts in go mode, and an entry point switches once its Go has passed the comparison with its bash
+  (Windows first, where a process start costs two to three orders of magnitude more than on Linux). While an entry
+  point has both, its rules exist twice: an exception to "compiling policy across languages" above, bounded by the
+  parity tests, which run both implementations of each such entry point in Linux CI. The exception ends for each entry
+  point when its bash is deleted (`2026-11-24-ccrc-go-core-design.md` section 2).
 - **Rejected: moving ccd's rotation and reap decisions to the server** (operator, 2026-10-26). They
   stay in ccd on the box, next to the files they touch, so they still work when the server is down;
   the server only shows and arms them (CCD, #522).

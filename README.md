@@ -5051,6 +5051,24 @@ who replaces both files is not stopped. `ws-expire`, `ws-collect`, `ws-audit --s
 `roll` and `claude` start under `bash -p` too, so an inherited `nocasematch` cannot fold a case variant into one of them;
 the body does not refuse them when it was started another way.
 
+**The launcher starts the Go core for its go-mode verbs** (spec 2026-11-24). `core/entries.json` gives each entry a
+mode per platform, `bash` or `go`; the installer renders this platform's go-mode verbs into the launcher and places the
+core binary at `~/.local/libexec/ccrc/core/ccrc-core` (`.exe` on Windows), and a listed verb starts
+`ccrc-core ccd <argv>` instead of the body: never a protected argv, and only once the binary matches the digest
+rendered into the launcher. A release carries the binaries (`core/bin/<goos>-<goarch>/`); a checkout does not, so
+`ccrc install` from a checkout, on a platform with a go-mode verb, first builds this machine's binary with
+`bash core/build.sh core/bin <goos>-<goarch>` when Go (the version `core/go.mod` names) is on PATH. Without Go
+nothing is built, and the install stops at ccd's launcher, whose installer refuses the missing binary and names that
+command. `deploy/deploy.sh` deploys to Linux and macOS boxes only.
+A failing core run fails with its own status; nothing retries it in Bash. Today only
+`caps` on Windows is in go mode, where every Bash start under MSYS2 costs hundreds of milliseconds.
+`~/.cc-sessions/ccd-go-off` is the hand switch back: empty, every verb uses Bash; one verb per line sends that verb to Bash; a file that cannot be read, a line
+that is no verb word, or a path that is not a regular file (a link, a directory, a FIFO) sends every verb to Bash.
+A standing `~/.cc-sessions/ccd-node-off` from the Node twin is not read any more: an operator who had sent a verb back to Bash writes the same line into `ccd-go-off`, and `ccrc doctor`'s `ccd-core` check warns while the old file stands.
+`touch ~/.cc-sessions/ccd-entry-timing` makes the launcher wait for each start and append
+`<epoch_ms> <verb> <ms> <status>` (tab-separated) to `~/.ccrc/ccd-entry-timing.log`, up to 16 MiB; `supervise` is never
+timed. Both files are hand-only switches: nothing in the tree writes them.
+
 **After a box move.** Each registry row's entry field (`$REG/<id>.workdirid`) records the device and inode of the
 directory its session entered, and the rows rung refuses a child while any other row cannot be placed. A registry copied
 onto new hardware with its trees keeps the old host's identities, so on Linux the rung places such a row by its path

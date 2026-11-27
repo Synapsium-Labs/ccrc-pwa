@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
+import { IMPLS, runGoHook } from './hookTwin.js';
 
 const RIG = path.resolve(__dirname, 'delegation-rig');
 const MOCK = path.join(RIG, 'mockapi.mjs');
@@ -619,7 +620,7 @@ describe('rig.sh run and all take only a version that is installed (review 304 F
       const bin = mkTmp('ccrc-dlg-bin-');
       fs.writeFileSync(path.join(bin, 'ls'), '#!/bin/sh\nexit 2\n', { mode: 0o755 });
       const home = versionsHome(MIXED);
-      const r = rigsh(['versions'], { HOME: home, PATH: `${bin}:${process.env.PATH}` }, undefined, 20_000);
+      const r = rigsh(['versions'], { HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH}` }, undefined, 20_000);
       expect.soft(r.status, r.stderr).toBe(2);
       expect.soft(r.stderr).toContain(`cannot read the versions directory ${path.join(home, '.local/share/claude/versions')}`);
       expect.soft(r.stdout).toBe('');
@@ -1493,7 +1494,7 @@ describe('rig.sh setup (fixture HOME and repo)', () => {
 // 2026-11-06, before the scenarios named a model. This row feeds the real hook, in a fixture HOME under the rig's own
 // session name, every scenario's scripted Agent, Task and Workflow call, and expects no deny. The hook decides: no rule
 // of it is copied here, and the two controls only prove that a deny would be seen.
-describe('every scenario\'s scripted fan-out passes today\'s session hook', () => {
+describe.each(IMPLS)('every scenario\'s scripted fan-out passes today\'s session hook (%s)', (impl) => {
   const HOOK = path.join(TREE, 'ccd/session-hook.sh');
   const SESSION_ID = 'rig-hookcap';
   const GENERATION = '0189abcd-1234-5678-9abc-0123456789ab';
@@ -1530,12 +1531,13 @@ describe('every scenario\'s scripted fan-out passes today\'s session hook', () =
     fs.mkdirSync(bin, { recursive: true });
     fs.writeFileSync(path.join(bin, 'tmux'), `#!/bin/sh\nprintf 'cc-${SESSION_ID}\\n'\n`, { mode: 0o755 });
     const env: NodeJS.ProcessEnv = {
-      ...process.env, HOME: home, PATH: `${bin}:${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1',
+      ...process.env, HOME: home, PATH: `${bin}${path.delimiter}${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1',
       CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
     };
     /** The hook's deny reason for this call, or null when it denied nothing. */
     const deny = (tool: string, input: unknown): string | null => {
-      const r = spawnSync('bash', [HOOK], { input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input, cwd: '/rig/repo' }), encoding: 'utf8', env });
+      const payload = { hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input, cwd: '/rig/repo' };
+      const r = impl === 'go' ? runGoHook(home, payload, env) : spawnSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env });
       expect(r.status, `${tool}: the hook exits 0`).toBe(0);
       const out = r.stdout.trim();
       if (out === '') return null;

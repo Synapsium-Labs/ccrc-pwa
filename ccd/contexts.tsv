@@ -481,6 +481,7 @@ _browser_mcp_box	C2
 _browser_spawn_compose	C2
 _spawn_settings_last	C2
 _fleet_spawn_compose	C2
+_hook_go_command	C2
 _profile_digest_ok	C2
 _profile_workspace	C2
 _profile_launch_ok	C2

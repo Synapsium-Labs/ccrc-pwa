@@ -742,6 +742,8 @@ export function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     '#!/bin/sh',
     // The box-token doctor readers, ahead of the argv log (their program text is not an argv a case asserts on).
     BT_PY_ARM,
+    // Ahead of the argv log too: doctor's ccd-core check runs the INSTALLED launcher's self-test (the Go core, spec 2026-11-24), on the REAL interpreter.
+    `[ "$1" = -IS ] && [ "$2" = "$HOME/.local/bin/ccd" ] && [ "$3" = --ccrc-entry-self-test ] && exec '${PYTHON3}' "$@"`,
     'printf \'%s\\n\' "$*" >> "$HOME/python3-argv"',
     'if [ "$1" = "-m" ] && [ "$2" = "venv" ] && [ -n "$3" ]; then',
     '  case "$3" in',
@@ -1887,6 +1889,9 @@ export const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   // ~/.cc-sessions/lib/carry-dedupe.py, so the registry exists, and a
   // fresh box has no swap.log and no sweep record yet, which the check reads as nothing copied and nothing recorded.
   "carry-copies": "PASS",
+  // The Go core (spec 2026-11-24): PASS at every stage: the installed launcher passes its self-test, and the install
+  // publishes this platform's core binary beside the body when an entry runs in go here (on Linux none does).
+  "ccd-core": "PASS",
   "caddy": "SKIP",
   "caddyfile": "SKIP",
   // The Overlord W1 pool set B1 (plan Task 8): PASS at every stage, re-measured from both box-token cases' own failing

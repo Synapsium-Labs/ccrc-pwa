@@ -15,6 +15,7 @@ import {
 import { counters, makeHistoryBox, openStoreRO, plantSession, plantTranscript, recordOpenFlags, runCli, runDriver, runShim, skipOnDarwin, type HistoryBox } from './historyHelpers.js';
 import { userRow } from './historyFixtures.js';
 import { mkTmp, removeTmpFixturesSince, tmpMark } from './tmpHelpers.js';
+import { IMPLS, runHook, type Impl } from './hookTwin.js';
 import { agentIdOk, capBytes, historyPaths, lagOfTick, META_FAILURES, META_MAX_BYTES, parseOpVerbArgs, SCAN_INTERVAL_MS, WRITING_FORMS } from '../../ccd/history/lib.mjs';
 import { closeWriter, createStore, getMeta, openWriter } from '../../ccd/history/store.mjs';
 import { behindStats, candidateFiles, discoverTranscripts, ingestTick, makeIngestCtx, newBudget, readAgentMeta } from '../../ccd/history/sweep.mjs';
@@ -1045,6 +1046,33 @@ function hookGateAccepts(id: string): boolean {
   expect(r.error, 'bash did not run').toBeUndefined();
   return r.status === 0;
 }
+/** Whether the hook in `impl`, on an automatic PreCompact with one live `agent-<id>.jsonl` beside a quiet parent, publishes
+ *  a `subagent` set (its gate accepted the id): a fixture HOME of its own, the row's generation and a stub tmux. */
+function hookScopesAgent(impl: Impl, id: string): boolean {
+  const home = mkTmp('ccrc-gate-');
+  try {
+    const reg = path.join(home, '.cc-sessions');
+    fs.mkdirSync(reg, { recursive: true });
+    const gen = '0189abcd-1234-5678-9abc-0123456789ab';
+    fs.writeFileSync(path.join(reg, 'lane-a-project-a.generation'), gen);
+    fs.mkdirSync(path.join(home, 'bin'));
+    fs.writeFileSync(path.join(home, 'bin', 'tmux'), '#!/bin/sh\necho "cc-lane-a-project-a"\n', { mode: 0o755 });
+    const sid = '00000000-0000-4000-8000-000000000001';
+    const t = path.join(home, 'p', `${sid}.jsonl`);
+    fs.mkdirSync(path.join(home, 'p', sid, 'subagents'), { recursive: true });
+    fs.writeFileSync(t, '{"type":"user"}\n');
+    const old = Math.floor(Date.now() / 1000) - 600;
+    fs.utimesSync(t, old, old);
+    fs.writeFileSync(path.join(home, 'p', sid, 'subagents', `agent-${id}.jsonl`), '{"type":"user"}\n');
+    const r = runHook({ home, env: (e = {}) => e }, impl,
+      { hook_event_name: 'PreCompact', session_id: sid, transcript_path: t, trigger: 'auto', cwd: home },
+      { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`, LC_ALL: 'C',
+        TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: sid, CCRC_SESSION_GENERATION: gen });
+    expect(r.status, 'the hook contract: exit 0').toBe(0);
+    const set = path.join(reg, 'lane-a-project-a.compactset');
+    return fs.existsSync(set) && (JSON.parse(fs.readFileSync(set, 'utf8')) as { scope: string }).scope === 'subagent';
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+}
 /** The top-level functions of ccd/history/*.mjs whose code lines spell `/subagents` as a path component. Comments are dropped. */
 function listersOfSubagents(files: Array<{ name: string; text: string }>): string[] {
   const out = new Set<string>();
@@ -1071,6 +1099,17 @@ describe('SA34 one walker, and the hook\'s id shape (P20 (a))', () => {
     expect(hookGateAccepts('a'), 'CONTROL: the harness accepts a good id').toBe(true);
     expect(hookGateAccepts('a.b'), 'CONTROL: and refuses a dot').toBe(false);
   });
+
+  // The Go twin of `hookGateLines` (Go core wave 2, Task 8b): the Go hook has no gate lines to cut, so its gate is driven end
+  // to end, and the bash's with it. One live `agent-<id>.jsonl` beside a quiet parent is the subagent's compaction exactly
+  // when the gate accepts its id; a refused id is unspeakable, and the arm writes no set (`_hook_compact_scope` rc 1).
+  it.each(IMPLS)('the %s hook\'s scope gate, end to end, and lib\'s agent-id grammar accept and refuse alike', (impl) => {
+    for (const id of ['', 'a', 'a'.repeat(128), 'a'.repeat(129), 'a.b', '-a', 'a_b', 'a b', 'é']) {
+      expect(hookScopesAgent(impl, id), JSON.stringify(id)).toBe(agentIdOk(id));
+    }
+    expect(hookScopesAgent(impl, 'a'), 'CONTROL: the run scopes a good id').toBe(true);
+    expect(hookScopesAgent(impl, 'a.b'), 'CONTROL: and refuses a dot').toBe(false);
+  }, 120_000);
 
   it('only the walk\'s agent arm lists the subagent tree, and census.mjs lists nothing', () => {
     const files = historyModules();

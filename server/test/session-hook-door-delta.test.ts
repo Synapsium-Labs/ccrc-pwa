@@ -10,7 +10,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSyncGroup } from './spawnGroup.js';
+import { hookBoth } from './hookTwin.js';
 import { mkTmp } from './tmpHelpers.js';
 import { renderMailNudge } from '../src/coord/envelope.js';
 import { IDLE_COMPACT_NOTICE_PREFIXES } from '../../shared/api.js';
@@ -64,18 +64,14 @@ const prompt = (said = 'carry on'): object => ({
 });
 /** The hook's stdout, its exit 0 asserted; `door` puts the spawn's hash in the environment. */
 const run = (payload: object, door: boolean | string = true): { out: string; ms: number } => {
-  const t0 = Date.now();
-  const r = spawnSyncGroup('bash', [HOOK], {
-    input: JSON.stringify(payload), encoding: 'utf8', timeout: 20_000,
-    env: {
-      ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
-      ...(door === false ? {} : { CCRC_DOOR_NONCE_SHA256: door === true ? HASH : door }),
-    },
-  });
-  expect(r.error, 'the spawn itself did not fail').toBeUndefined();
+  // the Go core and the bash, each from the same fixture state, must answer the same and leave the same files (Go core wave 2, Task 6)
+  const r = hookBoth(home, JSON.stringify(payload), {
+    ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
+    TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
+    ...(door === false ? {} : { CCRC_DOOR_NONCE_SHA256: door === true ? HASH : door }),
+  }, { hook: HOOK, watch: ['api-calls'], tree: true });
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
-  return { out: String(r.stdout), ms: Date.now() - t0 };
+  return { out: String(r.stdout), ms: r.ms };
 };
 /** The one envelope's context, or '' when nothing printed; more than one envelope fails. */
 const context = (stdout: string): string => {
@@ -86,6 +82,11 @@ const context = (stdout: string): string => {
   expect(env.hookSpecificOutput.hookEventName).toBe('UserPromptSubmit');
   return env.hookSpecificOutput.additionalContext;
 };
+
+// Linux and macOS only: the wake reads a /-rooted transcript_path (session-hook.sh's _hook_roster_wake, `[[ "$tp" == /* ]]`,
+// mirrored in Go), and Claude Code's transcript path on Windows is C:\..., so neither mode wakes there (measured in
+// both modes, Task 9b). Both modes run it on the Linux bench.
+const POSIX_TRANSCRIPT = process.platform !== 'win32';
 
 describe('the delta on a plain prompt: from the cache alone, no network', () => {
   it('a fresh cache prints its text, and the hook calls no client on this path', () => {
@@ -123,7 +124,8 @@ describe('the delta on a plain prompt: from the cache alone, no network', () => 
     expect(calls()).toEqual([]);
   });
 
-  it('a FIFO in the cache\'s place prints the unknown line, within the bound, never opened', () => {
+  // not on Windows: an MSYS2 FIFO is invisible to a native program (D-TBD-go-hook-windows-fifo)
+  it.skipIf(process.platform === 'win32')('a FIFO in the cache\'s place prints the unknown line, within the bound, never opened', () => {
     execFileSync('mkfifo', [cache()]);
     // A writer stands ready to offer a fresh-looking cache: a hook that opened the FIFO would read it and print LINE.
     const at = Date.now();
@@ -187,7 +189,7 @@ describe('one envelope an event: the delta joins the owed anchor\'s or the roste
     expect(fs.existsSync(reg(`${ID}.anchor-owed`)), 'the anchor was delivered').toBe(false);
   });
 
-  it('with the roster wake owed, stdout is one JSON object holding the card and then the delta', () => {
+  it.runIf(POSIX_TRANSCRIPT)('with the roster wake owed, stdout is one JSON object holding the card and then the delta', () => {
     writeCache(LINE, 180_000);
     fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
     const now = Date.now();

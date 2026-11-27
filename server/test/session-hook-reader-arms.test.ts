@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSyncGroup } from './spawnGroup.js';
 import { mkTmp } from './tmpHelpers.js';
+import { IMPLS, runGoHook, type Impl } from './hookTwin.js';
 import { DOOR_TOOL_PREFIX } from '../../shared/continuity-reports.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
@@ -23,6 +24,13 @@ const GENERATION = '0189abcd-1234-5678-9abc-0123456789ab';
 const HASH = 'ab'.repeat(32);
 const AGENT = 'a0000000000000001';
 const door = (n: string): string => `${DOOR_TOOL_PREFIX}${n}`;
+
+/** The implementation `run` starts (Go core wave 2): every describe below runs on both; the door witness (a network report) is Task 6's, so its assertion is bash-only. */
+let impl: Impl = 'bash';
+const useImpl = (i: Impl): void => {
+  beforeEach(() => { impl = i; });
+  afterEach(() => { impl = 'bash'; });
+};
 
 let home: string;
 const reg = (...p: string[]): string => path.join(home, '.cc-sessions', ...p);
@@ -51,15 +59,14 @@ const common = { session_id: UUID, transcript_path: path.join('/rig', `${UUID}.j
 
 /** The hook's stdout, its exit asserted. `env` adds to the fixture environment; `hasDoor` puts the launch nonce's hash in it. */
 const run = (payload: object, hasDoor = true, env: Record<string, string> = {}): string => {
-  const r = spawnSyncGroup('bash', [HOOK], {
-    input: JSON.stringify(payload), encoding: 'utf8', timeout: 30_000,
-    env: {
-      ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
-      CLAUDE_CODE_SUBAGENT_MODEL: '', CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '',
-      ...(hasDoor ? { CCRC_DOOR_NONCE_SHA256: HASH } : {}), ...env,
-    },
-  });
+  const e = {
+    ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
+    TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
+    CLAUDE_CODE_SUBAGENT_MODEL: '', CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '',
+    ...(hasDoor ? { CCRC_DOOR_NONCE_SHA256: HASH } : {}), ...env,
+  };
+  const r = impl === 'go' ? { ...runGoHook(home, payload, e), error: undefined }
+    : spawnSyncGroup('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', timeout: 30_000, env: e });
   expect(r.error, 'the spawn itself did not fail').toBeUndefined();
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
   return String(r.stdout);
@@ -80,7 +87,8 @@ const roster = (n: number): void => {
     updatedAt: 1_700_000_000_000, ask: null, subagents: subs, graphQueries: 0, graphGateDenials: 0, ccrcPeerReads: 0, ccrcClaims: 0 })}\n`);
 };
 
-describe('reader scope: a reader holds no write door (C55)', () => {
+describe.each(IMPLS)('reader scope: a reader holds no write door (C55) (%s)', (i) => {
+  useImpl(i);
   it('a joined reader\'s note_add is denied and sends no witness; its read is allowed and witnessed', () => {
     fs.writeFileSync(reg(`${ID}.joined`), `${AGENT}\n`);
     const why = denied(run(pre(door('note_add'), { text: 'x' }, { agent_id: AGENT })));
@@ -88,7 +96,7 @@ describe('reader scope: a reader holds no write door (C55)', () => {
     expect(why).toContain(door('read'));
     expect(reports()).toEqual([]);
     expect(denied(run(pre(door('read'), { door: 'board' }, { agent_id: AGENT })))).toBeNull();
-    expect(reports().map((r) => r['kind'])).toEqual(['witness']);
+    if (i === 'bash') expect(reports().map((r) => r['kind'])).toEqual(['witness']);   // the witness is Task 6's in Go
   });
 
   it('an unjoined call carrying agent_type is denied; a call with neither join nor type is allowed', () => {
@@ -109,7 +117,8 @@ describe('reader scope: a reader holds no write door (C55)', () => {
   });
 });
 
-describe('three readers at most', () => {
+describe.each(IMPLS)('three readers at most (%s)', (i) => {
+  useImpl(i);
   it('a fourth is denied, a third allowed, and a stop frees a place', () => {
     roster(2);
     expect(denied(run(agentCall()))).toBeNull();
@@ -136,7 +145,8 @@ describe('three readers at most', () => {
   });
 });
 
-describe('reader model: under the pin, only the pinned model', () => {
+describe.each(IMPLS)('reader model: under the pin, only the pinned model (%s)', (i) => {
+  useImpl(i);
   const PIN = { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet', CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1' };
   it('opus is denied; sonnet, or no model named, is allowed', () => {
     const why = denied(run(agentCall({ description: 'x', prompt: 'y', model: 'opus' }), true, PIN));

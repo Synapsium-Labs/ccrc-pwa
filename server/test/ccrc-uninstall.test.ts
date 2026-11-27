@@ -1007,15 +1007,36 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     const home = mkTmp('ccrc-uninst-redactor-');
     plantInstalledBox(home);
     const libexec = join(home, '.local', 'libexec', 'ccrc');
-    for (const rel of ['ccd', 'lib/disk-retention.sh', 'lib/train-proof.sh', 'lib/delegation-lease.sh', 'lib/pool-set.sh', 'lib/long-lived.sh', 'lib/door.sh', 'lib/model-aliases.sh', 'shared/redact.mjs', 'shared/redact-cli.mjs', 'door-process.mjs']) {
+    // …and the Go core (spec 2026-11-24), files only the installing tree names, and the Node twin's directory a box that
+    // ran it may still hold (spec 2026-11-22), nested two deep.
+    for (const rel of ['ccd', 'lib/disk-retention.sh', 'lib/train-proof.sh', 'lib/delegation-lease.sh', 'lib/pool-set.sh', 'lib/long-lived.sh', 'lib/door.sh', 'lib/model-aliases.sh', 'shared/redact.mjs', 'shared/redact-cli.mjs', 'door-process.mjs',
+      'core/ccrc-core', 'core/ccrc-core.exe', 'node/ccd.mjs', 'node/verbs.json', 'node/verbs/caps.mjs', 'node/lib/lock.mjs', 'node/lib/deep/x.mjs']) {
       mkdirSync(path.dirname(join(libexec, rel)), { recursive: true });
       writeFileSync(join(libexec, rel), `# fixture ${rel}\n`, { mode: 0o644 });
     }
     const r = runVerb(home, 'uninstall');
     expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(libexec, 'core')), 'the Go core survived the uninstall').toBe(false);
+    expect(existsSync(join(libexec, 'node')), 'the Node twin survived the uninstall').toBe(false);
     expect(existsSync(libexec), 'a ccrc libexec directory survived the uninstall').toBe(false);
-    expect(r.stdout).toContain('its libraries and redactor (lib/disk-retention.sh, lib/train-proof.sh, lib/delegation-lease.sh, lib/pool-set.sh, lib/long-lived.sh, lib/door.sh, lib/model-aliases.sh, shared/redact.mjs, shared/redact-cli.mjs, door-process.mjs) with it; ');
+    expect(r.stdout).toContain('its libraries and redactor (lib/disk-retention.sh, lib/train-proof.sh, lib/delegation-lease.sh, lib/pool-set.sh, lib/long-lived.sh, lib/door.sh, lib/model-aliases.sh, shared/redact.mjs, shared/redact-cli.mjs, door-process.mjs, the Go core under core/) with it; ');
   });
+
+  for (const dir of ['core', 'node']) {
+    it(`the ${dir === 'core' ? 'Go core' : 'Node twin'} is removed only through a real directory: a ${dir}/ that is a link is not followed, and its target keeps its files`, () => {
+      const home = mkTmp('ccrc-uninst-core-link-');
+      plantInstalledBox(home);
+      const libexec = join(home, '.local', 'libexec', 'ccrc');
+      const outside = join(home, 'outside');
+      mkdirSync(outside, { recursive: true });
+      writeFileSync(join(outside, 'keep'), 'not ccrc\'s\n');
+      mkdirSync(libexec, { recursive: true });
+      symlinkSync(outside, join(libexec, dir));
+      const r = runVerb(home, 'uninstall');
+      expect(r.code, r.stderr).toBe(0);
+      expect(readFileSync(join(outside, 'keep'), 'utf8')).toBe('not ccrc\'s\n');
+    });
+  }
 
   it('W29-I3: uninstall removes the reader, and ~/.local/libexec/ccrc with it only when that leaves it empty', () => {
     // wave 29 (D-6980): the settings reader the ccd-* sweeps source sits beside ccd's body, and goes by name in a

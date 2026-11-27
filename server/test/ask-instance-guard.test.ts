@@ -49,6 +49,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
+import { IMPLS, runGoHook, type Impl } from './hookTwin.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { okAsk } from './coordReadHelpers.js';
@@ -64,15 +65,27 @@ beforeEach(() => {
   fs.mkdirSync(bin, { recursive: true });
   fs.writeFileSync(path.join(bin, 'tmux'), '#!/bin/sh\necho "cc-demo-quiet-basin"\n', { mode: 0o755 });
 });
-afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
+afterEach(() => {
+  for (const db of opened.splice(0)) { try { if (db.isOpen) db.close(); } catch { /* closed already */ } }
+  fs.rmSync(home, { recursive: true, force: true });
+});
 
+/** The implementation `run` starts (Go core wave 2): a `describe.each(IMPLS)` body sets it with `useImpl`. */
+let impl: Impl = 'bash';
+const useImpl = (i: Impl): void => { beforeEach(() => { impl = i; }); afterEach(() => { impl = 'bash'; }); };
 const run = (payload: object): void => {
+  if (impl === 'go') {
+    const r = runGoHook(home, payload, { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
+      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242' });
+    expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
+    return;
+  }
   execFileSync('bash', [HOOK], {
     input: JSON.stringify(payload),
     encoding: 'utf8',
     env: {
       ...process.env, HOME: home,
-      PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+      PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
       TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242',
     },
   });
@@ -97,8 +110,13 @@ const blockOnAsk = (): ReturnType<typeof readState> => {
   return readState();
 };
 
-const store = (): CoordStore =>
-  new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+/** Every database a case opens, closed before its HOME goes: Windows refuses to unlink a file still open (EBUSY). */
+const opened: Array<ReturnType<typeof openCoordDb>> = [];
+const store = (): CoordStore => {
+  const db = openCoordDb(path.join(home, '.ccrc', 'coord.db'));
+  opened.push(db);
+  return new CoordStore(db);
+};
 
 /** The row the mint would write for the dialog above. `askAt` is the ONLY
  *  field under test; everything else is the shape `insertAsk` requires. */
@@ -109,7 +127,8 @@ const mintAskAt = (coord: CoordStore, askAt: number): number => coord.insertAsk(
   now: Date.now(),
 });
 
-describe('a subagent event under a main-thread dialog keeps the guarded number (D-4041)', () => {
+describe.each(IMPLS)('a subagent event under a main-thread dialog keeps the guarded number (D-4041) (%s)', (i) => {
+  useImpl(i);
   it('SubagentStop leaves updatedAt and event as the wait set them, adds aliveAt, keeps the ask', () => {
     const before = blockOnAsk();
     expect(before.state).toBe('waiting');
@@ -134,7 +153,8 @@ describe('a subagent event under a main-thread dialog keeps the guarded number (
   });
 });
 
-describe('what that means for the parent at the CAS', () => {
+describe.each(IMPLS)('what that means for the parent at the CAS (%s)', (i) => {
+  useImpl(i);
   it('the parent is NOT refused: the fresh read equals the minted askAt', () => {
     const before = blockOnAsk();
     run({ hook_event_name: 'SubagentStop', agent_name: 'reviewer' });
@@ -179,7 +199,8 @@ describe('what that means for the parent at the CAS', () => {
   });
 });
 
-describe('the control: a real substitution still refuses', () => {
+describe.each(IMPLS)('the control: a real substitution still refuses (%s)', (i) => {
+  useImpl(i);
   it('a NEW main-thread question moves updatedAt, so a row minted on the first is refused ask-moved', () => {
     const first = blockOnAsk();
     const coord = store();
@@ -204,7 +225,8 @@ describe('the control: a real substitution still refuses', () => {
   });
 });
 
-describe('late answer wins keeps the guard (D-5289)', () => {
+describe.each(IMPLS)('late answer wins keeps the guard (D-5289) (%s)', (i) => {
+  useImpl(i);
   it('a row the lapse released still refuses a re-minted dialog ask-moved, and stays released', () => {
     const first = blockOnAsk();
     const coord = store();
@@ -223,7 +245,8 @@ describe('late answer wins keeps the guard (D-5289)', () => {
   });
 });
 
-describe('still open: a wait a SUBAGENT raised is not carried', () => {
+describe.each(IMPLS)('still open: a wait a SUBAGENT raised is not carried (%s)', (i) => {
+  useImpl(i);
   it('a subagent-raised dialog is stored waitBy:"subagent" and a SubagentStop moves its stamp', () => {
     run({ hook_event_name: 'PermissionRequest', agent_id: 'a1', agent_type: 'general-purpose',
       tool_name: 'AskUserQuestion', tool_input: { questions: QUESTIONS } });

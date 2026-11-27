@@ -20,6 +20,7 @@ import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import { spawnSyncGroup } from './spawnGroup.js';
 import { scaled } from './timeScale.js';
+import { HOOK_ONLY_GO, goHookAsync, hookBoth } from './hookTwin.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 const FIX = path.resolve(__dirname, 'fixtures/prune-deny');
@@ -53,7 +54,7 @@ beforeAll(() => { home = makeHome('ccrc-prunedeny-hook-'); });
 afterAll(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
 const hookEnv = (h: string, id: string): NodeJS.ProcessEnv => ({
-  ...process.env, HOME: h, PATH: `${path.join(h, 'bin')}:${process.env['PATH'] ?? ''}`,
+  ...process.env, HOME: h, PATH: `${path.join(h, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
   TMUX_PANE: `%${id}`, CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
 });
 const payload = (command: string, extra: Record<string, unknown>): string =>
@@ -71,7 +72,8 @@ const denyOf = (stdout: string): string | null => {
 };
 /** One PreToolUse event through the real hook. */
 const fire = (h: string, id: string, command: string, extra: Record<string, unknown> = {}): string | null => {
-  const r = spawnSync('bash', [HOOK], { input: payload(command, extra), encoding: 'utf8', env: hookEnv(h, id) });
+  // the Go core and the bash, from the same fixture, must answer the same (Go core wave 2, Task 5)
+  const r = hookBoth(h, payload(command, extra), hookEnv(h, id));
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
   expect(r.stderr, 'the hook contract: silent on stderr').toBe('');
   return denyOf(r.stdout);
@@ -83,7 +85,9 @@ const fireMany = async (id: string, extra: Record<string, unknown>, commands: re
   const worker = async (): Promise<void> => {
     while (next < commands.length) {
       const i = next++;
-      const [code, so, se] = await new Promise<[number | null, string, string]>((resolve, reject) => {
+      const go = goHookAsync(payload(commands[i]!, extra), hookEnv(home, id));
+      // a go-only run (CCRC_HOOK_ONLY=go) reads the Go hook's answer alone, as hookBoth does there
+      const [code, so, se] = HOOK_ONLY_GO ? await go : await new Promise<[number | null, string, string]>((resolve, reject) => {
         const p = spawn('bash', [HOOK], { env: hookEnv(home, id) });
         let o = ''; let e = '';
         p.stdout.on('data', (d: Buffer) => { o += d.toString(); });
@@ -94,10 +98,14 @@ const fireMany = async (id: string, extra: Record<string, unknown>, commands: re
       });
       expect(code, `the hook contract: exit 0 on ${JSON.stringify(commands[i])}`).toBe(0);
       expect(se, `the hook contract: silent on stderr on ${JSON.stringify(commands[i])}`).toBe('');
+      const [gc, gso] = await go;
+      expect({ status: gc, stdout: gso }, `the Go hook answers as the bash does: ${JSON.stringify(commands[i])}`).toEqual({ status: code, stdout: so });
       out[i] = denyOf(so);
     }
   };
-  await Promise.all([worker(), worker(), worker(), worker()]);
+  // one at a time on Windows: there a hook's pane lookup runs the `#!` tmux stand-in through MSYS2's bash, and four at
+  // once on a loaded box outran its 2 s bound (no session, nothing decided: measured, Task 9b gate round)
+  await Promise.all(Array.from({ length: process.platform === 'win32' ? 1 : 4 }, () => worker()));
   return out;
 };
 
@@ -128,13 +136,13 @@ describe('the prune deny refuses a repo-wide git worktree prune on every session
         expect(reason, MUST_DENY[i]).toContain('`git commit -F <file>`');
         expect(reason, MUST_DENY[i]).toContain('`gh pr create --body-file <file>`');
       }
-    }, 120_000);
+    }, scaled(120_000));   // every listed command one hook run after another: on Windows a run costs most of a second
 
     it(`every must-allow command passes on ${caller}`, async () => {
       const got = await fireMany(id, extra, MUST_ALLOW);
       const denied = MUST_ALLOW.flatMap((c, i) => (got[i] === null ? [] : [`${c}: ${got[i]}`]));
       expect(denied, 'denied, but on the must-allow list').toEqual([]);
-    }, 120_000);
+    }, scaled(120_000));   // every listed command one hook run after another: on Windows a run costs most of a second
   }
 
   it('a deny already set is never replaced: an admin merge that also prunes keeps the merge reason', () => {
@@ -269,7 +277,9 @@ describe('the cost measure is the work a run did, not the time it waited (D-8334
 // The coordinator's FD8 ruling accepts fixed jq startup cost but pins both historical cost and doubling-size scaling;
 // it does not permit an amortized stream comparison. The CI follow-up uses 32/64 KB only for quotes/deny, whose
 // inherited normalization otherwise outlives its case.
-describe('the forbidden program\'s cost on quote-dense payloads naming worktree and prune', () => {
+// Bash-only by nature: it runs the bash hook's own jq program; its Go twin is the golden corpus in
+// core/internal/domain/attention (TestGuardCostBound), so a go-only run skips it.
+describe.skipIf(HOOK_ONLY_GO)('the forbidden program\'s cost on quote-dense payloads naming worktree and prune', () => {
   const extract = (src: string): string => (/^APPROVAL_FORBIDDEN_JQ='([^']*)'$/m.exec(src) ?? [])[1] ?? '';
   const prog = extract(fs.readFileSync(HOOK, 'utf8'));
   const BASELINE_FIXTURE = path.join(FIX, 'forbidden-jq-33e521e07.jq');

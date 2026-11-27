@@ -84,6 +84,17 @@
 # environment variable and no argument names it. It is the same trust surface as the body: PATH, and the hashing
 # tool it selects, are trusted prerequisites.
 #
+# THE GO CORE (spec 2026-11-24 §4). A verb the rendered core table lists starts
+# `<home>/.local/libexec/ccrc/core/ccrc-core[.exe] ccd <argv>` instead of the body: never a protected argv, never with
+# `~/.cc-sessions/ccd-go-off` empty, unreadable, naming the verb on a line of its own or holding a line that is no verb
+# word (the operator's way back to bash), never with a `ccd-go-off` that is not a regular file (a link, a directory or
+# a FIFO), and only once the one binary the table lists matches its digest (refused `entry-core-digest` or
+# `entry-core-unreadable` otherwise). Once a verb routes to the core nothing falls back to bash: a failing Go run fails
+# with its own code. The installer renders only this platform's go-mode verbs (ccd-entry-install.py, THE GO CORE), so
+# this file never asks which platform it is on. The core starts with the caller's environment unchanged, as an
+# ordinary bash start does: a Go binary loads no code from its environment. The digest detects a half-published or
+# mismatched core, as the body's does; like the body's, it authenticates nothing.
+#
 # STANDARD LIBRARY ONLY, and the shebang's `-IS` is load-bearing: isolated mode
 # ignores every PYTHON* variable, user site-packages and the current directory,
 # and `-S` imports no `site` (so no `sitecustomize` either). No bytecode is
@@ -94,16 +105,28 @@ sys.dont_write_bytecode = True
 
 import hashlib  # noqa: E402
 import hmac  # noqa: E402
+import json  # noqa: E402
 import os  # noqa: E402
+import re  # noqa: E402
 import select  # noqa: E402
+import signal  # noqa: E402
 import stat  # noqa: E402
 import subprocess  # noqa: E402
 import time  # noqa: E402
 
 BODY_SHA256 = '@CCRC_CCD_SHA256@'
+CORE_JSON = '@CCRC_CORE_JSON@'
 
 ENTRY_SUFFIX = '/.local/bin/ccd'
 BODY_SUFFIX = '/.local/libexec/ccrc/ccd'
+TIMING_MARKER = '/.cc-sessions/ccd-entry-timing'
+TIMING_LOG = '/.ccrc/ccd-entry-timing.log'
+TIMING_LOG_MAX = 16 << 20
+TIMING_NEVER = ('supervise',)   # the long-lived claude-session@ payload: always exec'd, never waited on
+VERB_WORD = re.compile(r'^[a-z][a-z0-9-]{0,40}$')
+CORE_SUFFIX = '/.local/libexec/ccrc/core'
+CORE_OFF = '/.cc-sessions/ccd-go-off'
+CORE_OFF_STRIP = ' \t\r\n\v\f\x00\ufffd'
 
 # The launcher's own refusal: one stable class word per condition, on stderr as
 # `ccd: refused (entry-<class>): …`, and this exit status. Nothing ran.
@@ -138,6 +161,8 @@ FUNC_PREFIX = b'BASH_FUNC_'
 # The one argv this file answers itself instead of passing to ccd: the
 # installer's pre-publication self-test. No ccd verb is spelled like it.
 SELFTEST_ARGV = '--ccrc-entry-self-test'
+# The other one: the session-hook installer's question, which command registers the hook (THE GO CORE, HOOK MODE below).
+HOOK_MODE_ARGV = '--ccrc-entry-hook-mode'
 
 PROBE_TIMEOUT_S = 10.0
 PROBE_MAX_BYTES = 256
@@ -258,6 +283,69 @@ def check_body(body):
                ' update is incomplete; re-run ccrc update (or ccrc install)' % body)
 
 
+def core_table():
+    # The verbs this box starts on the core, and the one binary that starts them, by its name under CORE_SUFFIX.
+    try:
+        t = json.loads(CORE_JSON)
+        verbs, files, hook = tuple(t['verbs']), dict(t['files']), t.get('hook') == 'go'
+    except (ValueError, KeyError, TypeError):
+        refuse('unrendered', 'this launcher carries no rendered core table — it is the template, not an install')
+    if (verbs or hook) and len(files) != 1:
+        refuse('unrendered', 'this launcher\'s core table lists verbs but not exactly one core binary to start them')
+    return verbs, files, hook
+
+
+def core_off(home, verb):
+    # Windows PowerShell 5.1 writes UTF-8 with a BOM, or UTF-16, by default: `utf-8-sig` drops the BOM, and a line that
+    # is still not one verb word (a UTF-16 line reads as letters between NULs) turns every verb off — the safe answer
+    # is bash, as it is for an empty or unreadable file. Its type first, as check_body asks it: a FIFO, a directory or
+    # a link is no switch file this launcher reads, and opening a FIFO could block the start, so each means bash.
+    p = home + CORE_OFF
+    try:
+        if not stat.S_ISREG(os.lstat(p).st_mode):
+            return True
+        fd = os.open(p, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_CLOEXEC', 0)
+                     | getattr(os, 'O_NONBLOCK', 0))
+        with os.fdopen(fd, 'rb') as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                return True
+            lines = [x.strip(CORE_OFF_STRIP) for x in f.read().decode('utf-8-sig', 'replace').splitlines()]
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True   # unreadable: the safe answer is bash
+    lines = [x for x in lines if x]
+    return not lines or any(not VERB_WORD.match(x) for x in lines) or verb in lines
+
+
+def check_core(root, files):
+    """The path of the one core binary the table lists, once its bytes match the digest rendered beside its name."""
+    ((name, want),) = files.items()
+    p = root + '/' + name
+    try:
+        # Its type first, as check_body asks it: a FIFO or a device opened for reading could block the start.
+        if not stat.S_ISREG(os.lstat(p).st_mode):
+            refuse('core-digest', '%s is not a regular file (a link, a FIFO or a device is never run)' % p)
+        fd = os.open(p, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_CLOEXEC', 0)
+                     | getattr(os, 'O_NONBLOCK', 0))
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                refuse('core-digest', '%s is not a regular file' % p)
+            d = hashlib.sha256()
+            while True:
+                chunk = os.read(fd, 1 << 16)
+                if not chunk:
+                    break
+                d.update(chunk)
+        finally:
+            os.close(fd)
+    except OSError as e:
+        refuse('core-unreadable', 'the core binary %s could not be read: %s' % (p, e.strerror))
+    if not hmac.compare_digest(d.hexdigest(), want):
+        refuse('core-digest', 'the core binary %s is not the one this launcher was rendered for — re-run ccrc update' % p)
+    return p
+
+
 def startup_free_env():
     return {k: v for k, v in os.environb.items() if k not in STARTUP_VARS and not k.startswith(FUNC_PREFIX)}
 
@@ -323,6 +411,33 @@ def select_bash(privileged, env):
     return None
 
 
+def start(path, argv, env, home, verb):
+    # Timing (spec 2026-11-22 §5, kept for the Go core): with the hand-touched marker, wait for the payload and log one
+    # line; without it, exec exactly as before.
+    if verb in TIMING_NEVER or not os.path.exists(home + TIMING_MARKER):
+        os.execve(path, argv, env)
+    t0 = time.monotonic()
+    child = subprocess.Popen(argv, executable=path, env=env, close_fds=True,
+                             restore_signals=False)  # keep SIGPIPE/SIGXFSZ ignored, as os.execve does
+    for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(s, lambda n, _f: child.send_signal(n))
+    rc = child.wait()
+    rc = 128 - rc if rc < 0 else rc
+    ms = int((time.monotonic() - t0) * 1000)
+    word = verb if verb is not None and VERB_WORD.match(verb) else '-'
+    try:
+        p = home + TIMING_LOG
+        if not os.path.exists(p) or os.path.getsize(p) < TIMING_LOG_MAX:
+            fd = os.open(p, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+            try:
+                os.write(fd, ('%d\t%s\t%d\t%d\n' % (int(time.time() * 1000), word, ms, rc)).encode('ascii'))
+            finally:
+                os.close(fd)
+    except OSError:
+        pass
+    os._exit(rc)
+
+
 def main():
     argv = sys.argv[1:]
     body = body_path()
@@ -335,7 +450,26 @@ def main():
         sys.stdout.write('ccd-entry-self-test %d %d %d %d %d\n'
                          % (sys.version_info[0], f.isolated, f.ignore_environment, f.no_user_site, f.no_site))
         return
+    home = body[:-len(BODY_SUFFIX)]
+    if argv == [HOOK_MODE_ARGV]:
+        # HOOK MODE: the hook is started by Claude Code from settings.json, never through this launcher, so the table's
+        # `hook` row is not a verb here (core_table's `verbs` never lists it); the installer asks this one question, once
+        # per run, and registers the core's command only on `go`. `go` needs the table's word, no `hook` line in
+        # `ccd-go-off` (the operator's way back, as for a verb) and the one binary matching its digest; anything else
+        # answers `bash`, which is the hook every box ran before the core.
+        _verbs, files, hook = core_table()
+        if hook and not core_off(home, 'hook'):
+            check_core(home + CORE_SUFFIX, files)
+            sys.stdout.write('go\n')
+        else:
+            sys.stdout.write('bash\n')
+        return
     protected = is_protected(argv)
+    verbs, files, _hook = core_table()
+    if argv and argv[0] in verbs and not protected and not core_off(home, argv[0]):
+        # The caller's environment, unchanged (THE GO CORE above), and no fall-through: the core answers for itself.
+        core = check_core(home + CORE_SUFFIX, files)
+        start(core, [core, 'ccd'] + argv, os.environb, home, argv[0])
     # `os.environb` already carries Python's PEP 538 locale coercion: under a C
     # or POSIX LC_CTYPE, isolated-mode Python sets LC_CTYPE to a UTF-8 locale
     # before this file runs, so every start below inherits it; on Darwin it
@@ -346,7 +480,7 @@ def main():
     if bash is None:
         refuse('no-bash', 'no bash on PATH proved Bash >= 4.4%s — ccd was not started'
                % (' in privileged mode (-p)' if protected else ''))
-    os.execve(bash, [bash] + (['-p'] if protected else []) + ['--', body] + argv, env)
+    start(bash, [bash] + (['-p'] if protected else []) + ['--', body] + argv, env, home, argv[0] if argv else None)
 
 
 if __name__ == '__main__':

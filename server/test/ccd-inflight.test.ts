@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { makeCcdHarness, ccdSource, CCD, ghContainedEnv, harnessBin, type CcdHarness } from './ccdWsHelpers.js';
 import { spawnSyncGroup } from './spawnGroup.js';
+import { IMPLS, runGoHook } from './hookTwin.js';
 
 const REPO = path.resolve(__dirname, '../..');
 const ID = 'lane-a-project-a';
@@ -283,7 +284,7 @@ describe('the manifest writer: the listed file', () => {
     expect(p.head['unread']).toBe('1');
   });
 
-  it('the compacted record ends in a newline: the real hook\'s next append is a line of its own, and every line parses', () => {
+  it.each(IMPLS)('the compacted record ends in a newline: the real hook (%s) appends a line of its own next, and every line parses', (impl) => {
     seed();
     fs.appendFileSync(reg(`${ID}.deleg`), '{"v":1,"t":1,"k":"drop","why":"id"}\n');
     write('swap');
@@ -303,7 +304,8 @@ describe('the manifest writer: the listed file', () => {
     delete env['OSTYPE'];
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const before = (readOr(answered) ?? '').length;
-      const r = spawnSyncGroup('bash', [path.join(REPO, 'ccd', 'session-hook.sh')], { input: JSON.stringify(payload), encoding: 'utf8', env, timeout: 120_000 });
+      const r = impl === 'go' ? runGoHook(h.home, payload, env)
+        : spawnSyncGroup('bash', [path.join(REPO, 'ccd', 'session-hook.sh')], { input: JSON.stringify(payload), encoding: 'utf8', env, timeout: 120_000 });
       expect(r.status).toBe(0);
       if ((readOr(answered) ?? '').length > before) break;
     }

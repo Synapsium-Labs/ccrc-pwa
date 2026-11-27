@@ -17,9 +17,12 @@
 import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
+import { scaled } from './timeScale.js';   // the whole-hook bounds scale with the box (CCRC_TIME_SCALE): on Windows process starts cost seconds under load
 import { waveLifecycleText } from './waveLifecycle.js';
+import { HOOK_ONLY_GO, hookBoth, recordGuard } from './hookTwin.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 const GENERATION = '0189abcd-1234-5678-9abc-0123456789ab';
@@ -59,12 +62,10 @@ const sized = (unit: string, tail: string, bytes: number): string =>
  *  fixture HOME unless a case names another). Exit 0 and a silent stderr
  *  are the hook's standing contract, asserted on every call. */
 const bash = (command: string, nulStderr = false, cwd: string = home): { deny: string | null; stdout: string } => {
-  const r = spawnSync('bash', [HOOK], {
-    input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, cwd }),
-    encoding: 'utf8',
-    env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION },
-  });
+  // the Go core and the bash, from the same fixture, must answer the same (Go core wave 2, Task 5)
+  const r = hookBoth(home, JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, cwd }),
+    { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
+      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION });
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
   // A NUL in the command makes bash warn on stderr when a read of the payload decodes it: the
   // graph-search read (a payload matching rg|grep|ag|ack|find|fd) and the merge arm (a payload
@@ -215,13 +216,10 @@ describe('the worker merge deny', () => {
     fs.writeFileSync(path.join(tree, 'graphify-out', 'graph.json'),
       `{\n  "hyperedges": [],\n  "built_at_commit": "${git('rev-parse', 'HEAD')}"\n}\n`);
     fs.writeFileSync(path.join(tree, 'graphify-out', '.graphify_engine'), '0.9.9\n');
-    const r = spawnSync('bash', [HOOK], {
-      input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash',
-        tool_input: { command: 'rg assembleFleet src && gh pr merge 42' }, cwd: tree }),
-      encoding: 'utf8',
-      env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-        TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION },
-    });
+    const r = hookBoth(home, JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash',
+      tool_input: { command: 'rg assembleFleet src && gh pr merge 42' }, cwd: tree }),
+    { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
+      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION });
     expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
     expect(r.stdout.trim(), 'the gate did not fire — this case went blind').not.toBe('');
     const reason = String(JSON.parse(r.stdout.trim()).hookSpecificOutput.permissionDecisionReason);
@@ -263,11 +261,11 @@ describe('the worker merge deny', () => {
     for (const u of [...units, '<<a\n']) {
       const c = sized(u, '\necho merge origin', CAP);
       expect(Buffer.byteLength(c)).toBe(CAP);
-      const t0 = Date.now();
+      const t0 = performance.now();
       const r = bash(c);
-      const ms = Date.now() - t0;
+      const ms = performance.now() - t0;
       expect(r.deny, `a non-merge was denied: ${JSON.stringify(u)}`).toBeNull();
-      expect(ms, `the hook took ${ms} ms on ${JSON.stringify(u)}`).toBeLessThan(1500);
+      expect(ms, `the hook took ${ms} ms on ${JSON.stringify(u)}`).toBeLessThan(scaled(1500));
     }
   }, 60000);
 
@@ -290,11 +288,11 @@ describe('the worker merge deny', () => {
       const tail = `${end}echo merge origin`;
       const c = pre + u.repeat(Math.floor((CAP - pre.length - tail.length) / u.length)) + tail;
       expect(Buffer.byteLength(c)).toBeLessThanOrEqual(CAP);
-      const t0 = Date.now();
+      const t0 = performance.now();
       const r = bash(c);
-      const ms = Date.now() - t0;
+      const ms = performance.now() - t0;
       expect(r.deny, `a non-merge was denied: ${JSON.stringify(u + end)}`).toBeNull();
-      expect(ms, `the hook took ${ms} ms on ${JSON.stringify(u + end)}`).toBeLessThan(1500);
+      expect(ms, `the hook took ${ms} ms on ${JSON.stringify(u + end)}`).toBeLessThan(scaled(1500));
     }
   }, 60000);
 
@@ -472,11 +470,11 @@ describe('the worker merge deny', () => {
       hold(WAVE_HOLD);
       const c = sized(unit, '', 100000);
       expect(Buffer.byteLength(c)).toBe(100000);
-      const t0 = Date.now();
+      const t0 = performance.now();
       const r = bash(c);
-      const ms = Date.now() - t0;
+      const ms = performance.now() - t0;
       expect(r.deny, `a non-merge was denied: ${JSON.stringify(unit)}`).toBeNull();
-      expect(ms, `the hook took ${ms} ms on 100 KB of ${JSON.stringify(unit)}`).toBeLessThan(1500);
+      expect(ms, `the hook took ${ms} ms on 100 KB of ${JSON.stringify(unit)}`).toBeLessThan(scaled(1500));
     }, 60000);
 
     it('refuses only where the deny applies: a session with no wave hold and no marker is never asked the wave-2 question', () => {
@@ -539,11 +537,11 @@ describe('the worker merge deny', () => {
       hold(WAVE_HOLD);
       for (const [unit, tail, denied] of [['"$(<)"', '\ngh pr merge 42', true], ['"', '\necho merge origin', false]] as const) {
         const c = sized(unit, tail, 36000);
-        const t0 = Date.now();
+        const t0 = performance.now();
         const r = bash(c);
-        const ms = Date.now() - t0;
+        const ms = performance.now() - t0;
         expect(r.deny !== null, `${JSON.stringify(unit)}: denied ${r.deny !== null}`).toBe(denied);
-        expect(ms, `the hook took ${ms} ms on 36 KB of ${JSON.stringify(unit)}`).toBeLessThan(1500);
+        expect(ms, `the hook took ${ms} ms on 36 KB of ${JSON.stringify(unit)}`).toBeLessThan(scaled(1500));
       }
     }, 60000);
   });
@@ -702,7 +700,12 @@ const stripProgram = (): string => {
 };
 /** One direct run of `MERGE_STRIP_JQ` over a Bash command: the answer line, without jq's newline. */
 const strip = (command: string): string => {
-  const r = spawnSync('jq', ['-r', '--arg', 'q', "'", '--argjson', 'cap', String(CAP), '--arg', 'allow', allowRe(), stripProgram()], {
+  recordGuard(JSON.stringify({ tool_name: 'Bash', tool_input: { command } }));
+  // the program from a file: on Windows a native caller's argv reaches MSYS2's jq re-parsed, and the program's quotes and
+  // backslashes did not survive it (jq then echoed its input; Task 9b gate round)
+  const prog = path.join(os.tmpdir(), `ccrc-merge-strip-${process.pid}.jq`);
+  if (!fs.existsSync(prog)) fs.writeFileSync(prog, stripProgram());
+  const r = spawnSync('jq', ['-r', '--arg', 'q', "'", '--argjson', 'cap', String(CAP), '--arg', 'allow', allowRe(), '-f', prog], {
     input: JSON.stringify({ tool_name: 'Bash', tool_input: { command } }), encoding: 'utf8',
   });
   expect(r.status, `jq failed: ${r.stderr}`).toBe(0);
@@ -768,9 +771,9 @@ const verdictBlock = (): string => {
 
 /** `bash()` with the wall time of the call. */
 const timed = (command: string): { deny: string | null; ms: number } => {
-  const t0 = Date.now();
+  const t0 = performance.now();
   const r = bash(command);
-  return { deny: r.deny, ms: Date.now() - t0 };
+  return { deny: r.deny, ms: performance.now() - t0 };
 };
 
 describe('the bypass deny (wave 2b)', () => {
@@ -856,8 +859,9 @@ describe('the bypass deny (wave 2b)', () => {
   it('LISTED pass: a flag word broken by quoting is not the word --admin in the raw text', () => {
     expect(bash("gh pr merge 42 --adm''in").deny, 'the listed pass was refused: update the hook header\'s list').toBeNull();
   });
-
-  it('the answer format: =<flags><US><stripped> under the cap, !<bytes>:<kinds> over it', () => {
+  // bash-only in part: it runs the bash hook's MERGE_STRIP_JQ (or counts its jq forks) directly; its Go twin is
+  // TestMergeStripGolden, so a go-only run skips it (both modes on the Linux bench)
+  it.skipIf(HOOK_ONLY_GO)('the answer format: =<flags><US><stripped> under the cap, !<bytes>:<kinds> over it', () => {
     expect(strip('gh pr merge 42 --auto')).toBe(`=${US}gh pr merge 42 --auto`);
     expect(strip('gh pr merge 42 --admin')).toBe(`=as${US}gh pr merge 42 --admin`);
     const longAdmin = over('gh pr merge 42 --admin');
@@ -869,8 +873,9 @@ describe('the bypass deny (wave 2b)', () => {
     // The stripped text still removes the quoted --admin, while the flag reads the raw text.
     expect(strip("gh pr merge 42 '--admin'")).toBe(`=a${US}gh pr merge 42 `);
   });
-
-  it('the allowance flag s: set for exactly one admin merge of a PR named by number, unset for every other spelling', () => {
+  // bash-only in part: it runs the bash hook's MERGE_STRIP_JQ (or counts its jq forks) directly; its Go twin is
+  // TestMergeStripGolden, so a go-only run skips it (both modes on the Linux bench)
+  it.skipIf(HOOK_ONLY_GO)('the allowance flag s: set for exactly one admin merge of a PR named by number, unset for every other spelling', () => {
     for (const c of S_SET) expect(flagsOf(c), `s not set: ${JSON.stringify(c)}`).toContain('s');
     for (const c of S_UNSET) {
       const f = flagsOf(c);
@@ -1085,7 +1090,9 @@ describe('the bypass deny (wave 2b)', () => {
     // (the arm's prefilter reads the payload as JSON text, so a word broken inside `enqueue…` skips the arm: LISTED below).
     const BROKEN: Array<[string, string]> = [['merge', 'PullRequest'], ['merge', 'Branch'], ['enablePullRequestAuto', 'Merge']];
     const IN_WORD = ['""', "''", '\\'];
-    it('refuses a mutation word broken by adjacent quotes or a backslash, under the cap and over it', () => {
+    // bash-only in part: it runs the bash hook's MERGE_STRIP_JQ (or counts its jq forks) directly; its Go twin is
+    // TestMergeStripGolden, so a go-only run skips it (both modes on the Linux bench)
+    it.skipIf(HOOK_ONLY_GO)('refuses a mutation word broken by adjacent quotes or a backslash, under the cap and over it', () => {
       const cases: string[] = [
         'gh api graphql -f query="mutation { merge""PullRequest(input: {pullRequestId: 1}) { clientMutationId } }"',
         'gh api graphql -f query="mutation { merge"\'PullRequest\'"(input: {pullRequestId: 1}) { clientMutationId } }"',
@@ -1105,7 +1112,9 @@ describe('the bypass deny (wave 2b)', () => {
     });
 
     // I2: a path segment runs to the next `/` or separator, so a `$(…)` operand is read as part of the path.
-    it('refuses a path whose number is a command substitution', () => {
+    // bash-only in part: it runs the bash hook's MERGE_STRIP_JQ (or counts its jq forks) directly; its Go twin is
+    // TestMergeStripGolden, so a go-only run skips it (both modes on the Linux bench)
+    it.skipIf(HOOK_ONLY_GO)('refuses a path whose number is a command substitution', () => {
       for (const c of [
         'gh api -X PUT repos/o/r/pulls/$(gh pr view --json number -q .number)/merge',
         'gh api -X PUT repos/o/r/pulls/$(echo 42)/merge',
@@ -1137,7 +1146,9 @@ describe('the bypass deny (wave 2b)', () => {
 
     // M3: a backslash in the word or the path is dropped like a quote, once the payload wakes the arm
     // (`-f merge_method=squash` holds the `merge` the payload needs).
-    it('refuses a path broken by a backslash, under the cap and over it', () => {
+    // bash-only in part: it runs the bash hook's MERGE_STRIP_JQ (or counts its jq forks) directly; its Go twin is
+    // TestMergeStripGolden, so a go-only run skips it (both modes on the Linux bench)
+    it.skipIf(HOOK_ONLY_GO)('refuses a path broken by a backslash, under the cap and over it', () => {
       const c = 'gh api -X PUT repos/o/r/pulls/42/m\\erge -f merge_method=squash';
       expect(flagsOf(c)).toContain('p');
       expect(bash(c).deny).not.toBeNull();
@@ -1153,7 +1164,7 @@ describe('the bypass deny (wave 2b)', () => {
         expect(Buffer.byteLength(c)).toBe(CAP);
         const r = timed(c);
         expect(r.deny, `a non-merge was denied: ${JSON.stringify(unit)}`).toBeNull();
-        expect(r.ms, `the hook took ${r.ms} ms on ${JSON.stringify(unit)}`).toBeLessThan(1500);
+        expect(r.ms, `the hook took ${r.ms} ms on ${JSON.stringify(unit)}`).toBeLessThan(scaled(1500));
       }
     }, 60000);
 
@@ -1318,8 +1329,9 @@ describe('the bypass deny (wave 2b)', () => {
       expect(verdicts(yes), `matched: ${yes.join(' | ')}`).toEqual(yes.map(() => true));
       expect(verdicts(no), `matched: ${no.join(' | ')}`).toEqual(no.map(() => false));
     });
-
-    it('answers the api flags from the raw text: `w` for a mutation word, `p` for a path with its quotes removed', () => {
+    // bash-only in part: it runs the bash hook's MERGE_STRIP_JQ (or counts its jq forks) directly; its Go twin is
+    // TestMergeStripGolden, so a go-only run skips it (both modes on the Linux bench)
+    it.skipIf(HOOK_ONLY_GO)('answers the api flags from the raw text: `w` for a mutation word, `p` for a path with its quotes removed', () => {
       expect(flagsOf('gh api graphql -f query=\'mutation { mergeBranch }\'')).toContain('w');
       expect(flagsOf('gh api -X PUT repos/o/r/pulls/42/merge')).toContain('p');
       expect(flagsOf('gh api --method PUT "repos/{owner}/{repo}/pulls/42/merge"'), 'the path is read from the raw text, quotes removed').toContain('p');
@@ -1332,7 +1344,9 @@ describe('the bypass deny (wave 2b)', () => {
 
   describe('over the cap, the gh api kind', () => {
     const pad = (n: number): string => sized('pad ', '', n);
-    it('refuses an over-cap REST merge call, answering inside the existing bound', () => {
+    // bash-only in part: it runs the bash hook's MERGE_STRIP_JQ (or counts its jq forks) directly; its Go twin is
+    // TestMergeStripGolden, so a go-only run skips it (both modes on the Linux bench)
+    it.skipIf(HOOK_ONLY_GO)('refuses an over-cap REST merge call, answering inside the existing bound', () => {
       const c = over('gh api -X PUT repos/o/r/pulls/42/merge');
       expect(strip(c)).toBe(`!${Buffer.byteLength(c)}:api`);
       const r = timed(c);
@@ -1341,7 +1355,7 @@ describe('the bypass deny (wave 2b)', () => {
       expect(r.deny).toContain(`${Buffer.byteLength(c)} bytes`);
       expect(r.deny).toContain(`${CAP}-byte parse cap`);
       expect(r.deny).toContain('cannot tell prose from a command');
-      expect(r.ms, `the hook took ${r.ms} ms`).toBeLessThan(1500);
+      expect(r.ms, `the hook took ${r.ms} ms`).toBeLessThan(scaled(1500));
     });
 
     it('refuses an over-cap heredoc body that names a mutation, and an over-cap multi-line -f query', () => {
@@ -1353,12 +1367,13 @@ describe('the bypass deny (wave 2b)', () => {
           const r = timed(c);
           expect(r.deny, `an over-cap ${word} went through: ${JSON.stringify(c.slice(0, 60))}`).not.toBeNull();
           expect(r.deny).toContain('parse cap');
-          expect(r.ms, `the hook took ${r.ms} ms`).toBeLessThan(1500);
+          expect(r.ms, `the hook took ${r.ms} ms`).toBeLessThan(scaled(1500));
         }
       }
     });
-
-    it('refuses an over-cap --raw-field mutation, naming the api kind (wave 2b fix round 1)', () => {
+    // bash-only in part: it runs the bash hook's MERGE_STRIP_JQ (or counts its jq forks) directly; its Go twin is
+    // TestMergeStripGolden, so a go-only run skips it (both modes on the Linux bench)
+    it.skipIf(HOOK_ONLY_GO)('refuses an over-cap --raw-field mutation, naming the api kind (wave 2b fix round 1)', () => {
       const c = over(`gh api graphql --raw-field query='mutation { mergePullRequest(input: {pullRequestId: "x"}) { clientMutationId } }'`);
       expect(strip(c)).toBe(`!${Buffer.byteLength(c)}:api`);
       const d = bash(c).deny;
@@ -1398,7 +1413,7 @@ describe('the bypass deny (wave 2b)', () => {
         const c = sized(unit, tail, 100000);
         const r = timed(c);
         expect(r.deny !== null, `${JSON.stringify(unit)}: denied ${r.deny !== null}`).toBe(denied);
-        expect(r.ms, `the hook took ${r.ms} ms on 100 KB of ${JSON.stringify(unit)}`).toBeLessThan(1500);
+        expect(r.ms, `the hook took ${r.ms} ms on 100 KB of ${JSON.stringify(unit)}`).toBeLessThan(scaled(1500));
       }
     }, 60000);
 
@@ -1458,12 +1473,9 @@ describe('the bypass deny (wave 2b)', () => {
       fs.writeFileSync(path.join(tree, 'graphify-out', 'graph.json'),
         `{\n  "hyperedges": [],\n  "built_at_commit": "${git('rev-parse', 'HEAD')}"\n}\n`);
       fs.writeFileSync(path.join(tree, 'graphify-out', '.graphify_engine'), '0.9.9\n');
-      const r = spawnSync('bash', [HOOK], {
-        input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, cwd: tree }),
-        encoding: 'utf8',
-        env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-          TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION },
-      });
+      const r = hookBoth(home, JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, cwd: tree }),
+        { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
+          TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION });
       expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
       expect(r.stdout.trim(), 'the gate did not fire — this case went blind').not.toBe('');
       const reason = String(JSON.parse(r.stdout.trim()).hookSpecificOutput.permissionDecisionReason);
@@ -1485,8 +1497,9 @@ describe('the bypass deny (wave 2b)', () => {
       return fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n').filter((l) => l !== '') : [];
     };
     const lines = (c: string): string[] => { fs.rmSync(path.join(home, 'jq.calls'), { force: true }); bash(c); return calls(); };
-
-    it('one strip per payload: a merge command costs exactly one more jq than the same command with its trigger words replaced, and it carries --argjson cap', () => {
+    // bash-only in part: it runs the bash hook's MERGE_STRIP_JQ (or counts its jq forks) directly; its Go twin is
+    // TestMergeStripGolden, so a go-only run skips it (both modes on the Linux bench)
+    it.skipIf(HOOK_ONLY_GO)('one strip per payload: a merge command costs exactly one more jq than the same command with its trigger words replaced, and it carries --argjson cap', () => {
       countJq();
       bash('echo warm'); // the first call in a fresh HOME does one-time work of its own
       // The coordinator's landing: it is not denied, so no deny envelope (which costs its own jq) is built.
@@ -1499,8 +1512,9 @@ describe('the bypass deny (wave 2b)', () => {
       expect(without.filter((l) => l.includes('--argjson cap'))).toHaveLength(0);
       expect(withMerge.filter((l) => l.includes('--arg allow')), 'the allowance grammar rides the same call').toHaveLength(1);
     });
-
-    it('the prefilter also lets `Merge` and `enqueuePullRequest` reach the strip, and nothing else does', () => {
+    // bash-only in part: it runs the bash hook's MERGE_STRIP_JQ (or counts its jq forks) directly; its Go twin is
+    // TestMergeStripGolden, so a go-only run skips it (both modes on the Linux bench)
+    it.skipIf(HOOK_ONLY_GO)('the prefilter also lets `Merge` and `enqueuePullRequest` reach the strip, and nothing else does', () => {
       countJq();
       bash('echo warm');
       expect(lines('echo Merge').length - lines('echo Marge').length, 'a capitalised Merge').toBe(1);
@@ -1828,7 +1842,9 @@ describe('every jq `as $name` binding in the hook is parenthesised on its own (j
 // on the strip's answer for every spelling and mention above, `ccd/lib/mail-hold.jq` finds `gh pr merge` exactly where
 // GH_MERGE_RE does. Both read the same stripped text, made by the hook's own MERGE_STRIP_JQ with its own arguments.
 describe('the mail hold\'s head grammar finds `gh pr merge` where GH_MERGE_RE does, and only there', () => {
-  it('on every SPELLING and MENTION', () => {
+  // bash-only in part: it runs the bash hook's MERGE_STRIP_JQ (or counts its jq forks) directly; its Go twin is
+  // TestMergeStripGolden, so a go-only run skips it (both modes on the Linux bench)
+  it.skipIf(HOOK_ONLY_GO)('on every SPELLING and MENTION', () => {
     const hookText = fs.readFileSync(HOOK, 'utf8');
     const strip = (/^MERGE_STRIP_JQ='([\s\S]*?)'$/m.exec(hookText) ?? [])[1] ?? '';
     const allow = (/^ALLOW_ADMIN_RE='(.*)'$/m.exec(hookText) ?? [])[1] ?? '';
@@ -1836,6 +1852,7 @@ describe('the mail hold\'s head grammar finds `gh pr merge` where GH_MERGE_RE do
     expect(strip !== '' && allow !== '' && ghRe !== '', 'the three definitions are read from the hook').toBe(true);
     const corpus = [...SPELLINGS, ...MENTIONS];
     const stripped = corpus.map((command) => {
+      recordGuard(JSON.stringify({ tool_name: 'Bash', tool_input: { command } }));
       const r = spawnSync('jq', ['-r', '--arg', 'q', "'", '--argjson', 'cap', String(CAP), '--arg', 'allow', allow, strip],
         { input: JSON.stringify({ tool_name: 'Bash', tool_input: { command } }), encoding: 'utf8' });
       expect(r.status, r.stderr).toBe(0);

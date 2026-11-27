@@ -15,6 +15,8 @@ import { mkTmp } from './tmpHelpers.js';
 import { readTurnMarkMeasured } from '../src/turnmark.js';
 import { stallOrphanDCandidate } from '../src/coord/stall.js';
 import { localIO } from '../src/io.js';
+import { HOOK_ONLY_GO, IMPLS, hookArgv, runHook, type Impl } from './hookTwin.js';
+import { coreBinary } from './coreBuild.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 
@@ -34,16 +36,32 @@ afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
 const hookEnv = (env: Record<string, string>): NodeJS.ProcessEnv => ({
   ...process.env, HOME: home,
-  PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+  PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
   TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242',
   CCRC_SESSION_GENERATION: GENERATION,
   ...env,
 });
+/** The implementation `run` and `runFull` start (Go core wave 2): bash, unless a describe that runs on both sets it for
+ *  its cases (`bothImpls`). */
+let impl: Impl = 'bash';
+const SESSION_ENV = { TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION };
+const goRun = (payload: object, env: Record<string, string>): { stdout: string; stderr: string } => {
+  const r = runHook({ home, env: (e = {}) => hookEnv(e as Record<string, string>) }, 'go', payload, { ...SESSION_ENV, ...env });
+  expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
+  return { stdout: r.stdout, stderr: r.stderr };
+};
+/** Called first in a `describe.each(IMPLS)` body: its cases run in that implementation. */
+const useImpl = (i: Impl): void => {
+  beforeEach(() => { impl = i; });
+  afterEach(() => { impl = 'bash'; });
+};
 /** The hook's STDOUT; `execFileSync` throws on a non-zero exit. */
 const run = (payload: object, env: Record<string, string> = {}): string =>
-  execFileSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env: hookEnv(env) });
+  impl === 'go' ? goRun(payload, env).stdout
+    : execFileSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env: hookEnv(env) });
 /** `run` plus stderr, with the header contract's exit 0 asserted once, here. */
 const runFull = (payload: object, env: Record<string, string> = {}): { stdout: string; stderr: string } => {
+  if (impl === 'go') return goRun(payload, env);
   const r = spawnSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env: hookEnv(env) });
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
   return { stdout: r.stdout, stderr: r.stderr };
@@ -53,7 +71,8 @@ const stateFile = (): string => path.join(reg(), 'demo-quiet-basin.hookstate.jso
 const readState = (): Record<string, unknown> =>
   JSON.parse(fs.readFileSync(stateFile(), 'utf8')) as Record<string, unknown>;
 
-describe('StopFailure (worker stall watch §5.1)', () => {
+describe.each(IMPLS)('StopFailure (worker stall watch §5.1) (%s)', (i) => {
+  useImpl(i);
   it('prints nothing on either stream and exits 0', () => {
     expect(runFull({ hook_event_name: 'StopFailure', error: 'server_error' })).toEqual({ stdout: '', stderr: '' });
     expect(run({ hook_event_name: 'StopFailure', error: 'rate_limit' })).toBe('');
@@ -80,7 +99,8 @@ describe('StopFailure (worker stall watch §5.1)', () => {
   });
 });
 
-describe('the capture arm (§5.1 first task; capture-arm-keyed-on-hookcap (D-3612))', () => {
+describe.each(IMPLS)('the capture arm (§5.1 first task; capture-arm-keyed-on-hookcap (D-3612)) (%s)', (i) => {
+  useImpl(i);
   const REDUCER = path.resolve(__dirname, '../../deploy/hook-capture-reduce.mjs');
   const capRoot = (): string => path.join(home, '.ccrc', 'hook-capture');
 
@@ -102,7 +122,9 @@ describe('the capture arm (§5.1 first task; capture-arm-keyed-on-hookcap (D-361
     /** The hook under an explicit `umask 022`, so a capture file's 0600 comes
      *  from the arm's own `umask 077` and never from the test process's umask. */
     const runCap = (payload: object, env: Record<string, string> = {}): { stdout: string; stderr: string } => {
-      const r = spawnSync('sh', ['-c', 'umask 022 && exec bash "$0"', HOOK],
+      // in the describe's own implementation (it ran the bash hook in both until Task 9b's gate round)
+      const hook = i === 'go' ? [coreBinary().split(path.sep).join('/'), 'hook'] : ['bash', HOOK];
+      const r = spawnSync('sh', ['-c', 'umask 022 && exec "$@"', 'sh', ...hook],
         { input: JSON.stringify(payload), encoding: 'utf8', env: hookEnv(env) });
       expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
       return { stdout: r.stdout, stderr: r.stderr };
@@ -119,12 +141,12 @@ describe('the capture arm (§5.1 first task; capture-arm-keyed-on-hookcap (D-361
       for (const p of payloads) runCap(p);
       const names = caps();
       expect(names).toHaveLength(payloads.length);
-      expect(fs.statSync(capDir()).mode & 0o777).toBe(0o700);
+      if (process.platform !== 'win32') expect(fs.statSync(capDir()).mode & 0o777).toBe(0o700);   // Windows has no POSIX modes
       for (const p of payloads) {
         const n = names.find((x) => x.startsWith(`${p.hook_event_name}-`));
         expect(n, p.hook_event_name).toMatch(/^[A-Za-z]+-[0-9]+-[0-9]+\.cap$/);
         const file = path.join(capDir(), n as string);
-        expect(fs.statSync(file).mode & 0o777, n).toBe(0o600);
+        if (process.platform !== 'win32') expect(fs.statSync(file).mode & 0o777, n).toBe(0o600);
         const [meta, body, tail, ...more] = fs.readFileSync(file, 'utf8').split('\n');
         expect(meta).toBe('{"envSid":"uuid-1"}');
         expect(JSON.parse(body as string)).toEqual(p);
@@ -154,7 +176,7 @@ describe('the capture arm (§5.1 first task; capture-arm-keyed-on-hookcap (D-361
       expect(fs.readdirSync(capDir()).filter((n) => !n.endsWith('.cap'))).toEqual([]);
     });
 
-    it.skipIf(process.getuid?.() === 0)('an unwritable capture dir costs nothing: silent, exit 0, no file, hookstate still written', () => {
+    it.skipIf(process.getuid?.() === 0 || process.platform === 'win32')('an unwritable capture dir costs nothing: silent, exit 0, no file, hookstate still written', () => {
       fs.mkdirSync(capDir(), { recursive: true, mode: 0o700 });
       fs.chmodSync(capDir(), 0o500);
       try {
@@ -223,7 +245,8 @@ const joined = (): string[] | undefined => idsOf(joinFile());
 const joinedPrev = (): string[] | undefined => idsOf(prevFile());
 const joinedAll = (): string[] => [...(joinedPrev() ?? []), ...(joined() ?? [])];
 
-describe('the turn marker (§5.1)', () => {
+describe.each(IMPLS)('the turn marker (§5.1) (%s)', (i) => {
+  useImpl(i);
   /** A Stop's line with nothing carried: what the writer emits over a foreign or unreadable previous line. */
   const freshStop = (at: number): Record<string, unknown> => ({ v: 1, sessionId: 'uuid-1', state: 'done',
     event: 'Stop', at, turnAt: null, stopAt: at, bg: -1, bgKinds: '', bgIds: '', err: null, restartAt: null,
@@ -487,7 +510,8 @@ describe('the turn marker (§5.1)', () => {
 // A SessionStart other than compact is a new process: the old one's background
 // tasks died with it, so a same-session `done` or `failed` moves bg/bgKinds/bgIds into lost*.
 // compact fires mid-turn and is inert (D-306); clear starts a fresh line.
-describe('the turn marker across a restart (§5.1, SessionStart)', () => {
+describe.each(IMPLS)('the turn marker across a restart (§5.1, SessionStart) (%s)', (i) => {
+  useImpl(i);
   const stopWith = (tasks: Array<{ id?: string; type?: string }>): void => {
     run({ hook_event_name: 'UserPromptSubmit' });
     run({ hook_event_name: 'Stop', background_tasks: tasks });
@@ -645,7 +669,8 @@ describe('the turn marker across a restart (§5.1, SessionStart)', () => {
 // its program is all-or-nothing: a jq without Oniguruma does not refuse a program up front, it fails at the first
 // regex call at RUNTIME, so a program that printed the count first would leave bg N beside empty kinds and ids. The
 // arm emits its three lines only together, and the stand-in below fails the way the real jq does, at runtime.
-describe('the payload parse needs no regex engine', () => {
+// Bash-only by nature: it stubs the bash hook's jq; the Go hook runs no jq on this path (D-TBD-go-hook-no-jq), so a go-only run skips it.
+describe.skipIf(HOOK_ONLY_GO)('the payload parse needs no regex engine', () => {
   /** A jq stand-in for one built without Oniguruma. It RUNS the real jq, with the program prefixed by definitions
    *  that shadow every regex builtin with one that raises, so the program executes up to its first regex call and
    *  then fails with status 5, exactly as the real failure looks (an up-front refusal would hide a program that
@@ -787,7 +812,8 @@ describe('the payload parse needs no regex engine', () => {
 // The writer and the reader agree (F2). The hook fits the kinds list whole-alias-first under 200 bytes, and
 // `readTurnMarkMeasured` refuses anything else as malformed. So a line this hook wrote must read back `ok`, with
 // every kind a whole alias it was sent.
-describe('the turn marker round trip: a hook-written line reads back ok (§5.1)', () => {
+describe.each(IMPLS)('the turn marker round trip: a hook-written line reads back ok (§5.1) (%s)', (i) => {
+  useImpl(i);
   const LETTERS = 'abcdefghijklmnopqrstuvwxyz';
   /** Forty distinct aliases `aa<tail>`…`bn<tail>`, already in the hook's cleaned alphabet and in sorted order. */
   const aliases = (tail: string): string[] =>
@@ -850,7 +876,8 @@ describe('the turn marker round trip: a hook-written line reads back ok (§5.1)'
 // ── SessionEnd (delegation broker wave 1, spec §5.3): registered, captured in a -hookcap
 // session, and otherwise inert — no hookstate, no turn marker, nothing printed. A quitting
 // session must not look like activity to the stall watch (STALL_PLUMBING_EVENTS). ──
-describe('SessionEnd (delegation broker §5.3)', () => {
+describe.each(IMPLS)('SessionEnd (delegation broker §5.3) (%s)', (i) => {
+  useImpl(i);
   const markFile = (id = 'demo-quiet-basin'): string => path.join(reg(), `${id}.turn.json`);
 
   it('prints nothing on either stream and exits 0', () => {
@@ -904,7 +931,8 @@ describe('SessionEnd (delegation broker §5.3)', () => {
 // /compact one) never gives it. `$paid` itself is untouched (the spool gate, the role-skill guard and the wait rules
 // still read "any id"). The join lives in a file of its own, appended with one short write, because hookstate.json is
 // rewritten whole by every event and a join kept there was lost to a concurrent hook (the concurrency rows below).
-describe('only an agent id with a qualifying join is a subagent to the turn marker (delegation broker wave 3)', () => {
+describe.each(IMPLS)('only an agent id with a qualifying join is a subagent to the turn marker (delegation broker wave 3) (%s)', (i) => {
+  useImpl(i);
   const start = (id: unknown, extra: Record<string, unknown> = {}): void => {
     run({ hook_event_name: 'SubagentStart', agent_id: id, agent_type: 'general-purpose', ...extra });
   };
@@ -932,7 +960,7 @@ describe('only an agent id with a qualifying join is a subagent to the turn mark
   };
   /** One hook process, started now: resolves when it exits 0. */
   const runAsync = (payload: object): Promise<void> => new Promise((resolve, reject) => {
-    const child = spawn('bash', [HOOK], { env: hookEnv({}), stdio: ['pipe', 'ignore', 'ignore'] });
+    const child = spawn(...hookArgv(i), { env: hookEnv({}), stdio: ['pipe', 'ignore', 'ignore'] });
     child.on('error', reject);
     child.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`the hook exited ${code}`))));
     child.stdin.end(JSON.stringify(payload));
@@ -1172,7 +1200,8 @@ describe('only an agent id with a qualifying join is a subagent to the turn mark
       expect(joinedPrev(), 'the retry rotated').toHaveLength(132);
     });
 
-    it.skipIf(!hasFlock)('a rotator whose path no longer names its inode skips: the -ef re-check', () => {
+    // bash only: the window is opened by a BASH_ENV shadow of flock(1), which the Go hook (flock(2) in-process) never runs.
+    it.skipIf(!hasFlock || i === 'go')('a rotator whose path no longer names its inode skips: the -ef re-check', () => {
       doneLine();
       plant(130);
       // Between this Start's open and its lock, ANOTHER rotator renamed the file and a new one was started.
@@ -1183,7 +1212,8 @@ describe('only an agent id with a qualifying join is a subagent to the turn mark
       expect(joined(), 'and the new file stays').toEqual(['fresh-1', 'fresh-2']);
     });
 
-    it('without flock the file is never rotated; the read bound then drops the newest ids, which fails toward the main turn', () => {
+    // bash only: "no flock" is a BASH_ENV shadow of `command -v flock`; the Go hook locks with flock(2) and needs no binary.
+    it.skipIf(i === 'go')('without flock the file is never rotated; the read bound then drops the newest ids, which fails toward the main turn', () => {
       doneLine();
       const long = (i: number): string => `n${String(i).padStart(63, '0')}`;
       fs.writeFileSync(joinFile(), `${Array.from({ length: 300 }, (_, i) => long(i)).join('\n')}\n`);
@@ -1226,10 +1256,11 @@ describe('only an agent id with a qualifying join is a subagent to the turn mark
           { hook_event_name: 'SubagentStart', agent_id: 'a-2', agent_type: 'general-purpose' },
           { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'true' }, agent_id: 'a-1' },
         ]) {
-          const t0 = Date.now();
-          const r = spawnSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env: hookEnv({}), timeout: 20_000 });
+          const t0 = performance.now();
+          const r = i === 'go' ? runHook({ home, env: (e = {}) => hookEnv(e as Record<string, string>) }, 'go', payload, SESSION_ENV)
+            : spawnSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env: hookEnv({}), timeout: 20_000 });
           expect(r.status, `${payload.hook_event_name}: exit 0, never blocked`).toBe(0);
-          expect(Date.now() - t0).toBeLessThan(15_000);
+          expect(performance.now() - t0).toBeLessThan(15_000);
         }
         expect(fs.readFileSync(path.join(home, 'elsewhere'), 'utf8'), 'nothing was written through').toBe('a-1\n');
         expect(turnMark().state, 'the event under the id the file seems to hold read as the main thread').toBe('working');
@@ -1245,7 +1276,8 @@ describe('only an agent id with a qualifying join is a subagent to the turn mark
       for (const make of [
         () => fs.mkdirSync(prevFile()),
         () => fs.symlinkSync(path.join(home, 'elsewhere'), prevFile()),
-        () => { execFileSync('mkfifo', [prevFile()]); },
+        // not on Windows: an MSYS2 FIFO is invisible to a native program (D-TBD-go-hook-windows-fifo)
+        ...(process.platform === 'win32' ? [] : [() => { execFileSync('mkfifo', [prevFile()]); }]),
       ]) {
         fs.rmSync(prevFile(), { recursive: true, force: true });
         fs.writeFileSync(joinFile(), `${Array.from({ length: 130 }, (_, i) => `j${i}`).join('\n')}\n`);
@@ -1254,10 +1286,11 @@ describe('only an agent id with a qualifying join is a subagent to the turn mark
           { hook_event_name: 'SubagentStart', agent_id: 'a-2', agent_type: 'general-purpose' },
           { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'true' }, agent_id: 'zz-9' },
         ]) {
-          const t0 = Date.now();
-          const r = spawnSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env: hookEnv({}), timeout: 20_000 });
+          const t0 = performance.now();
+          const r = i === 'go' ? runHook({ home, env: (e = {}) => hookEnv(e as Record<string, string>) }, 'go', payload, SESSION_ENV)
+            : spawnSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env: hookEnv({}), timeout: 20_000 });
           expect(r.status, `${payload.hook_event_name}: exit 0, never blocked`).toBe(0);
-          expect(Date.now() - t0).toBeLessThan(15_000);
+          expect(performance.now() - t0).toBeLessThan(15_000);
         }
         expect(fs.readFileSync(path.join(home, 'elsewhere'), 'utf8'), 'nothing was written through').toBe('zz-9\n');
         expect(joined(), 'the rotation was refused, so the file is whole').toHaveLength(131);
@@ -1268,7 +1301,8 @@ describe('only an agent id with a qualifying join is a subagent to the turn mark
     });
   });
 
-  describe('rotation cannot be turned against a swapped path, and a failed append leaves no orphan (Task 2 review, carried into Task 5)', () => {
+  // bash only: every row opens its window with a BASH_ENV shadow of a builtin or of flock(1), which the Go hook never runs.
+  describe.skipIf(i === 'go')('rotation cannot be turned against a swapped path, and a failed append leaves no orphan (Task 2 review, carried into Task 5)', () => {
     // The rotation checks `jf` (a regular file or nothing, at the top), then opens it on a descriptor, takes `flock -n`, and only
     // then renames: a path that changes after the check is not what `mv -f` should meet. These rows put the change at exactly that
     // point by shadowing `flock` with a shell function (BASH_ENV), so no sleep is involved. GNU `mv -f joined joinedprev` onto a
@@ -1354,7 +1388,8 @@ describe('only an agent id with a qualifying join is a subagent to the turn mark
     });
   });
 
-  describe('no window orphans a join record (the row can be purged while a Start is writing)', () => {
+  // bash only: the purge is placed by a BASH_ENV shadow, which the Go hook never runs.
+  describe.skipIf(i === 'go')('no window orphans a join record (the row can be purged while a Start is writing)', () => {
     // An orphan is a dot-free field: it holds the slug for ever. The hook takes no lock, so the only thing it can do is look again
     // after it has written: if the row's `generation` is gone it removes what it wrote, BOTH names (`joined` and `joinedprev`).
     // These rows drive the window with a shell function that `BASH_ENV` plants in the hook's own shell and that fires on ONE
@@ -1504,7 +1539,8 @@ describe('only an agent id with a qualifying join is a subagent to the turn mark
       'graphQueries', 'graphGateDenials', 'ccrcPeerReads', 'ccrcClaims']);
   });
 
-  describe('the membership read costs no fork', () => {
+  // bash only: it counts jq forks, and the Go hook runs no jq.
+  describe.skipIf(i === 'go')('the membership read costs no fork', () => {
     /** A `jq` on PATH that counts its own invocations and then runs the real one. */
     const countJq = (): (() => number) => {
       const real = execFileSync('sh', ['-c', 'command -v jq'], { encoding: 'utf8' }).trim();
@@ -1555,7 +1591,8 @@ describe('only an agent id with a qualifying join is a subagent to the turn mark
 // live word, background list or roster shows [B]); −1 when the key is absent or not an array. Carried on every
 // other kind for the same session, −1 on `clear` and for a foreign line. The payload is the committed five-kinds
 // Stop (`fixtures/hook/stop-bg-five-kinds.json`, every key kept), with only `session_crons` edited.
-describe('the turn marker counts session_crons (D-5242)', () => {
+describe.each(IMPLS)('the turn marker counts session_crons (D-5242) (%s)', (i) => {
+  useImpl(i);
   const FIVE_KINDS = path.resolve(__dirname, 'fixtures/hook/stop-bg-five-kinds.json');
   const fiveKinds = (): Record<string, unknown> =>
     JSON.parse(fs.readFileSync(FIVE_KINDS, 'utf8')) as Record<string, unknown>;

@@ -23,6 +23,7 @@ import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { equalCarrier } from './delegationLeaseFixture.js';
 import { spawnSyncGroup } from './spawnGroup.js';
+import { IMPLS, runGoHook, type Impl } from './hookTwin.js';
 
 const FIXTURES = path.resolve(__dirname, 'fixtures/delegation');
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
@@ -48,10 +49,14 @@ const measured = (v: string, s: string): boolean => MATRIX.cells[`${v}/${s}`]?.s
 afterEach(() => { vi.restoreAllMocks(); });
 
 /** Every `/rig/...` string of the capture, re-rooted under `root` (the capture's own paths name its synthetic `/rig`). */
-const reroot = <T>(v: T, root: string): T => JSON.parse(JSON.stringify(v).replace(/"\/rig\//g, `"${root}/rig/`).replace(/([ =:>])\/rig\//g, `$1${root}/rig/`)) as T;
+// root goes in as JSON spells it: a Windows path's backslashes are escapes inside the JSON text (Task 9b gate round)
+const reroot = <T>(v: T, root: string): T => {
+  const r = JSON.stringify(root).slice(1, -1);
+  return JSON.parse(JSON.stringify(v).replace(/"\/rig\//g, () => `"${r}/rig/`).replace(/([ =:>])\/rig\//g, (_m, c: string) => `${c}${r}/rig/`)) as T;
+};
 
-/** One capture, replayed to the lane's checkpoint. */
-async function replay(version: string, scenario: string): Promise<{ checkpoint: DelegationCheckpointV1; census: DelegationCensusRecord[]; capture: Capture }> {
+/** One capture, replayed to the lane's checkpoint, the hook in `impl` (Go core wave 2: both implementations write the spool the lane reads). */
+async function replay(impl: Impl, version: string, scenario: string): Promise<{ checkpoint: DelegationCheckpointV1; census: DelegationCensusRecord[]; capture: Capture }> {
   vi.restoreAllMocks();                                               // the previous replay's clock
   const home = mkTmp('ccrc-adopt-corpus-');
   const capture = reroot(JSON.parse(readFileSync(path.join(FIXTURES, version, `${scenario}.json`), 'utf8')) as Capture, home);
@@ -99,9 +104,11 @@ async function replay(version: string, scenario: string): Promise<{ checkpoint: 
     mkdirSync(admin, { recursive: true });
     let born = false;
     for (const e of capture.events) {
-      const r = spawnSyncGroup('bash', [HOOK], { input: JSON.stringify(e.payload), encoding: 'utf8', timeout: 60_000, env: {
-        ...process.env, OSTYPE: '', HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1',
-        CLAUDE_CODE_SESSION_ID: e.envSid, CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: INC, CLAUDE_CODE_EXECPATH: '' } });
+      const hookEnv = {
+        ...process.env, OSTYPE: '', HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1',
+        CLAUDE_CODE_SESSION_ID: e.envSid, CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: INC, CLAUDE_CODE_EXECPATH: '' };
+      const r = impl === 'go' ? runGoHook(home, e.payload, hookEnv)
+        : spawnSyncGroup('bash', [HOOK], { input: JSON.stringify(e.payload), encoding: 'utf8', timeout: 60_000, env: hookEnv });
       expect(r.status, `${version}/${scenario} seq ${e.seq}: the hook exits 0`).toBe(0);
       if (!born && e.event === 'PreToolUse' && ['Bash', 'Agent', 'Task', 'Workflow'].includes(String(e.payload['tool_name']))) {
         born = true;
@@ -149,7 +156,7 @@ const workflowNotified = (c: Capture): boolean => c.events.some((e) => e.event =
 /** The versions whose `wf-iso` adopted: the corpus-wide control below holds that the workflow arm is not vacuous. */
 const workflowAdopted: string[] = [];
 
-describe('W5-D12: adoption is fixture-proven for agent and workflow trees, on every lane version in the corpus', () => {
+describe.each(IMPLS)('W5-D12: adoption is fixture-proven for agent and workflow trees, on every lane version in the corpus (%s)', (impl) => {
   it('the adoptable sources are exactly agent and workflow, and the corpus covers the scenarios this row replays', () => {
     expect([...DELEGATION_ADOPTABLE_SOURCES]).toEqual(['agent', 'workflow']);
     expect(VERSIONS.length).toBeGreaterThanOrEqual(14);
@@ -158,7 +165,7 @@ describe('W5-D12: adoption is fixture-proven for agent and workflow trees, on ev
 
   it.each(VERSIONS)('%s: changed and dirty agent trees adopt once, an unchanged one never; a raw tree never; a workflow tree only once its run notified; a paused workflow never', async (version) => {
     const adopts = async (scenario: string): Promise<{ n: number; capture: Capture; sources: string[] }> => {
-      const { checkpoint, census, capture } = await replay(version, scenario);
+      const { checkpoint, census, capture } = await replay(impl, version, scenario);
       return { n: decide(scenario, checkpoint, census).filter((d) => d.kind === 'adopt').length, capture, sources: checkpoint.leases.map((l) => l.sourceKind) };
     };
     for (const s of ['agent-iso-changed', 'agent-iso-dirty']) {
@@ -172,16 +179,22 @@ describe('W5-D12: adoption is fixture-proven for agent and workflow trees, on ev
     expect(unchanged.sources.every((s) => s === 'agent'), `${version}/agent-iso-unchanged: no lease but an agent's`).toBe(true);
     expect(unchanged.n).toBe(0);
     const raw = await adopts('raw-worktree');
-    expect(raw.sources, `${version}/raw-worktree: leased as raw`).toEqual(['raw']);
+    // a raw tree is leased from the spool's worktree listing, which triggers on a `/`-rooted cwd: a Windows cwd is not one,
+    // in either hook (hook-core-spine's spool describe on Windows), so there no raw lease is made and none adopts
+    if (process.platform !== 'win32') expect(raw.sources, `${version}/raw-worktree: leased as raw`).toEqual(['raw']);
     expect(raw.n).toBe(0);
     const wf = await adopts('wf-iso');
     expect(wf.sources.every((s) => s === 'workflow') && wf.sources.length > 0, `${version}/wf-iso: leased as workflow`).toBe(true);
-    expect(wf.n > 0, `${version}/wf-iso: adopts iff the run's terminal notification is in the replay`).toBe(workflowNotified(wf.capture));
+    // not on Windows: the workflow lease names its script through `lrpath`, which needs a `/`-rooted transcript path (see
+    // the CONTROL below), so no workflow tree adopts there in either hook
+    if (process.platform !== 'win32') expect(wf.n > 0, `${version}/wf-iso: adopts iff the run's terminal notification is in the replay`).toBe(workflowNotified(wf.capture));
     if (wf.n > 0) workflowAdopted.push(version);
     expect((await adopts('wf-limit-pause')).n, `${version}/wf-limit-pause: a paused workflow never adopts`).toBe(0);
   }, CELL_MS);
 
-  it('CONTROL: the workflow arm adopted on at least one lane version (it runs after the versions above)', () => {
+  // not on Windows: a workflow lease names its script through the launch record's `lrpath`, which needs a `/`-rooted
+  // transcript path, and a Windows one is not, in either hook, so no workflow tree adopts there
+  it.skipIf(process.platform === 'win32')('CONTROL: the workflow arm adopted on at least one lane version (it runs after the versions above)', () => {
     expect(workflowAdopted.length, 'no wf-iso replay adopted').toBeGreaterThan(0);
   });
 });

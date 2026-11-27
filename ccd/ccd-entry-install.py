@@ -119,6 +119,25 @@
 # redactor is (read_regular, no newline rule), staged in the libexec directory in its own slot, and renamed right after
 # shared/redact-cli.mjs, before lib/disk-retention.sh and the body; the updater's backup carries it as ccd-door-process.mjs.
 #
+# THE GO CORE (spec 2026-11-24 §4, §7): `core/entries.json` names each entry's mode per platform (`bash` or `go`; an
+# entry or platform it does not name is `bash`), and `read_core` reads it for THIS box's platform, as Go names it
+# (`sys.platform` and `platform.machine()`). The launcher carries the core's table (`CORE_JSON`: the verbs in go mode
+# here and the one binary's SHA-256 by its name), rendered here; the binary, `core/bin/<goos>-<goarch>/ccrc-core`
+# (`.exe` on windows), is published to `core/` beside the body, mode 0755, as part of the library half, in its own
+# `.t0` slot, renamed right after the door program, before the body. With no verb in go mode here nothing is read from
+# `core/bin/` or published, and the table is `{"files":{},"verbs":[]}`. `read_core` refuses, before anything moves, a
+# tree without the table or with one it cannot read, a mode that is not `bash` or `go` on a platform that is not
+# linux, darwin or windows, a go-mode verb the launcher's own `is_protected` protects, and go-mode verbs with no binary
+# for this platform. A file that stands under `core/` and is not the binary is removed once the launcher lands (or on a
+# converged run), and so is the Node twin's whole `node/` directory, which a box that ran the twin still holds. A test
+# seam, CCRC_CORE_PLATFORM=<goos>, installs as another platform, and only from a tree holding a `.ccrc-test-fixture`
+# file, which no release carries.
+#
+# THE HOOK ROW (wave 2): the table's `hook` row is a mode, never a verb. In go mode it puts the one binary in the table
+# like a verb does (published, digest-pinned) and adds `"hook":"go"` to the rendered table, never `hook` to `verbs`, so the
+# launcher routes nothing to it and `ccd caps` lists no go:hook. The session-hook installer asks the launcher
+# (`--ccrc-entry-hook-mode`) and registers the core's command only on its `go`; an absent `hook` key is bash.
+#
 # The library must end in exactly one newline and carry no NUL byte. The body
 # hashes the file as bash reads it (`$(<file)` drops NULs and every trailing
 # newline; the body adds one back), while this publisher hashes the raw bytes:
@@ -132,7 +151,9 @@ import sys
 sys.dont_write_bytecode = True
 
 import hashlib  # noqa: E402
+import json  # noqa: E402
 import os  # noqa: E402
+import platform  # noqa: E402
 import re  # noqa: E402
 import shutil  # noqa: E402
 import stat  # noqa: E402
@@ -163,10 +184,11 @@ ALIASES_LIB_PIN_PLACEHOLDER = re.compile(rb'^__CCD_LIB_ALIASES_SHA256=stamp-at-i
 REDACT_PINS = ('__CCD_REDACT_SHA256', '__CCD_REDACT_CLI_SHA256', '__CCD_DOOR_SHA256')
 PLACEHOLDER_PYTHON = '@CCRC_' + 'PYTHON3@'
 PLACEHOLDER_DIGEST = '@CCRC_' + 'CCD_SHA256@'
+PLACEHOLDER_CORE = '@CCRC_' + 'CORE_JSON@'
 RESIDUE = re.compile(r'@CCRC_[A-Z0-9_]+@')
 
 STAGE_PREFIX = '.ccd.ccrc-stage.'
-STAGE_RE = re.compile(r'^\.ccd\.ccrc-stage\.[0-9]+(?:\.[123456])?$')
+STAGE_RE = re.compile(r'^\.ccd\.ccrc-stage\.[0-9]+(?:\.(?:[123456]|t[0-9]+))?$')
 SELFTEST_PREFIX = '.ccd-selftest.'
 SELFTEST_RE = re.compile(r'^\.ccd-selftest\.[A-Za-z0-9_]+$')
 
@@ -210,6 +232,15 @@ REDACT_CLI_SOURCE = 'shared/redact-cli.mjs'
 REDACT_CLI_DEST = '.local/libexec/ccrc/shared/redact-cli.mjs'
 DOOR_PROG_SOURCE = 'ccd/door-process.mjs'
 DOOR_PROG_DEST = '.local/libexec/ccrc/door-process.mjs'
+CORE_TABLE_SOURCE = 'core/entries.json'
+HOOK_ENTRY = 'hook'   # the table's hook row: a mode the installer's HOOK_CMD follows, never a verb (kernel.HookEntry)
+CORE_BIN_SOURCE = 'core/bin'   # a build product (`deploy/build-release.sh`), never tracked
+CORE_DEST = '.local/libexec/ccrc/core'
+CORE_MODE = 0o755
+CORE_PLATFORMS = ('linux', 'darwin', 'windows')
+# The Node twin's directory (spec 2026-11-22): no longer published, removed from a box that ran it (THE GO CORE, above).
+RETIRED_TWIN_DEST = '.local/libexec/ccrc/node'
+FIXTURE_FILE = '.ccrc-test-fixture'
 
 
 # THE BODY'S PROVENANCE STAMP IS WRITTEN HERE, AT INSTALL TIME, NEVER COMMITTED.
@@ -254,6 +285,130 @@ def read_lib(tree, source):
                       ' which drops NULs and trailing newlines, so any other file is one the body would refuse; fix the file'
                       ' in the source tree' % source)
     return data
+
+
+def core_platform(tree):
+    """(goos, goarch) for this box as Go names them, None for one Go has no build for (THE GO CORE, above)."""
+    goos = {'linux': 'linux', 'darwin': 'darwin', 'msys': 'windows', 'cygwin': 'windows', 'win32': 'windows'}.get(sys.platform)
+    # The test seam: inert unless the tree holds the fixture file, which no release carries.
+    if os.environ.get('CCRC_CORE_PLATFORM') and os.path.exists(os.path.join(tree, FIXTURE_FILE)):
+        goos = os.environ['CCRC_CORE_PLATFORM']
+    goarch = {'x86_64': 'amd64', 'amd64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64'}.get(platform.machine().lower())
+    return goos, goarch
+
+
+def core_modes(tree):
+    """{verb: {platform: mode}} from the tree's core table, validated, or Refused (THE GO CORE)."""
+    try:
+        data = read_regular(os.path.join(tree, *CORE_TABLE_SOURCE.split('/')))
+    except FileNotFoundError:
+        raise Refused('the tree has no %s: the launcher is published with the core table it names' % CORE_TABLE_SOURCE)
+    try:
+        modes = {verb: e.get('mode', {}) for verb, e in json.loads(data.decode('utf-8'))['entries'].items()}
+        bad = sorted((v, m, k) for v, ms in modes.items() for k, m in ms.items()
+                     if k not in CORE_PLATFORMS or m not in ('bash', 'go'))
+    except (ValueError, KeyError, TypeError, AttributeError) as e:
+        raise Refused('%s cannot be read as the core\'s entry table: %s' % (CORE_TABLE_SOURCE, e))
+    if bad:
+        raise Refused('%s gives %r the mode %r on %r: a mode is bash or go, on linux, darwin or windows'
+                      % ((CORE_TABLE_SOURCE,) + bad[0]))
+    return modes
+
+
+def core_bin(goos, goarch):
+    """The tree-relative path of the core binary for one platform (a build product of core/build.sh)."""
+    return '%s/%s-%s/%s' % (CORE_BIN_SOURCE, goos, goarch, 'ccrc-core.exe' if goos == 'windows' else 'ccrc-core')
+
+
+def core_target(tree):
+    """`<goos>-<goarch>` when this machine runs an entry in go mode, else '': what a checkout rebuilds before it installs,
+    even over a binary already in its git-ignored `core/bin/` (that one may predate the source). `ccrc install` asks,
+    through the `core-target` subcommand, and owns whether Go is there to build. A table that cannot be read answers
+    '', and the install refuses it by name."""
+    try:
+        modes = core_modes(tree)
+    except (Refused, OSError):
+        return ''
+    goos, goarch = core_platform(tree)
+    if goarch is None or not any(ms.get(goos) == 'go' for ms in modes.values()):
+        return ''
+    return '%s-%s' % (goos, goarch)
+
+
+def read_core(tree, template):
+    """The core's files as a list of (name, bytes) — its one binary, or none — and its table's JSON (THE GO CORE)."""
+    modes = core_modes(tree)
+    goos, goarch = core_platform(tree)
+    # The hook row is a mode, not a verb (HOOK_ENTRY): it never joins `verbs`, so the launcher routes nothing to it and
+    # `ccd caps` lists no go:hook; the table says `"hook":"go"` only when it is, and the launcher answers the installer from it.
+    verbs = sorted(v for v, ms in modes.items() if ms.get(goos) == 'go' and v != HOOK_ENTRY)
+    hook_go = modes.get(HOOK_ENTRY, {}).get(goos) == 'go'
+    entries = verbs + ([HOOK_ENTRY] if hook_go else [])
+    if not verbs and not hook_go:
+        return [], json.dumps({'verbs': [], 'files': {}}, sort_keys=True, separators=(',', ':'))
+    # The launcher's own `is_protected`, from the very text it will run, so the two cannot disagree.
+    launcher = {'__name__': 'ccd_entry_template'}
+    try:
+        exec(compile(template, '<ccd direct entry template>', 'exec', dont_inherit=True), launcher)
+        is_protected = launcher['is_protected']
+    except SyntaxError as e:
+        raise Refused('the rendered launcher does not compile: %s' % e)
+    except Exception as e:
+        raise Refused('the launcher template could not be loaded to ask which verbs it protects: %r' % e)
+    for verb in verbs:
+        if is_protected([verb]):
+            raise Refused('%s puts %r in go mode on %s, which the launcher protects: a protected verb is never started'
+                          ' on the core' % (CORE_TABLE_SOURCE, verb, goos))
+    if goarch is None:
+        raise Refused('this machine (%s) has no core build, and %s runs %s in go mode on %s'
+                      % (platform.machine(), CORE_TABLE_SOURCE, ', '.join(entries), goos))
+    rel = core_bin(goos, goarch)
+    name = rel.rsplit('/', 1)[1]
+    try:
+        binary = read_regular(os.path.join(tree, *rel.split('/')))
+    except FileNotFoundError:
+        # A checkout (it carries core/build.sh; a release carries the binaries instead) builds it with Go on PATH.
+        how = ('; build it in the checkout first, with Go on PATH: bash core/build.sh core/bin %s-%s'
+               % (goos, goarch)) if os.path.isfile(os.path.join(tree, 'core', 'build.sh')) else ''
+        raise Refused('the tree has no %s, the core binary for %s (go mode here for: %s)%s'
+                      % (rel, goos, ', '.join(entries), how))
+    table = {'verbs': verbs, 'files': {name: hashlib.sha256(binary).hexdigest()}}
+    if hook_go:
+        table['hook'] = 'go'
+    return [(name, binary)], json.dumps(table, sort_keys=True, separators=(',', ':'))
+
+
+def remove_stale(root, keep, what):
+    """Removes what stands under `root` and is not in `keep` (THE GO CORE, above): every entry that is not a directory,
+    never following a link, then every directory that leaves empty. A root that is a link is never walked."""
+    if os.path.islink(root):
+        return
+    for d, dirs, names in os.walk(root, topdown=False, followlinks=False):
+        for n in names + [x for x in dirs if os.path.islink(os.path.join(d, x))]:
+            p = os.path.join(d, n)
+            if os.path.relpath(p, root).replace(os.sep, '/') in keep:
+                continue
+            try:
+                os.unlink(p)
+            except OSError:
+                continue
+            say('%s: %s' % (what, p))
+        if d != root:
+            try:
+                os.rmdir(d)
+            except OSError:
+                pass
+
+
+def remove_leftovers(core_root, core_files, twin_root):
+    """Once the launcher that lists none of them stands: a stale file under core/, and the Node twin's directory."""
+    remove_stale(core_root, set(name for name, _data in core_files), 'core file removed, no longer in the tree')
+    remove_stale(twin_root, set(), 'Node twin file removed, the twin is retired')
+    if not os.path.islink(twin_root):
+        try:
+            os.rmdir(twin_root)
+        except OSError:
+            pass
 
 
 def render_redact_pins(data, digests):
@@ -353,12 +508,14 @@ def check_shebang_path(canon):
                       % (canon, len(line), SHEBANG_MAX))
 
 
-def render(template, python, digest):
-    for p in (PLACEHOLDER_PYTHON, PLACEHOLDER_DIGEST):
+def render(template, python, digest, core_json):
+    for p in (PLACEHOLDER_PYTHON, PLACEHOLDER_DIGEST, PLACEHOLDER_CORE):
         n = template.count(p)
         if n != 1:
             raise Refused('the launcher template carries %d copies of %s, not exactly one' % (n, p))
-    out = template.replace(PLACEHOLDER_PYTHON, python).replace(PLACEHOLDER_DIGEST, digest)
+    # The table lands inside a single-quoted Python string: its backslashes and quotes escaped (JSON has no line break).
+    out = template.replace(PLACEHOLDER_PYTHON, python).replace(PLACEHOLDER_DIGEST, digest) \
+        .replace(PLACEHOLDER_CORE, core_json.replace('\\', '\\\\').replace("'", "\\'"))
     if RESIDUE.search(out):
         raise Refused('the rendered launcher still carries a placeholder')
     if out.split('\n', 1)[0] != '#!' + python + SHEBANG_FLAGS:
@@ -627,8 +784,9 @@ def install(tree, home):
                       % (ALIASES_LIB_SOURCE, BODY_SOURCE, len(pins), BODY_SOURCE))
     body_data = stamp_body(pinned)
     template = read_regular(os.path.join(tree, *TEMPLATE_SOURCE.split('/'))).decode('utf-8')
+    core_files, core_json = read_core(tree, template)
     digest = hashlib.sha256(body_data).hexdigest()
-    entry_data = render(template, python, digest)
+    entry_data = render(template, python, digest, core_json)
 
     entry_dest = os.path.join(home, *ENTRY_DEST.split('/'))
     body_dest = os.path.join(home, *BODY_DEST.split('/'))
@@ -642,6 +800,9 @@ def install(tree, home):
     redact_dest = os.path.join(home, *REDACT_DEST.split('/'))
     cli_dest = os.path.join(home, *REDACT_CLI_DEST.split('/'))
     prog_dest = os.path.join(home, *DOOR_PROG_DEST.split('/'))
+    core_root = os.path.join(home, *CORE_DEST.split('/'))
+    core_dests = [os.path.join(core_root, name) for name, _data in core_files]
+    twin_root = os.path.join(home, *RETIRED_TWIN_DEST.split('/'))
     bindir = os.path.dirname(entry_dest)
     libexec = os.path.dirname(body_dest)
     libdir = os.path.dirname(lib_dest)
@@ -656,21 +817,31 @@ def install(tree, home):
     if derived is None or os.path.realpath(derived) != os.path.realpath(body_dest):
         raise Refused('%s resolves to %s, whose launcher would look for its body at %s, not at %s — this'
                       ' ~/.local layout cannot host the direct entry' % (entry_dest, os.path.realpath(entry_dest), derived, body_dest))
-    for dest in (redact_dest, cli_dest, prog_dest, lib_dest, train_dest, lease_dest, poolset_dest, longlived_dest, door_dest, aliases_dest, body_dest, entry_dest):
+    for dest in [redact_dest, cli_dest, prog_dest] + core_dests + [lib_dest, train_dest, lease_dest, poolset_dest, longlived_dest, door_dest, aliases_dest, body_dest, entry_dest]:
         destination_kind(dest)
-    for d in (bindir, libexec, libdir, shareddir):
+    # The core's directory is published into and swept, so it must be a real directory: through a link, a file would
+    # land, and a stale one be removed, wherever the link points. Asked whenever it stands, and created only for a binary.
+    if os.path.islink(core_root) or (os.path.lexists(core_root) and not os.path.isdir(core_root)):
+        raise Refused('%s is a link or not a directory — refusing to publish the core through it' % core_root)
+    for d in [bindir, libexec, libdir, shareddir] + ([core_root] if core_files else []):
         os.makedirs(d, mode=0o755, exist_ok=True)
     sweep(bindir, STAGE_RE, False)
     sweep(libexec, STAGE_RE, False)
     sweep(libdir, STAGE_RE, False)
     sweep(shareddir, STAGE_RE, False)
+    if os.path.isdir(core_root):
+        sweep(core_root, STAGE_RE, False)
     sweep(os.path.join(home, '.local'), SELFTEST_RE, True)
 
     # The library half, in its rename order: (name beside the body, destination, bytes, staging slot, state).
     beside = lambda d: d[len(os.path.dirname(BODY_DEST)) + 1:]  # noqa: E731 -- a name as the installed layout spells it
-    half = [[beside(REDACT_DEST), redact_dest, redact_data, '.1', shareddir], [beside(REDACT_CLI_DEST), cli_dest, cli_data, '.2', shareddir],
-            [beside(DOOR_PROG_DEST), prog_dest, prog_data, '.1', libexec]]
-    half = [h + [converged(h[1], h[2], BODY_MODE)] for h in half]  # (name, dest, bytes, slot, stage dir, state)
+    half = [[beside(REDACT_DEST), redact_dest, redact_data, '.1', shareddir, BODY_MODE],
+            [beside(REDACT_CLI_DEST), cli_dest, cli_data, '.2', shareddir, BODY_MODE],
+            [beside(DOOR_PROG_DEST), prog_dest, prog_data, '.1', libexec, BODY_MODE]]
+    # THE GO CORE's binary right after the door program, in its own `.t0` slot, executable (THE GO CORE, above).
+    half += [[beside(CORE_DEST) + '/' + name, dest, data, '.t%d' % i, core_root, CORE_MODE]
+             for i, ((name, data), dest) in enumerate(zip(core_files, core_dests))]
+    half = [h + [converged(h[1], h[2], h[5])] for h in half]  # (name, dest, bytes, slot, stage dir, mode, state)
     lib_state = converged(lib_dest, lib_data, BODY_MODE)
     train_state = converged(train_dest, train_data, BODY_MODE)
     lease_state = converged(lease_dest, lease_data, BODY_MODE)
@@ -693,8 +864,8 @@ def install(tree, home):
     body_proved = False
     entry_proved = entry_state == 'same'
     try:
-        for i, (_name, _dest, data, slot, sdir, state) in enumerate(half):
-            staged_half[i] = stage(sdir, data, BODY_MODE, slot) if state == 'differ' else None
+        for i, (_name, _dest, data, slot, sdir, mode, state) in enumerate(half):
+            staged_half[i] = stage(sdir, data, mode, slot) if state == 'differ' else None
         staged_lib = stage(libdir, lib_data, BODY_MODE) if lib_state == 'differ' else None
         staged_train = stage(libdir, train_data, BODY_MODE, '.1') if train_state == 'differ' else None
         staged_lease = stage(libdir, lease_data, BODY_MODE, '.2') if lease_state == 'differ' else None
@@ -711,18 +882,19 @@ def install(tree, home):
         self_test(home, staged_entry or entry_dest, staged_body or body_dest,
                   live=tuple(d for d, s in ((entry_dest, staged_entry), (body_dest, staged_body)) if s is None))
         if (all(p is None for p in staged_half) and staged_lib is None and staged_train is None and staged_lease is None and staged_poolset is None and staged_longlived is None and staged_door is None and staged_aliases is None and staged_body is None
-                and staged_entry is None and all(h[5] == 'same' for h in half)
+                and staged_entry is None and all(h[6] == 'same' for h in half)
                 and lib_state == train_state == lease_state == poolset_state == longlived_state == door_state == aliases_state == body_state == entry_state == 'same'):
+            remove_leftovers(core_root, core_files, twin_root)
             say('converged — the launcher, the body and the library already carry these bytes')
             return 0
         # The library goes FIRST: the body that lands next pins it. A standing body from before the library does not read it;
         # one that loads a library pins the old one and refuses starts until the new body lands (see THE LIBRARY above).
         # The redactor's two files go before the library, and all three before the body that pins them: one half,
         # `library` in `moved` once, at its first rename, and `lib_moved` naming each file of it that was renamed.
-        for i, (name, dest, data, _slot, _sdir, state) in enumerate(half):
+        for i, (name, dest, data, _slot, _sdir, mode, state) in enumerate(half):
             if state == 'mode':
-                repair_mode(dest, BODY_MODE)
-                say_repaired(dest, BODY_MODE)
+                repair_mode(dest, mode)
+                say_repaired(dest, mode)
             if staged_half[i] is not None:
                 kind = destination_kind(dest)
                 os.replace(staged_half[i], dest)
@@ -730,7 +902,7 @@ def install(tree, home):
                 if 'library' not in moved:
                     moved.append('library')
                 lib_moved.append(name)
-                postcondition(dest, data, BODY_MODE, 'library')
+                postcondition(dest, data, mode, 'library')
                 say('library published at %s (replaced: %s)' % (dest, kind))
         if lib_state == 'mode':
             repair_mode(lib_dest, BODY_MODE)
@@ -845,6 +1017,8 @@ def install(tree, home):
             postcondition(entry_dest, entry_data, ENTRY_MODE, 'launcher')
             entry_proved = True
             say('launcher published at %s for %s (replaced: %s)' % (entry_dest, python, kind))
+        # Only now, with the launcher that no longer lists them in place (THE GO CORE, above).
+        remove_leftovers(core_root, core_files, twin_root)
         return 0
     except (OSError, Refused) as e:
         if not moved:
@@ -897,7 +1071,10 @@ def main(argv):
             return 0
         if argv[:1] == ['install'] and len(argv) == 3:
             return install(argv[1], argv[2])
-        sys.stderr.write('usage: ccd-entry-install.py check | install <tree> <home>\n')
+        if argv[:1] == ['core-target'] and len(argv) == 2:
+            sys.stdout.write(core_target(argv[1]) + '\n')
+            return 0
+        sys.stderr.write('usage: ccd-entry-install.py check | install <tree> <home> | core-target <tree>\n')
         quiet_stdout()
         return 1
     except Refused as e:

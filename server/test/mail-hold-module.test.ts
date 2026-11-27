@@ -7,6 +7,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { recordGuard } from './hookTwin.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 const LIB = path.resolve(__dirname, '../../ccd/lib');
@@ -24,6 +25,7 @@ interface Opts { thread?: string; pairs?: string; state?: string; armed?: string
 /** The strip's answer for one command, as the hook's `$( )` capture holds it (trailing newlines cut): the module's
  *  `mh_prep`, then the hook's MERGE_STRIP_JQ, in one jq, as the hook's own call composes them. */
 const strip = (payload: string): string => {
+  recordGuard(payload);
   const r = spawnSync('jq', ['-L', LIB, '-r', '--arg', 'q', "'", '--argjson', 'cap', String(CAP), '--arg', 'allow', ALLOW,
     `include "mail-hold"; mh_prep | ${STRIP}`], { input: payload, encoding: 'utf8', ...BOUND });
   expect(r.status, r.stderr).toBe(0);

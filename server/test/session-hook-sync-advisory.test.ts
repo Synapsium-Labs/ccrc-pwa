@@ -16,9 +16,18 @@ import { spawnSync, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
+import { scaled } from './timeScale.js';   // the bound scales with the box (CCRC_TIME_SCALE): on Windows the hook's git and jq processes cost seconds under load
+import { IMPLS, runGoHook, type Impl } from './hookTwin.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 const GENERATION = '0189abcd-1234-5678-9abc-0123456789ab';
+/** The implementation `hook` starts (Go core wave 2): the describe below runs on both. */
+let impl: Impl = 'bash';
+const useImpl = (i: Impl): void => {
+  beforeEach(() => { impl = i; });
+  afterEach(() => { impl = 'bash'; });
+};
+
 let home: string;
 beforeEach(() => {
   home = mkTmp('ccrc-hook-sync-');
@@ -31,12 +40,10 @@ beforeEach(() => {
 afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
 const hook = (payload: object): { stdout: string; stderr: string } => {
-  const r = spawnSync('bash', [HOOK], {
-    input: JSON.stringify(payload), encoding: 'utf8',
-    env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+  const e = { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
       TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242',
-      CCRC_SESSION_GENERATION: GENERATION },
-  });
+      CCRC_SESSION_GENERATION: GENERATION };
+  const r = impl === 'go' ? runGoHook(home, payload, e) : spawnSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env: e });
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
   return { stdout: r.stdout, stderr: r.stderr };
 };
@@ -102,7 +109,8 @@ const NOT_SYNCS = [
   'git merge feature/x\ngit log origin main',
 ];
 
-describe('session-hook: the landing-order advisory on a sync of main', () => {
+describe.each(IMPLS)('session-hook: the landing-order advisory on a sync of main (%s)', (i) => {
+  useImpl(i);
   it.each(SYNCS)('advises on `%s` — additionalContext, never a decision', (command) => {
     const env = oneLine(hook(bash(command)).stdout);
     const out = env.hookSpecificOutput;
@@ -187,11 +195,11 @@ describe('session-hook: the landing-order advisory on a sync of main', () => {
       [`${sepName} x ${shapeName}`, unit(sep).repeat(Math.ceil(36000 / unit(sep).length)) + '\n# merge origin']));
   it.each(ADVERSARIAL)('answers a 36 KB adversarial command (%s) inside a generous bound', (_name, command) => {
     expect(command.length).toBeGreaterThan(36000);
-    const t0 = Date.now();
+    const t0 = performance.now();
     const r = hook(bash(command));
-    const ms = Date.now() - t0;
+    const ms = performance.now() - t0;
     expect(r.stdout, 'no line of it merges main').toBe('');
-    expect(ms, `the whole hook took ${ms} ms`).toBeLessThan(1500);
+    expect(ms, `the whole hook took ${ms} ms`).toBeLessThan(scaled(1500));
   });
 
   // QUOTE-DENSE, AT THE MERGE DENY'S PAYLOAD CAP (landing-order wave 3). The
@@ -216,11 +224,11 @@ describe('session-hook: the landing-order advisory on a sync of main', () => {
     const tail = '\n# merge origin';
     const command = unit.repeat(Math.ceil(CAP / unit.length)).slice(0, CAP - tail.length) + tail;
     expect(Buffer.byteLength(command)).toBe(CAP);
-    const t0 = Date.now();
+    const t0 = performance.now();
     const r = hook(bash(command));
-    const ms = Date.now() - t0;
+    const ms = performance.now() - t0;
     expect(r.stdout).toBe('');
-    expect(ms, `the whole hook took ${ms} ms`).toBeLessThan(1500);
+    expect(ms, `the whole hook took ${ms} ms`).toBeLessThan(scaled(1500));
   });
   // The same shapes at 36 KB, far over the cap and holding no `gh`: the deny
   // passes them unparsed after one fixed-string scan (the over-cap segment
@@ -232,11 +240,11 @@ describe('session-hook: the landing-order advisory on a sync of main', () => {
     const command = unit.repeat(Math.ceil(36000 / unit.length)) + '\n# merge origin';
     expect(command.length).toBeGreaterThan(36000);
     expect(command, 'a `gh` would make the deny refuse it unread in a held session; this case times the advisory').not.toContain('gh');
-    const t0 = Date.now();
+    const t0 = performance.now();
     const r = hook(bash(command));
-    const ms = Date.now() - t0;
+    const ms = performance.now() - t0;
     expect(r.stdout, 'no line of it merges main').toBe('');
-    expect(ms, `the whole hook took ${ms} ms`).toBeLessThan(1500);
+    expect(ms, `the whole hook took ${ms} ms`).toBeLessThan(scaled(1500));
   });
 
   // PRECEDENCE. One envelope per event, and a graph-arm deny wins: a compound

@@ -1,0 +1,4 @@
+(.passes // []) | last | (. // {})
+       | [(.repos // [])[] | select($s != "" and .source == $s)]
+       | map(select((.reason // "") != ""))
+       | if length == 0 then empty else (.[0].outcome + ": " + .[0].reason) end

@@ -7,7 +7,8 @@
  * subagent's menu painted after its hook returned still has its envelope, and the server's one reader of the painted
  * prompt (`paintedApprovalOf`, over `hookstate.ts`'s read) gives the console the approval surface, not a bare menu.
  *
- * Runs `ccd/session-hook.sh` for real in a fixture HOME. The session is no dispatched child (no `.child` mark) unless a
+ * Runs `ccd/session-hook.sh` and the Go core's `ccrc-core hook` for real, each event in each, each from the same fixture state
+ * in a HOME of its own (Go core wave 2, Task 7): the same stdout and the same hookstate left behind. The session is no dispatched child (no `.child` mark) unless a
  * case needs the wait, so the gate answers `not-a-child` and nothing is sent. The tie case runs the wait with a stubbed
  * client. The PermissionRequest is Task 13's subagent capture. Never the live HOME.
  */
@@ -16,7 +17,7 @@ import { createHash, generateKeyPairSync } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
-import { spawnSyncGroup } from './spawnGroup.js';
+import { hookBoth } from './hookTwin.js';
 import { localIO } from '../src/io.js';
 import { readHookStateRawMeasured } from '../src/hookstate.js';
 import { paintedApprovalOf } from '../src/coord/approvalEnvelope.js';
@@ -75,7 +76,7 @@ beforeEach(() => {
 afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
 const ENV = (): NodeJS.ProcessEnv => ({
-  ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+  ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
   TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
   CCRC_APPROVAL_TICK_S: '0.05', CCRC_APPROVAL_POLL_TICKS: '2', CCRC_APPROVAL_CEILING_S: '3',
 });
@@ -100,10 +101,12 @@ const request = (agent: string | null, command = SUB_COMMAND): Payload => {
 };
 const plain = (event: string, extra: Payload = {}): Payload => ({ ...base(), hook_event_name: event, ...extra });
 
-const fire = (p: Payload): void => {
-  const r = spawnSyncGroup('bash', [HOOK], { input: JSON.stringify(p), encoding: 'utf8', env: ENV(), timeout: 30_000 });
+/** One event through both hooks; the bash's run is the one the case reads on (its HOME), and its time and the Go run's. */
+const fire = (p: Payload): { ms: number; goMs: number } => {
+  const r = hookBoth(home, JSON.stringify(p), ENV(), { hook: HOOK, watch: [`.cc-sessions/${ID}.hookstate.json`], tree: true });
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
   expect(r.stderr, 'the hook contract: silent on stderr').toBe('');
+  return { ms: r.ms, goMs: r.goMs };
 };
 const stateOf = (): Record<string, unknown> => JSON.parse(fs.readFileSync(reg(`${ID}.hookstate.json`), 'utf8')) as Record<string, unknown>;
 const entries = (): Array<Record<string, unknown>> => (stateOf()['approvals'] as Array<Record<string, unknown>> | undefined) ?? [];
@@ -269,7 +272,9 @@ describe('the transcript tie\'s tool_result removes it (the wait saw the pane an
     expect((stateOf()['ask'] as { approval: { route: string } }).approval.route).toBe('request-refused:version-unverified');
     expect(entries().map((e) => e['route'])).toEqual(['request-refused:version-unverified']);
   });
-  it('the entry of the agent whose prompt was answered goes; a sibling\'s stays', () => {
+  // Linux and macOS only: the tie reads a /-rooted transcript_path (session-hook.sh's apr_tp, mirrored in Go), and Claude
+  // Code's transcript path on Windows is C:\..., so neither mode ties there (measured in both modes, Task 9b)
+  it.skipIf(process.platform === 'win32')('the entry of the agent whose prompt was answered goes; a sibling\'s stays', () => {
     asChild();
     put('stub/request.out', '{"id":41,"waitS":3}');
     fire(request(B, 'rm -rf other'));
@@ -277,10 +282,10 @@ describe('the transcript tie\'s tool_result removes it (the wait saw the pane an
     put(path.relative(home, sub), row({ type: 'assistant', uuid: `as-${TOOLU}`, message: { role: 'assistant', content: [{ type: 'tool_use', id: TOOLU, name: 'Bash', input: SUB['tool_input'] }] } }));
     put('stub/append/to', sub);
     put('stub/append/line', row({ type: 'user', sourceToolAssistantUUID: `as-${TOOLU}`, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: TOOLU, is_error: false, content: 'ok' }] } }));
-    const t0 = Date.now();
-    fire(request(A));
+    const r = fire(request(A));
     expect(fs.existsSync(path.join(home, 'stub/append/done')), 'the tool_result landed during the wait').toBe(true);
-    expect(Date.now() - t0, 'the tie ended the wait, not its window').toBeLessThan(2_900);
+    expect(r.ms, 'the tie ended the wait, not its window').toBeLessThan(2_900);
+    expect(r.goMs, 'the Go hook\'s tie ended its wait, not its window').toBeLessThan(2_900);
     expect(agents()).toEqual([B]);
   });
 });

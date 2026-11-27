@@ -11,7 +11,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fastSelection, relatedFromVitestList, guardTests, parseUntraced, scanShape, scansSourceTree, treeScanners, GUARD_TESTS, HEAVY_TREE_READERS, PIN_MAP_CARRIED, SCANNER_MAX_MS, TREE_READER, SESSION_HOOK_TRIGGERS } from '../../.github/ci/fast-plan.mjs';
+import { fastSelection, relatedFromVitestList, guardTests, parseUntraced, scanShape, scansSourceTree, treeScanners, GUARD_TESTS, HEAVY_TREE_READERS, PIN_MAP_CARRIED, SCANNER_MAX_MS, TREE_READER, SESSION_HOOK_TRIGGERS, CORE_TESTS } from '../../.github/ci/fast-plan.mjs';
 import { liveTestFiles, selectIgnoringUncertainty, selectTests, vitestFollows } from '../../.github/ci/select-tests.mjs';
 import { untracedOutput, untracedSelection } from '../../.github/ci/select.mjs';
 import type { TestMap, TestRecord } from '../../.github/ci/testmap.mjs';
@@ -100,6 +100,43 @@ describe('fastSelection: the related tests, every guard suite, and the hook suit
     }
   });
 
+  // The Go hook (wave 2 inventory §7, "CI selection"): its code is Go, which no import reaches, and the session-hook
+  // suites move onto both implementations as its arms port, so a change to it runs them all, as a bash hook change does.
+  it('runs every session-hook suite when the Go hook\'s entry, a domain decider, the kernel, a hook adapter or the generator changed', () => {
+    for (const changed of ['core/internal/app/hook/hook.go', 'core/internal/domain/attention/x.go', 'core/gen/vocab.mjs',
+      'core/internal/kernel/jqjson.go', 'core/internal/adapter/tmux/tmux.go', 'core/internal/adapter/regfs/regfs.go', 'core/internal/adapter/proc/proc.go']) {
+      const sel = fastSelection({ live: LIVE, related: [], guards: GUARDS, changed: ['docs/x.md', changed] });
+      expect(sel.hook, changed).toBe(true);
+      expect(sel.files, changed).toContain('server/test/session-hook.test.ts');
+      expect(sel.files, changed).toContain('server/test/session-hook-account-deny.test.ts');
+    }
+    for (const other of ['core/internal/app/ccd/caps.go', 'core/internal/adapter/lock/lock_unix.go', 'core/entries.json', 'core/internal/app/hooks/x.go', 'xcore/gen/a.mjs']) {
+      expect(fastSelection({ live: LIVE, related: [], guards: GUARDS, changed: [other] }).hook, other).toBe(false);
+    }
+  });
+
+  // The Go core (spec 2026-11-24 §7): a server test reaches core/ only by building it or by reading its entry table, and
+  // on Linux most of them build nothing (no entry runs in go there), so the map cannot vouch for them: any change under
+  // core/ runs the five (the hook's parity spine among them), and only such a change does.
+  it('runs the five core suites when a file under core/ changed, and only then', () => {
+    const suites = ['server/test/ccd-core-caps.test.ts', 'server/test/ccd-core-table.test.ts', 'server/test/ccd-core-entry.test.ts', 'server/test/ccd-entry-install.test.ts', 'server/test/hook-core-spine.test.ts'];
+    expect(CORE_TESTS).toEqual(suites);
+    for (const t of CORE_TESTS) expect(fs.existsSync(path.join(ROOT, t)), `${t} is a real suite`).toBe(true);
+    const live = [...LIVE, ...suites].sort();
+    for (const changed of ['core/go.mod', 'core/entries.json', 'core/internal/app/ccd/caps.go', 'core/build.sh', 'core/a/new/file.go']) {
+      const sel = fastSelection({ live, related: [], guards: GUARDS, changed: ['docs/x.md', changed] });
+      expect(sel.core, changed).toBe(true);
+      for (const t of suites) expect(sel.files, `${changed} runs ${t}`).toContain(t);
+    }
+    for (const other of ['ccd/ccd', 'docs/core/x.md', 'xcore/a.go', 'server/src/core.ts', 'core']) {
+      const sel = fastSelection({ live, related: [], guards: GUARDS, changed: [other] });
+      expect(sel.core, other).toBe(false);
+      for (const t of suites) expect(sel.files, `${other} does not run ${t}`).not.toContain(t);
+    }
+    // A suite that is not live (renamed, deleted) is not added: the list names files, never invents them.
+    expect(fastSelection({ live: LIVE, related: [], guards: GUARDS, changed: ['core/go.mod'] }).files).toEqual(GUARDS);
+  });
+
   it('adds the map\'s untraced selection that is live, and counts it apart from vitest\'s', () => {
     const sel = fastSelection({ live: LIVE, related: ['server/test/a.test.ts'], untraced: ['server/test/a.test.ts', 'server/test/b.test.ts', 'server/test/gone.test.ts'], guards: GUARDS, changed: ['ccd/ccd-account-auth'] });
     expect(sel.files).toEqual([...GUARDS, 'server/test/a.test.ts', 'server/test/b.test.ts'].sort());
@@ -169,6 +206,14 @@ describe('the guard suites: patterns, less the map-carried pins, plus every test
     expect(guardTests(['server/test/x.test.ts'], () => { throw new Error('EACCES'); })).toEqual(['server/test/x.test.ts']);
     expect(guardTests(['server/test/x.test.ts'], () => 'import { x } from "../src/x.js";')).toEqual([]);
     expect(GUARD_TESTS.length).toBeGreaterThan(0);
+  });
+
+  // The Go core's vocabulary (spec 2026-11-24 §5): its owners reach the test through a spawned tsc, never an import,
+  // so only the guard list can run it for a change to shared/*.ts alone.
+  it('vocab-gen runs on every fast pull request', () => {
+    expect(fs.existsSync(path.join(ROOT, 'server/test/vocab-gen.test.ts'))).toBe(true);
+    expect(guardTests(['server/test/vocab-gen.test.ts'], () => 'import { generate } from "../../core/gen/vocab.mjs";'))
+      .toEqual(['server/test/vocab-gen.test.ts']);
   });
 });
 

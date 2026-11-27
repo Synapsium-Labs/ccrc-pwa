@@ -16,6 +16,7 @@ import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import { CCD, CCD_LIB, CCD_LIB_PIN_PLACEHOLDER, CCD_TRAIN_LIB, CCD_TRAIN_LIB_PIN_PLACEHOLDER, CCD_LEASE_LIB, CCD_LEASE_LIB_PIN_PLACEHOLDER, CCD_POOLSET_LIB, CCD_POOLSET_LIB_PIN_PLACEHOLDER, CCD_LONGLIVED_LIB, CCD_LONGLIVED_LIB_PIN_PLACEHOLDER, CCD_DOOR_LIB, CCD_DOOR_LIB_PIN_PLACEHOLDER, CCD_ALIASES_LIB, CCD_ALIASES_LIB_PIN_PLACEHOLDER, CCD_REDACT, CCD_REDACT_CLI, CCD_DOOR_PROG, canonicalPython3, installedCcdBody, seedAccountsSh } from './ccdWsHelpers.js';
 import { verifyMarker, markGenerated } from '../../shared/mark.mjs';
+import { plantCore } from './coreBuild.js';
 
 const REPO = path.resolve(__dirname, '..', '..');
 const PYTHON = canonicalPython3();
@@ -52,6 +53,7 @@ function plantTree(ccdText: string = fs.readFileSync(CCD, 'utf8')): void {
   fs.copyFileSync(CCD_REDACT_CLI, path.join(tree(), 'shared', 'redact-cli.mjs'));
   fs.copyFileSync(CCD_DOOR_PROG, path.join(dir, 'door-process.mjs'));   // the door program (pinned as the redactor is)
   for (const f of ['ccd-entry.py', 'ccd-entry-install.py']) fs.copyFileSync(path.join(REPO, 'ccd', f), path.join(dir, f));
+  plantCore(tree());   // the Go core's table (and this platform's binary where an entry runs in go), published with the pair
 }
 function install(): { code: number; stdout: string; stderr: string } {
   const r = spawnSync(PYTHON, ['-IS', path.join(tree(), 'ccd', 'ccd-entry-install.py'), 'install', tree(), home],

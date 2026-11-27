@@ -5,16 +5,24 @@
  *
  * Runs `ccd/session-hook.sh` for real in a fixture HOME. Never the live HOME.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
+import { IMPLS, runGoHook, type Impl } from './hookTwin.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 const GENERATION = '0189abcd-1234-5678-9abc-0123456789ab';
 const TOP = 'project-a-calm-mesa';
 const CWD = '/srv/work/project-a';
+
+/** The implementation `run` starts (Go core wave 2): every describe below runs on both. */
+let impl: Impl = 'bash';
+const useImpl = (i: Impl): void => {
+  beforeEach(() => { impl = i; });
+  afterEach(() => { impl = 'bash'; });
+};
 
 let home: string;
 beforeAll(() => {
@@ -29,11 +37,11 @@ beforeAll(() => {
 afterAll(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
 const env = (): NodeJS.ProcessEnv => ({
-  ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+  ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
   TMUX_PANE: `%${TOP}`, CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
 });
 const run = (stdin: string): string => {
-  const r = spawnSync('bash', [HOOK], { input: stdin, encoding: 'utf8', env: env() });
+  const r = impl === 'go' ? runGoHook(home, stdin, env()) : spawnSync('bash', [HOOK], { input: stdin, encoding: 'utf8', env: env() });
   expect(r.status, 'exit 0 on every path').toBe(0);
   expect(r.stderr, 'silent on stderr').toBe('');
   return r.stdout.trim();
@@ -46,7 +54,8 @@ const fire = (tool: string, input: unknown): string | null => {
   return e.hookSpecificOutput.permissionDecision === 'deny' ? String(e.hookSpecificOutput.permissionDecisionReason) : null;
 };
 
-describe('the Fable arm denies an agent that names Fable (D-6792)', () => {
+describe.each(IMPLS)('the Fable arm denies an agent that names Fable (D-6792) (%s)', (i) => {
+  useImpl(i);
   it.each(['Agent', 'Task'])('%s with model fable is denied, with a reason that names the alternatives', (tool) => {
     const why = fire(tool, { description: 'x', prompt: 'do it', model: 'fable' });
     expect(why).toMatch(/opus, sonnet or haiku/);
@@ -63,7 +72,8 @@ describe('the Fable arm denies an agent that names Fable (D-6792)', () => {
   });
 });
 
-describe('the Fable arm denies a Workflow that names Fable (D-6792)', () => {
+describe.each(IMPLS)('the Fable arm denies a Workflow that names Fable (D-6792) (%s)', (i) => {
+  useImpl(i);
   it.each([
     ["model: 'fable'", "const r = await agent({ prompt: 'x', model: 'fable' })"],
     ['model: "fable"', 'await agent({ prompt: "x", model: "fable" })'],
@@ -82,7 +92,8 @@ describe('the Fable arm denies a Workflow that names Fable (D-6792)', () => {
   });
 });
 
-describe('the Fable arm fails open (D-6792)', () => {
+describe.each(IMPLS)('the Fable arm fails open (D-6792) (%s)', (i) => {
+  useImpl(i);
   it('a malformed payload that names fable prints nothing and exits 0', () => {
     expect(run('{"hook_event_name":"PreToolUse","tool_name":"Agent","tool_input":{"model":"fable"')).toBe('');
   });

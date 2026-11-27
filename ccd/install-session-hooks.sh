@@ -23,6 +23,18 @@ set -euo pipefail
 # the fleet host; $HOME is left unexpanded (single-quoted) so it resolves
 # per-session at hook-run time, not to this installer's own $HOME.
 HOOK_CMD='bash "$HOME/.cc-sessions/session-hook.sh"'
+# THE HOOK'S MODE (Go core wave 2, spec 2026-11-24 §4). In `go` the one registered command is the core's, `hook` its entry
+# point and no event argument (the event is stdin's `hook_event_name`, so one command serves every event). The mode is
+# core/entries.json's `hook` row, asked of the box's launcher through its one reader of the rendered table
+# (`ccd-entry.py`'s `--ccrc-entry-hook-mode`): `go` only when the table, the operator's `ccd-go-off` and the binary's digest
+# all say so. Anything else (no launcher, an older launcher, a refusal, `bash`) is bash, the hook every box ran before the core.
+# The registration lags the switch: a `hook` line in `ccd-go-off` takes effect on the very next call (the core hook reads
+# the file at entry and hands the call to the bash hook), while settings.json changes only on the next run of this
+# installer; `ccrc doctor` (ccd-core) warns while a home registers the other mode's command.
+# Never the command alone: BOTH commands are the managed hook below (`own`), so a box that moves between modes converges
+# on exactly one hook per event, and a sweep leaves no orphan of the other mode.
+HOOK_CMD_GO='"$HOME/.local/libexec/ccrc/core/ccrc-core" hook'
+if [[ "${1:-}" != --remove && "$("$HOME/.local/bin/ccd" --ccrc-entry-hook-mode 2>/dev/null || :)" == go ]]; then HOOK_CMD="$HOOK_CMD_GO"; fi
 # HOOK_TIMEOUT_S bounds every managed hook run but SessionEnd's (D-4418, review 316 F24).
 # One open(2) no builtin can make non-blocking remains in the hook: the history spool
 # append, if a FIFO is swapped in between its regular-file test and its `>>`. Claude Code
@@ -107,7 +119,7 @@ fi
 # `matcher`, its other keys and every foreign hook in order, and dropped only
 # when the sweep emptied it; a group holding none (a foreign group with an empty
 # `hooks` list included) is untouched. A non-object hook is foreign and kept.
-JQ_UNMANAGED='def own: type == "object" and ((.command // "") | tostring | contains("/session-hook.sh"));
+JQ_UNMANAGED='def own: type == "object" and ((.command // "") | tostring | (contains("/session-hook.sh") or contains("/libexec/ccrc/core/ccrc-core")));
 def unmanaged: map(if type == "object" and any((.hooks // [])[]?; own)
                    then (.hooks |= map(select(own | not))) | select((.hooks | length) > 0)
                    else . end);'

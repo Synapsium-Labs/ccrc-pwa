@@ -61,6 +61,7 @@ import { adoptPlantedSystemd, assertSpineFrontContained, spineSystemctlArms, spi
 import { docsProbeProgram } from './docsHelperPy.js';
 import { DOCS_INDEX_READY } from './docsIndexFixtures.js';
 import { swJs } from './swFixtures.js';
+import { plantCore } from './coreBuild.js';
 
 /** The two python3 invocations ccd's Docs front makes when the closing
  *  doctor's `docs` check runs the installed ccd (Docs W1a): the floor probe,
@@ -643,6 +644,8 @@ export function updateEnv(home: string): NodeJS.ProcessEnv {
     '#!/bin/sh',
     // The box-token doctor readers, ahead of the argv log (their program text is not an argv a case asserts on).
     BT_PY_ARM,
+    // Ahead of the argv log too: doctor's ccd-core check runs the INSTALLED launcher's self-test (the Go core, spec 2026-11-24), on the REAL interpreter.
+    `[ "$1" = -IS ] && [ "$2" = "$HOME/.local/bin/ccd" ] && [ "$3" = --ccrc-entry-self-test ] && exec '${REAL_PYTHON3}' "$@"`,
     'printf \'%s\\n\' "$*" >> "$HOME/python3-argv"',
     'if [ "$1" = "-m" ] && [ "$2" = "venv" ] && [ -n "$3" ]; then',
     '  bin="$3/bin"; mkdir -p "$bin" || exit 1',
@@ -868,6 +871,7 @@ export function fullTree(home: string, opts: { version: string; sha: string }): 
   cpSync(join(REPO, 'ccd'), join(tree, 'ccd'), { recursive: true });
   cpSync(join(REPO, 'shared'), join(tree, 'shared'), { recursive: true });
   cpSync(join(REPO, 'deploy'), join(tree, 'deploy'), { recursive: true, filter: noToken });
+  plantCore(tree);   // the Go core's table (and this platform's binary where an entry runs in go), as a release carries it
   copyFileSync(join(REPO, 'install.sh'), join(tree, 'install.sh'));
   for (const rel of ['server/package.json', 'agent/package.json']) {
     mkdirSync(dirname(join(tree, rel)), { recursive: true });

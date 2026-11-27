@@ -17,7 +17,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
-import { spawnSyncGroup } from './spawnGroup.js';
+import { hookBoth } from './hookTwin.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 const FIX = path.resolve(__dirname, 'fixtures/start-loads');
@@ -27,7 +27,7 @@ const ID = 'lane-a-project-a';
 const DIGEST = 'd'.repeat(64);
 const BUILD = '2.1.325';
 /** The real `timeout`, which this suite's shim in the fixture HOME's bin hands every call it does not fake. */
-const REAL_TIMEOUT = execFileSync('sh', ['-c', 'command -v timeout || command -v gtimeout'], { encoding: 'utf8' }).trim();
+const REAL_JQ = execFileSync('sh', ['-c', 'command -v jq'], { encoding: 'utf8' }).trim();
 
 let home: string;
 const reg = (): string => path.join(home, '.cc-sessions');
@@ -40,16 +40,17 @@ beforeEach(() => {
   fs.writeFileSync(path.join(reg(), `${ID}.generation`), GENERATION);
   fs.writeFileSync(path.join(reg(), `${ID}.workdir`), path.join(home, 'rig', 'repo'));
   fs.writeFileSync(path.join(home, 'bin', 'tmux'), `#!/bin/sh\necho "cc-${ID}"\n`, { mode: 0o755 });
-  // The `timeout` shim (review 2135 F3, F8): `$HOME/t.purge` removes the row's generation while the transcript is read
-  // (a purge in that window), `$HOME/t.overrun` makes the read run out its bound, and `$HOME/t.hang` makes the loads send
-  // go unanswered, each as `timeout` answers (124). Every other call runs the real one.
-  fs.writeFileSync(path.join(home, 'bin', 'timeout'), [
+  // The fault seams (review 2135 F3, F8), PATH shims both hooks reach (the Go hook bounds a read in-process and runs no
+  // `timeout`, so the bash's own `timeout` shim would be no seam for it): a `jq` shim, where `$HOME/t.purge` removes the
+  // row's generation while the transcript is read (a purge in that window) and `$HOME/t.overrun` makes the read run out its
+  // bound, as `timeout` answers it (124, nothing printed); and in the client, `$HOME/t.hang` makes the loads send go
+  // unanswered (it exits 124 itself, which the bash reads as hung as it reads a cut). Every other jq call runs the real one.
+  fs.writeFileSync(path.join(home, 'bin', 'jq'), [
     '#!/bin/sh',
     'case "$*" in',
-    `  *start_loads*) [ -f "$HOME/t.purge" ] && rm -f "$HOME/.cc-sessions/${ID}.generation"; [ -f "$HOME/t.overrun" ] && exit 124 ;;`,
-    '  *"sessions loads"*) [ -f "$HOME/t.hang" ] && exit 124 ;;',
+    `  *start_loads\\(*) [ -f "$HOME/t.purge" ] && rm -f "$HOME/.cc-sessions/${ID}.generation"; [ -f "$HOME/t.overrun" ] && exit 124 ;;`,
     'esac',
-    `exec '${REAL_TIMEOUT}' "$@"`,
+    `exec '${REAL_JQ}' "$@"`,
   ].join('\n') + '\n', { mode: 0o755 });
   // The rig's instruction files, at the fixture's paths moved under this HOME.
   fs.writeFileSync(path.join(home, 'rig', 'CLAUDE.md'), 'parent\n');
@@ -61,6 +62,7 @@ beforeEach(() => {
     'if [ "$1 $2" = "runs list" ]; then echo \'{"runs":[]}\'; echo "http 200" >&2; exit 0; fi',
     'if [ "$1 $2" = "sessions start" ]; then cat >/dev/null; echo \'{"ok":true}\'; echo "http 202" >&2; exit 0; fi',
     '[ "$1 $2" = "sessions loads" ] || exit 9',
+    '[ -f "$HOME/t.hang" ] && exit 124',
     `printf '%s\\n' "$*" >> "${home}/api.argv"`,
     `cat >> "${home}/api.bodies"`,
     `set -- $(cat "${home}/loads.code" 2>/dev/null || echo 202)`,
@@ -91,15 +93,20 @@ const ENV = { CCRC_LAUNCH_PROFILE: `overlord:${DIGEST}`, CCRC_LAUNCH_RC: 'off', 
 const base = (): object => ({ session_id: SID, transcript_path: tpath(), cwd: path.join(home, 'rig', 'repo') });
 const start = (source: string): object => ({ ...base(), hook_event_name: 'SessionStart', source, model: 'claude-model-a' });
 const stop = (): object => ({ ...base(), hook_event_name: 'Stop', stop_hook_active: false, permission_mode: 'bypassPermissions' });
-const hook = (p: object, env: Record<string, string> = ENV): number | null => spawnSyncGroup('bash', [HOOK], {
-  input: JSON.stringify(p), encoding: 'utf8', timeout: 60_000,
-  env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1',
+// the Go core and the bash, each from the same fixture state, must answer the same and leave the same files (Go core wave 2, Task 6)
+const hook = (p: object, env: Record<string, string> = ENV): number | null => hookBoth(home, JSON.stringify(p),
+  { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1',
     CLAUDE_CODE_SESSION_ID: SID, CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION, ...env },
-}).status;
+  { hook: HOOK, watch: ['api.argv', 'api.bodies'], tree: true }).status;
 const sha = (s: string): string => createHash('sha256').update(s).digest('hex');
 const flag = (name: string): void => { fs.writeFileSync(path.join(home, name), ''); };
 const ruleFile = (): string => path.join(home, 'rig', 'repo', '.claude', 'rules', 'w0-rule.md');
 const HOOKS = [sha('bash "$HOME/.cc-sessions/session-hook.sh"'), sha("sh -c 'echo w0-sandbox-failing-hook >&2; exit 1'")].sort();
+
+// Linux and macOS only: the report starts from a /-rooted transcript_path (session-hook.sh's `[[ "$tp" == /* ]]`, which
+// the Go hook mirrors), and Claude Code's transcript path on Windows is C:\..., so neither mode writes loadpending there
+// (measured in both modes, Task 9b); every case gated on it reads that file. Both modes run them on the Linux bench.
+const POSIX_TRANSCRIPT = process.platform !== 'win32';
 
 /** A startup run of the fixture: SessionStart on an absent transcript, then the whole startup transcript, then one Stop. */
 const startup = (env: Record<string, string> = ENV): void => {
@@ -110,7 +117,7 @@ const startup = (env: Record<string, string> = ENV): void => {
 };
 
 describe('the pending report (Task 4)', () => {
-  it('a startup SessionStart under a surface writes loadpending: no tries, a reportId, the window offset, the source, the path', () => {
+  it.runIf(POSIX_TRANSCRIPT)('a startup SessionStart under a surface writes loadpending: no tries, a reportId, the window offset, the source, the path', () => {
     writeT(['{"type":"x"}']);
     hook(start('startup'));
     const [t, rid, off, src, tp] = pendLines()![0]!.split('\t');
@@ -127,7 +134,7 @@ describe('the pending report (Task 4)', () => {
   });
 });
 
-describe('the body (Task 4, M4 fixtures)', () => {
+describe.runIf(POSIX_TRANSCRIPT)('the body (Task 4, M4 fixtures)', () => {
   for (const build of ['2.1.325', '2.1.323']) {
     it(`a startup on ${build}: every kind measured, sent once, the file removed and the start remembered`, () => {
       const env = { ...ENV, CLAUDE_CODE_EXECPATH: `/x/versions/${build}` };
@@ -256,6 +263,32 @@ describe('the body (Task 4, M4 fixtures)', () => {
     expect(body().loaded.instructions).toBe('unmeasured');
     expect(body().loaded.hooks).toStrictEqual(HOOKS);
   });
+  it('an instruction file that is a regular file but cannot be read digests as x: instructions read unmeasured (pipefail)', () => {
+    fs.chmodSync(ruleFile(), 0o000);
+    try { startup(); } finally { fs.chmodSync(ruleFile(), 0o644); }
+    expect(body().loaded.instructions).toBe('unmeasured');
+  });
+  it('a FIFO at .workdir is never opened: the report goes in the same Stop with no workdir', () => {
+    fs.rmSync(path.join(reg(), `${ID}.workdir`));
+    execFileSync('mkfifo', [path.join(reg(), `${ID}.workdir`)]);
+    startup();
+    expect(sent()).toHaveLength(1);
+  });
+  it('a box with no timeout binary: the read never starts (nothing is sent) and the file counts a try, in both hooks', () => {
+    const dir = path.join(home, 'bin-no-timeout');
+    fs.mkdirSync(dir);
+    for (const d of ['/usr/local/bin', '/usr/bin', '/bin']) {
+      for (const f of fs.existsSync(d) ? fs.readdirSync(d) : []) {
+        if (f === 'timeout' || f === 'gtimeout' || fs.existsSync(path.join(dir, f))) continue;
+        try { fs.symlinkSync(path.join(d, f), path.join(dir, f)); } catch { /* taken */ }
+      }
+    }
+    fs.writeFileSync(path.join(reg(), `${ID}.uuid`), `${SID}\n`);
+    const env = { ...ENV, PATH: `${path.join(home, 'bin')}${path.delimiter}${dir}`, TMUX_PANE: '', CLAUDE_JOB_DIR: path.join(home, 'job') };
+    startup(env);
+    expect(sent()).toStrictEqual([]);
+    expect(pendLines()![0]!.split('\t')[0]).toBe('1');
+  });
   it('an instruction file over LOADS_FILE_MAX is not hashed: instructions read unmeasured (F6)', () => {
     fs.writeFileSync(ruleFile(), 'r'.repeat(1024 * 1024 + 1));
     startup();
@@ -281,7 +314,7 @@ describe('a stale file and a purge (review 2135 F1, F3)', () => {
     expect(sent()).toStrictEqual([]);
     expect(fs.existsSync(pend())).toBe(false);
   });
-  it('a purge while the wait path reads leaves no loadpending: the wait ends at the generation re-check too (F3)', () => {
+  it.runIf(POSIX_TRANSCRIPT)('a purge while the wait path reads leaves no loadpending: the wait ends at the generation re-check too (F3)', () => {
     writeT([]); fs.rmSync(tpath());
     hook(start('startup'));
     const lines = fixLines(`transcript-${BUILD}-startup.jsonl`);
@@ -293,7 +326,7 @@ describe('a stale file and a purge (review 2135 F1, F3)', () => {
   });
 });
 
-describe('the resume carries its own start, under equality (ruled 2026-11-15, slug resume-carries-its-own-start)', () => {
+describe.runIf(POSIX_TRANSCRIPT)('the resume carries its own start, under equality (ruled 2026-11-15, slug resume-carries-its-own-start)', () => {
   /** A startup reported (202), then `between` appended, then a resume of the same transcript: the resume fixture's resume
    *  region appended. */
   const resume = (env: Record<string, string>, between: readonly string[] = []): void => {

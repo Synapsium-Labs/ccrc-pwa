@@ -1167,12 +1167,66 @@ git commit -m "test(ccd): the Node twin table's guards: modules, parity tests, t
 
 ## Deviations found
 
-(none yet)
+- **D-TBD-twin-roots** (Task 8, Step 4): adding `ccd/node` to `ROOTS` in `server/test/single-definition/helpers.ts` turned
+  `core-vocab.test.ts` "actually found the four source trees, and the files the findings name" red: it pins the root count
+  at four. Widening `sources()` to `.mjs` as well turned many unrelated scans red (`roster-bash`, `update-stall`, `models-op`,
+  `exec-kinds`, `vocabularies`, `injected-prompts`: they scan `.mjs` separately, so `shared/*.mjs` was counted twice). Both
+  changes are reverted; the twin is not under the copy scans. Follow-up: give the twin its own root-aware scan, or teach
+  `core-vocab` a fifth root and make `sources()` take an extension set per caller. (`core-vocab`
+  "is spelled in exactly one file, and that file is ccdWsHelpers.ts" was this task's own red, not a baseline one: the table test spelled the `ccd/ccd` path itself. Fixed by importing `CCD` from `./ccdWsHelpers.js`.)
+  Closing it is a precondition of the first wave whose twin module needs shared vocabulary (the session hook), and the
+  operator mints real numbers for every `D-TBD-twin-*` entry before the push.
+- **D-TBD-twin-harness** (final review I3): spec §6's `CCD_IMPL` harness mode, which would start the body or the twin
+  through the launcher, is not built. `runImpl` (`server/test/ccdTwin.ts#runImpl`) runs the body and the twin side by
+  side on one fixture instead. For `caps` it is the stronger parity check (one test compares the bytes), and the
+  launcher's own choice is covered by `ccd-twin-entry.test.ts`. A later verb whose tests are sourced-snippet tests
+  revisits this.
+- **D-TBD-twin-nonode** (final review): with no node on PATH, the launcher starts bash for a twin verb instead of
+  refusing `entry-no-node`. Nothing has started at that point, so spec §4's "picks once, before the start" holds, and a
+  box with no node on a unit's PATH keeps advertising its verbs. Cost if wrong: a box runs bash silently where the
+  operator expected the twin; doctor and the timing log can show it.
+- **D-TBD-twin-doctor** (final review): the doctor check compares the installed twin to the shipped tree, not to the
+  digests rendered into the launcher. The code is left as it is.
 
 ## Results of wave 0
 
-(filled by Task 3)
+Task 3 (the operator's measured day on the live box) is still open. One bench figure that does not need the live box
+was taken on the reference Windows box on 2026-11-23, with `node win/bench/hook-time.mjs 10`: the session hook's
+PreToolUse takes a median of 3713 ms and a p90 of 6548 ms, against a median of 31 ms on the Linux bench. The box was
+not in the measuring conditions: memory commit was 79 GB, near its limit. The hook runs on every tool call in every
+session, so it leads the order for wave 2 unless the measured day shows otherwise.
 
 ## Results of wave 1
 
-(filled by Task 9)
+Measured on the reference Windows box, 2026-11-23, with a scratch script that
+is not in the tree. It installs this branch through `ccd/ccd-entry-install.py` into a throwaway HOME with POSIX paths
+and runs the installed launcher with the real `node.exe`. The box was not in the measuring conditions (commit near
+its limit).
+
+- MSYS2 Python reports `sys.platform == 'cygwin'`, so the launcher takes the twin branch.
+- The `/c/…` script path reaches the native `node.exe` without conversion; no `cygpath` is needed.
+- `ccd caps` through the launcher printed exactly the bash body's output plus `node:caps`, both with the pool-sync
+  timer present and with it absent.
+- Time of `ccd caps` through the launcher: 519, 1449 and 554 ms with the twin; 11231, 9599 and 8206 ms with
+  `ccd-node-off` sending it to bash. Target under 2 s: met.
+- An empty `ccd-node-off`, and one written as UTF-8 with a BOM, send `caps` to bash.
+- `node_options` in lower case did not reach node.
+- The twin test files on Windows: `ccd-twin-caps`, `ccd-twin-lock` and `ccd-twin-table` pass. `ccd-twin-entry` and
+  `ccd-entry-timing` fail at their fixture install, because `installEntryFixture` hands MSYS2 Python a `C:\…` path.
+  This fixture class already fails on Windows: `ccd-entry-install` failed 106 of 108 in the Windows parity run before
+  this branch. The smoke above covers the same behaviour on Windows.
+
+**Live box, 2026-11-23.** The operator installed this branch with `ccrc install` from the twin worktree
+(`untagged-40624b584243`). The install's own restart of `ccrc.service` timed out, because the Windows manager had stopped
+answering about 12 hours earlier (a known issue, unrelated to the twin). The manager was started again from its logon
+shortcut, and the server came up on this build.
+- `ccd caps` from the box's own PATH: 2512, 3436 and 5169 ms; every run ends with `node:caps` and lists `account-v2`.
+  The same verb took about 27 s through bash on 2026-11-22. Target under 2 s: not met on this run, which had the
+  Windows parity run going with 8 workers and memory commit near its limit; the same box measured 0.5 s with that run
+  paused.
+- The server's boot read caps: Accounts shows its account controls, and no longer says the fleet host needs an update.
+- `ccrc version` still says `install: incomplete`, and the install could not enable the timers (HTTP 409), because the
+  manager was not answering; a second `ccrc install` with the manager up completes it.
+
+Still open from Task 9: the CI selection check (Step 1, needs a push), the timing taken again in the measuring
+conditions, and the second install run.

@@ -28,6 +28,9 @@ import { CONTAINED_TOOLS, plantPoison } from './containedTools.js';
 // The second, and it imports nothing at all (Docs W4): the PWA bundle's one fixture worker, so the closing doctor's
 // `docs-sw` check reads the same text `ccrc-doctorFixture.ts`'s `healthy()` plants.
 import { swJs } from './swFixtures.js';
+// The third imports only `node:*` too: the Go core's table and, where an entry runs in go, this platform's binary, which
+// the pair publisher refuses a tree without (spec 2026-11-24).
+import { plantCore } from './coreBuild.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -383,6 +386,7 @@ export function installFixtureTree(home: string, sub = 'checkout'): string {
     mkdirSync(dirname(dest), { recursive: true });
     writeFileSync(dest, body);
   }
+  plantCore(root);
   return root;
 }
 

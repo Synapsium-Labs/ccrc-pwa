@@ -67,6 +67,14 @@ jobs:
             pwa/package-lock.json
             ui/package-lock.json
 
+      # The Go core's five binaries are cross-built into the release (core/build.sh, spec 2026-11-24 §7), at the
+      # version core/go.mod's toolchain line names. No cache: a restored Go build cache is compiled output
+      # nothing verifies, and these binaries ship.
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: core/go.mod
+          cache: false
+
       # The script owns the build: refuses dirty/untagged (CI never passes
       # --untagged), installs and builds each package itself, assembles
       # ccrc-<tag>.tar.gz + SHA256SUMS under --out.

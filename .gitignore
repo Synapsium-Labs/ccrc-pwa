@@ -7,6 +7,8 @@ node_modules
 server/dist/
 server/dist-pwa/
 agent/dist/
+# ccrc-core cross-built by hand (bash core/build.sh core/bin): a release and deploy.sh build into their own staging.
+core/bin/
 
 # local, gitignored env files with real tokens.
 #

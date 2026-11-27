@@ -17,6 +17,8 @@ import { inheritedEnv } from './gitEnvStrip.js';
 import { CONTAINED_TOOLS, assertNoPoisonLeft, busUnder, ledgerHitLine, plantPoison, takePoisonRecord } from './containedTools.js';
 import { CLOSED_AUTH_BASE } from './codexAuthFixture.js';
 import { markGenerated } from '../../shared/mark.mjs';
+import { CORE_GOARCH, CORE_GOOS, coreExe, coreGoEntries, coreGoVerbs } from './coreBuild.js';
+import { assertFencedEnv, fenceEnv } from './pathFence.js';
 
 /** The home-able ids of the test roster — the set ccd reads as `CCRC_HOME_ABLE`
  *  out of the roster `seedAccountsSh` writes below. Derived, not hand-typed,
@@ -174,8 +176,20 @@ export const CCRC_API = path.resolve(__dirname, '../../ccd/ccrc-api');
  *  crosses the launcher and is outside the direct-entry guarantee. */
 export const CCD_ENTRY = path.resolve(__dirname, '../../ccd/ccd-entry.py');
 
-/** The two placeholders the template carries exactly once each. */
-export const CCD_ENTRY_PLACEHOLDERS = { python: '@CCRC_PYTHON3@', digest: '@CCRC_CCD_SHA256@' } as const;
+/** The three placeholders the template carries exactly once each. */
+export const CCD_ENTRY_PLACEHOLDERS = { python: '@CCRC_PYTHON3@', digest: '@CCRC_CCD_SHA256@', core: '@CCRC_CORE_JSON@' } as const;
+/** The Go core's table a hand-rendered launcher carries: no verb, so every start is the bash path. */
+export const NO_CORE_TABLE = '{"files":{},"verbs":[]}';
+/** The Go core's table as `ccd/ccd-entry-install.py` renders it from a tree for this platform: the verbs in go mode
+ *  here and the one binary's SHA-256 by its name, keys sorted, no whitespace; with no such verb, no file either. */
+export function coreTableJson(tree: string): string {
+  const verbs = coreGoVerbs();
+  if (coreGoEntries().length === 0) return NO_CORE_TABLE;
+  const bin = path.join(tree, 'core', 'bin', `${CORE_GOOS}-${CORE_GOARCH}`, coreExe());
+  // `"hook":"go"` only when the hook row is in go mode here: absent is bash (ccd-entry-install.py's `read_core`).
+  return JSON.stringify({ files: { [coreExe()]: createHash('sha256').update(fs.readFileSync(bin)).digest('hex') }, verbs,
+    ...(coreGoEntries().includes('hook') ? { hook: 'go' } : {}) });
+}
 
 /** The canonical path of the `python3` this test process's PATH selects,
  *  asked of that interpreter itself under `-IS` — the spelling a rendered
@@ -189,12 +203,15 @@ export function canonicalPython3(): string {
  *  placeholder census the installer enforces: exactly one of each before, none
  *  of any `@CCRC_…@` shape after. Throws rather than rendering a launcher that
  *  could not run. */
-export function renderCcdEntry(template: string, python: string, sha256: string): string {
+export function renderCcdEntry(template: string, python: string, sha256: string, coreJson: string = NO_CORE_TABLE): string {
   for (const p of Object.values(CCD_ENTRY_PLACEHOLDERS)) {
     const n = template.split(p).length - 1;
     if (n !== 1) throw new Error(`the launcher template carries ${n} copies of ${p}, not exactly one`);
   }
-  const out = template.replace(CCD_ENTRY_PLACEHOLDERS.python, python).replace(CCD_ENTRY_PLACEHOLDERS.digest, sha256);
+  const out = template.replace(CCD_ENTRY_PLACEHOLDERS.python, python).replace(CCD_ENTRY_PLACEHOLDERS.digest, sha256)
+    // Inside a single-quoted Python string, as the installer escapes it: backslashes, then quotes. A function replacer,
+    // so no `$` pattern in the table is read as one.
+    .replace(CCD_ENTRY_PLACEHOLDERS.core, () => coreJson.replace(/\\/g, '\\\\').replace(/'/g, "\\'"));
   if (/@CCRC_[A-Z0-9_]+@/.test(out)) throw new Error('the rendered launcher still carries a placeholder');
   return out;
 }
@@ -617,9 +634,14 @@ export function stripCcrcKnobs(env: NodeJS.ProcessEnv, keep: readonly string[] =
   return env;
 }
 
+/** The guard on every env ghContainedEnv hands out (pathFence.ts): on Windows it throws, before any spawn, when the env
+ *  reaches outside its fixture. */
+const contained = (e: NodeJS.ProcessEnv): NodeJS.ProcessEnv => { assertFencedEnv(e); return e; };
+
 export function ghContainedEnv(
   home: string, env: NodeJS.ProcessEnv = {}, opts: ContainOpts = {},
 ): NodeJS.ProcessEnv {
+  env = fenceEnv(env, home); // the Windows fence (pathFence.ts): PATH and every home variable, before PATH is built
   const bin = harnessBin(home);
   fs.writeFileSync(path.join(bin, 'gh'),
     `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/gh-poison"\n${ledgerHitLine('gh-poison')}\n`
@@ -639,7 +661,7 @@ export function ghContainedEnv(
     XDG_RUNTIME_DIR: path.join(home, 'no-runtime-dir'),
     DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(home, 'no-bus')}`,
   };
-  if (!opts.systemd && !opts.tmux && !opts.net) return { ...env, ...bus, ...containedAuthBase(env), ...containedBridgeBase(env), ...containedReleaseAnswer(env, home), PATH: `${pathEntry(bin)}:${posixPathList(env['PATH'] ?? '')}${lookupTail()}` };
+  if (!opts.systemd && !opts.tmux && !opts.net) return contained({ ...env, ...bus, ...containedAuthBase(env), ...containedBridgeBase(env), ...containedReleaseAnswer(env, home), PATH: `${pathEntry(bin)}:${posixPathList(env['PATH'] ?? '')}${lookupTail()}` });
   // THE SECOND STRUCTURAL BOUNDARY for the ccd runners, and the reason it is a
   // poison rather than an absence: `_have_systemctl` is `command -v systemctl`,
   // so REMOVING systemctl would send every ccd test down `_supervised_start`'s
@@ -702,7 +724,7 @@ export function ghContainedEnv(
   // Prepended to whatever the caller passed, never the other way round: a
   // snippet that supplies its own PATH must not be able to displace the poison,
   // which is the difference between structural and advisory.
-  return { ...env, ...bus, ...containedAuthBase(env), ...containedBridgeBase(env), ...containedReleaseAnswer(env, home), PATH: `${pathEntry(bin)}:${posixPathList(env['PATH'] ?? '')}${lookupTail()}` };
+  return contained({ ...env, ...bus, ...containedAuthBase(env), ...containedBridgeBase(env), ...containedReleaseAnswer(env, home), PATH: `${pathEntry(bin)}:${posixPathList(env['PATH'] ?? '')}${lookupTail()}` });
 }
 
 /** The one reader every append-only call log in this file goes through: absent

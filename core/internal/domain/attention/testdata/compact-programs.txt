@@ -1,0 +1,26 @@
+## setdoc
+{v:1, at:$at, nonce:$nonce, scope:$scope, overlap:($ovl == "true"),
+        agent:(if $agent=="" then null else $agent end),
+        transcript:(if $t=="" then null else $t end),
+        parentLive:(if $pl=="true" then true elif $pl=="false" then false else null end),
+        liveAgents:(if $ln=="" then null else ($ln|tonumber) end),
+        cwd:(if $cwd=="" then null else $cwd end),
+        built:(if $built=="" then null else $built end),
+        fresh:(if $fresh=="" then null else $fresh end),
+        steered:false, files:null, stats:null}
+## rec1
+$s[0] as $set | $m + {served: $sv,
+        cwd: $set.cwd, built: $set.built, agent: $set.agent,
+        transcript: $set.transcript, parentLive: $set.parentLive, liveAgents: $set.liveAgents}
+## rec2
+$m + {served: $sv, scope: (if $norm == "ambiguous" then "ambiguous" else null end),
+             cwd: null, built: null, agent: null,
+             transcript: null, parentLive: null, liveAgents: null}
+## norm
+
+            (.overlap == null or .overlap == false)
+            and (. + {trigger: $trig} | NORMAL_PROVENANCE)
+            and (.files == null or (.files | type == "array"
+                 and all(.[]; type == "object"
+                              and (.path | type == "string")
+                              and (.path | length > 0))))

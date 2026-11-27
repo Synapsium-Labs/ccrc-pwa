@@ -2012,6 +2012,37 @@ describe('the door program (the Overlord door process A2): backed up by the upda
   });
 });
 
+/** The Go core's table and directory the pair publisher reads and places beside the body (spec 2026-11-24), read from
+ *  the same helper. */
+function coreDecl(): { table: string; dest: string } {
+  const one = (name: string): string => {
+    const all = [...PAIR_HELPER.matchAll(new RegExp(`^${name} = '([^'\\n]+)'$`, 'gm'))];
+    if (all.length !== 1) throw new Error(`install-census.test.ts: expected exactly one \`${name} = '…'\` line in ${PAIR_HELPER_REL}, found ${all.length}`);
+    return all[0]![1]!;
+  };
+  return { table: one('CORE_TABLE_SOURCE'), dest: one('CORE_DEST') };
+}
+
+describe('ccd\'s Go core (spec 2026-11-24): the directory the launcher\'s table names is placed by the pair publisher and backed up, whole, before the body', () => {
+  it('the publisher declares it once, as core/ beside the body, and its table is a tracked file', () => {
+    const { table, dest } = coreDecl();
+    const { bodyDest } = pairDecl();
+    expect(dest, 'the core lives in core/ beside the body').toBe(`${path.posix.dirname(bodyDest)}/core`);
+    expect(trackedFiles().has(table), `${table} is not tracked`).toBe(true);
+  });
+
+  it('the update backup takes the directory after the redactor and before the body — arm 3 restores in that order', () => {
+    const { dest } = coreDecl();
+    const { bodyDest } = pairDecl();
+    const rows = calls(fnBody('_upd_backup_set'), '_upd_backup_copy');
+    const at = rows.findIndex((a) => a[0] === `$HOME/${dest}`);
+    expect(at, `_upd_backup_set does not back up $HOME/${dest}`).toBeGreaterThan(-1);
+    expect(rows[at]![1], 'the backup name').toBe('ccd-core');
+    expect(at).toBeGreaterThan(rows.findIndex((a) => a[0] === `$HOME/${redactDecl()[1]!.dest}`));
+    expect(at).toBeLessThan(rows.findIndex((a) => a[0] === `$HOME/${bodyDest}`));
+  });
+});
+
 describe('every file either installer copies out of the tree is tracked in this repository', () => {
   // Header: AND THE SOURCES. A placement whose source no commit carries dies
   // on every real tree; a fixture that stubs the file hides that (D-3165).

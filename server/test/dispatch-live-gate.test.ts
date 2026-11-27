@@ -29,6 +29,7 @@ import { SERVER_CAPS, SERVER_CAPS_FILE, renderServerCaps } from '../../shared/ap
 import { execFileSync } from 'node:child_process';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { IMPLS, runGoHook } from './hookTwin.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ccrcRoot = path.resolve(here, '..', '..');
@@ -517,7 +518,7 @@ describe('the gate\'s capability word (D-5238, advertised through D-5232\'s mech
 // `compactions-write-no-hookstate` (D-5239): behind this gate's word the fleet's hook leaves a Stop's `done` standing
 // through an idle compaction, while the live file reads `busy` (it does during a compaction). The carry is safe only
 // because this gate reads the live word: the real hook writes the file, and the dispatch still refuses.
-describe('a hook done carried through an idle compaction, live busy, is worker-busy (D-5239 behind D-5238)', () => {
+describe.each(IMPLS)('a hook done carried through an idle compaction, live busy, is worker-busy (D-5239 behind D-5238) (%s)', (impl) => {
   it('Stop, then PreCompact and PostCompact manual behind dispatch-live-gate-v1 → hook still done/Stop, worker-busy, no /clear', async () => {
     const b = await box();
     const bin = path.join(b.home, 'bin');
@@ -531,9 +532,10 @@ describe('a hook done carried through an idle compaction, live busy, is worker-b
       cwd: '/rig/repo', prompt_id: '00000000-0000-4000-8000-0000000000c1', hook_event_name: ev, trigger: 'manual',
       ...(ev === 'PreCompact' ? { custom_instructions: null } : { compact_summary: 'fixture summary' }) });
     for (const p of [stopPayload, compact('PreCompact'), compact('PostCompact')]) {
-      execFileSync('bash', [path.join(ccrcRoot, 'ccd', 'session-hook.sh')], { input: JSON.stringify(p), encoding: 'utf8',
-        env: { ...process.env, HOME: b.home, PATH: `${bin}:${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1',
-          CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: String(PANE) } });
+      const env = { ...process.env, HOME: b.home, PATH: `${bin}${path.delimiter}${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1',
+        CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: String(PANE) };
+      if (impl === 'go') expect(runGoHook(b.home, p, env).status, 'the Go hook: exit 0').toBe(0);
+      else execFileSync('bash', [path.join(ccrcRoot, 'ccd', 'session-hook.sh')], { input: JSON.stringify(p), encoding: 'utf8', env });
     }
     const hs = JSON.parse(readFileSync(path.join(b.home, '.cc-sessions', `${ID}.hookstate.json`), 'utf8')) as Record<string, unknown>;
     expect(hs).toMatchObject({ state: 'done', event: 'Stop', sessionId: UUID });

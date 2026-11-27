@@ -8,7 +8,7 @@ import path, { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { scaled } from './timeScale.js';
-import { installedCcdBody, renderCcdEntry } from './ccdWsHelpers.js';
+import { coreTableJson, installedCcdBody, renderCcdEntry } from './ccdWsHelpers.js';
 import { CONTAINED_TOOLS, assertNoRealTool, plantPoison } from './containedTools.js';
 import { describeLinux, describeDarwin, itLinux, itDarwin } from './platformFixtures.js';
 import { TREE_STUBS, installFixtureTree, rsyncRecorder } from './installTreeFixture.js';
@@ -123,6 +123,74 @@ describe('ccrc install: the shipped tree lands at $HOME/ccrc', () => {
     // BEFORE anything moved — the same property the two preflights above pin.
     expect(existsSync(placed(home)), 'the tree was placed before it was checked').toBe(false);
     expect(existsSync(join(home, 'rsync-argv')), 'rsync ran anyway').toBe(false);
+  });
+
+  // A checkout carries core/build.sh and no binary; an entry in go mode here needs this machine's binary, which the
+  // install builds before the tree is placed (spec 2026-11-24 §7). The pair installer's seam (`.ccrc-test-fixture` in
+  // the checkout, CCRC_CORE_PLATFORM) makes this Linux box read as windows, where caps runs in go mode; the stub build
+  // records its arguments and writes the binary.
+  const coreCheckout = (prefix: string): string => {
+    const home = freshBox(prefix);
+    writeFileSync(treeFile(home, '.ccrc-test-fixture'), '');
+    writeFileSync(treeFile(home, 'core/build.sh'), [
+      '#!/usr/bin/env bash',
+      'printf \'%s\\n\' "$*" >> "$HOME/core-build-argv"',
+      'mkdir -p "$1/$2" && echo built > "$1/$2/ccrc-core.exe"',
+    ].join('\n'), { mode: 0o755 });
+    return home;
+  };
+  const target = `windows-${({ x64: 'amd64', arm64: 'arm64' } as Record<string, string>)[process.arch]}`;
+  it('from a checkout with an entry in go mode here and Go on PATH, builds this machine\'s core before placing the tree', () => {
+    const home = coreCheckout('ccrc-install-corebuild-');
+    const r = runInstall(home, ['install'], { CCRC_CORE_PLATFORM: 'windows' }, { stubs: { go: '#!/bin/sh\nexit 0\n' } });
+    expect(r.code, r.stderr).toBe(0);
+    expect(read(join(home, 'core-build-argv'))).toBe(`${treeRoot(home)}/core/bin ${target}\n`);
+    expect(r.stdout).toContain(`install: core: building ccrc-core for ${target} in this checkout (bash core/build.sh core/bin ${target})`);
+    expect(existsSync(placed(home, 'core', 'bin', target, 'ccrc-core.exe')), 'the placed tree carries the built core').toBe(true);
+  });
+  it('builds nothing when no entry is in go mode here', () => {
+    const idle = coreCheckout('ccrc-install-corebuild-idle-');
+    expect(runInstall(idle, ['install'], { CCRC_CORE_PLATFORM: 'linux' }, { stubs: { go: '#!/bin/sh\nexit 0\n' } }).code).toBe(0);
+    expect(existsSync(join(idle, 'core-build-argv')), 'a build ran with no go verb here').toBe(false);
+  });
+  it('from a checkout rebuilds over a binary already in core/bin, so a pulled source never installs a stale core', () => {
+    const built = coreCheckout('ccrc-install-corebuild-have-');
+    mkdirSync(treeFile(built, `core/bin/${target}`), { recursive: true });
+    writeFileSync(treeFile(built, `core/bin/${target}/ccrc-core.exe`), 'stale\n');
+    const r = runInstall(built, ['install'], { CCRC_CORE_PLATFORM: 'windows' }, { stubs: { go: '#!/bin/sh\nexit 0\n' } });
+    expect(r.code, r.stderr).toBe(0);
+    expect(read(join(built, 'core-build-argv'))).toBe(`${treeRoot(built)}/core/bin ${target}\n`);
+    expect(read(placed(built, 'core', 'bin', target, 'ccrc-core.exe')), 'the placed core is the rebuilt one').toBe('built\n');
+  });
+  it('a release tree (no core/build.sh) never builds: it installs the shipped binary', () => {
+    const rel = coreCheckout('ccrc-install-corebuild-release-');
+    rmSync(treeFile(rel, 'core/build.sh'));
+    mkdirSync(treeFile(rel, `core/bin/${target}`), { recursive: true });
+    writeFileSync(treeFile(rel, `core/bin/${target}/ccrc-core.exe`), 'shipped\n');
+    const r = runInstall(rel, ['install'], { CCRC_CORE_PLATFORM: 'windows' }, { stubs: { go: '#!/bin/sh\nexit 0\n' } });
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(rel, 'core-build-argv')), 'a release tree built').toBe(false);
+    expect(read(placed(rel, 'core', 'bin', target, 'ccrc-core.exe'))).toBe('shipped\n');
+  });
+  // The box's own PATH less every directory that holds a `go` (a dev box has the real one): "Go is missing".
+  const noGoPath = (home: string): string => String(ccrcEnv(home).PATH).split(':')
+    .filter((d) => !existsSync(join(d, 'go'))).join(':');
+  it('a checkout without Go on PATH installs the binary it has and says once that it was not rebuilt', () => {
+    const have = coreCheckout('ccrc-install-corebuild-nogo-');
+    mkdirSync(treeFile(have, `core/bin/${target}`), { recursive: true });
+    writeFileSync(treeFile(have, `core/bin/${target}/ccrc-core.exe`), 'old\n');
+    const r = runInstall(have, ['install'], { CCRC_CORE_PLATFORM: 'windows', PATH: noGoPath(have) });
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(have, 'core-build-argv')), 'a build ran without go').toBe(false);
+    expect(r.stderr.match(/was not rebuilt/g) ?? []).toHaveLength(1);
+    expect(r.stderr).toContain('Go is not on PATH');
+    expect(read(placed(have, 'core', 'bin', target, 'ccrc-core.exe'))).toBe('old\n');
+  });
+  it('a checkout without Go and without a binary builds nothing and claims no stale core (the installer refusal is pinned in ccd-entry-install.test.ts)', () => {
+    const none = coreCheckout('ccrc-install-corebuild-nogo-nobin-');
+    const r = runInstall(none, ['install'], { CCRC_CORE_PLATFORM: 'windows', PATH: noGoPath(none) });
+    expect(existsSync(join(none, 'core-build-argv')), 'a build ran without go').toBe(false);
+    expect(r.stderr).not.toContain('was not rebuilt');
   });
 
   it('does NOT demand an agent build for --role both, the DEFAULT role (D-1161)', () => {
@@ -1065,7 +1133,7 @@ describe('ccrc install: the executables and files it installs', () => {
     const python = /^#!(\S+) -IS\n/.exec(read(entry))?.[1];
     expect(python, 'the launcher does not open with an absolute isolated-python shebang').toMatch(/^\//);
     expect(read(entry)).toBe(renderCcdEntry(read(placed(home, 'ccd/ccd-entry.py')), python!,
-      createHash('sha256').update(readFileSync(bin)).digest('hex')));
+      createHash('sha256').update(readFileSync(bin)).digest('hex'), coreTableJson(placed(home))));
     expect(mode(entry)).toBe(0o755);
   });
 

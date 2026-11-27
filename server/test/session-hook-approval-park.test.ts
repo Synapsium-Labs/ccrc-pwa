@@ -4,7 +4,8 @@
  * authority in a deny; and it prints `allow:operator` even for a child whose deny digest is only in the installer's
  * history (a v1 `allow` prints nothing there).
  *
- * Runs `ccd/session-hook.sh` for real in a fixture HOME. The verifier is a STUB here (it prints `stub/verdict.line`), so
+ * Runs `ccd/session-hook.sh` and the Go core's `ccrc-core hook` for real, every hook case in each (Go core wave 2, Task 7),
+ * each in a fixture HOME of its own. The verifier is a STUB here (it prints `stub/verdict.line`), so
  * no signatures are needed: this suite pins the hook's reading of the request's `park` field, of the `parked` state, and
  * of the printed verdict line, not the verifier's checks. The `ccrc-api` client is a stub as in the wait suite.
  */
@@ -13,7 +14,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
-import { spawnSyncGroup } from './spawnGroup.js';
+import { IMPLS, runHook, type Impl } from './hookTwin.js';
 import { approvalParkDenyText } from '../../shared/approval-park.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
@@ -102,16 +103,18 @@ beforeEach(() => {
 afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
 const ENV = (): NodeJS.ProcessEnv => ({
-  ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+  ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
   TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
   CCRC_APPROVAL_TICK_S: '0.05', CCRC_APPROVAL_POLL_TICKS: '2', CCRC_APPROVAL_CEILING_S: '4',
 });
 const payloadFor = (): Payload => ({ ...MAIN, transcript_path: transcript });
 interface Run { stdout: string; ms: number; rulings: number }
+/** The hook under test, set by the both-mode loop below. */
+let impl: Impl = 'bash';
 const fire = (env: NodeJS.ProcessEnv = ENV(), payload: Payload = payloadFor()): Run => {
-  const t0 = Date.now();
-  const r = spawnSyncGroup('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env, timeout: 30_000 });
-  const ms = Date.now() - t0;
+  const t0 = performance.now();
+  const r = runHook({ home, env: (e = {}) => e }, impl, JSON.stringify(payload), env);
+  const ms = performance.now() - t0;
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
   expect(r.stderr, 'the hook contract: silent on stderr').toBe('');
   const callsFile = path.join(stub, 'calls');
@@ -141,120 +144,125 @@ describe('the park deny text\'s bash copy', () => {
   });
 });
 
-describe('the park: printed at the window\'s end on an exact live, or at once on a parked answer', () => {
-  it('park "live" and a ruling that stays held: at the window\'s end the park deny for the row id is printed', () => {
-    put('stub/request.out', '{"id":41,"waitS":1,"park":"live"}');
-    put('stub/ruling.out', '{"state":"held"}');
-    const r = fire();
-    expect(decision(r)).toEqual(parkDeny(41));
-    expect(r.rulings).toBeGreaterThan(1);
-    expect(r.ms).toBeGreaterThanOrEqual(900);
-  });
-  it('a ruling read answering parked prints the park deny at once, after one poll', () => {
-    put('stub/ruling.out', '{"state":"parked"}');
-    const r = fire(longWindow());
-    expect(decision(r)).toEqual(parkDeny(41));
-    expect(r.rulings, 'it stopped on the first poll').toBe(1);
-    expect(r.ms, 'it ended at the answer, not at its window').toBeLessThan(EARLY_MS);
-  });
-  it.each([
-    ['shadow', 'shadow'], ['capped', 'capped'], ['absent', undefined], ['"Live"', 'Live'], ['" live"', ' live'], ['a non-string', 1],
-  ] as const)('park %s: at the window\'s end nothing is printed', (_n, park) => {
-    put('stub/request.out', JSON.stringify({ id: 41, waitS: 1, ...(park === undefined ? {} : { park }) }));
-    put('stub/ruling.out', '{"state":"held"}');
-    const r = fire();
-    expect(r.stdout).toBe('');
-    expect(r.rulings).toBeGreaterThan(1);
-  });
-  it('the retry: park "live" and a first poll that answers allowed prints the allow on the first poll', () => {
-    verdict('allow ok');
-    const r = fire(longWindow('live'));
-    expect(decision(r)).toEqual(ALLOW);
-    expect(r.rulings).toBe(1);
-    expect(r.ms).toBeLessThan(EARLY_MS);
-  });
-});
+describe.each(IMPLS)('the %s hook', (mode) => {
+  beforeEach(() => { impl = mode; });
+  afterEach(() => { impl = 'bash'; });
 
-describe('a deny names its authority', () => {
-  it.each([
-    ['deny:operator not here', 'denied by the operator: not here'],
-    ['deny:overlord not here', 'denied by the Overlord: not here'],
-    ['deny not here', 'denied by your coordinator: not here'],
-  ])('%s -> %s', (line, message) => {
-    verdict(line);
-    expect(decision(fire(longWindow()))).toEqual({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'deny', message } } });
+  describe('the park: printed at the window\'s end on an exact live, or at once on a parked answer', () => {
+    it('park "live" and a ruling that stays held: at the window\'s end the park deny for the row id is printed', () => {
+      put('stub/request.out', '{"id":41,"waitS":1,"park":"live"}');
+      put('stub/ruling.out', '{"state":"held"}');
+      const r = fire();
+      expect(decision(r)).toEqual(parkDeny(41));
+      expect(r.rulings).toBeGreaterThan(1);
+      expect(r.ms).toBeGreaterThanOrEqual(900);
+    });
+    it('a ruling read answering parked prints the park deny at once, after one poll', () => {
+      put('stub/ruling.out', '{"state":"parked"}');
+      const r = fire(longWindow());
+      expect(decision(r)).toEqual(parkDeny(41));
+      expect(r.rulings, 'it stopped on the first poll').toBe(1);
+      expect(r.ms, 'it ended at the answer, not at its window').toBeLessThan(EARLY_MS);
+    });
+    it.each([
+      ['shadow', 'shadow'], ['capped', 'capped'], ['absent', undefined], ['"Live"', 'Live'], ['" live"', ' live'], ['a non-string', 1],
+    ] as const)('park %s: at the window\'s end nothing is printed', (_n, park) => {
+      put('stub/request.out', JSON.stringify({ id: 41, waitS: 1, ...(park === undefined ? {} : { park }) }));
+      put('stub/ruling.out', '{"state":"held"}');
+      const r = fire();
+      expect(r.stdout).toBe('');
+      expect(r.rulings).toBeGreaterThan(1);
+    });
+    it('the retry: park "live" and a first poll that answers allowed prints the allow on the first poll', () => {
+      verdict('allow ok');
+      const r = fire(longWindow('live'));
+      expect(decision(r)).toEqual(ALLOW);
+      expect(r.rulings).toBe(1);
+      expect(r.ms).toBeLessThan(EARLY_MS);
+    });
   });
-  it('allow:operator prints the allow decision', () => {
-    verdict('allow:operator fine');
-    expect(decision(fire(longWindow()))).toEqual(ALLOW);
-  });
-});
 
-describe('an unknown verdict line prints nothing', () => {
-  it.each([['allow:overlord x'], ['deny:foo x'], ['allow:operatorx y']])('%s', (line) => {
-    verdict(line);
-    // The wait does not end on an unknown line, it keeps polling to its window: a short one.
-    const r = fire();
-    expect(r.stdout).toBe('');
+  describe('a deny names its authority', () => {
+    it.each([
+      ['deny:operator not here', 'denied by the operator: not here'],
+      ['deny:overlord not here', 'denied by the Overlord: not here'],
+      ['deny not here', 'denied by your coordinator: not here'],
+    ])('%s -> %s', (line, message) => {
+      verdict(line);
+      expect(decision(fire(longWindow()))).toEqual({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'deny', message } } });
+    });
+    it('allow:operator prints the allow decision', () => {
+      verdict('allow:operator fine');
+      expect(decision(fire(longWindow()))).toEqual(ALLOW);
+    });
   });
-});
 
-describe('a child whose deny digest is only in the installer\'s history', () => {
-  const OLD = 'c'.repeat(64);
-  beforeEach(() => {
-    put(`.cc-sessions/${ID}.deny-settings`, OLD);
-    put('.cc-sessions/child-deny.digests', `${OLD} 1700000000000\n`);
+  describe('an unknown verdict line prints nothing', () => {
+    it.each([['allow:overlord x'], ['deny:foo x'], ['allow:operatorx y']])('%s', (line) => {
+      verdict(line);
+      // The wait does not end on an unknown line, it keeps polling to its window: a short one.
+      const r = fire();
+      expect(r.stdout).toBe('');
+    });
   });
-  it('a v1 allow prints nothing', () => {
-    verdict('allow ok');
-    const r = fire(longWindow());
-    expect(r.rulings, 'the ruling was read').toBeGreaterThan(0);
-    expect(r.stdout).toBe('');
-  });
-  it('allow:operator prints the allow decision', () => {
-    verdict('allow:operator ok');
-    expect(decision(fire(longWindow()))).toEqual(ALLOW);
-  });
-  it('deny:operator prints the deny', () => {
-    verdict('deny:operator r');
-    expect(decision(fire(longWindow()))).toEqual({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'deny', message: 'denied by the operator: r' } } });
-  });
-});
 
-// Review 3037 F1: a parked subagent prompt's entry in hook state goes when the park deny prints. Its dialog is gone then,
-// and the server's press check (`questionPolicy.ts#pressAnswersHeldPrompt`) reads that list: an entry left standing would
-// let a press on a queued sibling's prompt, painted under the same menu (so the same dialog id), void the parked park.
-describe('the park deny drops the parked subagent prompt\'s entry; a sibling\'s stays (review 3037 F1)', () => {
-  const FIRST = 'a0000000000000013';
-  const SECOND = 'a0000000000000019';
-  const asAgent = (agent: string): Payload => ({ ...SUB, transcript_path: transcript, agent_id: agent });
-  const agents = (): string[] => {
-    const hs = JSON.parse(fs.readFileSync(path.join(home, '.cc-sessions', `${ID}.hookstate.json`), 'utf8')) as { approvals?: Array<{ agentId: string }> };
-    return (hs.approvals ?? []).map((e) => e.agentId);
-  };
-  /** The sibling's prompt, queued: its window ends unparked (shadow), nothing prints, and its entry stands. */
-  const queueSibling = (): void => {
-    put('stub/request.out', '{"id":42,"waitS":1,"park":"shadow"}');
-    put('stub/ruling.out', '{"state":"held"}');
-    expect(fire(ENV(), asAgent(SECOND)).stdout).toBe('');
-    expect(agents()).toEqual([SECOND]);
-  };
-  it('at the window\'s end on park "live": the deny prints and the parked agent\'s entry goes', () => {
-    queueSibling();
-    put('stub/request.out', '{"id":41,"waitS":1,"park":"live"}');
-    expect(decision(fire(ENV(), asAgent(FIRST)))).toEqual(parkDeny(41));
-    expect(agents()).toEqual([SECOND]);
+  describe('a child whose deny digest is only in the installer\'s history', () => {
+    const OLD = 'c'.repeat(64);
+    beforeEach(() => {
+      put(`.cc-sessions/${ID}.deny-settings`, OLD);
+      put('.cc-sessions/child-deny.digests', `${OLD} 1700000000000\n`);
+    });
+    it('a v1 allow prints nothing', () => {
+      verdict('allow ok');
+      const r = fire(longWindow());
+      expect(r.rulings, 'the ruling was read').toBeGreaterThan(0);
+      expect(r.stdout).toBe('');
+    });
+    it('allow:operator prints the allow decision', () => {
+      verdict('allow:operator ok');
+      expect(decision(fire(longWindow()))).toEqual(ALLOW);
+    });
+    it('deny:operator prints the deny', () => {
+      verdict('deny:operator r');
+      expect(decision(fire(longWindow()))).toEqual({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'deny', message: 'denied by the operator: r' } } });
+    });
   });
-  it('on a ruling read answering parked: the deny prints at once and the parked agent\'s entry goes', () => {
-    queueSibling();
-    put('stub/ruling.out', '{"state":"parked"}');
-    expect(decision(fire(longWindow(), asAgent(FIRST)))).toEqual(parkDeny(41));
-    expect(agents()).toEqual([SECOND]);
-  });
-  it('a window that ends unparked prints nothing and drops nothing: the prompt is still painted, the operator\'s', () => {
-    queueSibling();
-    put('stub/request.out', '{"id":41,"waitS":1,"park":"shadow"}');
-    expect(fire(ENV(), asAgent(FIRST)).stdout).toBe('');
-    expect(agents().sort()).toEqual([FIRST, SECOND].sort());
+
+  // Review 3037 F1: a parked subagent prompt's entry in hook state goes when the park deny prints. Its dialog is gone then,
+  // and the server's press check (`questionPolicy.ts#pressAnswersHeldPrompt`) reads that list: an entry left standing would
+  // let a press on a queued sibling's prompt, painted under the same menu (so the same dialog id), void the parked park.
+  describe('the park deny drops the parked subagent prompt\'s entry; a sibling\'s stays (review 3037 F1)', () => {
+    const FIRST = 'a0000000000000013';
+    const SECOND = 'a0000000000000019';
+    const asAgent = (agent: string): Payload => ({ ...SUB, transcript_path: transcript, agent_id: agent });
+    const agents = (): string[] => {
+      const hs = JSON.parse(fs.readFileSync(path.join(home, '.cc-sessions', `${ID}.hookstate.json`), 'utf8')) as { approvals?: Array<{ agentId: string }> };
+      return (hs.approvals ?? []).map((e) => e.agentId);
+    };
+    /** The sibling's prompt, queued: its window ends unparked (shadow), nothing prints, and its entry stands. */
+    const queueSibling = (): void => {
+      put('stub/request.out', '{"id":42,"waitS":1,"park":"shadow"}');
+      put('stub/ruling.out', '{"state":"held"}');
+      expect(fire(ENV(), asAgent(SECOND)).stdout).toBe('');
+      expect(agents()).toEqual([SECOND]);
+    };
+    it('at the window\'s end on park "live": the deny prints and the parked agent\'s entry goes', () => {
+      queueSibling();
+      put('stub/request.out', '{"id":41,"waitS":1,"park":"live"}');
+      expect(decision(fire(ENV(), asAgent(FIRST)))).toEqual(parkDeny(41));
+      expect(agents()).toEqual([SECOND]);
+    });
+    it('on a ruling read answering parked: the deny prints at once and the parked agent\'s entry goes', () => {
+      queueSibling();
+      put('stub/ruling.out', '{"state":"parked"}');
+      expect(decision(fire(longWindow(), asAgent(FIRST)))).toEqual(parkDeny(41));
+      expect(agents()).toEqual([SECOND]);
+    });
+    it('a window that ends unparked prints nothing and drops nothing: the prompt is still painted, the operator\'s', () => {
+      queueSibling();
+      put('stub/request.out', '{"id":41,"waitS":1,"park":"shadow"}');
+      expect(fire(ENV(), asAgent(FIRST)).stdout).toBe('');
+      expect(agents().sort()).toEqual([FIRST, SECOND].sort());
+    });
   });
 });

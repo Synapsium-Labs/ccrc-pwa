@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import { NON_DELEGATING_TASK_KINDS, TERMINAL_TASK_STATUSES } from '../../shared/api.js';
+import { IMPLS, runGoHook, type Impl } from './hookTwin.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 const FIVE_KINDS = path.resolve(__dirname, 'fixtures/hook/stop-bg-five-kinds.json');
@@ -33,12 +34,19 @@ afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
 const hookEnv = (): NodeJS.ProcessEnv => ({
   ...process.env, HOME: home,
-  PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+  PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
   TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: '00000000-0000-4000-8000-000000000001', CLAUDE_PID: '4242',
   CCRC_SESSION_GENERATION: GENERATION,
 });
-const run = (payload: object): string =>
-  execFileSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env: hookEnv() });
+/** The implementation `run` starts (Go core wave 2): a `describe.each(IMPLS)` body sets it with `useImpl`. */
+let impl: Impl = 'bash';
+const useImpl = (i: Impl): void => { beforeEach(() => { impl = i; }); afterEach(() => { impl = 'bash'; }); };
+const run = (payload: object): string => {
+  if (impl === 'bash') return execFileSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env: hookEnv() });
+  const r = runGoHook(home, payload, hookEnv());
+  expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
+  return r.stdout;
+};
 const stateFile = (): string => path.join(home, '.cc-sessions', `${ID}.hookstate.json`);
 const readState = (): Record<string, unknown> =>
   JSON.parse(fs.readFileSync(stateFile(), 'utf8')) as Record<string, unknown>;
@@ -83,7 +91,8 @@ const pair = (): { bgDelegated: unknown; bgDelegatedKinds: unknown } => {
 };
 const NEITHER = { bgDelegated: undefined, bgDelegatedKinds: undefined };
 
-describe('the Stop records delegated background work (D-5231)', () => {
+describe.each(IMPLS)('the Stop records delegated background work (D-5231) (%s)', (i) => {
+  useImpl(i);
   it('the five-kinds fixture counts the subagent, the teammate and the workflow, never the shell or the monitor', () => {
     run(fiveKinds());
     expect(readState()).toMatchObject({ state: 'done', event: 'Stop' });

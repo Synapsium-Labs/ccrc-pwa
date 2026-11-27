@@ -47,6 +47,39 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const deployDir = path.resolve(here, '..', '..', 'deploy');
 const VERIFY = path.join(deployDir, 'verify-service.sh');
 
+/** A recording `go` for deploy.sh's core build: one line per call (the target, then each argument bracketed) and, for
+ *  `build`, the `-o` file it names, holding the target. The agent suite needs no Go toolchain. */
+const GO_STUB = [
+  '#!/bin/sh',
+  '{ printf \'%s-%s|\' "${GOOS-}" "${GOARCH-}"; for a in "$@"; do printf \'[%s]\' "$a"; done; echo; } >> "$GO_ARGV"',
+  'if [ "$1" = build ]; then while [ $# -gt 0 ]; do if [ "$1" = -o ]; then printf \'fixture ccrc-core %s-%s\\n\' "$GOOS" "$GOARCH" > "$2"; fi; shift; done; fi',
+  'exit 0',
+].join('\n');
+
+/** deploy.sh's `stage_core`, cut out of the script and run from the repository root as deploy.sh runs it, into `dir`,
+ *  for a box reporting `os`/`arch`: the core deploy.sh pushes. `go: false` runs it on a PATH with no `go` at all. */
+function stageCore(deploySh: string, dir: string, os: string, arch: string, go = true): { status: number | null; stderr: string; argv: string } {
+  const fn = /\nstage_core\(\) \{[\s\S]*?\n\}\n/.exec(deploySh)?.[0];
+  if (fn === undefined) throw new Error('deploy.sh has no stage_core() helper');
+  const stub = mkTmp('ccrc-agent-corego-');
+  if (go) writeFileSync(path.join(stub, 'go'), GO_STUB, { mode: 0o755 });
+  // Without Go: each PATH directory holding a `go` stands in as a directory of links to everything else in it, so bash
+  // and cp are still found beside where Go was (an image may link Go into /usr/bin).
+  const dirs = (process.env.PATH ?? '').split(path.delimiter).map((d, i) => {
+    if (go || !existsSync(path.join(d, 'go'))) return d;
+    const twin = path.join(stub, `path-without-go-${i}`);
+    mkdirSync(twin, { recursive: true });
+    for (const n of readdirSync(d)) if (n !== 'go') symlinkSync(path.join(d, n), path.join(twin, n));
+    return twin;
+  });
+  const argv = path.join(stub, 'go-argv');
+  const r = spawnSync('bash', ['-c', `set -euo pipefail; BOX=box; ${fn}\nstage_core "$1" "$2" "$3"`, 'stage', dir, os, arch], {
+    encoding: 'utf8', cwd: path.resolve(deployDir, '..'),
+    env: { ...process.env, GO_ARGV: argv, PATH: [stub, ...dirs].join(path.delimiter) },
+  });
+  return { status: r.status, stderr: String(r.stderr), argv: existsSync(argv) ? readFileSync(argv, 'utf8') : '' };
+}
+
 /** One unit's answers, consumed one per call and the last one repeated — the
  *  sequence `stubs()` has always built, hoisted so `sweepStubs` shares it. */
 const seqArm = (counter: string, values: string[]): string =>
@@ -1867,6 +1900,10 @@ describe('the verification is actually wired into the deploy, and can observe a 
       mkdirSync(path.join(home, 'ccrc', 'shared'), { recursive: true });
       for (const f of ['redact.mjs', 'redact-cli.mjs']) cpSync(path.join(repoCcd, '..', 'shared', f), path.join(home, 'ccrc', 'shared', f));
       cpSync(path.join(repoCcd, 'door-process.mjs'), path.join(home, 'ccrc', 'ccd', 'door-process.mjs'));   // the door program (A2)
+      // The Go core as deploy.sh pushes it (spec 2026-11-24 §7): its own staging helper lays the entry table and this
+      // box's ccrc-core into ~/ccrc, which the publisher refuses a tree without.
+      const staged = stageCore(deploySh, path.join(home, 'ccrc'), 'Linux', 'x86_64');
+      expect(staged.status, staged.stderr).toBe(0);
       return home;
     };
 
@@ -1920,6 +1957,49 @@ describe('the verification is actually wired into the deploy, and can observe a 
       rmSync(home, { recursive: true, force: true });
     }
   }, 120_000);
+
+  it('the Go core rides as a release carries it: the table and the box\'s own ccrc-core, built here, refused before anything moves (spec 2026-11-24 §7)', () => {
+    const repoCore = path.resolve(deployDir, '..', 'core');
+    const cases: Array<[string, string, string]> = [['Linux', 'x86_64', 'linux-amd64'], ['Linux', 'aarch64', 'linux-arm64'], ['Darwin', 'arm64', 'darwin-arm64']];
+    for (const [os, arch, target] of cases) {
+      const dir = mkTmp('ccrc-agent-corestage-');
+      const r = stageCore(deploySh, dir, os, arch);
+      expect(r.status, r.stderr).toBe(0);
+      expect(readFileSync(path.join(dir, 'core', 'entries.json')).equals(readFileSync(path.join(repoCore, 'entries.json'))), 'the table is the tree\'s').toBe(true);
+      expect(readFileSync(path.join(dir, 'core', 'bin', target, 'ccrc-core'), 'utf8'), `${os} ${arch}`).toBe(`fixture ccrc-core ${target}\n`);
+      expect(readdirSync(path.join(dir, 'core', 'bin')), 'one binary: the box\'s own').toEqual([target]);
+      // The one build command, core/build.sh, with the flags a release builds with.
+      expect(r.argv).toBe(`${target}|[build][-trimpath][-buildvcs=false][-ldflags][-s -w][-o][${path.join(dir, 'core', 'bin', target, 'ccrc-core')}][./cmd/ccrc-core]\n`);
+    }
+    for (const [os, arch, says] of [['FreeBSD', 'x86_64', "uname -s 'FreeBSD'"], ['Linux', 'riscv64', "uname -m 'riscv64'"], ['', '', "uname -s ''"]] as const) {
+      const dir = mkTmp('ccrc-agent-corestage-');
+      const r = stageCore(deploySh, dir, os, arch);
+      expect(r.status, `${os} ${arch}`).toBe(1);
+      expect(r.stderr).toContain(says);
+      expect(r.argv, 'nothing was built').toBe('');
+    }
+    // A Windows box is refused as one, plainly: deploy.sh drives systemd over ssh, which Windows has not.
+    for (const os of ['MINGW64_NT-10.0', 'MSYS_NT-10.0', 'CYGWIN_NT-10.0']) {
+      const r = stageCore(deploySh, mkTmp('ccrc-agent-corestage-'), os, 'x86_64');
+      expect(r.status, os).toBe(1);
+      expect(r.stderr, os).toContain(`uname -s '${os}', a Windows box; deploy.sh deploys only to a Linux or macOS box`);
+      expect(r.argv, 'nothing was built').toBe('');
+    }
+    const nogo = stageCore(deploySh, mkTmp('ccrc-agent-corestage-'), 'Linux', 'x86_64', false);
+    expect(nogo.status).toBe(1);
+    expect(nogo.stderr, 'a machine without Go is told so, by name').toMatch(/Go is not on PATH/);
+    // Placement: staged before the branch's first mutation (the roster's seed), pushed before the publisher reads it.
+    const agentBranch = deploySh.slice(deploySh.indexOf('if [ "$TARGET" = "agent" ]'), deploySh.indexOf('\nelse'));
+    const stageAt = agentBranch.indexOf('stage_core "$CORE_STAGE"');
+    const seedAt = agentBranch.indexOf('\n  ship_roster\n');
+    const treeAt = agentBranch.indexOf('agent shared deploy ccd "$BOX":ccrc/');
+    const pushAt = agentBranch.indexOf('rsync -az --delete -e "${SSH[*]}" "$CORE_STAGE/core" "$BOX":ccrc/');
+    const pairAt = agentBranch.indexOf('\n  install_ccd_pair\n');
+    expect(stageAt, 'the agent branch stages the core').toBeGreaterThan(-1);
+    expect(stageAt, 'before the first mutation').toBeLessThan(seedAt);
+    expect(pushAt, 'the staged core is pushed').toBeGreaterThan(treeAt);
+    expect(pushAt, 'before the publisher reads it').toBeLessThan(pairAt);
+  });
 
   it('~/.ccrc/accounts.sh lands BEFORE ccd — every ccd invocation in the gap would die', () => {
     // Stage 2a, Task 10. `ccd` no longer carries the account roster: it

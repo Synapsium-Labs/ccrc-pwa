@@ -85,6 +85,10 @@ export const STALL_WATCH_DISABLED_MARKER = 'stall-watch-disabled';
 /** `$REG/autocompact-disabled` (D-8382): ccd's proactive `/compact` of an idle session, off fleet-wide. ccd's tick reads it
  *  itself (`AUTOCOMPACT_DISABLE_FILE`, `ccd/ccd`). Touched and removed by hand: no writer in the tree. */
 export const AUTOCOMPACT_DISABLED_MARKER = 'autocompact-disabled';
+/** The ccd launcher's timing (spec 2026-11-22 §5): it logs each run's verb and duration while it stands. */
+export const CCD_ENTRY_TIMING_MARKER = 'ccd-entry-timing';
+/** ccd's Go core off switch (spec 2026-11-24 §4): empty, every verb starts bash; lines, those verbs do. */
+export const CCD_GO_OFF_MARKER = 'ccd-go-off';
 /** `$REG/coordinator-roster-card-live`: arms the session hook's roster card (durability D4, #757) and its wake arm (R-5a,
  *  D-8201). Unarmed, the card goes to a shadow log only. No writer in the tree. */
 export const COORDINATOR_ROSTER_CARD_LIVE_MARKER = 'coordinator-roster-card-live';
@@ -305,6 +309,15 @@ export const SWITCHES = {
     storage: { ccrcFile: COMPACT_CARD_OFF_FILE }, default: 'absent: the compaction card runs', owner: 'C3',
     meaning: 'The compaction card is off in all three of its arms: no card, no steering and no measurement around a compaction.',
     writer: 'hand-only',
+  },
+  [CCD_ENTRY_TIMING_MARKER]: {
+    storage: { marker: CCD_ENTRY_TIMING_MARKER }, default: 'absent: nothing is timed', owner: 'C2',
+    meaning: 'The ccd launcher logs each run\'s verb, duration and status to ~/.ccrc/ccd-entry-timing.log.',
+    writer: 'hand-only',
+  },
+  [CCD_GO_OFF_MARKER]: {
+    storage: { marker: CCD_GO_OFF_MARKER }, default: 'absent: listed verbs start the Go core',
+    owner: 'C2', meaning: 'Empty: every verb starts bash. One verb per line: those verbs start bash.', writer: 'hand-only',
   },
   [MAIL_GATE_STRICT_MARKER]: {
     storage: { marker: MAIL_GATE_STRICT_MARKER }, default: 'absent: the shell mode', owner: 'C5',

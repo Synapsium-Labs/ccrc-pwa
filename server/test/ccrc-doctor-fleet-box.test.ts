@@ -8,8 +8,9 @@ import path, { join } from 'node:path';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { scaled } from './timeScale.js';
 import { ghContainedEnv, seedAccountsSh } from './ccdWsHelpers.js';
+import { CORE_GOARCH, CORE_GOOS, coreExe, coreGoEntries } from './coreBuild.js';
 import { POOLED_TEST_ROSTER } from './fixtures/poolRule.js';
-import { installDoctorHooks, here, REPO, BASH, unstub, linkReal, RosterEntry, writeRoster, entry, writeWrapper, writeBinary, writeCcrcEnv, writeRcFlag, writeUnitFile, removeUnitFile, stubDf, DfRow, stubDfMap, runDoctor, healthy, broken, lineFor } from './ccrc-doctorFixture.js';
+import { installDoctorHooks, here, REPO, BASH, CCRC_SRC, CHECKS_SRC, doctorEnv, shq, unstub, linkReal, RosterEntry, writeRoster, entry, writeWrapper, writeBinary, writeCcrcEnv, writeRcFlag, writeUnitFile, removeUnitFile, stubDf, DfRow, stubDfMap, runDoctor, healthy, broken, lineFor, stub, BT_PY_ARM, ENTRY_SELFTEST_PY_ARM } from './ccrc-doctorFixture.js';
 
 // Each case's homes go when the case ends, not in a file-wide end sweep (R100, review 518's S1): that sweep overran vitest's 20 s
 // hook timeout on the one file this family was split from. Registered before `installDoctorHooks()`'s root `afterEach` (the codex
@@ -676,6 +677,142 @@ describe('ccrc doctor: skills — every home carries the SHIPPED skills (release
   });
 });
 
+
+describe('ccrc doctor: ccd-core — the installed Go core is the shipped tree\'s (spec 2026-11-24)', () => {
+  const rel = `core/bin/${CORE_GOOS}-${CORE_GOARCH}/${coreExe()}`;
+  const installed = (home: string): string => join(home, '.local', 'libexec', 'ccrc', 'core', coreExe());
+  /** The check alone, sourced as `cmd_doctor` sources it; `pre` runs just before it (a case's own shell state). */
+  const check = (home: string, pre = ''): { line: string; remedy: string; code: number } => {
+    const r = spawnSync(BASH, ['-c', `set -uo pipefail\n. ${shq(CCRC_SRC)}\n. ${shq(CHECKS_SRC)}\n${pre}\n_check_ccd-core`],
+      { env: doctorEnv(home), encoding: 'utf8', timeout: scaled(30_000) });
+    const lines = (r.stdout ?? '').split('\n');
+    const i = lines.findIndex((l) => /^(PASS|WARN|FAIL|SKIP) ccd-core: /.test(l));
+    expect(i, `a ccd-core line: ${r.stdout}${r.stderr}`).toBeGreaterThanOrEqual(0);
+    return { line: lines[i]!, remedy: lines[i + 1] ?? '', code: r.status ?? -1 };
+  };
+  /** The healthy box, with the shipped table putting caps in go mode on every platform and a binary of fixture bytes
+   *  in the tree and installed: the core in use here, whatever this platform is. */
+  const inUse = (prefix: string): string => {
+    const home = healthy(prefix);
+    writeFileSync(join(home, 'ccrc', 'core', 'entries.json'),
+      JSON.stringify({ entries: { caps: { mode: { linux: 'go', darwin: 'go', windows: 'go' } } } }));
+    for (const to of [join(home, 'ccrc', ...rel.split('/')), installed(home)]) {
+      mkdirSync(path.dirname(to), { recursive: true });
+      writeFileSync(to, 'the core\n');
+    }
+    return home;
+  };
+
+  it('passes on the healthy box', () => {
+    const r = runDoctor(healthy('ccrc-doctor-core-pass-'));
+    expect(r.stdout).toMatch(coreGoEntries().length === 0
+      ? /^PASS ccd-core: the launcher passes its self-test; no verb runs on the Go core on \w+, so the core is not in use here$/m
+      : /^PASS ccd-core: the launcher passes its self-test, and \$HOME\/\.local\/libexec\/ccrc\/core\/\S+ is the shipped tree's core\/bin\//m);
+  });
+
+  it('with a verb in go mode here, passes when the installed binary is the tree\'s', () => {
+    const r = check(inUse('ccrc-doctor-core-inuse-'));
+    expect(r.code).toBe(0);
+    expect(r.line).toBe(`PASS ccd-core: the launcher passes its self-test, and $HOME/.local/libexec/ccrc/core/${coreExe()} is the shipped tree's ${rel} (caps on the core)`);
+  });
+
+  it('fails on a changed byte, a missing installed binary or a missing tree binary, with the remedy re-run ccrc update', () => {
+    for (const [what, edit] of [
+      ['a changed binary', (h: string) => writeFileSync(installed(h), 'the core, changed\n')],
+      ['no installed binary', (h: string) => rmSync(installed(h))],
+      ['no tree binary', (h: string) => rmSync(join(h, 'ccrc', ...rel.split('/')))],
+    ] as const) {
+      const home = inUse('ccrc-doctor-core-fail-');
+      expect(check(home).code, `${what}: the box in use first`).toBe(0);
+      edit(home);
+      const r = check(home);
+      expect(r.code, what).toBe(1);
+      expect(r.line, what).toMatch(/^FAIL ccd-core: /);
+      expect(r.remedy, what).toMatch(/^ {2}remedy: re-run ccrc update/);
+    }
+  });
+
+  it('fails, naming the machine, when a verb is in go mode here and Go has no build for this machine', () => {
+    const r = check(inUse('ccrc-doctor-core-arch-'), 'HOSTTYPE=sparc64');
+    expect(r.code).toBe(1);
+    expect(r.line).toMatch(/^FAIL ccd-core: this machine \(sparc64\) has no Go core build, and the shipped table runs caps on the core/);
+    // The installer refuses such a machine outright, so the off switch is no remedy: the remedy names what is.
+    expect(r.remedy).not.toContain('turn the core off');
+    expect(r.remedy).toMatch(/^ {2}remedy: the installer refuses this machine outright .*: install on an amd64 or arm64 machine, or from a tree whose core\/entries\.json runs caps in bash on \w+$/);
+  });
+
+  it('warns, at either pass, while a Node-twin ccd-node-off stands, naming ccd-go-off as its replacement', () => {
+    for (const [what, home] of [['core in use', inUse('ccrc-doctor-core-nodeoff-')], ['core not in use', healthy('ccrc-doctor-core-nodeoff-idle-')]] as const) {
+      if (what === 'core not in use') writeFileSync(join(home, 'ccrc', 'core', 'entries.json'), JSON.stringify({ entries: {} }));
+      expect(check(home).code, `${what}: passes first`).toBe(0);
+      mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+      writeFileSync(join(home, '.cc-sessions', 'ccd-node-off'), 'caps\n');
+      const r = check(home);
+      expect(r.code, what).toBe(2);
+      expect(r.line, what).toMatch(/^WARN ccd-core: the launcher passes its self-test.*; but \$HOME\/\.cc-sessions\/ccd-node-off still stands, and nothing reads it/);
+      expect(r.remedy, what).toBe('  remedy: ccd-go-off replaced it: write its lines into ~/.cc-sessions/ccd-go-off (empty sends every verb to Bash), then remove ~/.cc-sessions/ccd-node-off');
+    }
+  });
+
+  // F3 (Task 9a fix round 1): a home's registered hook command against the mode the launcher answers now.
+  describe('the registered hook command against the mode in force', () => {
+    const BASH_C = 'bash "$HOME/.cc-sessions/session-hook.sh"';
+    const GO_C = '"$HOME/.local/libexec/ccrc/core/ccrc-core" hook';
+    /** `.claude`'s settings registering `cmd` on every event; the launcher stand-in answering the hook-mode question `word`. */
+    const arrange = (prefix: string, cmd: string, word: string): string => {
+      const home = healthy(prefix);
+      writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({ hooks: {
+        SessionStart: [{ hooks: [{ type: 'command', command: cmd }] }], Stop: [{ hooks: [{ type: 'command', command: cmd }] }] } }));
+      stub(home, 'python3', `${BT_PY_ARM}${ENTRY_SELFTEST_PY_ARM}if [ "$1" = "-IS" ] && [ "$3" = --ccrc-entry-hook-mode ]; then echo ${word}; exit 0; fi\nexit 0`);
+      return home;
+    };
+    it('passes while the registered command is the mode in force', () => {
+      expect(check(arrange('ccrc-doctor-core-drift-bash-', BASH_C, 'bash')).line).toMatch(/^PASS ccd-core: /);
+      expect(check(arrange('ccrc-doctor-core-drift-go-', GO_C, 'go')).line).toMatch(/^PASS ccd-core: /);
+    });
+    it('warns once, naming the home and both modes, with the remedy, when they differ either way', () => {
+      for (const [reg, word, other] of [[GO_C, 'bash', 'bash'], [BASH_C, 'go', 'go']] as const) {
+        const r = check(arrange('ccrc-doctor-core-drift-', reg, word));
+        expect(r.code, reg).toBe(2);
+        expect(r.line, reg).toMatch(new RegExp(`^WARN ccd-core: .*; but the mode in force is ${other}, but settings.json registers the other hook in: .*\.claude$`));
+        expect(r.remedy, reg).toMatch(/^ {2}remedy: re-run the installer into every home: bash ~\/\.cc-sessions\/install-session-hooks\.sh/);
+      }
+    });
+  });
+
+  it('warns when jq is not on PATH, so the shipped core table cannot be read', () => {
+    const home = healthy('ccrc-doctor-core-nojq-');
+    unstub(home, 'jq');
+    const r = check(home);
+    expect(r.code).toBe(2);
+    expect(r.line).toBe('WARN ccd-core: jq is not on PATH, so the shipped core table could not be read');
+  });
+
+  it('fails when the shipped tree has no core table', () => {
+    const home = healthy('ccrc-doctor-core-notable-');
+    rmSync(join(home, 'ccrc', 'core', 'entries.json'));
+    const r = check(home);
+    expect(r.code).toBe(1);
+    expect(r.line).toMatch(/^FAIL ccd-core: the shipped tree has no .*core\/entries\.json/);
+  });
+
+  it('fails when the launcher does not pass its self-test', () => {
+    const home = healthy('ccrc-doctor-core-selftest-');
+    unstub(home, 'python3');
+    linkReal(home, 'python3');   // the real interpreter, on healthy()'s Docs stub: not a launcher
+    const r = check(home);
+    expect(r.code).toBe(1);
+    expect(r.line).toMatch(/^FAIL ccd-core: the launcher at \$HOME\/\.local\/bin\/ccd did not pass its self-test/);
+  });
+
+  it('skips on a server-role box', () => {
+    const home = healthy('ccrc-doctor-core-server-');
+    writeCcrcEnv(home, ['CCRC_ROLE=server', 'CCRC_FLEET=local', 'CCRC_HOST=ccrc-fixture.invalid', 'CCRC_PORT=7788', ''].join('\n'));
+    const r = check(home);
+    expect(r.code).toBe(3);
+    expect(r.line).toMatch(/^SKIP ccd-core: this box records CCRC_ROLE=server/);
+  });
+});
 
 describe('ccrc doctor: pools', () => {
   /** `$HOME/.cc-sessions/pools/<project>`, with EXACT bytes. */

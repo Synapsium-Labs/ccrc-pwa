@@ -7,11 +7,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { mkTmp } from './tmpHelpers.js';
-import { CCD, ccdSource } from './ccdWsHelpers.js';
+import { CCD, HARNESS_BASH, ccdSource } from './ccdWsHelpers.js';
 import { tl, GRAPH, type GraphContent } from './compactCardFixtures.js';
 import { isScratchSlug } from './scratchSlugs.js';
 import { hasCommit, isAncestorOfHead, isShallow, readAtSha } from './frozenSource.js';
-import { itLinux, IS_DARWIN } from './platformFixtures.js'; import { anchorCites } from './anchors.js';
+import { IS_DARWIN } from './platformFixtures.js'; import { anchorCites } from './anchors.js';
+// Linux only, as the name says (platformFixtures' itLinux skips only macOS): every case here that uses it asks /proc,
+// strace or the history drain, none of which a Windows box has (each measured red there, Task 9b gate round)
+const itLinux = it.skipIf(process.platform !== 'linux');
+import { IMPLS, bashSpelling, hookArgv, hookBoth, runHook, type Impl } from './hookTwin.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 const realTool = (name: string): string => execFileSync('sh', ['-c', `command -v ${name}`], { encoding: 'utf8' }).trim();
@@ -42,7 +47,7 @@ afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
  *  session id, the pid, the generation and a BLANK job dir (D-4953: `forkedEnv` at the end of this file says why). `env`
  *  overrides it: each test adds or breaks its own legs there, never in a second copy of this literal. */
 const hookEnv = (env: Record<string, string> = {}): NodeJS.ProcessEnv => ({
-  ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+  ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
   TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION, CLAUDE_JOB_DIR: '', ...env,
 });
 /** Run the hook with a payload; env overrides let each test break one leg.
@@ -76,6 +81,10 @@ const runFull = (payload: object, env: Record<string, string> = {}, opts: { allo
   if (!opts.allowNonZeroExit) expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
   return { stdout: r.stdout, stderr: r.stderr };
 };
+/** The module's own bash runners, for a case that measures the bash's process group itself (a child left behind is its
+ *  subject, which hookTwin's group runner kills and reports): the compaction describes shadow `run` and `runFull`. */
+const bashRun = run;
+const bashRunFull = runFull;
 /** `n` real hook PROCESSES started as close together as `spawn` (async,
  *  non-blocking) allows, all against the same fixture HOME/id — the shape
  *  M1's concurrency regression needs: `execFileSync`/`spawnSync` block, so a
@@ -88,7 +97,7 @@ const runFull = (payload: object, env: Record<string, string> = {}, opts: { allo
 const runConcurrent = (payload: object, n: number, opts: { allowNonZeroExit?: boolean } = {}): Promise<{ stdout: string; stderr: string }[]> =>
   Promise.all(Array.from({ length: n }, () => new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
     const child = spawn('bash', [HOOK], {
-      env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+      env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
         TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242',
         CCRC_SESSION_GENERATION: GENERATION },
     });
@@ -103,6 +112,63 @@ const runConcurrent = (payload: object, n: number, opts: { allowNonZeroExit?: bo
     });
     child.stdin.end(JSON.stringify(payload));
   })));
+/** The hook in either implementation (Go core wave 2): `runFull`'s contract (exit 0 asserted, both streams back) through
+ *  hookTwin's `runHook`, with this file's session env. The describes that run on both implementations shadow `run` and
+ *  `runFull` with `inImpl`, so their bodies read as they did. */
+const SESSION_ENV = { TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION, CLAUDE_JOB_DIR: '' };
+const runIn = (impl: Impl, payload: object, env: Record<string, string> = {}): { stdout: string; stderr: string } => {
+  const r = runHook({ home, env: (e = {}) => hookEnv(e as Record<string, string>) }, impl, payload, { ...SESSION_ENV, ...env });
+  expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
+  return { stdout: r.stdout, stderr: r.stderr };
+};
+const inImpl = (impl: Impl) => ({
+  run: (payload: object, env: Record<string, string> = {}): string => runIn(impl, payload, env).stdout,
+  runFull: (payload: object, env: Record<string, string> = {}) => runIn(impl, payload, env),
+});
+/** The command that runs the hook in `impl`: bash over the script, or the core's `hook` entry. */
+const hookArgvOf = (impl: Impl): [string, string[]] => hookArgv(impl);
+/** `runFull`, `run` and `runConcurrent` in `impl` (Go core wave 2, Task 8b): the compaction and lock describes run once per
+ *  implementation, each in its own fixture HOME, so every case reads that implementation's own files. */
+const inImplFull = (impl: Impl) => {
+  const runFullOf = (payload: object, env: Record<string, string> = {}, opts: { allowNonZeroExit?: boolean } = {}): { stdout: string; stderr: string } => {
+    const r = runHook({ home, env: (e = {}) => hookEnv(e as Record<string, string>) }, impl, payload, { ...SESSION_ENV, ...env });
+    if (!opts.allowNonZeroExit) expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
+    return { stdout: r.stdout, stderr: r.stderr };
+  };
+  const [cmd, args] = hookArgvOf(impl);
+  const concurrent = (payload: object, n: number, opts: { allowNonZeroExit?: boolean } = {}): Promise<{ stdout: string; stderr: string }[]> =>
+    Promise.all(Array.from({ length: n }, () => new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+      const child = spawn(cmd, args, {
+        env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
+          TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242',
+          CCRC_SESSION_GENERATION: GENERATION },
+      });
+      let stdout = ''; let stderr = '';
+      child.stdout.on('data', (d: Buffer) => { stdout += d.toString('utf8'); });
+      child.stderr.on('data', (d: Buffer) => { stderr += d.toString('utf8'); });
+      child.on('close', (code) => {
+        try {
+          if (!opts.allowNonZeroExit) expect(code, 'the hook contract: exit 0 on every path, every racer').toBe(0);
+          resolve({ stdout, stderr });
+        } catch (e) { reject(e as Error); }
+      });
+      child.stdin.end(JSON.stringify(payload));
+    })));
+  return { run: (payload: object, env: Record<string, string> = {}): string => runFullOf(payload, env).stdout, runFull: runFullOf, runConcurrent: concurrent };
+};
+/** The card describes' runner (Go core wave 2, Task 8a): the bash and the Go core through hookTwin's hookBoth, each from the
+ *  same fixture state, so every card case compares the two stdouts byte for byte and every file name each leaves under
+ *  the HOME; the bash's answer is what the case reads, and its files stay in `home`. A PreCompact or PostCompact runs both
+ *  too, since Task 8b ported the compaction arms. */
+const runBothFull = (payload: object, env: Record<string, string> = {}): { stdout: string; stderr: string } => {
+  const r = hookBoth(home, JSON.stringify(payload), hookEnv({ ...SESSION_ENV, ...env }), { hook: HOOK, tree: true });
+  expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
+  return { stdout: String(r.stdout), stderr: String(r.stderr) };
+};
+const both = {
+  run: (payload: object, env: Record<string, string> = {}): string => runBothFull(payload, env).stdout,
+  runFull: runBothFull,
+};
 const stateFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.hookstate.json');
 const readState = (): any => JSON.parse(fs.readFileSync(stateFile(), 'utf8'));
 
@@ -253,7 +319,9 @@ const plantSession = (opts: {
     const f = path.join(dir, `agent-${a.id}.jsonl`);
     fs.writeFileSync(f, a.lines.join('\n') + '\n');
     fs.utimesSync(f, now - a.age, now - a.age);
-    agents[a.id] = f;
+    // the path as the hook names it: `${tp%.jsonl}/subagents`, then find's `/` and the rest (on Windows the transcript's
+    // own backslashes, then slashes; on Linux and macOS this is `f`)
+    agents[a.id] = [transcript.slice(0, -'.jsonl'.length), 'subagents', ...(a.under ? [a.under] : []), `agent-${a.id}.jsonl`].join('/');
   }
   return { transcript, agents };
 };
@@ -269,6 +337,10 @@ const cardTree = (): string => {
  *  the ones named — so a test can make ONE command genuinely absent (the
  *  `command -v` guard is about absence; a stub that exits 127 is not absence).
  *  `tmux` stays the fixture stub. */
+const WIN = process.platform === 'win32';
+/** A UTF-8 locale on Windows, where MSYS2 runs the hook with none and both hooks clip in bytes (2400 bytes of a card holding
+ *  two `·` are 2398 characters, measured in both modes); the clip cases count characters, as a UTF-8 box does. */
+const UTF8_ON_WIN: Record<string, string> = WIN ? { LC_ALL: 'C.UTF-8' } : {};
 const minimalPath = (omit: string[]): string => {
   const bin = path.join(home, 'binmin');
   fs.mkdirSync(bin, { recursive: true });
@@ -299,8 +371,20 @@ const minimalPath = (omit: string[]): string => {
     // difference — `ls -i` is POSIX and both userlands ship it.
     'ls']) {
     if (omit.includes(t)) continue;
+    if (WIN) {
+      // On Windows `command -v` answers an MSYS2 path (/usr/bin/find), which a link Node makes cannot point at: the
+      // tool is asked of MSYS2's bash and linked by its Windows path, its .exe kept, so both hooks find it (measured:
+      // the POSIX branch left dangling links there, and every minimalPath case ran with no tools at all)
+      const real = execFileSync(HARNESS_BASH, ['-c', `PATH=/usr/bin:$PATH; p=$(command -v ${t}) || exit 0; [ -e "$p.exe" ] && p=$p.exe; cygpath -w "$p"`], { encoding: 'utf8' }).trim();
+      if (real) fs.symlinkSync(real, path.join(bin, /\.exe$/i.test(real) ? `${t}.exe` : t));
+      continue;
+    }
     const real = execFileSync('sh', ['-c', `command -v ${t}`], { encoding: 'utf8' }).trim();
     if (real) fs.symlinkSync(real, path.join(bin, t));
+  }
+  if (WIN) {   // the MSYS2 runtime and its libraries beside the linked tools, which load them from PATH
+    const usrBin = path.dirname(HARNESS_BASH);
+    for (const d of fs.readdirSync(usrBin)) if (/^msys-.*\.dll$/i.test(d)) fs.symlinkSync(path.join(usrBin, d), path.join(bin, d));
   }
   fs.copyFileSync(path.join(home, 'bin', 'tmux'), path.join(bin, 'tmux'));
   fs.chmodSync(path.join(bin, 'tmux'), 0o755);
@@ -391,7 +475,8 @@ const oneLine = (stdout: string): any => {
   return JSON.parse(lines[0]!);
 };
 
-describe('event → state mapping', () => {
+describe.each(IMPLS)('event → state mapping (%s)', (impl) => {
+  const { run } = inImpl(impl);
   it('UserPromptSubmit writes working with identity fields', () => {
     run({ hook_event_name: 'UserPromptSubmit', session_id: 'uuid-1' });
     const s = readState();
@@ -437,7 +522,8 @@ describe('event → state mapping', () => {
     expect(s.ask).toEqual({ questions });
     expect(s.ask.approval).toBeUndefined();
   });
-  it('PermissionRequest of an ordinary tool still writes the approval envelope — unaffected by the AskUserQuestion branch above', () => {
+  // bash only until wave 2 Task 7: the route word is the approval gate's (`_hook_approval_gate`), not yet ported.
+  it.skipIf(impl === 'go')('PermissionRequest of an ordinary tool still writes the approval envelope — unaffected by the AskUserQuestion branch above', () => {
     run({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'ls -la' } });
     const s = readState();
     expect(s.state).toBe('waiting');
@@ -523,7 +609,8 @@ describe('event → state mapping', () => {
   });
 });
 
-describe('subagents', () => {
+describe.each(IMPLS)('subagents (%s)', (impl) => {
+  const { run } = inImpl(impl);
   it('Start adds, Stop removes, the set caps at 32, session state is untouched', () => {
     run({ hook_event_name: 'UserPromptSubmit' });
     run({ hook_event_name: 'SubagentStart', agent_name: 'reviewer' });
@@ -556,7 +643,8 @@ describe('subagents', () => {
   });
 });
 
-describe('the fleet gate and failure polarity', () => {
+describe.each(IMPLS)('the fleet gate and failure polarity (%s)', (impl) => {
+  const { run } = inImpl(impl);
   /** What the HOOK put in the registry — never the row's `.generation`, which
    *  ccd's row creation mints before any hook runs and the harness plants for
    *  the same reason. It is an INPUT to every arm, so a "wrote nothing" scan
@@ -586,12 +674,17 @@ describe('the fleet gate and failure polarity', () => {
     expect(s.ask).toBeNull();
     expect(fs.statSync(stateFile()).size).toBeLessThan(65536);
   });
+});
+
+// The fleet gate's budget rows: bash's wall clock, on the CCRC_PERF job only (D-6929), outside the both-implementation
+// describe above so they time this file's own bash `run` exactly as before.
+describe('the fleet gate and failure polarity', () => {
   it.runIf(process.env['CCRC_PERF'] === '1')('p95 of 40 runs stays under the budget (150ms CI allowance; 50ms target)', () => {
     const times: number[] = []; run({ hook_event_name: 'PostToolUse', tool_name: 'Bash' });   // one warm-up, discarded; CCRC_PERF=1 only (the perf job, D-6929)
     for (let i = 0; i < 40; i++) {
-      const t0 = Date.now();
+      const t0 = performance.now();
       run({ hook_event_name: 'PostToolUse', tool_name: 'Bash' });
-      times.push(Date.now() - t0);
+      times.push(performance.now() - t0);
     }
     times.sort((a, b) => a - b);
     expect(times[37]).toBeLessThan(150);   // p95 of 40 = the third-largest (times[37]); the threshold is unchanged
@@ -681,7 +774,8 @@ describe('the fleet gate and failure polarity', () => {
 // Claude Code can fork a live session into a daemon-hosted background PTY with
 // no TMUX and no TMUX_PANE. The pane path stays first and unchanged; this is
 // the second source, read only with no pane AND the job marker (D-4953).
-describe('a session with no pane', () => {
+describe.each(IMPLS)('a session with no pane (%s)', (impl) => {
+  const { run, runFull } = inImpl(impl);
   const REG = (): string => path.join(home, '.cc-sessions');
   const hookstate = (id: string): unknown =>
     JSON.parse(fs.readFileSync(path.join(REG(), `${id}.hookstate.json`), 'utf8'));
@@ -984,6 +1078,7 @@ describe('graphQueries — the read counter the console can see', () => {
 // leaked onto another event would not be noise — it would answer a question
 // nobody asked.
 describe('the SessionStart graph card', () => {
+  const { run, runFull } = both;   // the bash and the Go core, compared (Task 8a)
   /** THE CENSUS FIXTURE IS WRITTEN BY THE SWEEP'S OWN WRITER (D-1337).
    *  `_gs_emit` (the one builder of a row's JSON), `_gs_row`, `_gs_finish` and
    *  the sweep's `declare -A K_…` lines are lifted verbatim out of
@@ -1035,7 +1130,8 @@ describe('the SessionStart graph card', () => {
     ].join('\n'));
     const source = (tree: string): string => {
       const gitDir = path.join(tree, '.git');
-      return fs.existsSync(gitDir) ? fs.realpathSync(gitDir) : gitDir;
+      // the sweep's realpath, in the spelling the bash sweep on the box writes (MSYS2's on Windows)
+      return bashSpelling(fs.existsSync(gitDir) ? fs.realpathSync(gitDir) : gitDir);
     };
     execFileSync('bash', [driver, ...rows.flatMap((r) => [source(r.path), r.outcome, r.reason])],
       { env: { ...process.env, HOME: home }, encoding: 'utf8' });
@@ -1190,8 +1286,9 @@ describe('the SessionStart graph card', () => {
     git(tree, 'commit', '-q', '--allow-empty', '-m', 'empty');   // same tree, HEAD moved
     // the premise: one commit of distance, zero bytes of difference
     expect(git(tree, 'rev-list', '--count', `${first}..HEAD`)).toBe('1');
-    expect(git(tree, 'rev-parse', `${first}^{tree}`))
-      .toBe(git(tree, 'rev-parse', 'HEAD^{tree}'));
+    // `<rev>:` is the commit's tree, as `<rev>^{tree}` is; no braces, which an MSYS2 git started by Node expands on Windows
+    expect(git(tree, 'rev-parse', `${first}:`))
+      .toBe(git(tree, 'rev-parse', 'HEAD:'));
     const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }));
     expect(text, 'a graph of exactly this tree was reported as behind HEAD')
       .not.toContain('behind HEAD');
@@ -1215,8 +1312,8 @@ describe('the SessionStart graph card', () => {
     // the premise, both halves: identical trees, diverged commits. This is the
     // exact shape measured on the live fleet 2026-09-03 — built 0281e084 vs
     // HEAD 6a26a9a3, `rev-parse X^{tree}` identical for both.
-    expect(git(tree, 'rev-parse', `${sideTip}^{tree}`))
-      .toBe(git(tree, 'rev-parse', 'HEAD^{tree}'));
+    expect(git(tree, 'rev-parse', `${sideTip}:`))
+      .toBe(git(tree, 'rev-parse', 'HEAD:'));
     expect(git(tree, 'rev-list', '--left-right', '--count', `${sideTip}...HEAD`))
       .toMatch(/^1\s+1$/);
     const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }));
@@ -1261,7 +1358,9 @@ describe('the SessionStart graph card', () => {
   // D-1335: the card was the one payload this file emitted with no cap, and
   // `.reason` is repo-controlled — the sweep fills it from one line of an
   // engine's stderr, or from a whole matched refusal line.
-  it('clips a pathological census reason instead of injecting it whole', () => {
+  // Linux and macOS only: the census writer takes its rows as arguments, and a 100 KB reason is past a Windows command
+  // line (32767 characters; measured ENAMETOOLONG), so the fixture cannot be written there
+  it.skipIf(process.platform === 'win32')('clips a pathological census reason instead of injecting it whole', () => {
     const tree = path.join(home, 'tree');
     gitTree(tree, 1); fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.child'), '');   // a child row: the D-5301 role subject is silent, so the bound measures this subject alone
     sweepPass([{ path: tree, outcome: 'failed', reason: 'x'.repeat(100_000) }]);
@@ -1270,6 +1369,36 @@ describe('the SessionStart graph card', () => {
     expect(text.length, 'an unbounded repo-controlled string reached the session')
       .toBeLessThan(600);
   });
+
+  // THE LOCALE'S UNIT AT THE CARD'S TWO CLIPS (Go core wave 2, Task 8a; core/internal/domain/attention/locale.go#UTF8Units,
+  // measured by testdata/gen-locale.sh). `${row:0:400}` and the emitter's `${1:0:2400}` count characters under a UTF-8
+  // LC_CTYPE and bytes otherwise, and bash takes LC_CTYPE once at startup: a named locale the box lacks, or any missing
+  // category beside it, leaves C. Each row puts a cut inside a two-byte character under C, so a wrong unit, or a cut the
+  // two encoders read differently, shows in the bytes the hookBoth runner compares.
+  const LOCALES: ReadonlyArray<readonly [string, Record<string, string>]> = [
+    ['LC_ALL=C', { LC_ALL: 'C' }],
+    ['LC_ALL=C.UTF-8', { LC_ALL: 'C.UTF-8' }],
+    ['LANG=xx_YY.UTF-8 (no such locale)', { LC_ALL: '', LC_CTYPE: '', LANG: 'xx_YY.UTF-8' }],
+    ['LC_CTYPE=C.UTF-8 beside a missing LC_MESSAGES and no LANG', { LC_ALL: '', LC_CTYPE: 'C.UTF-8', LC_MESSAGES: 'xx_YY.UTF-8', LANG: '' }],
+    ['LC_CTYPE=xx_YY.UTF-8 over LANG=C.UTF-8', { LC_ALL: '', LC_CTYPE: 'xx_YY.UTF-8', LANG: 'C.UTF-8' }],
+  ];
+  it.each(LOCALES)('the census row is cut at 400 in the locale\'s unit: %s', (_what, env) => {
+    const tree = path.join(home, 'tree');
+    gitTree(tree, 1); fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.child'), '');
+    sweepPass([{ path: tree, outcome: 'refused', reason: 'é'.repeat(300) }]);   // `refused: ` is 9 bytes: byte 400 splits an é
+    const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }, env));
+    expect(text).toContain('refused: éé');
+  });
+  it.each(LOCALES.flatMap(([what, env]) => [2250, 2251].map((n) => [`${what}, ${n} digits`, env, n] as const)))(
+    'the standing card is clipped at 2400 in the locale\'s unit: %s', (_what, env, n) => {
+      const tree = path.join(home, 'tree');
+      gitTree(tree, 1);
+      plantGraph(tree, { built: 'deadbee', nodes: Number('9'.repeat(15)), engine: 'é'.repeat(32) });
+      fs.writeFileSync(path.join(tree, 'graphify-out', 'GRAPH_REPORT.md'),
+        `# Graph Report - demo  (2026-09-02)\n\n## Summary\n- ${'9'.repeat(n)} nodes · 15645 edges · 423 communities\n`);
+      const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }, env));
+      expect(text).toContain(', engine é');   // under C the 2400th byte falls inside the engine's é run
+    });
 
   it('is printed for compact too — compaction is when a session loses what it knew', () => {
     const tree = path.join(home, 'tree');
@@ -1482,7 +1611,8 @@ describe('the SessionStart graph card', () => {
 // in the file allowed to print there, and only for a GATED call in an ARMED
 // session. Every other event's silence is pinned in the card describe above,
 // and the non-gated PreToolUse calls are pinned here beside it.
-describe('the PreToolUse search gate (R5, D-1613)', () => {
+describe.each(IMPLS)('the PreToolUse search gate (R5, D-1613) (%s)', (impl) => {
+  const { run } = inImpl(impl);
   const bashPre = (command: string, cwd: string): object => pre('Bash', { command }, cwd);
   const grepPre = (cwd: string): object => pre('Grep', { pattern: 'assembleFleet' }, cwd);
   /** The deny envelope on stdout: the module's one-line reader, under the name
@@ -1544,7 +1674,8 @@ describe('the PreToolUse search gate (R5, D-1613)', () => {
     expect(shown, 'the reason names no query command').toBeDefined();
     const command = shown!.replace('<your question in plain words>', 'who calls what');
     expect(reason, 'a machine-specific path reached the reason').not.toContain(home);
-    const out = execFileSync('/bin/sh', ['-c', command], { cwd: tree, encoding: 'utf8',
+    const sh = WIN ? path.join(path.dirname(HARNESS_BASH), 'sh.exe') : '/bin/sh';   // MSYS2's sh on Windows
+    const out = execFileSync(sh, ['-c', command], { cwd: tree, encoding: 'utf8',
       env: { HOME: home, PATH: '/usr/bin:/bin' } });
     expect(out).toContain('ran query');
     run({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command },
@@ -1683,7 +1814,8 @@ describe('the PreToolUse search gate (R5, D-1613)', () => {
     expect(readState().state, 'the corrupt file cost the state write too').toBe('working');
   });
 
-  it.skipIf(process.getuid?.() === 0)(
+  // Linux and macOS only: Windows has no POSIX mode bits, so chmod leaves the file readable and the directory writable
+  it.skipIf(process.getuid?.() === 0 || process.platform === 'win32')(
     'says a denial only once it is COUNTED — an unwritable registry means no deny at all (D-1689)', () => {
     // The dual of "counted only if it was said". A deny that goes out before
     // the hookstate lands is a denial the next event cannot see: with the
@@ -1742,7 +1874,8 @@ describe('the PreToolUse search gate (R5, D-1613)', () => {
 // prior `Read`, so denying a `Read` would charge every session told to fix a
 // named file one denial before its first edit. So this describe's load-bearing
 // row is the one that says a `Read` is NEVER denied, in any state.
-describe('the PreToolUse Read nudge (R6, D-1745)', () => {
+describe.each(IMPLS)('the PreToolUse Read nudge (R6, D-1745) (%s)', (impl) => {
+  const { run } = inImpl(impl);
   const readPre = (file: string, cwd: string): object => pre('Read', { file_path: file }, cwd);
 
   /** The spec's nudge, spelled here so a drift in either direction is red. The
@@ -1918,7 +2051,8 @@ describe('the PreToolUse Read nudge (R6, D-1745)', () => {
       tool_input: { file_path: 'src/a.ts' } })).toBe('');
   });
 
-  it.skipIf(process.getuid?.() === 0)(
+  // Linux and macOS only: Windows has no POSIX mode bits, so chmod leaves the file readable and the directory writable
+  it.skipIf(process.getuid?.() === 0 || process.platform === 'win32')(
     'says nothing at all when the registry cannot be written (D-1689\'s ordering)', () => {
     // The nudge rides the deny's own print site, which is AFTER the hookstate
     // rename lands. Nothing about a nudge needs counting, but the print site is
@@ -1970,6 +2104,7 @@ describe('the PreToolUse Read nudge (R6, D-1745)', () => {
 });
 
 describe('the emitter: one line, clipped once', () => {
+  const { run, runFull } = both;   // the bash and the Go core, compared (Task 8a)
   it('clips the assembled card at the emitter, on the armed-tree arm', () => {
     const tree = path.join(home, 'tree');
     gitTree(tree, 1);
@@ -2008,7 +2143,7 @@ describe('the emitter: one line, clipped once', () => {
     fs.writeFileSync(path.join(tree, 'graphify-out', 'GRAPH_REPORT.md'),
       `# Graph Report - demo  (2026-09-02)\n\n## Summary\n`
       + `- ${'9'.repeat(3000)} nodes · 15645 edges · 423 communities\n`);
-    const out = run({ hook_event_name: 'SessionStart', cwd: tree });
+    const out = run({ hook_event_name: 'SessionStart', cwd: tree }, UTF8_ON_WIN);
     const text = card(out);            // card() asserts exactly one JSON line
     expect(text.length).toBe(2400);    // clipped EXACTLY, not merely bounded
   });
@@ -2018,6 +2153,7 @@ describe('the emitter: one line, clipped once', () => {
 // assertion below needs a result object on a ZERO exit, which execFileSync
 // does not give.
 describe('the co-tenant subject', () => {
+  const { run, runFull } = both;   // the bash and the Go core, compared (Task 8a)
   const REG = (): string => path.join(home, '.cc-sessions');
   /** Plant a peer row: `.uuid` (the id enumeration), `.project`, `.supervised`. */
   const peer = (id: string, project: string | null, ageS: number | null): void => {
@@ -2071,6 +2207,12 @@ describe('the co-tenant subject', () => {
     expect(plain()).not.toContain('ccrc:');
   });
 
+  it('does not count a heartbeat stamped in the future (Go core wave 2, Task 8a: `now - beat >= 0`)', () => {
+    peer('demo-quiet-basin', 'alpha', 5);
+    peer('ahead', 'alpha', -3600);
+    expect(plain()).not.toContain('ccrc:');
+  });
+
   it('a trailing space in .project groups exactly as the server does', () => {
     peer('demo-quiet-basin', 'alpha ', 5);
     peer('p1', 'alpha', 5);
@@ -2082,7 +2224,8 @@ describe('the co-tenant subject', () => {
   // `$(<f)` on a mode-000 file writes "Permission denied" to the hook's real
   // stderr, which the harness folds into a user-visible warning on EVERY
   // SessionStart of EVERY co-tenant session.
-  it('an unreadable peer .project costs no stderr and is reported, never folded into absence', () => {
+  // Linux and macOS only: Windows has no POSIX mode bits, so chmod leaves the file readable and the directory writable
+  it.skipIf(process.platform === 'win32')('an unreadable peer .project costs no stderr and is reported, never folded into absence', () => {
     peer('demo-quiet-basin', 'alpha', 5);
     peer('p1', 'alpha', 5);
     peer('p2', 'alpha', 5);
@@ -2094,7 +2237,7 @@ describe('the co-tenant subject', () => {
       input: JSON.stringify({ hook_event_name: 'SessionStart', cwd: tree }),
       encoding: 'utf8',
       env: { ...process.env, HOME: home,
-        PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+        PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
         TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242' },
     });
     expect(r.status, 'the hook must exit 0 on every path').toBe(0);
@@ -2130,7 +2273,7 @@ describe('the co-tenant subject', () => {
       input: JSON.stringify({ hook_event_name: 'SessionStart', cwd: tree, source: 'startup' }),
       encoding: 'utf8',
       env: { ...process.env, HOME: home, BASH_ENV: rc,
-        PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+        PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
         TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242' },
     });
     expect(r.status, 'the hook must exit 0 on every path').toBe(0);
@@ -2229,7 +2372,7 @@ describe('the co-tenant subject', () => {
       input: JSON.stringify(payload),
       encoding: 'utf8',
       env: { ...process.env, HOME: home,
-        PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+        PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
         TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242' },
     });
 
@@ -2294,7 +2437,8 @@ describe('the co-tenant subject', () => {
 
     // Finding 3, branch: supervised UNMEASURABLE (unreadable, distinct from
     // absent). Nothing in the suite ever chmod'd a peer's `.supervised`.
-    it('a peer whose .supervised is unreadable counts toward "at least" (finding 3)', () => {
+    // Linux and macOS only: Windows has no POSIX mode bits, so chmod leaves the file readable and the directory writable
+    it.skipIf(process.platform === 'win32')('a peer whose .supervised is unreadable counts toward "at least" (finding 3)', () => {
       peer('demo-quiet-basin', 'alpha', 5);
       peer('p1', 'alpha', 5);
       peer('p2', 'alpha', 5);
@@ -2348,6 +2492,7 @@ describe('the co-tenant subject', () => {
 });
 
 describe('the program subject', () => {
+  const { run, runFull } = both;   // the bash and the Go core, compared (Task 8a)
   const REG = (): string => path.join(home, '.cc-sessions');
   const hold = (bytes: string): void =>
     fs.writeFileSync(path.join(REG(), 'demo-quiet-basin.hold'), bytes);
@@ -2429,7 +2574,8 @@ describe('the program subject', () => {
     expect(text).not.toContain('names NO run');
   });
 
-  it('tells unreadable apart from absent', () => {
+  // Linux and macOS only: Windows has no POSIX mode bits, so chmod leaves the file readable and the directory writable
+  it.skipIf(process.platform === 'win32')('tells unreadable apart from absent', () => {
     hold('program:account-pools wave:3/6 run:34');
     fs.chmodSync(path.join(REG(), 'demo-quiet-basin.hold'), 0o000);
     const text = plain();
@@ -2498,7 +2644,7 @@ describe('the program subject', () => {
       input: JSON.stringify({ hook_event_name: 'SessionStart', cwd: tree }),
       encoding: 'utf8',
       env: { ...process.env, HOME: home,
-        PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+        PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
         TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242' },
     });
     expect(r.status, 'the hook must exit 0 on every path').toBe(0);
@@ -2627,7 +2773,12 @@ describe('the R7 counters', () => {
   });
 });
 
-describe('the compaction card — which context is compacting (spec §3.0)', () => {
+describe.each(IMPLS)('the compaction card — which context is compacting (spec §3.0) (%s)', (which) => {
+  const { run, runFull, runConcurrent } = inImplFull(which);
+  const itBash = which === 'bash' ? it : it.skip;
+  const itLinuxBash = which === 'bash' ? itLinux : it.skip;
+  const hookCmd = hookArgvOf(which);
+  void itLinuxBash; void hookCmd; void runConcurrent; void itBash;
   it('PreCompact writes the set: scope main, the parent transcript, files null, the rule\'s inputs — no graph, no subagents/, no stderr', () => {
     const tree = path.join(home, 'tree');
     gitTree(tree, 1);                                  // a tree with NO graph
@@ -2882,7 +3033,9 @@ describe('the compaction card — which context is compacting (spec §3.0)', () 
     expect(fs.readFileSync(HOOK, 'utf8')).toContain('local tmp="$REG/.$id.$base.$$.$2.hook-write.tmp"');
   });
 
-  it('the constants are the spec\'s, the total is DERIVED, and the shape predicate is spelled once', () => {
+  // BASH ONLY: a pin on the bash's text. The Go hook's values are held by attention's TestCompactConstantsPinned and
+  // TestCompactGolden, its order and proofs by app/hook's TestItem3EverySite, TestItem3SecondSection and TestItem3EventsLine.
+  itBash('the constants are the spec\'s, the total is DERIVED, and the shape predicate is spelled once', () => {
     const src = fs.readFileSync(HOOK, 'utf8');
     expect(src).toMatch(/^COMPACT_CARD_MAX_CHARS=4000$/m);
     expect(src).toMatch(/^CARD_MAX_CHARS=2400$/m);
@@ -2895,7 +3048,9 @@ describe('the compaction card — which context is compacting (spec §3.0)', () 
     expect(src.match(/^COMPACT_SHAPE_PRED=/gm)).toHaveLength(1);
   });
 
-  it('the anchor\'s slot joins the sum: 1500 + 1 + 2400 + 1 + 4000 + 1 + 2048 = 9951, under 10000, with 49 characters left (C38)', () => {
+  // BASH ONLY: a pin on the bash's text. The Go hook's values are held by attention's TestCompactConstantsPinned and
+  // TestCompactGolden, its order and proofs by app/hook's TestItem3EverySite, TestItem3SecondSection and TestItem3EventsLine.
+  itBash('the anchor\'s slot joins the sum: 1500 + 1 + 2400 + 1 + 4000 + 1 + 2048 = 9951, under 10000, with 49 characters left (C38)', () => {
     const src = fs.readFileSync(HOOK, 'utf8');
     // A declaration line may carry several (`ANCHOR_CARD_MAX_CHARS=1500 ANCHOR_PROMPT_MAX_CHARS=600 ...`, as the start report's).
     const num = (name: string): number => Number(new RegExp(`^(?:[A-Z_]+=\\S+ )*${name}=(\\d+)(?: |$)`, 'm').exec(src)?.[1]);
@@ -2912,7 +3067,12 @@ describe('the compaction card — which context is compacting (spec §3.0)', () 
 });
 
 
-describe('the compaction card — PreCompact and the helper (spec §3.1)', () => {
+describe.each(IMPLS)('the compaction card — PreCompact and the helper (spec §3.1) (%s)', (which) => {
+  const { run, runFull, runConcurrent } = inImplFull(which);
+  const itBash = which === 'bash' ? it : it.skip;
+  const itLinuxBash = which === 'bash' ? itLinux : it.skip;
+  const hookCmd = hookArgvOf(which);
+  void itLinuxBash; void hookCmd; void runConcurrent; void itBash;
   it('with a fresh graph and the helper, PreCompact writes the card (nonce first) and the mined set, and prints nothing (unarmed: PreCompact prints only when armed and scope main)', () => {
     const tree = cardTree(); plantHelper();
     const { transcript } = plantSession({ lines: workLines(tree) });
@@ -2976,7 +3136,9 @@ describe('the compaction card — PreCompact and the helper (spec §3.1)', () =>
     expect(fs.existsSync(cardFile())).toBe(false);
   });
 
-  it('the helper runs through `timeout` with the constant, and the argv is the spec\'s', () => {
+  // BASH ONLY: the fault is a stand-in on PATH for a tool the Go hook never runs. Go: its argv is the next case's, read
+  // off a node stand-in both reach; its 8 s bound is attention.CompactHelperTimeout (TestCompactConstantsPinned).
+  itBash('the helper runs through `timeout` with the constant, and the argv is the spec\'s', () => {
     const tree = cardTree(); plantHelper();
     stub('timeout', [HELPER_ONLY, 'printf \'%s\\n\' "$*" > "$HOME/timeout-argv"; shift; exec "$@"'].join('\n'));
     const { transcript } = plantSession({ lines: workLines(tree) });
@@ -2991,7 +3153,27 @@ describe('the compaction card — PreCompact and the helper (spec §3.1)', () =>
     expect(fs.existsSync(cardFile())).toBe(true);
   });
 
-  it('records working hookstate before the bounded helper starts and rolls back its exact hook-owned document after a nonzero helper', () => {
+  // The argv half of the case above in both implementations (Task 8b): a `node` stand-in both reach through PATH (the
+  // bash under `timeout`, the Go hook under its own 8 s bound, attention.CompactHelperTimeout) records it, then runs node.
+  it('the helper\'s argv is the spec\'s, read off a node stand-in', () => {
+    const tree = cardTree(); plantHelper();
+    stub('node', [`printf '%s\\n' "$*" > "$HOME/node-argv"`, `exec ${sh(realTool('node'))} "$@"`].join('\n'));
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    const argv = fs.readFileSync(path.join(home, 'node-argv'), 'utf8');
+    expect(argv.startsWith(`${path.join(home, '.cc-sessions', 'compact-card.mjs')} card --transcript ${transcript} `)).toBe(true);
+    expect(argv).toContain(' --max-chars 4000 --max-files 12 ');
+    expect(argv).toContain(` --scope main --at ${readSet().at} --nonce ${readSet().nonce}`);
+    expect(argv).not.toContain('--steer');
+    // NO CANONICAL PATHNAME in the argv (option A): only the two private stages name the set and the card
+    expect(argv.split(/\s+/).filter((w) => /demo-quiet-basin\.compact(set|card)$/.test(w)), 'a canonical pathname in the argv').toEqual([]);
+    expect(argv).toMatch(/--set-stage \S*\.demo-quiet-basin\.compactset\.\d+\.compact-\S+\.stage /);
+    expect(fs.existsSync(cardFile())).toBe(true);
+  });
+
+  // BASH ONLY: the fault is a stand-in on PATH for a tool the Go hook never runs. Go:
+  // core/internal/app/hook/compaction_faults_test.go#TestPreNonzeroHelperPublishesNothing.
+  itBash('records working hookstate before the bounded helper starts and rolls back its exact hook-owned document after a nonzero helper', () => {
     const tree = cardTree(); plantHelper();
     const original = path.join(home, 'hook-before-helper.compactset');
     stub('timeout', [
@@ -3010,7 +3192,10 @@ describe('the compaction card — PreCompact and the helper (spec §3.1)', () =>
     expect(readState().state).toBe('working');
   });
 
-  it('resolves gtimeout when timeout is absent, with the local resolver shape pinned', () => {
+  // BASH ONLY: the fault is a stand-in on PATH for a tool the Go hook never runs. Go: the Go hook bounds the helper
+  // itself; its timeout/gtimeout probe (attention.HasTimeout) is held by the both-mode "no timeout or gtimeout on PATH"
+  // case.
+  itBash('resolves gtimeout when timeout is absent, with the local resolver shape pinned', () => {
     const src = fs.readFileSync(HOOK, 'utf8');
     expect(src).toContain(`_hook_timeout() {
   local bin
@@ -3086,7 +3271,9 @@ describe('the compaction card — PreCompact and the helper (spec §3.1)', () =>
     expect(fs.existsSync(cardFile())).toBe(false);
   });
 
-  it('the file header declares the TWO waits it allows — the R2 amendment, and D-2605\'s lock', () => {
+  // BASH ONLY: a pin on the bash's text. The Go hook's values are held by attention's TestCompactConstantsPinned and
+  // TestCompactGolden, its order and proofs by app/hook's TestItem3EverySite, TestItem3SecondSection and TestItem3EventsLine.
+  itBash('the file header declares the TWO waits it allows — the R2 amendment, and D-2605\'s lock', () => {
     // THE SLICE GREW WITH THE HEADER: D-2605 added a SECOND declared exception
     // (the bounded stable-lock acquisition), and a 16-line window no longer
     // reaches the end of the amendment this row is asserting.
@@ -3099,7 +3286,12 @@ describe('the compaction card — PreCompact and the helper (spec §3.1)', () =>
   });
 });
 
-describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
+describe.each(IMPLS)('the compaction card — SessionStart(compact) (spec §3.3) (%s)', (which) => {
+  const { run, runFull, runConcurrent } = inImplFull(which);
+  const itBash = which === 'bash' ? it : it.skip;
+  const itLinuxBash = which === 'bash' ? itLinux : it.skip;
+  const hookCmd = hookArgvOf(which);
+  void itLinuxBash; void hookCmd; void runConcurrent; void itBash;
   /** A card+set pair on disk exactly as Task 6 leaves them, without running
    *  the helper: numeric `at` is measurement; `nonce` owns the first line. */
   const plantPair = (at: number, text: string, opts: { nonce?: string; setNonce?: string } = {}): void => {
@@ -3310,7 +3502,10 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
   // builders, the served/set-doc rewrites, the nonce regex uses no jq at
   // all). Reading stdout directly (not through `card()`) avoids the same
   // confound the brief's version had.
-  it('a jq that fails ONLY the envelope build stamps served:false and prints nothing — the single-site pin for the emitter\'s return code (I4)', () => {
+  // BASH ONLY: the fault is a stand-in on PATH for a tool the Go hook never runs. Go: none: the Go hook builds the
+  // envelope with the kernel's encoder, which cannot fail; a print that fails is
+  // core/internal/app/hook/compaction_faults_test.go#TestSessionStartStopsAtABrokenPipe.
+  itBash('a jq that fails ONLY the envelope build stamps served:false and prints nothing — the single-site pin for the emitter\'s return code (I4)', () => {
     const tree = cardTree();
     plantPair(1, CARD_TEXT);
     const real = realTool('jq');
@@ -3402,10 +3597,10 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
     fs.writeFileSync(path.join(tree, 'graphify-out', 'GRAPH_REPORT.md'),
       `# Graph Report - demo  (2026-09-02)\n\n## Summary\n`
       + `- ${'9'.repeat(3000)} nodes · 15645 edges · 423 communities\n`);
-    const standing = cardChecked(compactStart(tree, '/t.jsonl'));   // no card on disk: the standing clip alone
+    const standing = cardChecked(compactStart(tree, '/t.jsonl'), UTF8_ON_WIN);   // no card on disk: the standing clip alone
     expect(standing.length).toBe(2400);
     plantPair(1, CARD_TEXT);
-    const out = cardChecked(compactStart(tree, '/t.jsonl'));
+    const out = cardChecked(compactStart(tree, '/t.jsonl'), UTF8_ON_WIN);
     expect(out.slice(0, 2400)).toBe(standing);
     expect(out.charAt(2400)).toBe(' ');
     expect(out.slice(2401)).toBe(CARD_TEXT);
@@ -3427,7 +3622,9 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
   // Defence in depth is the intended design (spec §3.3 step 4: the sum clip
   // is a pin on the DERIVATION, never a third budget), so this pins the
   // SOURCE spelling instead of the runtime effect the value can never prove.
-  it('CARD_TOTAL_MAX_CHARS is spelled as the derivation, not a hand-kept number (I2a)', () => {
+  // BASH ONLY: a pin on the bash's text. The Go hook's values are held by attention's TestCompactConstantsPinned and
+  // TestCompactGolden, its order and proofs by app/hook's TestItem3EverySite, TestItem3SecondSection and TestItem3EventsLine.
+  itBash('CARD_TOTAL_MAX_CHARS is spelled as the derivation, not a hand-kept number (I2a)', () => {
     const src = fs.readFileSync(HOOK, 'utf8');
     expect(src).toContain('CARD_TOTAL_MAX_CHARS=$(( CARD_MAX_CHARS + 1 + COMPACT_CARD_MAX_CHARS ))');
   });
@@ -3439,7 +3636,9 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
   // the two ceilings from the HOOK'S OWN SOURCE (not hand-copied numbers) so
   // raising either one reddens this, independent of CARD_TOTAL_MAX_CHARS's
   // own unreddenable value above.
-  it('the two clip ceilings stay under the harness context-spill budget (I2b, spec:189)', () => {
+  // BASH ONLY: a pin on the bash's text. The Go hook's values are held by attention's TestCompactConstantsPinned and
+  // TestCompactGolden, its order and proofs by app/hook's TestItem3EverySite, TestItem3SecondSection and TestItem3EventsLine.
+  itBash('the two clip ceilings stay under the harness context-spill budget (I2b, spec:189)', () => {
     const HARNESS_CONTEXT_SPILL_CHARS = 10_000;
     const src = fs.readFileSync(HOOK, 'utf8');
     const cardMax = Number(/^CARD_MAX_CHARS=(\d+)$/m.exec(src)?.[1]);
@@ -3449,7 +3648,7 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
     expect(anchorMax + cardMax + compactMax).toBeLessThan(HARNESS_CONTEXT_SPILL_CHARS);
   });
 
-  it.runIf(process.env['CCRC_PERF'] === '1')('costs no more than 4x the cheap PostToolUse arm with a card present, on a 200-row registry — its OWN ratio (perf job only, D-6929)', () => {
+  it.runIf(process.env['CCRC_PERF'] === '1' && which === 'bash')('costs no more than 4x the cheap PostToolUse arm with a card present, on a 200-row registry — its OWN ratio (perf job only, D-6929)', () => {
     // D-1898's method (see the startup-arm test above for why an absolute ms
     // number is the wrong shape): the compact arm interleaved with the cheap
     // arm in ONE run, its own array, its own p95 — SUPERSEDED to median below
@@ -3682,7 +3881,12 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
 // and the bounded wait is the acquire helper's FIRST POSITIONAL PARAMETER, so
 // `COMPACT_LOCK_WAIT_SERVE` (the one acquisition a human waits on) and
 // `COMPACT_LOCK_WAIT` (every other) coexist through one code path.
-describe('the compaction card — the permanent stable lock (spec §3.4)', () => {
+describe.each(IMPLS)('the compaction card — the permanent stable lock (spec §3.4) (%s)', (which) => {
+  const { run, runFull, runConcurrent } = inImplFull(which);
+  const itBash = which === 'bash' ? it : it.skip;
+  const itLinuxBash = which === 'bash' ? itLinux : it.skip;
+  const hookCmd = hookArgvOf(which);
+  void itLinuxBash; void hookCmd; void runConcurrent; void itBash;
   const lockFile = (): string => path.join(home, '.cc-sessions', '.demo-quiet-basin.compactions.lock');
   const regNames = (): string[] => fs.readdirSync(path.join(home, '.cc-sessions'));
 
@@ -3693,7 +3897,8 @@ describe('the compaction card — the permanent stable lock (spec §3.4)', () =>
    *  holder's own acknowledgement instead of sleeping a guessed interval. */
   const holdLock = async (ms: number): Promise<() => void> => {
     fs.closeSync(fs.openSync(lockFile(), 'a'));
-    const child = spawn('bash', ['-c',
+    // HARNESS_BASH: on Windows the hook's flock is MSYS2's, and another runtime's (Git Bash's) lock is invisible to it
+    const child = spawn(HARNESS_BASH, ['-c',
       `exec {g}<>"$1" || exit 1; flock "$g" || exit 1; echo held; exec sleep ${ms / 1000}`, '_', lockFile()]);
     let out = '';
     await new Promise<void>((res, rej) => {
@@ -3708,13 +3913,16 @@ describe('the compaction card — the permanent stable lock (spec §3.4)', () =>
   /** A FRESH ACQUIRER, from outside the hook entirely: the only way to ask
    *  whether the row's mutex is actually free. Returns GOT or BLOCKED. */
   const freshAcquire = (waitS: number): string => {
-    const r = spawnSync('bash', ['-c',
+    const r = spawnSyncGroup(HARNESS_BASH, ['-c',
       'exec 9<>"$1" || exit 1; if flock -w "$2" 9; then echo GOT; else echo BLOCKED; fi',
       '_', lockFile(), String(waitS)], { encoding: 'utf8', timeout: (waitS + 10) * 1000 });
     return (r.stdout ?? '').trim();
   };
 
-  it('NOTHING MAY BE BACKGROUNDED inside compact SessionStart\'s retained-lock section — both directions, measured', () => {
+  // BASH ONLY: the hazard is bash's (a `{fd}<>` descriptor is inherited across fork/exec, so a child outliving the
+  // section pins the row). The Go hook forks no `find`, and every descriptor Go opens is close-on-exec, so no child of
+  // the Go hook can hold its lock: core/internal/adapter/lock/row_test.go#TestRowLockNotInherited measures that.
+  itBash('NOTHING MAY BE BACKGROUNDED inside compact SessionStart\'s retained-lock section — both directions, measured', () => {
     // §5's round-9 row. The serve arm RETAINS its lock descriptor past
     // `_hook_compact_card`'s own return (`COMPACT_SERVE_FD`), and a held
     // `{fd}<>` descriptor is inherited across fork/exec — the flock lifts only
@@ -3729,8 +3937,8 @@ describe('the compaction card — the permanent stable lock (spec §3.4)', () =>
 
     // THE CONTROL FIRST, on the shipped arm: every child inside the section is
     // forked and reaped there, so the mutex is free the moment the arm returns.
-    run(preCompact(tree, transcript));
-    const served = runFull(compactStart(tree, transcript));
+    bashRun(preCompact(tree, transcript));
+    const served = bashRunFull(compactStart(tree, transcript));
     expect(served.stdout, 'the card was served, so the RETAINED-lock path really ran').not.toBe('');
     expect(freshAcquire(2), 'the shipped arm leaves the row free').toBe('GOT');
 
@@ -3746,17 +3954,19 @@ describe('the compaction card — the permanent stable lock (spec §3.4)', () =>
     // be started and the leg would pass for the wrong reason.
     const stale = Math.floor(Date.now() / 1000) - 1200 - 60;
     fs.utimesSync(setFile(), stale, stale);
-    run(preCompact(tree, transcript));
+    bashRun(preCompact(tree, transcript));
     expect(fs.existsSync(cardFile()), 'a card really was republished').toBe(true);
     stub('find', [
       `${sh(realTool('sleep'))} 5 >/dev/null 2>&1 &`,
       `exec ${sh(realTool('find'))} "$@"`,
     ].join('\n'));
-    const second = runFull(compactStart(tree, transcript));
+    const second = bashRunFull(compactStart(tree, transcript));
     expect(second.stdout, 'and the retained-lock path really ran again').not.toBe('');
     expect(freshAcquire(2), 'a child that outlives the section keeps the ROW locked').toBe('BLOCKED');
   }, 90_000);
-  it('the two waits are constants, and the acquire helper takes its wait as its FIRST positional', () => {
+  // BASH ONLY: a pin on the bash's text. The Go hook's values are held by attention's TestCompactConstantsPinned and
+  // TestCompactGolden, its order and proofs by app/hook's TestItem3EverySite, TestItem3SecondSection and TestItem3EventsLine.
+  itBash('the two waits are constants, and the acquire helper takes its wait as its FIRST positional', () => {
     const src = fs.readFileSync(HOOK, 'utf8');
     expect(src).toMatch(/^COMPACT_LOCK_WAIT=5$/m);
     expect(src).toMatch(/^COMPACT_LOCK_WAIT_SERVE=2$/m);
@@ -3772,7 +3982,9 @@ describe('the compaction card — the permanent stable lock (spec §3.4)', () =>
     expect(acquire).not.toContain('COMPACT_LOCK_WAIT');
   });
 
-  it('canonical is published by link off an mktemp source and NEVER opened at its own pathname', () => {
+  // BASH ONLY: a pin on the bash's text. The Go hook's values are held by attention's TestCompactConstantsPinned and
+  // TestCompactGolden, its order and proofs by app/hook's TestItem3EverySite, TestItem3SecondSection and TestItem3EventsLine.
+  itBash('canonical is published by link off an mktemp source and NEVER opened at its own pathname', () => {
     const src = fs.readFileSync(HOOK, 'utf8');
     // CODE ONLY. `single-definition.test.ts`'s own bash corpus filters on
     // non-comment lines for the same reason: the negative below is a claim
@@ -3818,7 +4030,7 @@ describe('the compaction card — the permanent stable lock (spec §3.4)', () =>
    *  what makes that faithful is the state it leaves, and the leg below
    *  asserts that state rather than assuming it. */
   const holdThroughAlias = async (ms: number): Promise<() => void> => {
-    const child = spawn('bash', ['-c',
+    const child = spawn(HARNESS_BASH, ['-c',
       `al="$1-open.$$.$RANDOM.$RANDOM"
        link "$1" "$al" || exit 1
        exec {g}<>"$al" || exit 1
@@ -3933,9 +4145,9 @@ describe('the compaction card — the permanent stable lock (spec §3.4)', () =>
     const setBytes = fs.readFileSync(setFile());
     const release = await holdLock(3000);
     try {
-      const t0 = Date.now();
+      const t0 = performance.now();
       const r = runFull(compactStart(tree, transcript));
-      const elapsed = Date.now() - t0;
+      const elapsed = performance.now() - t0;
       expect(r.stderr).toBe('');
       expect(r.stdout, 'no card was served under a held lock').not.toContain('graphify card —');
       // THE BOUND, in both directions. `COMPACT_LOCK_WAIT` (5 s) at this call
@@ -3981,12 +4193,19 @@ describe('the compaction card — the permanent stable lock (spec §3.4)', () =>
 // make that true: it cannot reach canonical, the hook's reconfirm-then-rename
 // is one compare-and-swap inside one held section, and a stage exists iff it
 // is complete.
-describe('the compaction card — option A, the staging-only helper (spec §3.1 protocol steps 9-14)', () => {
+describe.each(IMPLS)('the compaction card — option A, the staging-only helper (spec §3.1 protocol steps 9-14) (%s)', (which) => {
+  const { run, runFull, runConcurrent } = inImplFull(which);
+  const itBash = which === 'bash' ? it : it.skip;
+  const itLinuxBash = which === 'bash' ? itLinux : it.skip;
+  const hookCmd = hookArgvOf(which);
+  void itLinuxBash; void hookCmd; void runConcurrent; void itBash;
   const lockFile = (): string => path.join(home, '.cc-sessions', '.demo-quiet-basin.compactions.lock');
   const stages = (): string[] => fs.readdirSync(path.join(home, '.cc-sessions'))
     .filter((n) => n.includes('.stage'));
 
-  it('THE CAS: a sibling that publishes its own verdict while the helper runs keeps it — this arm publishes nothing', () => {
+  // BASH ONLY: the fault is a stand-in on PATH for a tool the Go hook never runs. Go:
+  // core/internal/app/hook/compaction_faults_test.go#TestPreCASKeepsASiblingsSet.
+  itBash('THE CAS: a sibling that publishes its own verdict while the helper runs keeps it — this arm publishes nothing', () => {
     const tree = cardTree(); plantHelper();
     const { transcript } = plantSession({ lines: workLines(tree) });
     // The BARRIER. `timeout` is the hook's own deadline wrapper, so this fires
@@ -4011,7 +4230,9 @@ describe('the compaction card — option A, the staging-only helper (spec §3.1 
     expect(stages(), 'the losing arm removed its own stages and published neither').toEqual([]);
   });
 
-  it('NO CANONICAL PATHNAME IN THE HELPER\'S ARGV, and with both canonical files present it writes neither', () => {
+  // BASH ONLY: the fault is a stand-in on PATH for a tool the Go hook never runs. Go: the both-mode "the helper's argv is
+  // the spec's, read off a node stand-in" case, which refuses a canonical name in the argv.
+  itBash('NO CANONICAL PATHNAME IN THE HELPER\'S ARGV, and with both canonical files present it writes neither', () => {
     const tree = cardTree(); plantHelper();
     const { transcript } = plantSession({ lines: workLines(tree) });
     // Record the argv the hook actually built, then run the real helper under
@@ -4075,20 +4296,20 @@ describe('the compaction card — option A, the staging-only helper (spec §3.1 
    *  the file, so the mutant's failure text names the signal instead of the
    *  suite. */
   const runBounded = (payload: object, ms: number): { status: number | null; signal: string | null; ms: number } => {
-    const t0 = Date.now();
-    const r = spawnSync('bash', [HOOK], {
+    const t0 = performance.now();
+    const r = spawnSyncGroup(hookCmd[0], hookCmd[1], {
       input: JSON.stringify(payload), encoding: 'utf8', timeout: ms, killSignal: 'SIGKILL',
-      env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+      env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
         TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242',
         CCRC_SESSION_GENERATION: GENERATION },
     });
-    return { status: r.status, signal: r.signal, ms: Date.now() - t0 };
+    return { status: r.status, signal: r.signal, ms: performance.now() - t0 };
   };
   /** Is the row's mutex free to a stranger? `flock -n` answers without waiting;
    *  0 is FREE, 1 is HELD. The lock file outlives every arm by design, so its
    *  presence is not the question — who holds it is. */
   const mutexFree = (): boolean =>
-    spawnSync('flock', ['-n', lockFile(), 'true'], { encoding: 'utf8' }).status === 0;
+    spawnSync(HARNESS_BASH, ['-c', 'exec flock -n "$1" true', '_', lockFile()], { encoding: 'utf8' }).status === 0;
 
   it('A NON-REGULAR CANONICAL SET AT THE REACQUIRE: the arm refuses inside its bound and leaves the row mutex FREE', () => {
     const tree = cardTree(); plantHelper();
@@ -4159,7 +4380,9 @@ describe('the compaction card — option A, the staging-only helper (spec §3.1 
     ].join('\n'));
   };
 
-  it('ITEM 3: canonical REPLACED under a holder — the section refuses and publishes NOTHING', () => {
+  // BASH ONLY: the fault is a stand-in on PATH for a tool the Go hook never runs. Go:
+  // core/internal/app/hook/compaction_test.go#TestItem3EverySite (section 1's three proofs).
+  itBash('ITEM 3: canonical REPLACED under a holder — the section refuses and publishes NOTHING', () => {
     const tree = cardTree(); plantHelper();
     const { transcript } = plantSession({ lines: workLines(tree) });
     strangerFind(true);
@@ -4209,7 +4432,9 @@ describe('the compaction card — option A, the staging-only helper (spec §3.1 
   const claimResidue = (): string[] => fs.readdirSync(path.join(home, '.cc-sessions'))
     .filter((n) => /^\.demo-quiet-basin\.compactcard\..+\.session-claim\.tmp$/.test(n));
 
-  it('ITEM 3 AT THE CARD CLAIM: the refusal removes the placeholder it just created (r4 A-M1)', () => {
+  // BASH ONLY: the fault is a stand-in on PATH for a tool the Go hook never runs. Go:
+  // core/internal/app/hook/compaction_test.go#TestItem3EverySite ("serve: at the card claim").
+  itBash('ITEM 3 AT THE CARD CLAIM: the refusal removes the placeholder it just created (r4 A-M1)', () => {
     const tree = cardTree();
     plantServablePair();
     strangerFind(true);
@@ -4243,7 +4468,9 @@ describe('the compaction card — option A, the staging-only helper (spec §3.1 
   // suppressed, which must still remove the card: without the control the
   // assertion is satisfied by a stub that broke `find` outright, and a broken
   // `find` also leaves an aged card standing.
-  it('ITEM 3 AT THE AGED-CARD REMOVAL: a replacement inside the age find\'s fork refuses, and the aged card SURVIVES (r4 A-M2)', () => {
+  // BASH ONLY: the fault is a stand-in on PATH for a tool the Go hook never runs. Go:
+  // core/internal/app/hook/compaction_test.go#TestItem3EverySite ("serve: at the aged card's removal").
+  itBash('ITEM 3 AT THE AGED-CARD REMOVAL: a replacement inside the age find\'s fork refuses, and the aged card SURVIVES (r4 A-M2)', () => {
     const tree = cardTree();
     plantServablePair();
     const old = Math.floor(Date.now() / 1000) - 1200 - 60;
@@ -4350,7 +4577,9 @@ describe('the compaction card — option A, the staging-only helper (spec §3.1 
   const journalLines = (): any[] => fs.readFileSync(journalFile(), 'utf8')
     .split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l));
 
-  it('ITEM 3 BETWEEN THE TWO STAGE RENAMES: the card is published and the SET IS NOT — and the serve arm tolerates that pair (r4 A-M2)', () => {
+  // BASH ONLY: the fault is a stand-in on PATH for a tool the Go hook never runs. Go:
+  // core/internal/app/hook/compaction_test.go#TestItem3SecondSection (failAt 5).
+  itBash('ITEM 3 BETWEEN THE TWO STAGE RENAMES: the card is published and the SET IS NOT — and the serve arm tolerates that pair (r4 A-M2)', () => {
     const tree = cardTree(); plantHelper();
     const { transcript } = plantSession({ lines: workLines(tree) });
     strangerMv(true);
@@ -4383,7 +4612,9 @@ describe('the compaction card — option A, the staging-only helper (spec §3.1 
     expect(readSet().files, 'the helper ENRICHED set is published when the proof holds').not.toBe(null);
   });
 
-  it('ITEM 3 BETWEEN THE CANONICAL UNLINK AND THE CLAIM TOUCH: the settlement refuses and RETAINS the claim — and the next arm tolerates that (r4 A-M2)', () => {
+  // BASH ONLY: the fault is a stand-in on PATH for a tool the Go hook never runs. Go:
+  // core/internal/app/hook/compaction_test.go#TestItem3EverySite ("PostCompact: between the unlink and the touch").
+  itBash('ITEM 3 BETWEEN THE CANONICAL UNLINK AND THE CLAIM TOUCH: the settlement refuses and RETAINS the claim — and the next arm tolerates that (r4 A-M2)', () => {
     const tree = cardTree(); plantHelper();
     const { transcript } = plantSession({ lines: workLines(tree) });
     run(preCompact(tree, transcript));
@@ -4421,7 +4652,9 @@ describe('the compaction card — option A, the staging-only helper (spec §3.1 
     expect(lines[0].scope, 'attributed from the claim, not from nothing').not.toBe(null);
   });
 
-  it('ITEM 3 AT THE FAILED-TOUCH RESTORE: a replacement inside `touch`\'s fork refuses, and canonical is NOT republished (r5 R4-M4)', () => {
+  // BASH ONLY: the fault is a stand-in on PATH for a tool the Go hook never runs. Go:
+  // core/internal/app/hook/compaction_test.go#TestItem3FailedTouchRestore (failAt 3).
+  itBash('ITEM 3 AT THE FAILED-TOUCH RESTORE: a replacement inside `touch`\'s fork refuses, and canonical is NOT republished (r5 R4-M4)', () => {
     const tree = cardTree(); plantHelper();
     const { transcript } = plantSession({ lines: workLines(tree) });
     run(preCompact(tree, transcript));
@@ -4447,7 +4680,9 @@ describe('the compaction card — option A, the staging-only helper (spec §3.1 
     expect(lines[0].scope, 'a genuinely absent canonical set attributes nothing').toBe(null);
   });
 
-  it('ITEM 3 AT THE FAILED-TOUCH RESTORE, THE CONTROL: the same stub and the same failing `touch` WITHOUT the replacement DO restore canonical', () => {
+  // BASH ONLY: the fault is a stand-in on PATH for a tool the Go hook never runs. Go:
+  // core/internal/app/hook/compaction_test.go#TestItem3FailedTouchRestore (its control).
+  itBash('ITEM 3 AT THE FAILED-TOUCH RESTORE, THE CONTROL: the same stub and the same failing `touch` WITHOUT the replacement DO restore canonical', () => {
     const tree = cardTree(); plantHelper();
     const { transcript } = plantSession({ lines: workLines(tree) });
     run(preCompact(tree, transcript));
@@ -4482,7 +4717,9 @@ describe('the compaction card — option A, the staging-only helper (spec §3.1 
   // only the count was wrong, in a task whose own scope included correcting
   // falsified comments. A numeral about the code is a claim about the code, so
   // it is counted rather than trusted.
-  it('THE ACQUIRE-SITE CENSUS: the numerals in the prose are the numbers in the source', () => {
+  // BASH ONLY: a pin on the bash's text. The Go hook's values are held by attention's TestCompactConstantsPinned and
+  // TestCompactGolden, its order and proofs by app/hook's TestItem3EverySite, TestItem3SecondSection and TestItem3EventsLine.
+  itBash('THE ACQUIRE-SITE CENSUS: the numerals in the prose are the numbers in the source', () => {
     const hookSrc = fs.readFileSync(HOOK, 'utf8');
     // THROUGH `CCD`, never a second spelling of the path: `single-definition`
     // allows exactly one file in the test tree to name the ccd script, and it
@@ -4533,7 +4770,9 @@ describe('the compaction card — option A, the staging-only helper (spec §3.1 
       .toContain(`across ${w(fallThroughSites)} of its ${w(ccdSites)} sites`);
   });
 
-  it('ITEM 3, EVERY SITE: each canonical mutation in a held section is preceded by its own re-check', () => {
+  // BASH ONLY: a pin on the bash's text. The Go hook's values are held by attention's TestCompactConstantsPinned and
+  // TestCompactGolden, its order and proofs by app/hook's TestItem3EverySite, TestItem3SecondSection and TestItem3EventsLine.
+  itBash('ITEM 3, EVERY SITE: each canonical mutation in a held section is preceded by its own re-check', () => {
     const src = fs.readFileSync(HOOK, 'utf8').split('\n');
     const lineOf = (needle: string): number => {
       const hits = src.map((l, i) => [l, i + 1] as const).filter(([l]) => l.includes(needle));
@@ -4650,7 +4889,9 @@ describe('the compaction card — option A, the staging-only helper (spec §3.1 
     }
   });
 
-  it('CLOSE-BEFORE-FORK, BY EFFECT: the helper can take the row\'s lock while it runs', () => {
+  // BASH ONLY: the fault is a stand-in on PATH for a tool the Go hook never runs. Go:
+  // core/internal/app/hook/compaction_faults_test.go#TestPreReleasesTheLockBeforeTheHelper.
+  itBash('CLOSE-BEFORE-FORK, BY EFFECT: the helper can take the row\'s lock while it runs', () => {
     const tree = cardTree(); plantHelper();
     const { transcript } = plantSession({ lines: workLines(tree) });
     // A held `{fd}<>` descriptor is NOT close-on-exec — measured, an exec'd
@@ -5202,7 +5443,12 @@ describe('the compaction card — the two documents say what the code does (spec
 });
 
 // ── D-2605: PostCompact — settle, measure, commit ONE journal line (§3.4) ─
-describe('the compaction card — PostCompact settlement and the journal (spec §3.4)', () => {
+describe.each(IMPLS)('the compaction card — PostCompact settlement and the journal (spec §3.4) (%s)', (which) => {
+  const { run, runFull, runConcurrent } = inImplFull(which);
+  const itBash = which === 'bash' ? it : it.skip;
+  const itLinuxBash = which === 'bash' ? itLinux : it.skip;
+  const hookCmd = hookArgvOf(which);
+  void itLinuxBash; void hookCmd; void runConcurrent; void itBash;
   const lockFile = (): string => path.join(home, '.cc-sessions', '.demo-quiet-basin.compactions.lock');
   const reg = (): string[] => fs.readdirSync(path.join(home, '.cc-sessions'));
   const journal = (): Array<Record<string, unknown>> =>
@@ -5517,7 +5763,9 @@ describe('the compaction card — PostCompact settlement and the journal (spec �
    *  alone. A failed snapshot copy used to reach the same record shape from a
    *  compaction that HAD a set, and then discarded the claim holding the only
    *  surviving copy of those bytes: canonical is already unlinked by then. */
-  it('A FAILED SNAPSHOT COPY commits NOTHING and retains the verified claim', () => {
+  // BASH ONLY: the fault is a stand-in on PATH for a tool the Go hook never runs. Go:
+  // core/internal/app/hook/compaction_faults_test.go#TestPostFailedSnapshotCopyCommitsNothing.
+  itBash('A FAILED SNAPSHOT COPY commits NOTHING and retains the verified claim', () => {
     const { tree, transcript } = cycle({ serve: true });
     // `cat` fails its SECOND no-operand invocation. The first is the hook's own
     // `payload=$(cat)`; the second is `cat <&"$claimfd" > "$snap"`. Every
@@ -5571,7 +5819,7 @@ describe('the compaction card — PostCompact settlement and the journal (spec �
     // pinned by its own fixture below, where the holder is started INSIDE the
     // measure window.
     fs.closeSync(fs.openSync(lockFile(), 'a'));
-    const holder = spawn('bash', ['-c',
+    const holder = spawn(HARNESS_BASH, ['-c',
       'exec 9<>"$1" || exit 1; flock 9 || exit 1; echo held; exec sleep 3', '_', lockFile()]);
     await new Promise<void>((res, rej) => {
       const t = setTimeout(() => rej(new Error('holder never took the lock')), 10_000);
@@ -5584,7 +5832,9 @@ describe('the compaction card — PostCompact settlement and the journal (spec �
     } finally { holder.kill('SIGKILL'); }
   }, 40_000);
 
-  it('A FAILED canonical unlink leaves canonical\'s bytes AND ITS MTIME unchanged, and removes only the claim', () => {
+  // BASH ONLY: the fault is a stand-in on PATH for a tool the Go hook never runs. Go:
+  // core/internal/app/hook/compaction_faults_test.go#TestPostFailedUnlinkKeepsTheSet.
+  itBash('A FAILED canonical unlink leaves canonical\'s bytes AND ITS MTIME unchanged, and removes only the claim', () => {
     const { tree, transcript } = cycle({ serve: true });
     const beforeBytes = fs.readFileSync(setFile());
     // NANOSECONDS, through the `bigint` overload — `mtimeNs` exists only on
@@ -5652,7 +5902,9 @@ describe('the compaction card — PostCompact settlement and the journal (spec �
    *  entire failed-`touch` branch had no behaviour fixture at all — replacing
    *  the no-clobber restore with a bare `rm -f "$claim"`, which destroys the
    *  compaction's only verified copy, left the suite fully green. */
-  it('A FAILED CLAIM TOUCH restores canonical by no-clobber link — same bytes, same mtime, same INODE', () => {
+  // BASH ONLY: the fault is a stand-in on PATH for a tool the Go hook never runs. Go:
+  // core/internal/app/hook/compaction_test.go#TestItem3FailedTouchRestore (its control: same bytes, same inode).
+  itBash('A FAILED CLAIM TOUCH restores canonical by no-clobber link — same bytes, same mtime, same INODE', () => {
     const { tree, transcript } = cycle({ serve: true });
     const before = fs.readFileSync(setFile());
     const st = fs.statSync(setFile(), { bigint: true });
@@ -5669,7 +5921,9 @@ describe('the compaction card — PostCompact settlement and the journal (spec �
     expect(fs.existsSync(journalFile()), 'and nothing was committed').toBe(false);
   });
 
-  it('…but a COLLIDING restore never overwrites the occupant, and RETAINS the claim as exact residue', () => {
+  // BASH ONLY: the fault is a stand-in on PATH for a tool the Go hook never runs. Go:
+  // core/internal/app/hook/compaction_faults_test.go#TestPostCollidingRestoreKeepsTheOccupantAndTheClaim.
+  itBash('…but a COLLIDING restore never overwrites the occupant, and RETAINS the claim as exact residue', () => {
     const { tree, transcript } = cycle({ serve: true });
     const STRANGER = '{"v":1,"nonce":"compact-9-9-9-9","note":"a stranger already owns this name"}\n';
     // The stub fails on exactly the claim AND re-occupies the canonical
@@ -5735,7 +5989,9 @@ describe('the compaction card — PostCompact settlement and the journal (spec �
     expect(reg().filter((n) => n.includes('compactpost')), 'no claim was taken').toEqual([]);
   }, 60_000);
 
-  it('the two guards beside it are ARGUED, not pinnable by behaviour — and the reason is measured', () => {
+  // BASH ONLY: a pin on the bash's text. The Go hook's values are held by attention's TestCompactConstantsPinned and
+  // TestCompactGolden, its order and proofs by app/hook's TestItem3EverySite, TestItem3SecondSection and TestItem3EventsLine.
+  itBash('the two guards beside it are ARGUED, not pinnable by behaviour — and the reason is measured', () => {
     // MEASURED on this box, in a throwaway copy: deleting `command -v touch`
     // or `command -v mktemp` from `_hook_compact_post` leaves the whole
     // session-hook suite GREEN, including the two absence legs above, because
@@ -5787,7 +6043,9 @@ describe('the compaction card — PostCompact settlement and the journal (spec �
     expect(reg().filter((n) => n.includes('compactions-snapshot')), 'only this process\'s own snapshot goes').toEqual([]);
   });
 
-  it('the record and every physical line pass ONE predicate, and a mutant record commits nothing', () => {
+  // BASH ONLY: a pin on the bash's text. The Go hook's values are held by attention's TestCompactConstantsPinned and
+  // TestCompactGolden, its order and proofs by app/hook's TestItem3EverySite, TestItem3SecondSection and TestItem3EventsLine.
+  itBash('the record and every physical line pass ONE predicate, and a mutant record commits nothing', () => {
     const src = fs.readFileSync(HOOK, 'utf8');
     // The sixteen keys are spelled ONCE, as a sorted-equality rather than a
     // presence test, and `\z` is jq/Oniguruma's — the bash arms in this file
@@ -5814,7 +6072,9 @@ describe('the compaction card — PostCompact settlement and the journal (spec �
     expect(post, 'canonical is never appended to directly').not.toMatch(/>>\s*"\$journal"/);
   });
 
-  it('the constants block does not say the journal is never READ — PostCompact reads it four ways', () => {
+  // BASH ONLY: a pin on the bash's text. The Go hook's values are held by attention's TestCompactConstantsPinned and
+  // TestCompactGolden, its order and proofs by app/hook's TestItem3EverySite, TestItem3SecondSection and TestItem3EventsLine.
+  itBash('the constants block does not say the journal is never READ — PostCompact reads it four ways', () => {
     // The comment said "`.compactions` (the per-session journal PostCompact
     // appends, / # never read here)". Measured in the same file,
     // `_hook_compact_post` opens the journal, copies it into its private
@@ -5935,7 +6195,7 @@ describe('the compaction card — no test reads `served` off a set (plan Task 9)
    *  treatment the canonical-write scan gives the helper's `writeAtomic`
    *  primitives: excluded BY THE SCOPE, never by an allow-list entry, so it can
    *  never be mistaken for something argued-for. */
-  const isTitle = (l: string): boolean => /^\s*(it|describe)\(/.test(l);
+  const isTitle = (l: string): boolean => /^\s*(it\w*|describe(\.each\(\w+\))?)\(/.test(l); // itBash and describe.each(IMPLS) too (Task 8b)
   /** PROSE is out of scope for the same reason a title is: a `//` or `/** *\/`
    *  line is a sentence about the member, never a read of it. */
   const isProse = (l: string): boolean => /^\s*(\/\/|\/\*|\*)/.test(l);
@@ -6259,7 +6519,12 @@ describe('the compaction card — jq programs and shell words in the compaction 
 // adding `compaction:{n:1}` to the hookstate `jq -cn` object passed the whole
 // session-hook suite. Both halves the row states are built here — the writer's
 // source, and the document's key set on a real run.
-describe('the compaction card — no hookstate compaction cache (spec §5)', () => {
+describe.each(IMPLS)('the compaction card — no hookstate compaction cache (spec §5) (%s)', (which) => {
+  const { run, runFull, runConcurrent } = inImplFull(which);
+  const itBash = which === 'bash' ? it : it.skip;
+  const itLinuxBash = which === 'bash' ? itLinux : it.skip;
+  const hookCmd = hookArgvOf(which);
+  void itLinuxBash; void hookCmd; void runConcurrent; void itBash;
   const SUMMARY = '1. Task\ndid a thing\n';
 
   it('the hookstate document\'s key set is pinned BY EQUALITY on a real run, compaction and all', () => {
@@ -6281,7 +6546,9 @@ describe('the compaction card — no hookstate compaction cache (spec §5)', () 
     expect(fs.existsSync(journalFile()), 'the compaction really happened').toBe(true);
   });
 
-  it('no arm BUILDS a `compaction` member into the hookstate document, and the writer is the one place that could', () => {
+  // BASH ONLY: a pin on the bash's text. The Go hook's values are held by attention's TestCompactConstantsPinned and
+  // TestCompactGolden, its order and proofs by app/hook's TestItem3EverySite, TestItem3SecondSection and TestItem3EventsLine.
+  itBash('no arm BUILDS a `compaction` member into the hookstate document, and the writer is the one place that could', () => {
     const src = fs.readFileSync(HOOK, 'utf8');
     const code = src.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
     // THE WRITER'S OWN OBJECT, bounded to the `jq -cn` that builds it. A key is
@@ -6307,7 +6574,12 @@ describe('the compaction card — no hookstate compaction cache (spec §5)', () 
   });
 });
 // ── D-2605: the generation gate, in all three arms (spec §3.1 step 5, §3.3) ─
-describe('the compaction card — the row generation authorizes every arm (spec §3.4)', () => {
+describe.each(IMPLS)('the compaction card — the row generation authorizes every arm (spec §3.4) (%s)', (which) => {
+  const { run, runFull, runConcurrent } = inImplFull(which);
+  const itBash = which === 'bash' ? it : it.skip;
+  const itLinuxBash = which === 'bash' ? itLinux : it.skip;
+  const hookCmd = hookArgvOf(which);
+  void itLinuxBash; void hookCmd; void runConcurrent; void itBash;
   const genFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.generation');
   const reg = (): string[] => fs.readdirSync(path.join(home, '.cc-sessions'));
   /** Compaction ARTIFACTS only. The PERMANENT LOCK is excluded by name: it is
@@ -6390,7 +6662,9 @@ describe('the compaction card — the row generation authorizes every arm (spec 
     expect(fs.existsSync(cardFile()), 'the same helper, the same tree, an unchanged row').toBe(true);
   });
 
-  it('the MARKER publication revalidates the generation — a row re-authorized between the print and the mark mints nothing', () => {
+  // BASH ONLY: the fault is a stand-in on PATH for a tool the Go hook never runs. Go:
+  // core/internal/app/hook/compaction_faults_test.go#TestMarkServedRevalidatesTheGeneration.
+  itBash('the MARKER publication revalidates the generation — a row re-authorized between the print and the mark mints nothing', () => {
     // §3.3 step 5: "Before unlock and only after successful output, REVALIDATE
     // environment generation and publish the exact nonce marker." The serve arm
     // holds the stable lock from the claim through the print, so the window is
@@ -6490,7 +6764,9 @@ describe('the compaction card — the row generation authorizes every arm (spec 
     }
   });
 
-  it('the gate is read through an owned alias and leaves none behind, and the arms validate UNDER the lock', () => {
+  // BASH ONLY: a pin on the bash's text. Go: the alias read is core/internal/adapter/lock/row_test.go#TestRowGeneration, and the
+  // arms' generation checks under the lock are the both-mode generation cases of this describe.
+  itBash('the gate is read through an owned alias and leaves none behind, and the arms validate UNDER the lock', () => {
     allThree();
     expect(reg().filter((n) => n.includes('generation-read')), 'no read alias survives').toEqual([]);
     const src = fs.readFileSync(HOOK, 'utf8');
@@ -7061,7 +7337,12 @@ _hook_compact_rollback_set() {
 // settlement it could not serialise. There is no unlocked fallback anywhere —
 // that is §10's forbidden second concurrency regime — so absence of the
 // mechanism makes each arm INERT, not degraded.
-describe('the compaction card — mechanism absence, the serve and settle arms (spec §4, §5)', () => {
+describe.each(IMPLS)('the compaction card — mechanism absence, the serve and settle arms (spec §4, §5) (%s)', (which) => {
+  const { run, runFull, runConcurrent } = inImplFull(which);
+  const itBash = which === 'bash' ? it : it.skip;
+  const itLinuxBash = which === 'bash' ? itLinux : it.skip;
+  const hookCmd = hookArgvOf(which);
+  void itLinuxBash; void hookCmd; void runConcurrent; void itBash;
   const reg = (): string[] => fs.readdirSync(path.join(home, '.cc-sessions')).sort();
   const SUMMARY = [
     '1. Task', 'did a thing', '',
@@ -7261,7 +7542,7 @@ describe('the strace fork census — split lines are rejoined (runs on every pla
 // branch-conditional and no single run produces all of them: a single expected
 // list naming every conditional member is RED on a correct tree, which is the
 // weakening this pin exists to prevent.
-describe.skipIf(process.platform === 'darwin')('the compaction card — the first held section forks exactly this (spec §3.1)', () => {
+describe.runIf(process.platform === 'linux')('the compaction card — the first held section forks exactly this (spec §3.1)', () => {
   /** One fork the arm's own shell took, named by the first command its subtree
    *  execs — or `(subshell)` when it execs nothing at all, which is what a
    *  `$( )` around a builtin-only function is. Naming by the SUBTREE rather
@@ -7274,7 +7555,7 @@ describe.skipIf(process.platform === 'darwin')('the compaction card — the firs
     const trace = path.join(home, 'trace.txt');
     const r = spawnSync('strace', ['-f', '-o', trace, '-e', 'trace=clone,clone3,fork,vfork,execve', 'bash', HOOK], {
       input: JSON.stringify(payload), encoding: 'utf8',
-      env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+      env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
         TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242',
         CCRC_SESSION_GENERATION: GENERATION },
     });
@@ -8527,7 +8808,10 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
 // and an UNRESOLVED per-user `/var/folders/<x>/<y>/T` on Darwin; `mkTmp`
 // resolves what it returns (`/private/var/folders/...` there), and the guard
 // skips either spelling.
-describe('memory convergence (spec 2026-09-08 §2)', () => {
+// Linux and macOS only: on Windows both hooks slug the MSYS2 spelling of the root (-c-...), not Claude Code's (C--...), so
+// neither converges there (measured in both modes, Task 9b gate round); both modes run it on the Linux bench
+describe.skipIf(process.platform === 'win32')('memory convergence (spec 2026-09-08 §2)', () => {
+  const { run, runFull } = both;   // the bash and the Go core, compared (Task 8a)
   /** The harness's own slug rule, measured against 30 live session workdirs:
    *  every character outside `[A-Za-z0-9-]` becomes `-`, over the PHYSICAL
    *  path (`/data` is a symlink on this box and no `-data-…` slug exists). */
@@ -8611,6 +8895,48 @@ describe('memory convergence (spec 2026-09-08 §2)', () => {
     run(payload());
     expect(fs.lstatSync(link()).isSymbolicLink()).toBe(false);
     expect(fs.readFileSync(path.join(link(), 'a.md'), 'utf8')).toBe('keep me');
+  });
+
+  // Go core wave 2, Task 8a: `rmdir` is the emptiness test, and it refuses a FILE too (where an unlink would take it),
+  // and the root is found through bash's LOGICAL `cd` then `pwd -P`. These run both implementations through hookBoth
+  // with the link itself watched, so a Go hook that removed the file, or resolved the root another way, reds here.
+  const watched = (p: object): string => {
+    const rel = path.relative(home, link());
+    const r = hookBoth(home, JSON.stringify(p), hookEnv(SESSION_ENV), { hook: HOOK, tree: true, watch: [rel, path.join(rel, 'a.md')] });
+    expect(r.status).toBe(0);
+    return String(r.stdout);
+  };
+  it('LEAVES a regular FILE at the memory path alone — rmdir refuses it, as it refuses a non-empty directory', () => {
+    fs.writeFileSync(link(), 'a file, not a directory');
+    watched(payload());
+    expect(fs.lstatSync(link()).isFile(), 'the file is still there').toBe(true);
+    expect(fs.readFileSync(link(), 'utf8')).toBe('a file, not a directory');
+    expect(fs.existsSync(store()), 'nothing was converged').toBe(false);
+  });
+  it('finds the root through a symlinked cwd inside the repository as bash\'s logical cd and pwd -P do', () => {
+    gitInit(root);
+    fs.mkdirSync(path.join(root, 'sub', 'deeper'), { recursive: true });
+    const lnk = path.join(home, 'lnk');
+    fs.symlinkSync(path.join(root, 'sub', 'deeper'), lnk);
+    watched(payload({ cwd: lnk }));
+    expect(fs.readlinkSync(link()), 'the main checkout\'s pair converged').toBe(store());
+  });
+
+  // Where the LOGICAL path holds the directories `..` steps out of, bash's `cd` takes `..` off the text, not off the link's
+  // target: the root it finds is the symlink's parent side, here the project base, whose own pair converges. Each
+  // implementation runs alone (the twin hookBoth makes has another HOME, so the project directory it plants differs).
+  it.each(IMPLS)('takes `..` off the symlinked cwd\'s TEXT where that path exists, as bash\'s logical cd does (%s)', (impl) => {
+    gitInit(root);
+    fs.mkdirSync(path.join(root, 'sub'), { recursive: true });
+    const lnk = path.join(pbase, 'lnk');
+    fs.symlinkSync(path.join(root, 'sub'), lnk);
+    fs.mkdirSync(path.join(pbase, '.git'));   // the logical `<base>/lnk/../.git` exists, so the logical walk holds
+    const baseSlug = slugOf(pbase);
+    fs.mkdirSync(path.join(home, '.claude-x', 'projects', baseSlug), { recursive: true });
+    runIn(impl, payload({ cwd: lnk }));
+    expect(fs.readlinkSync(path.join(home, '.claude-x', 'projects', baseSlug, 'memory')), 'the logical root\'s pair')
+      .toBe(path.join(home, '.ccrc', 'memory', baseSlug));
+    expect(fs.existsSync(link()), 'the physical root\'s pair is not touched').toBe(false);
   });
 
   it('LEAVES a symlink pointing elsewhere alone — its target holds data', () => {
@@ -8857,6 +9183,9 @@ describe('memory convergence (spec 2026-09-08 §2)', () => {
 // the second a stub that answers the untargeted question and fails or wedges the
 // targeted one, which is the lookup-failure half and needs no tmux at all.
 const EXACT_PANE_TMUX: string | null = (() => {
+  // not on Windows: `command -v` answers an MSYS2 path there, which Node cannot start, so the fixture's private server
+  // never answered (measured: "would not go away"); a tmux server is Linux and macOS ground
+  if (process.platform === 'win32') return null;
   const r = spawnSync('sh', ['-c', 'command -v tmux'], { encoding: 'utf8' });
   const p = (r.stdout ?? '').trim();
   return r.status === 0 && p.startsWith('/') ? p : null;
@@ -8986,9 +9315,9 @@ describe('exact-pane hook ownership: the session name is asked of $TMUX_PANE, ne
     it('a targeted lookup that NEVER ANSWERS costs the bound and attributes nothing', () => {
       plantTmux('sleep 30');
       for (const event of [EVENT, SESSION_END]) {
-        const t0 = Date.now();
+        const t0 = performance.now();
         expect(runFull(event, { TMUX_PANE: '%7' }), event.hook_event_name).toEqual({ stdout: '', stderr: '' });
-        const ms = Date.now() - t0;
+        const ms = performance.now() - t0;
         expect(ms, `${event.hook_event_name}: the hook took ${ms}ms — the bound did not fire`).toBeLessThan(10_000);
       }
       wroteNothing();
@@ -9308,9 +9637,9 @@ describe('the tmux session-name read is bounded', () => {
     // Mutation: drop the bound (`tname=$(tmux display-message -p -t "$TMUX_PANE" '#S' …)`) and
     // this waits the stub's full 30 s instead of ~2.
     fs.writeFileSync(path.join(home, 'bin', 'tmux'), '#!/bin/sh\nsleep 30\n', { mode: 0o755 });
-    const t0 = Date.now();
+    const t0 = performance.now();
     expect(() => run({ hook_event_name: 'UserPromptSubmit' })).not.toThrow();
-    const ms = Date.now() - t0;
+    const ms = performance.now() - t0;
     expect(ms, `the hook took ${ms}ms — the bound did not fire`).toBeLessThan(10_000);
     expect(fs.existsSync(stateFile())).toBe(false);
   });
@@ -10096,7 +10425,8 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     input: JSON.stringify(payload), encoding: 'utf8', timeout: 10_000, killSignal: 'SIGKILL', env: hookEnv(SCRUB),
   });
 
-  it('F24: a FIFO at the spool path writes no line and never blocks: exit 0, silent, hookstate written, the FIFO left as it was (D-4418)', () => {
+  // not on Windows: an MSYS2 FIFO is invisible to a native program (D-TBD-go-hook-windows-fifo)
+  it.skipIf(process.platform === 'win32')('F24: a FIFO at the spool path writes no line and never blocks: exit 0, silent, hookstate written, the FIFO left as it was (D-4418)', () => {
     plantSpool();
     execFileSync('mkfifo', [spoolFile()]);
     const r = runSpoolBounded({ hook_event_name: 'Stop', session_id: SID });
@@ -10185,7 +10515,13 @@ describe('the pane-less fallback: forked sessions only (D-4953), every row read 
   /** The hook with a wall-clock bound (the spool describe's `runSpoolBounded`, for this describe's env): a hook blocked
    *  in open(2) is killed, never left to hang the suite. `unset` REMOVES variables, which `env` cannot: a blank variable
    *  and an unset one are different inputs under the hook's `set -u`. */
-  const runBounded = (payload: object, env: Record<string, string>, unset: string[] = []): ReturnType<typeof spawnSync> => {
+  const runBounded = (payload: object, env: Record<string, string>, unset: string[] = [], impl: Impl = 'bash'): { signal: string | null; status: number | null; stdout: unknown; stderr: unknown } => {
+    if (impl === 'go') {   // hookTwin's runHook, bounded at its own 120 s; a name left out of its env is unset there
+      const given: Record<string, string> = { ...SESSION_ENV, ...env };
+      for (const k of unset) delete given[k];
+      const r = runHook({ home, env: (x = {}) => hookEnv(x as Record<string, string>) }, 'go', payload, given);
+      return { signal: r.status === null ? 'killed at the bound' : null, ...r };
+    }
     const e = hookEnv(env);
     for (const k of unset) delete e[k];
     return spawnSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', timeout: 10_000, killSignal: 'SIGKILL', env: e });
@@ -10197,7 +10533,8 @@ describe('the pane-less fallback: forked sessions only (D-4953), every row read 
   // live row, outside tmux, matched that row and wrote SessionStart(resume)
   // 'done' with the row's own uuid: state the server reads as current while
   // the row's real pane is mid-turn.
-  it('a Claude session outside tmux that resumes a registry uuid is still nobody\'s', () => {
+  it.each(IMPLS)('a Claude session outside tmux that resumes a registry uuid is still nobody\'s (%s)', (impl) => {
+    const { runFull } = inImpl(impl);
     row('demo-quiet-basin', 'uuid-1\n');
     expect(runFull({ hook_event_name: 'SessionStart', source: 'resume', session_id: 'uuid-1' }, { TMUX_PANE: '' }))
       .toMatchObject({ stdout: '', stderr: '' });
@@ -10206,7 +10543,8 @@ describe('the pane-less fallback: forked sessions only (D-4953), every row read 
 
   // The fleet gate's 'a foreign tmux session name' case, WITH the row it was
   // missing: without one, it passed because the fallback had nothing to match.
-  it('a tmux session not named cc-* writes nothing, even beside a row that names its session id', () => {
+  it.each(IMPLS)('a tmux session not named cc-* writes nothing, even beside a row that names its session id (%s)', (impl) => {
+    const { run } = inImpl(impl);
     fs.writeFileSync(path.join(home, 'bin', 'tmux'), '#!/bin/sh\necho "main"\n', { mode: 0o755 });
     row('demo-quiet-basin', 'uuid-1\n');
     run({ hook_event_name: 'Stop' });
@@ -10216,7 +10554,8 @@ describe('the pane-less fallback: forked sessions only (D-4953), every row read 
   // THE PANE IS THE PANE'S QUESTION: a process with a pane is answered by the
   // pane or by nobody, even when it also carries the job marker. This is the
   // case that isolates the `elif` from the job-marker conjunct.
-  it('a process in a tmux session not named cc-* is never attributed by its session id, job marker or not', () => {
+  it.each(IMPLS)('a process in a tmux session not named cc-* is never attributed by its session id, job marker or not (%s)', (impl) => {
+    const { run } = inImpl(impl);
     fs.writeFileSync(path.join(home, 'bin', 'tmux'), '#!/bin/sh\necho "main"\n', { mode: 0o755 });
     row('demo-quiet-basin', 'uuid-1\n');
     run({ hook_event_name: 'UserPromptSubmit' }, { ...forkedEnv(), TMUX_PANE: '%3' });
@@ -10226,10 +10565,10 @@ describe('the pane-less fallback: forked sessions only (D-4953), every row read 
   // UNSET IS NOT BLANK (H4). Under `set -u`, a comparison that expands an
   // unset CLAUDE_CODE_SESSION_ID kills the hook with "unbound variable" and
   // exit 1. The blank-id case is 'a session with no pane' above.
-  it('the session id UNSET: exit 0, silent on both streams, nobody attributed', () => {
+  it.each(IMPLS)('the session id UNSET: exit 0, silent on both streams, nobody attributed (%s)', (impl) => {
     row('demo-quiet-basin', 'uuid-1\n');
     row('ghost', '');
-    const r = runBounded({ hook_event_name: 'UserPromptSubmit' }, forkedEnv(), ['CLAUDE_CODE_SESSION_ID']);
+    const r = runBounded({ hook_event_name: 'UserPromptSubmit' }, forkedEnv(), ['CLAUDE_CODE_SESSION_ID'], impl);
     expect(r.signal).toBeNull();
     expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
     expect({ stdout: r.stdout, stderr: r.stderr }).toEqual({ stdout: '', stderr: '' });
@@ -10241,7 +10580,8 @@ describe('the pane-less fallback: forked sessions only (D-4953), every row read 
   // `a`/`b`-prefixed names sort before the matching row: the walk meets the
   // bad node first and must pass it to attribute at all.
 
-  it.skipIf(process.getuid?.() === 0)('a row it cannot read is passed in silence, and the walk goes on to the match', () => {
+  it.skipIf(process.getuid?.() === 0).each(IMPLS)('a row it cannot read is passed in silence, and the walk goes on to the match (%s)', (impl) => {
+    const { runFull } = inImpl(impl);
     row('a-row', 'uuid-other\n');
     fs.chmodSync(reg('a-row.uuid'), 0o000);
     row('demo-quiet-basin', 'uuid-1\n');
@@ -10284,10 +10624,11 @@ describe('the pane-less fallback: forked sessions only (D-4953), every row read 
     expect(attributed()).toEqual(['demo-quiet-basin.hookstate.json']);
   });
 
-  it('a FIFO at a registry row never blocks the hook: exit 0, silent, the match still found', () => {
+  // not on Windows: an MSYS2 FIFO is invisible to a native program (D-TBD-go-hook-windows-fifo)
+  it.skipIf(process.platform === 'win32').each(IMPLS)('a FIFO at a registry row never blocks the hook: exit 0, silent, the match still found (%s)', (impl) => {
     execFileSync('mkfifo', [reg('aaa-junk.uuid')]);
     row('demo-quiet-basin', 'uuid-1\n');
-    const r = runBounded({ hook_event_name: 'PreToolUse', tool_name: 'Read' }, forkedEnv());
+    const r = runBounded({ hook_event_name: 'PreToolUse', tool_name: 'Read' }, forkedEnv(), [], impl);
     expect(r.signal, 'killed at the bound: the hook blocked in open(2)').toBeNull();
     expect(r.status).toBe(0);
     expect(r.stderr).toBe('');
@@ -10295,15 +10636,24 @@ describe('the pane-less fallback: forked sessions only (D-4953), every row read 
     expect(fs.lstatSync(reg('aaa-junk.uuid')).isFIFO()).toBe(true);
   }, 30_000);
 
-  it('a row that is a symlink to a character device is never read: exit 0, silent, the match still found', () => {
+  it.each(IMPLS)('a row that is a symlink to a character device is never read: exit 0, silent, the match still found (%s)', (impl) => {
     fs.symlinkSync('/dev/zero', reg('bbb-dev.uuid'));
     row('demo-quiet-basin', 'uuid-1\n');
-    const r = runBounded({ hook_event_name: 'PreToolUse', tool_name: 'Read' }, forkedEnv());
+    const r = runBounded({ hook_event_name: 'PreToolUse', tool_name: 'Read' }, forkedEnv(), [], impl);
     expect(r.signal, 'killed at the bound: the hook read an endless device').toBeNull();
     expect(r.status).toBe(0);
     expect(r.stderr).toBe('');
     expect(attributed()).toEqual(['demo-quiet-basin.hookstate.json']);
   }, 30_000);
+
+  // The walk is the shell's `"$REG"/*.uuid`, whose `*` never matches a name led by a dot (Go core wave 2: Go's own glob
+  // does, so the Go hook drops such names, as the shell never sees them).
+  it.each(IMPLS)('a dot-led row naming the session id is not a row the walk sees (%s)', (impl) => {
+    const { run } = inImpl(impl);
+    row('.x', 'uuid-1\n');
+    run({ hook_event_name: 'UserPromptSubmit' }, forkedEnv());
+    expect(attributed()).toEqual([]);
+  });
 
   // THE ONE STRANGER THE MARKER LETS THROUGH, written where the gate is.
   // CLAUDE_JOB_DIR is INHERITED: Claude Code's child-environment builder keeps
@@ -10369,12 +10719,12 @@ describe.runIf(process.env['CCRC_PERF'] === '1')('the hot-path budget through th
     const prefix = path.resolve(__dirname, '../../ccd/ccd-tool-adj');
     const times: number[] = [];
     for (let i = 0; i < 41; i++) {   // the first run is a warm-up, discarded (CCRC_PERF=1 only: the perf job, D-6929)
-      const t0 = Date.now();
+      const t0 = performance.now();
       execFileSync(prefix, [`bash ${sh(HOOK)}`], {
         input: JSON.stringify({ hook_event_name: 'PostToolUse', tool_name: 'Bash' }),
         encoding: 'utf8', env: hookEnv(),
       });
-      if (i > 0) times.push(Date.now() - t0);
+      if (i > 0) times.push(performance.now() - t0);
     }
     times.sort((a, b) => a - b);
     expect(times[37]).toBeLessThan(150);   // p95 of 40 = times[37]; the threshold is unchanged
@@ -10393,9 +10743,9 @@ describe.runIf(process.env['CCRC_PERF'] === '1')('the PostToolUse budget holds f
     run({ hook_event_name: 'Stop', background_tasks: [] });
     const times: number[] = [];
     for (let i = 0; i < 41; i++) {   // the first run is a warm-up, discarded (CCRC_PERF=1 only: the perf job, D-6929)
-      const t0 = Date.now();
+      const t0 = performance.now();
       run({ hook_event_name: 'PostToolUse', tool_name: 'Bash', agent_id: 'a0000000000000001', agent_type: 'general-purpose' });
-      if (i > 0) times.push(Date.now() - t0);
+      if (i > 0) times.push(performance.now() - t0);
     }
     expect(readState().state, 'the carry ran: the Stop\'s done stands').toBe('done');
     times.sort((a, b) => a - b);
@@ -10413,7 +10763,12 @@ const HISTORY_HOOK_SCRUB: Record<string, string> = {
   TMUX: '', CLAUDE_CONFIG_DIR: '', CLAUDECODE: '',
   ...Object.fromEntries(Object.keys(process.env).filter((k) => k.startsWith('CCRC_RECALL_') || k.startsWith('HISTORY_TEST_')).map((k) => [k, ''])),
 };
-describe('history scope marker: PreCompact records whose context is compacting (spec §5.1, S16)', () => {
+describe.each(IMPLS)('history scope marker: PreCompact records whose context is compacting (spec §5.1, S16) (%s)', (which) => {
+  const { run, runFull } = inImplFull(which);
+  const itBash = which === 'bash' ? it : it.skip;
+  const itLinuxBash = which === 'bash' ? itLinux : it.skip;
+  const hookCmd = hookArgvOf(which);
+  void run; void itBash; void itLinuxBash; void hookCmd;
   const SID = '7d0c3f5e-1a2b-4c3d-8e9f-0a1b2c3d4e5f';
   const ID = 'demo-quiet-basin';
   const histDir = (...p: string[]): string => path.join(home, '.ccrc', 'history', ...p);
@@ -10457,7 +10812,8 @@ describe('history scope marker: PreCompact records whose context is compacting (
   // silently and leaves the same nothing behind. What the gate saves is the block's forks, so this case counts them
   // against the same run under history-off, whose own gate stops the block. compact-card-off keeps the card from
   // scoping, so CS_SCOPE stays unset and the block, past its gate, would run its own jq, scope and clock.
-  itLinux('S16: with no scope/ directory the gate forks nothing: the same forks as the run under history-off', () => {
+  // BASH ONLY: it counts the bash's forks under strace (the Go hook forks nothing on this path).
+  itLinuxBash('S16: with no scope/ directory the gate forks nothing: the same forks as the run under history-off', () => {
     cardOff();
     const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
     const forks = (): number => {
@@ -10565,12 +10921,14 @@ describe('history scope marker: PreCompact records whose context is compacting (
 
   it('an undecided verdict empties a fresh main marker this psid left, and creates nothing where none was', () => {
     plantScope();
-    fs.writeFileSync(marker(), `main ${SID} ${Date.now()}\n`);
+    // stamped 5 s back: the bench's clock steps back ~650 ms every 31 s, and a future-dated marker is refused (Task 8a, F5)
+    fs.writeFileSync(marker(), `main ${SID} ${Date.now() - 5000}\n`);
     expect(runFull(pre(path.join(home, 'missing.jsonl')), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
     expect(fs.readFileSync(marker(), 'utf8'), 'the earlier main marker survived an undecided compaction').toBe('');
   });
 
-  it.skipIf(process.getuid?.() === 0)('S16: a hookstate write that fails leaves no marker and still exits 0, silent', () => {
+  // Linux and macOS only: Windows has no POSIX mode bits, so chmod leaves the file readable and the directory writable
+  it.skipIf(process.getuid?.() === 0 || process.platform === 'win32')('S16: a hookstate write that fails leaves no marker and still exits 0, silent', () => {
     plantScope(); cardOff();
     const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
     const reg = path.join(home, '.cc-sessions');
@@ -10583,10 +10941,11 @@ describe('history scope marker: PreCompact records whose context is compacting (
     expect(fs.existsSync(marker()), 'a marker landed although the hookstate write failed').toBe(false);
   });
 
-  it.skipIf(process.getuid?.() === 0)('a hookstate write that fails empties an older fresh main marker, so a following SessionStart(compact) serves no line', async () => {
+  // Linux and macOS only: Windows has no POSIX mode bits, so chmod leaves the file readable and the directory writable
+  it.skipIf(process.getuid?.() === 0 || process.platform === 'win32')('a hookstate write that fails empties an older fresh main marker, so a following SessionStart(compact) serves no line', async () => {
     const lib = await import('../../ccd/history/lib.mjs');
     plantScope(); cardOff();
-    fs.writeFileSync(marker(), `main ${SID} ${Date.now()}\n`);  // an earlier main compaction's, still fresh
+    fs.writeFileSync(marker(), `main ${SID} ${Date.now() - 5000}\n`);  // an earlier main compaction's, still fresh
     fs.mkdirSync(histDir('card', ID), { recursive: true, mode: 0o700 });
     fs.writeFileSync(histDir('card', ID, `${SID}.txt`), `${lib.cardLine({ leaf: 'L03a9c1', parent: null })}\n`, { mode: 0o600 });
     const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
@@ -10624,7 +10983,7 @@ describe('history scope marker: PreCompact records whose context is compacting (
   // marker that was ALREADY there can tell the early line's tests from the block's.
   it('D-5054: a PreCompact whose payload carries an agent_id leaves a fresh main marker byte for byte intact', () => {
     plantScope(); cardOff();
-    const fresh = `main ${SID} ${Date.now()}\n`;
+    const fresh = `main ${SID} ${Date.now() - 5000}\n`;
     fs.writeFileSync(marker(), fresh);
     const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
     expect(runFull(pre(transcript, 'manual', { agent_id: 'agent-7' }), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
@@ -10702,11 +11061,12 @@ describe('history scope marker: PreCompact records whose context is compacting (
   // B1's F24 rows, for the marker (spec §5.1 and S16; B1's D-4418 rule, ruled R-B3-fifo). A
   // FIFO already standing at scope/<id> passes a test that keeps only `! -L`, and the `>` open then blocks with no
   // reader, so the run is bounded: a blocked hook is killed at the deadline, never left to hang the suite.
-  const runBounded = (payload: object): ReturnType<typeof spawnSync> => spawnSync('bash', [HOOK], {
+  const runBounded = (payload: object): ReturnType<typeof spawnSync> => spawnSyncGroup(hookCmd[0], hookCmd[1], {
     input: JSON.stringify(payload), encoding: 'utf8', timeout: 10_000, killSignal: 'SIGKILL', env: hookEnv(HISTORY_HOOK_SCRUB),
   });
 
-  it('a FIFO where the marker goes writes no marker and never blocks: exit 0, silent, the FIFO left as it was', () => {
+  // not on Windows: an MSYS2 FIFO is invisible to a native program (D-TBD-go-hook-windows-fifo)
+  it.skipIf(process.platform === 'win32')('a FIFO where the marker goes writes no marker and never blocks: exit 0, silent, the FIFO left as it was', () => {
     plantScope(); cardOff();
     execFileSync('mkfifo', [marker()]);
     const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
@@ -10740,7 +11100,8 @@ describe('history scope marker: PreCompact records whose context is compacting (
     expect([read().scope, read().sid]).toEqual(['main', SID]);
   });
 
-  it('the block sits after the card\'s call and before PostCompact\'s, and its gate forks nothing', () => {
+  // BASH ONLY: a pin on the bash's text; the Go order is compaction.go#compactTail's.
+  itBash('the block sits after the card\'s call and before PostCompact\'s, and its gate forks nothing', () => {
     const src = fs.readFileSync(HOOK, 'utf8');
     const open = src.indexOf('# >>> history-scope (spec 2026-10-05 §5.1)');
     const close = src.indexOf('# <<< history-scope');
@@ -10799,6 +11160,7 @@ describe('history scope marker: PreCompact records whose context is compacting (
 // `HOOK`/`HELPER_SRC`/`GENERATION`/`setFile`/`cardFile`/`cardTree`/`plantSession`/
 // `preCompact`/`LIVE`/`DEAD`/`tl` are this file's module-level fixture.
 describe('history card line: SessionStart(compact) serves the sweep\'s prediction to a main compaction (spec §8.6)', () => {
+  const { run, runFull } = both;   // the bash and the Go core, compared (Task 8a)
   const SID = '7d0c3f5e-1a2b-4c3d-8e9f-0a1b2c3d4e5f';
   const OTHER = '9e8d7c6b-5a49-4382-a1b0-c9d8e7f6a5b4';
   const G2 = '0189abcd-1234-5678-9abc-0123456789ff';
@@ -10822,7 +11184,12 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     fs.writeFileSync(reg(`${id}.child`), '');   // the id's own child row: the D-5301 role subject stays silent (beforeEach above)
   };
   /** What Task 8's marker writes, planted directly: `<scope> <psid> <ms>`. */
-  const mark = (text = `main ${SID} ${Date.now()}`, id = ID): void => fs.writeFileSync(histDir('scope', id), `${text}\n`);
+  /** STAMPED A FEW SECONDS BACK (Go core wave 2, Task 8a, fix round 1, F5): the card refuses a marker from the future, and a
+   *  box's realtime clock can step BACK between the plant and the hook (measured on the WSL bench: about 650 ms every 31 s,
+   *  its host time sync), which turned a `Date.now()` stamp into a future one about once a thousand runs. The slack is far
+   *  inside COMPACT_CARD_MAX_AGE, so no case's verdict depends on it. */
+  const MARK_SLACK_MS = 5000;
+  const mark = (text = `main ${SID} ${Date.now() - MARK_SLACK_MS}`, id = ID): void => fs.writeFileSync(histDir('scope', id), `${text}\n`);
   const cardPath = (sid = SID, id = ID): string => histDir('card', id, `${sid}.txt`);
   /** The whole fixture of a servable compaction: both directories, a fresh main marker, the prediction. */
   const plantAll = (text?: string, id = ID): void => {
@@ -10839,8 +11206,11 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     ({ hook_event_name: 'SessionStart', source: 'compact', cwd: home, transcript_path: path.join(home, 't.jsonl'),
       session_id: SID, prompt_id: 'p1', model: 'claude-opus-5', ...extra });
   /** The additionalContext the hook printed, or null when it printed nothing; silent stderr asserted. */
+  /** A case that reaches into the bash's own clock through BASH_ENV runs the bash alone (the Go hook has no EPOCHREALTIME);
+   *  every other case, the compact card's serve included (Task 8b), compares both implementations. */
   const served = (payload: object = start(), env: Record<string, string> = {}): string | null => {
-    const r = runFull(payload, { ...HISTORY_HOOK_SCRUB, ...env });
+    const r = (env['BASH_ENV'] !== undefined ? (p: object, e: Record<string, string>) => runIn('bash', p, e) : runFull)(
+      payload, { ...HISTORY_HOOK_SCRUB, ...env });
     expect(r.stderr, 'the hook is silent on stderr').toBe('');
     return r.stdout === '' ? null : card(r.stdout);
   };
@@ -11255,7 +11625,8 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     ['the env generation wins over the record', GENERATION, 'absent', 'G2', 'G2'],
     ['the registry generation wins over the record', '', 'G', 'G2', 'G2'],
   ];
-  const parityRows = PARITY.filter(([, , r, o, k]) => r !== 'fifo' && k !== 'fifo' && (!ROOT || (r !== 'unreadable' && o !== 'unreadable' && o !== 'unsearchable' && o !== 'link-000')))
+  // Linux and macOS only: Windows has no POSIX mode bits, so chmod leaves the file readable and the directory writable: the rows that need a mode run where one can be refused
+  const parityRows = PARITY.filter(([, , r, o, k]) => r !== 'fifo' && k !== 'fifo' && (!(ROOT || process.platform === 'win32') || (r !== 'unreadable' && o !== 'unreadable' && o !== 'unsearchable' && o !== 'link-000')))
     .map(([what, env, r, o, k, kind]) => [what, env, r, o, k, kind ?? 'agree'] as const);
   /** The FIFO rows stay in PARITY (CONTROL and the CLI model cover them) but run through `fifoServed`, which bounds the spawn. */
   const fifoRows = PARITY.filter(([, , r, , k]) => r === 'fifo' || k === 'fifo')
@@ -11587,7 +11958,8 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
       expect(reader('.gen')).toBe(LINE);                  // the .generation arm decides: the record is never read
     });
 
-    it('the record arm: the record turns unreadable after its first read, recall-off names G, the record is G (the probe once read an empty record and served)', () => {
+    // Linux and macOS only: Windows has no POSIX mode bits, so chmod leaves the file readable and the directory writable
+    it.skipIf(process.platform === 'win32')('the record arm: the record turns unreadable after its first read, recall-off names G, the record is G (the probe once read an empty record and served)', () => {
       plantAll();
       plantParity('absent', 'G', 'G');
       expect(reader('.gen')).toBe('');
@@ -11595,7 +11967,8 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
       expect(fs.statSync(histDir('card', ID, `${SID}.gen`)).mode & 0o777, 'the wrapper made the record unreadable').toBe(0);
     });
 
-    it('the .generation arm: .generation turns unreadable after its first read, recall-off is stale, the record is G2', () => {
+    // Linux and macOS only: Windows has no POSIX mode bits, so chmod leaves the file readable and the directory writable
+    it.skipIf(process.platform === 'win32')('the .generation arm: .generation turns unreadable after its first read, recall-off is stale, the record is G2', () => {
       plantAll();
       plantParity('G2', 'G', 'G2');
       expect(reader('.generation')).toBe('');
@@ -11653,16 +12026,22 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
 // APPENDED, with NO new import line: the citation census cites this file by line. `runFull`/`hookEnv`/`home`/
 // `HOOK`/`stub`/`HELPER_ONLY`/`plantHelper`/`cardTree`/`plantSession`/`workLines`/`preCompact` are this
 // file's module-level fixture, and `HISTORY_HOOK_SCRUB` (D-5055) is the one scrub of every history hook describe.
-describe('history card reserve: the compact card renders HISTORY_CARD_MAX + 1 chars short on a history box (spec §8.6, C38)', () => {
+describe.each(IMPLS)('history card reserve: the compact card renders HISTORY_CARD_MAX + 1 chars short on a history box (spec §8.6, C38) (%s)', (which) => {
+  const { run, runFull } = inImplFull(which);
+  const itBash = which === 'bash' ? it : it.skip;
+  const itLinuxBash = which === 'bash' ? itLinux : it.skip;
+  const hookCmd = hookArgvOf(which);
+  void run; void itBash; void itLinuxBash; void hookCmd;
   const cardDir = (): string => path.join(home, '.ccrc', 'history', 'card');
-  /** PreCompact through the real arm with a stub `timeout` recording the helper's argv (the helper-argv case's idiom). */
+  /** PreCompact through the real arm with a stand-in `node` recording the helper's argv, then running the real one: the
+   *  bash reaches it through `timeout`, the Go hook directly, both through PATH (Task 8b; the stand-in was `timeout`). */
   const helperArgv = (env: Record<string, string> = {}): string => {
     const tree = cardTree(); plantHelper();
-    stub('timeout', [HELPER_ONLY, 'printf \'%s\\n\' "$*" > "$HOME/timeout-argv"; shift; exec "$@"'].join('\n'));
+    stub('node', [`printf '%s\\n' "$*" > "$HOME/helper-argv"`, `exec ${sh(realTool('node'))} "$@"`].join('\n'));
     const { transcript } = plantSession({ lines: workLines(tree) });
     const r = runFull(preCompact(tree, transcript), { ...HISTORY_HOOK_SCRUB, ...env });
     expect(r).toEqual({ stdout: '', stderr: '' });
-    return fs.readFileSync(path.join(home, 'timeout-argv'), 'utf8');
+    return fs.readFileSync(path.join(home, 'helper-argv'), 'utf8');
   };
 
   it('C38: card/ present — the helper renders at 4000 - (HISTORY_CARD_MAX + 1) = 3487', async () => {
@@ -11686,7 +12065,8 @@ describe('history card reserve: the compact card renders HISTORY_CARD_MAX + 1 ch
     expect(helperArgv({ HISTORY_CARD_RESERVE: value })).toContain(' --max-chars 4000 --max-files 12 ');
   });
 
-  itLinux('no other event pays for it: a PostToolUse with card/ present names no history path in any syscall', () => {
+  // BASH ONLY: the bash's syscalls under strace; the Go hook computes the reserve on PreCompact alone (compactTail).
+  itLinuxBash('no other event pays for it: a PostToolUse with card/ present names no history path in any syscall', () => {
     fs.mkdirSync(cardDir(), { recursive: true, mode: 0o700 });
     const trace = path.join(home, 'reserve-trace.txt');
     const r = spawnSync('strace', ['-f', '-o', trace, '-e', 'trace=file', 'bash', HOOK], {
@@ -11698,7 +12078,8 @@ describe('history card reserve: the compact card renders HISTORY_CARD_MAX + 1 ch
     expect(touched, 'a PostToolUse stats the card directory').toEqual([]);
   }, 60_000);
 
-  it('the reserve is spelled from HISTORY_CARD_MAX, reset unconditionally, and set directly above the scope reset', () => {
+  // BASH ONLY: a pin on the bash's text; the Go reserve is attention.HistoryCardReserve.
+  itBash('the reserve is spelled from HISTORY_CARD_MAX, reset unconditionally, and set directly above the scope reset', () => {
     const src = fs.readFileSync(HOOK, 'utf8');
     expect(src).toContain('    --max-chars "$(( COMPACT_CARD_MAX_CHARS - ${HISTORY_CARD_RESERVE:-0} ))" --max-files "$COMPACT_WORKSET_MAX" \\\n');
     const reset = src.indexOf('\nHISTORY_CARD_RESERVE=0\n');
@@ -11747,6 +12128,8 @@ describe('the cheap PostToolUse arm forks exactly this (D-6929)', () => {
 // ── W4-H6, W4-H7 (delegation broker wave 4, PR4 Task 4.1): the scope marker's guard refuses only a POSITIVE non-regular
 // type, as D-5434's form in `_hook_join_record`. APPENDED, with NO new import line (the citation census cites this file by
 // line): the seam is loaded by a dynamic import, and the helpers are this describe's own, over the module-level fixture.
+// BASH ONLY: the seam rewrites a copy of the bash. The Go hook's guard is one lstat before the write, so no file a sibling
+// creates between reads can refuse it: core/internal/app/hook/compaction_test.go#TestHistoryScopeGuardOneRead holds that.
 describe('W4-H: the scope marker\'s guard refuses only a positive non-regular type (D-5434\'s form)', () => {
   const SID = '7d0c3f5e-1a2b-4c3d-8e9f-0a1b2c3d4e5f';
   const marker = (): string => path.join(home, '.ccrc', 'history', 'scope', 'demo-quiet-basin');

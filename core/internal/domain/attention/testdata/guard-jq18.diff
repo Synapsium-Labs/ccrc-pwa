@@ -1,0 +1,8 @@
+# jq 1.8.1 (Windows, bundled Oniguruma) against these goldens (jq 1.7, the Linux bench): every golden equal but the lines
+# below. The guard-globs row is D-TBD-go-hook-onig-class-range (Go keeps 1.7's refusal); the HOME-dependent rows of the
+# account and deny goldens (the `~/` paths) could not be measured on 1.8, whose native jq sees an MSYS-converted HOME.
+guard-globs.golden: 75c75
+guard-globs.golden: < ["[[:alpha:]-z][^/]*","err","err","err","err","err"]
+guard-globs.golden: ---
+guard-globs.golden: > ["[[:alpha:]-z][^/]*","true","true","true","true","true"]
+guard-account/deny/denyc/denyu.golden: 17 rows each, every one a `~/` path payload (unmeasured on 1.8)

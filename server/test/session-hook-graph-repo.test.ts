@@ -25,6 +25,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import { tl } from './compactCardFixtures.js';
+import { IMPLS, bashSpelling, hookBoth, runGoHook, type Impl } from './hookTwin.js';
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
 const HOOK = path.join(REPO_ROOT, 'ccd/session-hook.sh');
@@ -34,6 +35,13 @@ const ID = 'lane-a';
 const GENERATION = '0189abcd-1234-5678-9abc-0123456789ab';
 const PIN = '0.9.9';
 const NODES = 4242;
+
+/** The implementation `run` starts (Go core wave 2): a card row (a SessionStart) runs both through hookBoth (Task 8a); the gate rows below them run on both. */
+let impl: Impl = 'bash';
+const useImpl = (i: Impl): void => {
+  beforeEach(() => { impl = i; });
+  afterEach(() => { impl = 'bash'; });
+};
 
 let home: string;
 beforeEach(() => {
@@ -49,16 +57,24 @@ beforeEach(() => {
 });
 afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
-const run = (payload: object): string =>
-  execFileSync('bash', [HOOK], {
-    input: JSON.stringify(payload), encoding: 'utf8',
-    env: {
-      ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242',
-      CCRC_SESSION_GENERATION: GENERATION, CLAUDE_JOB_DIR: '',
-      TMUX: '', CLAUDE_CONFIG_DIR: '', CLAUDECODE: '',
-    },
-  });
+const run = (payload: object): string => {
+  const env = {
+    ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
+    TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242',
+    CCRC_SESSION_GENERATION: GENERATION, CLAUDE_JOB_DIR: '',
+    TMUX: '', CLAUDE_CONFIG_DIR: '', CLAUDECODE: '',
+  };
+  if (impl !== 'go' && (payload as { hook_event_name?: string }).hook_event_name === 'SessionStart') {
+    // the card rows: the bash and the Go core through hookBoth, the same stdout and the same files (Go core wave 2, Task 8a)
+    const r = hookBoth(home, JSON.stringify(payload), env, { hook: HOOK, tree: true });
+    expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
+    return String(r.stdout);
+  }
+  if (impl !== 'go') return execFileSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env });   // throws on any status but 0
+  const r = runGoHook(home, payload, env);
+  expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
+  return r.stdout;
+};
 
 const gitIn = (dir: string, ...args: string[]): string =>
   execFileSync('git', ['-C', dir, '-c', 'user.email=f@example.invalid', '-c', 'user.name=fixture', ...args],
@@ -88,7 +104,8 @@ const makeRepo = (branchFiles: string[], moved = 1): Repo => {
   fs.mkdirSync(path.dirname(tree), { recursive: true });
   gitIn(main, 'worktree', 'add', '-q', '-b', 'feat', tree, c0);
   for (const f of branchFiles) commitFile(tree, f);
-  return { main, tree, graph, common: fs.realpathSync(path.join(main, '.git')) };
+  // the common dir in the spelling the bash sweep on the box writes (MSYS2's on Windows)
+  return { main, tree, graph, common: bashSpelling(fs.realpathSync(path.join(main, '.git'))) };
 };
 
 interface Meta {
@@ -106,7 +123,7 @@ const publish = (r: Repo, meta: Meta = {}, link = true): string => {
   const build = path.join(STORE(), KEY, 'builds', 'b1');
   fs.mkdirSync(build, { recursive: true });
   const m = {
-    schema: 1, build_id: 'b1', repo_key: KEY, source: r.common, store: STORE(),
+    schema: 1, build_id: 'b1', repo_key: KEY, source: r.common, store: bashSpelling(STORE()),
     ref: 'refs/heads/main', commit: r.graph, engine: PIN, kind: 'full', changed_files: 0,
     nodes: NODES, edges: 9, files: 100,
     built_at: new Date(Date.now() - 3 * 3600_000 - 60_000).toISOString().replace(/\.\d+Z$/, 'Z'),
@@ -293,6 +310,88 @@ describe('N19: the gate of a linked tree arms by share of files, from settings.j
   });
 });
 
+// The gate half of N19 and of the real-directory arm, with no card in the way, on both implementations: a tree is armed
+// when the search gate denies it, and the bounds are read from the store (a link) or the constants (a real directory).
+describe.each(IMPLS)('the search gate of a linked tree and of a real directory (%s)', (i) => {
+  useImpl(i);
+  const reason = (tree: string): string | null => {
+    const out = grep(tree);
+    return out === '' ? null : String(JSON.parse(out).hookSpecificOutput.permissionDecisionReason);
+  };
+  it('gate_max_diff_pct is read: 3% arms, 2% does not', () => {
+    const r = makeRepo(['z-feat-1.txt', 'z-feat-2.txt']);
+    publish(r);
+    settings({ schema: 1, gate_max_diff_pct: 3, gate_max_denials: 3, card_diff_list_max: 20 });
+    expect(JSON.parse(grep(r.tree)).hookSpecificOutput.permissionDecision).toBe('deny');
+    settings({ schema: 1, gate_max_diff_pct: 2, gate_max_denials: 3, card_diff_list_max: 20 });
+    expect(grep(r.tree), 'the gate denied in a tree past the share').toBe('');
+  });
+  it('commits behind do not decide it: 12 commits on the branch, 13 files of 100, still armed', () => {
+    const files = Array.from({ length: 12 }, (_, k) => `z-feat-${String(k).padStart(2, '0')}.txt`);
+    const r = makeRepo(files);
+    publish(r);
+    expect(reason(r.tree)).toContain('graphify gate:');
+  });
+  it('the reason names the meta\'s nodes and the freshness word of the linked tree', () => {
+    const r = makeRepo(['z-feat-1.txt']);
+    publish(r);
+    expect(reason(r.tree)).toContain(`(${NODES} nodes, not an ancestor of HEAD) and this session has no answer from it yet.`);
+  });
+  it('gate_max_denials is read: one denial, then the gate opens', () => {
+    const r = makeRepo(['z-feat-1.txt']);
+    publish(r);
+    settings({ schema: 1, gate_max_diff_pct: 25, gate_max_denials: 1, card_diff_list_max: 20 });
+    expect(reason(r.tree)).toContain('Denial 1 of 1; after 1 the gate opens anyway.');
+    expect(grep(r.tree), 'a second search was denied past gate_max_denials').toBe('');
+  });
+  it('gate_max_denials above the old constant: a fourth denial', () => {
+    const r = makeRepo(['z-feat-1.txt']);
+    publish(r);
+    settings({ schema: 1, gate_max_diff_pct: 25, gate_max_denials: 5, card_diff_list_max: 20 });
+    for (const k of [1, 2, 3, 4]) expect(reason(r.tree)).toContain(`Denial ${k} of 5`);
+  });
+  it('an engine other than the pin does not arm', () => {
+    const r = makeRepo(['z-feat-1.txt']);
+    publish(r, { engine: '0.9.8' });
+    expect(grep(r.tree)).toBe('');
+  });
+  it.each([['schema 2', { schema: 2 }], ['not json', 'not json'], ['empty', '']] as Array<[string, object | string]>)(
+    'a meta.json that is %s measures the tree the old way: a link finds no graph.json, so nothing gates', (_n, body) => {
+      const r = makeRepo(['z-feat-1.txt']);
+      publish(r);
+      fs.writeFileSync(path.join(STORE(), KEY, 'builds', 'b1', 'meta.json'), typeof body === 'string' ? body : JSON.stringify({ ...body, commit: r.graph }));
+      fs.rmSync(path.join(STORE(), KEY, 'builds', 'b1', 'graph.json'));   // a dangling graph.json: the old arm's -f test fails
+      expect(grep(r.tree)).toBe('');
+    });
+  /** graphify-out as today's sweep leaves it, with a meta.json planted inside that names ANOTHER commit and a store whose settings would disarm. */
+  const realDir = (r: Repo, built: string): void => {
+    const out = path.join(r.tree, 'graphify-out');
+    fs.mkdirSync(out, { recursive: true });
+    fs.writeFileSync(path.join(out, 'graph.json'), `{"nodes": [], "links": [], "built_at_commit": "${built}"}\n`);
+    fs.writeFileSync(path.join(out, 'GRAPH_REPORT.md'), `- ${NODES} nodes · 9 edges\n`);
+    fs.writeFileSync(path.join(out, '.graphify_engine'), `${PIN}\n`);
+    fs.writeFileSync(path.join(out, 'meta.json'), JSON.stringify({ schema: 1, commit: r.graph, engine: PIN, nodes: 1, files: 1,
+      ref: 'refs/heads/main', store: bashSpelling(STORE()), built_at: '2026-10-29T00:00:00Z' }));
+    settings({ schema: 1, gate_max_diff_pct: 0, gate_max_denials: 0, card_diff_list_max: 0 });
+  };
+  it('a real directory is gated by commits behind (3 arms) and its denials by the constant (three, then open), whatever the store says', () => {
+    const r = makeRepo(['z-feat-1.txt', 'z-feat-2.txt', 'z-feat-3.txt']);
+    realDir(r, gitIn(r.tree, 'rev-parse', 'HEAD~3'));
+    for (const k of [1, 2, 3]) {
+      const why = reason(r.tree);
+      expect(why).toContain(`(${NODES} nodes, 3 commits behind HEAD) and this session has no answer from it yet.`);
+      expect(why).toContain(`Denial ${k} of 3`);
+    }
+    expect(grep(r.tree)).toBe('');
+  });
+  it('a real directory eleven commits behind is not armed, whatever the store says', () => {
+    const files = Array.from({ length: 11 }, (_, k) => `z-feat-${String(k).padStart(2, '0')}.txt`);
+    const r = makeRepo(files);
+    realDir(r, gitIn(r.tree, 'rev-parse', 'HEAD~11'));
+    expect(grep(r.tree)).toBe('');
+  });
+});
+
 describe('settings.json defaults: the hook\'s equal ccd/ccrc\'s _graph_knobs (spec §5.2, N13)', () => {
   const KEYS = ['CCRC_GRAPH_GATE_MAX_DIFF_PCT', 'CCRC_GRAPH_GATE_MAX_DENIALS', 'CCRC_GRAPH_CARD_DIFF_LIST_MAX'];
   const knobDefaults = (): Record<string, string> => {
@@ -340,7 +439,7 @@ describe('settings.json defaults: the hook\'s equal ccd/ccrc\'s _graph_knobs (sp
       expect(grep(r.tree)).toBe('');
       fs.rmSync(path.join(STORE(), KEY, 'builds', 'b1', 'meta.json'));
       fs.writeFileSync(path.join(STORE(), KEY, 'builds', 'b1', 'meta.json'), JSON.stringify({
-        schema: 1, commit: r.graph, engine: PIN, nodes: NODES, files: 99, ref: 'refs/heads/main', store: STORE(),
+        schema: 1, commit: r.graph, engine: PIN, nodes: NODES, files: 99, ref: 'refs/heads/main', store: bashSpelling(STORE()),
         built_at: new Date(Date.now() - 3 * 3600_000 - 60_000).toISOString().replace(/\.\d+Z$/, 'Z') }));
       expect(graphLine(start(r.tree)).endsWith(GATE_ARMED), '25 of 99 is past the default 25%').toBe(false);
     });
@@ -409,7 +508,7 @@ describe('a real-directory graphify-out keeps the old arm (GR1\'s pins, spec §6
     fs.writeFileSync(path.join(out, 'GRAPH_REPORT.md'), `- ${NODES} nodes · 9 edges\n`);
     fs.writeFileSync(path.join(out, '.graphify_engine'), `${PIN}\n`);
     fs.writeFileSync(path.join(out, 'meta.json'), JSON.stringify({ schema: 1, commit: r.graph, engine: PIN, nodes: 1,
-      files: 1, ref: 'refs/heads/main', store: STORE(), built_at: '2026-10-29T00:00:00Z' }));
+      files: 1, ref: 'refs/heads/main', store: bashSpelling(STORE()), built_at: '2026-10-29T00:00:00Z' }));
     settings({ schema: 1, gate_max_diff_pct: 0, gate_max_denials: 0, card_diff_list_max: 0 });
   };
   const has = (sha: string, fresh: string): string =>

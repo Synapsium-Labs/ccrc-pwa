@@ -10,7 +10,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSyncGroup } from './spawnGroup.js';
+import { hookBoth, runHook } from './hookTwin.js';
 import { mkTmp } from './tmpHelpers.js';
 import { renderOperatorMessageNudge } from '../src/coord/envelope.js';
 import { REPORT_TIMEOUT_S, DOOR_TOOL_PREFIX, AGENT_ID_RE } from '../../shared/continuity-reports.js';
@@ -26,6 +26,8 @@ const toolName = (n: string): string => `${DOOR_TOOL_PREFIX}${n}`;
 
 let home: string;
 let hookPath = HOOK;
+/** A case that runs a text-edited copy of the bash hook (a seam the Go hook has no twin of: its decider is unit-tested) runs bash alone. */
+let bashOnly = false;
 const reg = (...p: string[]): string => path.join(home, '.cc-sessions', ...p);
 
 /** The client: records every `sessions report` body (one line each); with `hang` present it then outlives the bound. */
@@ -41,6 +43,7 @@ function client(): void {
 }
 function setup(): void {
   hookPath = HOOK;
+  bashOnly = false;
   home = mkTmp('ccrc-hook-door-reports-');
   fs.mkdirSync(reg(), { recursive: true });
   fs.writeFileSync(reg(`${ID}.generation`), GENERATION);
@@ -63,18 +66,17 @@ const common = { session_id: UUID, transcript_path: path.join('/rig', `${UUID}.j
 
 /** The hook's exit asserted; `door` puts a hash in the environment (true: a good one; a string: that text; false: none). */
 const run = (payload: object, door: boolean | string = true, extraEnv: Record<string, string> = {}): { out: string; ms: number } => {
-  const t0 = Date.now();
-  const r = spawnSyncGroup('bash', [hookPath], {
-    input: JSON.stringify(payload), encoding: 'utf8', timeout: 30_000,
-    env: {
-      ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
-      ...(door === false ? {} : { CCRC_DOOR_NONCE_SHA256: door === true ? HASH : door }), ...extraEnv,
-    },
-  });
-  expect(r.error, 'the spawn itself did not fail').toBeUndefined();
+  // the Go core and the bash, each from the same fixture state, must answer the same and send the same (Go core wave 2, Task 6)
+  const env = {
+    ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
+    TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
+    ...(door === false ? {} : { CCRC_DOOR_NONCE_SHA256: door === true ? HASH : door }), ...extraEnv,
+  };
+  const t0 = performance.now();
+  const r = bashOnly ? { ...runHook({ home, env: (e = {}) => e }, 'bash', payload, env, hookPath), ms: performance.now() - t0 }
+    : hookBoth(home, JSON.stringify(payload), env, { hook: hookPath, watch: ['reports.log', 'report-args', 'verbs.log'], tree: true });
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
-  return { out: String(r.stdout), ms: Date.now() - t0 };
+  return { out: String(r.stdout), ms: r.ms };
 };
 const pre = (tool: string, input?: unknown, extra: object = {}): object =>
   ({ ...common, hook_event_name: 'PreToolUse', tool_name: tool, tool_use_id: 'toolu_01', ...(input === undefined ? {} : { tool_input: input }), ...extra });
@@ -126,11 +128,19 @@ describe('the witness: one report per door tool call, keyed by the call digest',
     const copy = path.join(home, 'hook-denying.sh');
     fs.writeFileSync(copy, text.replace(last, `${last}[[ "\${tool:-}" == mcp__door__denied ]] && pre_json=$(_hook_deny_json "fixture deny")\n`));
     hookPath = copy;
+    bashOnly = true;
     const { out } = run(pre(toolName('denied'), { text: 'x' }));
     expect(out, 'precondition: the call was denied').toContain('"permissionDecision":"deny"');
     expect(reports()).toEqual([]);
     run(pre(toolName('note_add'), { text: 'a plain note' }));
     expect(kinds(), 'a call that arm lets through is witnessed').toEqual(['witness']);
+  });
+
+  it('a joined reader\'s call of a door tool its scope refuses is denied by the reader arm, and no witness is sent (both hooks)', () => {
+    fs.writeFileSync(reg(`${ID}.joined`), `${AGENT}\n`);
+    const { out } = run(pre(toolName('note_add'), { text: 'x' }, { agent_id: AGENT }));
+    expect(out, 'precondition: a reader may only read').toContain('"permissionDecision":"deny"');
+    expect(reports()).toEqual([]);
   });
 
   it('a reader\'s call carries its agent id: with a recorded join, or with an agent_type; neither is the main thread\'s', () => {
@@ -259,6 +269,19 @@ describe('the nudge pattern is the renderer\'s (one jq definition, held to rende
   it('an id that is not a canonical positive safe integer matches nothing', () => {
     for (const id of ['0', '007', '-1', '1.5', '9007199254740992', '12345678901234567', '']) {
       expect(nudge(renderOperatorMessageNudge(1).replace('1:', `${id}:`)), id).toEqual([]);
+    }
+  });
+
+  // The Go twin of the cut (Go core wave 2, Task 6): `run` answers through the Go hook and the bash hook, each holding its own
+  // pick-up decision, and the ids they report are the cut program's, line by line.
+  it('both hooks report exactly the ids the cut program yields, for ids at every edge of the rule', () => {
+    const ids = ['1', '7', '10', '42', '99999', '123456789012345', '1234567890123456', '9007199254740991', '9007199254740992', '9999999999999999',
+      '0', '007', '-1', '1.5', '12345678901234567', '', ' 1', '1 ', '٣', '1١', '1e3', '0x10', '+1'];
+    for (const id of ids) {
+      const line = renderOperatorMessageNudge(1).replace('1:', `${id}:`);
+      fs.rmSync(path.join(home, 'reports.log'), { force: true });
+      run(prompt(line));
+      expect(reports().map((r) => String(r['messageId'])), JSON.stringify(id)).toEqual(nudge(line));
     }
   });
 });

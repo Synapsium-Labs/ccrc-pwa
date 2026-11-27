@@ -5,16 +5,24 @@
  *
  * Runs `ccd/session-hook.sh` for real in a fixture HOME. Never the live HOME.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
+import { IMPLS, runGoHook, type Impl } from './hookTwin.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 const GENERATION = '0189abcd-1234-5678-9abc-0123456789ab';
 const TOP = 'project-a-calm-mesa';
 const CWD = '/srv/work/project-a';
+
+/** The implementation `run` starts (Go core wave 2): every describe below runs on both. */
+let impl: Impl = 'bash';
+const useImpl = (i: Impl): void => {
+  beforeEach(() => { impl = i; });
+  afterEach(() => { impl = 'bash'; });
+};
 
 let home: string;
 beforeAll(() => {
@@ -31,11 +39,11 @@ afterAll(() => { fs.rmSync(home, { recursive: true, force: true }); });
 /** The runner's own environment, less the pin's two variables, so a case sets exactly the pin it names. */
 const { CLAUDE_CODE_SUBAGENT_MODEL: _m, CLAUDE_CODE_SUBAGENT_MODEL_FORCE: _f, ...BASE_ENV } = process.env;
 const env = (extra: Record<string, string> = {}): NodeJS.ProcessEnv => ({
-  ...BASE_ENV, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+  ...BASE_ENV, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
   TMUX_PANE: `%${TOP}`, CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION, ...extra,
 });
 const run = (stdin: string, extra: Record<string, string> = {}): string => {
-  const r = spawnSync('bash', [HOOK], { input: stdin, encoding: 'utf8', env: env(extra) });
+  const r = impl === 'go' ? runGoHook(home, stdin, env(extra)) : spawnSync('bash', [HOOK], { input: stdin, encoding: 'utf8', env: env(extra) });
   expect(r.status, 'exit 0 on every path').toBe(0);
   expect(r.stderr, 'silent on stderr').toBe('');
   return r.stdout.trim();
@@ -48,7 +56,8 @@ const fire = (tool: string, input: unknown, extra: Record<string, string> = {}):
   return e.hookSpecificOutput.permissionDecision === 'deny' ? String(e.hookSpecificOutput.permissionDecisionReason) : null;
 };
 
-describe('an Agent or Task call must name its model (D-6798)', () => {
+describe.each(IMPLS)('an Agent or Task call must name its model (D-6798) (%s)', (i) => {
+  useImpl(i);
   it.each(['Agent', 'Task'])('%s without a model is denied, with a reason that names the routing matrix', (tool) => {
     const why = fire(tool, { description: 'x', prompt: 'do it' });
     expect(why).toMatch(/routing matrix/);
@@ -65,7 +74,8 @@ describe('an Agent or Task call must name its model (D-6798)', () => {
   });
 });
 
-describe('the pin: a session launched with the subagent model forced (Overlord W1 sandbox, question 14)', () => {
+describe.each(IMPLS)('the pin: a session launched with the subagent model forced (Overlord W1 sandbox, question 14) (%s)', (i) => {
+  useImpl(i);
   const PIN = { CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1', CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' };
   it.each(['Agent', 'Task'])('FORCE with a model set allows a model-less %s call: it runs on the pinned model', (tool) => {
     expect(fire(tool, { description: 'x', prompt: 'do it', subagent_type: 'overlord-reader' }, PIN)).toBeNull();
@@ -82,7 +92,8 @@ describe('the pin: a session launched with the subagent model forced (Overlord W
   });
 });
 
-describe('a Workflow agent() call must name its model and effort (D-6798)', () => {
+describe.each(IMPLS)('a Workflow agent() call must name its model and effort (D-6798) (%s)', (i) => {
+  useImpl(i);
   it('an agent() call without effort is denied', () => {
     const why = fire('Workflow', { script: "const r = await agent({ prompt: 'x', model: 'sonnet' })" });
     expect(why).toMatch(/routing matrix/);
@@ -117,7 +128,8 @@ describe('a Workflow agent() call must name its model and effort (D-6798)', () =
   });
 });
 
-describe('a Workflow agent() call is read as code, not as text (D-6798)', () => {
+describe.each(IMPLS)('a Workflow agent() call is read as code, not as text (D-6798) (%s)', (i) => {
+  useImpl(i);
   it('options kept in a shared object are not seen, so the call is allowed', () => {
     expect(fire('Workflow', { script: 'const W = { model: "sonnet", effort: "low" }; await agent("x", W)' })).toBeNull();
     expect(fire('Workflow', { script: 'const W = { model: "sonnet", effort: "low" }; await pipeline(items, i => agent(i, W))' })).toBeNull();
@@ -153,7 +165,8 @@ describe('a Workflow agent() call is read as code, not as text (D-6798)', () => 
   });
 });
 
-describe('a Workflow run by scriptPath is checked as its file (D-6798)', () => {
+describe.each(IMPLS)('a Workflow run by scriptPath is checked as its file (D-6798) (%s)', (i) => {
+  useImpl(i);
   let dir: string;
   beforeAll(() => { dir = mkTmp('ccrc-fanout-script-'); });
   afterAll(() => { fs.rmSync(dir, { recursive: true, force: true }); });
@@ -177,7 +190,8 @@ describe('a Workflow run by scriptPath is checked as its file (D-6798)', () => {
   });
 });
 
-describe('the fan-out arm fails open (D-6798)', () => {
+describe.each(IMPLS)('the fan-out arm fails open (D-6798) (%s)', (i) => {
+  useImpl(i);
   it('a malformed Agent payload prints nothing and exits 0', () => {
     expect(run('{"hook_event_name":"PreToolUse","tool_name":"Agent","tool_input":{"prompt":"p"')).toBe('');
   });

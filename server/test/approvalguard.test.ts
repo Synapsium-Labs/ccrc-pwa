@@ -414,3 +414,27 @@ describe.skipIf(process.platform !== 'win32')('the Windows port: drive-letter pa
     expect(approvalClass('Bash', { command: String.raw`grep -r '\.ccrc' src` }, ctx())).not.toBe('forbidden');
   });
 });
+
+// Task 9a fix round 1 (F2): the Go core is the hook in go mode, so its binary and directory are protected exactly as
+// `session-hook.sh` is, by the same two lists (`SENSITIVE_EDIT`, the forbidden class's; `AGENT_FILE_PARTS`, a child's
+// write targets). The cases mirror the bash hook's, each measured red with its name removed from the list.
+describe('the core binary is protected as session-hook.sh is', () => {
+  const CORE = `${WT}/vendor/libexec/ccrc/core`;   // inside the worktree: outside it the roots forbid every write anyway
+  const pairs: [string, string][] = [["session-hook.sh", `${WT}/vendor/session-hook.sh`], ['ccrc-core', `${CORE}/ccrc-core`], ['ccrc-core.exe', `${CORE}/ccrc-core.exe`]];
+  it.each(pairs)('an edit of %s is forbidden', (_n, p) => {
+    for (const tool of ['Edit', 'Write']) expect(approvalClass(tool, { file_path: p, old_string: 'a', new_string: 'b', content: 'x' }, ctxFor({ cwd: WT })), tool).toBe('forbidden');
+  });
+  it.each(pairs)('a shell write of %s is forbidden', (_n, p) => {
+    for (const c of [`cp /tmp/x ${p}`, `echo x > ${p}`, `mv /tmp/x ${p}`, `rm ${p}`, `sed -i s/a/b/ ${p}`]) expect(bash(c), c).toBe('forbidden');
+  });
+  it('a write into the core directory, or its removal, is forbidden', () => {
+    for (const c of [`rm -rf ${CORE}`, `cp /tmp/x ${CORE}/other`, `mv ${CORE} /tmp/gone`]) expect(bash(c), c).toBe('forbidden');
+  });
+  it('a child\'s rm of a path under the worktree named ccrc-core is refused as an agent file, as session-hook.sh is', () => {
+    for (const n of ['ccrc-core', 'ccrc-core.exe']) for (const v of ['rm', 'touch', 'mkdir']) expect(bash(`${v} ${WT}/${n}`), `${v} ${n}`).toBe(bash(`${v} ${WT}/session-hook.sh`));
+  });
+  it('CONTROL: reading the core binary, or another file beside it, is not a forbidden write', () => {
+    expect(bash(`ls -l ${CORE}/ccrc-core`)).not.toBe('forbidden');
+    expect(bash(`cat ${HOME}/.local/bin/other-tool`)).not.toBe('forbidden');
+  });
+});

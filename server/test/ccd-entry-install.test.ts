@@ -20,6 +20,9 @@ import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import { CCD, CCD_LIB, CCD_LIB_PIN_PLACEHOLDER, CCD_TRAIN_LIB, CCD_LEASE_LIB, CCD_POOLSET_LIB, CCD_LONGLIVED_LIB, CCD_DOOR_LIB, CCD_ALIASES_LIB, CCD_REDACT, CCD_REDACT_CLI, CCD_DOOR_PROG, canonicalPython3, ghContainedEnv, installedCcdBody } from './ccdWsHelpers.js';
 import { itLinux } from './platformFixtures.js';
+import { plantEntryTree } from './entryFixture.js';
+import { assertFencedEnv, fenceEnv } from './pathFence.js';
+import { CORE_GOARCH, coreExe, coreGoEntries, coreGoVerbs } from './coreBuild.js';
 import { verifyMarker } from '../../shared/mark.mjs';
 
 const REPO = path.resolve(__dirname, '..', '..');
@@ -64,6 +67,9 @@ const aliasesLib = (): string => path.join(home, '.local', 'libexec', 'ccrc', 'l
 /** The door program (plan question 2), beside the body, not on PATH. */
 const doorProg = (): string => path.join(home, '.local', 'libexec', 'ccrc', 'door-process.mjs');
 const sha = (p: string): string => createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+/** The Go core's binary as the installer names it beside the body, when this platform runs a verb in go mode (the
+ *  library half's rename order: right after the door program). */
+const coreRels = (): string[] => (coreGoEntries().length ? [`core/${coreExe()}`] : []);
 
 /** The template's self-test branch, extended by a fixture HOOK that runs
  *  exactly where the real self-test runs — after staging, before publication.
@@ -87,63 +93,7 @@ const HOOK = [
   '                os.remove(_dest)',
   '                os.mkdir(_dest)',
 ].join('\n');
-
-/** A shipped-tree copy at `<home>/ccrc`: the body, the template and the helper.
- *  `template` rewrites the template's text (a hook, a broken self-test); `ccd`
- *  appends to the body; `installer` rewrites the helper's text (a fixture
- *  failure at a step no hook can reach); `lib` rewrites the library; `pin` rewrites the body's pin line (the committed one is
- *  the placeholder the installer renders, D-6913). */
-function plantTree(o: {
-  template?: (t: string) => string; ccd?: string; installer?: (t: string) => string; lib?: (t: string) => string; pin?: (line: string) => string;
-  train?: (t: string) => string; trainPin?: (line: string) => string;
-  lease?: (t: string) => string; leasePin?: (line: string) => string;
-  poolset?: (t: string) => string; poolsetPin?: (line: string) => string;
-  longlived?: (t: string) => string; longlivedPin?: (line: string) => string;
-  door?: (t: string) => string; doorPin?: (line: string) => string;
-  aliases?: (t: string) => string; aliasesPin?: (line: string) => string;
-} = {}): void {
-  const dir = path.join(tree(), 'ccd');
-  fs.mkdirSync(path.join(dir, 'lib'), { recursive: true });
-  const libText = o.lib ? o.lib(fs.readFileSync(CCD_LIB, 'utf8')) : fs.readFileSync(CCD_LIB, 'utf8');
-  fs.writeFileSync(path.join(dir, 'lib', 'disk-retention.sh'), libText);
-  // The second library (D-7463), `train` rewriting it as `lib` rewrites the first.
-  const trainText = o.train ? o.train(fs.readFileSync(CCD_TRAIN_LIB, 'utf8')) : fs.readFileSync(CCD_TRAIN_LIB, 'utf8');
-  fs.writeFileSync(path.join(dir, 'lib', 'train-proof.sh'), trainText);
-  // The third library (wave 5), `lease` rewriting it as `train` rewrites the second.
-  const leaseText = o.lease ? o.lease(fs.readFileSync(CCD_LEASE_LIB, 'utf8')) : fs.readFileSync(CCD_LEASE_LIB, 'utf8');
-  fs.writeFileSync(path.join(dir, 'lib', 'delegation-lease.sh'), leaseText);
-  // The fourth library (the Overlord's W1), `poolset` rewriting it as `lease` rewrites the third.
-  const poolsetText = o.poolset ? o.poolset(fs.readFileSync(CCD_POOLSET_LIB, 'utf8')) : fs.readFileSync(CCD_POOLSET_LIB, 'utf8');
-  fs.writeFileSync(path.join(dir, 'lib', 'pool-set.sh'), poolsetText);
-  // The fifth library (the Overlord's ccd arms), `longlived` rewriting it as `poolset` rewrites the fourth.
-  const longlivedText = o.longlived ? o.longlived(fs.readFileSync(CCD_LONGLIVED_LIB, 'utf8')) : fs.readFileSync(CCD_LONGLIVED_LIB, 'utf8');
-  fs.writeFileSync(path.join(dir, 'lib', 'long-lived.sh'), longlivedText);
-  // The sixth library (the Overlord's door process), `door` rewriting it as `longlived` rewrites the fifth.
-  const doorText = o.door ? o.door(fs.readFileSync(CCD_DOOR_LIB, 'utf8')) : fs.readFileSync(CCD_DOOR_LIB, 'utf8');
-  fs.writeFileSync(path.join(dir, 'lib', 'door.sh'), doorText);
-  // The seventh library (the model-class Anthropic arm), `aliases` rewriting it as `door` rewrites the sixth.
-  const aliasesText = o.aliases ? o.aliases(fs.readFileSync(CCD_ALIASES_LIB, 'utf8')) : fs.readFileSync(CCD_ALIASES_LIB, 'utf8');
-  fs.writeFileSync(path.join(dir, 'lib', 'model-aliases.sh'), aliasesText);
-  // The docs redactor's two files (D-7077), which the installer publishes beside the library and pins in the body.
-  fs.mkdirSync(path.join(tree(), 'shared'), { recursive: true });
-  fs.copyFileSync(CCD_REDACT, path.join(tree(), 'shared', 'redact.mjs'));
-  fs.copyFileSync(CCD_REDACT_CLI, path.join(tree(), 'shared', 'redact-cli.mjs'));
-  // The door program, which the installer publishes beside the body and pins in it (`__CCD_DOOR_SHA256`).
-  fs.copyFileSync(CCD_DOOR_PROG, path.join(dir, 'door-process.mjs'));
-  let bodyText = fs.readFileSync(CCD, 'utf8') + (o.ccd ?? '');
-  if (o.pin) bodyText = bodyText.replace(/^__CCD_LIB_SHA256=.*$/m, o.pin);
-  if (o.trainPin) bodyText = bodyText.replace(/^__CCD_LIB_TRAIN_SHA256=.*$/m, o.trainPin);
-  if (o.leasePin) bodyText = bodyText.replace(/^__CCD_LIB_LEASE_SHA256=.*$/m, o.leasePin);
-  if (o.poolsetPin) bodyText = bodyText.replace(/^__CCD_LIB_POOLSET_SHA256=.*$/m, o.poolsetPin);
-  if (o.longlivedPin) bodyText = bodyText.replace(/^__CCD_LIB_LONGLIVED_SHA256=.*$/m, o.longlivedPin);
-  if (o.doorPin) bodyText = bodyText.replace(/^__CCD_LIB_DOOR_SHA256=.*$/m, o.doorPin);
-  if (o.aliasesPin) bodyText = bodyText.replace(/^__CCD_LIB_ALIASES_SHA256=.*$/m, o.aliasesPin);
-  fs.writeFileSync(path.join(dir, 'ccd'), bodyText, { mode: 0o755 });
-  const tpl = fs.readFileSync(path.join(REPO, 'ccd', 'ccd-entry.py'), 'utf8');
-  fs.writeFileSync(path.join(dir, 'ccd-entry.py'), o.template ? o.template(tpl) : tpl);
-  const inst = fs.readFileSync(path.join(REPO, 'ccd', 'ccd-entry-install.py'), 'utf8');
-  fs.writeFileSync(path.join(dir, 'ccd-entry-install.py'), o.installer ? o.installer(inst) : inst);
-}
+const plantTree = (o: Parameters<typeof plantEntryTree>[1] = {}): void => plantEntryTree(home, o);
 /** The helper with the LAUNCHER's post-rename re-measurement failing — the one
  *  exit-2 arm in which both halves moved. */
 const launcherPostFails = (t: string): string => {
@@ -167,8 +117,13 @@ const withHook = (t: string): string => {
 interface Ran { code: number; stdout: string; stderr: string }
 const ran = (r: ReturnType<typeof spawnSync>): Ran =>
   ({ code: r.status ?? -1, stdout: String(r.stdout ?? ''), stderr: String(r.stderr ?? '') });
-const env = (pathPrefix = ''): NodeJS.ProcessEnv =>
-  ({ HOME: home, PATH: `${pathPrefix}${process.env['PATH'] ?? '/usr/bin:/bin'}` });
+/** Every run's env, behind the Windows fence (pathFence.ts) and its guard: this suite's deploy.sh lane once reached the
+ *  operator's real home there (the fix wave's report names how). */
+const env = (pathPrefix = ''): NodeJS.ProcessEnv => {
+  const e = fenceEnv({ HOME: home, PATH: `${pathPrefix}${process.env['PATH'] ?? '/usr/bin:/bin'}` });
+  assertFencedEnv(e);
+  return e;
+};
 
 /** The helper itself, under the canonical python3. */
 const helper = (args: readonly string[], python = PYTHON): Ran =>
@@ -1629,7 +1584,7 @@ describe('the docs redactor half: published beside the body, pinned, staged in s
       expect(pinOf('__CCD_REDACT_CLI_SHA256'), 'the body pins the published redact-cli.mjs').toBe(sha(shared('redact-cli.mjs')));
       // One `library published` line per file of the half, in its rename order, all before the body.
       const said = r.stdout.split('\n').filter((l) => l.includes('library published at'));
-      expect(said.map((l) => /published at \S*\/libexec\/ccrc\/(\S+) /.exec(l)?.[1])).toEqual(['shared/redact.mjs', 'shared/redact-cli.mjs', 'door-process.mjs', 'lib/disk-retention.sh', 'lib/train-proof.sh', 'lib/delegation-lease.sh', 'lib/pool-set.sh', 'lib/long-lived.sh', 'lib/door.sh', 'lib/model-aliases.sh']);
+      expect(said.map((l) => /published at \S*\/libexec\/ccrc\/(\S+) /.exec(l)?.[1])).toEqual(['shared/redact.mjs', 'shared/redact-cli.mjs', 'door-process.mjs', ...coreRels(), 'lib/disk-retention.sh', 'lib/train-proof.sh', 'lib/delegation-lease.sh', 'lib/pool-set.sh', 'lib/long-lived.sh', 'lib/door.sh', 'lib/model-aliases.sh']);
       expect(r.stdout.indexOf('library published')).toBeLessThan(r.stdout.indexOf('body published'));
       assertPair();
       assertNoLeftovers();
@@ -1675,7 +1630,8 @@ describe('the docs redactor half: published beside the body, pinned, staged in s
     expect(r.code, r.stderr).toBe(2);
     expect(r.stderr).toContain('refused after the library moved');
     expect(r.stderr).toContain('the library was renamed into place');
-    expect(r.stderr).toContain('; of the library half, these were renamed: shared/redact.mjs, shared/redact-cli.mjs, door-process.mjs, lib/disk-retention.sh, lib/train-proof.sh, lib/delegation-lease.sh, lib/pool-set.sh, lib/long-lived.sh, lib/door.sh, lib/model-aliases.sh\n');
+    expect(r.stderr).toContain(`; of the library half, these were renamed: ${['shared/redact.mjs', 'shared/redact-cli.mjs', 'door-process.mjs', ...coreRels(),
+      'lib/disk-retention.sh', 'lib/train-proof.sh', 'lib/delegation-lease.sh', 'lib/pool-set.sh', 'lib/long-lived.sh', 'lib/door.sh', 'lib/model-aliases.sh'].join(', ')}\n`);
     expect(r.stderr).not.toContain('the body was renamed into place');
     expect(fs.existsSync(body())).toBe(false);
   }, 60_000);
@@ -1691,4 +1647,212 @@ describe('the docs redactor half: published beside the body, pinned, staged in s
     expect(r.stderr).toContain('; of the library half, these were renamed: shared/redact-cli.mjs\n');
     expect(r.stderr).not.toContain('the body was renamed into place');
   }, 60_000);
+});
+
+describe('the Go core is published with the pair (spec 2026-11-24 §4, §7)', () => {
+  /** The platform the seam installs as when a case wants go-mode verbs, and the one it wants none on. */
+  const GO = 'windows';
+  const NONE = 'linux';
+  const name = coreExe(GO);
+  const treeBin = (): string => path.join(tree(), 'core', 'bin', `${GO}-${CORE_GOARCH}`, name);
+  const installed = (n = name): string => path.join(home, '.local', 'libexec', 'ccrc', 'core', n);
+  const twinDir = (...rel: string[]): string => path.join(home, '.local', 'libexec', 'ccrc', 'node', ...rel);
+  const tableLine = (): string | undefined => /^CORE_JSON = '(.*)'$/m.exec(fs.readFileSync(entry(), 'utf8'))?.[1];
+  /** The tree, opened to the seam, with a stub standing in for the windows binary (a Linux run cannot build one). */
+  const plantSeamTree = (o: Parameters<typeof plantEntryTree>[1] = {}): void => {
+    plantTree(o);
+    fs.writeFileSync(path.join(tree(), '.ccrc-test-fixture'), '');
+    fs.mkdirSync(path.dirname(treeBin()), { recursive: true });
+    fs.writeFileSync(treeBin(), '#!/bin/sh\necho core-stub\n', { mode: 0o755 });
+  };
+  const installAs = (goos: string): Ran => ran(spawnSync(PYTHON, ['-IS', path.join(tree(), 'ccd', 'ccd-entry-install.py'),
+    'install', tree(), home], { encoding: 'utf8', cwd: home, env: { ...env(), CCRC_CORE_PLATFORM: goos } }));
+  const editTable = (edit: (t: { entries: Record<string, { mode?: Record<string, string> }> }) => void): void => {
+    const f = path.join(tree(), 'core', 'entries.json');
+    const t = JSON.parse(fs.readFileSync(f, 'utf8')) as { entries: Record<string, { mode?: Record<string, string> }> };
+    edit(t);
+    fs.writeFileSync(f, JSON.stringify(t));
+  };
+  /** A refusal that came before anything moved, on a fresh box. */
+  const refusedFresh = (r: Ran, why: RegExp): void => {
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).toMatch(why);
+    expect([fs.existsSync(entry()), fs.existsSync(body()), fs.existsSync(installed())], 'something moved').toEqual([false, false, false]);
+  };
+
+  it('with no verb in go mode here, nothing is published under core/ and the table is empty', () => {
+    plantSeamTree();
+    const r = installAs(NONE);
+    expect(r.code, r.stderr).toBe(0);
+    expect(tableLine()).toBe('{"files":{},"verbs":[]}');
+    expect(fs.existsSync(path.dirname(installed())), 'a core/ directory was created').toBe(false);
+    assertPair();
+    assertNoLeftovers();
+    expect(installAs(NONE).stdout).toContain('converged');
+  }, 60_000);
+
+  it('with a verb in go mode here, the binary lands under core/, mode 0755, its digest beside its name in the launcher', () => {
+    plantSeamTree();
+    const r = installAs(GO);
+    expect(r.code, r.stderr).toBe(0);
+    // the shipped table: caps a go-mode verb on windows, and the hook row in go mode there (Task 9b's switch)
+    expect(JSON.parse(tableLine()!)).toEqual({ files: { [name]: sha(treeBin()) }, verbs: ['caps'], hook: 'go' });
+    expect(fs.lstatSync(installed()).isFile(), 'the binary is a regular file').toBe(true);
+    expect(fs.statSync(installed()).mode & 0o777).toBe(0o755);
+    expect(fs.readFileSync(installed()).equals(fs.readFileSync(treeBin())), 'the binary is the tree\'s').toBe(true);
+    expect(r.stdout).toMatch(/library published at \S*\/libexec\/ccrc\/core\/ccrc-core\.exe /);
+    assertPair();
+    assertNoLeftovers();
+    expect(installAs(GO).stdout).toContain('converged');
+  }, 60_000);
+
+  it('a binary whose mode drifted is repaired to 0755 in place', () => {
+    plantSeamTree();
+    expect(installAs(GO).code).toBe(0);
+    fs.chmodSync(installed(), 0o644);
+    const before = ident(installed());
+    const r = installAs(GO);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain(`${installed()}: mode repaired to 755`);
+    expect(fs.statSync(installed()).mode & 0o777).toBe(0o755);
+    expect(ident(installed())).toBe(before);
+  }, 60_000);
+
+  it('go-mode verbs with no binary for this platform refuse before anything moves, naming the path', () => {
+    plantSeamTree();
+    fs.rmSync(treeBin());
+    refusedFresh(installAs(GO), new RegExp(`the tree has no core/bin/${GO}-${CORE_GOARCH}/ccrc-core\\.exe, the core binary for ${GO} \\(go mode here for: caps, hook\\)\\n`));
+  }, 60_000);
+
+  it('from a checkout (core/build.sh beside the table), the refusal names the command that builds the missing binary', () => {
+    plantSeamTree();
+    fs.rmSync(treeBin());
+    fs.writeFileSync(path.join(tree(), 'core', 'build.sh'), '#!/usr/bin/env bash\n');
+    refusedFresh(installAs(GO), new RegExp(`the tree has no core/bin/${GO}-${CORE_GOARCH}/ccrc-core\\.exe, the core binary for ${GO} \\(go mode here for: caps, hook\\); `
+      + `build it in the checkout first, with Go on PATH: bash core/build.sh core/bin ${GO}-${CORE_GOARCH}\\n`));
+  }, 60_000);
+
+  it('core-target names this machine\'s platform when an entry runs in go mode here, binary or not', () => {
+    const target = (goos: string): Ran => ran(spawnSync(PYTHON, ['-IS', path.join(tree(), 'ccd', 'ccd-entry-install.py'),
+      'core-target', tree()], { encoding: 'utf8', cwd: home, env: { ...env(), CCRC_CORE_PLATFORM: goos } }));
+    plantSeamTree();
+    expect(target(GO), 'the binary is there: a checkout still rebuilds it').toMatchObject({ code: 0, stdout: `${GO}-${CORE_GOARCH}\n` });
+    fs.rmSync(treeBin());
+    expect(target(GO), 'the binary is missing').toMatchObject({ code: 0, stdout: `${GO}-${CORE_GOARCH}\n` });
+    expect(target(NONE), 'no go verb here').toMatchObject({ code: 0, stdout: '\n' });
+    fs.writeFileSync(path.join(tree(), 'core', 'entries.json'), '{');
+    expect(target(GO), 'a table it cannot read: the install refuses it by name').toMatchObject({ code: 0, stdout: '\n' });
+  }, 60_000);
+
+  it('a verb in go mode on a machine Go has no name for refuses before anything moves, naming the machine', () => {
+    // The installer's own machine map without this box's names, so this box reads as a machine with no core build.
+    plantSeamTree({ installer: (t) => t.replace("'x86_64': 'amd64', 'amd64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64'", '') });
+    refusedFresh(installAs(GO), /this machine \(\S+\) has no core build, and core\/entries\.json runs caps, hook in go mode on windows/);
+  }, 60_000);
+
+  it('a protected verb in go mode refuses before anything moves', () => {
+    plantSeamTree();
+    editTable((t) => { t.entries['WS-Reclaim'] = { mode: { [GO]: 'go' } }; });
+    refusedFresh(installAs(GO), /'WS-Reclaim'.*protects/);
+  }, 60_000);
+
+  for (const [what, make, why] of [
+    ['no table', () => fs.rmSync(path.join(tree(), 'core', 'entries.json')), /the tree has no core\/entries\.json/],
+    ['a table that is not JSON', () => fs.writeFileSync(path.join(tree(), 'core', 'entries.json'), '{'), /cannot be read as the core's entry table/],
+    ['a table with no entries', () => fs.writeFileSync(path.join(tree(), 'core', 'entries.json'), '{}'), /cannot be read as the core's entry table/],
+    ['a mode that is neither bash nor go', () => editTable((t) => { t.entries['caps']!.mode = { [GO]: 'node' }; }), /mode 'node'/],
+    ['a platform Go has no name for', () => editTable((t) => { t.entries['caps']!.mode = { win32: 'go' }; }), /on 'win32'/],
+  ] as const) {
+    it(`${what} refuses before anything moves, on a platform with no go verb too`, () => {
+      plantSeamTree();
+      make();
+      refusedFresh(installAs(NONE), why);
+    }, 60_000);
+  }
+
+  it('the platform seam is inert without the fixture file in the tree', () => {
+    plantSeamTree();
+    fs.rmSync(path.join(tree(), '.ccrc-test-fixture'));
+    const other = process.platform === 'win32' ? NONE : GO;
+    const r = installAs(other);
+    expect(r.code, r.stderr).toBe(0);
+    expect((JSON.parse(tableLine()!) as { verbs: string[] }).verbs, 'installed as this box, not as the seam asked').toEqual(coreGoVerbs());
+  }, 60_000);
+
+  it('a file under core/ that is not the binary is removed once the launcher lands, and on a converged run', () => {
+    plantSeamTree();
+    expect(installAs(GO).code).toBe(0);
+    fs.writeFileSync(installed('stale'), 'stale\n');
+    fs.mkdirSync(installed('old'));
+    fs.writeFileSync(installed('old/x'), 'x\n');
+    let r = installAs(GO);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain('converged');
+    expect([fs.existsSync(installed('stale')), fs.existsSync(installed('old')), fs.existsSync(installed())]).toEqual([false, false, true]);
+    // And the binary itself, once the launcher that lists it is replaced by one with no go verb.
+    r = installAs(NONE);
+    expect(r.code, r.stderr).toBe(0);
+    expect(fs.existsSync(installed()), 'the binary outlived the launcher that listed it').toBe(false);
+    assertNoLeftovers();
+  }, 60_000);
+
+  it('a box that ran the Node twin loses its whole node/ directory once the new launcher lands', () => {
+    plantSeamTree();
+    for (const rel of ['ccd.mjs', 'verbs.json', 'verbs/caps.mjs', 'lib/lock.mjs']) {
+      fs.mkdirSync(path.dirname(twinDir(rel)), { recursive: true });
+      fs.writeFileSync(twinDir(rel), '// the twin\n');
+    }
+    const r = installAs(NONE);
+    expect(r.code, r.stderr).toBe(0);
+    expect(fs.existsSync(twinDir()), 'the twin survived the install').toBe(false);
+    expect(r.stdout.indexOf('Node twin file removed')).toBeGreaterThan(r.stdout.indexOf('launcher published'));
+  }, 60_000);
+
+  it('a node/ that is a link is not followed: its target keeps its files', () => {
+    plantSeamTree();
+    const outside = path.join(home, 'outside');
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, 'keep.mjs'), '// not the twin\n');
+    fs.mkdirSync(path.dirname(twinDir()), { recursive: true });
+    fs.symlinkSync(outside, twinDir());
+    expect(installAs(NONE).code).toBe(0);
+    expect(fs.readdirSync(outside)).toEqual(['keep.mjs']);
+  }, 60_000);
+
+  for (const goos of [GO, NONE]) {
+    it(`an installed core/ that is a link refuses before anything moves (${goos === GO ? 'a verb in go mode' : 'no go verb'}), and nothing under its target is touched`, () => {
+      plantSeamTree();
+      const outside = path.join(home, 'outside');
+      fs.mkdirSync(outside);
+      fs.writeFileSync(path.join(outside, 'keep'), 'not the core\n');
+      fs.mkdirSync(path.dirname(path.dirname(installed())), { recursive: true });
+      fs.symlinkSync(outside, path.dirname(installed()));
+      const r = installAs(goos);
+      expect(r.code, r.stderr).toBe(1);
+      expect(r.stderr).toMatch(/is a link or not a directory/);
+      expect(fs.readdirSync(outside)).toEqual(['keep']);
+      expect([fs.existsSync(entry()), fs.existsSync(body())]).toEqual([false, false]);
+    }, 60_000);
+  }
+
+  it('a core slot staging file a killed run left is swept by the next run', () => {
+    plantSeamTree();
+    fs.mkdirSync(path.dirname(installed()), { recursive: true });
+    const left = installed('.ccd.ccrc-stage.4242.t0');
+    fs.writeFileSync(left, 'left by a killed run\n');
+    const r = installAs(GO);
+    expect(r.code, r.stderr).toBe(0);
+    expect(fs.existsSync(left), 'the slot file was swept').toBe(false);
+    assertNoLeftovers();
+  }, 60_000);
+
+  for (const [what, edit, msg] of [
+    ['duplicated', (t: string) => `${t}\n# @CCRC_CORE_JSON@\n`, /carries 2 copies of @CCRC_CORE_JSON@/],
+    ['missing', (t: string) => t.replace("'@CCRC_CORE_JSON@'", "'{}'"), /carries 0 copies of @CCRC_CORE_JSON@/],
+  ] as const) {
+    it(`the template's core placeholder, ${what}, refuses before anything moves`, () => {
+      plantSeamTree({ template: edit });
+      refusedFresh(installAs(NONE), msg);
+    }, 60_000);
+  }
 });

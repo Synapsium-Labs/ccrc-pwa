@@ -1,0 +1,112 @@
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":""}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":"/r/other/.git"}
+{"file":"{\"passes\":null}","src":"/r/repo/.git"}
+{"file":"{\"passes\":false}","src":"/r/repo/.git"}
+{"file":"{\"passes\":true}","src":"/r/repo/.git"}
+{"file":"{\"passes\":0}","src":"/r/repo/.git"}
+{"file":"{\"passes\":1}","src":"/r/repo/.git"}
+{"file":"{\"passes\":\"\"}","src":"/r/repo/.git"}
+{"file":"{\"passes\":\"x\"}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":{}}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":{\"a\":{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}}}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]},null]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]},false]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]},true]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]},0]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]},1]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]},\"\"]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]},\"x\"]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]},[]]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]},{}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]},[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]},{\"a\":{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":null}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":false}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":true}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":0}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":1}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":\"\"}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":\"x\"}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":{}}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":{\"a\":{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}}}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[null,{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[null,{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":""}
+{"file":"{\"passes\":[{\"repos\":[false,{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[false,{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":""}
+{"file":"{\"passes\":[{\"repos\":[true,{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[true,{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":""}
+{"file":"{\"passes\":[{\"repos\":[0,{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[0,{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":""}
+{"file":"{\"passes\":[{\"repos\":[1,{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[1,{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":""}
+{"file":"{\"passes\":[{\"repos\":[\"\",{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[\"\",{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":""}
+{"file":"{\"passes\":[{\"repos\":[\"x\",{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[\"x\",{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":""}
+{"file":"{\"passes\":[{\"repos\":[[],{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[[],{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":""}
+{"file":"{\"passes\":[{\"repos\":[{},{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{},{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":""}
+{"file":"{\"passes\":[{\"repos\":[[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}],{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}],{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":""}
+{"file":"{\"passes\":[{\"repos\":[{\"a\":{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}},{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"a\":{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}},{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":""}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":null}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":false}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":true}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":0}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":1}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"x\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":[]}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":{}}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":{\"a\":{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}}}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":null,\"reason\":\"too big\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":false,\"reason\":\"too big\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":true,\"reason\":\"too big\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":0,\"reason\":\"too big\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":1,\"reason\":\"too big\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"\",\"reason\":\"too big\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"x\",\"reason\":\"too big\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":[],\"reason\":\"too big\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":{},\"reason\":\"too big\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}],\"reason\":\"too big\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":{\"a\":{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}},\"reason\":\"too big\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":null,\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":false,\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":true,\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":0,\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":1,\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"x\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":[],\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":{},\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}],\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":{\"a\":{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}},\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"\"},{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"second\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"first\"},{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"second\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"line one\\nline two\\n\\n\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"nul\\u0000inside\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"é…xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}\n{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"again\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]} 5","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]} {","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]} garbage","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}\n{\"passes\": 3}","src":"/r/repo/.git"}
+{"file":"","src":"/r/repo/.git"}
+{"file":"  \n ","src":"/r/repo/.git"}
+{"file":"null","src":"/r/repo/.git"}
+{"file":"[]","src":"/r/repo/.git"}
+{"file":"\"s\"","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}],\"other\":1}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"reason\":\"no outcome\"}]}]}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{}]}","src":"/r/repo/.git"}
+{"file":"{}","src":"/r/repo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/repo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":"/r/reépo/.git"}
+{"file":"{\"passes\":[{\"repos\":[{\"source\":\"/r/reépo/.git\",\"outcome\":\"refused\",\"reason\":\"too big\"}]}]}","src":"/r/reépo/.git"}

@@ -10,8 +10,8 @@ import fs, { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ccdSource, ghContainedEnv, makeCcdHarness, stubContainedTool, type CcdHarness } from './ccdWsHelpers.js';
-import { spawnSyncGroup } from './spawnGroup.js';
 import { mkTmp } from './tmpHelpers.js';
+import { hookBoth } from './hookTwin.js';
 import { MAILHOLD_REACH_S, MAILHOLD_RE_BODY, parseMailHold } from '../../shared/mailHold.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -89,8 +89,9 @@ describe('the session hook\'s builtin parse agrees with parseMailHold on every c
   const hookReads = (value: string, over: NodeJS.ProcessEnv = {}): boolean => {
     fs.rmSync(path.join(home, '.ccrc'), { recursive: true, force: true });
     fs.writeFileSync(path.join(home, '.cc-sessions', `${ID}.mailhold`), value);
-    const r = spawnSyncGroup('bash', [HOOK], { encoding: 'utf8', env: { ...env, ...over }, timeout: 60_000,
-      input: JSON.stringify({ hook_event_name: 'PreToolUse', session_id: 'uuid-1', tool_name: 'Bash', tool_input: { command: 'git push' }, cwd: home }) });
+    // the Go core and the bash, each from the same fixture state, must answer the same (Go core wave 2, Task 5)
+    const r = hookBoth(home, JSON.stringify({ hook_event_name: 'PreToolUse', session_id: 'uuid-1', tool_name: 'Bash', tool_input: { command: 'git push' }, cwd: home }),
+      { ...env, ...over });
     expect(r.status, r.stderr).toBe(0);
     expect(r.stdout, 'shadow: nothing is said').toBe('');
     const log = path.join(home, '.ccrc', 'mail-hold-shadow.log');

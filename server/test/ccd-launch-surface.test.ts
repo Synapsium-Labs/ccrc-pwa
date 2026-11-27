@@ -107,6 +107,30 @@ describe('a standing profiledigest renders the overlord surface whole (Review Fo
       expect(s.statusLine).toStrictEqual({ type: 'command', command: 'bash "$HOME/.claude/statusline-command.sh"' });
     }
   });
+  // F1 (Task 9a fix round 1): the profile's hook command follows the box's hook mode through the launcher's one reader, the
+  // row and its digest staying the bash command's. A stand-in launcher answers the installer's question.
+  const GO_CMD = '"$HOME/.local/libexec/ccrc/core/ccrc-core" hook';
+  const answers = (word: string): void => fs.writeFileSync(path.join(h.home, '.local', 'bin', 'ccd'),
+    `#!/bin/sh\n[ "$1" = --ccrc-entry-hook-mode ] && echo ${word}\nexit 0\n`, { mode: 0o755 });
+  const hookCommands = (l: string): string[] => Object.values(settingsOf(l).hooks as Record<string, { hooks: { command: string }[] }[]>)
+    .flatMap((gs) => gs.flatMap((g) => g.hooks.map((x) => x.command)));
+  it('on a go-mode box every hook of the surfaced profile is the core\'s command, and the row\'s digest is unchanged', () => {
+    seed(OVERLORD);
+    answers('go');
+    const cmds = hookCommands(spawn('new').lines[0]!);
+    expect(cmds.length).toBeGreaterThan(10);
+    expect(new Set(cmds)).toEqual(new Set([GO_CMD]));
+  });
+  it('on a bash-mode box, with an older launcher, or with none, the row\'s bash command stands', () => {
+    seed(OVERLORD);
+    const BASH = 'bash "$HOME/.cc-sessions/session-hook.sh"';
+    answers('bash');
+    expect(new Set(hookCommands(spawn('new').lines[0]!))).toEqual(new Set([BASH]));
+    answers('usage: ccd {start|ensure}');
+    expect(new Set(hookCommands(spawn('new').lines[0]!))).toEqual(new Set([BASH]));
+    fs.rmSync(path.join(h.home, '.local', 'bin', 'ccd'));
+    expect(new Set(hookCommands(spawn('new').lines[0]!))).toEqual(new Set([BASH]));
+  });
   it('the merged settings carry crossSessionInbound refuse, from the fleet pin and the row, which agree', () => {
     seed(OVERLORD);
     const l = spawn('new').lines[0]!;

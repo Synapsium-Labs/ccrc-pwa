@@ -116,6 +116,14 @@ jobs:
             pwa/package-lock.json
             ui/package-lock.json
 
+      # The Go core's five binaries are cross-built into the candidate (core/build.sh, spec 2026-11-24 §7), at the
+      # version core/go.mod's toolchain line names. No cache: a restored Go build cache is compiled output
+      # nothing verifies, and these binaries ship.
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: core/go.mod
+          cache: false
+
       # Arm 1: refuses dirty/tagged, derives, tags LOCALLY, builds the candidate
       # into release-out/candidate. Nothing reaches origin here. The step has no
       # env: it installs the dependencies, and it takes no token and runs no gh

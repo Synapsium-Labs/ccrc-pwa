@@ -14,6 +14,7 @@ import { localIO } from '../src/io.js';
 import type { HookState } from '../src/hookstate.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
+import { IMPLS, runGoHook } from './hookTwin.js';
 
 const base: BucketInput = {
   status: 'idle', statusUpdatedAt: 1000, dialogPending: false,
@@ -618,7 +619,7 @@ describe('a Stop that leaves delegated work running (D-5231)', () => {
   // (b2) END TO END: the real hook writes the hookstate from a Stop whose only listed task is a FINISHED subagent, the
   // real reader parses it, and `assembleFleet` ships the row. The hook's status rule writes `bgDelegated: 0`, so
   // `fleet.ts` leaves `background` null and D-75's wedge recovery answers `done` over a stale live `busy`.
-  describe('(b2) a finished task does not switch off D-75', () => {
+  describe.each(IMPLS)('(b2) a finished task does not switch off D-75 (%s)', (impl) => {
     const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
     const FIVE = path.resolve(__dirname, 'fixtures/hook/stop-bg-five-kinds.json');
     const ID = 'lane-a-project-a';
@@ -646,11 +647,10 @@ describe('a Stop that leaves delegated work running (D-5231)', () => {
         writeFileSync(path.join(home, '.ccrc', SERVER_CAPS_FILE), renderServerCaps(caps, Math.floor(Date.now() / 1000)));
       }
       for (const p of [payload, ...after]) {
-        execFileSync('bash', [HOOK], {
-          input: JSON.stringify(p), encoding: 'utf8',
-          env: { ...process.env, HOME: home, PATH: `${bin}:${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1',
-            CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: '40613', CCRC_SESSION_GENERATION: GENERATION },
-        });
+        const env = { ...process.env, HOME: home, PATH: `${bin}${path.delimiter}${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1',
+          CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: '40613', CCRC_SESSION_GENERATION: GENERATION };
+        if (impl === 'go') expect(runGoHook(home, p, env).status, 'the Go hook: exit 0').toBe(0);
+        else execFileSync('bash', [HOOK], { input: JSON.stringify(p), encoding: 'utf8', env });
       }
       const raw = await readHookStateRawMeasured(localIO, reg, ID, UUID);
       if (!raw.ok) throw new Error(`the hook wrote no readable hookstate: ${raw.reason}`);
@@ -713,7 +713,7 @@ describe('a Stop that leaves delegated work running (D-5231)', () => {
 // carry keeps the Stop's `done` and the delegated pair, and Task 1's `!delegated` rung holds the row `working`
 // throughout over a live `busy` older than the Stop. Without the carry each agent event wrote `working` (the flap);
 // without the rung the carried `done` would read idle.
-describe('a carried done stands through delegated work, and the rung holds it working (D-5232)', () => {
+describe.each(IMPLS)('a carried done stands through delegated work, and the rung holds it working (D-5232) (%s)', (impl) => {
   const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
   const FIVE = path.resolve(__dirname, 'fixtures/hook/stop-bg-five-kinds.json');
   const ID = 'lane-a-project-a';
@@ -739,11 +739,10 @@ describe('a carried done stands through delegated work, and the rung holds it wo
     mkdirSync(path.join(home, '.ccrc'), { recursive: true });
     writeFileSync(path.join(home, '.ccrc', SERVER_CAPS_FILE), renderServerCaps(['dispatch-live-gate-v1', 'hook-main-state-v1'], Math.floor(Date.now() / 1000)));
     const hook = (payload: Record<string, unknown>): void => {
-      execFileSync('bash', [HOOK], {
-        input: JSON.stringify(payload), encoding: 'utf8',
-        env: { ...process.env, HOME: home, PATH: `${bin}:${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1',
-          CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: '40613', CCRC_SESSION_GENERATION: GENERATION },
-      });
+      const env = { ...process.env, HOME: home, PATH: `${bin}${path.delimiter}${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1',
+        CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: '40613', CCRC_SESSION_GENERATION: GENERATION };
+      if (impl === 'go') expect(runGoHook(home, payload, env).status, 'the Go hook: exit 0').toBe(0);
+      else execFileSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env });
     };
     const five = JSON.parse(readFileSync(FIVE, 'utf8')) as Record<string, unknown>;
     hook({ ...five, background_tasks: [subagent('a0000000000000001'), subagent('a0000000000000002')] });

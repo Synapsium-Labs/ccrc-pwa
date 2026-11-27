@@ -87,14 +87,32 @@ export const READS = {
 };
 
 /**
+ * The one exception to the inverse rule (spec 2026-11-24 §7): a package whose tests read nothing outside its own
+ * directory, so its foreign list would be the whole repository. The Go core is such a package: a Go module with no
+ * dependency (core/go.mod requires nothing), whose build and tests read core/ alone, but for one fixture its kernel test
+ * reads where it lives (the approval digest corpus, whose owner is the server's suite). Its tests (`test (core)`) skip
+ * unless a changed file is under its own prefix or is infrastructure every check shares (`infraTrigger`, which holds
+ * `.github/`, so a change to the job itself runs it). Legitimately different from FOREIGN, and not a second list of
+ * the same thing: it names what a package DOES read, and only for a package that provably reads nothing else.
+ */
+export const OWN = {
+  core: ['core/', 'server/test/fixtures/approvals/digest-corpus.json'],
+};
+
+/**
  * Whether a package may skip its tests for this change: true only when the
- * change is non-empty and every file is under one of its foreign prefixes.
+ * change is non-empty and every file is under one of its foreign prefixes
+ * (or, for an OWN package, no file is under its own prefixes or is infrastructure).
  * @param {string} pkg @param {string[]} changed
  */
 export function skipsTests(pkg, changed) {
+  const files = changed.map((f) => f.trim()).filter(Boolean);
+  if (Object.hasOwn(OWN, pkg)) {
+    const own = OWN[/** @type {keyof typeof OWN} */ (pkg)];
+    return files.length > 0 && files.every((f) => !own.some((p) => f.startsWith(p)) && infraTrigger(f) === null);
+  }
   const foreign = Object.hasOwn(FOREIGN, pkg) ? FOREIGN[pkg] : undefined;
   if (!foreign) return false;
-  const files = changed.map((f) => f.trim()).filter(Boolean);
   if (files.length === 0) return false;
   const reads = Object.hasOwn(READS, pkg) ? READS[pkg] : [];
   const read = (/** @type {string} */ f) => reads.some((r) => (r.endsWith('/') ? `${f}/`.startsWith(r) : f === r));

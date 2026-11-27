@@ -12,6 +12,7 @@ import path from 'node:path';
 import { makeCcdHarness, ghContainedEnv, CCD, type CcdHarness } from './ccdWsHelpers.js';
 import { inheritedEnv } from './gitEnvStrip.js';
 import { spawnSyncGroup } from './spawnGroup.js';
+import { recordGuard } from './hookTwin.js';
 import { approvalClass, rootsForChild, FORBIDDEN_CCD_VERBS } from '../src/coord/approvalguard.js';
 import { CHILD_DENY_RULES } from '../../shared/api.js';
 
@@ -260,6 +261,7 @@ describe('keep-awake is forbidden to every session', () => {
     return m[1] as string;
   };
   const hookSays = (command: string): string => {
+    recordGuard(JSON.stringify({ tool_name: 'Bash', tool_input: { command } }));
     const r = spawnSync('jq', ['-r', '--arg', 'q', "'", '--arg', 'mode', 'deny', forbiddenJq()], {
       input: JSON.stringify({ tool_name: 'Bash', tool_input: { command } }), encoding: 'utf8',
     });

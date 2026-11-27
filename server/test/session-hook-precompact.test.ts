@@ -9,14 +9,15 @@
 // Runs ccd/session-hook.sh for real inside a fixture HOME (the harness shape of session-hook-compact-carry.test.ts,
 // copied: a test file cannot import another). `_reg_purge` runs through makeCcdHarness's fixture HOME, never the live one.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { spawnSync } from 'node:child_process';
-import { spawnSyncGroup } from './spawnGroup.js';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import { holdCompactLock } from './lifecycleHelpers.js';
 import { makeCcdHarness } from './ccdWsHelpers.js';
 import { compactionsSince, type CompactionLine } from '../src/continuity/compactions.js';
+import { IMPLS, hookArgv, runHook, type Impl } from './hookTwin.js';
+import { coreBinary } from './coreBuild.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 const HELPER_SRC = path.resolve(__dirname, '../../ccd/compact-card.mjs');
@@ -46,16 +47,18 @@ const linesOf = (p: string): Array<Record<string, unknown>> => fs.existsSync(p)
 
 const env = (over: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({
   ...process.env, HOME: home,
-  PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+  PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
   TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: '4242',
   CCRC_SESSION_GENERATION: GENERATION, ...over,
 });
+/** The implementation the running describe asks for (Go core wave 2, Task 8b): each behaviour describe runs once per
+ *  implementation, in its own fixture HOME, so every case reads that implementation's own files. */
+let impl: Impl = 'bash';
 const run = (payload: object, over: NodeJS.ProcessEnv = {}): void => {
-  // Bounded (review 1927 M6): a synchronous spawn blocks the event loop, so vitest's own timeout could never fire on a
-  // hung hook. A timed shell spawn goes through spawnSyncGroup (#896), which also ends the hook's process group.
-  const r = spawnSyncGroup('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env: env(over), timeout: 15_000 });
-  expect(r.error, 'the spawn itself did not fail (a timeout or ENOENT reads as status null; review 1937 F5)').toBeUndefined();
-  expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
+  // Bounded (review 1927 M6): hookTwin's runHook spawns through spawnSyncGroup (#896), which also ends the hook's
+  // process group, under a timeout, so a hung hook fails the case rather than the event loop.
+  const r = runHook({ home, env: (e = {}) => e }, impl, payload, env(over));
+  expect(r.status, 'the hook contract: exit 0 on every path (a timeout reads as status null; review 1937 F5)').toBe(0);
 };
 /** A transcript that exists, so `_hook_compact_scope` resolves `main` for a manual compaction. */
 const transcript = (): string => {
@@ -76,8 +79,10 @@ const postCompact = (trigger: string, transcriptPath: string): object => ({
   hook_event_name: 'PostCompact', trigger, compact_summary: 'fixture summary',
 });
 
-describe('PreCompact writes one line to its own file (W0-05)', () => {
-  it('the hook\'s PRECOMPACT_KEEP is the bound this suite tests', () => {
+describe.each(IMPLS)('PreCompact writes one line to its own file (W0-05) (%s)', (which) => {
+  beforeEach(() => { impl = which; });
+  const itBash = which === 'bash' ? it : it.skip;
+  itBash('the hook\'s PRECOMPACT_KEEP is the bound this suite tests (the bash\'s text; TestCompactConstantsPinned holds the Go one)', () => {
     expect(fs.readFileSync(HOOK, 'utf8')).toMatch(new RegExp(`^PRECOMPACT_KEEP=${KEEP}$`, 'm'));
   });
 
@@ -133,7 +138,10 @@ describe('PreCompact writes one line to its own file (W0-05)', () => {
     const live = path.join(agents, 'agent-a1.jsonl');
     fs.writeFileSync(live, '{"type":"user"}\n');
     run(preCompact('auto', t));
-    expect(linesOf(preFile())).toEqual([{ at: expect.any(Number), trigger: 'auto', scope: 'subagent', transcript: live, phase: 'pre' }]);
+    // as the bash names it: `${tp%.jsonl}/subagents`, then find's `/` and the name (on Windows the transcript's own
+    // backslashes, then two slashes; on Linux and macOS this is `live`)
+    const named = `${t.slice(0, -'.jsonl'.length)}/subagents/${path.basename(live)}`;
+    expect(linesOf(preFile())).toEqual([{ at: expect.any(Number), trigger: 'auto', scope: 'subagent', transcript: named, phase: 'pre' }]);
   });
 
   it('a trigger outside auto and manual is written as other, never verbatim', () => {
@@ -173,11 +181,12 @@ describe('PreCompact writes one line to its own file (W0-05)', () => {
     expect(fs.existsSync(preFile())).toBe(false);
   });
 
-  it('a FIFO at the pathname is never opened: the run returns and writes nothing', () => {
+  // not on Windows: an MSYS2 FIFO is invisible to a native program (D-TBD-go-hook-windows-fifo)
+  it.skipIf(process.platform === 'win32')('a FIFO at the pathname is never opened: the run returns and writes nothing', () => {
     expect(spawnSync('mkfifo', [preFile()]).status).toBe(0);
-    const t0 = Date.now();
+    const t0 = performance.now();
     run(preCompact('auto', transcript()));
-    expect(Date.now() - t0).toBeLessThan(20_000);
+    expect(performance.now() - t0).toBeLessThan(20_000);
     expect(fs.lstatSync(preFile()).isFIFO()).toBe(true);
   }, 30_000);
 
@@ -210,7 +219,9 @@ describe('the line is the last PreCompact arm (plan review 1890 I1)', () => {
   });
 });
 
-describe('the line is written under the row\'s .compactions.lock', () => {
+describe.each(IMPLS)('the line is written under the row\'s .compactions.lock (%s)', (which) => {
+  beforeEach(() => { impl = which; });
+  const itBash = which === 'bash' ? it : it.skip;
   // THE MUTANT this pins: the append moved out of the locked section writes while another holder has the row.
   it('while another process holds the lock, PreCompact waits it out and writes nothing', async () => {
     const release = await holdCompactLock(home, ID, 30);
@@ -226,7 +237,9 @@ describe('the line is written under the row\'s .compactions.lock', () => {
   });
 });
 
-describe('the file is bounded by rotation, with no temp file', () => {
+describe.each(IMPLS)('the file is bounded by rotation, with no temp file (%s)', (which) => {
+  beforeEach(() => { impl = which; });
+  const itBash = which === 'bash' ? it : it.skip;
   const seedLines = (n: number): string => {
     const text = Array.from({ length: n }, (_, i) =>
       `${JSON.stringify({ at: 1_800_000_000_000 + i, trigger: 'auto', scope: 'main', transcript: null, phase: 'pre' })}\n`).join('');
@@ -279,7 +292,9 @@ describe('the file is bounded by rotation, with no temp file', () => {
   });
 
   // Review 1937 F2: a rotation that is due and fails appends nothing, so the file never passes its bound.
-  it('a rotation whose mv fails appends nothing: the file keeps its lines and does not grow past the bound', () => {
+  // BASH ONLY: the fault is a stub `mv` on PATH, which the Go hook never runs (it renames with rename(2)); the same failure
+  // through the Go port is TestPreLineFailedRotationAppendsNothing.
+  itBash('a rotation whose mv fails appends nothing: the file keeps its lines and does not grow past the bound', () => {
     const text = seedLines(KEEP);
     // Only the rotation's mv fails: the lock's own renames go through, so the run reaches the append and decides it.
     fs.writeFileSync(path.join(home, 'bin', 'mv'), '#!/bin/sh\ncase "$*" in *compacteventsprev*) exit 1 ;; esac\nexec /bin/mv "$@"\n', { mode: 0o755 });
@@ -299,7 +314,9 @@ describe('the file is bounded by rotation, with no temp file', () => {
   });
 });
 
-describe('PostCompact and its journal are untouched by the line', () => {
+describe.each(IMPLS)('PostCompact and its journal are untouched by the line (%s)', (which) => {
+  beforeEach(() => { impl = which; });
+  const itBash = which === 'bash' ? it : it.skip;
   it('a PreCompact then a PostCompact: one pre line in .compactevents, one record in .compactions with no phase', () => {
     fs.copyFileSync(HELPER_SRC, path.join(reg(), 'compact-card.mjs'));
     const t = transcript();
@@ -320,6 +337,28 @@ describe('PostCompact and its journal are untouched by the line', () => {
     for (let i = 0; i < 2; i += 1) { run(preCompact('manual', t)); run(postCompact('manual', t)); }
     expect(linesOf(preFile())).toHaveLength(2);
     expect(linesOf(journal())).toHaveLength(2);
+  });
+});
+
+// Task 9 switches the hook mid-session, so one compaction can be opened by one implementation and settled by the other,
+// and each commits onto a journal the other wrote: the bash's stage predicate re-validates every line Go committed, and
+// Go's every line the bash did (Go core wave 2, Task 8b).
+describe('a compaction crosses implementations: each settles the other\'s set and appends to the other\'s journal', () => {
+  it.each([['go', 'bash'], ['bash', 'go']] as const)('PreCompact in %s, PostCompact in %s, then the other way round: two records', (a, b) => {
+    fs.copyFileSync(HELPER_SRC, path.join(reg(), 'compact-card.mjs'));
+    const t = transcript();
+    fs.mkdirSync(path.join(home, 'repo'));
+    try {
+      impl = a; run(preCompact('manual', t));
+      impl = b; run(postCompact('manual', t));
+      impl = b; run(preCompact('manual', t));
+      impl = a; run(postCompact('manual', t));
+    } finally { impl = 'bash'; }
+    const recs = linesOf(journal());
+    expect(recs, 'both settlements committed, the second onto the first').toHaveLength(2);
+    for (const r of recs) expect(r).toMatchObject({ trigger: 'manual', scope: 'main', transcript: t });
+    expect(linesOf(preFile()).map((l) => l['phase'])).toEqual(['pre', 'pre']);
+    expect(fs.readdirSync(reg()).filter((n) => /compactpost|compactions-(stage|snapshot)|compactset/.test(n)), 'claims, stages and sets consumed').toEqual([]);
   });
 });
 
@@ -359,4 +398,71 @@ describe('the row\'s purge takes both files (dot-free, so the suffix glob covers
     expect(src).toContain('local f="$REG/$id.compactevents"');
     expect(src).toContain('"$REG/$id.compacteventsprev"');
   });
+});
+
+// ── The bash and the Go core on ONE `.compactions.lock` (Go core wave 2, Task 8b) ──────────────────────────────────────
+// Task 9 switches the hook mid-session, so a bash hook and a Go hook of one row can run at once: both must take the same
+// stable lock and exclude each other. A plain `>>` append is atomic on its own and would pass with no lock at all, so the
+// race is placed ACROSS THE ROTATION BOUNDARY, where the events line's read-count-then-rename-then-append is a
+// check-then-act only the lock makes safe: the file holds PRECOMPACT_KEEP - 1 lines, and every racer appends one. Under
+// the lock exactly one racer brings it to the bound, exactly one rotates it (prev holds the seed and that line,
+// PRECOMPACT_KEEP lines), and the rest start the fresh file: no line lost, none torn, none doubled.
+// THE RACERS ARE PARKED TOGETHER (fix round 1, F1): unparked, a Go racer is done before a bash one reaches its tail, so
+// the two rarely meet. Each round a flock(1) holder takes canonical (minted beforehand: flock(1) on an absent path would
+// make a different inode) before the eight start; while it holds, no racer may write (asserted), and its release lets
+// them all contend at once. Mutants measured red: the Go hook's flock(2) wait answering at once (row_unix.go#flockWait),
+// and the Go hook locking `.compactions.lockX` (a bash/Go split, which leaves Go-Go and bash-bash exclusion whole).
+// Exclusion measured inside the section itself is core/internal/adapter/lock/row_cross_test.go#TestBashAndGoExcludeOnTheRow.
+describe('the bash and the Go core contend on one .compactions.lock (Task 8b)', () => {
+  const ITER = Number(process.env['CCRC_LOCK_RACE_ITER'] ?? '12');
+  const racer = (impl: Impl, payload: object): Promise<{ code: number | null; stderr: string; impl: Impl }> =>
+    new Promise((resolve, reject) => {
+      const [cmd, args] = hookArgv(impl);
+      const child = spawn(cmd, args, { env: env() });
+      let stderr = '';
+      child.stderr.on('data', (d: Buffer) => { stderr += d.toString('utf8'); });
+      child.on('error', reject);
+      child.on('close', (code) => resolve({ code, stderr, impl }));
+      child.stdin.end(JSON.stringify(payload));
+    });
+  // Linux and macOS only: on Windows each racer's held section starts several MSYS2 processes, so eight of them in a row
+  // outrun the last one's COMPACT_LOCK_WAIT (5 s) and it gives up its line by design (measured: rounds 0 to 2 whole, then
+  // one line short with no line torn or doubled and one rotation). Bash and Go excluding each other on Windows is
+  // core/internal/adapter/lock/row_cross_test.go#TestBashAndGoExcludeOnTheRow, which runs there.
+  it.skipIf(process.platform === 'win32')(`${ITER} rounds of four bash and four Go PreCompacts at the rotation bound: one rotation, no line lost or torn`, async () => {
+    coreBinary();
+    const t = transcript();
+    run(preCompact('manual', t));                        // mints canonical, as any first compaction does
+    const lock = path.join(reg(), `.${ID}.compactions.lock`);
+    expect(fs.lstatSync(lock).isFile(), 'canonical minted').toBe(true);
+    for (let round = 0; round < ITER; round += 1) {
+      for (const f of [preFile(), prevFile()]) fs.rmSync(f, { force: true });
+      const seed = Array.from({ length: KEEP - 1 }, (_, i) =>
+        `${JSON.stringify({ at: 1_800_000_000_000 + i, trigger: 'auto', scope: 'main', transcript: null, phase: 'pre' })}\n`).join('');
+      fs.writeFileSync(preFile(), seed);
+      const holder = spawn('flock', ['-x', lock, 'sh', '-c', 'echo held; read -r _'], { stdio: ['pipe', 'pipe', 'ignore'] });
+      await new Promise<void>((res, rej) => {
+        holder.stdout.on('data', (d: Buffer) => { if (d.toString().includes('held')) res(); });
+        holder.on('error', rej);
+      });
+      const impls: Impl[] = ['bash', 'go', 'bash', 'go', 'bash', 'go', 'bash', 'go'];
+      const racing = Promise.all(impls.map((i) => racer(i, preCompact('manual', t))));
+      await new Promise((res) => setTimeout(res, 800));  // every racer parked on the held lock (each waits up to 5 s)
+      expect(fs.readFileSync(preFile(), 'utf8'), `round ${round}: a racer wrote while another process held the row`).toBe(seed);
+      holder.stdin.end();                                 // the release: all eight contend at once
+      const done = await racing;
+      for (const d of done) expect([d.impl, d.code, d.stderr], `round ${round}: the hook contract`).toEqual([d.impl, 0, '']);
+      const prev = fs.readFileSync(prevFile(), 'utf8');
+      const cur = fs.readFileSync(preFile(), 'utf8');
+      const lines = (s: string): string[] => s.split('\n').slice(0, -1);
+      expect(prev.endsWith('\n') && cur.endsWith('\n'), `round ${round}: whole lines only`).toBe(true);
+      expect(prev.startsWith(seed), `round ${round}: the seed rotated whole`).toBe(true);
+      expect(lines(prev), `round ${round}: one rotation, at the bound`).toHaveLength(KEEP);
+      expect(lines(cur), `round ${round}: the other racers started the fresh file`).toHaveLength(impls.length - 1);
+      for (const l of [...lines(prev).slice(KEEP - 1), ...lines(cur)]) {
+        expect(JSON.parse(l), `round ${round}: a whole line`).toMatchObject({ trigger: 'manual', scope: 'main', transcript: t, phase: 'pre' });
+      }
+      expect(fs.readdirSync(reg()).filter((n) => /lock-(open|init)|generation-read/.test(n)), `round ${round}: no lock residue`).toEqual([]);
+    }
+  }, 600_000);
 });

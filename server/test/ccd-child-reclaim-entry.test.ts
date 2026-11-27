@@ -736,9 +736,9 @@ describe('the launcher’s Python startup is isolated (-IS through the kernel)',
 
   it('the tracked template carries each placeholder exactly once, and a launcher left unrendered refuses by name', () => {
     const tpl = fs.readFileSync(path.resolve(__dirname, '../../ccd/ccd-entry.py'), 'utf8');
-    for (const p of ['@CCRC_PYTHON3@', '@CCRC_CCD_SHA256@']) expect(tpl.split(p).length - 1, p).toBe(1);
+    for (const p of ['@CCRC_PYTHON3@', '@CCRC_CCD_SHA256@', '@CCRC_CORE_JSON@']) expect(tpl.split(p).length - 1, p).toBe(1);
     expect(tpl.split('\n')[0]).toBe('#!@CCRC_PYTHON3@ -IS');
-    expect(tpl.match(/@CCRC_[A-Z0-9_]+@/g)).toEqual(['@CCRC_PYTHON3@', '@CCRC_CCD_SHA256@']);
+    expect(tpl.match(/@CCRC_[A-Z0-9_]+@/g)).toEqual(['@CCRC_PYTHON3@', '@CCRC_CCD_SHA256@', '@CCRC_CORE_JSON@']);
     de = installDirectEntry(h.home, { body: ECHO_BODY });
     fs.writeFileSync(de.entry, tpl.replace('@CCRC_PYTHON3@', de.python!), { mode: 0o755 });
     const r = direct(['caps']);

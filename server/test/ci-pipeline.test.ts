@@ -1195,9 +1195,9 @@ describe('ci.yml: test (pwa) is a summary over the pwa shards (D-6768)', () => {
 });
 
 describe('ci.yml: the full-suite verdict and the legs it runs (design 2026-09-23 §7, §8)', () => {
-  it('full-suite needs every leg — Linux shards, typecheck, agent, pwa, build, macOS, the Node floor, the browser — and asks verdict.mjs full', () => {
+  it('full-suite needs every leg — Linux shards, typecheck, agent, pwa, build, macOS, the Node floor, the browser, the Go core — and asks verdict.mjs full', () => {
     const b = job('full-suite');
-    expect(needs(b)).toEqual(['browser-pwa', 'build-pwa', 'macos', 'node-floor', 'pwa', 'select', 'server', 'server-shard', 'server-typecheck', 'test']);
+    expect(needs(b)).toEqual(['browser-pwa', 'build-pwa', 'core', 'macos', 'node-floor', 'pwa', 'select', 'server', 'server-shard', 'server-typecheck', 'test']);
     // Never on a merge-queue run (landing-order stage 2): a queue run skips
     // test-macos, and a queue run that fell back to `full` would read that skip
     // as a red leg here (ci-merge-queue.test.ts derives the rule).
@@ -1987,9 +1987,9 @@ describe('ci.yml: the light pull-request rule for the agent, pwa and browser tes
     expect(read(CI)).not.toMatch(/^ {4}types: .*labeled/m);
     // A head branch under train/ asks for the full suite too (operator ruling 2026-10-28), in every place the label is read.
     const full = "FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') || startsWith(github.head_ref, 'train/') }}";
-    // Select, the three test legs' asks, the docs-only asks of pwa-static, build-pwa and storybook-a11y (D-7868), and
-    // the docs-only follow-up ask (D-8396).
-    expect(read(CI).split(full).length - 1).toBe(8);
+    // Select, the three test legs' asks, the docs-only asks of pwa-static, build-pwa and storybook-a11y (D-7868),
+    // the docs-only follow-up ask (D-8396), and test (core)'s ask (the Go core, spec 2026-11-24 §7).
+    expect(read(CI).split(full).length - 1).toBe(9);
     expect(read(CI)).not.toMatch(/FULL_LABEL: \$\{\{ contains\([^|]*\}\}/);
   });
 
@@ -2485,5 +2485,95 @@ describe('D-8396 (2): a docs-only follow-up push skips the heavy pull-request jo
   it('the merge queue never takes it: the ask runs on a pull request only, and the verdict refuses it anywhere else', () => {
     expect(serverVerdict({ select: 'success', typecheck: 'skipped', shards: 'skipped', tests: 'selected', count: '', event: 'merge_group', followup: 'true' }).ok).toBe(false);
     expect(stepIf(step(job('select'), 'Is this push a docs-only follow-up?'))).toMatch(/^github\.event_name == 'pull_request' && /);
+  });
+});
+
+// ── the Go core (spec 2026-11-24 §7) ───────────────────────────────────────
+//
+// ccd's core suites build ccrc-core with the `go` on PATH (server/test/coreBuild.ts). A job that runs the files its
+// matrix hands it can be handed one of them (design 2026-09-23 §10: every shard installs what the whole suite needs), so
+// each such job sets Go up, at core/go.mod's version; a job that runs a fixed list (the node floor, the perf rows, the
+// macOS probe) builds nothing and sets nothing up. `test (core)` checks the module itself: gofmt, vet, its tests and the
+// five cross-builds (core/build.sh, the one build command build-release.sh and deploy.sh run too). It is not a required
+// check until the operator adds it to the ruleset, and full-suite does not wait on it.
+
+/** setup-go at its major tag, the way every action here is pinned. */
+const SETUP_GO = 'actions/setup-go@v7';
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** The jobs of a workflow that run whatever server test files their matrix hands them: a `vitest run` in server/, or
+ *  the trace runner, which runs each, fed `matrix.files`. */
+function serverTestJobs(yml: string): string[] {
+  return [...jobs(yml)].filter(([, b]) => steps(b).some((st) => st.includes('FILES: ${{ matrix.files }}')
+    && ((/^ {8}working-directory: server$/m.test(st) && /vitest run/.test(st)) || /node \.github\/ci\/trace-run\.mjs/.test(st))))
+    .map(([id]) => id).sort();
+}
+
+describe('the Go core (spec 2026-11-24 §7): every job that can run any server test sets Go up, and test (core) checks the module', () => {
+  it('finds the jobs that can be handed any server test (the reader is not vacuous)', () => {
+    expect(serverTestJobs(read(CI))).toEqual(['server-shard', 'trace-shard']);
+    expect(serverTestJobs(read(MACOS))).toEqual(['test-macos']);
+  });
+
+  it('each sets Go up from core/go.mod, at its major tag and cached, right after setup-node and under its condition', () => {
+    for (const file of [CI, MACOS]) {
+      for (const id of serverTestJobs(read(file))) {
+        const ss = steps(jobs(read(file)).get(id)!);
+        const node = ss.findIndex((st) => /^ {6}- uses: actions\/setup-node@/m.test(st));
+        expect(node, `${id} sets node up`).toBeGreaterThan(-1);
+        const go = ss[node + 1]!;
+        expect(go, `${id}: setup-go follows setup-node`).toMatch(new RegExp(`^ {6}- uses: ${escapeRe(SETUP_GO)}\\n`));
+        expect(go, id).toMatch(/^ {8}with:\n {10}go-version-file: core\/go\.mod\n {10}cache-dependency-path: core\/go\.mod\n/m);
+        expect(go, `${id}: the cache is on (setup-go's default)`).not.toMatch(/cache: false/);
+        expect(stepIf(go), `${id}: Go is set up exactly when node is`).toBe(stepIf(ss[node]!));
+      }
+    }
+  });
+
+  it('no other job sets Go up but test (core): the jobs that run a fixed list build nothing and need no toolchain', () => {
+    const withGo = (yml: string): string[] => [...jobs(yml)].filter(([, b]) => b.includes('actions/setup-go@')).map(([id]) => id).sort();
+    expect(withGo(read(CI))).toEqual([...serverTestJobs(read(CI)), 'core'].sort());
+    expect(withGo(read(MACOS))).toEqual(serverTestJobs(read(MACOS)));
+  });
+
+  it('test (core): gofmt, vet, an uncached go test, then the five cross-builds through core/build.sh', () => {
+    const b = job('core');
+    expect(jobKey(b, 'name')).toBe('test (core)');
+    expect(Number(jobKey(b, 'timeout-minutes'))).toBeGreaterThan(0);
+    const t = step(b, 'Test');
+    expect(t).toContain('        working-directory: core\n');
+    // -count=1: the rings test shells `go list`, which Go's test cache cannot see change.
+    expect(runScript(t)).toBe('gofmt -l . | (! grep .)\ngo vet ./...\ngo test -count=1 ./...\n');
+    expect(step(b, 'Cross-build ccrc-core for every platform')).toContain('        run: bash core/build.sh "$RUNNER_TEMP/core-bin"\n');
+    const ask = step(b, 'Can this change reach the core?');
+    expect(ask).toContain('        id: reach\n');
+    expect(ask).toContain('        run: node .github/ci/reach.mjs --pkg core --event pull_request --base "origin/$BASE_REF" --full-label "$FULL_LABEL"\n');
+    expect(steps(b)[0], 'the ask diffs from the merge base').toMatch(/^ {10}fetch-depth: 0$/m);
+    const go = steps(b).find((st) => st.includes('actions/setup-go@'))!;
+    expect(go).toMatch(new RegExp(`^ {6}- uses: ${escapeRe(SETUP_GO)}\\n {8}if: .*\\n {8}with:\\n {10}go-version-file: core/go\\.mod\\n {10}cache-dependency-path: core/go\\.mod\\n`));
+  });
+
+  it('test (core) runs on a pull request that reaches it, in the merge queue and on the daily run; a refresh runs nothing', () => {
+    const run = (ctx: Record<string, string>): string[] => (legSkips(job('core'), ctx) ? [] : stepsRun('core', { ...ctx, 'env.CCRC_LEG': 'run' }));
+    const all = steps(job('core')).length;
+    const base = { 'github.event.schedule': '', 'inputs.mode': '' };
+    const pr = (skip: string): Record<string, string> => ({ ...base, 'github.event_name': 'pull_request', 'steps.reach.outputs.skip': skip });
+    expect(run(pr('true')), 'a pull request that cannot reach the core: the checkout and the ask').toEqual(['actions/checkout@v7', 'Can this change reach the core?']);
+    expect(run(pr('false'))).toHaveLength(all);
+    // Off a pull request nothing is asked, and everything else runs.
+    expect(run({ ...base, 'github.event_name': 'merge_group' })).toHaveLength(all - 1);
+    expect(run({ ...base, 'github.event_name': 'schedule', 'github.event.schedule': '17 3 * * *' })).toHaveLength(all - 1);
+    expect(run({ ...base, 'github.event_name': 'schedule', 'github.event.schedule': '23 */3 * * *' }), 'a refresh').toEqual([]);
+    expect(run({ ...base, 'github.event_name': 'workflow_dispatch', 'inputs.mode': 'rebuild' }), 'a rebuild').toEqual([]);
+  });
+
+  // The controller's ruling (final review I6): full-suite needs it, so a red core fails the daily run and the stable
+  // gate; no required check does, since the operator owns the ruleset (test (server), (agent), (pwa) and build-pwa).
+  it('test (core) needs no job, and full-suite alone needs it: it gates the daily run and the stable promotion, not a merge', () => {
+    expect(jobKey(job('core'), 'needs')).toBeNull();
+    for (const [id, b] of jobs(read(CI))) {
+      if (id === 'full-suite') expect(needs(b), 'full-suite waits on test (core)').toContain('core');
+      else expect(needs(b), `${id} waits on test (core)`).not.toContain('core');
+    }
   });
 });

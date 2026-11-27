@@ -12,6 +12,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
+import { IMPLS, runGoHook, type Impl } from './hookTwin.js';
 import {
   SERVER_CAPS, SERVER_CAPS_FILE, SERVER_CAPS_LEASE_S, parseServerCaps, renderServerCaps,
 } from '../../shared/api.js';
@@ -40,13 +41,18 @@ afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
 const hookEnv = (): NodeJS.ProcessEnv => ({
   ...process.env, HOME: home,
-  PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+  PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
   TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: '4242',
   CCRC_SESSION_GENERATION: GENERATION,
 });
 /** One hook run; the header contract's exit 0 and silence asserted on every run. */
+/** The implementation `run` starts (Go core wave 2): a `describe.each(IMPLS)` body sets it with `useImpl`. */
+let impl: Impl = 'bash';
+const useImpl = (i: Impl): void => { beforeEach(() => { impl = i; }); afterEach(() => { impl = 'bash'; }); };
+const hookRun = (payload: object, env: NodeJS.ProcessEnv) => (impl === 'go' ? runGoHook(home, payload, { ...hookEnv(), ...env })
+  : spawnSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env: { ...hookEnv(), ...env } }));
 const run = (payload: object, env: NodeJS.ProcessEnv = {}): void => {
-  const r = spawnSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env: { ...hookEnv(), ...env } });
+  const r = hookRun(payload, env);
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
   expect(r.stdout, 'an unarmed compaction prints nothing (PreCompact prints only when armed and scope main)').toBe('');
 };
@@ -104,7 +110,8 @@ const doneAt = (atMs: number, tasks: unknown[] = []): Buffer => {
 };
 const T0 = Date.now() - 40 * 60_000;
 
-describe('the skip engages only behind the server\'s word (D-5239, spec §6.1)', () => {
+describe.each(IMPLS)('the skip engages only behind the server\'s word (D-5239, spec §6.1) (%s)', (i) => {
+  useImpl(i);
   const NOT_ADVERTISED: Array<[string, () => void]> = [
     ['absent', () => {}],
     ['stale (lease + 1 s)', () => writeCaps([WORD], SERVER_CAPS_LEASE_S + 1)],
@@ -146,7 +153,9 @@ describe('the skip engages only behind the server\'s word (D-5239, spec §6.1)',
   // and the case says so when a slow runner spent that second before the hook read its clock.
   it('control: the word listed in a current file (lease − 1 s, beside another word) → the skip', () => {
     const before = doneAt(T0);
-    const at = nowS() - (SERVER_CAPS_LEASE_S - 1);
+    // on Windows a hook run's process starts alone can spend that second (measured twice there: 181 against 180), so the
+    // file has five seconds of lease left there; the case still reads a current file
+    const at = nowS() - (SERVER_CAPS_LEASE_S - (process.platform === 'win32' ? 5 : 1));
     writeCapsText(renderServerCaps(['hook-main-state-v1', WORD], at));
     run(preCompact('manual'));
     expect(nowS() - at, 'the file was still inside its lease when the hook had run').toBeLessThanOrEqual(SERVER_CAPS_LEASE_S);
@@ -214,7 +223,8 @@ describe('the skip engages only behind the server\'s word (D-5239, spec §6.1)',
   });
 });
 
-describe('behind the word, a compaction writes no hookstate (D-5239, spec §5.8)', () => {
+describe.each(IMPLS)('behind the word, a compaction writes no hookstate (D-5239, spec §5.8) (%s)', (i) => {
+  useImpl(i);
   beforeEach(() => { writeCaps(); });
 
   it('Stop at T0, then PreCompact → the file byte-identical', () => {
@@ -285,7 +295,9 @@ describe('behind the word, a compaction writes no hookstate (D-5239, spec §5.8)
     expect(fs.existsSync(stateFile())).toBe(false);
   });
 
-  it('the compaction helpers still run: PreCompact publishes the set, PostCompact commits its journal line', () => {
+  // bash only until wave 2 Task 8: the compaction helpers (_hook_compact_pre, _hook_compact_post) are not ported yet.
+
+  it.skipIf(i === 'go')('the compaction helpers still run: PreCompact publishes the set, PostCompact commits its journal line', () => {
     fs.copyFileSync(HELPER_SRC, path.join(reg(), 'compact-card.mjs'));
     const proj = path.join(home, '.claude', 'projects', '-rig-repo');
     fs.mkdirSync(proj, { recursive: true });
@@ -325,7 +337,8 @@ const compactionSubagentStop = (): object => ({
   agent_transcript_path: `/rig/fixhome/cfg/projects/-rig-repo/${UUID}/subagents/agent-a80efa07709a9de58.jsonl`,
   last_assistant_message: 'fixture', background_tasks: [], session_crons: [],
 });
-describe('the full real /compact sequence (D-5232 lands the SubagentStop half)', () => {
+describe.each(IMPLS)('the full real /compact sequence (D-5232 lands the SubagentStop half) (%s)', (i) => {
+  useImpl(i);
   it('both words advertised: Stop at T0, PreCompact, SubagentStop, PostCompact(manual) → the main state untouched', () => {
     writeCaps([WORD, 'hook-main-state-v1']);
     const before = doneAt(T0);
@@ -422,7 +435,8 @@ describe('a typed /compact sends no UserPromptSubmit (the measurement the tail i
 // advertised and without it, and holds the state, the roster and the pair kept after each stop and after PostCompact.
 // The corpus holds no live ask, no subagent's own wait (no AskUserQuestion or PermissionRequest in any capture) and
 // nothing that sets `interrupted`, so those keys are held only at their setup values.
-describe('every compaction SubagentStop keeps the main state, two from 2.1.311 as one before', () => {
+describe.each(IMPLS)('every compaction SubagentStop keeps the main state, two from 2.1.311 as one before (%s)', (i) => {
+  useImpl(i);
   const twoStop = corpusVersions.filter((v) => stopsFor(v) === 2);
   const SETUPS: Record<'done' | 'working' | 'done, delegated', () => CapEv> = {
     done: () => { const ev = capture('2.1.319', 'clear-compact-resume'); return ev[ev.findIndex((e) => e.event === 'PreCompact') - 1]!; },
@@ -443,7 +457,7 @@ describe('every compaction SubagentStop keeps the main state, two from 2.1.311 a
     writeCaps(caps);
     const env = { CLAUDE_CODE_SESSION_ID: String(setup.payload['session_id']) };
     const go = (p: Record<string, unknown>): void => {
-      const r = spawnSync('bash', [HOOK], { input: JSON.stringify(p), encoding: 'utf8', env: { ...hookEnv(), ...env } });
+      const r = hookRun(p, env);
       expect(r.status, `${String(p['hook_event_name'])}: exit 0`).toBe(0);
     };
     go(setup.payload);

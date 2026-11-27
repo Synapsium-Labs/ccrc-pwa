@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(ccd ws-rm:*)",
+      "Bash(ccd ws-reap:*)",
+      "Bash(ccd ws-gc --prune:*)",
+      "Bash(ccd ws-archive:*)",
+      "Bash(ccd ws-restore:*)",
+      "Bash(ccd ws-reclaim:*)",
+      "Bash(ccd ws-expire:*)",
+      "Bash(ccd ws-collect:*)",
+      "Bash(ccd ws-orphan:*)",
+      "Bash(ccd scratch-rescue:*)",
+      "Bash(ccd ws-shed-deps:*)",
+      "Bash(ccd keep-awake:*)",
+      "Bash(ccd ws-lease-mark:*)",
+      "Bash(ccd delegation-adopt:*)",
+      "Bash(ccd roll:*)",
+      "Bash(ccd claude:*)",
+      "Bash(ccrc update:*)",
+      "Bash(ccrc rollback:*)",
+      "Bash(ccrc rollout:*)",
+      "Bash(claude install:*)",
+      "Bash(claude update:*)",
+      "Bash(upx install:*)",
+      "Bash(upx update:*)",
+      "Bash(lane-q install:*)"
+    ]
+  }
+}

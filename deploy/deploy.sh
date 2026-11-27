@@ -230,6 +230,23 @@ install_ccd_pair() {
   "${SSH[@]}" "$BOX" 'py="$(python3 -IS -c "import os,sys;sys.stdout.write(os.path.realpath(sys.executable))")" && [ -n "$py" ] && "$py" -IS ~/ccrc/ccd/ccd-entry-install.py install ~/ccrc "$HOME"'
 }
 
+# THE GO CORE (spec 2026-11-24 §7) rides to the box as a release carries it: the entry table, and ccrc-core for the
+# box's own platform, BUILT HERE by core/build.sh (the one build command), so the deploying machine needs Go and no box
+# does. The pair installer refuses a tree with no table, and a go-mode verb with no binary for its platform. Staged
+# under <dir>/core from the target's `uname -s` and `uname -m`; a platform with no build, or no Go here, refuses (rc 1)
+# before anything is copied anywhere.
+stage_core() {   # <dir> <uname -s> <uname -m>
+  local goos goarch
+  # A Windows box (MSYS2 or Git Bash answers MINGW*, MSYS* or CYGWIN*) is refused by name: this script drives a box's
+  # services through systemctl over ssh, which no Windows box has; there, ccrc install runs from a checkout on the box.
+  case "$2" in Linux) goos=linux ;; Darwin) goos=darwin ;; MINGW*|MSYS*|CYGWIN*)
+    echo "deploy: FAILED — $BOX reports uname -s '$2', a Windows box; deploy.sh deploys only to a Linux or macOS box (it drives systemd over ssh) — on Windows, run ccrc install from a checkout on that box" >&2; return 1 ;; *)
+    echo "deploy: FAILED — $BOX reports uname -s '$2'; ccrc-core is built for Linux and Darwin boxes only" >&2; return 1 ;; esac
+  case "$3" in x86_64|amd64) goarch=amd64 ;; aarch64|arm64) goarch=arm64 ;; *)
+    echo "deploy: FAILED — $BOX reports uname -m '$3'; ccrc-core is built for amd64 and arm64 only" >&2; return 1 ;; esac
+  mkdir -p "$1/core" && cp core/entries.json "$1/core/entries.json" && bash core/build.sh "$1/core/bin" "$goos-$goarch"
+}
+
 # ~/ccrc-backups grows without bound otherwise (18MB/13 dirs measured on the
 # server box before this existed), and it sits OUTSIDE the only disk guard,
 # which watches WORKTREES_ROOT alone. Timestamped dirs only: the directory
@@ -493,6 +510,11 @@ if [ "$TARGET" = "agent" ]; then
   # absent-source-is-the-only-skippable-case idiom): an absent local roster is
   # handled by the guard above, a present-but-broken one must abort here.
   [ ! -f "$ACCOUNTS_JSON" ] || check_local_roster
+  # The Go core, built for the box's platform BEFORE this branch's first mutation: a machine without Go, or a box with
+  # no core build, refuses here with nothing touched. One read-only ssh asks the platform.
+  CORE_STAGE="$(mktemp -d)"
+  read -r CORE_OS CORE_ARCH < <("${SSH[@]}" "$BOX" 'echo "$(uname -s) $(uname -m)"') || true
+  stage_core "$CORE_STAGE" "${CORE_OS:-}" "${CORE_ARCH:-}" || { rm -rf "$CORE_STAGE"; exit 1; }
   ship_roster
   # Generated from the roster THE BOX WILL BOOT WITH — read back over ssh,
   # never from the local file — so that the generated file's own first claim
@@ -605,6 +627,10 @@ if [ "$TARGET" = "agent" ]; then
   rsync -az --delete -e "${SSH[*]}" --exclude node_modules --exclude dist --exclude '*.env' \
     --exclude 'ccrc-mail.token' \
     agent shared deploy ccd "$BOX":ccrc/
+  # The core staged above lands as ~/ccrc/core, its own --delete scoped to that directory, before the pair installer
+  # below reads it.
+  rsync -az --delete -e "${SSH[*]}" "$CORE_STAGE/core" "$BOX":ccrc/
+  rm -rf "$CORE_STAGE"
   ship_env ccrc-agent.env .ccrc/agent.env
   # THE ROSTER LANDS BEFORE ccd, and that ordering is the whole point of this
   # block. The ccd installed on the next line refuses to run AT ALL without

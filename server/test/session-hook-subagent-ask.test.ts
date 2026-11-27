@@ -8,6 +8,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
+import { HOOK_ONLY_GO, IMPLS, runGoHook, type Impl } from './hookTwin.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 
@@ -27,14 +28,21 @@ afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
 const hookEnv = (env: Record<string, string>): NodeJS.ProcessEnv => ({
   ...process.env, HOME: home,
-  PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+  PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
   TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242',
   CCRC_SESSION_GENERATION: GENERATION,
   ...env,
 });
 /** The hook's STDOUT; `execFileSync` throws on a non-zero exit. */
-const run = (payload: object, env: Record<string, string> = {}): string =>
-  execFileSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env: hookEnv(env) });
+/** The implementation `run` starts (Go core wave 2): a `describe.each(IMPLS)` body sets it with `useImpl`. */
+let impl: Impl = 'bash';
+const useImpl = (i: Impl): void => { beforeEach(() => { impl = i; }); afterEach(() => { impl = 'bash'; }); };
+const run = (payload: object, env: Record<string, string> = {}): string => {
+  if (impl === 'bash') return execFileSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env: hookEnv(env) });
+  const r = runGoHook(home, payload, hookEnv(env));
+  expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
+  return r.stdout;
+};
 const reg = (): string => path.join(home, '.cc-sessions');
 const stateFile = (): string => path.join(reg(), 'demo-quiet-basin.hookstate.json');
 const readState = (): Record<string, unknown> =>
@@ -45,7 +53,8 @@ const Q = { questions: [{ question: 'Which base?', header: 'Base', multiSelect: 
 const SUB = { agent_id: 'a882033f84d7f43d3', agent_type: 'general-purpose' };
 const askViaPermission = (): void => { run({ hook_event_name: 'PermissionRequest', tool_name: 'AskUserQuestion', tool_input: Q }); };
 
-describe('a subagent tool event keeps the main thread waiting (D-4039)', () => {
+describe.each(IMPLS)('a subagent tool event keeps the main thread waiting (D-4039) (%s)', (i) => {
+  useImpl(i);
   it('a subagent PreToolUse after a PermissionRequest question leaves waiting and the questions', () => {
     askViaPermission();
     run({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'ls' }, ...SUB });
@@ -274,7 +283,9 @@ describe('a subagent tool event keeps the main thread waiting (D-4039)', () => {
 // A forced interleaving: a `jq` shim in the fixture's `bin/` passes through to the real jq, and, on ONE chosen read of the
 // hookstate file, prints the real result first and then rewrites the file the way the main thread's ANSWER would. The
 // prefilter read is the one whose program names `graphQueries`; the carry's fresh read is the one that names `waitBy`.
-describe('the carry is decided from one fresh read (D-4041)', () => {
+// Bash-only by nature: it interleaves a write between the bash hook's two jq reads of the hookstate (a jq shim). The Go hook
+// reads it once, so that window has no Go twin; a go-only run skips it (the Linux bench runs it in bash).
+describe.skipIf(HOOK_ONLY_GO)('the carry is decided from one fresh read (D-4041)', () => {
   const SHIM = `#!/bin/bash
 args=("$@"); last="${'$'}{args[$((${'$'}{#args[@]}-1))]}"
 if [[ "$last" == *.hookstate.json ]]; then

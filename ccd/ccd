@@ -26653,11 +26653,21 @@ PROFILE_ROW_JQ='.[$r] as $x
        and ($sf == "" or (($x.flags | type) == "array" and ($x.surfaceSettings | type) == "object" and ($x.remoteControl == "on" or $x.remoteControl == "off")
          and ($x.flags | to_entries | all(.value | type == "string") and all(if agents(.key) then (.value | test("[\u0027\\x00-\\x1f\\x7f]") | not) else (.value | test("\\A[A-Za-z0-9,._-]+\\z")) end))))
     then . else error("malformed row") end
-  | ($x.settings * (if $cw == "" then {} else $x.compactionSettings end) * (if $sf == "" then {} else $x.surfaceSettings end) | tojson) + "\u001f"
+  | ($x.settings * (if $cw == "" then {} else $x.compactionSettings end) * (if $sf == "" then {} else ($x.surfaceSettings | if $hg == "" then . else (.hooks |= walk(if type == "object" and .command == $hb then .command = $hg else . end)) end) end) | tojson) + "\u001f"
     + ([$x.env | to_entries[] | "\(.key)=\(.value)"]
        + (if $x.autoMemory == "off" or $am == "off" then ["CLAUDE_CODE_DISABLE_AUTO_MEMORY=1"] else [] end)
        + (if $cw == "" then [] else ["CLAUDE_CODE_AUTO_COMPACT_WINDOW=" + $cw] end) | join(" "))
     + "\u001f" + (if $sf == "" then "" else ([$x.flags | to_entries[] | if agents(.key) then "\u0027" + .value + "\u0027" else .value end] | join(" ")) + "\u001f" + $x.remoteControl end)'
+# THE HOOK'S MODE IN A SURFACED PROFILE (Go core wave 2, Task 9a fix round 1, F1). The row (and so its digest, the same on
+# both sides) always carries the bash hook's command: a pinned-sources session takes only the hook its profile registers, so
+# at render time the command is the one the installer would write for this box, asked of the launcher's one reader of the
+# core's table (`--ccrc-entry-hook-mode`, as `install-session-hooks.sh` asks it) and swapped in for the row's bash command.
+# No launcher, an older one, a refusal or `bash` keeps the row as it is. `_hook_go_command` prints the core's command on `go`.
+HOOK_COMMAND_BASH='bash "$HOME/.cc-sessions/session-hook.sh"'
+_hook_go_command() {
+  [[ "$("$HOME/.local/bin/ccd" --ccrc-entry-hook-mode 2>/dev/null || :)" == go ]] || return 0
+  printf '%s' '"$HOME/.local/libexec/ccrc/core/ccrc-core" hook'
+}
 _profile_digest_ok() {   # id -> 0 iff no `profiledigest` stands, or the row `profile` names hashes to it (then PROFILE_DIGEST_P, _D and _ROW hold the profile, the digest and the row, as `jq -cS` printed it, that it read, for the caller to render: review 2135 F7); else 1 and PROFILE_DIGEST_WHY
   local d p="" h row; PROFILE_DIGEST_WHY="" PROFILE_DIGEST_P="" PROFILE_DIGEST_D="" PROFILE_DIGEST_ROW=""
   [[ -e "$REG/$1.profiledigest" || -L "$REG/$1.profiledigest" ]] || return 0
@@ -26713,7 +26723,7 @@ _profile_refused() {   # id why -> journal one launch-profile-refused line; the 
 }
 # @ccd-lib:doorspawn — the door process's spawn step, `_door_spawn` (the Overlord's W1, spec §3.6 H1), which writes its tool-server config, lives in ccd/lib/door.sh
 _profile_spawn_compose() {   # id launchflags -> sets PROFILE_SPAWN_FLAGS, PROFILE_SPAWN_ENV; never half-applies; rc 1 only under a standing profiledigest
-  local id="$1" p="" am cw out="" pset="" penv="" pflags="" prc="" unread="" sf="" d="" src="$LAUNCH_PROFILES_JSON"
+  local id="$1" p="" am cw out="" pset="" penv="" pflags="" prc="" unread="" sf="" d="" hg="" src="$LAUNCH_PROFILES_JSON"
   PROFILE_SPAWN_FLAGS="$2"; PROFILE_SPAWN_ENV=""
   if [[ -e "$REG/$id.profiledigest" || -L "$REG/$id.profiledigest" ]]; then
     _profile_launch_ok "$id" make || { _profile_refused "$id" "$PROFILE_DIGEST_WHY"; return 1; }
@@ -26722,7 +26732,8 @@ _profile_spawn_compose() {   # id launchflags -> sets PROFILE_SPAWN_FLAGS, PROFI
   [[ -n "$sf" || -e "$REG/$id.profile" || -L "$REG/$id.profile" ]] || return 0
   [[ -n "$sf" ]] || _reg_get_to p "$id" profile 2>/dev/null || { _route_unread_note "$id" profile; unread=1; }
   am=$(_route_get "$id" automem); cw=$(_route_get "$id" compactwindow)
-  [[ "$p" =~ ^[a-z]{1,16}$ ]] && out=$(jq -r --arg r "$p" --arg am "$am" --arg cw "$cw" --arg sf "$sf" "$PROFILE_ROW_JQ" "$src" 2>/dev/null <<<"{\"$p\":${PROFILE_DIGEST_ROW:-null}}") || out=""
+  hg=""; [[ -z "$sf" ]] || hg=$(_hook_go_command)
+  [[ "$p" =~ ^[a-z]{1,16}$ ]] && out=$(jq -r --arg r "$p" --arg am "$am" --arg cw "$cw" --arg sf "$sf" --arg hg "$hg" --arg hb "$HOOK_COMMAND_BASH" "$PROFILE_ROW_JQ" "$src" 2>/dev/null <<<"{\"$p\":${PROFILE_DIGEST_ROW:-null}}") || out=""
   IFS=$'\x1f' read -r pset penv pflags prc <<< "$out"
   if [[ -z "$pset" ]]; then
     [[ -z "$sf" ]] || { _profile_refused "$id" "row $p malformed"; return 1; }

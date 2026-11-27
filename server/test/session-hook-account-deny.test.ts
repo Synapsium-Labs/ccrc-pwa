@@ -13,10 +13,11 @@
  * live HOME.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
+import { HOOK_ONLY_GO, goHookAsync, hookBoth } from './hookTwin.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 /** The one MUST-ALLOW corpus, iterated, never respelled (`account-deny.test.ts` and the plan's Step 4b read it too). */
@@ -52,7 +53,7 @@ const CALLERS: ReadonlyArray<[string, string, Record<string, unknown>]> = [
 ];
 
 const hookEnv = (id: string): NodeJS.ProcessEnv => ({
-  ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+  ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
   TMUX_PANE: `%${id}`, CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
 });
 const payload = (tool: string, input: Record<string, unknown>, extra: Record<string, unknown>): string =>
@@ -60,7 +61,8 @@ const payload = (tool: string, input: Record<string, unknown>, extra: Record<str
 
 /** One PreToolUse event through the real hook: the raw stdout, after the hook contract's checks. */
 const fireRaw = (id: string, tool: string, input: Record<string, unknown>, extra: Record<string, unknown>): string => {
-  const r = spawnSync('bash', [HOOK], { input: payload(tool, input, extra), encoding: 'utf8', env: hookEnv(id) });
+  // the Go core and the bash, from the same fixture, must answer the same (Go core wave 2, Task 5)
+  const r = hookBoth(home, payload(tool, input, extra), hookEnv(id));
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
   expect(r.stderr, 'the hook contract: silent on stderr').toBe('');
   return r.stdout;
@@ -81,7 +83,9 @@ const fireMany = async (id: string, extra: Record<string, unknown>, rows: Readon
     while (next < rows.length) {
       const i = next++;
       const row = rows[i]!;
-      out[i] = await new Promise<string>((resolve, reject) => {
+      const go = goHookAsync(payload(row.tool, row.input, extra), hookEnv(id));
+      // a go-only run (CCRC_HOOK_ONLY=go) reads the Go hook's answer alone, as hookBoth does there
+      out[i] = HOOK_ONLY_GO ? await go.then(([c, so, se]) => (c === 0 && se === '' ? so : `exit ${c} stderr ${se}`)) : await new Promise<string>((resolve, reject) => {
         const p = spawn('bash', [HOOK], { env: hookEnv(id) });
         let so = ''; let se = '';
         p.stdout.on('data', (d: Buffer) => { so += d.toString(); });
@@ -90,9 +94,13 @@ const fireMany = async (id: string, extra: Record<string, unknown>, rows: Readon
         p.on('close', (code) => resolve(code === 0 && se === '' ? so : `exit ${code} stderr ${se}`));
         p.stdin.end(payload(row.tool, row.input, extra));
       });
+      const [gc, gso] = await go;
+      expect({ status: gc, stdout: gso }, `the Go hook answers as the bash does: ${JSON.stringify(row.input)}`).toEqual({ status: 0, stdout: out[i] });
     }
   };
-  await Promise.all([worker(), worker(), worker(), worker()]);
+  // one at a time on Windows: there a hook's pane lookup runs the `#!` tmux stand-in through MSYS2's bash, and four at
+  // once on a loaded box outran its 2 s bound (no session, nothing decided: measured, Task 9b gate round)
+  await Promise.all(Array.from({ length: process.platform === 'win32' ? 1 : 4 }, () => worker()));
   return out;
 };
 

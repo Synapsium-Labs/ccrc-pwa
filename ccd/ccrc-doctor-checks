@@ -206,7 +206,7 @@ CCRC_DOCTOR_CHECKS=(
   name
   disk box-settings carry-copies   # one line, as `flock timeout`: _check_box-settings and then _check_carry-copies are at the END of this file
   wrappers
-  skills
+  skills ccd-core   # one line, as `flock timeout`: _check_ccd-core is at the very END of this file (the Go core, spec 2026-11-24)
   accounts
   credentials auto-memory   # one line, as `flock timeout`: _check_auto-memory follows _check_credentials (Overlord W1a launch profiles PR B)
   pools
@@ -6304,7 +6304,7 @@ _check_memory() {
     elif [ -r "${h}settings.json" ]; then
       hooked=0
       while IFS= read -r line || [ -n "$line" ]; do
-        case "$line" in *session-hook.sh*) hooked=1; break ;; esac
+        case "$line" in *session-hook.sh*|*/libexec/ccrc/core/ccrc-core*) hooked=1; break ;; esac
       done < "${h}settings.json"
       [ "$hooked" -eq 1 ] || unreachable="${unreachable:+$unreachable }$b"
     else
@@ -10735,9 +10735,9 @@ _dh_events() {   # -> the approved event names on stdout, one per line; rc 1 unr
   printf '%s\n' PreToolUse
 }
 
-# CCRC'S OWN HOOK, as the installer writes it: a hook object whose command names `/session-hook.sh`. One jq definition,
+# CCRC'S OWN HOOK, as the installer writes it: a hook object whose command names `/session-hook.sh` (the bash hook) or `/libexec/ccrc/core/ccrc-core` (the Go core's, wave 2: a box in either mode is hooked). One jq definition,
 # read by `_check_delegation-hooks` and `_check_overlord-mods` (Overlord W1 sandbox A2, Task 7).
-DR_OWN_HOOK_JQ='def ownhook: type == "object" and ((.command // "") | tostring | contains("/session-hook.sh"));'
+DR_OWN_HOOK_JQ='def ownhook: type == "object" and ((.command // "") | tostring | (contains("/session-hook.sh") or contains("/libexec/ccrc/core/ccrc-core")));'
 _check_delegation-hooks() {
   local _srv_role=""
   # `-f` BEFORE `-r` (D-3025); `${BOX_ENV_FILE:-}` because a test sources this file bare under `set -u`.
@@ -12864,4 +12864,96 @@ _check_model-release-lookup() {
     "pass"$'\x1f'*) _dr_pass model-release-lookup "${v#*$'\x1f'}" ;;
     *) _dr_skip model-release-lookup "the Codex release lookup record is unavailable or could not be measured"; return 3 ;;
   esac
+}
+
+# ── ccd-core: the Go core the launcher starts for its go-mode verbs (spec 2026-11-24 §4, §7) ──
+# The launcher starts a verb its table lists on ~/.local/libexec/ccrc/core/ccrc-core[.exe] only when the binary matches
+# the digest the table carries, and refuses the start otherwise; this measures the same binary against the shipped tree:
+# the launcher's own self-test first (it checks the body), then, when the shipped `core/entries.json` puts an entry in
+# go mode on this box's platform, the installed binary against the tree's `core/bin/<goos>-<goarch>/` one, byte for
+# byte (`diff`, the tool `skills` already needs: the same answer a digest comparison gives). The platform is Go's name
+# for it, asked as the installer's `core_platform` asks it in Python (another process, so its own copy of the mapping):
+# CCD_OS and _ccd_is_windows for the system, bash's own HOSTTYPE for the machine. A server-role box runs no ccd.
+# A `~/.cc-sessions/ccd-node-off` left from the Node twin is read by nothing since `ccd-go-off` replaced it, so a verb
+# it had sent back to bash runs on the core again: a check that would pass WARNs while it stands (`_ccd_core_pass`).
+# THE HOOK'S REGISTERED COMMAND AGAINST THE MODE NOW IN FORCE (Go core wave 2, Task 9a fix round 1, F3). settings.json holds
+# the command the installer last wrote (the core's in go mode, the bash hook's otherwise) and changes only when the installer
+# next runs, while the mode is asked of the launcher's one reader (`--ccrc-entry-hook-mode`, as the installer asks it): a
+# `hook` line in `ccd-go-off`, a changed binary or a table moved back to bash makes them differ. The core hook itself hands a
+# call to the bash hook at once when `ccd-go-off` says so, so nothing breaks meanwhile; this line says the registration is
+# stale. Prints one line naming the homes (and the two modes) on a disagreement, nothing otherwise.
+_ccd_core_hook_drift() {
+  local out want=bash h f cmds="" bad="" b
+  command -v jq >/dev/null 2>&1 || return 0
+  out="$(_plat_timeout "$CCRC_DOCTOR_DOCS_TIMEOUT" python3 -IS "$HOME/.local/bin/ccd" --ccrc-entry-hook-mode </dev/null 2>/dev/null 3>&-)" || out=""
+  [ "$out" = go ] && want=go
+  for h in "$HOME"/.claude*/; do
+    f="${h}settings.json"; [ -f "$f" ] && [ -r "$f" ] || continue
+    cmds="$(jq -r "$DR_OWN_HOOK_JQ"' [(.hooks // {})[]? | .[]? | (.hooks // [])[]? | select(ownhook) | .command | if contains("/libexec/ccrc/core/ccrc-core") then "go" else "bash" end] | unique | .[]' "$f" 2>/dev/null)" || continue
+    for b in $cmds; do [ "$b" = "$want" ] || { bad="${bad:+$bad, }${h%/}"; break; }; done
+  done
+  [ -z "$bad" ] || printf '%s' "the mode in force is $want, but settings.json registers the other hook in: ${bad//$HOME/\$HOME}"
+}
+_ccd_core_pass() {   # <what passed> -> the PASS line, or the WARN one while a Node-twin ccd-node-off stands or a home registers the other mode's hook
+  local off="$HOME/.cc-sessions/ccd-node-off" drift=""
+  drift="$(_ccd_core_hook_drift)"
+  if [ -n "$drift" ]; then
+    _dr_warn ccd-core "$1; but $drift" \
+      "re-run the installer into every home: bash ~/.cc-sessions/install-session-hooks.sh (ccrc update does it); until then the core hook honours ccd-go-off itself, so nothing is broken"
+    return 2
+  fi
+  if [ -e "$off" ] || [ -L "$off" ]; then
+    _dr_warn ccd-core "$1; but \$HOME/.cc-sessions/ccd-node-off still stands, and nothing reads it since the Go core replaced the Node twin: a verb it sent back to Bash runs on the core again" \
+      "ccd-go-off replaced it: write its lines into ~/.cc-sessions/ccd-go-off (empty sends every verb to Bash), then remove ~/.cc-sessions/ccd-node-off"
+    return 2
+  fi
+  _dr_pass ccd-core "$1"
+}
+_check_ccd-core() {
+  local role="" table="$BOX_TREE_DIR/core/entries.json" goos="$CCD_OS" goarch="" exe=ccrc-core verbs="" out="" rc=0
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  [ "$role" != server ] || { _dr_skip ccd-core "this box records CCRC_ROLE=server, so it runs no ccd and no Go core"; return 3; }
+  out="$(_plat_timeout "$CCRC_DOCTOR_DOCS_TIMEOUT" python3 -IS "$HOME/.local/bin/ccd" --ccrc-entry-self-test </dev/null 2>&1 3>&-)" || rc=$?
+  if [ "$rc" -ne 0 ] || [[ "$out" != "ccd-entry-self-test "* ]]; then
+    _dr_fail ccd-core "the launcher at \$HOME/.local/bin/ccd did not pass its self-test (rc $rc): $(_dr_first_line "$out")" \
+      "re-run ccrc update (or ccrc install)"
+    return 1
+  fi
+  if [ ! -f "$table" ]; then
+    _dr_fail ccd-core "the shipped tree has no $table, so nothing on this box says which verbs run on the Go core" \
+      "re-run ccrc update (or ccrc install) to place the shipped tree"
+    return 1
+  fi
+  command -v jq >/dev/null 2>&1 || { _dr_warn ccd-core "jq is not on PATH, so the shipped core table could not be read" "install jq"; return 2; }
+  _ccd_is_windows && goos=windows
+  if ! verbs="$(jq -r --arg p "$goos" '[.entries | to_entries[] | select(.value.mode[$p]? == "go") | .key] | sort | join(" ")' "$table" 2>/dev/null)"; then
+    _dr_fail ccd-core "the shipped tree's $table cannot be read as the core's entry table" "re-run ccrc update (or ccrc install) to place the shipped tree"
+    return 1
+  fi
+  if [ -z "$verbs" ]; then
+    _ccd_core_pass "the launcher passes its self-test; no verb runs on the Go core on $goos, so the core is not in use here"
+    return
+  fi
+  case "${HOSTTYPE:-}" in x86_64|amd64) goarch=amd64 ;; aarch64|arm64) goarch=arm64 ;; esac
+  if [ -z "$goarch" ]; then
+    _dr_fail ccd-core "this machine (${HOSTTYPE:-unknown}) has no Go core build, and the shipped table runs $verbs on the core on $goos" \
+      "the installer refuses this machine outright (the Go core is built for amd64 and arm64 only), so ccd-go-off cannot help: install on an amd64 or arm64 machine, or from a tree whose core/entries.json runs $verbs in bash on $goos"
+    return 1
+  fi
+  [ "$goos" != windows ] || exe=ccrc-core.exe
+  local rel="core/bin/$goos-$goarch/$exe"
+  if [ ! -f "$BOX_TREE_DIR/$rel" ]; then
+    _dr_fail ccd-core "the shipped tree has no $rel, the binary for $verbs on this box" "re-run ccrc update (or ccrc install) to place a complete tree"
+    return 1
+  fi
+  command -v diff >/dev/null 2>&1 || { _dr_warn ccd-core "diff is not on PATH, so the installed core could not be compared with the shipped tree" "install diffutils"; return 2; }
+  if [ ! -f "$HOME/.local/libexec/ccrc/core/$exe" ]; then
+    _dr_fail ccd-core "\$HOME/.local/libexec/ccrc/core/$exe is missing" "re-run ccrc update"
+    return 1
+  fi
+  out="$(diff -q "$BOX_TREE_DIR/$rel" "$HOME/.local/libexec/ccrc/core/$exe" 2>&1)" || {
+    _dr_fail ccd-core "the installed core at \$HOME/.local/libexec/ccrc/core/$exe is not the shipped tree's $rel: $(_dr_first_line "$out")" "re-run ccrc update"
+    return 1
+  }
+  _ccd_core_pass "the launcher passes its self-test, and \$HOME/.local/libexec/ccrc/core/$exe is the shipped tree's $rel ($verbs on the core)"
 }

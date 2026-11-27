@@ -14,11 +14,11 @@
 // harness is COPIED from session-hook-roster-card.test.ts (a test file cannot import another). The purge cases run ccd's
 // own functions through `makeCcdHarness`, in a fixture HOME of their own.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { hookBoth } from './hookTwin.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 const GENERATION = '0189abcd-1234-5678-9abc-0123456789ab';
@@ -105,16 +105,15 @@ const preTool = (): object => ({ ...base(), hook_event_name: 'PreToolUse', tool_
 const postTool = (): object => ({ ...base(), hook_event_name: 'PostToolUse', tool_name: 'Read', tool_use_id: 'toolu_1', tool_input: { file_path: '/x' }, tool_response: {} });
 const stop = (): object => ({ ...base(), hook_event_name: 'Stop', stop_hook_active: false });
 
+let tol = 2500;
 const hook = (p: object, env: Record<string, string> = {}): { status: number | null; stdout: string; ms: number } => {
-  const t0 = Date.now();
-  const r = spawnSync('bash', [HOOK], {
-    input: JSON.stringify(p), encoding: 'utf8',
-    env: {
-      ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: SID, CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION, ...env,
-    },
-  });
-  return { status: r.status, stdout: r.stdout, ms: Date.now() - t0 };
+  // the Go core and the bash, each from the same fixture state, must answer the same and leave the same files
+  // (Go core wave 2, Task 6): the pending field, the stub client's argv and bodies
+  const r = hookBoth(home, JSON.stringify(p), {
+    ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
+    TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: SID, CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION, ...env,
+  }, { hook: HOOK, watch: ['api.argv', 'api.bodies', 'api.once'], tree: true, tol });
+  return { status: r.status, stdout: r.stdout, ms: r.ms };
 };
 
 describe('the start report: what is sent', () => {
@@ -309,7 +308,9 @@ describe('the start report: what is kept and resent', () => {
 });
 
 describe('the start report: the budget, the answers that count a try, and the back-off (review 1911)', () => {
-  it.each([['SessionStart', (): object => start('clear')], ['UserPromptSubmit', prompt]] as const)(
+  // Linux and macOS only: the slow server is `sleep 3.6` against the 4 s budget, and on Windows an MSYS2 sleep of that
+  // length under sh takes about 4 s with its process starts (measured), so the one send no longer fits there in either mode
+  it.skipIf(process.platform === 'win32').each([['SessionStart', (): object => start('clear')], ['UserPromptSubmit', prompt]] as const)(
     'a %s against a slow server that answers (202 after 3.6 s) with two kept reports stays inside the 4 s budget (F2)', (_name, ev) => {
       const base = hook(prompt());
       expect(calls(), 'nothing kept, nothing sent').toBe(0);
@@ -465,6 +466,12 @@ describe('the start report: the budget, the answers that count a try, and the ba
     hook(start('clear'));
     const end = Date.now();
     expect(spool()!.after, 'a 3 s pass still leaves the full 5 s').toBeGreaterThanOrEqual(end + SHORT - 300);
+  }, 30_000);
+
+  it('the Go hook stamps the back-off at the end of the pass too: a 3 s pass, the two stamps within 1.5 s of their runs\' starts (G7)', () => {
+    answer('slowstale');
+    tol = 1500;
+    try { hook(start('clear')); } finally { tol = 2500; }
   }, 30_000);
 
   it('a fresh report taken clears a standing back-off, so the kept reports go on the next event (G7)', () => {

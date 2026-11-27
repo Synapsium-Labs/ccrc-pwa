@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import { spawnSyncGroup } from './spawnGroup.js';
+import { IMPLS, runGoHook, type Impl } from './hookTwin.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 const OWNER = 'demo-quiet-basin';
@@ -34,6 +35,16 @@ const src = fs.readFileSync(HOOK, 'utf8');
 const constant = (name: string, plan: number): number => Number(src.match(new RegExp(`${name}=(\\d+)`))?.[1] ?? plan);
 const LRC_MAX_BYTES = constant('LRC_MAX_BYTES', 1048576);
 const LRC_DROP_RESERVE = constant('LRC_DROP_RESERVE', 4096);
+
+/** The implementation `run` starts (Go core wave 2): bash, unless a describe that runs on both sets it for its cases. */
+let impl: Impl = 'bash';
+const useImpl = (i: Impl): void => {
+  beforeEach(() => { impl = i; });
+  afterEach(() => { impl = 'bash'; });
+};
+/** A case that stubs a PATH tool the Go hook never runs (jq, wc), swaps a node between two of the bash's builtins, or reads the
+ *  bash's text: it stays bash-only, and its Go twin is a unit test in core/ where the guard lives. */
+const bashOnly = (i: Impl): typeof it | typeof it.skip => (i === 'bash' ? it : it.skip);
 
 let home: string;
 const reg = (): string => path.join(home, '.cc-sessions');
@@ -64,7 +75,7 @@ const hookEnv = (env: Record<string, string> = {}): NodeJS.ProcessEnv => {
   const e: NodeJS.ProcessEnv = { ...process.env };
   delete e['OSTYPE'];
   return {
-    ...e, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+    ...e, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
     TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
     CLAUDE_CODE_EXECPATH: '', ...env,
   };
@@ -75,11 +86,12 @@ type Ran = { status: number | null; timedOut: boolean; ms: number; stderr: strin
 const run = (payload: object | string, env: Record<string, string> = {}, timeout = 120_000): Ran => {
   for (let attempt = 0; ; attempt += 1) {
     const answered = records(tmuxAnswered()).length;
-    const t0 = Date.now();
-    const r = spawnSyncGroup('bash', [HOOK], { input: typeof payload === 'string' ? payload : JSON.stringify(payload), encoding: 'utf8', env: hookEnv(env), timeout });
-    const timedOut = (r.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT';
+    const t0 = performance.now();
+    const r = impl === 'go' ? runGoHook(home, payload, hookEnv(env))
+      : spawnSyncGroup('bash', [HOOK], { input: typeof payload === 'string' ? payload : JSON.stringify(payload), encoding: 'utf8', env: hookEnv(env), timeout });
+    const timedOut = 'error' in r && (r.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT';
     const skipped = hookEnv(env)['TMUX_PANE'] !== '' && records(tmuxAnswered()).length === answered;
-    if (!skipped || timedOut || attempt === 4) return { status: r.status, timedOut, ms: Date.now() - t0, stderr: String(r.stderr ?? '') };
+    if (!skipped || timedOut || attempt === 4) return { status: r.status, timedOut, ms: performance.now() - t0, stderr: String(r.stderr ?? '') };
   }
 };
 const ok = (payload: object | string, env: Record<string, string> = {}): void => {
@@ -138,7 +150,9 @@ const plant = (bytes: number): void => {
 };
 const size = (): number => fs.statSync(delegFile()).size;
 
-describe('the launch record: what a launch appends (session-continuity 6b)', () => {
+describe.each(IMPLS)('the launch record: what a launch appends (session-continuity 6b) (%s)', (i) => {
+  useImpl(i);
+  const itB = bashOnly(i);
   it('a background Workflow launch appends one workflow row: time, wrapper, uuid, run, task and script, and nothing else of the payload', () => {
     const before = Date.now();
     expect(added(workflow())).toEqual([WORKFLOW_ROW]);
@@ -228,7 +242,9 @@ describe('the launch record: what a launch appends (session-continuity 6b)', () 
   });
 });
 
-describe('the launch record: the wrapper', () => {
+describe.each(IMPLS)('the launch record: the wrapper (%s)', (i) => {
+  useImpl(i);
+  const itB = bashOnly(i);
   it('a FIFO, a link, a directory, an over-long or an out-of-class value at $REG/<id>.wrapper writes w null and never blocks', () => {
     const elsewhere = path.join(home, 'elsewhere');
     fs.writeFileSync(elsewhere, 'lane-b');
@@ -264,7 +280,9 @@ describe('the launch record: the wrapper', () => {
   });
 });
 
-describe('the launch record: the script path', () => {
+describe.each(IMPLS)('the launch record: the script path (%s)', (i) => {
+  useImpl(i);
+  const itB = bashOnly(i);
   const bad: Array<[string, Record<string, unknown>]> = [
     ['a working-directory copy', { scriptPath: `/rig/repo/x-${RUN}.js` }],
     ['a .. segment', { scriptPath: `${SIDECAR}/workflows/scripts/../x.js` }],
@@ -346,7 +364,9 @@ describe('the launch record: the script path', () => {
   });
 });
 
-describe('the launch record: no event loses its hookstate or its turn marker', () => {
+describe.each(IMPLS)('the launch record: no event loses its hookstate or its turn marker (%s)', (i) => {
+  useImpl(i);
+  const itB = bashOnly(i);
   const states = (): { state: boolean; turn: boolean } => ({ state: fs.existsSync(stateFile()), turn: fs.existsSync(turnFile()) });
   const clear = (): void => { fs.rmSync(stateFile(), { force: true }); fs.rmSync(turnFile(), { force: true }); };
 
@@ -385,7 +405,7 @@ describe('the launch record: no event loses its hookstate or its turn marker', (
       fs.rmSync(path.join(home, 'bin', 'wc'), { force: true });
       fs.writeFileSync(genFile(), GENERATION);
       prep();
-      stub?.();
+      if (impl === 'bash') stub?.();   // the stub is a `wc` the bash forks; the Go hook stats the file
       fs.rmSync(stateFile(), { force: true });
       ok(payload);
       expect(fs.existsSync(stateFile()), `${label}: the hookstate was written`).toBe(true);
@@ -393,7 +413,9 @@ describe('the launch record: no event loses its hookstate or its turn marker', (
   });
 });
 
-describe('the launch record: its budget', () => {
+describe.each(IMPLS)('the launch record: its budget (%s)', (i) => {
+  useImpl(i);
+  const itB = bashOnly(i);
   const dropRows = (): any[] => rows().filter((r) => r.k === 'drop');
   it('the budget: past LRC_MAX_BYTES no row is written and one budget drop row is, until LRC_DROP_RESERVE is spent; every line in the file parses', () => {
     expect([LRC_MAX_BYTES, LRC_DROP_RESERVE], 'the provisional values (D-8366)').toEqual([1048576, 4096]);
@@ -446,7 +468,8 @@ describe('the launch record: its budget', () => {
       ['a link', () => { fs.writeFileSync(elsewhere, 'kept\n'); fs.symlinkSync(elsewhere, delegFile()); }],
       ['a dangling link', () => { fs.symlinkSync(path.join(home, 'nowhere'), delegFile()); }],
       ['a directory', () => { fs.mkdirSync(delegFile()); }],
-      ['a FIFO', () => { execFileSync('mkfifo', [delegFile()]); }],
+      // not on Windows: an MSYS2 FIFO is invisible to a native program (D-TBD-go-hook-windows-fifo)
+      ...(process.platform === 'win32' ? [] : [['a FIFO', () => { execFileSync('mkfifo', [delegFile()]); }] as [string, () => void]]),
     ];
     for (const [label, make] of cases) {
       fs.rmSync(delegFile(), { recursive: true, force: true });
@@ -463,7 +486,7 @@ describe('the launch record: its budget', () => {
     }
   });
 
-  it('a symlink, a directory or a FIFO that appears at $REG/<id>.deleg AFTER the gate is never written through either', () => {
+  itB('a symlink, a directory or a FIFO that appears at $REG/<id>.deleg AFTER the gate is never written through either', () => {
     // The gate (before the parse) saw no file; a jq stand-in runs the real jq and then makes the object, so only the append's own type test stands between it and the write.
     const elsewhere = path.join(home, 'elsewhere');
     const cases: Array<[string, string]> = [
@@ -490,7 +513,7 @@ describe('the launch record: its budget', () => {
     fs.rmSync(path.join(home, 'bin', 'jq'));
   });
 
-  it('a generation that changed between the parse and the append, or a pane generation that is not the row\'s, writes nothing', () => {
+  itB('a generation that changed between the parse and the append, or a pane generation that is not the row\'s, writes nothing', () => {
     expect(added(workflow()), 'control: with the real jq the event is recorded').toHaveLength(1);
     const flag = path.join(home, 'swapped');
     fs.writeFileSync(path.join(home, 'bin', 'jq'),
@@ -560,7 +583,7 @@ describe('the launch record: its budget', () => {
     expect(fs.readFileSync(delegFile()).equals(want), 'nothing was written').toBe(true);
   });
 
-  it('an append that lands after the row was purged leaves no .deleg behind', () => {
+  itB('an append that lands after the row was purged leaves no .deleg behind', () => {
     plant(120);   // one row, so the append forks its `wc -c`: it forks one only when the file exists
     fs.writeFileSync(path.join(home, 'bin', 'wc'), `#!/bin/sh\n'${REAL_WC}' "$@"\n`, { mode: 0o755 });
     expect(added(workflow()), 'control: a plain wc, the row lands').toHaveLength(1);
@@ -571,7 +594,9 @@ describe('the launch record: its budget', () => {
   });
 });
 
-describe('the launch record: its place in the hook', () => {
+describe.each(IMPLS)('the launch record: its place in the hook (%s)', (i) => {
+  useImpl(i);
+  const itB = bashOnly(i);
   it('the launch record needs no spool directory, and the spool still needs its own', () => {
     expect(added(workflow())).toHaveLength(1);
     expect(fs.existsSync(path.join(reg(), 'delegation')), 'the hook never makes the spool directory').toBe(false);
@@ -591,7 +616,7 @@ describe('the launch record: its place in the hook', () => {
   const logging = (name: string, real: string, logFile: string, line = '"$#"'): void =>
     fs.writeFileSync(path.join(home, 'bin', name), `#!/bin/sh\nprintf '%s\\n' ${line} >> '${logFile}'\nexec '${real}' "$@"\n`, { mode: 0o755 });
 
-  it('one parse: the same events fork jq exactly as often with the launch record as without it, and only an event that writes a row forks wc', () => {
+  itB('one parse: the same events fork jq exactly as often with the launch record as without it, and only an event that writes a row forks wc', () => {
     const jqLog = path.join(home, 'jq-calls');
     const wcLog = path.join(home, 'wc-calls');
     logging('jq', REAL_JQ, jqLog);
@@ -631,7 +656,7 @@ describe('the launch record: its place in the hook', () => {
     expect(count(wcLog)).toBe(2);
   });
 
-  it('with no spool directory, only a PostToolUse quoting Agent, Task, Workflow or SendMessage compiles DSP_DEFS', () => {
+  itB('with no spool directory, only a PostToolUse quoting Agent, Task, Workflow or SendMessage compiles DSP_DEFS', () => {
     const lenLog = path.join(home, 'jq-lengths');
     // Logs the length of the parse program (the one that defines `keep`), found among the arguments after the `--arg` pairs.
     fs.writeFileSync(path.join(home, 'bin', 'jq'), `#!/bin/sh
@@ -675,7 +700,7 @@ exec '${REAL_JQ}' "$@"
     expect(text()).not.toContain('SENTINEL');
   });
 
-  it('the constants are spelled once in the hook, beside the appender', () => {
+  itB('the constants are spelled once in the hook, beside the appender', () => {
     expect(src.match(/LRC_MAX_BYTES=\d+ LRC_DROP_RESERVE=\d+/g)).toHaveLength(1);
     expect(src.match(/^_hook_launch_record_append\(\)/gm)).toHaveLength(1);
     expect(src.indexOf('# <<< delegation-spool')).toBeLessThan(src.indexOf('# >>> launch-record'));

@@ -14,6 +14,8 @@ import { spawnSync } from 'node:child_process';
 import { spawnSyncGroup } from './spawnGroup.js';
 import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv, stubContainedTool, harnessBin } from './ccdWsHelpers.js';
+import { HOOK_ONLY_GO, hookBoth } from './hookTwin.js';
+import { coreBinary } from './coreBuild.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 const LIB = path.resolve(__dirname, '../../ccd/lib');
@@ -32,9 +34,12 @@ const ASUB = (a: string): string => `ccrc: this ${a} is held because the session
 let home: string;
 let env: NodeJS.ProcessEnv;
 let hook = HOOK;
+/** The Go core this case runs (undefined: the built one), a copy whose lib/ lacks the module for a missing module. */
+let core: string | undefined;
 beforeEach(() => {
   home = mkTmp('ccrc-mailhold-hook-');
   hook = HOOK;
+  core = undefined;
   fs.mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
   fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
   fs.writeFileSync(reg(`${ID}.generation`), GENERATION);
@@ -47,6 +52,16 @@ beforeEach(() => {
 });
 afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
+/** The built core copied beside a lib/ that holds every module but mail-hold.jq: the Go hook's missing module. */
+function coreWithoutModule(): string {
+  const dir = mkTmp('ccrc-mailhold-core-');
+  fs.mkdirSync(path.join(dir, 'lib'));
+  for (const f of fs.readdirSync(LIB)) if (f !== 'mail-hold.jq') fs.copyFileSync(path.join(LIB, f), path.join(dir, 'lib', f));
+  const exe = path.join(dir, path.basename(coreBinary()));
+  fs.copyFileSync(coreBinary(), exe);
+  fs.chmodSync(exe, 0o755);
+  return exe;
+}
 function reg(f: string): string { return path.join(home, '.cc-sessions', f); }
 function arm(which: 'notice' | 'refuse'): void { fs.writeFileSync(reg(`mailhold-${which}-live`), ''); }
 const disarm = (which: 'notice' | 'refuse'): void => { fs.rmSync(reg(`mailhold-${which}-live`), { force: true }); };
@@ -62,8 +77,8 @@ const logged = (): string[] => logLines().map((f) => f.slice(1).join(' '));
 
 interface Out { stdout: string; deny: string | null; context: string | null }
 const run = (payload: object): Out => {
-  const r = spawnSyncGroup('bash', [hook], { input: JSON.stringify(payload), encoding: 'utf8', env, timeout: 60_000 });
-  expect(r.error, 'the spawn itself did not fail').toBeUndefined();
+  // the Go core and the bash, each from the same fixture state, must answer the same (Go core wave 2, Task 5)
+  const r = hookBoth(home, JSON.stringify(payload), env, { hook, core });
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
   expect(r.stderr, 'the hook is silent on stderr').toBe('');
   const line = r.stdout.trim();
@@ -80,7 +95,9 @@ const denyEnvelope = (reason: string): string => JSON.stringify({ hookSpecificOu
 const nudgeEnvelope = (c: string): string => JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: c } });
 
 describe('no marker: the call pays nothing new', () => {
-  it('an ungated Read with no marker makes the pinned number of jq calls, none of them the block\'s', () => {
+  // bash-only: it counts the bash hook's jq forks, and the Go hook forks no jq, so a go-only run skips it (both modes on
+  // the Linux bench)
+  it.skipIf(HOOK_ONLY_GO)('an ungated Read with no marker makes the pinned number of jq calls, none of them the block\'s', () => {
     const realJq = spawnSync('sh', ['-c', 'command -v jq'], { encoding: 'utf8' }).stdout.trim();
     expect(realJq).not.toBe('');
     const calls = path.join(home, 'jq-calls');
@@ -262,6 +279,7 @@ describe('a missing module (D3)', () => {
     fs.copyFileSync(HOOK, path.join(dir, 'session-hook.sh'));
     for (const f of fs.readdirSync(LIB)) if (f !== 'mail-hold.jq') fs.copyFileSync(path.join(LIB, f), path.join(dir, 'lib', f));
     hook = path.join(dir, 'session-hook.sh');
+    core = coreWithoutModule();
     live();
     expect(bash('git push').stdout).toBe('');
     expect(read().stdout).toBe('');
@@ -322,6 +340,9 @@ describe('the log\'s bound (P8)', () => {
     disarm('notice'); disarm('refuse');
     live();
     for (let i = 0; i < 300; i += 1) {
+      // the projection rewrites the marker while the mail waits, as it does on a box; on a slow box 300 hooks outlive one
+      // 300 s marker (404 s on Windows, measured: two more lines), and the hook takes no `until` past now + 360
+      if (i % 50 === 0) live();
       if (i % 50 === 0) bash('git push');
       else if (i % 50 === 1) bash('git commit -m x');
       else if (i % 100 === 2) stop();
@@ -470,6 +491,7 @@ describe('the subagent\'s ack refusal (Task 6.1)', () => {
     fs.copyFileSync(HOOK, path.join(dir, 'session-hook.sh'));
     for (const f of fs.readdirSync(LIB)) if (f !== 'mail-hold.jq') fs.copyFileSync(path.join(LIB, f), path.join(dir, 'lib', f));
     hook = path.join(dir, 'session-hook.sh');
+    core = coreWithoutModule();
     joined();
     expect(subBash('ccrc-api mail ack 7').stdout).toBe('');
     expect(subBash('ccrc-api mail inbox').stdout).toBe('');

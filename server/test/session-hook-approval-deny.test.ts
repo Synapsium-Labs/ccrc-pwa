@@ -18,6 +18,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
+import { HOOK_ONLY_GO, hookBoth, recordGuard } from './hookTwin.js';
 import { approvalClass, rootsForChild, FORBIDDEN_CCD_VERBS, type ApprovalClass } from '../src/coord/approvalguard.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
@@ -35,6 +36,7 @@ export const hookForbiddenJq = (): string => {
 
 /** Runs the hook's jq program over a stream of `{tool_name, tool_input}` payloads: one output line per payload. */
 const runForbiddenJq = (mode: 'class' | 'deny', payloads: ReadonlyArray<{ tool_name: string; tool_input: unknown }>): string[] => {
+  for (const p of payloads) recordGuard(JSON.stringify(p));
   const r = spawnSync('jq', ['-r', '--arg', 'q', "'", '--arg', 'mode', mode, hookForbiddenJq()], {
     input: payloads.map((p) => JSON.stringify(p)).join('\n'), encoding: 'utf8', maxBuffer: 1 << 26,
   });
@@ -65,12 +67,10 @@ type Envelope = { hookSpecificOutput: { hookEventName?: string; permissionDecisi
 /** One PreToolUse event through the real hook; returns the deny reason, or null when nothing was denied. */
 const fire = (tool: string, toolInput: Record<string, unknown>, extra: Record<string, unknown> = {},
   envExtra: Record<string, string> = {}): string | null => {
-  const r = spawnSync('bash', [HOOK], {
-    input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: toolInput, cwd: CWD, ...extra }),
-    encoding: 'utf8',
-    env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION, ...envExtra },
-  });
+  // the Go core and the bash, from the same fixture, must answer the same (Go core wave 2, Task 5)
+  const r = hookBoth(home, JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: toolInput, cwd: CWD, ...extra }),
+    { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
+      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION, ...envExtra });
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
   expect(r.stderr, 'the hook contract: silent on stderr').toBe('');
   const line = r.stdout.trim();
@@ -103,7 +103,9 @@ const batches = <T>(cases: readonly T[], threads: ReadonlyArray<[string, Record<
   })));
 };
 
-describe('the hook\'s forbidden match is held equal to approvalClass over Task 12\'s corpus', () => {
+// Bash-only by nature: it runs the bash hook's own jq program; its Go twin is the golden corpus in
+// core/internal/domain/attention (TestForbiddenGolden), so a go-only run skips it.
+describe.skipIf(HOOK_ONLY_GO)('the hook\'s forbidden match is held equal to approvalClass over Task 12\'s corpus', () => {
   interface Row { tool: string; input: Record<string, unknown>; class: ApprovalClass; why: string; ctx: { cwd: string | null } }
   const rows: Row[] = JSON.parse(fs.readFileSync(CORPUS_FILE, 'utf8'));
   const HOMEDIR = '/rig/home';
@@ -132,7 +134,9 @@ describe('the hook\'s forbidden match is held equal to approvalClass over Task 1
 
 // Cleanup un-wedge, Task R3: the prune row (`GITWT` in the hook, `git worktree prune` in `FORBIDDEN_PATTERNS`) is held
 // equal over both of its fixture lists, in class mode, and deny mode answers it for every must-deny command.
-describe('the hook\'s prune row is held equal to the classifier\'s over fixtures/prune-deny', () => {
+// Bash-only by nature: it runs the bash hook's own jq program; its Go twin is the golden corpus in
+// core/internal/domain/attention (TestForbiddenGolden), so a go-only run skips it.
+describe.skipIf(HOOK_ONLY_GO)('the hook\'s prune row is held equal to the classifier\'s over fixtures/prune-deny', () => {
   const HOMEDIR = '/rig/home';
   const roots = rootsForChild({ id: ID, workdir: `${HOMEDIR}/ws/${ID}`, child: { kind: 'child', runId: 7 } }, HOMEDIR);
   const list = (k: 'deny' | 'allow'): string[] =>
@@ -399,7 +403,9 @@ describe('build guard D-6063: the CLI arm denies a flag before the verb, upgrade
     expect(cs.filter((c) => bash(c) !== null)).toEqual([]);
   }, BATCH_TIMEOUT_MS);
   // Every flag repetition is bounded ({0,8}): unbounded, a 40 KB run of flags with no verb backtracks for seconds.
-  it('timing: a 40 KB run of `claude -a ` with no verb is judged in under 1 s, and jq exits 0', () => {
+  // bash-only: it runs the bash hook's APPROVAL_FORBIDDEN_JQ directly; its Go twin is guardcost_test.go, so a go-only
+  // run skips it (both modes on the Linux bench)
+  it.skipIf(HOOK_ONLY_GO)('timing: a 40 KB run of `claude -a ` with no verb is judged in under 1 s, and jq exits 0', () => {
     expect(denyJqMs(`${'claude -a '.repeat(4000)}x`)).toBeLessThan(1000);
   });
 });
@@ -523,14 +529,18 @@ describe('build guard D-6064: a write to the build directory or the launcher, in
   });
   // Every separator repetition is bounded ({0,8}): an unbounded one made jq abort ("retry-limit-in-match over"), and
   // an empty answer is the deny arm FAILING OPEN.
-  it('timing: `~/.local/share/` then 40 KB of `./` is judged in under 1 s, and jq exits 0', () => {
+  // bash-only: it runs the bash hook's APPROVAL_FORBIDDEN_JQ directly; its Go twin is guardcost_test.go, so a go-only
+  // run skips it (both modes on the Linux bench)
+  it.skipIf(HOOK_ONLY_GO)('timing: `~/.local/share/` then 40 KB of `./` is judged in under 1 s, and jq exits 0', () => {
     expect(denyJqMs(`~/.local/share/${'./'.repeat(20000)}`)).toBeLessThan(1000);
   });
   // Segment-heavy input was already slow on main, since jq compiles a regex on every per-segment call: main's deny
   // program took 13.0 s on this 43 KB input where class mode took 4.7 s (a ratio of 2.8 to 3.1, measured on a loaded
   // box). Every segment-scanning arm first tests its anchor on the whole command, so deny mode must stay no slower
   // than main's, held as a ratio to class mode (unchanged from main) on the same input, which load scales alike.
-  it('timing: 43 KB of `cd ~/.local/ && ` is no slower in deny mode than on main (at most 3x class mode)', () => {
+  // bash-only: it runs the bash hook's APPROVAL_FORBIDDEN_JQ directly; its Go twin is guardcost_test.go, so a go-only
+  // run skips it (both modes on the Linux bench)
+  it.skipIf(HOOK_ONLY_GO)('timing: 43 KB of `cd ~/.local/ && ` is no slower in deny mode than on main (at most 3x class mode)', () => {
     const cmd = 'cd ~/.local/ && '.repeat(2700);
     const t0 = process.hrtime.bigint();
     const r = spawnSync('jq', ['-r', '--arg', 'q', "'", '--arg', 'mode', 'class', hookForbiddenJq()], {
@@ -688,7 +698,8 @@ describe('build guard D-6066: the upstream id, read from the deny file the insta
     expect(Buffer.byteLength(wide)).toBeLessThan(110_000);
     expect([...wide].length).toBeLessThanOrEqual(65_536);
     for (const setup of ['none', 'symlink', 'unparsable', 'mode 000', 'over the cap', 'over the cap in two-byte characters'] as const) {
-      if (setup === 'mode 000' && asRoot) continue;
+      // root reads a mode-000 file, and Windows has no POSIX read bits (chmod 000 leaves it readable): Linux and macOS only
+      if (setup === 'mode 000' && (asRoot || process.platform === 'win32')) continue;
       if (setup === 'over the cap in two-byte characters' && !utf8Counts) {
         console.warn('skipped setup "over the cap in two-byte characters": bash under LC_ALL=C.UTF-8 does not count one two-byte character as length 1 here');
         continue;
@@ -719,7 +730,9 @@ describe('build guard D-6066: the upstream id, read from the deny file the insta
     fs.rmSync(path.join(home, '.cc-sessions', `${ID}.child`));
     expect(cs.filter((c) => bash(c) !== null)).toEqual([]);
   }, BATCH_TIMEOUT_MS);
-  it('timing: a 40 KB run of `upstream-a -a ` with no verb, reading the deny file, is judged in under 1 s', () => {
+  // bash-only: it runs the bash hook's APPROVAL_FORBIDDEN_JQ directly; its Go twin is guardcost_test.go, so a go-only
+  // run skips it (both modes on the Linux bench)
+  it.skipIf(HOOK_ONLY_GO)('timing: a 40 KB run of `upstream-a -a ` with no verb, reading the deny file, is judged in under 1 s', () => {
     useDenyFile('upstream-a');
     expect(denyJqMs(`${'upstream-a -a '.repeat(2900)}x`, DENY())).toBeLessThan(1000);
   });
@@ -761,7 +774,9 @@ describe('build guard D-6064 and D-6065, review hardening: parent-directory targ
   // ran for minutes, past the hook's timeout, which fails open. Now one alternation of the names per command, and more
   // than 16 build-path assignments deny outright (fail closed). On this input main's deny program took 4.1 s and class
   // mode 1.25 s (a ratio of 3.3); held as at most 3.5 times class mode on the same input, as the `cd` timing pin is.
-  it('timing: 40 KB of distinct build-path assignments is denied, no slower than main (at most 3.5x class mode)', () => {
+  // bash-only: it runs the bash hook's APPROVAL_FORBIDDEN_JQ directly; its Go twin is guardcost_test.go, so a go-only
+  // run skips it (both modes on the Linux bench)
+  it.skipIf(HOOK_ONLY_GO)('timing: 40 KB of distinct build-path assignments is denied, no slower than main (at most 3.5x class mode)', () => {
     const cmd = Array.from({ length: 1600 }, (_, i) => `V${i}=~/.local/bin/claude; `).join('');
     const t0 = process.hrtime.bigint();
     const cls = spawnSync('jq', ['-r', '--arg', 'q', "'", '--arg', 'mode', 'class', hookForbiddenJq()], {

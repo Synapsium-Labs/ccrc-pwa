@@ -19,8 +19,10 @@
 //      RECORDED (the `tree-scanners` artifact, tree-scanners.mjs) and what the static detector `scansSourceTree`
 //      finds, so a shard whose record was lost, or a listing the capture cannot see, drops no scanner the detector
 //      knows; without a readable artifact, the static detector alone;
-//   4. the session-hook suites when ccd/ccd, a ccd/lib/*.sh, ccd/session-hook.sh or shared/api.ts changed
-//      (reachesSessionHook): the hook is bash, so no import reaches it.
+//   4. the session-hook suites when ccd/ccd, a ccd/lib/*.sh, ccd/session-hook.sh, shared/api.ts or the Go hook's code
+//      (core/internal/app/hook, core/internal/domain, core/gen) changed
+//      (reachesSessionHook): the hook is bash and Go, so no import reaches it;
+//   5. the core suites (CORE_TESTS) when a file under core/ changed: Go, which no import reaches either.
 // What this leaves out — a test the map has no entry for or does not trust, a TypeScript file a test reads as text
 // without importing it — the merge queue's full run catches before anything lands; the builder ran the scoped
 // tests before pushing.
@@ -53,6 +55,9 @@ export const GUARD_TESTS = [
   /^server\/test\/typecheck-tests\.test\.ts$/,
   // Reads the workflows, the README and the package metadata by name (no import, no listing).
   /^server\/test\/oss-metadata\.test\.ts$/,
+  // Regenerates the Go core's vocabulary from its owners through a spawned tsc (core/gen/vocab.mjs): no import reaches
+  // the owners, so a change to shared/*.ts alone could not select it, and a stale vocab_gen.go would pass the fast run.
+  /^server\/test\/vocab-gen\.test\.ts$/,
   // The pin suites: a pin reads its subject's source as text as often as it imports it. PIN_MAP_CARRIED leaves out
   // the ones whose subject is a script.
   /^server\/test\/[^/]*-pin\.test\.ts$/,
@@ -364,15 +369,25 @@ export function guardTests(live, readSource, durations = null, recorded = null, 
 export const SESSION_HOOK_TRIGGERS = ['ccd/ccd', 'ccd/session-hook.sh', 'shared/api.ts'];
 /** So does a change to a ccd library: ccd/ccd's code, in a file of its own. Matched by shape, so no list names one. */
 const CCD_LIBRARY = /^ccd\/lib\/[^/]+\.sh$/;
-const reachesSessionHook = (f) => SESSION_HOOK_TRIGGERS.includes(f) || CCD_LIBRARY.test(f);
+/** So does a change to the Go hook's code (Go core wave 2): its entry, its deciders, the kernel its state bytes go
+ *  through (the jq-faithful encoder), its tmux, registry and process (git, the test classifier) adapters and the vocabulary's generator. No import reaches
+ *  Go either, and the session-hook suites are what move onto both implementations as its arms port. */
+const GO_HOOK = /^core\/(internal\/app\/hook|internal\/domain|internal\/kernel|internal\/adapter\/(tmux|regfs|proc)|gen)\//;
+const reachesSessionHook = (f) => SESSION_HOOK_TRIGGERS.includes(f) || CCD_LIBRARY.test(f) || GO_HOOK.test(f);
 const SESSION_HOOK_TEST = /^server\/test\/session-hook[^/]*\.test\.ts$/;
 
+/** A change under core/ (the Go core, spec 2026-11-24 §7) runs these: the suites that build ccrc-core or read its entry
+ *  table. The map cannot vouch for them, a hand rule like the hook's: on Linux no entry runs in go, so the installer
+ *  suites never read a Go file, and a new core file is in no record. */
+export const CORE_TESTS = ['server/test/ccd-core-caps.test.ts', 'server/test/ccd-core-table.test.ts', 'server/test/ccd-core-entry.test.ts', 'server/test/ccd-entry-install.test.ts', 'server/test/hook-core-spine.test.ts'];
+const reachesCore = (f) => f.startsWith('core/');
+
 /**
- * The fast selection: the related tests and the map's untraced selection that are live, every guard suite, and
- * the session-hook suites when a trigger changed. Sorted, without duplicates. Paths are repo-relative
- * (`server/test/x.test.ts`).
+ * The fast selection: the related tests and the map's untraced selection that are live, every guard suite, the
+ * session-hook suites when a trigger changed, and the core suites when a file under core/ changed. Sorted, without
+ * duplicates. Paths are repo-relative (`server/test/x.test.ts`).
  * @param {{ live: string[], related: string[], untraced?: string[], guards: string[], changed: string[] }} args
- * @returns {{ files: string[], related: number, untraced: number, guards: number, hook: boolean }}
+ * @returns {{ files: string[], related: number, untraced: number, guards: number, hook: boolean, core: boolean }}
  */
 export function fastSelection({ live, related, untraced = [], guards, changed }) {
   const liveSet = new Set(live);
@@ -384,7 +399,9 @@ export function fastSelection({ live, related, untraced = [], guards, changed })
   const files = changed.map((f) => f.trim()).filter(Boolean);
   const hook = files.some(reachesSessionHook);
   if (hook) for (const f of live) if (SESSION_HOOK_TEST.test(f)) chosen.add(f);
-  return { files: [...chosen].sort(), related: new Set(relatedLive).size, untraced: new Set(untracedLive).size, guards: guardLive.length, hook };
+  const core = files.some(reachesCore);
+  if (core) for (const f of CORE_TESTS) if (liveSet.has(f)) chosen.add(f);
+  return { files: [...chosen].sort(), related: new Set(relatedLive).size, untraced: new Set(untracedLive).size, guards: guardLive.length, hook, core };
 }
 
 /**
@@ -476,7 +493,7 @@ function main() {
     const lines = [
       '## Fast server tests (an ordinary pull request)',
       '',
-      `${sel.files.length} test file(s) in ${plan.length} shard(s): ${sel.related} related to the change by vitest, ${sel.untraced} the map selects for paths vitest cannot follow, ${sel.guards} guard suite(s)${sel.hook ? ', and the session-hook suites (a hook trigger changed)' : ''}. The merge queue runs the full suite.`,
+      `${sel.files.length} test file(s) in ${plan.length} shard(s): ${sel.related} related to the change by vitest, ${sel.untraced} the map selects for paths vitest cannot follow, ${sel.guards} guard suite(s)${sel.hook ? ', and the session-hook suites (a hook trigger changed)' : ''}${sel.core ? ', and the core suites (a file under core/ changed)' : ''}. The merge queue runs the full suite.`,
       '',
       ...sel.files.map((f) => `- \`${f}\``),
       '',
@@ -492,7 +509,7 @@ function main() {
       ]),
     ];
     writeSummary(lines.join('\n'));
-    console.log(`fast plan: ${sel.files.length} file(s), ${plan.length} shard(s) (${sel.related} related, ${sel.untraced} untraced, ${sel.guards} guards, session-hook ${sel.hook})`);
+    console.log(`fast plan: ${sel.files.length} file(s), ${plan.length} shard(s) (${sel.related} related, ${sel.untraced} untraced, ${sel.guards} guards, session-hook ${sel.hook}, core ${sel.core})`);
   } catch (e) {
     const reason = e instanceof Error ? e.message : String(e);
     if (!fallbackMatrix || !fallbackCount) {

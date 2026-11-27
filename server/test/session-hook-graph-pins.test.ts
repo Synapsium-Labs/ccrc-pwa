@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import { tl, GRAPH, type GraphContent } from './compactCardFixtures.js';
+import { IMPLS, bashSpelling, hookBoth, runGoHook, type Impl } from './hookTwin.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 const SWEEP = path.resolve(__dirname, '../../ccd/ccd-graph-sweep');
@@ -24,6 +25,13 @@ const ID = 'lane-a';
 const GENERATION = '0189abcd-1234-5678-9abc-0123456789ab';
 const PIN = '0.9.9';
 const NODES = 4242;
+
+/** The implementation `run` starts (Go core wave 2): a card row (a SessionStart) runs both through hookBoth (Task 8a); the gate rows at the end run on both. */
+let impl: Impl = 'bash';
+const useImpl = (i: Impl): void => {
+  beforeEach(() => { impl = i; });
+  afterEach(() => { impl = 'bash'; });
+};
 
 let home: string;
 beforeEach(() => {
@@ -41,16 +49,24 @@ beforeEach(() => {
 });
 afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
-const run = (payload: object): string =>
-  execFileSync('bash', [HOOK], {
-    input: JSON.stringify(payload), encoding: 'utf8',
-    env: {
-      ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242',
-      CCRC_SESSION_GENERATION: GENERATION, CLAUDE_JOB_DIR: '',
-      TMUX: '', CLAUDE_CONFIG_DIR: '', CLAUDECODE: '',
-    },
-  });
+const run = (payload: object): string => {
+  const env = {
+    ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
+    TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242',
+    CCRC_SESSION_GENERATION: GENERATION, CLAUDE_JOB_DIR: '',
+    TMUX: '', CLAUDE_CONFIG_DIR: '', CLAUDECODE: '',
+  };
+  if (impl !== 'go' && (payload as { hook_event_name?: string }).hook_event_name === 'SessionStart') {
+    // the card rows: the bash and the Go core through hookBoth, the same stdout and the same files (Go core wave 2, Task 8a)
+    const r = hookBoth(home, JSON.stringify(payload), env, { hook: HOOK, tree: true });
+    expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
+    return String(r.stdout);
+  }
+  if (impl !== 'go') return execFileSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env });   // throws on any status but 0
+  const r = runGoHook(home, payload, env);
+  expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
+  return r.stdout;
+};
 
 /** A repository under the fixture HOME's projects root, `commits` commits
  *  deep, each changing the tree. Returns every sha, oldest first. */
@@ -132,7 +148,8 @@ const sweepPass = (rows: { path: string; outcome: string; reason: string }[]): v
   ].join('\n'));
   const source = (tree: string): string => {
     const gitDir = path.join(tree, '.git');
-    return fs.existsSync(gitDir) ? fs.realpathSync(gitDir) : gitDir;
+    // the sweep's realpath, in the spelling the bash sweep on the box writes (MSYS2's on Windows)
+    return bashSpelling(fs.existsSync(gitDir) ? fs.realpathSync(gitDir) : gitDir);
   };
   execFileSync('bash', [driver, ...rows.flatMap((r) => [source(r.path), r.outcome, r.reason])],
     { env: { ...process.env, HOME: home }, encoding: 'utf8' });
@@ -231,5 +248,58 @@ describe('the PreCompact helper argv for a real-directory graphify-out (GR1 pins
     const argv = fs.readFileSync(path.join(home, 'timeout-argv'), 'utf8');
     expect(argv).toContain(` --cwd ${tree} --graph ${tree}/graphify-out/graph.json `
       + `--labels ${tree}/graphify-out/.graphify_labels.json --set-stage `);
+  });
+});
+
+// ── The search gate and the Read nudge over the same real directory, on both implementations ─────────
+// The card rows above need the SessionStart cards (wave 2 Task 8); what the card calls "gate armed" is observable without
+// it: the search gate denies a tree it is armed for, and the Read nudge speaks for it.
+describe.each(IMPLS)('the search gate and the Read nudge for a real-directory graphify-out (GR1 pins, D-7347) (%s)', (i) => {
+  useImpl(i);
+  const grep = (tree: string): string => run({ hook_event_name: 'PreToolUse', tool_name: 'Grep', tool_input: { pattern: 'x' }, cwd: tree });
+  const reason = (tree: string): string | null => {
+    const out = grep(tree);
+    return out === '' ? null : String(JSON.parse(out).hookSpecificOutput.permissionDecisionReason);
+  };
+  it('(a) a graph built at HEAD: the exact reason, the node count and the freshness word', () => {
+    const { tree, shas } = repo(1);
+    plantGraph(tree, shas[0]!);
+    expect(reason(tree)).toBe('graphify gate: this tree has a knowledge graph (' + NODES + ' nodes, fresh) and this session has no answer from it yet.'
+      + ' Search tools open after one graph query that answers — run: `PATH="$HOME/.local/bin:$PATH" graphify query "<your question in plain words>"` '
+      + '(`PATH="$HOME/.local/bin:$PATH" graphify path "<A>" "<B>"` for a relationship, `PATH="$HOME/.local/bin:$PATH" graphify explain "<concept>"` for one concept).'
+      + ' Denial 1 of 3; after 3 the gate opens anyway.');
+  });
+  it('(b) three commits behind: armed; the word is the distance', () => {
+    const { tree, shas } = repo(4);
+    plantGraph(tree, shas[0]!);
+    expect(reason(tree)).toContain('(' + NODES + ' nodes, 3 commits behind HEAD)');
+  });
+  it('(d) ten behind arms, eleven does not: the gate\'s distance', () => {
+    const near = repo(11);
+    plantGraph(near.tree, near.shas[0]!);
+    expect(reason(near.tree)).toContain('10 commits behind HEAD');
+    fs.rmSync(near.tree, { recursive: true, force: true });
+    const far = repo(12);
+    plantGraph(far.tree, far.shas[0]!);
+    expect(grep(far.tree)).toBe('');
+  });
+  // not on Windows: the report's exclusion matches `/graphify-out/`, and a Windows file_path spells it with `\`, so both
+  // hooks nudge a Read of the report there (the bash case measured red at the same assertion, Task 9b gate round)
+  it.skipIf(process.platform === 'win32')('the Read of a source file is nudged, with no decision; a Read of the report, of a non-source file, or after a denial-free tree is not', () => {
+    const { tree, shas } = repo(1);
+    plantGraph(tree, shas[0]!);
+    const read = (file: string): string => run({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: file }, cwd: tree });
+    const nudge = JSON.parse(read(path.join(tree, 'src', 'A.TS')));
+    expect(nudge.hookSpecificOutput.permissionDecision).toBeUndefined();
+    expect(nudge.hookSpecificOutput.additionalContext).toContain('graphify: this tree has a knowledge graph (' + NODES + ' nodes, fresh)');
+    expect(nudge.hookSpecificOutput.additionalContext).toContain('Reading a named file to edit it needs no query.');
+    expect(read(path.join(tree, 'graphify-out', 'GRAPH_REPORT.md'))).toBe('');
+    expect(read('graphify-out/notes.md')).toBe('');
+    expect(read(path.join(tree, 'package.json'))).toBe('');
+    expect(read(path.join(tree, 'dist.ts', 'README'))).toBe('');
+  });
+  it('no graph, no gate: a tree without graphify-out is searched freely', () => {
+    const { tree } = repo(1);
+    expect(grep(tree)).toBe('');
   });
 });

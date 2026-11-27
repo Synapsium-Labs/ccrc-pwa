@@ -12,7 +12,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { skipsTests, scopeOf, prScope, queueScope, fastRun, docsOnly, QUEUE_ONLY, QUEUE_SKIPPABLE, QUEUE_DOCS_ONLY, FOREIGN, alwaysRunPwaTests } from '../../.github/ci/reach.mjs';
+import { skipsTests, scopeOf, prScope, queueScope, fastRun, docsOnly, QUEUE_ONLY, QUEUE_SKIPPABLE, QUEUE_DOCS_ONLY, FOREIGN, OWN, alwaysRunPwaTests } from '../../.github/ci/reach.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const REACH = path.join(ROOT, '.github', 'ci', 'reach.mjs');
@@ -67,6 +67,33 @@ describe('skipsTests: a package skips its tests only when EVERY changed file is 
       expect(list).not.toContain('.github/');
       expect(list).not.toContain(`${pkg}/`);
     }
+  });
+});
+
+describe('the Go core (spec 2026-11-24 §7): its tests read core/ alone, and core/ reaches the server and agent suites', () => {
+  it('core: its tests skip unless a file under core/, or infrastructure every check shares, changed', () => {
+    expect(OWN).toEqual({ core: ['core/', 'server/test/fixtures/approvals/digest-corpus.json'] });
+    // The kernel's encoder test reads the approval digest corpus where it lives (jqjson_test.go), so a change to it runs core.
+    expect(skipsTests('core', ['server/test/fixtures/approvals/digest-corpus.json'])).toBe(false);
+    expect(skipsTests('core', ['server/src/a.ts', 'ccd/ccd', 'agent/src/b.ts', 'pwa/src/c.ts', 'docs/x.md', 'README.md'])).toBe(true);
+    expect(skipsTests('core', ['docs/x.md', 'core/go.mod'])).toBe(false);
+    expect(skipsTests('core', ['core/internal/app/ccd/caps.go'])).toBe(false);
+    // The pipeline that runs it, and a manifest every check shares (select-tests.mjs `infraTrigger`).
+    expect(skipsTests('core', ['.github/workflows/ci.yml'])).toBe(false);
+    expect(skipsTests('core', ['server/package-lock.json'])).toBe(false);
+    // A directory, not a name prefix; and an empty change runs it, the safe direction.
+    expect(skipsTests('core', ['core-extra/a.go'])).toBe(true);
+    expect(skipsTests('core', [])).toBe(false);
+    // The queue runs it whole, a docs-only group included.
+    expect(queueScope('core', ['docs/x.md'])).toBe('all');
+    expect(queueScope('core', ['server/src/a.ts'])).toBe('all');
+  });
+
+  it('core/ reaches the agent tests and the server suite: neither lists it foreign', () => {
+    expect(skipsTests('agent', ['core/entries.json'])).toBe(false);
+    expect(prScope('agent', ['core/internal/a.go'])).toBe('all');
+    expect(Object.hasOwn(FOREIGN, 'server'), 'the server suite has no foreign list: every change reaches it').toBe(false);
+    expect(skipsTests('server', ['core/entries.json'])).toBe(false);
   });
 });
 
@@ -186,6 +213,15 @@ describe('reach.mjs CLI', () => {
 
   it('the full-ci label forces the tests on a pull request', () => {
     expect(run(['--pkg', 'agent', '--event', 'pull_request', '--full-label', 'true'], ['pwa/src/a.ts']).skip).toBe('false');
+  });
+
+  it('test (core): a pull request that changes nothing under core/ skips it; one that does, the label, the queue and the daily run do not', () => {
+    expect(run(['--pkg', 'core', '--event', 'pull_request'], ['server/src/a.ts', 'ccd/ccd']).skip).toBe('true');
+    expect(run(['--pkg', 'core', '--event', 'pull_request'], ['server/src/a.ts', 'core/go.mod']).skip).toBe('false');
+    expect(run(['--pkg', 'core', '--event', 'pull_request', '--full-label', 'true'], ['server/src/a.ts']).skip).toBe('false');
+    for (const event of ['merge_group', 'schedule', 'workflow_dispatch']) {
+      expect(run(['--pkg', 'core', '--event', event], ['server/src/a.ts']).skip, event).toBe('false');
+    }
   });
 
   it('a missing change list fails safe: the tests run', () => {

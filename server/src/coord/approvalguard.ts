@@ -171,8 +171,8 @@ export function rootsForChild(
 const WB = String.raw`(?:^|[\s;&|()\x60'"=/])`;                                  // a command word's left edge
 const reEsc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const CCD_HEAD = String.raw`${WB}ccd['"]?\s+(?:-\S+\s+)*`;
-/** A Claude settings file, a `CLAUDE.md`, a hook script. */
-const SENSITIVE_EDIT = String.raw`(?:CLAUDE\.md|settings(?:\.local)?\.json|session-hook\.sh|/hooks/)`;
+/** A Claude settings file, a `CLAUDE.md`, a hook script (the bash hook, or the Go core that runs the hook in go mode: its binary and its directory, `~/.local/libexec/ccrc/core/`). */
+const SENSITIVE_EDIT = String.raw`(?:CLAUDE\.md|settings(?:\.local)?\.json|session-hook\.sh|ccrc-core(?:\.exe)?|libexec/ccrc/core(?![\w.-])|/hooks/)`;
 /** The commands that write a file they name, the head `headBeforeTail` reads before a sensitive path. */
 const WRITE_HEAD = String.raw`>|\btee\b|\bsed\s+(?:-\S+\s+)*-i|\bperl\s+-\S*i|\bmv\b|\bcp\b|\bln\b|\btruncate\b|\brm\b`;
 /** D-5696 (spec §7.6): Claude Code's build directory and its launcher, the files a session never writes. The launcher
@@ -778,7 +778,7 @@ function noCredential(c: Simple, at: At, vars: Vars, ctx: ApprovalCtx): void {
  *  the forbidden class's `SENSITIVE_EDIT` names too (that class still catches `rm CLAUDE.md` first). `.git`, and so
  *  `.git/hooks/`, is `hasGit`'s. */
 const AGENT_FILE_PARTS: ReadonlySet<string> = new Set(['claude.md', 'claude.local.md', 'agents.md', '.mcp.json', '.claude',
-  '.husky', '.githooks', 'hooks', 'settings.json', 'settings.local.json', 'session-hook.sh',
+  '.husky', '.githooks', 'hooks', 'settings.json', 'settings.local.json', 'session-hook.sh', 'ccrc-core', 'ccrc-core.exe',
   // round 7: other agents' instructions and plugin dirs, and the git files that change what git does in the tree.
   '.claude-plugin', 'gemini.md', '.cursor', '.cursorrules', 'copilot-instructions.md', '.gitattributes', '.gitmodules',
   // round 9: more agents' instruction files.

@@ -1,6 +1,6 @@
 # ccd's Windows twin in Node — design
 
-Status: design, approved section by section by the operator on 2026-11-22. The plan follows from it.
+Status: superseded by `2026-11-24-ccrc-go-core-design.md` for everything ahead (the twin is now a Go core). Design, approved section by section by the operator on 2026-11-22.
 
 ## 1. Problem
 

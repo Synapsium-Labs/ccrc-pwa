@@ -17,6 +17,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
+import { HOOK_ONLY_GO, IMPLS, runGoHook, type Impl } from './hookTwin.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 const SRC = (): string => fs.readFileSync(HOOK, 'utf8');
@@ -69,7 +70,9 @@ const drive = (name: string, text: string, args: string[], timeout = 90_000): st
   return execFileSync('bash', [f, ...args], { encoding: 'utf8', timeout });
 };
 
-describe('the history spool append under a drain that renames the file away (D-7503)', () => {
+// Bash-only by nature: it races the bash hook's own append (its functions and a bash trap); the Go append is
+// core/internal/adapter/regfs (TestAppendRegular*, both modes on the Linux bench), so a go-only run skips it.
+describe.skipIf(HOOK_ONLY_GO)('the history spool append under a drain that renames the file away (D-7503)', () => {
   /** A drain renames the spool file to a fresh drained name, `n` times, and a sibling hook creates the file again whenever
    *  it is absent, so the path moves both ways under the appender: regular to absent (the drain) and absent to regular
    *  (the sibling). In `guard` mode the appender spins on `code` alone and counts each false evaluation, a refused append.
@@ -168,7 +171,7 @@ describe('the history spool append writes only through the descriptor it opened 
     const r = spawnSync('bash', [HOOK], {
       input: JSON.stringify({ hook_event_name: 'Stop', session_id: SID }), encoding: 'utf8',
       env: {
-        ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+        ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
         TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
         CLAUDE_JOB_DIR: '', TMUX: '', CLAUDE_CONFIG_DIR: '', CLAUDECODE: '',
         BASH_ENV: trap, T_MODE: mode, T_SPOOL: spool(), T_OUT: out,
@@ -178,20 +181,49 @@ describe('the history spool append writes only through the descriptor it opened 
     expect(r.stderr, 'the hook is silent').toBe('');
   };
 
-  it('control: with no swap the trap leaves the line in the spool file', () => {
-    const r = spawnSync('bash', [HOOK], {
-      input: JSON.stringify({ hook_event_name: 'Stop', session_id: SID }), encoding: 'utf8',
-      env: {
-        ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-        TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
-        CLAUDE_JOB_DIR: '', TMUX: '', CLAUDE_CONFIG_DIR: '', CLAUDECODE: '',
-      },
-    });
-    expect(r.status).toBe(0);
+  /** The hook's environment for a plain run (no trap): the fixture's stub tmux names the session. */
+  const plainEnv = (): NodeJS.ProcessEnv => ({
+    ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
+    TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
+    CLAUDE_JOB_DIR: '', TMUX: '', CLAUDE_CONFIG_DIR: '', CLAUDECODE: '',
+  });
+  const STOP = { hook_event_name: 'Stop', session_id: SID };
+  /** One Stop through `impl`, exit 0 and silent (Go core wave 2: the Go hook is held to the same guard by core/'s own twin of the
+   *  guard cut and of the race, in adapter/regfs). */
+  const fireStop = (impl: Impl): void => {
+    const r = impl === 'go' ? runGoHook(home, STOP, plainEnv())
+      : spawnSync('bash', [HOOK], { input: JSON.stringify(STOP), encoding: 'utf8', env: plainEnv() });
+    expect(r.status, 'the hook exits 0').toBe(0);
+    expect(r.stderr, 'the hook is silent').toBe('');
+  };
+
+  it.each(IMPLS)('control: with no swap the trap leaves the line in the spool file (%s)', (impl) => {
+    fireStop(impl);
     expect(fs.readFileSync(spool(), 'utf8')).toMatch(/"ev":"Stop"/);
+    expect(fs.readFileSync(spool(), 'utf8'), 'the fence: an empty line, the JSON, an LF').toMatch(/^\n\{"v":1,"ev":"Stop".*\}\n$/);
   });
 
-  it('a symlink swapped in after the guard never receives the line: its target stays byte-identical', () => {
+  it.each(IMPLS)('a link (live or dangling), a directory or a FIFO standing at the spool path is never written through or replaced (%s)', (impl) => {
+    const outside = path.join(home, 'outside.txt');
+    fs.writeFileSync(outside, 'outside\n');
+    const plant: Array<[string, () => void]> = [
+      ['a live link', () => fs.symlinkSync(outside, spool())],
+      ['a dangling link', () => fs.symlinkSync(path.join(home, 'nowhere'), spool())],
+      ['a directory', () => fs.mkdirSync(spool())],
+      // not on Windows: an MSYS2 FIFO is invisible to a native program (D-TBD-go-hook-windows-fifo)
+      ...(process.platform === 'win32' ? [] : [['a FIFO', () => { execFileSync('mkfifo', [spool()]); }] as [string, () => void]]),
+    ];
+    for (const [label, make] of plant) {
+      fs.rmSync(spool(), { recursive: true, force: true });
+      make();
+      fireStop(impl);
+      expect(fs.readFileSync(outside, 'utf8'), `${label}: nothing written through`).toBe('outside\n');
+      expect(fs.existsSync(path.join(home, 'nowhere')), `${label}: no target created`).toBe(false);
+      expect(fs.lstatSync(spool()).isFile(), `${label}: still not a regular file`).toBe(false);
+    }
+  });
+
+  it.skipIf(HOOK_ONLY_GO)('a symlink swapped in after the guard never receives the line: its target stays byte-identical', () => {   // a bash trap, bash-only
     const outside = path.join(home, 'outside.txt');
     fs.writeFileSync(outside, 'outside\n');
     runWithTrap('link', outside);
@@ -199,7 +231,7 @@ describe('the history spool append writes only through the descriptor it opened 
     expect(fs.readFileSync(outside, 'utf8')).toBe('outside\n');
   });
 
-  it('a drain that renames the file after the guard gets the line in the renamed file, and no new spool file is made', () => {
+  it.skipIf(HOOK_ONLY_GO)('a drain that renames the file after the guard gets the line in the renamed file, and no new spool file is made', () => {   // a bash trap, bash-only
     const drained = path.join(home, '.ccrc', 'history', 'spool', `${ID}.jsonl.draining`);
     runWithTrap('drain', drained);
     expect(fs.readFileSync(drained, 'utf8')).toMatch(/"ev":"Stop"/);
@@ -207,7 +239,9 @@ describe('the history spool append writes only through the descriptor it opened 
   });
 });
 
-describe('the join file\'s rotation target guards under a target that is renamed in and purged (D-7503)', () => {
+// Bash-only by nature: it races the bash hook's own append (its functions and a bash trap); the Go append is
+// core/internal/adapter/regfs (TestAppendRegular*, both modes on the Linux bench), so a go-only run skips it.
+describe.skipIf(HOOK_ONLY_GO)('the join file\'s rotation target guards under a target that is renamed in and purged (D-7503)', () => {
   /** A toggler moves `jp` absent to regular (`mv -f`, a rotation) and back (`rm -f`, a purge), `n` times, while a
    *  checker evaluates `expr` with `jf` a standing regular file. Every false evaluation is a rotation refused. */
   const race = (expr: string, n: number): { refused: number; ran: number } => {

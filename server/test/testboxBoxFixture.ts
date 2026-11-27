@@ -14,6 +14,7 @@ import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
+import { plantCore } from './coreBuild.js';
 
 export const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const SYS_DRIVER = path.join(REPO, 'server', 'test', 'fixtures', 'testbox-sys-driver.sh');
@@ -81,6 +82,7 @@ export function releaseTree(dir: string, version: string): string {
   cpSync(path.join(REPO, 'ccd'), path.join(tree, 'ccd'), { recursive: true });
   cpSync(path.join(REPO, 'shared'), path.join(tree, 'shared'), { recursive: true });
   cpSync(path.join(REPO, 'deploy'), path.join(tree, 'deploy'), { recursive: true, filter: (s) => !s.endsWith('ccrc-mail.token') });
+  plantCore(tree);   // the Go core's table (and this platform's binary where an entry runs in go), as a release carries it
   copyFileSync(path.join(REPO, 'install.sh'), path.join(tree, 'install.sh'));
   mkdirSync(path.join(tree, 'server'), { recursive: true });
   for (const f of ['package.json', 'package-lock.json']) copyFileSync(path.join(REPO, 'server', f), path.join(tree, 'server', f));

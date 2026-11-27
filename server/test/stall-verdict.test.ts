@@ -2117,8 +2117,9 @@ import fsHook from 'node:fs';
 import pathHook from 'node:path';
 import { mkTmp as mkTmpHook } from './tmpHelpers.js';
 import { SERVER_CAPS_FILE, renderServerCaps } from '../../shared/api.js';
+import { IMPLS, runGoHook } from './hookTwin.js';
 
-describe('a hookstate carried through a compaction reads the pre-compaction activity (D-5239)', () => {
+describe.each(IMPLS)('a hookstate carried through a compaction reads the pre-compaction activity (D-5239) (%s)', (impl) => {
   const HOOK = pathHook.resolve(__dirname, '../../ccd/session-hook.sh');
   const SID = 'lane-a-project-a';
   /** Plant `file`, run PreCompact and PostCompact (`trigger`) through the real hook behind the word, and answer the
@@ -2136,13 +2137,11 @@ describe('a hookstate carried through a compaction reads the pre-compaction acti
       const hs = pathHook.join(reg, `${SID}.hookstate.json`);
       fsHook.writeFileSync(hs, JSON.stringify(file) + '\n');
       for (const ev of ['PreCompact', 'PostCompact']) {
-        const r = spawnHook('bash', [HOOK], {
-          input: JSON.stringify({ session_id: UUID, transcript_path: '/rig/fixhome/cfg/projects/-rig-repo/x.jsonl', cwd: '/rig/repo',
-            prompt_id: '00000000-0000-4000-8000-0000000000c1', hook_event_name: ev, trigger,
-            ...(ev === 'PreCompact' ? { custom_instructions: null } : { compact_summary: 'fixture summary' }) }),
-          encoding: 'utf8',
-          env: { ...process.env, HOME: home, PATH: `${bin}:${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: '4242' },
-        });
+        const input = { session_id: UUID, transcript_path: '/rig/fixhome/cfg/projects/-rig-repo/x.jsonl', cwd: '/rig/repo',
+          prompt_id: '00000000-0000-4000-8000-0000000000c1', hook_event_name: ev, trigger,
+          ...(ev === 'PreCompact' ? { custom_instructions: null } : { compact_summary: 'fixture summary' }) };
+        const env = { ...process.env, HOME: home, PATH: `${bin}${pathHook.delimiter}${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: '4242' };
+        const r = impl === 'go' ? runGoHook(home, input, env) : spawnHook('bash', [HOOK], { input: JSON.stringify(input), encoding: 'utf8', env });
         expect(r.status).toBe(0);
       }
       const after = JSON.parse(fsHook.readFileSync(hs, 'utf8')) as { updatedAt: number; event: string };

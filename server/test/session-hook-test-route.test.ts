@@ -7,18 +7,37 @@
  *
  * Runs `ccd/session-hook.sh` for real in a fixture HOME. Never the live HOME.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
-import { platformContrast } from './platformFixtures.js';
+import { HARNESS_BASH } from './ccdWsHelpers.js';
+import { IMPLS, runGoHook, type Impl } from './hookTwin.js';
+import { platformContrast as contrastLinuxDarwin } from './platformFixtures.js';
+
+/** The bare-heavy arm is a fleet box's (Linux, `OSTYPE` linux*): on Windows MSYS2's bash sets OSTYPE=msys and the Go hook
+ *  reads its platform alike, so neither hook has a slice to send a run to there, as on macOS. So on Windows the macOS arm
+ *  is the expectation (Task 9b gate round; the bash case measured allowed at the Linux arm's assertion). */
+const platformContrast: typeof contrastLinuxDarwin = (subject, arms) => {
+  if (process.platform === 'win32') it(`${subject} — ${arms.darwin[0]} (Windows: no fleet arm, as on macOS)`, arms.darwin[1]);
+  else contrastLinuxDarwin(subject, arms);
+};
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
-const CCRC_TEST = path.resolve(__dirname, '../../ccd/ccrc-test');
+// forward slashes: the wrapper finds ccd/ccrc beside itself by ${BASH_SOURCE%/*}, which a Windows backslash path has no / for
+const CCRC_TEST = path.resolve(__dirname, '../../ccd/ccrc-test').split(path.sep).join('/');
 const GENERATION = '0189abcd-1234-5678-9abc-0123456789ab';
 const TOP = 'project-a-calm-mesa';
 const CWD = '/srv/work/project-a';
+
+/** The implementation `run` starts (Go core wave 2): every hook describe below runs on both. */
+let impl: Impl = 'bash';
+const useImpl = (i: Impl): void => {
+  beforeEach(() => { impl = i; });
+  afterEach(() => { impl = 'bash'; });
+};
+const hookRun = (input: string, e: NodeJS.ProcessEnv) => (impl === 'go' ? runGoHook(home, input, e) : spawnSync('bash', [HOOK], { input, encoding: 'utf8', env: e }));
 
 let home: string;
 beforeAll(() => {
@@ -35,11 +54,11 @@ beforeAll(() => {
 afterAll(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
 const env = (): NodeJS.ProcessEnv => ({
-  ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+  ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
   TMUX_PANE: `%${TOP}`, CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
 });
 const run = (stdin: string): string => {
-  const r = spawnSync('bash', [HOOK], { input: stdin, encoding: 'utf8', env: env() });
+  const r = hookRun(stdin, env());
   expect(r.status, 'exit 0 on every path').toBe(0);
   expect(r.stderr, 'silent on stderr').toBe('');
   return r.stdout.trim();
@@ -52,7 +71,8 @@ const bash = (command: string): string | null => {
   return e.hookSpecificOutput.permissionDecision === 'deny' ? String(e.hookSpecificOutput.permissionDecisionReason) : null;
 };
 
-describe('the test-route arm denies a test or typecheck under a systemd-run of its own (D-7298)', () => {
+describe.each(IMPLS)('the test-route arm denies a test or typecheck under a systemd-run of its own (D-7298) (%s)', (i) => {
+  useImpl(i);
   it.each([
     'systemd-run --user --scope -p MemoryMax=8G npx vitest run',
     'systemd-run --user --scope --slice=app.slice -- npx tsc --noEmit -p test/tsconfig.tests.json',
@@ -82,7 +102,8 @@ describe('the test-route arm denies a test or typecheck under a systemd-run of i
   });
 });
 
-describe('the test-route arm allows what is not a hand-placed test run (D-7298)', () => {
+describe.each(IMPLS)('the test-route arm allows what is not a hand-placed test run (D-7298) (%s)', (i) => {
+  useImpl(i);
   it.each([
     'ccrc test -- npx vitest run --maxWorkers=2 test/foo.test.ts',
     'ccrc test -- npx tsc --noEmit -p test/tsconfig.tests.json',
@@ -116,20 +137,57 @@ const BARE_HEAVY = [
   'eval "npx vitest run"',
   'make test',
 ];
-platformContrast('a bare heavy test run', {
-  darwin: ['is allowed: no slice to send it to', () => {
-    for (const cmd of BARE_HEAVY) expect(bash(cmd), cmd).toBeNull();
-  }],
-  linux: ['is denied, with a reason that names ccrc test', () => {
-    for (const cmd of BARE_HEAVY) {
-      const why = bash(cmd);
-      expect(why, cmd).toMatch(/starts a heavy test or typecheck outside `ccrc test`/);
-      expect(why, cmd).toContain('ccrc test -- <command>');
-    }
-  }],
+describe.each(IMPLS)('a bare heavy test run (%s)', (i) => {
+  useImpl(i);
+  platformContrast('a bare heavy test run', {
+    darwin: ['is allowed: no slice to send it to', () => {
+      for (const cmd of BARE_HEAVY) expect(bash(cmd), cmd).toBeNull();
+    }],
+    linux: ['is denied, with a reason that names ccrc test', () => {
+      for (const cmd of BARE_HEAVY) {
+        const why = bash(cmd);
+        expect(why, cmd).toMatch(/starts a heavy test or typecheck outside `ccrc test`/);
+        expect(why, cmd).toContain('ccrc test -- <command>');
+      }
+    }],
+  });
 });
 
-describe('the bare-heavy arm leaves light and contained runs alone (D-7298)', () => {
+// The classifier reads the whole command however long or quote-dense it is (final review finding 3): on Windows the Go hook
+// once handed it a command line, where MSYS2 cut an argument at 8186 characters and refused a quote-dense one past about
+// 16 KB, so a heavy run at the end of a long command went unread. Each answer must be the short command's. The session
+// is found by its job directory here, so neither hook bounds the classifier: on Windows the classifier itself takes
+// about 5 to 18 s over a 9 KB command, past the 5 s a paned session's bound allows, in both modes (measured; a
+// Windows-port item of its own), and this case is about what the classifier reads, not how long it takes.
+describe.each(IMPLS)('a heavy run at the end of a long or quote-dense command (%s)', (i) => {
+  useImpl(i);
+  beforeAll(() => { fs.writeFileSync(path.join(home, '.cc-sessions', `${TOP}.uuid`), 'uuid-1\n'); });
+  afterAll(() => { fs.rmSync(path.join(home, '.cc-sessions', `${TOP}.uuid`), { force: true }); });
+  const unpaned = (command: string): string | null => {
+    const { TMUX_PANE: _p, ...e } = env();
+    const r = hookRun(JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, cwd: CWD }),
+      { ...e, CLAUDE_JOB_DIR: path.join(home, 'job') });
+    expect(r.status, 'exit 0 on every path').toBe(0);
+    const out = r.stdout.trim();
+    if (out === '') return null;
+    const d = (JSON.parse(out) as { hookSpecificOutput: { permissionDecision?: string; permissionDecisionReason?: string } }).hookSpecificOutput;
+    return d.permissionDecision === 'deny' ? String(d.permissionDecisionReason) : null;
+  };
+  // the systemd-run arm denies on every platform, Windows among them (the bare-heavy arm is a fleet box's only)
+  const heavy = 'systemd-run --user --scope npx vitest run';
+  it.each([
+    ['9 KB of text before it', `echo ${'y'.repeat(9000)} && ${heavy}`],
+    ['17000 quotes before it', `: ${"''".repeat(8500)} && ${heavy}`],
+  ])('%s: answered as the short command is', (_n, cmd) => {
+    expect(cmd.length).toBeGreaterThan(8186);
+    const short = unpaned(heavy);
+    expect(short, 'the CONTROL: the short command is denied').toMatch(/never under a systemd-run of your own/);
+    expect(unpaned(cmd)).toEqual(short);
+  }, 120_000);
+});
+
+describe.each(IMPLS)('the bare-heavy arm leaves light and contained runs alone (D-7298) (%s)', (i) => {
+  useImpl(i);
   it.each([
     'ccrc test -- npx vitest run',
     'cd server && ccrc test -- npx tsc --noEmit -p test/tsconfig.tests.json',
@@ -147,8 +205,12 @@ describe('the bare-heavy arm leaves light and contained runs alone (D-7298)', ()
 // the body's lines are commands. The rows are run through the classifier on every platform, since macOS has no bare-heavy
 // arm, and through the hook on a fleet box.
 const lines = (...l: string[]): string => l.join('\n');
+// The command travels in the environment, which no runtime requotes: on Windows Node quotes an argument by MSVCRT's rule
+// and an MSYS2 bash reads a doubled backslash as one, so a body holding backslashes before `$(npm test)` arrived changed
+// there (measured).
 const classify = (line: string): string =>
-  spawnSync('bash', [CCRC_TEST, '--classify-shell', '--', line], { encoding: 'utf8', env: env() }).stdout.trim();
+  spawnSync(HARNESS_BASH, ['-c', 'exec "$BASH" "$0" --classify-shell -- "$CCRC_TEST_LINE"', CCRC_TEST],
+    { encoding: 'utf8', env: { ...env(), CCRC_TEST_LINE: line } }).stdout.trim();
 const TICKED = '- [x] `npm run typecheck`';
 const BODY_IS_TEXT = [
   // The two measured false positives.
@@ -450,22 +512,28 @@ const BODY_RUNS_OR_UNREAD = [
   lines("cat > r.sh <<'EOF'", 'npm test', 'EOF', 'export npm_config_script_shell=./r.sh; npm run build'),
   lines("cat > r.sh <<'EOF'", 'npm test', 'EOF', 'env npm_config_script_shell=./r.sh npm run build'),
 ];
-describe('a heredoc body that nothing runs is text (D-8052)', () => {
+describe.each(IMPLS)('a heredoc body that nothing runs is text (D-8052) (%s)', (i) => {
+  useImpl(i);
   it.each(BODY_IS_TEXT)('%j reads light and is allowed', (cmd) => {
     expect(classify(cmd)).toBe('light');
     expect(bash(cmd)).toBeNull();
   });
 });
+// The classifier alone (no hook runs): once, not per implementation.
 describe('a long heredoc body is skipped, not walked (D-8052)', () => {
   // The arm bounds the classifier at 5 seconds and fails open past it, and a walk of this body takes far longer. It stays
   // under 128 KiB, the most Linux passes in one argument.
-  it('a 120 KB body reads light well inside the bound', () => {
+  // Linux and macOS only: 120 KB is past what Windows hands a child, as an argument or an environment variable (32767
+  // characters); the hook's own long-command path there is stdin (proc_windows' ClassifyShell, TestClassifyShellPastTheCommandLine)
+  it.skipIf(process.platform === 'win32')('a 120 KB body reads light well inside the bound', () => {
     const body = Array.from({ length: 2000 }, (_, i) => `- [x] line ${i} with \`npm run typecheck\` and more words here`);
     expect(classify(lines("gh pr create --body-file - <<'EOF'", ...body, 'EOF'))).toBe('light');
   });
 });
-describe('a heredoc body that can run, or that cannot be read, is still read as commands (D-8052)', () => {
-  it.each(BODY_RUNS_OR_UNREAD)('%j reads heavy', (cmd) => {
+describe.each(IMPLS)('a heredoc body that can run, or that cannot be read, is still read as commands (D-8052) (%s)', (i) => {
+  useImpl(i);
+  // the classifier alone (no hook runs): once, in the bash pass
+  (i === 'bash' ? it : it.skip).each(BODY_RUNS_OR_UNREAD)('%j reads heavy', (cmd) => {
     expect(classify(cmd)).toBe('heavy');
   });
   it.each([
@@ -479,23 +547,24 @@ describe('a heredoc body that can run, or that cannot be read, is still read as 
   });
 });
 // One test per row: every row runs the real hook, so one loop over all of them outgrew the 20 s limit on a loaded runner.
-for (const cmd of BODY_RUNS_OR_UNREAD) {
-  platformContrast(`a heavy run a heredoc does not hide: ${JSON.stringify(cmd)}`, {
-    darwin: ['is allowed: no slice to send it to', () => {
-      expect(bash(cmd), cmd).toBeNull();
-    }],
-    linux: ['is denied, with a reason that names ccrc test', () => {
-      expect(bash(cmd), cmd).toMatch(/starts a heavy test or typecheck outside `ccrc test`/);
-    }],
-  });
-}
-
-describe('the test-route arm fails open (D-7298)', () => {
-  it('with no ccrc on PATH there is no ccrc test to send a run to, so nothing is denied', () => {
-    const r = spawnSync('bash', [HOOK], {
-      input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'systemd-run --user --scope npx vitest run' }, cwd: CWD }),
-      encoding: 'utf8', env: { ...env(), PATH: '/usr/bin:/bin' },
+describe.each(IMPLS)('a heavy run a heredoc does not hide (%s)', (i) => {
+  useImpl(i);
+  for (const cmd of BODY_RUNS_OR_UNREAD) {
+    platformContrast(`a heavy run a heredoc does not hide: ${JSON.stringify(cmd)}`, {
+      darwin: ['is allowed: no slice to send it to', () => {
+        expect(bash(cmd), cmd).toBeNull();
+      }],
+      linux: ['is denied, with a reason that names ccrc test', () => {
+        expect(bash(cmd), cmd).toMatch(/starts a heavy test or typecheck outside `ccrc test`/);
+      }],
     });
+  }
+});
+
+describe.each(IMPLS)('the test-route arm fails open (D-7298) (%s)', (i) => {
+  useImpl(i);
+  it('with no ccrc on PATH there is no ccrc test to send a run to, so nothing is denied', () => {
+    const r = hookRun(JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'systemd-run --user --scope npx vitest run' }, cwd: CWD }), { ...env(), PATH: '/usr/bin:/bin' });
     expect(r.status).toBe(0);
     expect(r.stdout).not.toMatch(/ccrc test/);
   });

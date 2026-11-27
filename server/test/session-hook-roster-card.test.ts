@@ -12,6 +12,8 @@
 // harness is COPIED from session-hook-role-card.test.ts (a test file cannot import another).
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
+import { hookBoth } from './hookTwin.js';
+import { coreBinary } from './coreBuild.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
@@ -63,13 +65,11 @@ const payload = (source: string): object => ({
   ...(source === 'compact' ? { prompt_id: 'p1' } : {}),
 });
 const hook = (source: string): string => {
-  const r = spawnSync('bash', [HOOK], {
-    input: JSON.stringify(payload(source)), encoding: 'utf8',
-    env: {
-      ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: SID, CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
-    },
-  });
+  // the Go core and the bash, each from the same fixture state, must answer the same and leave the same files (Go core wave 2, Task 6)
+  const r = hookBoth(home, JSON.stringify(payload(source)), {
+    ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
+    TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: SID, CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
+  }, { hook: HOOK, tree: true });
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
   const lines = r.stdout.split('\n').filter((l) => l.length > 0);
   expect(lines.length, 'at most one envelope per event').toBeLessThanOrEqual(1);
@@ -202,9 +202,9 @@ describe('D4: the guards on the card', () => {
 
   it('a server that hangs costs the card within the bound, not the whole session start', () => {
     fs.writeFileSync(path.join(home, '.local', 'bin', 'ccrc-api'), '#!/bin/sh\nexec sleep 30\n', { mode: 0o755 });
-    const t0 = Date.now();
+    const t0 = performance.now();
     const c = hook('compact');
-    expect(Date.now() - t0).toBeLessThan(10_000);
+    expect(performance.now() - t0).toBeLessThan(10_000);
     expect(c).not.toContain('ccrc-roster');
   }, 20_000);
 });
@@ -283,14 +283,11 @@ const writeTranscript = (text: string): void => {
 
 /** One UserPromptSubmit through the real hook; answers the additionalContext it printed, or '' for silence. */
 const wake = (prompt: string, over: Record<string, unknown> = {}): string => {
-  const r = spawnSync('bash', [HOOK], {
-    input: JSON.stringify({ session_id: SID, transcript_path: transcript(), cwd: path.join(home, 'work'),
-      hook_event_name: 'UserPromptSubmit', prompt, ...over }), encoding: 'utf8',
-    env: {
-      ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: SID, CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
-    },
-  });
+  const r = hookBoth(home, JSON.stringify({ session_id: SID, transcript_path: transcript(), cwd: path.join(home, 'work'),
+    hook_event_name: 'UserPromptSubmit', prompt, ...over }), {
+    ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
+    TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: SID, CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
+  }, { hook: HOOK, tree: true });
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
   const out = r.stdout.split('\n').filter((l) => l.length > 0);
   expect(out.length, 'at most one envelope per event').toBeLessThanOrEqual(1);
@@ -301,22 +298,27 @@ const wake = (prompt: string, over: Record<string, unknown> = {}): string => {
 };
 const MAIL = (): string => renderMailNudge(ID);
 
+// Linux and macOS only: the wake reads a /-rooted transcript_path (session-hook.sh's _hook_roster_wake, `[[ "$tp" == /* ]]`,
+// mirrored in Go), and Claude Code's transcript path on Windows is C:\..., so neither mode wakes there (measured in
+// both modes, Task 9b). Both modes run it on the Linux bench.
+const POSIX_TRANSCRIPT = process.platform !== 'win32';
+
 describe('R-5a: the wake arm, armed', () => {
   beforeEach(() => { arm(); writeTranscript(IDLE); });
 
-  it('the mail nudge after an idle compaction carries the same card a compaction would, byte for byte', () => {
+  it.runIf(POSIX_TRANSCRIPT)('the mail nudge after an idle compaction carries the same card a compaction would, byte for byte', () => {
     fakeApi(list(run_('', { id: 41 }), run_('', { id: 42, state: 'awaiting-review' })));
     const card = wake(MAIL());
     expect(card).toMatch(/^ccrc-roster: 2 open run\(s\) you claim/);
     expect(card).toBe(rosterOf(hook('compact')));
   });
 
-  it('so does the server\'s idle-compaction nudge', () => {
+  it.runIf(POSIX_TRANSCRIPT)('so does the server\'s idle-compaction nudge', () => {
     fakeApi(list(run_('', { id: 43 })));
     expect(wake(IDLE_COMPACT_NUDGE_PROMPT)).toMatch(/#43 prog-a w1\/3 working/);
   });
 
-  it('the prompt is still written as a turn: the hookstate reads working', () => {
+  it.runIf(POSIX_TRANSCRIPT)('the prompt is still written as a turn: the hookstate reads working', () => {
     fakeApi(list(run_('', { id: 44 })));
     expect(wake(MAIL())).toContain('#44 ');
     const hs = JSON.parse(fs.readFileSync(path.join(reg(), `${ID}.hookstate.json`), 'utf8')) as { state?: string };
@@ -376,7 +378,7 @@ describe('R-5a: the wake arm, armed', () => {
 });
 
 describe('R-5a: the wake arm, unarmed', () => {
-  it('injects nothing and appends the would-be card to the same shadow log, naming the wake', () => {
+  it.runIf(POSIX_TRANSCRIPT)('injects nothing and appends the would-be card to the same shadow log, naming the wake', () => {
     writeTranscript(IDLE);
     fakeApi(list(run_('', { id: 51 })));
     expect(wake(MAIL())).toBe('');
@@ -387,7 +389,7 @@ describe('R-5a: the wake arm, unarmed', () => {
 
   // D-8274 (R-6): the wake arm reads the SAME switch as the SessionStart arm, the Shadow lanes row the `runs list` reply
   // carries, through `_hook_roster_card`'s one read; the retired hand marker arms neither.
-  it('the server\'s "rosterCard":"live" arms the wake, and the retired hand marker does not', () => {
+  it.runIf(POSIX_TRANSCRIPT)('the server\'s "rosterCard":"live" arms the wake, and the retired hand marker does not', () => {
     writeTranscript(IDLE);
     fs.writeFileSync(path.join(reg(), MARKER), '');
     fakeApi(list(run_('', { id: 52 })));
@@ -398,7 +400,7 @@ describe('R-5a: the wake arm, unarmed', () => {
     expect(wake(MAIL())).toMatch(/^ccrc-roster: 1 open run\(s\) you claim[\s\S]*#52 prog-a w1\/3 working/);
   });
 
-  it.each([
+  it.runIf(POSIX_TRANSCRIPT).each([
     ['an older server, whose reply has no such field', undefined],
     ['a value that is not exactly live', 'Live'],
   ])('%s: the wake carries no card, the shadow record only', (_n, value) => {
@@ -502,20 +504,18 @@ describe('the builder ships', () => {
     fs.mkdirSync(path.join(home, '.cc-sessions', 'lib'), { recursive: true });
     fs.copyFileSync(path.join(REPO, 'ccd', 'lib', 'roster-card.jq'), path.join(home, DEST));
     fakeApi(list(run_('', { id: 61 })));
-    const r = spawnSync('bash', [path.join(bin, 'session-hook.sh')], {
-      input: JSON.stringify(payload('compact')), encoding: 'utf8',
-      env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-        TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: SID, CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION },
-    });
+    // the Go core alone in its directory too: no lib/ beside it, so it reads $HOME/.cc-sessions/lib
+    const core = path.join(bin, path.basename(coreBinary()));
+    fs.copyFileSync(coreBinary(), core);
+    fs.chmodSync(core, 0o755);
+    const env = { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
+      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: SID, CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION };
+    const r = hookBoth(home, JSON.stringify(payload('compact')), env, { hook: path.join(bin, 'session-hook.sh'), core, tree: true });
     expect(r.status).toBe(0);
     expect(r.stdout).toMatch(/#61 prog-a w1\/3 working/);
     // A box the builder never reached: no card, the other cards untouched (fail open).
     fs.rmSync(path.join(home, DEST));
-    const r2 = spawnSync('bash', [path.join(bin, 'session-hook.sh')], {
-      input: JSON.stringify(payload('compact')), encoding: 'utf8',
-      env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-        TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: SID, CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION },
-    });
+    const r2 = hookBoth(home, JSON.stringify(payload('compact')), env, { hook: path.join(bin, 'session-hook.sh'), core, tree: true });
     expect(r2.status).toBe(0);
     expect(r2.stdout).not.toContain('ccrc-roster');
     expect(r2.stdout).toContain('You are still this project\'s coordinator');
@@ -542,7 +542,7 @@ describe('D-8126: the roster card carries the fixed autonomy line', () => {
     expect(r[2]).toMatch(/^#41 /);
   });
 
-  it('the wake arm carries it too: the same builder', () => {
+  it.runIf(POSIX_TRANSCRIPT)('the wake arm carries it too: the same builder', () => {
     writeTranscript(IDLE);
     fakeApi(list(run_('', { id: 45 })));
     expect(wake(MAIL()).split('\n')[1]).toBe(AUTONOMY_LINE);

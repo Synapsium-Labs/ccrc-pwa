@@ -11,6 +11,7 @@ import { markGenerated, verifyMarker } from '../../shared/mark.mjs';
 // next run, did this comment while trying to explain it, which is why it now
 // describes the shape instead of writing it.
 import { CCD, canonicalPython3 } from './ccdWsHelpers.js';
+import { plantCore } from './coreBuild.js';
 
 const MARKER_RE = /^# ccrc:generated 1 sha256=([0-9a-f]{64})$/;
 
@@ -146,6 +147,7 @@ describe('the INSTALLED ccd carries a marker that matches its own bytes', () => 
   for (const f of ['redact.mjs', 'redact-cli.mjs']) copyFileSync(path.join(REPO, 'shared', f), path.join(tree, 'shared', f));
   // The door program, which the installer publishes beside the body and pins in it.
   copyFileSync(path.join(REPO, 'ccd', 'door-process.mjs'), path.join(tree, 'ccd', 'door-process.mjs'));
+  plantCore(tree);   // the Go core's table (and this platform's binary where an entry runs in go), published with the pair
   const r = spawnSync(canonicalPython3(), ['-IS', path.join(tree, 'ccd', 'ccd-entry-install.py'), 'install', tree, home],
     { encoding: 'utf8', cwd: home, env: { HOME: home, PATH: process.env['PATH'] ?? '/usr/bin:/bin' } });
   const ccd = r.status === 0 ? readFileSync(path.join(home, '.local', 'libexec', 'ccrc', path.basename(CCD)), 'utf8') : '';

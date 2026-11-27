@@ -11,7 +11,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSyncGroup } from './spawnGroup.js';
+import { hookBoth } from './hookTwin.js';
 import { mkTmp } from './tmpHelpers.js';
 import { MODEL_SWITCH_HOWS, REPORT_MODEL_MAX } from '../../shared/continuity-reports.js';
 import { hookReportOf } from '../src/continuity/hookReports.js';
@@ -53,15 +53,12 @@ const common = { session_id: UUID, transcript_path: path.join('/rig', `${UUID}.j
 
 /** The hook's exit asserted; `door` puts the launch nonce's hash in the environment. */
 const run = (payload: object, door = false): string => {
-  const r = spawnSyncGroup('bash', [HOOK], {
-    input: JSON.stringify(payload), encoding: 'utf8', timeout: 30_000,
-    env: {
-      ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
-      ...(door ? { CCRC_DOOR_NONCE_SHA256: HASH } : {}),
-    },
-  });
-  expect(r.error, 'the spawn itself did not fail').toBeUndefined();
+  // the Go core and the bash, each from the same fixture state, must answer the same and send the same (Go core wave 2, Task 6)
+  const r = hookBoth(home, JSON.stringify(payload), {
+    ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
+    TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
+    ...(door ? { CCRC_DOOR_NONCE_SHA256: HASH } : {}),
+  }, { hook: HOOK, watch: ['reports.log', 'verbs.log'], tree: true });
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
   return String(r.stdout);
 };

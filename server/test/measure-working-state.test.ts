@@ -12,6 +12,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
+import { IMPLS, runGoHook, type Impl } from './hookTwin.js';
 import { ccdSource } from './ccdWsHelpers.js';
 import { NON_DELEGATING_TASK_KINDS, sessionBucket, type FleetSession } from '../../shared/api.js';
 import { HOOKSTATE_FRESH_MS } from '../src/hookstate.js';
@@ -20,6 +21,11 @@ import { STALL_CHECK_PREFIX, STALL_REPORT_PREFIX } from '../src/coord/stall.js';
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const SCRIPT = path.join(ROOT, 'deploy', 'measure-working-state.py');
+/** Its runs pin PATH to `/usr/bin:/bin` (a POSIX layout) and embed the script's path in Python source, so on Windows
+ *  python3 is not found there (the spawn answers no status) and a backslash path is a Python escape (both measured, Task 9b
+ *  gate round): Linux-only by construction, skipped there and where no python3 runs; the hook files it reads run in both
+ *  modes on the Linux bench. */
+const NOT_HERE = process.platform === 'win32' || spawnSync('python3', ['-c', '0']).status !== 0;
 const HOOK = path.join(ROOT, 'ccd', 'session-hook.sh');
 const FIVE_KINDS = path.join(__dirname, 'fixtures', 'hook', 'stop-bg-five-kinds.json');
 const CAPTURE = (name: string): { event: string; payload: Record<string, unknown> }[] =>
@@ -91,20 +97,22 @@ const patch = (file: string, over: Record<string, unknown>): void => {
   fs.writeFileSync(file, JSON.stringify(raw));
 };
 
+/** The implementation `hook` starts (Go core wave 2): a `describe.each(IMPLS)` body sets it with `useImpl`. */
+let impl: Impl = 'bash';
+const useImpl = (i: Impl): void => { beforeEach(() => { impl = i; }); afterEach(() => { impl = 'bash'; }); };
 /** Run the REAL hook for row `id`, then move only the stamps named. A turn marker THIS run rewrote takes the
  *  hookstate's `updatedAt` as its `at` (and `stopAt`, when set); `mark` overrides either way. */
 const hook = (id: string, sid: string, payload: Record<string, unknown>,
   hs: Record<string, unknown> = {}, mark: Record<string, unknown> = {}): void => {
   const turn = reg(`${id}.turn.json`);
   const turnBefore = fs.existsSync(turn) ? fs.readFileSync(turn, 'utf8') : null;
-  execFileSync('bash', [HOOK], {
-    input: JSON.stringify({ ...payload, session_id: sid, transcript_path: `/rig/fixhome/cfg/projects/-rig-repo/${sid}.jsonl` }),
-    encoding: 'utf8',
-    env: {
-      ...process.env, HOME: home, FIXTURE_ID: id, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: sid, CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
-    },
-  });
+  const input = { ...payload, session_id: sid, transcript_path: `/rig/fixhome/cfg/projects/-rig-repo/${sid}.jsonl` };
+  const env = {
+    ...process.env, HOME: home, FIXTURE_ID: id, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
+    TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: sid, CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
+  };
+  if (impl === 'go') expect(runGoHook(home, input, env).status, 'the Go hook: exit 0').toBe(0);
+  else execFileSync('bash', [HOOK], { input: JSON.stringify(input), encoding: 'utf8', env });
   patch(reg(`${id}.hookstate.json`), hs);
   const rewrote = fs.existsSync(turn) && fs.readFileSync(turn, 'utf8') !== turnBefore;
   const stamps: Record<string, unknown> = {};
@@ -173,7 +181,7 @@ const jStart = (at: number, id: string) => ({ at, USER_UNIT: `claude-session@${i
 const writeJson = (name: string, v: unknown): string => { const p = path.join(home, name); fs.writeFileSync(p, typeof v === 'string' ? v : JSON.stringify(v)); return p; };
 
 // ── the second spellings ───────────────────────────────────────────────────────
-describe('measure-working-state.py: its second spellings are bound to their homes', () => {
+describe.skipIf(NOT_HERE)('measure-working-state.py: its second spellings are bound to their homes', () => {
   const src = (): string => fs.readFileSync(SCRIPT, 'utf8');
   const tuple = (name: string): string[] => {
     const m = new RegExp(`^${name} = \\(([^)]*)\\)`, 'm').exec(src());
@@ -254,7 +262,8 @@ describe('measure-working-state.py: its second spellings are bound to their home
 });
 
 // ── snapshot ───────────────────────────────────────────────────────────────────
-describe('measure-working-state.py --section snapshot', () => {
+describe.skipIf(NOT_HERE).each(IMPLS)('measure-working-state.py --section snapshot (%s)', (i) => {
+  useImpl(i);
   it('counts done-over-busy (with and without the D-5231 rung), the roster, PostCompact rows, idle ages and server-caps', () => {
     // A: delegated, written by today's hook (the pair) — working under D-5231, done before it.
     row('lane-a-project-a', sidOf(1));
@@ -387,7 +396,8 @@ type Tick = { sid: string; busy: boolean; shown: string; pre: string; delegated:
 const tick = (over: Partial<Tick>): Tick =>
   ({ sid: 's', busy: false, shown: 'idle', pre: 'idle', delegated: false, markdone: false, hook: null, hookfresh: false, ...over });
 
-describe('measure-working-state.py --section samples', () => {
+describe.skipIf(NOT_HERE).each(IMPLS)('measure-working-state.py --section samples (%s)', (i) => {
+  useImpl(i);
   it('episodes per hour, delegation-caused, share of busy seconds, PostCompact badges and delegated ends', () => {
     const ticks = Array.from({ length: 10 }, (_, i) => {
       const rows: Tick[] = [];
@@ -445,7 +455,7 @@ describe('measure-working-state.py --section samples', () => {
 });
 
 // ── pushes ─────────────────────────────────────────────────────────────────────
-describe('measure-working-state.py --section pushes', () => {
+describe.skipIf(NOT_HERE)('measure-working-state.py --section pushes', () => {
   it('classifies every Finished push: turn end, compaction-only, mid-turn, restart, overload, uncertain, unclassifiable', () => {
     const T = NOW - 600 * MIN;
     const events: Record<string, unknown>[] = [];
@@ -494,7 +504,8 @@ describe('measure-working-state.py --section pushes', () => {
 });
 
 // ── deaths, re-drives and spawn latency ────────────────────────────────────────
-describe('measure-working-state.py --section deaths / spawn', () => {
+describe.skipIf(NOT_HERE).each(IMPLS)('measure-working-state.py --section deaths / spawn (%s)', (i) => {
+  useImpl(i);
   it('session ends per day, OOM-associated by signature, kills after a restart, and re-drive loops', () => {
     const D0 = Date.UTC(2026, 9, 10, 0, 0, 0);
     const s = (ms: number): number => ms / 1000;
@@ -549,7 +560,7 @@ describe('measure-working-state.py --section deaths / spawn', () => {
 });
 
 // ── swaps ──────────────────────────────────────────────────────────────────────
-describe('measure-working-state.py --section swaps', () => {
+describe.skipIf(NOT_HERE)('measure-working-state.py --section swaps', () => {
   it('swap acts by kind, those that cut output (an API error is not output), and refusals by reason', () => {
     const T = NOW - 100 * MIN;
     const act = (n: number, id: string, at: number): [number, string] => [at, `swap ${id}: lane-a -> lane-b (uuid ${sidOf(n)})`];
@@ -601,7 +612,7 @@ describe('measure-working-state.py --section swaps', () => {
 });
 
 // ── interrupts and stall notices ───────────────────────────────────────────────
-describe('measure-working-state.py --section interrupts / stall', () => {
+describe.skipIf(NOT_HERE)('measure-working-state.py --section interrupts / stall', () => {
   it('interrupt events by source (an unknown word is unknown) and swap.log Escapes', () => {
     const ev = (at: number, body: string) => ({ seq: at, at, kind: 'interrupt', sessionId: 'lane-a-project-a', title: 'interrupt', body, runId: null });
     const feed = writeJson('feed.json', { events: [ev(NOW - MIN, 'escape-key sent'), ev(NOW - 2 * MIN, 'deny sent'),
@@ -633,7 +644,8 @@ describe('measure-working-state.py --section interrupts / stall', () => {
 });
 
 // ── read-only, and no text leaves ──────────────────────────────────────────────
-describe('measure-working-state.py: read-only, and nothing but counts leaves', () => {
+describe.skipIf(NOT_HERE).each(IMPLS)('measure-working-state.py: read-only, and nothing but counts leaves (%s)', (i) => {
+  useImpl(i);
   it('a full run over a populated HOME changes no byte and prints no id, uuid, path or text', () => {
     row('lane-a-project-a', sidOf(1));
     hook('lane-a-project-a', sidOf(1), fiveKinds(), { updatedAt: NOW - MIN });

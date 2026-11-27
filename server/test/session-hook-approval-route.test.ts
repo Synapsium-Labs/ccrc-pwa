@@ -4,7 +4,8 @@
  * `sent`; after the request, a refusal or a lost answer patches the word to `request-refused:<word>` or
  * `request-failed`, only over the bytes the hook itself wrote.
  *
- * Runs `ccd/session-hook.sh` for real in a fixture HOME, with the approval-wait suite's stubbed client (it records every
+ * Runs `ccd/session-hook.sh` and the Go core's `ccrc-core hook` for real, each in a fixture HOME of its own and each case in
+ * both (Go core wave 2, Task 7): the same stdout, and the same hookstate and client calls left behind. With the approval-wait suite's stubbed client (it records every
  * call and answers from `$HOME/stub`). The payloads are Task 13's captures, only `transcript_path` pointed into the
  * fixture HOME. Never the live HOME.
  */
@@ -13,7 +14,7 @@ import { createHash, generateKeyPairSync } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
-import { spawnSyncGroup } from './spawnGroup.js';
+import { hookBoth, runHook } from './hookTwin.js';
 import { APPROVAL_ROUTE_SKIP_WORDS, parseApprovalRoute } from '../../shared/approval-census.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
@@ -42,6 +43,7 @@ const sha = (s: string): string => createHash('sha256').update(s, 'utf8').digest
 const STUB_API = `#!/usr/bin/env bash
 d="$HOME/stub"
 printf '%s\\n' "$*" >> "$d/calls"
+printf '%s %s\\n' "$1" "$2" >> "$d/verbs"   # the calls less their nonce: what both hooks must make alike
 case "$1 $2" in
   "approvals request")
     cat > "$d/request.body"
@@ -82,7 +84,7 @@ beforeEach(() => {
 afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
 const ENV = (): NodeJS.ProcessEnv => ({
-  ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+  ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
   TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
   CCRC_APPROVAL_TICK_S: '0.05', CCRC_APPROVAL_POLL_TICKS: '2', CCRC_APPROVAL_CEILING_S: '2',
 });
@@ -90,8 +92,10 @@ const payloadFor = (p: Payload, over: Record<string, unknown> = {}): Payload =>
   ({ ...p, transcript_path: path.join(home, 'cfg/projects/-rig-proj/main.jsonl'), ...over });
 
 interface Run { stdout: string; sent: boolean; state: Record<string, unknown> | null }
-const fire = (p: Payload): Run => {
-  const r = spawnSyncGroup('bash', [HOOK], { input: JSON.stringify(p), encoding: 'utf8', env: ENV(), timeout: 30_000 });
+/** `bashOnly`: a case the Go hook cannot be driven into from outside (its nonce is no process on PATH). */
+const fire = (p: Payload, bashOnly = false): Run => {
+  const r = bashOnly ? runHook({ home, env: (e = {}) => e }, 'bash', JSON.stringify(p), ENV())
+    : hookBoth(home, JSON.stringify(p), ENV(), { hook: HOOK, watch: [`.cc-sessions/${ID}.hookstate.json`, 'stub/verbs'], tree: true });
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
   expect(r.stderr, 'the hook contract: silent on stderr').toBe('');
   const calls = fs.existsSync(path.join(home, 'stub/calls')) ? fs.readFileSync(path.join(home, 'stub/calls'), 'utf8') : '';
@@ -129,15 +133,19 @@ describe('every pre-send gate stamps its word into the envelope, and sends nothi
     ['deny-unknown', () => put(`.cc-sessions/${ID}.deny-settings`, sha('an older deny file'))],
     ['no-verifier', () => fs.rmSync(reg('approval-verify.mjs'))],
     ['no-key', () => fs.rmSync(path.join(home, '.ccrc/approval-signing.pub'))],
-    ['no-client', () => fs.chmodSync(path.join(home, '.local/bin/ccrc-api'), 0o644)],
+    // Linux and macOS only: on Windows MSYS2's -x reads a `#!` head as executable whatever the mode, so both hooks send
+    // (measured in both modes, Task 9b)
+    ...(process.platform === 'win32' ? [] : [['no-client', () => fs.chmodSync(path.join(home, '.local/bin/ccrc-api'), 0o644)] as const]),
     ['no-uuid', () => fs.rmSync(reg(`${ID}.uuid`))],
     ['forbidden', () => undefined, { ...MAIN, tool_input: { ...MAIN.tool_input, command: 'ccd ws-rm project-a-old' } }],
     ['canonical-failed', () => undefined, { ...MAIN, tool_input: { ...MAIN.tool_input, timeout: 1.5 } }],
+    // Bash only (D-TBD-go-hook-nonce-source): the Go hook takes its nonce from the system's cryptographic source, not `od`
+    // on PATH, so no stub reaches it; approval_test.go#TestApprovalGateLadder holds its `nonce-failed` word.
     ['nonce-failed', () => put('bin/od', '#!/bin/sh\nexit 1\n', 0o755)],
   ];
   it.each(cases.map(([w, setup, p], i) => [`${w} #${i}`, w, setup, p] as const))('%s', (_n, word, setup, p) => {
     setup();
-    const r = fire(payloadFor(p ?? MAIN));
+    const r = fire(payloadFor(p ?? MAIN), word === 'nonce-failed');
     expect(r.stdout, 'nothing printed').toBe('');
     expect(r.sent, 'no request sent').toBe(false);
     expect(r.state?.['state']).toBe('waiting');
@@ -146,6 +154,17 @@ describe('every pre-send gate stamps its word into the envelope, and sends nothi
 });
 
 describe('the request\'s own outcome', () => {
+  // Task 7 review F1: the bash's jq over the whole stdin reads the one value and then exits 2 at what follows it. The bash
+  // stops at its classification's first jq (`tool=$(jq …) || exit 0`), before the gate and the write; the Go gate reads the
+  // text as exactly one value and answers `forbidden`. Either way nothing is sent and nothing printed. The hookstate the Go
+  // hook still writes is its classification's (Task 2's first-value parse), not compared here: listed in task-7-report.md.
+  it('a payload with anything after its one value: nothing sent, nothing printed, in both hooks', () => {
+    const text = `${JSON.stringify(payloadFor(MAIN))} garbage`;
+    const r = hookBoth(home, text, ENV(), { hook: HOOK, watch: ['stub/verbs'] });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe('');
+    expect(fs.existsSync(path.join(home, 'stub/calls')), 'no request sent').toBe(false);
+  });
   it('a 201: `sent`, for the main thread and for a subagent', () => {
     put('stub/request.out', '{"id":41,"waitS":1}');
     const r = fire(payloadFor(MAIN));

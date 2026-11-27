@@ -1,2 +1,4 @@
 # The codex bridge replay corpus is compared byte for byte with what make_streams.py writes: no eol conversion (D-6837).
 server/test/fixtures/codexbridge/streams/* -text
+# The jq goldens and their cases are compared byte for byte, and some hold bytes that are not UTF-8 (gen-jq-golden.sh).
+core/internal/kernel/testdata/* -text

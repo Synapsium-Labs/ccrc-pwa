@@ -9,10 +9,10 @@
  * live HOME.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
+import { hookBoth } from './hookTwin.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 const GENERATION = '0189abcd-1234-5678-9abc-0123456789ab';
@@ -38,13 +38,14 @@ type Envelope = { hookSpecificOutput: { hookEventName?: string; permissionDecisi
 const CALLERS: ReadonlyArray<[string, string]> = [['a top-level session', TOP], ['a child', CHILD]];
 
 const hookEnv = (id: string): NodeJS.ProcessEnv => ({
-  ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+  ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
   TMUX_PANE: `%${id}`, CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
 });
 /** The deny reason, or null when nothing was denied. */
 const fire = (id: string, tool: string, input: Record<string, unknown>): string | null => {
   const payload = JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input, cwd: CWD });
-  const r = spawnSync('bash', [HOOK], { input: payload, encoding: 'utf8', env: hookEnv(id) });
+  // the Go core and the bash, from the same fixture, must answer the same (Go core wave 2, Task 5)
+  const r = hookBoth(home, payload, hookEnv(id));
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
   expect(r.stderr, 'the hook contract: silent on stderr').toBe('');
   const line = r.stdout.trim();

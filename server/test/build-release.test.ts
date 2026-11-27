@@ -22,6 +22,10 @@
 // `npm ci` would reach the registry and take minutes per test. `curl` and
 // `gh` are poisons — nothing in this script may ever touch the network or a
 // repository remote; a poison firing is a loud 97, not a silent pass.
+// `go` is a recording stub too (the Go core, spec 2026-11-24 §7): it writes
+// each `-o` file a cross-build names, so the five ccrc-core binaries a release
+// carries are asserted without a compiler; one case runs the real `go` over
+// the real core/ instead, and says why when it skips.
 // git/tar/sha256sum are the REAL tools, because the artifact's integrity
 // story (`sha256sum -c`, the MANIFEST) is exactly what must not be simulated.
 import { describe, it, expect } from 'vitest';
@@ -29,7 +33,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   mkdirSync, writeFileSync, existsSync, chmodSync, copyFileSync, readFileSync,
-  readdirSync, statSync,
+  readdirSync, statSync, symlinkSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -43,6 +47,15 @@ import { workflowJobs, type WorkflowJob, type WorkflowStep } from './workflowJob
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
 const SCRIPT = join(REPO, 'deploy', 'build-release.sh');
+/** The Go core's one build command (spec 2026-11-24 §7), which build-release.sh runs from the tree it builds. */
+const CORE_BUILD = join(REPO, 'core', 'build.sh');
+/** The five platforms a release carries ccrc-core for, as `<goos>-<goarch>`, and each binary's path in the tarball. */
+const CORE_TARGETS = ['linux-amd64', 'linux-arm64', 'darwin-amd64', 'darwin-arm64', 'windows-amd64'] as const;
+const coreBinPath = (t: string): string => `core/bin/${t}/${t.startsWith('windows-') ? 'ccrc-core.exe' : 'ccrc-core'}`;
+/** The real core/go.mod, which the fixture carries, and the exact Go its toolchain line names: the recording `go`
+ *  answers `go env GOVERSION` with it, so a stubbed release meets the version check as a correct machine does. */
+const CORE_GO_MOD = readFileSync(join(REPO, 'core', 'go.mod'), 'utf8');
+const CORE_TOOLCHAIN = /^toolchain (go\S+)$/m.exec(CORE_GO_MOD)?.[1] ?? 'core/go.mod names no toolchain';
 
 const realPath = (name: string): string => {
   const p = spawnSync('bash', ['-c', `command -v ${name}`], { encoding: 'utf8' }).stdout.trim();
@@ -89,6 +102,10 @@ const FIXTURE_FILES: Record<string, string> = {
   // explicit expected member below rather than something that merely rides along.
   'ccd/ccd': '#!/usr/bin/env bash\n# fixture ccd body: answers caps with a short list of well-shaped lines (build-release.sh stamps it)\n[ "${1:-}" = caps ] && { printf \'%s\\n\' start ws-add pool-answer pool-set; exit 0; }\necho fixture ccd body\n',
   'ccd/ccd-entry.py': '#!/usr/bin/env python3\n# fixture launcher template\n',
+  // The Go core's entry table (spec 2026-11-24): named in the pathspec, so a tree without it fails the archive.
+  'core/entries.json': '{ "entries": {} }\n',
+  // Its go.mod: build-release.sh reads the toolchain line and refuses any other Go.
+  'core/go.mod': CORE_GO_MOD,
   'shared/api.ts': '// fixture shared/api.ts\n',
   'shared/package.json': '{ "type": "module" }\n',
   'deploy/ccrc.service': '[Unit]\nDescription=fixture ccrc.service\n',
@@ -125,6 +142,7 @@ function fixtureRepo(home: string, opts: { tag?: string; files?: Record<string, 
   }
   copyFileSync(SCRIPT, join(root, 'deploy', 'build-release.sh'));
   chmodSync(join(root, 'deploy', 'build-release.sh'), 0o755);
+  copyFileSync(CORE_BUILD, join(root, 'core', 'build.sh'));
   git(root, 'init', '-q', '-b', 'fixture-branch');
   git(root, 'add', '-A');
   git(root, 'commit', '-q', '-m', 'fixture tree');
@@ -132,11 +150,28 @@ function fixtureRepo(home: string, opts: { tag?: string; files?: Record<string, 
   return root;
 }
 
+/** A recording `go`: one line per call — its cwd, the three variables a
+ *  cross-build sets, then each argument bracketed — and, for `build`, the
+ *  `-o` file it names, holding its target, as the npm stub fabricates a dist. */
+const GO_STUB = [
+  '#!/bin/sh',
+  // The version check's question, answered and not recorded: the record is the build's calls.
+  `if [ "$1 $2" = "env GOVERSION" ]; then echo '${CORE_TOOLCHAIN}'; exit; fi`,
+  '{ printf \'%s|CGO_ENABLED=%s GOOS=%s GOARCH=%s|\' "$PWD" "${CGO_ENABLED-}" "${GOOS-}" "${GOARCH-}"; for a in "$@"; do printf \'[%s]\' "$a"; done; echo; } >> "$HOME/go-argv"',
+  'if [ "$1" = build ]; then',
+  '  while [ $# -gt 0 ]; do if [ "$1" = -o ]; then printf \'fixture ccrc-core %s-%s\\n\' "$GOOS" "$GOARCH" > "$2"; fi; shift; done',
+  'fi',
+  'exit 0',
+].join('\n');
+
+/** How `go` is found: the recording stub (the default), absent from PATH, or the real one. */
+type GoMode = 'stub' | 'none' | 'real';
+
 /** The stub bin: a recording `npm` that FABRICATES what a build leaves behind
  *  (per-package, keyed on its own cwd — the script's `cd` into each package
- *  is half of what it promises), and poisons for the two tools this script
- *  must never reach. */
-function plantStubBin(home: string): string {
+ *  is half of what it promises), the recording `go` unless `go` says
+ *  otherwise, and poisons for the two tools this script must never reach. */
+function plantStubBin(home: string, go: GoMode = 'stub'): string {
   const bin = join(home, 'bin');
   mkdirSync(bin, { recursive: true });
   writeFileSync(join(bin, 'npm'), [
@@ -163,6 +198,7 @@ function plantStubBin(home: string): string {
       { mode: 0o755 });
   poison('curl', 'build-release tests must never reach the network');
   poison('gh', 'build-release tests must never reach a repository remote');
+  if (go === 'stub') writeFileSync(join(bin, 'go'), GO_STUB, { mode: 0o755 });
   return bin;
 }
 
@@ -171,11 +207,24 @@ interface Result { code: number; stdout: string; stderr: string }
 /** Runs the FIXTURE's copy of the script (never this checkout's), stub bin at
  *  the head of an otherwise-real PATH: `git`, `tar` and `sha256sum` must be
  *  the real tools, `npm`/`curl`/`gh` must be the stubs above. */
-function runRelease(root: string, home: string, args: string[] = []): Result {
-  const bin = plantStubBin(home);
+function runRelease(root: string, home: string, args: string[] = [], go: GoMode = 'stub'): Result {
+  const bin = plantStubBin(home, go);
+  // `none`: each PATH directory holding a `go` stands in as a directory of links to everything else in it, so the
+  // script meets a machine without Go and still finds bash, git and tar beside where Go was (an image may link Go
+  // into /usr/bin).
+  const dirs = (process.env.PATH ?? '').split(':').map((d, i) => {
+    if (go !== 'none' || !existsSync(join(d, 'go'))) return d;
+    const twin = join(home, `path-without-go-${i}`);
+    mkdirSync(twin, { recursive: true });
+    for (const n of readdirSync(d)) if (n !== 'go') symlinkSync(join(d, n), join(twin, n));
+    return twin;
+  });
   const env = {
     ...process.env, ...GIT_ENV, HOME: home,
-    PATH: `${bin}:${process.env.PATH ?? ''}`,
+    PATH: [bin, ...dirs].join(':'),
+    // The real `go` keeps the runner's build cache: HOME is the fixture's, and a cold one compiles the standard library
+    // once for each of the five platforms.
+    ...(go === 'real' ? { GOCACHE: spawnSync('go', ['env', 'GOCACHE'], { encoding: 'utf8' }).stdout.trim() } : {}),
   };
   const r = spawnSync(BASH, [join(root, 'deploy', 'build-release.sh'), ...args],
     { env, cwd: root, encoding: 'utf8' });
@@ -232,6 +281,8 @@ const EXPECTED_ENTRIES = [
   'install.sh',
   'MANIFEST',
   'build.json',
+  // The Go core's five binaries (spec 2026-11-24 §7), the go stub's fabrications.
+  ...CORE_TARGETS.map(coreBinPath),
 ];
 
 describe('build-release.sh: the two refusals, before anything is written', () => {
@@ -268,6 +319,118 @@ describe('build-release.sh: the two refusals, before anything is written', () =>
     expect(r.stderr).toMatch(/^build-release\.sh: unknown argument: --dry-run$/m);
     expect(existsSync(join(home, 'npm-argv')), 'npm ran before the refusal').toBe(false);
   });
+
+  it('refuses a machine without Go, naming it, before npm runs or anything is written (the Go core, spec 2026-11-24 §7)', () => {
+    const home = mkTmp('build-release-nogo-');
+    const root = fixtureRepo(home, { tag: 'v1.2.3' });
+    const r = runRelease(root, home, ['--out', join(home, 'out')], 'none');
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^build-release\.sh: Go is not on PATH/m);
+    expect(r.stderr, 'the remedy names the version file').toContain('core/go.mod');
+    expect(existsSync(join(home, 'out'))).toBe(false);
+    expect(existsSync(join(home, 'npm-argv')), 'npm ran before the refusal').toBe(false);
+  });
+
+  it('refuses a Go other than the one core/go.mod\'s toolchain line names, naming both, before npm runs or anything is written', () => {
+    const home = mkTmp('build-release-gover-');
+    const root = fixtureRepo(home, { tag: 'v1.2.3' });
+    const bin = plantStubBin(home);
+    writeFileSync(join(bin, 'go'), GO_STUB.replace(`echo '${CORE_TOOLCHAIN}'`, "echo 'go1.0.0'"), { mode: 0o755 });
+    const r = spawnSync(BASH, [join(root, 'deploy', 'build-release.sh'), '--out', join(home, 'out')],
+      { env: { ...process.env, ...GIT_ENV, HOME: home, PATH: `${bin}:${process.env.PATH ?? ''}` }, cwd: root, encoding: 'utf8' });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain(`build-release.sh: Go here is go1.0.0, and core/go.mod's toolchain line names ${CORE_TOOLCHAIN}`);
+    expect(existsSync(join(home, 'out'))).toBe(false);
+    expect(existsSync(join(home, 'npm-argv')), 'npm ran before the refusal').toBe(false);
+    expect(existsSync(join(home, 'go-argv')), 'go built before the refusal').toBe(false);
+  });
+});
+
+describe('build-release.sh: the Go core — ccrc-core for five platforms, built from core/ (spec 2026-11-24 §7)', () => {
+  // The release's Go is the one core/go.mod's toolchain line names (setup-go reads it through go-version-file). With the
+  // `go` line alone setup-go takes the newest patch of that minor, so a new Go patch would change the binaries, and
+  // release-main.sh's compare would cut a release on a merge that changed nothing shipped.
+  it('core/go.mod names the exact toolchain a release builds with: one go<major>.<minor>.<patch> line, of its go line\'s minor', () => {
+    const mod = readFileSync(join(REPO, 'core', 'go.mod'), 'utf8');
+    const lines = mod.split('\n').filter((l) => /^toolchain\b/.test(l));
+    expect(lines, 'core/go.mod carries one toolchain line').toHaveLength(1);
+    const tc = /^toolchain go(\d+)\.(\d+)\.(\d+)$/.exec(lines[0]!);
+    expect(tc, `${lines[0]} is not an exact patch (go<major>.<minor>.<patch>)`).not.toBeNull();
+    const go = /^go (\d+)\.(\d+)(?:\.\d+)?$/m.exec(mod);
+    expect(go, 'core/go.mod has its go line').not.toBeNull();
+    expect(`${tc![1]}.${tc![2]}`, 'the toolchain is a patch of the go line\'s minor').toBe(`${go![1]}.${go![2]}`);
+  });
+
+  it('vets core/, then cross-builds each platform with CGO off, trimmed, unstamped and stripped, into the MANIFEST', () => {
+    const home = mkTmp('build-release-core-');
+    const root = fixtureRepo(home, { tag: 'v1.2.3' });
+    const out = join(home, 'out');
+    const r = runRelease(root, home, ['--out', out]);
+    expect(r.code, r.stderr).toBe(0);
+    const calls = readFileSync(join(home, 'go-argv'), 'utf8').split('\n').filter(Boolean);
+    const core = join(root, 'core');
+    expect(calls[0], 'go vet runs first, over the whole module').toBe(`${core}|CGO_ENABLED= GOOS= GOARCH=|[vet][./...]`);
+    const builds = calls.slice(1);
+    expect(builds).toHaveLength(CORE_TARGETS.length);
+    CORE_TARGETS.forEach((t, i) => {
+      const [goos, goarch] = t.split('-');
+      // -buildvcs=false: without it Go stamps the commit into the binary, so every merge would change the tarball and
+      // release-main.sh's compare would never find a merge that changed nothing it ships (measured: vcs.revision).
+      expect(builds[i]).toMatch(new RegExp(`^${core}\\|CGO_ENABLED=0 GOOS=${goos} GOARCH=${goarch}\\|`
+        + `\\[build\\]\\[-trimpath\\]\\[-buildvcs=false\\]\\[-ldflags\\]\\[-s -w\\]\\[-o\\]\\[/[^\\]]+/${coreBinPath(t)}\\]\\[\\./cmd/ccrc-core\\]$`));
+    });
+    const dest = join(home, 'x');
+    extract(join(out, 'ccrc-v1.2.3.tar.gz'), dest);
+    const manifest = readFileSync(join(dest, 'MANIFEST'), 'utf8');
+    for (const t of CORE_TARGETS) {
+      const rel = coreBinPath(t);
+      expect(readFileSync(join(dest, rel), 'utf8'), `${rel} is the build's output`).toBe(`fixture ccrc-core ${t}\n`);
+      expect(manifest, `the MANIFEST covers ${rel}`).toContain(`${sha256(join(dest, rel))}  ${rel}\n`);
+    }
+    // The source stays home: only the entry table and the binaries ride the tarball.
+    expect(tarListing(join(out, 'ccrc-v1.2.3.tar.gz')).filter((e) => e.startsWith('core/')).sort())
+      .toEqual(['core/entries.json', ...CORE_TARGETS.map(coreBinPath)].sort());
+  });
+
+  it('a failed cross-build fails the release, naming the platform, and writes no tarball', () => {
+    const home = mkTmp('build-release-core-fail-');
+    const root = fixtureRepo(home, { tag: 'v1.2.3' });
+    const out = join(home, 'out');
+    const bin = plantStubBin(home);
+    writeFileSync(join(bin, 'go'), `${GO_STUB.replace('exit 0', '[ "$GOOS-$GOARCH" != darwin-arm64 ] || exit 3\nexit 0')}`, { mode: 0o755 });
+    const r = spawnSync(BASH, [join(root, 'deploy', 'build-release.sh'), '--out', out],
+      { env: { ...process.env, ...GIT_ENV, HOME: home, PATH: `${bin}:${process.env.PATH ?? ''}` }, cwd: root, encoding: 'utf8' });
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain('darwin-arm64');
+    expect(existsSync(join(out, 'ccrc-v1.2.3.tar.gz'))).toBe(false);
+  });
+
+  it('the real go builds the real core/ into five binaries, each in its platform\'s format, carrying no commit', (ctx) => {
+    const go = spawnSync('bash', ['-c', 'command -v go'], { encoding: 'utf8' }).stdout.trim();
+    if (go === '') {
+      // CI's server shards set Go up (ci.yml), so there a missing go is a broken leg, never a skip.
+      if (process.env.CI) throw new Error('go is not on PATH on a CI runner: the server jobs set Go up (actions/setup-go)');
+      ctx.skip('go is not on PATH, so the real cross-build cannot run here; the stubbed cases above still pin the commands');
+    }
+    const home = mkTmp('build-release-core-real-');
+    const files: Record<string, string> = {};
+    const coreDir = join(REPO, 'core');
+    for (const rel of walkFiles(coreDir)) if (!rel.startsWith('bin/') && rel !== 'build.sh') files[`core/${rel}`] = readFileSync(join(coreDir, rel), 'utf8');
+    const root = fixtureRepo(home, { tag: 'v1.2.3', files });
+    const out = join(home, 'out');
+    const r = runRelease(root, home, ['--out', out], 'real');
+    expect(r.code, r.stderr).toBe(0);
+    const dest = join(home, 'x');
+    extract(join(out, 'ccrc-v1.2.3.tar.gz'), dest);
+    const magic: Record<string, string> = { linux: '7f454c46', darwin: 'cffaedfe', windows: '4d5a' };
+    for (const t of CORE_TARGETS) {
+      const bytes = readFileSync(join(dest, coreBinPath(t)));
+      expect(bytes.subarray(0, t.startsWith('windows-') ? 2 : 4).toString('hex'), `${t}'s format`).toBe(magic[t.split('-')[0]!]);
+      const info = spawnSync(go, ['version', '-m', join(dest, coreBinPath(t))], { encoding: 'utf8' }).stdout;
+      expect(info, `${t} names its build`).toContain('CGO_ENABLED=0');
+      expect(info, `${t} carries no commit, so a merge that changes nothing shipped builds the same bytes`).not.toContain('vcs.revision');
+    }
+  }, 600_000);
 });
 
 describe('build-release.sh: the tagged run — the matched set, checksummed', () => {
@@ -426,8 +589,8 @@ describe('build-release.sh: the tagged run — the matched set, checksummed', ()
     // The fourth is the library the body pins and loads (D-6913): a release without it installs a ccd that refuses every start.
     // The fifth and sixth are the docs redactor the installer publishes beside the body and pins (D-7077, OA-C11 (a)).
     // The seventh is the body's second library, the train proof (D-7463), pinned and loaded as the fourth is.
-    // The eighth is its third, the delegation lease (wave 5), likewise, and the ninth its fourth, the pool set (the Overlord W1), and the tenth its fifth, the long-lived arms, and the eleventh its sixth, the door process, and the thirteenth its seventh, the model aliases (appended, so the indexes above hold).
-    const pair = ['ccd/ccd', 'ccd/ccd-entry.py', 'ccd/ccd-entry-install.py', 'ccd/lib/disk-retention.sh', 'shared/redact.mjs', 'shared/redact-cli.mjs', 'ccd/lib/train-proof.sh', 'ccd/lib/delegation-lease.sh', 'ccd/lib/pool-set.sh', 'ccd/lib/long-lived.sh', 'ccd/lib/door.sh', 'ccd/door-process.mjs', 'ccd/lib/model-aliases.sh'] as const;
+    // The eighth is its third, the delegation lease (wave 5), likewise, and the ninth its fourth, the pool set (the Overlord W1), and the tenth its fifth, the long-lived arms, and the eleventh its sixth, the door process, and the thirteenth its seventh, the model aliases (appended, so the indexes above hold); the Go core's entry table follows (spec 2026-11-24), which the pair installer refuses a tree without.
+    const pair = ['ccd/ccd', 'ccd/ccd-entry.py', 'ccd/ccd-entry-install.py', 'ccd/lib/disk-retention.sh', 'shared/redact.mjs', 'shared/redact-cli.mjs', 'ccd/lib/train-proof.sh', 'ccd/lib/delegation-lease.sh', 'ccd/lib/pool-set.sh', 'ccd/lib/long-lived.sh', 'ccd/lib/door.sh', 'ccd/door-process.mjs', 'ccd/lib/model-aliases.sh', 'core/entries.json'] as const;
     const home = mkTmp('build-release-ccd-pair-');
     const root = fixtureRepo(home, {
       tag: 'v1.2.3', files: Object.fromEntries(pair.map((rel) => [rel, real(rel)])),
@@ -457,7 +620,7 @@ describe('build-release.sh: the tagged run — the matched set, checksummed', ()
     const real = (rel: string): string => readFileSync(join(REPO, rel), 'utf8');
     // With the libraries the body pins (D-6913, D-7463) and the docs redactor's two files (D-7077): the installer renders their digests
     // into the body, then stamps it.
-    const pair = ['ccd/ccd', 'ccd/ccd-entry.py', 'ccd/ccd-entry-install.py', 'ccd/lib/disk-retention.sh', 'shared/redact.mjs', 'shared/redact-cli.mjs', 'ccd/lib/train-proof.sh', 'ccd/lib/delegation-lease.sh', 'ccd/lib/pool-set.sh', 'ccd/lib/long-lived.sh', 'ccd/lib/door.sh', 'ccd/door-process.mjs', 'ccd/lib/model-aliases.sh'] as const;
+    const pair = ['ccd/ccd', 'ccd/ccd-entry.py', 'ccd/ccd-entry-install.py', 'ccd/lib/disk-retention.sh', 'shared/redact.mjs', 'shared/redact-cli.mjs', 'ccd/lib/train-proof.sh', 'ccd/lib/delegation-lease.sh', 'ccd/lib/pool-set.sh', 'ccd/lib/long-lived.sh', 'ccd/lib/door.sh', 'ccd/door-process.mjs', 'ccd/lib/model-aliases.sh', 'core/entries.json'] as const;
     const home = mkTmp('build-release-ccd-stamp-');
     const root = fixtureRepo(home, { tag: 'v1.2.3', files: Object.fromEntries(pair.map((rel) => [rel, real(rel)])) });
     const out = join(home, 'out');
@@ -731,6 +894,8 @@ const BUILD_JOB_KEYS = ['outputs', 'permissions', 'runs-on', 'steps', 'timeout-m
  *  version pin is a deliberate edit, so a future bump reds it again (D-6739:
  *  the pins name the majors #364 moved to). */
 const PUBLISH_USES_PINNED = ['actions/checkout@v7', 'actions/download-artifact@v8', 'actions/attest-build-provenance@v4'];
+/** setup-go at its major tag, the way every action here is pinned (oss-metadata's dependabot ecosystem floats it). */
+const SETUP_GO = 'actions/setup-go@v7';
 /** The two values the publish steps are handed (D-6729). */
 const GH_TOKEN_VALUE = '${{ github.token }}';
 const BUNDLE_PATH_VALUE = '${{ steps.attest.outputs.bundle-path }}';
@@ -808,6 +973,25 @@ function splitRows(file: string, shape: SplitShape): void {
   it(`W26-Y9: ${file}: every publish step's env:, values included, is exactly its own`, () => {
     const publish = jobNamed(jobs(), 'publish');
     expect(Object.fromEntries(publish.steps.filter((s) => s.keys.includes('env')).map((s) => [s.name, s.env]))).toEqual(shape.publishEnv);
+  });
+
+  // The Go core (spec 2026-11-24 §7): the build job cross-builds ccrc-core, so it sets Go up, at core/go.mod's version,
+  // on every run, after setup-node and before the step that builds. No cache: a restored Go build cache is compiled
+  // output nothing verifies, and these binaries ship. The publish job sets up nothing (W26-Y8 and the job boundary).
+  it(`W27-G1: ${file}: the build job sets Go up from core/go.mod, at its major tag, uncached, unconditionally, before the build`, () => {
+    const build = jobNamed(jobs(), 'build');
+    const go = onlyStep(build.steps.filter((s) => s.uses !== null && s.uses.startsWith('actions/setup-go@')), 'setup-go');
+    expect(go.uses).toBe(SETUP_GO);
+    expect(go.with).toEqual({ 'go-version-file': 'core/go.mod', cache: false });
+    expect(go.if, 'Go is set up on every run').toBeNull();
+    const at = (pred: (s: WorkflowStep) => boolean): number => build.steps.findIndex(pred);
+    const node = at((s) => s.uses !== null && s.uses.startsWith('actions/setup-node@'));
+    const goAt = at((s) => s === go);
+    const builds = at((s) => s.run !== null && /deploy\/(?:build-release|release-main)\.sh (?:--out|prepare)/.test(s.run));
+    expect(node).toBeGreaterThan(-1);
+    expect(goAt, 'after setup-node').toBe(node + 1);
+    expect(builds, 'before the step that builds').toBe(goAt + 1);
+    expect(src(), 'the step, as written').toContain(`      - uses: ${SETUP_GO}\n`);
   });
 }
 
@@ -1109,7 +1293,7 @@ describe('release-main.yml: the thin main-push workflow, pinned to its script (s
     expect(wf()).toMatch(/^      - name: Compare the build with the newest release it contains\n        id: compare\n        env:\n          GH_TOKEN: \$\{\{ github\.token \}\}\n        run: bash deploy\/release-main\.sh compare --out release-out$/m);
   });
 
-  it('W25-Y3: the steps run in one order — checkout, setup-node, prepare, compare, the decision check, record, upload, download, receive, attest, publish — and setup-node carries no condition', () => {
+  it('W25-Y3: the steps run in one order — checkout, setup-node, setup-go, prepare, compare, the decision check, record, upload, download, receive, attest, publish — and setup-node carries no condition', () => {
     const src = wf();
     // A version pin is a deliberate edit, so a future bump reds it again
     // (D-6739: the pins name the majors #364 moved to).
@@ -1117,6 +1301,7 @@ describe('release-main.yml: the thin main-push workflow, pinned to its script (s
     const order = [
       at(/^      - uses: actions\/checkout@v7$/m),
       at(/^      - uses: actions\/setup-node@v7$/m),
+      at(/^      - uses: actions\/setup-go@v7$/m),
       at(/^        run: bash deploy\/release-main\.sh prepare /m),
       at(/^        run: bash deploy\/release-main\.sh compare /m),
       at(/^      - name: Fail when the release decision did not reach compare's step output$/m),

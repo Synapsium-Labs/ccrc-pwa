@@ -684,6 +684,16 @@ jobs:
             server/package-lock.json
             agent/package-lock.json
             pwa/package-lock.json
+      # The Go core (spec 2026-11-24 §7): ccd's core suites build ccrc-core
+      # with the `go` on PATH, and a shard can be handed any server test, so
+      # every shard sets Go up at the version core/go.mod names (its toolchain
+      # line). The cache keys on core/go.mod: the module has no go.sum,
+      # setup-go's default key. trace-shard and macos.yml's test-macos
+      # carry the same step, for the same reason (ci-pipeline.test.ts).
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: core/go.mod
+          cache-dependency-path: core/go.mod
 
       - uses: ./.github/actions/server-deps
         with:
@@ -956,6 +966,57 @@ jobs:
         if: env.CCRC_LEG == 'run'
         working-directory: ${{ matrix.package }}
         run: ./node_modules/.bin/tsc --noEmit
+
+  # THE GO CORE (spec 2026-11-24 §7): gofmt, go vet, the module's own tests
+  # (-count=1: the rings test shells `go list`, which Go's test cache cannot
+  # see change) and the five cross-builds, through core/build.sh, the build
+  # command a release and deploy.sh run. A pull request runs it when it changes
+  # a file under core/ or shared infrastructure (the ask below, `OWN`); the
+  # merge queue and the daily run always do; a refresh or a rebuild skips every
+  # step, as the other legs do. NOT REQUIRED until the operator adds it to the
+  # ruleset; full-suite needs it, so its verdict reads this leg.
+  core:
+    name: test (core)
+    runs-on: ubuntu-24.04
+    # gofmt, vet, the tests and five small cross-builds: a few minutes cold.
+    # 15 is a deadline, not an estimate.
+    timeout-minutes: 15
+    env:
+      CCRC_LEG: ${{ (github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}
+    steps:
+      # Full depth: the pull request's ask diffs from its merge base.
+      - uses: actions/checkout@v7
+        if: env.CCRC_LEG == 'run'
+        with:
+          fetch-depth: 0
+
+      # The runner's own node: reach.mjs imports nothing outside node's own modules.
+      - name: Can this change reach the core?
+        id: reach
+        if: env.CCRC_LEG == 'run' && github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') || startsWith(github.head_ref, 'train/') }}
+        run: node .github/ci/reach.mjs --pkg core --event pull_request --base "origin/$BASE_REF" --full-label "$FULL_LABEL"
+
+      # The cache keys on core/go.mod, the module having no go.sum.
+      - uses: actions/setup-go@v7
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
+        with:
+          go-version-file: core/go.mod
+          cache-dependency-path: core/go.mod
+
+      - name: Test
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
+        working-directory: core
+        run: |
+          gofmt -l . | (! grep .)
+          go vet ./...
+          go test -count=1 ./...
+
+      - name: Cross-build ccrc-core for every platform
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
+        run: bash core/build.sh "$RUNNER_TEMP/core-bin"
 
   # The pwa suite, split into three vitest shards (D-6768). The unsharded Test
   # step measured about 576 s of a 10.8 min job; `--shard=i/3` takes each shard
@@ -1659,6 +1720,11 @@ jobs:
             server/package-lock.json
             agent/package-lock.json
             pwa/package-lock.json
+      # Go, as on server-shard: a traced test may build the core, and the trace records what that build reads.
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: core/go.mod
+          cache-dependency-path: core/go.mod
       - uses: ./.github/actions/server-deps
         with:
           platform: linux
@@ -1914,7 +1980,9 @@ jobs:
     # skipped)`, which main-artifact.mjs `isGreenFullSuiteJob` does not read as evidence, so such a run can neither
     # stand in for the daily run's macOS legs nor promote to stable. Every other run keeps the name `full-suite`.
     name: ${{ needs.select.outputs.macos_off == 'true' && 'full-suite (macOS skipped)' || 'full-suite' }}
-    needs: [select, server, server-shard, server-typecheck, test, pwa, build-pwa, macos, node-floor, browser-pwa]
+    # `core` (test (core)) is a need, so a red Go core fails the daily run and the stable gate; it stays off the
+    # required checks, which the operator owns.
+    needs: [select, server, server-shard, server-typecheck, test, pwa, build-pwa, macos, node-floor, browser-pwa, core]
     # Never on a merge-queue run or a pull request: both skip the macOS call, and a
     # run that fell back to `full` would read that skip as a red leg (landing-
     # order stage 2; amendment 2026-10-15). Neither is ever the stable gate's
@@ -1934,7 +2002,7 @@ jobs:
         if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || (contains(needs.*.result, 'skipped') && needs.select.outputs.macos_off != 'true')
         run: exit 1
       - name: Refuse a skipped leg other than the macOS call a dispatch left out (no script involved)
-        if: needs.select.outputs.macos_off == 'true' && (needs.select.result == 'skipped' || needs.server.result == 'skipped' || needs.server-shard.result == 'skipped' || needs.server-typecheck.result == 'skipped' || needs.test.result == 'skipped' || needs.pwa.result == 'skipped' || needs.build-pwa.result == 'skipped' || needs.node-floor.result == 'skipped' || needs.browser-pwa.result == 'skipped')
+        if: needs.select.outputs.macos_off == 'true' && (needs.select.result == 'skipped' || needs.server.result == 'skipped' || needs.server-shard.result == 'skipped' || needs.server-typecheck.result == 'skipped' || needs.test.result == 'skipped' || needs.pwa.result == 'skipped' || needs.build-pwa.result == 'skipped' || needs.node-floor.result == 'skipped' || needs.browser-pwa.result == 'skipped' || needs.core.result == 'skipped')
         run: exit 1
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -1949,7 +2017,7 @@ jobs:
         env:
           # D-8396: `macos` when a dispatch left the macOS legs out on purpose; verdict.mjs excuses that skip alone.
           SKIPPED_ON_PURPOSE: ${{ needs.select.outputs.macos_off == 'true' && 'macos' || '' }}
-          RESULTS: select=${{ needs.select.result }} server=${{ needs.server.result }} server-shard=${{ needs.server-shard.result }} server-typecheck=${{ needs.server-typecheck.result }} test=${{ needs.test.result }} pwa=${{ needs.pwa.result }} build-pwa=${{ needs.build-pwa.result }} macos=${{ needs.macos.result }} node-floor=${{ needs.node-floor.result }} browser-pwa=${{ needs.browser-pwa.result }}
+          RESULTS: select=${{ needs.select.result }} server=${{ needs.server.result }} server-shard=${{ needs.server-shard.result }} server-typecheck=${{ needs.server-typecheck.result }} test=${{ needs.test.result }} pwa=${{ needs.pwa.result }} build-pwa=${{ needs.build-pwa.result }} macos=${{ needs.macos.result }} node-floor=${{ needs.node-floor.result }} browser-pwa=${{ needs.browser-pwa.result }} core=${{ needs.core.result }}
         run: |
           node .github/ci/verdict.mjs full
           echo "verdict=green" >> "$GITHUB_OUTPUT"

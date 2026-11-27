@@ -18,6 +18,7 @@ import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import { SERVER_CAPS, SERVER_CAPS_FILE, SERVER_CAPS_LEASE_S, renderServerCaps } from '../../shared/api.js';
 import { readHookStateMeasured } from '../src/hookstate.js';
+import { IMPLS, runGoHook, type Impl } from './hookTwin.js';
 import { localIO } from '../src/io.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
@@ -40,12 +41,19 @@ afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
 const hookEnv = (): NodeJS.ProcessEnv => ({
   ...process.env, HOME: home,
-  PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+  PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
   TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: SID, CLAUDE_PID: '4242',
   CCRC_SESSION_GENERATION: GENERATION,
 });
-const run = (payload: object, env: NodeJS.ProcessEnv = {}): string =>
-  execFileSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env: { ...hookEnv(), ...env } });
+/** The implementation `run` starts (Go core wave 2): a `describe.each(IMPLS)` body sets it with `useImpl`. */
+let impl: Impl = 'bash';
+const useImpl = (i: Impl): void => { beforeEach(() => { impl = i; }); afterEach(() => { impl = 'bash'; }); };
+const run = (payload: object, env: NodeJS.ProcessEnv = {}): string => {
+  if (impl === 'bash') return execFileSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env: { ...hookEnv(), ...env } });
+  const r = runGoHook(home, payload, { ...hookEnv(), ...env });
+  expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
+  return r.stdout;
+};
 const reg = (): string => path.join(home, '.cc-sessions');
 const stateFile = (): string => path.join(reg(), `${ID}.hookstate.json`);
 const readState = (): Record<string, unknown> =>
@@ -122,7 +130,8 @@ const stopAtT0 = (): number => {
 };
 const PAIR = { bgDelegated: 2, bgDelegatedKinds: 'subagent' };
 
-describe('the carry engages only behind the server\'s word (D-5232, spec §6.1)', () => {
+describe.each(IMPLS)('the carry engages only behind the server\'s word (D-5232, spec §6.1) (%s)', (i) => {
+  useImpl(i);
   const todays = (t0: number, env: NodeJS.ProcessEnv = {}): void => {
     const before = Date.now();
     run(agentTool('PostToolUse'), env);
@@ -173,7 +182,9 @@ describe('the carry engages only behind the server\'s word (D-5232, spec §6.1)'
     todays(stopAtT0());
   });
   it('with the word listed and the file 179 s old: the carry', () => {
-    writeCaps(['dispatch-live-gate-v1', WORD], SERVER_CAPS_LEASE_S - 1);
+    // a second inside the lease; ten on Windows, where one hook run on a loaded box can take longer than a second and
+    // the file would have aged out before the hook read it (measured, Task 9b gate round)
+    writeCaps(['dispatch-live-gate-v1', WORD], SERVER_CAPS_LEASE_S - (process.platform === 'win32' ? 10 : 1));
     const t0 = stopAtT0();
     run(agentTool('PostToolUse'));
     expect(readState()).toMatchObject({ state: 'done', event: 'Stop', updatedAt: t0, ...PAIR });
@@ -191,7 +202,8 @@ describe('the carry engages only behind the server\'s word (D-5232, spec §6.1)'
   });
 });
 
-describe('an agent event never rewrites the main state (D-5232)', () => {
+describe.each(IMPLS)('an agent event never rewrites the main state (D-5232) (%s)', (i) => {
+  useImpl(i);
   beforeEach(advertise);
   it('an agent PostToolUse after a main Stop keeps done/Stop/T0 and the pair, and writes aliveAt', () => {
     const t0 = stopAtT0();
@@ -245,7 +257,8 @@ describe('an agent event never rewrites the main state (D-5232)', () => {
   });
 });
 
-describe('a subagent\'s own wait is attention, and its end restores the main state (D-5232)', () => {
+describe.each(IMPLS)('a subagent\'s own wait is attention, and its end restores the main state (D-5232) (%s)', (i) => {
+  useImpl(i);
   beforeEach(advertise);
   it('a subagent PermissionRequest over done stores waitPrev; the next agent tool event restores it with aliveAt', () => {
     const t0 = stopAtT0();
@@ -311,7 +324,8 @@ describe('a subagent\'s own wait is attention, and its end restores the main sta
   });
 });
 
-describe('freshness moves to aliveAt (D-5232)', () => {
+describe.each(IMPLS)('freshness moves to aliveAt (D-5232) (%s)', (i) => {
+  useImpl(i);
   beforeEach(advertise);
   const read = () => readHookStateMeasured(localIO, reg(), ID, SID, Date.now());
   it('a main Stop 40 minutes ago, then an agent PostToolUse, reads fresh through the aged door', async () => {
@@ -328,7 +342,8 @@ describe('freshness moves to aliveAt (D-5232)', () => {
   });
 });
 
-describe('with no file to carry, an agent event writes no hookstate (D-5232)', () => {
+describe.each(IMPLS)('with no file to carry, an agent event writes no hookstate (D-5232) (%s)', (i) => {
+  useImpl(i);
   it('behind the word: an agent PostToolUse, SubagentStart and SubagentStop on a session with no file write none', () => {
     advertise();
     for (const p of [agentTool('PostToolUse'), agentTool('PreToolUse'), subStart(A), subStop(A)]) {
@@ -342,7 +357,8 @@ describe('with no file to carry, an agent event writes no hookstate (D-5232)', (
   });
 });
 
-describe('the roster is keyed by agent_id (D-5232)', () => {
+describe.each(IMPLS)('the roster is keyed by agent_id (D-5232) (%s)', (i) => {
+  useImpl(i);
   const roster = (): Array<Record<string, unknown>> => readState()['subagents'] as Array<Record<string, unknown>>;
   const ids = (): unknown[] => roster().map((e) => e['id']);
   beforeEach(() => { run(userPrompt()); });

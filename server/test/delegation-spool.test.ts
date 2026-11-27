@@ -23,6 +23,8 @@ import { mkTmp } from './tmpHelpers.js';
 import { makeCcdHarness, WIDE_PANE_IF_UP, type CcdHarness } from './ccdWsHelpers.js';
 import { DELEGATION_SPOOL_BOUNDS, type DelegationEventKind } from '../../shared/api.js';
 import { parseDelegationSpoolLine } from '../src/coord/delegation-ingest.js';
+import { IMPLS, hookArgv, runGoHook, type Impl } from './hookTwin.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 const FIXTURES = path.resolve(__dirname, 'fixtures/delegation');
@@ -58,6 +60,17 @@ const capOf = (env: Record<string, string> = {}): number => {
   return capMemo.get(key)!;
 };
 const SMALL: Record<string, string> = { OSTYPE: 'darwin23' };
+/** The implementation `run` starts (Go core wave 2): bash, unless a describe that runs on both sets it for its cases. */
+let impl: Impl = 'bash';
+const useImpl = (i: Impl): void => {
+  beforeEach(() => { impl = i; });
+  afterEach(() => { impl = 'bash'; });
+};
+/** A case that stubs a PATH tool the Go hook never runs (jq, rm), swaps a node between two of the bash's builtins, counts the
+ *  bash's forks or reads its text stays bash-only (so does a tmux stub that outlives the 2 s bound while ignoring TERM, which `timeout`
+ *  waits for and the Go adapter kills at its bound; D-TBD-go-hook-tmux-bound-kill); the Go twins of the cap and of the append's guard are unit tests in core/. */
+const bashOnly = (i: Impl): typeof it | typeof it.skip => (i === 'bash' ? it : it.skip);
+const bashOnlyDescribe = (i: Impl): typeof describe | typeof describe.skip => (i === 'bash' ? describe : describe.skip);
 /** This runner's own cap, with nothing forced: 4096 on a glibc Linux runner, 1008 on a darwin or musl one. */
 const NATIVE_CAP = capOf({});
 const NO_GLIBC_ARM = NATIVE_CAP === B.lineBytesBelow ? '' : `this bash picks a ${NATIVE_CAP}-byte cap, so the 4096 arm cannot run here (D-5436)`;
@@ -200,7 +213,7 @@ const tmuxStub = (name: string, before = '', between = ''): void => {
 };
 /** `CLAUDE_CODE_EXECPATH` is blanked: the runner's own would put a `claudeVersion` in every line. */
 const hookEnv = (env: Record<string, string> = {}): NodeJS.ProcessEnv => ({
-  ...inherited(), HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+  ...inherited(), HOME: home, PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
   TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
   CLAUDE_CODE_EXECPATH: '', ...env,
 });
@@ -213,7 +226,7 @@ type Ran = { stdout: string; stderr: string };
 const run = (payload: object | string, env: Record<string, string> = {}, onReplay: () => void = () => {}): Ran => {
   for (let attempt = 0; ; attempt += 1) {
     const answered = records(tmuxAnswered()).length;
-    const r = spawnSync('bash', [HOOK], {
+    const r = impl === 'go' ? runGoHook(home, payload, hookEnv(env)) : spawnSync('bash', [HOOK], {
       input: typeof payload === 'string' ? payload : JSON.stringify(payload), encoding: 'utf8', env: hookEnv(env), timeout: 120_000,
     });
     expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
@@ -323,7 +336,8 @@ describe('ccd makes the owner\'s spool directory at spawn and advertises delegat
   };
   const spawn1 = (id = ID): string => h.sh(`${TMUX} rm -f "$HOME/pane-up"; _spawn_start ${id} new 2>&1; echo "[rc=$?]"`);
 
-  it('a spawn makes $REG/delegation/spool/<id> at mode 0700, and its parents private too', () => {
+  // Linux-only by nature: Windows has no POSIX modes to assert (Go core wave 2, Task 9b gate round)
+  it.skipIf(process.platform === 'win32')('a spawn makes $REG/delegation/spool/<id> at mode 0700, and its parents private too', () => {
     seed();
     expect(spawn1()).toContain('[rc=0]');
     expect(fs.statSync(leaf()).isDirectory()).toBe(true);
@@ -332,7 +346,7 @@ describe('ccd makes the owner\'s spool directory at spawn and advertises delegat
     expect(mode(base())).toBe(0o700);
   });
 
-  it('a respawn keeps what the directory holds, and re-privatises a mode that was loosened', () => {
+  it.skipIf(process.platform === 'win32')('a respawn keeps what the directory holds, and re-privatises a mode that was loosened', () => {
     seed();
     spawn1();
     fs.writeFileSync(path.join(leaf(), '2026101400.spool'), '{"kept":1}\n');
@@ -475,7 +489,10 @@ describe('the hook\'s literal bounds equal DELEGATION_SPOOL_BOUNDS', () => {
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 // The hook, with a fixture HOME.
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-describe('the delegation spool: the hook appends evidence to a directory ccd made', () => {
+describe.each(IMPLS)('the delegation spool: the hook appends evidence to a directory ccd made (%s)', (i) => {
+  useImpl(i);
+  const itB = bashOnly(i);
+  const describeB = bashOnlyDescribe(i);
   beforeEach(() => { setup(); plantOwnerDir(); });
   afterEach(teardown);
 
@@ -1036,7 +1053,7 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
     it('invalid UTF-8 in a payload string is replaced, so the line is strict UTF-8 and still a line', () => {
       const body = Buffer.from(`{"hook_event_name":"PreToolUse","session_id":"${CLAUDE_SID}","tool_name":"Agent","tool_input":{},"tool_use_id":"toolu_01","cwd":"/a`);
       const payload = Buffer.concat([body, Buffer.from([0xff, 0xfe]), Buffer.from('b"}')]);
-      const r = spawnSync('bash', [HOOK], { input: payload, env: hookEnv(), timeout: 120_000 });
+      const r = impl === 'go' ? runGoHook(home, payload, hookEnv()) : spawnSync('bash', [HOOK], { input: payload, env: hookEnv(), timeout: 120_000 });
       expect(r.status).toBe(0);
       const raw = fs.readFileSync(path.join(ownerDir(), bucketFiles()[0]!));
       expect(() => new TextDecoder('utf-8', { fatal: true }).decode(raw)).not.toThrow();
@@ -1188,7 +1205,9 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
   }
 
   // ── Step 3: the Bash listing ──
-  describe('the Bash listing: names of <git-common-dir>/worktrees, bounded, never paths', () => {
+  // Not on Windows: the listing triggers on a `/`-rooted cwd (the spool's `$trig`) and a Windows cwd is not one, so neither
+  // hook lists there (hook-core-spine's spool describe on Windows: every event agreed in both modes and neither listed).
+  describe.skipIf(process.platform === 'win32')('the Bash listing: names of <git-common-dir>/worktrees, bounded, never paths', () => {
     let repo: string;
     const names = (ls: string[]): string[] => [...ls].sort();
     const admin = (n: string): void => { fs.mkdirSync(path.join(repo, '.git', 'worktrees', n), { recursive: true }); };
@@ -1485,7 +1504,7 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
       ['a directory', (): void => { fs.rmSync(genFile()); fs.mkdirSync(genFile()); }],
       ['unreadable', (): void => { fs.chmodSync(genFile(), 0o000); }],
     ])('a %s generation: exit 0, no line, nothing else disturbed', (label, breakIt) => {
-      if (label === 'unreadable' && process.getuid?.() === 0) return;
+      if (label === 'unreadable' && (process.getuid?.() === 0 || process.platform === 'win32')) return;   // chmod 000 reads on Windows
       one(pre('Agent', {}, 'toolu_ctl'));        // control: with a sound generation this event is recorded
       const before = rawLines().length;
       breakIt();
@@ -1494,7 +1513,7 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
       expect(fs.existsSync(path.join(reg(), `${OWNER}.hookstate.json`)), 'the hookstate is a different file with a different rule').toBe(true);
     });
 
-    it('a generation that CHANGES while the hook runs records nothing (the second read, just before the append, disagrees)', () => {
+    itB('a generation that CHANGES while the hook runs records nothing (the second read, just before the append, disagrees)', () => {
       // A jq stand-in that runs the real jq and then swaps the row's generation: the change lands between the line being built and written.
       one(pre('Agent', {}, 'toolu_ctl'));        // control: with the real jq the same event is recorded
       const flag = path.join(home, 'swapped');
@@ -1512,7 +1531,7 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
   // ── Step 4: append and prune ──
   describe('append: one complete line per write, from any number of hooks at once', () => {
     const racer = (payload: object, env: Record<string, string> = {}): Promise<number | null> => new Promise((resolve, reject) => {
-      const child = spawn('bash', [HOOK], { env: hookEnv(env) });
+      const child = spawn(...hookArgv(impl), { env: hookEnv(env) });
       child.on('error', reject);
       child.on('close', (code) => resolve(code));
       child.stdin.end(JSON.stringify(payload));
@@ -1614,7 +1633,7 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
     // and the replay writes a second line. That was a red "exactly one line" under load. So the stub ignores SIGTERM from just
     // before its reply until it exits: a lookup the bound kills before the reply has no reply and no record, and one it reaches
     // after the reply has both. This row puts a 3 s sleep between the reply and the record, so the bound always falls there.
-    it('an answer the 2 s bound cuts between the reply and its record is still counted, so its run is never replayed into a second line (D-7449)', () => {
+    itB('an answer the 2 s bound cuts between the reply and its record is still counted, so its run is never replayed into a second line (D-7449)', () => {
       tmuxStub(OWNER, '', 'sleep 3\n');
       expect(one(pre('Agent', {}, 'toolu_cut1')).toolUseId).toBe('toolu_cut1');
       expect(records(tmuxAnswered()), 'the cut answer is recorded, once').toHaveLength(1);
@@ -1690,7 +1709,7 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
     // older hours only), so absence must be probed FIRST. This row runs the SHIPPED gate line against that transition: a spinning
     // checker evaluates it while a background writer creates each fresh path, and no evaluation may refuse. The control runs
     // the same harness with the two probes in the old order and must be caught; it refused about one transition in six measured.
-    it('a bucket created by a racing hook between the gate\'s probes is a regular file to it, never a refusal (D-7448)', () => {
+    itB('a bucket created by a racing hook between the gate\'s probes is a regular file to it, never a refusal (D-7448)', () => {
       const src = fs.readFileSync(HOOK, 'utf8');
       const body = src.slice(src.indexOf('_hook_spool_append() {'), src.indexOf('\n}\n', src.indexOf('_hook_spool_append() {')));
       const gates = body.split('\n').filter((l) => /^\s*\[\[ ! -L "\$f" && \(.*\) \]\] \|\| return 1\b/.test(l));
@@ -1719,13 +1738,14 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
     // W4-H4 (wave 4 PR4 Task 4.1, kept by D-7019): whatever the gate's form, a FIFO at the bucket's name is never opened
     // for the append, which would block the hook past its bound. A run whose pane lookup went unanswered never reached the
     // append, so it proves nothing: it is replayed, as `run` does, and the row requires an answered one (review 1365, F4).
-    it('W4-H4: a FIFO at the bucket\'s name is never opened: the hook exits 0 within its bound, writes nothing, and the FIFO stays a FIFO', () => {
+    // not on Windows: an MSYS2 FIFO is invisible to a native program (D-TBD-go-hook-windows-fifo)
+    it.skipIf(process.platform === 'win32')('W4-H4: a FIFO at the bucket\'s name is never opened: the hook exits 0 within its bound, writes nothing, and the FIFO stays a FIFO', () => {
       const name = `${new Date().toISOString().slice(0, 13).replace(/[-T]/g, '')}.spool`;
       execFileSync('mkfifo', [path.join(ownerDir(), name)]);
       let answered = false;
       for (let attempt = 0; attempt < 5 && !answered; attempt += 1) {
         const was = records(tmuxAnswered()).length;
-        const r = spawnSync('bash', [HOOK], {
+        const r = (impl === 'go' ? spawnSyncGroup : spawnSync)(...hookArgv(impl), {
           input: JSON.stringify(pre('Agent', {})), encoding: 'utf8', env: hookEnv(), timeout: 10_000, killSignal: 'SIGKILL',
         });
         expect(r.signal, 'the hook blocked opening the FIFO and was killed at the bound').toBeNull();
@@ -1835,7 +1855,7 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
       expect(exists(old)).toBe(true);
     });
 
-    it('a prune that cannot remove anything never fails the hook or the write: the line is in and the old bucket is left', () => {
+    itB('a prune that cannot remove anything never fails the hook or the write: the line is in and the old bucket is left', () => {
       const old = plant(ownerDir(), `${bucket(Date.now() - 60 * HOUR)}.spool`);
       fs.writeFileSync(path.join(home, 'bin', 'rm'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
       hit('toolu_01');
@@ -1845,7 +1865,7 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
   });
 
   // ── the prefilter's selectivity (review of Task 5: the unquoted form compiled the spool's jq for any text that mentioned a tool) ──
-  describe('the spool\'s jq text is compiled only for a payload that quotes a delegation name', () => {
+  describeB('the spool\'s jq text is compiled only for a payload that quotes a delegation name', () => {
     /** The length of the program the FIRST jq call of one hook run compiled (the payload parse): a jq on PATH that records its
      *  arguments' lengths, then runs the real one. */
     const parseLength = (payload: object): number => {
@@ -1882,7 +1902,7 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
   });
 
   // ── no extra forks ──
-  describe('the append forks nothing the event did not already fork', () => {
+  describeB('the append forks nothing the event did not already fork', () => {
     const EXTERNALS = ['jq', 'date', 'mkdir', 'find', 'git', 'ls', 'stat', 'sed', 'tr', 'cut', 'head', 'tail', 'grep', 'wc', 'sort', 'cat', 'mv', 'rm', 'touch', 'flock', 'mktemp', 'link', 'basename', 'dirname', 'readlink', 'realpath', 'awk'];
     const shims = (): (() => Record<string, number>) => {
       const log = path.join(home, 'forks');

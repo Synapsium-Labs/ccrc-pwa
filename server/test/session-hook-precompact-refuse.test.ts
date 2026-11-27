@@ -18,8 +18,9 @@ import path from 'node:path';
 import { spawnSyncGroup } from './spawnGroup.js';
 import { mkTmp } from './tmpHelpers.js';
 import { PRECOMPACT_PARITY, type PrecompactRow } from './sim/compactionSets.js';
+import { IMPLS, HOOK, runHook, type Impl } from './hookTwin.js';
+import { coreBinary } from './coreBuild.js';
 
-const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 const ID = 'lane-a-project-a';
 const UUID = '00000000-0000-4000-8000-000000000001';
 const GENERATION = '0189abcd-1234-5678-9abc-0123456789ab';
@@ -46,15 +47,19 @@ const phases = (): unknown[] => events().map((l) => l['phase']);
 
 const env = (over: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({
   ...process.env, HOME: home,
-  PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+  PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env['PATH'] ?? ''}`,
   TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: '4242',
   CCRC_SESSION_GENERATION: GENERATION, CS_REFUSED: '', CLAUDECODE: '', ...over,
 });
-/** One hook run: the spawn did not fail, exit 0, silent stderr; answers stdout. */
+/** The implementation the running describe asks for (Go core wave 2, Task 8b): each describe runs once per
+ *  implementation, in its own fixture HOME. */
+let impl: Impl = 'bash';
+/** The command that runs the hook in `impl`, for a spawn that wraps it (a closed stdout). */
+const hookArgv = (): string[] => (impl === 'bash' ? ['bash', HOOK] : [coreBinary(), 'hook']);
+/** One hook run: exit 0, silent stderr; answers stdout. */
 const run = (payload: object, over: NodeJS.ProcessEnv = {}): string => {
-  const r = spawnSyncGroup('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env: env(over), timeout: 30_000 });
-  expect(r.error, 'the spawn itself did not fail').toBeUndefined();
-  expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
+  const r = runHook({ home, env: (e = {}) => e }, impl, payload, env(over));
+  expect(r.status, 'the hook contract: exit 0 on every path (a timeout reads as status null)').toBe(0);
   expect(r.stderr, 'the hook is silent on stderr').toBe('');
   return r.stdout;
 };
@@ -88,7 +93,8 @@ const turn = (turnAt: number | null, sessionId = UUID): void => {
 /** The armed fixture: the route says refuse and this turn began a minute ago. */
 const armed = (): string => { field('refuse'); turn(Date.now() - 60_000); return transcript(); };
 
-describe('dark: with the route field absent, nothing is refused', () => {
+describe.each(IMPLS)('dark: with the route field absent, nothing is refused (%s)', (which) => {
+  beforeEach(() => { impl = which; });
   it('an automatic main-scope compaction with no precompact field passes and records pre', () => {
     turn(Date.now() - 60_000);
     expect(run(preCompact('auto', transcript()))).toBe('');
@@ -111,7 +117,8 @@ describe('dark: with the route field absent, nothing is refused', () => {
   });
 });
 
-describe('armed: refuse + auto + main scope is blocked once a turn', () => {
+describe.each(IMPLS)('armed: refuse + auto + main scope is blocked once a turn (%s)', (which) => {
+  beforeEach(() => { impl = which; });
   it('blocked: the block decision is the whole stdout, one refused line and no pre line, the PostCompact journal untouched', () => {
     const t = armed();
     expect(run(preCompact('auto', t))).toBe(BLOCK);
@@ -169,27 +176,36 @@ describe('armed: refuse + auto + main scope is blocked once a turn', () => {
     const t = armed();
     expect(run({ ...preCompact('auto', t), agent_id: 'a1' })).toBe('');
   });
-  it('a print that fails: the refused line stands, the compaction\'s own pre line follows, and the turn asks no second refusal', () => {
+  // `>&-` closes the hook's stdout; a full device fails the write itself (Linux has /dev/full, the one both read the same).
+  // A stdout CLOSED at start is the one the Go hook cannot see: Go's runtime reopens fd 1 on /dev/null before main, as a
+  // caller's `stdio: 'ignore'` or DEVNULL hands it (all three O_RDWR, measured), so the block reads as delivered there:
+  // D-TBD-go-hook-closed-stdout (core/cmd/ccrc-core/main.go). The refused line stands, and no pre line follows it.
+  it.each(['>&-', '> /dev/full'])('a print that fails (%s): the refused line stands, the compaction\'s own pre line follows, and the turn asks no second refusal', (redirect) => {
+    if (redirect === '> /dev/full' && process.platform !== 'linux') return;
     const t = armed();
-    const r = spawnSyncGroup('bash', ['-c', 'bash "$0" >&-; echo "rc=$?"', HOOK], { input: JSON.stringify(preCompact('auto', t)), encoding: 'utf8', env: env(), timeout: 30_000 });
+    const r = spawnSyncGroup('bash', ['-c', `"$@" ${redirect}; echo "rc=$?"`, '_', ...hookArgv()], { input: JSON.stringify(preCompact('auto', t)), encoding: 'utf8', env: env(), timeout: 30_000 });
     expect(r.error).toBeUndefined();
     expect([r.stdout, r.stderr]).toEqual(['rc=0\n', '']);
-    expect(phases()).toEqual(['refused', 'pre']);
+    // D-TBD-go-hook-closed-stdout, Linux and macOS only: on Windows the core's print fails there as the bash's does (measured)
+    const unseen = impl === 'go' && redirect === '>&-' && process.platform !== 'win32';
+    expect(phases()).toEqual(unseen ? ['refused'] : ['refused', 'pre']);
     expect(run(preCompact('auto', t))).toBe('');
-    expect(phases()).toEqual(['refused', 'pre', 'pre']);
+    expect(phases()).toEqual(unseen ? ['refused', 'pre'] : ['refused', 'pre', 'pre']);
   });
 });
 
 // Review 2004 F1: the arm used to print first and leave the `refused` line to the last arm, so any path that wrote no line
 // refused again on every later automatic PreCompact (for a directory or FIFO at prev, every turn). Now it records first,
 // so each such path lets the compaction through, this turn and the next: the arm fails open on both sides.
-describe('a refusal is printed only once it is recorded (review 2004 F1)', () => {
+describe.each(IMPLS)('a refusal is printed only once it is recorded (review 2004 F1) (%s)', (which) => {
+  beforeEach(() => { impl = which; });
   const twoTurns = (t: string, label: string): void => {
     expect(run(preCompact('auto', t)), `${label}: this turn`).toBe('');
     turn(Date.now() + 1);
     expect(run(preCompact('auto', t)), `${label}: the next turn`).toBe('');
   };
-  it('a FIFO at .compacteventsprev: the automatic PreCompact passes, and so does the next turn\'s', () => {
+  // not on Windows: an MSYS2 FIFO is invisible to a native program (D-TBD-go-hook-windows-fifo)
+  it.skipIf(process.platform === 'win32')('a FIFO at .compacteventsprev: the automatic PreCompact passes, and so does the next turn\'s', () => {
     const t = armed();
     execFileSync('mkfifo', [reg(`${ID}.compacteventsprev`)]);
     twoTurns(t, 'fifo');
@@ -220,7 +236,8 @@ describe('a refusal is printed only once it is recorded (review 2004 F1)', () =>
   });
 });
 
-describe('no history switch turns the arm off (R7b)', () => {
+describe.each(IMPLS)('no history switch turns the arm off (R7b) (%s)', (which) => {
+  beforeEach(() => { impl = which; });
   const ccrc = (...p: string[]): string => path.join(home, '.ccrc', ...p);
   it('with history-off, with history-steer-off, with steer-on absent and with a session id that is no UUID, the refusal still fires', () => {
     const t = armed();
@@ -251,7 +268,8 @@ describe('no history switch turns the arm off (R7b)', () => {
 // returns at once on CS_REFUSED. A refused event is no compaction and has no PostCompact, so a card set written for it
 // would stand unconsumed, and for twenty minutes the card would read the next real compaction as an overlap: scope
 // `ambiguous`, its card degraded, and history's steer print (main only) silent for it.
-describe('a refused event writes nothing of the card\'s (refusal-ahead-of-the-card)', () => {
+describe.each(IMPLS)('a refused event writes nothing of the card\'s (refusal-ahead-of-the-card) (%s)', (which) => {
+  beforeEach(() => { impl = which; });
   const HELPER_SRC = path.resolve(__dirname, '../../ccd/compact-card.mjs');
   const set = (): Record<string, unknown> | null =>
     fs.existsSync(reg(`${ID}.compactset`)) ? JSON.parse(fs.readFileSync(reg(`${ID}.compactset`), 'utf8').split('\n')[0]!) as Record<string, unknown> : null;
@@ -278,7 +296,8 @@ describe('a refused event writes nothing of the card\'s (refusal-ahead-of-the-ca
   });
 });
 
-describe('parity: the bash arm and precompactDecision agree on every row of the table', () => {
+describe.each(IMPLS)('parity: the bash arm and precompactDecision agree on every row of the table (%s)', (which) => {
+  beforeEach(() => { impl = which; });
   const plant = (r: PrecompactRow): string => {
     field(r.field);
     turn(Date.now() - 60_000);

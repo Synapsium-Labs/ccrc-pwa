@@ -252,6 +252,9 @@ function releaseTree(dir: string, version: string, sha: string): string {
   cpSync(path.join(REPO, 'ccd'), path.join(tree, 'ccd'), { recursive: true });
   cpSync(path.join(REPO, 'shared'), path.join(tree, 'shared'), { recursive: true });
   cpSync(path.join(REPO, 'deploy'), path.join(tree, 'deploy'), { recursive: true, filter: (s) => !s.endsWith('ccrc-mail.token') });
+  // The Go core's entry table (spec 2026-11-24), as a release carries it: ccd's pair installer refuses a tree without it.
+  mkdirSync(path.join(tree, 'core'), { recursive: true });
+  copyFileSync(path.join(REPO, 'core', 'entries.json'), path.join(tree, 'core', 'entries.json'));
   copyFileSync(path.join(REPO, 'install.sh'), path.join(tree, 'install.sh'));
   mkdirSync(path.join(tree, 'server'), { recursive: true });
   for (const f of ['package.json', 'package-lock.json']) copyFileSync(path.join(REPO, 'server', f), path.join(tree, 'server', f));
