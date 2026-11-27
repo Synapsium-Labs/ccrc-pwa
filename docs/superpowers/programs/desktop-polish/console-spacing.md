@@ -500,3 +500,29 @@ the branch absorbed nothing). Measured.
 The ten reds are inferred to be the load: each was a timeout, each is green alone, and the files that read this round's
 screens (`waiting`, `waiting-controls`, `item-nav`, `item-wrap`, `epic-page`, `programme-page`, `runs-widths`, `digest-widths`)
 are green, in their parts or alone. The pull request's own fast run on the pushed head is in the wave-done mail.
+
+### 15.9 The absorb, and the re-gate on it
+
+Before the push, the probe against main fabd9d399d exited 1 with a tree id: `pwa/test/older-server-render.test.tsx`
+conflicted (main's landing line, #3426, changed the same replace chain this wave had changed for the list column's head
+row). That is clause 16's first trigger, so the branch absorbed main once, with `git merge` (merge 5982b5f221). The
+conflict was resolved by keeping both sides: main's card assertion and tab-index swap, and this wave's head-row class strip.
+The file was claimed first (no other claim held it once #3426 had merged).
+
+Main's commits since the earlier merge (c435573bc4) changed the Docs reader, the project cards' landing line and six browser
+files. The re-gate on 5982b5f221, every run through `ccrc test`, one process at a time (measured):
+
+| Run | Result |
+|---|---|
+| The growth check, armed | green, 100 of 100 |
+| The server's whole-tree guards (as §15.8) | green, 68 files, 1,913 cases |
+| `ui`'s and pwa's static checks | clean, both |
+| The whole pwa jsdom set, 642 files, in eight parts | green, 21,924 passed, 2 skipped (one memory-cap kill reported in part 3, no file failed) |
+| The browser files main's new commits added or changed: `docs-compact-head`, `frame-cost`, `landing-line`, `reader-appearance`, `reader-frame`, `reader-places` | green: 140 (1 skipped), 11 (1 expected fail, 41 skipped), 80, 28, 61, 10 |
+| This round's own and the list column's, Waiting's and the item's: `console-spacing`, `connect-sheet`, `fleet-toggle-row`, `runs-widths`, `run-tally`, `instrument-desk`, `instrument-bar`, `refined-bar`, `refined-phone`, `waiting`, `item-nav`, `item-wrap` | green: 70, 20, 14, 231, 40, 33, 57, 29, 53, 202, 54, 16 |
+
+Every other browser file stands on the run of §15.8 (the merge with c435573bc4). Main's later commits changed none of those
+files, nor the helpers they import (the two that import a changed helper, `frame-cost` and `reader-appearance`, are above);
+they did change source that some of them render (the Docs reader's other files), which this wave does not touch, so those
+files are unmeasured on this head by me, and the merge queue runs them. After this note, the probe against main a45831a795
+was clean (exit 0), so nothing more was absorbed.
