@@ -44,6 +44,7 @@ import { LEDGER_SESSION_CALLERS, PROBE_ANSWER_MAX_CHARS, READ_LEDGER_WRITTEN, bo
 import { roundVerdict } from './probes.js';
 import { REPORT_ID_RE, startLoadsOf } from './startLoads.js';
 import { sandboxSettle, sandboxVerdict, settleEvidenceStands, type ExpectedSurface, type WorkspaceFact } from './sandboxCheck.js';
+import { holdOfStart } from './renewalReadings.js';
 import type { DesignationRead, SettleFact } from '../../../shared/overlord-designation.js';
 import {
   NOTE_LIST_LIMIT, handoverAsked, handoverVerdict, noteKeyFact, noteListBytes, notesPage, noteVerdict, revisedNoteFact, type NoteInput,
@@ -83,8 +84,13 @@ export interface SandboxSettlePort {
   /** The pending attempt becomes the binding; `ok: false` names why (the authority journal refused it, a row it cannot read).
    *  `previous` is the old body a rebind's go-live unbound (designation B), which the settle drains next. */
   goLive(sessionId: string, generation: string, at: number): { readonly ok: boolean; readonly detail?: string; readonly previous?: string | null };
-  /** The pending attempt ends `overlord-sandbox-unmet`, its stop owed; `changed` is false when it was no longer pending. */
-  failPending(sessionId: string, at: number): { readonly ok: boolean; readonly changed?: boolean };
+  /** The pending attempt ends `overlord-sandbox-unmet`, its stop owed; `changed` is false when it was no longer pending. `hold`,
+   *  when given, is written by the one hold writer in the failure's own transaction, and `held` answers it. */
+  failPending(sessionId: string, at: number, hold?: { readonly lane: string; readonly startId: number }):
+    { readonly ok: boolean; readonly changed?: boolean; readonly held?: { readonly ok: boolean; readonly changed?: boolean } };
+  /** The account the session runs on, the registry's measured wrapper (the lane a generation is minted with), or null when the
+   *  registry did not measure it. Absent (a test, an older wiring): the failed start's account is unknown and holds nothing. */
+  laneOf?(sessionId: string): Promise<string | null>;
   /** Stops the failed body (the designation's one drain). `unrecorded` when no row owes the stop (the failure could not be
    *  recorded), so the drain logs it as the residual it is and never claims a stop debt (review 3346 F1). It can throw when
    *  the stop-done write after the stop fails (a busy database): the settle then answers `threw`, and the body is already
@@ -1151,8 +1157,9 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
   // THE ACCOUNT HOLDS' DOORS (spec §3.6; renewal readings PR H, plan Task 11, questions 6 and 7 of the home plan): the operator's,
   // session-gated when sign-in is armed, never EXEMPT, consulting no box token, the backstop's shape. A hold only narrows (it
   // leaves one account out of the Overlord's ordered list), so its clear widens back to the set the operator chose: no step-up,
-  // and the clear records who cleared it (`operatorActor`). `clearAccountHold` is the clear's one writer; the generations pass is
-  // the hold's. `box-token-census.test.ts`'s `CONTINUITY_SESSION_DOORS` names both paths.
+  // and the clear records who cleared it (`operatorActor`). `clearAccountHold` is the clear's one writer; `holdAccount` is the
+  // hold's, with two callers behind `holdOfStart`: the generations pass, and the settle's `failPending` (renewal readings G).
+  // `box-token-census.test.ts`'s `CONTINUITY_SESSION_DOORS` names both paths.
 
   /** `GET /api/continuity/account-holds`: the standing holds, oldest first, each its lane, its cause word, the start that held it
    *  and when (`{ ok, holds: [{ lane, cause, startId, heldAt }] }`): no session text, only the lane names Settings shows. A table
@@ -1347,7 +1354,8 @@ async function settleOnce(port: SandboxSettlePort, coord: Pick<CoordStore, 'star
   const n = newest.newest;
   // A newest start with no stored report has nothing to settle: a re-run before its report lands decides nothing (review 3325 F2).
   if (n.report === null) return 'no-report';
-  const workspace = await port.workspaceOf(id);
+  // The account is read beside the workspace, before the evidence is re-checked, so no await follows that check (review 3346 F3).
+  const [workspace, lane] = await Promise.all([port.workspaceOf(id), laneOrNull(port, id)]);
   // The start and loads doors write outside the serialiser: evidence that changed during that await is obsolete (review 3346 F3).
   const after = coord.startLoadsOfNewestStart(id);
   const again = port.read();
@@ -1369,9 +1377,13 @@ async function settleOnce(port: SandboxSettlePort, coord: Pick<CoordStore, 'star
     // The attempt's identity is the one `sandboxSettle` measured (the pending session, its generation, the newest start). A
     // record that is refused, and one that throws, each still stop that body through the drain as unrecorded: no stop owed,
     // and the record is not retried (review 3346 F1, review 3366 F7). `changed: false` alone (no longer pending) stops nothing.
+    // The failed start's own account hold (renewal readings G, ticket first-start-failure-holds-its-account): the one decider,
+    // `holdOfStart`, over the verdict this settle holds and the account the body runs on, handed to the record, which writes it
+    // through the one hold writer in its own transaction. An unknown account holds nothing; the failure and its stop go on.
+    const h = holdOfStart(verdict, lane);
     let f: ReturnType<SandboxSettlePort['failPending']>;
     try {
-      f = port.failPending(act.sessionId, wall());
+      f = port.failPending(act.sessionId, wall(), h.kind === 'hold' ? { lane: h.lane, startId: n.start.id } : undefined);
     } catch (e) {
       console.warn(`ccrc-server: the failed attempt of ${act.sessionId} could not be recorded (it threw: ${e instanceof Error ? e.message : String(e)}); stopping it unrecorded`);
       await port.drain(act.sessionId, true);
@@ -1383,8 +1395,15 @@ async function settleOnce(port: SandboxSettlePort, coord: Pick<CoordStore, 'star
       return 'fail-refused';
     }
     if (f.changed === false) return 'fail-noop';
+    if (f.held !== undefined && !f.held.ok) console.warn(`ccrc-server: the account hold for the failed start ${n.start.id} could not be written; the failure stands`);
+    else if (f.held?.changed === true && h.kind === 'hold') console.warn(`ccrc-server: the Overlord's start ${n.start.id} loaded what its launch profile does not list from ${h.lane}'s own configuration; ${h.lane} is held out of its ordered list until the operator clears it`);
     await port.drain(act.sessionId, false);
     return 'fail-pending';
   }
   return 'none';
+}
+
+/** The port's account read, or null: absent, unmeasured or thrown, the failed start's account is unknown and holds nothing. */
+async function laneOrNull(port: Pick<SandboxSettlePort, 'laneOf'>, id: string): Promise<string | null> {
+  try { return (await port.laneOf?.(id)) ?? null; } catch { return null; }
 }

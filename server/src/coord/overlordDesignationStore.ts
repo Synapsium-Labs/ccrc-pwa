@@ -25,6 +25,7 @@ import { stampSequenceInTx, type SequenceLineInput } from './overlordSequenceSto
 import { txWithAuthorityReceipt, type OverlordAuthorityJournal, type AuthorityAppendError } from './overlordAuthorityJournal.js';
 import type { OverlordAuthorityMove } from './overlordAuthority.js';
 import { endOverlordGeneration, restampOverlordGeneration } from '../continuity/continuityStore.js';
+import { holdAccount, type HoldWrite } from '../continuity/accountHolds.js';
 import {
   ATTEMPT_OUTCOME_MAP, DESIGNATION_SEQUENCE_STATES, PENDING_KINDS, parseAccountPools, parseOverlordModel,
   type AttemptOutcome, type DesignationRead, type DesignationView, type OverlordModelClass, type PendingKind,
@@ -336,12 +337,17 @@ function goLiveRebind(db: DatabaseSync, add: (entry: OverlordAuthorityMove) => A
 
 // ── failPending ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
-export type FailResult = { ok: true; changed: boolean } | { ok: false; reason: 'bad-outcome' } | RowUnreadable;
+/** `held`: the account hold the caller handed, as the one hold writer answered it; absent when none was handed. */
+export type FailResult = { ok: true; changed: boolean; held?: HoldWrite } | { ok: false; reason: 'bad-outcome' } | RowUnreadable;
 
 /** The pending attempt ended without going live: clear the slot, write its outcome, and owe its stop when asked. Only for the
  *  pending id. It never touches the term or a live binding, and appends nothing. A generation the pending body minted (it is
- *  `overlord` by `identityOf` from its start) ends `retired` in the same transaction (review 2366 N3). */
-export function failPending(db: DatabaseSync, sessionId: string, outcome: AttemptOutcome, at: number, owesStop: boolean): FailResult {
+ *  `overlord` by `identityOf` from its start) ends `retired` in the same transaction (review 2366 N3). `hold`, when the settle
+ *  hands one (`holdOfStart` ruled the failed start's account held; renewal readings G, ticket
+ *  first-start-failure-holds-its-account), is written by the one hold writer in the same transaction, so the failure and its
+ *  hold commit or roll back together; a hold the table refuses is answered in `held` and never undoes the failure. */
+export function failPending(db: DatabaseSync, sessionId: string, outcome: AttemptOutcome, at: number, owesStop: boolean,
+  hold?: { readonly lane: string; readonly startId: number }): FailResult {
   if (!Object.hasOwn(ATTEMPT_OUTCOME_MAP, outcome)) return { ok: false, reason: 'bad-outcome' };
   return tx(db, (): FailResult => {
     const h = held(db);
@@ -352,8 +358,9 @@ export function failPending(db: DatabaseSync, sessionId: string, outcome: Attemp
     db.prepare(`UPDATE overlord_designation SET ${CLEAR_PENDING}, attemptId = ?, attemptOutcome = ?, attemptAt = ?, stopsOwed = ?, updatedAt = ? WHERE id = 1`)
       .run(sessionId, outcome, at, JSON.stringify(owed), at);
     endOverlordGeneration(db, sessionId, at); // the failed attempt's body never went live: its generation ends here (N3)
+    const w = hold === undefined ? undefined : holdAccount(db, { lane: hold.lane, startId: hold.startId, at });
     stampLines(db, [designationLine(sessionId, 'failed', p.actorDetail, at)]); // no append: the attempt's actor, as its row recorded it
-    return { ok: true, changed: true };
+    return w === undefined ? { ok: true, changed: true } : { ok: true, changed: true, held: w };
   });
 }
 

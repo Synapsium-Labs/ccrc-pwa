@@ -202,12 +202,13 @@ describe('the Overlord\'s operator quiet: the `@overlord` mark, through the one 
     const q = lastQuiet(f) as { kind: string; value: number };
     expect(q.kind).toBe('measured');
     expect(q.value).toBeGreaterThanOrEqual(BREAK_NO_MESSAGE_MS);
-    // The break is the quiet's alone: readers measured none (PR E's reading), the place still unmeasured (PR G's).
+    // The break is the quiet's alone: readers measured none (PR E's reading), the place held visible (PR G's reading).
     const i = f.soft.at(-1)!;
-    expect(softRenewalMay({ ...i, readersRunning: { kind: 'measured', value: 0 } })).toEqual({ start: true });
+    expect(softRenewalMay({ ...i, readersRunning: { kind: 'measured', value: 0 }, placeHiddenObservedMs: { kind: 'measured', value: 0 } }))
+      .toEqual({ start: true });
   });
 
-  it('quiet under 20 minutes is no break: with the place unmeasured the permit waits `unmeasured`, never starts', () => {
+  it('quiet under 20 minutes is no break: with the place visible the permit waits `no-break`, with it unmeasured `unmeasured`', () => {
     const f = laneFx();
     f.s.putOperatorMark(OVERLORD_OPERATOR_MARK, f.t.ports.clock.wall());
     passFor(f, BREAK_NO_MESSAGE_MS - 2 * RENEWAL_LANE_PERIOD_MS);
@@ -215,7 +216,10 @@ describe('the Overlord\'s operator quiet: the `@overlord` mark, through the one 
     const q = i.operatorQuietObservedMs as { kind: string; value: number };
     expect(q.kind).toBe('measured');
     expect(q.value).toBeLessThan(BREAK_NO_MESSAGE_MS);
-    expect(softRenewalMay({ ...i, readersRunning: { kind: 'measured', value: 0 } })).toEqual({ start: false, waitFor: 'unmeasured' });
+    // The place is PR G's reading (`continuity-renewal-readings-place.test.ts`); here it is set, so the quiet alone is judged.
+    const ready = { ...i, readersRunning: { kind: 'measured' as const, value: 0 } };
+    expect(softRenewalMay({ ...ready, placeHiddenObservedMs: { kind: 'measured', value: 0 } })).toEqual({ start: false, waitFor: 'no-break' });
+    expect(softRenewalMay({ ...ready, placeHiddenObservedMs: { kind: 'unmeasured', why: 'u' } })).toEqual({ start: false, waitFor: 'unmeasured' });
   });
 
   it('a prompt that moves the mark resets the quiet to 0 at the next pass', () => {

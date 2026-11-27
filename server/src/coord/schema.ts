@@ -4759,7 +4759,8 @@ export const MIGRATIONS: readonly string[] = [
   // ── 133: user_version 132 -> 133 ──────────────────────────────────────────
   // The Overlord's account holds (spec §3.6; plan `docs/superpowers/plans/2026-11-14-overlord-w1/w1-renewal-readings.md` Task 11):
   // a start that loaded what the launch profile does not list holds its account out of the ordered list until the operator
-  // clears it. One row per lane; TWO writers, `continuity/accountHolds.ts#holdAccount` (the generations pass) and
+  // clears it. One row per lane; TWO writers, `continuity/accountHolds.ts#holdAccount` (two callers behind `holdOfStart`: the
+  // generations pass, and a failed designate or rebind start's `failPending`, renewal readings G) and
   // `#clearAccountHold` (the operator's door). NEW TABLE only: an older build takes rule 3 and never names it. RE-MEASURE the
   // slot before merge (it must print 132 before this entry is counted):
   //     git fetch origin main

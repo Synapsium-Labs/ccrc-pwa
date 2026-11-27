@@ -12,6 +12,7 @@ import type { AuthorityAppend } from '../src/coord/overlordAuthorityJournal.js';
 import { designationFenceCases } from './overlordDesignationFenceCases.js';
 import { authorityEntry, type OverlordAuthorityMove } from '../src/coord/overlordAuthority.js';
 import { insertStart, mintGeneration } from '../src/continuity/continuityStore.js';
+import { accountHolds } from '../src/continuity/accountHolds.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 import { gateActorOf } from '../src/accounts/audit.js';
 import { attributionIdentity } from '../src/auth/attributionIdentity.js';
@@ -265,6 +266,67 @@ describe('failPending', () => {
     live(db, f);
     expect(failPending(db, A, 'create-failed', NOW + 3, false)).toEqual({ ok: true, changed: false });
     expect(rowOf(db)).toMatchObject({ sessionId: A, term: 1 });
+  });
+
+  // The first start's account hold (renewal readings G, ticket first-start-failure-holds-its-account): the settle hands the hold
+  // the one decider ruled, and the failure writes it through the one writer inside its own transaction.
+  const holdsOf = (db: DatabaseSync): unknown => accountHolds(db);
+  it('a hold it is handed is written in the failure\'s own transaction, through the one hold writer', () => {
+    const db = openDb(); const f = fake(db);
+    des(db, f);
+    expect(failPending(db, A, 'overlord-sandbox-unmet', NOW + 1, true, { lane: 'lane-a', startId: 7 }))
+      .toEqual({ ok: true, changed: true, held: { ok: true, changed: true } });
+    expect(rowOf(db)).toMatchObject({ pendingId: null, attemptId: A, attemptOutcome: 'overlord-sandbox-unmet' });
+    expect(holdsOf(db)).toEqual({ ok: true, lanes: ['lane-a'] });
+    expect(db.prepare('SELECT lane, startId, heldAt FROM overlord_account_holds').all()).toEqual([{ lane: 'lane-a', startId: 7, heldAt: NOW + 1 }]);
+  });
+  it('a failure that rolls back leaves no hold: the hold and the failure are one fact', () => {
+    const db = openDb(); const f = fake(db);
+    des(db, f);
+    db.exec("CREATE TRIGGER no_seq BEFORE INSERT ON overlord_sequence BEGIN SELECT RAISE(ABORT, 'forced'); END");
+    expect(() => failPending(db, A, 'overlord-sandbox-unmet', NOW + 1, true, { lane: 'lane-a', startId: 7 })).toThrow();
+    expect(rowOf(db)).toMatchObject({ pendingId: A });
+    expect(holdsOf(db)).toEqual({ ok: true, lanes: [] });
+  });
+  it('no reader ever sees the failure without its hold: at the hold\'s write, a second connection still reads the attempt pending', () => {
+    const dir = path.join(mkTmp('ccrc-designation-'), '.ccrc');
+    mkdirSync(dir, { recursive: true });
+    copyFileSync(template, path.join(dir, 'coord.db'));
+    const db = openCoordDb(path.join(dir, 'coord.db')); opened.push(db);
+    const reader = openCoordDb(path.join(dir, 'coord.db')); opened.push(reader);
+    const f = fake(db);
+    des(db, f);
+    // The hold's own insert asks the other connection what it can see: a hold written after the failure's commit, as a call of
+    // its own, would find the failure already visible there.
+    const seen: unknown[] = [];
+    db.function('peek_attempt', () => {
+      seen.push(reader.prepare('SELECT pendingId, attemptOutcome FROM overlord_designation').get());
+      return 0;
+    });
+    db.exec('CREATE TRIGGER peek_hold AFTER INSERT ON overlord_account_holds BEGIN SELECT peek_attempt(); END');
+    expect(failPending(db, A, 'overlord-sandbox-unmet', NOW + 1, true, { lane: 'lane-a', startId: 7 }))
+      .toEqual({ ok: true, changed: true, held: { ok: true, changed: true } });
+    expect(seen).toEqual([{ pendingId: A, attemptOutcome: null }]);
+    expect(reader.prepare('SELECT pendingId, attemptOutcome FROM overlord_designation').get())
+      .toEqual({ pendingId: null, attemptOutcome: 'overlord-sandbox-unmet' });
+    expect(holdsOf(reader)).toEqual({ ok: true, lanes: ['lane-a'] });
+  });
+  it('a hold the table refuses leaves the failure recorded and its stop owed, and says so', () => {
+    const db = openDb(); const f = fake(db);
+    des(db, f);
+    db.exec("CREATE TRIGGER no_hold BEFORE INSERT ON overlord_account_holds BEGIN SELECT RAISE(ABORT, 'forced'); END");
+    expect(failPending(db, A, 'overlord-sandbox-unmet', NOW + 1, true, { lane: 'lane-a', startId: 7 }))
+      .toMatchObject({ ok: true, changed: true, held: { ok: false } });
+    expect(rowOf(db)).toMatchObject({ pendingId: null, attemptOutcome: 'overlord-sandbox-unmet', stopsOwed: JSON.stringify([A]) });
+    expect(holdsOf(db)).toEqual({ ok: true, lanes: [] });
+  });
+  it('an id no longer pending writes no hold, and a failure with none handed writes none', () => {
+    const db = openDb(); const f = fake(db);
+    des(db, f);
+    expect(failPending(db, B, 'overlord-sandbox-unmet', NOW + 1, true, { lane: 'lane-a', startId: 7 })).toEqual({ ok: true, changed: false });
+    expect(holdsOf(db)).toEqual({ ok: true, lanes: [] });
+    expect(failPending(db, A, 'overlord-sandbox-unmet', NOW + 1, true)).toEqual({ ok: true, changed: true });
+    expect(holdsOf(db)).toEqual({ ok: true, lanes: [] });
   });
 });
 
