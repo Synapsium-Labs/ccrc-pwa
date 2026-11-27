@@ -245,15 +245,29 @@ describe('PortfolioStrip', () => {
     await screen.findByText('Programme prog-a');
     fireEvent.click(screen.getByRole('button', { name: 'Move Programme prog-c up' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save order' }));
-    // The sentence is the refusal table's own (`rank-changed`), not a second one of the strip's.
-    await screen.findByText(LEDGER_REFUSAL_TEXT['rank-changed']);
-    expect('rankMoved' in PORTFOLIO_WORDS).toBe(false);
+    // The strip's own sentence (home C's carried 4c): it has read the order again by itself, so it never asks the operator to,
+    // as the Waiting on you table's sentence does; that table's sentence keeps its meaning, read again and reorder.
+    await screen.findByText(PORTFOLIO_WORDS.rankChanged);
+    expect(screen.queryByText(LEDGER_REFUSAL_TEXT['rank-changed'])).toBeNull();
+    expect(LEDGER_REFUSAL_TEXT['rank-changed']).toMatch(/Read it again and reorder\.$/);
+    expect(PORTFOLIO_WORDS.rankChanged).not.toMatch(/Read it again/);
     await waitFor(() => expect(rowsShown(container)).toEqual(['prog-d', 'prog-a', 'prog-b', 'prog-c']));
     expect(rank).toHaveBeenCalledTimes(1);
     expect(read).toHaveBeenCalledTimes(2);
     expect(screen.queryByRole('button', { name: 'Save order' })).toBeNull();   // the draft was dropped with its revision
     await Promise.resolve();
     expect(rank).toHaveBeenCalledTimes(1);
+  });
+
+  it('`rank-changed` whose read again fails says the order shown may be out of date, never that it is the new order', async () => {
+    vi.spyOn(api, 'portfolio').mockResolvedValueOnce(answered(BASE())).mockRejectedValue(new ApiError(503, { ok: false, error: 'runs-unreadable' }));
+    vi.spyOn(api, 'rankPortfolio').mockRejectedValue(new ApiError(409, { ok: false, error: 'rank-changed', revision: 9 }));
+    render(<PortfolioStrip />);
+    await screen.findByText('Programme prog-a');
+    fireEvent.click(screen.getByRole('button', { name: 'Move Programme prog-c up' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save order' }));
+    await screen.findByText(PORTFOLIO_WORDS.rankChangedUnread);
+    expect(screen.queryByText(PORTFOLIO_WORDS.rankChanged)).toBeNull();
   });
 
   it('another refusal is drawn by its word and keeps the draft', async () => {

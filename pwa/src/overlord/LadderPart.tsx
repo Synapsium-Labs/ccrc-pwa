@@ -124,7 +124,7 @@ function Answered({ l, doors, lastRead }: { readonly l: LadderWire; readonly doo
 
 export function LadderPart({ doors }: { readonly doors: LadderDoors }): ReactNode {
   const read = useLadder();
-  const line = doors.door === 'rung' ? takingEffectLine(doors.narrowing, read, doors.answeredAt) : null;
+  const line = doors.door === 'rung' ? takingEffectLine(doors.narrowing, read, doors.readSeq, doors.answeredSeq) : null;
   // Pause's refusal and line belong to the readiness part; the rung's and Clear's are drawn here.
   const said = doors.door === 'rung' || doors.door === 'clear' ? doors.said : null;
   return (

@@ -42,7 +42,14 @@ const ladder = (over: Partial<LadderWire> = {}): LadderWire => ({
   ],
   readBy: [], lastChange: null, rungs: RUNGS_WITHOUT_WORDS, ...over,
 });
-const answered = (l: LadderWire): void => { act(() => useOverlordStore.setState({ ladder: { state: 'answered', value: l, at: NOW } })); };
+/** The store's ladder calls, numbered as `read()` numbers them (home C's carried 4d): each `answered` is the answer of a call issued
+ *  now, and a door that answers keeps the number issued so far, so only a later `answered` speaks for it. */
+let issued = 0;
+const answered = (l: LadderWire): void => {
+  issued += 1;
+  const n = issued;
+  act(() => useOverlordStore.setState({ ladder: { state: 'answered', value: l, at: NOW }, ladderSeq: n, ladderIssued: () => issued }));
+};
 
 const fakeStepUp = (): StepUp => ({
   needed: false, arm: 'loading', ready: false, busy: false, notice: null, canRetry: false,
@@ -64,7 +71,8 @@ const takingEffect = (): string | null => document.querySelector('[data-taking-e
 beforeEach(() => {
   vi.setSystemTime(new Date(NOW));
   doorsOut = null;
-  useOverlordStore.setState({ ladder: { state: 'loading' }, readiness: { state: 'loading' } });
+  issued = 0;
+  useOverlordStore.setState({ ladder: { state: 'loading' }, readiness: { state: 'loading' }, ladderSeq: 0, ladderIssued: () => issued });
 });
 afterEach(() => {
   cleanup();
@@ -226,12 +234,27 @@ describe('lowering the rung', () => {
     vi.spyOn(api, 'overlordRung').mockResolvedValue({ changed: true, rung: 'off', narrowing: TAKING });
     mount();
     // An earlier narrowing is already done on the read the console holds when the door answers.
-    act(() => useOverlordStore.setState({ ladder: { state: 'answered', value: DONE_READ, at: NOW - 30_000 } }));
+    answered(DONE_READ);
     fireEvent.click(rungButton('off'));
     await waitFor(() => expect(takingEffect()).toBe(takingEffectWords['witness-unmeasured']));
-    // The refresh failed: the store keeps the old value as stale, at its old time.
+    // The refresh failed: the store keeps the old value as stale, with its old answer's number.
     act(() => useOverlordStore.setState({ ladder: { state: 'stale', value: DONE_READ, at: NOW - 30_000, error: 'timeout' } }));
     expect(takingEffect()).toBe(takingEffectWords['witness-unmeasured']);
+  });
+  it('4d: a read issued before the door answered, landing in the same millisecond, does not end the line; the next one does', async () => {
+    answered(ladder());
+    vi.spyOn(api, 'overlordRung').mockResolvedValue({ changed: true, rung: 'off', narrowing: TAKING });
+    mount();
+    // A poll's call is in flight when the door is pressed: it was issued before the door answered.
+    issued += 1;
+    const inFlight = issued;
+    fireEvent.click(rungButton('off'));
+    await waitFor(() => expect(takingEffect()).toBe(takingEffectWords['witness-unmeasured']));
+    // It lands at the door's own millisecond (the system clock is fixed), saying an earlier change is done.
+    act(() => useOverlordStore.setState({ ladder: { state: 'answered', value: DONE_READ, at: NOW }, ladderSeq: inFlight }));
+    expect(takingEffect()).toBe(takingEffectWords['witness-unmeasured']);
+    answered(ladder({ lastChange: { at: NOW, actor: 'operator', narrowing: { state: 'done' } } }));
+    expect(takingEffect()).toBeNull();
   });
   it('F5: a read newer than the door that records no narrowing (a raise from another device) leaves no line', async () => {
     answered(ladder());
@@ -239,10 +262,7 @@ describe('lowering the rung', () => {
     mount();
     fireEvent.click(rungButton('off'));
     await waitFor(() => expect(takingEffect()).toBe(takingEffectWords['witness-unmeasured']));
-    act(() => useOverlordStore.setState({ ladder: {
-      state: 'answered', at: NOW + 1_000,
-      value: ladder({ operatorRung: 'chat', lastChange: { at: NOW + 900, actor: 'operator', narrowing: null } }),
-    } }));
+    answered(ladder({ operatorRung: 'chat', lastChange: { at: NOW + 900, actor: 'operator', narrowing: null } }));
     expect(takingEffect()).toBeNull();
   });
 

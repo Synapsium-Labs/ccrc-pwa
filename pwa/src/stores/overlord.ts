@@ -50,6 +50,11 @@ export interface OverlordState {
   readonly ladder: ReadState<LadderWire>;
   /** The readiness word (home B): its 503 `unavailable` is unmeasured, an older server's 404 `absent`. */
   readonly readiness: ReadState<ReadinessWire>;
+  /** The number of the ladder call whose answer `ladder` holds, 0 before any (home C's carried 4d). Calls are numbered as they
+   *  are ISSUED, so a door that answered after call N trusts only an answer of a call numbered above N: one issued after it. */
+  readonly ladderSeq: number;
+  /** The number of the newest ladder call issued so far. */
+  ladderIssued(): number;
   /** Start reading; the answer stops it. Counted, so two starters share one poll and the last stop ends it. */
   start(): () => void;
   /** Re-read the designation, the ladder and the readiness word now (after a door answered), when the word is advertised. */
@@ -94,7 +99,9 @@ export function createOverlordStore(deps: OverlordStoreDeps = {}): OverlordStore
       const mine = ++seq[key];
       const outcome = await call().catch((err: unknown) => ({ kind: 'failed', error: failureWords(err) }) as const);
       if (mine !== seq[key]) return;
-      set({ [key]: nextReadState(get()[key] as ReadState<never>, outcome as ReadOutcome<never>, now()) } as Partial<OverlordState>);
+      // A stale read keeps its last answer, so `ladderSeq` moves only with an answer.
+      const answeredSeq = key === 'ladder' && outcome.kind === 'value' ? { ladderSeq: mine } : {};
+      set({ [key]: nextReadState(get()[key] as ReadState<never>, outcome as ReadOutcome<never>, now()), ...answeredSeq } as Partial<OverlordState>);
     }
     const shown = (): boolean => overlordShown(capReadOf(get().caps));
 
@@ -129,6 +136,8 @@ export function createOverlordStore(deps: OverlordStoreDeps = {}): OverlordStore
       designation: { state: 'loading' },
       ladder: { state: 'loading' },
       readiness: { state: 'loading' },
+      ladderSeq: 0,
+      ladderIssued: () => seq.ladder,
       refresh,
       readAll,
       start: () => {
