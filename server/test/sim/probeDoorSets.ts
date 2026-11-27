@@ -862,6 +862,12 @@ export function snapshotFactsOfCases(m: CardModule): Record<string, SuiteCase> {
     'a snapshot written by snapshotFactsJson reads back as the same facts, stamped with the row time': () => {
       expect(m.snapshotFactsOf(m.snapshotFactsJson(GOOD), stamp)).toEqual({ ...GOOD, at: stamp });
     },
+    'messages (overlord-v1): absent from another role\'s snapshot; on an Overlord snapshot without them, unmeasured, never none': () => {
+      expect('messages' in parse(stored())!).toBe(false);
+      expect(parse({ ...stored(), role: 'overlord' })!.messages).toEqual({ kind: 'unmeasured', what: "the snapshot's messages" });
+      const list = [{ id: 4, at: AT, term: 2, state: 'delivered', cut: true }];
+      expect(parse({ ...stored(), role: 'overlord', messages: { kind: 'read', value: list } })!.messages).toEqual({ kind: 'read', value: list });
+    },
     'text that is not a snapshot object is null: not JSON, JSON null, an array, a scalar, no session id': () => {
       for (const text of ['', 'not json', '{"sessionId":', 'null', '[]', '[{"sessionId":"x"}]', '"x"', '5', 'true', '{}', '{"sessionId":5}']) {
         expect(m.snapshotFactsOf(text, stamp), text).toBeNull();
@@ -1256,6 +1262,8 @@ const SNAPSHOT_FACTS_SET: MutantSet<CardModule> = {
     { id: 'N32 a timer run of any shape', old: '(x.runId === null || num(x.runId))', new: 'true' },
     { id: 'N33 a timer programme of any shape', old: '(x.programme === null || str(x.programme))', new: 'true' },
     { id: 'N34 timer rows not checked', old: "    timers: fact('timers', listOf(", new: "    timers: fact('timers', (x: unknown) => Array.isArray(x) || listOf(" },
+    // overlord-v1 (plan Task 1 Step 8): an Overlord snapshot stored without `messages` read as read and empty.
+    { id: 'N35 an Overlord snapshot without messages read as none', old: `{ kind: 'unmeasured', what: "the snapshot's messages" }`, new: "{ kind: 'read', value: [] }" },
   ],
   suite: snapshotFactsOfCases,
 };

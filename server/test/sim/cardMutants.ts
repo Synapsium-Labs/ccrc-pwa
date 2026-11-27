@@ -1,10 +1,11 @@
 // The card's mutant sets (Overlord W1a card plan, PR A; the floors rule is D-8217's): `trimCard`, and each renderer's
-// never-empty rule (C51), each run against suite cases that load the mutated copy of server/src/continuity/card.ts.
+// never-empty rule (C51), each run against suite cases that load the mutated copy of server/src/continuity/card.ts. The
+// never-empty set covers the Overlord's W1 card too (overlord-v1, mutants V1 to V5, their killing cases in its suite).
 // Registered in mutation-floors.test.ts's MUTANT_SETS, with a floor each in mutation-floors.json.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
-import type { CardCheckpoint, CardFacts, CardNote, CardSection, Fact } from '../../../shared/continuity-card.js';
+import type { CardCheckpoint, CardFacts, CardMessage, CardNote, CardSection, Fact } from '../../../shared/continuity-card.js';
 import type * as CardModule from '../../src/continuity/card.js';
 import type { MutantSet, SuiteCase } from './mutate.js';
 
@@ -197,8 +198,10 @@ export const CARD_BLOCK_SET: MutantSet<Card> = {
 export const CARD_NEVER_EMPTY_SET: MutantSet<Card> = {
   modulePath: CARD_TS,
   mutants: [
-    { id: 'R1', old: "const silent = facts.every((k) => f[k].kind === 'read' && !holds(f, k));", new: 'const silent = false;' },
-    { id: 'R2', old: "const silent = facts.every((k) => f[k].kind === 'read' && !holds(f, k));", new: 'const silent = facts.every((k) => !holds(f, k));' },
+    // R1 and R2 re-anchored on the line's overlord-v1 text: each fact is read through `bodyFact`, the optional `messages` through
+    // its one reader (plan Task 1 Step 8).
+    { id: 'R1', old: "const silent = facts.every((k) => bodyFact(f, k).kind === 'read' && !holds(f, k));", new: 'const silent = false;' },
+    { id: 'R2', old: "const silent = facts.every((k) => bodyFact(f, k).kind === 'read' && !holds(f, k));", new: 'const silent = facts.every((k) => !holds(f, k));' },
     { id: 'R3', old: "if (typeof v === 'boolean') return v;", new: "if (typeof v === 'boolean') return false;" },
     { id: 'R4', old: 'return Array.isArray(v) ? v.length > 0 : true;', new: 'return Array.isArray(v) ? v.length >= 0 : true;' },
     { id: 'R5', old: 'if (v === null) return false;', new: 'if (v === null) return true;' },
@@ -207,11 +210,41 @@ export const CARD_NEVER_EMPTY_SET: MutantSet<Card> = {
     { id: 'R8', old: "plain: ['claims', 'intent', 'itemsRaised', 'mailOutstanding'],", new: "plain: ['claims', 'intent', 'itemsRaised', 'mailOutstanding', 'runs'],"},
     { id: 'R9', old: "'mailOutstanding', 'notes', 'checkpoint'],", new: "'mailOutstanding', 'checkpoint'],"},
     { id: 'R10', old: 'const body = [...nothingSections(role, f), ...bodyOf(role, f)];', new: 'const body = [...bodyOf(role, f)];' },
+    // The Overlord's W1 card (overlord-v1, plan Task 1 Step 8): each killed by a case in this suite.
+    { id: 'V1 the Overlord answers the old one line', old: 'export function renderCard(role: CardRenderer, f: CardFacts): readonly CardSection[] {\n',
+      new: "export function renderCard(role: CardRenderer, f: CardFacts): readonly CardSection[] {\n  if (role === 'overlord') return [keepLine('overlord', 'one line')];\n" },
+    { id: 'V2 the Overlord counts timers as body facts', old: "overlord: ['messages', 'notes', 'checkpoint'],", new: "overlord: ['messages', 'notes', 'checkpoint', 'timers']," },
+    { id: 'V3 the messages lines droppable', old: "return [{ key: 'messages', rank: RANK.keep, keep: true,", new: "return [{ key: 'messages', rank: RANK.keep, keep: false," },
+    { id: 'V4 the cap drops the ids line', old: 'const tail = left === 0 ? [] : [', new: 'const tail = true ? [] : [' },
+    { id: 'V5 an absent messages read as none', old: 'return f.messages ?? MESSAGES_ABSENT;', new: "return f.messages ?? { kind: 'read', value: [] };" },
   ],
   suite(m): Record<string, SuiteCase> {
     const has = (role: Parameters<Card['renderCard']>[0], f: CardFacts): boolean =>
       m.renderCard(role, f).some((x) => x.text === m.CARD_NOTHING_LINE);
+    const overlord = (over: Partial<CardFacts> = {}): CardFacts => empty({ role: 'overlord', roleWhy: 'the designation names this session', ...over });
+    const MSG = (id: number): CardMessage => ({ id, at: AT - id, term: 2, state: 'delivered', cut: false });
+    const text = (f: CardFacts): string => join(m.renderCard('overlord', f));
     return {
+      'the Overlord\'s card lists its unsettled messages, one line each': () => {
+        expect(text(overlord({ messages: read([MSG(41), MSG(42)]) }))).toMatch(/\nmessage 41, [^\n]*\nmessage 42, /);
+      },
+      'an Overlord card holding only timers carries its own nothing line and the timers': () => {
+        const s = m.renderCard('overlord', overlord({ messages: read([]), timers: read([{ id: 9, dueAt: AT, preview: 'p', runId: null, programme: null }]) }));
+        expect([s.some((x) => x.text === m.CARD_OVERLORD_NOTHING_LINE), s.some((x) => x.key === 'timers')]).toEqual([true, true]);
+      },
+      'a tiny budget keeps every message id': () => {
+        const notes = Array.from({ length: 20 }, (_, i) => noteOf(500 + i, AT - i, 'n'.repeat(300)));
+        const r = m.trimCard(m.renderCard('overlord', overlord({ messages: read([MSG(41), MSG(42), MSG(43)]), notes: read(notes) })), 20);
+        for (const id of [41, 42, 43]) expect(r.text, String(id)).toContain(`message ${id},`);
+      },
+      'past a small cap the block names every id and how many lines it left out': () => {
+        const last = m.messagesSections(overlord({ messages: read([41, 42, 43, 44, 45].map(MSG)) }), 32)[0]!.text.split('\n').at(-1);
+        expect(last).toBe("5 of these 5 message line(s) were left out past the block's cap of 32 bytes; every unsettled message's id: 41, 42, 43, 44, 45.");
+      },
+      'an absent messages field on the Overlord\'s card is named as unread, never the nothing line': () => {
+        const t = text(overlord());
+        expect([t.includes('\nCould not read the unsettled messages.\n'), t.includes(m.CARD_OVERLORD_NOTHING_LINE)]).toEqual([true, false]);
+      },
       'every role with nothing renders the line': () => {
         for (const role of ['coordinator', 'worker', 'reviewer', 'plain'] as const) expect(has(role, empty()), role).toBe(true);
       },

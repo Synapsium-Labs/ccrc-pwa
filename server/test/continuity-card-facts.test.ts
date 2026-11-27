@@ -1,13 +1,15 @@
 // Overlord W1a, the card piece, PR B (plan `w1a-card.md` Task 3): `gatherCardFacts` reads one session's facts from the rows,
 // keeps every failed read as an `unmeasured` fact naming it, fills `everTicked` from `tickedAt`, and takes the role from
 // `roleOf(roleFactsOf(…))`, an undecided reading naming the fact it could not measure (C49).
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { copyFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import type { DesignationRead, DesignationView } from '../../shared/overlord-designation.js';
-import { CARD_HISTORY, gatherCardFacts, type CardFactsDeps } from '../src/continuity/cardFacts.js';
+import {
+  CARD_HISTORY, CARD_MESSAGES_NO_STORE_WHAT, CARD_MESSAGES_UNREAD_WHAT, gatherCardFacts, type CardFactsDeps, type CardMessagesPort,
+} from '../src/continuity/cardFacts.js';
 import { intentOfCheckpoint } from '../src/continuity/declaredIntent.js';
 import { CARD_REGISTRY_UNREAD, cardRoleOf, snapshotFactsJson } from '../src/continuity/card.js';
 import { timerPreview } from '../src/continuity/timers.js';
@@ -533,5 +535,96 @@ describe('gatherCardFacts: the pending timers (the timers piece, plan w1a-timers
     expect(b).toBe(a);
     set(c, ME, NOW + 900_000, 'another');
     expect(snapshotFactsJson((await gatherCardFacts(deps(c), ME, NOW)).facts)).not.toBe(a);
+  });
+});
+
+describe('gatherCardFacts: the Overlord\'s unsettled messages (overlord-v1 Task 1 Step 7)', () => {
+  const live: DesignationRead = { kind: 'designated', sessionId: ME, term: 5, row: {
+    bound: { sessionId: ME, generation: 'g1' }, pending: null, term: 5, designatedTerm: 5, model: 'opus',
+    accountPools: { pools: [], untagged: true }, pastIds: [], actor: 'op', lastAttempt: null, stopsOwed: [] } };
+  const FACTS = [
+    { id: 4, at: NOW - 9_000, term: 5, state: 'delivered' as const, cut: false },
+    { id: 7, at: NOW - 3_000, term: 5, state: 'unknown' as const, cut: true },
+  ];
+  /** A store fake that counts its asks and answers `answer`. */
+  const storeOf = (answer: () => ReturnType<CardMessagesPort['unsettledFacts']>) => {
+    let asked = 0;
+    const port: CardMessagesPort = {
+      messageSessionOf: () => ({ kind: 'measured', value: 'absent' }) as never,
+      unsettledFacts: () => { asked += 1; return answer(); },
+    };
+    return { port, asked: () => asked };
+  };
+  const overlordStore = (): CoordStore => { const c = store(); c.designationRead = () => live; return c; };
+  const warns = (): { lines: string[]; restore: () => void } => {
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, 'warn').mockImplementation((...a: unknown[]) => { lines.push(a.map(String).join(' ')); });
+    return { lines, restore: () => spy.mockRestore() };
+  };
+
+  it('the Overlord\'s card takes the store\'s unsettled facts, each row field for field, and asks the store once', async () => {
+    const s = storeOf(() => ({ kind: 'measured', value: FACTS }));
+    const { facts, renderer } = await gather(overlordStore(), { messages: () => s.port });
+    expect(renderer).toBe('overlord');
+    expect(facts.messages).toEqual({ kind: 'read', value: FACTS.map(({ id, at, term, state, cut }) => ({ id, at, term, state, cut })) });
+    expect(s.asked()).toBe(1);
+  });
+
+  it('a store read that answers unmeasured is the fixed phrase, and its reason one server log line, never the fact', async () => {
+    const w = warns();
+    try {
+      const s = storeOf(() => ({ kind: 'unmeasured', why: 'SQLITE_BUSY: database is locked\nat line 2' }));
+      const { facts } = await gather(overlordStore(), { messages: () => s.port });
+      expect(facts.messages).toEqual({ kind: 'unmeasured', what: CARD_MESSAGES_UNREAD_WHAT });
+      expect(w.lines).toEqual(["ccrc-server: the card could not read the private store's unsettled messages: SQLITE_BUSY: database is locked\\u{a}at line 2"]);
+    } finally { w.restore(); }
+  });
+
+  it('a store read that throws is the same fixed phrase, with one log line', async () => {
+    const w = warns();
+    try {
+      const s = storeOf(() => { throw new Error('disk I/O error'); });
+      const { facts } = await gather(overlordStore(), { messages: () => s.port });
+      expect(facts.messages).toEqual({ kind: 'unmeasured', what: CARD_MESSAGES_UNREAD_WHAT });
+      expect(w.lines).toHaveLength(1);
+      expect(w.lines[0]).toContain('disk I/O error');
+    } finally { w.restore(); }
+  });
+
+  it('an absent store is the other fixed phrase, and no log line', async () => {
+    const w = warns();
+    try {
+      for (const messages of [undefined, () => null, () => undefined]) {
+        const { facts } = await gather(overlordStore(), messages === undefined ? {} : { messages });
+        expect(facts.messages).toEqual({ kind: 'unmeasured', what: CARD_MESSAGES_NO_STORE_WHAT });
+      }
+      expect(w.lines).toEqual([]);
+    } finally { w.restore(); }
+  });
+
+  it('the reason never reaches the snapshot (review 3889 F1): two reads failing for two reasons give one snapshot id', async () => {
+    const w = warns();
+    try {
+      const c = overlordStore();
+      const a = await gather(c, { messages: () => storeOf(() => ({ kind: 'unmeasured', why: 'database is locked' })).port });
+      const b = await gather(c, { messages: () => storeOf(() => ({ kind: 'unmeasured', why: 'no such table: operator_messages' })).port });
+      expect(a.facts.messages).toEqual(b.facts.messages);
+      expect(snapshotFactsJson(a.facts)).toBe(snapshotFactsJson(b.facts));
+      expect(snapshotFactsJson(a.facts)).not.toContain('locked');
+    } finally { w.restore(); }
+  });
+
+  it('every other renderer gets no messages field, and the store is not asked', async () => {
+    const s = storeOf(() => ({ kind: 'measured', value: FACTS }));
+    const c = store();
+    openRun(c, 'prog-a', ME);
+    const { facts, renderer } = await gather(c, { messages: () => s.port });
+    expect(renderer).toBe('coordinator');
+    expect('messages' in facts).toBe(false);
+    expect(JSON.parse(snapshotFactsJson(facts))).not.toHaveProperty('messages');
+    const plain = await gather(store(), { messages: () => s.port });
+    expect(plain.renderer).toBe('plain');
+    expect('messages' in plain.facts).toBe(false);
+    expect(s.asked()).toBe(0);
   });
 });

@@ -8,9 +8,12 @@ import {
 import { NOTES_CAP } from '../../shared/continuity.js';
 import { FLEET_ROLES, FLEET_ROLE_NAMES } from '../../shared/fleetRoles.js';
 import {
-  CARD_AUTHORITY_LINE, CARD_NOTHING_LINE, CARD_OVERLORD_LINE, CARD_UNREADABLE_TIME, cardPages, cardTokens, couldNotRead, iso, oneLine,
-  renderCard, trimCard,
+  CARD_AUTHORITY_LINE, CARD_CONSTITUTION_LINE, CARD_NOTHING_LINE, CARD_OVERLORD_NOTHING_LINE, CARD_UNREADABLE_TIME, cardPages, cardTokens,
+  couldNotRead, iso, messagesSections, oneLine, renderCard, snapshotFactsJson, snapshotFactsOf, trimCard,
 } from '../src/continuity/card.js';
+import { CARD_MESSAGES_NO_STORE_WHAT, CARD_MESSAGES_UNREAD_WHAT } from '../src/continuity/cardFacts.js';
+import { createHash } from 'node:crypto';
+import type { CardMessage } from '../../shared/continuity-card.js';
 import { CARD_TEXT_PREFACE } from '../src/coord/untrusted.js';
 import { utf8Bytes } from '../../shared/utf8.js';
 
@@ -436,10 +439,11 @@ describe('the worker, reviewer, plain and Overlord renderers (Task 2)', () => {
     expect(keys(renderCard('plain', empty({ runs: unmeasured('the runs') })))).toEqual(['role', 'nothing', 'history']);
   });
 
-  it('overlord: one line until W1, whatever the facts', () => {
-    expect(renderCard('overlord', full())).toEqual([{ key: 'overlord', rank: 1000, keep: true, text: CARD_OVERLORD_LINE }]);
-    expect(renderCard('overlord', allUnmeasured())).toEqual([{ key: 'overlord', rank: 1000, keep: true, text: CARD_OVERLORD_LINE }]);
-    expect(CARD_OVERLORD_LINE).toBe("The Overlord's card ships with W1 (`overlord-v1`).");
+  it('overlord: every fact it reads unmeasured names each one, and the history; the facts it does not read stay off', () => {
+    const s = renderCard('overlord', allUnmeasured({ messages: unmeasured(CARD_MESSAGES_UNREAD_WHAT) }));
+    expect(keys(s)).toEqual(['role', 'constitution', 'unmeasured:messages', 'unmeasured:timers', 'unmeasured:notes', 'unmeasured:checkpoint',
+      'unmeasured:history']);
+    expect(s.every((x) => x.keep)).toBe(true);
   });
 
   it('the history line names the node and the verb when a read names the node', () => {
@@ -454,16 +458,20 @@ describe('the worker, reviewer, plain and Overlord renderers (Task 2)', () => {
 });
 
 describe('never silent, for every role and every combination of failed reads (Review focus 1)', () => {
-  const FACT_KEYS = ['runs', 'ledger', 'claims', 'intent', 'itemsRaised', 'mailOutstanding', 'notes', 'checkpoint', 'timers', 'history'] as const;
-  const roles: readonly CardRenderer[] = CARD_RENDERERS.filter((r) => r !== 'overlord');
+  // The Overlord's renderer is in the sweep (overlord-v1): `messages` is one more bit, and a non-Overlord role does not read it,
+  // so its bit leaves that role's card as it was.
+  const FACT_KEYS = ['runs', 'ledger', 'claims', 'intent', 'itemsRaised', 'mailOutstanding', 'notes', 'checkpoint', 'timers', 'history',
+    'messages'] as const;
+  const roles: readonly CardRenderer[] = CARD_RENDERERS;
   it('says nothing was measured, or names what could not be read', () => {
     for (let mask = 0; mask < 1 << FACT_KEYS.length; mask++) {
       const over: Record<string, Fact<never>> = {};
       FACT_KEYS.forEach((k, i) => { if (mask & (1 << i)) over[k] = unmeasured(`the ${k}`); });
-      const f = empty(over as Partial<CardFacts>);
+      const f = empty({ messages: read([]), ...over } as Partial<CardFacts>);
       for (const role of roles) {
         const t = textOf(renderCard(role, f));
-        expect(t.includes(CARD_NOTHING_LINE) || /\nCould not read the (runs|ledger|claims|intent|itemsRaised|mailOutstanding|notes|checkpoint|timers)\./.test(t),
+        expect(t.includes(CARD_NOTHING_LINE) || t.includes(CARD_OVERLORD_NOTHING_LINE)
+          || /\nCould not read the (runs|ledger|claims|intent|itemsRaised|mailOutstanding|notes|checkpoint|timers|messages)\./.test(t),
           `${role} mask ${mask}`).toBe(true);
       }
     }
@@ -481,6 +489,8 @@ describe('a card\'s text depends on its rows alone, never on the clock (plan rev
     notes: read([noteOf(8, AT - 3 * MIN, 'n')]), checkpoint: read(cpOf(AT - 2 * MIN, 'c')),
     timers: read([timerOf(9, AT + 30 * MIN, 'check the checks')]),
     history: read({ verb: 'ccrc history describe', node: 'N0123456789abcdef0123' }),
+    // One unsettled message at a fixed time, so the Overlord's renderer is tested on a row, not only on the absent field.
+    messages: read([{ id: 31, at: AT - 4 * MIN, term: 2, state: 'delivered', cut: false }]),
   });
   it('the same rows render the same text while the clock moves across minutes, hours and days', () => {
     for (const role of CARD_RENDERERS) {
@@ -671,10 +681,10 @@ describe('pending timers on the card (the timers piece, plan w1a-timers.md Task 
     expect(bareLines(t)).toContain(`Pending timers: 3 pending; the next is due at ${iso(T1.dueAt)}.`);
   });
 
-  it('every renderer but the Overlord\'s one line carries the section; none carries it with no pending timer', () => {
+  it('every renderer carries the section, the Overlord\'s included (overlord-v1); none carries it with no pending timer', () => {
     for (const role of CARD_RENDERERS) {
       const t = textOf(renderCard(role, empty({ timers: read([T1]) })));
-      expect(t.includes('Pending timers: 1 pending'), role).toBe(role !== 'overlord');
+      expect(t.includes('Pending timers: 1 pending'), role).toBe(true);
       expect(textOf(renderCard(role, empty())).includes('Pending timers'), role).toBe(false);
     }
   });
@@ -807,6 +817,159 @@ describe('every page the raw row prints stays under the cut, its controls escape
         expect(rawRowBytes(page), `page ${i + 1} at budget ${keep}`).toBeLessThanOrEqual(TOOL_RESULT_CUT_BYTES);
         expect(RAW_CONTROL.test(page), `page ${i + 1} at budget ${keep}`).toBe(false);
       }
+    }
+  });
+});
+
+describe('the Overlord\'s W1 card (overlord-v1 Task 1; spec §3.3.3 C38, I8, C51)', () => {
+  const msg = (id: number, over: Partial<CardMessage> = {}): CardMessage =>
+    ({ id, at: AT - id * MIN, term: 3, state: 'delivered', cut: false, ...over });
+  const overlord = (over: Partial<CardFacts> = {}): CardFacts => empty({ role: 'overlord', roleWhy: 'the designation names this session', ...over });
+  const M1 = msg(41);
+  const M2 = msg(42, { state: 'picked-up', cut: true });
+
+  it('two messages, one timer and one note render, in order: role, authority, constitution, messages, timers, notes, history', () => {
+    const s = renderCard('overlord', overlord({ messages: read([M2, M1]), timers: read([timerOf(9, AT + 30 * MIN, 'check the checks')]),
+      notes: read([noteOf(8, AT - 3 * MIN, 'answer the operator')]) }));
+    expect(keys(s)).toEqual(['role', 'authority', 'constitution', 'messages', 'timers', 'note:8', 'history']);
+    const m = s.find((x) => x.key === 'messages')!;
+    expect(m.keep).toBe(true);
+    expect(m.text.split('\n').slice(1)).toEqual([
+      `message 41, recorded ${iso(M1.at)}, term 3, delivered`,
+      `message 42, recorded ${iso(M2.at)}, term 3, picked-up (cut)`,
+    ]);
+    expect(s.find((x) => x.key === 'constitution')!.text).toBe(CARD_CONSTITUTION_LINE);
+  });
+
+  it('no card text says the Overlord\'s card ships later, for any renderer', () => {
+    for (const role of CARD_RENDERERS) {
+      for (const f of [empty({ messages: read([M1]) }), allUnmeasured({ messages: unmeasured('the messages') }), empty()]) {
+        expect(textOf(renderCard(role, f)), role).not.toContain('ships with W1');
+      }
+    }
+  });
+
+  it('the list carries facts only: an operator message\'s text never reaches the card, and its lines are bare rows', () => {
+    const t = textOf(renderCard('overlord', overlord({ messages: read([M1, M2]) })));
+    expect(bareLines(t).filter((l) => l.startsWith('message '))).toHaveLength(2);
+    expect(t).not.toContain(CARD_TEXT_PREFACE);
+  });
+
+  it('an unread store renders exactly "Could not read the private store." and nothing after it; never "no messages"', () => {
+    const s = renderCard('overlord', overlord({ messages: unmeasured(CARD_MESSAGES_UNREAD_WHAT) }));
+    const i = s.findIndex((x) => x.key === 'unmeasured:messages');
+    expect(s[i]).toEqual({ key: 'unmeasured:messages', rank: 1000, keep: true, text: 'Could not read the private store.' });
+    expect(s[i + 1]!.key).toBe('history');
+    const t = textOf(s);
+    expect(t).not.toContain(CARD_OVERLORD_NOTHING_LINE);
+    expect(t).not.toMatch(/no (unsettled )?messages/i);
+    expect(textOf(renderCard('overlord', overlord({ messages: unmeasured(CARD_MESSAGES_NO_STORE_WHAT) }))))
+      .toContain('\nCould not read the private store, which this server does not have.\n');
+  });
+
+  it('an absent messages field on the Overlord\'s card reads unmeasured: "Could not read the unsettled messages.", never the nothing line, never a throw', () => {
+    const f = overlord();
+    expect('messages' in f).toBe(false);
+    const t = textOf(renderCard('overlord', f));
+    expect(t).toContain('\nCould not read the unsettled messages.\n');
+    expect(t).not.toContain(CARD_OVERLORD_NOTHING_LINE);
+    expect(t).not.toContain(CARD_NOTHING_LINE);
+  });
+
+  it('read and empty everywhere renders the Overlord\'s own nothing line, and never the other roles\' line', () => {
+    const s = renderCard('overlord', overlord({ messages: read([]) }));
+    expect(keys(s)).toEqual(['role', 'constitution', 'nothing', 'history']);
+    expect(s.find((x) => x.key === 'nothing')!.text).toBe(CARD_OVERLORD_NOTHING_LINE);
+    expect(textOf(s)).not.toContain(CARD_NOTHING_LINE);
+    expect(CARD_OVERLORD_NOTHING_LINE).toBe('No unsettled operator messages, notes or checkpoint were measured for this session.');
+  });
+
+  it('timers only: the Overlord\'s nothing line and its timers section, both (timers are not body facts)', () => {
+    const s = renderCard('overlord', overlord({ messages: read([]), timers: read([timerOf(9, AT, 'p')]) }));
+    expect(keys(s)).toEqual(['role', 'authority', 'constitution', 'nothing', 'timers', 'history']);
+    expect(s.find((x) => x.key === 'nothing')!.text).toBe(CARD_OVERLORD_NOTHING_LINE);
+  });
+
+  it('a message, a note or a checkpoint is content: the nothing line goes', () => {
+    for (const over of [{ messages: read([M1]) }, { messages: read([]), notes: read([noteOf(8, AT, 'n')]) },
+      { messages: read([]), checkpoint: read(cpOf(AT, 't')) }] as Partial<CardFacts>[]) {
+      expect(keys(renderCard('overlord', overlord(over))), JSON.stringify(over)).not.toContain('nothing');
+    }
+  });
+
+  it('the cap: past a small one, every id on one kept line and how many lines were left out; under it, one line a message', () => {
+    const five = [41, 42, 43, 44, 45].map((id) => msg(id));
+    const past = messagesSections(overlord({ messages: read(five) }), 64);
+    expect(past).toHaveLength(1);
+    expect(past[0]!.keep).toBe(true);
+    const lines = past[0]!.text.split('\n');
+    // One line of about 61 bytes fits in 64; the other four are left out, and the last line names all five ids.
+    expect(lines.filter((l) => l.startsWith('message ')).map((l) => l.split(',')[0])).toEqual(['message 41']);
+    expect(lines.at(-1)).toBe("4 of these 5 message line(s) were left out past the block's cap of 64 bytes; every unsettled message's id: 41, 42, 43, 44, 45.");
+    expect(messagesSections(overlord({ messages: read(five) }), 32)[0]!.text.split('\n').at(-1))
+      .toBe("5 of these 5 message line(s) were left out past the block's cap of 32 bytes; every unsettled message's id: 41, 42, 43, 44, 45.");
+    const under = messagesSections(overlord({ messages: read(five) }));
+    expect(under).toHaveLength(1);
+    expect(under[0]!.keep).toBe(true);
+    expect(under[0]!.text.split('\n').filter((l) => l.startsWith('message '))).toHaveLength(5);
+    expect(under[0]!.text).not.toContain('left out');
+  });
+
+  it('a cap that fits some lines keeps those, in id order, and still names every id', () => {
+    const five = [45, 41, 43, 42, 44].map((id) => msg(id));
+    const one = utf8Bytes(`message 41, recorded ${iso(msg(41).at)}, term 3, delivered`) + 1;
+    const s = messagesSections(overlord({ messages: read(five) }), 2 * one);
+    const lines = s[0]!.text.split('\n');
+    expect(lines.filter((l) => l.startsWith('message ')).map((l) => l.split(',')[0])).toEqual(['message 41', 'message 42']);
+    expect(lines.at(-1)).toContain('3 of these 5 message line(s) were left out');
+    expect(lines.at(-1)).toContain('41, 42, 43, 44, 45.');
+  });
+
+  it('the trim: at a small budget every message id survives, past the cap and under it', () => {
+    // 400 lines are past `MESSAGES_CAP_BYTES` (fifty of the widest), so the first card is cut to its ids line; five are not.
+    const many = Array.from({ length: 400 }, (_, i) => msg(100 + i));
+    const mail = Array.from({ length: 30 }, (_, i) => noteOf(500 + i, AT - i, 'n'.repeat(400)));
+    for (const f of [overlord({ messages: read(many), notes: read(mail) }), overlord({ messages: read(many.slice(0, 5)), notes: read(mail) })]) {
+      const r = trimCard(renderCard('overlord', f), 200);
+      expect(r.leftOut).toBeGreaterThan(0);
+      const ids = (f.messages as { value: readonly CardMessage[] }).value.map((m) => m.id);
+      for (const id of ids) expect(r.text, String(id)).toMatch(new RegExp(`(message ${id},|[ ,]${id}[,.])`));
+    }
+  });
+
+  it('every other renderer\'s text and snapshot id are byte for byte main\'s for a fixed fixture (pinned sha256)', () => {
+    const sha = (s: string): string => createHash('sha256').update(s).digest('hex');
+    const base = empty({
+      runs: read([RUN_A]), claims: read([{ id: 3, paths: ['server/src/a.ts'], runId: 11 }]), intent: read(true),
+      mailOutstanding: read([{ deliveryId: 7, fromId: 'coordinator', at: AT - 5 * MIN, subject: 's', parked: false }]),
+      notes: read([noteOf(8, AT - 3 * MIN, 'n')]), timers: read([timerOf(9, AT + 30 * MIN, 'check the checks')]),
+    });
+    // Measured on main at 07e8cc51e1 (the renderers and snapshotFactsJson before this piece), by the same fixture.
+    const MAIN = {
+      coordinator: ['af999f069378c8021a289215a5c82d9d712d9d1a57663f2d919c2b07a4c5296f', '1e6142fab2fdae98767ce792b2a1112a1174737160a6b4e1d2e4191d539bab60'],
+      worker: ['c556599584ad240626e958deb8fa0e2d157fa5b39f886f0d4c0214c3e60d3329', 'e11184071d6a35073484513b9d39d855f1ef71ae986af40b856a9f0a6a4ad955'],
+      reviewer: ['cad9b7938bf8d7dd15b2329fdbd7967cbc1b882befbd0cf972fd1f9b475e52a1', '276694bc11929a4751ae37c2d9576cab399a4dde292f8c591099b3630964ad89'],
+      plain: ['e747eb1fede82580f14984e0ce345c9cdd6dba0deb7130ba24e0e25735607630', '7f954e05f8a5afd226a408e9503f7c0c805e336dd139383266de1660c4d12cf7'],
+    } as const;
+    for (const role of ['coordinator', 'worker', 'reviewer', 'plain'] as const) {
+      const f = { ...base, role };
+      expect(JSON.parse(snapshotFactsJson(f)), role).not.toHaveProperty('messages');
+      expect([sha(snapshotFactsJson(f)), sha(trimCard(renderCard(role, f), CARD_BUDGET_TOKENS).text)], role).toEqual(MAIN[role]);
+    }
+  });
+
+  it('snapshots: an Overlord snapshot with messages reads them back field for field; without, unmeasured; another role\'s stays absent', () => {
+    const stamp = AT + 5 * MIN;
+    const withList = overlord({ messages: read([M1, M2]) });
+    expect(snapshotFactsOf(snapshotFactsJson(withList), stamp)).toEqual({ ...withList, at: stamp });
+    const without = snapshotFactsOf(snapshotFactsJson(overlord()), stamp)!;
+    expect(without.messages).toEqual({ kind: 'unmeasured', what: "the snapshot's messages" });
+    const other = snapshotFactsOf(snapshotFactsJson(empty({ role: 'worker' })), stamp)!;
+    expect('messages' in other).toBe(false);
+    const stored = JSON.parse(snapshotFactsJson(withList)) as Record<string, unknown>;
+    for (const bad of [[{ ...M1, id: 'x' }], [{ ...M1, cut: 'no' }], [{ ...M1, term: null }], [{ ...M1, state: 5 }], [{ ...M1, at: '1' }], 'none']) {
+      expect(snapshotFactsOf(JSON.stringify({ ...stored, messages: { kind: 'read', value: bad } }), stamp)!.messages, JSON.stringify(bad))
+        .toEqual({ kind: 'unmeasured', what: "the snapshot's messages" });
     }
   });
 });

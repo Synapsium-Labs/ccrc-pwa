@@ -22,19 +22,22 @@
  * the identity's live one replaced stored at its renewal (`liveGenerations`, then `checkpointBefore`, which finds that
  * generation by its place in the line, reads no state column and answers its outcome; read only at `renewed`). The timers piece adds the session's own pending timers
  * (`pendingTimersOf`, oldest due first), each carried with `timerPreview`'s cut of its note and never the note itself.
+ * `overlord-v1` adds, for the Overlord's renderer only, the private store's unsettled messages (`unsettledFacts`, facts and
+ * never text), through the port this gatherer declares (`CardMessagesPort`).
  */
 import { OUTSTANDING_DELIVERY_STATES, type ChildMark, type ChildReclaimGeneration, type RunKind } from '../../../shared/api.js';
 import {
   CARD_MAIL_MAX, type CardCheckpoint, type CardClaim, type CardFacts, type CardGoal, type CardHistory, type CardItem, type CardMail,
-  type CardNote, type CardProgramme, type CardRenderer, type CardRun, type CardTimer, type Fact,
+  type CardMessage, type CardNote, type CardProgramme, type CardRenderer, type CardRun, type CardTimer, type Fact,
 } from '../../../shared/continuity-card.js';
 import { noteKeyText } from '../../../shared/continuity.js';
 import { ratificationOf, type Ratification } from '../../../shared/ledgers.js';
 import type { CoordStore } from '../coord/store.js';
 import { operatorWasShown, type ItemRow } from '../coord/ledgersStore.js';
+import type { OperatorModelStore } from '../operatorModel/store.js';
 import { designationFactFrom, identityOf, roleFactsOf, type DesignationFact } from '../roleOf.js';
-import { CARD_REGISTRY_UNREAD, cardRoleOf, type CardRole } from './card.js';
-import { noteKeyReader, type NoteKeysCaller, type NoteKeysMessages } from './noteKeys.js';
+import { CARD_REGISTRY_UNREAD, cardRoleOf, oneLine, type CardRole } from './card.js';
+import { noteKeyReader, type NoteKeysCaller } from './noteKeys.js';
 import { noteKeyFact } from './notes.js';
 import { timerPreview } from './timers.js';
 
@@ -53,9 +56,35 @@ export interface CardFactsDeps {
   /** Declared coordinator intent on one incarnation, from the delegation checkpoint (`intentOfCheckpoint`, the one reader,
    *  `declaredIntent.ts`), or `not-ready` while the delegation lane has no ready checkpoint. */
   declaredIntent(id: string, incarnation: string): boolean | 'not-ready';
-  /** The private store's text-free message read (a `miss` note's key), resolved when the card is gathered; absent or null on a
-   *  server without the store, where a `message` key reads `unmeasured`. */
-  readonly messages?: () => NoteKeysMessages | null | undefined;
+  /** The private store's text-free reads (a `miss` note's key, and the Overlord's unsettled list), resolved when the card is
+   *  gathered; absent or null on a server without the store, where a `message` key reads `unmeasured` and so does the list. */
+  readonly messages?: () => CardMessagesPort | null | undefined;
+}
+
+/** The private store's reads the card makes, declared by this consumer: a `message` note key's owner (`messageSessionOf`, the
+ *  notes' narrow port `NoteKeysMessages`, unchanged), and the Overlord's unsettled list (`unsettledFacts`: facts, never text). */
+export type CardMessagesPort = Pick<OperatorModelStore, 'messageSessionOf' | 'unsettledFacts'>;
+/** The two noun phrases an unmeasured messages fact may carry, and no other (call 1374): the store could not be read; this
+ *  server has no private store. The store's reason is logged at the gather, never carried, because `snapshotFactsJson`
+ *  stores a fact whole and the snapshot id is its sha256 (review 3889 F1). */
+export const CARD_MESSAGES_UNREAD_WHAT = 'the private store';
+export const CARD_MESSAGES_NO_STORE_WHAT = 'the private store, which this server does not have';
+
+/** The Overlord's unsettled messages, facts only, field for field (I8: never trimmed here or on the card). A failed read is
+ *  one of the two fixed phrases, and its reason one server log line (the card door gathers once per request, never on a poll,
+ *  so the line repeats only as the operator's reads do). */
+function overlordMessagesOf(store: CardMessagesPort | null): Fact<readonly CardMessage[]> {
+  if (store === null) return unmeasured(CARD_MESSAGES_NO_STORE_WHAT);
+  let why: string;
+  try {
+    const r = store.unsettledFacts();
+    if (r.kind === 'measured') return read(r.value.map((m) => ({ id: m.id, at: m.at, term: m.term, state: m.state, cut: m.cut })));
+    why = r.why;
+  } catch (err) {
+    why = err instanceof Error ? err.message : String(err);
+  }
+  console.warn(`ccrc-server: the card could not read the private store's unsettled messages: ${oneLine(why)}`);
+  return unmeasured(CARD_MESSAGES_UNREAD_WHAT);
 }
 
 /** The history line's verb (C52). No read names a session's newest node yet (slug history-line-without-a-node). */
@@ -258,11 +287,16 @@ export async function gatherCardFacts(deps: CardFactsDeps, who: NoteKeysCaller, 
     return !r.ok ? null : r.rows.map((t) => ({ id: t.id, dueAt: t.dueAt, preview: timerPreview(t.note), runId: t.runId, programme: t.programme }));
   });
 
+  // The unsettled operator messages (overlord-v1): asked of the store only when the Overlord's renderer draws the card, and
+  // carried only on its facts, so every other card's facts, snapshot JSON and snapshot id are as they were (slug
+  // card-messages-field-is-optional).
+  const messages = role.renderer === 'overlord' ? overlordMessagesOf(deps.messages?.() ?? null) : undefined;
+
   return {
     renderer: role.renderer,
     facts: {
       sessionId: id, role: role.role, roleWhy: role.roleWhy, at: now, runs, ledger, claims, intent, itemsRaised, mailOutstanding, mailMore,
-      notes, checkpoint, timers, history: read(CARD_HISTORY),
+      notes, checkpoint, timers, history: read(CARD_HISTORY), ...(messages === undefined ? {} : { messages }),
     },
   };
 }

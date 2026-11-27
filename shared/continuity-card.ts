@@ -13,7 +13,8 @@ import type { ItemKind, ItemState, NeededBy, RatifiedByKind } from './ledgers.js
  *  reads no clock. */
 
 /** The renderer each role's card is drawn by, one per `FLEET_ROLES` row's `cardRenderer` column. `auditor` and
- *  `replay` take `plain` (C51). `overlord` renders one line until W1 ships its card. */
+ *  `replay` take `plain` (C51). `overlord` draws the Overlord's W1 card (`overlord-v1`): its unsettled messages, its timers,
+ *  its notes and its checkpoint. */
 export type CardRenderer = 'overlord' | 'coordinator' | 'worker' | 'reviewer' | 'plain';
 const CARD_RENDERER_MAP: Readonly<Record<CardRenderer, true>> = {
   overlord: true, coordinator: true, worker: true, reviewer: true, plain: true,
@@ -167,6 +168,13 @@ export interface CardTimer {
   readonly programme: string | null;
 }
 
+/** One unsettled operator message on the Overlord's card (Overlord W1, `overlord-v1`): facts only, never its text, which the
+ *  Overlord reads through the `messages` door and its read ledger (slug card-lists-message-facts-not-text). `state` is the
+ *  private store's word, or `unknown` for one this build does not know; `cut` says the stored text was cut at its cap. */
+export interface CardMessage {
+  readonly id: number; readonly at: number; readonly term: number; readonly state: string; readonly cut: boolean;
+}
+
 /** The history line's facts: the verb that reads a node, and this session's newest node when a read names it. */
 export interface CardHistory { readonly verb: string; readonly node: string | null }
 
@@ -192,6 +200,12 @@ export interface CardFacts {
   /** The session's own pending timers, oldest due first (the timers piece). */
   readonly timers: Fact<readonly CardTimer[]>;
   readonly history: Fact<CardHistory>;
+  /** The private store's unsettled operator messages, in id order and never trimmed (I8), a plain `Fact`: its unmeasured arm
+   *  carries `what` and nothing else, because `snapshotFactsJson` stores a fact whole (review 3889 F1, call 1374). Present on
+   *  the Overlord's card only, read or unmeasured; absent on every other card, so no other snapshot's JSON or id moves (slug
+   *  card-messages-field-is-optional). The card's one reader of it is `card.ts#messagesFactOf`, which reads an absent field
+   *  as unmeasured, never as no messages. */
+  readonly messages?: Fact<readonly CardMessage[]>;
 }
 
 /** THE ANCHOR (C38; plan `w1a-anchor.md`): the card's short part, which the session hook prints in its first slot at a
