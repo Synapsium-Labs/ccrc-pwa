@@ -1,6 +1,7 @@
 # Wave 183: the session hook's cost row that went red now and then
 
-Task note for desktop-polish wave 183 (issue #3418). Claims are labelled **measured** (run here) or **read** (from the
+Task note for desktop-polish wave 183 (issue #3418), and for wave 191, its carry (review 4024's M1 and W1 to W6;
+§1, §8, §9 and §10). Claims are labelled **measured** (run here) or **read** (from the
 code or a log, not run). Every figure is the worker's own measurement; the scratch scripts and their raw outputs are
 not in the tree, and the tables below are copied from them.
 
@@ -14,8 +15,9 @@ not in the tree, and the tables below are copied from them.
   #3169 and -0.029 over 104 after it (§3). The two reds in the issue were the tail of that spread.
 - **This row cannot see a quadratic step,** because on this input the program is already quadratic: both programs cost
   about 0.2 s plus c·n², the n² term about 98% of the fitted cost at 32 KB, so their 64/32 ratio sits near 3.9
-  whatever is added in n² (§4). The linearity rows catch growth faster than n²; the 64 KB cost rows catch a cost of any
-  shape.
+  whatever is added in n² (§4). The linearity rows catch growth faster than n². The 64 KB deny cost rows catch a cost
+  of any shape on the deny path once it is about half the path's cost (the factor 1.5); the class cost rows catch one
+  only once it is dearer than the 100 ms floor, at their baselines of under 200 ms (§8).
 - **What made the reds:** one change of CPU contention inside a round. CPU time is not contention-proof on a shared
   core, and the current program's 64 KB sample was always the last of a round (§5).
 - **The repair (D-9118):** the four linearity rows measure four rounds, reverse which program runs first on alternate
@@ -32,13 +34,23 @@ not in the tree, and the tables below are copied from them.
   of the test file read red by case name (§9). What the rows cannot see, and what D-9141 tightened and widened, are
   stated in the test's comment, the plan's entry and §8; the figures review 4009 could not reproduce are corrected
   (§3, §4, §5, §9, §10).
-- **Fix round 2 (review 4016):** the places that use the table and the cells are pinned too. A pure `rowPrograms`
-  maps a row to its two texts, `pairCells` takes them, and a scan of the test file holds the call sites; five ways to
-  read the wrong program that round 1 left green now read red (§9). The deny bracket and the class rows' blind spots
-  are stated per row, and the header keeps the rules and points here for the figures.
+- **Fix round 2 (review 4016):** a pure `rowPrograms` maps a row to its two texts, `pairCells` takes them, and a scan
+  of the test file holds how the call sites are SPELT: the five spellings of reading the wrong program that round 1 left
+  green read red (§9). It did not hold how they are WIRED: review 4024 built the same crossings spelt otherwise, and
+  every case stayed green. The deny bracket and the class rows' blind spots are stated per row, and the header keeps
+  the rules and points here for the figures.
+- **Wave 191 (review 4024 M1): the wiring is held by behaviour.** Between its row's programs and its assertion a
+  measuring case now does one thing, a call of `costReading` or `linearityReading`, pure but for the programs and the
+  timing function it is handed; the timing function is `timedBy` on the real child runner, and the reader is
+  `vendoredReader` on the real file read. Cases that burn no CPU run each of them on recording stand-ins and pin, for
+  all eight rows, which program each reading came from, its cell, the order and the count of calls. The scan shrinks
+  to what only text can hold: each measuring case's body is that one call on the real `programsOf` and `timed`, and
+  no name in its table is bound twice. Every mutant review 4024 built, eight of this wave's and the five of review
+  4046 (U1 to U5, pinned in fix round 1) read red by case name. §9 lists the crossings measured as still passing every
+  case and who measured them; that list is what was measured, not a claim that nothing else passes.
 - **The class floor is 100 ms** (the hook owner's call 1643, after review 4009 showed 250 ms let a class path 5.5 times
-  dearer through). Hosted, every class reading less its baseline was within 2 ms, well under the owner's 50 ms line
-  (§8). Through the real file, about +80 ms reads green and about +120 ms red (§9).
+  dearer through). Hosted, every class reading less its baseline was within 2 ms on baff80048a's four readings, and
+  within 11 ms across the eight read on three heads, well under the owner's 50 ms line (§8). Through the real file, about +80 ms reads green and about +120 ms red (§9).
 
 ## 2. Where and how it was measured
 
@@ -323,11 +335,25 @@ rows keep the 25 ms floor; the class rows, whose program costs about one jq star
 owner first set 250 ms (call 1562), on the condition that their worst loaded reading stayed under half the bound (§9).
 After review 4009 it settled 100 ms (call 1643), by the rule below. Each cost row now prints its current, baseline and bound on green. Which row reads which file is one table in the test, `ROW_BASELINE`,
 and `programsOf` maps a row to its two program texts through it; `pairCells` puts each text's sample in its own cell.
-Cases that measure nothing pin the table (the four cost rows read the program at the gate, the four linearity rows the
-original), the mapping and the cells. A scan of the test file's own code pins the call sites: a vendored program is
-read only by `programsOf` and the hash case, each measuring case asks for its own row, and the linearity case pairs
-through `pairCells` (reviews 4009 F2 and 4016 F1, §9). The scan reads text, not behaviour; its comment says what it
-cannot see.
+What a measuring case does between its row's programs and its assertion is `costReading` or `linearityReading`, and
+the CPU it reads comes from `timedBy` on the real child runner (wave 191, review 4024 M1).
+
+What holds the wiring, case by case and by reading:
+- **Held by a case that burns no CPU:** the table (the four cost rows read the program at the gate, the four
+  linearity rows the original); that the file registers one measuring case per row of it, eight, and that the loop's
+  shape and mode lists cross to its rows; the mapping, `rowPrograms`; `pairCells`' order and cells; the reader, which
+  returns the very bytes it hashed and refuses a wrong hash; `timedBy`, which runs the program, mode and payload it is
+  given; for all eight rows through stand-ins, which program each reading came from, its cell, its size, the order and
+  the count of calls; and the bound of the four cost rows (quotes/deny, quotes/class, dqsub/deny and dqsub/class).
+- **Held by the scan, which reads text:** each measuring case's body, whitespace aside, is its one call on the real
+  `programsOf` and `timed` and its assertion, found by its title and its timeout literals (the cost case's one, the
+  linearity case's two); the five lines that compose the hook's path, the hook's program, the reader, `programsOf`
+  and `timed` occur once each, as written; and each of the seventeen names in its table (`programsOf`, `timed`,
+  `costReading`, `linearityReading`, `rowPrograms`, `readVendored`, `vendoredReader`, `timedBy`, `childCpu`,
+  `pairCells`, `linearityVerdict`, `prog`, `expect`, `scaled`, `linearityKb`, `SHAPE_NAMES`, `MODES`) is written a
+  fixed number of times, so a second binding of one (a shadow) reds. A name not in the table is not counted.
+- **Not held:** the crossings measured as still passing every case, in §9 with who measured them. The list is what was
+  measured, not a claim that nothing else passes.
 
 **What is pinned now, and what D-9141 changed in each bound** (review 4009 F1):
 
@@ -340,7 +366,7 @@ cannot see.
   program costs more than the original on the dqsub shape: 310.5 is 1.5 × the original's 207 ms (the linearity row's
   sample), 352.5 is 1.5 × 235 ms, the cost row's own hosted baseline (full run).
 - **The class floor, 100 ms** (the owner's call 1643). It exists for one reason, to keep run-to-run noise off the bound.
-  A class cost row's bound is its baseline (about 35 to 70 ms, one jq start-up) plus 100 ms, about 150 to 195 ms on the hosted runs read (164 to 193 ms at this round's head, 166 and 168 ms in the full run)
+  A class cost row's bound is its baseline (about 35 to 70 ms, one jq start-up) plus 100 ms, about 150 to 195 ms on the hosted runs read (152 and 163 ms on the merged head's fast run, 164 and 193 ms at fix round 1's head, 166 and 168 ms in baff80048a's full run)
   (about 2.5 times). A class path dearer by less than the floor is green. Through the real test file with a fixed burn
   in the class path only (jq 1.7.1, this box): about +80 ms read green on both class cost rows and about +120 ms read
   red on both (§9).
@@ -348,7 +374,8 @@ cannot see.
   50 ms, half the floor; if any is over, the floor is 150 ms. Read on baff80048a, before the floor changed (a reading
   does not depend on the floor): full run 45900000033, quotes/class 67 against 66 (+1 ms) and dqsub/class 66 against 68
   (-2 ms); fast run 45899992077, quotes/class 51 against 53 (-2 ms) and dqsub/class 52 against 52 (0 ms). Every
-  difference is at or under 50 ms, so 100 ms stands; the fast run on this round's head is read again in the wave-done.
+  difference is at or under 50 ms, so 100 ms stands. Read since: fix round 1's head, -7 and -2 ms; the merged head's
+  fast run, 0 and -11 ms. All eight are at or under 50 ms.
 - At 250 ms (review 4009, jq 1.8.1) the class cost rows let a fixed burn of about 180 ms, a class path 5.5 times
   dearer, through; that is what moved the value.
 - **What the class rows cannot see**:
@@ -363,13 +390,19 @@ cannot see.
   - Per row, then: a class COST row misses a class step dearer by less than the floor; the dqsub/class linearity row
     reds a quadratic one from about +37 ms; on the quotes shape, and for a fixed or linear step on either shape, a step
     dearer by less than the floor is seen by no row.
-- **On the deny path, the measured bracket** (review 4016, from round 1's readings of the quadratic steps on the loaded
-  box): one program's own 64 KB CPU spread about 30% across review 4009's runs (6.9 to 10.6 s).
-  - On that box a quadratic deny step is sure red near +90% of the gated cost.
-  - Between about +28% and +50% it is decided by the baseline sample's own spread: it read red at +28% and green at +38%
-    and +45%.
-  - Hosted, where the two samples agree to under 1% (0.3% in the full run, 0.7% at this round's head), the edge is near
-    +50%.
+- **On the deny path, the measured bracket** (review 4009's runs of quadratic steps on its loaded box, worked out by
+  review 4016, its F2). Each step was (n/k)² added to the deny path, with the k values those two reviews record; a
+  step's size here is scaled by 1/k² from review 4009's own reading of (n/7.6)², +94% of the gated cost on its box,
+  not read run by run. This note's own reading of (n/7.6)² is +80% (the table above); on that base each size is 0.85
+  times the one given (in order below: +80%, +62%, +42%, +24%; +38%, +32%).
+  - Red: (n/7.6)², +94%; (n/8.6)², +73%; (n/10.5)², +49%; (n/14)², +28%. "Sure red near +90%" names the step red in
+    every run, (n/7.6)²; the lighter ones read red in the runs made, but a lighter step is decided by the noise below.
+  - Green: (n/11)², +45%, and (n/12)², +38%, in the runs where the baseline sample read 10.6 s against 6.9 to 8.2 s in
+    the others (review 4009's figures).
+  - So between about +28% and +50% a step is decided by the baseline sample's own spread: one program's 64 KB samples
+    ran from 6.9 to 10.6 s across review 4009's runs, the high end 54% above the low, about ±21% about their midpoint.
+  - Hosted, where the two samples agree to under 1% (0.3% in baff80048a's full run, 0.7% at fix round 1's head, 0.3% on
+    the merged head's fast run), the edge is near +50%, the factor's own.
   - "+68%" in the first draft of this section was a reading, current over that run's baseline sample, not a step size.
 
 ## 9. Step 3: the mutants and the runs
@@ -384,7 +417,7 @@ jq 1.7.1:
 | quadratic step (n/8)^2, about 60% at 64 KB, pre-gate | quotes/deny linearity | - | green, 3.815 against 4.377 |
 | the same | quotes/deny 64 KB cost, old baseline | - | RED, 19816 against 18247.5 |
 | cubic step (n/150)^3, on the gated program | quotes/deny linearity | RED, 5.330 against 4.341 | RED, 5.121 against 4.314; differences 1.536, 1.613, 1.076, 1.023 |
-| quadratic step (n/8)^2, about 74% of the gated cost (15 545 against its baseline 8 940) | quotes/deny linearity | - | green, 3.857 against 4.454 |
+| quadratic step (n/8)^2, about 72% of the gated cost by scaling from §8's +80% for (n/7.6)^2 (15 545 against its baseline sample 8 940 reads 1.74, a reading, not a step size) | quotes/deny linearity | - | green, 3.857 against 4.454 |
 | the same | quotes/deny 64 KB cost, OLD baseline | - | green; the case passed, and the cost row printed no figures then: 16272 against 1.5 x 12561 = 18842 is RECONSTRUCTED from the 64 KB samples the linearity row printed (the finding of §8) |
 | the same | quotes/deny 64 KB cost, NEW baseline (D-9141) | - | RED, 15545 against 13410 (the owner's red-before, green-after case) |
 | quadratic steps adding about 80% and 105% of the gated cost | quotes/deny 64 KB cost, old baseline | - | green, green (§8) |
@@ -394,7 +427,8 @@ failed as shown, and the cost rows printed no figures before D-9141.
 
 **Fix rounds 1 and 2: the mutants of the test file itself** (reviews 4009 F2 and 4016 F1). Each was applied to a
 scratch copy of this branch's test file at fix round 2 and run by name with the cases that measure nothing: the order,
-`pairCells`, the table, `programsOf`, the hash and the scan.
+`pairCells`, the table, `programsOf`, the hash and the scan. The scan's title below is the one it had then; wave 191
+renamed it.
 
 | mutant of the test file | case that reads red | its message |
 |---|---|---|
@@ -416,15 +450,85 @@ and so did a linearity case reading the cost baseline. The two `pairCells` mutan
 case tested `linearityOrder` alone.
 
 After fix round 1, review 4016 found five ways to read the wrong program that still left every case green:
-- reading past the table;
+- a cost case reading the original directly, past the table;
+- a linearity case reading the gate's program directly, past the table;
 - swapping the call-site keys;
 - not calling `pairCells`;
 - crossing its callback, which hid a real class regression: with the class path 6 times dearer, dqsub/class linearity
   read green at 1.66× where the true file reds at 3.73× against 2.5×.
 
 Fix round 2 moved the row-to-text mapping into a pure `rowPrograms` (`programsOf` is it on the real reader), made
-`pairCells` take the two texts, and added the scan. All five survivors, and two more on `programsOf`, now read red by
-the case named above.
+`pairCells` take the two texts, and added the scan. All five, as spelt, and two more on `programsOf`, read red by the
+case named above. They were spellings, not the defect: review 4024 built the same crossings spelt otherwise, and they
+stayed green (next table).
+
+**Wave 191 (reviews 4024 M1 and 4046 M1'): the mutants of the test file, by behaviour.** Each was applied to a scratch
+copy of this wave's test file at fix round 1 (`node_modules` linked) and run through `ccrc test --local` with the cases
+that burn no CPU, by name (the D-9118 block, the hash, the table, the registration case, `programsOf`, the reader,
+`timedBy`, `costReading` twice, `linearityReading` and the scan: 16 cases). Unmutated: 16 passed, 27 skipped (43). The
+`S` probes also ran the three D-8334 cases (unmutated: 19 passed). After each run the file was put back and compared
+byte for byte. "Red" is the case named; where two read red, both are given.
+
+| id | mutant of the test file | case that reads red | its message (first line) |
+|---|---|---|---|
+| O1 | `programsOf` shadowed in the name loop by a function that swaps the pair (review 4024) | the scan | programsOf is written this many times … |
+| O2 | a helper outside the case swaps the result of the linearity case's `programsOf` (review 4024's O2) | the scan | the linearity case's body: expected … to be … |
+| O2c | the same helper around the cost case's `programsOf` | the scan | the cost case's body: expected … to be … |
+| O3 | `timedBy` runs the hook's program in place of the one it is given (review 4024) | `timedBy`'s case; the scan | it answers the run's CPU ms: expected 29668 to be 34; prog is written this many times … |
+| C1 | the two cells crossed between the reader and the pairing (review 4024) | `linearityReading`'s case | quotes/deny linearity: what it ran, where, in which order, how often |
+| A1 | an in-place swap after `programs()` in `linearityReading`, `Object.assign` (review 4024) | `linearityReading`'s case | quotes/deny linearity: what it ran, where, in which order, how often |
+| C3 | the reader shadowed in the name loop, every row the hook against itself (review 4024 c3) | the scan | programsOf is written this many times … |
+| T1 | `timed` shadowed in the name loop by a timer of the hook's program, `outerTimed` (review 4024) | the scan | timed is written this many times …: expected 5 to be 3 |
+| P1 | the pairing function shadowed inside `linearityReading`, cells in run order | `linearityReading`'s case; the scan | quotes/deny linearity: each round [original small, current small, original large, current large]; pairCells is written this many times … |
+| P2 | the pairing function shadowed in the name loop (review 4024) | the scan | pairCells is written this many times … |
+| X1 | the cost case's destructure crossed (review 4024) | `costReading`'s case; the bound case | quotes/deny cost: what it ran, where, in which order, how often; quotes/deny cost, baseline 40: expected 32 to be 65 |
+| X2 | the cost case's pair order crossed (review 4024) | `costReading`'s case; the bound case | the same two |
+| X3 | the cost case's indices crossed (review 4024) | `costReading`'s case; the bound case | quotes/deny cost: each cell the faster of its own program's two: expected { referenceMs: 3064096, … } |
+| X4 | the cost pair times the gate against itself (review 4024) | `costReading`'s case; the bound case | quotes/deny cost: what it ran …; the printed line reads current 52 for 63 |
+| M2 | a linearity case reads the gate's program directly (review 4024) | the scan | the linearity case's body: expected … to be … |
+| M3 | the row keys swapped: `costReading` asks the linearity row, `linearityReading` the cost row (review 4024) | `costReading`'s case; `linearityReading`'s case | quotes/deny cost: what it ran …; quotes/deny linearity: what it ran … |
+| R1 | the reader returns the hook's text for the gate (review 4024 a10) | the reader's case; the scan | expected 'def WS: …' to be 'the bytes of g.jq' |
+| R2 | the reader skips its hash check (review 4024 R2) | the reader's case; the scan | a wrong hash refuses: expected [Function] to throw an error |
+| K1 | a cost case reads the original directly, past the table (review 4016's first) | the scan | the cost case's body: expected … to be … |
+| K2 | the linearity reading pairs inline, not through `pairCells` (review 4016) | `linearityReading`'s case; the scan | quotes/deny linearity: what it ran …; pairCells is written this many times … |
+| K3 | the pairing callback runs the other program's text (review 4016) | `linearityReading`'s case | quotes/deny linearity: what it ran, where, in which order, how often |
+| N1 | this wave's: the cost row times at 32 KB | `costReading`'s case | quotes/deny cost: what it ran, where, in which order, how often |
+| N2 | this wave's: a linearity round takes its large pair first | `linearityReading`'s case | quotes/deny linearity: what it ran, where, in which order, how often |
+| N3 | this wave's: `timedBy` runs every sample in deny mode | `timedBy`'s case | quotes/class 32 KB: the argv |
+| N4 | this wave's: the class rows take the deny floor | the bound case | quotes/class cost, baseline 40: expected 65 to be 140 |
+| N5 | this wave's: `timed` composed on a runner that swaps in the hook's program | the scan | composed once, on the real one: const timed = timedBy(childCpu); |
+| N6 | this wave's: the two shapes' units crossed | `timedBy`'s case | quotes/deny 32 KB: the payload |
+| N7 | this wave's: a cost cell keeps the first pair's sample, not the faster of two | `costReading`'s case | quotes/deny cost: each cell the faster of its own program's two: expected { referenceMs: 2064099, … } |
+| N8 | this wave's: the printed minima read the first round only | `linearityReading`'s case | quotes/deny linearity: the printed line, each cell the fastest of its four |
+| U1a | the mode list narrowed to `class` (review 4046 U1) | the registration case | the loop's lists, crossed, are the table's rows |
+| U1b | the shape list narrowed to `quotes` (review 4046 U1) | the registration case | the loop's lists, crossed, are the table's rows |
+| U1c | `linearityKb` shadowed in the name loop (review 4046 U1) | the registration case; the scan | the measuring cases this describe registers, in order; linearityKb is written this many times … |
+| U2 | `expect` shadowed in the measuring loop, every assertion a no-op (review 4046 U2) | the scan | expect is written this many times …: expected 102 to be 101 |
+| U3 | the dqsub/deny bound keyed ten times looser (review 4046 U3) | the bound case | dqsub/deny cost, baseline 40: expected 650 to be 65 |
+| U4a | the hook's program taken from the gate fixture (review 4046 U4) | the scan | composed once, on the real one: const prog = extract(fs.readFileSync(HOOK, 'utf8')); |
+| U4b | the hook's path pointed at the original fixture (review 4046 U4) | the scan | composed once, on the real one: const HOOK = path.resolve(…) |
+| U5 | the linearity case's timeouts cut tenfold (review 4046 U5) | the scan | the end of the case titled …KB stays within the inherited-cost bound: expected -1 to be greater than … |
+| S1j | `childCpu` runs the hook's program whenever the program it runs is `jq` (review 4046 U6) | the D-8334 case "a run that computes reads its compute…" | jq: error: $mode is not defined |
+| H1 | harmless: the cost call reflowed over three lines | none: 16 passed | - |
+| H2 | a reflow with a trailing comma and the parenthesis on its own line | the scan | the cost case's body: expected … to be … (the scan's comment says so) |
+
+The two mutants review 4024 measured hiding a real slowdown are among them: O3 (`timedBy` ignoring its program) and the
+cost case's destructure or order crossed (X1, X2). Each reads red with no CPU measured.
+
+**The crossings measured as still passing every case.** This is the list of what was measured green, by whom; it is
+not claimed complete, and a crossing not on it may pass too.
+- **S1, measured by this wave and by review 4046 (its U6): `childCpu` runs another program than its argv names, when
+  keyed on something its own cases do not exercise.** Keyed on the mode argument (S1m) or on a forbidden program text
+  (S1): green, 19 passed with the D-8334 cases. Keyed on the program being `jq` (S1j): red, by the D-8334 case that
+  runs `jq`. Held by reading.
+- **S2, measured by this wave: a crossing that fires only on the real program texts** (here `costReading` timing the
+  hook's program in the baseline's place when the baseline starts `def WS:`): green, 19 passed. The stand-ins never
+  start that way, and a mutant can key on anything about the real texts. Held by reading.
+- **Measured by review 4046, equivalent:** `costReading` asking for the other shape's cost row. The texts a cost row
+  reads are the same for both shapes, so no reading can differ.
+- **Of the scan's kind, by reading:** a crossing spelt so that every body line, composition line and count stays the
+  same (for example a shadow that adds one use of a counted name and removes another), and a shadow of a name the
+  scan's table does not count.
 
 **The class floor at 100 ms, through the real test file** (a fixed burn in the hook's class path only, scratch copies,
 jq 1.7.1, the two class cost rows by name; "quotes: class stays within the startup-adjusted 06aed21ff bound at 64 KB"
@@ -580,7 +684,7 @@ dqsub: class linearity from 64 to 128 KB stays within the inherited-cost bound  
 
 After the gate, the row nearest its timeout is quotes/class linearity, which four rounds doubled too: at most 227 s of its 300 s under load here (0.76). quotes/deny linearity took at most 440 s of its 600 s here (0.73). Under load both pass two thirds of their timeouts on this box; the coordinator allowed it as measured, and the timeouts are unchanged.
 
-Hosted, quotes/class linearity read 74.7 s (the fast run on baff80048a), 89.7 s (the full run on baff80048a) and 96.6 s (the fast run at fix round 1's head) of its 300 s: 0.25, 0.30 and 0.32, the last 3.4 s under a third. quotes/deny linearity read 125.2, 167.9 and 164.0 s of its 600 s. "A third of its timeout" is the coordinator's ruling on a hosted reading, read at each wave-done, not a guard: the test asserts no budget, and three readings give no pass rate.
+Hosted, quotes/class linearity read 74.7 s (the fast run on baff80048a), 89.7 s (the full run on baff80048a), 96.6 s (the fast run at fix round 1's head) and 74.6 s (the merged head's fast run) of its 300 s: 0.25, 0.30, 0.32 and 0.25, the third 3.4 s under a third. quotes/deny linearity read 125.2, 167.9, 164.0 and 125.9 s of its 600 s. "A third of its timeout" is the coordinator's ruling on a hosted reading, read at each wave-done, not a guard: the test asserts no budget, and four readings give no pass rate.
 
 ## 11. Left for the owner
 

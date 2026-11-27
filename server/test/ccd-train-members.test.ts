@@ -4,6 +4,7 @@
 // member always sits beside a valid #42 at its head, so a mutant that stops refusing it proves #42 and reds. Cases
 // P1 to P38 and P9b are the wave 5l plan's section 9.1 (docs/superpowers/plans/2026-11-26-landing-order-wave5l-train-landings.md).
 // P39 and P40 are fix round 1's (docs/superpowers/programs/landing-order/wave5l-fix-round-1.md).
+// P41 to P43 are wave 5m's (docs/superpowers/plans/2026-11-27-landing-order-wave5m-carried-corrections.md, section 4.1).
 // Every ccd call runs in a fixture HOME (`makePrHarness`); no case reads GitHub.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
@@ -177,6 +178,22 @@ describe('the train tool\'s train-members block proves a member, by the one pars
   it('P40: a v1 block with a line that is not a member line, and no tool block, proves nothing, with the v1 sentence', () => {
     expect(check(toolTrainRow(50, M, `<!-- ccrc-train v1\nmember #42 ${H}\nnot a member line\n-->\n`)))
       .toBe(W('has a ccrc-train v1 block with a line that is not a member line'));
+  });
+  // Wave 5m (docs/superpowers/plans/2026-11-27-landing-order-wave5m-carried-corrections.md, section 4.1): the three
+  // cases the reviews of wave 5l carried. They characterise today's prover and must be green as written.
+  it('P41: both blocks bad: a doubled v1 block beside an empty tool block prints the v1 sentence', () => {
+    const v1 = trainBlock([[42, H]]);
+    expect(check(toolTrainRow(50, M, `${rawTrainMembers('[]')}\n${v1}${v1}`))).toBe(W('carries 2 ccrc-train v1 blocks, not one'));
+  });
+  it.each([['Infinity'], ['-Infinity']])('P42: %s in a key that is never read refuses the tool block', (token) => {
+    expect(check(toolTrainRow(50, M, rawTrainMembers(`[{"pr": 42, "headSha": "${H}", "blast": ${token}}]`)))).toBe(NOT_ARRAY);
+  });
+  it('P43: a key given twice inside the value of a key that is never read refuses the tool block; with two keys it proves', () => {
+    const blast = (value: string): string => rawTrainMembers(`[{"pr": 42, "headSha": "${H}", "blast": ${value}}]`);
+    expect(check(toolTrainRow(50, M, blast('{"a": 1, "a": 2}')))).toBe(NOT_ARRAY);
+    // Fix round 1 (review run 4030, F4): a key given twice with the SAME value is refused too.
+    expect(check(toolTrainRow(50, M, blast('{"a": 1, "a": 1}')))).toBe(NOT_ARRAY);
+    expect(check(toolTrainRow(50, M, blast('{"a": 1, "b": 2}')))).toBe(PROVED);
   });
 });
 

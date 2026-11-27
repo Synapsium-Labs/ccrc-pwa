@@ -4,7 +4,7 @@
 // the keys are what the code touches, not text it holds. C7l moves every owner onto one storage port; every key here
 // stays byte-identical (a renamed key loses a device's remembered choice).
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createElement } from 'react';
@@ -28,6 +28,7 @@ import { createFleetStore } from '../src/stores/fleet';
 import { api } from '../src/lib/api';
 import { BRIDGE_LIMITS } from '@synapsium-labs/pinax-lib/frame';
 import { readerDocKey } from '../src/docs/reader/policy';
+import { NO_READER_PLACES, READER_TURN_STORAGE_KEY, useReaderMode } from '../src/docs/useReaderMode';
 import { READER_STORE_PREFIX } from '../src/lib/readerLimits';
 
 /** Every key any owner touched in this file. */
@@ -75,6 +76,28 @@ describe('each storage owner\'s keys (read and write), byte for byte', () => {
     expect(await keysTouched(() => { setInspectorHidden(true); resetInspectorChoiceForTests(); inspectorHidden(); })).toEqual(['ccrc-inspector']);
     expect(window.localStorage.getItem('ccrc-inspector')).toBe('hidden');
     resetInspectorChoiceForTests();
+  });
+  it('turn: the storage key is in the census and written in one place', async () => {
+    // Driven through the hook itself: a read as it starts, and the write its `setTurn` makes. The key is the census's, byte for byte.
+    expect(READER_TURN_STORAGE_KEY).toBe('ccrc-reader-turn');
+    expect(await keysTouched(() => {
+      const { result, unmount } = renderHook(() => useReaderMode({ doc: 'doc-a', plainView: false, places: NO_READER_PLACES }));
+      act(() => { result.current.value.setTurn('scroll'); });
+      unmount();
+    })).toEqual(['ccrc-reader-turn']);
+    expect(window.localStorage.getItem('ccrc-reader-turn')).toBe('scroll');
+    // One writer: of the console's own source, only the hook names the key (its literal and its constant) and only its `setTurn`
+    // writes it, through the one storage port. A second writer, such as the overlay writing the choice itself, reds here.
+    const SRC = path.join(__dirname, '..', 'src');
+    const sources = (readdirSync(SRC, { recursive: true }) as string[])
+      .filter((f) => /\.(ts|tsx)$/.test(f))
+      .map((f) => ({ file: f.split(path.sep).join('/'), text: readFileSync(path.join(SRC, f), 'utf8') }));
+    const naming = sources.filter((s) => s.text.includes('ccrc-reader-turn')).map((s) => s.file);
+    expect(naming, 'the key\'s literal is spelled in one file').toEqual(['docs/useReaderMode.ts']);
+    const touching = sources.filter((s) => s.text.includes('READER_TURN_STORAGE_KEY') || s.text.includes('ccrc-reader-turn'));
+    const writes = touching.flatMap((s) => [...s.text.matchAll(/\b(?:writeKey|removeKey|setItem|removeItem)\(\s*(?:READER_TURN_STORAGE_KEY|['"]ccrc-reader-turn['"])/g)]
+      .map(() => s.file));
+    expect(writes, 'the turn is written by one call, in the hook').toEqual(['docs/useReaderMode.ts']);
   });
   it('lib/notifymark.ts', async () => {
     expect(await keysTouched(() => { saveMark({ epoch: 'epoch-a', seq: 3 }); loadMark(); })).toEqual(['ccrc:notify:v1']);
@@ -128,7 +151,8 @@ describe('each storage owner\'s keys (read and write), byte for byte', () => {
 describe('every key, across the owners above, as one sorted list', () => {
   it('the literal list (the union of the rows above)', () => {
     expect([...ALL].sort()).toEqual([
-      'ccrc-accounts-strip', 'ccrc-character', 'ccrc-fleet-group', 'ccrc-inspector', 'ccrc-release-dismissed', 'ccrc-skin', 'ccrc-theme',
+      'ccrc-accounts-strip', 'ccrc-character', 'ccrc-fleet-group', 'ccrc-inspector', 'ccrc-reader-turn', 'ccrc-release-dismissed',
+      'ccrc-skin', 'ccrc-theme',
       'ccrc.drawer-view.v1', 'ccrc.fleet-folded.v1', 'ccrc.fleet-rollup.v1', 'ccrc.fleet-snapshot.v1',
       'ccrc.waiting-snapshot.v1', 'ccrc:chat-row-samples', 'ccrc:chat-row-samples-v2', 'ccrc:notify:v1', 'ccrc:seen:v1',
     ]);

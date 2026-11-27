@@ -17,7 +17,7 @@ of how that one sheet happened to be written.
 
 - the page's `/assets/…` links and entry script;
 - each chunk's `./…` imports;
-- Vite's `assets/…` preload lists and worker URLs.
+- Vite's `assets/…` preload lists, and worker URLs as `(/)assets/…`.
 
 It reads them in double quotes, single quotes, backticks or parentheses. `shellSheets` keeps the old order (the index's
 links first, then the rest of the folder) but keeps only the sheets the walk from `index.html` reaches. A script or a
@@ -49,3 +49,7 @@ The walk reads the reference forms the build writes today. A form it cannot read
 page reaches the file. In that one case, a shell reference the walk misses would leave the file out silently, along
 with any sheet only that file loads. Today that could only be one of the review page's 3 scripts or its sheet. The walk
 can also over-include, because it reads text: a shell chunk's string naming a file counts as loading it.
+
+Changed by the follow-up `w8-review-built-comment`: the real-build cases 1 and 2 took "foreign" from the other pages'
+links, so a sheet `review.html` links that a lazy shell chunk also imports would have turned them red falsely. They now
+take it from the walks (what the other pages reach, less what the index reaches), and an in-memory case pins that.

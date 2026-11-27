@@ -660,13 +660,16 @@ describe('ccrc\'s bar and the commands (the take-up plan, refinements (g), (i))'
     expect(() => none.options().adapters.onProgress!(1)).not.toThrow();
   });
 
-  it('a frame-bar mount, and a mount that names no chrome, pass neither features nor onProgress', async () => {
+  it('a frame-bar mount, and a mount that names no chrome, pass no features, and pass onProgress only when the input listens (D-8805)', async () => {
     for (const chrome of ['frame-bar', undefined] as const) {
       const r = rig({ ...(chrome === undefined ? {} : { chrome }), onProgress: vi.fn() });
       await r.run();
       const keys = Object.keys(r.options().adapters);
       expect(keys).not.toContain('features');
-      expect(keys).not.toContain('onProgress');
+      expect(keys).toContain('onProgress');
+      const bare = rig(chrome === undefined ? {} : { chrome });
+      await bare.run();
+      expect(Object.keys(bare.options().adapters), 'no listener on the input, no onProgress').not.toContain('onProgress');
     }
   });
 

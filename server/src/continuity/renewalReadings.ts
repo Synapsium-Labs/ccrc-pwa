@@ -15,13 +15,14 @@
 // those `unboundCandidates` answers from the designation alone. PR H: the launch profile's two deciders, `holdOfStart` (whether a
 // start holds its account out of the Overlord's ordered list) and `overlordInstallBehindOf` (the digest reading folded into the
 // Overlord's `installBehind`), with its two mappers, `startDigestDiffersOf` and `buildsAgreeOf`. The holds reach the list through
-// L0's `heldOutOfList` (designation A's `overlordAccounts`) and `accountOutsideSetOf` through `Holds`.
+// L0's `heldOutOfList` (designation A's `overlordAccounts`) and `accountOutsideSetOf` through `Holds`. PR G: `placeHiddenOf`, the
+// Overlord's soft place hidden, from the `@overlord-place` mark's observed quiet (the lane's one marks read, as the operator's quiet).
 //
 // IMPORTS ACROSS CONTEXTS (PR D, plan Task 7): L1 into L1 only, each a producer's own decider, never re-derived. C1's
 // `server/src/poolrule.ts` (the pool answer's parsed type) and `server/src/accountLoad.ts` (serviceability B: the candidates, the
 // load move and the twin's `classUnservable`), and C5's `server/src/coord/overlordDesignation.ts` (designation A's ordered list,
 // `overlordAccounts`), with L0's `serviceability`.
-import type { GenerationState, StartRow } from '../../../shared/continuity.js';
+import { OPERATOR_MARK_MS, OVERLORD_PLACE_MARK, type GenerationState, type StartRow } from '../../../shared/continuity.js';
 import type { FleetRole } from '../../../shared/fleetRoles.js';
 import type { DesignationRead } from '../../../shared/overlord-designation.js';
 import type { AccountHoldsRead, BackstopRead } from '../../../shared/renewal-readings.js';
@@ -35,6 +36,8 @@ import { familyClassOf } from '../../../shared/models.js';
 import type { ModelSwitchHow } from '../../../shared/continuity-reports.js';
 import type { ReadFailure } from '../../../shared/agent-protocol.js';
 import { hardCapTokens, measuredCount, type Reading, type RenewalInputs } from './renewalDue.js';
+import { markQuietMs, type MarkReading } from './operatorMark.js';
+import type { SoftReading } from './softRenewal.js';
 import { serviceability, type LaneFacts } from '../../../shared/serviceability.js';
 import type { PoolAnswerRead } from '../poolrule.js';
 import { accountLoadMoveReading, classUnservableReading, overlordLoadCandidates, type Candidates } from '../accountLoad.js';
@@ -504,4 +507,23 @@ export function overlordInstallBehindOf(behind: Reading<boolean>, digestDiffers:
   if (behind.kind === 'unmeasured') return behind;
   if (digestDiffers.kind === 'unmeasured') return digestDiffers;
   return { kind: 'measured', value: false };
+}
+
+/** One mark as the lane's one read answers it, with the `at` its `quiet` is kept for (`continuityStore.ts#OperatorMarkRow`). */
+export type PlaceMarkReading = MarkReading & { readonly at: number };
+
+/** PR G: the Overlord's soft `placeHiddenObservedMs` (R19, "no visible Overlord place for five minutes"; question 7, slug
+ *  place-hidden-is-a-mark), from the `@overlord-place` mark the console's visible place refreshes (home B, `placeMarkReport.ts`)
+ *  and the observed `quiet` the generations lane keeps for it, read as `operatorQuietOf` reads a programme's mark (`markQuietMs`).
+ *  Marks that could not be read are unmeasured: never 0 and never long hidden. A mark never written reads `OPERATOR_MARK_MS`, as
+ *  `operatorQuietOf` reads a programme with no mark (no place has been visible; never "visible just now"). A mark dated after the
+ *  pass's `nowMs` (the wall clock stepped back since it was written) is not trusted as visible: unmeasured, until the next
+ *  visible frame rewrites it (`placeMarkDue` refreshes a future mark at once). Otherwise its quiet, at most `OPERATOR_MARK_MS`,
+ *  the most the lane ages a mark (`markAges`). The break's five minutes are `softRenewalMay`'s alone (`BREAK_PLACE_HIDDEN_MS`). */
+export function placeHiddenOf(marks: readonly PlaceMarkReading[] | 'unmeasured', nowMs: number): SoftReading<number> {
+  if (marks === 'unmeasured') return unmeasured('place-mark: the marks could not be read');
+  const m = marks.find((x) => x.programme === OVERLORD_PLACE_MARK);
+  if (m === undefined) return { kind: 'measured', value: OPERATOR_MARK_MS };
+  if (m.at > nowMs) return unmeasured('place-mark: dated after this pass');
+  return { kind: 'measured', value: Math.min(OPERATOR_MARK_MS, markQuietMs(m)) };
 }

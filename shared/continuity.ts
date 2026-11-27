@@ -98,7 +98,7 @@ export const BREAK_NO_MESSAGE_MS = 1_200_000;
 export const BREAK_PLACE_HIDDEN_MS = 300_000;
 /** The operator mark the console's visible Overlord place refreshes (W1 home B, question 4, slug place-visible-rides-the-session-socket):
  *  one key in `operator_marks`, written by the session socket's `visible: true` frame of the bound session, at most once every
- *  `PLACE_MARK_EVERY_MS`. A later piece reads it as the place's visibility; the generations lane does not yet. */
+ *  `PLACE_MARK_EVERY_MS`. The generations lane reads its observed quiet as the Overlord's place hidden (renewal readings PR G). */
 export const OVERLORD_PLACE_MARK = '@overlord-place';
 /** The most often the place mark is refreshed: a minute, well under `BREAK_PLACE_HIDDEN_MS`, so a visible place never reads hidden. */
 export const PLACE_MARK_EVERY_MS = 60_000;

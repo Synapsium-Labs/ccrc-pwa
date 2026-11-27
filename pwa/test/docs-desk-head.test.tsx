@@ -6,7 +6,7 @@
 // `atWidth` answers a width query as a real engine would (docs-compact-head.test.tsx#atWidth's form).
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { DocsScreen } from '../src/screens/DocsScreen';
 import { DocsHead } from '../src/docs/DocsHead';
 import { fullHeadFormFor, headLayoutFor } from '../src/docs/docsHeadWords';
@@ -16,6 +16,9 @@ import { parseMarkdown } from '../src/lib/markdownParse';
 import type { MarkdownParser } from '../src/lib/markdownRunner';
 import { navigate, useLocation } from '../src/lib/router';
 import type { DocsVisit } from '../src/docs/useDocsVisit';
+import { ReaderModeContext, type ReaderModeContextValue } from '../src/docs/useReaderMode';
+import { READER_MODE_OFF } from '../src/docs/reader/readerMode';
+import { READER_MODE_TEXT } from '../src/docs/reader/readerModeWords';
 import { COMMIT_B, NO_RANGE_VISIT, draftOf, entry, fakeLoaders, holder, okTree, pageAt, treeOk, treeResponse, type FakeLoaders } from './docsFixtures';
 import { labelInName, shownText } from './labelInName';
 
@@ -497,5 +500,184 @@ describe('the desk row gives way in order: the words, then the middle crumbs (fi
     // Whatever the stage, each action keeps its name.
     expect(within(row()).getByRole('button', { name: DOCS_HEAD_TEXT.share })).toBeInTheDocument();
     expect(within(row()).getByRole('link', { name: DOCS_HEAD_TEXT.github })).toBeInTheDocument();
+  });
+});
+
+// Reader mode's entry on the desk head (native Docs reader, reader-mode plan Task XR1.5, spec 2026-11-20 section 3.1): the FIRST
+// action of the row, the word with an icon, an icon after the row's first stage as its neighbours are, drawn only while the
+// context offers it (a ready frame outside the plain view). The head is drawn on its own over a stand-in context: the real
+// context's offer is `readerModeOffered`'s (reader-mode-policy.test.ts), and the real frame's ready is reader-mode.test.tsx's.
+describe('the desk head draws Reader mode (X6 XR1.5)', () => {
+  function readerCtx(o: { readonly offered: boolean; readonly enter?: ReaderModeContextValue['enter'] }): ReaderModeContextValue {
+    return { state: READER_MODE_OFF, offered: o.offered, enter: o.enter ?? vi.fn() } as unknown as ReaderModeContextValue;
+  }
+  function leafVisit(): { readonly tree: ReturnType<typeof treeOk>; readonly visit: DocsVisit } {
+    const tree = treeOk({ entries: [entry('specs', 'd/e/x.md')] });
+    const visit: DocsVisit = {
+      tree: { s: 'ok', answer: treeResponse(tree), receivedAt: Date.now() },
+      file: { s: 'none' }, freshness: { s: 'idle' }, updatedTo: null, pendingFragment: null,
+      ...NO_RANGE_VISIT, retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
+    };
+    return { tree, visit };
+  }
+  function drawHead(ctx: ReaderModeContextValue | null, plainView = false): void {
+    const { tree, visit } = leafVisit();
+    const head = <DocsHead page={pageAt('/docs/demo/specs/d/e/x.md')} visit={visit} tree={tree} plainView={plainView} />;
+    render(ctx === null ? head : <ReaderModeContext value={ctx}>{head}</ReaderModeContext>);
+  }
+  const actions = (): HTMLElement => row().querySelector<HTMLElement>(':scope > .docs-actions')!;
+
+  /** Lays the row out so that the page's name is whole only once the other actions' words are hidden (`words: 'others'`: the
+   *  row's first stage, with Reader mode's own word still drawn), or only once Reader mode's word is hidden too (`'all'`: the
+   *  next step), or never (`'never'`: the fold). */
+  function wholeOnlyAsIcons(words: 'others' | 'all' | 'never' = 'others'): void {
+    class OnceObserver {
+      private readonly cb: ResizeObserverCallback;
+      constructor(cb: ResizeObserverCallback) { this.cb = cb; }
+      // A first size, as an engine reports one: the row is probed by it (a head drawn on its own has no later change).
+      observe(): void {
+        queueMicrotask(() => this.cb([{ contentRect: { width: 900 } } as ResizeObserverEntry], this as unknown as ResizeObserver));
+      }
+      unobserve(): void {}
+      disconnect(): void {}
+    }
+    vi.stubGlobal('ResizeObserver', OnceObserver);
+    vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      const r = this.closest('.docs-head-bar');
+      if (!this.classList.contains('docs-crumb-here') || r === null) return 0;
+      const fits = words === 'never' ? false
+        : r.getAttribute('data-words') === 'off' && (words === 'others' || r.getAttribute('data-reader-word') === 'off');
+      return fits ? 40 : 120;
+    });
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('docs-crumb-here') ? 60 : 900;
+    });
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(() => new DOMRect(0, 0, 10, 44));
+  }
+
+  it('desk head: Reader mode leads the actions row, a word at stage 0 and an icon after', async () => {
+    atWidth(1280);
+    const enter = vi.fn();
+    drawHead(readerCtx({ offered: true, enter }));
+    const first = actions().firstElementChild as HTMLElement;
+    // The first action, ahead of GitHub, Share and Export: the word beside a book's icon, named as it is worded.
+    expect(first.tagName).toBe('BUTTON');
+    expect(first.getAttribute('aria-label')).toBe(READER_MODE_TEXT.enter);
+    // Its word is its own span, `.docs-reader-words`: the row's first stage hides `.docs-action-words`, and this one stays.
+    expect(first.querySelector('.docs-reader-words')?.textContent).toBe(READER_MODE_TEXT.enter);
+    expect(first.querySelector('.docs-action-words'), 'its word is not the neighbours\' kind').toBeNull();
+    expect(shownText(first)).toBe(READER_MODE_TEXT.enter);
+    expect(labelInName(shownText(first), first.getAttribute('aria-label') ?? '')).toBe(true);
+    expect(first.querySelector('svg[aria-hidden="true"]'), 'its icon').not.toBeNull();
+    expect(row().getAttribute('data-words'), 'stage 0 shows the words').toBeNull();
+    expect(screen.getByRole('link', { name: DOCS_HEAD_TEXT.github }), 'GitHub follows it').toBeInTheDocument();
+    expect(head().querySelectorAll('.docs-actions'), 'one actions group, in the row').toHaveLength(1);
+    fireEvent.click(first);
+    expect(enter).toHaveBeenCalledTimes(1);
+    expect(enter).toHaveBeenCalledWith('button');
+    // The row's first stage hides its neighbours' words (`data-words`) and keeps this action's icon, name, place and word.
+    cleanup();
+    wholeOnlyAsIcons();
+    drawHead(readerCtx({ offered: true }));
+    await waitFor(() => expect(row().getAttribute('data-words')).toBe('off'));
+    const icon = actions().firstElementChild as HTMLElement;
+    expect(icon.getAttribute('aria-label')).toBe(READER_MODE_TEXT.enter);
+    expect(icon.querySelector('svg[aria-hidden="true"]'), 'the icon stays').not.toBeNull();
+    expect(within(row()).getByRole('button', { name: READER_MODE_TEXT.enter })).toBe(icon);
+    expect(within(row()).getByRole('link', { name: DOCS_HEAD_TEXT.github }), 'its neighbours keep their names').toBeInTheDocument();
+    expect(row().getAttribute('data-reader-word'), 'its own word is still asked for at the first stage').toBeNull();
+    expect(row().getAttribute('data-fold')).toBeNull();
+  });
+
+  it('desk head: Reader mode keeps its word through the row\'s first stage and gives way at the next, then the crumbs fold', async () => {
+    atWidth(1280);
+    // The name is whole once the neighbours' words are hidden: the first stage, the word kept.
+    wholeOnlyAsIcons('others');
+    drawHead(readerCtx({ offered: true }));
+    await waitFor(() => expect(row().getAttribute('data-words')).toBe('off'));
+    expect(row().getAttribute('data-reader-word'), 'the word is kept').toBeNull();
+    expect(row().getAttribute('data-fold')).toBeNull();
+    cleanup();
+    vi.restoreAllMocks();
+    // The name is whole only once Reader mode's word is hidden too: the same first stage, with its word given up.
+    wholeOnlyAsIcons('all');
+    drawHead(readerCtx({ offered: true }));
+    await waitFor(() => expect(row().getAttribute('data-reader-word')).toBe('off'));
+    expect(row().getAttribute('data-words')).toBe('off');
+    expect(row().getAttribute('data-fold'), 'the crumbs are not folded for a word').toBeNull();
+    expect(within(row()).getByRole('button', { name: READER_MODE_TEXT.enter }), 'its name stays').toBeInTheDocument();
+    cleanup();
+    vi.restoreAllMocks();
+    // Nothing fits: the last stage, with the word given up and the crumbs folded.
+    wholeOnlyAsIcons('never');
+    drawHead(readerCtx({ offered: true }));
+    await waitFor(() => expect(row().getAttribute('data-fold')).toBe(''));
+    expect(row().getAttribute('data-reader-word')).toBe('off');
+    cleanup();
+    vi.restoreAllMocks();
+    // A row with no Reader mode action behaves as it did: the stage it stops at needs no second try.
+    wholeOnlyAsIcons('others');
+    drawHead(null);
+    await waitFor(() => expect(row().getAttribute('data-words')).toBe('off'));
+    expect(row().getAttribute('data-reader-word'), 'no Reader mode action, nothing to give up').toBeNull();
+    expect(within(row()).queryByRole('button', { name: READER_MODE_TEXT.enter })).toBeNull();
+  });
+
+  it('desk head: every action shown as an icon keeps its name and its tooltip', async () => {
+    atWidth(1280);
+    // The row's actions on a draft leaf: GitHub, Share, Export and Open committed version. Each is named, and its name is also
+    // its tooltip, so the icon that is left once the words give way still says what it is on hover.
+    open('/docs/demo/specs/a.md?ref=main', fakeLoaders({ tree: okTree(DRAFT_TREE) }));
+    await waitFor(() => expect(screen.getByRole('button', { name: DOCS_HEAD_TEXT.export })).toBeEnabled());
+    const names = (): string[] => [...row().querySelectorAll<HTMLElement>(':scope > .docs-actions > a, :scope > .docs-actions > button')]
+      .map((c) => c.getAttribute('aria-label') ?? '');
+    expect(names()).toEqual([DOCS_HEAD_TEXT.github, DOCS_HEAD_TEXT.share, DOCS_HEAD_TEXT.export, DOCS_HEAD_TEXT.openCommitted]);
+    for (const c of row().querySelectorAll<HTMLElement>(':scope > .docs-actions > a, :scope > .docs-actions > button')) {
+      const name = c.getAttribute('aria-label') ?? '';
+      expect(c.querySelector('svg[aria-hidden="true"]'), `${name}: an icon`).not.toBeNull();
+      expect(c.getAttribute('title'), `${name}: its tooltip is its name`).toBe(name);
+    }
+    // Reader mode, the row's first action, the same.
+    cleanup();
+    drawHead(readerCtx({ offered: true }));
+    const reader = actions().firstElementChild as HTMLElement;
+    expect(reader.getAttribute('aria-label')).toBe(READER_MODE_TEXT.enter);
+    expect(reader.getAttribute('title'), 'Reader mode: its tooltip is its name').toBe(READER_MODE_TEXT.enter);
+  });
+
+  it('desk head: no two actions of the row share a glyph', async () => {
+    atWidth(1280);
+    open('/docs/demo/specs/a.md?ref=main', fakeLoaders({ tree: okTree(DRAFT_TREE) }));
+    await waitFor(() => expect(screen.getByRole('button', { name: DOCS_HEAD_TEXT.export })).toBeEnabled());
+    const glyphs = (): string[] => [...row().querySelectorAll<HTMLElement>(':scope > .docs-actions > a, :scope > .docs-actions > button')]
+      .map((c) => c.querySelector('svg')?.innerHTML ?? '');
+    const drawn = glyphs();
+    expect(drawn).toHaveLength(4);
+    cleanup();
+    drawHead(readerCtx({ offered: true }));
+    const reader = actions().firstElementChild!.querySelector('svg')!.innerHTML;
+    expect(reader, 'Reader mode draws a glyph').not.toBe('');
+    expect([...drawn, reader].filter((g, i, all) => all.indexOf(g) !== i), 'no glyph twice').toEqual([]);
+  });
+
+  it('desk head: no Reader mode on the plain view or before ready', async () => {
+    atWidth(1280);
+    // The context says what is offered: `false` on the plain view and before the frame is ready.
+    drawHead(readerCtx({ offered: false }));
+    expect(within(row()).queryByRole('button', { name: READER_MODE_TEXT.enter })).toBeNull();
+    cleanup();
+    drawHead(readerCtx({ offered: false }), true);
+    expect(within(row()).queryByRole('button', { name: READER_MODE_TEXT.enter })).toBeNull();
+    expect(head().querySelector('[data-plain-note]'), 'the plain view is the one drawn').not.toBeNull();
+    cleanup();
+    // No Docs screen around the head: no context, and so no entry.
+    drawHead(null);
+    expect(within(row()).queryByRole('button', { name: READER_MODE_TEXT.enter })).toBeNull();
+    expect(screen.getByRole('link', { name: DOCS_HEAD_TEXT.github })).toBeInTheDocument();
+    cleanup();
+    // The whole screen with no reader mounted: the frame never ready, so the entry is not drawn.
+    open('/docs/demo/specs/a.md', fakeLoaders());
+    await waitFor(() => expect(screen.getByRole('button', { name: DOCS_HEAD_TEXT.export })).toBeEnabled());
+    expect(screen.queryByRole('button', { name: READER_MODE_TEXT.enter })).toBeNull();
   });
 });
