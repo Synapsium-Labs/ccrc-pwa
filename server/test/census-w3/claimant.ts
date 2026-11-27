@@ -103,7 +103,7 @@ export function capReaderDefinitions(root: string = REPO): CapReaderDefinitionSi
 export interface CapReaderCallSite extends CensusSite { readonly guarded: boolean }
 
 /** Every call of `_api_server_cap` in `ccd/ccrc-api` outside the generated regions (comment lines skipped, a definition
- *  line not a call), each `guarded` when the same line names `$claimant` BEFORE the call, or tests `"$key" == 'goals.show'` or `'calls.record'` (D-8126) or `"$key" == plan.*` (the plan door, D-8181) (the plan rows' one table gate too: phase-ref, take, triage and ticket-done, D-8183) or `"$key" == timer.*` (the timers piece) (the claimant-row test; it
+ *  line not a call), each `guarded` when the same line names `$claimant` BEFORE the call, or tests `"$key" == 'goals.show'` or `'calls.record'` (D-8126) or `"$key" == plan.*` (the plan door, D-8181) or `[[ -n "$gate" ]]` (the one table gate: the plan rows' phase-ref, take, triage and ticket-done, D-8183, and the Overlord's rows since overlord-v1) or `"$key" == timer.*` (the timers piece) (the claimant-row test; it
  *  was `$family`, the row's fifth field, from Q3j until Q3l removed that field, D-7324). At Q3h's base: 0; 0 at Q3i,
  *  exactly 1 guarded and 0 unguarded at Q3j, and still at Q3l. This census, not a runtime probe, is the proof that no other row reads
  *  the cap file (D-7339). */
@@ -119,9 +119,10 @@ export function capReaderCalls(root: string = REPO): CapReaderCallSite[] {
     const call = /\b_api_server_cap\b(?!\s*\(\))/.exec(text);
     if (call === null) return;
     // The claimant test, or the goals read's or the call record's row test (D-8126), or the plan rows' (D-8181) or the timer rows'
-    // family test (the timers piece): either
+    // family test (the timers piece), or the gated table's own non-empty test, `[[ -n "$gate" ]]`, which only a row of that one
+    // table passes (overlord-v1, slug client-word-gate-is-one-table): either
     // must come on the line BEFORE the call.
-    const guard = /\$\{?claimant\b|"\$key" == (?:'(?:goals\.show|calls\.record)'|plan\.\*|timer\.\*)/.exec(text);
+    const guard = /\$\{?claimant\b|"\$key" == (?:'(?:goals\.show|calls\.record)'|plan\.\*|timer\.\*)|\[\[ -n "\$gate" \]\]/.exec(text);
     out.push({ file: CLIENT, line: i + 1, text, guarded: guard !== null && guard.index < call.index });
   });
   return out;

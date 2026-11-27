@@ -12,12 +12,14 @@
 //
 // THE RULES ARE TABLES (`HOME_TABLE`), read by the function and by the tests alike, so a new designation kind or rung class
 // without a row is a compile error here and a red totality case there.
+import type { ServerCap } from '../../../shared/api';
 import type { DesignationView } from '../../../shared/overlord-designation';
 import type { ReadState } from './readState';
 
-/** The server capability word that draws the Overlord (plan question 9). Compared as a string here, held once: the word's
- *  `SERVER_CAP_MAP` row comes with the `overlord-v1` piece, which then points this name at its typed constant. */
-export const OVERLORD_CAP = 'overlord-v1';
+/** The server capability word that draws the Overlord (plan question 9), typed against the server's one word list
+ *  (`SERVER_CAP_MAP`'s keys, through a type-only import): a change that drops the word from the map makes this line a compile
+ *  error, so the console's constant goes with the word (the overlord-v1 plan, question 6). */
+export const OVERLORD_CAP: ServerCap = 'overlord-v1';
 
 /** What the console knows of the designation, from one read. */
 export type DesignationState =
