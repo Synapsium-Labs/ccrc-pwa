@@ -7,9 +7,10 @@
 //   CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/archive-claims-sheet.browser.test.ts
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright-core';
-import { INSTRUMENT, REFINED } from '@ccrc/ui';
+import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
 import { openApp, serveDist, sharedDist, type AppFixture, type DistServer, type OpenedApp } from './app';
+import { expectStampedTheme } from './stampedTheme';
 import { withRunBinding } from '../test/runBindingFixture';
 
 const NOW = Date.now();
@@ -78,6 +79,7 @@ afterAll(async () => {
 async function openSheet(width: number, skin: string, theme: string): Promise<OpenedApp> {
   const opened = await openApp(browser!, { skin, theme, width }, FIXTURE);
   await opened.page.goto(`${server!.origin}/s/${COORD}`);
+  await expectStampedTheme(opened.page, theme);
   await opened.page.waitForSelector('.chat-head .keycap--more', { timeout: 20_000 });
   await opened.page.locator('.chat-head .keycap--more').first().click();
   await opened.page.locator('[data-command="session-archive"] >> visible=true').first().click();
@@ -119,7 +121,7 @@ function expectFits(m: Measured, where: string): void {
 }
 
 for (const skin of [REFINED, INSTRUMENT]) {
-  for (const theme of ['light', 'dark']) {
+  for (const theme of ['light', PHOSPHOR]) {
     describe(`the archive sheet's coordinator question, ${skin} ${theme}`, () => {
       for (const width of [360, 390, 1280, 1920]) {
         it(`at ${width}px the three answers, the picker and the confirm sit inside the window`, async () => {
