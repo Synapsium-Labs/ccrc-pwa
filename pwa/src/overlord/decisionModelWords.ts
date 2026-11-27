@@ -12,6 +12,7 @@ import {
   DECISION_QUESTIONS, readDecisionModelView, readDecisionRowSide, type DecisionHeldCause, type DecisionHostKind, type DecisionModelView,
   type DecisionRowMode, type DecisionRowSide, type DecisionRowView,
 } from '../../../shared/decisionModel';
+import { isRecord as isObj } from '../lib/wire';
 
 /** The read's view, or null for an answer the one reader refuses (the card says the read could not be read). */
 export function decisionViewOf(body: unknown): DecisionModelView | null {
@@ -112,7 +113,6 @@ export function decisionRowLine(r: DecisionRowView): DecisionRowLine {
   };
 }
 
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /** A row door's answer (arm, off, ceiling): the side it installed and, for an off the journal refused, `offRefused` with the
  *  guard's cause (ruling F1). Null for an answer it cannot read, which the card answers by reading the view again. */

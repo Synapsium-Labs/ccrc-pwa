@@ -33,6 +33,8 @@
   "pwa/src/overlord/readOutcome.ts#nextReadState": 1,
   "pwa/src/overlord/readOutcome.ts#readFailed": 1,
   "pwa/src/overlord/sinceWords.ts#sinceLines": 1,
+  "pwa/src/overlord/nameListWords.ts#nameListRowsOf": 1,
+  "pwa/src/overlord/decisionModelWords.ts#decisionRowLine": 1,
   "pwa/src/lib/places.ts#placesFor": 1,
   "pwa/src/lib/places.ts#deskPlacesFor": 1,
   "pwa/src/lib/places.ts#phoneDoorsFit": 1,

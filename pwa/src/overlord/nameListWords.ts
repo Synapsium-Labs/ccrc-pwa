@@ -19,9 +19,7 @@ import {
   type NameListStatus, type NameListUnreadable,
 } from '../../../shared/privateNames';
 import { ApiError } from '../lib/apiError';
-
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
-const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
+import { isCount, isOneOf, isRecord as isObj } from '../lib/wire';
 
 /** The status read's one reader (`GET /api/overlord/private-names`): one of its three answers, or null for one it cannot read. */
 export function nameListStatusOf(body: unknown): NameListStatus | null {
@@ -29,8 +27,7 @@ export function nameListStatusOf(body: unknown): NameListStatus | null {
   if (body.state === 'none') return { state: 'none' };
   if (body.state === 'list') return isCount(body.rows) && isCount(body.uploadedAt) ? { state: 'list', rows: body.rows, uploadedAt: body.uploadedAt } : null;
   if (body.state === 'unreadable') {
-    return typeof body.reason === 'string' && (NAME_LIST_UNREADABLE as readonly string[]).includes(body.reason)
-      ? { state: 'unreadable', reason: body.reason as NameListUnreadable } : null;
+    return isOneOf(NAME_LIST_UNREADABLE, body.reason) ? { state: 'unreadable', reason: body.reason } : null;
   }
   return null;
 }
@@ -85,7 +82,7 @@ export type NameListText =
   | { readonly ok: false; readonly why: 'mode'; readonly line: number };
 
 const MODE_PREFIX = /^([a-z]+):(.*)$/;
-const isMode = (w: string): w is NameListMode => (NAME_LIST_MODES as readonly string[]).includes(w);
+const isMode = (w: string): w is NameListMode => isOneOf(NAME_LIST_MODES, w);
 
 export function nameListRowsOf(text: string): NameListText {
   const rows: NameListRow[] = [];
@@ -109,10 +106,9 @@ export function nameListRowsOf(text: string): NameListText {
  *  `overlordSettingsRefusalText` for `name-list`). The answer's row and reason are read; nothing of the text is. */
 export function nameListRefusalText(err: unknown, lines: readonly number[], otherwise: (err: unknown) => string): string {
   const body = err instanceof ApiError && isObj(err.body) ? err.body : null;
-  if (body !== null && body.error === 'bad-request' && isCount(body.row) && typeof body.reason === 'string'
-    && (NAME_LIST_ROW_REFUSALS as readonly string[]).includes(body.reason)) {
+  if (body !== null && body.error === 'bad-request' && isCount(body.row) && isOneOf(NAME_LIST_ROW_REFUSALS, body.reason)) {
     const line = lines[body.row];
-    if (line !== undefined) return NAME_LIST_WORDS.rowRefused(line, body.reason as NameListRowRefusal);
+    if (line !== undefined) return NAME_LIST_WORDS.rowRefused(line, body.reason);
   }
   return otherwise(err);
 }
