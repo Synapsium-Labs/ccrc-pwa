@@ -93,7 +93,9 @@ export const DESIGNATION_KEBABS = ['refuse-input', 'retire-live', 'cancel-pendin
   // the Settings doors (designation C): the gate's own refusal word the set decider re-asks, and the set door's op-key stem
   'step-up-required', 'account-set',
   // designation B: the deadline sweep's attempt outcomes and settle fact, and `rebindPending`'s refusal
-  'deadline-passed', 'authority-unrecorded', 'no-report', 'attempt-pending'] as const;
+  'deadline-passed', 'authority-unrecorded', 'no-report', 'attempt-pending',
+  // overlord-v1's guard: the history fact of a server with no fleet link by configuration (`HistoryAgentFact`)
+  'no-link'] as const;
 export const isDesignationKebab = (w: string): boolean => (DESIGNATION_KEBABS as readonly string[]).includes(w);
 
 export type DesignateVerdict =

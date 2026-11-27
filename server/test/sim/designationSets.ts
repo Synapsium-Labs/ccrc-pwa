@@ -110,7 +110,7 @@ export const laneView = (lane: LaneArmLane, read: 'live' | 'shadow' | 'absent' |
   laneArmRowViewOf(lane, read === 'absent' ? { kind: 'absent' } : read === 'unreadable' ? { kind: 'unreadable', detail: 'SQLITE_BUSY' }
     : { kind: 'row', choice: read, updatedAt: 1, importedAt: null, imported: null }, gate);
 /** Every lane a start needs, live (overlord-v1's guard). */
-export const LANES_LIVE: readonly LaneArmRowView[] = [CONTINUITY_LANE, LAUNCH_PROFILE_LANE, ANCHOR_SLOT_LANE].map((l) => laneView(l, 'live'));
+export const LANES_LIVE: readonly LaneArmRowView[] = ([CONTINUITY_LANE, LAUNCH_PROFILE_LANE, ANCHOR_SLOT_LANE] as const).map((l) => laneView(l, 'live'));
 
 export const dfacts = (over: Partial<Facts> = {}): Facts => ({
   read: NONE, ccdWords: ALL_CCD, serverWords: SERVER_WORDS, builds: 'agreed', probe: ANSWER, model: 'opus', accountPools: SET_AB,
