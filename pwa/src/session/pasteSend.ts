@@ -14,6 +14,7 @@
 // not a pointer of THIS session or is longer than `PASTE_POINTER_MAX` (`unpointable`). Either way nothing is sent.
 // "Send as typed text" is the expansion (`expandValue`), unchanged, never this.
 import { PASTE_POINTER_MAX, pastePointer, readPastePointer } from '../../../shared/pastePointer';
+import { utf8Bytes } from '../../../shared/utf8';
 import { parseChips, stripMarkers, type PasteChips } from './pasteChips';
 
 /** A file a pasted text was saved to: the path the upload answered, and the exact text it was saved from. */
@@ -100,5 +101,6 @@ export function pointerSend(value: string, chips: PasteChips, saved: SavedPastes
   return { kind: 'ready', text: out.trim() };
 }
 
-/** The size a pasted text is saved at: its UTF-8 bytes, which is what the upload carries and what the limit counts. */
-export const pasteBytes = (text: string): number => new TextEncoder().encode(text).length;
+/** The size a pasted text is saved at: its UTF-8 bytes (the shared counter), which is what the upload carries and what
+ *  the limit counts. */
+export const pasteBytes = (text: string): number => utf8Bytes(text);
