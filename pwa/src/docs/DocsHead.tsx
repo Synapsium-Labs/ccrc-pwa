@@ -16,7 +16,7 @@
 // viewport, one row and one dense line (desk-nav Part B, D-8101), with back, crumbs and actions sharing `HeadRow`, action
 // words giving way first, and the dense truth line below. A desktop-born reader keeps its frame bar on narrowing.
 import {
-  useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
+  useContext, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
   type CSSProperties, type KeyboardEvent, type ReactNode, type RefObject,
 } from 'react';
 import { flushSync } from 'react-dom';
@@ -53,7 +53,9 @@ import type { ExportAssets } from './export/exportAssets';
 import type { HighlightStore } from '../lib/highlightStore';
 import { pinCommit, pinFor, samePin, type DocsVisit, type FileSlot, type Freshness } from './useDocsVisit';
 import { oneBarTools, type ReaderCommand } from './reader/policy';
+import { READER_MODE_TEXT } from './reader/readerModeWords';
 import type { ReaderBar, ReaderProgress } from './readerBar';
+import { ReaderModeContext, type ReaderModeContextValue } from './useReaderMode';
 
 type Leaf = DocsPageLocation & { kind: 'path' };
 type TreePage = Exclude<DocsPageLocation, { kind: 'index' }>;
@@ -594,8 +596,29 @@ function TruthLine(p: {
 /** An action's face in the full head's row (desk-nav Part B, D-8101): its icon, then its words in `.docs-action-words`,
  *  which docs.css hides when `HeadRow` asks (and under the `docs-head` container query); the control's name is set
  *  beside it, so it is kept. */
-function RowFace(p: { readonly icon: 'folder-code' | 'share' | 'download' | 'file-text'; readonly words: string }): ReactNode {
-  return <><Icon name={p.icon} size={16} /><span className="docs-action-words">{p.words}</span></>;
+function RowFace(p: { readonly icon: IconName; readonly words: string; readonly wordsClass?: string }): ReactNode {
+  return <><Icon name={p.icon} size={16} /><span className={p.wordsClass ?? 'docs-action-words'}>{p.words}</span></>;
+}
+
+/** Reader mode's glyph on the desk row, the one bar and the compact row (X6 XR1.5): an open book, vendored in `@ccrc/ui`. No
+ *  other action of the row wears it (GitHub's is `folder-code`, Share's `share`, Export's `download`, Open committed's
+ *  `file-text`). */
+const READER_MODE_ICON: IconName = 'book-open';
+
+/** Reader mode on the desk head (X6 XR1.5, spec 2026-11-20 3.1): the row's first action, the word beside the icon. Its word is
+ *  `.docs-reader-words`, not `.docs-action-words`: the row's first stage hides its neighbours' words and keeps this one, which
+ *  gives way only at the row's next stage (`useRowStage`'s `readerWord`, `data-reader-word`) and under the `docs-head` container
+ *  query, the widths where the row's words gave way before reader mode was drawn. Its name and its tooltip are its words. Its
+ *  tap is the context's `enter('button')`; whether it is drawn at all is the context's `offered`, decided by the caller. */
+function ReaderModeAction(p: { readonly ctx: ReaderModeContextValue }): ReactNode {
+  return (
+    <button
+      type="button" className="docs-action docs-reader-mode" aria-label={READER_MODE_TEXT.enter} title={READER_MODE_TEXT.enter}
+      onClick={() => p.ctx.enter('button')}
+    >
+      <RowFace icon={READER_MODE_ICON} words={READER_MODE_TEXT.enter} wordsClass="docs-reader-words" />
+    </button>
+  );
 }
 
 /** View on GitHub (spec 3.11, opened with `openExternal` on tap), with its may-differ note, or its refusal in words.
@@ -625,6 +648,7 @@ function GithubAction(p: {
       <a
         className="docs-action" href={link.url} target="_blank" rel="noopener noreferrer" onClick={(e) => openExternal(e, link.url)}
         aria-label={row ? DOCS_HEAD_TEXT.github : undefined} aria-describedby={row && noted ? noteId : undefined}
+        title={row ? DOCS_HEAD_TEXT.github : undefined}
       >
         {row ? <RowFace icon="folder-code" words={DOCS_HEAD_TEXT.githubShort} /> : DOCS_HEAD_TEXT.github}
       </a>
@@ -680,11 +704,13 @@ function ExportAction(p: {
     if (state.s === 'plain-view') p.onPlainView?.();
     else if (state.s === 'ready') setRequest({ page, tree, source: state.source, assets: p.assets, readAt: p.readAt });
   };
+  const name = busy ? fillSentence(DOCS_HEAD_TEXT.exportBusy, { state: words }) : p.glyph === true || p.row === true ? words : undefined;
   return (
     <>
+      {/* The row's form shows its words only while the row has room, so its name is also its tooltip (a hover names the icon). */}
       <button
         type="button" className="docs-action docs-export" disabled={!enabled} onClick={onClick}
-        aria-label={busy ? fillSentence(DOCS_HEAD_TEXT.exportBusy, { state: words }) : p.glyph === true || p.row === true ? words : undefined}
+        aria-label={name} title={p.row === true ? name : undefined}
       >
         {p.glyph === true ? <Icon name="download" size={20} /> : p.row === true ? <RowFace icon="download" words={words} /> : words}
       </button>
@@ -719,11 +745,13 @@ function ShareAction(p: {
   const [open, setOpen] = useState(false);
   const target = open && share.s === 'ready' ? shareTargetFor(tree, page, share.opened) : null;
   const words = shareWords(share);
+  const name = p.glyph !== true && p.row !== true ? undefined : share.s === 'updating' ? fillSentence(DOCS_HEAD_TEXT.shareBusy, { state: words }) : words;
   return (
     <>
+      {/* The row's form shows its words only while the row has room, so its name is also its tooltip (a hover names the icon). */}
       <button
         type="button" className="docs-action docs-share" disabled={share.s === 'updating'} onClick={() => setOpen(true)}
-        aria-label={p.glyph !== true && p.row !== true ? undefined : share.s === 'updating' ? fillSentence(DOCS_HEAD_TEXT.shareBusy, { state: words }) : words}
+        aria-label={name} title={p.row === true ? name : undefined}
       >
         {p.glyph === true ? <Icon name="share" size={20} /> : p.row === true ? <RowFace icon="share" words={words} /> : words}
       </button>
@@ -776,9 +804,14 @@ function ActionsRow(p: ActionInputs & { readonly form: FullHeadForm; readonly he
   const { page, tree, file } = p;
   const row = p.form === 'row';
   const { target, showsDraft, onVersion, share, exported, committedHref } = p.head;
-  if (target === null && committedHref === null) return null;
+  // Reader mode (X6 XR1.5): the row's first action, only in the desk row (the one bar draws its own control, and the panel's
+  // stacked list is the page's details), and only while the Docs screen's context offers it: a ready frame outside the plain view.
+  const readerMode = useContext(ReaderModeContext);
+  const reader = row && readerMode !== null && readerMode.offered ? readerMode : null;
+  if (target === null && committedHref === null && reader === null) return null;
   return (
     <div className="docs-actions">
+      {reader !== null && <ReaderModeAction ctx={reader} />}
       {target !== null && <GithubAction tree={tree} target={target} showsDraft={showsDraft} onVersion={onVersion} row={row} />}
       {share.s !== 'absent' && (
         <ShareAction key={shareKeyOf(page, tree, share)} page={page} tree={tree} share={share} exportOffered={exported.s !== 'absent'} row={row} />
@@ -791,7 +824,7 @@ function ActionsRow(p: ActionInputs & { readonly form: FullHeadForm; readonly he
       )}
       {committedHref !== null && (row
         ? (
-          <DocsPageLink className="docs-action" href={committedHref} label={DOCS_HEAD_TEXT.openCommitted}>
+          <DocsPageLink className="docs-action" href={committedHref} label={DOCS_HEAD_TEXT.openCommitted} title={DOCS_HEAD_TEXT.openCommitted}>
             <RowFace icon="file-text" words={DOCS_HEAD_TEXT.openCommitted} />
           </DocsPageLink>
         )
@@ -1042,15 +1075,24 @@ function rowFits(row: HTMLElement): boolean {
  *  alone, so a wider row never stands further on than a narrower one. A face that loads between the browser's paint and
  *  its promise settling can still show one frame at the old stage. Changes inside the crumbs are the fold's own and are
  *  not watched. With no ResizeObserver (jsdom) the row stays at 0. */
-function useRowStage(ref: { readonly current: HTMLElement | null }): RowStage {
+function useRowStage(ref: { readonly current: HTMLElement | null }): { readonly stage: RowStage; readonly readerWord: boolean } {
   const [stage, setStage] = useState<RowStage>(0);
+  // Whether Reader mode's own word shows (X6 XR1.5). It is drawn at stage 0 and, where the row fits with it, at stage 1 as well:
+  // the row's first stage hides the OTHER actions' words, and Reader mode's gives way only at the next step, where the old row
+  // (before reader mode was drawn) had hidden its words too. A row with no Reader mode action draws nothing for it, so the
+  // extra step costs nothing there.
+  const [readerWord, setReaderWord] = useState(true);
   useLayoutEffect(() => {
     const row = ref.current;
     if (row === null || typeof ResizeObserver === 'undefined') return;
     const probe = (): void => {
       for (const s of ROW_STAGES) {
-        flushSync(() => setStage(s));
+        flushSync(() => { setStage(s); setReaderWord(s !== 2); });
         if (s === ROW_STAGES.at(-1) || rowFits(row)) return;
+        if (s === 1 && row.querySelector('.docs-reader-mode') !== null) {
+          flushSync(() => setReaderWord(false));
+          if (rowFits(row)) return;
+        }
       }
     };
     let width = -1;
@@ -1086,7 +1128,7 @@ function useRowStage(ref: { readonly current: HTMLElement | null }): RowStage {
       fonts?.removeEventListener?.('loadingdone', probe);
     };
   }, [ref]);
-  return stage;
+  return { stage, readerWord };
 }
 
 /** The full head's row (desk-nav Part B, D-8101): back, the crumbs and the actions. When the row is short it gives way in
@@ -1100,11 +1142,12 @@ function HeadRow(p: {
   readonly actionInputs: Omit<ActionInputs, 'page' | 'tree'>;
 }): ReactNode {
   const ref = useRef<HTMLDivElement>(null);
-  const stage = useRowStage(ref);
+  const { stage, readerWord } = useRowStage(ref);
   return (
     <div
       className="docs-head-bar" ref={ref}
-      data-words={stage === 0 ? undefined : 'off'} data-fold={stage === ROW_STAGES.at(-1) ? '' : undefined}
+      data-words={stage === 0 ? undefined : 'off'} data-reader-word={readerWord ? undefined : 'off'}
+      data-fold={stage === ROW_STAGES.at(-1) ? '' : undefined}
     >
       <BackButton page={p.page} />
       <Crumbs key={p.crumbs.at(-1)?.href} crumbs={p.crumbs} fold={stage === 2} />
@@ -1305,6 +1348,10 @@ function CompactControls(p: CompactProps & {
   const { page, visit, tree, head, toggle } = p;
   const file = visit.file;
   const { share, exported } = head;
+  // Reader mode (X6 XR1.5): a frame mounted at a desk width has no host bar, so narrowing below 600 px gives this row over a
+  // READY frame, where reader mode is offered and nothing else draws its entry. An icon only, a whole tap like Share's and
+  // Export's, drawn only while the context offers it (a frame still loading offers nothing).
+  const readerMode = useContext(ReaderModeContext);
   return (
     <>
       <CompactLabel
@@ -1318,6 +1365,14 @@ function CompactControls(p: CompactProps & {
           key={exportKeyOf(page, tree, exported)} page={page} tree={tree} state={exported} assets={p.exportAssets}
           readAt={file.s === 'ok' ? file.receivedAt : null} onPlainView={p.onPlainView} glyph
         />
+      )}
+      {readerMode !== null && readerMode.offered && (
+        <button
+          type="button" className="docs-action docs-reader-mode" aria-label={READER_MODE_TEXT.enter}
+          onClick={() => readerMode.enter('button')}
+        >
+          <Icon name={READER_MODE_ICON} size={20} />
+        </button>
       )}
       <button
         ref={toggle.button} type="button" className="docs-more" aria-expanded={toggle.open} aria-controls={toggle.panelId}
@@ -1386,6 +1441,7 @@ function OneBarControls(p: {
   readonly bar: ReaderBar; readonly dot: FreshDot; readonly toggle: PhoneToggle;
 }): ReactNode {
   const { page, visit, tree, bar, toggle } = p;
+  const readerMode = useContext(ReaderModeContext);
   return (
     <>
       <button
@@ -1407,6 +1463,14 @@ function OneBarControls(p: {
           <Icon name={TOOL_ICON[t]} size={20} />
         </button>
       ))}
+      {/* Reader mode (X6 XR1.5, spec 2026-11-20 3.1): the bar's LAST control, icon only, a whole tap like the tools. It is
+          ccrc's own action, not one of `oneBarTools` (the library's command names only), and draws only while the context
+          offers it. It is a `.docs-tool`, so it takes the tools' size and floor from that rule. */}
+      {readerMode !== null && readerMode.offered && (
+        <button type="button" className="docs-tool" aria-label={READER_MODE_TEXT.enter} onClick={() => readerMode.enter('button')}>
+          <Icon name={READER_MODE_ICON} size={20} />
+        </button>
+      )}
       <ReadLine progress={bar.progress} />
     </>
   );

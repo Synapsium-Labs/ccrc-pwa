@@ -139,6 +139,9 @@ export interface ReaderModeContainer {
 /** The outside door's face of the same hook (`readerModeHandle.ts`): read at the moment of the act, never a render's copy. */
 export interface ReaderModeControls {
   offered(): boolean;
+  /** `offered()` without the modal-layer clause (the context's render-time offer, read now): what a listing asks, since the
+   *  listing may itself be a layer. */
+  available(): boolean;
   on(): boolean;
   toggle(): void;
 }
@@ -327,6 +330,9 @@ function createController(sink: Sink) {
     plainView: input.plainView,
     modalMounted: document.querySelector('[role="dialog"]') !== null,
   });
+  /** The offer less the modal-layer clause, the context's render-time answer read now: a listing (the shortcut sheet is a
+   *  dialog itself) asks this, never `offered`. */
+  const available = (): boolean => readerModeOffered({ frameReady: frame?.ready === true, plainView: input.plainView, modalMounted: false });
   const exit = (cause: 'exit-tap' | 'key'): void => step({ kind: cause });
   const enter = (_by: 'button' | 'key'): void => {
     const c = container;
@@ -400,6 +406,7 @@ function createController(sink: Sink) {
     frameToggle,
     focusFrame(): void { frame?.focus(); },
     offered,
+    available,
     on: (): boolean => state.on,
     enter,
     exit,
@@ -499,6 +506,6 @@ export function useReaderMode(o: { doc: string | null; plainView: boolean; place
   const container = useMemo<ReaderModeContainer>(() => ({
     setContainer: ctl.setContainer, on: state.on, how: state.on ? state.how : undefined, live, focusFrame: ctl.focusFrame,
   }), [ctl, state, live]);
-  const controls = useMemo<ReaderModeControls>(() => ({ offered: ctl.offered, on: ctl.on, toggle: ctl.toggle }), [ctl]);
+  const controls = useMemo<ReaderModeControls>(() => ({ offered: ctl.offered, available: ctl.available, on: ctl.on, toggle: ctl.toggle }), [ctl]);
   return { value, container, controls };
 }

@@ -23,6 +23,9 @@ import { parseMarkdown } from '../src/lib/markdownParse';
 import type { MarkdownParser } from '../src/lib/markdownRunner';
 import type { DocsVisit } from '../src/docs/useDocsVisit';
 import { createReaderProgress, type ReaderBar } from '../src/docs/readerBar';
+import { ReaderModeContext, type ReaderModeContextValue } from '../src/docs/useReaderMode';
+import { READER_MODE_OFF } from '../src/docs/reader/readerMode';
+import { READER_MODE_TEXT } from '../src/docs/reader/readerModeWords';
 import { navigate, useLocation } from '../src/lib/router';
 import {
   COMMIT_A, FP_1, NO_RANGE_VISIT, draftOf, entry, fakeLoaders, fileResponse, holder, okFile, okTree, pageAt, treeOk, treeResponse, type FakeLoaders,
@@ -559,5 +562,50 @@ describe('the phone head is one shell across the swap at ready (asks 554 and 555
     fireEvent.keyDown(inside, { key: 'Escape' });
     expect(title()).toHaveAttribute('aria-expanded', 'false');
     expect(document.activeElement).toBe(title());
+  });
+});
+
+// Reader mode on the compact row (native Docs reader, reader-mode plan Task XR1.5, spec 2026-11-20 3.1): a frame mounted at a desk
+// width has no host bar, so narrowing below 600 px gives the compact row over a READY frame, where reader mode is offered and
+// nothing else draws its entry. The row draws the icon-only control then, as the one bar and the desk row draw theirs.
+describe('the compact row draws Reader mode (X6 XR1.5)', () => {
+  function over(offered: boolean, enter = vi.fn()): ReturnType<typeof render> {
+    atWidth(412);
+    const tree = treeOk({ entries: [entry('specs', 'a.md')] });
+    const visit: DocsVisit = {
+      tree: { s: 'ok', answer: treeResponse(tree), receivedAt: Date.now() },
+      file: { s: 'loading', pin: { kind: 'committed', commit: COMMIT_A, servedRef: 'refs/remotes/origin/main', section: 'specs', path: 'a.md' } },
+      freshness: { s: 'idle' }, updatedTo: null, pendingFragment: null,
+      ...NO_RANGE_VISIT, retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
+    };
+    const ctx = { state: READER_MODE_OFF, offered, enter } as unknown as ReaderModeContextValue;
+    return render(
+      <ReaderModeContext value={ctx}>
+        <DocsHead page={pageAt('/docs/demo/specs/a.md')} visit={visit} tree={tree} />
+      </ReaderModeContext>,
+    );
+  }
+
+  it('compact row: Reader mode is offered over a ready frame mounted at desk width', () => {
+    const enter = vi.fn();
+    over(true, enter);
+    expect(document.querySelector('.docs-compact-bar'), 'the compact row is the head here (no host bar, no one bar)').not.toBeNull();
+    expect(document.querySelector('.docs-one-bar')).toBeNull();
+    const buttons = within(bar()).getAllByRole('button');
+    // After Share and Export, before Page details.
+    expect(buttons.at(-1)).toBe(more());
+    const control = buttons.at(-2)!;
+    expect(control.getAttribute('aria-label')).toBe(READER_MODE_TEXT.enter);
+    expect(control.textContent, 'icon only: no visible word').toBe('');
+    expect(control.querySelector('svg[aria-hidden="true"]'), 'its icon').not.toBeNull();
+    expect(control).toHaveClass('docs-action', 'docs-reader-mode');
+    fireEvent.click(control);
+    expect(enter).toHaveBeenCalledTimes(1);
+    expect(enter).toHaveBeenCalledWith('button');
+    // Nothing offered (a frame still loading, the plain view): nothing is drawn.
+    cleanup();
+    over(false);
+    expect(within(bar()).queryByRole('button', { name: READER_MODE_TEXT.enter })).toBeNull();
+    expect(within(bar()).getAllByRole('button').at(-1)).toBe(more());
   });
 });

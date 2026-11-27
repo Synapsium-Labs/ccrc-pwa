@@ -523,6 +523,9 @@ const CONTROLS: Record<string, string> = {
   'docs/DocsHead.tsx <button> docs-action docs-export':
     "TOKEN. Export (spec 4.17), after Share on a leaf: a <button> wearing the header's link-action class, `.docs-action`, "
     + 'whose rule carries the floor.',
+  'docs/DocsHead.tsx <button> docs-action docs-reader-mode':
+    "TOKEN. Reader mode (the reader-mode spec 3.1), the first action of the row: a <button> wearing the header's link-action "
+    + 'class, `.docs-action`, whose rule carries the floor.',
   'docs/DocsHead.tsx <a> docs-action': 'TOKEN. View on GitHub and Open committed version, standalone links in the header.',
   'docs/DocsIndexView.tsx <button> docs-row': 'TOKEN. A project row of the Docs index, one button per row (spec 4.4).',
   'docs/DocsTreeView.tsx <button> docs-row': 'TOKEN. A section or entry row of a Docs directory, the same rule.',

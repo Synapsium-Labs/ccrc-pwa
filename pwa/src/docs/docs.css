@@ -258,6 +258,7 @@
 .docs-full > .docs-head-bar[data-words='off'] .docs-action-words { display: none; }
 @container docs-head (width < 530px) {
   .docs-action-words { display: none; }
+  .docs-reader-words { display: none; }
 }
 .docs-full > .docs-truth {
   display: flex; flex-wrap: wrap; align-items: center; min-height: var(--docs-line-h);
@@ -549,6 +550,23 @@
 .docs-export-facts > div { display: contents; }
 .docs-export-facts dt, .docs-export-facts dd { margin: 0; overflow-wrap: anywhere; font-size: var(--text-sm); }
 .docs-export-note { margin: 0; font-size: var(--text-sm); line-height: var(--leading-normal); }
+
+/* — Reader mode's entry on the desk head (X6 XR1.5, spec 2026-11-20 3.1). The row's first action is a <button> wearing
+   `.docs-action`, as Share's and Export's are: its floor and its icon beside its words are the row's own rules above
+   (`.docs-full .docs-action`). `.docs-reader-mode` adds the pointer and drops the underline (the row's own rule for an action
+   with words matches `.docs-action-words` only, and this word is `.docs-reader-words`). It sets no colour, ground or border
+   colour, so design/audit.mjs owes it no entry.
+   ITS WORD GIVES WAY LATER THAN ITS NEIGHBOURS'. The word is `.docs-reader-words`, not `.docs-action-words`: the row's first
+   stage (`data-words='off'`) hides GitHub's, Share's and Export's words and leaves this one; `HeadRow` hides it too
+   (`data-reader-word='off'`) only at the stage where the row, before reader mode was drawn, had hidden its words, and the
+   `docs-head` container query below hides it at the width where it hid them. So at every width where the row showed words
+   before, Reader mode shows its word, and it is its neighbours' words that make way for it (each keeps its icon, its name and
+   its tooltip).
+   On a phone the one bar's control is a `.docs-tool`, which takes its floor and size from that rule: the bar's height, its
+   title's place and the tools' floor are unchanged, and the title's width falls by the control's own 44 px, which its ellipsis
+   absorbs. — */
+.docs-reader-mode { cursor: pointer; text-decoration: none; }
+.docs-full > .docs-head-bar[data-reader-word='off'] .docs-reader-words { display: none; }
 
 /* — the compact and one-bar heads (the phone-header and library 1.1 take-up plans). `docsHeadWords#headLayoutFor`
    is the sole layout policy; DocsHead renders its answer. The rules key on classes, never viewport width: a phone-born

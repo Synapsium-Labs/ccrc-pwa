@@ -17,6 +17,10 @@ export const READER_MODE_TEXT = Object.freeze({
   aaShown: 'Aa',
 } as const);
 
+/** Reader mode's one key, `r` with no modifier (spec 2026-11-20 3.2): the console's registry row and its key-holding check both
+ *  read this, so the key is spelled once. */
+export const READER_MODE_KEY = 'r';
+
 /** The overlay's progress text for a share read (clamped to [0, 1]): the percentage, rounded, like `41%`. */
 export function progressText(share: number): string {
   const s = Number.isFinite(share) ? Math.min(1, Math.max(0, share)) : 0;

@@ -46,6 +46,7 @@ import { DOCS_COMPACT_QUERY } from '../src/docs/DocsHead';
 import { DocsFailureView } from '../src/docs/DocsFailureView';
 import { DOC_MARKDOWN_ACTION } from '../src/docs/DocMarkdown';
 import { DOC_IMAGE_TEXT, DOCS_BANNER_TEXT, DOCS_HEAD_TEXT, DOCS_TOOL_TEXT, DOCS_VIEW_TEXT, SHARE_SHEET_TEXT } from '../src/docs/docsText';
+import { READER_MODE_TEXT } from '../src/docs/reader/readerModeWords';
 import type { ReaderDeps } from '../src/docs/ReaderFrame';
 import type { ReaderMount, ReaderMountInput } from '../src/docs/reader/bridge';
 import { SessionActionsSheet } from '../src/fleet/SessionActionsSheet';
@@ -1347,6 +1348,66 @@ describe('the one bar: the rendered bar carries .docs-title and .docs-tool (docs
     act(() => inputs[0]!.onReady());
     expect(document.querySelector('.docs-one-bar .docs-title')).not.toBeNull();
     expect(screen.getByRole('button', { name: DOCS_TOOL_TEXT.jump })).toHaveClass('docs-tool');
+  });
+});
+
+// — Reader mode's entry (reader-mode plan Task XR1.5, spec 2026-11-20 sections 3.1 and 4.6): the one bar's last control is a
+//   `.docs-tool` and the desk row's first action a `.docs-action`, so each takes the floor from its class's rule. Both
+//   halves: the rules carry the token, and a rendered ready frame draws a control wearing the class. —
+describe('Reader mode: the entry is a whole tap on the one bar and in the desk row (X6 XR1.5)', () => {
+  afterEach(() => {
+    history.replaceState(null, '', '/');
+  });
+
+  /** A ready reader frame on `/docs/demo/specs/a.md`, at the compact width or not. */
+  async function readyFrame(compact: boolean): Promise<void> {
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: compact && q === DOCS_COMPACT_QUERY, media: q, onchange: null,
+      addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+    }));
+    const inputs: ReaderMountInput[] = [];
+    const reader = {
+      render: vi.fn(async () => ({
+        kind: 'rendered',
+        result: { outcome: 'rendered', html: '<p>x</p>', meta: { title: 'Doc title', frontList: null, headings: [], figures: 0, mermaidKinds: [] } },
+        mermaid: { fences: 0, largestBytes: 0, totalBytes: 0, largestChars: 0, totalChars: 0 },
+        images: [], imagesTruncated: false,
+      })),
+      mount: vi.fn(async (_el: HTMLElement, input: ReaderMountInput) => {
+        inputs.push(input);
+        return {
+          destroy: vi.fn(), setPrefs: vi.fn(), command: vi.fn(),
+          seed: { hosted: false }, follow: vi.fn(),
+        } as unknown as ReaderMount;
+      }),
+      images: vi.fn(async () => ({ urls: {}, drafts: 0, auth: 0 })),
+    } as unknown as ReaderDeps;
+    const f = markdownLeaf('# A\n');
+    navigate('/docs/demo/specs/a.md');
+    render(<DocsScreen path={location.pathname} search={location.search} loaders={f.loaders} parser={docsParser} reader={reader} />);
+    await waitFor(() => expect(inputs.length).toBe(1));
+    act(() => inputs[0]!.onReady());
+  }
+
+  it('tap targets: the reader mode control floors on --tap-min', async () => {
+    // The scrape: the one bar's tool and the desk row's action rules carry the shared token, never a literal.
+    for (const sel of ['.docs-tool', '.docs-action']) {
+      expect(floorIn(docsCss, sel), sel).toBe('var(--tap-min)');
+      expect(norm(stripComments(ruleIn(docsCss, sel))), sel).not.toContain('44px');
+    }
+    expect(declValue(ruleIn(docsCss, '.docs-tool'), 'min-width')).toBe('var(--tap-min)');
+    // The render, on the one bar: the last control wears `.docs-tool`.
+    await readyFrame(true);
+    const onBar = screen.getByRole('button', { name: READER_MODE_TEXT.enter });
+    expect(onBar).toHaveClass('docs-tool');
+    expect(onBar.closest('.docs-one-bar'), 'it is on the one bar').not.toBeNull();
+    cleanup();
+    // The render, in the desk row: the first action wears `.docs-action`.
+    await readyFrame(false);
+    const inRow = await screen.findByRole('button', { name: READER_MODE_TEXT.enter });
+    expect(inRow).toHaveClass('docs-action');
+    expect(inRow.closest('.docs-actions'), 'it is in the actions row').not.toBeNull();
+    expect(inRow.closest('.docs-one-bar')).toBeNull();
   });
 });
 

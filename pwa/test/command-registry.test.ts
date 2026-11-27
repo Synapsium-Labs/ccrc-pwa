@@ -150,6 +150,8 @@ describe("the ids are W2's door table's", () => {
       'session-browser',
       // Overlord W1 home, Task 3: the Overlord's place (a top route, offered only under its word) and Go home (the wordmark).
       'go-overlord', 'go-home',
+      // The reader-mode plan, Task XR1.5: `r` enters and leaves reader mode on a Docs page; the palette never lists it.
+      'toggle-reader-mode',
     ].sort());
   });
 });
@@ -249,7 +251,9 @@ describe('the top search: terms, tier and search-only (D-6714)', () => {
     // D-8932 reads it without go-settings-integrations the same way; its own rank row and place are pinned below.
     const ranked = (q: string): string[] => rankCommands(q, baseCommands()).map((c) => c.id).filter((id) => id !== 'toggle-inspector' && id !== 'go-measure-highlighting' && id !== 'go-reader-lab' && id !== 'session-browser' && id !== 'switch-character' && id !== 'go-settings-integrations'
       // Overlord W1 home: Go to Overlord and Go home are read without the same way; their own rows are pinned in their case.
-      && id !== 'go-overlord' && id !== 'go-home');
+      && id !== 'go-overlord' && id !== 'go-home'
+      // Reader mode's `r` (X6 XR1.5) is read without the same way: its `when` keeps it out of the palette.
+      && id !== 'toggle-reader-mode');
     // Desktop-polish PL5a adds `go-waiting` (a top route's door); the table is read without it, and its own place is below.
     const rankedBefore = (q: string): string[] => ranked(q).filter((id) => id !== 'go-waiting');
     for (const [q, ids] of BEFORE) expect(rankedBefore(q), JSON.stringify(q)).toEqual(ids);
@@ -267,8 +271,9 @@ describe('the top search: terms, tier and search-only (D-6714)', () => {
     // W5h-a: the one command whose title holds "measure", placed right after Settings' six pages.
     expect(rankCommands('measure', baseCommands()).map((c) => c.id)).toEqual(['go-measure-highlighting']);
     expect(empty.indexOf('go-measure-highlighting'), 'after Settings\' six pages').toBe(empty.indexOf('go-settings-integrations') + 1);
-    // The reader lab plan, Task 10: the one command whose title holds "reader", placed right after R19's page.
-    expect(rankCommands('reader', baseCommands()).map((c) => c.id)).toEqual(['go-reader-lab']);
+    // The reader lab plan, Task 10: the one palette command whose title holds "reader", placed right after R19's page.
+    // Reader mode's `r` (X6 XR1.5) also holds it, first, and its `when` keeps it out of the palette, so it is read apart.
+    expect(rankCommands('reader', baseCommands()).map((c) => c.id)).toEqual(['toggle-reader-mode', 'go-reader-lab']);
     expect(empty.indexOf('go-reader-lab'), 'after R19\'s page').toBe(empty.indexOf('go-measure-highlighting') + 1);
     // D-8121: the one command whose title holds "browser", placed right after Change effort, as the menu places it.
     expect(rankCommands('browser', baseCommands()).map((c) => c.id)).toEqual(['session-browser']);
