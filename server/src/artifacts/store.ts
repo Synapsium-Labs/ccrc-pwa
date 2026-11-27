@@ -23,8 +23,9 @@
 // nothing, so a slot is never freed twice. A capability that ends loses its queue places with its record, but a running ticket
 // still holds its box slot until it is released (the response it serves is still on its way out), so the box count is never
 // freed twice and never leaked. `charge` is the capability's hourly byte budget (the window restarts an hour after its start,
-// asked only where the store is asked, with no timer), and `recordSnapshot` keeps one range snapshot per manifest entry, which
-// the view shows through a read-only face. A route reads these in a frozen view and writes none of them.
+// asked only where the store is asked, with no timer); it answers `ok`, `over-budget` (a spent hour) or `dead` (an ended or
+// unknown capability) as three words, and throws for a count that is not a whole non-negative number. `recordSnapshot` keeps one
+// range snapshot per manifest entry, which the view shows through a read-only face. A route reads these in a frozen view and writes none of them.
 import { createHash, randomBytes } from 'node:crypto';
 import {
   ARTIFACT_HOURLY_BYTES, ARTIFACT_IDLE_MS, ARTIFACT_MAX_AGE_DRAFT_MS, ARTIFACT_MAX_AGE_MS, ARTIFACT_MAX_LIVE,
@@ -130,9 +131,11 @@ export interface ArtifactStore {
   release(ticket: number): void;
   /** The running requests of the whole box, whichever capability they belong to, ended or not. */
   boxInflight(): number;
-  /** Charge `bytes` to the capability's hour: `over-budget`, charging nothing, when they would pass `ARTIFACT_HOURLY_BYTES`,
-   *  and for a dead or unknown capability or a count that is not a non-negative whole number (it fails shut). */
-  charge(id: string, bytes: number): 'ok' | 'over-budget';
+  /** Charge `bytes` to the capability's hour: `ok`; `over-budget`, charging nothing, when they would pass `ARTIFACT_HOURLY_BYTES`
+   *  (a spent hour and nothing else); `dead`, charging nothing, for a capability that has ended or was never minted (it fails
+   *  shut, and a caller tells it from a spent hour by the word). A count that is not a non-negative safe integer is a caller's
+   *  programming error: it throws a `RangeError` (naming no id), whatever the capability's state, and charges nothing. */
+  charge(id: string, bytes: number): 'ok' | 'over-budget' | 'dead';
   /** Set a live capability's snapshot for a manifest key, or remove it for `null`. A dead or unknown id, or a key that is not
    *  in its manifest, is left alone. */
   recordSnapshot(id: string, rel: string, snapshot: string | null): void;
@@ -373,8 +376,11 @@ export function createArtifactStore(
     },
 
     charge(id, bytes) {
+      // A count that is not a whole, non-negative number is the caller's programming error, never a verdict about the capability:
+      // it is refused before the capability is looked at, charges nothing, and its words name no id and no token.
+      if (!Number.isSafeInteger(bytes) || bytes < 0) throw new RangeError('charge: bytes must be a non-negative safe integer');
       const rec = liveRecord(id);
-      if (rec === null || !Number.isSafeInteger(bytes) || bytes < 0) return 'over-budget';
+      if (rec === null) return 'dead';
       const now = clock();
       if (now - rec.hourStart >= ARTIFACT_BUDGET_WINDOW_MS) {
         rec.hourStart = now;

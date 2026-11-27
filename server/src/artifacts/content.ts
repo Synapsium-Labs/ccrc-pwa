@@ -306,12 +306,15 @@ export function createContentDoor(deps: ContentDeps): ContentDoor {
       const sink = async (frame: Uint8Array): Promise<'next' | 'stop'> => {
         if (over) return 'stop';
         if (!frameFits(sent, frame.length, total)) { terminate({ kind: 'destroy' }); return 'stop'; }
-        // The hour's budget is charged for what is written, frame by frame. A frame that would pass it fails shut: the 429 before
-        // any byte, a cut socket short of `Content-Length` after one.
-        if (store.charge(live!.id, frame.length) !== 'ok') {
-          // `charge` also refuses a capability that has ended: that is an end (the identical 404 before a byte), not a spent budget.
-          const ended = store.lookup(token) === null;
-          terminate(reply.wrote() ? { kind: 'destroy' } : ended ? { kind: 'not-found' } : { kind: 'answer', answer: contentAnswer('too-many') });
+        // The hour's budget is charged for what is written, frame by frame, and `charge` answers three words. `dead` is a
+        // capability that has ended (the identical 404 before a byte, a cut socket after one); `over-budget` is a spent hour (the
+        // 429 before any byte, a cut socket short of `Content-Length` after one). A count `charge` refuses throws: the frame's
+        // length is always whole, so that is a defect, and it goes where any throw of the sink goes: the real port turns it into an
+        // unreadable read (the identical 404 before a byte, a cut socket after), and a port that lets it through reaches
+        // `flow`'s catch (the instance's fixed 500 before a byte, a cut socket after).
+        const charged = store.charge(live!.id, frame.length);
+        if (charged !== 'ok') {
+          terminate(reply.wrote() ? { kind: 'destroy' } : charged === 'dead' ? { kind: 'not-found' } : { kind: 'answer', answer: contentAnswer('too-many') });
           return 'stop';
         }
         if (!reply.wrote()) reply.head(status, headersFor(live!));
@@ -441,7 +444,6 @@ export function createContentDoor(deps: ContentDeps): ContentDoor {
       const outcome = await waitInQueue(admitted.ticket, c.id, arrival, reply.closed);
       if (outcome === 'dead') { reply.notFound(); return; }
       if (outcome === 'timeout') {
-        // A wait that ran out for a capability that has ended meanwhile (nothing announces a passphrase change) is the identical 404.
         // A wait that ran out for a capability that has ended meanwhile (nothing announces a passphrase change) is the identical 404.
         if (store.lookup(path.token) === null) { reply.notFound(); return; }
         const a = contentAnswer('wait-out');

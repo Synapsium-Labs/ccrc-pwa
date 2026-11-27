@@ -691,18 +691,28 @@ describe('X5 A3.3: admission, budget and snapshots (D-9135)', () => {
     const v = r.store.lookup(m.token)!;
     expect(v.hourStart).toBe(T0 + 3_600_000);
     expect(v.servedThisHour).toBe(5);
-    // a charge that is not a whole, non-negative count of bytes fails shut and charges nothing
-    expect(r.store.charge(m.id, -1)).toBe('over-budget');
-    expect(r.store.charge(m.id, Number.NaN)).toBe('over-budget');
+    // a charge that is not a whole, non-negative count of bytes is a caller's error: it throws, and charges nothing
+    for (const bad of [-1, Number.NaN, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() => r.store.charge(m.id, bad), `a count of ${bad}`).toThrow(RangeError);
+    }
     expect(r.store.lookup(m.token)!.servedThisHour).toBe(5);
+    // and the throw names neither the id nor a count of the caller's
+    let thrown: unknown;
+    try { r.store.charge(m.id, -1); } catch (e) { thrown = e; }
+    expect(String((thrown as Error).message)).not.toContain(m.id);
+    expect(String((thrown as Error).message)).not.toContain('-1');
   });
 
   it('store: the hour\'s budget fails shut for a dead capability', () => {
     const r = rig();
     const m = mintOk(r);
     r.store.revoke(m.id);
-    expect(r.store.charge(m.id, 1)).toBe('over-budget');
-    expect(r.store.charge('never-minted', 1)).toBe('over-budget');
+    // an ended capability is `dead`, which is not a spent hour (`over-budget`): the door answers the two differently
+    expect(r.store.charge(m.id, 1)).toBe('dead');
+    expect(r.store.charge('never-minted', 1)).toBe('dead');
+    // a bad count throws whatever the capability's state: it is never folded into `dead`
+    expect(() => r.store.charge(m.id, -1)).toThrow(RangeError);
+    expect(() => r.store.charge('never-minted', Number.NaN)).toThrow(RangeError);
   });
 
   it('store: snapshots per entry', () => {

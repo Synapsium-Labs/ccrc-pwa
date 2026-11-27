@@ -949,6 +949,56 @@ describe('content: the end of a capability reaches work in flight', () => {
     void E;
   });
 
+  // X5 A3 fix round 1 (item 3): the case above revokes a capability that also has running requests, whose ends pump the queue and
+  // answer the waiting tickets anyway, so it cannot tell whether a waiter hears the end itself. Here the revoked capability has
+  // nothing running, and no slot of the box frees before its answers are due.
+  it('content: a revoke reaches a link whose requests only wait', async () => {
+    const r = await rig();
+    r.bytes.holdAll();
+    const mk = (n: string) => ({ n, ...mint(r, { [`${n}.js`]: 1000 }) });
+    const others = ['a', 'b', 'c', 'd'].map(mk);
+    const B = mk('e');
+    const running = others.flatMap((c) => [0, 1, 2, 3].map(() => getFile(r, c.token, `${c.n}.js`)));
+    await settle(r);
+    expect(r.store.boxInflight(), 'the box is full').toBe(16);
+    expect(r.bytes.held.length, 'sixteen reads are held open').toBe(16);
+    const waiting = [0, 1, 2].map(() => getFile(r, B.token, 'e.js'));
+    expect(await until(() => r.store.lookup(B.token)!.queued === 3), 'B\'s requests only wait').toBe(true);
+    expect(r.store.lookup(B.token)!.inflight).toBe(0);
+
+    expect(r.store.revoke(B.id)).toBe(true);
+
+    expect(await until(() => waiting.every((p) => p.settled()), 1500), 'each answers before any slot frees').toBe(true);
+    for (const p of waiting) {
+      const got = await p.promise;
+      expect(got.status, 'the identical 404').toBe(404);
+      expect(got.body.toString()).toBe(BODY_404);
+    }
+    expect(r.store.boxInflight(), 'every one of the sixteen slots is still held').toBe(16);
+    expect(r.bytes.held.length, 'and no read began for B').toBe(16);
+    expect(running.every((p) => !p.settled()), 'no held read was released or cut').toBe(true);
+    // The others finish, and nothing leaks.
+    for (const h of r.bytes.held) h.release();
+    const done = await Promise.all(running.map((p) => p.promise));
+    expect(done.every((g) => g.status === 200 && g.outcome === 'complete')).toBe(true);
+    expect(await until(() => r.store.boxInflight() === 0)).toBe(true);
+  });
+
+  // X5 A3 fix round 1 (item 2): the sink reads the word `charge` answers. The door's own end subscription normally answers an end
+  // first (the store announces it during the charge), so the store here loses its announcements: only the word is left to say that
+  // the capability ended, and an ended capability is the identical 404, never the 429 of a spent hour.
+  it('content: a charge that finds the capability ended is the identical 404, not a spent budget', async () => {
+    const r = await rig();
+    r.store.onEnd = () => () => {};
+    const { token } = mint(r, { 'three.bin': 3 * FRAME });
+    r.bytes.onFrame = (n) => { if (n === 1) r.ended.add(SESSION); };
+    const got = await getFile(r, token, 'three.bin').promise;
+    expect(got.status).toBe(404);
+    expect(got.body.toString()).toBe(BODY_404);
+    expect(r.bytes.frameReads, 'nothing was written, and no second frame was read').toBe(1);
+    expect(await until(() => r.store.boxInflight() === 0), 'its slot is released').toBe(true);
+  });
+
   it('content: a slot is freed once', async () => {
     const r = await rig();
     fakeTime();
@@ -1476,5 +1526,72 @@ describe('content: hosts, logging and the socket', () => {
     expect(all.match(/HTTP\/1\.1 \d{3}/g), 'one status line only, never a second answer inside the body').toEqual(['HTTP/1.1 200']);
     expect(all).not.toContain('Bad request');
     for (const h of r.bytes.held) h.release();
+  });
+
+  // X5 A3 fix round 1 (item 2): `charge` throws a RangeError for a count that is not a whole number. The one caller passes a frame's
+  // length, so that is a defect, and it must end its own response only: the door's throw path, as for any throw of the sink.
+  it('content: a bad count thrown from the charge ends only its own response', async () => {
+    /** A three-frame read that records each frame it asks the sink for and the signal the port was given. */
+    const scripted = (r: Rig): { asked: number; signals: AbortSignal[] } => {
+      const seen = { asked: 0, signals: [] as AbortSignal[] };
+      r.bytes.readScript = async (c, sink, signal) => {
+        seen.signals.push(signal);
+        for (let offset = c.range.start; offset <= c.range.end; offset += FRAME) {
+          seen.asked++;
+          r.bytes.activity++;
+          if (await sink(bytesOf(c.key, offset, Math.min(FRAME, c.range.end - offset + 1))) === 'stop') return { ok: true };
+        }
+        return { ok: true };
+      };
+      return seen;
+    };
+    /** The store's own refusal of a bad count, thrown on the `n`th charge; the other charges are the real store's. */
+    const throwOn = (r: Rig, n: number): void => {
+      const charge = r.store.charge;
+      let calls = 0;
+      r.store.charge = (id, bytes) => charge(id, ++calls === n ? -1 : bytes);
+    };
+    /** Nothing else is taken down: the same capability and another one are served whole. */
+    const othersServed = async (r: Rig, same: string, other: string): Promise<void> => {
+      const again = await getFile(r, same, 'a.js').promise;
+      expect(again.status, 'the same capability').toBe(200);
+      expect(again.body).toEqual(bytesOf('x/a.js', 0, 10));
+      const elsewhere = await getFile(r, other, 'a.js').promise;
+      expect(elsewhere.status, 'another capability').toBe(200);
+      expect(elsewhere.body).toEqual(bytesOf('x/a.js', 0, 10));
+    };
+
+    // On the first frame: nothing is out, so the door's throw path answers the instance's fixed 500 and nothing of the path.
+    const r = await rig();
+    const one = mint(r, { 'three.bin': 3 * FRAME, 'a.js': 10 });
+    const two = mint(r, { 'a.js': 10 });
+    const seen = scripted(r);
+    throwOn(r, 1);
+    const first = await getFile(r, one.token, 'three.bin').promise;
+    expect(first.status, 'the throw path before a byte').toBe(500);
+    expect(first.body.toString()).toBe('Something went wrong.');
+    expect(first.body.toString()).not.toContain(one.token);
+    expect(first.body.toString()).not.toContain('three.bin');
+    expect(await until(() => r.store.boxInflight() === 0), 'its slot is released').toBe(true);
+    expect(r.store.lookup(one.token)).toMatchObject({ inflight: 0, queued: 0, servedThisHour: 0 });
+    expect(seen.asked, 'no further frame is asked for').toBe(1);
+    expect(seen.signals.every((s) => s.aborted), 'the port\'s work for it is aborted').toBe(true);
+    await othersServed(r, one.token, two.token);
+
+    // On the second frame: the first is out, so the response is cut short of Content-Length and nothing is written into it.
+    const r2 = await rig();
+    const one2 = mint(r2, { 'three.bin': 3 * FRAME, 'a.js': 10 });
+    const two2 = mint(r2, { 'a.js': 10 });
+    const seen2 = scripted(r2);
+    throwOn(r2, 2);
+    const second = await getFile(r2, one2.token, 'three.bin').promise;
+    expect(second.headers['content-length']).toBe(String(3 * FRAME));
+    expect(second.outcome, 'a reset, never a short 200').toBe('reset');
+    expect(same(second.body, bytesOf('x/three.bin', 0, FRAME)), 'exactly the first frame and nothing after it').toBe(true);
+    expect(await until(() => r2.store.boxInflight() === 0), 'its slot is released').toBe(true);
+    expect(r2.store.lookup(one2.token)).toMatchObject({ inflight: 0, queued: 0, servedThisHour: FRAME });
+    expect(seen2.asked, 'the throwing frame was the last asked for').toBe(2);
+    expect(seen2.signals.every((s) => s.aborted), 'the port\'s work for it is aborted').toBe(true);
+    await othersServed(r2, one2.token, two2.token);
   });
 });

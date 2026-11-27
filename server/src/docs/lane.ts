@@ -79,9 +79,13 @@ interface ReadWaiter {
  * empty (or holds only prepares `laneStep` skips) and `laneAdmit` admits it; else it queues (or is `busy` when
  * `laneOverflow` says `DOCS_LANE_QUEUE` jobs already wait). The pump walks the console FIFO in order and stops at the
  * first job `laneStep` stops at, so a large job cannot starve; the one job it passes is a prepare held back only because
- * a prepare already runs (X2 P1). Only the HEAD of the artifact FIFO is ever considered, as only the head of the console
- * FIFO is (past the skipped prepares): once the console walk is done, the pump asks `laneNext` which FIFO's head
- * starts, and while it answers `artifact` starts the artifact head. An artifact job starts at once only when both FIFOs
+ * a prepare already runs (X2 P1). Once the console walk is done, the pump asks `laneNext` which FIFO's head starts, and
+ * while it answers `artifact` starts the artifact head. `laneNext` is asked with the console FIFO's FIRST job (the
+ * console walk's skip does not apply to it) and the artifact FIFO's first job: the artifact head is considered only
+ * when the console FIFO is empty, and only that head is. So a console prepare that waits (held back because a prepare
+ * already runs, a job the console walk skips) holds EVERY artifact job behind it until that prepare starts or leaves
+ * its FIFO (its own wait ends, or its client goes), and an artifact job at the head that `laneAdmit` refuses holds the
+ * artifact jobs behind it the same way. An artifact job starts at once only when both FIFOs
  * are empty and `laneNext` says so; else it queues (or is `busy` when `laneOverflow` says `DOCS_LANE_ARTIFACT_QUEUE`
  * artifact jobs already wait, a count that never touches the console's bound), with the same wait, abort and refuse
  * paths as a console job. At most one artifact READ job runs; an artifact prepare is held by the prepare clause, not by that

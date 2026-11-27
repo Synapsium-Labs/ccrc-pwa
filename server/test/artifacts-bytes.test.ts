@@ -521,4 +521,60 @@ describe('bytes: jobs are the artifact lane\'s', () => {
       vi.useRealTimers();
     }
   });
+
+  // X5 A3 fix round 1 (item 2): the store's `charge` throws a RangeError for a count that is not whole, and the door's sink lets it
+  // through. This is where it lands for the real adapter and the real lane: the read ends as `unreadable` (the word a throwing exec
+  // gets), nothing more is asked of the reader, and the lane holds no exec afterwards.
+  it('bytes: a sink that throws ends its read as unreadable and frees the lane', async () => {
+    const unreadable = { ok: false, error: artifactReadWord('show', 'exec-threw') } as const;
+    expect(unreadable.error).toBe('unreadable');
+    /** A sink that keeps what it is handed and throws a RangeError on its `at`th frame. */
+    const throwing = (at: number) => {
+      const sunk = collector((n) => {
+        if (n === at) throw new RangeError('charge: bytes must be a non-negative safe integer');
+        return 'next';
+      });
+      return sunk;
+    };
+    const idle = (docs: ReturnType<typeof rig>['docs']): void => {
+      const load = nodeLanes(docs).read.load();
+      expect(load).toMatchObject({ execs: 0, queued: 0 });
+      expect(load.artifact ?? 0).toBe(0);
+      expect(load.artifactQueued ?? 0).toBe(0);
+    };
+
+    // The frame path: three frames, the sink throws on the second.
+    const file = framedFile(3);
+    const { rec, docs, bytes } = rig(ccdOver(file));
+    const e = entry(blobPin(), file.length);
+    const whole = { start: 0, end: file.length - 1 };
+    const frameCalls = (): number => rec.calls.filter((argv) => argv.includes('--offset')).length;
+    const bad = throwing(2);
+    expect(await bytes.read(COMMITTED_AT, e, whole, SNAP, bad.sink, LIVE)).toEqual(unreadable);
+    await settle();
+    expect(bad.frames.length, 'the sink was handed two frames').toBe(2);
+    expect(frameCalls(), 'no third frame is asked of the reader').toBe(2);
+    idle(docs);
+    const good = collector();
+    expect(await bytes.read(COMMITTED_AT, e, whole, SNAP, good.sink, LIVE)).toEqual({ ok: true });
+    expect(good.joined().equals(file), 'a second read on the same rig is served whole').toBe(true);
+    expect(frameCalls()).toBe(5);
+    idle(docs);
+
+    // The show path: a small file, the sink throws on its one call.
+    const small = Buffer.from('hello, artifact');
+    const s = rig(ccdOver(small));
+    const se = entry(blobPin(), small.length);
+    const range = { start: 0, end: small.length - 1 };
+    const showBad = throwing(1);
+    expect(await s.bytes.read(COMMITTED_AT, se, range, null, showBad.sink, LIVE)).toEqual(unreadable);
+    await settle();
+    expect(showBad.frames.length).toBe(1);
+    expect(s.rec.calls.filter((argv) => argv[0] === 'docs-show'), 'the file was read once').toHaveLength(1);
+    idle(s.docs);
+    const showGood = collector();
+    expect(await s.bytes.read(COMMITTED_AT, se, range, null, showGood.sink, LIVE)).toEqual({ ok: true });
+    expect(showGood.joined().equals(small)).toBe(true);
+    idle(s.docs);
+  });
 });

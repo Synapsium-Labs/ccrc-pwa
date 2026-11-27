@@ -1086,4 +1086,58 @@ describe('X5 A3.3: artifact jobs on the read lane', () => {
     expect(laneAdmit(prepareRunning, ART_PREPARE)).toBe(false);
     expect(laneAdmit(prepareRunning, RANGE_PREPARE_JOB)).toBe(false);
   });
+
+  // X5 A3 fix round 1 (item 5): a prepare that waits (held back because a prepare already runs) holds the artifact FIFO's jobs
+  // behind it, and its leaving at the end of its own wait is what lets the next head start, ahead of that job's own wait.
+  it('lanes: an artifact frame behind a waiting console prepare is admitted when that wait ends, not answered busy', async () => {
+    const lane = readLane();
+    const b = blocker<string>();
+    const order: string[] = [];
+    void lane.run(RANGE_PREPARE_JOB, live(), named(order, 'p', b));
+    const waiting = lane.run(RANGE_PREPARE_JOB, live(), named(order, 'c', b));
+    expect(order, 'a prepare runs, the console prepare waits (skipped)').toStrictEqual(['p']);
+    await vi.advanceTimersByTimeAsync(1000);
+    const frame = lane.run(ART, live(), named(order, 'f', b));
+    expect(order, 'the frame waits behind the console FIFO\'s prepare, though an exec is free').toStrictEqual(['p']);
+    expect(lane.load()).toMatchObject({ execs: 1, prepares: 1, queued: 1, artifactQueued: 1 });
+    // The console prepare's wait ends 1000 ms before the frame's own.
+    await vi.advanceTimersByTimeAsync(DOCS_LANE_MAX_WAIT_MS - 1000);
+    expect(await waiting).toStrictEqual(BUSY_READ);
+    expect(order, 'the frame starts as that wait ends').toStrictEqual(['p', 'f']);
+    expect(await settledOrPending(frame), 'and is not busy').toBe('pending');
+    expect(lane.load()).toMatchObject({ execs: 2, prepares: 1, artifact: 1, queued: 0, artifactQueued: 0 });
+    // Past the frame's own wait it is still running, never answered busy.
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(await settledOrPending(frame)).toBe('pending');
+    b.release(1, 'frame');
+    expect(await frame).toStrictEqual({ kind: 'ran', value: 'frame' });
+    b.release(0, 'prepare');
+    await flush();
+    expect(lane.load()).toStrictEqual(IDLE);
+  });
+
+  it('lanes: an artifact frame behind an artifact prepare at the artifact head is admitted when that wait ends, not answered busy', async () => {
+    const lane = readLane();
+    const b = blocker<string>();
+    const order: string[] = [];
+    void lane.run(ART_PREPARE, live(), named(order, 'p', b));
+    const waiting = lane.run(ART_PREPARE, live(), named(order, 'q', b));
+    expect(order, 'a prepare runs, the second artifact prepare waits at the artifact head').toStrictEqual(['p']);
+    await vi.advanceTimersByTimeAsync(1000);
+    const frame = lane.run(ART, live(), named(order, 'f', b));
+    expect(order, 'the frame waits behind it in the artifact FIFO, though an exec is free').toStrictEqual(['p']);
+    expect(lane.load()).toMatchObject({ execs: 1, prepares: 1, queued: 0, artifactQueued: 2 });
+    await vi.advanceTimersByTimeAsync(DOCS_LANE_MAX_WAIT_MS - 1000);
+    expect(await waiting).toStrictEqual(BUSY_READ);
+    expect(order, 'the frame starts as that wait ends').toStrictEqual(['p', 'f']);
+    expect(await settledOrPending(frame), 'and is not busy').toBe('pending');
+    expect(lane.load()).toMatchObject({ execs: 2, prepares: 1, artifact: 1, queued: 0, artifactQueued: 0 });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(await settledOrPending(frame)).toBe('pending');
+    b.release(1, 'frame');
+    expect(await frame).toStrictEqual({ kind: 'ran', value: 'frame' });
+    b.release(0, 'prepare');
+    await flush();
+    expect(lane.load()).toStrictEqual(IDLE);
+  });
 });
