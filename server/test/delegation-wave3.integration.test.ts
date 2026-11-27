@@ -1335,7 +1335,9 @@ describe('8. the closed scope census', () => {
     const dbPath = path.join(mkTmp('ccrc-dlgint-db-'), 'coord.db');
     const db = openCoordDb(dbPath);
     const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map((r) => r.name);
-    expect(tables.filter((t) => /^(delegation|lease|cleanup|audit|carrier)/i.test(t)).sort(), 'exactly the spec\'s six tables, no queue, token or audit table').toEqual(
+    // D-9167: the delegation events contract row (migration 134) is a later, separate fact about `delegation_events`, not broker state:
+    // named here, so any other table under these prefixes is still red.
+    expect(tables.filter((t) => /^(delegation|lease|cleanup|audit|carrier)/i.test(t) && t !== 'delegation_events_projection').sort(), 'exactly the spec\'s six tables, no queue, token or audit table').toEqual(
       ['delegation_activities', 'delegation_attempts', 'delegation_events', 'delegation_leases', 'delegation_lineage', 'delegation_sessions']);
     expect(tables.filter((t) => /token|queue|audit|cleanup|obligation/i.test(t) && !/^(mail|push)/i.test(t)), 'no cleanup or audit machinery in the schema').toEqual([]);
     const columns = (db.prepare('PRAGMA table_info(delegation_leases)').all() as Array<{ name: string }>).map((r) => r.name).sort();
@@ -1379,6 +1381,9 @@ describe('8. the closed scope census', () => {
       "projectDelegationCheckpointChanges: case delegationAttemptCodec.table: return swap('UPDATE delegation_attempts', del",
       "projectDelegationCheckpointChanges: case delegationLeaseCodec.table: return swap('UPDATE delegation_leases', delegat",
       "projectDelegationCheckpointChanges: case delegationLineageCodec.table: return swap('UPDATE delegation_lineage', dele",
+      // D-9167: the delegation events contract row's two writers, each updating that one row of `delegation_events_projection` only.
+      "setDelegationEventsRow: + 'VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET mode = excl",
+      "deleteDelegationEventsAt: const moved = this.db.prepare(\"UPDATE delegation_events_projection SET sweptBelo",
     ]);
     // wave 5 (PR5a): a lease changes in a delta only through its one compare-and-swap: that is the one line of the delta method naming the
     // lease table or its codec, and the method is not empty (so a renamed method cannot turn this into a scan of nothing)

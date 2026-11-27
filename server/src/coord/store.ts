@@ -158,6 +158,7 @@ import {
   type DelegationCheckpointV1, type DelegationEventRow, type DelegationInsertEventsResult, type DelegationLineageRow, type DelegationProjectChangesResult,
   type DelegationProjectionInsert, type DelegationProjectionUpdate, type DelegationRowCodec, type DelegationSqlValue,
 } from './delegation-model.js';
+import { encodeDelegationEventsRow, type DelegationEventsPageStats, type DelegationEventsRow, type DelegationEventsRowRead } from './delegation-event-projection.js';
 // Child reclamation wave 10 (path-identity spec 2026-10-12 §5.2): the collector switch's read vocabularies, its journal
 // port and its write decision are declared by their CONSUMER, the L1 `collectLane.ts`. This file implements the row read
 // and the one writer, and runs the decision inside its transaction.
@@ -11825,6 +11826,42 @@ export class CoordStore {
     return tx(this.db, () => Number(this.db.prepare(
       'DELETE FROM delegation_events WHERE id IN (SELECT id FROM delegation_events WHERE journalSequence > ? AND journalSequence <= ? ORDER BY journalSequence LIMIT ?)',
     ).run(afterExclusive, throughInclusive, limit).changes));
+  }
+
+  /** D-9167: the contract row of `delegation_events` (migration 134), raw; `decodeDelegationEventsRow` reads it, never this method. */
+  delegationEventsRow(): DelegationEventsRowRead {
+    try {
+      const r = this.db.prepare('SELECT mode, legacyBelow, sweptBelow, stoppedAt, stopReason, stopChoiceAt, stopNoticedAt FROM delegation_events_projection WHERE id = 1')
+        .get() as Record<string, unknown> | undefined;
+      return r === undefined ? { kind: 'absent' } : { kind: 'row', raw: r };
+    } catch (err) { return { kind: 'unreadable', detail: err instanceof Error ? err.message : String(err) }; }
+  }
+
+  /** D-9167: the contract row's whole-row writer (a contract move, a stop, a notice's mark), called only by the applier. Throws. */
+  setDelegationEventsRow(row: DelegationEventsRow, at: number): void {
+    const c = encodeDelegationEventsRow(row);
+    this.db.prepare('INSERT INTO delegation_events_projection (id, mode, legacyBelow, sweptBelow, stoppedAt, stopReason, stopChoiceAt, stopNoticedAt, updatedAt) '
+      + 'VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET mode = excluded.mode, legacyBelow = excluded.legacyBelow, sweptBelow = excluded.sweptBelow, '
+      + 'stoppedAt = excluded.stoppedAt, stopReason = excluded.stopReason, stopChoiceAt = excluded.stopChoiceAt, stopNoticedAt = excluded.stopNoticedAt, updatedAt = excluded.updatedAt')
+      .run(c.mode, c.legacyBelow, c.sweptBelow, c.stoppedAt, c.stopReason, c.stopChoiceAt, c.stopNoticedAt, at);
+  }
+
+  /** D-9168: one sweep batch: the named evidence rows and the window's new `sweptBelow`, in ONE transaction, so a crash leaves both or
+   *  neither. A row that is not `thin` refuses (a sweep has no window there) and rolls back. Answers the rows deleted. */
+  deleteDelegationEventsAt(sequences: readonly number[], sweptBelow: number, at: number): number {
+    return tx(this.db, () => {
+      const n = sequences.length === 0 ? 0
+        : Number(this.db.prepare(`DELETE FROM delegation_events WHERE journalSequence IN (${sequences.map(() => '?').join(', ')})`).run(...sequences).changes);
+      const moved = this.db.prepare("UPDATE delegation_events_projection SET sweptBelow = ?, updatedAt = ? WHERE id = 1 AND mode = 'thin'").run(sweptBelow, at);
+      if (Number(moved.changes) !== 1) throw new Error('delegation events: the contract row is not thin, so a sweep batch has no window');
+      return n;
+    });
+  }
+
+  /** D-9170: the file's page counts, for the daily delegation-events line. Throws on a failed read. */
+  coordPageStats(): DelegationEventsPageStats {
+    const n = (p: string): number => Number((this.db.prepare(`PRAGMA ${p}`).get() as Record<string, unknown>)[p]);
+    return { pageCount: n('page_count'), freelistCount: n('freelist_count'), pageSize: n('page_size') };
   }
 
   /**
