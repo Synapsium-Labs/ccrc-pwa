@@ -6,7 +6,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { act, cleanup, render } from '@testing-library/react';
 import type { RenderInput } from '@synapsium-labs/pinax-lib/frame';
 import type { DocFrame, HostAdapters, mountDocFrame } from '@synapsium-labs/pinax-lib/host';
@@ -15,6 +15,7 @@ import { mountReader, type ReaderMount, type ReaderMountInput } from '../src/doc
 import { readerMountAsks, type ReaderChrome } from '../src/docs/reader/policy';
 import { ReaderFrame, type ReaderDeps } from '../src/docs/ReaderFrame';
 import { DocsReading } from '../src/docs/DocsReading';
+import { readerModeHandle, setReaderModeHandle } from '../src/docs/readerModeHandle';
 import { ReaderBarContext, type ReaderBar } from '../src/docs/readerBar';
 import {
   ReaderModeContext, useReaderMode, type ReaderModeContextValue, type ReaderModePlaces,
@@ -392,8 +393,13 @@ function bodyOf(rig: BodyRig, bodyKey: string, path = 'a.md'): ReactNode {
 
 /** The Docs screen's part of reader mode: the hook, its container and its context around one body. */
 function Screen(p: { doc: string | null; rig: BodyRig; bodyKey: string; path?: string; places: ReaderModePlaces }): ReactNode {
-  const { value, container } = useReaderMode({ doc: p.doc, plainView: false, places: p.places });
+  const { value, container, controls } = useReaderMode({ doc: p.doc, plainView: false, places: p.places });
   latest = value;
+  // The outside door, as `DocsScreen` sets it (`r` and the palette read it).
+  useEffect(() => {
+    setReaderModeHandle(controls);
+    return () => setReaderModeHandle(null);
+  }, [controls]);
   return (
     <ReaderModeContext value={value}>
       <DocsReading reading={container}>{bodyOf(p.rig, p.bodyKey, p.path)}</DocsReading>
@@ -877,5 +883,66 @@ describe('reader mode: the frame wiring (X6 XR1.4 with XR2.1)', () => {
     expect(() => rig.inputs[0]!.onProgress!(0.2)).not.toThrow();
     expect(() => rig.inputs[0]!.onPlace!('overlay')).not.toThrow();
     expect(rig.mounts[0]!.setReading).not.toHaveBeenCalled();
+  });
+});
+
+// ─── fix round 1 (X6 XR fix round 1) ───────────────────────────────────────────────────────────────────────────────────────
+
+describe('reader mode: not offered while a figure is open (X6 XR fix round 1, item 3)', () => {
+  beforeEach(() => {
+    for (const f of Object.values(placesFake)) f.mockClear();
+  });
+  afterEach(() => {
+    cleanup();
+    window.localStorage.clear();
+    while (restorers.length > 0) restorers.pop()?.();
+  });
+
+  /** A screen with one ready body and nothing entered. */
+  async function ready(): Promise<{ rig: BodyRig; places: ReturnType<typeof placesPort>; view: ReturnType<typeof render> }> {
+    const rig = bodyRig();
+    const places = placesPort();
+    const view = render(<Screen doc={KEY_A} rig={rig} bodyKey="k1" places={places} />);
+    await flush();
+    await frameReady(rig, 0);
+    return { rig, places, view };
+  }
+
+  it('figure: with a figure open the head, the one bar, r and enter all refuse, and after it closes it is offered again', async () => {
+    const { rig, places } = await ready();
+    expect(latest.offered, 'CONTROL: offered with no figure open').toBe(true);
+    expect(readerModeHandle()?.available(), 'CONTROL: r is available with no figure open').toBe(true);
+    act(() => { rig.inputs[0]!.onPlace!('overlay'); });
+    expect(latest.offered, 'the head still draws Reader mode over an open figure').toBe(false);
+    expect(readerModeHandle()?.available(), 'r is still available over an open figure').toBe(false);
+    expect(readerModeHandle()?.offered(), 'r still acts over an open figure').toBe(false);
+    act(() => { latest.enter('button'); });
+    act(() => { readerModeHandle()?.toggle(); });
+    expect(latest.state.on, 'reader mode started over an open figure').toBe(false);
+    expect(places.push, 'a reader place was pushed over the figure\'s entry').not.toHaveBeenCalled();
+    act(() => { rig.inputs[0]!.onPlace!('overlay-closed'); });
+    expect(latest.offered, 'not offered again after the figure closed').toBe(true);
+    expect(readerModeHandle()?.available()).toBe(true);
+    act(() => { latest.enter('button'); });
+    expect(latest.state.on, 'could not enter after the figure closed').toBe(true);
+    expect(places.push).toHaveBeenCalledTimes(1);
+  });
+
+  it('figure: a figure closed by Back (the dispatcher\'s closeOverlay reports nothing) and a body that ends both offer it again', async () => {
+    const { rig, view } = await ready();
+    act(() => { rig.inputs[0]!.onPlace!('overlay'); });
+    expect(latest.offered, 'CONTROL: a figure is open').toBe(false);
+    // The pop that closes the figure is the dispatcher's: it calls the host the body registered, and the frame reports nothing.
+    const host = placesFake.host.mock.calls.map((c) => c[0] as { closeOverlay?(): void } | null).filter((h) => h !== null).at(-1);
+    expect(host, 'the body registered no host').toBeDefined();
+    act(() => { host!.closeOverlay?.(); });
+    expect(latest.offered, 'a Back that closed the figure left reader mode unoffered').toBe(true);
+    // A figure open when the body ends (a new commit): the next body's frame has none.
+    act(() => { rig.inputs[0]!.onPlace!('overlay'); });
+    expect(latest.offered, 'CONTROL: a figure is open again').toBe(false);
+    view.rerender(<Screen doc={KEY_A} rig={rig} bodyKey="k2" places={placesPort()} />);
+    await flush();
+    await frameReady(rig, 1);
+    expect(latest.offered, 'a figure of the ended body kept reader mode unoffered').toBe(true);
   });
 });

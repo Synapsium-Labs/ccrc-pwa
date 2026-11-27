@@ -233,11 +233,15 @@ export function readerModeStep(state: ReaderModeState, event: ReaderModeEvent): 
   }
 }
 
-/** Whether reader mode is offered: a ready frame, outside the plain view, and with no modal layer mounted. `modalMounted`
- *  is true while any `[role="dialog"]` is in the document, open or still animating closed, so reader mode never starts
- *  its hiding under a modal layer (spec section 4.1). */
-export function readerModeOffered(input: { frameReady: boolean; plainView: boolean; modalMounted: boolean }): boolean {
-  return input.frameReady && !input.plainView && !input.modalMounted;
+/** Whether reader mode is offered: a ready frame, outside the plain view, with no modal layer mounted and no figure open.
+ *  `modalMounted` is true while any `[role="dialog"]` is in the document, open or still animating closed, so reader mode never
+ *  starts its hiding under a modal layer (spec section 4.1). `figureOpen` is whether the frame's full-screen figure is open (X6 XR
+ *  fix round 1): its history entry is above the page's, and a reader place pushed over it would sit above the figure's own, so
+ *  the head's button, the one bar's control and `r` alike are refused until it closes. */
+export function readerModeOffered(
+  input: { frameReady: boolean; plainView: boolean; modalMounted: boolean; figureOpen: boolean },
+): boolean {
+  return input.frameReady && !input.plainView && !input.modalMounted && !input.figureOpen;
 }
 
 /** Whether ccrc draws its own Exit with no frame to give an overlay (X6 XR fix round 1): reader mode is on and no frame stands.

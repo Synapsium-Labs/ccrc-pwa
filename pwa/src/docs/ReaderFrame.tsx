@@ -569,6 +569,8 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
         // The visit's places hear the frame's figure opening and closing, and so does the reader's activity (the wake lock).
         onPlace: (kind) => {
           places.onPlace(kind);
+          // Reader mode is not offered while the figure is open (X6 XR fix round 1).
+          live.current.readerMode?.setFigure(kind === 'overlay');
           live.current.readerMode?.activity();
         },
         copy: onCopy,
@@ -635,7 +637,13 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
       }
       mount = m;
       mountRef.current = m;
-      places.host(m);
+      // The pops that are the frame's reach the mount through this host. A figure the dispatcher closes (a Back) is closed by
+      // the host's own command, which the frame does not report, so reader mode hears of it here.
+      places.host({
+        closeOverlay: () => { m.closeOverlay?.(); live.current.readerMode?.setFigure(false); },
+        goto: (id, from) => m.goto?.(id, from),
+        gotoTop: (id) => m.gotoTop?.(id),
+      });
       // Only a mount on ccrc's own bar publishes the bar's handle.
       if (chrome === 'host-bar') {
         setBar({ title: barTitle, command: (name) => m.command?.(name), progress });

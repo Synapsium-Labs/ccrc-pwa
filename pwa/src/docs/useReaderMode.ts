@@ -120,6 +120,9 @@ export interface ReaderModeContextValue {
   /** Clears the stored frame only when it is `f`: a body that ends never clears the frame of the body that replaced it. A frame
    *  that goes while the overlay shows hides the overlay (reader mode stays on). */
   dropFrame(f: ReaderModeFrame): void;
+  /** The frame's full-screen figure opened or closed (the frame's `place` reports, and the dispatcher's close of it, which the
+   *  frame does not report): reader mode is not offered while it is open. Cleared with the frame. */
+  setFigure(open: boolean): void;
   setFallback(): void;
   /** The reading a mount made now for the document `doc` is made under: the turn when reader mode is on for that document and it is
    *  still the screen's current one, else `off`. */
@@ -169,6 +172,7 @@ interface Sink {
   live(text: string): void;
   frame(f: ReaderModeFrame | null): void;
   turn(t: ReaderTurn): void;
+  figure(open: boolean): void;
 }
 
 /** The mutable half of the hook: refs and handles, in closures. One per mount of the hook, never rebuilt by a render.
@@ -179,6 +183,8 @@ function createController(sink: Sink, initialTurn: ReaderTurn) {
   let state: ReaderModeState = READER_MODE_OFF;
   let container: HTMLElement | null = null;
   let frame: ReaderModeFrame | null = null;
+  /** Whether the stored frame's full-screen figure is open (`setFigure`): the frame's own reports, and the dispatcher's close. */
+  let figure = false;
   let input: { doc: string | null; plainView: boolean; places: ReaderModePlaces } = { doc: null, plainView: false, places: READER_PLACES };
   let hiding: PageHiding | null = null;
   let settleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -317,8 +323,7 @@ function createController(sink: Sink, initialTurn: ReaderTurn) {
     const answer = readerModeStep(before, event);
     state = answer.state;
     if (!before.on && answer.state.on) {
-      lastActivity = Date.now();   // entering counts as activity
-      // An entry during an exit's settle (by `enter` or by the frame's toggle): the old settle must not run into the new reading,
+      lastActivity = Date.now();   // entering counts as activity      // An entry during an exit's settle (by `enter` or by the frame's toggle): the old settle must not run into the new reading,
       // it would step back its place.
       if (settleTimer !== null) {
         clearTimeout(settleTimer);
@@ -339,17 +344,30 @@ function createController(sink: Sink, initialTurn: ReaderTurn) {
     if (frame !== f) return;
     frame = null;
     sink.frame(null);
+    setFigure(false);   // a figure goes with its frame: the next body's frame has none open
     step({ kind: 'dismiss' });
+  }
+
+  /** The frame's full-screen figure opened (`true`) or closed (`false`): the frame's `place` reports, and the dispatcher's own
+   *  close of it (a Back), which the frame does not report. Read by every offer, so an entry never pushes a reader place over the
+   *  figure's history entry. */
+  function setFigure(open: boolean): void {
+    if (figure === open) return;
+    figure = open;
+    if (alive) sink.figure(open);
   }
 
   const offered = (): boolean => readerModeOffered({
     frameReady: frame?.ready === true,
     plainView: input.plainView,
     modalMounted: document.querySelector('[role="dialog"]') !== null,
+    figureOpen: figure,
   });
   /** The offer less the modal-layer clause, the context's render-time answer read now: a listing (the shortcut sheet is a
    *  dialog itself) asks this, never `offered`. */
-  const available = (): boolean => readerModeOffered({ frameReady: frame?.ready === true, plainView: input.plainView, modalMounted: false });
+  const available = (): boolean => readerModeOffered({
+    frameReady: frame?.ready === true, plainView: input.plainView, modalMounted: false, figureOpen: figure,
+  });
   const exit = (cause: 'exit-tap' | 'key'): void => step({ kind: cause });
   const enter = (_by: 'button' | 'key'): void => {
     const c = container;
@@ -424,6 +442,7 @@ function createController(sink: Sink, initialTurn: ReaderTurn) {
       if (f.ready) step({ kind: 'frame-ready', planned: f.planned, turn });
     },
     dropFrame,
+    setFigure,
     /** What a mount for `doc` is made under: the turn only while reader mode is on for `doc` and `doc` is still the screen's
      *  current document, so a new document's frame never inherits the old document's reading. */
     readingFor(doc: string | null): ReaderReading {
@@ -493,7 +512,10 @@ export function useReaderMode(o: { doc: string | null; plainView: boolean; place
   const [frame, setFrameState] = useState<ReaderModeFrame | null>(null);
   // The turn is the device's remembered one, read from storage once, as the hook starts (`screens` when none is kept).
   const [turn, setTurnState] = useState<ReaderTurn>(readStoredTurn);
-  const [ctl] = useState(() => createController({ state: setState, live: setLive, frame: setFrameState, turn: setTurnState }, turn));
+  const [figure, setFigureState] = useState(false);
+  const [ctl] = useState(() => createController(
+    { state: setState, live: setLive, frame: setFrameState, turn: setTurnState, figure: setFigureState }, turn,
+  ));
   const { doc, plainView } = o;
   const places = o.places ?? READER_PLACES;
 
@@ -527,12 +549,13 @@ export function useReaderMode(o: { doc: string | null; plainView: boolean; place
 
   const value = useMemo<ReaderModeContextValue>(() => ({
     // `readerModeOffered` owns the rule. The modal-layer test is read at each `enter` and in the handle, not at render.
-    state, offered: readerModeOffered({ frameReady: frame?.ready === true, plainView, modalMounted: false }), turn, setTurn: ctl.setTurn,
+    state, turn, setTurn: ctl.setTurn,
+    offered: readerModeOffered({ frameReady: frame?.ready === true, plainView, modalMounted: false, figureOpen: figure }),
     enter: ctl.enter, exit: ctl.exit, menu: ctl.menu, escOverlay: ctl.escOverlay, activity: ctl.activity, dismiss: ctl.dismiss,
     aa: ctl.aa, frame,
-    setFrame: ctl.setFrame, dropFrame: ctl.dropFrame, setFallback: ctl.setFallback, readingFor: ctl.readingFor,
+    setFrame: ctl.setFrame, dropFrame: ctl.dropFrame, setFigure: ctl.setFigure, setFallback: ctl.setFallback, readingFor: ctl.readingFor,
     frameExit: ctl.frameExit, frameToggle: ctl.frameToggle,
-  }), [ctl, state, frame, plainView, turn]);
+  }), [ctl, state, frame, plainView, turn, figure]);
   const container = useMemo<ReaderModeContainer>(() => ({
     setContainer: ctl.setContainer, on: state.on, how: state.on ? state.how : undefined, live, focusFrame: ctl.focusFrame,
   }), [ctl, state, live]);
