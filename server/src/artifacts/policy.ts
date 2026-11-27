@@ -187,11 +187,16 @@ export function artifactConfig(
   if (!a.ok) return invalid(a.detail);
   const c = checkOrigin(KEY_CONTENT, content, consoleLoopback, consoleHostname, consolePort);
   if (!c.ok) return invalid(c.detail);
-  for (const [key, value] of [[KEY_ORIGIN, origin], [KEY_CONTENT, content]] as const) {
-    if (masks(value)) {
-      return invalid(`${key} has a name the console's answer mask would alter (it has a credential's shape), so no link could `
-        + 'reach you; choose another label');
-    }
+  // The artifact origin is in every mint's answer, so a name the mask alters means no link can reach the operator. The content
+  // origin is in no masked answer today (the wrapper and the page's headers come from the artifact listener, unmasked); it is held
+  // to the same rule so the two hosts are one rule and no later answer that names it is ever altered (the coordinator's ruling).
+  if (masks(origin)) {
+    return invalid(`${KEY_ORIGIN} has a name the console's answer mask would alter (it has a credential's shape), so no link `
+      + 'could reach you; choose another label');
+  }
+  if (masks(content)) {
+    return invalid(`${KEY_CONTENT} has a name the console's answer mask would alter (it has a credential's shape); both artifact `
+      + 'hosts are held to the same rule; choose another label');
   }
   return { state: 'on', artifactOrigin: origin, contentOrigin: content, port, artifactHost: a.host, contentHost: c.host };
 }

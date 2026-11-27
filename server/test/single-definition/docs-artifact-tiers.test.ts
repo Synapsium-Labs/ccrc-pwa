@@ -59,10 +59,8 @@ describe('single-definition: no shared policy between tiers', () => {
 
   it('no module of the walls tier imports shared/artifacts', () => {
     const files = wallsTier();
-    const members = files.map(rel);
-    expect(members).toContain('pwa/src/docs/mockup/policy.ts');
-    expect(members).toContain('pwa/src/docs/MockupFrame.tsx');
-    expect(members).toContain('pwa/src/docs/MockupView.tsx');
+    // The folder walk must find the policy module; the two views are named by hand, and a missing one throws at the read below.
+    expect(files.map(rel)).toContain('pwa/src/docs/mockup/policy.ts');
     const holders = files.filter((f) => ARTIFACTS_SPEC.test(readFileSync(f, 'utf8'))).map(rel);
     expect(holders).toEqual([]);
   });
