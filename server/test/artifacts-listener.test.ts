@@ -15,6 +15,8 @@ import {
 import {
   ARTIFACT_NOT_FOUND_BODY, buildArtifactServer, createArtifactListenerState, listenArtifactServer,
 } from '../src/artifacts/routes.js';
+import { createArtifactStore, type ArtifactStore } from '../src/artifacts/store.js';
+import { ARTIFACT_ENDED_BODY } from '../src/artifacts/wrapper.js';
 import { hashLine, type ScryptParams } from '../src/auth/secret.js';
 import type { PtyLike } from '../src/pty.js';
 import { testDeps } from './helpers.js';
@@ -112,8 +114,12 @@ function rawRequest(port: number, text: string): Promise<string> {
   });
 }
 
+/** An empty capability store over a fake liveness: this file's cases name no live capability, so every token is unknown (X5 A3.1
+ *  gave the instance a store). */
+const emptyStore = (): ArtifactStore => createArtifactStore(() => 1_800_000_000_000, { of: () => 'live' });
+
 const artifactApp = (): FastifyInstance => {
-  const a = buildArtifactServer({ cfg: onConfig() });
+  const a = buildArtifactServer({ cfg: onConfig(), store: emptyStore() });
   toClose.push(a);
   return a;
 };
@@ -234,7 +240,9 @@ describe('listener: the decoration', () => {
 describe('listener: no shell', () => {
   it('every path answers the fixed 404 page, never the app shell', async () => {
     const app = artifactApp();
-    const paths = ['/index.html', '/api/auth/status', '/assets/x.js', '/ws/fleet', '/', `/a/${TOKEN}`, `/c/${TOKEN}/x.js`, '/clear',
+    // `/a/<token>` is the wrapper's route since X5 A3.1, so it has its own fixed answers (see `artifacts-wrapper.test.ts`); it is
+    // checked below, with the fetch destination a navigation sends.
+    const paths = ['/index.html', '/api/auth/status', '/assets/x.js', '/ws/fleet', '/', `/c/${TOKEN}/x.js`, '/clear',
       '/favicon.ico', '/health'];
     for (const url of paths) {
       for (const method of ['GET', 'HEAD'] as const) {
@@ -248,6 +256,11 @@ describe('listener: no shell', () => {
     const onContent = await app.inject({ method: 'GET', url: `/c/${TOKEN}/x.js`, headers: { host: CONTENT } });
     expect(onContent.statusCode).toBe(404);
     expect(onContent.body).toBe(ARTIFACT_NOT_FOUND_BODY);
+    // The wrapper route answers its own fixed ended page for an unknown token, never the shell.
+    const wrapper = await app.inject({ method: 'GET', url: `/a/${TOKEN}`, headers: { host: ART, 'sec-fetch-dest': 'document' } });
+    expect(wrapper.statusCode).toBe(404);
+    expect(wrapper.body).toBe(ARTIFACT_ENDED_BODY);
+    expectHardened(wrapper.headers, 'GET /a/<token>');
   });
 
   it('the fixed page says one sentence, with no script and no reference', () => {
@@ -431,7 +444,7 @@ describe('listener: an artifact host on the console instance is 421', () => {
     for (const host of ['127.0.0.1:7790', '127.0.0.1:7791']) {
       expect((await app.inject({ method: 'GET', url: '/api/auth/status', headers: { host } })).statusCode, host).toBe(421);
     }
-    const inst = buildArtifactServer({ cfg: lo });
+    const inst = buildArtifactServer({ cfg: lo, store: emptyStore() });
     toClose.push(inst);
     for (const host of ['127.0.0.1:7790', '127.0.0.1:7791']) {
       expect((await inst.inject({ method: 'GET', url: '/', headers: { host } })).statusCode, host).toBe(404);
@@ -473,7 +486,7 @@ describe('listener: no cookie', () => {
 describe('listener: the error handler', () => {
   it('answers a fixed 500 with no thrown text and no console output', async () => {
     const spies = CONSOLE_METHODS.map((m) => vi.spyOn(console, m).mockImplementation(() => {}));
-    const app = buildArtifactServer({ cfg: onConfig() });
+    const app = buildArtifactServer({ cfg: onConfig(), store: emptyStore() });
     toClose.push(app);
     app.get('/boom', async () => { throw new Error('SECRET-THROWN-TEXT /a/' + TOKEN); });
     app.get('/boom-sync', () => { throw Object.assign(new Error('SECRET-SYNC'), { statusCode: 418 }); });
@@ -495,7 +508,8 @@ describe('listener: logs no path', () => {
     const app = artifactApp();
     const spies = CONSOLE_METHODS.map((m) => vi.spyOn(console, m).mockImplementation(() => {}));
     const out = [
-      await app.inject({ method: 'GET', url: `/a/${TOKEN}`, headers: { host: ART } }),
+      // A navigation, so the wrapper route looks the token up (unknown: its 404) rather than refusing at the fence (403).
+      await app.inject({ method: 'GET', url: `/a/${TOKEN}`, headers: { host: ART, 'sec-fetch-dest': 'document' } }),
       await app.inject({ method: 'GET', url: `/c/${TOKEN}/dir/file.js?v=2`, headers: { host: CONTENT } }),
       await app.inject({ method: 'GET', url: `/c/${TOKEN}/../x`, headers: { host: CONTENT } }),
       await app.inject({ method: 'GET', url: `/a/${TOKEN}`, headers: { host: CONSOLE_HOST } }),
@@ -571,7 +585,7 @@ describe('listener: a taken port leaves the console up', () => {
   });
 
   it('a request that arrives while the instance closes is answered by the hook and routes, never the framework\'s bare 503', async () => {
-    const inst = buildArtifactServer({ cfg: onConfig() });
+    const inst = buildArtifactServer({ cfg: onConfig(), store: emptyStore() });
     await inst.listen({ host: '127.0.0.1', port: 0 });
     const { port } = inst.server.address() as net.AddressInfo;
     // The server has taken the connection off its queue before the close starts, so the close never resets it.

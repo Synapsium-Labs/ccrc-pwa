@@ -629,14 +629,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // listen state, and closes it with the console. The console's host fence is an onRequest hook added before every
   // other, so a request naming an artifact host answers 421 before the gate runs; with the tier off it adds nothing.
   const artifactCfg = deps.cfg.artifact;
-  const artifactApp = artifactCfg.state === 'on' ? buildArtifactServer({ cfg: artifactCfg }) : null;
+  // The one capability store (X5 A2.2), in memory, built first when the tier is on: the artifact instance reads it (A3.1's
+  // wrapper) and it is handed to the docs plugin's mint-side doors below. Its liveness port asks `authStore` with the secret
+  // measured afresh on every call: `secretNow` is declared further down this body and is only called at a request, after it exists.
+  const artifactStore = artifactCfg.state === 'on' ? createArtifactStore(Date.now, sessionLiveness(authStore, () => secretNow())) : null;
+  const artifactApp = artifactCfg.state === 'on' && artifactStore !== null ? buildArtifactServer({ cfg: artifactCfg, store: artifactStore }) : null;
   app.decorate('artifactServer', artifactApp);
   const artifactListener = artifactApp === null ? null : createArtifactListenerState();
   app.decorate('artifactListener', artifactListener);
-  // The one capability store (X5 A2.2), in memory, built beside the listener state when the tier is on and handed to the docs
-  // plugin's mint-side doors below. Its liveness port asks `authStore` with the secret measured afresh on every call: `secretNow`
-  // is declared further down this body and is only called at a request, after it exists.
-  const artifactStore = artifactApp === null ? null : createArtifactStore(Date.now, sessionLiveness(authStore, () => secretNow()));
   if (artifactApp !== null) app.addHook('onClose', async () => { await artifactApp.close(); });
   installConsoleHostFence(app, artifactCfg);
   // The reader lab's door (the reader lab design, section 4): its counter is an onRequest hook added HERE, before the

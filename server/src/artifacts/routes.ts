@@ -10,7 +10,8 @@
 //
 // WHAT IT NEVER DOES. It sets no cookie, reads no body, and writes no log line on any request path: a request path on this tier
 // holds a capability token, so the instance never has a console call on a request path, the error handler included. In A1 every
-// route answers the identical 404 page; A3 fills `/a/:token`, `/c/:token/*` and `/clear`.
+// route answers the identical 404 page; A3 fills `/a/:token`, `/c/:token/*` and `/clear`. A3.1 fills `/a/:token`: the wrapper,
+// built in `wrapper.ts` from the capability the store finds live for the token.
 //
 // THE FENCES. Every request first meets the host fence (421 when `Host` is not one of the two artifact hosts) and then the method
 // fence (405 unless GET or HEAD). `installConsoleHostFence` is the console's side: a request naming an artifact host, in any
@@ -22,6 +23,8 @@ import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import {
   artifactMethodAllowed, clientErrorAction, frameworkErrorStatus, hostFence, namesArtifactHost, type ArtifactConfig, type ArtifactListenWord,
 } from './policy.js';
+import type { ArtifactStore } from './store.js';
+import { ARTIFACT_ENDED_BODY, wrapperDestOk, wrapperDocument } from './wrapper.js';
 import { refuseRoute } from '../refuse.js';
 import { ARTIFACT_FENCE_REFUSALS } from '../../../shared/refusal.js';
 
@@ -42,6 +45,9 @@ declare module 'fastify' {
 
 export interface ArtifactRouteDeps {
   cfg: Extract<ArtifactConfig, { state: 'on' }>;
+  /** The capability store: the one thing a route reads (X5 A3.1). It asks the session store itself whether a capability's
+   *  minting session still stands, so this instance has no other dependency and no cookie. */
+  store: ArtifactStore;
 }
 
 /** The fixed page every unknown or unfilled path answers (spec 3.4): one sentence, no script, no reference to anything. */
@@ -55,6 +61,8 @@ const ERROR_BODY = 'Something went wrong.';
 const BAD_REQUEST_BODY = 'Bad request.';
 const TIMEOUT_BODY = 'Request timeout.';
 const EXPECTATION_BODY = 'Expectation failed.';
+/** The wrapper's answer to a request that is not a top-level navigation (spec 3.4): no capability is read for it. */
+const FORBIDDEN_BODY = 'Forbidden.';
 
 const HTML = 'text/html; charset=utf-8';
 const TEXT = 'text/plain; charset=utf-8';
@@ -138,7 +146,19 @@ export function buildArtifactServer(deps: ArtifactRouteDeps): FastifyInstance {
   const notFound = (_req: unknown, reply: FastifyReply): FastifyReply => answer(reply, 404, HTML, ARTIFACT_NOT_FOUND_BODY);
   // The four routes of spec 3.4. A1 answers the identical 404 on all of them; A3 fills three.
   app.get('/', notFound);
-  app.get('/a/:token', notFound);
+  // The wrapper (X5 A3.1). First the fetch-metadata fence, which reads no capability: a request that is not a top-level
+  // navigation is the fixed 403. Then the one look-up: every token that does not name a live capability (malformed, unknown,
+  // revoked, idle, expired, its session ended) gets the same 404 page, byte for byte. A live one has its idle clock moved and is
+  // answered with the wrapper; its six headers replace the hardening CSP and the rest equal the hardening set. Nothing is logged.
+  app.get<{ Params: { token: string } }>('/a/:token', (req, reply) => {
+    if (!wrapperDestOk(req.headers['sec-fetch-dest'])) return answer(reply, 403, TEXT, FORBIDDEN_BODY);
+    const { token } = req.params;
+    const c = deps.store.lookup(token);
+    if (c === null) return answer(reply, 404, HTML, ARTIFACT_ENDED_BODY);
+    deps.store.touch(c.id);
+    const doc = wrapperDocument(c, token, deps.cfg.contentOrigin);
+    return reply.code(200).headers(HARDENING).headers(doc.headers).header('content-type', HTML).send(doc.html);
+  });
   app.get('/c/:token/*', notFound);
   app.get('/clear', notFound);
   app.setNotFoundHandler(notFound);
