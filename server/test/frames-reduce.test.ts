@@ -12,7 +12,7 @@ import { FRAMES_NUDGE_TEXT, FRAMES_RECIPE_VERSION, framesOurs } from '../../shar
 import { FRAMES_PARTS, frameSize, FRAMES_VERSION_SHAPE } from '../../shared/framesResult.js';
 import {
   FRAMES_DECORATION, FRAMES_REPLACED, FRAMES_STATUS_TEXT, FRAMES_WIDE_RANGES, PATH_LIKE, checkReducedFrame, credentialShaped, frameCellWidth, isRuleRow, reduceFrame,
-  rowIsOurs, runsToTheEdge, statusRowOf, type FramesScan,
+  reducerFingerprint, rowIsOurs, runsToTheEdge, statusRowOf, type FramesScan,
 } from '../../shared/framesReduce.js';
 
 const ESC = '\x1b';
@@ -210,8 +210,8 @@ describe('the wide table is the Unicode East Asian Width table (review 4109, R1,
   /** What the function answers for a character the table does not list: the engine's two classes (ruling 2). */
   const besideTheTable = (c: string): 1 | 2 => (/\p{Emoji_Presentation}|\p{Cn}/u.test(c) ? 2 : 1);
 
-  it('the fixture names its data file and version, and the shared file names the same', () => {
-    expect(FIXTURE.split('\n')[1]).toContain('EastAsianWidth-17.0.0.txt (Unicode 17.0.0');
+  it('the fixture carries its data file\'s own name and date lines, and the shared file names the same file', () => {
+    expect(FIXTURE.split('\n').slice(0, 2)).toEqual(['# EastAsianWidth-17.0.0.txt', '# Date: 2025-07-24, 00:12:54 GMT']);
     expect(SHARED).toContain('EastAsianWidth-17.0.0.txt');
   });
   it('the shared table is the fixture\'s W and F ranges merged, as the generator writes them: they cannot drift', () => {
@@ -244,10 +244,13 @@ describe('the wide table is the Unicode East Asian Width table (review 4109, R1,
     }
     expect(outside).toBe(246);
   });
-  it('the reviewer\'s and the panel\'s unlisted wide characters are two cells now', () => {
+  it('the reviewer\'s and the panel\'s unlisted wide characters are two cells now, and so is a regional indicator, which the table gives N', () => {
     for (const cp of [0x2329, 0xfe10, 0xa960, 0x16fe0, 0x17000, 0x1b000, 0x1f200, 0xac00, 0xff01]) {
       expect(frameCellWidth(String.fromCodePoint(cp)), cp.toString(16)).toBe(2);
     }
+    // U+1F1E6..1F1FF are emoji drawn as one (Emoji_Presentation) and N in the data file: the engine's class counts them.
+    expect(FRAMES_WIDE_RANGES.some(([a, b]) => 0x1f1e6 >= a && 0x1f1e6 <= b)).toBe(false);
+    expect(frameCellWidth(String.fromCodePoint(0x1f1e6))).toBe(2);
   });
   it('unknown is wide on purpose: an unassigned code point and a noncharacter count two cells; a private-use one is refused by the shape gate before any width is asked', () => {
     // Ruling 2: U+0378 is unassigned, U+FDD0 a noncharacter (both Cn, which the class rule lets through); U+E000 is private use (Co).
@@ -559,6 +562,15 @@ describe('rule 10, and the receiver\'s check', () => {
   });
   it('the version folds in the reducer\'s probe answers', () => {
     expect(FRAMES_RECIPE_VERSION).toMatch(FRAMES_VERSION_SHAPE);
+  });
+  it('the probe table answers for a bare quote, a wide character at the edge, a row at the probe\'s width and a straddle (review 4109, F9)', () => {
+    // The four probes after the eighteen of round 2, each drawn in its box: a change in what the reducer does with any of
+    // them moves the version.
+    const answers = JSON.parse(reducerFingerprint()) as { kind: string; refusal?: string; text?: string }[];
+    expect(answers).toHaveLength(25);
+    expect(answers[18]).toMatchObject({ kind: 'reduced' });
+    expect(answers[18]!.text).toContain('› stashed');
+    for (const i of [19, 20, 21]) expect(answers[i], String(i)).toEqual({ kind: 'refused', refusal: 'private-shape' });
   });
 });
 

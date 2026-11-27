@@ -1,16 +1,20 @@
-# The characters a terminal draws two cells wide: every line of the Unicode Character Database file
-# EastAsianWidth-17.0.0.txt (Unicode 17.0.0, dated 2025-07-24, sha256
-# ea7ce50f3444a050333448dffef1cadd9325af55cbb764b4a2280faf52170a33) whose property is W (Wide) or F (Fullwidth), copied
-# verbatim and in the file's order: the lines `grep -E '^[0-9A-F.]+ *; *[WF] '` selects. Every other code point is N, Na, A or H
-# there, the file's own default being N (`@missing: 0000..10FFFF; N`).
+# EastAsianWidth-17.0.0.txt
+# Date: 2025-07-24, 00:12:54 GMT
+# © 2025 Unicode®, Inc.
+# Unicode and the Unicode Logo are registered trademarks of Unicode, Inc. in the U.S. and other countries.
+# For terms of use and license, see https://www.unicode.org/terms_of_use.html
+#
+# ABOVE: the first five lines of the Unicode Character Database file EastAsianWidth-17.0.0.txt (Unicode 17.0.0), verbatim,
+# from the Unicode Consortium's public UCD directory for 17.0.0 (sha256 of the whole file:
+# ea7ce50f3444a050333448dffef1cadd9325af55cbb764b4a2280faf52170a33). BELOW: every line of that file whose property is W
+# (Wide) or F (Fullwidth), verbatim and in the file's order, the lines `grep -E '^[0-9A-F.]+ *; *[WF] '` selects. Every
+# other code point is N, Na, A or H there, the file's own default being N (`@missing: 0000..10FFFF; N`).
 #
 # server/test/frames-reduce.test.ts parses these lines, merges adjacent ranges and holds shared/framesReduce.ts's
 # FRAMES_WIDE_RANGES equal to the result, then walks every range. Read at test time from this file only: no test fetches it.
-# To move to a newer version, replace the lines below with that version's W and F lines, change this header, and run
-# the generator the shared file's comment names; the case reds until the shared table follows.
+# To move to a newer version, replace this file's lines with that version's, and paste the table the case then prints as
+# its expected text into the shared file: the case reds until the shared table follows.
 #
-# Copyright and terms of the source file: (c) 2025 Unicode, Inc. Unicode and the Unicode Logo are registered trademarks of
-# Unicode, Inc. in the U.S. and other countries. For terms of use and license, see https://www.unicode.org/terms_of_use.html
 1100..115F     ; W  # Lo    [96] HANGUL CHOSEONG KIYEOK..HANGUL CHOSEONG FILLER
 231A..231B     ; W  # So     [2] WATCH..HOURGLASS
 2329           ; W  # Ps         LEFT-POINTING ANGLE BRACKET
