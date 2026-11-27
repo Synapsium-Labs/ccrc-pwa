@@ -106,8 +106,12 @@ export interface ArtifactMintAsk { pin: DocListPin; project: string; origins: st
  *  capabilities as rows (never a token or a URL). */
 export interface ArtifactListOk { ok: true; available: boolean; why?: ArtifactOffWhy; live: ArtifactRow[] }
 
-/** The scope answer: what a mint would carry (spec section 6). */
-export interface ArtifactScopeOk { ok: true; files: number; uncommitted: number; unsized: number; bytes: number }
+/** The scope answer: what a mint would carry (spec section 6), and the tier's two hosts as a `Host` header names them (the
+ *  hostname, plus `:<port>` when the origin states one), so the launch sheet names the artifact host in its "What runs" line and
+ *  never offers an outside origin on either host (X5 A5, D-9162). */
+export interface ArtifactScopeOk {
+  ok: true; files: number; uncommitted: number; unsized: number; bytes: number; artifactHost: string; contentHost: string;
+}
 
 /** The mint answer (spec section 6). */
 export interface ArtifactMintOk { ok: true; id: string; url: string; expiresAt: number; files: number; uncommitted: number; unsized: number }

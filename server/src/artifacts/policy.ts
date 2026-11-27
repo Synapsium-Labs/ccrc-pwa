@@ -548,9 +548,13 @@ export function scopeOfTree(pin: DocPin, tree: DocsTreeOk): { ok: true; scope: M
   return { ok: true, scope };
 }
 
-/** The scope read's answer: the manifest's counts, nothing minted. */
-export function scopeAnswer(scope: ManifestScope): ArtifactScopeOk {
-  return { ok: true, files: scope.entries.length, uncommitted: scope.uncommitted, unsized: scope.unsized, bytes: scope.bytes };
+/** The scope read's answer: the manifest's counts, nothing minted, and the tier's two hosts (D-9162: the launch sheet names the
+ *  artifact host and offers no outside origin on either; the mint still refuses such an origin `bad-origin` itself). */
+export function scopeAnswer(scope: ManifestScope, cfg: ArtifactTierOn): ArtifactScopeOk {
+  return {
+    ok: true, files: scope.entries.length, uncommitted: scope.uncommitted, unsized: scope.unsized, bytes: scope.bytes,
+    artifactHost: cfg.artifactHost, contentHost: cfg.contentHost,
+  };
 }
 
 /** The list read's answer: whether a mint could work now and, when it could not, the reason (`artifactAvailability`'s), beside the
