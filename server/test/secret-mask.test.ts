@@ -950,6 +950,24 @@ describe('the review findings: every egress of session text is masked (D-5995)',
     expect(leaksNone(res.body, OAT), res.body.slice(0, 300)).toBe(true);
   });
 
+  // Flows wave 3b: the same read carries each programme's newest outcome as its coordinator reported it.
+  it('GET /api/flows/:id/programmes masks an assembled credential in a programme\'s last outcome', async () => {
+    const home = mkTmp('ccrc-mask-flows-outcome-');
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    app = await buildServer({ ...testDeps(home), coord });
+    await app.ready();
+    const made = await app.inject({ method: 'POST', url: '/api/flows', payload: { template: 'ccrc' } });
+    const id = (made.json() as { id: number }).id;
+    await app.inject({ method: 'POST', url: `/api/flows/${id}/publish` });
+    coord.db.prepare("INSERT INTO programs (slug, title, createdAt, state, flowId, flowVersion) VALUES ('programme-a', 'Programme A', 1, 'active', ?, 1)").run(id);
+    coord.recordFlowOutcome({ program: 'programme-a', flowId: id, version: 1, blockId: 'build', outcome: `done ${OAT}`,
+      nextBlock: 'verify', wouldSend: `send ${ORKEY}`, byId: 'lane-a', at: 2 });
+    const res = await app.inject({ method: 'GET', url: `/api/flows/${id}/programmes` });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.body).toContain(`"outcome":"done ${SECRET_MASK}"`);
+    expect(leaksNone(res.body, OAT) && leaksNone(res.body, ORKEY), res.body.slice(0, 300)).toBe(true);
+  });
+
   // Review 951 F1: the review cap's ask carries the last review-done's summary and its report path, session-derived
   // text, so the one answer hook masks it (`MASKED_GET_ROUTES`). The summary is shape-redacted where it is read, so the
   // key planted here is a compatible one with dots in it, which the redactor's shapes keep and only a fingerprint row

@@ -783,9 +783,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[121] (continuity_generations.designatedClass, the class an Overlord generation was minted under, run 3303),
     // and MIGRATIONS[122] (advisor_settings, advisor_calls and advisor_reads, the coordinator advisor, D-8967),
     // and MIGRATIONS[123] (flows and flow_versions, flows wave 1),
-    // and MIGRATIONS[124] (flow_settings and the programme flow pin, flows wave 2).
-    expect(COORD_SCHEMA_VERSION).toBe(125);
-    expect(MIGRATIONS.length).toBe(125);
+    // and MIGRATIONS[124] (flow_settings and the programme flow pin, flows wave 2),
+    // and MIGRATIONS[125] (flow_outcomes, flows wave 3b).
+    expect(COORD_SCHEMA_VERSION).toBe(126);
+    expect(MIGRATIONS.length).toBe(126);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -936,8 +937,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[121] (continuity_generations.designatedClass, run 3303),
     // and MIGRATIONS[122] (the coordinator advisor's three tables, D-8967),
     // and MIGRATIONS[123] (flows and flow_versions, flows wave 1),
-    // and MIGRATIONS[124] (flows wave 2); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(125);
+    // and MIGRATIONS[124] (flows wave 2),
+    // and MIGRATIONS[125] (flows wave 3b); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(126);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();

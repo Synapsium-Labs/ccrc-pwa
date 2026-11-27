@@ -200,7 +200,9 @@ hues stay accounts') and live positions (a breathing dot on a block).
    sends the composed brief live, because removing the method from the skills before then removes it from every session.
 3. **The engine, shadow then live**: positions, the outcome door, instruction and skill blocks. *As built so far
    (`plans/2026-11-20-flows-w3a.md`, 3a):* a programme's position on the protocol blocks, derived from its runs on every read
-   and shown on the flow's page; the outcome door and the engine's shadow are 3b.
+   and shown on the flow's page. 3b (`plans/2026-11-20-flows-w3b.md`): the outcome door, as
+   `POST /api/coord/programmes/:slug/flow-outcome` (the holding coordinator only, instruction and skill blocks only), recorded
+   in shadow with what the engine would do next. Going live is the operator's arm, after the shadow has run.
 4. **Gates**: approval, PR state, attested.
 5. **The canvas**: drag and drop, connect by dragging, live positions.
 6. **Plugins**: per-session loading, plugin templates, `requires` and the confirm-to-install screen (§14.3).

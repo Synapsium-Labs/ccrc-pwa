@@ -369,4 +369,8 @@ export interface FlowAnswer {
  *  which fact was read (or why none places it). */
 export interface FlowPosition { blockId: string | null; why: string }
 /** Wave 3a: one programme that pins a flow, and where it is. */
-export interface FlowProgrammeRow { slug: string; title: string; version: number; position: FlowPosition }
+export interface FlowProgrammeRow {
+  slug: string; title: string; version: number; position: FlowPosition;
+  /** Wave 3b: the newest outcome its coordinator reported, recorded in shadow; absent for none (or an older server). */
+  lastOutcome?: { blockId: string; outcome: string; nextBlock: string; wouldSend: string; at: number };
+}

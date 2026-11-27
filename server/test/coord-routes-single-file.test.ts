@@ -57,7 +57,9 @@ const OWN_FILE_ROUTES = new Set(['coord/coordCallsRoute.ts POST /api/coord/progr
   // which the skill test's EXEMPT list leaves unnamed, no skill names it (a coordinator never runs the pass), and
   // `box-token-census.test.ts`'s `DELEGATION_BACKFILL_DOORS` pins both routes in both directions.
   'coord/delegationBackfillRoutes.ts GET /api/coord/delegation-backfill',
-  'coord/delegationBackfillRoutes.ts POST /api/coord/delegation-backfill']);
+  'coord/delegationBackfillRoutes.ts POST /api/coord/delegation-backfill',
+  // Flows wave 3b: a coordinator's flow outcome, recorded in shadow, in the Flows module's own file.
+  'flows/outcomeRoute.ts POST /api/coord/programmes/:slug/flow-outcome']);
 
 const isCoord = (p: string): boolean => COORD_PREFIXES.some((pre) => p.startsWith(pre));
 
