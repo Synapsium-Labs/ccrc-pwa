@@ -238,7 +238,9 @@ function printOf(home: string, job: string, over: { path?: string; program?: str
   env?: [string, string][] } = {}): string {
   const uid = process.getuid?.() ?? 0;
   const args = over.args ?? jobArgs(job);
-  const env = over.env ?? [['PATH', JOB_PATH], ['HOME', home]];
+  // The block a real launchd drew (wave 193's first full run, macos-26-arm64): its four keys in its order. The rate
+  // limit's value was not printed there; a whole number stands in.
+  const env = over.env ?? [['OSLogRateLimit', '64'], ['PATH', JOB_PATH], ['HOME', home], ['XPC_SERVICE_NAME', MAC_LABEL]];
   return [`gui/${uid}/${MAC_LABEL} = {`, '\tactive count = 1', `\tpath = ${over.path ?? macJobFile(home)}`, '\ttype = LaunchAgent',
     '\tstate = @STATE@', '', `\tprogram = ${over.program ?? '/bin/bash'}`, '\targuments = {', ...args.map((a) => `\t\t${a}`), '\t}', '',
     '\tinherited environment = {', '\t\tSSH_AUTH_SOCK => /private/tmp/com.apple.launchd.x/Listeners', '\t}', '',
@@ -1310,6 +1312,15 @@ describe(`ccrc auth on a Mac: the job proved (wave 193) [${IS_DARWIN ? 'darwin' 
       /launchd holds the job app\.ccrc\.ccrc with XPC_SERVICE_NAME in its own environment, which .*app\.ccrc\.ccrc\.plist does not set/],
     ['with a fourth key beside XPC_SERVICE_NAME', (h, j) => printOf(h, j, { env: [['PATH', JOB_PATH], ['HOME', h], ['XPC_SERVICE_NAME', MAC_LABEL], ['BASH_ENV', '/tmp/x']] }),
       /launchd holds the job app\.ccrc\.ccrc with BASH_ENV in its own environment/],
+    // Wave 193 fix round (ruling 40092): OSLogRateLimit only by its exact name, holding one to nine digits.
+    ...([['a word', 'abc'], ['nothing', ''], ['ten digits', '1234567890'], ['a space', '1 2']] as const).map(([what, v]):
+      [string, (h: string, j: string) => string, RegExp] => [`with OSLogRateLimit holding ${what}`,
+      (h, j) => printOf(h, j, { env: [['OSLogRateLimit', v], ['PATH', JOB_PATH], ['HOME', h], ['XPC_SERVICE_NAME', MAC_LABEL]] }),
+      /launchd holds the job app\.ccrc\.ccrc with OSLogRateLimit in its own environment, which .*app\.ccrc\.ccrc\.plist does not set/]),
+    ...(['oslogratelimit', 'XOSLogRateLimit', 'OSLogRateLimitX'] as const).map((k): [string, (h: string, j: string) => string, RegExp] =>
+      [`with ${k}, not the measured key's exact name`,
+        (h, j) => printOf(h, j, { env: [[k, '64'], ['PATH', JOB_PATH], ['HOME', h], ['XPC_SERVICE_NAME', MAC_LABEL]] }),
+        new RegExp(`launchd holds the job app\\.ccrc\\.ccrc with ${k} in its own environment`)]),
     ['with another PATH', (h, j) => printOf(h, j, { env: [['PATH', '/tmp/evil:/usr/bin'], ['HOME', h]] }), /with another PATH or HOME in its environment than/],
     ['with another HOME', (h, j) => printOf(h, j, { env: [['PATH', JOB_PATH], ['HOME', '/tmp/elsewhere']] }), /with another PATH or HOME in its environment than/],
   ];
@@ -1325,6 +1336,13 @@ describe(`ccrc auth on a Mac: the job proved (wave 193) [${IS_DARWIN ? 'darwin' 
       }
     });
   }
+  it('acts on the block a real launchd drew: OSLogRateLimit, PATH, HOME and XPC_SERVICE_NAME (wave 193 fix round)', async () => {
+    const b = box('ccrc-auth-mac-measured-', portLines());
+    writeFileSync(join(b.home, 'lc-print'), printOf(b.home, job(b.home)));
+    expect(readFileSync(join(b.home, 'lc-print'), 'utf8')).toContain('\t\tOSLogRateLimit => 64\n');
+    const r = await runTty(b.home, ['auth', 'on']);
+    expect(r.code, r.out).toBe(0);
+  });
   it("acts on a job whose environment launchd also gives XPC_SERVICE_NAME, holding the job's label", async () => {
     const b = box('ccrc-auth-mac-xpc-', portLines());
     writeFileSync(join(b.home, 'lc-print'), printOf(b.home, job(b.home), { env: [['PATH', JOB_PATH], ['HOME', b.home], ['XPC_SERVICE_NAME', MAC_LABEL]] }));
@@ -1766,6 +1784,33 @@ onEach('ccrc auth: every refusal before the write (review 3934 F4)', (p) => {
   });
 });
 
+// Wave 193's fix round: the closed form's length is tested apart from its bytes. macOS's regex library caps a counted
+// bound at RE_DUP_MAX, 255 (glibc allows 32767), so a pattern with `{1,1024}` matched nothing on a real Mac: every value
+// was held back and, through the home check, the verb refused on every Mac. The simulated darwin uses glibc and could
+// never see it, so the class is held on Linux by the file's text: no interval bound over 255 anywhere in ccd/ccrc (main
+// has none, so the guard is not noisy). The rows below pin the length edges the form keeps.
+describe('ccrc auth: the closed form carries no counted bound a Mac cannot match (wave 193 fix round)', () => {
+  it('ccd/ccrc holds no interval bound over 255, in a bash match or any other pattern', () => {
+    const over: string[] = [];
+    readFileSync(CCRC_SRC, 'utf8').split('\n').forEach((line, i) => {
+      for (const m of line.matchAll(/\\?\{(\d+)(?:,(\d*))?\\?\}/g)) {
+        if (Math.max(Number(m[1]), Number(m[2] || 0)) > 255) over.push(`ccd/ccrc:${i + 1}: ${m[0]}`);
+      }
+    });
+    expect(over).toEqual([]);
+  });
+  it('_box_said prints 1024 bytes of the form whole, and holds 1025, an empty value and a byte outside it', () => {
+    const said = (v: string): { rc: number; out: string } => {
+      const r = spawnSync(BASH, ['-c', `. ${JSON.stringify(CCRC_SRC)}; _box_said "$1"`, 'said', v],
+        { encoding: 'utf8', env: { HOME: mkTmp('ccrc-auth-said-'), PATH: process.env['PATH'] ?? '/usr/bin:/bin' } });
+      return { rc: r.status ?? -1, out: r.stdout };
+    };
+    const HELD = '[a value this verb does not print]';
+    for (const n of [1, 255, 256, 1024]) expect(said('a'.repeat(n)), `${n} bytes`).toEqual({ rc: 0, out: 'a'.repeat(n) });
+    for (const v of ['a'.repeat(1025), '', 'a b', `a\x1b[2J`]) expect(said(v), JSON.stringify(v.slice(0, 8))).toEqual({ rc: 1, out: HELD });
+  });
+});
+
 // Review 4061 C5: a value the verb read from a file, or from what the service manager answers, reaches the terminal only
 // whole and in a closed form (letters, digits and ._/@:+,%=~-[], at most 1024 bytes); anything else is printed as
 // "[a value this verb does not print]", so an escape sequence, a newline or a quote in it never reaches the terminal or
@@ -1957,6 +2002,14 @@ describe.skipIf(!realLaunchdGate(process.env, process.platform))(
         console.log(`wave 193 measurement, getenv of an unset key: exit ${unset.status}, ${unset.stdout.length} bytes out`);
         const bad = spawnSync(LC, ['getenv'], { encoding: 'utf8' });
         console.log(`wave 193 measurement, getenv with no key: exit ${bad.status}, ${bad.stdout.length} bytes out`);
+        // The fix round's one value shape (ruling 40092): OSLogRateLimit's value, by its length and whether it is all
+        // digits, never the value itself.
+        const lines = held.split('\n');
+        const at = lines.indexOf('\tenvironment = {');
+        const block = at < 0 ? [] : lines.slice(at + 1, lines.indexOf('\t}', at));
+        const rate = block.find((l) => l.startsWith('\t\tOSLogRateLimit => '))?.slice('\t\tOSLogRateLimit => '.length);
+        console.log(`wave 193 measurement, OSLogRateLimit in the job's own environment: ${rate === undefined ? 'absent'
+          : `${rate.length} bytes, ${/^[0-9]+$/.test(rate) ? 'all digits' : 'not all digits'}`}`);
         const e = env(b.home, { CCRC_ALLOW_SANDBOX_LAUNCHCTL: '1', CCRC_UPDATE_HEALTH_S: '60' });
         rmSync(join(b.home, '.local', 'bin', 'launchctl'), { force: true });
         writeFileSync(join(b.home, 'curl-allow-ports'), `${port}\n`);
