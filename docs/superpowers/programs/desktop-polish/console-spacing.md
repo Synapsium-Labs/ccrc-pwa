@@ -477,3 +477,26 @@ unchanged and green on this round's head.
 
 Ledger-Edit: not needed. This note is new in this pull request (no file under the programme notes folder exists on main
 with this name), so the head commit edits no existing file there.
+
+### 15.8 Evidence for this round
+
+Every run went through `ccrc test`, one process at a time. The checks on the exact head (the commit this round pushes,
+whose code is ecbdf626be; this note's section is the commit after it) and the runs on that head merged with main
+c435573bc4 (a local detached merge, 177cb36113, never committed to the branch; the probe against main was clean, exit 0, so
+the branch absorbed nothing). Measured.
+
+| Run | Where | Result |
+|---|---|---|
+| The growth check, armed (`GROWTH_CHECK=1` inside `ccrc test`) | exact head | green, 100 of 100; `fleet.css` under its cap, no waiver |
+| The server's whole-tree guards: `single-definition`, `anchors`, `citations`, `deviation-refs`, `topology-clean`, `ownership`, `oss-metadata`, `rings` | exact head | green, 66 files, 1,903 cases |
+| `ui`'s static check | exact head | clean |
+| pwa's static check | exact head | the memory cap killed it on its first run (exit 137); alone, clean |
+| The whole pwa jsdom set, 631 files, in eight parts | the merge | 629 files green (19,530 passed, 2 skipped); 2 files killed by the memory cap mid-run in part 3, none red |
+| `markdown-parse.test.ts` alone | the merge | green, 40 of 40 |
+| `mockup-policy.test.ts` alone | the merge | killed by the memory cap twice more (146 and 145 of 153 passed when killed; the slice held 3.8 G of its 6 G with other sessions' runs), then green, 153 of 153, alone on a quiet slice (1.0 G). It reads its own fixtures only, nothing of this wave |
+| Every file under `pwa/browser`, 127 files, in 22 parts of six | the merge | 116 files green; 10 files red, 14 cases, every one a timeout (`waitForSelector`, `locator.click`, `expect.poll` or a frame window past its bound), in parts where the memory cap killed processes; `console-spacing` and `connect-sheet` green in their part. 4,470 passed, 14 failed, 52 skipped, 1 expected fail |
+| Each of the ten red browser files alone | the merge | all green: `delegation-adopt-card` 36, `delegation-rows` 76, `drawer-prompt-glyph` 16, `frame-cost` 9 (and 1 expected fail, 40 skipped), `linear-items` 160, `mail-rows` 26, `move-sessions` 24, `reader-history` 12, `waiting-controls` 134, `waiting` 202 |
+
+The ten reds are inferred to be the load: each was a timeout, each is green alone, and the files that read this round's
+screens (`waiting`, `waiting-controls`, `item-nav`, `item-wrap`, `epic-page`, `programme-page`, `runs-widths`, `digest-widths`)
+are green, in their parts or alone. The pull request's own fast run on the pushed head is in the wave-done mail.
