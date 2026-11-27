@@ -12,7 +12,8 @@ three skills and as constants in the server. Nobody can change it without a ccrc
 **data**: a **Flow** is a graph of **blocks** joined by **outcome edges**, each block carrying the prompt a session is given
 when a programme reaches it. ccrc ships **templates** (its own flow, `ccrc`); a plugin may ship more (a lifecycle of its own,
 for one). The operator copies a template, edits it in the PWA — drag and drop on the desk, an outline on the phone — and
-publishes immutable versions. A programme **pins** the version it opened with. ccrc's fleet protocol (open a run, dispatch,
+publishes immutable versions. A programme **pins** the version it opened with, and moves to a later one only when the
+operator asks (§13 Q1). ccrc's fleet protocol (open a run, dispatch,
 re-measured wave-done, the review handoff) appears as **locked blocks**: they can be placed, never edited or deleted,
 because the server's re-measurement depends on them. Wave 1 builds the definitions, their store and the editor; **nothing
 executes a flow until wave 3**, and then in shadow first.
@@ -60,7 +61,8 @@ engine for anything but ccrc programmes; replacing Claude Code's own Workflow to
 Anti-goals — the design has failed, even if it works, if:
 - an edited flow can remove or reorder the fleet protocol, and a programme wedges `stale-tip` or skips re-measurement;
 - the server gains a way to run arbitrary commands on the fleet box;
-- a flow edit changes a programme already running;
+- a flow edit changes a programme already running (publishing a version moves no programme; only the operator's
+  "Move to vN" does, §13 Q1);
 - a second writer appears for a run's state.
 
 ## 4. The model (L0, `shared/flows.ts`)
@@ -87,11 +89,13 @@ interface FlowEdge { from: string; outcome: string; to: string }
 interface FlowDoc { schema: 1; title: string; start: string; blocks: FlowBlock[]; edges: FlowEdge[] }
 ```
 
-- **Template**: a `FlowDoc` shipped in code, with an id and a version (`ccrc@1`). Read-only.
+- **Template**: a `FlowDoc` shipped in code, with an id and a version (`ccrc@1`). Read-only. The operator may **hide** one
+  (§13 Q2): one hidden list per installation, which changes only the Flows list.
 - **Flow**: the operator's, `{ id, title, source?: { template, version } }`, holding one mutable **draft** and any number of
   immutable **published versions** (1, 2, 3…).
 - **Pin** (wave 2): a programme's `(flowId, version)`, written once when the programme starts — before its first run,
-  because the blocks before `open-wave` (brainstorm, spec, plan) are the programme's too.
+  because the blocks before `open-wave` (brainstorm, spec, plan) are the programme's too. The operator's "Move to vN" re-pins
+  it (§13 Q1); every earlier pin is kept and stays readable, so a pin is a history, not one field.
 - **Position** (wave 3): the block a programme is on, with its history.
 
 **One flow covers a whole programme**; the protocol skeleton is **one wave**, and the flow loops through it once per wave
@@ -200,6 +204,9 @@ hues stay accounts') and live positions (a breathing dot on a block).
 7. **Harnesses** (§14.2), once the harness adapter seam exists: capability tables, derived support levels, the policy hook.
 8. **Managed flows** (§14.4): the managed door and read-only managed flows.
 
+Placed by the operator's rulings of 2026-11-25 (§13), not numbered above: **Move to vN** (Q1), a small wave of its own after
+3b, beside 4b; **Hide a template** (Q2), small, in any later wave.
+
 ## 11. Challenges the design answers (principal engineer's notes)
 
 - **"Command passes" as a server gate was refused**: it would open the closed exec surface. It became `attested`.
@@ -225,9 +232,21 @@ gate; editable protocol blocks; per-home plugin enablement.
 
 ## 13. Waiting on you
 
-- Q1. Should a programme already running move to a newly published version when the operator asks, or only new programmes
-  (this design: only new)?
-- Q2. Should the operator be able to hide a template they never use?
+- Q1 (ruled by the operator 2026-11-25: yes, a running programme may move to a newly published version; this replaces the
+  draft's "only new"). The §3 anti-goal holds because the move is the operator's explicit act: publishing a version changes
+  no running programme by itself.
+  - **The act**: "Move to vN" on a programme re-pins `(flowId, version)` and keeps the pin history; every earlier pin stays
+    readable.
+  - **Where it lands**: the current block is mapped by id. If vN has no block with that id, the operator picks the target
+    block before the move. Protocol blocks are in every version, so a programme on one always maps.
+  - **Timing**: between waves and mid-wave. The run is untouched, because protocol blocks only observe the run machine and
+    never write it. A brief already sent keeps its words; the new prompts apply from the next block entered.
+  - **Before confirming**: a preview of the changed prompts and removed blocks, and the harness support level recomputed for
+    vN once §14.2 exists. The move is shadow-then-live, like the rest of the engine.
+  - **Placement**: its own small wave after 3b, beside 4b (§10).
+- Q2 (ruled by the operator 2026-11-25: yes). A Hide action on each template in the Flows list, with "Show hidden" to bring
+  it back; one hidden list per installation, like flows. Hiding changes only the list: a flow copied from a hidden template
+  keeps working and still gets its "template moved to vN" notice. Small; it fits any later wave (§10).
 - Q3 (ruled by the operator 2026-11-19: anything may be added, with a notice that the source is unknown and an offer to
   trust it; once trusted, it is not asked again). The confirm screen marks a package from an unknown source and offers
   "Trust this source"; a trusted source is never asked about again, and the confirm screen still lists what each package
