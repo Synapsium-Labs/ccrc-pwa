@@ -61,9 +61,9 @@ export function winSpelling(d: string, msys = MSYS_BIN, tmp = REAL_TMP): string 
 
 /** A PATH's entries in either spelling (`;`-separated Windows, `:`-separated MSYS, or the two mixed, as the ccd harness
  *  builds them), each in Windows spelling. A `:` that glues a Windows path onto the one before it is a separator. */
-export function pathEntries(p: string): string[] {
+export function pathEntries(p: string, msys = MSYS_BIN): string[] {
   return p.split(/;|:(?=[A-Za-z]:[\\/])/).flatMap((e) => (e.startsWith('/') ? e.split(':') : [e]))
-    .filter((e) => e !== '').map((e) => winSpelling(e));
+    .filter((e) => e !== '').map((e) => winSpelling(e, msys));
 }
 
 /** A Windows PATH with the fence applied: a `:` gluing two Windows paths read as the separator it was meant as, every
@@ -106,10 +106,18 @@ export function fenceEnv(env: NodeJS.ProcessEnv, home?: string): NodeJS.ProcessE
 const SYSTEM_ROOT = process.env['SystemRoot'] ?? process.env['SYSTEMROOT'] ?? 'C:\\Windows';
 const hasBashExe = (d: string): boolean => { try { return fs.existsSync(path.win32.join(d, 'bash.exe')); } catch { return false; } };
 
-/** The directory of the first `bash.exe` on a PATH (either spelling), or null: where a bare `bash` lands, for node's own
- *  lookup and for an MSYS shell's. */
-export function bashDir(p: string, hasBash = hasBashExe): string | null {
-  return pathEntries(p).find(hasBash) ?? null;
+/** The directory of the first `bash.exe` on a PATH (either spelling), or null: where a bare `bash` lands for an MSYS
+ *  shell's lookup. */
+export function bashDir(p: string, hasBash = hasBashExe, msys = MSYS_BIN): string | null {
+  return pathEntries(p, msys).find(hasBash) ?? null;
+}
+
+/** Where a bare `bash` lands for node's own lookup (libuv's): PATH split on `;` alone and each entry read as a Windows
+ *  path, so an MSYS-spelled entry (`/usr/bin`, or a `:`-joined list) is one node cannot resolve. The two lookups part
+ *  there: `/usr/bin;C:\Windows\System32` is MSYS2's bash to a shell and the WSL launcher to node (fix round 2's
+ *  re-review, N1-b). */
+export function nodeBashDir(p: string, hasBash = hasBashExe): string | null {
+  return p.split(';').find((e) => /^(?:[A-Za-z]:[\\/]|\\\\)/.test(e) && hasBash(e)) ?? null;
 }
 
 /** Whether a Windows path names the WSL launcher: a `bash.exe` or `wsl.exe` under the Windows directory (System32's runs
@@ -124,15 +132,16 @@ function pathBad(env: NodeJS.ProcessEnv, home: string, tmp: string, msys: string
   const bad: string[] = [];
   for (const [k, v] of Object.entries(env)) {
     if (k.toUpperCase() !== 'PATH' || !v) continue;
-    for (const d of pathEntries(v)) {
+    for (const d of pathEntries(v, msys)) {
       if (operatorPathEntry(d, home, tmp)) bad.push(`PATH ${d}`);
       else if (foreignMsysRuntime(d, msys)) bad.push(`PATH ${d} (a second MSYS runtime)`);
     }
-    const b = bashDir(v, hasBash);
-    if (b !== null && norm(b) !== norm(msys)) {
-      bad.push(wslLauncher(path.win32.join(b, 'bash.exe'))
-        ? `PATH resolves bash to ${path.win32.join(b, 'bash.exe')}, the WSL launcher (Linux as root, HOME=/root)`
-        : `PATH resolves bash to ${path.win32.join(b, 'bash.exe')}, not MSYS2's`);
+    // an MSYS shell's lookup and node's own, each judged
+    const dirs = [bashDir(v, hasBash, msys), nodeBashDir(v, hasBash)].filter((b): b is string => b !== null && norm(b) !== norm(msys));
+    for (const b of new Set(dirs.map((d) => path.win32.join(d, 'bash.exe')))) {
+      bad.push(wslLauncher(b)
+        ? `PATH resolves bash to ${b}, the WSL launcher (Linux as root, HOME=/root)`
+        : `PATH resolves bash to ${b}, not MSYS2's`);
     }
   }
   return bad;
@@ -190,7 +199,9 @@ export function fenceSpawnArgs(name: typeof SPAWNERS[number], a: unknown[], msys
   }
   const opts = args[i] as { env?: NodeJS.ProcessEnv; shell?: unknown };
   const env = fenceEnv(opts.env ?? process.env);
-  const bad = pathBad(env, REAL_HOME, REAL_TMP, msys, hasBash);
+  // A child env with no PATH key: node looks a bare command up on this process's PATH (measured), so that is the one
+  // judged. Judged only: the child gets its env as given.
+  const bad = pathBad(keyOf(env, 'PATH') ? env : { ...env, PATH: process.env['PATH'] }, REAL_HOME, REAL_TMP, msys, hasBash);
   for (const f of [name === 'exec' || name === 'execSync' ? undefined : args[0], opts.shell]) {
     const why = commandBad(f, msys);
     if (why !== null) bad.push(why);

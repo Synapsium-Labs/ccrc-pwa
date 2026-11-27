@@ -26,6 +26,23 @@ describe('the spawn fence\'s rule (pure, every platform)', () => {
     expect(() => fence('spawnSync', ['bash', [], { env: env(`${STUB};${MSYS};${SYS32}`) }])).not.toThrow();
     expect(() => fence('spawnSync', ['git', [], { env: env(STUB) }]), 'a PATH with no bash on it has nowhere to land').not.toThrow();
   });
+  // N1-b (fix round 2's re-review): the two shapes where the fence and node read PATH apart.
+  it('judges what node would start: an MSYS-spelled /usr/bin before a `;`-joined System32 is the WSL launcher to node', () => {
+    expect(() => fence('spawnSync', ['bash', [], { env: env(`/usr/bin;${SYS32}`) }])).toThrow(/spawnSync refused.*the WSL launcher/);
+    expect(() => fence('spawnSync', ['bash', [], { env: env(`/usr/bin;${MSYS};${SYS32}`) }]), 'node reaches MSYS2 first').not.toThrow();
+  });
+  it('a child env with no PATH key is judged by the PATH node looks it up on, this process\'s', () => {
+    const noPath = { HOME: 'C:\\Users\\op\\AppData\\Local\\Temp\\ccrc-testrun-x\\home' };
+    vi.stubEnv('PATH', `${SYS32};${MSYS}`);
+    try {
+      expect(() => fence('spawnSync', ['bash', [], { env: noPath }])).toThrow(/spawnSync refused.*the WSL launcher/);
+    } finally { vi.unstubAllEnvs(); }
+    vi.stubEnv('PATH', `${MSYS};${SYS32}`);
+    try {
+      const [, , o] = fence('spawnSync', ['bash', [], { env: noPath }]) as [string, string[], { env: NodeJS.ProcessEnv }];
+      expect(Object.keys(o.env).some((k) => k.toUpperCase() === 'PATH'), 'judged only: no PATH is handed to the child').toBe(false);
+    } finally { vi.unstubAllEnvs(); }
+  });
   it('the harness guard refuses the same PATH (assertFencedEnv)', () => {
     const e = { ...env(`${STUB};${SYS32}`), USERPROFILE: 'x', HOMEDRIVE: 'C:', HOMEPATH: '\\x' };
     expect(() => assertFencedEnv(e, 'C:\\Users\\op', 'C:\\Users\\op\\AppData\\Local\\Temp', MSYS, bashIn(MSYS, SYS32))).toThrow(/the WSL launcher/);

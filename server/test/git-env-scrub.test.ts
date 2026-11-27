@@ -115,12 +115,18 @@ describe('the vitest wiring', () => {
   const strip = (f: string): string => readFileSync(path.join(here, '..', '..', f), 'utf8')
     .split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
 
+  const listIn = (pkg: string, key: string): string[] =>
+    [...(new RegExp(`${key}:\\s*\\[([^\\]]*)\\]`).exec(strip(`${pkg}/vitest.config.ts`))?.[1] ?? '').matchAll(/'([^']+)'/g)].map((m) => m[1]!);
+
   it.each(['server', 'agent'])('%s/vitest.config.ts scrubs in the main process first and in every worker', (pkg) => {
-    const code = strip(`${pkg}/vitest.config.ts`);
-    const list = (key: string): string[] =>
-      [...(new RegExp(`${key}:\\s*\\[([^\\]]*)\\]`).exec(code)?.[1] ?? '').matchAll(/'([^']+)'/g)].map((m) => m[1]!);
-    expect(list('globalSetup')[0], 'the scrub is not the first globalSetup').toMatch(/git-env\.setup\.mjs$/);
-    expect(list('setupFiles')[0], 'the scrub is not the first setupFile').toMatch(/git-env\.setup\.mjs$/);
+    expect(listIn(pkg, 'globalSetup')[0], 'the scrub is not the first globalSetup').toMatch(/git-env\.setup\.mjs$/);
+    expect(listIn(pkg, 'setupFiles')[0], 'the scrub is not the first setupFile').toMatch(/git-env\.setup\.mjs$/);
+  });
+
+  // The spawn fence's wiring, read as text so that deleting it reds on every platform: the fence's own assertions run
+  // on Windows only (fix round 2's re-review, N1-a).
+  it('server/vitest.config.ts installs the spawn fence in every worker', () => {
+    expect(listIn('server', 'setupFiles'), 'spawn-fence.setup.mjs is not a setupFile').toContain('test/spawn-fence.setup.mjs');
   });
 
   it('a server worker has none of the redirecting variables, whatever the parent exported', () => {
