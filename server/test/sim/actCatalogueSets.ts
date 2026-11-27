@@ -17,7 +17,8 @@ type Row = ReturnType<CatalogueModule['actRow']> & object;
 /** A synthetic row, for a lookup a case hands the decider. */
 const synthetic = (over: Partial<Row>): Row => ({
   what: 'synthetic', actor: 'overlord', classes: [], answer: false, carrier: false, mayCarry: [], reversibility: 'reversible',
-  covers: [], verbClass: 'operate', compensator: null, leastStrength: 'attributed', rungs: { chat: 'allow', advise: 'allow', full: 'allow' },
+  covers: [], verbClass: 'operate', compensator: null, ceiling: { kind: 'never' }, leastStrength: 'attributed',
+  rungs: { chat: 'allow', advise: 'allow', full: 'allow' },
   ...over,
 }) as Row;
 
@@ -75,6 +76,135 @@ export function effectiveClassesCases(m: CatalogueModule): Record<string, SuiteC
   };
 }
 
+// ------------------------------------------------------------------------------------------------------- actCeilingStep
+
+export type CeilingModule = typeof import('../../src/coord/overlordActCeiling.js');
+type Counts = Parameters<CeilingModule['actCeilingStep']>[2];
+type Count = Counts['act'];
+
+/** Table 5 written out (question 19 as proposed): each group's kinds, per programme and in all. */
+export const TABLE_5: Readonly<Record<string, { kinds: readonly string[]; perProgramme: number | null; all: number }>> = {
+  relay: { kinds: ['relay', 'nudge-owner'], perProgramme: 6, all: 30 },
+  request: { kinds: ['close-request', 'drop-request', 'escalate-request'], perProgramme: 6, all: 30 },
+  brief: { kinds: ['attach-brief'], perProgramme: 6, all: 30 },
+  'operator-reach': { kinds: ['raise-item', 'escalate', 'return-over-asked', 'object'], perProgramme: 3, all: 10 },
+  proposal: { kinds: ['propose-grant', 'propose-command', 'propose-retire', 'propose-practice'], perProgramme: 1, all: 6 },
+  answer: { kinds: ['answer-item', 'answer-ask'], perProgramme: 6, all: 30 },
+  'o3-effect': { kinds: ['approve-spec', 'approve-dod', 'widen-scope'], perProgramme: 1, all: 3 },
+  fact: { kinds: ['state-a-fact'], perProgramme: 3, all: 10 },
+  start: { kinds: ['start-programme'], perProgramme: 1, all: 2 },
+  rekick: { kinds: ['rekick-coordinator'], perProgramme: 1, all: 3 },
+  'own-record': { kinds: ['open-request', 'model-write', 'seal-prediction'], perProgramme: null, all: 60 },
+};
+/** Table 6 and the ruled fourth kind: the kinds whose bound an owner holds. */
+export const HELD_BY: readonly string[] = ['read', 'write-note', 'acknowledge', 'renew', 'link-team'];
+const groupOfKind = (k: string): string | null => Object.entries(TABLE_5).find(([, g]) => g.kinds.includes(k))?.[0] ?? null;
+
+/** §5's rule, written from the plan's text and not from the decider: the needed counts (the act's group if counted, the
+ *  effect's if asked and counted), any not asked or unmeasured is unavailable, then each needed group in all, then for the
+ *  programme. Answers the word, the group and the scope, or pass. */
+function ceilingOracle(act: string, effect: string | null, c: Counts): string {
+  const needed: [string, Count][] = [];
+  const a = groupOfKind(act);
+  if (a !== null) needed.push([a, c.act]);
+  const e = effect === null || c.effect === 'not-asked' ? null : groupOfKind(effect);
+  if (e !== null) needed.push([e, c.effect]);
+  for (const [g, n] of needed) if (n === 'not-asked' || n.kind === 'unmeasured') return `unavailable:${g}`;
+  for (const [g, n] of needed) {
+    const t = TABLE_5[g]!;
+    const k = n as Extract<Count, { kind: 'counted' }>;
+    if (k.all >= t.all) return `act-ceiling:${g}:all`;
+    if (t.perProgramme !== null && k.programme !== null && k.programme >= t.perProgramme) return `act-ceiling:${g}:programme`;
+  }
+  return 'pass';
+}
+const said = (v: ReturnType<CeilingModule['actCeilingStep']>): string =>
+  (v.pass ? 'pass' : v.word === 'unavailable' ? `unavailable:${v.group}` : `act-ceiling:${v.group}:${v.scope}`);
+
+/** Counts at, under and over each limit for a group, with and without a programme target, and the two arms that refuse. */
+function countsFor(group: string | null): Count[] {
+  const t = group === null ? { perProgramme: 1, all: 2 } : TABLE_5[group]!;
+  const pp = t.perProgramme ?? 5;
+  const out: Count[] = ['not-asked', { kind: 'unmeasured', why: 'not-wired' }];
+  for (const all of [0, t.all - 1, t.all, t.all + 1]) for (const programme of [null, 0, pp - 1, pp, pp + 1]) {
+    out.push({ kind: 'counted', programme: programme === null ? null : Math.min(programme, all), all });
+  }
+  return out;
+}
+
+export function actCeilingStepCases(m: CeilingModule, kinds: readonly string[]): Record<string, SuiteCase> {
+  return {
+    'every kind against every count of its group, with no effect, agrees with the oracle written from §5': () => {
+      for (const act of kinds) for (const count of countsFor(groupOfKind(act))) {
+        const counts = { act: count, effect: 'not-asked' as const };
+        expect(said(m.actCeilingStep(act as never, null, counts)), `${act} ${JSON.stringify(count)}`).toBe(ceilingOracle(act, null, counts));
+      }
+    },
+    'a held-by or never kind passes and reads no count, whatever the count holds': () => {
+      for (const act of [...HELD_BY, 'accept-limit', 'deploy', 'live-box-act', 'spend']) for (const count of countsFor(null)) {
+        expect(m.actCeilingStep(act as never, null, { act: count, effect: 'not-asked' }), act).toEqual({ pass: true });
+      }
+    },
+    'a carrier refuses on its effect\'s count, and the effect is checked after the act': () => {
+      const under = { kind: 'counted', programme: 0, all: 0 } as const;
+      for (const [effect, group] of [['widen-scope', 'o3-effect'], ['start-programme', 'start'], ['close-request', 'request']] as const) {
+        const t = TABLE_5[group]!;
+        const over = { kind: 'counted', programme: 0, all: t.all } as const;
+        expect(said(m.actCeilingStep('answer-item', effect, { act: under, effect: over })), effect).toBe(`act-ceiling:${group}:all`);
+        expect(said(m.actCeilingStep('answer-item', effect, { act: under, effect: { kind: 'unmeasured', why: 'u' } })), effect).toBe(`unavailable:${group}`);
+        expect(said(m.actCeilingStep('answer-item', effect, { act: { kind: 'counted', programme: 0, all: 30 }, effect: over })), effect).toBe('act-ceiling:answer:all');
+        expect(m.actCeilingStep('answer-item', effect, { act: under, effect: 'not-asked' }), effect).toEqual({ pass: true });
+      }
+      // a relay carrying a widening counts in both groups (question 10)
+      expect(said(m.actCeilingStep('relay', 'widen-scope', { act: { kind: 'counted', programme: 0, all: 0 }, effect: { kind: 'counted', programme: 1, all: 1 } }))).toBe('act-ceiling:o3-effect:programme');
+    },
+    'an unmeasured count refuses before any ceiling is read, its own or the effect\'s': () => {
+      const over = { kind: 'counted', programme: 0, all: 99 } as const;
+      expect(said(m.actCeilingStep('relay', 'widen-scope', { act: over, effect: { kind: 'unmeasured', why: 'u' } }))).toBe('unavailable:o3-effect');
+      expect(said(m.actCeilingStep('relay', 'widen-scope', { act: 'not-asked', effect: over }))).toBe('unavailable:relay');
+    },
+    'an effect the build lacks, or one whose ceiling is not counted, adds no check': () => {
+      const under = { kind: 'counted', programme: 0, all: 0 } as const;
+      for (const effect of ['no-such', 'read', 'deploy', 'link-team']) {
+        expect(m.actCeilingStep('answer-ask', effect, { act: under, effect: { kind: 'unmeasured', why: 'u' } }), effect).toEqual({ pass: true });
+      }
+    },
+    'an act-ceiling verdict names act-ceiling-hit and its limit, and an unavailable one names no latch': () => {
+      expect(m.actCeilingStep('relay', null, { act: { kind: 'counted', programme: null, all: 30 }, effect: 'not-asked' }))
+        .toEqual({ pass: false, word: 'act-ceiling', group: 'relay', scope: 'all', limit: 30, latch: 'act-ceiling-hit' });
+      expect(m.actCeilingStep('escalate-request', null, { act: { kind: 'counted', programme: 6, all: 6 }, effect: 'not-asked' }))
+        .toEqual({ pass: false, word: 'act-ceiling', group: 'request', scope: 'programme', limit: 6, latch: 'act-ceiling-hit' });
+      expect(m.actCeilingStep('relay', null, { act: { kind: 'unmeasured', why: 'not-wired' }, effect: 'not-asked' }))
+        .toEqual({ pass: false, word: 'unavailable', group: 'relay', why: 'not-wired', latch: null });
+      expect(m.actCeilingStep('relay', null, { act: 'not-asked', effect: 'not-asked' }))
+        .toEqual({ pass: false, word: 'unavailable', group: 'relay', why: "the act's count was not asked", latch: null });
+    },
+    'a group with no per-programme ceiling counts in all only, and a null programme count is no target': () => {
+      expect(m.actCeilingStep('open-request', null, { act: { kind: 'counted', programme: 1000, all: 59 }, effect: 'not-asked' })).toEqual({ pass: true });
+      expect(said(m.actCeilingStep('open-request', null, { act: { kind: 'counted', programme: 0, all: 60 }, effect: 'not-asked' }))).toBe('act-ceiling:own-record:all');
+      expect(m.actCeilingStep('start-programme', null, { act: { kind: 'counted', programme: null, all: 1 }, effect: 'not-asked' })).toEqual({ pass: true });
+      expect(said(m.actCeilingStep('start-programme', null, { act: { kind: 'counted', programme: 1, all: 1 }, effect: 'not-asked' }))).toBe('act-ceiling:start:programme');
+    },
+  };
+}
+
+export function ceilingLatchDueCases(m: CeilingModule): Record<string, SuiteCase> {
+  return {
+    'the cause is raised when none stands, or when standing could not be read': () => {
+      expect(m.ceilingLatchDue('act-ceiling-hit', false)).toBe(true);
+      expect(m.ceilingLatchDue('act-ceiling-hit', 'unmeasured')).toBe(true);
+    },
+    'unless one stands': () => { expect(m.ceilingLatchDue('act-ceiling-hit', true)).toBe(false); },
+    'a refusal that names no cause raises nothing, whatever stands': () => {
+      for (const s of [true, false, 'unmeasured'] as const) {
+        expect(m.ceilingLatchDue(null, s)).toBe(false);
+        expect(m.ceilingLatchDue(undefined, s)).toBe(false);
+        expect(m.ceilingLatchDue('other-cause' as never, s)).toBe(false);
+      }
+    },
+  };
+}
+
 // --------------------------------------------------------------------------------------------------------- mutant sets
 
 const KEY = 'shared/overlord.ts';
@@ -96,7 +226,41 @@ const EFFECTIVE_CLASSES_SET = set(effectiveClassesCases, [
   { id: 'C6 the act\'s classes are dropped when an effect is carried', old: "return [...out, ...e.classes.map(", new: "return [...e.classes.map(" },
 ]);
 
+const CEILING_TS = path.join(ROOT, 'server/src/coord/overlordActCeiling.ts');
+const CEILING_KEY = 'server/src/coord/overlordActCeiling.ts';
+const ALL_KINDS = [...Object.values(TABLE_5).flatMap((g) => g.kinds), ...HELD_BY, 'accept-limit', 'deploy', 'spend'];
+const CEILING_SET: MutantSet<CeilingModule> = {
+  modulePath: CEILING_TS, suite: (m) => actCeilingStepCases(m, ALL_KINDS),
+  mutants: [
+    // The plan's Step 5 hand mutations, and the rest of §5's rule.
+    { id: 'A1 > in the all check', old: 'if (count.all >= ceiling.all)', new: 'if (count.all > ceiling.all)' },
+    { id: 'A2 > in the programme check', old: 'count.programme >= ceiling.perProgramme', new: 'count.programme > ceiling.perProgramme' },
+    { id: 'A3 unmeasured read as zero', old: "    if (n.count.kind === 'unmeasured') return { pass: false, word: 'unavailable', group: n.group, why: n.count.why, latch: null };\n", new: "    if (n.count.kind === 'unmeasured') n.count = { kind: 'counted', programme: 0, all: 0 } as never;\n" },
+    { id: 'A4 the effect\'s count skipped', old: "if (theirs !== undefined && theirs.kind === 'counted') needed.push(", new: 'if (false) needed.push(' },
+    { id: 'A5 not-asked passes', old: "    if (n.count === 'not-asked') return { pass: false, word: 'unavailable', group: n.group, why: `the ${n.whose}'s count was not asked`, latch: null };\n", new: "    if (n.count === 'not-asked') continue;\n" },
+    { id: 'A6 the act\'s count skipped', old: "if (own.kind === 'counted') needed.push(", new: 'if (false) needed.push(' },
+    { id: 'A7 a held-by kind is counted', old: "if (own.kind === 'counted') needed.push({ group: own.group,", new: "if (own.kind !== 'never') needed.push({ group: (own as { group?: never }).group ?? 'relay'," },
+    { id: 'A8 a null programme refuses', old: 'count.programme !== null && count.programme >=', new: 'count.programme === null || count.programme >=' },
+    { id: 'A9 no per-programme ceiling reads as zero', old: 'ceiling.perProgramme !== null && count.programme', new: 'count.programme' },
+    { id: 'A10 the programme scope reported as all', old: "scope: 'programme', limit: ceiling.perProgramme", new: "scope: 'all', limit: ceiling.perProgramme" },
+    { id: 'A11 the latch dropped', old: "scope: 'all', limit: ceiling.all, latch: ACT_CEILING_LATCH", new: "scope: 'all', limit: ceiling.all, latch: null" },
+    { id: 'A12 the programme limit is the all limit', old: "limit: ceiling.perProgramme, latch", new: 'limit: ceiling.all, latch' },
+    { id: 'A13 ceilings read before every count is measured', old: '  for (const n of needed) {\n    if (n.count', new: '  for (const n of [...needed].reverse()) {\n    const r = n.count !== \'not-asked\' && n.count.kind === \'counted\' ? overGroup(n.group, n.count) : null;\n    if (r !== null) return r;\n    if (n.count' },
+    { id: 'A14 an effect not asked is asked', old: "effect === null || counts.effect === 'not-asked' ? undefined", new: 'effect === null ? undefined' },
+  ],
+};
+const LATCH_DUE_SET: MutantSet<CeilingModule> = {
+  modulePath: CEILING_TS, suite: ceilingLatchDueCases,
+  mutants: [
+    { id: 'L1 raised when one stands', old: "latch === ACT_CEILING_LATCH && standing !== true", new: 'latch === ACT_CEILING_LATCH' },
+    { id: 'L2 raised on a refusal naming no cause', old: "latch === ACT_CEILING_LATCH && standing !== true", new: 'standing !== true' },
+    { id: 'L3 an unmeasured standing does not raise', old: "standing !== true;", new: 'standing === false;' },
+  ],
+};
+
 export const ACT_CATALOGUE_MUTANT_SETS: Record<string, MutantSet<never>> = {
   [`${KEY}#actRow`]: ACT_ROW_SET as MutantSet<never>,
   [`${KEY}#effectiveClasses`]: EFFECTIVE_CLASSES_SET as MutantSet<never>,
+  [`${CEILING_KEY}#actCeilingStep`]: CEILING_SET as MutantSet<never>,
+  [`${CEILING_KEY}#ceilingLatchDue`]: LATCH_DUE_SET as MutantSet<never>,
 };

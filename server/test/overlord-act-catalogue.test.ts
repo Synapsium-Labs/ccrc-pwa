@@ -51,9 +51,10 @@ describe('the catalogue\'s words', () => {
     expect(cat.REVERSIBILITIES).toEqual(['n/a', 'reversible', 'compensable', 'irreversible']);
     expect(cat.COVER_KINDS).toEqual(['grant', 'command', 'operator-request', 'stated-entry']);
     expect(cat.COMPENSATORS).toEqual(['correction-mail', 'new-request', 'end-programme', 'operator-relink']);
+    expect(cat.CEILING_CELL_KINDS).toEqual(['counted', 'held-by', 'never']);
   });
   it('every row\'s columns are words of their lists, and its keys are Table 4a\'s', () => {
-    const keys = ['what', 'actor', 'classes', 'answer', 'carrier', 'mayCarry', 'reversibility', 'covers', 'verbClass', 'compensator', 'leastStrength', 'rungs'];
+    const keys = ['what', 'actor', 'classes', 'answer', 'carrier', 'mayCarry', 'reversibility', 'covers', 'verbClass', 'compensator', 'ceiling', 'leastStrength', 'rungs'];
     for (const k of cat.OVERLORD_ACT_KIND_LIST) {
       const r = cat.OVERLORD_ACT_KINDS[k];
       expect(Object.keys(r).sort(), k).toEqual([...keys].sort());
@@ -62,6 +63,8 @@ describe('the catalogue\'s words', () => {
       expect(cat.REVERSIBILITIES, k).toContain(r.reversibility);
       for (const c of r.covers) expect(cat.COVER_KINDS, k).toContain(c);
       if (r.compensator !== null) expect(cat.COMPENSATORS, k).toContain(r.compensator);
+      expect(cat.CEILING_CELL_KINDS, k).toContain(r.ceiling.kind);
+      if (r.ceiling.kind === 'counted') expect(cat.CEILING_GROUPS, k).toContain(r.ceiling.group);
       expect(Object.keys(r.rungs), k).toEqual(['chat', 'advise', 'full']);
       for (const w of Object.values(r.rungs)) expect(cat.isRungCellWord(w), `${k}: ${w}`).toBe(true);
       if (r.mayCarry !== 'question-effect') for (const e of r.mayCarry) expect(cat.isOverlordActKind(e), `${k} carries ${e}`).toBe(true);

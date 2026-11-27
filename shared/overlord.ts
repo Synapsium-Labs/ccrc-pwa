@@ -81,6 +81,37 @@ export type Compensator = keyof typeof COMPENSATOR_MAP;
 export const COMPENSATORS = Object.keys(COMPENSATOR_MAP) as Compensator[];
 export function compensatorDoor(c: Compensator): string { return COMPENSATOR_MAP[c].door; }
 
+/** The ceiling groups (the plan's Table 5, question 19 as proposed, approved by the coordinator): each act kind of a group
+ *  counts against one count, per programme and in all, over a rolling hour of wall time. A `null` per-programme value is a
+ *  group with no per-programme ceiling, never a ceiling of zero. Starting values of Table 11.5b, re-fitted after a week. */
+const CEILING_GROUP_MAP = {
+  relay: { perProgramme: 6, all: 30 },
+  request: { perProgramme: 6, all: 30 },
+  brief: { perProgramme: 6, all: 30 },
+  'operator-reach': { perProgramme: 3, all: 10 },
+  proposal: { perProgramme: 1, all: 6 },
+  answer: { perProgramme: 6, all: 30 },
+  'o3-effect': { perProgramme: 1, all: 3 },
+  fact: { perProgramme: 3, all: 10 },
+  start: { perProgramme: 1, all: 2 },
+  rekick: { perProgramme: 1, all: 3 },
+  'own-record': { perProgramme: null, all: 60 },
+} as const satisfies Readonly<Record<string, { readonly perProgramme: number | null; readonly all: number }>>;
+export type CeilingGroup = keyof typeof CEILING_GROUP_MAP;
+export const CEILING_GROUPS = Object.keys(CEILING_GROUP_MAP) as CeilingGroup[];
+export const ACT_CEILINGS: Readonly<Record<CeilingGroup, { readonly perProgramme: number | null; readonly all: number }>> = CEILING_GROUP_MAP;
+/** A rolling hour of wall time (Table 11.5b). */
+export const ACT_CEILING_WINDOW_MS = 3_600_000;
+
+/** A row's ceiling (§7.5, plan §5): counted in a group; held by an owner that already bounds the kind, so no count is asked
+ *  (plan question 2); or `never`, a kind refused at every rung, so no count is ever asked. */
+export type CeilingCell =
+  | { readonly kind: 'counted'; readonly group: CeilingGroup }
+  | { readonly kind: 'held-by'; readonly owner: string }
+  | { readonly kind: 'never' };
+const CEILING_CELL_KIND_MAP = { counted: true, 'held-by': true, never: true } as const satisfies Record<CeilingCell['kind'], true>;
+export const CEILING_CELL_KINDS = Object.keys(CEILING_CELL_KIND_MAP) as CeilingCell['kind'][];
+
 /** One catalogue row (Table 4a). `classes` holds only known classes; a carrier's own are its effect's, so it holds none. */
 export interface OverlordActRow {
   readonly what: string;
@@ -96,6 +127,7 @@ export interface OverlordActRow {
   readonly covers: readonly CoverKind[];
   readonly verbClass: VerbClass;
   readonly compensator: Compensator | null;
+  readonly ceiling: CeilingCell;
   readonly leastStrength: CallerStrength;
   readonly rungs: RungCells;
 }
@@ -108,58 +140,66 @@ const FULL_ARMED: RungCells = { chat: 'refuse', advise: 'refuse', full: 'armed' 
 const FULL_BY_GRANT: RungCells = { chat: 'refuse', advise: 'refuse', full: 'by-grant' };
 const NEVER: RungCells = { chat: 'refuse', advise: 'refuse', full: 'refuse' };
 
-type RowIn = Pick<OverlordActRow, 'what' | 'reversibility' | 'rungs'> & Partial<OverlordActRow>;
+type RowIn = Pick<OverlordActRow, 'what' | 'reversibility' | 'rungs' | 'ceiling'> & Partial<OverlordActRow>;
 /** A row with Table 4a's defaults: the Overlord's, class none, no answer, carrying nothing, no cover, `operate`, no
- *  compensator, `attributed`. Every row below names what differs. */
+ *  compensator, `attributed`. Every row below names what differs, and its ceiling. */
 const row = (r: RowIn): OverlordActRow => ({
   actor: 'overlord', classes: [], answer: false, carrier: false, mayCarry: [], covers: [], verbClass: 'operate',
   compensator: null, leastStrength: 'attributed', ...r,
 });
-/** A row refused at every rung: no cover, and the operator's strength (plan Table 4). */
+const counted = (group: CeilingGroup): CeilingCell => ({ kind: 'counted', group });
+const heldBy = (owner: string): CeilingCell => ({ kind: 'held-by', owner });
+/** A row refused at every rung: no cover, the operator's strength (plan Table 4) and the ceiling `never` (§5, F7). */
 const refused = (what: string, classes: OverlordActRow['classes'], reversibility: Reversibility): OverlordActRow =>
-  row({ what, classes, reversibility, rungs: NEVER, leastStrength: 'operator' });
-const ownRecord = (what: string): OverlordActRow => row({ what, reversibility: 'reversible', rungs: ALL });
-const routeOrPropose = (what: string): OverlordActRow => row({ what, reversibility: 'reversible', rungs: ADVISE_UP });
+  row({ what, classes, reversibility, rungs: NEVER, leastStrength: 'operator', ceiling: { kind: 'never' } });
+const ownRecord = (what: string, ceiling: CeilingCell): OverlordActRow => row({ what, reversibility: 'reversible', rungs: ALL, ceiling });
+const routeOrPropose = (what: string, group: CeilingGroup): OverlordActRow =>
+  row({ what, reversibility: 'reversible', rungs: ADVISE_UP, ceiling: counted(group) });
 
-/** Table 4 of the plan, which is Table 7.1a with the plan's completions. */
+/** Table 4 of the plan, which is Table 7.1a with the plan's completions; each row's ceiling is the plan's Tables 5 and 6. */
 const OVERLORD_ACT_KIND_MAP = {
-  read: row({ what: "Read the server's rows through the door process", reversibility: 'n/a', verbClass: 'view', rungs: ALL }),
-  'write-note': ownRecord('Keep its own records: a note'),
-  acknowledge: ownRecord("Keep its own records: acknowledge an operator message, a held delivery to the role or a band-3 request row"),
-  'open-request': ownRecord('Keep its own records: open a request, citing an operator message or none'),
-  'model-write': ownRecord('Keep its own records: propose or change an entry of the operator model'),
-  'seal-prediction': ownRecord('Keep its own records: seal a prediction with its brief'),
+  read: row({ what: "Read the server's rows through the door process", reversibility: 'n/a', verbClass: 'view', rungs: ALL,
+    ceiling: heldBy('the read ceilings, per door (Table 11.5b; the inbox piece\'s read-ceiling)') }),
+  'write-note': ownRecord('Keep its own records: a note', heldBy('the notes cap, 200 notes of 500 characters for one identity (shared/continuity.ts#NOTES_CAP)')),
+  // The W2 index's wording of the acknowledge cell (Table W2, ruled, fold; slug acknowledge-cell-reads-the-index).
+  acknowledge: ownRecord("Keep its own records: acknowledge an operator message, a held delivery to the role or a band-3 request row",
+    heldBy('its targets: one acknowledgement for each operator message, each held delivery to the role and each band-3 request row')),
+  'open-request': ownRecord('Keep its own records: open a request, citing an operator message or none', counted('own-record')),
+  'model-write': ownRecord('Keep its own records: propose or change an entry of the operator model', counted('own-record')),
+  'seal-prediction': ownRecord('Keep its own records: seal a prediction with its brief', counted('own-record')),
   relay: row({ what: 'Route a request to the coordinator that owns it', reversibility: 'compensable', mayCarry: ['widen-scope'],
-    compensator: 'correction-mail', rungs: ADVISE_UP }),
-  'drop-request': row({ what: 'Drop a request', reversibility: 'compensable', compensator: 'new-request', rungs: ADVISE_UP }),
-  'close-request': routeOrPropose('Close a request'),
-  'escalate-request': routeOrPropose("Move a request to the operator (`needs-you`)"),
-  'attach-brief': routeOrPropose("Attach a brief to a coordinator's item"),
-  escalate: routeOrPropose('Escalate to the operator'),
-  'return-over-asked': routeOrPropose('Return an over-asked question to its coordinator'),
-  object: routeOrPropose('Object to a call made in the operator\'s name'),
-  'propose-grant': routeOrPropose('Propose a grant to the operator'),
-  'propose-command': routeOrPropose('Propose a command to the operator'),
-  'propose-retire': routeOrPropose('Propose retiring a programme to the operator'),
-  'propose-practice': routeOrPropose('Propose a practice to the operator'),
-  'nudge-owner': routeOrPropose('Mail the owner of a routed request a follow-up, through the relay door'),
-  'raise-item': routeOrPropose('Raise an operator item of its own, with a brief, keyed by its subject'),
+    compensator: 'correction-mail', rungs: ADVISE_UP, ceiling: counted('relay') }),
+  'drop-request': row({ what: 'Drop a request', reversibility: 'compensable', compensator: 'new-request', rungs: ADVISE_UP,
+    ceiling: counted('request') }),
+  'close-request': routeOrPropose('Close a request', 'request'),
+  'escalate-request': routeOrPropose("Move a request to the operator (`needs-you`)", 'request'),
+  'attach-brief': routeOrPropose("Attach a brief to a coordinator's item", 'brief'),
+  escalate: routeOrPropose('Escalate to the operator', 'operator-reach'),
+  'return-over-asked': routeOrPropose('Return an over-asked question to its coordinator', 'operator-reach'),
+  object: routeOrPropose('Object to a call made in the operator\'s name', 'operator-reach'),
+  'propose-grant': routeOrPropose('Propose a grant to the operator', 'proposal'),
+  'propose-command': routeOrPropose('Propose a command to the operator', 'proposal'),
+  'propose-retire': routeOrPropose('Propose retiring a programme to the operator', 'proposal'),
+  'propose-practice': routeOrPropose('Propose a practice to the operator', 'proposal'),
+  // Index question 21: a nudge counts against the relay's ceilings.
+  'nudge-owner': routeOrPropose('Mail the owner of a routed request a follow-up, through the relay door', 'relay'),
+  'raise-item': routeOrPropose('Raise an operator item of its own, with a brief, keyed by its subject', 'operator-reach'),
   'answer-item': row({ what: 'Answer a held item with an option', answer: true, carrier: true, mayCarry: 'question-effect',
-    reversibility: 'compensable', compensator: 'correction-mail', rungs: FULL_ARMED }),
+    reversibility: 'compensable', compensator: 'correction-mail', rungs: FULL_ARMED, ceiling: counted('answer') }),
   'answer-ask': row({ what: "Answer a held ask with an option", answer: true, carrier: true, mayCarry: 'question-effect',
-    reversibility: 'compensable', compensator: 'correction-mail', rungs: FULL_ARMED }),
+    reversibility: 'compensable', compensator: 'correction-mail', rungs: FULL_ARMED, ceiling: counted('answer') }),
   'start-programme': row({ what: 'Start a coordinator in a named workspace', classes: ['O3'], reversibility: 'compensable',
-    covers: ['operator-request', 'command'], compensator: 'end-programme', rungs: PROPOSE_THEN_ALLOW }),
+    covers: ['operator-request', 'command'], compensator: 'end-programme', rungs: PROPOSE_THEN_ALLOW, ceiling: counted('start') }),
   'rekick-coordinator': row({ what: 'Re-kick a coordinator as the same session', reversibility: 'compensable',
-    compensator: 'correction-mail', rungs: PROPOSE_THEN_ALLOW }),
+    compensator: 'correction-mail', rungs: PROPOSE_THEN_ALLOW, ceiling: counted('rekick') }),
   'approve-spec': row({ what: 'Approve a spec', classes: ['O3'], reversibility: 'compensable', covers: ['grant', 'command'],
-    compensator: 'correction-mail', rungs: FULL_BY_GRANT }),
+    compensator: 'correction-mail', rungs: FULL_BY_GRANT, ceiling: counted('o3-effect') }),
   'approve-dod': row({ what: 'Approve or change a definition of done', classes: ['O3'], reversibility: 'compensable',
-    covers: ['grant', 'command'], compensator: 'correction-mail', rungs: FULL_BY_GRANT }),
+    covers: ['grant', 'command'], compensator: 'correction-mail', rungs: FULL_BY_GRANT, ceiling: counted('o3-effect') }),
   'widen-scope': row({ what: "Widen a programme's scope", classes: ['O3'], reversibility: 'compensable',
-    covers: ['grant', 'command', 'operator-request'], compensator: 'correction-mail', rungs: FULL_BY_GRANT }),
+    covers: ['grant', 'command', 'operator-request'], compensator: 'correction-mail', rungs: FULL_BY_GRANT, ceiling: counted('o3-effect') }),
   'state-a-fact': row({ what: 'Answer a value item: a fact only the operator holds', classes: ['O5'], answer: true,
-    reversibility: 'compensable', covers: ['stated-entry'], compensator: 'correction-mail', rungs: FULL_ONLY }),
+    reversibility: 'compensable', covers: ['stated-entry'], compensator: 'correction-mail', rungs: FULL_ONLY, ceiling: counted('fact') }),
   'accept-limit': refused('Drop or cut a definition-of-done item, or accept a known limit that leaves one unmet', ['O3'], 'compensable'),
   'message-people': refused('Comment where other people take part', ['O1'], 'irreversible'),
   publish: refused('Make public or release', ['O1'], 'irreversible'),
@@ -173,11 +213,14 @@ const OVERLORD_ACT_KIND_MAP = {
   'secret-or-access': refused('Secrets, sign-ins and access', ['O4'], 'irreversible'),
   'reassign-programme': refused('Hand a programme to another session', ['O4'], 'irreversible'),
   'override-a-person': refused("Ignore a reviewer's requested change, or another person's ruling", ['O6'], 'irreversible'),
-  renew: row({ what: 'End the conversation and start a fresh one', actor: 'server', reversibility: 'reversible', rungs: ALL }),
+  renew: row({ what: 'End the conversation and start a fresh one', actor: 'server', reversibility: 'reversible', rungs: ALL,
+    ceiling: heldBy("the renewal's hold-off and restart bounds (Table 11.5b, the W1a rows)") }),
   // D-8809 and the coordinator's ruling (call 1816): the Overlord confirms one team candidate for a project, its own call in the
-  // operator's name, which the operator overturns with their own write. Class none; at `full` only.
+  // operator's name, which the operator overturns with their own write. Class none; at `full` only; its bound is the linking
+  // rule's, so step 10 asks no count for it.
   'link-team': row({ what: "Confirm one team candidate for a project with no key, as a call made in the operator's name",
-    reversibility: 'compensable', compensator: 'operator-relink', rungs: FULL_ONLY }),
+    reversibility: 'compensable', compensator: 'operator-relink', rungs: FULL_ONLY,
+    ceiling: heldBy('the linking rule: one link for a project with no stored key and no operator decision (autoLinkAllowed)') }),
 } as const satisfies Readonly<Record<string, OverlordActRow>>;
 export type OverlordActKind = keyof typeof OVERLORD_ACT_KIND_MAP;
 export const OVERLORD_ACT_KINDS: Readonly<Record<OverlordActKind, OverlordActRow>> = OVERLORD_ACT_KIND_MAP;

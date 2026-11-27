@@ -98,6 +98,13 @@ export const LADDER_CAUSE_MAP = {
     kind: 'latch', effect: { kind: 'cap', cap: 'advise' }, notice: 'item',
     spec: 'an invariant-monitor violation (Table 7.5a, §10.4)',
   },
+  // The act catalogue A (W2 plan w2-act-catalogue.md question 3): raised by the gate runner through `raiseLatch` when step 10's
+  // ceiling half refuses `act-ceiling`, unless one stands. Before W3 the effective rung is at most `advise`, so the cap changes
+  // nothing a session sees; the evidence is kept and the operator sees and clears it.
+  'act-ceiling-hit': {
+    kind: 'latch', effect: { kind: 'cap', cap: 'advise' }, notice: 'none',
+    spec: 'an act ceiling hit (Table 7.5a, §7.5)',
+  },
   'no-witness-since-boot': {
     kind: 'condition', effect: { kind: 'cap', cap: 'advise' }, notice: 'none',
     spec: "since boot, no witness off the server's volume has answered (Table 7.5a, §7.6)",
