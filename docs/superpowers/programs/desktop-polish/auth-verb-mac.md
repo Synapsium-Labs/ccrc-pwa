@@ -454,6 +454,76 @@ Two reds were this wave's, and both are fixed in one round on the coordinator's 
   The real case prints the value's length and whether it is all digits, never the value; a value outside the rule
   there goes to the coordinator, and the rule is not widened here.
 
+### 4.7 Fix round 2: what the runs on `8871ace2a3` found
+
+The PR's fast run (46053756796) was green. The second full run (46053868645, the coordinator's, macOS on) was green on
+every Linux leg and red on all eight macOS shards, none cancelled; nothing was re-run.
+
+- **The real launchd case passed** ("on, then off, through launchd", shard 1). The job's own environment block held the
+  same four keys as the first run, `OSLogRateLimit`, `PATH`, `HOME` and `XPC_SERVICE_NAME`, and no fifth; the
+  `OSLogRateLimit` value was 2 bytes, all digits, inside the rule. The other sections and the two `getenv` answers were
+  as in section 2.2.
+- **The nine rows of section 4.6:** seven passed (`is idempotent`, `the four lines mean, to the SERVER, ...`, `removes
+  exactly what on wrote`, `leaves ccrc.env plain to the Mac's reader ...`, and the SIGINT, SIGTERM and SIGHUP rows). Two
+  were red: "a signal after the copy is made and before the write" and "a signal as the proven run removes its copy".
+- **Four rows were this wave's, both causes in fixtures.**
+  - The two signal rows and "a failed proof whose copy cannot be moved back, with the re-proof passing" plant `cp`, `mv`
+    and `rm` stubs that passed through to `/usr/bin/<tool>`, where a Mac has none of the three
+    (`/usr/bin/mv: No such file or directory`). The stub lines came from main; they ran on Linux only until this wave
+    let the verb act on a Mac. Every stub of the file now reaches its tool through one lookup, `realTool` (`command -v`,
+    as the file's other stubs did), in six places: the three that failed, the two `rm` stubs whose cases pass without
+    reaching it, and the restart stub's `mv`, which a Mac has at `/bin`. A new case reads the file as text and finds no
+    stub that runs a fixed `/bin`, `/usr/bin`, `/sbin` or `/usr/sbin` path with an argument (a shell aside), and a second
+    case shows the reader catches the three shapes that went red.
+  - Doctor core-auth's "on a loopback-only server box the dark remedy is ccrc auth on" gave the hand route on the Mac.
+    Doctor runs under the fixture's contained PATH, and on a Mac the job compare asks the installer's writer,
+    `_inst_plist_server`, for the bytes it expects; the writer prints them through `cat`, which that PATH lacks, so the
+    compare answered not measured and the verb was not offered (reproduced here on a scratch home with only the stub
+    directory on PATH: not measured without `cat`, the verb offered with it). The fixture now stubs `cat` beside its
+    `cmp` stub, for the same reason. **A known behaviour, not a defect:** on a box whose PATH lacks `cat`, doctor (and
+    install's gate line) cannot print the job the installer writes, so it does not offer the verb and gives the hand
+    route; not measured is the safe answer there.
+- **Mutants**, in the scratch worktree, the copy put back and compared: `realTool` answering a path that does not exist
+  (the Mac's shape for `/usr/bin/<tool>`) reds five rows under both platforms of the suite (ten results): the three the
+  Mac showed, and the two whose stubs reach the tool only there, "a failed proof whose removal of the file this run
+  created fails, with the re-proof passing" (an `rm` stub) and "puts the file back when the restarted console does not
+  prove sign-in on (down)" (the restart stub's `mv`); one stub put back to `exec /usr/bin/mv` reds the text guard,
+  naming its line. The `cat` stub's row runs on a Mac only (the fixture
+  plants the job there alone); its evidence here is the scratch trace above, and the third full run measures it.
+- **The shell ratchet** on the fast run: `ccd/ccrc: 59 findings, pinned at 62` (SC2034 12, where the pin held 15; every
+  other code at its pin). The ratchet asks for the entry to come down, and `server/test/shellcheck-baseline.json` was
+  unclaimed and is not one of the four gate-code files, so its `ccd/ccrc` entry is now 59, the ratchet's own line.
+- **macOS reds that are not this wave's** (coordinator ruling 40277: listed, not chased). Runs: R1 the first full run
+  (46033893311, on `05a0859f6b`; its shard 7 was cancelled), R2 the second (46053868645, on `8871ace2a3`), D1 main's
+  daily (45933630761, on `3fda0fc9b1`, 2026-11-27), D2 main's daily of 2026-11-26 (45748314113). The reason for every row
+  is the same: no file of this wave is named by it, and none of it calls a helper this wave changed.
+
+| File | Rows red in R2 | Runs that showed it red | Not this wave's |
+|---|---|---|---|
+| `testbox-admin-acts` | 28 | R2, D1 | no file of this wave; its verb sources `ccd/ccrc` but calls none of this wave's helpers |
+| `testbox-admin-user-writes` | 18 | R1, R2, D1 | no file of this wave |
+| `testbox-admin-key-rotate` | 17 | R1 (16), R2, D1 | no file of this wave |
+| `ccd-launch-profile` | 14 | R1, R2, D1 | no file of this wave |
+| `ccd-route-holddown` | 13 | R1, R2, D1 | no file of this wave |
+| `ccd-fresh-pick` | 8 | R1, R2, D1 | no file of this wave |
+| `overlord-read` | 8 | R1, R2, D1 | no file of this wave |
+| `overlord-read-context` | 6 | R1, R2, D1 | no file of this wave |
+| `history-quiz-unattended` | 2 | R1, R2, D1 | no file of this wave |
+| `ccrc-api` | 2 | R1, R2 | no file of this wave (a code point past U+10FFFF) |
+| `typecheck-tests` | 2 | R2 | no file of this wave (the pwa typecheck ran out of heap) |
+| `ccrc-doctor-core-auth` | 1 | R1, R2, D1 | "a CCRC_HOST the unit reader cannot decide": the Mac's bash reader makes that line not measured, with or without this wave |
+| `ccrc-install-landing` | 1 | R1, R2, D1 | the same row, at install's gate line |
+| `ccd-route-degrade` | 1 | R1, R2, D2 | no file of this wave |
+| `ccd-skill-ensure` | 1 | R1, R2, D2 | no file of this wave |
+| `delivery-drive` | 1 | R1, R2 | no file of this wave (a key the Mac adds to an empty environment) |
+| `models-probe` | 1 | R2, D1 | no file of this wave |
+| `testbox-admin-connect-retry` | 1 | R2, D1 | no file of this wave |
+| `ccd-docs-folder`, `ccd-docs-folder-read`, `ccd-hibernate-roll`, `ccd-inflight`, `ccd-route-model-id`, `ccd-tick-budget`, `ccrc-doctor-quiz`, `inflight-manifest`, `overlord-read-scope`, `session-hook-precompact-refuse` | 1 each | R1, R2, D1 | no file of this wave |
+
+  A correction to the mail of the second run: `testbox-admin-acts`, `models-probe` and `testbox-admin-connect-retry` were
+  called first measured on a Mac there. They are red on D1 too, the same rows; R1 never reached them, because its shard 7
+  was cancelled.
+
 ## 5. Notes
 
 - `ccd/ccrc` is held by claim 7531 for #3478. Its holder said yes (mail 39670) to this exact change of the file
@@ -472,7 +542,10 @@ Two reds were this wave's, and both are fixed in one round on the coordinator's 
   change, as measured), under claim 7602, so the case now shows the Mac reach check is reached.
 - Growth: `ccd/ccrc` grows by 131 code lines against the merge-base (26 of them Part 1's, 9 fix round 1's key table),
   past the per-PR limit of 40, under D-9158's waiver (`server/test/growth-waivers/D-9158-ccd-ccrc.json`, its limit
-  the measured 131).
+  the measured 131). The nine are the cost of the coordinator's ruling on the fourth key (mail 40092), not growth of
+  this wave's own: the table's function, `_auth_job_env_ok`, eight lines, and the one line of the environment loop that
+  calls it. The table's comment counts no line. The coordinator accepted 131 as the waiver's figure in mail 40130.
+  Fix round 2 changes no line of `ccd/ccrc`.
 
 - One shell call of this wave was refused by the session hook: a Python heredoc rewriting two blocks of this wave's own
   test file, whose text named fixture passphrase file names; no file that guard protects was its target. It was

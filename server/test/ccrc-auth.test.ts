@@ -128,10 +128,16 @@ beforeAll(async () => {
 });
 afterAll(async () => { await new Promise<void>((r) => server.close(() => r())); });
 
+/** The real command where this box keeps it, for a stub that passes through to it: a Mac has cp, mv and rm in /bin, a
+ *  Linux box in /usr/bin too (wave 193 fix round 2: three stubs that named /usr/bin went red on a real Mac). Every stub
+ *  in this file names its system tool through this lookup; the guard case below reads the file for a fixed path. */
+const realTool = (cmd: string): string =>
+  spawnSync('/bin/sh', ['-c', `command -v ${cmd}`], { encoding: 'utf8' }).stdout.trim() || `/usr/bin/${cmd}`;
+
 /** The restart, as either stub plays it: the server reading its env file. */
 const RESTART_ARM = [
   '    plan="$HOME/restart-plan"; next=""',
-  '    if [ -s "$plan" ]; then next=$(head -n 1 "$plan"); tail -n +2 "$plan" > "$plan.n"; /bin/mv "$plan.n" "$plan"; fi',
+  `    if [ -s "$plan" ]; then next=$(head -n 1 "$plan"); tail -n +2 "$plan" > "$plan.n"; ${realTool('mv')} "$plan.n" "$plan"; fi`,
   '    [ "$next" != fail ] || exit 1',
   '    if [ -z "$next" ]; then',
   '      if grep -qx "CCRC_AUTH=on" "$HOME/.ccrc/ccrc.env" 2>/dev/null; then next=armed; else next=off; fi',
@@ -706,7 +712,7 @@ onEach('ccrc auth off', () => {
     spawnSync('rm', ['-f', envFile(b.home)]);
     writeFileSync(join(b.home, 'restart-plan'), 'fail\nfail\n');
     mkdirSync(join(b.home, '.local', 'bin'), { recursive: true });
-    writeFileSync(join(b.home, '.local', 'bin', 'rm'), '#!/bin/sh\ncase "$*" in *"/.ccrc/ccrc.env") exit 1 ;; esac\nexec /usr/bin/rm "$@"\n',
+    writeFileSync(join(b.home, '.local', 'bin', 'rm'), `#!/bin/sh\ncase "$*" in *"/.ccrc/ccrc.env") exit 1 ;; esac\nexec ${realTool('rm')} "$@"\n`,
       { mode: 0o755 });
     const r = await runTty(b.home, ['auth', 'on']);
     expect(r.code, r.out).toBe(1);
@@ -730,7 +736,7 @@ onEach('ccrc auth off', () => {
     writeFileSync(join(b.home, '.local', 'bin', 'curl-front'), loopbackCurlFront(realCurl), { mode: 0o755 });
     writeFileSync(join(b.home, '.local', 'bin', 'curl'), `#!${BASH}\nargs=(); for a in "$@"; do args+=("\${a//127.0.0.1:7788/127.0.0.1:${PORT}}"); done\n`
       + 'exec "$(dirname "$0")/curl-front" "${args[@]}"\n', { mode: 0o755 });
-    writeFileSync(join(b.home, '.local', 'bin', 'rm'), '#!/bin/sh\ncase "$*" in *"/.ccrc/ccrc.env") exit 1 ;; esac\nexec /usr/bin/rm "$@"\n',
+    writeFileSync(join(b.home, '.local', 'bin', 'rm'), `#!/bin/sh\ncase "$*" in *"/.ccrc/ccrc.env") exit 1 ;; esac\nexec ${realTool('rm')} "$@"\n`,
       { mode: 0o755 });
     const r = await runTty(b.home, ['auth', 'on']);
     expect(r.code, r.out).toBe(1);
@@ -744,7 +750,7 @@ onEach('ccrc auth off', () => {
     const b = box('ccrc-auth-copyback-mvfails-', portLines());
     writeFileSync(join(b.home, 'restart-plan'), 'down\noff\n');
     mkdirSync(join(b.home, '.local', 'bin'), { recursive: true });
-    writeFileSync(join(b.home, '.local', 'bin', 'mv'), '#!/bin/sh\ncase "$*" in *ccrc.env.auth-restore.*) exit 1 ;; esac\nexec /usr/bin/mv "$@"\n',
+    writeFileSync(join(b.home, '.local', 'bin', 'mv'), `#!/bin/sh\ncase "$*" in *ccrc.env.auth-restore.*) exit 1 ;; esac\nexec ${realTool('mv')} "$@"\n`,
       { mode: 0o755 });
     const r = await runTty(b.home, ['auth', 'on']);
     expect(r.code, r.out).toBe(1);
@@ -1512,7 +1518,7 @@ onEach('ccrc auth: a signal in the proof window (review 3934 F3)', () => {
     const before = bytes(envFile(b.home));
     // A cp that makes the copy, then waits, so the signal lands between the copy and the rename.
     mkdirSync(join(b.home, '.local', 'bin'), { recursive: true });
-    writeFileSync(join(b.home, '.local', 'bin', 'cp'), '#!/bin/sh\n/usr/bin/cp "$@" || exit $?\n'
+    writeFileSync(join(b.home, '.local', 'bin', 'cp'), `#!/bin/sh\n${realTool('cp')} "$@" || exit $?\n`
       + 'case "$*" in *auth-restore*) : > "$HOME/cp-done"; sleep 3 ;; esac\n', { mode: 0o755 });
     const { p, done } = startTty(b.home, ['auth', 'on']);
     await waitFor(() => existsSync(join(b.home, 'cp-done')));
@@ -1532,7 +1538,7 @@ onEach('ccrc auth: a signal in the proof window (review 3934 F3)', () => {
     mkdirSync(join(b.home, '.local', 'bin'), { recursive: true });
     writeFileSync(join(b.home, '.local', 'bin', 'rm'), '#!/bin/sh\n'
       + 'case "$*" in *auth-restore*) [ -e "$HOME/rm-signalled" ] || { : > "$HOME/rm-signalled"; kill -TERM "$PPID"; } ;; esac\n'
-      + 'exec /usr/bin/rm "$@"\n', { mode: 0o755 });
+      + `exec ${realTool('rm')} "$@"\n`, { mode: 0o755 });
     const r = await runTty(b.home, ['auth', 'on']);
     expect(existsSync(join(b.home, 'rm-signalled'))).toBe(true);
     expect(r.code, r.out).toBe(130);
@@ -1808,6 +1814,32 @@ describe('ccrc auth: the closed form carries no counted bound a Mac cannot match
     const HELD = '[a value this verb does not print]';
     for (const n of [1, 255, 256, 1024]) expect(said('a'.repeat(n)), `${n} bytes`).toEqual({ rc: 0, out: 'a'.repeat(n) });
     for (const v of ['a'.repeat(1025), '', 'a b', `a\x1b[2J`]) expect(said(v), JSON.stringify(v.slice(0, 8))).toEqual({ rc: 1, out: HELD });
+  });
+});
+
+// Wave 193 fix round 2: three rows were red on a real Mac because their stubs passed through to /usr/bin/<tool>, where a
+// Mac has none of cp, mv and rm. A stub reaches its system tool through `realTool`, the lookup, never a fixed path.
+describe('ccrc auth: every stub in this file reaches its system tool by lookup (wave 193 fix round 2)', () => {
+  // A fixed /bin, /usr/bin, /sbin or /usr/sbin path run with an argument from the stub's shell; a shell itself is not a
+  // tool a stub passes through to.
+  const FIXED = /\/(?:usr\/)?s?bin\/([A-Za-z0-9_.-]+) +"?\$/g;
+  const fixedIn = (text: string): string[] => {
+    const hits: string[] = [];
+    text.split('\n').forEach((line, i) => {
+      for (const m of line.matchAll(FIXED)) if (m[1] !== 'sh' && m[1] !== 'bash') hits.push(`${i + 1}: ${m[0]}`);
+    });
+    return hits;
+  };
+  it('no stub ends in a fixed absolute path to a system tool', () => {
+    expect(fixedIn(readFileSync(fileURLToPath(import.meta.url), 'utf8'))).toEqual([]);
+  });
+  it('the reader sees the shapes that went red, and passes the lookup and a shell', () => {
+    const p = (...seg: string[]): string => ['', ...seg].join('/');
+    expect(fixedIn(`exec ${p('usr', 'bin', 'rm')} "$@"`)).toHaveLength(1);
+    expect(fixedIn(`${p('usr', 'bin', 'cp')} "$@" || exit $?`)).toHaveLength(1);
+    expect(fixedIn(`next=x; ${p('bin', 'mv')} "$plan.n" "$plan"`)).toHaveLength(1);
+    expect(fixedIn('`exec ${realTool(\'rm\')} "$@"`')).toEqual([]);
+    expect(fixedIn(`exec ${p('bin', 'sh')} "$0"`)).toEqual([]);
   });
 });
 

@@ -106,6 +106,10 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     }
     // The compare runs `cmp`, which a box has (diffutils) and doctor's contained PATH does not: the real one, by stub.
     stub(home, 'cmp', 'exec /usr/bin/cmp "$@"');
+    // On a Mac the compare asks the job's writer for its bytes, and the writer runs `cat`, which a box has (coreutils)
+    // and doctor's contained PATH does not: the real one, by stub (wave 193 fix round 2; without it, not measured).
+    const realCat = spawnSync('/bin/sh', ['-c', 'command -v cat'], { encoding: 'utf8' }).stdout.trim() || '/bin/cat';
+    stub(home, 'cat', `exec ${realCat} "$@"`);
     return home;
   };
 
