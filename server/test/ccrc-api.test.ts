@@ -1354,6 +1354,15 @@ describe('a query key rides only if its row declared it', () => {
     expect(seen).toHaveLength(0);
     expect(r.stdout).toContain('bad-query');
   });
+  // The read's one caller is this row. A box with no coordination store answers the table's 501 for `not-configured`
+  // (D-5381): the session reading a frame gets the body, the status line and exit 0, as for every answer, and takes the word.
+  it('the frames read on a box with no store: the 501 body as it came, its status line, exit 0', async () => {
+    reply = { code: 501, body: '{"ok":false,"error":"not-configured"}' };
+    const r = await run(['testbox', 'frames', '--build', '2.1.332']);
+    expect(r.status).toBe(0);
+    expect(r.stdout.trim()).toBe('{"ok":false,"error":"not-configured"}');
+    expect(r.stderr).toMatch(/^http 501$/m);
+  });
   it('another row keeps SAFE_RE: a dot in its value is refused', async () => {
     const r = await run(['landing', 'show', '--project', 'a.b']);
     expect(seen).toHaveLength(0);

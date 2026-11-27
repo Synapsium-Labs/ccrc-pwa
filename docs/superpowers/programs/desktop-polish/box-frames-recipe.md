@@ -101,6 +101,11 @@ removed, so a colour change inside a key cannot split it past the shapes.
 - **frames-nudge-held-once**: the mail notice turn's text is written once in the shared case file, because the agent cannot
   import server code. A server case holds it equal to `renderMailNudge` for the neutral id, the `DELIVERY_PART_COUNT`
   precedent. The driver types the product's own render.
+- **frames-sgr-own-definition**: the box frames shape rule keeps its own SGR stripper beside the pane reader's
+  (`pane/dialog.ts`, ARCH-63), one copy for every box frames file (`shared/framesResult.ts#stripFrameSgr`). The reason is a
+  boundary and another host: the shape rule decides which escapes may leave the test box, it runs in the box's agent as well
+  as on the server (an L0 file cannot import `server/src`), and it also takes SGR's colon sub-parameter form. The ARCH-63
+  guard names it as the one holder beside the pane reader.
 
 ## 7. Evidence
 
@@ -152,10 +157,54 @@ fails) and was replaced by `v in map`, which the own-property cases kill.
   - `tmux-socket-census`: no raw `'tmux'` call outside the adapter; the frame's cursor is read through
     `Tmux.cursor` (`list-panes`, a granted verb, the active row).
   - `single-definition/core-vocab`: a new coordination store file joins the handle holders.
-- **Not run here:** the pin suite whose name names the approval signing (the approval-surface guard refuses a command
-  naming it), and the test projects' compile guard (it needs the console's packages, not installed in this tree). Both
-  are read from the exact head's CI run.
-- **Load-bound here, read from CI:** `retire-executors-pin.test.ts` timed out on this box under load, on this branch and
-  on a clean checkout of main alike (#3484); a hosted run passes it. Its result on the exact head is read from CI by name.
+- **What the PR's fast run caught that the local guard batch had not run** (the first full run, so the suite line is red):
+  - `delivery-lane-capture`: the frames pass takes a pass that sends no delivery job, so the delivery lane's own file
+    counts delivery jobs; the frames lane's turn is pinned in its own file.
+  - `lane-draft-never-blocks`: every `sendPrompt` call has its row in the call-site table, the frames step's included.
+  - `injected-prompts-characterization`: the typers' caller lists name the frames step, the moved line loop
+    (`typeComposedLines`) and the computed `STASH_KEY` sites.
+  - `pane-sgr-guard-characterization`: one SGR stripper; the box frames rule's own is named as its one neighbour, with
+    the reason above.
+  - `testbox-pins`: a test that plants the fleet host's box settings joins the capture holders.
+  - `refusal-status`: a new route answers its refusals through `refuseRoute`, so its own words take a row in
+    `shared/refusal.ts` (`FRAMES_READ_REFUSALS`), and `not-configured` answers the table's 501.
+  - `coord-token`: a box-token check composed for a route its own file registers is counted, and the helper's call is
+    that route's registration (held to its file).
+- **The three guards the fast run's fixes widen** (the coordinator's ask, 39194), each with what it held, what it holds,
+  and the mutant that reds it (each measured on this branch, one file a run, and red):
+  - `coord-token` (the box-token lane scan). Before: a `checkMailToken` call's owner was the last `app.get`/`app.post`
+    registration above it in `server.ts`, `coord/routes.ts` or `update/routes.ts`, and the scan counted 19 calls. Now: a
+    hand-kept `HELPER_ROUTES` table adds one registration kind, a helper call `registerX(app` whose row names the route
+    and the file that registers it, and a new case holds each row to its file (`app.get('/api/testbox/frames'` in
+    `testboxFramesRoutes.ts`). Of the 40 helper calls in those three files, it sees exactly one,
+    `registerTestboxFramesRoute(app` in `coord/routes.ts`, and ignores the rest. Of the 20 calls, only the frames
+    check's owner moves (from `GET /api/testbox`, the status read above it, to its own route), and the 19 it saw before
+    keep their owners. No door it saw before is lost. None of the files fixes 6 and 7 touch is one of the four gate-code
+    files. Mutants: the table's row deleted reds the lane case (the frames check is owned by `GET /api/testbox`
+    again); the row's file pointed at `testboxAdmin.ts` reds the new case.
+  - `pane-sgr-guard-characterization` (ARCH-63, one SGR stripper). Before: only `pane/dialog.ts` may declare one, across
+    `server/src`, `shared`, `pwa/src` and `agent/src`. Now: `shared/framesResult.ts` is named beside it
+    (`LEGITIMATELY_DIFFERENT`), the one copy every box frames file strips through (the two copies the branch had are one).
+    Why the pane reader's cannot be imported there: `shared/framesResult.ts` is L0, and the ring rule lets a `shared/*.ts`
+    file import only its `./` siblings (`rings/shared-imports.test.ts`, D-6045), while the reducer also runs in the test
+    box's agent, which builds from `agent/src` and `shared` and never from `server/src`. It is the boundary of what may
+    leave the test box, and it takes SGR's colon sub-parameter form, which the pane reader's does not. Mutants: the
+    named holder removed reds the guard; a second stripper added to `shared/framesReduce.ts` reds it; and the pane
+    reader's imported into `shared/framesResult.ts` reds `rings/shared-imports` (`imports '../server/src/pane/dialog.js'`).
+  - `refusal-status` (the inline-send ratchet, D-5381). Before: the read sent seven computed-status refusals inline. Now:
+    each goes through `refuseRoute`, at the one status the table gives its word. The read's own four words take a
+    `FRAMES_READ_REFUSALS` row in `shared/refusal.ts`, each at the status the read sent before (400, 400, 404, 503), and
+    the shared words `unauthenticated` and `bad-request` keep 401 and 400. One answer changes: `not-configured` (a server
+    with no coordination store) is 501, the table's status for the word, where the read sent 503. The read has one
+    caller, the closed client's `testbox frames` row (`ccd/ccrc-api`), and a session reads frames through it
+    (`shared/framesFixture.ts`'s flow). The client prints any HTTP answer's body as it came, writes `http <code>` on
+    stderr and exits 0, so the caller sees `{"ok":false,"error":"not-configured"}`, `http 501` and exit 0, and acts on
+    the word. The PWA does not call the read. Pinned twice: the read's own suite holds `[501, 'not-configured']`, and
+    the client's suite holds the body, the status line and exit 0 for a 501. Mutant: `not-configured` sent inline at
+    503 reds the read's store case and three ratchet cases.
+- **Not run here, read from CI on 8ccde82251, each passed:** the pin suite whose name names the approval signing (the
+  approval-surface guard refuses a command naming it, 5 cases), the test projects' compile guard (it needs the console's
+  packages, not installed in this tree, 12 cases), and `retire-executors-pin.test.ts` (230 cases), which timed out on this
+  box under load, on this branch and on a clean checkout of main alike (#3484).
 - **Packets:** one went to each holder of a file this wave edits (`send.ts`, `agent-protocol.ts`, the coordination store,
   port and schema, the gate and its suite, `server.ts`), and three to the capture owner. Each edit followed its yes.
