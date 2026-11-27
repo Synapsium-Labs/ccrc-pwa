@@ -4,13 +4,13 @@
 // listen that fails turns the tier off and leaves the console up. Every host is under a reserved name or on loopback.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import http from 'node:http';
+import http, { STATUS_CODES } from 'node:http';
 import net from 'node:net';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildServer, type Deps } from '../src/server.js';
 import {
-  artifactConfig, artifactMethodAllowed, clientErrorAction, clientErrorStatus, frameworkErrorStatus, hostFence, hostMatches, namesArtifactHost, type ArtifactConfig,
+  artifactConfig, artifactMethodAllowed, clientErrorAction, clientErrorStatus, frameworkErrorPhrase, frameworkErrorStatus, hostFence, hostMatches, namesArtifactHost, type ArtifactConfig,
 } from '../src/artifacts/policy.js';
 import {
   ARTIFACT_NOT_FOUND_BODY, buildArtifactServer, createArtifactListenerState, listenArtifactServer,
@@ -670,6 +670,13 @@ describe('the console\'s early answers echo nothing (X5 A3, from the A1 reviews)
     for (const other of ['FST_ERR_ASYNC_CONSTRAINT', '', undefined, null, 400, {}]) expect(frameworkErrorStatus(other), String(other)).toBe(500);
   });
 
+  it('frameworkErrorPhrase: each status keeps the runtime\'s own reason phrase (X5 A3 fix round 1)', () => {
+    expect(frameworkErrorPhrase(400)).toBe('Bad Request');
+    expect(frameworkErrorPhrase(414)).toBe('URI Too Long');
+    expect(frameworkErrorPhrase(500)).toBe('Internal Server Error');
+    for (const status of [400, 414, 500] as const) expect(frameworkErrorPhrase(status), String(status)).toBe(STATUS_CODES[status]);
+  });
+
   it('the console answers a malformed percent-escape and an over-long parameter with Fastify\'s body less its message, before the fence', async () => {
     const app = await openConsole(onConfig(), true);
     toClose.push(app);
@@ -683,7 +690,7 @@ describe('the console\'s early answers echo nothing (X5 A3, from the A1 reviews)
     const long = 'p'.repeat(150);
     const over = await app.inject({ method: 'GET', url: `/api/docs/${long}/tree`, headers: { host: CONSOLE_HOST } });
     expect(over.statusCode).toBe(414);
-    expect(over.json()).toEqual({ error: 'Bad Request', code: 'FST_ERR_MAX_PARAM_LENGTH', statusCode: 414 });
+    expect(over.json()).toEqual({ error: 'URI Too Long', code: 'FST_ERR_MAX_PARAM_LENGTH', statusCode: 414 });
     expect(over.body).not.toContain(long);
   });
 });

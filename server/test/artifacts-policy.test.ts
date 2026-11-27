@@ -85,8 +85,10 @@ describe('artifact page policy (X5 A3.2)', () => {
       expect(cacheControl(cacheKind(artifactMime(name).mime), 7200), name).toBe('no-store');
     }
     // Every row of the table: a JavaScript type is a script, HTML is html, anything else keeps the bounded private form.
+    // SVG is `html` too: a browser opens it as a script-running document (D-9149).
+    const SCRIPTED_DOCUMENTS = ['text/html', 'image/svg+xml'];
     for (const [ext, mime] of Object.entries(ARTIFACT_MIME)) {
-      const want = JS.includes(mime) ? 'script' : mime === 'text/html' ? 'html' : 'other';
+      const want = JS.includes(mime) ? 'script' : SCRIPTED_DOCUMENTS.includes(mime) ? 'html' : 'other';
       expect(cacheKind(mime), ext).toBe(want);
     }
     for (const m of ['application/wasm', 'model/gltf-binary', 'image/png', 'application/json', 'text/css', 'application/octet-stream']) {
@@ -96,6 +98,29 @@ describe('artifact page policy (X5 A3.2)', () => {
     expect(cacheKind('text/html')).toBe('html');
     expect(cacheControl('script', 0)).toBe('no-store');
     expect(cacheControl('script', 90)).toBe('no-store');
+  });
+
+  it('policy: a document that can run script is never stored (D-9149)', () => {
+    // The MIME Sniffing standard's HTML MIME type and XML MIME types, written here.
+    const SCRIPTED = [
+      'text/html', 'application/xhtml+xml', 'image/svg+xml', 'text/xml', 'application/xml', 'application/xslt+xml',
+    ];
+    for (const m of SCRIPTED) {
+      for (const spelled of [m, `${m.toUpperCase()}; charset=utf-8`]) {
+        expect(cacheKind(spelled), spelled).toBe('html');
+        expect(cacheControl(cacheKind(spelled), 7200), spelled).toBe('no-store');
+      }
+    }
+    for (const m of [
+      'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/x-icon', 'model/gltf+json', 'application/json', 'text/plain; x=+xml',
+    ]) {
+      expect(cacheKind(m), m).toBe('other');
+      expect(cacheControl(cacheKind(m), 7200), m).toBe('private, max-age=3600, immutable');
+    }
+    // End to end through the MIME table: an SVG file reaches no-store.
+    for (const name of ['a.svg', 'A.SVG']) {
+      expect(cacheControl(cacheKind(artifactMime(name).mime), 7200), name).toBe('no-store');
+    }
   });
 
   describe('policy: contentCsp equals the spec text', () => {

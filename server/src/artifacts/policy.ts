@@ -285,6 +285,16 @@ export function frameworkErrorStatus(code: unknown): 400 | 414 | 500 {
   return 500;
 }
 
+/** The fixed `error` words of the console's answer to a framework error: the runtime's own reason phrase for each status
+ *  `frameworkErrorStatus` can answer (Node's `http.STATUS_CODES`, and Fastify's default), so the console's 414 reads `URI Too
+ *  Long`, not `Bad Request`. A literal table, with no import of `node:http` here; the answer still echoes nothing of the path
+ *  (X5 A3 fix round 1, review 4050 A4). */
+export function frameworkErrorPhrase(status: 400 | 414 | 500): string {
+  if (status === 400) return 'Bad Request';
+  if (status === 414) return 'URI Too Long';
+  return 'Internal Server Error';
+}
+
 // ---- The availability read, the scope read and the mint (plan Task A2.3, spec 3.2) ----
 //
 // The console doors in `server/src/docs/routes.ts` (L4) decide NOTHING: every verdict below is this file's, and the route sends
@@ -633,11 +643,22 @@ const JAVASCRIPT_ESSENCES: ReadonlySet<string> = new Set([
   'text/javascript1.4', 'text/javascript1.5', 'text/jscript', 'text/livescript', 'text/x-ecmascript', 'text/x-javascript',
 ]);
 
-/** Which cache rule a served file takes, by its MIME type's essence (the type less any parameter, lower-cased): `html` for
- *  `text/html`, `script` for a JavaScript type a browser runs as a script, `other` for everything else (D-9145). */
+/** Whether a MIME type essence is an XML MIME type in the MIME Sniffing standard's sense: `text/xml`, `application/xml`, or any
+ *  essence whose SUBTYPE ends in `+xml` (`image/svg+xml`, `application/xhtml+xml`, `application/rss+xml`, ...). The caller passes
+ *  the essence, so a parameter such as `x=+xml` never reaches the test. The one place the tier names them (D-9149). */
+function isXmlEssence(essence: string): boolean {
+  if (essence === 'text/xml' || essence === 'application/xml') return true;
+  const subtype = essence.slice(essence.indexOf('/') + 1);
+  return essence.includes('/') && subtype.endsWith('+xml');
+}
+
+/** Which cache rule a served file takes, by its MIME type's essence (the type less any parameter, trimmed, lower-cased): `html`
+ *  for a document a browser opens and runs script in, which is the MIME Sniffing standard's HTML MIME type (`text/html`) and
+ *  every XML MIME type (an SVG, an XHTML page or an XSLT sheet run script on the content origin when opened as a document;
+ *  D-9149), `script` for a JavaScript type a browser runs as a script, `other` for everything else (D-9145). */
 export function cacheKind(mime: string): 'html' | 'script' | 'other' {
   const essence = mime.split(';')[0]!.trim().toLowerCase();
-  if (essence === 'text/html') return 'html';
+  if (essence === 'text/html' || isXmlEssence(essence)) return 'html';
   return JAVASCRIPT_ESSENCES.has(essence) ? 'script' : 'other';
 }
 
@@ -662,8 +683,9 @@ export function fetchFence(
   return h.site === 'same-origin' ? 'ok' : 'refused';
 }
 
-/** The browser cache rule (spec 5, "Browser cache", amended by D-9145): an HTML response is never cached, so a dead capability
- *  cannot start a page; a script is never cached either, so a worker's script fetch always reaches the network and the
+/** The browser cache rule (spec 5, "Browser cache", amended by D-9145 and D-9149): a response of kind `html`, a document that can
+ *  run script (HTML or any XML type), is never cached, so a dead capability cannot start a page, nor can Back/Forward or a
+ *  reload replay one; a script is never cached either, so a worker's script fetch always reaches the network and the
  *  service-worker fence, whatever a browser does with `Vary` (D-9145); any other file is cached for the seconds the capability
  *  may still live, at most an hour, because a pin's bytes never change. `cacheKind` picks the kind from the MIME type. */
 export function cacheControl(kind: 'html' | 'script' | 'other', secondsLeft: number): string {
