@@ -8,7 +8,7 @@ import path, { join } from 'node:path';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { fixtureSecretLine } from './authFixtures.js';
 import { itLinux, itDarwin } from './platformFixtures.js';
-import { installDoctorHooks, REPO, CCRC_SRC, CHECKS_SRC, BASH, writeAuthSecret, unstub, shq, writeCcrcEnv, unitDirOf, writeUnitFile, removeUnitFile, sysCaddyfile, runDoctor, healthy, lineFor, expectUndecided, UnitEnvAnswer, remedyFor } from './ccrc-doctorFixture.js';
+import { installDoctorHooks, REPO, CCRC_SRC, CHECKS_SRC, BASH, writeAuthSecret, unstub, shq, stub, stubBin, writeCcrcEnv, unitDirOf, writeUnitFile, removeUnitFile, sysCaddyfile, runDoctor, healthy, lineFor, expectUndecided, UnitEnvAnswer, remedyFor } from './ccrc-doctorFixture.js';
 
 // Each case's homes go when the case ends, not in a file-wide end sweep (R100, review 518's S1): that sweep overran vitest's 20 s
 // hook timeout on the one file this family was split from. Registered before `installDoctorHooks()`'s root `afterEach` (the codex
@@ -97,6 +97,8 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     mkdirSync(join(home, 'ccrc', 'deploy'), { recursive: true });
     copyFileSync(join(REPO, 'deploy', 'ccrc.service'), join(home, 'ccrc', 'deploy', 'ccrc.service'));
     if (process.platform !== 'darwin') copyFileSync(join(REPO, 'deploy', 'ccrc.service'), join(unitDirOf(home), 'ccrc.service'));
+    // The compare runs `cmp`, which a box has (diffutils) and doctor's contained PATH does not: the real one, by stub.
+    stub(home, 'cmp', 'exec /usr/bin/cmp "$@"');
     return home;
   };
 
@@ -184,6 +186,7 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
       writeFileSync(u, readFileSync(u, 'utf8').replace('RestartSec=3', 'RestartSec=4'));
     }],
     ["the tree's own deploy/ccrc.service missing", (h: string): void => rmSync(join(h, 'ccrc', 'deploy', 'ccrc.service'), { force: true })],
+    ['no cmp on PATH, so the compare cannot be made', (h: string): void => rmSync(join(stubBin(h), 'cmp'), { force: true })],
   ] as const)('wave 190: where the installed unit is not provably the installer\'s, the dark remedy does not offer ccrc auth: %s',
     (_name, plant) => {
       const home = unexposedBox('ccrc-doctor-auth-notown-');

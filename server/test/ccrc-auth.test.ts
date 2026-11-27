@@ -1011,7 +1011,7 @@ describe('ccrc auth: the proof window\'s signal handler, line by line (review 39
   it('H2 written, the copy already moved back (just after the failed proof\'s restore): no copy named, one restart', () => {
     const r = handler({ state: 'written', keep: 0, dest: OLD, copy: null });
     expect(r).toMatchObject({ rc: 130, dest: OLD, copy: null, restarts: 1 });
-    expect(r.err).toMatch(/the copy this run kept of .*ccrc\.env is gone, which only this run's own restore does, so .*ccrc\.env is taken to be back on its old file, and ccrc\.service was restarted once on it\. That was not proven/);
+    expect(r.err).toMatch(/the copy this run kept of .*ccrc\.env is gone, which in this run only its own restore does, so .*ccrc\.env is taken to be back on its old file, and ccrc\.service was restarted once on it\. That was not proven/);
     expect(r.err).not.toMatch(/could NOT|auth-restore|byte for byte/);
   });
 

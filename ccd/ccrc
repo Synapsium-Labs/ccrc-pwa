@@ -6330,7 +6330,8 @@ _ccrc_operator_only() {   # <the verb's words, e.g. "auth on">
 #   update-exposure check asks (no exposure artifact, CCRC_HOST measured a loopback address), and `_auth_unit_sources`,
 #   the unit's other sources of its environment, none of which may name a key (or be a drop-in, or an env file beyond
 #   the two) and all of which must be listable, and `_auth_unit_own`: on Linux the unit is the tree's own file byte for
-#   byte, as systemd loaded it (review 3971 R1); 5. every key read as ccrc.service receives it (`_box_unit_env`, the
+#   byte, and the file systemd says it loaded, as it is now (review 3971 R1, wave 190 F1); 5. every key read as
+#   ccrc.service receives it (`_box_unit_env`, the
 #   two path keys through `_box_path_for`), and an undecidable one refuses; 6. on: CCRC_HOST unset, 127.0.0.1 or
 #   localhost, no foreign CCRC_RP_ID/CCRC_ORIGIN/CCRC_COOKIE_INSECURE, and a USABLE passphrase (the hasher's `--check`,
 #   doctor's own question, which prints no byte of the secret) — never the other order: a gate armed with no passphrase
@@ -6357,8 +6358,9 @@ _auth_want() {   # <key> <port> -> the value `ccrc auth on` writes for it
 # in the unit directory given), is PROVABLY loopback-only (`_box_reach`: no evidence, CCRC_HOST measured), and is not
 # configured for another address (no CCRC_ORIGIN or CCRC_RP_ID other than what `on` writes, each measured; review 3934
 # A5: the typical gate-off box behind a proxy of its own, where the verb refuses). The readers `cmd_auth` refuses on,
-# asked as one yes for the words that name the verb: doctor's `auth` check, install's gate line. It does not ask the
-# unit's other sources (`_auth_unit_sources`), which needs the service manager: the verb refuses there itself, by name.
+# asked as one yes for the words that name the verb: doctor's `auth` check, install's gate line. It asks whether the
+# installed unit is the tree's file (`_auth_unit_cmp`, wave 190 A4), which needs no service manager; not the unit's
+# other sources (`_auth_unit_sources`) or what systemd loaded, which do: the verb refuses there itself, by name.
 # It clobbers `_box_unit_env`'s out-params, so a caller asks it first. It answers no on a Mac, where the verb refuses
 # (review 3971 R1(d), ruling B), so doctor and install give the hand route there.
 _auth_fits_here() {   # <unit dir>
@@ -6366,6 +6368,7 @@ _auth_fits_here() {   # <unit dir>
   [ "${CCD_OS:-linux}" != darwin ] || return 1
   [ ! -f "$BOX_ENV_FILE" ] || [ ! -r "$BOX_ENV_FILE" ] || role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
   [ "$role" != fleet ] && [ -f "$1/$(_box_unit_file ccrc.service)" ] || return 1
+  _auth_unit_cmp "$1" || return 1
   _box_reach "$1"
   [ "${#BRE_REASONS[@]}" -eq 0 ] && [ "$BRE_HOSTRC" -eq 0 ] || return 1
   _box_unit_env CCRC_PORT || return 1
@@ -6462,14 +6465,14 @@ _auth_unit_sources() {   # <unit dir>
 # Review 3971 R1 (the coordinator's ruling): the verb acts only on a service definition that is the installer's. On
 # Linux `_inst_units` and deploy.sh land the tree's deploy/ccrc.service unchanged, so the installed unit must be that
 # file byte for byte: an ExecStart= edit, or a line the reading above does not parse as systemd does (a space around
-# `=`, a continuation, an escape in a name), is a difference, and a difference refuses. systemd must have loaded the
-# file as it is now (NeedDaemonReload=no), or the restart applies something else. rc 0 the installer's, and loaded; rc
-# 1 not, AUO_WHY which and AUO_FIX the way on; rc 2 UNMEASURED, AUO_WHY the cause. A path is printed, never a difference.
+# `=`, a continuation, an escape in a name), is a difference, and a difference refuses. `_auth_unit_cmp` is that
+# compare, which needs no service manager, so `_auth_fits_here` asks it too (wave 190 A4). rc 0 the installer's; rc 1
+# not, AUO_WHY which and AUO_FIX the way on; rc 2 UNMEASURED, AUO_WHY the cause. A path is printed, never a difference.
 AUO_WHY=""; AUO_FIX=""
-_auth_unit_own() {   # <unit dir>
-  local udir="$1" uf tf out crc=0
+_auth_unit_cmp() {   # <unit dir>
+  local uf tf crc=0
   AUO_WHY=""; AUO_FIX=""
-  uf="$udir/$(_box_unit_file ccrc.service)"
+  uf="$1/$(_box_unit_file ccrc.service)"
   tf="$BOX_TREE_DIR/deploy/ccrc.service"
   if [ ! -f "$tf" ] || [ ! -r "$tf" ]; then
     AUO_WHY="$tf, the unit file ccrc installs, cannot be read, so whether $uf is that file was not measured"; return 2
@@ -6479,23 +6482,43 @@ _auth_unit_own() {   # <unit dir>
     || { AUO_WHY="cmp is not on PATH, so whether $uf is $tf was not measured"; return 2; }
   cmp -s -- "$tf" "$uf" || crc=$?
   case "$crc" in
-    0) ;;
+    0) return 0 ;;
     1) AUO_WHY="$uf is not the unit file ccrc installs ($tf), and this verb acts only on its own"
-       AUO_FIX="ccrc install, or an update, puts the shipped file back; or set the keys by hand (the README's 'The session gate')"
+       # Wave 190 A3: an update leaves a box already on its version alone unless forced; an install always lands it.
+       AUO_FIX="ccrc install puts the shipped file back and reloads systemd (an update does not, on a box already on its version); or set the keys by hand (the README's 'The session gate')"
        return 1 ;;
-    *) AUO_WHY="$uf could not be compared with $tf, so whether it is that file was not measured"; return 2 ;;
   esac
-  out="$(_plat_timeout 10 systemctl --user show ccrc.service -p NeedDaemonReload 2>/dev/null)" || out=""
-  case "$out" in
-    NeedDaemonReload=no) return 0 ;;
-    NeedDaemonReload=yes)
-      AUO_WHY="systemd has not loaded $uf as it is now (NeedDaemonReload=yes), so the restart would apply something other than the file this verb read"
-      AUO_FIX="run systemctl --user daemon-reload, then re-run"
-      return 1 ;;
-  esac
-  AUO_WHY="systemctl --user show did not say whether systemd loaded $uf as it is now (NeedDaemonReload), so what the restart would apply was not measured"
+  AUO_WHY="$uf could not be compared with $tf, so whether it is that file was not measured"; return 2
+}
+# The compare, then ONE read of what systemd loaded for the unit (wave 190 F1): the file (FragmentPath) must be the user
+# unit directory's own, made from no other source (SourcePath empty), and loaded as it is now (NeedDaemonReload=no), or
+# the restart applies something else: a unit of the same name earlier on the search path (the control directories, the
+# runtime transient directory, the early generators) passes the compare and the reload answer alike. systemd prints
+# the properties in its own order, so each is read by name; an empty or absent answer is unmeasured.
+_auth_unit_own() {   # <unit dir>
+  local uf out line need="" frag="" srcp=""
+  _auth_unit_cmp "$1" || return $?
+  uf="$1/$(_box_unit_file ccrc.service)"
+  out="$(_plat_timeout 10 systemctl --user show ccrc.service -p NeedDaemonReload -p FragmentPath -p SourcePath 2>/dev/null)" || out=""
+  while IFS= read -r line; do
+    case "$line" in
+      NeedDaemonReload=*) need="${line#*=}" ;; FragmentPath=*) frag="${line#*=}" ;; SourcePath=*) srcp="${line#*=}" ;;
+    esac
+  done <<< "$out"
   AUO_FIX="run systemctl --user daemon-reload, then re-run"
-  return 2
+  case "$need" in
+    no) ;;
+    yes) AUO_WHY="systemd has not loaded $uf as it is now (NeedDaemonReload=yes), so the restart would apply something other than the file this verb read"
+         return 1 ;;
+    *) AUO_WHY="systemctl --user show did not say whether systemd loaded $uf as it is now (NeedDaemonReload), so what the restart would apply was not measured"
+       return 2 ;;
+  esac
+  [ -n "$frag" ] || { AUO_WHY="systemctl --user show did not say which file systemd loaded for ccrc.service (FragmentPath), so what the restart would apply was not measured"; return 2; }
+  AUO_FIX="take that unit away (or what puts it there), run systemctl --user daemon-reload, then re-run; or set the keys by hand (the README's 'The session gate')"
+  [ "$frag" = "$uf" ] \
+    || { AUO_WHY="systemd loaded ccrc.service from $frag, not from $uf, the file this verb read (a unit of the same name earlier on its search path), so the restart would apply a file this verb did not read"; return 1; }
+  [ -z "$srcp" ] \
+    || { AUO_WHY="systemd made ccrc.service from $srcp (SourcePath), not from $uf alone, so the restart would apply something other than the file this verb read"; return 1; }
 }
 
 # The rewrite, as one awk pass in bytes (LC_ALL=C). A line is one of ours only when, after leading spaces and tabs,
@@ -6586,19 +6609,21 @@ _auth_restart_prove() {   # <armed|off> <host:port>
   return 1
 }
 
-# The proof window's signal handler (review 3934 F3, review 3971 R4). From just before the rename on, INT, TERM and HUP
-# put the original bytes back (its mode too) unless they are back already, restart the unit once on them, and say
-# plainly that the box is back on its old file and that this was not proven. It reads what is on disk, never where the
-# run had got to: a copy still there is not put back yet, a copy gone is back, and a restore that already failed
-# (AUTH_KEEP_BAK) is never reported as back. The state word moves before each file move. Globals, because a trap runs
-# wherever the shell is when the signal lands.
+# The proof window's signal handler (review 3934 F3, review 3971 R4, wave 190 A2). From just before the rewrite into the
+# temporary file on, INT, TERM and HUP put the original back (its mode too) unless it is back already, restart the unit
+# once on it, say what is on disk, and say plainly that this was not proven. It reads what is on disk, never where the
+# run had got to: a copy still there is put back; a copy gone, with no restore that failed, can in this run only have
+# been moved back by its own restore, so the file is TAKEN to be back, and said to be taken so; with no file before the
+# run, the one it wrote is removed, and no old file is named; and a restore that already failed (AUTH_KEEP_BAK) is never
+# reported as back. The state word moves to `written` before the rewrite into the temporary file, and to `proved`
+# before the copy is removed. Globals, because a trap runs wherever the shell is when the signal lands.
 #   pre      nothing is written yet: nothing changed.
-#   written  from just before the rename to the end of the last proof: put back if need be, restart, say so.
+#   written  from just before the rewrite to the end of the last proof: put back if need be, restart, say so.
 #   proved   the change is proven; the copy is all that is left, and the exit chain removes it.
 AUTH_SIG_STATE=""; AUTH_SIG_SUB=""; AUTH_SIG_DEST=""; AUTH_SIG_HAD=0; AUTH_SIG_MODE=""; AUTH_BAK=""; AUTH_KEEP_BAK=0
 _auth_on_signal() {
   trap '' INT TERM HUP
-  local how
+  local how what
   case "$AUTH_SIG_STATE" in
     written)
       if [ "$AUTH_KEEP_BAK" -eq 1 ]; then
@@ -6610,18 +6635,24 @@ _auth_on_signal() {
         exit 130
       fi
       if [ "$AUTH_SIG_HAD" -eq 1 ]; then
-        if [ -e "$AUTH_BAK" ] && { ! chmod -- "$AUTH_SIG_MODE" "$AUTH_BAK" 2>/dev/null || ! mv -f -- "$AUTH_BAK" "$AUTH_SIG_DEST" 2>/dev/null; }; then
-          AUTH_KEEP_BAK=1
-          echo "$PROG: auth $AUTH_SIG_SUB: stopped by a signal while proving the change, and $AUTH_SIG_DEST could NOT be put back: the previous file is kept at $AUTH_BAK, and $AUTH_SIG_DEST still holds this run's lines. Put it back (mv $AUTH_BAK $AUTH_SIG_DEST), then restart: $(_svc_restart_hint ccrc.service)" >&2
-          exit 130
+        what="the copy this run kept of $AUTH_SIG_DEST is gone, which in this run only its own restore does, so $AUTH_SIG_DEST is taken to be back on its old file"
+        if [ -e "$AUTH_BAK" ]; then
+          if ! chmod -- "$AUTH_SIG_MODE" "$AUTH_BAK" 2>/dev/null || ! mv -f -- "$AUTH_BAK" "$AUTH_SIG_DEST" 2>/dev/null; then
+            AUTH_KEEP_BAK=1
+            echo "$PROG: auth $AUTH_SIG_SUB: stopped by a signal while writing or proving the change, and $AUTH_SIG_DEST could NOT be put back: the previous file is kept at $AUTH_BAK, and $AUTH_SIG_DEST still holds this run's lines. Put it back (mv $AUTH_BAK $AUTH_SIG_DEST), then restart: $(_svc_restart_hint ccrc.service)" >&2
+            exit 130
+          fi
+          what="$AUTH_SIG_DEST is back on its old file, byte for byte"
         fi
       elif ! rm -f -- "$AUTH_SIG_DEST" 2>/dev/null; then
-        echo "$PROG: auth $AUTH_SIG_SUB: stopped by a signal while proving the change, and $AUTH_SIG_DEST, which this run created, could NOT be removed; remove it, then restart: $(_svc_restart_hint ccrc.service)" >&2
+        echo "$PROG: auth $AUTH_SIG_SUB: stopped by a signal while writing or proving the change, and $AUTH_SIG_DEST, which this run created, could NOT be removed; remove it, then restart: $(_svc_restart_hint ccrc.service)" >&2
         exit 130
+      else
+        what="$AUTH_SIG_DEST is gone again, as before this run, which found no such file"
       fi
       how="restarted once on it"
       _svc_restart ccrc.service || how="not restarted on it (the restart command failed: $(_svc_restart_hint ccrc.service))"
-      echo "$PROG: auth $AUTH_SIG_SUB: stopped by a signal while proving the change: $AUTH_SIG_DEST is back on its old file, byte for byte, and ccrc.service was $how. That was not proven: ccrc doctor's auth check reads what this box runs now." >&2 ;;
+      echo "$PROG: auth $AUTH_SIG_SUB: stopped by a signal while writing or proving the change: $what, and ccrc.service was $how. That was not proven: ccrc doctor's auth check reads what this box runs now." >&2 ;;
     proved)
       echo "$PROG: auth $AUTH_SIG_SUB: stopped by a signal after the change was proven: it stands, and nothing else was changed." >&2 ;;
     *)
@@ -6710,7 +6741,8 @@ cmd_auth() {
     || _ccrc_die "auth $sub: $AUS_WHY, so whether ccrc.service takes its bind or a sign-in key from somewhere this verb does not read was not measured. Nothing was changed."
   [ "${#AUS_REASONS[@]}" -eq 0 ] \
     || _ccrc_die "auth $sub: ccrc.service can take its bind address or a sign-in key from sources which this verb does not read ($(_auth_join "${AUS_REASONS[@]}")), so this box was not proven loopback-only. Move those settings into $BOX_ENV_FILE or remove them, then re-run, or keep the README's hand route ('The session gate'). Nothing was changed."
-  # The unit itself is the installer's, as systemd loaded it (review 3971 R1): what the readings above cannot parse.
+  # The unit is the installer's file and the one systemd loaded, as it is now (review 3971 R1, wave 190 F1): what the
+  # readings above cannot parse.
   local orc=0
   _auth_unit_own "$BOX_UNIT_DIR" || orc=$?
   [ "$orc" -eq 0 ] || _ccrc_die "auth $sub: $AUO_WHY${AUO_FIX:+. To go on: $AUO_FIX}. Nothing was changed."
@@ -6805,7 +6837,8 @@ cmd_auth() {
 
   # The write. The original stays beside the file as a copy until the proof passes, 0600 by its own explicit mode, never
   # the source's (review 3934 F3: `cp -p` kept a 0644 file 0644). The exit chain removes it on every path but a failed
-  # restore, which names it; from just before the rename on, a signal puts the original back (`_auth_on_signal`).
+  # restore, which names it; from just before the rewrite into the temporary file on, a signal puts the original back
+  # (`_auth_on_signal`).
   local dest="$BOX_ENV_FILE" tmp bak="" had=0 mode="600"
   mkdir -p "${dest%/*}" || _ccrc_die "auth $sub: cannot create ${dest%/*}. Nothing was changed."
   tmp="$dest.auth.tmp.$$"
@@ -6833,15 +6866,18 @@ cmd_auth() {
 
   local want=armed; [ "$sub" = on ] || want=off
   if ! _auth_restart_prove "$want" "$addr"; then
-    local why="$AUTH_WHY" back="put back"
+    # Wave 190 A2: a file this run created is named as this run's, never as a previous one.
+    local why="$AUTH_WHY" back="The previous $dest was put back"
     if [ "$had" -eq 1 ]; then
       if ! chmod -- "$mode" "$bak" || ! mv -f -- "$bak" "$dest"; then
         AUTH_KEEP_BAK=1
-        back="NOT put back: the previous file is kept at $bak, and $dest still holds this run's lines"
+        back="The previous $dest was NOT put back: the previous file is kept at $bak, and $dest still holds this run's lines"
       fi
-    elif ! rm -f -- "$dest"; then
+    elif rm -f -- "$dest"; then
+      back="$dest, which this run created, was removed again"
+    else
       AUTH_KEEP_BAK=1
-      back="NOT removed: $dest still holds this run's lines"
+      back="$dest, which this run created, was NOT removed: it still holds this run's lines"
     fi
     # The state stays `written` through the restore and its proof (review 3971 R4): the handler reads the disk.
     # Back to what the box ran before this run: armed iff its CCRC_AUTH was on.
@@ -6849,14 +6885,14 @@ cmd_auth() {
     [ "${auth_cur[0]}" != on ] || was=armed
     if _auth_restart_prove "$was" "$addr"; then
       if [ "$AUTH_KEEP_BAK" -eq 1 ]; then
-        again="it answers with sign-in ${was/armed/on} as before this run, though on this run's lines, not on its old file"
+        again="it answers with sign-in ${was/armed/on} as before this run, though on this run's lines$([ "$had" -eq 0 ] || printf ', not on its old file')"
       else
         again="it is back as it was, with sign-in ${was/armed/on}"
       fi
     else
       again="and it did not come back as it was either ($AUTH_WHY); $(_svc_status_hint ccrc.service) says why"
     fi
-    _ccrc_die "auth $sub: the restarted console did not prove the change: $why. The previous $dest was $back, and ccrc.service was restarted again: $again."
+    _ccrc_die "auth $sub: the restarted console did not prove the change: $why. $back, and ccrc.service was restarted again: $again."
   fi
   AUTH_SIG_STATE=proved
   [ -z "$bak" ] || rm -f -- "$bak"
