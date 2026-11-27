@@ -1088,3 +1088,36 @@ describe('reader mode: an Exit with no frame standing (X6 XR fix round 1, item 2
   });
 });
 
+describe('wake lock: a refusal is remembered (X6 XR fix round 1, item 5)', () => {
+  it('wake lock: a refused request is not asked again by activity, but by the page visible again and by a fresh entry', async () => {
+    const wake = installWakeLock(true);
+    const fire = installVisibility();
+    setup();
+    act(() => { latest.enter('button'); });
+    await settle();
+    expect(wake.request, 'entering asks once').toHaveBeenCalledTimes(1);
+    for (let i = 0; i < 4; i += 1) {
+      act(() => { latest.activity(); });
+      await settle();
+    }
+    expect(wake.request, 'activity asked again after the refusal').toHaveBeenCalledTimes(1);
+    // The page is hidden and visible again: the next ask is made once (and refused again).
+    await act(async () => { fire('hidden'); });
+    await act(async () => { fire('visible'); });
+    await settle();
+    expect(wake.request, 'the page visible again did not ask once more').toHaveBeenCalledTimes(2);
+    act(() => { latest.activity(); });
+    await settle();
+    expect(wake.request, 'activity asked again after the second refusal').toHaveBeenCalledTimes(2);
+    // A fresh entry into reader mode asks once more.
+    act(() => { latest.exit('exit-tap'); });
+    await settle();
+    act(() => { latest.enter('button'); });
+    await settle();
+    expect(wake.request, 'a fresh entry did not ask once more').toHaveBeenCalledTimes(3);
+    act(() => { latest.activity(); });
+    await settle();
+    expect(wake.request, 'activity after the fresh entry\'s refusal asked again').toHaveBeenCalledTimes(3);
+    expect(latest.state.on, 'a refused lock ended reader mode').toBe(true);
+  });
+});

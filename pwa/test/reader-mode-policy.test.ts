@@ -360,15 +360,22 @@ describe('reader mode: what is offered, and the wake lock', () => {
   });
 
   it('wake: wanted at 299999 ms idle, not at 300000', () => {
-    expect(wakeLockWanted({ on: true, visible: true, lastActivityMs: 0, nowMs: 299999 })).toBe(true);
-    expect(wakeLockWanted({ on: true, visible: true, lastActivityMs: 0, nowMs: 300000 })).toBe(false);
-    expect(wakeLockWanted({ on: true, visible: true, lastActivityMs: 1000, nowMs: 300999 })).toBe(true);
+    const free = { refused: false };
+    expect(wakeLockWanted({ on: true, visible: true, lastActivityMs: 0, nowMs: 299999, ...free })).toBe(true);
+    expect(wakeLockWanted({ on: true, visible: true, lastActivityMs: 0, nowMs: 300000, ...free })).toBe(false);
+    expect(wakeLockWanted({ on: true, visible: true, lastActivityMs: 1000, nowMs: 300999, ...free })).toBe(true);
   });
 
   it('wake: never while hidden or off', () => {
-    expect(wakeLockWanted({ on: true, visible: false, lastActivityMs: 0, nowMs: 1 })).toBe(false);
-    expect(wakeLockWanted({ on: false, visible: true, lastActivityMs: 0, nowMs: 1 })).toBe(false);
-    expect(wakeLockWanted({ on: false, visible: false, lastActivityMs: 0, nowMs: 1 })).toBe(false);
+    const free = { refused: false };
+    expect(wakeLockWanted({ on: true, visible: false, lastActivityMs: 0, nowMs: 1, ...free })).toBe(false);
+    expect(wakeLockWanted({ on: false, visible: true, lastActivityMs: 0, nowMs: 1, ...free })).toBe(false);
+    expect(wakeLockWanted({ on: false, visible: false, lastActivityMs: 0, nowMs: 1, ...free })).toBe(false);
+  });
+
+  it('wake: not wanted while a refusal is remembered (X6 XR fix round 1)', () => {
+    expect(wakeLockWanted({ on: true, visible: true, lastActivityMs: 0, nowMs: 1, refused: false }), 'CONTROL').toBe(true);
+    expect(wakeLockWanted({ on: true, visible: true, lastActivityMs: 0, nowMs: 1, refused: true })).toBe(false);
   });
 });
 

@@ -192,11 +192,14 @@ function createController(sink: Sink, initialTurn: ReaderTurn) {
   let lastActivity = 0;
   let sentinel: WakeLockSentinel | null = null;
   let requesting = false;
+  /** The browser refused the last request: remembered (`wakeLockWanted` reads it) until the next entry into reader mode or the page
+   *  visible again, so activity never asks again meanwhile (X6 XR fix round 1). */
+  let refused = false;
   let alive = true;
 
   // ── the wake lock (spec 6.3) ──
   const wantedNow = (): boolean => wakeLockWanted({
-    on: state.on, visible: document.visibilityState === 'visible', lastActivityMs: lastActivity, nowMs: Date.now(),
+    on: state.on, visible: document.visibilityState === 'visible', lastActivityMs: lastActivity, nowMs: Date.now(), refused,
   });
   const releaseSentinel = (s: WakeLockSentinel): void => {
     try { void Promise.resolve(s.release()).catch(noop); } catch { /* a release that throws changes nothing */ }
@@ -206,14 +209,14 @@ function createController(sink: Sink, initialTurn: ReaderTurn) {
     if (api === undefined || typeof api.request !== 'function') return;
     requesting = true;
     let pending: Promise<WakeLockSentinel>;
-    try { pending = api.request('screen'); } catch { requesting = false; return; }
+    try { pending = api.request('screen'); } catch { requesting = false; refused = true; return; }
     Promise.resolve(pending).then((s) => {
       requesting = false;
       // No longer wanted by the time it was granted: let it go at once.
       if (!alive || !wantedNow()) { releaseSentinel(s); return; }
       sentinel = s;
       s.addEventListener('release', () => { if (sentinel === s) sentinel = null; });
-    }, () => { requesting = false; });
+    }, () => { requesting = false; refused = true; });
   };
   const syncWake = (): void => {
     if (wantedNow()) {
@@ -323,7 +326,8 @@ function createController(sink: Sink, initialTurn: ReaderTurn) {
     const answer = readerModeStep(before, event);
     state = answer.state;
     if (!before.on && answer.state.on) {
-      lastActivity = Date.now();   // entering counts as activity      // An entry during an exit's settle (by `enter` or by the frame's toggle): the old settle must not run into the new reading,
+      lastActivity = Date.now();   // entering counts as activity
+      refused = false;             // a fresh entry asks the browser for the lock once more      // An entry during an exit's settle (by `enter` or by the frame's toggle): the old settle must not run into the new reading,
       // it would step back its place.
       if (settleTimer !== null) {
         clearTimeout(settleTimer);
@@ -467,7 +471,8 @@ function createController(sink: Sink, initialTurn: ReaderTurn) {
     activity,
     aa,
     setTurn,
-    pageVisible: (): void => syncWake(),
+    /** The page is visible again: a refusal of the lock is forgotten, so it is asked for once more. */
+    pageVisible: (): void => { refused = false; syncWake(); },
     /** The browser drops the lock when the page is hidden: forget the sentinel, then re-read. */
     pageHidden: (): void => { sentinel = null; syncWake(); },
     /** Registers this hook's host with the pop dispatcher for its whole life, and returns the unregister. `exitReader` is the

@@ -252,9 +252,13 @@ export function readerModeExitShown(input: { on: boolean; frameStands: boolean }
   return input.on && !input.frameStands;
 }
 
-/** The one wake-lock decider, re-read on every state change: on, visible, and active within `READER_WAKE_IDLE_MS`. */
-export function wakeLockWanted(input: { on: boolean; visible: boolean; lastActivityMs: number; nowMs: number }): boolean {
-  return input.on && input.visible && input.nowMs - input.lastActivityMs < READER_WAKE_IDLE_MS;
+/** The one wake-lock decider, re-read on every state change: on, visible, and active within `READER_WAKE_IDLE_MS`, and not
+ *  refused. `refused` is the memo of a request the browser refused (X6 XR fix round 1): until the next entry into reader mode or
+ *  the page becoming visible again (both clear it, in delivery) a refusal means the lock is not wanted, so activity asks nothing. */
+export function wakeLockWanted(
+  input: { on: boolean; visible: boolean; lastActivityMs: number; nowMs: number; refused: boolean },
+): boolean {
+  return input.on && input.visible && !input.refused && input.nowMs - input.lastActivityMs < READER_WAKE_IDLE_MS;
 }
 
 /** The minutes left of a reading time at a share read (`share` clamped to [0, 1], and read as 0 when it is not a finite number,
