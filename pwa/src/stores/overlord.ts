@@ -1,6 +1,6 @@
 // The console's one reader of the Overlord (Overlord W1 home, Task 2; plan Global Constraints, "One reader per fact"): L4. It
-// reads the server's capability words (`GET /health`'s `caps`), the designation and the ladder, and keeps each as a
-// `ReadState`. The bars, the home route, the place and the Settings rows all read this store; none fetches on its own.
+// reads the server's capability words (`GET /health`'s `caps`), the designation, the ladder and the readiness word (home B,
+// Task 4), and keeps each as a `ReadState`. The bars, the home route, the place and the Settings rows all read this store; none fetches on its own.
 //
 // WHEN IT READS. At start, when the page comes back to the front, every `OVERLORD_POLL_MS` while the page is visible, and at
 // once after any of the Overlord's doors answers (`refreshOverlord`). Each visible tick reads the designation and the ladder
@@ -17,6 +17,7 @@ import { useMemo } from 'react';
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 import type { DesignationView } from '../../../shared/overlord-designation';
 import type { LadderWire } from '../../../shared/overlord-ladder';
+import type { ReadinessWire } from '../../../shared/overlord-readiness';
 import { api, ApiError, ApiTimeout } from '../lib/api';
 import { onPageVisible } from '../lib/pageClock';
 import {
@@ -35,6 +36,7 @@ export interface OverlordReads {
   caps(): Promise<{ readonly caps?: readonly string[] }>;
   designation(): Promise<{ readonly designation: DesignationView | null } | Absent>;
   ladder(): Promise<LadderWire | Absent>;
+  readiness(): Promise<ReadinessWire | Absent>;
 }
 
 export interface OverlordStoreDeps {
@@ -46,9 +48,11 @@ export interface OverlordState {
   readonly caps: ReadState<readonly string[]>;
   readonly designation: ReadState<DesignationView | null>;
   readonly ladder: ReadState<LadderWire>;
+  /** The readiness word (home B): its 503 `unavailable` is unmeasured, an older server's 404 `absent`. */
+  readonly readiness: ReadState<ReadinessWire>;
   /** Start reading; the answer stops it. Counted, so two starters share one poll and the last stop ends it. */
   start(): () => void;
-  /** Re-read the designation and the ladder now (after a door answered), when the word is advertised. */
+  /** Re-read the designation, the ladder and the readiness word now (after a door answered), when the word is advertised. */
   refresh(): Promise<void>;
   /** Re-read everything now, the caps first. */
   readAll(): Promise<void>;
@@ -60,6 +64,7 @@ const DEFAULT_READS: OverlordReads = {
   caps: () => api.serverCaps(),
   designation: () => api.overlordDesignation(),
   ladder: () => api.overlordLadder(),
+  readiness: () => api.overlordReadiness(),
 };
 
 /** A failure's words, as the place prints them: never a value. */
@@ -76,14 +81,14 @@ const UNREADABLE = { kind: 'failed', error: 'unreadable answer' } as const;
 export function createOverlordStore(deps: OverlordStoreDeps = {}): OverlordStore {
   const reads = deps.reads ?? DEFAULT_READS;
   const now = deps.now ?? Date.now;
-  const seq = { caps: 0, designation: 0, ladder: 0 };
+  const seq = { caps: 0, designation: 0, ladder: 0, readiness: 0 };
   let starters = 0;
   let timer: ReturnType<typeof setInterval> | null = null;
   let stopVisible: (() => void) | null = null;
 
   return create<OverlordState>()((set, get) => {
     /** One call, its outcome folded into its state; a later call's answer wins over an earlier one's. */
-    async function read<K extends 'caps' | 'designation' | 'ladder'>(
+    async function read<K extends 'caps' | 'designation' | 'ladder' | 'readiness'>(
       key: K, call: () => Promise<ReadOutcome<OverlordState[K] extends ReadState<infer T> ? T : never>>,
     ): Promise<void> {
       const mine = ++seq[key];
@@ -106,6 +111,11 @@ export function createOverlordStore(deps: OverlordStoreDeps = {}): OverlordStore
           if (isAbsent(body)) return { kind: 'absent' };
           return typeof body.operatorRung === 'string' ? { kind: 'value', value: body } : UNREADABLE;
         }),
+        read('readiness', async () => {
+          const body = await reads.readiness();
+          if (isAbsent(body)) return { kind: 'absent' };
+          return typeof body.word === 'string' && typeof body.since === 'number' ? { kind: 'value', value: body } : UNREADABLE;
+        }),
       ]);
     };
     const readAll = async (): Promise<void> => {
@@ -118,6 +128,7 @@ export function createOverlordStore(deps: OverlordStoreDeps = {}): OverlordStore
       caps: { state: 'loading' },
       designation: { state: 'loading' },
       ladder: { state: 'loading' },
+      readiness: { state: 'loading' },
       refresh,
       readAll,
       start: () => {
@@ -148,7 +159,7 @@ export function createOverlordStore(deps: OverlordStoreDeps = {}): OverlordStore
 
 export const useOverlordStore: OverlordStore = createOverlordStore();
 
-/** Re-read the designation and the ladder now: every Overlord door calls it after its answer. */
+/** Re-read the designation, the ladder and the readiness word now: every Overlord door calls it after its answer. */
 export function refreshOverlord(): Promise<void> {
   return useOverlordStore.getState().refresh();
 }
@@ -165,6 +176,11 @@ export function useDesignationState(): DesignationState {
 
 export function useLadder(): ReadState<LadderWire> {
   return useOverlordStore((s) => s.ladder);
+}
+
+/** The readiness word's read, as the place and the two readiness lines draw it. */
+export function useReadiness(): ReadState<ReadinessWire> {
+  return useOverlordStore((s) => s.readiness);
 }
 
 export function useRungRead(): RungRead {
