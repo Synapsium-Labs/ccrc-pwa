@@ -280,24 +280,27 @@ Known limits sentence on the unfenced history read.
 
 ## The gate's counts
 
-The coordinator read the rows by diff before they were committed (call 1606). First measured on main `87c64a957a` plus this work.
-Re-derived in fix round 1 on the merged tree (merge commit `1d9a96358d`, main `6f3f88143e`): main brought no route, gate or client
-change, the censuses that pin these counts are green there, and every figure below stands. Neither #3455 nor #3460 had landed.
+The coordinator read the rows by diff before they were committed (call 1606). First measured on main `87c64a957a` plus this work,
+then re-derived in fix round 1 on each merged tree, never added. The figures below are measured on the last one: merge commit
+`b518a27222`, main `3fda0fc9b1`, which carries renewal readings H (#3455), the Docs reader's wave 52 (#3460) and the Overlord's
+place (#3457). The censuses that pin these counts are green there.
 
 | Count | Main | This branch |
 |---|---|---|
-| Routes scanned | 334 | 335 |
-| HTTP routes | 331 | 332 |
-| Gated | 213 | 213 |
+| Routes scanned | 341 | 342 |
+| HTTP routes | 338 | 339 |
+| Gated | 220 | 220 |
 | Exempt | 118 | 119 (the board) |
 | Box-token machine lanes | 104 | 105 |
 | Box-token lanes in all | 107 | 108 |
 | Route files | 32 | 33 |
 | Client rows | 103 | 104 |
 
-Others move the same lines, so the second lander re-derives on its merged tree and never adds: renewal readings H (#3455, two
-gated doors), the Desktop polish box frames read (one exempt lane and a routes file of its own, and one client row), and the Docs
-reader's wave 52 (#3460, five gated doors).
+The branch took one merge of that main, as the coordinator directed. Two earlier merges were resolved and then aborted before they
+were committed, each on the coordinator's word to wait for the next lander: one of main with #3455, and one of main with #3460
+before #3457 landed. The first merge in this round (`1d9a96358d`, main `6f3f88143e`) moved no count. Others still move the same
+lines, among them the Desktop polish box frames read (one exempt lane, a routes file of its own and one client row), so the
+second lander re-derives on its merged tree and never adds.
 
 ## Seam files and their holders
 
@@ -305,6 +308,8 @@ Each held file took the exact diff as a packet first (size and sha256), and was 
 and its two suites (claim 7412); `server.ts` and the mutation floors pair (claim 7353); the read runner and its suite (claim 7354, the
 type import on a line of its own at the holder's ask); the session gate's file, its suite and the mask suite (claim 7410); the
 box-token census (claim 7373). The drafts were measured in this tree and restored to main's text before each packet went.
+The session gate's file and its suite took the merge's count lines too: the resolution went to that claim's holder as a packet, and
+when that work had merged and its claim was released, this run claimed the two files (claim 7477) and committed the same text.
 
 ## Design rule
 
