@@ -16,6 +16,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import type { CoordStore } from '../src/coord/store.js';
 import { landingStoreOver } from './landingFixture.js';
 import { landingBindingOf, mainRedNext, probedHeadOf } from '../src/coord/landingLine.js';
+import { REPO_ROOT, sourceOfSymbol } from './scan/symbols.js';
 import type { LandingMutationFacts } from '../src/coord/landingWrites.js';
 import { isLandingEntryState, type LandingEntry, type LandingEntryState } from '../../shared/landingLine.js';
 
@@ -547,15 +548,11 @@ describe('landingBindingOf: precedence and the evidence it binds', () => {
     expect(probedHeadOf(twice, 7)).toBeNull();
   });
   it('the probe\'s heads are searched for a PR only inside probedHeadOf (D-9159)', () => {
-    const src = readFileSync(path.join(import.meta.dirname, '../src/coord/landingLine.ts'), 'utf8');
-    const hits = [...src.matchAll(/\.heads\b/g)].map((m) => m.index);
-    expect(hits).toHaveLength(1);
-    const start = src.indexOf('export function probedHeadOf(');
-    expect(start).toBeGreaterThanOrEqual(0);
-    const end = src.indexOf('\n}\n', start);
-    expect(end).toBeGreaterThan(start);
-    expect(hits[0]).toBeGreaterThan(start);
-    expect(hits[0]).toBeLessThan(end);
+    // Keyed on the symbol (scan/symbols.ts), never on a line of text: the file's one `.heads` lies inside probedHeadOf.
+    const file = 'server/src/coord/landingLine.ts';
+    const heads = (text: string): number => [...text.matchAll(/\.heads\b/g)].length;
+    expect(heads(readFileSync(path.join(REPO_ROOT, file), 'utf8'))).toBe(1);
+    expect(heads(sourceOfSymbol(file, 'probedHeadOf'))).toBe(1);
   });
 });
 

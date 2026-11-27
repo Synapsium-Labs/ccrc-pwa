@@ -30,6 +30,21 @@ Run 4111 (wave 36). Plan: `docs/superpowers/plans/2026-11-27-landing-order-wave5
 After each, `landingLine.ts` read back at sha256 `4a00f69b9aaf28339c9ed1ecd29ef449099f68d37bec8308f8ee55b695f1db08`, the
 built file, and both cases passed again.
 
+## The text case, re-keyed on the symbol (after the pull request's first run)
+
+The plan's form of the `landingLine.ts` text case found `probedHeadOf`'s span with `src.indexOf('export function
+probedHeadOf(')` and `src.indexOf('\n}\n', start)`. The pull request's first run was red on it: the ARCH-06 ratchet
+(`single-definition/advance-switches.test.ts`, "literal source pins over every other server/src file may only shrink")
+counts each such `indexOf` as a new literal source pin over `server/src/coord/landingLine.ts` and refuses it, naming the
+remedy: key it on `scan/symbols.ts`. The case now asserts the same rule without a pin: the file holds `.heads` once
+(counted with `matchAll`), and `sourceOfSymbol(file, 'probedHeadOf')` holds it once, so the one match is inside the
+reader. The `landingNext.ts` case was not flagged (it uses `matchAll` and `split`, which the ratchet does not count) and is
+unchanged.
+
+- Red on the base's `landingLine.ts`: `scan/symbols: no symbol 'probedHeadOf' in server/src/coord/landingLine.ts`.
+- M4 again (the inline lookup kept beside the call): `expected 2 to be 1`; restored to sha256 `4a00f69b…db08`.
+- Green: `landing-control` 65 passed (65), `single-definition/advance-switches` 53 passed (53).
+
 ## Claims
 
 `landingLine.ts`, `landing-control.test.ts` and this note under claim 7611. No packet needed.
