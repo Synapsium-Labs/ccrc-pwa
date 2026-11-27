@@ -196,7 +196,7 @@ describe('the Flows doors', () => {
     expect(rows.find((p) => p.slug === 'programme-b')?.position).toEqual({ blockId: null, why: 'before the first wave' });
     expect(rows.find((p) => p.slug === 'programme-a')?.lastOutcome).toBeUndefined();
     coord.recordFlowOutcome({ program: 'programme-a', flowId: id, version: 1, blockId: 'build', outcome: 'done', nextBlock: 'verify',
-      wouldSend: 'observe verify', byId: 'lane-a-project-a', at: 9 });
+      wouldSend: 'observe verify', byId: 'lane-a-project-a', at: 9, evidence: null });
     const again = ((await app.inject({ method: 'GET', url: `/api/flows/${id}/programmes` })).json() as { programmes: FlowProgrammeRow[] }).programmes;
     expect(again.find((p) => p.slug === 'programme-a')?.lastOutcome).toEqual({ blockId: 'build', outcome: 'done', nextBlock: 'verify', wouldSend: 'observe verify', at: 9 });
     expect((await app.inject({ method: 'GET', url: '/api/flows/99/programmes' })).statusCode).toBe(404);

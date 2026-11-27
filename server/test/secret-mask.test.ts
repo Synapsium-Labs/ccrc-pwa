@@ -961,7 +961,7 @@ describe('the review findings: every egress of session text is masked (D-5995)',
     await app.inject({ method: 'POST', url: `/api/flows/${id}/publish` });
     coord.db.prepare("INSERT INTO programs (slug, title, createdAt, state, flowId, flowVersion) VALUES ('programme-a', 'Programme A', 1, 'active', ?, 1)").run(id);
     coord.recordFlowOutcome({ program: 'programme-a', flowId: id, version: 1, blockId: 'build', outcome: `done ${OAT}`,
-      nextBlock: 'verify', wouldSend: `send ${ORKEY}`, byId: 'lane-a', at: 2 });
+      nextBlock: 'verify', wouldSend: `send ${ORKEY}`, byId: 'lane-a', at: 2, evidence: null });
     const res = await app.inject({ method: 'GET', url: `/api/flows/${id}/programmes` });
     expect(res.statusCode, res.body).toBe(200);
     expect(res.body).toContain(`"outcome":"done ${SECRET_MASK}"`);

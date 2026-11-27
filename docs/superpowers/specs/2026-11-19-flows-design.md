@@ -203,7 +203,8 @@ hues stay accounts') and live positions (a breathing dot on a block).
    and shown on the flow's page. 3b (`plans/2026-11-20-flows-w3b.md`): the outcome door, as
    `POST /api/coord/programmes/:slug/flow-outcome` (the holding coordinator only, instruction and skill blocks only), recorded
    in shadow with what the engine would do next. Going live is the operator's arm, after the shadow has run.
-4. **Gates**: approval, PR state, attested.
+4. **Gates**: approval, PR state, attested. *As built so far (`plans/2026-11-20-flows-w4a.md`, 4a):* `attested`, through the
+   outcome door with required evidence; approval and PR state are 4b.
 5. **The canvas**: drag and drop, connect by dragging, live positions.
 6. **Plugins**: per-session loading, plugin templates, `requires` and the confirm-to-install screen (§14.3).
 7. **Harnesses** (§14.2), once the harness adapter seam exists: capability tables, derived support levels, the policy hook.

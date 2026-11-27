@@ -47,6 +47,19 @@ describe('decideOutcome (L1)', () => {
     expect(wouldSendOf(doc.doc, 'verify', {})).toBe('observe verify');
     expect(wouldSendOf(doc.doc, 'build', {})).toMatch(/^send worker build bytes=\d+ missing=plan\.path$/);
   });
+  it('an attested gate takes an outcome with its evidence, and refuses one without (wave 4a)', () => {
+    const d = ccrc();
+    const g = d.blocks.find((b) => b.id === 'merged')!;
+    g.gate = { kind: 'attested' };
+    const att = { ok: true as const, doc: d };
+    expect(decideOutcome(att, true, { block: 'merged', outcome: g.outcomes[0], evidence: 'suite: 412 passed, 0 failed' }, {}))
+      .toMatchObject({ ok: true, evidence: 'suite: 412 passed, 0 failed' });
+    expect(decideOutcome(att, true, { block: 'merged', outcome: g.outcomes[0] }, {}))
+      .toEqual({ ok: false, refusal: 'bad-request', detail: 'an attested gate takes evidence: one to 2000 characters' });
+    expect(decideOutcome(att, true, { block: 'merged', outcome: g.outcomes[0], evidence: 'x'.repeat(2001) }, {}))
+      .toMatchObject({ ok: false, refusal: 'bad-request' });
+    expect(decideOutcome(doc, true, { block: 'build', outcome: 'done', evidence: 'x' }, {})).toMatchObject({ ok: true, evidence: null });
+  });
   it('refuses a protocol step, a gate, an unknown block or outcome, and a programme with no flow', () => {
     expect(decideOutcome(doc, true, { block: 'verify', outcome: 'verified' }, {})).toMatchObject({ ok: false, refusal: 'conflict' });
     expect(decideOutcome(doc, true, { block: 'spec-approved', outcome: 'approved' }, {})).toMatchObject({ ok: false, refusal: 'conflict' });
@@ -74,7 +87,7 @@ describe('POST /api/coord/programmes/:slug/flow-outcome', () => {
     const res = await post(r.app, URL_A, { ...as(), block: 'build', outcome: 'done' });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ ok: true, next: 'verify', wouldSend: 'observe verify' });
-    expect(r.coord.lastFlowOutcome('prog-a')).toMatchObject({ blockId: 'build', outcome: 'done', nextBlock: 'verify', byId: 'lane-a' });
+    expect(r.coord.lastFlowOutcome('prog-a')).toMatchObject({ blockId: 'build', outcome: 'done', nextBlock: 'verify', byId: 'lane-a', evidence: null });
   });
 
   it('refuses a worker, another programme\'s coordinator, a programme with no flow, and a protocol step', async () => {

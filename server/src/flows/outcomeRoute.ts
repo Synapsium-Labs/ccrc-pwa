@@ -53,7 +53,7 @@ export function registerFlowOutcomeRoute(app: FastifyInstance, deps: FlowOutcome
     const v = decideOutcome(doc, pin !== null, body, { 'programme.slug': slug });
     if (!v.ok) return refuseRoute(reply, v.refusal, { detail: v.detail });
     const id = coord.recordFlowOutcome({ program: slug, flowId: pin!.flowId, version: pin!.version, blockId: v.blockId,
-      outcome: v.outcome, nextBlock: v.next, wouldSend: v.wouldSend, byId, at: deps.now() });
+      outcome: v.outcome, nextBlock: v.next, wouldSend: v.wouldSend, byId, at: deps.now(), evidence: v.evidence });
     return { ok: true, id, next: v.next, wouldSend: v.wouldSend };
   });
 }

@@ -4458,6 +4458,17 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX flow_outcomes_by_program ON flow_outcomes (program, at);
   `,
+
+  // ── 127: user_version 126 -> 127 ──────────────────────────────────────────
+  // Flows wave 4a (plan `2026-11-20-flows-w4a.md`): an attested gate's evidence on its reported outcome
+  // (`flows/outcome.ts#decideOutcome`); NULL for an instruction or skill block, and for every row written before. Writer:
+  // `flowsStore.ts#recordFlowOutcome` alone, which names its columns. ONE NULLABLE COLUMN: an older build at this
+  // `user_version` takes rule 3 and its INSERT never names it. Same slot rule as 124 to 126; RE-MEASURE (it must print 126
+  // before this entry is counted):
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE flow_outcomes ADD COLUMN evidence TEXT;
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
