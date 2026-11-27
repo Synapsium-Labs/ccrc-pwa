@@ -231,9 +231,11 @@ Both guards are green on the fix, and so are the board's suites, the wiring suit
 
 ## Fix round 1 (review 4010, call 1641)
 
-**F1, the projects walk.** `listProjects` answers its walk flag, and the projects part reads `read-failed` on an unmeasured walk
-(`board-projects-unmeasured-walk`). Red first: two cases (the lister's flag over a readable root, from a kept walk and over an
-unreadable root; the part's `read-failed` with the root listed once), red without the lister's flag, green with it.
+**F1, the projects walk.** `listProjectsWalked`, the lister's one body, answers its walk flag, and the projects part reads
+`read-failed` on an unmeasured walk (`board-projects-unmeasured-walk`). Red first: two cases (the lister's flag over a readable
+root, from a kept walk and over an unreadable root; the part's `read-failed` with the root listed once), red without the lister's
+flag, green with it. The first push's fast run then went red on the projects route's pinned keys (served-routes), because the flag
+had ridden onto that route's wire; `listProjects` now answers exactly its old fields, and a case pins them.
 
 **F2, the brakes.** The ladder part carries the standing latches and the live conditions through `ladderWire`, the ladder read's
 own projection (`board-latch-detail-not-carried`, `board-brakes-armed-kinds-later`). **F3, the portfolio.** A row carries the
