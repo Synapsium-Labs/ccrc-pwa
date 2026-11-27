@@ -1322,3 +1322,102 @@ describe('reader mode: the console hidden as the page\'s own, and sheets in the 
     expect(third.hidden, 'CONTROL: and it records the console').toEqual(expect.arrayContaining(consoleNodes()));
   });
 });
+
+// X6 XR fix round 2, review 4043 F1: a sheet that UNMOUNTS while open, after reader mode has ended behind it, must give the
+// console back. `releaseAsPage` keeps `aria-hidden` on a node a modal marked, for that modal's close to lift; an unmount is no
+// close, and Radix's own undo never removes an `aria-hidden` it found already set.
+describe('reader mode: a sheet unmounted while open after reader mode ended gives the console back (X6 XR fix round 2, F1)', () => {
+  function Unmount({ first, second }: { first: boolean | 'closed'; second: boolean | 'closed' }): ReactNode {
+    const [portal, setPortal] = useState<HTMLElement | null>(null);
+    return (
+      <div data-testid="wrapper">
+        <header data-testid="console-head"><button type="button">Console button</button></header>
+        <nav data-testid="console-nav"><a href="#console">Console link</a></nav>
+        <div data-testid="reading-container">
+          <div className="docs-reading-portal" ref={setPortal} />
+        </div>
+        <SheetPortalContext value={portal}>
+          {first !== false && <Sheet open={first === true} onClose={() => undefined} title="First"><button type="button">Inside the first</button></Sheet>}
+          {second !== false && <Sheet open={second === true} onClose={() => undefined} title="Second"><button type="button">Inside the second</button></Sheet>}
+        </SheetPortalContext>
+      </div>
+    );
+  }
+  const consoleNodes = (): HTMLElement[] => [screen.getByTestId('console-head'), screen.getByTestId('console-nav')];
+  const hiddenNow = (): boolean[] => consoleNodes().map((n) => n.hasAttribute('aria-hidden'));
+  const made: PageHiding[] = [];
+  afterEach(() => {
+    for (const h of made.splice(0)) releaseAsPage(h);
+  });
+  const hideConsole = (): PageHiding => {
+    const h = hideAsPage(screen.getByTestId('reading-container'));
+    made.push(h);
+    return h;
+  };
+
+  it('reader mode: an open sheet unmounted after reader mode ended leaves no console node hidden', async () => {
+    const view = render(<Unmount first={false} second={false} />);
+    const hiding = hideConsole();
+    view.rerender(<Unmount first second={false} />);
+    await settle();
+    expect(screen.getByRole('dialog').getAttribute('data-state'), 'CONTROL: the sheet is open').toBe('open');
+    releaseAsPage(hiding);
+    expect(hiddenNow(), 'CONTROL: the open modal keeps the console hidden after reader mode ends').toEqual([true, true]);
+    view.rerender(<Unmount first={false} second={false} />);
+    await settle();
+    expect(document.querySelector('[role="dialog"]'), 'CONTROL: the sheet is gone').toBeNull();
+    expect(hiddenNow(), 'the console stayed aria-hidden after the sheet unmounted').toEqual([false, false]);
+    expect(consoleNodes().map((n) => n.hasAttribute('inert'))).toEqual([false, false]);
+  });
+
+  it('reader mode: with a second dialog still open, the console stays hidden until that one unmounts too', async () => {
+    const view = render(<Unmount first={false} second={false} />);
+    const hiding = hideConsole();
+    view.rerender(<Unmount first second={false} />);
+    await settle();
+    releaseAsPage(hiding);
+    view.rerender(<Unmount first second />);
+    await settle();
+    expect(document.querySelectorAll('[role="dialog"][data-state="open"]'), 'CONTROL: two dialogs are open').toHaveLength(2);
+    view.rerender(<Unmount first={false} second />);
+    await settle();
+    expect(document.querySelectorAll('[role="dialog"][data-state="open"]'), 'CONTROL: one dialog is left').toHaveLength(1);
+    expect(hiddenNow(), 'the first sheet\'s unmount lifted the console from behind the second one').toEqual([true, true]);
+    view.rerender(<Unmount first={false} second={false} />);
+    await settle();
+    expect(document.querySelector('[role="dialog"]'), 'CONTROL: both are gone').toBeNull();
+    expect(hiddenNow(), 'the console stayed aria-hidden after the last dialog unmounted').toEqual([false, false]);
+  });
+
+  it('reader mode: a closed sheet mounting in StrictMode (its effects torn down and set up again) lifts nothing from behind an open dialog', async () => {
+    const view = render(<StrictMode><Unmount first={false} second={false} /></StrictMode>);
+    const hiding = hideConsole();
+    view.rerender(<StrictMode><Unmount first second={false} /></StrictMode>);
+    await settle();
+    releaseAsPage(hiding);
+    expect(hiddenNow(), 'CONTROL: hidden behind the open sheet').toEqual([true, true]);
+    view.rerender(<StrictMode><Unmount first second="closed" /></StrictMode>);
+    await settle();
+    expect(document.querySelectorAll('[role="dialog"]'), 'CONTROL: the second sheet drew no panel').toHaveLength(1);
+    expect(hiddenNow(), 'a sheet\'s simulated unmount lifted the console from behind the open dialog').toEqual([true, true]);
+  });
+
+  it('reader mode: a node handed to a modal that then closed is the next reader mode\'s own, and a sheet unmounting there does not lift it', async () => {
+    const view = render(<Unmount first={false} second={false} />);
+    const hiding = hideConsole();
+    view.rerender(<Unmount first second={false} />);
+    await settle();
+    releaseAsPage(hiding);
+    view.rerender(<Unmount first="closed" second={false} />);
+    await settle();
+    expect(document.querySelector('[role="dialog"]'), 'CONTROL: the sheet is closed and gone').toBeNull();
+    expect(hiddenNow(), 'CONTROL: the close lifted the console').toEqual([false, false]);
+    hideConsole();
+    expect(hiddenNow(), 'CONTROL: reader mode hides it again').toEqual([true, true]);
+    view.rerender(<Unmount first="closed" second="closed" />);
+    await settle();
+    view.rerender(<Unmount first="closed" second={false} />);
+    await settle();
+    expect(hiddenNow(), 'a sheet\'s unmount lifted the hiding of the reader mode that stands').toEqual([true, true]);
+  });
+});

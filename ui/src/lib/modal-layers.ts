@@ -74,7 +74,9 @@ export function recordModalLayer(panel: Element): ReadonlySet<Element> {
 // hidden behind the open modal. It is deleted from every layer's record, so it is no longer the page's own and that modal's
 // close lifts it like any other mark. A marked node with no open dialog (a sheet still animating closed, `data-state="closed"`,
 // has already made its one lift) is un-hidden at once, so the console is announced and focusable from the moment reader mode
-// ends.
+// ends. A modal that UNMOUNTS while still open is no close and lifts nothing, so `releaseAsPage` also remembers each node it
+// left hidden, and `liftHandedAtUnmount` (the unmount's lift, X6 XR fix round 2, review 4043 F1) gives it back once no open
+// dialog stands.
 //
 // TWO PRECONDITIONS. The hiding is entered with no modal layer in the document (reader mode is not offered while any
 // `[role="dialog"]` is mounted, open or closing): under one, a node a modal hid would read as the page's own and never be
@@ -84,6 +86,14 @@ export function recordModalLayer(panel: Element): ReadonlySet<Element> {
 // outside `keep` afterwards (a toast host that appears) is neither inert nor hidden (spec §4.1 accepts that toasts draw behind
 // reader mode).
 let live: PageHiding | null = null;
+
+// WHAT `releaseAsPage` LEFT HIDDEN FOR AN OPEN MODAL (X6 XR fix round 2, review 4043 F1). The nodes above that stay
+// `aria-hidden` for the modal's close to lift are kept here, written by `releaseAsPage` alone. A modal that UNMOUNTS while
+// open is no close: Radix's undo takes the node's mark but never the `aria-hidden` it found already set, so the node would stay
+// hidden for good (a sheet in the Docs body unmounts open when the body remounts or the route leaves, after reader mode ended
+// behind it). `liftHandedAtUnmount` is that unmount's lift. `hideAsPage` empties the set: a hiding is entered with no modal in
+// the document, so nothing is handed then.
+const handed = new Set<Element>();
 
 /** What `hideAsPage` set, for `releaseAsPage` to undo: the nodes it made `inert` and the nodes it gave `aria-hidden`. */
 export interface PageHiding {
@@ -98,6 +108,7 @@ const NOT_CONTENT = new Set(['SCRIPT', 'STYLE', 'TEMPLATE']);
  *  templates and any node that contains `keep` are left alone. While a hiding is live, it is answered again (above). */
 export function hideAsPage(keep: Element): PageHiding {
   if (live !== null) return live;
+  handed.clear();
   const inerted: Element[] = [];
   const hidden: Element[] = [];
   for (let at: Element | null = keep; at !== null && at !== document.body && at.parentElement !== null; at = at.parentElement) {
@@ -126,8 +137,26 @@ export function releaseAsPage(h: PageHiding): void {
   for (const node of h.hidden) {
     if (modalOpen && node.hasAttribute('data-aria-hidden')) {
       for (const recorded of layers.values()) recorded.delete(node);
+      handed.add(node);
     } else {
       node.removeAttribute('aria-hidden');
+    }
+  }
+}
+
+/** A modal layer's unmount (`sheet.tsx`, passive cleanup, after the DOM removal): give back each node `releaseAsPage` left
+ *  hidden for an open modal, when no `[role="dialog"][data-state="open"]` stands in the document any more. With another open
+ *  dialog the node stays hidden and in the set, and that dialog's own close or unmount lifts it. A node that is no longer
+ *  hidden, or has left the document, is dropped. A no-op while the set is empty, which is every sheet outside reader mode. */
+export function liftHandedAtUnmount(): void {
+  if (handed.size === 0) return;
+  const modalOpen = document.querySelector('[role="dialog"][data-state="open"]') !== null;
+  for (const node of [...handed]) {
+    if (!node.isConnected || node.getAttribute('aria-hidden') !== 'true') {
+      handed.delete(node);
+    } else if (!modalOpen) {
+      node.removeAttribute('aria-hidden');
+      handed.delete(node);
     }
   }
 }

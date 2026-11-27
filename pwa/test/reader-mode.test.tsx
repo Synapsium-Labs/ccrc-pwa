@@ -609,6 +609,86 @@ describe('docs screen (X6 XR1.2)', () => {
     }
   });
 
+  // X6 XR fix round 2, review 4043 F1: a sheet that unmounts while open, after reader mode has ended, gives the console back.
+  /** Every node outside the reading container that is hidden from assistive technology or inert. The page's own markup hides
+   *  some (a decorative icon or glyph), and a head draws others as its state changes, so a case reads what reader mode added:
+   *  the nodes hidden once it is on that were not before it, and which of those are still hidden or inert later. */
+  const suspendedOutside = (): Element[] => {
+    const container = document.querySelector('.docs-reading');
+    return [...document.querySelectorAll('[aria-hidden="true"], [inert]')].filter((el) => !(container?.contains(el) ?? false));
+  };
+  const stillSuspended = (nodes: readonly Element[]): Element[] =>
+    nodes.filter((el) => el.isConnected && (el.getAttribute('aria-hidden') === 'true' || el.hasAttribute('inert')));
+
+  it('reader mode: the sheet open, full screen lost, then the body remounting at another commit leaves no console node hidden', async () => {
+    const fs = installFullScreen();
+    const f = fakeLoaders();
+    function Routed(): ReactNode {
+      const { path, search } = useLocation();
+      return <DocsScreen path={path} search={search} loaders={f.loaders} parser={parser} reader={reader} />;
+    }
+    navigate('/docs/demo/specs/a.md');
+    render(<Routed />);
+    await screen.findByTestId('reader-host');
+    await flush();
+    const outside = document.createElement('aside');
+    document.body.appendChild(outside);
+    const before = suspendedOutside();
+    try {
+      act(() => { readerModeHandle()?.toggle(); });
+      await act(async () => { fs.grant(); });
+      await sheetOpen(true);
+      expect(screen.getByRole('dialog').getAttribute('data-state'), 'CONTROL: the body sheet is open').toBe('open');
+      expect(outside.getAttribute('aria-hidden'), 'CONTROL: the console is hidden in reader mode').toBe('true');
+      const added = suspendedOutside().filter((el) => !before.includes(el));
+      expect(added, 'CONTROL: reader mode hid the console').toContain(outside);
+      await act(async () => { fs.lose(); });
+      expect(readerModeHandle()?.on(), 'CONTROL: losing full screen ended reader mode').toBe(false);
+      expect(screen.getByRole('dialog'), 'CONTROL: the sheet is still open').toBeDefined();
+      expect(outside.hasAttribute('inert'), 'CONTROL: the console is focusable again').toBe(false);
+      expect(outside.getAttribute('aria-hidden'), 'CONTROL: hidden behind the open sheet').toBe('true');
+      const body = screen.getByTestId('reader-host');
+      await act(async () => { navigate(`/docs/demo/specs/a.md?at=${COMMIT_B}`); });
+      await settle();
+      expect(screen.queryByRole('dialog'), 'CONTROL: the body remounted, and its sheet went with it').toBeNull();
+      expect(screen.getByTestId('reader-host'), 'CONTROL: the body is a new mount').not.toBe(body);
+      expect(stillSuspended(added), 'a console node stayed hidden or inert after the sheet unmounted').toEqual([]);
+    } finally {
+      leaveReaderMode();
+      outside.remove();
+    }
+  });
+
+  it('reader mode: the sheet open, then the route leaving the Docs screen, leaves no console node hidden', async () => {
+    installFullScreen();
+    const f = fakeLoaders();
+    function Routed(): ReactNode {
+      const { path, search } = useLocation();
+      return path.startsWith('/docs')
+        ? <DocsScreen path={path} search={search} loaders={f.loaders} parser={parser} reader={reader} />
+        : <p>Another screen</p>;
+    }
+    navigate('/docs/demo/specs/a.md');
+    render(<Routed />);
+    await screen.findByTestId('reader-host');
+    await flush();
+    const outside = document.createElement('aside');
+    document.body.appendChild(outside);
+    try {
+      act(() => { readerModeHandle()?.toggle(); });
+      await sheetOpen(true);
+      expect(screen.getByRole('dialog').getAttribute('data-state'), 'CONTROL: the body sheet is open').toBe('open');
+      expect(outside.getAttribute('aria-hidden'), 'CONTROL: the console is hidden in reader mode').toBe('true');
+      await act(async () => { navigate('/somewhere-else'); });
+      await settle();
+      expect(screen.getByText('Another screen'), 'CONTROL: the route left the Docs screen').toBeDefined();
+      expect(screen.queryByRole('dialog'), 'CONTROL: the sheet went with it').toBeNull();
+      expect(suspendedOutside(), 'a console node stayed hidden or inert after the sheet unmounted').toEqual([]);
+    } finally {
+      outside.remove();
+    }
+  });
+
   it('reader mode: the entry announcement is not inside any aria-hidden or inert node', async () => {
     screenAt('/docs/demo/specs/a.md');
     await screen.findByTestId('reader-host');
