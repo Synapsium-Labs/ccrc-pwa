@@ -46,8 +46,8 @@ merges, workers never do, and an unattended landing is the goal when every safeg
 | 5j | 5, the doors (server) | the two session-only routes, pause the line and withdraw an entry, and `landing-subtractive.test.ts` | server, skills | 5e and 5i | — | the plan is on `main` (`docs/superpowers/plans/2026-11-25-landing-order-wave5j-doors.md`, #3360, `39fbd18f`, D-9045 to D-9052), accepted at the review cutoff after three rounds and corrected by the coordinator in its section 11; two build waves, 5j-a then 5j-b; 5j-a is dispatched as run 3759 (the run's wave 26), and the operator's reading of the plan's section 9 is asked as item 665, which holds nothing; 5j-a's first review (run 3781) found five minor points, and one fix round kept a withdrawn entry with no run at a pin, which the plan's Task 3 got wrong (the plan's section 12, C9; D-9071 and D-9072); its second review (run 3806) found seven minor points, one ruled (section 12, C11); 5j-a **merged** as #3375 (`31d5d9ae`); 5j-b's two reviews (runs 3864 and 3887) found six and five minor points, and one fix round made the terminal states one shared copy and widened the subtractive suite to all seven landing tables (the plan's section 13; D-9093, D-9094); 5j-b **merged** as #3397 (`83c1ed22`) (Decisions, 2026-11-25 04:30, 07:10, 08:42, 12:06 and 14:51, and 2026-11-26 02:10) |
 | 5k | 5, the doors (PWA) | the line on the project card, the pause control and the withdraw sheet | pwa | 5j | — | the plan is **merged** as #3410 (`44f2b15a`) after three review rounds (runs 3895, 3906 and 3911); its section 11 is the coordinator's corrections and wins over the tasks; D-9107 to D-9110 are defined there, and the two numbers issued after them, D-9111 and D-9112, are defined in wave 5l's plan; the build, run 3914 (the run's wave 30), is **merged** as #3426 (`7c365ded`) after three review rounds (runs 3946, 3969 and 3983) and two fix rounds; D-9129 and D-9130 are two departures in existing tests, defined in the plan; the plan's section 12 is the coordinator's corrections to it as built (Decisions, 2026-11-26 02:10, 06:20 and 20:20) |
 | 5l | 5, the line | a merge-train landing must not hold the landing line: the train record's one parser reads the train tool's own member list, the landed reader marks a closed, labelled, unproven entry `closed`, and the coordinator references keep a waiting pull request a draft | ccd (fleet box first), server, skills | 5h, 5i | — | the plan is **merged** as #3423 (`aac570d3`) after three review rounds (runs 3935, 3936 and 3939); its section 12 is the coordinator's corrections and wins over the tasks; D-9111, D-9112 and D-9115 are defined there; the spec's §5.5 carries the amended line for D-9112; the build, run 3942 (the run's wave 32), is **merged** as #3451 (`48d35634`) after two review rounds (runs 3963 and 3995) and one fix round; D-9134 is a departure in one store case, defined in the plan; the plan's section 13 is the coordinator's corrections to it as built; two loose phrases of one reference sentence and one prover case are carried as issue #3466, for run 4011 (issue #3422; Decisions, 2026-11-26 11:10, 20:20 and 23:10) |
-| 5m | 5, carried cases | test cases only: three for the train prover (both blocks bad, `Infinity`, a key given twice inside a value that is never read) and two hardenings of the console's landing-line cases | tests (server, pwa) | 5k, 5l | — | planned 2026-11-27 by the coordinator (`docs/superpowers/plans/2026-11-27-landing-order-wave5m-carried-corrections.md`, no deviation number); run 4011 (the run's wave 33), not yet dispatched (issue #3466; Decisions, 2026-11-27 00:50) |
-| 5n | 5, skill text | one sentence of the coordinator's landing reference reworded, with its pin: what the reader does on a train-closed head, and what the 20 minutes cover | skills | 5l | — | planned 2026-11-27 in the same plan (its section 3); run 4014 (the run's wave 34), not yet dispatched; a pull request of its own, because the reference and its pin are rules files (issue #3466; Decisions, 2026-11-27 00:50) |
+| 5m | 5, carried cases | test cases only: three for the train prover (both blocks bad, `Infinity`, a key given twice inside a value that is never read) and two hardenings of the console's landing-line cases | tests (server, pwa) | 5k, 5l | — | planned 2026-11-27 by the coordinator (`docs/superpowers/plans/2026-11-27-landing-order-wave5m-carried-corrections.md`, no deviation number); the build, run 4011 (the run's wave 33), is **merged** as #3477 (`d417f085`) after two review rounds (runs 4030 and 4038) and one fix round, which added one console case and one prover body; the plan's section 6 is the coordinator's record of it as built (issue #3466; Decisions, 2026-11-27 00:50 and 06:52) |
+| 5n | 5, skill text | one sentence of the coordinator's landing reference reworded, with its pin: what the reader does on a train-closed head, and what the 20 minutes cover | skills | 5l | — | planned 2026-11-27 in the same plan (its section 3); the build, run 4014 (the run's wave 34), is **merged** as #3480 (`97dd3d30`) after one review round (run 4035), in a pull request of its own, because the reference and its pin are rules files; the word "damaged" is carried as issue #3552 (issue #3466; Decisions, 2026-11-27 00:50 and 06:52) |
 
 **A fresh workspace per wave (R4) is child-reclamation's.** The spec first drew it as step 6 of the wave lifecycle,
 gated on #166 wave 3. #166 wave 2 (#178) made it live on `main` as "One PR per child", so wave 1 no longer
@@ -2822,6 +2822,49 @@ carries it (spec §5.1, amended 2026-09-24).
     minutes a coordinator acts on, and it puts the timer before the re-read.
   - **The peer's fix of the landing line's browser file** (call 1620) is pull request #3472. With the real dark
     palette all of its cases pass, so nothing of it comes back to this programme.
+- **2026-11-27 06:52 — waves 5m and 5n are merged: the corrections carried from the reviews of waves 5k and 5l are built. No run of this programme is open.**
+  - **Wave 5m** (#3477, `d417f085`, run 4011) adds test cases only: three prover cases (both blocks bad, `Infinity`, a
+    key given twice inside a value that is never read) and two hardenings of the console's landing-line cases.
+    - Two review rounds (runs 4030 and 4038), one fix round.
+    - Call 1670, the fix round. Review 4030 found nothing critical or important and four minor points: two coverage
+      gaps and two wording faults. The wave exists to close test gaps,
+      so it did not carry new ones forward: one more console case (focus must not move when the block recorded no
+      control), one more body in a prover case (a key given twice with equal values), each with a mutation row, and
+      two wording fixes.
+    - Call 1678: land now. Round 2 found no wrong assertion and reproduced both new rows. It left two loose phrases
+      in the builder's note. The call said to record them in the ledger; they are in the plan's section 6 instead
+      (C6), beside the rows they describe, and the note stays as it merged. To stop the chain,
+      the round-2 brief said that a further finding of the form "this mutant is not caught" would be recorded and
+      accepted without a fix round.
+    - Call 1679. The review judge was red on one blocking reason, the proof for the lane not built (the standing yes,
+      item 480), and flagged two edited test files, which both reviews read and re-ran under their rows.
+    - Call 1697, the second queue entry. The merge queue removed the pull request once: case C3 of the account suite, in a
+      file the wave does not touch, timed out at its 20-second bound (#3452, its second sighting). It was enqueued
+      again once at the same head, after the line, the merge probe and the verdict were read again, and merged on
+      that second entry.
+  - **Wave 5n** (#3480, `97dd3d30`, run 4014) rewords one sentence of the coordinator's landing reference, with
+    its pin, in a pull request of exactly those two files.
+    - One review round (run 4035), no fix round. The sentence equals the plan's section 3 word for word, and each
+      clause is true of the reader's code: the longest retry step plus one beat is 17 minutes, under the 20 the
+      sentence names.
+    - Call 1680. One advisory point is carried as issue #3552: the word "damaged" decides two clauses and is defined
+      nowhere in the coordinator skill. It was in the shipped text before this wave, and a coordinator acts the same
+      for both kinds of entry.
+    - Call 1681. The review judge was red on two blocking reasons: the proof not built (the standing yes), and a
+      code-owner approval (an approval reason holds no pull request here). It raised no mixed-rules reason, so the
+      two-file rule held.
+    - The wave has no note file. Its three mutation rows, the red-first run and the gate's counts are in the plan's
+      section 6, from the pull request's body and the wave-done mail.
+    - The corrected sentence reaches each home when its box is updated to a release that contains #3480.
+  - **The plans.** The plan of both waves gains section 6, as built. The 5l plan's section 7.2 now quotes the new
+    sentence, and its section 13 says which wave built each carried point. This pull request closes issue #3466.
+  - **Two things the builds met that are not this programme's.** One is filed: a test run sent to the test box gave
+    no output for 55 minutes with the queue empty, and the same command ran locally in seconds (#3481). The other
+    is reported on its existing issue: the account suite's second queue timeout (#3452).
+  - **What is open.** No build wave of this programme is planned, and its last run is closed with no run opened
+    after it (call 1712): a planned run with no work behind it would misstate the programme. Left, with no wave:
+    issue #3552 (the word "damaged"), the cost measurement of wave 3f's sweep cadence (the Waves table), and the
+    points listed under "Carried constraints" below.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -3503,8 +3546,8 @@ Deploy: ccrc's updater carries the server, the PWA and the skill text.
   2026-11-26 06:20). **5k is merged** (#3426 `7c365ded`; Decisions, 2026-11-26 20:20). It was built as run 3914 (the run's wave 30): the console for the two doors, from
   `docs/superpowers/plans/2026-11-26-landing-order-wave5k-console.md`, whose section 12 says where the build's
   reviews changed the console and wins over the sections before it. Its first task carried four points from
-  5j-b's reviews, listed in the 5j plan's section 13. Two hardenings of its newest cases wait for the next
-  change to the console's landing block. For any wave: a worker reads its trailer lines back with git's own
+  5j-b's reviews, listed in the 5j plan's section 13. Its two carried hardenings were built in wave 5m
+  (#3477). For any wave: a worker reads its trailer lines back with git's own
   trailer reader before a push that edits a plan, and a wave that changes the console runs the whole browser
   suite locally before its wave-done.
 - **5l's plan is merged** (#3423 `aac570d3`; Decisions, 2026-11-26 11:10). **5l is merged** (#3451 `48d35634`; Decisions,
@@ -3515,14 +3558,14 @@ Deploy: ccrc's updater carries the server, the PWA and the skill text.
   on both boxes, the practice of the 11:10 entry stands: a coordinator marks a pull request ready only on a ready
   binding for its own entry, and a held binding on a train-closed pull request comes to this programme's
   coordinator.
-- **Waves 5m and 5n are planned** (Decisions, 2026-11-27 00:50), from
-  `docs/superpowers/plans/2026-11-27-landing-order-wave5m-carried-corrections.md`. 5m is run 4011 (the run's
-  wave 33): test cases only, three for the train prover and two hardenings of the console's landing-line cases.
-  5n is run 4014 (the run's wave 34): one sentence of the coordinator's landing reference and its pin, in a pull
-  request of exactly those two files, so its mutation rows travel in the pull request's body and the wave-done
-  mail. Neither is dispatched yet; they share no file and can run side by side. After 5n merges, the 5l plan's
-  section 7.2 takes the new sentence on the ledger's pull request. For any long build: the brief tells the
-  worker to read its own claims before each push, because a claim has a hard expiry.
+- **Waves 5m and 5n are merged** (#3477 `d417f085`, #3480 `97dd3d30`; Decisions, 2026-11-27 06:52), from
+  `docs/superpowers/plans/2026-11-27-landing-order-wave5m-carried-corrections.md`, whose section 6 says what the
+  builds and their reviews added and wins over the sections before it. **No build wave of this programme is
+  planned and no run is open.** Where another point of this brief says that a run is open or a wave is
+  planned, a point with a later date says what became of it. One point is carried with no wave: issue #3552,
+  a gloss for the word "damaged" in the coordinator's landing reference, which takes a pull request of its
+  own because the reference and its pin are rules files. For any long build: the brief tells the worker to
+  read its own claims before each push, because a claim has a hard expiry.
 - **Waves 1c and 1e are merged** (#3357 `6ac066f5`, #3362 `cb973d69`; Decisions, 2026-11-25 08:42). Their
   departures are D-9057 to D-9064 and D-9065, each in its wave's plan. The spec's section 5.1 says the fourth
   trigger holds until that round's wave-done.
