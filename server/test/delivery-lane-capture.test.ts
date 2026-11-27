@@ -81,6 +81,10 @@ async function setup(transport: BuildCaptureTransport) {
 const warned = (): string[] => (console.warn as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => String(c[0]));
 // The rig's newest passed build; a fresh store trusts it, so a pass with no live build sends a delivery job for it.
 const RIG = '2.1.302';
+// The box frames recipe (Desktop polish wave 187) takes a pass that sends no trust job and no delivery job, so a pass in this
+// file that sends no delivery job may send one frames job. Its turn is pinned in `frames-lane-capture.test.ts`; this file
+// counts the delivery jobs.
+const deliveryJobs = (t: { jobs: BuildCaptureJob[] }): BuildCaptureJob[] => t.jobs.filter((j) => j.recipe !== 'frames');
 
 describe('the lane sends one delivery job after the trust part', () => {
   it('trust first: a queued build takes the pass, and the delivery job waits for the pass after its verdict', async () => {
@@ -121,7 +125,9 @@ describe('the lane sends one delivery job after the trust part', () => {
     const t = fake(intact);
     const s = await setup(t);
     for (let i = 0; i < DELIVERY_PART_COUNT + 2; i++) await s.pass();
-    expect(t.jobs).toEqual(Array.from({ length: DELIVERY_PART_COUNT }, (_, part) => ({ build: RIG, recipe: 'delivery', part })));
+    expect(deliveryJobs(t)).toEqual(Array.from({ length: DELIVERY_PART_COUNT }, (_, part) => ({ build: RIG, recipe: 'delivery', part })));
+    expect(t.jobs.slice(0, DELIVERY_PART_COUNT), 'no frames job while a delivery part was due').toEqual(deliveryJobs(t));
+    expect(t.jobs.length, 'at most one capture a pass').toBeLessThanOrEqual(DELIVERY_PART_COUNT + 2);
     expect(s.coord.claudeBuildDeliveries().map((r) => `${r.part}:${r.word}:${r.attempts}`)).toEqual(
       Array.from({ length: DELIVERY_PART_COUNT }, (_, p) => `${p}:intact:1`));
   });
@@ -185,11 +191,11 @@ describe('what each answer comes to', () => {
     await s.pass();
     expect(s.coord.claudeBuildDeliveries()[0]).toMatchObject({ part: 0, attempts: 1, word: null, result: null });
     await s.pass();
-    expect(t.jobs, 'within the spacing').toHaveLength(1);
+    expect(deliveryJobs(t), 'within the spacing').toHaveLength(1);
     s.tick(BUILD_CAPTURE_RETRY_MS);
     await s.pass();
-    expect(t.jobs).toHaveLength(2);
-    expect(t.jobs[1]).toMatchObject({ part: 0 });
+    expect(deliveryJobs(t)).toHaveLength(2);
+    expect(deliveryJobs(t)[1]).toMatchObject({ part: 0 });
   });
 
   it('a contradiction: the attempt is stamped, no row, one warning', async () => {
@@ -228,10 +234,10 @@ describe('what each answer comes to', () => {
       await s.pass();
       expect(s.coord.claudeBuildDeliveries()[0]).toMatchObject({ attempts: 1, notSent: null, result: null });
       await s.pass();
-      expect(t.jobs).toHaveLength(1);
+      expect(deliveryJobs(t)).toHaveLength(1);
       s.tick(BUILD_CAPTURE_RETRY_MS);
       await s.pass();
-      expect(t.jobs).toHaveLength(2);
+      expect(deliveryJobs(t)).toHaveLength(2);
     }
   });
 

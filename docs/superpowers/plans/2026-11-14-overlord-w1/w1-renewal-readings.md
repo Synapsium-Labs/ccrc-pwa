@@ -359,7 +359,9 @@ Measured on `main` at `a7d0c978a` (2026-11-15), and on the renewal act's branch 
   - **One writer per fact.** The backstop row has one writer, `continuityStore.ts#setBackstop`, called only by the
     door. `designatedClass` on `continuity_generations` has one writer, the mint (the generations lane, already the
     table's one writer). `overlord_account_holds` has two writers, each a different move of the same fact: the hold
-    (`holdAccount`, called only by the generations pass, behind `holdOfStart`) and the clear (`clearAccountHold`,
+    (`holdAccount`, behind `holdOfStart`, with two callers: the generations pass, for the designated Overlord's
+    start, and `failPending`, for a designate or rebind attempt whose start failed; corrected 2026-11-27 by renewal
+    readings G) and the clear (`clearAccountHold`,
     called only by the operator's door); `writers-map.test.ts` names both. The wiring writes nothing. The latch row is the ladder's: this piece calls `raiseLatch`, the ladder's one
     writer. Every reading is its producer's; the mappers only map.
   - **Decide in L1, act in L4.** Every mapper and decider is in `renewalReadings.ts`, which imports L0 and L1 only. The

@@ -26,12 +26,16 @@ import { readCaptureRecords, replayCapture, type CaptureRecord } from '../../../
 import type { CaptureRecipe } from '../../../shared/claudeBuildCapture.js';
 import type { BuildCaptureResult } from '../../../shared/claudeBuildTrust.js';
 import type { DeliveryCaptureResult } from '../../../shared/deliveryResult.js';
+import type { FramesScan } from '../../../shared/framesReduce.js';
+import { FRAMES_PARTS, type FramesCaptureResult } from '../../../shared/framesResult.js';
 import {
   CAPTURE_SOCKET, CAPTURE_STEPS, CAPTURE_TMUX_SESSION, captureClaudeJson, captureEnv, capturePaths, captureSettings, stepDone,
 } from './capture.js';
 import type { StandIn } from './captureStub.js';
 import { DELIVERY_PANE, deliveryStandInReply } from './captureDelivery.js';
 import { runDeliveryDrive, type DeliveryDriver } from './captureDeliveryRun.js';
+import { framesStandInReplyOf } from './captureFrames.js';
+import { runFramesDrive, type FramesDriver } from './captureFramesRun.js';
 import type { StandInReply } from './capture.js';
 import { tmuxName, tmuxTarget } from '../../../shared/tmux-target.js';
 import { boundedExec, type Exec } from './exec.js';
@@ -71,6 +75,8 @@ export interface CaptureRun {
   readonly result: BuildCaptureResult | null;
   readonly detail: string | null;
   readonly delivery?: DeliveryCaptureResult | null;
+  /** A frames capture's answer only (Desktop polish wave 187): its result, or null. */
+  readonly frames?: FramesCaptureResult | null;
 }
 
 /** What the delivery recipe needs beyond a build-trust capture (Desktop polish wave 178). Absent: the runner answers a
@@ -90,6 +96,27 @@ export interface CaptureDeliveryDeps {
   readonly quietMs: number;
 }
 
+/** What a frames capture asked with no part answers. */
+export const FRAMES_NO_PART = 'a frames capture was asked with no part: not run, no result';
+
+/** What the box frames recipe needs beyond a build-trust capture (Desktop polish wave 187). Absent: the runner answers a
+ *  frames capture with no result, and the box refuses a frames submission at the frame. */
+export interface CaptureFramesDeps {
+  readonly driver: FramesDriver;
+  /** The fleet's shipped tmux config, or null for none (as the delivery recipe's). */
+  readonly tmuxConf: string | null;
+  readonly release: string | null;
+  /** The delivery recipe's settle and quiet, for a turn this recipe sends; the stand-in's hold. */
+  readonly settleMs: number;
+  readonly quietMs: number;
+  readonly holdMs: number;
+  /** The box's own private strings (home, its `~` form, user and host names, the release tree), which every frame's
+   *  reducer is given beside the capture's own directories. */
+  readonly privates: readonly string[];
+  /** The committed private-name matcher. */
+  readonly scan: FramesScan;
+}
+
 export interface CaptureRunnerDeps {
   readonly root: string;
   /** The service's temporary directory, under which the capture's tmux directory goes (`capture.ts#captureTmuxDir`). */
@@ -104,6 +131,8 @@ export interface CaptureRunnerDeps {
   readonly standIn: (reply?: (body: unknown) => StandInReply) => Promise<StandIn>;
   /** The delivery recipe's driver, tmux config and bounds; absent, a delivery capture answers no verdict. */
   readonly delivery?: CaptureDeliveryDeps;
+  /** The frames recipe's driver, config and bounds; absent, a frames capture answers no result. */
+  readonly frames?: CaptureFramesDeps;
   /** How long one step may take to raise its events. */
   readonly stepTimeoutMs: number;
   /** How long the build may take to exit after the last step. */
@@ -144,12 +173,23 @@ export class CaptureRunner {
    *  submission at the frame, as a box that predates the recipe does (the capture owner's call 1148). */
   get delivers(): boolean { return this.d.delivery !== undefined; }
 
+  /** Whether this runner runs the box frames recipe: its driver is wired. */
+  get frames(): boolean { return this.d.frames !== undefined; }
+
   /** `part` is the delivery recipe's, and has no default: a delivery capture asked with no part runs nothing and answers no
    *  verdict, never part 0 (the capture owner's call 1208, condition 1). */
   async run(captureId: string, build: string, recipe: CaptureRecipe = 'build-trust', part?: number): Promise<CaptureRun> {
     const delivery = recipe === 'delivery' ? this.d.delivery : undefined;
     if (recipe === 'delivery' && delivery === undefined) return { result: null, delivery: null, detail: 'no delivery driver is wired to this runner' };
     if (recipe === 'delivery' && part === undefined) return { result: null, delivery: null, detail: DELIVERY_NO_PART };
+    const frames = recipe === 'frames' ? this.d.frames : undefined;
+    if (recipe === 'frames' && frames === undefined) return { result: null, frames: null, detail: 'no frames driver is wired to this runner' };
+    if (recipe === 'frames' && (part === undefined || FRAMES_PARTS[part] === undefined)) return { result: null, frames: null, detail: FRAMES_NO_PART };
+    // The recipe's own null answer: a delivery capture's carries `delivery`, a frames capture's `frames`, build trust's none.
+    const nul = recipe === 'delivery' ? { delivery: null } : recipe === 'frames' ? { frames: null } : {};
+    // A recipe of its own (delivery or frames): its stand-in rule, its pane and its config.
+    const own = delivery !== undefined ? { reply: deliveryStandInReply, pane: DELIVERY_PANE, tmuxConf: delivery.tmuxConf }
+      : frames !== undefined ? { reply: framesStandInReplyOf(frames.holdMs), pane: FRAMES_PARTS[part!]!.pane, tmuxConf: frames.tmuxConf } : null;
     const p = capturePaths(this.d.root, captureId, build, this.d.tmuxBase);
     const sleep = this.d.sleep ?? ((ms: number) => new Promise<void>((r) => { setTimeout(r, ms); }));
     const now = this.d.now ?? Date.now;
@@ -166,21 +206,21 @@ export class CaptureRunner {
       // may move them between two): the build's pane and the driver's search path get the same value (call 1208, cond. 2).
       let deliveryEnv: readonly (readonly [string, string])[] = [];
       try {
-        if (delivery === undefined) {
+        if (own === null) {
           standIn = await this.d.standIn();
           launched = await this.d.launcher.start({
             binary: p.buildFile, cwd: work, env: captureEnv(p, standIn.port, this.d.toolsPath()), socket: CAPTURE_SOCKET, session: CAPTURE_TMUX_SESSION,
           });
         } else {
-          standIn = await this.d.standIn(deliveryStandInReply);
+          standIn = await this.d.standIn(own.reply);
           deliveryEnv = captureEnv(p, standIn.port, this.d.toolsPath());
           launched = await this.d.launcher.start({
             binary: p.buildFile, cwd: work, env: deliveryEnv, socket: CAPTURE_SOCKET, session: CAPTURE_TMUX_SESSION,
-            pane: DELIVERY_PANE, ...(delivery.tmuxConf === null ? {} : { tmuxConf: delivery.tmuxConf }),
+            pane: own.pane, ...(own.tmuxConf === null ? {} : { tmuxConf: own.tmuxConf }),
           });
         }
       } catch (e) {
-        return { result: null, ...(delivery === undefined ? {} : { delivery: null }), detail: `the capture could not start: ${why(e)}` };
+        return { result: null, ...nul, detail: `the capture could not start: ${why(e)}` };
       }
       if (delivery !== undefined) {
         // The delivery recipe (Desktop polish wave 178): its own drive, its own result; the build-trust drive below is not
@@ -197,6 +237,22 @@ export class CaptureRunner {
           stepTimeoutMs: this.d.stepTimeoutMs, exitTimeoutMs: this.d.exitTimeoutMs, pollMs: this.d.pollMs, sleep, now,
         });
         return { result: null, delivery: out.delivery, detail: out.detail };
+      }
+      if (frames !== undefined) {
+        // The box frames recipe (Desktop polish wave 187): its own drive, its own result; the frame is reduced in the drive,
+        // on this box, with this capture's own private strings beside the box's.
+        const l = launched;
+        const s = standIn;
+        const pathVar = deliveryEnv.find(([k]) => k === 'PATH')?.[1] ?? '';
+        const privates = [...frames.privates, p.dir, p.tmux, p.home, p.config, p.work, work, p.buildFile, `127.0.0.1:${s.port}`];
+        const out = await runFramesDrive({
+          launched: l, life: () => lifeOf(l), requests: s.requests, routes: s.routes, ...(s.others === undefined ? {} : { others: s.others }), records: () => this.recorded(p.recording).records,
+          input: { capture: p.dir, tmux: p.tmux }, place: { path: pathVar, tmpBase: this.d.tmuxBase }, build, part: part!, driver: frames.driver,
+          settleMs: frames.settleMs, quietMs: frames.quietMs, release: frames.release, unmeasured: frames.tmuxConf === null ? ['fleet-tmux-config'] : [],
+          privates, scan: frames.scan, releaseHold: () => s.release?.(),
+          stepTimeoutMs: this.d.stepTimeoutMs, exitTimeoutMs: this.d.exitTimeoutMs, pollMs: this.d.pollMs, sleep, now,
+        });
+        return { result: null, frames: out.frames, detail: out.detail };
       }
       let finished = true;
       let before = 0;
@@ -242,7 +298,7 @@ export class CaptureRunner {
       }
       return { result: replayCapture({ records, unreadable, cdDir, finished }, build), detail: null };
     } catch (e) {
-      return { result: null, ...(delivery === undefined ? {} : { delivery: null }), detail: `the capture could not be set up: ${why(e)}` };
+      return { result: null, ...nul, detail: `the capture could not be set up: ${why(e)}` };
     } finally {
       if (launched !== null) {
         await launched.stop().catch(() => undefined);

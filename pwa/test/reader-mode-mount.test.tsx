@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { useEffect, type ReactNode } from 'react';
-import { act, cleanup, render } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import type { RenderInput } from '@synapsium-labs/pinax-lib/frame';
 import type { DocFrame, HostAdapters, mountDocFrame } from '@synapsium-labs/pinax-lib/host';
 import type { DocsPageLocation } from '../../shared/docs';
@@ -24,7 +24,10 @@ import { READER_WAKE_IDLE_MS, readerModeDocKey } from '../src/docs/reader/reader
 import type { DocLinkContextValue } from '../src/docs/DocLink';
 import type { ReaderRenderOutcome } from '../src/lib/readerRenderJob';
 import { parseMarkdown } from '../src/lib/markdownParse';
-import { fileResponse, treeOk } from './docsFixtures';
+import { DocsScreen } from '../src/screens/DocsScreen';
+import { navigate } from '../src/lib/router';
+import { READER_MODE_TEXT } from '../src/docs/reader/readerModeWords';
+import { fakeLoaders, fileResponse, treeOk } from './docsFixtures';
 
 // The visit's places are the history half's (reader-places.test.ts); here only what `ReaderFrame` hands them is read.
 const placesFake = vi.hoisted(() => ({ onPlace: vi.fn(), onHash: vi.fn(), host: vi.fn(), end: vi.fn() }));
@@ -958,5 +961,49 @@ describe('reader mode: not offered while a figure is open (X6 XR fix round 1, it
     await frameReady(rig, 0);
     expect(latest.frame, 'CONTROL: the context was handed a new frame').not.toBe(before);
     expect(latest.offered, 'a figure of the replaced frame kept reader mode unoffered').toBe(true);
+  });
+});
+
+// ─── focus after a fall back that follows an entry, with the real Docs head (X6 follow-up, review 4052 F1) ──────────────
+//
+// The real Docs screen (its head, its reading container and the real `ReaderFrame` body over `bodyRig`'s mount), inside a stand-in
+// for the console's `<main id="content" tabindex="-1">` that `focusShownLandmark` reaches. The fall back drops the frame, and the
+// exit's focus act runs in the same step, before React commits the frame's loss: the head still holds its Reader mode action
+// then, and that action unmounts in the next commit, since reader mode is no longer offered.
+
+describe('reader mode: focus after a fall back that follows an entry, the real Docs head drawn (X6 follow-up, review 4052 F1)', () => {
+  beforeEach(() => {
+    for (const f of Object.values(placesFake)) f.mockClear();
+  });
+  afterEach(() => {
+    cleanup();
+    window.localStorage.clear();
+    while (restorers.length > 0) restorers.pop()?.();
+    navigate('/');
+  });
+
+  it('fall back: after entering by the head\'s Reader mode action, a fall back puts focus on a control that stays (the main region), never on the action the next commit unmounts', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    installWakeLock();
+    const rig = bodyRig();
+    navigate('/docs/demo/specs/a.md');
+    render(
+      <main id="content" tabIndex={-1}>
+        <DocsScreen path={location.pathname} search={location.search} loaders={fakeLoaders().loaders} parser={parser} reader={rig.reader} />
+      </main>,
+    );
+    await flush();
+    await waitFor(() => expect(rig.inputs.length, 'CONTROL: the body mounted its frame').toBe(1));
+    await frameReady(rig, 0);
+    const action = await screen.findByRole('button', { name: READER_MODE_TEXT.enter });
+    act(() => { action.click(); });
+    expect(readerModeHandle()?.on(), 'CONTROL: the head\'s action entered reader mode').toBe(true);
+    await act(async () => { rig.inputs[0]!.onFallback('timeout'); });
+    expect(readerModeHandle()?.on(), 'CONTROL: the fall back ended reader mode').toBe(false);
+    expect(screen.queryByRole('button', { name: READER_MODE_TEXT.enter }), 'CONTROL: the head no longer draws Reader mode').toBeNull();
+    const main = document.getElementById('content');
+    expect(document.activeElement, 'after the commit, focus is on the main region, not left on the body by an unmounted action')
+      .toBe(main);
+    expect(main?.isConnected).toBe(true);
   });
 });

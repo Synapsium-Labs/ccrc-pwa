@@ -17,7 +17,7 @@ import type { NarrowingState, Rung } from '../../../shared/overlord-ladder';
 import type { StepUp } from '../accounts/useStepUp';
 import { ApiError, api, overlordRefusalText, type OverlordDoorAct } from '../lib/api';
 import { nudgeWitness } from '../lib/witness';
-import { refreshOverlord, useLadder } from '../stores/overlord';
+import { refreshOverlord, useLadder, useOverlordStore } from '../stores/overlord';
 import { rungMovesUp } from './ladderWords';
 
 /** Which door the last answer or refusal belongs to: the part that owns that door draws its line and its sentence. */
@@ -29,9 +29,12 @@ export interface LadderDoors {
   readonly said: string | null;
   /** The narrowing the last narrowing door answered, present and not null; null otherwise. */
   readonly narrowing: NarrowingState | null;
-  /** This device's clock when that narrowing's door answered, null with no narrowing: the fact `takingEffectLine` compares a
-   *  ladder read's `at` with, so a read taken before the door is never taken for the door's change. */
-  readonly answeredAt: number | null;
+  /** The number of the newest ladder call the store had issued when that narrowing's door answered, null with no narrowing:
+   *  `takingEffectLine` trusts only a read numbered above it, so a read issued before the answer is never taken for the door's
+   *  change (home C's carried 4d). */
+  readonly answeredSeq: number | null;
+  /** The number of the ladder call whose answer the store's ladder read holds. */
+  readonly readSeq: number;
   /** The door `said` and `narrowing` belong to. */
   readonly door: LadderDoor | null;
   pause(): Promise<void>;
@@ -52,7 +55,8 @@ export function useLadderDoors(stepUp: StepUp): LadderDoors {
   const [busy, setBusy] = useState(false);
   const [said, setSaid] = useState<string | null>(null);
   const [narrowing, setNarrowing] = useState<NarrowingState | null>(null);
-  const [answeredAt, setAnsweredAt] = useState<number | null>(null);
+  const [answeredSeq, setAnsweredSeq] = useState<number | null>(null);
+  const readSeq = useOverlordStore((s) => s.ladderSeq);
   const [door, setDoor] = useState<LadderDoor | null>(null);
   const inFlight = useRef(false);
   const mounted = useRef(true);
@@ -72,12 +76,12 @@ export function useLadderDoors(stepUp: StepUp): LadderDoors {
     setBusy(true);
     setSaid(null);
     setNarrowing(null);
-    setAnsweredAt(null);
+    setAnsweredSeq(null);
     setDoor(which);
     try {
       let answer: unknown;
-      let answerAt = 0;
-      const act = async (): Promise<void> => { answer = await call(); answerAt = Date.now(); };
+      let answerSeq = 0;
+      const act = async (): Promise<void> => { answer = await call(); answerSeq = useOverlordStore.getState().ladderIssued(); };
       if (opts.stepped) {
         const outcome = await stepUpRef.current.runAct(act);
         if (outcome === 'step-up') return;
@@ -86,7 +90,7 @@ export function useLadderDoors(stepUp: StepUp): LadderDoors {
       }
       const n = opts.narrows ? narrowingOf(answer) : null;
       if (n !== null) {
-        if (mounted.current) { setNarrowing(n); setAnsweredAt(answerAt); }
+        if (mounted.current) { setNarrowing(n); setAnsweredSeq(answerSeq); }
         nudgeWitness();
       }
     } catch (err) {
@@ -106,5 +110,5 @@ export function useLadderDoors(stepUp: StepUp): LadderDoors {
   }, [run]);
   const clear = useCallback((cause: string) => run('clear', () => api.clearLatch(cause), { stepped: true, narrows: false, act: 'clear' }), [run]);
 
-  return { busy, said, narrowing, answeredAt, door, pause, setRung, clear };
+  return { busy, said, narrowing, answeredSeq, readSeq, door, pause, setRung, clear };
 }

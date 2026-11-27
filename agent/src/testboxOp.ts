@@ -274,6 +274,10 @@ export interface TestboxCaptureSeams {
   readonly deadlineMs?: number;
 }
 
+/** The field a recipe's reply carries as null when there is no result: `delivery` or `frames`, none for build trust. */
+const recipeNull = (recipe: CaptureRecipe): { delivery: null } | { frames: null } | Record<string, never> =>
+  (recipe === 'delivery' ? { delivery: null } : recipe === 'frames' ? { frames: null } : {});
+
 const freshCaptureId = (): string => randomBytes(16).toString('hex');
 
 /** One connection for a capture: the hello, the status answer, one `capture.submit`, then that capture's states until
@@ -290,11 +294,12 @@ function callBoxCapture(t: BoxTarget, build: string, captureId: string, deadline
       clearTimeout(timer);
       try { ws.close(); } catch { /* closed */ }
       // A delivery request's reply always carries `delivery` (Desktop polish wave 178); a build-trust reply never does.
-      const delivery = recipe === 'delivery' ? { delivery: rest.delivery ?? null } : {};
+      // A frames request's reply always carries `frames` the same way (wave 187), and never `delivery`.
+      const delivery = recipe === 'delivery' ? { delivery: rest.delivery ?? null } : recipe === 'frames' ? { frames: rest.frames ?? null } : {};
       const reply: TestboxCaptureReply = { outcome, refusal: rest.refusal ?? null, result: rest.result ?? null, detail: rest.detail ?? null, ...delivery };
       // The server's reader is the judge of a reply: one it would refuse is an unanswered capture, never sent on.
       if (readTestboxCaptureReply(reply, build, recipe, part) === null) {
-        resolve({ outcome: submitted ? 'unanswered' : 'bad-answer', refusal: null, result: null, detail: 'the reply was off its shape', ...(recipe === 'delivery' ? { delivery: null } : {}) });
+        resolve({ outcome: submitted ? 'unanswered' : 'bad-answer', refusal: null, result: null, detail: 'the reply was off its shape', ...recipeNull(recipe) });
         return;
       }
       resolve(reply);
@@ -316,7 +321,7 @@ function callBoxCapture(t: BoxTarget, build: string, captureId: string, deadline
         submitted = true;
         clearTimeout(timer);
         timer = setTimeout(() => finish('unanswered', { detail: `no verdict within ${deadlineMs} ms` }), deadlineMs);
-        ws.send(JSON.stringify(recipe === 'delivery' ? { t: 'capture.submit', captureId, build, recipe, part } : { t: 'capture.submit', captureId, build }));
+        ws.send(JSON.stringify(recipe === 'delivery' || recipe === 'frames' ? { t: 'capture.submit', captureId, build, recipe, part } : { t: 'capture.submit', captureId, build }));
         return;
       }
       // Whether a frame is this capture's is read off its own fields, so a frame the reader refuses is still told apart.
@@ -330,7 +335,8 @@ function callBoxCapture(t: BoxTarget, build: string, captureId: string, deadline
       if (f.build !== build) { finish('unanswered', { detail: 'a state for another build' }); return; }
       // A state frame has its submission's shape (the capture owner's call 1135): a delivery capture's frames carry
       // `delivery`, a build-trust capture's never do; either one off it is no answer to trust.
-      if ((recipe === 'delivery') !== Object.prototype.hasOwnProperty.call(f, 'delivery')) {
+      // The same for a frames capture's `frames`, and a frame carrying the other recipe's field is off shape (wave 187).
+      if ((recipe === 'delivery') !== Object.prototype.hasOwnProperty.call(f, 'delivery') || (recipe === 'frames') !== Object.prototype.hasOwnProperty.call(f, 'frames')) {
         finish('unanswered', { detail: `a state frame off its ${recipe} submission's shape` });
         return;
       }
@@ -340,8 +346,12 @@ function callBoxCapture(t: BoxTarget, build: string, captureId: string, deadline
         finish('unanswered', { detail: `a result for part ${f.delivery.part}, not the part ${String(part)} submitted` });
         return;
       }
+      if (recipe === 'frames' && f.frames !== undefined && f.frames !== null && f.frames.part !== part) {
+        finish('unanswered', { detail: `a result for part ${f.frames.part}, not the part ${String(part)} submitted` });
+        return;
+      }
       if (f.state === 'refused') finish('refused', { refusal: f.refusal, detail: f.detail });
-      else if (f.state === 'ended') finish('answered', { result: f.result, detail: f.detail, ...(recipe === 'delivery' ? { delivery: f.delivery ?? null } : {}) });
+      else if (f.state === 'ended') finish('answered', { result: f.result, detail: f.detail, ...(recipe === 'delivery' ? { delivery: f.delivery ?? null } : recipe === 'frames' ? { frames: f.frames ?? null } : {}) });
     });
     ws.addEventListener('close', (e) => {
       if (!submitted) {
@@ -365,7 +375,7 @@ export async function captureTestbox(
   const knobs = await readKnobs(home, seams.agentPath, seams);
   const target = boxTarget(home, knobs);
   if (!('url' in target)) {
-    return { outcome: target.failure, refusal: null, result: null, detail: target.detail, ...(recipe === 'delivery' ? { delivery: null } : {}) };
+    return { outcome: target.failure, refusal: null, result: null, detail: target.detail, ...recipeNull(recipe) };
   }
   return callBoxCapture(target, build, (seams.randomId ?? freshCaptureId)(), seams.deadlineMs ?? TESTBOX_CAPTURE_DEADLINE_MS, recipe, part);
 }

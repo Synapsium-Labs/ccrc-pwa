@@ -300,9 +300,9 @@ export interface FleetIO {
    *  another capture. `unanswered` is an ask that failed after the send, the deadline, or a reply in no shape
    *  `readTestboxCaptureReply` knows (a job may have gone out). None is ever `ok`. `recipe: 'delivery'` with its `part`
    *  (Desktop polish wave 178) asks for one part of the paste delivery recipe and reads the reply as one; absent, the job is
-   *  a build-trust capture. One member whose arguments are either ask, so a delivery ask with no part cannot be written
+   *  a build-trust capture; `recipe: 'frames'` (wave 187) asks one part of the box frames recipe the same way. One member whose arguments are either ask, so a delivery ask with no part cannot be written
    *  (call 1253); an untyped caller's is never sent, and answers `not-started`: no job went out. */
-  testboxCapture(...ask: [build: string] | [build: string, recipe: 'delivery', part: number]): Promise<CaptureAsked>;
+  testboxCapture(...ask: [build: string] | [build: string, recipe: 'delivery' | 'frames', part: number]): Promise<CaptureAsked>;
   /** The `testbox-admin` op (test box connect spec §2.1, plan TC12, D-8166): runs `ccrc testbox-admin <sub>` on ITS box with
    *  the builder's argv and the agent's own `--from agent`. Failure contract: never rejects. The builder's refusal is
    *  `refused` (nothing sent), an agent that does not list the op is `unsupported` (never sent it), a frame that never left
@@ -622,7 +622,7 @@ export const localIO: FleetIO = {
   // The agent's own op bodies on this box (D-7411), as `statfsMeasured` calls `measureDisk`; neither ever rejects.
   testboxMeasured: () => localTestbox(os.homedir()),
   testboxToolsSync: () => localTestboxSync(os.homedir()),
-  testboxCapture: (build: string, recipe?: 'delivery', part?: number) => localTestboxCapture(build, os.homedir(), recipe, part),
+  testboxCapture: (build: string, recipe?: 'delivery' | 'frames', part?: number) => localTestboxCapture(build, os.homedir(), recipe, part),
   // The server's local arm spawns the verb itself (`testboxAdmin.ts#localTestboxAdminOps`); this seam is the agent arm's.
   testboxAdmin: async () => ({ kind: 'unsupported' }),
   // The bare localIO has no configured home: `localIOFor(home)` runs the local arm, so nothing here ever spawns against
@@ -645,8 +645,8 @@ export async function localTestboxSync(home: string): Promise<TestboxSyncAsked> 
 /** The `testbox-capture` op's body on `home` (build capture runner spec §2.5): the agent's own `captureTestbox` with the
  *  real seams, as `localTestbox` runs the `testbox` op's; it reads the host's settings through `home`'s launcher. No gate
  *  here: the capture lane sends one job at a time. */
-export async function localTestboxCapture(build: string, home: string, recipe?: 'delivery', part?: number): Promise<CaptureAsked> {
-  if (recipe === 'delivery' && part === undefined) return { ok: false, reason: 'not-started' };
+export async function localTestboxCapture(build: string, home: string, recipe?: 'delivery' | 'frames', part?: number): Promise<CaptureAsked> {
+  if (recipe !== undefined && part === undefined) return { ok: false, reason: 'not-started' };
   try { return { ok: true, reply: await captureTestbox(build, realTestboxSeams(), home, recipe ?? 'build-trust', part) }; } catch { return { ok: false, reason: 'unanswered' }; }
 }
 
@@ -672,7 +672,7 @@ export function localIOFor(home: string): FleetIO {
   return {
     ...localIO, statfsMeasured: () => measureLocalDisk(home),
     testboxMeasured: () => localTestbox(home), testboxToolsSync: () => localTestboxSync(home),
-    testboxCapture: (build: string, recipe?: 'delivery', part?: number) => localTestboxCapture(build, home, recipe, part),
+    testboxCapture: (build: string, recipe?: 'delivery' | 'frames', part?: number) => localTestboxCapture(build, home, recipe, part),
     models: (lane, action, cls) => localModels(home, lane, action, cls),
   };
 }

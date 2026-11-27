@@ -302,6 +302,11 @@ const duplicated = (m: Map<string, string[]>): string[] =>
  *  census rots. */
 const REGISTERED_BLOCKS: Record<string, string> = {
   // No NEXT. Every block below is argued, not deferred.
+  'div.ovs-actions(Button,Button)':
+    'DIFFERENT THINGS. Settings › Overlord (home C) draws two action rows of two buttons: the Overlord card\'s link to the '
+    + 'place and its Retire, and the account set\'s Save and Save again. They share the row class that lays a card\'s acts out '
+    + 'and nothing else: each pair is a different door with its own answer. The account facts\' repeated pair is extracted '
+    + '(`AccountFactsCard.tsx`\'s `Fact`).',
   'div.acct-list(AccountRow,p.acct-none)':
     'DIFFERENT THINGS. Both sheets list accounts and both say something when '
     + 'the list is empty, but they are answering different questions — '
