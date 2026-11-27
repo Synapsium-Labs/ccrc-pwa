@@ -156,6 +156,8 @@ describe('the full-width rule counts screen cells, two for a wide character (rev
     const edge = `🎯${'x'.repeat(33)} /pro`;
     expect(Array.from(edge)).toHaveLength(P.cols - 1); // 39 code points, 40 cells
     expect(both(boxed(edge, 'ject-x rest'))).toEqual(REFUSED);
+    const cjk = `${'漢'.repeat(17)}x /pro`; // 23 code points, 40 cells
+    expect(both(boxed(cjk, 'ject-x rest'))).toEqual(REFUSED);
   });
   it('an ASCII row run to the last column still refuses', () => {
     const edge = `${'x'.repeat(35)} /pro`;
