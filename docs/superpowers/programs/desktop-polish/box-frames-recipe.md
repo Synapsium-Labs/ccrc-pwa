@@ -104,9 +104,9 @@ removed, so a colour change inside a key cannot split it past the shapes.
 
 ## 7. Evidence
 
-**The migration number** (133, `claude_build_frames`) is the first free on main at this push, and it is re-taken at queue
-time if another migration lands first: the renewal readings branch (#3455) carries 133 too, and whichever of the two
-queues second renumbers in its absorb and re-derives the count suites (the coordinator's ruling).
+**The migration number** (134, `claude_build_frames`) is the first free on main at this push, taken on a main that carries
+133 (the renewal readings branch, #3455, merged at bb21a1e56c), and it is re-taken at queue time if another migration lands
+first, with the count suites re-derived on that merged tree (the coordinator's ruling).
 
 Every run went through `ccrc test --local`, in the foreground, one file per command.
 - `DELIVERY_RECIPE_VERSION`: `da16fe2f55551e0b` before the first edit and after the last.
