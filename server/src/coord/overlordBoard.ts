@@ -1,12 +1,14 @@
 // The Overlord's board, composed (Overlord W1, PR B2; plan `docs/superpowers/plans/2026-11-14-overlord-w1/w1-board-history.md`
-// Task 6, questions 3, 4, 17 and 18; spec §5.2 C10, C44). Ring L1, context C5: pure, importing `shared/` types only; no store,
-// no `fs`, no fastify, no clock.
+// Task 6, questions 3, 4, 17 and 18; spec §5.2 C10, C44). Ring L1, context C5: pure, importing `shared/` only; no store, no
+// `fs`, no fastify, no clock.
 //
 // IT DECIDES NOTHING. `composeBoard` maps each reader's answer, as the gatherer (`overlordBoardRead.ts`, L3) hands it over, to
 // its part: it groups per programme by the slug the readers carry, marks session-written text untrusted (question 17), and turns
 // a failed reader into that part's `unmeasured` with the gatherer's closed reason. It ranks nothing, filters nothing beyond the
 // grouping, computes no verdict a reader did not already compute, and adds no field its inputs do not carry.
 // `timersByProgramme` counts each programme's coordinator's pending timers and finds the earliest due time; it reads no note.
+// The brakes' rows are the switchboard's own (`SWITCHES`, through its derived name lists): a settings or file row the gatherer did
+// not hand over reads `read-failed`, never a missing row (board B3).
 import type { MarkerState, ProgrammeWaves, SessionStatus } from '../../../shared/api.js';
 import type { GoalsView, ItemKind, ItemState, NeededBy, Ratification } from '../../../shared/ledgers.js';
 import type { CoordinatorLine, ProgrammeLifecycle } from '../../../shared/programmeLifecycle.js';
@@ -15,10 +17,12 @@ import type { IsolationRead } from '../../../shared/isolation.js';
 import type { ReadinessWord } from '../../../shared/overlord-readiness.js';
 import type { Rung } from '../../../shared/overlord-ladder.js';
 import type {
-  BoardCondition, BoardGoalsRow, BoardIdentityRow, BoardItem, BoardLatch, BoardPortfolioRow, BoardStallNoticeCount, BoardText, BoardTextSource,
-  BoardTimersRow, BoardUnmeasured, BoardWorkRow, Measured, OverlordBoard, UntrustedText,
+  BoardCondition, BoardFileRow, BoardGoalsRow, BoardIdentityRow, BoardItem, BoardLatch, BoardPortfolioRow, BoardSettingRow, BoardSettingStored,
+  BoardSettingWord, BoardStallNoticeCount, BoardText, BoardTextSource, BoardTimersRow, BoardUnmeasured, BoardWorkRow, Measured, OverlordBoard,
+  UntrustedText,
 } from '../../../shared/overlordBoard.js';
 import { BOARD_TEXT_SOURCES, BOARD_UNMEASURED } from '../../../shared/overlordBoard.js';
+import { ccrcFileSwitchNames, settingSwitchNames } from '../../../shared/switches.js';
 
 /** One reader's answer, as the gatherer hands it over: its value, or why it could not be read (a closed word). */
 export type BoardRead<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly reason: BoardUnmeasured };
@@ -35,6 +39,8 @@ export interface BoardItemIn { readonly id: number; readonly kind: ItemKind; rea
 /** A pending timer as the store holds it: who set it, when it is due, and its note, which comes in and never goes out (§3.3.12):
  *  `timersByProgramme` reads `setter` and `dueAt` only. */
 export interface BoardTimerIn { readonly setter: string; readonly dueAt: number; readonly note?: string }
+/** One settings row, as the gatherer hands it over: closed words only, read by the store's reader and the row's own predicate. */
+export interface BoardSettingIn { readonly stored: BoardSettingStored | null; readonly value: BoardSettingWord | 'unknown' | null }
 
 export interface BoardInputs {
   readonly programmes: BoardRead<readonly BoardProgrammeIn[]>;
@@ -47,8 +53,13 @@ export interface BoardInputs {
   readonly stallNotices: BoardRead<{ readonly since: number; readonly windowMs: number; readonly counts: readonly BoardStallNoticeCount[] }>;
   readonly portfolio: BoardRead<PortfolioView>;
   readonly capacity: BoardRead<{ readonly maxConcurrentWorkers: number; readonly running: number }>;
-  readonly projects: BoardRead<{ readonly registry: 'listed' | 'unlistable'; readonly names: readonly string[] }>;
+  /** `unreadable`: the walk's entries under a listed root that it could not read (board B3). */
+  readonly projects: BoardRead<{ readonly registry: 'listed' | 'unlistable'; readonly names: readonly string[]; readonly unreadable: readonly string[] }>;
   readonly switches: BoardRead<Readonly<Record<string, MarkerState>>>;
+  /** Each settings row of the switchboard, keyed by its name, each read on its own (board B3). */
+  readonly settings: ReadonlyMap<string, BoardRead<BoardSettingIn>>;
+  /** The fleet host's switch files, from the one reading of all of them (`readCcrcFileSwitches`), keyed by switch name. */
+  readonly files: BoardRead<Readonly<Record<string, MarkerState>>>;
   /** The ladder read's projection (`ladderWire`), its latches cut to the board's fields by the gatherer. */
   readonly ladder: BoardRead<{ readonly rung: Rung; readonly operatorRung: Rung; readonly latches: readonly BoardLatch[]; readonly conditions: readonly BoardCondition[] }>;
   readonly readiness: BoardRead<{ readonly word: ReadinessWord; readonly since: number; readonly until: number | null }>;
@@ -128,6 +139,13 @@ export function composeBoard(i: BoardInputs): OverlordBoard {
   });
   const latch = (x: BoardLatch): BoardLatch => ({ cause: x.cause, cap: x.cap, raisedAt: x.raisedAt, known: x.known, narrowing: x.narrowing });
   const condition = (c: BoardCondition): BoardCondition => ({ cause: c.cause, reading: c.reading, effect: c.effect });
+  const settingRow = (name: string): BoardSettingRow => partOf(readFor(i.settings, name), (s) => ({ stored: s.stored, value: s.value }));
+  /** A file the reading could not prove present or absent (`unmeasurable`), or one it does not name, is that row's `read-failed`. */
+  const fileRow = (name: string): BoardFileRow => {
+    if (!i.files.ok) return unmeasured(i.files.reason);
+    const v = i.files.value[name];
+    return v === 'set' || v === 'clear' ? { state: 'measured', value: v } : unmeasured('read-failed');
+  };
   const iso = i.isolation;
   return {
     identity: partOf(programmes, (ps) => ({ programmes: ps.map(identityRow) })),
@@ -135,10 +153,12 @@ export function composeBoard(i: BoardInputs): OverlordBoard {
     work: partOf(programmes, (ps) => ({ programmes: ps.map(workRow), stallNotices: partOf(i.stallNotices, (s) => ({ since: s.since, windowMs: s.windowMs, counts: s.counts })) })),
     portfolio: partOf(i.portfolio, (v) => ({ revision: v.revision, programmes: v.programmes.map(portfolioRow) })),
     capacity: partOf(i.capacity, (c) => ({ maxConcurrentWorkers: c.maxConcurrentWorkers, running: c.running })),
-    projects: partOf(i.projects, (p) => ({ registry: p.registry, names: p.names })),
+    projects: partOf(i.projects, (p) => ({ registry: p.registry, names: p.names, unreadable: p.unreadable })),
     brakes: {
       state: 'measured',
       switches: partOf(i.switches, (m) => ({ markers: m })),
+      settings: Object.fromEntries(settingSwitchNames.map((k) => [k, settingRow(k)])),
+      files: Object.fromEntries(ccrcFileSwitchNames.map((k) => [k, fileRow(k)])),
       ladder: partOf(i.ladder, (l) => ({ rung: l.rung, operatorRung: l.operatorRung, latches: l.latches.map(latch), conditions: l.conditions.map(condition) })),
     },
     itself: {

@@ -447,7 +447,18 @@ export function readSwitches(listing: readonly string[] | null): SwitchReading {
   return out;
 }
 
-// ── The `~/.ccrc` rows and Overrides in force (D-8382) ──────────────────────────────────────────────────────────────
+/** The rows stored in a coord.db settings table (board B3: the board's brakes part carries each through its store's own
+ *  reader). A listing says nothing about them. */
+export type SettingSwitchName = {
+  [K in SwitchName]: (typeof SWITCHES)[K]['storage'] extends SettingStorage ? K : never
+}[SwitchName];
+
+const isSettingRow = (k: SwitchName): k is SettingSwitchName => 'setting' in SWITCHES[k].storage;
+
+/** Every settings row's name, in `SWITCHES` order. */
+export const settingSwitchNames: readonly SettingSwitchName[] = (Object.keys(SWITCHES) as SwitchName[]).filter(isSettingRow);
+
+// ── The `~/.ccrc` rows and Overrides in force (D-8382)──────────────────────────────────────────────────────────────
 
 /** The rows stored as a file in the fleet host's `~/.ccrc`. */
 export type CcrcFileSwitchName = {

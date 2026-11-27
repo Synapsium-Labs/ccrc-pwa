@@ -187,12 +187,13 @@ export function fleetRowsUsable(
  * (a probe kept for any workdir meanwhile drops every probe whose age reads negative; review 1440 F6), the residual of a wall clock (`fleetRowsUsable` reads the same one).
  *
  * Kept on purpose, and said once:
- * - an entry under the root whose listing failed is left out of a kept walk as it is left out of today's one answer
- *   (`readdir` cannot tell a plain file from a dropped read), so such a gap lasts up to the TTL rather than one request;
+ * - an entry under the root whose listing failed is left out of a kept walk as it is left out of today's one answer, so
+ *   such a gap lasts up to the TTL rather than one request; the kept walk keeps its name with it (board B3), so a read
+ *   served from the cache still says which entry it could not read;
  * - there is no single flight: k cold requests that overlap each walk, so together they may hold 8 x k reads.
  */
 export class ProjectWalkCache {
-  private walk: { at: number; rows: readonly ProjectRow[] } | null = null;
+  private walk: { at: number; rows: readonly ProjectRow[]; unreadable: readonly string[] } | null = null;
   private readonly probes = new Map<string, { at: number; linked: boolean }>();
   /** When `drop` last ran; a walk that STARTED at or before it is not kept (`keepWalk`). */
   private droppedAt = Number.NEGATIVE_INFINITY;
@@ -212,8 +213,13 @@ export class ProjectWalkCache {
 
   /** The kept walk while it is fresh, else null; a kept walk whose age reads negative is dropped. */
   keptWalk(): readonly ProjectRow[] | null {
+    return this.keptWalkRead()?.rows ?? null;
+  }
+
+  /** `keptWalk` with the names of the entries that walk could not read (board B3): the same rule, one more field. */
+  keptWalkRead(): { readonly rows: readonly ProjectRow[]; readonly unreadable: readonly string[] } | null {
     if (this.walk !== null && this.future(this.walk.at)) this.walk = null;
-    return this.walk !== null && this.fresh(this.walk.at) ? this.walk.rows : null;
+    return this.walk !== null && this.fresh(this.walk.at) ? this.walk : null;
   }
 
   /** The stamp a walk or probe takes when it starts, for `keepWalk`/`keepProbe`. */
@@ -224,9 +230,9 @@ export class ProjectWalkCache {
   /** Keeps a walk that started at `startedAt`, unless the kept one is still fresh and started later. A kept walk that
    *  is not fresh, a negative age after the clock stepped back included, is replaced whatever the new stamp, as the
    *  probes heal (review 1378, F4). */
-  keepWalk(rows: readonly ProjectRow[], startedAt: number): void {
+  keepWalk(rows: readonly ProjectRow[], startedAt: number, unreadable: readonly string[] = []): void {
     if (startedAt <= this.droppedAt && this.now() >= this.droppedAt) return;
-    if (this.walk === null || !this.fresh(this.walk.at) || startedAt > this.walk.at) this.walk = { at: startedAt, rows };
+    if (this.walk === null || !this.fresh(this.walk.at) || startedAt > this.walk.at) this.walk = { at: startedAt, rows, unreadable };
   }
 
   /**
@@ -283,30 +289,53 @@ const probeLinkedWorktree = async (io: FleetIO, workdir: string, names?: string[
   return unmeasured ? 'unmeasured' : 'not-linked';
 };
 
+/** One root entry whose listing failed, read by its own type (board B3): through the collapsing listing a plain file and a
+ *  failed read look alike, so the measured type probe tells them apart. A plain file is skipped silently, as before, and so is
+ *  an entry that is gone; anything else (a directory, a link, or an entry whose type could not be read) is one the walk could
+ *  not read. */
+const unlistedEntry = async (io: FleetIO, workdir: string): Promise<'skip' | 'unreadable'> => {
+  const kind = await io.lstatMeasured(workdir);
+  if (kind.ok) return kind.kind === 'regular' ? 'skip' : 'unreadable';
+  return kind.reason === 'absent' ? 'skip' : 'unreadable';
+};
+
 /** The root walk: one slot per entry (its listing, then its probe), at most `PROJECT_WALK_CONCURRENCY` in flight, the
  *  answer in the listing's order whatever order the reads finish in. Null when the root itself could not be listed;
- *  `measured` is false when any slot's probe could not answer (its row is kept, the walk is not cached). */
-const walkRoot = async (io: FleetIO, cfg: CcrcConfig): Promise<{ rows: ProjectRow[]; measured: boolean } | null> => {
+ *  `measured` is false when any slot's probe could not answer (its row is kept, the walk is not cached). `unreadable` names
+ *  the entries whose own listing failed and which the type probe does not read as a plain file or gone (board B3); they
+ *  leave the walk measured, so the rest of it stands and the cache keeps its rule. */
+const walkRoot = async (io: FleetIO, cfg: CcrcConfig): Promise<{ rows: ProjectRow[]; measured: boolean; unreadable: string[] } | null> => {
   const names = await io.readdir(cfg.projectsRoot);
   if (names === null) return null;
   let measured = true;
-  const rows = await mapBounded(names.filter((n) => !n.startsWith('.')), PROJECT_WALK_CONCURRENCY, async (name) => {
-    const workdir = path.join(cfg.projectsRoot, name);
-    const entries = await io.readdir(workdir);
-    if (entries === null) return null; // not a directory — skip
-    const probe = await probeLinkedWorktree(io, workdir, entries);
-    if (probe === 'unmeasured') measured = false;
-    return probe === 'linked' ? null : { name, workdir };
-  });
-  return { rows: rows.filter((r): r is ProjectRow => r !== null), measured };
+  const slots = await mapBounded(names.filter((n) => !n.startsWith('.')), PROJECT_WALK_CONCURRENCY,
+    async (name): Promise<ProjectRow | { readonly unreadable: string } | null> => {
+      const workdir = path.join(cfg.projectsRoot, name);
+      const entries = await io.readdir(workdir);
+      // A failed listing: a plain file or a gone entry is skipped, as before; any other is named.
+      if (entries === null) return (await unlistedEntry(io, workdir)) === 'skip' ? null : { unreadable: name };
+      const probe = await probeLinkedWorktree(io, workdir, entries);
+      if (probe === 'unmeasured') measured = false;
+      return probe === 'linked' ? null : { name, workdir };
+    });
+  const rows: ProjectRow[] = [];
+  const unreadable: string[] = [];
+  for (const s of slots) {
+    if (s === null) continue;
+    if ('unreadable' in s) unreadable.push(s.unreadable);
+    else rows.push(s);
+  }
+  return { rows, measured, unreadable };
 };
 
 /**
  * Directories under cfg.projectsRoot (dotfiles skipped) unioned with registry
  * workdirs, deduped by workdir. Sorted by name (byte order) for determinism.
- * Directory-ness is probed via a second `readdir` (FleetIO carries no file-type
- * info) — it succeeds (possibly empty) for a directory, returns null for a
- * plain file or anything unreadable. A linked worktree cannot masquerade as a
+ * Directory-ness is probed via a second `readdir` — it succeeds (possibly empty)
+ * for a directory, returns null for a plain file or anything unreadable; only
+ * when it fails does the measured type probe (`lstatMeasured`) tell the two
+ * apart, so a plain file is skipped and an unreadable entry is named in
+ * `listProjectsWalked`'s `unreadable` (board B3). A linked worktree cannot masquerade as a
  * project through either door: `isLinkedWorktree` skips it whether it turned
  * up under the projects root or only in the registry.
  *
@@ -332,31 +361,37 @@ export async function listProjects(
   rows?: readonly ProjectSourceRow[],
   cache?: ProjectWalkCache,
 ): Promise<{ roots: string[]; projects: ProjectRow[]; registry: 'listed' | 'unlistable' }> {
-  const { walk: _walk, ...listing } = await listProjectsWalked(io, cfg, rows, cache);
+  const { walk: _walk, unreadable: _unreadable, ...listing } = await listProjectsWalked(io, cfg, rows, cache);
   return listing;
 }
 
 /**
  * `listProjects`' one body, with the root walk's own flag beside its answer (board B2, review 4010 F1): `walk` is `'unmeasured'`
  * when the projects root could not be listed or a probe under it could not answer, so the walk's rows may be short or empty
- * because nothing was read. It is the flag that already decides caching. The board's projects part reads it; the projects route
- * still folds it (a ticket), and its wire is unchanged.
+ * because nothing was read. It is the flag that already decides caching. `unreadable` (board B3) names the entries under a
+ * listed root that the walk could not read; it is empty when the root itself could not be listed, which `walk` says. The board's
+ * projects part reads both; the projects route folds them (a ticket), and its wire is unchanged.
  */
 export async function listProjectsWalked(
   io: FleetIO,
   cfg: CcrcConfig,
   rows?: readonly ProjectSourceRow[],
   cache?: ProjectWalkCache,
-): Promise<{ roots: string[]; projects: ProjectRow[]; registry: 'listed' | 'unlistable'; walk: 'measured' | 'unmeasured' }> {
-  let walked = cache?.keptWalk() ?? null;
+): Promise<{
+  roots: string[]; projects: ProjectRow[]; registry: 'listed' | 'unlistable'; walk: 'measured' | 'unmeasured'; unreadable: string[];
+}> {
+  const kept = cache?.keptWalkRead() ?? null;
+  let walked: readonly ProjectRow[] | null = kept?.rows ?? null;
+  let unreadable: string[] = kept === null ? [] : [...kept.unreadable];
   // A kept walk was measured (the cache keeps no other); a fresh one is measured when the root listed and every probe answered.
   let walk: 'measured' | 'unmeasured' = 'measured';
   if (walked === null) {
     const startedAt = cache?.stamp();
     const fresh = await walkRoot(io, cfg);
-    if (fresh !== null && fresh.measured && startedAt !== undefined) cache?.keepWalk(fresh.rows, startedAt);
+    if (fresh !== null && fresh.measured && startedAt !== undefined) cache?.keepWalk(fresh.rows, startedAt, fresh.unreadable);
     if (fresh === null || !fresh.measured) walk = 'unmeasured';
     walked = fresh?.rows ?? [];
+    unreadable = fresh?.unreadable ?? [];
   }
   const byWorkdir = new Map<string, ProjectRow>(walked.map((r) => [r.workdir, r]));
   let source: readonly ProjectSourceRow[];
@@ -389,5 +424,5 @@ export async function listProjectsWalked(
   const projects = [...byWorkdir.values()].sort((a, b) =>
     a.name < b.name ? -1 : a.name > b.name ? 1 : a.workdir < b.workdir ? -1 : 1,
   );
-  return { roots: [cfg.projectsRoot], projects, registry: listed ? 'listed' : 'unlistable', walk };
+  return { roots: [cfg.projectsRoot], projects, registry: listed ? 'listed' : 'unlistable', walk, unreadable };
 }
