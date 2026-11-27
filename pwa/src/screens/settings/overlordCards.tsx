@@ -1,6 +1,6 @@
 // Settings › Overlord's cards (Overlord W1 home C, Task 8; plan `w1-home.md` Task 8): the Overlord (Retire), the model class, the
-// account set, the renewal backstop and the response retention. Ring L4, context C5: every card reads the store or its own read and
-// asks `overlordSettingsWords.ts` (L1) what to say; it decides nothing.
+// account set, the renewal backstop and the response retention. Ring L4, context K (a settings screen): every card reads the
+// store or its own read and asks `overlordSettingsWords.ts` (L1) what to say; it decides nothing.
 //
 // EVERY DOOR IS SENT, NEVER JUDGED (the brief's ruling 1). A card runs its act once through the section's one step-up
 // (`stepUp.runAct`): a door that asks for the step answers `step-up-required`, the section's one `ConfirmItsYou` is drawn in that
@@ -22,7 +22,7 @@ import {
   hourLabel, modelAnswerWords, retentionChoicesOf, retentionOf, retentionWords, retireAnswerOf, retireOffered, retireWords,
   sameSet, setBoxesOf, storeAnswered, zoneChoicesOf, type BackstopView, type OverlordGate, type RetentionView,
 } from '../../overlord/overlordSettingsWords';
-import { BODY_WORDS, MODEL_CLASS_OPTIONS, startGateOf } from '../../overlord/placeWords';
+import { MODEL_CLASS_OPTIONS } from '../../overlord/placeWords';
 import { nextReadState, type ReadOutcome } from '../../overlord/readOutcome';
 import type { ReadState } from '../../overlord/readState';
 import { refreshOverlord } from '../../stores/overlord';
@@ -129,6 +129,7 @@ export function DesignationCard({ ctx }: { readonly ctx: SectionCtx }): ReactNod
       {g.kind === 'row' && (
         <>
           <p className="ovs-note" data-settings-binding>{bindingWordOf(g.row)}</p>
+          {g.row.stopsOwed.length > 0 && <p className="ovs-note" data-settings-owed>{W.owedStops(g.row.stopsOwed)}</p>}
           <div className="ovs-actions">
             <Button variant="ghost" size="fit" data-settings-control="open-place" onClick={goPlace}>
               {g.row.bound !== null ? W.rebindOnPlace : W.openPlace}
@@ -200,23 +201,25 @@ export function AccountSetCard({ ctx }: { readonly ctx: SectionCtx }): ReactNode
       <GateLine gate={g} card="account-set" />
       {saved !== null && (() => {
         const edited = editedSetOf(saved, options, picks);
-        const wait = startGateOf(edited, accountsHeard);
+        // Start's empty-set gate does not govern this card (review 4056 F8, ruled): the card edits the saved set and the door
+        // decides, saving an empty set with its warning while nothing is bound. Only the roster gates it: the options are not
+        // known before the accounts are heard.
         const flip = (key: string) => (on: boolean): void => setPicks((cur) => new Map(cur).set(key, on));
         return (
           <>
             <AccountSetFieldset
               legend={W.setLegend} disabled={door.busy || !accountsHeard} marker="data-settings-account-set"
-              boxes={setBoxesOf(saved, options).map((b) => ({
+              boxes={setBoxesOf(saved, options, accountsHeard).map((b) => ({
                 key: b.key,
-                label: b.pool === null ? W.untagged : b.rostered ? b.pool : W.notRostered(b.pool),
+                label: b.pool === null ? W.untagged : b.rostered === false ? W.notRostered(b.pool) : b.pool,
                 on: b.pool === null ? edited.untagged : edited.pools.includes(b.pool),
                 set: flip(b.key),
               }))}
             />
-            {wait !== null && <p className="ovs-note" role="status" data-settings-set-wait={wait.kind}>{wait.kind === 'waiting' ? W.waitsForAccounts : BODY_WORDS.noAccounts}</p>}
+            {!accountsHeard && <p className="ovs-note" role="status" data-settings-set-wait="waiting">{W.waitsForAccounts}</p>}
             <div className="ovs-actions">
               <Button
-                variant="primary" size="fit" data-settings-control="set-save" disabled={door.busy || wait !== null || sameSet(edited, saved)}
+                variant="primary" size="fit" data-settings-control="set-save" disabled={door.busy || !accountsHeard || sameSet(edited, saved)}
                 onClick={() => { void door.run(() => api.overlordAccountSet(edited), accountSetAnswerWords, after); }}
               >
                 {door.busy ? W.saving : W.save}

@@ -77,8 +77,10 @@ describe("the index's status line", () => {
 });
 
 describe('Retire', () => {
-  it('is offered only while something is bound or starting', () => {
+  it('is offered while something is bound or starting, or while the row still owes a stop (F1), and not otherwise', () => {
     expect(retireOffered(BOUND)).toBe(true);
+    expect(retireOffered(row({ pending: { sessionId: 'lane-a-overlord', kind: 'designate', deadlineAt: AT, since: AT, actor: 'operator', generation: null } }))).toBe(true);
+    expect(retireOffered(row({ stopsOwed: ['lane-b-overlord'] }))).toBe(true);
     expect(retireOffered(row())).toBe(false);
   });
 
@@ -136,6 +138,12 @@ describe('the account set boxes keep the saved order and the same pool options a
   it('saved pools first as saved, then the roster pools not in it, then untagged', () => {
     expect(setBoxesOf(saved, options).map((b) => [b.key, b.rostered])).toEqual([
       ['pool-b', true], ['pool-gone', false], ['pool-a', true], ['(untagged)', true],
+    ]);
+  });
+
+  it('before the roster is heard, a saved pool is unread (null), never "no account carries it" (F6)', () => {
+    expect(setBoxesOf(saved, [], false).map((b) => [b.key, b.rostered])).toEqual([
+      ['pool-b', null], ['pool-gone', null], ['(untagged)', true],
     ]);
   });
 

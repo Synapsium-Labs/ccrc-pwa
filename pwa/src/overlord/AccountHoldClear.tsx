@@ -11,14 +11,18 @@ import { Button } from '@ccrc/ui';
 import { ApiError, api, overlordSettingsRefusalText } from '../lib/api';
 import { FACT_WORDS } from './overlordSettingsWords';
 
-export function AccountHoldClear({ lane, onCleared }: { readonly lane: string; readonly onCleared?: () => void }): ReactNode {
+// `current` is false on an item drawn from the device's saved copy (`ItemViewProps.current`): Clear is disabled and sends nothing,
+// the panel's rule for every act (review 4056 F2).
+export function AccountHoldClear({ lane, onCleared, current = true }: {
+  readonly lane: string; readonly onCleared?: () => void; readonly current?: boolean;
+}): ReactNode {
   const [state, setState] = useState<'ready' | 'busy' | 'cleared' | 'gone'>('ready');
   const [refusal, setRefusal] = useState<string | null>(null);
   const inFlight = useRef(false);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const clear = async (): Promise<void> => {
-    if (inFlight.current) return;
+    if (inFlight.current || !current) return;
     inFlight.current = true;
     setState('busy');
     setRefusal(null);
@@ -38,7 +42,7 @@ export function AccountHoldClear({ lane, onCleared }: { readonly lane: string; r
   return (
     <>
       {state !== 'gone' && (
-        <Button variant="ghost" size="fit" data-hold-clear={lane} disabled={state === 'busy'} onClick={() => { void clear(); }}>
+        <Button variant="ghost" size="fit" data-hold-clear={lane} disabled={state === 'busy' || !current} onClick={() => { void clear(); }}>
           {state === 'busy' ? FACT_WORDS.clearing : FACT_WORDS.clear}
         </Button>
       )}

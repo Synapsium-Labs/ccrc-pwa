@@ -179,7 +179,8 @@ const measure = (phosphor: string): {
         name: el.getAttribute('aria-label') ?? target.textContent?.trim() ?? el.tagName, w: box.width, h: box.height, left: box.left, right: box.right,
       };
     });
-  // The place's own label: the one-line form beside the Fleet's BuildLine carries the same hook, and comes first on a desk.
+  // The place's own label: the one-line form beside the Fleet's BuildLine carries the same hook, and comes first in the document
+  // at every width, because the fleet column is mounted at every width and only CSS hides it on a phone.
   const word = place.querySelector('[data-readiness-word]');
   return {
     controls,

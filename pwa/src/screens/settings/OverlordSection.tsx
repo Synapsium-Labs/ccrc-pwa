@@ -1,7 +1,7 @@
 // Settings › Overlord (Overlord W1 home C, Tasks 8 and 9; spec 2026-11-09 §3.4, Table 11.1a, Table 11.1d's Settings row; plan
 // `w1-home.md` Tasks 8 and 9, slug `settings-gains-an-overlord-section`): six cards, each a `Section` with its scope and purpose
 // line, in this order: the Overlord (its state, the place's link, Retire), the model class, the account set, the renewal backstop,
-// the response retention, and each account's facts with its hold. Ring L4, context C5: it decides nothing.
+// the response retention, and each account's facts with its hold. Ring L4, context K (a settings screen): it decides nothing.
 //
 // DRAWN ONLY UNDER `overlord-v1` (plan question 9): the frame draws Settings' index in its place without the word, and the index
 // lists no Overlord row. A server whose designation read is `absent` (an older one) draws one sentence and no card.

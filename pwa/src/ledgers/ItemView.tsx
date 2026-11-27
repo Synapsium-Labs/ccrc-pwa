@@ -474,12 +474,12 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
   // The Overlord's account hold (home C, plan F17; ruled call 1684): an open hold item's Clear, for the lane its title names.
   const holdLane = holdLaneOfItem(item);
   // Why the acts are off on a saved copy, said once, and only where there is an act to be off.
-  const notCurrent = !current && (mayTick || ended || secretOpen || removable);
+  const notCurrent = !current && (mayTick || ended || secretOpen || removable || holdLane !== null);
   return (
     <section className="wi-card wi-act" aria-label="Your move" {...(stuck ? { 'data-sticky': 'foot' } : {})}>
       {closed !== null && <p className="wi-status" data-closed={item.state}>{closed}</p>}
       {ended && <p className="wi-hint">{WAITS_ON_WORDS.ended}</p>}
-      {holdLane !== null && <div className="wi-hold" data-item-hold={holdLane}><AccountHoldClear lane={holdLane} /></div>}
+      {holdLane !== null && <div className="wi-hold" data-item-hold={holdLane}><AccountHoldClear lane={holdLane} current={current} /></div>}
       {mayTick && decide && (
         <>
           {/* The reasons come BEFORE the choices and describe them, so they are read before the pick; nothing is picked for

@@ -137,6 +137,25 @@ describe('Retire', () => {
     await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
   });
 
+  it('F1: the re-read returns the retired row that still owes a stop; Retire stays offered, so "Retire again" can be followed', async () => {
+    const OWING = row({ stopsOwed: ['lane-b-overlord'] });
+    refresh.mockImplementation(async () => { useOverlordStore.setState({ designation: answered(OWING) }); });
+    const retire = vi.spyOn(api, 'overlordRetire')
+      .mockResolvedValueOnce({ ok: true, changed: true, term: 2, stopped: [ID], owed: ['lane-b-overlord'] })
+      .mockResolvedValueOnce({ ok: true, changed: false, term: null, stopped: ['lane-b-overlord'], owed: [] });
+    show(answered(BOUND));
+    await settle();
+    press('retire');
+    expect(await screen.findByText('Still owed a stop: lane-b-overlord. Retire again to try the stop again.')).toBeTruthy();
+    await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+    await settle();
+    expect(controlsIn('designation')).toEqual(['open-place', 'retire']);
+    expect(within(card('designation')).getByText(W.owedStops(['lane-b-overlord']))).toBeTruthy();
+    press('retire');
+    await waitFor(() => expect(retire).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('Stopped: lane-b-overlord.')).toBeTruthy();
+  });
+
   it('the door\'s step-up is drawn in its own card, and Retire runs again only when pressed', async () => {
     const retire = vi.spyOn(api, 'overlordRetire').mockRejectedValueOnce(stepUpRequired()).mockResolvedValue({ ok: true, changed: true, term: 2, stopped: [], owed: [] });
     show(answered(BOUND));
@@ -268,6 +287,35 @@ describe('the account set', () => {
     await settle();
     expect(card('account-set').querySelector('[data-settings-set-wait="waiting"]')?.textContent).toBe(W.waitsForAccounts);
     expect((document.querySelector('[data-settings-control="set-save"]') as HTMLButtonElement).disabled).toBe(true);
+    expect(card('account-set').querySelector<HTMLFieldSetElement>('[data-settings-account-set]')!.disabled).toBe(true);
+  });
+
+  it('F6: on a cold load, before the accounts are heard, no saved pool is said to have no account (unread is not absent)', async () => {
+    act(() => useFleetStore.setState({ roster: [], accountsHeard: false }));
+    show(answered(BOUND));
+    await settle();
+    const labels = [...card('account-set').querySelectorAll('[data-set-box]')].map((b) => b.textContent);
+    expect(labels).toEqual(['pool-a', 'pool-b', W.untagged]);
+    // Heard, and the roster carries neither pool: now the verdict is drawn.
+    act(() => useFleetStore.setState({ roster: [ROSTER[2]!], accountsHeard: true }));
+    await settle();
+    expect([...card('account-set').querySelectorAll('[data-set-box]')].map((b) => b.textContent))
+      .toEqual([W.notRostered('pool-a'), W.notRostered('pool-b'), 'pool-c', W.untagged]);
+  });
+
+  it('F8 (ruled): Start\'s empty-set gate does not govern the card; an empty set is sent, and the door\'s answer is drawn', async () => {
+    const save = vi.spyOn(api, 'overlordAccountSet').mockResolvedValue({
+      ok: true, changed: true, accounts: { list: [], counted: [], unmeasured: [] }, warnings: [{ warning: 'overlord-single-account', count: 0 }],
+    });
+    show(answered(row()));
+    await settle();
+    fireEvent.click(within(card('account-set')).getByRole('checkbox', { name: 'pool-a' }));
+    fireEvent.click(within(card('account-set')).getByRole('checkbox', { name: 'pool-b' }));
+    expect(card('account-set').querySelector('[data-settings-set-wait]')).toBeNull();
+    expect((document.querySelector('[data-settings-control="set-save"]') as HTMLButtonElement).disabled).toBe(false);
+    press('set-save');
+    await waitFor(() => expect(save).toHaveBeenCalledWith({ pools: [], untagged: false }));
+    expect(await within(card('account-set')).findByText('Only 0 accounts can serve it: the Overlord needs at least two.')).toBeTruthy();
   });
 });
 

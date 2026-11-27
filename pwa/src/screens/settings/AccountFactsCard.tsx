@@ -1,7 +1,7 @@
 // Settings › Overlord's account facts (Overlord W1 home C, Task 9; spec 2026-11-09 §3.4, Table 11.1a, §3.6): one row per roster
 // account, with its Fable billing fact, its continuity record and, when the Overlord's account holds name it, its hold with Clear.
-// Ring L4, context C5: the rows come from the roster (`GET /api/accounts`, the fleet store's one read), never from a name list in
-// source, and every word is `overlordSettingsWords.ts`' (L1).
+// Ring L4, context K (a settings screen, by the architecture spec's table): the rows come from the roster (`GET /api/accounts`,
+// the fleet store's one read), never from a name list in source, and every word is `overlordSettingsWords.ts`' (L1).
 //
 // THE DOORS. A fact saves through the account set door (`POST /api/accounts/:id/set`) with one field; the door asks the step-up for
 // `included` and `on`, whatever is stored (`factsChangeWidens`), and nothing for `credits` and `off`, so those land in one tap. An
@@ -12,7 +12,7 @@
 //
 // `AccountHoldClear` (its own file) is also mounted on the hold item's detail (`ItemView.tsx`, plan F17), so the item and the
 // card share one control.
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Button, Section } from '@ccrc/ui';
 import type { RosterWire } from '../../../../shared/api';
 import { SETTINGS_CARDS } from '../../fleet/settingsText';
@@ -53,7 +53,10 @@ function FactRow({ ctx, account, hold, onHoldCleared }: {
   // The fact door's refusals are the account words' (`accountFactRefusalText`), not the Overlord's.
   const door = useCardDoor(ctx, card, (err) => accountFactRefusalText(err, account.id));
   const refreshAccounts = useFleetStore((s) => s.refreshAccounts);
-  const save = (field: { fableBilling: 'included' | 'credits' } | { continuity: 'on' | 'off' }): void => {
+  // Once Clear has answered, its control stays mounted, so its answer line outlives the holds re-read it triggers: that re-read
+  // no longer names the lane when the clear landed, or when no hold stood (review 4056 F7).
+  const [clearAnswered, setClearAnswered] = useState(false);
+  const save =(field: { fableBilling: 'included' | 'credits' } | { continuity: 'on' | 'off' }): void => {
     void door.run(() => api.accountSet(account.id, field), () => [W.saved], refreshAccounts);
   };
   return (
@@ -73,10 +76,10 @@ function FactRow({ ctx, account, hold, onHoldCleared }: {
           { control: 'continuity-off', label: FACT_WORDS.recordOff, pressed: null, act: () => save({ continuity: 'off' }) },
         ]}
       />
-      {hold !== null && (
+      {(hold !== null || clearAnswered) && (
         <div className="ovs-actions" data-account-hold={account.id}>
-          <p className="ovs-note">{holdLineOf(hold)}</p>
-          <AccountHoldClear lane={account.id} onCleared={onHoldCleared} />
+          {hold !== null && <p className="ovs-note">{holdLineOf(hold)}</p>}
+          <AccountHoldClear lane={account.id} onCleared={() => { setClearAnswered(true); onHoldCleared(); }} />
         </div>
       )}
       {ctx.confirmFor(card)}

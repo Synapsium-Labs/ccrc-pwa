@@ -62,6 +62,7 @@ export const OVERLORD_SETTINGS_WORDS = {
   openPlace: 'Open the Overlord place',
   rebindOnPlace: 'Rebind it on the Overlord place',
   stale: (at: number) => `Last read at ${clockOf(at)}: this may be out of date.`,
+  owedStops: (ids: readonly string[]) => `Still owed a stop: ${ids.join(', ')}. Retire sends the stop again.`,
   retire: 'Retire the Overlord',
   retiring: 'Retiring…',
   save: 'Save',
@@ -120,8 +121,10 @@ export function bindingWordOf(row: DesignationView): string {
   return 'Nothing is bound.';
 }
 
-/** Retire is drawn while something is bound or starting: with neither, there is nothing to retire. */
-export const retireOffered = (row: DesignationView): boolean => row.bound !== null || row.pending !== null;
+/** Retire is drawn while something is bound or starting, or while the row still owes a stop: the door drains owed stops on a
+ *  row with nothing bound, so the answer's "Retire again" must stay something the operator can follow (review 4056 F1). With
+ *  none of the three, there is nothing for the door to do. */
+export const retireOffered = (row: DesignationView): boolean => row.bound !== null || row.pending !== null || row.stopsOwed.length > 0;
 
 const strings = (v: unknown): readonly string[] | null =>
   (Array.isArray(v) && v.every((x) => typeof x === 'string') ? v as string[] : null);
@@ -215,14 +218,16 @@ export function accountSetAnswerWords(body: unknown): readonly string[] {
 // ── The account set card's boxes ──
 
 /** One box of the set: a pool, or the untagged accounts. `rostered` false is a saved pool no roster account carries. */
-export interface SetBox { readonly key: string; readonly pool: string | null; readonly rostered: boolean }
+/** `rostered: null` is unread: the roster has not been heard, so whether any account carries the pool is not known (review
+ *  4056 F6: unread is not absent, so no "no account carries this pool" verdict is drawn before the roster answers). */
+export interface SetBox { readonly key: string; readonly pool: string | null; readonly rostered: boolean | null }
 
 /** The boxes, in the SAVED set's order: the saved pools first, as saved, then each roster pool (`poolOptions`' answer, the
  *  same options Start uses) not in it, in the roster's order, then the untagged accounts. A saved pool the roster no longer
- *  carries keeps its box, so it can be switched off. */
-export function setBoxesOf(saved: PoolSet, options: readonly string[]): readonly SetBox[] {
+ *  carries keeps its box, so it can be switched off. `heard` is whether the roster has answered. */
+export function setBoxesOf(saved: PoolSet, options: readonly string[], heard = true): readonly SetBox[] {
   return [
-    ...saved.pools.map((p) => ({ key: p, pool: p, rostered: options.includes(p) })),
+    ...saved.pools.map((p) => ({ key: p, pool: p, rostered: heard ? options.includes(p) : null })),
     ...options.filter((p) => !saved.pools.includes(p)).map((p) => ({ key: p, pool: p, rostered: true })),
     { key: '(untagged)', pool: null, rostered: true },
   ];

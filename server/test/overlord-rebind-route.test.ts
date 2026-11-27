@@ -446,6 +446,9 @@ describe('POST /api/overlord/rebind: the pair the caller saw', () => {
     // An equal pair with the step-up not fresh is asked for it, as today.
     const same = await rebind(r, { force: true, sessionId: r.oldId, term: termOf(r) });
     expect(same.json()).toMatchObject({ error: 'step-up-required' });
+    // Both halves of the ordering (review 4056 F12): the moved pair asked only the plain gate, and the equal pair asked the plain
+    // gate and then the step-up, so the compare sits between the two asks.
+    expect(r.gate.asks).toEqual([{ cap: null }, { cap: null }, { cap: null, stepUp: true }]);
     expect(r.body.log).toEqual([]);
   });
 
@@ -506,7 +509,7 @@ describe('POST /api/overlord/rebind: the pair the caller saw', () => {
     const uses = sourceOfSymbol(ROUTES, 'registerOverlordRoutes.rebind').split('\n').filter((l) => /\bsaw\b/.test(l));
     expect(uses).toHaveLength(2);   // the parameter, and the compare
     expect(uses[0]).toMatch(/saw: RebindSaw \| undefined/);
-    expect(uses[1]).toMatch(/const moved = saw === undefined \? null : rebindMovedDetail\(read, saw\);/);
+    expect(uses[1]).toMatch(/^\s*const moved = saw === undefined \? null : rebindMovedDetail\(read, saw\);\s*$/);
   });
 });
 

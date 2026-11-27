@@ -41,7 +41,8 @@ Every door the plan lists as "not on `main` yet" is on `main`. Each card is draw
 - **A census holds every Overlord refusal word to the spec's Table 11.6** (`single-definition/refusal-table.test.ts`; `codeOnly` is
   shrink-only). The forced rebind's new word could not land without a spec row, so the door answers the existing
   `stale-designation` (ruled call 1685; below).
-- **Main moved during the build** from `3fda0fc9b1` to `1f31f6133d`. The last merge of `main` is recorded under "Merges" below.
+- **Main moved during the build** from `3fda0fc9b1` to `1f31f6133d`. The build absorbed no `main` before its first push. The one
+  merge of `main`, in fix round 1, is recorded under "Fix round 1" below.
 
 ## What was built
 
@@ -87,8 +88,9 @@ Every door the plan lists as "not on `main` yet" is on `main`. Each card is draw
   dropped, and the act table is `Partial`, so an act with no sentence draws the word raw (`Refused: auth-off`), never Start's sentence.
   Settings' three designation doors joined the table, because each asks the account gate.
 - **4b.** The place's browser file asserts the readiness label in every state, by the state's own word, and its settle waits for the
-  word itself. Its `measure` now reads the label inside the place. On a desk, the Fleet's one-line form carries the same hook and came
-  first, so the old contrast check measured that line, not the place's chip.
+  word itself. Its `measure` now reads the label inside the place. The Fleet's one-line form carries the same hook and comes first in
+  the document at every width (the fleet column is mounted at every width; only CSS hides it on a phone), so the old contrast check
+  measured that line, not the place's chip.
 - **4c.** The strip says `rank-changed` in its own words (`PORTFOLIO_WORDS.rankChanged`). It has already read the order again, so it
   does not tell the operator to, and the sentence is set only once that read has answered (`rankChangedUnread` otherwise). The Waiting
   on you table's sentence, "Read it again and reorder", is unchanged and pinned.
@@ -156,6 +158,22 @@ Every door the plan lists as "not on `main` yet" is on `main`. Each card is draw
   third measured holder of `stale-designation`, beside the two older doors. The pair is compared before the step-up, so it is not a
   gate fence and cannot ask the gate. The run/session census names the pair's compare (`rebindMovedDetail`) in its not-binding list:
   it reads the designation row and the console's pair, never a run.
+- **`spec-refusal-row-owed-for-the-rebind-pair`** (review 4056 F4, the coordinator's to carry on the ledger). The spec's Table 11.6 row
+  for `stale-designation` names the write doors and the prompt route, not the rebind door's pair. The row is owed, and this PR
+  edits no spec.
+- **`settings-screen-test-untouched`** (review 4056 F5). The plan lists `pwa/test/settings-screen.test.tsx` among the files to modify.
+  The Overlord's page is drawn by the frame (`SettingsFrame.tsx`'s overlord case), so its routing, its gate under `overlord-v1` and
+  its index row are pinned in `settings-frame` and `section-status`, and the screen's own cases needed no change.
+- **`retire-offered-while-stops-are-owed`** (review 4056 F1). The console keeps the offer, and it widens to a row that owes a stop:
+  `retireOffered` is bound, or pending, or `stopsOwed` non-empty. The card says what is owed. Leaving the offer to the door would
+  draw Retire on a row the door has nothing to do for, so the console's rule stays, matched to the door's.
+- **`hold-clear-sends-nothing-from-a-saved-copy`** (review 4056 F2). `AccountHoldClear` takes the item's `current`, and the panel's
+  saved-copy line counts Clear among the acts that are off.
+- **`account-set-card-sends-an-empty-set`** (review 4056 F8, ruled). Start's empty-set gate does not govern the card: the door saves
+  an empty set with its `overlord-single-account` warning while nothing is bound, and the card draws that answer. Only the roster
+  gates the card.
+- **`clear-answer-outlives-the-holds-re-read`** (review 4056 F7). Once Clear has answered, the account's hold block stays mounted
+  without its hold line, so the answer is still readable after the re-read no longer names the lane.
 
 The first full run on the pushed tip was red on these two censuses and on the route table's probe list (`app.test.tsx`, which had no
 probe for `/settings/overlord`). My local census run had not included the three files. They were fixed in one follow-up commit.

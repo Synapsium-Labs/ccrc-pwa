@@ -8,6 +8,7 @@ import { READINESS_ITEM_TEXT } from '../../shared/overlord-readiness';
 import { OVERLORD_ITEM_PROGRAMME } from '../../shared/overlord-sequence';
 import { ApiError, OVERLORD_SETTINGS_REFUSAL_TEXT, api } from '../src/lib/api';
 import { ItemView } from '../src/ledgers/ItemView';
+import { NOT_CURRENT_ACTS_WORD } from '../src/ledgers/ledgerWords';
 import { FACT_WORDS } from '../src/overlord/overlordSettingsWords';
 import { NOW, itemView } from './ledgersFixture';
 
@@ -17,8 +18,8 @@ const holdItem = (over: Partial<ReturnType<typeof itemView>> = {}) => itemView({
   program: OVERLORD_ITEM_PROGRAMME, kind: 'do', title: `${READINESS_ITEM_TEXT.hold.title}: lane-a`,
   why: READINESS_ITEM_TEXT.hold.why, how: [...READINESS_ITEM_TEXT.hold.how], ...over,
 });
-const show = (item: ReturnType<typeof itemView>): void => {
-  render(<ItemView item={item} onTick={vi.fn()} onDismiss={vi.fn()} programmeLive={true} now={NOW} />);
+const show = (item: ReturnType<typeof itemView>, current = true): void => {
+  render(<ItemView item={item} onTick={vi.fn()} onDismiss={vi.fn()} programmeLive={true} now={NOW} current={current} />);
 };
 const settle = async (): Promise<void> => { await act(async () => { await new Promise((r) => setTimeout(r, 0)); }); };
 
@@ -61,4 +62,23 @@ describe('the hold item draws the Clear for the lane it names', () => {
     expect(await screen.findByText(OVERLORD_SETTINGS_REFUSAL_TEXT['no-hold'])).toBeTruthy();
     expect(screen.queryByRole('button', { name: FACT_WORDS.clear })).toBeNull();
   });
-});
+
+  it('F2: on a saved copy of the item, Clear sends nothing, and the line that says the acts are off counts it', async () => {
+    const clear = vi.spyOn(api, 'clearAccountHold').mockResolvedValue({ ok: true, lane: 'lane-a' });
+    show(holdItem(), false);
+    const button = screen.getByRole<HTMLButtonElement>('button', { name: FACT_WORDS.clear });
+    expect(button.disabled).toBe(true);
+    // The disabled state is what holds: React drops a click on a button whose `disabled` prop is set, so the handler's own check
+    // of `current` is a second guard no click can reach.
+    fireEvent.click(button);
+    await settle();
+    expect(clear).not.toHaveBeenCalled();
+    expect(document.querySelector('[data-current="false"]')?.textContent).toBe(NOT_CURRENT_ACTS_WORD);
+  });
+
+  it('F2: the saved-copy line counts Clear itself: on an item whose other acts draw no such line (one that carries an action), it is still said', () => {
+    // Tick and the ended hint stand aside for an item that carries an action, so only the hold's Clear makes the line due here.
+    show(holdItem({ action: { verb: 'linear-report', migrationId: 3 } }), false);
+    expect(document.querySelector('[data-item-hold="lane-a"]')).not.toBeNull();
+    expect(document.querySelector('[data-current="false"]')?.textContent).toBe(NOT_CURRENT_ACTS_WORD);
+  });});

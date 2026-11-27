@@ -120,8 +120,11 @@ describe('an older fleet node and an unmeasured outcome', () => {
 });
 
 describe('the account-hold Clear', () => {
-  it('is drawn only for a held lane, and calls the door once', async () => {
-    vi.spyOn(api, 'accountHolds').mockResolvedValue({ ok: true, holds: [{ lane: 'lane-b', cause: 'launch-profile-unmet', startId: 4, heldAt: AT }] });
+  it('is drawn only for a held lane, and calls the door once; its answer stays readable after the re-read it triggers (F7)', async () => {
+    // The server's own answers: the hold stands on the first read, and the re-read after the clear no longer names it.
+    const holds = vi.spyOn(api, 'accountHolds')
+      .mockResolvedValueOnce({ ok: true, holds: [{ lane: 'lane-b', cause: 'launch-profile-unmet', startId: 4, heldAt: AT }] })
+      .mockResolvedValue({ ok: true, holds: [] });
     let resolve!: (v: unknown) => void;
     const clear = vi.spyOn(api, 'clearAccountHold').mockImplementation(() => new Promise((r) => { resolve = r; }));
     show([lane('lane-a'), lane('lane-b')]);
@@ -136,16 +139,26 @@ describe('the account-hold Clear', () => {
     expect(client.stepUpStart).not.toHaveBeenCalled();
     await act(async () => { resolve({ ok: true, lane: 'lane-b' }); });
     await settle();
+    await waitFor(() => expect(holds).toHaveBeenCalledTimes(2));
+    await settle();
     expect(row('lane-b').querySelector('[data-hold-clear]')).toBeNull();
+    expect(row('lane-b').querySelector('[data-hold-cleared="lane-b"]')?.textContent).toBe(FACT_WORDS.cleared);
+    expect(within(row('lane-b')).queryByText('Held: launch profile unmet')).toBeNull();
   });
 
-  it('a hold that no longer stands says so and draws no button again', async () => {
-    vi.spyOn(api, 'accountHolds').mockResolvedValue({ ok: true, holds: [{ lane: 'lane-a', cause: 'launch-profile-unmet', startId: 4, heldAt: AT }] });
+  it('a hold that no longer stands says so after the re-read, and draws no button again (F7: the re-read answers as the server would)', async () => {
+    const holds = vi.spyOn(api, 'accountHolds')
+      .mockResolvedValueOnce({ ok: true, holds: [{ lane: 'lane-a', cause: 'launch-profile-unmet', startId: 4, heldAt: AT }] })
+      .mockResolvedValue({ ok: true, holds: [] });
     vi.spyOn(api, 'clearAccountHold').mockRejectedValue(new ApiError(404, { ok: false, error: 'not-found' }));
     show([lane('lane-a')]);
     await settle();
     fireEvent.click(row('lane-a').querySelector('[data-hold-clear="lane-a"]')!);
     expect(await screen.findByText(OVERLORD_SETTINGS_REFUSAL_TEXT['no-hold'])).toBeTruthy();
+    await waitFor(() => expect(holds).toHaveBeenCalledTimes(2));
+    await settle();
+    expect(row('lane-a').querySelector('[data-hold-refusal="lane-a"]')?.textContent).toBe(OVERLORD_SETTINGS_REFUSAL_TEXT['no-hold']);
+    expect(row('lane-a').querySelector('[data-hold-clear]')).toBeNull();
   });
 
   it('holds that cannot be read are said, and no Clear is drawn', async () => {

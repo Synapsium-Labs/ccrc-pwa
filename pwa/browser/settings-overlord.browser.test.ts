@@ -4,10 +4,12 @@
 // billing fact and a continuity record on one account), the renewal backstop, the response retention and the account holds
 // (one hold, so Clear is drawn).
 //
-// TWO STATES of the designation, so every control the section can draw is drawn and measured:
+// TWO STATES of the designation, and each pins the exact count of the controls it draws:
 // - `bound`: a bound Overlord (Retire, the place's link, the model class radios and Save, the account set's boxes, Save and Save
 //   again), with the backstop, the retention and the account facts;
 // - `none`: no designation (the place's Start link only on the designation cards), with the same three other cards.
+// Neither draws what only an answer or another read brings: the step-up's confirm, an answer or refusal line, Retire on a row
+// that only owes stops, the waiting-for-accounts line, or the absent and unread sentences. Those are the unit files' cases.
 //
 // At 320, 360, 390, 899 and 1280 px, in both skins and in the light and the dark palette (the dark palette's id is `PHOSPHOR`;
 // each case asserts the theme the page stamped, so a name the app does not keep can never pass as dark):
@@ -140,8 +142,11 @@ describe.each(SKINS)('Settings › Overlord in %s', (skin) => {
             const m = await page.evaluate(measure, PHOSPHOR);
             expect(m.theme, 'the palette the page stamped is the one asked for').toBe(theme);
             expect(m.cards, 'the six cards, in order').toEqual([...CARDS]);
-            // Two accounts with four fact controls each, a Clear, the backstop's and the retention's: never fewer.
-            expect(m.controls.length, 'the section draws its controls').toBeGreaterThanOrEqual(state === 'bound' ? 20 : 13);
+            // The controls drawn, exactly (review 4056 F10: a floor under them let a card lose a control and still pass). In both
+            // states: the backstop's hour, zone and Save (3), the retention's days and Save (2), and two accounts with four fact
+            // controls each and one Clear (9). `bound` adds the place's link and Retire (2), the model class's two radios and Save
+            // (3), and the account set's three boxes, Save and Save again (5): 24. `none` adds the place's Start link (1): 15.
+            expect(m.controls.length, 'the section draws exactly its controls').toBe(state === 'bound' ? 24 : 15);
             if (state === 'bound') {
               const boxes = await page.$$eval('[data-settings-account-set] label', (ls) => ls.map((l) => l.textContent?.trim() ?? ''));
               expect(boxes, 'the account set draws the saved pool first, the other long pool and untagged').toEqual([...LONG_POOLS, 'Untagged accounts']);

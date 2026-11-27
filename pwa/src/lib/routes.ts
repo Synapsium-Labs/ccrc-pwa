@@ -23,8 +23,9 @@ export interface Route {
 }
 
 /** Settings' seven sections, in the index's order (D-5503): each is its own route, `/settings/<id>` (D-5504). The one
- *  list: the route entries below, the index rows and the section pages all read it. Integrations is the last
- *  (D-8932): Linear, project linking and GitHub, which sat on Security. */
+ *  list: the route entries below, the index rows and the section pages all read it. Integrations (D-8932: Linear, project
+ *  linking and GitHub, which sat on Security) comes before the Overlord's, which is last and drawn only under `overlord-v1`
+ *  (Overlord W1 home C). */
 export const SETTINGS_SECTIONS = [
   { id: 'updates', title: 'Updates' },
   { id: 'appearance', title: 'Appearance' },

@@ -9,6 +9,9 @@ import type { LinearLegacyRow, LinearWorkspaceView } from '../../shared/linear';
 import type { LinearWorkspacesRead } from '../src/lib/api';
 import { dismissRelease, resetDismissalForTests } from '../src/fleet/releaseDismissal';
 import { boxToken, node, updatesView } from './settingsViewFixture';
+import type { DesignationView } from '../../shared/overlord-designation';
+import { modelLabelOf } from '../src/overlord/overlordSettingsWords';
+import type { ReadState } from '../src/overlord/readState';
 
 const noop = (): void => {};
 const stallView = (level: string): StallWatchView => ({ chosen: { level } } as unknown as StallWatchView);
@@ -228,5 +231,30 @@ describe('Integrations', () => {
     const s = of('integrations', settings(linear({ store: 'unreadable' })));
     expect(text(s)).toBe(`Linear keys ${UNREAD_STATUS} · ${INTEGRATIONS_GITHUB_STATUS}`);
     expect(tone(s)).toBe('amber');
+  });
+});
+
+describe('overlord (home C; review 4056 F5): the Overlord store\'s one read, mapped line by line', () => {
+  const AT = 1_700_000_000_000;
+  const row = (over: Partial<DesignationView> = {}): DesignationView => ({
+    bound: null, pending: null, term: 2, designatedTerm: 1, model: 'opus', accountPools: { pools: [], untagged: true },
+    pastIds: [], actor: 'operator', lastAttempt: null, stopsOwed: [], ...over,
+  });
+  const ofRead = (overlord: ReadState<DesignationView | null>): SectionStatus => of('overlord', settings(), { ...FACTS, overlord });
+
+  it('loading is the skeleton, and the other states are each their own line', () => {
+    expect(ofRead({ state: 'loading' })).toEqual({ kind: 'skeleton' });
+    const lines: [ReadState<DesignationView | null>, string, string][] = [
+      [{ state: 'absent' }, 'This server has no Overlord', 'calm'],
+      [{ state: 'unmeasured', error: 'HTTP 503' }, 'unmeasured', 'amber'],
+      [{ state: 'answered', value: null, at: AT }, 'No Overlord', 'calm'],
+      [{ state: 'answered', value: row({ bound: { sessionId: 'lane-a-overlord', generation: 'g1' } }), at: AT }, `Bound to lane-a-overlord, ${modelLabelOf('opus')}`, 'calm'],
+      [{ state: 'stale', value: row(), at: AT, error: 'timeout' }, `No Overlord, ${modelLabelOf('opus')}`, 'calm'],
+    ];
+    for (const [read, t, tn] of lines) {
+      const s = ofRead(read);
+      expect(text(s), read.state).toBe(t);
+      expect(tone(s), read.state).toBe(tn);
+    }
   });
 });
