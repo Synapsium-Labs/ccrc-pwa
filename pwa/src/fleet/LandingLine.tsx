@@ -27,7 +27,7 @@
 //   the disclosure; focus elsewhere, or a block with no record, moves nothing.
 import { useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode, RefObject } from 'react';
-import { BARE_ROW, Button, Chip } from '@ccrc/ui';
+import { BareRow, Button, Chip } from '@ccrc/ui';
 import type { LandingPauseAnswer } from '../../../shared/landingLine';
 import { api } from '../lib/api';
 import { toggleLandingLineOpen, useLandingLineOpen } from './foldState';
@@ -64,7 +64,8 @@ export function LandingLine({
   const gen = useRef(0);
   useEffect(() => () => { gen.current += 1; }, []);
   const pauseRef = useRef<HTMLButtonElement>(null);
-  const toggleRef = useRef<HTMLButtonElement>(null);
+  /** The block's disclosure (wave 192), found in the block: `BareRow` takes no ref. `null` once the block has gone. */
+  const toggle = (): HTMLElement | null => sectionRef.current?.querySelector<HTMLElement>(':scope > .landing-line-title') ?? null;
   const rowButtons = useRef(new Map<number, HTMLButtonElement>());
   const sectionRef = useRef<HTMLElement>(null);
   /** The control in the block that last held focus, until focus moves to an element outside the block (R6). */
@@ -77,8 +78,8 @@ export function LandingLine({
   useEffect(() => {
     if (closed === null) return;
     const order = closed.after === 'done'
-      ? [pauseRef.current, toggleRef.current, focusFallback.current]
-      : [rowButtons.current.get(closed.entryId), pauseRef.current, toggleRef.current, focusFallback.current];
+      ? [pauseRef.current, toggle(), focusFallback.current]
+      : [rowButtons.current.get(closed.entryId), pauseRef.current, toggle(), focusFallback.current];
     firstInDocument(order)?.focus({ preventScroll: true });
   }, [closed, focusFallback]);
 
@@ -92,7 +93,7 @@ export function LandingLine({
     lastFocused.current = null;
     const active = document.activeElement;
     if (active !== null && active !== document.body) return;
-    firstInDocument([pauseRef.current, toggleRef.current, focusFallback.current])?.focus({ preventScroll: true });
+    firstInDocument([pauseRef.current, toggle(), focusFallback.current])?.focus({ preventScroll: true });
   }, [state, sheet, open, focusFallback]);
 
   const tapPause = (card: LandingLineCard): void => {
@@ -144,18 +145,10 @@ export function LandingLine({
           if (next instanceof Node && !(sectionRef.current?.contains(next) ?? false)) lastFocused.current = null;
         }}
       >
-        {/* `BareRow`'s classes on a plain button: that primitive takes no ref, and focus needs one. */}
-        <button
-          ref={toggleRef}
-          type="button"
-          className={`${BARE_ROW} landing-line-title`}
-          aria-expanded={open}
-          aria-controls={bodyId}
-          onClick={() => toggleLandingLineOpen(project)}
-        >
+        <BareRow className="landing-line-title" aria-expanded={open} aria-controls={bodyId} onClick={() => toggleLandingLineOpen(project)}>
           <span className="landing-line-mark" aria-hidden="true">{open ? '▾' : '▸'}</span>
           <span>{LINE_TITLE}</span>
-        </button>
+        </BareRow>
         <p className="landing-line-status" role="status" aria-live="polite">{card.statusText}</p>
         {stale !== null && <p className="landing-line-stale">{STALE_PREFIX + stale.text}</p>}
         {/* Rolled up: the summary, outside the status's live region and no live region itself, so a read that changes only
