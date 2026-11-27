@@ -230,7 +230,9 @@ describe('I5 over the real kept designation line (call 1240)', () => {
     expect(invariantVerdict('I5', gatherInvariantInput(depsOf(db)))).toMatchObject({ kind: 'violated', findings: [{ subject: 'seq:3' }, { subject: 'seq:4' }] });
   });
 
-  it('a designation line after the floor moves the kept line to it: the window lines before it read unmeasured, never holds', () => {
+  // While a binding stands, only a newer live line or the retire of the bound body moves the kept line; with no binding, any newer
+  // designation line does (`keptDesignationLine`; sequence-b2-review-carries). Here the retire of a, then the live b, move it.
+  it('the retire of the bound body and a newer live line after the floor move the kept line: the window lines before it read unmeasured, never holds', () => {
     const db = openDb();
     designation(db, 'overlord-a', 'live');                  // seq 1
     line(db, {});                                           // seq 2

@@ -18,6 +18,9 @@ import {
 } from '../../../shared/plan.js';
 import { AUTO_TICKET_PREFIX, autoTicketKey, ccrcIssueIds, epicAdmitsRun, epicIsDone, fitInboundText } from './planPolicy.js';
 import { inboundRetirable, retireWhyOf, type RetireWhy } from '../linear/inboundRetire.js';
+import { ADOPTED_FINGERPRINT } from '../linear/planSyncPolicy.js';
+// D-9131: the `adopted` word's home is the L1 fingerprint encoding; the store imports it and re-exports it for its own readers.
+export { ADOPTED_FINGERPRINT } from '../linear/planSyncPolicy.js';
 import { tx } from './tx.js';
 import * as lifecycle from './programmeLifecycleStore.js';
 import { markSyncDueInTx } from './programmeLifecycleStore.js';
@@ -127,11 +130,6 @@ const ticketOf = (r: Raw): TicketRow => r as unknown as TicketRow;
 /** The due-queue key of an epic: its programme's slug, or `upkeep:<project>` for a team's Upkeep epic. */
 const dueKeyOf = (e: { program: string | null; project: string }): string =>
   e.program ?? `${UPKEEP_DUE_PREFIX}${e.project}`;
-
-/** The fingerprint of an adopted object (recovery, conflict, an inbound issue taken or placed): it was never sent the current
- *  inputs, so it matches no planned one and the next re-read emits one absolute update (or link) that writes the real
- *  fingerprint. The sync's `adopted` word, spelled once, here. */
-export const ADOPTED_FINGERPRINT = 'adopted';
 
 // ── The queue ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 

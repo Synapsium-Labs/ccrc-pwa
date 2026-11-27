@@ -1137,9 +1137,9 @@ describe('every stylesheet under src/ is audited', () => {
     //
     // THE TWO HALVES ARE PINNED DIFFERENTLY, ON PURPOSE.
     //
-    // The APP's stylesheets are a CLOSED set — five files (the fifth, docs.css,
-    // is the native Docs reader's), and a sixth is an architectural event worth
-    // a test edit. They stay an exact literal.
+    // The APP's stylesheets are a CLOSED set — every file of APP_SHEETS below
+    // (docs.css among them, the native Docs reader's), and one more is an
+    // architectural event worth a test edit. They stay an exact literal.
     //
     // @ccrc/ui's are OPEN: the design system gains a stylesheet every time it
     // gains a component, because each component's CSS is colocated with it.
@@ -1168,11 +1168,13 @@ describe('every stylesheet under src/ is audited', () => {
       'src/ledgers/ledgers.css',  // the Waiting on you list and the item view (desktop-polish PL5a, D-7712): pills and the programme band
       'src/ledgers/migration.css',  // the migration map and report bodies' structure lists (D-8186): spacing and wrapping only, no colour
       'src/inspector/inspector.css', // the inspector's shared sections (W2 Task S8, D-5474); layout only
+      'src/overlord/overlord.css', // the Overlord's place (Overlord W1 home B): every ink beside its ground, the page's or a card's --bg-surface
       'src/readerLab/readerLab.css', // the reader lab page (reader lab plan, Task 10): layout only, no colour of its own
       'src/screens/run-find.css', // the run board's search (D-8072): layout and ink only, grounded on --bg-page
       'src/screens/run-detail.css', // one run's page (D-8072): layout and ink only, grounded on --bg-page
       'src/accounts/models-sheet.css', // the Models sheet (model-class-advance R4): the body on --bg-sheet and each card on --bg-raised, self-grounded
       'src/fleet/group-abandon.css', // the group abandon sheet (D-8074): layout and ink only, on .abandon-sheet's own ground (fleet.css); the refusal ink is .abandon-sheet .abandon-error's
+      'src/fleet/landing-line.css', // one project's landing line on its card and the withdraw sheet (landing order wave 5k, D-9129): every ink on --bg-surface, set beside it
       'src/screens/programme-card.css', // the programme cards, quiet fold and Finished (D-8075): layout and ink only, every ink on its own --bg-surface
       'src/screens/run-close.css', // Advanced's lane rows (D-8077): grounded on --bg-surface by the row and the sheet's own rule, ink only
       'src/screens/stuck-band.css', // the Stuck band (D-8074): layout and ink only; the band is grounded on --bg-page, its heads and rows on --bg-surface

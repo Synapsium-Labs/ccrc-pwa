@@ -7,7 +7,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { render } from '@synapsium-labs/docserver/render';
+import { render } from '@synapsium-labs/pinax-lib/render';
 import { DOCS_MAX_DOC_BYTES } from '../../shared/docs';
 import { utf8Bytes } from '../../shared/utf8';
 import { DOCS_RENDER_GATE_BYTES } from '../src/lib/markdownLimits';

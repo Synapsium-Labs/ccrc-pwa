@@ -114,6 +114,11 @@ export function plannedFingerprint(fields: Readonly<Record<string, unknown>>): s
  *  its stored fingerprint, which reads `<base>` or `<base>+<mark>`: `<base>` is F(the planned fields without the link), `<mark>` is
  *  F({ link: <initiativeId> }) for a project's link to its initiative, F({ pr: <url> }) for an issue's pull request link. */
 const LINK_MARK_SEPARATOR = '+';
+/** The fingerprint of an adopted object (recovery, conflict, an inbound issue taken or placed): it was never sent the current
+ *  inputs, so it matches no planned one and the next re-read emits one absolute update (or link) that writes the real
+ *  fingerprint. The sync's `adopted` word, spelled once, here beside the encoding that reads it (D-9131: the policy reads it, so it
+ *  lives in L1; the plan store imports it from here and re-exports it, never the other way round). */
+export const ADOPTED_FINGERPRINT = 'adopted';
 /** A stored fingerprint: the base alone, or the base with the link's mark. */
 export function withLinkMark(base: string, mark: string | null): string {
   return mark === null ? base : `${base}${LINK_MARK_SEPARATOR}${mark}`;
@@ -609,8 +614,16 @@ export function planSyncSteps(s: SyncSnapshot, opts: { force?: ReadonlyMap<numbe
       const pr = s.ticketPrs?.[t.id];
       const ident = tb?.state === 'bound' ? tb.identifier : null;
       const wantPr = pr !== undefined && ident !== null && ticketRefOfBranch(pr.branch ?? '', tpl.teamKey) !== ident.toUpperCase();
-      // A create (no issue yet) in a team the epic's project is not in: it waits until the project's update with that team is current.
-      const createsOnOtherTeam = (tb === undefined || tb.state !== 'bound' || tb.linearId === null) && tpl.teamKey.toUpperCase() !== pl.teamKey.toUpperCase();
+      // D-9131: a create (no issue yet) waits until the project's update with its team is current, unless the project already holds the
+      // team: the ticket's team is the epic's planned team AND that is the team the project's binding recorded at its last write ccrc
+      // made (`eb.teamKey`: the planned team of its create or update). After a team-key move the planned key is not what Linear holds,
+      // so the planned key alone says nothing; a binding that recorded no team cannot tell, and the create waits. An ADOPTED project's
+      // record (stored fingerprint base: the adoption's) is the team planned at adoption, not the team the lost create sent, so it is
+      // not trusted: it reads as no record until the project's first update, which is emitted because the adopted fingerprint is never
+      // current. A link mark added after adoption does not hide that (`linkMarkOf`).
+      const recordedTeam = eb !== undefined && eb.fingerprint !== null && linkMarkOf(eb.fingerprint).base === ADOPTED_FINGERPRINT ? null : (eb?.teamKey ?? null);
+      const createWaits = (tb === undefined || tb.state !== 'bound' || tb.linearId === null)
+        && (tpl.teamKey.toUpperCase() !== pl.teamKey.toUpperCase() || recordedTeam === null || recordedTeam.toUpperCase() !== pl.teamKey.toUpperCase());
       // D-8183: the same encoding as the project's link: `<base>` or `<base>+<mark>` with the mark F({ pr: <url> }) once the link was sent. A
       // pass where no PR is known keeps the stored mark and sends nothing; an update keeps it; a new URL is linked once.
       const fpBase = plannedFingerprint(ip);
@@ -618,7 +631,7 @@ export function planSyncSteps(s: SyncSnapshot, opts: { force?: ReadonlyMap<numbe
       const keptMark = tb?.state === 'bound' ? linkMarkOf(tb.fingerprint).mark : null;
       decide({
         phase: 3, kind: 'ticket', id: t.id, workspaceId: wsId, teamKey: tpl.teamKey, op: { create: 'issueCreate', update: 'issueUpdate' },
-        b: tb, ready: (t.checkpointId === null || milestoneId !== null) && (projectHasTeams || !createsOnOtherTeam), statusMissing: iStatus === null, texts: [ip.title, ip.description, ...(cancelBody === null ? [] : [cancelBody])], facts: [tpl.fact],
+        b: tb, ready: (t.checkpointId === null || milestoneId !== null) && (projectHasTeams || !createWaits), statusMissing: iStatus === null, texts: [ip.title, ip.description, ...(cancelBody === null ? [] : [cancelBody])], facts: [tpl.fact],
         planned: ip, fp: withLinkMark(fpBase, keptMark), isCurrent: (st) => { const m = linkMarkOf(st); return m.base === fpBase && (prMark === null || m.mark === prMark); },
         link: (forced) => {
           if (forced !== null || prMark === null || pr === undefined || tb === undefined || tb.linearId === null) return null;

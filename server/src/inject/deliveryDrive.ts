@@ -22,7 +22,8 @@
 // Its answer is one JSON line on stdout: `{"send":"ok"}`, or `{"send":"<sendPrompt's refusal word>"}`, with exit status 0;
 // for a refused input, `{"refused":"<word>","detail":"<sentence>"}` with exit status 2; and for a FAULT OF THE BOX,
 // `{"fault":"<the runner's reason>","send":"<the word the send then answered>","detail":"<sentence>"}` with exit status 3
-// (`DRIVE_FAULT_EXIT`): a tmux call its own runner could not complete (the per-call bound, a spawn that failed) is never
+// (`DRIVE_FAULT_EXIT`): a tmux call its own runner could not complete (the per-call bound, a spawn that failed, a signal
+// not the bound's) is never
 // read as the product's send word (review 3882 F2, the coordinator's ruling), and once one has failed no later call of the
 // case runs, so nothing more is typed into a pane that may hold a half-typed draft. It decides no verdict: the runner does,
 // and reads any non-zero status as a fault of the box, which ends the part with no verdict.
@@ -101,9 +102,19 @@ const SYSTEM_PATH = '/usr/local/bin:/usr/bin:/bin';
 /** The capture's own server, as the one socket lookup's setting: its name, never the fleet's file. */
 const CAPTURE_SOCKET_SETTING = { kind: 'text', text: CAPTURE_SOCKET } as const;
 
+/** The status at or above which a tmux client that exited on its own was ended by a signal (`shared/spawn.mjs#boundedSpawn`
+ *  answers a signal end as `128 + signo`; tmux's own statuses are 0 and 1). */
+export const DRIVE_SIGNAL_EXIT_MIN = 128;
+
 /** The Runner over the capture's own tmux server: each call through the one socket lookup (`tmuxCommand`, so `-L
  *  ccrc-capture`), with `TMUX_TMPDIR` the capture's tmux directory, in an environment built from empty, each call bounded.
- *  It runs tmux only; any other command is answered not run. */
+ *  It runs tmux only; any other command is answered not run.
+ *
+ *  WHAT IS A FAULT OF THE BOX (not run, so the case halts and no verdict is given): a tmux that could not start; a call
+ *  killed at its bound, or whose output did not arrive whole; and a tmux client ended by a signal that was not the bound's
+ *  own kill (an exit of {@link DRIVE_SIGNAL_EXIT_MIN} or more, wave 184's ruling F5). A tmux that ran and exited non-zero
+ *  on its own (1: no such session, a key it refused) is the product's own answer: the send reads it, as it does on the
+ *  fleet. */
 export function captureTmuxRunner(tmuxDir: string, pathVar: string | undefined, boundMs = DRIVE_TMUX_CALL_MS): Runner {
   const env = { PATH: pathVar !== undefined && pathVar !== '' ? pathVar : SYSTEM_PATH, TMUX_TMPDIR: tmuxDir, LANG: 'C.UTF-8' };
   return async (cmd, args): Promise<ExecResult> => {
@@ -113,6 +124,7 @@ export function captureTmuxRunner(tmuxDir: string, pathVar: string | undefined, 
     const r = await boundedSpawn({ spawn, signals: os.constants.signals }, routed.file, routed.args, { env, timeoutMs: boundMs, drainMs: UPDATE_SPAWN_DRAIN_MS });
     if (r.pid === null) return { ran: false, reason: 'spawn', detail: r.stderr.trim() || 'tmux could not start', code: 1, stdout: '', stderr: r.stderr };
     if (r.killed || r.stdout === null) return { ran: false, reason: 'timeout', detail: `tmux did not answer whole within ${boundMs} ms`, code: 1, stdout: r.stdout ?? '', stderr: r.stderr };
+    if (r.code >= DRIVE_SIGNAL_EXIT_MIN) return { ran: false, reason: 'spawn', detail: `tmux was ended by a signal that was not the bound's kill (exit ${r.code})`, code: 1, stdout: r.stdout, stderr: r.stderr };
     return { ran: true, code: r.code, stdout: r.stdout, stderr: r.stderr, killed: false, signal: null };
   };
 }

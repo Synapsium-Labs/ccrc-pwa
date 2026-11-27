@@ -459,8 +459,9 @@ describe('the client stays closed', () => {
     // unattended quiz: the timer's verb and runner, and the coordinator's own body, no splice and no fill) to ninety-eight.
     // `overlord.inbox`, `overlord.messages` and `overlord.acknowledge` (Overlord W1, the inbox piece: the pane's pair in the
     // query of the two reads, and the acknowledge body built from it alone) to one hundred and one. `overlord.history` (Overlord W1,
-    // PR B1: a body built whole by its own grammar, the pane's pair appended last) to one hundred and two.
-    expect(routeKeys().size).toBe(102);
+    // PR B1: a body built whole by its own grammar, the pane's pair appended last) to one hundred and two. `overlord.sequence`
+    // (Overlord W1, sequence C: the pane's pair in the query after the cursor's keys, no body) to one hundred and three.
+    expect(routeKeys().size).toBe(103);
     // The call record's fill is the one that REFUSES a caller's identity (D-8126): it tests the stripped copy for both keys and
     // refuses, then derives the pair from the pane and appends it LAST, byId then byUuid (review 2039 F7, review 3245 A2). Each
     // slice below ends at its own block's closing `fi`, so a later block's splice (`runs.review-rounds`) cannot satisfy it

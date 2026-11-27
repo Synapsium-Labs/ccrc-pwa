@@ -12,14 +12,15 @@ import { NotifyLog } from '../src/notifylog.js';
 import { BUILD_CAPTURE_SWEEP_MS, BuildCaptureLane, type BuildCaptureAnswer, type BuildCaptureTransport } from '../src/buildCaptureLane.js';
 import { testboxCaptureTransport } from '../src/testboxCapture.js';
 import type { CaptureAsked } from '../src/io.js';
-import { createIo } from '../src/remote/io.js';
+import { DELIVERY_BAD_REQUEST_DETAIL, createIo } from '../src/remote/io.js';
 import { AgentOpError } from '../src/remote/errors.js';
 import { registerCoordRoutes } from '../src/coord/routes.js';
 import { Bus } from '../src/bus.js';
 import type { Deps } from '../src/server.js';
 import type { GateDecision } from '../src/auth/gate.js';
 import { BUILD_CAPTURE_RETRY_MS, buildTrustOf, readClaudeBuildRecords, type BuildCaptureJob } from '../../shared/claudeBuildTrust.js';
-import { DELIVERY_PART_COUNT, readDeliveryViews, type DeliveryCaptureResult } from '../../shared/deliveryResult.js';
+import { DELIVERY_PART_COUNT, readDeliveryStandingAnswer, readDeliveryViews, type DeliveryCaptureResult } from '../../shared/deliveryResult.js';
+import { nextDeliveryJob } from '../../shared/deliveryLane.js';
 import { TESTBOX_CAPTURE_OP, TESTBOX_CAPTURE_REQUEST_MS, type TestboxCaptureReply } from '../../shared/agent-protocol.js';
 import { testDeps } from './helpers.js';
 import { deliveryResultFor } from './deliveryLaneHelpers.js';
@@ -246,8 +247,19 @@ describe('what each answer comes to', () => {
     const s = await setup(testboxCaptureTransport(() => io));
     await s.pass();
     expect(s.coord.claudeBuildDeliveries()[0]).toMatchObject({ attempts: 0, notSent: 'recipe-not-run', result: null });
-    expect(warned().filter((l) => l.includes('does not run the delivery recipe'))).toHaveLength(1);
+    expect(warned().filter((l) => l.includes('closed the connection on the delivery frame'))).toHaveLength(1);
     expect(warn).toHaveBeenCalledTimes(1);
+  });
+  // ONE LINE, WITH WHAT WAS MEASURED (review 3898 F6): the test box's own refusal of the frame carries its detail; the
+  // transport logs nothing for it, and the lane's one line says it.
+  it('a box that refused the frame, with its detail: exactly one line, the lane\'s, saying what the box said', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const io = { testboxCapture: async (): Promise<CaptureAsked> => ({ ok: true, reply: { outcome: 'not-taken', refusal: null, result: null, detail: 'the box refused the frame: not a recipe this box runs', delivery: null } }) };
+    const s = await setup(testboxCaptureTransport(() => io));
+    await s.pass();
+    expect(s.coord.claudeBuildDeliveries()[0]).toMatchObject({ attempts: 0, notSent: 'recipe-not-run', result: null });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warned()[0]).toMatch(/^ccrc-server: delivery capture: .* part 0: not sent: the box refused the frame: not a recipe this box runs; /);
   });
 
   it('a box that was not reached stays no-test-box, with no recipe line: a reader can tell the two apart', async () => {
@@ -332,11 +344,12 @@ describe('the remote arm sends the recipe and the part for a delivery ask only',
       const request = vi.fn(async () => { throw old(); });
       const io = createIo({ state: { agentOps: [TESTBOX_CAPTURE_OP] }, request } as never);
       expect(await io.testboxCapture(BUILD, 'delivery', 0)).toEqual({
-        ok: true, reply: { outcome: 'not-taken', refusal: null, result: null, detail: null, delivery: null },
+        ok: true, reply: { outcome: 'not-taken', refusal: null, result: null, detail: DELIVERY_BAD_REQUEST_DETAIL, delivery: null },
       });
       expect(request).toHaveBeenCalledTimes(1);
-      expect(warn).toHaveBeenCalledTimes(1);
-      expect(String(warn.mock.calls[0]![0])).toMatch(/^ccrc-server: .*answered bad-request to a delivery job, so the part was not sent \(likely an agent older/);
+      // The arm logs nothing: it hands what it measured to the lane, which writes the one line (review 3898 F6).
+      expect(warn).not.toHaveBeenCalled();
+      expect(DELIVERY_BAD_REQUEST_DETAIL).toMatch(/^the fleet agent answered bad-request to a delivery job \(likely an agent older/);
     });
     it('a trust job answered bad-request is still unanswered, with no line', async () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -349,12 +362,15 @@ describe('the remote arm sends the recipe and the part for a delivery ask only',
       const io = createIo({ state: { agentOps: [TESTBOX_CAPTURE_OP] }, request: async () => { throw new AgentOpError('forbidden', null); } } as never);
       expect(await io.testboxCapture(BUILD, 'delivery', 0)).toEqual({ ok: false, reason: 'unanswered' });
     });
-    it('through the lane: the part is recipe-not-run and no attempt is counted', async () => {
-      vi.spyOn(console, 'warn').mockImplementation(() => {});
+    it('through the lane: the part is recipe-not-run, no attempt is counted, and exactly one line names the fleet agent, not the test box', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       const io = createIo({ state: { agentOps: [TESTBOX_CAPTURE_OP] }, request: async () => { throw old(); } } as never);
       const s = await setup(testboxCaptureTransport(() => io));
       await s.pass();
       expect(s.coord.claudeBuildDeliveries()[0]).toMatchObject({ part: 0, attempts: 0, notSent: 'recipe-not-run', result: null });
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warned()[0]).toContain(`not sent: ${DELIVERY_BAD_REQUEST_DETAIL}; `);
+      expect(warned()[0]).not.toMatch(/test box/);
     });
   });
   it('a trust ask sends no recipe or part', async () => {
@@ -395,8 +411,14 @@ describe('GET /api/testbox/builds carries the deliveries', () => {
     coord.recordDelivery(deliveryResultFor(RIG, 2), 7);
     const body = (await app.inject({ method: 'GET', url: '/api/testbox/builds' })).json() as { deliveries: unknown };
     const v = readDeliveryViews(body.deliveries)![0]!;
-    expect(v.unmeasured).toEqual([{ part: 0, notSent: 'recipe-not-run' }, { part: 1, notSent: 'no-test-box' }]);
+    expect(v.unmeasured).toEqual([{ part: 0, notSent: 'recipe-not-run', attempts: 0 }, { part: 1, notSent: 'no-test-box', attempts: 0 }]);
     expect(v.parts.map((p) => p.part)).toEqual([2]);
+  });
+  it('a part three jobs went out for, each unanswered, reads 3 attempts through the route (wave 184 proposal 1)', async () => {
+    const { app, coord } = await route();
+    for (const t of [5, 6, 7]) coord.markDeliveryAttempt(RIG, 0, t, 'sent');
+    const body = (await app.inject({ method: 'GET', url: '/api/testbox/builds' })).json() as { deliveries: unknown };
+    expect(readDeliveryViews(body.deliveries)![0]!.unmeasured[0]).toEqual({ part: 0, notSent: null, attempts: 3 });
   });
   it('an answer with no deliveries key, an older server\'s, is still read; one with none recorded carries an empty list', async () => {
     const { app } = await route();
@@ -423,5 +445,57 @@ describe('GET /api/testbox/builds carries the deliveries', () => {
     // `pwa/src/fleet/TestBoxBuilds.tsx`: `isRecord(raw) ? readClaudeBuildRecords(raw.claudeBuilds) : null`.
     expect(Object.keys(raw).sort()).toEqual(['claudeBuilds', 'deliveries', 'ok']);
     expect(readClaudeBuildRecords(raw['claudeBuilds'])?.map((b) => b.build)).toContain(RIG);
+  });
+});
+
+// Wave 184 (option A, the capture owner's calls 1446 and 37541): the status read carries the newest trusted build's standing.
+describe('GET /api/testbox carries the delivery standing (wave 184)', () => {
+  const apps: FastifyInstance[] = [];
+  afterEach(async () => { for (const a of apps.splice(0)) await a.close(); vi.restoreAllMocks(); });
+  async function route(wrap: (c: CoordStore) => CoordStore = (c) => c) {
+    const home = mkTmp('ccrc-standing-route-');
+    const coord = freshStore(home);
+    const deps: Deps = { ...testDeps(home), coord: wrap(coord) };
+    const sessionAuth = (): GateDecision => ({ allow: true, verdict: 'ok', reason: 'session', device: null });
+    const app = Fastify();
+    registerCoordRoutes(app, deps, new Bus(), sessionAuth, { tmux: deps.tmux, queue: deps.queue, readAsk: async () => null }, undefined);
+    apps.push(app);
+    const get = async () => app.inject({ method: 'GET', url: '/api/testbox' });
+    return { coord, get };
+  }
+  /** The store, with one read replaced. */
+  const over = (c: CoordStore, o: Partial<CoordStore>): CoordStore => Object.assign(Object.create(c) as CoordStore, o);
+
+  it('the standing names the build the lane sends for, and carries no text of a case', async () => {
+    const { coord, get } = await route();
+    const r = deliveryResultFor(RIG, 0, 'altered');
+    const marker = 'BUILD-TEXT-MARKER';
+    coord.recordDelivery({ ...r, cases: r.cases.map((c, i) => (i === 0 ? { ...c, divergence: { ...c.divergence!, received: marker } } : c)) }, 7);
+    coord.markDeliveryAttempt(RIG, 1, 8, 'sent');
+    const res = await get();
+    expect(res.statusCode).toBe(200);
+    expect(res.body).not.toContain(marker);
+    const body = res.json() as { ok: boolean; testbox: unknown; delivery: unknown };
+    expect(body.testbox).toBeNull();
+    const read = readDeliveryStandingAnswer(body.delivery);
+    expect(read).toMatchObject({ kind: 'standing', standing: { build: RIG, word: 'fault' } });
+    const job = nextDeliveryJob(coord.claudeBuilds(), [], 0);
+    expect(read!.kind === 'standing' && read!.standing.build).toBe(job!.build);
+    expect(read!.kind === 'standing' && read!.standing.unmeasured[0]).toEqual({ part: 1, notSent: null, attempts: 1 });
+  });
+  it('no build passed its trust capture: its own word, not a standing and not unreadable', async () => {
+    const { get } = await route((c) => over(c, { claudeBuilds: () => [] }));
+    const body = (await get()).json() as { delivery: unknown };
+    expect(body.delivery).toEqual({ kind: 'no-trusted-build' });
+  });
+  it('a store read that throws answers unreadable, keeps the test box block answered, and logs one line the wire does not carry', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { get } = await route((c) => over(c, { claudeBuildDeliveries: () => { throw new Error('disk I/O error'); } }));
+    const res = await get();
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, testbox: null, delivery: { kind: 'unreadable' } });
+    expect(res.body).not.toContain('disk I/O');
+    // The server's own lines only: the fixture's roster notice at setup is not the route's.
+    expect(warn.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('ccrc-server:'))).toEqual(['ccrc-server: GET /api/testbox: the delivery standing could not be read (disk I/O error)']);
   });
 });

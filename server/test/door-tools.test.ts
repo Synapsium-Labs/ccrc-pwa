@@ -5,7 +5,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   DOOR_TOOLS, DOOR_TOOL_PREFIX as PROGRAM_PREFIX, DOOR_ONLY_TOOLS, ATTRIBUTION_FIELDS, CLAIM_RETRY_MIN_MS, CLAIM_RETRY_MAX_MS, DELTA_REFRESH_MS, DELTA_LEASE_MS, TEAM_KEY_SHAPE,
+  SEQUENCE_PAGE_MAX as PROGRAM_PAGE_MAX,
 } from '../../ccd/door-process.mjs';
+import { SEQUENCE_PAGE_MAX } from '../../shared/overlord-sequence.js';
 import * as shared from '../../shared/continuity-door.js';
 import { DOOR_TOOL_PREFIX, DOOR_TOOL_NAME_RE } from '../../shared/continuity-reports.js';
 import { LINEAR_TEAM_KEY_SHAPE } from '../../shared/linear.js';
@@ -44,10 +46,10 @@ const keysOf = (v: unknown): string[] => {
 };
 
 describe('DOOR_TOOLS', () => {
-  it('has fifteen uniquely named rows, the readers\' `read` last', () => {
+  it('has sixteen uniquely named rows, the readers\' `read` last', () => {
     // D-8809: `link_team`, the Overlord's confirm of a team candidate. The inbox piece (Overlord W1): `inbox`, `messages`
-    // and `acknowledge`.
-    expect(ROWS.map((r) => r.name)).toEqual(['card', 'probe', 'probe_answer', 'note_add', 'note_close', 'note_list', 'note_handover', 'timer_set', 'timer_list', 'timer_cancel', 'inbox', 'messages', 'acknowledge', 'link_team', 'read']);
+    // and `acknowledge`. Sequence C (Overlord W1): `sequence`, the cursor read.
+    expect(ROWS.map((r) => r.name)).toEqual(['card', 'probe', 'probe_answer', 'note_add', 'note_close', 'note_list', 'note_handover', 'timer_set', 'timer_list', 'timer_cancel', 'inbox', 'messages', 'acknowledge', 'sequence', 'link_team', 'read']);
   });
 
   it('every name is a legal tool name after the hook\'s prefix, and the prefix is the L0 constant', () => {
@@ -98,7 +100,15 @@ describe('DOOR_TOOLS', () => {
   it('card, inbox and messages are the view rows that are fenced, and every operate row is fenced', () => {
     expect(ROWS.filter((r) => r.class === 'view' && r.fenced).map((r) => r.name)).toEqual(['card', 'inbox', 'messages']);
     expect(ROWS.filter((r) => r.class === 'operate' && !r.fenced).map((r) => r.name)).toEqual([]);
-    expect(ROWS.filter((r) => r.class === 'view' && !r.fenced).map((r) => r.name).sort()).toEqual(['note_list', 'probe', 'read', 'timer_list']);
+    expect(ROWS.filter((r) => r.class === 'view' && !r.fenced).map((r) => r.name).sort()).toEqual(['note_list', 'probe', 'read', 'sequence', 'timer_list']);
+  });
+
+  it('the sequence row: a view, unfenced (its door row is not a write), never a reader\'s door, its page bound shared/overlord-sequence.ts\'s', () => {
+    const r = ROWS.find((x) => x.name === 'sequence')!;
+    expect([r.verb, r.class, r.fenced, r.reader]).toEqual(['overlord.sequence', 'view', false, false]);
+    expect(PROGRAM_PAGE_MAX).toBe(SEQUENCE_PAGE_MAX);
+    expect(r.input).toMatchObject({ type: 'object', additionalProperties: false, required: [],
+      properties: { after: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: SEQUENCE_PAGE_MAX } } });
   });
 
   it('no input schema names an attribution field, at any depth', () => {

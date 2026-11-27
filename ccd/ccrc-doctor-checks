@@ -833,9 +833,7 @@ fi
 # — which this file can call, because `ccrc` sources the platform block before
 # it sources this one. Spelled once here so the checks below keep reading in
 # systemd's vocabulary, which is the vocabulary their messages are written in.
-_dr_unit_file() {   # <unit> -> the filename to look for under $CCRC_UNIT_DIR
-  if [ "${CCD_OS:-linux}" = darwin ]; then printf '%s.plist' "$(_svc_label "$1")"; else printf '%s' "$1"; fi
-}
+_dr_unit_file() { _box_unit_file "$1"; }   # <unit> -> the filename to look for under $CCRC_UNIT_DIR (one spelling, in ccrc)
 # THE REMEDY VERB. Every "restart it" line in this file used to end in
 # `systemctl --user restart ccrc.service`; on macOS that is a command not
 # found, which turns a remedy into a second dead end.
@@ -1507,9 +1505,9 @@ _check_auth() {
      || ! declare -F _box_env_value >/dev/null 2>&1 \
      || ! declare -F _box_unit_env >/dev/null 2>&1 \
      || ! declare -F _box_auth_path >/dev/null 2>&1 \
-     || ! declare -F _box_sessions_path >/dev/null 2>&1; then
+     || ! declare -F _box_sessions_path >/dev/null 2>&1 || ! declare -F _auth_fits_here >/dev/null 2>&1; then
     _dr_fail auth "ccrc's own config reader is not loaded, so neither this box's CCRC_AUTH flag nor its passphrase file was measured" \
-      "this is a bug in ccrc, not a fact about your box — _check_auth reads CCRC_AUTH through _box_unit_env (BOX_ENV_FILE and CCRC_EXPOSURE_FILE) and resolves the secret's and the session store's paths through _box_auth_path and _box_sessions_path, all declared once in ccrc itself, and this check table was sourced by something that is not ccrc"
+      "this is a bug in ccrc, not a fact about your box — _check_auth reads CCRC_AUTH through _box_unit_env (BOX_ENV_FILE and CCRC_EXPOSURE_FILE) and resolves the secret's and the session store's paths through _box_auth_path and _box_sessions_path, and asks _auth_fits_here whether ccrc auth is this box's remedy, all declared once in ccrc itself, and this check table was sourced by something that is not ccrc"
     return 1
   fi
 
@@ -1636,15 +1634,19 @@ _check_auth() {
       # DEFAULT and a legitimate state for a box to be in (`_check_rc`'s rule —
       # a doctor that WARNed here would be asserting a preference). The detail
       # says the gate is off so nobody reads this line as "we are protected".
-      _dr_pass auth "$secret$via holds a usable passphrase ($detail), but $gate, so no request is gated yet"
+      # Wave 181: on a box `ccrc auth on` serves (a loopback-only server box), the verb is the arming remedy.
+      local tail=""
+      ! _auth_fits_here "$CCRC_UNIT_DIR" || tail="; to arm it: ccrc auth on"
+      _dr_pass auth "$secret$via holds a usable passphrase ($detail), but $gate, so no request is gated yet$tail"
       return 0 ;;
     3)
       # Wave 8 item D, D-3596: same reasoning as rc 0's — with no passphrase
       # file EITHER, whether the gate is armed (and failing shut) is the one
       # fact this box needs and the one this check cannot give it.
       if [ "$unmeasured" -ne 0 ]; then
-        # This arm's own rc-2 remedy (D-3596), byte-identical; every other cause keeps `unfix`.
-        [ "$unmeasured" -ne 2 ] || unfix="look at what is really there (ls -ld $CCRC_EXPOSURE_FILE) and re-run ccrc expose; if the gate is meant to be armed, run: ccrc passwd"
+        # This arm's own rc-2 remedy (D-3596); every other cause keeps `unfix`. Wave 181: a bare `ccrc expose` exits 2
+        # (missing subcommand), and the file cannot be read, so the remedy names every arm and the operator picks theirs.
+        [ "$unmeasured" -ne 2 ] || unfix="look at what is really there (ls -ld $CCRC_EXPOSURE_FILE) and re-run the arm this box was exposed with: ccrc expose duckdns, ccrc expose byo or ccrc expose ip; if the gate is meant to be armed, run: ccrc passwd"
         _dr_warn auth "there is no passphrase file at $secret$via, and $unwhy, so whether the gate is armed (and failing shut) was not measured" \
           "$unfix"
         return 2
@@ -1674,6 +1676,8 @@ _check_auth() {
       # to set the flag THERE, not in the file the unit no longer reads it
       # from.
       local arming="set CCRC_AUTH=on together with CCRC_RP_ID and CCRC_ORIGIN in $BOX_ENV_FILE and restart ccrc.service"
+      # Wave 181: a loopback-only server box arms with one verb, which writes the four localhost lines and restarts.
+      if _auth_fits_here "$CCRC_UNIT_DIR"; then arming="ccrc auth on"; fi
       [ "$expnamed" -eq 0 ] || arming="set CCRC_AUTH=on in $CCRC_EXPOSURE_FILE, which overrides $BOX_ENV_FILE, together with CCRC_RP_ID and CCRC_ORIGIN (ccrc expose writes all three), and restart ccrc.service"
       _dr_pass auth "no passphrase file at $secret$via, and $gate — the shipped default, so nothing is gated and anyone who can reach this box can drive it; to arm the gate: ccrc passwd, then $arming"
       return 0 ;;
@@ -2042,7 +2046,7 @@ _check_exposure() {
 _check_update-exposure() {
   if [ -z "${CCRC_EXPOSURE_FILE:-}" ] || [ -z "${CCRC_CADDYFILE:-}" ] || [ -z "${CCRC_DDNS_UNIT:-}" ] \
      || [ -z "${BOX_ENV_FILE:-}" ] || ! declare -F _box_env_value >/dev/null 2>&1 \
-     || ! declare -F _box_unit_env >/dev/null 2>&1; then
+     || ! declare -F _box_unit_env >/dev/null 2>&1 || ! declare -F _box_reach >/dev/null 2>&1; then
     _dr_fail update-exposure "ccrc's own config and exposure constants are not loaded, so whether this box's update routes are gated was never measured" \
       "this is a bug in ccrc, not a fact about your box — _check_update-exposure reads this box's recorded CCRC_ROLE through _box_env_value, and the CCRC_AUTH flag and the CCRC_HOST bind through _box_unit_env, and looks for CCRC_CADDYFILE and the CCRC_DDNS_UNIT unit, all declared once in ccrc itself, and this check table was sourced by something that is not ccrc"
     return 1
@@ -2090,38 +2094,16 @@ _check_update-exposure() {
   # exposure file is systemd's own way of reasserting the loopback default
   # over whatever ccrc.env named, not "no opinion, keep reading ccrc.env's
   # bind" — `_box_unit_env`'s presence rule gives that for free.
-  local bindhost="" bindsrc="" hostrc=0 hostwhy="" hostfix=""
-  _box_unit_env CCRC_HOST || hostrc=$?
-  hostwhy="$BUE_WHY"; hostfix="$BUE_FIX"
-  bindhost="$BUE_VAL"; bindsrc="$BUE_SRC"
-  local -a reach=()
-  case "$bindhost" in
-    # Empty is config.ts's default (127.0.0.1); every 127/8 address and both
-    # spellings of ::1 are loopback. Everything else — a wildcard, a routable
-    # address, a hostname — answers someone other than this box.
-    ''|localhost|::1|'[::1]'|127.*) ;;
-    *) reach+=("CCRC_HOST=$bindhost in $bindsrc") ;;
-  esac
-  [ ! -e "$CCRC_EXPOSURE_FILE" ] || reach+=("$CCRC_EXPOSURE_FILE exists")
-  [ ! -e "$CCRC_CADDYFILE" ] || reach+=("$CCRC_CADDYFILE exists")
-  # The ddns unit, in this platform's spelling. On Linux it is a PAIR, and
-  # either half on its own is the evidence. On macOS `_exp_ddns_units`' Darwin
-  # arm writes ONE launchd job for the pair, `app.ccrc.<unit>.plist`, and it is
-  # reached through the `.service` name ONLY: `_svc_label` strips `.service`
-  # and nothing else, so `_dr_unit_file` maps the `.timer` name to
-  # `app.ccrc.<unit>.timer.plist`, a file nothing writes — looking it up would
-  # be a second, vacuous lookup that could never find anything.
-  local -a ddns=("$CCRC_DDNS_UNIT.service")
-  [ "${CCD_OS:-linux}" = darwin ] || ddns+=("$CCRC_DDNS_UNIT.timer")
-  local u f
-  for u in "${ddns[@]}"; do
-    f="$(_dr_unit_file "$u")"
-    [ ! -f "$CCRC_UNIT_DIR/$f" ] || reach+=("$f is installed in $CCRC_UNIT_DIR")
-  done
+  # Wave 181: the reach list is `_box_reach` in ccrc now, the ONE reader `ccrc auth` asks too, moved unchanged. It
+  # reads CCRC_HOST through the same `_box_unit_env`, so a bare `CCRC_HOST=` in the exposure file is systemd's own way
+  # of reasserting the loopback default over whatever ccrc.env named, not "no opinion, keep reading ccrc.env's bind".
+  _box_reach "$CCRC_UNIT_DIR"
+  local bindhost="$BRE_HOST" hostrc="$BRE_HOSTRC" hostwhy="$BRE_HOSTWHY" hostfix="$BRE_HOSTFIX"
+  local -a reach=("${BRE_REASONS[@]}")
 
   if [ "$expunread" -eq 1 ]; then
     _dr_warn update-exposure "$CCRC_EXPOSURE_FILE is there and cannot be read, so whether CCRC_AUTH is on — and so whether the update routes are gated — was not measured" \
-      "look at what is really there (ls -ld $CCRC_EXPOSURE_FILE; the exposure check above says what it found), then re-run ccrc expose — it rewrites the file 0600"
+      "look at what is really there (ls -ld $CCRC_EXPOSURE_FILE; the exposure check above says what it found), then re-run the arm this box was exposed with: ccrc expose duckdns, ccrc expose byo or ccrc expose ip — it rewrites the file 0600"
     return 2
   fi
   # An undecidable CCRC_AUTH WARNs only where its answer could matter: a box PROVABLY loopback-only (CCRC_HOST
@@ -2143,7 +2125,7 @@ _check_update-exposure() {
   fi
   if [ "${#reach[@]}" -gt 0 ]; then
     _dr_fail update-exposure "this box is reachable ($(_dr_join "${reach[@]}")) and CCRC_AUTH is not on in $BOX_ENV_FILE or $CCRC_EXPOSURE_FILE — the update routes, and every other write route, answer anyone who can reach it" \
-      "arm the gate: ccrc expose (writes CCRC_AUTH=on with CCRC_RP_ID and CCRC_ORIGIN into $CCRC_EXPOSURE_FILE), or set all three in $BOX_ENV_FILE, then restart: $(_dr_restart_hint ccrc.service)"
+      "arm the gate: ccrc expose duckdns, ccrc expose byo or ccrc expose ip (each writes CCRC_AUTH=on and CCRC_ORIGIN into $CCRC_EXPOSURE_FILE, and CCRC_RP_ID beside them for a name), or set CCRC_AUTH=on with CCRC_RP_ID and CCRC_ORIGIN in $BOX_ENV_FILE, then restart: $(_dr_restart_hint ccrc.service)"
     return 1
   fi
   _dr_pass update-exposure "loopback only — no exposure artifact and CCRC_HOST=${bindhost:-127.0.0.1 (the default)}"

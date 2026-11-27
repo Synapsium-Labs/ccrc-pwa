@@ -562,7 +562,9 @@ describe('ccrc doctor: update-exposure (design §12 — armed and reachable, eac
     // about a route it cannot even reach.
     expect(l).toContain('the update routes');
     expect(l).not.toContain('/api/updates/apply');
-    expect(remedyFor(r.stdout, 'update-exposure')).toMatch(/^ {2}remedy: arm the gate: ccrc expose /);
+    // Wave 181 (review of wave 180): a bare `ccrc expose` exits 2 (missing subcommand), so the remedy names the arms.
+    expect(remedyFor(r.stdout, 'update-exposure')).toMatch(/^ {2}remedy: arm the gate: ccrc expose duckdns, ccrc expose byo or ccrc expose ip \(each writes CCRC_AUTH=on and CCRC_ORIGIN into /);
+    expect(remedyFor(r.stdout, 'update-exposure')).not.toMatch(/ccrc expose(?! (?:duckdns|byo|ip|status)\b)/);
     noRunnerBugLine(r.stdout, 'update-exposure');
     expect(r.code).toBe(1);
   });
@@ -624,7 +626,14 @@ describe('ccrc doctor: update-exposure (design §12 — armed and reachable, eac
     expect(line(runDoctor(home).stdout)).toContain('CCRC_HOST=ccrc-fixture.invalid in ');
   });
 
-  it.each([['127.0.0.1'], ['127.0.0.2'], ['localhost'], ['::1'], ['']])(
+  // Wave 181 (review 3934 A2): loopback is an address, 127.0.0.1 to 127.255.255.254, never any text that begins 127.
+  it.each([['127.0.0.1.example.com'], ['127.example'], ['127.256.0.1'], ['127.0.0.01'], ['127.255.255.255'], ['127.0.0.0']])(
+    'a bind that only begins 127 (%s) is reachable — a name or no address at all', (host) => {
+      const home = unexposed('ccrc-doctor-upx-127text-', `CCRC_FLEET=local\nCCRC_HOST=${host}\nCCRC_PORT=7788\n`);
+      expect(line(runDoctor(home).stdout)).toContain(`CCRC_HOST=${host} in `);
+    });
+
+  it.each([['127.0.0.1'], ['127.0.0.2'], ['127.255.255.254'], ['localhost'], ['::1'], ['']])(
     'loopback (%s) with no artifact and the gate off → PASS, loopback only', (host) => {
       const home = unexposed(`ccrc-doctor-upx-loop-${host.replace(/[^a-z0-9]/gi, '') || 'default'}-`,
         `CCRC_FLEET=local\n${host ? `CCRC_HOST=${host}\n` : ''}CCRC_PORT=7788\n`);
@@ -646,6 +655,9 @@ describe('ccrc doctor: update-exposure (design §12 — armed and reachable, eac
     const r = runDoctor(home);
     expect(line(r.stdout)).toMatch(/^WARN update-exposure: .*exposure\.env is there and cannot be read, so whether CCRC_AUTH is on — and so whether the update routes are gated — was not measured$/);
     expect(line(r.stdout)).not.toContain('/api/updates/apply');
+    // Wave 181 (review of wave 180): a bare `ccrc expose` exits 2 (missing subcommand), so the re-run names the arms.
+    expect(remedyFor(r.stdout, 'update-exposure')).toContain('then re-run the arm this box was exposed with: ccrc expose duckdns, ccrc expose byo or ccrc expose ip — it rewrites the file 0600');
+    expect(remedyFor(r.stdout, 'update-exposure')).not.toMatch(/ccrc expose(?! (?:duckdns|byo|ip|status)\b)/);
     noRunnerBugLine(r.stdout, 'update-exposure');
   });
 

@@ -261,7 +261,7 @@ const sub = (over: Partial<SubjectReadings> = {}): SubjectReadings => ({
   candidates: { kind: 'candidates', list: [{ id: 'lane-a', limits: undefined, serves: 'yes' }, { id: 'lane-b', limits: undefined, serves: 'yes' }] },
   resets: { ok: true, value: {} }, strand: { kind: 'none' }, swapBlocked: null, turnMark: ABSENT_MARK, hookState: NO_HOOK, sessionStatus: 'idle',
   dialogSince: null, unsettled: { kind: 'measured', value: [] }, servedReadAt: { kind: 'measured', value: 'none' },
-  continuityReadAt: { ok: true, value: null }, ...over,
+  continuityReadAt: { ok: true, value: null }, holds: { kind: 'read', lanes: [] }, ...over,
 });
 const row = (over: Partial<ReadinessNowRow> = {}): ReadinessNowRow => ({
   id: 5, sessionId: ME, word: 'ready', why: null, until: null, strandCause: null, restartable: false, at: 2_000, readySince: 2_000, readySessionId: ME,

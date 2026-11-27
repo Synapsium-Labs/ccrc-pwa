@@ -562,10 +562,10 @@ describe('_provider_move_rank_to: which lanes a provider move may take, and in w
       _provider_move_rank_to r claude-d gpt 1000 '' '' && echo "$r"`)).toBe('2');
   });
 
-  it('nothing calls it or its sibling, and it reads no file (this wave moves nobody)', () => {
+  it('the order has one caller, the pass that decides a move, and reads no file', () => {
     const src = ccdSource().split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
-    expect([...src.matchAll(/\b_provider_move_rank_to\b/g)]).toHaveLength(1);
-    expect([...src.matchAll(/\b_provider_move_fits\b/g)]).toHaveLength(1);
+    expect([...src.matchAll(/\b_provider_move_rank_to\b/g)]).toHaveLength(2);
+    expect([...src.matchAll(/\b_provider_move_fits\b/g)]).toHaveLength(2);
     const open = src.indexOf('\n_provider_move_rank_to() {');
     const body = src.slice(open, src.indexOf('\n}\n', open)).replace(/^.*\n.*\n/, '');   // without the header and its comment
     expect(body).not.toMatch(/\$REG|\$HOME|[<>]{1,2} ?"|\$\((?!\()/);

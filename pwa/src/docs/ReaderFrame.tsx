@@ -37,6 +37,10 @@
 // over the body's own pin and text and answer nothing once the body ends. The document carries no version of its own: the
 // seed is the one carrier. Without `opened` there is no history read and no version list, and the seed is the served hash alone.
 //
+// A body also owns its visit's places (X2 P5.3, D-8763, `reader/places.ts`): it starts the visit as it starts, hands the frame
+// `onPlace` and `onHash`, registers the mounted frame as the host of the pops that close its overlay or return from a jump,
+// and ends the visit with its cleanup when the page has moved to another doc or to a screen that is not a doc.
+//
 // The library's host and the frame's asset texts reach the main bundle only through the two literal dynamic imports in
 // `lazyMountReader`; this file names the adapter's types with `import type` only.
 import { THEMES } from '@ccrc/ui';
@@ -49,6 +53,8 @@ import type { ReaderRenderOutcome } from '../lib/readerRenderJob';
 import { onAuthRegained } from '../lib/auth';
 import { navigate, replaceFragment } from '../lib/router';
 import { useThemeChoice } from '../lib/theme';
+import { useHostAppearance } from '../lib/appearance';
+import { appearanceStamp } from '../lib/appearanceStamp';
 import { DocsAssetContext } from './DocImage';
 import type { DocsHistoryLoader } from './failures';
 import type { DocLinkContextValue } from './DocLink';
@@ -61,6 +67,7 @@ import type { ReaderImages, loadReaderImages } from './reader/images';
 import type { ReaderMount, ReaderMountInput, ReaderThemePref } from './reader/bridge';
 import { readerServedHash, readerVersionSeed } from './reader/history';
 import { startReaderHistory } from './readerHistory';
+import { docNow, startPlaces } from './reader/places';
 import {
   copyDecision, readerBarTitle, readerBodyReducer, readerDocKey, readerPrefsOf, routeReaderLink,
   type ReaderBodyState, type ReaderLink,
@@ -186,6 +193,7 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
   const overGate = bytes > DOCS_RENDER_GATE_BYTES;
   const assets = useContext(DocsAssetContext);
   const prefs = readerPrefsOf(useThemeChoice(), THEMES).theme;
+  const stamp = useHostAppearance();
   const link = useMemo<DocLinkContextValue>(() => ({ ...p.link, urls: new WeakMap() }), [p.link]);
   const [state, dispatch] = useReducer(
     readerBodyReducer, undefined, (): ReaderBodyState => (overGate ? { s: 'plain', why: 'over-gate' } : { s: 'rendering' }),
@@ -199,23 +207,46 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
   /** The frame theme the frame was last given: the mount's seed, then each `setPrefs`. */
   const seededPrefs = useRef<ReaderThemePref['theme'] | null>(null);
   /** The latest props, for the callbacks the frame holds for its whole life. */
-  const live = useRef({ props: p, link, assets, prefs, barSlot });
+  const live = useRef({ props: p, link, assets, prefs, stamp, barSlot });
   useEffect(() => {
-    live.current = { props: p, link, assets, prefs, barSlot };
+    live.current = { props: p, link, assets, prefs, stamp, barSlot };
   });
+  const followedStamp = useRef<string | null>(null);
 
   // A later change of the DERIVED theme reaches the frame as its `prefs` operation: no remount, so the reading position
   // survives, and a switch between two palettes of one mode sends nothing.
   useEffect(() => {
     const m = mountRef.current;
-    if (m === null || seededPrefs.current === prefs) return;
+    if (m === null || m.seed?.hosted || seededPrefs.current === prefs) return;
     seededPrefs.current = prefs;
-    m.setPrefs({ theme: prefs });
+    m.follow(prefs);
   }, [prefs]);
+
+  const appearanceFrame = useRef<number | null>(null);
+  const scheduleAppearance = (m: ReaderMount): void => {
+    if (appearanceFrame.current !== null) return;
+    appearanceFrame.current = requestAnimationFrame(() => {
+      appearanceFrame.current = null;
+      const current = appearanceStamp(document.documentElement);
+      if (mountRef.current !== m || followedStamp.current === current) return;
+      followedStamp.current = current;
+      m.follow(live.current.prefs);
+    });
+  };
+  useEffect(() => () => {
+    if (appearanceFrame.current !== null) cancelAnimationFrame(appearanceFrame.current);
+    appearanceFrame.current = null;
+  }, []);
+  useEffect(() => {
+    const m = mountRef.current;
+    if (m !== null && m.seed?.hosted && followedStamp.current !== stamp) scheduleAppearance(m);
+  }, [stamp]);
 
   useEffect(() => {
     if (overGate) return undefined;
     const ac = new AbortController();
+    // The visit's places (D-8763): started before the frame mounts, for the doc this body shows, and ended with the body.
+    const places = startPlaces({ doc: docNow(), scope: p.bodyKey });
     let mount: ReaderMount | null = null;
     let landed = false;
     let counted = 0;
@@ -226,6 +257,7 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
     let reopened: string | null = null;
 
     const drop = (): void => {
+      places.host(null);
       mount?.destroy();
       mount = null;
       mountRef.current = null;
@@ -271,9 +303,17 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
           // frame opened at it lands the plain view there; that frame's `ready` spends it. `mount` is null before the mount
           // lands and after a fallback or the body's end, so a late link opens nothing.
           if (r.reopen && mount !== null && mount.openAt !== undefined) {
+            const currentMount = mount;
             reopened = r.id;
             cur.link.onFragment(r.id, location.pathname + location.search);
-            mount.openAt(decodedId(r.id));
+            if (mount !== currentMount) break;
+            currentMount.openAt?.(decodedId(r.id));
+            // openAt replaces the frame and its seed without replacing the handle. Reconcile even if the root's
+            // intermediate stamp never reaches React's observer, sharing any already queued appearance frame.
+            if (mount === currentMount && currentMount.seed?.hosted) {
+              followedStamp.current = currentMount.seed.stamp;
+              scheduleAppearance(currentMount);
+            }
           }
           break;
         case 'sheet':
@@ -407,8 +447,10 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
         docKey: readerDocKey(cur.props.link.project, cur.props.show.section, cur.props.show.path),
         title: leafName(cur.props.show.path),
         prefs: { theme: cur.prefs },
+        appearanceRoot: document.documentElement,
         onLink,
-        onHash: replaceFragment,
+        onHash: places.onHash,
+        onPlace: places.onPlace,
         copy: onCopy,
         onReady: () => {
           if (ac.signal.aborted || landed) return;
@@ -444,6 +486,7 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
       }
       mount = m;
       mountRef.current = m;
+      places.host(m);
       if (progress !== null) {
         setBar({
           title: readerBarTitle(outcome.result.meta.title, leafName(cur.props.show.path)),
@@ -451,10 +494,17 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
           progress,
         });
       }
-      const latest = live.current.prefs;
-      if (latest !== seededPrefs.current) {
-        seededPrefs.current = latest;
-        m.setPrefs({ theme: latest });
+      const latest = live.current;
+      if (m.seed?.hosted) {
+        followedStamp.current = m.seed.stamp;
+        const current = appearanceStamp(document.documentElement);
+        if (current !== m.seed.stamp) {
+          followedStamp.current = current;
+          m.follow(latest.prefs);
+        }
+      } else if (latest.prefs !== seededPrefs.current) {
+        seededPrefs.current = latest.prefs;
+        m.follow(latest.prefs);
       }
     })();
 
@@ -463,6 +513,7 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
       unwatch();
       drop();
       giveBack();
+      places.end();
     };
   }, [overGate, text, bytes]);
 

@@ -1246,6 +1246,7 @@ and the answer was bad, 2 a usage error — `update` adds 3 and 4, and `rollback
 | `coordination-snapshot validate\|restore\|recover` | classify a backup's coordination snapshot, restore it as one set, finish an interrupted restore; exits 0 (`v1`, `legacy`), 1 (`none`, `thinned`), 2 (`invalid`), 70 (usage or a helper that cannot run), below |
 | `expose duckdns\|byo\|ip\|status` | a public name and a certificate ("Exposure", above) |
 | `passwd` | set or rotate the PWA passphrase ("The session gate", below) |
+| `auth on\|off` | turn the console's sign-in on or off on a box used only at localhost: writes or removes the four localhost lines in `ccrc.env`, restarts `ccrc.service` and proves the result ("The session gate", below) |
 | `adopt`, `wrappers` | rediscover the roster from `~/.local/bin`; write the wrappers the roster marks generated ("Accounts", below) |
 | `account <subcommand>` | connect, check and remove account lanes: `add`, `candidates`, `check`, `credential`, `declare`, `disable`, `enable`, `remove`, `roster` |
 | `memory [--apply]` | census each project's memory, then converge it into one store ("One memory store per project", below) |
@@ -1458,6 +1459,35 @@ $EDITOR ~/.ccrc/ccrc.env          # CCRC_AUTH=on  +  CCRC_RP_ID  +  CCRC_ORIGIN
 systemctl --user restart ccrc.service   # macOS: launchctl kickstart -k gui/$UID/app.ccrc.ccrc
 ```
 
+At `http://localhost`, put `CCRC_COOKIE_INSECURE=on` in the same edit: Safari (WebKit) does not keep a `Secure` cookie
+on a plain-http localhost origin, and the session cookie is `Secure` unless that key says otherwise, so without it a
+Safari login answers 204 and the login screen comes straight back (Chromium keeps the cookie either way).
+
+**On a box used only at localhost, one verb does all of it: `ccrc passwd`, then `ccrc auth on`.** It refuses unless the
+passphrase file is usable, writes `CCRC_AUTH=on`, `CCRC_RP_ID=localhost`, `CCRC_ORIGIN=http://localhost:<port>` and
+`CCRC_COOKIE_INSECURE=on` into `ccrc.env` (every other line byte for byte as it was, the file's mode kept), restarts
+`ccrc.service`, and proves that the server answers with sign-in on; if it does not, or the run is interrupted, the file
+goes back as it was and the unit is restarted again. Open `http://localhost:<port>/` exactly: `http://127.0.0.1:<port>`
+is a different origin, where the console signs in and loads but every change is refused. `ccrc auth off` removes those
+lines (a cookie line it did not write stays, named) and proves sign-in off. Both refuse, changing nothing, on a box
+reached from elsewhere (an exposure file, a Caddyfile or the ddns unit: that box arms with `ccrc expose duckdns`,
+`ccrc expose byo` or `ccrc expose ip`; a `CCRC_HOST` bind beyond loopback: bind it back to `127.0.0.1`, or arm it by
+hand), on a box whose `ccrc.service` can take its bind or a sign-in key from anywhere but `ccrc.env` and the exposure
+file (a drop-in, an `Environment=` line, another environment file, the service manager's own environment), on a box
+whose `ccrc.service` is not, byte for byte, the unit file ccrc installs (any hand edit of it, an `ExecStart=` one
+included: an install or an update puts the shipped file back) or one systemd has not reloaded since it changed, while an
+update or rollback holds `~/.ccrc/update.lock`, and inside a Claude Code session, without a terminal or in a fleet
+session's pane. Those last three are speed bumps, not walls: `env -u CLAUDECODE`, a terminal made with `script`, an
+unset `TMUX_PANE`, a script file or another interpreter each run past them, so they stop a session that arms or disarms
+the gate by accident, never one that sets out to. The hand edit above stays the route for a box behind a TLS-terminating
+proxy of your own, and `ccrc auth off` refuses a box whose `CCRC_ORIGIN` or `CCRC_RP_ID` holds a value it did not write:
+that box looks armed for another address, and turning sign-in off there is a hand edit too. Such a box that has not yet
+set `CCRC_ORIGIN` looks loopback-only to the verb; armed for localhost, it signs in through the proxy but cannot act, so
+run `ccrc auth off` there and use the hand edit. The verb is Linux only for now: on a Mac it refuses, changing nothing,
+and the hand edit above is the route there (ticket auth-verb-on-a-mac). It cannot see a drop-in placed outside the user
+unit directory that systemd has not loaded yet, or a script that `NODE_OPTIONS` in `ccrc.env` or the exposure file tells
+node to preload.
+
 **On a box exposed with `ccrc expose`, skip the edit.** The verb writes `CCRC_AUTH=on` and
 `CCRC_ORIGIN` into `~/.ccrc/exposure.env` itself — and `CCRC_RP_ID` too, on every arm but
 `ip`, where an address cannot be an rp id and the gate runs on the passphrase alone — and
@@ -1505,7 +1535,7 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the one hundred and six machine lanes the
+liveness gate reads the shipped sha out of it), the one hundred and seven machine lanes the
 fleet host reaches (thirty-nine box-token-consulting coordination routes plus
 the Linear proxy's routes under `/api/linear/proxy/`, which a session's `ccrc-api linear`
 verbs call and which refuse any call without the token whatever `CCRC_AUTH` says,
@@ -1529,7 +1559,9 @@ refuses otherwise) and its tick report
 (`POST /api/continuity/quiz-baseline/live`, attributed and owned, W1a lanes only),
 the Overlord's inbox doors (`GET /api/overlord/inbox`, `GET /api/overlord/messages/:id` and
 `POST /api/overlord/messages/:id/acknowledge`, attributed, then behind the Overlord gate and its fence), the Overlord's
-history door (`POST /api/overlord/history`, a read whose search words ride the body, behind the same gate and fence),
+history door (`POST /api/overlord/history`, a read whose search words ride the body, behind the same gate and fence), the
+Overlord's cursor read of the sequence (`GET /api/overlord/sequence`, server words and ids only, behind the same gate, its row not
+fenced),
 `/api/notify`, which refuses an absent token like every lane,
 `/api/pools/epoch` and `/api/updates/intent/:nodeId` — the callers are `curl` inside a
 Claude Code session, `ccd-pool-sync.timer` and, from update-management W4, `ccd-update-sync.timer`, none with a cookie jar, though the
@@ -5939,7 +5971,7 @@ state, `entriesScope` saying which of the two the answer is; beside them the
 operator pause (the stored flag) and the main-red hold (`mainRedHold`, and `order.paused`), which the read recomputes from the stored flag and the
 watcher's latest control snapshot, with the same pure transition the radar lane applies and without writing it, and the order the server's decider computes on that read; the line is paused
 while either flag is set, except that a dependency-eligible `fixesMain` head already selected is not paused by the main-red hold alone (D-8625). An entry leaves the line `landed` when GitHub reads its PR merged (a merge train's proved landing included), with a head other than
-the pinned one kept in its `detail`, or `closed` when GitHub reads it closed unmerged or says no such PR exists. The landed reader
+the pinned one kept in its `detail`, or `closed` when GitHub reads it closed unmerged, reads it closed with the train label while its train record was read and did not prove the landing (`train-unproven`, D-9112), or says no such PR exists. The landed reader
 (at most ten entries a sweep, oldest first) marks it, and a work run's `done` close marks it `landed` when GitHub reads the PR
 MERGED (a merge train's landing is left to the landed reader, which carries the train facts); a verified pin re-pins a `closed`
 entry only when its projection is readable and carries no quarantine marker (D-8626). A project the line has never seen answers no entries and both flags off. The line's authority (no-run creation evidence,
@@ -5970,7 +6002,13 @@ entry whose order names it directly, where one is recorded and reads; the answer
 journalled, and both work while sign-in is dark, recording `flag-off`. Neither chooses, reorders or brings forward the head: an
 order edge to a withdrawn entry stays outstanding, so its dependant waits, named in the read's `order.waits` with each target's
 entry id and PR, until a session declares its order again without that entry, which the feed records whoever does it, or the
-entry re-enters at its run's next verified pin and then lands or is closed; a run-less entry cannot re-enter (D-9047).
+entry re-enters at its run's next verified pin and then lands or is closed; a run-less entry cannot re-enter (D-9047). Since wave 5k
+the console draws the line on the fleet screen's project card, only for a project whose line has an open entry or the operator's
+pause: each open entry by pull request in the read's order, which one is next to land, what waits and on which withdrawn entry, and
+why the line is paused. It reads `GET /api/landing` for every known project, at once when the list of projects changes, every 60
+seconds, when the page is shown again and after each door's answer (D-9108). A read that fails is shown only over a line already
+drawn, as not read again (D-9109). Pause and resume are one tap; a withdrawal is a sheet that sends the pin time of the entry it
+shows, and then names who was told and who could not be.
 
 The main-red hold has one writer: a fresh, same-base `main-health` measurement applied through the radar lane. A next-to-land mail
 is sent once per exact episode, base and recipient; it tells a coordinator to re-read the line and is not merge permission. The
@@ -6285,6 +6323,22 @@ unreadable (ahead of every wave-1 rung and cap), coordinator deaf (ahead of the
   - An account-class error holds, because the limit and swap machinery owns it.
   - A token this build does not know holds with one `ccrc-server: stall-watch
     unknown StopFailure` line. It is never guessed into a self-wake.
+
+**A session on a failing provider moves by itself**, the last rung of the
+provider-failure ladder below (`ccd/ccd#_watchdog_provider`, in the fleet limit
+watchdog's pass). On the third counted failure since its last move, still owed,
+it goes to another lane by itself: the limit rescue's act, with the
+arm `provider`, and no key is sent. Every gate of a rescue stands (the pool side,
+the class, `<lane>-disabled`, measured room, the 15 minutes after a move, do not
+bounce, three moves a pass), never one class down, and never a lane that is marked
+failing, one of a provider with two marked lanes, or one the session's measured
+context does not fit. A lane with a good turn since the first failure comes first,
+then another provider, then an unproved lane of its own. It waits for a running
+turn, background work, a dialog, a question and unsent text in the box, at the
+decision and again at the act. With no lane it stays, the nudges go on, and
+`~/.cc-sessions/<id>.provwait` (an epoch) says since when, until a good turn or a
+move. It raises no notice. `ccd swap`, `ccd swap-self` and `ccd prefer` are never
+held by any of it, and `CCRC_LIMIT_WATCHDOG_MIN=0` stops it.
 
 **The provider-failure ladder** (`server/src/coord/providerRetry.ts`, run inside
 the stall watch's pass by `server/src/providerRetryLane.ts`). Any live session
@@ -8167,12 +8221,17 @@ the head, base and repository it expected. A PR CLOSED with the train label is n
 `closed`: the form runs the same train proof, inside `PR_STATE_TRAIN_TIMEOUT`, and keeps a proof it
 makes. A proved one reads `merged` with `landedInTrain: true`, `train` and `trainMergeCommit`; one
 whose record was read and did not prove it, or could not be read, reads `unmeasured`
-(`train-unproven`, `train-unread`); a labelled PR from a fork is never proved and reads `unmeasured` (`train-unread`). The workspace form reads a claim whose record was read and did not prove it as `closed` (`train-unproven`); this form reads the same fact as `unmeasured`, so the two forms' words are not interchangeable. `ccd caps` lists `pr-state-pr-v1` for a ccd that has the form.
+(`train-unproven`, `train-unread`); a labelled PR from a fork is never proved and reads `unmeasured` (`train-unread`). The workspace form reads a claim whose record was read and did not prove it as `closed` (`train-unproven`); this form reads the same fact as `unmeasured`, so the two forms' words are not interchangeable.
+The landed reader reads this form's `unmeasured` line with reason `train-unproven` and `trainUnproven: true` as
+GitHub's CLOSED: it marks the entry `closed`, its detail naming `train-unproven`, so the entry leaves the
+landing line (D-9112), except a damaged row the bounded terminal repair hands it, which it asks again (spec
+amendment B); a `train-unread` line, and every other `unmeasured` one, it asks again at its back-off.
+`ccd caps` lists `pr-state-pr-v1` for a ccd that has the form.
 
-**The train record (D-7335)** is the one machine-readable block in a train PR's
-body, and a train tool writes exactly one: an HTML comment on lines of its own,
-opened by `<!-- ccrc-train v1`, one `member #<n> <40-hex head sha>` line per
-member, closed by `-->`:
+**The train record (D-7335, D-9111)** is the machine-readable part of a train PR's
+body, in either of two forms; every other part is for people. The documented form
+is an HTML comment on lines of its own, opened by `<!-- ccrc-train v1`, one
+`member #<n> <40-hex head sha>` line per member, closed by `-->`:
 
 ```
 <!-- ccrc-train v1
@@ -8184,12 +8243,35 @@ member #1800 89abcdef0123456789abcdef0123456789abcdef
 A member line is exactly `member`, one space, `#` and the PR number, one space,
 and the full 40-character head sha in lowercase hex: no tabs, no second space,
 no short or uppercase sha. Leading and trailing spaces on a line are ignored;
-nothing else is. Tables,
-lists and prose beside the block are for people and are never parsed, so a
-body with only a table proves nothing. No block, two blocks, a block that never
-closes, a line inside it that is not a member line, or a member listed twice
-proves nothing for any member, and neither does a member listed at a sha other
-than its head.
+nothing else is. No block, two blocks, a block that never closes, a line inside
+it that is not a member line, or a member listed twice proves nothing for any
+member.
+
+The other form is the one the merge train tool in use writes (D-9111): a fenced
+block opened by a line that is exactly ```` ```train-members ```` and closed by the
+next line that is exactly ```` ``` ````, holding one JSON array with one object per
+member:
+
+````
+```train-members
+[{"pr": 1797, "headSha": "0123456789abcdef0123456789abcdef01234567", "blast": 3}]
+```
+````
+
+A member is an object whose `pr` is a JSON integer of one to ten digits with no
+leading zero (never `true` or a string) and whose `headSha` is the full
+40-character head sha in lowercase hex; any other key, the tool's `blast` among
+them, is never read. Leading and trailing spaces on the two fence lines are
+ignored. No such block, two of them, a block that never closes, content that is
+not one JSON array of at least one member, a member of another shape, a key given
+twice in one member, or a member listed twice proves nothing for any member.
+
+A body with one form is read by that form alone, so a `ccrc-train v1` block added
+by hand to a body with no `train-members` block proves. A body with both proves
+only when both read and list the same members at the same heads; any difference
+proves nothing. Tables, lists and prose beside the blocks are never parsed, so a
+body with only a table proves nothing, and in either form neither does a member
+listed at a sha other than its head.
 
 A coordinator
 proves the merge before closing the run from `landedInTrain: true` on the PR's

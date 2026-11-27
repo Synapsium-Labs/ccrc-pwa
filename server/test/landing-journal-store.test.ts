@@ -955,7 +955,7 @@ describe('an ambient landing read does not own the rollback (wave 5i, M18)', () 
     const f = boot();
     faultSelect(f.db);
     failOnce(f.db, 'ROLLBACK');
-    const land = { kind: 'land', project: P, pr: 9, by: 'reader', at: 1, outcome: { word: 'closed' }, expect: null } as const;
+    const land = { kind: 'land', project: P, pr: 9, by: 'reader', at: 1, outcome: { word: 'closed', reason: null }, expect: null } as const;
     expect(f.store.advanceLanding(land)).toEqual({ ok: false, error: 'landing-db-unavailable', recovery: 'restart' });
     expect(f.db.isOpen).toBe(false);
   });

@@ -5,6 +5,7 @@
 import type { AccountAuthCancelBody, AccountAuthCodeBody, AccountAuthStartAnswer, AccountAuthStartBody, AccountAuthStatusAnswer, AccountSetBody, AccountSignOutAnswer } from '../../../shared/api';
 import type { AccountAddAnswer, AccountAddBody, AccountCheckAnswer, AccountCredentialAnswer, AccountCredentialBody, AccountRemoveAnswer, AccountRemoveBody, AccountRemoveCheckAnswer, AccountRevokeAckBody, AccountsResponse, AccountSwitchAnswer, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ProgrammesAnswer, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunFindAnswer, RunFindQuery, RunRecordAnswer, RunSignals, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WorkItemState, WsAudit } from '../../../shared/api';
 import type { CoordCapsWrite } from '../../../shared/runCap';
+import type { LandingPauseAnswer, LandingWithdrawAnswer } from '../../../shared/landingLine';
 import type { ArchiveAnswer, CallView, StopAnswer, StopBody, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource, QuestionAnswerBody } from '../../../shared/api';
 import type { GoalsVersion, GoalsView, ItemActBody, ItemView, WaitingView } from '../../../shared/ledgers';
 import type { AnswerMarkKind, AnswerMarkName, AnswerMarkView } from '../../../shared/answerMarks';
@@ -51,8 +52,11 @@ import type { RenewalMode, RenewalModeView } from '../../../shared/continuity';
 import type { TestboxAdminFields, TestboxAdminSub } from '../../../shared/testbox-admin';
 import type { ProjectAddAnswer, ProjectAddBody } from '../../../shared/projectAdd';
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking';
-import type { DesignationView } from '../../../shared/overlord-designation';
-import type { LadderWire } from '../../../shared/overlord-ladder';
+import type { DesignateBody, DesignationView } from '../../../shared/overlord-designation';
+import type { LadderWire, NarrowingState, Rung } from '../../../shared/overlord-ladder';
+import type { ReadinessWire } from '../../../shared/overlord-readiness';
+import type { PortfolioView, RankWrite } from '../../../shared/portfolio';
+import type { PoolRunwayWire } from '../../../shared/loadLines';
 import type { EpicView, HierarchyAnswer, HierarchyProjectRow, MigrationView, PlanView, WorkAnswer } from '../../../shared/plan';
 import type { ReceiptIn, ResponseRetentionView, ResponseRowBrief } from '../../../shared/responses';
 import type { LinearItemAct, SecretRemoveAnswer, SecretSaveAnswer, StoredSecretsAnswer } from '../../../shared/ledgers';
@@ -351,6 +355,24 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     overlordDesignation: (opts?: ReadOpts) => getJsonOrAbsent<{ readonly designation: DesignationView | null }>('/api/overlord/designation', opts),
     overlordLadder: (opts?: ReadOpts) => getJsonOrAbsent<LadderWire>('/api/overlord/ladder', opts),
     serverCaps: (opts?: ReadOpts) => getJson<{ readonly caps?: readonly string[] }>('/health', opts),
+    /** The readiness word (Overlord W1 home B, Task 4), read only by `stores/overlord.ts`: `ReadinessWire` as served, `absent` on
+     *  an older server's 404; a 503 `unavailable` throws, which the store reads as unmeasured. */
+    overlordReadiness: (opts?: ReadOpts) => getJsonOrAbsent<ReadinessWire>('/api/overlord/readiness', opts),
+    /** The ladder's operator doors (home B, Task 4). A lowering answers `narrowing` (the "taking effect" line keys on it, never on
+     *  `changed`); a raise above `chat` refuses `capability-missing`, and the server asks the step-up for every raise. */
+    overlordRung: (rung: Rung) => postJson<{ readonly changed: boolean; readonly rung: Rung; readonly narrowing?: NarrowingState | null }>('/api/overlord/rung', { rung }),
+    overlordPause: () => postJson<{ readonly changed: boolean; readonly rung: Rung; readonly narrowing?: NarrowingState | null }>('/api/overlord/pause'),
+    /** A latch's Clear is a raise: the step-up, and no `narrowing` in its answer. */
+    clearLatch: (cause: string) => postJson<{ readonly changed: boolean }>(`/api/overlord/latches/${encodeURIComponent(cause)}/clear`),
+    /** Start, Rebind and Restart (home B, Task 5). Designate and Rebind ask the step-up; Restart does not. */
+    overlordDesignate: (body: DesignateBody) =>
+      postJson<{ readonly sessionId: string; readonly deadlineAt: number; readonly warnings: readonly { readonly warning: string; readonly pool?: string }[] }>('/api/overlord/designate', body),
+    overlordRebind: (force: boolean) => postJson<{ readonly sessionId: string; readonly deadlineAt: number }>('/api/overlord/rebind', { force }),
+    overlordRestart: () => postJson<{ readonly sessionId: string }>('/api/overlord/restart'),
+    /** The portfolio strip and the capacity line (home B, Task 6): `absent` on a server without the read. */
+    portfolio: () => getJsonOrAbsent<{ readonly portfolio: PortfolioView }>('/api/portfolio'),
+    rankPortfolio: (body: RankWrite) => postJson<{ readonly revision: number; readonly portfolio: PortfolioView }>('/api/portfolio/rank', body),
+    poolRunway: () => getJsonOrAbsent<PoolRunwayWire>('/api/pools/runway'),
     rebootFleet: () => post('/api/fleet/reboot'),
 
     /** `GET /api/updates` — the control plane read (W2 Task 13): catalogue line,
@@ -935,6 +957,13 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     claims: (opts?: { all?: boolean }): Promise<{ claims: ClaimSummary[] }> =>
       getJson<{ claims: ClaimSummary[] }>(
         opts?.all === true ? '/api/claims?all=1' : '/api/claims'),
+    /** `GET /api/landing?project=` (wave 5j), read raw: `fleet/landingLineView.ts#readLandingLine` is its guard (wave 5k). */
+    landingLine: (project: string, opts?: ReadOpts) => getJson<unknown>(`/api/landing?project=${encodeURIComponent(project)}`, opts),
+    /** The operator's two landing doors (wave 5j-b); every answer, refusal or not, re-reads the line (wave 5k). */
+    landingPause: (project: string, paused: boolean) =>
+      postJson<{ ok: true } & LandingPauseAnswer>('/api/landing/pause', { project, paused }),
+    landingWithdraw: (project: string, pr: number, pinnedAt: number) =>
+      postJson<{ ok: true } & LandingWithdrawAnswer>('/api/landing/withdraw', { project, pr, pinnedAt }),
     /** D-5237: `source` names the control that sent it (the keycap, the Escape key, a Deny); the server records it. */
     interrupt: (id: string, source: InterruptRouteSource) => post(`${sid(id)}/interrupt`, { source }),
     /** `POST /api/coord/pause` (spec §4.2) — request `{paused}`, response

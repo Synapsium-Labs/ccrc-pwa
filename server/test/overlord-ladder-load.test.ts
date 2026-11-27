@@ -36,7 +36,7 @@ const lim = (pct: number, ago = 60): AccountLimits => ({
 });
 const designated: DesignationRead = { kind: 'designated', sessionId: 'overlord-a', term: 1,
   row: { model: 'opus', accountPools: { pools: ['pool-a'], untagged: false } } as unknown as DesignationView };
-const facts = (a: number, b: number, agoB = 60): AccountFacts => loadFactsOf(roster, { 'lane-a': lim(a), 'lane-b': lim(b, agoB) }, new Map(), NOW);
+const facts = (a: number, b: number, agoB = 60): AccountFacts => loadFactsOf(roster, { 'lane-a': lim(a), 'lane-b': lim(b, agoB) }, new Map(), NOW, { ok: true, lanes: [] });
 
 function ladderWith(designationRead: () => DesignationRead, facts: () => AccountFacts | null) {
   const db = new DatabaseSync(':memory:');

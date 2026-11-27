@@ -2,7 +2,7 @@
 // join of a build's parts, and the list the build list carries. Pure: no store, no transport.
 import { describe, expect, it } from 'vitest';
 import { BUILD_CAPTURE_RETRY_MS } from '../../shared/claudeBuildTrust.js';
-import { deliveryWordOf, deliveryViewsOf, isCurrentDelivery, nextDeliveryJob } from '../../shared/deliveryLane.js';
+import { deliveryBuildViewOf, deliveryWordOf, deliveryViewsOf, isCurrentDelivery, nextDeliveryJob } from '../../shared/deliveryLane.js';
 import { DELIVERY_PART_COUNT, DELIVERY_VIEW_BUILDS_MAX, readDeliveryViews, type DeliveryBuildView } from '../../shared/deliveryResult.js';
 import { attemptRow, deliveryResultFor, record, rowOf } from './deliveryLaneHelpers.js';
 
@@ -76,11 +76,24 @@ describe('deliveryViewsOf and its reader', () => {
     expect(views.map((v) => `${v.build}:${v.word}:${v.parts.length}`)).toEqual(['2.1.320:incomplete:0', '2.1.310:incomplete:1']);
     expect(readDeliveryViews(JSON.parse(JSON.stringify(views)))).toEqual(views);
   });
+  // THE LANE'S OWN CLOCK (review 3898 F1): the lane stores `at` as a millisecond clock reading, so the reader takes any
+  // non-negative safe integer there, never the count bound, or it would refuse every true view.
+  it('views built from rows with a real millisecond `at` are read back exactly', () => {
+    const now = Date.UTC(2026, 10, 26, 9, 0, 0);
+    const rows = done('2.1.320', DELIVERY_PART_COUNT).map((r) => ({ ...r, at: now, lastAttemptAt: now }));
+    const views = deliveryViewsOf(rows);
+    expect(views[0]!.parts.map((p) => p.at)).toEqual(rows.map(() => now));
+    expect(readDeliveryViews(JSON.parse(JSON.stringify(views)))).toEqual(views);
+    expect(readDeliveryViews(JSON.parse(JSON.stringify([{ ...views[0]!, parts: views[0]!.parts.map((p) => ({ ...p, at: Number.MAX_SAFE_INTEGER })) }])))).not.toBeNull();
+    for (const bad of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1, '5', null]) {
+      expect(readDeliveryViews([{ ...views[0]!, parts: views[0]!.parts.map((p, i) => (i === 0 ? { ...p, at: bad } : p)) }]), String(bad)).toBeNull();
+    }
+  });
   it('each part with no current result is listed with its last not-sent word, or null', () => {
     const rows = [attemptRow('2.1.320', 0, 3, { notSent: 'recipe-not-run' }), attemptRow('2.1.320', 1, 3, { notSent: 'no-test-box' }), ...done('2.1.320', DELIVERY_PART_COUNT).slice(2)];
     const [v] = deliveryViewsOf(rows);
-    expect(v!.unmeasured.slice(0, 2)).toEqual([{ part: 0, notSent: 'recipe-not-run' }, { part: 1, notSent: 'no-test-box' }]);
-    expect(deliveryViewsOf([attemptRow('2.1.320', 0, 3)])[0]!.unmeasured[0]).toEqual({ part: 0, notSent: null });
+    expect(v!.unmeasured.slice(0, 2)).toEqual([{ part: 0, notSent: 'recipe-not-run', attempts: 1 }, { part: 1, notSent: 'no-test-box', attempts: 1 }]);
+    expect(deliveryViewsOf([attemptRow('2.1.320', 0, 3)])[0]!.unmeasured[0]).toEqual({ part: 0, notSent: null, attempts: 1 });
     expect(readDeliveryViews(JSON.parse(JSON.stringify([v])))).toEqual([v]);
     expect(readDeliveryViews([{ ...v, unmeasured: [{ part: 0, notSent: 'copied' }] }])).toBeNull();
   });
@@ -218,5 +231,36 @@ describe('isCurrentDelivery', () => {
       expect(deliveryViewsOf(rows)[0]!.unmeasured[0]).toMatchObject({ part: 0 });
     }
     expect(isCurrentDelivery(rowOf(deliveryResultFor('2.1.320', 0)))).toBe(true);
+  });
+});
+
+// Proposal 1 of wave 184 (review 3898 F4; the capture owner's call 1444, the coordinator's 37528): each unmeasured part carries
+// how many delivery jobs went out for it, so a part a box faults on again and again is told from a part never asked. The count
+// is all time for the (build, part) row; the read says how many times, never when.
+describe('an unmeasured part\'s attempts (wave 184 proposal 1)', () => {
+  const b = '2.1.320';
+  it('a part never asked carries 0, written by the view, not left out', () => {
+    expect(deliveryBuildViewOf([], b).unmeasured).toEqual(parts.map((p) => ({ part: p, notSent: null, attempts: 0 })));
+    const [v] = deliveryViewsOf(done(b, 1));
+    expect(v!.unmeasured.every((u) => u.attempts === 0)).toBe(true);
+  });
+  it('a part the box faulted on three times carries 3: the view never writes 0 for a count above 0', () => {
+    const [v] = deliveryViewsOf([attemptRow(b, 0, AT, { attempts: 3 })]);
+    expect(v!.unmeasured[0]).toEqual({ part: 0, notSent: null, attempts: 3 });
+    expect(readDeliveryViews(JSON.parse(JSON.stringify([v])))![0]!.unmeasured[0]!.attempts).toBe(3);
+  });
+  it('a part faulted on, then measured, leaves the unmeasured list', () => {
+    const [v] = deliveryViewsOf([rowOf(deliveryResultFor(b, 0), { attempts: 4 })]);
+    expect(v!.unmeasured.map((u) => u.part)).not.toContain(0);
+    expect(v!.parts.map((p) => p.part)).toEqual([0]);
+  });
+  it('absent, an older server\'s view, reads as unknown (null), never 0; a count off its shape is refused', () => {
+    const [v] = deliveryViewsOf([attemptRow(b, 0, AT, { attempts: 2 })]);
+    const older = JSON.parse(JSON.stringify([{ ...v!, unmeasured: v!.unmeasured.map(({ part, notSent }) => ({ part, notSent })) }]));
+    expect(readDeliveryViews(older)![0]!.unmeasured.map((u) => u.attempts)).toEqual(parts.map(() => null));
+    expect(readDeliveryViews([{ ...v!, unmeasured: v!.unmeasured.map((u, i) => (i === 0 ? { ...u, attempts: Number.MAX_SAFE_INTEGER } : u)) }])).not.toBeNull();
+    for (const bad of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1, '2', null]) {
+      expect(readDeliveryViews([{ ...v!, unmeasured: v!.unmeasured.map((u, i) => (i === 0 ? { ...u, attempts: bad } : u)) }]), String(bad)).toBeNull();
+    }
   });
 });

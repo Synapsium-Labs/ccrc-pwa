@@ -617,9 +617,10 @@ export interface DoorAnswer { n: number; text: string }
  * announced once, politely, in the one live region of the door. THE ANSWER BELONGS TO THE TAP, NOT TO THE RENDER (fix
  * round 1): a mount answers only a tap that arrives after it, so a remount (the 900 px crossing moves the reason to the
  * other slot) replays nothing; the screen drops the answer when the narrowing changes or ends; and the live region
- * empties when the mark ends, so the sentence is not left in the page twice. The door names no description
- * (`aria-describedby`): a reader that focused the door and then pressed it would hear the sentence twice, and the press
- * is where it is said. The disclosure's open state is the screen's (`moreOpen`), so it survives the crossing too.
+ * empties when the mark ends, so the sentence is not left in the page twice. The narrowed door names this sentence
+ * as its description (`aria-describedby`, {@link DOOR_REASON_ID}), so a reader that focuses it hears why before any
+ * press; a press then says it again, which is accepted (desktop-polish wave 181, the coordinator reversing that part of
+ * wave 180's fix round 1). The disclosure's open state is the screen's (`moreOpen`), so it survives the crossing too.
  */
 export function DoorReason({ reason, answer = null, moreOpen = false, onMoreToggle }: {
   reason: DoorNarrowed;
@@ -666,8 +667,8 @@ export function DoorReason({ reason, answer = null, moreOpen = false, onMoreTogg
  * desktop it is a secondary button in the page's header. It NARROWS IN PLACE, never vanishes: `aria-disabled`, still
  * focusable, its reason drawn beneath it. No palette command and no hint key. Narrowed, it stands down in the design
  * system's disabled look (fleet.css), and a tap or Enter calls `onNarrowedTap`, which brings the reason forward and says
- * it (`DoorReason`'s `answer`), never the sheet (desktop-polish wave 180). It names no `aria-describedby`: the press
- * says the reason, once (fix round 1).
+ * it (`DoorReason`'s `answer`), never the sheet (desktop-polish wave 180). Narrowed, both forms name the reason's
+ * sentence as their description (`aria-describedby`), so focusing the door says why (wave 181).
  */
 export function AddAccountDoor({ desk, narrowed, onOpen, onNarrowedTap }: {
   desk: boolean;
@@ -682,7 +683,7 @@ export function AddAccountDoor({ desk, narrowed, onOpen, onNarrowedTap }: {
     return (
       <Button
         variant="ghost" size="fit" className="acct-door-action"
-        aria-disabled={narrowed || undefined}
+        aria-disabled={narrowed || undefined} aria-describedby={narrowed ? DOOR_REASON_ID : undefined}
         data-narrowed={narrowed ? 'true' : undefined} onClick={tap}
       >
         <span aria-hidden="true">＋</span> {DOOR_WORD}
@@ -693,7 +694,7 @@ export function AddAccountDoor({ desk, narrowed, onOpen, onNarrowedTap }: {
     <ListRow
       className="acct-door"
       aria-label={DOOR_WORD}
-      aria-disabled={narrowed || undefined}
+      aria-disabled={narrowed || undefined} aria-describedby={narrowed ? DOOR_REASON_ID : undefined}
       data-narrowed={narrowed ? 'true' : undefined} onClick={tap}
     >
       <span className="acct-door-word"><span aria-hidden="true">＋</span> {DOOR_WORD}</span>

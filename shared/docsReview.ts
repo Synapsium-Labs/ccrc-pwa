@@ -1,9 +1,10 @@
 // Draft review's L0 vocabulary and limits: the `shared/docsReview.ts` row of the draft-review design,
 // `docs/superpowers/specs/2026-11-18-native-docs-draft-review-design.md`, and Task R1.1 of its plan.
 //
-// L0: it imports only `shared/docs.ts`, which names no host global, and it names none itself, so the PWA bundles it and
-// the server compiles it. The grammars of a share's source are `shared/docs.ts`'s own (project, section, path, ref,
-// commit, fingerprint), never a second copy; the one grammar added here is the capability token's.
+// L0: it imports only `shared/docs.ts` and `shared/capabilityToken.ts`, which name no host global, and it names none
+// itself, so the PWA bundles it and the server compiles it. The grammars of a share's source are `shared/docs.ts`'s own (project, section, path, ref,
+// commit, fingerprint), never a second copy; the capability token's grammar is defined in `shared/capabilityToken.ts`
+// and re-exported here under the review names.
 //
 // Every limit is declared once here (the export cap, which a share's snapshot also obeys, is in `shared/docs.ts`).
 
@@ -11,6 +12,7 @@ import {
   isDocsBareRef, isDocsCommit, isDocsFingerprint, isDocsProject, isDocsQualifiedRef, isDocsRelPath, isDocsSection,
   type DocSectionSlug,
 } from './docs.js';
+import { CAPABILITY_TOKEN_RE, isCapabilityToken } from './capabilityToken.js';
 
 // ---- Limits ----------------------------------------------------------------------------------------------------
 
@@ -104,12 +106,11 @@ export const REVIEW_PAGE_HEADERS: Readonly<Record<string, string>> = Object.free
 
 // ---- The token ---------------------------------------------------------------------------------------------------
 
-/** The capability token: 32 random bytes, base64url without padding, so 43 characters. The one grammar of it. */
-export const REVIEW_TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
+/** The capability token: 32 random bytes, base64url without padding, so 43 characters. Its grammar is defined once, in
+ *  `shared/capabilityToken.ts`, and re-exported here under the review names. */
+export const REVIEW_TOKEN_RE = CAPABILITY_TOKEN_RE;
 
-export function isReviewToken(s: string): boolean {
-  return typeof s === 'string' && REVIEW_TOKEN_RE.test(s);
-}
+export const isReviewToken = isCapabilityToken;
 
 // ---- Removal causes ----------------------------------------------------------------------------------------------
 

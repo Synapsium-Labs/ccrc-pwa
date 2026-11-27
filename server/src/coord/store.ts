@@ -65,6 +65,7 @@ import {
 } from '../continuity/continuityStore.js';
 import * as timers from '../continuity/continuityStore.js';
 import * as probes from '../continuity/continuityStore.js';
+import * as holds from '../continuity/accountHolds.js';
 import { modelSwitchesSinceStart, readerEventsSinceStart, type HookStoreRead, type ModelSwitchRow, type ReaderEvent } from '../continuity/hookReportStore.js';
 import * as designation from './overlordDesignationStore.js';
 import * as ladder from './overlordLadderStore.js';
@@ -5904,6 +5905,11 @@ export class CoordStore {
   closedSpotProbes(modelClass: string): ReturnType<typeof probes.closedSpotProbes> { return probes.closedSpotProbes(this.db, modelClass); }
   backstopRead(): ReturnType<typeof probes.backstopRead> { return probes.backstopRead(this.db); }
   setBackstop(b: { hour: number; zone: string; at: number }): { ok: boolean } { return probes.setBackstop(this.db, b); }
+  /** Renewal readings PR H (§3.6): the account holds' two writers (the generations pass, the operator's door) and two reads. */
+  holdAccount(h: { lane: string; startId: number; at: number }): holds.HoldWrite { return holds.holdAccount(this.db, h); }
+  clearAccountHold(c: { lane: string; by: string; at: number }): holds.HoldWrite { return holds.clearAccountHold(this.db, c); }
+  standingHolds(): holds.StandingHoldsRead { return holds.standingHolds(this.db); }
+  accountHolds(): ReturnType<typeof holds.accountHolds> { return holds.accountHolds(this.db); }
   /** Overlord W1, the readiness word: its reads (the rows' one writer, `overlordReadinessStore.ts`, is called by the readiness lane
    *  alone, so the writers have no delegate) and the two generation readers it gathers through. */
   readinessNow(): ReturnType<typeof readiness.readinessNow> { return readiness.readinessNow(this.db); }

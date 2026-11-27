@@ -151,7 +151,10 @@ export class PlanSync {
   private readonly tails = new Map<string, Promise<unknown>>();
   /** Consecutive deferrals of a key: the backoff step. Reset by progress and by `done`. */
   private readonly attempts = new Map<string, number>();
-  /** Malformed answers for one binding: after the last backoff step it is failed. */
+  /** Consecutive answers outside the grammar for one binding (D-9132: also those outside the closed error table): after the last
+   *  backoff step it is failed. Cleared by any `bind` of the binding (a create, an update, a link, a read-only `same` verdict, and an
+   *  adoption, which binds after reads), by its failure and when the programme goes clean. A read that does not reach `bind` does not
+   *  clear it: answers outside the table that such a read splits still count. */
   private readonly malformed = new Map<number, number>();
   /** Workspaces whose key is not configured, for this tick: no call is made for them again until the next. */
   private readonly notConfigured = new Set<string>();
@@ -538,7 +541,9 @@ export class PlanSync {
             this.deferFor(slug, 'initiatives-unknown');
             return 'deferred';
           }
-          plan.clearSyncDue(slug); this.attempts.delete(slug); this.clearHolds(slug); return 'done';
+          plan.clearSyncDue(slug); this.attempts.delete(slug); this.clearHolds(slug);
+          for (const b of plan.bindingsOf(slug)) this.malformed.delete(b.id);   // D-9132: a clean programme starts every count again
+          return 'done';
         }
         const held = [...new Set(actionable.flatMap((s) => (s.workspaceId === null ? [] : [s.workspaceId])))]
           .flatMap((ws) => { const until = this.releaseOf(slug, ws); return until > this.deps.now() ? [{ until, why: this.wsHolds.get(`${slug}|${ws}`)?.why ?? deferralOf('workspace-blocked').why }] : []; })
@@ -736,7 +741,9 @@ export class PlanSync {
       ? { ...ask, teamKey: currentTeam, ...(moves ? { destinationTeamKey: step.teamKey } : {}) } : ask);
     if (out.ok) {
       if (note !== undefined) note.wrote = true;
-      this.bind(b, b.linearId, this.identifierOf(out, b), step.fingerprint, step.kind === 'update' && step.op === 'issueUpdate' ? step.teamKey : undefined);
+      // D-9131: an issue update records the team the issue now sits in, and a project update the planned team it was written with (the
+      // team the project's last write held), so a create's wait reads the project as last WRITTEN, never as it was created or adopted.
+      this.bind(b, b.linearId, this.identifierOf(out, b), step.fingerprint, step.kind === 'update' && (step.op === 'issueUpdate' || step.op === 'projectUpdate') ? step.teamKey : undefined);
       this.progressed(slug, step.workspaceId);
       return 'next';
     }
@@ -855,17 +862,22 @@ export class PlanSync {
 
   /** `failWith` is what a failing word does (by default the binding fails with it, C16's link gives the URL up instead). */
   private onFailure(out: Failure, s: Subject, failWith: (word: string) => void = (word) => this.fail(s, word)): Flow {
+    // Sent and answered outside the grammar: as `maybeSent`, and failed after the last backoff step.
+    const outsideGrammar = (): Flow => {
+      const n = (this.malformed.get(s.bindingId ?? -1) ?? 0) + 1;
+      if (s.bindingId !== null) this.malformed.set(s.bindingId, n);
+      // D-9132: the count is of CONSECUTIVE answers: the failure itself starts it again (a requeued binding), as a good write does.
+      if (s.bindingId !== null && n > PLAN_SYNC_BACKOFF_MS.length) { this.malformed.delete(s.bindingId); failWith('malformed'); return 'next'; }
+      return this.hold(s, 'malformed');
+    };
+    // D-9132: Linear answered, but with an error outside the closed table (`outsideTable`): the malformed row's handling, not a
+    // transport failure's endless hold. The binding fails `malformed` after the last backoff step, so the pass goes on.
+    if (out.word === 'unreachable' && out.outsideTable === true) return outsideGrammar();
     switch (out.word) {
       case 'rate-limited': return this.hold(s, out.word, { floorMs: 'retryAfterS' in out ? out.retryAfterS * 1000 : 0 });
       case 'unreachable': case 'timeout': case 'policy-unavailable': case 'journal-unavailable':
         return this.hold(s, out.word);
-      case 'malformed': {
-        // Sent and answered outside the grammar: as `maybeSent`, and failed after the last backoff step.
-        const n = (this.malformed.get(s.bindingId ?? -1) ?? 0) + 1;
-        if (s.bindingId !== null) this.malformed.set(s.bindingId, n);
-        if (s.bindingId !== null && n > PLAN_SYNC_BACKOFF_MS.length) { failWith('malformed'); return 'next'; }
-        return this.hold(s, 'malformed');
-      }
+      case 'malformed': return outsideGrammar();
       case 'not-configured': this.notConfigured.add(s.workspaceId); return 'next';
       case 'linear-unauthorised': {
         this.hold(s, 'linear-unauthorised');
@@ -947,6 +959,7 @@ export class PlanSync {
   // ── Writes ──
 
   private bind(b: BindingRow, linearId: string, identifier: string | null, fingerprint: string, teamKey?: string | null): void {
+    this.malformed.delete(b.id);   // D-9132: a good answer for the binding ends the run of answers outside the grammar
     this.deps.plan.markBound(b.id, linearId, identifier, fingerprint, this.deps.now(), teamKey);
   }
 

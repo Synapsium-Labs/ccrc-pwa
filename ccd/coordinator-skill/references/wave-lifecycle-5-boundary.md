@@ -139,7 +139,12 @@ JSON
    the landing's checks lane reads it, where a draft at the advance leaves that
    lane off (D-8999). A refused advance turns the PR back into a draft at once
    (`gh pr ready <pr> --undo`, §4), and a head other than `handoffCommit` is
-   never marked ready. Enqueue only a PR whose required checks
+   never marked ready. On a project positively opted in to the binding head,
+   read the landing line as soon as the advance answers `ok` (§5b, **The
+   landing line**): when its `binding` is `ready` for this run's own entry,
+   the gate below, the enqueue and the read-back run in this sitting;
+   otherwise turn the PR back into a draft, and they run only in the later
+   sitting that marks it ready again (D-9115). Enqueue only a PR whose required checks
    have all passed — every required name the verdict discovered passes on the
    head, and `gh pr checks <pr> --required` exits 0: for any other
    PR gh arms auto-merge instead of queueing it,

@@ -26,7 +26,7 @@ import { FleetTable, loadGroupMode } from '../src/skins/instrument/FleetTable';
 import { FleetChromeProvider } from '../src/fleet/FleetChrome';
 import { createFleetStore } from '../src/stores/fleet';
 import { api } from '../src/lib/api';
-import { BRIDGE_LIMITS } from '@synapsium-labs/docserver/frame';
+import { BRIDGE_LIMITS } from '@synapsium-labs/pinax-lib/frame';
 import { readerDocKey } from '../src/docs/reader/policy';
 import { READER_STORE_PREFIX } from '../src/lib/readerLimits';
 
@@ -139,7 +139,7 @@ describe('every key, across the owners above, as one sorted list', () => {
 // reader's are a family under one prefix, not a literal set); this describe pins that the library's store keeps every
 // write and every eviction inside `READER_STORE_PREFIX`, and the budget and caps it states (M8.15).
 describe('W8a: the reader\'s keys stay under its own prefix (M8.15)', () => {
-  const LIB = path.join(__dirname, '..', 'node_modules', '@synapsium-labs', 'docserver', 'dist', 'host');
+  const LIB = path.join(__dirname, '..', 'node_modules', '@synapsium-labs', 'pinax-lib', 'dist', 'host');
   /** The part of Web Storage the library's store uses, and the store's two methods (its `.d.ts` declares both). */
   interface HostStorage {
     getItem(key: string): string | null;

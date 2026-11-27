@@ -39,7 +39,7 @@ const ROOTS: readonly string[] = [
  */
 const SHARED_FILES: readonly string[] = ['../shared/utf8.ts'];
 const ALLOWED_PACKAGES: ReadonlySet<string> = new Set([
-  'unified', 'remark-parse', 'remark-gfm', 'remark-rehype', 'hast', 'mdast', '@synapsium-labs/docserver/render',
+  'unified', 'remark-parse', 'remark-gfm', 'remark-rehype', 'hast', 'mdast', '@synapsium-labs/pinax-lib/render',
 ]);
 
 /** The file a relative specifier names, or `undefined` when no `.ts`/`.tsx` file answers it. */

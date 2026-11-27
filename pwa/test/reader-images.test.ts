@@ -4,7 +4,7 @@
 // the page's byte budget. Loaders and queue are injected; every page is a placeholder (`demo`, `https://a.example`).
 import { describe, expect, it, vi } from 'vitest';
 import type { Element as HastElement, Nodes as HastNode } from 'hast';
-import { scanRefs } from '@synapsium-labs/docserver/render';
+import { scanRefs } from '@synapsium-labs/pinax-lib/render';
 import { DOC_SECTION_SLUGS, DOCS_MAX_IMAGES_PER_PAGE, DOCS_RASTER_TYPES, type DocsEntry, type DocsTreeOk } from '../../shared/docs';
 import { planImageRef, type DocsAssetContextValue } from '../src/docs/DocImage';
 import type { DocLinkContextValue } from '../src/docs/DocLink';
@@ -17,7 +17,7 @@ import { READER_IMAGE_BUDGET_BYTES } from '../src/lib/readerLimits';
 import { draftOf, entry, fileResponse, holder, pageAt, treeOk } from './docsFixtures';
 // The library's seed limits are not on its public entry points (`/frame` exports `SEED_HTML_MAX_CHARS` and `BRIDGE_LIMITS`
 // only), so the pin reads the published file the seed check itself runs from.
-import { SEED_LIMITS } from '../node_modules/@synapsium-labs/docserver/dist/frame/seed.js';
+import { SEED_LIMITS } from '../node_modules/@synapsium-labs/pinax-lib/dist/frame/seed.js';
 
 /** The library's image grammar, re-spelled from the spec's type list (the library's own pattern is internal). */
 const IMAGE_DATA_URL = /^data:image\/(png|jpeg|gif|webp|avif|svg\+xml);base64,[A-Za-z0-9+/]+=*$/;
