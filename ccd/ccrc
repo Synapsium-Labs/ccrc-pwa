@@ -6376,7 +6376,7 @@ _auth_want() {   # <key> <port> -> the value `ccrc auth on` writes for it
 # (review 3971 R1(d), ruling B), so doctor and install give the hand route there.
 _auth_fits_here() {   # <unit dir>
   local role port
-  [ "${CCD_OS:-linux}" != darwin ] || return 1
+  [ "${CCD_OS:-linux}" != darwin ] || _box_said "$HOME" >/dev/null || return 1
   _auth_role; role="$AUR_ROLE"
   [ "$role" != fleet ] && [ -f "$1/$(_box_unit_file ccrc.service)" ] || return 1
   _auth_unit_cmp "$1" "$role" || return 1
@@ -6414,6 +6414,17 @@ _auth_unit_sources() {   # <unit dir>
   local at='(^|[[:space:]"'"'"'])'
   local -a ins seen=()
   AUS_REASONS=(); AUS_WHY=""
+  # The Mac (wave 193): the job file and what launchd holds for it are `_auth_unit_own`'s; what is left is the domain's
+  # own environment (`launchctl setenv`), which every job of the domain inherits: each key of AUTH_SOURCE_KEYS, and
+  # BASH_ENV, a file the job's `bash -c` runs before it sources the two env files.
+  if [ "${CCD_OS:-linux}" = darwin ]; then
+    for k in "${AUTH_SOURCE_KEYS[@]}" BASH_ENV; do
+      out="$(_svc_launchctl getenv "$k" 2>/dev/null)" \
+        || { AUS_WHY="launchctl getenv $k did not answer, so launchd's own environment was not read"; return 1; }
+      [ -z "$out" ] || AUS_REASONS+=("launchd's own environment (launchctl getenv) sets $k")
+    done
+    return 0
+  fi
   kre="$(IFS='|'; printf '%s' "${AUTH_SOURCE_KEYS[*]}")"
   uf="$udir/$(_box_unit_file ccrc.service)"
   if [ ! -f "$uf" ] || [ ! -r "$uf" ]; then AUS_WHY="$uf cannot be read"; return 1; fi
@@ -6493,8 +6504,18 @@ _auth_role() {
   if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then AUR_ROLE="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"; else AUR_ROLE=$'\n'; fi
 }
 AUO_WHY=""; AUO_FIX=""
+# `_auth_install_role` is that clamp, for every way on that names the install (on a Mac too, wave 193 A4): AIR_ROLE is
+# `server` or `both`, matched whole, else `<role>`, and AIR_NONE the clause saying why it is not named.
+AIR_ROLE=""; AIR_NONE=""
+_auth_install_role() {   # <recorded role, "" or a newline>
+  AIR_ROLE="<role>"; AIR_NONE=""
+  case "${1:-}" in server|both) AIR_ROLE="$1" ;; '') AIR_NONE="; this box records no role, and a bare install takes role both" ;;
+    $'\n') AIR_NONE="; $BOX_ENV_FILE cannot be read, so the role it records was not read, and a bare install takes role both" ;;
+    *) AIR_NONE="; the role $BOX_ENV_FILE records is not one ccrc install takes, and a bare install takes role both" ;; esac
+}
 _auth_unit_cmp() {   # <unit dir> <recorded role or "">
-  local uf tf crc=0 none="" r="<role>"
+  [ "${CCD_OS:-linux}" != darwin ] || { _auth_job_cmp "$@"; return; }
+  local uf tf crc=0
   AUO_WHY=""; AUO_FIX=""
   uf="$1/$(_box_unit_file ccrc.service)"
   tf="$BOX_TREE_DIR/deploy/ccrc.service"
@@ -6509,10 +6530,8 @@ _auth_unit_cmp() {   # <unit dir> <recorded role or "">
     0) return 0 ;;
     1) AUO_WHY="$uf is not the unit file ccrc installs ($tf), and this verb acts only on its own"
        # Wave 190 A3: an update leaves a box already on its version alone unless forced; an install always lands it.
-       case "${2:-}" in server|both) r="$2" ;; '') none="; this box records no role, and a bare install takes role both" ;;
-         $'\n') none="; $BOX_ENV_FILE cannot be read, so the role it records was not read, and a bare install takes role both" ;;
-         *) none="; the role $BOX_ENV_FILE records is not one ccrc install takes, and a bare install takes role both" ;; esac
-       AUO_FIX="ccrc install --role $r puts the shipped file back and reloads systemd (an update does not, on a box already on its version$none); or set the keys by hand (the README's 'The session gate')"
+       _auth_install_role "${2:-}"
+       AUO_FIX="ccrc install --role $AIR_ROLE puts the shipped file back and reloads systemd (an update does not, on a box already on its version$AIR_NONE); or set the keys by hand (the README's 'The session gate')"
        return 1 ;;
   esac
   AUO_WHY="$uf could not be compared with $tf, so whether it is that file was not measured"; return 2
@@ -6526,6 +6545,7 @@ _auth_unit_cmp() {   # <unit dir> <recorded role or "">
 _auth_unit_own() {   # <unit dir> <recorded role or "">
   local uf out line need="" frag="" srcp=$'\n'
   _auth_unit_cmp "$1" "${2:-}" || return $?
+  [ "${CCD_OS:-linux}" != darwin ] || { _auth_job_loaded "$1" "${2:-}"; return; }
   uf="$1/$(_box_unit_file ccrc.service)"
   out="$(_plat_timeout 10 systemctl --user show ccrc.service -p NeedDaemonReload -p FragmentPath -p SourcePath 2>/dev/null)" || out=""
   while IFS= read -r line; do
@@ -6553,6 +6573,109 @@ _auth_unit_own() {   # <unit dir> <recorded role or "">
     AUO_WHY="systemctl --user show did not say whether systemd made ccrc.service from another source (SourcePath), so what the restart would apply was not measured"; return 2; }
   [ -z "$srcp" ] \
     || { AUO_WHY="systemd made ccrc.service from $(_box_said "$srcp") (SourcePath), not from $uf alone, so the restart would apply something other than the file this verb read"; return 1; }
+}
+
+# ── THE MAC: the console's launchd job, proved (wave 193, issue #3475) ──
+# `_auth_job_cmp` is `_auth_unit_cmp` on a Mac, and needs no service manager either (fits-here asks it). The job is
+# what `_inst_plist_server` prints for this home, byte for byte, but for the two fields that belong to the moment of
+# the install: its ProcessType is one of `_launchd_class`'s four words, and its PATH one or more `:`-joined absolute
+# directories of printable ASCII with no `<`, `>`, `&`, quote or backslash and no empty entry, so neither can open a
+# key, close the string, spell an entity, carry a newline or name a relative directory. The writer is asked for the
+# bytes with a sentinel in each field, and the job is read whole (a NUL byte, a CR, a line more or less, and a missing
+# final newline are differences). A job file that is a link refuses: launchd loads the file it names. rc 0 the
+# installer's; rc 1 not, AUO_WHY which and AUO_FIX the way on (a PATH that fails its grammar is not cured by an install
+# from the same shell, wave 193 A1); rc 2 UNMEASURED. A path is printed, never a byte of the job.
+AUTH_JOB_SPATH=$'\001ccrc-job-path\001'; AUTH_JOB_SCLASS=$'\001ccrc-job-class\001'; AJ_PATH=""; AJ_ARGS=()
+_auth_job_cmp() {   # <unit dir> <recorded role or "">
+  local jf label exp all="" i pre suf v pbad=0 LC_ALL=C
+  local -a want have parts
+  AUO_WHY=""; AUO_FIX=""; AJ_PATH=""; AJ_ARGS=()
+  label="$(_svc_label ccrc.service)"; jf="$1/$label.plist"
+  _auth_install_role "${2:-}"
+  if [ -L "$jf" ]; then
+    AUO_WHY="$jf is a symlink, and launchd loads the job from the file it names, which this verb did not read"
+    AUO_FIX="ccrc install --role $AIR_ROLE writes the shipped job in its place and loads it into launchd (an update does not, on a box already on its version$AIR_NONE); or set the keys by hand (the README's 'The session gate')"
+    return 1
+  fi
+  if [ ! -f "$jf" ] || [ ! -r "$jf" ]; then AUO_WHY="$jf cannot be read, so whether it is the job ccrc installs was not measured"; return 2; fi
+  exp="$(_inst_plist_server "$label" "$HOME/.ccrc/logs/$label.log" server "$AUTH_JOB_SPATH" "$AUTH_JOB_SCLASS" 2>/dev/null)" \
+    || { AUO_WHY="the job ccrc installs could not be printed here, so whether $jf is that job was not measured"; return 2; }
+  mapfile -t want <<< "$exp"
+  { IFS= read -r -d '' all || :; } < "$jf" 2>/dev/null
+  mapfile -t have <<< "${all%$'\n'}"
+  AUO_WHY="$jf is not the job ccrc installs, and this verb acts only on its own"
+  AUO_FIX="ccrc install --role $AIR_ROLE puts the shipped job back and loads it into launchd (an update does not, on a box already on its version$AIR_NONE); or set the keys by hand (the README's 'The session gate')"
+  [ "${all: -1}" = $'\n' ] && [ "${#have[@]}" -eq "${#want[@]}" ] || return 1
+  for i in "${!want[@]}"; do
+    case "${want[$i]}" in
+      *"$AUTH_JOB_SPATH"*|*"$AUTH_JOB_SCLASS"*)
+        pre="${want[$i]%%$'\001'*}"; suf="${want[$i]##*$'\001'}"
+        [[ "${have[$i]}" == "$pre"*"$suf" ]] || return 1
+        v="${have[$i]#"$pre"}"; v="${v%"$suf"}"
+        if [[ "${want[$i]}" == *"$AUTH_JOB_SCLASS"* ]]; then
+          case "$v" in Background|Standard|Adaptive|Interactive) ;; *) return 1 ;; esac
+        else
+          AJ_PATH="$v"; IFS=: read -ra parts <<< "$v"
+          [[ "$v" =~ ^[\ -~]+$ && "$v" != *[\<\>\&\"\'\\]* && ":$v:" != *::* ]] || pbad=1
+          for v in ${parts[@]+"${parts[@]}"}; do [[ "$v" == /* ]] || pbad=1; done
+        fi ;;
+      *) [ "${have[$i]}" = "${want[$i]}" ] || return 1 ;;
+    esac
+  done
+  # The three arguments, as launchd reads them (the XML's `&amp;` is `&`), for `_auth_job_loaded`. The `&` is quoted:
+  # under bash 5.2's patsub_replacement an unquoted one in the replacement is the matched text.
+  for i in "${!have[@]}"; do [ "${have[$i]}" != '  <key>ProgramArguments</key>' ] || break; done
+  for v in "${have[@]:i+2:3}"; do v="${v#    <string>}"; v="${v%</string>}"; AJ_ARGS+=("${v//&amp;/"&"}"); done
+  [ "$pbad" -eq 0 ] && { AUO_WHY=""; AUO_FIX=""; return 0; }
+  AUO_WHY="the PATH in $jf holds an entry this verb does not read as a plain absolute directory, so what that PATH could carry into the job was not proved"
+  AUO_FIX="an install puts the PATH of the shell it runs in into the job, so run ccrc install --role $AIR_ROLE from a shell whose PATH holds only absolute directories with no <, >, &, quote or backslash in them$AIR_NONE; or set the keys by hand (the README's 'The session gate')"
+  return 1
+}
+# `_auth_job_loaded` is `_auth_unit_own`'s second half on a Mac: launchd reads a job file only when the job is loaded,
+# and `kickstart -k` restarts the definition it holds, so the job it holds must be the file just compared. ONE read,
+# `launchctl print`, through `_svc_launchctl` (its guard stands), whose lines of one tab are read by name: `path` is the
+# job file, `program` is /bin/bash, `arguments` are the file's three, and the job's own `environment` is exactly PATH
+# and HOME holding the file's values, and at most XPC_SERVICE_NAME holding the job's label (wave 193 B1, ruled). Any
+# other key in it refuses, named, never its value. A missing line or block is UNMEASURED; launchd's "no such job"
+# (113) refuses with the install as the way on. The print's other blocks (the inherited and default environments) are
+# not read: the domain's environment is `_auth_unit_sources`'s Mac read.
+_auth_job_loaded() {   # <unit dir> <recorded role or "">
+  local jf label out rc=0 line sect="" path="" prog="" k v a=0 e=0 extra="" lpath=$'\n' lhome=$'\n' LC_ALL=C
+  local -a args=()
+  label="$(_svc_label ccrc.service)"; jf="$1/$label.plist"
+  _auth_install_role "${2:-}"
+  out="$(_svc_launchctl print "$(_svc_domain)/$label" 2>/dev/null)" || rc=$?
+  AUO_FIX="ccrc install --role $AIR_ROLE loads the job file into launchd again (an update does not, on a box already on its version$AIR_NONE); or set the keys by hand (the README's 'The session gate')"
+  if [ "$rc" -eq 113 ]; then AUO_WHY="launchd holds no job $label (launchctl print: no such service), so the restart would start nothing this verb read"; return 1; fi
+  AUO_FIX="this verb cannot prove the job on this box without that read; set the keys by hand (the README's 'The session gate')"
+  [ "$rc" -eq 0 ] && [ -n "$out" ] \
+    || { AUO_WHY="launchctl print $(_svc_domain)/$label did not answer, so what launchd holds for the job was not measured"; return 2; }
+  while IFS= read -r line; do
+    case "$sect:$line" in
+      :$'\t'"path = "*) path="${line#*= }" ;;
+      :$'\t'"program = "*) prog="${line#*= }" ;;
+      :$'\t'"arguments = {") sect=args; a=1 ;;
+      :$'\t'"environment = {") sect=env; e=1 ;;
+      :$'\t'*" = {") sect=other ;;
+      *:$'\t}') sect="" ;;
+      args:$'\t\t'*) args+=("${line#$'\t\t'}") ;;
+      env:$'\t\t'*" => "*) k="${line#$'\t\t'}"; v="${k#* => }"; k="${k%% => *}"
+        # B1's one permitted extra (the coordinator's ruling): launchd's own XPC_SERVICE_NAME, holding the label exactly.
+        case "$k" in PATH) lpath="$v" ;; HOME) lhome="$v" ;; XPC_SERVICE_NAME) [ "$v" = "$label" ] || extra="$k" ;; *) extra="$k" ;; esac ;;
+    esac
+  done <<< "$out"
+  [ -n "$path" ] && [ -n "$prog" ] && [ "$a" -eq 1 ] && [ "$e" -eq 1 ] \
+    || { AUO_WHY="launchctl print $(_svc_domain)/$label did not say all of the job's path, program, arguments and environment, so what launchd holds was not measured"; return 2; }
+  AUO_FIX="ccrc install --role $AIR_ROLE loads the job file into launchd again (an update does not, on a box already on its version$AIR_NONE); or set the keys by hand (the README's 'The session gate')"
+  [ "$path" = "$jf" ] \
+    || { AUO_WHY="launchd holds the job $label from $(_box_said "$path"), not from $jf, the file this verb read"; return 1; }
+  [ "$prog" = /bin/bash ] && [ "${#args[@]}" -eq "${#AJ_ARGS[@]}" ] \
+    && [ "$(IFS=$'\001'; printf '%s' "${args[*]}")" = "$(IFS=$'\001'; printf '%s' "${AJ_ARGS[*]}")" ] \
+    || { AUO_WHY="launchd holds the job $label with another program or other arguments than $jf, the file this verb read, so the restart would run something else"; return 1; }
+  [ -z "$extra" ] \
+    || { AUO_WHY="launchd holds the job $label with $(_box_said "$extra") in its own environment, which $jf does not set, so the restart would apply something other than the file this verb read"; return 1; }
+  [ "$lpath" = "$AJ_PATH" ] && [ "$lhome" = "$HOME" ] \
+    || { AUO_WHY="launchd holds the job $label with another PATH or HOME in its environment than $jf, the file this verb read, so the restart would apply something else"; return 1; }
 }
 
 # The rewrite, as one awk pass in bytes (LC_ALL=C). A line is one of ours only when, after leading spaces and tabs,
@@ -6712,14 +6835,11 @@ cmd_auth() {
 
   _ccrc_operator_only "auth $sub"
 
-  # Not on a Mac yet (review 3971 R1(d), the coordinator's ruling B): two fields of the launchd job belong to the
-  # moment of the install (its PATH, its ProcessType), so the job file cannot be proved the installer's, and the verb
-  # acts only on what it can prove. Before any read of the box; the hand route, in words that hold on a Mac.
-  if [ "${CCD_OS:-linux}" = darwin ]; then
-    if [ "$sub" = on ]; then
-      _ccrc_die "auth on: this verb does not act on a Mac yet: there, what the console's job runs cannot be proved to be what ccrc installs. Arm it by hand: run ccrc passwd if there is no passphrase yet, put CCRC_AUTH=on, CCRC_RP_ID=localhost, CCRC_ORIGIN=http://localhost:<port> and CCRC_COOKIE_INSECURE=on in $BOX_ENV_FILE (<port> is CCRC_PORT, 7788 when it is unset), then restart: $(_svc_restart_hint ccrc.service). The README's 'The session gate' has the rest. Nothing was changed."
-    fi
-    _ccrc_die "auth off: this verb does not act on a Mac yet: there, what the console's job runs cannot be proved to be what ccrc installs. Turn sign-in off by hand: remove the CCRC_AUTH, CCRC_RP_ID, CCRC_ORIGIN and CCRC_COOKIE_INSECURE lines that arm it in $BOX_ENV_FILE, then restart: $(_svc_restart_hint ccrc.service). The README's 'The session gate' has the rest. Nothing was changed."
+  # A Mac (wave 193; review 3971's ruling B's refusal stands only where the proof cannot be made): the installer writes
+  # this home's path raw into the console's job file and inside single quotes in its shell line, so a home that is not
+  # in the closed form `_box_said` prints is refused here, before any read of the box, naming no byte of it (A2).
+  if [ "${CCD_OS:-linux}" = darwin ] && ! _box_said "$HOME" >/dev/null; then
+    _ccrc_die "auth $sub: this home's path holds a byte other than a letter, a digit or one of ._/@:+,%=~-[], and ccrc writes it into the console's job file and its shell line, so the job cannot be proved to be what ccrc installs; set the keys by hand (the README's 'The session gate'). Nothing was changed."
   fi
 
   # A server box: the fleet role runs no console, and a box with no installed ccrc.service has nothing to restart.
@@ -6728,7 +6848,7 @@ cmd_auth() {
   [ "$role" != fleet ] \
     || _ccrc_die "auth: this box runs no console ($BOX_ENV_FILE records CCRC_ROLE=fleet); sign-in belongs to the server box. Nothing was changed."
   [ -f "$BOX_UNIT_DIR/$(_box_unit_file ccrc.service)" ] \
-    || _ccrc_die "auth: ccrc.service is not installed in $BOX_UNIT_DIR, so there is no console service here to restart (a dev checkout runs its server by hand: set the keys in the README's 'The session gate' yourself). Nothing was changed."
+    || _ccrc_die "auth: $(_box_unit_file ccrc.service) is not installed in $BOX_UNIT_DIR, so there is no console service here to restart (a dev checkout runs its server by hand: set the keys in the README's 'The session gate' yourself). Nothing was changed."
 
   # Held from here to the end of the act, so an update cannot restart or measure this unit in between.
   local lrc=0
@@ -6736,7 +6856,8 @@ cmd_auth() {
   case "$lrc" in
     0) _exit_add '_upd_unlock' ;;
     1) _ccrc_die "auth: an update or rollback holds ~/.ccrc/update.lock, and it restarts and measures this same service; wait for it to finish, then re-run. Nothing was changed." ;;
-    2) _ccrc_die "auth: ~/.ccrc/update.lock cannot be taken (flock is not on PATH), so a running update could not be ruled out. Put flock on PATH and re-run, or set the keys by hand (the README's 'The session gate'). Nothing was changed." ;;
+    2) local fway="Put flock on PATH and re-run"; [ "${CCD_OS:-linux}" != darwin ] || fway="Install it (brew install flock, as ccrc install asks on a Mac) and re-run"
+       _ccrc_die "auth: ~/.ccrc/update.lock cannot be taken (flock is not on PATH), so a running update could not be ruled out. $fway, or set the keys by hand (the README's 'The session gate'). Nothing was changed." ;;
     *) _ccrc_die "auth: ~/.ccrc/update.lock could not be taken or measured, so a running update could not be ruled out. Nothing was changed." ;;
   esac
 
@@ -19715,8 +19836,13 @@ _inst_caps() {   # what THIS install's ccrc can do (design 2026-09-20 §9, decis
 # REQUIRED. So the fleet line stops (`|| exit 1`) where systemd refuses to
 # start, and never reads ccrc.env or exposure.env, which a fleet unit does not
 # read either. Every other role gets the server's line, unchanged.
-_inst_plist_server() {   # <label> <log> [<role>] -> the plist bytes, on stdout
-  local label="$1" log="$2" role="${3:-}" env1="$BOX_ENV_FILE" env2="$CCRC_EXPOSURE_FILE"
+# The two fields that belong to the moment of the install, the job's PATH (`_svc_job_path`) and its ProcessType
+# (`_launchd_class`), are the fourth and fifth arguments when a caller gives them, and today's values when it does not:
+# `ccrc auth`'s job proof asks this same writer for the bytes it expects, with a sentinel in each (wave 193).
+_inst_plist_server() {   # <label> <log> [<role>] [<path>] [<class>] -> the plist bytes, on stdout
+  local label="$1" log="$2" role="${3:-}" env1="$BOX_ENV_FILE" env2="$CCRC_EXPOSURE_FILE" jpath="${4-}" jclass="${5-}"
+  [ $# -ge 4 ] || jpath="$(_svc_job_path)"
+  [ $# -ge 5 ] || jclass="$(if declare -F _launchd_class >/dev/null; then _launchd_class; else printf Background; fi)"
   local entry="$HOME/ccrc/server/dist/server/src/index.js"
   # `&amp;&amp;` — this string lands inside XML, where a bare `&` is a parse
   # error and `plutil` refuses the whole file.
@@ -19741,10 +19867,10 @@ _inst_plist_server() {   # <label> <log> [<role>] -> the plist bytes, on stdout
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>3</integer>
-  <key>ProcessType</key><string>$(if declare -F _launchd_class >/dev/null; then _launchd_class; else printf Background; fi)</string>
+  <key>ProcessType</key><string>$jclass</string>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>PATH</key><string>$(_svc_job_path)</string>
+    <key>PATH</key><string>$jpath</string>
     <key>HOME</key><string>$HOME</string>
   </dict>
   <key>SoftResourceLimits</key>

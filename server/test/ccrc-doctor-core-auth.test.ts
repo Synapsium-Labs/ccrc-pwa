@@ -97,6 +97,13 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     mkdirSync(join(home, 'ccrc', 'deploy'), { recursive: true });
     copyFileSync(join(REPO, 'deploy', 'ccrc.service'), join(home, 'ccrc', 'deploy', 'ccrc.service'));
     if (process.platform !== 'darwin') copyFileSync(join(REPO, 'deploy', 'ccrc.service'), join(unitDirOf(home), 'ccrc.service'));
+    // Wave 193 g: on a Mac the helper proves the job file instead, so the box carries the job the installer's writer
+    // prints for this home (a PATH of plain absolute directories, the default class).
+    if (process.platform === 'darwin') {
+      const w = spawnSync(BASH, ['-c', '. "$1"; CCD_OS=darwin; _inst_plist_server app.ccrc.ccrc "$HOME/.ccrc/logs/app.ccrc.ccrc.log" server /usr/bin:/bin Background',
+        'writer', CCRC_SRC], { env: { HOME: home, PATH: process.env['PATH'] ?? '/usr/bin:/bin' }, encoding: 'latin1' });
+      writeFileSync(join(unitDirOf(home), 'app.ccrc.ccrc.plist'), w.stdout, 'latin1');
+    }
     // The compare runs `cmp`, which a box has (diffutils) and doctor's contained PATH does not: the real one, by stub.
     stub(home, 'cmp', 'exec /usr/bin/cmp "$@"');
     return home;
@@ -148,12 +155,7 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     const a = authLine(runDoctor(none).stdout);
     const set = unexposedBox('ccrc-doctor-auth-verb-set-');
     const b = authLine(runDoctor(set).stdout);
-    if (process.platform === 'darwin') {
-      // Review 3971 R1(d), ruling B: the verb refuses on a Mac, so doctor gives the hand route there.
-      expect(a).toMatch(/^PASS auth: .*to arm the gate: ccrc passwd, then set CCRC_AUTH=on together with CCRC_RP_ID and CCRC_ORIGIN/);
-      for (const l of [a, b]) expect(l).not.toContain('ccrc auth on');
-      return;
-    }
+    // Wave 193: on a Mac the verb acts where it can prove the job, so doctor names it there too.
     expect(a).toMatch(/^PASS auth: .*to arm the gate: ccrc passwd, then ccrc auth on$/);
     expect(a).not.toContain('CCRC_RP_ID');
     expect(b).toMatch(/^PASS auth: .*holds a usable passphrase .*no request is gated yet; to arm it: ccrc auth on$/);
@@ -175,6 +177,25 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     const line = authLine(runDoctor(home).stdout);
     expect(line).toMatch(/^PASS auth: /);
     expect(line).toContain('CCRC_AUTH=on');
+    expect(line).not.toContain('ccrc auth on');
+  });
+
+  // Wave 193 g: on a Mac the helper asks the job file's proof and the reader that holds ccrc.env to plain assignments
+  // (both need no service manager), so where either says no, the verb, which refuses there, is not offered.
+  itDarwin.each([
+    ['the job file edited by hand', (h: string): void => {
+      const j = join(unitDirOf(h), 'app.ccrc.ccrc.plist');
+      writeFileSync(j, `${readFileSync(j, 'latin1')}<!-- edited -->\n`, 'latin1');
+    }],
+    ['a ccrc.env line that is not a plain assignment', (h: string): void => {
+      const p = join(h, '.ccrc', 'ccrc.env');
+      writeFileSync(p, `${readFileSync(p, 'utf8')}CCRC_X=$(id)\n`);
+    }],
+  ] as const)('wave 193: where the Mac proof says no, the dark remedy does not offer ccrc auth: %s', (_name, plant) => {
+    const home = unexposedBox('ccrc-doctor-auth-mac-notown-');
+    rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
+    plant(home);
+    const line = authLine(runDoctor(home).stdout);
     expect(line).not.toContain('ccrc auth on');
   });
 

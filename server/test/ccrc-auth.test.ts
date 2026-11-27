@@ -24,7 +24,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import {
-  chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, symlinkSync, writeFileSync,
+  chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -48,15 +48,47 @@ const BASH = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).
 /** The unit the installer lands: the tree's own file, copied unchanged (`_inst_units`, deploy.sh). */
 const SHIPPED_UNIT_SRC = join(REPO, 'deploy', 'ccrc.service');
 const SHIPPED_UNIT = readFileSync(SHIPPED_UNIT_SRC, 'latin1');
-/** The verb's end-to-end cases plant a systemd user unit and a systemctl stub; on a Mac the verb looks for a launchd
- *  job instead, so they run on Linux only (review 3971 R3), as the install and expose suites branch. */
+/** Wave 193: the end-to-end cases run on both platforms. On Linux the box is a systemd user unit and a systemctl stub; on
+ *  a Mac it is the launchd job the installer's writer prints and a launchctl stub. A describe made with `onEach` runs
+ *  once per platform this box can run: on a Mac, darwin with the real BSD tools; on Linux, linux and a SIMULATED darwin,
+ *  where `ccrc` is sourced and `CCD_OS=darwin` (and the unit directory it fixes at load) set after, as the suite's other
+ *  darwin harnesses do. What a simulated darwin cannot run is the task note's list: `_plat_mode`'s darwin arm (BSD
+ *  `stat -f`, here a shim that answers GNU's `%a` in its shape), BSD `cp`, `mv`, `chmod` and `awk`, and /bin/bash 3.2
+ *  sourcing the env files. Describes that read systemd's own answers stay Linux only. */
 const IS_DARWIN = process.platform === 'darwin';
+type Plat = 'linux' | 'darwin';
+const HOST_PLAT: Plat = IS_DARWIN ? 'darwin' : 'linux';
+let PLAT: Plat = HOST_PLAT;
+const simulated = (): boolean => PLAT === 'darwin' && !IS_DARWIN;
+const PLATFORMS: Plat[] = IS_DARWIN ? ['darwin'] : ['linux', 'darwin'];
+/** One describe per platform; `body` gets the platform for collection-time choices (`it.skipIf`). */
+function onEach(title: string, body: (p: Plat) => void): void {
+  for (const p of PLATFORMS) {
+    describe(`${title} [${p === 'darwin' && !IS_DARWIN ? 'darwin, simulated' : p}]`, () => {
+      beforeAll(() => { PLAT = p; });
+      afterAll(() => { PLAT = HOST_PLAT; });
+      body(p);
+    });
+  }
+}
+const MAC_LABEL = 'app.ccrc.ccrc';
+const macJobFile = (h: string): string => join(h, 'Library', 'LaunchAgents', `${MAC_LABEL}.plist`);
+/** The PATH a Mac install wrote into the fixture's job: the writer's own appends, fixed so every row knows it. */
+const JOB_PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
+/** The file the verb finds installed: the unit on Linux, the job on a Mac. */
+const installedFile = (h: string): string =>
+  (PLAT === 'darwin' ? macJobFile(h) : join(h, '.config', 'systemd', 'user', 'ccrc.service'));
 
 const ccrcIn = (home: string): string => join(home, 'ccrc', 'ccd', 'ccrc');
 const envFile = (home: string): string => join(home, '.ccrc', 'ccrc.env');
+/** One restart of the console's service, as the cases count them; on a Mac each `kickstart -k` of its job is one. */
+const RESTART = '--user restart ccrc.service';
 const restarts = (home: string): string[] => {
-  const f = join(home, 'systemctl-argv');
-  return existsSync(f) ? readFileSync(f, 'utf8').split('\n').filter((l) => /^--user restart /.test(l)) : [];
+  const [f, re] = PLAT === 'darwin'
+    ? [join(home, 'launchctl-argv'), /^kickstart -k /] : [join(home, 'systemctl-argv'), /^--user restart /];
+  const kick = `kickstart -k gui/${process.getuid?.() ?? 0}/${MAC_LABEL}`;
+  return (existsSync(f) ? readFileSync(f, 'utf8').split('\n').filter((l) => re.test(l)) : [])
+    .map((l) => (PLAT === 'darwin' && l === kick ? RESTART : l));
 };
 const bytes = (p: string): string | null => (existsSync(p) ? readFileSync(p, 'latin1') : null);
 /** A directory of links to every command of the real PATH but `name`, so nothing else a run needs goes missing. */
@@ -96,11 +128,8 @@ beforeAll(async () => {
 });
 afterAll(async () => { await new Promise<void>((r) => server.close(() => r())); });
 
-const SYSTEMCTL_STUB = [
-  '#!/bin/sh',
-  'printf \'%s\\n\' "$*" >> "$HOME/systemctl-argv"',
-  'case "$*" in',
-  '  "--user restart ccrc.service")',
+/** The restart, as either stub plays it: the server reading its env file. */
+const RESTART_ARM = [
   '    plan="$HOME/restart-plan"; next=""',
   '    if [ -s "$plan" ]; then next=$(head -n 1 "$plan"); tail -n +2 "$plan" > "$plan.n"; /bin/mv "$plan.n" "$plan"; fi',
   '    [ "$next" != fail ] || exit 1',
@@ -108,6 +137,13 @@ const SYSTEMCTL_STUB = [
   '      if grep -qx "CCRC_AUTH=on" "$HOME/.ccrc/ccrc.env" 2>/dev/null; then next=armed; else next=off; fi',
   '    fi',
   '    printf \'%s\\n\' "$next" > "$HOME/server-state"; exit 0 ;;',
+];
+const SYSTEMCTL_STUB = [
+  '#!/bin/sh',
+  'printf \'%s\\n\' "$*" >> "$HOME/systemctl-argv"',
+  'case "$*" in',
+  '  "--user restart ccrc.service")',
+  ...RESTART_ARM,
   // `systemctl --user show ccrc.service -p …`: one line per property asked, in systemd's own order and not the order
   // asked (measured on systemd 259: FragmentPath, SourcePath, DropInPaths, NeedDaemonReload, then the service's
   // Environment, EnvironmentFiles, PassEnvironment), an empty one printed as `Name=`, as systemd prints a property asked
@@ -150,6 +186,66 @@ const SYSTEMCTL_STUB = [
   'echo "fixture systemctl: unexpected argv: $*" >&2; exit 90',
 ].join('\n') + '\n';
 
+// `launchctl` on a Mac box (wave 193), the shape `_svc_launchctl` runs: a stub on PATH is not the system binary, so the
+// sandbox guard lets it run. `print gui/<uid>/app.ccrc.ccrc` answers `<home>/lc-print` (the box writes what launchd
+// would hold for the installed job; `@STATE@` is `running` unless the server is down), 113 when `<home>/lc-not-held`
+// stands, 5 when `<home>/lc-print-fails` does. `kickstart -k` is the restart, 113 when `<home>/lc-kick-fails` or
+// `lc-not-held` stands. `getenv <KEY>` answers the domain's environment from `<home>/lc-domain-env` (KEY=value lines;
+// an unset key prints nothing and exits 0, the shape the macOS leg measures), 5 when `<home>/lc-getenv-fails` stands.
+const LAUNCHCTL_STUB = [
+  '#!/bin/sh',
+  'printf \'%s\\n\' "$*" >> "$HOME/launchctl-argv"',
+  'case "$1 $2" in',
+  '  "print gui/"*"/app.ccrc.ccrc")',
+  '    [ ! -e "$HOME/lc-not-held" ] || { echo "Could not find service \\"app.ccrc.ccrc\\" in domain" >&2; exit 113; }',
+  '    [ ! -e "$HOME/lc-print-fails" ] || exit 5',
+  '    st=running; [ "$(cat "$HOME/server-state" 2>/dev/null)" != down ] || st="not running"',
+  '    while IFS= read -r l; do case "$l" in *@STATE@*) printf \'%s\\n\' "${l%%@STATE@*}$st" ;; *) printf \'%s\\n\' "$l" ;; esac; done < "$HOME/lc-print"',
+  '    exit 0 ;;',
+  '  "kickstart -k")',
+  '    case "$3" in gui/*/app.ccrc.ccrc) ;; *) echo "fixture launchctl: unexpected argv: $*" >&2; exit 90 ;; esac',
+  '    [ ! -e "$HOME/lc-not-held" ] && [ ! -e "$HOME/lc-kick-fails" ] || exit 113',
+  ...RESTART_ARM,
+  '  "getenv "*)',
+  '    [ ! -e "$HOME/lc-getenv-fails" ] || exit 5',
+  '    v=$(grep "^$2=" "$HOME/lc-domain-env" 2>/dev/null | head -n 1); [ -z "$v" ] || printf \'%s\\n\' "${v#*=}"; exit 0 ;;',
+  'esac',
+  'echo "fixture launchctl: unexpected argv: $*" >&2; exit 90',
+].join('\n') + '\n';
+/** A simulated darwin's BSD `stat -f%Mp%Lp` (`_plat_mode`), answered from GNU's `%a` in BSD's padded shape; every other
+ *  form passes through. */
+const STAT_SHIM = (real: string): string => '#!/bin/sh\n'
+  + `if [ "$1" = -f%Mp%Lp ]; then shift; exec ${real} -c 0%a "$@"; fi\nexec ${real} "$@"\n`;
+const REAL_STAT = spawnSync('/bin/sh', ['-c', 'command -v stat'], { encoding: 'utf8' }).stdout.trim() || '/usr/bin/stat';
+
+/** The installed job: the real writer's bytes for this home, through a bash that sourced ccrc with darwin set. */
+function writeJob(home: string, jobPath = JOB_PATH, cls = 'Background'): string {
+  const r = spawnSync(BASH, ['-c', `. "$1"; CCD_OS=darwin; _inst_plist_server ${MAC_LABEL} "$HOME/.ccrc/logs/${MAC_LABEL}.log" server "$2" "$3"`,
+    'writer', CCRC_SRC, jobPath, cls], { env: { HOME: home, PATH: process.env['PATH'] ?? '/usr/bin:/bin' }, encoding: 'latin1' });
+  if (r.status !== 0) throw new Error(`the writer failed: ${r.stderr}`);
+  mkdirSync(join(home, 'Library', 'LaunchAgents'), { recursive: true });
+  writeFileSync(macJobFile(home), r.stdout, 'latin1');
+  return r.stdout;
+}
+/** The job's three arguments, as launchd reads them from the file (its `&amp;` is `&`). */
+function jobArgs(job: string): string[] {
+  const lines = job.split('\n');
+  const at = lines.indexOf('  <key>ProgramArguments</key>');
+  return lines.slice(at + 2, at + 5).map((l) => l.replace(/^ {4}<string>/, '').replace(/<\/string>$/, '').replace(/&amp;/g, '&'));
+}
+/** What `launchctl print` answers for a job launchd holds, in its shape (one tab a level). `over` replaces a field. */
+function printOf(home: string, job: string, over: { path?: string; program?: string; args?: string[];
+  env?: [string, string][] } = {}): string {
+  const uid = process.getuid?.() ?? 0;
+  const args = over.args ?? jobArgs(job);
+  const env = over.env ?? [['PATH', JOB_PATH], ['HOME', home]];
+  return [`gui/${uid}/${MAC_LABEL} = {`, '\tactive count = 1', `\tpath = ${over.path ?? macJobFile(home)}`, '\ttype = LaunchAgent',
+    '\tstate = @STATE@', '', `\tprogram = ${over.program ?? '/bin/bash'}`, '\targuments = {', ...args.map((a) => `\t\t${a}`), '\t}', '',
+    '\tinherited environment = {', '\t\tSSH_AUTH_SOCK => /private/tmp/com.apple.launchd.x/Listeners', '\t}', '',
+    '\tdefault environment = {', '\t\tPATH => /usr/bin:/bin:/usr/sbin:/sbin', '\t}', '',
+    '\tenvironment = {', ...env.map(([k, v]) => `\t\t${k} => ${v}`), '\t}', '', `\tdomain = gui/${uid} [100005]`, '}', ''].join('\n');
+}
+
 interface Box { home: string }
 /** A server box on loopback: ccrc.env naming this server's port, ccrc.service installed, the server up with sign-in
  *  off, and (unless `passphrase: false`) a real passphrase file. `envText` is ccrc.env's whole text; the port line is
@@ -165,12 +261,17 @@ function box(prefix: string, envText: string, opts: { passphrase?: boolean | 'ga
   mkdirSync(join(home, '.ccrc'), { recursive: true });
   writeFileSync(envFile(home), envText, { mode: 0o600 });
   chmodSync(envFile(home), 0o600);
-  // The tree's unit file, and the installed copy of it, byte for byte: what `_inst_units` lands (review 3971 R1).
+  // The tree's unit file, and the installed copy of it, byte for byte: what `_inst_units` lands (review 3971 R1). On a
+  // Mac, what `_inst_units_darwin` lands: the job the writer prints for this home, and what launchd holds for it.
   mkdirSync(join(home, 'ccrc', 'deploy'), { recursive: true });
   copyFileSync(SHIPPED_UNIT_SRC, join(home, 'ccrc', 'deploy', 'ccrc.service'));
-  const units = join(home, '.config', 'systemd', 'user');
-  mkdirSync(units, { recursive: true });
-  copyFileSync(SHIPPED_UNIT_SRC, join(units, 'ccrc.service'));
+  if (PLAT === 'darwin') {
+    writeFileSync(join(home, 'lc-print'), printOf(home, writeJob(home)));
+  } else {
+    const units = join(home, '.config', 'systemd', 'user');
+    mkdirSync(units, { recursive: true });
+    copyFileSync(SHIPPED_UNIT_SRC, join(units, 'ccrc.service'));
+  }
   if (opts.passphrase !== false) {
     writeFileSync(join(home, '.ccrc', 'auth.scrypt'), opts.passphrase === 'garbled' ? 'not a secret line\n' : fixtureSecretLine(),
       { mode: 0o600 });
@@ -184,6 +285,11 @@ function env(home: string, extra: Record<string, string> = {}): Record<string, s
   const e = ccrcContainedEnv(home, process.env, { managers: true, curl: 'loopback' });
   writeFileSync(join(home, 'curl-allow-ports'), `${PORT}\n`);
   writeFileSync(join(home, '.local', 'bin', 'systemctl'), SYSTEMCTL_STUB, { mode: 0o755 });
+  if (PLAT === 'darwin') writeFileSync(join(home, '.local', 'bin', 'launchctl'), LAUNCHCTL_STUB, { mode: 0o755 });
+  // A case that plants a failing `stat` of its own keeps it (the shim is written once, where none stands).
+  if (simulated() && !existsSync(join(home, '.local', 'bin', 'stat'))) {
+    writeFileSync(join(home, '.local', 'bin', 'stat'), STAT_SHIM(REAL_STAT), { mode: 0o755 });
+  }
   // The pane guard's one tmux read, answered with `<home>/tmux-session` when a case plants one; the containment's
   // poison stands otherwise.
   const session = join(home, 'tmux-session');
@@ -198,10 +304,16 @@ function env(home: string, extra: Record<string, string> = {}): Record<string, s
 }
 
 interface Result { code: number; out: string; signal?: number }
+/** A simulated darwin's command line: `ccrc` sourced (its dispatch skipped: `$0` is not the file), the platform and
+ *  the unit directory it fixes at load set after, then the verb's own function with the verb's words. */
+const SIM_DARWIN = 'f=$1; shift; v=$1; shift; set -- "$@"; . "$f"; CCD_OS=darwin; BOX_UNIT_DIR="$HOME/Library/LaunchAgents"; '
+  + '[ "$v" = auth ] || { echo "simulated darwin runs auth only" >&2; exit 90; }; cmd_auth "$@"';
+const argvOf = (home: string, args: string[]): string[] =>
+  (simulated() ? ['-c', SIM_DARWIN, 'sim-darwin', ccrcIn(home), ...args] : [ccrcIn(home), ...args]);
 /** `ccrc auth <sub>` on a real terminal, with the terminal handed back so a case can signal the run. A pty merges the
  *  two streams. */
 function startTty(home: string, args: string[], extra: Record<string, string> = {}): { p: pty.IPty; done: Promise<Result> } {
-  const p = pty.spawn(BASH, [ccrcIn(home), ...args], {
+  const p = pty.spawn(BASH, argvOf(home, args), {
     name: 'xterm-color', cols: 400, rows: 60, cwd: home, env: env(home, extra),
   });
   const done = new Promise<Result>((resolve) => {
@@ -226,10 +338,13 @@ const waitFor = async (pred: () => boolean, ms = 20_000): Promise<void> => {
 };
 /** `ccrc <args>` with stdin a pipe — the shape a session's tool has. */
 function runPiped(home: string, args: string[]): Result {
-  const r = spawnSync(BASH, [ccrcIn(home), ...args], { env: env(home), encoding: 'utf8', input: '' });
+  const r = spawnSync(BASH, argvOf(home, args), { env: env(home), encoding: 'utf8', input: '' });
   return { code: r.status ?? -1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
 }
 
+/** On a Mac the job sources ccrc.env with bash, and a line its reader cannot hold to a plain assignment makes every key
+ *  undecided, so a row whose Linux reason is one key's shape refuses there at the first key read, with these words. */
+const NOT_PLAIN = /is not a plain NAME=value line, and on macOS the launchd job sources both env files with bash/;
 /** The refusal shape: non-zero, ccrc.env exactly as it was, nothing restarted, no temp or restore file left. */
 async function expectRefused(b: Box, r: Result, before: string | null, words: RegExp): Promise<void> {
   expect(r.code, r.out).not.toBe(0);
@@ -244,7 +359,7 @@ const ON_LINES = (port: number): string =>
   `# ccrc auth on: sign-in at http://localhost:${port} ('ccrc auth off' removes these lines)\n`
   + `CCRC_AUTH=on\nCCRC_RP_ID=localhost\nCCRC_ORIGIN=http://localhost:${port}\nCCRC_COOKIE_INSECURE=on\n`;
 
-describe.skipIf(IS_DARWIN)('ccrc auth: the guards an operator-only verb runs first', () => {
+onEach('ccrc auth: the guards an operator-only verb runs first', () => {
   it('refuses inside a Claude Code session (CLAUDECODE set)', async () => {
     const b = box('ccrc-auth-claudecode-', portLines());
     const before = bytes(envFile(b.home));
@@ -271,20 +386,24 @@ describe.skipIf(IS_DARWIN)('ccrc auth: the guards an operator-only verb runs fir
   });
 });
 
-describe.skipIf(IS_DARWIN)('ccrc auth: which box may run it', () => {
+onEach('ccrc auth: which box may run it', (p) => {
   it('refuses on the fleet role, and on a box with no ccrc.service installed', async () => {
     const a = box('ccrc-auth-fleet-', `${portLines()}CCRC_ROLE=fleet\n`);
     await expectRefused(a, await runTty(a.home, ['auth', 'on']), bytes(envFile(a.home)), /runs no console/);
     const c = box('ccrc-auth-nounit-', portLines());
-    const unit = join(c.home, '.config', 'systemd', 'user', 'ccrc.service');
-    spawnSync('rm', ['-f', unit]);
-    await expectRefused(c, await runTty(c.home, ['auth', 'on']), bytes(envFile(c.home)), /ccrc\.service is not installed/);
+    spawnSync('rm', ['-f', installedFile(c.home)]);
+    await expectRefused(c, await runTty(c.home, ['auth', 'on']), bytes(envFile(c.home)),
+      p === 'darwin' ? /app\.ccrc\.ccrc\.plist is not installed/ : /ccrc\.service is not installed/);
   });
 
+  // On a Mac the ddns pair is one launchd job (`_box_reach`'s own comment).
+  const ddns: [string, (h: string) => void, RegExp] = p === 'darwin'
+    ? ['the ddns job', (h) => writeFileSync(join(h, 'Library', 'LaunchAgents', 'app.ccrc.ccrc-ddns.plist'), ''), /app\.ccrc\.ccrc-ddns\.plist is installed/]
+    : ['the ddns timer unit', (h) => writeFileSync(join(h, '.config', 'systemd', 'user', 'ccrc-ddns.timer'), ''), /ccrc-ddns\.timer is installed/];
   for (const [name, plant, words] of [
     ['an exposure file', (h: string) => writeFileSync(join(h, '.ccrc', 'exposure.env'), 'CCRC_AUTH=on\n', { mode: 0o600 }), /exposure\.env exists/],
     ['a Caddyfile', (h: string) => writeFileSync(join(h, '.ccrc', 'Caddyfile'), 'x {\n}\n'), /Caddyfile exists/],
-    ['the ddns timer unit', (h: string) => writeFileSync(join(h, '.config', 'systemd', 'user', 'ccrc-ddns.timer'), ''), /ccrc-ddns\.timer is installed/],
+    ddns,
   ] as const) {
     it(`refuses a box reached from elsewhere: ${name}, naming ccrc expose — on and off alike`, async () => {
       const b = box('ccrc-auth-reach-', portLines());
@@ -355,7 +474,7 @@ describe.skipIf(IS_DARWIN)('ccrc auth: which box may run it', () => {
   });
 });
 
-describe.skipIf(IS_DARWIN)('ccrc auth on: what must hold before anything is written', () => {
+onEach('ccrc auth on: what must hold before anything is written', () => {
   it('refuses with no passphrase, and says to run ccrc passwd first', async () => {
     const b = box('ccrc-auth-nopass-', portLines(), { passphrase: false });
     await expectRefused(b, await runTty(b.home, ['auth', 'on']), bytes(envFile(b.home)), /ccrc passwd, then ccrc auth on/);
@@ -370,7 +489,8 @@ describe.skipIf(IS_DARWIN)('ccrc auth on: what must hold before anything is writ
   for (const key of ['CCRC_AUTH_SECRET_PATH', 'CCRC_SESSIONS_PATH']) {
     it(`refuses a ${key} line the unit reader cannot decide (a space before =) rather than reading it as unset`, async () => {
       const b = box('ccrc-auth-pathkey-', `${portLines()}${key} =/elsewhere/file\n`);
-      await expectRefused(b, await runTty(b.home, ['auth', 'on']), bytes(envFile(b.home)), new RegExp(`names ${key} in a shape this reader does not decide`));
+      await expectRefused(b, await runTty(b.home, ['auth', 'on']), bytes(envFile(b.home)),
+        PLAT === 'darwin' ? NOT_PLAIN : new RegExp(`names ${key} in a shape this reader does not decide`));
     });
   }
 
@@ -387,11 +507,13 @@ describe.skipIf(IS_DARWIN)('ccrc auth on: what must hold before anything is writ
 // Every shape of line the write must carry over untouched: comments (one NAMING a key, which is still a comment),
 // a key we do not own, odd spacing in a value, a CRLF line, and a last line with no newline.
 // A function: the port is known only once `beforeAll` has started the console.
+// On a Mac the job sources ccrc.env with bash, and its reader holds the file to plain assignments (wave 193 B3): no CR,
+// and a value with a blank in it is one whole quoted pair; the rest of the file is the same lines.
 const others = (): string => `# box config\n${portLines()}# CCRC_AUTH=off   <- a comment that names the key\n`
-  + 'CCRC_VAPID_SUBJECT=mailto:fixture@example.invalid\nCCRC_FLEET=local\r\nNOTE_LINE=a  b\tc';
-const RESTART = '--user restart ccrc.service';
+  + (PLAT === 'darwin' ? "CCRC_VAPID_SUBJECT=mailto:fixture@example.invalid\nCCRC_FLEET=local\nNOTE_LINE='a  b\tc'"
+    : 'CCRC_VAPID_SUBJECT=mailto:fixture@example.invalid\nCCRC_FLEET=local\r\nNOTE_LINE=a  b\tc');
 
-describe.skipIf(IS_DARWIN)('ccrc auth on: the write, the restart and the proof', () => {
+onEach('ccrc auth on: the write, the restart and the proof', () => {
 
   it('appends the four lines, keeps every other byte and the file mode, restarts once and proves sign-in on', async () => {
     const b = box('ccrc-auth-on-', others());
@@ -440,7 +562,8 @@ describe.skipIf(IS_DARWIN)('ccrc auth on: the write, the restart and the proof',
       writeFileSync(join(b.home, 'restart-plan'), `${plan}\n`);
       const r = await runTty(b.home, ['auth', 'on']);
       expect(r.code, r.out).toBe(1);
-      expect(r.out).toMatch(words);
+      // On a Mac a job that is not running has no failed word (`_svc_is_active` keeps launchd's "unanswered" apart).
+      expect(r.out).toMatch(plan === 'down' && PLAT === 'darwin' ? /ccrc\.service is unanswered/ : words);
       expect(r.out).toMatch(/was put back/);
       expect(r.out).toMatch(/it is back as it was, with sign-in off/);
       expect(bytes(envFile(b.home))).toBe(before);
@@ -472,7 +595,7 @@ describe.skipIf(IS_DARWIN)('ccrc auth on: the write, the restart and the proof',
   });
 });
 
-describe.skipIf(IS_DARWIN)('ccrc auth off', () => {
+onEach('ccrc auth off', () => {
   it('removes exactly what on wrote — the file is back to its bytes — and proves sign-in off', async () => {
     const original = `# box config\n${portLines()}# CCRC_AUTH=on  <- a comment, never removed\nCCRC_FLEET=local\n`;
     const b = box('ccrc-auth-off-', original);
@@ -958,14 +1081,14 @@ describe.skipIf(IS_DARWIN)('ccrc auth: the installed unit is the installer\'s, a
 // Two fields of the launchd job belong to the moment of the install, so the job file cannot be proved the installer's:
 // on a Mac the verb refuses before any read of the box, with the hand route, and the helper that offers it declines.
 // `ccrc` takes its platform from bash's OSTYPE, so darwin is set after sourcing (the unit reader's own harness) and these
-// run on every platform. The launchd arm of the sources reading went with this ruling, and its three function-level
-// cases with it (the task note's section 10).
-describe('ccrc auth: on a Mac the verb refuses with the hand route, and is not offered (review 3971 R1(d))', () => {
+// run on every platform. Wave 193: the Mac refusal of review 3971's ruling B is gone where the proof can be made; the
+// helper's rows below are the function-level ones, and the Mac's end-to-end rows follow in their own describe.
+describe('ccrc auth: the helper that offers the verb, function by function (wave 190 A4, wave 193 g)', () => {
   /** A loopback server box (ccrc.env, the installed unit), then `body` run in a bash that sourced ccrc with `os` set. */
   function asFunction(os: 'linux' | 'darwin', body: string,
-    opts: { path?: (dir: string) => string; plant?: (dir: string) => void } = {}):
+    opts: { path?: (dir: string) => string; plant?: (dir: string) => void; prefix?: string } = {}):
   { rc: number; err: string; env: string | null; calls: string; lock: boolean } {
-    const dir = mkTmp('ccrc-auth-mac-');
+    const dir = mkTmp(opts.prefix ?? 'ccrc-auth-mac-');
     const bin = join(dir, 'bin');
     mkdirSync(bin);
     mkdirSync(join(dir, '.ccrc'), { recursive: true });
@@ -986,51 +1109,6 @@ describe('ccrc auth: on a Mac the verb refuses with the hand route, and is not o
     return { rc: r.status ?? -1, err: r.stderr, env: bytes(join(dir, '.ccrc', 'ccrc.env')), calls,
       lock: existsSync(join(dir, '.ccrc', 'update.lock')) };
   }
-  // The operator-only checks pass by stub: what is asked here is the platform's refusal right after them. Wave 190 F2:
-  // the box is planted so that a run that went past the refusal meets later ones with words of their own (review 3971's
-  // survivor: the two refusals turned into printed lines left these cases green, because with no job file the "not
-  // installed" refusal ended the run with the same checks satisfied). The job the installer's writer prints is in the
-  // unit directory, so that refusal passes; a copy a killed run left stands beside ccrc.env, which the leftover-copy
-  // refusal would name; and the lock would be taken (update.lock made). Each case asserts the run stopped AT the Mac
-  // refusal: its exit, its words, no later refusal's words, no lock and no copy named, so its place is pinned before the
-  // lock, the leftover-copy check and the reach read.
-  const verb = (sub: string): string => [
-    '_ccrc_operator_only() { :; }',
-    'd="$HOME/.config/systemd/user"',
-    '_inst_plist_server "$(_svc_label ccrc.service)" "$HOME/ccrc.log" > "$d/$(_box_unit_file ccrc.service)"',
-    ': > "$HOME/.ccrc/ccrc.env.auth-restore.4242"',
-    `cmd_auth ${sub}`,
-  ].join('\n');
-  const LATER = /is not installed|runs no console|update\.lock|auth-restore|did not finish|reached from elsewhere|loopback|not measured/;
-
-  it('on refuses on a Mac before any read of the box, naming the four lines, the file and the launchd restart', () => {
-    const r = asFunction('darwin', verb('on'));
-    expect(r.rc, r.err).toBe(1);
-    expect(r.err).toMatch(/auth on: this verb does not act on a Mac yet/);
-    expect(r.err).not.toMatch(LATER);
-    expect(r.err.trim().split('\n')).toHaveLength(1);
-    expect(r.lock).toBe(false);
-    expect(r.err).toMatch(/put CCRC_AUTH=on, CCRC_RP_ID=localhost, CCRC_ORIGIN=http:\/\/localhost:<port> and CCRC_COOKIE_INSECURE=on in .*\/\.ccrc\/ccrc\.env/);
-    expect(r.err).toMatch(/then restart: launchctl kickstart -k gui\/\d+\/app\.ccrc\.ccrc/);
-    expect(r.err).toMatch(/Nothing was changed/);
-    expect(r.env).toBe('CCRC_HOST=127.0.0.1\nCCRC_PORT=7788\n');
-    expect(r.calls).toBe('');
-  });
-
-  it('off refuses on a Mac the same way, naming the lines to remove and the launchd restart', () => {
-    const r = asFunction('darwin', verb('off'));
-    expect(r.rc, r.err).toBe(1);
-    expect(r.err).toMatch(/auth off: this verb does not act on a Mac yet/);
-    expect(r.err).not.toMatch(LATER);
-    expect(r.err.trim().split('\n')).toHaveLength(1);
-    expect(r.lock).toBe(false);
-    expect(r.err).toMatch(/remove the CCRC_AUTH, CCRC_RP_ID, CCRC_ORIGIN and CCRC_COOKIE_INSECURE lines that arm it in .*\/\.ccrc\/ccrc\.env, then restart: launchctl kickstart -k/);
-    expect(r.err).toMatch(/Nothing was changed/);
-    expect(r.calls).toBe('');
-  });
-
-  // The helper's declines on the platform: the same box fits on Linux and not on a Mac. On darwin the unit directory
-  // also holds the launchd job the installer's writer prints, so the platform is the only reason left to decline.
   // Doctor's `auth` line and install's gate line ask only this helper, so it decides for both surfaces.
   // Wave 190 A4: the helper asks the installer's-unit proof's compare half, which needs no service manager, so doctor and
   // install no longer offer the verb on a Linux box whose installed unit is not the tree's file. One row per reason it
@@ -1056,20 +1134,334 @@ describe('ccrc auth: on a Mac the verb refuses with the hand route, and is not o
     expect(r.err).toContain('rc=1');
   });
 
-  it.each([['linux', 0], ['darwin', 1]] as const)('the helper that offers the verb, on %s, answers %i', (os, want) => {
-    const r = asFunction(os, [
-      'd="$HOME/.config/systemd/user"',
-      '[ "$CCD_OS" != darwin ] || _inst_plist_server "$(_svc_label ccrc.service)" "$HOME/ccrc.log" > "$d/$(_box_unit_file ccrc.service)"',
-      '[ -f "$d/$(_box_unit_file ccrc.service)" ] || echo "no job or unit planted" >&2',
-      '_auth_fits_here "$d"; echo "rc=$?" >&2',
-    ].join('\n'));
-    expect(r.err).not.toContain('no job or unit planted');
-    expect(r.err).toContain(`rc=${want}`);
+  // Wave 193 g: on a Mac the helper offers the verb where it would act, asking what needs no service manager: the job
+  // file's proof (its reproducible part and its two fields), the reach read and the keys, through the reader that holds
+  // ccrc.env to plain assignments (B3). The box that fits on Linux fits on a Mac with the job the writer prints; each
+  // reason it declines there has a row.
+  const macFits = (plant: (d: string) => void = () => {}, prefix?: string): string => asFunction('darwin', [
+    'BOX_UNIT_DIR="$HOME/Library/LaunchAgents"',
+    `_inst_plist_server ${MAC_LABEL} "$HOME/.ccrc/logs/${MAC_LABEL}.log" server ${JSON.stringify(JOB_PATH)} Background > "$BOX_UNIT_DIR/${MAC_LABEL}.plist"`,
+    'm=$(cat "$HOME/mac-edit" 2>/dev/null) && [ -z "$m" ] || eval "$m"',
+    '_auth_fits_here "$BOX_UNIT_DIR"; echo "rc=$?" >&2',
+  ].join('\n'), { prefix, plant: (d) => { mkdirSync(join(d, 'Library', 'LaunchAgents'), { recursive: true }); plant(d); } }).err;
+  it.each([['linux', 0], ['darwin', 0]] as const)('the helper that offers the verb, on %s, answers %i', (os, want) => {
+    const err = os === 'darwin' ? macFits() : asFunction(os, '_auth_fits_here "$HOME/.config/systemd/user"; echo "rc=$?" >&2').err;
+    expect(err).toContain(`rc=${want}`);
+  });
+  it.each([
+    ['the job edited by hand', `printf '<!-- edited -->\\n' >> "$BOX_UNIT_DIR/${MAC_LABEL}.plist"`],
+    ['a PATH entry this verb does not read', `printf '%s' "$(sed 's#<string>/usr/bin:#<string>.:/usr/bin:#' "$BOX_UNIT_DIR/${MAC_LABEL}.plist")" > "$BOX_UNIT_DIR/j" && printf '\\n' >> "$BOX_UNIT_DIR/j" && mv "$BOX_UNIT_DIR/j" "$BOX_UNIT_DIR/${MAC_LABEL}.plist"`],
+    ['a ccrc.env line that is not a plain assignment (B3)', 'printf \'CCRC_X=$(id)\\n\' >> "$HOME/.ccrc/ccrc.env"'],
+    ['a foreign CCRC_ORIGIN', 'printf \'CCRC_ORIGIN=https://box.example.com\\n\' >> "$HOME/.ccrc/ccrc.env"'],
+  ] as const)('the helper that offers the verb, on darwin, answers 1 for %s', (_name, edit) => {
+    expect(macFits((d) => writeFileSync(join(d, 'mac-edit'), edit))).toContain('rc=1');
+  });
+  // A2: the verb refuses a home outside the closed form before any read, so the helper does not offer it there either.
+  it('the helper that offers the verb, on darwin, answers 1 for a home whose path holds a space', () => {
+    expect(macFits(() => {}, 'ccrc-auth-mac-sp ace-')).toContain('rc=1');
+  });
+});
+
+// ── wave 193: on a Mac, the job proved (issue #3475) ──────────────────────────────────────────────────────────────
+// The verb acts on a Mac where it can prove the job: the job file is what the installer's writer prints for this home
+// but for its PATH and ProcessType, each held to a closed grammar; launchd holds that file as it is; the domain sets
+// none of the keys. Every row runs on darwin: real on the macOS leg, simulated on Linux.
+describe(`ccrc auth on a Mac: the job proved (wave 193) [${IS_DARWIN ? 'darwin' : 'darwin, simulated'}]`, () => {
+  beforeAll(() => { PLAT = 'darwin'; });
+  afterAll(() => { PLAT = HOST_PLAT; });
+  const job = (h: string): string => readFileSync(macJobFile(h), 'latin1');
+  const NOT_JOB = /app\.ccrc\.ccrc\.plist is not the job ccrc installs, and this verb acts only on its own\. To go on: ccrc install --role <role> puts the shipped job back and loads it into launchd/;
+
+  it('turns sign-in on and off: the four lines, one kickstart each, and the proof, with no systemd asked', async () => {
+    const b = box('ccrc-auth-mac-', portLines());
+    const before = bytes(envFile(b.home));
+    const on = await runTty(b.home, ['auth', 'on']);
+    expect(on.code, on.out).toBe(0);
+    expect(bytes(envFile(b.home))).toBe(`${before}${ON_LINES(PORT)}`);
+    expect(statSync(envFile(b.home)).mode & 0o777).toBe(0o600);
+    expect(restarts(b.home)).toEqual([RESTART]);
+    expect(on.out).toMatch(/the server at 127\.0\.0\.1:\d+ answers with sign-in on/);
+    const off = await runTty(b.home, ['auth', 'off']);
+    expect(off.code, off.out).toBe(0);
+    expect(bytes(envFile(b.home))).toBe(before);
+    expect(restarts(b.home)).toEqual([RESTART, RESTART]);
+    expect(existsSync(join(b.home, 'systemctl-argv'))).toBe(false);
+    expect(leftovers(b.home)).toEqual([]);
+  });
+
+  // B3: on a Mac the job sources ccrc.env with bash, and what the verb leaves is plain to that reader, both states.
+  it("leaves ccrc.env plain to the Mac's reader after on and after off, each key read back as written", async () => {
+    const b = box('ccrc-auth-mac-plain-', portLines());
+    const readBack = (): string => spawnSync(BASH, ['-c', `. "$1"; CCD_OS=darwin; _box_env_shell_plain "$HOME/.ccrc/ccrc.env" && echo plain; `
+      + 'for k in CCRC_AUTH CCRC_RP_ID CCRC_ORIGIN CCRC_COOKIE_INSECURE; do _box_unit_env $k; echo "$k=$BUE_VAL rc=$?"; done',
+    'check', CCRC_SRC], { env: { HOME: b.home, PATH: process.env['PATH'] ?? '' }, encoding: 'utf8' }).stdout;
+    expect((await runTty(b.home, ['auth', 'on'])).code).toBe(0);
+    expect(readBack()).toBe(`plain\nCCRC_AUTH=on rc=0\nCCRC_RP_ID=localhost rc=0\nCCRC_ORIGIN=http://localhost:${PORT} rc=0\nCCRC_COOKIE_INSECURE=on rc=0\n`);
+    expect((await runTty(b.home, ['auth', 'off'])).code).toBe(0);
+    expect(readBack()).toBe('plain\nCCRC_AUTH= rc=0\nCCRC_RP_ID= rc=0\nCCRC_ORIGIN= rc=0\nCCRC_COOKIE_INSECURE= rc=0\n');
+  });
+
+  // a, A1: what an install writes and what a hand edit does are told apart. Each row: on and off refuse, the job file
+  // named, its bytes never printed.
+  const edits: [string, (j: string) => string][] = [
+    ['a key added to its EnvironmentVariables', (j) => j.replace('    <key>HOME</key>', '    <key>NODE_OPTIONS</key><string>--require /tmp/x.js</string>\n    <key>HOME</key>')],
+    ['its shell line binding every interface', (j) => j.replace('exec /usr/bin/env node', 'exec /usr/bin/env CCRC_HOST=0.0.0.0 node')],
+    ['a job written by an older writer (no core limits)', (j) => j.replace(/ {2}<key>SoftResourceLimits<\/key>[\s\S]*?<\/dict>\n {2}<key>HardResourceLimits<\/key>[\s\S]*?<\/dict>\n/, '')],
+    ['the same job re-serialised with tabs', (j) => j.replace(/^ {2}/gm, '\t')],
+    ['CRLF line endings', (j) => j.replace(/\n/g, '\r\n')],
+    ['no newline after its last line', (j) => j.replace(/\n$/, '')],
+    ['a binary plist', () => 'bplist00\u00d4\u0001\u0002\u0003\u0000\u0000\u0000\u0008Label'],
+    ['a ProcessType that is not one of the four words', (j) => j.replace('<string>Background</string>', '<string>Batch</string>')],
+  ];
+  for (const [name, edit] of edits) {
+    it(`refuses on and off a job file that is not the installer's: ${name}, naming the file, never a byte of it`, async () => {
+      const b = box('ccrc-auth-mac-edit-', portLines());
+      writeFileSync(macJobFile(b.home), edit(job(b.home)), 'latin1');
+      const before = bytes(envFile(b.home));
+      for (const sub of ['on', 'off']) {
+        const r = await runTty(b.home, ['auth', sub]);
+        await expectRefused(b, r, before, NOT_JOB);
+        expect(r.out).not.toMatch(/NODE_OPTIONS|0\.0\.0\.0|Batch|bplist/);
+      }
+    });
+  }
+
+  // A1: a PATH field outside its grammar is not cured by an install from the same shell, so its way on says so.
+  const badPaths: [string, string][] = [
+    ['a relative entry', '/usr/bin:.'], ['an empty entry', '/usr/bin::/bin'], ['an empty entry at its end', '/usr/bin:/sbin:'],
+    ['an entity', '/usr/bin:/x&amp;y'],
+    ['a quote', "/usr/bin:/it's"], ['a double quote', '/usr/bin:/a"b'], ['a backslash', '/usr/bin:/a\\b'],
+    ['a tab', '/usr/bin:/a\tb'], ['a byte above ASCII', '/usr/bin:/caf\u00e9'],
+    ['a second key', '/usr/bin</string><key>NODE_OPTIONS</key><string>--require=/x'],
+  ];
+  for (const [name, value] of badPaths) {
+    it(`refuses on and off a job whose PATH holds ${name}, with a way on that is not the same install`, async () => {
+      const b = box('ccrc-auth-mac-path-', portLines());
+      writeJob(b.home, value);
+      const before = bytes(envFile(b.home));
+      for (const sub of ['on', 'off']) {
+        const r = await runTty(b.home, ['auth', sub]);
+        await expectRefused(b, r, before, /the PATH in .*app\.ccrc\.ccrc\.plist holds an entry this verb does not read as a plain absolute directory/);
+        expect(r.out).toMatch(/To go on: an install puts the PATH of the shell it runs in into the job, so run ccrc install --role <role> from a shell whose PATH holds only absolute directories/);
+        expect(r.out).not.toMatch(/puts the shipped job back/);
+        for (const part of value.split(':').filter((s) => s.length >= 4 && !['/usr/bin', '/sbin', '/bin'].includes(s))) expect(r.out).not.toContain(part);
+      }
+    });
+  }
+
+  it('acts on a job whose PATH holds an app bundle\'s directory (a space) and whose ProcessType is Interactive', async () => {
+    const b = box('ccrc-auth-mac-bundle-', portLines());
+    const p = '/usr/bin:/Applications/Some App.app/Contents/Resources/bin:/bin';
+    writeFileSync(join(b.home, 'lc-print'), printOf(b.home, writeJob(b.home, p, 'Interactive'), { env: [['PATH', p], ['HOME', b.home]] }));
+    const r = await runTty(b.home, ['auth', 'on']);
+    expect(r.code, r.out).toBe(0);
+  });
+
+  // A3 (ruled: option 1, the Mac only): launchd loads the file a link names, which this verb did not read. The link
+  // refuses at the job-file proof, before launchd is asked what it holds; the regular file the box plants passes (the
+  // first row of this describe).
+  it('refuses on and off a job file that is a link, even to an equal file, before asking launchd', async () => {
+    const b = box('ccrc-auth-mac-link-', portLines());
+    renameSync(macJobFile(b.home), join(b.home, 'job-elsewhere.plist'));
+    symlinkSync(join(b.home, 'job-elsewhere.plist'), macJobFile(b.home));
+    for (const sub of ['on', 'off']) {
+      const r = await runTty(b.home, ['auth', sub]);
+      await expectRefused(b, r, bytes(envFile(b.home)),
+        /app\.ccrc\.ccrc\.plist is a symlink, and launchd loads the job from the file it names, which this verb did not read/);
+      expect(r.out).toMatch(/To go on: ccrc install --role <role> writes the shipped job in its place and loads it into launchd/);
+    }
+    expect(readFileSync(join(b.home, 'launchctl-argv'), 'utf8')).not.toMatch(/^print /m);
+  });
+
+  it('refuses as not measured a job file it cannot read', async () => {
+    const b = box('ccrc-auth-mac-unread-', portLines());
+    chmodSync(macJobFile(b.home), 0o000);
+    try {
+      await expectRefused(b, await runTty(b.home, ['auth', 'on']), bytes(envFile(b.home)),
+        /app\.ccrc\.ccrc\.plist cannot be read, so whether it is the job ccrc installs was not measured/);
+    } finally { chmodSync(macJobFile(b.home), 0o644); }
+  });
+
+  // A4: the role printed in a way on is the clamped one, on a Mac too. (A role holding a control byte never gets that
+  // far there: the job's reader refuses its line as not a plain assignment, naming the line and not the value.)
+  for (const [role, fix] of [['server', '--role server'], ['both', '--role both'], ['Server', '--role <role>'], ['servers', '--role <role>']] as const) {
+    it(`names the recorded role only when it is server or both: ${role}, on and off`, async () => {
+      const b = box('ccrc-auth-mac-role-', `CCRC_ROLE=${role}\n${portLines()}`);
+      writeFileSync(macJobFile(b.home), `${job(b.home)}<!-- edited -->\n`);
+      for (const sub of ['on', 'off']) {
+        const r = await runTty(b.home, ['auth', sub]);
+        await expectRefused(b, r, bytes(envFile(b.home)), /app\.ccrc\.ccrc\.plist is not the job ccrc installs, and this verb acts only on its own/);
+        expect(r.out).toContain(`To go on: ccrc install ${fix} puts the shipped job back and loads it into launchd`);
+        if (fix === '--role <role>') expect(r.out).not.toContain(`--role ${role}`);
+      }
+    });
+  }
+
+  // b: what launchd holds is the file just compared. Each row plants launchd's answer; on and off refuse.
+  const held: [string, (h: string, j: string) => string, RegExp][] = [
+    ['from another file', (h, j) => printOf(h, j, { path: '/Library/LaunchAgents/app.ccrc.ccrc.plist' }),
+      /launchd holds the job app\.ccrc\.ccrc from \/Library\/LaunchAgents\/app\.ccrc\.ccrc\.plist, not from .*app\.ccrc\.ccrc\.plist, the file this verb read/],
+    ['with other arguments (a bind in its shell line)', (h, j) => printOf(h, j, { args: jobArgs(j).map((a) => a.replace('env node', 'env CCRC_HOST=0.0.0.0 node')) }),
+      /launchd holds the job app\.ccrc\.ccrc with another program or other arguments than/],
+    ['with another program', (h, j) => printOf(h, j, { program: '/bin/zsh' }), /with another program or other arguments than/],
+    ['with a key of its own in its environment', (h, j) => printOf(h, j, { env: [['PATH', JOB_PATH], ['HOME', h], ['NODE_OPTIONS', '--require /tmp/x.js']] }),
+      /launchd holds the job app\.ccrc\.ccrc with NODE_OPTIONS in its own environment, which .*app\.ccrc\.ccrc\.plist does not set/],
+    ['with XPC_SERVICE_NAME holding another label', (h, j) => printOf(h, j, { env: [['PATH', JOB_PATH], ['HOME', h], ['XPC_SERVICE_NAME', 'app.other']] }),
+      /launchd holds the job app\.ccrc\.ccrc with XPC_SERVICE_NAME in its own environment, which .*app\.ccrc\.ccrc\.plist does not set/],
+    ['with a fourth key beside XPC_SERVICE_NAME', (h, j) => printOf(h, j, { env: [['PATH', JOB_PATH], ['HOME', h], ['XPC_SERVICE_NAME', MAC_LABEL], ['BASH_ENV', '/tmp/x']] }),
+      /launchd holds the job app\.ccrc\.ccrc with BASH_ENV in its own environment/],
+    ['with another PATH', (h, j) => printOf(h, j, { env: [['PATH', '/tmp/evil:/usr/bin'], ['HOME', h]] }), /with another PATH or HOME in its environment than/],
+    ['with another HOME', (h, j) => printOf(h, j, { env: [['PATH', JOB_PATH], ['HOME', '/tmp/elsewhere']] }), /with another PATH or HOME in its environment than/],
+  ];
+  for (const [name, print, words] of held) {
+    it(`refuses on and off a job launchd holds ${name}, naming the reason and never a value`, async () => {
+      const b = box('ccrc-auth-mac-held-', portLines());
+      writeFileSync(join(b.home, 'lc-print'), print(b.home, job(b.home)));
+      for (const sub of ['on', 'off']) {
+        const r = await runTty(b.home, ['auth', sub]);
+        await expectRefused(b, r, bytes(envFile(b.home)), words);
+        expect(r.out).toMatch(/To go on: ccrc install --role <role> loads the job file into launchd again/);
+        expect(r.out).not.toMatch(/0\.0\.0\.0|\/tmp\/evil|\/tmp\/elsewhere|zsh|--require|app\.other|\/tmp\/x/);
+      }
+    });
+  }
+  it("acts on a job whose environment launchd also gives XPC_SERVICE_NAME, holding the job's label", async () => {
+    const b = box('ccrc-auth-mac-xpc-', portLines());
+    writeFileSync(join(b.home, 'lc-print'), printOf(b.home, job(b.home), { env: [['PATH', JOB_PATH], ['HOME', b.home], ['XPC_SERVICE_NAME', MAC_LABEL]] }));
+    const r = await runTty(b.home, ['auth', 'on']);
+    expect(r.code, r.out).toBe(0);
+  });
+  it('refuses a job launchd does not hold (no such service), with the install as the way on', async () => {
+    const b = box('ccrc-auth-mac-notheld-', portLines());
+    writeFileSync(join(b.home, 'lc-not-held'), '');
+    for (const sub of ['on', 'off']) {
+      const r = await runTty(b.home, ['auth', sub]);
+      await expectRefused(b, r, bytes(envFile(b.home)), /launchd holds no job app\.ccrc\.ccrc \(launchctl print: no such service\)/);
+      expect(r.out).toMatch(/To go on: ccrc install --role <role> loads the job file into launchd again/);
+    }
+  });
+  const SAID_ALL = /launchctl print gui\/\d+\/app\.ccrc\.ccrc did not say all of the job's path, program, arguments and environment, so what launchd holds/;
+  for (const [name, plant, words] of [
+    ['a print that fails', (h: string) => writeFileSync(join(h, 'lc-print-fails'), ''),
+      /launchctl print gui\/\d+\/app\.ccrc\.ccrc did not answer, so what launchd holds for the job was not measured/],
+    ['a print with no path line', (h: string) => writeFileSync(join(h, 'lc-print'), printOf(h, job(h)).replace(/\tpath = .*\n/, '')), SAID_ALL],
+    ['a print with no environment block', (h: string) => writeFileSync(join(h, 'lc-print'), printOf(h, job(h)).replace(/\tenvironment = \{\n[\s\S]*?\t\}\n/, '')), SAID_ALL],
+  ] as const) {
+    it(`refuses as not measured ${name}, saying there is no way on from here but the hand route`, async () => {
+      const b = box('ccrc-auth-mac-unprinted-', portLines());
+      plant(b.home);
+      const r = await runTty(b.home, ['auth', 'on']);
+      await expectRefused(b, r, bytes(envFile(b.home)), words);
+      expect(r.out).toMatch(/this verb cannot prove the job on this box without that read; set the keys by hand/);
+    });
+  }
+
+  // b: the domain's own environment, which every job of the domain inherits.
+  for (const key of ['CCRC_HOST', 'CCRC_ORIGIN', 'BASH_ENV']) {
+    it(`refuses on and off a domain whose environment sets ${key}, naming the key, never its value`, async () => {
+      const b = box('ccrc-auth-mac-domain-', portLines());
+      writeFileSync(join(b.home, 'lc-domain-env'), `${key}=/tmp/value-of-${key}\n`);
+      for (const sub of ['on', 'off']) {
+        const r = await runTty(b.home, ['auth', sub]);
+        await expectRefused(b, r, bytes(envFile(b.home)), new RegExp(`launchd's own environment \\(launchctl getenv\\) sets ${key}`));
+        expect(r.out).not.toContain('/tmp/value-of');
+      }
+    });
+  }
+  it('refuses as not measured a domain read that does not answer', async () => {
+    const b = box('ccrc-auth-mac-domain-unasked-', portLines());
+    writeFileSync(join(b.home, 'lc-getenv-fails'), '');
+    await expectRefused(b, await runTty(b.home, ['auth', 'on']), bytes(envFile(b.home)), /launchctl getenv CCRC_HOST did not answer, so launchd's own environment was not read/);
+  });
+
+  // d: a failed kickstart is a failed restart, and takes the restore path.
+  it('puts the file back when the kickstart fails (the job not held at restart time), exit 1', async () => {
+    const b = box('ccrc-auth-mac-kick-', portLines());
+    writeFileSync(join(b.home, 'lc-kick-fails'), '');
+    const before = bytes(envFile(b.home));
+    const r = await runTty(b.home, ['auth', 'on']);
+    expect(r.code, r.out).toBe(1);
+    expect(r.out).toMatch(/the restarted console did not prove the change: the restart command failed \(launchctl kickstart -k gui\/\d+\/app\.ccrc\.ccrc\)/);
+    expect(bytes(envFile(b.home))).toBe(before);
+    expect(leftovers(b.home)).toEqual([]);
+  });
+
+  // A2: the installer writes the home raw into the job file and into its shell line in single quotes.
+  for (const [name, mark] of [['a quote', "hq'uote"], ['an ampersand', 'ha&mp'], ['a space', 'hsp ace']] as const) {
+    it(`refuses, before any read of the box, a home whose path holds ${name}, naming no byte of it`, async () => {
+      const b = box(`ccrc-auth-mac-${mark}-`, portLines());
+      for (const sub of ['on', 'off']) {
+        const r = await runTty(b.home, ['auth', sub]);
+        expect(r.code, r.out).toBe(1);
+        expect(r.out).toMatch(new RegExp(`auth ${sub}: this home's path holds a byte other than a letter, a digit or one of \\._/@:\\+,%=~-\\[\\], and ccrc writes it into the console's job file`));
+        expect(r.out).not.toContain(mark);
+      }
+      expect(existsSync(join(b.home, 'launchctl-argv'))).toBe(false);
+      expect(existsSync(join(b.home, '.ccrc', 'update.lock'))).toBe(false);
+    });
+  }
+
+  // B3: on a Mac every key the verb reads goes through the reader of the job's bash sourcing, and an unmeasured answer
+  // for any one of them refuses, on and off, before a write.
+  it('refuses on and off a ccrc.env line that is not a plain assignment, before a write', async () => {
+    const b = box('ccrc-auth-mac-notplain-', `${portLines()}CCRC_X=$(id)\n`);
+    for (const sub of ['on', 'off']) {
+      await expectRefused(b, await runTty(b.home, ['auth', sub]), bytes(envFile(b.home)),
+        /line 3 is not a plain NAME=value line, and on macOS the launchd job sources both env files with bash/);
+    }
+  });
+  const KEYS_ON = ['CCRC_HOST', 'CCRC_PORT', 'CCRC_AUTH', 'CCRC_RP_ID', 'CCRC_ORIGIN', 'CCRC_COOKIE_INSECURE', 'CCRC_SESSIONS_PATH', 'CCRC_AUTH_SECRET_PATH'];
+  /** cmd_auth in a darwin harness whose job reader logs each key and answers unmeasured (rc 3) for `bad`. Not spawnSync:
+   *  the console this process plays must answer while the run waits on it. */
+  const harness = async (b: Box, sub: string, bad = ''): Promise<{ rc: number; keys: string[]; out: string }> => {
+    const c = spawn(BASH, ['-c', [
+      'bad="$2"; . "$1"; CCD_OS=darwin; BOX_UNIT_DIR="$HOME/Library/LaunchAgents"; _ccrc_operator_only() { :; }',
+      'eval "_orig_shell()$(declare -f _box_unit_env_shell | tail -n +2)"',
+      '_box_unit_env_shell() { echo "$1" >> "$HOME/keys-read"; if [ "$1" = "$bad" ]; then BUE_WHY="planted"; return 3; fi; _orig_shell "$1"; }',
+      `cmd_auth ${sub}`,
+    ].join('\n'), 'harness', ccrcIn(b.home), bad], { env: env(b.home), stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    c.stdout?.on('data', (d) => { out += d; });
+    c.stderr?.on('data', (d) => { out += d; });
+    const rc = await new Promise<number>((r) => c.on('close', (code) => r(code ?? -1)));
+    const f = join(b.home, 'keys-read');
+    return { rc, out, keys: existsSync(f) ? [...new Set(readFileSync(f, 'utf8').split('\n').filter(Boolean))] : [] };
+  };
+  it('reads every key through that reader: on reads all eight, off the six it uses', async () => {
+    const b = box('ccrc-auth-mac-keys-', portLines());
+    const on = await harness(b, 'on');
+    expect(on.rc, on.out).toBe(0);
+    expect(on.keys.sort()).toEqual([...KEYS_ON].sort());
+    spawnSync('rm', ['-f', join(b.home, 'keys-read')]);
+    const off = await harness(b, 'off');
+    expect(off.rc, off.out).toBe(0);
+    expect(off.keys.sort()).toEqual(KEYS_ON.slice(0, 6).sort());
+  });
+  for (const key of KEYS_ON) {
+    it(`refuses, before a write, when that reader cannot decide ${key}: on${KEYS_ON.indexOf(key) < 6 ? ' and off' : ''}`, async () => {
+      const subs = KEYS_ON.indexOf(key) < 6 ? ['on', 'off'] : ['on'];
+      for (const sub of subs) {
+        const b = box('ccrc-auth-mac-undecided-', sub === 'off' ? `${portLines()}${ON_LINES(PORT)}` : portLines());
+        const before = bytes(envFile(b.home));
+        const r = await harness(b, sub, key);
+        expect(r.rc, `${key} ${sub}`).toBe(1);
+        expect(bytes(envFile(b.home))).toBe(before);
+        expect(restarts(b.home)).toEqual([]);
+        expect(leftovers(b.home)).toEqual([]);
+      }
+    });
+  }
+
+  // c: the lock, on a Mac with the real flock (Homebrew's on the macOS leg).
+  it('refuses with no flock on PATH, giving the Mac its way on', async () => {
+    const b = box('ccrc-auth-mac-noflock-', portLines());
+    const r = await runTty(b.home, ['auth', 'on'], { PATH: `${join(b.home, '.local', 'bin')}:${pathWithout(b.home, 'flock')}` });
+    await expectRefused(b, r, bytes(envFile(b.home)), /flock is not on PATH\), so a running update could not be ruled out\. Install it \(brew install flock, as ccrc install asks on a Mac\) and re-run/);
   });
 });
 
 // ── review 3934 F3: a signal in the proof window, the copy it keeps, and a copy a killed run left ─────────────────
-describe.skipIf(IS_DARWIN)('ccrc auth: a signal in the proof window (review 3934 F3)', () => {
+onEach('ccrc auth: a signal in the proof window (review 3934 F3)', () => {
   for (const sig of ['INT', 'TERM', 'HUP'] as const) {
     it(`SIG${sig} three seconds into the proof puts the old bytes back, restarts once more, leaves no copy and frees the lock`, async () => {
       const b = box(`ccrc-auth-sig-${sig.toLowerCase()}-`, others());
@@ -1232,11 +1624,13 @@ describe('ccrc auth: the proof window\'s signal handler, line by line (review 39
 });
 
 // ── review 3934 F4, review 3971 R2: every refusal before the write has a case that goes red without it ─────────
-describe.skipIf(IS_DARWIN)('ccrc auth: every refusal before the write (review 3934 F4)', () => {
+onEach('ccrc auth: every refusal before the write (review 3934 F4)', (p) => {
   /** A command on PATH ahead of the real one (the containment's bin), failing for the arguments `when` matches. */
+  // The real command found where this box keeps it (a Mac has cp and mv in /bin, review 3971 F4).
   const failing = (h: string, cmd: string, when: string): void => {
     mkdirSync(join(h, '.local', 'bin'), { recursive: true });
-    writeFileSync(join(h, '.local', 'bin', cmd), `#!/bin/sh\ncase "$*" in ${when}) exit 1 ;; esac\nexec /usr/bin/${cmd} "$@"\n`,
+    const real = spawnSync('/bin/sh', ['-c', `command -v ${cmd}`], { encoding: 'utf8' }).stdout.trim() || `/usr/bin/${cmd}`;
+    writeFileSync(join(h, '.local', 'bin', cmd), `#!/bin/sh\ncase "$*" in ${when}) exit 1 ;; esac\nexec ${real} "$@"\n`,
       { mode: 0o755 });
   };
   const helper = (h: string): string => join(h, 'ccrc', 'deploy', 'gen-auth-hash.mjs');
@@ -1307,7 +1701,7 @@ describe.skipIf(IS_DARWIN)('ccrc auth: every refusal before the write (review 39
     const b = box('ccrc-auth-port-undecided-', `CCRC_HOST=127.0.0.1\nCCRC_PORT =${PORT}\n`);
     for (const sub of ['on', 'off']) {
       await expectRefused(b, await runTty(b.home, ['auth', sub]), bytes(envFile(b.home)),
-        /names CCRC_PORT in a shape this reader does not decide .*, so the address was not measured/);
+        PLAT === 'darwin' ? NOT_PLAIN : /names CCRC_PORT in a shape this reader does not decide .*, so the address was not measured/);
     }
   });
 
@@ -1316,7 +1710,7 @@ describe.skipIf(IS_DARWIN)('ccrc auth: every refusal before the write (review 39
       const b = box('ccrc-auth-key-undecided-', `${portLines()}${key} =x\n`);
       for (const sub of ['on', 'off']) {
         await expectRefused(b, await runTty(b.home, ['auth', sub]), bytes(envFile(b.home)),
-          new RegExp(`names ${key} in a shape this reader does not decide`));
+          PLAT === 'darwin' ? NOT_PLAIN : new RegExp(`names ${key} in a shape this reader does not decide`));
       }
     });
   }
@@ -1334,7 +1728,10 @@ describe.skipIf(IS_DARWIN)('ccrc auth: every refusal before the write (review 39
     }
     const r = await runTty(b.home, ['auth', 'on'], { PATH: `${join(b.home, '.local', 'bin')}:${bin}` });
     await expectRefused(b, r, bytes(envFile(b.home)), /update\.lock cannot be taken \(flock is not on PATH\)/);
-    expect(r.out).toMatch(/Put flock on PATH and re-run, or set the keys by hand \(the README's 'The session gate'\)/);
+    // Wave 193 c: on a Mac the way on is the install's own (Homebrew's flock).
+    expect(r.out).toMatch(PLAT === 'darwin'
+      ? /Install it \(brew install flock, as ccrc install asks on a Mac\) and re-run, or set the keys by hand \(the README's 'The session gate'\)/
+      : /Put flock on PATH and re-run, or set the keys by hand \(the README's 'The session gate'\)/);
   });
 
   it('refuses when the lock cannot be opened (update.lock is a directory) as not measured', async () => {
@@ -1345,7 +1742,8 @@ describe.skipIf(IS_DARWIN)('ccrc auth: every refusal before the write (review 39
   });
 
   // Wave 190 A5: the installer's-unit compare's two unmeasured arms.
-  it('refuses as not measured with no cmp on PATH, and when cmp fails with another exit', async () => {
+  // The unit compare's tool and the user manager's environment are Linux's; the Mac's reads have rows of their own.
+  it.skipIf(p === 'darwin')('refuses as not measured with no cmp on PATH, and when cmp fails with another exit', async () => {
     const a = box('ccrc-auth-nocmp-', portLines());
     await expectRefused(a, await runTty(a.home, ['auth', 'on'], { PATH: `${join(a.home, '.local', 'bin')}:${pathWithout(a.home, 'cmp')}` }),
       bytes(envFile(a.home)), /cmp is not on PATH, so whether .*\/ccrc\.service is .*\/deploy\/ccrc\.service was not measured/);
@@ -1358,7 +1756,7 @@ describe.skipIf(IS_DARWIN)('ccrc auth: every refusal before the write (review 39
     }
   });
 
-  it("refuses when only the user manager's environment does not answer (systemctl --user show-environment)", async () => {
+  it.skipIf(p === 'darwin')("refuses when only the user manager's environment does not answer (systemctl --user show-environment)", async () => {
     const b = box('ccrc-auth-managerenv-unasked-', portLines());
     writeFileSync(join(b.home, 'sd-manager-env-fails'), '');
     for (const sub of ['on', 'off']) {
@@ -1375,7 +1773,7 @@ describe.skipIf(IS_DARWIN)('ccrc auth: every refusal before the write (review 39
 // the value in the output. A quote in a CCRC_HOST or CCRC_AUTH_SECRET_PATH line never reaches a print at all: the unit
 // reader refuses any quote that is not one whole pair as undecidable, naming the line and not its value (its two rows
 // pin that, and were green before C5).
-describe.skipIf(IS_DARWIN)('ccrc auth: a value read from a file is printed only in a closed form (review 4061 C5)', () => {
+onEach('ccrc auth: a value read from a file is printed only in a closed form (review 4061 C5)', (p) => {
   const HELD = '[a value this verb does not print]';
   const ESC = '\x1b[2J';
   const units = (h: string): string => join(h, '.config', 'systemd', 'user');
@@ -1426,14 +1824,18 @@ describe.skipIf(IS_DARWIN)('ccrc auth: a value read from a file is printed only 
       /systemd made ccrc\.service from \[a value this verb does not print\] \(SourcePath\)/],
   ];
   for (const [name, envText, plant, raw, words] of cases) {
-    it(`never prints ${name}, on and off`, async () => {
+    // A unit's lines, a drop-in and what systemd answers are Linux's; the bind rows run on both.
+    it.skipIf(p === 'darwin' && !name.startsWith('CCRC_HOST'))(`never prints ${name}, on and off`, async () => {
       const b = box('ccrc-auth-held-', envText.replace('@PORTLINES@', portLines()).replace('@PORT@', String(PORT)));
       plant(b.home);
       const before = bytes(envFile(b.home));
       for (const sub of ['on', 'off']) {
         const r = await runTty(b.home, ['auth', sub]);
-        await expectRefused(b, r, before, words);
-        heldIn(r, ...raw);
+        // On a Mac the job's reader holds such a line to a plain assignment, so it refuses it at the first key read,
+        // naming the line and never its value: the value never reaches a print.
+        await expectRefused(b, r, before, PLAT !== 'darwin' ? words
+          : name.includes('exposure') ? /this box is reached from elsewhere \(.*exposure\.env exists\)/ : NOT_PLAIN);
+        if (PLAT === 'darwin') { expect(r.out).not.toContain('\x1b'); for (const v of raw) expect(r.out).not.toContain(v); } else heldIn(r, ...raw);
       }
     });
   }
@@ -1454,13 +1856,14 @@ describe.skipIf(IS_DARWIN)('ccrc auth: a value read from a file is printed only 
       writeFileSync(envFile(b.home), `${portLines()}CCRC_AUTH_SECRET_PATH=${p}\n`, { mode: 0o600 });
       plant(b.home, p);
       const r = await runTty(b.home, ['auth', 'on']);
-      await expectRefused(b, r, bytes(envFile(b.home)), words);
-      heldIn(r, ...raw);
+      await expectRefused(b, r, bytes(envFile(b.home)), PLAT === 'darwin' ? NOT_PLAIN : words);
+      if (PLAT === 'darwin') { expect(r.out).not.toContain('\x1b'); for (const v of raw) expect(r.out).not.toContain(v); } else heldIn(r, ...raw);
     });
   }
 
   // What the service manager answers for the unit's state is printed in the failed proof's sentence: held the same way.
-  it('never prints a state word the service manager answers with an escape sequence in it (a failed proof)', async () => {
+  // On a Mac the state word is one of `_svc_is_active`'s own literals, read from launchd's print; no answer reaches it.
+  it.skipIf(p === 'darwin')('never prints a state word the service manager answers with an escape sequence in it (a failed proof)', async () => {
     const b = box('ccrc-auth-held-state-', portLines());
     writeFileSync(join(b.home, 'sd-is-active'), `activ${ESC}e\n`);
     const before = bytes(envFile(b.home));
@@ -1488,7 +1891,95 @@ describe.skipIf(IS_DARWIN)('ccrc auth: a value read from a file is printed only 
   }
 });
 
-describe.skipIf(IS_DARWIN)('ccrc auth: the verb is in the usage and the verb table', () => {
+// ── wave 193 f: one real launchd job, on a GitHub-hosted macOS runner only (F1 to F4, the coordinator's terms) ────────
+// F1: it runs only when the three variables GitHub Actions sets itself read so AND the platform is darwin; anywhere else
+// it is skipped by name, and the row after it proves the gate on any box. F2: before it bootstraps, it asks whether a
+// job with the verb's label is held already, and if one is it stops red and touches nothing; it boots out only the job
+// it bootstrapped, by its own file, on failure too. F3: the guard's allow switch is set in this case's run only. F4:
+// nothing in it is a real account, host or path: a temporary home, and a console stand-in on loopback at a port it
+// picks, which answers from its own environment, so what launchd's `bash -c` sourced is what the proof reads.
+function realLaunchdGate(e: NodeJS.ProcessEnv, platform: string): boolean {
+  return platform === 'darwin' && e['GITHUB_ACTIONS'] === 'true' && e['RUNNER_OS'] === 'macOS'
+    && e['RUNNER_ENVIRONMENT'] === 'github-hosted';
+}
+describe('the real launchd case runs only on a GitHub-hosted macOS runner (wave 193 F1)', () => {
+  const all = { GITHUB_ACTIONS: 'true', RUNNER_OS: 'macOS', RUNNER_ENVIRONMENT: 'github-hosted' };
+  it('opens with all three variables on darwin, and never with two of three, another value, or another platform', () => {
+    expect(realLaunchdGate(all, 'darwin')).toBe(true);
+    expect(realLaunchdGate(all, 'linux')).toBe(false);
+    for (const k of Object.keys(all) as (keyof typeof all)[]) {
+      const two: Record<string, string> = { ...all };
+      delete two[k];
+      expect(realLaunchdGate(two, 'darwin'), `without ${k}`).toBe(false);
+      expect(realLaunchdGate({ ...all, [k]: 'other' }, 'darwin'), `${k}=other`).toBe(false);
+    }
+  });
+});
+describe.skipIf(!realLaunchdGate(process.env, process.platform))(
+  'ccrc auth against a real launchd job (wave 193 f: a GitHub-hosted macOS runner only)', () => {
+    const LC = '/bin/launchctl';
+    const uid = process.getuid?.() ?? 0;
+    let booted = '';
+    beforeAll(() => { PLAT = 'darwin'; });
+    afterAll(() => {
+      PLAT = HOST_PLAT;
+      if (booted !== '') spawnSync(LC, ['bootout', `gui/${uid}`, booted], { stdio: 'ignore' });
+    });
+    /** Section headings and key names of a print, never a value (what the coordinator asked to see). */
+    const shape = (out: string): string => out.split('\n').filter((l) => / = \{$/.test(l) || / => /.test(l))
+      .map((l) => l.replace(/ => .*$/, ' =>')).join('\n');
+    it('on, then off, through launchd: bootstrap, kickstart, the proof, and the bootout of only its own job', async () => {
+      const pre = spawnSync(LC, ['print', `gui/${uid}/${MAC_LABEL}`], { encoding: 'utf8' });
+      expect(pre.status, `a job ${MAC_LABEL} is already held in gui/${uid}; nothing was touched`).not.toBe(0);
+      const port = await new Promise<number>((r) => { const s = http.createServer().listen(0, '127.0.0.1', () => {
+        const p = (s.address() as AddressInfo).port; s.close(() => r(p)); }); });
+      const b = box('ccrc-auth-launchd-', `CCRC_HOST=127.0.0.1\nCCRC_PORT=${port}\n`);
+      const entry = join(b.home, 'ccrc', 'server', 'dist', 'server', 'src', 'index.js');
+      mkdirSync(path.dirname(entry), { recursive: true });
+      writeFileSync(entry, "import('node:http').then(({ default: http }) => http.createServer((q, s) => {\n"
+        + "  s.setHeader('content-type', 'application/json');\n"
+        + "  if (q.url === '/health') { s.end(JSON.stringify({ ok: true })); return; }\n"
+        + "  if (q.url === '/api/auth/status') { s.end(JSON.stringify({ mode: process.env.CCRC_AUTH === 'on' ? 'passphrase' : 'off' })); return; }\n"
+        + "  s.statusCode = 404; s.end('{}');\n"
+        + '}).listen(Number(process.env.CCRC_PORT), process.env.CCRC_HOST || \'127.0.0.1\'));\n');
+      const nodeDir = path.dirname(process.execPath);
+      writeJob(b.home, `${nodeDir}:/usr/bin:/bin:/usr/sbin:/sbin`);
+      mkdirSync(join(b.home, '.ccrc', 'logs'), { recursive: true });
+      const boot = spawnSync(LC, ['bootstrap', `gui/${uid}`, macJobFile(b.home)], { encoding: 'utf8' });
+      expect(boot.status, boot.stderr).toBe(0);
+      booted = macJobFile(b.home);
+      try {
+        const held = spawnSync(LC, ['print', `gui/${uid}/${MAC_LABEL}`], { encoding: 'utf8' }).stdout;
+        console.log(`wave 193 measurement, the job's print (headings and key names only):\n${shape(held)}`);
+        console.log(`wave 193 measurement, the domain's print (headings and key names only):\n${shape(
+          spawnSync(LC, ['print', `gui/${uid}`], { encoding: 'utf8' }).stdout)}`);
+        const unset = spawnSync(LC, ['getenv', 'CCRC_WAVE193_UNSET_PROBE'], { encoding: 'utf8' });
+        console.log(`wave 193 measurement, getenv of an unset key: exit ${unset.status}, ${unset.stdout.length} bytes out`);
+        const bad = spawnSync(LC, ['getenv'], { encoding: 'utf8' });
+        console.log(`wave 193 measurement, getenv with no key: exit ${bad.status}, ${bad.stdout.length} bytes out`);
+        const e = env(b.home, { CCRC_ALLOW_SANDBOX_LAUNCHCTL: '1', CCRC_UPDATE_HEALTH_S: '60' });
+        rmSync(join(b.home, '.local', 'bin', 'launchctl'), { force: true });
+        writeFileSync(join(b.home, 'curl-allow-ports'), `${port}\n`);
+        const run = (sub: string): Promise<Result> => new Promise((resolve) => {
+          const p = pty.spawn(BASH, [ccrcIn(b.home), 'auth', sub], { name: 'xterm-color', cols: 400, rows: 60, cwd: b.home, env: e });
+          let out = '';
+          p.onData((d) => { out += d; });
+          p.onExit(({ exitCode }) => resolve({ code: exitCode, out }));
+        });
+        const on = await run('on');
+        expect(on.code, on.out).toBe(0);
+        expect(on.out).toMatch(/answers with sign-in on/);
+        const off = await run('off');
+        expect(off.code, off.out).toBe(0);
+        expect(off.out).toMatch(/answers with sign-in off/);
+      } finally {
+        const out = spawnSync(LC, ['bootout', `gui/${uid}`, booted], { encoding: 'utf8' });
+        if (out.status === 0) booted = '';
+      }
+    }, 240_000);
+  });
+
+onEach('ccrc auth: the verb is in the usage and the verb table', () => {
   it('lists auth in the usage, and refuses a missing or unknown subcommand as a usage error', () => {
     const b = box('ccrc-auth-usage-', portLines());
     const help = runPiped(b.home, ['auth', '--help']);
