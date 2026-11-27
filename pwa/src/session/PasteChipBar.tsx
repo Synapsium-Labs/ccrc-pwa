@@ -9,13 +9,14 @@
 //
 // A send saves each pasted text as a file first (desktop-polish wave 194, `usePasteSave.ts`): while it does, the row
 // says so; a chip whose save failed gets a notice of its own, its reason (already composed, `longPasteWords.ts`) with
-// Retry and "Send as typed text". The chip itself keeps its look.
+// Retry, where saving again could change it, and "Send as typed text". The chip itself keeps its look.
 import type { ReactNode } from 'react';
 import { Button } from '@ccrc/ui';
 import { BROKEN_NOTICE, linesWord, type LiveChip } from './pasteChips';
 import {
   PASTE_RETRY_WORD, PASTE_SAVING_TEXT, PASTE_TYPED_LABEL, PASTE_TYPED_WORD, pasteRetryLabel,
 } from './longPasteWords';
+import type { PasteFailure } from './usePasteSave';
 import './pasteChips.css';
 
 export interface PasteChipBarProps {
@@ -30,8 +31,9 @@ export interface PasteChipBarProps {
   onDismiss?: () => void;
   /** The pasted texts are being saved and the send is held. */
   saving?: boolean;
-  /** Why a chip's save failed, by chip number. A failure shows only while its chip stands in the field. */
-  failures?: ReadonlyMap<number, string>;
+  /** Why a chip's save failed, by chip number. A failure shows only while its chip stands in the field, and offers
+   *  Retry only where saving again could change it. */
+  failures?: ReadonlyMap<number, PasteFailure>;
   /** Save again what is still unsaved, then send. */
   onRetry?: () => void;
   /** Send the message as today, every pasted text typed in full. */
@@ -66,8 +68,10 @@ export function PasteChipBar({
       {saving && <p className="paste-notice paste-saving" role="status">{PASTE_SAVING_TEXT}</p>}
       {!saving && failed.map(({ n, why }) => (
         <div key={n} className="paste-notice paste-failed" role="alert">
-          <p className="paste-notice-text">{why}</p>
-          <ChipAct label={pasteRetryLabel(n)} disabled={disabled} onClick={onRetry}>{PASTE_RETRY_WORD}</ChipAct>
+          <p className="paste-notice-text">{why.text}</p>
+          {why.retry && (
+            <ChipAct label={pasteRetryLabel(n)} disabled={disabled} onClick={onRetry}>{PASTE_RETRY_WORD}</ChipAct>
+          )}
           <ChipAct label={PASTE_TYPED_LABEL} disabled={disabled} onClick={onSendTyped}>{PASTE_TYPED_WORD}</ChipAct>
         </div>
       ))}

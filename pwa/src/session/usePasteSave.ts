@@ -14,7 +14,8 @@
 // wait their turn.
 //
 // LEAVING ENDS IT. When the composer goes away, or its session changes, while a save is in flight, the answer is
-// dropped and nothing is sent; a file already saved stays on the box (no route deletes a clip).
+// dropped and nothing is sent; a session change ends the hold too, with no failure shown. A file already saved stays
+// on the box (no route deletes a clip).
 //
 // SECRETS. No failure is toasted and nothing is logged: the reason shows on the chip only, in the upload's own words,
 // which hold no character of the paste.
@@ -35,15 +36,22 @@ export const PASTE_SAVE_DEADLINE_MS = 120_000;
 /** How many saves run at once: the tray's own number (`CLIP_MAX_PER_MESSAGE` files upload at once there). */
 export const PASTE_SAVES_AT_ONCE = CLIP_MAX_PER_MESSAGE;
 
+/** Why a chip's save failed, and whether saving again could change it: an upload's refusal or a deadline can, a saved
+ *  file the plan refused cannot (it stands for the same text, and Retry would only meet it again). */
+export interface PasteFailure {
+  readonly text: string;
+  readonly retry: boolean;
+}
+
 export interface PasteSave {
   /** A save is in flight: Send is held. */
   readonly saving: boolean;
   /** Why each chip's last save failed, by chip number; empty when none did. */
-  readonly failures: ReadonlyMap<number, string>;
+  readonly failures: ReadonlyMap<number, PasteFailure>;
   /** Save every chip `value` sends that has no file for its text. Resolves to the files when every one is saved, or
    *  null when any failed, another save was already running, or the composer or its session went away meanwhile. */
   save: (value: string, chips: PasteChips) => Promise<SavedPastes | null>;
-  /** Mark chips failed with a reason the caller decided (the plan refused their saved file). */
+  /** Mark chips failed with a reason the caller decided: the plan refused their saved file, which no retry changes. */
   fail: (reasons: ReadonlyMap<number, string>) => void;
   /** The message went: forget the files and the failures, for the next draft. */
   reset: () => void;
@@ -57,7 +65,7 @@ export function usePasteSave(
   deadlineMs: number = PASTE_SAVE_DEADLINE_MS,
 ): PasteSave {
   const [saving, setSaving] = useState(false);
-  const [failures, setFailures] = useState<ReadonlyMap<number, string>>(new Map());
+  const [failures, setFailures] = useState<ReadonlyMap<number, PasteFailure>>(new Map());
   const saved = useRef(new Map<number, SavedPaste>());
   const busy = useRef(false);
   const mounted = useRef(true);
@@ -98,23 +106,30 @@ export function usePasteSave(
     busy.current = true;
     setSaving(true);
     setFailures(new Map());
-    const failed = new Map<number, string>();
+    const failed = new Map<number, PasteFailure>();
     const queue = [...todo];
     const worker = async (): Promise<void> => {
       for (let n = queue.shift(); n !== undefined; n = queue.shift()) {
         const why = await saveOne(sid, n, chips.get(n)!.text);
-        if (why !== null) failed.set(n, why);
+        if (why !== null) failed.set(n, { text: why, retry: true });
       }
     };
     await Promise.all(Array.from({ length: Math.min(PASTE_SAVES_AT_ONCE, todo.length) }, worker));
     busy.current = false;
-    if (!mounted.current || idNow.current !== sid) return null;
+    if (!mounted.current) return null;
+    // The hold ends on every path while mounted, the session change included: the answer is dropped, nothing is sent,
+    // and the composer is free again (review 4119 F3).
     setSaving(false);
+    if (idNow.current !== sid) {
+      setFailures(new Map());
+      return null;
+    }
     setFailures(failed);
     return failed.size === 0 ? new Map(saved.current) : null;
   };
 
-  const fail = (reasons: ReadonlyMap<number, string>): void => setFailures(new Map(reasons));
+  const fail = (reasons: ReadonlyMap<number, string>): void =>
+    setFailures(new Map([...reasons].map(([n, text]) => [n, { text, retry: false }])));
   const reset = (): void => {
     saved.current = new Map();
     setFailures(new Map());

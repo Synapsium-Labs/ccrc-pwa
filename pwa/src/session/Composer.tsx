@@ -143,8 +143,9 @@ export function Composer({
   // without a round trip through the filesystem and the file picker. Drop and
   // the file picker feed the same staged-images tray.
   const staged = useStagedImages(id ?? '');
-  // The saves behind a send with chips (wave 194): Send is held while one runs, and the field, the paste and the tray
-  // take nothing new, so what goes out is what was on screen at the tap.
+  // The saves behind a send with chips (wave 194): Send is held while one runs, and the field, the paste, the drop and
+  // the tray take nothing new and give nothing up. What goes out is one snapshot taken at the tap (the text, the chip
+  // table, the attachments): the send decides on it and delivers exactly it, so nothing read after the tap changes it.
   const pasteSave = usePasteSave(id ?? '');
   const saving = pasteSave.saving;
   const [dropping, setDropping] = useState(false);
@@ -393,15 +394,15 @@ export function Composer({
     onInterrupt?.('keycap');
   };
 
-  /** Hand `text` to the session and start a new draft. It runs from the latest render, because a save may have run
-   *  between the tap and here: a session that went away or a card that came up meanwhile keeps the draft (and its saved
-   *  files, which a later Send reuses). */
-  const deliver = useRef<(text: string) => void>(() => undefined);
-  deliver.current = (text: string): void => {
+  /** Hand `text` and `files`, both taken at the tap, to the session and start a new draft. It runs from the latest
+   *  render, because a save may have run between the tap and here: a session that went away or a card that came up
+   *  meanwhile keeps the draft (and its saved files, which a later Send reuses). It reads nothing else of that render. */
+  const deliver = useRef<(text: string, files: PendingAttachment[]) => void>(() => undefined);
+  deliver.current = (text: string, files: PendingAttachment[]): void => {
     if (disabled || askUp) return;
     // An explicit `undefined` second argument still counts as a 2-arg call to
     // a caller matching on arity — only pass opts when there is one.
-    if (attachments.length > 0) onSend(text, { attachments });
+    if (files.length > 0) onSend(text, { attachments: files });
     else onSend(text);
     sentAt.current = Date.now();
     put('');
@@ -417,26 +418,28 @@ export function Composer({
     // defence for Enter, which calls `send()` directly. The sentence above the field (R93) is the surface's own and shows
     // while the card is up, not after a try.
     if (askUp) return;
+    // The snapshot (wave 194): the text, the chip table and the attachments as the tap saw them.
     const v = valueNow.current;
     const table = chips.current;
+    const files = attachments;
     // A long paste goes as a saved file with a pointer line in its place (wave 194): every chip is saved first, and
     // nothing is sent unless every one was. A shell line's chips go as typed text, as today (`sendsAsShellLine`).
-    if (id !== undefined && pasted.length > 0 && !sendsAsShellLine(v, table, attachments.length)) {
+    if (id !== undefined && pasted.length > 0 && !sendsAsShellLine(v, table, files.length)) {
       const sid = id;
-      void pasteSave.save(v, table).then((files) => {
-        if (files === null || valueNow.current !== v) return;
-        const plan = pointerSend(v, table, files, sid);
-        if (plan.kind === 'ready') deliver.current(plan.text);
+      void pasteSave.save(v, table).then((saved) => {
+        if (saved === null || valueNow.current !== v) return;
+        const plan = pointerSend(v, table, saved, sid);
+        if (plan.kind === 'ready') deliver.current(plan.text, files);
         else if (plan.kind === 'unpointable') pasteSave.fail(new Map(plan.numbers.map((n) => [n, pasteUnpointableText(n)])));
       });
       return;
     }
-    deliver.current(expanded.trim());
+    deliver.current(expanded.trim(), files);
   };
   /** "Send as typed text", on a chip whose save failed: today's send, every chip its full text, by the tap only. */
   const sendTyped = (): void => {
     if (!canSend || askUp) return;
-    deliver.current(expanded.trim());
+    deliver.current(expanded.trim(), attachments);
   };
 
   // A physical keyboard exists → Enter is the send key, as in every desktop
@@ -534,7 +537,7 @@ export function Composer({
       onDragOver={(e) => {
         if (id !== undefined && !disabled) {
           e.preventDefault();
-          setDropping(true);
+          if (!saving) setDropping(true);
         }
       }}
       onDragLeave={(e) => {
@@ -555,9 +558,12 @@ export function Composer({
         // (e.g. the session dying) could otherwise leave `dropping` armed
         // from an earlier dragover with no drop handler branch left to clear it.
         setDropping(false);
-        if (id === undefined || disabled || saving) return;
+        if (id === undefined || disabled) return;
         if (e.dataTransfer.files.length === 0) return; // a text/URL drop — leave it to the browser
         e.preventDefault();
+        // While a send saves, a file dropped here is cancelled and taken nowhere: the drag-over above accepted it, so
+        // returning before the cancel would leave the browser to open the file in place of the page and its draft.
+        if (saving) return;
         // `isAttachable`, not a bare `image/` type test: a dragged .md reports
         // text/markdown on one OS and nothing at all on another, and the old
         // type test dropped it SILENTLY — the file vanished with no chip, no
@@ -580,7 +586,11 @@ export function Composer({
           ))}
         </ul>
       )}
-      <AttachTray images={staged.images} onRemove={staged.remove} onRetry={staged.retry} />
+      {/* Held while a send saves (wave 194): a disabled fieldset disables every control inside it, remove and retry,
+          as assistive tech reads it, with no change to the tray itself; `display: contents` keeps its layout. */}
+      <fieldset className="attach-tray-hold" disabled={saving}>
+        <AttachTray images={staged.images} onRemove={staged.remove} onRetry={staged.retry} />
+      </fieldset>
       <PasteChipBar chips={pasted} onExpand={expandPaste} onRemove={removePaste} disabled={disabled || saving}
         broken={broken} onUndo={undoBreak} onDismiss={dismissBreak}
         saving={saving} failures={pasteSave.failures} onRetry={send} onSendTyped={sendTyped} />

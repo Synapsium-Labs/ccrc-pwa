@@ -13,8 +13,10 @@ import { api, uploadErrorText } from '../src/lib/api';
 import { ApiError } from '../src/lib/apiError';
 import { CLIP_MAX_BYTES, composePrompt, type StagedClip } from '../../shared/api';
 import { PASTE_UPLOAD_NAME, pastePointer, readPastePointer } from '../../shared/pastePointer';
-import { PASTE_SAVING_TEXT, PASTE_TYPED_LABEL, pasteRetryLabel } from '../src/session/longPasteWords';
-import { PASTE_SAVES_AT_ONCE, PASTE_SAVE_DEADLINE_MS, usePasteSave } from '../src/session/usePasteSave';
+import {
+  PASTE_SAVING_TEXT, PASTE_TYPED_LABEL, pasteRetryLabel, pasteUnpointableText,
+} from '../src/session/longPasteWords';
+import { PASTE_SAVE_DEADLINE_MS, usePasteSave } from '../src/session/usePasteSave';
 
 type Prompt = NonNullable<SessionStoreDeps['api']>['prompt'];
 
@@ -259,7 +261,24 @@ describe('a failed save sends nothing', () => {
     pasteText(lines(20));
     await tapSend();
     expect(onSend).not.toHaveBeenCalled();
-    expect(screen.getByRole('alert').textContent).toContain('cannot be named in this session');
+    expect(screen.getByRole('alert').querySelector('.paste-notice-text')?.textContent)
+      .toBe(pasteUnpointableText(1));
+    expect(pasteUnpointableText(1)).toContain('so it can go only as typed text');
+  });
+
+  it('that failure offers only "Send as typed text" (Retry could change nothing), and its tap sends the typed text', async () => {
+    const upload = vi.spyOn(api, 'upload').mockResolvedValue({
+      path: '/home/user-a/.cc-clips/lane-b/clip-20261127-153012-00000000-paste.txt', name: 'x', bytes: 1,
+    });
+    const { onSend } = mount();
+    pasteText(lines(20));
+    await tapSend();
+    const alert = screen.getByRole('alert');
+    expect(Array.from(alert.querySelectorAll('button')).map((b) => b.getAttribute('aria-label'))).toEqual([PASTE_TYPED_LABEL]);
+    expect(screen.queryByRole('button', { name: pasteRetryLabel(1) })).toBeNull();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: PASTE_TYPED_LABEL })); });
+    expect(sentText(onSend)).toBe(lines(20));
+    expect(upload).toHaveBeenCalledTimes(1);
   });
 
   it('Retry saves only what is still missing and reuses the saved file', async () => {
@@ -344,17 +363,17 @@ describe('Send is held while saving', () => {
     expect(screen.getByRole('button', { name: pasteRetryLabel(1) })).toBeEnabled();
   });
 
-  it(`runs at most ${String(PASTE_SAVES_AT_ONCE)} saves at once; the rest wait their turn`, async () => {
+  it('runs at most four saves at once; the rest wait their turn', async () => {
     const waiting: ((c: StagedClip) => void)[] = [];
     let n = 0;
     const spy = vi.spyOn(api, 'upload').mockImplementation(() => new Promise((r) => { waiting.push(r); }));
     const { onSend } = mount();
-    for (let i = 0; i < PASTE_SAVES_AT_ONCE + 2; i += 1) {
+    for (let i = 0; i < 6; i += 1) {
       caretEnd();
       pasteText(lines(13 + i));
     }
     await act(async () => { fireEvent.click(sendButton()); });
-    expect(spy).toHaveBeenCalledTimes(PASTE_SAVES_AT_ONCE);
+    expect(spy).toHaveBeenCalledTimes(4);
     while (waiting.length > 0) {
       await act(async () => {
         waiting.shift()!({ path: `${STORE}/clip-20261127-153012-${String(n++).padStart(8, '0')}-paste.txt`, name: 'n', bytes: 1 });
@@ -362,8 +381,33 @@ describe('Send is held while saving', () => {
         await Promise.resolve();
       });
     }
-    expect(spy).toHaveBeenCalledTimes(PASTE_SAVES_AT_ONCE + 2);
+    expect(spy).toHaveBeenCalledTimes(6);
     expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
+  it('the chip row\'s Expand and Remove cannot be used while saving', async () => {
+    vi.spyOn(api, 'upload').mockImplementation(() => new Promise(() => undefined));
+    mount();
+    pasteText(lines(20));
+    await act(async () => { fireEvent.click(sendButton()); });
+    expect(screen.getByRole('button', { name: 'Expand pasted text #1, 20 lines, into the message' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Remove pasted text #1' })).toBeDisabled();
+  });
+
+  it('a draft changed while saving by any way the hold does not cover is not sent, and stays', async () => {
+    let release!: (c: StagedClip) => void;
+    vi.spyOn(api, 'upload').mockImplementation(() => new Promise((r) => { release = r; }));
+    const { onSend } = mount();
+    pasteText(lines(20));
+    await act(async () => { fireEvent.click(sendButton()); });
+    // A read-only field still takes a change made by script (an extension, an autofill); the send must not follow it.
+    edit(`${field().value} more`);
+    await act(async () => {
+      release({ path: `${STORE}/clip-20261127-153012-00000000-paste.txt`, name: 'n', bytes: 1 });
+      await Promise.resolve();
+    });
+    expect(onSend).not.toHaveBeenCalled();
+    expect(field().value).toBe(`${label(1, 20)} more`);
   });
 
   it('a question card that comes up while saving keeps the draft: nothing is sent, and the saved file is reused later', async () => {
@@ -399,6 +443,92 @@ describe('Send is held while saving', () => {
   });
 });
 
+describe('a send is one snapshot taken at the tap (review 4119 F1)', () => {
+  const DOC = `${STORE}/clip-20261127-153012-dddddddd-notes.md`;
+  /** Documents stage at once; a pasted text's save waits for `release`. */
+  const deferPaste = () => {
+    let release!: () => void;
+    let late = 0;
+    const spy = vi.spyOn(api, 'upload').mockImplementation(async (_id, file) => {
+      if (file.name !== PASTE_UPLOAD_NAME) {
+        late += 1;
+        return { path: late === 1 ? DOC : `${STORE}/clip-20261127-153012-eeeeeeee-late.md`, name: file.name, bytes: 1 };
+      }
+      await new Promise<void>((r) => { release = r; });
+      return { path: `${STORE}/clip-20261127-153012-00000000-paste.txt`, name: 'n', bytes: 1 };
+    });
+    return { spy, release: async () => { await act(async () => { release(); await Promise.resolve(); await Promise.resolve(); }); } };
+  };
+  const drop = async (name: string): Promise<boolean> => {
+    let taken = true;
+    await act(async () => {
+      taken = fireEvent.drop(field().closest('.composer')!, {
+        dataTransfer: { files: [new File(['x'], name, { type: 'text/markdown' })] },
+      });
+    });
+    return taken;
+  };
+  const sentFiles = (onSend: ReturnType<typeof vi.fn>): unknown =>
+    (onSend.mock.calls.at(-1)?.[1] as { attachments?: { path: string }[] } | undefined)?.attachments?.map((a) => a.path);
+
+  it('a `!` draft with an attachment in front: the attachment removed during the save still goes, so no shell line', async () => {
+    const up = deferPaste();
+    const { onSend } = mount();
+    await drop('notes.md');
+    edit('!cat ');
+    caretEnd();
+    pasteText(lines(20));
+    await act(async () => { fireEvent.click(sendButton()); });
+    // jsdom lets a click through a disabled fieldset (a browser does not): this is a tray that changed after the tap.
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Remove notes.md' })); });
+    await up.release();
+    expect(sentText(onSend)).toBe(`!cat \n${pastePointer(`${STORE}/clip-20261127-153012-00000000-paste.txt`, 20)}`);
+    expect(sentFiles(onSend)).toEqual([DOC]);
+  });
+
+  it('the tray\'s remove control cannot be used while saving, and says so', async () => {
+    deferPaste();
+    mount();
+    await drop('notes.md');
+    pasteText(lines(20));
+    const remove = screen.getByRole('button', { name: 'Remove notes.md' });
+    expect(remove).toBeEnabled();
+    await act(async () => { fireEvent.click(sendButton()); });
+    expect(remove).toBeDisabled();
+    expect(remove.closest('fieldset')).toHaveProperty('disabled', true);
+  });
+
+  it('an attachment that finishes staging after the tap is not in the send', async () => {
+    const up = deferPaste();
+    const { onSend } = mount();
+    pasteText(lines(20));
+    await act(async () => { fireEvent.click(sendButton()); });
+    const input = document.querySelector('input.attach-input') as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(input, { target: { files: [new File(['x'], 'late.md', { type: 'text/markdown' })] } });
+      await Promise.resolve();
+    });
+    await up.release();
+    expect(sentText(onSend)).toBe(pastePointer(`${STORE}/clip-20261127-153012-00000000-paste.txt`, 20));
+    expect(sentFiles(onSend)).toBeUndefined();
+  });
+
+  it('a file dropped during a save is cancelled, so the browser keeps the page, and is taken nowhere', async () => {
+    const up = deferPaste();
+    const { onSend } = mount();
+    pasteText(lines(20));
+    await act(async () => { fireEvent.click(sendButton()); });
+    const composer = field().closest('.composer')!;
+    expect(fireEvent.dragOver(composer)).toBe(false);
+    expect(composer).not.toHaveAttribute('data-drop');
+    expect(await drop('late.md')).toBe(false);
+    expect(up.spy).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('.attach-tray')).toBeNull();
+    await up.release();
+    expect(sentFiles(onSend)).toBeUndefined();
+  });
+});
+
 describe('the save hook on its own', () => {
   it('answers null to a second save while one runs, and uploads nothing more for it', async () => {
     let release!: (c: StagedClip) => void;
@@ -416,6 +546,40 @@ describe('the save hook on its own', () => {
     await act(async () => { release({ path, name: 'n', bytes: 1 }); await first; });
     await expect(first).resolves.toEqual(new Map([[1, { path, text: lines(20) }]]));
     expect(upload).toHaveBeenCalledTimes(1);
+  });
+
+  it('a session change in place while a save runs ends the hold: the answer is dropped, nothing fails', async () => {
+    let release!: (c: StagedClip) => void;
+    const upload = vi.fn(() => new Promise<StagedClip>((r) => { release = r; }));
+    const { result, rerender } = renderHook(({ sid }) => usePasteSave(sid, upload), { initialProps: { sid: SID } });
+    const a = addChip(emptyChips(), lines(20), 1);
+    let saved!: Promise<unknown>;
+    act(() => { saved = result.current.save(a.field, a.chips); });
+    expect(result.current.saving).toBe(true);
+    rerender({ sid: 'lane-b-project-a' });
+    await act(async () => {
+      release({ path: `${STORE}/clip-20261127-153012-00000000-paste.txt`, name: 'n', bytes: 1 });
+      await saved;
+    });
+    await expect(saved).resolves.toBeNull();
+    expect(result.current.saving).toBe(false);
+    expect(result.current.failures.size).toBe(0);
+  });
+
+  it('another session starts the saved table again: the same draft is saved anew there', async () => {
+    const upload = vi.fn(async (sid: string) => (
+      { path: `/home/user-a/.cc-clips/${sid}/clip-20261127-153012-00000000-paste.txt`, name: 'n', bytes: 1 }));
+    const { result, rerender } = renderHook(({ sid }) => usePasteSave(sid, upload), { initialProps: { sid: SID } });
+    const a = addChip(emptyChips(), lines(20), 1);
+    await act(async () => { await result.current.save(a.field, a.chips); });
+    expect(upload).toHaveBeenCalledTimes(1);
+    rerender({ sid: 'lane-b-project-a' });
+    let again!: unknown;
+    await act(async () => { again = await result.current.save(a.field, a.chips); });
+    expect(upload).toHaveBeenCalledTimes(2);
+    expect(again).toEqual(new Map([[1, {
+      path: '/home/user-a/.cc-clips/lane-b-project-a/clip-20261127-153012-00000000-paste.txt', text: lines(20),
+    }]]));
   });
 });
 
@@ -485,13 +649,26 @@ describe('a send that fails after the saves (condition 5)', () => {
     expect(up.spy).toHaveBeenCalledTimes(1);
   });
 
-  it('the store matches the echo against the pointer text', async () => {
+  it('the store clears the pending send on the echo of the pointer text, and on no other', async () => {
     const up = mockUpload();
     const prompt = vi.fn<Prompt>().mockResolvedValue(undefined);
     const store = harness(prompt);
-    pasteText(lines(20));
+    const text = lines(20);
+    pasteText(text);
     await tapSend();
     const pointer = pastePointer(up.paths()[0]!, 20);
     expect(store.getState().pending.map((p) => composePrompt(p.text, []))).toEqual([pointer]);
+    const echo = (uuid: string, said: string): void => {
+      act(() => {
+        store.getState().apply({
+          type: 'events', uuid: 's1', offset: 1,
+          events: [{ kind: 'user', uuid, ts: new Date(Date.now() + 1000).toISOString(), text: said }],
+        });
+      });
+    };
+    echo('e1', text);
+    expect(store.getState().pending).toHaveLength(1);
+    echo('e2', pointer);
+    expect(store.getState().pending).toHaveLength(0);
   });
 });

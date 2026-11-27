@@ -1924,6 +1924,16 @@ button.metachip:active {
   flex: none;
 }
 
+/* The composer's tray hold (desktop-polish wave 194): a fieldset that only disables the tray's controls while a send
+   saves. It draws no box of its own, so the tray sits where it always did. */
+.attach-tray-hold {
+  display: contents;
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
 /* Desktop drop target. */
 .composer[data-drop='true'] .inputbar {
   border-color: var(--accent);

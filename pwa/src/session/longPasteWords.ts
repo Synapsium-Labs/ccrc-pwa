@@ -5,7 +5,7 @@
 //
 // No sentence here carries a character of the paste: a paste may hold a secret, so the chip row, the chat chip and
 // every failure say a number, a line count and a reason, nothing else.
-import { linesWord } from './pasteChips';
+import { linesWord } from '../../../shared/pastePointer';
 
 /** A pasted text named by its chip number, as the composer's chip row numbers it: `Pasted text #2`. */
 export const pasteName = (n: number): string => `Pasted text #${String(n)}`;
@@ -25,9 +25,10 @@ export const PASTE_TYPED_LABEL = 'Send the message with every pasted text typed 
 export const pasteTimeoutText = (n: number, seconds: number): string =>
   `${pasteName(n)} was not saved within ${String(seconds)} seconds`;
 
-/** A saved file whose pointer would not read back as this session's own (`pasteSend.ts`, `unpointable`). */
+/** A saved file whose pointer would not read back as this session's own (`pasteSend.ts`, `unpointable`). Saving again
+ *  cannot change that (the saved file stands for the same text), so this failure offers no retry and says why. */
 export const pasteUnpointableText = (n: number): string =>
-  `${pasteName(n)} was saved, but its file cannot be named in this session's message`;
+  `${pasteName(n)} was saved, but its file cannot be named in this session's message, so it can go only as typed text`;
 
 /** An upload's refusal, in the tray's words (`uploadErrorText(apiErrorText(err))`), said of the pasted text it hit. */
 export const pasteFailedText = (n: number, reason: string): string => `${pasteName(n)}: ${reason}`;
