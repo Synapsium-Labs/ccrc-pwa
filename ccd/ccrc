@@ -3880,6 +3880,16 @@ _box_loopback_host() {   # <host>
   case "$1" in ''|localhost|::1|'[::1]') return 0 ;; 127.0.0.0|127.255.255.255) return 1 ;; esac
   [[ "$1" =~ ^127\.$o\.$o\.$o$ ]]
 }
+# ── _box_said — A VALUE READ FROM A FILE, AS THE TERMINAL MAY SEE IT (review 4061 C5) ──
+# A value read from a file, or from what the service manager answers, is printed whole only when it is 1 to 1024 bytes
+# of letters, digits and ._/@:+,%=~-[]; anything else prints as BOX_HELD, so an escape sequence, a newline or a quote in
+# it never reaches the terminal or a line the operator is told to copy. Bytes (LC_ALL=C). rc 0 whole, rc 1 held.
+BOX_HELD='[a value this verb does not print]'
+_box_said() {   # <value>
+  local LC_ALL=C re='^[][A-Za-z0-9._/@:+,%=~-]{1,1024}$'
+  if [[ "$1" =~ $re ]]; then printf '%s' "$1"; return 0; fi
+  printf '%s' "$BOX_HELD"; return 1
+}
 BRE_REASONS=(); BRE_HOST=""; BRE_HOSTSRC=""; BRE_HOSTRC=0; BRE_HOSTWHY=""; BRE_HOSTFIX=""; BRE_HOSTOUT=0
 _box_reach() {   # <unit dir>
   local udir="$1" u f
@@ -3888,7 +3898,7 @@ _box_reach() {   # <unit dir>
   _box_unit_env CCRC_HOST || BRE_HOSTRC=$?
   BRE_HOSTWHY="$BUE_WHY"; BRE_HOSTFIX="$BUE_FIX"
   BRE_HOST="$BUE_VAL"; BRE_HOSTSRC="$BUE_SRC"
-  if ! _box_loopback_host "$BRE_HOST"; then BRE_REASONS+=("CCRC_HOST=$BRE_HOST in $BRE_HOSTSRC"); BRE_HOSTOUT=1; fi
+  if ! _box_loopback_host "$BRE_HOST"; then BRE_REASONS+=("CCRC_HOST=$(_box_said "$BRE_HOST") in $BRE_HOSTSRC"); BRE_HOSTOUT=1; fi
   [ ! -e "$CCRC_EXPOSURE_FILE" ] || BRE_REASONS+=("$CCRC_EXPOSURE_FILE exists")
   [ ! -e "$CCRC_CADDYFILE" ] || BRE_REASONS+=("$CCRC_CADDYFILE exists")
   # On macOS `_exp_ddns_units` writes ONE launchd job for the pair, reached through the `.service` name only:
@@ -6365,9 +6375,9 @@ _auth_want() {   # <key> <port> -> the value `ccrc auth on` writes for it
 # It clobbers `_box_unit_env`'s out-params, so a caller asks it first. It answers no on a Mac, where the verb refuses
 # (review 3971 R1(d), ruling B), so doctor and install give the hand route there.
 _auth_fits_here() {   # <unit dir>
-  local role="" port
+  local role port
   [ "${CCD_OS:-linux}" != darwin ] || return 1
-  [ ! -f "$BOX_ENV_FILE" ] || [ ! -r "$BOX_ENV_FILE" ] || role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  _auth_role; role="$AUR_ROLE"
   [ "$role" != fleet ] && [ -f "$1/$(_box_unit_file ccrc.service)" ] || return 1
   _auth_unit_cmp "$1" "$role" || return 1
   _box_reach "$1"
@@ -6402,7 +6412,7 @@ _auth_unit_sources() {   # <unit dir>
   # The pattern as a variable, so no quote or backslash rides into a bracket expression: an assignment's start (the
   # value's head, a blank or a quote before the key).
   local at='(^|[[:space:]"'"'"'])'
-  local -a ins
+  local -a ins seen=()
   AUS_REASONS=(); AUS_WHY=""
   kre="$(IFS='|'; printf '%s' "${AUTH_SOURCE_KEYS[*]}")"
   uf="$udir/$(_box_unit_file ccrc.service)"
@@ -6420,7 +6430,7 @@ _auth_unit_sources() {   # <unit dir>
         done ;;
       EnvironmentFile=*)
         p="${t#EnvironmentFile=}"; p="${p#-}"; p="${p//%h/$HOME}"
-        [ "$p" = "$BOX_ENV_FILE" ] || [ "$p" = "$CCRC_EXPOSURE_FILE" ] || AUS_REASONS+=("$uf reads $p (EnvironmentFile=)") ;;
+        [ "$p" = "$BOX_ENV_FILE" ] || [ "$p" = "$CCRC_EXPOSURE_FILE" ] || AUS_REASONS+=("$uf reads $(_box_said "$p") (EnvironmentFile=)") ;;
     esac
   done < "$uf"
   for d in "$udir/ccrc.service.d" "$udir/service.d"; do
@@ -6428,7 +6438,7 @@ _auth_unit_sources() {   # <unit dir>
     if [ ! -d "$d" ] || [ ! -r "$d" ] || [ ! -x "$d" ]; then AUS_WHY="$d cannot be listed"; return 1; fi
     for f in "$d"/*.conf; do
       [ -e "$f" ] || [ -L "$f" ] || continue
-      AUS_REASONS+=("$f is a drop-in for ccrc.service")
+      AUS_REASONS+=("$(_box_said "$f") is a drop-in for ccrc.service"); seen+=("$f")
     done
   done
   out="$(_plat_timeout 10 systemctl --user show ccrc.service -p DropInPaths -p EnvironmentFiles -p Environment -p PassEnvironment 2>/dev/null)" \
@@ -6439,12 +6449,12 @@ _auth_unit_sources() {   # <unit dir>
       DropInPaths=?*)
         read -ra ins <<< "${line#DropInPaths=}"
         for f in "${ins[@]}"; do
-          case " ${AUS_REASONS[*]+${AUS_REASONS[*]}} " in *" $f is a drop-in"*) continue ;; esac
-          AUS_REASONS+=("systemd loaded the drop-in $f for ccrc.service")
+          for p in ${seen[@]+"${seen[@]}"}; do [ "$p" != "$f" ] || continue 2; done
+          AUS_REASONS+=("systemd loaded the drop-in $(_box_said "$f") for ccrc.service")
         done ;;
       EnvironmentFiles=?*)
         p="${line#EnvironmentFiles=}"; p="${p% (ignore_errors=*)}"
-        [ "$p" = "$BOX_ENV_FILE" ] || [ "$p" = "$CCRC_EXPOSURE_FILE" ] || AUS_REASONS+=("systemd loaded ccrc.service with the environment file $p") ;;
+        [ "$p" = "$BOX_ENV_FILE" ] || [ "$p" = "$CCRC_EXPOSURE_FILE" ] || AUS_REASONS+=("systemd loaded ccrc.service with the environment file $(_box_said "$p")") ;;
       Environment=?*)
         for k in "${AUTH_SOURCE_KEYS[@]}"; do
           [[ "${line#Environment=}" =~ $at$k= ]] && AUS_REASONS+=("systemd loaded ccrc.service with $k in its Environment=")
@@ -6473,6 +6483,15 @@ _auth_unit_sources() {   # <unit dir>
 # install takes role both and never reads the recorded one (`_kf_remedy`'s reason; wave 190 fix round 1, R2). It is
 # printed only when it is a word the install takes for a box this verb serves (the fleet word has refused already),
 # matched whole as the other readers of the role match it; any other content is never printed (fix round 2, R1).
+# `_auth_role` is that read, one for both callers: AUR_ROLE is the recorded CCRC_ROLE, "" when ccrc.env is absent or
+# records none, and a newline, which no line read can hold, when ccrc.env is there and cannot be read: a role nobody read
+# is not "no role" (review 4061 C4), so the way on says which.
+AUR_ROLE=""
+_auth_role() {
+  AUR_ROLE=""
+  [ -e "$BOX_ENV_FILE" ] || [ -L "$BOX_ENV_FILE" ] || return 0
+  if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then AUR_ROLE="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"; else AUR_ROLE=$'\n'; fi
+}
 AUO_WHY=""; AUO_FIX=""
 _auth_unit_cmp() {   # <unit dir> <recorded role or "">
   local uf tf crc=0 none="" r="<role>"
@@ -6491,6 +6510,7 @@ _auth_unit_cmp() {   # <unit dir> <recorded role or "">
     1) AUO_WHY="$uf is not the unit file ccrc installs ($tf), and this verb acts only on its own"
        # Wave 190 A3: an update leaves a box already on its version alone unless forced; an install always lands it.
        case "${2:-}" in server|both) r="$2" ;; '') none="; this box records no role, and a bare install takes role both" ;;
+         $'\n') none="; $BOX_ENV_FILE cannot be read, so the role it records was not read, and a bare install takes role both" ;;
          *) none="; the role $BOX_ENV_FILE records is not one ccrc install takes, and a bare install takes role both" ;; esac
        AUO_FIX="ccrc install --role $r puts the shipped file back and reloads systemd (an update does not, on a box already on its version$none); or set the keys by hand (the README's 'The session gate')"
        return 1 ;;
@@ -6518,17 +6538,21 @@ _auth_unit_own() {   # <unit dir> <recorded role or "">
     no) ;;
     yes) AUO_WHY="systemd has not loaded $uf as it is now (NeedDaemonReload=yes), so the restart would apply something other than the file this verb read"
          return 1 ;;
-    *) AUO_WHY="systemctl --user show did not say whether systemd loaded $uf as it is now (NeedDaemonReload), so what the restart would apply was not measured"
+    # Wave 193 C6: a reload cannot make a manager print a property it leaves out (fix round 2's R3, for SourcePath), so
+    # these two arms say there is no way on from here and name the hand route.
+    *) AUO_FIX="this systemd does not answer NeedDaemonReload, so this verb cannot prove the unit on this box; set the keys by hand (the README's 'The session gate')"
+       AUO_WHY="systemctl --user show did not say whether systemd loaded $uf as it is now (NeedDaemonReload), so what the restart would apply was not measured"
        return 2 ;;
   esac
-  [ -n "$frag" ] || { AUO_WHY="systemctl --user show did not say which file systemd loaded for ccrc.service (FragmentPath), so what the restart would apply was not measured"; return 2; }
+  [ -n "$frag" ] || { AUO_FIX="this systemd names no file it loaded for ccrc.service, and a reload does not make it name one, so this verb cannot prove the unit on this box; set the keys by hand (the README's 'The session gate')"
+    AUO_WHY="systemctl --user show did not say which file systemd loaded for ccrc.service (FragmentPath), so what the restart would apply was not measured"; return 2; }
   AUO_FIX="take that unit away (or what puts it there), run systemctl --user daemon-reload, then re-run; or set the keys by hand (the README's 'The session gate')"
   [ "$frag" = "$uf" ] \
-    || { AUO_WHY="systemd loaded ccrc.service from $frag, not from $uf, the file this verb read (a unit of the same name earlier on its search path), so the restart would apply a file this verb did not read"; return 1; }
+    || { AUO_WHY="systemd loaded ccrc.service from $(_box_said "$frag"), not from $uf, the file this verb read (a unit of the same name earlier on its search path), so the restart would apply a file this verb did not read"; return 1; }
   [ "$srcp" != $'\n' ] || { AUO_FIX="this systemd does not answer SourcePath, so this verb cannot prove the unit on this box; set the keys by hand (the README's 'The session gate')"
     AUO_WHY="systemctl --user show did not say whether systemd made ccrc.service from another source (SourcePath), so what the restart would apply was not measured"; return 2; }
   [ -z "$srcp" ] \
-    || { AUO_WHY="systemd made ccrc.service from $srcp (SourcePath), not from $uf alone, so the restart would apply something other than the file this verb read"; return 1; }
+    || { AUO_WHY="systemd made ccrc.service from $(_box_said "$srcp") (SourcePath), not from $uf alone, so the restart would apply something other than the file this verb read"; return 1; }
 }
 
 # The rewrite, as one awk pass in bytes (LC_ALL=C). A line is one of ours only when, after leading spaces and tabs,
@@ -6615,7 +6639,7 @@ _auth_restart_prove() {   # <armed|off> <host:port>
     [ "$SECONDS" -lt "$end" ] || break
     sleep 2
   done
-  AUTH_WHY="after ${UPD_HEALTH_S}s ccrc.service is ${st:-unanswered} and http://$addr/api/auth/status answers ${AUTH_MODE:-nothing}"
+  AUTH_WHY="after ${UPD_HEALTH_S}s ccrc.service is $(_box_said "${st:-unanswered}") and http://$addr/api/auth/status answers ${AUTH_MODE:-nothing}"
   return 1
 }
 
@@ -6699,8 +6723,8 @@ cmd_auth() {
   fi
 
   # A server box: the fleet role runs no console, and a box with no installed ccrc.service has nothing to restart.
-  local role=""
-  [ ! -f "$BOX_ENV_FILE" ] || [ ! -r "$BOX_ENV_FILE" ] || role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  local role
+  _auth_role; role="$AUR_ROLE"
   [ "$role" != fleet ] \
     || _ccrc_die "auth: this box runs no console ($BOX_ENV_FILE records CCRC_ROLE=fleet); sign-in belongs to the server box. Nothing was changed."
   [ -f "$BOX_UNIT_DIR/$(_box_unit_file ccrc.service)" ] \
@@ -6731,7 +6755,7 @@ cmd_auth() {
     # Review 3934 A4, review 3971 R5: a bind alone is no exposure, so there is nothing to expose or un-expose; say what
     # it is, and only what is true of every value refused here (a loopback spelling this reader does not take included).
     if [ "$BRE_HOSTOUT" -eq 1 ] && [ "${#BRE_REASONS[@]}" -eq 1 ]; then
-      local bindwhy="CCRC_HOST=$BRE_HOST in $BRE_HOSTSRC is not a value this verb can read as this machine only (127.0.0.1 to 127.255.255.254, localhost or ::1)"
+      local bindwhy="CCRC_HOST=$(_box_said "$BRE_HOST") in $BRE_HOSTSRC is not a value this verb can read as this machine only (127.0.0.1 to 127.255.255.254, localhost or ::1)"
       [ "$sub" = off ] \
         || _ccrc_die "auth on: $bindwhy, and this verb turns sign-in on only on a box that only this machine reaches. Bind it back to 127.0.0.1 (or remove the line) and re-run, or arm it by hand (the README's 'The session gate'). Nothing was changed."
       _ccrc_die "auth off: $bindwhy, so with sign-in off whoever can reach the address it binds could drive the console, and this verb turns sign-in off only on a box that only this machine reaches. Bind it back to 127.0.0.1 (or remove the line) first, or edit the keys by hand (the README's 'The session gate'). Nothing was changed."
@@ -6808,17 +6832,17 @@ cmd_auth() {
     fi
     # The passphrase, before anything is written: armed with none, the gate refuses everyone.
     # Both path keys as ccrc.service receives them (review 3934 F1): a line the unit reader does not decide is not unset.
-    local secret src=0 crc=0 helper="$CCRC_HERE/../deploy/gen-auth-hash.mjs"
+    local secret sp src=0 crc=0 helper="$CCRC_HERE/../deploy/gen-auth-hash.mjs"
     _box_path_for CCRC_SESSIONS_PATH "$BOX_SESSIONS_FILE" unit >/dev/null || src=$?
     [ "$src" -ne 4 ] \
       || _ccrc_die "auth on: $BPF_WHY, so which file the server keeps its sessions in was not measured${BPF_FIX:+ — $BPF_FIX}. Nothing was changed."
     src=0
     _box_path_for CCRC_AUTH_SECRET_PATH "$BOX_AUTH_FILE" unit >/dev/null || src=$?
-    secret="$BPF_PATH"
+    secret="$BPF_PATH"; sp="$(_box_said "$secret")"
     [ "$src" -ne 4 ] \
       || _ccrc_die "auth on: $BPF_WHY, so which passphrase file the server reads was not measured${BPF_FIX:+ — $BPF_FIX}. Nothing was changed."
     [ "$src" -ne 3 ] \
-      || _ccrc_die "auth on: $BPF_SRC sets CCRC_AUTH_SECRET_PATH to a RELATIVE path ($secret), so which passphrase file the server reads cannot be said; make it absolute, or remove the line. Nothing was changed."
+      || _ccrc_die "auth on: $BPF_SRC sets CCRC_AUTH_SECRET_PATH to a RELATIVE path ($sp), so which passphrase file the server reads cannot be said; make it absolute, or remove the line. Nothing was changed."
     command -v node >/dev/null 2>&1 \
       || _ccrc_die "auth on: node is not on PATH, so the passphrase file could not be checked. Nothing was changed."
     [ -f "$helper" ] \
@@ -6826,8 +6850,8 @@ cmd_auth() {
     node "$helper" --check "$secret" >/dev/null 2>&1 </dev/null || crc=$?
     case "$crc" in
       0) ;;
-      3) _ccrc_die "auth on: there is no passphrase yet ($secret). Set one first: ccrc passwd, then ccrc auth on. Armed with none, the console would refuse everyone. Nothing was changed." ;;
-      4) _ccrc_die "auth on: the passphrase file at $secret cannot be used (it does not parse, or cannot be read), and the server refuses to boot on it once armed. ccrc doctor's auth check says how to replace it. Nothing was changed." ;;
+      3) _ccrc_die "auth on: there is no passphrase yet ($sp). Set one first: ccrc passwd, then ccrc auth on. Armed with none, the console would refuse everyone. Nothing was changed." ;;
+      4) _ccrc_die "auth on: the passphrase file at $sp cannot be used (it does not parse, or cannot be read), and the server refuses to boot on it once armed. ccrc doctor's auth check says how to replace it. Nothing was changed." ;;
       5) _ccrc_die "auth on: this box has no server build, and the passphrase file is read by the server's own parser, so it could not be checked. Nothing was changed." ;;
       *) _ccrc_die "auth on: checking the passphrase file exited $crc, which this verb does not know. Nothing was changed." ;;
     esac
@@ -6839,8 +6863,17 @@ cmd_auth() {
     # Review 3934 R1 (the coordinator's ruling): a CCRC_ORIGIN or CCRC_RP_ID this verb did not write is the one evidence
     # the box has that it is reached under another address, and the proof cannot see a proxy; turning sign-in off there
     # is a hand edit. A foreign cookie line alone is no such evidence, and stays, named.
-    local addr_keys=()
+    local addr_keys=() was="" mark ml found=0
     for k in ${foreign[@]+"${foreign[@]}"}; do [ "$k" = CCRC_COOKIE_INSECURE ] || addr_keys+=("$k"); done
+    # Wave 193 C6: an origin `on` wrote for the port its marker line names, after CCRC_PORT moved, is this verb's own line
+    # for another port, refused as any origin it would not write today; the way on that works is the port back, then off.
+    if [ "${addr_keys[*]-}" = CCRC_ORIGIN ] && [[ "${auth_cur[2]}" =~ ^http://localhost:([0-9]{1,5})$ ]]; then
+      was="${BASH_REMATCH[1]}"; mark="$(_auth_marker "$was")"
+      { while IFS= read -r ml || [ -n "$ml" ]; do ml="${ml%$'\r'}"; [ "${ml#"${ml%%[!$' \t']*}"}" != "$mark" ] || found=1; done < "$BOX_ENV_FILE"; } 2>/dev/null
+      was="$(_box_said "$was")"
+      [ "$found" -eq 0 ] \
+        || _ccrc_die "auth off: CCRC_ORIGIN holds http://localhost:$was, which ccrc auth on wrote for port $was (its marker line in $BOX_ENV_FILE says so), and CCRC_PORT is now $port, so it is not the origin this verb would write today. To go on: set CCRC_PORT back to $was, run ccrc auth off, then change the port; or remove the lines by hand (the README's 'The session gate'). Nothing was changed."
+    fi
     [ "${#addr_keys[@]}" -eq 0 ] \
       || _ccrc_die "auth off: ${addr_keys[*]} $([ "${#addr_keys[@]}" -eq 1 ] && printf 'holds a value' || printf 'hold values') this verb did not write, so this box looks armed by hand for another address (a proxy of your own, most likely), which the loopback proof cannot see. Turning sign-in off there is a hand edit of $BOX_ENV_FILE (the README's 'The session gate'). Nothing was changed."
   fi
@@ -7017,12 +7050,18 @@ cmd_expose() {
   # its own undo, said first — and only where `ccrc auth off` acts (review 3934 A7): CCRC_AUTH still `on`, and neither
   # CCRC_RP_ID nor CCRC_ORIGIN holding anything but the localhost values `on` writes. Otherwise it would answer "already
   # off", or refuse a box armed by hand for another address, and the hand removal below is the remedy.
-  local auth_said="" a_rp a_origin
+  # Wave 193 C6: an origin `on` wrote for another port than CCRC_PORT now names is one `off` refuses, so there the hint
+  # is `off`'s own way on: the port back first.
+  local auth_said="" a_rp a_origin a_port
   if [ -n "$shadow_keys" ] && [ -r "$BOX_ENV_FILE" ] && LC_ALL=C grep -qF -- "$AUTH_MARKER_HEAD" "$BOX_ENV_FILE" \
      && [ "$(_box_env_value "$BOX_ENV_FILE" CCRC_AUTH)" = on ]; then
     a_rp="$(_box_env_value "$BOX_ENV_FILE" CCRC_RP_ID)"; a_origin="$(_box_env_value "$BOX_ENV_FILE" CCRC_ORIGIN)"
-    if { [ -z "$a_rp" ] || [ "$a_rp" = localhost ]; } && { [ -z "$a_origin" ] || [[ "$a_origin" =~ ^http://localhost:[0-9]{1,5}$ ]]; }; then
+    a_port="$(_box_env_value "$BOX_ENV_FILE" CCRC_PORT)"; a_port="${a_port:-7788}"
+    [[ "$a_port" =~ ^[0-9]{1,5}$ ]] && a_port="$((10#$a_port))"
+    if { [ -z "$a_rp" ] || [ "$a_rp" = localhost ]; } && { [ -z "$a_origin" ] || [[ "$a_origin" =~ ^http://localhost:([0-9]{1,5})$ ]]; }; then
       auth_said=" These are the lines ccrc auth on writes: run ccrc auth off first, which removes them and restarts the server, then re-run this."
+      [ -z "$a_origin" ] || [ "${BASH_REMATCH[1]}" = "$a_port" ] \
+        || auth_said=" These are the lines ccrc auth on writes, for port $(_box_said "${BASH_REMATCH[1]}"), and CCRC_PORT is now $(_box_said "$a_port"): set it back to $(_box_said "${BASH_REMATCH[1]}"), run ccrc auth off, which removes them and restarts the server, then change the port and re-run this."
     fi
   fi
   [ -z "$shadow_keys" ] \

@@ -142,6 +142,8 @@ const SYSTEMCTL_STUB = [
   '    if [ -e "$HOME/sd-manager-env" ]; then cat "$HOME/sd-manager-env"; else printf \'HOME=%s\\nLANG=C.UTF-8\\n\' "$HOME"; fi',
   '    exit 0 ;;',
   '  "--user is-active ccrc.service")',
+  // `<home>/sd-is-active`, when a case plants it, is the whole answer (review 4061 C5: what the manager says is held too).
+  '    if [ -e "$HOME/sd-is-active" ]; then cat "$HOME/sd-is-active"; exit 3; fi',
   '    if [ "$(cat "$HOME/server-state" 2>/dev/null)" = down ]; then echo failed; exit 3; fi',
   '    echo active; exit 0 ;;',
   'esac',
@@ -499,6 +501,33 @@ describe.skipIf(IS_DARWIN)('ccrc auth off', () => {
     });
   }
 
+  // Wave 193 C6: on wrote its origin for the port its marker line names, and CCRC_PORT has moved since. off refuses that
+  // origin as it refuses any it would not write today (never loosened), and says the way on that works.
+  it('refuses its own origin for a port CCRC_PORT has moved from, with a way on that works: the port back, then off', async () => {
+    const moved = PORT === 7788 ? 7789 : 7788;
+    const armedAt = (p: number): string => `CCRC_HOST=127.0.0.1\nCCRC_PORT=${p}\n${ON_LINES(PORT)}`;
+    const b = box('ccrc-auth-off-moved-', armedAt(moved));
+    writeFileSync(join(b.home, 'server-state'), 'armed\n');
+    const r = await runTty(b.home, ['auth', 'off']);
+    await expectRefused(b, r, armedAt(moved), /CCRC_ORIGIN holds http:\/\/localhost:\d+, which ccrc auth on wrote for port \d+ \(its marker line in .*ccrc\.env says so\)/);
+    expect(r.out).toContain(`CCRC_ORIGIN holds http://localhost:${PORT}, which ccrc auth on wrote for port ${PORT}`);
+    expect(r.out).toContain(`and CCRC_PORT is now ${moved}, so it is not the origin this verb would write today`);
+    expect(r.out).toContain(`To go on: set CCRC_PORT back to ${PORT}, run ccrc auth off, then change the port; or remove the lines by hand (the README's 'The session gate')`);
+    expect(r.out).not.toMatch(/armed by hand for another address/);
+    // The way on, followed: the port back, then off, which acts and proves.
+    writeFileSync(envFile(b.home), armedAt(PORT));
+    const back = await runTty(b.home, ['auth', 'off']);
+    expect(back.code, back.out).toBe(0);
+    expect(bytes(envFile(b.home))).toBe(`CCRC_HOST=127.0.0.1\nCCRC_PORT=${PORT}\n`);
+    // Without its marker line the same origin is no line of this verb's: the hand-armed words, as before.
+    const lines = `CCRC_HOST=127.0.0.1\nCCRC_PORT=${moved}\nCCRC_AUTH=on\nCCRC_RP_ID=localhost\nCCRC_ORIGIN=http://localhost:${PORT}\n`;
+    const h = box('ccrc-auth-off-moved-nomark-', lines);
+    const n = await runTty(h.home, ['auth', 'off']);
+    await expectRefused(h, n, lines, /CCRC_ORIGIN holds a value this verb did not write/);
+    expect(n.out).toMatch(/armed by hand for another address/);
+    expect(n.out).not.toMatch(/set CCRC_PORT back/);
+  });
+
   it('a foreign cookie line alone is no such evidence: off removes its own lines and names the one it left', async () => {
     const b = box('ccrc-auth-off-cookie-',
       `${portLines()}CCRC_AUTH=on\nCCRC_RP_ID=localhost\nCCRC_ORIGIN=http://localhost:${PORT}\nCCRC_COOKIE_INSECURE=yes\n`);
@@ -668,6 +697,20 @@ describe.skipIf(IS_DARWIN)("ccrc auth: the unit's other sources of its environme
     });
   }
 
+  // Wave 193: a drop-in on disk that systemd also lists as loaded is one source, named once (the de-duplication had no
+  // case; review 4061 C5 moved it from the printed words to the paths themselves).
+  it('names a drop-in on disk that systemd also loaded once, as the drop-in on disk', async () => {
+    const b = box('ccrc-auth-src-dedupe-', portLines());
+    dropIn(b.home, 'ccrc.service.d', 'bind.conf', '[Service]\nEnvironment=CCRC_HOST=0.0.0.0\n');
+    writeFileSync(join(b.home, 'sd-dropins'), join(units(b.home), 'ccrc.service.d', 'bind.conf'));
+    for (const sub of ['on', 'off']) {
+      const r = await runTty(b.home, ['auth', sub]);
+      await expectRefused(b, r, bytes(envFile(b.home)), /ccrc\.service\.d\/bind\.conf is a drop-in for ccrc\.service/);
+      expect(r.out.match(/bind\.conf/g)).toHaveLength(1);
+      expect(r.out).not.toMatch(/systemd loaded the drop-in/);
+    }
+  });
+
   it('refuses a drop-in directory it cannot list, and a service manager it cannot ask, as not measured', async () => {
     const a = box('ccrc-auth-src-unlisted-', portLines());
     mkdirSync(join(units(a.home), 'ccrc.service.d'));
@@ -735,21 +778,28 @@ describe.skipIf(IS_DARWIN)('ccrc auth: the installed unit is the installer\'s, a
   // Fix round 2 (R1): only a role word the install takes for a box this verb serves is printed; any other content is
   // never printed, and the sentence says the recorded role is not one the install takes. Each case asserts the whole
   // printed line, so nothing of the file's content can ride along.
-  const ownLine = (h: string, fix: string): string =>
-    `ccrc: auth on: ${installed(h)} is not the unit file ccrc installs (${join(h, 'ccrc', 'deploy', 'ccrc.service')}), and this `
+  const ownLine = (h: string, fix: string, sub = 'on'): string =>
+    `ccrc: auth ${sub}: ${installed(h)} is not the unit file ccrc installs (${join(h, 'ccrc', 'deploy', 'ccrc.service')}), and this `
     + `verb acts only on its own. To go on: ${fix}; or set the keys by hand (the README's 'The session gate'). Nothing was changed.`;
   const printed = (out: string): string => out.replace(/\r/g, '').trim();
-  it('names the recorded role in the install that puts a hand-edited unit back', async () => {
-    const b = box('ccrc-auth-own-role-', `CCRC_ROLE=server\n${portLines()}`);
-    writeFileSync(installed(b.home), `${SHIPPED_UNIT}# edited\n`);
-    const r = await runTty(b.home, ['auth', 'on']);
-    await expectRefused(b, r, bytes(envFile(b.home)), /ccrc\.service is not the unit file ccrc installs/);
-    expect(r.out).toMatch(/To go on: ccrc install --role server puts the shipped file back and reloads systemd \(an update does not, on a box already on its version\); or set/);
-    expect(r.out).not.toMatch(/<role>|records no role/);
-    expect(printed(r.out)).toBe(ownLine(b.home,
-      'ccrc install --role server puts the shipped file back and reloads systemd (an update does not, on a box already on its version)'));
-  });
+  // Review 4061 C1: `both` is the other word the clamp prints, so it has a row of its own (the mutant that drops it from
+  // the clamp was green without one); `server` and `both`, on and off alike.
+  for (const role of ['server', 'both']) {
+    it(`names the recorded role ${role} in the install that puts a hand-edited unit back, on and off`, async () => {
+      const b = box('ccrc-auth-own-role-', `CCRC_ROLE=${role}\n${portLines()}`);
+      writeFileSync(installed(b.home), `${SHIPPED_UNIT}# edited\n`);
+      for (const sub of ['on', 'off']) {
+        const r = await runTty(b.home, ['auth', sub]);
+        await expectRefused(b, r, bytes(envFile(b.home)), /ccrc\.service is not the unit file ccrc installs/);
+        expect(r.out).toContain(`To go on: ccrc install --role ${role} puts the shipped file back and reloads systemd (an update does not, on a box already on its version); or set`);
+        expect(r.out).not.toMatch(/<role>|records no role/);
+        expect(printed(r.out)).toBe(ownLine(b.home, `ccrc install --role ${role} puts the shipped file back and reloads systemd (an `
+          + 'update does not, on a box already on its version)', sub));
+      }
+    });
+  }
 
+  // Review 4061 C2: the four rows run on `off` as well as `on`; the role check is the same arm for both.
   const notTaken: [string, string][] = [
     ['an unknown word', 'Server'],
     ['a shell metacharacter', 'server; touch /tmp/x'],
@@ -757,18 +807,37 @@ describe.skipIf(IS_DARWIN)('ccrc auth: the installed unit is the installer\'s, a
     ['a very long value', 'x'.repeat(3000)],
   ];
   for (const [name, value] of notTaken) {
-    it(`never prints a recorded role the install does not take: ${name}`, async () => {
+    it(`never prints a recorded role the install does not take, on and off: ${name}`, async () => {
       const b = box('ccrc-auth-own-badrole-', `CCRC_ROLE=${value}\n${portLines()}`);
       writeFileSync(installed(b.home), `${SHIPPED_UNIT}# edited\n`);
-      const r = await runTty(b.home, ['auth', 'on']);
-      await expectRefused(b, r, bytes(envFile(b.home)), /ccrc\.service is not the unit file ccrc installs/);
-      expect(printed(r.out)).toBe(ownLine(b.home, 'ccrc install --role <role> puts the shipped file back and reloads systemd (an '
-        + `update does not, on a box already on its version; the role ${envFile(b.home)} records is not one ccrc install takes, and a `
-        + 'bare install takes role both)'));
-      expect(r.out).not.toContain(value);
-      expect(r.out).not.toMatch(/records no role/);
+      for (const sub of ['on', 'off']) {
+        const r = await runTty(b.home, ['auth', sub]);
+        await expectRefused(b, r, bytes(envFile(b.home)), /ccrc\.service is not the unit file ccrc installs/);
+        expect(printed(r.out)).toBe(ownLine(b.home, 'ccrc install --role <role> puts the shipped file back and reloads systemd (an '
+          + `update does not, on a box already on its version; the role ${envFile(b.home)} records is not one ccrc install takes, and a `
+          + 'bare install takes role both)', sub));
+        expect(r.out).not.toContain(value);
+        expect(r.out).not.toMatch(/records no role/);
+      }
     });
   }
+
+  // Review 4061 C4: a ccrc.env that cannot be read records a role nobody read, which is not "no role": its own words.
+  it('says an unreadable ccrc.env was not read for its role, never that it records none, on and off', async () => {
+    const b = box('ccrc-auth-own-unread-', `CCRC_ROLE=server\n${portLines()}`);
+    writeFileSync(installed(b.home), `${SHIPPED_UNIT}# edited\n`);
+    const before = bytes(envFile(b.home));
+    for (const sub of ['on', 'off']) {
+      chmodSync(envFile(b.home), 0o000);
+      let r: Result;
+      try { r = await runTty(b.home, ['auth', sub]); } finally { chmodSync(envFile(b.home), 0o600); }
+      await expectRefused(b, r, before, /ccrc\.service is not the unit file ccrc installs/);
+      expect(printed(r.out)).toBe(ownLine(b.home, 'ccrc install --role <role> puts the shipped file back and reloads systemd (an '
+        + `update does not, on a box already on its version; ${envFile(b.home)} cannot be read, so the role it records was not `
+        + 'read, and a bare install takes role both)', sub));
+      expect(r.out).not.toMatch(/records no role|is not one ccrc install takes/);
+    }
+  });
 
   it('refuses a unit systemd has not reloaded since it changed, and a systemd that does not say, naming the reload', async () => {
     const a = box('ccrc-auth-own-stale-', portLines());
@@ -778,10 +847,16 @@ describe.skipIf(IS_DARWIN)('ccrc auth: the installed unit is the installer\'s, a
       await expectRefused(a, r, bytes(envFile(a.home)), /systemd has not loaded .*ccrc\.service as it is now \(NeedDaemonReload=yes\)/);
       expect(r.out).toMatch(/To go on: run systemctl --user daemon-reload, then re-run/);
     }
+    // Wave 193 C6: no answer is not cured by a reload, so the way on says there is none from here and names the hand route.
     const c = box('ccrc-auth-own-unsaid-', portLines());
     writeFileSync(join(c.home, 'sd-needreload-fails'), '');
-    await expectRefused(c, await runTty(c.home, ['auth', 'on']), bytes(envFile(c.home)),
-      /systemctl --user show did not say whether systemd loaded .*ccrc\.service as it is now \(NeedDaemonReload\), so what the restart would apply was not measured/);
+    for (const sub of ['on', 'off']) {
+      const r = await runTty(c.home, ['auth', sub]);
+      await expectRefused(c, r, bytes(envFile(c.home)),
+        /systemctl --user show did not say whether systemd loaded .*ccrc\.service as it is now \(NeedDaemonReload\), so what the restart would apply was not measured/);
+      expect(r.out).toMatch(/To go on: this systemd does not answer NeedDaemonReload, so this verb cannot prove the unit on this box; set the keys by hand \(the README's 'The session gate'\)\. Nothing was changed\./);
+      expect(r.out).not.toMatch(/daemon-reload/);
+    }
   });
 
   // Wave 190 F1: the compare and the reload answer say nothing of WHICH file systemd loaded. A unit of the same name
@@ -850,8 +925,12 @@ describe.skipIf(IS_DARWIN)('ccrc auth: the installed unit is the installer\'s, a
       const b = box('ccrc-auth-frag-unsaid-', portLines());
       writeFileSync(join(b.home, 'sd-fragment'), answer);
       for (const sub of ['on', 'off']) {
-        await expectRefused(b, await runTty(b.home, ['auth', sub]), bytes(envFile(b.home)),
+        const r = await runTty(b.home, ['auth', sub]);
+        await expectRefused(b, r, bytes(envFile(b.home)),
           /systemctl --user show did not say which file systemd loaded for ccrc\.service \(FragmentPath\), so what the restart would apply was not measured/);
+        // Wave 193 C6: a reload does not make systemd name a file, so the way on names the hand route, never the reload.
+        expect(r.out).toMatch(/To go on: this systemd names no file it loaded for ccrc\.service, and a reload does not make it name one, so this verb cannot prove the unit on this box; set the keys by hand \(the README's 'The session gate'\)\. Nothing was changed\./);
+        expect(r.out).not.toMatch(/daemon-reload/);
       }
     }
   });
@@ -1287,6 +1366,126 @@ describe.skipIf(IS_DARWIN)('ccrc auth: every refusal before the write (review 39
         /systemctl --user show-environment did not answer, so the user service manager's environment was not read/);
     }
   });
+});
+
+// Review 4061 C5: a value the verb read from a file, or from what the service manager answers, reaches the terminal only
+// whole and in a closed form (letters, digits and ._/@:+,%=~-[], at most 1024 bytes); anything else is printed as
+// "[a value this verb does not print]", so an escape sequence, a newline or a quote in it never reaches the terminal or
+// a line the operator is told to copy. Each row: the refusal it reaches, on and off where both reach it, and no byte of
+// the value in the output. A quote in a CCRC_HOST or CCRC_AUTH_SECRET_PATH line never reaches a print at all: the unit
+// reader refuses any quote that is not one whole pair as undecidable, naming the line and not its value (its two rows
+// pin that, and were green before C5).
+describe.skipIf(IS_DARWIN)('ccrc auth: a value read from a file is printed only in a closed form (review 4061 C5)', () => {
+  const HELD = '[a value this verb does not print]';
+  const ESC = '\x1b[2J';
+  const units = (h: string): string => join(h, '.config', 'systemd', 'user');
+  const oneLine = (out: string): string[] => out.replace(/\r/g, '').trim().split('\n');
+  const heldIn = (r: Result, ...raw: string[]): void => {
+    expect(r.out).toContain(HELD);
+    expect(r.out).not.toContain('\x1b');
+    for (const v of raw) expect(r.out).not.toContain(v);
+    expect(oneLine(r.out)).toHaveLength(1);
+  };
+  const cases: [string, string, (h: string) => void, string[], RegExp][] = [
+    ['CCRC_HOST with an escape sequence (the bind sentence)', `CCRC_HOST=0.0.0.0${ESC}\nCCRC_PORT=@PORT@\n`, () => {}, ['0.0.0.0'],
+      /CCRC_HOST=\[a value this verb does not print\] in .*ccrc\.env is not a value this verb can read as this machine only/],
+    ['CCRC_HOST with an escape sequence beside an exposure file (the reach reasons)', `CCRC_HOST=0.0.0.0${ESC}\nCCRC_PORT=@PORT@\n`,
+      (h) => writeFileSync(join(h, '.ccrc', 'exposure.env'), 'CCRC_AUTH=on\n', { mode: 0o600 }), ['0.0.0.0'],
+      /this box is reached from elsewhere \(CCRC_HOST=\[a value this verb does not print\] in .*ccrc\.env; .*exposure\.env exists\)/],
+    ["an EnvironmentFile= line naming a path with an escape sequence and a quote", '@PORTLINES@',
+      (h) => writeFileSync(join(units(h), 'ccrc.service'),
+        SHIPPED_UNIT.replace('[Service]\n', `[Service]\nEnvironmentFile=-%h/.ccrc/m${ESC}'q.env\n`)), ["'q.env"],
+      /ccrc\.service reads \[a value this verb does not print\] \(EnvironmentFile=\)/],
+    ['an EnvironmentFile= line naming a path with a quote alone', '@PORTLINES@',
+      (h) => writeFileSync(join(units(h), 'ccrc.service'),
+        SHIPPED_UNIT.replace('[Service]\n', "[Service]\nEnvironmentFile=-%h/.ccrc/it's.env\n")), ["it's"],
+      /ccrc\.service reads \[a value this verb does not print\] \(EnvironmentFile=\)/],
+    ['a drop-in whose file name holds a newline, an escape sequence and a quote', '@PORTLINES@', (h) => {
+      mkdirSync(join(units(h), 'ccrc.service.d'), { recursive: true });
+      writeFileSync(join(units(h), 'ccrc.service.d', `b'\n${ESC}.conf`), '[Service]\n');
+    }, ["b'"], /\[a value this verb does not print\] is a drop-in for ccrc\.service/],
+    // One byte class a row, so a grammar that let any one of them through is red by its own row.
+    ...([['a newline', 'b\nc.conf', 'c.conf'], ['an escape sequence', `b${ESC}c.conf`, 'c.conf'], ['a quote', "b'c.conf", "b'c"],
+      ['a space', 'b c.conf', 'b c']] as const).map(([what, file, raw]): [string, string, (h: string) => void, string[], RegExp] => [
+      `a drop-in whose file name holds ${what} alone`, '@PORTLINES@', (h) => {
+        mkdirSync(join(units(h), 'ccrc.service.d'), { recursive: true });
+        writeFileSync(join(units(h), 'ccrc.service.d', file), '[Service]\n');
+      }, [raw], /\[a value this verb does not print\] is a drop-in for ccrc\.service/]),
+    ['a drop-in systemd loaded from a path with an escape sequence', '@PORTLINES@',
+      (h) => writeFileSync(join(h, 'sd-dropins'), `/etc/systemd/user/ccrc.service.d/x${ESC}.conf`), ['/etc/systemd'],
+      /systemd loaded the drop-in \[a value this verb does not print\] for ccrc\.service/],
+    ['an environment file systemd loaded from a path with an escape sequence', '@PORTLINES@',
+      (h) => writeFileSync(join(h, 'sd-envfiles'), `EnvironmentFiles=${join(h, '.ccrc', 'ccrc.env')} (ignore_errors=yes)\n`
+        + `EnvironmentFiles=/etc/ccrc/e${ESC}.env (ignore_errors=no)\n`), ['/etc/ccrc'],
+      /systemd loaded ccrc\.service with the environment file \[a value this verb does not print\]/],
+    ['a FragmentPath with an escape sequence', '@PORTLINES@',
+      (h) => writeFileSync(join(h, 'sd-fragment'), `FragmentPath=/run/user/1/systemd/u${ESC}/ccrc.service\n`), ['/run/user'],
+      /systemd loaded ccrc\.service from \[a value this verb does not print\], not from .*ccrc\.service, the file this verb read/],
+    ['a SourcePath with an escape sequence', '@PORTLINES@',
+      (h) => writeFileSync(join(h, 'sd-sourcepath'), `SourcePath=/etc/x${ESC}\n`), ['/etc/x'],
+      /systemd made ccrc\.service from \[a value this verb does not print\] \(SourcePath\)/],
+  ];
+  for (const [name, envText, plant, raw, words] of cases) {
+    it(`never prints ${name}, on and off`, async () => {
+      const b = box('ccrc-auth-held-', envText.replace('@PORTLINES@', portLines()).replace('@PORT@', String(PORT)));
+      plant(b.home);
+      const before = bytes(envFile(b.home));
+      for (const sub of ['on', 'off']) {
+        const r = await runTty(b.home, ['auth', sub]);
+        await expectRefused(b, r, before, words);
+        heldIn(r, ...raw);
+      }
+    });
+  }
+
+  // The passphrase path, in each of the three sentences that name it (`on` alone reads it).
+  const secrets: [string, string, (h: string, p: string) => void, string[], RegExp][] = [
+    ['no passphrase file at it', `/nonexistent/a${ESC}b.scrypt`, () => {}, ['/nonexistent', 'b.scrypt'],
+      /there is no passphrase yet \(\[a value this verb does not print\]\)/],
+    ['a passphrase file there the server could not use', `@HOME@/.ccrc/g${ESC}x.scrypt`,
+      (_h, p) => writeFileSync(p, 'not a secret line\n', { mode: 0o600 }), ['x.scrypt'],
+      /the passphrase file at \[a value this verb does not print\] cannot be used/],
+    ['a relative path', `sec${ESC}ret.scrypt`, () => {}, ['ret.scrypt'], /to a RELATIVE path \(\[a value this verb does not print\]\)/],
+  ];
+  for (const [name, value, plant, raw, words] of secrets) {
+    it(`never prints a CCRC_AUTH_SECRET_PATH with an escape sequence: ${name}`, async () => {
+      const b = box('ccrc-auth-held-secret-', portLines(), { passphrase: false });
+      const p = value.replace('@HOME@', b.home);
+      writeFileSync(envFile(b.home), `${portLines()}CCRC_AUTH_SECRET_PATH=${p}\n`, { mode: 0o600 });
+      plant(b.home, p);
+      const r = await runTty(b.home, ['auth', 'on']);
+      await expectRefused(b, r, bytes(envFile(b.home)), words);
+      heldIn(r, ...raw);
+    });
+  }
+
+  // What the service manager answers for the unit's state is printed in the failed proof's sentence: held the same way.
+  it('never prints a state word the service manager answers with an escape sequence in it (a failed proof)', async () => {
+    const b = box('ccrc-auth-held-state-', portLines());
+    writeFileSync(join(b.home, 'sd-is-active'), `activ${ESC}e\n`);
+    const before = bytes(envFile(b.home));
+    const r = await runTty(b.home, ['auth', 'on']);
+    expect(r.code, r.out).toBe(1);
+    expect(r.out).toMatch(/the restarted console did not prove the change: after 2s ccrc\.service is \[a value this verb does not print\] and/);
+    expect(r.out).not.toContain('\x1b');
+    expect(r.out).not.toContain('activ');
+    expect(bytes(envFile(b.home))).toBe(before);
+    expect(leftovers(b.home)).toEqual([]);
+  });
+
+  // Held already by the unit reader, before any print (pins, green before C5).
+  for (const [name, line] of [
+    ['a quote in CCRC_HOST', "CCRC_HOST=0.0.0.0'x"],
+    ['a CCRC_HOST value that spans a newline', 'CCRC_HOST="0.0.0.0\nevil"'],
+    ['a quote in CCRC_AUTH_SECRET_PATH', "CCRC_AUTH_SECRET_PATH=/tmp/a'b"],
+  ] as const) {
+    it(`never prints ${name}: the unit reader refuses it as undecidable, naming the line`, async () => {
+      const b = box('ccrc-auth-held-reader-', `CCRC_PORT=${PORT}\n${line}\n`);
+      const r = await runTty(b.home, ['auth', 'on']);
+      await expectRefused(b, r, bytes(envFile(b.home)), /was not measured/);
+      expect(r.out).not.toMatch(/'x|evil|a'b/);
+    });
+  }
 });
 
 describe.skipIf(IS_DARWIN)('ccrc auth: the verb is in the usage and the verb table', () => {
