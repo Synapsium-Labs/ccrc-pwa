@@ -40,13 +40,15 @@ import { leafName } from './docsTree';
 import { MockupFrame, mockupFrameProps } from './MockupFrame';
 import { buildMockupSrcdoc, extractMockupRefs, startMockupLoad, type MockupBuild, type MockupExtract } from './mockup/load';
 import {
-  capRows, censusCounts, censusOf, draftPinsOf, hasConservativeAdmission, linksOf, originsOf, pageHasScripts, type PageLink, type RouteOf,
+  capRows, censusCounts, censusOf, draftPinsOf, hasConservativeAdmission, linksOf, loaderOverBudget, originsOf, pageHasScripts,
+  type PageLink, type RouteOf,
 } from './mockup/census';
 import { scriptTextOrigins } from './mockup/origins';
 import { parseMockup } from './mockup/parse';
 import { MockupContextMismatch, planMockupAssets } from './mockup/plan';
 import {
-  MOCKUP_AUTO_RENDER_BYTES, MOCKUP_MAX_ATTRIBUTES, MOCKUP_MAX_DEPTH, MOCKUP_MAX_OPEN_FORMATTING, MOCKUP_MAX_TAGS,
+  MOCKUP_AUTO_RENDER_BYTES, MOCKUP_MAX_ASSET_BYTES, MOCKUP_MAX_ASSETS, MOCKUP_MAX_ATTRIBUTES, MOCKUP_MAX_DEPTH, MOCKUP_MAX_OPEN_FORMATTING,
+  MOCKUP_MAX_TAGS,
 } from './mockup/policy';
 import type { HttpsOrigin, MockupAssetPlan, MockupAssetReader, MockupAssetResult, MockupContext } from './mockup/ports';
 import { prescanMockup, type MockupPrescan } from './mockup/prescan';
@@ -262,8 +264,9 @@ function MockupLive(p: MockupViewProps & {
       host.current.relist();
     };
     const observing: MockupAssetReader = {
-      read: async (readPin, signal) => {
-        const answer = await p.reader.read(readPin, signal);
+      read: async (readPin, signal, range) => {
+        // X2 P6.2: a range read is passed on as asked, so a fetched sibling above its cap still reads by range.
+        const answer = await (range === undefined ? p.reader.read(readPin, signal) : p.reader.read(readPin, signal, range));
         if (answer.kind === 'failed' && DOCS_RELIST_WORDS.has(answer.failure as DocsFailure)) moved();
         return answer;
       },
@@ -405,11 +408,15 @@ function MockupLive(p: MockupViewProps & {
     remount();
   };
 
+  const overBudget = build !== null && build.ok && loaderOverBudget(build.plan.rows);
   let region: ReactNode;
   if (build === null) {
     region = <p className="docs-loading">{DOCS_VIEW_TEXT.loading}</p>;
   } else if (!build.ok) {
     region = <p className="docs-note">{MOCKUP_TEXT.tooLarge}</p>;
+  } else if (overBudget) {
+    // X2 P6.2 (spec 4.8): what the loader must give the page does not fit, so it does not run; Source and Download stay.
+    region = <p className="docs-note">{fillSentence(MOCKUP_TEXT.overBudget, { n: MOCKUP_MAX_ASSETS, size: kib(MOCKUP_MAX_ASSET_BYTES) })}</p>;
   } else if (away) {
     region = (
       <NoteAction note={MOCKUP_TEXT.navigatedAway} label={MOCKUP_TEXT.reload} onClick={() => { setAway(false); remount(); }} />
@@ -426,7 +433,7 @@ function MockupLive(p: MockupViewProps & {
       </div>
     );
   }
-  const framed = build !== null && build.ok;
+  const framed = build !== null && build.ok && !overBudget;
   const offeredCount = origins === null ? 0 : origins.offered.length;
   const scriptsOffBadge = hasScripts && !scripted;
   const conservative = build !== null && hasConservativeAdmission(build.plan.rows);

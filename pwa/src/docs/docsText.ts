@@ -16,7 +16,7 @@ import type { ShareFields, ShareNote, ShareNoteLine, ShareRefusal } from './shar
 import type { ExportMissing, ExportPlain, ExportWait } from './export/policy';
 import type { MockupRefVerdict } from './mockup/ports';
 import type { MockupPrescan } from './mockup/prescan';
-import { MOCKUP_MAX_CSS_DEPTH } from './mockup/policy';
+import { MOCKUP_MAX_CSS_DEPTH, MOCKUP_MODULE_MAX_DEPTH } from './mockup/policy';
 
 /** One sentence per docs failure word (spec 4.7), at least 20 characters each (M4.F1). */
 export const DOCS_FAILURE_SENTENCE: Record<DocsFailure, string> = {
@@ -880,6 +880,9 @@ export const MOCKUP_TEXT = {
     + 'Limits: depth {maxDepth}, {maxTags} tags, {maxFormatting} formatting elements open, {maxAttributes} attributes on one tag.',
   render: 'Render mockup · {size}',
   tooLarge: 'Too large to render; use Download.',
+  /** X2 P6.2: a page whose modules or fetched files do not fit the asset budget (spec 4.8; `MOCKUP_MAX_ASSETS` and
+   *  `MOCKUP_MAX_ASSET_BYTES`). It does not run, and Source and Download stay. */
+  overBudget: 'Not rendered: the modules and files this page loads are over the limit of {n} files and {size} in all. Use Download to open it outside Docs.',
   embeds: 'embeds {k} uncommitted asset{s}',
   scriptsOff: 'scripts off',
   notLoaded: '{n} not loaded',
@@ -934,6 +937,12 @@ export const MOCKUP_VERDICT_SENTENCE = {
     'kind': 'its file type does not fit what the page uses it for',
     'element': 'an element the policy blocks',
     'css-depth': 'it is nested more than {n} stylesheets deep',
+    'module-depth': 'it is imported more than {n} modules deep',
+    'cycle': 'it imports a module that imports it back, so Docs does not load it',
+    'dynamic': 'a dynamic import, which Docs does not follow',
+    'unreadable': 'a module name written with an escape, which Docs does not read',
+    'bare': "a module name the page's import map does not name",
+    'scan-limit': 'past the most a script may name that Docs reads',
   },
   skipped: {
     'too-large': 'its listed size is over the limit for its kind',
@@ -970,7 +979,7 @@ export function mockupVerdictSentence(v: MockupRefVerdict, offered: boolean): st
     case 'missing':
       return DOC_IMAGE_REFUSED_SENTENCE[v.why === 'absent-at-commit' ? 'absent' : v.why];
     case 'unsupported':
-      return fillSentence(MOCKUP_VERDICT_SENTENCE.unsupported[v.why], { n: MOCKUP_MAX_CSS_DEPTH });
+      return fillSentence(MOCKUP_VERDICT_SENTENCE.unsupported[v.why], { n: v.why === 'module-depth' ? MOCKUP_MODULE_MAX_DEPTH : MOCKUP_MAX_CSS_DEPTH });
     case 'skipped':
       return MOCKUP_VERDICT_SENTENCE.skipped[v.why];
     case 'failed':
