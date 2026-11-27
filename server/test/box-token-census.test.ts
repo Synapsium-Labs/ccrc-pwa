@@ -59,6 +59,7 @@ import { readdirSync } from 'node:fs';
 import path from 'node:path';
 import { DOCS_PAGE_PREFIX } from '../../shared/docs.js';
 import { ccdSource } from './ccdWsHelpers.js';
+import { HELPER_ROUTES } from './boxTokenHelperRoutes.js';
 import {
   REPO, read, COORD_SRC, SERVER_SRC, UPDATE_SRC, TOKEN_SRC, LEDGER_SRC, LINEAR_PROXY_SRC, LINKING_SRC, CALLS_SRC, REMAINING_SRC, PLAN_SRC, CONTINUITY_SRC, GATE_PATTERNS, registrationsIn, lanesIn, handlerBody, UNGATED_DOORS, SESSION_ONLY_DOORS,
 } from './routeRegistrations.js';
@@ -101,13 +102,9 @@ const CCD_SRC = ccdSource();
 
 /** The box frames recipe's read (Desktop polish wave 187; review 4069's F6): `GET /api/testbox/frames`, a routes file of its
  *  own whose box-token check is COMPOSED in `coord/routes.ts` and handed in (`registerTestboxFramesRoute(app, { boxToken })`).
- *  The helper's call is that route's registration there, as `coord-token.test.ts`'s `HELPER_ROUTES` reads it, so the check
- *  in its arguments is credited to the frames read and not to `GET /api/testbox`, the status read registered above it. Each
- *  row is held to its own file below. */
-const TESTBOX_FRAMES_SRC = read('server/src/testboxFramesRoutes.ts');
-const HELPER_ROUTES: Readonly<Record<string, { readonly key: string; readonly src: string }>> = {
-  registerTestboxFramesRoute: { key: 'GET /api/testbox/frames', src: TESTBOX_FRAMES_SRC },
-};
+ *  The helper's call is that route's registration there, read from the one table of helper routes, `boxTokenHelperRoutes.ts`,
+ *  which `coord-token.test.ts` reads too (review 4086's F-F), so the check in its arguments is credited to the frames read and
+ *  not to `GET /api/testbox`, the status read registered above it. Each row is held to its own file below. */
 const HELPER_KEYS = new Set(Object.values(HELPER_ROUTES).map((r) => r.key));
 /** `lanesIn` with the helper calls of `HELPER_ROUTES` counted as registrations, so each slice runs to the next of either. */
 const lanesWithHelpersIn = (src: string): string[] => {
@@ -1778,7 +1775,8 @@ describe('the frames read: a helper-registered route whose box-token check is co
     expect(COORD_LANES, 'a helper route was counted twice').not.toContain('GET /api/testbox/frames');
   });
   it('each helper row is held to its own file: the file registers exactly that route, and its handler asks the check it is given', () => {
-    for (const { key, src } of Object.values(HELPER_ROUTES)) {
+    for (const { key, file } of Object.values(HELPER_ROUTES)) {
+      const src = read(file);
       expect(registrationsIn(src).map((r) => r.key)).toEqual([key]);
       expect(handlerBody(src, key)).toMatch(/d\.boxToken\(req\)/);
     }
