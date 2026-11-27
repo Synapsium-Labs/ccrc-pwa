@@ -158,16 +158,23 @@ not after.
      ends in a new wave-done and a NEW review run (step 5); review runs are never reused.
      **A fix round with no report behind it** comes from `merging`, and the
      cause you measured decides which of two forms it takes. **An ejection** is
-     sent in two cases only: the new-head route for a red that is `main`'s own
-     (`references/wave-lifecycle.md` §5b), and a dequeue (§5) whose cause is a
-     conflict you measured: after one `git fetch origin`, `git merge-tree
-     --write-tree --name-only --no-messages origin/main <handoffCommit>` exits 1
-     with a tree id on its first line, then the conflicted paths. Its body holds
-     three entries, one to a line, and nothing else: `ejected: new-head:#<pr>`
-     or `ejected: dequeued:#<pr>`, then `base: <sha>`, the `origin/main` sha you
-     read after one `git fetch origin`, then `checks: <required names that are
-     red>` for the new-head route or `paths: <the conflicted paths>` for the
-     dequeue. Every ejection is clause 15's ejection, its base recorded on the
+     sent in three cases only: the new-head route for a red that is `main`'s own
+     (`references/wave-lifecycle.md` §5b), a dequeue (§5) whose cause is a
+     conflict you measured, and a conflict you measured on this run's own pinned
+     entry, an entry whose PR was never queued, at the head of the landing line
+     or behind it (§5b, **The landing line**; D-9160): for a dequeue, after one
+     `git fetch origin`, `git merge-tree --write-tree --name-only --no-messages
+     origin/main <handoffCommit>` exits 1 with a tree id on its first line, then
+     the conflicted paths, and for an entry whose PR was never queued the same
+     probe of its `pinnedSha` in place of `<handoffCommit>` does. A run that
+     received `dequeued:#<pr>` for this PR in this episode takes the dequeue
+     form. Its body holds three entries, one to a line, and nothing else:
+     `ejected: new-head:#<pr>`, `ejected: dequeued:#<pr>` or `ejected:
+     conflict:#<pr>`, then `base: <sha>`, the `origin/main` sha you read after
+     one `git fetch origin`, then `checks: <required names that are red>` for
+     the new-head route or `paths: <the conflicted paths>` for a dequeue or an
+     entry whose PR was never queued. Every ejection is clause 15's ejection,
+     its base recorded on the
      landing line by the advance that sends the run back: first read the line,
      `GET /api/landing?project=<project>&pr=<pr>` (`ccrc-api landing show
      --project <project> --pr <pr>`), and send an ejection only where this PR's
@@ -185,9 +192,9 @@ not after.
      route Q disarm first (§5), on every route turn the PR back into a draft
      with `gh pr ready <pr> --undo` (D-8997), then make the same advance to `working`, on the
      `merging → working` edge, and send the same `fix-round` mail with no
-     `artifacts`. Every `ejected:` round's advance carries `ejection`, an
-     object of two fields: `base`, the sha on the mail's `base:` line, and
-     `kind`, `new-head` or `dequeued` as the mail's first line names it; a
+     `artifacts`. Every `ejected:` round's advance carries `ejection`, an object
+     of two fields: `base`, the sha on the mail's `base:` line, and `kind`,
+     `new-head`, `dequeued` or `conflict` as the mail's first line names it; a
      `red:` round's advance, and any other retreat, carries none. Send the
      `ejected:` mail once the advance's answer reads `landing.kind` `ejected`
      and `landing.entry.baseSha` equals the base you sent. If it reads
