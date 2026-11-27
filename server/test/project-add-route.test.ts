@@ -185,12 +185,12 @@ describe('ProjectWalkCache.drop', () => {
   it('forgets the kept walk at once', () => {
     let now = 1000;
     const c = new ProjectWalkCache(() => now);
-    c.keepWalk([], c.stamp());
+    c.keepWalk([], c.stamp(), []);
     expect(c.keptWalk()).toEqual([]);
     c.drop();
     expect(c.keptWalk()).toBeNull();
     now += 1;
-    c.keepWalk([], c.stamp());
+    c.keepWalk([], c.stamp(), []);
     expect(c.keptWalk(), 'a walk that starts after the drop is kept').toEqual([]);
   });
 
@@ -201,7 +201,7 @@ describe('ProjectWalkCache.drop', () => {
     now += 5;
     c.drop();
     now += 5;
-    c.keepWalk([], before);
+    c.keepWalk([], before, []);
     expect(c.keptWalk()).toBeNull();
   });
 
@@ -210,7 +210,7 @@ describe('ProjectWalkCache.drop', () => {
     const c = new ProjectWalkCache(() => now);
     c.drop();
     now = 500;
-    c.keepWalk([], c.stamp());
+    c.keepWalk([], c.stamp(), []);
     expect(c.keptWalk()).toEqual([]);
   });
 });
