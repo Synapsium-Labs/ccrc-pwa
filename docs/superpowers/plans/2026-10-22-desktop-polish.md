@@ -5928,17 +5928,20 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   accepted cost; each is frozen by its own hash and named by its commit; a test cannot read a commit through git. Why:
   the gated program costs 0.75 of the original at 64 KB, so 1.5 x the original let the deny path's cost about double
   before the row went red. In the bracket runs a quadratic step of about +80%, (n/7.6)², read 1.34 of the original,
-  green, and about +105% sat at the bound. Through the real test file a lighter step, (n/8)², about +74% of the gated
-  cost, was green against the original (a cell reconstructed from the printed samples, about 1.30 of it) and reads red
+  green, and about +105% sat at the bound. Through the real test file a lighter step, (n/8)², about +72% of the gated
+  cost by scaling from +80% for (n/7.6)², was green against the original (a cell reconstructed from the printed samples, about 1.30 of it) and reads red
   on the new baseline (15.5 s against 13.4 s). On the deny path, on a loaded box, a quadratic step is sure red near
-  +90% of the gated cost, and is decided by the baseline sample's own spread between about +28% and +50%. Hosted,
+  +90% of the gated cost, and is decided by the baseline sample's own spread between about +28% and +50%; those step
+  sizes are scaled by 1/k² from review 4009's reading of (n/7.6)², +94% of the gated cost on its box, and on the task
+  note's own +80% for that step each is 0.85 times as large. Hosted,
   where the two samples agree to under 1%, the edge is near +50%. The deny rows keep the 25 ms floor.
 
   The class rows, whose program costs about one jq start-up, take a floor of their own, 100 ms (`COST_FLOOR_MS`). It
   is the owner's call 1643, amending the class-floor part of call 1562, which had set 250 ms. The floor exists for one
   reason, to keep run-to-run noise off the bound: a class cost row is green on a class path dearer by less than the
   floor (through the real test file: about +80 ms green, about +120 ms red). The class bound is the baseline plus
-  100 ms, about 150 to 195 ms on the hosted runs read (164 to 193 ms at the head). The owner's rule for the value: on
+  100 ms, about 150 to 195 ms on the hosted runs read (152 and 163 ms on the merged head's fast run, 164 and 193 ms at
+  fix round 1's head). The owner's rule for the value: on
   hosted runs, each class row's reading less its own baseline must be at or under 50 ms, half the floor; if any is
   over, the floor is 150 ms, and this entry names the row and the run. Read on baff80048a, before the floor changed (a
   reading does not depend on the floor):
@@ -5951,8 +5954,19 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   Every difference is at or under 50 ms, so 100 ms stands. Each cost row prints its figures on green.
 
   Which row reads which file is one table, `ROW_BASELINE`. `programsOf` maps a row to its two program texts, and
-  `pairCells` puts each text's sample in its own cell. Cases that measure nothing pin all three, and a scan of the
-  test file pins the call sites (reviews 4009 F2 and 4016 F1). What is pinned now: the linearity rows pin doubling-size
+  `pairCells` puts each text's sample in its own cell. Between its row's programs and its assertion a measuring case
+  calls `costReading` or `linearityReading`, pure but for the programs and the timing function it is handed, and the
+  timing function is `timedBy` on the real child runner (wave 191, reviews 4024 M1 and 4046 M1'). Held by a case that
+  burns no CPU: the table, that the file registers one measuring case per row of it, the mapping, the cells, the reader
+  (it returns the bytes it hashed and refuses a wrong hash), `timedBy` (it runs the program it is given), for all eight
+  rows which program each reading came from, its cell, the order and the count, and the bound of the four cost rows
+  (quotes/deny, quotes/class, dqsub/deny and dqsub/class). Held by a scan of the test file, which reads text: that each
+  measuring case's body is that one call on the real `programsOf` and `timed`, with its timeout literals; that the
+  five lines composing the hook's path, the hook's program, the reader, `programsOf` and `timed` are the real ones; and
+  that none of the seventeen names in its table is bound twice. Not held: the crossings measured as still passing
+  every case, which the task note's §9 lists with who measured them; the list is what was measured, not a claim that
+  nothing else passes.
+  What is pinned now: the linearity rows pin doubling-size
   scaling against the original, the cost rows pin cost against the program at the gate, and no row bounds cost
   against the original, so FD8's historical-cost half no longer holds for any row.
 
