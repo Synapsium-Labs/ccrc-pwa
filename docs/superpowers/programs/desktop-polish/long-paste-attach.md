@@ -43,7 +43,7 @@ step-1 proposal with nine conditions, and corrected condition 1 on the worker's 
 | `pwa/src/session/pastedTurn.ts` (new) | L1, C3 | The chat's view model: `userTurnView`, `pendingTurnParts`, and since review 4119 the list's price of a turn (`pricedParts`, `PASTED_CHIP_LINES`) and the turn's text for its evidence (`partsText`) |
 | `pwa/src/session/usePasteSave.ts` (new) | L4, C3 | The saves: deadline, concurrency, identity, the unmount guard; since review 4119 a failure says whether a retry could change it, and a session change ends the hold |
 | `pwa/src/session/PastedTextChip.tsx` (new) | L4, C3 | The chat chip and the bubble body that places it |
-| `pwa/src/session/Composer.tsx` | L4, C3 | `send()` routed through the plan and the hook, one snapshot from the tap to the delivery; the hold while saving, the tray's fieldset and the drop's cancel included (see section 8) |
+| `pwa/src/session/Composer.tsx` | L4, C3 | `send()` routed through the plan and the hook, one snapshot from the tap to the delivery; the hold while saving, the tray's fieldset and the drop's cancel included; merged with #3488, the one `held()` helper holds the tray and #3488's `leading` slot only in a composer with a session id (see section 8) |
 | `pwa/src/session/PasteChipBar.tsx`, `pasteChips.css` | L4, C3 | The saving line and the failed chip's notice, on the break notice's audited ground and ink |
 | `pwa/src/session/MessageBubble.tsx`, `PendingBubble.tsx`, `ChatList.tsx`, `chat.css` | L4, C3 | The chip in the bubbles, linked on the whole turn's evidence; the list prices a pointer of this session as the chip it draws; the tray hold's rule |
 
@@ -85,8 +85,9 @@ step-1 proposal with nine conditions, and corrected condition 1 on the worker's 
   deadline, four at a time); the composer does not cap n, so the bound grows with the number of chips in one draft.
   While saving, Send is disabled and `aria-busy`, the row says `Saving pasted text…`, the field is read-only, the chip
   row's Expand and Remove are disabled, the paste and the attach button take nothing new, a dropped file is cancelled
-  (so the browser does not open it in place of the page) and taken nowhere, and the tray sits in a disabled fieldset,
-  so its remove and retry cannot be used and read as disabled. A session change in place ends the hold too, with no
+  (so the browser does not open it in place of the page) and taken nowhere, and the tray and a caller's control in the
+  input bar's `leading` slot (#3488) sit in a disabled fieldset, so they cannot be used and read as disabled; the
+  fieldset is drawn only in a composer with a session id, the only one that can save (section 8). A session change in place ends the hold too, with no
   failure shown (not reachable today: the session screen remounts per session).
 - **One snapshot at the tap (review 4119 F1).** A send takes the text, the chip table and the tray's attachments as the
   tap saw them, decides the shell line on that snapshot, and delivers exactly it after the saves: nothing read after
@@ -214,13 +215,20 @@ and the rest as they were). A send with no chip goes out at once, as before. 33 
   the path pattern or the final trim, and was removed in the first round); the hook, the composer, the view model, the
   chip row and the list 30 of 30; the corrected shell line 3 of 3; this round's 20 of 20, the reviewer's five
   survivors among them by name (M07 as F9c, M15, M19, M21, M23). A no-op swap of each swapped module (the hook, the
-  composer) was green 37 of 37 first, so no row is red by the swap itself.
+  composer) was green 37 of 37 first, so no row is red by the swap itself. On the tip that merges `main` 07e8cc51e1
+  (#3488) every row was run again, with the merge's five (section 10): 82 of 82 red, the composer's no-op swap green 39
+  of 39 first.
 - **The browser leg, this round**, on this head merged with `main` 8a7bcacc8b: 40 of 40. Its new cases, in both skins
   and palettes at 390 and 1440 px: while a send saves the tray's remove is disabled and a real click at its place does
   nothing, a dropped file's drag-over and drop are both cancelled (a dispatched drop never runs Chrome's own open-the-file
   default, so the cancel is what the case can pin; the page's address and the draft stay), and the send that goes is
   the tap's (the attachment, then the pointer); and the drawn chip agrees with its price within half a bubble line, the
   turn holding still (within 1 px) for 600 ms after its row is drawn. Wave 169's leg is 33 of 33 on the same merge.
+- **On the tip that merges `main` 07e8cc51e1 (#3488)**, each file alone through the supported runner: this leg 40 of 40,
+  wave 169's 33 of 33, #3488's chat leg (`overlord-chat.browser.test.ts`) 36 of 36, and the other browser files that
+  draw the composer (the inline question card, the chat width, the phone bar and the rest are listed in the wave-done
+  mail) green. The unit files of both sides are green there too: this wave's composer flow 39 of 39, #3488's record suite
+  11 of 11 and its chat suites, the composer's paste-chip suite, the attach and paste suites, and the control census.
 - **Server tests naming a changed file**, each run alone: `server/test/rings/pwa-rings.test.ts`,
   `server/test/w7-compaction-parity.test.ts` (green). The guard suites (rings, single-definition, the censuses and the
   tree scanners that use the source-scan helper) ran as one batch: one red, the UTF-8 byte counter defined a second time
@@ -243,6 +251,38 @@ then the pointer branch, then today's send through `deliver(text, files)`, whose
 optional prop. Whichever lands second re-runs both sides' composer cases (the record suite and this wave's hold cases)
 on the merged file.
 
+**The merge.** #3488 landed first, on `main` as 07e8cc51e1 (its tree the reviewed head 430ad85e83's). This branch
+merged that `main` once; the one conflict was this file, and nothing outside it differs from the scratch merge built
+against 430ad85e83 beforehand (the two trees are identical). After #3488's merge its holder released claim 7629, and
+this wave claimed the file for the merge. The resolution, side by side:
+
+- From #3488: the three props and their destructuring, the `recording` state, and the record branch of `send()`,
+  placed first. It sends `expanded.trim()` and reads no attachments, so it takes no part in the snapshot or the save.
+- From this wave: the snapshot, the pointer branch and `deliver(text, files)`. `deliver` calls `onSend?.(...)` on
+  #3488's now optional prop.
+- Both: `canSend` holds `!saving && !recording`.
+- New in the merge: one helper, `held(node)`, puts a node in the disabled-while-saving group (`attach-tray-hold`).
+  It wraps the tray and the `leading` slot, and only in a composer with a session id, the only one that can save.
+  #3488 adds one control beside the tray, its `leading` slot in the input bar (the chat's "Off the record" toggle),
+  and nothing in the tray or the attachments. So while a send saves, a caller's control in that slot is disabled, as
+  the tray's remove and retry are, and it comes back when the save ends.
+- With no session id, both the slot and the tray are drawn bare. A group is not nothing (it is a role in the
+  accessibility tree and a box in the layout), so it is added only where a save can happen. Every way of staging an
+  attachment already needs a session id, so such a composer's tray is always empty. The Overlord chat is such a
+  composer: it passes no session id and records, so it never saves, and its toggle keeps its own hold while recording.
+
+Two cases pin the slot (`composer-long-paste.test.tsx`):
+- With a session id, a caller's control in the slot cannot be used while saving and comes back after.
+- With no session id, the slot is a direct child of the input bar, no group is anywhere in the composer, and the bar's
+  children are the prompt glyph, the field, the caller's control and Send.
+
+A one-off measurement, not a committed case (it would import #3488's file at a pinned head, and after the merge both
+are one file): the merged composer and #3488's own composer at 430ad85e83 were rendered with no session id and the same
+props, and their markup compared, with the generated ids normalised. Three prop sets were used: record with the
+leading slot, record without it, and today's send with a leading slot. All three are identical, on the scratch merge
+and again on this merge. The same comparison against an earlier scratch commit that always drew the groups failed all
+three, so it does see a difference.
+
 ## 9. Words used here
 
 - **Pointer:** the one line that names a saved pasted text in the sent message.
@@ -250,7 +290,9 @@ on the merged file.
 
 ## 10. Mutants, row by row (review 4119 F13)
 
-Every row was run on the final tip of the fix round. To replay one: in the named file, replace the first text with the
+Every row was run on the final tip of the fix round, and again on the tip that merges `main` 07e8cc51e1 (#3488): all
+red there, with a no-op swap of the composer green 39 of 39 first. F1a and F1b are given as they read in the merged
+file. To replay one: in the named file, replace the first text with the
 second (`⏎` is a line break, `…` marks a row shortened here), run the named suite from `pwa/` through the supported
 runner (`./node_modules/.bin/vitest run <suite>`), see the named case red, and put the file back. Each row names the
 first case that went red; several rows turn more than one case red. The ids are this branch's own; the reviewer's
@@ -325,8 +367,8 @@ round) as F9c.
 
 **This round (review 4119)** (20 rows)
 
-- F1a-deliver-latest: in `pwa/src/session/Composer.tsx`, `    if (files.length > 0) onSend(text, { attachments: files });` becomes `    if (attachments.length > 0) onSend(text, { attachments });`; run `test/composer-long-paste`; red: test/composer-long-paste.test.tsx: a send is one snapshot taken at the tap (review 4119 F1) > a `!` draft with an attachment in front: the attachment removed during the save still goes, so no shell line.
-- F1b-tray-hold: in `pwa/src/session/Composer.tsx`, `<fieldset className="attach-tray-hold" disabled={saving}>` becomes `<fieldset className="attach-tray-hold" disabled={false}>`; run `test/composer-long-paste`; red: test/composer-long-paste.test.tsx: a send is one snapshot taken at the tap (review 4119 F1) > the tray's remove control cannot be used while saving, and says so.
+- F1a-deliver-latest: in `pwa/src/session/Composer.tsx`, `    if (files.length > 0) onSend?.(text, { attachments: files });` becomes `    if (attachments.length > 0) onSend?.(text, { attachments });`; run `test/composer-long-paste`; red: test/composer-long-paste.test.tsx: a send is one snapshot taken at the tap (review 4119 F1) > a `!` draft with an attachment in front: the attachment removed during the save still goes, so no shell line.
+- F1b-tray-hold: in `pwa/src/session/Composer.tsx`, `<fieldset className="attach-tray-hold" disabled={saving}>{node}</fieldset>` becomes `<fieldset className="attach-tray-hold" disabled={false}>{node}</fieldset>`; run `test/composer-long-paste`; red: test/composer-long-paste.test.tsx: a send is one snapshot taken at the tap (review 4119 F1) > the tray's remove control cannot be used while saving, and says so.
 - F7a-drop-cancel: in `pwa/src/session/Composer.tsx`, `        if (id === undefined || disabled) return;⏎        if (e.dataTransfer.files.length === 0) return;` becomes `        if (id === undefined || disabled || saving) return;⏎        if (e.dataTransfer.files.length === 0) …`; run `test/composer-long-paste`; red: test/composer-long-paste.test.tsx: a send is one snapshot taken at the tap (review 4119 F1) > a file dropped during a save is cancelled, so the browser keeps the page, and is taken nowhere.
 - F7b-dragover-target: in `pwa/src/session/Composer.tsx`, `if (!saving) setDropping(true);` becomes `setDropping(true);`; run `test/composer-long-paste`; red: test/composer-long-paste.test.tsx: a send is one snapshot taken at the tap (review 4119 F1) > a file dropped during a save is cancelled, so the browser keeps the page, and is taken nowhere.
 - M19-stale-draft: in `pwa/src/session/Composer.tsx`, `if (saved === null || valueNow.current !== v) return;` becomes `if (saved === null) return;`; run `test/composer-long-paste`; red: test/composer-long-paste.test.tsx: Send is held while saving > a draft changed while saving by any way the hold does not cover is not sent, and stays.
@@ -345,3 +387,11 @@ round) as F9c.
 - F4-turn-evidence: in `pwa/src/session/MessageBubble.tsx`, `linkify(t, refs, said)` becomes `linkify(t, refs)`; run `test/pasted-turn`; red: test/pasted-turn.test.tsx: a turn's repository evidence is the whole turn's (review 4119 F4) > a repository named before a chip still qualifies a bare reference after it.
 - F12-link-from-prefix: in `pwa/src/session/pastedTurn.ts`, `parts.push(pasteView(part.pointer.name, part.pointer.lines));` becomes `parts.push(pasteView(part.pointer.path, part.pointer.lines));`; run `test/pasted-turn`; red: test/pasted-turn.test.tsx: a user turn with a pointer > draws the chip in its place, between the text around it, linking to this session's clip.
 - F8-word-owner: in `shared/pastePointer.ts`, `` export const linesWord = (lines: number): string => `${String(lines)} ${lines === 1 ? 'line' : 'lines'}`; `` becomes `` export const linesWord = (lines: number): string => `${String(lines)} lines`; ``; run `test/paste-`; red: test/paste-chips.test.ts: the label grammar, with one owner for the line count > is the console’s, numbered, with the line count, its spaces no-break; in the field it sits between the markers.
+
+**The merge with #3488** (5 rows)
+
+- X1-leading-hold: in `pwa/src/session/Composer.tsx`, `{leading === undefined ? null : held(leading)}` becomes `{leading}`; run `test/composer-long-paste`; red: test/composer-long-paste.test.tsx: a send is one snapshot taken at the tap (review 4119 F1) > a caller's control in the input bar (#3488's leading slot) cannot be used while saving, and says so.
+- X2-cansend-recording: in `pwa/src/session/Composer.tsx`, ` && !saving && !recording⏎` becomes ` && !saving⏎`; run `test/composer-record`; red: test/composer-record.test.tsx: onRecord: the text is kept until the answer, and cleared only on clear > keeps the text while the answer is on its way, holds Send, then clears on clear.
+- X3-record-branch: in `pwa/src/session/Composer.tsx`, `if (onRecord !== undefined) {` becomes `if (false) {`; run `test/composer-record`; red: test/composer-record.test.tsx: onRecord: the text is kept until the answer, and cleared only on clear > keeps the text while the answer is on its way, holds Send, then clears on clear.
+- X4-cansend-saving-merged: in `pwa/src/session/Composer.tsx`, ` && !saving && !recording⏎` becomes ` && !recording⏎`; run `test/composer-long-paste`; red: test/composer-long-paste.test.tsx: Send is held while saving > visibly; the field and the tray take nothing; a second tap or Enter sends nothing twice.
+- X5-always-wrap: in `pwa/src/session/Composer.tsx`, `(id === undefined ? node` becomes `(false ? node`; run `test/composer-long-paste`; red: test/composer-long-paste.test.tsx: a send is one snapshot taken at the tap (review 4119 F1) > with no session id (a composer that can never save) the leading slot is drawn bare, as #3488 draws it: no group.
