@@ -645,7 +645,11 @@ const JAVASCRIPT_ESSENCES: ReadonlySet<string> = new Set([
 
 /** Whether a MIME type essence is an XML MIME type in the MIME Sniffing standard's sense: `text/xml`, `application/xml`, or any
  *  essence whose SUBTYPE ends in `+xml` (`image/svg+xml`, `application/xhtml+xml`, `application/rss+xml`, ...). The caller passes
- *  the essence, so a parameter such as `x=+xml` never reaches the test. The one place the tier names them (D-9149). */
+ *  the essence, so a parameter such as `x=+xml` never reaches the test. The one place the tier names them (D-9149).
+ *  The MIME table (`ARTIFACT_MIME`, `shared/artifacts.ts`) has no row for `xsl`, `xslt`, `rdf` or `xml` today (review 4062), so
+ *  every such file is an octet-stream attachment. A row added for one of them must be looked at here: its type must be one this
+ *  test catches (`text/xml`, `application/xml` or a `+xml` subtype such as `application/xslt+xml`), never an older spelling such
+ *  as `text/xsl`, or a document that runs script would be cached under the `other` rule. */
 function isXmlEssence(essence: string): boolean {
   if (essence === 'text/xml' || essence === 'application/xml') return true;
   const subtype = essence.slice(essence.indexOf('/') + 1);
