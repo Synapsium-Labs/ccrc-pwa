@@ -12,7 +12,7 @@ import { SPAWN_STALL_MS, type NodeRole } from '../../shared/api.js';
 import { DISPATCH_ABANDON_DEFAULT_MS } from '../../shared/dispatch-abandon.js';
 import { backupStaleHoursOf } from '../../shared/backup.js';
 import { privateTrackerKeysOf } from './linking/publicTextClasses.js';
-import type { FingerprintAnswer } from './accounts/mask.js';
+import { SHAPE_ONLY_MASKER, type FingerprintAnswer } from './accounts/mask.js';
 import { artifactConfig, type ArtifactConfig } from './artifacts/policy.js';
 import { DEPS_SHED_AFTER_HOURS_DEFAULT, DEPS_SHED_PER_PASS_DEFAULT } from './depsShed.js';
 import {
@@ -575,7 +575,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
       origin: env.CCRC_ARTIFACT_ORIGIN, content: env.CCRC_ARTIFACT_CONTENT_ORIGIN,
       port: env.CCRC_ARTIFACT_PORT, exposeMode: env.CCRC_EXPOSE_MODE,
     },
-    consoleOrigin, port);
+    // D-9161: the shape-only answer mask, the one the mint's answer meets for shapes, so an origin it would alter turns the tier off.
+    consoleOrigin, port, (value) => SHAPE_ONLY_MASKER.maskText(value) !== value);
   if (artifact.state === 'off' && (artifact.why === 'partial' || artifact.why === 'invalid')) {
     console.warn(`ccrc-server: artifact tier off — ${artifact.detail}`);
   }

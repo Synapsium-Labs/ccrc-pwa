@@ -138,11 +138,17 @@ function checkOrigin(key: string, value: string, consoleLoopback: boolean, conso
 /** The tier's one config decision (spec 2.3). Never throws. Order: an address (`CCRC_EXPOSE_MODE=ip`) has no second site, so
  *  it is off whatever keys stand; no keys is unset; some keys is partial; all three are validated and any failure is invalid. A
  *  key counts as present only when it is a non-empty string (an EnvironmentFile's bare `KEY=` line is absent). A detail holds
- *  only key names, the values the operator wrote and the rule's words, since it goes to a boot warning. */
+ *  only key names, the values the operator wrote and the rule's words, since it goes to a boot warning.
+ *  `masks` says whether the console's answer mask would alter a string (the caller hands in the shape-only masker, its one
+ *  home; absent, nothing is masked). Last, after the site rule: an origin it would alter is `invalid`, naming the key but never
+ *  the value, because a mint answer carries the artifact origin and the mask would alter every one, so no link could reach the
+ *  operator (D-9161). The live masker can also alter a string holding a stored secret's exact bytes; that is not known here,
+ *  and the mint's draws still answer `unmeasured` for it. */
 export function artifactConfig(
   env: { origin?: string; content?: string; port?: string; exposeMode?: string },
   consoleOrigin: string,
   consolePort: number,
+  masks: (value: string) => boolean = () => false,
 ): ArtifactConfig {
   if (env.exposeMode === 'ip') {
     return { state: 'off', why: 'by-address', detail: 'this box is reached by address, and artifacts need names' };
@@ -181,6 +187,12 @@ export function artifactConfig(
   if (!a.ok) return invalid(a.detail);
   const c = checkOrigin(KEY_CONTENT, content, consoleLoopback, consoleHostname, consolePort);
   if (!c.ok) return invalid(c.detail);
+  for (const [key, value] of [[KEY_ORIGIN, origin], [KEY_CONTENT, content]] as const) {
+    if (masks(value)) {
+      return invalid(`${key} has a name the console's answer mask would alter (it has a credential's shape), so no link could `
+        + 'reach you; choose another label');
+    }
+  }
   return { state: 'on', artifactOrigin: origin, contentOrigin: content, port, artifactHost: a.host, contentHost: c.host };
 }
 
