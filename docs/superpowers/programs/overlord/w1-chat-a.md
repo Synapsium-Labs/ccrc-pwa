@@ -333,6 +333,13 @@ Mutants, each red, each reverted, the part's suite alone (33 cases):
   pair beside the chat's two reads), `server.ts`, the box-token census, the renewal readings suite, the writers map, the floors
   file, the control census and the contrast suite's sheet list. Counts re-measured on the merged tree: 344 scanned, 341 HTTP, 222
   gated, 119 exempt, thirty-three route files; growth against it, the shared client +17 and `server.ts` +8.
+- `8a7bcacc8b` (the box frames recipe, #3487; the landing line fold, #3580), after fix round 3, the coordinator's call 1845: two
+  hand resolutions. The gate's docstring reads 342 routes. The gate suite keeps the box frames' history comment (343, the HTTP
+  half 339 -> 340, 120 exempt), then the chat's, re-based on it (345: the HTTP half 340 -> 342, the gated count 220 -> 222, 342 -
+  120, the exempt count stays 120), both files' scan lines, and the three count sentences at 345 scanned and 342 HTTP, 120
+  exempt. Merged without a hand: `server.ts` and the box-token census. Counts re-measured on the merged tree, by the gate suite
+  (436 of 436) and its own scanner over its file list: 345 scanned, 342 HTTP, 222 gated, 120 exempt, thirty-four route files;
+  growth against it, the shared client +17 and `server.ts` +8. The composer PR (#3604) was not on main.
 
 ## Known limits (so far)
 
