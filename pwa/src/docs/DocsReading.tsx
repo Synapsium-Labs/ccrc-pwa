@@ -41,6 +41,8 @@ export function DocsReading(p: { reading: ReaderModeContainer; children: ReactNo
           <ReaderModeOverlay
             ref={overlay} title={shown.title} progress={shown.progress}
             onExit={() => ctx.exit('exit-tap')} onAa={ctx.aa} onDismiss={ctx.dismiss} onEsc={ctx.escOverlay} onActivity={ctx.activity}
+            turn={ctx.turn} onTurn={ctx.setTurn}
+            {...(shown.readingMinutes === undefined ? {} : { readingMinutes: shown.readingMinutes })}
           />
         )}
       </div>

@@ -40,6 +40,12 @@ export type ReaderTurn = 'screens' | 'scroll';
  *  one definition: the mount's policy, the bridge, the frame's body and the hook all name it from here. */
 export type ReaderReading = ReaderTurn | 'off';
 
+/** The turn a device's stored word means (X6 XR2.2): exactly `screens` or `scroll`; absent or anything else reads `screens`, so an
+ *  unknown word, a hand-edited value or a newer build's word never leaves the reader with no way to turn. */
+export function readerTurnOf(stored: string | null): ReaderTurn {
+  return stored === 'scroll' ? 'scroll' : 'screens';
+}
+
 /** How reader mode fills the screen. `fill`: the console's layer is drawn over the viewport. `full-screen`: the browser
  *  also granted element full screen. A refusal leaves reader mode on as `fill`. */
 export type ReaderModeHow = 'full-screen' | 'fill';
@@ -64,9 +70,11 @@ export const READER_MODE_OFF: ReaderModeState = Object.freeze({ on: false as con
  *  `dismiss` (a tap on the clear layer outside it) only hides it. No window blur reaches it: wave XR subscribes none
  *  (XR2.1). `frame-toggle` is the frame's `r`: it enters or exits, and is refused unless reader mode is offered (the
  *  whole of `readerModeOffered`, read by delivery as the op arrives) and the frame holds focus (spec §8). `frame-ready` is a
- *  mount reporting ready, with `planned` whether it was mounted under a reading (sent `setReading` before its ready): it is
- *  brought to the reading in force, which a mount made just before entering, or planned under a reading that has since ended
- *  (a new document's frame after a link, an exit during a remount), would otherwise miss. */
+ *  mount reporting ready, with `planned` the reading the mount was last sent (`off` when it was sent none) and `turn` the turn in
+ *  force now: it is brought to the reading in force, which a mount made just before entering, or planned under a reading that has
+ *  since ended or changed (a new document's frame after a link, an exit during a remount, a switch of the turn while it was
+ *  mounting), would otherwise miss. `turn-changed` is the operator's switch of the turn (X6 XR2.2), after the new turn is stored:
+ *  while on, the frame is sent it in place. */
 export type ReaderModeEvent =
   | { kind: 'enter'; doc: string; activation: boolean; fullscreenEnabled: boolean; placeFree: boolean }
   | { kind: 'full-screen-granted' }
@@ -84,7 +92,8 @@ export type ReaderModeEvent =
   | { kind: 'dismiss' }
   | { kind: 'frame-exit' }
   | { kind: 'leave' }
-  | { kind: 'frame-ready'; planned: boolean }
+  | { kind: 'frame-ready'; planned: ReaderReading; turn: ReaderTurn }
+  | { kind: 'turn-changed' }
   | {
       kind: 'frame-toggle'; doc: string; activation: boolean; fullscreenEnabled: boolean; placeFree: boolean;
       offered: boolean; frameFocused: boolean;
@@ -174,10 +183,14 @@ export function readerModeStep(state: ReaderModeState, event: ReaderModeEvent): 
       if (state.on) return operatorExit(state);
       return event.offered && event.frameFocused ? entered(event) : NOTHING(state);
     case 'frame-ready':
-      // On and not planned: its reading must be set now. Off and planned: the reading it was made under has ended.
-      if (state.on && !event.planned) return { state, acts: ['start-reading'] };
-      if (!state.on && event.planned) return { state, acts: ['stop-reading'] };
+      // On and planned under another reading than the turn in force (none, or the other turn): its reading must be set now. Off and
+      // planned under any turn: the reading it was made under has ended.
+      if (state.on && event.planned !== event.turn) return { state, acts: ['start-reading'] };
+      if (!state.on && event.planned !== 'off') return { state, acts: ['stop-reading'] };
       return NOTHING(state);
+    case 'turn-changed':
+      // The frame is sent the new turn in place (the stored turn is read by the act); off, there is no reading to change.
+      return state.on ? { state, acts: ['start-reading'] } : NOTHING(state);
     case 'leave':
       // The screen is going: give the page back (full screen, the fill, the console). The frame goes with the screen, so
       // it is neither told to stop nor focused, and nothing steps back: the place is stale once the visit ends (spec §3.3).
@@ -232,8 +245,9 @@ export function wakeLockWanted(input: { on: boolean; visible: boolean; lastActiv
   return input.on && input.visible && input.nowMs - input.lastActivityMs < READER_WAKE_IDLE_MS;
 }
 
-/** The minutes left of a reading time at a share read (`share` clamped to [0, 1]); unrounded. */
+/** The minutes left of a reading time at a share read (`share` clamped to [0, 1], and read as 0 when it is not a finite number,
+ *  as the overlay's percentage reads it); unrounded. */
 export function timeLeftMinutes(readingMinutes: number, share: number): number {
-  const s = Math.min(1, Math.max(0, share));
+  const s = Number.isFinite(share) ? Math.min(1, Math.max(0, share)) : 0;
   return readingMinutes * (1 - s);
 }

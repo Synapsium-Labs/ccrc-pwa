@@ -447,12 +447,14 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
       // Every production mount asks for progress (D-8805): the bar's line on ccrc's bar, and the reader's activity on either.
       const progress = createReaderProgress();
       const barTitle = readerBarTitle(outcome.result.meta.title, leafName(cur.props.show.path));
+      const readingMinutes = outcome.result.meta.readingMinutes;
       // The reading this mount is made under, asked as the mount starts: the turn when reader mode is on for this body's own
       // document (and it is still the screen's), else `off`. A mount made under a reading is sent it before its `ready`.
       const reading = cur.readerMode?.readingFor(readerModeDocKeyOf({
         kind: 'project', owner: cur.props.link.project, section: cur.props.show.section, path: cur.props.show.path,
       })) ?? 'off';
-      /** What the frame was last sent as its reading: this mount's, then each `setReading` the context sent through the handle. */
+      /** What the frame was last sent as its reading: this mount's, then each `setReading` the context sent through the handle. It is
+       *  the published frame's `planned`, which `frame-ready` compares with the turn in force. */
       let sentReading: ReaderReading = reading;
       /** Whether this body's frame has reported `ready`: with the mount, it is what makes the frame the context's. */
       let isReady = false;
@@ -464,7 +466,7 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
         if (!isReady || m === null || ctx === null) return;
         const f: ReaderModeFrame = {
           ready: true,
-          planned: sentReading !== 'off',
+          planned: sentReading,
           focus: () => m.focus?.(),
           setReading: (mode) => {
             sentReading = mode;
@@ -473,6 +475,8 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
           command: (name) => m.command?.(name),
           title: barTitle,
           progress,
+          // The reading time the library gave this document, for the overlay's time left; absent when it gave none.
+          ...(readingMinutes === undefined ? {} : { readingMinutes }),
         };
         published = f;
         ctx.setFrame(f);

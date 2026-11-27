@@ -10,13 +10,14 @@ import {
   readerModeDocKeyOf,
   readerModeOffered,
   readerModeStep,
+  readerTurnOf,
   timeLeftMinutes,
   wakeLockWanted,
   type ReaderModeAct,
   type ReaderModeEvent,
   type ReaderModeState,
 } from '../src/docs/reader/readerMode';
-import { READER_MODE_TEXT, timeLeftText } from '../src/docs/reader/readerModeWords';
+import { READER_MODE_TEXT, overlayProgressText, timeLeftText } from '../src/docs/reader/readerModeWords';
 import type { DocsFolderLocation, DocsPageLocation } from '../../shared/docs';
 
 type On = Extract<ReaderModeState, { on: true }>;
@@ -292,24 +293,59 @@ describe('reader ops: the frame', () => {
 describe('reader mode: a frame that reports ready (X6 XR1.4)', () => {
   it('reader mode: a frame that reports ready is brought to the reading in force, whichever way it was mounted', () => {
     // On, and the mount was made before reader mode was entered: its reading must be set now.
-    const started = readerModeStep(on(), { kind: 'frame-ready', planned: false });
+    const started = readerModeStep(on(), { kind: 'frame-ready', planned: 'off', turn: 'screens' });
     expect(started.acts).toEqual(['start-reading']);
     expect(started.state).toEqual(on());
-    // On, and the mount was made under the reading (sent `setReading` before its ready): nothing to do.
-    expect(readerModeStep(on(), { kind: 'frame-ready', planned: true }).acts).toEqual([]);
+    // On, and the mount was made under the reading in force (sent `setReading` with the turn before its ready): nothing to do.
+    expect(readerModeStep(on(), { kind: 'frame-ready', planned: 'screens', turn: 'screens' }).acts).toEqual([]);
+    expect(readerModeStep(on(), { kind: 'frame-ready', planned: 'scroll', turn: 'scroll' }).acts).toEqual([]);
     // Off, and the mount was planned under a reading that ended before its ready (a link's new document, an exit during a
     // remount): it is told to stop.
-    const stopped = readerModeStep(READER_MODE_OFF, { kind: 'frame-ready', planned: true });
-    expect(stopped.acts).toEqual(['stop-reading']);
-    expect(stopped.state).toEqual(READER_MODE_OFF);
+    for (const planned of ['screens', 'scroll'] as const) {
+      const stopped = readerModeStep(READER_MODE_OFF, { kind: 'frame-ready', planned, turn: 'screens' });
+      expect(stopped.acts, planned).toEqual(['stop-reading']);
+      expect(stopped.state).toEqual(READER_MODE_OFF);
+    }
     // Off, and never planned: a fresh frame is off already.
-    expect(readerModeStep(READER_MODE_OFF, { kind: 'frame-ready', planned: false }).acts).toEqual([]);
+    expect(readerModeStep(READER_MODE_OFF, { kind: 'frame-ready', planned: 'off', turn: 'scroll' }).acts).toEqual([]);
     // It changes no state in any case: the overlay, the fill and the place stay as they were.
     for (const state of [on({ overlay: true }), on({ how: 'fill', placed: false })]) {
-      const answer = readerModeStep(state, { kind: 'frame-ready', planned: false });
+      const answer = readerModeStep(state, { kind: 'frame-ready', planned: 'off', turn: 'screens' });
       expect(answer.state).toEqual(state);
       expect(answer.acts).toEqual(['start-reading']);
     }
+  });
+
+  it('reader mode: a body made under one turn and ready after a switch to the other is brought to the new turn', () => {
+    // Made under pages, the turn became scroll before its ready: it was planned under what is no longer in force.
+    const toScroll = readerModeStep(on(), { kind: 'frame-ready', planned: 'screens', turn: 'scroll' });
+    expect(toScroll.acts).toEqual(['start-reading']);
+    expect(toScroll.state).toEqual(on());
+    const toScreens = readerModeStep(on({ overlay: true }), { kind: 'frame-ready', planned: 'scroll', turn: 'screens' });
+    expect(toScreens.acts).toEqual(['start-reading']);
+    expect(toScreens.state).toEqual(on({ overlay: true }));
+  });
+});
+
+describe('reader mode: the turn (X6 XR2.2)', () => {
+  it('reader mode: a change of turn while on is sent to the frame, and while off changes nothing', () => {
+    for (const state of [on(), on({ overlay: true }), on({ how: 'fill', placed: false })]) {
+      const answer = readerModeStep(state, { kind: 'turn-changed' });
+      expect(answer.acts).toEqual(['start-reading']);
+      expect(answer.state, 'a change of turn leaves the overlay, the fill and the place as they were').toEqual(state);
+    }
+    const off = readerModeStep(READER_MODE_OFF, { kind: 'turn-changed' });
+    expect(off.acts).toEqual([]);
+    expect(off.state).toEqual(READER_MODE_OFF);
+  });
+
+  it('turn: an absent or unknown stored word reads pages, and only the two words are kept', () => {
+    expect(readerTurnOf(null)).toBe('screens');
+    expect(readerTurnOf('')).toBe('screens');
+    expect(readerTurnOf('page')).toBe('screens');
+    expect(readerTurnOf('SCROLL')).toBe('screens');
+    expect(readerTurnOf('screens')).toBe('screens');
+    expect(readerTurnOf('scroll')).toBe('scroll');
   });
 });
 
@@ -352,11 +388,38 @@ describe('reader mode: time left and its words', () => {
     expect(timeLeftText(0)).toBe('less than a minute left');
   });
 
+  it('time left: a share that is not a finite number reads as 0, and the overlay\'s text never says NaN', () => {
+    expect(timeLeftMinutes(10, Number.NaN)).toBe(10);
+    expect(timeLeftMinutes(10, Number.POSITIVE_INFINITY), 'read as the percentage reads it: 0%').toBe(10);
+    expect(timeLeftMinutes(10, Number.NEGATIVE_INFINITY)).toBe(10);
+    // The percentage and the time left are made from the one share, so a bad share gives 0% with the whole time left.
+    for (const share of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(overlayProgressText(share, 10), String(share)).toBe('0% · about 10 min left');
+    }
+    // Out of range but finite: clamped.
+    expect(overlayProgressText(-1, 10)).toBe('0% · about 10 min left');
+    expect(overlayProgressText(2, 10)).toBe('100% · less than a minute left');
+  });
+
+  it('time left: an unusable reading time shows the percentage alone, and 0 (the library\'s no text) is one', () => {
+    for (const minutes of [undefined, 0, -0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(overlayProgressText(0.5, minutes), String(minutes)).toBe('50%');
+    }
+    // With a share that is itself bad, the text is still never `NaN`.
+    expect(overlayProgressText(Number.NaN, 0)).toBe('0%');
+    expect(overlayProgressText(Number.NaN, Number.NaN)).toBe('0%');
+    // A usable time: the percentage, then the time left at that share.
+    expect(overlayProgressText(0.5, 10)).toBe('50% · about 5 min left');
+    expect(overlayProgressText(0.41, 0.4)).toBe('41% · less than a minute left');
+  });
+
   it('words: the reader mode sentences', () => {
     expect(READER_MODE_TEXT).toEqual({
       enter: 'Reader mode', exit: 'Exit reader mode', live: 'Reader mode. Back or Exit leaves it.', toolbar: 'Reader mode',
       // The overlay's own words (X6 XR2.1, D-8803): Exit shows a short word under its full name, and Aa opens the reader's settings.
       exitShown: 'Exit', aa: 'Reading settings', aaShown: 'Aa',
+      // The turn setting (X6 XR2.2): a group named `turn`, with one pressed button for each way the reader turns the page.
+      turn: 'Turning', turnScreens: 'Pages', turnScroll: 'Scroll',
     });
     expect(Object.isFrozen(READER_MODE_TEXT)).toBe(true);
   });

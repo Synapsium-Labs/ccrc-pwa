@@ -17,13 +17,16 @@
 // frame is brought to the reading in force), asks it which reading a mount is made under (`readingFor`), and reports the frame's
 // own `reader` acts (`menu`, `frameExit`, `frameToggle`) and its activity. The hook subscribes to no window blur. The overlay
 // (`ReaderModeOverlay`, drawn by `DocsReading`) reads the stored frame's title and progress from the context and acts through
-// `exit`, `aa`, `dismiss`, `escOverlay` and `activity`; `aa` hides the overlay first, then sends `command('settings')`. What is
-// left to the later task: the stored turn (XR2.2).
+// `exit`, `aa`, `dismiss`, `escOverlay`, `setTurn` and `activity`; `aa` hides the overlay first, then sends `command('settings')`.
+// The turn (XR2.2): how the reader turns the page is the device's remembered choice (`READER_TURN_STORAGE_KEY`; `setTurn` is its one
+// writer), `screens` until one is made. `perform('start-reading')`, `readingFor` and the context's `turn` all read that one value, and
+// a frame's `planned` is the reading its mount was last sent, which `frame-ready` compares with it.
 import { createContext, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { hideAsPage, releaseAsPage, type PageHiding } from '@ccrc/ui';
 import { useAuthLost } from '../lib/auth';
 import { onPageHidden, onPageVisible } from '../lib/pageClock';
 import { setReaderPlaceHost, type ReaderPlaceHost } from '../lib/popstate';
+import { readKey, writeKey } from '../lib/storage';
 import { useFleetStore } from '../stores/fleet';
 import type { ReaderCommand } from './reader/policy';
 import type { ReaderProgress } from './readerBar';
@@ -32,22 +35,24 @@ import {
   stepBelowReaderPlace,
 } from './reader/places';
 import {
-  READER_EXIT_SETTLE_MS, READER_MODE_OFF, READER_WAKE_IDLE_MS, readerModeOffered, readerModeStep, wakeLockWanted,
+  READER_EXIT_SETTLE_MS, READER_MODE_OFF, READER_WAKE_IDLE_MS, readerModeOffered, readerModeStep, readerTurnOf, wakeLockWanted,
   type ReaderModeAct, type ReaderModeEvent, type ReaderModeHow, type ReaderModeState, type ReaderReading, type ReaderTurn,
 } from './reader/readerMode';
 import { READER_MODE_TEXT } from './reader/readerModeWords';
 
-/** The frame, as reader mode needs it: ready or not, whether its mount was made under a reading (sent `setReading` before its
- *  ready, which `frame-ready` reads), focus, the `reading` op, and, for the overlay, the document's title, how far it has been
- *  read and the frame's own commands (`command('settings')`). No remount and no layout (D-8975). */
+/** The frame, as reader mode needs it: ready or not, the reading its mount was last sent (`planned`, `off` when it was sent none:
+ *  `frame-ready` compares it with the turn in force), focus, the `reading` op, and, for the overlay, the document's title, how
+ *  far it has been read, its reading time in minutes (absent when the library gave none) and the frame's own commands
+ *  (`command('settings')`). No remount and no layout (D-8975). */
 export interface ReaderModeFrame {
   readonly ready: boolean;
-  readonly planned: boolean;
+  readonly planned: ReaderReading;
   focus(): void;
   setReading(mode: ReaderReading): void;
   command(name: ReaderCommand): void;
   readonly title: string;
   readonly progress: ReaderProgress;
+  readonly readingMinutes?: number;
 }
 
 /** The history port reader mode acts through (consumer-declared; `READER_PLACES` is the real one). `placeFree`: the place budget has
@@ -95,7 +100,10 @@ export interface ReaderModeContextValue {
   readonly state: ReaderModeState;
   /** Whether the entry is drawn: a ready frame outside the plain view. The modal-layer test is read at each `enter`. */
   readonly offered: boolean;
+  /** How the reader turns the page, kept per device (`READER_TURN_STORAGE_KEY`); `screens` until a device chooses. */
   readonly turn: ReaderTurn;
+  /** The overlay's turn switch (X6 XR2.2): stores the turn, the one writer of its key, then sends the frame it in place while on. */
+  setTurn(next: ReaderTurn): void;
   enter(by: 'button' | 'key'): void;
   exit(cause: 'exit-tap' | 'key'): void;
   menu(): void;
@@ -146,8 +154,13 @@ export interface ReaderModeControls {
   toggle(): void;
 }
 
-/** How the reader turns the page. XR2.2 stores it per device; until then every reading is screens. */
-const READER_TURN: ReaderTurn = 'screens';
+/** The device's remembered turn (X6 XR2.2, `ccrc-reader-turn`: `screens` or `scroll`). Read through the one storage port
+ *  (`lib/storage.ts`) by `readStoredTurn` and written ONLY by the controller's `setTurn`, in this file: a second writer is a
+ *  red `turn: the storage key is in the census and written in one place`. */
+export const READER_TURN_STORAGE_KEY = 'ccrc-reader-turn';
+
+/** The stored turn: `screens` when nothing is stored, the store throws or the word is unknown (`readerTurnOf`). */
+const readStoredTurn = (): ReaderTurn => readerTurnOf(readKey(READER_TURN_STORAGE_KEY));
 
 const noop = (): void => undefined;
 
@@ -155,10 +168,14 @@ interface Sink {
   state(s: ReaderModeState): void;
   live(text: string): void;
   frame(f: ReaderModeFrame | null): void;
+  turn(t: ReaderTurn): void;
 }
 
-/** The mutable half of the hook: refs and handles, in closures. One per mount of the hook, never rebuilt by a render. */
-function createController(sink: Sink) {
+/** The mutable half of the hook: refs and handles, in closures. One per mount of the hook, never rebuilt by a render.
+ *  `initialTurn` is the turn the hook's state was initialised with from storage: the controller keeps it, stored at once as
+ *  `state` is, so every act and read of this file sees the one value, and React hears of a change through the sink. */
+function createController(sink: Sink, initialTurn: ReaderTurn) {
+  let turn: ReaderTurn = initialTurn;
   let state: ReaderModeState = READER_MODE_OFF;
   let container: HTMLElement | null = null;
   let frame: ReaderModeFrame | null = null;
@@ -265,7 +282,7 @@ function createController(sink: Sink) {
         hiding = null;
         break;
       case 'start-reading':
-        frame?.setReading(READER_TURN);
+        frame?.setReading(turn);
         break;
       case 'stop-reading':
         frame?.setReading('off');
@@ -374,6 +391,16 @@ function createController(sink: Sink) {
     armIdle();
     syncWake();
   };
+  /** The overlay's turn switch: the new turn is kept (the one writer of the stored key, and the value every act reads), React is
+   *  told, and the decider rules what the frame is sent (`turn-changed`: the new turn in place while on, nothing while off). The
+   *  turn already in force changes nothing. */
+  const setTurn = (next: ReaderTurn): void => {
+    if (next === turn) return;
+    turn = next;
+    writeKey(READER_TURN_STORAGE_KEY, next);   // refused (private window, blocked storage): the page keeps the turn anyway
+    if (alive) sink.turn(next);
+    step({ kind: 'turn-changed' });
+  };
   /** The overlay's Aa: the decider's `dismiss` runs FIRST (state stored at once, the overlay and its layer leave the next
    *  render), and only then the frame's settings command, so the frame's menu is never opened under the layer. */
   const aa = (): void => {
@@ -394,13 +421,13 @@ function createController(sink: Sink) {
       frame = f;
       sink.frame(f);
       // A frame that is ready is brought to the reading in force, however it was mounted: the decider answers (L1).
-      if (f.ready) step({ kind: 'frame-ready', planned: f.planned });
+      if (f.ready) step({ kind: 'frame-ready', planned: f.planned, turn });
     },
     dropFrame,
     /** What a mount for `doc` is made under: the turn only while reader mode is on for `doc` and `doc` is still the screen's
      *  current document, so a new document's frame never inherits the old document's reading. */
     readingFor(doc: string | null): ReaderReading {
-      return doc !== null && state.on && state.doc === doc && input.doc === doc ? READER_TURN : 'off';
+      return doc !== null && state.on && state.doc === doc && input.doc === doc ? turn : 'off';
     },
     frameExit: (): void => step({ kind: 'frame-exit' }),
     frameToggle,
@@ -420,6 +447,7 @@ function createController(sink: Sink) {
     fullScreenChanged: (): void => { if (state.on && document.fullscreenElement !== container) step({ kind: 'full-screen-lost' }); },
     activity,
     aa,
+    setTurn,
     pageVisible: (): void => syncWake(),
     /** The browser drops the lock when the page is hidden: forget the sentinel, then re-read. */
     pageHidden: (): void => { sentinel = null; syncWake(); },
@@ -463,7 +491,9 @@ export function useReaderMode(o: { doc: string | null; plainView: boolean; place
   const [state, setState] = useState<ReaderModeState>(READER_MODE_OFF);
   const [live, setLive] = useState('');
   const [frame, setFrameState] = useState<ReaderModeFrame | null>(null);
-  const [ctl] = useState(() => createController({ state: setState, live: setLive, frame: setFrameState }));
+  // The turn is the device's remembered one, read from storage once, as the hook starts (`screens` when none is kept).
+  const [turn, setTurnState] = useState<ReaderTurn>(readStoredTurn);
+  const [ctl] = useState(() => createController({ state: setState, live: setLive, frame: setFrameState, turn: setTurnState }, turn));
   const { doc, plainView } = o;
   const places = o.places ?? READER_PLACES;
 
@@ -497,12 +527,12 @@ export function useReaderMode(o: { doc: string | null; plainView: boolean; place
 
   const value = useMemo<ReaderModeContextValue>(() => ({
     // `readerModeOffered` owns the rule. The modal-layer test is read at each `enter` and in the handle, not at render.
-    state, offered: readerModeOffered({ frameReady: frame?.ready === true, plainView, modalMounted: false }), turn: READER_TURN,
+    state, offered: readerModeOffered({ frameReady: frame?.ready === true, plainView, modalMounted: false }), turn, setTurn: ctl.setTurn,
     enter: ctl.enter, exit: ctl.exit, menu: ctl.menu, escOverlay: ctl.escOverlay, activity: ctl.activity, dismiss: ctl.dismiss,
     aa: ctl.aa, frame,
     setFrame: ctl.setFrame, dropFrame: ctl.dropFrame, setFallback: ctl.setFallback, readingFor: ctl.readingFor,
     frameExit: ctl.frameExit, frameToggle: ctl.frameToggle,
-  }), [ctl, state, frame, plainView]);
+  }), [ctl, state, frame, plainView, turn]);
   const container = useMemo<ReaderModeContainer>(() => ({
     setContainer: ctl.setContainer, on: state.on, how: state.on ? state.how : undefined, live, focusFrame: ctl.focusFrame,
   }), [ctl, state, live]);

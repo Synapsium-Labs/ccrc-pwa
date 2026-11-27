@@ -5,12 +5,12 @@
 // are spies and whose progress is a real `createReaderProgress()`; the overlay is shown the way the frame's band tap shows it
 // (`menu()`). Stylesheet rules are read as text (vitest evaluates none). Portrait and landscape, and the pixels, are the
 // browser leg's (`reader-mode.browser.test.ts`): the plan's "in portrait and in landscape" half of the two XR2.1 rows is not
-// asserted here, and XR2.2 extends the X6.74 case with the turn setting.
+// asserted here. XR2.2 (the turn setting and the time left) is in the last two describes and in the X6.74 case.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRef, useEffect, type ReactNode } from 'react';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, renderHook, screen, within } from '@testing-library/react';
 import { Sheet } from '@ccrc/ui';
 import { DocsReading } from '../src/docs/DocsReading';
 import { ReaderModeOverlay, type ReaderModeOverlayHandle } from '../src/docs/ReaderModeOverlay';
@@ -37,10 +37,11 @@ interface FakeFrame extends ReaderModeFrame {
   readonly order: string[];
 }
 
-function fakeFrame(): FakeFrame {
+function fakeFrame(readingMinutes?: number): FakeFrame {
   const order: string[] = [];
   return {
-    ready: true, planned: false, title: 'Native Docs reader: reader mode', progress: createReaderProgress(), order,
+    ready: true, planned: 'off', title: 'Native Docs reader: reader mode', progress: createReaderProgress(), order,
+    ...(readingMinutes === undefined ? {} : { readingMinutes }),
     focus: vi.fn<() => void>(() => { order.push('focus'); }),
     setReading: vi.fn<ReaderModeFrame['setReading']>(),
     command: vi.fn<ReaderModeFrame['command']>((name) => { order.push(`command:${name}`); }),
@@ -81,11 +82,17 @@ const topStrip = (): HTMLElement | null => document.querySelector<HTMLElement>('
 const layer = (): HTMLElement | null => document.querySelector<HTMLElement>('.docs-reading-layer');
 const exitButton = (): HTMLElement => screen.getByRole('button', { name: READER_MODE_TEXT.exit });
 const aaButton = (): HTMLElement => screen.getByRole('button', { name: READER_MODE_TEXT.aa });
+const pagesButton = (): HTMLElement => screen.getByRole('radio', { name: READER_MODE_TEXT.turnScreens });
+const scrollButton = (): HTMLElement => screen.getByRole('radio', { name: READER_MODE_TEXT.turnScroll });
+const TURN_KEY = 'ccrc-reader-turn';
 
 /** Renders the harness with a ready frame and enters reader mode (the overlay is hidden on entry). */
-function entered(over: { places?: ReaderModePlaces; sheet?: boolean; onSheetClose?: () => void } = {}): { frame: FakeFrame; view: ReturnType<typeof render> } {
-  const frame = fakeFrame();
-  const view = render(<Harness frame={frame} {...over} />);
+function entered(
+  over: { places?: ReaderModePlaces; sheet?: boolean; onSheetClose?: () => void; readingMinutes?: number } = {},
+): { frame: FakeFrame; view: ReturnType<typeof render> } {
+  const { readingMinutes, ...harness } = over;
+  const frame = fakeFrame(readingMinutes);
+  const view = render(<Harness frame={frame} {...harness} />);
   act(() => { latest.enter('button'); });
   expect(latest.state.on, 'CONTROL: reader mode is on').toBe(true);
   frame.focus.mockClear();
@@ -95,10 +102,14 @@ function entered(over: { places?: ReaderModePlaces; sheet?: boolean; onSheetClos
 
 const showOverlay = (): void => { act(() => { latest.menu(); }); };
 
-beforeEach(() => { useFleetStore.setState({ blocked: false }); });
+beforeEach(() => {
+  useFleetStore.setState({ blocked: false });
+  window.localStorage.clear();   // the turn is the device's remembered choice: no case inherits another's
+});
 
 afterEach(() => {
   cleanup();
+  window.localStorage.clear();
   for (const el of document.querySelectorAll('[inert], [aria-hidden="true"]')) { el.removeAttribute('inert'); el.removeAttribute('aria-hidden'); }
   clearAuthLost();
   vi.useRealTimers();
@@ -225,7 +236,7 @@ describe('overlay: the progress text (X6 XR1.4)', () => {
 
 describe('overlay: the tap floor and motion (X6 XR1.4)', () => {
   it('overlay: every control is at least the tap floor', () => {
-    for (const sel of ['.docs-reading-exit', '.docs-reading-aa']) {
+    for (const sel of ['.docs-reading-exit', '.docs-reading-aa', '.docs-reading-turn']) {
       const rule = ruleIn(docsCss, sel);
       expect(declValue(rule, 'min-width'), `${sel} min-width`).toBe('var(--tap-min)');
       expect(declValue(rule, 'min-height'), `${sel} min-height`).toBe('var(--tap-min)');
@@ -237,6 +248,8 @@ describe('overlay: the tap floor and motion (X6 XR1.4)', () => {
     showOverlay();
     expect(exitButton().classList.contains('docs-reading-exit')).toBe(true);
     expect(aaButton().classList.contains('docs-reading-aa')).toBe(true);
+    expect(pagesButton().classList.contains('docs-reading-turn')).toBe(true);
+    expect(scrollButton().classList.contains('docs-reading-turn')).toBe(true);
   });
 
   it('overlay: it appears with a --dur-fast fade, and with none under reduced motion', () => {
@@ -319,13 +332,18 @@ describe('reader ops: the overlay\'s shape and Aa (X6 XR2.1)', () => {
     const bar = toolbar() as HTMLElement;
     expect(bar.contains(exitButton())).toBe(true);
     expect(bar.contains(aaButton())).toBe(true);
+    // The turn setting (X6 XR2.2): a named radio group of the two turn radios, in the bottom strip.
+    const turns = within(bar).getByRole('radiogroup', { name: READER_MODE_TEXT.turn });
+    expect(turns.contains(pagesButton()) && turns.contains(scrollButton()), 'the turn setting is not in the bottom strip').toBe(true);
+    expect(top.contains(turns), 'the turn setting is drawn in the top strip').toBe(false);
     const buttons: HTMLElement[] = [...bar.querySelectorAll('button')];
     expect(buttons[0], 'Exit is at the strip\'s left end').toBe(exitButton());
-    expect(buttons.indexOf(aaButton())).toBeGreaterThan(0);
+    // The spec's order: Exit, the turn setting, Aa (Aa stays the toolbar's last control).
+    expect(buttons, 'the order of the bottom strip\'s controls').toEqual([exitButton(), pagesButton(), scrollButton(), aaButton()]);
     // The strips and the layer, in DOM order: the top strip, the layer, the bottom strip.
     const controls = document.querySelector('.docs-reading-controls') as HTMLElement;
     expect([...controls.children].map((c) => c.className)).toEqual(['docs-reading-top', 'docs-reading-layer', 'docs-reading-bottom']);
-    // The progress text follows the buttons and is not focusable. XR2.2 extends this case with the turn setting.
+    // The progress text follows the buttons and is not focusable.
     expect(bar.lastElementChild?.getAttribute('role')).toBe('status');
   });
 
@@ -361,6 +379,7 @@ describe('reader ops: the overlay\'s shape and Aa (X6 XR2.1)', () => {
       title: 'A title', progress: createReaderProgress(),
       onExit: () => { calls.push('exit'); }, onAa: () => { calls.push('aa'); }, onDismiss: () => { calls.push('dismiss'); },
       onEsc: () => { calls.push('esc'); }, onActivity: () => { calls.push('activity'); },
+      turn: 'screens' as const, onTurn: (next: string) => { calls.push(`turn:${next}`); },
     };
     render(<ReaderModeOverlay {...props} />);
     fireEvent.click(exitButton());
@@ -368,6 +387,12 @@ describe('reader ops: the overlay\'s shape and Aa (X6 XR2.1)', () => {
     calls.length = 0;
     fireEvent.click(aaButton());
     expect(calls).toEqual(['activity', 'aa']);
+    calls.length = 0;
+    fireEvent.click(scrollButton());
+    expect(calls, 'the turn setting counts as activity, then asks for the turn').toEqual(['activity', 'turn:scroll']);
+    calls.length = 0;
+    fireEvent.click(pagesButton());
+    expect(calls).toEqual(['activity', 'turn:screens']);
     calls.length = 0;
     fireEvent.click(layer() as HTMLElement);
     fireEvent.click(topStrip() as HTMLElement);
@@ -416,6 +441,7 @@ describe('focus (X6 XR1.2, XR2.1)', () => {
       <ReaderModeOverlay
         ref={ref} title="T" progress={createReaderProgress()}
         onExit={() => undefined} onAa={() => undefined} onDismiss={() => undefined} onEsc={() => undefined} onActivity={() => undefined}
+        turn="screens" onTurn={() => undefined}
       />,
     );
     const bar = toolbar() as HTMLElement;
@@ -459,5 +485,160 @@ describe('overlay: a dropped frame (X6 XR1.4)', () => {
     act(() => { latest.dropFrame(frame); });
     expect(toolbar(), 'a stale frame\'s drop hid the overlay').not.toBeNull();
     expect(latest.frame).toBe(next);
+  });
+});
+
+// ─── the turn setting (X6 XR2.2) ───────────────────────────────────────────────────────────────────────────────────────────
+
+describe('turn (X6 XR2.2)', () => {
+  it('turn: Pages by default, Scroll kept per device, sent with setReading', () => {
+    // Nothing stored: pages, sent when reader mode starts, and nothing written.
+    const { frame } = entered();
+    expect(latest.turn, 'the default turn').toBe('screens');
+    expect(frame.setReading).toHaveBeenCalledTimes(1);
+    expect(frame.setReading).toHaveBeenLastCalledWith('screens');
+    expect(window.localStorage.getItem(TURN_KEY), 'choosing nothing stored something').toBeNull();
+    showOverlay();
+    expect(pagesButton().getAttribute('aria-checked')).toBe('true');
+    expect(scrollButton().getAttribute('aria-checked')).toBe('false');
+    // Choosing Scroll: stored, sent to the frame in place, the overlay stays, reader mode stays on.
+    frame.setReading.mockClear();
+    act(() => { fireEvent.click(scrollButton()); });
+    expect(frame.setReading, 'the new turn was not sent to the frame').toHaveBeenCalledTimes(1);
+    expect(frame.setReading).toHaveBeenCalledWith('scroll');
+    expect(window.localStorage.getItem(TURN_KEY), 'the choice was not kept on the device').toBe('scroll');
+    expect(latest.turn).toBe('scroll');
+    expect(scrollButton().getAttribute('aria-checked')).toBe('true');
+    expect(pagesButton().getAttribute('aria-checked')).toBe('false');
+    expect(toolbar(), 'choosing a turn hid the overlay').not.toBeNull();
+    expect(latest.state.on && latest.state.overlay).toBe(true);
+    expect(latest.frame, 'choosing a turn remounted the frame').toBe(frame);
+    expect(frame.command, 'choosing a turn sent a command').not.toHaveBeenCalled();
+    // The turn already in force: nothing is sent or written again.
+    act(() => { fireEvent.click(scrollButton()); });
+    expect(frame.setReading).toHaveBeenCalledTimes(1);
+    // A later mount of the hook (another visit, another document) reads Scroll back, and a body made under reader mode is made under it.
+    cleanup();
+    const next = fakeFrame();
+    render(<Harness frame={next} />);
+    expect(latest.turn, 'a new hook instance did not read the kept turn').toBe('scroll');
+    // Off: a change of turn is kept and sent nowhere.
+    act(() => { latest.setTurn('screens'); });
+    expect(next.setReading, 'a change of turn while off reached the frame').not.toHaveBeenCalled();
+    expect(window.localStorage.getItem(TURN_KEY)).toBe('screens');
+    act(() => { latest.setTurn('scroll'); });
+    act(() => { latest.enter('button'); });
+    expect(next.setReading).toHaveBeenCalledTimes(1);
+    expect(next.setReading, 'entering did not send the kept turn').toHaveBeenCalledWith('scroll');
+    expect(latest.readingFor('doc-a')).toBe('scroll');
+  });
+
+  it('turn: the setting is a radio group: the checked radio is the one tab stop, and the arrow keys move between the radios and choose', () => {
+    const { frame } = entered();
+    showOverlay();
+    const group = screen.getByRole('radiogroup', { name: READER_MODE_TEXT.turn });
+    expect(within(group).getAllByRole('radio')).toHaveLength(2);
+    expect(pagesButton().tabIndex, 'the checked radio is the tab stop').toBe(0);
+    expect(scrollButton().tabIndex, 'the other radio is reached by the arrow keys').toBe(-1);
+    frame.setReading.mockClear();
+    // Right: from Pages to Scroll. Focus moves, the turn is chosen, sent and kept; the overlay stays.
+    pagesButton().focus();
+    act(() => { fireEvent.keyDown(pagesButton(), { key: 'ArrowRight' }); });
+    expect(document.activeElement, 'focus did not move to Scroll').toBe(scrollButton());
+    expect(scrollButton().getAttribute('aria-checked')).toBe('true');
+    expect(pagesButton().tabIndex).toBe(-1);
+    expect(scrollButton().tabIndex).toBe(0);
+    expect(frame.setReading).toHaveBeenLastCalledWith('scroll');
+    expect(window.localStorage.getItem(TURN_KEY)).toBe('scroll');
+    expect(toolbar(), 'an arrow key hid the overlay').not.toBeNull();
+    // Right again wraps to Pages; Left and Up go back; Down goes forward.
+    act(() => { fireEvent.keyDown(scrollButton(), { key: 'ArrowRight' }); });
+    expect(document.activeElement).toBe(pagesButton());
+    expect(latest.turn).toBe('screens');
+    act(() => { fireEvent.keyDown(pagesButton(), { key: 'ArrowLeft' }); });
+    expect(document.activeElement, 'Left from the first did not wrap').toBe(scrollButton());
+    expect(latest.turn).toBe('scroll');
+    act(() => { fireEvent.keyDown(scrollButton(), { key: 'ArrowUp' }); });
+    expect(latest.turn).toBe('screens');
+    act(() => { fireEvent.keyDown(pagesButton(), { key: 'ArrowDown' }); });
+    expect(latest.turn).toBe('scroll');
+    // Any other key is not the group's: it neither moves nor chooses, and Esc still reaches the toolbar and hides the overlay.
+    const calls = frame.setReading.mock.calls.length;
+    act(() => { fireEvent.keyDown(scrollButton(), { key: 'a' }); });
+    expect(frame.setReading.mock.calls.length).toBe(calls);
+    act(() => { fireEvent.keyDown(scrollButton(), { key: 'Escape' }); });
+    expect(toolbar(), 'Esc on a radio did not reach the toolbar').toBeNull();
+    expect(latest.state.on).toBe(true);
+  });
+
+  it('turn: an unknown stored word reads Pages, and a hook that cannot store still turns for the page', () => {
+    window.localStorage.setItem(TURN_KEY, 'book');
+    const { result } = renderHook(() => useReaderMode({ doc: 'doc-a', plainView: false, places: NO_READER_PLACES }));
+    expect(result.current.value.turn).toBe('screens');
+    cleanup();
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new DOMException('full', 'QuotaExceededError'); });
+    const { frame } = entered();
+    showOverlay();
+    frame.setReading.mockClear();
+    act(() => { fireEvent.click(scrollButton()); });
+    expect(frame.setReading, 'a refused write stopped the turn reaching the frame').toHaveBeenCalledWith('scroll');
+    expect(latest.turn).toBe('scroll');
+    expect(window.localStorage.getItem(TURN_KEY), 'CONTROL: the store refused the write').toBe('book');
+  });
+
+  it('turn: a frame ready after a switch of the turn is brought to it, and a ready frame under the turn in force is left alone', () => {
+    // Reader mode is on over one frame; the turn is switched to Scroll; that body ends, and its replacement, made under Pages
+    // before the switch, reports ready.
+    const { frame } = entered();
+    act(() => { latest.setTurn('scroll'); });
+    expect(frame.setReading).toHaveBeenLastCalledWith('scroll');
+    act(() => { latest.dropFrame(frame); });
+    const made = fakeFrame();
+    act(() => { latest.setFrame({ ...made, planned: 'screens' }); });
+    expect(made.setReading, 'the frame made under Pages was left there').toHaveBeenCalledTimes(1);
+    expect(made.setReading).toHaveBeenCalledWith('scroll');
+    // One made under the turn in force is left alone.
+    act(() => { latest.dropFrame(latest.frame as ReaderModeFrame); });
+    const current = fakeFrame();
+    act(() => { latest.setFrame({ ...current, planned: 'scroll' }); });
+    expect(current.setReading, 'a frame already under the turn was sent it again').not.toHaveBeenCalled();
+  });
+});
+
+describe('time left (X6 XR2.2)', () => {
+  it('time left: the overlay reads about N min left from readingMinutes and the share', () => {
+    const { frame } = entered({ readingMinutes: 10 });
+    frame.progress.set(0.5);
+    showOverlay();
+    const status = screen.getByRole('status');
+    expect(status.textContent, 'the percentage, then the time left at the same share').toBe('50% · about 5 min left');
+    expect(status.hasAttribute('tabindex'), 'the progress text is focusable').toBe(false);
+  });
+
+  it('time left: the time left and the percentage change together, at most once a second', async () => {
+    vi.useFakeTimers();
+    const { frame } = entered({ readingMinutes: 10 });
+    frame.progress.set(0.4);
+    showOverlay();
+    const status = screen.getByRole('status');
+    expect(status.textContent).toBe('40% · about 6 min left');
+    await act(async () => { frame.progress.set(0.95); await vi.advanceTimersByTimeAsync(999); });
+    expect(status.textContent, 'the time left moved inside the second').toBe('40% · about 6 min left');
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(status.textContent, 'the time left did not land with the percentage').toBe('95% · less than a minute left');
+  });
+
+  it('time left: absent readingMinutes shows the percentage alone', () => {
+    const { frame } = entered();
+    frame.progress.set(0.5);
+    showOverlay();
+    expect(screen.getByRole('status').textContent).toBe('50%');
+  });
+
+  it('time left: a reading time of 0, the library\'s no text, shows the percentage alone', () => {
+    const { frame } = entered({ readingMinutes: 0 });
+    frame.progress.set(0.5);
+    showOverlay();
+    expect(screen.getByRole('status').textContent, 'a document with no text claimed a time left').toBe('50%');
   });
 });

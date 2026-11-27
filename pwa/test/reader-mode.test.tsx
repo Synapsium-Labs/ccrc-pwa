@@ -44,7 +44,7 @@ vi.mock('../src/docs/ReaderFrame', async (importOriginal) => {
     const [sheet, setSheet] = useState(false);
     useEffect(() => {
       setFrame?.({
-        ready: true, planned: false, focus: () => undefined, setReading: () => undefined, command: () => undefined,
+        ready: true, planned: 'off', focus: () => undefined, setReading: () => undefined, command: () => undefined,
         title: 'a.md', progress: { read: () => 0, subscribe: () => () => undefined },
       });
       return () => setFrame?.(null);
@@ -167,7 +167,7 @@ interface FakeFrame extends ReaderModeFrame {
 
 function fakeFrame(ready = true): FakeFrame {
   return {
-    ready, planned: false, focus: vi.fn<() => void>(), setReading: vi.fn<ReaderModeFrame['setReading']>(), command: () => undefined,
+    ready, planned: 'off', focus: vi.fn<() => void>(), setReading: vi.fn<ReaderModeFrame['setReading']>(), command: () => undefined,
     title: 'a.md', progress: { read: () => 0, subscribe: () => () => undefined },
   };
 }

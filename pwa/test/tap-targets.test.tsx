@@ -47,6 +47,8 @@ import { DocsFailureView } from '../src/docs/DocsFailureView';
 import { DOC_MARKDOWN_ACTION } from '../src/docs/DocMarkdown';
 import { DOC_IMAGE_TEXT, DOCS_BANNER_TEXT, DOCS_HEAD_TEXT, DOCS_TOOL_TEXT, DOCS_VIEW_TEXT, SHARE_SHEET_TEXT } from '../src/docs/docsText';
 import { READER_MODE_TEXT } from '../src/docs/reader/readerModeWords';
+import { ReaderModeOverlay } from '../src/docs/ReaderModeOverlay';
+import { createReaderProgress } from '../src/docs/readerBar';
 import type { ReaderDeps } from '../src/docs/ReaderFrame';
 import type { ReaderMount, ReaderMountInput } from '../src/docs/reader/bridge';
 import { SessionActionsSheet } from '../src/fleet/SessionActionsSheet';
@@ -1090,6 +1092,27 @@ describe('the Docs controls (docs W5 part 1, spec 4.14)', () => {
       }));
       expect(await screen.findByRole('button', { name: DOCS_VIEW_TEXT.source })).toHaveClass('docs-leaf-action');
       expect(screen.getByRole('button', { name: DOCS_VIEW_TEXT.download })).toHaveClass('docs-leaf-action');
+    });
+  });
+
+  describe('.docs-reading-turn — reader mode’s Pages and Scroll switch (X6 XR2.2)', () => {
+    it('is at least one tap tall and one tap wide, off the shared token', () => {
+      expect(floorIn(docsCss, '.docs-reading-turn')).toBe('var(--tap-min)');
+      expect(declValue(ruleIn(docsCss, '.docs-reading-turn'), 'min-width')).toBe('var(--tap-min)');
+    });
+    it('is the class both rendered buttons of the overlay’s switch carry, in the bottom strip', () => {
+      render(
+        <ReaderModeOverlay
+          title="a.md" progress={createReaderProgress()} turn="screens" onTurn={() => {}}
+          onExit={() => {}} onAa={() => {}} onDismiss={() => {}} onEsc={() => {}} onActivity={() => {}}
+        />,
+      );
+      const bar = screen.getByRole('toolbar', { name: READER_MODE_TEXT.toolbar });
+      for (const name of [READER_MODE_TEXT.turnScreens, READER_MODE_TEXT.turnScroll]) {
+        const b = screen.getByRole('radio', { name });
+        expect(b).toHaveClass('docs-reading-turn');
+        expect(bar.contains(b)).toBe(true);
+      }
     });
   });
 

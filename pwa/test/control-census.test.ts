@@ -548,6 +548,8 @@ const CONTROLS: Record<string, string> = {
   'docs/DocImage.tsx <button> doc-img-link': "TOKEN. A loaded image's own button, which opens its leaf.",
   'docs/ReaderModeOverlay.tsx <button> docs-reading-exit': "TOKEN. Reader mode's Exit, at the left end of the overlay's bottom strip.",
   'docs/ReaderModeOverlay.tsx <button> docs-reading-aa': "TOKEN. Reader mode's Aa, which opens the reader's settings (D-8803).",
+  'docs/ReaderModeOverlay.tsx <button> docs-reading-turn':
+    "TOKEN. Reader mode's turn setting: the Pages and Scroll buttons between Exit and Aa in the overlay's bottom strip.",
   'docs/ReaderModeOverlay.tsx <div> docs-reading-top':
     "TOKEN. Reader mode's top strip: the document's title, and a tap anywhere on it hides the overlay; it holds no control, "
     + 'and its rule declares the floor.',

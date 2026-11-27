@@ -31,6 +31,20 @@ describe('answerRenderJob', () => {
     expect(outcome.imagesTruncated).toBe(false);
   });
 
+  it('render job: the outcome carries the library\'s reading time', () => {
+    // About 460 words of prose is two minutes by the byline's rule (230 a minute): finite, and at least one.
+    const prose = posts({ id: 7, kind: 'render', src: `# T\n\n${'word '.repeat(460)}\n` })[0]!.outcome;
+    if (prose.kind !== 'rendered') throw new Error(`expected rendered, got ${prose.kind}`);
+    const minutes = prose.result.meta.readingMinutes;
+    expect(typeof minutes, 'the reading time was dropped from the meta').toBe('number');
+    expect(Number.isFinite(minutes)).toBe(true);
+    expect(minutes as number).toBeGreaterThanOrEqual(1);
+    // A document with no text has none: the library says 0, and the job carries it as it is (the overlay shows the percentage alone).
+    const empty = posts({ id: 8, kind: 'render', src: '' })[0]!.outcome;
+    if (empty.kind !== 'rendered') throw new Error(`expected rendered, got ${empty.kind}`);
+    expect(empty.result.meta.readingMinutes).toBe(0);
+  });
+
   it('a delimiter run the pre-scan refuses answers refused, before render runs', () => {
     const src = `a ${String.fromCharCode(42).repeat(MD_MAX_DELIMITER_RUN + 1)} b`;
     const out = posts({ id: 2, kind: 'render', src });

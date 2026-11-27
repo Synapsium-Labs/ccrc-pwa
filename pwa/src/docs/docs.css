@@ -500,13 +500,26 @@
   cursor: pointer;
 }
 .docs-reading-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.docs-reading-bottom { inset-block-end: var(--safe-bottom); gap: var(--sp-2); padding: var(--sp-1) var(--sp-3); }
+/* The strip wraps (X6 XR2.2): on a phone Exit, the turn setting, Aa and "41% · about 12 min left" do not fit one line, and the progress
+   text, which takes the far end, then sits on the next line rather than running off the screen. */
+.docs-reading-bottom { inset-block-end: var(--safe-bottom); flex-wrap: wrap; gap: var(--sp-2); padding: var(--sp-1) var(--sp-3); }
 .docs-reading-exit, .docs-reading-aa {
   flex: none; min-width: var(--tap-min); min-height: var(--tap-min); padding: 0 var(--sp-3);
   border: 0; border-radius: var(--r-sm); background: none;
   font: var(--weight-medium) var(--text-sm) / 1 var(--font-ui);
   cursor: pointer;
 }
+/* The turn setting (X6 XR2.2): a radio group of two buttons, Pages and Scroll, between Exit and Aa. Each is a tap target in both
+   dimensions; the checked one wears the house's pressed ground. It has no transition of its own, so the reduced-motion block
+   has nothing to name for it. */
+.docs-reading-turns { flex: none; display: flex; align-items: center; gap: var(--sp-1); }
+.docs-reading-turn {
+  flex: none; min-width: var(--tap-min); min-height: var(--tap-min); padding: 0 var(--sp-2);
+  border: 0; border-radius: var(--r-sm); background: none;
+  font: var(--weight-medium) var(--text-sm) / 1 var(--font-ui);
+  cursor: pointer;
+}
+.docs-reading-turn[aria-checked='true'] { background: var(--bg-pressed); font-weight: var(--weight-semibold); }
 .docs-reading-percent {
   flex: none; margin-inline-start: auto;
   font: var(--weight-regular) var(--text-sm) / 1 var(--font-ui); font-variant-numeric: tabular-nums;

@@ -452,6 +452,7 @@ describe('reader mode: the frame wiring (X6 XR1.4 with XR2.1)', () => {
   afterEach(() => {
     cleanup();
     vi.useRealTimers();
+    window.localStorage.clear();   // the turn is the device's remembered choice: no case inherits another's
     while (restorers.length > 0) restorers.pop()?.();
   });
 
@@ -739,6 +740,66 @@ describe('reader mode: the frame wiring (X6 XR1.4 with XR2.1)', () => {
     await frameReady(rig, 1);
     expect(rig.mounts[1]!.setReading, 'the late frame was left under a reading that ended').toHaveBeenCalledTimes(1);
     expect(rig.mounts[1]!.setReading).toHaveBeenCalledWith('off');
+  });
+
+  it('reader mode: a body made under one turn and ready after a switch to the other is brought to the new turn', async () => {
+    const { rig, view, places } = await entered();
+    expect(rig.mounts[0]!.setReading).toHaveBeenLastCalledWith('screens');
+    // A new body of the document, made under Pages; its frame is not ready yet.
+    view.rerender(<Screen doc={KEY_A} rig={rig} bodyKey="k2" places={places} />);
+    await flush();
+    expect(rig.inputs[1]!.reading, 'CONTROL: the new body is made under Pages').toBe('screens');
+    // The turn is switched to Scroll meanwhile: no frame is stored (the old one is gone, the new one is not ready), so none is sent.
+    const first = rig.mounts[0]!.setReading.mock.calls.length;
+    act(() => { latest.setTurn('scroll'); });
+    expect(rig.mounts[0]!.setReading.mock.calls.length, 'the destroyed mount was sent the turn').toBe(first);
+    expect(rig.mounts[1]!.setReading).not.toHaveBeenCalled();
+    // It reports ready: it is brought to Scroll, once.
+    await frameReady(rig, 1);
+    expect(rig.mounts[1]!.setReading, 'the body made under Pages was left there').toHaveBeenCalledTimes(1);
+    expect(rig.mounts[1]!.setReading).toHaveBeenCalledWith('scroll');
+    // A turn chosen while the frame is up goes to it in place, and the next body made carries the latest.
+    act(() => { latest.setTurn('screens'); });
+    expect(rig.mounts[1]!.setReading).toHaveBeenLastCalledWith('screens');
+    expect(rig.mounts[1]!.setReading).toHaveBeenCalledTimes(2);
+    view.rerender(<Screen doc={KEY_A} rig={rig} bodyKey="k3" places={places} />);
+    await flush();
+    expect(rig.inputs[2]!.reading, 'a new body is made under the latest turn').toBe('screens');
+    await frameReady(rig, 2);
+    expect(rig.mounts[2]!.setReading, 'a body made under the turn in force was sent it again').not.toHaveBeenCalled();
+  });
+
+  it('reader mode: a same-page reopening reports ready again and the turn chosen meanwhile reaches the frame once', async () => {
+    const { rig } = await entered();
+    const sent = rig.mounts[0]!.setReading;
+    expect(sent.mock.calls).toEqual([['screens']]);
+    act(() => { latest.setTurn('scroll'); });
+    expect(sent.mock.calls, 'the chosen turn did not reach the frame in place').toEqual([['screens'], ['scroll']]);
+    // The same mount opens the same document again at an anchor (`openAt`, a same-page link): its new frame reports ready again, and the
+    // handle's last-sent reading (`scroll`) is what `planned` says, so the context has nothing to send again.
+    await frameReady(rig, 0);
+    await frameReady(rig, 0);
+    expect(sent.mock.calls, 'the turn was sent to the frame again at its second ready').toEqual([['screens'], ['scroll']]);
+    expect(latest.state.on).toBe(true);
+  });
+
+  it('time left: the frame a body hands the context carries the render\'s readingMinutes, and none when the library gave none', async () => {
+    const base = bodyRig();
+    const timed: ReaderRenderOutcome = { ...RENDERED, result: { ...RENDERED.result, meta: { ...RENDERED.result.meta, readingMinutes: 7 } } };
+    const rig: BodyRig = { ...base, reader: { ...base.reader, render: async () => timed } };
+    const places = placesPort();
+    const view = render(<Screen doc={KEY_A} rig={rig} bodyKey="k1" places={places} />);
+    await flush();
+    await frameReady(rig, 0);
+    expect(latest.frame?.readingMinutes, 'the reading time did not reach the frame reader mode holds').toBe(7);
+    view.unmount();
+    const plain = bodyRig();
+    render(<Screen doc={KEY_A} rig={plain} bodyKey="k1" places={places} />);
+    await flush();
+    await frameReady(plain, 0);
+    expect(latest.frame, 'CONTROL: a frame is stored').not.toBeNull();
+    expect(latest.frame?.readingMinutes, 'a reading time appeared from nowhere').toBeUndefined();
+    expect('readingMinutes' in (latest.frame ?? {}), 'the key is absent, not undefined').toBe(false);
   });
 
   it('focus: the frame is focused after entering and after leaving', async () => {

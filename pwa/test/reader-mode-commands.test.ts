@@ -76,7 +76,7 @@ describe('commands: r', () => {
   it('commands: the real handle answers available() through a dialog that offered() refuses', () => {
     const { result } = renderHook(() => useReaderMode({ doc: 'doc-a', plainView: false, places: NO_READER_PLACES }));
     const frame: ReaderModeFrame = {
-      ready: true, planned: false, focus: () => undefined, setReading: () => undefined, command: () => undefined,
+      ready: true, planned: 'off', focus: () => undefined, setReading: () => undefined, command: () => undefined,
       title: 'a.md', progress: { read: () => 0, subscribe: () => () => undefined },
     };
     expect(result.current.controls.available(), 'no frame stored').toBe(false);
