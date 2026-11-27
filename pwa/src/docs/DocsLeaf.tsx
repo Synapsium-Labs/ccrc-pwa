@@ -27,6 +27,7 @@ import { useDocsHighlightStore } from '../lib/highlighterContext';
 import type { MarkdownParser } from '../lib/markdownRunner';
 import { DocImage, DocsAssetContext, DocsLeafImageContext, svgDataUrl, type DocsAssetContextValue } from './DocImage';
 import { MockupView } from './MockupView';
+import { ArtifactOffer } from './artifact/ArtifactOffer';
 import { PdfLeaf, pdfOverInlineSentence } from './pdf/PdfLeaf';
 import { mockupAssetReader } from './mockup/load';
 import type { MockupContext } from './mockup/ports';
@@ -226,6 +227,7 @@ function HtmlBody(p: {
     return (
       <div className="docs-standin">
         <div className="docs-leaf-actions"><SourceButton shown={source} onToggle={() => setSource((s) => !s)} />{p.download}</div>
+        <ArtifactOffer project={page.project} pin={pin} page={page} census={null} />
         {source && <SourceText show={p.show} />}
       </div>
     );
@@ -541,6 +543,8 @@ export function DocsLeaf(p: {
     if (over !== null) {
       // A class with no view (`other`) was told by `DownloadButton`'s tap, so its first tap saves.
       body = rangeBody(pin, { kind: 'blob', sha: over.blob }, over.size, entry, over.blob, cls === 'other');
+      // An HTML version page above its cap never mounts the walls view either: the offer shows its version sentence beside it.
+      if (cls === 'html') body = <>{body}<ArtifactOffer project={page.project} pin={pin} page={page} census={null} /></>;
     } else if (cls === 'raster' && rasterByRange) {
       // X2 P1 (spec 4.3): an image above its class cap, or a draft image with no fingerprint, is shown on its own page
       // from bytes read by range, after its header's dimensions pass the image-view ceilings.
@@ -561,6 +565,8 @@ export function DocsLeaf(p: {
       // Download read the same way.
       const range = rangePinOf(file.pin, entry);
       body = range === null ? <p className="docs-note">{DOCS_VIEW_TEXT.nothingToShow}</p> : rangeBody(file.pin, range, file.size, entry);
+      // X5 A5.1: an HTML page above its cap never mounts the walls view, so the artifact offer sits beside its sentence and Download.
+      if (cls === 'html') body = <>{body}<ArtifactOffer project={page.project} pin={file.pin} page={page} census={null} /></>;
     } else if (cls === 'other') {
       const size = page.at !== null ? undefined : pin.kind === 'draft' ? entry.draft?.size : entry.committed?.size;
       body = (

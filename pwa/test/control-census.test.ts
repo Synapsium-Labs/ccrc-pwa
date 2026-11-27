@@ -541,6 +541,9 @@ const CONTROLS: Record<string, string> = {
   'docs/MockupView.tsx <a> docs-hint-link':
     "TOKEN. An external link in the mockup's links list (native Docs reader C2 Task 8), opened with `openExternal` on tap: a standalone "
     + "line of the list wearing `.docs-hint-link`, whose own rule carries the floor.",
+  'docs/artifact/ArtifactOffer.tsx <button> docs-leaf-action':
+    "TOKEN. Open as artifact (X5 A5.1), beside every HTML page's walls view, the too-large view and the stand-in: the leaf's "
+    + "bordered `.docs-leaf-action`, whose own rule carries the floor.",
   'docs/DocMarkdown.tsx <button> doc-gate-btn': "TOKEN. The large-document gate's two choices.",
   'docs/DocMarkdown.tsx <button> doc-plain-action': "TOKEN. Plain text's Format anyway or Retry.",
   'docs/DocImage.tsx <button> doc-img-load': 'TOKEN. Load image, for an image the page budget held back.',

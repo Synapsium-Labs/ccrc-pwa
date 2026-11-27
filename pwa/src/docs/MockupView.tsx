@@ -27,6 +27,7 @@ import { openExternal, CodeBlock, PreHighlightContext } from '../lib/markdown';
 import { useDocsHighlightStore } from '../lib/highlighterContext';
 import { onAuthRegained } from '../lib/auth';
 import { navigate } from '../lib/router';
+import { ArtifactOffer } from './artifact/ArtifactOffer';
 import { DocsAssetContext } from './DocImage';
 import { DOC_NOT_UTF8_NOTE, docMarkdownSource } from './DocMarkdown';
 import { DocsFailureView } from './DocsFailureView';
@@ -129,8 +130,18 @@ function SourceActions(p: { readonly text: string; readonly download: ReactNode;
   );
 }
 
-/** The refusal line, its reason, the measured counts and the limits, then Source and Download (base 5.6.8). */
-function Refusal(p: { readonly prescan: Extract<MockupPrescan, { ok: false }>; readonly text: string; readonly download: ReactNode; readonly chip: ReactNode }): ReactNode {
+/** The artifact tier's offer beside this view (X5 A5.1; spec 2026-11-19 §6.1): on every inline view, whatever the walls did, and
+ *  none in the full-screen view. The census stays null: only `MockupLive` has one to give (A5.2). */
+function Offer(p: { readonly context: MockupContext; readonly page: Leaf }): ReactNode {
+  if (p.page.frame === 'full') return null;
+  return <ArtifactOffer project={p.page.project} pin={p.context.pin} page={p.page} census={null} />;
+}
+
+/** The refusal line, its reason, the measured counts and the limits, then Source and Download (base 5.6.8), then the offer. */
+function Refusal(p: {
+  readonly prescan: Extract<MockupPrescan, { ok: false }>; readonly text: string; readonly download: ReactNode; readonly chip: ReactNode;
+  readonly context: MockupContext; readonly page: Leaf;
+}): ReactNode {
   const { prescan } = p;
   return (
     <div className="docs-mockup" data-state="refused">
@@ -144,6 +155,7 @@ function Refusal(p: { readonly prescan: Extract<MockupPrescan, { ok: false }>; r
         })}
       </p>
       <SourceActions text={p.text} download={p.download} />
+      <Offer context={p.context} page={p.page} />
     </div>
   );
 }
@@ -479,6 +491,7 @@ function MockupLive(p: MockupViewProps & {
           {p.download}
         </div>
       )}
+      {!full && <Offer context={context} page={page} />}
       {changing && <NoteAction note={MOCKUP_TEXT.changing} label={MOCKUP_TEXT.retry} onClick={retry} />}
       {region}
       {!full && framed && (
@@ -577,7 +590,14 @@ const refusedBody = (text: string): ExportBody => ({ kind: 'plain', text, note: 
 function MockupRun(p: MockupViewProps & { readonly text: string; readonly chip: ReactNode }): ReactNode {
   const parsed = useMemo(() => parseMockup(p.text), [p.text]);
   usePublishExportBody(useMemo(() => (parsed.ok ? null : refusedBody(p.text)), [parsed.ok, p.text]));
-  if (!parsed.ok) return <Refusal prescan={parsed.prescan as Extract<MockupPrescan, { ok: false }>} text={p.text} download={p.download} chip={p.chip} />;
+  if (!parsed.ok) {
+    return (
+      <Refusal
+        prescan={parsed.prescan as Extract<MockupPrescan, { ok: false }>} text={p.text} download={p.download} chip={p.chip}
+        context={p.context} page={p.page}
+      />
+    );
+  }
   return <MockupLive {...p} doc={parsed.doc} />;
 }
 
@@ -599,7 +619,7 @@ export function MockupView(p: MockupViewProps): ReactNode {
     return <DocsFailureView answer={{ s: 'failed', body: { ok: false, failure: 'malformed-answer', why: DOCS_SHOW_NO_BYTES } }} />;
   }
   const chip = src.kind === 'not-utf8' ? <p className="doc-plain-note">{DOC_NOT_UTF8_NOTE}</p> : null;
-  if (pre !== null && !pre.ok) return <Refusal prescan={pre} text={text} download={p.download} chip={chip} />;
+  if (pre !== null && !pre.ok) return <Refusal prescan={pre} text={text} download={p.download} chip={chip} context={p.context} page={p.page} />;
   if (gated) {
     return (
       <div className="docs-mockup" data-state="gated">
@@ -610,6 +630,7 @@ export function MockupView(p: MockupViewProps): ReactNode {
             <Action onClick={() => setTapped(true)}>{fillSentence(MOCKUP_TEXT.render, { size: kib(show.size) })}</Action>
           )}
         />
+        <Offer context={p.context} page={p.page} />
       </div>
     );
   }
