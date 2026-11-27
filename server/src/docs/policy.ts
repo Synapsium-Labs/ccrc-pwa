@@ -289,7 +289,7 @@ const REFRESH_KEYS: readonly string[] = ['ref', 'reason'];
 /** `bad-query`, with the key it names when it names one (`pin-shape` and a non-object body name none). The two range
  *  reasons: `range-step`, a query that is neither exactly a prepare (`prepare=1`) nor exactly a frame (`snapshot`,
  *  `offset`, `length`); `range-number`, an `offset` or `length` outside its count grammar, or a `length` of zero. */
-function badQuery(why: 'unknown' | 'repeated' | 'pin-shape' | 'body' | 'range-step' | 'range-number', key?: string):
+export function badQuery(why: 'unknown' | 'repeated' | 'pin-shape' | 'body' | 'range-step' | 'range-number', key?: string):
   DocsFailureBody {
   return key === undefined ? { ok: false, failure: 'bad-query', why } : { ok: false, failure: 'bad-query', key, why };
 }
@@ -311,9 +311,14 @@ function own(record: Readonly<Record<string, unknown>>, key: string): unknown {
 
 /** The first own key outside `allowed`, in code-unit order, so the answer does not depend on the order the keys
  *  arrived in; `undefined` when every key is allowed. */
-function firstUnknownKey(record: Readonly<Record<string, unknown>>, allowed: readonly string[]): string | undefined {
+export function firstUnknownKey(record: Readonly<Record<string, unknown>>, allowed: readonly string[]): string | undefined {
   return Object.keys(record).sort().find((k) => !allowed.includes(k));
 }
+
+/** `own` and `isRecord` for the artifact tier's parsers (`../artifacts/policy.ts`), under names no other file declares: both
+ *  names are declared, un-exported, in dozens of files, and `docs-ring.test.ts` holds every export of this directory to one
+ *  declaration across the four roots. An export clause declares nothing, so the one definition of each stays here. */
+export { own as docsOwn, isRecord as isDocsRecord };
 
 function sameKeys(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((k, i) => k === b[i]);
@@ -338,7 +343,7 @@ function parsePinPlace(query: Readonly<Record<string, unknown>>):
  * - draft: `branch` (bad-ref; BARE only), `head` (bad-commit), `section`, `path`, `fp` (bad-fingerprint).
  * The pin is assembled only after every value passed.
  */
-function parseFilePin(query: Readonly<Record<string, unknown>>): { ok: true; pin: DocFilePin } | DocsFailureBody {
+export function parseFilePin(query: Readonly<Record<string, unknown>>): { ok: true; pin: DocFilePin } | DocsFailureBody {
   const pinKeys = DOCS_PIN_KEYS.filter((k) => Object.hasOwn(query, k));
   const committed = sameKeys(pinKeys, COMMITTED_PIN_KEYS);
   if ((!committed && !sameKeys(pinKeys, DRAFT_PIN_KEYS)) ||

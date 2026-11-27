@@ -1,5 +1,6 @@
 // The capability token's grammar (native Docs HTML artifacts X5, plan Task A1.1; moved here from `shared/docsReview.ts`,
-// which re-exports it under its own names). L0: imports nothing. The one definition of the grammar.
+// which re-exports it under its own names). L0: imports nothing. The one definition of the grammar. `shared/agent-protocol.ts`
+// re-exports it as the box-token claim code's `CLAIM_CODE_RE` (X5 A2), which is the same 32 bytes in the same alphabet.
 
 /** The characters of a capability token: 32 random bytes, base64url without padding. */
 export const CAPABILITY_TOKEN_CHARS = 43;
