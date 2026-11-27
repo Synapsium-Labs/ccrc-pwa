@@ -6001,7 +6001,7 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   (one of `_launchd_class`'s four words); the writer takes those two as optional arguments, so install's bytes do not
   move. A link, an edit, an older writer's job, a home outside the closed form of `_box_said`, a job launchd holds other
   than that file (`launchctl print`: its path, program, arguments, and an environment of `PATH`, `HOME` and at most
-  `XPC_SERVICE_NAME` holding the label), a launchd domain setting a sign-in key or `BASH_ENV`, and a `ccrc.env` that is
+  `XPC_SERVICE_NAME` holding the label and `OSLogRateLimit` holding a whole number, the four a real launchd drew), a launchd domain setting a sign-in key or `BASH_ENV`, and a `ccrc.env` that is
   not plain assignments all refuse. The lock, the restart and the proof are Linux's code, unchanged. With it, review
   4061's follow-ups: the printed-role rows (`both`, and the bad roles on `off`), an unreadable `ccrc.env`'s own words,
   every file value printed only in a closed form (`_box_said`), the reload advice that could not cure two arms, and

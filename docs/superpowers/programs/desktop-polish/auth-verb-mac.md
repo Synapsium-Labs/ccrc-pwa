@@ -179,7 +179,17 @@ cannot be made; it no longer stands where it can.
   three (the XML's `&amp;` read as `&`; the replacement is quoted, because bash 5.2's `patsub_replacement` makes an
   unquoted `&` the matched text, which the first build tripped on); the job's own `environment` exactly `PATH` and
   `HOME` holding the file's values, plus, if present, `XPC_SERVICE_NAME` holding the label exactly (the coordinator's
-  ruling). Any other key there refuses, named, never its value. The print's other blocks are not read.
+  ruling) and `OSLogRateLimit` holding one to nine digits (fix round 1, ruling 40092). Any other key there refuses,
+  named, never its value. The print's other blocks are not read. The four keys and their rules are one table in the
+  reader (`_auth_job_env_ok`), whose comment says which were measured on a real launchd, on which hosted image and when.
+- **What a real launchd printed** (the first full run, 46033893311, on the hosted image `macos-26-arm64`, 2026-11-27;
+  headings and key names only). The job: `arguments`; `inherited environment` (`SSH_AUTH_SOCK`); `default environment`
+  (`PATH`); `environment` (`OSLogRateLimit`, `PATH`, `HOME`, `XPC_SERVICE_NAME`); `resource coalition`; `jetsam
+  coalition`; `resource limits`. The domain: `security context`; `environment` (`SSH_AUTH_SOCK`); `services`;
+  `unmanaged processes`; `endpoints`; `externally-hosted endpoints`; `task-special ports`; `disabled services`.
+  `OSLogRateLimit` is the system's logging rate limit, which launchd adds to every job: refusing it would refuse every
+  Mac of that system, so the coordinator allowed it by its exact name with a value rule, and the set stays closed. Its
+  value was not printed; the second full run prints only its length and whether it is all digits.
 - **Why it is needed**: launchd reads a job file at bootstrap only, and `kickstart -k` restarts the definition it
   holds, so an edit of the job file on disk is not what a restart applies. (The env files are re-sourced by the job's
   `bash -c` at every start, so the verb's own edit does apply.)
@@ -188,16 +198,25 @@ cannot be made; it no longer stands where it can.
   cannot prove the job on this box without that read; set the keys by hand".
 - **The domain** (`_auth_unit_sources`' Mac arm): `launchctl getenv` for each key of `AUTH_SOURCE_KEYS` and for
   `BASH_ENV`, which the job's `bash -c` runs before it sources the env files. A non-zero exit refuses as not measured;
-  exit zero with output names the key, never its value; exit zero with nothing is no value there.
+  exit zero with output names the key, never its value; exit zero with nothing is no value there. Measured on the
+  hosted Mac (the first full run): `getenv` of an unset key exits 0 with no output, and `getenv` with no key exits 64,
+  so a failed read is told apart from an unset key.
+- **The inherited and default sections are not read (B2, ruling 40092).** The job's print lists by name what the job
+  inherits (`inherited environment`) and launchd's defaults (`default environment`). The reader reads the job's own
+  block only. A domain-level setting of a known key is still covered: whatever the domain sets reaches the job through
+  launchd's inheritance, and the per-key `getenv` read of the domain refuses any of the verb's keys and `BASH_ENV`
+  that the domain sets, before the job is read. A refusing-only read of the inherited list for those keys would be a
+  stronger measure (it reads what the job was given, not what the domain says now); it goes on a ticket of its own
+  with this measurement, not in this wave.
 - **What stays outside (B2), once:** any other variable of the domain (a preload variable, a node option, an exported
   shell function) reaches the job as it reaches the unit on Linux. It is the class the wave-181 note states (anything
   that changes what node runs before the server reads its keys), named here for the Mac: the verb reads only its own
   keys and `BASH_ENV`. On a Mac the job's own `PATH`, which the install writes, is the `PATH` that picks `node`.
 - **An empty value.** What the server receives for a key set to an empty value is the empty string, which `config.ts`
   reads with `||` as unset. The Linux arm refuses a key the user manager's environment sets to an empty value (its
-  `^KEY=` match takes `KEY=` too). `launchctl getenv` answers an empty value and an unset key the same way, as far as
-  can be read, so the Mac cannot hold that line by this read; the hosted leg measures whether the job's print has a
-  section for what it inherits, which would answer it (section 3).
+  `^KEY=` match takes `KEY=` too). `launchctl getenv` answers an empty value and an unset key the same way (exit 0, no
+  output), so the Mac reads both as no value, which is what the server makes of an empty value (ruling 40092, c). The
+  job's print does have a section for what it inherits; reading it is the ticket above.
 
 ### 2.3 The env files under bash (B3)
 
@@ -361,6 +380,80 @@ the branch itself:
   the same four failed with the same tests as on main (`session-hook` 2, `ccrc-models-advance` 6, `ccrc-codex` 2,
   `ccd-tmux-anchor` 19). `shellcheck-ratchet` is still unmeasured here (section 4.4).
 
+### 4.6 Fix round 1: what the first two runs on `05a0859f6b` found
+
+Two reds were this wave's, and both are fixed in one round on the coordinator's word (mail 40018).
+
+- **The shellcheck ratchet** (the PR's fast run, `server 12/12`): `ccd/ccrc: 86 findings, pinned at 62`, SC2178,
+  SC2128, SC2190, SC2209 and SC2155. Shellcheck types a variable name across the whole file, and this wave's new
+  arrays reused names that are strings elsewhere in `ccd/ccrc` (`seen`, `want`). They and the other new arrays now have
+  names used nowhere else in the file (`aus_seen`, `ajc_want`, `ajc_have`, `ajc_parts`, `ajl_args`). Checked by search
+  before the push: no old name (`seen`, `want`, `have`, `parts`, `args`) is left in the changed functions
+  (`_auth_unit_sources`, `_auth_job_cmp`, `_auth_job_loaded`) but the launchd reader's section word `'args'`, a string,
+  while the old names still stand elsewhere in the file as strings; each new name appears only in those three
+  functions; and a word-level read of the round's diff shows only the renamed tokens, the quoted section words, the
+  split `local` and the length test. That read was needed: the first suite pass of the round was red because two
+  file-tool edits had each lost the space at the end of the matched text (`in $BRE_HOSTSRC`, and the `=` of the
+  launchd arguments' comparison), found by the suites and put back. The launchd reader's section words are quoted (`sect='env'` read
+  as a command name), and the bind sentence's `local` is declared apart from its assignment. The pin is not raised and
+  no finding is silenced. The ratchet is measured on CI only: on this box `shellcheck` cannot parse `ccd/ccrc` within
+  the test slice's memory cap (6G), on main's file as on this one. Nothing behaves differently, and no code line is added
+  or removed (the bound fix below adds one comment line). The growth is 131 code lines, re-measured on the round's
+  final tree: 122 before the round, and 9 for `_auth_job_env_ok`, the launchd key table (below).
+- **The regex bound** (the full run, `macos / test-macos 8/8`, `ccrc-doctor-exposure`: `CCRC_HOST=127.0.0.0` printed
+  as `[a value this verb does not print]`): `_box_said`'s pattern was `^[...]{1,1024}$`. macOS's regex library caps a
+  counted bound at RE_DUP_MAX, 255 (glibc allows 32767), so on a real Mac it matched nothing and every value was held
+  back. The length is now tested apart from the bytes (`${#v} -le 1024`, then `^[...]+$`). A search of every pattern in
+  `ccd/ccrc` (bash matches, grep, sed, awk, jq and any other) for an interval bound over 255 finds only that one, on this
+  branch's tip, and none on main. The new describe holds it: a text guard, no interval bound over 255 anywhere in
+  `ccd/ccrc`, red on the mutant back to `{1,1024}`; and the length edges (1, 255, 256 and 1024 bytes whole; 1025, empty,
+  a space and an escape held), red on the mutant without the length test. Both mutants were run in the scratch
+  worktree, and the copy put back and compared.
+- **What that bug would have broken on a real Mac, by condition.** It failed closed: no unsafe byte was ever printed,
+  but every value was held back and every home failed the form. A2's home check (`cmd_auth`, and the fits-here
+  helper's g) asks `_box_said "$HOME"`, so on a real Mac the verb would have refused on every box, `on` and `off`,
+  before any proof. So nothing behind that check was reachable there: A1 (the PATH's remedy), A3 (the link), A4 (the
+  clamped role), B1 (launchd's job environment), B2 (the domain's environment) and B3 (the plain read-back). Doctor and
+  install would never have offered the verb on a Mac either (g). Every refusal sentence that names a file value
+  would have shown the held word in its place (C5's prints, and doctor's reach reasons, which is what the shard showed).
+  The simulated darwin on Linux uses glibc's regex and could never see it. Only the hosted macOS leg measures it, so
+  the second full run with the macOS legs is required before the wave-done, not optional.
+- **What else the first full run showed** (46033893311, on `05a0859f6b`; nothing re-run). The real launchd case ran,
+  printed (section 2.2) and failed at `on` on the bound. The macOS reds of this wave all show the bound: the verb's
+  suite (121), doctor exposure (8), doctor's fleet-box suite (3, the regex error on stderr), doctor's artifacts suite,
+  expose, the artifact tier's expose suite and install-tree (1 each), and the "wave 181" rows of doctor core-auth and
+  install landing (the fits-here helper's home check fails silently there). Nine rows of the verb's suite asserted
+  only an exit code or waited out the proof, so this run cannot show that the bound is their cause; the second run's
+  result is read for each:
+  - `ccrc auth on: the write, the restart and the proof [darwin]`: "is idempotent", and "the four lines mean, to the
+    SERVER, what the verb says they mean";
+  - `ccrc auth off [darwin]`: "removes exactly what on wrote";
+  - `ccrc auth on a Mac: the job proved (wave 193) [darwin]`: "leaves ccrc.env plain to the Mac's reader after on and
+    after off";
+  - `ccrc auth: a signal in the proof window (review 3934 F3) [darwin]`: the SIGINT, SIGTERM and SIGHUP rows, "a
+    signal after the copy is made and before the write", and "a signal as the proven run removes its copy".
+- **macOS reds that are not this wave's**, each red on a daily run of main with the macOS legs (45933630761 on
+  `3fda0fc9b1`, 2026-11-27, unless named): `testbox-admin-user-writes` (18), `testbox-admin-key-rotate` (17),
+  `ccd-launch-profile` (14), `ccd-route-holddown` (13), `ccd-fresh-pick` (8), `overlord-read` (8),
+  `overlord-read-context` (6), `history-quiz-unattended` (2), one row each of `ccd-docs-folder`,
+  `ccd-docs-folder-read`, `ccd-hibernate-roll`, `ccd-inflight`, `ccd-route-model-id`, `ccd-tick-budget`,
+  `ccrc-doctor-quiz`, `inflight-manifest`, `overlord-read-scope`, `session-hook-precompact-refuse`,
+  `testbox-admin-connect-retry`, and of doctor core-auth and install landing; `ccd-route-degrade` and
+  `ccd-skill-ensure` red on 45748314113 (2026-11-26). Three are red on neither daily and in no file of this wave:
+  two rows of `ccrc-api` (an out-of-range code point), one of `delivery-drive` (a key the Mac adds to an empty
+  environment) and one timing row of `session-hook`. Shard 7 was cancelled at the job's 55-minute limit after 28 files,
+  as a shard of main's daily of 2026-11-27 was.
+- **`OSLogRateLimit` (ruling 40092).** B1's table gains the key by its exact name with a value of one to nine digits.
+  The simulated darwin's launchd answer is now the block the real launchd drew (`OSLogRateLimit`, `PATH`, `HOME`,
+  `XPC_SERVICE_NAME`), so every darwin row reads that block, and one row says it is accepted. Refused, on and off,
+  naming the key: a value that is a word, empty, ten digits or holds a space, and the names `oslogratelimit`,
+  `XOSLogRateLimit` and `OSLogRateLimitX`. Three mutants, run in the scratch worktree and the copy put back and
+  compared: the table without its fourth row (the measured-block row red, with four more of the Mac describe), the
+  key with any value (the four value rows red), and the name matched in any case with a prefix or suffix (the three
+  name rows red).
+  The real case prints the value's length and whether it is all digits, never the value; a value outside the rule
+  there goes to the coordinator, and the rule is not widened here.
+
 ## 5. Notes
 
 - `ccd/ccrc` is held by claim 7531 for #3478. Its holder said yes (mail 39670) to this exact change of the file
@@ -377,12 +470,17 @@ the branch itself:
   the planted file is never compared and `launchctl` is asked nothing. So the reach refusal there needs no job the
   proof accepts. This branch changes that case's Darwin expectation to the reach refusal (red on the merge before the
   change, as measured), under claim 7602, so the case now shows the Mac reach check is reached.
-- Growth: `ccd/ccrc` grows by 122 code lines against the merge-base (26 of them Part 1's), past the per-PR limit of 40,
-  under D-9158's waiver (`server/test/growth-waivers/D-9158-ccd-ccrc.json`, its limit the measured 122).
+- Growth: `ccd/ccrc` grows by 131 code lines against the merge-base (26 of them Part 1's, 9 fix round 1's key table),
+  past the per-PR limit of 40, under D-9158's waiver (`server/test/growth-waivers/D-9158-ccd-ccrc.json`, its limit
+  the measured 131).
 
 - One shell call of this wave was refused by the session hook: a Python heredoc rewriting two blocks of this wave's own
   test file, whose text named fixture passphrase file names; no file that guard protects was its target. It was
   reported word for word (mail 39527) and the edit made with the file edit tool, the coordinator's ruling (mail 39535).
+- In fix round 1 the session hook refused a second shell call, a read-only check of this round's own diff whose
+  pattern named the launchd reader's section word for the environment block as a bare word, as "printing the whole
+  environment"; nothing was printed, it was reported word for word (mail 40034), and the act was stopped and not made
+  another way.
 - `ccrc-install-landing`'s "ends with doctor, and a fresh box ends green" is red on this box on main's code too
   (measured): its doctor reads this box's own processes, and a browser MCP server here makes it WARN. On the fleet test
   box, where `ccrc test` ran it for section 4.4, it is green.
