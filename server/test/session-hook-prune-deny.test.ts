@@ -356,12 +356,14 @@ describe('the linearity verdict is the median of the per-round differences (D-91
   });
 
   it('runs each round\'s pair in that round\'s order and puts each sample in its own program\'s cell, in both orders (pairCells)', () => {
+    const programs = { original: 'the original program text', current: 'the current program text' } as const;
     for (let i = 0; i < LINEARITY_ROUNDS; i++) {
-      const calls: Program[] = [];
+      const calls: string[] = [];
       // A sample reads its program (original 10s, current 20s) plus its place in the round's run order (1 or 2).
-      const cells = pairCells(i, (p) => { calls.push(p); return (p === 'original' ? 10 : 20) + calls.length; });
+      const cells = pairCells(i, programs, (text) => { calls.push(text); return (text === programs.original ? 10 : 20) + calls.length; });
       const first = linearityOrder(i);
-      expect(calls, `round ${i} runs ${first} first`).toEqual(first === 'original' ? ['original', 'current'] : ['current', 'original']);
+      expect(calls, `round ${i} runs ${first} first`)
+        .toEqual(first === 'original' ? [programs.original, programs.current] : [programs.current, programs.original]);
       expect(cells, `round ${i}'s cells are [original, current]`).toEqual(first === 'original' ? [11, 22] : [12, 21]);
     }
   });
@@ -480,6 +482,48 @@ describe('the forbidden program\'s cost on quote-dense payloads naming worktree 
       .flatMap((mode) => (['cost', 'linearity'] as const).map((kind): Row => `${name}/${mode} ${kind}`)));
     expect(Object.keys(ROW_BASELINE).sort(), 'one entry for each of the eight rows').toEqual([...rows].sort());
     for (const row of rows) expect(ROW_BASELINE[row], row).toBe(row.endsWith(' cost') ? 'gate' : 'original');
+  });
+  it('each row\'s two programs are its baseline from the table in the original\'s cell and the hook\'s program in the current one (programsOf)', () => {
+    for (const row of Object.keys(ROW_BASELINE) as Row[]) {
+      const p = programsOf(row);
+      expect(p.original, `${row}: the original's cell holds the row's baseline`).toBe(readVendored(ROW_BASELINE[row]));
+      expect(p.current, `${row}: the current cell holds the hook's program`).toBe(prog);
+      expect(p.original, `${row}: two different programs`).not.toBe(p.current);
+    }
+  });
+  // review 4016 F1: a scan of this file's own code (comments taken out), for what the pins above cannot see, the places
+  // that use the table and the cells. It reads text, not behaviour: it cannot see a fixture read some other way than the
+  // one accessor (an alias, a helper of another name, a path built at run time), a measuring case outside the two
+  // bodies it finds by their titles, or code that means the same but is spelt otherwise; what `programsOf`, `pairCells`
+  // and `timed` do is pinned by their own cases and the rows' figures, not here. Its needles are split so that this
+  // case's own text never matches them.
+  it('the measuring cases take their programs only through programsOf, each by its own row, and the linearity rows pair through pairCells (a scan of this file)', () => {
+    const code = fs.readFileSync(path.join(__dirname, 'session-hook-prune-deny.test.ts'), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    const count = (text: string, needle: string): number => text.split(needle).length - 1;
+    const body = (title: string, end: string): string => {
+      const at = code.indexOf(title);
+      expect(at, `the case titled …${title}`).toBeGreaterThan(-1);
+      expect(count(code, title), `one case titled …${title}`).toBe(1);
+      const stop = code.indexOf(end, at);
+      expect(stop, `the end of the case titled …${title}`).toBeGreaterThan(at);
+      return code.slice(at, stop);
+    };
+    const cost = body('stays within the startup-adjusted 06aed21ff bound at 64 KB' + '`', '}, scaled(' + '300_000)');
+    const linearity = body('KB stays within the inherited-cost bound' + '`', '}, scaled(' + 'smallKb');
+    const vendored = 'readVendored' + '(';
+    const programsFor = (kind: 'cost' | 'linearity'): string => 'programsOf' + '(`${name}/${mode} ' + kind + '`)';
+    expect(count(code, vendored), 'a vendored program is read in programsOf, the hash case and the programsOf case only').toBe(4);
+    for (const [kind, b] of [['cost', cost], ['linearity', linearity]] as const) {
+      expect(count(b, vendored), `the ${kind} case reads no vendored program itself`).toBe(0);
+      expect(count(b, 'programsOf' + '('), `the ${kind} case asks programsOf once`).toBe(1);
+      expect(count(b, programsFor(kind)), `the ${kind} case asks for its own row`).toBe(1);
+    }
+    expect(count(cost, 'timed' + '('), 'the cost case times its two programs, nothing else').toBe(2);
+    expect(count(cost, 'timed' + '(reference, mode, 64)') + count(cost, 'timed' + '(current, mode, 64)')).toBe(2);
+    expect(count(linearity, 'pairCells' + '(i, programs, (text) => timed(text, mode, kb))'),
+      'the linearity case pairs through pairCells, its callback running the text it is given').toBe(1);
+    expect(count(linearity, 'timed' + '('), 'the linearity case times nothing outside pairCells').toBe(1);
   });
   for (const [name, unit, quoted] of [['quotes', 'a "b c" \'d\' \\e ', false], ['dqsub', '$(x) `y` ', true]] as const) {
     const timed = (p: string, mode: string, kb: number): number => {
