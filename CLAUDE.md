@@ -197,6 +197,11 @@ real values: `deploy/reference-fleet.md` (gitignored).
   walls** (`env -u CLAUDECODE` defeats the first). Never run one from a session to turn a test or a doctor line
   green: `~/.ccrc/history` holds verbatim session text, secrets sessions printed included, and once Claude Code's
   retention passes it is that text's only copy.
+- **Turning the console's sign-in on or off with `ccrc auth on|off` is the OPERATOR's, never a session's** (desktop
+  polish wave 181): it rewrites the server box's `ccrc.env` and restarts `ccrc.service`, from the operator's own
+  terminal. It refuses inside a Claude Code session (`CLAUDECODE` set), without a terminal and inside a `cc-*` pane
+  (`_ccrc_operator_only`, `ccd/ccrc`): **speed bumps, not walls** (`env -u CLAUDECODE` defeats the first). Never run
+  it from a session, and never against the live host from a test.
 
 ## Build / test / deploy
 **No root `package.json`, no root runner.** FIVE packages, each `"type":"module"`, run cd'd in:
@@ -621,10 +626,13 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `server/src/coord/overlordInboxRoutes.ts`, a lane source of its own for the census), each check the box token in their own
   `onRequest`, then ask the Overlord gate with their own row's key, and sit in `auth/gate.ts`'s EXEMPT table like the linking
   confirm. So does the Overlord's history door, `POST /api/overlord/history` (Overlord W1 PR B1: a read whose search words ride the
-  body; its handler is in `server/src/coord/overlordHistoryRoutes.ts`, a lane source of its own for the census). So does the Overlord's cursor
+  body; its row not fenced since board B2, so a reader reads it through the door process's read tool and a read is attributed to the
+  Overlord, not proven its own; its handler is in `server/src/coord/overlordHistoryRoutes.ts`, a lane source of its own for the census). So does the Overlord's cursor
   read of the sequence, `GET /api/overlord/sequence` (Overlord W1 sequence C: server words and ids only, its row not fenced, so its read
-  ceiling counts every attributed line; its handler is in `server/src/coord/overlordSequenceRoutes.ts`, a lane source of its own for the
-  census). The dual-credential reads, including `GET /api/feed`,
+  ceiling counts every attributed served line; its handler is in `server/src/coord/overlordSequenceRoutes.ts`, a lane source of its own for the
+  census). So does the Overlord's board, `GET /api/overlord/board` (Overlord W1 PR B2: one composed read of the fleet, ids, counts and
+  marked one-liners, its row not fenced, so its read ceiling counts every attributed served line; its handler is in
+  `server/src/coord/overlordBoardRoutes.ts`, a lane source of its own for the census). The dual-credential reads, including `GET /api/feed`,
   the programme goals read `GET /api/programmes/:slug/goals` (D-8126: a coordinator reads the pin, its definition of done and
   the open items cookieless through `ccrc-api`, the console with a session), the landing line's read `GET /api/landing`
   (landing order wave 5j, D-9048: a coordinator reads it cookieless through `ccrc-api landing show`, the console with a session),

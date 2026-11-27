@@ -108,8 +108,9 @@ function scanRoutes(file: string): ScannedRoute[] {
     .map((m) => ({ method: m[1]!.toUpperCase(), routePath: m[2]!, file }));
 }
 
-/** THIRTY-THREE files register routes since the box frames read (`server/src/testboxFramesRoutes.ts`, Desktop polish wave 187:
- *  its one box-token route, registered from `registerCoordRoutes`); THIRTY-TWO since the Overlord's cursor read of the sequence (`server/src/coord/overlordSequenceRoutes.ts`,
+/** THIRTY-FOUR files register routes since the box frames read (`server/src/testboxFramesRoutes.ts`, Desktop polish wave 187:
+ *  its one box-token route, registered from `registerCoordRoutes`); THIRTY-THREE since the Overlord's board (`server/src/coord/overlordBoardRoutes.ts`, Overlord W1 PR B2: its one
+ *  box-token route); THIRTY-TWO since the Overlord's cursor read of the sequence (`server/src/coord/overlordSequenceRoutes.ts`,
  *  Overlord W1 sequence C: its one box-token route); THIRTY-ONE since the runway read (`server/src/poolRunwayRoute.ts`, Overlord W1 serviceability B: its one session-gated route);
  *  THIRTY since the Overlord's history door (`server/src/coord/overlordHistoryRoutes.ts`, Overlord W1 PR B1: its one box-token route);
  *  TWENTY-NINE since the draft review's read door (`server/src/review/routes.ts`, X3 R1: its one capability route,
@@ -150,6 +151,7 @@ const ROUTES: ScannedRoute[] = [
   ...scanRoutes('coord/overlordInboxRoutes.ts'),
   ...scanRoutes('coord/overlordHistoryRoutes.ts'),
   ...scanRoutes('coord/overlordSequenceRoutes.ts'),
+  ...scanRoutes('coord/overlordBoardRoutes.ts'),
   ...scanRoutes('continuity/quizRoutes.ts'),
   ...scanRoutes('operatorModel/nameListRoutes.ts'),
   ...scanRoutes('coord/decisionModelRoutes.ts'),
@@ -851,12 +853,16 @@ describe('the scanner is looking at something', () => {
     // token: the HTTP half 331 -> 333, the gated count 213 -> 215 (333 - 118), the exempt-HTTP count stays 118.
     // 341 with the artifact tier's five console doors (X5 A2.3), in `docs/routes.ts`: session-gated and NOT EXEMPT, no box token.
     // The HTTP half 333 -> 338, the gated count 215 -> 220 (338 - 118), the exempt-HTTP count stays 118.
-    // 342 with the box frames read (Desktop polish wave 187): `GET /api/testbox/frames` in `testboxFramesRoutes.ts`, a routes
-    // file of its own, a box-token machine lane IN EXEMPT (a session or the box token). The HTTP half 338 -> 339, the gated
-    // count stays 220 (339 - 119), the exempt-HTTP count 118 -> 119.
     expect(scanRoutes('coord/overlordSequenceRoutes.ts').length).toBe(1);
+    // 342 with board B2's read: `GET /api/overlord/board`, the Overlord's board, in `coord/overlordBoardRoutes.ts`, a routes file of
+    // its own, one box-token machine lane IN EXEMPT. The HTTP half 338 -> 339, the gated count stays 220 (339 - 119), the
+    // exempt-HTTP count 118 -> 119.
+    expect(scanRoutes('coord/overlordBoardRoutes.ts').length).toBe(1);
+    // 343 with the box frames read (Desktop polish wave 187): `GET /api/testbox/frames` in `testboxFramesRoutes.ts`, a routes
+    // file of its own, a box-token machine lane IN EXEMPT (a session or the box token). The HTTP half 339 -> 340, the gated
+    // count stays 220 (340 - 120), the exempt-HTTP count 119 -> 120.
     expect(scanRoutes('testboxFramesRoutes.ts').length).toBe(1);
-    expect(ROUTES.length).toBe(342);
+    expect(ROUTES.length).toBe(343);
     expect(scanRoutes('laneModelsRoutes.ts').length).toBe(1);
     expect(scanRoutes('coord/delegationBackfillRoutes.ts').length).toBe(2);
     expect(scanRoutes('coord/approvalCensusRoutes.ts').length).toBe(1);
@@ -1048,7 +1054,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 342 scanned + the static wildcard when the bundle is built.
+    // 343 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1171,6 +1177,7 @@ describe('EXEMPT is complete in both directions', () => {
       'GET /api/mail',
       'GET /api/mail/:id',
       'GET /api/mail/inbox',
+      'GET /api/overlord/board',
       'GET /api/overlord/inbox',
       'GET /api/overlord/messages/:id',
       'GET /api/overlord/sequence',
@@ -1295,7 +1302,7 @@ describe('EXEMPT is complete in both directions', () => {
     expect([...EXEMPT_BUT_AUTHENTICATED].sort()).toEqual([...EXEMPT_BUT_AUTHENTICATED_DERIVED].sort());
   });
 
-  it('the thirty-nine box-token lanes in EXEMPT are those coord routes, and one hundred and seven with notify, pools/epoch, updates/intent, the Linear proxy, the ledgers, the linking lanes, the call record, the remaining-work door, the plan lanes, the start report, the loads report, the act-key claim, the report door, the card door, the note door, the timer doors, the probe door, the quiz record door, its confirmation, its tick report, the coordinator\'s Live, the Overlord\'s inbox doors, its history door and its cursor read', () => {
+  it('the thirty-nine box-token lanes in EXEMPT are those coord routes, and one hundred and eight with notify, pools/epoch, updates/intent, the Linear proxy, the ledgers, the linking lanes, the call record, the remaining-work door, the plan lanes, the start report, the loads report, the act-key claim, the report door, the card door, the note door, the timer doors, the probe door, the quiz record door, its confirmation, its tick report, the coordinator\'s Live, the Overlord\'s inbox doors, its history door, its cursor read and its board', () => {
     // ORDER-PINNED TITLE. `box-token-census.test.ts` reads the number words in the
     // line above IN SEQUENCE — lanes first, total second — so rewording the title
     // the other way round is a red suite until that expectation moves with it
@@ -1867,7 +1874,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 339 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 340 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1931,7 +1938,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 339 HTTP routes, not the 119 exempt.
+          //    is not itself flag-aware — the assertion that covers all 340 HTTP routes, not the 120 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

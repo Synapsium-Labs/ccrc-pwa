@@ -9,6 +9,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { defaultOperatorModelDbPath, openOperatorModelDb } from '../src/operatorModel/db.js';
 import { OperatorModelStore, type PrivacyIssuer } from '../src/operatorModel/store.js';
 import { runOverlordRead, type OverlordReadDeps, type ReadComposed } from '../src/coord/overlordRead.js';
+import type { ReadRefusalExtra } from '../src/coord/overlordRead.js';
 import { doorRow, type OverlordDoorRow } from '../src/coord/overlordDoors.js';
 import type { GateRun } from '../src/coord/overlordGateRun.js';
 import { READ_TURN_STATES, type ReadDoor, type ReadLine, type ReadTurnState } from '../../shared/operatorMessages.js';
@@ -273,6 +274,17 @@ describe('the other 200, and a refusal\'s own fields (Overlord W1, PR B1)', () =
       { kind: 'refuse', word: 'bad-request', extra: { detail: 'd' }, scope: 'all', outcome: 'x' },
     ];
     expect(shapes).toHaveLength(3);
+  });
+
+  // Review 3749 F4: an extra built elsewhere (not a fresh literal, so the type's excess-property check never saw it) that also
+  // carries the answer's own keys cannot override them: the runner picks `cause` and `refusal` by name.
+  it('an extra value that carries ok, error or detail beside its own fields overrides nothing: only cause and refusal ride', async () => {
+    const { store } = storeOnFile();
+    const built = { cause: 'no-agent', refusal: 'oversize', ok: true, error: 'other', detail: 'a producer\'s words', note: 'x' };
+    const extra: ReadRefusalExtra = built;
+    const r = await rig({ ledger: store, compose: () => ({ kind: 'refuse', word: 'history-unreachable', extra, scope: 'all', outcome: 'no-agent' }) });
+    const res = await get(r);
+    expect(json(res)).toEqual({ ok: false, error: 'history-unreachable', cause: 'no-agent', refusal: 'oversize' });
   });
 
   it('an answer whose line did not land sends nothing but write-failed', async () => {

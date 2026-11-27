@@ -133,6 +133,7 @@ import { registerOverlordInboxRoutes } from './coord/overlordInboxRoutes.js';
 import { runOverlordRead } from './coord/overlordRead.js';
 import { registerOverlordHistoryRoutes } from './coord/overlordHistoryRoutes.js';
 import { registerOverlordSequenceRoutes } from './coord/overlordSequenceRoutes.js';
+import { boardPortsOf, registerOverlordBoardRoutes } from './coord/overlordBoardRoutes.js';
 import { sequenceAfter } from './coord/overlordSequenceStore.js';
 import { invariantsReadOver } from './coord/invariantLane.js';
 import { readTurnMarkMeasured } from './turnmark.js';
@@ -140,6 +141,7 @@ import { actKeyFact, advanceCounterGuarded, recordFenceRefusal } from './coord/o
 import { CONTINUITY_LANE } from '../../shared/lane-arm.js';
 import { NO_LADDER_AUTHORITY } from './coord/overlordAuthorityJournal.js';
 import { renewalHostOf } from './continuity/renewalWiring.js';
+import { placeMarkReporter } from './continuity/placeMarkReport.js';
 import { registerResponseRoutes } from './responses/routes.js';
 import { readLinearStore } from './linear/store.js';
 import { trackerIdsIn } from './linking/policy.js';
@@ -330,6 +332,8 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/portfolio', '/api/overlord/ladder', '/api/overlord/readiness',
   // The operator's messages, one by its id (W1 inbox piece): the text is the operator's own words, masked by the one answer hook.
   '/api/overlord/inbox', '/api/overlord/messages/:id',
+  // The Overlord's board (W1 PR B2): programme titles, session ids and item titles a session wrote, each marked untrusted.
+  '/api/overlord/board',
   // The operator's read of the invariant monitor (sequence C): findings' messages and unmeasured reasons carry composed text, a
   // producer's error detail among it, as the ladder's and the readiness word's `why` do.
   '/api/overlord/invariants',
@@ -2368,6 +2372,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   registerOverlordSequenceRoutes(app, { mailToken: () => deps.mailToken ?? null, gate, readRunner,
     sequence: (after, limit) => (deps.coord === undefined ? { kind: 'unmeasured', why: 'no coordination store' } : sequenceAfter(deps.coord.db, after, limit)),
     restoreGeneration: () => deps.overlordRestore?.restoreGeneration() ?? { kind: 'unmeasured' } });
+  // The Overlord's board (W1 PR B2): one composed read over the readers the console's own reads call, through this server's walk cache.
+  registerOverlordBoardRoutes(app, { mailToken: () => deps.mailToken ?? null, gate, readRunner, board: boardPortsOf({ coord: deps.coord, io: deps.io,
+    cfg: deps.cfg, cache: () => projectWalk, watcher, liveAsk, now: () => deps.time.clock.wall(), readiness: deps.overlordReadiness, isolation: deps.isolation,
+    ladder: ladderDeps === undefined ? undefined : () => ladderRead(ladderDeps.coord, ladderDeps.inputs, ladderDeps.witness ?? NO_WITNESS_YET, ladderDeps.serverCaps) }) });
   // The Overlord's account reads, one object for the designation doors and the designation's lane port.
   const overlordAccountReads = { roster: () => deps.cfg.roster, limits: () => readLimits(deps.io, deps.cfg), shares: () => readSharesMeasured(deps.io, deps.cfg.registryDir) };
   // The loads door's settle step (W1 sandbox B, Task 9): the designation's writers and its one drain, on the serialiser.
@@ -2540,6 +2548,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   });
   registerResponseRoutes(app, { coord: deps.coord, time: deps.time, gate: accountGate, notice, actorOf: consoleActor });
 
+  // The visible Overlord place's report: a visible frame of the bound session refreshes the @overlord-place mark, at most once a minute.
+  const reportPlaceVisible = placeMarkReporter(deps.coord, () => deps.time.clock.wall());
   app.get('/ws/session/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };
     const q = req.query as { since?: string; sinceFile?: string };
@@ -2562,7 +2572,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       viewers.touch(token);
       try {
         const m = asSessionClientMsg(JSON.parse(String(raw)));
-        if (m?.type === 'visible') viewers.setVisible(token, m.visible ? id : null);
+        if (m?.type === 'visible') { viewers.setVisible(token, m.visible ? id : null); reportPlaceVisible(id, m.visible); }
         else if (m?.type === 'helper-report') stream.helperReport(m.id);
         else if (m?.type === 'older-page') stream.olderPage(m.continuation);
       } catch { /* a client that sends garbage simply isn't reporting visibility */ }
