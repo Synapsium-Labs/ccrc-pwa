@@ -803,8 +803,9 @@ describe('screen pages, on the real 1.2.0 release (XR2.3)', () => {
 
   /** Taps an in-document link in Pages and reads where the frame is while it settles: the target is reached, and it is not a turn
    *  on top (the library's tap on a link never turns). `by` is the finger or the mouse. */
-  async function linkTap(by: 'touch' | 'mouse'): Promise<void> {
+  async function linkTap(by: 'touch' | 'mouse', settleMs: number): Promise<{ reached: { top: number; scroll: number }; later: { top: number; scroll: number } }> {
     const app = await open({ view: DESK, touch: by === 'touch' });
+    let out: { reached: { top: number; scroll: number }; later: { top: number; scroll: number } } | null = null;
     await using(app, async () => {
       const page = app.page;
       await enter(page);
@@ -822,21 +823,43 @@ describe('screen pages, on the real 1.2.0 release (XR2.3)', () => {
       }));
       await becomes(async () => { const r = await at(); return r.top >= -1 && r.top < 300; }, true, 'the fragment\'s target at the top of the frame', page);
       const reached = await at();
-      // The place the link took the frame to holds: the frame is read again once the jump has settled.
-      await page.waitForTimeout(800);
-      const later = await at();
+      // With a settle time, the place the link took the frame to is read again once the jump has settled.
+      if (settleMs > 0) await page.waitForTimeout(settleMs);
+      const later = settleMs > 0 ? await at() : reached;
       console.log(`XRB-FIGURE link-tap ${by} ${JSON.stringify({ h, top0, reached, later })}`);
       expect(reached.scroll, 'the link took the frame away from the top').toBeGreaterThan(top0 + h);
       expect(reached.top, 'the target is where a link puts it (not a screen further: no turn on top)').toBeGreaterThanOrEqual(-1);
       expect(reached.top, 'and in the upper part of the view').toBeLessThan(h / 3);
-      expect(later.scroll, 'and the frame stays at the target once the jump has settled').toBe(reached.scroll);
+      out = { reached, later };
     });
+    if (out === null) throw new Error('the link tap read nothing');
+    return out;
   }
 
-  it('screen pages: a link tap opens the link, not a turn', () => linkTap('touch'), 180_000);
+  it('screen pages: a link tap opens the link, not a turn', async () => {
+    const { reached, later } = await linkTap('touch', 800);
+    expect(later.scroll, 'and the frame stays at the target once the jump has settled').toBe(reached.scroll);
+  }, 180_000);
 
-  // Known failure, not ccrc's (under the library's report): with a mouse, in real full screen, in Pages, the library's in-document jump scrolls back to where it was about 170 to 200 ms later, and this row reds the day the library is fixed.
-  it.fails('screen pages: a link tap opens the link, not a turn (a mouse, no touch screen)', () => linkTap('mouse'), 180_000);
+  // With a mouse the jump itself is proven here (a plain row: any failure of open, enter, the click or the jump reds it), and it stops there.
+  it('screen pages: a link tap opens the link, not a turn (a mouse, no touch screen)', async () => {
+    await linkTap('mouse', 0);
+  }, 180_000);
+
+  // Known failure: the revert follows a focus move without scroll inside the frame while an ancestor is the full-screen element, about 160 to 200 ms later, in automated Chromium;
+  // no script of the library's or the console's causes it, and whether a person's browser shows it is not yet measured. This row reds the day it holds.
+  // `it.fails` passes on any throw, so the row marks the one place it must reach (the last assertion), and the `afterAll` below reds the file if it started and never got there.
+  let mouseStayStarted = false;
+  let mouseStayReached = false;
+  afterAll(() => {
+    if (mouseStayStarted) expect(mouseStayReached, 'the mouse stay row got past open, enter, the click and the jump to its last assertion').toBe(true);
+  });
+  it.fails('screen pages: with a mouse, the frame stays at a link\'s target once the jump has settled (known failure, in automated Chromium)', async () => {
+    mouseStayStarted = true;
+    const { reached, later } = await linkTap('mouse', 800);
+    mouseStayReached = true;
+    expect(later.scroll, 'the frame stays at the target once the jump has settled').toBe(reached.scroll);
+  }, 180_000);
 
   it('screen pages: a resize keeps the place and lands on a whole line', async () => {
     const app = await open({ view: DESK });
