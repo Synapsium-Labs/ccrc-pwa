@@ -99,7 +99,7 @@ export interface OverlordBody {
 /** The coordination store's members the doors call (one `Pick`, so a test hands the real store over an in-memory database). */
 export type OverlordCoord = Pick<CoordStore,
   'designationRead' | 'designatePending' | 'rebindPending' | 'bindPendingGeneration' | 'failPending' | 'retire' | 'stopDone'
-  | 'raiseItem' | 'accountPoolEdges'
+  | 'raiseItem' | 'accountPoolEdges' | 'accountHolds'
   | 'setModelClass' | 'setAccountSet'>;
 
 export interface OverlordRouteDeps {
@@ -163,6 +163,7 @@ export const NO_OVERLORD_STORE: { readonly coord: OverlordCoord; readonly journa
   coord: {
     designationRead: () => ({ kind: 'unmeasured', why: 'this server has no coordination store or authority journal' }),
     accountPoolEdges: () => new Map(),
+    accountHolds: () => ({ ok: false, detail: 'this server has no coordination store' }),
     designatePending: unreachable, rebindPending: unreachable, bindPendingGeneration: unreachable, failPending: unreachable, retire: unreachable,
     stopDone: unreachable, raiseItem: unreachable,
     setModelClass: unreachable, setAccountSet: unreachable,
@@ -236,23 +237,23 @@ export async function drainOwedStops(
   return { stopped, owed };
 }
 
-/** Everything `overlordAccounts` and the placement read, once per call. A read that throws is the caller's to answer, never an
- *  empty list. */
+/** Everything `overlordAccounts` and the placement read, once per call, the standing account holds among them (renewal readings
+ *  PR H: the list leaves a held account out). A read that throws is the caller's to answer, never an empty list. */
 async function readAccountFacts(d: { facts: Pick<OverlordRouteDeps['facts'], 'roster' | 'limits' | 'shares'>;
-  coord: Pick<OverlordCoord, 'accountPoolEdges'>; clock: Pick<Clock, 'wall'> }): Promise<AccountFacts & { shares: SharesRead }> {
+  coord: Pick<OverlordCoord, 'accountPoolEdges' | 'accountHolds'>; clock: Pick<Clock, 'wall'> }): Promise<AccountFacts & { shares: SharesRead }> {
   const roster = d.facts.roster();
   const [limits, shares] = await Promise.all([d.facts.limits(), d.facts.shares()]);
   const edges = d.coord.accountPoolEdges();
   const lanes: Record<string, LaneFacts> = {};
   for (const a of roster.accounts) lanes[a.id] = laneFactsOf(a, limits, shares);
-  return { roster, limits, edges, lanes, nowS: Math.floor(d.clock.wall() / 1000), shares };
+  return { roster, limits, edges, lanes, nowS: Math.floor(d.clock.wall() / 1000), shares, held: d.coord.accountHolds() };
 }
 
 // ── the lane port (designation B, plan Tasks 7 and 10) ───────────────────────────────────────────────────────────────
 
 /** What the lane port reaches: the doors' serialiser, store, body and account facts, and the settle step's two entries. */
 export interface OverlordLaneDeps extends Pick<OverlordRouteDeps, 'serial' | 'body' | 'clock'> {
-  readonly coord: Pick<OverlordCoord, 'designationRead' | 'failPending' | 'stopDone' | 'accountPoolEdges'>;
+  readonly coord: Pick<OverlordCoord, 'designationRead' | 'failPending' | 'stopDone' | 'accountPoolEdges' | 'accountHolds'>;
   readonly facts: Pick<OverlordRouteDeps['facts'], 'roster' | 'limits' | 'shares'>;
   /** `continuity/routes.ts#settleFactOf` and `#settleLoads` over the loads door's own settle port (one settle path). */
   readonly settle: {

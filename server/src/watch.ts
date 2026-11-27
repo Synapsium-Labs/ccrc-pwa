@@ -2125,6 +2125,8 @@ export class FleetWatcher {
   private generationsProc: string | undefined;
   /** The starts this process held for a failed read, and each generation's empty probe try (`GenerationsDeps.retried`, `.emptyTries`). */
   private readonly generationsRetried = new Set<number>(); private readonly generationsEmptyTries: EmptyTries = new Map(); private readonly renewalMemo = new Set<string>();
+  /** The Overlord's starts whose account-hold verdict is settled (`GenerationsDeps.holdsSettled`, renewal readings PR H): a memo. */
+  private readonly generationsHoldsSettled = new Set<number>();
   /** The launch-profile lane's last logged line (`ProfileLaneMemory`): a log throttle, never a decision's memory. */
   private readonly launchProfileMemory: ProfileLaneMemory = { lastLine: null };
   private readonly mailHoldMemory: MailHoldLaneMemory = { failing: new Set(), lastLine: null, storeUnread: false, generation: 0 };
@@ -6387,7 +6389,8 @@ export class FleetWatcher {
       }, this.generationsCompactions);
       this.generationsProc ??= this.deps.time.entropy.uuid();
       const pass = generationsPass({ coord, clock: this.deps.time.clock, entropy: this.deps.time.entropy, proc: this.generationsProc,
-        log: (line) => console.warn(line), retried: this.generationsRetried, emptyTries: this.generationsEmptyTries, latch: w1.latch }, {
+        log: (line) => console.warn(line), retried: this.generationsRetried, emptyTries: this.generationsEmptyTries, latch: w1.latch,
+        holdsSettled: this.generationsHoldsSettled }, {
         registry: records.map((r) => ({ id: r.id, uuid: r.unmeasured.includes('uuid') ? null : r.uuid,
           lane: r.unmeasured.includes('wrapper') ? null : r.wrapper, child: r.child,
           precompact: r.route === null ? null : r.route.unreadable.includes('precompact') ? 'unread' : r.route.fields.precompact ?? null })),

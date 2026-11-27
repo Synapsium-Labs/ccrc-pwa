@@ -6,7 +6,13 @@
 // `ready`, and `features` (the frame's bar off, its top space trimmed) with `onProgress` for a mount on ccrc's bar (the
 // take-up plan, refinements (c) and (g)). A Docs mount with history (`policy.ts#readerMountPlan`'s `history`) also
 // passes `changes` and `openVersion` and the version seed (completion plan Task 12), when the input has them; the reader
-// lab's mounts never do. It never passes `mermaidGate`, so the Mermaid gate runs at the library's own caps.
+// lab's mounts never do. A mount whose input has `onPlace` (the Docs reader's Back places, X2 P5.3, D-8763) hands it to the
+// library, which then gives `onHash` its second argument (passed on as it came), and the mount's `closeOverlay` and `goto`
+// call the live frame's (and `gotoTop`, Back to the top of the document); a `goto` called before the frame's `ready` is
+// held, the latest only, and sent at `ready`, since the library drops such a command (a close then is dropped: a fresh
+// frame has no overlay open); a mount made without `onPlace` passes none and does none of them (the library throws for
+// such a host).
+// It never passes `mermaidGate`, so the Mermaid gate runs at the library's own caps.
 //
 // It decides nothing a policy file decides: the watchdog, the doc key and the prefs arrive already measured. It
 // does three things of its own. It unwraps the library's callback shapes into ccrc's (the copy check's `hidden`
@@ -19,28 +25,31 @@
 //
 // `mountReader` remounts only for `openAt` (a link to this very page, spelled with its file name): the old frame is
 // destroyed and the same document is mounted again at the anchor, through the same mount function and adapters. The
-// library's `update` is never called (it keeps the first mount's adapters, `focus` among them), and a theme change is the
-// library's `setPrefs`. Whether a mount focuses its frame is `policy.ts#readerMountFocusFor`'s, from one fact this file
+// library's `update` is never called (it keeps the first mount's adapters, `focus` among them). A hosted mount follows
+// appearance through `setAppearance`; a mode-only mount follows theme through `setPrefs`. Whether a mount focuses its frame is `policy.ts#readerMountFocusFor`'s, from one fact this file
 // reads: `el.ownerDocument.activeElement` is a connected element outside `el`, other than the body and the document
 // element. It is read once per library mount, after the last await and in the same synchronous run as the mount call.
 // The watchdog, the draw mode, whether a storage port is handed over, whether the history is carried and whose bar the
 // frame has are
 // `policy.ts#readerMountPlan`'s, by the input's `profile` (none for the Docs reader, `lab-draw` for the reader lab's
 // timed mounts: the reader lab plan, refinement (k)), its `chrome`, and the recorded E17 reading.
+import * as frameLibrary from '@synapsium-labs/pinax-lib/frame';
 import {
-  mermaidGate, type FrameAssets, type RenderInput,
-} from '@synapsium-labs/docserver/frame';
+  mermaidGate, type FrameAssets, type PlaceKind, type RenderInput,
+} from '@synapsium-labs/pinax-lib/frame';
 import {
   mountDocFrame, type FallbackReason, type HiddenChar, type HostAdapters, type HostLink,
-} from '@synapsium-labs/docserver/host';
+} from '@synapsium-labs/pinax-lib/host';
 import { isDocsCommit } from '../../../../shared/docs';
 import { READER_STORE_PREFIX } from '../../lib/readerLimits';
 import { enumerablePageStorage, type EnumerableStoragePort } from '../../lib/storage';
 import {
-  READER_E17_MERMAID, readerMountFocusFor, readerMountPlan,
+  READER_E17_MERMAID, isHostedMount, readerMountFocusFor, readerMountPlan,
   type ReaderChrome, type ReaderCommand, type ReaderE17Reading, type ReaderLink, type ReaderMountProfile,
 } from './policy';
-import { loadMermaidAsset, loadReaderAssets } from './assets';
+import { loadMermaidAsset, loadReaderAssets, loadReaderFonts } from './assets';
+import { readHostAppearance } from './hostAppearance';
+import { readerAppearanceSupported } from './appearance';
 import type { ReaderVersionSeed } from './history';
 
 /** The theme choice the frame takes. */
@@ -58,8 +67,20 @@ export interface ReaderMountInput {
    *  that rejection is the caller's fallback. */
   readonly title: string;
   readonly prefs: ReaderThemePref;
+  readonly appearanceRoot?: HTMLElement;
   readonly onLink: (l: ReaderLink) => void;
-  readonly onHash: (id: string) => void;
+  /** The frame went to the place `id`. With `onPlace` given the library says how: `entry.push` is true for a move that is a
+   *  new place in the console's history, and `entry.from` is the library's own position token for the place left (or null).
+   *  `entry.inGrammar` is the library's own `isFragmentId(id)`, asked here so the main bundle never imports the library
+   *  (D-9117): a pushed jump names its id in the address only when it is true.
+   *  Without `onPlace` the library calls it with the id alone. */
+  readonly onHash: (id: string, entry?: {
+    readonly push: boolean; readonly from: string | null; readonly inGrammar: boolean;
+  }) => void;
+  /** The frame reports its full-screen figure: `overlay` when it opened, `overlay-closed` when it closed. Giving it asks the
+   *  frame for places (the seed's `bridge.places`) and makes `closeOverlay` and `goto` of the mount live. The reader lab
+   *  passes none. */
+  readonly onPlace?: (kind: PlaceKind) => void;
   readonly copy: (text: string, hidden: readonly HiddenChar[]) => void;
   readonly onReady: () => void;
   readonly onFallback: (r: FallbackReason) => void;
@@ -89,11 +110,15 @@ export interface ReaderMountDeps {
   readonly store?: () => EnumerableStoragePort | null;
   readonly assets?: () => Promise<FrameAssets>;
   readonly mermaid?: () => Promise<string>;
+  readonly libraryContract?: () => number | 'none';
+  readonly fonts?: () => Promise<{ sans: string; mono: string }>;
   /** Tests only: the E17 reading to plan with; absent, the recorded one (`READER_E17_MERMAID`). */
   readonly e17?: ReaderE17Reading;
 }
 
 export interface ReaderMount {
+  readonly seed: { readonly hosted: true; readonly stamp: string } | { readonly hosted: false };
+  follow(theme: 'light' | 'dark' | 'auto'): void;
   /** Idempotent. */
   destroy(): void;
   /** The frame's `prefs` operation: applied in place, with no remount. */
@@ -106,7 +131,23 @@ export interface ReaderMount {
    *  name (completion plan Task 13): a new mount of the same document with `initialHash: id`, so no body is read again.
    *  Does nothing after `destroy`. Absent: this mount has no frame (the assets did not load). */
   openAt?(id: string): void;
+  /** Closes the frame's full-screen figure, if one is open (a Back that pops its place), through the live frame's
+   *  `closeOverlay()`. Does nothing after `destroy`, on a mount made without `onPlace` (the library throws for a host with
+   *  none), or when the frame refuses. Absent: this mount has no frame (the assets did not load). */
+  closeOverlay?(): void;
+  /** Takes the frame to the place `id`, from the position token `from` an `onHash` entry gave (a Back that pops a jump's
+   *  place), through the live frame's `goto()`. Does nothing, as `closeOverlay` does nothing. */
+  goto?(id: string, from?: string): void;
+  /** Takes the frame to the top of the document, as Back from a jump whose reader was at the top (no `from`): `goto(id,
+   *  TOP_TOKEN)`. Does nothing, as `goto` does nothing. */
+  gotoTop?(id: string): void;
 }
+
+/** The position token for "the top of the document". The library's host refuses an empty id, and its reader restores a
+ *  token whose `line` is null by scrolling to `y`: the shape the library's own `anchor()` writes for a place with no block.
+ *  Exported for the test that asserts the library still reads it (`isAnchorToken`): if the library changes, that test
+ *  fails, not the console at run time. */
+export const TOP_TOKEN = '{"line":null,"offset":0,"y":0}';
 
 /** Whether an element outside the reader holds focus right now: `el`'s document has an active element that is connected
  *  and is neither the body, the document element, `el` nor anything inside `el`. The one fact the mount-focus decision
@@ -118,7 +159,7 @@ function hostOwnsFocus(el: HTMLElement): boolean {
 }
 
 /** A mount that holds nothing (the assets did not load): both calls do nothing. */
-const INERT: ReaderMount = { destroy() {}, setPrefs() {} };
+const INERT: ReaderMount = { seed: { hosted: false }, follow() {}, destroy() {}, setPrefs() {} };
 
 /** The link the frame reported, copied field by field into ccrc's own shape. */
 function readerLinkOf(l: HostLink): ReaderLink {
@@ -151,15 +192,28 @@ function withSeed(d: RenderInput, v: ReaderVersionSeed): RenderInput {
  *  `ready` and any fallback come later, through the callbacks). A rejected asset load calls `onFallback('assets')`
  *  and mounts nothing. */
 export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps: ReaderMountDeps = {}): Promise<ReaderMount> {
+  const plan = readerMountPlan(input.profile, input.bytes, input.chrome ?? 'frame-bar', deps.e17 ?? READER_E17_MERMAID);
+  const contract = (deps.libraryContract ?? (() => frameLibrary.APPEARANCE_CONTRACT ?? 'none'))();
+  const hosted = isHostedMount(plan, readerAppearanceSupported(contract), input.appearanceRoot !== undefined);
+  // Start the base I/O first, then faces without yielding; contain either loader's immediate failure.
+  let baseLoad: Promise<FrameAssets>;
+  try { baseLoad = (deps.assets ?? loadReaderAssets)(); }
+  catch (error) { baseLoad = Promise.reject(error); }
+  void baseLoad.catch(() => undefined);
+  let faces: Promise<{ sans: string; mono: string } | undefined> | undefined;
+  if (hosted) {
+    try { faces = (deps.fonts ?? loadReaderFonts)().catch(() => undefined); }
+    catch { faces = Promise.resolve(undefined); }
+  }
   let assets: FrameAssets;
   try {
-    assets = await (deps.assets ?? loadReaderAssets)();
+    const { fonts: _fonts, ...base } = await baseLoad;
+    assets = base;
   } catch {
     input.onFallback('assets');
     return INERT;
   }
 
-  const plan = readerMountPlan(input.profile, input.bytes, input.chrome ?? 'frame-bar', deps.e17 ?? READER_E17_MERMAID);
   const watchdogMs = plan.watchdogMs;
   const loadMermaid = deps.mermaid ?? loadMermaidAsset;
   let document: RenderInput = plan.history && input.version !== undefined
@@ -186,6 +240,11 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
     }
   }
 
+  if (faces !== undefined) {
+    const fonts = await faces;
+    if (fonts !== undefined) assets = { ...assets, fonts };
+  }
+
   const port = plan.store ? (deps.store ?? enumerablePageStorage)() : null;
   const historyChanges = plan.history ? input.changes : undefined;
   const historyOpen = plan.history ? input.openVersion : undefined;
@@ -194,13 +253,31 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
   let theme = input.prefs.theme;
   // Everything one library mount is handed except the document; `focus` is read at the call, so each mount decides it
   // anew. Called synchronously, right after the last await (or at `openAt`), so the read is as fresh as the mount.
+  let seed: ReaderMount['seed'] = { hosted: false };
+  let lastDrop: string | null = null;
+  const readAppearance = (forMount = false) => {
+    const reading = readHostAppearance(input.appearanceRoot!);
+    const drop = reading.outcome.dropped;
+    const key = drop === null ? null : JSON.stringify([drop.why, drop.token]);
+    if (drop !== null && key !== lastDrop) console.warn(`ccrc-reader: ${drop.why} ${drop.token}`);
+    lastDrop = key;
+    if (forMount) seed = { hosted: true, stamp: reading.stamp };
+    return reading.outcome.value;
+  };
+  const onPlace = input.onPlace;
+  // The library drops a command sent before its frame's `ready` and queues nothing, so a Back decided in that window is held
+  // here (the latest only) and sent at `ready`. `mountGen` names the live frame: a stale frame's ready changes nothing.
+  type Held = { readonly what: string; readonly run: (f: ReturnType<typeof mountDocFrame>) => void };
+  let mountGen = 0;
+  let isReady = false;
+  let held: Held | null = null;
   const adaptersNow = (): HostAdapters => ({
     assets,
     watchdogMs,
     ...(port === null ? {} : { store: port }),
     storePrefix: READER_STORE_PREFIX,
     ...(input.docKey === null ? {} : { docKey: input.docKey }),
-    prefs: { theme },
+    ...(hosted ? { appearance: readAppearance(true) } : { prefs: { theme } }),
     mermaidDraw: plan.draw,
     ...(plan.draw === 'after-ready' ? { loadMermaid } : {}),
     ...(historyChanges === undefined ? {} : { changes: (sha: string) => historyChanges(sha) }),
@@ -215,16 +292,51 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
     title: input.title,
     focus: readerMountFocusFor(input.profile, hostOwnsFocus(el)),
     onLink: (l) => input.onLink(readerLinkOf(l)),
-    onHash: (id) => input.onHash(id),
+    // The library gives the second argument only to a host that passed `onPlace`; it goes on only when it came.
+    onHash: (id, entry) => (entry === undefined
+      ? input.onHash(id)
+      : input.onHash(id, { push: entry.push, from: entry.from, inGrammar: frameLibrary.isFragmentId(id) })),
+    ...(onPlace === undefined ? {} : { onPlace: (kind: PlaceKind) => onPlace(kind) }),
     copy: (text, check) => input.copy(text, check.hidden),
-    onReady: () => input.onReady(),
+    onReady: readyOf(mountGen),
     onFallback: (r) => input.onFallback(r),
   });
 
   const mountFrame = deps.mount ?? mountDocFrame;
-  let frame = mountFrame(el, { document, adapters: adaptersNow() });
   let destroyed = false;
+  const deliver = (h: Held): void => {
+    try {
+      h.run(frame);
+    } catch (e) {
+      console.warn(`ccrc-reader: the frame refused ${h.what}`, e);
+    }
+  };
+  /** The adapter for frame number `gen`'s `ready`: it releases the held command, then tells the input. */
+  const readyOf = (gen: number) => (): void => {
+    if (gen === mountGen) {
+      isReady = true;
+      const h = held;
+      held = null;
+      if (h !== null && !destroyed) deliver(h);
+    }
+    input.onReady();
+  };
+  /** Sends `h` to the live frame, or holds it (replacing any held one) until the frame's `ready`. */
+  const send = (h: Held): void => {
+    if (destroyed || onPlace === undefined) return;
+    if (!isReady) { held = h; return; }
+    deliver(h);
+  };
+  mountGen += 1;
+  let frame = mountFrame(el, { document, adapters: adaptersNow() });
   return {
+    get seed() { return seed; },
+    follow(nextTheme) {
+      if (destroyed) return;
+      theme = nextTheme;
+      if (hosted) frame.setAppearance(readAppearance());
+      else frame.setPrefs({ theme: nextTheme });
+    },
     destroy() {
       if (destroyed) return;
       destroyed = true;
@@ -242,11 +354,26 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
     openAt(id) {
       if (destroyed) return;
       frame.destroy();
+      mountGen += 1;
+      isReady = false;
+      held = null;
       const next = mountFrame(el, { document: { ...document, initialHash: id }, adapters: adaptersNow() });
       frame = next;
       // The library runs host code while it mounts (a focus or insertion handler, a fallback): one that destroyed this
       // mount then reached the frame before it, so the new frame goes too.
       if (destroyed) next.destroy();
+    },
+    closeOverlay() {
+      // Before `ready` the frame is a fresh one with no overlay open, so there is nothing to close: the close is dropped,
+      // never held, and so never replaces a held `goto`, which names a position the fresh frame does need.
+      if (!isReady) return;
+      send({ what: 'closeOverlay', run: (f) => f.closeOverlay() });
+    },
+    goto(id, from) {
+      send({ what: 'goto', run: (f) => { if (from === undefined) f.goto(id); else f.goto(id, from); } });
+    },
+    gotoTop(id) {
+      send({ what: 'goto', run: (f) => f.goto(id, TOP_TOKEN) });
     },
   };
 }

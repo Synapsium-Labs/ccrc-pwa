@@ -25,8 +25,9 @@ export interface CcdPrRow {
   /** ccd's annotation, beside `ours`: a merge train PROVABLY landed this PR's
    *  work and closed it — GitHub says CLOSED, the PR carries the deployment's
    *  train label (ccd's `CCD_LANDED_LABEL`, default `landed-in-train`), AND the
-   *  train record proves it: the train PR is MERGED and its `ccrc-train v1`
-   *  block lists this PR at exactly its head sha (D-7362). The label alone is
+   *  train record proves it: the train PR is MERGED and its train record (the
+   *  `ccrc-train v1` block or the train tool's `train-members` block, D-9111)
+   *  lists this PR at exactly its head sha (D-7362). The label alone is
    *  never enough. The fleet box is the one reader of the label and the record,
    *  so this side never names either. Absent on a row from an older ccd, which
    *  reads as not landed. */

@@ -693,6 +693,13 @@ describe('landingWithdrawNoticesOf (wave 5j-b, D-9050)', () => {
       expect(b, want).toContain(want);
     }
   });
+  // The time formatter's boundaries (D-9110 carry): the epoch, a leap day's last millisecond, the first of March in a leap
+  // century and in a non-leap century, and a year's last millisecond. The test may use `Date`; the source may not.
+  it.each([0, Date.UTC(2024, 1, 29, 23, 59, 59, 999), Date.UTC(2000, 2, 1), Date.UTC(2100, 2, 1), Date.UTC(2026, 11, 31, 23, 59, 59, 999)])(
+    'the entry notice writes %i as its ISO instant', (at) => {
+      const [n] = landingWithdrawNoticesOf({ project: 'project-a', mutation: m, seq: 9, at });
+      expect(n!.body).toContain(`at ${new Date(at).toISOString()},`);
+    });
   it('builds nothing for an unreadable dependant', () => {
     const u = withdrawn(withdraw(1, 1001), facts({ entries: line(), unreadableRun: [102] }));
     expect(landingWithdrawNoticesOf({ project: 'project-a', mutation: u, seq: 3, at: 0 }).map((n) => n.word)).toEqual(['landing-withdrawn']);

@@ -12,7 +12,10 @@
 // (`probesFailedTwiceOf`). PR B: `notLocalOf`, from the transcript resolver's answer on the host that runs the session, and
 // `notLocalAskOf`, what that reading asks the resolver about. PR D: the account readings, `accountOutsideSetOf`,
 // `classUnservableOf`, `accountLoadOf` with `accountLoadMoveOf`, over the candidates `overlordCandidatesOf` builds once a pass, or
-// those `unboundCandidates` answers from the designation alone. The later pull requests of the plan add the other mappers here.
+// those `unboundCandidates` answers from the designation alone. PR H: the launch profile's two deciders, `holdOfStart` (whether a
+// start holds its account out of the Overlord's ordered list) and `overlordInstallBehindOf` (the digest reading folded into the
+// Overlord's `installBehind`), with its two mappers, `startDigestDiffersOf` and `buildsAgreeOf`. The holds reach the list through
+// L0's `heldOutOfList` (designation A's `overlordAccounts`) and `accountOutsideSetOf` through `Holds`.
 //
 // IMPORTS ACROSS CONTEXTS (PR D, plan Task 7): L1 into L1 only, each a producer's own decider, never re-derived. C1's
 // `server/src/poolrule.ts` (the pool answer's parsed type) and `server/src/accountLoad.ts` (serviceability B: the candidates, the
@@ -21,7 +24,9 @@
 import type { GenerationState, StartRow } from '../../../shared/continuity.js';
 import type { FleetRole } from '../../../shared/fleetRoles.js';
 import type { DesignationRead } from '../../../shared/overlord-designation.js';
-import type { BackstopRead } from '../../../shared/renewal-readings.js';
+import type { AccountHoldsRead, BackstopRead } from '../../../shared/renewal-readings.js';
+import type { BuildAgreement } from '../../../shared/api.js';
+import type { SandboxVerdict } from './sandboxCheck.js';
 import type { TurnMarkRead } from '../coord/stall.js';
 import type { GenEvent } from './generationMachine.js';
 import { fittedCeiling, type SpotProbe } from './probes.js';
@@ -38,7 +43,9 @@ import { overlordAccounts, type AccountFacts } from '../coord/overlordDesignatio
 /** The `RenewalInputs` fields the lane reads `W1` until their producers are wired (`renewalInputsOf`'s defaults). The
  *  wiring answers only the fields whose producer is wired, and the lane spreads them over the defaults. */
 export type W1Inputs = Pick<RenewalInputs, 'fittedCeilingTokens' | 'turns' | 'backstopDue' | 'modelDrift' | 'termRaised'
-  | 'accountOutsideSet' | 'classUnservable' | 'accountLoadMove' | 'classChanged' | 'notLocal'>;
+  | 'accountOutsideSet' | 'classUnservable' | 'accountLoadMove' | 'classChanged' | 'notLocal'
+  // PR H: the Overlord's `installBehind`, which the lane reads from the gather's `behind` for every other role.
+  | 'installBehind'>;
 
 /** The graded closed-book spot probes of one model class (`continuityStore.ts#closedSpotProbes`), or why they are unread. */
 export type SpotsRead = { readonly ok: true; readonly spots: readonly SpotProbe[] } | { readonly ok: false; readonly detail: string };
@@ -311,7 +318,20 @@ export function notLocalOf(i: {
 /** The Overlord's candidates for one pass: designation A's ordered list (`overlordAccounts`, asked only of a live binding, which
  *  alone has a set) under serviceability B's `overlordLoadCandidates`. */
 export function overlordCandidatesOf(d: DesignationRead, f: AccountFacts): Candidates {
-  return overlordLoadCandidates(d, d.kind === 'designated' ? overlordAccounts(d.row.accountPools, d.row.model, f).list : [], f);
+  return overlordCandidatesAndHoldsOf(d, f).candidates;
+}
+
+/** The candidates and the holds as the list builder applied them, from ONE `overlordAccounts` result, so the account readings and
+ *  the list cannot disagree about which accounts are held (fix round 1, F1: an overridden hold is overridden everywhere). */
+export function overlordCandidatesAndHoldsOf(d: DesignationRead, f: AccountFacts): { readonly candidates: Candidates; readonly holds: Holds } {
+  const built = d.kind === 'designated' ? overlordAccounts(d.row.accountPools, d.row.model, f) : null;
+  return { candidates: overlordLoadCandidates(d, built === null ? [] : built.list, f), holds: built === null ? f.held : holdsAppliedOf(f.held, built.holds) };
+}
+
+/** The holds a reading takes from the list builder's answer (F1): `overridden` (the holds would have left no account, so the list
+ *  is kept as it was) reads exactly as no holds; `applied` and `unread` are the holds as read. */
+export function holdsAppliedOf(held: Holds, applied: 'applied' | 'overridden' | 'unread'): Holds {
+  return applied === 'overridden' ? { ok: true, lanes: [] } : held;
 }
 
 /** The candidates for one generation when the designation alone answers, or null when it is this session's live binding and the
@@ -324,8 +344,8 @@ export function unboundCandidates(d: DesignationRead, sessionId: string): Candid
   return b.kind === 'unmeasured' ? { kind: 'unmeasured', why: 'designation-unreadable' } : null;
 }
 
-/** The account holds (`overlord_account_holds`, PR H) as this reading takes them, or why they are unread. */
-export type Holds = { readonly ok: true; readonly lanes: readonly string[] } | { readonly ok: false; readonly detail: string };
+/** The account holds (`overlord_account_holds`, PR H) as this reading takes them, or why they are unread: L0's one shape. */
+export type Holds = AccountHoldsRead;
 
 /** A set on the route record, read from the session's side word as `_session_pool_side` printed it (fix round 1, F1): a set, or
  *  one of the two bad-set words, which arrive as `verdict=undecidable`. Never the side the verdict was decided on, which
@@ -419,4 +439,69 @@ export function accountLoadMoveOf(load: Reading<boolean>, turn: TurnMarkRead): R
   if (idle.kind === 'measured' && !idle.value) return idle;
   if (load.kind === 'unmeasured') return load;
   return idle;
+}
+
+// PR H (Task 11): the launch profile (§3.6). A start that loaded something the profile does not list, from the account's own config
+// directory, holds that account out of the Overlord's ordered list until the operator clears it; a held account reads as outside the
+// set (`accountOutsideSetOf`, F7), so the hard row renews the Overlord off it. A digest that differs from the server's while the two
+// boxes run one build is a new install for the Overlord (question 5, slug digest-mismatch-rides-new-install).
+
+/** The live generation whose newest start the hold reads (PR H): the Overlord's, of the session the designation binds, by the
+ *  one binding reader (`boundTo`, so no session comparison is made by hand here); none when nobody is designated, the row is
+ *  unreadable, or no live Overlord generation is the bound session's. */
+export function holdTargetOf<G extends { readonly role: string; readonly sessionId: string }>(d: DesignationRead, rows: readonly G[]): G | null {
+  return rows.find((g) => { const b = boundTo(d, g.sessionId); return g.role === 'overlord' && b !== false && b.kind === 'designated'; }) ?? null;
+}
+
+/** What one start's sandbox verdict does to its account: `hold` the account it ran on; `settled`, nothing, and the start is not
+ *  asked again (a pass, or a failure that is not the account's); `unmeasured`, nothing yet, and the pass asks again (slug
+ *  hold-of-start-answers-three-arms: a pass and an unread verdict are handled differently, so they are never one null). */
+export type StartHold =
+  | { readonly kind: 'hold'; readonly lane: string } | { readonly kind: 'settled' } | { readonly kind: 'unmeasured'; readonly why: string };
+
+/** A start's hold (§3.6, plan question 6), first match:
+ *  1. no verdict yet (no loads report, or one that is not this start's): unmeasured;
+ *  1b. the `profile` property not held (the role or the digest differs, or the report names none): settled with no hold. The
+ *     start ran another launch profile, so its extras say nothing about the account (fix round 1, F2; the stance
+ *     `overlordInstallBehindOf` takes on build skew);
+ *  2. a property failed with something loaded from the account's own config directory (`PropertyVerdict.fromAccount`, the sandbox
+ *     check's own reading of the harness): hold the account the start ran on, or unmeasured when that account is unknown;
+ *  3. any property unmeasured: unmeasured, since an unmeasured property never holds an account and may yet hide one;
+ *  4. otherwise settled: a pass, or failures that a workspace, the launch's composition or a missing load explain, which another
+ *     account would not cure. */
+export function holdOfStart(verdict: SandboxVerdict | 'unmeasured', lane: string | null): StartHold {
+  if (verdict === 'unmeasured') return { kind: 'unmeasured', why: 'no verdict for the start yet' };
+  if (verdict.properties.find((p) => p.property === 'profile')?.state !== 'held') return { kind: 'settled' };
+  if (verdict.properties.some((p) => p.state === 'failed' && p.fromAccount)) {
+    return lane === null ? { kind: 'unmeasured', why: 'the account the start ran on is unknown' } : { kind: 'hold', lane };
+  }
+  const open = verdict.properties.find((p) => p.state === 'unmeasured');
+  if (open !== undefined) return { kind: 'unmeasured', why: `${open.property} unmeasured` };
+  return { kind: 'settled' };
+}
+
+/** Whether the Overlord's newest start ran a launch profile whose digest differs from the server's (`launchDigestOf('overlord')`):
+ *  read from that start's own loads report. A failed read, no start, no report or a report naming no digest: unmeasured. */
+export function startDigestDiffersOf(read: { readonly ok: true; readonly newest: { readonly report: { readonly profileDigest: string | null } | null } | null }
+  | { readonly ok: false; readonly detail: string }, serverDigest: string): Reading<boolean> {
+  if (!read.ok) return unmeasured(`start loads unread: ${read.detail}`);
+  const digest = read.newest?.report?.profileDigest ?? null;
+  if (digest === null) return unmeasured(read.newest === null ? 'no start' : read.newest.report === null ? 'no loads report' : 'no digest reported');
+  return { kind: 'measured', value: digest !== serverDigest };
+}
+
+/** The profile lane's build agreement as a reading: `agreed` true, `skewed` false, `unknown` unmeasured. */
+export function buildsAgreeOf(b: BuildAgreement): Reading<boolean> {
+  return b === 'unknown' ? unmeasured('builds unknown') : { kind: 'measured', value: b === 'agreed' };
+}
+
+/** The Overlord's `installBehind` (question 5): the roll's "behind" test, or the start's digest differing from the server's while
+ *  the builds agree, by Kleene's or. Builds that differ or are unknown: unmeasured `build skew`, so a fresh start ccd would refuse
+ *  is never asked for. */
+export function overlordInstallBehindOf(behind: Reading<boolean>, digestDiffers: Reading<boolean>, buildsAgree: Reading<boolean>): Reading<boolean> {
+  if (buildsAgree.kind === 'unmeasured' || !buildsAgree.value) return unmeasured('build skew');
+  if ((behind.kind === 'measured' && behind.value) || (digestDiffers.kind === 'measured' && digestDiffers.value)) return { kind: 'measured', value: true };
+  if (behind.kind === 'unmeasured') return behind;
+  if (digestDiffers.kind === 'unmeasured') return digestDiffers;
+  return { kind: 'measured', value: false };
 }
