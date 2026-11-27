@@ -1118,17 +1118,22 @@ describe('reader place: the hook with the real port (X6 XR1.3)', () => {
 // ─── fix round 1 (X6 XR fix round 1) ───────────────────────────────────────────────────────────────────────────────────
 
 /** The hook, its context and the container, as the Docs screen draws them: the overlay and the frameless Exit read the context. */
-function CtxHarness(p: { frame: ReaderModeFrame | null; places?: ReaderModePlaces }): ReactNode {
+function CtxHarness(p: { frame: ReaderModeFrame | null; places?: ReaderModePlaces; head?: true }): ReactNode {
   const { value, container } = useReaderMode({ doc: 'doc-a', plainView: false, places: p.places });
   latest = value;
   const setFrame = value.setFrame;
   const { frame } = p;
   useEffect(() => { setFrame(frame); }, [setFrame, frame]);
+  // The app's main landmark (`<main id="content" tabIndex={-1}>`, `skins/frame.tsx`) holds the screen; `head` stands in for the Docs
+  // head's Reader mode action (a button with its name), outside the reading container as the head is, so reader mode hides it.
   return (
     <ReaderModeContext value={value}>
-      <DocsReading reading={container}>
-        <div className="docs-leaf"><div className="docs-reader" data-testid="host" /></div>
-      </DocsReading>
+      <main id="content" tabIndex={-1}>
+        {p.head === true && <header><button type="button" aria-label={READER_MODE_TEXT.enter}>Reader mode</button></header>}
+        <DocsReading reading={container}>
+          <div className="docs-leaf"><div className="docs-reader" data-testid="host" /></div>
+        </DocsReading>
+      </main>
     </ReaderModeContext>
   );
 }
@@ -1155,6 +1160,10 @@ describe('reader mode: an Exit with no frame standing (X6 XR fix round 1, item 2
     expect(latest.state.on, 'the Exit did not leave reader mode').toBe(false);
     expect(places.stepBack, 'the exit did not step back once').toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('button', { name: READER_MODE_TEXT.exit }), 'the Exit stayed after leaving').toBeNull();
+    // X6 XR fix round 2, item 3 (review 4043 A2): the Exit unmounted with the focus on it and no frame to give it to, so it must not
+    // be left on the page's body: with no head action on screen it goes to the main region.
+    expect(document.activeElement, 'focus was left on the body').not.toBe(document.body);
+    expect(document.activeElement, 'focus did not go to the main region').toBe(document.getElementById('content'));
   });
 
   it('no frame: reader mode off draws no Exit, and a standing frame with the overlay hidden draws none either', async () => {
@@ -1182,6 +1191,90 @@ describe('reader mode: an Exit with no frame standing (X6 XR fix round 1, item 2
       act(() => { guard.focus(); });
       expect(document.activeElement, `the ${i === 0 ? 'leading' : 'trailing'} guard left focus on itself`).toBe(exit);
     }
+  });
+});
+
+describe('reader mode: where focus goes after the frameless Exit (X6 XR fix round 2, item 3, review 4043 A2)', () => {
+  /** Enters with a standing frame, then drops it (the leaf left `ok`): reader mode is on and the Exit alone is drawn. It takes no
+   *  focus when it appears (a frame that comes back must not find focus pulled to it), so `tapExit` focuses it first, as a tap on
+   *  a button does in most engines: the Exit that unmounts then holds the focus. */
+  async function onWithoutFrame(head?: true): Promise<{ view: ReturnType<typeof render>; places: ReturnType<typeof fakePlaces> }> {
+    installFullScreen();
+    const places = fakePlaces();
+    const view = render(<CtxHarness frame={fakeFrame()} places={places} head={head} />);
+    act(() => { latest.enter('button'); });
+    await flush();
+    view.rerender(<CtxHarness frame={null} places={places} head={head} />);
+    await flush();
+    expect(latest.state.on, 'CONTROL: reader mode stays on without the frame').toBe(true);
+    return { view, places };
+  }
+  const tapExit = (): void => {
+    const exit = screen.getByRole('button', { name: READER_MODE_TEXT.exit });
+    act(() => { exit.focus(); });
+    expect(document.activeElement, 'CONTROL: the Exit holds focus before the tap').toBe(exit);
+    act(() => { exit.click(); });
+  };
+
+  it('no frame: the Exit\'s tap puts focus on the head\'s Reader mode action when the head draws it', async () => {
+    await onWithoutFrame(true);
+    const action = screen.getByRole('button', { name: READER_MODE_TEXT.enter, hidden: true });
+    tapExit();
+    expect(latest.state.on, 'the Exit did not leave reader mode').toBe(false);
+    expect(hiddenUp(action), 'CONTROL: the head is back on screen').toBe(false);
+    expect(document.activeElement, 'focus did not go to the head\'s Reader mode action').toBe(action);
+  });
+
+  it('no frame: the Exit\'s tap puts focus on the main region when the head draws no Reader mode action', async () => {
+    await onWithoutFrame();
+    expect(screen.queryByRole('button', { name: READER_MODE_TEXT.enter, hidden: true }), 'CONTROL: no head action stands').toBeNull();
+    tapExit();
+    expect(latest.state.on, 'the Exit did not leave reader mode').toBe(false);
+    expect(document.activeElement, 'focus did not go to the main region').toBe(document.getElementById('content'));
+  });
+
+  it('no frame: a frame that arrives after the Exit is not given focus, and focus stays where the Exit put it', async () => {
+    const { view, places } = await onWithoutFrame();
+    tapExit();
+    const main = document.getElementById('content');
+    expect(document.activeElement, 'CONTROL: focus is on the main region').toBe(main);
+    const later = fakeFrame();
+    view.rerender(<CtxHarness frame={later} places={places} />);
+    await flush();
+    await settle();
+    expect(latest.frame, 'CONTROL: the later frame is the context\'s').toBe(later);
+    expect(later.focus, 'a frame that arrived after the exit was given focus').not.toHaveBeenCalled();
+    expect(later.setReading, 'the later frame was told to read').not.toHaveBeenCalled();
+    expect(document.activeElement, 'focus moved when the frame arrived').toBe(main);
+  });
+
+  it('no frame: an exit with a frame standing still focuses the frame, and leaves the head and the main region alone', async () => {
+    installFullScreen();
+    const frame = fakeFrame();
+    render(<CtxHarness frame={frame} places={fakePlaces()} head />);
+    act(() => { latest.enter('button'); });
+    await flush();
+    frame.focus.mockClear();
+    act(() => { latest.exit('exit-tap'); });
+    expect(latest.state.on).toBe(false);
+    expect(frame.focus, 'the exit did not focus the frame').toHaveBeenCalledTimes(1);
+    expect(document.activeElement, 'focus went to the head or the main region').toBe(document.body);
+  });
+
+  it('no frame: a dropped frame\'s dismiss while reader mode stays on moves focus nowhere', async () => {
+    installFullScreen();
+    const places = fakePlaces();
+    const view = render(<CtxHarness frame={fakeFrame()} places={places} head />);
+    act(() => { latest.enter('button'); });
+    await flush();
+    act(() => { latest.menu(); });
+    await flush();
+    expect(latest.state.on && latest.state.overlay, 'CONTROL: the overlay is shown').toBe(true);
+    view.rerender(<CtxHarness frame={null} places={places} head />);
+    await flush();
+    expect(latest.state.on, 'reader mode ended with the frame').toBe(true);
+    expect(screen.getByRole('button', { name: READER_MODE_TEXT.exit }), 'CONTROL: the frameless Exit is drawn').toBeTruthy();
+    expect(document.activeElement, 'focus was moved to the head or the main region').toBe(document.body);
   });
 });
 

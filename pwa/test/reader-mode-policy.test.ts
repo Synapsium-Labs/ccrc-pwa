@@ -8,6 +8,7 @@ import {
   READER_WAKE_IDLE_MS,
   readerModeDocKey,
   readerModeDocKeyOf,
+  readerModeExitFocus,
   readerModeExitShown,
   readerModeGuardTarget,
   readerModeOffered,
@@ -455,5 +456,17 @@ describe('reader mode: the Exit with no frame, and where the guards send focus (
     expect(readerModeGuardTarget({ ...base, overlayShown: true, guard: 'trailing' }), 'the trailing guard goes into the frame').toBe('frame');
     expect(readerModeGuardTarget({ ...base, guard: 'leading' })).toBe('frame');
     expect(readerModeGuardTarget({ ...base, guard: 'trailing' })).toBe('frame');
+  });
+
+  it('exit focus: the frame while one stands or reader mode is still on, else the head\'s Reader mode action, else the main region (X6 XR fix round 2, review 4043 A2)', () => {
+    // An exit with a frame standing: the frame, whatever the head draws (every frame-standing exit is as it was).
+    expect(readerModeExitFocus({ on: false, frameStands: true, headActionShown: false })).toBe('frame');
+    expect(readerModeExitFocus({ on: false, frameStands: true, headActionShown: true })).toBe('frame');
+    // A focus request while reader mode stays on (Esc, the overlay's menu, a dropped frame's dismiss) is the frame's, whatever stands.
+    expect(readerModeExitFocus({ on: true, frameStands: false, headActionShown: true })).toBe('frame');
+    expect(readerModeExitFocus({ on: true, frameStands: false, headActionShown: false })).toBe('frame');
+    // An exit with no frame standing: the head's action when it is on screen, the main region otherwise.
+    expect(readerModeExitFocus({ on: false, frameStands: false, headActionShown: true })).toBe('head-action');
+    expect(readerModeExitFocus({ on: false, frameStands: false, headActionShown: false })).toBe('main');
   });
 });

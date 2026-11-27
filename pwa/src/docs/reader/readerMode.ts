@@ -252,6 +252,19 @@ export function readerModeExitShown(input: { on: boolean; frameStands: boolean }
   return input.on && !input.frameStands;
 }
 
+/** Where the `focus-frame` act puts focus (X6 XR fix round 2, item 3, review 4043 A2). `frame`: the frame, as it always was: a
+ *  focus request while reader mode stays on (Esc, the overlay's menu, a dropped frame's dismiss), and every exit that has a frame
+ *  standing. `head-action`: an exit with no frame standing (the frameless Exit's own), while the Docs head draws its Reader mode
+ *  action. `main`: the same exit with no such action on screen. The frameless Exit unmounts holding the focus, and with no frame
+ *  to give it to, focus would otherwise fall to the page's body with nothing announced. A frame that arrives afterwards is
+ *  neither asked nor given focus: this is an answer for the act that ran, not a state. */
+export type ReaderExitFocus = 'frame' | 'head-action' | 'main';
+
+export function readerModeExitFocus(input: { on: boolean; frameStands: boolean; headActionShown: boolean }): ReaderExitFocus {
+  if (input.on || input.frameStands) return 'frame';
+  return input.headActionShown ? 'head-action' : 'main';
+}
+
 /** Where focus goes when a focus guard of the reading container is reached (spec 6.5; X6 XR fix round 1). `none`: reader mode is
  *  off, the guards are out of the tab order. `exit-only`: no frame stands, so the Exit alone is drawn and both guards send focus to
  *  it (a guard that sent it to a frame that is not there would leave it on an invisible span, and the next Tab out of the

@@ -27,6 +27,7 @@ import { useAuthLost } from '../lib/auth';
 import { onPageHidden, onPageVisible } from '../lib/pageClock';
 import { setReaderPlaceHost, type ReaderPlaceHost } from '../lib/popstate';
 import { readKey, writeKey } from '../lib/storage';
+import { focusShownLandmark } from '../skins/frame';
 import { useFleetStore } from '../stores/fleet';
 import type { ReaderCommand } from './reader/policy';
 import type { ReaderProgress } from './readerBar';
@@ -35,7 +36,8 @@ import {
   stepBelowReaderPlace,
 } from './reader/places';
 import {
-  READER_EXIT_SETTLE_MS, READER_MODE_OFF, READER_WAKE_IDLE_MS, readerModeOffered, readerModeStep, readerTurnOf, wakeLockWanted,
+  READER_EXIT_SETTLE_MS, READER_MODE_OFF, READER_WAKE_IDLE_MS, readerModeExitFocus, readerModeOffered, readerModeStep, readerTurnOf,
+  wakeLockWanted,
   type ReaderModeAct, type ReaderModeEvent, type ReaderModeHow, type ReaderModeState, type ReaderReading, type ReaderTurn,
 } from './reader/readerMode';
 import { READER_MODE_TEXT } from './reader/readerModeWords';
@@ -269,6 +271,15 @@ function createController(sink: Sink, initialTurn: ReaderTurn) {
       () => { if (alive) step({ kind: 'full-screen-refused' }); },
     );
   };
+  /** The Docs head's Reader mode action when one is on screen: the head draws it (the desk row's, the compact row's or the one
+   *  bar's, all named `READER_MODE_TEXT.enter`) only while a ready frame offers reader mode, so with no frame standing it is
+   *  normally absent. Read from the page, at the act, after the console is shown again. */
+  const headAction = (): HTMLElement | null => {
+    for (const b of document.querySelectorAll<HTMLButtonElement>('button')) {
+      if (b.getAttribute('aria-label') === READER_MODE_TEXT.enter && !b.disabled && b.isConnected) return b;
+    }
+    return null;
+  };
   const perform = (act: ReaderModeAct): void => {
     const c = container;
     switch (act) {
@@ -307,9 +318,17 @@ function createController(sink: Sink, initialTurn: ReaderTurn) {
       case 'stop-reading':
         frame?.setReading('off');
         break;
-      case 'focus-frame':
-        frame?.focus();
+      case 'focus-frame': {
+        // `readerModeExitFocus` decides (L1). Only an exit with no frame standing asks the page for a target: the head's action is
+        // looked for then and not otherwise, so every other focus request is the frame's alone, as before.
+        const frameless = !state.on && frame === null;
+        const head = frameless ? headAction() : null;
+        const where = readerModeExitFocus({ on: state.on, frameStands: frame !== null, headActionShown: head !== null });
+        if (where === 'frame') frame?.focus();
+        else if (where === 'head-action') head?.focus();
+        else focusShownLandmark();
         break;
+      }
       case 'announce':
         // Cleared first, so a repeat of the same sentence is announced again.
         sink.live('');
