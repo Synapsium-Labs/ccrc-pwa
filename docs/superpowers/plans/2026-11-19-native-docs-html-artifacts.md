@@ -485,6 +485,12 @@ The block's third number, 8788, is unused. The adversarial pass proposed it for 
 
 - **D-9149 (2026-11-27)** — a-scripted-document-is-never-cached. Wave A3 (fix round 1, the coordinator's ruling on review 4050's A1): an SVG file was cached `private, max-age=<at most 3600>, immutable`, but an SVG opened as a document runs script on the content origin (the content CSP's sandbox allows scripts and same-origin), and the fence lets it be opened as one (in the wrapper's frame, or top-level for a link minted with windows). So after a revoke, Back, Forward or a reload replayed it from the cache with no capability check, against the design's own reason for HTML's `no-store` (a dead capability cannot start a page). Departs from the design's section 5 "Browser cache" row: every type a browser opens as a document that can run script is `no-store`, as HTML is, by its essence whatever the case or parameters: HTML, and every XML type in the MIME Sniffing standard's sense (`text/xml`, `application/xml`, any subtype ending in `+xml`, so XHTML and SVG). `cacheKind` answers `html` for all of them; images that cannot run script keep their cache rule. The design's row and Global Constraints carry dated notes naming this entry, and the policy case that pinned SVG as the cached kind changes with it. Issued to run 4032 (X5 wave A3) by the coordinator, for its fix round 1.
 
+- **D-9161 (2026-11-27)** — a-masked-artifact-name-turns-the-tier-off. Wave A5 (its first items, the coordinator's ruling on the A2 review's carry): the mint draws its token at most eight times while the console's answer mask would alter its answer, and the answer carries the artifact origin, so an origin whose label has a credential's shape made every mint answer `unmeasured` while the availability read said the tier was on. Departs from the design's site rule (section 2.3), which admitted such a name: after the site rule, `artifactConfig` answers `off`/`invalid` when the shape half of the answer mask (`matchesShape`, `server/src/accounts/shapes.ts`, its one home, handed in by `loadConfig`) matches either origin, the detail naming the key and never the value. The content origin is in no masked answer today; it is held to the same rule so the two hosts follow one rule. The live masker's exact-bytes half is not known at boot, so the mint's eight draws still answer `unmeasured` for a name that holds a stored secret's bytes. The design's 2.3 carries a dated note. The setup command's mirror is follow-up `x5-fu-expose-masked-label`, after wave A4. Issued to run 4089 (X5 wave A5) in its brief's reserve, 9161 and 9162.
+
+- **D-9162 (2026-11-27)** — the-scope-answer-names-the-hosts. Wave A5 (Task A5.2): the launch sheet names the artifact host in its "What runs" line and must offer no outside origin on the console's, the artifact or the content host (design 6.2), but no answer the console reads named the two artifact hosts. Departs from the scope answer of Task A2.3 and design section 6's wire types: `ArtifactScopeOk` gains `artifactHost` and `contentHost` (the `Host` form, the hostname with a stated port), from the tier's config, behind the account gate like the rest of the scope read. Additive; the mint still refuses such an origin `bad-origin` itself, and since wave A5 the sheet and the mint share one admission function (`originAdmitted`, `shared/artifacts.ts`). Issued to run 4089 (X5 wave A5) in its brief's reserve.
+
+- **D-9164 (2026-11-27)** — the-wrapper-policy-also-severs-the-opener. Wave A5 (Task A5.3's browser proof, the coordinator's ruling of 2026-11-27): design 4.5's first row says the wrapper's `Cross-Origin-Opener-Policy: same-origin-allow-popups` does not itself sever the console, and 4.2's parenthetical says isolation from the console does not rest on it. Measured in Chromium, it does sever it: with the console's link `rel` changed to `opener`, the new tab's `window.opener` stayed null until the policy was also removed from the replayed answer (the HTML rule: a navigation to a document of another origin whose policy is not `unsafe-none` gets a new browsing context group). So the opener is cut twice, by the link's `rel` and by the wrapper's policy. Departs from the design's text in 4.2 and 4.5, each of which gains a dated note; the isolation still rests on the `rel` and the walls, and the policy is recorded as an extra layer, promoted to nothing. The browser case `the tab has no opener` therefore cannot go red for a regression of the `rel` alone; the launch sheet's jsdom case (MX5.39) pins the `rel` exactly. Other engines are acceptance's ART rows. Issued to run 4089 (X5 wave A5) by the coordinator, beyond its reserve.
+
 ## Results
 
 ### What was read and measured (2026-11-19)
@@ -1051,3 +1057,120 @@ Measured after the round, one file at a time through `ccrc test`: `artifacts-con
 `artifacts-content` 52, `artifacts-wrapper` 16, `artifacts-policy` 31, `artifacts-store` 41, `artifacts-bytes` 27, `artifacts-listener` 34, `artifacts-mint` 42, `artifacts-binding` 2, `artifacts-config` 57, `artifacts-vocabulary` 8, `artifacts-liveness` 7, `docs-lanes` 52, `docs-policy` 729, `docs-budget` 40, `docs-routes` 172, `docs-headers` 65, `single-definition/docs-ring` 80, `single-definition/docs-artifact-tiers` 5, `single-definition/docs-l0` 159 (1 skipped), `single-definition/refusal-table` 24, `refusal-status` 28, `auth-gate` 431, `box-token-census` 90, `secret-mask` 98 (1 skipped), `deviation-refs` 35, `anchors` 9, `citations` 4, `rings/totality` 11, `rings/fastify-l4` 5, `rings/outward-edges` 7, `rings/host-imports` 6; the server typecheck clean. The merge probe against `main` at `397cccdc92` was clean (exit 0), so nothing was absorbed.
 
 **Not measured:** any browser (the cached-script path D-9145 closes is read from the service worker update algorithm; wave A5's browser proof owes it, registering a script first loaded by a script tag); the whole tests typecheck (`typecheck-tests` could not start in the test slice, and the whole tests project ran out of the slice's memory; the changed test files were typechecked under a narrower config, clean); the whole server, agent and console suites, which the hosted full run arbitrates.
+
+### Wave A5 (run 4089, 2026-11-27, base `main` at `183010ed67`, `main` absorbed at `197665f6a0`)
+
+Built on this workspace's branch. The plan was written before A1 to A3 and X2 P6.2 landed: every step was re-anchored by content, and where a task's text and the landed code differ the landed code governs (each place is named below). Implementers were Sonnet (high); each task's diff had one Opus (high) review before its commit, and its findings a fix round. Every test and typecheck ran through `ccrc test`, one named file or one shard at a time (`--local` where the remote test box did not hold an uncommitted file). `main` at `197665f6a0` (wave A4, #3478) was absorbed once, by merge, on the coordinator's word, so these Results sit after A4's; the merge was clean (probe exit 0).
+
+**What the console now does.** Beside every HTML page's walls view, and on the views that never mount it (the page above 2 MiB read by range, a version page read by range above its cap, the stand-in with no asset reader), "Open as artifact" is a button on a box whose tier is on, a disabled button with its reason where it is not, the version sentence on an earlier version, and nothing for an outside folder or a dark sign-in. It opens the launch sheet: what runs and on which host, the files it can read (uncommitted, unmeasured), at most eight unticked outside hosts, the references above the folder, the others-open line and an unticked windows box; Prepare mints and shows one Open link (`rel="noopener noreferrer"`, never `window.open`, no Copy link). Page details (the phone head) lists this page's live links, and the Docs index every link on the box, with Revoke and Revoke all; no URL is ever shown.
+
+#### The first items (commits `09d8509d85`, `23c8a93dd2`, `284c8de44d`, `38e9c2c721`)
+
+1. **The reverse tier scan** (`single-definition/docs-artifact-tiers.test.ts`) reads `MockupFrame.tsx` and `MockupView.tsx` beside `docs/mockup/` (review 3947's A8). A planted `shared/artifacts` import in either is red (rows T-1, T-2).
+2. **The XML-row note** beside the scripted-document list in `server/src/artifacts/policy.ts` (review 4062). Comment only.
+3. **A masked artifact name**: D-9161 (above), as the coordinator ruled; the shell mirror is follow-up `x5-fu-expose-masked-label`. Its first build handed `artifactConfig` the shape-only masker from `accounts/mask.ts`, which `rings/outward-edges` refused (`config.ts` is L3, `mask.ts` L4 by its drawer's timer); `38e9c2c721` hands it `matchesShape` from `accounts/shapes.ts`, the shape half the masker itself reads, and the CONTROL case holds the two to the same verdicts. The first items' review found nothing blocking; its important item (the content key's reason was worded as the artifact key's) and two minors were taken in `284c8de44d`.
+
+| Label | Mutation | Red |
+|---|---|---|
+| T-1 | a `shared/artifacts` import planted in `MockupView.tsx` | `single-definition: no shared policy between tiers > no module of the walls tier imports shared/artifacts` |
+| T-2 | the same in `MockupFrame.tsx` | the same case |
+| D9161-a | the mask check skipped in `artifactConfig` | `config: a name the answer mask would alter turns the tier off (D-9161) > config: an artifact origin the mask would alter is off/invalid, naming the key and never echoing the value`, `> config: a content origin the mask would alter is off/invalid, naming its key`, `loadConfig asks the server's own answer mask (D-9161) > config: a shaped artifact label read from the environment turns the tier off with one warning naming the key` |
+| D9161-b | `loadConfig` hands no predicate (measured on both wirings) | `loadConfig asks the server's own answer mask (D-9161) > config: a shaped artifact label read from the environment turns the tier off with one warning naming the key` |
+| D9161-c | only the artifact origin checked | `… > config: a content origin the mask would alter is off/invalid, naming its key` |
+
+#### D-9162 (commit `fb3d8e6901`) and the one admission (commit `0d8050df80`)
+
+The scope answer names the two hosts (D-9162); its case `scope: the answer names the artifact and content hosts, so the launch sheet offers neither (D-9162)` ran red before the code. A5.2's review found that the sheet's first origin filter was a second copy of the mint's rule that had already drifted (no trailing-dot drop, no address refusal), so the pure admission moved to L0 (`originAdmitted`, `hostnameOfOrigin`, `looksNumericHost` in `shared/artifacts.ts`) and both call it: a move, `artifacts-mint` 43 and `artifacts-policy` 32 unedited and green before and after.
+
+#### A5.1, the offer (commit `6ed0767e5e`)
+
+`artifactWords.ts` and `tier.ts` (L1: `artifactOffer` in Figure 4's order, version first; `artifactRefusalOf`; and the consumer's port `ArtifactDoors` with its failure contract), `useArtifacts.ts` (L4: one module store read with `useSyncExternalStore`, so the availability is read once for every reader; it reads again on mount after a failure and on a sign-in regained, the newest read wins, an unknown reason is a failure; and it holds which page's sheet is open, so a `MockupView` remount keeps the sheet), `ArtifactOffer.tsx` (L4), and `api.docs.artifacts` (`pwa/src/lib/api.ts`, four hunks and one type import, by its holder's yes). Where the plan and the code differ: the plan's `artifactOffer(avail: {available: boolean; why?})` takes the store's `ArtifactAvailability`, so the reasons are checked exhaustively; the plan put the offer's `<button>` in `MockupView.tsx` and `DocsLeaf.tsx` under their existing census rows, and it lives in `ArtifactOffer.tsx` instead (one component for six placements), with one census row of its own; the button says `aria-haspopup="dialog"` (it opens the sheet), which also keeps it apart from Download's markup in `markup-census`; the sign-in re-read watches `useAuthLost` as a value, because `mockup-view`'s cases count `onAuthRegained` listeners one by one (review 2378 F1). The review's blocking item (the duplicated leaf markup) and its important items (a version page above 2 MiB had no offer, a failed read was never read again, the door classifier had no case) were fixed in its round.
+
+| Label | Mutation | Red (`artifact-offer-view.test.tsx` unless named) |
+|---|---|---|
+| MX5.49a | the offer only on a pre-scan refusal | `offer: beside the walls, refused or not > a page the pre-scan runs shows the frame toolbar and the button`, `> the gated view, before Render, shows the button` |
+| MX5.49b | the offer only where the pre-scan did not refuse | `offer: beside the walls, refused or not > a page the pre-scan refuses under the budgets shows its refusal line and the button` |
+| MX5.81 | the button on a version page | `offer: a version page gets its sentence` (here and in `artifact-tier.test.ts`), `a version page shows the version sentence and no button` |
+| MX5.83 | no offer on the too-large arm | `offer: a page above 2 MiB shows the too-large sentence, Download and the button, and no walls view` |
+| MX5.84 | no offer on the stand-in | `offer: the stand-in shows Source, Download and the button when there is no asset reader` |
+| V-1 | no offer on a version page read by range | `offer: a version page above 2 MiB reads by range and shows the version sentence, with no button` |
+| S-1a, S-1b | no re-read after a failure; none on a sign-in | the two `S-1` cases |
+| S-2 | an older read published last | `S-2: reads that answer out of order publish the newest read's answer, never the older one` |
+| S-3 | an unknown reason read as `unset` | both `S-3` cases |
+| A-1 | the 401 clause dropped from `artifactRead` | `artifact-api.test.ts`: `a 401 {ok: false, error: "unauthenticated"} is the docs auth slot, not a refusal` |
+| A-2 | the refusal arm dropped | `artifact-api.test.ts`: `a 409 {ok: false, error: "pin-moved"} on the scope read is refused with that word` |
+| MA-1 | no `aria-haspopup` | `the live button says it opens a dialog…`; `markup-census.test.ts`: `registers every duplicated leaf` |
+| MA-2 | no `aria-describedby` | `an unavailable box shows a disabled button described by the setup sentence` |
+
+#### A5.2, the launch sheet (commit `d68970c882`)
+
+`LaunchSheet.tsx` (L4) and its own stylesheet `artifact.css` (the checkbox rows' tap floor; `contrast.test.ts`'s closed list gains it, by its holder's yes), the words of design 6.2 and 3.2 (`ARTIFACT_REFUSAL_TEXT` is total over the refusal words), and L1 helpers in `tier.ts` (`aboveFolderCount`, `sheetOrigins`, `artifactStop`). `MockupLive` hands the census (its offered origins and the references above the page's folder) once its load answers, `'pending'` before (Prepare held), and the walls note it shows (the over-budget or too-large sentence; the refusal line from the pre-scan's `Refusal`); every view with no census hands `null`, the not-scanned case. Decisions the plan leaves open, each with a case: a held capability whose Open was never tapped is revoked on a tick change, a pin change, an unmount or an offered origin leaving the offer; once Open was tapped it lives on and the lists end it; a stale mint answer revokes its own id and never touches the held one; a scope stopped by `unmeasured` or a docs slot offers Retry (pin-moved still names only its one action); a reference above the repository root counts as above the folder. The review found nothing blocking; its four important items (a stale mint overwriting the held id, no fence on unmount, the display drifting from the minted capability, the duplicated origin rule) were fixed in its round.
+
+| Label | Mutation | Red (`artifact-sheet.test.tsx`) |
+|---|---|---|
+| MX5.39a | `ARTIFACT_OPEN_REL = 'noopener'` | `sheet: the Open anchor's rel` |
+| MX5.39b | an `onClick` calling `window.open` | `sheet: the Open anchor's rel` |
+| MX5.40 | windows starts ticked | `every origin checkbox and the windows checkbox start unticked` and five more |
+| MX5.82a | the scope read not keyed on the pin | `a scope read answering pin-moved shows the sentence and one action; tapping it re-lists once…`, `a mint answering pin-moved shows the sentence and the same one action` |
+| MX5.82b | pin-moved with no action | the same two, and `retryTree is the visit's re-list…` |
+| MX5.90 | an empty census for the too-large view | `sheet: an unscanned page > opened from the too-large view` (the gated and pre-scan-refusal arms have passing cases but no mutation row) |
+| I1-m | the held id set before the stale check | `I1: a stale mint answer revokes its own id and never touches the capability the sheet holds` |
+| I2-a, I2-b, I2-c | always revoke; no release on unmount; no generation bump on unmount | the `I2-opened`, `I2-tick` and `I2-unmount` cases |
+| I3-a, I3-b | no reaction to a departed origin; a failed revoke kept in `mine` | the three `I3: a census that becomes …` cases; `I3: a revoke that failed leaves the capability live…` |
+| I4-m | `sheetOrigins` admits an address-like host | `drops what the mint would refuse…`, `is the shared admission, origin by origin…` |
+| M1-m, M2-m, M3-m, M4-m | null for pending; Reload not re-enabled; no Retry; no too-large walls note | each its own `M…` case |
+
+#### A5.3, the lists and the proofs (commit `b10ded02e2`)
+
+- **The lists.** `ArtifactList.tsx` (L4) and `listWords.ts` (L1): page, version, a short id (eight characters, also in each Revoke's accessible name, so two links of one page are told apart), minted, last request and expiry in relative words, windows and the number of outside hosts; Revoke and Revoke all through the store's doors, one call per tap (a ref guard), then a re-read; a failed revoke keeps the rows and says why through `artifactStop`, the existing owner. A mounted list asks the store for an answer no older than ten seconds (`ensureFresh`, `ARTIFACT_LIST_FRESH_MS`). Revoke and Revoke all are `Button`s of `@ccrc/ui`, so the plan's census rows for them are not needed. `DocsHead.tsx` (two hunks, by its holder's yes) and `DocsIndexView.tsx` draw it.
+- **The golden.** `server/test/artifacts-golden.test.ts` builds the real artifact instance (`buildArtifactServer`; only the store's token, id and clock, the bytes port and the liveness port are fixtures) and pins twelve answers of a fixture page, each beside the `Sec-Fetch-Dest`, `-Mode` and `-Site` Chromium sends for it and any `Service-Worker` header, to `pwa/browser/fixtures/artifact-answers.json` byte for byte, the two origins and hosts as placeholders, `date` and `connection` left out. It was green three times in a row.
+- **The proofs** (`pwa/browser/artifact-isolation.browser.test.ts`; the harness replays the golden on two loopback ports it binds, and a console page on `localhost` holds the Open link). What Chromium showed:
+  - a frame navigation to another site: `Framing 'https://example.invalid/' violates the following Content Security Policy directive: "frame-src http://127.0.0.1:<p>/c/<token>/ http://127.0.0.1:<p>/clear". The request has been blocked.`; the frame lands on Chromium's error page and the tab stays on the wrapper;
+  - `parent.document`: `SecurityError`, "Failed to read a named property 'document' from 'Window': Blocked a frame with origin … from accessing a cross-origin frame.";
+  - the tab's `window.opener === null`; no content request and no wrapper request carried a `Referer`;
+  - the console's storage key reads null on the content origin (whose own storage works);
+  - the service worker (D-9145's proof): `sw.js` loaded by a script tag first, then `register('sw.js', {updateViaCache: 'all'})` sent exactly one request to the network, `serviceworker`/`same-origin`/`same-origin` with `Service-Worker: script`, answered 403 by the golden's fence entry, and rejected with `TypeError: Failed to register a ServiceWorker … A bad HTTP response code (403) was received when fetching the script.`;
+  - an SVG image (`naturalWidth` 16), a same-origin HTML fetch (200), `alert` (the dialog's message), a WebAssembly module (`add(2,3)` is 5), a module worker and a download (`data.txt`, `empty`/`navigate`/`same-origin`) ran;
+  - the frame's and `/clear`'s `Sec-Fetch-Site` between two `127.0.0.1` ports is `same-site`, as the plan expected; every request the replay answered carried exactly the set stored with its answer.
+  - D-9164: with the link's `rel` changed to `opener`, the opener case stayed green until the wrapper's policy was also removed.
+- The proofs' review found one blocking item (the service-worker case could pass with no request reaching the fence) and two important ones (the opener finding, D-9164; the frame-navigation case leaned on a loose match); all were fixed in its round. The lists' review found nothing blocking; its important items (a stale list, no id, a decision in the component) were fixed in its round.
+
+| Label | Mutation | Red |
+|---|---|---|
+| G-1 | one character of the wrapper's `Referrer-Policy` changed | `artifacts-golden.test.ts`: `golden: every answer equals the file byte for byte` |
+| MX5.87 | the frame's stored `Sec-Fetch-Site` set to `cross-site` | `browser: the injected sets are Chromium's` |
+| SW-1a | the registration of a script outside the manifest | `browser: a service worker cannot register, even from a script first loaded by a script tag with the cache allowed` (`expected 'Failed to register a ServiceWorker fo…' to match /403/`), and the sets case |
+| SW-1b | the script-tag load removed | the same case (`sw.js was loaded by the script tag first: expected -1 to be greater than or equal to 0`), and the sets case |
+| B-1 | the console link's `rel` as `opener` | `browser: the content request carries no Referer` only (D-9164) |
+| M6 | an entry named twice in the golden | the file fails at load: `artifact-answers.json names an entry twice` |
+| L-1 | a row's page drawn as a link | `artifact-list.test.tsx`: `list: never a URL` |
+| L-2 | no re-read after a revoke | `list: Revoke calls revoke(id) once and the row drops after the refresh`, `list: Revoke all calls revokeAll() once and every row drops` |
+| S-6 | the scope filter bypassed | the scoped and index case, the no-match case and both Page details cases |
+| F-1, I-2, W-3, E-5, G-7, H-9a, H-9b, A-13 | no freshness read; an empty id in the label; a refused revoke worded plainly; no under-a-minute branch; no in-flight guard; no focus move; the status mounted late; `aria-label` for `aria-labelledby` | each its own `artifact-list.test.tsx` case |
+
+#### Departures
+
+- D-9161 (the first items), D-9162 (A5.2) and D-9164 (A5.3), defined above. The reserve, 9161 and 9162, is used whole; 9164 was issued beyond it.
+- Where the plan's text and the landed code differ, besides those: the offer is one component with its own census row (A5.1); the plan's Revoke census rows are not needed (A5.3); Page details exists only on the phone head, so on a desk page the Docs index carries Revoke and Revoke all; the browser suite's console is a fixture page with the sheet's link, and the sheet's own link is pinned in jsdom (MX5.39).
+
+#### Not right yet
+
+- **Desk has no per-page list.** Design 3.3 puts Revoke in Page details and the Docs index; a desk page has no Page details, so it revokes from the index.
+- **A re-read that fails after a good revoke hides the list** (the store reads `failed`) with no sentence; nothing false is shown.
+- **Every phone docs page reads the availability once** (the list mounts in the closed panel). One request while the answer is fresh.
+- **A page whose load never answers holds Prepare** (the census stays `'pending'`).
+- **Chromium logs `Unrecognized feature: 'bluetooth'`** for the content `Permissions-Policy`, whose value is the design's text, pinned. A console warning only.
+
+#### Slips
+
+- I committed the first items and D-9161 before their Opus review; the review ran on the committed diff, and its findings landed in `284c8de44d`.
+- Implementers wrote code before its new tests in three rounds (A5.1's fix round, A5.3's list fix round, and part of the golden's first build); in each, the red side is the mutation rows above, each the guard removed.
+- One implementer ran `sed -i` once on `pwa/test/artifact-sheet.test.tsx` to add two imports; every later change used the file tools, and the file was reviewed after.
+
+#### Measured after the last commit
+
+- **Console:** the whole pwa suite in eight shards (`--shard=i/8 --maxWorkers=2`, because one run is past the test slice's memory): 671 of 672 files green, 22,583 tests passed and 2 skipped; the 672nd, `markdown-worker-built`, failed in shard 4 under load (its vite build stopped) and passed alone (9); two shards' typecheck pass was killed by the slice's memory cap with every test green. The pwa, ui and server typechecks are clean.
+- **Server:** every `artifacts-*` file (13, 331 tests); `deviation-refs`, `anchors`, `citations`, `topology-clean`, `private-names`, `license`, `oss-metadata`, `growth-check`, `growth-caps`, `ownership`, `ledger-crosstree`; the `single-definition` and `rings` files the wave touches.
+- **Browser:** `artifact-isolation` (10) and 28 more files that reach the Docs leaf, the mockup view or the reader, one per run, all green (listed in the task note; `docs-review`, `docs-headers`, `phone-bar`, `chat-links`, `instrument-bar` and `pdf-labs` green on a second run after a first that the test slice's memory cap stopped before any test).
+
+**Not measured:** `pdf-frame` and `settings-integrations`, whose runs the test slice's memory cap stopped at the build, before any test, three times each (the slice held 5 of its 6 GiB for other sessions); neither file nor anything it imports changed in this wave; the hosted full run arbitrates them. Firefox, Safari and phones (acceptance's ART rows); the browser files that import the harness only for `resolveChrome` (its change is additive); the whole server and agent suites.
