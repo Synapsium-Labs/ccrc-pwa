@@ -29,7 +29,9 @@ import { markProgrammesOf } from '../src/continuity/operatorMark.js';
 import { markOperatorPrompt, type PromptHandoffsCoord } from '../src/continuity/promptHandoffs.js';
 import { generationsPass, type GenerationsDeps, type GenReadings, type RegistryFacts } from '../src/continuity/generationsLane.js';
 import { softRenewalMay, type SoftInputs } from '../src/continuity/softRenewal.js';
-import { LEAST_AGE_MS } from '../../shared/continuity.js';
+import {
+  BREAK_NO_MESSAGE_MS, BREAK_PLACE_HIDDEN_MS, LEAST_AGE_MS, OVERLORD_PLACE_MARK, PLACE_MARK_EVERY_MS, RENEWAL_LANE_PERIOD_MS,
+} from '../../shared/continuity.js';
 import { OVERLORD_OPERATOR_MARK } from '../../shared/operatorMessages.js';
 import { seedRoster } from './helpers.js';
 import { fakeTime, FAKE_T0, type FakeTime } from './fakeTime.js';
@@ -134,6 +136,19 @@ async function drawerInput(r: Awaited<ReturnType<typeof rig>>, data: string): Pr
   ws.close();
 }
 const submit = (app: FastifyInstance) => app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: { expect: 'hello' } });
+const placeAt = (coord: CoordStore): number | null =>
+  (coord.db.prepare('SELECT at FROM operator_marks WHERE programme = ?').get(OVERLORD_PLACE_MARK) as { at: number } | undefined)?.at ?? null;
+/** The Overlord's place on screen (renewal readings G): one visible frame of the bound session over the real session socket,
+ *  which the server's own place reporter (`placeMarkReporter`, home B) turns into the `@overlord-place` mark at the rig's clock.
+ *  Never a mark written by hand. Waits until the mark stands at this instant. */
+async function placeVisible(r: Awaited<ReturnType<typeof rig>>): Promise<void> {
+  const ws = new WebSocket(`ws://127.0.0.1:${r.port}/ws/session/${ID}`);
+  await new Promise<void>((resolve, reject) => { ws.once('open', () => resolve()); ws.once('error', reject); });
+  try {
+    ws.send(JSON.stringify({ type: 'visible', visible: true }));
+    await vi.waitFor(() => expect(placeAt(r.coord)).toBe(r.time.ports.clock.wall()), wait);
+  } finally { ws.close(); }
+}
 
 // ── The four routes of wave 228: their screens and requests ──────────────────────────────────────────────────────────
 
@@ -377,17 +392,20 @@ describe('the real pass: input through either path within the break window keeps
     ['the drawer', async (r: Awaited<ReturnType<typeof rig>>) => drawerInput(r, 'h')],
     ['the submit route', async (r: Awaited<ReturnType<typeof rig>>) => { expect((await submit(r.app)).statusCode).toBe(200); }],
   ] as const) {
-    it(`the Overlord the operator typed to through ${name}, no reader running, keeps the permit waiting`, async () => {
+    it(`the Overlord the operator typed to through ${name}, its place on screen, no reader running, waits for a break`, async () => {
       const r = await rig();
       designate(r.coord);
       await act(r);
       await vi.waitFor(() => expect(marks(r.coord)).toEqual([{ programme: OVERLORD_OPERATOR_MARK, at: r.time.ports.clock.wall() }]), wait);
+      await placeVisible(r);
       const f = passOver(r.coord, fakeTime({ wallMs: r.time.ports.clock.wall(), monoMs: 1_000 }), 'overlord');
       const res = f.pass();
       expect(f.soft.at(-1)?.operatorQuietObservedMs).toEqual({ kind: 'measured', value: 0 });
       expect(f.soft.at(-1)?.readersRunning).toEqual({ kind: 'measured', value: 0 });
-      // Not a break: the quiet is measured 0, and the place-hidden input is still the lane's W1, so the permit waits `unmeasured`.
-      expect(res.waits).toEqual({ unmeasured: 1 });
+      expect(f.soft.at(-1)?.placeHiddenObservedMs).toEqual({ kind: 'measured', value: 0 });
+      // Not a break, measured on both sides: the operator's quiet is 0 and the place is on screen (renewal readings G). Before G
+      // this case expected `unmeasured`, which held only because the place reading did not exist yet.
+      expect(res.waits).toEqual({ 'no-break': 1 });
     });
   }
 
@@ -401,13 +419,15 @@ describe('the real pass: input through either path within the break window keeps
       expect(f.soft.at(-1)?.operatorQuietObservedMs).toEqual({ kind: 'measured', value: 0 });
     });
 
-    it(`the Overlord the operator acted on through ${c.name}, no reader running, keeps the permit waiting`, async () => {
+    it(`the Overlord the operator acted on through ${c.name}, its place on screen, no reader running, waits for a break`, async () => {
       const r = await rig(c.opts);
       designate(r.coord);
       expect((await c.go(r)).statusCode).toBe(200);
+      await placeVisible(r);
       const f = passOver(r.coord, fakeTime({ wallMs: r.time.ports.clock.wall(), monoMs: 1_000 }), 'overlord');
-      expect(f.pass().waits).toEqual({ unmeasured: 1 });
+      expect(f.pass().waits).toEqual({ 'no-break': 1 });
       expect(f.soft.at(-1)?.operatorQuietObservedMs).toEqual({ kind: 'measured', value: 0 });
+      expect(f.soft.at(-1)?.placeHiddenObservedMs).toEqual({ kind: 'measured', value: 0 });
     });
   }
 
@@ -424,5 +444,80 @@ describe('the real pass: input through either path within the break window keeps
     openRun(s, 'prog-a');
     const f = passOver(s, fakeTime({ wallMs: FAKE_T0, monoMs: 1_000 }));
     expect(f.pass().waits).toEqual({});
+  });
+});
+
+// R19's break for the Overlord, read through both marks the console writes (renewal readings G): no operator message for 20
+// minutes, OR no visible Overlord place for five, each in observed time. The operator acts through the drawer and the place is
+// on screen through the session socket's visible frame; the lane runs on the rig's own clock, so both marks age as the pass does.
+describe('the Overlord\'s break: the operator\'s quiet or the place hidden, either one (R19, renewal readings G)', () => {
+  type R = Awaited<ReturnType<typeof rig>>;
+  /** Passes every lane period on the rig's clock for `ms`, the place re-reported visible every minute when `onScreen`. */
+  const passFor = async (r: R, f: ReturnType<typeof passOver>, ms: number, onScreen: boolean): Promise<ReturnType<ReturnType<typeof passOver>['pass']>[]> => {
+    const out = [f.pass()];
+    for (let at = RENEWAL_LANE_PERIOD_MS; at <= ms; at += RENEWAL_LANE_PERIOD_MS) {
+      r.time.advance(RENEWAL_LANE_PERIOD_MS);
+      if (onScreen && at % PLACE_MARK_EVERY_MS === 0) await placeVisible(r);
+      out.push(f.pass());
+    }
+    return out;
+  };
+  const measuredMs = (v: unknown): number => { expect(v).toMatchObject({ kind: 'measured' }); return (v as { value: number }).value; };
+
+  it('the place on screen and the operator just acted: no break', async () => {
+    const r = await rig();
+    designate(r.coord);
+    await drawerInput(r, 'h');
+    await placeVisible(r);
+    const f = passOver(r.coord, r.time, 'overlord');
+    expect(f.pass().waits).toEqual({ 'no-break': 1 });
+  });
+
+  it('the place on screen and the operator quiet for 20 minutes: a break, by the quiet', async () => {
+    const r = await rig();
+    designate(r.coord);
+    await drawerInput(r, 'h');
+    await placeVisible(r);
+    const f = passOver(r.coord, r.time, 'overlord');
+    const res = await passFor(r, f, BREAK_NO_MESSAGE_MS + 2 * RENEWAL_LANE_PERIOD_MS, true);
+    const opened = res.findIndex((p) => Object.keys(p.waits).length === 0);
+    expect(opened).toBeGreaterThan(0);
+    expect(res.slice(0, opened).every((p) => p.waits['no-break'] === 1)).toBe(true);
+    const i = f.soft[opened]!;
+    expect(measuredMs(i.operatorQuietObservedMs)).toBeGreaterThanOrEqual(BREAK_NO_MESSAGE_MS);
+    expect(measuredMs(i.placeHiddenObservedMs)).toBeLessThan(BREAK_PLACE_HIDDEN_MS);
+  });
+
+  it('the place hidden for five minutes and the operator just acted: a break, by the place (the OR)', async () => {
+    const r = await rig();
+    designate(r.coord);
+    await drawerInput(r, 'h');
+    await placeVisible(r);
+    const f = passOver(r.coord, r.time, 'overlord');
+    const before = await passFor(r, f, BREAK_PLACE_HIDDEN_MS - 2 * RENEWAL_LANE_PERIOD_MS, false);
+    expect(before.every((p) => p.waits['no-break'] === 1)).toBe(true);
+    // Five minutes pass with the place off screen; the operator types before the lane's next pass, which sees both at once.
+    r.time.advance(2 * RENEWAL_LANE_PERIOD_MS);
+    await drawerInput(r, 'i');
+    await vi.waitFor(() => expect(marks(r.coord)).toContainEqual({ programme: OVERLORD_OPERATOR_MARK, at: r.time.ports.clock.wall() }), wait);
+    const res = f.pass();
+    const i = f.soft.at(-1)!;
+    expect(i.operatorQuietObservedMs).toEqual({ kind: 'measured', value: 0 });
+    expect(measuredMs(i.placeHiddenObservedMs)).toBeGreaterThanOrEqual(BREAK_PLACE_HIDDEN_MS);
+    expect(res.waits).toEqual({});
+  });
+
+  it('the place mark unread: the permit waits unmeasured, unless the quiet passes', async () => {
+    const r = await rig();
+    designate(r.coord);
+    await drawerInput(r, 'h');
+    await placeVisible(r);
+    r.coord.db.prepare('UPDATE operator_marks SET at = ? WHERE programme = ?').run('not a time', OVERLORD_PLACE_MARK);
+    const f = passOver(r.coord, r.time, 'overlord');
+    expect(f.pass().waits).toEqual({ unmeasured: 1 });
+    const i = f.soft.at(-1)!;
+    expect(i.placeHiddenObservedMs).toMatchObject({ kind: 'unmeasured' });
+    expect(softRenewalMay({ ...i, operatorQuietObservedMs: { kind: 'measured', value: BREAK_NO_MESSAGE_MS - 1 } })).toEqual({ start: false, waitFor: 'unmeasured' });
+    expect(softRenewalMay({ ...i, operatorQuietObservedMs: { kind: 'measured', value: BREAK_NO_MESSAGE_MS } })).toEqual({ start: true });
   });
 });

@@ -90,6 +90,42 @@ issued for this piece, so none is defined; the coordinator folds these slugs int
 | A rebind attempt holds too, and the old binding stays | "a failed rebind body that loaded from its account's own configuration holds that account; the old binding stays" |
 | An unknown account holds nothing | "an account the port cannot name holds nothing: a read that throws or answers null, or no read wired" |
 
+## Fix round 1: the Overlord cases of the operator-mark paths suite (call 1690)
+
+The first CI run reddened nine cases of `continuity-operator-mark-paths.test.ts` (shard 2). I had not run that file before the
+push. Their rig writes no place mark, so the place now reads long hidden, and R19's break is an OR: the place hidden for five
+minutes is a break even with the operator's quiet at 0. Option A was ruled: the soft decider and the reading stay as built.
+The cases now stand the place on screen **through the real reporter**: `placeVisible` sends one `{ type: 'visible', visible:
+true }` frame of the bound session over the real `/ws/session/:id` socket. The server's own `placeMarkReporter` turns that
+frame into the mark at the rig's clock, so no mark is written by hand.
+
+| Case ("the Overlord the operator ... ") | Old expectation | New expectation | Why the new one is stronger |
+|---|---|---|---|
+| typed to through the drawer | waits `unmeasured` | waits `no-break`; quiet 0 and place 0, both measured | The old one passed only because the place reading did not exist yet; the case's own comment said so ("the place-hidden input is still the lane's W1"). The new one proves the wait on two measured readings, with the place stood on screen as the console stands it. |
+| typed to through the submit route | waits `unmeasured` | waits `no-break`; quiet 0 and place 0 | as above |
+| acted on through the question door, a free-text answer | waits `unmeasured` | waits `no-break`; quiet 0 and place 0 | as above |
+| acted on through the question door, a dialog row | waits `unmeasured` | waits `no-break`; quiet 0 and place 0 | as above |
+| acted on through the question door, a multi-select set | waits `unmeasured` | waits `no-break`; quiet 0 and place 0 | as above |
+| acted on through the question door, an ask | waits `unmeasured` | waits `no-break`; quiet 0 and place 0 | as above |
+| acted on through the dialog tab move | waits `unmeasured` | waits `no-break`; quiet 0 and place 0 | as above |
+| acted on through the interrupt | waits `unmeasured` | waits `no-break`; quiet 0 and place 0 | as above |
+| acted on through the model and effort picker | waits `unmeasured` | waits `no-break`; quiet 0 and place 0 | as above |
+
+Each case's title gained "its place on screen", and the drawer case's comment now says what is measured. Four new cases in
+the same suite pin R19's rule for the Overlord openly. Both marks age on the rig's one clock, and the lane runs the real
+`softRenewalMay`:
+
+- The place on screen and the operator just acted: no break.
+- The place on screen (re-reported every minute) and the operator quiet for 20 minutes: a break, opened by the quiet. Every
+  pass before it waits `no-break`, and the place stays under five minutes.
+- The place hidden for five minutes and the operator just acted: a break, opened by the place (the OR). The quiet reads 0.
+- The place mark unread: the permit waits `unmeasured`. The same inputs start once the quiet reaches 20 minutes.
+
+**The search the missed file called for** (point 5 of the ruling). Every suite that builds the generations lane's soft inputs
+or asserts a soft wait word: `grep` over `server/test` for `softRenewalMay`, `SoftInputs`, `softInputsOf`, the two soft
+readings, `'no-break'`, `.waits` and `generationsPass(`, kept where the file imports the lane, the soft decider or their sets.
+Each was run alone; the wave-done lists them.
+
 ## Mutation
 
 **The floors' set.** `server/src/continuity/renewalReadings.ts#placeHiddenOf` joins `MUTANT_SETS` through
@@ -155,6 +191,9 @@ the source was restored (`git checkout`). Before: every named file green.
 
 ## Known limits
 
+- **Acting from a surface that does not show the place is not "on screen".** The break is R19's either-or. An operator who acts
+  on the Overlord from a surface that does not show its place (an answer given from the waiting list, say), with the place
+  hidden for five minutes, meets a break. The renewal carries the thread and the answer, as every soft renewal does.
 - **A rebind leaves the old place mark.** The place mark is one key, not one per session. After a rebind, the mark the old
   body's place refreshed still reads as visible for up to five minutes, until it ages or the new place refreshes it.
 - **A backward wall step leaves a hidden place unmeasured.** While the place is hidden, a mark dated after the pass stays
