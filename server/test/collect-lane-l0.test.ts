@@ -78,7 +78,7 @@ const IMPORTS = [
   "import { hookEventIs, type HookEvent } from './hook-events.js';",
   "import { providerRetryOf, type ProviderRetryWire } from './provider-retry-wire.js';",
   // Programme lifecycle W1: the lifecycle's open refusals and its stored states, spelled in `shared/programmeLifecycle.ts`.
-  "import { PROGRAMME_RUN_REFUSAL_MAP, PROGRAMME_STORED_STATES, type ProgrammeLifecycleFields, type ProgrammeRunRefuseCode, type ProgrammesLifecycleAnswer, type ProgrammeStoredState } from './programmeLifecycle.js';",
+  "import { PROGRAMME_RUN_REFUSAL_MAP, PROGRAMME_STORED_STATES, type ProgrammeLifecycleFields, type ProgrammeRunRefuseCode, type ProgrammesLifecycleAnswer, type ProgrammesWindowAnswer, type ProgrammeStoredState } from './programmeLifecycle.js';",
   // Overlord W1, the vocabulary piece: the two prompt constants moved into the list of what ccrc types, an import-free
   // `.mjs`; `shared/api.ts` imports them and re-exports them with a bare `export { … }`, so no importer changes.
   "import { IDLE_COMPACT_NUDGE_PROMPT, RESUME_PROMPT_PREFIX } from './injected-prompts.mjs';",
