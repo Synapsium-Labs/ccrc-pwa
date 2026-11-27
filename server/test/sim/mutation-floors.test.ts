@@ -77,6 +77,7 @@ import { APPROVAL_PARK_MUTANT_SETS } from './approvalParkSets.js';
 import { PROGRAMME_HEALTH_MUTANT_SETS } from './programmeHealthSets.js';
 import { WITNESS_MUTANT_SETS } from './witnessSets.js';
 import { ISOLATION_MUTANT_SETS } from './isolationSets.js';
+import { REQUEST_MUTANT_SETS } from './requestSets.js';
 import { simulate } from './run.js';
 import {
   CARD_BLOCK_KEY, CARD_BLOCK_SET, CARD_NEVER_EMPTY_KEY, CARD_NEVER_EMPTY_SET, CARD_ONE_LINE_KEY, CARD_ONE_LINE_SET, CARD_TRIM_KEY,
@@ -319,6 +320,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...WITNESS_MUTANT_SETS,
   ...ISOLATION_MUTANT_SETS,
   ...ACCOUNT_LOAD_MUTANT_SETS,
+  ...REQUEST_MUTANT_SETS,
 };
 
 it('rewriteRelativeImports makes ./ and ../ absolute and leaves bare specifiers', () => {
