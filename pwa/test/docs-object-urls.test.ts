@@ -108,7 +108,8 @@ describe('showBytes: a docs-show answer as bytes', () => {
 
 describe('downloadDocFile (spec 5.4; M5.17): octet-stream for every class', () => {
   const PATHS: readonly (readonly [DocContentClass, string])[] = [
-    ['markdown', 'a.md'], ['raster', 'i.png'], ['svg', 'd.svg'], ['html', 'm.html'], ['text', 't.txt'], ['other', 'x.pdf'],
+    ['markdown', 'a.md'], ['raster', 'i.png'], ['svg', 'd.svg'], ['html', 'm.html'], ['pdf', 'x.pdf'], ['text', 't.txt'],
+    ['other', 'x.zip'],
   ];
 
   function loadersFor(cls: DocContentClass, path: string) {
@@ -124,9 +125,9 @@ describe('downloadDocFile (spec 5.4; M5.17): octet-stream for every class', () =
     return { raster, file };
   }
 
-  it('the six paths are the six classes', () => {
+  it('the seven paths are the seven classes', () => {
     expect(PATHS.map(([, p]) => contentClass(p))).toEqual(PATHS.map(([c]) => c));
-    expect(new Set(PATHS.map(([c]) => c)).size).toBe(6);
+    expect(new Set(PATHS.map(([c]) => c)).size).toBe(7);
   });
 
   it.each(PATHS)('%s (%s): saved as application/octet-stream through saveBytes, never its own type', async (cls, path) => {
@@ -147,7 +148,7 @@ describe('downloadDocFile (spec 5.4; M5.17): octet-stream for every class', () =
     const r = fileResponse('');
     const file = vi.fn<DocsLoaders['file']>(async () =>
       ({ s: 'ok', value: { ...r, contentClass: 'other', show: { ...r.show, encoding: 'base64', text: undefined, b64: 'AP88' } } }));
-    expect(await downloadDocFile('demo', pinAt('x.pdf'), 'x.pdf', { raster: vi.fn(), file })).toEqual({ s: 'ok', value: undefined });
+    expect(await downloadDocFile('demo', pinAt('x.zip'), 'x.zip', { raster: vi.fn(), file })).toEqual({ s: 'ok', value: undefined });
     expect(await bytesOf(blobs()[0]!)).toEqual([0, 255, 60]);
   });
 

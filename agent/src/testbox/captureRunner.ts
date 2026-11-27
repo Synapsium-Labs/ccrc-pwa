@@ -23,11 +23,16 @@
 import { accessSync, constants, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { readCaptureRecords, replayCapture, type CaptureRecord } from '../../../shared/claudeBuildCapture.js';
+import type { CaptureRecipe } from '../../../shared/claudeBuildCapture.js';
 import type { BuildCaptureResult } from '../../../shared/claudeBuildTrust.js';
+import type { DeliveryCaptureResult } from '../../../shared/deliveryResult.js';
 import {
   CAPTURE_SOCKET, CAPTURE_STEPS, CAPTURE_TMUX_SESSION, captureClaudeJson, captureEnv, capturePaths, captureSettings, stepDone,
 } from './capture.js';
 import type { StandIn } from './captureStub.js';
+import { DELIVERY_PANE, deliveryStandInReply } from './captureDelivery.js';
+import { runDeliveryDrive, type DeliveryDriver } from './captureDeliveryRun.js';
+import type { StandInReply } from './capture.js';
 import { tmuxName, tmuxTarget } from '../../../shared/tmux-target.js';
 import { boundedExec, type Exec } from './exec.js';
 
@@ -38,6 +43,11 @@ export interface CaptureLaunchSpec {
   readonly env: readonly (readonly [string, string])[];
   readonly socket: string;
   readonly session: string;
+  /** The pane's size (default 200x50, build trust's); the delivery recipe asks for the fleet's (Desktop polish wave 178). */
+  readonly pane?: { readonly cols: number; readonly rows: number };
+  /** The tmux config file the private server starts with (default `/dev/null`, build trust's); the delivery recipe asks for
+   *  the fleet's shipped `ccd/tmux.conf`. */
+  readonly tmuxConf?: string;
 }
 
 /** Whether a started build lives: `unknown` when the launcher cannot tell, which is never read as `gone`. */
@@ -55,8 +65,30 @@ export interface LaunchedBuild {
 /** Starts a build: tmux in production, a pipe in the tests. A throw is a build that could not start. */
 export interface CaptureLauncher { start(spec: CaptureLaunchSpec): Promise<LaunchedBuild> }
 
-/** The capture's answer: the verdict, or none with why (nothing was judged). */
-export interface CaptureRun { readonly result: BuildCaptureResult | null; readonly detail: string | null }
+/** The capture's answer: the verdict, or none with why (nothing was judged). A delivery capture's answer carries
+ *  `delivery` (its result, or null) and never a build-trust `result`. */
+export interface CaptureRun {
+  readonly result: BuildCaptureResult | null;
+  readonly detail: string | null;
+  readonly delivery?: DeliveryCaptureResult | null;
+}
+
+/** What the delivery recipe needs beyond a build-trust capture (Desktop polish wave 178). Absent: the runner answers a
+ *  delivery capture with no verdict. */
+/** What a delivery capture asked with no part answers (the capture owner's call 1208, condition 1). */
+export const DELIVERY_NO_PART = 'a delivery capture was asked with no part: not run, no verdict';
+
+export interface CaptureDeliveryDeps {
+  readonly driver: DeliveryDriver;
+  /** The fleet's shipped tmux config (`ccd/tmux.conf` in the release tree), or null for none. */
+  readonly tmuxConf: string | null;
+  /** The test box's own release tag, which the part's result carries; null when it is not known (never a made-up tag). */
+  readonly release: string | null;
+  /** The settle and quiet bounds of one case: `CaptureTimings.deliverySettleMs` and `deliveryQuietMs`, from the one
+   *  contract the runner is built from (`main.ts#captureRunnerFor`). */
+  readonly settleMs: number;
+  readonly quietMs: number;
+}
 
 export interface CaptureRunnerDeps {
   readonly root: string;
@@ -68,7 +100,10 @@ export interface CaptureRunnerDeps {
   /** The box's tools directories, read when each capture starts (the tool sync may move them between captures). */
   readonly toolsPath: () => string | null;
   readonly launcher: CaptureLauncher;
-  readonly standIn: () => Promise<StandIn>;
+  /** Starts the stand-in; `reply` is the delivery recipe's rule, and absent for build trust. */
+  readonly standIn: (reply?: (body: unknown) => StandInReply) => Promise<StandIn>;
+  /** The delivery recipe's driver, tmux config and bounds; absent, a delivery capture answers no verdict. */
+  readonly delivery?: CaptureDeliveryDeps;
   /** How long one step may take to raise its events. */
   readonly stepTimeoutMs: number;
   /** How long the build may take to exit after the last step. */
@@ -105,7 +140,16 @@ export class CaptureRunner {
     try { return readCaptureRecords(readFileSync(file, 'utf8')); } catch { return { records: [], unreadable: 0 }; }
   }
 
-  async run(captureId: string, build: string): Promise<CaptureRun> {
+  /** Whether this runner runs the delivery recipe: its driver is wired. A box whose runner does not refuses a delivery
+   *  submission at the frame, as a box that predates the recipe does (the capture owner's call 1148). */
+  get delivers(): boolean { return this.d.delivery !== undefined; }
+
+  /** `part` is the delivery recipe's, and has no default: a delivery capture asked with no part runs nothing and answers no
+   *  verdict, never part 0 (the capture owner's call 1208, condition 1). */
+  async run(captureId: string, build: string, recipe: CaptureRecipe = 'build-trust', part?: number): Promise<CaptureRun> {
+    const delivery = recipe === 'delivery' ? this.d.delivery : undefined;
+    if (recipe === 'delivery' && delivery === undefined) return { result: null, delivery: null, detail: 'no delivery driver is wired to this runner' };
+    if (recipe === 'delivery' && part === undefined) return { result: null, delivery: null, detail: DELIVERY_NO_PART };
     const p = capturePaths(this.d.root, captureId, build, this.d.tmuxBase);
     const sleep = this.d.sleep ?? ((ms: number) => new Promise<void>((r) => { setTimeout(r, ms); }));
     const now = this.d.now ?? Date.now;
@@ -118,13 +162,41 @@ export class CaptureRunner {
       const cdDir = path.join(work, path.basename(p.cdDir));
       writeFileSync(path.join(p.config, 'settings.json'), JSON.stringify(captureSettings(this.d.recorder)));
       writeFileSync(path.join(p.config, '.claude.json'), JSON.stringify(captureClaudeJson(work)));
+      // The delivery capture's environment, built ONCE (the tools directories are read fresh on each build, and a tool sync
+      // may move them between two): the build's pane and the driver's search path get the same value (call 1208, cond. 2).
+      let deliveryEnv: readonly (readonly [string, string])[] = [];
       try {
-        standIn = await this.d.standIn();
-        launched = await this.d.launcher.start({
-          binary: p.buildFile, cwd: work, env: captureEnv(p, standIn.port, this.d.toolsPath()), socket: CAPTURE_SOCKET, session: CAPTURE_TMUX_SESSION,
-        });
+        if (delivery === undefined) {
+          standIn = await this.d.standIn();
+          launched = await this.d.launcher.start({
+            binary: p.buildFile, cwd: work, env: captureEnv(p, standIn.port, this.d.toolsPath()), socket: CAPTURE_SOCKET, session: CAPTURE_TMUX_SESSION,
+          });
+        } else {
+          standIn = await this.d.standIn(deliveryStandInReply);
+          deliveryEnv = captureEnv(p, standIn.port, this.d.toolsPath());
+          launched = await this.d.launcher.start({
+            binary: p.buildFile, cwd: work, env: deliveryEnv, socket: CAPTURE_SOCKET, session: CAPTURE_TMUX_SESSION,
+            pane: DELIVERY_PANE, ...(delivery.tmuxConf === null ? {} : { tmuxConf: delivery.tmuxConf }),
+          });
+        }
       } catch (e) {
-        return { result: null, detail: `the capture could not start: ${why(e)}` };
+        return { result: null, ...(delivery === undefined ? {} : { delivery: null }), detail: `the capture could not start: ${why(e)}` };
+      }
+      if (delivery !== undefined) {
+        // The delivery recipe (Desktop polish wave 178): its own drive, its own result; the build-trust drive below is not
+        // run, and nothing here reads or writes the build-trust verdict.
+        const l = launched;
+        const s = standIn;
+        const pathVar = deliveryEnv.find(([k]) => k === 'PATH')?.[1] ?? '';
+        const out = await runDeliveryDrive({
+          launched: l, life: () => lifeOf(l), requests: s.requests, routes: s.routes, ...(s.others === undefined ? {} : { others: s.others }), records: () => this.recorded(p.recording).records,
+          input: { capture: p.dir, tmux: p.tmux }, place: { path: pathVar, tmpBase: this.d.tmuxBase }, build, part: part!, driver: delivery.driver, settleMs: delivery.settleMs, quietMs: delivery.quietMs,
+          release: delivery.release,
+          // A pane started with no tmux config (the release tree had none) is not the fleet's pane: the result says so.
+          unmeasured: delivery.tmuxConf === null ? ['fleet-tmux-config'] : [],
+          stepTimeoutMs: this.d.stepTimeoutMs, exitTimeoutMs: this.d.exitTimeoutMs, pollMs: this.d.pollMs, sleep, now,
+        });
+        return { result: null, delivery: out.delivery, detail: out.detail };
       }
       let finished = true;
       let before = 0;
@@ -170,7 +242,7 @@ export class CaptureRunner {
       }
       return { result: replayCapture({ records, unreadable, cdDir, finished }, build), detail: null };
     } catch (e) {
-      return { result: null, detail: `the capture could not be set up: ${why(e)}` };
+      return { result: null, ...(delivery === undefined ? {} : { delivery: null }), detail: `the capture could not be set up: ${why(e)}` };
     } finally {
       if (launched !== null) {
         await launched.stop().catch(() => undefined);
@@ -272,8 +344,8 @@ export function tmuxLauncher(tmux: string, boundMs = 15_000, seams: TmuxLauncher
       // target, so no `-t` can prefix-match another session even on this private server.
       const made = await call([
         // The server's default shell is set first, in the same call, so the pane sees it as `SHELL` (call 1047).
-        '-f', '/dev/null', 'set-option', '-g', 'default-shell', CAPTURE_SHELL, ';',
-        'new-session', '-d', '-P', '-F', '#{pane_pid}', '-s', tmuxName(spec.session), '-x', '200', '-y', '50',
+        '-f', spec.tmuxConf ?? '/dev/null', 'set-option', '-g', 'default-shell', CAPTURE_SHELL, ';',
+        'new-session', '-d', '-P', '-F', '#{pane_pid}', '-s', tmuxName(spec.session), '-x', String(spec.pane?.cols ?? 200), '-y', String(spec.pane?.rows ?? 50),
         '-c', spec.cwd, ...command,
       ]);
       const pid = made.status === 0 && /^[1-9][0-9]*$/.test(made.stdout.trim()) ? Number(made.stdout.trim()) : null;

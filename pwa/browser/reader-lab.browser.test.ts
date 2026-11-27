@@ -150,6 +150,11 @@ describe('the reader lab in Chrome (reader lab plan, Task 11)', () => {
 
     await page.goto(`${origin}/settings/reader-lab`);
     await page.getByRole('button', { name: 'Start' }).click();
+    // The frame can be visible before the console commits the step that owns the click.
+    const step = '1 of 9: Tap the button in the box below.';
+    await page.getByText(step, { exact: true }).waitFor({ state: 'visible', timeout: 30_000 }).catch((cause: unknown) => {
+      throw new Error(`Reader lab did not reach step 1 before the frame tap: ${step}`, { cause });
+    });
     await page.frameLocator('.reader-lab-stage > iframe').first().getByRole('button', { name: 'Tap here' }).click({ timeout: 30_000 });
     try {
       await page.locator('figcaption', { hasText: /^Result$/ }).waitFor({ timeout: 180_000 });

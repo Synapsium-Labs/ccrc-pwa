@@ -159,9 +159,9 @@ const [LOCAL_REF_PREFIX, ORIGIN_REF_PREFIX] = DOCS_REF_PREFIXES;
 export type DocsRefTarget = { side: 'bare' | 'local' | 'origin'; branch: string };
 
 /**
- * The target of a ref spec. A bare spec is its name; a qualified spec is its branch, read after whichever derived
- * prefix it starts with. A qualified spec under neither prefix is a caller's bug (`parseDocsRef` never builds one),
- * so it throws rather than guessing a side.
+ * The target of a refresh ref. A bare spec is its name; a qualified branch follows one of the two derived prefixes.
+ * `parseDocsRef` also admits qualified tags for reads. `parseDocsRefreshBody` excludes them here: a caller passing
+ * a qualified ref under neither branch prefix has broken that contract, so this throws rather than guessing a side.
  */
 export function docsRefTarget(ref: DocsRefSpec): DocsRefTarget {
   if (ref.kind === 'bare') return { side: 'bare', branch: ref.name };
@@ -707,8 +707,8 @@ export type DocsRefreshRequest = { ref: DocsRefSpec | null; reason: 'auto' | 'ma
  * 2. an extra key: `bad-query {key, why:'unknown'}`, the first in code-unit order;
  * 3. `ref` missing or neither `null` nor a string, then `reason` missing or not `auto`/`manual`:
  *    `bad-query {key, why:'body'}`;
- * 4. a string `ref` in neither ref grammar: `bad-ref`. A local qualified ref is ACCEPTED here: `fetchBranchFor`
- *    skips its fetch, and the follow-up tree still runs.
+ * 4. a string `ref` outside the bare and qualified branch grammars, including a qualified tag: `bad-ref`.
+ *    A local qualified branch is accepted: `fetchBranchFor` skips its fetch, and the follow-up tree still runs.
  */
 export function parseDocsRefreshBody(body: unknown): { ok: true; req: DocsRefreshRequest } | DocsFailureBody {
   if (typeof body !== 'object' || body === null || Array.isArray(body)) return badQuery('body');
@@ -721,7 +721,8 @@ export function parseDocsRefreshBody(body: unknown): { ok: true; req: DocsRefres
   if (reason !== 'auto' && reason !== 'manual') return badQuery('body', 'reason');
   if (ref === null) return { ok: true, req: { ref: null, reason } };
   const spec = parseDocsRef(ref);
-  return spec === null ? refused('bad-ref') : { ok: true, req: { ref: spec, reason } };
+  return spec === null || (spec.kind === 'qualified' && !isDocsQualifiedRef(spec.ref))
+    ? refused('bad-ref') : { ok: true, req: { ref: spec, reason } };
 }
 
 // ===== Request provenance (section 3.8; refinement (o)) =====

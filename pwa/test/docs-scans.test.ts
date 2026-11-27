@@ -15,7 +15,7 @@
 // second badge whatever its spelling.
 //
 // W5 part 2 appends its clauses (M4.SH7, M4.EX2, M4.EX11, M4.EX16) below this one.
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ts } from '../../server/test/scan/parse';
@@ -177,7 +177,9 @@ describe("clause 1: no Docs file reads a draft's state (M4.T7, base form)", () =
 //   and `srcDoc` forms in `docs/export/buildExport.tsx`, and `default-src 'none'` in `docs/export/policy.ts`, the mockup
 //   frame's `iframe` and `srcDoc` forms in `docs/MockupFrame.tsx` (C2 Task 8, M5.13), by exact path too, and the
 //   mockup viewer's one (M5.16's last bullet): `default-src 'none'` in `docs/mockup/policy.ts` (`MOCKUP_CSP`), by exact
-//   path, never the directory. The allowance holds whether or not those files exist yet. One more, for the mockup
+//   path, never the directory; and the PDF frame's two (X2 P3, spec 2026-11-18 4.4): the `iframe` and `srcDoc` forms in
+//   `docs/pdf/PdfFrame.tsx` and `default-src 'none'` in `docs/pdf/pdfPolicy.ts`, by exact path too. The allowance holds
+//   whether or not those files exist yet. One more, for the mockup
 //   export's snapshot (C2 Task 9, spec 5.6.9 step 3): the STRING `srcdoc` (its strip list names the attribute it drops)
 //   in `docs/mockup/exportMockup.ts`, by exact path; an identifier, property name, JSX attribute or `<iframe` string
 //   there stays red, and the same string in any other file, `docs/mockup/load.ts` and a sibling `exportMockup2.ts`
@@ -204,17 +206,19 @@ describe("clause 1: no Docs file reads a draft's state (M4.T7, base form)", () =
 // Review lens 4 reads for those; the library's own frame tests and `reader-bridge.test.ts` hold the runtime side.
 // ---------------------------------------------------------------------------------------------------------------
 const SRC_DIR = path.join(PWA, 'src');
-const LIBRARY = '@synapsium-labs/docserver';
+const LIBRARY = '@synapsium-labs/pinax-lib';
 /** The two value uses of the adapters that keep them out of the main bundle: ReaderFrame's literal dynamic `import()`s,
  * and the bridge's own static import of the assets (the bridge is itself loaded only through that dynamic import, so
  * what it imports is lazy with it). */
 function adapterUseAllowed(file: string, target: string, dynamic: boolean): boolean {
-  return (file === ADAPTER_LOADER && dynamic) || (file === 'src/docs/reader/bridge.ts' && target === 'src/docs/reader/assets');
+  return (file === ADAPTER_LOADER && dynamic && ['src/docs/reader/bridge', 'src/docs/reader/assets'].includes(target))
+    || (file === 'src/docs/reader/bridge.ts' && !dynamic && ['src/docs/reader/assets', 'src/docs/reader/hostAppearance', 'src/docs/reader/appearance'].includes(target))
+    || (file === 'src/docs/reader/hostAppearance.ts' && !dynamic && target === 'src/docs/reader/appearance');
 }
 /** The worker-side render job, as a base-relative path without its extension. */
 const RENDER_JOB = 'src/lib/readerRenderJob';
 /** The two reader adapters that must stay out of the main bundle, base-relative without an extension. */
-const READER_ADAPTERS: readonly string[] = ['src/docs/reader/bridge', 'src/docs/reader/assets'];
+const READER_ADAPTERS: readonly string[] = ['src/docs/reader/bridge', 'src/docs/reader/assets', 'src/docs/reader/hostAppearance', 'src/docs/reader/appearance'];
 /** The one file that may load them, and only as a literal dynamic `import()` (the "Library imports" constraint). */
 const ADAPTER_LOADER = 'src/docs/ReaderFrame.tsx';
 
@@ -226,7 +230,7 @@ const LIBRARY_HOMES: ReadonlyArray<readonly [(sub: string) => boolean, (file: st
   [(sub) => sub === '/host', (file) => file === 'src/docs/reader/bridge.ts'],
   [(sub) => sub === '/render', (file) => file === 'src/lib/readerRenderJob.ts'],
   [(sub) => /^\/assets\/.+\?raw$/.test(sub), (file) => file === 'src/docs/reader/assets.ts'],
-  [(sub) => sub === '/frame', (file) => file.startsWith('src/docs/reader/')],
+  [(sub) => sub === '/frame', (file) => ['src/docs/reader/bridge.ts', 'src/docs/reader/assets.ts', 'src/docs/reader/labPolicy.ts', 'src/docs/reader/appearance.ts'].includes(file)],
 ];
 
 /** Where the message scan reads: all of `pwa/src`. */
@@ -240,14 +244,23 @@ const renderJobValueHome = (file: string): boolean => file === 'src/lib/markdown
  *  or name `srcdoc`, by exact path, never the directory or a prefix (`MockupFrame2.tsx` and `MockupView.tsx` are not it). */
 const MOCKUP_FRAME_HOME = 'src/docs/MockupFrame.tsx';
 
+/** The PDF frame's one frame file (X2 P3, spec 2026-11-18 4.4): like the mockup's, the only file of its viewer that may draw the
+ *  JSX `iframe` or name `srcdoc`, by exact path, never the directory or a prefix. */
+const PDF_FRAME_HOME = 'src/docs/pdf/PdfFrame.tsx';
+
+/** The PDF frame's one policy file (X2 P3): the only file of its viewer that may spell `default-src 'none'`, by exact path. */
+const PDF_POLICY_HOME = 'src/docs/pdf/pdfPolicy.ts';
+
 /** The one file that may spell the string `srcdoc` without drawing a frame: the mockup export's snapshot, whose strip list
  *  names the attribute it removes (C2 Task 9). By exact path, and for the string form only. */
 const SRCDOC_STRING_HOME = 'src/docs/mockup/exportMockup.ts';
 
 /** Export's two allowances, by exact path (A2b, M8.10): the `iframe` element and `srcDoc`, and the `default-src 'none'` string;
- *  and the mockup frame's `iframe` and `srcDoc` (`MOCKUP_FRAME_HOME`). */
+ *  the mockup frame's `iframe` and `srcDoc` (`MOCKUP_FRAME_HOME`); and the PDF frame's two (`PDF_FRAME_HOME`, `PDF_POLICY_HOME`). */
 function exportAllows(kind: 'iframe' | 'policy', file: string): boolean {
-  return kind === 'iframe' ? file === 'src/docs/export/buildExport.tsx' || file === MOCKUP_FRAME_HOME : file === 'src/docs/export/policy.ts';
+  return kind === 'iframe'
+    ? file === 'src/docs/export/buildExport.tsx' || file === MOCKUP_FRAME_HOME || file === PDF_FRAME_HOME
+    : file === 'src/docs/export/policy.ts' || file === PDF_POLICY_HOME;
 }
 
 /** A module specifier an import, export or `import()` names; `value` is false for the type-only forms. */
@@ -362,16 +375,37 @@ function scanReaderFile(source: string, file: string): { hits: ReaderHit[]; uses
   return { hits, uses };
 }
 
+/** `scanReaderFile`'s answers in this test process, keyed by the file's relative path and its exact text (#3450: the parse of
+ *  every file on every scan was the cost of the planted cases, not their copies). The answer is a pure function of those two:
+ *  `scanReaderFile` reads only its `source` and `file` arguments and this module's constants (the homes, the library name and
+ *  the allow rules, none reassigned), never the tree's root, another file or an option, so the key is complete. A planted
+ *  file's text differs from the real one's, so it is always parsed afresh. In memory only, and `readerScan`'s alone. */
+const READER_SCAN_CACHE = new Map<string, { hits: ReaderHit[]; uses: string[] }>();
+
 /** The reader scan over every `.ts` and `.tsx` file under `<base>/src`, named relative to `base`. */
 function readerScan(base: string): { files: string[]; hits: ReaderHit[]; uses: string[] } {
   const files = sourceFiles(path.join(base, 'src')).map((f) => path.relative(base, f).split(path.sep).join('/'));
-  const found = files.map((rel) => scanReaderFile(readFileSync(path.join(base, ...rel.split('/')), 'utf8'), rel));
+  const found = files.map((rel) => {
+    const source = readFileSync(path.join(base, ...rel.split('/')), 'utf8');
+    const key = `${rel}\0${source}`;
+    let answer = READER_SCAN_CACHE.get(key);
+    if (answer === undefined) READER_SCAN_CACHE.set(key, answer = scanReaderFile(source, rel));
+    return answer;
+  });
   return { files, hits: found.flatMap((f) => f.hits), uses: found.flatMap((f) => f.uses) };
 }
 
-// Each planted case copies and re-scans the whole of pwa/src (the ReaderFrame case three times); on a loaded merge-queue
-// runner that has passed vitest's 5 s default, so the clause gives its cases 30 s, as clause W5h-a's do.
-describe('clause W8a: the reader library has its homes (M8.10 amended, M8.21)', { timeout: 30_000 }, () => {
+/** The case budget of every clause below that copies the tree (W8a, W5h-a, W5 Share, W5 Export, W5h-b, C1). Sized for a slow
+ *  runner from a measurement (#3450): with the scan caches, the slowest case of those clauses took 5.7 s on the fleet box
+ *  (three runs of this file at load 27 to 32; before the caches it was 13 to 29 s); the issue's queue runs show a slow hosted
+ *  runner taking about 2.03 times a fast one (Task 9: 30.5 s against 15.0 s), so about 11.6 s there, and 30 s leaves 2.6 times
+ *  that. */
+const TREE_COPY_TIMEOUT_MS = 30_000;
+
+// Each planted case copies the whole of pwa/src and scans the copy (the ReaderFrame case three times; the scan cache parses
+// only what a plant changed); on a loaded merge-queue runner that has passed vitest's 5 s default, so the clause gives its
+// cases `TREE_COPY_TIMEOUT_MS`, as clause W5h-a's do.
+describe('clause W8a: the reader library has its homes (M8.10 amended, M8.21)', { timeout: TREE_COPY_TIMEOUT_MS }, () => {
   const copies: string[] = [];
   afterAll(() => {
     for (const dir of copies) rmSync(dir, { recursive: true, force: true });
@@ -406,10 +440,10 @@ describe('clause W8a: the reader library has its homes (M8.10 amended, M8.21)', 
     // The homes are real: each entry point is imported where the rule says it lives, so the rule is not green for
     // want of anything to see.
     expect(uses).toEqual(expect.arrayContaining([
-      'src/docs/reader/bridge.ts @synapsium-labs/docserver/host',
-      'src/docs/reader/bridge.ts @synapsium-labs/docserver/frame',
-      'src/lib/readerRenderJob.ts @synapsium-labs/docserver/render',
-      'src/docs/reader/assets.ts @synapsium-labs/docserver/assets/frame/guard.js?raw',
+      'src/docs/reader/bridge.ts @synapsium-labs/pinax-lib/host',
+      'src/docs/reader/bridge.ts @synapsium-labs/pinax-lib/frame',
+      'src/lib/readerRenderJob.ts @synapsium-labs/pinax-lib/render',
+      'src/docs/reader/assets.ts @synapsium-labs/pinax-lib/assets/frame/guard.js?raw',
     ]));
     expect(names(hits, 'library:')).toEqual([]);
   });
@@ -428,13 +462,13 @@ describe('clause W8a: the reader library has its homes (M8.10 amended, M8.21)', 
 
   it('M8.10 planted: a /host import in DocsLeaf is red', () => {
     const dir = treeCopy();
-    plant(dir, 'src/docs/DocsLeaf.tsx', "\nimport { createHost } from '@synapsium-labs/docserver/host';\nvoid createHost;\n");
+    plant(dir, 'src/docs/DocsLeaf.tsx', "\nimport { createHost } from '@synapsium-labs/pinax-lib/host';\nvoid createHost;\n");
     expect(names(readerScan(dir).hits, 'library:')).toEqual(['src/docs/DocsLeaf.tsx library:/host']);
   });
 
   it('M8.10 planted: a /render import in DocsLeaf is red', () => {
     const dir = treeCopy();
-    plant(dir, 'src/docs/DocsLeaf.tsx', "\nimport { render } from '@synapsium-labs/docserver/render';\nvoid render;\n");
+    plant(dir, 'src/docs/DocsLeaf.tsx', "\nimport { render } from '@synapsium-labs/pinax-lib/render';\nvoid render;\n");
     expect(names(readerScan(dir).hits, 'library:')).toEqual(['src/docs/DocsLeaf.tsx library:/render']);
   });
 
@@ -485,6 +519,19 @@ describe('clause W8a: the reader library has its homes (M8.10 amended, M8.21)', 
     const sibling = treeCopy();
     plant(sibling, 'src/docs/MockupFrame2.tsx', "export const PlantedSibling = () => <iframe srcDoc=\"x\" />;\n");
     expect(names(readerScan(sibling).hits, 'docs:')).toEqual(['src/docs/MockupFrame2.tsx docs:iframe', 'src/docs/MockupFrame2.tsx docs:srcDoc']);
+  });
+
+  it("X2 P3: the PDF frame's iframe and srcDoc are allowed at src/docs/pdf/PdfFrame.tsx only, its policy string at pdfPolicy.ts only; the same in a sibling is red", () => {
+    const dir = treeCopy();
+    plant(dir, PDF_FRAME_HOME, "\nexport const PlantedPdfFrame = () => <iframe srcDoc=\"x\" />;\n");
+    plant(dir, PDF_POLICY_HOME, "\nexport const PLANTED_PDF_POLICY = \"default-src 'none'\";\n");
+    expect(readerScan(dir).hits).toEqual([]);
+    const sibling = treeCopy();
+    plant(sibling, 'src/docs/pdf/PdfLeaf.tsx', "\nexport const PlantedLeaf = () => <iframe srcDoc=\"x\" />;\n");
+    plant(sibling, 'src/docs/pdf/pdfSrcdoc.ts', "\nexport const PLANTED_PDF_POLICY = \"default-src 'none'\";\n");
+    expect(names(readerScan(sibling).hits, 'docs:')).toEqual([
+      'src/docs/pdf/PdfLeaf.tsx docs:iframe', 'src/docs/pdf/PdfLeaf.tsx docs:srcDoc', 'src/docs/pdf/pdfSrcdoc.ts docs:default-src-none',
+    ]);
   });
 
   it("Task 9: the snapshot's srcdoc STRING is allowed at src/docs/mockup/exportMockup.ts only; every other form there, and the string in load.ts or a sibling, is red", () => {
@@ -595,20 +642,20 @@ describe('clause W8a: the reader library has its homes (M8.10 amended, M8.21)', 
   });
 
   it('M8.10 planted: the bare package import in DocsLeaf is red', () => {
-    expect(planted(LEAF, "\nimport * as planted from '@synapsium-labs/docserver';\nvoid planted;\n")).toEqual([`${LEAF} library:(bare)`]);
+    expect(planted(LEAF, "\nimport * as planted from '@synapsium-labs/pinax-lib';\nvoid planted;\n")).toEqual([`${LEAF} library:(bare)`]);
   });
 
   it('M8.10 planted: an /enhance import in DocsLeaf is red', () => {
-    expect(planted(LEAF, "\nimport * as planted from '@synapsium-labs/docserver/enhance';\nvoid planted;\n")).toEqual([`${LEAF} library:/enhance`]);
+    expect(planted(LEAF, "\nimport * as planted from '@synapsium-labs/pinax-lib/enhance';\nvoid planted;\n")).toEqual([`${LEAF} library:/enhance`]);
   });
 
   it('M8.10 planted: a /frame import in DocsLeaf is red', () => {
-    expect(planted(LEAF, "\nimport { frameDocument } from '@synapsium-labs/docserver/frame';\nvoid frameDocument;\n"))
+    expect(planted(LEAF, "\nimport { frameDocument } from '@synapsium-labs/pinax-lib/frame';\nvoid frameDocument;\n"))
       .toEqual([`${LEAF} library:/frame`]);
   });
 
   it('M8.10 planted: an /assets raw import outside assets.ts is red', () => {
-    expect(planted(LEAF, "\nimport planted from '@synapsium-labs/docserver/assets/frame/guard.js?raw';\nvoid planted;\n"))
+    expect(planted(LEAF, "\nimport planted from '@synapsium-labs/pinax-lib/assets/frame/guard.js?raw';\nvoid planted;\n"))
       .toEqual([`${LEAF} library:/assets`]);
   });
 
@@ -619,7 +666,26 @@ describe('clause W8a: the reader library has its homes (M8.10 amended, M8.21)', 
     expect(loader('./reader/bridge')).toHaveLength(2);
     expect(loader('./reader/assets')).toHaveLength(1);
     expect(uses.filter((u) => /\/reader\/(?:bridge|assets)$/.test(u))).toHaveLength(3);
+    expect(uses.filter((u) => / \.\/(?:hostAppearance|appearance)$/.test(u))).toEqual([
+      'src/docs/reader/bridge.ts ./hostAppearance', 'src/docs/reader/bridge.ts ./appearance',
+      'src/docs/reader/hostAppearance.ts ./appearance',
+    ]);
     expect(names(hits, 'main-bundle:')).toEqual([]);
+  });
+
+  it('appearance adapters and frame imports cannot enter the main bundle', () => {
+    for (const [file, spec] of [
+      ['src/docs/ReaderFrame.tsx', './reader/hostAppearance'],
+      ['src/docs/ReaderFrame.tsx', './reader/appearance'],
+      ['src/docs/DocsHead.tsx', './reader/appearance'],
+    ]) {
+      expect(planted(file!, `\nimport * as plantedAppearance from '${spec}';\nvoid plantedAppearance;\n`))
+        .toEqual([`${file} main-bundle:value-import`]);
+    }
+    for (const file of ['src/docs/reader/policy.ts', 'src/docs/reader/images.ts']) {
+      expect(planted(file, "\nimport * as plantedFrame from '@synapsium-labs/pinax-lib/frame';\nvoid plantedFrame;\n"))
+        .toEqual([`${file} library:/frame`]);
+    }
   });
 
   it('Library imports planted: a static import of ./reader/bridge in DocsLeaf is red', () => {
@@ -639,6 +705,22 @@ describe('clause W8a: the reader library has its homes (M8.10 amended, M8.21)', 
 
   it('Library imports planted: an import type of ./reader/bridge in DocsLeaf is allowed', () => {
     expect(planted(LEAF, "\nimport type { ReaderMount } from './reader/bridge';\nexport type PlantedMount = ReaderMount;\n")).toEqual([]);
+  });
+
+  it('the scan cache (#3450): the real tree scanned with a cold cache and again warm gives the same answer', () => {
+    READER_SCAN_CACHE.clear();
+    const cold = readerScan(PWA);
+    expect(READER_SCAN_CACHE.size).toBe(cold.files.length);
+    expect(readerScan(PWA)).toEqual(cold);
+  });
+
+  it('the scan cache (#3450): a plant into a file the warm cache holds is seen', () => {
+    const { files } = readerScan(PWA);
+    expect(files).toContain(LEAF);
+    expect(READER_SCAN_CACHE.size).toBeGreaterThanOrEqual(files.length);
+    const dir = treeCopy();
+    plant(dir, LEAF, `\nimport { createHost } from '${LIBRARY}/host';\nvoid createHost;\n`);
+    expect(names(readerScan(dir).hits, 'library:')).toEqual([`${LEAF} library:/host`]);
   });
 });
 
@@ -761,14 +843,34 @@ function scanHighlightFile(source: string, file: string): { hits: string[]; sink
 /** Where `ui/src` is, which pwa reaches through the `@/` alias: no file there may name highlight.js. */
 const UI_SRC_DIR = path.join(PWA, '..', 'ui', 'src');
 
+/** `highlightScan`'s per-file answers in this test process, keyed by which half of the scan made the answer (`src` for
+ *  `scanHighlightFile` over `<base>/src`, `ui` for the specifier hits over `uiSrc`), the file's relative path and its exact text
+ *  (#3450, as `READER_SCAN_CACHE`). Each answer is a pure function of those three: both halves read only the file's text, its
+ *  relative path (the `.tsx` kind included) and this module's constants (the highlight homes, the chain and the sink name, none
+ *  reassigned), never the tree's root, another file or an option, so the key is complete. A planted file's text differs from
+ *  the real one's, so it is always parsed afresh. In memory only, and `highlightScan`'s alone. */
+const HIGHLIGHT_SCAN_CACHE = new Map<string, { hits: string[]; sinks: string[] }>();
+
 /** The scan over every `.ts` and `.tsx` file under `<base>/src`, named relative to `base`, and over `uiSrc` (named `ui/src/...`). */
 function highlightScan(base: string, uiSrc: string = UI_SRC_DIR): { files: string[]; hits: string[]; sinks: string[] } {
+  const cached = (half: 'src' | 'ui', rel: string, source: string, scan: () => { hits: string[]; sinks: string[] }) => {
+    const key = `${half}\0${rel}\0${source}`;
+    let answer = HIGHLIGHT_SCAN_CACHE.get(key);
+    if (answer === undefined) HIGHLIGHT_SCAN_CACHE.set(key, answer = scan());
+    return answer;
+  };
   const files = sourceFiles(path.join(base, 'src')).map((f) => path.relative(base, f).split(path.sep).join('/'));
-  const found = files.map((rel) => scanHighlightFile(readFileSync(path.join(base, ...rel.split('/')), 'utf8'), rel));
+  const found = files.map((rel) => {
+    const source = readFileSync(path.join(base, ...rel.split('/')), 'utf8');
+    return cached('src', rel, source, () => scanHighlightFile(source, rel));
+  });
   const uiHits = sourceFiles(uiSrc).flatMap((f) => {
     const rel = `ui/src/${path.relative(uiSrc, f).split(path.sep).join('/')}`;
-    const sf = ts.createSourceFile(rel, readFileSync(f, 'utf8'), ts.ScriptTarget.Latest, true, f.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
-    return highlightSpecifierHits(sf, rel);
+    const source = readFileSync(f, 'utf8');
+    return cached('ui', rel, source, () => {
+      const sf = ts.createSourceFile(rel, source, ts.ScriptTarget.Latest, true, f.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+      return { hits: highlightSpecifierHits(sf, rel), sinks: [] };
+    }).hits;
   });
   return { files, hits: [...found.flatMap((f) => f.hits), ...uiHits], sinks: found.flatMap((f) => f.sinks) };
 }
@@ -786,9 +888,10 @@ function highlightWorkerUrlSites(source: string, file: string): string[] {
   return sites;
 }
 
-// Each planted case copies and re-scans the whole of pwa/src; under a loaded box that has passed vitest's 5 s default,
-// so the clause gives its cases 30 s (a slow scan is not a wrong one).
-describe('clause W5h-a: highlight.js stays in the worker, one checked sink, no test seam in pwa/src (M4.H4, M4.H15, M4.H17)', { timeout: 30_000 }, () => {
+// Each planted case copies the whole of pwa/src and scans the copy (the scan cache parses only what a plant changed); under a
+// loaded box that has passed vitest's 5 s default, so the clause gives its cases `TREE_COPY_TIMEOUT_MS` (a slow scan is not a
+// wrong one).
+describe('clause W5h-a: highlight.js stays in the worker, one checked sink, no test seam in pwa/src (M4.H4, M4.H15, M4.H17)', { timeout: TREE_COPY_TIMEOUT_MS }, () => {
   const copies: string[] = [];
   afterAll(() => { for (const dir of copies) rmSync(dir, { recursive: true, force: true }); });
   /** A fresh copy of `pwa/src` with `edit` applied to one file (created when absent); returns the copy's base. */
@@ -902,6 +1005,24 @@ describe('clause W5h-a: highlight.js stays in the worker, one checked sink, no t
     expect(highlightWorkerUrlSites('export function f() { return new Worker(new URL(\n  "./markdownHighlightWorker", import.meta.url)); }', 'x.ts')).toEqual(['x.ts f']);
     expect(highlightWorkerUrlSites("new URL('./markdownWorker.ts', import.meta.url);", 'x.ts')).toEqual([]);
   });
+
+  it('the scan cache (#3450): the real trees scanned with a cold cache and again warm give the same answer', () => {
+    HIGHLIGHT_SCAN_CACHE.clear();
+    const cold = highlightScan(PWA);
+    expect(HIGHLIGHT_SCAN_CACHE.size).toBe(cold.files.length + sourceFiles(UI_SRC_DIR).length);
+    expect(highlightScan(PWA)).toEqual(cold);
+  });
+
+  it('the scan cache (#3450): a plant into a file the warm cache holds is seen, in either half', () => {
+    const { files } = highlightScan(PWA);
+    expect(files).toContain('src/lib/markdown.tsx');
+    expect(existsSync(path.join(UI_SRC_DIR, 'index.ts'))).toBe(true);
+    expect(HIGHLIGHT_SCAN_CACHE.size).toBeGreaterThanOrEqual(files.length + sourceFiles(UI_SRC_DIR).length);
+    const dir = planted('src/lib/markdown.tsx', append("\nimport plantedHljs from 'highlight.js/lib/core';\nexport const plantedH = plantedHljs;\n"));
+    expect(highlightScan(dir).hits).toEqual(['src/lib/markdown.tsx highlight.js:import']);
+    const ui = plantedUi('index.ts', append("\nexport const plantedLoad = () => import('highlight.js/lib/languages/xml');\n"));
+    expect(highlightScan(PWA, ui).hits).toEqual(['ui/src/index.ts highlight.js:import']);
+  });
 });
 
 // Clause W5h-a, M7.12 (base spec 2026-10-01 section 7.10): R19's page only reads. In its two modules, read with
@@ -1004,8 +1125,8 @@ function shareDoorScan(base: string): { files: string[]; uses: string[] } {
   return { files, uses: uses.map((u) => `${u.file} ${u.door}`) };
 }
 
-// Its planted cases copy the whole of pwa/src too, so it takes the same 30 s bound.
-describe('clause W5 Share: one share door, and one clipboard writer under pwa/src/docs (M4.SH7; M4.T7 Share clause)', { timeout: 30_000 }, () => {
+// Its planted cases copy the whole of pwa/src too, so it takes the same bound, `TREE_COPY_TIMEOUT_MS`.
+describe('clause W5 Share: one share door, and one clipboard writer under pwa/src/docs (M4.SH7; M4.T7 Share clause)', { timeout: TREE_COPY_TIMEOUT_MS }, () => {
   const copies: string[] = [];
   afterAll(() => {
     for (const dir of copies) rmSync(dir, { recursive: true, force: true });
@@ -1105,6 +1226,51 @@ describe('clause W5 Share: one share door, and one clipboard writer under pwa/sr
 
 const parse = (source: string, file: string): ts.SourceFile =>
   ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+
+const PDF_ASSETS_HOME = 'src/docs/pdf/pdfAssets.ts';
+
+/** The installed PDF library is data only. Detect literal dependencies across the app, not only PDF's siblings. */
+function pdfDependencyHits(source: string, file: string): string[] {
+  if (!source.includes('pdfjs-dist')) return [];
+  const sf = parse(source, file);
+  const approved = new Set<ts.Node>();
+  if (file === PDF_ASSETS_HOME) {
+    for (const use of moduleUses(sf)) {
+      if (ts.isImportDeclaration(use.node) && /^pdfjs-dist\/build\/pdf(?:\.worker)?\.min\.mjs\?raw$/.test(use.specifier)) {
+        approved.add(use.node.moduleSpecifier);
+      }
+    }
+    const globs = (n: ts.Node): void => {
+      if (ts.isCallExpression(n) && n.expression.getText(sf) === 'import.meta.glob') {
+        const p = n.arguments[0];
+        if (p !== undefined && isPlainString(p) && (p.text === '/node_modules/pdfjs-dist/standard_fonts/*.{pfb,ttf}'
+          || p.text === '/node_modules/pdfjs-dist/cmaps/*.bcmap')) approved.add(p);
+      }
+      ts.forEachChild(n, globs);
+    };
+    globs(sf);
+  }
+  const hits: string[] = [];
+  const visit = (n: ts.Node): void => {
+    const text = stringText(n);
+    if (text !== undefined && /(?:^|\/)pdfjs-dist(?:$|\/)/.test(text) && !approved.has(n)) hits.push(`${file} ${text}`);
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return hits;
+}
+
+describe('pdf dependency: no app runtime import of pdfjs-dist', () => {
+  it('only the adapter takes raw viewer and parser text, fonts and CMaps', () => {
+    expect(sourceFiles(SRC_DIR).flatMap((f) => pdfDependencyHits(readFileSync(f, 'utf8'), path.relative(PWA, f).split(path.sep).join('/'))))
+      .toEqual([]);
+  });
+
+  it('detects a raw sibling import and a runtime import even in the allowed adapter', () => {
+    expect(pdfDependencyHits("import src from 'pdfjs-dist/build/pdf.min.mjs?raw';", 'src/screens/Example.tsx')).toHaveLength(1);
+    expect(pdfDependencyHits("const m = import('pdfjs-dist');", PDF_ASSETS_HOME)).toHaveLength(1);
+  });
+});
 
 /** The files M4.EX2's token rule reads. */
 const exportInertScope = (file: string): boolean => file.startsWith('src/docs/export/')
@@ -1245,7 +1411,7 @@ function scanSrc(base: string, scan: (source: string, file: string) => string[],
     .filter(scope).flatMap((rel) => scan(readFileSync(path.join(base, ...rel.split('/')), 'utf8'), rel)).sort();
 }
 
-describe('clause W5 Export: inert by construction, confined, one pin rule, no highlighter (M4.EX2, M4.EX11, M4.EX16, M4.EX17, M4.T7)', { timeout: 30_000 }, () => {
+describe('clause W5 Export: inert by construction, confined, one pin rule, no highlighter (M4.EX2, M4.EX11, M4.EX16, M4.EX17, M4.T7)', { timeout: TREE_COPY_TIMEOUT_MS }, () => {
   const copies: string[] = [];
   afterAll(() => {
     for (const dir of copies) rmSync(dir, { recursive: true, force: true });
@@ -1321,6 +1487,9 @@ describe('clause W5 Export: inert by construction, confined, one pin rule, no hi
       'src/docs/mockup/plan.ts imagePinFor',
       'src/docs/objectUrls.ts createObjectURL',
       'src/docs/objectUrls.ts new Blob',
+      // The PDF frame (X2 P3, spec 2026-11-18 4.4): its one frame file, as the mockup's.
+      'src/docs/pdf/PdfFrame.tsx iframe',
+      'src/docs/pdf/PdfFrame.tsx srcDoc',
     ]);
   });
 
@@ -1448,8 +1617,8 @@ function identifierUses(source: string, file: string): Map<string, number> {
   return uses;
 }
 
-// Its planted case copies the whole of pwa/src, so it takes the same 30 s bound as the clauses above.
-describe('clause W5h-b, M4.H23: what the retirement of part 1\'s highlight bounds keeps', { timeout: 30_000 }, () => {
+// Its planted case copies the whole of pwa/src, so it takes the same bound as the clauses above, `TREE_COPY_TIMEOUT_MS`.
+describe('clause W5h-b, M4.H23: what the retirement of part 1\'s highlight bounds keeps', { timeout: TREE_COPY_TIMEOUT_MS }, () => {
   const copies: string[] = [];
   afterAll(() => {
     for (const dir of copies) rmSync(dir, { recursive: true, force: true });
@@ -1590,7 +1759,7 @@ function treeSources(base: string): Map<string, string> {
   return new Map(sourceFiles(path.join(base, 'src')).map((f) => [path.relative(base, f).split(path.sep).join('/'), readFileSync(f, 'utf8')] as const));
 }
 
-describe('clause C1: the HTML parser has one home, one constructor and one parse call (M5.16, the DOMParser bullet)', { timeout: 30_000 }, () => {
+describe('clause C1: the HTML parser has one home, one constructor and one parse call (M5.16, the DOMParser bullet)', { timeout: TREE_COPY_TIMEOUT_MS }, () => {
   const real = treeSources(PWA);
   /** The real tree with `text` appended to `rel` (created when it is absent). */
   const planted = (rel: string, text: string): ReadonlyMap<string, string> => new Map([...real, [rel, `${real.get(rel) ?? ''}${text}`]]);

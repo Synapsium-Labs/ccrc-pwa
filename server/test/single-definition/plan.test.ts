@@ -50,8 +50,9 @@ describe('the plan vocabulary has one home (D-8181)', () => {
     expect(holders(decl('workMapOf'))).toEqual(['server/src/coord/workMap.ts']);
   });
 
-  it('the adopted fingerprint is spelled once, in the plan store (D-8183)', () => {
-    expect(holders(decl('ADOPTED_FINGERPRINT'))).toEqual(['server/src/coord/planStore.ts']);
+  it('the adopted fingerprint is spelled once, beside the fingerprint encoding in the L1 sync policy (D-8183, D-9131)', () => {
+    // The plan store re-exports it (`export { ADOPTED_FINGERPRINT } from …`), which `decl` does not count as a declaration.
+    expect(holders(decl('ADOPTED_FINGERPRINT'))).toEqual(['server/src/linear/planSyncPolicy.ts']);
     expect(holders(/\bconst\s+ADOPTED\b/)).toEqual([]);
   });
 

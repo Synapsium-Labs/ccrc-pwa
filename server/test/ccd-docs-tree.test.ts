@@ -275,6 +275,57 @@ describe('docs ref resolution: the default ignores the checkout (row 20)', () =>
   });
 });
 
+describe('docs ref resolution: legacy tag and commit spellings (M11.36, M11.48)', () => {
+  it('returns a canonical commit hint for tags and unique abbreviated commits, after branches', () => {
+    const main = h.makeRepo('demo');
+    const commit = rev(main, 'HEAD');
+    h.git(main, 'tag', '-a', 'release', '-m', 'release', commit);
+    for (const ref of ['release', 'refs/tags/release']) {
+      expect(refused(resolveIn('demo', ref))).toMatchObject({
+        failure: 'unresolved-ref', resolved: { commit, via: 'tag' },
+      });
+    }
+    const short = commit.slice(0, 9);
+    expect(refused(resolveIn('demo', short))).toMatchObject({
+      failure: 'unresolved-ref', resolved: { commit, via: 'commit' },
+    });
+    h.git(main, 'branch', short, commit);
+    expect(served(resolveIn('demo', short))).toMatchObject({ served: `refs/heads/${short}` });
+  });
+
+  it('an abbreviated annotated tag object is not a commit, even when it peels to one', () => {
+    const main = h.makeRepo('demo');
+    const commit = rev(main, 'HEAD');
+    h.git(main, 'tag', '-a', 'release', '-m', 'release', commit);
+    const tag = rev(main, 'refs/tags/release');
+    const prefix = tag.slice(0, 12);
+    expect(h.git(main, 'rev-parse', `--disambiguate=${prefix}`).trim()).toBe(tag);
+    expect(rev(main, `${tag}^{commit}`)).toBe(commit);
+    const result = refused(resolveIn('demo', prefix));
+    expect(result.failure).toBe('unresolved-ref');
+    expect(result).not.toHaveProperty('resolved');
+    expect(result).not.toHaveProperty('hint');
+  });
+
+  it('refuses an ambiguous object prefix, even when one candidate is a commit', () => {
+    h.makeRepo('demo');
+    const pre = [
+      'class Ambiguous(H.Sys):',
+      '    def spawn(self, argv, *a, **k):',
+      "        if '--disambiguate=abcdef0' in argv:",
+      "            return H.Spawned(rc=0, out=(b'abcdef0' + b'1'*33 + b'\\n' + b'abcdef0' + b'2'*33 + b'\\n'), err=b'', timed_out=False, overflow=False)",
+      "        if 'abcdef0' + '1'*33 + '^{commit}' in argv:",
+      "            return H.Spawned(rc=0, out=(b'abcdef0' + b'1'*33 + b'\\n'), err=b'', timed_out=False, overflow=False)",
+      '        return H.Sys.spawn(self, argv, *a, **k)',
+      'H.SYS = Ambiguous()',
+    ];
+    const result = refused(resolveIn('demo', 'abcdef0', pre));
+    expect(result.failure).toBe('unresolved-ref');
+    expect(result).not.toHaveProperty('resolved');
+    expect(result).not.toHaveProperty('hint');
+  });
+});
+
 describe('docs ref resolution: fully qualified, exact names (rows 17, 18)', () => {
   it('row 17: a tag x and a branch x at different commits; --ref x serves the branch', () => {
     const main = h.makeRepo('demo');
@@ -406,13 +457,14 @@ describe('docs ref resolution: the peel (row 22, MM3)', () => {
 });
 
 describe('docs ref resolution: unresolved names (row 23)', () => {
-  it('--ref origin/feat with refs/remotes/origin/feat present: unresolved-ref carrying suggest', () => {
+  it('origin/feat serves origin/feat unless a local branch of that name exists', () => {
     const main = h.makeRepo('demo');
     shapeBranch(h, main, 'feat', 'origin-only');
-    expect(refused(resolveIn('demo', 'origin/feat'))).toEqual({
-      ok: false, failure: 'unresolved-ref', suggest: 'refs/remotes/origin/feat',
-      tried: [{ ref: 'refs/heads/origin/feat', result: 'absent' }, { ref: 'refs/remotes/origin/origin/feat', result: 'absent' }],
+    expect(served(resolveIn('demo', 'origin/feat'))).toMatchObject({
+      requested: 'origin/feat', served: 'refs/remotes/origin/feat',
     });
+    h.git(main, 'branch', 'origin/feat', 'main');
+    expect(served(resolveIn('demo', 'origin/feat'))).toMatchObject({ served: 'refs/heads/origin/feat' });
   });
 
   it('suggest is set only when the remainder resolves on origin', () => {
@@ -423,13 +475,11 @@ describe('docs ref resolution: unresolved names (row 23)', () => {
     });
   });
 
-  it("a name that exists only as a tag answers unresolved-ref with hint:'tag', and the tag is never served", () => {
+  it('a tag hint is reserved for a tag not pointing to a commit', () => {
     const main = h.makeRepo('demo');
-    h.git(main, 'tag', 'v1', 'refs/heads/main');
-    expect(refused(resolveIn('demo', 'v1'))).toEqual({
-      ok: false, failure: 'unresolved-ref', hint: 'tag',
-      tried: [{ ref: 'refs/heads/v1', result: 'absent' }, { ref: 'refs/remotes/origin/v1', result: 'absent' }],
-    });
+    h.git(main, 'tag', 'v1', 'HEAD^{tree}');
+    expect(refused(resolveIn('demo', 'v1'))).toMatchObject({ failure: 'unresolved-ref', hint: 'tag' });
+    expect(refused(resolveIn('demo', 'refs/tags/v1'))).toMatchObject({ failure: 'unresolved-ref', hint: 'tag' });
   });
 });
 
@@ -3095,15 +3145,14 @@ describe('docs-tree end to end (docs W1a Task 15)', () => {
       expect(t.drafts).toEqual({ state: 'none', branch: 'main', skipped: [] });
     });
 
-    it('row 23: an unresolved ref answers ok:false with no listing at all, and suggests origin/<b>', () => {
-      const main = t15docsRepo(h, 'demo', T15_FILES);
-      h.git(main, 'update-ref', 'refs/remotes/origin/feat', h.git(main, 'rev-parse', 'HEAD'));
+    it('row 23: an unresolved ref answers ok:false with no listing at all', () => {
+      t15docsRepo(h, 'demo', T15_FILES);
       const rec = t15recorder(h.home);
-      const t = t15tree(['--ref', 'origin/feat']);
-      expect(t).toMatchObject({ v: 1, verb: 'docs-tree', ok: false, failure: 'unresolved-ref', suggest: 'refs/remotes/origin/feat' });
+      const t = t15tree(['--ref', 'origin/gone']);
+      expect(t).toMatchObject({ v: 1, verb: 'docs-tree', ok: false, failure: 'unresolved-ref' });
       expect(t['tried']).toEqual([
-        { ref: 'refs/heads/origin/feat', result: 'absent' },
-        { ref: 'refs/remotes/origin/origin/feat', result: 'absent' },
+        { ref: 'refs/heads/origin/gone', result: 'absent' },
+        { ref: 'refs/remotes/origin/origin/gone', result: 'absent' },
       ]);
       for (const k of ['entries', 'sections', 'drafts', 'mainCheckout', 'freshness']) expect(t).not.toHaveProperty(k);
       // Never a listing: no ls-tree ran, and no draft phase either.

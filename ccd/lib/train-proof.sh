@@ -9,8 +9,9 @@
 #   2. the bounded prover, `ccd pr-train-prove` (D-7378, D-7381);
 #   3. the train proof's budgets, its kept proofs and tried records, `_ws_train_record` and `_pr_train_proofs` (D-7362,
 #      D-7378, D-7381).
-# It is a MOVE and nothing else: not one function body changed on the way (the python's first mode reads `if` where it
-# read `elif`, the program's head being its own), and every test that exercised the train proof still does.
+# It was a MOVE and nothing else: not one function body changed on the way (the python's first mode reads `if` where it
+# read `elif`, the program's head being its own), and every test that exercised the train proof still does. Since the
+# move, `train-check` also reads the train tool's `train-members` block beside the `ccrc-train v1` one (D-9111).
 #
 # THE TRUST CHAIN is ccd/lib/disk-retention.sh's: installed beside ccd's body (`~/.local/libexec/ccrc/lib/train-proof.sh`)
 # by `ccd/ccd-entry-install.py`, pinned by the body (`__CCD_LIB_TRAIN_SHA256`, near the foot of ccd/ccd, written at
@@ -52,18 +53,11 @@ if mode == 'train-refs':
     sys.stdout.write(''.join(n + '\n' for n in seen))
 
 elif mode == 'train-check':
-    # THE TRAIN RECORD (D-7335). stdin is one train PR (`gh pr view`) or a list
+    # THE TRAIN RECORD (D-7335, D-9111). stdin is one train PR (`gh pr view`) or a list
     # of them (`gh pr list --search`). A train proves the member landed when it
     # is MERGED into the member's base, from this repository, with a merge
-    # commit, and its body's ONE `ccrc-train v1` block lists the member at
-    # exactly the member's head. The block is an HTML comment on lines of its
-    # own, the only part of the body a machine reads:
-    #     <!-- ccrc-train v1
-    #     member #<n> <40-hex head sha>
-    #     -->
-    # Human tables and lists beside it are never parsed. No block, two blocks,
-    # a block that never closes, a line in it that is not a member line, or a
-    # member listed twice proves nothing. Prints `<train>\t<merge oid>` for the
+    # commit, and its train record lists the member at exactly the member's
+    # head; the record's two forms are README.md's "The train record". Prints `<train>\t<merge oid>` for the
     # first that proves; else `?<sentence>` when a candidate's answer was not
     # definitive (an OPEN train, a missing or odd state), `!<sentence>` for the
     # first failed candidate's reason, nothing when there was no candidate at
@@ -84,24 +78,66 @@ elif mode == 'train-check':
     MEMBER = re.compile(rf'member #({PR_NUM}) ([0-9a-f]{{40}})')
 
     def train_block(body):
-        # -> ({member number: head sha}, None) or (None, why).
+        # -> ('absent', None), ('ok', {member number: head sha}) or ('bad', why).
         lines = [l.strip() for l in body.splitlines()]
         starts = [i for i, l in enumerate(lines) if l == OPEN]
         if not starts:
-            return None, 'carries no ccrc-train v1 block'
+            return 'absent', None
         if len(starts) > 1:
-            return None, 'carries %d ccrc-train v1 blocks, not one' % len(starts)
+            return 'bad', 'carries %d ccrc-train v1 blocks, not one' % len(starts)
         got = {}
         for l in lines[starts[0] + 1:]:
             if l == CLOSE:
-                return got, None
+                return 'ok', got
             m = MEMBER.fullmatch(l)
             if m is None:
-                return None, 'has a ccrc-train v1 block with a line that is not a member line'
+                return 'bad', 'has a ccrc-train v1 block with a line that is not a member line'
             if m.group(1) in got:
-                return None, 'has a ccrc-train v1 block listing #%s twice' % m.group(1)
+                return 'bad', 'has a ccrc-train v1 block listing #%s twice' % m.group(1)
             got[m.group(1)] = m.group(2)
-        return None, 'has a ccrc-train v1 block that never closes'
+        return 'bad', 'has a ccrc-train v1 block that never closes'
+
+    def refuse(x):
+        raise ValueError(x)
+
+    def members_block(body):
+        lines = [l.strip() for l in body.splitlines()]
+        starts = [i for i, l in enumerate(lines) if l == '```train-members']
+        if len(starts) != 1:
+            return ('bad', 'carries %d train-members blocks, not one' % len(starts)) if starts else ('absent', None)
+        ends = [i for i in range(starts[0] + 1, len(lines)) if lines[i] == '```']
+        if not ends:
+            return 'bad', 'has a train-members block that never closes'
+        try:
+            doc = json.loads('\n'.join(lines[starts[0] + 1:ends[0]]), parse_constant=refuse, object_pairs_hook=lambda kv:
+                             dict(kv) if len({k for k, _ in kv}) == len(kv) else refuse('a key given twice'))
+        except (ValueError, RecursionError):
+            doc = None
+        if not isinstance(doc, list) or not doc:
+            return 'bad', 'has a train-members block that is not one JSON array of members'
+        got = {}
+        for m in doc:
+            pr, sha = (m.get('pr'), m.get('headSha')) if isinstance(m, dict) else (None, None)
+            if (type(pr) is not int or re.fullmatch(PR_NUM, str(pr)) is None
+                    or not isinstance(sha, str) or re.fullmatch(r'[0-9a-f]{40}', sha) is None):
+                return 'bad', 'has a train-members block with a member that is not a pr and a full head sha'
+            if str(pr) in got:
+                return 'bad', 'has a train-members block listing #%d twice' % pr
+            got[str(pr)] = sha
+        return 'ok', got
+
+    # D-9111: train_members, the ONE parser the loop calls, reads the v1 block and the train tool's train-members block.
+    def train_members(body):
+        (vk, v), (tk, tm) = train_block(body), members_block(body)
+        if 'bad' in (vk, tk):
+            return None, (v if vk == 'bad' else tm), None
+        if vk == tk == 'absent':
+            return None, 'carries no train record: no ccrc-train v1 block and no train-members block', None
+        if 'absent' in (vk, tk):
+            return (v, None, 'ccrc-train v1 block') if tk == 'absent' else (tm, None, 'train-members block')
+        if v != tm:
+            return None, 'has a ccrc-train v1 block and a train-members block that list different members or heads', None
+        return v, None, 'ccrc-train v1 block, like its train-members block,'
 
     why = None
     unread = None
@@ -129,15 +165,15 @@ elif mode == 'train-check':
             why = why or 'train #%d did not merge into %s from this repository' % (n, base_short)
             continue
         body = t.get('body') if isinstance(t.get('body'), str) else ''
-        listed, bad = train_block(body)
+        listed, bad, form = train_members(body)
         if bad:
             why = why or 'train #%d %s' % (n, bad)
             continue
         if member not in listed:
-            why = why or "train #%d's ccrc-train v1 block does not list #%s" % (n, member)
+            why = why or "train #%d's %s does not list #%s" % (n, form, member)
             continue
         if listed[member] != head:
-            why = why or "train #%d's ccrc-train v1 block lists #%s at %s, not its head %s" % (n, member, listed[member], head)
+            why = why or "train #%d's %s lists #%s at %s, not its head %s" % (n, form, member, listed[member], head)
             continue
         sys.stdout.write('%d\t%s\n' % (n, oid))
         sys.exit(0)
@@ -375,9 +411,10 @@ _ws_train_record() {   # main repo number headOid baseShort [keep] -> 0 with the
   # editing those lines later makes a merge into its head conflict for ever.
   # What does hold is what the train itself wrote down: the train PR the member
   # names (in the comment the train leaves on it, `train #<n>`), or one a
-  # search on the member's head sha finds, is MERGED and its one `ccrc-train v1`
-  # block lists this member at exactly this member's head sha (`_pr_py
-  # train-check`, D-7335; the format is in the README).
+  # search on the member's head sha finds, is MERGED and its train record, the
+  # `ccrc-train v1` block or the train tool's `train-members` block (D-9111),
+  # lists this member at exactly this member's head sha (`_pr_py train-check`,
+  # D-7335; both forms are in the README).
   #
   # EVERY REFERENCE IS A CANDIDATE, AND A BAD ONE IS ONLY A FAILED CANDIDATE
   # (D-7362) — and a candidate FAILS only when GitHub DEFINITIVELY answered

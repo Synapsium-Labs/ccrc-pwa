@@ -326,7 +326,7 @@ export const TRIED_RESULT_TEXT: Record<TriedResult, string> = {
 };
 
 /** `unresolved-ref {hint: 'tag'}` (spec 4.7). */
-export const UNRESOLVED_TAG_HINT = 'A tag has that name; tags are not served.';
+export const UNRESOLVED_TAG_HINT = 'A tag has that name but does not point to a commit.';
 
 /** A word this build does not know, from a newer server (spec 4.7, verbatim): never folded into a known one. */
 export function unknownWordSentence(word: string): string {
@@ -501,6 +501,8 @@ export const DOCS_SHOW_NOT_SVG = 'an SVG path was answered as another class';
  *  which replaces spec 4.7's "that checkout is detached" because `branch: null` also covers an unmeasured read. */
 export const DOCS_VIEW_TEXT = {
   indexHead: "Each project's default branch, read from the fleet box.",
+  indexConfiguredBranch: 'Opens {branch}',
+  configuredBranchGone: 'Configured branch {branch} is unavailable. Showing the Git default branch.',
   filterProjects: 'Filter projects',
   filterEntries: 'Filter this listing',
   noDocs: 'Projects with no docs ({n})',
@@ -539,6 +541,13 @@ export const DOCS_VIEW_TEXT = {
   redirectBadBranch: "That checkout's branch {branch} is not one Docs can address; showing {owner}'s default branch.",
   redirectLoop: 'Docs did not follow it: the owner named for this folder leads back to this folder.',
   indexLink: 'Docs index',
+  /** X2 P4.1: the index's newest names. `{n}` is the docs beyond the names shown. */
+  newestMore: '{n} more',
+  /** The "N more" link's accessible name: the section and the project it opens. */
+  newestMoreLabel: '{n} more {section} in {project}',
+  /** The accessible name of one project's list of a section's newest docs. */
+  newestListLabel: '{project}: {section}',
+  newestTruncated: 'Some newest names were left out to keep this index small; the counts are whole.',
 } as const;
 
 /** A count's plural suffix for `{s}`. */

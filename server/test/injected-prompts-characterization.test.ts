@@ -75,10 +75,11 @@ const callersOf = (name: string): string[] => {
 };
 
 describe('the server\'s typers, by parsedFile', () => {
-  it('sendPrompt has six callers (renewalHostOf types renewal-first-prompt and overlord-first-prompt, one call each)', () => {
+  it('sendPrompt has seven callers (renewalHostOf types renewal-first-prompt and overlord-first-prompt, one call each; the paste delivery recipe\'s driver one, on a capture\'s own session)', () => {
     expect(callersOf('sendPrompt')).toEqual([
       'server/src/continuity/renewalWiring.ts#renewalHostOf',
       'server/src/continuity/renewalWiring.ts#renewalHostOf',
+      'server/src/inject/deliveryDrive.ts#driveCase',
       'server/src/inject/send.ts#clearSender',
       'server/src/server.ts#buildServer',
       'server/src/watch.ts#FleetWatcher.idleNudgeOne',

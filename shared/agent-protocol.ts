@@ -1325,8 +1325,11 @@ export type ModelsAsked = ModelsOpOutcome | { kind: 'unsupported' } | { kind: 'l
 // `FLEET_PROTO` bump; an agent that predates it answers `bad-request` and is never sent it (the server reads `ready.ops`
 // first).
 
-/** ONE member of the `req` envelope. A frame with any other extra field is a malformed frame (`bad-request`). */
-export interface TestboxCaptureReq { t: 'req'; id: number; op: 'testbox-capture'; build: string }
+/** ONE member of the `req` envelope. A frame with any other extra field is a malformed frame (`bad-request`). `recipe`
+ *  (Desktop polish wave 178) is additive: absent is build trust; present, only `delivery`, which an agent that predates it
+ *  refuses `bad-request` as it refuses any extra field. `part` is present exactly with `recipe`: which part of the delivery
+ *  cases (`deliveryResult.ts#deliveryParts`, the capture owner's call 1148). */
+export interface TestboxCaptureReq { t: 'req'; id: number; op: 'testbox-capture'; build: string; recipe?: 'delivery'; part?: number }
 
 /** The op's name, and the word an agent that answers it lists in `ready.ops`. */
 export const TESTBOX_CAPTURE_OP = 'testbox-capture';
@@ -1355,12 +1358,34 @@ export interface TestboxCaptureReply {
   readonly refusal: CaptureRefusal | null;
   readonly result: BuildCaptureResult | null;
   readonly detail: string | null;
+  /** A delivery request's reply only, and always on it (Desktop polish wave 178): its result on `answered`, null when the
+   *  box had no verdict and on every other outcome. A delivery reply's `result` is always null. */
+  readonly delivery?: DeliveryCaptureResult | null;
 }
 
 /** THE ONE READER of a `testbox-capture` op's reply (the `res` frame itself: its envelope fields `t`, `id` and `ok` are not
  *  read, as `readTestboxOpReply` reads its own), for the build the request named. `null` is "no answer to trust". Each of
- *  the four fields must be present; the verdict is read by the verdict's one reader. */
-export function readTestboxCaptureReply(raw: unknown, build: string): TestboxCaptureReply | null {
+ *  the four fields must be present; the verdict is read by the verdict's one reader. For a delivery request
+ *  (`recipe: 'delivery'`) the reply must also carry `delivery`, read by its one reader, and no build-trust verdict. A
+ *  build-trust request is read as before, save that a reply naming `delivery` is no answer to trust: read as a trust
+ *  capture with no verdict, it would count against the trust lane's retry for that build (the capture owner's call 1135). A
+ *  delivery request names its `part`, and its result must echo it (call 1148); with no part there is no answer. */
+export function readTestboxCaptureReply(raw: unknown, build: string, recipe: CaptureRecipe = 'build-trust', part?: number): TestboxCaptureReply | null {
+  if (recipe === 'delivery') {
+    // A reply with no `delivery` field does not echo the recipe: `d` is then undefined, which the two checks below refuse
+    // (on an answered reply the result's reader refuses it; on any other, it is not null).
+    if (!isObj(raw)) return null;
+    const { delivery: d, ...rest } = raw;
+    const base = readTestboxCaptureReply(rest, build);
+    if (base === null || base.result !== null) return null;
+    if (base.outcome !== 'answered' && d !== null) return null;
+    // The result must echo the part asked (call 1148); a delivery request with no part has no answer.
+    if (part === undefined) return null;
+    const delivery = d === null ? null : readDeliveryCaptureResult(d, build, part);
+    if (d !== null && delivery === null) return null;
+    return { ...base, delivery };
+  }
+  if (isObj(raw) && Object.prototype.hasOwnProperty.call(raw, 'delivery')) return null;
   if (!isObj(raw) || !['outcome', 'refusal', 'result', 'detail'].every((k) => Object.prototype.hasOwnProperty.call(raw, k))) return null;
   const { outcome, refusal, result, detail } = raw;
   if (typeof outcome !== 'string' || !Object.prototype.hasOwnProperty.call(TESTBOX_CAPTURE_OUTCOME_MAP, outcome)) return null;
@@ -1372,8 +1397,9 @@ export function readTestboxCaptureReply(raw: unknown, build: string): TestboxCap
   if (result !== null && read === null) return null;
   return { outcome: outcome as TestboxCaptureOutcome, refusal: refusal as CaptureRefusal | null, result: read, detail };
 }
-import { CAPTURE_REFUSAL_MAP, type CaptureRefusal } from './claudeBuildCapture.js';
+import { CAPTURE_REFUSAL_MAP, type CaptureRecipe, type CaptureRefusal } from './claudeBuildCapture.js';
 import { readBuildCaptureResult, type BuildCaptureResult } from './claudeBuildTrust.js';
+import { readDeliveryCaptureResult, type DeliveryCaptureResult } from './deliveryResult.js';
 
 // ── the `witness` op (Overlord W1, w1-authority-journal.md Task 6; spec §7.6) ──
 // The server offers the agent its current authority tuple; the agent keeps the higher epoch in its own file

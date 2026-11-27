@@ -80,6 +80,8 @@ import { isOverlordInboxKebab } from '../src/coord/overlordInbox.js';
 import { isOverlordHistoryKebab } from '../src/coord/overlordHistory.js';
 import { isLadderKebab } from '../src/coord/overlordLadder.js';
 import { isInvariantKebab } from '../src/coord/invariants.js';
+import { isSequenceDoorKebab } from '../src/coord/overlordSequenceDoor.js';
+import { isReadinessKebab } from '../src/coord/overlordReadiness.js';
 import { isOverlapsKebab } from '../src/coord/overlaps.js';
 import { isDoneTestKebab } from '../src/coord/doneTests.js';
 import { isSequenceStampKebab } from '../src/coord/overlordSequenceStore.js';
@@ -756,6 +758,7 @@ describe('the rejection table is total, in both directions', () => {
       'stale-episode-head', // coord/landingEntry.ts: the one quarantine kind, also a schema CHECK literal (landing order wave 5f), a recovery-view discriminant, not a refusal code
       'call-failed',        // coord/landed.ts#landedAnswerOf and coord/landedLane.ts#landedPass: the input word for a ran-but-failed `pr-state` call (landing order wave 5h), a reader-internal discriminant, not a refusal code
       'missing-field',      // coord/landed.ts#landedAnswerOf: compared against ccd's `pr-state` unmeasured reason, a word ccd writes (landing order wave 5h), a reader-internal discriminant, not a refusal code
+      'train-unproven',     // coord/landed.ts#landedAnswerOf and coord/landingEntry.ts#LandingOutcome: ccd's `pr-state` unmeasured reason, kept in a closed mark's detail (D-9112), a reader-internal discriminant, not a refusal code
       'not-ran',            // coord/landed.ts#landedCallStep: the act word for a `pr-state --pr` call that did not run (landing order wave 5i), a pure-decider discriminant, not a refusal code
       'main-health',        // coord/lineageRead.ts: the main-health reading's tag (landing order wave 5i), a tag on a stored value, not a mail or run refusal code
       'landing-next',       // coord/landingNext.ts: the control document kind / cue tuple tag (landing order wave 5i), a tag on a stored value, not a mail or run refusal code
@@ -1385,8 +1388,16 @@ describe('the rejection table is total, in both directions', () => {
         // why a row is not applicable (`'tables-absent'`, `'predicate-not-built'`) and how a live finding's latch stood
         // (`'row-only'`) as literals. Each rides a verdict or a findings row, never a `refused` or `reject.code`. Admitted
         // through the module's guard, derived from its maps, never NOT_CODES.
-        || isInvariantKebab(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, edge state, health word, edge kind, spend state, service class, Overlord door word, actor issuer, Overlord refusal, designation word, unforecastable reason, approval census word, untrusted-build reason, Overlord gate word, Overlord inbox word, Overlord history word, linking refusal, block-wake word, sequence stamp word or invariant monitor word`).toBe(true);
+        || isInvariantKebab(tok)
+        // THE READINESS WORD (Overlord W1, §6.4): `coord/overlordReadiness*.ts` name the fourteen words, the strand causes, a fact's
+        // and a notice's kinds, the dead causes, the push's tag and action and the lane's log kinds as literals. None rides a
+        // `refused` or a `reject.code`. Admitted through the module's guard, derived from its maps and L0's, never NOT_CODES.
+        || isReadinessKebab(tok)
+        // THE SEQUENCE DOORS (Overlord W1, sequence C): `coord/overlordSequenceDoor.ts` names the operator's invariants read's own
+        // answer kind (`'no-pass-yet'`) as a literal. It rides a 200's `kind`, never a `refused` or `reject.code`. Admitted through
+        // the module's guard, derived from its map, never NOT_CODES.
+        || isSequenceDoorKebab(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, edge state, health word, edge kind, spend state, service class, Overlord door word, actor issuer, Overlord refusal, designation word, unforecastable reason, approval census word, untrusted-build reason, Overlord gate word, Overlord inbox word, Overlord history word, linking refusal, block-wake word, sequence stamp word, invariant monitor word, readiness word or sequence door word`).toBe(true);
     }
   });
 });

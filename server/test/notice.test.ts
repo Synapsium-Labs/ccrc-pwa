@@ -20,6 +20,9 @@ import {
   catchUpBody, catchUpExpected, degradeLine, feedRecorder, flushedAfterRecord, interruptDeps, withoutFlush,
   type FeedRecorder,
 } from './feedWriterFixture.js';
+import { readinessPushVia } from '../src/coord/overlordReadinessWiring.js';
+import { readinessPushOf } from '../src/coord/overlordReadiness.js';
+import { fakeTime } from './fakeTime.js';
 import {
   NOTICE_DEGRADED_DEFAULT, notify, notifyEach, notifyPushOnly, noticeBanner, type NoticeMode, type NoticeRecord,
 } from '../src/notice.js';
@@ -345,5 +348,42 @@ describe('notify: the lane prefix on the archive-failure warning (D-7041)', () =
     const rec = await failing();
     notify(sinks(rec), EVENT, 'push', { degraded: 'the writer\'s own sentence' });
     expect(rec.warned()).toEqual(['ccrc-server: recordFeedEvent failed (disk full) — the writer\'s own sentence']);
+  });
+});
+
+describe("notify: the Overlord readiness lane's dead push (Overlord W1 readiness, plan Task 3)", () => {
+  /** The wiring's own push member over a recorder's sinks and fake time ports, so the push outbox writes its row. */
+  const over = async (home: string) => {
+    const rec = await feedRecorder(mkTmp(home));
+    return { rec, push: readinessPushVia({ ...sinks(rec), time: fakeTime().ports }) };
+  };
+  const outbox = (rec: FeedRecorder) =>
+    rec.coord.db.prepare('SELECT tag, sourceKind FROM push_outbox ORDER BY id').all() as { tag: string; sourceKind: string | null }[];
+
+  it('goes through the funnel as a coord notice with no session: ring, archive with its per-episode key, and an outbox row', async () => {
+    const { rec, push } = await over('ccrc-notice-readiness-');
+    push(readinessPushOf(7, true));
+    expect(withoutFlush(rec.calls)).toEqual(['record', 'archive', 'push']);
+    expect(rec.ring).toHaveLength(1);
+    expect(rec.ring[0]).toMatchObject({ kind: 'coord', sessionId: '', runId: null });
+    expect(rec.coord.hasNotice('coord', '', 'overlord-dead:7')).toBe(true);
+    expect(rec.coord.hasNotice('coord', '', 'overlord-dead:8')).toBe(false);
+    expect(outbox(rec)).toEqual([{ tag: 'overlord-readiness', sourceKind: null }]);
+  });
+
+  it('sends the lane\'s tag, a same-origin url and the Restart action when the door would act', async () => {
+    const { rec, push } = await over('ccrc-notice-readiness-restart-');
+    push(readinessPushOf(7, true));
+    expect(rec.pushes).toHaveLength(1);
+    expect(rec.pushes[0]).toMatchObject({ tag: 'overlord-readiness', url: '/', actions: [{ action: 'overlord-restart', title: 'Restart' }] });
+  });
+
+  it('carries no Restart action when the door would not act', async () => {
+    const { rec, push } = await over('ccrc-notice-readiness-norestart-');
+    push(readinessPushOf(8, false));
+    expect(rec.pushes).toHaveLength(1);
+    expect(rec.pushes[0]).toMatchObject({ tag: 'overlord-readiness', url: '/' });
+    expect((rec.pushes[0]!.actions ?? []).map((a) => a.title)).not.toContain('Restart');
+    expect(rec.coord.hasNotice('coord', '', 'overlord-dead:8')).toBe(true);
   });
 });

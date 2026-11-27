@@ -970,7 +970,9 @@ describe('the Docs controls (docs W5 part 1, spec 4.14)', () => {
     });
     it('are the classes a section’s rendered rows and filter carry', async () => {
       openDocs('/docs/demo/specs', fakeLoaders());
-      const rows = await screen.findAllByRole('button', { name: /^a\.md|^b\.md/ });
+      // X2 P4.1: a section's rows are named by the doc's readable title (`docTitle`: `a.md` reads `a`); the raw name is the
+      // row's `title`.
+      const rows = await screen.findAllByRole('button', { name: /^a\b|^b\b/ });
       expect(rows).toHaveLength(2);
       for (const row of rows) expect(row).toHaveClass('docs-row');
       expect(screen.getByRole('searchbox', { name: DOCS_VIEW_TEXT.filterEntries })).toHaveClass('docs-filter');
@@ -1331,7 +1333,10 @@ describe('the one bar: the rendered bar carries .docs-title and .docs-tool (docs
       })),
       mount: vi.fn(async (_el: HTMLElement, input: ReaderMountInput) => {
         inputs.push(input);
-        return { destroy: vi.fn(), setPrefs: vi.fn(), command: vi.fn() } as unknown as ReaderMount;
+        return {
+          destroy: vi.fn(), setPrefs: vi.fn(), command: vi.fn(),
+          seed: { hosted: false }, follow: vi.fn(),
+        } as unknown as ReaderMount;
       }),
       images: vi.fn(async () => ({ urls: {}, drafts: 0, auth: 0 })),
     } as unknown as ReaderDeps;

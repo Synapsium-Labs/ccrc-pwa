@@ -512,6 +512,7 @@ describe('parseDocsRefreshBody: exactly {ref, reason} (section 3.4, refinement (
     ['ref a number', { ref: 7, reason: 'auto' }, badQuery('body', 'ref')],
     ['ref an array', { ref: ['main'], reason: 'auto' }, badQuery('body', 'ref')],
     ['ref outside both grammars', { ref: 'a..b', reason: 'auto' }, refusal('bad-ref')],
+    ['a tag is readable but not a refresh ref', { ref: 'refs/tags/release', reason: 'manual' }, refusal('bad-ref')],
     ['ref empty', { ref: '', reason: 'auto' }, refusal('bad-ref')],
     ['precedence: a bad reason beats a bad ref string', { ref: 'a..b', reason: 'later' }, badQuery('body', 'reason')],
     ['precedence: an extra key beats a bad shape', { ref: 7, x: 1 }, badQuery('unknown', 'x')],
@@ -679,7 +680,8 @@ describe('wire estimates read server facts only (M6.4, section 6.2)', () => {
     ['dir/b.svg', 5000000, { cls: 'svg', maxBytes: 2097152, job: { raw: 2097152, wire: 2861740 } }],
     ['a.html', 0, { cls: 'html', maxBytes: 2097152, job: { raw: 0, wire: 65536 } }],
     ['a.json', 3, { cls: 'text', maxBytes: 2097152, job: { raw: 3, wire: 65540 } }],
-    ['a.pdf', undefined, { cls: 'other', maxBytes: 2097152, job: { raw: 2097152, wire: 2861740 } }],
+    ['a.pdf', undefined, { cls: 'pdf', maxBytes: 2097152, job: { raw: 2097152, wire: 2861740 } }],
+    ['a.zip', undefined, { cls: 'other', maxBytes: 2097152, job: { raw: 2097152, wire: 2861740 } }],
   ] as const)('docsShowPlan(%j, %j)', (p, size, want) => {
     expect(docsShowPlan(p, size)).toStrictEqual(want);
   });
@@ -687,7 +689,7 @@ describe('wire estimates read server facts only (M6.4, section 6.2)', () => {
   it("docsShowPlan's --max-bytes is the path's class cap, for every class", () => {
     const byClass: readonly (readonly [string, DocContentClass])[] = [
       ['a.md', 'markdown'], ['a.png', 'raster'], ['a.svg', 'svg'], ['a.html', 'html'], ['a.txt', 'text'],
-      ['a.pdf', 'other'],
+      ['a.pdf', 'pdf'], ['a.zip', 'other'],
     ];
     for (const [p, cls] of byClass) expect(docsShowPlan(p, undefined).maxBytes, p).toBe(DOCS_CLASS_CAP[cls]);
   });
@@ -1447,6 +1449,7 @@ function t2Runs(type: RasterType): readonly { readonly at: number; readonly byte
 
 /** Bytes that are `type` by L0's table: its first magic alternative's runs, written into 16 zero bytes. */
 function t2Magic(type: RasterType): Uint8Array {
+  if (type === 'ico') return Uint8Array.from([0, 0, 1, 0, 1, 0, 16, 16, 0, 0, 1, 0, 32, 0, 1, 0, 0, 0, 22, 0, 0, 0, 42]);
   const out = new Uint8Array(16);
   for (const run of t2Runs(type)) out.set(run.bytes, run.at);
   return out;
@@ -1474,8 +1477,8 @@ describe('W3 T2: docsRasterType, the declared raster type of a path (section 5.2
 });
 
 describe("W3 T2: rasterVerdict, the declared type against the bytes (section 5.2 step 5; M5.2's L1 half)", () => {
-  it('the table holds the four raster types the spec names', () => {
-    expect(T2_RASTER_TYPES).toEqual(['png', 'jpeg', 'gif', 'webp']);
+  it('the table holds the five raster types the spec names', () => {
+    expect(T2_RASTER_TYPES).toEqual(['png', 'jpeg', 'gif', 'webp', 'ico']);
   });
 
   it.each(T2_RASTER_TYPES.flatMap((declared) => T2_RASTER_TYPES.map((actual) => [declared, actual] as const)))(
@@ -1507,7 +1510,7 @@ const t2Draft = (p: string): DocPin =>
 describe('W3 T2: docsFileReply, the representation by contentClass(path) alone (section 3.6, section 5.2)', () => {
   it.each([
     ['a.png', 'png', 'image/png'], ['x.jpg', 'jpeg', 'image/jpeg'], ['x.GIF', 'gif', 'image/gif'],
-    ['x.webp', 'webp', 'image/webp'],
+    ['x.webp', 'webp', 'image/webp'], ['x.ico', 'ico', 'image/x-icon'],
   ] as const)('a committed %s holding %s bytes is raw bytes, %s, immutable', (p, type, mime) => {
     const bytes = t2Magic(type);
     const reply: DocsFileReply = docsFileReply(t2Committed(p), t2Show(p, bytes), bytes, 'ccd');
@@ -1552,7 +1555,7 @@ describe('W3 T2: docsFileReply, the representation by contentClass(path) alone (
 
   it.each([
     ['a.md', 'markdown'], ['a.svg', 'svg'], ['a.html', 'html'], ['a.json', 'text'], ['a.woff2', 'other'],
-    ['a.pdf', 'other'], ['a', 'other'], ['a.png.html', 'html'],
+    ['a.pdf', 'pdf'], ['a', 'other'], ['a.png.html', 'html'],
   ] as const)('%s is DocsFileResponse JSON of class %s, from carried', (p, cls) => {
     const bytes = t2Magic('png');
     for (const from of ['ccd', 'cache'] as const) {

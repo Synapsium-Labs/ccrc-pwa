@@ -361,6 +361,11 @@ export const DECISION_MODEL_REFUSALS = {
 } as const;
 export type DecisionModelRefusal = keyof typeof DECISION_MODEL_REFUSALS;
 
+/** The console's host fence (X5 plan Task A1.3, `server/src/artifacts/routes.ts#installConsoleHostFence`): a request on the
+ *  console's listener that names an artifact host, refused before the auth gate. CHOSEN, not measured: 421, Misdirected Request. */
+export const ARTIFACT_FENCE_REFUSALS = { misdirected: 421 } as const;
+export type ArtifactFenceRefusal = keyof typeof ARTIFACT_FENCE_REFUSALS;
+
 /** The approval routes' own words (plan Task 16, D-5298): typed from the start, as D-5381 set out to make them. */
 export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | CollectLaneRouteRefusal | SwapRefusal | GenericRefusal
   | ApprovalRefusal | DigestRefusal | StepUpRefusal | AccountGateRefusal | WsCreateRefusal | WsTitleRefusal | ProjectAddRefusal
@@ -419,6 +424,8 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   | DelegationAdoptRefusal
   // The one-time pass's door (session helpers S2, D-8874): its one word, declared once, `delegationBackfill.ts#DELEGATION_BACKFILL_REFUSALS`.
   | DelegationBackfillRefusal
+  // The console's host fence (X5 A1.3): its one word, declared once, `ARTIFACT_FENCE_REFUSALS` above.
+  | ArtifactFenceRefusal
   // The linking standard's words (D-8147): declared once, `linking.ts#LINKING_REFUSALS`, each with its status below.
   | LinkingRefusal
   // The plan verbs' and the hierarchy routes' words (Linear hierarchy design, D-8181): declared once, `plan.ts#PLAN_REFUSALS`.
@@ -454,6 +461,8 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   ...DELEGATION_ADOPT_REFUSALS,
   // The one-time pass's door (D-8874): one new word, CHOSEN, with its status in `DELEGATION_BACKFILL_REFUSALS`.
   ...DELEGATION_BACKFILL_REFUSALS,
+  // The console's host fence (X5 A1.3): one new word, CHOSEN, with its status in `ARTIFACT_FENCE_REFUSALS`.
+  ...ARTIFACT_FENCE_REFUSALS,
   // The programme lifecycle's doors (W2): CHOSEN, each status declared once in `PROGRAMME_DOOR_REFUSALS`.
   ...PROGRAMME_DOOR_REFUSALS,
   // The linking standard (D-8147): CHOSEN, not measured, new words. 400 for what the operator can retype (a team key or an

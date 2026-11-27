@@ -105,6 +105,9 @@ const OPERATOR_TEXT_SITES: ReadonlyArray<{ file: string; callee: string; arg: st
   { file: 'server/src/server.ts', callee: 'sendPrompt', arg: 'body.text', count: 1 },
   // `pressDialogText`'s arrow passes the operator's answer to a dialog's free-text row.
   { file: 'server/src/server.ts', callee: 'answerDialogText', arg: 'text', count: 1 },
+  // The paste delivery recipe's driver (Desktop polish wave 178) sends what the console sends for one fixed case, on a test
+  // box capture's private server only: the operator's text, stood in for by `shared/deliveryCapture.ts`'s cases.
+  { file: 'server/src/inject/deliveryDrive.ts', callee: 'sendPrompt', arg: 'deliveryCaseText(input.case)', count: 1 },
 ];
 
 /** The keys the server presses by name. */

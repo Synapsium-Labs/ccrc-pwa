@@ -82,7 +82,7 @@ describe('moodOf', () => {
     expect(mood(withSession(deadRow({ lastEnd: endedAgo(10 * MIN) })))).toBe('crying'));
   it('every death cause cries, and a swap or a limit restart is no death', () => {
     for (const cause of ['oom', 'tmux-server', 'exited', 'unknown'] as const) expect(mood(withSession(deadRow({ lastEnd: endedAgo(MIN, cause) })))).toBe('crying');
-    for (const cause of ['swap-auto-home', 'swap-auto-rescue', 'swap-auto', 'swap-manual', 'limit-resume'] as const)
+    for (const cause of ['swap-auto-home', 'swap-auto-rescue', 'swap-auto-provider', 'swap-auto', 'swap-manual', 'limit-resume'] as const)
       expect(mood(withSession(deadRow({ lastEnd: endedAgo(MIN, cause) })))).not.toBe('crying');
   });
   it('a limit wait nobody chose is Crying: ccd waiting by itself, or no choice yet', () => {

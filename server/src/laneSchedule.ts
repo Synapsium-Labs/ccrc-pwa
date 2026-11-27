@@ -17,6 +17,7 @@ import { RENEWAL_LANE_PERIOD_MS } from '../../shared/continuity.js';
 import { TIMER_LANE_PERIOD_MS } from '../../shared/continuity-timers.js';
 import { OUTBOX_SEND_DEADLINE_MS } from '../../shared/push-outbox.js';
 import { LIMIT_SAMPLE_MS } from '../../shared/loadLines.js';
+import { OVERLORD_READINESS_SWEEP_MS } from '../../shared/overlord-readiness.js';
 
 /** The push outbox lane's beat: a refused row's first retry lands 30 to 60 s after the refusal (plan Task 2). */
 export const OUTBOX_LANE_PERIOD_MS = 30_000;
@@ -220,7 +221,7 @@ export type LaneName =
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'blockWakes' | 'admissionWake' | 'idleNudge' | 'mail' | 'mailHold' | 'inboxWake' | 'asks' | 'approvalPrune' | 'digestBeat' | 'pushOutbox'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
   | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'diskLaneStall' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases' | 'overlaps' | 'generations'
-  | 'launchProfile' | 'advisorCount' | 'timers' | 'sequenceRetention' | 'quiz' | 'responses' | 'linearPlanSync' | 'linearDrift' | 'linearMigration' | 'forecasts' | 'decisionAnchors' | 'skillInstall' | 'skillRollout' | 'limitSamples' | 'authorityWitness' | 'invariants';
+  | 'launchProfile' | 'advisorCount' | 'timers' | 'sequenceRetention' | 'quiz' | 'responses' | 'linearPlanSync' | 'linearDrift' | 'linearMigration' | 'forecasts' | 'decisionAnchors' | 'skillInstall' | 'skillRollout' | 'limitSamples' | 'authorityWitness' | 'invariants' | 'overlordReadiness';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -447,6 +448,10 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   // a minute; a pass gathers only when the sequence head moved, or at INVARIANT_TABLE_SWEEP_MS for the table invariants (I2, I7,
   // I17 read tables that stamp no line). Shadow until its row of the Shadow lanes card is Live.
   { name: 'invariants', cadenceMs: INVARIANT_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the invariant monitor failed' },
+  // `overlordReadiness`: the Overlord's readiness word (Overlord spec §6.4, C23, H20; `coord/overlordReadinessLane.ts`). One pass at a
+  // time, ten seconds (the mail and asks lanes' cadence, plan question 5); a pass stuck past a minute is abandoned, so a hung producer
+  // read never freezes the word: the read door serves `stale` after READINESS_FRESH_MS with no pass.
+  { name: 'overlordReadiness', cadenceMs: OVERLORD_READINESS_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', staleAfterMs: 60_000, warnKey: 'ccrc-server: the Overlord readiness lane failed' },
   // The weekly replay quiz lane (Overlord spec §3.3.9 C52, Table 11.1c; W1a, plan `w1a-replay-quiz.md` Task 4): it looks once a
   // day and raises at most one operator item an ISO week, keyed by the week (`quiz.ts#quizLaneVerdict`); a thrown pass is
   // caught here. It raises nothing while the record path is absent (`QUIZ_RECORD_READY`).

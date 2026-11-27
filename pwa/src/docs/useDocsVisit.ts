@@ -9,7 +9,7 @@
 // the first pass's in-flight request), and a version counter re-renders when an answer lands.
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import {
-  DOCS_CLASS_CAP, DOCS_STALE_MS, contentClass, docsRefText, entryView, isDocsFolderLocation, parseDocsPage,
+  DOCS_CLASS_CAP, DOCS_STALE_MS, contentClass, docsRefText, entryView, isDocsFolderLocation, isDocsQualifiedRef, parseDocsPage,
   type DocListPin, type DocPin, type DocsEntry, type DocsFailure, type DocsFailureBody, type DocsFileResponse, type DocsPageLocation,
   type DocsRefreshFetch, type DocsRefSpec, type DocsTreeOk, type DocsTreeResponse,
 } from '../../../shared/docs';
@@ -242,6 +242,20 @@ function isLocalHeadsRef(ref: DocsRefSpec | null): boolean {
   return ref !== null && ref.kind === 'qualified' && ref.ref.startsWith('refs/heads/');
 }
 
+/** A failed listing can fetch only a named branch on origin, not a local-only or tag view. */
+export function canFetchUnresolvedRef(ref: DocsRefSpec | null): boolean {
+  return ref !== null && (ref.kind === 'bare' || (isDocsQualifiedRef(ref.ref) && !isLocalHeadsRef(ref)));
+}
+
+/** The compatibility spelling `origin/b` can serve the exact tracking ref for `b`. Use that answer for both kinds
+ * of refresh, but keep the visit keyed by the URL. A literal local branch named `origin/b` is still a bare branch. */
+function refreshRef(ref: DocsRefSpec | null, slot: TreeSlot | undefined): string | null {
+  if (ref === null) return null;
+  const served = slot?.s === 'ok' ? slot.answer.tree.ref : null;
+  return ref.kind === 'bare' && ref.name.startsWith('origin/') && served?.via === 'qualified' && served.side === 'origin'
+    ? served.served : docsRefText(ref);
+}
+
 function autoRetryId(scope: string, key: string, word: string): string {
   return [scope, key, word].join(NUL);
 }
@@ -429,7 +443,7 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
     st.refreshInflight.add(key);
     const before = st.freshness.get(key);
     st.freshness.set(key, { s: 'fetching', reason });
-    const body = { ref: target.ref === null ? null : docsRefText(target.ref), reason };
+    const body = { ref: refreshRef(target.ref, st.trees.get(key)), reason };
     void loadersRef.current.refresh(target.project, body).then((a) => {
       st.refreshInflight.delete(key);
       if (!st.alive) {

@@ -140,8 +140,11 @@ const COPY_LOAD_MS = 30_000;
 
 /** Seed `html` as a snapshot, open it through the real flow (the fragment, then a tap on Open draft) and return the copy's frame
  *  once the frame element has fired its first `load`. A row that taps the copy before that load would race the page's own
- *  restore watch, which takes the first `load` as its own draw's (the named tap-before-load residual): a local run at load
- *  about 9 lost the fast-tap row's first tap that way. The load is counted from the top
+ *  restore watch, which takes the first `load` as its own draw's (the named tap-before-load residual); this wait closes that
+ *  window. It does not explain a first tap that never navigated the frame: a local run at load about 9 lost the fast-tap row's
+ *  first tap with the copy still there for taps 2 to 4 (so not the residual, which loses the copy; review 3892), and a hosted
+ *  run lost the no-target row's only tap behind this very wait (#3421). Both causes are unproven; `selfNavigation` now waits
+ *  for the page to settle and records where its tap landed, and the fast-tap row records its frame navigations. The load is counted from the top
  *  page's side, as the tap-before-load row counts it; that row opens its draft by hand, so it never waits here. */
 async function openDraft(s: Session, html: string): Promise<{ readonly frame: Frame; readonly tok: string }> {
   const tok = token();
@@ -367,12 +370,74 @@ const noteOf = async (page: Page): Promise<string | null> => {
   return (await note.count()) === 0 ? null : note.first().innerText();
 };
 
+/** How long `settledBox` waits for the page to settle after the copy's load: well under the row's test bound. */
+const SETTLE_MS = 10_000;
+
+/** The copy frame's box on the top page, as `x,y wxh`, or `none` when there is no copy frame. */
+const frameBox = (page: Page): Promise<string> => page.evaluate(() => {
+  const f = document.querySelector('iframe.review-frame');
+  if (f === null) return 'none';
+  const r = f.getBoundingClientRect();
+  return `${r.x},${r.y} ${r.width}x${r.height}`;
+});
+
+/** Waits until the page has settled after Open draft (#3421): the link list above the frame is drawn (the page draws it in the
+ *  same step as the frame, so this half is a guard on that, not a wait) and the copy frame's box is the same across two
+ *  animation frames, bounded by `SETTLE_MS`. Returns that box, or on expiry a line beginning `unsettled:` that names what it
+ *  saw, which the row reports as a problem beside its other verdicts. Only for a session with no installed clock: the poll
+ *  runs on the page's own animation frames. */
+async function settledBox(page: Page): Promise<string> {
+  return page.waitForFunction(() => {
+    const w = window as unknown as { __settle?: { box: string; same: number } };
+    const f = document.querySelector('iframe.review-frame');
+    const r = f?.getBoundingClientRect();
+    const box = r === undefined ? 'none' : `${r.x},${r.y} ${r.width}x${r.height}`;
+    const prev = w.__settle;
+    w.__settle = { box, same: prev !== undefined && prev.box === box ? prev.same + 1 : 0 };
+    return document.querySelector('.review-links li a') !== null && f !== null && w.__settle.same >= 2;
+  }, undefined, { polling: 'raf', timeout: SETTLE_MS }).then(() => frameBox(page), async (e: Error) => {
+    const links = await page.locator('.review-links li a').count().catch(() => -1);
+    return `unsettled: the review page did not settle within ${SETTLE_MS / 1000}s of the copy's load (${e.message.split('\n')[0]}): `
+      + `listed links ${links}, frame box ${await frameBox(page).catch(() => 'unreadable')}`;
+  });
+}
+
+/** The hit test at the anchor `#nav` just before a tap, read by the test's own evaluations: in the copy, the anchor's box and
+ *  the element at its centre; on the top page, the element at that same point in the page's coordinates (the frame's box plus
+ *  its border plus the anchor's centre), which is the copy frame when the frame has not moved off the point Playwright taps.
+ *  A listener cannot be the record: the copy's frame is sandboxed without `allow-scripts`, so Chromium runs no listener
+ *  there, one an evaluation added included ("Blocked script execution in 'about:srcdoc' because the document's frame is
+ *  sandboxed", measured for #3421); an evaluation itself still runs. */
+async function hitAtAnchor(page: Page, frame: Frame): Promise<string> {
+  const inCopy = await frame.evaluate(() => {
+    const a = document.getElementById('nav');
+    if (a === null) return null;
+    const r = a.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+    const name = hit === null ? 'nothing' : `${hit.tagName.toLowerCase()}${hit.id === '' ? '' : `#${hit.id}`}`;
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2, line: `anchor box ${r.x},${r.y} ${r.width}x${r.height}, its centre reaches ${name}${hit?.closest('#nav') ? ' (the anchor)' : ''}` };
+  }).catch((e: Error) => `unreadable: ${e.message.split('\n')[0]}`);
+  if (inCopy === null) return 'no anchor';
+  if (typeof inCopy === 'string') return inCopy;
+  const onTop = await page.evaluate(([x, y]) => {
+    const f = document.querySelector('iframe.review-frame');
+    if (f === null) return 'no copy frame';
+    const r = f.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.x + f.clientLeft + x, r.y + f.clientTop + y);
+    return hit === f ? 'the copy frame' : hit === null ? 'nothing' : `${hit.tagName.toLowerCase()}${hit.className === '' ? '' : `.${hit.className}`}`;
+  }, [inCopy.x, inCopy.y] as const).catch((e: Error) => `unreadable: ${e.message.split('\n')[0]}`);
+  return `${inCopy.line}; on the top page that point reaches ${onTop}`;
+}
+
 /**
  * One tap on an anchor of the copy that tries to leave the frame (`attrs` is '' for no target, ` target="_top"` for the page,
  * ` target="_blank"` for a new tab), on a fresh copy opened through the real flow. The target is a distinct `https:` path on a host
  * the context routes and records. `restored` says what the page is expected to do: the no-target tap navigates the frame to
  * Chromium's error page, and the page puts its own copy back (one restore, one sentence); `_top` and `_blank` leave the copy where
  * it was, with NO restore (count zero, no sentence). Either way no request leaves, the top page does not move and no tab opens.
+ * Before the tap the row waits for the page to settle (`settledBox`) and hit-tests the anchor's centre in the copy and on the
+ * top page (`hitAtAnchor`); after it, the browser's own console lines and the frame's box: so a tap that did nothing says
+ * whether its point was on the anchor, whether the anchor acted, and where the frame was (#3421).
  * Logs `M-X3.16 Chromium <version>: self-navigation <label> <outcome>` and returns what departed from the expectation.
  */
 async function selfNavigation(label: string, attrs: string, restored: boolean): Promise<{ readonly label: string; readonly problems: string[] }> {
@@ -381,11 +446,24 @@ async function selfNavigation(label: string, attrs: string, restored: boolean): 
   const t = await session();
   const { frame } = await openDraft(t, copy(`<p><a id="nav" href="${linkHref}"${attrs}>go</a></p>`));
   await frame.waitForSelector('#nav', { state: 'attached', timeout: 30_000 });
+  const boxBefore = await settledBox(t.page);
+  const hit = await hitAtAnchor(t.page, frame);
+  // The browser's own console lines after the tap, from every frame: the anchor's activation leaves its trace there (measured:
+  // "Framing ... violates" for no target, "Unsafe attempt to initiate navigation" for `_top`, "Blocked opening" for `_blank`), so
+  // a tap with none is a tap the anchor never acted on. The sandbox's "Blocked script execution" lines (listeners the tap's
+  // driver sets in the copy, which the sandbox stops) are counted, not kept.
+  const said: string[] = [];
+  let scriptBlocks = 0;
+  t.page.on('console', (m) => {
+    if (m.text().startsWith('Blocked script execution')) scriptBlocks += 1;
+    else said.push(m.text().slice(0, 160));
+  });
   const mark = server.requests.length;
   const navigated: string[] = [];
   t.page.on('framenavigated', (f) => { navigated.push(f.url()); });
   const urlBefore = [frame.url(), await frame.evaluate(() => location.href)];
   await frame.locator('#nav').click({ timeout: 10_000 });
+  const boxAfter = await frameBox(t.page).catch((e: Error) => `unreadable: ${e.message.split('\n')[0]}`);
   await new Promise((r) => setTimeout(r, WATCH_MS));
   // Under load the frame's navigation and the page's restore can land after the watch window (measured once, beside another
   // browser file): when a restore is expected, wait for its count, bounded; a missing one is still reported below.
@@ -406,12 +484,14 @@ async function selfNavigation(label: string, attrs: string, restored: boolean): 
   const outcome = copyText === 'Seeded copy'
     ? `the copy is in its frame at ${urlAfter[0]}, restores ${restores}, sentence ${JSON.stringify(note)}`
     : `the copy is gone: frame url ${JSON.stringify(urlAfter)} (was ${JSON.stringify(urlBefore)}), copy ${JSON.stringify(copyText)}`;
-  console.log(`M-X3.16 Chromium ${version}: self-navigation ${label} ${outcome}; frame navigations ${navigated.length}; top page ${topPath}; requests for ${linkPath}: ${reached.length}; new tabs ${t.popups.length}`);
+  const click = `${hit}; the browser said ${JSON.stringify(said)} and blocked ${scriptBlocks} script(s)`;
+  console.log(`M-X3.16 Chromium ${version}: self-navigation ${label} ${outcome}; frame navigations ${navigated.length}; top page ${topPath}; requests for ${linkPath}: ${reached.length}; new tabs ${t.popups.length}; click: ${click}; frame box settled ${boxBefore}, after the tap ${boxAfter}`);
   const problems: string[] = [];
+  if (boxBefore.startsWith('unsettled:')) problems.push(boxBefore);
   if (JSON.stringify(urlAfter) !== JSON.stringify(urlBefore)) problems.push(`the frame's URL changed from ${JSON.stringify(urlBefore)} to ${JSON.stringify(urlAfter)}`);
   if (copyText !== 'Seeded copy') problems.push(`the copy is not there: ${JSON.stringify(copyText)}`);
   if (restored) {
-    if (navigated.length === 0) problems.push('the frame never navigated, so there was nothing to restore');
+    if (navigated.length === 0) problems.push(`the frame never navigated, so there was nothing to restore (click ${click})`);
     if (restores !== '1') problems.push(`the page's restore count is ${JSON.stringify(restores)}, expected "1"`);
     if (note !== RESTORED_WITH_LINKS) problems.push(`the sentence is ${JSON.stringify(note)}`);
   } else {
@@ -442,19 +522,26 @@ async function repeatedSelfNavigation(): Promise<{ readonly label: string; reado
   const mark = server.requests.length;
   const problems: string[] = [];
   const seen: string[] = [];
+  // Every frame navigation after the copy's load, as the single-tap helper records them (a tap that never navigated the
+  // frame reads 0 for that tap; a restored one reads its navigation away and the page's redraw).
+  const navigated: string[] = [];
+  t.page.on('framenavigated', (f) => { navigated.push(f.url()); });
   // The frame element is read afresh each time: a restore replaces its document.
   const current = (): Promise<Frame> => frameIn(t.page, 'iframe.review-frame');
   for (let i = 1; i <= 3; i += 1) {
     const frame = await current();
+    const before = navigated.length;
     await frame.locator('#nav').click({ timeout: 10_000 });
     const reached = await expect.poll(() => restoresOf(t.page), { timeout: 15_000, message: `restore ${i}` }).toBe(String(i)).then(() => true, () => false);
     const back = await current();
     await back.waitForSelector('#nav', { state: 'attached', timeout: 15_000 }).catch(() => undefined);
-    seen.push(`tap ${i}: count ${await restoresOf(t.page)}, sentence ${JSON.stringify(await noteOf(t.page))}, frame ${back.url()}`);
-    if (!reached) problems.push(`tap ${i} was not restored`);
+    const moves = navigated.slice(before);
+    seen.push(`tap ${i}: count ${await restoresOf(t.page)}, sentence ${JSON.stringify(await noteOf(t.page))}, frame ${back.url()}, frame navigations ${moves.length} ${JSON.stringify(moves)}`);
+    if (!reached) problems.push(`tap ${i} was not restored (frame navigations since the tap: ${moves.length})`);
     if ((await back.evaluate(() => document.getElementById('seeded')?.textContent ?? null).catch(() => null)) !== 'Seeded copy') problems.push(`after tap ${i} the copy is not back`);
     if ((await noteOf(t.page)) !== RESTORED_WITH_LINKS) problems.push(`after tap ${i} the sentence is not the restore sentence`);
   }
+  const beforeLast = navigated.length;
   await (await current()).locator('#nav').click({ timeout: 10_000 });
   await new Promise((r) => setTimeout(r, WATCH_MS));
   const finalUrl = (await current()).url();
@@ -462,7 +549,7 @@ async function repeatedSelfNavigation(): Promise<{ readonly label: string; reado
   const finalNote = await noteOf(t.page);
   const reachedLink = [...externalFor(t, linkHref).map((e) => e.url), ...server.requests.slice(mark).filter((r) => r.url.includes(linkPath)).map((r) => r.url)];
   const asked = server.requests.slice(mark).filter((r) => r.url !== '/favicon.ico').map((r) => `${r.method} ${r.url}`);
-  console.log(`M-X3.16 Chromium ${version}: self-navigation repeated ${seen.join('; ')}; tap 4: frame ${finalUrl}, count ${finalCount}, sentence ${JSON.stringify(finalNote)}; top page ${new URL(t.page.url()).pathname}; requests for ${linkPath}: ${reachedLink.length}; new tabs ${t.popups.length}`);
+  console.log(`M-X3.16 Chromium ${version}: self-navigation repeated ${seen.join('; ')}; tap 4: frame ${finalUrl}, count ${finalCount}, sentence ${JSON.stringify(finalNote)}, frame navigations ${navigated.length - beforeLast} ${JSON.stringify(navigated.slice(beforeLast))}; top page ${new URL(t.page.url()).pathname}; requests for ${linkPath}: ${reachedLink.length}; new tabs ${t.popups.length}`);
   if (!finalUrl.startsWith('chrome-error://')) problems.push(`after the fourth tap the frame is at ${finalUrl}, expected Chromium's error page`);
   if (finalCount !== '3') problems.push(`after the fourth tap the restore count is ${JSON.stringify(finalCount)}, expected "3"`);
   if (finalNote !== RESTORE_STOPPED) problems.push(`after the fourth tap the sentence is ${JSON.stringify(finalNote)}`);

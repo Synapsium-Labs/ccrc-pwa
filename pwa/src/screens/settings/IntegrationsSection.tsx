@@ -10,6 +10,7 @@ import type { ReactNode } from 'react';
 import type { LinearWorkspacesPoll } from '../../fleet/useLinearWorkspaces';
 import { LinearSection } from '../LinearSection';
 import { DocsFoldersSection } from './DocsFoldersSection';
+import { DocsSettingsSection } from './DocsSettingsSection';
 import { GitHubCard } from './GitHubCard';
 import { ProjectLinkingCard } from './ProjectLinkingCard';
 import { useProjectList } from './useProjectList';
@@ -25,6 +26,7 @@ export function IntegrationsSection({ linear }: { linear: LinearWorkspacesPoll }
       <GitHubCard list={list.read} />
       {/* The folders outside the projects that Docs may read (X2 P2.4, spec 4.1 "Settings"): its own card, its own reads. */}
       <DocsFoldersSection />
+      <DocsSettingsSection list={list.read} />
     </>
   );
 }

@@ -103,7 +103,8 @@ export function raiseItem(
 /** `raiseItem`'s in-transaction form, for a caller that already holds the transaction (programme lifecycle W2: the end
  *  proposal raises its item with its programme event in one transaction; the invariant monitor's finding writes its row in the
  *  same one): `checkRaise` first, then the insert, so `operator_items` keeps its one writer behind three
- *  checked entries. A refused input throws `RangeError` inside the caller's `tx()`, which rolls it back. */
+ *  checked entries. A refused input throws `RangeError` inside the caller's `tx()`, which rolls it back. Its settle is
+ *  `settleItemCheckedInTx`. */
 export function raiseItemCheckedInTx(
   db: DatabaseSync, input: RaiseItemInput, now: number, actor: 'coordinator' | 'ccrc', reach?: ItemReach,
 ): number {
@@ -338,6 +339,15 @@ export function settleEndRequestsInTx(db: DatabaseSync, runId: number, note: str
     if (res.ok) settled += 1;
   }
   return settled;
+}
+
+/** A server-raised item's cause cleared, so the item moves `settle` (ccrc, open or checking to done) with `note`, inside a
+ *  transaction the CALLER holds (the Overlord readiness lane stamps its record in the same one). The settle beside
+ *  `raiseItemCheckedInTx`: it throws when no transaction is open, and the move is `moveItemInTx`'s, the only writer of the
+ *  state, so a dismissed or done item answers its refusal and nothing is written. */
+export function settleItemCheckedInTx(db: DatabaseSync, id: number, note: string, now: number): ItemMoveResult {
+  if (!db.isTransaction) throw new Error('settleItemCheckedInTx: no transaction is open');
+  return moveItemInTx(db, id, 'settle', 'ccrc', { note }, now, { programmeHasOpenRun: true });
 }
 
 /** The mend for a death between the operator's act and its item (spec 2026-11-04 §10, "The act", step 3): the abandon committed

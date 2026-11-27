@@ -18,6 +18,8 @@ import { readTestboxFrame } from '../../shared/testbox.js';
 import {
   CAPTURE_DEADLINE_MARGIN_MS, CAPTURE_LATE_DETAIL, CAPTURE_STEPS, CAPTURE_TIMINGS, captureStartsLate, captureWorstCaseMs, type BuildFileFacts, type CaptureTimings,
 } from '../src/testbox/capture.js';
+import { DELIVERY_PART_COUNT, deliveryParts } from '../../shared/deliveryResult.js';
+import { DELIVERY_STEPS_BEFORE, deliveryPartCount, deliveryStartsLate, deliveryWorstCaseMs } from '../src/testbox/captureDelivery.js';
 import { CaptureDesk, type CaptureDeskDeps, type CaptureRunnerLike } from '../src/testbox/captureDesk.js';
 import type { CaptureRun } from '../src/testbox/captureRunner.js';
 import type { MirrorOps } from '../src/testbox/mirror.js';
@@ -26,10 +28,15 @@ import type { SystemManager } from '../src/testbox/systemd.js';
 import { appendFileSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { TestboxConfig } from '../src/testbox/config.js';
-import { captureDeskComposed } from '../src/testbox/main.js';
+import { captureDeskComposed, deliveryOf, deliveryWiring } from '../src/testbox/main.js';
 import { mkTmp } from './tmpHelpers.js';
 
-const T: CaptureTimings = { stepMs: 1000, exitMs: 100, pollMs: 10, tmuxCallMs: 20, stopWaitMs: 50, standInCloseMs: 30, setupMs: 5, removeMs: 7 };
+const T: CaptureTimings = {
+  stepMs: 1000, exitMs: 100, pollMs: 10, tmuxCallMs: 20, stopWaitMs: 50, standInCloseMs: 30, setupMs: 5, removeMs: 7,
+  deliveryDriveMs: 300, deliveryKillGraceMs: 60, deliverySettleMs: 200, deliveryQuietMs: 40,
+};
+/** The delivery recipe's bounds in the contract (Desktop polish wave 178): build trust's worst case never reads them. */
+const DELIVERY_KEYS: readonly (keyof CaptureTimings)[] = ['deliveryDriveMs', 'deliveryKillGraceMs', 'deliverySettleMs', 'deliveryQuietMs'];
 
 describe('the worst case of one capture by the wired runner (capture.ts#captureWorstCaseMs)', () => {
   it('adds the setup allowance, the start, each typed step\'s two calls, each step\'s wait and a poll, the exit wait and a poll, the stop, the stop wait and a poll, the stand-in\'s close and the removal allowance', () => {
@@ -42,14 +49,29 @@ describe('the worst case of one capture by the wired runner (capture.ts#captureW
   });
   it('grows with each timing it is made of', () => {
     const base = captureWorstCaseMs(T);
-    for (const k of Object.keys(T) as (keyof CaptureTimings)[]) expect(captureWorstCaseMs({ ...T, [k]: T[k] + 1 }), k).toBeGreaterThan(base);
+    for (const k of Object.keys(T) as (keyof CaptureTimings)[]) {
+      if (!DELIVERY_KEYS.includes(k)) expect(captureWorstCaseMs({ ...T, [k]: T[k] + 1 }), k).toBeGreaterThan(base);
+    }
+  });
+  it('the delivery recipe\'s bounds leave it unchanged, and they are the only ones that do', () => {
+    const base = captureWorstCaseMs(T);
+    for (const k of DELIVERY_KEYS) expect(captureWorstCaseMs({ ...T, [k]: T[k] + 1 }), k).toBe(base);
   });
 });
 
 describe('the timing contract fits the fleet agent\'s deadline (review 3226 F8; gate G1)', () => {
-  it('under the contract, a capture with one capture ahead of it in the queue ends, with its margin, before the agent stops waiting', () => {
+  it('under the contract, a capture with one capture ahead of it in the queue ends, with its margin, before the agent stops waiting, a delivery part either member', () => {
     const worst = captureWorstCaseMs(CAPTURE_TIMINGS);
     expect(2 * worst + CAPTURE_DEADLINE_MARGIN_MS).toBeLessThanOrEqual(TESTBOX_CAPTURE_DEADLINE_MS);
+    // The delivery recipe's largest part (Desktop polish wave 178; the capture owner's calls 1148 and 1159), ahead of or
+    // behind a build-trust capture or another part.
+    const part = deliveryWorstCaseMs(CAPTURE_TIMINGS);
+    for (const [ahead, own] of [[worst, part], [part, worst], [part, part]] as const) {
+      expect(ahead + own + CAPTURE_DEADLINE_MARGIN_MS, `${ahead} then ${own}`).toBeLessThanOrEqual(TESTBOX_CAPTURE_DEADLINE_MS);
+    }
+    // The shared part count is the one this contract derives: the smallest that fits, so a count one higher or lower than
+    // the derivation is red here (shared/deliveryResult.ts#DELIVERY_PART_COUNT).
+    expect(deliveryPartCount(CAPTURE_TIMINGS)).toBe(DELIVERY_PART_COUNT);
   });
   it('the drive carries door B2\'s typed step and still fits', () => {
     const typed = CAPTURE_STEPS.filter((s) => s.type === '/model haiku');
@@ -239,7 +261,7 @@ describe('gate G1: the composed desk and runner, the real launcher, on a virtual
         },
         signal: () => undefined,
       },
-      standIn: async () => ({ port: 1, requests: [], close: () => new Promise<void>(() => undefined) }),
+      standIn: async () => ({ port: 1, requests: [], routes: [], close: () => new Promise<void>(() => undefined) }),
     } });
     const at: number[] = [];
     const frames: CaptureAnswer[] = [];
@@ -315,5 +337,122 @@ describe('the desk\'s late check reads the contract it is given', () => {
     expect(runner.runs).toEqual([ID(1), ID(2)]);
     runner.release();
     await d.settled();
+  });  it('so does a delivery part\'s, on the same contract\'s delivery bounds (Desktop polish wave 178)', async () => {
+    const runner = new GatedRunner();
+    const clock = { now: 0 };
+    const d = new CaptureDesk({
+      role: 'test-box', runner, root: '/srv/testbox', tmuxBase: '/tmp', fleetDirs: () => [], realPath: (p) => p, buildFacts: HERE, now: () => clock.now, timings: T,
+    });
+    d.submit(SUBMIT(1), new Sink());
+    d.submit({ ...SUBMIT(2), recipe: 'delivery', part: 0 }, new Sink());
+    await new Promise((r) => { setTimeout(r, 5); });
+    const waited = TESTBOX_CAPTURE_DEADLINE_MS - deliveryWorstCaseMs(T) - CAPTURE_DEADLINE_MARGIN_MS;
+    expect([deliveryStartsLate(waited, T), deliveryStartsLate(waited, CAPTURE_TIMINGS)]).toEqual([false, true]);
+    clock.now += waited;
+    runner.release();
+    await new Promise((r) => { setTimeout(r, 5); });
+    expect(runner.runs).toEqual([ID(1), ID(2)]);
+    runner.release();
+    await d.settled();
   });
 });
+
+// The delivery recipe's settle and quiet bounds reach its runner from the contract the runner is built from, never from a
+// seam or a copy (Desktop polish wave 178; the capture owner's condition 5).
+describe('the runner\'s delivery bounds are the contract\'s', () => {
+  const driver = { drive: async (): Promise<never> => { throw new Error('not run'); } };
+  it('a seam\'s wiring takes the given contract\'s settle and quiet bounds, and no wiring is none', () => {
+    expect(deliveryOf({ delivery: { driver, tmuxConf: null } }, T, null)).toEqual({ delivery: { driver, tmuxConf: null, release: null, settleMs: T.deliverySettleMs, quietMs: T.deliveryQuietMs } });
+    expect(deliveryOf({ delivery: null }, T, null)).toEqual({});
+  });
+  it('the box\'s release tag is pinned into the delivery dependencies, and absent is null, never a made-up tag (review 3882 F5)', () => {
+    expect(deliveryOf({ delivery: { driver, tmuxConf: null } }, T, 'v1.2.3')).toEqual({ delivery: { driver, tmuxConf: null, release: 'v1.2.3', settleMs: T.deliverySettleMs, quietMs: T.deliveryQuietMs } });
+    expect(deliveryOf({ delivery: { driver, tmuxConf: null } }, T)).toEqual({ delivery: { driver, tmuxConf: null, release: null, settleMs: T.deliverySettleMs, quietMs: T.deliveryQuietMs } });
+  });
+  it('the production wiring\'s driver child is stopped at the given contract\'s bound and killed its kill grace later', async () => {
+    const dir = mkTmp('ccrc-capwire-');
+    const script = path.join(dir, 'stubborn.cjs');
+    writeFileSync(script, `process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);\n`);
+    const tc: CaptureTimings = { ...CAPTURE_TIMINGS, deliveryDriveMs: 200, deliveryKillGraceMs: 300 };
+    const w = deliveryWiring(tc, script, path.join(dir, 'no-such.conf'));
+    expect(w?.tmuxConf).toBeNull();
+    const t0 = Date.now();
+    const a = await w!.driver.drive({ capture: '/box/captures/x', tmux: '/tmp/ccrc-capture-x', case: 'c0' }, { path: '/usr/bin:/bin', tmpBase: dir });
+    const took = Date.now() - t0;
+    expect(a).toMatchObject({ kind: 'fault', detail: expect.stringMatching(/within 200 ms/) });
+    // Its bound and its grace, the contract's; never the production grace, which would hold it a full second.
+    expect(took).toBeGreaterThanOrEqual(tc.deliveryDriveMs + tc.deliveryKillGraceMs);
+    expect(took).toBeLessThan(tc.deliveryDriveMs + CAPTURE_TIMINGS.deliveryKillGraceMs);
+  }, 20_000);
+});
+
+// Gate G1 for the delivery recipe (the capture owner's call 1208): the composed desk and runner, the real launcher, a
+// virtual clock, every bound taken, and the elapsed time held to the part's worst case, as build trust's composed run is.
+describe('gate G1: a delivery part, composed, every bound taken, ends within its worst case', () => {
+  const t = CAPTURE_TIMINGS;
+  const cases = deliveryParts()[0]!.length;
+  /** The worst case less its two allowances and the polls' overruns, which this clock never has: the start's, the two
+   *  steps before's, each case's settle and quiet, the last case's trailing settle window, the /exit step's, the exit wait's
+   *  and the stop wait's. Measured EXACTLY. */
+  const atLimits = deliveryWorstCaseMs(t) - t.setupMs - t.removeMs - (DELIVERY_STEPS_BEFORE.length + 2 * cases + 4) * t.pollMs;
+
+  it(`the steps before at their bound, each of the ${cases} cases' driver stopped at its bound with its kill grace and drain, the settle and the quiet in full, /exit at its bound, the exit wait and the stop`, async () => {
+    const root = realpathSync(mkTmp('ccrc-capg1d-'));
+    mkdirSync(path.join(root, 'captures', 'builds'), { recursive: true });
+    writeFileSync(path.join(root, 'captures', 'builds', BUILD), 'bytes');
+    const cfg = { root, lines: new Map([['A_BOX_LINE', { key: 'A_BOX_LINE', def: '', value: root, from: 'file' }]]) } as unknown as TestboxConfig;
+    const clock = { now: 1_000_000 };
+    const call = t.tmuxCallMs + UPDATE_SPAWN_DRAIN_MS;
+    // The build raises a step's events once the step has waited its whole limit, for the steps before the cases only: no
+    // turn ever ends (so each settle runs in full) and /exit never finishes (so its step runs its bound).
+    let cur: { recording: string; step: number; began: number; written: number } | null = null;
+    const sleep = async (ms: number): Promise<void> => {
+      clock.now += ms;
+      if (cur !== null && cur.written < cur.step + 1 && cur.step < DELIVERY_STEPS_BEFORE.length && clock.now >= cur.began + t.stepMs) {
+        for (const event of DELIVERY_STEPS_BEFORE[cur.step]!.waitFor) appendFileSync(cur.recording, `${JSON.stringify({ kind: 'hook', event, payload: {}, status: null })}\n`);
+        cur.written = cur.step + 1;
+      }
+    };
+    // The driver child at its limit: its bound passes, the group is sent TERM, KILL a grace later, then one drain; its
+    // answer is a send the build took, so the case waits its settle and quiet in full.
+    const drives: number[] = [];
+    const driver = { drive: async () => { drives.push(clock.now); clock.now += t.deliveryDriveMs + t.deliveryKillGraceMs + UPDATE_SPAWN_DRAIN_MS; return { kind: 'sent' as const, send: 'ok' }; } };
+    const desk = captureDeskComposed(cfg, root, true, { home: root, seams: {
+      now: () => clock.now, sleep,
+      tmux: {
+        spawner: (env) => async (_file, args) => {
+          clock.now += call;
+          if (args.includes('new-session')) {
+            cur = { recording: env['CCRC_CAPTURE_RECORDING']!, step: 0, began: clock.now, written: 0 };
+            return { status: 0, stdout: '4242\n', stderr: '', killed: false };
+          }
+          if (args.at(-1) === 'Enter' && cur !== null) { cur.step++; cur.began = clock.now; }
+          return { status: 0, stdout: '', stderr: '', killed: false };
+        },
+        signal: () => undefined,
+      },
+      standIn: async () => ({ port: 1, requests: [], routes: [], close: () => new Promise<void>(() => undefined) }),
+      delivery: { driver, tmuxConf: null },
+    } });
+    const t0 = clock.now;
+    let at = -1;
+    const frames: CaptureAnswer[] = [];
+    desk.submit({ ...SUBMIT(1), recipe: 'delivery', part: 0 }, { send: (f: CaptureAnswer): void => { frames.push(f); if (f.state === 'ended') at = clock.now - t0; } });
+    await desk.settled();
+    expect(drives).toHaveLength(cases);
+    expect(frames.at(-1)).toMatchObject({ state: 'ended', detail: null, delivery: { part: 0 } });
+    expect(at).toBe(atLimits);
+    expect(at).toBeLessThanOrEqual(deliveryWorstCaseMs(t));
+  });
+
+  it('the figures today: a four-case part 401 s (the trailing window, one settle and a poll, over 385.5 s), trust unchanged at 399.5 s, every pair with the margin inside the 900 s wait, and three parts', () => {
+    const part = deliveryWorstCaseMs(t);
+    const trust = captureWorstCaseMs(t);
+    expect(part).toBe(401_000);
+    expect(trust).toBe(399_500);
+    expect([part + part, part + trust, trust + part].map((pair) => pair + CAPTURE_DEADLINE_MARGIN_MS)).toEqual([832_000, 830_500, 830_500]);
+    for (const pair of [part + part, part + trust, trust + part]) expect(pair + CAPTURE_DEADLINE_MARGIN_MS).toBeLessThanOrEqual(TESTBOX_CAPTURE_DEADLINE_MS);
+    expect(deliveryPartCount(t)).toBe(3);
+  });
+});
+

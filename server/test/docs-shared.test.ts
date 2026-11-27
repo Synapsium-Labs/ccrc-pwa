@@ -11,8 +11,26 @@ import {
   DOCS_MAX_LISTING_WIRE_BYTES, DOCS_MAX_ENTRIES, DOCS_DRAFT_HASH_BUDGET, DOCS_MAX_DRAFTS, DOCS_MAX_IMAGES_PER_PAGE,
   DOCS_FETCH_MIN_INTERVAL_MS, DOCS_STALE_MS, DOCS_RETRY_FLOOR_MS,
   DOCS_LOG_MAX_ENTRIES, DOCS_LOG_SUBJECT_MAX_CHARS, DOCS_LOG_AUTHOR_MAX_CHARS, DOCS_LOG_MAX_WIRE_BYTES,
-  DOCS_PATH_MAX_BYTES, type DocsLogEntry, type DocsLogOk,
+  DOCS_PATH_MAX_BYTES, contentClass, sniffRaster, type DocsLogEntry, type DocsLogOk,
 } from '../../shared/docs.js';
+
+describe('ico structural validation', () => {
+  it('accepts an icon with a complete table and first image', () => {
+    const icon = Uint8Array.from([0, 0, 1, 0, 1, 0, 16, 16, 0, 0, 1, 0, 32, 0, 1, 0, 0, 0, 22, 0, 0, 0, 42]);
+    expect(contentClass('favicon.ico')).toBe('raster');
+    expect(sniffRaster('ico', icon)).toBe('match');
+  });
+
+  it('rejects bad counts, incomplete tables, and first images outside the file', () => {
+    const icon = Uint8Array.from([0, 0, 1, 0, 1, 0, 16, 16, 0, 0, 1, 0, 32, 0, 1, 0, 0, 0, 22, 0, 0, 0, 42]);
+    for (const [index, value] of [[4, 0], [4, 65], [4, 2], [14, 0], [14, 2], [18, 21], [18, 23]] as const) {
+      const bad = icon.slice();
+      bad[index] = value;
+      expect(sniffRaster('ico', bad), `byte ${index} = ${value}`).toBe('mismatch');
+    }
+    expect(sniffRaster('ico', icon.slice(0, 21))).toBe('mismatch');
+  });
+});
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const DOCS = path.resolve(here, '..', '..', 'shared', 'docs.ts');
@@ -579,7 +597,9 @@ describe('(F) contentClass (spec 5.1; M5.3, L0 cases)', () => {
     ['a/b.c/README', 'other'],
     ['a.md/README', 'other'],
     ['x.abcdefghijk', 'other'],
-    ['x.pdf', 'other'],
+    ['x.pdf', 'pdf'],
+    ['dir/Report.PDF', 'pdf'],
+    ['x.pdf.txt', 'text'],
     ['x.woff2', 'other'],
     ['x.tar.gz', 'other'],
     ['dir/Notes.MarkDown', 'markdown'],
@@ -592,11 +612,12 @@ describe('(F) contentClass (spec 5.1; M5.3, L0 cases)', () => {
     expect('x.mar\u212Adown'.toLowerCase()).toBe('x.markdown');
   });
 
-  it('the table is spec 5.1 verbatim', () => {
+  it('the table is spec 5.1 verbatim, plus pdf (X2 spec 4.4)', () => {
     expect(DocsFG.DOC_CONTENT_CLASS_BY_EXT).toEqual({
       md: 'markdown', markdown: 'markdown',
       png: 'raster', jpg: 'raster', jpeg: 'raster', gif: 'raster', webp: 'raster',
-      svg: 'svg', html: 'html', htm: 'html',
+      svg: 'svg', html: 'html', htm: 'html', pdf: 'pdf',
+      ico: 'raster',
       txt: 'text', json: 'text', yaml: 'text', yml: 'text', toml: 'text', csv: 'text', tsv: 'text', log: 'text',
       ts: 'text', tsx: 'text', js: 'text', mjs: 'text', cjs: 'text', css: 'text', py: 'text', sh: 'text',
       sql: 'text', diff: 'text', patch: 'text', xml: 'text', xsl: 'text', xhtml: 'text',
@@ -614,7 +635,7 @@ describe('(F) contentClass (spec 5.1; M5.3, L0 cases)', () => {
 describe('(F) DOCS_CLASS_CAP (spec 6.1)', () => {
   it('holds each class to its cap', () => {
     expect(DocsFG.DOCS_CLASS_CAP).toEqual({
-      markdown: 2097152, raster: 2097152, svg: 2097152, html: 2097152, text: 2097152, other: 2097152,
+      markdown: 2097152, raster: 2097152, svg: 2097152, html: 2097152, pdf: 2097152, text: 2097152, other: 2097152,
     });
   });
 
@@ -622,7 +643,7 @@ describe('(F) DOCS_CLASS_CAP (spec 6.1)', () => {
     for (const cls of ['raster', 'svg'] as const) {
       expect(DocsFG.DOCS_CLASS_CAP[cls], cls).toBe(DocsFG.DOCS_MAX_IMAGE_BYTES);
     }
-    for (const cls of ['markdown', 'html', 'text', 'other'] as const) {
+    for (const cls of ['markdown', 'html', 'pdf', 'text', 'other'] as const) {
       expect(DocsFG.DOCS_CLASS_CAP[cls], cls).toBe(DocsFG.DOCS_MAX_DOC_BYTES);
     }
   });
@@ -636,8 +657,37 @@ describe('(F) DOCS_CLASS_CAP (spec 6.1)', () => {
     const named = Object.fromEntries([...(decl?.[1] ?? '').matchAll(/(\w+): (\w+),/g)].map((m) => [m[1], m[2]]));
     expect(named).toEqual({
       markdown: 'DOCS_MAX_DOC_BYTES', raster: 'DOCS_MAX_IMAGE_BYTES', svg: 'DOCS_MAX_IMAGE_BYTES',
-      html: 'DOCS_MAX_DOC_BYTES', text: 'DOCS_MAX_DOC_BYTES', other: 'DOCS_MAX_DOC_BYTES',
+      html: 'DOCS_MAX_DOC_BYTES', pdf: 'DOCS_MAX_DOC_BYTES', text: 'DOCS_MAX_DOC_BYTES', other: 'DOCS_MAX_DOC_BYTES',
     });
+  });
+});
+
+describe('(F) the pdf class: sniffPdf and pdfVerdict (X2 spec 4.4; P3.1, M11.54)', () => {
+  it('pdfVerdict: 4194303 and 4194304 bytes inline, 4194305 download only', () => {
+    expect(DocsFG.DOCS_PDF_INLINE_MAX_BYTES).toBe(4194304);
+    expect(DocsFG.pdfVerdict(4194303)).toBe('inline');
+    expect(DocsFG.pdfVerdict(4194304)).toBe('inline');
+    expect(DocsFG.pdfVerdict(4194305)).toBe('download');
+  });
+
+  it('pdfVerdict: a size that is not a whole byte count opens nothing', () => {
+    for (const s of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) expect(DocsFG.pdfVerdict(s), String(s)).toBe('download');
+    expect(DocsFG.pdfVerdict(0)).toBe('inline');
+  });
+
+  it('contentClass: .pdf is pdf', () => {
+    expect(DocsFG.contentClass('specs/x.pdf')).toBe('pdf');
+    expect(DocsFG.contentClass('specs/X.Pdf')).toBe('pdf');
+  });
+
+  it('sniffPdf: %PDF- at 0 matches, else mismatch', () => {
+    expect(DocsFG.sniffPdf(bytesFG('%PDF-1.7\n%\xe2\xe3\xcf\xd3'))).toBe('match');
+    expect(DocsFG.sniffPdf(bytesFG('%PDF-'))).toBe('match');
+    expect(DocsFG.sniffPdf(bytesFG('%PDF')), 'truncated at 4 bytes').toBe('mismatch');
+    expect(DocsFG.sniffPdf(bytesFG(' %PDF-1.7')), '%PDF- at offset 1').toBe('mismatch');
+    expect(DocsFG.sniffPdf(bytesFG('%pdf-1.7')), 'lower case').toBe('mismatch');
+    expect(DocsFG.sniffPdf(new Uint8Array(0)), 'empty input').toBe('mismatch');
+    expect(DocsFG.sniffPdf(bytesFG('\x89PNG\r\n\x1a\n')), 'PNG bytes').toBe('mismatch');
   });
 });
 
@@ -647,20 +697,21 @@ describe('(F) the raster table and sniffRaster (spec 5.1)', () => {
     jpeg: bytesFG('\xff\xd8\xff\xe0\x00\x10JFIF\x00'),
     gif: bytesFG('GIF89a\x01\x00\x01\x00'),
     webp: bytesFG('RIFF\x1a\x00\x00\x00WEBPVP8 '),
+    ico: Uint8Array.from([0, 0, 1, 0, 1, 0, 16, 16, 0, 0, 1, 0, 32, 0, 1, 0, 0, 0, 22, 0, 0, 0, 42]),
   };
-  const TYPES = ['png', 'jpeg', 'gif', 'webp'] as const;
+  const TYPES = ['png', 'jpeg', 'gif', 'webp', 'ico'] as const;
 
   it('names each type its MIME, and every raster extension of the class table its type', () => {
     expect(Object.fromEntries(TYPES.map((t) => [t, DocsFG.DOCS_RASTER_TYPES[t].mime]))).toEqual({
-      png: 'image/png', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp',
+      png: 'image/png', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', ico: 'image/x-icon',
     });
     expect(Object.keys(DocsFG.DOCS_RASTER_TYPES)).toEqual([...TYPES]);
-    expect(DocsFG.DOCS_RASTER_EXT).toEqual({ png: 'png', jpg: 'jpeg', jpeg: 'jpeg', gif: 'gif', webp: 'webp' });
+    expect(DocsFG.DOCS_RASTER_EXT).toEqual({ png: 'png', jpg: 'jpeg', jpeg: 'jpeg', gif: 'gif', webp: 'webp', ico: 'ico' });
     const rasterExts = Object.entries(DocsFG.DOC_CONTENT_CLASS_BY_EXT).filter(([, c]) => c === 'raster').map(([e]) => e);
     expect(Object.keys(DocsFG.DOCS_RASTER_EXT).sort()).toEqual(rasterExts.sort());
   });
 
-  it('matches only on the diagonal of the 4x4 (declared, actual) matrix', () => {
+  it('matches only on the diagonal of the 5x5 (declared, actual) matrix', () => {
     for (const declared of TYPES) {
       for (const actual of TYPES) {
         expect(DocsFG.sniffRaster(declared, SAMPLE[actual]), `${declared} declared, ${actual} bytes`)
@@ -708,9 +759,9 @@ describe('(F) the docs response headers (spec 5.3)', () => {
     });
   });
 
-  it('allows JSON and the four raster types, and nothing a browser would render as a document', () => {
+  it('allows JSON and the five raster types, and nothing a browser would render as a document', () => {
     expect(DocsFG.DOCS_ALLOWED_CONTENT_TYPES)
-      .toEqual(['application/json; charset=utf-8', 'image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+      .toEqual(['application/json; charset=utf-8', 'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/x-icon']);
     for (const t of ['text/html', 'text/html; charset=utf-8', 'image/svg+xml', 'text/plain', 'application/octet-stream', 'application/xml']) {
       expect(DocsFG.DOCS_ALLOWED_CONTENT_TYPES, t).not.toContain(t);
     }

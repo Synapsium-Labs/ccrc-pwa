@@ -164,6 +164,8 @@ import {
   CHILD_DENY_SETTINGS_FILE, type ApprovalKeyAnswer, type ApprovalRequestAccepted, type ApprovalRulingAnswer,
   type ApprovalView,
 } from '../../../shared/api.js';
+import { deliveryStandingAnswerOf, deliveryViewsOf } from '../../../shared/deliveryLane.js';
+import type { DeliveryStandingAnswer } from '../../../shared/deliveryResult.js';
 import { CLAUDE_ROLL_TARGETS, CLAUDE_ROLL_TARGETS_DEFAULT, isClaudeRollTargets, isClaudeVersion, type ClaudeRollTargets } from '../../../shared/claudeVersion.js';
 import { rollTargetsOf } from './rollTarget.js';
 import { plainAutoMemoryOf } from '../continuity/profileFor.js';
@@ -2441,18 +2443,32 @@ export function registerCoordRoutes(
   });
 
   /** Test box plan TB9 (D-7411; spec 2026-10-28 §2.7): the test box's three doors.
-   *  - `GET /api/testbox` answers the block the poll last decided (`testbox.ts`), `null` before its first pass.
+   *  - `GET /api/testbox` answers the block the poll last decided (`testbox.ts`), `null` before its first pass, and beside it
+   *    `delivery`, the newest trusted build's paste delivery standing (words, counts, a release tag and a time per part, never a
+   *    case or its text; `deliveryResult.ts#readDeliveryStandingAnswer` reads it).
    *  - `POST /api/testbox/switch` takes `{on: boolean}` and nothing else, and runs `ccd testbox-remote --state on|off`
    *    through the agent's whitelist, the marker's one writer. SESSION-ONLY (`coord-pause-route.test.ts`'s
    *    `SESSION_ONLY`): the operator's switch, never the box token's, so no coordinator can arm remote runs.
    *  - `POST /api/testbox/tools-sync` takes no body: the release and the versions it sends are the fleet host's own.
    *  D-7554: the read and the sync ALSO take the box token (EXEMPT-BUT-AUTHENTICATED in `auth/gate.ts`, the `GET
    *  /api/runs` pattern), because `ccrc-api testbox status|tools-sync` is a cookieless fleet-host caller (the update
-   *  lane's signal). No `coordMutex` and no `notConfigured` arm: none of them touches the coordination database. */
+   *  lane's signal). No `coordMutex` and no `notConfigured` arm: the switch and the sync touch no coordination database.
+   *  The read does since wave 184: two synchronous store reads for its `delivery` key (the builds and the deliveries
+   *  tables), outside the serialiser, as a read needs; with no store the key is absent and the block is answered alone. */
+  const deliveryStandingRead = (coord: NonNullable<typeof deps.coord>): DeliveryStandingAnswer => {
+    try { return deliveryStandingAnswerOf(coord.claudeBuilds(), coord.claudeBuildDeliveries()); } catch (err) {
+      console.warn(`ccrc-server: GET /api/testbox: the delivery standing could not be read (${err instanceof Error ? err.message : String(err)})`);
+      return { kind: 'unreadable' };
+    }
+  };
   app.get('/api/testbox', async (req, reply) => {
     if (deps.cfg.authEnabled && sessionAuth(req).reason !== 'session'
       && checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/testbox') !== 'ok') return reply.code(401).send(TESTBOX_UNAUTHENTICATED);
-    return reply.code(200).send({ ok: true, testbox: watcher?.testboxLane.block() ?? null });
+    // Wave 184 (option A, the capture owner's calls 1446 and 37541): `delivery`, the newest trusted build's delivery standing,
+    // decided by `deliveryLane.ts#deliveryStandingAnswerOf`. A store read that throws answers `unreadable` and leaves the block
+    // answered; with no coordination store the key is absent, which a reader takes as unknown.
+    const coord = deps.coord;
+    return reply.code(200).send({ ok: true, testbox: watcher?.testboxLane.block() ?? null, ...(coord ? { delivery: deliveryStandingRead(coord) } : {}) });
   });
   app.post('/api/testbox/switch', async (req, reply) => {
     // D-8166 (TC13): every request writes one `switch` ledger row, by the session that asked.
@@ -2504,10 +2520,11 @@ export function registerCoordRoutes(
 
   /** D-8289: Settings › Automation › Test box's build list (`GET`, the record as `CoordStore.claudeBuilds` reads it) and the
    *  operator's **Capture again** (`POST`, `{build}` and nothing else: a FAILED build goes back to the queue, which sends it on
-   *  its next pass). Both session-gated, no box token: no machine lane reads or moves the trusted set. A record that cannot be
+   *  its next pass). The GET also carries `deliveries`, the paste delivery recipe's standing per build (Desktop polish wave 178;
+   *  `shared/deliveryLane.ts#deliveryViewsOf`, additive, no console surface reads it yet). Both session-gated, no box token: no machine lane reads or moves the trusted set. A record that cannot be
    *  read is `unavailable`, never an empty list. */
   const buildsAnswer = (reply: FastifyReply, coord: NonNullable<typeof deps.coord>): FastifyReply => {
-    try { return reply.code(200).send({ ok: true, claudeBuilds: coord.claudeBuilds() }); } catch (err) {
+    try { return reply.code(200).send({ ok: true, claudeBuilds: coord.claudeBuilds(), deliveries: deliveryViewsOf(coord.claudeBuildDeliveries()) }); } catch (err) {
       return refuseRoute(reply, 'unavailable', { detail: `the build record could not be read (${err instanceof Error ? err.message : String(err)})` });
     }
   };

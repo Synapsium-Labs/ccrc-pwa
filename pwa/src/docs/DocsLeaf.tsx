@@ -2,14 +2,15 @@
 // `contentClass(path)`. `markdown` is `DocMarkdown`; `raster` is ONE `DocImage` (its bytes through `loaders.raster`,
 // an object URL); `svg` is the same `data:` image Markdown gets, with Source and Download; `html` is the mockup viewer
 // (`MockupView`: one sandboxed frame, C2 Task 8), keyed by the document's identity and the mode; `text` is the file in `<pre class="doc-plain">`, or `CodeBlock`
-// on a one-block highlight store (W5h-a) when a registered grammar matches its extension; `other` is "No preview" and Download. A listed size over its
+// on a one-block highlight store (W5h-a) when a registered grammar matches its extension; `pdf` is the isolated PDF frame (X2 P3, spec
+// 2026-11-18 4.4: `PdfLeaf`, read by range between the class cap and the inline ceiling, Download only above it); `other` is "No preview" and Download. A listed size over its
 // class cap is the `too-large` sentence, and nothing was requested (the visit's `too-large` slot). The header and the
 // banners are `DocsScreen`'s (`DocsHead`, `DocsBanners`), above this body, so a file failure replaces only the body.
 import { useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Button } from '@ccrc/ui';
 import type { Element as HastElement } from 'hast';
 import {
-  DOCS_CLASS_CAP, DOCS_MAX_IMAGE_BYTES, contentClass, docsApi, entryView, type DocListPin, type DocPin, type DocsEntry, type DocsPageLocation,
+  DOCS_CLASS_CAP, DOCS_MAX_IMAGE_BYTES, contentClass, docsApi, entryView, pdfVerdict, type DocListPin, type DocPin, type DocsEntry, type DocsPageLocation,
   type DocsRangePin, type DocsShowOk, type DocsTreeOk,
 } from '../../../shared/docs';
 import { utf8Bytes } from '../../../shared/utf8';
@@ -26,6 +27,7 @@ import { useDocsHighlightStore } from '../lib/highlighterContext';
 import type { MarkdownParser } from '../lib/markdownRunner';
 import { DocImage, DocsAssetContext, DocsLeafImageContext, svgDataUrl, type DocsAssetContextValue } from './DocImage';
 import { MockupView } from './MockupView';
+import { PdfLeaf, pdfOverInlineSentence } from './pdf/PdfLeaf';
 import { mockupAssetReader } from './mockup/load';
 import type { MockupContext } from './mockup/ports';
 import { DocInLinkContext, DocLinkContext, fragmentTarget, type DocLinkContextValue } from './DocLink';
@@ -171,6 +173,19 @@ function TextSource(p: { readonly text: string; readonly path: string }): ReactN
  *  outside folder's (`FolderPages.tsx`) both. */
 export function SvgImage(p: { readonly bytes: Uint8Array; readonly name: string }): ReactNode {
   return <img className="docs-svg-img" src={svgDataUrl(p.bytes)} alt={p.name} />;
+}
+
+/** The `pdf` leaf (X2 spec 4.4): the PDF frame over the file route's bytes (at most the class cap), with Download beside
+ *  it. An answer that holds no bytes is the same client-built failure an SVG's is. The view is keyed by the caller. */
+function PdfBody(p: { readonly show: DocsShowOk; readonly download: ReactNode; readonly name: string }): ReactNode {
+  const bytes = useMemo(() => showBytes(p.show), [p.show]);
+  if (bytes === null) return <DocsFailureView answer={malformed(DOCS_SHOW_NO_BYTES)} />;
+  return (
+    <div className="docs-pdf">
+      <div className="docs-leaf-actions">{p.download}</div>
+      <PdfLeaf bytes={bytes} name={p.name} />
+    </div>
+  );
 }
 
 /** An `svg` leaf (spec 5.5): the bytes as the same `data:` image Markdown gets (never a `blob:`, never `/api/`),
@@ -440,16 +455,20 @@ export function DocsLeaf(p: {
   // page they were told for, so another page never inherits them.
   const versionKey = JSON.stringify([page.project, page.ref, page.at, page.section, page.path]);
   const [toldOver, setToldOver] = useState<{ key: string; blob: string; size: number } | null>(null);
-  const openKey = useRef(versionKey);
-  openKey.current = versionKey;
+  const liveTold = useRef<((over: { blob: string; size: number }) => void) | null>(null);
   const onTold = useCallback(
-    (over: { blob: string; size: number }) => {
-      // A late answer for a page already left behind is dropped: it would be matched on a later visit to that page.
-      if (openKey.current !== versionKey) return;
+    function told(over: { blob: string; size: number }) {
+      // The guard is keyed by the tap, not the page: a callback is recreated whenever `versionKey` changes, so the
+      // callback that carried a tap is the live one only while the page it was made on stays open. A late answer is
+      // dropped unless that callback is still the live one; leaving the page and coming back makes a new callback,
+      // so the old tap's answer saves nothing on the later visit.
+      if (liveTold.current !== told) return;
       setToldOver({ key: versionKey, ...over });
     }, [versionKey]);
-  // A told answer belongs to the tap that made it: leaving the page drops it (and a late answer for a left page is
-  // dropped above), so coming back to the page asks again instead of mounting a leaf that saves a file nobody asked for.
+  liveTold.current = onTold;
+  // A told answer belongs to the tap that made it: leaving the page drops it (and a late answer for a tap whose
+  // callback is no longer live is dropped above), so coming back to the page asks again instead of mounting a leaf
+  // that saves a file nobody asked for.
   useEffect(() => {
     setToldOver((t) => (t !== null && t.key !== versionKey ? null : t));
   }, [versionKey]);
@@ -474,8 +493,10 @@ export function DocsLeaf(p: {
     // source in parts, any other class a Download that reads by range first.
     // `blob`: the blob of the bytes when it is not the listing's (a version page's, named by the answer).
     // `saveOnOpen`: the leaf was handed over by a Download tap (the file route's refusal), so it saves as it opens.
-    const rangeBody = (
-      rpin: DocListPin, range: DocsRangePin, size: number, rentry: DocsEntry, blob?: string, saveOnOpen = false,
+    // A PDF above the inline ceiling (X2 spec 4.4) is read by range only for its Download, and says why it is not drawn.
+    const pdfOver = (size: number): boolean => cls === 'pdf' && pdfVerdict(size) === 'download';
+    const rangeLeaf = (
+      rpin: DocListPin, range: DocsRangePin, size: number, rentry: DocsEntry, blob: string | undefined, saveOnOpen: boolean,
     ): ReactNode => (
       <RangeLeaf
         key={rangeReadKey({ project: page.project, pin: rpin, range, size })}
@@ -499,9 +520,17 @@ export function DocsLeaf(p: {
             )
             : cls === 'text'
               ? (read) => <RangeSource read={read} path={rentry.path} />
-              : undefined}
+              : cls === 'pdf' && !pdfOver(size)
+                ? (read) => <PdfLeaf bytes={read.bytes} name={name} />
+                : undefined}
       </RangeLeaf>
     );
+    const rangeBody = (
+      rpin: DocListPin, range: DocsRangePin, size: number, rentry: DocsEntry, blob?: string, saveOnOpen = false,
+    ): ReactNode => {
+      const leaf = rangeLeaf(rpin, range, size, rentry, blob, saveOnOpen);
+      return pdfOver(size) ? <><p className="docs-note">{pdfOverInlineSentence(size)}</p>{leaf}</> : leaf;
+    };
     // A version page (review Q4): the listing's size is the served commit's, so the file route (or, for an image, the
     // raster route) answered `too-large`, and that answer names the size and the blob of this path AT the version's
     // commit: the same range read, pinned by that blob. An answer that names none keeps the class cap's sentence.
@@ -582,6 +611,9 @@ export function DocsLeaf(p: {
           break;
         case 'svg':
           body = <SvgBody key={pinKey} show={show} answered={file.answer.contentClass} download={download} name={name} />;
+          break;
+        case 'pdf':
+          body = <PdfBody key={pinKey} show={show} download={download} name={name} />;
           break;
         case 'html':
           body = (

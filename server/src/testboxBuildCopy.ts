@@ -13,8 +13,8 @@
 //   - every other refusal (`build-hash-mismatch`, `build-store-refused`, `build-copy-failed`, `busy`, the lane's own
 //     ssh codes such as `unreachable` or `host-key-changed`), an exit off the verb's grammar,
 //     a builder refusal, a frame that never left, a deadline or a lost answer ................. `copy-failed`
-// A copy whose answer says the box replaced a link at the build's name (`"replaced":"link"`, capture runner PR 3b's fix
-// round 1) is `copied` like any other, and this adapter writes one server log line saying so.
+// A copy whose answer says the box's check, made before the stream, saw a link at the build's name (`"replaced":"link"`,
+// capture runner PR 3b's fix round 1) is `copied` like any other, and this adapter writes one server log line saying so.
 // A lost answer may have placed the build after all: the next capture finds out, since the box answers `build-absent` only
 // for a build it does not hold.
 // THE FOLD, and why it is safe: the lane needs only whether to try again within the hour, which every not-sent word answers
@@ -59,7 +59,7 @@ export function testboxBuildCopy(ops: () => Pick<TestboxAdminOps, 'run'> | undef
         if (line === null) return 'copy-failed';
         if (line.ok) {
           if (ran.code !== 0) return 'copy-failed';
-          if (line.replacedLink) console.warn(`ccrc-server: build copy of ${job.build}: the test box replaced a link at the build's name with the build`);
+          if (line.replacedLink) console.warn(`ccrc-server: build copy of ${job.build}: the test box's check before the stream saw a link at the build's name`);
           return 'copied';
         }
         const word: BuildCopyAnswer = REFUSED.has(line.code) ? 'copy-refused' : NO_LANE.has(line.code) ? 'no-admin-lane' : 'copy-failed';

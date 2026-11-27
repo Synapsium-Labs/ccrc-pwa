@@ -221,7 +221,7 @@ describe('docsAnswerFromError', () => {
 });
 
 describe('DocsFailureView: the context each word renders (spec 4.7)', () => {
-  it('unresolved-ref shows what was tried, the suggestion as a link, the tag hint and Fetch from origin', () => {
+  it('an unresolved tag shows what was tried, the suggestion and the tag hint, not Fetch from origin', () => {
     const onFetch = vi.fn();
     render(
       <DocsFailureView
@@ -237,8 +237,8 @@ describe('DocsFailureView: the context each word renders (spec 4.7)', () => {
     expect(screen.getByText('refs/remotes/origin/ws/a')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'main' })).toHaveAttribute('href', '/docs/demo?ref=main');
     expect(screen.getByText(UNRESOLVED_TAG_HINT)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Fetch from origin' }));
-    expect(onFetch).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: 'Fetch from origin' })).toBeNull();
+    expect(onFetch).not.toHaveBeenCalled();
   });
 
   it("a tried result that is an Object.prototype key renders as the literal word, never a function", () => {

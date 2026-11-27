@@ -87,7 +87,8 @@ describe('the index over a four- or six-section fleet (M9.3)', () => {
 
 describe('the project, section and leaf pages over a four- or six-section tree', () => {
   const rowNames = (): (string | null | undefined)[] =>
-    [...document.querySelectorAll('.docs-project .docs-row')].map((r) => r.querySelector('.docs-row-name')?.textContent);
+    // X2 P4.1: the section rows only; the nested doc rows under each are not counted.
+    [...document.querySelectorAll('.docs-project > .docs-rows > li > .docs-row')].map((r) => r.querySelector('.docs-row-name')?.textContent);
 
   it('a project page over a four-section tree draws four section rows', async () => {
     open('/docs/demo', fakeLoaders({ tree: okTree(fourSectionTree()) }));

@@ -25,7 +25,9 @@ afterEach(removeTmpFixtures);
 /** A fake transport: answers what the row hands it, and records every job. */
 function fake(answer: (job: BuildCaptureJob) => BuildCaptureAnswer | Promise<BuildCaptureAnswer>): BuildCaptureTransport & { jobs: string[] } {
   const jobs: string[] = [];
-  return { jobs, capture: async (job) => { jobs.push(job.build); return answer(job); } };
+  // The delivery recipe's job (Desktop polish wave 178) follows a pass that sent no trust job; this file is the trust queue's,
+  // so a box that does not run the recipe answers it and it is not recorded (`delivery-lane-capture.test.ts` is the recipe's).
+  return { jobs, capture: async (job) => { if (job.recipe === 'delivery') return { kind: 'unavailable', why: 'no-runner' }; jobs.push(job.build); return answer(job); } };
 }
 const pass = (job: BuildCaptureJob): BuildCaptureAnswer => ({ kind: 'answered', result: { build: job.build, pass: true, cwd: true, output: 'replay: 40 passed' } });
 const fail = (job: BuildCaptureJob): BuildCaptureAnswer => ({ kind: 'answered', result: { build: job.build, pass: false, cwd: true, output: 'replay: 1 failed\nStop: missing field' } });

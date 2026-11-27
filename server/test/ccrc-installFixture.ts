@@ -78,7 +78,7 @@ import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { mkTmp } from './tmpHelpers.js';
-import { scaled } from './timeScale.js';
+import { scaled, platformDeadline } from './timeScale.js';
 import { FIXTURE_DF_INODES_LINES } from './fixtureDfInodes.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
@@ -873,12 +873,65 @@ export function runInstall(home: string, args: string[] = ['install'],
   assertSpineFrontContained(env, home, { expectAbsent });
   assertNoRealTool(env, home);
   const ccrc = opts.from ?? ccrcIn(treeRoot(home));
+  if (args[0] === 'install') installerRuns++;
   const r = opts.umask === undefined
     ? spawnSync(BASH, [ccrc, ...args], { env, encoding: 'utf8' })
     : spawnSync(BASH, ['-c', `umask ${opts.umask}; exec ${BASH} "$0" "$@"`,
       ccrc, ...args], { env, encoding: 'utf8' });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
+
+// ── The bound of a case that runs the installer (#3408) ────────────────────────────────────────────────────────────
+// One `ccrc install` is the cost unit of these suites: about 7 to 9 s on the fleet box (a case's own work beside it is
+// a few hundred ms), 4 to 8 s on a hosted runner alone, and up to 14.7 s for a whole single-install case on one beside
+// the test-typecheck suite's heavy cases (`ccrc-install-versioned`, measured on the fast run and the queue run of
+// #3411). The package's default per-case bound is 20 s, so a case that installs twice or three times sat on it: one
+// installed-tree case and two versioned-tree cases reached 20.1 to 21.5 s there, against 12.9 s on a quiet run, and a
+// few hundred milliseconds decided a pass.
+// So a case that runs the installer states how many installs it makes and takes its bound from that count, in this
+// one place: `INSTALL_RUN_MS` for each install plus `INSTALL_CASE_BASE_MS` for the case's own work and margin. Both are
+// written from the slowest measured figure, so each case's bound is at least twice its slowest measured duration on a
+// hosted runner (1 install 30 s against 14.7 s; 2 installs 45 s against 21.5 s; 3 installs 60 s against 20.1 s).
+// It is a bound on a slow case, not a watchdog: a synchronous body that blocks cannot be interrupted by the per-case
+// timer, so the timer fails a slow case once its body returns, and a hung installer run ends with the job's own limit
+// (no timeout is put on the spawn here). `itInstalls` also measures the count (the installs `runInstall` made while the
+// case ran) and fails when it differs from the one the bound was written from, so a case that gains an install cannot
+// keep its old bound silently; `ccrc-install-tree.test.ts` pins both that and which cases carry the wrapper. Only the
+// `install` verb counts: a `version`, `doctor` or `update` run is a fraction of one.
+// The installer family's own convention is an explicit `scaled(...)` bound on a whole-spine case, which the pin in
+// `ccrc-install-tree.test.ts` ("the whole-spine cases … carry an explicit bound") requires for five titles. The wrapper
+// sits beside it because a bound written as a literal says nothing of the count it came from and goes stale when a
+// case gains an install; the wrapper derives it, and measures it.
+/** A whole single-install case's slowest hosted duration (14.66 s), rounded up, in ms: the per-install term. */
+export const INSTALL_RUN_MS = 15_000;
+/** A case's own work beside its installs, and the margin that keeps its bound at twice the slowest measurement, in ms. */
+export const INSTALL_CASE_BASE_MS = 15_000;
+/** The slowest hosted duration measured for a case with this many installs, in ms, from the runs #3408 names: 14,660 ms
+ *  (a single-install case, the fast run's first attempt), 21,521 ms (two installs, the same attempt) and 20,146 ms
+ *  (three installs, a queue run). The pin in `ccrc-install-tree.test.ts` holds each bound at twice its figure. */
+export const SLOWEST_HOSTED_MS = { 1: 14_660, 2: 21_521, 3: 20_146 } as const;
+/** The suite's default per-case bound, as `vitest.config.ts` sets `testTimeout`: the pin in `ccrc-install-tree.test.ts`
+ *  reads both and fails when the two spell different values (the worker offers no read of the configured one). */
+export const SUITE_CASE_MS = scaled(process.platform === 'darwin' ? 90_000 : 20_000);
+/** The bound of a case that runs `ccrc install` `runs` times: this suite's one formula, scaled and Darwin-adjusted as
+ *  every deadline a test sets for itself is (`platformDeadline`, D-8398), and never below the suite's own default for
+ *  the platform (`SUITE_CASE_MS`). Today the floor raises nothing: with both terms at 15 s the single-install formula
+ *  on macOS is 90 s, the default exactly. It guards a later lowering of a constant, which would otherwise leave macOS
+ *  under its own default. The collector suite's budget uses `scaled` alone, which has no such floor. */
+export const installBudgetMs = (runs: number): number =>
+  Math.max(platformDeadline(INSTALL_CASE_BASE_MS + runs * INSTALL_RUN_MS), SUITE_CASE_MS);
+/** Every `ccrc install` `runInstall` has spawned in this process; `itInstalls` reads it before and after a case. */
+let installerRuns = 0;
+/** `it` for a case that runs `ccrc install` exactly `runs` times: the bound is `installBudgetMs(runs)`, and the case
+ *  ends by measuring the count, so a budget never goes stale silently. The body is synchronous, as these cases are.
+ *  `runner` is `it`, or `itLinux` for a case the macOS leg skips. */
+export const itInstalls = (runs: number, runner: (title: string, body: () => void, timeout?: number) => void = it) => (title: string, body: () => void): void => {
+  runner(title, () => {
+    const before = installerRuns;
+    body();
+    expect(installerRuns - before, 'the `ccrc install` runs the bound of this case is written from').toBe(runs);
+  }, installBudgetMs(runs));
+};
 
 /** The tool `_plat_sha256` runs on this platform (the platform layer's two arms). */
 export const SHA256_TOOL = process.platform === 'darwin' ? 'shasum' : 'sha256sum';

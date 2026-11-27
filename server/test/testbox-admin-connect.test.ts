@@ -279,15 +279,31 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin conn
     expect(lastAct(h).outcome).toBe('ok');
     const tok = readFileSync(h.token, 'utf8');
     expect(tok).toMatch(/^[0-9a-f]{64}$/);
-    expect(stdinOf(h, 'p=/var/lib/')).toBe(tok);
+    expect(stdinOf(h, 'token-home')).toBe(tok);
     expect(readFileSync(h.log, 'utf8')).not.toContain(tok);
-    const cmd = sshCalls(h).map(cmdOf).find((c) => c.includes('p=/var/lib/'))!;
-    // a temp beside the file and a rename: `install … /dev/stdin` over a token already there fails on some userlands
-    expect(cmd).toContain('mktemp "$p.XXXXXXXX"');
-    expect(cmd).toContain('chmod 0600 "$t" && mv -f -- "$t" "$p"');
+    const cmd = sshCalls(h).map(cmdOf).find((c) => c.includes('token-home'))!;
+    // in the service user's home, so written as that user, through the one drop (ccd/testbox-user-write; the property cases are in
+    // testbox-admin-user-writes.test.ts): a temp beside the file and a rename, never `install … /dev/stdin`, which over a token
+    // already there fails on some userlands
+    expect(cmd).toContain('h=${4:-/var/lib}/$s');
+    expect(cmd).toContain('exec setpriv --reuid="$u" --regid="$g" --clear-groups --inh-caps=-all --reset-env -- sh -c "$w" sh "$h" "$p"');
+    expect(cmd).toContain('tba_put "$1" "$2" 0600');
+    expect(cmd).toContain('mv -fT -- "$t" "$f"');
     expect(cmd).not.toContain('/dev/stdin');
     expect(cmd).toContain('ccrc-tb-svc');
     expect(sshCalls(h).map(cmdOf).some((c) => c.includes('systemctl restart ccrc-testbox.service'))).toBe(true);
+  });
+
+  // testbox-admin-hardening: a box whose token step refuses (a word of its own, exit 5) ends pair-failed, the code a failed token
+  // write always had, with the box's word in this host's log and never in an answer; the service is not restarted.
+  it('a token step the box refuses ends pair-failed, with the box\'s word in the log only', () => {
+    const h = fixture({}, [['token-home', '5', 'token-dir\\n'], ...PASSING_RULES]);
+    connectedTo(h);
+    const a = act(h, WORDS());
+    expect(lastAct(h)).toMatchObject({ outcome: 'failed', code: 'pair-failed', phase: 'pair' });
+    expect(readFileSync(h.lg, 'utf8')).toContain('connect: the token was not placed (rc 5: token-dir)');
+    expect(a.out + a.err).not.toContain('token-dir');
+    expect(sshCalls(h).map(cmdOf).some((c) => c.includes('systemctl restart ccrc-testbox.service'))).toBe(false);
   });
 
   it('the token file is 0600 by a temp and a rename', () => {

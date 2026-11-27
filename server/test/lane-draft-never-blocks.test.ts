@@ -251,6 +251,8 @@ const CALL_SITES: readonly Site[] = [
   // The renewal host's two first prompts, one call per `RenewalPrompt` row (Overlord W1a; the Overlord's own row, designation).
   { file: 'continuity/renewalWiring.ts', fn: 'renewalHostOf', policy: 'stash' }, // `renewal-first-prompt`
   { file: 'continuity/renewalWiring.ts', fn: 'renewalHostOf', policy: 'stash' }, // `overlord-first-prompt`
+  // The paste delivery recipe's driver (Desktop polish wave 178): the route's own options on a test box capture's own session.
+  { file: 'inject/deliveryDrive.ts', fn: 'driveCase', policy: 'refuse-or-replace' },
 ];
 
 const FN_RE = /^ {2}(?:private |public |protected )?(?:static )?(?:async )?(?!(?:if|for|while|switch|catch|return|await)\b)([A-Za-z_]\w*)\s*\(|^(?:export )?(?:async )?function\s+([A-Za-z_]\w*)|app\.(get|post|put|patch|delete)\('([^']+)'/;

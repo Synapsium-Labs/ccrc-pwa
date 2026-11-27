@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   DOCS_API_PREFIX, DOCS_PAGE_KEYS, DOCS_PAGE_PREFIX, DOCS_PIN_KEYS, DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE,
-  docsApi, docsPageUrl, parseDocsPage, type DocPin, type DocsPageLocation, type DocsPageParseFailure,
+  docsApi, docsPageUrl, parseDocsPage, docsResolvedRefLocation, type DocPin, type DocsPageLocation, type DocsPageParseFailure,
 } from '../../shared/docs.js';
 
 const C40 = 'a'.repeat(40);
@@ -49,6 +49,23 @@ const CANONICAL: readonly (readonly [string, DocsPageLocation])[] = [
   ['/docs/demo/specs/a%20b/%C3%A9.md', leaf('a b/' + String.fromCodePoint(0xe9) + '.md')],
   ['/docs/demo/specs/x%2By.md', leaf('x+y.md')],
 ];
+
+describe('M11.36 and M11.48: resolved refs canonicalise safely', () => {
+  it('accepts tag ref syntax and uses the validated resolved commit only on a leaf', () => {
+    const r = parse('/docs/demo/specs/a.md?ref=refs/tags/v1');
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const hint = { ok: false, failure: 'unresolved-ref', resolved: { commit: C40, via: 'tag' } };
+    const loc = docsResolvedRefLocation(r.loc as DocsPageLocation, hint);
+    expect(loc && docsPageUrl(loc)).toBe(`/docs/demo/specs/a.md?at=${C40}`);
+    const listing = parse('/docs/demo/specs/sub/?ref=release');
+    if (!listing.ok) throw new Error('listing parse failed');
+    const dir = docsResolvedRefLocation(listing.loc as DocsPageLocation, hint);
+    expect(dir && docsPageUrl(dir)).toBe('/docs/demo/specs/sub/');
+    expect(docsResolvedRefLocation(r.loc as DocsPageLocation,
+      { ...hint, resolved: { commit: 'bad', via: 'tag' } })).toBeNull();
+  });
+});
 
 describe('M3.1: canonical page URLs round-trip', () => {
   it.each(CANONICAL)('%s', (url, loc) => {
@@ -203,7 +220,7 @@ describe('M3.3: view and frame canonicalisation; unknown and repeated keys', () 
     ['/docs/demo/specs/m.html?frame=inline', 'bad-frame'],
     ['/docs/demo?ref=-x', 'bad-ref'],
     ['/docs/demo?ref=main~1', 'bad-ref'],
-    ['/docs/demo?ref=refs/tags/v1', 'bad-ref'],
+    ['/docs/demo?ref=refs/tags/a..b', 'bad-ref'],
     ['/docs/demo?ref=', 'bad-ref'],
     ['/docs/demo?ref=%zz', 'bad-escape'],
     ['/docs/demo?%zz=1', 'bad-escape'],

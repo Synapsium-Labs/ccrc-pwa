@@ -497,7 +497,7 @@ describe('one badge function: Share names the badge the row shows (M4.T7, Share 
 describe('shareStateFor: where Share is offered, and when it waits (spec 4.5, 4.16; M4.SH8 pure half, M4.EX12)', () => {
   const tree = treeOk({
     entries: [
-      entry('specs', 'a.md'), entry('specs', 'm.html'), entry('specs', 'x.png'), entry('specs', 'o.pdf'),
+      entry('specs', 'a.md'), entry('specs', 'm.html'), entry('specs', 'x.png'), entry('specs', 'o.zip'),
       entry('specs', 'big.png', { committed: { kind: 'file', blob: BLOB_2, size: DOCS_CLASS_CAP.raster + 1 } }),
       entry('specs', 'l.md', { committed: { kind: 'symlink', blob: BLOB_1, size: 10 } }),
       entry('specs', 'd/x.md'),
@@ -538,8 +538,8 @@ describe('shareStateFor: where Share is offered, and when it waits (spec 4.5, 4.
   });
 
   it("a class Docs does not preview reads nothing, so it is ready at pinFor's pin (refinement (q))", () => {
-    const pin = pinOf(tree, '/docs/demo/specs/o.pdf');
-    expect(shareStateFor(pageAt('/docs/demo/specs/o.pdf'), tree, NO_FILE, null)).toEqual(readyAt(pin));
+    const pin = pinOf(tree, '/docs/demo/specs/o.zip');
+    expect(shareStateFor(pageAt('/docs/demo/specs/o.zip'), tree, NO_FILE, null)).toEqual(readyAt(pin));
   });
 
   it('a raster leaf waits for its own image, and is ready at the pin the image settled at (refinement (f))', () => {

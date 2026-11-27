@@ -562,3 +562,48 @@ describe('unsettledFacts and messageFactsById: the text-free readers', () => {
     expect(f.store.messageFactsById(1).kind).toBe('unmeasured');
   });
 });
+
+describe('lastServedReadAt: the Overlord\'s proof of its current generation', () => {
+  it('an empty inbox read (outcome rows, count 0) counts as served (call 1319, point 4)', () => {
+    const f = fixture();
+    f.store.recordRead({ ...SERVED, at: 1_500, generation: 7, door: 'inbox', count: 0 });
+    expect(f.store.lastServedReadAt(7, 1_000)).toEqual({ kind: 'measured', value: 1_500 });
+  });
+  it('answers the newest served line of the generation after sinceMs, from any door, leaving out everything else', () => {
+    const f = fixture();
+    f.store.recordRead({ ...SERVED, at: 1_000, generation: 5 });                                   // at sinceMs: left out
+    f.store.recordRead({ ...SERVED, at: 900, generation: 5 });                                     // before: left out
+    f.store.recordRead({ ...SERVED, at: 1_100, generation: 5, door: 'inbox' });
+    f.store.recordRead({ ...SERVED, at: 1_200, generation: 5, door: 'messages' });
+    f.store.recordRead({ ...OPERATOR_LINE, at: 1_900, generation: 5 });                            // the console: left out
+    f.store.recordRead({ ...SERVED, at: 1_800, generation: 5, outcome: 'refused' });               // another outcome
+    f.store.recordRead({ ...SERVED, at: 1_850, generation: 5, outcome: 'unmeasured' });
+    f.store.recordRead({ ...SERVED, at: 1_950, generation: 6 });                                   // another generation
+    expect(f.store.lastServedReadAt(5, 1_000)).toEqual({ kind: 'measured', value: 1_200 });
+    expect(f.store.lastServedReadAt(6, 1_000)).toEqual({ kind: 'measured', value: 1_950 });
+  });
+
+  it('a served line from a reader caller of the generation counts', () => {
+    const f = fixture();
+    f.store.recordRead({ ...SERVED, at: 2_000, generation: 5, caller: 'reader' });
+    expect(f.store.lastServedReadAt(5, 0)).toEqual({ kind: 'measured', value: 2_000 });
+  });
+
+  it('answers none when nothing qualifies', () => {
+    const f = fixture();
+    expect(f.store.lastServedReadAt(5, 0)).toEqual({ kind: 'measured', value: 'none' });
+    f.store.recordRead({ ...SERVED, at: 1_000, generation: 5 });
+    expect(f.store.lastServedReadAt(5, 1_000)).toEqual({ kind: 'measured', value: 'none' });
+    expect(f.store.lastServedReadAt(4, 0)).toEqual({ kind: 'measured', value: 'none' });
+  });
+
+  it('a bad argument answers unmeasured, and so does a closed handle', () => {
+    const f = fixture();
+    expect(f.store.lastServedReadAt(-1, 0).kind).toBe('unmeasured');
+    expect(f.store.lastServedReadAt(1.5, 0).kind).toBe('unmeasured');
+    expect(f.store.lastServedReadAt(1, -5).kind).toBe('unmeasured');
+    expect(f.store.lastServedReadAt(Number.NaN, 0).kind).toBe('unmeasured');
+    f.db.close();
+    expect(f.store.lastServedReadAt(1, 0).kind).toBe('unmeasured');
+  });
+});

@@ -468,3 +468,38 @@ describe('logLineRedactors() equals [ccd/ccrc#_upd_redact], may only shrink (C5i
     expect(c5iInlineUserinfoStrips().map((s) => s.name)).toEqual([]);
   });
 });
+
+// X2 P4.4, M11.23: no tracker address ships in these three source roots or the pinned reader's defaults.
+// Hosted server jobs install the PWA dependency tree too (`.github/actions/server-deps/action.yml`).
+import { EMPTY_DOCS_SETTINGS } from '../../../shared/docsTracker.js';
+import { containsTrackerAddress, trackerAddressFiles } from './docsTrackerHostScan.js';
+
+describe('Docs tracker defaults (X2 P4.4)', () => {
+  it('CONTROL: finds a hard-coded issue URL and a template; permits an unrelated link', () => {
+    expect(containsTrackerAddress('const link = "https://tracker-fixture.invalid/browse/EXAMPLE-1";')).toBe(true);
+    expect(containsTrackerAddress('const template = "https://tracker-fixture.invalid/path/{1}";')).toBe(true);
+    expect(containsTrackerAddress('const web = "https://project-fixture.invalid/docs/readme";')).toBe(false);
+  });
+
+  it('no tracker host in pwa/src, server/src or shared, and no default rule', () => {
+    expect(EMPTY_DOCS_SETTINGS).toEqual({ rules: [], defaultBranches: {} });
+    expect(trackerAddressFiles(ccrcRoot, ['pwa/src', 'server/src', 'shared'])).toEqual([]);
+  });
+
+  const pwaRoot = path.join(ccrcRoot, 'pwa');
+  // A server-only local install can run the shipped-source guard above. CI must also prove the installed bytes.
+  it.skipIf(!process.env.CI && statSync(path.join(pwaRoot, 'node_modules'), { throwIfNoEntry: false }) === undefined)(
+    'no tracker host ships in the pinned reader library defaults', () => {
+      const lock = JSON.parse(readFileSync(path.join(pwaRoot, 'package-lock.json'), 'utf8')) as { packages: Record<string, { version?: string }> };
+      // The library rename is an independent pin wave. Scan whichever single reader the lock actually pins.
+      const pins = Object.entries(lock.packages).filter(([name]) => /^node_modules\/@synapsium-labs\/(?:docserver|pinax-lib)$/.test(name));
+      expect(pins.map(([name]) => name), 'exactly one reader pin').toHaveLength(1);
+      const [name, pin] = pins[0]!;
+      const reader = path.join(pwaRoot, name);
+      const installed = JSON.parse(readFileSync(path.join(reader, 'package.json'), 'utf8')) as { version?: string };
+      expect(installed.version).toBeTypeOf('string');
+      expect(installed.version).toBe(pin.version);
+      expect(trackerAddressFiles(reader, ['dist', 'assets'], (f) => f.startsWith('dist/conformance/'))).toEqual([]);
+    },
+  );
+});

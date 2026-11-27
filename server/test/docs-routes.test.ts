@@ -544,6 +544,7 @@ describe('T7: a refresh body or :project that fails its parser is refused before
     ['reason neither auto nor manual', 'application/json', '{"ref":null,"reason":"later"}', badQuery('body', 'reason')],
     ['an unknown key x', 'application/json', '{"ref":null,"reason":"auto","x":1}', badQuery('unknown', 'x')],
     ['a ref in neither grammar', 'application/json', '{"ref":"a..b","reason":"auto"}', word('bad-ref')],
+    ['a tag ref in a refresh POST', 'application/json', '{"ref":"refs/tags/release","reason":"manual"}', word('bad-ref')],
     ['a body of 1 MiB + 1', 'application/json', `{"ref":"${'x'.repeat(1048577)}","reason":"auto"}`, badQuery('body')],
     ['a form-encoded body', 'application/x-www-form-urlencoded', 'ref=main&reason=auto', badQuery('body')],
   ];

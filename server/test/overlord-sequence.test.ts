@@ -12,8 +12,8 @@ import { RUNGS } from '../../shared/overlord-ladder.js';
 import { retentionCutCases, sequenceLineKnownCases, sequenceLineVerdictCases, sequencePageCases } from './sim/sequenceSets.js';
 
 describe('the sequence vocabulary (shared/overlord-sequence.ts)', () => {
-  it('names generation, designation, message and the ladder\'s two kinds of line, each with its id rule and spec text', () => {
-    expect(L0.SEQUENCE_KINDS).toEqual(['generation', 'designation', 'message', 'ladder-rung', 'ladder-latch']);
+  it('names generation, designation, message, the ladder\'s two kinds of line and the readiness word, each with its id rule and spec text', () => {
+    expect(L0.SEQUENCE_KINDS).toEqual(['generation', 'designation', 'message', 'ladder-rung', 'ladder-latch', 'readiness']);
     for (const k of L0.SEQUENCE_KINDS) {
       expect(L0.SEQUENCE_KIND_MAP[k].id.length).toBeGreaterThan(0);
       expect(L0.SEQUENCE_KIND_MAP[k].spec).toMatch(/^§10\.4 /);

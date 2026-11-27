@@ -5,8 +5,8 @@
 // are built with `String.fromCharCode`.
 import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { FRAME_MANIFEST, frameCsp, mermaidGate, type RenderInput } from '@synapsium-labs/docserver/frame';
-import type { DocFrame, HostAdapters, HostLink, mountDocFrame, HiddenChar } from '@synapsium-labs/docserver/host';
+import { FRAME_MANIFEST, frameCsp, isAnchorToken, mermaidGate, type RenderInput } from '@synapsium-labs/pinax-lib/frame';
+import type { DocFrame, HostAdapters, HostLink, mountDocFrame, HiddenChar } from '@synapsium-labs/pinax-lib/host';
 import { READER_STORE_PREFIX } from '../src/lib/readerLimits';
 import type { EnumerableStoragePort } from '../src/lib/storage';
 import {
@@ -14,8 +14,12 @@ import {
   type ReaderChrome, type ReaderE17Reading, type ReaderLink,
 } from '../src/docs/reader/policy';
 import { READER_LAB_DRAW_WATCHDOG_MS } from '../src/lib/readerLimits';
-import { loadReaderAssets } from '../src/docs/reader/assets';
-import { mountReader, type ReaderMountInput } from '../src/docs/reader/bridge';
+import { loadReaderAssets, loadReaderFonts } from '../src/docs/reader/assets';
+import { READER_APPEARANCE_MAP } from '../src/docs/reader/appearance';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { parseAppearance } from '@synapsium-labs/pinax-lib/frame';
+import { mountReader, TOP_TOKEN, type ReaderMountInput } from '../src/docs/reader/bridge';
 import type { ReaderVersionSeed } from '../src/docs/reader/history';
 
 afterEach(() => {
@@ -52,7 +56,10 @@ const STUB_ASSETS = { guard: 'g', bootstrap: 'b', enhance: 'e', css: 'c' };
 
 interface Rig {
   readonly input: { [K in keyof ReaderMountInput]: ReaderMountInput[K] };
-  readonly frame: { update: ReturnType<typeof vi.fn>; setPrefs: ReturnType<typeof vi.fn>; destroy: ReturnType<typeof vi.fn>; command: ReturnType<typeof vi.fn> };
+  readonly frame: {
+    update: ReturnType<typeof vi.fn>; setPrefs: ReturnType<typeof vi.fn>; setAppearance: ReturnType<typeof vi.fn>;
+    destroy: ReturnType<typeof vi.fn>; command: ReturnType<typeof vi.fn>; closeOverlay: ReturnType<typeof vi.fn>; goto: ReturnType<typeof vi.fn>;
+  };
   readonly mount: ReturnType<typeof vi.fn>;
   readonly mermaid: ReturnType<typeof vi.fn>;
   readonly options: () => { document: RenderInput; adapters: HostAdapters };
@@ -75,17 +82,36 @@ function rig(o: {
   profile?: 'lab-draw'; version?: ReaderVersionSeed; changes?: ReaderMountInput['changes']; openVersion?: ReaderMountInput['openVersion'];
   /** The element mounted into (default: a detached div). */
   el?: HTMLElement;
+  appearanceRoot?: HTMLElement;
+  libraryContract?: () => number | 'none';
+  fonts?: () => Promise<{ sans: string; mono: string }>;
+  strictOld?: boolean;
+  validateAppearance?: boolean;
+  onMount?: () => void;
+  /** The place callback a mount is given (default: none, as the reader lab's mounts). */
+  onPlace?: ReaderMountInput['onPlace'];
 } = {}): Rig {
   const order: string[] = [];
   const newFrame = (): Rig['frame'] => {
     const n = frames.length;
-    const f = { update: vi.fn(), setPrefs: vi.fn(), destroy: vi.fn(() => { order.push(`destroy ${n}`); }), command: vi.fn() };
+    const f = {
+      update: vi.fn(), setPrefs: vi.fn(), setAppearance: vi.fn(), destroy: vi.fn(() => { order.push(`destroy ${n}`); }), command: vi.fn(),
+      closeOverlay: vi.fn(), goto: vi.fn(),
+    };
     frames.push(f);
     return f;
   };
   const frames: Rig['frame'][] = [];
   const frame = newFrame();
   const mount = vi.fn((_el: HTMLElement, _o: { document: RenderInput; adapters: HostAdapters }) => {
+    o.onMount?.();
+    if (o.strictOld) {
+      const keys = ['assets', 'copy', 'docKey', 'focus', 'mermaidDraw', 'onFallback', 'onHash', 'onLink', 'onReady', 'prefs', 'store', 'storePrefix', 'title', 'watchdogMs', 'loadMermaid', 'features', 'onProgress', 'changes', 'openVersion'];
+      if (Object.keys(_o.adapters).some((key) => !keys.includes(key)) || 'fonts' in _o.adapters.assets) throw new TypeError('unknown adapter');
+    }
+    if (o.validateAppearance && _o.adapters.appearance !== undefined) {
+      if (JSON.stringify(parseAppearance(_o.adapters.appearance).appearance) !== JSON.stringify(_o.adapters.appearance)) throw new TypeError('unvalidated appearance');
+    }
     order.push(`mount ${mount.mock.calls.length - 1}`);
     return (mount.mock.calls.length === 1 ? frame : newFrame()) as unknown as DocFrame;
   });
@@ -104,6 +130,8 @@ function rig(o: {
     ...(o.version === undefined ? {} : { version: o.version }),
     ...(o.changes === undefined ? {} : { changes: o.changes }),
     ...(o.openVersion === undefined ? {} : { openVersion: o.openVersion }),
+    ...(o.appearanceRoot === undefined ? {} : { appearanceRoot: o.appearanceRoot }),
+    ...(o.onPlace === undefined ? {} : { onPlace: o.onPlace }),
   };
   const store = o.store === undefined ? fakeStore() : o.store;
   const run = () => mountReader(o.el ?? document.createElement('div'), input, {
@@ -111,6 +139,8 @@ function rig(o: {
     store: () => store,
     assets: o.assets ?? (() => Promise.resolve(STUB_ASSETS)),
     mermaid,
+    ...(o.libraryContract === undefined ? {} : { libraryContract: o.libraryContract }),
+    ...(o.fonts === undefined ? {} : { fonts: o.fonts }),
     ...(o.e17 === 'recorded' ? {} : { e17: o.e17 ?? 'does-not-hold' }),
   });
   return {
@@ -118,6 +148,194 @@ function rig(o: {
     options: () => mount.mock.calls[0]![1], optionsAt: (n) => mount.mock.calls[n]![1],
   };
 }
+
+describe('host appearance', () => {
+  function root(): HTMLElement {
+    const el = document.createElement('div');
+    document.body.append(el);
+    el.dataset.skin = 'refined'; el.dataset.theme = 'first';
+    el.style.setProperty('color-scheme', 'light');
+    for (const token of Object.values(READER_APPEARANCE_MAP.colour)) el.style.setProperty(token, '#123456');
+    return el;
+  }
+  const fonts = { sans: 'sans', mono: 'mono' };
+
+  it.each(['assets', 'mermaid', 'fonts'] as const)('reads after the %s wait and again on remount', async (held) => {
+    const el = root();
+    let release!: () => void;
+    let entered!: () => void;
+    const waiting = new Promise<void>((resolve) => { entered = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const wait = async <T,>(value: T): Promise<T> => { entered(); await gate; return value; };
+    const computed = window.getComputedStyle.bind(window);
+    let yielded = false;
+    const read = vi.spyOn(window, 'getComputedStyle').mockImplementation((element, pseudo) => {
+      yielded = false;
+      queueMicrotask(() => { yielded = true; });
+      return computed(element, pseudo);
+    });
+    const r = rig({ appearanceRoot: el,
+      document: docOf({ scan: { mermaid: mermaidCounts(1, 10, 10) } }),
+      assets: () => held === 'assets' ? wait(STUB_ASSETS) : Promise.resolve(STUB_ASSETS),
+      mermaid: () => held === 'mermaid' ? wait('MERMAID') : Promise.resolve('MERMAID'),
+      fonts: () => held === 'fonts' ? wait(fonts) : Promise.resolve(fonts),
+      onMount: () => { expect(read.mock.calls.length).toBeGreaterThan(0); expect(yielded, 'no microtask between read and mount').toBe(false); },
+    });
+    const pending = r.run();
+    await waiting;
+    if (held === 'fonts') await vi.waitFor(() => expect(r.mermaid).toHaveBeenCalledTimes(1));
+    expect(read).not.toHaveBeenCalled();
+    el.dataset.theme = 'second'; el.style.setProperty('--bg-page', '#abcdef');
+    release();
+    const mount = await pending;
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(mount.seed).toEqual({ hosted: true, stamp: 'refined|second' });
+    expect(r.options().adapters.appearance?.colour?.bg).toBe('#abcdef');
+    expect(r.options().adapters.assets.fonts).toEqual(fonts);
+    expect(r.options().adapters.prefs?.theme).toBeUndefined();
+    el.dataset.theme = 'third';
+    mount.openAt!('x');
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(mount.seed).toEqual({ hosted: true, stamp: 'refined|third' });
+  });
+
+  it('starts hosted faces and base assets before either settles', async () => {
+    let releaseAssets!: (value: typeof STUB_ASSETS) => void;
+    let releaseFonts!: (value: typeof fonts) => void;
+    const order: string[] = [];
+    const assets = vi.fn(() => { order.push('base'); return new Promise<typeof STUB_ASSETS>((resolve) => { releaseAssets = resolve; }); });
+    const faces = vi.fn(() => { order.push('faces'); return new Promise<typeof fonts>((resolve) => { releaseFonts = resolve; }); });
+    const r = rig({ appearanceRoot: root(), assets, fonts: faces });
+    const pending = r.run();
+    expect(assets).toHaveBeenCalledTimes(1);
+    expect(faces).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(['base', 'faces']);
+    expect(r.mount).not.toHaveBeenCalled();
+    releaseFonts(fonts); releaseAssets(STUB_ASSETS);
+    await pending;
+    expect(r.options().adapters.assets.fonts).toEqual(fonts);
+  });
+
+  it.each(['reject', 'throw'] as const)('base %s falls back without waiting for pending faces', async (failure) => {
+    const faces = vi.fn(() => new Promise<typeof fonts>(() => {}));
+    const r = rig({ appearanceRoot: root(), fonts: faces, assets: () => {
+      if (failure === 'throw') throw new Error('base failed');
+      return Promise.reject(new Error('base failed'));
+    } });
+    await r.run();
+    expect(faces).toHaveBeenCalledTimes(1);
+    expect(r.input.onFallback).toHaveBeenCalledWith('assets');
+    expect(r.mount).not.toHaveBeenCalled();
+  });
+
+  it.each(['reject', 'throw'] as const)('face %s is contained while base assets are held', async (failure) => {
+    let release!: (value: typeof STUB_ASSETS) => void;
+    const r = rig({ appearanceRoot: root(),
+      assets: () => new Promise<typeof STUB_ASSETS>((resolve) => { release = resolve; }),
+      fonts: () => { if (failure === 'throw') throw new Error('faces failed'); return Promise.reject(new Error('faces failed')); },
+    });
+    const pending = r.run();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(r.mount).not.toHaveBeenCalled();
+    release(STUB_ASSETS);
+    await pending;
+    expect(r.options().adapters.assets.fonts).toBeUndefined();
+    expect(r.input.onFallback).not.toHaveBeenCalled();
+  });
+
+  it('only passes the validated appearance, and follows drops without setPrefs', async () => {
+    expect(parseAppearance({ mode: 'light', skin: { radius: '99px' } }).appearance.skin?.radius).toBeUndefined();
+    const el = root(); el.style.setProperty('--r-md', '99px');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const r = rig({ appearanceRoot: el, fonts: () => Promise.resolve(fonts), validateAppearance: true });
+    const m = await r.run();
+    el.dataset.theme = 'changed';
+    m.follow('dark');
+    expect(m.seed).toEqual({ hosted: true, stamp: 'refined|first' });
+    r.frame.setAppearance.mockClear();
+    expect(r.options().adapters.appearance?.skin?.radius).toBeUndefined();
+    expect(Object.keys(r.options().adapters).sort()).toEqual(['appearance', 'assets', 'copy', 'docKey', 'focus', 'mermaidDraw', 'onFallback', 'onHash', 'onLink', 'onReady', 'store', 'storePrefix', 'title', 'watchdogMs'].sort());
+    el.style.removeProperty('--bg-page');
+    m.follow('dark'); m.follow('dark');
+    expect(r.frame.setAppearance).toHaveBeenCalledTimes(2);
+    expect(r.frame.setAppearance.mock.lastCall![0]).toMatchObject({ mode: 'light' });
+    expect(r.frame.setAppearance.mock.lastCall![0].colour).toBeUndefined();
+    expect(r.frame.setPrefs).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]![0]).toContain('ccrc-reader: ');
+    expect(warn.mock.calls[0]![0]).toContain('colour-unreadable');
+    expect(warn.mock.calls[0]![0]).toContain('--bg-page');
+    el.style.setProperty('--bg-page', '#123456'); el.style.removeProperty('--bg-surface');
+    m.follow('dark'); expect(warn).toHaveBeenCalledTimes(2);
+    const read = vi.spyOn(window, 'getComputedStyle');
+    m.destroy(); m.follow('light'); expect(r.frame.setAppearance).toHaveBeenCalledTimes(3);
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('mounts with an appearance and warns once when its colour group is dropped', async () => {
+    const el = root(); el.style.removeProperty('--bg-page');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const r = rig({ appearanceRoot: el, fonts: () => Promise.resolve(fonts) });
+    const m = await r.run();
+    expect(r.options().adapters.appearance).toMatchObject({ mode: 'light' });
+    expect(r.options().adapters.appearance?.colour).toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]![0]).toMatch(/^ccrc-reader: .*colour-unreadable.*--bg-page/);
+    m.follow('dark'); expect(warn).toHaveBeenCalledTimes(1);
+    el.style.setProperty('--bg-page', 'not-a-colour');
+    m.follow('dark'); expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls[1]![0]).toContain('colour-refused');
+    expect(warn.mock.calls[1]![0]).toContain('--bg-page');
+    el.style.setProperty('--bg-page', '#123456'); el.style.removeProperty('--bg-surface');
+    m.follow('dark'); expect(warn).toHaveBeenCalledTimes(3);
+    el.style.setProperty('--bg-surface', '#123456'); el.style.removeProperty('--bg-raised');
+    m.follow('dark'); expect(warn).toHaveBeenCalledTimes(4);
+    expect(warn.mock.calls[2]![0]).toContain('colour-unreadable');
+    expect(warn.mock.calls[3]![0]).toContain('colour-unreadable');
+    expect(warn.mock.calls[3]![0]).toContain('--bg-raised');
+  });
+
+  it.each(['none', 2] as const)('unsupported contract %s is mode-only and never reads the root', async (contract) => {
+    const read = vi.spyOn(window, 'getComputedStyle');
+    const faces = vi.fn(() => Promise.resolve(fonts));
+    const r = rig({ appearanceRoot: root(), libraryContract: () => contract, fonts: faces, strictOld: true });
+    const m = await r.run();
+    expect(faces).not.toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
+    expect(m.seed).toEqual({ hosted: false });
+    expect(r.options().adapters.appearance).toBeUndefined();
+    expect(r.options().adapters.assets.fonts).toBeUndefined();
+    expect(r.options().adapters.prefs).toEqual({ theme: 'auto' });
+    m.follow('dark'); expect(r.frame.setPrefs).toHaveBeenCalledTimes(1);
+    expect(r.frame.setPrefs).toHaveBeenCalledWith({ theme: 'dark' });
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('the lab never reads the root and failed fonts do not fall back', async () => {
+    const read = vi.spyOn(window, 'getComputedStyle');
+    const preloaded = { ...STUB_ASSETS, fonts, mermaid: 'preloaded' };
+    const lab = rig({ profile: 'lab-draw', appearanceRoot: root(), assets: () => Promise.resolve(preloaded) });
+    const lm = await lab.run();
+    expect(lm.seed).toEqual({ hosted: false }); expect(read).not.toHaveBeenCalled();
+    expect(lab.options().adapters.appearance).toBeUndefined();
+    expect(lab.options().adapters.assets).toEqual({ ...STUB_ASSETS, mermaid: 'preloaded' });
+    const unsupported = rig({ appearanceRoot: root(), libraryContract: () => 'none', assets: () => Promise.resolve(preloaded) });
+    await unsupported.run();
+    expect(unsupported.options().adapters.assets).toEqual({ ...STUB_ASSETS, mermaid: 'preloaded' });
+    const r = rig({ appearanceRoot: root(), assets: () => Promise.resolve(preloaded), fonts: () => Promise.reject(new Error('unavailable')) });
+    await r.run();
+    expect(r.options().adapters.assets).toEqual({ ...STUB_ASSETS, mermaid: 'preloaded' });
+    expect(r.input.onFallback).not.toHaveBeenCalled();
+  });
+
+  it('the loaded faces are the design system files', async () => {
+    const result = await loadReaderFonts();
+    for (const [name, file] of [['sans', 'Geist-Variable.woff2'], ['mono', 'GeistMono-Variable.woff2']] as const) {
+      const hash = (data: Buffer) => createHash('sha256').update(data).digest('hex');
+      expect(hash(Buffer.from(result[name], 'base64'))).toBe(hash(readFileSync(path.join(import.meta.dirname, '../../ui/src/fonts', file))));
+    }
+  });
+});
 
 describe('the adapters', () => {
   it('the adapters are ccrc\'s keys for each draw and bar: the fourteen, loadMermaid after ready, features and onProgress on ccrc\'s bar', async () => {
@@ -839,6 +1057,250 @@ describe('openAt', () => {
   });
 });
 
+// Back places (X2 P5.3, D-8763): the library's `onPlace`, `onHash`'s second argument, and the frame's `closeOverlay` and `goto`.
+describe('places (X2 P5.3)', () => {
+  it('onPlace reaches the library\'s adapters only when the input has it; the reader lab\'s input has none, its adapters unchanged', async () => {
+    const without = rig();
+    await without.run();
+    expect(Object.keys(without.options().adapters)).not.toContain('onPlace');
+    const lab = rig({ profile: 'lab-draw' });
+    await lab.run();
+    expect(Object.keys(lab.options().adapters)).not.toContain('onPlace');
+    // The lab's adapters are exactly what they were before this change: the same keys, none of them new.
+    expect(Object.keys(lab.options().adapters).sort()).toEqual(
+      ['assets', 'copy', 'docKey', 'focus', 'mermaidDraw', 'onFallback', 'onHash', 'onLink', 'onReady', 'prefs', 'storePrefix', 'title', 'watchdogMs'],
+    );
+
+    const onPlace = vi.fn();
+    const withIt = rig({ onPlace });
+    await withIt.run();
+    const a = withIt.options().adapters;
+    expect(typeof a.onPlace).toBe('function');
+    a.onPlace!('overlay');
+    a.onPlace!('overlay-closed');
+    expect(onPlace.mock.calls).toEqual([['overlay'], ['overlay-closed']]);
+  });
+
+  it('onHash hands on the library\'s second argument, and only when the library gave one', async () => {
+    const r = rig({ onPlace: vi.fn() });
+    await r.run();
+    const a = r.options().adapters;
+    a.onHash!('sec-1');
+    expect((r.input.onHash as ReturnType<typeof vi.fn>).mock.lastCall, 'no second argument invented').toEqual(['sec-1']);
+    a.onHash!('sec-2', { push: true, from: 'tok' });
+    expect(r.input.onHash).toHaveBeenLastCalledWith('sec-2', { push: true, from: 'tok', inGrammar: true });
+    a.onHash!('sec-3', { push: false, from: null });
+    expect(r.input.onHash).toHaveBeenLastCalledWith('sec-3', { push: false, from: null, inGrammar: true });
+  });
+
+  it('onHash tells whether the id is inside the fragment grammar (D-9117), only with the library\'s second argument', async () => {
+    const r = rig({ onPlace: vi.fn() });
+    await r.run();
+    const a = r.options().adapters;
+    const last = (): unknown => (r.input.onHash as ReturnType<typeof vi.fn>).mock.lastCall;
+    for (const [id, inGrammar] of [['part-20', true], ['a.b:c_d-e', true], ['bad id', false], ['a/b', false], ['x#y', false], ['é-ü', true]] as const) {
+      a.onHash!(id, { push: true, from: 'tok' });
+      expect(last(), id).toEqual([id, { push: true, from: 'tok', inGrammar }]);
+    }
+    // 257 code units are outside the grammar's length.
+    a.onHash!('a'.repeat(257), { push: true, from: null });
+    expect(last()).toEqual(['a'.repeat(257), { push: true, from: null, inGrammar: false }]);
+    // Without the second argument the id goes alone, whatever it is.
+    a.onHash!('bad id');
+    expect(last()).toEqual(['bad id']);
+  });
+
+  it('closeOverlay and goto call the live frame\'s, and goto without a from passes none', async () => {
+    const r = rig({ onPlace: vi.fn() });
+    const m = await r.run();
+    r.optionsAt(0).adapters.onReady!();
+    m.closeOverlay!();
+    expect(r.frame.closeOverlay).toHaveBeenCalledTimes(1);
+    m.goto!('sec-4', 'tok');
+    expect(r.frame.goto).toHaveBeenLastCalledWith('sec-4', 'tok');
+    m.goto!('sec-5');
+    expect((r.frame.goto as ReturnType<typeof vi.fn>).mock.lastCall).toEqual(['sec-5']);
+  });
+
+  it('closeOverlay and goto do nothing after destroy', async () => {
+    const r = rig({ onPlace: vi.fn() });
+    const m = await r.run();
+    // Ready first, so `closeOverlay` gets past its not-ready return and meets the destroy guard it names.
+    r.optionsAt(0).adapters.onReady!();
+    m.destroy();
+    m.closeOverlay!();
+    m.goto!('sec-4', 'tok');
+    expect(r.frame.closeOverlay).not.toHaveBeenCalled();
+    expect(r.frame.goto).not.toHaveBeenCalled();
+  });
+
+  it('closeOverlay and goto do nothing on a mount made without onPlace (the library throws a TypeError for a host with none)', async () => {
+    const r = rig();
+    r.frame.closeOverlay.mockImplementation(() => { throw new TypeError('no onPlace'); });
+    r.frame.goto.mockImplementation(() => { throw new TypeError('no onPlace'); });
+    const m = await r.run();
+    // Ready first, so `closeOverlay` gets past its not-ready return and meets the no-onPlace guard it names.
+    r.optionsAt(0).adapters.onReady!();
+    expect(() => m.closeOverlay!()).not.toThrow();
+    expect(() => m.goto!('sec-4')).not.toThrow();
+    expect(r.frame.closeOverlay).not.toHaveBeenCalled();
+    expect(r.frame.goto).not.toHaveBeenCalled();
+  });
+
+  it('a frame that throws on closeOverlay or goto is contained', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const r = rig({ onPlace: vi.fn() });
+    r.frame.closeOverlay.mockImplementation(() => { throw new TypeError('refused'); });
+    r.frame.goto.mockImplementation(() => { throw new TypeError('refused'); });
+    const m = await r.run();
+    r.optionsAt(0).adapters.onReady!();
+    expect(() => m.closeOverlay!()).not.toThrow();
+    expect(() => m.goto!('sec-4', 'tok')).not.toThrow();
+    expect(() => m.gotoTop!('sec-4')).not.toThrow();
+    expect(warn).toHaveBeenCalledTimes(3);
+  });
+
+  it('a command held until ready that the frame then refuses is contained too', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const r = rig({ onPlace: vi.fn() });
+    r.frame.goto.mockImplementation(() => { throw new TypeError('refused'); });
+    const m = await r.run();
+    m.goto!('sec-4', 'tok');
+    expect(r.frame.goto, 'held: nothing is sent before ready').not.toHaveBeenCalled();
+    expect(() => r.optionsAt(0).adapters.onReady!()).not.toThrow();
+    expect(r.frame.goto, 'sent once, at ready').toHaveBeenCalledTimes(1);
+    expect(r.frame.goto).toHaveBeenCalledWith('sec-4', 'tok');
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(r.input.onReady).toHaveBeenCalledTimes(1);
+  });
+
+  it('bridge: a goto before ready is held and sent at ready', async () => {
+    const r = rig({ onPlace: vi.fn() });
+    const m = await r.run();
+    m.goto!('sec-4', 'tok');
+    m.closeOverlay!();
+    expect(r.frame.goto, 'nothing is sent before ready').not.toHaveBeenCalled();
+    m.destroy();
+    const s = rig({ onPlace: vi.fn() });
+    const n = await s.run();
+    n.goto!('sec-4', 'tok');
+    expect(s.frame.goto).not.toHaveBeenCalled();
+    s.optionsAt(0).adapters.onReady!();
+    expect(s.frame.goto).toHaveBeenCalledTimes(1);
+    expect(s.frame.goto).toHaveBeenCalledWith('sec-4', 'tok');
+    expect(s.input.onReady, 'the input still hears ready').toHaveBeenCalledTimes(1);
+    // Sent once: a second ready sends nothing more, and a command after ready goes at once.
+    s.optionsAt(0).adapters.onReady!();
+    expect(s.frame.goto).toHaveBeenCalledTimes(1);
+    n.goto!('sec-5');
+    expect(s.frame.goto).toHaveBeenCalledTimes(2);
+  });
+
+  it('bridge: a later command before ready replaces the held one', async () => {
+    const r = rig({ onPlace: vi.fn() });
+    const m = await r.run();
+    m.goto!('sec-1', 'tok');
+    m.closeOverlay!();
+    m.gotoTop!('sec-2');
+    r.optionsAt(0).adapters.onReady!();
+    expect(r.frame.closeOverlay, 'the earlier ones are gone').not.toHaveBeenCalled();
+    expect(r.frame.goto).toHaveBeenCalledTimes(1);
+    expect(r.frame.goto).toHaveBeenCalledWith('sec-2', TOP_TOKEN);
+  });
+
+  it('bridge: a close before ready is dropped and leaves a held goto in place', async () => {
+    const r = rig({ onPlace: vi.fn() });
+    const m = await r.run();
+    m.goto!('sec-1', 'tok');
+    m.closeOverlay!();
+    r.optionsAt(0).adapters.onReady!();
+    expect(r.frame.closeOverlay, 'a fresh frame has no overlay to close').not.toHaveBeenCalled();
+    expect(r.frame.goto, 'the held position still reaches the frame').toHaveBeenCalledWith('sec-1', 'tok');
+    m.closeOverlay!();
+    expect(r.frame.closeOverlay, 'after ready a close is sent').toHaveBeenCalledTimes(1);
+  });
+
+  it('bridge: openAt\'s new frame holds a command until its own ready', async () => {
+    const el = document.createElement('div');
+    document.body.append(el);
+    const r = rig({ el, onPlace: vi.fn() });
+    const m = await r.run();
+    r.optionsAt(0).adapters.onReady!();
+    m.openAt!('far');
+    m.goto!('sec-4', 'tok');
+    expect(r.frames[1]!.goto, 'the new frame is not ready').not.toHaveBeenCalled();
+    expect(r.frames[0]!.goto).not.toHaveBeenCalled();
+    r.optionsAt(0).adapters.onReady!();
+    expect(r.frames[1]!.goto, 'the old frame\'s ready does not release it').not.toHaveBeenCalled();
+    r.optionsAt(1).adapters.onReady!();
+    expect(r.frames[1]!.goto).toHaveBeenCalledWith('sec-4', 'tok');
+    expect(r.frames[0]!.goto).not.toHaveBeenCalled();
+  });
+
+  it('bridge: nothing is held after destroy', async () => {
+    const r = rig({ onPlace: vi.fn() });
+    const m = await r.run();
+    m.goto!('sec-4', 'tok');
+    m.destroy();
+    r.optionsAt(0).adapters.onReady!();
+    expect(r.frame.goto, 'a command held before destroy is dropped').not.toHaveBeenCalled();
+    m.goto!('sec-5');
+    m.closeOverlay!();
+    m.gotoTop!('sec-6');
+    r.optionsAt(0).adapters.onReady!();
+    expect(r.frame.goto).not.toHaveBeenCalled();
+    expect(r.frame.closeOverlay).not.toHaveBeenCalled();
+    // And with no onPlace nothing is held, so a ready sends nothing.
+    const q = rig();
+    const n = await q.run();
+    n.goto!('sec-4');
+    n.gotoTop!('sec-4');
+    n.closeOverlay!();
+    q.optionsAt(0).adapters.onReady!();
+    expect(q.frame.goto).not.toHaveBeenCalled();
+    expect(q.frame.closeOverlay).not.toHaveBeenCalled();
+  });
+
+  it('bridge: gotoTop sends the id with the top token', async () => {
+    const r = rig({ onPlace: vi.fn() });
+    const m = await r.run();
+    r.optionsAt(0).adapters.onReady!();
+    m.gotoTop!('part-20');
+    expect(r.frame.goto).toHaveBeenCalledTimes(1);
+    expect(r.frame.goto).toHaveBeenCalledWith('part-20', TOP_TOKEN);
+  });
+
+  it('bridge: the top token is a position token the library reads', () => {
+    expect(isAnchorToken(TOP_TOKEN)).toBe(true);
+  });
+
+  it('openAt keeps onPlace and the commands follow the new frame', async () => {
+    const el = document.createElement('div');
+    document.body.append(el);
+    const onPlace = vi.fn();
+    const r = rig({ el, onPlace });
+    const m = await r.run();
+    m.openAt!('far');
+    r.optionsAt(1).adapters.onReady!();
+    expect(r.mount).toHaveBeenCalledTimes(2);
+    expect(Object.keys(r.optionsAt(1).adapters).sort()).toEqual(Object.keys(r.optionsAt(0).adapters).sort());
+    r.optionsAt(1).adapters.onPlace!('overlay');
+    expect(onPlace).toHaveBeenCalledWith('overlay');
+    r.optionsAt(1).adapters.onHash!('x', { push: true, from: 'tok' });
+    expect(r.input.onHash).toHaveBeenLastCalledWith('x', { push: true, from: 'tok', inGrammar: true });
+    m.closeOverlay!();
+    expect(r.frames[0]!.closeOverlay).not.toHaveBeenCalled();
+    expect(r.frames[1]!.closeOverlay).toHaveBeenCalledTimes(1);
+  });
+
+  it('a mount whose assets did not load has neither closeOverlay nor goto', async () => {
+    const r = rig({ assets: () => Promise.reject(new Error('chunk failed')), onPlace: vi.fn() });
+    const m = await r.run();
+    expect('closeOverlay' in m).toBe(false);
+    expect('goto' in m).toBe(false);
+  });
+});
+
 describe('failure and teardown', () => {
   it('a rejected asset load falls back with assets and never mounts', async () => {
     const r = rig({ assets: () => Promise.reject(new Error('chunk failed')) });
@@ -1039,8 +1501,8 @@ describe('the reader lab profile (reader lab plan, Task 7)', () => {
 
   it('readerMountPlan is the one decision, and only lab-draw maps to drawing on open', () => {
     expect(readerMountPlan('lab-draw', 100, 'frame-bar', 'holds'))
-      .toEqual({ draw: 'auto', watchdogMs: READER_LAB_DRAW_WATCHDOG_MS, store: false, chrome: 'frame-bar', history: false });
+      .toEqual({ draw: 'auto', watchdogMs: READER_LAB_DRAW_WATCHDOG_MS, store: false, chrome: 'frame-bar', history: false, appearance: false });
     expect(readerMountPlan(undefined, 100, 'frame-bar', 'does-not-hold'))
-      .toEqual({ draw: 'on-request', watchdogMs: readerWatchdogMs(100), store: true, chrome: 'frame-bar', history: true });
+      .toEqual({ draw: 'on-request', watchdogMs: readerWatchdogMs(100), store: true, chrome: 'frame-bar', history: true, appearance: true });
   });
 });

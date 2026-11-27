@@ -16,6 +16,9 @@ const GUARDED = [
   '_watchdog_resume_run', '_limitwait_open', '_limitwait_close', '_limitwait_choose', 'cmd_limit_wait', '_wake_ceiling_move',
   // The lane-failing mark (the provider-failure ladder, wave 3a): its reader, its home gate, its writer and the marker reader.
   '_provfail', '_provfail_holds_home', '_provfail_pass', '_turn_mark_read',
+  // Its moves (wave 3b): what is owed, what holds one, its act gate, and the pieces that choose a target.
+  '_provfail_row', '_provfail_owed', '_provider_hold_to', '_swap_provider_act_gate', '_lane_provider_to', '_provider_move_rank_to', '_provider_move_fits',
+  '_watchdog_provider',
 ];
 
 /** The body of `name() { … }` at column 0, up to the closing brace at column 0. */

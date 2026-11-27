@@ -68,6 +68,11 @@ export interface LeastLoadedCase {
    *  can carry its own malformed content; omitted/empty means no lane gets a
    *  malformed marker. */
   authDeadMalformed?: Record<string, string>;
+  /** Wrappers carrying a `<w>-provfail` marker, the limit watchdog's verdict that the lane's provider answers turns with
+   *  errors (wave 3a), keyed by wrapper with its exact bytes. A PREFERENCE of placement on both sides and nothing else: a
+   *  marked lane is placed on only when no unmarked lane that is not condemned can take the work, never refused. Bytes
+   *  ccd's `_provfail` does not take (malformed, 30 minutes old, dated ahead) are no mark on either side. */
+  provFailing?: Record<string, string>;
   /** Registry rows' spawn records (`<id>.wrapper`, `<id>.spawn` and `<id>.uuid` in the registry directory), the one
    *  fact A7-3's demotion reads: a lane whose NEWEST spawn recorded rc 2 (`login`) or 5 (`blocked`) is placed last until
    *  a later spawn on it reads otherwise or the record is 6 h old. `at` is an epoch the case builds from `now`; `rc` is
@@ -662,6 +667,111 @@ export function leastLoadedCases(now: number): LeastLoadedCase[] {
       expect: { wrapper: 'claude-b', score: 40 },
       serverExpect: { wrapper: 'claude-a', score: 5 },
       why: 'ccd counts any `.spawn` beside a `.wrapper`; the registry yields only ids with a `.uuid`, so the server sees no row',
+    },
+    {
+      name: 'provfail-loses-to-a-busier-lane',
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(40, 20), 'claude-d': fresh(85, 45) },
+      provFailing: { 'claude-a': `${now - 60} server_error` },
+      expect: { wrapper: 'claude-b', score: 40 },
+      why: 'the emptiest lane is one whose provider is failing: new work goes to the next one',
+    },
+    {
+      name: 'provfail-measured-loses-to-an-unmeasured-lane',
+      files: { claude: fresh(5, 3) },
+      provFailing: { claude: `${now - 60} overloaded` },
+      expect: { wrapper: 'claude-a', score: 0 },
+      why: 'a marked lane is tried after EVERY unmarked one, the fallback tiers included',
+    },
+    {
+      name: 'provfail-on-a-lane-that-never-reported-loses-the-fallback',
+      files: {},
+      provFailing: { claude: `${now - 60} server_error` },
+      expect: { wrapper: 'claude-a', score: 0 },
+      why: 'a mark on a lane with no telemetry file at all is still read',
+    },
+    {
+      name: 'provfail-on-a-lane-whose-telemetry-does-not-parse-loses-the-fallback',
+      files: { claude: '{' },
+      provFailing: { claude: `${now - 60} server_error` },
+      expect: { wrapper: 'claude-a', score: 0 },
+      why: 'a mark beside a torn limits file is still read',
+    },
+    {
+      name: 'provfail-all-marked-ranks-by-load-among-them',
+      files: { claude: fresh(80, 40), 'claude-a': fresh(40, 3), 'claude-b': fresh(20, 20), 'claude-d': fresh(85, 45) },
+      provFailing: Object.fromEntries(['claude', 'claude-a', 'claude-b', 'claude-d'].map((w) => [w, `${now - 60} server_error`])),
+      expect: { wrapper: 'claude-b', score: 20 },
+      why: 'never refused: with every lane marked the rule is the ordinary one over all of them',
+    },
+    {
+      name: 'provfail-still-beats-a-dead-credential',
+      files: { claude: fresh(5, 3), 'claude-b': fresh(60, 20) },
+      authDead: ['claude', 'claude-a', 'claude-d'],
+      provFailing: { 'claude-b': `${now - 60} server_error` },
+      expect: { wrapper: 'claude-b', score: 60 },
+      why: 'a dead credential can run no turn at all, so the condemned tier stays the last one',
+    },
+    {
+      name: 'provfail-and-condemned-is-condemned',
+      files: { claude: fresh(5, 3), 'claude-b': fresh(60, 20) },
+      authDead: ['claude', 'claude-a', 'claude-d'],
+      provFailing: { claude: `${now - 60} server_error`, 'claude-b': `${now - 60} server_error` },
+      expect: { wrapper: 'claude-b', score: 60 },
+      why: 'a lane that is both stays in the last tier',
+    },
+    {
+      name: 'provfail-the-only-lane-switched-on-still-places',
+      files: { claude: fresh(5, 3), 'claude-a': fresh(60, 20) },
+      disabled: ['claude-a', 'claude-b', 'claude-d'],
+      provFailing: { claude: `${now - 60} server_error` },
+      expect: { wrapper: 'claude', score: 5 },
+      why: 'a mark is a measurement that can be wrong; no destination at all is the worse answer',
+    },
+    {
+      name: 'provfail-one-second-inside-its-half-hour-demotes',
+      pinClock: true,
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3) },
+      provFailing: { 'claude-a': `${now - 1799} server_error` },
+      expect: { wrapper: 'claude', score: 80 },
+      why: 'the reader\'s own bound: younger than 30 minutes',
+    },
+    {
+      name: 'provfail-half-an-hour-old-is-no-mark',
+      pinClock: true,
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3) },
+      provFailing: { 'claude-a': `${now - 1800} server_error` },
+      expect: { wrapper: 'claude-a', score: 5 },
+      why: 'past its 30 minutes a mark means nothing, whether or not the writer removed it',
+    },
+    {
+      name: 'provfail-a-minute-ahead-still-demotes',
+      pinClock: true,
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3) },
+      provFailing: { 'claude-a': `${now + 60} server_error` },
+      expect: { wrapper: 'claude', score: 80 },
+      why: 'a clock that stepped back a little does not lift the mark',
+    },
+    {
+      name: 'provfail-further-ahead-is-no-mark',
+      pinClock: true,
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3) },
+      provFailing: { 'claude-a': `${now + 61} server_error` },
+      expect: { wrapper: 'claude-a', score: 5 },
+      why: 'it would never age out',
+    },
+    ...['', 'NOW', 'soon server_error', ' NOW server_error', 'NOW Server', 'NOW server_error extra', 'NOW server_error\nmore'].map((shape) => ({
+      name: `provfail-malformed-${JSON.stringify(shape)}-is-no-mark`,
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3) },
+      provFailing: { 'claude-a': shape.replace('NOW', String(now - 60)) },
+      expect: { wrapper: 'claude-a', score: 5 },
+      why: 'only exactly `<epoch> <word>` is a mark; every other shape is absence, which permits',
+    })),
+    {
+      name: 'provfail-trailing-newline-is-a-mark',
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3) },
+      provFailing: { 'claude-a': `${now - 60} server_error\n` },
+      expect: { wrapper: 'claude', score: 80 },
+      why: 'both readers drop trailing newlines',
     },
     {
       name: 'spawn-unreadable-record-is-not-a-demotion',

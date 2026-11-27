@@ -5,6 +5,7 @@
 import type { AccountAuthCancelBody, AccountAuthCodeBody, AccountAuthStartAnswer, AccountAuthStartBody, AccountAuthStatusAnswer, AccountSetBody, AccountSignOutAnswer } from '../../../shared/api';
 import type { AccountAddAnswer, AccountAddBody, AccountCheckAnswer, AccountCredentialAnswer, AccountCredentialBody, AccountRemoveAnswer, AccountRemoveBody, AccountRemoveCheckAnswer, AccountRevokeAckBody, AccountsResponse, AccountSwitchAnswer, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ProgrammesAnswer, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunFindAnswer, RunFindQuery, RunRecordAnswer, RunSignals, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WorkItemState, WsAudit } from '../../../shared/api';
 import type { CoordCapsWrite } from '../../../shared/runCap';
+import type { LandingPauseAnswer, LandingWithdrawAnswer } from '../../../shared/landingLine';
 import type { ArchiveAnswer, CallView, StopAnswer, StopBody, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource, QuestionAnswerBody } from '../../../shared/api';
 import type { GoalsVersion, GoalsView, ItemActBody, ItemView, WaitingView } from '../../../shared/ledgers';
 import type { AnswerMarkKind, AnswerMarkName, AnswerMarkView } from '../../../shared/answerMarks';
@@ -41,6 +42,7 @@ import type {
   DocsFolderAddResponse, DocsFolderFileResponse, DocsFolderRemoveResponse, DocsFolderTreeResponse, DocsFoldersLabelsResponse,
   DocsFoldersPathsResponse, DocsRangeFrameResponse, DocsRangePrepareResponse,
 } from '../../../shared/docs';
+import type { DocsSettings, DocsSettingsResponse } from '../../../shared/docsTracker';
 import type { DocsFolderLoaders } from '../docs/folderPage';
 import type { RangeLoader } from '../docs/range/readRange';
 import type { ClaudeRollTargets } from '../../../shared/claudeVersion';
@@ -934,6 +936,13 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     claims: (opts?: { all?: boolean }): Promise<{ claims: ClaimSummary[] }> =>
       getJson<{ claims: ClaimSummary[] }>(
         opts?.all === true ? '/api/claims?all=1' : '/api/claims'),
+    /** `GET /api/landing?project=` (wave 5j), read raw: `fleet/landingLineView.ts#readLandingLine` is its guard (wave 5k). */
+    landingLine: (project: string, opts?: ReadOpts) => getJson<unknown>(`/api/landing?project=${encodeURIComponent(project)}`, opts),
+    /** The operator's two landing doors (wave 5j-b); every answer, refusal or not, re-reads the line (wave 5k). */
+    landingPause: (project: string, paused: boolean) =>
+      postJson<{ ok: true } & LandingPauseAnswer>('/api/landing/pause', { project, paused }),
+    landingWithdraw: (project: string, pr: number, pinnedAt: number) =>
+      postJson<{ ok: true } & LandingWithdrawAnswer>('/api/landing/withdraw', { project, pr, pinnedAt }),
     /** D-5237: `source` names the control that sent it (the keycap, the Escape key, a Deny); the server records it. */
     interrupt: (id: string, source: InterruptRouteSource) => post(`${sid(id)}/interrupt`, { source }),
     /** `POST /api/coord/pause` (spec §4.2) — request `{paused}`, response
@@ -1262,7 +1271,10 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      * never rejects for a server answer (`docs/failures.ts`): it rejects only when the caller's signal aborts, or for
      * a defect. `file` and `raster` refuse each other's paths by throwing `wrong-representation` before any request.
      */
-    docs: ((): DocsLoaders & DocsHistoryLoader & { readonly range: RangeLoader; readonly folders: DocsFolderLoaders } => {
+    docs: ((): DocsLoaders & DocsHistoryLoader & { readonly range: RangeLoader; readonly folders: DocsFolderLoaders; readonly settings: {
+      read(signal?: AbortSignal): Promise<DocsAnswer<DocsSettingsResponse>>;
+      write(settings: DocsSettings): Promise<DocsAnswer<DocsSettingsResponse>>;
+    } } => {
       const marker = { [DOCS_REQUEST_HEADER]: DOCS_REQUEST_HEADER_VALUE };
       // NO TIME LIMIT on the docs reads (`timeoutMs: null`, console speed C1): a loader never rejects for a server
       // answer, and its slot vocabulary (`docs/failures.ts`) has no word for "slow", so a timeout would leave a screen
@@ -1319,6 +1331,12 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       };
       return {
         folders,
+        settings: {
+          read: (signal) => read<DocsSettingsResponse>(docsApi.settings(), ['settings'], { headers: marker, signal }),
+          write: (settings) => readWrite<DocsSettingsResponse>(docsApi.settings(), ['settings'], {
+            method: 'PUT', headers: { ...marker, 'content-type': 'application/json' }, body: JSON.stringify({ settings }),
+          }),
+        },
         projects: () => read<DocsProjectsResponse>(docsApi.projects(), ['index'], { headers: marker }),
         tree: (project, ref) =>
           read<DocsTreeResponse>(docsApi.tree(project, ref), ['tree', 'refreshDue'], { headers: marker }),
