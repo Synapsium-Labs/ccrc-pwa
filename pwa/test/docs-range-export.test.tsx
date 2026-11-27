@@ -6,9 +6,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
-import { DOCS_MAX_DOC_BYTES, type DocListPin, type DocPin, type DocsTreeOk } from '../../shared/docs';
+import {
+  DOCS_CLASS_CAP, DOCS_MAX_DOC_BYTES, DOCS_PDF_INLINE_MAX_BYTES, contentClass, type DocContentClass, type DocListPin, type DocPin, type DocsTreeOk,
+} from '../../shared/docs';
 import { DocsHead, exportStateFor, type ExportInputs, type ExportState } from '../src/docs/DocsHead';
-import { actsOnPart, openedRangePin, rangePinOf, rangeReadKey } from '../src/docs/range/rangePolicy';
+import { actsOnPart, openedRangePin, rangeHasTextView, rangePinOf, rangeReadKey } from '../src/docs/range/rangePolicy';
 import { decodeRangeBytes } from '../src/docs/range/rangeText';
 import { RangeLeaf } from '../src/docs/range/RangeLeaf';
 import { MarkdownParts, type PartsPrePass } from '../src/docs/range/MarkdownParts';
@@ -255,9 +257,77 @@ describe('RangeLeaf: what a finished read tells the visit', () => {
     const { rerender } = render(<Harness show />);
     await screen.findByText('shown');
     await waitFor(() => expect(seen.visit?.rangeOpened, 'the read stands while the leaf is on screen').not.toBeNull());
-    expect(decodeRangeBytes(seen.visit!.rangeOpened!.bytes).text, 'the bytes the leaf read').toBe('hello\n');
+    expect(decodeRangeBytes(seen.visit!.rangeOpened!.bytes!).text, 'the bytes the leaf read').toBe('hello\n');
     rerender(<Harness show={false} />);
     await waitFor(() => expect(seen.visit?.rangeOpened, 'the leaf left: nothing is held').toBeNull());
+  });
+
+  // Review 4126 F1: a leaf with NO view (HTML or SVG above its cap, a PDF above the inline ceiling, any other class) saves the bytes
+  // and stays mounted, so whatever the visit was handed it holds until the page is left. Only a class with a text view (Markdown,
+  // text) has the bytes handed over; the other facts (key, digest, readAt) reach the visit for every class.
+  describe('the bytes reach the visit only for a class with a text view (review 4126 F1)', () => {
+    /** `name` read by range at `size` bytes through a real visit and a leaf mounted as `DocsLeaf` mounts it: with the view `withView`
+     *  gives (none: a Download-only leaf that saves as it opens). Resolves with the visit once its read finished. */
+    async function readOf(name: string, size: number, withView: boolean): Promise<{ visit: DocsVisit; saved: number }> {
+      const src = new Uint8Array(size).fill(0x41) as Uint8Array<ArrayBuffer>;
+      const tree = committedTree(name, size);
+      const f = fakeLoaders({ tree: okTree(tree) });
+      const range = servingLoader(src);
+      const seen: { visit: DocsVisit | null } = { visit: null };
+      const clicks: HTMLAnchorElement[] = [];
+      const spy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) { clicks.push(this); });
+      function Harness(): ReactNode {
+        const visit = useDocsVisit(pageAt(`/docs/demo/specs/${name}`), f.loaders);
+        seen.visit = visit;
+        const file = visit.file;
+        if (file.s !== 'too-large') return null;
+        const rangePin = rangePinOf(file.pin, tree.entries[0]!);
+        if (rangePin === null) throw new Error('fixture: no range pin');
+        const target: RangeTarget = { project: 'demo', size: file.size, range: rangePin, pin: file.pin };
+        return withView
+          ? <RangeLeaf key={rangeReadKey(target)} target={target} cls={contentClass(name)} name={name} loader={range.loader} visit={visit}>{() => <p>shown</p>}</RangeLeaf>
+          : <RangeLeaf key={rangeReadKey(target)} target={target} cls={contentClass(name)} name={name} loader={range.loader} visit={visit} saveOnOpen />;
+      }
+      try {
+        render(<Harness />);
+        await waitFor(() => expect(seen.visit?.rangeOpened, name + ': the read finished').not.toBeNull(), { timeout: 20000 });
+        if (!withView) await waitFor(() => expect(clicks, name + ': saved').toHaveLength(1));
+        return { visit: seen.visit!, saved: clicks.length };
+      } finally {
+        spy.mockRestore();
+      }
+    }
+
+    const noView: ReadonlyArray<readonly [string, string, number]> = [
+      ['an HTML page above its cap', 'a.html', DOCS_CLASS_CAP.html + 1],
+      ['an SVG above its cap', 'a.svg', DOCS_CLASS_CAP.svg + 1],
+      ['a PDF above the inline ceiling', 'a.pdf', DOCS_PDF_INLINE_MAX_BYTES + 1],
+      ['a file of a class with no view (other)', 'a.bin', DOCS_CLASS_CAP.other + 1],
+    ];
+    for (const [label, name, size] of noView) {
+      it(`range facts: ${label}, read with no view and saved, hands the visit no bytes, and its other facts still stand`, async () => {
+        const { visit } = await readOf(name, size, false);
+        const opened = visit.rangeOpened!;
+        expect('bytes' in opened, name + ': the visit holds no bytes no view can use').toBe(false);
+        expect(opened.readAt, 'the truth line\'s read time still stands').toBeGreaterThan(0);
+        expect(opened.pin).toMatchObject({ kind: 'committed', path: name });
+      }, 60000);
+    }
+
+    for (const [label, name] of [['a Markdown text', 'a.md'], ['a text file', 'a.txt']] as const) {
+      it(`range facts: ${label} above its cap still hands the visit its bytes, the head compares a body with their text`, async () => {
+        const { visit } = await readOf(name, DOCS_CLASS_CAP.markdown + 1, true);
+        const bytes = visit.rangeOpened!.bytes;
+        expect(bytes?.length, name + ': the bytes the leaf read').toBe(DOCS_CLASS_CAP.markdown + 1);
+      }, 60000);
+    }
+
+    it('rangeHasTextView: Markdown and text have a text view above their cap, no other class does', () => {
+      const classes: Record<DocContentClass, boolean> = {
+        markdown: true, text: true, raster: false, svg: false, html: false, pdf: false, other: false,
+      };
+      for (const [cls, has] of Object.entries(classes) as [DocContentClass, boolean][]) expect(rangeHasTextView(cls), cls).toBe(has);
+    });
   });
 });
 
@@ -386,6 +456,16 @@ describe('the truth line: as read at <time> (spec 4.3 "The pin")', () => {
         exportStateFor(page, tree, listed, inputs(null, result.current.rangeOpened));
         expect(decodedBlob(), name + ': nothing decoded the bytes').toBe(0);
         unmount();
+      }
+      // HTML and SVG above their cap, with a NON-NULL ranged fact that carries bytes (built here: the visit itself hands none for a
+      // class with no text view, review 4126 F1). `exportStateFor` goes on past its own class check for these (they have an Export
+      // outside a range read), so only `rangeExportState`'s own class check, before any decode, keeps the bytes undecoded (A1).
+      for (const name of ['a.html', 'a.svg']) {
+        const h = held(committedTree(name, DOCS_CLASS_CAP[contentClass(name)] + 1), `/docs/demo/specs/${name}`);
+        const ranged: RangeOpened = { ...h.ranged, bytes: blob };
+        expect(ranged.bytes, name + ': a read that carries bytes').toBe(blob);
+        expect(exportStateFor(h.page, h.tree, h.file, inputs(null, ranged)), name + ': no Export of a range read').toEqual({ s: 'absent' });
+        expect(decodedBlob(), name + ': nothing decoded the bytes').toBe(0);
       }
       // The control: a text file's bytes are decoded, once, however often the head asks.
       const h = held(statTree('a.txt', blob.length), '/docs/demo/specs/a.txt?ref=main');

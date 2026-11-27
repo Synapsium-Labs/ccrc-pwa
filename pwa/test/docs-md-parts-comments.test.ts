@@ -167,6 +167,14 @@ describe('a closed comment is its own cut candidate (review F3)', { timeout: 120
     }
   });
 
+  it('md parts comments: a closer line too long to fit a part beside the reopen line leaves the comment to P1, every part still in size (class 10)', async () => {
+    // The closer and the rest of its line always end the comment's last part, whole, after `<!--`: when the two do not fit one
+    // part, the comment is not cut as one (`cutComment` answers null) and P1 cuts the unit. Its hidden text may show then (residual
+    // class 10, ticket x2-fu-comment-in-container); what this pins is the size of every part.
+    const long = 'Before.\n\n<!--\n' + 'hiddenword line\n'.repeat(6) + '-->' + ' '.repeat(60) + '\n\nAfter.\n';
+    for (let max = 24; max <= 70; max += 1) checkCover(long, await cut(long, max), max);
+  });
+
   it('md parts comments: a comment, then a heading: the heading starts a part, not continued', async () => {
     const text = 'Intro paragraph.\n\n' + bigComment(40) + '## Next\n\ntext after.\n';
     const parts = await cutsHidden(text, 200, HIDDEN);

@@ -586,6 +586,19 @@ describe('print: what the worker prepares (printPlan.prepKeyOf, the one gate pre
     expect(prepKeyOf({ kind: 'markdown', text: '# A\n', ready: true })).toBe('# A\n');
     expect(prepKeyOf({ kind: 'markdown-parts', parts, complete: true, at: 1 })).toBe(parts);
   });
+
+  // Review 4126 A6: the cases above pin `prepKeyOf`'s formula, not that the hook USES it. A text scan of the hook (its code, with
+  // comments cut out): the prepare key is `prepKeyOf(source)`, and the hook states no gate of its own (the published source's
+  // `ready`, `complete` or `parts.length`), which is how a second writer of the gate would come back.
+  it('print: usePrint takes its prepare key from prepKeyOf and restates no gate of its own (review 4126 A6)', () => {
+    const file = path.join(import.meta.dirname, '..', 'src', 'docs', 'print', 'usePrint.ts');
+    const code = readFileSync(file, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+    expect(code, 'the prepare key is prepKeyOf of the published source').toMatch(/\bconst prepKey\s*=\s*prepKeyOf\(\s*source\s*\)\s*;/);
+    expect(code.match(/\bprepKey\s*=(?!=)/g) ?? [], 'one writer of the prepare key').toHaveLength(1);
+    expect(code, 'no `ready` gate of a Markdown source written inline').not.toMatch(/\.ready\b/);
+    expect(code, 'no `complete` gate of parts written inline').not.toMatch(/\.complete\b/);
+    expect(code, 'no parts-count gate written inline').not.toMatch(/\.parts\.length\b/);
+  });
 });
 
 // ---- which URL a printed image loads from ---------------------------------------------------------------------------------------

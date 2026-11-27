@@ -54,6 +54,7 @@ import { showBytes } from './objectUrls';
 import type { ExportBody } from './exportBody';
 import type { ExportAssets } from './export/exportAssets';
 import type { HighlightStore } from '../lib/highlightStore';
+import { rangeHasTextView } from './range/rangePolicy';
 import { decodeRangeBytes } from './range/rangeText';
 import { pinCommit, pinFor, samePin, type DocsVisit, type FileSlot, type Freshness, type RangeOpened } from './useDocsVisit';
 import { oneBarTools, type ReaderCommand } from './reader/policy';
@@ -335,10 +336,14 @@ function bodyExportState(
  *  failed, past the range ceiling) leaves nothing to export, so there is no Export, as there is none for any file slot that settled
  *  with no bytes (refinement (k)). */
 function rangeExportState(cls: DocContentClass, expected: DocListPin, x: ExportInputs): ExportState {
-  if (cls !== 'markdown' && cls !== 'text') return EXPORT_ABSENT;
+  if (!rangeHasTextView(cls)) return EXPORT_ABSENT;
   const ranged = x.ranged ?? null;
   if (ranged === null || !samePin(ranged.pin, expected)) return EXPORT_ABSENT;
-  return bodyExportState(cls, x.body, (t) => t === decodeRangeBytes(ranged.bytes).text, ranged.pin, null, x);
+  // The leaf hands the visit the bytes of a class with a text view only (`RangeOpened.bytes`), so none here is a read with nothing
+  // to compare a body with: no Export, as for a read that gave no bytes.
+  const bytes = ranged.bytes;
+  if (bytes === undefined) return EXPORT_ABSENT;
+  return bodyExportState(cls, x.body, (t) => t === decodeRangeBytes(bytes).text, ranged.pin, null, x);
 }
 
 export function exportStateFor(page: DocsPageLocation, tree: DocsTreeOk, file: FileSlot, x: ExportInputs): ExportState {

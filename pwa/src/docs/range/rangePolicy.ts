@@ -42,6 +42,15 @@ export function rangeVerdict(size: number, cls: DocContentClass, pin: DocsRangeP
   return size > DOCS_CLASS_CAP[cls] ? 'range' : 'show';
 }
 
+/** Whether a class's range read has a TEXT view (spec 4.3), above its cap or a stat-pinned draft below it: Markdown (in parts, or
+ *  whole) and text (as source). Only such a read's
+ *  bytes are handed to the visit (`RangeReadFacts.bytes`), because only the head's Export compares them, as text, with a body. A read
+ *  of any other class (an image, a PDF, HTML or SVG above its cap, a download) is held by no one past its own leaf: the leaf hands the
+ *  visit no bytes, and the head, which asks this first, never reads them. The one owner of the question, for the leaf and the head. */
+export function rangeHasTextView(cls: DocContentClass): boolean {
+  return cls === 'markdown' || cls === 'text';
+}
+
 /** The range pin of the bytes a leaf's page pin names (spec 4.3): a committed pin reads the entry's committed blob, a
  *  draft pin its fingerprint, or, with none yet, its stat. `null` when the pin names nothing the entry holds (a committed
  *  pin over an entry with no committed blob). The page pin, not the row's `entryView` pin, decides, because a draft

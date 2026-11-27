@@ -16,7 +16,7 @@ import { DOCS_RANGE_TEXT, DOCS_VIEW_TEXT, failureSentence, fillSentence, mib, sl
 import { declaredRaster } from '../failures';
 import { rasterObjectUrl, saveBytes } from '../objectUrls';
 import type { DocsVisit, RangeStale } from '../useDocsVisit';
-import { imageHeaderDims, imageViewVerdict, rangeReadKey, rangeVerdict } from './rangePolicy';
+import { imageHeaderDims, imageViewVerdict, rangeHasTextView, rangeReadKey, rangeVerdict } from './rangePolicy';
 import { readRange, type RangeLoader, type RangeReadFailure, type RangeTarget } from './readRange';
 
 /** The words for a read that gave no bytes. */
@@ -81,8 +81,8 @@ export function RangeLeaf(p: {
   const hasView = p.children !== undefined;
   // The newest props, read by a read in flight: a re-render's new objects never restart it.
   const saveOnOpen = p.saveOnOpen === true;
-  const latest = useRef({ target: p.target, loader: p.loader, name: p.name, hasView, visit: p.visit, saveOnOpen });
-  latest.current = { target: p.target, loader: p.loader, name: p.name, hasView, visit: p.visit, saveOnOpen };
+  const latest = useRef({ target: p.target, loader: p.loader, name: p.name, cls: p.cls, hasView, visit: p.visit, saveOnOpen });
+  latest.current = { target: p.target, loader: p.loader, name: p.name, cls: p.cls, hasView, visit: p.visit, saveOnOpen };
   const [state, setState] = useState<ReadState>({ s: 'idle' });
   const ac = useRef<AbortController | null>(null);
   // True while a re-list is pending for this leaf: when the visit says a re-list that started after the failure has
@@ -119,9 +119,11 @@ export function RangeLeaf(p: {
         setState({ s: 'failed', why, stale });
         return;
       }
-      // What the read gave, for the page's head: its identity, the bytes' digest, the bytes (their text is what Export compares a
-      // body with) and when its last frame was checked.
-      latest.current.visit.rangeRead({ key: rangeReadKey(target), digest: r.digest, readAt: Date.now(), bytes: r.bytes });
+      // What the read gave, for the page's head: its identity, the bytes' digest and when its last frame was checked, and, only for a
+      // class with a text view (`rangeHasTextView`), the bytes, whose text is what Export compares a body with. A leaf with no view
+      // stays mounted after it saves, so a read of any other class hands the visit none to hold.
+      const facts = { key: rangeReadKey(target), digest: r.digest, readAt: Date.now() };
+      latest.current.visit.rangeRead(rangeHasTextView(latest.current.cls) ? { ...facts, bytes: r.bytes } : facts);
       if (save) saveBytes(latest.current.name, r.bytes);
       setState(save && !latest.current.hasView ? { s: 'idle' } : { s: 'done', bytes: r.bytes, digest: r.digest });
     }, () => { if (ac.current === mine) setState({ s: 'failed', why: { kind: 'threw' }, stale: 'other' }); });

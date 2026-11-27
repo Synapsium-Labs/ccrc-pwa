@@ -71,12 +71,18 @@
 //     line indented six columns or more in an item. The fuzz's library judge counts it: 36 lines in 27 of 8 000 documents.
 //   And the unread tail (`tailFrom`): all nine, as P1 has them, for the rest of a text whose blocks were not read.
 //   10 (a closed comment cut inside, so its text shows: the block cutter's own class, X2 P6.1 review 4116 F3, ruled a residual on
-//     2026-11-27): none for a comment at the top level (above). It REMAINS for a closed comment inside a list item or a quote that is
-//     larger than a part (the container's text goes to P1, which reads no comment; measured at 200 bytes on an item, a lone item, a
-//     quote and an item holding a fence then the comment: commented text in 4 of 5, 4 of 4, 4 of 4 and 4 of 5 parts), and on P1's own
-//     paths: the unread tail, the console with no render job, and the whole-text fallback of a cutter that throws. The cure for
-//     containers (the same candidates and close and reopen inside each container path, with the container's prefix) is carried as
-//     the follow-up ticket `x2-fu-comment-in-container`.
+//     2026-11-27): none for a comment at the top level (above) whose opener line starts with `<!--` (after at most three spaces) and
+//     whose closer line has only white space after its first `-->`. It REMAINS for a closed comment inside a list item or a quote that
+//     is larger than a part (the container's text goes to P1, which reads no comment; measured at 200 bytes on an item, a lone item, a
+//     quote and an item holding a fence then the comment: commented text in 4 of 5, 4 of 4, 4 of 4 and 4 of 5 parts); for the
+//     top-level shapes the library draws inside a paragraph, which go to P1 as a paragraph does (review 4126 F2, ruled a residual on
+//     2026-11-27): text after the first `-->` on its line, text before `<!--` on its line, and a `<!-->` or `<!--->` opener with a
+//     later closer (measured at 200 bytes: hidden text in 3 of 5 parts for each; at the gate, a 576 089-byte old table behind
+//     `<!--` and `--> (removed …)`: 2 of 4); for a comment the cutter hands to P1 itself, one whose closer line does not fit a part
+//     beside the `<!--` reopen line or one in a window too small for its close and reopen lines; and on P1's own paths: the unread tail, the console with no
+//     render job, and the whole-text fallback of a cutter that throws. The cure for these (the same candidates and close and reopen
+//     inside each container path, with the container's prefix, and the paragraph shapes) is carried as the follow-up ticket
+//     `x2-fu-comment-in-container`.
 // The line cutter's own description follows.
 //
 // THE LINE CUTTER (P1). The cut, in this order of preference, taking the latest cut of the best kind that keeps the part within `maxBytes`:

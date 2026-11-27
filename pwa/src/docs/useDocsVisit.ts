@@ -142,18 +142,20 @@ export type RangeStale = 'relist' | 'changing' | 'other';
 
 /** What a finished range read tells the visit (`DocsVisit.rangeRead`): the read's identity (`rangeReadKey` of its target: the
  *  project, the place, the range pin and the size, so a moved listing pin over the same bytes is the same read), the snapshot's
- *  digest of the bytes it gave, the bytes themselves (`RangeOpened.bytes`; the visit never decodes them) and when its last frame
- *  was checked (Date.now()). The leaf drops them when it goes (`rangeDropped`), so they are held no longer than the page that read
- *  them. */
+ *  digest of the bytes it gave, when its last frame was checked (Date.now()) and, for a class with a text view, the bytes themselves
+ *  (`RangeOpened.bytes`; the visit never decodes them). `bytes` absent has one meaning: this read's text is never compared, because
+ *  its class has no text view (`rangeHasTextView`), so the leaf handed none (a leaf with no view stays mounted after it saves, and
+ *  would otherwise keep up to 64 MiB no view can use). The leaf drops the facts when it goes (`rangeDropped`), so they are held no
+ *  longer than the page that read them. */
 export interface RangeReadFacts {
-  readonly key: string; readonly digest: string; readonly readAt: number; readonly bytes: Uint8Array<ArrayBuffer>;
+  readonly key: string; readonly digest: string; readonly readAt: number; readonly bytes?: Uint8Array<ArrayBuffer>;
 }
 
 /** The page's range read, as the head reads it (`DocsVisit.rangeOpened`): the OPENED pin (a stat-pinned draft's carries the
- *  snapshot's digest as `fp`, X2 P1), when the bytes were read, and the bytes themselves. The head decodes them (`decodeRangeBytes`,
- *  the leaf's own, memoised per array) only for a class whose body Export compares with their text (Markdown, text): a read of an
- *  image, a PDF or a download of any type is never decoded. */
-export interface RangeOpened { readonly pin: DocPin; readonly readAt: number; readonly bytes: Uint8Array<ArrayBuffer> }
+ *  snapshot's digest as `fp`, X2 P1), when the bytes were read, and the bytes themselves for a class with a text view. The head
+ *  decodes them (`decodeRangeBytes`, the leaf's own, memoised per array) only for such a class (Markdown, text), after its class
+ *  check. `bytes` absent has one meaning, the facts': this read's text is never compared, its class has no text view. */
+export interface RangeOpened { readonly pin: DocPin; readonly readAt: number; readonly bytes?: Uint8Array<ArrayBuffer> }
 
 /** One visit, as the Docs views read it. */
 export interface DocsVisit {
@@ -792,7 +794,8 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
     const entry = findEntry(tree.answer.tree, file.pin.section, file.pin.path);
     const range = entry === undefined ? null : rangePinOf(file.pin, entry);
     if (range !== null && rangeReadKey({ project: page.project, pin: file.pin, range, size: file.size }) === ranged.facts.key) {
-      rangeOpened = { pin: openedRangePin(file.pin, ranged.facts.digest), readAt: ranged.facts.readAt, bytes: ranged.facts.bytes };
+      const opened = { pin: openedRangePin(file.pin, ranged.facts.digest), readAt: ranged.facts.readAt };
+      rangeOpened = ranged.facts.bytes === undefined ? opened : { ...opened, bytes: ranged.facts.bytes };
     }
   }
 
