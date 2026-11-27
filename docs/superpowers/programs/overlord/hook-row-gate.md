@@ -13,8 +13,9 @@ row (#3169) raised the forbidden program's cost on a quote-dense command by abou
   lost it, and the shell-side prefilter is untouched.
 - `server/test/session-hook-gate-equivalence.test.ts` checks four things:
   - The gated program against the same program with the gate cut out, in all three modes. The cut must find the gate
-    exactly twice. The ungated program is byte-equal to the program before the gate, apart from the unused `QZANC`
-    definition.
+    exactly twice. The suite does not check that the ungated program is byte-equal to the program before the gate,
+    apart from the unused `QZANC` definition: that is a fact of the diff, measured three times against main, and
+    asserted by no case (call 1526).
   - The commands: the quiz deny suite's lists (copied), plus spellings where only the normalised form holds the
     literal, at least one for each member of `QCH` between two of the letters.
   - The claim, sampled.
