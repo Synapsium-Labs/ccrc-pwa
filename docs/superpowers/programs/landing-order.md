@@ -48,6 +48,7 @@ merges, workers never do, and an unattended landing is the goal when every safeg
 | 5l | 5, the line | a merge-train landing must not hold the landing line: the train record's one parser reads the train tool's own member list, the landed reader marks a closed, labelled, unproven entry `closed`, and the coordinator references keep a waiting pull request a draft | ccd (fleet box first), server, skills | 5h, 5i | — | the plan is **merged** as #3423 (`aac570d3`) after three review rounds (runs 3935, 3936 and 3939); its section 12 is the coordinator's corrections and wins over the tasks; D-9111, D-9112 and D-9115 are defined there; the spec's §5.5 carries the amended line for D-9112; the build, run 3942 (the run's wave 32), is **merged** as #3451 (`48d35634`) after two review rounds (runs 3963 and 3995) and one fix round; D-9134 is a departure in one store case, defined in the plan; the plan's section 13 is the coordinator's corrections to it as built; two loose phrases of one reference sentence and one prover case are carried as issue #3466, for run 4011 (issue #3422; Decisions, 2026-11-26 11:10, 20:20 and 23:10) |
 | 5m | 5, carried cases | test cases only: three for the train prover (both blocks bad, `Infinity`, a key given twice inside a value that is never read) and two hardenings of the console's landing-line cases | tests (server, pwa) | 5k, 5l | — | planned 2026-11-27 by the coordinator (`docs/superpowers/plans/2026-11-27-landing-order-wave5m-carried-corrections.md`, no deviation number); the build, run 4011 (the run's wave 33), is **merged** as #3477 (`d417f085`) after two review rounds (runs 4030 and 4038) and one fix round, which added one console case and one prover body; the plan's section 6 is the coordinator's record of it as built (issue #3466; Decisions, 2026-11-27 00:50 and 06:52) |
 | 5n | 5, skill text | one sentence of the coordinator's landing reference reworded, with its pin: what the reader does on a train-closed head, and what the 20 minutes cover | skills | 5l | — | planned 2026-11-27 in the same plan (its section 3); the build, run 4014 (the run's wave 34), is **merged** as #3480 (`97dd3d30`) after one review round (run 4035), in a pull request of its own, because the reference and its pin are rules files; the word "damaged" is carried as issue #3552 (issue #3466; Decisions, 2026-11-27 00:50 and 06:52) |
+| 5o | 5, the held head | a head that conflicts with the base before it is queued must not hold the line in silence: the next-to-land cue's decider answers a third kind, `held`, and its transaction mails the entry's own coordinator once; the coordinator's and the worker's text name the line's third ejection, `conflict`, for this run's own entry | server, skills | 5i, 5l | — | planned 2026-11-27 by run 4081 (the run's wave 35; `docs/superpowers/plans/2026-11-27-landing-order-wave5o-held-head.md`, D-9159 and D-9160); the plan is **merged** as #3578 (`5576023f`) after three review rounds (runs 4083, 4094 and 4102) and two fix rounds, and was corrected by the coordinator in #3596 (`912babd5`); two builds along the plan's seam: the server half and the README, run 4111 (the run's wave 36), is **merged** as #3610 (`51683c2e`) after one review round (run 4137), and the text, run 4117 (the run's wave 37), is **merged** as #3614 (`f9cb8274`) after one review round (run 4127); D-9171 is a departure in one text case of the server half, defined in the plan; the plan's section 12 is the coordinator's record of the wave as built (issue #3577; Decisions, 2026-11-27 23:07) |
 
 **A fresh workspace per wave (R4) is child-reclamation's.** The spec first drew it as step 6 of the wave lifecycle,
 gated on #166 wave 3. #166 wave 2 (#178) made it live on `main` as "One PR per child", so wave 1 no longer
@@ -2865,6 +2866,97 @@ carries it (spec §5.1, amended 2026-09-24).
     after it (call 1712): a planned run with no work behind it would misstate the programme. Left, with no wave:
     issue #3552 (the word "damaged"), the cost measurement of wave 3f's sweep cadence (the Waves table), and the
     points listed under "Carried constraints" below.
+- **2026-11-27 23:07 — wave 5o is merged: a head that conflicts with the base before it is queued no longer holds the line in silence. No run of this programme is open.**
+  - **The case** (issue #3577). On 2026-11-27 the head entry of this project's line stopped merging with `main`
+    before its pull request was queued. The binding read `held` with reason `composition-not-clean`, and no mail
+    told its coordinator. That coordinator reported six entries waiting about half an hour. I read the code it
+    cited, and it held: the cue's decider sent nothing for any held binding, and the coordinator's and the
+    worker's text named two ejections where the line's vocabulary has three.
+    - Call 1752: plan a wave for both gaps through a plan run, then a reviewed build. Item 727, which asked
+      whether to end the programme or leave it idle, was withdrawn: its premise, that no wave is planned, had
+      become false.
+    - Call 1758: the conflict send-back is for a run's own pinned entry wherever it stands in the order, on a
+      conflict its coordinator measured. The notice stays for the head only, because the binding reads only
+      the head. The call's recorded reason says two coordinators had already sent an entry back early that
+      day. One case was measured, an entry sent back while fourth in the order. A second entry was ejected
+      with kind `conflict` at the same base, and where it stood was not measured. A recorded call cannot be
+      edited, so this entry says so.
+    - The other coordinators of this project were told a practice by mail that day: read the line for your own
+      entry, measure the conflict yourself, and send your own run back with the ejection kind `conflict`.
+  - **The plan** (#3578, `5576023f`, run 4081, the run's wave 35; D-9159 and D-9160). Three review rounds (runs
+    4083, 4094 and 4102), two fix rounds.
+    - Call 1761, fix round 1. Review 4083 found one critical, four important and eight minor points. The notice
+      covers the measured conflict only. `head-mismatch` left the wave, because a probe stamped after the pin
+      may have listed the heads before it (issue #3581). The identity is entry, pin, episode, base and
+      recipient. Behind the head there is no send-back while the line is paused or in recovery. The cost
+      sentence names three costs.
+    - Call 1785, fix round 2. Review 4094 found one critical, four important and six minor points, all in the
+      text half.
+      - Ruling A: behind the head only a `ready` binding for another entry licenses the early send-back. The
+        binding decides the lander marker before the pause and the recovery hold, so a test on those two
+        reasons is masked.
+      - Ruling B: the pull request's state is read once, with the boundary reference's queue query and
+        `isDraft`, before any change to it. This replaced the round 1 order, which measured nothing.
+      - Ruling C: the store's refusals are listed as measured.
+    - Calls 1798 and 1799: accepted at the review cap. Round 3 (review 4102) confirmed nothing and left six
+      wording points. The review judge's blocking reason was a plan with no spec, accepted as call 1470
+      accepted it for wave 5l's plan. Call 1799's recorded reason for keeping the early send-back of a ready
+      pull request to route Q is loose: it says a merge train may board a ready pull request on other routes.
+      The plan gives the reason that holds: only on route Q do the query's two null fields show that nothing
+      is queued or armed.
+    - Call 1811: two builds and two pull requests along the plan's seam, so that the rules files travel alone.
+      The review's wording points were corrected by the coordinator in a pull request of its own (#3596,
+      `912babd5`), after two independent reads of the edits, before the text half was dispatched. This replaced
+      call 1799's route, the builder's first commit: a builder does not edit a plan.
+    - **A measurement**, made on #3596 while it was a draft with nothing armed (gh 2.103.3). `gh pr ready <n>
+      --undo` on a draft answers that it is already a draft and exits 0. `gh pr merge <n> --disable-auto` on
+      a pull request with no auto-merge armed exits 1. Neither changed anything. A ready pull request with
+      nothing armed was not measured. Because of the second result, the text for the third ejection reads
+      step 6's disarm as an act on a pull request the query answers armed. Step 6's own sentence still reads
+      unconditional for the other forms (issue #3601).
+  - **The server half** (#3610, `51683c2e`, run 4111, the run's wave 36): the notice, D-9159, and the README's
+    sentence. One review round (run 4137), no fix round.
+    - Call 1860. The pull request's first run was red in one case, the literal source pin ratchet
+      (`single-definition/advance-switches`). The plan's own text case found `probedHeadOf`'s span with two
+      `indexOf` pins over a source file, which that ratchet counts. The worker keyed the case on the symbol
+      reader instead, in one commit that changes a test and a note. I read it and allowed the push.
+    - Calls 1884 and 1885. Review 4137 found nothing in the code: the notice is sent only on the measured
+      conflict and once per identity, the cue is unchanged byte for byte, and the README block is the plan's.
+      Its one finding is that the five commits before the new key are red on that ratchet, against the plan's
+      rule that each commit is green. Accepted as it stands, because the queue lands one squash commit. The
+      departure is D-9171, in the plan.
+    - Its minor points, on what the two text cases guard, on one comment and on the queue's two-way choice
+      of subject, are on issue #3581, which reworks the same decider.
+    - The review judge was green, with no blocking reason.
+  - **The text half** (#3614, `f9cb8274`, run 4117, the run's wave 37): D-9160, in a pull request of exactly
+    the three rules files and their two pin files. One review round (run 4127), no fix round.
+    - Call 1868. The three files equal the plan's blocks byte for byte. The review found no defect in the
+      text. Its panel rated the missing task note important, and I ruled that the pull request's body stands
+      in for it, as my brief had said. Its wording points on the disarm clause and on the head licence's
+      draft branch, and one lost indent in a pin file, are on issue #3601.
+    - Call 1869. The review judge did not pass, on two blocking reasons: the proof not built (the standing yes), and
+      a code-owner approval (an approval reason holds no pull request here). It raised no mixed-rules reason.
+    - This half has no note file. Its rows, the red-first run and the sizes are in the plan's section 12, from
+      the pull request's body and the wave-done report.
+    - The two halves share no file, and the text licenses nothing on the notice alone, so neither waited for
+      the other. The text landed first.
+  - **When it is live.** The notice is sent once the server box runs a release that contains #3610. The text
+    reaches each home when its box is updated to a release that contains #3614. The plan's section 6 says
+    what each order costs. Until both are live, the practice mailed on 2026-11-27 stands. The built text then
+    replaces it, and differs from it in two points: whether there is anything to disarm is read from the
+    queue query, and the line is read for this on no timer of its own. The coordinators who hold that
+    practice are told when the wave is live.
+  - **The plans and the spec.** The plan gains section 12, as built, and D-9171. The spec's §5.5 carries the
+    dated line for D-9159. The 5k plan's section 12 gains a pointer to #3580, another programme's change that
+    rolls the console's block up (D-9153, defined in that programme's plan).
+  - **What is open.** No build wave of this programme is planned, and its last run is closed with no run
+    opened after it (call 1905, for call 1712's reason: a planned run with no work behind it would
+    misstate the programme). This pull request closes issue #3577. The question that item 727 asked, to end
+    the programme or leave it idle, is raised again now that the wave is merged. Left, with no wave: issue
+    #3581 (a head whose pull request moved after the pin), issue #3601 (the disarm sentences), issue #3552
+    (the word "damaged"), whether an entry that conflicts behind the head gets a notice (the plan's
+    question 5), the cost measurement of wave 3f's sweep cadence (the Waves table), and the points listed
+    under "Carried constraints" below.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -3560,12 +3652,23 @@ Deploy: ccrc's updater carries the server, the PWA and the skill text.
   coordinator.
 - **Waves 5m and 5n are merged** (#3477 `d417f085`, #3480 `97dd3d30`; Decisions, 2026-11-27 06:52), from
   `docs/superpowers/plans/2026-11-27-landing-order-wave5m-carried-corrections.md`, whose section 6 says what the
-  builds and their reviews added and wins over the sections before it. **No build wave of this programme is
-  planned and no run is open.** Where another point of this brief says that a run is open or a wave is
-  planned, a point with a later date says what became of it. One point is carried with no wave: issue #3552,
+  builds and their reviews added and wins over the sections before it. Where another point of this brief
+  says that a run is open or a wave is planned, a point with a later date says what became of it. One point
+  is carried with no wave: issue #3552,
   a gloss for the word "damaged" in the coordinator's landing reference, which takes a pull request of its
   own because the reference and its pin are rules files. For any long build: the brief tells the worker to
   read its own claims before each push, because a claim has a hard expiry.
+- **Wave 5o is merged** (#3610 `51683c2e`, #3614 `f9cb8274`; Decisions, 2026-11-27 23:07), from
+  `docs/superpowers/plans/2026-11-27-landing-order-wave5o-held-head.md`, whose section 12 says what the builds
+  and their reviews found and wins over the sections before it. Once the server box runs a release that
+  contains #3610, a head held on its own measured conflict with the base gets one `head-held:` mail to its
+  coordinator. The coordinator's text names the third ejection, `conflict`, for this run's own entry at the
+  head or behind it, in each home whose box runs a release that contains #3614. Until both are live, the
+  practice mailed on 2026-11-27 stands (Decisions, that entry). **No build wave of this programme
+  is planned and no run is open.** Carried with no wave: issue #3581, issue #3601 and issue #3552; the last
+  two change rules files, so each takes a pull request of its own. For a plan that prescribes a test reading
+  a source file as text: key it on the symbol reader (`server/test/scan/symbols.ts`), because a new literal
+  pin over a `server/src` file turns the source pin ratchet red.
 - **Waves 1c and 1e are merged** (#3357 `6ac066f5`, #3362 `cb973d69`; Decisions, 2026-11-25 08:42). Their
   departures are D-9057 to D-9064 and D-9065, each in its wave's plan. The spec's section 5.1 says the fourth
   trigger holds until that round's wave-done.
