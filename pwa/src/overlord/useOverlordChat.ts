@@ -14,7 +14,7 @@
 // edited draft makes a new key, and `stale-designation` drops the binding, so the next send carries the new thread's term.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SessionStatus, SessionStreamMsg } from '../../../shared/api';
-import type { ChatEarlierAnswer, ChatSendAnswer, ChatThread, GenerationKey } from '../../../shared/overlordChat';
+import type { ChatEarlierAnswer, ChatSendAnswer, ChatThread, ChatThreadAnswer, GenerationKey } from '../../../shared/overlordChat';
 import { ApiError } from '../lib/apiError';
 import { apiErrorText, sendErrorText } from '../lib/api';
 import { onPageVisible } from '../lib/pageClock';
@@ -22,12 +22,8 @@ import {
   awaitsPickUp, chatReadTrigger, chatRefusalRole, draftAfterSend, historyItemsToChat, nextReadAt, sendNotice, type ChatRow,
 } from './chatWords';
 
-/** The thread door's answer as the chat reads it. `no-answer` is a transport failure; `off-shape` a body in no shape known. */
-export type ChatThreadRead =
-  | { readonly kind: 'thread'; readonly thread: ChatThread }
-  | { readonly kind: 'refused'; readonly error: string; readonly retryAfterS?: number }
-  | { readonly kind: 'off-shape' }
-  | { readonly kind: 'no-answer' };
+/** The thread door's answer as the chat reads it (`shared/overlordChat.ts#readChatThreadAnswer`). */
+export type ChatThreadRead = ChatThreadAnswer;
 
 /** The earlier door's answer, or why there is none. */
 export type ChatEarlierRead = ChatEarlierAnswer | 'off-shape' | 'no-answer';

@@ -280,7 +280,8 @@ describe('GET /api/overlord/chat/earlier: the query', () => {
     oneTerm(r);
     const bad = [
       'term=0&n=1', 'term=1', 'n=1', 'term=1&n=0', 'term=1&n=1.5', 'term=-1&n=1', 'term=01&n=1', 'term=1&n=1&around=x',
-      `term=1&n=1&around=${AROUND.toUpperCase()}`, `term=1&n=1&around=${AROUND}&around=${AROUND}`,
+      // A uuid with hex letters: AROUND is digits only, so upper-casing it would change nothing.
+      `term=1&n=1&around=${'abcdef01-2345-4678-89ab-cdef01234567'.toUpperCase()}`, `term=1&n=1&around=${AROUND}&around=${AROUND}`,
       `term=1&n=1&target=${LANE_B}`, `term=1&n=1&session=${LANE_B}`, '',
     ];
     for (const q of bad) {

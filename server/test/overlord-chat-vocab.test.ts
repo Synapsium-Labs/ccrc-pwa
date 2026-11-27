@@ -7,7 +7,7 @@ import { READINESS_WORDS } from '../../shared/overlord-readiness.js';
 import { renderInboxWakeLine } from '../../shared/overlordInbox.js';
 import {
   CHAT_ENTRY_KINDS, CHAT_SERVER_LINE_MAP, CHAT_SERVER_LINE_UNMEASURED, EARLIER_WORDS, MESSAGE_TICK_MAP, NOT_ON_RECORD, TICK_STAGES,
-  chatTicksOf, readChatEarlierAnswer, readChatEarlierQuery, readChatSendAnswer, readChatThread, readChatThreadQuery,
+  chatTicksOf, readChatEarlierAnswer, readChatEarlierQuery, readChatSendAnswer, readChatThread, readChatThreadAnswer, readChatThreadQuery,
 } from '../../shared/overlordChat.js';
 import { renderMailNudge, renderOperatorMessageNudge } from '../src/coord/envelope.js';
 import * as vocabModule from '../../shared/overlordChat.js';
@@ -96,6 +96,27 @@ describe('readChatEarlierAnswer', () => {
     expect(readChatEarlierAnswer({ ok: true, page })).toBe('off-shape');
     expect(readChatEarlierAnswer({ ok: false })).toBe('off-shape');
     expect(readChatEarlierAnswer(null)).toBe('off-shape');
+  });
+});
+
+describe('readChatThreadAnswer: the thread door\'s answer as the console reads it', () => {
+  const thread = { v: 1, designation: 'none', sessionId: null, term: null, entries: [],
+    messages: { kind: 'read', value: { more: false } }, generations: { kind: 'read', value: { count: 0 } }, readiness: { kind: 'read', value: { oldest: null } } };
+  it('a 200 thread through the thread\'s reader; a 200 it cannot read is off-shape', () => {
+    expect(readChatThreadAnswer(200, thread)).toMatchObject({ kind: 'thread', thread: { designation: 'none' } });
+    expect(readChatThreadAnswer(200, { ...thread, v: 2 })).toEqual({ kind: 'off-shape' });
+    expect(readChatThreadAnswer(200, null)).toEqual({ kind: 'off-shape' });
+  });
+  it('a refusal with its word, and retryAfterS only when the body carries a count', () => {
+    expect(readChatThreadAnswer(429, { ok: false, error: 'read-ceiling', retryAfterS: 60 })).toEqual({ kind: 'refused', error: 'read-ceiling', retryAfterS: 60 });
+    expect(readChatThreadAnswer(502, { ok: false, error: 'unmeasured', detail: 'x' })).toEqual({ kind: 'refused', error: 'unmeasured' });
+    expect(readChatThreadAnswer(429, { ok: false, error: 'read-ceiling', retryAfterS: -1 })).toEqual({ kind: 'refused', error: 'read-ceiling' });
+  });
+  it('a refusal with no word, a 3xx or a thread at a refusal status is off-shape', () => {
+    expect(readChatThreadAnswer(502, { ok: false })).toEqual({ kind: 'off-shape' });
+    expect(readChatThreadAnswer(502, { ok: false, error: '' })).toEqual({ kind: 'off-shape' });
+    expect(readChatThreadAnswer(304, { ok: false, error: 'x' })).toEqual({ kind: 'off-shape' });
+    expect(readChatThreadAnswer(500, thread)).toEqual({ kind: 'off-shape' });
   });
 });
 

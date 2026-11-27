@@ -55,6 +55,15 @@ import { rungMoveVerdict, narrowingState, type LadderWriterRefusal } from './ove
 import { LadderStampRefused, type LadderWrite } from './overlordLadderStore.js';
 import type { OverlordAuthorityExchange } from './overlordAuthorityExchange.js';
 import type { OverlordRestoreState } from './overlordRestoreState.js';
+import { readChatEarlierQuery, readChatThreadQuery } from '../../../shared/overlordChat.js';
+import type { FleetIO } from '../io.js';
+import { composeChat } from './overlordChat.js';
+import {
+  CHAT_EARLIER_PAGEABLE, CHAT_PAGE_ROWS, chatDesignation, chatThreadComposed, earlierComposed, earlierStep, generationsFact, messagesFact,
+  readinessFact, type GenerationsRead, type MessagesPageRead, type ReadinessChangesRead,
+} from './overlordChatDoor.js';
+import { historyAgentFor, historyDoorAnswer, type HistoryLink } from './overlordHistory.js';
+import type { runOverlordRead } from './overlordRead.js';
 
 // ── the port ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -128,6 +137,18 @@ export interface OverlordRouteDeps {
   readonly restore?: Pick<OverlordRestoreState, 'confirm' | 'authority'>;
   /** The authority journal (`AuthorityAppender`), handed to the writers that append. */
   readonly journal: AuthorityAppender;
+  /** The chat's two reads (Overlord W1 chat, Tasks 2 and 3): the one read runner, in its operator mode; the private store's page of
+   *  messages (the store itself, so the words are read in the door's handler: `operator-message-readers`), absent without a store;
+   *  one identity's generations; the readiness changes; and the history door's agent links and port. Absent (a test server, a
+   *  script): both doors answer 503 `unavailable` after the gate and the designation. */
+  readonly chat?: {
+    readonly readRunner: ReturnType<typeof runOverlordRead>;
+    readonly messages: { messagesPage(beforeId: number | null, limit: number): MessagesPageRead } | undefined;
+    readonly generationsOf: (identity: string) => GenerationsRead;
+    readonly readinessChanges: (sinceMs: number, untilMs: number) => ReadinessChangesRead;
+    readonly links: () => readonly HistoryLink[];
+    readonly io: Pick<FleetIO, 'overlordHistory'>;
+  };
   readonly body: OverlordBody;
   /** The first prompt goes through the renewal lane's port (X4). */
   readonly host: Pick<SessionHost, 'deliver'>;
@@ -604,6 +625,56 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
       const owedIds = standing.kind === 'unmeasured' || standing.row === null ? r.owed : standing.row.stopsOwed;
       const drained = await drainOwedStops(deps, owedIds);
       return { ok: true, changed: true, term: r.term, stopped: drained.stopped, owed: drained.owed };
+    });
+  });
+
+  // The chat's thread (Overlord W1 chat, Task 2): the account gate with no cap (refused while sign-in is off, before any read), the
+  // query, the designation's three arms, then the read runner in its operator mode, door `chat`: the console's ceiling, the facts
+  // each read once, and one line. No designation is a measured absence: 200, no read, no line.
+  app.get('/api/overlord/chat', async (req, reply) => {
+    if (!deps.gate(req, reply, { cap: null }).pass) return reply;
+    const q = readChatThreadQuery(req.query);
+    if (!q.ok) return refuseRoute(reply, 'bad-request', { detail: q.detail });
+    const d = chatDesignation(coord.designationRead());
+    if (d.kind === 'refuse') return refuseRoute(reply, d.word, { detail: d.detail });
+    if (d.kind === 'none') return d.thread;
+    const chat = deps.chat;
+    if (chat === undefined) return refuseRoute(reply, 'unavailable', { detail: 'the chat reads are not wired on this server' });
+    return chat.readRunner(req, reply, {
+      door: 'chat', caller: 'operator',
+      compose: () => chatThreadComposed(composeChat({
+        designation: { kind: 'designated', sessionId: d.sessionId, term: d.term },
+        messages: messagesFact(chat.messages?.messagesPage(q.before, CHAT_PAGE_ROWS) ?? { kind: 'unmeasured', why: 'no private store' }),
+        generations: generationsFact(chat.generationsOf(d.identity)),
+        readiness: readinessFact(chat.readinessChanges(0, Number.MAX_SAFE_INTEGER)),
+        pageable: CHAT_EARLIER_PAGEABLE,
+      })),
+    });
+  });
+
+  // An earlier generation's page (Overlord W1 chat, Task 3), through the history door's own choice and mapping: the gate, the
+  // query, the designation, then the runner's operator mode, door `chat-history`. No designation has no generation to read: 400
+  // `no-generation`, with no line because no read is attempted and nothing is counted (slug `earlier-door-none-is-no-generation`).
+  app.get('/api/overlord/chat/earlier', async (req, reply) => {
+    if (!deps.gate(req, reply, { cap: null }).pass) return reply;
+    const q = readChatEarlierQuery(req.query);
+    if (!q.ok) return refuseRoute(reply, 'bad-request', { detail: q.detail });
+    const d = chatDesignation(coord.designationRead());
+    if (d.kind === 'refuse') return refuseRoute(reply, d.word, { detail: d.detail });
+    if (d.kind === 'none') return refuseRoute(reply, 'bad-request', { detail: 'no-generation' });
+    const chat = deps.chat;
+    if (chat === undefined) return refuseRoute(reply, 'unavailable', { detail: 'the chat reads are not wired on this server' });
+    const ac = new AbortController();
+    reply.raw.once('close', () => { if (!reply.raw.writableFinished) ac.abort(); });
+    const { gen, around } = q.req;
+    return chat.readRunner(req, reply, {
+      door: 'chat-history', caller: 'operator',
+      compose: async () => {
+        const step = earlierStep(generationsFact(chat.generationsOf(d.identity)), gen, around, CHAT_EARLIER_PAGEABLE);
+        if (step.kind === 'composed') return step.composed;
+        const choice = historyAgentFor(chat.links());
+        return earlierComposed(gen, historyDoorAnswer(choice.kind === 'agent' ? await chat.io.overlordHistory(step.request, ac.signal) : choice), step.scope);
+      },
     });
   });
 

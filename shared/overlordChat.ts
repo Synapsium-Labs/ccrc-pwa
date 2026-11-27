@@ -274,6 +274,26 @@ export function readChatEarlierAnswer(body: unknown): ChatEarlierAnswer | 'off-s
   };
 }
 
+/** The thread door's answer as the console reads it, by its status and body: the thread through its one reader, or the refusal word
+ *  with `retryAfterS` when the body has one (the read ceiling's). `no-answer` is a transport failure, which the client says; a body
+ *  in no shape known is `off-shape`. */
+export type ChatThreadAnswer =
+  | { readonly kind: 'thread'; readonly thread: ChatThread }
+  | { readonly kind: 'refused'; readonly error: string; readonly retryAfterS?: number }
+  | { readonly kind: 'off-shape' }
+  | { readonly kind: 'no-answer' };
+
+export function readChatThreadAnswer(status: number, body: unknown): ChatThreadAnswer {
+  if (status === 200) {
+    const r = readChatThread(body);
+    return r.ok ? { kind: 'thread', thread: r.thread } : { kind: 'off-shape' };
+  }
+  if (status >= 400 && status <= 599 && isObj(body) && typeof body.error === 'string' && body.error !== '') {
+    return { kind: 'refused', error: body.error, ...(isCount(body.retryAfterS) ? { retryAfterS: body.retryAfterS } : {}) };
+  }
+  return { kind: 'off-shape' };
+}
+
 // ── the prompt route's answer, as the chat reads it ───────────────────────────────────────────────────────────────────
 
 /** The prompt route's answer as the chat reads it (private store B's additive shape). `no-answer` is a transport failure: the
