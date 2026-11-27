@@ -95,8 +95,13 @@ export const FRAMES_SEND_STEPS: readonly FramesSendStep[] = Object.keys(FRAMES_S
 /** A frame's byte ceiling (the capture owner's condition: a cap of rows by columns and bytes, refused over it). */
 export const FRAME_BYTES_MAX = 65_536;
 
-/** An SGR sequence, the one escape a frame may hold. */
+/** An SGR sequence, the one escape a frame may hold. The frame's own definition, beside the pane reader's (`pane/dialog.ts`,
+ *  ARCH-63), for a recorded reason: the shape rule is the boundary of what may leave the test box, the reducer runs in the
+ *  test box's agent as well as on the server (so an L0 file cannot import `server/src`), and it takes SGR's colon
+ *  sub-parameter form (`4:3`) too, so a frame's escapes are judged by one rule on both hosts. */
 const SGR = /\x1b\[[0-9;:]*m/g;
+/** `text` with every SGR sequence removed, by the frame's definition above: the one stripper the box frames files use. */
+export const stripFrameSgr = (text: string): string => text.replace(SGR, '');
 
 /** The frame's measured size: its rows (lines, less one trailing empty line `capture-pane -p` ends with), its widest row in
  *  printable code points (SGR removed), and its UTF-8 bytes. */

@@ -12,12 +12,9 @@
 //
 // A frame the reducer cannot clear is REFUSED WHOLE with its rule word. Nothing is ever cut out to make one pass.
 import { CREDENTIAL_MASKS } from './api.js';
-import { frameTextFits, type FramesPane, type FramesRefusal } from './framesResult.js';
+import { frameTextFits, stripFrameSgr, type FramesPane, type FramesRefusal } from './framesResult.js';
 import { CLASSES } from './models.js';
 
-/** An SGR sequence (a frame's only escape, by the shape rule). */
-const SGR = /\x1b\[[0-9;:]*m/g;
-const stripSgr = (s: string): string => s.replace(SGR, '');
 /** Whitespace erased, as `server/src/inject/send.ts`'s `squash` reads a box row: wrapping moves only spaces. */
 const squash = (s: string): string => s.replace(/\s+/g, '');
 
@@ -111,7 +108,7 @@ export function reduceFrame(
   const scanned: string[] = [];
   let ruleLeak = false;
   const rows = frame.split('\n').map((row) => {
-    const plain = stripSgr(row);
+    const plain = stripFrameSgr(row);
     const hasPrivate = priv.some((p) => plain.includes(p));
     if (isRuleRow(plain)) {
       // Rule 7: a rule row's label is kept byte for byte, unless it holds a private string. A label rules 4 to 6 would
@@ -140,7 +137,7 @@ export function reduceFrame(
   if (ruleLeak || PRIVATE_SHAPES.some((r) => r.test(foreign)) || priv.some((p) => foreign.includes(p))) return { kind: 'refused', refusal: 'private-shape' };
   // The masker over the whole frame as drawn AND with its SGR removed, so a colour change inside a key cannot split it
   // past the shapes (the security review of F3).
-  if (mask(text) || mask(stripSgr(text))) return { kind: 'refused', refusal: 'masked' };
+  if (mask(text) || mask(stripFrameSgr(text))) return { kind: 'refused', refusal: 'masked' };
   return { kind: 'reduced', text, replaced: count };
 }
 

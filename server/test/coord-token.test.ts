@@ -493,7 +493,7 @@ describe('matchDigestSlots: every slot compared, every time', () => {
 });
 
 describe('every box-token lane names itself to the check', () => {
-  // The 19 call sites (server.ts 2, coord/routes.ts 16, update/routes.ts 1) each
+  // The 20 call sites (server.ts 2, coord/routes.ts 17, update/routes.ts 1) each
   // pass their route key, so a retired presentation is counted per lane. The
   // one call before the first registration is requireMailToken's own, which
   // passes the `route` its callers name. Two are the test box's read and tools
@@ -504,20 +504,37 @@ describe('every box-token lane names itself to the check', () => {
   // EXEMPT-BUT-AUTHENTICATED in auth-gate.test.ts and counted in the census.
   // 19 since landing order wave 5j-a's `GET /api/landing` (D-9048): the line's read takes the session OR the box token,
   // the `GET /api/feed` shape, where it called requireMailToken before, so its check is now a call site of its own.
+  // 20 since Desktop polish wave 187's `GET /api/testbox/frames`: the box frames read takes the session OR the box token, as
+  // the test box status read does; its route is registered in `testboxFramesRoutes.ts`, and its check is composed here.
   const CALL = /checkMailToken\(deps\.mailToken \?\? null, req\.headers\[MAIL_TOKEN_HEADER\](?:, ([^)]+))?\)/g;
+  // A route its own file registers, with its check composed in the calling file: the helper's call is that route's
+  // registration there. Each row is held to its file below.
+  const HELPER_ROUTES: Readonly<Record<string, { key: string; file: string }>> = {
+    registerTestboxFramesRoute: { key: 'GET /api/testbox/frames', file: 'testboxFramesRoutes.ts' },
+  };
   const sites = (rel: string): { lane: string | null; route: string | null }[] => {
     const src = readFileSync(path.join(repoRoot, 'server', 'src', rel), 'utf8');
-    const regs = [...src.matchAll(/app\.(get|post)\('([^']+)'/g)]
-      .map((m) => ({ key: `${m[1]!.toUpperCase()} ${m[2]!}`, at: m.index! }));
+    const regs = [
+      ...[...src.matchAll(/app\.(get|post)\('([^']+)'/g)].map((m) => ({ key: `${m[1]!.toUpperCase()} ${m[2]!}`, at: m.index! })),
+      ...[...src.matchAll(/\b(register\w+)\(app\b/g)].filter((m) => HELPER_ROUTES[m[1]!] !== undefined)
+        .map((m) => ({ key: HELPER_ROUTES[m[1]!]!.key, at: m.index! })),
+    ].sort((x, y) => x.at - y.at);
     return [...src.matchAll(CALL)].map((m) => {
       const owner = regs.filter((r) => r.at < m.index!).pop();
       return { lane: m[1] ?? null, route: owner?.key ?? null };
     });
   };
 
-  it('all nineteen pass a lane, and a literal lane is its own route key', () => {
+  it('each helper route is registered by its own file, at the path its row names', () => {
+    for (const { key, file } of Object.values(HELPER_ROUTES)) {
+      const [method, route] = key.split(' ');
+      expect(readFileSync(path.join(repoRoot, 'server', 'src', file), 'utf8')).toContain(`app.${method!.toLowerCase()}('${route!}'`);
+    }
+  });
+
+  it('all twenty pass a lane, and a literal lane is its own route key', () => {
     const all = ['server.ts', 'coord/routes.ts', 'update/routes.ts'].flatMap(sites);
-    expect(all).toHaveLength(19);
+    expect(all).toHaveLength(20);
     for (const s of all) {
       expect(s.lane, `a call inside ${s.route ?? 'the helper'} names no lane`).not.toBeNull();
       if (s.route === null) expect(s.lane).toBe('route');
