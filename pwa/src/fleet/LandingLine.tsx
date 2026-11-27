@@ -3,23 +3,31 @@
 //
 // - `none` draws no block; `line` draws a named region: the title, the status in `role="status"`, the stale sentence when
 //   the last read failed, the pause control, and one row per open entry, each with `Withdraw…` (R1). That is also the
-//   document order (section 11); the stylesheet places the pause button on the title row, and it is the only control
-//   there, so the tab order still follows what is seen.
+//   document order (section 11); the stylesheet places the pause button on the title row, after the title, so the tab
+//   order still follows what is seen.
+// - Rolled up by default (desktop polish wave 192): the title is the block's disclosure, a button that names whether it
+//   is open and what it controls, the body after the status and the stale sentence. Rolled up, the body holds only the
+//   view model's summary line; open, it holds what the block always drew: the pause control, its error and the rows.
+//   The status and the stale sentence sit outside the body, the same elements in both states, so a change is announced
+//   once. Only the operator's tap opens or closes it (`foldState.ts` keeps it, per project, while the page lives).
 // - The pause label comes only from the read: a tap shows the busy label, then re-reads; the label changes when a read
 //   does (row M8). The button is never disabled while busy, so focus stays on it; a second tap sends nothing.
 // - The sheet outlives the block (F1): while a sheet is open it is drawn whatever the state, so a withdrawal of the
 //   line's only entry, or a refusal on a line the re-read empties, keeps its sentence until the operator closes it.
 // - The re-read on every answer of the withdraw door is this component's act (fix round 1, F1): it stays mounted when
 //   the sheet is closed while the call is in flight, so it re-reads once per answer, the sheet open or not.
-// - Focus (m7, R6): after `Done` the pause button, else the card; after `Cancel` the row's `Withdraw…`, else the pause
-//   button, else the card. When a read removes the control that held focus (the row's `Withdraw…` after a sheet closed
-//   mid-flight, or the pause button when the block removes itself) and focus has fallen to the page: the pause button,
-//   else the card. Each is moved in an effect, after the sheet primitive has given the focus back to its opener.
-import { useEffect, useRef, useState } from 'react';
+// - Focus (m7, R6): after `Done` the pause button, else the disclosure, else the card; after `Cancel` the row's
+//   `Withdraw…`, else the pause button, else the disclosure, else the card. When a read removes the control that held
+//   focus (the row's `Withdraw…` after a sheet closed mid-flight, or the pause button when the block removes itself) and
+//   focus has fallen to the page: the pause button, else the disclosure, else the card. Each is moved in an effect,
+//   after the sheet primitive has given the focus back to its opener. Rolling the block up with focus inside it leaves
+//   focus on the disclosure (wave 192), moved before the body's controls go.
+import { useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode, RefObject } from 'react';
-import { Button, Chip } from '@ccrc/ui';
+import { BARE_ROW, Button, Chip } from '@ccrc/ui';
 import type { LandingPauseAnswer } from '../../../shared/landingLine';
 import { api } from '../lib/api';
+import { toggleLandingLineOpen, useLandingLineOpen } from './foldState';
 import type { LandingCardState, LandingLineCard } from './landingLineView';
 import {
   LINE_TITLE, PAUSE_NAME, STALE_PREFIX, TAG_FIXES_MAIN, TAG_NO_RUN, WITHDRAW_LABEL, WITHDRAW_VISIBLE, landingFailureOf,
@@ -53,30 +61,41 @@ export function LandingLine({
   const gen = useRef(0);
   useEffect(() => () => { gen.current += 1; }, []);
   const pauseRef = useRef<HTMLButtonElement>(null);
+  const toggleRef = useRef<HTMLButtonElement>(null);
   const rowButtons = useRef(new Map<number, HTMLButtonElement>());
   const sectionRef = useRef<HTMLElement>(null);
   /** The control in the block that last held focus, until focus moves to an element outside the block (R6). */
   const lastFocused = useRef<HTMLElement | null>(null);
+  /** Whether the operator opened this project's block (wave 192); rolled up when they have not. */
+  const open = useLandingLineOpen().has(project);
+  const bodyId = useId();
 
   // Focus after the sheet closes (m7, R6): after the sheet primitive's own give-back, which a re-read may have removed.
   useEffect(() => {
     if (closed === null) return;
     const order = closed.after === 'done'
-      ? [pauseRef.current, focusFallback.current]
-      : [rowButtons.current.get(closed.entryId), pauseRef.current, focusFallback.current];
+      ? [pauseRef.current, toggleRef.current, focusFallback.current]
+      : [rowButtons.current.get(closed.entryId), pauseRef.current, toggleRef.current, focusFallback.current];
     firstInDocument(order)?.focus({ preventScroll: true });
   }, [closed, focusFallback]);
 
   // A read removed the control that held focus, no sheet is open, and focus fell to the page (R6; fix round 1, F1): the
-  // pause button, else the card.
+  // pause button, else the disclosure, else the card.
   useEffect(() => {
     const held = lastFocused.current;
     if (sheet !== null || held === null || held.isConnected) return;
     lastFocused.current = null;
     const active = document.activeElement;
     if (active !== null && active !== document.body) return;
-    firstInDocument([pauseRef.current, focusFallback.current])?.focus({ preventScroll: true });
+    firstInDocument([pauseRef.current, toggleRef.current, focusFallback.current])?.focus({ preventScroll: true });
   }, [state, sheet, focusFallback]);
+
+  /** The disclosure's tap (wave 192). Rolling up with focus inside the block puts focus on the disclosure first, so the
+   *  body's controls never take it with them: a mouse click does not focus a button in every engine. */
+  const tapToggle = (): void => {
+    if (open && (sectionRef.current?.contains(document.activeElement) ?? false)) toggleRef.current?.focus({ preventScroll: true });
+    toggleLandingLineOpen(project);
+  };
 
   const tapPause = (card: LandingLineCard): void => {
     if (busy) return;
@@ -127,44 +146,62 @@ export function LandingLine({
           if (next instanceof Node && !(sectionRef.current?.contains(next) ?? false)) lastFocused.current = null;
         }}
       >
-        <p className="landing-line-title">{LINE_TITLE}</p>
+        {/* `BareRow`'s classes on a plain button: that primitive takes no ref, and focus needs one. */}
+        <button
+          ref={toggleRef}
+          type="button"
+          className={`${BARE_ROW} landing-line-title`}
+          aria-expanded={open}
+          aria-controls={bodyId}
+          onClick={tapToggle}
+        >
+          <span className="landing-line-mark" aria-hidden="true">{open ? '▾' : '▸'}</span>
+          <span>{LINE_TITLE}</span>
+        </button>
         <p className="landing-line-status" role="status" aria-live="polite">{card.statusText}</p>
         {stale !== null && <p className="landing-line-stale">{STALE_PREFIX + stale.text}</p>}
-        <Button
-          ref={pauseRef}
-          className="landing-line-pause"
-          variant="quiet"
-          size="fit"
-          aria-label={PAUSE_NAME(label, project)}
-          onClick={() => tapPause(card)}
-        >
-          {label}
-        </Button>
-        {error !== null && <p className="landing-line-error" role="alert">{error}</p>}
-        {card.rows.length > 0 && (
-          <ul className="landing-line-rows">
-            {card.rows.map((r) => (
-              <li key={r.entryId} className="landing-line-row">
-                <span className="landing-line-pr">#{r.pr}</span>
-                <span className="landing-line-role">
-                  <span>{r.text}</span>
-                  {r.fixesMain && <Chip>{TAG_FIXES_MAIN}</Chip>}
-                  {r.runless && <Chip>{TAG_NO_RUN}</Chip>}
-                </span>
-                <Button
-                  ref={(el: HTMLButtonElement | null) => { if (el === null) rowButtons.current.delete(r.entryId); else rowButtons.current.set(r.entryId, el); }}
-                  className="landing-line-act"
-                  variant="danger-ghost"
-                  size="fit"
-                  aria-label={WITHDRAW_LABEL(r.pr, project)}
-                  onClick={() => openSheet(r.entryId, r.pr)}
-                >
-                  {WITHDRAW_VISIBLE}
-                </Button>
-              </li>
-            ))}
-          </ul>
-        )}
+        <div id={bodyId} className="landing-line-body">
+          {!open && card.summary !== null && <p className="landing-line-summary">{card.summary}</p>}
+          {open && (
+            <>
+              <Button
+                ref={pauseRef}
+                className="landing-line-pause"
+                variant="quiet"
+                size="fit"
+                aria-label={PAUSE_NAME(label, project)}
+                onClick={() => tapPause(card)}
+              >
+                {label}
+              </Button>
+              {error !== null && <p className="landing-line-error" role="alert">{error}</p>}
+              {card.rows.length > 0 && (
+                <ul className="landing-line-rows">
+                  {card.rows.map((r) => (
+                    <li key={r.entryId} className="landing-line-row">
+                      <span className="landing-line-pr">#{r.pr}</span>
+                      <span className="landing-line-role">
+                        <span>{r.text}</span>
+                        {r.fixesMain && <Chip>{TAG_FIXES_MAIN}</Chip>}
+                        {r.runless && <Chip>{TAG_NO_RUN}</Chip>}
+                      </span>
+                      <Button
+                        ref={(el: HTMLButtonElement | null) => { if (el === null) rowButtons.current.delete(r.entryId); else rowButtons.current.set(r.entryId, el); }}
+                        className="landing-line-act"
+                        variant="danger-ghost"
+                        size="fit"
+                        aria-label={WITHDRAW_LABEL(r.pr, project)}
+                        onClick={() => openSheet(r.entryId, r.pr)}
+                      >
+                        {WITHDRAW_VISIBLE}
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>
+          )}
+        </div>
       </section>
     );
   })() : null;

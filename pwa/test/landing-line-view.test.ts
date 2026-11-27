@@ -205,18 +205,83 @@ describe('sameLandingState', () => {
 });
 
 describe('landingLineHoldPart (R8)', () => {
-  it('empty for no state and for none', () => {
-    expect(landingLineHoldPart(undefined)).toBe('');
-    expect(landingLineHoldPart({ kind: 'none' })).toBe('');
+  // Desktop polish wave 192: the open block's part is today's, byte for byte, and takes `open: true`.
+  it('empty for no state and for none, open or rolled up', () => {
+    for (const open of [true, false]) {
+      expect(landingLineHoldPart(undefined, open)).toBe('');
+      expect(landingLineHoldPart({ kind: 'none' }, open)).toBe('');
+    }
   });
   it('the row count, the status letter and the stale mark', () => {
-    expect(landingLineHoldPart(line())).toBe('5r');
-    expect(landingLineHoldPart(landingCardStateOf(line(), fail(503, { ok: false, error: 'landing-fenced', recovery: 'restart' })))).toBe('5rs');
-    expect(landingLineHoldPart(line(paused(['operator'])))).toBe('5p');
-    expect(landingLineHoldPart(line(paused(['operator'], { held: { reason: 'landing-recovery-unresolved', subjectIds: [1] } })))).toBe('5q');
-    expect(landingLineHoldPart(line(view({}, { head: null, held: { reason: 'landing-recovery-unresolved', subjectIds: [1] } })))).toBe('5h');
-    expect(landingLineHoldPart(line(view({ mainRedHold: true })))).toBe('5m');
-    expect(landingLineHoldPart(line(view({}, { head: null })))).toBe('5n');
+    expect(landingLineHoldPart(line(), true)).toBe('5r');
+    expect(landingLineHoldPart(landingCardStateOf(line(), fail(503, { ok: false, error: 'landing-fenced', recovery: 'restart' })), true)).toBe('5rs');
+    expect(landingLineHoldPart(line(paused(['operator'])), true)).toBe('5p');
+    expect(landingLineHoldPart(line(paused(['operator'], { held: { reason: 'landing-recovery-unresolved', subjectIds: [1] } })), true)).toBe('5q');
+    expect(landingLineHoldPart(line(view({}, { head: null, held: { reason: 'landing-recovery-unresolved', subjectIds: [1] } })), true)).toBe('5h');
+    expect(landingLineHoldPart(line(view({ mainRedHold: true })), true)).toBe('5m');
+    expect(landingLineHoldPart(line(view({}, { head: null })), true)).toBe('5n');
+  });
+});
+
+// Desktop polish wave 192: the rolled-up block's height is its status, its stale sentence and its one summary line, so
+// its part is `c`, the entries the summary names, `+` when it cuts the list, the same status letter and stale mark.
+describe('landingLineHoldPart rolled up (wave 192)', () => {
+  const many = (n: number): LandingLineView => {
+    const entries = Array.from({ length: n }, (_, i) => e(201 + i));
+    return { project: P, operatorPaused: false, mainRedHold: false, entries, order: { paused: false, order: entries, head: entries[0] ?? null } };
+  };
+  it('c, the named count, the status letter and the stale mark; never the open block\'s part', () => {
+    expect(landingLineHoldPart(line(), false)).toBe('c5r');
+    expect(landingLineHoldPart(landingCardStateOf(line(), fail(503, { ok: false, error: 'landing-fenced', recovery: 'restart' })), false)).toBe('c5rs');
+    expect(landingLineHoldPart(line(paused(['operator'])), false)).toBe('c5p');
+    expect(landingLineHoldPart(line(paused(['operator'], { held: { reason: 'landing-recovery-unresolved', subjectIds: [1] } })), false)).toBe('c5q');
+    expect(landingLineHoldPart(line(view({}, { head: null, held: { reason: 'landing-recovery-unresolved', subjectIds: [1] } })), false)).toBe('c5h');
+    expect(landingLineHoldPart(line(view({ mainRedHold: true })), false)).toBe('c5m');
+    expect(landingLineHoldPart(line(view({}, { head: null })), false)).toBe('c5n');
+  });
+  it('a pause on an empty line draws no summary: c0', () => {
+    const empty: LandingLineView = { project: P, operatorPaused: true, mainRedHold: false, entries: [], order: { paused: true, by: ['operator'], order: [] } };
+    expect(landingLineHoldPart(line(empty), false)).toBe('c0p');
+  });
+  it('the named count stops at the cut: twelve is c12, thirteen and more are c12+ whatever their number', () => {
+    expect(landingLineHoldPart(line(many(1)), false)).toBe('c1r');
+    expect(landingLineHoldPart(line(many(12)), false)).toBe('c12r');
+    expect(landingLineHoldPart(line(many(13)), false)).toBe('c12+r');
+    expect(landingLineHoldPart(line(many(30)), false)).toBe('c12+r');
+    expect(landingLineHoldPart(line(many(13)), true)).toBe('13r');
+  });
+  it('a change of a row\'s role, wrapped text only, keeps the part (R8)', () => {
+    const moved = view({ entries: [E101, e(102, { state: 'ejected', ejectionKind: 'conflict', ejections: 2 }), E104, E107, E109] });
+    expect(landingLineHoldPart(line(moved), false)).toBe(landingLineHoldPart(line(), false));
+  });
+});
+
+// Desktop polish wave 192: the rolled-up block's one line, every open entry by its PR in the rows' order, after their count.
+describe('the rolled-up summary (wave 192)', () => {
+  const pinned = (n: number): LandingEntry[] => Array.from({ length: n }, (_, i) => e(301 + i));
+  const only = (entries: LandingEntry[]): LandingLineView =>
+    ({ project: P, operatorPaused: false, mainRedHold: false, entries, order: { paused: false, order: entries, head: entries[0] ?? null } });
+  it('one entry: its count says one', () => {
+    expect(card(only(pinned(1))).summary).toBe('One in line: #301');
+  });
+  it('six entries: every one, in order, after the count', () => {
+    expect(card(only(pinned(6))).summary).toBe('6 in line: #301, #302, #303, #304, #305, #306');
+  });
+  it('thirteen entries: the first twelve, then how many more', () => {
+    expect(card(only(pinned(13))).summary)
+      .toBe('13 in line: #301, #302, #303, #304, #305, #306, #307, #308, #309, #310, #311, #312 and 1 more');
+    expect(card(only(pinned(20))).summary?.endsWith('#312 and 8 more')).toBe(true);
+  });
+  it('section 5\'s line: the waiting, the sent-back and the set-aside entry each carry their word; the head and the one in line none', () => {
+    expect(card(view()).summary)
+      .toBe('5 in line: #101, #104, #107 (waiting on a withdrawn entry), #102 (sent back), #109 (set aside)');
+  });
+  it('names the rows the card draws, in their order, paused too', () => {
+    const c = card(paused(['operator']));
+    expect(c.summary).toBe(`5 in line: ${c.rows.map((r) => `#${r.pr}${r.role === 'in-line' ? '' : ` (${r.role === 'waits' ? 'waiting on a withdrawn entry' : r.role === 'ejected' ? 'sent back' : 'set aside'})`}`).join(', ')}`);
+  });
+  it('a pause on an empty line has no summary', () => {
+    expect(card({ project: P, operatorPaused: true, mainRedHold: false, entries: [], order: { paused: true, by: ['operator'], order: [] } }).summary).toBeNull();
   });
 });
 

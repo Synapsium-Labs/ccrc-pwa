@@ -147,6 +147,18 @@ export const WITHDRAW_VISIBLE = 'Withdraw…';
 /** The withdraw button's accessible name. */
 export const WITHDRAW_LABEL = (pr: number, project: string): string => `Withdraw #${pr} from ${project}'s landing line`;
 
+// The rolled-up block's summary (desktop polish wave 192): every open entry by its PR, in the read's order, after their
+// count. An entry that is neither the head nor plainly in line carries its short word, so rolling up hides no trouble.
+// `landingLineView.ts` chooses the words and composes the line; nothing here decides.
+/** The count before the list: one entry, or several. */
+export const SUMMARY_COUNT = (n: number): string => (n === 1 ? 'One in line' : `${n} in line`);
+/** The short word of an entry that is neither the head nor plainly in line. */
+export const SUMMARY_WORD = { waits: 'waiting on a withdrawn entry', ejected: 'sent back', unknown: 'set aside' } as const;
+/** One entry in the list: `#<pr>`, or `#<pr> (<word>)`. */
+export const SUMMARY_ENTRY = (pr: number, word: string | null): string => (word === null ? `#${pr}` : `#${pr} (${word})`);
+/** The tail of a cut list: how many entries it does not name. */
+export const SUMMARY_MORE = (n: number): string => `and ${n} more`;
+
 // The sheet's words: section 9 block 3's truth for an operator who has not read it.
 export const SHEET_TITLE = (pr: number): string => `Withdraw #${pr}?`;
 export const SHEET_LEAVES = (pr: number, project: string): string => `#${pr} leaves ${project}'s landing line and will not land from it.`;

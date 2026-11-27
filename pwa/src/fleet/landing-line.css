@@ -16,24 +16,43 @@
   background: var(--bg-surface);
 }
 /* Section 11: in the document the status and the stale sentence come before the pause button. The grid puts the button
-   on the title row, so it keeps its look; every other child spans the block, in document order below that row. */
-.landing-line > * {
+   on the title row, so it keeps its look; every other child spans the block, in document order below that row. The body
+   (desktop polish wave 192: the part the title discloses) draws no box of its own, so its children are the grid's too. */
+.landing-line > *,
+.landing-line-body > * {
   grid-column: 1 / -1;
   min-width: 0;
+}
+.landing-line-body {
+  display: contents;
 }
 .landing-line > .landing-line-title {
   grid-column: 1;
   grid-row: 1;
 }
-.landing-line > .landing-line-pause {
+.landing-line-body > .landing-line-pause {
   grid-column: 2;
   grid-row: 1;
   justify-self: end;
 }
+/* The title is the block's disclosure (wave 192): `BareRow`'s tap floor and focus ring, its mark before the words. */
 .landing-line-title {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
   margin: 0;
+  padding: 0;
   font-size: var(--fs-sm);
   font-weight: 600;
+  color: var(--ink-secondary);
+  background: var(--bg-surface);
+}
+/* Rolled up: every open entry by its PR, wrapping inside the card and never widening it. */
+.landing-line-summary {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--fs-sm);
   color: var(--ink-secondary);
   background: var(--bg-surface);
 }
