@@ -32,6 +32,9 @@ not in the tree, and the tables below are copied from them.
   of the test file read red by case name (§9). What the rows cannot see, and what D-9141 tightened and widened, are
   stated in the test's comment, the plan's entry and §8; the figures review 4009 could not reproduce are corrected
   (§3, §4, §5, §9, §10).
+- **The class floor is 100 ms** (the hook owner's call 1643, after review 4009 showed 250 ms let a class path 5.5 times
+  dearer through). Hosted, every class reading less its baseline was within 2 ms, well under the owner's 50 ms line
+  (§8). Through the real file, about +80 ms reads green and about +120 ms red (§9).
 
 ## 2. Where and how it was measured
 
@@ -311,9 +314,9 @@ byte-identical to main c435573bc4's), pinned by its own sha256 and held by a cas
 `forbidden-jq-33e521e07.jq`. The two files answer two rulings: inherited scaling against the program the deny was
 added to, and today's accepted cost; each is frozen by its own hash and named by its commit; a test cannot read a commit
 through git. The file is replaced only on the owner's next ruling on accepted cost, never to turn a row green. The deny
-rows keep the 25 ms floor; the class rows, whose program costs about one jq start-up, take a floor of their own, 250 ms,
-which the owner made conditional on their worst loaded reading staying under half the bound (§9). Each cost row now
-prints its current, baseline and bound on green. Which row reads which file is one table in the test, `ROW_BASELINE`,
+rows keep the 25 ms floor; the class rows, whose program costs about one jq start-up, take a floor of their own. The
+owner first set 250 ms (call 1562), on the condition that their worst loaded reading stayed under half the bound (§9).
+After review 4009 it settled 100 ms (call 1643), by the rule below. Each cost row now prints its current, baseline and bound on green. Which row reads which file is one table in the test, `ROW_BASELINE`,
 and the measuring cases read their baseline only through it. A case that measures nothing pins it: the four cost rows
 read the program at the gate, the four linearity rows the original (review 4009 F2, §9).
 
@@ -323,26 +326,33 @@ read the program at the gate, the four linearity rows the original (review 4009 
   against the original, and the four cost rows pin cost against the program at the gate. No row bounds cost against
   the original any more.
 - D-9141 **tightened** two bounds (hosted figures): quotes/deny from about 27 s (1.5 × 18 104) to 20.7 s; quotes/class
-  from about 6.7 s (1.5 × the original's quadratic class path, which the row read 0.01 of) to 316 ms.
-- It **widened** two: dqsub/class from 81 to 318 ms, and dqsub/deny from 310.5 to 352.5 ms, because the gated program
-  costs more than the original on the dqsub shape (238 against 207 ms).
-- **What the class rows cannot see** (review 4009, jq 1.8.1 on the fleet box):
-  - A class cost row's bound is its baseline (about 35 to 70 ms, one jq start-up) plus 250 ms. It sees a class step of
-    250 ms and up and nothing under it: a fixed burn of about 180 ms, a class path 5.5 times dearer, read green on both
-    class cost rows; about 250 ms read red. Hosted, the edge is about 4.8 times the class path's cost.
-  - Neither quotes/class row sees a quadratic step of any weight. The original's class path is itself quadratic on the
-    quotes input, so the linearity bound is 4.40×, above n²'s 4.0. A step that made the class path 6 times dearer read
-    green on both quotes/class rows.
-  - dqsub/class linearity does see it: 3.86× against 2.5×.
-  - So what the suite does not see on the class path is a step under 250 ms, and on the quotes shape a quadratic one of
-    any weight.
-- **The 250 ms floor is a chosen allowance, not a measured one.** Its condition, the worst loaded reading under half
-  the bound, holds for any class path under about 250 ms at this size, and a floor of 100 to 150 ms would meet it too.
-  On the original with 25 ms, hosted dqsub/class read up to 0.95 of its bound (§3), which is a reason to raise the
-  floor; how far is the owner's call.
-- On a loaded box one program's own 64 KB CPU spread about 30% across review 4009's runs (6.9 to 10.6 s). There a
-  quotes/deny step of 50 to 60% can read green when the baseline sample reads high. Hosted, the two samples agreed to
-  0.3%, so the edge there is near +50%.
+  from about 6.7 s (1.5 × the original's quadratic class path, which the row read 0.01 of) to about 166 ms.
+- It **widened** two: dqsub/class from 81 to about 168 ms, and dqsub/deny from 310.5 to 352.5 ms, because the gated
+  program costs more than the original on the dqsub shape (238 against 207 ms).
+- **The class floor, 100 ms** (the owner's call 1643). It exists for one reason, to keep run-to-run noise off the bound.
+  A class cost row's bound is its baseline (about 35 to 70 ms, one jq start-up) plus 100 ms, about 166 ms hosted
+  (about 2.5 times). A class path dearer by less than the floor is green. Through the real test file with a fixed burn
+  in the class path only (jq 1.7.1, this box): about +80 ms read green on both class cost rows and about +120 ms read
+  red on both (§9).
+- **The owner's rule for the value**: on hosted runs, each class row's reading less its own baseline must be at or under
+  50 ms, half the floor; if any is over, the floor is 150 ms. Read on baff80048a, before the floor changed (a reading
+  does not depend on the floor): full run 45900000033, quotes/class 67 against 66 (+1 ms) and dqsub/class 66 against 68
+  (-2 ms); fast run 45899992077, quotes/class 51 against 53 (-2 ms) and dqsub/class 52 against 52 (0 ms). Every
+  difference is at or under 50 ms, so 100 ms stands; the fast run on this round's head is read again in the wave-done.
+- At 250 ms (review 4009, jq 1.8.1) the class cost rows let a fixed burn of about 180 ms, a class path 5.5 times
+  dearer, through; that is what moved the value.
+- **What the class rows cannot see**:
+  - The quotes/class linearity row sees no quadratic step of any weight. The original's class path is itself quadratic
+    on the quotes input, so the linearity bound is 4.40×, above n²'s 4.0. A step that made the class path 6 times dearer
+    read green there (review 4009).
+  - Only the dqsub/class linearity row sees one: 3.86× against 2.5×.
+  - So on the quotes shape a quadratic class step shows only in the quotes/class cost row, once it is dearer than the
+    floor. That step, 6 times dearer (+190 ms), read green on that row at 250 ms, and by the arithmetic would read red
+    at 100 ms.
+  - What the suite does not see on the class path is a step dearer by less than the floor.
+- **On the deny path, the measured bracket**: red from about +68% of the gated program's cost on a loaded box, where one
+  program's own 64 KB CPU spread about 30% across review 4009's runs (6.9 to 10.6 s). The edge is near +50% hosted,
+  where the two samples agreed to 0.3%.
 
 ## 9. Step 3: the mutants and the runs
 
@@ -378,6 +388,16 @@ branch's test file and run by name with the cases that pin the order and the bas
 Before this round, the two mutants of `ROW_BASELINE` had no table to edit: a cost case reverted to read the original
 stayed green, and so did a linearity case reading the cost baseline. The two mutants of `pairCells` stayed green too,
 because the order case tested `linearityOrder` alone.
+
+**The class floor at 100 ms, through the real test file** (a fixed burn in the hook's class path only, scratch copies,
+jq 1.7.1, the two class cost rows by name; "quotes: class stays within the startup-adjusted 06aed21ff bound at 64 KB"
+and "dqsub: class stays within…"):
+
+| class path made dearer (fixed burn, class mode only) | quotes/class 64 KB cost | dqsub/class 64 KB cost |
+|---|---|---|
+| none | green: 31 against 131 (baseline 31, +0 ms) | green: 31 against 131 (baseline 31, +0 ms) |
+| 640000 jq loop steps | green: 114 against 132 (baseline 32, +82 ms) | green: 111 against 131 (baseline 31, +80 ms) |
+| 960000 jq loop steps | RED: 157 against 135 (baseline 35, +122 ms) | RED: 149 against 132 (baseline 32, +117 ms) |
 
 **Fifty consecutive runs of the repaired row under load, before the gate** (main 44f2b15a3b; ambient load plus 6
 spinners), and **ten at jq 1.8.1**: 50 of 50 green at 1.7.1; 9 of 10 green at 1.8.1 (run 54, §7):
@@ -453,51 +473,55 @@ jq 1.8.1: 10 runs, 1 red; difference median -0.002, max +0.704; the case took a 
 **After the gate, on the new cost baseline**, the whole cost block (all eight rows), twenty runs under load (ambient
 plus 6 spinners) and ten at ambient load, jq 1.7.1:
 
+The block runs printed the class rows' bound under the 250 ms floor they ran with. The table and the summary below
+re-read the class rows against the settled 100 ms floor, from the same current and baseline figures; a reading does not
+depend on the floor.
+
 ```text
 loaded: 20 runs, 0 red
   quotes/deny  cost row current/bound median 0.66, worst 0.73; linearity headroom median +0.51, worst +0.16
-  quotes/class cost row current/bound median 0.17, worst 0.19; linearity headroom median +2.87, worst +2.58
+  quotes/class cost row current/bound median 0.34, worst 0.37; linearity headroom median +2.87, worst +2.58
   dqsub/deny   cost row current/bound median 0.68, worst 0.79; linearity headroom median +0.77, worst +0.34
-  dqsub/class  cost row current/bound median 0.17, worst 0.19; linearity headroom median +1.08, worst +0.50
+  dqsub/class  cost row current/bound median 0.35, worst 0.38; linearity headroom median +1.08, worst +0.50
 quiet: 10 runs, 0 red
   quotes/deny  cost row current/bound median 0.67, worst 0.75; linearity headroom median +0.50, worst +0.38
-  quotes/class cost row current/bound median 0.12, worst 0.17; linearity headroom median +2.98, worst +2.73
+  quotes/class cost row current/bound median 0.26, worst 0.36; linearity headroom median +2.98, worst +2.73
   dqsub/deny   cost row current/bound median 0.66, worst 0.67; linearity headroom median +0.72, worst +0.50
-  dqsub/class  cost row current/bound median 0.12, worst 0.12; linearity headroom median +1.03, worst +0.95
+  dqsub/class  cost row current/bound median 0.25, worst 0.26; linearity headroom median +1.03, worst +0.95
 ```
 
 | # | load | spinners | wall s | quotes/deny cost (cur/bound) | quotes/class cost (cur/bound) | dqsub/deny cost (cur/bound) | dqsub/class cost (cur/bound) | quotes/deny lin. headroom | quotes/class lin. headroom | dqsub/deny lin. headroom | dqsub/class lin. headroom | result |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1 | 8.73..15.82 | 6 | 390 | 0.57 | 0.19 | 0.77 | 0.19 | +0.57 | +2.66 | +0.54 | +1.38 | pass |
-| 2 | 15.20..12.57 | 6 | 388 | 0.65 | 0.18 | 0.77 | 0.19 | +0.80 | +3.38 | +0.87 | +0.97 | pass |
-| 3 | 12.57..17.51 | 6 | 289 | 0.65 | 0.15 | 0.66 | 0.14 | +0.65 | +3.09 | +0.97 | +1.06 | pass |
-| 4 | 16.91..14.84 | 6 | 277 | 0.67 | 0.14 | 0.65 | 0.14 | +0.39 | +3.00 | +0.34 | +1.09 | pass |
-| 5 | 14.21..14.32 | 6 | 280 | 0.68 | 0.14 | 0.65 | 0.15 | +0.45 | +2.80 | +0.66 | +0.89 | pass |
-| 6 | 10.54..18.75 | 6 | 378 | 0.68 | 0.16 | 0.65 | 0.19 | +0.17 | +2.81 | +0.58 | +1.09 | pass |
-| 7 | 18.93..13.20 | 6 | 719 | 0.67 | 0.19 | 0.67 | 0.17 | +0.56 | +3.12 | +0.84 | +1.12 | pass |
-| 8 | 11.88..18.62 | 6 | 461 | 0.73 | 0.18 | 0.72 | 0.19 | +0.51 | +2.94 | +0.92 | +1.08 | pass |
-| 9 | 18.31..17.23 | 6 | 343 | 0.63 | 0.17 | 0.66 | 0.13 | +0.51 | +2.97 | +0.88 | +0.68 | pass |
-| 10 | 17.23..23.75 | 6 | 402 | 0.68 | 0.13 | 0.61 | 0.18 | +0.90 | +2.73 | +0.78 | +0.69 | pass |
-| 11 | 23.75..23.79 | 6 | 458 | 0.65 | 0.18 | 0.64 | 0.18 | +0.90 | +2.87 | +0.87 | +1.33 | pass |
-| 12 | 23.79..29.20 | 6 | 451 | 0.65 | 0.17 | 0.70 | 0.19 | +0.64 | +2.62 | +0.66 | +1.09 | pass |
-| 13 | 24.28..16.52 | 6 | 422 | 0.66 | 0.18 | 0.79 | 0.18 | +0.61 | +2.78 | +0.63 | +0.50 | pass |
-| 14 | 16.52..15.86 | 6 | 457 | 0.68 | 0.18 | 0.77 | 0.17 | +0.52 | +2.79 | +0.76 | +0.51 | pass |
-| 15 | 15.86..13.52 | 6 | 315 | 0.67 | 0.13 | 0.62 | 0.15 | +0.16 | +3.09 | +0.82 | +1.03 | pass |
-| 16 | 13.52..17.79 | 6 | 340 | 0.70 | 0.17 | 0.74 | 0.14 | +0.19 | +2.58 | +0.56 | +1.00 | pass |
-| 17 | 16.32..27.64 | 6 | 477 | 0.64 | 0.14 | 0.69 | 0.18 | +0.19 | +2.87 | +0.70 | +1.11 | pass |
-| 18 | 27.64..22.67 | 6 | 450 | 0.68 | 0.19 | 0.68 | 0.15 | +0.46 | +2.80 | +0.82 | +1.28 | pass |
-| 19 | 22.67..30.99 | 6 | 581 | 0.65 | 0.19 | 0.61 | 0.17 | +0.42 | +3.04 | +0.72 | +1.10 | pass |
-| 20 | 30.99..18.64 | 6 | 468 | 0.66 | 0.14 | 0.74 | 0.19 | +0.47 | +2.99 | +0.78 | +1.07 | pass |
-| 21 | 18.40..9.43 | 0 | 293 | 0.66 | 0.13 | 0.66 | 0.12 | +0.82 | +3.10 | +0.75 | +0.97 | pass |
-| 22 | 9.43..8.66 | 0 | 364 | 0.66 | 0.12 | 0.67 | 0.12 | +0.54 | +3.06 | +0.50 | +1.14 | pass |
-| 23 | 8.66..10.35 | 0 | 325 | 0.75 | 0.12 | 0.66 | 0.11 | +0.87 | +3.04 | +0.78 | +0.95 | pass |
-| 24 | 10.35..9.20 | 0 | 279 | 0.69 | 0.17 | 0.67 | 0.12 | +0.39 | +2.86 | +0.75 | +1.07 | pass |
-| 25 | 9.20..9.96 | 0 | 214 | 0.67 | 0.12 | 0.66 | 0.11 | +0.47 | +2.95 | +0.72 | +1.02 | pass |
-| 26 | 9.32..8.24 | 0 | 268 | 0.66 | 0.12 | 0.59 | 0.12 | +0.44 | +3.10 | +0.70 | +1.01 | pass |
-| 27 | 8.24..9.11 | 0 | 213 | 0.67 | 0.11 | 0.66 | 0.11 | +0.60 | +2.88 | +0.69 | +1.12 | pass |
-| 28 | 9.11..13.06 | 0 | 295 | 0.69 | 0.13 | 0.67 | 0.12 | +0.42 | +3.02 | +0.71 | +1.03 | pass |
-| 29 | 13.06..13.26 | 0 | 233 | 0.66 | 0.12 | 0.67 | 0.12 | +0.38 | +2.92 | +0.71 | +0.96 | pass |
-| 30 | 13.26..9.00 | 0 | 275 | 0.66 | 0.14 | 0.62 | 0.12 | +0.63 | +2.73 | +0.82 | +1.27 | pass |
+| 1 | 8.73..15.82 | 6 | 390 | 0.57 | 0.36 | 0.77 | 0.37 | +0.57 | +2.66 | +0.54 | +1.38 | pass |
+| 2 | 15.20..12.57 | 6 | 388 | 0.65 | 0.36 | 0.77 | 0.37 | +0.80 | +3.38 | +0.87 | +0.97 | pass |
+| 3 | 12.57..17.51 | 6 | 289 | 0.65 | 0.31 | 0.66 | 0.29 | +0.65 | +3.09 | +0.97 | +1.06 | pass |
+| 4 | 16.91..14.84 | 6 | 277 | 0.67 | 0.30 | 0.65 | 0.28 | +0.39 | +3.00 | +0.34 | +1.09 | pass |
+| 5 | 14.21..14.32 | 6 | 280 | 0.68 | 0.29 | 0.65 | 0.32 | +0.45 | +2.80 | +0.66 | +0.89 | pass |
+| 6 | 10.54..18.75 | 6 | 378 | 0.68 | 0.31 | 0.65 | 0.37 | +0.17 | +2.81 | +0.58 | +1.09 | pass |
+| 7 | 18.93..13.20 | 6 | 719 | 0.67 | 0.37 | 0.67 | 0.33 | +0.56 | +3.12 | +0.84 | +1.12 | pass |
+| 8 | 11.88..18.62 | 6 | 461 | 0.73 | 0.36 | 0.72 | 0.37 | +0.51 | +2.94 | +0.92 | +1.08 | pass |
+| 9 | 18.31..17.23 | 6 | 343 | 0.63 | 0.34 | 0.66 | 0.28 | +0.51 | +2.97 | +0.88 | +0.68 | pass |
+| 10 | 17.23..23.75 | 6 | 402 | 0.68 | 0.28 | 0.61 | 0.36 | +0.90 | +2.73 | +0.78 | +0.69 | pass |
+| 11 | 23.75..23.79 | 6 | 458 | 0.65 | 0.37 | 0.64 | 0.36 | +0.90 | +2.87 | +0.87 | +1.33 | pass |
+| 12 | 23.79..29.20 | 6 | 451 | 0.65 | 0.34 | 0.70 | 0.38 | +0.64 | +2.62 | +0.66 | +1.09 | pass |
+| 13 | 24.28..16.52 | 6 | 422 | 0.66 | 0.34 | 0.79 | 0.35 | +0.61 | +2.78 | +0.63 | +0.50 | pass |
+| 14 | 16.52..15.86 | 6 | 457 | 0.68 | 0.36 | 0.77 | 0.34 | +0.52 | +2.79 | +0.76 | +0.51 | pass |
+| 15 | 15.86..13.52 | 6 | 315 | 0.67 | 0.26 | 0.62 | 0.32 | +0.16 | +3.09 | +0.82 | +1.03 | pass |
+| 16 | 13.52..17.79 | 6 | 340 | 0.70 | 0.33 | 0.74 | 0.28 | +0.19 | +2.58 | +0.56 | +1.00 | pass |
+| 17 | 16.32..27.64 | 6 | 477 | 0.64 | 0.29 | 0.69 | 0.36 | +0.19 | +2.87 | +0.70 | +1.11 | pass |
+| 18 | 27.64..22.67 | 6 | 450 | 0.68 | 0.36 | 0.68 | 0.30 | +0.46 | +2.80 | +0.82 | +1.28 | pass |
+| 19 | 22.67..30.99 | 6 | 581 | 0.65 | 0.37 | 0.61 | 0.33 | +0.42 | +3.04 | +0.72 | +1.10 | pass |
+| 20 | 30.99..18.64 | 6 | 468 | 0.66 | 0.29 | 0.74 | 0.37 | +0.47 | +2.99 | +0.78 | +1.07 | pass |
+| 21 | 18.40..9.43 | 0 | 293 | 0.66 | 0.27 | 0.66 | 0.26 | +0.82 | +3.10 | +0.75 | +0.97 | pass |
+| 22 | 9.43..8.66 | 0 | 364 | 0.66 | 0.26 | 0.67 | 0.26 | +0.54 | +3.06 | +0.50 | +1.14 | pass |
+| 23 | 8.66..10.35 | 0 | 325 | 0.75 | 0.25 | 0.66 | 0.23 | +0.87 | +3.04 | +0.78 | +0.95 | pass |
+| 24 | 10.35..9.20 | 0 | 279 | 0.69 | 0.36 | 0.67 | 0.25 | +0.39 | +2.86 | +0.75 | +1.07 | pass |
+| 25 | 9.20..9.96 | 0 | 214 | 0.67 | 0.25 | 0.66 | 0.24 | +0.47 | +2.95 | +0.72 | +1.02 | pass |
+| 26 | 9.32..8.24 | 0 | 268 | 0.66 | 0.26 | 0.59 | 0.25 | +0.44 | +3.10 | +0.70 | +1.01 | pass |
+| 27 | 8.24..9.11 | 0 | 213 | 0.67 | 0.23 | 0.66 | 0.24 | +0.60 | +2.88 | +0.69 | +1.12 | pass |
+| 28 | 9.11..13.06 | 0 | 295 | 0.69 | 0.27 | 0.67 | 0.25 | +0.42 | +3.02 | +0.71 | +1.03 | pass |
+| 29 | 13.06..13.26 | 0 | 233 | 0.66 | 0.25 | 0.67 | 0.25 | +0.38 | +2.92 | +0.71 | +0.96 | pass |
+| 30 | 13.26..9.00 | 0 | 275 | 0.66 | 0.28 | 0.62 | 0.25 | +0.63 | +2.73 | +0.82 | +1.27 | pass |
 
 ## 10. Time (condition 3)
 
@@ -523,7 +547,7 @@ After the gate, the row nearest its timeout is quotes/class linearity, which fou
 
 - The cost suite's factor and floors are the hook owner's; this wave changed the deny rows' baseline and the class rows'
   floor only as it ruled.
-- The class rows were moved to the new baseline with the 250 ms floor, as the owner allowed only if their worst loaded reading stayed under half of the bound: quotes/class worst 0.19, dqsub/class worst 0.19. The hosted run reads them too. The floor's value is a chosen allowance (review 4009: the condition holds for any class path under about 250 ms, and 100 to 150 ms would meet it too); the coordinator has put the value to the hook owner, and the floor is one constant, `COST_FLOOR_MS.class`.
+- The class rows were moved to the new baseline. Their floor was first 250 ms, taken because their worst loaded reading stayed under half of that bound (0.19 for both). After review 4009 the owner settled 100 ms (call 1643). Against it, the worst loaded readings are quotes/class 0.37 and dqsub/class 0.38 of the bound. The floor is one constant, `COST_FLOOR_MS.class`. If a hosted class reading less its baseline passes 50 ms, the owner's rule makes it 150 ms.
 - A mechanical gate on refreshing either vendored baseline (review 4009 F6): today the fixture, its hash and the
   hook's program can change together in one diff with every case green. What holds the baseline is words, the test's
   comment and D-9141's last sentence. Left for the owner's ticket, not this wave.

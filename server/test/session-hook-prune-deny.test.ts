@@ -385,24 +385,26 @@ describe('the linearity verdict is the median of the per-round differences (D-91
 // What each row can see (measured 2026-11-26 with jq 1.7.1 on main c435573bc4, after the quiz row's gate 06aed21ff7,
 // and by review 4009 with jq 1.8.1; task note docs/superpowers/programs/desktop-polish/hook-cost-row.md). The 64 KB
 // cost rows take the faster of two interleaved measurements (D-8334), the baseline first in both pairs, and catch a
-// cost of ANY shape once the path costs about 1.5x its baseline, today's program (D-9141), at quiet (on a loaded box one
-// program's own 64 KB CPU spread about 30%, so a step of 50 to 60% can pass there): a quadratic step adding about 80%
-// of the gated program's cost at 64 KB reads 15.5 s against a 13.4 s bound, red. (Against the original, which the
-// gated program costs 0.75x of, the same row let the cost about double: that step read green, and one adding about
-// 105% sat at the bound.) A class cost row's bound is its baseline (about 50 to 70 ms, one jq start-up) plus the
-// 250 ms class floor, so it sees a step of 250 ms and up and nothing under it: a class path 5.5x dearer (+180 ms) read
-// green, and the edge is about 4.8x hosted. The linearity rows catch only growth FASTER than the programs' own: on the
+// cost of ANY shape once the path costs about 1.5x its baseline, today's program (D-9141). On the deny path the
+// measured bracket reads red from about +68% of the gated program's cost on a loaded box (one program's own 64 KB CPU
+// spread about 30% there), with an edge near +50% hosted: a quadratic step adding about 80% of the gated program's cost
+// at 64 KB reads 15.5 s against a 13.4 s bound, red. (Against the original, which the gated program costs 0.75x of,
+// the same row let the cost about double: that step read green, and one adding about 105% sat at the bound.) A class
+// cost row's bound is its baseline (about 35 to 70 ms, one jq start-up) plus the 100 ms class floor, about 166 ms
+// hosted (about 2.5x): a class path dearer by less than the floor is green (+80 ms green, +120 ms red here, through
+// this file). The linearity rows catch only growth FASTER than the programs' own: on the
 // quote-dense deny shape both programs are almost pure n^2 (a fixed ~0.2 s plus c n^2, the n^2 term about 98% of the
 // fitted cost at 32 and 64 KB and 95% of the original's measured 3.9 s at 32 KB), so their 64/32 ratio sits near 3.9
 // and a quadratic step, of any weight, leaves it there. The smallest growth the linearity row catches reliably is a
 // cubic step adding about 30% of the current program's cost at 32 KB (red in 24 of 24 windows; 20%: 15 of 24; a third:
-// red, 5.12 against 4.31). Neither quotes/class row sees a quadratic step of any weight either, because the original's
-// class path is itself quadratic on the quotes input (its bound, 4.40x, is above n^2's 4.0): a class path 6x dearer
-// read green on both; dqsub/class linearity does see it (3.86x against 2.5x). What the suite does not see: a quadratic
-// step on the deny path adding less than about half of its cost at 64 KB, and on the class path a step under 250 ms on
-// the quotes shape. D-9141 tightened two bounds (hosted: quotes/deny about 27 s to 20.7 s; quotes/class about 6.7 s,
-// which it read 0.01 of, to 316 ms) and WIDENED two (dqsub/class 81 to 318 ms; dqsub/deny 310.5 to 352.5 ms, because
-// the gated program costs more than the original on the dqsub shape).
+// red, 5.12 against 4.31). The quotes/class linearity row sees no quadratic step of any weight either, because the
+// original's class path is itself quadratic on the quotes input (its bound, 4.40x, is above n^2's 4.0): a class path 6x
+// dearer read green there (review 4009); only the dqsub/class linearity row sees one (3.86x against 2.5x). On the
+// quotes shape a quadratic class step shows only in the quotes/class cost row, once it is dearer than the floor. What
+// the suite does not see: a quadratic step on the deny path adding less than about half of its cost at 64 KB, and on
+// the class path a step dearer by less than the 100 ms floor. D-9141 tightened two bounds (hosted: quotes/deny about
+// 27 s to 20.7 s; quotes/class about 6.7 s, which it read 0.01 of, to about 166 ms) and WIDENED two (dqsub/class 81 to
+// about 168 ms; dqsub/deny 310.5 to 352.5 ms, because the gated program costs more than the original on the dqsub shape).
 //
 // D-9118 (amending D-8334 for the linearity rows only): a linearity row measures LINEARITY_ROUNDS rounds, reverses which
 // program runs first on alternate rounds, and reads the current program's ratio as the original's plus the MEDIAN of the
@@ -459,11 +461,12 @@ describe('the forbidden program\'s cost on quote-dense payloads naming worktree 
   const baselineOf = (row: Row): string => readVendored(ROW_BASELINE[row]);
   /** The allowance a 64 KB cost row grants over the baseline beside its factor of 1.5: the bound is
    * max(1.5 x baseline, baseline + floor). The deny path keeps FD8's 25 ms. The class path costs about one jq start-up
-   * (about 50 to 70 ms on the gated program), where 25 ms is start-up jitter (hosted, dqsub/class read up to 0.95 of
-   * its bound on the original): the owner's ruling (D-9141) gives it a floor of its own, 250 ms. That value is a chosen
-   * allowance, not a measured one: its condition, the worst loaded reading under half the bound, holds for any class
-   * path under about 250 ms, and it leaves a class step under 250 ms unseen (the header above). */
-  const COST_FLOOR_MS = { deny: 25, class: 250 } as const;
+   * (about 35 to 70 ms on the gated program), where 25 ms is start-up jitter (hosted, dqsub/class read up to 0.95 of
+   * its bound on the original). The owner's ruling (D-9141, its call 1643 amending call 1562) gives it a floor of its
+   * own, 100 ms, for one reason: to keep run-to-run noise off the bound. A class path dearer by less than the floor is
+   * green (the header above). The owner's rule for the value: on hosted runs each class row's reading less its own
+   * baseline stays at or under 50 ms, half the floor; were one over, the floor would be 150 ms. */
+  const COST_FLOOR_MS = { deny: 25, class: 100 } as const;
   it('the cost baseline is the hook\'s forbidden program at 06aed21ff7, held by its hash, and is not the original (D-9141)', () => {
     const cost = readVendored('gate');
     expect(cost).not.toBe('');

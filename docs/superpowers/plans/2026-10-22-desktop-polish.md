@@ -5911,7 +5911,7 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   each sample's cell go through `pairCells`, which a case pins with no CPU measured (review 4009 F2). Task note:
   `docs/superpowers/programs/desktop-polish/hook-cost-row.md`.
 - **D-9141** — `cost-rows-own-baseline`: desktop-polish wave 183, issued on 2026-11-26, the hook owner's ruling (its
-  call 1562). The four 64 KB cost rows of `server/test/session-hook-prune-deny.test.ts` read a baseline of their own,
+  calls 1562 and 1643). The four 64 KB cost rows of `server/test/session-hook-prune-deny.test.ts` read a baseline of their own,
   `fixtures/prune-deny/forbidden-jq-06aed21ff.jq`: the hook's forbidden program at the quiz row's gate, 06aed21ff7,
   pinned by its own sha256; the factor stays 1.5. The linearity rows keep `forbidden-jq-33e521e07.jq` and its hash.
   The two files answer two rulings: inherited scaling against the program the deny was added to, and today's accepted
@@ -5919,18 +5919,31 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   gated program costs 0.75 of the original at 64 KB, so 1.5 x the original let the deny path's cost about double
   before the row went red (a quadratic step adding about 80% read 1.34 of the original in the bracket runs and 1.30
   through the real test file, green; about 105%, at the bound); on the new baseline the 80% step reads red (15.5 s
-  against 13.4 s). The deny rows keep the 25 ms floor; the class rows, whose program costs about one jq start-up, take
-  a floor of their own, 250 ms (`COST_FLOOR_MS`), taken because their worst loaded reading stayed under half of the
-  bound. That value is a chosen allowance: the condition holds for any class path under about 250 ms. Each cost row
-  prints its figures on green. Which row reads which file is one table, `ROW_BASELINE`, pinned by a case that
+  against 13.4 s). On the deny path the measured bracket reads red from about +68% of the gated program's cost on a
+  loaded box, with an edge near +50% hosted. The deny rows keep the 25 ms floor. The class rows, whose program costs
+  about one jq start-up, take a floor of their own, 100 ms (`COST_FLOOR_MS`; the owner's call 1643, amending the
+  class-floor part of call 1562, which had set 250 ms). The floor exists for one reason, to keep run-to-run noise off
+  the bound, and a class path dearer by less than the floor is green (through the real test file: about +80 ms green,
+  about +120 ms red). The class bound is the baseline plus 100 ms, about 166 ms hosted (about 2.5 times). The owner's
+  rule for the value: on hosted runs, each class row's reading less its own baseline must be at or under 50 ms, half
+  the floor; if any is over, the floor is 150 ms, and this entry names the row and the run. Read on baff80048a, before
+  the floor changed (a reading does not depend on the floor):
+
+  | hosted run on baff80048a | quotes/class current, baseline, difference | dqsub/class current, baseline, difference |
+  |---|---|---|
+  | full run 45900000033 | 67, 66 ms: +1 ms | 66, 68 ms: -2 ms |
+  | fast run 45899992077 | 51, 53 ms: -2 ms | 52, 52 ms: 0 ms |
+
+  Every difference is at or under 50 ms, so 100 ms stands. Each cost row prints its figures on green. Which row reads which file is one table, `ROW_BASELINE`, pinned by a case that
   measures nothing (review 4009 F2). What is pinned now: the linearity rows pin doubling-size scaling against the
   original, the cost rows pin cost against the program at the gate, and no row bounds cost against the original, so
   FD8's historical-cost half no longer holds for any row. The ruling tightened two bounds (hosted: quotes/deny about
-  27 s to 20.7 s, quotes/class about 6.7 s to 316 ms) and widened two (dqsub/class 81 to 318 ms; dqsub/deny 310.5 to
-  352.5 ms, because the gated program costs more than the original on the dqsub shape). What the rows cannot see: a
-  class cost row sees a class step of 250 ms and up and nothing under it (a class path 5.5 times dearer read green,
-  the edge about 4.8 times hosted); neither quotes/class row sees a quadratic step of any weight, because the
-  original's class path is itself quadratic on that input, while dqsub/class linearity does. The file is replaced only
+  27 s to 20.7 s, quotes/class about 6.7 s to about 166 ms) and widened two (dqsub/class 81 to about 168 ms; dqsub/deny
+  310.5 to 352.5 ms, because the gated program costs more than the original on the dqsub shape). What the rows cannot
+  see: a class cost row misses a class step dearer by less than the floor; the quotes/class linearity row sees no
+  quadratic step of any weight, because the original's class path is itself quadratic on that input, and only the
+  dqsub/class linearity row sees one, so on the quotes shape a quadratic class step shows only in the quotes/class cost
+  row, once it is dearer than the floor. The file is replaced only
   on the owner's next ruling on accepted cost, never to turn a row green.
 
 ## Out of scope
