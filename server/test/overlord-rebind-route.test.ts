@@ -6,7 +6,11 @@ import { describe, it, expect, afterEach, afterAll, beforeAll } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
-import { copyFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync } from 'node:fs';
+import { callsIn, sourceOfSymbol, symbolOf } from './scan/symbols.js';
+
+/** The Overlord's routes, read through the symbol scanner (never a literal source pin, advance-switches' rule). */
+const ROUTES = 'server/src/coord/overlordRoutes.ts';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import {
@@ -492,21 +496,14 @@ describe('POST /api/overlord/rebind: the pair the caller saw', () => {
     release();
     const [, b] = await Promise.all([first, second]);
     expect(b.json()).toMatchObject({ ok: false, error: 'overlord-attempt-pending' });
-    const src = readFileSync(path.join(import.meta.dirname, '..', 'src', 'coord', 'overlordRoutes.ts'), 'utf8');
-    const start = src.indexOf("app.post('/api/overlord/rebind'");
-    const door = src.slice(start, src.indexOf('\n  }\n', src.indexOf('async function rebind(', start)));
-    // Each `stale-designation` of the rebind door is guarded by the pair's compare, and only by it.
-    expect(door.split('\n').filter((l) => l.includes("'stale-designation'"))).toEqual([
-      "      if (moved !== null) return refuseRoute(reply, 'stale-designation', { detail: moved });",
-      "    if (moved !== null) return refuseRoute(reply, 'stale-designation', { detail: moved });",
-    ]);
+    // Every `stale-designation` the Overlord's routes answer is the pair's compare: two calls, each with the compare's detail.
+    const refusals = callsIn(symbolOf(ROUTES, 'registerOverlordRoutes'))
+      .filter((c) => c.name === 'refuseRoute' && c.args[1]?.kind === 'string' && c.args[1].text === 'stale-designation');
+    expect(refusals.map((c) => c.args[2]?.text)).toEqual(['{ detail: moved }', '{ detail: moved }']);
   });
 
   it('hold 4: past the compare, `rebind()` reads nothing of the pair; it acts on its own read', () => {
-    const src = readFileSync(path.join(import.meta.dirname, '..', 'src', 'coord', 'overlordRoutes.ts'), 'utf8');
-    const start = src.indexOf('async function rebind(');
-    const body = src.slice(start, src.indexOf('\n  }\n', start));
-    const uses = body.split('\n').filter((l) => /\bsaw\b/.test(l));
+    const uses = sourceOfSymbol(ROUTES, 'registerOverlordRoutes.rebind').split('\n').filter((l) => /\bsaw\b/.test(l));
     expect(uses).toHaveLength(2);   // the parameter, and the compare
     expect(uses[0]).toMatch(/saw: RebindSaw \| undefined/);
     expect(uses[1]).toMatch(/const moved = saw === undefined \? null : rebindMovedDetail\(read, saw\);/);
