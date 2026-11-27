@@ -11,7 +11,7 @@ import { BUILD_CAPTURE_RETRY_MS, type ClaudeBuildRecord } from './claudeBuildTru
 import { newestTrustedBuild } from './deliveryLane.js';
 import type { DeliveryNotSent } from './deliveryResult.js';
 import { FRAMES_RECIPE_VERSION } from './framesCapture.js';
-import { FRAMES_PARTS, framesFrameId, type FramesCaptureResult, type FramesRefusal, type FramesWord } from './framesResult.js';
+import { FRAMES_PARTS, framesFrameId, framesWord, type FramesCaptureResult, type FramesRefusal, type FramesWord } from './framesResult.js';
 
 /** One (build, part) row of `claude_build_frames`, as the store reads it. `record` is the stored result with its frame text
  *  kept apart (null on a row that only holds attempts, or one the reader no longer accepts); `text` is that frame's text,
@@ -87,7 +87,9 @@ export interface FramesListRow {
 }
 
 /** The list answer: a row for each part with a stored record (any version: the row says which), and each part with no
- *  current row beside its last not-sent word and attempts. A frame the receiver refused at store time lists its refusal. */
+ *  current row beside its last not-sent word and attempts. A frame the receiver refused at store time lists as the word
+ *  reader says a refused frame reads (`framesWord`): outcome `refused` with the receiver's word, word `gaps`, no replaced
+ *  counts and no text (review 4069's A1). The store keeps the box's own word as it was sent; this is where it is read. */
 export function framesListOf(rows: readonly FramesRow[], build: string): { readonly frames: FramesListRow[]; readonly unmeasured: { readonly part: number; readonly notSent: DeliveryNotSent | null; readonly attempts: number }[] } {
   const frames: FramesListRow[] = [];
   const unmeasured: { part: number; notSent: DeliveryNotSent | null; attempts: number }[] = [];
@@ -98,8 +100,8 @@ export function framesListOf(rows: readonly FramesRow[], build: string): { reado
       const refusedAtStore = r.checked !== null && r.checked !== 'clear';
       frames.push({
         part, frame: framesFrameId(FRAMES_PARTS[part]!), case: r.record.case, pane: r.record.pane, version: r.version, release: r.record.release, at: r.at,
-        word: r.word, outcome: refusedAtStore ? 'refused' : f.outcome, refusal: refusedAtStore ? (r.checked as FramesRefusal) : f.refusal,
-        rows: f.rows, width: f.width, bytes: f.bytes, cursor: f.cursor, replaced: f.replaced, sends: r.record.sends, turns: r.record.turns,
+        word: refusedAtStore ? framesWord('refused') : r.word, outcome: refusedAtStore ? 'refused' : f.outcome, refusal: refusedAtStore ? (r.checked as FramesRefusal) : f.refusal,
+        rows: f.rows, width: f.width, bytes: f.bytes, cursor: f.cursor, replaced: refusedAtStore ? null : f.replaced, sends: r.record.sends, turns: r.record.turns,
         sideRequests: r.record.sideRequests, hasText: r.text !== null && !refusedAtStore,
       });
     }

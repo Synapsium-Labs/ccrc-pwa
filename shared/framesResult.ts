@@ -75,9 +75,11 @@ export type FramesOutcome = 'drawn' | 'unsettled' | 'over-cap' | 'refused';
 export const FRAMES_OUTCOME_MAP: Record<FramesOutcome, true> = { drawn: true, unsettled: true, 'over-cap': true, refused: true };
 
 /** Why the reducer, or the receiver's check, refused a frame (plan section 5.2): not a frame by the shape rule; a hit of
- *  the committed private-name matcher; a private shape left after reduction; a text the product's masker would change. */
-export type FramesRefusal = 'not-a-frame' | 'private-name' | 'private-shape' | 'masked';
-export const FRAMES_REFUSAL_MAP: Record<FramesRefusal, true> = { 'not-a-frame': true, 'private-name': true, 'private-shape': true, masked: true };
+ *  the committed private-name matcher; a private shape left after reduction; a text the product's masker would change; a
+ *  status position that is not exactly the capture's own status text (rule 8, review 4069's F3 and the capture owner's
+ *  condition). */
+export type FramesRefusal = 'not-a-frame' | 'private-name' | 'private-shape' | 'masked' | 'status-row';
+export const FRAMES_REFUSAL_MAP: Record<FramesRefusal, true> = { 'not-a-frame': true, 'private-name': true, 'private-shape': true, masked: true, 'status-row': true };
 export const isFramesRefusal = (v: unknown): v is FramesRefusal => typeof v === 'string' && Object.prototype.hasOwnProperty.call(FRAMES_REFUSAL_MAP, v);
 
 /** A part's word: `framed` when its frame was drawn, `gaps` otherwise. A box fault gives no result at all, never a word. */
@@ -116,14 +118,19 @@ export function frameSize(text: string): { readonly rows: number; readonly width
 export const frameOverCap = (s: { readonly rows: number; readonly width: number; readonly bytes: number }, pane: FramesPane): boolean =>
   s.rows > pane.rows || s.width > pane.cols || s.bytes > FRAME_BYTES_MAX;
 
+/** The characters a frame never holds once its SGR is removed, by Unicode class, never a hand list (the coordinator's
+ *  ruling on review 4069's F1): every control (`Cc`: C0, DEL and C1, so a one-character CSI or OSC too) but LF, every
+ *  format character (`Cf`: the bidi marks and isolates, the zero-width and joiner characters, the byte-order mark), the
+ *  line and paragraph separators (`Zl`, `Zp`), a lone surrogate (`Cs`) and a private-use character (`Co`; the recorded
+ *  2.1.300 panes hold none, measured). ESC is a control too, so an ESC that does not start an SGR sequence fails here. */
+const FRAME_REFUSED_CHARS = /(?!\n)[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}\p{Co}]/u;
+
 /** THE SHAPE RULE of a frame's text (plan 5.1; the reducer's rule 1 and the reader both ask it): inside the cap for its
- *  pane, no control character but ESC and LF, and every ESC the start of an SGR sequence. A hyperlink, a cursor move or any
- *  other escape fails it whole: it is never stripped. */
+ *  pane, no control character but ESC and LF, every ESC the start of an SGR sequence, and none of the other characters
+ *  `FRAME_REFUSED_CHARS` names. A hyperlink, a cursor move or any other escape fails it whole: it is never stripped. */
 export function frameTextFits(text: string, pane: FramesPane): boolean {
   if (frameOverCap(frameSize(text), pane)) return false;
-  const rest = text.replace(SGR, '');
-  // eslint-disable-next-line no-control-regex
-  return !/[\x00-\x09\x0b-\x1f\x7f]/.test(rest);
+  return !FRAME_REFUSED_CHARS.test(text.replace(SGR, ''));
 }
 
 /** One frame as a result carries it. `text` is the REDUCED frame, present exactly with `drawn` or `unsettled`. */

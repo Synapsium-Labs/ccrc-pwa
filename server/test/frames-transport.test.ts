@@ -10,7 +10,24 @@ import { AgentOpError } from '../src/remote/errors.js';
 import { TESTBOX_CAPTURE_OP, type TestboxCaptureOutcome, type TestboxCaptureReply } from '../../shared/agent-protocol.js';
 import type { CaptureRefusal } from '../../shared/claudeBuildCapture.js';
 import type { BuildCaptureResult } from '../../shared/claudeBuildTrust.js';
-import { FRAMES_PARTS, frameSize, type FramesCaptureResult } from '../../shared/framesResult.js';
+import { FRAMES_PARTS, frameSize, framesFrameId, type FramesCaptureResult } from '../../shared/framesResult.js';
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import Fastify from 'fastify';
+import { WebSocketServer } from 'ws';
+import { BUILD_CAPTURE_SWEEP_MS, BuildCaptureLane } from '../src/buildCaptureLane.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
+import { NotifyLog } from '../src/notifylog.js';
+import { registerTestboxFramesRoute } from '../src/testboxFramesRoutes.js';
+import { DELIVERY_PART_COUNT } from '../../shared/deliveryResult.js';
+import { FRAMES_RECIPE_VERSION } from '../../shared/framesCapture.js';
+import { FRAMES_STATUS_TEXT } from '../../shared/framesReduce.js';
+import { TESTBOX_PROTO } from '../../shared/testbox.js';
+import { deliveryResultFor } from './deliveryLaneHelpers.js';
+import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
+
+removeTmpFixturesEachTest();
 
 const BUILD = '2.1.332';
 const PART = 3;
@@ -176,3 +193,90 @@ describe('the local arm of FleetIO.testboxCapture, a frames ask', () => {
     expect(asked).toEqual({ ok: false, reason: 'not-started' });
   });
 });
+
+// Review 4069's F5, the coordinator's condition 1 (plan 5.3): the single-box install's arm carries the same result to the same
+// lane, store, check and read. The local arm runs the agent's own capture body (`localIOFor(home).testboxCapture`), against a
+// fixture HOME whose launcher prints the box settings and an in-process stand-in box on loopback: nothing reaches a test box.
+describe('the local arm end to end: the lane, the store, the check and the read', () => {
+  const US = '\x1f';
+  const closers: (() => Promise<void>)[] = [];
+  afterEach(async () => { for (const c of closers.splice(0)) await c(); });
+
+  /** A stand-in box: the status answer to the first frame, then the frames result for the part each submission names. */
+  async function standInBox(text: string): Promise<{ url: string; submits: Record<string, unknown>[] }> {
+    const wss = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    await new Promise<void>((r) => wss.once('listening', () => r()));
+    closers.push(() => new Promise((r) => { for (const c of wss.clients) c.terminate(); wss.close(() => r()); }));
+    const submits: Record<string, unknown>[] = [];
+    wss.on('connection', (ws) => {
+      let first = true;
+      ws.on('message', (raw) => {
+        const m = JSON.parse(String(raw)) as Record<string, unknown>;
+        if (first) {
+          first = false;
+          ws.send(JSON.stringify({
+            t: 'status', state: 'ok', reason: null, serviceVersion: '1.0.0', proto: TESTBOX_PROTO, release: 'v0.0.900',
+            tools: { node: '22.99.1', npm: '10.9.0', tmux: '3.4', git: '2.43.0', python3: '3.12.3', chrome: '131.0.6778.85' },
+            sync: { state: 'idle', detail: null, at: null }, runs: { inProgress: 0, limit: 2 }, queueDepth: 0,
+            pristine: [], failedKeys: [], heldRunUsers: [], repositories: [],
+          }));
+          return;
+        }
+        submits.push(m);
+        const part = m['part'] as number;
+        const p = FRAMES_PARTS[part]!;
+        const result: FramesCaptureResult = {
+          recipe: 'frames', version: FRAMES_RECIPE_VERSION, build: m['build'] as string, part, case: p.case, pane: p.pane, release: 'v0.0.900',
+          unmeasured: [], word: 'framed', sends: [], turns: 0, sideRequests: 0,
+          frame: { outcome: 'drawn', refusal: null, ...frameSize(text), cursor: [2, 1], replaced: { cwd: 0, path: 0, model: 0, account: 0 }, text },
+        };
+        ws.send(JSON.stringify({ t: 'capture.state', captureId: m['captureId'], build: m['build'], state: 'ended', refusal: null, detail: null, position: null, result: null, frames: result }));
+      });
+    });
+    return { url: `ws://127.0.0.1:${(wss.address() as { port: number }).port}`, submits };
+  }
+
+  /** A fixture HOME whose launcher prints the box settings (the box at `url`) and a token file beside it. */
+  function fixtureHome(url: string): string {
+    const home = mkTmp('ccrc-frames-local-arm-');
+    mkdirSync(path.join(home, '.local', 'bin'), { recursive: true });
+    const launcher = path.join(home, '.local', 'bin', 'ccrc');
+    writeFileSync(launcher, ['#!/bin/sh', 'while IFS= read -r l || [ -n "$l" ]; do printf \'%s\\n\' "$l"; done < "$HOME/knobs.out"', ''].join('\n'));
+    chmodSync(launcher, 0o755);
+    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(home, '.ccrc', 'testbox.token'), 'fixture-token\n');
+    writeFileSync(path.join(home, 'knobs.out'), [
+      ['CCRC_TESTBOX_URL', '', url, 'the fixture'],
+      ['CCRC_TESTBOX_TOKEN_FILE', '~/.ccrc/testbox.token', '~/.ccrc/testbox.token', 'default'],
+      ['CCRC_TESTBOX_STATUS_DEADLINE', '3s', '1s', 'the fixture'],
+      ['CCRC_TESTBOX_POLL', '30s', '45s', 'the fixture'],
+    ].map((f) => f.join(US)).join('\n') + '\n');
+    return home;
+  }
+
+  it('a frames part sent through localIOFor reaches the lane, is checked, is stored clear with its text, and the read serves it', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const text = ['─'.repeat(60), '❯ frames row 001 of 003 abcdefghij', '─'.repeat(60), `  ${FRAMES_STATUS_TEXT}`, '  ? for shortcuts'].join('\n') + '\n';
+    const box = await standInBox(text);
+    const home = fixtureHome(box.url);
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    closers.push(async () => { coord.db.close(); });
+    const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
+    await notifyLog.load();
+    // A fresh store trusts its newest passed build; with every delivery part measured, the pass goes on to frames.
+    const build = '2.1.302';
+    for (let p = 0; p < DELIVERY_PART_COUNT; p++) coord.recordDelivery(deliveryResultFor(build, p), 1);
+    let clock = 1_000_000_000_000;
+    const lane = new BuildCaptureLane(() => ({ coord, notifyLog, buildCapture: testboxCaptureTransport(() => localIOFor(home)), masker: undefined }), () => clock);
+    clock += BUILD_CAPTURE_SWEEP_MS;
+    await lane.sweep([]);
+    expect(box.submits).toEqual([{ t: 'capture.submit', captureId: expect.stringMatching(/^[0-9a-f]{32}$/), build, recipe: 'frames', part: 0 }]);
+    expect(coord.claudeBuildFrames()).toMatchObject([{ build, part: 0, word: 'framed', checked: 'clear', text }]);
+    const app = Fastify({ logger: false });
+    closers.push(() => app.close());
+    registerTestboxFramesRoute(app, { frames: () => coord.claudeBuildFrames(), session: () => true, boxToken: () => false, masker: { maskText: (t: string) => t } });
+    const r = await app.inject({ method: 'GET', url: `/api/testbox/frames?build=${build}&frame=${framesFrameId(FRAMES_PARTS[0]!)}` });
+    expect([r.statusCode, r.json().text]).toEqual([200, text]);
+  });
+});
+

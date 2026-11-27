@@ -261,12 +261,14 @@ export function deliveryWiring(t: CaptureTimings = CAPTURE_TIMINGS, driver: stri
 }
 
 /** The box's own private strings every frame's reducer is given (Desktop polish wave 187, plan 5.2 rule 3): its home
- *  directory, its user name (four characters or more, so a short one does not match half the screen), its host name and its
- *  short form, and the release tree it runs from. Each capture adds its own directories and the stand-in's address. */
+ *  directory, its user name, its host name and its short form, and the release tree it runs from. No name is dropped for
+ *  being short: the reducer matches one of one to three characters as a whole word (`framesReduce.ts#holdsPrivate`, the
+ *  coordinator's ruling on review 4069's F4). Each capture adds its own directories, its working directory and the
+ *  stand-in's address. */
 export function boxPrivates(home: string = os.homedir(), user: string = os.userInfo().username, host: string = os.hostname(),
   tree: string = fileURLToPath(new URL('../../../../../', import.meta.url))): string[] {
   const short = host.split('.')[0] ?? '';
-  return [home, tree.replace(/\/$/, ''), ...(user.length >= 4 ? [user] : []), ...(host.length >= 4 ? [host] : []), ...(short.length >= 4 && short !== host ? [short] : [])]
+  return [home, tree.replace(/\/$/, ''), user, host, ...(short !== host ? [short] : [])]
     .filter((x) => x !== '' && x !== '/');
 }
 

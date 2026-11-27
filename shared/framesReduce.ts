@@ -48,6 +48,27 @@ export function rowIsOurs(plainRow: string, oursSquashed: readonly string[]): bo
 const RULE_RUN = /─{10,}/;
 export const isRuleRow = (plainRow: string): boolean => RULE_RUN.test(plainRow);
 
+/** RULE 8's one text: what the capture's status line prints, the recorder's `STATUSLINE_REPLY`
+ *  (`agent/src/testbox/captureRecord.ts`). Held here, once, for both hosts: the server's check must know it and cannot import
+ *  agent code. The recorder keeps its own literal, a legitimately different copy across a process boundary (it runs as its
+ *  own type-stripped process and imports no local module), and `testbox-capture-frames-run.test.ts` holds the two equal. */
+export const FRAMES_STATUS_TEXT = 'ccrc capture';
+
+/** RULE 8, THE STATUS POSITION (review 4069's F3, the capture owner's condition, the coordinator's rule): the row directly
+ *  under the frame's LOWEST rule row, which in a box frame is the box's lower rule, where a configured status line is drawn
+ *  (measured on the recorded 2.1.291 panes). It fails closed: that row, spaces trimmed, must be exactly
+ *  `FRAMES_STATUS_TEXT`, and no later row may hold the text again; a blank or missing row there refuses too. A frame with
+ *  no rule row has no box and so no status position. Answers the status row's index, `null` for no position, or `refused`. */
+export function statusRowOf(plainRows: readonly string[]): number | null | 'refused' {
+  let low = -1;
+  plainRows.forEach((p, i) => { if (isRuleRow(p)) low = i; });
+  if (low < 0) return null;
+  const at = low + 1;
+  if (at >= plainRows.length || plainRows[at]!.trim() !== FRAMES_STATUS_TEXT) return 'refused';
+  for (let i = at + 1; i < plainRows.length; i++) if (plainRows[i]!.includes(FRAMES_STATUS_TEXT)) return 'refused';
+  return at;
+}
+
 /** RULE 4: a path-like run, whole or cut short (the owner's condition 2). It is two or more components around `/`, a
  *  leading `/` before two components, or an ellipsis or a home mark followed by `/`. */
 export const PATH_LIKE = /(?:[\w.-]+\/){2,}|(?:\/[\w.-]+){2,}|(?:…|\.\.\.|~)\//;
@@ -61,6 +82,78 @@ export const ACCOUNT_WORD = /api usage billing|\bclaude (?:pro|max|team|enterpri
 
 /** The fixed texts a replaced row's content becomes. */
 export const FRAMES_REPLACED = Object.freeze({ cwd: '‹working directory›', model: '‹model›', account: '‹account›' });
+const TOKENS: readonly string[] = Object.values(FRAMES_REPLACED);
+
+/** A private string of at most this many code points (a short user or host name) is matched as a whole word (the
+ *  coordinator's ruling on review 4069's F4): bounded on each side by the text's edge or by a character that is not a
+ *  letter, digit, dot, dash or underscore. A longer one is matched anywhere. No name is dropped. */
+export const FRAMES_SHORT_PRIVATE_MAX = 3;
+const WORD_BEFORE = /[\p{L}\p{N}._-]$/u;
+const WORD_AFTER = /^[\p{L}\p{N}._-]/u;
+
+/** Every index (in code units) at which `p` occurs in `text` as the reducer counts an occurrence. */
+function privateAt(text: string, p: string): number[] {
+  const short = Array.from(p).length <= FRAMES_SHORT_PRIVATE_MAX;
+  const out: number[] = [];
+  for (let i = text.indexOf(p); i !== -1; i = text.indexOf(p, i + 1)) {
+    const j = i + p.length;
+    if (!short || (!WORD_BEFORE.test(text.slice(Math.max(0, i - 2), i)) && !WORD_AFTER.test(text.slice(j, j + 2)))) out.push(i);
+  }
+  return out;
+}
+/** Whether `text` holds one of `privates`, counted as `privateAt` counts it. */
+export const holdsPrivate = (text: string, privates: readonly string[]): boolean => privates.some((p) => privateAt(text, p).length > 0);
+
+/** A row less the decoration at its end, and a row less the decoration at its start. */
+const lessTail = (row: string): string => { const s = spans(row); return s.lead + s.content; };
+const lessLead = (row: string): string => { const s = spans(row); return s.content + s.tail; };
+
+/** THE WRAP RULE, on the box (review 4069's F2): a private string whose head ends one row and whose tail starts the next,
+ *  at any split point, read on the rows as drawn and again with the decoration at the break stripped, so padding or a
+ *  border between the halves does not hide it. SGR is already gone from both rows, so a colour change between the halves
+ *  does not either. A wrap through a private string means the pane is not laid out as the recipe expects: the frame is
+ *  refused whole, never repaired. */
+function privateAcross(a: string, b: string, privates: readonly string[]): boolean {
+  for (const [x, y] of [[a, b], [lessTail(a), lessLead(b)]] as const) {
+    const joined = x + y;
+    for (const p of privates) if (privateAt(joined, p).some((i) => i < x.length && i + p.length > x.length)) return true;
+  }
+  return false;
+}
+
+/** The first run of a row's content (after its leading decoration), and whether it reads as the tail of a path: it
+ *  holds a `/`. */
+const pathTail = (row: string): boolean => (/^\S+/u.exec(spans(row).content)?.[0] ?? '').includes('/');
+
+/** Whether a row's text runs to its last column: it is the pane's full width and its last character is neither a space,
+ *  the decoration nor a rule's `─`. */
+function runsToTheEdge(row: string, pane: FramesPane): boolean {
+  const cps = Array.from(row);
+  const last = cps[cps.length - 1];
+  return cps.length === pane.cols && last !== undefined && !DECOR.has(last) && !/[\s─]/u.test(last);
+}
+
+/** THE FULL-WIDTH RULE, on both hosts (review 4069's F2): a token holding a `/` that runs to a full-width row's last
+ *  column and goes on at the start of the next row, which is not ours and not a rule row. The pane wrapped a path:
+ *  refused whole. */
+function pathOffTheEdge(a: string, b: string, pane: FramesPane): boolean {
+  if (!runsToTheEdge(a, pane)) return false;
+  const head = /\S+$/u.exec(a)?.[0] ?? '';
+  const tail = /^\S+/u.exec(spans(b).content)?.[0] ?? '';
+  return tail !== '' && (head + tail).includes('/');
+}
+
+/** THE SHAPE CHECKS ON A REDUCED TEXT, on both hosts, so the server, which has none of the box's strings, refuses by shape
+ *  what a wrap left (review 4069's F2, the reviewer's two measured frames and their class): a replacement token cut
+ *  anywhere (a `‹` that starts none of the tokens, or a `›` that ends none), and a path's tail at the start of the row
+ *  after a row that ends in a replacement token or runs to the edge. A row too narrow for its whole token leaves a cut
+ *  token, so it is refused here too: a token is never cut short to fit. */
+function cutToken(plain: string): boolean {
+  for (let i = plain.indexOf('‹'); i !== -1; i = plain.indexOf('‹', i + 1)) if (!TOKENS.some((t) => plain.startsWith(t, i))) return true;
+  for (let i = plain.indexOf('›'); i !== -1; i = plain.indexOf('›', i + 1)) if (!TOKENS.some((t) => plain.slice(0, i + 1).endsWith(t))) return true;
+  return false;
+}
+const endsInToken = (row: string): boolean => TOKENS.some((t) => lessTail(row).endsWith(t));
 
 /** A row with its content replaced by `token`, padded with spaces or cut to the content's width, its two decoration spans
  *  kept, its SGR gone with its content: every row keeps its width. */
@@ -107,9 +200,21 @@ export function reduceFrame(
   const count = { cwd: 0, path: 0, model: 0, account: 0 };
   const scanned: string[] = [];
   let ruleLeak = false;
-  const rows = frame.split('\n').map((row) => {
-    const plain = stripFrameSgr(row);
-    const hasPrivate = priv.some((p) => plain.includes(p));
+  const drawn = frame.split('\n');
+  const plains = drawn.map(stripFrameSgr);
+  // Rule 8: the status position holds exactly the capture's status text, which is then ours; anything else refuses whole.
+  const status = statusRowOf(plains);
+  if (status === 'refused') return { kind: 'refused', refusal: 'status-row' };
+  // The wrap rule (box only: it needs the box's strings) and the full-width rule, on the rows as drawn, SGR removed.
+  for (let i = 0; i + 1 < plains.length; i++) {
+    const [a, b] = [plains[i]!, plains[i + 1]!];
+    if (priv.length > 0 && privateAcross(a, b, priv)) return { kind: 'refused', refusal: 'private-shape' };
+    if (!isRuleRow(b) && !rowIsOurs(b, oursSq) && pathOffTheEdge(a, b, pane)) return { kind: 'refused', refusal: 'private-shape' };
+  }
+  const ourRow = plains.map((p, i) => i === status || (!isRuleRow(p) && rowIsOurs(p, oursSq)));
+  const rows = drawn.map((row, i) => {
+    const plain = plains[i]!;
+    const hasPrivate = holdsPrivate(plain, priv);
     if (isRuleRow(plain)) {
       // Rule 7: a rule row's label is kept byte for byte, unless it holds a private string. A label rules 4 to 6 would
       // catch is never kept and never rewritten: the frame is refused (below), so a cut-short path, a model or a plan
@@ -120,21 +225,29 @@ export function reduceFrame(
       return row;
     }
     // Rule 2: our rows stay byte for byte.
-    if (rowIsOurs(plain, oursSq)) return row;
+    if (ourRow[i]) return row;
     let out: string | null = null;
     if (hasPrivate) { count.cwd++; out = replaced(plain, FRAMES_REPLACED.cwd); } // rule 3
     else if (PATH_LIKE.test(plain)) { count.path++; out = replaced(plain, FRAMES_REPLACED.cwd); } // rule 4
     else if (MODEL_WORD.test(plain)) { count.model++; out = replaced(plain, FRAMES_REPLACED.model); } // rule 5
     else if (ACCOUNT_WORD.test(plain)) { count.account++; out = replaced(plain, FRAMES_REPLACED.account); } // rule 6
-    // Rule 8: the capture configures no status line, so a row below the box is read by rules 3 to 6 like any other.
+    // Rule 8 judged the status row above (it is ours once it is exactly the capture's text). Any other row below the box
+    // is read by rules 3 to 6 like any other.
     scanned.push(out ?? plain);
     return out ?? row;
   });
   const text = rows.join('\n');
+  // The shape checks on the reduced rows: no cut token, no path's tail after a token or a row run to the edge.
+  const outPlain = rows.map(stripFrameSgr);
+  if (outPlain.some(cutToken)) return { kind: 'refused', refusal: 'private-shape' };
+  for (let i = 0; i + 1 < outPlain.length; i++) {
+    const [a, b] = [outPlain[i]!, outPlain[i + 1]!];
+    if (!ourRow[i + 1] && !isRuleRow(b) && pathTail(b) && (endsInToken(a) || runsToTheEdge(a, pane))) return { kind: 'refused', refusal: 'private-shape' };
+  }
   // Rule 9: the scans over every row not ours, then the masker's over the whole frame. A hit refuses it whole.
   const foreign = scanned.join('\n');
   if (scan(foreign)) return { kind: 'refused', refusal: 'private-name' };
-  if (ruleLeak || PRIVATE_SHAPES.some((r) => r.test(foreign)) || priv.some((p) => foreign.includes(p))) return { kind: 'refused', refusal: 'private-shape' };
+  if (ruleLeak || PRIVATE_SHAPES.some((r) => r.test(foreign)) || holdsPrivate(foreign, priv)) return { kind: 'refused', refusal: 'private-shape' };
   // The masker over the whole frame as drawn AND with its SGR removed, so a colour change inside a key cannot split it
   // past the shapes (the security review of F3).
   if (mask(text) || mask(stripFrameSgr(text))) return { kind: 'refused', refusal: 'masked' };

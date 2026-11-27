@@ -1,6 +1,6 @@
 // A box frame as a test fixture (Desktop polish wave 187; plan docs/superpowers/plans/2026-11-26-box-frames-recipe.md
 // section 5.4). L0, pure, imports only `shared/` siblings. A session fetches one reduced frame through the one read
-// (`ccrc-api testbox frames <build> <frame id>`) and writes it under `server/test/fixtures/panes/box/` in this form: one
+// (`ccrc-api testbox frames --build <build> --frame <frame id>`) and writes it under `FRAMES_FIXTURE_DIR` in this form: one
 // header line naming the build, the frame id and the recipe version (so a fixture can be matched to the lines that produced
 // it after the case file moves on, the coordinator's 38179), then the frame's text exactly as the read served it.
 //
@@ -9,8 +9,14 @@
 import { isClaudeVersion } from './claudeVersion.js';
 import { FRAMES_PARTS, FRAMES_VERSION_SHAPE, framesFrameId, framesPartOfId } from './framesResult.js';
 
-/** The header line's grammar. */
-const HEADER = /^# ccrc box frame: build (\S+) frame (\S+) recipe ([0-9a-f]{16})$/;
+/** The folder every box frame fixture goes in, from the repository root: a folder of frames only, so the tree check
+ *  (`box-frame-fixtures.test.ts`) holds every file in it, whatever its name (review 4069's A5). The panes' `box/` folder
+ *  holds the earlier box fixtures, which are not frames. */
+export const FRAMES_FIXTURE_DIR = 'server/test/fixtures/box-frames';
+
+/** The header line's grammar. Each field is one run of non-spaces here; its own grammar decides it below, held once:
+ *  the build by `isClaudeVersion`, the frame by the part list, the version by `FRAMES_VERSION_SHAPE` (review 4069's F7). */
+const HEADER = /^# ccrc box frame: build (\S+) frame (\S+) recipe (\S+)$/;
 
 /** The fixture's text for a frame: the header line, then the frame. */
 export const frameFixtureOf = (build: string, frame: string, version: string, text: string): string =>

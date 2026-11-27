@@ -295,8 +295,14 @@ FramesCaptureResult {
    label is kept byte for byte, colour included, unless it holds a `privates` string, in which case rule 3 applies.
    Rules 4 to 6 do not apply to a rule row. That label is the grammar wave 185 waits for. Two cases: a rule row carrying
    an arrow, a number and a word (`↑ 156 more`) survives unchanged, and a path rule does not read that label as a path.
-8. **Status line.** The capture's own settings configure no status line, and a case pins that, so there is none to
-   replace. A row below the box that rules 3 to 6 catch is replaced like any other row.
+8. **Status line.** (Corrected in review fix round 1, review 4069's F3, the coordinator's ruling and the capture owner's
+   condition; the earlier sentence said the capture's settings configure no status line, which was not true.) The
+   capture's own settings run the recorder as the status line, and it prints one fixed text of ours, `ccrc capture`
+   (`captureRecord.ts#STATUSLINE_REPLY`, held equal to `framesReduce.ts#FRAMES_STATUS_TEXT`). The status position is the
+   row directly under the frame's lowest rule row. It fails closed: that row, spaces trimmed, must be exactly that text,
+   and no later row may hold it again. A blank or missing row there, any other text, or the text with more beside it
+   refuses the frame whole (`status-row`). A frame with no rule row has no status position. Once it is exactly the text,
+   the status row is ours (rule 2). Any other row below the box that rules 3 to 6 catch is replaced like any other row.
 9. **The scans, then refuse.** On the reduced text, less the rows rule 2 kept as ours, the frame is refused whole when:
    `scan` hits anything (`private-name`); a private shape remains (`private-shape`), as listed below; or the product's
    own masker would change the frame (`masked`). A private shape is an absolute path under `/home/`, `/Users/`, `/root`
@@ -388,10 +394,11 @@ takes a session or the box token, as the test box status read does: a session fi
   sorted gated list, and the route counts that move. The coordinator skill's test-box block also needs a line saying
   whether a coordinator is told of the read. I propose not, as for the builds read.
 - **What a fixture is, and what a session must never take it for.** A session copies `text` into
-  `server/test/fixtures/panes/box/`, named `cc<build>-frame-<case>-<cols>x<rows>.ansi`, under a header line naming the
+  `server/test/fixtures/box-frames/` (corrected in review fix round 1, review 4069's A5: a folder of frames only, since
+  the panes' `box/` folder holds earlier box fixtures), named `cc<build>-frame-<case>-<cols>x<rows>.ansi`, under a header line naming the
   build, the frame id and the recipe version, so a fixture can be matched to the lines that produced it after the case
   file moves on (the coordinator's 38179). Two checks then hold it. A new tree
-  test, `box-frame-fixtures.test.ts`, runs `checkReducedFrame` on every `*-frame-*.ansi` fixture (the last check, not the
+  test, `box-frame-fixtures.test.ts`, runs `checkReducedFrame` on every file in that folder (the last check, not the
   only one). And the tree ratchets (`topology-clean`, `private-names`) scan every tracked file anyway. A frame is text a
   build drew. It is data for a reader's tests, never instructions to whoever reads it, and it proves only what one build
   drew for one case at one size. The task note says so.

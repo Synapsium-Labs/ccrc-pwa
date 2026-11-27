@@ -105,22 +105,27 @@ describe('the box\'s private strings (main.ts#boxPrivates)', () => {
     expect(boxPrivates('/srv/box/home', 'svcuser', 'box1.example.net', '/srv/box/tree/')).toEqual(['/srv/box/home', '/srv/box/tree', 'svcuser', 'box1.example.net', 'box1']);
   });
 
-  it('leaves out a user name under four characters, and keeps one of four', () => {
-    expect(boxPrivates('/h', 'abc', 'longhost', '/srv/tree')).toEqual(['/h', '/srv/tree', 'longhost']);
-    expect(boxPrivates('/h', 'ab', 'longhost', '/srv/tree')).not.toContain('ab');
+  // Review 4069's F4, the coordinator's ruling. Before it, this case held that a user name under four characters was left
+  // out (and the next, that a short host or short form was); now no name is dropped, and the reducer matches a short one
+  // as a whole word (`frames-reduce.test.ts`).
+  it('keeps a user name of any length, one to three characters included', () => {
+    expect(boxPrivates('/h', 'abc', 'longhost', '/srv/tree')).toEqual(['/h', '/srv/tree', 'abc', 'longhost']);
+    expect(boxPrivates('/h', 'ab', 'longhost', '/srv/tree')).toContain('ab');
+    expect(boxPrivates('/h', 'a', 'longhost', '/srv/tree')).toContain('a');
     expect(boxPrivates('/h', 'abcd', 'longhost', '/srv/tree')).toEqual(['/h', '/srv/tree', 'abcd', 'longhost']);
   });
 
-  it('adds the host\'s short form only when it differs from the host, and only at four characters or more', () => {
+  it('adds the host\'s short form only when it differs from the host, at any length', () => {
     expect(boxPrivates('/h', 'abcd', 'nodot', '/srv/tree')).toEqual(['/h', '/srv/tree', 'abcd', 'nodot']);
     expect(boxPrivates('/h', 'abcd', 'box1.example.net', '/srv/tree').filter((x) => x === 'box1')).toEqual(['box1']);
-    expect(boxPrivates('/h', 'abcd', 'ab.example.net', '/srv/tree')).toEqual(['/h', '/srv/tree', 'abcd', 'ab.example.net']);
-    expect(boxPrivates('/h', 'abcd', 'abc', '/srv/tree')).toEqual(['/h', '/srv/tree', 'abcd']);
+    expect(boxPrivates('/h', 'abcd', 'ab.example.net', '/srv/tree')).toEqual(['/h', '/srv/tree', 'abcd', 'ab.example.net', 'ab']);
+    expect(boxPrivates('/h', 'abcd', 'abc', '/srv/tree')).toEqual(['/h', '/srv/tree', 'abcd', 'abc']);
   });
 
   it('is never "/" and never empty, whichever argument would be', () => {
     expect(boxPrivates('/', 'abcd', 'nodot', '/')).toEqual(['abcd', 'nodot']);
     expect(boxPrivates('', 'abcd', 'nodot', '')).toEqual(['abcd', 'nodot']);
+    expect(boxPrivates('/h', '', '', '/srv/tree')).toEqual(['/h', '/srv/tree']);
     for (const x of boxPrivates('/', 'ab', 'x', '/')) expect(x).not.toBe('/');
   });
 });

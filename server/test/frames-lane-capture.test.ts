@@ -13,6 +13,7 @@ import { BUILD_CAPTURE_SWEEP_MS, BuildCaptureLane, type BuildCaptureAnswer, type
 import { BUILD_CAPTURE_RETRY_MS, buildTrustOf, type BuildCaptureJob } from '../../shared/claudeBuildTrust.js';
 import { DELIVERY_PART_COUNT } from '../../shared/deliveryResult.js';
 import { FRAMES_RECIPE_VERSION } from '../../shared/framesCapture.js';
+import { FRAMES_STATUS_TEXT } from '../../shared/framesReduce.js';
 import { FRAMES_KEEP_BUILDS } from '../../shared/framesLane.js';
 import { FRAMES_PARTS, frameSize, type FramesCaptureResult } from '../../shared/framesResult.js';
 import { deliveryResultFor } from './deliveryLaneHelpers.js';
@@ -51,7 +52,9 @@ function fake(answer: (job: BuildCaptureJob) => Answer): BuildCaptureTransport &
 
 const RULE = '─'.repeat(60);
 /** A frame the reducer's check leaves as it is: two rule rows, a draft row and a footer row, none of them private. */
-const TEXT = [RULE, '❯ frames row 001 of 003 abcdefghij', RULE, '  ? for shortcuts'].join('\n') + '\n';
+// The capture's status row sits directly under the box's lower rule (rule 8, review 4069's F3).
+const STATUS = `  ${FRAMES_STATUS_TEXT}`;
+const TEXT = [RULE, '❯ frames row 001 of 003 abcdefghij', RULE, STATUS, '  ? for shortcuts'].join('\n') + '\n';
 
 /** A well-formed frames result for `build` and `part`: drawn with `text`, or, with null text, a frame the box's reducer refused. */
 function resultFor(build: string, part: number, text: string | null = TEXT, version: string = FRAMES_RECIPE_VERSION): FramesCaptureResult {
@@ -219,7 +222,7 @@ describe('the receiver\'s check: what is stored with the text', () => {
   });
 
   it('a frame holding a path-like row, which the reducer\'s own rules would still replace, is recorded with its refusal word and NO text', async () => {
-    const text = [RULE, '  cwd /work/project-a/src/main', RULE, '  ? for shortcuts'].join('\n') + '\n';
+    const text = [RULE, '  cwd /work/project-a/src/main', RULE, STATUS, '  ? for shortcuts'].join('\n') + '\n';
     const s = await setup(fake(answering(text)), { maskText: (t) => t });
     deliveriesDone(s, RIG);
     await s.pass();
@@ -231,7 +234,7 @@ describe('the receiver\'s check: what is stored with the text', () => {
   });
 
   it('a frame an address in it gives away is refused the same way: an email-shaped run', async () => {
-    const text = [RULE, '  contact lane-a@example.com', RULE].join('\n') + '\n';
+    const text = [RULE, '  contact lane-a@example.com', RULE, STATUS].join('\n') + '\n';
     const s = await setup(fake(answering(text)), { maskText: (t) => t });
     deliveriesDone(s, RIG);
     await s.pass();

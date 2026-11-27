@@ -7,9 +7,11 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { CaptureRecord } from '../../shared/claudeBuildCapture.js';
 import type { DeliveryRoute } from '../../shared/deliveryResult.js';
-import { FRAMES_HOLD_TEXT, FRAMES_REPLY_TEXT, framesDraftLines, framesRows } from '../../shared/framesCapture.js';
+import { FRAMES_HOLD_TEXT, FRAMES_REPLY_TEXT, framesDraftLines, framesOurs, framesRows } from '../../shared/framesCapture.js';
 import { FRAME_BYTES_MAX, FRAMES_PARTS, framesPartOfId, readFramesCaptureResult } from '../../shared/framesResult.js';
-import { capturePaths } from '../src/testbox/capture.js';
+import { capturePaths, captureSettings } from '../src/testbox/capture.js';
+import { record, STATUSLINE_REPLY } from '../src/testbox/captureRecord.js';
+import { FRAMES_STATUS_TEXT, checkReducedFrame } from '../../shared/framesReduce.js';
 import type { DriverPlace } from '../src/testbox/captureDeliveryRun.js';
 import {
   FRAMES_FRAME_OUTPUT_MAX, FRAMES_STEP_OUTPUT_MAX, framesFrameOf, nodeFramesDriver, readFramesDriverAnswer, runFramesDrive,
@@ -175,6 +177,27 @@ describe('a frame as the result carries it (framesFrameOf)', () => {
 
   it('a text that is not a frame by the shape rule (a control character) is refused as not-a-frame', () => {
     expect(framesFrameOf('a\x07b', false, null, true, part, [], never)).toMatchObject({ outcome: 'refused', refusal: 'not-a-frame', text: null, replaced: null });
+  });
+
+  // Review 4069's F3, the coordinator's ruling: the capture's own status row is accepted and pinned. The capture's settings
+  // run the recorder as the status line, the recorder prints exactly its one constant, and that row under the box is ours.
+  it('the capture\'s settings print exactly the recorder\'s status text, and a frame with that row under the box keeps it', () => {
+    const settings = captureSettings(['node', '/r.js']) as { statusLine: { type: string; command: string } };
+    expect(settings.statusLine).toEqual({ type: 'command', command: "'node' '/r.js' statusline" });
+    expect(record('statusline', '{}', {})).toBe(STATUSLINE_REPLY);
+    // The reducer's one copy, read on both hosts, is the recorder's text: the two literals are held equal here.
+    expect(FRAMES_STATUS_TEXT).toBe(STATUSLINE_REPLY);
+    const raw = `${OURS}\n${'─'.repeat(40)}\n  ${STATUSLINE_REPLY}`;
+    const f = framesFrameOf(raw, false, null, true, part, ['scratch-host-name'], never);
+    expect(f).toMatchObject({ outcome: 'drawn', text: raw, replaced: { cwd: 0, path: 0, model: 0, account: 0 } });
+    // The server's check, which has the case's texts only, clears the same text unchanged.
+    expect(checkReducedFrame(f.text!, pane, framesOurs(FRAMES_PARTS[part]!.case, pane), never)).toEqual({ ok: true });
+  });
+
+  it('a private string the drive is given, wrapped across two rows, refuses the frame whole (review 4069, F2)', () => {
+    const p = 'scratch-host-name';
+    const raw = `${OURS}\nrunning on ${p.slice(0, 7)}\n${p.slice(7)} now`;
+    expect(framesFrameOf(raw, false, null, true, part, [p], never)).toMatchObject({ outcome: 'refused', refusal: 'private-shape', text: null, replaced: null });
   });
 
   it('a cursor outside the pane is null, and one on its last cell is kept', () => {
@@ -587,7 +610,8 @@ describe('the runner\'s frames branch', () => {
       async step(word, input) {
         seen = JSON.stringify(input);
         if (word !== 'frame') return { kind: 'typed', typed: true };
-        const frame = [...framesRows(3), `on box-private-name`, `in ${input.capture}`, `in ${input.tmux}`, 'to 127.0.0.1:4567', 'to 127.0.0.1:9999'].join('\n');
+        const frame = [...framesRows(3), `on box-private-name`, `in ${input.capture}`, `in ${input.tmux}`, 'to 127.0.0.1:4567 and on', 'to 127.0.0.1:9999'].join('\n');
+        // (Each replaced row is wide enough for its whole token: a narrower one refuses the frame, review 4069's F2.)
         return { kind: 'frame', frame, cursor: null, settled: true };
       },
     };
@@ -601,6 +625,23 @@ describe('the runner\'s frames branch', () => {
     expect(f.replaced).toEqual({ cwd: 4, path: 0, model: 0, account: 0 });
     for (const bad of ['box-private-name', capturePaths(root, 'priv', GOOD, root).dir, capturePaths(root, 'priv', GOOD, root).tmux, '127.0.0.1:4567']) expect(f.text).not.toContain(bad);
     expect(f.text).toContain('127.0.0.1:9999');
+  }, LONG);
+
+  it('the runner gives the capture\'s working directory: a frame wrapped inside it is refused whole (review 4069, F2)', async () => {
+    const root = freshRoot();
+    const l = fakeLauncher();
+    const part = partOf('rows-3@220x50');
+    // The head ends inside the work folder's own name, past the capture's directory, so only the working directory itself
+    // (`<capture>/work`) runs across the break: without it among the privates the frame would pass.
+    const driver: FramesDriver = {
+      async step(word, input) {
+        if (word !== 'frame') return { kind: 'typed', typed: true };
+        return { kind: 'frame', frame: [...framesRows(3), `in ${input.capture}/wo`, 'rk and more'].join('\n'), cursor: null, settled: true };
+      },
+    };
+    const r = await runner(root, l.launcher, standIns(), framesDeps(driver)).run('wrap', GOOD, 'frames', part);
+    expect(r.detail).toBeNull();
+    expect(r.frames!.frame).toMatchObject({ outcome: 'refused', refusal: 'private-shape', text: null });
   }, LONG);
 
   it('a driver fault answers no result and the directories still go', async () => {

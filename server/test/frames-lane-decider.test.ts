@@ -63,9 +63,12 @@ describe('framesListOf: the list answer carries no text', () => {
     expect(list.unmeasured).toHaveLength(FRAMES_PART_COUNT - 2);
     expect(JSON.stringify(list)).not.toContain('"text"');
   });
-  it('a frame the server refused at store time lists as refused, with its word and no text', () => {
-    // A text beside a store-time refusal is never listed as held, whatever the row carries.
+  it('a frame the server refused at store time lists as refused, with its word, the gaps word, no counts and no text', () => {
+    // A text beside a store-time refusal is never listed as held, whatever the row carries. Review 4069's A1: the word and
+    // the counts are the word reader's for a refused frame, not the box's for the drawn frame it sent.
     const f = framesListOf([row('2.1.332', 0, { checked: 'private-shape', text: 'x\n' })], '2.1.332').frames[0]!;
-    expect([f.outcome, f.refusal, f.hasText]).toEqual(['refused', 'private-shape', false]);
+    expect([f.outcome, f.refusal, f.word, f.replaced, f.hasText]).toEqual(['refused', 'private-shape', 'gaps', null, false]);
+    const clear = framesListOf([row('2.1.332', 0)], '2.1.332').frames[0]!;
+    expect([clear.outcome, clear.word, clear.replaced]).toEqual(['drawn', 'framed', { cwd: 0, path: 0, model: 0, account: 0 }]);
   });
 });

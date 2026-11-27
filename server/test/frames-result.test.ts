@@ -69,6 +69,27 @@ describe('a frame\'s shape rule and the cap', () => {
   it('refuses a hyperlink, a cursor move, a bare ESC, a tab and a carriage return: never stripped', () => {
     for (const t of [`${ESC}]8;;http://x${ESC}\\x${ESC}]8;;${ESC}\\\n`, `${ESC}[2Ax\n`, `${ESC}x\n`, 'a\tb\n', 'a\r\n']) expect(frameTextFits(t, pane)).toBe(false);
   });
+  // Review 4069's F1, the coordinator's ruling: by Unicode class, one case per class, each refused whole.
+  const BY_CLASS: readonly [string, readonly string[]][] = [
+    ['a C1 control (Cc): a one-character CSI, an OSC, a next-line', ['\u009b', '\u009d', '\u0085', '\u0080', '\u009f']],
+    ['a format character (Cf): the bidi marks and isolates, zero-width and joiner, the byte-order mark, a soft hyphen',
+      ['‮', '‪', '‎', '⁦', '⁧', '⁨', '⁩', '​', '‌', '‍', '⁠', '﻿', '­']],
+    ['the line separator (Zl)', [' ']],
+    ['the paragraph separator (Zp)', [' ']],
+    ['a lone surrogate (Cs)', ['\ud800', '\udfff']],
+    ['a private-use character (Co)', ['', '', '\u{f0000}', '\u{10fffd}']],
+  ];
+  for (const [name, chars] of BY_CLASS) {
+    it(`refuses ${name}, never stripped`, () => {
+      for (const c of chars) {
+        expect(frameTextFits(`❯ a${c}b\n`, pane), `U+${c.codePointAt(0)!.toString(16)}`).toBe(false);
+        expect(frameTextFits(`${ESC}[2m${c}${ESC}[0m\n`, pane), `U+${c.codePointAt(0)!.toString(16)} inside SGR`).toBe(false);
+      }
+    });
+  }
+  it('takes what a box draws that is none of those: borders, the glyph, the markers, letters, an emoji and its selector', () => {
+    expect(frameTextFits('╭─╮│❯⏺●⎿ ж 漢 ✓ ⚠️ 👍\n', pane)).toBe(true);
+  });
   it('refuses one row over, one column over, and one byte over the cap', () => {
     expect(frameTextFits(frameText(51, 10), pane)).toBe(false);
     expect(frameTextFits(frameText(1, 221), pane)).toBe(false);
@@ -118,6 +139,8 @@ describe('readFramesCaptureResult: the one reader', () => {
     ['over-cap sizes on a drawn frame', {}, { rows: 51 }],
     ['an over-cap outcome inside the cap', { word: 'gaps' }, { outcome: 'over-cap', text: null }],
     ['a text that does not fit its pane', {}, { text: `${ESC}]8;;x${ESC}\\\n` }],
+    ['a text holding a C1 control', {}, { text: 'ab\u009bc\n', ...frameSize('ab\u009bc\n') }],
+    ['a text holding a bidi isolate', {}, { text: 'ab⁦c\n', ...frameSize('ab⁦c\n') }],
     ['a cursor outside the pane', {}, { cursor: [220, 0] }],
     ['a cursor not a pair', {}, { cursor: [1] }],
     ['a frame with a key added', {}, { extra: 1 }],

@@ -11,6 +11,7 @@ import { COORD_SCHEMA_VERSION, MIGRATIONS } from '../src/coord/schema.js';
 import { CoordStore } from '../src/coord/store.js';
 import { BUILD_CAPTURE_NOT_SENT_MAP, buildTrustOf } from '../../shared/claudeBuildTrust.js';
 import { FRAMES_RECIPE_VERSION } from '../../shared/framesCapture.js';
+import { framesListOf } from '../../shared/framesLane.js';
 import { FRAMES_PARTS, FRAMES_REFUSAL_MAP, frameSize, type FramesCaptureResult, type FramesRefusal } from '../../shared/framesResult.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 
@@ -111,8 +112,11 @@ describe('the frames writers', () => {
     expect(rows).toHaveLength(words.length);
     for (const [i, w] of words.entries()) {
       expect(raw(c, 'text', '2.1.320', i), w).toBeNull();
+      // The row keeps the box's own word as it was sent (`framed`): the store records and decides nothing, so this case pinned
+      // the stored word. What a reader is answered is the list's (review 4069's A1): a refused frame, the gaps word, no counts.
       expect(rows[i], w).toMatchObject({ part: i, word: 'framed', checked: w, text: null, at: 10 + i });
       expect(rows[i]!.record, w).toEqual(recordOf(resultFor('2.1.320', i)));
+      expect(framesListOf(rows, '2.1.320').frames[i], w).toMatchObject({ outcome: 'refused', refusal: w, word: 'gaps', replaced: null, hasText: false });
     }
   });
 
