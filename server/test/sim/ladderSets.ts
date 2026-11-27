@@ -407,16 +407,17 @@ export function offStepCases(m: LadderModule): Record<string, SuiteCase> {
 // ---------------------------------------------------------------------------------------------------------- rungStep
 
 export function rungStepCases(m: LadderModule): Record<string, SuiteCase> {
-  const refuse = (needs: Rung) => ({ pass: false, word: 'rung-below', needs });
+  const refuse = (needs: Rung | null) => ({ pass: false, word: 'rung-below', needs });
+  const passing = (cell: string) => ({ pass: true, cell });
   return {
-    'every W1 act is allowed at chat, advise and full, by any door': () => {
+    'every W1 act is allowed at chat, advise and full, by any door, and the pass names the cell': () => {
       for (const act of ['read', 'write-note', 'acknowledge'] as const) for (const r of ['chat', 'advise', 'full'] as const) {
-        for (const d of ['other', 'card-probe-note'] as const) expect(m.rungStep(r, d, act)).toEqual({ pass: true });
+        for (const d of ['other', 'card-probe-note'] as const) expect(m.rungStep(r, d, act)).toEqual(passing('allow'));
       }
     },
-    'at off, card, probe and note pass and any other door refuses rung-below naming chat': () => {
+    'at off, card, probe and note pass skipped and any other door refuses rung-below naming chat': () => {
       for (const act of ['read', 'write-note', 'acknowledge'] as const) {
-        expect(m.rungStep('off', 'card-probe-note', act)).toEqual({ pass: true });
+        expect(m.rungStep('off', 'card-probe-note', act)).toEqual(passing('skipped'));
         expect(m.rungStep('off', 'other', act)).toEqual(refuse('chat'));
       }
     },
@@ -425,16 +426,40 @@ export function rungStepCases(m: LadderModule): Record<string, SuiteCase> {
         acknowledge: { chat: 'allow', advise: 'refuse', full: 'allow' } } as const;
       expect(m.rungStep('chat', 'other', 'read', cells)).toEqual(refuse('full'));
       expect(m.rungStep('advise', 'other', 'read', cells)).toEqual(refuse('full'));
-      expect(m.rungStep('full', 'other', 'read', cells)).toEqual({ pass: true });
+      expect(m.rungStep('full', 'other', 'read', cells)).toEqual(passing('allow'));
       expect(m.rungStep('chat', 'other', 'write-note', cells)).toEqual(refuse('advise'));
-      expect(m.rungStep('advise', 'other', 'write-note', cells)).toEqual({ pass: true });
+      expect(m.rungStep('advise', 'other', 'write-note', cells)).toEqual(passing('allow'));
       expect(m.rungStep('advise', 'other', 'acknowledge', cells)).toEqual(refuse('chat'));
       expect(m.rungStep('chat', 'card-probe-note', 'read', cells)).toEqual(refuse('full'));
-      expect(m.rungStep('off', 'card-probe-note', 'read', cells)).toEqual({ pass: true });
+      expect(m.rungStep('off', 'card-probe-note', 'read', cells)).toEqual(passing('skipped'));
     },
-    'a cell no rung allows names full, the highest, and still refuses': () => {
+    'a cell no rung allows names null, never a rung, and still refuses': () => {
       const cells = { read: { chat: 'refuse', advise: 'refuse', full: 'refuse' } } as never;
-      expect(m.rungStep('full', 'other', 'read', cells)).toEqual(refuse('full'));
+      for (const r of ['off', 'chat', 'advise', 'full'] as const) expect(m.rungStep(r, 'other', 'read', cells)).toEqual(refuse(null));
+      expect(m.rungStep('off', 'card-probe-note', 'read', cells)).toEqual(passing('skipped'));
+    },
+    // Plan question 6: only `refuse` refuses; each other word passes and is named in the pass.
+    'each cell word at each rung: refuse refuses, every other word passes naming itself': () => {
+      for (const word of ['allow', 'proposal', 'armed', 'by-grant'] as const) {
+        for (const r of ['chat', 'advise', 'full'] as const) {
+          const cells = { read: { chat: 'refuse', advise: 'refuse', full: 'refuse', [r]: word } } as never;
+          expect(m.rungStep(r, 'other', 'read', cells), `${word} at ${r}`).toEqual(passing(word));
+          expect(m.rungStep(r, 'card-probe-note', 'read', cells), `${word} at ${r} by a start door`).toEqual(passing(word));
+          for (const other of ['chat', 'advise', 'full'] as const) {
+            if (other !== r) expect(m.rungStep(other, 'other', 'read', cells), `${word} at ${r}, asked at ${other}`).toEqual(refuse(r));
+          }
+        }
+      }
+    },
+    'rung-below names the lowest rung whose cell is not refuse, whatever word it holds': () => {
+      const cells = { read: { chat: 'refuse', advise: 'proposal', full: 'allow' }, 'write-note': { chat: 'refuse', advise: 'refuse', full: 'by-grant' },
+        acknowledge: { chat: 'refuse', advise: 'armed', full: 'armed' } } as never;
+      expect(m.rungStep('chat', 'other', 'read', cells)).toEqual(refuse('advise'));
+      expect(m.rungStep('advise', 'other', 'read', cells)).toEqual(passing('proposal'));
+      expect(m.rungStep('advise', 'other', 'write-note', cells)).toEqual(refuse('full'));
+      expect(m.rungStep('full', 'other', 'write-note', cells)).toEqual(passing('by-grant'));
+      expect(m.rungStep('off', 'other', 'acknowledge', cells)).toEqual(refuse('advise'));
+      expect(m.rungStep('full', 'other', 'acknowledge', cells)).toEqual(passing('armed'));
     },
   };
 }
@@ -545,13 +570,19 @@ const OFF_SET = set(offStepCases, [
 ]);
 
 const RUNG_STEP_SET = set(rungStepCases, [
-  { id: 'S1 card, probe and note are refused at off', old: "  if (effective === 'off' && door === 'card-probe-note') return { pass: true };\n", new: '' },
+  { id: 'S1 card, probe and note are refused at off', old: "  if (effective === 'off' && door === 'card-probe-note') return { pass: true, cell: 'skipped' };\n", new: '' },
   { id: 'S2 every door passes at off', old: "effective === 'off' && door === 'card-probe-note'", new: "effective === 'off'" },
-  { id: 'S3 the cell is inverted', old: "effective !== 'off' && cell[effective] === 'allow'", new: "effective !== 'off' && cell[effective] !== 'allow'" },
+  { id: 'S3 the cell is inverted', old: "effective !== 'off' && cell[effective] !== 'refuse'", new: "effective !== 'off' && cell[effective] === 'refuse'" },
   { id: 'S4 the named rung is the highest allowing', old: "RUNGS.find((r) => r !== 'off'", new: "[...RUNGS].reverse().find((r) => r !== 'off'" },
-  { id: 'S5 a cell no rung allows names chat', old: "?? 'full';", new: "?? 'chat';" },
-  { id: 'S6 the cell is read at the next rung', old: "cell[effective] === 'allow') return", new: "cell[effective === 'chat' ? 'advise' : effective] === 'allow') return" },
-  { id: 'S7 a cell no rung allows passes', old: "const needs = RUNGS.find(", new: "if (!RUNGS.some((r) => r !== 'off' && cell[r] === 'allow')) return { pass: true };\n  const needs = RUNGS.find(" },
+  { id: 'S5 a cell no rung allows names full', old: "?? null;", new: "?? 'full';" },
+  { id: 'S6 the cell is read at the next rung', old: "cell[effective] !== 'refuse') return", new: "cell[effective === 'chat' ? 'advise' : effective] !== 'refuse') return" },
+  { id: 'S7 a cell no rung allows passes', old: "const needs = RUNGS.find(", new: "if (!RUNGS.some((r) => r !== 'off' && cell[r] !== 'refuse')) return { pass: true, cell: 'allow' };\n  const needs = RUNGS.find(" },
+  // W2 act catalogue (plan question 6): the five words, the pass's cell and `null`.
+  { id: 'S8 only allow passes', old: "cell[effective] !== 'refuse') return", new: "cell[effective] === 'allow') return" },
+  { id: 'S9 the pass names allow whatever the cell', old: "return { pass: true, cell: cell[effective] };", new: "return { pass: true, cell: 'allow' };" },
+  { id: 'S10 the skip names the cell', old: "return { pass: true, cell: 'skipped' };", new: "return { pass: true, cell: cells[act]!.chat };" },
+  { id: 'S11 rung-below names only an allowing rung', old: "cell[r] !== 'refuse') ?? null", new: "cell[r] === 'allow') ?? null" },
+  { id: 'S12 by-grant refuses', old: "cell[effective] !== 'refuse') return", new: "cell[effective] !== 'refuse' && cell[effective] !== 'by-grant') return" },
 ]);
 
 const NARROWING_SET = set(narrowingStateCases, [

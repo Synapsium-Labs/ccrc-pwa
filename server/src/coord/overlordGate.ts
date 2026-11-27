@@ -338,7 +338,7 @@ export function overlordGate(f: GateFacts): GateVerdict {
     // Step 10: the rung by act kind (rungStep). A door that names no act kind skips it, and only it (the timer doors, §11.2).
     if (door.act !== null && ladder !== 'start-door' && ladder.kind === 'read') {
       const rung = rungStep(ladder.rung.rung, door.ladderClass, door.act);
-      if (!rung.pass) return refuse(rung.word, '10', `the act needs the rung ${rung.needs}`);
+      if (!rung.pass) return refuse(rung.word, '10', rung.needs === null ? 'no rung allows the act' : `the act needs the rung ${rung.needs}`);
     }
   }
   return { kind: 'pass' };

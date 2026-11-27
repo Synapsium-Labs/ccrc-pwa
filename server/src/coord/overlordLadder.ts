@@ -13,7 +13,7 @@ import {
 import type {
   Binding, ConditionReading, LadderCauseRow, NarrowingState, ReadByEntry, Rung,
 } from '../../../shared/overlord-ladder.js';
-import { OVERLORD_ACT_KINDS, OVERLORD_ACT_KIND_LIST, type OverlordActKind } from '../../../shared/overlord.js';
+import { OVERLORD_ACT_KINDS, OVERLORD_ACT_KIND_LIST, type OverlordActKind, type RungCells, type RungCellWord } from '../../../shared/overlord.js';
 import type { DesignationRead } from '../../../shared/overlord-designation.js';
 import type { GenerationState } from '../../../shared/continuity.js';
 
@@ -172,19 +172,21 @@ export function offStep(operatorRung: Rung, door: DoorClass): { readonly pass: t
   return operatorRung === 'off' && door === 'other' ? { pass: false, word: 'overlord-off' } : { pass: true };
 }
 
-type RungCells = Readonly<Record<string, Readonly<Record<Exclude<Rung, 'off'>, 'allow' | 'refuse'>>>>;
+type CellTable = Readonly<Record<string, RungCells>>;
 /** The act catalogue's cells by kind, derived from its rows (`shared/overlord.ts`, the one home), never written out here. */
-const CATALOGUE_CELLS: RungCells = Object.fromEntries(OVERLORD_ACT_KIND_LIST.map((k) => [k, OVERLORD_ACT_KINDS[k].rungs]));
+const CATALOGUE_CELLS: CellTable = Object.fromEntries(OVERLORD_ACT_KIND_LIST.map((k) => [k, OVERLORD_ACT_KINDS[k].rungs]));
 
-/** Step 10's rung half: the act's cell at the effective rung, skipped by card, probe and note at `off`. `cells` is the act
- *  catalogue's; a caller passes no other table, a test passes a synthetic one. A cell no rung allows names `full`. */
+/** Step 10's rung half (plan question 6): the act's cell at the effective rung. Only `refuse` refuses; a pass carries the cell
+ *  (its mode, which the act's decider binds), or `skipped` for card, probe and note at `off`. A refusal names the lowest rung
+ *  whose cell is not `refuse`, or `null` when no rung allows the act: `null` is "no rung allows it", never "no rung needed".
+ *  `cells` is the act catalogue's; a caller passes no other table, a test passes a synthetic one. */
 export function rungStep(
-  effective: Rung, door: DoorClass, act: OverlordActKind, cells: RungCells = CATALOGUE_CELLS,
-): { readonly pass: true } | { readonly pass: false; readonly word: 'rung-below'; readonly needs: Rung } {
-  if (effective === 'off' && door === 'card-probe-note') return { pass: true };
+  effective: Rung, door: DoorClass, act: OverlordActKind, cells: CellTable = CATALOGUE_CELLS,
+): { readonly pass: true; readonly cell: RungCellWord | 'skipped' } | { readonly pass: false; readonly word: 'rung-below'; readonly needs: Rung | null } {
+  if (effective === 'off' && door === 'card-probe-note') return { pass: true, cell: 'skipped' };
   const cell = cells[act]!;
-  if (effective !== 'off' && cell[effective] === 'allow') return { pass: true };
-  const needs = RUNGS.find((r) => r !== 'off' && cell[r] === 'allow') ?? 'full';
+  if (effective !== 'off' && cell[effective] !== 'refuse') return { pass: true, cell: cell[effective] };
+  const needs = RUNGS.find((r) => r !== 'off' && cell[r] !== 'refuse') ?? null;
   return { pass: false, word: 'rung-below', needs };
 }
 
