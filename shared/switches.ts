@@ -458,7 +458,7 @@ const isSettingRow = (k: SwitchName): k is SettingSwitchName => 'setting' in SWI
 /** Every settings row's name, in `SWITCHES` order. */
 export const settingSwitchNames: readonly SettingSwitchName[] = (Object.keys(SWITCHES) as SwitchName[]).filter(isSettingRow);
 
-// ── The `~/.ccrc` rows and Overrides in force (D-8382)──────────────────────────────────────────────────────────────
+// ── The `~/.ccrc` rows and Overrides in force (D-8382) ──────────────────────────────────────────────────────────────
 
 /** The rows stored as a file in the fleet host's `~/.ccrc`. */
 export type CcrcFileSwitchName = {

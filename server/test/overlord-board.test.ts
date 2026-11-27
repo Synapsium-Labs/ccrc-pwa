@@ -20,7 +20,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import type { HostMachineReading } from '../../shared/pressure.js';
 import { SWITCHES, ccrcFileSwitchNames, settingSwitchNames } from '../../shared/switches.js';
 import { BOARD_SETTING_ROW_NAMES } from '../src/coord/overlordBoardRead.js';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { testDeps } from './helpers.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import {
@@ -462,7 +462,7 @@ describe('the brakes carry every switch of the switchboard: each settings row th
     expect(JSON.stringify(b)).not.toContain(SENTINEL);
   });
 
-  it('no row is absent with no value, the roll\'s seed is seed, and a read that failed is read-failed', async () => {
+  it('a lost row is absent with its owner\'s word (none where the owner gives it none), the roll\'s seed is seed, a failed read read-failed', async () => {
     const store = fakeStore({
       stallSettings: vi.fn(() => ({ kind: 'absent' })),
       collectLaneRow: vi.fn(() => ({ kind: 'unreadable', detail: SENTINEL })),
@@ -475,12 +475,14 @@ describe('the brakes carry every switch of the switchboard: each settings row th
     });
     const b = composeBoard(await gatherBoard(fixturePorts({}, store).ports));
     const rows = settingsOf(b);
-    const absent = { state: 'measured', stored: 'absent', value: null };
+    const absent = (value: string | null) => ({ state: 'measured', stored: 'absent', value });
     const failed = { state: 'unmeasured', reason: 'read-failed' };
     expect(rows).toEqual({
-      'stall-watch-level': absent, 'collect-lane-choice': failed, 'roll-idle-targets': { state: 'measured', stored: 'seed', value: 'coordinators' },
-      'dispatch-abandon-choice': absent, 'run-close-never-started-choice': failed, 'run-close-claimant-crashed-choice': failed,
-      'run-close-claimant-gone-choice': failed, 'plain-auto-memory': failed, 'coordinator-advisor': absent, 'overlord-rung': absent,
+      // The stall watch's lost row applies nothing, so the box's files decide (follow); the roll's seed is its default (all); the
+      // dispatch abandon's lost row has no word (it arms nothing); the advisor's lost row is its default (off); no rung row is chat.
+      'stall-watch-level': absent('follow'), 'collect-lane-choice': failed, 'roll-idle-targets': { state: 'measured', stored: 'seed', value: 'all' },
+      'dispatch-abandon-choice': absent(null), 'run-close-never-started-choice': failed, 'run-close-claimant-crashed-choice': failed,
+      'run-close-claimant-gone-choice': failed, 'plain-auto-memory': failed, 'coordinator-advisor': absent('off'), 'overlord-rung': absent('chat'),
     });
     // The stall row's own parse reads an unreadable store as unreadable, and the rung reader a store it cannot read as unmeasured.
     const worse = fakeStore({
@@ -493,11 +495,41 @@ describe('the brakes carry every switch of the switchboard: each settings row th
     expect(JSON.stringify(b)).not.toContain(SENTINEL);
   });
 
+  it('a seeded or lost row says the word its owner reads in force, never the raw column (fix round 1, F1)', async () => {
+    const store = fakeStore({
+      // A level the stall watch knows, whose quiet time it cannot read: the row does not apply whole, so the box's files decide.
+      stallSettings: vi.fn(() => ({ kind: 'row', row: { level: 'alert', quietMs: 'not a duration', updatedAt: 1 } })),
+      collectLaneRow: vi.fn(() => ({ kind: 'row', row: { choice: 'off', fleetNodeId: null, markerRetiredAt: null, generation: 0, updatedAt: 0 } })),
+      rollSettings: vi.fn(() => ({ kind: 'absent' })),
+      plainAutoMemorySettings: vi.fn(() => ({ kind: 'absent' })),
+      // A choice the advisor knows, beside a cap it cannot read: its owner reads no setting from the row.
+      coordinatorAdvisorSettings: vi.fn(() => ({ kind: 'row', choice: 'fable', cap: -1, scope: { kind: 'all' } })),
+    });
+    const rows = settingsOf(composeBoard(await gatherBoard(fixturePorts({}, store).ports)));
+    expect(rows['stall-watch-level']).toEqual({ state: 'measured', stored: 'row', value: 'follow' });
+    expect(rows['collect-lane-choice']).toEqual({ state: 'measured', stored: 'seed', value: 'off' });
+    expect(rows['roll-idle-targets']).toEqual({ state: 'measured', stored: 'absent', value: 'all' });
+    expect(rows['plain-auto-memory']).toEqual({ state: 'measured', stored: 'absent', value: 'off' });
+    expect(rows['coordinator-advisor']).toEqual({ state: 'measured', stored: 'row', value: 'unknown' });
+  });
+
+  it('the run-close rows never answer unknown: their reader reads a word it does not know as shadow, as the lanes do (A2)', async () => {
+    const coord = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-board-runclose-'), '.ccrc', 'coord.db')));
+    coord.db.prepare('INSERT OR REPLACE INTO run_close_settings (id, neverStarted, claimantCrashed, claimantGone, updatedAt) VALUES (1, ?, ?, ?, 5)')
+      .run(SENTINEL, 'on', 'off');
+    const rows = settingsOf(composeBoard(await gatherBoard(fixturePorts({}, coord as unknown as FakeStore).ports)));
+    expect(rows['run-close-never-started-choice']).toEqual({ state: 'measured', stored: null, value: 'shadow' });
+    expect(rows['run-close-claimant-crashed-choice']).toEqual({ state: 'measured', stored: null, value: 'on' });
+    expect(rows['run-close-claimant-gone-choice']).toEqual({ state: 'measured', stored: null, value: 'off' });
+  });
+
   it('no store is every settings row\'s no-store, and the fleet host\'s files are still read', async () => {
     const { ports } = fixturePorts({}, undefined);
     const b = composeBoard(await gatherBoard({ ...ports, coord: undefined }));
     expect(settingsOf(b)).toEqual(Object.fromEntries(settingSwitchNames.map((k) => [k, { state: 'unmeasured', reason: 'no-store' }])));
-    expect(b.brakes.state === 'measured' && Object.values(b.brakes.files ?? {}).every((r) => r.state === 'measured')).toBe(true);
+    if (b.brakes.state !== 'measured') throw new Error('brakes are not measured');
+    expect(ccrcFileSwitchNames.length).toBeGreaterThan(0);
+    expect(b.brakes.files).toEqual(Object.fromEntries(ccrcFileSwitchNames.map((k) => [k, { state: 'measured', value: 'clear' }])));
   });
 
   it('over a real store, every settings row is measured through the store\'s own readers', async () => {
@@ -505,8 +537,15 @@ describe('the brakes carry every switch of the switchboard: each settings row th
     const b = composeBoard(await gatherBoard(fixturePorts({}, coord as unknown as FakeStore).ports));
     const rows = settingsOf(b);
     expect(Object.keys(rows).sort()).toEqual([...settingSwitchNames].sort());
-    for (const k of settingSwitchNames) expect(rows[k]?.state, k).toBe('measured');
-    expect(rows['overlord-rung']).toEqual({ state: 'measured', stored: 'absent', value: null });
+    // A box nobody wrote: each row as its owner reads the migration's seeds. The roll's seed spells "coordinators" and its owner
+    // reads the seed as its default, "all" (F1); no rung row is the ladder's default.
+    const m = (stored: string | null, value: string) => ({ state: 'measured', stored, value });
+    expect(rows).toEqual({
+      'stall-watch-level': m('row', 'follow'), 'collect-lane-choice': m('seed', 'off'), 'roll-idle-targets': m('seed', 'all'),
+      'dispatch-abandon-choice': m('row', 'on'), 'run-close-never-started-choice': m(null, 'shadow'),
+      'run-close-claimant-crashed-choice': m(null, 'shadow'), 'run-close-claimant-gone-choice': m(null, 'shadow'),
+      'plain-auto-memory': m('row', 'off'), 'coordinator-advisor': m('row', 'off'), 'overlord-rung': m('absent', 'chat'),
+    });
   });
 });
 
@@ -540,12 +579,14 @@ describe('the brakes carry the fleet host\'s switch files through the Overrides 
 });
 
 describe('the projects walk names the folders it could not read, and the rest of the walk stands (board B3)', () => {
-  /** A root of a project, a plain file, a folder whose listing fails, a folder gone before its type probe, and a folder whose
-   *  listing fails and whose type the probe cannot read; `lstats` records each type probe the walk asks. */
+  /** A root of a project, a plain file, a link to that plain file, a folder whose listing fails, a folder gone before its type
+   *  probe, and a folder whose listing fails and whose type the probe cannot read; `lstats` records each type probe the walk asks.
+   *  The link is real: its listing fails and the probe reads a link, so the walk names it (a known limit, A7). */
   function walkFixture() {
     const { ports, io, cfg } = fixturePorts();
     const root = cfg.projectsRoot;
     writeFileSync(path.join(root, 'notes.txt'), 'a plain file');
+    symlinkSync(path.join(root, 'notes.txt'), path.join(root, 'note-link'));
     for (const d of ['locked', 'gone', 'murky']) mkdirSync(path.join(root, d));
     const lstats: string[] = [];
     const failing = new Set(['locked', 'gone', 'murky'].map((d) => path.join(root, d)));
@@ -567,9 +608,9 @@ describe('the projects walk names the folders it could not read, and the rest of
     const l = await listProjectsWalked(walkIo, cfg, []);
     expect(l.walk).toBe('measured');
     expect(l.projects.map((r) => r.name)).toEqual(['project-a']);
-    expect(l.unreadable).toEqual(['locked', 'murky']);
+    expect([...l.unreadable].sort()).toEqual(['locked', 'murky', 'note-link']);
     // The type probe is asked only of the entries whose listing failed.
-    expect([...lstats].sort()).toEqual(['gone', 'locked', 'murky', 'notes.txt']);
+    expect([...lstats].sort()).toEqual(['gone', 'locked', 'murky', 'note-link', 'notes.txt']);
     // The old lister answers exactly its old fields.
     expect(Object.keys(await listProjects(walkIo, cfg, [])).sort()).toEqual(['projects', 'registry', 'roots']);
   });
@@ -577,11 +618,12 @@ describe('the projects walk names the folders it could not read, and the rest of
   it('a kept walk keeps the names it could not read, so a read served from the cache says them too; the cache keeps such a walk', async () => {
     const { cfg, walkIo } = walkFixture();
     const cache = new ProjectWalkCache();
-    expect((await listProjectsWalked(walkIo, cfg, [], cache)).unreadable).toEqual(['locked', 'murky']);
+    const first = await listProjectsWalked(walkIo, cfg, [], cache);
+    expect([...first.unreadable].sort()).toEqual(['locked', 'murky', 'note-link']);
     expect(cache.keptWalk()?.map((r) => r.name)).toEqual(['project-a']);
     const rootGone = Object.assign(Object.create(walkIo) as FleetIO, { readdir: async (p: string) => (p === cfg.projectsRoot ? null : walkIo.readdir(p)) });
     const fromCache = await listProjectsWalked(rootGone, cfg, [], cache);
-    expect(fromCache).toMatchObject({ walk: 'measured', unreadable: ['locked', 'murky'] });
+    expect(fromCache).toMatchObject({ walk: 'measured', unreadable: first.unreadable });
     expect(fromCache.projects.map((r) => r.name)).toEqual(['project-a']);
     // A root that cannot be listed names nothing: the walk's flag says so.
     expect(await listProjectsWalked(rootGone, cfg, [])).toMatchObject({ walk: 'unmeasured', unreadable: [] });
@@ -590,6 +632,8 @@ describe('the projects walk names the folders it could not read, and the rest of
   it('the board\'s projects part carries the names, beside the projects the walk could read', async () => {
     const { ports, walkIo } = walkFixture();
     const b = composeBoard(await gatherBoard({ ...ports, projects: { ...ports.projects, io: walkIo } }));
-    expect(b.projects).toEqual({ state: 'measured', registry: 'listed', names: ['project-a'], unreadable: ['locked', 'murky'] });
+    if (b.projects.state !== 'measured') throw new Error('projects are not measured');
+    expect({ ...b.projects, unreadable: [...(b.projects.unreadable ?? [])].sort() })
+      .toEqual({ state: 'measured', registry: 'listed', names: ['project-a'], unreadable: ['locked', 'murky', 'note-link'] });
   });
 });

@@ -1398,9 +1398,10 @@ describe('the rejection table is total, in both directions', () => {
         // answer kind (`'no-pass-yet'`) as a literal. It rides a 200's `kind`, never a `refused` or `reject.code`. Admitted through
         // the module's guard, derived from its map, never NOT_CODES.
         || isSequenceDoorKebab(tok)
-        // THE BOARD (Overlord W1, PR B2): `coord/overlordBoard.ts` and its gatherer name the board's closed unmeasured reasons, its
-        // untrusted text's sources, the `operator-ratified` trust and the listing's `not-listed` as literals. Each rides a 200's part,
-        // never a refusal. Admitted through the module's guard, derived from the wire's lists, never NOT_CODES.
+        // THE BOARD (Overlord W1, PRs B2 and B3): `coord/overlordBoard.ts` and its gatherer name the board's closed unmeasured
+        // reasons, its untrusted text's sources, the `operator-ratified` trust, the listing's `not-listed` and (B3) the switchboard's
+        // settings and file row names the brakes' rows are keyed by, as literals. Each rides a 200's part, never a refusal. Admitted
+        // through the module's guard, derived from the wire's and the switchboard's lists, never NOT_CODES.
         || isBoardKebab(tok),
         `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, edge state, health word, edge kind, spend state, service class, Overlord door word, actor issuer, Overlord refusal, designation word, unforecastable reason, approval census word, untrusted-build reason, Overlord gate word, Overlord inbox word, Overlord history word, linking refusal, block-wake word, sequence stamp word, invariant monitor word, readiness word, sequence door word or board word`).toBe(true);
     }

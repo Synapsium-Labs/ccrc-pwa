@@ -161,15 +161,17 @@ export type BoardSettingWord =
 /** What a settings row's store read found. */
 const BOARD_SETTING_STORED_MAP = {
   row: 'a row stands',
-  absent: 'no row: the row\'s owner reads its own default, which the switchboard describes',
-  seed: 'the migration\'s seed, which no operator has written',
+  absent: 'no row stands; what that means is the row\'s owner\'s, and `value` says its word where the owner gives it one',
+  seed: 'the migration\'s seed, which no operator has written; `value` is the word its owner reads it as',
 } as const;
 export type BoardSettingStored = keyof typeof BOARD_SETTING_STORED_MAP;
 export const BOARD_SETTING_STORED = Object.keys(BOARD_SETTING_STORED_MAP) as BoardSettingStored[];
-/** One switch kept as a settings row, through its store's own reader (board B3). `stored` is null only where that reader does not
- *  tell a lost row from a written one (the run-close rows, whose reader reads a lost row as shadow). `value` is the stored word as
- *  the row's own predicate reads it, `unknown` for a word this build does not know (never the stored text), and null only when no
- *  row stands. A read that failed is unmeasured. */
+/** One switch kept as a settings row, through its owner's own reader (board B3). `stored` is null only where that reader does not
+ *  tell a lost row from a written one (the run-close rows). `value` is the word the row's owner reads in force, for a seeded or lost
+ *  row too (the idle roll reads its seed as `all`, the stall watch reads a lost row as `follow`); `unknown` where the owner reads no
+ *  word from a row that stands (never the stored text); null only when no row stands and its owner gives that no word (the collect
+ *  lane reads it as unmeasurable, the dispatch abandon arms nothing). The run-close rows never answer `unknown`: their reader reads a
+ *  lost row, and any word it does not know, as shadow, which is what the lanes do too. A read that failed is unmeasured. */
 export type BoardSettingRow = Measured<{ readonly stored: BoardSettingStored | null; readonly value: BoardSettingWord | 'unknown' | null }>;
 /** One switch kept as a file on the fleet host (board B3): `set` when it stands, `clear` on a proven absence; a read that proved
  *  neither is unmeasured. */

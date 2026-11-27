@@ -11,10 +11,10 @@ it in. No deviation number was allocated: departures are recorded by slug.
 exactly one of three groups of `brakes`, keyed by its name:
 - `switches.markers`: the registry marker rows, as before (`readSwitches` over the registry's one measured listing).
 - `settings` (new, optional on the wire): the ten settings rows, each `measured` with `stored` and `value`, or `unmeasured` with a
-  closed reason. `stored` is `row`, `absent` (no row: the owner reads its own default, which the table describes) or `seed` (the
-  roll row's migration seed, which no operator wrote), and null only for the three run-close rows, whose store reader reads a lost
-  row as shadow and so cannot say. `value` is the stored word through the row's own predicate, `unknown` for a word this build does
-  not know, and null only when no row stands.
+  closed reason. `stored` is `row`, `absent` (no row stands; what that means is the owner's) or `seed` (a migration's seed, which no
+  operator wrote), and null only for the three run-close rows, whose store reader reads a lost row as shadow and so cannot say.
+  `value` is the word the row's OWNER reads in force (fix round 1, F1), a seeded or lost row included; `unknown` where the owner
+  reads no word from a row that stands; null only when no row stands and the owner gives that no word. Per row, below.
 - `files` (new, optional): the three files on the fleet host, each `measured` `set` or `clear`, or `unmeasured`.
 
 The rows are derived from the table, never listed a second time: `settingSwitchNames` (new, in `shared/switches.ts` beside
@@ -47,14 +47,14 @@ Every row has a reader on the server side, so none is carried as `no-reader`.
 | Group | Rows | Reader | Unmeasured when |
 |---|---|---|---|
 | markers | every registry marker row | the registry's measured listing, `readSwitches` | the listing failed (the group's `read-failed`) |
-| settings | `stall-watch-level` | `CoordStore.stallSettings`, through `parseStallSettings` | the store read failed |
-| settings | `collect-lane-choice` | `CoordStore.collectLaneRow`, `isCollectLaneChoice` | the store read failed |
-| settings | `roll-idle-targets` | `CoordStore.rollSettings`, `isClaudeRollTargets` | the store read failed |
-| settings | `dispatch-abandon-choice` | `CoordStore.dispatchAbandonSetting`, `isDispatchAbandonChoice` | the store read failed |
+| settings | `stall-watch-level` | `CoordStore.stallSettings`, through `parseStallSettings` and `resolveStallWatch` | the store read failed |
+| settings | `collect-lane-choice` | `CoordStore.collectLaneRow`, through `measureCollectLaneRow` | the store read failed |
+| settings | `roll-idle-targets` | `CoordStore.rollSettings`, through `rollTargetsOf` | the store read failed |
+| settings | `dispatch-abandon-choice` | `CoordStore.dispatchAbandonSetting`, through `dispatchAbandonViewOf` | the store read failed |
 | settings | the three `run-close-*-choice` rows | `CoordStore.runCloseSetting`, one call for all three | the store read failed |
-| settings | `plain-auto-memory` | `CoordStore.plainAutoMemorySettings`, `isPlainAutoMemoryChoice` | the store read failed |
-| settings | `coordinator-advisor` | `CoordStore.coordinatorAdvisorSettings`, `isAdvisorChoice` | the store read failed |
-| settings | `overlord-rung` | `CoordStore.ladderRungRead` ("the brakes' read") | the database could not be read |
+| settings | `plain-auto-memory` | `CoordStore.plainAutoMemorySettings`, through `plainAutoMemoryOf` | the store read failed |
+| settings | `coordinator-advisor` | `CoordStore.coordinatorAdvisorSettings`, through `coordinatorAdvisorOf` | the store read failed |
+| settings | `overlord-rung` | `CoordStore.ladderRungRead` ("the brakes' read"), its default `LADDER_DEFAULT_RUNG` | the database could not be read |
 | files | `graph-gate-off`, `ccrc-card-off`, `compact-card-off` | the Overrides read's own `readCcrcFileSwitches` (one measured stat each, which the agent admits for exactly these names) | the stat proved neither presence nor absence |
 
 Every settings row reads `no-store` on a server with no coordination store, and a reader that throws is `threw` for the rows it
@@ -71,7 +71,12 @@ too), its answer or its throw kept for the rows it serves. No new agent frame, e
   example). The advisor's daily cap and its named list of sessions, and the stall watch's quiet time, are other columns, not carried.
   No entered text reaches the wire: an out-of-vocabulary stored word is `unknown`.
 - `board-rung-twice`: the operator's rung rides the ladder part (as before) and the `overlord-rung` settings row (because it is a
-  row of the table). Both are read from the store: the ladder part through the ladder read, the row through `ladderRungRead`.
+  row of the table). Both are read from the store: the ladder part through the ladder read, the row through `ladderRungRead`. They
+  are two reads of the row inside one board read, so a rung written between them can make the two differ inside one answer; the
+  next read agrees again (A3).
+- `board-run-close-rows-never-unknown` (A2): the three run-close rows never answer `unknown`. Their reader (`runCloseSetting`) reads
+  a lost row, and any stored word it does not know, as shadow, which is also what the lanes do, so the board says shadow there. A
+  case writes a corrupt word into the real store and pins it.
 - `walk-type-probe-after-a-failed-listing`: the brief puts the type probe before the listing. It runs after a listing that failed,
   and only then: the outcome is the same for every entry (a listed directory needs no probe, and for an unlisted one the probe alone
   decides), it costs no extra request per project directory on every walk, and the walk's order and concurrency cases
@@ -147,9 +152,54 @@ declares them as its words (`isBoardKebab`), derived from `settingSwitchNames` a
 - An entry under the projects root that is a link to a plain file, or a dangling link, is named as unreadable: the type probe reads
   a link's own type, and its listing fails. So is a non-directory of another type (a socket or a pipe).
 - Against a fleet host whose agent cannot answer the type probe, every entry whose listing fails is named, plain files included.
+- A project folder that is a link to a directory outside the agent's read roots is now named unreadable: its listing is refused
+  and the probe reads a link. It was skipped silently before (A4).
+- The rows of the Shadow lanes card and of the decision model are not on the board: the plan's brakes row is the switches table,
+  and they are not rows of it (A4).
+- The lister's and the gatherer's by-hand mutants (M1-M7, G1-G5) are not in the floors' set: the floors pair is shared work and
+  stays untouched (A6). They are recorded here only.
 - The projects route still folds the walk's flag and its names (the ticket B2 named); only the board reads them.
 - A settings row carries its own column only (slug `board-setting-row-is-its-column`).
 - The answer mask and the attribution limits of B2 stand unchanged.
+
+## Fix round 1 (review 4067, call 1731)
+
+**F1, each row's owner's word.** The first build read the idle-roll row's raw column, so a box nobody wrote (the migration's seed,
+`coordinators` at time zero) read `seed` / `coordinators`, while the owner's reader (`rollTargetsOf`) reads the seed as its default,
+`all`, and the roll pass uses that reader. Every settings row now goes through its owner's reader. What each owner gives a seeded or
+lost row, measured row by row:
+
+| Row | Owner's reader | Seeded or lost row, by its owner | Board before | Board now |
+|---|---|---|---|---|
+| `stall-watch-level` | `resolveStallWatch` over `parseStallSettings` | a lost row, or a row with a field it cannot read, applies nothing: the box's files decide | lost: `absent`, null; a chosen level beside an unreadable quiet time: that level | `follow` for both |
+| `collect-lane-choice` | `measureCollectLaneRow` | tells the seed apart; a lost row is unmeasurable (`row-absent`), no word | the seed read `row` | seed `seed` / `off`; lost `absent`, null (no word); malformed `unknown` |
+| `roll-idle-targets` | `rollTargetsOf` | the seed and a lost row read the default, `all` | seed `coordinators`, lost null | `all` for both |
+| `dispatch-abandon-choice` | `dispatchAbandonViewOf` | a lost row arms nothing, no choice word | lost `absent`, null | the same (the owner gives no word) |
+| the three `run-close-*-choice` | `runCloseSetting` | a lost row and any unknown word read shadow | shadow | the same, and never `unknown` (A2) |
+| `plain-auto-memory` | `plainAutoMemoryOf` | a lost row reads the default, `off` | lost null | `off` |
+| `coordinator-advisor` | `coordinatorAdvisorOf` | a lost row reads the default, `off`; a row whose cap or scope it cannot read gives no setting | lost null; such a row its choice | lost `off`; such a row `unknown` |
+| `overlord-rung` | `ladderRungRead`, the ladder's default | no row reads `LADDER_DEFAULT_RUNG`, `chat` | null | `chat` |
+
+The switches table's own default for the idle roll (`coordinators`) still differs from its owner's reader (`all`); the coordinator
+files that line as its own ticket.
+
+**Red first.** The board file against the first build's gatherer: 3 of 65 red (the lost-row case, the owner's-word case and the
+real store's pinned rows); 65 green on the fix.
+
+**New mutants, by hand** (each applied with the edit tool, the board file run, the gatherer restored and compared byte for byte):
+
+| Mutant | After |
+|---|---|
+| G3 the roll row reads its raw column again | 3 red |
+| G4 the stall watch's lost row has no word | 1 red |
+| G5 no rung row loses the ladder's default | 2 red |
+
+**The rest.** A1 the `absent` gloss is true for every row; A2 above; A3 the slug; A4 two known limits; A5 the kebab census comment
+(a packet to its holder, applied as sent on its yes); A6 a known limit; A7 the walk's fixture holds a real link to a plain file,
+pinned as named unreadable; A8 the size header says 15 percent, the measured bytes are asserted exactly, and the field census holds
+the settings and file groups to the table's names, so it cannot pass on an absent or empty list (the no-store case too); A9 the kept
+walk's names are a required argument (the four cache cases pass an empty list); A10 the switches file's header line is back to main's
+text byte for byte.
 
 ## Design rule
 

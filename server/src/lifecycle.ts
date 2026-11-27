@@ -230,7 +230,7 @@ export class ProjectWalkCache {
   /** Keeps a walk that started at `startedAt`, unless the kept one is still fresh and started later. A kept walk that
    *  is not fresh, a negative age after the clock stepped back included, is replaced whatever the new stamp, as the
    *  probes heal (review 1378, F4). */
-  keepWalk(rows: readonly ProjectRow[], startedAt: number, unreadable: readonly string[] = []): void {
+  keepWalk(rows: readonly ProjectRow[], startedAt: number, unreadable: readonly string[]): void {
     if (startedAt <= this.droppedAt && this.now() >= this.droppedAt) return;
     if (this.walk === null || !this.fresh(this.walk.at) || startedAt > this.walk.at) this.walk = { at: startedAt, rows, unreadable };
   }

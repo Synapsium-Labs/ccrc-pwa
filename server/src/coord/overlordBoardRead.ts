@@ -13,17 +13,20 @@
 // listing (`readSwitches`), each settings row through its store's own reader and that row's own predicate (`SETTING_ROWS`, keyed by
 // the table's names, so a settings row added to the table is a type error here until it has a reader), and the fleet host's files
 // through the Overrides read's own reader (`readCcrcFileSwitches`). A store reader that serves several rows (the run-close row's
-// three columns) is called once per board read. A stored word this build does not know is `unknown`, never the stored text.
+// three columns) is called once per board read. Each row's value is the word its OWNER's reader reads in force, a seeded or lost
+// row included (fix round 1, F1). A stored word this build does not know is `unknown`, never the stored text.
 import type { CcrcConfig } from '../config.js';
 import type { FleetIO } from '../io.js';
 import { listProjectsWalked, type ProjectWalkCache } from '../lifecycle.js';
 import { readCcrcFileSwitches } from '../overridesRead.js';
 import { isCollectLaneChoice, type ProgrammesAnswer, type SessionStatus } from '../../../shared/api.js';
 import { readSwitches, settingSwitchNames, type SettingSwitchName } from '../../../shared/switches.js';
-import { isClaudeRollTargets } from '../../../shared/claudeVersion.js';
-import { isDispatchAbandonChoice } from '../../../shared/dispatch-abandon.js';
-import { isPlainAutoMemoryChoice } from '../../../shared/plainAutoMemory.js';
-import { isAdvisorChoice } from '../../../shared/coordinatorAdvisor.js';
+import { LADDER_DEFAULT_RUNG } from '../../../shared/overlord-ladder.js';
+import { measureCollectLaneRow } from '../collectLane.js';
+import { plainAutoMemoryOf } from '../continuity/profileFor.js';
+import { coordinatorAdvisorOf } from '../continuity/advisorPolicy.js';
+import { rollTargetsOf } from './rollTarget.js';
+import { dispatchAbandonViewOf } from './deadDispatch.js';
 import type { IsolationRead } from '../../../shared/isolation.js';
 import type { PortfolioView } from '../../../shared/portfolio.js';
 import type { ReadinessWire } from '../../../shared/overlord-readiness.js';
@@ -32,7 +35,7 @@ import type { CoordCapNow } from '../../../shared/runCap.js';
 import type { CoordStore } from './store.js';
 import type { RunVerdicts } from './runVerdicts.js';
 import { ladderWire, type LadderRead } from './overlordLadderRead.js';
-import { STALL_NOTICE_WINDOW_MS, parseStallSettings, stallNoticeCounts } from './stallsettings.js';
+import { STALL_NOTICE_WINDOW_MS, parseStallSettings, resolveStallWatch, stallBoxArmingOf, stallNoticeCounts } from './stallsettings.js';
 import type { BoardInputs, BoardRead, BoardSettingIn } from './overlordBoard.js';
 
 /** How far back the programmes read looks for closed runs: `GET /api/programmes`' own default (the last 24 hours). */
@@ -104,42 +107,70 @@ type SettingReads = ReturnType<typeof settingReadsOf>;
 
 const setting = (stored: BoardSettingStored | null, value: BoardSettingWord | 'unknown' | null): BoardRead<BoardSettingIn> =>
   ({ ok: true, value: { stored, value } });
-const NO_ROW = setting('absent', null);
-/** A stored word through its row's own predicate: the word, or `unknown`, never the stored text. */
-const wordOf = <W extends BoardSettingWord>(is: (v: unknown) => v is W, v: unknown): W | 'unknown' => (is(v) ? v : 'unknown');
-/** The common read shape (a row, no row, or a read that failed), the row's word from `value`. */
-const rowOf = <T extends { readonly kind: string }>(read: T,
-  value: (row: Extract<T, { readonly kind: 'row' }>) => BoardSettingWord | 'unknown'): BoardRead<BoardSettingIn> =>
-  (read.kind === 'unreadable' ? fail('read-failed') : read.kind === 'absent' ? NO_ROW : setting('row', value(read as Extract<T, { readonly kind: 'row' }>)));
-/** The run-close row's three columns, from its reader's one read; it reads a lost row as shadow, so it cannot say `stored`. */
+/** A row or a lost row, once a failed read has been answered. */
+const storedOf = (kind: 'row' | 'absent'): BoardSettingStored => kind;
+/** A word the owner's reader answers, or `unknown` where it answers none for a row that stands (never the stored text). */
+const known = <W extends BoardSettingWord>(w: W | null): W | 'unknown' => w ?? 'unknown';
+/** The run-close row's three columns, from its reader's one read. That reader reads a lost row, and any word it does not know, as
+ *  shadow (what the lanes do too), so it cannot say `stored` and never answers `unknown`. */
 const runCloseRow = (r: SettingReads, field: 'neverStarted' | 'claimantCrashed' | 'claimantGone'): BoardRead<BoardSettingIn> => {
   const x = r.runClose();
   return x.kind === 'row' ? setting(null, x[field]) : fail('read-failed');
 };
 
-/** Each settings row of the switchboard, read through its store's own reader and its own predicate. */
+/** Each settings row of the switchboard, read through its OWNER's reader, so `value` is the word that owner reads in force: for a
+ *  seeded or lost row too, where the owner gives it a meaning other than the raw column (fix round 1, F1). Per row:
+ *  - the stall watch: its resolver's chosen level (`resolveStallWatch`); a row that does not apply whole (a lost row, or a field
+ *    that cannot be read) applies nothing, so the box's files decide, which is `follow`; a level word it does not know is `unknown`;
+ *  - the collect lane: its own measure (`measureCollectLaneRow`), which tells the seed apart; a lost row has no word (the lane
+ *    reads it as unmeasurable), and a malformed row is `unknown`;
+ *  - the idle roll: `rollTargetsOf`, which reads a lost row and the migration's seed as the default (`all`);
+ *  - the dispatch abandon: `dispatchAbandonViewOf`; a lost row has no word (it arms nothing);
+ *  - the plain sessions' auto memory: `plainAutoMemoryOf`, a lost row the default (`off`);
+ *  - the coordinator advisor: `coordinatorAdvisorOf`, a lost row the default (`off`), a row whose cap or scope cannot be read `unknown`;
+ *  - the operator's rung: no row is the ladder's default (`LADDER_DEFAULT_RUNG`). */
 const SETTING_ROWS: { readonly [K in SettingSwitchName]: (r: SettingReads) => BoardRead<BoardSettingIn> } = {
   'stall-watch-level': (r) => {
     const p = parseStallSettings(r.stall());
     if (p.stored === 'unreadable') return fail('read-failed');
-    if (p.stored === 'absent') return NO_ROW;
-    return setting('row', p.level.kind === 'follow' ? 'follow' : p.level.kind === 'chosen' ? p.level.level : 'unknown');
+    if (p.stored === 'row' && p.level.kind === 'unreadable') return setting('row', 'unknown');
+    return setting(p.stored, resolveStallWatch(stallBoxArmingOf([], false), p).chosen ?? 'follow');
   },
-  'collect-lane-choice': (r) => rowOf(r.collect(), (x) => wordOf(isCollectLaneChoice, x.row.choice)),
+  'collect-lane-choice': (r) => {
+    const m = measureCollectLaneRow(r.collect());
+    if (m.kind === 'unreadable') return fail('read-failed');
+    if (m.kind === 'absent') return setting('absent', null);
+    if (m.kind === 'malformed') return setting('row', 'unknown');
+    return setting(m.kind, isCollectLaneChoice(m.row.choice) ? m.row.choice : 'unknown');
+  },
   'roll-idle-targets': (r) => {
     const x = r.roll();
-    return x.kind === 'row' ? setting(x.seeded ? 'seed' : 'row', wordOf(isClaudeRollTargets, x.targets)) : rowOf(x, () => 'unknown');
+    if (x.kind === 'unreadable') return fail('read-failed');
+    return setting(x.kind === 'row' && x.seeded ? 'seed' : storedOf(x.kind), known(rollTargetsOf(x)));
   },
-  'dispatch-abandon-choice': (r) => rowOf(r.abandon(), (x) => wordOf(isDispatchAbandonChoice, x.choice)),
+  'dispatch-abandon-choice': (r) => {
+    const v = dispatchAbandonViewOf(r.abandon(), 0);
+    if (v.stored === 'unreadable') return fail('read-failed');
+    return v.stored === 'absent' ? setting('absent', null) : setting('row', v.stored);
+  },
   'run-close-never-started-choice': (r) => runCloseRow(r, 'neverStarted'),
   'run-close-claimant-crashed-choice': (r) => runCloseRow(r, 'claimantCrashed'),
   'run-close-claimant-gone-choice': (r) => runCloseRow(r, 'claimantGone'),
-  'plain-auto-memory': (r) => rowOf(r.plainMemory(), (x) => wordOf(isPlainAutoMemoryChoice, x.choice)),
-  'coordinator-advisor': (r) => rowOf(r.advisor(), (x) => wordOf(isAdvisorChoice, x.choice)),
+  'plain-auto-memory': (r) => {
+    const x = r.plainMemory();
+    if (x.kind === 'unreadable') return fail('read-failed');
+    return setting(storedOf(x.kind), known(plainAutoMemoryOf(x)));
+  },
+  'coordinator-advisor': (r) => {
+    const x = r.advisor();
+    if (x.kind === 'unreadable') return fail('read-failed');
+    return setting(storedOf(x.kind), known(coordinatorAdvisorOf(x)?.choice ?? null));
+  },
   'overlord-rung': (r) => {
     const x = r.rung();
     if (x.kind === 'unmeasured') return fail('read-failed');
-    return x.current.kind === 'default' ? NO_ROW : setting('row', x.current.kind === 'rung' ? x.current.rung : 'unknown');
+    if (x.current.kind === 'default') return setting('absent', LADDER_DEFAULT_RUNG);
+    return setting('row', x.current.kind === 'rung' ? x.current.rung : 'unknown');
   },
 };
 /** The settings rows' names `SETTING_ROWS` answers, for the census that holds them equal to the table's. */

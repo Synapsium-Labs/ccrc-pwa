@@ -191,7 +191,8 @@ export function bigInputs(n: number): BoardInputs {
   });
 }
 
-/** The measured size of `JSON.stringify(composeBoard(bigInputs(50)))`, and the bound pinned over it (about 16 percent headroom).
+/** The measured size of `JSON.stringify(composeBoard(bigInputs(50)))`, asserted exactly, so a change that moves it re-measures
+ *  here, and the bound pinned over it (about 15 percent headroom).
  *  It catches a part that grows by a whole new list per programme; a leaked body or note adds too little to cross it at this
  *  scale. What catches those is the sentinel cases (`SENTINEL` above and the board door suite's C44 case). First measured at
  *  81,988 bytes (bound 95,000); re-measured in review 4010's round with the portfolio's measures and what blocks, and the
@@ -503,6 +504,10 @@ export function composeBoardCases(compose: Compose): Record<string, SuiteCase> {
       expect(keysOf(b.brakes)).toEqual(['files', 'ladder', 'settings', 'state', 'switches']);
       if (b.brakes.state === 'measured') {
         expect(keysOf(b.brakes.switches)).toEqual(['markers', 'state']);
+        // Neither group may be absent or empty, so the loops below cannot pass on nothing.
+        expect(keysOf(b.brakes.settings ?? {})).toEqual([...settingSwitchNames].sort());
+        expect(keysOf(b.brakes.files ?? {})).toEqual([...ccrcFileSwitchNames].sort());
+        expect(settingSwitchNames.length * ccrcFileSwitchNames.length).toBeGreaterThan(0);
         for (const row of [...Object.values(b.brakes.settings ?? {}), ...Object.values(b.brakes.files ?? {})]) {
           if (row.state !== 'measured') expect(keysOf(row)).toEqual(['reason', 'state']);
         }
@@ -544,7 +549,8 @@ export function composeBoardCases(compose: Compose): Record<string, SuiteCase> {
       const b = compose(bigInputs(50));
       expect(rowsOf(b.identity)).toHaveLength(50);
       expect(rowsOf(b.timers).every((r) => r.pending === 2)).toBe(true);
-      // Measured when written: BOARD_50_MEASURED_BYTES, a bound with headroom over it.
+      // The measured size, exactly, and the bound with headroom over it.
+      expect(JSON.stringify(b).length).toBe(BOARD_50_MEASURED_BYTES);
       expect(JSON.stringify(b).length).toBeLessThan(BOARD_50_BOUND_BYTES);
     },
 
