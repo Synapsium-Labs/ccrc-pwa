@@ -1,9 +1,12 @@
 // The artifact tier's one client store (X5 A5.1; spec 2026-11-19 §3.2, §6.1). Ring L4: a module store, read with
 // `useSyncExternalStore`, shared by the offer beside every HTML page, the launch sheet (A5.2) and the lists (A5.3), so the
 // availability is read once for all of them and a mint or a revoke refreshes every reader at once.
-//   - `list`: the availability read's answer. Anything but an ok answer (a failed read, a 401, a rejection, an unavailable answer with
-//     no known reason) is `failed`, and the offer is hidden then: no sentence about a box state the console could not measure. A
-//     failed list is read again by the next consumer that mounts and when a sign-in returns; a refresh keeps the last ok answer.
+//   - `list`: the availability read's answer. A FIRST read that is not ok (a failed read, a 401, a rejection, an unavailable answer
+//     with no known reason) is `failed`, and the offer is hidden then: no sentence about a box state the console could not measure.
+//     A failed list is read again by the next consumer that mounts and when a sign-in returns. A RE-read that is not ok never
+//     replaces the last good answer: the store keeps that ok list and marks it `stale: true`, so the offer, an open sheet (and the
+//     capability it minted) and the lists with their Revoke stay as they were, and the list says it could not read again. A good read
+//     replaces it (`stale: false`); a consumer that mounts while it is stale reads again.
 //   - `sheetFor`: the page key whose launch sheet is open. It lives here and not in the offer, because `MockupView` is keyed by a
 //     draft's fingerprint and remounts, and a remount must not close a sheet the operator is using.
 // The doors come from `ArtifactDoorsContext`; its default is `api.docs.artifacts`, and tests provide a fake.
@@ -16,7 +19,7 @@ import type { ArtifactAvailability, ArtifactDoors } from './tier';
 export type ArtifactListState =
   | { readonly s: 'idle' }
   | { readonly s: 'loading' }
-  | { readonly s: 'ok'; readonly avail: ArtifactAvailability; readonly live: readonly ArtifactRow[] }
+  | { readonly s: 'ok'; readonly avail: ArtifactAvailability; readonly live: readonly ArtifactRow[]; readonly stale: boolean }
   | { readonly s: 'failed' };
 
 export interface ArtifactsState { readonly list: ArtifactListState; readonly sheetFor: string | null }
@@ -61,13 +64,16 @@ const snapshot = (): ArtifactsState => state;
 /** The list answer as the store holds it. An unavailable answer must name a reason this build knows: a missing or unknown `why` is a
  *  read the console cannot word, so it is `failed` and the offer stays hidden, never the setup sentence by default. */
 function listOf(value: ArtifactListOk): ArtifactListState {
-  if (value.available) return { s: 'ok', avail: { available: true }, live: value.live };
+  if (value.available) return { s: 'ok', avail: { available: true }, live: value.live, stale: false };
   const why = value.why;
   if (why === undefined || !(ARTIFACT_OFF_WHYS as readonly string[]).includes(why)) return { s: 'failed' };
-  return { s: 'ok', avail: { available: false, why }, live: value.live };
+  return { s: 'ok', avail: { available: false, why }, live: value.live, stale: false };
 }
 
-/** Reads the availability once more. The store keeps its last ok answer while it reads, so a refresh never flashes the offer away. */
+/** Reads the availability once more. The store keeps its last ok answer while it reads, so a refresh never flashes the offer away,
+ *  and a re-read that is not ok (a failed answer, a rejection, an unavailable answer with no known reason) keeps it too, marked
+ *  `stale`: the last good answer is what is offered and listed until a good read replaces it. With no ok list held (idle, loading,
+ *  failed) a not-ok answer is `failed`, as before. */
 async function read(doors: ArtifactDoors): Promise<void> {
   const mine = generation;
   const my = ++newest;
@@ -85,7 +91,8 @@ async function read(doors: ArtifactDoors): Promise<void> {
   inflight -= 1;
   if (my === newest) {
     if (next.s === 'ok') readAt = Date.now();
-    publish({ ...state, list: next });
+    const held = state.list;
+    publish({ ...state, list: next.s !== 'ok' && held.s === 'ok' ? { ...held, stale: true } : next });
   }
 }
 
@@ -116,7 +123,8 @@ export function useArtifacts(): UseArtifacts {
   // A consumer that mounts finds the list never read, or failed, and reads it (one read in flight at a time); the others find it
   // loading or answered. Read the store, not the render's copy.
   useEffect(() => {
-    if (state.list.s === 'idle' || (state.list.s === 'failed' && inflight === 0)) void read(doors);
+    const held = state.list;
+    if (held.s === 'idle' || ((held.s === 'failed' || (held.s === 'ok' && held.stale)) && inflight === 0)) void read(doors);
   }, [doors]);
   // A sign-in that returns reads the list again, whatever it holds (a 401 left it failed). It watches the auth signal as a value
   // (`useAuthLost`) and reads on the lost-to-live edge, not through `onAuthRegained`, whose listeners the mockup view's tests count

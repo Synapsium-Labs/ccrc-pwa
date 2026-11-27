@@ -6,7 +6,9 @@
 // NEVER a URL: a row shows its page, short id, version, times, windows and outside-host count, and the component draws no anchor, no
 // token and no Copy control, because a link is not meant to travel (spec §3.3). Revoke ends one capability and Revoke all every one
 // on the box (also those another page's list shows); each then reads the list again, and a refused or failed revoke keeps the rows
-// and says one sentence in a status line that stays mounted, so a screen reader hears the change. A tap while a revoke is under way
+// and says one sentence in a status line that stays mounted, so a screen reader hears the change. When the store could not read the
+// list again (`stale`) the rows stay as last read, with their Revoke, and one plain sentence under the heading says so; it is not
+// the status line, so a revoke tap never clears it, and the next good read does. A tap while a revoke is under way
 // is ignored (a ref, set in the tap itself, since the disabled state only lands with the next render). After a revoke that ended, focus
 // moves to the list's heading, which the dropped row's button no longer holds.
 import { useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react';
@@ -91,6 +93,7 @@ export function ArtifactList(p: { readonly scope?: ArtifactListScope }): ReactNo
   return (
     <section className="grid gap-[var(--sp-2)]" aria-labelledby={headingId}>
       <h2 id={headingId} ref={heading} tabIndex={-1} className="docs-note">{ARTIFACT_LIST_TEXT.heading}</h2>
+      {state.list.stale && <p className="docs-note">{ARTIFACT_LIST_TEXT.stale}</p>}
       <ul className="docs-rows gap-[var(--sp-2)]">
         {rows.map((row) => (
           <RowView

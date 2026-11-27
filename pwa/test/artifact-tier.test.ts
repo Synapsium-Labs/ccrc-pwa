@@ -14,10 +14,7 @@ const off = (why: ArtifactOffWhy) => ({ available: false, why }) as const;
 
 describe('artifactOffer: Figure 4', () => {
   it('offer: every HTML page (an available box gives the button; the walls are no input, so a page they ran and one they refused are the same call)', () => {
-    const ranInFull = artifactOffer(AVAILABLE, CURRENT);
-    const refusedByBudget = artifactOffer(AVAILABLE, CURRENT);
-    expect(ranInFull).toEqual({ kind: 'button', text: ARTIFACT_TEXT.open });
-    expect(refusedByBudget).toEqual(ranInFull);
+    expect(artifactOffer(AVAILABLE, CURRENT)).toEqual({ kind: 'button', text: ARTIFACT_TEXT.open });
     expect(ARTIFACT_TEXT.open).toBe('Open as artifact');
   });
 

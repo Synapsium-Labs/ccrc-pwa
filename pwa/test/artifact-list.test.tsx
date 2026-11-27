@@ -348,6 +348,104 @@ describe('list: a list left standing is read again', () => {
   });
 });
 
+describe('list: a failed re-read keeps the last good list', () => {
+  const STALE = 'This list could not be read again; it shows what it last read.';
+  const SCOPE_A = { project: 'demo', section: 'specs', path: 'm.html' } as const;
+  /** The ways a re-read can be not ok: a client slot, a 401, a rejection, and an unavailable answer whose reason this build does
+   *  not know (it carries a fresh `live`, which the store does not take: the trade-off Results record). */
+  type Failing = false | 'unreachable' | 'auth' | 'rejects' | 'unknown-why';
+  /** Doors whose list answer a case can fail, and a consumer that reads again on a tap. */
+  function flaky(live: ArtifactRow[], over: Partial<ArtifactDoors> = {}) {
+    const control: { failing: Failing } = { failing: false };
+    const base = fakeDoors(live, over);
+    const list = vi.fn(async (): Promise<ArtifactAnswer<ArtifactListOk>> => {
+      switch (control.failing) {
+        case false: return okList([...live]);
+        case 'unreachable': return { s: 'unreachable' };
+        case 'auth': return { s: 'auth' };
+        case 'rejects': throw new Error('a defect in the door');
+        case 'unknown-why': return { s: 'ok', value: { ok: true, available: false, why: 'not-a-word-this-build-knows', live: [] } as unknown as ArtifactListOk };
+      }
+    });
+    return { ...base, doors: { ...base.doors, list }, control, list };
+  }
+  function Again(): ReactNode {
+    const a = useArtifacts();
+    return <button type="button" onClick={() => void a.refresh()}>read again</button>;
+  }
+  const readAgain = (): void => { fireEvent.click(screen.getByRole('button', { name: 'read again' })); };
+
+  it('F1: both lists keep their rows, Revoke and Revoke all, and say the stale sentence; the next good read clears it', async () => {
+    const f = flaky([A, B]);
+    render(within_(f.doors, <><Again /><ArtifactList scope={SCOPE_A} /><ArtifactList /></>));
+    await waitFor(() => expect(rowsShown()).toHaveLength(3));
+    expect(screen.queryByText(STALE)).toBeNull();
+    f.control.failing = 'unreachable';
+    readAgain();
+    await waitFor(() => expect(screen.getAllByText(STALE)).toHaveLength(2));
+    expect(rowsShown()).toHaveLength(3);
+    expect(revokeButtons()).toHaveLength(3);
+    expect(screen.getAllByRole('button', { name: ARTIFACT_LIST_TEXT.revokeAllLabel })).toHaveLength(2);
+    f.control.failing = false;
+    readAgain();
+    await waitFor(() => expect(screen.queryByText(STALE)).toBeNull());
+    expect(rowsShown()).toHaveLength(3);
+  });
+
+  it('F1: the stale sentence is not the revoke status line: a refused revoke leaves it, and says its own sentence beside it', async () => {
+    const f = flaky([A, B], { revoke: vi.fn(async () => ({ s: 'unreachable' as const })) });
+    render(within_(f.doors, <><Again /><ArtifactList /></>));
+    await waitFor(() => expect(rowsShown()).toHaveLength(2));
+    f.control.failing = 'unreachable';
+    readAgain();
+    await screen.findByText(STALE);
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke specs/m.html in demo (aaaaaaaa)' }));
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(DOCS_SLOT_SENTENCE.unreachable));
+    expect(screen.getByText(STALE)).toBeInTheDocument();
+    expect(screen.getByRole('status')).not.toHaveTextContent(STALE);
+  });
+
+  it('F1: a consumer that mounts while the list is ok but stale reads again, and a good answer clears it', async () => {
+    const f = flaky([A, B]);
+    const first = render(within_(f.doors, <><Again /><ArtifactList /></>));
+    await waitFor(() => expect(rowsShown()).toHaveLength(2));
+    f.control.failing = 'unreachable';
+    readAgain();
+    await screen.findByText(STALE);
+    first.unmount();
+    f.control.failing = false;
+    const reads = f.list.mock.calls.length;
+    render(within_(f.doors, <ArtifactList />));
+    await waitFor(() => expect(f.list.mock.calls.length).toBe(reads + 1));
+    await waitFor(() => expect(screen.queryByText(STALE)).toBeNull());
+    expect(rowsShown()).toHaveLength(2);
+  });
+
+  it('F1: a first read that fails still draws nothing (failed, not stale)', async () => {
+    const f = flaky([A]);
+    f.control.failing = 'unreachable';
+    const view = render(within_(f.doors, <><Probe /><ArtifactList /></>));
+    await waitFor(() => expect(storeState()).toBe('failed'));
+    expect(view.container.querySelector('section')).toBeNull();
+    expect(screen.queryByText(STALE)).toBeNull();
+  });
+
+  it.each([
+    ['a 401', 'auth'],
+    ['a door that rejects', 'rejects'],
+    ['an unavailable answer whose reason this build does not know', 'unknown-why'],
+  ] as const)('F1: %s on a re-read keeps the last good rows, with Revoke, and says the stale sentence', async (_name, how) => {
+    const f = flaky([A, B]);
+    render(within_(f.doors, <><Again /><ArtifactList /></>));
+    await waitFor(() => expect(rowsShown()).toHaveLength(2));
+    f.control.failing = how;
+    readAgain();
+    await screen.findByText(STALE);
+    expect(rowsShown()).toHaveLength(2);
+    expect(revokeButtons()).toHaveLength(2);
+  });
+});
+
 /** The matchMedia of a phone, so a leaf draws the compact head and its Page details panel. */
 function phone(): void {
   vi.stubGlobal('matchMedia', (q: string) => {

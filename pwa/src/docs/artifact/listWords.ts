@@ -39,6 +39,8 @@ export const ARTIFACT_LIST_TEXT = {
   /** One sentence for a revoke the box did not take: the rows stay, and nothing else is claimed. */
   failed: 'The link was not revoked. Try again.',
   failedAll: 'The links were not revoked. Try again.',
+  /** Drawn beside a list the store holds but could not read again: it shows what it last read, until a read answers. */
+  stale: 'This list could not be read again; it shows what it last read.',
 } as const;
 
 /** The page a list is scoped to: a project's page by section and path. */

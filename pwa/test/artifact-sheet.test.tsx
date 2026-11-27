@@ -9,8 +9,9 @@ import path from 'node:path';
 import type { ReactNode } from 'react';
 import { DOCS_CLASS_CAP, type DocListPin, type DocPin, type DocsPageLocation, type DocsShowOk } from '../../shared/docs';
 import type {
-  ArtifactMintAsk, ArtifactMintOk, ArtifactRefusal, ArtifactRevokeOk, ArtifactRow, ArtifactScopeOk,
+  ArtifactListOk, ArtifactMintAsk, ArtifactMintOk, ArtifactRefusal, ArtifactRevokeOk, ArtifactRow, ArtifactScopeOk,
 } from '../../shared/artifacts';
+import { ArtifactOffer } from '../src/docs/artifact/ArtifactOffer';
 import { ARTIFACT_REFUSAL_TEXT, ARTIFACT_TEXT } from '../src/docs/artifact/artifactWords';
 import { ARTIFACT_OPEN_REL, LaunchSheet } from '../src/docs/artifact/LaunchSheet';
 import { aboveFolderCount, type ArtifactAnswer, type ArtifactCensusState, type ArtifactDoors } from '../src/docs/artifact/tier';
@@ -71,6 +72,8 @@ function fakeDoors(over: {
   readonly mint?: (ask: ArtifactMintAsk) => ArtifactAnswer<ArtifactMintOk> | Promise<ArtifactAnswer<ArtifactMintOk>>;
   /** Replaces the revoke: a failed answer leaves the capability live. */
   readonly revoke?: (id: string) => ArtifactAnswer<ArtifactRevokeOk>;
+  /** Replaces the availability read: it is handed the box's live rows as they stand. */
+  readonly list?: (live: readonly ArtifactRow[]) => ArtifactAnswer<ArtifactListOk>;
 } = {}): Fake {
   const live = [...(over.live ?? [])];
   const scope = vi.fn<ArtifactDoors['scope']>(async (_project, pin) => (over.scope ?? (() => ok(SCOPE)))(pin));
@@ -86,7 +89,7 @@ function fakeDoors(over: {
     return ok<ArtifactRevokeOk>({ ok: true, revoked: at >= 0 ? 1 : 0 });
   });
   const doors: ArtifactDoors = {
-    list: async () => ok({ ok: true, available: true, live: [...live] }),
+    list: async () => (over.list ?? ((rows) => ok({ ok: true, available: true, live: [...rows] })))(live),
     scope, mint, revoke,
     revokeAll: async () => ok<ArtifactRevokeOk>({ ok: true, revoked: 0 }),
   };
@@ -540,6 +543,73 @@ describe('sheet: what the sheet holds, and when it lets go', () => {
     await new Promise((r) => { setTimeout(r, 20); });
     expect(f.revoke).not.toHaveBeenCalled();
     expect(f.live.map((r) => r.id)).toEqual(['cap-1']);
+  });
+
+  it.each([
+    ['a middle click', (el: HTMLElement) => fireEvent(el, new MouseEvent('auxclick', { bubbles: true, cancelable: true, button: 1 }))],
+    ['a context menu', (el: HTMLElement) => fireEvent.contextMenu(el)],
+    ['a pointer down', (el: HTMLElement) => fireEvent.pointerDown(el)],
+  ])('F2: %s on Open counts as tapped: a tick change after it revokes nothing, and the capability is no longer the sheet\'s', async (_name, gesture) => {
+    const f = fakeDoors();
+    const p = await prepared(f);
+    gesture(p.link);
+    fireEvent.click(checkboxes(p.d)[1]!);
+    await waitFor(() => expect(within(p.d).queryByRole('link')).toBeNull());
+    await within(p.d).findByText(ARTIFACT_TEXT.othersOpen);
+    expect(f.revoke).not.toHaveBeenCalled();
+    expect(f.live.map((r) => r.id)).toEqual(['cap-1']);
+    p.unmount();
+    await new Promise((r) => { setTimeout(r, 20); });
+    expect(f.revoke).not.toHaveBeenCalled();
+  });
+
+  it('F1: a failed re-read of the list (the mint\'s own refresh) keeps the offer, the open sheet, the minted link and the capability', async () => {
+    let failing = false;
+    let reads = 0;
+    const f = fakeDoors({
+      list: (rows) => {
+        reads += 1;
+        return failing ? { s: 'unreachable' } : ok({ ok: true, available: true, live: [...rows] });
+      },
+    });
+    render(
+      <ArtifactDoorsContext value={f.doors}>
+        <ArtifactOffer
+          project="demo" pin={PIN} page={{ section: 'specs', path: 'm.html', at: null }} census={NO_CENSUS} wallsNote={null}
+          retryTree={() => {}}
+        />
+      </ArtifactDoorsContext>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: ARTIFACT_TEXT.open }));
+    const d = await dialogOf();
+    await within(d).findByText(/can read the/);
+    failing = true;
+    const before = reads;
+    fireEvent.click(prepareButton());
+    const link = await within(d).findByRole('link', { name: ARTIFACT_TEXT.openLink });
+    await waitFor(() => expect(reads).toBeGreaterThan(before));
+    await new Promise((r) => { setTimeout(r, 20); });
+    expect(screen.getByRole('dialog')).toBe(d);
+    expect(within(d).getByRole('link', { name: ARTIFACT_TEXT.openLink })).toBe(link);
+    expect(link.getAttribute('href')).toBe(MINT_URL);
+    expect(f.revoke).not.toHaveBeenCalled();
+  });
+
+  it('A1: a mint answer that arrives after its origin left the offer is revoked, and Open never shows', async () => {
+    const waiting: ((a: ArtifactAnswer<ArtifactMintOk>) => void)[] = [];
+    const f = fakeDoors({ mint: () => new Promise((resolve) => { waiting.push(resolve); }) });
+    const { rerender } = render(sheetOf(f.doors, { census }));
+    const d = await dialogOf();
+    await within(d).findByText(/can read the/);
+    fireEvent.click(checkboxes(d)[0]!);
+    fireEvent.click(prepareButton());
+    await waitFor(() => expect(waiting).toHaveLength(1));
+    // The ticked origin leaves the census while the mint is out.
+    rerender(sheetOf(f.doors, { census: { origins: ['https://cdn.b.test'], above: 0 } }));
+    await act(async () => { waiting[0]!(ok(MINT)); });
+    await waitFor(() => expect(f.revoke).toHaveBeenCalledWith('cap-1'));
+    expect(within(d).queryByRole('link')).toBeNull();
+    await waitFor(() => expect(prepareButton()).toBeEnabled());
   });
 
   it('I2-pin: a held capability never opened is revoked when the pin changes, and Open is gone', async () => {

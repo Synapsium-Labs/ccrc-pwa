@@ -1156,7 +1156,7 @@ The scope answer names the two hosts (D-9162); its case `scope: the answer names
 #### Not right yet
 
 - **Desk has no per-page list.** Design 3.3 puts Revoke in Page details and the Docs index; a desk page has no Page details, so it revokes from the index.
-- **A re-read that fails after a good revoke hides the list** (the store reads `failed`) with no sentence; nothing false is shown.
+- ~~**A re-read that fails after a good revoke hides the list**~~ Mended in fix round 2 (F1, below): a re-read that fails keeps the last good list, marked stale, with one sentence. This note understated it: the same failure also closed an open sheet (revoking what it had just minted) and hid a live opened link from both lists.
 - **Every phone docs page reads the availability once** (the list mounts in the closed panel). One request while the answer is fresh.
 - **A page whose load never answers holds Prepare** (the census stays `'pending'`).
 - **Chromium logs `Unrecognized feature: 'bluetooth'`** for the content `Permissions-Policy`, whose value is the design's text, pinned. A console warning only.
@@ -1189,3 +1189,35 @@ The PR's fast run on `c15c456ef8` (run 46029278950) was red in `server 8/12` and
 Red first: the three guards were red in the fast run on the old head (above); each was green on the fixed tree.
 
 Measured on the fixed tree, through `ccrc test`, one command each: the three guards (189); every `single-definition` file (50 files, 1,631 tests); every census file (45 files, 1,089 passed and 1 skipped; `landing-entry-census` timed out once at 21 s in its landing-line writer case under load and passed alone, 40); the pwa files that reach the changed code (`artifact-sheet`, `artifact-tier`, `artifact-offer-view`, `artifact-list`, `control-census`: 127); the pwa typecheck, clean; `deviation-refs`, `anchors`, `citations`, `private-names`, `topology-clean`, `growth-check` (220, 3 skipped).
+
+#### Fix round 2, review 4121 (at `4c66d38765`; the coordinator's ruling, 2026-11-27)
+
+The held-out review confirmed two findings and two advisories; the coordinator asked for all four, each red first.
+
+| Item | What was wrong | What changed |
+|---|---|---|
+| F1 | A failed re-read of the list published `failed` over the last good answer. The offer unmounted an open sheet, whose unmount revoked the capability it had just minted, and both lists hid a live link whose Open was tapped, with Revoke and Revoke all out of reach until a remount or a sign-in. | The store's ok list carries `stale`. A re-read that is not ok (a failed answer, a rejection, an unknown `why`) keeps the ok list it holds, `stale: true`; a first read that is not ok is still `failed`. A consumer that mounts while it is stale reads again, and the next good read clears it. Each list draws one sentence ("This list could not be read again; it shows what it last read.") under its heading while stale (`ARTIFACT_LIST_TEXT.stale`), apart from the revoke status line, so a revoke tap does not clear it. |
+| F2 | Open counted as tapped only on a primary click, so a middle-click, "Open link in new tab" or a phone long-press opened a tab whose capability a later tick, pin change or close revoked. | The Open link marks itself tapped on click, middle-click (`auxclick`), context menu and pointer-down. Pointer-down covers a long-press where the browser fires no context menu for a link, and the start of a drag into the tab bar. A touch that only grazes the link also keeps the capability alive until the list's Revoke: the safe direction, never revoked behind the operator's back. |
+| A1 | A mint answer was checked only against the sheet's generation, so an origin that left the offer while the mint was out was held and shown. | The sheet keeps the latest offer in a ref; a mint answer with an origin no longer offered is revoked, nothing is held, and Prepare shows again. |
+| A2 | One line of `offer: every HTML page` compared two identical calls and could not fail. | The line is dropped; the case's other assertions stand. |
+
+Red first, each case before its code: the F1 list cases could not find the stale sentence; the F1 sheet case could not find the Open link (the sheet had unmounted); the three F2 cases found the capability revoked (no "Another artifact is open" line); A1's revoke door was never called with the minted id. A first read that fails still draws nothing, green before and after.
+
+| Row | Mutation | Red |
+|---|---|---|
+| FR2-1 | `read()` publishes the not-ok answer over the held ok list | the three F1 list cases (no stale sentence) and the F1 sheet case (no Open link); measured again after the review's cases were added (after the code), the 401, rejecting-door and unknown-reason cases (all three) |
+| FR2-2 | the mount effect no longer re-reads a stale list | F1, a consumer that mounts while stale (`expected 2 to be 3` list reads) |
+| FR2-3 | the stale sentence is not drawn | the three F1 list cases |
+| FR2-4a | `onAuxClick` removed | F2, a middle click (only that case) |
+| FR2-4b | `onContextMenu` removed | F2, a context menu (only that case) |
+| FR2-4c | `onPointerDown` removed | F2, a pointer down (only that case) |
+| FR2-5 | the current-offer check after the mint removed | A1 (`revoke` not called with the minted id) |
+
+The round's own Opus review found no blocker. From it: the stale sentence drops "just now", since nothing re-reads a list left standing until a mount, a sign-in, a mint or a revoke (or `ensureFresh` on the next mount) does; and one case per kind of not-ok re-read (a 401, a door that rejects, an unavailable answer with a reason this build does not know) pins that each keeps the rows with Revoke and says the sentence, beside the `unreachable` cases above. Recorded, not changed:
+- An unavailable answer whose reason this build does not know carries a `live` list of its own; the store keeps the last good list instead, so a link minted since that read is not listed until a good read, and the offer stays as last read (a Prepare then gets the box's refusal).
+- After a revoke that ended, a re-read that fails leaves the revoked row listed under the stale sentence; a second Revoke on it ends nothing more.
+- The stale sentence is a plain note, not a second status region, so a screen reader is not told when it appears.
+
+Measured on the round's tree, through `ccrc test`: every artifact jsdom file with `artifact-api` and `control-census` (6 files, 148); the pwa typecheck, clean; `artifact-isolation` (10; a first run was stopped at its build by the test slice's memory cap, before any test) and the browser files that reach the mockup view, one a run: `docs-mockup` (23), `docs-mockup-export` (20), `mockup-loader` (6), `mockup-parse` (71), `docs-compact-head` (156, 1 skipped), `docs-headers` (13), `docs-review` (12), `reader-frame` (61). `docs-mockup-export` and `mockup-loader` ran side by side in one batch, not one a run (a slip of the runner). Every `single-definition` file (50 files, 1,631) and every census file (45 files, 1,090 and 1 skipped).
+
+Recorded, no change: the judge's check is pending on this head ("test-weakened" among its routing words). Under the operator's standing ruling the judge holds no PR. The review found no weakened test: the only test lines this wave removed widen the walls-tier scan (the first items), and A2 drops a line that could not fail.

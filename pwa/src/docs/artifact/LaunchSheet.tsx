@@ -7,9 +7,13 @@
 //     is the anchor's `href` and nowhere else on the page: no text, no Copy link, never answered again.
 //   - THE ONE RULE FOR LETTING GO (`release`): a capability the sheet holds is revoked when the sheet unmounts, when the pin
 //     changes, when a tick changes, or when an origin it was minted with leaves the offer, but only if its Open was never tapped.
-//     Once Open was tapped the tab may be using it, so it lives on and the list's Revoke ends it. A mint answer that arrives
-//     after the sheet moved on (a newer pin, an unmount) is for a page this sheet no longer shows: it revokes its own id and
-//     touches nothing the sheet holds.
+//     Open counts as tapped on any pointer-down, click, middle-click or context menu on the link, because each can open it in a
+//     tab (a long-press, the menu key and a drag into the tab bar included). Once Open was tapped the tab may be using it, so it
+//     lives on and the list's Revoke ends it; a touch that only grazes the link therefore also keeps the capability alive until
+//     that Revoke, the safe direction: never revoked behind the operator's back. A mint answer that arrives after the sheet
+//     moved on (a newer pin, an unmount) is for a page this sheet no longer shows: it revokes its own id and touches nothing the
+//     sheet holds. So is one whose origins are no longer all in the CURRENT offer (the census changed while the mint was out): it
+//     is checked against the latest offer, revoked, and Prepare shows again with nothing held.
 //   - `pin-moved`, from the scope read or the mint, is the one refusal with an action, "Reload and open again": each tap asks the
 //     leaf's re-list once, and it is enabled again when the leaf hands a new pin; the new pin reads the scope again with this
 //     sheet still open. A scope read that did not complete (the box could not list the files, a docs slot) shows Retry instead.
@@ -154,6 +158,12 @@ export function LaunchSheet(p: LaunchSheetProps): ReactNode {
     ? []
     : sheetOrigins(counts.origins, [location.hostname, read.scope.artifactHost, read.scope.contentHost]);
 
+  // The latest offer, for a mint answer that lands after a render moved the offer on.
+  const offeredNow = useRef(offered);
+  useEffect(() => {
+    offeredNow.current = offered;
+  });
+
   // An origin the held capability was minted with that the offer no longer holds is a tick change.
   const offeredKey = offered.join('\n');
   useEffect(() => {
@@ -192,6 +202,13 @@ export function LaunchSheet(p: LaunchSheetProps): ReactNode {
       void revokeId(answer.value.id);
       return;
     }
+    // The offer moved on while the mint was out: an origin it was minted with is gone, so it ends its own id, holds nothing and
+    // Prepare shows again.
+    if (asked.origins.some((o) => !offeredNow.current.includes(o))) {
+      void revokeId(answer.value.id);
+      setMint({ s: 'idle' });
+      return;
+    }
     const { id } = answer.value;
     heldId.current = id;
     heldAsked.current = asked;
@@ -200,6 +217,9 @@ export function LaunchSheet(p: LaunchSheetProps): ReactNode {
     setMint({ s: 'minted', mint: answer.value });
     void refresh();
   };
+
+  /** Open was tapped, on any of the ways a tab can be opened from the link (see the header). */
+  const markOpened = (): void => { opened.current = true; };
 
   const minted = mint.s === 'minted' ? mint.mint : null;
   const haltedMoved = read.s === 'halted' && read.pinMoved;
@@ -259,7 +279,8 @@ export function LaunchSheet(p: LaunchSheetProps): ReactNode {
   } else if (minted !== null) {
     main = (
       <a
-        href={minted.url} target="_blank" rel={ARTIFACT_OPEN_REL} onClick={() => { opened.current = true; }}
+        href={minted.url} target="_blank" rel={ARTIFACT_OPEN_REL}
+        onClick={markOpened} onAuxClick={markOpened} onContextMenu={markOpened} onPointerDown={markOpened}
         className={buttonVariants({ variant: 'primary' })}
       >
         {ARTIFACT_TEXT.openLink}
