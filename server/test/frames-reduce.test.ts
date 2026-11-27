@@ -249,6 +249,14 @@ describe('the width table is the Unicode East Asian Width data file (review 4109
     expect(bytes.length).toBe(14426);
     expect(bytes.filter((b) => b > 0x7f)).toEqual([]);
   });
+  it('the docs guard\'s allowance is one generated row: the shared file spells the selector ranges pair once, inside the table', () => {
+    // `single-definition/docs-l0.test.ts` lets this file hold the docs path's selector ranges pair because the width
+    // table has a generated row with the same range (the coordinator's ruling on the red guard). A hand-written second
+    // copy anywhere else in the file would ride that allowance, so it is held to exactly one, and that one in the table.
+    const PAIR = /0xe0100\s*,\s*0xe01ef/gi;
+    expect(SHARED.match(PAIR) ?? []).toHaveLength(1);
+    expect(tableText().match(PAIR) ?? []).toHaveLength(1);
+  });
   it('every line of the fixture, first, last and one inside, counts what the file says; the code point just outside each one-cell range counts two', () => {
     let outside = 0;
     for (const l of dataLines()) {
