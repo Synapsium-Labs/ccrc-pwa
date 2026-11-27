@@ -447,6 +447,110 @@ const SINCE_SET: MutantSet<SinceModule> = {
   suite: sinceCases,
 };
 
+// Overlord W2 Settings: the private-name list's text (`nameListWords.ts`) and the decision model's row words
+// (`decisionModelWords.ts`). The pwa suites (`name-list-words.test.ts`, `decision-model-words.test.ts`) pin the same behaviour
+// against the real modules. Synthetic names only.
+type NameListText =
+  | { ok: true; rows: readonly { text: string; mode: string }[]; lines: readonly number[] }
+  | { ok: false; why: 'empty' } | { ok: false; why: 'mode'; line: number };
+interface NameListModule {
+  nameListRowsOf(text: string): NameListText;
+  nameListRefusalText(err: unknown, lines: readonly number[], otherwise: (err: unknown) => string): string;
+  NAME_LIST_ROW_TEXT: Readonly<Record<string, string>>;
+}
+interface ApiErrorModule { ApiError: new (status: number, body: unknown) => Error }
+interface RowSide { mode: string; ceiling: number; armedLine: { id: number; line: number } | null; held: boolean }
+interface DecisionRow {
+  id: string; side: RowSide; heldWhy: string | null; direction: 'advice' | 'gate'; privateState: boolean;
+  today: { serve: number; maintenance: number; reserved: number; total: number };
+  line: null; offered: { id: number; line: number } | null;
+}
+interface DecisionWordsModule {
+  decisionRowLine(r: DecisionRow): { held: string | null; today: string; armedOn: string | null; offered: { text: string; id: number } | null };
+  rowAnswerOf(body: unknown): { side: RowSide; offRefused: boolean; cause: string | null } | null;
+  ceilingOf(text: string): number | null;
+}
+
+const API_ERROR = path.join(ROOT, 'pwa/src/lib/apiError.ts');
+export function nameListCases(m: NameListModule): Record<string, SuiteCase> {
+  return {
+    'a plain line is part, a mode word in front sets the mode, and blank lines are skipped with their numbers kept': () => {
+      expect(m.nameListRowsOf('zz-alpha\n\nexact: zq-bravo-x9')).toEqual({
+        ok: true, rows: [{ text: 'zz-alpha', mode: 'part' }, { text: 'zq-bravo-x9', mode: 'exact' }], lines: [1, 3],
+      });
+    },
+    'text with no name in it is refused empty, never zero rows': () => {
+      expect(m.nameListRowsOf('')).toEqual({ ok: false, why: 'empty' });
+      expect(m.nameListRowsOf('\n \n')).toEqual({ ok: false, why: 'empty' });
+    },
+    'a word before the colon that is no mode is refused with its line': () => {
+      expect(m.nameListRowsOf('zz-alpha\nexat: zq-bravo-x9')).toEqual({ ok: false, why: 'mode', line: 2 });
+    },
+    'a refused row is worded by the line it came from': async () => {
+      const { ApiError } = (await import(API_ERROR)) as ApiErrorModule;
+      const err = new ApiError(400, { ok: false, error: 'bad-request', detail: 'row 1', row: 1, reason: 'length' });
+      expect(m.nameListRefusalText(err, [1, 3], () => 'otherwise')).toBe(`Line 3: ${m.NAME_LIST_ROW_TEXT['length']}`);
+    },
+  };
+}
+
+const SIDE: RowSide = { mode: 'armed', ceiling: 300, armedLine: { id: 5, line: 0.8 }, held: false };
+const decisionRow = (over: Partial<DecisionRow> = {}): DecisionRow => ({
+  id: 'scope.widens', side: SIDE, heldWhy: null, direction: 'gate', privateState: false,
+  today: { serve: 2, maintenance: 1, reserved: 0, total: 3 }, line: null, offered: null, ...over,
+});
+export function decisionWordsCases(m: DecisionWordsModule): Record<string, SuiteCase> {
+  return {
+    'a row that is not held says nothing of a hold; a held one names its cause': () => {
+      expect(m.decisionRowLine(decisionRow({ heldWhy: 'drift' })).held).toBeNull();
+      expect(m.decisionRowLine(decisionRow({ side: { ...SIDE, held: true }, heldWhy: 'no-key' })).held).toBe('Held: the key was removed. Resume to turn it on again.');
+    },
+    "today's calls are of the row's own ceiling": () => {
+      expect(m.decisionRowLine(decisionRow()).today).toBe('Today: 3 of 300 calls.');
+    },
+    'an armed gate names its own line, offered a newer one or not': () => {
+      expect(m.decisionRowLine(decisionRow()).armedOn).toBe('Armed on line 80% (#5).');
+      expect(m.decisionRowLine(decisionRow({ offered: { id: 7, line: 0.9 } })).armedOn).toBe('Armed on line 80% (#5).');
+    },
+    'an off the journal refused is read as held, not off': () => {
+      expect(m.rowAnswerOf({ ok: true, side: { ...SIDE, held: true }, offRefused: true, cause: 'x' })?.offRefused).toBe(true);
+      expect(m.rowAnswerOf({ ok: true, side: SIDE })?.offRefused).toBe(false);
+    },
+    'the ceiling field sends a whole number only': () => {
+      expect(m.ceilingOf('600')).toBe(600);
+      expect(m.ceilingOf('6.5')).toBeNull();
+      expect(m.ceilingOf('')).toBeNull();
+    },
+  };
+}
+
+const NAME_LIST = path.join(ROOT, 'pwa/src/overlord/nameListWords.ts');
+const DECISION_WORDS = path.join(ROOT, 'pwa/src/overlord/decisionModelWords.ts');
+const NAME_LIST_SET: MutantSet<NameListModule> = {
+  modulePath: NAME_LIST,
+  mutants: [
+    // The plan's W1: a line with no mode read as `exact`.
+    { id: 'N1', old: "rows.push({ text: line, mode: 'part' })", new: "rows.push({ text: line, mode: 'exact' })" },
+    // The plan's W4: empty text answers zero rows.
+    { id: 'N2', old: "return rows.length === 0 ? { ok: false, why: 'empty' } : { ok: true, rows, lines };", new: 'return { ok: true, rows, lines };' },
+    { id: 'N3', old: "    if (line === '') continue;\n", new: '' },
+    { id: 'N4', old: "if (!isMode(word)) return { ok: false, why: 'mode', line: i + 1 };", new: '' },
+    { id: 'N5', old: 'const line = lines[body.row];', new: 'const line = body.row + 1;' },
+  ],
+  suite: nameListCases,
+};
+const DECISION_WORDS_SET: MutantSet<DecisionWordsModule> = {
+  modulePath: DECISION_WORDS,
+  mutants: [
+    { id: 'DW1', old: 'held: r.side.held ? ', new: 'held: true ? ' },
+    { id: 'DW2', old: 'of ${r.side.ceiling} calls', new: 'of ${r.today.total} calls' },
+    { id: 'DW3', old: 'armedOn: r.side.armedLine === null ? null', new: 'armedOn: r.offered === null ? null' },
+    { id: 'DW4', old: 'const offRefused = body.offRefused === true;', new: 'const offRefused = false;' },
+    { id: 'DW5', old: '/^\\d{1,9}$/', new: '/^[\\d.]{1,9}$/' },
+  ],
+  suite: decisionWordsCases,
+};
+
 /** This piece's sets, keyed as `mutation-floors.json` keys them (`<file>#<decider>`). */
 export const HOME_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'pwa/src/overlord/homePlace.ts#designationStateOf': DESIGNATION_SET as MutantSet<never>,
@@ -461,4 +565,6 @@ export const HOME_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'pwa/src/lib/places.ts#deskPlacesFor': DESK_SET as MutantSet<never>,
   'pwa/src/lib/places.ts#phoneDoorsFit': PHONE_SET as MutantSet<never>,
   'pwa/src/overlord/sinceWords.ts#sinceLines': SINCE_SET as MutantSet<never>,
+  'pwa/src/overlord/nameListWords.ts#nameListRowsOf': NAME_LIST_SET as MutantSet<never>,
+  'pwa/src/overlord/decisionModelWords.ts#decisionRowLine': DECISION_WORDS_SET as MutantSet<never>,
 };

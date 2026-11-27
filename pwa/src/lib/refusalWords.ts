@@ -8,7 +8,7 @@ import { ARCHIVE_REFUSALS, type ArchiveRefusal } from '../../../shared/api';
 import { SWAP_REFUSALS, TESTBOX_ADMIN_ROUTE_REFUSALS, TESTBOX_PARITY_REQUIRED_SENTENCE, type SwapRefusal, type TestboxAdminRouteRefusal } from '../../../shared/api';
 import { TESTBOX_ADMIN_CODE_SENTENCE, readTestboxBusyHolder } from '../../../shared/testbox-admin';
 import type { LinkingRefusal } from '../../../shared/linking';
-import type { HandoffRefusal, RouteRefusal } from '../../../shared/refusal';
+import type { DecisionModelRefusal, HandoffRefusal, RouteRefusal } from '../../../shared/refusal';
 import { ANSWER_MAX, type LinearItemAct } from '../../../shared/ledgers';
 import { ApiError } from './apiError';
 import { busyHolderSentence } from '../fleet/testboxAdminWords';
@@ -953,7 +953,27 @@ export function overlordRefusalText(err: unknown, act: OverlordDoorAct): string 
  * so before an answer it says the door did not answer. The backstop, the retention and a hold's Clear have their own words
  * here, with the server's detail drawn where it names the fault, and a word this build does not know is drawn raw.
  */
-export type OverlordSettingsAct = 'retire' | 'model' | 'account-set' | 'backstop' | 'retention' | 'hold-clear';
+export type OverlordSettingsAct = 'retire' | 'model' | 'account-set' | 'backstop' | 'retention' | 'hold-clear'
+  // Overlord W2 Settings: a decision-model row's moves (arm, off, Resume, Approve and its ceiling), the key's save and removal,
+  // and the private-name list's upload (its Clear included).
+  | 'decision-row' | 'decision-key' | 'decision-key-remove' | 'name-list';
+
+/** The decision model's doors' own words (`shared/refusal.ts#DECISION_MODEL_REFUSALS`, eleven), one sentence each. Typed over the
+ *  shared list, so a word it gains without a sentence is a compile error, and `decision-model-words.test.ts` holds the keys to the
+ *  list both ways. A sentence never names a value the operator sent: the doors' details are their own fixed text. */
+export const DECISION_MODEL_REFUSAL_TEXT: Readonly<Record<DecisionModelRefusal, string>> = {
+  'decision-row-unknown': 'This server does not know that decision-model row, so nothing was changed.',
+  'key-unset': 'Set the host and its key first, so nothing was changed.',
+  'key-required': 'A new endpoint origin needs its key: type the key, then save again.',
+  'private-state-host': 'This row carries your words, so it is never asked of a hosted model. Choose a local or zero-retention host first.',
+  'line-not-admitted': "No admitted line stands for this row under today's host and model, so it cannot be armed yet. Leave it in shadow until one is admitted.",
+  'canary-unmet': "The line's canary has not held, so the row cannot be armed on it yet.",
+  'bad-ceiling': 'The server refused that ceiling, so nothing was saved.',
+  'bad-endpoint': 'The server refused that endpoint, so nothing was saved.',
+  'row-changed': 'This row changed since you read it. Look again, then try again.',
+  'stored-not-applied': 'Only part of the change was written.',
+  'removed-not-held': 'The key was removed, but the armed gates were not held. Remove it again.',
+};
 
 export const OVERLORD_SETTINGS_REFUSAL_TEXT = {
   'no-row': 'There is no Overlord designation row any more, so nothing was changed. The page reads it again.',
@@ -964,6 +984,13 @@ export const OVERLORD_SETTINGS_REFUSAL_TEXT = {
   unavailable: 'It could not be read just now, so nothing was changed. Try again in a minute.',
   'not-configured': 'This server keeps no coordination database, so this setting is not kept here.',
   'retention-auth-off': 'Sign-in must be on to lower the response retention.',
+  'decision-auth-off': 'Sign-in must be on to change the decision model.',
+  'names-auth-off': 'Sign-in must be on to change the private-name list.',
+  'key-bad-request': 'The server refused the host or the key, so nothing was saved.',
+  'names-bad-request': 'The server refused the list, so nothing was uploaded.',
+  'slot-busy': 'An earlier change has not finished yet, so nothing was done. Try again in a moment.',
+  oversize: 'That is larger than the server takes, so nothing was sent.',
+  'journal-refused': 'The authority journal could not record the change, so nothing was changed.',
 } as const;
 
 type DesignationSettingsAct = Extract<OverlordSettingsAct, OverlordDoorAct>;
@@ -975,14 +1002,32 @@ const withDetail = (said: string) => (c: SettingsCtx): string => (c.detail === n
 const DESIGNATION_SETTINGS_WORDS: Readonly<Record<string, (c: SettingsCtx) => string>> = {
   'not-found': (c) => (c.answered ? ST['no-row'] : ST['no-door']),
 };
-/** The backstop's, the retention's and a Clear's words, each keyed by the word and read by `Object.hasOwn`. */
+/** `auth-off` by the act that asked the account gate (home C's carried 4a: only an act whose door asks it has a sentence). */
+const AUTH_OFF_BY_ACT: Readonly<Partial<Record<OverlordSettingsAct, string>>> = {
+  retention: ST['retention-auth-off'],
+  'decision-row': ST['decision-auth-off'], 'decision-key': ST['decision-auth-off'], 'decision-key-remove': ST['decision-auth-off'],
+  'name-list': ST['names-auth-off'],
+};
+/** `bad-request` by the act: the key door and the list's upload have their own (ruling 5), every other door the shared one. */
+const BAD_REQUEST_BY_ACT: Readonly<Partial<Record<OverlordSettingsAct, string>>> = {
+  'decision-key': ST['key-bad-request'], 'name-list': ST['names-bad-request'],
+};
+/** The decision model's words whose answer's `detail` (the door's own fixed text) is drawn beside the sentence. */
+const DECISION_DETAIL_WORDS: ReadonlySet<string> = new Set(['bad-endpoint', 'stored-not-applied', 'removed-not-held']);
+const DECISION_SETTINGS_ACTS: ReadonlySet<OverlordSettingsAct> = new Set<OverlordSettingsAct>(['decision-row', 'decision-key', 'decision-key-remove']);
+/** The backstop's, the retention's, a Clear's, the decision model's and the list's other words, each keyed by the word and read by
+ *  `Object.hasOwn`. */
 const OTHER_SETTINGS_WORDS: Readonly<Record<string, (c: SettingsCtx) => string | null>> = {
   'not-found': (c) => (c.act === 'hold-clear' ? ST['no-hold'] : ST['no-door']),
-  'auth-off': (c) => (c.act === 'retention' ? ST['retention-auth-off'] : null),
-  'bad-request': withDetail(ST['bad-request']),
+  'auth-off': (c) => AUTH_OFF_BY_ACT[c.act] ?? null,
+  'bad-request': (c) => withDetail(BAD_REQUEST_BY_ACT[c.act] ?? ST['bad-request'])(c),
   'write-failed': withDetail(ST['write-failed']),
   unavailable: withDetail(ST.unavailable),
   'not-configured': () => ST['not-configured'],
+  'slot-busy': () => ST['slot-busy'],
+  oversize: () => ST.oversize,
+  'authority-rolled-back': withDetail(ST['journal-refused']),
+  'journal-unreadable': withDetail(ST['journal-refused']),
 };
 
 export function overlordSettingsRefusalText(err: unknown, act: OverlordSettingsAct, storeAnswered: boolean): string {
@@ -992,6 +1037,10 @@ export function overlordSettingsRefusalText(err: unknown, act: OverlordSettingsA
   const ctx: SettingsCtx = { act, answered: storeAnswered, detail: typeof body!.detail === 'string' && body!.detail.length > 0 ? body!.detail : null };
   if (SETTINGS_DESIGNATION_ACTS.has(act)) {
     return Object.hasOwn(DESIGNATION_SETTINGS_WORDS, word) ? DESIGNATION_SETTINGS_WORDS[word]!(ctx) : overlordRefusalText(err, act as DesignationSettingsAct);
+  }
+  if (DECISION_SETTINGS_ACTS.has(act) && Object.hasOwn(DECISION_MODEL_REFUSAL_TEXT, word)) {
+    const said = DECISION_MODEL_REFUSAL_TEXT[word as DecisionModelRefusal];
+    return DECISION_DETAIL_WORDS.has(word) ? withDetail(said)(ctx) : said;
   }
   return (Object.hasOwn(OTHER_SETTINGS_WORDS, word) ? OTHER_SETTINGS_WORDS[word]!(ctx) : null) ?? `Refused: ${word}`;
 }
