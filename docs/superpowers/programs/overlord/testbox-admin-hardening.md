@@ -46,8 +46,9 @@ answer as before. There are five quiet differences:
 - **The access key file is the login user's after an edit.** It keeps its mode and its modification time: before, an
   edit set the modification time to the time of the edit; now the old time is kept. Its access time is that of the edit's
   own read. A file its owner may only read (0400 or 0444, which sshd accepts) is still edited.
-- **An edit of the access key file drops its trailing blank lines and every NUL byte, and ends the last line with a
-  newline when it had none** (named differences). The edits read the file through a command substitution. sshd skips
+- **An edit of the access key file drops its trailing blank lines and every NUL byte** (named differences; the final
+  newline is not one, because the earlier programs already ended every printed line). The edits read the file through a
+  command substitution. sshd skips
   blank lines, so no login changes there. Only the login user, or root on its own file, can put a NUL in the file, so no
   boundary is crossed; whether sshd skips a line holding a NUL is not measured (section 6).
 - **The repair copy replaces a link at a destination name** with the staged file, rather than writing through the link.

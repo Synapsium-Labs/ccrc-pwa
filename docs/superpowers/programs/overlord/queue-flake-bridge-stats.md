@@ -77,14 +77,17 @@ be 4`: the counts never reach the file) and green with the fix; the second is gr
 durations: about 10.7 s and 11.7 s on the hosted runner, 11 to 14 s on the loaded fleet box, inside the 20 s bound.
 
 **The case behind a write that succeeds** (fix round 1, review F1). Both cases above end their held write in a failure
-(a pipe cannot be synced), and a failure sets the retry flag, which skips the interval rule. The queue's red took the
+(a pipe cannot be synced), and a failure sets the retry flag, which skips the interval rule. The production shape is the
 other path: a waiter behind a write that SUCCEEDS, let through only by the interval rule. What lets it through is that
-the last flush's tick is the tick at the write's start; a tick taken at the end would throttle it and bring the lost
-write back. The bridge's count stats suite, block "the stats file's write lock and value rules", now has "a waiting flush
+the last flush's tick is the tick at the write's start; a tick taken at the end would throttle it and, at a `FLUSH_S`
+above 0 (production 10.0), bring the lost write back. The server suite, whose case the queue's red was, runs at
+`FLUSH_S` 0, where the interval rule can never hold, so the end-tick mutant throttles nothing there and only the count
+stats case goes red under it. The bridge's count stats suite, block "the stats file's write lock and value rules", now has "a waiting flush
 behind a write that succeeds waits for it, then writes the counts made during it". It uses the suite's race op, which
 holds a real fsync that succeeds and runs the stats module in process on every platform. One count goes in before the
 hold and one during it; the waiting flush waits out a 0.6 s hold at `FLUSH_S` 0.3, then writes, and the next flush finds
-nothing dirty. It is red on main (the waiting flush returns at once) and under the end-tick mutant (X2: the waiter is
+nothing dirty. It is red on main because main's `flush` has no `wait` keyword at all (`flush(wait=True)` raises a TypeError, which the
+case's driver records), not because the flush returns at once; and it is red under the end-tick mutant (X2: the waiter is
 throttled, `[null, false]`). I chose that home, as the review advised, over a third FIFO case in the server suite: a
 FIFO write can only fail, so the server suite cannot hold a write that succeeds without a hook in the bridge. The flush's
 docstring now says the tick is the write's start, and why.
@@ -145,7 +148,7 @@ all seven were killed. M2, M4 and M5 are now also killed by the count stats case
 ## 6. What ran
 
 Each file alone through the fleet test wrapper, at most two workers, load 9 to 12 on 16 cores: the bridge server suite
-(134 of 134), the stats suite (67 of 67, every in-flight pin unchanged), the proxy (123), harness (25), runtime (103, 10
+(134 of 134), the stats suite (68 of 68 after fix round 1, with its new case; every in-flight pin unchanged), the proxy (123), harness (25), runtime (103, 10
 skipped), usage (71), absorb (6), backend (30) and live tools (40) suites, the card facts suite (40 of 40), the command registry suite (28 of 28), the growth
 check armed (100 of 100), single-definition (1624, 1 skipped). The type check of all the tests was killed twice by the
 test slice's memory cap, with other sessions' runs holding most of it; the two changed test files and everything they
