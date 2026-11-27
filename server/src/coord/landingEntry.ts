@@ -1,7 +1,7 @@
 // L1: pure. The landing line's entry (landing order wave 5e): what an advance writes to it, decided from values, and
 // the reader of its rows. No fs, no node:sqlite, no clock; the one writer, `CoordStore.advanceLanding` (L3), gathers
 // the facts, calls `decideLandingWrite`, and acts inside its transaction. Value imports are L0 only.
-import type { RunState } from '../../../shared/api.js';
+import type { PrReason, RunState } from '../../../shared/api.js';
 import type { ChecksMode } from '../../../shared/landing.js';
 import { isLandingEjectionKind, isLandingEntryState, LANDING_ENTRY_TERMINAL } from '../../../shared/landingLine.js';
 import type {
@@ -118,11 +118,14 @@ export function isLandable(state: LandingEntryState, projection: LandingProjecti
     && projection?.kind === 'readable' && projection.quarantine === null;
 }
 
-/** What GitHub said of one PR: merged (with the facts the mark records), closed without merging, or no such PR. */
+/** What GitHub said of one PR: merged (with the facts the mark records), closed without merging (`reason` names the one
+ *  closed case that is not GitHub's bare word: CLOSED with the train label and an unproven train record, D-9112), or no
+ *  such PR. */
 export type LandingOutcome =
   | { word: 'merged'; head: string; base: string; mergedAt: string | null; mergeCommit: string | null;
     train: { number: number; mergeCommit: string } | null }
-  | { word: 'closed' | 'absent' };
+  | { word: 'closed'; reason: Extract<PrReason, 'train-unproven'> | null }
+  | { word: 'absent' };
 
 /** The land arm's input. `expect` is the reader's compare-and-set: the entry it read before the GitHub call. `null` is
  *  the close's: a merge is final, so no later pin can make it untrue. */
@@ -165,7 +168,7 @@ export function decideLandingLand(f: { land: LandingLand; current: LandingEntry 
   const detail = o.word === 'merged'
     ? { ...base, ...(o.head !== current.pinnedSha ? { head: o.head } : {}), base: o.base, mergedAt: o.mergedAt,
       mergeCommit: o.mergeCommit, train: o.train?.number ?? null, trainMergeCommit: o.train?.mergeCommit ?? null }
-    : base;
+    : o.word === 'closed' && o.reason !== null ? { ...base, reason: o.reason } : base;
   return { act: 'land', id: current.id, state: o.word === 'merged' ? 'landed' : 'closed', detail: JSON.stringify(detail) };
 }
 

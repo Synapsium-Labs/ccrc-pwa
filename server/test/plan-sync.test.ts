@@ -489,6 +489,147 @@ describe('every outcome has one handling', () => {
     expect(mails(r).filter((m) => m.subject.includes('programme'))).toHaveLength(row.mails);
   });
 
+  // D-9132: a plain `unreachable` (a transport failure, nothing answered) only holds: it never fails the binding, however many
+  // passes run. The same word with `outsideTable` (Linear answered, outside the closed table) is the malformed row's.
+  it('D-9132: a plain unreachable, maybe sent, only holds however many passes run, and mails nothing', async () => {
+    const r = await rig();
+    r.respond.current = (ask) => (ask.op === 'initiativeCreate' ? fail('unreachable', true) : defaultRespond(ask, 0));
+    for (let i = 0; i < PLAN_SYNC_BACKOFF_MS.length + 3; i += 1) {
+      await r.sync.passFor(SLUG, r.t.now + 60_000);
+      r.db.prepare('UPDATE plan_sync_due SET dueAt = 0').run();
+      r.t.now += PLAN_SYNC_BACKOFF_MS[PLAN_SYNC_BACKOFF_MS.length - 1]! + 1;
+    }
+    expect(bindingOfKind(r, 'programme')).toMatchObject({ state: 'pending', failedWord: null });
+    expect(mails(r)).toEqual([]);
+  });
+
+  it('D-9132: unreachable outside the closed table is failed malformed after the last backoff step, mailed once', async () => {
+    const r = await rig();
+    r.respond.current = (ask) => (ask.op === 'initiativeCreate' ? { ok: false, word: 'unreachable', maybeSent: true, outsideTable: true } : defaultRespond(ask, 0));
+    for (let i = 0; i < PLAN_SYNC_BACKOFF_MS.length + 2; i += 1) {
+      await r.sync.passFor(SLUG, r.t.now + 60_000);
+      r.db.prepare('UPDATE plan_sync_due SET dueAt = 0').run();
+      r.t.now += PLAN_SYNC_BACKOFF_MS[PLAN_SYNC_BACKOFF_MS.length - 1]! + 1;
+    }
+    expect(bindingOfKind(r, 'programme')).toMatchObject({ state: 'failed', failedWord: 'malformed' });
+    expect(mails(r).filter((m) => m.subject.includes('malformed'))).toHaveLength(1);
+  });
+
+  // D-9132 (round 1 F2): the counter counts CONSECUTIVE answers outside the table. A good write for the binding clears it.
+  it('D-9132: four answers outside the closed table, a good write, four more: the binding is not failed; the fifth in a row fails it, mailed once', async () => {
+    const r = await rig();
+    let creates = 0;
+    let updates = 0;
+    const outside: CcrcOpOutcome = { ok: false, word: 'unreachable', maybeSent: true, outsideTable: true };
+    r.respond.current = (ask) => {
+      if (ask.op === 'initiativeCreate') { creates += 1; return creates <= 4 ? outside : defaultRespond(ask, 0); }
+      if (ask.op === 'initiativeUpdate') { updates += 1; return outside; }
+      return defaultRespond(ask, 0);
+    };
+    const pass = async (): Promise<void> => {
+      await r.sync.passFor(SLUG, r.t.now + 60_000);
+      r.db.prepare('UPDATE plan_sync_due SET dueAt = 0').run();
+      r.t.now += PLAN_SYNC_BACKOFF_MS[PLAN_SYNC_BACKOFF_MS.length - 1]! + 1;     // past every hold
+    };
+    for (let i = 0; i < 5; i += 1) await pass();                                  // four refused creates, then the good one
+    expect(creates).toBe(5);
+    expect(bindingOfKind(r, 'programme')).toMatchObject({ state: 'bound' });
+    r.db.prepare('UPDATE programs SET title = ? WHERE slug = ?').run('Programme renamed', SLUG);
+    r.plan.markSyncDue(SLUG, r.t.now);
+    for (let i = 0; i < 4; i += 1) await pass();                                  // four answers outside the table for the update
+    expect(updates).toBe(4);
+    expect(bindingOfKind(r, 'programme')).toMatchObject({ state: 'bound', failedWord: null });
+    expect(mails(r).filter((m) => m.subject.includes('malformed'))).toEqual([]);
+    await pass();                                                                 // the fifth in a row
+    expect(updates).toBe(5);
+    expect(bindingOfKind(r, 'programme')).toMatchObject({ state: 'failed', failedWord: 'malformed' });
+    expect(mails(r).filter((m) => m.subject.includes('malformed'))).toHaveLength(1);
+  });
+
+  // D-9132 (round 2 F3): the pin above leaves the programme clean after the good write, so the clean-programme clear covers for
+  // `bind`'s. Here the programme is renamed while the good create is in flight, so the initiative's update is emitted in the same
+  // pass and answered outside the table: the programme is never clean after the good write, and only that write's `bind` can end the
+  // binding's run of answers (four before it, four after).
+  it('D-9132 (round 2 F3): with the programme dirty after the good write, four answers outside the closed table, a good write, four more: not failed', async () => {
+    const r = await rig();
+    let creates = 0;
+    let updates = 0;
+    const outside: CcrcOpOutcome = { ok: false, word: 'unreachable', maybeSent: true, outsideTable: true };
+    r.respond.current = (ask) => {
+      if (ask.op === 'initiativeCreate') {
+        creates += 1;
+        if (creates <= 4) return outside;
+        r.db.prepare('UPDATE programs SET title = ? WHERE slug = ?').run('Programme renamed', SLUG);   // the good write lands, the plan has moved on
+        return defaultRespond(ask, 0);
+      }
+      if (ask.op === 'initiativeUpdate') { updates += 1; return outside; }
+      return defaultRespond(ask, 0);
+    };
+    const pass = async (): Promise<void> => {
+      await r.sync.passFor(SLUG, r.t.now + 60_000);
+      r.db.prepare('UPDATE plan_sync_due SET dueAt = 0').run();
+      r.t.now += PLAN_SYNC_BACKOFF_MS[PLAN_SYNC_BACKOFF_MS.length - 1]! + 1;     // past every hold
+    };
+    for (let i = 0; i < 4; i += 1) await pass();                                  // four answers outside the table for the create
+    expect(creates).toBe(4);
+    await pass();                                                                 // the good create, then the first update, answered outside the table
+    expect(creates).toBe(5);
+    expect(updates).toBe(1);
+    for (let i = 0; i < 3; i += 1) await pass();                                  // updates two to four
+    expect(updates).toBe(4);
+    expect(bindingOfKind(r, 'programme')).toMatchObject({ state: 'bound', failedWord: null });
+    expect(mails(r).filter((m) => m.subject.includes('malformed'))).toEqual([]);
+    await pass();                                                                 // the fifth in a row since the good write
+    expect(updates).toBe(5);
+    expect(bindingOfKind(r, 'programme')).toMatchObject({ state: 'failed', failedWord: 'malformed' });
+  });
+
+  // D-9132 (round 2 F4): the failure itself starts the count again. A binding failed `malformed` and requeued answers outside the table
+  // once more: that answer holds (the count is one), it does not fail the binding again at once. A second binding (the project, never
+  // answered) keeps the programme dirty, so the clean-programme clear never runs.
+  it('D-9132 (round 2 F4): a binding failed malformed and requeued holds on its next answer outside the closed table, and is not failed again', async () => {
+    const r = await rig();
+    let creates = 0;
+    const outside: CcrcOpOutcome = { ok: false, word: 'unreachable', maybeSent: true, outsideTable: true };
+    r.respond.current = (ask) => {
+      if (ask.op === 'initiativeCreate') { creates += 1; return outside; }
+      if (ask.op === 'projectCreate') return fail('timeout', true);
+      return defaultRespond(ask, 0);
+    };
+    for (let i = 0; i < PLAN_SYNC_BACKOFF_MS.length + 1; i += 1) {
+      await r.sync.passFor(SLUG, r.t.now + 60_000);
+      r.db.prepare('UPDATE plan_sync_due SET dueAt = 0').run();
+      r.t.now += PLAN_SYNC_BACKOFF_MS[PLAN_SYNC_BACKOFF_MS.length - 1]! + 1;
+    }
+    expect(bindingOfKind(r, 'programme')).toMatchObject({ state: 'failed', failedWord: 'malformed' });
+    expect(mails(r).filter((m) => m.subject.includes('malformed'))).toHaveLength(1);
+    const before = creates;
+    r.t.now += PLAN_SYNC_BACKOFF_MS[PLAN_SYNC_BACKOFF_MS.length - 1]! + 1_000;     // past the last backoff step since the failure: the time requeue
+    await r.sync.tick(r.t.now);
+    expect(creates).toBeGreaterThan(before);                                        // the requeued binding sent its create once more
+    expect(bindingOfKind(r, 'programme')).toMatchObject({ state: 'pending', failedWord: null });
+    expect(mails(r).filter((m) => m.subject.includes('malformed'))).toHaveLength(1);
+  });
+
+  // D-9132 (round 1 A1): a READ answered outside the table is the same: backoff, then the binding fails malformed (characterization
+  // of the widened scope; green before the round). The C12 read before a started ticket's update is the read driven here.
+  it('D-9132: a read (the issue read before an update) answered outside the closed table every time fails the ticket binding malformed, mailed once', async () => {
+    const r = await rig();
+    await r.sync.tick(afterDebounce(r));
+    expect(bindingOfKind(r, 'ticket')).toMatchObject({ state: 'bound' });
+    r.db.prepare("UPDATE plan_tickets SET state = 'started' WHERE id = ?").run(r.plan.planOf(SLUG).epics[0]!.tickets[0]!.id);
+    r.respond.current = (ask) => (ask.op === 'issueOwned' ? { ok: false, word: 'unreachable', maybeSent: true, outsideTable: true } : defaultRespond(ask, 0));
+    r.plan.markSyncDue(SLUG, r.t.now);
+    for (let i = 0; i < PLAN_SYNC_BACKOFF_MS.length + 2; i += 1) {
+      await r.sync.passFor(SLUG, r.t.now + 60_000);
+      r.db.prepare('UPDATE plan_sync_due SET dueAt = 0').run();
+      r.t.now += PLAN_SYNC_BACKOFF_MS[PLAN_SYNC_BACKOFF_MS.length - 1]! + 1;
+    }
+    expect(r.asks.some((a) => a.op === 'issueOwned')).toBe(true);
+    expect(bindingOfKind(r, 'ticket')).toMatchObject({ state: 'failed', failedWord: 'malformed' });
+    expect(mails(r).filter((m) => m.subject.includes('malformed'))).toHaveLength(1);
+  });
+
   it('the first outcome that defers ends the pass: no later step is sent', async () => {
     const r = await rig();
     r.respond.current = () => fail('unreachable');
@@ -1073,6 +1214,36 @@ describe('end to end through runCcrcOp, Linear faked at FetchLike (recorded answ
     await sync.tick(afterDebounce(r));
     expect(docs.filter((d) => d === D.initiativeCreate)).toHaveLength(1);
     expect(bindingOfKind(r, 'programme')).toMatchObject({ state: 'bound', linearId: requestId });
+  });
+
+  // D-9132: CONSTRUCTED, not recorded (no live answer of this kind was recorded): an errors body whose code no row of the closed
+  // table knows. runCcrcOp answers it `unreachable` with `outsideTable`, and the plan sync must not hold on it for ever.
+  it("D-9132: an initiative create refused with an error outside the closed table every time: its binding fails malformed, mailed once, and the other objects are written", async () => {
+    const r = await rig();
+    const fx = linearServicesFake({ clock: () => r.t.now, db: r.db });
+    let sentInitiative = 0;
+    const fetch: FetchLike = async (_u, init) => {
+      const q = (JSON.parse(init.body) as { query: string }).query;
+      if (q === D.initiativeCreate) {
+        sentInitiative += 1;
+        return linearAnswer({ ok: true, status: 200, json: async () => ({ data: null, errors: [{ message: 'something new', extensions: { code: 'SOMETHING_NEW' } }] }) });
+      }
+      // The pending binding's recovery reads by name before each later create: Linear holds no such initiative.
+      if (q === D.initiativesByName) return linearAnswer({ ok: true, status: 200, json: async () => ({ data: { initiatives: { nodes: [] } } }) });
+      const name = ANSWERS.get(q);
+      if (name === undefined) throw new Error('no recorded answer for this document');
+      return recordedAnswer(name);
+    };
+    const sync = r.build({ call: (ask) => runCcrcOp({ ccrcDir: r.ccrcDir, rate: fx.rate, journal: fx.journal, policy: fx.policy, fetch, now: () => r.t.now }, ask) });
+    for (let i = 0; i < PLAN_SYNC_BACKOFF_MS.length + 3; i += 1) {
+      await sync.passFor(SLUG, r.t.now + 60_000);
+      r.db.prepare('UPDATE plan_sync_due SET dueAt = 0').run();
+      r.t.now += PLAN_SYNC_BACKOFF_MS[PLAN_SYNC_BACKOFF_MS.length - 1]! + 1;   // past the workspace's hold
+    }
+    expect(sentInitiative).toBeGreaterThan(0);
+    expect(bindingOfKind(r, 'programme')).toMatchObject({ state: 'failed', failedWord: 'malformed' });
+    expect(mails(r).filter((m) => m.subject.includes('malformed'))).toHaveLength(1);
+    for (const kind of ['epic', 'checkpoint', 'ticket']) expect(bindingOfKind(r, kind)?.state, kind).toBe('bound');
   });
 });
 
