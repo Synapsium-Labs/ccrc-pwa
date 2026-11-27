@@ -649,6 +649,9 @@ committed to the branch.
 The other browser files stand on the earlier full run (§15.8) and on review 4029's 28 files on the merge with main
 a45831a795; the merge queue is their arbiter. The pull request's own fast run on the pushed head is in the wave-done mail.
 
+Those counts are against main 1f31f6133d, as they stood then. On fix round 3's head, which contains main f3b3cceed7,
+`linear-items` reads 167 of 167 (main had added cases since), §17.5.
+
 Ledger-Edit: not needed. This note is new in this pull request, so the head commit edits no existing file under the
 programme notes folder.
 
@@ -711,3 +714,25 @@ Each mutant was run on a saved copy of the sheet and restored, compared with `cm
   token, `--sp-4`, equal to the list column's `--gutter` today by Instrument's role, not by one source; the R2 case reds if
   they part.
 - §16.7's `linear-items` count and the main its merge runs were against are as they were then; §17.5 gives both on this head.
+
+### 17.5 Evidence for this round
+
+Every run went through `ccrc test`, one process at a time, on the exact head whose code this round pushes, f3c90eb3eb (this
+section is the commit after it). That head contains main f3b3cceed7, so no scratch merge was needed (measured).
+
+| Run | Result |
+|---|---|
+| The growth check, armed | green, 100 of 100; `fleet.css` under its cap, no waiver |
+| The server's whole-tree guards (as §15.8) | green, 68 files, 1,919 cases |
+| `ui`'s and pwa's static checks | clean, both |
+| #3472's palette guards, `browser-theme-ids` and `browser-dist` | green, 36 of 36 |
+| The jsdom files that read `ledgers.css` or `fleet.css` (45 test files, in two parts) | green, 2,298 passed |
+| `console-spacing`, `run-tally`, `runs-widths`, `connect-sheet`, `item-nav`, `item-wrap`, `waiting`, each alone | green: 90, 40, 231, 20, 54, 16, 202 |
+| The browser files that draw a run page or Runs advanced, with its Back strip, each alone: `calls-made`, `caps-dial`, `review-cap-coord`, `refusal-copy` (and `run-tally`, `runs-widths` above) | green: 12, 4, 12, 16 |
+| `refined-phone`, `phone-bar`, `instrument-desk`, `linear-items`, each alone | green: 53, 58, 33, 167 |
+
+The other browser files stand on review 4044's 17 files on this branch merged with main 397cccdc92, and on the merge queue.
+The pull request's own fast run on the pushed head is in the wave-done mail.
+
+Ledger-Edit: not needed. This note is new in this pull request, so the head commit edits no existing file under the
+programme notes folder.
