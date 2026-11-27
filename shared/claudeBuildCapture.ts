@@ -13,6 +13,7 @@
 // that build queued.
 import { readBuildCaptureResult, type BuildCaptureResult } from './claudeBuildTrust.js';
 import type { DeliveryCaptureResult } from './deliveryResult.js';
+import type { FramesCaptureResult } from './framesResult.js';
 import { HOOK_EVENTS, hookEventIs, isHookEvent, type HookEvent } from './hook-events.js';
 
 // ── the job kind's words ─────────────────────────────────────────────────────────────────────────────────────────
@@ -46,10 +47,13 @@ export const CAPTURE_STATE_WORD_MAP: Record<CaptureStateWord, true> = { refused:
 /** Which recipe a capture runs on the one runner (Desktop polish wave 178). `build-trust`: the drive of the spec's Table 1,
  *  whose replay is the build's trust verdict (`result`). `delivery`: the fixed paste delivery cases sent through the
  *  product's own send (`shared/deliveryCapture.ts`), whose result (`delivery`) never reads or writes the build-trust
- *  record. ADDITIVE: a submission with no `recipe` is build trust, its one spelling, so every sender before the delivery
- *  recipe is unchanged, and a box that predates it refuses a `recipe` field as it refuses any extra field. */
-export type CaptureRecipe = 'build-trust' | 'delivery';
-export const CAPTURE_RECIPE_MAP: Record<CaptureRecipe, true> = { 'build-trust': true, delivery: true };
+ *  record. `frames` (Desktop polish wave 187, the capture owner's calls 1549 and 1558): one case of the fixed box frames
+ *  (`shared/framesCapture.ts`) at one pane size, whose result (`frames`) is one REDUCED frame and never reads or writes
+ *  the build-trust or the delivery record. ADDITIVE: a submission with no `recipe` is build trust, its one spelling, so
+ *  every sender before the delivery recipe is unchanged, and a box that predates a recipe refuses its `recipe` field as it
+ *  refuses any extra field. */
+export type CaptureRecipe = 'build-trust' | 'delivery' | 'frames';
+export const CAPTURE_RECIPE_MAP: Record<CaptureRecipe, true> = { 'build-trust': true, delivery: true, frames: true };
 
 /** The job: capture one build, under a fresh id. */
 export interface CaptureSubmit {
@@ -58,10 +62,11 @@ export interface CaptureSubmit {
   readonly captureId: string;
   /** The Claude Code build, `isClaudeVersion`. */
   readonly build: string;
-  /** Absent: build trust. Present only as `delivery` (see {@link CaptureRecipe}). */
-  readonly recipe?: 'delivery';
-  /** Present exactly when `recipe` is: which part of the delivery cases this capture runs, an index into
-   *  `deliveryResult.ts#deliveryParts` (the capture owner's call 1148). Each part is a capture of its own. */
+  /** Absent: build trust. Present only as `delivery` or `frames` (see {@link CaptureRecipe}). */
+  readonly recipe?: 'delivery' | 'frames';
+  /** Present exactly when `recipe` is: which part of that recipe this capture runs, an index into
+   *  `deliveryResult.ts#deliveryParts` (the capture owner's call 1148) or `framesResult.ts#FRAMES_PARTS` (one case at one
+   *  pane size). Each part is a capture of its own. */
   readonly part?: number;
 }
 
@@ -97,6 +102,10 @@ export interface CaptureAnswer {
   /** A delivery capture's frames only, and every one of them (absent on build trust's): its result on `ended`, null
    *  there when there is no verdict and on every other state. A delivery capture's `result` is always null. */
   readonly delivery?: DeliveryCaptureResult | null;
+  /** A frames capture's frames only, and every one of them (absent on the other recipes'): its result on `ended`, null
+   *  there when there is no result and on every other state. A frames capture's `result` is always null, and a frame
+   *  names `delivery` or `frames`, never both. */
+  readonly frames?: FramesCaptureResult | null;
 }
 
 // ── the recording ────────────────────────────────────────────────────────────────────────────────────────────────

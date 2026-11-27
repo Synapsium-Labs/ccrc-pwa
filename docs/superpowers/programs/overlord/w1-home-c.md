@@ -41,8 +41,9 @@ Every door the plan lists as "not on `main` yet" is on `main`. Each card is draw
 - **A census holds every Overlord refusal word to the spec's Table 11.6** (`single-definition/refusal-table.test.ts`; `codeOnly` is
   shrink-only). The forced rebind's new word could not land without a spec row, so the door answers the existing
   `stale-designation` (ruled call 1685; below).
-- **Main moved during the build** from `3fda0fc9b1` to `1f31f6133d`. The build absorbed no `main` before its first push. The one
-  merge of `main`, in fix round 1, is recorded under "Fix round 1" below.
+- **Main moved during the build** from `3fda0fc9b1` to `1f31f6133d`. The build absorbed no `main` before its first push. Two
+  merges of `main` came later (one in fix round 1 and one after the landing line's ejection), and both are recorded under
+  "Fix round 2" below.
 
 ## What was built
 
@@ -247,7 +248,7 @@ hand, seen red, and taken out (`settings-account-facts`, 14 cases).
 - **The latch follows the hold (review 4065 F1).** The latch now holds the held-at of the hold that answer ended, and the control
   is keyed by it. A hold that returns with another held-at is a new hold: its line and a live Clear, with none of the old answer.
   Red first: the case that clears a lane and re-reads it held again (no Clear was drawn). Mutant, the control's key and the latch's
-  reset both taken out: red, 1 of 14. Mutant, the reset alone taken out: red, 1 of 14, in the case where the returned hold goes in
+  reset both taken out: red, 2 of 14 (the "returns after a clear is a new hold" and "supersedes the old answer" cases). Mutant, the reset alone taken out: red, 1 of 14, in the case where the returned hold goes in
   a re-read another row's Clear triggers (the old latch drew a live Clear with no hold line).
 - **The latch only on an answer that ended the hold (review 4065 F2).** Clear now reports `cleared`, `gone` or `refused`, and the
   row latches only on the first two. Red first: the refused-Clear case (a live Clear stayed with no hold line). Mutant, the latch on
@@ -258,7 +259,8 @@ hand, seen red, and taken out (`settings-account-facts`, 14 cases).
 
 **The landing line's ejection (after acceptance, call 1740).** The line ejected the PR for a conflict with `main` at `276555102d`
 in `pwa/test/command-registry.test.ts`: reader mode's `toggle-reader-mode` and this PR's `go-settings-overlord` were each added in
-the same three places. The one merge of exactly that commit keeps both: both ids in the registry's list, both read apart from the
+two of the conflict's three places (the registry's id list and the ranked-table filter; the third was this PR's Measure
+highlighting line against main's rewording of the "reader" rank line). The one merge of exactly that commit keeps both: both ids in the registry's list, both read apart from the
 ranked table, Go to Measure highlighting still right after Settings' seventh page, and "reader" ranking reader mode before the
 reader lab. Its item screen had still not been rebuilt, so Clear stays after History.
 

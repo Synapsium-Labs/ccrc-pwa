@@ -232,6 +232,19 @@ export class Tmux {
     const r = await this.run('tmux', ['capture-pane', '-t', tmuxTarget(id), '-p', '-e']);
     return r.code === 0 ? r.stdout : null;
   }
+  /** The ACTIVE pane's cursor, `[column, row]`, the pane `capture-pane` reads (F7's rule: the active row, never the
+   *  first): `null` when the listing did not run, failed, or names no active pane with two numbers. Through
+   *  `list-panes`, a granted verb, so the exec whitelist gains none (Desktop polish wave 187: the box frames recipe's
+   *  frame records where the cursor stood). */
+  async cursor(id: string): Promise<[number, number] | null> {
+    const r = await this.run('tmux', ['list-panes', '-t', tmuxTarget(id), '-F', '#{pane_active} #{cursor_x} #{cursor_y}']);
+    if (r.code !== 0) return null;
+    for (const line of r.stdout.split('\n')) {
+      const m = /^1 (\d+) (\d+)\s*$/.exec(line);
+      if (m !== null) return [Number(m[1]), Number(m[2])];
+    }
+    return null;
+  }
   /**
    * ONE MEASUREMENT OF THE PANE the drawer is about to read, and the four
    * answers it can honestly give (spec §5.2).

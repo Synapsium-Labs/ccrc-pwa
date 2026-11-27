@@ -104,7 +104,10 @@ The plan's own slugs stand as written (questions 1 to 14, and `strand-cause-from
   restart under way is not added while renewing, for any unproven generation, because no producer tells a renewal the lane
   started from a crash's fresh mint, and counting on an unproven generation would read a real renewal `dead` and push. So in a
   crash loop whose previous generation never proved, a third restart reads `restarting` or `renewing` until its generation
-  mints, then `dead`: late by the mint window, never `ready`, one push. A lane case pins those words.
+  mints, then `dead`: late by the mint window, never `ready`, one push. A lane case pins those words. The overlap is wider
+  than that: a body that stays down, or goes gone, over an `active` generation that never proved reads `renewing` with no
+  end, because `active` has no state deadline and only a mint or a retire ends it, and `renewing` never pushes (review
+  3952, F5). A gone body over a proven generation does go `dead`.
   With the body up and the live generation unreadable, a down sighting inside the hour counts as under way, so two completed
   restarts read `dead` (doubt lowers, the ruled direction), as the down half already did; a case pins each half.
 - **`readiness-ready-clock-per-binding`** (fix round 1, F10, ruled). The plan's `readySince` is the newest `ready` row of any
@@ -171,7 +174,7 @@ Each fix ships with a case that is red without it, measured by putting the old l
 | F4 | a pass token checked after the awaits | the check disabled: an overtaken pass held at the turn marker, and at the hook state, writes a row |
 | F5 | the item-state lists imported from `shared/ledgers.ts`; the unused closed-by list removed | NO-15, retargeted to the imported list, killed. The item kinds' two spellings, the shared list and the migration's `CHECK` text, are held by round 2's A4 case, which raises every kind of `READINESS_ITEM_KINDS` on a migrated database (a fourth kind in the shared map alone is red); the level map is held by its `Record` type |
 | F6 | (tests only) down, up, down; dialog, none, dialog; nobody designated between sightings | each reset and each `clear` deleted alone |
-| F7 | (tests only) `overlord-readiness-wiring.test.ts`: the sweep passes the tick on a listed tick and a failed listing; pins read through the parser (not text) of the root's assignment, the watcher's two calls and the sweep's lane name; the watchers quieted | measured in round 2 (A1), each line deleted in turn and restored: the root's assignment, 1 red; the failed-listing call, 1 red; the listed call, 1 red; the sweep's lane name, 3 red |
+| F7 | (tests only) `overlord-readiness-wiring.test.ts`: the sweep passes the tick on a listed tick and a failed listing; pins read through the parser (not text) of the root's assignment, the watcher's two calls and the sweep's lane name; the watchers quieted | measured in round 2 (A1), each line deleted in turn and restored: the root's assignment, 1 red; the failed-listing call, 1 red; the listed call, 1 red; the sweep's lane name renamed to one with no lane row, 3 red (deleting the whole sweep line reads 4) |
 | F8 | `readinessCountOf` in a mutation set, floor 1 | CO-1 to CO-4, all killed |
 | F9 | the prune keeps an open dead episode's first row by the break rule, whatever the newest word | the keep list put back to the newest row's episode |
 | F10 | the ready clock is the current binding's (slug `readiness-ready-clock-per-binding`) | FA-24, and the decider case over a predecessor's ready row |

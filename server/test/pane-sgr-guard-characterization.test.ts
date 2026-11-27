@@ -68,11 +68,16 @@ describe('ARCH-63: one SGR stripper, no guard copy', () => {
     }
     expect('/\\x1b\\[0;(?:1;)?2(?:;[0-9;]*)?m/g').not.toMatch(STRIPPER_RE);
   });
-  it('only pane/dialog.ts declares an SGR stripper, across server/src, shared, pwa/src and agent/src', () => {
+  // One holder beside it, for a recorded reason (Desktop polish wave 187): the box frames shape rule's own SGR definition,
+  // `shared/framesResult.ts#stripFrameSgr`. It is the boundary of what may leave the test box, it runs in the test box's
+  // agent as well as on the server (an L0 file cannot import `server/src`), and it takes the colon sub-parameter form too.
+  // Every box frames file strips through it, so the shared kernel holds one copy.
+  const LEGITIMATELY_DIFFERENT = ['shared/framesResult.ts'];
+  it('only pane/dialog.ts declares an SGR stripper, across server/src, shared, pwa/src and agent/src, beside the box frames rule', () => {
     const files = walkSrc({ roots: ['server/src', 'shared', 'pwa/src', 'agent/src'], min: 400 });
     const hits = files.filter((f) => f !== 'server/src/pane/dialog.ts')
       .filter((f) => STRIPPER_RE.test(readFileSync(path.join(REPO, f), 'utf8')));
-    expect(hits).toEqual([]);
+    expect(hits).toEqual(LEGITIMATELY_DIFFERENT);
   });
   it('no former site keeps an SGR binding of its own', () => {
     for (const rel of ['inject/send.ts', 'sessionws.ts', 'watch.ts', 'transcript/parse.ts']) {

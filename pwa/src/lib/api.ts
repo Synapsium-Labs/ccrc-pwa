@@ -56,6 +56,9 @@ import type { DesignateBody, DesignationView, OverlordModelClass, RebindSaw } fr
 import type { PoolSet } from '../../../shared/poolset';
 import type { LadderWire, NarrowingState, Rung } from '../../../shared/overlord-ladder';
 import type { ReadinessWire } from '../../../shared/overlord-readiness';
+import {
+  readChatEarlierAnswer, readChatSendAnswer, readChatThreadAnswer, type ChatEarlierAnswer, type ChatSendAnswer, type ChatThreadAnswer, type GenerationKey,
+} from '../../../shared/overlordChat';
 import type { PortfolioView, RankWrite } from '../../../shared/portfolio';
 import type { PoolRunwayWire } from '../../../shared/loadLines';
 import type { EpicView, HierarchyAnswer, HierarchyProjectRow, MigrationView, PlanView, WorkAnswer } from '../../../shared/plan';
@@ -228,6 +231,12 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
 
   const sid = (id: string): string => `/api/sessions/${encodeURIComponent(id)}`;
 
+  /** A call whose every answer is read (the Overlord chat's three): a 2xx and a refusal each go to `read` with its status and body,
+   *  through the one funnel (a 401 still raises the login screen); only a request with no answer is `none`. */
+  const readAnswer = async <T>(path: string, init: RequestInit | undefined, read: (status: number, body: unknown) => T, none: T): Promise<T> => {
+    try { const res = await request(path, init); return read(res.status, await res.json().catch(() => null)); } catch (err) { return err instanceof ApiError ? read(err.status, err.body) : none; }
+  };
+
   /** A worktree door's POST (delegation broker wave 5, PR10). A 2xx is read by `readDoorAnswer` (`postJsonOr`: a body that
    *  is not JSON reads `unreadable`, never a thrown parse). A failed request is a door's ANSWER (`readDoorRefusal`, review
    *  1623 F2) in four parts: (1) a door word only at its own status; (2) a word the route vocabulary names that is no door
@@ -379,6 +388,14 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     setRenewalBackstop: (body: { readonly hour: number; readonly zone: string }) => postJson<unknown>('/api/continuity/renewal-backstop', body),
     accountHolds: () => getJsonOrAbsent<unknown>('/api/continuity/account-holds'),
     clearAccountHold: (lane: string) => postJson<unknown>(`/api/continuity/account-holds/${encodeURIComponent(lane)}/clear`),
+    /** The Overlord chat's three calls (W1 chat), the port `overlord/useOverlordChat.ts` declares: the thread, an earlier
+     *  generation's page and a send to the prompt route. Each is read by its L0 reader, none throws on a refusal, and a request
+     *  with no answer is `no-answer`, so a send's draft and key are kept. */
+    overlordChat: () => readAnswer<ChatThreadAnswer>('/api/overlord/chat', undefined, readChatThreadAnswer, { kind: 'no-answer' }),
+    overlordChatEarlier: (gen: GenerationKey, around: string | null) => readAnswer<ChatEarlierAnswer | 'off-shape' | 'no-answer'>(`/api/overlord/chat/earlier?term=${gen.term}&n=${gen.n}`
+      + (around === null ? '' : `&around=${encodeURIComponent(around)}`), undefined, (_status, body) => readChatEarlierAnswer(body), 'no-answer'),
+    overlordSend: (id: string, text: string, o: { readonly offRecord: boolean; readonly sendKey: string; readonly overlordTerm: number }) =>
+      readAnswer<ChatSendAnswer>(`${sid(id)}/prompt`, jsonInit({ text, offRecord: o.offRecord, sendKey: o.sendKey, overlordTerm: o.overlordTerm }), readChatSendAnswer, { kind: 'no-answer' }),
     /** The portfolio strip and the capacity line (home B, Task 6): `absent` on a server without the read. */
     portfolio: () => getJsonOrAbsent<{ readonly portfolio: PortfolioView }>('/api/portfolio'),
     rankPortfolio: (body: RankWrite) => postJson<{ readonly revision: number; readonly portfolio: PortfolioView }>('/api/portfolio/rank', body),
