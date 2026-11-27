@@ -5909,15 +5909,16 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   read as `ccrc.service` receives it; on a box whose `ccrc.service` can take its bind or a sign-in key from anywhere
   but `ccrc.env` and the exposure file; on a box whose installed `ccrc.service` is not the installer's file byte for
   byte, is not the file systemd loaded, or has not been reloaded since it changed; and on a symlinked `ccrc.env`.
-  `on` alone refuses a loopback bind other than 127.0.0.1, any of its four keys holding a value it does not write, and
-  a passphrase that is missing, unusable or cannot be checked; it otherwise writes `CCRC_AUTH=on`,
-  `CCRC_RP_ID=localhost`, `CCRC_ORIGIN=http://localhost:<port>` and `CCRC_COOKIE_INSECURE=on` into `ccrc.env` (the
-  cookie line because WebKit drops a Secure cookie on plain-http localhost, measured). `off` alone refuses a
-  `CCRC_ORIGIN` or `CCRC_RP_ID` holding a value it did not write (armed by hand for another address), and otherwise
-  removes exactly those lines. Either way it restarts `ccrc.service` and proves the mode, restoring the file if the
-  proof fails. `ccd/ccrc` grows by the verb past the per-PR limit, waived as `growth-waivers/D-9105-ccd-ccrc.json`:
-  `passwd`, `expose` and `auth` are one family kept inline together. Measurements, guards, residuals and mutants in
-  `programs/desktop-polish/auth-on-verb.md`.
+  `on` alone refuses a loopback bind other than 127.0.0.1 or `localhost`; any of `CCRC_RP_ID`, `CCRC_ORIGIN` and
+  `CCRC_COOKIE_INSECURE` holding a value it does not write (a `CCRC_AUTH` it did not write is replaced, not refused); a
+  `CCRC_SESSIONS_PATH` line its reader cannot decide; and a passphrase that is missing, unusable or cannot be checked.
+  It otherwise writes `CCRC_AUTH=on`, `CCRC_RP_ID=localhost`, `CCRC_ORIGIN=http://localhost:<port>` and
+  `CCRC_COOKIE_INSECURE=on` into `ccrc.env` (the cookie line because WebKit drops a Secure cookie on plain-http
+  localhost, measured). `off` alone refuses a `CCRC_ORIGIN` or `CCRC_RP_ID` holding a value it did not write (armed by
+  hand for another address), and otherwise removes exactly those lines. Either way it restarts `ccrc.service` and
+  proves the mode, restoring the file if the proof fails. `ccd/ccrc` grows by the verb past the per-PR limit, waived as
+  `growth-waivers/D-9105-ccd-ccrc.json`: `passwd`, `expose` and `auth` are one family kept inline together.
+  Measurements, guards, residuals and mutants in `programs/desktop-polish/auth-on-verb.md`.
 - **D-9118** — `linearity-median-of-four`: desktop-polish wave 183, issued on 2026-11-26. The four linearity rows of
   `server/test/session-hook-prune-deny.test.ts` measure four rounds instead of two, reverse which program runs first
   on alternate rounds, and read the current program's ratio as the original's plus the median of the per-round

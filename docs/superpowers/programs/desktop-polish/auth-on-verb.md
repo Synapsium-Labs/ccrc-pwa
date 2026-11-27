@@ -779,9 +779,14 @@ its wave 190 rows) through `ccrc test`, and was put back from HEAD and compared 
 | R1 (fix round 1) | a read with no `SourcePath` line accepted | "refuses as not measured a read that prints no SourcePath line" |
 | R2a (fix round 1) | the recorded role not named in the way on | "names the recorded role in the install that puts a hand-edited unit back" |
 | R2b (fix round 1) | the no-role words dropped from the way on | the five edit cases |
+| CL1 (fix round 2) | the role clamp removed: any non-empty role printed | the four "never prints a recorded role the install does not take" cases |
+| CL2 (fix round 2) | the unknown-role arm prints the content | the same four cases |
+| M1 (fix round 2, review 4049's) | the no-`SourcePath` arm moved above the `FragmentPath` compare | "refuses a fragment loaded elsewhere for that, even when the read prints no SourcePath line" |
+| R3 (fix round 2) | the no-`SourcePath` arm's old way on (a reload) | "refuses as not measured a read that prints no SourcePath line" |
 
-The first 16 rows are this round's build: all 16 are red on the verb's suite, and A4 on doctor's too. The last seven are
-fix round 1's (section 12), each red by its own case on the 106-case suite: 23 rows, all red.
+The first 16 rows are this round's build: all 16 are red on the verb's suite, and A4 on doctor's too. The next seven
+are fix round 1's (section 12), each red by its own case on the 106-case suite, and the last four fix round 2's
+(section 13), each red by its own case on the 111-case suite: 27 rows, all red.
 
 ### 11.2 Evidence
 
@@ -892,3 +897,53 @@ is claimed by this run. Each change went to its holder first as a unified diff, 
 its holder's yes: `ccd/ccrc` against this branch's head `e26dc177a1` (it also applies to the branch merged with main
 `00b6f5e230`), yes in mail 39164; the plan's D-9105 entry against main `00b6f5e230`, yes in mail 39146. No holder's
 lines are shared.
+
+## 13. Wave 190 fix round 2 (review 4049)
+
+Review 4049 found one thing that had to be fixed before main, from the coordinator's own ruling R2 of round 1: the
+recorded role was printed raw. The coordinator ruled four items (R1 to R4); round 3 is the last the cap allows. What
+must not move did not, and in `ccd/ccrc` this round changes one printed sentence's source (R1) and one arm's way on
+(R3), nothing else.
+
+1. **R1: the printed role is clamped.** The verb printed `CCRC_ROLE` as `_box_env_value` read it: an unknown word,
+   a `;` with more shell after it, an escape byte and a 3000-character value all reached a line a person is told to
+   copy, against the verb's own rule that no file value is printed. `_auth_unit_cmp` now prints the role only when it
+   is `server` or `both`, matched whole, in the form the other readers of the recorded role use
+   (`case "$role" in server|fleet|both) ;; *) role="" ;; esac`; there is no helper, and `fleet` has refused already).
+   An empty role keeps its words. Any other content is never printed: the way on prints `--role <role>` and says the
+   role `ccrc.env` records is not one `ccrc install` takes, and that a bare install takes role `both`. Five cases
+   assert the whole printed line: `server` kept, and an unknown word, a shell metacharacter, a control character and a
+   3000-character value, none of which appears in the output.
+2. **R2: the arm's place is pinned.** A `FragmentPath` elsewhere with no `SourcePath` line refuses with the
+   `FragmentPath` words, so the no-line arm stays after the compare (review 4049's mutant M1 is red).
+3. **R3: a true way on.** A reload cannot make a manager print a property it leaves out, so the no-line arm's way on
+   now says this systemd does not answer `SourcePath`, so the verb cannot prove the unit on this box, and the keys are
+   set by hand (the README's "The session gate"). Section 12's item 1 described the reload advice of round 1.
+4. **R4: the plan's D-9105 entry, against the code.** The foreign-value refusal covers three keys (`CCRC_RP_ID`,
+   `CCRC_ORIGIN`, `CCRC_COOKIE_INSECURE`), and a `CCRC_AUTH` it did not write is replaced, not refused; the loopback
+   refusal lets `localhost` through as well as 127.0.0.1; and `on`'s refusal of a `CCRC_SESSIONS_PATH` line its reader
+   cannot decide joins `on`'s own list.
+
+### 13.1 Red first, and the mutants
+
+The new and changed cases were written first and run against `d43df54b86`'s `ccd/ccrc` through `ccrc test`. Of the
+suite's 111 cases, 5 were red there: the four role cases the install does not take, and the no-line case's new way on.
+The `server` case's whole-line assertion and the R2 pin were green there, because they pin what the code already did;
+mutants CL1, CL2 and M1 hold them. The four mutants are the last four rows of section 11.1's table, each made on the
+fix's code, run against the whole verb suite, and then the file was put back from HEAD and compared with it.
+
+### 13.2 Where CI prints the growth line
+
+The growth check runs in whichever server shard the fast plan packs it into, and prints its table into that job's log.
+On round 1's head (`d43df54b86`, run 45944539699) it was the job `server 6/12`:
+`ccd/ccrc base 14871 head 14897 delta +26`. The shell lint ratchet ran in `server 12/12` there.
+
+### 13.3 Evidence and packets
+
+Through `ccrc test`, one file at a time, on the fix's code: the verb's suite 111 of 111, doctor core-auth 73 (8
+skipped), the offered-commands guard 12, expose 66 (3 skipped). Growth, armed: the clamp's `case` replaces one code line
+with two, so `ccd/ccrc` stands at about +27, under the per-PR limit; no waiver. The exact head's CI job prints the
+check's own line. `ccd/ccrc` went to its holder (the Docs reader's artifacts run) against `d43df54b86`, yes in mail
+39281; the plan's D-9105 entry went to its holder (the hook cost carries run) against `d43df54b86`, yes in mail 39260.
+Each was applied byte for byte. This round absorbs nothing: the coordinator's rule for it is that a conflicting probe
+is reported, not merged.
