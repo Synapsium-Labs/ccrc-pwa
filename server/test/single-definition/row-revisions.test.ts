@@ -3,7 +3,8 @@
 // what an answer acts on moves (ruled F8): each write that changes it raises the revision by one in its own `SET`, and a
 // bookkeeping write (a reach stamp, the correction flag, `neededBy`, the retention wipe, the in-flight hold and its
 // rollback, ruled F14) never names it. `REVISION_CLASSES` is the plan's Table R1, and it is CLOSED: a new UPDATE or upsert
-// of either table is red here until its pull request classifies it, and a row no statement matches is red as stale.
+// of either table is red here until its pull request classifies it, and a row no statement matches is red as stale. W2's
+// request record (plan w2-requests.md RQ7) adds `overlord_requests` under the same rule: its move writer alone raises.
 //
 // It reads the one scan `writers-map.test.ts#tableWriters` reads (`sqlStatements.ts#sqlWrites`), so the two censuses
 // cannot disagree about which functions write these tables.
@@ -18,9 +19,14 @@ type RevisionClass = 'raises' | 'bookkeeping';
 const STORE = 'server/src/coord/store.ts#CoordStore.';
 const LEDGERS = 'server/src/coord/ledgersStore.ts#';
 const REACH = 'server/src/coord/pushOutboxStore.ts#stampReach';
+const REQUESTS = 'server/src/coord/overlordRequestStore.ts#';
+/** The revised tables: the asks and items of Table R1, and the request record's requests (W2 request record A, RQ7). */
+const REVISED_TABLES = ['asks', 'operator_items', 'overlord_requests'] as const;
+type RevisedTable = (typeof REVISED_TABLES)[number];
+const isRevised = (t: string): t is RevisedTable => (REVISED_TABLES as readonly string[]).includes(t);
 /** Table R1: every UPDATE (and upsert) of `asks` and `operator_items`, by writer and table (`stampReach` has one row per
- *  table, its two arms). */
-const REVISION_CLASSES: readonly { table: 'asks' | 'operator_items'; writer: string; cls: RevisionClass }[] = [
+ *  table, its two arms); and every UPDATE of `overlord_requests`, where the move writer alone raises (RQ7). */
+const REVISION_CLASSES: readonly { table: RevisedTable; writer: string; cls: RevisionClass }[] = [
   { table: 'asks', writer: `${STORE}takeAskForAnswer`, cls: 'bookkeeping' },
   { table: 'asks', writer: `${STORE}untakeAsk`, cls: 'bookkeeping' },
   { table: 'asks', writer: `${STORE}settleAsk`, cls: 'raises' },
@@ -34,6 +40,8 @@ const REVISION_CLASSES: readonly { table: 'asks' | 'operator_items'; writer: str
   { table: 'operator_items', writer: `${LEDGERS}moveItemInTx`, cls: 'raises' },
   { table: 'operator_items', writer: `${LEDGERS}setBlocking`, cls: 'bookkeeping' },
   { table: 'operator_items', writer: REACH, cls: 'bookkeeping' },
+  { table: 'overlord_requests', writer: `${REQUESTS}applyRequestMoveInTx`, cls: 'raises' },
+  { table: 'overlord_requests', writer: `${REQUESTS}setParentClockInTx`, cls: 'bookkeeping' },
 ];
 
 /** The one raise, and the re-stamp's conditional raise (question 2: only when `askAt` moves), whitespace folded. */
@@ -88,7 +96,7 @@ const revisionProblems = (writes: readonly SqlWrite[], classes: typeof REVISION_
   const problems: string[] = [];
   const covered = new Set<string>();
   for (const w of writes) {
-    if (w.table !== 'asks' && w.table !== 'operator_items') continue;
+    if (!isRevised(w.table)) continue;
     const sql = fold(w.sql);
     const shape = shapeOf(sql, w.table);
     if (shape.kind === 'replace') {
@@ -127,10 +135,10 @@ const revisionProblems = (writes: readonly SqlWrite[], classes: typeof REVISION_
 };
 
 let scanned: SqlWrite[] | undefined;
-const writesOf = (): SqlWrite[] => (scanned ??= sqlWrites(ALL.filter((f) => !rel(f).startsWith('pwa/')), ['asks', 'operator_items']))
+const writesOf = (): SqlWrite[] => (scanned ??= sqlWrites(ALL.filter((f) => !rel(f).startsWith('pwa/')), [...REVISED_TABLES]))
   .map((w) => ({ ...w }));
 
-describe('row revisions: every write of asks and operator_items is classified, raises or bookkeeping (Overlord W2)', () => {
+describe('row revisions: every write of asks, operator_items and overlord_requests is classified, raises or bookkeeping (Overlord W2)', () => {
   it('the census holds: each raise once in its own SET, no bookkeeping write names it, no insert names it, no stale row', () => {
     expect(revisionProblems(writesOf(), REVISION_CLASSES)).toEqual([]);
   });
@@ -176,6 +184,12 @@ describe('row revisions: every write of asks and operator_items is classified, r
       /insertAsk: an INSERT names revision/],
     ['a stale row', () => real().filter((w) => !(w.writer === `${LEDGERS}setBlocking` && w.table === 'operator_items')),
       /stale REVISION_CLASSES row: .*setBlocking on operator_items/],
+    ['a raise missing from the request move writer', () => swap(real(), `${REQUESTS}applyRequestMoveInTx`, 'overlord_requests',
+      (s) => s.replace(/,\s*revision = revision \+ 1/, '')), /applyRequestMoveInTx raises on overlord_requests/],
+    ['a raise in the parent clock stamp', () => swap(real(), `${REQUESTS}setParentClockInTx`, 'overlord_requests',
+      (s) => s.replace(' WHERE', ', revision = revision + 1 WHERE')), /setParentClockInTx is bookkeeping on overlord_requests/],
+    ['an unclassified UPDATE of overlord_requests', () => [...real(), { table: 'overlord_requests', writer: 'server/src/x.ts#planted',
+      sql: "UPDATE overlord_requests SET state = 'done' WHERE id = ?" }], /planted writes overlord_requests and has no class/],
   ];
   it.each(CONTROLS)('CONTROL: %s is red', (_name, plant, why) => {
     const problems = revisionProblems(plant(), REVISION_CLASSES);

@@ -321,7 +321,8 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'continuity_act_keys', 'approval_census', 'approval_parks', 'overlord_fence_refusals',
   'continuity_hook_reports', 'continuity_witness_checks', 'coordinator_state', 'overlord_sequence', 'overlord_sequence_pruned', 'limit_samples',
   'programme_events', 'programme_picks', 'continuity_timer_refusals',
-  'overlord_invariant_findings', 'overlord_readiness', 'overlord_readiness_items', 'overlord_account_holds'] as const;
+  'overlord_invariant_findings', 'overlord_readiness', 'overlord_readiness_items', 'overlord_account_holds',
+  'overlord_requests', 'overlord_request_messages', 'overlord_request_moves'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique, read off the one scan (`sqlStatements.ts#sqlWrites`). `tables`
  *  is the table list to read: coord.db's by default, and the private store's for its own describe (Overlord W1 private store A). */
@@ -466,6 +467,12 @@ describe(TABLES_PIN, () => {
       // hold and the operator door's clear. The hold has two callers behind one decider (renewal readings G): the generations
       // pass, and the designation store's `failPending` for a first start that failed the launch profile check.
       overlord_account_holds: ['clearAccountHold', 'holdAccount'].map((f) => `server/src/continuity/accountHolds.ts#${f}`),
+      // The Overlord's request record (W2 request record A, §5.1): one module owns the three tables. The insert writes the row; the
+      // move writer moves it with its one revision raise; the parent's clock is the one bookkeeping writer (F2). The citations are
+      // the insert's alone, and the move rows `appendMove`'s alone, for both appliers (F7).
+      overlord_requests: ['applyRequestInsertInTx', 'applyRequestMoveInTx', 'setParentClockInTx'].map((f) => `server/src/coord/overlordRequestStore.ts#${f}`),
+      overlord_request_messages: ['server/src/coord/overlordRequestStore.ts#applyRequestInsertInTx'],
+      overlord_request_moves: ['server/src/coord/overlordRequestStore.ts#appendMove'],
       // The daily backstop (Overlord W1 renewal readings A): its seed row, and its door's one writer.
       renewal_backstop_settings: ['server/src/continuity/continuityStore.ts#setBackstop', 'server/src/coord/schema.ts#(module)'],
       // What a programme says is left (Overlord W2 remaining work A): one writer of both tables, reached only from the

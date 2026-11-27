@@ -4771,6 +4771,38 @@ export const MIGRATIONS: readonly string[] = [
     heldAt INTEGER NOT NULL, clearedAt INTEGER, clearedBy TEXT
   );
   `,
+
+  // ── 134: user_version 133 -> 134 ──────────────────────────────────────────
+  // The Overlord's request record (spec §5.1, C9, H7, H22; plan `docs/superpowers/plans/2026-11-16-overlord-w2/w2-requests.md`
+  // Task A3): `overlord_requests`, one row per request, its cited operator messages by id and hash (never their words), and one
+  // append-only row per move. ONE owner of the three tables' SQL, `coord/overlordRequestStore.ts`. No CHECK holds a word or a close
+  // note: `shared/overlordRequests.ts` governs every word. The id is issued by `nextRequestId`, never AUTOINCREMENT. The partial
+  // unique index makes one message found one root request. NEW TABLES only: an older build takes rule 3 and never names them.
+  // The slot is the next free one by position on `main`; whoever lands second renumbers. RE-MEASURE the slot before merge (it
+  // must print 133 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE overlord_requests (
+    id INTEGER PRIMARY KEY, origin TEXT NOT NULL, summary TEXT NOT NULL, owner TEXT, parentRequestId INTEGER,
+    consulted TEXT NOT NULL DEFAULT '[]', state TEXT NOT NULL, doneTest TEXT, expectedPaths TEXT NOT NULL DEFAULT '[]',
+    dependsOn TEXT, takenFrom TEXT, openedAt INTEGER NOT NULL, lastNewsAt INTEGER, news TEXT, followUpAt INTEGER,
+    nudges INTEGER NOT NULL DEFAULT 0, counters TEXT NOT NULL DEFAULT '[]', closedAt INTEGER, closeNote TEXT,
+    revision INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX overlord_requests_by_state ON overlord_requests (state);
+  CREATE INDEX overlord_requests_by_parent ON overlord_requests (parentRequestId);
+  CREATE TABLE overlord_request_messages (
+    requestId INTEGER NOT NULL, messageId INTEGER NOT NULL, sha256 TEXT NOT NULL, root INTEGER NOT NULL CHECK (root IN (0, 1)),
+    at INTEGER NOT NULL, PRIMARY KEY (requestId, messageId)
+  );
+  CREATE UNIQUE INDEX overlord_request_messages_one_root ON overlord_request_messages (messageId) WHERE root = 1;
+  CREATE TABLE overlord_request_moves (
+    id INTEGER PRIMARY KEY, requestId INTEGER NOT NULL, move TEXT NOT NULL, actorKind TEXT NOT NULL, actor TEXT NOT NULL,
+    fromState TEXT, toState TEXT NOT NULL, reason TEXT, actId INTEGER, revision INTEGER NOT NULL, at INTEGER NOT NULL
+  );
+  CREATE INDEX overlord_request_moves_by_request ON overlord_request_moves (requestId, id);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
