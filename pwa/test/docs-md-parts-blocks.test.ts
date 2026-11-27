@@ -583,6 +583,45 @@ describe('windows, comments and the cut as a function (review of Step 0b2)', { t
     expect(Math.max(...asked), 'the window grew to hold the comment').toBeGreaterThan(utf8Bytes(comment));
   });
 
+  it('md parts: the open-comment scan is linear on a hostile window', () => {
+    // Security review of Step 0b2: the scan runs on the console's main thread with no budget, over bytes a hostile document
+    // chooses. The work is bounded by the probe's count of characters examined, never by wall time. (a) One line of 200 000
+    // characters of spaces and list markers, which fails to be a container prefix at its end (the old prefix test backtracked
+    // exponentially over it); (b) one line of 50 000 `<!--` with no closer (the old scan walked back to the line start for each).
+    // Each window is cut short by the next, longer line, so it is not the last.
+    const hostile: [string, string, boolean][] = [
+      ['(b) 50 000 comment openers on one line, after a letter (none is at a line start)', 'x' + '<!--'.repeat(50000), false],
+      ['(b0) 50 000 comment openers on one line', '<!--'.repeat(50000), true],
+      ['(a) spaces and markers, then a letter, then an opener', '-   '.repeat(50000) + 'x<!--', true],
+      ['(a2) the same without the letter, and quote marks', '> -  '.repeat(40000) + '<!--', true],
+      ['(c) a hundred thousand lines that each hold a non-prefix and an opener', 'x<!--\n'.repeat(100000), false],
+    ];
+    for (const [name, line, closed] of hostile) {
+      const text = line + '\n' + 'filler line of text\n'.repeat(120000);
+      const win = blockWindow(text, 0, 1 << 20)!;
+      expect(win.toEnd, name).toBe(false);
+      const probe = { chars: 0 };
+      const folded = foldBlockWindow(text, win, [{ from: 0, to: 1, kind: 'other' }, { from: 1, to: 2, kind: 'other' }], probe);
+      const size = win.end - win.from;
+      expect(probe.chars, `${name}: the scan is counted`).toBeGreaterThanOrEqual(line.length);
+      expect(probe.chars, `${name}: the work on a window of ${size} characters`).toBeLessThanOrEqual(16 * size);
+      // It fails closed: the hostile line holds an open comment as far as the window can tell, so nothing before it is confirmed.
+      if (closed) expect(folded.grow, name).toBe(true);
+    }
+  });
+
+  it('md parts: the tail check of a code-point cut is linear in a long run of white space before a fence marker', () => {
+    // A content line of `a`, 30 000 spaces and three backticks, cut inside the run: each step back over the run used to scan
+    // forward over it again.
+    const t = '```\na' + ' '.repeat(30000) + '```' + 'b'.repeat(20) + '\nafter\n```\n';
+    const probe = { chars: 0 };
+    const parts = splitMarkdownPartsAt(t, 400, [{ start: 0, end: t.length, kind: 'fence' }], null, probe).parts;
+    checkCover(t, parts, 400);
+    // Where no cut of the line is safe (inside the run every tail is white space and a marker) the unit is the line cutter's.
+    expect(probe.chars, 'work on one line of 30 000 spaces').toBeLessThanOrEqual(16 * t.length);
+    expect(probe.chars, 'the scans are counted').toBeGreaterThanOrEqual(t.length);
+  });
+
   it('md parts at blocks: a code-point tail never begins with spaces and a fence marker either (probe 3)', async () => {
     const line = 'a'.repeat(40) + '   ```';
     const t = '```\n' + line + '\n' + 'code after\n'.repeat(3) + '```\n\npara\n';

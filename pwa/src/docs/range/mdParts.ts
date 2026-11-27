@@ -516,26 +516,74 @@ export interface FoldedBlocks { readonly blocks: TextBlock[]; readonly next: num
 
 /** Whether the offset `off` is inside a block the library parsed as code (a fence, indented code), at any depth. */
 function inCode(blocks: readonly TextBlock[], off: number): boolean {
-  for (const b of blocks) {
-    if (off < b.start || off >= b.end) continue;
-    if (b.kind === 'fence' || b.kind === 'code') return true;
-    if (b.items !== undefined && inCode(b.items, off)) return true;
+  // The blocks are sorted and apart, so the one that holds `off` is found by bisection.
+  let lo = 0;
+  let hi = blocks.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const b = blocks[mid]!;
+    if (off < b.start) hi = mid - 1;
+    else if (off >= b.end) lo = mid + 1;
+    else return b.kind === 'fence' || b.kind === 'code' || (b.items !== undefined && inCode(b.items, off));
   }
   return false;
+}
+
+/** The longest prefix of a line (its quote marks, white space and list markers) that `openComment` reads; a longer one is not a
+ *  container prefix and the line is treated as an open comment (fail closed: the window is shortened). */
+const COMMENT_PREFIX_MAX = 256;
+/** The most lines holding a `<!--` that `openComment` examines in one window; past it the next such line is treated as open. */
+const COMMENT_LINES_MAX = 4096;
+
+/** Whether `s[from, to)` is only a container prefix: quote marks (`>`), spaces and tabs, and list markers (`-`, `*`, `+`, or one to
+ *  nine digits and `.` or `)`), each marker followed by a space or tab. One forward pass, no backtracking. */
+function containerPrefix(s: string, from: number, to: number): boolean {
+  let i = from;
+  while (i < to) {
+    const c = s.charCodeAt(i);
+    if (c === 32 || c === 9 || c === 62) { i += 1; continue; }
+    let j = i;
+    if (c === 45 || c === 42 || c === 43) j += 1;
+    else if (c >= 48 && c <= 57) {
+      while (j < to && j - i < 9 && s.charCodeAt(j) >= 48 && s.charCodeAt(j) <= 57) j += 1;
+      if (j < to && (s.charCodeAt(j) === 46 || s.charCodeAt(j) === 41)) j += 1;
+      else return false;
+    } else return false;
+    if (j < to && (s.charCodeAt(j) === 32 || s.charCodeAt(j) === 9)) i = j + 1;
+    else return false;
+  }
+  return true;
 }
 
 /** The start of the first line of a window that opens a block comment the window does not close, or -1. The library reads a
  *  `<!--` line as a comment only when a `-->` follows it in the same source (`blockComment` in its `allowlist.js` looks from
  *  that line to the source's end), so at a window's end such a line is paragraph text and the comment's inner lines are blocks
  *  that the whole document does not have. A line opens one when, after its quote marks, indentation and list markers, it starts
- *  with `<!--`, outside a block parsed as code, and no `-->` stands at or after it in the window. */
-function openComment(text: string, win: BlockWindow, all: readonly TextBlock[]): number {
-  const slice = text.slice(win.from, win.end);
+ *  with `<!--`, outside a block parsed as code, and no `-->` stands at or after it in the window. Linear in the window whatever its
+ *  bytes: one forward pass finds the openers and carries the line start along (no walk back), the prefix test is a scan with no
+ *  backtracking, only the first opener of a line is examined (a later one has `<!--` in its prefix), a prefix over
+ *  `COMMENT_PREFIX_MAX` characters and a window with over `COMMENT_LINES_MAX` such lines are read as an open comment (fail closed:
+ *  they shorten the window, which is safe). `probe` counts the characters examined. */
+function openComment(slice: string, from: number, all: readonly TextBlock[], probe: Probe | undefined): number {
+  if (probe !== undefined) probe.chars += slice.length;
   let i = slice.indexOf('<!--', slice.lastIndexOf('-->') + 1);
+  let p = 0; // how far the line start has been carried
+  let ls = 0; // the start of the line that holds `p`
+  let examined = -1; // the line start of the last line whose opener was examined
+  let lines = 0;
   while (i !== -1) {
-    let ls = i;
-    while (ls > 0 && slice.charCodeAt(ls - 1) !== 10 && slice.charCodeAt(ls - 1) !== 13) ls -= 1;
-    if (/^[ \t>]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+[ \t>]*)*$/.test(slice.slice(ls, i)) && !inCode(all, win.from + i)) return win.from + ls;
+    for (; p < i; p += 1) {
+      const c = slice.charCodeAt(p);
+      if (c === 10 || c === 13) ls = p + 1;
+    }
+    if (probe !== undefined) probe.chars += 1;
+    if (ls !== examined) {
+      examined = ls;
+      lines += 1;
+      if (lines > COMMENT_LINES_MAX || i - ls > COMMENT_PREFIX_MAX) return from + ls;
+      if (probe !== undefined) probe.chars += i - ls;
+      if (containerPrefix(slice, ls, i) && !inCode(all, from + i)) return from + ls;
+    }
     i = slice.indexOf('<!--', i + 1);
   }
   return -1;
@@ -545,7 +593,7 @@ function openComment(text: string, win: BlockWindow, all: readonly TextBlock[]):
  *  than the text's for a `shifted` one) become offsets, and every block but the last is confirmed unless the window reached the
  *  text's end: the last may run past the window, or be cut short by it. A window that ends inside a block comment confirms only
  *  the blocks before the block that holds the comment's opening line, and the next window starts at that block (`openComment`). */
-export function foldBlockWindow(text: string, win: BlockWindow, blocks: readonly MdBlock[]): FoldedBlocks {
+export function foldBlockWindow(text: string, win: BlockWindow, blocks: readonly MdBlock[], probe?: Probe): FoldedBlocks {
   const slice = text.slice(win.from, win.end);
   const starts = lineStartsIn(slice);
   const shift = win.shifted ? 1 : 0;
@@ -558,7 +606,7 @@ export function foldBlockWindow(text: string, win: BlockWindow, blocks: readonly
   if (win.toEnd) return { blocks: all, next: null, grow: false };
   // The last block is never confirmed (it may run past the window); neither is a block from the one that holds an open comment.
   let limit = all.length > 0 ? all[all.length - 1]!.start : -1;
-  const open = openComment(text, win, all);
+  const open = openComment(slice, win.from, all, probe);
   if (open >= 0) {
     const holding = all.find((b) => b.start <= open && open < b.end);
     const cap = holding !== undefined ? holding.start : open;
@@ -807,6 +855,7 @@ class BlockCutter {
   private startsWithFence(off: number): boolean {
     let i = off;
     while (this.text.charCodeAt(i) === 32 || this.text.charCodeAt(i) === 9) i += 1;
+    if (this.probe !== undefined) this.probe.chars += i - off + 1;
     return this.text.startsWith('```', i) || this.text.startsWith('~~~', i);
   }
 
@@ -883,7 +932,14 @@ class BlockCutter {
         let e = cp.off;
         // The tail must not read as a fence line: never start it with spaces or tabs and then three or more backticks or tildes (the
         // reopen's own prefix and these make a closing line), never split a surrogate pair.
-        while (e > pos && this.startsWithFence(e)) e -= e - 2 >= pos && isLowSurrogate(text.charCodeAt(e - 1)) && isHighSurrogate(text.charCodeAt(e - 2)) ? 2 : 1;
+        while (e > pos && this.startsWithFence(e)) {
+          // Inside a run of white space before the marker every cut is as bad: jump to the run's start (one walk back over it, so
+          // a long run is not scanned forward once per step), then step back past the character before it.
+          let s = e;
+          while (s > pos && (text.charCodeAt(s - 1) === 32 || text.charCodeAt(s - 1) === 9)) s -= 1;
+          if (this.probe !== undefined) this.probe.chars += e - s;
+          e = s < e ? s : e - (e - 2 >= pos && isLowSurrogate(text.charCodeAt(e - 1)) && isHighSurrogate(text.charCodeAt(e - 2)) ? 2 : 1);
+        }
         if (e <= pos) return null;
         push(e, '\n' + closeLine);
         restart(e, true);
