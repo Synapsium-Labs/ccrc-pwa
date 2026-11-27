@@ -21,6 +21,10 @@ import { exportWorktreeLabel, type ExportFact } from './export/provenance';
 import { capRows } from './mockup/census';
 import { downloadExport } from './objectUrls';
 
+/** What the sheet says of a document shown in parts (X2 P6.1 Step 0c; spec 4.3 "Markdown in parts"): the file is the part on screen.
+ *  Local to the sheet, as the Docs words file is held by another session; it moves there with the rest. */
+export const EXPORT_PART_NOTE = 'This exports the part on screen.';
+
 /** The builder's chunk, as the sheet calls it. A test injects one. */
 export interface ExportBuilder { readonly buildExport: (input: ExportInput) => Promise<ExportResult> }
 
@@ -155,6 +159,7 @@ export function ExportSheet(p: {
             <dl className="docs-export-facts">
               {ready.facts.map((f) => <div key={f.label}><dt>{f.label}</dt><dd>{f.value}</dd></div>)}
             </dl>
+            {request.part === true && <p className="docs-export-note">{EXPORT_PART_NOTE}</p>}
             {ready.result.notes.map((n, i) => <p key={i} className="docs-export-note">{n}</p>)}
             {ready.result.mockup !== null && <MockupLists facts={ready.result.mockup} />}
             {ready.confirming && (

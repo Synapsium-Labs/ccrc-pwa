@@ -4,4 +4,6 @@
 export const PARTS_WORDS = {
   /** The bar before the number of parts is known: `{k}` the part shown. */
   partOpen: 'Part {k}',
+  /** Under the bar of a document above 2 MiB: Changes since and Export read the part on screen, not the whole text (spec 4.3). */
+  actsOnPart: 'Changes since and Export act on this part.',
 } as const;

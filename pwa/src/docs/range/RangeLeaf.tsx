@@ -8,14 +8,14 @@ import { DocsAssetContext } from '../DocImage';
 import { ASSET_FAILED } from '../export/exportAssets';
 import { Button } from '@ccrc/ui';
 import {
-  DOCS_IMAGE_VIEW_MAX_PIXELS, DOCS_IMAGE_VIEW_MAX_SIDE, DOCS_RANGE_MAX_BYTES, DOCS_RASTER_TYPES, docsRangePinText, sniffRaster,
+  DOCS_IMAGE_VIEW_MAX_PIXELS, DOCS_IMAGE_VIEW_MAX_SIDE, DOCS_RANGE_MAX_BYTES, DOCS_RASTER_TYPES, sniffRaster,
   type DocContentClass, type DocPin,
 } from '../../../../shared/docs';
 import { DOCS_RANGE_TEXT, DOCS_VIEW_TEXT, failureSentence, fillSentence, mib, slotSentence } from '../docsText';
 import { declaredRaster } from '../failures';
 import { rasterObjectUrl, saveBytes } from '../objectUrls';
 import type { DocsVisit, RangeStale } from '../useDocsVisit';
-import { imageHeaderDims, imageViewVerdict, rangeVerdict } from './rangePolicy';
+import { imageHeaderDims, imageViewVerdict, rangeReadKey, rangeVerdict } from './rangePolicy';
 import { readRange, type RangeLoader, type RangeReadFailure, type RangeTarget } from './readRange';
 
 /** The words for a read that gave no bytes. */
@@ -55,12 +55,8 @@ type ReadState =
  *  its `fp`). */
 export interface RangeBytes { readonly bytes: Uint8Array<ArrayBuffer>; readonly digest: string }
 
-/** One read's identity: the project, the place, the range pin and the size. A leaf is keyed by it (`DocsLeaf` gives it as
- *  the element's `key`), so another doc is another instance with its own state, and a re-render that rebuilds an equal
- *  target object reads nothing again. */
-export function rangeReadKey(t: RangeTarget): string {
-  return [t.project, t.pin.section, t.pin.path, docsRangePinText(t.range), String(t.size)].join('\u0000');
-}
+/** `rangePolicy.ts`'s, which the visit reads too; still named here for the callers that import it from the leaf. */
+export { rangeReadKey };
 
 export function RangeLeaf(p: {
   readonly target: RangeTarget;
@@ -70,8 +66,10 @@ export function RangeLeaf(p: {
   /** The view of the bytes once read; absent, the class has no view above its cap and the leaf offers Download only. */
   readonly children?: (read: RangeBytes) => ReactNode;
   /** The visit, which owns the one automatic re-list (spec 4.3 item 1) for this page: a refused read is handed to it, and
-   *  it answers whether it re-listed, has no re-list left, or the word is none of its business. */
-  readonly visit: Pick<DocsVisit, 'rangeFailed' | 'rangeRead' | 'rangeRetry' | 'rangeRelists' | 'rangeWaiting'>;
+   *  it answers whether it re-listed, has no re-list left, or the word is none of its business. It also keeps what a finished
+   *  read gave (`rangeRead`) and drops it when a read of the page starts (`rangeDropped`: a visit that keeps no facts, as an
+   *  outside folder's, may omit it). */
+  readonly visit: Pick<DocsVisit, 'rangeFailed' | 'rangeRead' | 'rangeRetry' | 'rangeRelists' | 'rangeWaiting'> & Partial<Pick<DocsVisit, 'rangeDropped'>>;
   /** A leaf with no view reads and saves as it opens (a Download tap already made, as on a version page where the file
    *  route's refusal named the blob), instead of waiting for a tap of its own. The leaf is keyed by its read key, so this
    *  runs once per such answer. */
@@ -100,6 +98,8 @@ export function RangeLeaf(p: {
     ac.current = mine;
     pending.current = false;
     const { target, loader } = latest.current;
+    // A read starting is no read of the page: what an earlier one gave is dropped, so a Cancel or a failure leaves none.
+    latest.current.visit.rangeDropped?.();
     setState({ s: 'reading', done: 0, total: target.size });
     void readRange(loader, target, {
       signal: mine.signal,
@@ -118,7 +118,8 @@ export function RangeLeaf(p: {
         setState({ s: 'failed', why, stale });
         return;
       }
-      latest.current.visit.rangeRead();
+      // What the read gave, for the page's head: its identity, the bytes' digest and when its last frame was checked.
+      latest.current.visit.rangeRead({ key: rangeReadKey(target), digest: r.digest, readAt: Date.now() });
       if (save) saveBytes(latest.current.name, r.bytes);
       setState(save && !latest.current.hasView ? { s: 'idle' } : { s: 'done', bytes: r.bytes, digest: r.digest });
     }, () => { if (ac.current === mine) setState({ s: 'failed', why: { kind: 'threw' }, stale: 'other' }); });
@@ -128,6 +129,8 @@ export function RangeLeaf(p: {
   // aborts the read, whatever its state. While the visit still has a re-list pending for this page (a leaf that mounted
   // under it), the pin it was given is the stale one: it waits for that re-list instead of reading it.
   useEffect(() => {
+    // A leaf that opens holds no read yet, whatever an earlier visit of the page gave.
+    latest.current.visit.rangeDropped?.();
     if (verdict !== 'over-ceiling' && (hasView || latest.current.saveOnOpen)) {
       if (latest.current.visit.rangeWaiting) {
         pending.current = true;

@@ -8,6 +8,7 @@
 //   - `gate`: the render gate, waiting for Format anyway or Show as text;
 //   - `text`: a text leaf's text and the grammar its extension matched, or `null` (`TextBody`);
 //   - `reader`: the reader frame shows the leaf (refinement (a));
+//   - `none`: the leaf shows a note and no text, and no body will come (a text above 2 MiB that is not UTF-8): no Export;
 //   - `mockup`: the mockup viewer's attempt, from the moment it has a plan: the page text it parsed, its inert Document
 //     (Export CLONES it and never parses again) and the attempt's plan with a promise of what its load came to and `now`,
 //     its load as it stands (completion plan Task 9; review 2361 F2). The viewer publishes `plain` for a page the pre-scan
@@ -18,7 +19,7 @@
 // composes them (refinement (h)).
 //
 // Ring L4 (a hook).
-import { createContext, useContext, useEffect } from 'react';
+import { createContext, createElement, useContext, useEffect, useMemo, type ReactNode } from 'react';
 import type { Element as HastElement, Root as HastRoot } from 'hast';
 import type { DocLinkContextValue } from './DocLink';
 import type { DetachedUrls } from './docsLinks';
@@ -43,17 +44,34 @@ export type ExportBody =
   | { readonly kind: 'gate' }
   | {
     readonly kind: 'tree'; readonly text: string; readonly tree: HastRoot;
-    readonly urls: WeakMap<HastElement, DetachedUrls>; readonly link: Omit<DocLinkContextValue, 'urls'>;
+    readonly urls: WeakMap<HastElement, DetachedUrls>; readonly link: Omit<DocLinkContextValue, 'urls'>; readonly part?: true;
   }
-  | { readonly kind: 'plain'; readonly text: string; readonly note: string }
-  | { readonly kind: 'text'; readonly text: string; readonly lang: string | null }
-  | { readonly kind: 'mockup'; readonly text: string; readonly doc: Document; readonly assets: MockupExportAssets };
+  | { readonly kind: 'plain'; readonly text: string; readonly note: string; readonly part?: true }
+  | { readonly kind: 'text'; readonly text: string; readonly lang: string | null; readonly part?: true }
+  | { readonly kind: 'mockup'; readonly text: string; readonly doc: Document; readonly assets: MockupExportAssets }
+  | { readonly kind: 'none' };
 
 export const READER_BODY: ExportBody = Object.freeze({ kind: 'reader' } as const);
 export const GATE_BODY: ExportBody = Object.freeze({ kind: 'gate' } as const);
+/** A leaf that shows no text, so no body will come: a note and a Download only (a text above the file cap that is not UTF-8). */
+export const NONE_BODY: ExportBody = Object.freeze({ kind: 'none' } as const);
+
+// `part` (X2 P6.1 Step 0c; spec 4.3): the body is one part of a text above 2 MiB (`actsOnPart`), so Export acts on the part on
+// screen and its sheet says so. The body's own flag, set by whatever draws it inside the parts (`PartExportBody`), never inferred
+// from a size: a text shown whole above the cap (not UTF-8) is not a part.
 
 /** Where a body publishes. `null`, the default, has one meaning: nothing listens (a body outside the Docs screen). */
 export const ExportBodyContext = createContext<((body: ExportBody | null) => void) | null>(null);
+
+/** Marks every Markdown, plain or text body drawn inside it as a part (`part: true`) on its way to the screen's holder; any other
+ *  kind passes through. Draw the parts of a text above 2 MiB inside it. */
+export function PartExportBody(p: { readonly children: ReactNode }): ReactNode {
+  const publish = useContext(ExportBodyContext);
+  const marked = useMemo<((body: ExportBody | null) => void) | null>(() => (publish === null ? null : (body) => {
+    publish(body !== null && (body.kind === 'tree' || body.kind === 'plain' || body.kind === 'text') ? { ...body, part: true } : body);
+  }), [publish]);
+  return createElement(ExportBodyContext, { value: marked }, p.children);
+}
 
 /** Publishes `body` while it stands and the component is mounted; `null` publishes nothing. The caller memoises `body`. */
 export function usePublishExportBody(body: ExportBody | null): void {

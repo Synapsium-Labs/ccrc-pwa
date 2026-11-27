@@ -20,6 +20,7 @@ import {
   type DocsRefreshLoaderAnswer, type DocsTreeAnswer,
 } from './failures';
 import { DOCS_RELIST_WORDS } from './docsText';
+import { openedRangePin, rangePinOf, rangeReadKey } from './range/rangePolicy';
 
 /** A tree slot, exactly spec 4.3's type. `loading` is also what a page shows before its first GET has started. */
 export type TreeSlot =
@@ -139,6 +140,15 @@ export function pinFor(tree: DocsTreeOk, page: DocsPageLocation): DocListPin | n
 /** What `DocsVisit.rangeFailed` answers a failed range read (see there). */
 export type RangeStale = 'relist' | 'changing' | 'other';
 
+/** What a finished range read tells the visit (`DocsVisit.rangeRead`): the read's identity (`rangeReadKey` of its target: the
+ *  project, the place, the range pin and the size, so a moved listing pin over the same bytes is the same read), the snapshot's
+ *  digest of the bytes it gave, and when its last frame was checked (Date.now()). */
+export interface RangeReadFacts { readonly key: string; readonly digest: string; readonly readAt: number }
+
+/** The page's range read, as the head reads it (`DocsVisit.rangeOpened`): the OPENED pin (a stat-pinned draft's carries the
+ *  snapshot's digest as `fp`, X2 P1) and when the bytes were read. */
+export interface RangeOpened { readonly pin: DocPin; readonly readAt: number }
+
 /** One visit, as the Docs views read it. */
 export interface DocsVisit {
   /** The current page's tree slot; null = the page names no project (the index, or a URL that did not parse). */
@@ -166,8 +176,16 @@ export interface DocsVisit {
    *  `relist` the read waits as a file read does: the re-list that STARTS after this call and answers moves
    *  `rangeRelists`, whatever pin it gives. A hand-built visit in a test takes the stub of `docsFixtures.ts`. */
   rangeFailed(word: DocsFailure): RangeStale;
-  /** A range read of the current leaf gave its bytes: re-arms the page's one automatic re-list, as an ok file read does. */
-  rangeRead(): void;
+  /** A range read of the current leaf gave its bytes: re-arms the page's one automatic re-list, as an ok file read does, and keeps
+   *  its `facts` for this page (`rangeOpened`). */
+  rangeRead(facts: RangeReadFacts): void;
+  /** A range read of the page starts, or its leaf opens: what an earlier read gave is no longer shown, so it is dropped (a read
+   *  that is cancelled or fails then leaves none). */
+  rangeDropped(): void;
+  /** What the range read of the page now open gave, once it finished; `null` has one meaning: no finished read stands for these
+   *  bytes (nothing read yet, one in progress, cancelled or failed; another page; or other bytes), or the file slot is neither
+   *  `stat-pinned` nor `too-large`. Export and the truth line's "as read at" read it; they ask for no bytes. */
+  readonly rangeOpened: RangeOpened | null;
   /** Read it after a spent re-list: re-lists again and waits for it as `rangeFailed` does, taking no one-shot. */
   rangeRetry(): void;
   /** How many re-lists of this page's listing served a range read that waited for one: a leaf that waits restarts when
@@ -221,6 +239,10 @@ interface Store {
    *  `relistAfter` does; and the count of re-lists that served such a read (`DocsVisit.rangeRelists`). */
   readonly rangeWaits: Map<string, { readonly treeKey: string; readonly relistAfter: number }>;
   readonly rangeRelists: Map<string, number>;
+  /** The last finished range read (`rangeRead`'s facts) and the page (`relistPageKey`) it was made for: one at a time, so a
+   *  read of another page replaces it, a read starting drops it (`rangeDropped`), and it shows only while the page's file slot
+   *  names the same read (same `rangeReadKey`). */
+  ranged: { readonly page: string; readonly facts: RangeReadFacts } | null;
 }
 
 function newStore(): Store {
@@ -228,7 +250,7 @@ function newStore(): Store {
     alive: false, targets: new Map(), trees: new Map(), treeInflight: new Set(), refreshInflight: new Set(),
     freshness: new Map(), files: new Map(), shown: new Map(), updatedTo: new Map(),
     timers: new Set(), refreshTimers: new Map(), aborts: new Map(), seq: 0, slotSeq: new Map(),
-    rangeWaits: new Map(), rangeRelists: new Map(),
+    rangeWaits: new Map(), rangeRelists: new Map(), ranged: null,
   };
 }
 
@@ -753,6 +775,20 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
     }
   }
   const freshness: Freshness = tKey === null ? { s: 'idle' } : (st.freshness.get(tKey) ?? { s: 'idle' });
+  // The range read of THIS page, matched on the read's own identity (`rangeReadKey`: the project, the place, the range pin and the
+  // size), never on a listing pin: a re-list that moves the commit or the worktree's head but leaves the bytes alone keeps the
+  // read, and the opened pin is built from the CURRENT listing pin and the digest. A read of another page, or of other bytes (a
+  // moved blob, a new stat), is not the page's.
+  const ranged = st.ranged;
+  let rangeOpened: RangeOpened | null = null;
+  if (ranged !== null && tKey !== null && page?.kind === 'path' && tree?.s === 'ok'
+    && ranged.page === relistPageKey(tKey, page.section, page.path) && (file.s === 'stat-pinned' || file.s === 'too-large')) {
+    const entry = findEntry(tree.answer.tree, file.pin.section, file.pin.path);
+    const range = entry === undefined ? null : rangePinOf(file.pin, entry);
+    if (range !== null && rangeReadKey({ project: page.project, pin: file.pin, range, size: file.size }) === ranged.facts.key) {
+      rangeOpened = { pin: openedRangePin(file.pin, ranged.facts.digest), readAt: ranged.facts.readAt };
+    }
+  }
 
   return {
     tree,
@@ -762,6 +798,7 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
     pendingFragment,
     rangeRelists: tKey === null || page?.kind !== 'path' ? 0 : st.rangeRelists.get(relistPageKey(tKey, page.section, page.path)) ?? 0,
     rangeWaiting: tKey !== null && page?.kind === 'path' && st.rangeWaits.has(relistPageKey(tKey, page.section, page.path)),
+    rangeOpened,
     retryTree: () => {
       const t = targetOf(pageRef.current);
       if (t === null) return;
@@ -801,11 +838,19 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
       awaitRelist(t, relistPageKey(treeKey(t.project, t.ref), p.section, p.path));
       changed();
     },
-    rangeRead: () => {
+    rangeRead: (facts) => {
       const p = pageRef.current;
       const t = targetOf(p);
       if (t === null || p?.kind !== 'path') return;
-      autoRetried.current.delete(autoRetryId('relist', relistPageKey(treeKey(t.project, t.ref), p.section, p.path), ''));
+      const pk = relistPageKey(treeKey(t.project, t.ref), p.section, p.path);
+      autoRetried.current.delete(autoRetryId('relist', pk, ''));
+      st.ranged = { page: pk, facts };
+      changed();
+    },
+    rangeDropped: () => {
+      if (st.ranged === null) return;
+      st.ranged = null;
+      changed();
     },
     refreshManual: () => {
       const t = targetOf(pageRef.current);

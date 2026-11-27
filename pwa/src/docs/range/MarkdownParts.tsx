@@ -16,6 +16,10 @@
 // budget refuses keeps its ids unknown, and a fragment no known part holds opens part 1, with a note when some part's ids are
 // unknown. With no fragment there is no pre-pass, and part 1 shows at once. Ids are de-duplicated within each part (spec 4.3),
 // so a heading repeated in another part has that part's own id there. Unmounting aborts the pre-pass.
+//
+// Each part mounts inside `PartContext` (the whole text, the part's cut, its place), which the reader frame reads for Changes
+// since on the part (`reader/partChanges.ts`). A text above 2 MiB was read by range, so Changes since and Export act on the part
+// on screen, and a note under the bar says so (`PARTS_WORDS.actsOnPart`); the frame cannot show ccrc's words.
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Button } from '@ccrc/ui';
 import { utf8Bytes } from '../../../../shared/utf8';
@@ -23,7 +27,18 @@ import { DOCS_PARSE_BUDGET_MS, DOCS_RENDER_GATE_BYTES } from '../../lib/markdown
 import type { ReaderRenderOutcome } from '../../lib/readerRenderJob';
 import { DOCS_RANGE_TEXT, fillSentence } from '../docsText';
 import { cutMarkdownText, partForFragment, partHolds, partText, splitMarkdownParts, type MdPart } from './mdParts';
+import { PartContext } from './partContext';
 import { PARTS_WORDS } from './partsWords';
+import { actsOnPart } from './rangePolicy';
+
+/** The last cut of one text, and the part it was showing (X2 P6.1 Step 0c, review 3): the reader's tap on Export's plain view
+ *  turns the reader off and mounts the plain branch's `MarkdownParts` for the same text, which must show the same part of the same
+ *  parts, not part 1 of the line cutter's. One entry, keyed by the body key and the text: a new text or key cuts afresh. Only a
+ *  whole cut is kept for reuse (`complete`), so a plain branch never lands on a part of a cut the reader had not finished. */
+interface PartsSlot { readonly key: string; readonly text: string; readonly parts: readonly MdPart[]; readonly complete: boolean; readonly index: number }
+let slot: PartsSlot | null = null;
+const heldCut = (key: string | undefined, text: string): PartsSlot | null =>
+  key !== undefined && slot !== null && slot.key === key && slot.text === text && slot.complete ? slot : null;
 
 /** The render job the pre-pass and the blocks read ask, the reader's (`ReaderDeps['render']`). */
 export type PartsPrePass = (src: string, o: { budgetMs: number; signal?: AbortSignal; blocks?: true }) => Promise<ReaderRenderOutcome>;
@@ -56,13 +71,19 @@ export function MarkdownParts(p: {
   /** The pre-pass's render job; `null`, no pre-pass (a fragment then opens part 1). */
   readonly pre: PartsPrePass | null;
   readonly fragment: string | null;
+  /** What the text is the body of (the leaf's body key): with it, the last cut of this text and its part are kept for the next
+   *  `MarkdownParts` of the same text and key (the reader's plain view). Absent, nothing is kept or reused. */
+  readonly bodyKey?: string;
 }): ReactNode {
-  const { pre } = p;
+  const { pre, bodyKey } = p;
   const fragment = p.fragment;
   // With no render job the line cutter cuts at once; with one, `cutMarkdownText` (`mdParts.ts`) reads the blocks window by window
   // and hands over each part as it becomes final (`cut`, for one text and one render job; `complete` once the cut is whole), and
   // `reading` says how far the read got.
-  const lineParts = useMemo(() => (pre === null ? splitMarkdownParts(p.text, DOCS_RENDER_GATE_BYTES).parts : null), [p.text, pre]);
+  // With none, a whole cut of this very text the reader made is shown as it was cut (`slot`), else the line cutter cuts.
+  const lineParts = useMemo(
+    () => (pre === null ? heldCut(bodyKey, p.text)?.parts ?? splitMarkdownParts(p.text, DOCS_RENDER_GATE_BYTES).parts : null),
+    [p.text, pre, bodyKey]);
   const [cut, setCut] = useState<{ readonly text: string; readonly pre: PartsPrePass; readonly parts: readonly MdPart[]; readonly complete: boolean } | null>(null);
   const [reading, setReading] = useState<{ readonly covered: number; readonly total: number }>(() => ({ covered: 0, total: utf8Bytes(p.text) }));
   const now = cut !== null && cut.text === p.text && cut.pre === pre ? cut : null;
@@ -74,8 +95,10 @@ export function MarkdownParts(p: {
     let sum = 0;
     return parts.map((q) => (sum += utf8Bytes(p.text.slice(q.start, q.end))));
   }, [complete, parts, p.text]);
+  // Above 2 MiB the text was read by range, and Changes since and Export act on the part on screen (spec 4.3): the bar says so.
+  const overWhole = useMemo(() => actsOnPart(p.text), [p.text]);
   const [done, setDone] = useState(0);
-  const [index, setIndex] = useState(0);
+  const [index, setIndex] = useState(() => heldCut(bodyKey, p.text)?.index ?? 0);
   const [note, setNote] = useState(false);
   // The fragment this page was opened with is placed once, at the first part whose ids hold it.
   const [placed, setPlaced] = useState<string | null>(null);
@@ -100,6 +123,12 @@ export function MarkdownParts(p: {
     );
     return () => ac.abort();
   }, [p.text, pre]);
+
+  // Keep the cut and the place for the next `MarkdownParts` of this text and key.
+  useEffect(() => {
+    if (bodyKey === undefined || parts === null) return;
+    slot = { key: bodyKey, text: p.text, parts, complete, index: Math.min(index, parts.length - 1) };
+  }, [bodyKey, p.text, parts, complete, index]);
 
   // The pre-pass runs only while a fragment waits to be placed, and stops at the first part that holds it (the first
   // match wins, as the whole document would name it); with no fragment it costs nothing.
@@ -155,13 +184,17 @@ export function MarkdownParts(p: {
   // Until the fragment is placed, no part mounts (a part mounted and then replaced would cost a frame for nothing), and a
   // fragment waits for the whole cut, as the first part holding its heading is the first of the whole.
   if (pending !== null && pre !== null && (!complete || parts.length > 1)) return preparing(complete ? (done > 0 ? ends[done - 1] ?? 0 : 0) : reading.covered);
-  const part = parts[Math.min(index, parts.length - 1)]!;
+  const at = Math.min(index, parts.length - 1);
+  const part = parts[at]!;
   return (
     <div className="docs-in-parts" data-part={index + 1} data-parts={complete ? parts.length : undefined}>
       <PartBar index={index} count={parts.length} more={!complete} onGo={(to) => { setIndex(to); setNote(false); }} />
+      {overWhole && <p className="docs-note">{PARTS_WORDS.actsOnPart}</p>}
       {note && <p className="docs-note" role="status">{DOCS_RANGE_TEXT.fragmentUnknown}</p>}
       {part.continued && index > 0 && <p className="docs-note">{DOCS_RANGE_TEXT.partContinued}</p>}
-      {p.renderPart({ text: partText(p.text, part), index, fragment: placed !== null && placed === fragment ? fragment : null })}
+      <PartContext.Provider value={{ whole: p.text, part }}>
+        {p.renderPart({ text: partText(p.text, part), index, fragment: placed !== null && placed === fragment ? fragment : null })}
+      </PartContext.Provider>
     </div>
   );
 }

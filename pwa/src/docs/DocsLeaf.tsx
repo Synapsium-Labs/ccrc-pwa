@@ -18,7 +18,7 @@ import { api } from '../lib/api';
 import { DOCS_RENDER_GATE_BYTES } from '../lib/markdownLimits';
 import { MarkdownParts } from './range/MarkdownParts';
 import { RangeImage, RangeLeaf, rangeReadKey, type RangeBytes } from './range/RangeLeaf';
-import { rangeOfTooLarge, rangePinOf } from './range/rangePolicy';
+import { actsOnPart, openedRangePin, rangeOfTooLarge, rangePinOf } from './range/rangePolicy';
 import type { RangeLoader } from './range/readRange';
 import { SourceParts } from './range/SourceParts';
 import { CodeBlock, PreHighlightContext } from '../lib/markdown';
@@ -43,7 +43,7 @@ import { downloadDocFile, showBytes } from './objectUrls';
 import { ReaderFrame, type ReaderDeps } from './ReaderFrame';
 import { useReaderOnly } from './readerHistory';
 import { pinFor, type DocsVisit, type FileSlot } from './useDocsVisit';
-import { usePublishExportBody, type ExportBody } from './exportBody';
+import { NONE_BODY, PartExportBody, usePublishExportBody, type ExportBody } from './exportBody';
 
 type Leaf = DocsPageLocation & { kind: 'path' };
 type LinkBase = Omit<DocLinkContextValue, 'urls'>;
@@ -308,6 +308,25 @@ function MarkdownBody(p: {
   if (src.kind === 'no-bytes') return <DocsFailureView answer={malformed(DOCS_SHOW_NO_BYTES)} />;
   if (src.kind === 'not-utf8') return <DocPlain text={src.text} note={DOC_NOT_UTF8_NOTE} />;
   if (p.reader === null) {
+    // The plain view of a text above the file cap (X2 P6.1 Step 0c; spec 4.3): the parts, each its own `DocMarkdown` under the render
+    // gate, so Export has the part on screen to export. Up to the cap (a text read whole, or by range) the whole text keeps the
+    // gate's own question (Format anyway, Show as text), and Export acts on the whole text.
+    if (actsOnPart(src.text)) {
+      return (
+        <MarkdownParts
+          // `bodyKey`: the reader's cut and place for this text, which the plain view of the same text takes up.
+          key={p.bodyKey} bodyKey={p.bodyKey} text={src.text} pre={null} fragment={null}
+          renderPart={(part) => {
+            const key = p.bodyKey + '\u0000part:' + String(part.index);
+            return (
+              <PartExportBody>
+                <DocMarkdown key={key} text={part.text} pinKey={key} parser={p.parser} link={p.link} />
+              </PartExportBody>
+            );
+          }}
+        />
+      );
+    }
     return <DocMarkdown key={p.bodyKey} text={src.text} pinKey={p.bodyKey} parser={p.parser} link={p.link} />;
   }
   // X2 P1 (spec 4.3, the render-gate carry): above the render gate the text is read in parts no larger than the gate,
@@ -316,7 +335,7 @@ function MarkdownBody(p: {
     const reader = p.reader;
     return (
       <MarkdownParts
-        key={p.bodyKey} text={src.text} pre={reader.render} fragment={p.pendingFragment}
+        key={p.bodyKey} bodyKey={p.bodyKey} text={src.text} pre={reader.render} fragment={p.pendingFragment}
         renderPart={(part) => {
           const show: DocsShowOk = { ...p.show, encoding: 'utf8', text: part.text, size: utf8Bytes(part.text) };
           const key = p.bodyKey + '\u0000part:' + String(part.index);
@@ -341,12 +360,8 @@ function MarkdownBody(p: {
   );
 }
 
-/** The opened pin of bytes read by range (spec 4.3, "Where the time comes from, and where the pin lives"): a draft the
- *  listing could not fingerprint takes the snapshot's digest as its `fp`, the sha256 of the bytes the page shows, and
- *  keeps its stat, so `samePin` holds it equal to the listing's pin and every reader of `fp` reads the bytes' digest. */
-export function openedRangePin(pin: DocListPin, digest: string): DocPin {
-  return pin.kind === 'draft' && pin.fp === null ? { ...pin, fp: digest, stat: pin.stat } : pin;
-}
+/** `rangePolicy.ts`'s, which the visit reads too; still named here for the callers that import it from the leaf. */
+export { openedRangePin };
 
 /** The bytes a range read gave, decoded as UTF-8. `utf8: false` carries the lossy decoding, for the plain view with its
  *  note (spec 4.4's not-UTF-8 row); a file that is not UTF-8 is never parsed. */
@@ -382,14 +397,25 @@ export function RangeSource(p: { readonly read: RangeBytes; readonly path: strin
   if (!decoded.utf8) {
     return size <= DOCS_CLASS_CAP.text
       ? <DocPlain text={decoded.text} note={DOC_NOT_UTF8_NOTE} />
-      : <p className="docs-note">{fillSentence(DOCS_RANGE_TEXT.downloadOnly, { size: mib(size) })}</p>;
+      : <><NoExportBody /><p className="docs-note">{fillSentence(DOCS_RANGE_TEXT.downloadOnly, { size: mib(size) })}</p></>;
   }
+  // Above 2 MiB the file is shown in parts and Export acts on the part on screen: each part's body says so.
+  const inParts = actsOnPart(decoded.text);
   return (
     <SourceParts
       key={p.read.digest} text={decoded.text} size={size} maxBytes={DOCS_CLASS_CAP.text}
-      renderPart={(part) => <TextSource key={part.index} text={part.text} path={p.path} />}
+      renderPart={(part) => {
+        const body = <TextSource key={part.index} text={part.text} path={p.path} />;
+        return inParts ? <PartExportBody key={part.index}>{body}</PartExportBody> : body;
+      }}
     />
   );
+}
+
+/** A leaf that shows a note and no text publishes that no body will come, so Export is not offered (and does not wait for one). */
+function NoExportBody(): ReactNode {
+  usePublishExportBody(NONE_BODY);
+  return null;
 }
 
 /** A Markdown leaf read by range (spec 4.3): its bytes as a docs-show answer of their own (text, size and digest), under

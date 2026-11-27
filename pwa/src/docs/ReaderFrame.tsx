@@ -63,6 +63,7 @@ import { useThemeChoice } from '../lib/theme';
 import { useHostAppearance } from '../lib/appearance';
 import { appearanceStamp } from '../lib/appearanceStamp';
 import { DocsAssetContext } from './DocImage';
+import { PartContext } from './range/partContext';
 import type { DocsHistoryLoader } from './failures';
 import type { DocLinkContextValue } from './DocLink';
 import { DocMarkdown, DocPlain, docMarkdownSource, docsPlainNote, DOC_FORMATTING } from './DocMarkdown';
@@ -217,6 +218,8 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
   const bytes = useMemo(() => utf8ByteLength(text), [text]);
   const overGate = bytes > DOCS_RENDER_GATE_BYTES;
   const assets = useContext(DocsAssetContext);
+  /** The part this body renders, when the text was cut into parts (`MarkdownParts`); `null`: the body is the whole text. */
+  const partCtx = useContext(PartContext);
   const prefs = readerPrefsOf(useThemeChoice(), THEMES).theme;
   const stamp = useHostAppearance();
   const link = useMemo<DocLinkContextValue>(() => ({ ...p.link, urls: new WeakMap() }), [p.link]);
@@ -234,9 +237,9 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
   /** The frame theme the frame was last given: the mount's seed, then each `setPrefs`. */
   const seededPrefs = useRef<ReaderThemePref['theme'] | null>(null);
   /** The latest props, for the callbacks the frame holds for its whole life. */
-  const live = useRef({ props: p, link, assets, prefs, stamp, barSlot, readerMode });
+  const live = useRef({ props: p, link, assets, prefs, stamp, barSlot, readerMode, partCtx });
   useEffect(() => {
-    live.current = { props: p, link, assets, prefs, stamp, barSlot, readerMode };
+    live.current = { props: p, link, assets, prefs, stamp, barSlot, readerMode, partCtx };
   });
   const followedStamp = useRef<string | null>(null);
 
@@ -424,6 +427,7 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
         page: () => (live.current.props.opened ?? opened).page, only: opened.only,
         history: first.props.reader.history ?? null, loaders: first.assets?.loaders ?? null,
         queue: first.assets?.queue ?? null, signal: ac.signal,
+        part: first.partCtx === null ? null : { whole: first.partCtx.whole, part: first.partCtx.part },
       });
       let outcome: ReaderRenderOutcome;
       try {
