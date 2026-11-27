@@ -16,7 +16,9 @@ import path from 'node:path';
 import { parseFile, parseSource } from '../scan/parse.js';
 import { OUTWARD_EDGE_EXEMPTIONS } from './outward-edges.data.js';
 import { malformedEntries } from './exemptions.js';
-import { DOCS_RING_ROLES, outwardRuntimeEdges, serverRing, type Ring } from './ring.js';
+import {
+  DOCS_RING_ROLES, outward, outwardRuntimeEdges, resolveLocal, runtimeEdges, serverRing, type Ring,
+} from './ring.js';
 import { REPO, walkSrc } from './walkSrc.js';
 
 const files = (): string[] => walkSrc({ roots: ['server/src'], min: 170 });
@@ -32,6 +34,24 @@ const ringOf = (r: string): Ring | null => {
 };
 
 const ringOfSource = (file: string, lines: string[]): Ring => serverRing(file, parseSource(lines.join('\n'))).ring;
+
+/** The plan store (D-9148), and a planted L1 file that loads a value from it, as `planSyncPolicy.ts` once did (#3454). */
+const PLAN_STORE = 'server/src/coord/planStore.ts';
+const PLANTED = 'server/src/coord/planted.ts';
+const PLANTED_STORE_IMPORT = "import { ADOPTED_FINGERPRINT } from './planStore.js';\nexport const f = () => ADOPTED_FINGERPRINT;\n";
+
+/** Every runtime edge into `target` from a file in a ring inward of L3 (L0, L1, L2), as `<ring> <file> :<line> {names}`. */
+const valueImportersInward = (target: string): string[] => {
+  const out: string[] = [];
+  for (const f of files()) {
+    const p = parseFile(path.join(REPO, f));
+    const edges = runtimeEdges(p).filter((e) => resolveLocal(f, e.specifier, exists) === target);
+    if (edges.length === 0) continue;
+    const r = serverRing(f, p).ring;
+    if (outward(r, 'L3')) for (const e of edges) out.push(`${r} ${f} :${e.line} {${e.names.join(', ')}}`);
+  }
+  return out;
+};
 
 describe('server/src runtime imports never point outward (ARCH-04 stage 2, D-6045)', () => {
   it('CONTROL: the ring rules, clause by clause, from a file\'s own facts', () => {
@@ -76,6 +96,15 @@ describe('server/src runtime imports never point outward (ARCH-04 stage 2, D-604
     expect(outwardRuntimeEdges(file, planted, ringOf, exists).map((e) => `${e.fromRing} ${e.from} -> ${e.toRing} ${e.to}`))
       .toEqual(['L1 server/src/coord/planted.ts -> L3 server/src/coord/store.ts']);
     expect(outwardRuntimeEdges(file, parseSource("import type { CoordStore } from './store.js';"), ringOf, exists)).toEqual([]);
+  });
+
+  it('CHARACTERIZATION (D-9148): coord/planStore.ts by its facts alone, and the edges that touch it', () => {
+    // Its `node:sqlite` import is type-only and its header declares no ring, so the rules read it L1.
+    expect(serverRing(PLAN_STORE)).toEqual({ ring: 'L1', why: 'no outer-ring fact' });
+    // No L1 or L2 file loads a value from it at runtime today: every such edge is type-only.
+    expect(valueImportersInward(PLAN_STORE)).toEqual([]);
+    // So a planted runtime import of the store from a new L1 file is not seen as outward.
+    expect(outwardRuntimeEdges(PLANTED, parseSource(PLANTED_STORE_IMPORT), ringOf, exists)).toEqual([]);
   });
 
   it('CONTROL: the docs ring pin\'s role table, a declaration by the spec, is single-definition\'s copy', () => {
