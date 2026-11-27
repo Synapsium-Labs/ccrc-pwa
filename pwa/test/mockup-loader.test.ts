@@ -27,8 +27,9 @@ import {
   MOCKUP_MODULE_MAX_DEPTH, MOCKUP_SANDBOX_SCRIPTED, MOCKUP_SCRIPT_MAX_REFS, MOCKUP_SCRIPT_SCAN_BYTES, metaFor,
 } from '../src/docs/mockup/policy';
 import { MOCKUP_FETCH_SHIM_MARK } from '../src/docs/mockup/shim';
+import { buildMockupSnapshot } from '../src/docs/mockup/exportMockup';
 import type {
-  HttpsOrigin, MockupAssetPlan, MockupAssetReader, MockupContext, MockupRangeRead, MockupReadAnswer,
+  HttpsOrigin, MockupAssetPlan, MockupAssetReader, MockupAssetResult, MockupContext, MockupRangeRead, MockupReadAnswer,
 } from '../src/docs/mockup/ports';
 import { COMMIT_A, entry, fakeLoaders, holder, treeOk } from './docsFixtures';
 
@@ -85,6 +86,9 @@ interface Run {
   readonly page: string;
   readonly out: Document;
   readonly calls: { path: string; range: MockupRangeRead | undefined }[];
+  /** The parsed page and the load's result, for Export's snapshot. */
+  readonly doc: Document;
+  readonly result: MockupAssetResult;
 }
 
 /** The page through the real pipeline, as the viewer runs it: parse, `planMockupPage`, load, build. `sizes` overrides a
@@ -103,7 +107,10 @@ async function run(
   opts.beforeBuild?.();
   const build = buildMockupSrcdoc(parsed.doc, result, opts.extra ?? [], true);
   const page = build.ok ? build.page : '';
-  return { ex, first, loaded: result.plan, plan: build.plan, build, page, out: new DOMParser().parseFromString(page, 'text/html'), calls };
+  return {
+    ex, first, loaded: result.plan, plan: build.plan, build, page, out: new DOMParser().parseFromString(page, 'text/html'), calls,
+    doc: parsed.doc, result,
+  };
 }
 
 /** The view over `html`, its siblings read from `files` by path, each listed at its byte length or `sizes`' value; the
@@ -707,7 +714,8 @@ describe('X2 P6.2 fix round 1 (review 4066)', () => {
   const refusals: readonly [string, string, unknown][] = [
     ['root-relative', '/x.js', { v: 'refused', why: 'root-relative' }],
     ['a climb out of the root', '../../../../x.js', { v: 'refused', why: 'above-root' }],
-    ['out of the section', '../plans/x.js', { v: 'missing', why: 'absent-at-commit' }],
+    ['an unlisted path in another section', '../plans/x.js', { v: 'missing', why: 'absent-at-commit' }],
+    ['out of the Docs sections', '../x.js', { v: 'refused', why: 'repo' }],
     ['a backslash form', './sub\\x.js', { v: 'refused', why: 'malformed' }],
   ];
   for (const [label, value, verdict] of refusals) {
@@ -725,6 +733,72 @@ describe('X2 P6.2 fix round 1 (review 4066)', () => {
       expect(r.calls).toEqual([]);
     });
   }
+
+  it('a map entry over its class cap keeps its own row, and the written map holds no value it did not replace (D-9152, the ruling)', async () => {
+    const r = await run(`<!doctype html><html><head><script type="importmap">{"imports":{"lib":"./lib.js","ok":"./ok.js","three":"https://cdn.example/t.js"}}</script>
+<script type="module">import 'lib'; import 'ok';</script></head><body></body></html>`, {
+      'lib.js': 'export default 1;', 'ok.js': 'export default 2;',
+    }, { sizes: { 'lib.js': 3 * MIB } });
+    expect(r.plan.importMapRefused).toBeUndefined();
+    expect(r.ex.unsupported.map((u) => u.element)).not.toContain('script[type=importmap]');
+    const lib = verdictOf(r, './lib.js');
+    expect(lib).toEqual({ v: 'skipped', why: 'too-large' });
+    expect(mockupVerdictSentence(lib, false)).toBe(MOCKUP_VERDICT_SENTENCE.skipped['too-large']);
+    const written = importsOf(r.out);
+    expect(Object.keys(written)).toEqual(['ok', 'three']);
+    expect(decode(written['ok']!)).toBe('export default 2;');
+    expect(written['three']).toBe('https://cdn.example/t.js');
+    expect(mapsOf(r.out)[0]!.textContent).not.toContain('./lib.js');
+  });
+
+  it('a map entry over the asset budget still gives the over-budget answer, not a refused map (D-9152, the ruling)', async () => {
+    const imgs = Array.from({ length: MOCKUP_MAX_ASSETS }, (_, i) => `<img src="i${i}.png">`).join('');
+    const html = `<!doctype html><html><head></head><body>${imgs}<script type="importmap">{"imports":{"lib":"./lib.js"}}</script>
+<script type="module">import 'lib';</script></body></html>`;
+    const files: Files = { 'lib.js': 'export default 1;' };
+    for (let i = 0; i < MOCKUP_MAX_ASSETS; i += 1) files[`i${i}.png`] = new Uint8Array([i]);
+    const r = await run(html, files);
+    expect(r.plan.importMapRefused).toBeUndefined();
+    expect(verdictOf(r, './lib.js')).toEqual({ v: 'skipped', why: 'over-budget' });
+    expect(Object.keys(importsOf(r.out))).toEqual([]);
+    expect(loaderUnfit(r.loaded.rows, r.plan.rows)).toBe('budget');
+    renderView(html, files);
+    fireEvent.click(await screen.findByRole('button', { name: MOCKUP_TEXT.runScripts }));
+    expect(await screen.findByText(fillSentence(MOCKUP_TEXT.overBudget, { n: MOCKUP_MAX_ASSETS, size: kib(MOCKUP_MAX_ASSET_BYTES) }))).toBeTruthy();
+  });
+
+  const PNG = (b: number): string => `data:image/png;base64,${btoa(String.fromCharCode(b))}`;
+  const REFUSED_MAP = '<script type="importmap">{"imports":{"bad":"/x.js"}}</script>';
+
+  it('a refused map\'s plan keeps its mark through a stylesheet\'s extension, so the build\'s keys are the plan\'s (review of the round, M1)', async () => {
+    const r = await run(`<!doctype html><html><head>${REFUSED_MAP}<link rel="stylesheet" href="s.css"></head>
+<body><img src="j.png"><img src="k.png"></body></html>`, {
+      's.css': 'body{background:url(i.png)}', 'i.png': new Uint8Array([1]), 'j.png': new Uint8Array([2]), 'k.png': new Uint8Array([3]),
+    });
+    expect(r.loaded.rows.map((x) => x.ref.raw)).toContain('i.png');
+    expect(r.loaded.importMapRefused).toBe(true);
+    expect(r.plan.importMapRefused).toBe(true);
+    expect(mapsOf(r.out)).toHaveLength(0);
+    expect([...r.out.querySelectorAll('img')].map((i) => i.getAttribute('src'))).toEqual([PNG(2), PNG(3)]);
+  });
+
+  it('Export extracts a refused map\'s page as the plan did: each image gets its own bytes (review of the round, M2)', async () => {
+    const r = await run(`<!doctype html><html><head>${REFUSED_MAP}</head><body><img src="j.png"><img src="k.png"></body></html>`, {
+      'j.png': new Uint8Array([2]), 'k.png': new Uint8Array([3]),
+    });
+    expect(r.result.plan.importMapRefused).toBe(true);
+    const snap = buildMockupSnapshot(r.doc, r.result);
+    const out = new DOMParser().parseFromString(snap.html, 'text/html');
+    expect([...out.querySelectorAll('img')].map((i) => i.getAttribute('src'))).toEqual([PNG(2), PNG(3)]);
+  });
+
+  it('a map inside a noscript is refused, never moved to life (review of the round, N1)', async () => {
+    const r = await run(`<!doctype html><html><head></head><body><noscript><script type="importmap">{"imports":{"lib":"./lib.js"}}</script></noscript>
+<script type="module">import 'lib';</script></body></html>`, { 'lib.js': 'export default 1;' });
+    expect(r.ex.unsupported.map((u) => u.element)).toContain('script[type=importmap]');
+    expect(verdictOf(r, 'lib')).toEqual({ v: 'unsupported', why: 'bare' });
+    expect(r.out.head.querySelector('script[type="importmap"]')).toBeNull();
+  });
 
   it('an import map element with a src is refused whole (A3)', async () => {
     const r = await run(`<!doctype html><html><head><script type="importmap" src="m.json">{"imports":{"lib":"./lib.js"}}</script>

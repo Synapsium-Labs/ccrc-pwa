@@ -204,11 +204,13 @@ function decide(plan: MockupAssetPlan, refs: readonly MockupRef[]): MockupAssetP
 }
 
 /** Whether a plan's rows refuse the page's import map whole (X2 P6.2, D-9152; spec 4.8, "A map naming anything else is
- *  refused as now"): some entry of it (a `map` row) is neither `inline` nor an `https` offer (`external`). A root-relative
- *  value, a climb out of the root or of the section, a backslash form, a missing sibling, a kind the table refuses and an
- *  entry over the budget all refuse the map, as an unreadable one is refused. */
+ *  refused as now"): some entry of it (a `map` row) is neither `inline` nor an `https` offer (`external`) nor one of the two
+ *  budget skips. A root-relative value, a climb out of the root or out of the Docs sections, a backslash form, a missing
+ *  sibling and a kind the table refuses all refuse the map, as an unreadable one is refused. An entry over the asset budget
+ *  or over its class cap (`skipped`) keeps its own row, so the over-budget answer stands for it (the coordinator's ruling in
+ *  fix round 1 of review 4066); the build leaves it out of the map it writes. */
 export function importMapRefusedBy(rows: readonly MockupAssetRow[]): boolean {
-  return rows.some((r) => r.ref.spec === 'map' && r.verdict.v !== 'inline' && r.verdict.v !== 'external');
+  return rows.some((r) => r.ref.spec === 'map' && r.verdict.v !== 'inline' && r.verdict.v !== 'external' && r.verdict.v !== 'skipped');
 }
 
 /** The plan of one attempt's first references (the page's own), decided from `ctx` alone. Throws

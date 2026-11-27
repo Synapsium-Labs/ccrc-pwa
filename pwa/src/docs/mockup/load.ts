@@ -137,10 +137,11 @@ export function extractMockupRefs(doc: Document, page: MockupBase, opts: { reado
   // The import maps first (X2 P6.2): a page's one map that `readImportMap` accepts is read; every map of a page with more
   // than one, and a map it refuses, is refused whole, as every map was before this loader. So is a map with a `src`, which
   // the browser registers no map for (fix round 1 of review 4066, A3), and a map whose entries the plan refused
-  // (`refuseMap`, D-9152: `planMockupPage`).
+  // (`refuseMap`, D-9152: `planMockupPage`). So is a map inside a `noscript`: the frame runs scripts, so its parser reads a
+  // `noscript`'s content as text and the map is no element there; moving it to the head would make it one.
   const typeOf = (el: Element): string => (el.getAttribute('type') ?? '').trim().toLowerCase();
   const maps = [...doc.querySelectorAll('script')].filter((s) => s.namespaceURI === HTML_NS && typeOf(s) === 'importmap');
-  const readable = maps.length === 1 && opts.refuseMap !== true && !maps[0]!.hasAttribute('src');
+  const readable = maps.length === 1 && opts.refuseMap !== true && !maps[0]!.hasAttribute('src') && maps[0]!.closest('noscript') === null;
   const read = readable ? readImportMap(maps[0]!.textContent ?? '') : { ok: false as const };
   const accepted = read.ok ? maps[0]! : null;
   const mapEntries = read.ok ? read.entries : [];
@@ -981,13 +982,20 @@ export function buildMockupSrcdoc(
     }
     log.push(row.ref.key);
   }
-  // The import map: the page's own entries, a sibling's value now its module's URL, then the build's names, bottom up.
+  // The import map: the page's own entries, a sibling's value now its module's URL, then the build's names, bottom up. The
+  // written map carries no value the build did not replace (D-9152): a page entry is its module's URL or its offered `https`
+  // URL, and one with neither (a budget skip, the cut, a failed read) is left out, so no path text of the page resolves
+  // against the console's origin; its import fails as not loaded, and its row says why. So the page's own map, when one was
+  // accepted, is always written back (already charged, as an upper bound, by `pageMapCharge`).
   let mapText: string | null = null;
-  const valueChanged = pageMap !== null && pageMap.entries.some((e) => replacements.has(e.key));
-  if (idEntries.length > 0 || valueChanged) {
+  if (idEntries.length > 0 || pageMap !== null) {
     // No prototype, so a page's own `__proto__` entry is a key like any other (review finding 7).
     const imports = Object.create(null) as Record<string, string>;
-    for (const e of pageMap?.entries ?? []) imports[e.name] = replacements.get(e.key) ?? e.value;
+    for (const e of pageMap?.entries ?? []) {
+      const url = replacements.get(e.key);
+      if (url !== undefined) imports[e.name] = url;
+      else if (rowByKey.get(e.key)?.verdict.v === 'external') imports[e.name] = e.value;
+    }
     for (const [id, url] of idEntries) imports[id] = url;
     mapText = scriptJson({ imports });
   }
