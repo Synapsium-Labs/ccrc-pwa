@@ -11,14 +11,19 @@ capture of its box exists yet (section 6).
 - **What this PR is: a stated partial repair, not the proof the report asked for.** Reading the readers for the new form
   found a worse fault than the stuck send. The mail lane could press Enter on a person's own unfinished draft and call
   the mail delivered. Two guards close it in the shapes they read and not in others (section 8, "What this does not
-  close", all four on ticket tall-box-top-anchor). In every pane the review built, neither guard presses a key `main`
-  does not press, and in the shapes they read the send presses fewer.
+  close", all five on issue #3482). In no pane the two reviews built does the head submit a draft that `main` does not
+  submit, so none is a regression. The keys do differ: where guard 1 refuses a resume `main` made, the lane goes on to
+  its stash arm and presses the stash key, in some forms the typed nudge and a second Enter too, where `main` pressed
+  Enter. On the review's pane (a past nudge, a reply, a plain top rule, a tall draft, static captures) the head presses
+  `C-s` and answers `stash-failed`, and `main` presses Enter twice.
 - **Guard 1: the resume's Enter is pressed only where the rows from the last glyph row down to the first plain rule are
   our text.** The prefix-mode resume (`resumeIfOwn: true`, the generic mail nudge's) now also needs those rows to equal
   the composed text up to whitespace, with that rule there. This is the reading the whole-box resume
   (`resumeIfOwn: 'whole'`, D-6367) already uses: `renderedAsTyped`. Where the box's marker row is in view, that rule is
-  the box's closing rule. Where it is out of view and only blank rows lie between a past turn of our text and a plain top
-  rule, that top rule is the first plain rule, and the read passes: (a) in section 8.
+  the box's closing rule, unless a row of the person's below our text is itself eight or more rule characters, at any
+  indent: that row reads as the closing rule, and the read passes ((e) in section 8). Where the marker row is out of view
+  and only blank rows lie between a past turn of our text and a plain top rule, that top rule is the first plain rule,
+  and the read passes: (a) in section 8.
 - **Guard 2 (shape only, grammar unconfirmed): a labelled rule below the last glyph row means the box's marker is out of
   view.** A labelled rule is a row that starts at the first column with three or more rule characters and is not a plain
   rule. When one lies between the last glyph row and the first plain rule below it, the box reads absent. Every reader
@@ -68,11 +73,14 @@ our text was resumed. The send suite pinned that as intended (case 6 in section 
 operator-message marker, and it adds `renderedAsTyped(pane, parts, 'whole') !== null`. That read takes the rows from the
 last glyph row down to the first plain rule below it, and passes only when they equal our text up to whitespace and that
 rule is there. It closes the resume Enter where a non-blank row that is not our text lies below the last glyph row (a
-reply, a longer draft, a second row of the person's), and where no rule follows. It does not close it where the last
-glyph row is a past turn of our text and only blank rows lie between it and a plain top rule: (a) in section 8. A box that
+reply, a longer draft, a second row of the person's), and where no rule follows, except where that row of the person's
+is itself eight or more rule characters, at any indent (`isRuleRow` trims): the read stops at it as at the closing rule,
+sees only our text, and passes ((e) in section 8). It does not close it either where the last glyph row is a past turn
+of our text and only blank rows lie between it and a plain top rule: (a) in section 8. A box that
 fails it goes on to the next arm, as for any box the call did not prove. For the mail lane that is the stash arm: the box
 is stashed whole, the nudge typed and submitted, and the build restores the draft at submit. In a box whose marker row is
-out of view that arm's second Enter can then submit the restored draft, as on `main`: (b) in section 8.
+out of view that arm can press a second Enter, which submits the restored draft, depending on the row drawn after our
+turn: (b) in section 8.
 
 **Guard 2** (`boxMarkerIndex`, the one answer to "which row is the box's marker row" for `draftOfMeasured`, `boxRows`
 and `continuationRows`). A labelled rule between the last glyph row and the first plain rule below it makes it answer -1,
@@ -91,7 +99,8 @@ every pane: (d) in section 8.
     below which a plain rule comes before any other glyph row; its draft rows are the rows strictly between. There are
     61 boxes holding 124 draft rows, and none of those rows starts at the first column or holds a run of rule characters.
     (Round 1 of this note gave 59 boxes and 149 rows from a scan whose rule it did not state; the review could not
-    reproduce them, and these replace them. The review's own counts by this rule are the same: 61 and 124.)
+    reproduce them, and these replace them. The review's own counts by this rule are the same: 61 and 124. The
+    sender's comment beside guard 2 carried the old figures too, and fix round 2 corrected that comment alone.)
 - **Width.** A rule's width does not separate the two: recorded rules are shorter than their pane too (the review counts
   17 of the 280).
 - **The condition, and why the guard stays (the coordinator's ruling, mail 38899).** The condition was that the guard
@@ -103,8 +112,8 @@ every pane: (d) in section 8.
   pressed, it is the only guard for the shape in the operator's picture, and in that shape it also keeps the stash arm
   from pressing anything.
 - **The grammar is unconfirmed.** If the real top rule starts with its words, or is indented, the guard does not fire,
-  the readers again describe the past turn as the draft, and what is left is guard 1, which does not cover (a) to (c) in
-  section 8.
+  the readers again describe the past turn as the draft, and what is left is guard 1, which does not cover (a) to (c) or
+  (e) in section 8.
 - **A false positive refuses.** A person's own draft whose row starts at the first column with rule characters would read
   unreadable, which is the safe direction. No recorded draft row starts there.
 - **`stashHeld` keeps its own scan.** It already needs a plain rule directly above the marker row, which no past turn
@@ -185,8 +194,16 @@ and never reaches the resume, and the review ran the file against the repair's s
 A wider search after it, by text, for every capture in the test tree that answers a bare marker row, found five suites,
 one of them already among the six above. Each passes whole on the repair, alone, and none is touched: clip-any-file (36
 cases), run-work-started (9), idle-compact-nudge-lane (46), feed-writers-pin (61) and send-echo-clock (17, the echo-clock
-suite of the six). So ten distinct suites still draw the old bare shape: the six above, and clip-any-file,
-run-work-started, idle-compact-nudge-lane and feed-writers-pin.
+suite of the six). Two text searches do not make a census, so no total is claimed. The suites known to draw the old
+bare shape still (files under `server/test/`, each green on the repair):
+- the first search's six: `deliverability-parity`, `lane-draft-never-blocks`, `mail-delivery-characterization`,
+  `overlord-prompt-record`, `overlord-timer-line-lane` and `send-echo-clock`;
+- the wider search's four more: `clip-any-file`, `run-work-started`, `idle-compact-nudge-lane` and `feed-writers-pin`;
+- the review's (round 2): `routes` (through the prompt route to the sender), `submit-route` (through `submitEnter`) and
+  the send suite's own bare literals;
+- a third search in fix round 2, for a capture answered with a bare marker row in any spelling: `ccd-route-apply` (123
+  cases, run alone here), `push-outbox-characterization`, `roll-sweep-handoff`, `stall-sweep` and `worker-seen` (each
+  green in the exact head's fast run, as were `routes` and `submit-route`).
 
 Red on `main`'s `send.ts` too, under the same load, and so not the repair's: "the fallback warns once while it stands",
 the two warn-latch cases and the boot trace. "puts `parkedAt` on the wire for the mail strip" timed out on both send
@@ -218,7 +235,7 @@ once the server carries the status read's delivery standing (merged in #3433).
   count on the rule plus the rows in view must equal the rows our text occupies at the pane's width, and a count larger
   than what we typed means the box is not ours. It needs frames 1 to 3 and 6 of the list. Guard 2 must then be narrowed
   to the real rule's bytes, and the proof reads that same row.
-- **The top-rule anchor**, not in this PR (ticket tall-box-top-anchor, the coordinator's ruling, mail 38899), for the
+- **The top-rule anchor**, not in this PR (issue #3482, the coordinator's ruling, mail 38899), for the
   wave that follows wave 187's recorded frames: "the box's marker row sits directly under a rule". It is truer than
   guard 2 and the recorded panes show it, and it would close (a) and (d) in section 8. But it changes how every send
   reads the box, no recorded pane holds a real tall box yet, and dozens of hand-written panes across the send and lane
@@ -249,8 +266,10 @@ once the server carries the status read's delivery standing (merged in #3433).
 
 ## 8. What this does not close
 
-Review run 4018 built these panes and measured them on the head; every one presses the same keys on `main`, so none is a
-regression, and none is closed here. All four go on one ticket, **tall-box-top-anchor**, for the wave that follows wave
+Review runs 4018 and 4033 built these panes and measured them on the head. In none does the head submit a draft that
+`main` does not submit, so none is a regression, and none is closed here. The keys are not always the same: in (a) with
+a reply row, and in (b), the head presses the stash arm's keys where `main` pressed Enter (the head `C-s` and
+`stash-failed` on a static pane, `main` Enter twice). All five go on one issue, **#3482**, for the wave that follows wave
 187's recorded frames (the coordinator's ruling, mail 38899): they change how every send reads the box, and no recorded
 pane holds a real tall box yet. Each pane is SYNTHETIC, 220 columns by 50 rows, sent with the mail lane's options
 (`onDraft: 'stash'`, `resumeIfOwn: true`, `clearMailResidue: true`, `holdIfAutoContinueArmed: true`) unless stated.
@@ -259,23 +278,34 @@ pane holds a real tall box yet. Each pane is SYNTHETIC, 220 columns by 50 rows, 
   three rows; one blank row (or none), then blank rows; a plain rule 220 wide; 20 indented rows of the person's draft;
   the plain closing rule; a footer. Guard 1 reads from the past nudge down to the first plain rule, which is the tall
   box's top rule, so the rows read are our text and blank rows, and the read passes. Keys: `Enter, Enter`, word
-  `enter-ignored`. The same in whole mode (`resumeIfOwn: 'whole'`) over a past operator line, blank rows and a plain top
-  rule: `Enter, Enter`. And `submitEnter` with our nudge expected, on the same pane, presses a third Enter (the review's
-  measurement, not pinned). Pinned as it is today, both modes, by the two cases "wave 185, residual (a), not closed here"
-  in `send-tall-box.test.ts`, so the follow-up wave turns them red first. A reply row between the turn and the box (`⏺
-  ok`) is not our text and makes the read refuse: then `C-s`, `stash-failed`. A labelled count top rule: no keys,
-  `box-unreadable`.
-- **(b) Where guard 1 refuses the resume, the stash arm's second Enter submits the person's draft.** The pane: a past turn,
-  a reply, a top rule that is plain, words first (`↑ 20 more ───…`) or indented, 20 rows of the person's draft, the
-  closing rule. The review followed the keys with a model of the build: `C-s` empties the box, the typed nudge echoes,
-  the first Enter makes it a past turn and the build restores the draft, with no glyph in view again. Keys: `C-s`, the
-  nudge typed, `Enter`, `Enter`; word `ok` with `draftRestore: 'restore-unverified'`. The second Enter (the stash arm's
-  check reads the just-submitted nudge as the marker row, so it presses again) submits the person's 20 or 40 rows. `main`
-  does the same harm with one Enter and no nudge typed, and for a past turn that is not a nudge the two press alike.
-  Under a first-column count rule it is safe: no keys, `box-unreadable` (guard 2). Not pinned by a case here: the one
-  runner in the tree that follows keys through a stash and its restore, the stash suite's fake terminal (`fakeCc`,
-  `server/test/send-stash.test.ts`), always draws the box's marker row with the glyph in view, so it cannot draw this
-  form without a new harness, which the ruling does not ask for.
+  `enter-ignored` on a static pane. On a model that follows the keys, the first Enter submits the person's draft (40
+  rows), and the send answers `ok`: the mail reads delivered and the nudge was never typed. The same, head and `main`, in
+  whole mode (`resumeIfOwn: 'whole'`) over a past operator line, and with 0, 1 or 5 blank rows. `submitEnter` with our
+  nudge expected refuses on this pane with a mismatch and presses nothing, on both senders (its gate compares the marker
+  row exactly, and the nudge wraps); given the refusal's own draft (the nudge's first row), it presses a third Enter.
+  Pinned as it is today, both modes, by the two cases "wave 185, residual (a), not closed here (#3482)" in
+  `send-tall-box.test.ts`, so the follow-up wave turns them red first. A reply row between the turn and the box (`⏺ ok`)
+  is not our text and makes the read refuse: then the head presses `C-s` and answers `stash-failed`, where `main` pressed
+  Enter twice. A labelled count top rule: no keys, `box-unreadable`.
+- **(b) Where guard 1 refuses the resume, the stash arm's second Enter can submit the person's draft.** The pane: a past
+  turn, a reply, a top rule that is plain, words first (`↑ 20 more ───…`) or indented, 20 rows of the person's draft, the
+  closing rule. The reviews followed the keys with a model of the build: `C-s` empties the box, the typed nudge echoes,
+  the first Enter makes it a past turn and the build restores the draft, with no glyph in view again. What follows
+  depends on the row drawn after our just-submitted turn, with a plain top rule:
+  - nothing drawn after it: `C-s`, the nudge typed, `Enter`; word `enter-ignored`; the draft is kept;
+  - the same reply as before (`⏺ ok`): `C-s`, the nudge typed, `Enter`; word `ok`, restored; the draft is kept;
+  - a different reply: `C-s`, the nudge typed, `Enter`, `Enter`; word `ok` with `draftRestore: 'restore-unverified'`.
+    The second Enter (the stash arm's check reads the just-submitted nudge as the marker row, so it presses again)
+    submits the person's 20 or 40 rows.
+
+  With a words-first or an indented top rule, both Enters are pressed in every variant the reviews ran. `main`, with a
+  past nudge, presses one Enter on that pane and no nudge, which submits the draft alone; for a past turn that is not a
+  nudge the two press alike. So the harm is the same draft submitted, with our own nudge as an extra turn on the head.
+  Under a first-column count rule it is safe: no keys, `box-unreadable` (guard 2). Not pinned by a case here. Three
+  runners in the tree follow keys through a stash and its restore: the stash suite's fake terminal (`fakeCc`,
+  `send-stash.test.ts`), the never-blocks lane's `paneRunner` (`lane-draft-never-blocks.test.ts`) and the inline
+  runner in `idle-compact-nudge-lane.test.ts`. Each draws the box's first row with the glyph in view, so none can draw
+  this form without a new harness, which the ruling does not ask for.
 - **(c) Older than this PR: the residue clear in a tall draft.** The pane: a past paste-chip user turn
   (`❯ [Pasted text #1 +40 lines]`) above a person's tall draft under a plain top rule. `clearMailResidue` reads the past
   turn as machine residue and sends 24 `C-u` into the draft; word `draft-clear-failed`. The same on `main`. Guard 1 sits
@@ -284,8 +314,19 @@ pane holds a real tall box yet. Each pane is SYNTHETIC, 220 columns by 50 rows, 
   the last glyph row and the first plain rule below it. The pane: a past nudge, a blank row, a full-width plain rule at
   the first column, then a labelled top rule and 20 rows of the person's draft. Guard 2 stops at the plain rule and never
   reaches the labelled one, and guard 1 reads our text down to that plain rule. Keys: `Enter, Enter`, word
-  `enter-ignored`. It needs a plain rule at the first column in the transcript, which no reply in the recorded panes
-  draws (every plain rule there is the input box's or a dialog's).
+  `enter-ignored` on a static pane, head and `main`. On a model that follows the keys, the first Enter submits the
+  person's draft and the send answers `ok`, as in (a). It needs a plain rule at the first column in the transcript,
+  which no reply in the recorded panes draws (every plain rule there is the input box's or a dialog's).
+- **(e) A row of the person's made of rule characters reads as the closing rule** (review run 4033, older than this PR).
+  The marker row is in view and the box is closed. The pane: our stranded nudge on the marker row and its continuation
+  rows, then the person's row `  ────────────` (12 rule characters, indented; 8 do too), then their
+  `  and here is what I actually want to say next`, then the box's real closing rule. `isRuleRow` trims and needs only
+  eight rule characters, so the whole-box read stops at the person's row, sees only our text, and the resume presses
+  Enter. Keys: `Enter, Enter`, word `enter-ignored`, head and `main` alike. On a model that follows the keys, that Enter
+  submits every row: our nudge and the person's two. With a plain second row instead of the rule row, the head presses
+  `C-s` (`stash-failed`) where `main` pressed Enter twice, so guard 1 does close that case. No recorded draft row holds a
+  run of rule characters (0 of 124). Pinned as it is today by the case "wave 185, residual (e), not closed here (#3482)"
+  in `send-tall-box.test.ts`.
 
 ## 9. Evidence
 
@@ -296,16 +337,19 @@ pane holds a real tall box yet. Each pane is SYNTHETIC, 220 columns by 50 rows, 
 - Red first (measured): against `main`'s `send.ts`, in round 1, 9 of the file's 12 cases at the time failed by name, and
   the three that passed are those that must hold on `main` too (the spliced stranded nudge resumes, a row not at the
   first column does not fire, no recorded pane's reading moves). The two cases of our own rule-like lines, added after,
-  are green on `main` by design. In fix round 1 the file has 18 cases; against `main` a45831a795's `send.ts`, 11 fail
+  are green on `main` by design. In fix round 1 the file had 18 cases; against `main` a45831a795's `send.ts`, 11 failed
   (the nine, the case whose only defect is the missing closing rule, and the case of a first-column labelled row inside
-  the box), and 7 pass: those five, and the two residual (a) cases, which pin keys `main` presses too.
+  the box), and 7 passed: those five, and the two residual (a) cases, which pin keys `main` presses too. In fix round 2
+  the file has 19; against `main` 3fda0fc9b1's `send.ts`, the same 11 fail and 8 pass, the residual (e) case among them.
 - The test tree's compile check could not finish in this workspace (the test slice's memory cap stopped it twice), so
   the first fast run was the first to run it (shard `server 10/12`). It found one line of the new file calling an array
   method the test tree's library setting lacks, now a plain loop.
 - Mutants (measured): each mutant was applied to `send.ts` in place, the file's suite was run alone through the test
   slice, and `send.ts` was restored and compared byte for byte. Round 1 ran `send-tall-box.test.ts` and `send.test.ts`;
-  fix round 1 ran `send-tall-box.test.ts` (18 cases) for every row below, and the counts are that file's. The send
-  suite's only kill is M1's, its reversed case 6.
+  fix round 1 ran `send-tall-box.test.ts` (18 cases) for every row below, and the counts are that file's. Fix round 2
+  changed one comment of `send.ts` (the corpus counts beside guard 2) and re-ran every row against the file's 19 cases:
+  the same counts, and the residual (e) case passes under every mutant, as a residual that pins `main`'s keys does. The
+  send suite's only kill is M1's, its reversed case 6.
 
 | Mutant | Result | Killed by (in `send-tall-box.test.ts`) |
 |---|---|---|

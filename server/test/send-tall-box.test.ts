@@ -16,7 +16,7 @@ import { KeyedQueue } from '../src/inject/queue.js';
 import { sendPrompt, submitEnter, readBoxText, draftOfMeasured } from '../src/inject/send.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { renderMailNudge } from '../src/coord/envelope.js';
-import { BOX_RULE, EMPTY_BOX } from './inputBoxPane.js';
+import { BOX_RULE, EMPTY_BOX, boxPane } from './inputBoxPane.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const noSleep = async () => {};
@@ -85,9 +85,11 @@ describe('wave 185, point 1: the resume presses Enter only on a box read whole a
     const { tmux, calls } = fakeTmux([SYNTHETIC_tallBox(NUDGE, PLAIN_RULE)]);
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', NUDGE, LANE);
     expect(keys(calls)).not.toContain('Enter');
-    // The lane's next arm: the box is stashed whole (C-s). This static pane never empties after it, so the stash is
-    // reported failed. On a pane that follows the keys the arm goes on, and in this form its second Enter can submit the
-    // person's restored draft, on main too: the note's "What this does not close", (b), ticket tall-box-top-anchor.
+    // The lane's next arm: the box is stashed whole (C-s), where main pressed Enter twice on this pane. This static pane
+    // never empties after it, so the stash is reported failed. On a model that follows the keys the arm goes on: the
+    // nudge is typed and submitted and the build restores the draft. Whether the arm then presses a second Enter, which
+    // submits that draft, depends on the row drawn after our just-submitted turn: nothing, or the same reply as before,
+    // and the draft is kept; a different reply, and it is submitted. The note's "What this does not close", (b), #3482.
     expect(res).toMatchObject({ ok: false, error: 'stash-failed' });
   });
 
@@ -275,9 +277,9 @@ function SYNTHETIC_tallBoxBlankGap(turn: string): string {
   return [...head, ...Array<string>(fill).fill(''), PLAIN_RULE, ...box, PLAIN_RULE, ...foot].join('\n') + '\n';
 }
 
-// RESIDUALS, pinned as they are today so the follow-up wave (ticket tall-box-top-anchor) turns them red first. Each
-// asserts a key list main presses too: this PR does not close them (the note's "What this does not close", (a)).
-describe('wave 185, residual (a), not closed here: a past turn of our text, then only blank rows, then a plain top rule', () => {
+// RESIDUALS, pinned as they are today so the follow-up wave (#3482) turns them red first. Each asserts a key list main
+// presses too: this PR does not close them (the note's "What this does not close", (a) and (e)).
+describe('wave 185, residual (a), not closed here (#3482): a past turn of our text, then only blank rows, then a plain top rule', () => {
   it('prefix mode: the resume reads the past nudge and the blank rows down to the TOP rule as a closed box: Enter, Enter', async () => {
     const { tmux, calls } = fakeTmux([SYNTHETIC_tallBoxBlankGap(NUDGE)]);
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', NUDGE, LANE);
@@ -289,6 +291,22 @@ describe('wave 185, residual (a), not closed here: a past turn of our text, then
     const line = 'please look at the failing check on the release branch and tell me what broke';
     const { tmux, calls } = fakeTmux([SYNTHETIC_tallBoxBlankGap(line)]);
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', line, { resumeIfOwn: 'whole' });
+    expect(keys(calls)).toEqual(['Enter', 'Enter']);
+    expect(res).toMatchObject({ ok: false, error: 'enter-ignored' });
+  });
+});
+
+describe('wave 185, residual (e), not closed here (#3482): a row of the person\'s made of rule characters reads as the closing rule', () => {
+  it('our stranded nudge, then the person\'s indented row of 12 rule characters and their text: Enter, Enter', async () => {
+    // The marker row is in view and the box is closed. The whole-box read stops at the first row it takes for a plain
+    // rule (eight or more rule characters, at any indent), which here is the person's own row, so it sees only our text.
+    const rows: string[] = [];
+    let rest = NUDGE;
+    while (rest.length > 100) { const cut = rest.lastIndexOf(' ', 100); rows.push(rest.slice(0, cut)); rest = rest.slice(cut + 1); }
+    rows.push(rest);
+    const pane = boxPane([...rows, '─'.repeat(12), 'and here is what I actually want to say next']);
+    const { tmux, calls } = fakeTmux([pane]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', NUDGE, LANE);
     expect(keys(calls)).toEqual(['Enter', 'Enter']);
     expect(res).toMatchObject({ ok: false, error: 'enter-ignored' });
   });

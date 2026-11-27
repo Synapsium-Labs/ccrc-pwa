@@ -304,7 +304,7 @@ export const draftOfMeasured = (ansiPane: string): BoxRead => {
  *
  * THE FIRST COLUMN is what tells the box's own rule from a row of a draft, ours included (a message holding "─── notes
  * ───" or a table's crossing line): measured on every recorded pane, each of the 280 rules starts at the first column,
- * and none of the 149 draft rows below a marker row in the 59 input boxes does. The marker row starts with the glyph,
+ * and none of the 124 draft rows below a marker row in the 61 input boxes does. The marker row starts with the glyph,
  * and every row below it is indented, wrapped rows too. No recorded pane carries a labelled rule at all. A rule's width
  * is not used: the box corpus records rules shorter than the pane.
  */
