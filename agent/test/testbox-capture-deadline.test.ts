@@ -523,7 +523,9 @@ describe('gate G1: a frames part, composed, every bound taken, ends within its w
     return { at, drives: i, ended: frames.find((f) => f.state === 'ended') };
   }
 
-  for (const [name, part] of [['the first part', 0], ['the longest part', longest]] as const) {
+  // The person part by name, since the longest part is chosen by the very formula a case must hold.
+  const person = FRAMES_PARTS.findIndex((p) => p.case === 'person-turns');
+  for (const [name, part] of [['the first part', 0], ['the longest part', longest], ['the person part, with its own bound', person]] as const) {
     it(`${name}: every step at its bound, ended with its frame, within its own worst case`, async () => {
       const r = await composedRun(part);
       expect(r.drives).toBe(framesDriveSteps(part).length);
