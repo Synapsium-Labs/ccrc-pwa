@@ -1,11 +1,13 @@
 # `delegation_events`: keep only the events something reads (design)
 
-Date: 2026-11-27. Status: **draft for the operator**. Nothing is deleted anywhere before the operator approves this design.
+Date: 2026-11-27. Status: **ruled by the operator on 2026-11-27** (§0.1). Plan: `docs/superpowers/plans/2026-11-27-delegation-events-retention.md`,
+which defines D-9165 to D-9170.
 Read against `origin/main` at `f80f47760`. Context: C5, the delegation lane (broker spec
 `docs/superpowers/specs/2026-10-04-delegation-broker-design.md`, wave-4 plan
 `docs/superpowers/plans/2026-10-26-delegation-broker-wave4-project.md`, programme ledger
-`docs/superpowers/programs/delegation-broker.md`). Deviation numbers are `D-TBD-delegation-retention-<x>` until the
-orchestrator mints them.
+`docs/superpowers/programs/delegation-broker.md`). Deviation numbers: D-9165 (no reader), D-9166 (the swing),
+D-9167 (the contract), D-9168 (the sequence-list delete), D-9169 (the broker spec's amendment) and D-9170 (live by default with an
+automatic stop, no shadow phase), all issued and defined in the plan.
 
 ## 0. Summary
 
@@ -27,11 +29,24 @@ orchestrator mints them.
 7. No new timer. The existing applier and the existing 60-second lane pass do the work. The first pass over the existing
    ~1.25 million Bash rows deletes 1,000 rows per transaction and 20,000 per pass, so it takes about an hour (§4.5).
 8. The journal, the checkpoint, the carried file, compaction and every carry rule stay unchanged (§4.6).
-9. Shadow first: a new row on the existing Shadow lanes card counts what would be removed and removes nothing. Live
-   removes the rows, and Shadow is also the off switch (§4.9).
+9. **Live when it ships, with an automatic stop (D-9170).** No shadow phase. A row on the existing Shadow lanes card,
+   seeded Live, is the operator's Off switch. If the repair ever finds SQLite disagreeing with the kept-classes rule, the
+   lane goes back to keeping every class by itself, records why once (one durable operator notice) and stays that way
+   until the operator re-arms it with a tap. A daily counts line gives the measurement that a shadow phase would have
+   given (§4.9).
 10. Expected result (§5): the table goes from about 2.4 GB to about 0.25 to 0.9 GB, depending on the Bash share, which
-    the shadow measures. A backup's coordination set goes from 4.6 GB to about 2.5 to 2.9 GB. The live file shrinks only
-    if the operator chooses a one-time VACUUM (decision D3).
+    the daily line measures. A backup's coordination set goes from 4.6 GB to about 2.5 to 2.9 GB. The live file keeps
+    its size, and its freed pages are reused (D3 (a)).
+
+### 0.1 The operator's rulings of 2026-11-27
+
+| Decision | Ruling |
+|---|---|
+| D1, what SQLite keeps | (a) Every class except the three Bash classes. |
+| D2, how it goes live | No shadow phase: it is live when it ships. The Shadow lanes card row stays only as the operator's Off switch, Live by default. An automatic stop: when the per-pass repair finds SQLite disagreeing with the kept-classes rule (a mismatch it would fix by replay), the lane switches itself back to keeping every class, records why once (one operator notice, durable, so a restart does not repeat it) and does not re-arm by itself; the operator's tap re-arms it. The daily counts line stays (D-9170). |
+| The first pass | Its batch cost limits itself: each batch is timed, and the batch is halved when one takes over 100 ms. |
+| D3, space | (a) Leave the freed pages for reuse; no `VACUUM`. |
+| D4, the journal | Unchanged. No separate design now. |
 
 ## 1. The problem, as measured
 
@@ -140,7 +155,7 @@ is a separate defect to fix first. §11 has the read-only queries that tell the 
 
 ### 2.5 Which records dominate
 
-The code answers part of this, and the shadow measures the rest. In the hook's spool definition (`ccd/session-hook.sh`,
+The code answers part of this, and the daily counts line (§4.9) measures the rest. In the hook's spool definition (`ccd/session-hook.sh`,
 `DSP_DEFS`, its `spool` def), a line is written for:
 
 - `PreToolUse` and `PostToolUse` of **Agent, Task, Workflow and Bash**;
@@ -189,14 +204,14 @@ different hazard (§6, alternative F).
   references. K1 to K6 carry what is needed. Pruning never passes an event before a durable checkpoint covers it. An
   activity id survives pruning in the checkpoint. **Unchanged.**
 - **Broker spec §5.2** lists `delegation_events` as "append-only accepted events", and §5.12 says "`delegation_events`
-  follows the journal". **Both are amended** (§10): the table holds the accepted events of the projected classes, and
+  follows the journal". **Both are amended** (§10): the table holds the accepted events of the kept classes, and
   it follows the journal for those classes.
 - **One writer per fact.** Which evidence rows SQLite holds is one fact. Its one owner is the applier
-  (`DelegationDurability`), which acts through the store. The operator's shadow or live choice is a second fact with its
+  (`DelegationDurability`), which acts through the store. The operator's Live or Off choice is a second fact with its
   own owner: the lane-arm door, `POST /api/coord/lane-arm`.
 - **`coord.db` rules (CLAUDE.md).** `DatabaseSync` stays synchronous, and no repository or async layer goes over
-  `CoordStore`. Migrations refuse rather than open empty. The one migration here is additive, so an older build reads
-  it under rule 3. A lost `coord.db` is re-measured from the files; here that means a full replay of the retained
+  `CoordStore`. Migrations refuse rather than open empty. The two migrations here are additive, so an older build
+  reads them under rule 3. A lost `coord.db` is re-measured from the files; here that means a full replay of the retained
   journal, which is what happens today.
 - **Snapshot and restore rules.** The coordination set (journal, checkpoint, carried file, `coord.db`,
   `operator-model.db`, manifest) is restored as one set. The landing log and the privacy journal are never copied or
@@ -210,7 +225,7 @@ different hazard (§6, alternative F).
 
 ### 4.1 The idea
 
-The table becomes **a projection of the projected classes**, not of all evidence. Everything that keeps the table equal
+The table becomes **a projection of the kept classes**, not of all evidence. Everything that keeps the table equal
 to the journal, which is the index, the per-pass check, the replay, step 0 and the compaction delete, already turns on
 one question: which sequences does SQLite hold? `DelegationEvidenceIndex` is the answer today, and it holds every
 evidence sequence. The design changes **only that membership**, through one pure rule, and every existing check
@@ -218,27 +233,23 @@ follows. No second retention mechanism appears, and the age bound stays compacti
 
 ### 4.2 The L1 decider
 
-A new pure module, `server/src/coord/delegation-event-projection.ts` (ring L1, context C5). It imports the envelope
-type from `shared/api.ts` and nothing with I/O. Its vocabulary is declared once in `shared/api.ts`, beside
-`DELEGATION_EVENT_KINDS`, and derived from there.
+A new pure module, `server/src/coord/delegation-event-projection.ts` (ring L1, context C5). It imports the envelope type
+and nothing with I/O. The class vocabulary is the lane's own, declared once in that module with an exported kebab guard
+for `mail-routes.test.ts`'s scan, as `delegation-compaction.ts#DELEGATION_CARRY_REASONS` is. It never goes on the wire.
 
 ```ts
-// shared/api.ts (L0): the record classes, closed.
 export const DELEGATION_EVENT_CLASSES = ['bash-plain', 'bash-listed', 'bash-shed', 'agentic', 'subagent', 'session', 'prompt'] as const;
-
-// delegation-event-projection.ts (L1)
 export function delegationEventClassOf(e: DelegationEventEnvelopeV1): DelegationEventClass;
-/** The one table: which classes SQLite holds while the row is live. Extending it is a row, never a branch. */
-export const DELEGATION_EVENT_CLASS_PROJECTED: Readonly<Record<DelegationEventClass, boolean>>;
-export type DelegationEventsContract =
-  | { mode: 'all' }
-  | { mode: 'thin'; legacyBelow: number; sweptBelow: number; projectedThrough: number | null };
-/** Is this evidence record one SQLite must hold under `contract`? Used by recovery, the applier, the repair's replay and the sweep. */
+/** The one table: which classes SQLite keeps while the lane is armed (D1 (a): every class but the three Bash ones). */
+export const DELEGATION_EVENT_CLASS_KEPT: Readonly<Record<DelegationEventClass, boolean>>;
+export type DelegationEventsContract = { mode: 'all' } | { mode: 'thin'; legacyBelow: number; sweptBelow: number };
+export interface DelegationEventsStop { at: number; reason: DelegationEventsStopReason; choiceAt: number | null; noticedAt: number | null }
+export interface DelegationEventsRow { contract: DelegationEventsContract; stop: DelegationEventsStop | null }
 export function delegationEventHeld(contract: DelegationEventsContract, sequence: number, cls: DelegationEventClass): boolean;
-/** The contract's next value, given the operator's choice, the first sequence of the application about to project, and what SQLite reports. */
-export function nextDelegationEventsContract(input: {...}): DelegationEventsContract;
-/** At most `budget` legacy sequences to delete next, ascending, and the `sweptBelow` they reach. */
-export function planDelegationEventSweep(contract: DelegationEventsContract, legacy: readonly number[], budget: number): { delete: readonly number[]; sweptBelow: number };
+export function delegationEventsWant(choice: { live: boolean; updatedAt: number | null }, stop: DelegationEventsStop | null): 'thin' | 'all';
+export function alignDelegationEvents(row: DelegationEventsRow, want: 'thin' | 'all', at: { lastSequence: number | null; firstRetained: number | null }): DelegationEventsRow | null;
+export function stopDelegationEvents(row: DelegationEventsRow, reason: DelegationEventsStopReason, at: number, choiceAt: number | null): DelegationEventsRow;
+export function nextDelegationSweepBatch(size: number, elapsedMs: number): number;
 ```
 
 - **Classes**, decided from the envelope as the ingest validates it:
@@ -249,20 +260,24 @@ export function planDelegationEventSweep(contract: DelegationEventsContract, leg
   - `subagent`: `SubagentStart` or `SubagentStop`;
   - `session`: `SessionStart` or `SessionEnd`;
   - `prompt`: `UserPromptSubmit`.
-- **The projected table.** The recommendation is to project every class except the three Bash classes (decision D1).
-  The rule is simple to state: Bash evidence belongs to the lane, and the lane reads it from the journal. The classes
-  stay separate in the vocabulary anyway, so the shadow can report each one, and a later ruling can keep, say,
-  `bash-shed` by changing a single row.
-- **Membership.** `delegationEventHeld` is true when the mode is `all`, when the class is projected, or when
-  `sweptBelow ≤ sequence < legacyBelow` (a legacy row still waiting for the sweep).
-- **Contract moves** (`nextDelegationEventsContract`):
-  - From `all` to live: `{ thin, legacyBelow: <first sequence of this application>, sweptBelow: <journal's first retained sequence>, projectedThrough }`.
-  - From `thin` to shadow: `all`.
-  - Thin, with SQLite's `MAX(journalSequence)` above `projectedThrough`: another writer projected after us, which means
-    an older build ran (§4.10). The contract **re-baselines** to `legacyBelow = max + 1` and keeps `sweptBelow`. It
-    never wipes.
-- **The sweep plan.** It takes the lowest legacy sequences at or above `sweptBelow`, up to the budget. Its `sweptBelow`
-  is the last one plus one, or `legacyBelow` when none are left.
+- **The kept table** (D1 (a)): every class except the three Bash ones. The classes stay separate in the vocabulary so the
+  daily line can report each one, and a later ruling can keep, say, `bash-shed` by changing a single row.
+- **Membership.** `delegationEventHeld` is true when the mode is `all`, when the class is kept, or when
+  `sweptBelow ≤ sequence < legacyBelow` (a legacy row the sweep has not reached yet).
+- **What the lane wants** (`delegationEventsWant`): `thin` when the card row reads Live and no stop stands against that
+  choice. A stop stands while its `choiceAt` equals the row's `updatedAt`. Every tap on the row
+  (`CoordStore.setLaneArm`) writes a new `updatedAt`, so the operator's tap re-arms the lane, and nothing else does. A row
+  that is unreadable or absent reads as not live, the card's rule (`server/src/coord/laneArm.ts#laneArmRowViewOf`), so
+  doubt keeps every class.
+- **Contract moves** (`alignDelegationEvents`; null when nothing changes):
+  - From `all` to `thin`: `legacyBelow` = the last evidence sequence plus one, so everything SQLite holds now is legacy,
+    and `sweptBelow` = the journal's first retained sequence. A standing stop is cleared on this move.
+  - From `thin` to `all`: the Off tap, or a stop.
+- **The stop** (`stopDelegationEvents`): mode `all`, with the reason, the time and the choice it stopped under.
+  `noticedAt` is null until the notice is raised.
+- **The batch** (`nextDelegationSweepBatch`): it starts at `DELEGATION_EVENTS_SWEEP_FIRST_BATCH` (1,000) and halves, down
+  to a floor of 1, whenever a batch took more than `DELEGATION_EVENTS_SWEEP_SLOW_MS` (100 ms). It never grows back in that
+  process.
 
 ### 4.3 The contract row: one durable fact, written with its rows
 
@@ -270,105 +285,112 @@ One additive migration (the next free `MIGRATIONS` slot, re-measured before the 
 
 ```sql
 CREATE TABLE delegation_events_projection (
-  id               INTEGER PRIMARY KEY CHECK (id = 1),
-  mode             TEXT NOT NULL CHECK (mode IN ('all', 'thin')),
-  legacyBelow      INTEGER,          -- thin: rows below it were projected in full
-  sweptBelow       INTEGER,          -- thin: excluded rows below it are gone
-  projectedThrough INTEGER,          -- thin: the highest sequence this contract's writer projected
-  updatedAt        INTEGER NOT NULL
+  id            INTEGER PRIMARY KEY CHECK (id = 1),
+  mode          TEXT NOT NULL,     -- 'all' | 'thin'; no CHECK, so a newer build's word reads as unknown, which keeps every class
+  legacyBelow   INTEGER,           -- thin: rows below it were projected in full
+  sweptBelow    INTEGER,           -- thin: excluded rows below it are gone
+  stoppedAt     INTEGER,           -- the automatic stop (D-9170), null when none stands
+  stopReason    TEXT,
+  stopChoiceAt  INTEGER,           -- the card row's updatedAt the stop was made under
+  stopNoticedAt INTEGER,           -- when the one notice was raised
+  updatedAt     INTEGER NOT NULL
 );
 INSERT INTO delegation_events_projection (id, mode, updatedAt) VALUES (1, 'all', 0);
--- plus the Shadow lanes card's seed row for the new lane (shadow), as every lane-arm lane gets one
 ```
 
-- **Writers.** Only the store writes the contract, and only from three calls, each inside the same transaction as the
-  rows that call touches:
-  - `insertDelegationEvents` also writes `projectedThrough` and, on a contract move, `mode` and the bounds;
-  - the sweep's delete writes `sweptBelow`;
-  - the full projection's wipe arm writes `all`.
-- **Readers.** The applier reads the contract once at `recover()`, through one new member of the projection port
-  (`contract()`), before it builds the index.
-- **Why a table and not the checkpoint.** The contract describes SQLite, which is repairable output. If it lived in
-  the checkpoint, the authority would carry facts about its own copy, and a restore of `coord.db` alone could leave the
-  two disagreeing. Inside `coord.db`, the contract and its rows commit together, so a crash between them is impossible.
-- **The operator's choice is a different fact.** The lane-arm row (`lane_arm_settings`, written only by
-  `POST /api/coord/lane-arm`) records what the operator wants. The contract records what SQLite holds. The applier
-  moves the contract toward the choice at its next application.
+A later migration, in the PR that turns the lane on, seeds the card row as `('delegation-events', 'live', 0)`.
+
+- **Writers.** Only the store writes the contract row, and only through two methods:
+  - `setDelegationEventsRow` writes the whole row: a contract move, a stop, the notice mark;
+  - `deleteDelegationEventsAt` deletes a batch of legacy rows and writes `sweptBelow` in the same transaction.
+  Both are called only by the applier (`DelegationDurability`).
+- **Readers.** The applier reads the row at `recover()`, through the projection port, before it builds the index. The
+  row is decoded in L1, never in the store.
+- **Why a table and not the checkpoint.** The contract describes SQLite, which is repairable output. If it lived in the
+  checkpoint, the authority would carry facts about its own copy, and a restore of `coord.db` alone could leave the two
+  disagreeing. Inside `coord.db`, the contract and its rows commit together.
+- **The operator's choice is a different fact.** The card row (`lane_arm_settings`, written only by
+  `POST /api/coord/lane-arm`) records what the operator wants. The contract row records what SQLite holds and whether
+  the lane stopped itself. The applier moves the contract toward the choice on every lane pass.
 
 ### 4.4 Who acts: no new timer and no new writer
 
 - **The applier** (`DelegationDurability`, L3, on its serialized queue). Its changes:
-  - `recover()` reads the contract and builds the index from the retained set with `delegationEventHeld`. The index
-    keeps one class byte per held sequence (about 1.4 MB at 1.4M records) and the ascending list of legacy sequences.
-  - The application path filters `evidenceSequences` and the rows it hands to `projectLocked` through the same rule.
-  - The repair's `replay` pushes only held records.
-  - A new door, `sweepProjection(budget)`, is enqueued like `compactJournal`, so it is serialized with every
-    application, repair and cut. It calls the planner, then `CoordStore.deleteDelegationEventsAt(sequences, sweptBelow)`
-    (one transaction), then removes those sequences from the index. It removes them only after the commit, so the
-    in-memory index never runs ahead of SQLite.
-- **The lane** (`DelegationLane`, L4, on its existing 60-second pass, `DELEGATION_SWEEP_MS`). It reads the lane-arm row
-  through the existing reader and passes the choice to the applier. Right after `compact`, it calls `sweepProjection`
-  while legacy rows remain. It decides nothing itself.
-- **Recorded reason for a second delete statement** (CLAUDE.md, "legitimately different"). `deleteDelegationEventsBetween`
-  deletes a contiguous sequence range, and that suits the compaction's sparse carried set. The legacy set is the
-  opposite shape: about 90% of the rows, scattered among the kept 10%. Walking it with `deleteEventsInGaps` would make
-  one transaction, and one WAL fsync, per gap of about 10 rows, roughly 125,000 commits. `deleteDelegationEventsAt`
-  deletes a list of up to 1,000 sequences with `journalSequence IN (…)`, through the UNIQUE index, in one transaction.
-  Both statements belong to the store, and the applier is the only caller of either.
+  - `recover()` reads the row and sets the index's contract. The index keeps every evidence sequence with one class byte,
+    and derives from them the held sequences its counts answer and the legacy sequences the sweep takes.
+  - The application path classifies its records and hands `projectLocked` only the held rows.
+  - The repair's replay pushes only held records. In `thin` mode, the per-pass repair runs with `stopOnMismatch`
+    (§4.6). A mismatch stops the lane, the repair then runs under `all`, and its report carries `stopped`.
+  - A door `alignEvents(choice)`, enqueued, moves the contract toward the card row's choice. It writes nothing when the
+    two already agree.
+  - A door `sweepEvents()`, enqueued like `compactJournal`, so it is serialized with every application, repair and cut.
+    It takes at most `DELEGATION_EVENTS_SWEEP_BATCHES_PER_PASS` (20) batches. It times each `deleteDelegationEventsAt`
+    on the applier's monotonic clock and sizes the next batch with `nextDelegationSweepBatch`. It removes a batch's
+    sequences from the index only after the commit, so the index never runs ahead of SQLite.
+  - A door `noteEventsStopNoticed(at)` writes `stopNoticedAt`.
+- **The lane** (`DelegationLane`, L4, on its existing 60-second pass, `DELEGATION_SWEEP_MS`). A small step module,
+  `server/src/coord/delegation-events-step.ts` (L4), does each pass:
+  1. hands the card row's choice to `alignEvents`;
+  2. after `compact`, calls `sweepEvents`;
+  3. when a stop stands with no `stopNoticedAt`, raises the one notice through the existing funnel
+     (`server/src/notice.ts#notify`, with the once-only feed key `delegation-events-stopped:<stoppedAt>`), then marks it;
+  4. once a UTC day, under the compaction's day guard, writes the counts line.
+  The step takes its reads and acts as arguments, so it decides nothing about the store, and `watch.ts` only wires it.
+- **Recorded reason for a second delete statement** (D-9168, CLAUDE.md "legitimately different").
+  `deleteDelegationEventsBetween` deletes a contiguous sequence range, and that suits the compaction's sparse carried
+  set. The legacy set is the opposite shape: about 90% of the rows, scattered among the kept 10%. Walking it with
+  `deleteEventsInGaps` would make one transaction, and one WAL fsync, per gap of about 10 rows, roughly 125,000 commits.
+  `deleteDelegationEventsAt` deletes a list of sequences with `journalSequence IN (…)`, through the UNIQUE index, in one
+  transaction. Both statements belong to the store, and the applier is the only caller of either.
 
 ### 4.5 The one-time first pass over the existing rows
 
-When the row goes live, the legacy set is every excluded record below `legacyBelow`: about 0.9 × 1.38M ≈ **1.25M rows**,
-and up to about 1.7M if the flip happens at the top of the 13.3-day swing.
+When the lane first arms, the legacy set is every excluded record below `legacyBelow`: about 0.9 × 1.38M ≈ **1.25M rows**,
+and up to about 1.7M if the arming lands at the top of the 13.3-day swing.
 
-- **Batch.** 1,000 rows per transaction (`DELEGATION_EVENTS_SWEEP_CHUNK`), with the loop yielded between transactions,
-  and at most 20 transactions (20,000 rows) per lane pass (`DELEGATION_EVENTS_SWEEP_PASS_ROWS`).
+- **Batch.** It starts at 1,000 rows per transaction, with the loop yielded between transactions, and runs at most 20
+  transactions per lane pass. Each batch is timed, and the next one is halved whenever a batch took over 100 ms, so the
+  longest stall limits itself on any box.
 - **Cost.** At the 70 to 85 µs per deleted row that `repairDelegationProjection`'s header gives for event deletes (not
-  measured on this box at this size), one transaction holds the loop for 70 to 85 ms, which is the longest stall. A pass
-  spends 1.4 to 1.7 s, spread over 20 turns, inside its 45 s budget (`DELEGATION_PASS_BUDGET_MS`). The whole first pass
-  takes 1.25M / 20k ≈ 63 passes, or **about an hour**. The existing stall sampler (`stallMax`, `stallP99` on the slow
-  line) measures the real figure.
-- **WAL.** Each transaction touches about 1,000 × 1.7 KB of table and index pages, a few MB of WAL frames. SQLite's
-  default checkpoint threshold (1,000 pages), which `sqliteFile.ts` does not change, keeps the WAL at a few MB. A
-  `VACUUM INTO` backup during the sweep reads one consistent snapshot, as it does today.
-- **Crash.** Rows, `sweptBelow` and their removal from the index move together: the first two in one transaction, the
-  index after the commit. After a restart, recovery rebuilds the legacy list from `sweptBelow`, and the sweep resumes.
-  Nothing is replayed.
+  measured on this box at this size), a 1,000-row transaction holds the loop for 70 to 85 ms, under the halving bound.
+  A pass then spends 1.4 to 1.7 s, spread over 20 turns, inside its 45 s budget (`DELEGATION_PASS_BUDGET_MS`). The whole
+  first pass takes 1.25M / 20k ≈ 63 passes, or **about an hour**, and longer if the batch halves. The existing stall
+  sampler (`stallMax`, `stallP99` on the slow line) measures the real figure.
+- **WAL.** Each transaction touches a few MB of table and index pages. SQLite's default checkpoint threshold (1,000
+  pages), which `sqliteFile.ts` does not change, keeps the WAL at a few MB. A `VACUUM INTO` backup during the sweep reads
+  one consistent snapshot, as it does today.
+- **Crash.** Rows and `sweptBelow` commit in one transaction, and the index follows after the commit. After a restart,
+  recovery rebuilds the legacy list from `sweptBelow`, and the sweep resumes. Nothing is replayed.
 - **Compaction meanwhile.** Compaction cuts from the bottom: a cut removes legacy sequences from the index, and the
-  sweep treats `sweptBelow` as at least the journal's first retained sequence. They never race, because both run on
-  the applier's queue.
+  sweep starts at least at the journal's first retained sequence. They never race, because both run on the applier's
+  queue.
 - **Doing nothing is also safe.** Compaction would remove every legacy row by itself within 10 to 13.3 days, through
   the existing delete walk. The sweep only brings that forward.
 
-### 4.6 The journal, the checkpoint and compaction stay consistent
+### 4.6 The journal, the checkpoint and compaction stay consistent, and what counts as a mismatch
 
 - The journal, the checkpoint and the carried file are not touched. Compaction's plan, its carry rules, its renames
   and its retirement work exactly as before.
 - Compaction's `events-delete` and repair step 0 call `deleteEventsInGaps` with the carried evidence sequences. When a
   carried record is not held, its row is not in SQLite, and the range delete around it removes nothing extra. The
-  index's `dropThrough` keeps only held sequences, so its counts stay right.
+  index's `dropThrough` drops cut sequences from both its lists, so its counts stay right.
 - The per-pass check (`stats.count === evidence.total`, `stats.maxSequence === evidence.last`) and the full repair
-  compare SQLite with the new membership, which holds fewer rows, and they compare the same way as before.
-- The repair's last-resort wipe, if it ever runs, writes the contract `all` in its own transaction and then replays in
-  full under that contract. The next application moves the contract back to thin, and the sweep runs again. The wipe
-  stays correct, and it stays what it is today: drift handling, not a normal path.
+  compare SQLite with the held set.
+- **The mismatch that stops the lane** (D-9170). In `thin` mode, the repair runs with `stopOnMismatch`, and it returns
+  before acting in exactly two cases: it would replay from the start (its `behind`: SQLite's count below its own maximum
+  differs from the held count), or it would wipe (SQLite holds rows the journal's held set does not). Both say that
+  SQLite and the kept-classes rule disagree. The applier then stops the lane (`stopDelegationEvents`, one transaction),
+  moves the index to `all`, and runs the repair under `all`, which replays what the rule had excluded.
+- **Not a mismatch:** a stale projection's catch-up from SQLite's maximum (an application whose SQLite step failed),
+  step 0's clean-up below the journal's first retained sequence (a compaction that died between its rename and its
+  delete), and a per-session conflict heal. These are repaired as today, with no stop.
 
 ### 4.7 Reclaiming the space
 
-- **Default: no `VACUUM`.** The freed pages, about 2.1 GB plus the 400 MB already free, stay in the file and are reused
-  by later inserts into every table. The live file stays at 3.4 GB. Backups shrink at once, because `VACUUM INTO`
-  copies only live pages (§2.6).
-- **Option (decision D3): one `VACUUM` that also switches the file to incremental auto-vacuum**
-  (`PRAGMA auto_vacuum = INCREMENTAL; VACUUM;`).
-  - A plain `VACUUM` on the live server would hold the event loop for minutes, because `DatabaseSync` is synchronous.
-    It would also need about the live content's size (about 0.9 GB after the sweep) in temporary disk and an exclusive
-    lock. So it can run **only while the server is stopped**, as one step of `ccrc update` after its backup, and only
-    when the freelist is more than half the file. Where that step sits relative to the unit's stop is not verified.
-  - From then on, the lane's daily `compact` call ends with a bounded `PRAGMA incremental_vacuum(N)`, on the history
-    store's precedent (`PRUNE_VACUUM_PAGES`).
-  - The cost is one longer update and a small permanent pointer-map overhead.
-  - The recommendation is not now. The disk had enough room when last measured, the backups (the real cost) shrink
-    without it, and the freed pages will be reused.
+Ruled D3 (a): no `VACUUM`. The freed pages, about 2.1 GB plus the 400 MB already free, stay in the file and are reused by
+later inserts into every table. The live file stays at 3.4 GB. Backups shrink at once, because `VACUUM INTO` copies only
+live pages (§2.6). A live `VACUUM` stays rejected (§6 G). Switching the file to incremental auto-vacuum is left for a
+later decision, with the history store's bounded reclaim (`PRUNE_VACUUM_PAGES`) as its precedent.
 
 ### 4.8 What backups then contain
 
@@ -377,42 +399,44 @@ the carried file, `operator-model.db` and the manifest. The snapshot helper's va
 never reads `delegation_events`. A restored `coord.db` carries its contract row, so the restored server rebuilds its
 index under the restored contract.
 
-### 4.9 Shadow, then live, and what the operator sees
+### 4.9 Live by default, the automatic stop, and what the operator sees
 
-- **The switch.** One new row on the existing Shadow lanes card (`shared/lane-arm.ts#LANE_ARM_LANES`, for example
-  `delegation-events-thin`, seeded `shadow` by the migration). This adds a row to an existing table, not a new setting:
-  it is the shadow gate the brief asks for, and it is also the off switch (decision D2).
-- **Shadow (the default; deletes nothing).** The applier projects every record, as today. It also classifies every
-  record at recovery and at each application, and it runs the sweep planner without deleting. Once a day, beside the
-  compaction line and under the same day guard, it writes one line:
+- **The switch.** One new row on the existing Shadow lanes card (`shared/lane-arm.ts#LANE_ARM_LANES`,
+  `delegation-events`), seeded Live by its migration. It is the operator's Off switch, not a shadow gate: there is no
+  shadow phase (D-9170). Live means SQLite keeps only the kept classes. Off means SQLite keeps every class, which is
+  what `main` does today. Setting it Live asks for sign-in and the confirm key, as every row does.
+- **On the first pass after the release,** the contract moves from `all` to `thin`, new Bash records stop reaching
+  SQLite, and the sweep removes the legacy rows over about an hour.
+- **The automatic stop.** On a mismatch (§4.6) the lane keeps every class again, by itself. It records the reason and
+  the time in the contract row, raises **one** operator notice through the existing funnel (feed row and push, with a
+  once-only feed key), and marks the notice in the row, so a restart does not raise it again. If the server dies
+  between the notice and the mark, the next pass raises it once more, and the feed key keeps a single feed row. The lane
+  does not re-arm by itself. The operator re-arms it with a tap on the card row (Off, then Live), because the stop stands
+  only while the row's `updatedAt` is the one it was made under.
+- **The daily counts line,** once a UTC day, beside the compaction line and under the same day guard. It is the
+  measurement a shadow phase would have given:
 
-  `ccrc-server: delegation events: rows <n> by class bash-plain=<a>,bash-listed=<b>,bash-shed=<c>,agentic=<d>,subagent=<e>,session=<f>,prompt=<g>; would keep <k>; would remove <r> (<bytes>); freelist <p> of <q> pages`
+  `ccrc-server: delegation events: mode <all|thin>[ stopped <reason> at <iso>]; held <h> of <n> evidence records; by class bash-plain=<a>,bash-listed=<b>,bash-shed=<c>,agentic=<d>,subagent=<e>,session=<f>,prompt=<g>; legacy left <l>; freelist <p> of <q> pages of <s> bytes`
 
-  The same counts go to the lane's slow line as size keys (`evClassBashPlain`, …, `evWouldRemove`), and the card's row
-  shows "would remove <r> rows (<size>) of Bash evidence that nothing reads; removes nothing".
-- **Live.** The next application moves the contract to thin, and new Bash records stop reaching SQLite. The sweep
-  removes the legacy rows. The card shows "<n> old rows left to remove", then "done". The daily line reports `kept` and
-  `removed`.
-- **Back to Shadow.** The contract goes back to `all`. The next repair replays the excluded records from the journal
-  through the existing chunked replay (500 rows per chunk, with yields). That is a few minutes of background work and
-  about 2 GB of pages back in use. The card warns about this before the tap.
-- **Nothing else.** No feed rows, no mail, no pushes, no attention items. The size facts are diagnostics, not work for
-  anyone.
+- **Back to Off.** The contract goes to `all`. The next repair replays the excluded records from the journal through the
+  existing chunked replay (500 rows per chunk, with yields). That is a few minutes of background work and about 2 GB of
+  pages back in use. The card's words say so.
+- **Nothing else.** No mail, no attention items. The notice is the one exception, and it is raised once per stop.
 
 ### 4.10 Rollback, a lost `coord.db`, and restore
 
-- **Rolling back to a build without this design.** The older build ignores the contract and the lane-arm row. Its
-  repair expects every evidence record, so it replays the excluded ones, in chunks with yields, which costs minutes and
-  disk. When this build returns, it reads `MAX(journalSequence)` above `projectedThrough`, re-baselines (§4.2), and
-  sweeps again. Nothing refuses and nothing wipes. The rollback-floor reasoning in the broker spec (§5.13) is
-  untouched, because the journal format does not change.
-- **A lost `coord.db`.** The migration seeds `all` and `shadow`, and the repair replays every retained record. That is
-  today's behaviour. The operator re-arms the row, as with every lane-arm row.
-- **A coordination restore.** The contract comes back with its rows (§4.8).
+- **Rolling back to a build without this design.** The older build ignores the contract row and the card row. Its repair
+  expects every evidence record, so it replays the excluded ones, in chunks with yields, which costs minutes and disk.
+  When this build returns, its first repair finds SQLite holding rows the rule excludes, which is a mismatch. It stops
+  itself with one notice, and nothing refuses and nothing wipes. The operator's tap re-arms it, and the sweep runs
+  again. The broker spec's rollback-floor reasoning (§5.13) is untouched, because the journal format does not change.
+- **A lost `coord.db`.** The migrations seed `all` and Live, the repair replays every retained record (today's
+  behaviour), and the next pass arms the lane and sweeps.
+- **A coordination restore.** The contract row comes back with its rows (§4.8).
 
 ## 5. Expected size afterwards
 
-Let s be the Bash share of rows (inferred at about 0.9 or more in §2.5; the shadow measures it, and D1's answer moves it).
+Let s be the Bash share of rows (inferred at about 0.9 or more in §2.5; the daily counts line measures it).
 
 | | Today | After, s = 0.9 | After, s = 0.7 |
 |---|---|---|---|
@@ -458,21 +482,24 @@ reducing it is alternative F.
 
 ## 7. Risks
 
-1. **The Bash share is inferred.** If it is well below 90%, the gain is smaller, though never negative. The shadow
-   measures it before any deletion.
+1. **The Bash share is inferred, and there is no shadow phase to measure it first** (D-9170). If it is well below 90%,
+   the gain is smaller, though never negative. The first daily counts line measures it.
 2. **A reader outside the tree.** A private tool or an operator's habit could read `delegation_events` by SQL. Nothing in
-   this repository does. The journal keeps every byte, and the Shadow row brings the rows back.
+   this repository does. The journal keeps every byte, and the card row's Off brings the rows back.
 3. **A membership bug causes replay storms.** If recovery, the applier and the repair disagree about membership, every
-   pass would run a full replay. Mitigations: one function used at all four sites; a characterization test pinned
-   first; a mutation row that reverses membership must go red; and the shadow phase compares the would-keep count with
-   the count the index would hold.
-4. **Stalls.** About 80 ms per 1,000-row transaction is an estimate from a figure measured elsewhere. The stall sampler
-   measures the real value, and a single constant halves it if needed.
-5. **The cost of a rollback.** An older build replays about 1.25M records back into SQLite. That is minutes of
-   background work, about 2 GB of pages and a larger backup until this build returns and sweeps again.
-6. **The live file does not shrink without D3.** The freed pages are reused, but the disk does not get them back.
-7. **The journal stays large.** About 1.5 GB of every backup set remains until alternative F is decided.
-8. **Compaction might not be running.** If the daily line shows it skipping for a reason other than `below-share`, this
+   pass would replay. The automatic stop bounds this: the first such mismatch stops the lane and keeps every class, which
+   is `main`'s behaviour. Mitigations before that: one function used at all four sites, a characterization test pinned
+   first, and mutation rows that must go red.
+4. **A false stop.** A mismatch with another cause (an operator's hand edit of the table, a disk fault) also stops the
+   lane. That is the safe direction, and the notice names the reason.
+5. **Stalls.** About 80 ms per 1,000-row transaction is an estimate from a figure measured elsewhere. The batch
+   halves itself whenever one takes over 100 ms, and the stall sampler reports the real value.
+6. **The cost of a rollback.** An older build replays about 1.25M records back into SQLite. That is minutes of
+   background work and about 2 GB of pages. When this build returns, it stops itself with one notice, and the operator
+   re-arms it with a tap.
+7. **The live file does not shrink** (D3 (a)). The freed pages are reused, but the disk does not get them back.
+8. **The journal stays large** (D4). About 1.5 GB of every backup set remains.
+9. **Compaction might not be running.** If the daily line shows it skipping for a reason other than `below-share`, this
    design helps, but the real defect is elsewhere and has to be fixed first (§2.4).
 
 ## 8. Not verified
@@ -482,27 +509,16 @@ reducing it is alternative F.
 - `PRAGMA auto_vacuum`, `freelist_count`, `page_count` and `page_size` on the live file (§11, query 3).
 - The journal's and the carried file's sizes on the server box. The journal's ~1.5 GB is a subtraction.
 - The per-row delete cost on the server box at this table size.
-- Whether `ccrc update` has a window with the server stopped and after its backup, where D3's `VACUUM` could run.
 - Whether any tool outside this repository reads `delegation_events`.
 - That `delegation_events_by_observed` (22 MB) has no reader: no statement in the tree filters or orders on
   `observedAt`. Dropping it is a small, separate change, not part of this design.
 
-## 9. Decisions for the operator
+## 9. Decisions, as ruled on 2026-11-27
 
-- **D1. What SQLite keeps.**
-  - (a) Every class except the three Bash classes. **Recommended.**
-  - (b) Every class except `bash-plain`.
-  - (c) Nothing, so the journal alone holds the evidence.
-- **D2. How it goes live.**
-  - (a) A row on the existing Shadow lanes card: shadow at first, live with one tap after the daily line has shown the
-    counts, and Shadow is the off switch. **Recommended.**
-  - (b) Live in the release after the shadow release, with no card row.
-- **D3. Space.**
-  - (a) Leave the freed pages for reuse. **Recommended now.**
-  - (b) One `VACUUM`, switching the file to incremental auto-vacuum, in an update's stopped-server window, then bounded
-    incremental reclaim on the daily compaction.
-- **D4. The journal.** Whether to open a separate design for reducing plain Bash records in the journal itself
-  (alternative F). It changes rung 3's evidence and needs the broker's review.
+- **D1:** (a) every class except the three Bash classes.
+- **D2:** no shadow phase; live when it ships, with the card row as the Off switch and the automatic stop (D-9170).
+- **D3:** (a) leave the freed pages for reuse.
+- **D4:** the journal stays unchanged, with no separate design now.
 
 ## 10. Tests the plan must carry, and amendments to other documents
 
@@ -517,18 +533,22 @@ step 0, all against today's behaviour, where membership is "every evidence recor
 | M2 | recovery builds the index without the contract (mode `all`) | the per-pass check goes full after a restart in thin mode |
 | M3 | the sweep commits rows without `sweptBelow` | a restart after the sweep's first transaction replays rows |
 | M4 | the index drops swept sequences before the commit | a failed delete leaves the index ahead of SQLite |
-| M5 | the contract's re-baseline is removed | the full repair wipes after a simulated older-build replay |
-| M6 | the sweep's chunk is unbounded | a pass deletes more than `DELEGATION_EVENTS_SWEEP_PASS_ROWS` rows |
-| M7 | shadow deletes | any row is removed while the lane-arm row reads `shadow` |
+| M5 | the stop is removed | the full repair wipes after a simulated older-build replay, instead of stopping |
+| M6 | the sweep's batches per pass are unbounded | a pass runs more than `DELEGATION_EVENTS_SWEEP_BATCHES_PER_PASS` batches |
+| M7 | the stop is ignored by `delegationEventsWant` | after a stop the next pass moves the contract back to `thin` with no tap |
+| M7b | the stop's notice is raised again after a restart | a second notice for one `stoppedAt` |
+| M7c | `stopOnMismatch` is not passed in thin mode | a mismatch replays or wipes under `thin` instead of stopping |
+| M10 | the batch never halves | a batch slower than 100 ms leaves the next at the same size |
 | M8 | compaction's delete ignores the contract | the counts disagree after a cut in thin mode |
-| M9 | a class is added without a projected-table row | a type error or a red row in the `single-definition` area file |
+| M9 | a class is added without a kept-table row | a type error or a red row in the `single-definition` area file |
 
 **Amendments.**
-- Broker spec §5.2, the `delegation_events` row: "the accepted events of the projected classes
-  (`DELEGATION_EVENT_CLASS_PROJECTED`)".
-- Broker spec §5.12, "Retention": "`delegation_events` follows the journal for the projected classes; its contract row
-  says which records it holds".
-- The schema entry-22 comment and the projection header in `store.ts`: "journal-derived, of the projected classes".
+- Broker spec §5.2, the `delegation_events` row: "the accepted events of the kept classes
+  (`DELEGATION_EVENT_CLASS_KEPT`)".
+- Broker spec §5.12, "Retention": "`delegation_events` follows the journal for the kept classes; its contract row
+  says which records it holds (D-9169)".
+- The projection header in `store.ts` and the new migration's comment: "journal-derived, of the kept classes" (entry 22 is
+  frozen, so the new entry says it).
 
 ## 11. Measurement queries (read-only, by the operator, on a backup copy of `coord.db`)
 
@@ -539,14 +559,10 @@ step 0, all against today's behaviour, where membership is "every evidence recor
 3. The file: `PRAGMA auto_vacuum; PRAGMA freelist_count; PRAGMA page_count; PRAGMA page_size;`
 4. In the server's log: the `ccrc-server: delegation compaction:` lines of the last two weeks.
 
-## Deviations found
+## Deviation numbers
 
-- **D-TBD-delegation-retention-no-reader**: `delegation_events` has no business reader. Its only readers are the
-  projection's own consistency checks (§2.2).
-- **D-TBD-delegation-retention-swing**: the 25% share rule makes the 10-day floor hold 10 to 13.3 days, and the table
-  follows (§2.4).
-- **D-TBD-delegation-retention-contract**: the table holds the projected classes, under a contract row in `coord.db`
-  written with its rows (§4.2, §4.3).
-- **D-TBD-delegation-retention-sweep-delete**: a sequence-list delete beside the range delete, for the reason recorded in
-  §4.4.
-- **D-TBD-delegation-retention-spec-amend**: broker spec §5.2 and §5.12 amended (§10).
+Issued by the orchestrator and defined in the plan, `docs/superpowers/plans/2026-11-27-delegation-events-retention.md`:
+D-9165 (`delegation_events` has no business reader, §2.2), D-9166 (the 25% share rule makes the 10-day floor hold 10 to
+13.3 days, §2.4), D-9167 (the table holds the kept classes under a contract row written with its rows, §4.2 and §4.3),
+D-9168 (a sequence-list delete beside the range delete, §4.4), D-9169 (the broker spec's §5.2 and §5.12 amended, §10) and
+D-9170 (live by default with an automatic stop, no shadow phase, the operator's ruling of 2026-11-27, §4.9).
