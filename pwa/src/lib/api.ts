@@ -57,7 +57,8 @@ import type { PoolSet } from '../../../shared/poolset';
 import type { LadderWire, NarrowingState, Rung } from '../../../shared/overlord-ladder';
 import type { ReadinessWire } from '../../../shared/overlord-readiness';
 import {
-  readChatEarlierAnswer, readChatSendAnswer, readChatThreadAnswer, type ChatEarlierAnswer, type ChatSendAnswer, type ChatThreadAnswer, type GenerationKey,
+  chatThreadPath, readChatEarlierAnswer, readChatSendAnswer, readChatThreadAnswer, type ChatEarlierAnswer, type ChatOlder, type ChatSendAnswer,
+  type ChatThreadAnswer, type GenerationKey,
 } from '../../../shared/overlordChat';
 import type { PortfolioView, RankWrite } from '../../../shared/portfolio';
 import type { PoolRunwayWire } from '../../../shared/loadLines';
@@ -391,7 +392,7 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     /** The Overlord chat's three calls (W1 chat), the port `overlord/useOverlordChat.ts` declares: the thread, an earlier
      *  generation's page and a send to the prompt route. Each is read by its L0 reader, none throws on a refusal, and a request
      *  with no answer is `no-answer`, so a send's draft and key are kept. */
-    overlordChat: () => readAnswer<ChatThreadAnswer>('/api/overlord/chat', undefined, readChatThreadAnswer, { kind: 'no-answer' }),
+    overlordChat: (older: ChatOlder | null = null) => readAnswer<ChatThreadAnswer>(chatThreadPath(older), undefined, readChatThreadAnswer, { kind: 'no-answer' }),
     overlordChatEarlier: (gen: GenerationKey, around: string | null) => readAnswer<ChatEarlierAnswer | 'off-shape' | 'no-answer'>(`/api/overlord/chat/earlier?term=${gen.term}&n=${gen.n}`
       + (around === null ? '' : `&around=${encodeURIComponent(around)}`), undefined, (_status, body) => readChatEarlierAnswer(body), 'no-answer'),
     overlordSend: (id: string, text: string, o: { readonly offRecord: boolean; readonly sendKey: string; readonly overlordTerm: number }) =>

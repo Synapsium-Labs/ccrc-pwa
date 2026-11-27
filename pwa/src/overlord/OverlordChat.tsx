@@ -27,13 +27,14 @@ import { Composer } from '../session/Composer';
 import { ChatItemView } from '../session/ChatList';
 import type { ChatItem } from '../session/chatItems';
 import { ChatDivider } from './ChatDivider';
+import { ChatReply } from './ChatReply';
 import { ChatServerLine } from './ChatServerLine';
 import { ChatTicks } from './ChatTicks';
 import { PaneTurn } from './PaneTurn';
 import {
-  CUT_WORDS, EARLIER_UNREACHABLE_WORDS, GENERATIONS_UNMEASURED_WORDS, MESSAGES_UNMEASURED_WORDS, NO_OVERLORD_WORDS, OFF_RECORD_WORDS,
-  OLDER_MESSAGES_WORDS, READINESS_UNMEASURED_WORDS, READING_WORDS, TOGGLE_HELD_WORDS, ccrcLineWords, mergeLive, messageLinkWords, threadTroubleWords,
-  type ChatRow,
+  CUT_WORDS, EARLIER_UNREACHABLE_WORDS, GENERATIONS_UNMEASURED_WORDS, MESSAGES_UNMEASURED_WORDS, NO_OVERLORD_WORDS, NO_REPLIES_WORDS,
+  OFF_RECORD_WORDS, OLDER_MESSAGES_WORDS, OLDER_PAGE_UNREACHABLE_WORDS, READINESS_UNMEASURED_WORDS, READING_WORDS, REPLIES_UNMEASURED_WORDS,
+  SHOW_OLDER_WORDS, TOGGLE_HELD_WORDS, ccrcLineWords, mergeLive, messageLinkWords, replyIdsOf, threadTroubleWords, type ChatRow,
 } from './chatWords';
 import { genKey, useOverlordChat, type EarlierState, type OverlordChatPort } from './useOverlordChat';
 import './overlordChat.css';
@@ -83,6 +84,7 @@ function Row({ row, sessionId }: { row: ChatRow; sessionId: string }): ReactNode
     case 'entry':
       if (row.entry.kind === 'message') return <Message entry={row.entry} />;
       if (row.entry.kind === 'server-line') return <ChatServerLine text={row.entry.text} />;
+      if (row.entry.kind === 'reply') return <ChatReply entry={row.entry} />;
       return null;
     case 'live':
       return <ChatItemView item={row.item} id={sessionId} />;
@@ -110,7 +112,9 @@ export function OverlordChat({ port, live, subscribe }: OverlordChatProps): Reac
 
   const t = chat.thread;
   const designated = t !== null && t.designation === 'designated';
-  const rows = t === null ? [] : mergeLive(t.entries, designated ? live : []);
+  // A reply an earlier generation's page already draws is not drawn again in the thread (`mergeLive`'s third argument).
+  const earlierRows = [...chat.earlier.values()].flatMap((s) => s.rows);
+  const rows = t === null ? [] : mergeLive(chat.entries, designated ? live : [], replyIdsOf(earlierRows));
   const sessionId = t?.sessionId ?? '';
 
   // Scrolled to the newest while the reader is at the foot; a reader who scrolled up stays where they are.
@@ -118,6 +122,19 @@ export function OverlordChat({ port, live, subscribe }: OverlordChatProps): Reac
     const el = scroller.current;
     if (el !== null && pinned.current) el.scrollTop = el.scrollHeight;
   }, [rows.length, chat.earlier]);
+  // An older page lands above the reader: keep what they were looking at where it was, not the page's new top.
+  const anchor = useRef<{ readonly height: number; readonly top: number } | null>(null);
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (el === null || anchor.current === null || chat.olderLoad === 'loading') return;
+    el.scrollTop = anchor.current.top + (el.scrollHeight - anchor.current.height);
+    anchor.current = null;
+  }, [chat.olderLoad, chat.entries]);
+  const showOlder = (): void => {
+    const el = scroller.current;
+    if (el !== null) anchor.current = { height: el.scrollHeight, top: el.scrollTop };
+    chat.showOlder();
+  };
   const onScroll = (): void => {
     const el = scroller.current;
     if (el !== null) pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
@@ -145,8 +162,17 @@ export function OverlordChat({ port, live, subscribe }: OverlordChatProps): Reac
       <div className="oc-thread" ref={scroller} onScroll={onScroll}>
         {t === null && chat.trouble === null && <p className="oc-quiet" role="status">{READING_WORDS}</p>}
         {t !== null && t.designation === 'none' && <p className="oc-quiet" role="status">{NO_OVERLORD_WORDS}</p>}
-        {t !== null && t.messages.kind === 'read' && t.messages.value.more && <p className="oc-quiet" role="status">{OLDER_MESSAGES_WORDS}</p>}
+        {t !== null && t.messages.kind === 'read' && t.messages.value.more && chat.older === null && (
+          <p className="oc-quiet" role="status">{OLDER_MESSAGES_WORDS}</p>
+        )}
         {t !== null && t.generations.kind === 'unmeasured' && <p className="oc-unmeasured" role="status">{GENERATIONS_UNMEASURED_WORDS}</p>}
+        {chat.older !== null && (
+          <div className="oc-older">
+            <Button variant="ghost" size="fit" disabled={chat.olderLoad === 'loading'} onClick={showOlder}>{SHOW_OLDER_WORDS}</Button>
+            {chat.olderLoad === 'loading' && <p className="oc-quiet" role="status">{READING_WORDS}</p>}
+            {chat.olderLoad === 'failed' && <p className="oc-quiet" role="status">{OLDER_PAGE_UNREACHABLE_WORDS}</p>}
+          </div>
+        )}
         {rows.map((r) => {
           if (r.kind === 'entry' && r.entry.kind === 'divider') {
             const d = r.entry;
@@ -161,6 +187,8 @@ export function OverlordChat({ port, live, subscribe }: OverlordChatProps): Reac
           return <Row key={r.key} row={r} sessionId={sessionId} />;
         })}
         {t !== null && t.messages.kind === 'unmeasured' && <p className="oc-unmeasured" role="status">{MESSAGES_UNMEASURED_WORDS}</p>}
+        {t !== null && t.replies?.kind === 'unmeasured' && <p className="oc-unmeasured" role="status">{REPLIES_UNMEASURED_WORDS}</p>}
+        {t !== null && t.replies === null && designated && <p className="oc-quiet" role="status">{NO_REPLIES_WORDS}</p>}
         {t !== null && t.readiness.kind === 'unmeasured' && <p className="oc-unmeasured" role="status">{READINESS_UNMEASURED_WORDS}</p>}
         {chat.trouble !== null && <p className="oc-quiet" role="status">{threadTroubleWords(chat.trouble, t !== null)}</p>}
       </div>

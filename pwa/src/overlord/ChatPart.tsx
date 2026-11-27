@@ -2,7 +2,8 @@
 // one stream (ruled F3): the bound session's store, which `useOverlordSessionStream` has already connected, gives the current
 // generation's transcript rows (`buildChatItems`, the session view's own rows) and the frames the refresh reads. It opens no
 // stream and adds no frame of its own: a change of the store's transcript or status is handed on as the frame it came from, and
-// a beat changes neither, so the allow-list never sees one. The port is the shared client's three calls.
+// a beat changes neither, so the allow-list never sees one. The port is the shared client's calls (the thread read takes the
+// older page's cursor, PR B).
 import { useCallback, useMemo } from 'react';
 import type { ReactNode } from 'react';
 import type { SessionStreamMsg } from '../../../shared/api';
@@ -13,7 +14,7 @@ import { OverlordChat } from './OverlordChat';
 import type { OverlordChatPort } from './useOverlordChat';
 
 const PORT: OverlordChatPort = {
-  thread: () => api.overlordChat(),
+  thread: (older) => api.overlordChat(older ?? null),
   earlier: (gen, around) => api.overlordChatEarlier(gen, around),
   send: (id, text, opts) => api.overlordSend(id, text, opts),
 };

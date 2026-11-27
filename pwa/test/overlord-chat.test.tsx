@@ -4,13 +4,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { ChatEvent, SessionStreamMsg } from '../../shared/api';
 import { INJECTED_PROMPTS } from '../../shared/injected-prompts.mjs';
-import { isSendKey, operatorMessageNudgeLine, type OperatorMessageRow } from '../../shared/operatorMessages';
-import { chatTicksOf, type ChatEntry, type ChatSendAnswer, type ChatThread } from '../../shared/overlordChat';
+import { isSendKey, operatorMessageNudgeLine, type OperatorMessageRow, type OverlordReplyRow } from '../../shared/operatorMessages';
+import { chatTicksOf, readChatThread, type ChatEntry, type ChatOlder, type ChatSendAnswer, type ChatThread, type ReplyResponse } from '../../shared/overlordChat';
 import { OverlordChat } from '../src/overlord/OverlordChat';
 import {
-  EARLIER_UNREACHABLE_WORDS, GENERATIONS_UNMEASURED_WORDS, MESSAGES_UNMEASURED_WORDS, NO_OVERLORD_WORDS, OLDER_MESSAGES_WORDS,
-  PANE_TURN_WORDS, READ_CEILING_WORDS,
+  EARLIER_UNREACHABLE_WORDS, GENERATIONS_UNMEASURED_WORDS, MESSAGES_UNMEASURED_WORDS, NO_OVERLORD_WORDS, NO_REPLIES_WORDS, OLDER_MESSAGES_WORDS,
+  OLDER_PAGE_UNREACHABLE_WORDS, PANE_TURN_WORDS, READ_CEILING_WORDS, REPLIES_UNMEASURED_WORDS,
 } from '../src/overlord/chatWords';
+import { HANDLED_WORDS } from '../src/responses/responseWords';
 import type { ChatEarlierRead, ChatThreadRead, ChatSendOpts, OverlordChatPort } from '../src/overlord/useOverlordChat';
 import { buildChatItems, type ChatItem } from '../src/session/chatItems';
 import { api } from '../src/lib/api';
@@ -31,8 +32,14 @@ const settled = (id: number, s: number, over: Partial<OperatorMessageRow> = {}):
 const thread = (entries: ChatEntry[], over: Partial<ChatThread> = {}): ChatThread => ({
   v: 1, designation: 'designated', sessionId: SID, term: 2, entries,
   messages: { kind: 'read', value: { more: false } }, generations: { kind: 'read', value: { count: 1 } },
-  readiness: { kind: 'read', value: { oldest: null } }, ...over,
+  readiness: { kind: 'read', value: { oldest: null } }, replies: { kind: 'read', value: { more: false } }, older: null, ...over,
 });
+const reply = (id: number, s: number, over: Partial<OverlordReplyRow> = {}): OverlordReplyRow => ({
+  id, at: T0 + s * 1000, turnAt: T0 + s * 1000, term: 2, entryUuid: `e0e0e0e0-0000-4000-8000-${String(id).padStart(12, '0')}`,
+  text: `fixture reply ${id}`, cut: false, sha256: 'b'.repeat(64), inReplyTo: null, offRecord: false, ...over,
+});
+const replyEntry = (r: OverlordReplyRow, response: ReplyResponse = { kind: 'no-row' }): ChatEntry => ({ kind: 'reply', row: r, response });
+const C = (before: number | 'end', replyBefore: number | 'end'): ChatOlder => ({ before, replyBefore });
 const iso = (s: number): string => new Date(T0 + s * 1000).toISOString();
 const user = (uuid: string, s: number, text: string): ChatEvent => ({ kind: 'user', uuid, ts: iso(s), text });
 const assistant = (uuid: string, s: number, text: string): ChatEvent => ({ kind: 'assistant', uuid, ts: iso(s), text });
@@ -41,6 +48,10 @@ interface Fake extends OverlordChatPort {
   threads: ChatThreadRead[];
   sends: ChatSendAnswer[];
   earliers: ChatEarlierRead[];
+  /** The answers to a read below a cursor (an older page), in order; none left: no answer. */
+  olders: ChatThreadRead[];
+  /** The cursor of each thread read: null for the newest page. */
+  threadArgs: (ChatOlder | null)[];
   threadCalls: number;
   sendCalls: { sessionId: string; text: string; opts: ChatSendOpts }[];
   earlierCalls: { term: number; n: number; around: string | null }[];
@@ -48,8 +59,13 @@ interface Fake extends OverlordChatPort {
 /** A port answering from queues; the last thread answer repeats. */
 function fakePort(first: ChatThreadRead): Fake {
   const f: Fake = {
-    threads: [first], sends: [], earliers: [], threadCalls: 0, sendCalls: [], earlierCalls: [],
-    thread: async () => { f.threadCalls += 1; return f.threads.length > 1 ? f.threads.shift()! : f.threads[0]!; },
+    threads: [first], sends: [], earliers: [], olders: [], threadArgs: [], threadCalls: 0, sendCalls: [], earlierCalls: [],
+    thread: async (older) => {
+      f.threadCalls += 1;
+      f.threadArgs.push(older ?? null);
+      if (older !== undefined && older !== null) return f.olders.shift() ?? { kind: 'no-answer' };
+      return f.threads.length > 1 ? f.threads.shift()! : f.threads[0]!;
+    },
     send: async (sessionId, text, opts) => { f.sendCalls.push({ sessionId, text, opts }); return f.sends.shift() ?? { kind: 'no-answer' }; },
     earlier: async (gen, around) => { f.earlierCalls.push({ ...gen, around }); return f.earliers.shift() ?? 'no-answer'; },
   };
@@ -120,7 +136,7 @@ describe('what the part draws', () => {
     const none: ChatThread = {
       v: 1, designation: 'none', sessionId: null, term: null, entries: [],
       messages: { kind: 'read', value: { more: false } }, generations: { kind: 'read', value: { count: 0 } },
-      readiness: { kind: 'read', value: { oldest: null } },
+      readiness: { kind: 'read', value: { oldest: null } }, replies: { kind: 'read', value: { more: false } }, older: null,
     };
     await mount(fakePort({ kind: 'thread', thread: none }), buildChatItems([user('u1', 1, 'stale pane text')], []));
     expect(screen.getByText(NO_OVERLORD_WORDS)).toBeInTheDocument();
@@ -575,6 +591,312 @@ describe('a read refused by the ceiling reads again after the server\'s retry ti
     await tick(1_000);
     expect(port.threadCalls, 'read again at retryAfterS').toBe(2);
     expect(screen.getByText('fixture message 3'), 'the thread is drawn').toBeInTheDocument();
+    await tick(120_000);
+    expect(port.threadCalls).toBe(2);
+  });
+});
+
+// ── PR B: the replies, the paging, the handled control ─────────────────────────────────────────────────────────────────────
+
+describe('a recorded reply is drawn as the Overlord\'s words, as text', () => {
+  it('its words are text: markup, a link and a script are shown as typed, never a link, a control or an element', async () => {
+    const hostile = '<b>bold</b> [click](https://example.test/x) <script>window.__x = 1</script> `code`';
+    const t = thread([divider(2, 1, 0, { current: true }), replyEntry(reply(8, 10, { text: hostile }))]);
+    await mount(fakePort({ kind: 'thread', thread: t }));
+    const group = screen.getByRole('group', { name: 'Overlord reply 8' });
+    expect(group.querySelector('.oc-reply-text')!.textContent).toBe(hostile);
+    expect(group.querySelector('a, b, script, code, button, input, img'), 'no element is made from the words').toBeNull();
+    expect(bubbles(), 'a reply is never an operator bubble').toHaveLength(0);
+  });
+
+  it('an off-the-record reply and a cut one say so', async () => {
+    const t = thread([replyEntry(reply(8, 10, { offRecord: true, cut: true })), replyEntry(reply(9, 11))]);
+    await mount(fakePort({ kind: 'thread', thread: t }));
+    const [a, b] = [screen.getByRole('group', { name: 'Overlord reply 8' }), screen.getByRole('group', { name: 'Overlord reply 9' })];
+    expect([within(a).queryByText('off the record') !== null, within(a).queryByText('cut to fit') !== null]).toEqual([true, true]);
+    expect([within(b).queryByText('off the record'), within(b).queryByText('cut to fit')]).toEqual([null, null]);
+  });
+
+  it('a reply whose entry is a live row is drawn once, in that row\'s place, and its live copy is not drawn', async () => {
+    const t = thread([divider(2, 1, 0, { current: true }), replyEntry(reply(8, 31, { entryUuid: 'a2', text: 'the recorded words' }))]);
+    // An earlier turn's text stays; this turn's earlier text block is the recorded reply's words too, so it is not drawn beside it.
+    const live = buildChatItems([assistant('a1', 5, 'first live answer'), user('u1', 20, 'typed at the terminal'), assistant('a1b', 25, 'an earlier block of the turn'),
+      assistant('a2', 31, 'the live copy'), assistant('a3', 40, 'last live answer')], []);
+    await mount(fakePort({ kind: 'thread', thread: t }), live);
+    const text = screen.getByRole('region', { name: 'Chat with the Overlord' }).textContent ?? '';
+    expect(screen.getAllByText('the recorded words')).toHaveLength(1);
+    expect(screen.queryByText('the live copy')).toBeNull();
+    expect(screen.queryByText('an earlier block of the turn')).toBeNull();
+    expect([text.indexOf('first live answer'), text.indexOf('the recorded words'), text.indexOf('last live answer')].every((i, k, a) => i >= 0 && (k === 0 || i > a[k - 1]!))).toBe(true);
+  });
+
+  it('a reply with no live entry is drawn, by time', async () => {
+    const t = thread([replyEntry(reply(8, 20, { text: 'a reply with no live row' }))]);
+    const live = buildChatItems([assistant('a1', 5, 'early live'), assistant('a3', 40, 'late live')], []);
+    await mount(fakePort({ kind: 'thread', thread: t }), live);
+    const text = screen.getByRole('region', { name: 'Chat with the Overlord' }).textContent ?? '';
+    expect(text.indexOf('early live')).toBeLessThan(text.indexOf('a reply with no live row'));
+    expect(text.indexOf('a reply with no live row')).toBeLessThan(text.indexOf('late live'));
+  });
+});
+
+describe('I handled this elsewhere, on a reply with a response row', () => {
+  const entries = (): ChatEntry[] => [
+    divider(2, 1, 0, { current: true }),
+    replyEntry(reply(8, 10), { kind: 'row', id: 80, handledAt: null }),
+    replyEntry(reply(9, 11), { kind: 'no-row' }),
+    replyEntry(reply(10, 12), { kind: 'unmeasured' }),
+    replyEntry(reply(11, 13), { kind: 'row', id: 110, handledAt: T0 }),
+  ];
+  const control = (): HTMLElement[] => screen.queryAllByRole('button', { name: HANDLED_WORDS.button });
+
+  it('is offered on the reply with an unhandled row only; a handled row says so; no row and unmeasured draw no control', async () => {
+    await mount(fakePort({ kind: 'thread', thread: thread(entries()) }));
+    expect(control()).toHaveLength(1);
+    expect(within(screen.getByRole('group', { name: 'Overlord reply 8' })).getByRole('button', { name: HANDLED_WORDS.button })).toBeInTheDocument();
+    expect(within(screen.getByRole('group', { name: 'Overlord reply 11' })).getByText(HANDLED_WORDS.handled)).toBeInTheDocument();
+    for (const id of [9, 10]) {
+      const g = within(screen.getByRole('group', { name: `Overlord reply ${id}` }));
+      expect([g.queryByRole('button'), g.queryByText(HANDLED_WORDS.handled)]).toEqual([null, null]);
+    }
+  });
+
+  it('calls the handled door once with the response row\'s id, even pressed twice while it is on its way; after success the row says so', async () => {
+    let finish: (v: { ok: true; id: number; handledAt: number | null; changed: boolean }) => void = () => {};
+    const mark = vi.spyOn(api, 'markResponseHandled').mockImplementation(() => new Promise((r) => { finish = r; }));
+    await mount(fakePort({ kind: 'thread', thread: thread(entries()) }));
+    const b = control()[0]!;
+    fireEvent.click(b);
+    fireEvent.click(b);
+    await flush();
+    expect(mark).toHaveBeenCalledTimes(1);
+    expect(mark).toHaveBeenCalledWith(80);
+    await act(async () => { finish({ ok: true, id: 80, handledAt: T0, changed: true }); });
+    await flush();
+    expect(control()).toHaveLength(0);
+    expect(within(screen.getByRole('group', { name: 'Overlord reply 8' })).getByText(HANDLED_WORDS.handled)).toBeInTheDocument();
+  });
+
+  it('a refusal keeps the control and says so quietly; the next press tries again', async () => {
+    const mark = vi.spyOn(api, 'markResponseHandled').mockRejectedValueOnce(new Error('refused')).mockResolvedValueOnce({ ok: true, id: 80, handledAt: T0, changed: true });
+    await mount(fakePort({ kind: 'thread', thread: thread(entries()) }));
+    await act(async () => { fireEvent.click(control()[0]!); });
+    await flush();
+    expect(control()).toHaveLength(1);
+    const line = screen.getByText(HANDLED_WORDS.refused);
+    expect(line).toHaveAttribute('role', 'status');
+    await act(async () => { fireEvent.click(control()[0]!); });
+    await flush();
+    expect(mark).toHaveBeenCalledTimes(2);
+    expect(control()).toHaveLength(0);
+  });
+});
+
+describe('the lines for replies that were not read, or are not kept', () => {
+  it('a server below PR B (no replies part) says so once; a modern server with replies read says nothing', async () => {
+    await mount(fakePort({ kind: 'thread', thread: thread([divider(2, 1, 0, { current: true })], { replies: null }) }));
+    expect(screen.getByText(NO_REPLIES_WORDS)).toBeInTheDocument();
+    cleanup();
+    await mount(fakePort({ kind: 'thread', thread: thread([divider(2, 1, 0, { current: true })]) }));
+    expect(screen.queryByText(NO_REPLIES_WORDS)).toBeNull();
+    expect(screen.queryByText(REPLIES_UNMEASURED_WORDS)).toBeNull();
+  });
+
+  it('replies that could not be read draw their own line, never an empty conversation, and the messages still draw', async () => {
+    const t = thread([divider(2, 1, 0, { current: true }), message(row(4, 5, { term: 2 }))], { replies: { kind: 'unmeasured', why: 'store-closed' } });
+    await mount(fakePort({ kind: 'thread', thread: t }));
+    expect(screen.getByText(REPLIES_UNMEASURED_WORDS)).toBeInTheDocument();
+    expect(screen.getByText('fixture message 4')).toBeInTheDocument();
+  });
+});
+
+describe('Show older: the thread\'s older pages', () => {
+  const newest = (older: ChatOlder | null = C(5, 'end')): ChatThread => thread([
+    // The newest page's first divider is at its oldest row's time: the server sends a divider only where its page reaches.
+    divider(2, 1, 110, { current: true }), message(settled(5, 110, { term: 2 })), replyEntry(reply(6, 120)), message(settled(7, 130, { term: 2 })),
+  ], { messages: { kind: 'read', value: { more: older !== null } }, older });
+  const page = (entries: ChatEntry[], older: ChatOlder | null): ChatThreadRead =>
+    ({ kind: 'thread', thread: thread(entries, { messages: { kind: 'read', value: { more: older !== null } }, older }) });
+  const showOlder = (): HTMLElement | null => screen.queryByRole('button', { name: 'Show older' });
+  const press = async (): Promise<void> => { await act(async () => { fireEvent.click(showOlder()!); }); await flush(); };
+  const order = (...words: string[]): boolean => {
+    const text = screen.getByRole('region', { name: 'Chat with the Overlord' }).textContent ?? '';
+    const at = words.map((w) => text.indexOf(w));
+    return at.every((i, k) => i >= 0 && (k === 0 || i > at[k - 1]!));
+  };
+
+  it('is drawn above the oldest row when the thread says an older page is on record, and not otherwise; the old line is gone', async () => {
+    await mount(fakePort({ kind: 'thread', thread: newest() }));
+    expect(showOlder()).toBeInTheDocument();
+    expect(screen.queryByText(OLDER_MESSAGES_WORDS)).toBeNull();
+    expect(order('Show older', 'generation 1', 'fixture message 5')).toBe(true);
+    cleanup();
+    await mount(fakePort({ kind: 'thread', thread: newest(null) }));
+    expect(showOlder()).toBeNull();
+  });
+
+  it('reads the page below the cursor, prepends it, and the next press asks with the page\'s own cursor; the last page offers no more', async () => {
+    const port = fakePort({ kind: 'thread', thread: newest() });
+    port.olders.push(
+      page([message(settled(3, 60, { term: 2 })), replyEntry(reply(4, 70))], C(3, 4)),
+      page([divider(1, 1, 0), message(settled(1, 20, { term: 2 }))], null),
+    );
+    await mount(port);
+    await press();
+    expect(port.threadArgs).toEqual([null, C(5, 'end')]);
+    expect(order('fixture message 3', 'fixture reply 4', 'fixture message 5', 'fixture reply 6', 'fixture message 7')).toBe(true);
+    expect(showOlder(), 'the page names a cursor: the control stays').toBeInTheDocument();
+    await press();
+    expect(port.threadArgs).toEqual([null, C(5, 'end'), C(3, 4)]);
+    expect(order('generation 1', 'fixture message 1', 'fixture message 3', 'fixture message 5')).toBe(true);
+    expect(showOlder()).toBeNull();
+  });
+
+  it('a press while a page is on its way does nothing more; the control is held, and says it is reading', async () => {
+    const port = fakePort({ kind: 'thread', thread: newest() });
+    let answer: (r: ChatThreadRead) => void = () => {};
+    const base = port.thread;
+    port.thread = (older) => (older === undefined || older === null ? base(older) : new Promise<ChatThreadRead>((r) => { answer = r; port.threadArgs.push(older); port.threadCalls += 1; }));
+    await mount(port);
+    fireEvent.click(showOlder()!);
+    fireEvent.click(showOlder()!);
+    await flush();
+    expect(port.threadArgs.filter((a) => a !== null)).toHaveLength(1);
+    expect(showOlder()).toBeDisabled();
+    await act(async () => { answer(page([message(settled(3, 60, { term: 2 }))], null)); });
+    await flush();
+    expect(screen.getByText('fixture message 3')).toBeInTheDocument();
+    expect(showOlder()).toBeNull();
+  });
+
+  it('a page that could not be read keeps everything drawn, says so in one quiet line, and the control stays for a retry', async () => {
+    const port = fakePort({ kind: 'thread', thread: newest() });
+    port.olders.push({ kind: 'refused', error: 'read-ceiling', retryAfterS: 30 }, { kind: 'no-answer' }, { kind: 'off-shape' }, page([message(settled(3, 60, { term: 2 }))], null));
+    await mount(port);
+    for (let i = 0; i < 3; i++) {
+      await press();
+      expect(screen.getByText(OLDER_PAGE_UNREACHABLE_WORDS)).toHaveAttribute('role', 'status');
+      expect(screen.getAllByText(OLDER_PAGE_UNREACHABLE_WORDS)).toHaveLength(1);
+      expect(showOlder(), 'the control stays').toBeEnabled();
+      expect(screen.getByText('fixture message 7'), 'what was drawn stays').toBeInTheDocument();
+    }
+    await press();
+    expect(screen.queryByText(OLDER_PAGE_UNREACHABLE_WORDS), 'a page read clears the line').toBeNull();
+    expect(screen.getByText('fixture message 3')).toBeInTheDocument();
+  });
+
+  it('a page whose messages or replies could not be read is no page: the line, never an empty page', async () => {
+    const port = fakePort({ kind: 'thread', thread: newest() });
+    port.olders.push({ kind: 'thread', thread: thread([], { messages: { kind: 'unmeasured', why: 'closed' } }) },
+      { kind: 'thread', thread: thread([], { replies: { kind: 'unmeasured', why: 'closed' } }) });
+    await mount(port);
+    await press();
+    expect(screen.getByText(OLDER_PAGE_UNREACHABLE_WORDS)).toBeInTheDocument();
+    await press();
+    expect(screen.getByText(OLDER_PAGE_UNREACHABLE_WORDS)).toBeInTheDocument();
+    expect(showOlder()).toBeInTheDocument();
+  });
+
+  it('a divider repeated by two pages is drawn once; an older divider is not drawn over nothing while an older page waits', async () => {
+    // The newest page carries a stray divider older than its oldest row (a server below the divider floor): not drawn.
+    const stray = thread([divider(1, 1, 0), divider(1, 2, 100, { current: true }), message(settled(5, 110, { term: 2 }))], { messages: { kind: 'read', value: { more: true } }, older: C(5, 'end') });
+    const port = fakePort({ kind: 'thread', thread: stray });
+    port.olders.push(page([divider(1, 1, 0), message(settled(3, 60, { term: 2 })), divider(1, 2, 100, { current: true })], null));
+    await mount(port);
+    expect(screen.queryByText('generation 1'), 'older than every row drawn, with an older page waiting').toBeNull();
+    expect(screen.queryByText('generation 2'), 'this one too: the oldest row is later').toBeNull();
+    await press();
+    expect(screen.getAllByText('generation 1')).toHaveLength(1);
+    expect(screen.getAllByText('generation 2'), 'a divider both pages carry is drawn once').toHaveLength(1);
+    expect(order('generation 1', 'fixture message 3', 'generation 2', 'fixture message 5')).toBe(true);
+  });
+
+  it('a server below PR B (no older field, messages say more) still offers the control, and says it keeps no replies', async () => {
+    const raw = {
+      v: 1, designation: 'designated', sessionId: SID, term: 2,
+      entries: [{ kind: 'divider', gen: { term: 2, n: 1 }, at: T0, current: true, newTerm: false, earlier: 'not-pageable' }, { kind: 'message', row: row(5, 10, { term: 2 }) }],
+      messages: { kind: 'read', value: { more: true } }, generations: { kind: 'read', value: { count: 1 } }, readiness: { kind: 'read', value: { oldest: null } },
+    };
+    const parsed = readChatThread(raw);
+    expect(parsed.ok).toBe(true);
+    const port = fakePort({ kind: 'thread', thread: (parsed as { thread: ChatThread }).thread });
+    port.olders.push(page([message(settled(3, 5, { term: 2 }))], null));
+    await mount(port);
+    expect(screen.getByText(NO_REPLIES_WORDS)).toBeInTheDocument();
+    expect(screen.queryByText(OLDER_MESSAGES_WORDS)).toBeNull();
+    await press();
+    expect(port.threadArgs[1]).toEqual(C(5, 'end'));
+    expect(screen.getByText('fixture message 3')).toBeInTheDocument();
+  });
+
+  it('more messages with no cursor to read them by keeps the old line, and no control', async () => {
+    await mount(fakePort({ kind: 'thread', thread: thread([divider(2, 1, 0, { current: true })], { messages: { kind: 'read', value: { more: true } }, older: null }) }));
+    expect(screen.getByText(OLDER_MESSAGES_WORDS)).toBeInTheDocument();
+    expect(showOlder()).toBeNull();
+  });
+
+  it('the refresh of the newest page keeps the older pages drawn, and a row it read again shows its new ticks', async () => {
+    vi.useFakeTimers({ now: T0 + 135_000 });
+    const waiting = (): ChatThread => thread([divider(2, 1, 120, { current: true }), message(row(5, 120, { term: 2 }))], { messages: { kind: 'read', value: { more: true } }, older: C(5, 'end') });
+    const port = fakePort({ kind: 'thread', thread: waiting() });
+    port.olders.push(page([message(settled(3, 60, { term: 2 }))], null));
+    port.threads.push({ kind: 'thread', thread: thread([divider(2, 1, 120, { current: true }), message(settled(5, 120, { term: 2 }))], { messages: { kind: 'read', value: { more: true } }, older: C(5, 'end') }) });
+    await mount(port);
+    await press();
+    expect(screen.getByText('fixture message 3')).toBeInTheDocument();
+    expect(screen.getByLabelText('recorded, queued')).toBeInTheDocument();
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(port.threadArgs.filter((a) => a === null).length, 'the newest page was read again').toBeGreaterThanOrEqual(2);
+    expect(screen.getByText('fixture message 3'), 'the older page is kept').toBeInTheDocument();
+    expect(screen.getAllByLabelText('recorded, delivered, picked up, settled'), 'the row read again shows its new ticks: both messages are settled now').toHaveLength(2);
+    expect(screen.queryByLabelText('recorded, queued')).toBeNull();
+    expect(showOlder(), 'the older page was read: no more').toBeNull();
+  });
+
+  it('a reply an earlier generation\'s page already drew is not drawn twice', async () => {
+    const t = thread([divider(1, 1, 0, { readable: true }), divider(2, 1, 20, { newTerm: true, current: true }), replyEntry(reply(6, 5, { entryUuid: 'aaaaaaaa-0000-4000-8000-000000000001', text: 'the recorded words' }))]);
+    const port = fakePort({ kind: 'thread', thread: t });
+    port.earliers.push({ ok: true, gen: { term: 1, n: 1 }, page: { outcome: 'rows', exit: 0, items: [
+      { kind: 'entry', role: 'assistant', text: 'the history copy', trust: 'untrusted', uuid: 'aaaaaaaa-0000-4000-8000-000000000001' } as never,
+    ], shown: 1, total: 1, scope: { kind: 'overlord', id: `session:${SID}`, project: null, families: [], families_total: 0, transcripts: 1 } } });
+    await mount(port);
+    expect(screen.getAllByText('the recorded words')).toHaveLength(1);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Show generation 1' })); });
+    await flush();
+    expect(screen.getAllByText('the recorded words'), 'once, in the earlier page, not again in the thread').toHaveLength(1);
+    expect(screen.queryByText('the history copy')).toBeNull();
+  });
+});
+
+describe('a read refused by the ceiling with no retry time, or an absurd one (ruling 8)', () => {
+  beforeEach(() => { vi.useFakeTimers({ now: T0 + 60_000 }); });
+  const tick = async (ms: number): Promise<void> => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
+  const quiet = (): ChatThread => thread([divider(2, 1, 0, { current: true }), message(settled(3, 5))]);
+
+  it('with no retry time the next read waits a minute, not none', async () => {
+    const port = fakePort({ kind: 'thread', thread: quiet() });
+    port.threads.push({ kind: 'refused', error: 'read-ceiling' }, { kind: 'thread', thread: quiet() });
+    let push: (m: SessionStreamMsg) => void = () => {};
+    await mount(port, [], (f) => { push = f; return () => {}; });
+    await tick(20_000);
+    act(() => { push({ type: 'events', uuid: 'u', events: [user('u9', 80, 'a turn')], offset: 0 }); });
+    await tick(0);
+    expect(port.threadCalls).toBe(2);
+    await tick(59_000);
+    expect(port.threadCalls, 'not before the default wait').toBe(2);
+    await tick(1_000);
+    expect(port.threadCalls).toBe(3);
+  });
+
+  it('a retry time past a timer\'s limit waits an hour, not a loop of instant reads', async () => {
+    const port = fakePort({ kind: 'refused', error: 'read-ceiling', retryAfterS: 2 ** 31 });
+    port.threads.push({ kind: 'thread', thread: quiet() });
+    await mount(port);
+    expect(port.threadCalls).toBe(1);
+    await tick(3_599_000);
+    expect(port.threadCalls, 'nothing before the hour').toBe(1);
+    await tick(1_000);
+    expect(port.threadCalls).toBe(2);
     await tick(120_000);
     expect(port.threadCalls).toBe(2);
   });
