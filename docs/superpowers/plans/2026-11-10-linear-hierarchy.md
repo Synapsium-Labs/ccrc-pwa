@@ -583,6 +583,9 @@ number from `POST /api/ledger/deviations`.
 - **D-9132 (2026-11-26)** — w8-team-move-create-order: a write or a read Linear answered, on a 200 or a 4xx, with an error outside
   the closed table fails its binding `malformed` after the last backoff step, never a silent, permanent hold; a 5xx stays a plain
   hold. Record: the same note.
+- **D-9148 (2026-11-27)** — w8-planstore-ring: `coord/planStore.ts`, which the rings classifier read L1 because its `node:sqlite`
+  import is type-only, declares L3 in its header, so an L1 value import of the store is an outward edge (none existed). Record:
+  `docs/superpowers/programs/linear-hierarchy/w8-planstore-ring.md`.
 
 ## Global Constraints
 
