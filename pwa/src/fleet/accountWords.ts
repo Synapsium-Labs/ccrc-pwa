@@ -387,31 +387,33 @@ export const DOOR_META = 'Anthropic · OpenAI · OpenRouter';
  *
  *  THE KINDS OF BOX (desktop-polish wave 180). Sign-in is turned on in three ways: a box reached from other devices with
  *  https served by the box itself takes `ccrc expose`, which sets an https address and sign-in together; a box behind
- *  the operator's own https proxy is armed by hand in `~/.ccrc/ccrc.env`; a box used only at localhost on itself is
- *  armed by hand too, as the README's "The session gate" says, because no verb does it yet. The account gate accepts a
- *  loopback origin (`server/src/accounts/gate.ts`), so https is not required there; sign-in is. {@link LOCAL_ARMING}
- *  names the localhost hand route in ONE place, and both reasons say it through it, so a verb can replace it later in
- *  one edit without touching the sentences around it.
+ *  the operator's own https proxy is armed by hand in `~/.ccrc/ccrc.env`; a box used only at localhost on itself takes
+ *  `ccrc auth on` (desktop-polish wave 181), which writes the localhost lines, restarts the server and prints the address
+ *  to open. The account gate accepts a loopback origin (`server/src/accounts/gate.ts`), so https is not required there;
+ *  sign-in is. {@link LOCAL_ARMING} names that route in ONE place, for the gate-dark reason; the insecure-origin reason
+ *  does not take it, because that box is armed with a plain-HTTP origin that is not localhost, where the verb refuses.
  *
- *  WHERE A PLAIN-HTTP ORIGIN COMES FROM (fix round 1). An armed box's origin is `CCRC_ORIGIN` in `~/.ccrc/ccrc.env`,
- *  else `exposure.env`, which `ccrc expose` writes with an https origin only, else the default
- *  `http://localhost:<port>`, which the gate accepts. So a box that sees the insecure-origin reason set its origin by
- *  hand in `ccrc.env` (or in the unit's own environment), `ccrc expose status` has nothing to show it, and the expose
- *  verb refuses until `CCRC_AUTH`, `CCRC_RP_ID` and `CCRC_ORIGIN` are out of that file. Its copy line is a read of that
- *  file's three keys. */
+ *  WHERE A PLAIN-HTTP ORIGIN COMES FROM (fix round 1; wave 181). The server unit reads `~/.ccrc/ccrc.env`, then
+ *  `~/.ccrc/exposure.env`, and the later file wins for a key both set (`deploy/ccrc.service`); the unit's own
+ *  environment (a drop-in) can set it too, and with none of them the origin is the default `http://localhost:<port>`,
+ *  which the gate accepts. `ccrc expose` writes an https origin only, so a box that sees the insecure-origin reason had
+ *  its origin set by hand, in either file or the unit, and such a box usually has `CCRC_COOKIE_INSECURE=on` beside it
+ *  (a Secure cookie is dropped on plain HTTP), which must come out when the origin becomes https. Its copy line reads
+ *  those keys from both files, with each line's file. */
 export type DoorNarrowing = 'waiting' | 'gate-dark' | 'insecure-origin' | 'unsupported';
 export interface DoorNarrowed {
   readonly text: string;
   readonly more?: { readonly summary: string; readonly lines: readonly string[] };
   readonly fix?: string;
 }
-/** How a box used only at localhost sets sign-in up: by hand, as the README says, until a verb does it. The one place
- *  the localhost hand route is written; both reasons below say it through this. */
-export const LOCAL_ARMING = 'set sign-in up for localhost by hand, as the README\'s "The session gate" says, then restart the '
-  + 'server';
-/** The insecure-origin reason's copy line: a read of the three keys of `~/.ccrc/ccrc.env` that set the origin and
- *  arm the gate. It changes nothing, and on the box that sees the reason it shows the plain-HTTP origin. */
-export const ORIGIN_READ = "grep -E '^CCRC_(ORIGIN|RP_ID|AUTH)=' ~/.ccrc/ccrc.env";
+/** How a box used only at localhost turns sign-in on (desktop-polish wave 181): `ccrc auth on`, which refuses without a
+ *  passphrase, so it says what sets one. ONE string literal, so the command scan reads the command whole. The one place
+ *  the localhost route is written; the gate-dark reason says it through this. */
+export const LOCAL_ARMING = 'once a passphrase is set (ccrc passwd sets it), run ccrc auth on there: it turns sign-in on, restarts the server and prints the address to open';
+/** The insecure-origin reason's copy line: a read of the four keys that set the origin, arm the gate and loosen the
+ *  cookie, from both files the server unit reads, each line with its file, an indented line included. It changes
+ *  nothing, prints no secret (no other key matches), and stays quiet about a file that is not there. */
+export const ORIGIN_READ = "grep -sHE '^[[:space:]]*CCRC_(ORIGIN|RP_ID|AUTH|COOKIE_INSECURE)=' ~/.ccrc/ccrc.env ~/.ccrc/exposure.env";
 /** The copy field's name for a command the door offers: it runs where this console's server runs, which on a two-box
  *  fleet is not the fleet host (the trouble card's commands run there). */
 export const DOOR_COMMAND_LABEL = "Command to run on this console's server";
@@ -427,7 +429,7 @@ export const DOOR_NARROWED: { readonly [N in DoorNarrowing]: DoorNarrowed } = {
           + 'gives the box an https address and turns sign-in on, and follow the steps it prints.',
         'Behind your own https proxy: then set CCRC_AUTH=on with CCRC_RP_ID and CCRC_ORIGIN (that https address) in '
           + '~/.ccrc/ccrc.env, as the README\'s "The session gate" says, and restart the server.',
-        `Used only at localhost on the box itself: then ${LOCAL_ARMING}, and open it at localhost.`,
+        `Used only at localhost on the box itself: ${LOCAL_ARMING}.`,
       ],
     },
     fix: 'ccrc passwd',
@@ -437,14 +439,17 @@ export const DOOR_NARROWED: { readonly [N in DoorNarrowing]: DoorNarrowed } = {
     more: {
       summary: 'How to fix it',
       lines: [
-        "This console's origin was set by hand, as CCRC_ORIGIN in ~/.ccrc/ccrc.env on its server (the expose verb only "
-          + 'ever writes an https one). The command below shows it.',
-        'Behind your own https proxy: set CCRC_ORIGIN there to that https address and CCRC_RP_ID to its domain, then '
-          + 'restart the server.',
-        'With https served by the box itself: first take CCRC_AUTH, CCRC_RP_ID and CCRC_ORIGIN out of that file (the '
-          + 'expose verb refuses while they are set), then run ccrc expose duckdns, byo or ip and follow the steps it '
-          + 'prints.',
-        `Used only on the box itself: ${LOCAL_ARMING}, and open it at localhost.`,
+        "This console's plain-HTTP origin was set by hand on its server, as CCRC_ORIGIN in ~/.ccrc/ccrc.env or in "
+          + '~/.ccrc/exposure.env (the later file wins), or in the unit itself; the expose verb only ever writes an https '
+          + 'one. The command below shows those lines in both files, and CCRC_COOKIE_INSECURE beside them.',
+        'Behind your own https proxy: where they are set, make CCRC_ORIGIN that https address and CCRC_RP_ID its domain, '
+          + 'take out CCRC_COOKIE_INSECURE=on so the cookie is Secure again, then restart the server.',
+        'With https served by the box itself: first take CCRC_AUTH, CCRC_RP_ID, CCRC_ORIGIN and CCRC_COOKIE_INSECURE out '
+          + 'of ~/.ccrc/ccrc.env (the expose verb refuses while the first three are set), then run ccrc expose duckdns, '
+          + 'byo or ip and follow the steps it prints.',
+        'Used only on the box itself: where they are set, make CCRC_ORIGIN http://localhost with its port and CCRC_RP_ID '
+          + 'localhost, keep CCRC_COOKIE_INSECURE=on (Safari drops a Secure cookie there), restart the server and open it '
+          + 'at localhost.',
       ],
     },
     fix: ORIGIN_READ,
@@ -1151,7 +1156,8 @@ const SIGN_IN_START_TEXT: Readonly<Record<SignInStartWord, (id: string, reason: 
   'not-found': (id) => `${id} is no longer on this box's roster.`,
   unsupported: () => DOOR_NARROWED.unsupported.text,
   'insecure-origin': () => "Accounts can't be changed over plain HTTP. Nothing was started.",
-  'auth-off': () => DOOR_NARROWED['gate-dark'].text,
+  // The sign-in-off sentence, with the tail its siblings carry: a re-sign-in or a method switch adds nothing (A6, wave 181).
+  'auth-off': () => `${DOOR_NARROWED['gate-dark'].text} Nothing was started.`,
   unavailable: () => "The fleet host couldn't run it: nothing was started.",
 };
 /** A start refused with a word (spec §13.1's `auth/start` refusals), from the code alone. `reason` is the body's

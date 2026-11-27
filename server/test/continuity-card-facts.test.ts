@@ -1,7 +1,8 @@
 // Overlord W1a, the card piece, PR B (plan `w1a-card.md` Task 3): `gatherCardFacts` reads one session's facts from the rows,
 // keeps every failed read as an `unmeasured` fact naming it, fills `everTicked` from `tickedAt`, and takes the role from
 // `roleOf(roleFactsOf(…))`, an undecided reading naming the fact it could not measure (C49).
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { copyFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
@@ -14,16 +15,30 @@ import { delegationIntentKey } from '../src/coord/delegation-model.js';
 import { roleFactsOf } from '../src/roleOf.js';
 import type { ChildMark, ChildReclaimGeneration } from '../../shared/api.js';
 import { CARD_MAIL_MAX, type CardFacts, type Fact } from '../../shared/continuity-card.js';
-import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
+import { mkTmp, removeTmpFixtures, removeTmpFixturesEachTest } from './tmpHelpers.js';
 
-afterEach(removeTmpFixtures);
+// Opening a coord db replays every migration, about 7 s a store on a loaded box, and a case that loops over three stores
+// sat at its 20 s bound there: migrate ONE template, and copy it for each store. Each test's own directories go after
+// it; the template's, made before the first test, goes after the file.
+let template = '';
+beforeAll(() => {
+  template = path.join(mkTmp('ccrc-card-facts-template-'), 'coord.db');
+  openCoordDb(template).close();
+});
+removeTmpFixturesEachTest();
+afterAll(removeTmpFixtures);
 
 const NOW = 1_800_000_000_000;
 const ME = 'lane-a-project-a';
 const OTHER = 'lane-b-project-a';
 const INC = '0b1c2d3e-4f50-4617-8899-aabbccddeeff';
 
-const store = (): CoordStore => new CoordStore(openCoordDb(path.join(mkTmp('ccrc-card-facts-'), '.ccrc', 'coord.db')));
+const store = (): CoordStore => {
+  const dir = path.join(mkTmp('ccrc-card-facts-'), '.ccrc');
+  mkdirSync(dir, { recursive: true });
+  copyFileSync(template, path.join(dir, 'coord.db'));
+  return new CoordStore(openCoordDb(path.join(dir, 'coord.db')));
+};
 const deps = (coord: CoordStore, over: Partial<CardFactsDeps> = {}): CardFactsDeps => ({
   coord, childMark: async (): Promise<ChildMark | typeof CARD_REGISTRY_UNREAD> => ({ kind: 'none' }),
   incarnation: async (): Promise<ChildReclaimGeneration> => ({ kind: 'value', v: INC }), declaredIntent: () => false, ...over,

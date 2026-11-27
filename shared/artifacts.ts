@@ -1,7 +1,7 @@
 // The artifact tier's L0 vocabulary (native Docs HTML artifacts X5; spec docs/superpowers/specs/2026-11-19-native-docs-html-artifacts-design.md,
 // plan Task A1.1). L0: imports only `./docs.js`, no `node:*`, no package, so the PWA bundles it and the server compiles it.
 // Nothing here is shared with the walls tier (the mockup viewer): no `MOCKUP_` name, and the mockup policy never imports this.
-import { DOCS_RASTER_EXT, DOCS_RASTER_TYPES, type DocPin, type DocSectionSlug } from './docs.js';
+import { DOCS_RASTER_EXT, DOCS_RASTER_TYPES, type DocListPin, type DocSectionSlug } from './docs.js';
 
 // ---- Limits (spec section 4, plan Global Constraints "Capability") ----------------------------------------------------
 
@@ -97,14 +97,22 @@ export function artifactMime(path: string): { mime: string; attachment: boolean 
 
 // ---- Wire types (spec section 6) --------------------------------------------------------------------------------------
 
-/** The console's ask to scope or mint a capability (spec section 6). */
-export interface ArtifactMintAsk { pin: DocPin; project: string; origins: string[]; windows: boolean }
+/** The console's ask to mint a capability (spec section 6). The pin is a listing pin: a draft the listing could not fingerprint
+ *  (`fp: null` with its `stat`) can be asked, and the mint refuses it `draft-too-large` before any tree read (X5 A2.3). */
+export interface ArtifactMintAsk { pin: DocListPin; project: string; origins: string[]; windows: boolean }
+
+/** The availability read's answer (spec section 6): whether a mint could work now, why not when it could not, and the live
+ *  capabilities as rows (never a token or a URL). */
+export interface ArtifactListOk { ok: true; available: boolean; why?: ArtifactOffWhy; live: ArtifactRow[] }
 
 /** The scope answer: what a mint would carry (spec section 6). */
 export interface ArtifactScopeOk { ok: true; files: number; uncommitted: number; unsized: number; bytes: number }
 
 /** The mint answer (spec section 6). */
 export interface ArtifactMintOk { ok: true; id: string; url: string; expiresAt: number; files: number; uncommitted: number; unsized: number }
+
+/** The revoke doors' answer: one capability's revoke answers 0 or 1, Revoke all the count ended (spec section 3.3). */
+export interface ArtifactRevokeOk { ok: true; revoked: number }
 
 /** One live capability as the console lists it, never its token (spec section 6). */
 export interface ArtifactRow {

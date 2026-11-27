@@ -73,7 +73,7 @@ function rig(read: DesignationRead = designated(OLD)): Rig {
     body,
     clock: { wall: () => NOW },
     coord: {
-      designationRead: sequenceRead, failPending: r.failPending, stopDone: r.stopDone, accountPoolEdges: () => new Map(),
+      designationRead: sequenceRead, failPending: r.failPending, stopDone: r.stopDone, accountPoolEdges: () => new Map(), accountHolds: () => ({ ok: true, lanes: [] }),
     } as unknown as OverlordLaneDeps['coord'],
     facts: {
       roster: () => ROSTER,
@@ -200,6 +200,13 @@ describe('overlordLanePortOf: beforeRenew, the write-set before a renewal (desig
       `write-class ${OLD} fable [serial]`,
     ]);
     expect(r.serialRuns()).toBe(1);
+  });
+
+  it('a standing hold leaves its account out of the order written before a renewal (the doors\' account facts, PR H F4)', async () => {
+    const r = rig(designated(OLD, { model: 'opus', accountPools: { pools: ['pool-a'], untagged: false } }));
+    (r.deps.coord as { accountHolds: () => unknown }).accountHolds = () => ({ ok: true, lanes: ['lane-a'] });
+    expect(await overlordLanePortOf(r.deps).beforeRenew(OLD)).toStrictEqual({ ok: true });
+    expect(r.log.slice(1)).toStrictEqual([`write-set ${OLD} [pool-a] [lane-c] [serial]`, `write-class ${OLD} opus [serial]`]);
   });
 
   it('the class is the row\'s own: an opus row writes opus', async () => {

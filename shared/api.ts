@@ -25,7 +25,7 @@ import type { ApprovalParkWord, ApprovalRulingAuthority, ApprovalRulingFamily } 
 import type { LandingWrite } from './landingLine.js';
 import { hookEventIs, type HookEvent } from './hook-events.js';
 import { providerRetryOf, type ProviderRetryWire } from './provider-retry-wire.js';
-import { PROGRAMME_RUN_REFUSAL_MAP, PROGRAMME_STORED_STATES, type ProgrammeLifecycleFields, type ProgrammeRunRefuseCode, type ProgrammesLifecycleAnswer, type ProgrammeStoredState } from './programmeLifecycle.js';
+import { PROGRAMME_RUN_REFUSAL_MAP, PROGRAMME_STORED_STATES, type ProgrammeLifecycleFields, type ProgrammeRunRefuseCode, type ProgrammesLifecycleAnswer, type ProgrammesWindowAnswer, type ProgrammeStoredState } from './programmeLifecycle.js';
 
 export type SessionStatus = 'busy' | 'idle' | 'dead';
 
@@ -7296,7 +7296,7 @@ export interface ProgrammeRow extends ProgrammeLifecycleFields {   // programme 
 }
 
 /** `GET /api/programmes`'s answer: the rows, and the runs closed since the operator's local midnight, by who closed them (A32). */
-export interface ProgrammesAnswer extends ProgrammesLifecycleAnswer {
+export interface ProgrammesAnswer extends ProgrammesLifecycleAnswer, ProgrammesWindowAnswer {
   ok: true;
   programmes: ProgrammeRow[];
   closedToday: { operator: number; sweep: number; coordinator: number };
