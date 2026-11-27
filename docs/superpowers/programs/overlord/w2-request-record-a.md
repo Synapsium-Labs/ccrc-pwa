@@ -129,6 +129,11 @@ Every decider registered at floor 1; each set was run through the floors' own ru
 One mutant is left out on purpose: dropping the entry rule from the reason guard is equivalent today, because every
 move that enters `needs-you` already carries a reason word. It becomes killable when one does not.
 
+Task A3's store mutations, each made by hand, run against the store test and restored byte for byte (measured with
+`git diff`): the root check dropped from the insert plan (3 of 33 red, before the unique index is reached); the
+revision raise removed (5 red); the parent's clock stamp removed (3 red, the F2 cases); the stamp call removed from the
+move writer (the stamp census reds, and 4 store cases).
+
 Hand mutations on the guards (each reds, then restored): `hand-back-blocked` pointed at `routed` (two cases red);
 `done` added to `withdraw`'s `from` (three red); the revision raise removed from the move writer, a raise added to the
 parent's clock stamp, and an unclassified `UPDATE` of `overlord_requests` (the row-revision census's three new
