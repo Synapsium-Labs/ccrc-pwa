@@ -6,11 +6,12 @@
 import { describe, expect, it } from 'vitest';
 import { utf8Bytes } from '../../shared/utf8';
 import { DOCS_RENDER_GATE_BYTES } from '../src/lib/markdownLimits';
-import { partForFragment, partText, splitMarkdownParts, type MdPart } from '../src/docs/range/mdParts';
+import { partForFragment, partText, splitMarkdownParts, splitMarkdownPartsAt, type MdPart } from '../src/docs/range/mdParts';
 import { fileKey, pinFor, samePin } from '../src/docs/useDocsVisit';
 import { pageOpensDraft } from '../src/docs/docsLinks';
 import type { DocPin } from '../../shared/docs';
 import { draftOf, entry, holder, pageAt, treeOk } from './docsFixtures';
+import { blocksOf, judgeViolations } from './mdPartsJudge';
 
 const GATE = DOCS_RENDER_GATE_BYTES;
 
@@ -403,19 +404,52 @@ describe('splitMarkdownParts', () => {
     }
   });
 
-  it('md parts: residual 1 (a list-ended fence, then a later fence at column 0): pinned as today\'s behaviour, which P6.1 Step 0b2 flips', () => {
+  it('md parts: a real lazy line, then a fence the item holds, with the item\'s own continuation content, is never cut inside', () => {
+    // The positive case P6.1 Step 0b2 asks for (review 2932 a3), before the three residual pins flip: M11.115 and M11.116 (and
+    // M11.113) were guarded only by those pins. Each input is a lazy line (`lazy` is a lazy continuation of the item's
+    // paragraph, so the item is still open), then a fence the item holds, whose content (and closer) sit at the item's content
+    // column or right of it. CommonMark keeps the whole fence in the item, so a cut inside it with no close is a cut through code,
+    // and a part that starts at the fence's opener would read an opener indented four columns as indented code. At the
+    // maxBytes of each the whole fence fits, so it is never cut. Each input is the one where exactly one of the three rows turns
+    // the cut inside the fence (measured, P6.1 Step 0b2):
+    //  - M11.116 (a lazy line ends the item): the fence is then not the item's, and the column-0 line after it is read as its content;
+    //  - M11.115 (a zone ends at its opener's own column): the opener at four columns opens a zone that its own content line ends;
+    //  - M11.113 (a zone is never closed by a matching fence line): the closer at column 2 left of the opener at column 3 stays in the zone.
+    const inputs: readonly { t: string; max: number; opener: string; endsBefore: string }[] = [
+      { t: '- a\nlazy\n\n   ```\n  c\n  c\n\nafter\n', max: 16, opener: '   ```\n', endsBefore: '\nafter' },
+      { t: '- a\nlazy\n    ```ts\n  c0\n  c1\n  ```\nafter\n', max: 39, opener: '    ```ts\n', endsBefore: 'after' },
+      { t: '- a\nlazy\n   ```ts\n   code0\n   code1\n  ```\nafter\n', max: 35, opener: '   ```ts\n', endsBefore: 'after' },
+    ];
+    for (const { t, max, opener, endsBefore } of inputs) {
+      const { parts } = splitMarkdownParts(t, max);
+      checkCover(t, parts, max);
+      expect(parts.length, JSON.stringify(t)).toBeGreaterThanOrEqual(2);
+      const from = t.indexOf(opener);
+      const to = t.lastIndexOf(endsBefore);
+      expect(cutsIn(parts, from, to), `${JSON.stringify(t)}: no cut inside the item's fence`).toEqual([]);
+      for (const p of parts) {
+        expect(p.reopen, JSON.stringify(t)).toBeNull();
+        expect(p.close, JSON.stringify(t)).toBeNull();
+      }
+    }
+  });
+
+  it('md parts: residual 1 (a list-ended fence, then a later fence at column 0): flipped, the block cutter cuts it right (P6.1 Step 0b2)', async () => {
     // CommonMark ends the fence at `b` (its list item is over), so the first column-0 ``` line OPENS a fence that holds
-    // `# H` and `more`. The cutter reads that line as the closer of the list-ended fence's zone, so it cuts before `# H` as at
-    // a top-level heading, inside the real fence. 22 is the smallest maxBytes at which the text splits in two at `# H`
-    // (below it the windows are under the size the header names, and the text splits in three or more).
+    // `# H` and `more`. P1's cutter read that line as the closer of the list-ended fence's zone, and cut before `# H` as at
+    // a top-level heading, inside the real fence, at 22 (the smallest maxBytes at which its text splits in two at `# H`). The
+    // library's blocks are the list, a paragraph and that fence, so the cut falls between the list and the fence.
     const t = '- a\n  ```js\n  x\nb\n```\n# H\nmore\n```\n';
-    const { parts } = splitMarkdownParts(t, 22);
+    const { blocks, tailFrom } = await blocksOf(t);
+    const { parts } = splitMarkdownPartsAt(t, 22, blocks, tailFrom);
     checkCover(t, parts, 22);
-    expect(parts, 'a cut before `# H`, no close and no reopen').toEqual([
-      { start: 0, end: 22, continued: false, reopen: null, close: null },
-      { start: 22, end: 35, continued: false, reopen: null, close: null },
+    expect(parts, 'the part break is before the fence, which stays whole').toEqual([
+      { start: 0, end: 18, continued: false, reopen: null, close: null },
+      { start: 18, end: 35, continued: true, reopen: null, close: null },
     ]);
-    expect(t.startsWith('# H', 22)).toBe(true);
+    expect(t.startsWith('```\n# H', 18), 'the second part is the whole fence').toBe(true);
+    expect(judgeViolations(t, parts)).toEqual([]);
+    expect(judgeViolations(t, splitMarkdownParts(t, 22).parts), 'the line cutter\'s own cut of it was a violation').not.toEqual([]);
   });
 
   /** The part starts that fall strictly inside the real fence of a residual input, which a close line must come with. */
@@ -426,45 +460,58 @@ describe('splitMarkdownParts', () => {
     return { cuts, closed: parts.slice(0, -1).filter((p) => p.end > from && p.end <= to).map((p) => p.close) };
   };
 
-  it('md parts: residual 6 (indented fence-looking code, then an indented real fence opener the zone detector swallows): pinned as today\'s behaviour, which P6.1 Step 0b2 flips', () => {
-    // `    ```js` is indented code, not a fence, but the cutter reads it as a container fence (a zone) that ends at the first
-    // line indented under two columns. `  ```ts` right after it is a real top-level fence opener, which the zone swallows,
-    // so the cutter is outside a fence where CommonMark is inside one, and a cut falls inside it with no close. maxBytes 80
-    // is above the window the header names for residual 3. The round-1 cutter closes and reopens this fence.
+  it('md parts: residual 6 (indented fence-looking code, then an indented real fence opener the zone detector swallowed): flipped, the block cutter cuts it right (P6.1 Step 0b2)', async () => {
+    // `    ```js` is indented code, not a fence; `  ```ts` right after it is a real top-level fence opener. P1's cutter read the
+    // first as a container fence (a zone) that swallowed the second, so a cut fell inside the fence with no close, at 59 and 67.
+    // The library's blocks are the indented code and the fence: the fence, longer than what is left of a part at maxBytes 80
+    // (the window the header names for residual 3 is smaller), is closed on a line of its own at the first content line end and
+    // reopened with its own opener's prefix (two spaces), the marker and its language.
     const a = '    ```js\n  ```ts\n' + 'x'.repeat(40) + '\n' + 'y'.repeat(40) + '\n```\nafter\n';
-    const pa = splitMarkdownParts(a, 80).parts;
+    const ba = await blocksOf(a);
+    const pa = splitMarkdownPartsAt(a, 80, ba.blocks, ba.tailFrom).parts;
     checkCover(a, pa, 80);
-    expect(pa, 'a cut inside the fence, no close and no reopen').toEqual([
-      { start: 0, end: 59, continued: false, reopen: null, close: null },
-      { start: 59, end: 110, continued: true, reopen: null, close: null },
+    expect(pa, 'a cut inside the fence closes it and the next part reopens it').toEqual([
+      { start: 0, end: 10, continued: false, reopen: null, close: null },
+      { start: 10, end: 59, continued: true, reopen: null, close: '  ```\n' },
+      { start: 59, end: 104, continued: true, reopen: '  ``` ts\n', close: null },
+      { start: 104, end: 110, continued: true, reopen: null, close: null },
     ]);
-    expect(residualCuts(a, pa), 'the cut at 59 is inside the fence and carries no close').toEqual({ cuts: [59], closed: [null] });
-    // A fence-looking line after a list marker inside that fence changes nothing: the root is the same swallowed opener.
+    expect(residualCuts(a, pa), 'the cut at 59 is inside the fence and carries a close').toEqual({ cuts: [59], closed: ['  ```\n'] });
+    expect(judgeViolations(a, pa)).toEqual([]);
+    expect(judgeViolations(a, splitMarkdownParts(a, 80).parts), 'the line cutter\'s own cut of it was a violation').not.toEqual([]);
+    // A fence-looking line after a list marker inside that fence changes nothing: it is code, and the cut comes a line later.
     const b = '    ```js\n  ```ts\n' + 'x'.repeat(40) + '\n- ```md\n' + 'y'.repeat(40) + '\n```\nafter\n';
-    const pb = splitMarkdownParts(b, 80).parts;
+    const bb = await blocksOf(b);
+    const pb = splitMarkdownPartsAt(b, 80, bb.blocks, bb.tailFrom).parts;
     checkCover(b, pb, 80);
     expect(pb, 'the same cut, a line later').toEqual([
-      { start: 0, end: 67, continued: false, reopen: null, close: null },
-      { start: 67, end: 118, continued: true, reopen: null, close: null },
+      { start: 0, end: 10, continued: false, reopen: null, close: null },
+      { start: 10, end: 67, continued: true, reopen: null, close: '  ```\n' },
+      { start: 67, end: 112, continued: true, reopen: '  ``` ts\n', close: null },
+      { start: 112, end: 118, continued: true, reopen: null, close: null },
     ]);
-    expect(residualCuts(b, pb)).toEqual({ cuts: [67], closed: [null] });
+    expect(residualCuts(b, pb)).toEqual({ cuts: [67], closed: ['  ```\n'] });
+    expect(judgeViolations(b, pb)).toEqual([]);
   });
 
-  it('md parts: residual 7 (an empty list marker, a plain line, then a fence at the marker\'s content column: the item is read as open): pinned as today\'s behaviour, which P6.1 Step 0b2 flips', () => {
+  it('md parts: residual 7 (an empty list marker, a plain line, then a fence at the marker\'s content column: the item was read as open): flipped, the block cutter cuts it right (P6.1 Step 0b2)', async () => {
     // `-` is an empty item and `x` at column 0 is a paragraph after it, not a lazy line of the item, so `  ```ts` is a
-    // top-level fence. The list state reads `x` as a lazy line, holds the fence in the item, and the next column-0 line
-    // ends it: the rest of the fence is a zone, and a cut falls inside it with no close. The round-1 cutter closes and
-    // reopens this fence.
+    // top-level fence. P1's list state read `x` as a lazy line, held the fence in the item, and the next column-0 line ended it:
+    // the rest of the fence was a zone, and a cut fell inside it with no close, at 53. The library's blocks are the empty list,
+    // the paragraph and the fence, which is closed at the first content line end and reopened.
     const t = '-\nx\n  ```ts\n' + 'x'.repeat(40) + '\n' + 'y'.repeat(40) + '\n```\nafter\n';
-    const parts = splitMarkdownParts(t, 80).parts;
+    const { blocks, tailFrom } = await blocksOf(t);
+    const parts = splitMarkdownPartsAt(t, 80, blocks, tailFrom).parts;
     checkCover(t, parts, 80);
-    expect(parts, 'a cut inside the fence, no close and no reopen').toEqual([
+    expect(parts, 'a cut inside the fence closes it and the next part reopens it').toEqual([
       { start: 0, end: 4, continued: false, reopen: null, close: null },
-      { start: 4, end: 53, continued: true, reopen: null, close: null },
-      { start: 53, end: 98, continued: true, reopen: null, close: null },
+      { start: 4, end: 53, continued: true, reopen: null, close: '  ```\n' },
+      { start: 53, end: 98, continued: true, reopen: '  ``` ts\n', close: null },
       { start: 98, end: 104, continued: true, reopen: null, close: null },
     ]);
-    expect(residualCuts(t, parts), 'the cut at 53 is inside the fence and carries no close').toEqual({ cuts: [53], closed: [null] });
+    expect(residualCuts(t, parts), 'the cut at 53 is inside the fence and carries a close').toEqual({ cuts: [53], closed: ['  ```\n'] });
+    expect(judgeViolations(t, parts)).toEqual([]);
+    expect(judgeViolations(t, splitMarkdownParts(t, 80).parts), 'the line cutter\'s own cut of it was a violation').not.toEqual([]);
   });
 
   it('md parts: a fence with a marker over 64 characters is cut at line ends, never mid-line, and never reopened', () => {

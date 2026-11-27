@@ -5,6 +5,7 @@
 // part's index and says which part continues a line.
 import { useMemo, useState, type ReactNode } from 'react';
 import { DOCS_RANGE_TEXT, fillSentence, mib } from '../docsText';
+import { NoPrintSource, usePublishPrintSource, type PrintSource } from '../print/printSource';
 import { PartBar } from './MarkdownParts';
 import { splitSourceParts } from './textParts';
 
@@ -13,6 +14,8 @@ export interface SourcePartToMount { readonly text: string; readonly index: numb
 
 export function SourceParts(p: {
   readonly text: string;
+  /** The file's name, for Print (X2 P6.1 Step 1): this component publishes every part's text as the one text leaf's print source. */
+  readonly name: string;
   /** The file's size in bytes as it was read (the bytes of the read, not of the decoded text, whose BOM is stripped), for
    *  the sentence naming the parts: the same figure the Download sentence gives. */
   readonly size: number;
@@ -20,15 +23,17 @@ export function SourceParts(p: {
   readonly renderPart: (part: SourcePartToMount) => ReactNode;
 }): ReactNode {
   const { parts } = useMemo(() => splitSourceParts(p.text, p.maxBytes), [p.text, p.maxBytes]);
+  const printParts = useMemo(() => parts.map((q) => p.text.slice(q.start, q.end)), [parts, p.text]);
   const [index, setIndex] = useState(0);
   const part = parts[Math.min(index, parts.length - 1)]!;
   const at = Math.min(index, parts.length - 1);
+  usePublishPrintSource(useMemo<PrintSource>(() => ({ kind: 'text', parts: printParts, name: p.name, at }), [printParts, p.name, at]));
   return (
     <div className="docs-in-parts docs-source-parts" data-part={at + 1} data-parts={parts.length}>
       <PartBar index={at} count={parts.length} onGo={setIndex} />
       {parts.length > 1 && <p className="docs-note">{fillSentence(DOCS_RANGE_TEXT.sourceParts, { size: mib(p.size), part: mib(p.maxBytes) })}</p>}
       {part.continued && <p className="docs-note">{DOCS_RANGE_TEXT.partContinued}</p>}
-      {p.renderPart({ text: p.text.slice(part.start, part.end), index: at })}
+      <NoPrintSource>{p.renderPart({ text: p.text.slice(part.start, part.end), index: at })}</NoPrintSource>
     </div>
   );
 }

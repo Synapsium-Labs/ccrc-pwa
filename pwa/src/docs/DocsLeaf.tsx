@@ -6,7 +6,7 @@
 // 2026-11-18 4.4: `PdfLeaf`, read by range between the class cap and the inline ceiling, Download only above it); `other` is "No preview" and Download. A listed size over its
 // class cap is the `too-large` sentence, and nothing was requested (the visit's `too-large` slot). The header and the
 // banners are `DocsScreen`'s (`DocsHead`, `DocsBanners`), above this body, so a file failure replaces only the body.
-import { useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react';
 import { Button } from '@ccrc/ui';
 import type { Element as HastElement } from 'hast';
 import {
@@ -18,14 +18,16 @@ import { api } from '../lib/api';
 import { DOCS_RENDER_GATE_BYTES } from '../lib/markdownLimits';
 import { MarkdownParts } from './range/MarkdownParts';
 import { RangeImage, RangeLeaf, rangeReadKey, type RangeBytes } from './range/RangeLeaf';
-import { rangeOfTooLarge, rangePinOf } from './range/rangePolicy';
+import { actsOnPart, openedRangePin, rangeOfTooLarge, rangePinOf } from './range/rangePolicy';
+import { decodeRangeBytes } from './range/rangeText';
 import type { RangeLoader } from './range/readRange';
 import { SourceParts } from './range/SourceParts';
 import { CodeBlock, PreHighlightContext } from '../lib/markdown';
 import { isRegisteredGrammar } from '../lib/highlightNames';
 import { useDocsHighlightStore } from '../lib/highlighterContext';
 import type { MarkdownParser } from '../lib/markdownRunner';
-import { DocImage, DocsAssetContext, DocsLeafImageContext, svgDataUrl, type DocsAssetContextValue } from './DocImage';
+import { DocImage, DocsAssetContext, DocsLeafImageContext, rasterDataUrl, svgDataUrl, type DocsAssetContextValue } from './DocImage';
+import { usePublishPrintSource, type PrintSource } from './print/printSource';
 import { MockupView } from './MockupView';
 import { PdfLeaf, pdfOverInlineSentence } from './pdf/PdfLeaf';
 import { mockupAssetReader } from './mockup/load';
@@ -34,6 +36,7 @@ import { DocInLinkContext, DocLinkContext, fragmentTarget, type DocLinkContextVa
 import { DOC_NOT_UTF8_NOTE, DocMarkdown, DocPlain, docMarkdownSource } from './DocMarkdown';
 import { DocsFailureView } from './DocsFailureView';
 import type { DetachedUrls } from './docsLinks';
+import { linkBaseFor, type LinkBase } from './docsLinkBase';
 import {
   DOCS_RANGE_TEXT, DOCS_SHOW_NO_BYTES, DOCS_SHOW_NOT_SVG, DOCS_VIEW_TEXT, failureSentence, fillSentence, kib, mib, shortCommit, slotSentence,
 } from './docsText';
@@ -43,10 +46,9 @@ import { downloadDocFile, showBytes } from './objectUrls';
 import { ReaderFrame, type ReaderDeps } from './ReaderFrame';
 import { useReaderOnly } from './readerHistory';
 import { pinFor, type DocsVisit, type FileSlot } from './useDocsVisit';
-import { usePublishExportBody, type ExportBody } from './exportBody';
+import { NONE_BODY, PartExportBody, usePublishExportBody, type ExportBody } from './exportBody';
 
 type Leaf = DocsPageLocation & { kind: 'path' };
-type LinkBase = Omit<DocLinkContextValue, 'urls'>;
 
 /** A client-built `malformed-answer` for a file answer that does not hold what its class needs. */
 function malformed(why: string): DocsNotOk {
@@ -120,6 +122,47 @@ function DownloadButton(p: {
   );
 }
 
+// What Print draws from for a PDF and an HTML page (X2 P6.1 Step 1; spec 4.6, PL4 and PL5): they print from their downloaded file.
+const PDF_PRINT: PrintSource = Object.freeze({ kind: 'download-to-print', cls: 'pdf' } as const);
+const HTML_PRINT: PrintSource = Object.freeze({ kind: 'download-to-print', cls: 'html' } as const);
+
+/** Publishes that this leaf is a PDF or an HTML page, which print from their file, while it is mounted. */
+function PrintFromFile(p: { readonly cls: 'pdf' | 'html' }): null {
+  usePublishPrintSource(p.cls === 'pdf' ? PDF_PRINT : HTML_PRINT);
+  return null;
+}
+
+/** Publishes text that is shown as plain text because its bytes are not UTF-8 (the lossy decoding, with its note): Print draws it as
+ *  one `pre`, as it draws any text leaf. */
+function PrintAsText(p: { readonly text: string; readonly name: string }): null {
+  usePublishPrintSource(useMemo<PrintSource>(() => ({ kind: 'text', parts: [p.text], name: p.name, at: 0 }), [p.text, p.name]));
+  return null;
+}
+
+const NO_SUBSCRIPTION = (): (() => void) => () => {};
+
+/** The registry key of the image a page's own pin names, or `''` for a draft with no fingerprint (which is read by range and
+ *  registered under its opened pin, so no listing pin names it: Export's own rule). */
+function listedAssetKey(project: string, pin: DocListPin): string {
+  if (pin.kind === 'draft' && pin.fp === null) return '';
+  return docsApi.file(project, pin);
+}
+
+/** Publishes a raster leaf's own image for Print once its bytes have loaded: the image the page already holds, from the visit's
+ *  registry (`ExportAssets`, under the leaf's pin key, which Export reads the same way), as the `data:` URL of those verified
+ *  bytes. Nothing while it loads or if it failed. */
+function RasterPrintSource(p: { readonly assetKey: string; readonly name: string }): null {
+  const exportAssets = useContext(DocsAssetContext)?.exportAssets ?? null;
+  const read = (): number => (exportAssets === null ? 0 : exportAssets.version());
+  useSyncExternalStore(exportAssets === null ? NO_SUBSCRIPTION : exportAssets.subscribe, read, read);
+  const held = exportAssets === null ? undefined : exportAssets.get(p.assetKey);
+  usePublishPrintSource(useMemo<PrintSource | null>(() => (
+    held !== undefined && held.s === 'loaded' && held.asset.kind === 'raster'
+      ? { kind: 'image', src: rasterDataUrl(held.asset.bytes, held.asset.mime), name: p.name } : null
+  ), [held, p.name]));
+  return null;
+}
+
 function SourceButton(p: { readonly shown: boolean; readonly onToggle: () => void }): ReactNode {
   return (
     <button type="button" className="docs-leaf-action" aria-pressed={p.shown} onClick={p.onToggle}>
@@ -142,7 +185,7 @@ function SourceText(p: { readonly show: DocsShowOk }): ReactNode {
 function TextBody(p: { readonly show: DocsShowOk; readonly path: string }): ReactNode {
   const src = useMemo(() => docMarkdownSource(p.show), [p.show]);
   if (src.kind === 'no-bytes') return <DocsFailureView answer={malformed(DOCS_SHOW_NO_BYTES)} />;
-  if (src.kind === 'not-utf8') return <DocPlain text={src.text} note={DOC_NOT_UTF8_NOTE} />;
+  if (src.kind === 'not-utf8') return <><PrintAsText text={src.text} name={leafName(p.path)} /><DocPlain text={src.text} note={DOC_NOT_UTF8_NOTE} /></>;
   return <TextSource text={src.text} path={p.path} />;
 }
 
@@ -161,6 +204,8 @@ function TextSource(p: { readonly text: string; readonly path: string }): ReactN
   // What this body shows, for Export: its text, and the grammar that colours it, if any.
   usePublishExportBody(useMemo<ExportBody>(
     () => ({ kind: 'text', text: p.text, lang: text === null ? null : ext }), [p.text, text, ext]));
+  // And for Print: the whole text as the one part (a part of a file in parts is drawn inside `SourceParts`, which publishes them all).
+  usePublishPrintSource(useMemo<PrintSource>(() => ({ kind: 'text', parts: [p.text], name, at: 0 }), [p.text, name]));
   if (store === null) return <pre className="doc-plain">{p.text}</pre>;
   return (
     <PreHighlightContext value={store}>
@@ -182,6 +227,7 @@ function PdfBody(p: { readonly show: DocsShowOk; readonly download: ReactNode; r
   if (bytes === null) return <DocsFailureView answer={malformed(DOCS_SHOW_NO_BYTES)} />;
   return (
     <div className="docs-pdf">
+      <PrintFromFile cls="pdf" />
       <div className="docs-leaf-actions">{p.download}</div>
       <PdfLeaf bytes={bytes} name={p.name} />
     </div>
@@ -192,7 +238,11 @@ function PdfBody(p: { readonly show: DocsShowOk; readonly download: ReactNode; r
  *  with Source and Download. */
 function SvgBody(p: { readonly show: DocsShowOk; readonly answered: string; readonly download: ReactNode; readonly name: string }): ReactNode {
   const [source, setSource] = useState(false);
-  const bytes = p.answered === 'svg' ? showBytes(p.show) : null;
+  // Held across renders: Print's source below is made from it, and a new array each render would publish a new source each render.
+  const bytes = useMemo(() => (p.answered === 'svg' ? showBytes(p.show) : null), [p.answered, p.show]);
+  // Print draws the very `data:` image the leaf draws (Source or not).
+  usePublishPrintSource(useMemo<PrintSource | null>(
+    () => (bytes === null ? null : { kind: 'image', src: svgDataUrl(bytes), name: p.name }), [bytes, p.name]));
   if (bytes === null) return <DocsFailureView answer={malformed(p.answered === 'svg' ? DOCS_SHOW_NO_BYTES : DOCS_SHOW_NOT_SVG)} />;
   return (
     <div className="docs-svg">
@@ -225,13 +275,19 @@ function HtmlBody(p: {
   if (reader === null) {
     return (
       <div className="docs-standin">
+        <PrintFromFile cls="html" />
         <div className="docs-leaf-actions"><SourceButton shown={source} onToggle={() => setSource((s) => !s)} />{p.download}</div>
         {source && <SourceText show={p.show} />}
       </div>
     );
   }
   const key = [p.bodyKey, page.view, page.frame].join('\u0000');
-  return <MockupView key={key} show={p.show} context={context} reader={reader} page={page} relist={p.visit.retryTree} download={p.download} />;
+  return (
+    <>
+      <PrintFromFile cls="html" />
+      <MockupView key={key} show={p.show} context={context} reader={reader} page={page} relist={p.visit.retryTree} download={p.download} />
+    </>
+  );
 }
 
 /** The leaf's own image is not an embedded draft asset (the truth line already says draft), so this leaf's assets
@@ -248,6 +304,8 @@ const IGNORE_DRAFT_ASSET = (): void => {};
  *  waits for (spec 4.16; refinement (f)); no image inside a document has that listener. */
 function RasterBody(p: {
   readonly link: LinkBase; readonly name: string; readonly onLeafImage: ((pin: DocPin | null) => void) | null;
+  /** The registry key of the leaf's own image (`docsApi.file` of the page's pin), which Print reads the loaded image under. */
+  readonly assetKey: string;
   /** A version page (review Q4): told when the raster route answers `too-large` with the blob at the version's commit, so
    *  the leaf reads the image by range instead. Absent, the failure is the image's own sentence. This wrapper reads the
    *  raster answer a second time, beside `DocImage`'s own read of it, and that is legitimately different from a second
@@ -277,6 +335,7 @@ function RasterBody(p: {
   }, [p.link, p.name, node]);
   return (
     <div className="docs-raster">
+      <RasterPrintSource assetKey={p.assetKey} name={p.name} />
       <DocsAssetContext value={own}>
         <DocLinkContext value={ctx}><DocInLinkContext value={true}><DocsLeafImageContext value={p.onLeafImage}><DocImage node={node} alt={p.name} /></DocsLeafImageContext></DocInLinkContext></DocLinkContext>
       </DocsAssetContext>
@@ -305,9 +364,33 @@ function MarkdownBody(p: {
   readonly reader: ReaderDeps | null; readonly pendingFragment: string | null; readonly onFragmentConsumed: () => void;
 }): ReactNode {
   const src = useMemo(() => docMarkdownSource(p.show), [p.show]);
+  // Print, for the plain view drawn here whole (no reader, up to the file cap): the text, formatted by the print render like any
+  // other. The reader's body publishes its own, and parts publish from `MarkdownParts`.
+  const plainText = p.reader === null && src.kind === 'markdown' && !actsOnPart(src.text) ? src.text : null;
+  usePublishPrintSource(useMemo<PrintSource | null>(
+    () => (plainText === null ? null : { kind: 'markdown', text: plainText, ready: true }), [plainText]));
   if (src.kind === 'no-bytes') return <DocsFailureView answer={malformed(DOCS_SHOW_NO_BYTES)} />;
-  if (src.kind === 'not-utf8') return <DocPlain text={src.text} note={DOC_NOT_UTF8_NOTE} />;
+  if (src.kind === 'not-utf8') return <><PrintAsText text={src.text} name={leafName(p.page.path)} /><DocPlain text={src.text} note={DOC_NOT_UTF8_NOTE} /></>;
   if (p.reader === null) {
+    // The plain view of a text above the file cap (X2 P6.1 Step 0c; spec 4.3): the parts, each its own `DocMarkdown` under the render
+    // gate, so Export has the part on screen to export. Up to the cap (a text read whole, or by range) the whole text keeps the
+    // gate's own question (Format anyway, Show as text), and Export acts on the whole text.
+    if (actsOnPart(src.text)) {
+      return (
+        <MarkdownParts
+          // `bodyKey`: the reader's cut and place for this text, which the plain view of the same text takes up.
+          key={p.bodyKey} bodyKey={p.bodyKey} text={src.text} pre={null} fragment={null}
+          renderPart={(part) => {
+            const key = p.bodyKey + '\u0000part:' + String(part.index);
+            return (
+              <PartExportBody>
+                <DocMarkdown key={key} text={part.text} pinKey={key} parser={p.parser} link={p.link} />
+              </PartExportBody>
+            );
+          }}
+        />
+      );
+    }
     return <DocMarkdown key={p.bodyKey} text={src.text} pinKey={p.bodyKey} parser={p.parser} link={p.link} />;
   }
   // X2 P1 (spec 4.3, the render-gate carry): above the render gate the text is read in parts no larger than the gate,
@@ -316,7 +399,7 @@ function MarkdownBody(p: {
     const reader = p.reader;
     return (
       <MarkdownParts
-        key={p.bodyKey} text={src.text} pre={reader.render} fragment={p.pendingFragment}
+        key={p.bodyKey} bodyKey={p.bodyKey} text={src.text} pre={reader.render} fragment={p.pendingFragment}
         renderPart={(part) => {
           const show: DocsShowOk = { ...p.show, encoding: 'utf8', text: part.text, size: utf8Bytes(part.text) };
           const key = p.bodyKey + '\u0000part:' + String(part.index);
@@ -341,22 +424,8 @@ function MarkdownBody(p: {
   );
 }
 
-/** The opened pin of bytes read by range (spec 4.3, "Where the time comes from, and where the pin lives"): a draft the
- *  listing could not fingerprint takes the snapshot's digest as its `fp`, the sha256 of the bytes the page shows, and
- *  keeps its stat, so `samePin` holds it equal to the listing's pin and every reader of `fp` reads the bytes' digest. */
-export function openedRangePin(pin: DocListPin, digest: string): DocPin {
-  return pin.kind === 'draft' && pin.fp === null ? { ...pin, fp: digest, stat: pin.stat } : pin;
-}
-
-/** The bytes a range read gave, decoded as UTF-8. `utf8: false` carries the lossy decoding, for the plain view with its
- *  note (spec 4.4's not-UTF-8 row); a file that is not UTF-8 is never parsed. */
-function decodeRangeBytes(bytes: Uint8Array<ArrayBuffer>): { utf8: boolean; text: string } {
-  try {
-    return { utf8: true, text: new TextDecoder('utf-8', { fatal: true }).decode(bytes) };
-  } catch {
-    return { utf8: false, text: new TextDecoder('utf-8').decode(bytes) };
-  }
-}
+/** `rangePolicy.ts`'s, which the visit reads too; still named here for the callers that import it from the leaf. */
+export { openedRangePin };
 
 /** The docs-show answer of bytes read by range: their text, size and digest, under the opened pin. `blob`: the blob of the
  *  bytes, when it is not the listing's (a version page's, which the too-large answer named). */
@@ -381,15 +450,26 @@ export function RangeSource(p: { readonly read: RangeBytes; readonly path: strin
   const size = p.read.bytes.length;
   if (!decoded.utf8) {
     return size <= DOCS_CLASS_CAP.text
-      ? <DocPlain text={decoded.text} note={DOC_NOT_UTF8_NOTE} />
-      : <p className="docs-note">{fillSentence(DOCS_RANGE_TEXT.downloadOnly, { size: mib(size) })}</p>;
+      ? <><PrintAsText text={decoded.text} name={leafName(p.path)} /><DocPlain text={decoded.text} note={DOC_NOT_UTF8_NOTE} /></>
+      : <><NoExportBody /><p className="docs-note">{fillSentence(DOCS_RANGE_TEXT.downloadOnly, { size: mib(size) })}</p></>;
   }
+  // Above 2 MiB the file is shown in parts and Export acts on the part on screen: each part's body says so.
+  const inParts = actsOnPart(decoded.text);
   return (
     <SourceParts
-      key={p.read.digest} text={decoded.text} size={size} maxBytes={DOCS_CLASS_CAP.text}
-      renderPart={(part) => <TextSource key={part.index} text={part.text} path={p.path} />}
+      key={p.read.digest} text={decoded.text} size={size} maxBytes={DOCS_CLASS_CAP.text} name={leafName(p.path)}
+      renderPart={(part) => {
+        const body = <TextSource key={part.index} text={part.text} path={p.path} />;
+        return inParts ? <PartExportBody key={part.index}>{body}</PartExportBody> : body;
+      }}
     />
   );
+}
+
+/** A leaf that shows a note and no text publishes that no body will come, so Export is not offered (and does not wait for one). */
+function NoExportBody(): ReactNode {
+  usePublishExportBody(NONE_BODY);
+  return null;
 }
 
 /** A Markdown leaf read by range (spec 4.3): its bytes as a docs-show answer of their own (text, size and digest), under
@@ -408,7 +488,7 @@ export function RangeMarkdown(p: {
   const show = useMemo<DocsShowOk>(
     () => rangeShowOf(p.read, p.entry, opened, decoded.text, p.blob), [p.read, p.entry, opened, decoded, p.blob]);
   const bodyKey = ['range', p.page.project, p.entry.section, p.entry.path, p.read.digest].join('\u0000');
-  if (!decoded.utf8) return <DocPlain text={decoded.text} note={DOC_NOT_UTF8_NOTE} />;
+  if (!decoded.utf8) return <><PrintAsText text={decoded.text} name={leafName(p.entry.path)} /><DocPlain text={decoded.text} note={DOC_NOT_UTF8_NOTE} /></>;
   return (
     <MarkdownBody
       show={show} bodyKey={bodyKey} link={p.link} parser={p.parser} pin={opened} page={p.page} only={p.only}
@@ -446,10 +526,7 @@ export function DocsLeaf(p: {
   }, [cls, pendingFragment, setFragment]);
   // One pin object per (tree, page), so the range views' memos keyed by it hold across renders.
   const pin = useMemo(() => pinFor(tree, page), [tree, page]);
-  const link = useMemo<LinkBase>(() => ({
-    project: page.project, pageRef: page.ref, pageAt: page.at, view: page.view, section: page.section, path: page.path, tree,
-    pageSource: pin?.kind === 'draft' ? 'draft' : 'committed', onFragment: visit.setFragment,
-  }), [page, tree, pin?.kind, visit.setFragment]);
+  const link = useMemo<LinkBase>(() => linkBaseFor(page, tree, pin, visit.setFragment), [page, tree, pin, visit.setFragment]);
   // On a version page, a raster (its own route's answer) and a class the visit reads no file for (`other`, whose Download
   // asks the file route) learn they are over their cap from that answer, and report its size and blob here, keyed by the
   // page they were told for, so another page never inherits them.
@@ -521,7 +598,7 @@ export function DocsLeaf(p: {
             : cls === 'text'
               ? (read) => <RangeSource read={read} path={rentry.path} />
               : cls === 'pdf' && !pdfOver(size)
-                ? (read) => <PdfLeaf bytes={read.bytes} name={name} />
+                ? (read) => <><PrintFromFile cls="pdf" /><PdfLeaf bytes={read.bytes} name={name} /></>
                 : undefined}
       </RangeLeaf>
     );
@@ -551,7 +628,10 @@ export function DocsLeaf(p: {
     } else if (cls === 'raster') {
       body = (
         <>
-          <RasterBody link={link} name={name} onLeafImage={p.onLeafImage ?? null} onOverCap={page.at !== null ? onTold : null} />
+          <RasterBody
+            link={link} name={name} onLeafImage={p.onLeafImage ?? null} onOverCap={page.at !== null ? onTold : null}
+            assetKey={listedAssetKey(page.project, pin)}
+          />
           <div className="docs-leaf-actions">{download}</div>
         </>
       );

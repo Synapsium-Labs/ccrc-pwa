@@ -18,7 +18,10 @@
 //   - The reader's render job (W8a Task 4) is a second kind of job on the SAME runner: `render()` queues behind and
 //     ahead of parse jobs in the one FIFO, with the same budget timer, terminate-and-respawn, abort and dispose. A
 //     parse job posts exactly `{id, src, profile}`, a render job exactly `{id, kind: 'render', src}`, and
-//     `ParseOutcome` keeps its eight arms: a render job's own outcome type is `ReaderRenderOutcome`.
+//     `ParseOutcome` keeps its eight arms: a render job's own outcome type is `ReaderRenderOutcome`. An optional
+//     flag rides a render job only when set (X2 P6.1 Step 0b2): `blocks: true`, the library's block boundaries for
+//     Markdown parts, and `print: true` (X2 P6.1 Step 1), the print tree beside the page, so a render without either posts
+//     exactly as before.
 // Messages are received by ASSIGNING `onmessage`, never by adding a listener (refinement (w)).
 //
 // Two module singletons, `docsRunner` and `chatRunner`: a 30 s docs job never delays a chat message. Neither spawns
@@ -75,7 +78,7 @@ export interface MarkdownRunner {
   readonly parse: MarkdownParser;
   /** The reader's render job, on the same queue and budget as `parse`. Resolves with the job's outcome; rejects only
    *  on an abort or `dispose()`. */
-  readonly render: (src: string, o: { budgetMs: number; signal?: AbortSignal }) => Promise<ReaderRenderOutcome>;
+  readonly render: (src: string, o: { budgetMs: number; signal?: AbortSignal; blocks?: true; print?: true }) => Promise<ReaderRenderOutcome>;
   /** Spawns the worker now, when there is none, so the first job does not wait for it to start. */
   prewarm(): void;
   /** Terminates the worker and rejects every pending job with an `AbortError`. A later job spawns again. */
@@ -382,7 +385,11 @@ export function createMarkdownRunner(deps: Partial<MarkdownRunnerDeps> = {}): Ma
   const parse: MarkdownParser = (src, opts) =>
     core.run((id) => ({ id, src, profile: opts.profile }), opts.budgetMs, { signal: opts.signal }) as Promise<ParseOutcome>;
   const render: MarkdownRunner['render'] = (src, opts) =>
-    core.run((id) => ({ id, kind: 'render', src }), opts.budgetMs, { signal: opts.signal }) as Promise<ReaderRenderOutcome>;
+    core.run((id) => ({
+      id, kind: 'render', src,
+      ...(opts.blocks === true ? { blocks: true as const } : {}),
+      ...(opts.print === true ? { print: true as const } : {}),
+    }), opts.budgetMs, { signal: opts.signal }) as Promise<ReaderRenderOutcome>;
   return { parse, render, prewarm: () => core.prewarm(), dispose: () => core.dispose() };
 }
 

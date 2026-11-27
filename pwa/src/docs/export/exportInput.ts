@@ -17,15 +17,19 @@ import { exportProvenance } from './provenance';
 
 type Leaf = DocsPageLocation & { kind: 'path' };
 
-/** What a leaf that is ready to export holds (`DocsHead.tsx#exportStateFor`'s answer). */
+/** What a leaf that is ready to export holds (`DocsHead.tsx#exportStateFor`'s answer). A tree, plain or text source's `show`
+ *  is `null` for a document read by range (X2 P6.1 Step 0c): its body is the part on screen, so no answer holds the text the
+ *  body is compared with, and the pin is the opened one. */
 export type ExportSource =
   | {
-    readonly kind: 'tree'; readonly pin: DocPin; readonly show: DocsShowOk;
+    readonly kind: 'tree'; readonly pin: DocPin; readonly show: DocsShowOk | null;
     readonly body: Extract<ExportBody, { kind: 'tree' }>; readonly store: HighlightStore;
   }
-  | { readonly kind: 'plain'; readonly pin: DocPin; readonly show: DocsShowOk; readonly body: Extract<ExportBody, { kind: 'plain' }> }
   | {
-    readonly kind: 'text'; readonly pin: DocPin; readonly show: DocsShowOk;
+    readonly kind: 'plain'; readonly pin: DocPin; readonly show: DocsShowOk | null; readonly body: Extract<ExportBody, { kind: 'plain' }>;
+  }
+  | {
+    readonly kind: 'text'; readonly pin: DocPin; readonly show: DocsShowOk | null;
     readonly body: Extract<ExportBody, { kind: 'text' }>; readonly store: HighlightStore | null;
   }
   | { readonly kind: 'svg'; readonly pin: DocPin; readonly show: DocsShowOk; readonly bytes: Uint8Array }
@@ -41,8 +45,12 @@ export interface ExportRequest {
   readonly tree: DocsTreeOk;
   readonly source: ExportSource;
   readonly assets: ExportAssets | null;
-  /** When the leaf's bytes were read (its file slot's `receivedAt`); `null`: a raster leaf, which has no file slot. */
+  /** When the leaf's bytes were read (its file slot's `receivedAt`, or a range read's `readAt`); `null`: a raster leaf, which has
+   *  no file slot. */
   readonly readAt: number | null;
+  /** The document is shown in parts and the source is the part on screen (X2 P6.1 Step 0c); the sheet says so. Absent: the
+   *  source is the whole text. */
+  readonly part?: true;
 }
 
 // A copy of the private `lib/highlightStore.ts#textOf`, kept so that file stays untouched.

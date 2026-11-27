@@ -949,7 +949,7 @@ describe('the range read\'s share of the one automatic re-list (X2 P1, review F2
     await flush();
     act(() => { result.current.rangeFailed('draft-changed'); });
     await flush();
-    act(() => { result.current.rangeRead(); });
+    act(() => { result.current.rangeRead({ key: 'k', digest: 'd'.repeat(64), readAt: 0, bytes: new Uint8Array(0) }); });
     let again: string | undefined;
     act(() => { again = result.current.rangeFailed('draft-changed'); });
     await flush();

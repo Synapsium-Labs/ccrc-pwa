@@ -285,11 +285,12 @@ describe('RangeSource: one document at a time', () => {
     const part1 = 'a'.repeat(DOCS_MAX_DOC_BYTES);
     const shown = (): string => document.querySelector('pre.doc-plain')?.textContent ?? '';
     expect(shown(), 'part 1 is the first 2 MiB of the file, no more').toBe(part1);
-    expect(published.at(-1), 'and the Export body is that text alone').toEqual({ kind: 'text', text: part1, lang: null });
+    expect(published.at(-1), 'and the Export body is that text alone').toEqual({ kind: 'text', text: part1, lang: null, part: true });
     fireEvent.click(screen.getByText(DOCS_RANGE_TEXT.partNext));
     expect(shown(), 'part 2 is the rest').toBe('a'.repeat(10));
-    expect(published.at(-1)).toEqual({ kind: 'text', text: 'a'.repeat(10), lang: null });
-    for (const b of published) expect(Object.keys(b).sort(), 'a body carries kind, lang and text only').toEqual(['kind', 'lang', 'text']);
+    expect(published.at(-1)).toEqual({ kind: 'text', text: 'a'.repeat(10), lang: null, part: true });
+    // X2 P6.1 Step 0c: a part of a text above 2 MiB says it is one, so Export acts on it and its sheet says so.
+    for (const b of published) expect(Object.keys(b).sort(), 'a body carries kind, lang, part and text only').toEqual(['kind', 'lang', 'part', 'text']);
     expect(document.body.innerHTML, 'no digest on the page').not.toContain(digest);
   }, 60000);
 });

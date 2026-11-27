@@ -30,6 +30,9 @@ import { FolderPage } from '../docs/FolderPages';
 import { createFetchQueue } from '../docs/fetchQueue';
 import { createExportAssets } from '../docs/export/exportAssets';
 import { ExportBodyContext, type ExportBody } from '../docs/exportBody';
+import { PrintSourceContext, type PrintSource } from '../docs/print/printSource';
+import type { PrintRender } from '../docs/print/preparePrint';
+import { PrintControlContext, usePrint } from '../docs/print/usePrint';
 import { ReaderBarContext, type ReaderBar, type ReaderBarSlot } from '../docs/readerBar';
 import { readerChromeFor } from '../docs/reader/policy';
 import { docsRetryPlan, type DocsAnswer, type DocsLoaders, type DocsNotOk } from '../docs/failures';
@@ -64,6 +67,11 @@ const DEFAULT_READER: ReaderDeps = {
   images: loadReaderImages,
   history: api.docs,
 };
+
+/** The render job Print asks for its trees when the screen has no reader deps (no `Worker` here, or a caller that chose none): the
+ *  render job is never asked (the screen's pin `reader-frame.test.tsx`: no reader, no `docsRunner.render`), and the page prints as its
+ *  plain text under the worker-unavailable sentence. */
+const DEFAULT_PRINT_RENDER: PrintRender = () => Promise.resolve({ kind: 'worker-unavailable' });
 
 /** The index's answer this visit. `null` has one meaning: no index request has been made in this visit yet. */
 type IndexSlot = { s: 'loading' } | { s: 'ok'; answer: DocsProjectsResponse } | DocsNotOk;
@@ -205,6 +213,9 @@ export function DocsScreen(p: {
   // (refinement (a)). The image registry is `exportAssets`, above, in the images' context.
   const [exportBody, setExportBody] = useState<ExportBody | null>(null);
   const [pageStore, setPageStore] = useState<HighlightStore | null>(null);
+  // Print (X2 P6.1 Step 1): what the leaf's body shows, for print (`docs/print/printSource.ts`, as Export's body above), and the
+  // control the head's Print row reads (`usePrint`, below, once the tree is known).
+  const [printSource, setPrintSource] = useState<PrintSource | null>(null);
   const [plainAt, setPlainAt] = useState<string | null>(null);
   // The one bar (the library 1.1 take-up plan, refinement (i)): a frame mounted at the compact width is on ccrc's bar,
   // and once it is ready its handle comes back here for the head. A width change moves the next mount, never this one.
@@ -321,6 +332,8 @@ export function DocsScreen(p: {
 
   // Every redirect is a replace (M4.R4): canonicalisation, the slash the tree decides, the owner of a worktree.
   const tree = treeOf(visit.tree);
+  const printRender = useMemo<PrintRender>(() => (reader === null ? DEFAULT_PRINT_RENDER : (src, o) => reader.render(src, o)), [reader]);
+  const printControl = usePrint({ source: printSource, page, tree, visit, render: printRender, assets: exportAssets, loaders });
   // Fetch from origin on a page with no listing has no chip to show it: its state is said under the button, and a
   // `soon` wait counts down on the clock.
   const soon = soonUntil(visit.freshness);
@@ -425,23 +438,27 @@ export function DocsScreen(p: {
       <ReaderModeContext value={readerMode.value}>
         <div className="docs-screen" data-draft-assets={draftAssets}>
           {page !== null && (
-            <DocsHead
-              page={page} visit={visit} tree={tree} leafImage={leafImage} exportBody={exportBody} pageStore={pageStore}
-              exportAssets={exportAssets} plainView={plainAt === here} onPlainView={() => setPlainAt(here)}
-              readerBar={readerBar}
-            />
+            <PrintControlContext value={printControl}>
+              <DocsHead
+                page={page} visit={visit} tree={tree} leafImage={leafImage} exportBody={exportBody} pageStore={pageStore}
+                exportAssets={exportAssets} plainView={plainAt === here} onPlainView={() => setPlainAt(here)}
+                readerBar={readerBar}
+              />
+            </PrintControlContext>
           )}
           {note?.at === here && <p className="docs-note docs-redirect-note" role="status">{note.text}</p>}
           {page !== null && page.kind !== 'index' && tree !== null && (
             <DocsBanners page={page} tree={tree} file={visit.file} draftAssets={draftAssets} onRelist={visit.retryTree} />
           )}
           <ExportBodyContext value={setExportBody}>
-            <ReaderBarContext value={barSlot}>
-              <HighlighterContext value={withPublish}>
-                {/* Always, in every view, with no key: adding the container remounts nothing (spec 4.1). */}
-                <DocsReading reading={readerMode.container}>{body}</DocsReading>
-              </HighlighterContext>
-            </ReaderBarContext>
+            <PrintSourceContext value={setPrintSource}>
+              <ReaderBarContext value={barSlot}>
+                <HighlighterContext value={withPublish}>
+                  {/* Always, in every view, with no key: adding the container remounts nothing (spec 4.1). */}
+                  <DocsReading reading={readerMode.container}>{body}</DocsReading>
+                </HighlighterContext>
+              </ReaderBarContext>
+            </PrintSourceContext>
           </ExportBodyContext>
         </div>
       </ReaderModeContext>

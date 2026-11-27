@@ -12,6 +12,7 @@
 // from desktop Chromium without calling a wall broken.
 import { LAB_BATTERY_CHANNELS, type LabBatteryChannel, type LabProbeName, type LabRunView } from '../../../shared/readerLab';
 import type { LabCheckId, LabOutcome } from './checks';
+import type { ReaderRenderOutcome } from '../lib/readerRenderJob';
 import { LAB_STRAYS_POSTED } from './frameScripts';
 
 /** One timed mount of the production reader under the lab profile. */
@@ -27,6 +28,70 @@ export interface LabMount {
   readonly elapsedMs: number;
 }
 
+/** One timing of the gate-sized page (X2 P6.1 Step 0b): the render job on its own, then the mount to its outcome. The two
+ *  outcomes are kept apart: a word the render says (its `timeout` is the parse budget passed) is never the mount's (its
+ *  `timeout` is the lab's cap or a stop). */
+export interface LabGateRun {
+  /** The render job's time, from the call to its answer. */
+  readonly renderMs: number;
+  /** The mount's time, from its start to its outcome; 0 when nothing was mounted. */
+  readonly mountMs: number;
+  /** The render job's own outcome kind. */
+  readonly render: ReaderRenderOutcome['kind'];
+  /** The mount's outcome; null when no mount happened because the render did not render. Only `ready` is a measurement. */
+  readonly mount: Exclude<LabMount['outcome'], 'not-rendered'> | null;
+}
+
+/** The gate-sized page's timings (X2 P6.1 Step 0b). */
+export interface LabGate {
+  readonly bytes: number;
+  /** The parse budget for the page's bytes, which each render is held to. */
+  readonly budgetMs: number;
+  readonly runs: readonly LabGateRun[];
+}
+
+/** The middle and the worst of some times, in ms. */
+export interface LabGateStat { readonly median: number; readonly worst: number }
+
+/** What the five runs say: all measured and within the budget; some render over it (its figures are the runs that
+ *  rendered, and `overRuns` are the run numbers, from 1); or the figures cannot be read because a run did not render or its
+ *  mount did not reach ready, with how many were ready and the first failure. */
+export type LabGateReading =
+  | { readonly verdict: 'within'; readonly render: LabGateStat; readonly both: LabGateStat }
+  | { readonly verdict: 'over'; readonly render: LabGateStat | null; readonly both: LabGateStat | null; readonly overRuns: readonly number[] }
+  | {
+    readonly verdict: 'not-measured'; readonly ready: number; readonly of: number;
+    readonly first: { readonly run: number; readonly stage: 'render' | 'mount'; readonly outcome: string } | null;
+  };
+
+const statOf = (xs: readonly number[]): LabGateStat | null => {
+  if (xs.length === 0) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  return { median: s[Math.floor(s.length / 2)]!, worst: s[s.length - 1]! };
+};
+
+/** The gate page's reading, for the result line: not a verdict of the lab's walls. A render over the parse budget (the
+ *  runner's `timeout`, or a time past it) is `over`, a fact of its own that stands whatever another run's mount did; else any
+ *  run whose render did not render, or whose mount did not reach ready, makes the figures unreadable: `not-measured`; else
+ *  `within` (a render of exactly the budget is within). */
+export function gateReading(g: LabGate): LabGateReading {
+  const overRuns = g.runs.flatMap((r, i) => (r.render === 'timeout' || r.renderMs > g.budgetMs ? [i + 1] : []));
+  const rendered = g.runs.filter((r) => r.render === 'rendered');
+  const ready = g.runs.filter((r) => r.render === 'rendered' && r.mount === 'ready');
+  if (overRuns.length > 0) {
+    return { verdict: 'over', render: statOf(rendered.map((r) => r.renderMs)), both: statOf(ready.map((r) => r.renderMs + r.mountMs)), overRuns };
+  }
+  const bad = g.runs.findIndex((r) => r.render !== 'rendered' || r.mount !== 'ready');
+  if (bad >= 0 || g.runs.length === 0) {
+    const r = g.runs[bad];
+    const first = r === undefined ? null
+      : r.render !== 'rendered' ? { run: bad + 1, stage: 'render' as const, outcome: r.render }
+        : { run: bad + 1, stage: 'mount' as const, outcome: r.mount ?? 'not mounted' };
+    return { verdict: 'not-measured', ready: ready.length, of: g.runs.length, first };
+  }
+  return { verdict: 'within', render: statOf(rendered.map((r) => r.renderMs))!, both: statOf(ready.map((r) => r.renderMs + r.mountMs))! };
+}
+
 /** What the page itself observed. Each `null` means that step did not run (the run stopped or failed before it). */
 export interface LabLocal {
   /** The `load` events the self-navigating frame fired. */
@@ -40,6 +105,9 @@ export interface LabLocal {
   /** The benign page's mount, which the stray messages are sent to: whether it became ready, and the host callbacks the
    *  stray messages reached (a fallback after ready counts as one here). */
   readonly strays: { readonly ready: boolean; readonly effects: number; readonly addressChanged: boolean } | null;
+  /** The gate-sized page's timings, in run order. Absent where the run did not time it (an older code path). It decides no
+   *  verdict: only the result block's one line reads it. */
+  readonly gate?: LabGate;
 }
 
 const ORIGIN_KEYS = ['parent', 'origin'] as const;

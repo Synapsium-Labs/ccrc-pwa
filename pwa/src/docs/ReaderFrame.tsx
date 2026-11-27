@@ -63,6 +63,7 @@ import { useThemeChoice } from '../lib/theme';
 import { useHostAppearance } from '../lib/appearance';
 import { appearanceStamp } from '../lib/appearanceStamp';
 import { DocsAssetContext } from './DocImage';
+import { PartContext } from './range/partContext';
 import type { DocsHistoryLoader } from './failures';
 import type { DocLinkContextValue } from './DocLink';
 import { DocMarkdown, DocPlain, docMarkdownSource, docsPlainNote, DOC_FORMATTING } from './DocMarkdown';
@@ -86,6 +87,7 @@ import { ReaderBarContext, createReaderProgress, usePublishReaderBar, type Reade
 import { leafName } from './docsTree';
 import { copyText } from './share';
 import { READER_BODY, usePublishExportBody } from './exportBody';
+import { usePublishPrintSource } from './print/printSource';
 
 type LinkBase = Omit<DocLinkContextValue, 'urls'>;
 
@@ -103,7 +105,7 @@ const READER_HOLD_FRAMES = 2;
 
 /** What the leaf needs of the reader: the render job, the mount, and the page's images. A test injects all three. */
 export interface ReaderDeps {
-  render(src: string, o: { budgetMs: number; signal?: AbortSignal }): Promise<ReaderRenderOutcome>;
+  render(src: string, o: { budgetMs: number; signal?: AbortSignal; blocks?: true; print?: true }): Promise<ReaderRenderOutcome>;
   mount(el: HTMLElement, input: ReaderMountInput): Promise<ReaderMount>;
   images: typeof loadReaderImages;
   /** The doc's commit list (B2's history loader). Absent, no commit list is read. */
@@ -181,6 +183,10 @@ function outcomeReason(o: Exclude<ReaderRenderOutcome, { kind: 'rendered' | 'tim
       return `${o.kind}: ${o.error}`;
     case 'worker-unavailable':
       return o.kind;
+    case 'blocks':
+      // Only a job that asked for blocks is answered so, and the frame never asks: a render that came back as blocks is a
+      // wrong answer, not a page.
+      return 'blocks: not a page';
   }
 }
 
@@ -213,6 +219,8 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
   const bytes = useMemo(() => utf8ByteLength(text), [text]);
   const overGate = bytes > DOCS_RENDER_GATE_BYTES;
   const assets = useContext(DocsAssetContext);
+  /** The part this body renders, when the text was cut into parts (`MarkdownParts`); `null`: the body is the whole text. */
+  const partCtx = useContext(PartContext);
   const prefs = readerPrefsOf(useThemeChoice(), THEMES).theme;
   const stamp = useHostAppearance();
   const link = useMemo<DocLinkContextValue>(() => ({ ...p.link, urls: new WeakMap() }), [p.link]);
@@ -220,6 +228,14 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
     readerBodyReducer, undefined, (): ReaderBodyState => (overGate ? { s: 'plain', why: 'over-gate' } : { s: 'rendering' }),
   );
   const [ask, setAsk] = useState<Ask | null>(null);
+  /** The `data:` URLs this body's images came to, by ref, for the print view (X2 P6.1 Step 1); `null` until its walk ends. */
+  const [printImages, setPrintImages] = useState<Readonly<Record<string, string>> | null>(null);
+  // What Print draws from (spec 4.6): this text, ready once the frame has reported `ready` (or when the body is not the frame: the
+  // plain view and its fallback, which the worker's print render answers for as for any text). Published while mounted.
+  const printReady = state.s === 'ready' || state.s === 'fallback' || state.s === 'plain';
+  usePublishPrintSource(useMemo(
+    () => ({ kind: 'markdown' as const, text, ready: printReady, ...(printImages === null ? {} : { images: printImages }) }),
+    [text, printReady, printImages]));
   /** The bar this body's frame publishes once ready; `null`: its frame is on its own bar, or not mounted yet. */
   const [bar, setBar] = useState<ReaderBar | null>(null);
   const barSlot = useContext(ReaderBarContext);
@@ -230,9 +246,9 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
   /** The frame theme the frame was last given: the mount's seed, then each `setPrefs`. */
   const seededPrefs = useRef<ReaderThemePref['theme'] | null>(null);
   /** The latest props, for the callbacks the frame holds for its whole life. */
-  const live = useRef({ props: p, link, assets, prefs, stamp, barSlot, readerMode });
+  const live = useRef({ props: p, link, assets, prefs, stamp, barSlot, readerMode, partCtx });
   useEffect(() => {
-    live.current = { props: p, link, assets, prefs, stamp, barSlot, readerMode };
+    live.current = { props: p, link, assets, prefs, stamp, barSlot, readerMode, partCtx };
   });
   const followedStamp = useRef<string | null>(null);
 
@@ -420,6 +436,7 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
         page: () => (live.current.props.opened ?? opened).page, only: opened.only,
         history: first.props.reader.history ?? null, loaders: first.assets?.loaders ?? null,
         queue: first.assets?.queue ?? null, signal: ac.signal,
+        part: first.partCtx === null ? null : { whole: first.partCtx.whole, part: first.partCtx.part },
       });
       let outcome: ReaderRenderOutcome;
       try {
@@ -480,6 +497,7 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
       } else {
         watching = true;
       }
+      setPrintImages(images.urls);
       if (second.assets !== null && images.drafts !== 0) {
         counted = images.drafts;
         uncount = second.assets.onDraftAsset;

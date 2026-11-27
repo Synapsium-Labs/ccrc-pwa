@@ -2,9 +2,34 @@
 // whether an image may be decoded for its own page, and the dimensions an image's header declares, read before any
 // decode. No I/O, no timers, no DOM: the loader and the views act on these answers.
 import {
-  DOCS_CLASS_CAP, DOCS_IMAGE_VIEW_MAX_PIXELS, DOCS_IMAGE_VIEW_MAX_SIDE, DOCS_RANGE_MAX_BYTES, docsFailureBlob,
-  type DocContentClass, type DocListPin, type DocsEntry, type DocsFailureBody, type DocsRangePin,
+  DOCS_CLASS_CAP, DOCS_IMAGE_VIEW_MAX_PIXELS, DOCS_IMAGE_VIEW_MAX_SIDE, DOCS_MAX_DOC_BYTES, DOCS_RANGE_MAX_BYTES, docsFailureBlob,
+  docsRangePinText, type DocContentClass, type DocListPin, type DocPin, type DocsEntry, type DocsFailureBody, type DocsRangePin,
 } from '../../../../shared/docs';
+import { utf8Bytes } from '../../../../shared/utf8';
+import type { RangeTarget } from './readRange';
+
+/** Whether Changes since and Export act on the PART on screen rather than the whole text (spec 4.3): a text above 2 MiB
+ *  (`DOCS_MAX_DOC_BYTES`), which the page shows in parts. Up to it they act on the whole text. The one measure: the UTF-8 bytes of
+ *  the text the page shows, which every caller has (the parts' bar, the plain view, the source parts). */
+export function actsOnPart(text: string): boolean {
+  return utf8Bytes(text) > DOCS_MAX_DOC_BYTES;
+}
+
+/** One read's identity: the project, the place, the range pin and the size. A leaf is keyed by it (`DocsLeaf` gives it as the
+ *  element's `key`), so another doc is another instance with its own state, and a re-render that rebuilds an equal target object
+ *  reads nothing again; the visit keeps a finished read's facts under it (`DocsVisit.rangeOpened`), so a re-list that leaves the
+ *  bytes alone (a new commit, a moved worktree head) keeps them. */
+export function rangeReadKey(t: RangeTarget): string {
+  return [t.project, t.pin.section, t.pin.path, docsRangePinText(t.range), String(t.size)].join('\u0000');
+}
+
+/** The opened pin of bytes read by range (spec 4.3, "Where the time comes from, and where the pin lives"): a draft the
+ *  listing could not fingerprint takes the snapshot's digest as its `fp`, the sha256 of the bytes the page shows, and
+ *  keeps its stat, so `samePin` holds it equal to the listing's pin and every reader of `fp` reads the bytes' digest. Here,
+ *  below the leaf and the visit alike, so neither imports the other for it. */
+export function openedRangePin(pin: DocListPin, digest: string): DocPin {
+  return pin.kind === 'draft' && pin.fp === null ? { ...pin, fp: digest, stat: pin.stat } : pin;
+}
 
 /** How a leaf's bytes are read (spec 4.3).
  *  - `show`: the class-capped file route, as before (at most the class cap, pinned by blob or fingerprint).
@@ -15,6 +40,15 @@ export function rangeVerdict(size: number, cls: DocContentClass, pin: DocsRangeP
   if (!Number.isSafeInteger(size) || size < 0 || size > DOCS_RANGE_MAX_BYTES) return 'over-ceiling';
   if (pin === 'stat') return 'range';
   return size > DOCS_CLASS_CAP[cls] ? 'range' : 'show';
+}
+
+/** Whether a class's range read has a TEXT view (spec 4.3), above its cap or a stat-pinned draft below it: Markdown (in parts, or
+ *  whole) and text (as source). Only such a read's
+ *  bytes are handed to the visit (`RangeReadFacts.bytes`), because only the head's Export compares them, as text, with a body. A read
+ *  of any other class (an image, a PDF, HTML or SVG above its cap, a download) is held by no one past its own leaf: the leaf hands the
+ *  visit no bytes, and the head, which asks this first, never reads them. The one owner of the question, for the leaf and the head. */
+export function rangeHasTextView(cls: DocContentClass): boolean {
+  return cls === 'markdown' || cls === 'text';
 }
 
 /** The range pin of the bytes a leaf's page pin names (spec 4.3): a committed pin reads the entry's committed blob, a

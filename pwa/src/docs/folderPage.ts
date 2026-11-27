@@ -180,7 +180,12 @@ export function folderPathStale(missing: boolean, reads: number, askedAt: number
  *  (`isDocsMtimeNs`; a time before 1970 is negative and never matches), so the line says nothing rather than a wrong time. */
 export function folderTimeText(mtimeNs: string | null): string | null {
   if (mtimeNs === null || !isDocsMtimeNs(mtimeNs)) return null;
-  const ms = Number(BigInt(mtimeNs) / 1000000n);
+  return utcMinuteText(Number(BigInt(mtimeNs) / 1000000n));
+}
+
+/** A time in milliseconds since the epoch as the truth line writes every time it shows: UTC, to the minute. `null` for a time
+ *  `Date` cannot hold. The one owner of the format: a folder file's modified time and a range read's "as read at" both use it. */
+export function utcMinuteText(ms: number): string | null {
   const d = new Date(ms);
   return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
 }
