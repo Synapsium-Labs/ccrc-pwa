@@ -10,7 +10,7 @@ import type { DesignationView } from '../../shared/overlord-designation';
 import type { ReadinessWire } from '../../shared/overlord-readiness';
 import { ConfirmItsYou } from '../src/accounts/ConfirmItsYou';
 import { useStepUp, type StepUpDeps } from '../src/accounts/useStepUp';
-import { ApiError, OVERLORD_PLACE_REFUSAL_TEXT, api } from '../src/lib/api';
+import { ApiError, OVERLORD_PLACE_REFUSAL_TEXT, REBIND_MOVED_TEXT, api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { BodyPart } from '../src/overlord/BodyPart';
 import {
@@ -417,16 +417,16 @@ describe('Rebind', () => {
     await waitFor(() => expect(screen.queryByText(BODY_WORDS.forceSentence)).toBeNull());
   });
 
-  it('a forced rebind refused overlord-binding-moved draws its sentence, drops the offer and reads the designation again', async () => {
+  it('a forced rebind refused stale-designation draws its sentence, drops the offer and reads the designation again', async () => {
     vi.spyOn(api, 'overlordRebind')
       .mockRejectedValueOnce(new ApiError(409, { ok: false, error: 'overlord-body-alive', detail: 'the body is running' }))
-      .mockRejectedValueOnce(new ApiError(409, { ok: false, error: 'overlord-binding-moved', detail: 'lane-b-overlord is bound, at term 2' }));
+      .mockRejectedValueOnce(new ApiError(409, { ok: false, error: 'stale-designation', detail: 'lane-b-overlord is bound, at term 2' }));
     show(answered(BOUND));
     click(BODY_WORDS.rebind);
     await screen.findByRole('button', { name: BODY_WORDS.rebindAnyway });
     refresh.mockClear();
     click(BODY_WORDS.rebindAnyway);
-    expect((await screen.findByRole('alert')).textContent).toBe(OVERLORD_PLACE_REFUSAL_TEXT['overlord-binding-moved']);
+    expect((await screen.findByRole('alert')).textContent).toBe(REBIND_MOVED_TEXT);
     expect(screen.queryByRole('button', { name: BODY_WORDS.rebindAnyway })).toBeNull();
     await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
   });

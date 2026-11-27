@@ -873,8 +873,7 @@ export function testboxRouteText(err: unknown): string | null {
  */
 export const OVERLORD_PLACE_REFUSAL_TEXT: Readonly<Record<
   | 'capability-missing' | 'authority-rolled-back' | 'journal-unreadable' | 'unavailable' | 'overlord-exists' | 'overlord-single-account'
-  | 'launch-profile-unmet' | 'overlord-sandbox-unmet' | 'overlord-body-alive' | 'overlord-attempt-pending' | 'overlord-binding-moved'
-  | 'auth-off' | 'not-found',
+  | 'launch-profile-unmet' | 'overlord-sandbox-unmet' | 'overlord-body-alive' | 'overlord-attempt-pending' | 'auth-off' | 'not-found',
   string>> = {
   'capability-missing': 'This server does not advertise a capability word this needs, so nothing was changed.',
   'authority-rolled-back': "The Overlord's authority reads rolled back, so nothing was changed. Confirm the restore first.",
@@ -886,10 +885,12 @@ export const OVERLORD_PLACE_REFUSAL_TEXT: Readonly<Record<
   'overlord-sandbox-unmet': "The Overlord's sandbox check failed, so it was not started.",
   'overlord-body-alive': 'The Overlord session in place does not measure dead, so it was not replaced.',
   'overlord-attempt-pending': 'A start is already pending on the designation. Wait for it to go live or fail.',
-  'overlord-binding-moved': 'The Overlord changed since you looked, so nothing was stopped. The page reads it again.',
   'auth-off': 'Sign-in must be on to start the Overlord.',
   'not-found': 'No Overlord is designated, so there is nothing to act on.',
 };
+
+/** The place's Rebind refused `stale-designation`: the binding its forced call named has moved (home C). */
+export const REBIND_MOVED_TEXT = 'The Overlord changed since you looked, so nothing was stopped. The page reads it again.';
 
 /** The Overlord's doors, by the act the operator pressed (review 3998 M3): the place's, and Settings › Overlord's three
  *  designation doors (home C). A word whose sentence depends on the act reads it here. */
@@ -910,6 +911,10 @@ const OVERLORD_ACT_TEXT: Readonly<Record<string, Readonly<Partial<Record<Overlor
     model: "Sign-in must be on to change the Overlord's model class.",
     'account-set': "Sign-in must be on to change the Overlord's account set.",
   },
+  // A forced rebind whose pair (the session and term it was offered on) the designation no longer holds (home C, ruled calls
+  // 1675 and 1685). Keyed by the act: the word is also the prompt route's and every write door's, whose screens say it their
+  // own way, so no other act or screen draws this sentence; another act answered it is drawn raw.
+  'stale-designation': { rebind: REBIND_MOVED_TEXT },
 };
 
 /** The words whose answer's `detail` is drawn beside the sentence (the plan: the authority words, `overlord-body-alive`'s

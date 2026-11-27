@@ -110,7 +110,7 @@ export function BodyPart({ stepUp }: { readonly stepUp: StepUp }): ReactNode {
     return outcome;
   });
   // A forced rebind names the binding its offer was made for (slug `forced-rebind-names-the-session-it-stops`): the door compares
-  // it with what is bound and refuses `overlord-binding-moved` when it moved, so it never stops a session the operator did not see.
+  // it with what is bound and refuses `stale-designation` when it moved, so it never stops a session the operator did not see.
   const rebind = (forced: boolean): Promise<void> =>
     run('rebind', () => stepUp.runAct(() => api.overlordRebind(forced, forced && force !== null ? force : undefined)));
   const restart = (): Promise<void> => run('restart', async () => { await api.overlordRestart(); return 'done'; });

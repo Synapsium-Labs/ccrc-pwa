@@ -30,7 +30,7 @@ const ROSTER: RosterWire[] = [
 ];
 const stepUpRequired = (): ApiError => new ApiError(403, { ok: false, error: 'step-up-required' });
 const BACKSTOP = { ok: true, hour: 4, zone: 'UTC', isDefault: true, setAt: null };
-const RETENTION = { ok: true, days: 30, min: 7, max: 90, default: 30 };
+const RETENTION = { ok: true as const, days: 30, min: 7, max: 90, default: 30 };
 
 let refresh: Mock<() => Promise<void>>;
 const client = () => ({

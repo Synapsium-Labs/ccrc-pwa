@@ -392,7 +392,7 @@ describe('POST /api/overlord/rebind: the refusals, in the plan\'s order', () => 
 });
 
 // Home C (slug forced-rebind-names-the-session-it-stops; ruled call 1675 with four holds): a forced rebind names the binding its
-// caller saw, the door compares it with its own read, and refuses `overlord-binding-moved` when it moved.
+// caller saw, the door compares it with its own read, and refuses `stale-designation` when it moved.
 describe('POST /api/overlord/rebind: the pair the caller saw', () => {
   const termOf = (r: Rig): number => view(r)!.term;
 
@@ -411,14 +411,14 @@ describe('POST /api/overlord/rebind: the pair the caller saw', () => {
   it.each([
     ['another session', (r: Rig) => ({ sessionId: 'overlord-other-body', term: termOf(r) }), (r: Rig) => `${r.oldId} is bound, at term ${termOf(r)}`],
     ['another term', (r: Rig) => ({ sessionId: r.oldId, term: termOf(r) + 1 }), (r: Rig) => `${r.oldId} is bound, at term ${termOf(r)}`],
-  ])('a moved binding (%s) is refused overlord-binding-moved, stops nothing, creates nothing, writes nothing', async (_n, saw, detail) => {
+  ])('a moved binding (%s) is refused stale-designation, stops nothing, creates nothing, writes nothing', async (_n, saw, detail) => {
     const r = await rig();
     r.facts.old = 'alive';
     const before = snapshot(r);
     const res = await rebind(r, { force: true, ...saw(r) });
-    expect(res.statusCode).toBe(REFUSAL_STATUS['overlord-binding-moved']);
+    expect(res.statusCode).toBe(REFUSAL_STATUS['stale-designation']);
     // Hold 3: the detail is what the designation read serves this caller, the session bound now and its term, and nothing more.
-    expect(res.json()).toEqual({ ok: false, error: 'overlord-binding-moved', detail: detail(r) });
+    expect(res.json()).toEqual({ ok: false, error: 'stale-designation', detail: detail(r) });
     expect(r.body.log).toEqual([]);
     expect(r.facts.oldAsked).toEqual([]);
     expect(snapshot(r)).toEqual(before);
@@ -428,7 +428,7 @@ describe('POST /api/overlord/rebind: the pair the caller saw', () => {
   it('nothing bound is a move too, said as such', async () => {
     const r = await rig({ bound: false });
     const res = await rebind(r, { force: true, sessionId: 'overlord-quiet-otter', term: 1 });
-    expect(res.json()).toEqual({ ok: false, error: 'overlord-binding-moved', detail: 'nothing is bound' });
+    expect(res.json()).toEqual({ ok: false, error: 'stale-designation', detail: 'nothing is bound' });
     expect(r.body.log).toEqual([]);
   });
 
@@ -436,7 +436,7 @@ describe('POST /api/overlord/rebind: the pair the caller saw', () => {
     const r = await rig();
     r.gate.staleStepUp = true;
     const res = await rebind(r, { force: true, sessionId: 'overlord-other-body', term: termOf(r) });
-    expect(res.json()).toMatchObject({ error: 'overlord-binding-moved' });
+    expect(res.json()).toMatchObject({ error: 'stale-designation' });
     expect(r.gate.asks).toEqual([{ cap: null }]);
     expect(r.serialRuns.n).toBe(0);
     // An equal pair with the step-up not fresh is asked for it, as today.
@@ -476,8 +476,30 @@ describe('POST /api/overlord/rebind: the pair the caller saw', () => {
     r.db.exec('UPDATE overlord_designation SET term = term + 1');
     release();
     const [, b] = await Promise.all([first, second]);
-    expect(b.json()).toEqual({ ok: false, error: 'overlord-binding-moved', detail: `${r.oldId} is bound, at term ${saw.term + 1}` });
+    expect(b.json()).toEqual({ ok: false, error: 'stale-designation', detail: `${r.oldId} is bound, at term ${saw.term + 1}` });
     expect(r.body.idsOf('stop')).toEqual([]);
+  });
+
+  it('call 1685: the pair is the only cause of stale-designation at this door; with no pair the same move answers today\'s word', async () => {
+    const r = await rig();
+    let release!: () => void;
+    r.body.gate = new Promise<void>((res) => { release = res; });
+    const first = rebind(r);
+    for (let i = 0; i < 400 && r.body.count('create') === 0; i++) await new Promise((res) => setTimeout(res, 5));
+    const second = rebind(r, { force: true });
+    await new Promise((res) => setTimeout(res, 20));
+    r.db.exec('UPDATE overlord_designation SET term = term + 1');
+    release();
+    const [, b] = await Promise.all([first, second]);
+    expect(b.json()).toMatchObject({ ok: false, error: 'overlord-attempt-pending' });
+    const src = readFileSync(path.join(import.meta.dirname, '..', 'src', 'coord', 'overlordRoutes.ts'), 'utf8');
+    const start = src.indexOf("app.post('/api/overlord/rebind'");
+    const door = src.slice(start, src.indexOf('\n  }\n', src.indexOf('async function rebind(', start)));
+    // Each `stale-designation` of the rebind door is guarded by the pair's compare, and only by it.
+    expect(door.split('\n').filter((l) => l.includes("'stale-designation'"))).toEqual([
+      "      if (moved !== null) return refuseRoute(reply, 'stale-designation', { detail: moved });",
+      "    if (moved !== null) return refuseRoute(reply, 'stale-designation', { detail: moved });",
+    ]);
   });
 
   it('hold 4: past the compare, `rebind()` reads nothing of the pair; it acts on its own read', () => {

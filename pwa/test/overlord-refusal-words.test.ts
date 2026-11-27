@@ -2,7 +2,7 @@
 // whose sentence depends on the act says the act that was refused (`auth-off` refuses every stepped door while sign-in is off, and
 // "to start the Overlord" is true of Start alone); the facts an answer names are added; an unknown word is drawn raw.
 import { describe, expect, it } from 'vitest';
-import { ApiError, OVERLORD_PLACE_REFUSAL_TEXT, overlordRefusalText, type OverlordDoorAct } from '../src/lib/api';
+import { ApiError, OVERLORD_PLACE_REFUSAL_TEXT, REBIND_MOVED_TEXT, overlordRefusalText, type OverlordDoorAct } from '../src/lib/api';
 
 const refused = (error: string, extra: Record<string, unknown> = {}): ApiError => new ApiError(409, { ok: false, error, ...extra });
 /** The acts whose door asks the account gate, so sign-in off refuses them `auth-off`. Pause and a lowered rung are not among
@@ -29,6 +29,14 @@ describe('overlordRefusalText', () => {
       expect(said, act).toBe('Refused: auth-off');
       expect(said, act).not.toMatch(/Sign-in must be on/);
     }
+  });
+
+  it('stale-designation has a sentence for Rebind alone (call 1685): every other act draws it raw, so no other screen\'s meaning changes', () => {
+    expect(overlordRefusalText(refused('stale-designation', { detail: 'lane-b-overlord is bound, at term 2' }), 'rebind')).toBe(REBIND_MOVED_TEXT);
+    for (const act of ACTS.filter((a) => a !== 'rebind')) {
+      expect(overlordRefusalText(refused('stale-designation'), act), act).toBe('Refused: stale-designation');
+    }
+    expect(Object.values(OVERLORD_PLACE_REFUSAL_TEXT)).not.toContain(REBIND_MOVED_TEXT);
   });
 
   it('a word whose sentence does not depend on the act says the same for every act', () => {

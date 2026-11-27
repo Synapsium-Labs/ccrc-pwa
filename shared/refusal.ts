@@ -278,9 +278,6 @@ export const OVERLORD_REFUSALS = {
   'overlord-body-alive': 409,
   // Rebind: an attempt is pending on the designation's one slot (designation B; the designation plan, question 9). 409.
   'overlord-attempt-pending': 409,
-  // Rebind: the call named the binding its caller saw (session and term), and what is bound now is another, or nothing (home C,
-  // slug forced-rebind-names-the-session-it-stops). Nothing was stopped or created. 409, a state of the world.
-  'overlord-binding-moved': 409,
   // Designate, rebind and the account set's Settings row: fewer than two accounts (designation A and C). 409.
   'overlord-single-account': 409,
   // Designate and rebind: a property of the sandbox check failed (sandbox B). 409.
@@ -293,7 +290,9 @@ export const OVERLORD_REFUSALS = {
   // Every door but card, probe and note: boot coherence failed, the authority journal rolled back (authority journal A).
   // 503, a box fault.
   'authority-rolled-back': 503,
-  // Every write door: the call carries an older term, or a wrong generation or act key (gates B). 409.
+  // Every write door: the call carries an older term, or a wrong generation or act key (gates B). 409. The prompt route's chat
+  // send and a forced rebind's pair (home C, slug forced-rebind-names-the-session-it-stops) answer it too, for a designation
+  // that no longer binds the session at the term the console sent.
   'stale-designation': 409, 'stale-generation': 409,
   // Every door but card, probe and note: this generation has not read the current card (gates B). 409.
   'card-unread': 409,
