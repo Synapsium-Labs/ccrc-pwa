@@ -29,8 +29,29 @@ async function cut(text: string, max: number): Promise<MdPart[]> {
   return splitMarkdownPartsAt(text, max, blocks, tailFrom).parts;
 }
 
-/** `s` without its closed comments (`<!--` up to the first `-->`): what is left of a part's text outside every comment. */
-const outsideComments = (s: string): string => s.replace(/<!--[\s\S]*?-->/g, '');
+/** `s` without its closed comments (`<!--` up to the first `-->` that starts after the opener's end, so `<!-->` closes nothing): what
+ *  is left of a part's text outside every comment.
+ *  An index walk, left to right: an opener with no closer after it, and everything from there on, is kept. */
+const outsideComments = (s: string): string => {
+  let out = '';
+  let at = 0;
+  for (;;) {
+    const open = s.indexOf('<!--', at);
+    if (open < 0) break;
+    const close = s.indexOf('-->', open + '<!--'.length);
+    if (close < 0) break;
+    out += s.slice(at, open);
+    at = close + '-->'.length;
+  }
+  return out + s.slice(at);
+};
+
+/** How many times `needle` stands in `s`, counted left to right without overlap. */
+const occurrences = (s: string, needle: string): number => {
+  let n = 0;
+  for (let at = s.indexOf(needle); at >= 0; at = s.indexOf(needle, at + needle.length)) n += 1;
+  return n;
+};
 
 const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
 
@@ -116,7 +137,7 @@ describe('a closed comment is its own cut candidate (review F3)', { timeout: 120
       expect(p.reopen, 'no part reopens a comment').toBeNull();
       expect(p.close, 'no part closes a comment').toBeNull();
       const src = text.slice(p.start, p.end);
-      expect((src.match(/<!--/g) ?? []).length, 'every comment a part holds is whole').toBe((src.match(/-->/g) ?? []).length);
+      expect(occurrences(src, '<!--'), 'every comment a part holds is whole').toBe(occurrences(src, '-->'));
     }
     expect(parts.some((p) => text.startsWith('<!--', p.start)), 'a part starts at a comment').toBe(true);
     for (const p of parts.slice(1)) expect(p.continued, 'a part that starts at a comment or after one is continued').toBe(true);
@@ -204,7 +225,7 @@ describe('a closed comment is its own cut candidate (review F3)', { timeout: 120
       const parts = await cutsHidden(text, max, HIDDEN);
       for (const p of parts) {
         const src = partText(text, p);
-        expect((src.match(/<!--/g) ?? []).length, `max ${max}: an opener in a part is closed in it`).toBe((src.match(/-->/g) ?? []).length);
+        expect(occurrences(src, '<!--'), `max ${max}: an opener in a part is closed in it`).toBe(occurrences(src, '-->'));
       }
     }
     // A multi-line comment whose middle line is long, and whose closer line has text before it.
