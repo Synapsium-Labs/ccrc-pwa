@@ -10,7 +10,7 @@
 // `board-unmeasured-reasons-are-closed-words`).
 import type { CcrcConfig } from '../config.js';
 import type { FleetIO } from '../io.js';
-import { listProjects, type ProjectWalkCache } from '../lifecycle.js';
+import { listProjectsWalked, type ProjectWalkCache } from '../lifecycle.js';
 import type { ProgrammesAnswer, SessionStatus } from '../../../shared/api.js';
 import { readSwitches } from '../../../shared/switches.js';
 import type { IsolationRead } from '../../../shared/isolation.js';
@@ -94,7 +94,7 @@ export async function gatherBoard(p: BoardGatherPorts): Promise<BoardInputs> {
   const capacity = once(() => (coord === undefined ? noStore : p.capNow === undefined ? fail('not-wired')
     : { ok: true, value: { maxConcurrentWorkers: p.capNow().cap, running: coord.capsUsage().running } }));
   const projects = await onceAsync(async () => {
-    const l = await listProjects(p.projects.io, p.projects.cfg, undefined, p.projects.cache);
+    const l = await listProjectsWalked(p.projects.io, p.projects.cfg, undefined, p.projects.cache);
     // A walk of the projects root that was not measured may be short or empty because nothing was read: the part's
     // `read-failed`, as the switches part reads its own listing (review 4010 F1). The lister's own flag; no second probe.
     if (l.walk !== 'measured') return fail('read-failed');

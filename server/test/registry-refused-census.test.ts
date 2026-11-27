@@ -149,7 +149,9 @@ const EXPECTED_SITES: readonly string[] = [
   // same reader and the same word; only the file and the enclosing symbol change.
   'coord/questions.ts | ruleApproval | readRegistry | refuses',
   'fleet.ts | assembleFleetWithPanePids | readRegistryMeasured | tests-only',
-  'lifecycle.ts | listProjects | readRegistryMeasured | reports',
+  // Board B2 (review 4010 F1): the lister's one body moved into `listProjectsWalked`, which answers the walk's flag beside it;
+  // `listProjects` answers the same fields through it. The same reader and the same word; only the enclosing symbol changes.
+  'lifecycle.ts | listProjectsWalked | readRegistryMeasured | reports',
   'registry.ts | readRegistry | readRegistryMeasured | wrapper',
   'watch.ts | detectDialogs | readRegistry | tests-only',
   'watch.ts | sweepHookStates | readRegistryMeasured | tests-only',

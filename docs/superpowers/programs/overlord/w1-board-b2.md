@@ -157,10 +157,13 @@ The ones left:
   list and the critical path. `blocking.edges` is carried as a count, or null when the view did not count it.
 - `board-work-no-last-move-time` (fix round 1): spec Table 5.2a lists a programme's time of last movement. The plan's work row
   is wave buckets, open items and stalls (question 18), so the board does not carry it; adding it later is additive.
-- `board-projects-unmeasured-walk` (fix round 1, F1): `listProjects` returns its own walk flag (`walk`, additive), and the
-  projects part reads `read-failed` when the walk was not measured, that is when the root could not be listed or a probe under it
-  could not answer. The flag is the one that already decided caching; there is no second probe of the root. The projects route
-  still folds it (its own ticket); its answer now carries `walk` as one more field, which no caller reads.
+- `board-projects-unmeasured-walk` (fix round 1, F1): the lister's one body is `listProjectsWalked`, which answers the root walk's
+  own flag (`walk`) beside the listing, and the projects part reads `read-failed` when the walk was not measured, that is when the
+  root could not be listed or a probe under it could not answer. The flag is the one that already decided caching; there is no
+  second probe of the root. `listProjects` answers exactly the fields it did, through it, because `GET /api/projects` spreads that
+  answer onto a wire whose keys are pinned: the first push of this round put `walk` there, and the fast run's served-routes cases
+  went red on it. The projects route still folds the walk (its own ticket). The registry census's site line names the new
+  enclosing function; the reader and its word are unchanged.
 
 ## Mutation rows
 

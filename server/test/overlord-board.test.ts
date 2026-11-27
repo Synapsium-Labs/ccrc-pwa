@@ -5,7 +5,7 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { composeBoard, timersByProgramme, boardProgrammeCount } from '../src/coord/overlordBoard.js';
 import { BOARD_PROGRAMMES_SINCE_MS, gatherBoard, type BoardGatherPorts, type BoardStore } from '../src/coord/overlordBoardRead.js';
-import { ProjectWalkCache, listProjects } from '../src/lifecycle.js';
+import { ProjectWalkCache, listProjects, listProjectsWalked } from '../src/lifecycle.js';
 import type { FleetIO } from '../src/io.js';
 import type { ProgrammesAnswer } from '../../shared/api.js';
 import type { PortfolioView } from '../../shared/portfolio.js';
@@ -332,10 +332,12 @@ describe('the projects part reads read-failed when the walk of the projects root
   it('the lister answers its walk flag: measured over a readable root and from a kept walk, unmeasured when the root cannot be listed', async () => {
     const { io, cfg } = fixturePorts();
     const cache = new ProjectWalkCache();
-    expect((await listProjects(io, cfg, [], cache)).walk).toBe('measured');
-    expect((await listProjects(rootUnreadable(io, cfg.projectsRoot), cfg, [], cache)).walk).toBe('measured');   // the kept walk
-    const failed = await listProjects(rootUnreadable(io, cfg.projectsRoot), cfg, []);
+    expect((await listProjectsWalked(io, cfg, [], cache)).walk).toBe('measured');
+    expect((await listProjectsWalked(rootUnreadable(io, cfg.projectsRoot), cfg, [], cache)).walk).toBe('measured');   // the kept walk
+    const failed = await listProjectsWalked(rootUnreadable(io, cfg.projectsRoot), cfg, []);
     expect(failed).toMatchObject({ walk: 'unmeasured', registry: 'listed', projects: [] });
+    // listProjects answers what it always did: the projects route spreads it onto a wire whose keys are pinned.
+    expect(Object.keys(await listProjects(rootUnreadable(io, cfg.projectsRoot), cfg, [])).sort()).toEqual(['projects', 'registry', 'roots']);
   });
 
   it('a projects root that cannot be listed is the projects part\'s read-failed, never a measured empty list, and the root is not probed twice', async () => {
