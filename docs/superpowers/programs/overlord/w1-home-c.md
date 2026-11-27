@@ -152,6 +152,13 @@ Every door the plan lists as "not on `main` yet" is on `main`. Each card is draw
 - **`place-label-read-inside-the-place`** (4b).
 - **`forced-rebind-names-the-session-it-stops`** and **`rebind-moved-is-stale-designation`** (rulings 1675 and 1685).
 - **`rebind-sentence-keyed-by-act`** (call 1685).
+- **`rebind-door-holds-the-gate-word`** (call 1685). The gate words' one-home census (`core-vocab`) now pins the rebind door as a
+  third measured holder of `stale-designation`, beside the two older doors. The pair is compared before the step-up, so it is not a
+  gate fence and cannot ask the gate. The run/session census names the pair's compare (`rebindMovedDetail`) in its not-binding list:
+  it reads the designation row and the console's pair, never a run.
+
+The first full run on the pushed tip was red on these two censuses and on the route table's probe list (`app.test.tsx`, which had no
+probe for `/settings/overlord`). My local census run had not included the three files. They were fixed in one follow-up commit.
 
 ## Mutation rows
 
