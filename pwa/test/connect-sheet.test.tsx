@@ -13,8 +13,8 @@ import { AccountsScreen } from '../src/screens/AccountsScreen';
 import { ConnectSheet, DOOR_REASON_ID, DOOR_REASON_MARK_MS, type ConnectClient, type ConnectSheetProps } from '../src/accounts/ConnectSheet';
 import { DOOR_PROVIDERS, defaultHue, methodChoices, onLedgerLine } from '../src/accounts/connectFlow';
 import {
-  DOOR_COMMAND_LABEL, DOOR_NARROWED, LEDGER, METHOD_LINES, NOT_ON_THIS_FLEET_YET, OUTCOME_UNKNOWN, READ_AGAIN, checkedLine, notFoundAfterUnknown, offlineRefusal,
-  resultDone, stillUnknownAfterUnknown,
+  DOOR_COMMAND_LABEL, DOOR_NARROWED, LEDGER, LOCAL_ARMING, METHOD_LINES, NOT_ON_THIS_FLEET_YET, ORIGIN_READ, OUTCOME_UNKNOWN, READ_AGAIN,
+  checkedLine, notFoundAfterUnknown, offlineRefusal, resultDone, signInStartRefusal, stillUnknownAfterUnknown,
 } from '../src/fleet/accountWords';
 import { ApiError, api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
@@ -122,13 +122,14 @@ describe('the door (D-5522)', () => {
     desk.unmount();
     vi.unstubAllGlobals();
 
-    // Each narrowing: the door stays, aria-disabled, its reason beneath it; a tap opens nothing. The door names no
-    // description (fix round 1): the press says the reason, once.
+    // Each narrowing: the door stays, aria-disabled, its reason beneath it and named as its description, so focusing it
+    // says why (a changed claim: wave 181 reverses fix round 1's "no description"); a tap opens nothing.
     // Each narrowing's copy line, or none, as written (fix round 1): one that exists, changes nothing run alone and says
     // something true on the box that sees it. Literals, so a changed command is a red case here, not only a new string.
     const cases: [AccountsConnect | null, boolean, string, string | null][] = [
       [null, true, DOOR_NARROWED['gate-dark'].text, 'ccrc passwd'],
-      [{ ...FRESH(), origin: 'insecure' }, true, DOOR_NARROWED['insecure-origin'].text, "grep -E '^CCRC_(ORIGIN|RP_ID|AUTH)=' ~/.ccrc/ccrc.env"],
+      [{ ...FRESH(), origin: 'insecure' }, true, DOOR_NARROWED['insecure-origin'].text,
+        "grep -sHE '^[[:space:]]*CCRC_(ORIGIN|RP_ID|AUTH|COOKIE_INSECURE)=' ~/.ccrc/ccrc.env ~/.ccrc/exposure.env"],
       [{ ...FRESH(), accountOps: 'unsupported', caps: [] }, true, DOOR_NARROWED.unsupported.text, null],
       [FRESH(), false, DOOR_NARROWED.waiting.text, null],
     ];
@@ -137,7 +138,8 @@ describe('the door (D-5522)', () => {
       const r = render(<AccountsScreen />);
       const door = screen.getByRole('button', { name: /Add account/ });
       expect(door, text).toHaveAttribute('aria-disabled', 'true');
-      expect(door, text).not.toHaveAttribute('aria-describedby');
+      expect(door, text).toHaveAttribute('aria-describedby', DOOR_REASON_ID);
+      expect(door, text).toHaveAccessibleDescription(text);
       const reason = document.getElementById(DOOR_REASON_ID)!;
       expect(reason).toHaveTextContent(text);
       const box = reason.closest('.acct-door-reason')!;
@@ -173,8 +175,10 @@ describe('the door (D-5522)', () => {
         const r = render(<AccountsScreen />);
         const door = screen.getByRole('button', { name: /Add account/ });
         expect(door).toHaveAttribute('data-narrowed', 'true');
-        // Both forms name no description, so a reader that focused the door does not hear the sentence again on Enter.
-        expect(door).not.toHaveAttribute('aria-describedby');
+        // Both forms name the reason as their description (a changed claim, wave 181): focusing says why, a press says
+        // it again.
+        expect(door).toHaveAttribute('aria-describedby', DOOR_REASON_ID);
+        expect(door).toHaveAccessibleDescription(DOOR_NARROWED['gate-dark'].text);
         const box = document.getElementById(DOOR_REASON_ID)!.closest('.acct-door-reason')!;
         // The door's one live region (fix round 1, review R2): no second node, filled or not.
         expect(box.querySelectorAll('[role="status"], [aria-live]')).toHaveLength(1);
@@ -340,8 +344,29 @@ describe('the door (D-5522)', () => {
     fireEvent.click(within(box() as HTMLElement).getByRole('button', { name: /Copy/ }));
     await waitFor(() => expect(within(box() as HTMLElement).getByRole('button', { name: /Copied/ })).toBeInTheDocument());
     act(() => useFleetStore.setState({ accountsConnect: { ...FRESH(), origin: 'insecure' } }));
-    expect(box().querySelector('.acct-fix-field')!.textContent).toBe("grep -E '^CCRC_(ORIGIN|RP_ID|AUTH)=' ~/.ccrc/ccrc.env");
+    expect(box().querySelector('.acct-fix-field')!.textContent)
+      .toBe("grep -sHE '^[[:space:]]*CCRC_(ORIGIN|RP_ID|AUTH|COOKIE_INSECURE)=' ~/.ccrc/ccrc.env ~/.ccrc/exposure.env");
     expect(within(box() as HTMLElement).queryByRole('button', { name: /Copied/ })).toBeNull();
+  });
+
+  it('the localhost route names ccrc auth on in the gate-dark reason only, and the insecure-origin reason is true on its box (wave 181)', () => {
+    // Literals, so a changed sentence is a red case here, not only a new string.
+    const local = 'Used only at localhost on the box itself: once a passphrase is set (ccrc passwd sets it), run ccrc auth on '
+      + 'there: it turns sign-in on, restarts the server and prints the address to open.';
+    expect(DOOR_NARROWED['gate-dark'].more!.lines).toContain(local);
+    expect(LOCAL_ARMING).toContain('ccrc auth on');
+    expect(LOCAL_ARMING).not.toMatch(/restart the server|by hand/);
+    // The insecure-origin box is armed with a plain-HTTP origin that is not localhost, where the verb refuses: its
+    // reason never offers the verb, and it says the cookie key, the two files and the unit.
+    const insecure = DOOR_NARROWED['insecure-origin'].more!.lines.join(' ');
+    expect(insecure).not.toContain(LOCAL_ARMING);
+    expect(insecure).not.toContain('ccrc auth');
+    expect(insecure).toContain('CCRC_COOKIE_INSECURE');
+    expect(insecure).toContain('~/.ccrc/exposure.env (the later file wins)');
+    expect(insecure).toContain('or in the unit itself');
+    expect(DOOR_NARROWED['insecure-origin'].fix).toBe(ORIGIN_READ);
+    // The sign-in-start form of the sign-in-off sentence keeps its siblings' tail (A6): nothing is being added there.
+    expect(signInStartRefusal('lane-a', 'auth-off', undefined)).toBe(`${DOOR_NARROWED['gate-dark'].text} Nothing was started.`);
   });
 
   it('opens the sheet at the provider frame when nothing narrows it', () => {
