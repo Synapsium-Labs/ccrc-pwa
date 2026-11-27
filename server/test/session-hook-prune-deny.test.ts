@@ -257,6 +257,120 @@ describe('the cost measure is the work a run did, not the time it waited (D-8334
   });
 });
 
+/** One round of a linearity row: the CPU ms of the original at the small size, the current program at the small
+ * size, the original at the large size and the current program at the large size. */
+type Round = readonly [number, number, number, number];
+/** How many rounds a linearity row measures (D-9118). */
+const LINEARITY_ROUNDS = 4;
+/** Which program a sample is of. */
+type Program = 'original' | 'current';
+/** Which program runs first at each size in round `i`: the original on even rounds, the current one on odd rounds, so
+ * neither program's large sample is always the last of a round (D-9118). */
+const linearityOrder = (i: number): Program => (i % 2 === 0 ? 'original' : 'current');
+/** The two program texts a row compares, by the cell each fills. */
+type Programs = Readonly<Record<Program, string>>;
+/** One size of round `i` (D-9118): runs the two programs' texts back to back, the first as `linearityOrder(i)` says, and
+ * puts each sample in its own program's cell, [original, current], whichever ran first. `run` measures one text once.
+ * Pure but for `run`, so a case pins the order, the texts and the cells with no CPU measured (review 4016 F1). */
+const pairCells = (i: number, programs: Programs, run: (text: string) => number): [number, number] => {
+  const first = linearityOrder(i);
+  const a = run(programs[first]);
+  const b = run(programs[first === 'original' ? 'current' : 'original']);
+  return first === 'original' ? [a, b] : [b, a];
+};
+/** D-9118's verdict. The original's ratio is read off the faster of all rounds, cell by cell, as before; the bound is
+ * FD8's (that ratio plus 0.5, or 2.5 where the original is below it). The current program's ratio is the original's
+ * plus the MEDIAN of the per-round differences (current large / current small less original large / original small),
+ * each difference taken from samples measured back to back, so a change of load between rounds moves one difference,
+ * not the verdict. */
+const linearityVerdict = (rounds: readonly Round[]): {
+  referenceRatio: number; bound: number; differences: number[]; currentRatio: number; red: boolean;
+} => {
+  const fastest = (i: number): number => Math.min(...rounds.map((r) => r[i]));
+  const referenceRatio = fastest(2) / fastest(0);
+  const bound = referenceRatio > 2.5 ? referenceRatio + 0.5 : 2.5;
+  const differences = rounds.map(([rs, cs, rl, cl]) => cl / cs - rl / rs);
+  const sorted = [...differences].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  const median = sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+  const currentRatio = referenceRatio + median;
+  return { referenceRatio, bound, differences, currentRatio, red: currentRatio > bound };
+};
+
+// D-9118: the linearity rows' estimator, pinned on recorded samples with no CPU measured. `linearity-windows.json` holds
+// two windows of four rounds each, CPU ms as [original small, current small, original large, current large], measured
+// with jq 1.7.1 on the fleet box on 2026-11-26 at ambient load: `ambient` is main's program, whose first two rounds
+// read red under the faster-of-two that D-8334 used and are green under the median; `cubic` is main's program plus a
+// cubic step (about 18% of its cost at 32 KB), red under both. Numbers only. The two windows keep their verdicts under a
+// mean or a minimum of the per-round differences too, so they tell the median from the faster of two only: the synthetic
+// case ("…the median of an even count as the mean of the middle two") is the one that pins the median against a mean or
+// a minimum. `pairCells`' case pins the order and the cells the measuring rows run through (review 4009 F2).
+describe('the linearity verdict is the median of the per-round differences (D-9118)', () => {
+  const WINDOWS: Record<'ambient' | 'cubic', Round[]> = JSON.parse(fs.readFileSync(path.join(FIX, 'linearity-windows.json'), 'utf8'));
+  /** D-8334's reading: the faster of the first two rounds, cell by cell, and the same bound. */
+  const fasterOfTwo = (rounds: readonly Round[]): { currentRatio: number; bound: number } => {
+    const [rs, cs, rl, cl] = [0, 1, 2, 3].map((i) => Math.min(...rounds.slice(0, 2).map((r) => r[i]))) as [number, number, number, number];
+    const referenceRatio = rl / rs;
+    return { currentRatio: cl / cs, bound: referenceRatio > 2.5 ? referenceRatio + 0.5 : 2.5 };
+  };
+
+  it('both windows hold four rounds of four positive numbers', () => {
+    for (const w of Object.values(WINDOWS)) {
+      expect(w).toHaveLength(LINEARITY_ROUNDS);
+      for (const r of w) { expect(r).toHaveLength(4); for (const ms of r) expect(ms).toBeGreaterThan(0); }
+    }
+  });
+
+  it('an ambient window the faster of two reads red is green under the median', () => {
+    const old = fasterOfTwo(WINDOWS.ambient);
+    expect(old.currentRatio, 'the recorded window is red under the faster of two').toBeGreaterThan(old.bound);
+    const v = linearityVerdict(WINDOWS.ambient);
+    expect(v.red).toBe(false);
+    expect(v.currentRatio).toBeLessThanOrEqual(v.bound);
+  });
+
+  it('a cubic step is red under both', () => {
+    const old = fasterOfTwo(WINDOWS.cubic);
+    expect(old.currentRatio).toBeGreaterThan(old.bound);
+    const v = linearityVerdict(WINDOWS.cubic);
+    expect(v.red).toBe(true);
+    expect(v.currentRatio).toBeGreaterThan(v.bound);
+  });
+
+  it('reads the original ratio off the faster of all rounds, the bound as FD8 set it, and the median of an even count as the mean of the middle two', () => {
+    const rounds: Round[] = [[100, 100, 400, 410], [90, 100, 380, 600], [100, 90, 400, 360], [120, 100, 500, 420]];
+    const v = linearityVerdict(rounds);
+    expect(v.referenceRatio).toBeCloseTo(380 / 90, 12);
+    expect(v.bound).toBeCloseTo(380 / 90 + 0.5, 12);
+    expect(v.differences.map((d) => +d.toFixed(6))).toEqual([0.1, 1.777778, 0, 0.033333]);
+    expect(v.currentRatio).toBeCloseTo(v.referenceRatio + (1 / 30 + 0.1) / 2, 12);
+    const low = linearityVerdict([[100, 100, 200, 240], [100, 100, 200, 240], [100, 100, 200, 240], [100, 100, 200, 240]]);
+    expect(low.bound, 'an original below 2.5x keeps the 2.5x bound').toBe(2.5);
+    expect(low.red).toBe(false);
+    expect(linearityVerdict([[100, 100, 200, 260], [100, 100, 200, 260], [100, 100, 200, 260], [100, 100, 200, 260]]).red).toBe(true);
+  });
+
+  it('alternates which program runs first, so across the rounds each is last at a size as often as the other', () => {
+    const order = Array.from({ length: LINEARITY_ROUNDS }, (_, i) => linearityOrder(i));
+    expect(order).toEqual(['original', 'current', 'original', 'current']);
+    const lastCurrent = order.filter((first) => first === 'original').length;
+    expect(lastCurrent).toBe(LINEARITY_ROUNDS - lastCurrent);
+  });
+
+  it('runs each round\'s pair in that round\'s order and puts each sample in its own program\'s cell, in both orders (pairCells)', () => {
+    const programs = { original: 'the original program text', current: 'the current program text' } as const;
+    for (let i = 0; i < LINEARITY_ROUNDS; i++) {
+      const calls: string[] = [];
+      // A sample reads its program (original 10s, current 20s) plus its place in the round's run order (1 or 2).
+      const cells = pairCells(i, programs, (text) => { calls.push(text); return (text === programs.original ? 10 : 20) + calls.length; });
+      const first = linearityOrder(i);
+      expect(calls, `round ${i} runs ${first} first`)
+        .toEqual(first === 'original' ? [programs.original, programs.current] : [programs.current, programs.original]);
+      expect(cells, `round ${i}'s cells are [original, current]`).toEqual(first === 'original' ? [11, 22] : [12, 21]);
+    }
+  });
+});
+
 // Review 1493, FD8/R3/R4: compare the actual original program, not a synthetic reference or the presence of pmatch.
 // The original is VENDORED, byte for byte, in `fixtures/prune-deny/forbidden-jq-33e521e07.jq`: it is the
 // APPROVAL_FORBIDDEN_JQ of the hook as it stood before this deny, extracted with `extract` below. It was first read by
@@ -265,22 +379,156 @@ describe('the cost measure is the work a run did, not the time it waited (D-8334
 // a branch-only sha from a test: vendor the baseline with a pinned hash. The sha256 is pinned in one constant, so an
 // edit of the fixture reds, and a missing or unreadable fixture reds as a failing case, never a skip.
 // No hook is executed here: both embedded jq programs receive JSON text. Each mode, shape and size is a single
-// invocation (startup included), using the faster of two interleaved measurements of the CPU it spent (D-8334, above).
-// The coordinator's FD8 ruling accepts fixed jq startup cost but pins both historical cost and doubling-size scaling;
-// it does not permit an amortized stream comparison. The CI follow-up uses 32/64 KB only for quotes/deny, whose
-// inherited normalization otherwise outlives its case.
+// invocation (startup included). The coordinator's FD8 ruling accepts fixed jq startup cost and pinned both historical
+// cost and doubling-size scaling against the original; it does not permit an amortized stream comparison. What is
+// pinned now (D-9141): the four linearity rows pin doubling-size scaling against the original; the four 64 KB cost rows
+// pin cost against the hook's program at the gate; no row bounds cost against the original any more. `ROW_BASELINE`
+// says which row reads which, `programsOf` and `pairCells` carry it to the measuring cases, and cases that measure
+// nothing pin all three and the call sites. The CI follow-up uses 32/64 KB only for quotes/deny, whose inherited
+// normalization otherwise outlives its case.
+//
+// What each row can see. The rules are here; the figures are in the task note,
+// docs/superpowers/programs/desktop-polish/hook-cost-row.md, by section, so that each figure has one source.
+// - The 64 KB cost rows take the faster of two interleaved measurements (D-8334), the baseline first in both pairs.
+//   A deny row's bound is 1.5x its baseline, today's program (D-9141), with FD8's 25 ms floor: it catches a cost of
+//   ANY shape on the deny path once that path costs about 1.5x the baseline. On a loaded box a quadratic deny step is
+//   sure red near +90% of the gated cost and is decided by the baseline sample's own spread between about +28% and
+//   +50%; hosted, where the two samples agree to under 1%, the edge is near +50% (note §8).
+// - A class row's bound is its baseline plus the 100 ms class floor (`COST_FLOOR_MS`), the owner's: a class cost row
+//   misses a class step dearer by less than the floor (note §8 and §9 hold the readings and the +80 ms / +120 ms
+//   mutants).
+// - The linearity rows catch only growth FASTER than the programs' own. On the quote-dense deny shape both programs are
+//   almost pure n^2, so their 64/32 ratio sits near 3.9 and a quadratic step, of any weight, leaves it there; the
+//   smallest growth the quotes/deny linearity row catches reliably is a cubic step of about 30% of the current
+//   program's cost at 32 KB (note §4 and §6).
+// - The quotes/class linearity row sees no quadratic step of any weight either, because the original's class path is
+//   itself quadratic on the quotes input (its bound is above n^2's 4.0). The dqsub/class linearity row does see one,
+//   and reds it below the floor. So on the quotes shape a quadratic class step shows only in the quotes/class cost
+//   row, once it is dearer than the floor (note §8).
+// - What no row sees: on the deny path, a quadratic step adding less than about half of its cost at 64 KB; on the
+//   class path, a fixed or linear step dearer by less than the floor, and on the quotes shape a quadratic one too.
+// - D-9141 tightened the quotes/deny and quotes/class bounds and WIDENED the dqsub/class and dqsub/deny ones (note §8).
+//
+// D-9118 (amending D-8334 for the linearity rows only): a linearity row measures LINEARITY_ROUNDS rounds, reverses which
+// program runs first on alternate rounds, and reads the current program's ratio as the original's plus the MEDIAN of the
+// per-round differences (`linearityVerdict`). The faster of two let one change of CPU contention inside a round decide
+// the row: CPU time is not contention-proof on a shared core, and the current program's large sample was always the
+// last of a round, so contention rising just before it read as worse scaling (note §3, §5 and §6). THE LIMIT, measured,
+// not removed: a load that switches on and off with a period near one 64 KB sample still reds the row before and
+// after; no estimator over four rounds survives it, and nothing here retries a red. By design the median hides a
+// one-round spike and sees a two-round one only above about 1.25x; the alternation halves a slowdown that comes with
+// running second. On a box at load 20 to 40 the row reads red on a few runs in 100 with nothing wrong, a rate for
+// independent rounds and a lower bound where one contention episode spans rounds; hosted it is predicted far lower,
+// which a hosted run can bound but not prove (note §7, with a worked red). A red is re-run alone on a quiet box before
+// it is believed.
+// TIME: four rounds double the linearity rows' time. Under load a run on a box at load 20 or more may pass two thirds
+// of a row's timeout; the row nearest its timeout is quotes/class linearity, hosted too, where it reads near a third
+// (note §10). The timeouts are unchanged.
 describe('the forbidden program\'s cost on quote-dense payloads naming worktree and prune', () => {
   const extract = (src: string): string => (/^APPROVAL_FORBIDDEN_JQ='([^']*)'$/m.exec(src) ?? [])[1] ?? '';
   const prog = extract(fs.readFileSync(HOOK, 'utf8'));
-  const BASELINE_FIXTURE = path.join(FIX, 'forbidden-jq-33e521e07.jq');
   /** The sha256 of the vendored baseline's bytes. */
   const BASELINE_SHA256 = 'aa24afe9ff29c1f912cf5c1c8045f541ad45d6070c358c571d40c4d8d715262f';
-  /** The vendored original program: a missing, unreadable or edited fixture throws here, inside the case that reads it. */
-  const readBaseline = (): string => {
-    const bytes = fs.readFileSync(BASELINE_FIXTURE);
-    expect(createHash('sha256').update(bytes).digest('hex'), 'the vendored baseline was edited').toBe(BASELINE_SHA256);
+  // D-9141 (the hook owner's rulings, its calls 1562 and 1643): the 64 KB cost rows read a baseline of their own, the hook's
+  // forbidden program as main had it at the gate's merge, 06aed21ff7 (the quiz row asked one linear anchor first); the
+  // linearity rows keep the original above. The two files answer two rulings: inherited scaling against the program the
+  // deny was added to (FD8), and today's accepted cost; each is frozen by its own hash and named by its commit, and a
+  // test cannot read a commit through git (D-8001). Replace this file only on the owner's next ruling on accepted cost,
+  // with the program at the commit that ruling names, never to turn a row green.
+  /** The sha256 of `APPROVAL_FORBIDDEN_JQ` extracted with `extract` from `ccd/session-hook.sh` at 06aed21ff7. */
+  const COST_BASELINE_SHA256 = '9a8a7a7a89536aeac1e7e056b4c75b7ec734493031d505eae529f53cc68aa595';
+  /** The two vendored programs a row may read: FD8's original and D-9141's program at the gate, each held by its hash. */
+  const BASELINES = {
+    original: { fixture: 'forbidden-jq-33e521e07.jq', sha256: BASELINE_SHA256, edited: 'the vendored baseline was edited' },
+    gate: { fixture: 'forbidden-jq-06aed21ff.jq', sha256: COST_BASELINE_SHA256, edited: 'the vendored cost baseline was edited' },
+  } as const;
+  type Baseline = keyof typeof BASELINES;
+  /** A vendored program: a missing, unreadable or edited fixture throws here, inside the case that reads it. */
+  const readVendored = (b: Baseline): string => {
+    const bytes = fs.readFileSync(path.join(FIX, BASELINES[b].fixture));
+    expect(createHash('sha256').update(bytes).digest('hex'), BASELINES[b].edited).toBe(BASELINES[b].sha256);
     return bytes.toString('utf8');
   };
+  type Row = `${'quotes' | 'dqsub'}/${'deny' | 'class'} ${'cost' | 'linearity'}`;
+  /** Which baseline each of the eight rows reads. A case that measures nothing pins it, so an edit of this table that
+   * moves a row to the other program reds there (review 4009 F2). That the measuring cases read their programs only
+   * through it (`programsOf`), each by its own row, is held by the scan case below (review 4016 F1). */
+  const ROW_BASELINE: Record<Row, Baseline> = {
+    'quotes/deny cost': 'gate', 'quotes/class cost': 'gate', 'dqsub/deny cost': 'gate', 'dqsub/class cost': 'gate',
+    'quotes/deny linearity': 'original', 'quotes/class linearity': 'original',
+    'dqsub/deny linearity': 'original', 'dqsub/class linearity': 'original',
+  };
+  /** A row's two programs: its baseline from the table, read by `read`, in the original's cell, and `current` in the
+   * current one. Pure but for `read`, so a case pins the mapping with stand-in texts; today the gate's program and the
+   * hook's are byte-identical, so the real texts could not tell the two cells apart. */
+  const rowPrograms = (read: (b: Baseline) => string, current: string) => (row: Row): Programs =>
+    ({ original: read(ROW_BASELINE[row]), current });
+  const programsOf = rowPrograms(readVendored, prog);
+  /** The allowance a 64 KB cost row grants over the baseline beside its factor of 1.5: the bound is
+   * max(1.5 x baseline, baseline + floor). The deny path keeps FD8's 25 ms. The class path costs about one jq start-up
+   * (about 35 to 70 ms on the gated program), where 25 ms is start-up jitter (hosted, dqsub/class read up to 0.95 of
+   * its bound on the original). The owner's ruling (D-9141, its call 1643 amending call 1562) gives it a floor of its
+   * own, 100 ms, for one reason: to keep run-to-run noise off the bound. A class path dearer by less than the floor is
+   * green (the header above). The owner's rule for the value: on hosted runs each class row's reading less its own
+   * baseline stays at or under 50 ms, half the floor; were one over, the floor would be 150 ms. */
+  const COST_FLOOR_MS = { deny: 25, class: 100 } as const;
+  it('the cost baseline is the hook\'s forbidden program at 06aed21ff7, held by its hash, and is not the original (D-9141)', () => {
+    const cost = readVendored('gate');
+    expect(cost).not.toBe('');
+    expect(cost, 'the two baselines answer two rulings').not.toBe(readVendored('original'));
+    expect(cost.startsWith('def WS:'), 'a forbidden program, as `extract` returns it').toBe(true);
+  });
+  it('each row reads the baseline its ruling names: the four cost rows the program at the gate (D-9141), the four linearity rows the original (FD8)', () => {
+    expect(BASELINES.original.fixture).toBe('forbidden-jq-33e521e07.jq');
+    expect(BASELINES.gate.fixture).toBe('forbidden-jq-06aed21ff.jq');
+    const rows = (['quotes', 'dqsub'] as const).flatMap((name) => (['deny', 'class'] as const)
+      .flatMap((mode) => (['cost', 'linearity'] as const).map((kind): Row => `${name}/${mode} ${kind}`)));
+    expect(Object.keys(ROW_BASELINE).sort(), 'one entry for each of the eight rows').toEqual([...rows].sort());
+    for (const row of rows) expect(ROW_BASELINE[row], row).toBe(row.endsWith(' cost') ? 'gate' : 'original');
+  });
+  it('each row\'s two programs are its baseline from the table in the original\'s cell and the hook\'s program in the current one (programsOf)', () => {
+    const of = rowPrograms((b) => `the vendored ${b} program`, 'the hook\'s program');
+    for (const row of Object.keys(ROW_BASELINE) as Row[]) {
+      expect(of(row), row).toEqual({ original: `the vendored ${ROW_BASELINE[row]} program`, current: 'the hook\'s program' });
+    }
+  });
+  // review 4016 F1: a scan of this file's own code (comments taken out), for what the pins above cannot see, the places
+  // that use the table and the cells. It reads text, not behaviour: it cannot see a fixture read some other way than the
+  // one accessor (an alias, a helper of another name, a path built at run time), a measuring case outside the two
+  // bodies it finds by their titles, or code that means the same but is spelt otherwise; what `programsOf`, `pairCells`
+  // and `timed` do is pinned by their own cases and the rows' figures, not here. Its needles are split so that this
+  // case's own text never matches them.
+  it('the measuring cases take their programs only through programsOf, each by its own row, and the linearity rows pair through pairCells (a scan of this file)', () => {
+    const code = fs.readFileSync(path.join(__dirname, 'session-hook-prune-deny.test.ts'), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    const count = (text: string, needle: string): number => text.split(needle).length - 1;
+    const body = (title: string, end: string): string => {
+      const at = code.indexOf(title);
+      expect(at, `the case titled …${title}`).toBeGreaterThan(-1);
+      expect(count(code, title), `one case titled …${title}`).toBe(1);
+      const stop = code.indexOf(end, at);
+      expect(stop, `the end of the case titled …${title}`).toBeGreaterThan(at);
+      return code.slice(at, stop);
+    };
+    const cost = body('stays within the startup-adjusted 06aed21ff bound at 64 KB' + '`', '}, scaled(' + '300_000)');
+    const linearity = body('KB stays within the inherited-cost bound' + '`', '}, scaled(' + 'smallKb');
+    const reader = 'read' + 'Vendored';
+    const vendored = reader + '(';
+    const programsFor = (kind: 'cost' | 'linearity'): string => 'programsOf' + '(`${name}/${mode} ' + kind + '`)';
+    expect(count(code, reader), 'the reader is named in its definition, programsOf and the hash case only').toBe(4);
+    expect(count(code, vendored), 'a vendored program is read directly in the hash case only').toBe(2);
+    expect(count(code, 'const programsOf = rowPrograms(' + reader + ', prog);'), 'programsOf reads the real baselines').toBe(1);
+    for (const [kind, b] of [['cost', cost], ['linearity', linearity]] as const) {
+      expect(count(b, vendored), `the ${kind} case reads no vendored program itself`).toBe(0);
+      expect(count(b, 'programsOf' + '('), `the ${kind} case asks programsOf once`).toBe(1);
+      expect(count(b, programsFor(kind)), `the ${kind} case asks for its own row`).toBe(1);
+    }
+    expect(count(cost, 'timed' + '('), 'the cost case times its two programs, nothing else').toBe(2);
+    expect(count(cost, 'timed' + '(reference, mode, 64)') + count(cost, 'timed' + '(current, mode, 64)')).toBe(2);
+    expect(count(linearity, 'pairCells' + '(i, programs, (text) => timed(text, mode, kb))'),
+      'the linearity case pairs through pairCells, its callback running the text it is given').toBe(1);
+    expect(count(linearity, 'timed' + '('), 'the linearity case times nothing outside pairCells').toBe(1);
+  });
   for (const [name, unit, quoted] of [['quotes', 'a "b c" \'d\' \\e ', false], ['dqsub', '$(x) `y` ', true]] as const) {
     const timed = (p: string, mode: string, kb: number): number => {
       const dense = unit.repeat(Math.floor((kb * 1024) / unit.length));
@@ -291,35 +539,36 @@ describe('the forbidden program\'s cost on quote-dense payloads naming worktree 
       expect(r.stdout.trim()).toBe('');
       return r.cpuMs;
     };
-    for (const mode of ['deny', 'class']) {
-      it(`${name}: ${mode} stays within the startup-adjusted 33e521e07 bound at 64 KB`, () => {
-        const reference = readBaseline();
+    for (const mode of ['deny', 'class'] as const) {
+      it(`${name}: ${mode} stays within the startup-adjusted 06aed21ff bound at 64 KB`, () => {
+        const { original: reference, current } = programsOf(`${name}/${mode} cost`);
         expect(reference).not.toBe('');
-        expect(prog).not.toBe('');
-        const pairs = [0, 1].map(() => [timed(reference, mode, 64), timed(prog, mode, 64)]);
+        expect(current).not.toBe('');
+        const pairs = [0, 1].map(() => [timed(reference, mode, 64), timed(current, mode, 64)]);
         const referenceMs = Math.min(...pairs.map((p) => p[0] as number));
         const currentMs = Math.min(...pairs.map((p) => p[1] as number));
-        expect(currentMs, `${name}/${mode}: current ${currentMs} cpu ms, original ${referenceMs} cpu ms`)
-          .toBeLessThanOrEqual(Math.max(1.5 * referenceMs, referenceMs + 25));
+        const bound = Math.max(1.5 * referenceMs, referenceMs + COST_FLOOR_MS[mode]);
+        const measured = `${name}/${mode} 64 KB: current ${currentMs} cpu ms, baseline ${referenceMs} cpu ms, bound ${bound} cpu ms`;
+        console.info(measured);
+        expect(currentMs, measured).toBeLessThanOrEqual(bound);
       }, scaled(300_000));
       const smallKb = name === 'quotes' && mode === 'deny' ? 32 : 64;
       const largeKb = smallKb * 2;
       it(`${name}: ${mode} linearity from ${smallKb} to ${largeKb} KB stays within the inherited-cost bound`, () => {
-        const reference = readBaseline();
-        expect(reference).not.toBe('');
-        expect(prog).not.toBe('');
-        const pairs = [0, 1].map(() => [timed(reference, mode, smallKb), timed(prog, mode, smallKb),
-          timed(reference, mode, largeKb), timed(prog, mode, largeKb)]);
-        const minima = [0, 1, 2, 3].map((i) => Math.min(...pairs.map((p) => p[i] as number)));
-        const [referenceSmall, smallMs, referenceLarge, largeMs] = minima as [number, number, number, number];
-        const referenceRatio = referenceLarge / referenceSmall;
+        const programs = programsOf(`${name}/${mode} linearity`);
+        expect(programs.original).not.toBe('');
+        expect(programs.current).not.toBe('');
+        // D-9118: each pair of samples back to back, the first program alternating by round (`pairCells`).
+        const pair = (i: number, kb: number): [number, number] => pairCells(i, programs, (text) => timed(text, mode, kb));
+        const rounds = Array.from({ length: LINEARITY_ROUNDS }, (_, i): Round => [...pair(i, smallKb), ...pair(i, largeKb)]);
+        const minima = [0, 1, 2, 3].map((i) => Math.min(...rounds.map((r) => r[i])));
         // The coordinator's follow-up rules inherited super-linearity separately: retain 2.5x if the original is
         // below it; otherwise allow the original ratio plus the explicitly accepted 0.5 measurement margin.
-        const bound = referenceRatio > 2.5 ? referenceRatio + 0.5 : 2.5;
-        const currentRatio = largeMs / smallMs;
-        const measured = `${name}/${mode}: original ${referenceRatio}x, current ${currentRatio}x, bound ${bound}x; cpu ms ${minima.join(', ')}`;
+        const v = linearityVerdict(rounds);
+        const measured = `${name}/${mode}: original ${v.referenceRatio}x, current ${v.currentRatio}x, bound ${v.bound}x; cpu ms ${minima.join(', ')}; `
+          + `per-round differences ${v.differences.map((d) => d.toFixed(3)).join(', ')}`;
         console.info(measured);
-        expect(currentRatio, measured).toBeLessThanOrEqual(bound);
+        expect(v.currentRatio, measured).toBeLessThanOrEqual(v.bound);
       }, scaled(smallKb === 32 ? 600_000 : 300_000));
     }
   }

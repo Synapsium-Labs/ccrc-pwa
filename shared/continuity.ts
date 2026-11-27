@@ -96,6 +96,12 @@ export const SOFT_BUDGET = { count: 3, windowMs: 21_600_000 } as const;
 /** Table 11.5b, observed time: a break (R19), no operator message for this long, or no visible place for this long. */
 export const BREAK_NO_MESSAGE_MS = 1_200_000;
 export const BREAK_PLACE_HIDDEN_MS = 300_000;
+/** The operator mark the console's visible Overlord place refreshes (W1 home B, question 4, slug place-visible-rides-the-session-socket):
+ *  one key in `operator_marks`, written by the session socket's `visible: true` frame of the bound session, at most once every
+ *  `PLACE_MARK_EVERY_MS`. A later piece reads it as the place's visibility; the generations lane does not yet. */
+export const OVERLORD_PLACE_MARK = '@overlord-place';
+/** The most often the place mark is refreshed: a minute, well under `BREAK_PLACE_HIDDEN_MS`, so a visible place never reads hidden. */
+export const PLACE_MARK_EVERY_MS = 60_000;
 /** Table 11.1e, the mark `operator-at-programme` (W1a): a coordinator's operator activity lasts this long, observed, after the
  *  operator's newest prompt into any session of its programme; older, it reads as no activity (C50, the hand-offs piece). */
 export const OPERATOR_MARK_MS = 1_800_000;

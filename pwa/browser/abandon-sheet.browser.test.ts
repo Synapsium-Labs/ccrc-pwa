@@ -6,10 +6,11 @@
 //   CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/abandon-sheet.browser.test.ts
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright-core';
-import { INSTRUMENT, REFINED } from '@ccrc/ui';
+import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
 import { fleetSession } from '../test/fleetFixture';
 import { openApp, serveDist, sharedDist, type AppFixture, type DistServer, type OpenedApp } from './app';
+import { expectStampedTheme } from './stampedTheme';
 
 const NOW = Date.now();
 const H = 3_600_000;
@@ -74,6 +75,7 @@ async function openSheet(width: number, skin: string, theme: string, height?: nu
   const opened = await openApp(browser!, { skin, theme, width }, FIXTURE);
   if (height !== undefined) await opened.page.setViewportSize({ width, height });
   await opened.page.goto(`${server!.origin}/runs`);
+  await expectStampedTheme(opened.page, theme);
   await opened.page.locator('.stuck-head-toggle').first().click();
   await opened.page.getByRole('button', { name: 'Abandon run 1501' }).first().click();
   await opened.page.locator('.sheet-panel[data-state="open"]').waitFor({ timeout: 20_000 });
@@ -97,7 +99,7 @@ const measure = (page: Page) => page.evaluate(async () => {
 });
 
 for (const skin of [REFINED, INSTRUMENT]) {
-  for (const theme of ['light', 'dark']) {
+  for (const theme of ['light', PHOSPHOR]) {
     describe(`the abandon sheet, ${skin} ${theme}`, () => {
       for (const width of [360, 390, 1280, 1470, 1920]) {
         it(`at ${width}px both answers sit inside the window and nothing runs sideways`, async () => {

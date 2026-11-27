@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DesignationView } from '../../shared/overlord-designation';
 import type { LadderWire } from '../../shared/overlord-ladder';
+import type { ReadinessWire } from '../../shared/overlord-readiness';
 import { ApiError, ApiTimeout } from '../src/lib/api';
 import { nextReadState, readFailed } from '../src/overlord/readOutcome';
 import type { ReadState } from '../src/overlord/readState';
@@ -14,16 +15,18 @@ const ROW: DesignationView = {
   accountPools: { pools: ['pool-a'], untagged: false }, pastIds: [], actor: 'operator', lastAttempt: null, stopsOwed: [],
 };
 const LADDER = { ok: true, operatorRung: 'chat' } as unknown as LadderWire;
+const READY: ReadinessWire = { word: 'ready', since: AT - 60_000, why: null, until: null, questionsGo: 'operator', restartable: false, strandCause: null };
 
-interface Calls { caps: number; designation: number; ladder: number }
+interface Calls { caps: number; designation: number; ladder: number; readiness: number }
 function fakeReads(over: Partial<OverlordReads> = {}): { reads: OverlordReads; calls: Calls } {
-  const calls: Calls = { caps: 0, designation: 0, ladder: 0 };
+  const calls: Calls = { caps: 0, designation: 0, ladder: 0, readiness: 0 };
   return {
     calls,
     reads: {
       caps: async () => { calls.caps += 1; return over.caps ? over.caps() : { caps: ['overlord-v1'] }; },
       designation: async () => { calls.designation += 1; return over.designation ? over.designation() : { designation: ROW }; },
       ladder: async () => { calls.ladder += 1; return over.ladder ? over.ladder() : LADDER; },
+      readiness: async () => { calls.readiness += 1; return over.readiness ? over.readiness() : READY; },
     },
   };
 }
@@ -71,7 +74,7 @@ describe('the Overlord store', () => {
     const store = createOverlordStore({ reads, now: () => AT });
     const stop = store.getState().start();
     await settle();
-    expect(calls).toEqual({ caps: 1, designation: 1, ladder: 1 });
+    expect(calls).toEqual({ caps: 1, designation: 1, ladder: 1, readiness: 1 });
     expect(store.getState().caps).toEqual({ state: 'answered', value: ['overlord-v1'], at: AT });
     expect(store.getState().designation).toEqual({ state: 'answered', value: ROW, at: AT });
     expect(store.getState().ladder).toEqual({ state: 'answered', value: LADDER, at: AT });
@@ -85,7 +88,7 @@ describe('the Overlord store', () => {
     await settle();
     await vi.advanceTimersByTimeAsync(OVERLORD_POLL_MS * 3);
     await store.getState().refresh();
-    expect(calls).toEqual({ caps: 1, designation: 0, ladder: 0 });
+    expect(calls).toEqual({ caps: 1, designation: 0, ladder: 0, readiness: 0 });
     expect(store.getState().designation).toEqual({ state: 'loading' });
     stop();
   });
@@ -106,10 +109,10 @@ describe('the Overlord store', () => {
     const stop = store.getState().start();
     await settle();
     await vi.advanceTimersByTimeAsync(OVERLORD_POLL_MS);
-    expect(calls).toEqual({ caps: 1, designation: 2, ladder: 2 });
+    expect(calls).toEqual({ caps: 1, designation: 2, ladder: 2, readiness: 2 });
     visibility = 'hidden';
     await vi.advanceTimersByTimeAsync(OVERLORD_POLL_MS * 2);
-    expect(calls).toEqual({ caps: 1, designation: 2, ladder: 2 });
+    expect(calls).toEqual({ caps: 1, designation: 2, ladder: 2, readiness: 2 });
     stop();
   });
 
@@ -124,16 +127,16 @@ describe('the Overlord store', () => {
     const stop = store.getState().start();
     await settle();
     expect(store.getState().caps).toEqual({ state: 'unmeasured', error: 'HTTP 503' });
-    expect(calls).toEqual({ caps: 1, designation: 0, ladder: 0 });
+    expect(calls).toEqual({ caps: 1, designation: 0, ladder: 0, readiness: 0 });
     expect(vi.getTimerCount(), 'one timer: the poll').toBe(1);
     await vi.advanceTimersByTimeAsync(OVERLORD_POLL_MS);
     await settle();
     expect(store.getState().caps).toEqual({ state: 'answered', value: ['overlord-v1'], at: AT });
-    expect(calls).toEqual({ caps: 2, designation: 1, ladder: 1 });
+    expect(calls).toEqual({ caps: 2, designation: 1, ladder: 1, readiness: 1 });
     expect(store.getState().designation).toEqual({ state: 'answered', value: ROW, at: AT });
     // Answered, the caps leave the tick: it reads the designation and the ladder only.
     await vi.advanceTimersByTimeAsync(OVERLORD_POLL_MS);
-    expect(calls).toEqual({ caps: 2, designation: 2, ladder: 2 });
+    expect(calls).toEqual({ caps: 2, designation: 2, ladder: 2, readiness: 2 });
     expect(vi.getTimerCount(), 'still one timer').toBe(1);
     stop();
   });
@@ -144,7 +147,7 @@ describe('the Overlord store', () => {
     const stop = store.getState().start();
     await settle();
     await vi.advanceTimersByTimeAsync(OVERLORD_POLL_MS * 2);
-    expect(calls).toEqual({ caps: 3, designation: 0, ladder: 0 });
+    expect(calls).toEqual({ caps: 3, designation: 0, ladder: 0, readiness: 0 });
     expect(store.getState().caps).toEqual({ state: 'unmeasured', error: 'timeout' });
     visibility = 'hidden';
     await vi.advanceTimersByTimeAsync(OVERLORD_POLL_MS * 3);
@@ -177,7 +180,7 @@ describe('the Overlord store', () => {
     visibility = 'visible';
     document.dispatchEvent(new Event('visibilitychange'));
     await settle();
-    expect(calls).toEqual({ caps: 2, designation: 2, ladder: 2 });
+    expect(calls).toEqual({ caps: 2, designation: 2, ladder: 2, readiness: 2 });
     stop();
   });
 
@@ -188,7 +191,7 @@ describe('the Overlord store', () => {
     const b = store.getState().start();
     await settle();
     await store.getState().refresh();
-    expect(calls).toEqual({ caps: 1, designation: 2, ladder: 2 });
+    expect(calls).toEqual({ caps: 1, designation: 2, ladder: 2, readiness: 2 });
     a();
     await vi.advanceTimersByTimeAsync(OVERLORD_POLL_MS);
     expect(calls.designation).toBe(3);
@@ -227,6 +230,40 @@ describe('the Overlord store', () => {
     await settle();
     expect(store.getState().designation).toEqual({ state: 'unmeasured', error: 'unreadable answer' });
     expect(store.getState().ladder).toEqual({ state: 'unmeasured', error: 'unreadable answer' });
+    stop();
+  });
+
+  it('reads the readiness word with the designation and the ladder: an answer, an older server\'s 404, a 503 and an unreadable body', async () => {
+    const { reads } = fakeReads();
+    const s1 = createOverlordStore({ reads, now: () => AT });
+    const stop1 = s1.getState().start();
+    await settle();
+    expect(s1.getState().readiness).toEqual({ state: 'answered', value: READY, at: AT });
+    stop1();
+    const absent = createOverlordStore({ reads: fakeReads({ readiness: async () => ({ absent: true }) }).reads });
+    const stop2 = absent.getState().start();
+    await settle();
+    expect(absent.getState().readiness).toEqual({ state: 'absent' });
+    stop2();
+    const down = createOverlordStore({ reads: fakeReads({ readiness: async () => { throw new ApiError(503, { error: 'unavailable' }); } }).reads });
+    const stop3 = down.getState().start();
+    await settle();
+    expect(down.getState().readiness).toEqual({ state: 'unmeasured', error: 'HTTP 503' });
+    stop3();
+    const odd = createOverlordStore({ reads: fakeReads({ readiness: async () => ({ ok: true }) as never }).reads });
+    const stop4 = odd.getState().start();
+    await settle();
+    expect(odd.getState().readiness).toEqual({ state: 'unmeasured', error: 'unreadable answer' });
+    stop4();
+  });
+
+  it('makes no readiness read without the word', async () => {
+    const { reads, calls } = fakeReads({ caps: async () => ({ caps: [] }) });
+    const store = createOverlordStore({ reads });
+    const stop = store.getState().start();
+    await settle();
+    expect(calls.readiness).toBe(0);
+    expect(store.getState().readiness).toEqual({ state: 'loading' });
     stop();
   });
 
