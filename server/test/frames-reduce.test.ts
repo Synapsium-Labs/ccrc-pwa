@@ -2,6 +2,7 @@
 // docs/superpowers/plans/2026-11-26-box-frames-recipe.md section 5.2; the capture owner's calls 1549 and 1558, and its yes to
 // packet 2 with the corrected rule 2). One case or more per rule, the owner's four rule-2 cases, the coordinator's two
 // rule-row cases, idempotence, and the over-replacement on the recorded 2.1.300 panes, pinned as measured.
+import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,7 +12,7 @@ import { framesScan } from '../../shared/framesScan.mjs';
 import { FRAMES_NUDGE_TEXT, FRAMES_RECIPE_VERSION, framesOurs } from '../../shared/framesCapture.js';
 import { FRAMES_PARTS, frameSize, FRAMES_VERSION_SHAPE } from '../../shared/framesResult.js';
 import {
-  FRAMES_DECORATION, FRAMES_REPLACED, FRAMES_STATUS_TEXT, FRAMES_WIDE_KEPT, FRAMES_WIDE_RANGES, PATH_LIKE, checkReducedFrame, credentialShaped, frameCellWidth, isRuleRow, reduceFrame,
+  FRAMES_DECORATION, FRAMES_REPLACED, FRAMES_STATUS_TEXT, FRAMES_ONE_CELL_RANGES, FRAMES_WIDE_KEPT, PATH_LIKE, checkReducedFrame, credentialShaped, frameCellWidth, isRuleRow, reduceFrame,
   reducerFingerprint, rowIsOurs, runsToTheEdge, statusRowOf, type FramesScan,
 } from '../../shared/framesReduce.js';
 
@@ -172,31 +173,44 @@ describe('the full-width rule counts screen cells, two for a wide character (rev
   });
 });
 
-describe('the wide table is the Unicode East Asian Width table (review 4109, R1, the coordinator\'s rulings 1 and 2 on wave 195)', () => {
-  const FIXTURE = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'unicode-east-asian-width.txt'), 'utf8');
-  const SHARED = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'shared', 'framesReduce.ts'), 'utf8');
-  const DATA_LINE = /^([0-9A-F]{4,6})(?:\.\.([0-9A-F]{4,6}))?\s*;\s*([WF])\s+#/;
-  /** The fixture's W and F lines, parsed, sorted and merged where adjacent: what the shared table must be. */
-  const fromFixture = (): [number, number][] => {
-    const lines = FIXTURE.split('\n').filter((l) => l !== '' && !l.startsWith('#'));
-    const raw = lines.map((l) => {
+describe('the width table is the Unicode East Asian Width data file (review 4109, R1; the coordinator\'s rulings 1 and 2 on wave 195, and on review 4133, F2)', () => {
+  const HERE = path.dirname(fileURLToPath(import.meta.url));
+  const FIXTURE_BYTES = readFileSync(path.join(HERE, 'fixtures', 'unicode-east-asian-width.txt'));
+  const FIXTURE = FIXTURE_BYTES.toString('utf8');
+  const SHARED = readFileSync(path.join(HERE, '..', '..', 'shared', 'framesReduce.ts'), 'utf8');
+  const DATA_LINE = /^([0-9A-F]{4,6})(?:\.\.([0-9A-F]{4,6}))?\s*;\s*(N|Na|H|A|W|F)\s+#/;
+  const ONE = ['N', 'Na', 'H', 'A'];
+  /** Every data line of the fixture: its range and its property. */
+  const dataLines = (): { a: number; b: number; p: string }[] =>
+    FIXTURE.split('\n').filter((l) => /^[0-9A-F]/.test(l)).map((l) => {
       const m = DATA_LINE.exec(l);
-      if (m === null) throw new Error(`not a W or F line of the data file: ${l}`);
-      return [parseInt(m[1]!, 16), parseInt(m[2] ?? m[1]!, 16)] as [number, number];
+      if (m === null) throw new Error(`not a data line of the width file: ${l}`);
+      return { a: parseInt(m[1]!, 16), b: parseInt(m[2] ?? m[1]!, 16), p: m[3]! };
     });
-    expect(raw).toHaveLength(293);
-    raw.sort((a, b) => a[0] - b[0]);
-    const merged: [number, number][] = [];
-    for (const [a, b] of raw) {
-      const last = merged[merged.length - 1];
+  const merge = (ranges: [number, number][]): [number, number][] => {
+    const sorted = [...ranges].sort((x, y) => x[0] - y[0]);
+    const out: [number, number][] = [];
+    for (const [a, b] of sorted) {
+      const last = out[out.length - 1];
       if (last !== undefined && a <= last[1] + 1) last[1] = Math.max(last[1], b);
-      else merged.push([a, b]);
+      else out.push([a, b]);
     }
-    return merged;
+    return out;
   };
+  /** The fixture's one-cell lines (N, Na, H, A), merged: what the shared table must be. */
+  const oneCellFromFixture = (): [number, number][] => merge(dataLines().filter((l) => ONE.includes(l.p)).map((l) => [l.a, l.b]));
+  /** What the data file says of every code point, with no engine asked: 0 not listed (unassigned in 17.0), 1 one cell, 2 W or F. */
+  const BY_FILE = ((): Uint8Array => {
+    const by = new Uint8Array(0x110000);
+    for (const l of dataLines()) for (let cp = l.a; cp <= l.b; cp++) by[cp] = ONE.includes(l.p) ? 1 : 2;
+    return by;
+  })();
+  const inKept = (cp: number): boolean => FRAMES_WIDE_KEPT.some(([a, b]) => cp >= a && cp <= b);
+  /** The width the table and the stated addition give a code point, with no engine asked. */
+  const byTable = (cp: number): 1 | 2 => (inKept(cp) || BY_FILE[cp] !== 1 ? 2 : 1);
   /** The shared file's table as source text, and as the generator writes it from the fixture: eight pairs to a line. */
   const tableText = (): string => {
-    const open = SHARED.indexOf('export const FRAMES_WIDE_RANGES');
+    const open = SHARED.indexOf('export const FRAMES_ONE_CELL_RANGES');
     const start = SHARED.indexOf('\n', open) + 1;
     return SHARED.slice(start, SHARED.indexOf(']);', start));
   };
@@ -207,90 +221,109 @@ describe('the wide table is the Unicode East Asian Width table (review 4109, R1,
     for (let i = 0; i < items.length; i += 8) lines.push(`  ${items.slice(i, i + 8).join(', ')},\n`);
     return lines.join('');
   };
-  /** What the function answers for a character the table does not list: the stated addition, and the engine's two classes
-   *  (ruling 2). */
-  const inKept = (cp: number): boolean => FRAMES_WIDE_KEPT.some(([a, b]) => cp >= a && cp <= b);
-  const besideTheTable = (c: string): 1 | 2 => (inKept(c.codePointAt(0)!) || /\p{Emoji_Presentation}|\p{Cn}/u.test(c) ? 2 : 1);
   /** THE RULE ON MAIN at 86b2c2d6e2, as data: its hand list's ranges, and an emoji drawn as one. */
   const MAIN_RANGES: readonly (readonly [number, number])[] = [
     [0x1100, 0x115f], [0x2e80, 0x303e], [0x3041, 0x33ff], [0x3400, 0x4dbf], [0x4e00, 0x9fff], [0xa000, 0xa4cf], [0xac00, 0xd7a3],
     [0xf900, 0xfaff], [0xfe30, 0xfe4f], [0xff00, 0xff60], [0xffe0, 0xffe6], [0x20000, 0x3fffd],
   ];
-  const onMain = (cp: number, c: string): 1 | 2 => (MAIN_RANGES.some(([a, b]) => cp >= a && cp <= b) || /\p{Emoji_Presentation}/u.test(c) ? 2 : 1);
+  const inMain = (cp: number): boolean => MAIN_RANGES.some(([a, b]) => cp >= a && cp <= b);
+  const everyCodePoint = (f: (cp: number, c: string) => void): void => {
+    for (let cp = 0; cp <= 0x10ffff; cp++) if (cp < 0xd800 || cp > 0xdfff) f(cp, String.fromCodePoint(cp));
+  };
 
-  it('no code point counts narrower than it did on main: the one stated addition keeps the eight ambiguous ones main counted wide (the coordinator\'s ruling on wave 195)', () => {
-    const narrower: string[] = [];
-    let wider = 0;
-    for (let cp = 0; cp <= 0x10ffff; cp++) {
-      if (cp >= 0xd800 && cp <= 0xdfff) continue;
-      const c = String.fromCodePoint(cp);
-      const [was, now] = [onMain(cp, c), frameCellWidth(c)];
-      if (now < was) narrower.push(cp.toString(16));
-      else if (now > was) wider++;
-    }
-    expect(narrower).toEqual([]);
-    expect(wider).toBe(767047);
-    // The addition is exactly U+3248 to U+324F, none of them in the data file's W or F lines, each two cells.
-    expect(FRAMES_WIDE_KEPT.map(([a, b]) => [a, b])).toEqual([[0x3248, 0x324f]]);
-    const ranges = fromFixture();
-    for (let cp = 0x3248; cp <= 0x324f; cp++) {
-      expect(ranges.some(([a, b]) => cp >= a && cp <= b), cp.toString(16)).toBe(false);
-      expect(frameCellWidth(String.fromCodePoint(cp)), cp.toString(16)).toBe(2);
-    }
-  });
-
-  it('the fixture carries its data file\'s own name and date lines, and the shared file names the same file', () => {
+  it('the fixture IS the public data file EastAsianWidth-17.0.0.txt, byte for byte, and the shared file names the same file', () => {
+    expect(createHash('sha256').update(FIXTURE_BYTES).digest('hex')).toBe('ea7ce50f3444a050333448dffef1cadd9325af55cbb764b4a2280faf52170a33');
+    expect(FIXTURE_BYTES.length).toBe(201595);
     expect(FIXTURE.split('\n').slice(0, 2)).toEqual(['# EastAsianWidth-17.0.0.txt', '# Date: 2025-07-24, 00:12:54 GMT']);
+    expect(dataLines()).toHaveLength(2678);
     expect(SHARED).toContain('EastAsianWidth-17.0.0.txt');
   });
-  it('the shared table is the fixture\'s W and F ranges merged, as the generator writes them: they cannot drift', () => {
-    const want = fromFixture();
-    expect(want).toHaveLength(123);
+  it('the shared table is the fixture\'s N, Na, H and A lines merged, as the generator writes them: they cannot drift', () => {
+    const want = oneCellFromFixture();
+    expect(want).toHaveLength(747);
     expect(tableText()).toBe(generated(want));
-    expect(FRAMES_WIDE_RANGES.map(([a, b]) => [a, b])).toEqual(want);
+    expect(FRAMES_ONE_CELL_RANGES.map(([a, b]) => [a, b])).toEqual(want);
   });
   it('the shared table\'s source text is ASCII only, byte for byte', () => {
     const bytes = [...new TextEncoder().encode(tableText())];
-    expect(bytes.length).toBeGreaterThan(1000);
+    expect(bytes.length).toBe(14426);
     expect(bytes.filter((b) => b > 0x7f)).toEqual([]);
   });
-  it('the engine\'s Unicode version is not newer than the table\'s, so nothing it has assigned is missing from the table', () => {
-    const [maj, min] = (process.versions.unicode ?? '0.0').split('.').map(Number) as [number, number];
-    expect(maj * 100 + (min ?? 0)).toBeLessThanOrEqual(1700);
-  });
-  it('every range of the fixture, first, last and one inside, is two cells; the code point just outside each is what the rest of the function gives', () => {
-    const ranges = fromFixture();
-    const inTable = (cp: number): boolean => ranges.some(([a, b]) => cp >= a && cp <= b);
+  it('every line of the fixture, first, last and one inside, counts what the file says; the code point just outside each one-cell range counts two', () => {
     let outside = 0;
-    for (const [a, b] of ranges) {
-      for (const cp of [a, b, a + ((b - a) >> 1)]) expect(frameCellWidth(String.fromCodePoint(cp)), cp.toString(16)).toBe(2);
-      for (const cp of [a - 1, b + 1]) {
-        if (cp < 0 || cp > 0x10ffff || inTable(cp)) continue;
+    for (const l of dataLines()) {
+      for (const cp of [l.a, l.b, l.a + ((l.b - l.a) >> 1)]) {
         const c = String.fromCodePoint(cp);
-        expect(frameCellWidth(c), cp.toString(16)).toBe(besideTheTable(c));
+        const want = ONE.includes(l.p) && !inKept(cp) && !/\p{Emoji_Presentation}/u.test(c) ? 1 : 2;
+        expect(frameCellWidth(c), `${cp.toString(16)} ${l.p}`).toBe(want);
+      }
+    }
+    for (const [a, b] of oneCellFromFixture()) {
+      for (const cp of [a - 1, b + 1]) {
+        if (cp < 0 || cp > 0x10ffff) continue;
+        expect(frameCellWidth(String.fromCodePoint(cp)), cp.toString(16)).toBe(2);
         outside++;
       }
     }
-    expect(outside).toBe(246);
+    expect(outside).toBe(1493);
   });
-  it('the reviewer\'s and the panel\'s unlisted wide characters are two cells now, and so is a regional indicator, which the table gives N', () => {
+  it('unknown is relative to the table, never to the engine: a code point the 17.0 file does not list counts two cells, whatever the engine has assigned', () => {
+    // The reviewer's measured case (review 4133, F2): code points the next version's public data lists as Wide that this
+    // file does not list (Jurchen, Khitan, Tangut components, a small archaic Katakana YE), and ruling 2's unassigned and
+    // noncharacter samples. None is listed here; each counts two cells with no engine class asked.
+    for (const cp of [0x18e00, 0x19191, 0x191a0, 0x191d2, 0x18cd6, 0x18cda, 0x18d1f, 0x18d20, 0x1b168, 0x0378, 0xfdd0, 0x1ffff]) {
+      expect(BY_FILE[cp], cp.toString(16)).toBe(0);
+      expect(frameCellWidth(String.fromCodePoint(cp)), cp.toString(16)).toBe(2);
+    }
+    let unlisted = 0;
+    everyCodePoint((cp, c) => { if (BY_FILE[cp] === 0) { unlisted++; if (frameCellWidth(c) !== 2) throw new Error(`unlisted ${cp.toString(16)} counts one`); } });
+    expect(unlisted).toBe(758564);
+  });
+  it('the engine\'s emoji class only widens: every code point counts at least what the table gives it, and every one it counts wider is an emoji drawn as one', () => {
+    const widened: number[] = [];
+    everyCodePoint((cp, c) => {
+      const [w, t] = [frameCellWidth(c), byTable(cp)];
+      if (w < t) throw new Error(`${cp.toString(16)} counts narrower than the table`);
+      if (w > t) { widened.push(cp); if (!/\p{Emoji_Presentation}/u.test(c)) throw new Error(`${cp.toString(16)} widened by something else`); }
+    });
+    // The regional indicators, N in the data file, are emoji drawn as one: the class is what makes them two cells.
+    for (let cp = 0x1f1e6; cp <= 0x1f1ff; cp++) expect(widened, cp.toString(16)).toContain(cp);
+  });
+  it('no code point counts narrower than it did on main, with no engine asked, and on this engine too: the one stated addition keeps the eight ambiguous ones main counted wide', () => {
+    let wider = 0;
+    const narrower: string[] = [];
+    everyCodePoint((cp) => {
+      const [now, was] = [byTable(cp), inMain(cp) ? 2 : 1];
+      if (now < was) narrower.push(cp.toString(16));
+      else if (now > was) wider++;
+    });
+    expect(narrower).toEqual([]);
+    expect(wider).toBe(768240);
+    // With the engine's emoji class on both sides, as main and this function each read it.
+    const narrowerHere: string[] = [];
+    everyCodePoint((cp, c) => { const ep = /\p{Emoji_Presentation}/u.test(c); if (frameCellWidth(c) < (inMain(cp) || ep ? 2 : 1)) narrowerHere.push(cp.toString(16)); });
+    expect(narrowerHere).toEqual([]);
+    // The addition is exactly U+3248 to U+324F, A in the data file, each two cells.
+    expect(FRAMES_WIDE_KEPT.map(([a, b]) => [a, b])).toEqual([[0x3248, 0x324f]]);
+    for (let cp = 0x3248; cp <= 0x324f; cp++) {
+      expect(BY_FILE[cp], cp.toString(16)).toBe(1);
+      expect(frameCellWidth(String.fromCodePoint(cp)), cp.toString(16)).toBe(2);
+    }
+  });
+  it('the reviewer\'s and the panel\'s unlisted-before wide characters are two cells, and so is a regional indicator, which the file gives N', () => {
     for (const cp of [0x2329, 0xfe10, 0xa960, 0x16fe0, 0x17000, 0x1b000, 0x1f200, 0xac00, 0xff01]) {
       expect(frameCellWidth(String.fromCodePoint(cp)), cp.toString(16)).toBe(2);
     }
-    // U+1F1E6..1F1FF are emoji drawn as one (Emoji_Presentation) and N in the data file: the engine's class counts them.
-    expect(FRAMES_WIDE_RANGES.some(([a, b]) => 0x1f1e6 >= a && 0x1f1e6 <= b)).toBe(false);
+    expect(BY_FILE[0x1f1e6]).toBe(1);
     expect(frameCellWidth(String.fromCodePoint(0x1f1e6))).toBe(2);
   });
-  it('unknown is wide on purpose: an unassigned code point and a noncharacter count two cells; a private-use one is refused by the shape gate before any width is asked', () => {
-    // Ruling 2: U+0378 is unassigned, U+FDD0 a noncharacter (both Cn, which the class rule lets through); U+E000 is private use (Co).
-    for (const cp of [0x0378, 0xfdd0, 0x1ffff]) expect(frameCellWidth(String.fromCodePoint(cp)), cp.toString(16)).toBe(2);
+  it('a private-use code point is refused by the shape gate before any width is asked; were it asked, it would count one cell', () => {
     const P = { cols: 20, rows: 8 };
     const boxed = (...rows: string[]): string => raw(...rows, '─'.repeat(P.cols), STATUS);
-    // Reaching the edge through an unassigned code point refuses a path going on below, on both hosts.
+    // Reaching the edge through an unlisted code point refuses a path going on below, on both hosts.
     const edge = `ab/${'c'.repeat(15)}${String.fromCodePoint(0x0378)}`;
     expect(reduceFrame(boxed(edge, 'tail rest'), P, [], [], NONE)).toEqual({ kind: 'refused', refusal: 'private-shape' });
     expect(checkReducedFrame(boxed(edge, 'tail rest'), P, [], NONE)).toEqual({ ok: false, refusal: 'private-shape' });
-    // A private-use code point there is refused whole by rule 1 first, on both hosts; were it asked, it would count one cell.
     const pua = `ab/${'c'.repeat(16)}${String.fromCodePoint(0xe000)}`;
     expect(reduceFrame(boxed(pua, 'tail rest'), P, [], [], NONE)).toEqual({ kind: 'refused', refusal: 'not-a-frame' });
     expect(checkReducedFrame(boxed(pua, 'tail rest'), P, [], NONE)).toEqual({ ok: false, refusal: 'not-a-frame' });
@@ -331,6 +364,78 @@ describe('the capture owner\'s condition: a row truly at the edge is at the edge
   it('a row two cells short, even with a wide character below, is kept', () => {
     const short = `ab/${'c'.repeat(15)} `;
     expect(both(boxed(short, `${WIDE}tail rest`))).toEqual(KEPT(boxed(short, `${WIDE}tail rest`)));
+  });
+
+  // Review 4133's F1, the coordinator's ruling: ONE reader of the next row. The straddle asks the first character of the
+  // same content the tail is read from, after the leading decoration, so a decorated next row cannot hide a straddle.
+  const SEL = String.fromCodePoint(0xfe0f);
+  const KEYCAP = String.fromCodePoint(0x20e3);
+  const NBSP = String.fromCodePoint(0xa0);
+  const DECORATED = [`  ${WIDE}tail rest`, `│${WIDE}tail rest`, `│ ${WIDE}tail rest`, `❯ ${WIDE}tail rest`, `⏺ ${WIDE}tail rest`, `${NBSP}${WIDE}tail rest`];
+  const SELECTED = [
+    `${String.fromCodePoint(0x2764)}${SEL}tail rest`, `${String.fromCodePoint(0x263a)}${SEL}tail rest`, `${String.fromCodePoint(0x270c)}${SEL}tail rest`,
+    `1${SEL}${KEYCAP}tail rest`, `1${KEYCAP}tail rest`, `  ${String.fromCodePoint(0x2764)}${SEL}tail rest`,
+  ];
+  for (const cols of [20, 220]) {
+    const W = { cols, rows: 8 };
+    const at = (...rows: string[]): string => raw(...rows, '─'.repeat(cols), STATUS);
+    const on = (f: string): unknown[] => [reduceFrame(f, W, [], [], NONE), checkReducedFrame(f, W, [], NONE)];
+    const short = `ab/${'x'.repeat(cols - 4)}`; // one cell short of the pane (a filler that is no hex run)
+    it(`at ${cols} columns: a straddle whose next row begins with decoration before the wide character refuses on both hosts`, () => {
+      for (const next of DECORATED) expect(on(at(short, next)), JSON.stringify(next)).toEqual(REFUSED);
+    });
+    it(`at ${cols} columns: a straddle whose next row begins with a base character and the emoji selector or the keycap mark refuses on both hosts`, () => {
+      for (const next of SELECTED) expect(on(at(short, next)), JSON.stringify(next)).toEqual(REFUSED);
+    });
+    it(`at ${cols} columns: decoration then a narrow character is still not a straddle, and is kept`, () => {
+      for (const next of ['  tail rest', '│ tail rest', '❯ tail rest', `${NBSP}tail rest`]) {
+        expect(on(at(short, next)), JSON.stringify(next)).toEqual([{ kind: 'reduced', text: at(short, next), replaced: { cwd: 0, path: 0, model: 0, account: 0 } }, { ok: true }]);
+      }
+    });
+  }
+  it('a row whose last character is the decoration is not run to the edge, even at the full width (review 4133, A6)', () => {
+    const bordered = `ab/${'c'.repeat(16)}│`; // 20 cells, its last a border character
+    expect(both(boxed(bordered, 'tail rest'))).toEqual(KEPT(boxed(bordered, 'tail rest')));
+  });
+});
+
+describe('what the box answers as reduced passes the server\'s check, by construction (review 4133, F3, the coordinator\'s ruling)', () => {
+  const PANES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'panes');
+  it('the reviewer\'s 40-column frame, a replaced row of one-code-point two-cell characters, refuses on the box with the server\'s word', () => {
+    const P = { cols: 40, rows: 6 };
+    const f = raw(`${String.fromCodePoint(0x0378).repeat(18)} /a/b`, '─'.repeat(40), STATUS);
+    expect(reduceFrame(f, P, [], [], NONE)).toEqual({ kind: 'refused', refusal: 'not-a-frame' });
+    // What the box answered before this round: the row padded to its 41 cells, 41 code points, which the server refuses.
+    const sentBefore = raw(`${FRAMES_REPLACED.cwd}${' '.repeat(41 - Array.from(FRAMES_REPLACED.cwd).length)}`, '─'.repeat(40), STATUS);
+    expect(checkReducedFrame(sentBefore, P, [], NONE)).toEqual({ ok: false, refusal: 'not-a-frame' });
+  });
+  it('over every recorded pane as the recipe meets it, and the capture owner\'s frames, a reduced answer passes the server\'s check', () => {
+    const files = [
+      ...readdirSync(PANES_DIR).filter((f) => /\.(txt|ansi)$/.test(f)).map((f) => path.join(PANES_DIR, f)),
+      ...readdirSync(path.join(PANES_DIR, 'box')).filter((f) => f.endsWith('.ansi')).map((f) => path.join(PANES_DIR, 'box', f)),
+    ];
+    let reduced = 0;
+    let checked = 0;
+    for (const f of files) {
+      const recorded = readFileSync(f, 'utf8');
+      if (!recorded.split('\n').some((l) => isRuleRow(plainOf(l))) || recorded.split('\n').findIndex((l) => isRuleRow(plainOf(l))) < 1) continue;
+      const pane = realPane(recorded);
+      const r = reduceFrame(asTheRecipeMeetsIt(recorded), pane, [], [], NONE);
+      checked++;
+      if (r.kind !== 'reduced') continue;
+      reduced++;
+      expect(checkReducedFrame(r.text, pane, [], NONE), f).toEqual({ ok: true });
+    }
+    expect(checked).toBeGreaterThanOrEqual(90);
+    expect(reduced).toBeGreaterThanOrEqual(90);
+    // The capture owner's frames (review 4109, R1): each is refused, so none reaches the store.
+    const P = { cols: 20, rows: 8 };
+    for (const cp of [0x2329, 0xfe10, 0xa960, 0x16fe0, 0x17000, 0x1b000, 0x1f200]) {
+      const f = raw(`ab/${'c'.repeat(15)}${String.fromCodePoint(cp)}`, 'tail rest', '─'.repeat(20), STATUS);
+      const r = reduceFrame(f, P, [], [], NONE);
+      if (r.kind === 'reduced') expect(checkReducedFrame(r.text, P, [], NONE)).toEqual({ ok: true });
+      else expect(r.refusal).toBe('private-shape');
+    }
   });
 });
 
@@ -592,14 +697,14 @@ describe('rule 10, and the receiver\'s check', () => {
   it('the version folds in the reducer\'s probe answers', () => {
     expect(FRAMES_RECIPE_VERSION).toMatch(FRAMES_VERSION_SHAPE);
   });
-  it('the probe table answers for a bare quote, a wide character at the edge, a row at the probe\'s width, a straddle and the stated addition at the edge (review 4109, F9)', () => {
-    // The five probes after the eighteen of round 2, each drawn in its box: a change in what the reducer does with any of
-    // them moves the version.
+  it('the probe table answers for a bare quote, a wide character at the edge, a row at the probe\'s width, a straddle, the stated addition at the edge, a table-only wide character at the edge and a trailing-space straddle (review 4109, F9; review 4133, D1)', () => {
+    // The seven probes after the eighteen of round 2, each drawn in its box: a change in what the reducer does with any of
+    // them moves the version. None asks the engine for anything (review 4133, D1).
     const answers = JSON.parse(reducerFingerprint()) as { kind: string; refusal?: string; text?: string }[];
-    expect(answers).toHaveLength(26);
+    expect(answers).toHaveLength(28);
     expect(answers[18]).toMatchObject({ kind: 'reduced' });
     expect(answers[18]!.text).toContain('› stashed');
-    for (const i of [19, 20, 21, 22]) expect(answers[i], String(i)).toEqual({ kind: 'refused', refusal: 'private-shape' });
+    for (const i of [19, 20, 21, 22, 23, 24]) expect(answers[i], String(i)).toEqual({ kind: 'refused', refusal: 'private-shape' });
   });
 });
 
