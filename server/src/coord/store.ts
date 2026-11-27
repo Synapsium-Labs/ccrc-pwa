@@ -5797,7 +5797,7 @@ export class CoordStore {
   bindPendingGeneration(sessionId: string, generation: string, at: number): designation.BindResult { return designation.bindPendingGeneration(this.db, sessionId, generation, at); }
   rebindPending(i: designation.RebindInput): designation.RebindResult { return designation.rebindPending(this.db, i); }
   goLive(j: designation.AuthorityAppender, sessionId: string, generation: string, at: number): designation.GoLiveResult { return designation.goLive(this.db, j, sessionId, generation, at, (to, from) => this.repointOverlordMail(to, from)); }
-  failPending(sessionId: string, outcome: AttemptOutcome, at: number, owesStop: boolean): designation.FailResult { return designation.failPending(this.db, sessionId, outcome, at, owesStop); }
+  failPending(sessionId: string, outcome: AttemptOutcome, at: number, owesStop: boolean, hold?: { readonly lane: string; readonly startId: number }): designation.FailResult { return designation.failPending(this.db, sessionId, outcome, at, owesStop, hold); }
   retire(j: designation.AuthorityAppender, i: designation.RetireInput): designation.RetireResult { return designation.retire(this.db, j, i); }
   stopDone(sessionId: string): designation.StopDoneResult { return designation.stopDone(this.db, sessionId); }
   setModelClass(j: designation.AuthorityAppender, i: Parameters<typeof designation.setModelClass>[2]): designation.SettingResult { return designation.setModelClass(this.db, j, i); }

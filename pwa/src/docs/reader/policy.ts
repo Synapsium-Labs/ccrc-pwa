@@ -16,6 +16,7 @@ import { docLinkTarget } from '../docLinkTarget';
 import type { DocLinkContextValue } from '../DocLink';
 import type { DocSectionSlug } from '../../../../shared/docs';
 import type { ReaderHiddenChar } from './readerText';
+import type { ReaderReading } from './readerMode';
 
 /** A link as the host's classifier of the frame's href yields it (mirrors the library's host-link shape; nothing is
  *  imported from it). The frame's content is untrusted: `external` is re-derived from its `url` before it is used. */
@@ -189,6 +190,33 @@ export interface ReaderMountPlan {
   readonly appearance: boolean;
 }
 
+/** What a mount asks of the frame for reader mode (X6 XR1.4 with XR2.1), beside its plan: kept apart from `ReaderMountPlan`, whose
+ *  shape the existing pins hold whole. */
+export interface ReaderMountAsks {
+  /** Whether the mount asks the frame for `progress` (rich-docs §4.4, D-8805): every production mount, never the reader lab's.
+   *  Asked on either bar: the frame's bar stays on a `frame-bar` mount, and ccrc's own bar and reader mode's activity read the share. */
+  readonly progress: boolean;
+  /** Whether the mount asks the frame for its `reader` acts (`onReader`, reader mode LX6.1): a Docs mount only. */
+  readonly reader: boolean;
+  /** The reading (reader mode's turn, or `off`) a mount made under is sent before its `ready`: each of ccrc's mounts is a new
+   *  `DocFrame`, and the library replays a `setReading` only within one. `off` sends nothing: a fresh mount is off. */
+  readonly reading: ReaderReading;
+}
+
+/** Reader mode's reading as the library's `setReading` takes it: screen pages, a plain scroll, or reader mode off. Mirrors
+ *  the library's `ReadingMode`; nothing is imported from it. Defined once, in `readerMode.ts` (L1, where the turn lives);
+ *  re-exported here so the mount's callers keep naming it from the policy. */
+export type { ReaderReading };
+
+/** The acts of the frame's `reader` op, as the library parses them (a closed set): the top band's `menu`, `exit`, `toggle`, and
+ *  `active` (a sideways scroll or a figure's pan or zoom). Mirrors the library's `ReaderAct`; nothing is imported from it. */
+export type ReaderAct = 'menu' | 'exit' | 'toggle' | 'active';
+
+/** What a mount is made under, beyond who mounts: reader mode's state. Absent fields read `off`. */
+export interface ReaderMountState {
+  readonly reading?: ReaderReading;
+}
+
 /** The one decision: the Docs reader draws as the E17 reading says (`docsDrawFor`), waits `readerWatchdogMs(bytes)`, keeps
  *  reader state, carries the doc's history and has the bar it asked for; the reader lab's `lab-draw` draws on open in the library's `auto` mode
  *  (where `ready` waits for the figures, so the lab's gap window still times the draw: refinement (d)), waits
@@ -199,6 +227,15 @@ export function readerMountPlan(
   return profile === 'lab-draw'
     ? { draw: 'auto', watchdogMs: READER_LAB_DRAW_WATCHDOG_MS, store: false, chrome: 'frame-bar', history: false, appearance: false }
     : { draw: docsDrawFor(e17), watchdogMs: readerWatchdogMs(bytes), store: true, chrome, history: true, appearance: true };
+}
+
+/** Reader mode's asks of one mount (`readerMountPlan` takes reader mode's state through this, X6 XR1.4): a Docs mount asks for
+ *  progress on either bar and for the frame's reader acts, and is sent the reading it is made under (`state.reading`, absent
+ *  `off`); the reader lab's `lab-draw` asks for none of them and is sent no reading, whatever the state says. */
+export function readerMountAsks(profile: ReaderMountProfile | undefined, state: ReaderMountState = {}): ReaderMountAsks {
+  return profile === 'lab-draw'
+    ? { progress: false, reader: false, reading: 'off' }
+    : { progress: true, reader: true, reading: state.reading ?? 'off' };
 }
 
 /** Hosted only when the contract, the mount plan and the caller all permit it. */

@@ -4,7 +4,7 @@
 // sender, then `insertStartLoads`, which finds the start the `reportId` names (`unknown-start`, 404) and keeps the first body.
 // The read side (`startLoadsOfNewestStart`, `startLoadsRowOf`) is pinned here too. Fixture HOMEs only.
 import { describe, it, expect, afterEach, beforeAll, beforeEach, vi } from 'vitest';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import type { FastifyInstance } from 'fastify';
@@ -26,7 +26,8 @@ import { attributionIdentity } from '../src/auth/attributionIdentity.js';
 import { KEEP_AWAKE_CAP, POOL_SET_CAP, ROUTE_CAP } from '../src/ccdargv.js';
 import type { FleetState } from '../src/fleetstate.js';
 import { drainOwedStops, overlordLanePortOf, type OverlordBody } from '../src/coord/overlordRoutes.js';
-import { pendingDeadlineOf } from '../src/coord/overlordDesignation.js';
+import { overlordAccounts, pendingDeadlineOf } from '../src/coord/overlordDesignation.js';
+import { afacts, limit, SET_A } from './sim/designationSets.js';
 import { runOverlordAttempt } from '../src/continuity/renewalActs.js';
 import type { AttemptAction } from '../../shared/overlord-designation.js';
 
@@ -257,6 +258,118 @@ describe('the settle step at the loads door (Task 9)', { timeout: 90_000 }, () =
     expect(d.kind === 'not-designated' && d.row?.stopsOwed).toStrictEqual([]);
     expect(calls.some((c) => c.join(' ').includes('profiledigest=') && c.join(' ').includes(OV)), JSON.stringify(calls)).toBe(true);
     expect(stops(), JSON.stringify(calls)).toStrictEqual([STOP_OV]);
+  });
+
+  // The first start's account hold (renewal readings G, ticket first-start-failure-holds-its-account): a designate whose start
+  // failed the check because it loaded something from the account's own configuration holds that account, through the one
+  // decider and the one writer, and the hold shows and clears like the pass's own.
+  const foreignHook = (over: Record<string, unknown> = {}) => {
+    const l = loads(over);
+    return { ...l, loaded: { ...(l.loaded as Record<string, unknown>), hooks: [e.hookSha256, 'd'.repeat(64)] } };
+  };
+  const listOf = (limits: Parameters<typeof afacts>[0]) => overlordAccounts(SET_A, 'opus', afacts(limits, { held: coord!.accountHolds() }));
+  const holdsDoor = async (a: FastifyInstance) => (await a.inject({ method: 'GET', url: '/api/continuity/account-holds' })).json() as unknown;
+
+  it('a failed first start holds its account: the holds read shows it, the next ordered list leaves it out, the clear offers it again', async () => {
+    app = await openOv(); seedRow(home, OV, { uuid: OV_UUID, project: 'overlord', wrapper: 'lane-a' }); pend();
+    await startOv(app);
+    const two = { 'lane-a': limit(), 'lane-c': limit(), 'lane-off': limit({ disabled: true }) };
+    expect(listOf(two).list).toStrictEqual(['lane-a', 'lane-c']);
+    expect((await report(app, foreignHook())).act).toBe('fail-pending');
+    const d = view();
+    expect(d.kind === 'not-designated' && d.row?.lastAttempt).toMatchObject({ sessionId: OV, outcome: 'overlord-sandbox-unmet' });
+    expect(stops(), JSON.stringify(calls)).toStrictEqual([STOP_OV]);
+    expect(coord!.accountHolds()).toStrictEqual({ ok: true, lanes: ['lane-a'] });
+    expect(await holdsDoor(app)).toMatchObject({ ok: true, holds: [{ lane: 'lane-a', cause: 'launch-profile-unmet', startId: 1 }] });
+    expect(listOf(two)).toMatchObject({ list: ['lane-c'], holds: 'applied' });
+    const cleared = await app.inject({ method: 'POST', url: '/api/continuity/account-holds/lane-a/clear' });
+    expect(cleared.statusCode, cleared.body).toBe(200);
+    expect(listOf(two).list).toStrictEqual(['lane-a', 'lane-c']);
+    // The same failed start, settled again from its stored report, never puts the cleared hold back: its failure cleared the
+    // pending slot, so the settle answers none and never asks the writer.
+    expect((await report(app, foreignHook())).act).toBe('none');
+    expect(coord!.accountHolds()).toStrictEqual({ ok: true, lanes: [] });
+  });
+
+  it('the never-empty rule stands for this path: with every candidate held, the list is kept as it was', async () => {
+    app = await openOv(); seedRow(home, OV, { uuid: OV_UUID, project: 'overlord', wrapper: 'lane-a' }); pend();
+    await startOv(app);
+    expect((await report(app, foreignHook())).act).toBe('fail-pending');
+    expect(coord!.accountHolds()).toStrictEqual({ ok: true, lanes: ['lane-a'] });
+    const one = { 'lane-a': limit(), 'lane-c': limit({ disabled: true }), 'lane-off': limit({ disabled: true }) };
+    expect(listOf(one)).toMatchObject({ list: ['lane-a'], holds: 'overridden' });
+  });
+
+  it('a failed first start whose failure is not the account\'s holds nothing: the launch, the workspace, another profile', async () => {
+    for (const body of [loads({ launchRc: 'on' }), loads({ cwdInWorkspace: false }), foreignHook({ profileDigest: 'f'.repeat(64) })]) {
+      if (app !== undefined) { await app.close(); coord?.db.close(); home = mkTmp('ccrc-loads-route-'); }
+      app = await openOv(); seedRow(home, OV, { uuid: OV_UUID, project: 'overlord', wrapper: 'lane-a' }); pend();
+      await startOv(app);
+      expect((await report(app, body)).act).toBe('fail-pending');
+      expect(coord!.accountHolds(), JSON.stringify(body)).toStrictEqual({ ok: true, lanes: [] });
+      expect(stops()).toStrictEqual([STOP_OV]);
+    }
+  });
+
+  it('a hold the table refuses still records the failure and stops the body, and says so', async () => {
+    app = await openOv(); seedRow(home, OV, { uuid: OV_UUID, project: 'overlord', wrapper: 'lane-a' }); pend();
+    await startOv(app);
+    coord!.db.exec("CREATE TRIGGER no_hold BEFORE INSERT ON overlord_account_holds BEGIN SELECT RAISE(ABORT, 'forced'); END");
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect((await report(app, foreignHook())).act).toBe('fail-pending');
+      expect(warn.mock.calls.map((c) => String(c[0]))).toContainEqual(expect.stringContaining('could not be written; the failure stands'));
+    } finally { warn.mockRestore(); }
+    const d = view();
+    expect(d.kind === 'not-designated' && d.row?.lastAttempt).toMatchObject({ sessionId: OV, outcome: 'overlord-sandbox-unmet' });
+    expect(stops()).toStrictEqual([STOP_OV]);
+    expect(coord!.accountHolds()).toStrictEqual({ ok: true, lanes: [] });
+  });
+
+  it('an unmeasured wrapper holds nothing, never a hold on an empty name; the failure and the stop go on (the real account read)', async () => {
+    app = await openOv(); seedRow(home, OV, { uuid: OV_UUID, project: 'overlord', wrapper: 'lane-a' }); pend();
+    await startOv(app);
+    // The door's attribution reads the registry whole (it refuses a row it cannot measure), so the wrapper turns unreadable
+    // after the door's answer, at the settle's first read: the registry lists it but cannot read it, and the record's wrapper is
+    // unmeasured, its measured value empty, when the server's own account read asks.
+    const w = path.join(home, '.cc-sessions', `${OV}.wrapper`);
+    const real = coord!.startLoadsOfNewestStart.bind(coord!);
+    const first = vi.spyOn(coord!, 'startLoadsOfNewestStart').mockImplementationOnce((id) => { rmSync(w); mkdirSync(w); return real(id); });
+    try {
+      expect((await report(app, foreignHook())).act).toBe('fail-pending');
+      expect(first).toHaveBeenCalled();
+    } finally { first.mockRestore(); }
+    const d = view();
+    expect(d.kind === 'not-designated' && d.row?.lastAttempt).toMatchObject({ sessionId: OV, outcome: 'overlord-sandbox-unmet' });
+    // The drain goes on to that body (its markers off); the stop's own registry read cannot measure the row, so the stop
+    // stays owed on the failure record for the sweep, as for any stop that does not complete.
+    expect(calls, JSON.stringify(calls)).toContainEqual(['keep-awake', '--session', OV, '--state', 'off']);
+    expect(d.kind === 'not-designated' && d.row?.stopsOwed).toStrictEqual([OV]);
+    expect(coord!.db.prepare('SELECT lane FROM overlord_account_holds').all()).toStrictEqual([]);
+  });
+
+  // The account a hold lands on is the registry's wrapper when the settle runs (slug first-start-lane-from-the-registry); no
+  // fact the start carried names its account. A swap whose new start is recorded first leaves the old report nothing to
+  // settle; a swap caught between its wrapper write and its new start is the known limit `swap-before-the-settle`.
+  it('a swap whose new start is recorded before the old report settles holds neither account; the new start\'s own failure holds its own', async () => {
+    app = await openOv(); seedRow(home, OV, { uuid: OV_UUID, project: 'overlord', wrapper: 'lane-a' }); pend();
+    await startOv(app);
+    seedRow(home, OV, { uuid: OV_UUID, project: 'overlord', wrapper: 'lane-b' });
+    await startOv(app, 'r-ov2-abcd', 'resume');
+    // The newest start is the swap's, with no report yet: the old start's report settles nothing.
+    expect((await report(app, foreignHook())).act).toBe('no-report');
+    expect(coord!.accountHolds()).toStrictEqual({ ok: true, lanes: [] });
+    expect((await report(app, { ...foreignHook(), reportId: 'r-ov2-abcd' })).act).toBe('fail-pending');
+    expect(coord!.accountHolds()).toStrictEqual({ ok: true, lanes: ['lane-b'] });
+  });
+
+  it('known limit swap-before-the-settle: a wrapper rewritten before the swap\'s new start is recorded holds the new account', async () => {
+    app = await openOv(); seedRow(home, OV, { uuid: OV_UUID, project: 'overlord', wrapper: 'lane-a' }); pend();
+    await startOv(app);
+    seedRow(home, OV, { uuid: OV_UUID, project: 'overlord', wrapper: 'lane-b' });
+    expect((await report(app, foreignHook())).act).toBe('fail-pending');
+    // Pinned as it stands, so a tie to the start's own account shows here when one is built.
+    expect(coord!.accountHolds()).toStrictEqual({ ok: true, lanes: ['lane-b'] });
   });
 
   it('a stop that throws keeps the failure record, leaves the stop owed and logs it', async () => {
@@ -744,6 +857,35 @@ describe('the settle step at the loads door (Task 9)', { timeout: 90_000 }, () =
         expect(d.row?.pending).toBeNull();
         expect(d.row?.lastAttempt).toMatchObject({ sessionId: NEW, outcome: 'overlord-sandbox-unmet' });
         expect(drained).toStrictEqual([[NEW, false]]);
+      });
+
+      it('a failed rebind body that loaded from its account\'s own configuration holds that account; the old binding stays (renewal readings G)', async () => {
+        app = await openLost(); pendRebind();
+        await startNew(app);
+        await store(app, { ...newLoads(), loaded: { ...(newLoads().loaded as Record<string, unknown>), hooks: [e.hookSha256, 'd'.repeat(64)] } }, NEW);
+        const asked: string[] = [];
+        const port = livePort({ failPending: (id, at, hold) => coord!.failPending(id, 'overlord-sandbox-unmet', at, true, hold),
+          laneOf: async (id) => { asked.push(id); return 'lane-b'; } });
+        expect(await rerun(NEW, 1, port)).toMatchObject({ act: 'fail-pending' });
+        expect(asked).toStrictEqual([NEW]);
+        expect(view()).toMatchObject({ kind: 'designated', sessionId: OLD, row: { pending: null } });
+        expect(coord!.accountHolds()).toStrictEqual({ ok: true, lanes: ['lane-b'] });
+        expect(drained).toStrictEqual([[NEW, false]]);
+      });
+
+      it('an account the port cannot name holds nothing: a read that throws or answers null, or no read wired; the failure and the stop go on', async () => {
+        for (const laneOf of [async (): Promise<string | null> => null, async (): Promise<string | null> => { throw new Error('registry'); }, undefined]) {
+          if (app !== undefined) { await app.close(); coord?.db.close(); home = mkTmp('ccrc-loads-route-'); }
+          drained = [];
+          app = await openLost(); pendRebind();
+          await startNew(app);
+          await store(app, { ...newLoads(), loaded: { ...(newLoads().loaded as Record<string, unknown>), hooks: [e.hookSha256, 'd'.repeat(64)] } }, NEW);
+          const port = livePort({ failPending: (id, at, hold) => coord!.failPending(id, 'overlord-sandbox-unmet', at, true, hold),
+            ...(laneOf === undefined ? {} : { laneOf }) });
+          expect(await rerun(NEW, 1, port)).toMatchObject({ act: 'fail-pending' });
+          expect(coord!.accountHolds()).toStrictEqual({ ok: true, lanes: [] });
+          expect(drained).toStrictEqual([[NEW, false]]);
+        }
       });
 
       it('a late held report from a rebind body whose attempt Restart already ended (deadline-passed) meets the settle\'s none: the old binding stands, nothing goes live', async () => {

@@ -2,8 +2,9 @@
 // `docs/superpowers/plans/2026-11-14-overlord-w1/w1-designation.md` Tasks 1, 2, 5, 8 and 9): L0, one concern (the index's
 // large-file question 1, slug `wire-types-in-sibling-modules`). The view of the one row, the model class words, the
 // attempt outcomes, the capability words Start the Overlord requires, the set-side placement answer, the deadline sweep's
-// fact and action (designation B) and the doors' body parsers (designate, rebind, and the two Settings doors). The account set is `poolset.ts#PoolSet`, reused. It imports types only, and nothing from
-// `node:*`, because the PWA bundles this file.
+// fact and action (designation B) and the doors' body parsers (designate, rebind, and the two Settings doors). The account set is `poolset.ts#PoolSet`, reused. It imports types and one L0 shape check
+// (`isSessionIdShape`, for rebind's pair), and nothing from `node:*`, because the PWA bundles this file.
+import { isSessionIdShape } from './api.js';
 import type { PoolSet } from './poolset.js';
 import type { ActorWire } from './overlord-identity.js';
 
@@ -134,12 +135,24 @@ export function parseAccountSetBody(v: unknown): PoolSet | null {
   return parseAccountPools(v['accountPools']);
 }
 
-/** Rebind's body (designation B, plan Task 6): `{}` or `{force: boolean}`, and no other key; an absent body is `{}`. Anything
- *  else is `null` (400). `force` lifts only the alive step, and stops the old body after every other check has passed. */
-export function parseRebindBody(v: unknown): { readonly force: boolean } | null {
+/** The binding a rebind's caller saw: the bound session and the designation's term (home C, slug
+ *  `forced-rebind-names-the-session-it-stops`). The door compares it with its own read and never acts on it. */
+export interface RebindSaw { readonly sessionId: string; readonly term: number }
+
+/** Rebind's body (designation B, plan Task 6): `{}`, `{force: boolean}`, or `{force, sessionId, term}` with both or neither of
+ *  the pair, and no other key; an absent body is `{}`. Anything else is `null` (400), a term that is not a non-negative whole
+ *  number and a session id of no session's shape included. `force` lifts only the alive step, and stops the old body after
+ *  every other check has passed. `saw` is present only when the pair was sent. */
+export function parseRebindBody(v: unknown): { readonly force: boolean; readonly saw?: RebindSaw } | null {
   if (v === undefined || v === null) return { force: false };
   if (!isRecord(v)) return null;
   const keys = Object.keys(v);
   if (keys.length === 0) return { force: false };
-  return keys.length === 1 && typeof v['force'] === 'boolean' ? { force: v['force'] } : null;
+  if (keys.length === 1) return typeof v['force'] === 'boolean' ? { force: v['force'] } : null;
+  if (keys.length !== 3 || typeof v['force'] !== 'boolean') return null;
+  const sessionId = v['sessionId'];
+  const term = v['term'];
+  if (typeof sessionId !== 'string' || !isSessionIdShape(sessionId)) return null;
+  if (typeof term !== 'number' || !Number.isSafeInteger(term) || term < 0) return null;
+  return { force: v['force'], saw: { sessionId, term } };
 }

@@ -29,6 +29,14 @@ const answered = (w: ReadinessWire): void => {
 };
 const ladderWith = (narrowing: unknown): LadderWire =>
   ({ ok: true, operatorRung: 'off', lastChange: { at: NOW, actor: 'operator', narrowing } }) as unknown as LadderWire;
+/** The store's ladder calls, numbered as `read()` numbers them (home C's carried 4d): `ladderRead` is the answer of a call issued
+ *  now, so only one made after a door answered speaks for it. */
+let issued = 0;
+const ladderRead = (value: LadderWire): void => {
+  issued += 1;
+  const n = issued;
+  act(() => useOverlordStore.setState({ ladder: { state: 'answered', at: NOW, value }, ladderSeq: n, ladderIssued: () => issued }));
+};
 
 /** A stand-in for the place's one `useStepUp`: runs the act and counts the asks, so "no step-up" is a number. */
 const fakeStepUp = (): StepUp => ({
@@ -47,7 +55,8 @@ const takingEffect = (): string | null => document.querySelector('[data-taking-e
 
 beforeEach(() => {
   vi.setSystemTime(new Date(NOW));
-  useOverlordStore.setState({ readiness: { state: 'loading' }, ladder: { state: 'loading' } });
+  issued = 0;
+  useOverlordStore.setState({ readiness: { state: 'loading' }, ladder: { state: 'loading' }, ladderSeq: 0, ladderIssued: () => issued });
 });
 afterEach(() => {
   cleanup();
@@ -167,9 +176,23 @@ describe('Pause', () => {
     expect(pause).toHaveBeenCalledTimes(1);
     expect(stepUp.runAct).not.toHaveBeenCalled();
     // The ladder read the change as still taking effect, for another reason: its sentence rules.
-    act(() => useOverlordStore.setState({ ladder: { state: 'answered', at: NOW, value: ladderWith({ state: 'taking-effect', why: 'not-journalled' }) } }));
+    ladderRead(ladderWith({ state: 'taking-effect', why: 'not-journalled' }));
     expect(takingEffect()).toBe(takingEffectWords['not-journalled']);
-    act(() => useOverlordStore.setState({ ladder: { state: 'answered', at: NOW, value: ladderWith({ state: 'done' }) } }));
+    ladderRead(ladderWith({ state: 'done' }));
+    expect(takingEffect()).toBeNull();
+  });
+
+  it('4d: a read in the same millisecond whose call was issued before Pause answered does not end the line', async () => {
+    answered(wire());
+    vi.spyOn(api, 'overlordPause').mockResolvedValue({ changed: true, rung: 'off', narrowing: TAKING });
+    mount();
+    issued += 1;
+    const inFlight = issued;
+    fireEvent.click(screen.getByRole('button', { name: /^pause/i }));
+    await waitFor(() => expect(takingEffect()).toBe(takingEffectWords['no-witness-yet']));
+    act(() => useOverlordStore.setState({ ladder: { state: 'answered', at: NOW, value: ladderWith({ state: 'done' }) }, ladderSeq: inFlight }));
+    expect(takingEffect()).toBe(takingEffectWords['no-witness-yet']);
+    ladderRead(ladderWith({ state: 'done' }));
     expect(takingEffect()).toBeNull();
   });
 
@@ -180,7 +203,7 @@ describe('Pause', () => {
     mount();
     fireEvent.click(screen.getByRole('button', { name: /^pause/i }));
     await waitFor(() => expect(takingEffect()).toBe(takingEffectWords['no-witness-yet']));
-    act(() => useOverlordStore.setState({ ladder: { state: 'answered', at: NOW + 1_000, value: ladderWith({ state: 'done' }) } }));
+    ladderRead(ladderWith({ state: 'done' }));
     expect(takingEffect()).toBeNull();
   });
 

@@ -12,7 +12,7 @@
 // not started.
 import type { DocsFailureBody } from '../../../shared/docs.js';
 import {
-  DOCS_FETCH_MAX_WAIT_MS, DOCS_LANE_MAX_WAIT_MS, docsBusyBody, fetchAdmit, laneAdmit, laneLarge, lanePrepare, laneOverflow, laneStep,
+  DOCS_FETCH_MAX_WAIT_MS, DOCS_LANE_MAX_WAIT_MS, docsBusyBody, fetchAdmit, laneAdmit, laneArtifactRead, laneLarge, laneNext, lanePrepare, laneOverflow, laneStep,
   type DocsJob, type DocsLaneName, type LaneLoad,
 } from './policy.js';
 
@@ -23,11 +23,15 @@ import {
  */
 export type DocsLaneRun<T> = { kind: 'ran'; value: T } | { kind: 'busy'; body: DocsFailureBody } | { kind: 'abandoned' };
 
-/** One node's read lane (section 6.3). `load()` is a fresh snapshot: the three counters `laneAdmit` reads, plus
- *  how many jobs wait in the FIFO. `close()` answers every queued job `busy` and every later `run` too. */
+/** One node's read lane (section 6.3). `load()` is a fresh snapshot: the counters `laneAdmit` reads, plus how many
+ *  jobs wait in the console FIFO (`queued`). The artifact fields (X5 A3.3), `artifact` (artifact READ jobs running: at most
+ *  one; an artifact prepare is counted in `prepares` instead, D-9146) and `artifactQueued` (jobs waiting in the artifact
+ *  FIFO), are present only while one artifact read runs or any artifact job waits, so a
+ *  lane that never saw an artifact job answers exactly the fields it always did. `close()` answers every queued job of
+ *  both FIFOs `busy` and every later `run` too. */
 export interface DocsReadLane {
   run<T>(job: DocsJob, signal: AbortSignal, exec: () => Promise<T>): Promise<DocsLaneRun<T>>;
-  load(): Readonly<LaneLoad & { queued: number }>;
+  load(): Readonly<LaneLoad & { queued: number; artifactQueued?: number }>;
   close(): void;
 }
 
@@ -70,15 +74,28 @@ interface ReadWaiter {
 }
 
 /**
- * A read lane (section 6.3). A job starts at once only when the FIFO is empty (or holds only prepares `laneStep`
- * skips) and `laneAdmit` admits it; else it queues (or is `busy` when `laneOverflow` says `DOCS_LANE_QUEUE` jobs already
- * wait). The pump walks the FIFO in order and stops at the first job `laneStep` stops at, so a large job cannot starve;
- * the one job it passes is a prepare held back only because a prepare already runs (X2 P1). Every settle of a running exec releases its share exactly once (in `finally`) and pumps; so does a
- * queued job leaving, since the job behind it may now admit.
+ * A read lane (section 6.3). Two FIFOs (X5 A3.3): the console's, which is the lane as it always was, and the artifact
+ * content door's, for jobs whose `source` is `artifact`. A console job starts at once only when the console FIFO is
+ * empty (or holds only prepares `laneStep` skips) and `laneAdmit` admits it; else it queues (or is `busy` when
+ * `laneOverflow` says `DOCS_LANE_QUEUE` jobs already wait). The pump walks the console FIFO in order and stops at the
+ * first job `laneStep` stops at, so a large job cannot starve; the one job it passes is a prepare held back only because
+ * a prepare already runs (X2 P1). Once the console walk is done, the pump asks `laneNext` which FIFO's head starts, and
+ * while it answers `artifact` starts the artifact head. `laneNext` is asked with the console FIFO's FIRST job (the
+ * console walk's skip does not apply to it) and the artifact FIFO's first job: the artifact head is considered only
+ * when the console FIFO is empty, and only that head is. So a console prepare that waits (held back because a prepare
+ * already runs, a job the console walk skips) holds EVERY artifact job behind it until that prepare starts or leaves
+ * its FIFO (its own wait ends, or its client goes), and an artifact job at the head that `laneAdmit` refuses holds the
+ * artifact jobs behind it the same way. An artifact job starts at once only when both FIFOs
+ * are empty and `laneNext` says so; else it queues (or is `busy` when `laneOverflow` says `DOCS_LANE_ARTIFACT_QUEUE`
+ * artifact jobs already wait, a count that never touches the console's bound), with the same wait, abort and refuse
+ * paths as a console job. At most one artifact READ job runs; an artifact prepare is held by the prepare clause, not by that
+ * share, so a read may run beside it (D-9146). Every settle of a running exec releases its share exactly once (in `finally`) and pumps; so
+ * does a queued job leaving, since the job behind it may now admit.
  */
 export function docsReadLane(): DocsReadLane {
   const load: LaneLoad = { execs: 0, bytes: 0, large: 0, prepares: 0 };
   const queue: ReadWaiter[] = [];
+  const artifactQueue: ReadWaiter[] = [];
   let closed = false;
 
   /** Detach a waiter from its timer and its signal (on admission, expiry, abandonment or close). */
@@ -87,26 +104,34 @@ export function docsReadLane(): DocsReadLane {
     w.signal.removeEventListener('abort', w.onAbort);
   };
 
-  // In FIFO order; a prepare `laneStep` skips (one already runs) keeps its place and the pump considers the job behind
-  // it; any other refusal stops the pump, as before (X2 P1).
+  // The console FIFO first, in order; a prepare `laneStep` skips (one already runs) keeps its place and the pump
+  // considers the job behind it; any other refusal ends the console walk, as before (X2 P1). Then, while `laneNext`
+  // answers `artifact`, the artifact head starts: it answers so only when no console job waits (X5 A3.3). A started
+  // job counts itself into `load` before `begin` returns, so each pass sees the load it left.
   const pump = (): void => {
     for (let i = 0; i < queue.length;) {
       const step = laneStep(load, queue[i]!.job);
-      if (step === 'stop') return;
+      if (step === 'stop') break;
       if (step === 'skip') { i += 1; continue; }
       const [w] = queue.splice(i, 1) as [ReadWaiter];
       detach(w);
       w.begin();
     }
+    while (laneNext(load, queue[0]?.job ?? null, artifactQueue[0]?.job ?? null) === 'artifact') {
+      const w = artifactQueue.shift()!;
+      detach(w);
+      w.begin();
+    }
   };
-  /** Whether every queued job is a prepare the pump would skip now, so an arriving job may start before them. */
+  /** Whether every queued console job is a prepare the pump would skip now, so an arriving job may start before them. */
   const onlySkipped = (): boolean => queue.every((w) => laneStep(load, w.job) === 'skip');
 
-  /** Take a queued job out of the FIFO and answer it `run`; the job behind it may now admit. */
+  /** Take a queued job out of its FIFO and answer it `run`; the job behind it may now admit. */
   const leave = (w: ReadWaiter, run: DocsLaneRun<never>): void => {
-    const i = queue.indexOf(w);
+    const fifo = w.job.source === 'artifact' ? artifactQueue : queue;
+    const i = fifo.indexOf(w);
     if (i < 0) return;
-    queue.splice(i, 1);
+    fifo.splice(i, 1);
     detach(w);
     w.refuse(run);
     pump();
@@ -118,6 +143,7 @@ export function docsReadLane(): DocsReadLane {
     load.bytes -= job.wire;
     if (laneLarge(job)) load.large -= 1;
     if (lanePrepare(job)) load.prepares -= 1;
+    if (laneArtifactRead(job)) load.artifact = (load.artifact ?? 0) - 1;
     pump();
   };
 
@@ -126,6 +152,7 @@ export function docsReadLane(): DocsReadLane {
     load.bytes += job.wire;
     if (laneLarge(job)) load.large += 1;
     if (lanePrepare(job)) load.prepares += 1;
+    if (laneArtifactRead(job)) load.artifact = (load.artifact ?? 0) + 1;
     try {
       return { kind: 'ran', value: await exec() };
     } finally {
@@ -137,8 +164,14 @@ export function docsReadLane(): DocsReadLane {
     run<T>(job: DocsJob, signal: AbortSignal, exec: () => Promise<T>): Promise<DocsLaneRun<T>> {
       if (signal.aborted) return Promise.resolve(ABANDONED);
       if (closed) return Promise.resolve(busy('read'));
-      if (onlySkipped() && laneAdmit(load, job)) return running(job, exec);
-      if (laneOverflow('read', queue.length + 1)) return Promise.resolve(busy('read'));
+      const artifact = job.source === 'artifact';
+      if (artifact) {
+        if (queue.length === 0 && artifactQueue.length === 0 && laneNext(load, null, job) === 'artifact') return running(job, exec);
+        if (laneOverflow('read', artifactQueue.length + 1, 'artifact')) return Promise.resolve(busy('read'));
+      } else {
+        if (onlySkipped() && laneAdmit(load, job)) return running(job, exec);
+        if (laneOverflow('read', queue.length + 1)) return Promise.resolve(busy('read'));
+      }
       return new Promise<DocsLaneRun<T>>((resolve) => {
         const w: ReadWaiter = {
           job, signal, timer: undefined,
@@ -149,13 +182,19 @@ export function docsReadLane(): DocsReadLane {
         w.timer = setTimeout(() => leave(w, busy('read')), DOCS_LANE_MAX_WAIT_MS);
         w.timer.unref();
         signal.addEventListener('abort', w.onAbort, { once: true });
-        queue.push(w);
+        (artifact ? artifactQueue : queue).push(w);
       });
     },
-    load: () => ({ ...load, queued: queue.length }),
+    load: () => {
+      const { artifact, ...base } = load;
+      const artifactRunning = artifact ?? 0;
+      return artifactRunning > 0 || artifactQueue.length > 0
+        ? { ...base, queued: queue.length, artifact: artifactRunning, artifactQueued: artifactQueue.length }
+        : { ...base, queued: queue.length };
+    },
     close: () => {
       closed = true;
-      for (const w of queue.splice(0)) {
+      for (const w of [...queue.splice(0), ...artifactQueue.splice(0)]) {
         detach(w);
         w.refuse(busy('read'));
       }

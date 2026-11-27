@@ -3,7 +3,8 @@
 // against the real module, and `mutation-floors.test.ts` runs them against each textual mutant (D-8217's every-run floors).
 // A later pull request of the plan adds its mappers' cases and sets here (PR C: the designation's readings, the class a mint
 // stamps, and the probes-failed-twice decider; PR B: `notLocalOf`; PR D: the account readings, in `renewalAccountReadingSets.ts`;
-// PR H: the launch profile's hold, the list's hold filter and the Overlord's digest reading, in `renewalHoldReadingSets.ts`).
+// PR H: the launch profile's hold, the list's hold filter and the Overlord's digest reading, in `renewalHoldReadingSets.ts`;
+// PR G: the place hidden, in `renewalPlaceReadingSets.ts`).
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
@@ -14,6 +15,7 @@ import type { MutantSet, SuiteCase } from './mutate.js';
 import { RENEWAL_DOOR_READING_SETS } from './renewalReadingDoorSets.js';
 import { RENEWAL_ACCOUNT_READING_SETS } from './renewalAccountReadingSets.js';
 import { RENEWAL_HOLD_READING_SETS } from './renewalHoldReadingSets.js';
+import { RENEWAL_PLACE_READING_SETS } from './renewalPlaceReadingSets.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const MODULE = path.join(ROOT, 'server/src/continuity/renewalReadings.ts');
@@ -553,6 +555,7 @@ export const RENEWAL_READING_MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...RENEWAL_DOOR_READING_SETS,   // PR E: the door process's mappers, cases in their own file
   ...RENEWAL_ACCOUNT_READING_SETS,   // PR D: the account readings, cases in their own file
   ...RENEWAL_HOLD_READING_SETS,   // PR H: the launch profile's hold and digest reading, cases in their own file
+  ...RENEWAL_PLACE_READING_SETS,   // PR G: the place hidden, cases in their own file
   'server/src/continuity/renewalReadings.ts#fittedCeilingOf': FITTED_CEILING_SET as MutantSet<never>,
   'server/src/continuity/renewalReadings.ts#backstopInstantBefore': BACKSTOP_INSTANT_SET as MutantSet<never>,
   'server/src/continuity/renewalReadings.ts#backstopDueOf': BACKSTOP_DUE_SET as MutantSet<never>,

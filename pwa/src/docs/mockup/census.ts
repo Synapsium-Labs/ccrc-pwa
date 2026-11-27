@@ -73,6 +73,27 @@ export function originsOf(rows: readonly MockupAssetRow[], scriptOrigins: readon
   return { offered, refused };
 }
 
+/** Whether the page cannot run because what the in-walls loader must give it does not fit (X2 P6.2, spec 4.8: "a page over
+ *  the budget shows Download and Source with the reason"): a module import, an import map entry or a fetched sibling kept
+ *  out by the asset budget or the page's size cap. An image, a stylesheet or a script the page names as an element's URL
+ *  keeps the answer it had before this loader: the page frames with that row not loaded. */
+export function loaderOverBudget(rows: readonly MockupAssetRow[]): boolean {
+  return rows.some((r) => r.verdict.v === 'skipped' && r.verdict.why === 'over-budget' && (r.ref.spec !== undefined || r.ref.kind === 'fetch'));
+}
+
+/** Why a page with scripts run cannot run as planned, or null (X2 P6.2; fix round 1 of review 4066, A1). `budget`: the plan
+ *  kept a module import, a map entry or a fetched sibling out by the asset budget (`loaderOverBudget` over the loaded rows).
+ *  `page`: the build's cut kept out a script, a module or a fetched sibling the plan had loaded, because the page with it
+ *  written in would pass `MOCKUP_MAX_SRCDOC_CHARS` (a module both a page `src` and imported is written twice, and the shim's
+ *  own text is not in the cap's derivation). Either way no page frames with a script silently not loaded. `built` is the
+ *  build's plan of `loaded`, row for row (`buildMockupSrcdoc` changes verdicts only). */
+export function loaderUnfit(loaded: readonly MockupAssetRow[], built: readonly MockupAssetRow[]): 'budget' | 'page' | null {
+  if (loaderOverBudget(loaded)) return 'budget';
+  const cut = built.some((r, i) => r.verdict.v === 'skipped' && r.verdict.why === 'over-budget' && loaded[i]?.verdict.v === 'inline'
+    && (r.ref.kind === 'module' || r.ref.kind === 'script' || r.ref.kind === 'fetch'));
+  return cut ? 'page' : null;
+}
+
 /** One census row, ready to draw. `state` is what the fold's totals count; `href` is the in-app route of an in-section doc
  *  target (never of a missing one). */
 export interface CensusRow {

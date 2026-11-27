@@ -7,6 +7,10 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import type { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import { copyFileSync, mkdirSync } from 'node:fs';
+import { callsIn, sourceOfSymbol, symbolOf } from './scan/symbols.js';
+
+/** The Overlord's routes, read through the symbol scanner (never a literal source pin, advance-switches' rule). */
+const ROUTES = 'server/src/coord/overlordRoutes.ts';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import {
@@ -57,15 +61,19 @@ const HEALTHY = Object.fromEntries(
 // ── the fakes (the designate test's, with `ensure` for Restart) ──────────────────────────────────────────────────────
 
 type GateMode = 'pass' | 'auth-off' | 'step-up-required';
-interface FakeGate extends AccountGate { asks: AccountGateAsk[]; mode: GateMode }
+/** `staleStepUp`: the session is signed in but its step-up is not fresh, so only an ask WITH a step-up is refused, as the real
+ *  gate does (home C: what the operator would be asked to confirm). */
+interface FakeGate extends AccountGate { asks: AccountGateAsk[]; mode: GateMode; staleStepUp: boolean }
 function fakeGate(): FakeGate {
   const g = ((_req, reply, ask) => {
     g.asks.push(ask);
     if (g.mode !== 'pass') { void refuseRoute(reply, g.mode); return { pass: false }; }
+    if (g.staleStepUp && ask.stepUp === true) { void refuseRoute(reply, 'step-up-required'); return { pass: false }; }
     return { pass: true, actor: gateActorOf('device-a', 'abcdef0123456789'), sessionIdHash: 'abcdef0123456789' };
   }) as FakeGate;
   g.asks = [];
   g.mode = 'pass';
+  g.staleStepUp = false;
   return g;
 }
 
@@ -384,6 +392,125 @@ describe('POST /api/overlord/rebind: the refusals, in the plan\'s order', () => 
     expect(res.json()).toMatchObject({ error: 'unavailable', detail: 'the designation row could not be read' });
     expect(r.body.ops()).toEqual([]);
     expect(snapshot(r)).toEqual(before);
+  });
+});
+
+// Home C (slug forced-rebind-names-the-session-it-stops; ruled call 1675 with four holds): a forced rebind names the binding its
+// caller saw, the door compares it with its own read, and refuses `stale-designation` when it moved.
+describe('POST /api/overlord/rebind: the pair the caller saw', () => {
+  const termOf = (r: Rig): number => view(r)!.term;
+
+  it('hold 4: an equal pair has exactly the effects of today\'s forced rebind, the stop taking the session the door read', async () => {
+    const r = await rig();
+    r.facts.old = 'alive';
+    const res = await rebind(r, { force: true, sessionId: r.oldId, term: termOf(r) });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, state: 'pending', kind: 'rebind', previous: r.oldId, forced: true });
+    expect(r.body.ops()).toEqual(['stop', 'ensureProject', 'create', 'writeSet', 'keepAwake-on']);
+    expect(r.body.idsOf('stop')).toEqual([r.oldId]);
+    // The plain gate first (the compare), then the step-up gate, as a call with no pair asks it.
+    expect(r.gate.asks).toEqual([{ cap: null }, { cap: null, stepUp: true }]);
+  });
+
+  it.each([
+    ['another session', (r: Rig) => ({ sessionId: 'overlord-other-body', term: termOf(r) }), (r: Rig) => `${r.oldId} is bound, at term ${termOf(r)}`],
+    ['another term', (r: Rig) => ({ sessionId: r.oldId, term: termOf(r) + 1 }), (r: Rig) => `${r.oldId} is bound, at term ${termOf(r)}`],
+  ])('a moved binding (%s) is refused stale-designation, stops nothing, creates nothing, writes nothing', async (_n, saw, detail) => {
+    const r = await rig();
+    r.facts.old = 'alive';
+    const before = snapshot(r);
+    const res = await rebind(r, { force: true, ...saw(r) });
+    expect(res.statusCode).toBe(REFUSAL_STATUS['stale-designation']);
+    // Hold 3: the detail is what the designation read serves this caller, the session bound now and its term, and nothing more.
+    expect(res.json()).toEqual({ ok: false, error: 'stale-designation', detail: detail(r) });
+    expect(r.body.log).toEqual([]);
+    expect(r.facts.oldAsked).toEqual([]);
+    expect(snapshot(r)).toEqual(before);
+    expect(r.body.alive.has(r.oldId)).toBe(true);
+  });
+
+  it('nothing bound is a move too, said as such', async () => {
+    const r = await rig({ bound: false });
+    const res = await rebind(r, { force: true, sessionId: 'overlord-quiet-otter', term: 1 });
+    expect(res.json()).toEqual({ ok: false, error: 'stale-designation', detail: 'nothing is bound' });
+    expect(r.body.log).toEqual([]);
+  });
+
+  it('hold 2: a moved binding is refused before the step-up, so the operator is never asked to confirm an act that is then refused', async () => {
+    const r = await rig();
+    r.gate.staleStepUp = true;
+    const res = await rebind(r, { force: true, sessionId: 'overlord-other-body', term: termOf(r) });
+    expect(res.json()).toMatchObject({ error: 'stale-designation' });
+    expect(r.gate.asks).toEqual([{ cap: null }]);
+    expect(r.serialRuns.n).toBe(0);
+    // An equal pair with the step-up not fresh is asked for it, as today.
+    const same = await rebind(r, { force: true, sessionId: r.oldId, term: termOf(r) });
+    expect(same.json()).toMatchObject({ error: 'step-up-required' });
+    // The equal pair's asks in this stale step-up scenario (review 4056 F12, worded by review 4065 F3): after the moved pair's one
+    // plain ask, the equal pair asks the plain gate and then the step-up. This rejects no order the lines above accepted; it adds
+    // what the equal pair asks.
+    expect(r.gate.asks).toEqual([{ cap: null }, { cap: null }, { cap: null, stepUp: true }]);
+    expect(r.body.log).toEqual([]);
+  });
+
+  it('a signed-out caller is refused by the plain gate before any read, with a pair as without one', async () => {
+    const r = await rig();
+    r.gate.mode = 'auth-off';
+    const res = await rebind(r, { force: true, sessionId: 'overlord-other-body', term: 9 });
+    expect(res.json()).toMatchObject({ error: 'auth-off' });
+    expect(r.gate.asks).toEqual([{ cap: null }]);
+  });
+
+  it('hold 1: the pair with a designation that cannot be read answers what a failed read answers today, never the new word', async () => {
+    const r = await rig();
+    r.db.exec("UPDATE overlord_designation SET accountPools = 'nope'");
+    const before = snapshot(r);
+    const res = await rebind(r, { force: true, sessionId: 'overlord-other-body', term: 1 });
+    expect(res.statusCode).toBe(REFUSAL_STATUS.unavailable);
+    expect(res.json()).toMatchObject({ error: 'unavailable', detail: 'the designation row could not be read' });
+    expect(snapshot(r)).toEqual(before);
+  });
+
+  it('the binding that moves while the call waits on the serialiser is caught there, before any stop', async () => {
+    const r = await rig();
+    let release!: () => void;
+    r.body.gate = new Promise<void>((res) => { release = res; });
+    const first = rebind(r);
+    for (let i = 0; i < 400 && r.body.count('create') === 0; i++) await new Promise((res) => setTimeout(res, 5));
+    const saw = { sessionId: r.oldId, term: termOf(r) };
+    const second = rebind(r, { force: true, ...saw });
+    await new Promise((res) => setTimeout(res, 20));
+    // The binding moves to a new term while the forced call waits: its compare on the serialiser sees it.
+    r.db.exec('UPDATE overlord_designation SET term = term + 1');
+    release();
+    const [, b] = await Promise.all([first, second]);
+    expect(b.json()).toEqual({ ok: false, error: 'stale-designation', detail: `${r.oldId} is bound, at term ${saw.term + 1}` });
+    expect(r.body.idsOf('stop')).toEqual([]);
+  });
+
+  it('call 1685: the pair is the only cause of stale-designation at this door; with no pair the same move answers today\'s word', async () => {
+    const r = await rig();
+    let release!: () => void;
+    r.body.gate = new Promise<void>((res) => { release = res; });
+    const first = rebind(r);
+    for (let i = 0; i < 400 && r.body.count('create') === 0; i++) await new Promise((res) => setTimeout(res, 5));
+    const second = rebind(r, { force: true });
+    await new Promise((res) => setTimeout(res, 20));
+    r.db.exec('UPDATE overlord_designation SET term = term + 1');
+    release();
+    const [, b] = await Promise.all([first, second]);
+    expect(b.json()).toMatchObject({ ok: false, error: 'overlord-attempt-pending' });
+    // Every `stale-designation` the Overlord's routes answer is the pair's compare: two calls, each with the compare's detail.
+    const refusals = callsIn(symbolOf(ROUTES, 'registerOverlordRoutes'))
+      .filter((c) => c.name === 'refuseRoute' && c.args[1]?.kind === 'string' && c.args[1].text === 'stale-designation');
+    expect(refusals.map((c) => c.args[2]?.text)).toEqual(['{ detail: moved }', '{ detail: moved }']);
+  });
+
+  it('hold 4: past the compare, `rebind()` reads nothing of the pair; it acts on its own read', () => {
+    const uses = sourceOfSymbol(ROUTES, 'registerOverlordRoutes.rebind').split('\n').filter((l) => /\bsaw\b/.test(l));
+    expect(uses).toHaveLength(2);   // the parameter, and the compare
+    expect(uses[0]).toMatch(/saw: RebindSaw \| undefined/);
+    expect(uses[1]).toMatch(/^\s*const moved = saw === undefined \? null : rebindMovedDetail\(read, saw\);\s*$/);
   });
 });
 

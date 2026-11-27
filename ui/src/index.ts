@@ -16,7 +16,9 @@ export { LimitBar, limitBand, fillVariants, TRACK as LIMIT_TRACK, type LimitBand
 // and the pickers' gauges all draw through it.
 export { Meter, type MeterProps } from './primitives/meter';
 export { Skeleton, type SkeletonProps } from './primitives/skeleton';
-export { Sheet, type SheetProps } from './primitives/sheet';
+export { Sheet, SheetPortalContext, type SheetProps } from './primitives/sheet';
+// Reader mode's hiding of the console as the page's own, which no closing modal lifts (X6 XR1.2).
+export { hideAsPage, releaseAsPage, type PageHiding } from './lib/modal-layers';
 export { CloseButton, type CloseButtonProps } from './primitives/close-button';
 // The popover (D-5934): Radix's, on the layers the Sheet already runs on.
 export { Popover, PopoverTrigger, PopoverClose, PopoverContent, type PopoverContentProps } from './primitives/popover';

@@ -117,8 +117,8 @@ describe('artifact capabilities end with the console session that minted them (X
     const second = await signIn(app, PASSPHRASE);
     expect((await listWith(app, second)).live, 'the first session ended, so its capability did').toEqual([]);
 
-    // The dead session's own cookie reaches no mint: the account gate refuses it before the tree read, so this refusal never
-    // reaches the store. The binding itself is proved by the empty list above, not by this 401.
+    // The dead session's own cookie reaches no mint: the session gate (`server/src/auth/gate.ts`) refuses it before the route
+    // runs, so this refusal never reaches the store. The binding itself is proved by the empty list above, not by this 401.
     const dead = await mintWith(app, first, origin);
     expect(dead.statusCode).toBe(401);
     expect(dead.json()).toMatchObject({ ok: false, error: 'unauthenticated' });

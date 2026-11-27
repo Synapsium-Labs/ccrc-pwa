@@ -9,6 +9,7 @@ import { copyFileSync, mkdirSync } from 'node:fs';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import * as m from '../src/coord/overlordDesignation.js';
+import { parseRebindBody } from '../../shared/overlord-designation.js';
 import {
   designationRead, failPending, goLive, rebindPending, retire, SequenceStampRefused, type AuthorityAppender,
 } from '../src/coord/overlordDesignationStore.js';
@@ -95,6 +96,44 @@ const gens = (db: DatabaseSync): unknown[] =>
 
 describe('rebindVerdict', () => {
   for (const [name, fn] of Object.entries(rebindVerdictCases(m))) it(name, fn);
+});
+
+// Home C (slug forced-rebind-names-the-session-it-stops, ruled call 1675): the pair a forced rebind names, parsed and compared.
+describe('the rebind pair: parseRebindBody and rebindMovedDetail', () => {
+  const row = { bound: { sessionId: A, generation: GEN_A }, pending: null, term: 3, designatedTerm: 1, model: 'opus' as const,
+    accountPools: SET_X, pastIds: [], actor: 'operator', lastAttempt: null, stopsOwed: [] };
+  const designated = (sessionId = A, term = 3) => ({ kind: 'designated' as const, sessionId, term, row: { ...row, term } });
+
+  it('takes the pair only whole, with a session id of a session\'s shape and a non-negative whole term; anything else is a 400', () => {
+    expect(parseRebindBody({ force: true, sessionId: A, term: 3 })).toEqual({ force: true, saw: { sessionId: A, term: 3 } });
+    expect(parseRebindBody({ force: true })).toEqual({ force: true });
+    expect(parseRebindBody({})).toEqual({ force: false });
+    expect(parseRebindBody(undefined)).toEqual({ force: false });
+    for (const bad of [
+      { force: true, sessionId: A }, { force: true, term: 3 }, { sessionId: A, term: 3 }, { force: true, sessionId: A, term: -1 },
+      { force: true, sessionId: A, term: 1.5 }, { force: true, sessionId: A, term: '3' }, { force: true, sessionId: 'a b', term: 3 },
+      { force: true, sessionId: '', term: 3 }, { force: true, sessionId: 7, term: 3 }, { force: true, sessionId: A, term: 3, extra: 1 },
+      { force: 'yes', sessionId: A, term: 3 },
+    ]) expect(parseRebindBody(bad), JSON.stringify(bad)).toBeNull();
+  });
+
+  it('a binding that still stands answers null: the same session at the same term', () => {
+    expect(m.rebindMovedDetail(designated(), { sessionId: A, term: 3 })).toBeNull();
+  });
+
+  it('another session or another term moved it, and the detail names only what is bound now and its term', () => {
+    expect(m.rebindMovedDetail(designated(B, 4), { sessionId: A, term: 3 })).toBe(`${B} is bound, at term 4`);
+    expect(m.rebindMovedDetail(designated(A, 4), { sessionId: A, term: 3 })).toBe(`${A} is bound, at term 4`);
+    expect(m.rebindMovedDetail(designated(B, 3), { sessionId: A, term: 3 })).toBe(`${B} is bound, at term 3`);
+  });
+
+  it('nothing bound moved it too, and says so', () => {
+    expect(m.rebindMovedDetail({ kind: 'not-designated', row: null }, { sessionId: A, term: 3 })).toBe('nothing is bound');
+  });
+
+  it('hold 1: a read that failed is never "moved": the door answers it as it does today', () => {
+    expect(m.rebindMovedDetail({ kind: 'unmeasured', why: 'the row could not be read' }, { sessionId: A, term: 3 })).toBeNull();
+  });
 });
 
 describe('rebindPending', () => {

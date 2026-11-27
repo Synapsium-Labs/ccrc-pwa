@@ -10,7 +10,8 @@ import { declValue, effectiveValue, ruleIn, selectorsOf, stripComments } from '.
 
 const docsCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'docs', 'docs.css'), 'utf8');
 const SCREEN = '.docs-screen:has(> .docs-compact)';
-const LEAF = `${SCREEN} > .docs-leaf:has(> .docs-reader)`;
+// The reading container (reader mode, X6 XR1.2) sits between the screen and the Docs body in every view.
+const LEAF = `${SCREEN} > .docs-reading > .docs-leaf:has(> .docs-reader)`;
 
 describe('the compact head in docs.css (the phone-header plan, refinements (d), (e), (f), (i), (k))', () => {
   it('the screen gives the row the top: only the safe-area inset above it (0 outside an installed iOS app) and a 4 px gap under it; its sides and bottom as before', () => {

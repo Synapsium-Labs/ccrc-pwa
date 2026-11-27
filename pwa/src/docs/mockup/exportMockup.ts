@@ -559,7 +559,8 @@ export function mockupDiagramCount(doc: Document): number {
 export function buildMockupSnapshot(doc: Document, assets: MockupAssetResult): MockupSnapshot {
   const clone = doc.cloneNode(true) as Document;
   const { section, path } = assets.plan.context.pin;
-  const { omitted, why } = inlineAssets(extractMockupRefs(clone, `${section}/${path}`), assets);
+  // The plan's own extraction (D-9152): a page whose import map the plan refused is extracted with it refused, so the keys agree.
+  const { omitted, why } = inlineAssets(extractMockupRefs(clone, `${section}/${path}`, { refuseMap: assets.plan.importMapRefused === true }), assets);
   markMissingImages(clone, why);
   dropInertElements(clone);
   const taken = takeLinks(clone);

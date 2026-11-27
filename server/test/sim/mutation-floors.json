@@ -295,6 +295,7 @@
   "server/src/continuity/renewalReadings.ts#holdOfStart": 1,
   "server/src/continuity/renewalReadings.ts#holdsAppliedOf": 1,
   "server/src/continuity/renewalReadings.ts#overlordInstallBehindOf": 1,
+  "server/src/continuity/renewalReadings.ts#placeHiddenOf": 1,
   "shared/renewal-readings.ts#heldOutOfList": 1,
   "server/src/coord/overlordLadder.ts#effectiveRung": 1,
   "server/src/coord/overlordLadder.ts#highestHeldRung": 1,

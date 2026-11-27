@@ -7,6 +7,8 @@ import { AUTO, SKINS, SYSTEM, THEMES } from '@ccrc/ui';
 import type { FleetSession, RunSummary } from '../../../shared/api';
 import { fleetTree } from '../fleet/fleetTree';
 import { isRunClosed } from '../fleet/runWords';
+import { readerModeHandle } from '../docs/readerModeHandle';
+import { READER_MODE_KEY, READER_MODE_TEXT } from '../docs/reader/readerModeWords';
 import { matchRoute, placePath, ROUTES, sessionPath } from '../lib/routes';
 import type { Command, CommandContext } from './registry';
 import { sessionEntries } from './sessionEntries';
@@ -24,6 +26,8 @@ const CHORDS: Readonly<Record<string, string>> = { overlord: 'o', fleet: 'f', in
  *  nothing (review 3319 A1), as the inspector's `i` does with no rail placed. */
 const GO_TO_WHEN: Readonly<Record<string, (ctx: CommandContext) => boolean>> = {
   'go-overlord': (ctx) => ctx.overlordShown,
+  // Settings › Overlord (home C): its "Go to" only under the word too, as its index row and its page.
+  'go-settings-overlord': (ctx) => ctx.overlordShown,
 };
 
 /** The top row whose page a path sits under (`/settings` for `/settings/updates`), or null. */
@@ -221,6 +225,25 @@ export function baseCommands(): Command[] {
       group: 'Help',
       keys: ['?'],
       run: (ctx) => ctx.openShortcuts(),
+    },
+    {
+      // Reader mode's key (X6 XR1.5, spec 2026-11-20 3.1 and 3.2), last, so every earlier command keeps its place. The
+      // Docs screen sets a handle while it is mounted and this reads it at the moment of the act. A single key skips `when`
+      // (`useShortcuts`), so the run checks for itself: `r` on any other screen, or on a Docs page that offers nothing and
+      // is not on, does nothing. The `when` is false while the palette is open (the palette never lists it: choosing it
+      // there would start reader mode while the palette's own layer is still leaving) and asks the same handle, so the
+      // sheet lists `r` only where it acts. It asks `available()`, never `offered()`: the sheet is itself a dialog, and
+      // `offered()` is false whenever one is mounted, so the row would vanish from the sheet at its next render. The act
+      // keeps the full test (`run`).
+      id: 'toggle-reader-mode',
+      title: READER_MODE_TEXT.enter,
+      group: 'Docs',
+      keys: [READER_MODE_KEY],
+      when: (ctx) => !ctx.paletteOpen && (readerModeHandle()?.available() === true || readerModeHandle()?.on() === true),
+      run: () => {
+        const handle = readerModeHandle();
+        if (handle !== null && (handle.offered() || handle.on())) handle.toggle();
+      },
     },
   ];
 }

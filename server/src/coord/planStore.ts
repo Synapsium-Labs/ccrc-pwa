@@ -3,6 +3,9 @@
 // work map WM0, D-8715), whose one writer this is too; and a ticket's done time and evidence (`doneAt`, `doneEvidence`, WM1,
 // D-8727), written here and by WM1's back-fill migration alone.
 //
+// Ring L3: an adapter, which reads and writes coord.db through the handle it is handed. Its `node:sqlite` import is a type,
+// so its facts alone read L1, and this line is what holds it in L3 (D-9148, pinned by `outward-edges.test.ts`).
+//
 // It sits beside `store.ts` in the same ring and context (Coordination), in `ledgersStore.ts`'s idiom: every function takes
 // the store's `DatabaseSync` and is synchronous. It holds the handle (`core-vocab.test.ts`'s `HANDLE_HOLDERS`); the plan
 // routes, the hierarchy routes, `PlanSync`, `DriftPass` and `LinearMigration` take the `PlanStorePort` built once in

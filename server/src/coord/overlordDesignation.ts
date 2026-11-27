@@ -7,7 +7,7 @@
 // `pendingDeadlineOf` (Rebind, Restart, and the deadline sweep's one action per pass), and `renewalSetOf` (the write-set step).
 import { DEAD_CAUSES, type BuildAgreement, type DeadCause, type FleetSession } from '../../../shared/api.js';
 import { DESIGNATE_CCD_WORDS, DESIGNATE_SERVER_WORDS } from '../../../shared/overlord-designation.js';
-import type { AttemptAction, DesignationRead, DesignationView, OverlordModelClass, SettleFact } from '../../../shared/overlord-designation.js';
+import type { AttemptAction, DesignationRead, DesignationView, OverlordModelClass, RebindSaw, SettleFact } from '../../../shared/overlord-designation.js';
 import { orgSpread, type OrgSpread } from '../../../shared/accountOrg.js';
 import type { ProjectedHome } from '../../../shared/api.js';
 import { poolSetSpelling } from '../../../shared/poolset.js';
@@ -205,6 +205,17 @@ export function rebindVerdict(f: RebindFacts): RebindVerdict {
       detail: f.old === 'alive' ? 'the bound body is alive' : 'the bound body could not be measured dead or absent' };
   }
   return createSteps({ ...f, model: row.model, accountPools: row.accountPools });
+}
+
+/** Whether the binding a rebind's caller saw still stands (home C, slug `forced-rebind-names-the-session-it-stops`): `null` when
+ *  it does, and for a read that failed, which the door answers as it does today (`unmeasured` stays unmeasured, never
+ *  "moved"); otherwise the detail of what is bound now, or that nothing is. The detail says no more than the designation read
+ *  serves the same caller (the session and its term). The pair is compared here and used nowhere else: the door acts on its own
+ *  read. */
+export function rebindMovedDetail(read: DesignationRead, saw: RebindSaw): string | null {
+  if (read.kind === 'unmeasured') return null;
+  if (read.kind === 'not-designated') return 'nothing is bound';
+  return read.sessionId === saw.sessionId && read.term === saw.term ? null : `${read.sessionId} is bound, at term ${read.term}`;
 }
 
 /** The Overlord's body, from the tick's listing and its assembled session (plan Task 7, shared with readiness). */

@@ -41,11 +41,13 @@ import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { INSTRUMENT, REFINED, SKINS } from '@ccrc/ui';
-import { DOC_SECTION_SLUGS, DOCS_RESPONSE_HEADERS } from '../../shared/docs';
+import { DOC_SECTION_SLUGS, DOCS_RESPONSE_HEADERS, type DocSectionSlug } from '../../shared/docs';
 import { DOCS_HEAD_TEXT, DOCS_TOOL_TEXT } from '../src/docs/docsText';
 import { READER_FALLBACK_NOTE } from '../src/docs/reader/readerText';
+import { READER_MODE_TEXT } from '../src/docs/reader/readerModeWords';
 import { COMMIT_A, COMMIT_B, draftOf, entry, holder, treeOk, treeResponse } from '../test/docsFixtures';
 import { openApp, serveDist, sharedDist, type DistServer, type OpenedApp } from './app';
+import { CONSOLE_PART_MAX, HEAD_MAX, ONE_BAR_TITLE_MAX, TAP } from './docsHeadBudgets';
 import { resolveChrome } from './harness';
 
 const PROJECT = 'demo';
@@ -64,11 +66,7 @@ const LONG_BRANCH = 'ws/a-long-workspace-branch-for-the-phone-header';
  *  holds the directory and nothing else unless the ref is given its own room. */
 const LONG_DIR = '2026-10-27-one-long-directory-name-for-the-row';
 
-/** The option 2 mockup's trimmed figure: the bar and its gap, 48, and the frame's root trimmed to 8 px (prediction 56). */
-const ONE_BAR_TITLE_MAX = 61;
-const CONSOLE_PART_MAX = 48;
-/** The floor every control on the row reaches (`--tap-min`). */
-const TAP = 44;
+// The budgets (ONE_BAR_TITLE_MAX, CONSOLE_PART_MAX, TAP, HEAD_MAX) are `docsHeadBudgets.ts`'s, shared with reader-mode-head.browser.test.ts.
 const PHONE = { width: 412, height: 915 } as const;
 /** Every skin the PWA offers, read from its catalogue: the geometry budgets (AP-7) hold once per skin. */
 const SKIN_IDS = SKINS.map((s) => s.id);
@@ -136,7 +134,7 @@ function draftTree(leaf = NAME): ReturnType<typeof treeOk> {
 
 /** `/api/docs/demo/tree` answers `tree` and `/api/docs/demo/file` the leaf's Markdown; any other `/api/docs` request (a
  *  refresh) answers 204. Routed after `openApp`'s own `/api` route, so this one answers first. */
-async function answerDocs(app: OpenedApp, tree = COMMITTED_TREE, leaf = NAME, contentClass: 'markdown' | 'text' = 'markdown', doc = DOC): Promise<void> {
+async function answerDocs(app: OpenedApp, tree = COMMITTED_TREE, leaf = NAME, contentClass: 'markdown' | 'text' = 'markdown', doc = DOC, section: DocSectionSlug = SECTION): Promise<void> {
   await app.ctx.route((u) => u.pathname.startsWith('/api/docs/'), async (route) => {
     const req = route.request();
     if (req.method() !== 'GET') {
@@ -154,7 +152,7 @@ async function answerDocs(app: OpenedApp, tree = COMMITTED_TREE, leaf = NAME, co
         sha256: TEXT_SHA256, encoding: 'utf8', text: TEXT_BODY, commit: COMMIT_A, blob: TEXT_BLOB, onRef: 'contains',
       }
       : {
-        v: 1, verb: 'docs-show', ok: true, elapsedMs: 3, source: 'committed', section: SECTION, path: leaf, size: Buffer.byteLength(doc, 'utf8'),
+        v: 1, verb: 'docs-show', ok: true, elapsedMs: 3, source: 'committed', section, path: leaf, size: Buffer.byteLength(doc, 'utf8'),
         sha256: BLOB.padEnd(64, '0'), encoding: 'utf8', text: doc, commit: COMMIT_A, blob: BLOB, onRef: 'contains',
       };
     await route.fulfill({ status: 200, headers, body: bodyOf({ ok: true, contentClass, from: 'ccd', show }) });
@@ -171,13 +169,13 @@ interface View {
 
 /** A context at `view` (a touch screen below 900 px, or when `touch` asks; a mouse when `pointer` is `fine`), its
  *  `/api/docs` answering `tree`. */
-async function openView(view: View, tree = COMMITTED_TREE, leaf = NAME, contentClass: 'markdown' | 'text' = 'markdown', doc = DOC): Promise<OpenedApp> {
+async function openView(view: View, tree = COMMITTED_TREE, leaf = NAME, contentClass: 'markdown' | 'text' = 'markdown', doc = DOC, section: DocSectionSlug = SECTION): Promise<OpenedApp> {
   const opened = view.pointer === 'fine' ? Math.max(view.width, 900) : view.width;
   const app = await openApp(browser!, {
     width: opened, skin: view.skin, theme: 'light', touch: view.touch, ...(view.tab === 'docs' ? {} : { tab: 'console' as const }),
   }, { api: {}, fleetFrames: [] });
   await app.page.setViewportSize({ width: view.width, height: view.height });
-  await answerDocs(app, tree, leaf, contentClass, doc);
+  await answerDocs(app, tree, leaf, contentClass, doc, section);
   return app;
 }
 
@@ -185,9 +183,9 @@ async function openView(view: View, tree = COMMITTED_TREE, leaf = NAME, contentC
  *  came up: the figure is about the reader page. One re-open on a fallback, D-7958: the reader's start watchdog (2 s for a
  *  small document) can pass on a loaded runner, so a `fallback` re-navigates the same page once, and says so on the
  *  console; a second `fallback`, a timeout and every other outcome throw as before. */
-async function openLeaf(view: View, tree = COMMITTED_TREE, leaf = NAME, doc = DOC, origin = server!.origin): Promise<OpenedApp> {
-  const app = await openView(view, tree, leaf, 'markdown', doc);
-  const url = `${origin}/docs/${PROJECT}/${SECTION}/${leaf}`;
+async function openLeaf(view: View, tree = COMMITTED_TREE, leaf = NAME, doc = DOC, origin = server!.origin, section: DocSectionSlug = SECTION): Promise<OpenedApp> {
+  const app = await openView(view, tree, leaf, 'markdown', doc, section);
+  const url = `${origin}/docs/${PROJECT}/${section}/${leaf}`;
   const start = async (): Promise<unknown> => {
     await app.page.goto(url, { waitUntil: 'load' });
     const up = await app.page.waitForFunction((note) => {
@@ -275,9 +273,15 @@ async function focusBackSettled(page: Page): Promise<void> {
   await page.waitForFunction(() => document.activeElement?.classList.contains('docs-back') === true, undefined, { timeout: 10_000 });
 }
 
+/** Waits for Reader mode's control in the full head's row (X6 XR1.5). It is drawn once the reader's frame is READY, a moment after
+ *  the leaf shows, and the row's stage and what it folds depend on it, so a case that measures the row waits for it first. */
+async function readerEntryDrawn(page: Page): Promise<void> {
+  await page.waitForSelector('.docs-full .docs-actions .docs-reader-mode', { timeout: 90_000 });
+}
+
 /** Opens the leaf at `view`, runs `check`, asks that the page threw nothing, and closes the context whatever happens. */
-async function at(view: View, check: (app: OpenedApp) => Promise<void>, tree = COMMITTED_TREE, leaf = NAME): Promise<void> {
-  const app = await openLeaf(view, tree, leaf);
+async function at(view: View, check: (app: OpenedApp) => Promise<void>, tree = COMMITTED_TREE, leaf = NAME, section: DocSectionSlug = SECTION): Promise<void> {
+  const app = await openLeaf(view, tree, leaf, DOC, server!.origin, section);
   try {
     await check(app);
     expect(app.errors, 'no page error').toEqual([]);
@@ -533,7 +537,8 @@ describe('a phone draws the one bar above a ready reader (the take-up plan, refi
       console.log(`L11-FIGURE ${skin} 412x915 bar ${JSON.stringify(row)}`);
       expect(row, 'the one bar is drawn').not.toBeNull();
       const r = row!;
-      expect(r.buttons.map((b) => b.name)).toEqual([DOCS_HEAD_TEXT.back, 'title', DOCS_TOOL_TEXT.jump, DOCS_TOOL_TEXT.contents]);
+      // X6 XR1.5 (on purpose): Reader mode is the bar's last control, after Contents.
+      expect(r.buttons.map((b) => b.name)).toEqual([DOCS_HEAD_TEXT.back, 'title', DOCS_TOOL_TEXT.jump, DOCS_TOOL_TEXT.contents, READER_MODE_TEXT.enter]);
       expect(r.buttons[1]?.text, 'the title button holds the document title and the Page details words').toContain(TITLE);
       for (const b of r.buttons) {
         expect(b.w, b.name).toBeGreaterThanOrEqual(TAP);
@@ -936,9 +941,6 @@ describe("option 1's row stays where the reader is not up (refinement (f))", () 
  *  inside the frame) stays until the library take-up moves it into the head row, so the pin is this tree's figure: the
  *  next 10 px step above 310 (departure b-before-take-up). */
 const DESK_TITLE_MAX = 320;
-/** The head itself, from the top of `.docs-head` to the bottom of the truth line, under a mouse at 1280: the row (one tap),
- *  the 4 px gap and the dense line (28 px) is 76. */
-const HEAD_MAX = 80;
 /** The dense line's height under a mouse (`--docs-line-h` inside `@media (pointer: fine)`). */
 const DENSE = 28;
 /** A leaf three directories down, so the row has middle crumbs to give way. */
@@ -951,6 +953,8 @@ interface RowFigure {
   readonly head: Box | null; readonly row: Box | null; readonly truth: Box | null; readonly back: Box | null; readonly here: Box | null;
   readonly commit: Box | null; readonly chip: Box | null; readonly controls: readonly Control[]; readonly truthControls: readonly Control[];
   readonly words: readonly { readonly text: string; readonly shown: boolean; readonly cut: boolean }[];
+  /** Reader mode's own word, apart from `words` (the row's first stage hides those and keeps this one). */
+  readonly readerWords: readonly { readonly text: string; readonly shown: boolean; readonly cut: boolean }[];
   readonly fine: boolean; readonly scrollW: number; readonly innerW: number; readonly folded: boolean; readonly crumbCut: boolean;
   readonly rowW: number;
 }
@@ -976,6 +980,10 @@ async function rowFigure(page: Page): Promise<RowFigure> {
       controls: row === null ? [] : [...row.querySelectorAll('button, a')].filter(shown).map(control),
       truthControls: truth === null ? [] : [...truth.querySelectorAll('button')].filter(shown).map(control),
       words: row === null ? [] : [...row.querySelectorAll('.docs-action-words')].map((w) => ({
+        text: w.textContent ?? '', shown: shown(w), cut: w.scrollWidth > w.clientWidth + 0.5,
+      })),
+      // Reader mode's own word (X6 XR1.5): its span is `.docs-reader-words`, which the row's first stage keeps.
+      readerWords: row === null ? [] : [...row.querySelectorAll('.docs-reader-words')].map((w) => ({
         text: w.textContent ?? '', shown: shown(w), cut: w.scrollWidth > w.clientWidth + 0.5,
       })),
       fine: matchMedia('(pointer: fine)').matches,
@@ -1004,14 +1012,23 @@ describe('the desk head (desk-nav Part B)', () => {
 
   it.each([INSTRUMENT, REFINED])('1280 x 800, %s: the row is one line, and the truth line one dense line holding its chip and commit', async (skin) => {
     await at({ width: 1280, height: 800, skin }, async ({ page }) => {
+      // X6 XR1.5 (on purpose): the row is settled once Reader mode's control is drawn, which is when the frame is ready.
+      await readerEntryDrawn(page);
       const r = await rowFigure(page);
-      console.log(`PHH-FIGURE ${skin} 1280x800 row ${JSON.stringify({ row: r.row, truth: r.truth, controls: r.controls.map((c) => [c.name, c.height]) })}`);
-      expect(r.controls.map((c) => c.name)).toEqual([DOCS_HEAD_TEXT.back, 'Docs', PROJECT, SECTION, DOCS_HEAD_TEXT.github, DOCS_HEAD_TEXT.share, DOCS_HEAD_TEXT.exportPlainView]);
+      console.log(`PHH-FIGURE ${skin} 1280x800 row ${JSON.stringify({ row: r.row, truth: r.truth, controls: r.controls.map((c) => [c.name, c.height]), words: r.words, readerWords: r.readerWords })}`);
+      // X6 XR1.5 (on purpose): Reader mode leads the actions, after the crumbs and before GitHub.
+      expect(r.controls.map((c) => c.name)).toEqual([DOCS_HEAD_TEXT.back, 'Docs', PROJECT, SECTION, READER_MODE_TEXT.enter, DOCS_HEAD_TEXT.github, DOCS_HEAD_TEXT.share, DOCS_HEAD_TEXT.exportPlainView]);
       for (const c of [...r.controls, r.here!]) {
         expect(Math.abs(c.mid - r.back!.mid), `${'name' in c ? c.name : 'the page crumb'} on the row's line`).toBeLessThanOrEqual(1);
       }
       expect(r.row!.height, 'the row is one tap tall').toBeLessThanOrEqual(TAP + 0.5);
-      expect(r.words.every((w) => w.shown && !w.cut), 'every action shows its words').toBe(true);
+      // X6 XR1.5 (on purpose; the coordinator's ruling): Reader mode's own word makes the row's first stage the one this row
+      // stands at, so GitHub, Share and Export show as icons (each keeping its name, measured above, and its tooltip) and
+      // Reader mode keeps its word. Before it, every action showed its words here.
+      expect(r.words.map((w) => [w.text, w.shown, w.cut]), "the neighbours' words are hidden").toEqual([
+        ['GitHub', false, false], ['Share', false, false], [DOCS_HEAD_TEXT.exportPlainView, false, false],
+      ]);
+      expect(r.readerWords.map((w) => [w.text, w.shown, w.cut]), 'Reader mode keeps its word').toEqual([[READER_MODE_TEXT.enter, true, false]]);
       expect(r.truth!.height, 'the dense line').toBeLessThanOrEqual(DENSE + 0.5);
       for (const [what, b] of [['the chip', r.chip], ['the commit', r.commit]] as const) {
         expect(b, what).not.toBeNull();
@@ -1025,8 +1042,9 @@ describe('the desk head (desk-nav Part B)', () => {
 
   it.each(SKIN_IDS)("%s, at 600 the action words give way first (fix round 2): the actions are icons on the crumbs' line, each keeping its name, and the page's name shows", async (skin) => {
     await at({ width: 600, height: 960, skin }, async ({ page }) => {
+      await readerEntryDrawn(page);
       const r = await rowFigure(page);
-      console.log(`PHH-FIGURE ${skin} 600x960 deep-row ${JSON.stringify({ rowW: r.rowW, folded: r.folded, crumbCut: r.crumbCut, words: r.words })}`);
+      console.log(`PHH-FIGURE ${skin} 600x960 deep-row ${JSON.stringify({ rowW: r.rowW, folded: r.folded, crumbCut: r.crumbCut, words: r.words, readerWords: r.readerWords })}`);
       expect(r.words.length).toBe(3);
       expect(r.words.some((w) => w.shown), 'no word shows').toBe(false);
       expect(r.folded, 'the middle crumbs are folded').toBe(true);
@@ -1043,6 +1061,7 @@ describe('the desk head (desk-nav Part B)', () => {
     [1280, 800, false],
   ] as const).map(([w, h, folded]) => [skin, w, h, folded] as const)))('%s, %i x %i: the full head, no sideways scroll; crumbs folded: %s', async (skin, width, height, folded) => {
     await at({ width, height, skin }, async ({ page }) => {
+      await readerEntryDrawn(page);
       const f = await measure(page);
       const r = await rowFigure(page);
       console.log(`PHH-FIGURE ${skin} ${width}x${height} ${JSON.stringify({ ...f, headH: r.truth!.bottom - r.head!.top, fine: r.fine })}`);
@@ -1074,12 +1093,16 @@ describe('the desk head (desk-nav Part B)', () => {
     // No leaf at 600 px or wider has a row under the query's 530 px in either skin, so the head is narrowed here by hand
     // to 500 px: the container query keys on the row's own width, whatever narrows it.
     await at({ width: 1280, height: 800, skin }, async ({ page }) => {
+      await readerEntryDrawn(page);
       await page.evaluate(() => { (document.querySelector('.docs-head.docs-full') as HTMLElement).style.width = '500px'; });
       const r = await rowFigure(page);
-      console.log(`PHH-FIGURE ${skin} 1280x800 narrowed-row ${JSON.stringify({ rowW: r.rowW, words: r.words, controls: r.controls.map((c) => c.name) })}`);
+      console.log(`PHH-FIGURE ${skin} 1280x800 narrowed-row ${JSON.stringify({ rowW: r.rowW, words: r.words, readerWords: r.readerWords, controls: r.controls.map((c) => c.name) })}`);
       expect(r.rowW).toBeLessThan(530);
       expect(r.words.length).toBe(3);
       expect(r.words.some((w) => w.shown), 'no word shows').toBe(false);
+      // X6 XR1.5 (on purpose): the container query hides Reader mode's word at the width where it hid every word before.
+      expect(r.readerWords.length).toBe(1);
+      expect(r.readerWords.some((w) => w.shown), "Reader mode's word is hidden by the query too").toBe(false);
       expect(r.controls.map((c) => c.name)).toEqual(expect.arrayContaining([DOCS_HEAD_TEXT.github, DOCS_HEAD_TEXT.share, DOCS_HEAD_TEXT.exportPlainView]));
     });
   }, 120_000);
@@ -1248,6 +1271,10 @@ describe('the desk head (desk-nav Part B)', () => {
     const app = await openView(view, tree, DEEP);
     await app.page.goto(`${server!.origin}/docs/${PROJECT}/${SECTION}/${DEEP}?ref=${ref}`, { waitUntil: 'load' });
     await app.page.waitForFunction(() => document.querySelector('.docs-full .docs-export')?.getAttribute('aria-label') === 'Export (plain view)', undefined, { timeout: 90_000 });
+    // X6 XR1.5 (on purpose): the row is settled once Reader mode's control is drawn, which comes when the reader's frame is
+    // READY, a moment after Export reads "(plain view)". Before it the row is one icon narrower, so a sweep begun earlier
+    // measured a row that changed under it (the name 32 px narrower at the width where the frame became ready).
+    await readerEntryDrawn(app.page);
     return app;
   }
   interface RowState {
@@ -1632,4 +1659,195 @@ describe('the desk head (desk-nav Part B)', () => {
       expect(r.truth!.height, 'the line keeps the floor').toBeGreaterThanOrEqual(TAP - 0.5);
     });
   }, 120_000);
+});
+
+// Reader mode's entry on the Docs head (reader-mode plan Task XR1.5, spec 2026-11-20 sections 3.1 and 4.6). On a phone the one
+// bar draws Reader mode as its last control, one more tool of 44 by 44 px: the bar stays one tap tall, its title stays at most 61
+// px down (at 412 wide), and every control keeps the 44 px floor, at 412 x 915 and at 915 x 412 (a bar mounted at 412 and turned),
+// and at 360 x 800, the commonest Android width, where a plan's bar holds back, four tools and a title, with no sideways scroll.
+// On a desk the row's first action is Reader mode: it keeps its word where the row showed words before, the row stays one line and
+// the head at most 80 px at 1280 x 800, 1440 x 900 and 1920 x 1080, and each action says what it shows there.
+const PLANS_TREE = treeOk({ entries: [entry('plans', NAME, { committed: { kind: 'file', blob: BLOB, size: SIZE } })] });
+
+interface BarControl { readonly name: string; readonly w: number; readonly h: number; readonly right: number }
+interface BarFigure {
+  readonly bar: { readonly h: number; readonly w: number };
+  readonly controls: readonly BarControl[];
+  readonly scrollW: number; readonly innerW: number;
+}
+
+/** The one bar's geometry: its buttons in order, the bar's own box, and the page's width against the viewport's. */
+async function barFigure(page: Page): Promise<BarFigure> {
+  await oneBar(page);
+  return page.evaluate(async () => {
+    await document.fonts.ready;
+    const bar = document.querySelector('.docs-one-bar .docs-compact-bar')!;
+    const b = bar.getBoundingClientRect();
+    return {
+      bar: { h: b.height, w: b.width },
+      controls: [...bar.querySelectorAll('button')].map((c) => {
+        const r = c.getBoundingClientRect();
+        return { name: c.classList.contains('docs-title') ? 'title' : c.getAttribute('aria-label') ?? '', w: r.width, h: r.height, right: r.right };
+      }),
+      scrollW: document.documentElement.scrollWidth, innerW: innerWidth,
+    };
+  });
+}
+
+function expectWholeTaps(f: BarFigure): void {
+  for (const c of f.controls) {
+    expect(c.w, `${c.name}: a tap wide`).toBeGreaterThanOrEqual(TAP - 0.5);
+    expect(c.h, `${c.name}: a tap tall`).toBeGreaterThanOrEqual(TAP - 0.5);
+  }
+}
+
+describe('Reader mode on the one bar (X6 XR1.5)', () => {
+  // The title's budget is asserted at 412 only. Turned to 915 x 412 the frame draws the library's own wide layout, whose h1 stands
+  // lower by its own margins, and the case above that records this figure ('mounted at 412 x 915, then turned to 915 x 412') never
+  // asserts it. What Reader mode changes is the bar, so at 915 x 412 the bar's height, the console's part above the frame
+  // (CONSOLE_PART_MAX) and every control's floor are asserted, and the title's own 61 px is the phone's.
+  it.each(SKIN_IDS)('%s: one bar: with Reader mode the bar stays 44 px and every control at least 44 by 44, at 412 by 915 and 915 by 412, and the title at most 61 px down at 412 by 915', async (skin) => {
+    await at({ ...PHONE, skin }, async ({ page }) => {
+      for (const [width, height] of [[412, 915], [915, 412]] as const) {
+        // The bar mounted at 412 persists when the phone turns, so the second figure is the same bar at 915 x 412.
+        await page.setViewportSize({ width, height });
+        const f = await barFigure(page);
+        const m = await measure(page);
+        console.log(`XR15-FIGURE ${skin} ${width}x${height} ${JSON.stringify({ bar: f.bar, controls: f.controls, above: m.above })}`);
+        expect(f.controls.map((c) => c.name), `${width}x${height}`).toEqual([
+          DOCS_HEAD_TEXT.back, 'title', DOCS_TOOL_TEXT.jump, DOCS_TOOL_TEXT.contents, READER_MODE_TEXT.enter,
+        ]);
+        expectWholeTaps(f);
+        expect(f.bar.h, 'the bar is one tap tall, its divider inside').toBeLessThanOrEqual(TAP + 0.5);
+        expect(f.bar.h, 'the bar is a whole tap tall').toBeGreaterThanOrEqual(TAP - 0.5);
+        expect(m.frameTop - m.screenTop, 'the bar and the gap under it').toBeLessThanOrEqual(CONSOLE_PART_MAX);
+        if (width === 412) expect(m.above, 'px above the title').toBeLessThanOrEqual(ONE_BAR_TITLE_MAX);
+        expect(f.scrollW, 'no sideways scroll').toBeLessThanOrEqual(f.innerW);
+      }
+    });
+  }, 180_000);
+
+  it.each(SKIN_IDS)("%s: one bar: at 360 by 800, a plan's bar holds back, four tools and the title with no sideways scroll, every control at least 44 by 44 and the title's tap width at least 44 px", async (skin) => {
+    await at({ width: 360, height: 800, skin }, async ({ page }) => {
+      const f = await barFigure(page);
+      console.log(`XR15-FIGURE ${skin} 360x800 plan ${JSON.stringify(f)}`);
+      expect(f.controls.map((c) => c.name)).toEqual([
+        DOCS_HEAD_TEXT.back, 'title', DOCS_TOOL_TEXT.jump, DOCS_TOOL_TEXT.contents, DOCS_TOOL_TEXT.outline, READER_MODE_TEXT.enter,
+      ]);
+      expectWholeTaps(f);
+      const title = f.controls.find((c) => c.name === 'title')!;
+      expect(title.w, "the title's tap width").toBeGreaterThanOrEqual(TAP);
+      // Both halves: the page's width is the viewport's, and the last control ends inside it, so an ancestor that clips
+      // cannot hide an overflow.
+      expect(f.scrollW, 'no sideways scroll').toBe(f.innerW);
+      expect(f.controls.at(-1)!.right, 'the last control ends inside the viewport').toBeLessThanOrEqual(f.innerW);
+      expect(f.bar.h, 'the bar is one tap tall').toBeLessThanOrEqual(TAP + 0.5);
+    }, PLANS_TREE, NAME, 'plans');
+  }, 180_000);
+});
+
+/** What the row's actions show and say: their names, whether their words are drawn, their tooltips, and the row's own height. */
+interface DeskFigure {
+  readonly head: number; readonly rowH: number; readonly mids: readonly { readonly name: string; readonly mid: number }[]; readonly backMid: number;
+  readonly actions: readonly { readonly name: string; readonly words: boolean; readonly title: string | null; readonly icon: string }[];
+  readonly scrollW: number; readonly innerW: number;
+}
+
+/** The full head's row: its controls' names and midlines, the row's height, and the head from its top to the truth line's bottom. */
+async function deskFigure(page: Page): Promise<DeskFigure> {
+  await readerEntryDrawn(page);
+  return page.evaluate(async () => {
+    await document.fonts.ready;
+    const head = document.querySelector('.docs-head.docs-full')!;
+    const row = head.querySelector(':scope > .docs-head-bar')!;
+    const truth = head.querySelector(':scope > .docs-truth')!;
+    const mid = (e: Element): number => { const r = e.getBoundingClientRect(); return (r.top + r.bottom) / 2; };
+    const shown = (e: Element | null): boolean => e !== null && getComputedStyle(e).display !== 'none' && e.getBoundingClientRect().width > 0;
+    return {
+      head: truth.getBoundingClientRect().bottom - head.getBoundingClientRect().top,
+      rowH: row.getBoundingClientRect().height,
+      mids: [...row.querySelectorAll('button, a')].filter((e) => shown(e)).map((c) => ({ name: c.getAttribute('aria-label') ?? c.textContent ?? '', mid: mid(c) })),
+      backMid: mid(row.querySelector('.docs-back')!),
+      actions: [...row.querySelectorAll(':scope > .docs-actions > a, :scope > .docs-actions > button')].map((c) => ({
+        name: c.getAttribute('aria-label') ?? '', words: shown(c.querySelector('.docs-action-words, .docs-reader-words')),
+        title: c.getAttribute('title'), icon: c.querySelector('svg')?.innerHTML ?? '',
+      })),
+      scrollW: document.documentElement.scrollWidth, innerW: innerWidth,
+    };
+  });
+}
+
+/** What the row's four actions show at each desk width (Reader mode, GitHub, Share, Export), measured in the browser leg on the
+ *  committed leaf: the word, or the icon alone. At 1280 x 800 Reader mode's word takes the room of its neighbours' (the row's
+ *  first stage); at 1440 x 900 and wider every action shows its word. */
+const SHOWS: Readonly<Record<number, readonly ('word' | 'icon')[]>> = {
+  1280: ['word', 'icon', 'icon', 'icon'],
+  1440: ['word', 'word', 'word', 'word'],
+  1920: ['word', 'word', 'word', 'word'],
+};
+
+describe('Reader mode on the desk head (X6 XR1.5)', () => {
+  const ACTIONS = [READER_MODE_TEXT.enter, DOCS_HEAD_TEXT.github, DOCS_HEAD_TEXT.share, DOCS_HEAD_TEXT.exportPlainView];
+  it.each([INSTRUMENT, REFINED].flatMap((skin) => ([[1280, 800], [1920, 1080]] as const).map(([w, h]) => [skin, w, h] as const)))(
+    '%s: desk head: with Reader mode the row stays one line and the head at most 80 px at 1280 by 800 and 1920 by 1080 (%i x %i)',
+    async (skin, width, height) => {
+      await at({ width, height, skin, pointer: 'fine' }, async ({ page }) => {
+        const f = await deskFigure(page);
+        console.log(`XR15-FIGURE ${skin} ${width}x${height} desk ${JSON.stringify(f)}`);
+        expect(f.actions.map((a) => a.name), 'Reader mode leads the actions').toEqual(ACTIONS);
+        expect(f.actions[0]!.words, 'Reader mode keeps its word').toBe(true);
+        for (const c of f.mids) expect(Math.abs(c.mid - f.backMid), `${c.name} on the row's line`).toBeLessThanOrEqual(1);
+        expect(f.rowH, 'the row is one tap tall').toBeLessThanOrEqual(TAP + 0.5);
+        expect(f.head, 'the head, from its top to the bottom of the truth line').toBeLessThanOrEqual(HEAD_MAX);
+        expect(f.scrollW, 'no sideways scroll').toBeLessThanOrEqual(f.innerW);
+      });
+    }, 180_000,
+  );
+
+  // The word's own stage rule (the coordinator's ruling, condition (a)): before Reader mode was drawn the row showed every word at
+  // 1280 x 800 and wider, so the Reader mode action ITSELF keeps its word from 1280 up, whatever its neighbours' words do, and its
+  // word never comes back at a narrower width once it has gone (the sweep is monotonic).
+  it.each([INSTRUMENT, REFINED])('%s: desk head: Reader mode keeps its word at every width from 1280 to 1920, and its word never returns at a narrower one', async (skin) => {
+    await at({ width: 1280, height: 800, skin, pointer: 'fine' }, async ({ page }) => {
+      await readerEntryDrawn(page);
+      const seen: [number, boolean, number][] = [];
+      for (const w of Array.from({ length: (1920 - 1000) / 40 + 1 }, (_, i) => 1920 - 40 * i)) {
+        await page.setViewportSize({ width: w, height: 800 });
+        await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+        const f = await deskFigure(page);
+        seen.push([w, f.actions[0]!.words, f.actions.filter((a) => a.words).length]);
+        expect(f.rowH, `the row is one line at ${w}`).toBeLessThanOrEqual(TAP + 0.5);
+        expect(f.scrollW, `no sideways scroll at ${w}`).toBeLessThanOrEqual(f.innerW);
+      }
+      console.log(`XR15-FIGURE ${skin} sweep reader-word [width, reader word, words shown] ${JSON.stringify(seen)}`);
+      for (const [w, word] of seen) if (w >= 1280) expect(word, `Reader mode shows its word at ${w}`).toBe(true);
+      // Widest first: once the word is gone it stays gone at every narrower width.
+      let gone = false;
+      for (const [w, word] of seen) {
+        if (gone) expect(word, `its word does not return at ${w}`).toBe(false);
+        if (!word) gone = true;
+      }
+    });
+  }, 300_000);
+
+  // What each action shows at the three desk sizes the plan names. Share, Export and GitHub may be icons where Reader mode's word
+  // takes the room (the coordinator's ruling of this wave), but Reader mode itself keeps its word wherever the row showed words
+  // before it was drawn, and every action that is an icon keeps its accessible name and its tooltip (`title`, its name) and wears
+  // a glyph no other action of the row wears.
+  it.each([INSTRUMENT, REFINED].flatMap((skin) => ([[1280, 800], [1440, 900], [1920, 1080]] as const).map(([w, h]) => [skin, w, h] as const)))(
+    '%s: desk head: what each action shows at %i x %i: Reader mode keeps its word, every icon keeps its name and tooltip, no two share a glyph',
+    async (skin, width, height) => {
+      await at({ width, height, skin, pointer: 'fine' }, async ({ page }) => {
+        const f = await deskFigure(page);
+        console.log(`XR15-FIGURE ${skin} ${width}x${height} shows ${JSON.stringify(f.actions.map((a) => [a.name, a.words ? 'word' : 'icon']))}`);
+        expect(f.actions.map((a) => a.name)).toEqual(ACTIONS);
+        expect(f.actions.map((a) => a.words ? 'word' : 'icon'), `what each shows at ${width}`).toEqual(SHOWS[width]);
+        for (const a of f.actions) {
+          expect(a.icon, `${a.name}: a glyph`).not.toBe('');
+          expect(a.title, `${a.name}: its tooltip is its name`).toBe(a.name);
+        }
+        expect(new Set(f.actions.map((a) => a.icon)).size, 'no two actions share a glyph').toBe(f.actions.length);
+      });
+    }, 180_000,
+  );
 });

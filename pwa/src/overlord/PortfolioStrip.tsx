@@ -68,9 +68,11 @@ export function PortfolioStrip({ now = Date.now }: { readonly now?: () => number
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
-  const load = useCallback(async (): Promise<void> => {
+  /** Read the portfolio; true when this read answered with a value. */
+  const load = useCallback(async (): Promise<boolean> => {
     const outcome = await readPortfolio();
     if (mounted.current) setRead((prev) => nextReadState(prev, outcome, now()));
+    return outcome.kind === 'value';
   }, [now]);
   useEffect(() => { void load(); }, [load]);
 
@@ -106,8 +108,10 @@ export function PortfolioStrip({ now = Date.now }: { readonly now?: () => number
       const word = err instanceof ApiError && typeof err.body === 'object' && err.body !== null ? (err.body as { error?: unknown }).error : undefined;
       if (isRankChanged(word)) {
         setEdit(null);
-        setSaid(refusalWords(err));   // the refusal table's own `rank-changed` sentence
-        await load();
+        setSaid(null);
+        // The strip's own sentence, said once the read it describes has come back (carried 4c): it has read the order again.
+        const fresh = await load();
+        if (mounted.current) setSaid(fresh ? PORTFOLIO_WORDS.rankChanged : PORTFOLIO_WORDS.rankChangedUnread);
       } else if (!(err instanceof ApiError && err.status === 401)) {
         setSaid(refusalWords(err));
       }

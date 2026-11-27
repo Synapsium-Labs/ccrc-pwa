@@ -45,6 +45,7 @@ export const SETTINGS_INDEX_TEXT = {
       + 'came back, and clearing what dead sessions leave behind.',
     security: 'Who can open this console, and the key the fleet box uses to call this server.',
     integrations: 'Linear keys and project linking, GitHub, and the folders, item links and default branches used by Docs.',
+    overlord: 'The Overlord: retire it, its model class and accounts, when it renews, and the facts it reads about each account.',
   } satisfies Record<SettingsSectionId, string>,
   /** The two diagnostic rows under the five sections (library 1.1 take-up, Task 9): pages under Settings that are not
    *  sections, so they are not `purpose` keys. */
@@ -471,6 +472,34 @@ export const SETTINGS_CARDS = {
     docsSettings: {
       scope: SETTINGS_SCOPE.box, title: 'Docs settings',
       purpose: 'Set item links and project default branches.',
+    },
+  },
+  // Settings › Overlord (Overlord W1 home C): drawn only while the server advertises `overlord-v1`. Each card writes through
+  // its own door, which decides the step-up (`OverlordSection.tsx`).
+  overlord: {
+    designation: {
+      scope: SETTINGS_SCOPE.fleet, title: 'The Overlord',
+      purpose: 'Which session is the Overlord, and Retire. Start, Open and Rebind are on the Overlord place.',
+    },
+    model: {
+      scope: SETTINGS_SCOPE.fleet, title: 'Model class',
+      purpose: 'The model class the Overlord runs on.',
+    },
+    accountSet: {
+      scope: SETTINGS_SCOPE.fleet, title: 'Account set',
+      purpose: 'The pools whose accounts the Overlord may use, in the order it tries them.',
+    },
+    backstop: {
+      scope: SETTINGS_SCOPE.fleet, title: 'Renewal backstop',
+      purpose: 'The hour of the day the Overlord renews at the latest, in the time zone you pick.',
+    },
+    retention: {
+      scope: SETTINGS_SCOPE.fleet, title: 'Response retention',
+      purpose: 'How many days the record of how you answered the Overlord is kept.',
+    },
+    accounts: {
+      scope: SETTINGS_SCOPE.fleet, title: 'Account facts',
+      purpose: 'For each account: whether Fable bills credits, whether its continuity is recorded, and any hold on it.',
     },
   },
 } as const satisfies Record<SettingsSectionId, Record<string, SettingsCardText>>;

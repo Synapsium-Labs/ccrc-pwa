@@ -792,17 +792,35 @@ export const DOCS_LANE_QUEUE = 32;
 /** The longest a queued read job waits for admission; `docs-busy {lane:'read'}` past it (section 6.3). */
 export const DOCS_LANE_MAX_WAIT_MS = 10000;
 
+/** The most artifact jobs queued behind a read lane (X5 A3.3): their own bound, never counted against
+ *  `DOCS_LANE_QUEUE`, so a page of artifact requests cannot fill the queue the console's reads share. Its own literal,
+ *  never an alias of a neighbour that holds the same number. */
+export const DOCS_LANE_ARTIFACT_QUEUE = 16;
+
 /** One read job's estimate: `raw`, the most content bytes its answer can carry; `wire`, the most framed bytes the
- *  answer line can take on the link. */
-export interface DocsJob { raw: number; wire: number; prepare?: true }
+ *  answer line can take on the link. `source` says who asked (X5 A3.3): `artifact` for a job of the artifact content
+ *  door, `reader` (the default when absent, so every caller before X5 is unchanged) for the docs reader's own reads. */
+export interface DocsJob { raw: number; wire: number; prepare?: true; source?: DocsJobSource }
+
+/** Who asked for a read job (X5 A3.3): the docs reader's own reads in the console (`reader`), or the artifact content
+ *  door's (`artifact`). The plan names the first `console`; this file's L1 scan (`docs-policy.test.ts`) refuses that word in
+ *  its code, so the source is named for the reader instead. */
+export type DocsJobSource = 'reader' | 'artifact';
 
 /** A read lane's load at the moment its head job is considered: execs in flight, their summed `wire` estimates, how
- *  many of them are large (`raw` over `DOCS_LANE_LARGE_RAW`) and how many are range prepares (`job.prepare`). The lane
- *  keeps the counters; this only reads them. */
-export interface LaneLoad { execs: number; bytes: number; large: number; prepares: number }
+ *  many of them are large (`raw` over `DOCS_LANE_LARGE_RAW`) and how many are range prepares (`job.prepare`), and
+ *  (X5 A3.3, D-9146) how many are artifact READ jobs, a frame or a small show (absent means 0); an artifact range prepare
+ *  is counted by `prepares`, never by `artifact`. The lane keeps the counters; this only reads them. */
+export interface LaneLoad { execs: number; bytes: number; large: number; prepares: number; artifact?: number }
 
 /**
- * Whether the read lane admits `job` now (section 6.3), its five clauses in order, the first that answers winning:
+ * Whether the read lane admits `job` now (section 6.3), its five clauses in order, the first that answers winning.
+ * Two rules for a job whose `source` is `artifact` come BEFORE them (X5 A3.3), so they hold on an idle lane too: its
+ * `raw` above `DOCS_LANE_LARGE_RAW` is refused (an artifact reads a larger file as range frames, so the door never
+ * sends such a job), and an artifact READ job (not a prepare) is refused while an artifact read runs (`load.artifact`
+ * above 0): at most one artifact read job runs. An artifact range prepare does NOT take that share (D-9146): clause 5
+ * alone holds it to one prepare across every caller, so a page's second large file can prepare while the first streams
+ * its frames, and a frame never waits out a prepare's ~23 s. Then:
  * 1. an idle lane always admits one job, so a job larger than the budget still runs, alone;
  * 2. `DOCS_LANE_EXECS` execs in flight refuse;
  * 3. the summed wire estimate past `DOCS_LANE_BYTES` refuses (exactly at it admits);
@@ -815,6 +833,8 @@ export interface LaneLoad { execs: number; bytes: number; large: number; prepare
  * A refusal here is "not yet", never `docs-busy`: the lane keeps the job at the head of its FIFO (W3).
  */
 export function laneAdmit(load: LaneLoad, job: DocsJob): boolean {
+  if (job.source === 'artifact' && laneLarge(job)) return false;
+  if (laneArtifactRead(job) && (load.artifact ?? 0) > 0) return false;
   if (load.execs === 0) return true;
   if (load.execs >= DOCS_LANE_EXECS) return false;
   if (load.bytes + job.wire > DOCS_LANE_BYTES) return false;
@@ -833,6 +853,17 @@ export function laneAdmit(load: LaneLoad, job: DocsJob): boolean {
 export function laneStep(load: LaneLoad, job: DocsJob): 'start' | 'skip' | 'stop' {
   if (laneAdmit(load, job)) return 'start';
   return lanePrepare(job) && load.prepares > 0 && laneAdmit({ ...load, prepares: 0 }, job) ? 'skip' : 'stop';
+}
+
+/**
+ * Which FIFO's head the read lane starts next (X5 A3.3). The console head comes first: when one waits, `'reader'` if
+ * `laneAdmit` admits it, else `null`, so an artifact job never passes a waiting console job. Only when no console job
+ * waits is the artifact head considered: `'artifact'` if `laneAdmit` admits it, else `null`. Each FIFO is judged by
+ * its head only, as the lane always did; the lane's pump decides nothing itself.
+ */
+export function laneNext(load: LaneLoad, consoleHead: DocsJob | null, artifactHead: DocsJob | null): DocsJobSource | null {
+  if (consoleHead !== null) return laneAdmit(load, consoleHead) ? 'reader' : null;
+  return artifactHead !== null && laneAdmit(load, artifactHead) ? 'artifact' : null;
 }
 
 /**
@@ -871,8 +902,123 @@ export function rangeFrameJob(length: number): DocsJob {
   return { raw: length, wire: showWire(length) };
 }
 
+// ===== X5 A3.3: the artifact content door's reads (the bytes port's adapter, `artifactBytes` in `routes.ts`, decides nothing) =====
+
+/** The same job, booked by the artifact content door (X5 A3.3): a fresh job with every field of `job` and `source` `artifact`,
+ *  so the read lane keeps it in its own FIFO and runs at most one such job at a time. */
+export function artifactJob(job: DocsJob): DocsJob {
+  return { ...job, source: 'artifact' };
+}
+
+/** The estimate of one artifact show of `size` raw bytes (an entry at most `DOCS_LANE_LARGE_RAW`): the show's own bound
+ *  (`showWire`), booked as an artifact job. */
+export function artifactShowJob(size: number): DocsJob {
+  return artifactJob({ raw: size, wire: showWire(size) });
+}
+
+/** The answer words of an artifact prepare (the port's contract, `ArtifactPrepareAnswer`; spelled here because L1 imports `shared/docs.ts`
+ *  alone). */
+export type ArtifactPrepareWord = 'prepare-busy' | 'busy' | 'draft-changed' | 'unreadable';
+
+/** The answer words of an artifact read (the port's contract, `ArtifactReadAnswer`'s error words). */
+export type ArtifactReadWord = 'draft-changed' | 'unreadable' | 'too-large' | 'frame-digest' | 'snapshot-gone' | 'busy';
+
+/**
+ * The answer word of one failed artifact exec (X5 A3.3), each failure kept apart as the port's contract says. `failure` is a docs
+ * failure word as the reader answers it (the lane's own `docs-busy` included), or any other text for an exec that threw:
+ * - `docs-busy`: `busy` (the lane's wait ran out, it was closed, or the read was abandoned);
+ * - `draft-changed` and `worktree-moved`: `draft-changed`;
+ * - `snapshot-gone`: `snapshot-gone`, on a show or a frame (a prepare makes the snapshot, so it has none: `unreadable`);
+ * - `prepare-busy`: `prepare-busy` on a prepare (ccd's own word: the door waits and asks again), `unreadable` on a read;
+ * - `too-large` and `range-too-large`: `too-large` on a read, `unreadable` on a prepare;
+ * - `malformed-answer`: `frame-digest` on a frame (its echo, length, digest or total, or its shape, failed), `unreadable` elsewhere;
+ * - anything else: `unreadable`.
+ */
+export function artifactReadWord(step: 'prepare', failure: string): ArtifactPrepareWord;
+export function artifactReadWord(step: 'show' | 'frame', failure: string): ArtifactReadWord;
+export function artifactReadWord(step: 'show' | 'prepare' | 'frame', failure: string): ArtifactPrepareWord | ArtifactReadWord;
+export function artifactReadWord(step: 'show' | 'prepare' | 'frame', failure: string): ArtifactPrepareWord | ArtifactReadWord {
+  switch (failure) {
+    case 'docs-busy': return 'busy';
+    case 'draft-changed':
+    case 'worktree-moved': return 'draft-changed';
+    case 'snapshot-gone': return step === 'prepare' ? 'unreadable' : 'snapshot-gone';
+    case 'prepare-busy': return step === 'prepare' ? 'prepare-busy' : 'unreadable';
+    case 'too-large':
+    case 'range-too-large': return step === 'prepare' ? 'unreadable' : 'too-large';
+    case 'malformed-answer': return step === 'frame' ? 'frame-digest' : 'unreadable';
+    default: return 'unreadable';
+  }
+}
+
+/** The answer of an artifact read or prepare that fits no read (no pin to show or range, a range outside the file): `unreadable`
+ *  with no exec. Frozen, so no caller can change every other caller's answer. */
+export const ARTIFACT_UNREADABLE = Object.freeze({ ok: false, error: 'unreadable' } as const);
+
+/** Where an artifact read reads, as `ArtifactReadAt` carries it (the port is L2 and this file imports `shared/docs.ts` alone, so the
+ *  fields the decisions below read are named here; the port's type is assignable to this one). */
+export interface ArtifactPlace {
+  pin: DocPin; ref: { commit: string; served: string }; section: DocSectionSlug; path: string;
+}
+
+/**
+ * The file pin of an artifact entry's show (X5 A3.3), or `null` when its pin fits no show:
+ * - a committed entry (its pin is `blob`), under either kind of capability pin: the capability's own commit and served ref
+ *   (`ref`, which the mint matched to the pin), never what a branch holds now;
+ * - an uncommitted entry with an `fp` pin, only under a draft capability pin: the draft's branch and head and the entry's fingerprint;
+ * - anything else (a `stat` pin, which names no bytes to show, or an `fp` entry under a committed pin): `null`.
+ */
+export function artifactShowPin(at: ArtifactPlace, entry: { pin: DocsRangePin }): DocFilePin | null {
+  if (entry.pin.kind === 'blob') {
+    return { kind: 'committed', commit: at.ref.commit, servedRef: at.ref.served, section: at.section, path: at.path };
+  }
+  if (entry.pin.kind === 'fp' && at.pin.kind === 'draft') {
+    return { kind: 'draft', branch: at.pin.branch, head: at.pin.head, section: at.section, path: at.path, fp: entry.pin.sha };
+  }
+  return null;
+}
+
+/**
+ * The range target of an artifact entry (X5 A3.3), or `null` when no range read fits: a committed entry (`blob` pin) is read at the
+ * capability's commit, an uncommitted one at the draft's branch and head (never a commit), and only under a draft capability pin.
+ */
+export function artifactRangeTarget(at: ArtifactPlace, entry: { pin: DocsRangePin }): DocsRangeTarget | null {
+  const base = { section: at.section, path: at.path, pin: entry.pin };
+  if (entry.pin.kind === 'blob') return { where: { commit: at.ref.commit }, ...base };
+  if (at.pin.kind === 'draft') return { where: { branch: at.pin.branch, head: at.pin.head }, ...base };
+  return null;
+}
+
+/** The raw length of the next frame of an artifact range read from `offset` to `end` inclusive: a whole frame, or what is left. */
+export function artifactFrameLength(offset: number, end: number): number {
+  return Math.min(DOCS_RANGE_FRAME_BYTES, end + 1 - offset);
+}
+
+/** Whether `range` (inclusive) lies inside a file of `size` bytes, and is not empty. */
+export function artifactRangeFits(range: { start: number; end: number }, size: number): boolean {
+  return Number.isSafeInteger(range.start) && Number.isSafeInteger(range.end) && range.start >= 0 && range.start <= range.end
+    && range.end < size;
+}
+
+/**
+ * The answer word when what an exec measured is not the size the manifest holds (X5 A3.3), or `null` when it is. A frame's `total`
+ * that differs is a frame that failed its check (`frame-digest`); a show's length or a prepare's size that differs is `unreadable`.
+ */
+export function artifactSizeWord(step: 'show' | 'prepare', got: number, want: number): 'unreadable' | null;
+export function artifactSizeWord(step: 'frame', got: number, want: number): 'frame-digest' | null;
+export function artifactSizeWord(step: 'show' | 'prepare' | 'frame', got: number, want: number): 'unreadable' | 'frame-digest' | null {
+  if (got === want) return null;
+  return step === 'frame' ? 'frame-digest' : 'unreadable';
+}
+
+/** The committed blob an artifact show must name (`DocsShowAsk.listedBlob`): the entry's blob when it is a committed entry, else
+ *  `null`, which means only that the manifest holds none (a draft file has no blob). */
+export function artifactListedBlob(entry: { pin: DocsRangePin; committed: boolean }): string | null {
+  return entry.committed && entry.pin.kind === 'blob' ? entry.pin.sha : null;
+}
+
 /** What `docsRangePlan` decided: the leaf, the step (`frame: null` is a prepare, one meaning) and the lane job. */
-export type DocsRangePlan = { ok: true; target: DocsRangeTarget; frame: DocsRangeFrameAsk | null; job: DocsJob };
+export type DocsRangePlan ={ ok: true; target: DocsRangeTarget; frame: DocsRangeFrameAsk | null; job: DocsJob };
 
 /**
  * Plan one range read from the parsed query alone (X2 spec 4.3, the plan's P1.3; pure, no exec), the first refusal
@@ -1805,12 +1951,23 @@ export function lanePrepare(job: DocsJob): boolean {
 }
 
 /**
+ * Whether `job` is an artifact READ job (X5 A3.3, D-9146): `source` `artifact` and not a range prepare. THE one predicate
+ * of the artifact share: `laneAdmit` holds a second one back with it, and the read lane counts a started and a finished
+ * job in `LaneLoad.artifact` with it. An artifact range prepare is not one: the prepare clause alone holds it to one.
+ */
+export function laneArtifactRead(job: DocsJob): boolean {
+  return job.source === 'artifact' && !lanePrepare(job);
+}
+
+/**
  * Whether a lane's jobs that have not started, COUNTING the one just arriving, exceed that lane's queue bound
  * (section 6.3, section 6.4): `DOCS_LANE_QUEUE` for the read lane, `DOCS_FETCH_QUEUE` for the fetch lane. Exactly at
  * the bound is not over it. The read lane asks before it queues a job (`waiting` is its FIFO plus the new job); the
- * fetch lane asks after it has queued and pumped (`waiting` is the FIFO).
+ * fetch lane asks after it has queued and pumped (`waiting` is the FIFO). With `source` `artifact` (the read lane
+ * only), the bound is `DOCS_LANE_ARTIFACT_QUEUE`, the artifact FIFO's own (X5 A3.3); without it, unchanged.
  */
-export function laneOverflow(lane: DocsLaneName, waiting: number): boolean {
+export function laneOverflow(lane: DocsLaneName, waiting: number, source?: DocsJobSource): boolean {
+  if (lane === 'read' && source === 'artifact') return waiting > DOCS_LANE_ARTIFACT_QUEUE;
   return waiting > (lane === 'read' ? DOCS_LANE_QUEUE : DOCS_FETCH_QUEUE);
 }
 

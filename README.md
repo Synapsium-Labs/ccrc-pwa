@@ -1475,18 +1475,23 @@ reached from elsewhere (an exposure file, a Caddyfile or the ddns unit: that box
 hand), on a box whose `ccrc.service` can take its bind or a sign-in key from anywhere but `ccrc.env` and the exposure
 file (a drop-in, an `Environment=` line, another environment file, the service manager's own environment), on a box
 whose `ccrc.service` is not, byte for byte, the unit file ccrc installs (any hand edit of it, an `ExecStart=` one
-included: an install or an update puts the shipped file back) or one systemd has not reloaded since it changed, while an
-update or rollback holds `~/.ccrc/update.lock`, and inside a Claude Code session, without a terminal or in a fleet
-session's pane. Those last three are speed bumps, not walls: `env -u CLAUDECODE`, a terminal made with `script`, an
-unset `TMUX_PANE`, a script file or another interpreter each run past them, so they stop a session that arms or disarms
-the gate by accident, never one that sets out to. The hand edit above stays the route for a box behind a TLS-terminating
-proxy of your own, and `ccrc auth off` refuses a box whose `CCRC_ORIGIN` or `CCRC_RP_ID` holds a value it did not write:
+included: `ccrc install --role <the role ccrc.env records>` puts the shipped file back and reloads systemd, which an
+update does not do on a box already on its version; name the role, since a bare install takes role `both`), or is not
+the file systemd loaded (a unit of the same name earlier on its search path), or has not been
+reloaded since it changed, while an update or rollback holds `~/.ccrc/update.lock`, and inside a Claude Code session,
+without a terminal or in a fleet session's pane. Those last three are speed bumps, not walls: `env -u CLAUDECODE` runs
+past the session refusal, a terminal made with `script` past the terminal refusal and an unset `TMUX_PANE` past the pane
+refusal, so they stop a session that arms or disarms the gate by accident, never one that sets out to. The hand edit
+above stays the route for a box behind a TLS-terminating proxy of your own, and `ccrc auth off` refuses a box whose
+`CCRC_ORIGIN` or `CCRC_RP_ID` holds a value it did not write:
 that box looks armed for another address, and turning sign-in off there is a hand edit too. Such a box that has not yet
 set `CCRC_ORIGIN` looks loopback-only to the verb; armed for localhost, it signs in through the proxy but cannot act, so
 run `ccrc auth off` there and use the hand edit. The verb is Linux only for now: on a Mac it refuses, changing nothing,
-and the hand edit above is the route there (ticket auth-verb-on-a-mac). It cannot see a drop-in placed outside the user
-unit directory that systemd has not loaded yet, or a script that `NODE_OPTIONS` in `ccrc.env` or the exposure file tells
-node to preload.
+and the hand edit above is the route there (issue #3475). It cannot see a drop-in placed outside the user unit
+directory that systemd has not loaded yet, or anything that changes what node runs before the server reads its keys: a
+node option such as `NODE_OPTIONS`, or a `PATH` that finds another `node` first (the unit starts node through
+`/usr/bin/env`), set in `ccrc.env`, in the exposure file or in the service manager's own environment, of which the verb
+reads only its own keys.
 
 **On a box exposed with `ccrc expose`, skip the edit.** The verb writes `CCRC_AUTH=on` and
 `CCRC_ORIGIN` into `~/.ccrc/exposure.env` itself — and `CCRC_RP_ID` too, on every arm but

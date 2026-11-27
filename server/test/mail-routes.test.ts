@@ -1400,9 +1400,12 @@ describe('the rejection table is total, in both directions', () => {
         // answer kind (`'no-pass-yet'`) as a literal. It rides a 200's `kind`, never a `refused` or `reject.code`. Admitted through
         // the module's guard, derived from its map, never NOT_CODES.
         || isSequenceDoorKebab(tok)
-        // THE BOARD (Overlord W1, PR B2): `coord/overlordBoard.ts` and its gatherer name the board's closed unmeasured reasons, its
-        // untrusted text's sources, the `operator-ratified` trust and the listing's `not-listed` as literals. Each rides a 200's part,
-        // never a refusal. Admitted through the module's guard, derived from the wire's lists, never NOT_CODES.
+        // THE BOARD (Overlord W1, PRs B2 and B3): `coord/overlordBoard.ts` and its gatherer name the board's closed unmeasured
+        // reasons, its untrusted text's sources, the `operator-ratified` trust, the listing's `not-listed` and (B3) the switchboard's
+        // settings row names, the keys of the gatherer's reader table, as literals. The brakes' file row names come from the
+        // switchboard's own list and are spelled as literals nowhere in the board; the guard admits them beside the settings names.
+        // Each rides a 200's part, never a refusal. Admitted through the module's guard, derived from the wire's and the
+        // switchboard's lists, never NOT_CODES.
         || isBoardKebab(tok)
         // THE CHAT (Overlord W1 chat A): `coord/overlordChat.ts` names an earlier page's refusal reasons and a thread entry's kinds
         // as literals, and `coord/overlordChatDoor.ts` its doors' ledger outcomes. The earlier door words a reason as `bad-request`'s

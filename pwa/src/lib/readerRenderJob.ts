@@ -32,6 +32,8 @@ export interface ReaderRenderMeta {
   readonly headings: readonly Heading[];
   readonly figures: number;
   readonly mermaidKinds: readonly string[];
+  /** The library's reading time in minutes (its own rule, so the byline and the overlay's time left agree); absent when it gave none. */
+  readonly readingMinutes?: number;
 }
 
 export type ReaderRenderOutcome =
@@ -71,7 +73,10 @@ function renderOutcome(src: string): ReaderRenderOutcome {
     result: {
       outcome: 'rendered',
       html: rendered.html,
-      meta: { title: m.title, frontList: m.frontList, headings: m.headings, figures: m.figures, mermaidKinds: m.mermaidKinds },
+      meta: {
+        title: m.title, frontList: m.frontList, headings: m.headings, figures: m.figures, mermaidKinds: m.mermaidKinds,
+        ...(typeof m.readingMinutes === 'number' && Number.isFinite(m.readingMinutes) ? { readingMinutes: m.readingMinutes } : {}),
+      },
     },
     mermaid: refs.mermaid,
     images: refs.images,

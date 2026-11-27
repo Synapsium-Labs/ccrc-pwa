@@ -85,7 +85,7 @@ import { compactionInFlight, compactionsBegunSince, compactionsSince, newestComp
 import { RENEW_REQUESTS_CURSOR, effectiveGeneration, genExpectOf, genViewOf, type GenRow, type MintInput } from './continuityStore.js';
 import { renewNowStands, renewalModeOf } from './renewNow.js';
 import { precompactField, precompactRetractions } from './precompact.js';
-import { markAges, markProgrammesOf, operatorQuietOf, type MarkReading } from './operatorMark.js';
+import { markAges, markProgrammesOf, operatorQuietOf } from './operatorMark.js';
 import { generationStep, type GenEvent } from './generationMachine.js';
 import { snapshotFactsOf } from './card.js';
 import { probeRound } from './probes.js';
@@ -103,7 +103,7 @@ import type { GenAction, GenStep } from './generationMachine.js';
 import { softRenewalMay, type SoftInputs, type SoftReading } from './softRenewal.js';
 import { overlordFirst, type OverlordGenerationReading } from './renewalOrder.js';
 import type { DrainRead } from './renewalDrain.js';
-import { designatedClassAtMint, holdOfStart, holdTargetOf, probesFailedTwiceOf, type W1Inputs } from './renewalReadings.js';
+import { designatedClassAtMint, holdOfStart, holdTargetOf, placeHiddenOf, probesFailedTwiceOf, type PlaceMarkReading, type W1Inputs } from './renewalReadings.js';
 import { OVERLORD_PROJECT, type AttemptAction, type DesignationRead, type SettleFact } from '../../../shared/overlord-designation.js';
 import { expectedSurfaceOf, newestStartVerdict } from './sandboxCheck.js';
 import { pendingDeadlineOf } from '../coord/overlordDesignation.js';
@@ -618,8 +618,8 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
   const overlord = overlordReadingOf(walk.rows, live);
   const softMode = input.softMode ?? renewalModeOf(coord.renewalModeSetting()) ?? RENEWAL_MODE_DEFAULT;
   // The marks as they stand after step ONE aged them, read once and only for a pass with a soft due to permit.
-  let marksNow: readonly MarkReading[] | 'unmeasured' | null = null;
-  const marks = (): readonly MarkReading[] | 'unmeasured' => (marksNow ??= marksOf(coord.operatorMarks()));
+  let marksNow: readonly PlaceMarkReading[] | 'unmeasured' | null = null;
+  const marks = (): readonly PlaceMarkReading[] | 'unmeasured' => (marksNow ??= marksOf(coord.operatorMarks()));
   for (const g0 of walk.rows) {
     let g = g0;
     const eff = effectiveGeneration(g, live);
@@ -631,7 +631,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
         isCoordinator: g.role === 'coordinator', cls: g.dueClass, canRenew: input.canRenew === true, overlord,
         roleChanged: g.role === 'coordinator' && !(roleNow.kind === 'role' && roleNow.role === 'coordinator'),
         holdOff: holdOffStands(softTimesOf(g)),
-        soft: g.dueClass === 'soft' ? D.softRenewalMay(softInputsOf(coord, g, r, overlord, softMode, marks())) : { start: true },
+        soft: g.dueClass === 'soft' ? D.softRenewalMay(softInputsOf(coord, g, r, overlord, softMode, marks(), now)) : { start: true },
       });
       if (permit.feed) due = { cls: permit.cls }; else waits[permit.waitFor] = (waits[permit.waitFor] ?? 0) + 1;
     }
@@ -733,7 +733,7 @@ function overlordReadingOf(rows: readonly GenRow[], live: boolean): OverlordGene
 }
 
 /** The marks as step ONE read them, for `operatorQuietOf`: `unmeasured` when that read failed. */
-const marksOf = (read: ReturnType<GenerationsCoord['operatorMarks']>): readonly MarkReading[] | 'unmeasured' => read.ok ? read.rows : 'unmeasured';
+const marksOf = (read: ReturnType<GenerationsCoord['operatorMarks']>): readonly PlaceMarkReading[] | 'unmeasured' => read.ok ? read.rows : 'unmeasured';
 
 /** A coordinator's programmes, the open runs it claims (`markProgrammesOf`, the prompt route's own rule, with no worker side). */
 function coordinatorProgrammes(coord: Pick<GenerationsCoord, 'bindingsOf'>, identity: string): readonly string[] | 'unmeasured' {
@@ -743,10 +743,11 @@ function coordinatorProgrammes(coord: Pick<GenerationsCoord, 'bindingsOf'>, iden
 /** `softRenewalMay`'s inputs from stored columns and measured readings (ruling R4, slug gather-in-the-act-lane): the observed
  *  times (`softTimesOf`), the soft renewals of the identity's line within the budget's window of observed time (the
  *  accumulator carries across mints), the hold table's drain, and the operator's quiet (`operatorQuietOf`; the hand-offs piece):
- *  a coordinator's programmes' marks, the Overlord's `@overlord` mark (renewal readings PR F). A count that could not be read
- *  is not a count, so the decider waits `unmeasured`. */
+ *  a coordinator's programmes' marks, the Overlord's `@overlord` mark (renewal readings PR F). The Overlord's place hidden is
+ *  the `@overlord-place` mark's quiet from the same read (`placeHiddenOf`, PR G), with the pass's `now` only to refuse a mark
+ *  dated after it. A count that could not be read is not a count, so the decider waits `unmeasured`. */
 function softInputsOf(coord: Pick<GenerationsCoord, 'softRenewalsOf' | 'bindingsOf'>, g: GenRow, r: GenReadings | undefined,
-  overlord: OverlordGenerationReading, mode: SoftInputs['mode'], marks: readonly MarkReading[] | 'unmeasured'): SoftInputs {
+  overlord: OverlordGenerationReading, mode: SoftInputs['mode'], marks: readonly PlaceMarkReading[] | 'unmeasured', now: number): SoftInputs {
   const inWindow = softRenewalsInWindowOf(coord, g);
   const na: SoftReading<number> = { kind: 'not-applicable' };
   return {
@@ -755,7 +756,7 @@ function softInputsOf(coord: Pick<GenerationsCoord, 'softRenewalsOf' | 'bindings
     readersRunning: g.role === 'coordinator' ? na : later('W1'),
     operatorQuietObservedMs: g.role === 'coordinator' ? operatorQuietOf(coordinatorProgrammes(coord, g.identity), marks)
       : g.role === 'overlord' ? operatorQuietOf([OVERLORD_OPERATOR_MARK], marks) : na,
-    placeHiddenObservedMs: g.role === 'overlord' ? later('W1') : na,
+    placeHiddenObservedMs: g.role === 'overlord' ? placeHiddenOf(marks, now) : na,
     ...r?.soft,
     mode, ...softTimesOf(g), softRenewalsInWindow: inWindow, overlordOutsideActive: !overlordFirst(overlord),
   };

@@ -10,6 +10,10 @@ import type { ReactNode } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { DocsScreen } from '../src/screens/DocsScreen';
 import { DocsHead } from '../src/docs/DocsHead';
+import { ReaderModeContext, type ReaderModeContextValue } from '../src/docs/useReaderMode';
+import { READER_MODE_OFF } from '../src/docs/reader/readerMode';
+import { READER_MODE_TEXT } from '../src/docs/reader/readerModeWords';
+import { oneBarTools } from '../src/docs/reader/policy';
 import type { ReaderDeps } from '../src/docs/ReaderFrame';
 import type { ReaderMount, ReaderMountInput } from '../src/docs/reader/bridge';
 import { createReaderProgress, type ReaderBar } from '../src/docs/readerBar';
@@ -158,11 +162,12 @@ describe('the one bar (refinements (f), (j), (k), (l))', () => {
   it('a ready frame on ccrc\'s bar turns the row into the one bar: back, the title, Quick jump, Contents', async () => {
     await openReady('/docs/demo/specs/a.md');
     const names = barButtons().map(nameOf);
-    expect(names).toHaveLength(4);
+    // XR1.5 (on purpose): Reader mode is the bar's last control, after the tools.
+    expect(names).toHaveLength(5);
     expect(names[0]).toBe(DOCS_HEAD_TEXT.back);
     expect(names[1]!.startsWith('specs')).toBe(true);
     expect(names[1]).toContain('Doc title');
-    expect(names.slice(2)).toEqual([DOCS_TOOL_TEXT.jump, DOCS_TOOL_TEXT.contents]);
+    expect(names.slice(2)).toEqual([DOCS_TOOL_TEXT.jump, DOCS_TOOL_TEXT.contents, READER_MODE_TEXT.enter]);
     for (const name of [DOCS_HEAD_TEXT.share, DOCS_HEAD_TEXT.export, DOCS_HEAD_TEXT.exportPlainView]) {
       expect(within(oneBar().querySelector<HTMLElement>('.docs-compact-bar')!).queryByRole('button', { name })).toBeNull();
     }
@@ -172,7 +177,8 @@ describe('the one bar (refinements (f), (j), (k), (l))', () => {
   it('a plan\'s leaf adds Outline after Contents', async () => {
     const f = fakeLoaders({ tree: okTree(treeOk({ entries: [entry('plans', 'p.md')] })) });
     await openReady('/docs/demo/plans/p.md', 412, f);
-    expect(barButtons().map(nameOf).slice(2)).toEqual([DOCS_TOOL_TEXT.jump, DOCS_TOOL_TEXT.contents, DOCS_TOOL_TEXT.outline]);
+    // XR1.5 (on purpose): Reader mode follows Outline as the bar's last control.
+    expect(barButtons().map(nameOf).slice(2)).toEqual([DOCS_TOOL_TEXT.jump, DOCS_TOOL_TEXT.contents, DOCS_TOOL_TEXT.outline, READER_MODE_TEXT.enter]);
   });
 
   it('each tool runs its command in the tap itself', async () => {
@@ -485,4 +491,57 @@ describe('the one bar (refinements (f), (j), (k), (l))', () => {
       expect(document.querySelectorAll('.docs-head')).toHaveLength(1);
     },
   );
+});
+
+// Reader mode's entry on the one bar (native Docs reader, reader-mode plan Task XR1.5, spec 2026-11-20 section 3.1): the LAST
+// control, icon only, ccrc's own action and not a row of `oneBarTools`, which holds the library's command names only.
+describe('the one bar draws Reader mode last (X6 XR1.5)', () => {
+  const barNames = (): string[] => barButtons().map(nameOf);
+
+  it('one bar: Reader mode is the last control, after Jump, Contents and a plan\'s Outline, labelled Reader mode', async () => {
+    const f = fakeLoaders({ tree: okTree(treeOk({ entries: [entry('plans', 'p.md')] })) });
+    const r = await openReady('/docs/demo/plans/p.md', 412, f);
+    expect(barNames()).toEqual([
+      DOCS_HEAD_TEXT.back, barNames()[1]!, DOCS_TOOL_TEXT.jump, DOCS_TOOL_TEXT.contents, DOCS_TOOL_TEXT.outline, READER_MODE_TEXT.enter,
+    ]);
+    const last = barButtons().at(-1)!;
+    expect(last.getAttribute('aria-label')).toBe(READER_MODE_TEXT.enter);
+    expect(last.textContent, 'icon only: no visible word').toBe('');
+    expect(last.querySelector('svg[aria-hidden="true"]'), 'its icon').not.toBeNull();
+    // The reading line follows the controls; the control is the bar's last button, and it is a whole tap like the tools.
+    expect(last).toHaveClass('docs-tool');
+    expect(last.nextElementSibling).toHaveClass('docs-read');
+    // A tap enters reader mode (the container takes its attribute); it sends the frame no command of its own.
+    expect(document.querySelector('[data-reader-mode]')).toBeNull();
+    fireEvent.click(last);
+    expect(document.querySelector('[data-reader-mode]'), 'reader mode is on').not.toBeNull();
+    expect(r.command).not.toHaveBeenCalled();
+  });
+
+  it('one bar: oneBarTools is unchanged', () => {
+    // The library's command names only: Reader mode is ccrc's own action and is no row of it.
+    expect(oneBarTools('specs')).toEqual(['jump', 'contents']);
+    expect(oneBarTools('plans')).toEqual(['jump', 'contents', 'outline']);
+    for (const section of ['specs', 'plans', 'conventions'] as const) {
+      expect(oneBarTools(section)).not.toContain(READER_MODE_TEXT.enter);
+    }
+  });
+
+  it('one bar: no Reader mode control while the context does not offer it', () => {
+    atWidth(412);
+    const tree = treeOk({ entries: [entry('specs', 'a.md')] });
+    const visit: DocsVisit = {
+      tree: { s: 'ok', answer: treeResponse(tree), receivedAt: Date.now() },
+      file: { s: 'loading', pin: { kind: 'committed', commit: COMMIT_B, servedRef: 'refs/remotes/origin/main', section: 'specs', path: 'a.md' } }, freshness: { s: 'idle' }, updatedTo: null, pendingFragment: null,
+      ...NO_RANGE_VISIT, retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
+    };
+    const bar: ReaderBar = { title: 'Doc title', command: vi.fn(), progress: createReaderProgress() };
+    const ctx = { state: READER_MODE_OFF, offered: false, enter: vi.fn() } as unknown as ReaderModeContextValue;
+    render(
+      <ReaderModeContext value={ctx}>
+        <DocsHead page={pageAt('/docs/demo/specs/a.md')} visit={visit} tree={tree} readerBar={bar} />
+      </ReaderModeContext>,
+    );
+    expect(barNames()).toEqual([DOCS_HEAD_TEXT.back, barNames()[1]!, DOCS_TOOL_TEXT.jump, DOCS_TOOL_TEXT.contents]);
+  });
 });
