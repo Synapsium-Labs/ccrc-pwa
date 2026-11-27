@@ -5902,12 +5902,16 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   `docs/superpowers/programs/desktop-polish/add-account-safari.md` §4.4.
 - **D-9105** — `auth-on-verb`: wave 181, issued on 2026-11-26. The accounts design's gate-dark remedy named a verb ccrc
   did not have; the operator ruled on 2026-11-25 to build it for a local box, so `ccrc auth on|off` arms or disarms the
-  console's sign-in on a server box used only at http://localhost. `on` refuses without a usable passphrase, on a box
-  reached from elsewhere (that is `ccrc expose`), while an update holds the lock, inside a session, without a terminal
-  and in a fleet pane, and otherwise writes `CCRC_AUTH=on`, `CCRC_RP_ID=localhost`, `CCRC_ORIGIN=http://localhost:<port>`
+  console's sign-in on a server box used only at http://localhost. `on` refuses without a usable passphrase, on a Mac
+  (Linux only for now, issue #3475), on a box reached from elsewhere (that is `ccrc expose`), on a box whose
+  `ccrc.service` can take its bind or a sign-in key from anywhere but `ccrc.env` and the exposure file, on a box whose
+  installed `ccrc.service` is not the installer's file byte for byte, is not the file systemd loaded, or has not been
+  reloaded since it changed, while an update holds the lock, inside a session, without a terminal and in a fleet pane,
+  and otherwise writes `CCRC_AUTH=on`, `CCRC_RP_ID=localhost`, `CCRC_ORIGIN=http://localhost:<port>`
   and `CCRC_COOKIE_INSECURE=on` into `ccrc.env` (the cookie line because WebKit drops a Secure cookie on plain-http
   localhost, measured), restarts `ccrc.service` and proves the mode, restoring the file if the proof fails; `off`
-  removes exactly those lines. `ccd/ccrc` grows by the verb past the per-PR limit, waived as
+  removes exactly those lines, with the same refusals but the passphrase, and refuses a box whose `CCRC_ORIGIN` or
+  `CCRC_RP_ID` holds a value it did not write (armed by hand for another address). `ccd/ccrc` grows by the verb past the per-PR limit, waived as
   `growth-waivers/D-9105-ccd-ccrc.json`: `passwd`, `expose` and `auth` are one family kept inline together. Measurements,
   guards, residuals and mutants in `programs/desktop-polish/auth-on-verb.md`.
 
