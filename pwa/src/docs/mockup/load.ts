@@ -23,7 +23,7 @@ import { DOCS_PWA_FETCH_CONCURRENCY, type FetchQueue } from '../fetchQueue';
 import { showBytes } from '../objectUrls';
 import { readRange, type RangeReadFailure } from '../range/readRange';
 import { refsFromTokens, rewriteCss, rewriteCssBytes, scanCss, scanCssBytesRefs } from './css';
-import { readImportMap, scanScript, scriptChildRefs, scriptJson, scriptRefs, type ScriptString } from './modules';
+import { graphKeysBelow, readImportMap, scanScript, scriptChildRefs, scriptJson, scriptRefs, type ScriptString } from './modules';
 import { extendMockupAssetPlan } from './plan';
 import {
   MOCKUP_CLICK_GUARD, MOCKUP_MAX_CSS_DEPTH, MOCKUP_MAX_SRCDOC_CHARS, metaFor, mockupCsp, type MockupAssetKind,
@@ -728,12 +728,14 @@ export function buildMockupSrcdoc(
     below.set(at, out);
     const loaded = assetOf(fileKey);
     if (loaded !== null && loaded.row.verdict.kind === 'module') {
-      for (const ref of importsOf(loaded).refs) {
-        const child = childRow(ref);
-        if (child !== undefined && child.verdict.v === 'inline' && child.verdict.kind === 'module') {
-          out.push(child.ref.key, ...keysBelow(unitKeyOf(child.ref), 0));
-        }
-      }
+      for (const k of graphKeysBelow(fileKey, (file) => {
+        const at = assetOf(file);
+        if (at === null || at.row.verdict.kind !== 'module') return [];
+        return importsOf(at).refs.flatMap((ref): [string, string][] => {
+          const child = childRow(ref);
+          return child !== undefined && child.verdict.v === 'inline' && child.verdict.kind === 'module' ? [[child.ref.key, unitKeyOf(child.ref)]] : [];
+        });
+      })) out.push(k);
     } else if (loaded !== null && loaded.row.verdict.kind === 'css' && depth + 1 <= MOCKUP_MAX_CSS_DEPTH) {
       for (const ref of scanCssBytesRefs(loaded.bytes, loaded.row.ref).refs) {
         const child = childRow(ref);

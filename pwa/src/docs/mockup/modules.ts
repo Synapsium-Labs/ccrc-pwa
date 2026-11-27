@@ -44,6 +44,8 @@ const isSpace = (c: number): boolean => c === 0x20 || c === 0x09 || c === 0x0a |
   || c === 0xa0 || c === 0x2028 || c === 0x2029 || c === 0xfeff;
 const isIdent = (c: number): boolean => (c >= 0x61 && c <= 0x7a) || (c >= 0x41 && c <= 0x5a) || (c >= 0x30 && c <= 0x39)
   || c === 0x24 || c === 0x5f || c >= 0x80;
+/** The most characters of a dynamic import the census shows, from `import` on. */
+const DYNAMIC_TEXT_UNITS = 120;
 /** Keywords after which a `/` opens a regular expression. */
 const REGEX_AFTER = new Set(['return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void', 'throw', 'case', 'do', 'else', 'yield', 'await']);
 
@@ -220,18 +222,19 @@ export function scanScript(text: string): ScriptScan {
           // A dynamic import: its argument is read only when it is one plain string literal.
           const a = skip(j + 1);
           let literal: string | null = null;
-          let close = -1;
           if (a >= 0 && (text.charCodeAt(a) === 0x27 || text.charCodeAt(a) === 0x22)) {
             const q = quoted(a);
             const after = q === null ? -1 : skip(q.next);
             if (q !== null && !q.escaped && after >= 0 && (text.charCodeAt(after) === 0x29 || text.charCodeAt(after) === 0x2c)) {
               literal = q.s.raw;
-              close = text.indexOf(')', after);
             }
           }
-          if (close < 0) close = text.indexOf(')', j);
-          const end = close < 0 ? Math.min(n, j + 120) : close + 1;
-          dynamic.push({ literal, text: text.slice(i - 6, Math.min(end, i - 6 + 120)) });
+          // The census text: the call up to its first `)` within DYNAMIC_TEXT_UNITS of `import`, never a search past that
+          // window, so a text full of `import(` with no `)` stays linear (review: an unbounded search was quadratic).
+          const from = i - 6;
+          const window = text.slice(from, Math.min(n, from + DYNAMIC_TEXT_UNITS));
+          const close = window.indexOf(')');
+          if (dynamic.length <= MOCKUP_SCRIPT_MAX_REFS) dynamic.push({ literal, text: close < 0 ? window : window.slice(0, close + 1) });
           regexOk = true;
           continue;
         }
@@ -239,7 +242,7 @@ export function scanScript(text: string): ScriptScan {
         if (d === 0x27 || d === 0x22) {
           const q = quoted(j);
           if (q === null) break;
-          specifiers.push(q.escaped ? { ...q.s, raw: `\\${q.s.raw}` } : q.s);
+          if (specifiers.length <= MOCKUP_SCRIPT_MAX_REFS) specifiers.push(q.escaped ? { ...q.s, raw: `\\${q.s.raw}` } : q.s);
           i = q.next;
           regexOk = false;
           continue;
@@ -258,7 +261,7 @@ export function scanScript(text: string): ScriptScan {
         if (d === 0x27 || d === 0x22) {
           const q = quoted(j);
           if (q === null) break;
-          specifiers.push(q.escaped ? { ...q.s, raw: `\\${q.s.raw}` } : q.s);
+          if (specifiers.length <= MOCKUP_SCRIPT_MAX_REFS) specifiers.push(q.escaped ? { ...q.s, raw: `\\${q.s.raw}` } : q.s);
           pendingFrom = false;
           i = q.next;
           regexOk = false;
@@ -383,6 +386,32 @@ export function scriptRefs(
     if (fetchCandidate(l.raw)) push({ key: key('f', i), raw: l.raw, basePath: page, kind: 'fetch', depth }, null);
   });
   return { refs, sites };
+}
+
+/** Every key below `root` in a module graph, each once, in depth-first order: `children(file)` answers a file's imports as
+ *  `[key, file]` pairs. One walk with a visited set, so a layered graph (each module importing every module of the next
+ *  layer) costs its edges, never its paths (review: a list built by concatenating each child's list grew with the paths). */
+export function graphKeysBelow(root: string, children: (file: string) => readonly (readonly [string, string])[]): string[] {
+  const out: string[] = [];
+  const seenFiles = new Set<string>([root]);
+  const seenKeys = new Set<string>();
+  const stack: string[] = [root];
+  while (stack.length > 0) {
+    const file = stack.pop()!;
+    const next = children(file);
+    for (let i = next.length - 1; i >= 0; i -= 1) {
+      const [key, child] = next[i]!;
+      if (!seenKeys.has(key)) {
+        seenKeys.add(key);
+        out.push(key);
+      }
+      if (!seenFiles.has(child)) {
+        seenFiles.add(child);
+        stack.push(child);
+      }
+    }
+  }
+  return out;
 }
 
 /** The `<section>/<path>` of the file `parent` names, resolved from its own base (the loader reads only a parent it was

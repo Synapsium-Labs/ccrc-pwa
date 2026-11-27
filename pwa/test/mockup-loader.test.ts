@@ -18,7 +18,7 @@ import { loaderOverBudget, originsOf } from '../src/docs/mockup/census';
 import {
   buildMockupSrcdoc, extractMockupRefs, loadMockupAssets, mockupAssetReader, type MockupBuild, type MockupExtract,
 } from '../src/docs/mockup/load';
-import { readImportMap, scanScript, scriptJson } from '../src/docs/mockup/modules';
+import { graphKeysBelow, readImportMap, scanScript, scriptJson } from '../src/docs/mockup/modules';
 import { parseMockup } from '../src/docs/mockup/parse';
 import { planMockupAssets } from '../src/docs/mockup/plan';
 import {
@@ -355,6 +355,41 @@ describe('X2 P6.2 the scan\'s bounds', () => {
     expect(over.plan.rows).toHaveLength(1 + n + 1);
     expect(over.plan.rows.at(-1)!.ref.raw).toBe(`./x${n}.js`);
     expect(over.plan.rows.at(-1)!.verdict).toEqual({ v: 'unsupported', why: 'scan-limit' });
+  });
+
+  it('a text full of import( with no closing parenthesis is scanned in linear time, its list capped', () => {
+    // Measured against the same length of text with no `import(`: a search past the census window per call made this text
+    // about ten times slower than that baseline (V8's `indexOf` is fast, so a fixed time bound could not tell them apart).
+    const text = 'import(x '.repeat(200_000);
+    const plain = 'impart(x '.repeat(200_000);
+    scanScript(plain);
+    const b0 = performance.now();
+    scanScript(plain);
+    const base = performance.now() - b0;
+    const t0 = performance.now();
+    const s = scanScript(text);
+    const took = performance.now() - t0;
+    expect(took, `baseline ${base.toFixed(0)} ms`).toBeLessThan(Math.max(250, 4 * base));
+    expect(s.over).toBe(false);
+    expect(s.dynamic.length).toBe(MOCKUP_SCRIPT_MAX_REFS + 1);
+    expect(s.dynamic[0]!.text.length).toBeLessThanOrEqual(120);
+  });
+
+  it('graphKeysBelow walks a layered graph by its edges: each key once, each file asked once', () => {
+    const width = 4;
+    const layers = 8;
+    const name = (l: number, j: number): string => `m${l}_${j}`;
+    const asked: string[] = [];
+    const children = (file: string): [string, string][] => {
+      asked.push(file);
+      const l = file === 'root' ? -1 : Number(file.slice(1, file.indexOf('_')));
+      if (l + 1 >= layers) return [];
+      return Array.from({ length: width }, (_, j): [string, string] => [`${file}>${name(l + 1, j)}`, name(l + 1, j)]);
+    };
+    const keys = graphKeysBelow('root', children);
+    expect(keys).toHaveLength(width + (layers - 1) * width * width);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(asked).toHaveLength(1 + layers * width);
   });
 
   it('the lexer skips comments, strings, templates and regular expressions', () => {
