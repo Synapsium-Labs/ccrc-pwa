@@ -1,8 +1,8 @@
 {
   "file": "ccd/ccrc",
-  "maxDelta": 222,
+  "maxDelta": 224,
   "d": "D-9137",
-  "reason": "`ccrc expose artifacts` (native docs X5 wave A4.1): the bash mirror of the artifact tier's site rule and config decision (`_art_site_problem`, `_art_config` and four helpers, 83 lines, kept whole with its loopback pair by the coordinator's ruling), the one reader of the three artifact keys and the console arms' carry (19), the arm itself with its bound guard that it never stands alone (81), and the rest (39: `cmd_expose`'s dispatch and shadow list, `_exp_env_write`'s key lines, `_exp_caddyfile`'s log block and second site block, the landing text, status, the console-port reader, the usage clause); measured against the merge base, `main` at #3405's merge; kept inline because the mirror is read by both the expose arm and doctor's `artifacts` check, which this file sources, and the arm is one of `cmd_expose`'s family, a candidate to leave the file with it when ccd/ccrc is split",
+  "reason": "`ccrc expose artifacts` (native docs X5 wave A4.1): the bash mirror of the artifact tier's site rule and config decision (`_art_site_problem`, `_art_config` and four helpers, 84 lines with review 4022's console-port refusal, kept whole with its loopback pair by the coordinator's ruling), the one reader of the three artifact keys and the console arms' carry (19), the arm itself with its bound guard that it never stands alone and the stored-port remedy (82), and the rest (39: `cmd_expose`'s dispatch and shadow list, `_exp_env_write`'s key lines, `_exp_caddyfile`'s log block and second site block, the landing text, status, the console-port reader, the usage clause); measured against the merge base, `main` at #3405's merge; kept inline because the mirror is read by both the expose arm and doctor's `artifacts` check, which this file sources, and the arm is one of `cmd_expose`'s family, a candidate to leave the file with it when ccd/ccrc is split",
   "added": "2026-11-27",
   "createdAt": "2026-11-27"
 }

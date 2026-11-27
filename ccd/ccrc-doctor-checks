@@ -2493,10 +2493,17 @@ _check_artifacts() {
       _dr_skip artifacts "no artifact names set (no CCRC_ARTIFACT_ORIGIN, CCRC_ARTIFACT_CONTENT_ORIGIN or CCRC_ARTIFACT_PORT in $CCRC_EXPOSURE_FILE): ccrc expose artifacts sets them"
       return 3 ;;
     by-address)
-      _dr_skip artifacts "$ART_DETAIL"
-      return 3 ;;
+      # Reached only with all three keys set (unset and partial answer first): the same hand-made state as mode ip.
+      _dr_fail artifacts "artifact keys stand beside a console reached by address (CCRC_ORIGIN in $CCRC_EXPOSURE_FILE), where the artifact tier cannot serve (an address has no second site)" \
+        "ccrc expose artifacts --off — it removes them"
+      return 1 ;;
     *)
-      _dr_fail artifacts "$ART_DETAIL" "re-run: ccrc expose artifacts — it writes all three keys together and checks them as the server does"
+      local fix="re-run: ccrc expose artifacts — it writes all three keys together and checks them as the server does"
+      case "$ART_DETAIL" in
+        CCRC_PORT=*) fix="write CCRC_PORT in $BOX_ENV_FILE as digits only (1 to 65535, no leading zero), or remove the line for 7788, then restart: $(_svc_restart_hint ccrc.service)" ;;
+        CCRC_ARTIFACT_PORT=*) fix="ccrc expose artifacts --off, then ccrc expose artifacts — a bare re-run keeps the stored port" ;;
+      esac
+      _dr_fail artifacts "$ART_DETAIL" "$fix"
       return 1 ;;
   esac
   local line="" inblk=0 proxied=0

@@ -31,6 +31,10 @@ const BASH = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).
 
 const genLabel = (): string => 't' + randomBytes(6).toString('hex');
 
+/** Whether en_US.UTF-8 is installed: `locale -a` spells it en_US.utf8 on glibc and en_US.UTF-8 on macOS. */
+const HAS_EN_US = (spawnSync('locale', ['-a'], { encoding: 'utf8' }).stdout ?? '').split('\n')
+  .some((l: string): boolean => l.trim().toLowerCase().replace('-', '') === 'en_us.utf8');
+
 interface SiteCheck { console: string; host: string; accepted: boolean; detailHas?: string[]; detailLacks?: string[] }
 interface SiteCase { case: string; checks: SiteCheck[] }
 interface ConfigEnv { origin?: string; content?: string; port?: string; exposeMode?: string }
@@ -96,7 +100,8 @@ describe('ccrc expose artifacts: the bash site rule mirrors the server\'s', () =
     expect(lines[0]![1]!.split(' ')).toEqual(table.acceptList);
   });
 
-  it('site rule: every table case answers the same in bash', () => {
+  /** Every check of the table through the bash mirror, in one process under the given LC_ALL. */
+  const tableAnswersSameInBash = (lcAll: string): void => {
     const planned: Planned[] = [
       ...table.siteCases.flatMap((sc: SiteCase): Planned[] =>
         sc.checks.map((c: SiteCheck): Planned => ({ kind: 'site', check: fresh(c) }))),
@@ -111,10 +116,8 @@ describe('ccrc expose artifacts: the bash site rule mirrors the server\'s', () =
     const home = mkTmp('artbash-');
     const inputPath = join(home, 'artifact-checks.tsv');
     writeFileSync(inputPath, input);
-    // A UTF-8 LC_ALL, as an ssh session may forward one: under it a bracket range like [a-z] can match letters outside
-    // ASCII, so the mirror must pin its own collation. Where the locale is not installed, bash falls back to C.
     const r = spawnSync(BASH, ['-c', DRIVER, '_', CCRC_SRC, inputPath], {
-      env: { ...fixtureEnv(home), TAB: '\t', LC_ALL: 'en_US.UTF-8' }, cwd: home, encoding: 'utf8',
+      env: { ...fixtureEnv(home), TAB: '\t', LC_ALL: lcAll }, cwd: home, encoding: 'utf8',
     });
     expect(r.stderr, 'bash stderr').toBe('');
     expect(r.status, 'bash exit code').toBe(0);
@@ -148,7 +151,16 @@ describe('ccrc expose artifacts: the bash site rule mirrors the server\'s', () =
       for (const w of c.detailHas ?? []) expect(detail, msg).toContain(w);
       for (const w of c.detailLacks ?? []) expect(detail, msg).not.toContain(w);
     });
-  });
+  };
+
+  it('site rule: every table case answers the same in bash', () => tableAnswersSameInBash('C'));
+
+  // A UTF-8 LC_ALL, as an ssh session may forward one: under it a bracket range like [a-z] can match letters outside
+  // ASCII, so the mirror pins its own collation. Where the locale is not installed, bash falls back to C and also warns
+  // on stderr (`setlocale: LC_ALL: cannot change locale`) at start and each time a function's `local LC_ALL=C` unwinds,
+  // so the case would test nothing and fail on the warning: it is skipped there, by a probe of `locale -a` (review 4022 F6).
+  it.skipIf(!HAS_EN_US)('site rule: every table case answers the same in bash under en_US.UTF-8 (skipped where that locale is not installed)',
+    () => tableAnswersSameInBash('en_US.UTF-8'));
 });
 
 // ── the arm itself: `ccrc expose artifacts` ───────────────────────────────
@@ -716,18 +728,44 @@ describe('ccrc expose artifacts: the arm', () => {
     }
   });
 
-  it('expose: an unusable CCRC_PORT is the default, as the server reads it', () => {
-    // config.ts falls back to 7788 for a CCRC_PORT it cannot use; the mirror must not hand the raw value to arithmetic.
-    for (const port of ['abc', '07788', '70000']) {
+  it('expose: a CCRC_PORT that is not plain digits refuses', () => {
+    // config.ts reads CCRC_PORT with Number(): 07788 is 7788 and 07790 is 7790, ' 7790' is 7790, and abc or 70000 fall
+    // back to 7788. The bash reader takes none of them as a port and never guesses which the server took: it refuses,
+    // writing nothing, and only unset or empty is the default (review 4022 F1, the coordinator's rule). This case was
+    // `expose: an unusable CCRC_PORT is the default, as the server reads it`, which expected 7788 for abc, 07788 and 70000.
+    const flags = ['expose', 'artifacts', '--artifact-origin', 'https://art.example.invalid', '--content-origin', 'https://content.example.invalid'];
+    for (const port of ['abc', '07788', '07790', '70000', ' 7790']) {
       const home = box('ccrc-art-badport-');
       seedFile(home, byoEnv('https://ccrc.example.test', 'example.test'));
       writeFileSync(join(home, '.ccrc', 'ccrc.env'), `CCRC_PORT=${port}\n`);
-      const r = runPiped(home, ['expose', 'artifacts', '--artifact-origin', 'https://art.example.invalid',
-        '--content-origin', 'https://content.example.invalid']);
-      expect(r.code, `${port}: ${r.stderr}`).toBe(0);
-      expect(r.stderr, port).toBe('');
-      expect(bytesAt(exposurePath(home)), port).toContain('CCRC_ARTIFACT_PORT=7790\n');
+      const r = runPiped(home, flags);
+      expect(r.code, `${port}: ${r.stderr}`).toBe(1);
+      expect(r.stderr, port).toContain(`CCRC_PORT="${port}" is not a plain port number: write it as digits only (1 to 65535, no leading zero). Nothing was written.`);
+      expect(bytesAt(exposurePath(home)), port).toBe(byoEnv('https://ccrc.example.test', 'example.test'));
     }
+    for (const line of ['CCRC_PORT=\n', 'CCRC_PORT=7789\n']) {
+      const home = box('ccrc-art-port-');
+      seedFile(home, byoEnv('https://ccrc.example.test', 'example.test'));
+      writeFileSync(join(home, '.ccrc', 'ccrc.env'), line);
+      const r = runPiped(home, flags);
+      expect(r.code, `${line}: ${r.stderr}`).toBe(0);
+      expect(bytesAt(exposurePath(home)), line).toContain('CCRC_ARTIFACT_PORT=7790\n');
+    }
+  });
+
+  it('expose: a stored artifact port the console cannot keep names --off', () => {
+    // The arm has no port flag, so a bare re-run keeps the stored port; --off clears it and the next run writes 7790.
+    const home = box('ccrc-art-storedport-');
+    const [ao, co] = ['https://art.example.invalid', 'https://content.example.invalid'];
+    seedFile(home, byoEnv('https://ccrc.example.test', 'example.test') + artKeys(ao, co, 7788));
+    const flags = ['expose', 'artifacts', '--artifact-origin', ao, '--content-origin', co];
+    const r = runPiped(home, flags);
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).toContain('CCRC_ARTIFACT_PORT="7788" is the console\'s own port. Turn the tier off first '
+      + '(ccrc expose artifacts --off), then run ccrc expose artifacts again. Nothing was written.');
+    expect(runPiped(home, ['expose', 'artifacts', '--off']).code).toBe(0);
+    expect(runPiped(home, flags).code).toBe(0);
+    expect(bytesAt(exposurePath(home))).toContain('CCRC_ARTIFACT_PORT=7790\n');
   });
 
   it('expose: artifacts flags that do not fit are usage errors or refusals', async () => {

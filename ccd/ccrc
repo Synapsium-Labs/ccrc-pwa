@@ -7219,7 +7219,7 @@ _art_check_origin() {  # key value console-is-loopback console-host console-port
 _art_config() {
   local LC_ALL=C co=${1:-} cp=${2:-} o=${3:-} c=${4:-} pr=${5:-} lo=0 ch="" miss="" ah=""
   local addr='this box is reached by address, and artifacts need names'
-  _art_port "$cp" || cp=7788   # config.ts's own fallback for a CCRC_PORT it cannot use; never raw into (( ))
+  [[ -n $cp ]] || cp=7788   # unset or empty: config.ts's default
   ART_STATE="" ART_DETAIL="" ART_HOST="" ART_CONTENT_HOST="" _ART_H=""
   if [[ ${6:-} == ip ]]; then ART_STATE=by-address ART_DETAIL=$addr; return 0; fi
   if [[ -z $o$c$pr ]]; then ART_STATE="unset"; return 0; fi
@@ -7230,6 +7230,9 @@ _art_config() {
     ART_STATE=partial ART_DETAIL="missing $miss; all three keys are needed"; return 0
   fi
   ART_STATE=invalid
+  # A CCRC_PORT that is set and not plain digits is refused, never read: config.ts's Number() takes 07790 or 0x1e6e as a
+  # port bash would read otherwise, and teaching bash that parse is a second reader (review 4022 F1, the coordinator's rule).
+  _art_port "$cp" || { ART_DETAIL="CCRC_PORT=$(_art_q "$cp") is not a plain port number: write it as digits only (1 to 65535, no leading zero)"; return 0; }
   _art_port "$pr" || { ART_DETAIL="CCRC_ARTIFACT_PORT=$(_art_q "$pr") is not a port (digits only, no leading zero, 1 to 65535)"; return 0; }
   (( pr == cp )) && { ART_DETAIL="CCRC_ARTIFACT_PORT=$(_art_q "$pr") is the console's own port"; return 0; }
   if [[ $co =~ ^http://localhost:([0-9]+)$ ]] && _art_port "${BASH_REMATCH[1]}"; then lo=1; ch=localhost
@@ -7438,6 +7441,8 @@ _exp_artifacts() {
     _exp_art_keys
     w="${EXP_ART_PORT:-7790}"
     _art_config "$origin" "$(_exp_console_port)" "$ao" "$co" "$w" ""
+    # A stored artifact port a bare re-run keeps: --off clears it, and the next run writes the default (review 4022 L2-F1).
+    [[ $ART_DETAIL != CCRC_ARTIFACT_PORT=* || -z $EXP_ART_PORT ]] || ART_DETAIL+=". Turn the tier off first (ccrc expose artifacts --off), then run ccrc expose artifacts again"
     [ "$ART_STATE" = on ] || _ccrc_die "$ART_DETAIL. Nothing was written."
     [ "$arm" = duckdns ] \
       || echo "expose: artifacts: $ART_HOST and $ART_CONTENT_HOST must sit on a registrable domain of their own: page code can set cookies on its own registrable domain, which on a domain you share would reach your other services"

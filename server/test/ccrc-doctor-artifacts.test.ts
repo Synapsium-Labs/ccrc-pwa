@@ -225,6 +225,39 @@ describe('ccrc doctor: artifacts', () => {
     expect(artifactLine(r.stdout), r.stdout).toBe(
       'FAIL artifacts: artifact keys stand on a box exposed by address, where the artifact tier cannot serve (an address has no second site)');
     expect(remedyFor(r.stdout, 'artifacts')).toBe('  remedy: ccrc expose ip — a re-run drops them');
+
+    // The same state with no mode saying so: the console origin itself is an address (review 4022 F2).
+    const addr = healthy('ccrc-doctor-art-addr-origin-');
+    writeExposureEnv(addr, { duckdns: false, origin: 'https://203.0.113.9', rpid: '203.0.113.9' });
+    plantKeys(addr, n);
+    const a = runDoctor(addr);
+    expect(artifactLine(a.stdout), a.stdout).toBe(
+      'FAIL artifacts: artifact keys stand beside a console reached by address (CCRC_ORIGIN in '
+      + `${join(addr, '.ccrc', 'exposure.env')}), where the artifact tier cannot serve (an address has no second site)`);
+    expect(remedyFor(a.stdout, 'artifacts')).toBe('  remedy: ccrc expose artifacts --off — it removes them');
+  }, SLOW);
+
+  it('doctor: a CCRC_PORT that is not plain digits FAILs', () => {
+    // config.ts reads 07790 as 7790 and the bash reader would not: the value is refused by name, never read (review 4022 F1).
+    const n = names();
+    const home = artifactBox('ccrc-doctor-art-cport-', n);
+    const env = join(home, '.ccrc', 'ccrc.env');
+    writeFileSync(env, readFileSync(env, 'utf8').replace('CCRC_PORT=7788\n', 'CCRC_PORT=07790\n'));
+    const r = runDoctor(home);
+    expect(artifactLine(r.stdout), r.stdout).toBe(
+      'FAIL artifacts: CCRC_PORT="07790" is not a plain port number: write it as digits only (1 to 65535, no leading zero)');
+    expect(remedyFor(r.stdout, 'artifacts')).toMatch(
+      /^ {2}remedy: write CCRC_PORT in .*\/\.ccrc\/ccrc\.env as digits only \(1 to 65535, no leading zero\), or remove the line for 7788, then restart: /);
+  }, SLOW);
+
+  it('doctor: a stored artifact port the console cannot keep names --off', () => {
+    // A bare re-run keeps the stored port (the arm has no port flag), so the remedy turns the tier off first (review 4022 L2-F1).
+    const n = { ...names(), port: 7788 };
+    const home = artifactBox('ccrc-doctor-art-aport-', n);
+    const r = runDoctor(home);
+    expect(artifactLine(r.stdout), r.stdout).toBe('FAIL artifacts: CCRC_ARTIFACT_PORT="7788" is the console\'s own port');
+    expect(remedyFor(r.stdout, 'artifacts'))
+      .toBe('  remedy: ccrc expose artifacts --off, then ccrc expose artifacts — a bare re-run keeps the stored port');
   }, SLOW);
 
   it('doctor: artifact keys beside an incomplete sign-in FAIL', () => {
