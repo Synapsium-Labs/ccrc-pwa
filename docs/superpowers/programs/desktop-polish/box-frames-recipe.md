@@ -125,7 +125,7 @@ its cases:**
   drawn as one) counts two cells, so a row that reaches the last column through one is at the edge. A row of wide
   characters one cell short is not. Round 2's sentence that a row is never read as narrower than it is drawn was not true:
   the wide set was a hand list, and a wide character outside it counted one cell (review 4109's R1 and F7). Wave 195
-  replaced the list with the Unicode table and says where a row is still read narrower than it is drawn (section 9).
+  replaced the list with the Unicode table and says where a row is still read narrower than it is drawn (section 9.1).
 - **Recorded panes as the recipe meets them (F-H).** Every recorded pane of the panes' box folder, and every 2.1.300 pane,
   is reduced with the capture's status row a NEW row under its lowest rule, at the pane's real width and height (its rows
   and its widest row, as the reader measures them), so the pane's top row scrolls off and every rule runs as on a real
@@ -413,172 +413,227 @@ Review 4109 of #3487 found that the full-width rule measured a row with a hand l
 truly reaches the last column could read one cell short, and a path the pane wrapped there was kept in a stored frame (its
 R1). Nothing leaked: no real capture had run. The capture owner and the coordinator agreed that no real capture with this
 recipe starts until this wave is on `main`. Every change below is in `shared/framesReduce.ts`, the one function the test
-box's reducer and the server's check both run, and each case shows both hosts.
+box's reducer and the server's check both run, and each case shows both hosts. This section describes the code at the
+wave's last push; section 9.5 says what each push changed.
 
-### 9.1 What changed
+### 9.1 What the width model is now
 
-- **The wide set is the Unicode table (ruling 1).** `FRAMES_WIDE_RANGES` lists every code point whose East Asian Width
-  is W (Wide) or F (Fullwidth) in the Unicode Character Database file `EastAsianWidth-17.0.0.txt` (Unicode 17.0.0, dated
-  2025-07-24, from the Unicode Consortium's public UCD directory for 17.0.0): its 293 W and F lines, merged where adjacent,
-  are 123 inclusive ranges. The fixture `server/test/fixtures/unicode-east-asian-width.txt` keeps the data file's own
-  first five lines (its name, date and terms) and its 293 W and F lines verbatim. No test fetches anything.
-  - **How it cannot drift.** The table is generated, never edited by hand. The table case parses the fixture's lines,
-    merges them, writes the table's source text from them (eight pairs to a line) and requires the shared file's table to
-    be exactly that text, and its numbers to be exactly those ranges. A new version is a new fixture, and the text the
-    case then expects is what goes into the shared file. The table is written as numbers, not regular expression
-    escapes, so it is ASCII by construction, and a case reads its bytes and requires none over 0x7f. The engine's
-    regular expressions have no East Asian Width property, so no property escape could stand in for the table.
-  - **The walk.** A case walks every range: its first and last code points and one inside must be two cells. The code
-    point just outside each range that the table does not list (246 samples, 226 distinct code points) must be what the
-    rest of the function gives it: two cells for the stated addition (below), an emoji drawn as one or an unassigned
-    code point, one otherwise.
-  - **Nothing counts narrower than on main (the coordinator's ruling on this wave, after the first push).** The first
-    push counted 8 code points one cell where main's hand list counted two: U+3248 to U+324F, circled numbers on black
-    squares, which the data file gives A (ambiguous) and the hand list's range U+3041 to U+33FF took in. A terminal that
-    draws an ambiguous character wide draws them in two, and this wave closes under-counting, so they stay two cells:
-    `FRAMES_WIDE_KEPT`, the one stated addition beside the generated table, with its reason in its comment. The table
-    case still requires the generated table to be exactly the fixture's ranges, so the addition is the only thing beside
-    it. A case holds main's rule as data (its hand list's twelve ranges, from 86b2c2d6e2, and an emoji drawn as one) and
-    compares every code point: **none counts narrower than on main, and 767,047 count wider** (the table's ranges the
-    hand list missed, and every unassigned code point). Of the 226 code points just outside a range, 73 count wider than
-    on main (all unassigned) and none narrower. Wider is the safe direction: it only refuses.
-  - **The engine's version.** A case requires that the engine's Unicode version is not newer than 17.0, so a character
-    the engine knows and a newer terminal may draw wide is never missing from the table. Measured: this engine reports
-    17.0.
-  - **Bundle cost.** The table is 2374 bytes of source (2096 without white space). No file under `pwa/src` or `ui/src`
-    imports `shared/framesReduce.ts`, or `shared/framesCapture.ts` or `shared/framesLane.ts`, the two shared files that
-    import it, so the console's bundle carries none of it today (read, by search of the two source trees).
-- **Unknown is wide on purpose (ruling 2).** Beside the table, two of the engine's own classes count two cells: an emoji
-  drawn as one (`Emoji_Presentation`, which covers the regional indicators, which the table gives N), and an unassigned
-  code point (`Cn`, the noncharacters included). The class rule (rule 1) lets an unassigned code point through, and
-  nothing can say how a terminal draws one, so it counts two, the direction in which the full-width rule fires. A
-  private-use code point never reaches the width: rule 1 refuses the frame whole (`not-a-frame`) first, as it does a
-  surrogate, a control and a format character. Were it asked, a private-use code point would count one cell (the data
-  file gives it A). An engine on an older Unicode version reads more code points as unassigned, and so counts them wider:
-  the safe direction. One comment in the shared file says this, and one case pins it. The stated addition (above) is
-  answered first.
-- **A straddle is at the edge (ruling 3).** A row that ends one cell short of the pane's width, whose next row begins
-  with a wide character, is at the edge: the wide character did not fit in the last cell and the terminal wrapped it
+- **The data file is the fixture (rulings 1 and 2; review 4133's F2).** `server/test/fixtures/unicode-east-asian-width.txt`
+  is the Unicode Character Database file `EastAsianWidth-17.0.0.txt` (Unicode 17.0.0, dated 2025-07-24, from the Unicode
+  Consortium's public UCD directory for 17.0.0), byte for byte: 201,595 bytes, sha256
+  `ea7ce50f3444a050333448dffef1cadd9325af55cbb764b4a2280faf52170a33`, with its own header and terms lines and no line
+  added. A case pins the sha256, the length, the name and date lines and its 2,678 data lines, so anyone can compare it with
+  the public file. No test fetches anything. No size guard in the tree reads it (the growth guards read source files only);
+  the tree scans read it and pass.
+- **The one-cell table.** `FRAMES_ONE_CELL_RANGES` is every code point the file lists as N (neutral), Na (narrow), H
+  (halfwidth) or A (ambiguous), merged: 747 ranges. Everything else counts two cells: what the file lists as W (wide) or
+  F (fullwidth), and what it does not list at all. The file lists every assigned code point (measured on this engine: no
+  code point it has assigned is missing from the file), so "not listed" is "unassigned in Unicode 17.0", 758,564 code
+  points. **Unknown is relative to the table, never to the engine:** the answer for a code point is the same on every
+  engine version, and one assigned after 17.0 counts two cells until a newer data file says otherwise. The reviewer's
+  measured case, Wide code points of the next version's public data that this file does not list (Jurchen, Khitan, Tangut
+  components, a small archaic Katakana YE), counts two cells with no engine asked.
+- **How it cannot drift.** The table is generated, never edited by hand. The table case parses the fixture, merges the
+  one-cell lines, writes the table's source text from them (eight pairs to a line) and requires the shared file's table to
+  be exactly that text and its numbers to be exactly those ranges. A new version is a new fixture, and the text the case
+  then expects is what goes into the shared file. The table is numbers, not regular expression escapes, so it is ASCII
+  by construction: 14,426 bytes of source, and a case reads them and requires none over 0x7f. The engine's regular
+  expressions have no East Asian Width property, so no property escape could stand in. The shared file still imports
+  nothing new.
+- **The one stated addition (the coordinator's ruling after the first push).** U+3248 to U+324F, circled numbers on black
+  squares, are A in the file, so the table lists them as one cell; `main`'s hand list counted them two (its range U+3041 to
+  U+33FF took them in). A terminal that draws an ambiguous character wide draws them in two, and over-counting only
+  refuses, so they stay two cells: `FRAMES_WIDE_KEPT`, one named constant beside the table, its reason in its comment.
+- **The engine's one class, a widener only.** An emoji drawn as one (`Emoji_Presentation`) counts two cells. It takes in
+  the 26 regional indicators, which the file gives N. It can make a code point wider than the table says, never narrower,
+  so a newer engine only widens. A case walks every code point and requires that each counts at least what the table and
+  the addition give it, and that every one counted wider is an emoji drawn as one; the regional indicators are among
+  them. The engine's unassigned class is no longer asked anywhere, and the case on the engine's Unicode version is gone.
+- **Nothing counts narrower than on `main`.** A case holds `main`'s rule as data (its hand list's twelve ranges, from
+  86b2c2d6e2) and compares every code point, with no engine asked: **none counts narrower, and exactly 768,240 count
+  wider**, a figure that is the same on every engine. It also compares with the engine's emoji class on both sides, as
+  `main` and this function each read it: none narrower.
+- **Private use.** A private-use code point never reaches the width: rule 1 refuses the frame whole (`not-a-frame`)
+  first, as it does a surrogate, a control and a format character. Were it asked, it would count one cell (the file gives
+  it A). A case pins it.
+- **Where a row is still read narrower than it is drawn (F7, review 4133's F1).** Only where a terminal in an East Asian
+  locale draws an ambiguous-width character in two cells: the table counts the A characters one cell, as `main` did, less
+  the eight of the addition. The frames driver runs under `LANG=C.UTF-8` (read in `agent/src/testbox/captureFramesRun.ts`),
+  which is not one; how the terminal draws them there is inferred, not measured. A combining or zero-width mark counts one
+  cell though it is drawn in none, so a base followed by the emoji selector (U+FE0F) or the keycap mark (U+20E3) counts at
+  least two in a row: wider, never narrower.
+
+### 9.2 The full-width rule
+
+- **A straddle is at the edge (ruling 3).** A row that ends one cell short of the pane's width, whose next row's first
+  character is two cells, is at the edge: the wide character did not fit in the last cell and the terminal wrapped it
   whole, leaving that cell blank. "One cell short" is measured **after the row's trailing spaces are dropped**, because a
-  read of the pane may give the blank cell as a trailing space or as nothing. Measured on the row as drawn, a row that
-  keeps the blank cell as a space reads as full but ending in a space, and the rule kept the path it continued: the wrong
-  direction. The path token at the row's end is read from the same trimmed row. A case for each form: the row drawn with
-  no trailing space, and the row drawn with one. A row one cell short whose next row begins with a narrow character is a
-  short row, not a wrap, and is kept; so is a row two cells short.
+  read of the pane may give the blank cell as a trailing space or as nothing; measured on the row as drawn, the rule kept
+  the path it continued, the wrong direction. The path token at the row's end is read from the same trimmed row.
+- **One reader of the next row (review 4133's F1, the coordinator's ruling).** The straddle test and the tail are read
+  from the same content of the next row, after its leading decoration (`nextRowContent`, through `spans`), so the two
+  cannot disagree. Before this round the straddle read the next row raw, so a next row that began with decoration before
+  the wide character (a two-space indent, a bar, the prompt glyph, the turn marker, a no-break space) kept the continued
+  tail on both hosts. Its first character counts two cells when the emoji selector or the keycap mark follows it (the keycap
+  after a selector too), since a terminal may draw such a base in two cells. Cases, at a 20-column and a 220-column pane,
+  each on both hosts: every decorated form refuses; every selector and keycap form refuses; decoration then a narrow
+  character is not a straddle and is kept.
 - **The capture owner's condition (ruling 4), red first on the old rule.** A row built with a wide character outside the
-  old hand list reaching the last column, then a continued path tail, refuses the frame whole on both hosts (seven
-  characters: U+2329, U+FE10, U+A960, U+16FE0, U+17000, U+1B000 and U+1F200). A straddler at the last column, then a
-  continued tail, refuses on both hosts, in both forms.
-- **F5 is in this wave (ruling 7).** A replaced row is measured in screen cells, not code points: the content and the
-  token, the two call sites in `replaced`. A content of ten wide characters and a path, 25 cells and 15 code points, is now
-  replaced and keeps its width on screen, where it was refused as narrower than the 19-cell token. No recorded result
-  changed: every recorded pane reduces as before (below).
+  old hand list reaching the last column, then a continued path tail, refuses the frame whole on both hosts (U+2329,
+  U+FE10, U+A960, U+16FE0, U+17000, U+1B000 and U+1F200). A straddler at the last column, then a continued tail, refuses on
+  both hosts, with and without the trailing space. A row one cell short whose next row begins with a narrow character is a
+  short row, not a wrap, and is kept; so is a row two cells short.
+- **A row ending in the decoration (review 4133's A6).** A row whose last character is a border character is not run to the
+  edge, even at the full width: a case now pins it.
+
+### 9.3 What the box sends, and the smaller items
+
+- **What the box answers as reduced passes the server's check, by construction (review 4133's F3).** A replaced row is
+  padded in screen cells (F5), while the shape gate caps a row in code points, so a row of characters that count two cells
+  but take one code point could come out longer than the gate allows: the box answered `reduced` and the server refused
+  the frame. `reduceFrame` now runs the server's check on its own result, with the same lists, and refuses the frame with
+  the check's word when the check would refuse it. The reviewer's 40-column frame (18 unassigned code points and a path)
+  now refuses on the box, `not-a-frame`. A case states the property over every recorded pane as the recipe meets it, and
+  over the capture owner's frames.
+- **F5.** A replaced row is measured in screen cells, not code points: the content and the token, the two call sites in
+  `replaced`. A content of ten wide characters and a path, 25 cells and 15 code points, is now replaced and keeps its width
+  on screen, where it was refused as narrower than the 19-cell token.
+- **What changed in the recorded panes (review 4133's T1; this corrects the first push's "no recorded result changed").**
+  Measured over all 136 recorded panes that have a rule row, `main`'s reducer against this one, as the recipe meets each
+  at its real size: no refusal and no count changed. Nine panes' reduced text changed in one row each, the replaced model
+  row, which carries four more pad spaces because its emoji now count two cells and the row keeps its drawn width:
+  `cc291-model-ack-220x50-full.txt`, `cc291-model-default-ack-120x30.txt`, `cc291-model-default-picker-120x30.txt`,
+  `cc291-model-default-switch-120x30.txt`, `cc291-model-escape-to-picker-120x30.txt`,
+  `cc291-model-picker-220x50-full.txt`, `cc291-model-switch-220x50-full.txt`, and in the box folder
+  `cc291-model-default-switch-120x30.ansi` and `cc291-model-picker-220x50-full.ansi`. Ruling 5 holds: every box-folder
+  pane reduces on both hosts, and the 2.1.300 corpus keeps 38 model rows, 0 account rows and 5 path rows in 61 panes.
 - **F3.** A case puts a bare quote before a cut part of a token's name in the same row, for every name and both quotes;
-  the reviewer's mutant M8 (only a row's first closing quote examined) is now red by that case's name.
-- **F8a.** A case counts the recorded frames in which the full-width rule has a candidate row (a row it reads as run to
-  the edge, or to a straddle, with a row under it), over the 61 2.1.300 panes and the 29 box-folder panes as the recipe
-  meets them at their real sizes. It requires the six frames that had one before this wave
-  (`cc300-ask-freetext-1000.txt`, `cc300-ask-review-4q-100col.txt`, `cc300-ask-wrapped-question-focused.txt`,
-  `cc300-ask-wrapped-question.txt`, `box-taller-than-capture.ansi`, `stash-held-during-turn.ansi`) and pins the count: 6
-  of 90, before and after this wave (measured with the old rule by a scratch script, and with the new one by the case).
-- **F8b.** The third stash pane's case now requires that the one row the path rule replaces is the stash notice row, that
-  it reads the whole working-directory token, and that the stored text holds no `stashed`.
-- **F9.** The version fingerprint gains five probes: a bare quote (kept), a Hangul syllable row reaching the edge, a row
-  at the probe's own width, a straddle, and (with the ruling) a row reaching the edge through U+3248. A case pins their
-  five answers. **The frames recipe's version: `03f101670690507b` on `main`, `bec098af3496f523` at this wave's first push,
-  `962a0b5e963e0b92` at its final tip.** No file in the tree pins any of the three (searched: none, outside this note), so
-  no pin follows. The delivery recipe's version still prints `da16fe2f55551e0b`.
+  the reviewer's mutant M8 is red by that case's name.
+- **F8a.** A case counts the recorded frames in which the full-width rule has a candidate row: it requires the six that had
+  one before this wave (`cc300-ask-freetext-1000.txt`, `cc300-ask-review-4q-100col.txt`,
+  `cc300-ask-wrapped-question-focused.txt`, `cc300-ask-wrapped-question.txt`, `box-taller-than-capture.ansi`,
+  `stash-held-during-turn.ansi`) and pins the count: 6 of 90, on `main`'s rule and at every push of this wave, this round's
+  one reader of the next row included (it did not move).
+- **F8b.** The third stash pane's case requires that the one row the path rule replaces is the stash notice row, that it
+  reads the whole working-directory token, and that the stored text holds no `stashed`.
+- **F9 and D1, the version.** The fingerprint gains seven probes, none of which asks the engine anything: a bare quote
+  (kept), a Hangul syllable row reaching the edge, a row at the probe's own width, a straddle, a row reaching the edge
+  through U+3248, a table-only wide character (U+2329) reaching the edge, and a straddle whose row keeps its blank last
+  cell as a trailing space. A case pins their seven answers. **The frames recipe's version: `03f101670690507b` on `main`,
+  `bec098af3496f523` at the first push, `962a0b5e963e0b92` at the second, `5d453fb42f2d80c8` at fix round 1.** No file in
+  the tree pins any of them outside this note. The delivery recipe's version still prints `da16fe2f55551e0b`.
+- **Bundle cost (A5 corrected).** No file under `pwa/src` or `ui/src` imports `shared/framesReduce.ts`, or the one shared
+  file that imports it, `shared/framesCapture.ts` (`shared/framesLane.ts` imports `framesCapture.ts` only, not the
+  reducer), so the console's bundle carries none of the table today (read, by search of the two source trees).
 
-### 9.2 The note corrected to the code (ruling 8)
+### 9.4 The note corrected to the code (ruling 8), and the known limits
 
-- **R2** (section 5, the class rule's pass-through characters): one combining mark also defeats three shape rules, not
-  the exact matchers only, and the limit now names them: the path rule, the private shapes and the credential shapes.
-- **F7, the first half** (section 4, round 2's F-B): the sentence that a row is never read as narrower than it is drawn
-  was not true with the hand list. It is replaced by a pointer here. What is true now: a character counts two cells when
-  the table lists it, when it is the stated addition, when it is an emoji drawn as one, or when it is unassigned, and one
-  otherwise. A row can still be read narrower than it is drawn in one place: an ambiguous-width character (A in the data
-  file) other than the eight of the stated addition counts one cell, which a terminal draws in two only in an East Asian
-  locale; each of them counted one cell on `main` too. The frames driver runs under `LANG=C.UTF-8` (read in
-  `agent/src/testbox/captureFramesRun.ts`), and how the terminal draws an ambiguous character there is inferred, not
-  measured. Every combining or zero-width mark counts one cell though it is drawn in none, so there the row reads wider
-  than it is drawn, the safe direction.
-- **F7, the second half** (section 5, the three-row split): a bordered box drawn narrower than the pane holds less in a
-  row than the pane's width, so the split needs a string longer than the box's content width; the figure of about 70
-  characters for the longest of the box's strings is marked as inferred.
-- **Ruling 5, measured.** Every recorded box-folder pane still reduces on both hosts, and the 2.1.300 corpus keeps its
-  results and counts: 38 model rows, 0 account rows and 5 path rows replaced in 61 panes, every width kept. No pane or
-  row needed to go to the coordinator.
+- **R2** (section 5, the class rule's pass-through characters): one combining mark also defeats three shape rules, and the
+  limit names them: the path rule, the private shapes and the credential shapes. **D2:** so does any non-ASCII letter, a
+  look-alike included (a Cyrillic `о` for an `o`, a fullwidth `ｈ`): those three read ASCII only, so `/hоme/bob` or a key
+  with one Cyrillic letter is kept as drawn on both hosts. It stays open with F4 and F6, by the coordinator's ruling.
+- **F7** (section 4's round 2 sentence, replaced by a pointer here; and section 5's three-row split, corrected for a
+  bordered box narrower than the pane, with the figure of about 70 characters marked as inferred).
+- **The "Known limits at merge" of #3487.** Closed by this wave: the wide set as a hand list, with the straddle; one
+  combining mark defeating more than the exact matchers, as text (the limit itself stays a named residual on the alarm
+  wave's ticket); a cut token after an earlier bare quote with no case (F3); a replaced row measured in code points (F5); the
+  recorded-pane case not asserting that the full-width rule was exercised (F8a); the third stash pane's case not asserting
+  the notice row (F8b); the fingerprint with no probe for a bare quote, a wide character or a full-width row (F9). Still
+  open, as ruled: F4 (an ordinary word beside a quote glyph refused as a cut token) and F6 (a rule row whose label holds a
+  private string replaced, so the server's check refuses the frame `status-row`), with D2 beside them; and how Claude
+  Code's own wrap indents a continuation row, which the first real capture shows (F1's cases cover the decorated shapes
+  without it).
 
-### 9.3 The "Known limits at merge" of #3487
+### 9.5 The pushes
 
-- **Closed by this wave:** the wide set as a hand list, with the straddle (9.1); one combining mark defeating more than
-  the exact matchers, as text (9.2: the limit itself stays a named residual on the alarm wave's ticket); a cut token after
-  an earlier bare quote with no case (F3); a replaced row measured in code points (F5); the recorded-pane case not
-  asserting that the full-width rule was exercised (F8a); the third stash pane's case not asserting the notice row (F8b);
-  the fingerprint with no probe for a bare quote, a wide character or a full-width row (F9).
-- **Still open, as ruled (ruling 9):** an ordinary word beside a quote glyph refused as a cut token (F4), and a rule row
-  whose label holds a private string replaced, so the server's check refuses the frame `status-row` (F6). Both wait for
-  the first capture's refusal counts. So do the alarm, the send, and anything under `server/src/inject`, which this wave
-  does not touch.
+- **First push, 6f020b7229.** The wide set as the file's W and F lines (123 ranges, the fixture those 293 lines with a
+  header of its own), unassigned code points two cells through the engine's unassigned class, the straddle, F3, F5, F8a,
+  F8b, four probes.
+- **Second push, 5dcae59cb7** (the coordinator's ruling: no code point narrower than on `main`). The stated addition, the
+  case that compares every code point with `main`, a fifth probe.
+- **Fix round 1, review 4133.** F1 (one reader of the next row; the selector and keycap rule), F2 (the fixture is the
+  whole file byte for byte, the table is its one-cell lines, unknown relative to the table, the engine's emoji class a
+  widener only), F3 (the box checks its own result), T1 (9.3), A6, D1 (two probes), D2, and A4 and A5 in the evidence.
 
-### 9.4 Evidence
+### 9.6 Evidence
 
 Every run went through `ccrc test --local`, in the foreground, one file per command.
-- **Red first.** The 11 new cases that need the new rule were run against the old `shared/framesReduce.ts` and each was
-  red by name: the six table and width cases, the three capture-owner cases (the unlisted wide character, the straddle
-  with no trailing space and with one), F5, and F8a. The F3 and F8b cases hold on the old code too (they make the suite
-  stronger; F3's is proved by M8 below). The ruling's case, the comparison with main, is new at the second push and is
-  proved by its mutant below. On the final tip the reducer suite passes 91 of 91.
-- **Mutants**, on the final code tip, in a scratch clone of this branch (never this workspace), one row at a time,
-  with the first wave's runner (from the coordinator's copy, not in the tree): each edit applied, `frames-reduce.test.ts`
-  run once (one row, N18, runs the agent's `testbox-capture-frames-run.test.ts`), the file restored. **178 mutants, 178
-  killed** on the final tip (176 of 176 at the first push). The scratch tree read clean by git after each batch.
-  - Every reducer row of the first wave's list, 38 rows (rules 1 to 10, round 1's and round 2's), three of them
-    re-anchored where the code moved: P6 (the edge counted in code points) now on the cell count, P7 (an emoji counted
-    one cell) as a one-cell answer for an emoji at the top of the width function, and P8 (a CJK ideograph counted one cell) as the unified
-    ideographs carved out of their table range.
-  - 15 for this wave: the reviewer's M4 (the Hangul syllables range removed) and M5 (the fullwidth forms range removed),
-    each red through the table case and the walk; M8 (only a row's first closing quote examined), red through the F3
-    case; the straddle branch removed; the edge measured on the row as drawn; the path token read on the row as drawn;
-    an unassigned code point counted one cell; an emoji drawn as one but N in the table counted one cell; the table
-    search missing a range's first, and its last, code point; F5 reverted; F9's four probes removed; a straddle read under
-    a narrow first character; a straddle read two cells short; the table emptied. And two for the ruling: the stated
-    addition dropped, red by the case that compares every code point with main; the fifth probe removed, red by the
-    probe case.
-  - One per range: each of the 123 ranges dropped from the table, each red through the table case by name (the runner
-    records two names a row; for the one row whose first two were other cases, D49, a run alone showed the table case red
-    too).
-- **Suites on this branch** (`main` had not moved from 86b2c2d6e2, the branch's base, when they ran), each alone: on the
-  server, `frames-reduce` 90, `frames-result` 54, `frames-lane-decider` 9, `frames-lane-store` 25, `frames-lane-capture` 25,
-  `frames-transport` 25, `frames-capture` 13, `frames-capture-frames` 24, `box-frame-fixtures` 8, `testbox-frames-route`
-  19, `delivery-drive-frames` 19, `send-type-loop` 5, the gate's suite 434, `box-token-census` 92, `coord-token` 44, the
-  three sender-reading suites (`pane-prompt-glyph` 6, `injected-prompts-characterization` 11, `send` 158), `anchors` 9,
-  `citations` 4, `deviation-refs` 35, `docs-grammar` 158 and `ci-ledger-guard` 32; on the agent,
-  `testbox-capture-frames` 13, `testbox-capture-frames-run` 49, `testbox-capture-desk-frames` 4,
-  `testbox-capture-op-frames` 11, `testbox-imports` 7 and `testbox-capture-deadline` 26; and the tree guards
-  `topology-clean` 62, `public-text` 20, `private-names` 47, `oss-metadata` 29, `growth-check` 63 (3 skipped) and
-  `growth-caps` 12. All pass. The server's and the agent's own compiles pass.
-- **On each pushed head merged with `main` 8a7bcacc8b** (which had moved by one merge that touches none of these files;
-  the merge probe answered clean each time, so nothing was absorbed), in the scratch clone, each alone: the nineteen
-  server suites of the list above from `frames-reduce` to `send` (the gate's suite among them, 434) and the six agent
-  suites, with the same counts (`frames-reduce` 90 at the first push, 91 at the final tip), and on the final tip also
-  `public-text`, `private-names`, `growth-check` and `growth-caps`. `topology-clean` cannot run in that clone (its tree
-  read overflows git's output buffer there, `spawnSync git ENOBUFS`), so it ran in the workspace at the final tip: one
-  timeout under load (`nothing in the tree speaks it`, 24.6 s against its 20 s), then 62 of 62 alone. The recipe
-  versions print the same on the merge as on the tip: frames `962a0b5e963e0b92` at the final tip, delivery
-  `da16fe2f55551e0b`.
-- **Unmeasured here: the server's test-project compile** (`test/tsconfig.tests.json`). The test slice's memory cap killed
-  it twice under the fleet's load (exit 137, no type error printed); CI's `typecheck (server)` job is its arbiter.
+- **Red first.** At the first push, 11 new cases were run against `main`'s `shared/framesReduce.ts` and each was red by
+  name: the six table and width cases of that push, the three capture-owner cases (the unlisted wide character, the
+  straddle with no trailing space and with one), F5 and F8a. The F9 probe case was added after that run; review 4133
+  measured it red on `main` (`main` gives 21 answers, 18 probes and 3 status frames, where the case asks more). Cases that
+  hold on `main` and on the earlier pushes are proved by mutants instead: F3's (M8), F8b's, the "is kept" controls (a row
+  one cell short with a narrow character below, a row two cells short, decoration then a narrow character), A6's, and the
+  recorded-pane half of 9.3's property case. At fix round 1, the
+  round's suite was run against the second push's reducer: 8 cases red by name (the two table cases, the four decorated
+  and selector straddle cases at 20 and 220 columns, the reviewer's 40-column frame and the probe case). The
+  table-relative unknown case and the emoji-widener case hold on this engine on the second push's code too, whose engine
+  class agreed with the 17.0 table here; each is proved by its mutant (W7, W8). The reducer suite passes 101 of 101.
+- **Mutants** at fix round 1's tip, in a scratch clone of this branch (never this workspace), one row at a time, with the
+  first wave's runner from the coordinator's copy (not in the tree): each edit applied, its test file run once, the file
+  restored. **808 mutants, 808 killed.** The scratch tree read clean by git after each batch.
+  - The 38 reducer rows of the first wave's list (rules 1 to 10, rounds 1 and 2), P6, P7 and P8 re-anchored where the
+    width code moved; one of them (N18) runs the agent's `testbox-capture-frames-run.test.ts`.
+  - 23 rows on the width function, the straddle and this wave's other guards, listed below so that a reviewer can replay
+    each by hand.
+  - One per line of the generated table: each of the 747 one-cell ranges deleted, each red through the table case by name.
+
+The rows on the width function and the straddle, as run at fix round 1's tip (P6, P7 and P8 are the first wave's rows
+re-anchored):
+
+| Row | The edit in `shared/framesReduce.ts` (old, then new; ⏎ is a line break) | Red in `server/test/frames-reduce.test.ts` (first case) |
+|---|---|---|
+| P6 F-B the edge counted in code points | `const cells = cellsOf(cps);⏎  return cells` → `const cells = cps.length;⏎  return cells` | the reviewer's frame: a row that reaches the last column with a wide character, a path going on below, refuses on both hosts |
+| P7 F-B an emoji counted one cell | `const cp = c.codePointAt(0) ?? 0;⏎  if (FRAMES_WIDE_KEPT` → `if (/\p{Emoji_Presentation}/u.test(c)) return 1;⏎  const cp = c.codePointAt(0) ?? 0;⏎  if (FRAMES_WIDE_KEPT` | the reviewer's frame: a row that reaches the last column with a wide character, a path going on below, refuses on both hosts |
+| P8 F-B a CJK ideograph counted one cell | `if (WIDE_CLASS.test(c)) return 2;⏎` → `if (WIDE_CLASS.test(c)) return 2;⏎  if (cp >= 0x4e00 && cp <= 0x9fff) return 1;⏎` | the reviewer's frame: a row that reaches the last column with a wide character, a path going on below, refuses on both hosts |
+| W1 M4 the Hangul syllables counted one cell (a one-cell range added to the table) | `[0xABF0, 0xABF9],` → `[0xABF0, 0xABF9], [0xAC00, 0xD7A3],` | the shared table is the fixture's N, Na, H and A lines merged, as the generator writes them: they cannot drift |
+| W2 M5 the fullwidth forms counted one cell (a one-cell range added to the table) | `[0xFEFF, 0xFEFF],` → `[0xFEFF, 0xFEFF], [0xFF01, 0xFF60],` | the shared table is the fixture's N, Na, H and A lines merged, as the generator writes them: they cannot drift |
+| W3 M8 only a row's first closing quote examined | `j = plain.indexOf('›', j + 1)) {` → `j = -1) {` | a cut token after an earlier bare quote of the same kind in the same row still refuses on both hosts (review 4109, F3) |
+| W4 the straddle branch removed | `\|\| (cells === pane.cols - 1 && firstCells(nextRowContent(next)) === 2)` → (nothing) | a straddler at the last column, then a continued tail: the row ends one cell short as drawn, with no trailing space, and refuses on both hosts |
+| W5 the edge measured on the row as drawn | `const cps = Array.from(row.replace(/\s+$/u, ''));` → `const cps = Array.from(row);` | the same straddle with the blank last cell read as a trailing space: measured after trailing spaces are dropped, it refuses on both hosts |
+| W6 the head read on the row as drawn | `/\S+$/u.exec(a.replace(/\s+$/u, ''))` → `/\S+$/u.exec(a)` | the same straddle with the blank last cell read as a trailing space: measured after trailing spaces are dropped, it refuses on both hosts |
+| W7 F2 unknown asks an engine's unassigned class, stubbed empty (a newer engine) | `else return 1;⏎  }⏎  return 2;⏎}` → `else return 1;⏎  }⏎  return /[^\s\S]/u.test(c) ? 2 : 1;⏎}` | the reviewer's frame: a row that reaches the last column with a wide character, a path going on below, refuses on both hosts |
+| W8 the engine's emoji class removed | `const WIDE_CLASS = /\p{Emoji_Presentation}/u;` → `const WIDE_CLASS = /[^\s\S]/u;` | every line of the fixture, first, last and one inside, counts what the file says; the code point just outside each one-cell range counts two |
+| W9 the table search misses a range's first code point | `if (cp < a) hi = mid - 1;` → `if (cp <= a) hi = mid - 1;` | every line of the fixture, first, last and one inside, counts what the file says; the code point just outside each one-cell range counts two |
+| W10 the table search misses a range's last code point | `else if (cp > b) lo = mid + 1;` → `else if (cp >= b) lo = mid + 1;` | every line of the fixture, first, last and one inside, counts what the file says; the code point just outside each one-cell range counts two |
+| W11 F5 a replaced row measured in code points again | `const w = cellsOf(Array.from(s.content));⏎  const t = cellsOf(Array.from(token));` → `const w = Array.from(s.content).length;⏎  const t = Array.from(token).length;` | the reviewer's 40-column frame, a replaced row of one-code-point two-cell characters, refuses on the box with the server's word |
+| W12 F9 the first four new probes removed | `'› stashed · Restart to update', String.fromCodePoint(0xAC00).repeat(17) + 'xy /ab\ncd rest',⏎    'x'.repeat(35) + ' /pro\nject rest', 'x'.repeat(35) + ' /pr\n' + String.fromCodePoint(0x6F22) + 'ject rest',⏎` → (nothing) | the probe table answers for a bare quote, a wide character at the edge, a row at the probe's width, a straddle, the stated addition at the edge, a table-only wide character at the edge and a trailing-space straddle (review 4109, F9; review 4133, D1) |
+| W13 a straddle read under a narrow first character too | `firstCells(nextRowContent(next)) === 2)` → `firstCells(nextRowContent(next)) >= 1)` | a row of wide characters one cell short of the edge is not run to it, and reduces unchanged |
+| W14 a straddle read two cells short too | `(cells === pane.cols - 1 &&` → `(cells >= pane.cols - 2 &&` | a row two cells short, even with a wide character below, is kept |
+| W15 the one-cell table emptied | `FRAMES_ONE_CELL_RANGES: readonly (readonly [number, number])[] = Object.freeze([` → `FRAMES_ONE_CELL_RANGES: readonly (readonly [number, number])[] = Object.freeze([] ?? [` | a row of wide characters one cell short of the edge is not run to it, and reduces unchanged |
+| W16 the stated addition dropped | `Object.freeze([[0x3248, 0x324F]])` → `Object.freeze([])` | no code point counts narrower than it did on main, with no engine asked, and on this engine too: the one stated addition keeps the eight ambiguous ones main counted wide |
+| W17 the fifth probe removed | `'x'.repeat(35) + ' /p' + String.fromCodePoint(0x3248) + '\nq rest',⏎` → (nothing) | the probe table answers for a bare quote, a wide character at the edge, a row at the probe's width, a straddle, the stated addition at the edge, a table-only wide character at the edge and a trailing-space straddle (review 4109, F9; review 4133, D1) |
+| F1a the straddle reads the next row raw | `firstCells(nextRowContent(next)) === 2)` → `firstCells(next) === 2)` | at 20 columns: a straddle whose next row begins with decoration before the wide character refuses on both hosts |
+| F1b the selector and keycap rule removed | `if (cps[1] === EMOJI_SELECTOR \|\| cps[1] === KEYCAP_MARK \|\| cps[2] === KEYCAP_MARK) return 2;⏎` → (nothing) | at 20 columns: a straddle whose next row begins with a base character and the emoji selector or the keycap mark refuses on both hosts |
+| F1c the tail read from the raw next row | `const tail = /^\S+/u.exec(nextRowContent(b))` → `const tail = /^\S+/u.exec(b)` | at 20 columns: a straddle whose next row begins with decoration before the wide character refuses on both hosts |
+| F3a the box's check of its own result removed | `return c.ok ? r : { kind: 'refused', refusal: c.refusal };` → `return r;` | the reviewer's 40-column frame, a replaced row of one-code-point two-cell characters, refuses on the box with the server's word |
+| A6 the decoration clause removed from the edge test | `if (last === undefined \|\| DECOR.has(last) \|\| last ===` → `if (last === undefined \|\| last ===` | a row whose last character is the decoration is not run to the edge, even at the full width (review 4133, A6) |
+| D1 the two new probes removed | `'x'.repeat(35) + ' /a' + String.fromCodePoint(0x2329) + '\nb rest', 'x'.repeat(35) + ' /pr \n' + String.fromCodePoint(0x6F22) + 'ject rest',⏎` → (nothing) | the probe table answers for a bare quote, a wide character at the edge, a row at the probe's width, a straddle, the stated addition at the edge, a table-only wide character at the edge and a trailing-space straddle (review 4109, F9; review 4133, D1) |
+
+- **Suites at fix round 1's tip**, each alone. `main` is 8a7bcacc8b, which touches nothing under `shared/`, `server/`,
+  `agent/` or `ccd/` since the branch's base, and the merge probe answered clean, so the tip is the merged head for those
+  packages and nothing was absorbed. On the server: `frames-reduce` 101, `frames-result` 54, `frames-lane-decider` 9,
+  `frames-lane-store` 25, `frames-lane-capture` 25, `frames-transport` 25, `frames-capture` 13, `frames-capture-frames`
+  24, `box-frame-fixtures` 8, `testbox-frames-route` 19, `delivery-drive-frames` 19, `delivery-capture-frames` 36,
+  `radar-fleet-frames` 15, `send-type-loop` 5, `single-definition/late-census` 83, the gate's suite 434,
+  `box-token-census` 92, `coord-token` 44, the three sender-reading suites (`pane-prompt-glyph` 6,
+  `injected-prompts-characterization` 11, `send` 158), `pane-sgr-guard-characterization` 128, `rings/shared-imports` 6,
+  and the tree guards `topology-clean` 62, `public-text` 20, `private-names` 47, `oss-metadata` 29, `growth-check` 63
+  (3 skipped) and `growth-caps` 12. On the agent: `testbox-capture-frames` 13, `testbox-capture-frames-run` 49,
+  `testbox-capture-desk-frames` 4, `testbox-capture-op-frames` 11, `testbox-imports` 7 and `testbox-capture-deadline` 26.
+  All pass, and the server's and the agent's own compiles pass. At the earlier pushes the same list passed, and the PR's
+  own server compile job measured the test-project compile, which the box's test slice killed twice for memory (exit
+  137).
 - **Tests that read a file this wave changes as text** (#3562): the server tests that name `shared/framesReduce.ts` in a
   string are `frames-reduce`, `box-frame-fixtures`, `frames-lane-capture`, `frames-transport`, `testbox-frames-route` and
-  `single-definition/late-census` (83), and on the agent `testbox-capture-deadline` and `testbox-capture-frames-run`. All
-  ran above and pass. This wave changes no other TypeScript file.
+  `single-definition/late-census`, and on the agent `testbox-capture-deadline` and `testbox-capture-frames-run`. All ran
+  above and pass. This wave changes no other TypeScript file.
 - **Count lines.** No file this wave touches states the gate's count lines, so none was re-derived.
 - **This note** is an existing task note, edited with the coordinator's direction; the head commit carries the ledger
   guard's edit trailer for it.
 - **Process.** Three hook refusals, each reported. The graph gate refused a search command until one graph query had
   answered (its own instruction), so a query ran and the search was not repeated. The test slice's hook refused two
   commands whose text named the compiler, though neither ran one: a status mail to the coordinator, sent again with that
-  word left out, and a memory note, written with the file tools instead. The file tools turn a
-  `\u` escape typed into an edit into the character itself, so the table was written as numbers and spliced in by a
-  script, and the four new probes spell their wide characters with `String.fromCodePoint`.
+  word left out, and a memory note, written with the file tools instead. The file tools turn a `\u` escape typed into an
+  edit into the character itself, so the tables are written as numbers and spliced in by a script, and the probes spell
+  their wide characters with `String.fromCodePoint`.
