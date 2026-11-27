@@ -54,8 +54,9 @@ derived from the EXEMPT table's marker) is the one list of routes that take the 
 read is in it. The dark rule is held by the gate suite's whole-surface property loop (a dark box answers what a signed-in
 caller sees), not by the read's own suite, which injects its two credentials (review 4069's A4). The box-token census
 counts the frames read as a lane of its own (review 4069's F6): its check is composed in `coord/routes.ts` and handed to
-its own route file, and a `HELPER_ROUTES` table, the same one the coord-token guard reads, makes the helper's call that
-route's registration, so the check is no longer credited to the status read above it. The derived counts are 109 lanes,
+its own route file, and one table of helper routes (`server/test/boxTokenHelperRoutes.ts`), which the census and the
+coord-token guard both read (review 4086's F-F), makes the helper's call that route's registration, so the check is no
+longer credited to the status read above it. The derived counts are 109 lanes,
 106 machine lanes and 39 coordination routes. Its query is closed: `build`, and optionally `frame`. The list answer
 carries no text. A frame answer carries one reduced text, or no text and the rule word when the check refuses it. The store
 keeps text for the newest four framed builds; older rows keep their record, word and check. The status read and the builds
@@ -89,9 +90,9 @@ its cases:**
   break stripped, with SGR removed, so a colour change or a border between the halves does not hide it. The runner
   gives the capture's working directory among its strings (a case pins it). On both hosts, so the server's check holds
   the same rule with none of the box's strings: a token with a `/` run to a full-width row's last column and going on
-  below refuses; so does a replacement token cut anywhere (a `‹` that starts none of the tokens, or a `›` that ends
-  none); so does a path's tail at the start of the row after a row that ends in a token or runs to the edge. A row too
-  narrow for its whole token refuses the frame rather than cut the token. The reviewer's two frames are cases by name,
+  below refuses; so does a replacement token cut anywhere (made exact in round 2, below); so does a path's tail at the
+  start of the row after a row that ends in a token or runs to the edge. A row too narrow for its whole token refuses the
+  frame rather than cut the token. The reviewer's two frames are cases by name,
   as the box now refuses them and as the server refuses what a box without the fix sent.
 - **The status row (F3).** The capture's settings run the recorder as the status line, and it prints one fixed text,
   `ccrc capture`. The status position is the row directly under the frame's lowest rule row. In the recorded 2.1.291
@@ -104,11 +105,38 @@ its cases:**
 - **The over-replacement corpus, altered (F3).** The 2.1.300 panes were drawn with no status line, so as recorded every
   one is refused `status-row` (under its lowest rule each holds an ask's last option, its tab row, a hint such as
   `paste again to expand`, or the auto mode row; pinned). The measurement case adds the status row as a NEW row under each
-  pane's lowest rule and keeps every row the pane drew, and the counts are unchanged: 38 model rows, 5 path rows, 0
-  account rows, 61 panes reduced.
+  pane's lowest rule, and the counts are unchanged: 38 model rows, 5 path rows, 0 account rows, 61 panes reduced. Since
+  round 2 it does so at the pane's real size, so its top row scrolls off (F-H, below).
 - **Short names (F4).** A user or host name of one to three characters is no longer dropped: it is matched as a whole
   word, bounded by the row's edge or by a character that is not a letter, digit, dot, dash or underscore, and its row is
   replaced as a longer one's is.
+
+**Review fix round 2 (review 4086, the coordinator's ruling 39742), each red first and held by its cases:**
+- **A cut token is exact (F-A).** Claude Code draws a held stash as a row that begins with the single right-angle quote
+  (`› stashed · …`), the character the replacement tokens end in. Round 1's check read any such quote that closed no token
+  as a cut, so it refused both recorded held-stash panes whole, on both hosts. A cut is now the opening quote followed by
+  a non-empty part of the start of a token's name that does not go on to the whole token, or a non-empty part of the end
+  of a name followed by the closing quote and not preceded by the rest of the token. A bare quote, with no part of a name
+  against it, is Claude Code's own glyph and is kept. The stash notice row is a fixed Claude Code string and is kept byte
+  for byte. Nothing else about the cut rule moved: the reviewer's round-1 frames still refuse, and a row too narrow for its
+  token is refused where it would be replaced, never cut short. The token names begin with three different letters and
+  end with three different letters, so at most one name stands against a quote.
+- **The full-width rule counts screen cells (F-B).** A wide character (the East Asian wide and fullwidth blocks, an emoji
+  drawn as one) counts two cells, so a row that reaches the last column through one is at the edge. A row of wide
+  characters one cell short is not. Every other character counts one cell, a combining mark included, so a row is never
+  read as narrower than it is drawn.
+- **Recorded panes as the recipe meets them (F-H).** Every recorded pane of the panes' box folder, and every 2.1.300 pane,
+  is reduced with the capture's status row a NEW row under its lowest rule, at the pane's real width and height (its rows
+  and its widest row, as the reader measures them), so the pane's top row scrolls off and every rule runs as on a real
+  frame. Measured: all 29 box-folder panes reduce on both hosts (before the fix, the two held-stash panes were refused
+  `private-shape`), and the 2.1.300 counts are unchanged at the real sizes (59 panes at 220x50, two at 100x40): 38 model
+  rows, 5 path rows, 0 account rows. The held-stash panes keep their notice row byte for byte; the one row replaced in each
+  is the banner's model-and-plan row.
+- **Three survivors killed (F-G).** A stored row whose record says `over-cap` but holds a text is refused `not-a-frame` by
+  the read, which reads the whole result again; the read asks the live masker in rows mode, every call; our own mail
+  notice wrapped at exactly the pane's width inside `~/.local/bin/…` reduces unchanged, because both rows are ours.
+- **One table of helper routes (F-F).** The census and the coord-token guard read one table,
+  `server/test/boxTokenHelperRoutes.ts`; each holds every row to its file. Emptying the table reds both.
 
 ## 5. Known limits
 
@@ -122,12 +150,39 @@ its cases:**
 - **The read is the box token's audience.** That is the owner's ruling: the reduced frames are made to be committed to a
   public repository.
 - **A short user or host name.** On a box whose user or host is an ordinary short word, frames lose that word: each row
-  holding it as a word is replaced (review 4069's F4).
+  holding it as a whole word is replaced (review 4069's F4). As built, beside a digit, a dot, a dash, an underscore or any
+  letter (a non-ASCII one included) it is not the word and is not replaced, and case is not folded (`Bo` and `BO` are
+  kept); the injected private-name scan carries case (review 4086's F-E).
+- **A private name that is also part of our own text.** A row whose whole content is a private string that is also a run
+  of one of our fixed texts is kept, because rule 2 runs before rule 3 and the two cannot be told apart there. Round 1's
+  note said such a row is replaced; it is not (review 4086's F-E). The recipe's fixed texts are this repository's own, and
+  the box's strings (its home, user, host and directories) are not runs of them at any recorded size.
+- **The path rule reads ASCII components only.** `PATH_LIKE` takes `[\w.-]` components, so `/srv/проект/данные` is not
+  read as a path; the box's exact home and working-directory strings still replace the capture's own paths (review 4086's
+  F-E).
+- **A private string split across three rows is not caught.** The wrap rule joins two adjacent rows. A three-row split needs
+  a middle row that is wholly inside the private string, so the string would be longer than a row; the recipe's panes are
+  220 columns wide and the longest of the box's strings, its working directory, is about 70 characters (review 4086's
+  F-C). It goes onto the alarm wave's ticket.
+- **Characters the class rule lets through.** Variation selectors, combining marks, unassigned and noncharacter code
+  points, the Hangul fillers, the braille blank, the no-break and wide spaces, the object replacement and replacement
+  characters and regional indicators pass the shape rule, which is by class as ruled. Placed inside a private string, a
+  model word or an account word, one defeats the exact matchers (a private with a U+FE0F inside survives on the box;
+  `Haiku 5.5` with a U+034F inside survives rule 5). No build draws one there. A named residual (review 4086's F-D), on the alarm wave's ticket.
+- **The third stash pane's notice row is replaced.** In `stash-after-cs.ansi` the stash notice shares its row with the tmux
+  hint, which carries `~/.tmux.conf`, so the path rule replaces the whole row and the notice is not in the stored frame
+  (pinned). If the first real capture's stash case shows a replacement on that row, that figure goes to the capture owner
+  with the rest, and the question of replacing only the path comes back then (the coordinator's ruling on F-A).
+- **The status pair is held on the literals.** The agent case holds `FRAMES_STATUS_TEXT` equal to the recorder's
+  `STATUSLINE_REPLY`, and the settings the capture writes name the recorder; no case reads the `settings.json` the runner
+  writes. A runner that dropped the status line would have every frame refused `status-row`: it fails closed (review
+  4086's F-I). On the alarm wave's ticket.
 - **The status row fails closed.** A build that draws any notice on the status row itself has every frame refused
   `status-row`. In the recorded 2.1.291 model-picker pane the build draws its effort mark at that row's right end. The
   first real capture's refused-by-word counts show it if it happens, and they go to the capture owner.
 - **A narrow replaced row refuses.** A row whose content is narrower than its whole token (`‹working directory›`,
-  `‹model›`, `‹account›`) refuses the frame. None of the 61 recorded panes has one.
+  `‹model›`, `‹account›`) refuses the frame where it would be replaced. None of the 61 recorded 2.1.300 panes and none of
+  the 29 box-folder panes has one.
 - **What the driver cannot produce** is in the plan's section 3: a macOS box, a real keyboard, a person's Enter, a mouse
   scroll, a new build's exact cap, and anything a real account or model draws.
 
@@ -157,6 +212,14 @@ its cases:**
   plan named, so the tree check can hold every file in the folder (review 4069's A5). The plan is corrected.
 - **frames-short-names-kept**: `boxPrivates` keeps a user or host name of any length. Its pin held that a name under four
   characters was left out, and now holds that it is kept (review 4069's F4).
+- **plan-statements-the-code-departs-from** (review 4086's F-I): five statements of the plan that the code does not do,
+  each by the plan's line at this round's tip. Line 247 to 249: the signatures are `reduceFrame(frame, pane, ours,
+  privates, scan, mask)` and `checkReducedFrame(text, pane, ours, scan, mask)`, each with the pane and the masker. Line
+  264: the home's `~` form is not among the box's strings; a home-relative path is caught by rule 4 and by the private
+  shapes instead. Line 296: rules 4 to 6 do read a rule row, and a label they would catch refuses the frame, never kept and
+  never rewritten (the background security review). Line 320 and 328: rule 5 and rule 6 are one chain, so the banner's row
+  is counted once, as a model row: 38, 0 and 5, not 38, 38 and 5. Line 572: "Waiting on you" still waits on the owner's
+  yeses to packets 1 and 2 and the wave 185 worker's word, each given since (sections 3 and 8).
 - **frames-sgr-own-definition**: the box frames shape rule keeps its own SGR stripper beside the pane reader's
   (`pane/dialog.ts`, ARCH-63), one copy for every box frames file (`shared/framesResult.ts#stripFrameSgr`). The reason is a
   boundary and another host: the shape rule decides which escapes may leave the test box, it runs in the box's agent as well
@@ -207,6 +270,17 @@ reviewer's survivors (W2b, W4, the C1 class and the version grammar) and one per
 | the drive | the hold's release; the cap at the runner; the privates handed to the reducer; a refused key; the status text moved (round 1, F3) | `testbox-capture-frames-run.test.ts` |
 | the box's strings | the short-name floor back (round 1, F4) | `testbox-capture-frames.test.ts` |
 | the client | the build grammar; the frame grammar | `ccrc-api.test.ts` |
+| reducer, round 2 | a closing quote that ends no token a cut again (F-A, widened); an opening quote that starts no token a cut again; the cut check narrowed to nothing; its head loop deleted; its tail loop deleted; a row too narrow for its token kept as drawn; the edge counted in code points (F-B); an emoji counted one cell; a CJK ideograph counted one cell; the full-width rule without its ours-row exemption (O6) | `frames-reduce.test.ts`: the held-stash panes, the bare quotes, the reviewer's frames, the narrow row, the wide-character edge and our wrapped notice, each by name |
+| the read, round 2 | the whole-result re-read skipped (O4); the masker asked without rows mode (O5) | `testbox-frames-route.test.ts` |
+| the helper table, round 2 | the one table's row removed (F-F) | `coord-token.test.ts` and `box-token-census.test.ts`, each by name |
+
+**Re-run on round 2's final tip** (the coordinator's ask, 39742): every row of the table above, at 2f312f5297, the last
+commit that changes code or a test (the commit after it changes this note only). Round 1's 79, three of them re-anchored
+where the cut check, the replacement and a rule row's private string moved, and 13 for round 2's guards, including the
+reviewer's three survivors (O4, O5, O6). **92 mutants, 92 killed, measured.** A first run of 91 at 1532e9c2da (before the
+census read the one table) killed all 91 as well. The mutation runner is a scratch script that applies each edit, runs its
+named test file once through the supported runner, and restores the file byte for byte (review 4086's F-I (2): it is not
+in the tree, and the table above is the record).
 
 ## 8. Process notes
 
@@ -289,16 +363,39 @@ reviewer's survivors (W2b, W4, the C1 class and the version grammar) and one per
     a scratch copy (the census 92 cases, the gate suite 434, mutant W2b red in 5 cases). Its yes (39547) came before the
     edit.
   - The tests that read a file this round changes as text, outside the fast run's selection (#3562): for the five
-    `server/` and `shared/` TypeScript files this round changes, 11 tests name one in a string. Each ran alone on this
+    `server/` and `shared/` TypeScript files this round changes, eight tests read one as text. Each ran alone on this
     branch merged with `main` (not absorbed) and passed: `auth-gate`, `box-token-census`, `coord-pause-route`,
-    `coordinator-skill`, `frames-lane-decider`, `frames-result`, `pane-sgr-guard-characterization`, `pool-accounts-route`,
-    `refusal-status`, `single-definition/advance-switches` and `single-definition/late-census`. So did the count suites
+    `notify-token`, `pane-sgr-guard-characterization`, `refusal-status`, `single-definition/advance-switches` and
+    `single-definition/late-census`. (Corrected in round 2, review 4086's F-I: the round-1 list missed `notify-token`, which
+    reads `server/src/auth/gate.ts` with its path in pieces, and named four that only import a file or mention it in a
+    comment, `coordinator-skill`, `frames-lane-decider`, `frames-result` and `pool-accounts-route`; all four passed too.) So did the count suites
     (`ccrc-api`, `ccrc-api-closed`, `coord-db`, `limit-samples-store`, `run-close-switch`, `coord-token`, `testbox-pins`).
     The final tip was merged again with `main` at 276555102d (#3490 had landed and touches the census), and the count
     suites, `late-census` and the frames suites passed there too. The figures stand: 343 scanned, 340 HTTP, 220 gated,
     120 exempt, 34 route files, 105 client rows, migration 134 (`main`'s highest is 133).
   - One guard this round's cases tripped: `testbox-pins`, because the local-arm case plants the box settings in a fixture
     `HOME`. The transport test is named as a capture holder.
+  - No hook refused a command this round.
+- **Review fix round 2** (review 4086; the coordinator's 39742):
+  - The census change went to chat A first, which holds the census, as a packet of three edits measured on a scratch copy
+    (the census 92 cases, coord-token 44, the table's row removed red in both). Its yes (39759) came before the edit, and
+    the edit is that packet byte for byte.
+  - Main had moved to 8595076eca (#3566, #3567, #3569). My probe of the tip against it was clean (exit 0), so nothing was
+    absorbed. On the tip merged with that main in scratch (not absorbed, not committed), each alone, all passed: the gate
+    suite (434 cases, which asserts 343 scanned routes), the census (92, which derives 109 lanes, 106 machine lanes and 39
+    coordination routes and holds the README and `gate.ts` to them), `coord-token`, the count suites (`ccrc-api` with its
+    105 client rows, `ccrc-api-closed`, `coord-db`, `limit-samples-store`, `run-close-switch`, `testbox-pins`), `refusal-status`,
+    `coord-pause-route` and `notify-token`; the three sender-reading suites (`pane-prompt-glyph` 6, the injected-prompts
+    characterization 11, `send` 158) and `send-tall-box`; every frames suite on the server and the agent, `testbox-imports`
+    included; and the guards that read this round's `shared/framesReduce.ts` as text or scan `shared/`
+    (`single-definition/late-census`, `single-definition/advance-switches`, `pane-sgr-guard-characterization`,
+    `rings/shared-imports`, `rings/wire-totality`, `rings/fastify-l4`, `single-definition/injected-prompts`,
+    `single-definition/roster-bash`). The figures stand: 343 scanned, 340 HTTP, 220 gated, 120 exempt, 34 route files, 105
+    client rows, migration 134 (`main`'s highest is still 133), and 109, 106 and 39. No side moved them.
+  - `DELIVERY_RECIPE_VERSION` printed `da16fe2f55551e0b` on the tip and on the merge.
+  - The background security review flagged two of the mutation round's mutants while each was applied (the client's frame
+    grammar dropped, and a rule row's private string kept). Each was the runner's transient edit, restored after its run;
+    the tree was clean after the round.
   - No hook refused a command this round.
 - **Packets:** one went to each holder of a file this wave edits (`send.ts`, `agent-protocol.ts`, the coordination store,
   port and schema, the gate and its suite, `server.ts`), and three to the capture owner. Each edit followed its yes.
