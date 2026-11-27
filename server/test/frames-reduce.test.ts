@@ -19,9 +19,15 @@ const PANE = { cols: 220, rows: 50 };
 const NONE: FramesScan = () => false;
 const COMMITTED: FramesScan = framesScan;
 const OURS = ['frames row 001 of 003 abcdefghij', 'frames earlier turn ZQX-END-turn', FRAMES_NUDGE_TEXT];
-const frame = (...rows: string[]): string => rows.join('\n') + '\n';
 /** The capture's status row, which sits directly under the frame's lowest rule (rule 8, review 4069's F3). */
 const STATUS = `  ${FRAMES_STATUS_TEXT}`;
+/** The box's lower rule as a frame draws it, the status row under it. */
+const LOWER = '─'.repeat(60);
+/** A frame of `rows` exactly as given: for the cases that draw their own rules and status row. */
+const raw = (...rows: string[]): string => rows.join('\n') + '\n';
+/** A frame of `rows` above the box's lower rule and the capture's status row, as every recipe frame ends (rule 8), so a
+ *  case's rows are its first rows. */
+const frame = (...rows: string[]): string => raw(...rows, LOWER, STATUS);
 const reduced = (f: string, privates: readonly string[] = [], ours: readonly string[] = OURS): string => {
   const r = reduceFrame(f, PANE, ours, privates, NONE);
   if (r.kind !== 'reduced') throw new Error(`refused: ${r.refusal}`);
@@ -84,7 +90,7 @@ describe('a wrap through a private string or a path (review 4069, F2, the coordi
     const words = `  ${'word '.repeat(43)}wor`;
     expect(Array.from(words)).toHaveLength(PANE.cols);
     expect(reduced(frame(words, 'next words'))).toBe(frame(words, 'next words'));
-    const ruled = frame('─'.repeat(PANE.cols), '  /help for help', '─'.repeat(30), STATUS);
+    const ruled = raw('─'.repeat(PANE.cols), '  /help for help', '─'.repeat(30), STATUS);
     expect(reduced(ruled)).toBe(ruled);
   });
 
@@ -177,9 +183,9 @@ describe('rules 3 to 6: a row replaced keeps its width and its border', () => {
     }
   });
   it('rule 5: a model name, rule 6: an account or a plan', () => {
-    expect(reduced(frame('  Haiku 9.9 · whatever')).trim()).toBe(FRAMES_REPLACED.model);
-    expect(reduced(frame('  API Usage Billing')).trim()).toBe(FRAMES_REPLACED.account);
-    expect(reduced(frame('  Claude Max')).trim()).toBe(FRAMES_REPLACED.account);
+    expect(reduced(frame('  Haiku 9.9 · whatever')).split('\n')[0]!.trim()).toBe(FRAMES_REPLACED.model);
+    expect(reduced(frame('  API Usage Billing')).split('\n')[0]!.trim()).toBe(FRAMES_REPLACED.account);
+    expect(reduced(frame('  Claude Max')).split('\n')[0]!.trim()).toBe(FRAMES_REPLACED.account);
   });
   it('a plain build row is kept', () => {
     expect(reduced(frame('  ? for shortcuts'))).toBe(frame('  ? for shortcuts'));
@@ -189,7 +195,7 @@ describe('rules 3 to 6: a row replaced keeps its width and its border', () => {
 describe('rule 7: a rule row\'s label is kept byte for byte (the coordinator\'s condition 2)', () => {
   const rule = `${ESC}[38;5;244m${'─'.repeat(90)} ↑ 156 more ${'─'.repeat(90)}${ESC}[0m`;
   it('a rule row carrying an arrow, a number and a word survives reduction unchanged', () => {
-    expect(reduced(frame(rule, STATUS))).toBe(frame(rule, STATUS));
+    expect(reduced(frame(rule))).toBe(frame(rule));
   });
   it('the path rule does not read that label as a path', () => {
     expect(PATH_LIKE.test('↑ 156 more')).toBe(false);
@@ -197,18 +203,18 @@ describe('rule 7: a rule row\'s label is kept byte for byte (the coordinator\'s 
   });
   it('a rule row whose label rules 4 to 6 would catch refuses the frame: never kept, never rewritten', () => {
     for (const label of ['…/work/x', 'Haiku 9', 'Claude Max']) {
-      expect(reduceFrame(frame(`${'─'.repeat(20)} ${label} ${'─'.repeat(20)}`, STATUS), PANE, OURS, [], NONE)).toEqual({ kind: 'refused', refusal: 'private-shape' });
+      expect(reduceFrame(frame(`${'─'.repeat(20)} ${label} ${'─'.repeat(20)}`), PANE, OURS, [], NONE)).toEqual({ kind: 'refused', refusal: 'private-shape' });
     }
   });
   it('a rule row holding a private string is replaced', () => {
-    const out = reduced(frame(`${'─'.repeat(20)} /srv/capture-x ${'─'.repeat(20)}`, STATUS), ['/srv/capture-x']);
+    const out = reduced(frame(`${'─'.repeat(20)} /srv/capture-x ${'─'.repeat(20)}`), ['/srv/capture-x']);
     expect(out).toContain(FRAMES_REPLACED.cwd);
   });
 });
 
 describe('rule 8: the status position holds exactly the capture\'s status text (review 4069, F3, the capture owner\'s condition)', () => {
   const RULE = '─'.repeat(60);
-  const box = (...under: string[]): string => frame(RULE, '❯ frames row 001 of 003 abcdefghij', RULE, ...under);
+  const box = (...under: string[]): string => raw(RULE, '❯ frames row 001 of 003 abcdefghij', RULE, ...under);
   const REFUSED = { kind: 'refused', refusal: 'status-row' };
   it('the text alone in that row passes, kept byte for byte, SGR and indent included, with a hint row under it', () => {
     for (const f of [box(STATUS), box(STATUS, '  ? for shortcuts'), box(`${ESC}[2m  ${FRAMES_STATUS_TEXT}${ESC}[0m   `)]) expect(reduced(f), f).toBe(f);
@@ -229,16 +235,19 @@ describe('rule 8: the status position holds exactly the capture\'s status text (
   });
   it('an empty status position refuses: the lowest rule is the last row, or the row under it is blank', () => {
     expect(reduceFrame(box(), PANE, OURS, [], NONE)).toEqual(REFUSED);
-    expect(reduceFrame(frame(RULE, '❯ x', RULE).slice(0, -1), PANE, OURS, [], NONE)).toEqual(REFUSED);
+    expect(reduceFrame(raw(RULE, '❯ x', RULE).slice(0, -1), PANE, OURS, [], NONE)).toEqual(REFUSED);
     expect(reduceFrame(box('   ', STATUS), PANE, OURS, [], NONE)).toEqual(REFUSED);
   });
   it('the position is under the LOWEST rule: a status text under an upper rule only is a second row or a refused one', () => {
-    expect(reduceFrame(frame(RULE, STATUS, '❯ x', RULE, '  ? for shortcuts'), PANE, OURS, [], NONE)).toEqual(REFUSED);
+    expect(reduceFrame(raw(RULE, STATUS, '❯ x', RULE, '  ? for shortcuts'), PANE, OURS, [], NONE)).toEqual(REFUSED);
     expect(statusRowOf([RULE, '❯ x', RULE, STATUS, ''])).toBe(3);
   });
-  it('a frame with no rule row has no box and no status position: the rule does not apply, every other rule does', () => {
-    expect(statusRowOf(['  plain row', ''])).toBeNull();
-    expect(reduced(frame('  plain row'))).toBe(frame('  plain row'));
+  it('a frame with no rule row has no box and no status position, and is refused too (the coordinator\'s change 1, 39557)', () => {
+    expect(statusRowOf(['  plain row', ''])).toBe('refused');
+    for (const f of [raw('  plain row'), raw(STATUS), raw('❯ frames row 001 of 003 abcdefghij', STATUS), '']) {
+      expect(reduceFrame(f, PANE, OURS, [], NONE), JSON.stringify(f)).toEqual(REFUSED);
+      expect(checkReducedFrame(f, PANE, OURS, NONE), JSON.stringify(f)).toEqual({ ok: false, refusal: 'status-row' });
+    }
   });
   it('the server\'s check refuses the same frames, and clears the one the box keeps', () => {
     for (const f of [box(`${STATUS} · main`), box('  ? for shortcuts'), box(STATUS, STATUS), box()]) {
@@ -279,7 +288,7 @@ describe('rule 9: the scans refuse the whole frame', () => {
 });
 
 describe('rule 10, and the receiver\'s check', () => {
-  const mixed = frame(
+  const mixed = raw(
     '  Haiku 9.9 · Claude Max', '  cwd /srv/capture-x/captures/abc', `${'─'.repeat(30)} ↑ 9 more ${'─'.repeat(30)}`,
     '❯ frames row 001 of 003 abcdefghij', `${'─'.repeat(70)}`, STATUS, '  ? for shortcuts',
   );
@@ -319,7 +328,7 @@ describe('over-replacement on the recorded 2.1.300 panes (the coordinator\'s con
     rows.forEach((l, i) => { if (isRuleRow(l.replace(/\x1b\[[0-9;:]*m/g, ''))) low = i; });
     return low < 0 ? text : [...rows.slice(0, low + 1), STATUS, ...rows.slice(low + 1)].join('\n');
   };
-  it('replaces 38 model rows, 0 account rows and 5 path rows in 61 panes, never a box, rule or chip row, and keeps every width', () => {
+  it('ALTERED: each pane with the status row added as a NEW row under its lowest rule, every row it drew kept: replaces 38 model rows, 0 account rows and 5 path rows in 61 panes, never a box, rule or chip row, and keeps every width', () => {
     // The panes were not drawn under the capture's settings, so each gets the status row ours would draw (above); the
     // counts are the rules' over every row the build drew, as they were before rule 8.
     const total = { cwd: 0, path: 0, model: 0, account: 0 };
@@ -366,6 +375,17 @@ describe('over-replacement on the recorded 2.1.300 panes (the coordinator\'s con
     expect(under.has(FRAMES_STATUS_TEXT)).toBe(false);
     // What the build drew there (no status line was configured): a hint, the mode row, an ask dialog's last row, or nothing.
     expect([...under.keys()].sort()).toEqual(UNDER_THE_LOWEST_RULE);
+  });
+  // The coordinator's change 1 (39557): a frame with no rule row is refused, which costs a recipe frame nothing only if every
+  // input box draws its rules. No pane per recipe case is recorded in the tree; every recorded input-box pane is, across
+  // 2.1.29x and 2.1.300 (drafts, tall and capped boxes, stashes, chips, placeholders, asks): each has a rule row.
+  it('every recorded input-box pane in the tree has a rule row: the 61 2.1.300 panes and the 29 of the panes\' box folder', () => {
+    const boxDir = path.join(dir, 'box');
+    const boxFiles = readdirSync(boxDir).filter((f) => f.endsWith('.ansi'));
+    expect(boxFiles).toHaveLength(29);
+    const unruled = [...files.map((f) => path.join(dir, f)), ...boxFiles.map((f) => path.join(boxDir, f))]
+      .filter((f) => !readFileSync(f, 'utf8').split('\n').some((l) => isRuleRow(l.replace(/\x1b\[[0-9;:?]*[a-zA-Z]/g, ''))));
+    expect(unruled).toEqual([]);
   });
   it('the frame size of a recorded pane is measured as the reader measures it', () => {
     expect(frameSize(readFileSync(path.join(dir, files[0]!), 'utf8')).rows).toBeGreaterThan(0);

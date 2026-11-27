@@ -58,11 +58,12 @@ export const FRAMES_STATUS_TEXT = 'ccrc capture';
  *  under the frame's LOWEST rule row, which in a box frame is the box's lower rule, where a configured status line is drawn
  *  (measured on the recorded 2.1.291 panes). It fails closed: that row, spaces trimmed, must be exactly
  *  `FRAMES_STATUS_TEXT`, and no later row may hold the text again; a blank or missing row there refuses too. A frame with
- *  no rule row has no box and so no status position. Answers the status row's index, `null` for no position, or `refused`. */
-export function statusRowOf(plainRows: readonly string[]): number | null | 'refused' {
+ *  no rule row has no box and so no status position, and it is refused too (the coordinator's change 1, 39557): every
+ *  recipe case draws the input box between its rules. Answers the status row's index, or `refused`. */
+export function statusRowOf(plainRows: readonly string[]): number | 'refused' {
   let low = -1;
   plainRows.forEach((p, i) => { if (isRuleRow(p)) low = i; });
-  if (low < 0) return null;
+  if (low < 0) return 'refused';
   const at = low + 1;
   if (at >= plainRows.length || plainRows[at]!.trim() !== FRAMES_STATUS_TEXT) return 'refused';
   for (let i = at + 1; i < plainRows.length; i++) if (plainRows[i]!.includes(FRAMES_STATUS_TEXT)) return 'refused';
@@ -273,6 +274,12 @@ export function reducerFingerprint(): string {
   const probes = [
     '❯ ours text here', '│ /work/a/b and more │', 'see …/x/y here', 'Haiku 9 · Claude Max', 'Claude Pro account', '──────────── ↑ 9 more ──',
     'mail a@b.example.com', 'host 10.1.2.3', 'tok ' + 'a'.repeat(32), 'sk-ant-api03-abcdefghij', 'plain row', '\x1b]8;;x\x1b\\',
+    'a\u2066b', 'see ‹model here', 'logged as bo now and', 'at /secr\net/x more', '‹model›\nx/y tail', '~/x',
   ];
-  return JSON.stringify(probes.map((p) => reduceFrame(p + '\n', pane, ['ours text here'], ['/secret/x'], none)));
+  // Each probe drawn as a box draws it: between two rules, the capture's status row under the lower one (rule 8). And the
+  // status rule's own probes: no rule, another status text, the text twice.
+  const rule = '─'.repeat(12);
+  const boxed = (p: string): string => `${rule}\n${p}\n${rule}\n  ${FRAMES_STATUS_TEXT}\n`;
+  const status = ['plain row\n', `${rule}\n  other status\n`, `${rule}\n  ${FRAMES_STATUS_TEXT}\n  ${FRAMES_STATUS_TEXT}\n`];
+  return JSON.stringify([...probes.map(boxed), ...status].map((f) => reduceFrame(f, pane, ['ours text here'], ['/secret/x', 'bo'], none)));
 }

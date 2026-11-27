@@ -32,6 +32,7 @@ import { captureDeskComposed, deliveryOf, deliveryWiring } from '../src/testbox/
 import { framesWorstCaseMs } from '../src/testbox/captureFrames.js';
 import type { FramesDriver } from '../src/testbox/captureFramesRun.js';
 import { framesDriveSteps } from '../../shared/framesCapture.js';
+import { FRAMES_STATUS_TEXT } from '../../shared/framesReduce.js';
 import { FRAMES_PARTS } from '../../shared/framesResult.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -492,7 +493,7 @@ describe('gate G1: a frames part, composed, every bound taken, ends within its w
       async step(_word, _input, _place, person) {
         const s = steps[i++]!;
         clock.now += (person ? t.framesPersonDriveMs : t.framesDriveMs) + t.deliveryKillGraceMs + UPDATE_SPAWN_DRAIN_MS;
-        if (s.kind === 'frame') return { kind: 'frame', frame: 'plain row\n', cursor: null, settled: true };
+        if (s.kind === 'frame') return { kind: 'frame', frame: `plain row\n${'─'.repeat(40)}\n  ${FRAMES_STATUS_TEXT}\n`, cursor: null, settled: true };
         if (s.kind === 'turn' || s.kind === 'send' || s.kind === 'queued' || s.kind === 'held') return { kind: 'sent', send: 'ok' };
         return { kind: 'typed', typed: true };
       },

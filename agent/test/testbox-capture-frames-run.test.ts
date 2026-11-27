@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 import type { CaptureRecord } from '../../shared/claudeBuildCapture.js';
 import type { DeliveryRoute } from '../../shared/deliveryResult.js';
 import { FRAMES_HOLD_TEXT, FRAMES_REPLY_TEXT, framesDraftLines, framesOurs, framesRows } from '../../shared/framesCapture.js';
-import { FRAME_BYTES_MAX, FRAMES_PARTS, framesPartOfId, readFramesCaptureResult } from '../../shared/framesResult.js';
+import { FRAME_BYTES_MAX, FRAMES_PARTS, frameSize, framesPartOfId, readFramesCaptureResult } from '../../shared/framesResult.js';
 import { capturePaths, captureSettings } from '../src/testbox/capture.js';
 import { record, STATUSLINE_REPLY } from '../src/testbox/captureRecord.js';
 import { FRAMES_STATUS_TEXT, checkReducedFrame } from '../../shared/framesReduce.js';
@@ -117,6 +117,10 @@ describe('the production driver (nodeFramesDriver)', () => {
 
 // ── the frame ────────────────────────────────────────────────────────────────────────────────────────────────────
 
+/** Rows as a recipe frame ends: the box's lower rule and the capture's status row under it (rule 8, review 4069's F3 and
+ *  the coordinator's 39557: a frame without them is refused). */
+const boxed = (...rows: string[]): string => [...rows, '─'.repeat(40), `  ${FRAMES_STATUS_TEXT}`].join('\n');
+
 describe('a frame as the result carries it (framesFrameOf)', () => {
   const part = partOf('rows-3@220x50');
   const pane = FRAMES_PARTS[part]!.pane;
@@ -124,19 +128,21 @@ describe('a frame as the result carries it (framesFrameOf)', () => {
   const bytesOf = (s: string): number => Buffer.byteLength(s, 'utf8');
 
   it('a drawn frame is reduced: its rows kept, its replaced counts present, its cursor as read', () => {
-    const f = framesFrameOf(`${OURS}\nhello world`, false, [3, 4], true, part, [], never);
-    expect(f).toEqual({ outcome: 'drawn', refusal: null, rows: 4, width: Math.max(...framesRows(3).map((r) => r.length), 'hello world'.length), bytes: bytesOf(`${OURS}\nhello world`), cursor: [3, 4], replaced: { cwd: 0, path: 0, model: 0, account: 0 }, text: `${OURS}\nhello world` });
+    const text = boxed(OURS, 'hello world');
+    const f = framesFrameOf(text, false, [3, 4], true, part, [], never);
+    expect(f).toEqual({ outcome: 'drawn', refusal: null, ...frameSize(text), cursor: [3, 4], replaced: { cwd: 0, path: 0, model: 0, account: 0 }, text });
+    expect(frameSize(text)).toEqual({ rows: 6, width: 60, bytes: bytesOf(text) });
   });
 
   it('an unsettled frame is kept as unsettled, its text reduced the same', () => {
-    expect(framesFrameOf(OURS, false, null, false, part, [], never)).toMatchObject({ outcome: 'unsettled', refusal: null, text: OURS, replaced: { cwd: 0, path: 0, model: 0, account: 0 }, cursor: null });
+    expect(framesFrameOf(boxed(OURS), false, null, false, part, [], never)).toMatchObject({ outcome: 'unsettled', refusal: null, text: boxed(OURS), replaced: { cwd: 0, path: 0, model: 0, account: 0 }, cursor: null });
   });
 
   it('one row over the pane is over-cap with its measured sizes and no text', () => {
     const raw = Array.from({ length: pane.rows + 1 }, () => 'x').join('\n');
     expect(framesFrameOf(raw, false, [0, 0], true, part, [], never)).toEqual({ outcome: 'over-cap', refusal: null, rows: pane.rows + 1, width: 1, bytes: bytesOf(raw), cursor: [0, 0], replaced: null, text: null });
     // At exactly the pane's rows it is inside the cap.
-    expect(framesFrameOf(Array.from({ length: pane.rows }, () => 'x').join('\n'), false, null, true, part, [], never).outcome).toBe('drawn');
+    expect(framesFrameOf(boxed(...Array.from({ length: pane.rows - 2 }, () => 'x')), false, null, true, part, [], never).outcome).toBe('drawn');
   });
 
   it('a row one column too wide is over-cap too', () => {
@@ -159,7 +165,7 @@ describe('a frame as the result carries it (framesFrameOf)', () => {
   });
 
   it('a frame naming one of the capture\'s private strings has that row replaced, and the count says so', () => {
-    const raw = `${OURS}\nrunning on scratch-host-name now\nhello world`;
+    const raw = boxed(OURS, 'running on scratch-host-name now', 'hello world');
     const f = framesFrameOf(raw, false, null, true, part, ['scratch-host-name', ''], never);
     expect(f.outcome).toBe('drawn');
     expect(f.text).not.toContain('scratch-host-name');
@@ -170,9 +176,9 @@ describe('a frame as the result carries it (framesFrameOf)', () => {
   });
 
   it('a frame the committed scan hits is refused as a private name, with its measured sizes and no text', () => {
-    const raw = `${OURS}\nsome FORBIDDEN word`;
+    const raw = boxed(OURS, 'some FORBIDDEN word');
     const f = framesFrameOf(raw, false, [0, 1], true, part, [], (t) => t.includes('FORBIDDEN'));
-    expect(f).toEqual({ outcome: 'refused', refusal: 'private-name', rows: 4, width: 'some FORBIDDEN word'.length > framesRows(3)[0]!.length ? 'some FORBIDDEN word'.length : framesRows(3)[0]!.length, bytes: bytesOf(raw), cursor: [0, 1], replaced: null, text: null });
+    expect(f).toEqual({ outcome: 'refused', refusal: 'private-name', ...frameSize(raw), cursor: [0, 1], replaced: null, text: null });
   });
 
   it('a text that is not a frame by the shape rule (a control character) is refused as not-a-frame', () => {
@@ -196,7 +202,7 @@ describe('a frame as the result carries it (framesFrameOf)', () => {
 
   it('a private string the drive is given, wrapped across two rows, refuses the frame whole (review 4069, F2)', () => {
     const p = 'scratch-host-name';
-    const raw = `${OURS}\nrunning on ${p.slice(0, 7)}\n${p.slice(7)} now`;
+    const raw = boxed(OURS, `running on ${p.slice(0, 7)}`, `${p.slice(7)} now`);
     expect(framesFrameOf(raw, false, null, true, part, [p], never)).toMatchObject({ outcome: 'refused', refusal: 'private-shape', text: null, replaced: null });
   });
 
@@ -247,7 +253,7 @@ function scripted(id: string, o: Script = {}) {
     request: (route, text = 'a turn') => { requests.push(body(text)); routes.push(route); },
     other: () => { others.push(requests.length); },
   };
-  const frameText = o.frame ?? framesDraftLines(p.case, p.pane).slice(0, 3).join('\n');
+  const frameText = o.frame ?? boxed(...framesDraftLines(p.case, p.pane).slice(0, 3));
   const driver: FramesDriver = {
     async step(word, _input, _place, person, frame) {
       const k = asked.length;
@@ -290,7 +296,7 @@ describe('the drive of a part', () => {
     expect(s.asked).toEqual([{ word: 'type:rows-3@220x50', person: false, frame: false }, { word: 'frame', person: false, frame: true }]);
     const r = run.frames!;
     expect(r.word).toBe('framed');
-    expect(r.frame).toMatchObject({ outcome: 'drawn', rows: 3, cursor: [0, 0] });
+    expect(r.frame).toMatchObject({ outcome: 'drawn', rows: 5, cursor: [0, 0] });
     expect(r).toMatchObject({ recipe: 'frames', build: GOOD, part: s.part, case: 'rows-3', pane: { cols: 220, rows: 50 }, release: null, unmeasured: [], sends: [], turns: 0, sideRequests: 0 });
     expect(readFramesCaptureResult(JSON.parse(JSON.stringify(r)), GOOD, s.part)).toEqual(r);
     expect(s.released()).toBe(1);
@@ -339,7 +345,7 @@ describe('the drive of a part', () => {
   it('every part of the list can be driven on a scripted build to a result the one reader accepts', async () => {
     for (let i = 0; i < FRAMES_PARTS.length; i++) {
       const p = FRAMES_PARTS[i]!;
-      const s = scripted(`${p.case}@${p.pane.cols}x${p.pane.rows}`, { frame: framesRows(3).join('\n') });
+      const s = scripted(`${p.case}@${p.pane.cols}x${p.pane.rows}`, { frame: boxed(...framesRows(3)) });
       const run = await runFramesDrive(s.ctx);
       expect(run.detail, `part ${i}`).toBeNull();
       expect(readFramesCaptureResult(JSON.parse(JSON.stringify(run.frames)), GOOD, i), `part ${i}`).not.toBeNull();
@@ -371,7 +377,7 @@ describe('what the frame says about the result', () => {
   });
 
   it('a frame the scan hits is a gap with no text; the result still reads back', async () => {
-    const s = scripted('rows-3@220x50', { frame: 'a FORBIDDEN row', scan: (t) => t.includes('FORBIDDEN') });
+    const s = scripted('rows-3@220x50', { frame: boxed('a FORBIDDEN row'), scan: (t) => t.includes('FORBIDDEN') });
     const run = await runFramesDrive(s.ctx);
     expect(run.frames).toMatchObject({ word: 'gaps', frame: { outcome: 'refused', refusal: 'private-name', text: null } });
     expect(readFramesCaptureResult(JSON.parse(JSON.stringify(run.frames)), GOOD, s.part)).not.toBeNull();
@@ -383,7 +389,7 @@ describe('what the frame says about the result', () => {
   });
 
   it('the frame is reduced with the privates the drive is given', async () => {
-    const s = scripted('rows-3@220x50', { frame: `${framesRows(3).join('\n')}\non scratch-host-name`, privates: ['scratch-host-name'] });
+    const s = scripted('rows-3@220x50', { frame: boxed(...framesRows(3), 'on scratch-host-name and more'), privates: ['scratch-host-name'] });
     const run = await runFramesDrive(s.ctx);
     expect(run.frames!.frame.replaced).toEqual({ cwd: 1, path: 0, model: 0, account: 0 });
     expect(run.frames!.frame.text).not.toContain('scratch-host-name');
@@ -544,7 +550,7 @@ describe('the runner\'s frames branch', () => {
     });
   }
 
-  const typingDriver: FramesDriver = { step: async (word) => (word === 'frame' ? { kind: 'frame', frame: framesRows(3).join('\n'), cursor: null, settled: true } : { kind: 'typed', typed: true }) };
+  const typingDriver: FramesDriver = { step: async (word) => (word === 'frame' ? { kind: 'frame', frame: boxed(...framesRows(3)), cursor: null, settled: true } : { kind: 'typed', typed: true }) };
 
   it('a runner with no frames deps says so, answers no result with a detail, and starts nothing', async () => {
     const root = freshRoot();
@@ -610,7 +616,7 @@ describe('the runner\'s frames branch', () => {
       async step(word, input) {
         seen = JSON.stringify(input);
         if (word !== 'frame') return { kind: 'typed', typed: true };
-        const frame = [...framesRows(3), `on box-private-name`, `in ${input.capture}`, `in ${input.tmux}`, 'to 127.0.0.1:4567 and on', 'to 127.0.0.1:9999'].join('\n');
+        const frame = boxed(...framesRows(3), `on box-private-name`, `in ${input.capture}`, `in ${input.tmux}`, 'to 127.0.0.1:4567 and on', 'to 127.0.0.1:9999');
         // (Each replaced row is wide enough for its whole token: a narrower one refuses the frame, review 4069's F2.)
         return { kind: 'frame', frame, cursor: null, settled: true };
       },
@@ -636,7 +642,7 @@ describe('the runner\'s frames branch', () => {
     const driver: FramesDriver = {
       async step(word, input) {
         if (word !== 'frame') return { kind: 'typed', typed: true };
-        return { kind: 'frame', frame: [...framesRows(3), `in ${input.capture}/wo`, 'rk and more'].join('\n'), cursor: null, settled: true };
+        return { kind: 'frame', frame: boxed(...framesRows(3), `in ${input.capture}/wo`, 'rk and more'), cursor: null, settled: true };
       },
     };
     const r = await runner(root, l.launcher, standIns(), framesDeps(driver)).run('wrap', GOOD, 'frames', part);
