@@ -129,15 +129,36 @@ there that mount with an id (the slash pick and a file pasted with text) send no
 `pwa/test/composer-long-paste.test.tsx` mounts with an id, as the session screen does, and pins the pointer route; its
 "send as typed text" case pins that the operator's tap sends today's text.
 
+The browser leg of wave 169, `pwa/browser/paste-chips.browser.test.ts`, opens the real session screen, which passes the
+id, so its sends changed by intent: run on this head merged with `main`, 19 of its 33 cases failed at its one send
+helper (a chip's send now saves first, and that leg simulated no upload route, so nothing went out). Every assertion
+it held is kept, unchanged, on today's route through the operator's tap: the leg's upload route now refuses (502), and
+its send helper (`sendAndSettle`, which now takes the key: Enter, or Ctrl+Enter in the touch-width case that used to
+send inline) taps **send as typed text** when the save is refused, so each case still asserts one request whose `text`
+is the full pasted text, byte for byte (`{ text: LONG }`, `` `a${LONG}b` ``, `` `www ${LONG} tail` ``, `` `x${LONG}` ``
+and the rest as they were). A send with no chip goes out at once, as before. 33 of 33 green after the change.
+
 ## 7. Evidence
 
 - **Red first.** The grammar's and the plan's cases failed on missing modules, then the plan's identity and shell-line
   cases failed by name before their code existed. The composer flow: 20 of its first 23 cases red against `main`'s
   composer (the three that passed are today's-route pins). The chat: 8 of 19 red against `main`'s bubbles and list (the
   11 that passed pin that look-alikes stay text). The browser leg's first run: 12 of 24 red, 8 because a case gave the
-  chat no transcript (fixed in the case) and 4 on a real defect, the chat chip drawn in the bubble's link ink on the well
-  (1.09:1 in the light palette), fixed by scoping its rules under the bubble. The server cases pin unchanged server
-  behaviour, so their red is the grammar's mutants.
+  chat no transcript (fixed in the case) and 4 on a real defect: the bubble's own `.msg-user a { color: inherit }`
+  outranked `.msg-paste`, so the chip drew the bubble's ink (`--ink-primary`) on the well. Before the fix, in both skins
+  at both widths: 1.09:1 in the light palette (measured; `#1A201B` on `#141715`) and 17.42:1 in phosphor (`#ECF0EC` on
+  `#070808`, which passed by luck). After scoping the chip's rules under the bubble (`.msg-user .msg-paste`) it draws the
+  document chip's pair, `--ink-on-well` on `--bg-well`: 13.98:1 in light and 15.52:1 in phosphor (the token values; the
+  leg asserts at least 4.5:1 in each skin, palette and width). The server cases pin unchanged server behaviour, so their
+  red is the grammar's mutants.
+- **The tap floor.** The chat chip is a new hand-drawn control, so the control census registers it
+  (`session/PastedTextChip.tsx <a> msg-paste`, TOKEN): the floor is the token on the tapped element itself, the anchor,
+  from its own rule `.msg-user .msg-paste { min-height: var(--tap-min) }`. The browser leg measures the chip's height at
+  44 px or more at 390 and at 1440 px, in both skins and palettes. The census file was held by #3488's claim; the entry
+  went to its holder as an exact diff first. The first full pwa suite run after the implementation was red on exactly
+  this missing entry (`control-census.test.ts`, "registers every one"), so the wave reports `suite: red`.
+- **A slip.** Once, to see why the compiler check kept being killed at the test slice's memory cap, it was run outside
+  the supported runner; that is not allowed for any reason, it was reported at once, and it was not repeated.
 - **Mutants**, each run in memory against the cases (a scratch copy swapped in by an alias, nothing written in the
   tree): the grammar and the plan 24 of 24 killed (three more were equivalent, the code they guarded already implied by
   the path pattern or the final trim, and was removed); the hook, the composer, the view model, the chip row and the

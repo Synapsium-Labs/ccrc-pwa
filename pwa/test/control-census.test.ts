@@ -241,6 +241,9 @@ const CONTROLS: Record<string, string> = {
   'fleet/AccountKnob.tsx <button> acct-switch':
     'TOKEN. The Accounts card\'s switch (`LaneSwitch`): the kill switch (D-7732) and "Start new sessions here" (D-8195), a 36px track inside a tap-floor box.',
   'fleet/NewSessionSheet.tsx <button> acct-change': 'TOKEN. The change-account line above the project list.',
+  'session/PastedTextChip.tsx <a> msg-paste':
+    'TOKEN. A pasted text the session received as a file, drawn in its place in the user bubble (desktop-polish wave '
+    + '194): a block of its own line that opens the saved file, its rule `.msg-user .msg-paste` holding the floor.',
   'fleet/chips.tsx <button> acct-disclosure':
     'TOKEN. "show other pools (N)" — ONE entry where there were two, because '
     + 'the two sheets that drew it were drawing the same button down to the '
