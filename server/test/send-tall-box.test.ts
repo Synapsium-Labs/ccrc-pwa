@@ -5,7 +5,9 @@
 // Claude Code 2.1.332 (a box taller than its row cap: a count on its top rule, "↑ 156 more", and no prompt glyph on the
 // first row in view) and the past-turn rows a recorded 2.1.332 pane shows (`fixtures/panes/box/placeholder-error-hint-*`).
 // The real build's bytes are not on record yet, so no case here makes a claim about that build: each makes a claim about
-// a SHAPE. The one recorded pane used (`cc300-paste-empty-box.txt`, Claude Code 2.1.300) is the true stranded nudge's box.
+// a SHAPE. The one recorded pane used (`cc300-paste-empty-box.txt`, Claude Code 2.1.300) is an EMPTY box: the stranded
+// nudge's rows are spliced into it by hand below, so that case too is synthetic in what the box holds. No recorded pane of
+// any build holds our nudge stranded.
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -14,6 +16,7 @@ import { KeyedQueue } from '../src/inject/queue.js';
 import { sendPrompt, submitEnter, readBoxText, draftOfMeasured } from '../src/inject/send.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { renderMailNudge } from '../src/coord/envelope.js';
+import { BOX_RULE, EMPTY_BOX } from './inputBoxPane.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const noSleep = async () => {};
@@ -61,8 +64,9 @@ function SYNTHETIC_tallBox(turn: string, top: string, turnRows: 1 | 2 = 1): stri
 const SYNTHETIC_AFTER_SUBMIT = [pastTurn('person line 1 of the draft they are still writing'), ...Array<string>(45).fill(''),
   PLAIN_RULE, '\x1b[39m❯ ', PLAIN_RULE, '  auto mode on'].join('\n') + '\n';
 
-/** RECORDED (Claude Code 2.1.300, 220x50): an empty box. The true stranded nudge is this box holding the nudge, wrapped
- *  at a space onto a continuation row as the build wraps a line longer than the box. */
+/** RECORDED (Claude Code 2.1.300, 220x50): an empty box. `strandedNudge300` splices the nudge into its marker row BY
+ *  HAND, wrapped at a space onto a continuation row as the build wraps a line longer than the box: a recorded empty box
+ *  with the nudge spliced in, not a recorded stranded nudge. */
 const EMPTY_300 = readFileSync(path.join(here, 'fixtures/panes/cc300-paste-empty-box.txt'), 'utf8');
 function strandedNudge300(): string {
   const cut = NUDGE.lastIndexOf(' ', W - 4);
@@ -81,8 +85,9 @@ describe('wave 185, point 1: the resume presses Enter only on a box read whole a
     const { tmux, calls } = fakeTmux([SYNTHETIC_tallBox(NUDGE, PLAIN_RULE)]);
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', NUDGE, LANE);
     expect(keys(calls)).not.toContain('Enter');
-    // The lane's next arm: the box is stashed whole (C-s), never submitted. This static pane never empties after it, so
-    // the stash is reported failed; on a real pane the box empties, the nudge is typed, and the build restores the draft.
+    // The lane's next arm: the box is stashed whole (C-s). This static pane never empties after it, so the stash is
+    // reported failed. On a pane that follows the keys the arm goes on, and in this form its second Enter can submit the
+    // person's restored draft, on main too: the note's "What this does not close", (b), ticket tall-box-top-anchor.
     expect(res).toMatchObject({ ok: false, error: 'stash-failed' });
   });
 
@@ -101,11 +106,20 @@ describe('wave 185, point 1: the resume presses Enter only on a box read whole a
     expect(keys(calls)).toEqual([]);
   });
 
-  it('the true stranded nudge, on a recorded 2.1.300 box, still resumes with one Enter and nothing typed', async () => {
+  it('our nudge spliced into a recorded 2.1.300 empty box still resumes with one Enter and nothing typed', async () => {
     const { tmux, calls } = fakeTmux([strandedNudge300(), EMPTIED_300]);
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', NUDGE, LANE);
     expect(res).toEqual({ ok: true });
     expect(keys(calls)).toEqual(['Enter']);
+  });
+
+  it('our whole nudge on the marker row with nothing under it, no closing rule, is not resumed: no Enter', async () => {
+    // The pane's only defect is the missing closing rule: the rows from the marker row down are our text and nothing
+    // else, so this pins the closing-rule half of the whole-box read in this file (mutant Ma in the note).
+    const { tmux, calls } = fakeTmux([`\x1b[39m❯ ${NUDGE}\n`]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', NUDGE, LANE);
+    expect(keys(calls)).not.toContain('Enter');
+    expect(res).toMatchObject({ ok: false, error: 'stash-failed' });
   });
 });
 
@@ -158,6 +172,27 @@ describe('wave 185, point 2: a labelled rule below the last glyph row means the 
     expect(draftOfMeasured(indented)).toEqual({ box: 'present', draft: 'an older question' });
     const wordsFirst = SYNTHETIC_tallBox('an older question', `↑ 156 more ${'─'.repeat(W - 12)}`);
     expect(draftOfMeasured(wordsFirst)).toEqual({ box: 'present', draft: 'an older question' });
+  });
+
+  it('a box whose body holds a first-column labelled row is never proved ours: no Enter, box-unreadable', async () => {
+    // The whole-box proof (D-5088, `ownRenderedBox`) reads the LAST capture of the echo wait even when that capture read
+    // absent, so the marker row it anchors on must be the shared index's too (mutant M6 in the note). Three captures, by
+    // phase: the empty box before we type, the box holding our text with its middle row drawn at the first column once we
+    // have typed, and the empty box after an Enter.
+    const row = `─── ↑ 3 more ${'─'.repeat(40)}`;
+    const typed = ['earlier turn', BOX_RULE, '\x1b[39m❯ please read', row, '  the end', BOX_RULE, '  footer'].join('\n') + '\n';
+    let phase: 'empty' | 'typed' | 'submitted' = 'empty';
+    const calls: string[][] = [];
+    const tmux = new Tmux(async (cmd, args) => {
+      calls.push([cmd, ...args]);
+      if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: phase === 'typed' ? typed : EMPTY_BOX, stderr: '' };
+      if (args[0] === 'send-keys' && args.includes('-l')) phase = 'typed';
+      else if (args[0] === 'send-keys' && args.at(-1) === 'Enter') phase = 'submitted';
+      return { ran: true, code: 0, stdout: '', stderr: '' };
+    });
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', `please read\n${row}\nthe end`);
+    expect(res).toMatchObject({ ok: false, error: 'box-unreadable' });
+    expect(keys(calls)).not.toContain('Enter');
   });
 });
 
@@ -223,5 +258,38 @@ describe('wave 185, point 2: the recorded panes', () => {
     expect(files.length).toBeGreaterThan(100);
     const moved = files.filter((p) => { const pane = readFileSync(p, 'utf8'); return draftOfMeasured(pane).box !== before(pane); });
     expect(moved).toEqual([]);
+  });
+});
+
+/** SYNTHETIC: a 50-row pane whose last past user turn is `turn`, wrapped at spaces over as many rows as it takes, then
+ *  only blank rows, then a tall box of 20 rows with no glyph in view under a PLAIN top rule, then its closing rule. */
+function SYNTHETIC_tallBoxBlankGap(turn: string): string {
+  const rows: string[] = [];
+  let rest = turn;
+  while (rest.length > W - 4) { const cut = rest.lastIndexOf(' ', W - 4); rows.push(rest.slice(0, cut)); rest = rest.slice(cut + 1); }
+  rows.push(rest);
+  const head = [pastTurn(rows[0]!), ...rows.slice(1).map((r) => `  ${r}`), ''];
+  const box = Array.from({ length: 20 }, (_, i) => `  person line ${157 + i} of the draft they are still writing`);
+  const foot = ['  \x1b[38;5;220m⏵⏵ auto mode on\x1b[39m'];
+  const fill = 50 - head.length - 2 - box.length - foot.length;
+  return [...head, ...Array<string>(fill).fill(''), PLAIN_RULE, ...box, PLAIN_RULE, ...foot].join('\n') + '\n';
+}
+
+// RESIDUALS, pinned as they are today so the follow-up wave (ticket tall-box-top-anchor) turns them red first. Each
+// asserts a key list main presses too: this PR does not close them (the note's "What this does not close", (a)).
+describe('wave 185, residual (a), not closed here: a past turn of our text, then only blank rows, then a plain top rule', () => {
+  it('prefix mode: the resume reads the past nudge and the blank rows down to the TOP rule as a closed box: Enter, Enter', async () => {
+    const { tmux, calls } = fakeTmux([SYNTHETIC_tallBoxBlankGap(NUDGE)]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', NUDGE, LANE);
+    expect(keys(calls)).toEqual(['Enter', 'Enter']);
+    expect(res).toMatchObject({ ok: false, error: 'enter-ignored' });
+  });
+
+  it('whole mode, over a past operator line: the same Enter, Enter', async () => {
+    const line = 'please look at the failing check on the release branch and tell me what broke';
+    const { tmux, calls } = fakeTmux([SYNTHETIC_tallBoxBlankGap(line)]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', line, { resumeIfOwn: 'whole' });
+    expect(keys(calls)).toEqual(['Enter', 'Enter']);
+    expect(res).toMatchObject({ ok: false, error: 'enter-ignored' });
   });
 });

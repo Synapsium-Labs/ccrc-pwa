@@ -8,16 +8,20 @@ capture of its box exists yet (section 6).
 
 ## 1. In short
 
-- **What this PR is: a safety repair, not the proof the report asked for.** Reading the readers for the new form found
-  a worse fault than the stuck send. The mail lane could press Enter on a person's own unfinished draft and call the mail
-  delivered. Two guards close it, and neither presses, clears or types anything new.
-- **Guard 1 (any form): the resume presses Enter only on a box read whole and closed.** The prefix-mode resume
-  (`resumeIfOwn: true`, the generic mail nudge's) now also needs every row from the marker row down to the box's closing
-  rule to equal the composed text up to whitespace, with the closing rule there. This is the reading the whole-box resume
-  (`resumeIfOwn: 'whole'`, D-6367) already uses: `renderedAsTyped`.
+- **What this PR is: a stated partial repair, not the proof the report asked for.** Reading the readers for the new form
+  found a worse fault than the stuck send. The mail lane could press Enter on a person's own unfinished draft and call
+  the mail delivered. Two guards close it in the shapes they read and not in others (section 8, "What this does not
+  close", all four on ticket tall-box-top-anchor). In every pane the review built, neither guard presses a key `main`
+  does not press, and in the shapes they read the send presses fewer.
+- **Guard 1: the resume's Enter is pressed only where the rows from the last glyph row down to the first plain rule are
+  our text.** The prefix-mode resume (`resumeIfOwn: true`, the generic mail nudge's) now also needs those rows to equal
+  the composed text up to whitespace, with that rule there. This is the reading the whole-box resume
+  (`resumeIfOwn: 'whole'`, D-6367) already uses: `renderedAsTyped`. Where the box's marker row is in view, that rule is
+  the box's closing rule. Where it is out of view and only blank rows lie between a past turn of our text and a plain top
+  rule, that top rule is the first plain rule, and the read passes: (a) in section 8.
 - **Guard 2 (shape only, grammar unconfirmed): a labelled rule below the last glyph row means the box's marker is out of
   view.** A labelled rule is a row that starts at the first column with three or more rule characters and is not a plain
-  rule. When one lies between the last glyph row and the plain rule that closes it, the box reads absent. Every reader
+  rule. When one lies between the last glyph row and the first plain rule below it, the box reads absent. Every reader
   then says box-unreadable, and nothing is typed, cleared or pressed.
 - **The proof for our own tall send (step 2 of the brief) is not here.** It waits for real frames of the new form, which a
   recipe of their own will capture on the test box (wave 187). Section 7 keeps what this wave learned for it.
@@ -48,7 +52,7 @@ EMPTY. With no past turn on screen, the marker read answered absent (box-unreada
 | `continuationRows`, `boxText`, `readBoxText` (the park probe) | the past turn, the reply, the count rule (not a plain rule, so the scan runs on), the box rows | a wrong text, never empty |
 | `boxRows` | anchored on the past turn, so every proof fails (null) | none: the proofs refuse |
 | `clearBox` under `onDraft: 'replace'` | never reads cleared; 24 C-u presses, then `draft-clear-failed` | the operator's Replace shreds rows of a draft the conflict sheet showed as the past turn |
-| `stashHeld` | false (no rule directly above the past turn) | none: the stash path stashes the box whole, its restore check cannot match, and it ends `restore-unverified` with no key pressed |
+| `stashHeld` | false (no rule directly above the past turn) | the stash path stashes the box whole and types and submits our text; its restore check cannot match the restored draft, so it presses a second Enter, which can submit that draft (section 8, (b); measured by the review on a model that follows the keys) |
 | `submitEnter`'s gate | compares against the past turn's row | reachable only from a refusal that carried that row |
 | **the prefix-mode resume** | **the past turn is an earlier generic nudge, so it starts with the nudge's needle, and the one-line nudge has no second row to compare: one Enter, `{"ok":true}`, the nudge never typed** | **the person's unfinished draft is submitted as a turn, and the mail is marked delivered** |
 
@@ -61,25 +65,46 @@ our text was resumed. The send suite pinned that as intended (case 6 in section 
 ## 4. The two guards
 
 **Guard 1** (`sendPrompt`'s `resumeIfOwn === true` arm). It keeps the prefix, the per-delivery second row and the
-operator-message marker, and it adds `renderedAsTyped(pane, parts, 'whole') !== null`. It is form-independent: it decides
-on the rows below the marker row, which are present in every form. A box that fails it goes on to the next arm, as for any
-box the call did not prove. For the mail lane that is the stash arm: the box is stashed whole, the nudge typed and
-submitted, and the build restores the draft at submit.
+operator-message marker, and it adds `renderedAsTyped(pane, parts, 'whole') !== null`. That read takes the rows from the
+last glyph row down to the first plain rule below it, and passes only when they equal our text up to whitespace and that
+rule is there. It closes the resume Enter where a non-blank row that is not our text lies below the last glyph row (a
+reply, a longer draft, a second row of the person's), and where no rule follows. It does not close it where the last
+glyph row is a past turn of our text and only blank rows lie between it and a plain top rule: (a) in section 8. A box that
+fails it goes on to the next arm, as for any box the call did not prove. For the mail lane that is the stash arm: the box
+is stashed whole, the nudge typed and submitted, and the build restores the draft at submit. In a box whose marker row is
+out of view that arm's second Enter can then submit the restored draft, as on `main`: (b) in section 8.
 
 **Guard 2** (`boxMarkerIndex`, the one answer to "which row is the box's marker row" for `draftOfMeasured`, `boxRows`
-and `continuationRows`). A labelled rule between the last glyph row and the closing plain rule makes it answer -1, so the
-box reads absent.
+and `continuationRows`). A labelled rule between the last glyph row and the first plain rule below it makes it answer -1,
+so the box reads absent. That first plain rule is the box's closing rule in every recorded pane, but not necessarily in
+every pane: (d) in section 8.
 
 - **The first column.** It tells the box's own rule from a row of a draft, ours included. That matters for a message that
   carries "─── notes ───" or a table's crossing line, which types, echoes and submits today and must keep doing so.
-  Measured on every recorded pane under `server/test/fixtures/panes` (158 files, Claude Code 2.1.220 to 2.1.332):
-  - each of the 280 rules starts at the first column;
-  - none of the 149 draft rows below a marker row in the 59 input boxes does (the marker row starts with the glyph, every
-    row below it is indented, wrapped rows too; the two first-column rows the scan met are a question dialog's footer);
-  - no pane carries a labelled rule anywhere.
-- **Width.** A rule's width does not separate the two: the box corpus records rules shorter than the pane.
-- **The grammar is unconfirmed.** If the real top rule starts with its words, or is indented, the guard does not fire and
-  nothing changes: guard 1 still stands under it.
+  Measured on the recorded panes under `server/test/fixtures/panes` (160 files: 158 pane files, `.txt` and `.ansi`, Claude
+  Code 2.1.220 to 2.1.332, and two verdict lists), reading each row with its SGR sequences removed:
+  - a plain rule is a row that is, trimmed, at least 8 characters, all of them rule characters or spaces (`isRuleRow`).
+    There are 280, and every one starts at the first column;
+  - a labelled rule is a row that starts at the first column with three or more rule characters and is not a plain rule.
+    There are none;
+  - an input box is a row that starts at the first column with the glyph, whose row directly above is a plain rule, and
+    below which a plain rule comes before any other glyph row; its draft rows are the rows strictly between. There are
+    61 boxes holding 124 draft rows, and none of those rows starts at the first column or holds a run of rule characters.
+    (Round 1 of this note gave 59 boxes and 149 rows from a scan whose rule it did not state; the review could not
+    reproduce them, and these replace them. The review's own counts by this rule are the same: 61 and 124.)
+- **Width.** A rule's width does not separate the two: recorded rules are shorter than their pane too (the review counts
+  17 of the 280).
+- **The condition, and why the guard stays (the coordinator's ruling, mail 38899).** The condition was that the guard
+  tell the box's rule from a row of a draft or of our own message, by where the row starts and how wide it is, on
+  recorded panes, with green cases for our own messages that hold a rule-like line. It is not met to the letter: only
+  the first column is used, width is not; the two own-message cases run on a hand-built box (`followingBox`), not a
+  recorded pane; and no recorded pane holds the guard's positive case, which rests on the operator's picture and a
+  synthetic pane. It stays because it fires on none of the 160 recorded files, it fails toward "unreadable" with no key
+  pressed, it is the only guard for the shape in the operator's picture, and in that shape it also keeps the stash arm
+  from pressing anything.
+- **The grammar is unconfirmed.** If the real top rule starts with its words, or is indented, the guard does not fire,
+  the readers again describe the past turn as the draft, and what is left is guard 1, which does not cover (a) to (c) in
+  section 8.
 - **A false positive refuses.** A person's own draft whose row starts at the first column with rule characters would read
   unreadable, which is the safe direction. No recorded draft row starts there.
 - **`stashHeld` keeps its own scan.** It already needs a plain rule directly above the marker row, which no past turn
@@ -148,16 +173,20 @@ That search missed one place, because it looked for the sweep's helpers by name.
 not imported), and its capture answered the same bare marker row. The exact head's first fast run found it red (shard
 `server 4/12`), and so did a run of the file alone on the repair; it passes whole on `main`'s `send.ts`. Its capture now
 draws the closed box through `boxPane([st.box])` too (the coordinator's yes, mail 38742): one use, and no claim, expected
-answer or key in the file moved. The two cases that had gone red:
+answer or key in the file moved. The case that had gone red:
 
 16. "an enter-ignored brief on a fresh worker is retried at 5 minutes through the park and lands, our nudge never
     re-typed": the delivery stayed `queued` where `delivered` is pinned.
-17. "a restart over the same coord.db repeats neither the retry nor the notice": the same, then the case timed out.
+Only that case is red under the repair. In the same run here a second case, "a restart over the same coord.db repeats
+neither the retry nor the notice", timed out at 20 s: that was load, not the repair. It seeds a person's line in the box
+and never reaches the resume, and the review ran the file against the repair's sender twice with only case 16 red (11 of
+12).
 
-A wider search after it, by text, for every capture in the test tree that answers a bare marker row, found five more
-suites. Each passes whole on the repair, alone, and none is touched: clip-any-file (36 cases), run-work-started (9),
-idle-compact-nudge-lane (46), feed-writers-pin (61) and send-echo-clock (17, the echo-clock suite of the six above).
-These, with the six above, are where the old bare shape still lives.
+A wider search after it, by text, for every capture in the test tree that answers a bare marker row, found five suites,
+one of them already among the six above. Each passes whole on the repair, alone, and none is touched: clip-any-file (36
+cases), run-work-started (9), idle-compact-nudge-lane (46), feed-writers-pin (61) and send-echo-clock (17, the echo-clock
+suite of the six). So ten distinct suites still draw the old bare shape: the six above, and clip-any-file,
+run-work-started, idle-compact-nudge-lane and feed-writers-pin.
 
 Red on `main`'s `send.ts` too, under the same load, and so not the repair's: "the fallback warns once while it stands",
 the two warn-latch cases and the boot trace. "puts `parkedAt` on the wire for the mail strip" timed out on both send
@@ -189,8 +218,10 @@ once the server carries the status read's delivery standing (merged in #3433).
   count on the rule plus the rows in view must equal the rows our text occupies at the pane's width, and a count larger
   than what we typed means the box is not ours. It needs frames 1 to 3 and 6 of the list. Guard 2 must then be narrowed
   to the real rule's bytes, and the proof reads that same row.
-- **The top-rule anchor**, a candidate for that wave on real bytes: "the box's marker row sits directly under a rule".
-  It is truer than guard 2 and the recorded panes show it, but dozens of hand-written panes across the send and lane
+- **The top-rule anchor**, not in this PR (ticket tall-box-top-anchor, the coordinator's ruling, mail 38899), for the
+  wave that follows wave 187's recorded frames: "the box's marker row sits directly under a rule". It is truer than
+  guard 2 and the recorded panes show it, and it would close (a) and (d) in section 8. But it changes how every send
+  reads the box, no recorded pane holds a real tall box yet, and dozens of hand-written panes across the send and lane
   suites have no top rule, so it would change many existing claims. `ccd`'s own box reader already uses it
   (`_pane_box_draft`, D-8116: "the last `❯` row directly under a `─` border"). So, read and not measured, `ccd` answers
   `absent` for a person's tall draft in the new form: the past turn above the box is under no border, and the row under
@@ -206,33 +237,85 @@ once the server carries the status read's delivery standing (merged in #3433).
   After guard 2 both answer `box-unreadable`, whose sentence ("clear it in the terminal (Ctrl-C once), then send again")
   is the wrong advice for a person's own unsent text: clearing it throws away what they meant to send. In every case
   the person is left with nothing that sends their text. No console change in this wave.
-- **Residual of guard 1.** A stranded nudge whose text differs from today's (another build's wording) is no longer
-  resumed. The lane stashes it, delivers and restores it, so it stays in the box. Nothing ever clears it (read):
-  `clearMailResidue` matches a paste chip or a mail fence only, and `ownStrandedClear` a `/clear` only. A person clears
-  it by hand. That is a line for the coordinator's ledger, not a change here.
+- **Residual of guard 1: an older-worded stranded nudge.** A stranded nudge whose text differs from today's (another
+  build's wording) is no longer resumed. Each delivery stashes it, types today's nudge once and submits it, and the build
+  restores the old one, so it stays in the box for good (the review measured `ok`, `restored`, no loop). Nothing ever
+  clears it (read): `clearMailResidue` matches a paste chip or a mail fence only, and `ownStrandedClear` a `/clear` only.
+  A person clears it by hand. That is a line for the coordinator's ledger, not a change here. Where the person had typed
+  after the old nudge, `main` submitted their text with one Enter; the repair keeps it.
 - **Residuals of guard 2.** It fires only on a rule that starts at the first column with three or more rule
-  characters. A top rule drawn otherwise leaves only guard 1, and the readers again describe the past turn as the draft,
-  as before this PR.
+  characters, and only before the first plain rule below the last glyph row. A top rule drawn otherwise leaves only
+  guard 1, and the readers again describe the past turn as the draft, as before this PR: section 8.
 
-## 8. Evidence
+## 8. What this does not close
+
+Review run 4018 built these panes and measured them on the head; every one presses the same keys on `main`, so none is a
+regression, and none is closed here. All four go on one ticket, **tall-box-top-anchor**, for the wave that follows wave
+187's recorded frames (the coordinator's ruling, mail 38899): they change how every send reads the box, and no recorded
+pane holds a real tall box yet. Each pane is SYNTHETIC, 220 columns by 50 rows, sent with the mail lane's options
+(`onDraft: 'stash'`, `resumeIfOwn: true`, `clearMailResidue: true`, `holdIfAutoContinueArmed: true`) unless stated.
+
+- **(a) A past turn of our text, then only blank rows, then a plain top rule.** The pane: our past nudge, wrapped over
+  three rows; one blank row (or none), then blank rows; a plain rule 220 wide; 20 indented rows of the person's draft;
+  the plain closing rule; a footer. Guard 1 reads from the past nudge down to the first plain rule, which is the tall
+  box's top rule, so the rows read are our text and blank rows, and the read passes. Keys: `Enter, Enter`, word
+  `enter-ignored`. The same in whole mode (`resumeIfOwn: 'whole'`) over a past operator line, blank rows and a plain top
+  rule: `Enter, Enter`. And `submitEnter` with our nudge expected, on the same pane, presses a third Enter (the review's
+  measurement, not pinned). Pinned as it is today, both modes, by the two cases "wave 185, residual (a), not closed here"
+  in `send-tall-box.test.ts`, so the follow-up wave turns them red first. A reply row between the turn and the box (`⏺
+  ok`) is not our text and makes the read refuse: then `C-s`, `stash-failed`. A labelled count top rule: no keys,
+  `box-unreadable`.
+- **(b) Where guard 1 refuses the resume, the stash arm's second Enter submits the person's draft.** The pane: a past turn,
+  a reply, a top rule that is plain, words first (`↑ 20 more ───…`) or indented, 20 rows of the person's draft, the
+  closing rule. The review followed the keys with a model of the build: `C-s` empties the box, the typed nudge echoes,
+  the first Enter makes it a past turn and the build restores the draft, with no glyph in view again. Keys: `C-s`, the
+  nudge typed, `Enter`, `Enter`; word `ok` with `draftRestore: 'restore-unverified'`. The second Enter (the stash arm's
+  check reads the just-submitted nudge as the marker row, so it presses again) submits the person's 20 or 40 rows. `main`
+  does the same harm with one Enter and no nudge typed, and for a past turn that is not a nudge the two press alike.
+  Under a first-column count rule it is safe: no keys, `box-unreadable` (guard 2). Not pinned by a case here: the one
+  runner in the tree that follows keys through a stash and its restore, the stash suite's fake terminal (`fakeCc`,
+  `server/test/send-stash.test.ts`), always draws the box's marker row with the glyph in view, so it cannot draw this
+  form without a new harness, which the ruling does not ask for.
+- **(c) Older than this PR: the residue clear in a tall draft.** The pane: a past paste-chip user turn
+  (`❯ [Pasted text #1 +40 lines]`) above a person's tall draft under a plain top rule. `clearMailResidue` reads the past
+  turn as machine residue and sends 24 `C-u` into the draft; word `draft-clear-failed`. The same on `main`. Guard 1 sits
+  on the resume branch only, and guard 2 closes the labelled form only (no keys, `box-unreadable`).
+- **(d) A plain first-column rule in the transcript disarms guard 2.** Guard 2 looks for the labelled rule only between
+  the last glyph row and the first plain rule below it. The pane: a past nudge, a blank row, a full-width plain rule at
+  the first column, then a labelled top rule and 20 rows of the person's draft. Guard 2 stops at the plain rule and never
+  reaches the labelled one, and guard 1 reads our text down to that plain rule. Keys: `Enter, Enter`, word
+  `enter-ignored`. It needs a plain rule at the first column in the transcript, which no reply in the recorded panes
+  draws (every plain rule there is the input box's or a dialog's).
+
+## 9. Evidence
 
 - New cases: `server/test/send-tall-box.test.ts`. Its panes named `SYNTHETIC_*` are built in the file and labelled
-  synthetic there; the true stranded nudge stands on a recorded 2.1.300 box (`cc300-paste-empty-box.txt`).
-- Red first (measured): against `main`'s `send.ts`, 10 of the file's 13 cases at the time failed by name, and the three
-  that passed are those that must hold on `main` too (the stranded nudge resumes, a rule with no rule characters at its
-  ends does not fire, no recorded pane's reading moves). The two cases of our own rule-like lines, added after, are green
-  on `main` by design.
+  synthetic there, and so is the shared builder `server/test/inputBoxPane.ts`. The stranded nudge's case uses a recorded
+  2.1.300 EMPTY box (`cc300-paste-empty-box.txt`) with the nudge spliced in by hand: no recorded pane of any build holds
+  our nudge stranded.
+- Red first (measured): against `main`'s `send.ts`, in round 1, 9 of the file's 12 cases at the time failed by name, and
+  the three that passed are those that must hold on `main` too (the spliced stranded nudge resumes, a row not at the
+  first column does not fire, no recorded pane's reading moves). The two cases of our own rule-like lines, added after,
+  are green on `main` by design. In fix round 1 the file has 18 cases; against `main` a45831a795's `send.ts`, 11 fail
+  (the nine, the case whose only defect is the missing closing rule, and the case of a first-column labelled row inside
+  the box), and 7 pass: those five, and the two residual (a) cases, which pin keys `main` presses too.
 - The test tree's compile check could not finish in this workspace (the test slice's memory cap stopped it twice), so
   the first fast run was the first to run it (shard `server 10/12`). It found one line of the new file calling an array
   method the test tree's library setting lacks, now a plain loop.
-- Mutants (measured): each mutant was applied to `send.ts` in place, `send-tall-box.test.ts` and `send.test.ts` were run,
-  and the file was restored and compared byte for byte.
+- Mutants (measured): each mutant was applied to `send.ts` in place, the file's suite was run alone through the test
+  slice, and `send.ts` was restored and compared byte for byte. Round 1 ran `send-tall-box.test.ts` and `send.test.ts`;
+  fix round 1 ran `send-tall-box.test.ts` (18 cases) for every row below, and the counts are that file's. The send
+  suite's only kill is M1's, its reversed case 6.
 
-| Mutant | Result | Killed by |
+| Mutant | Result | Killed by (in `send-tall-box.test.ts`) |
 |---|---|---|
-| M1: guard 1 removed (the resume's whole-box read) | killed, 4 | the past nudge on one row and wrapped, the longer draft, and the send suite's reversed case 6 |
-| M2: guard 2's refusal removed (`boxMarkerIndex` never answers -1 for a labelled rule) | killed, 6 | the box reads absent, the lane presses nothing, Replace's presses, the refusal's draft, the park probe and rescue, the count near the left |
-| M3: guard 2 in the first draft's form (trimmed, rule characters at either end) | killed, 3 | an indented rule-like row, and both cases of our own message holding a rule-like line |
-| M4: the marker read without `boxMarkerIndex` | killed, 6 | as M2 |
-| M5: `continuationRows` without `boxMarkerIndex` | survived | none, and none can be written through the send's entry points: every caller reads `draftOfMeasured` first and stops on absent, so the two scans answer alike at every reachable call. The shared index is there for one definition of the marker row, not as a guard of its own |
-| M6: `boxRows` without `boxMarkerIndex` | survived | as M5 |
+| M1: guard 1 removed (the resume's whole-box read) | killed, 4 | the past nudge on one row and wrapped, the longer draft, our whole nudge with no closing rule; and the send suite's reversed case 6 |
+| M2: guard 2's refusal removed (`boxMarkerIndex` never answers -1 for a labelled rule) | killed, 7 | the box reads absent, the lane presses nothing, Replace's presses, the refusal's draft, the park probe and rescue, the count near the left, the first-column labelled row inside the box |
+| M3: guard 2 in the first draft's form (trimmed, rule characters at either end) | killed, 3 | a row not at the first column, and both cases of our own message holding a rule-like line |
+| M4: the marker read without `boxMarkerIndex` | killed, 7 | as M2 |
+| M5: `continuationRows` without `boxMarkerIndex` | survived | none: equivalent at every reachable call. Every caller of `continuationRows` reads `draftOfMeasured` on the same pane first and stops on absent, so the two scans answer alike wherever they are reached |
+| M6: `boxRows` without `boxMarkerIndex` | killed, 1 | the first-column labelled row inside the box. Round 1 of this note called it unreachable, which was wrong (the review's finding): the whole-box proof (D-5088, `ownRenderedBox`) reads the echo wait's last capture even when that capture read absent, so `boxRows` is reached on a pane `draftOfMeasured` refused. The case is the review's kill pane |
+| Ma: the closing-rule requirement dropped (`boxRows` answers its rows when no plain rule follows; the review's mutant) | killed, 1 | our whole nudge on the marker row with nothing under it. Before fix round 1 it survived this file and the send suite; the older paste-chip suite's "THE BOX MUST CLOSE" case killed it (the review's refuter) |
+
+The review's other mutants (Mb1 and Mb2, the whole-mode compare loosened to a prefix in one place or both; Mc, guard 2
+skipped) are in its report: Mb1 equivalent, Mb2 and Mc killed.
