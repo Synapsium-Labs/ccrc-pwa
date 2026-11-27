@@ -14,6 +14,8 @@
 .oc-chat .oc-thread {
   flex: 1 1 auto;
   min-height: 0;
+  /* The thread is its own scroller: a long one scrolls here, never the page (a part of the place, not the page itself). */
+  max-height: 70dvh;
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;

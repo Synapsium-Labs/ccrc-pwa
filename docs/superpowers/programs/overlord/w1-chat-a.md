@@ -9,7 +9,8 @@ caller, the continuity store's read of one identity's generations, the history m
 functions, and both doors' route suites written red. **Stage 1b** (done, local) is the part of Task 4 in new files of its own:
 the chat part and its pieces, its hook over a port it declares, and the composer's opt-in props. **Stage 2** adds the two
 handlers, their door rows and wiring, every census that ties a row to a live door, the `CLAUDE.md` paragraph, the mutation
-floors' registration, the shared client's three calls, the mount in the Overlord place, and the browser suite.
+floors' registration, the shared client's three calls, the mount in the Overlord place, and the browser suite (done, after one
+ordinary merge of main `3fda0fc9b1`, which carries home B, #3457, and the sequence doors, #3456).
 
 ## What was built (stage 1)
 
@@ -53,6 +54,38 @@ then the props), `pwa/test/overlord-chat.test.tsx` (new, jsdom, a fake port), an
 What stage 1b stops at, as a prop (home B's files are not on main): the current generation's transcript rows (`live`, the shared
 `ChatItem` rows) and its stream's frames (`subscribe`) come from the place's session stream at the mount; the port is built from
 the shared client's three calls in stage 2. Nothing outside a test builds the part yet.
+
+## What was built (stage 2)
+
+| Piece | Where | Ring, context |
+|---|---|---|
+| `GET /api/overlord/chat` and `GET /api/overlord/chat/earlier`: the account gate with no cap (refused `auth-off` while sign-in is off, before any read or line), the query's reader, the designation's three arms, then the read runner in its operator mode (doors `chat` and `chat-history`); each handler only calls the pure functions of `overlordChatDoor.ts` and `overlordChat.ts` | `server/src/coord/overlordRoutes.ts` | L4, C5 |
+| The routes' `chat` deps: the one read runner, the private store (so the words are read in the door's handler), `generationsOf` over `coord.db`, `readinessChanges`, and the history door's agent links and port; `MASKED_GET_ROUTES` gains both reads | `server/src/server.ts` (8 lines) | L5-side wiring |
+| `OVERLORD_DOORS` gains `chat` and `chat-earlier`, operator `view` rows | `server/src/coord/overlordDoors.ts` | L1 |
+| The thread door's answer read by status and body, beside the send answer's reader | `shared/overlordChat.ts#readChatThreadAnswer` | L0, C11 |
+| The client's three calls, each read by its L0 reader through one helper (`readAnswer`): a 2xx and a refusal are both answers, only no answer is `no-answer`; a 401 still raises the login screen | `pwa/src/lib/api.ts` (17 lines) | L3 |
+| Part 7 of the place: `ChatPart`, mounted below the capacity line, reusing the place's one session store (`useOverlordSessionStream`'s connect): the store's events are the live rows (`buildChatItems`), and a change of its transcript or status is handed to the refresh as the frame it came from, so no second stream and no new frame | `pwa/src/overlord/ChatPart.tsx` (new), `OverlordPlace.tsx` (2 lines) | L4 |
+| The thread bounded at 70dvh, its own scroller | `pwa/src/overlord/overlordChat.css` | L4 |
+
+Censuses moved, each re-derived on the merged tree: the gate census (both reads flag-aware, thirty-nine to forty-one; 343
+scanned, 340 HTTP, 222 gated, 118 exempt) and `gate.ts`'s count; `OVERLORD_OPERATOR_DOORS` and the Overlord file's route count
+(sixteen to eighteen); the doors census's landing list; the operator-message readers census (`messagesPage` is a text reader, and
+`GET /api/overlord/chat` is the one entry of `OPERATOR_MESSAGE_DOORS`); `MASKED_GET_ROUTES`; the floors (the twelve sets
+registered, each at 1); the contrast suite's sheet list; the `CLAUDE.md` sentence beside the witness door's. `time-ports` and
+`fastify-l4` needed nothing (green as they stood).
+
+Packets, each a diff against main `3fda0fc9b1` with its size and sha256, each answered yes before its file was edited:
+`server.ts` (docs artifacts A3), the floors file (renewal readings G), `pwa/src/lib/api.ts` (home C; a second cut renamed the
+helper, because the file already imports `answered`), and the door table, the two censuses, the gate census, `gate.ts` and
+`CLAUDE.md` (board B2, as a notice: its PR is on the landing line and lands first, so the counts re-derive at this branch's last
+merge). The gate's rows went to the coordinator by diff (call 1687). Home C's packet for this branch's `overlordRoutes.ts` (the
+rebind door's pair) was answered yes: it meets none of the chat's lines.
+
+Tests: `pwa/browser/overlord-chat.browser.test.ts` (new: 360, 390, 1280 and 1920 px, both skins, the light and the dark palette
+by its id, the stamped theme asserted; 36 cases), `pwa/test/overlord-chat-part.test.tsx` (new: the mount over the session store),
+`overlord-chat-vocab` (the thread answer's reader), and the earlier door's query case corrected (its upper-cased uuid was all
+digits, so it upper-cased nothing: a uuid with hex letters now). Home B's place suite (128 cases in the browser, 19 in jsdom) is
+green with the chat mounted.
 
 ## Task 3 Step 1: the measured arm is `not-pageable`
 
@@ -121,6 +154,17 @@ The coordinator ruled on the first five on 2026-11-26 (call 1543): all stand as 
 - **`chat-refusals-by-lookup`** (stage 1b): the two refusal words the chat acts on (`stale-designation`, `read-ceiling`) are read
   through one table, `chatWords.ts#chatRefusalRole`, so no branch spells a refusal word (`refusal-literal-ratchet` stays at its
   pin; `sendNotice`'s stage-1 branch moved onto the table too).
+- **`chat-part-reads-the-store-not-the-socket`** (stage 2): the session store has no frame hook, and adding one would be a second
+  path beside its socket handler. The mount subscribes to the store itself: new transcript events are handed on as an `events`
+  frame and a status change as a `status` frame, so the refresh's allow-list reads exactly what the store applied. A `beat` changes
+  neither, so it can never trigger a read.
+- **`chat-thread-is-an-operator-message-door`** (stage 2): the plan put `chat` in `TEXT_READING_DOORS`, but that list is the
+  refusing Overlord doors' (group `overlord`, others refused) and the chat's rows are operator doors. So the thread is the one
+  entry of `OPERATOR_MESSAGE_DOORS`, which is what that list is for, and `TEXT_READING_DOORS` stays `['messages']`.
+- **`chat-door-reads-the-store-in-its-handler`** (stage 2): the routes take the private store itself, not a closure over it, so
+  the census sees the words read inside the door's own handler; a call in `server.ts` would be a call outside every door.
+- **`chat-thread-answer-has-one-reader`** (stage 2): the client's calls hand status and body to L0 readers, so the client imports
+  nothing from the console and the hook's port type is the L0 answer type.
 - **`chat-visibility-through-the-page-clock`** (stage 1b): the hook hears the page turning visible through
   `lib/pageClock.ts#onPageVisible`, the one owner of that subscription (`pwa-one-owner`), and reads `document.visibilityState`
   itself before each read.
@@ -151,35 +195,33 @@ them); let `messagesPage` answer an empty page for a closed store (red); drop th
 red); write `offRecord` in a second statement (the new column check red, the per-table check green, so the column check is the
 mechanism); let the runner read the turn in operator mode (2 red).
 
+By hand in stage 2, each red and reverted: the thread's height cap removed (the long-thread cases, 4 red, in the browser); a pane
+turn drawn with a bubble's ground on the right (2 red, in the browser).
+
 By hand for Task 4's Step 5 (stage 1b; each red, each reverted, on the local tip): K1 clear the box before the answer under
 `onRecord` (3 red); K2 a new key on every retry (the double-send case red); K3 pane text drawn as an operator bubble (2 red); K4
 refresh on `beat` (red); K5 poll while hidden (red); K6 the composer clears late without `onRecord` (the characterization, 3
 red); K7 the timer reads with nothing waiting (5 red); K8 `stale-designation` keeps the key and term (red); K9 the toggle never
 resets (red). `draftAfterSend` clearing on no answer is the set's W1 above.
 
-## Censuses that move with the live doors (stage 2)
-
-`auth-gate.test.ts` (the routes file's count and sentences), `box-token-census.test.ts` (`OVERLORD_OPERATOR_DOORS` and the
-`CLAUDE.md` sentence), `secret-mask.test.ts` (`MASKED_GET_ROUTES`), `operator-message-readers.test.ts` (`messagesPage` among the
-words readers, the chat's path in `OPERATOR_MESSAGE_DOORS`, `chat` in `TEXT_READING_DOORS`), the gates piece's
-`overlord-doors-census`, and `mutation-floors` (the twelve sets above). `time-ports` and `fastify-l4` are measured at build.
-
 ## What would change for another harness
 
-The chat records through the server and reads the record, which any harness can use. Two things lean on Claude Code: the live
-generation's stream (its transcript, read by today's `SessionStream` and `buildChatItems`) and what a pane turn is (the mail
-lane's nudge line in that transcript). Both stay behind those readers; another harness changes the readers, and `chatWords.ts`
-keeps its rule that no transcript user turn is ever the operator's words.
+The chat records through the server and reads the record, mechanisms ccrc owns that any harness can use: the private store, the
+read runner and its ledger, the continuity store's generations and the readiness word. Three things lean on one harness, Claude
+Code, and each stays behind a reader that already exists:
+- the live generation's transcript (`SessionStream` on the server, `buildChatItems` in the console): its file layout and event
+  kinds are Claude Code's;
+- what a pane turn is (the mail lane's nudge line typed into that transcript, and `INJECTED_PROMPTS`' other lines);
+- an earlier generation's text, read through the history door (`ccrc history`'s store, which today's sweep fills from Claude
+  Code's transcripts).
+Another harness changes those readers (its transcript reader, its injected lines, what the sweep ingests); the chat's doors,
+deciders and part do not change, and `chatWords.ts` keeps its rule that no transcript user turn is ever the operator's words.
 
 ## Known limits (so far)
 
 - Earlier generations are not paged in W1 (the measured arm); the divider names `ccrc history` instead. The part draws a
   `readable` divider's page and its "Show earlier" (the next page asks `around` the page's first item) for when paging joins.
-- The browser suite at every width is stage 2's, once the part is mounted in the place.
-- One census line is stage 2's: `pwa/test/contrast.test.ts`'s `APP_SHEETS` gains `src/overlord/overlordChat.css` (the app's sheets
-  are a closed list there). Until then its "discovers them from disk" case is red on this branch, and it is the only red: every
-  pair of the sheet is measured and passes. That red is expected (the coordinator, call 1570): the contrast suite, the control
-  census, the shared client and the mount are in home B's branch, so the census line, the three calls and the mount line go in
-  after home B lands, on a main that carries it.
+- The gate counts are re-derived once more at this branch's last merge, after the board (#3463) lands (the coordinator, call
+  1687): expected 344 scanned, 341 HTTP, 222 gated, 119 exempt, the flag-aware count still forty-one.
 - The full server test-project type check is killed by the test slice's memory cap on this box; the changed test files are type
   checked in a narrowed project instead, and `typecheck-tests` in CI covers the whole.

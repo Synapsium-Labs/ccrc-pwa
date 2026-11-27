@@ -140,6 +140,7 @@ import { actKeyFact, advanceCounterGuarded, recordFenceRefusal } from './coord/o
 import { CONTINUITY_LANE } from '../../shared/lane-arm.js';
 import { NO_LADDER_AUTHORITY } from './coord/overlordAuthorityJournal.js';
 import { renewalHostOf } from './continuity/renewalWiring.js';
+import { generationsOf } from './continuity/continuityStore.js';
 import { placeMarkReporter } from './continuity/placeMarkReport.js';
 import { registerResponseRoutes } from './responses/routes.js';
 import { readLinearStore } from './linear/store.js';
@@ -331,6 +332,8 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/portfolio', '/api/overlord/ladder', '/api/overlord/readiness',
   // The operator's messages, one by its id (W1 inbox piece): the text is the operator's own words, masked by the one answer hook.
   '/api/overlord/inbox', '/api/overlord/messages/:id',
+  // The chat's thread and an earlier generation's page (W1 chat): the operator's words, and the Overlord's text from its transcript.
+  '/api/overlord/chat', '/api/overlord/chat/earlier',
   // The operator's read of the invariant monitor (sequence C): findings' messages and unmeasured reasons carry composed text, a
   // producer's error detail among it, as the ladder's and the readiness word's `why` do.
   '/api/overlord/invariants',
@@ -2523,6 +2526,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   registerOverlordRoutes(app, {
     gate: accountGate, identity, serial: coordRoutes.serial, ...overlordStore, exchange: deps.overlordAuthorityExchange, consoleFacts: (req) => ({ armed: deps.cfg.authEnabled, device: deps.cfg.authEnabled ? sessionAuth(req).device : null }), host: renewalHostOf(deps, deps.coord ?? { startsOf: () => ({ ok: false, detail: 'no coordination store' }) }, null),
     ladder: ladderDeps, restore: deps.overlordRestore, readiness: () => deps.overlordReadiness?.read() ?? null,
+    // The chat's two reads (W1 chat): the one runner, the store's page, the identity's generations, the readiness changes, the link.
+    chat: { readRunner, messages: deps.operatorModel,
+      generationsOf: (i) => (deps.coord === undefined ? { ok: false, detail: 'no coordination store' } : generationsOf(deps.coord.db, i)),
+      readinessChanges: (s, u) => deps.coord?.readinessChanges(s, u) ?? { ok: false, detail: 'no coordination store' },
+      links: () => (deps.fleetState === undefined ? [] : [deps.fleetState]), io: deps.io },
     invariants: deps.invariantMonitor === undefined || deps.coord === undefined ? undefined : invariantsReadOver(deps.invariantMonitor, deps.coord.db),
     // Read at call time, as the continuity routes read `deps.time`: a test server may hand none.
     clock: { wall: () => deps.time.clock.wall() }, entropy: { uuid: () => deps.time.entropy.uuid(), hex: (n) => deps.time.entropy.hex(n) }, dec: pwaDec,

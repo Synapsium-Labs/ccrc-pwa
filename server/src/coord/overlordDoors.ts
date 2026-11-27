@@ -79,6 +79,9 @@ export const OVERLORD_DOORS: Readonly<Record<string, DoorRow>> = {
   ladder: operator('GET', '/api/overlord/ladder', OVERLORD, 'view'),
   // The readiness word (§6.4, C23, H20): the operator's read of whether the Overlord can take a question; no act, no box token.
   readiness: operator('GET', '/api/overlord/readiness', OVERLORD, 'view'),
+  // The chat's thread and an earlier generation's page (W1 chat): the operator's reads, behind the account gate; no act, no box token.
+  chat: operator('GET', '/api/overlord/chat', OVERLORD, 'view'),
+  'chat-earlier': operator('GET', '/api/overlord/chat/earlier', OVERLORD, 'view'),
   // The operator's read of the invariant monitor (sequence C, §10.4, question 18): the last pass, the findings of both modes and
   // the counts, where the shadow record is read before the row is armed; session-gated, no box token, no step-up.
   invariants: operator('GET', '/api/overlord/invariants', OVERLORD, 'view'),
