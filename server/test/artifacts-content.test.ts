@@ -5,10 +5,8 @@
 // constant would then pass. Requests go over a REAL loopback socket (`node:http`) unless a case says `app.inject`: a real client
 // can send a path exactly as written, read slowly, and see a reset. Cases that move time run `vi.useFakeTimers` over `setTimeout`,
 // `clearTimeout` and `Date` only (the sockets are real, so no I/O timer is faked); each such case says so.
-import { readFileSync } from 'node:fs';
 import http from 'node:http';
 import type { IncomingHttpHeaders } from 'node:http';
-import { fileURLToPath } from 'node:url';
 import net from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -1273,11 +1271,6 @@ describe('content: the socket, whatever the head does', () => {
     expect(head.result()!.outcome).toBe('reset');
     expect(await until(() => r.store.boxInflight() === 0), 'the slot is free').toBe(true);
     expect((await getFile(r, token, 'ok.txt').promise).status, 'and the door still serves').toBe(200);
-  });
-
-  it('content: the prepare window is the policy\'s own constant', () => {
-    const src = readFileSync(fileURLToPath(new URL('../src/artifacts/content.ts', import.meta.url)), 'utf8');
-    expect(src).not.toMatch(/\b60000\b/);
   });
 });
 

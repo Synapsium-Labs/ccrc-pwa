@@ -881,16 +881,16 @@ Built on this workspace's branch, one commit per task, each task's diff read by 
 | D9146-a | the prepare takes the share again | `docs-lanes`: `> lane: an artifact frame runs beside an artifact prepare (D-9146)` and three more; `artifacts-bytes`: `> bytes: two large files on a first load both complete (D-9146)` |
 | D9146-b | the read share dropped | `docs-lanes`: `> lane: never two prepares, never two artifact reads (D-9146)` and four more |
 | D9146-c | the console-first order dropped | `docs-lanes`: `> lane: the console is next beside an artifact prepare and frame (D-9146)` and two more |
-| FR-1 to FR-10 | the fix round's guards (the budget at admission and per frame, the queue timeout's look-up, the prepare flight's look-ups, the stopping flight, the re-prepare's wait, the minute's one copy, `writeHead`'s throw, the three L1 verdicts) | each its own `content: …` case; the `snapshotOf` guard against a request that is over is defensive only (no path reaches it), so no case can go red without it |
+| FR-1 to FR-10 | the fix round's guards (the budget at admission and per frame, the queue timeout's look-up, the prepare flight's look-ups, the stopping flight, the re-prepare's wait, `writeHead`'s throw, the three L1 verdicts) | each its own `content: …` case; the `snapshotOf` guard against a request that is over is defensive only (no path reaches it), so no case can go red without it. The minute held once (`content.ts` names the policy's constant) has no case: its first one read the source as text, a literal source pin the ARCH-06 ratchet (`single-definition/advance-switches.test.ts`) refuses over a file nobody pinned, so the PR's fast run dropped it |
 
 Where the plan's text and the landed code differ, besides the deviations: the plan's `content: reads name the pinned version` and the adapter half of `content: a bad frame aborts the response` live in `artifacts-bytes.test.ts`, the adapter's own file; the plan's lane case "a fourth [prepare] in a minute waits" is the door's (`prepareSlot`, D-9147); and the door's case for the page with two large files is `bytes: two large files on a first load both complete (D-9146)`, through the real adapter and lane.
 
 #### Departures
 
-- **D-9145**: content responses vary by `Sec-Fetch-Dest` and `Service-Worker`, and scripts are never cached (above).
-- **D-9146**: an artifact prepare does not take the lane's artifact share (above).
-- **D-9147**: six places where the code departs from this plan's written Interfaces, defined above.
-- **D-8787** carried out: the completion plan's three walls sentences gain the additions D-8787 quotes, each ending "(amended 2026-11-27; X5 A3, D-8787)".
+- Content responses vary by `Sec-Fetch-Dest` and `Service-Worker`, and scripts are never cached: D-9145 (above).
+- An artifact prepare does not take the lane's artifact share: D-9146 (above).
+- Six places where the code departs from this plan's written Interfaces: D-9147, defined above.
+- Carried out: D-8787. The completion plan's three walls sentences gain the additions it quotes, each ending "(amended 2026-11-27; X5 A3, D-8787)".
 
 #### Not right yet
 
