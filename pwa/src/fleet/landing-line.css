@@ -17,7 +17,8 @@
 }
 /* Section 11: in the document the status and the stale sentence come before the pause button. The grid puts the button
    on the title row, so it keeps its look; every other child spans the block, in document order below that row. The body
-   (desktop polish wave 192: the part the title discloses) draws no box of its own, so its children are the grid's too. */
+   (desktop polish wave 192, D-9153: the part the title discloses, drawn only while open) draws no box of its own, so its
+   children are the grid's too. */
 .landing-line > *,
 .landing-line-body > * {
   grid-column: 1 / -1;

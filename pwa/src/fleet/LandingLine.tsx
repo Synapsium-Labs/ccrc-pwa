@@ -5,11 +5,13 @@
 //   the last read failed, the pause control, and one row per open entry, each with `Withdraw…` (R1). That is also the
 //   document order (section 11); the stylesheet places the pause button on the title row, after the title, so the tab
 //   order still follows what is seen.
-// - Rolled up by default (desktop polish wave 192): the title is the block's disclosure, a button that names whether it
-//   is open and what it controls, the body after the status and the stale sentence. Rolled up, the body holds only the
-//   view model's summary line; open, it holds what the block always drew: the pause control, its error and the rows.
-//   The status and the stale sentence sit outside the body, the same elements in both states, so a change is announced
-//   once. Only the operator's tap opens or closes it (`foldState.ts` keeps it, per project, while the page lives).
+// - Rolled up by default (desktop polish wave 192, D-9153): the title is the block's disclosure, a button that names
+//   whether it is open and what it controls, so the title row holds a second control beside the pause button. The
+//   order is the disclosure, the status, the stale sentence, then rolled up the view model's summary line, or open the
+//   body it controls: what the block always drew, the pause control, its error and the rows. The body is in the
+//   document only while open. The status and the stale sentence sit outside it, the same elements in both states, so a
+//   change is announced once; the summary is no live region. Only the operator's tap opens or closes it (`foldState.ts`
+//   keeps it, per project, while the page lives).
 // - The pause label comes only from the read: a tap shows the busy label, then re-reads; the label changes when a read
 //   does (row M8). The button is never disabled while busy, so focus stays on it; a second tap sends nothing.
 // - The sheet outlives the block (F1): while a sheet is open it is drawn whatever the state, so a withdrawal of the
@@ -20,8 +22,9 @@
 //   `Withdraw…`, else the pause button, else the disclosure, else the card. When a read removes the control that held
 //   focus (the row's `Withdraw…` after a sheet closed mid-flight, or the pause button when the block removes itself) and
 //   focus has fallen to the page: the pause button, else the disclosure, else the card. Each is moved in an effect,
-//   after the sheet primitive has given the focus back to its opener. Rolling the block up with focus inside it leaves
-//   focus on the disclosure (wave 192), moved before the body's controls go.
+//   after the sheet primitive has given the focus back to its opener. Rolling the block up removes controls too, so the
+//   same effect runs when the block opens or closes (wave 192): focus left on a removed row or pause button comes back to
+//   the disclosure; focus elsewhere, or a block with no record, moves nothing.
 import { useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode, RefObject } from 'react';
 import { BARE_ROW, Button, Chip } from '@ccrc/ui';
@@ -80,7 +83,9 @@ export function LandingLine({
   }, [closed, focusFallback]);
 
   // A read removed the control that held focus, no sheet is open, and focus fell to the page (R6; fix round 1, F1): the
-  // pause button, else the disclosure, else the card.
+  // pause button, else the disclosure, else the card. Rolling the block up removes controls too (wave 192), so the effect
+  // also runs when the block opens or closes: a tap that does not focus the disclosure (an engine that focuses no button
+  // on a click) leaves the record on a removed row or pause button, and focus comes back to the disclosure.
   useEffect(() => {
     const held = lastFocused.current;
     if (sheet !== null || held === null || held.isConnected) return;
@@ -88,14 +93,7 @@ export function LandingLine({
     const active = document.activeElement;
     if (active !== null && active !== document.body) return;
     firstInDocument([pauseRef.current, toggleRef.current, focusFallback.current])?.focus({ preventScroll: true });
-  }, [state, sheet, focusFallback]);
-
-  /** The disclosure's tap (wave 192). Rolling up with focus inside the block puts focus on the disclosure first, so the
-   *  body's controls never take it with them: a mouse click does not focus a button in every engine. */
-  const tapToggle = (): void => {
-    if (open && (sectionRef.current?.contains(document.activeElement) ?? false)) toggleRef.current?.focus({ preventScroll: true });
-    toggleLandingLineOpen(project);
-  };
+  }, [state, sheet, open, focusFallback]);
 
   const tapPause = (card: LandingLineCard): void => {
     if (busy) return;
@@ -153,55 +151,55 @@ export function LandingLine({
           className={`${BARE_ROW} landing-line-title`}
           aria-expanded={open}
           aria-controls={bodyId}
-          onClick={tapToggle}
+          onClick={() => toggleLandingLineOpen(project)}
         >
           <span className="landing-line-mark" aria-hidden="true">{open ? '▾' : '▸'}</span>
           <span>{LINE_TITLE}</span>
         </button>
         <p className="landing-line-status" role="status" aria-live="polite">{card.statusText}</p>
         {stale !== null && <p className="landing-line-stale">{STALE_PREFIX + stale.text}</p>}
-        <div id={bodyId} className="landing-line-body">
-          {!open && card.summary !== null && <p className="landing-line-summary">{card.summary}</p>}
-          {open && (
-            <>
-              <Button
-                ref={pauseRef}
-                className="landing-line-pause"
-                variant="quiet"
-                size="fit"
-                aria-label={PAUSE_NAME(label, project)}
-                onClick={() => tapPause(card)}
-              >
-                {label}
-              </Button>
-              {error !== null && <p className="landing-line-error" role="alert">{error}</p>}
-              {card.rows.length > 0 && (
-                <ul className="landing-line-rows">
-                  {card.rows.map((r) => (
-                    <li key={r.entryId} className="landing-line-row">
-                      <span className="landing-line-pr">#{r.pr}</span>
-                      <span className="landing-line-role">
-                        <span>{r.text}</span>
-                        {r.fixesMain && <Chip>{TAG_FIXES_MAIN}</Chip>}
-                        {r.runless && <Chip>{TAG_NO_RUN}</Chip>}
-                      </span>
-                      <Button
-                        ref={(el: HTMLButtonElement | null) => { if (el === null) rowButtons.current.delete(r.entryId); else rowButtons.current.set(r.entryId, el); }}
-                        className="landing-line-act"
-                        variant="danger-ghost"
-                        size="fit"
-                        aria-label={WITHDRAW_LABEL(r.pr, project)}
-                        onClick={() => openSheet(r.entryId, r.pr)}
-                      >
-                        {WITHDRAW_VISIBLE}
-                      </Button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </>
-          )}
-        </div>
+        {/* Rolled up: the summary, outside the status's live region and no live region itself, so a read that changes only
+            the line's order announces nothing. */}
+        {!open && card.summary !== null && <p className="landing-line-summary">{card.summary}</p>}
+        {open && (
+          <div id={bodyId} className="landing-line-body">
+            <Button
+              ref={pauseRef}
+              className="landing-line-pause"
+              variant="quiet"
+              size="fit"
+              aria-label={PAUSE_NAME(label, project)}
+              onClick={() => tapPause(card)}
+            >
+              {label}
+            </Button>
+            {error !== null && <p className="landing-line-error" role="alert">{error}</p>}
+            {card.rows.length > 0 && (
+              <ul className="landing-line-rows">
+                {card.rows.map((r) => (
+                  <li key={r.entryId} className="landing-line-row">
+                    <span className="landing-line-pr">#{r.pr}</span>
+                    <span className="landing-line-role">
+                      <span>{r.text}</span>
+                      {r.fixesMain && <Chip>{TAG_FIXES_MAIN}</Chip>}
+                      {r.runless && <Chip>{TAG_NO_RUN}</Chip>}
+                    </span>
+                    <Button
+                      ref={(el: HTMLButtonElement | null) => { if (el === null) rowButtons.current.delete(r.entryId); else rowButtons.current.set(r.entryId, el); }}
+                      className="landing-line-act"
+                      variant="danger-ghost"
+                      size="fit"
+                      aria-label={WITHDRAW_LABEL(r.pr, project)}
+                      onClick={() => openSheet(r.entryId, r.pr)}
+                    >
+                      {WITHDRAW_VISIBLE}
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
       </section>
     );
   })() : null;

@@ -46,16 +46,35 @@ const pinned = (n: number): LandingEntry[] => Array.from({ length: n }, (_, i) =
 const held = (): LandingLineView => lineView({}, { head: null, held: { reason: 'landing-recovery-unresolved', subjectIds: [1] } });
 
 describe('rolled up on first draw', () => {
-  it('the disclosure is a button carrying the title, not expanded, controlling the body that is in the region', () => {
+  it('the disclosure is a button carrying the title, not expanded; the body it controls is absent until it opens', () => {
     render(<Card state={stateOf(lineView())} />);
     const t = toggle();
     expect(t.tagName).toBe('BUTTON');
     expect(t.getAttribute('type')).toBe('button');
     expect(t.getAttribute('aria-expanded')).toBe('false');
-    const body = document.getElementById(t.getAttribute('aria-controls') ?? '');
+    const id = t.getAttribute('aria-controls') ?? '';
+    expect(id).not.toBe('');
+    expect(document.getElementById(id)).toBeNull();
+    fireEvent.click(t);
+    expect(t.getAttribute('aria-expanded')).toBe('true');
+    expect(t.getAttribute('aria-controls')).toBe(id);
+    const body = document.getElementById(id);
     expect(body).not.toBeNull();
     expect(region().contains(body)).toBe(true);
-    expect(body!.contains(region().querySelector('.landing-line-summary'))).toBe(true);
+    expect(body!.contains(pauseButton('Pause line'))).toBe(true);
+    expect(body!.contains(within(region()).getByRole('list'))).toBe(true);
+    expect(body!.contains(region().querySelector('.landing-line-summary'))).toBe(false);
+    fireEvent.click(t);
+    expect(document.getElementById(id)).toBeNull();
+  });
+
+  it('the summary is no live region: outside the status element, with no live attribute of its own or around it', () => {
+    render(<Card state={stateOf(lineView())} />);
+    const s = region().querySelector<HTMLElement>('.landing-line-summary')!;
+    const status = within(region()).getByRole('status');
+    expect(status.contains(s)).toBe(false);
+    for (const attr of ['aria-live', 'role', 'aria-atomic', 'aria-relevant']) expect(s.hasAttribute(attr), attr).toBe(false);
+    expect(s.closest('[aria-live], [role="status"], [role="alert"], [role="log"]')).toBeNull();
   });
 
   it('no pause control, no pause error, no row and no Withdraw in the accessibility tree; the disclosure is the only stop on Tab', () => {
@@ -168,29 +187,63 @@ describe('only the operator opens it', () => {
   });
 });
 
-describe('focus (ruling 6)', () => {
-  it('rolling up with focus on a row\'s Withdraw leaves focus on the disclosure', () => {
+describe('focus (ruling 6, and the additions\' point 3: the effect also runs when the block opens or closes)', () => {
+  // `fireEvent.click` moves no focus, as a tap does not in an engine that focuses no button on a click: the record stays
+  // on the control that had focus, and rolling up removes it.
+  it('the record on a row\'s Withdraw, roll up: focus on the disclosure', async () => {
     render(<Card state={stateOf(lineView())} />);
     fireEvent.click(toggle());
     withdrawButton(104).focus();
-    fireEvent.click(toggle());   // a click that does not move focus, as in an engine that focuses no button on click
-    expect(document.activeElement).toBe(toggle());
+    fireEvent.click(toggle());
+    await flush();
     expect(toggle().getAttribute('aria-expanded')).toBe('false');
+    expect(document.activeElement).toBe(toggle());
   });
-  it('rolling up with focus on the pause button leaves focus on the disclosure', () => {
+  it('the record on the pause button, roll up: focus on the disclosure', async () => {
     render(<Card state={stateOf(lineView())} />);
     fireEvent.click(toggle());
     pauseButton('Pause line').focus();
     fireEvent.click(toggle());
+    await flush();
     expect(document.activeElement).toBe(toggle());
   });
-  it('rolling up with focus outside the block moves no focus', () => {
+  it('no record and the page\'s focus on the body, roll up: nothing moves', async () => {
+    render(<Card state={stateOf(lineView())} />);
+    fireEvent.click(toggle());
+    expect(document.activeElement).toBe(document.body);
+    fireEvent.click(toggle());
+    await flush();
+    expect(toggle().getAttribute('aria-expanded')).toBe('false');
+    expect(document.activeElement).toBe(document.body);
+  });
+  it('focus elsewhere on the page while the block holds a record, roll up: nothing moves', async () => {
     render(<Card state={stateOf(lineView())} />);
     fireEvent.click(toggle());
     const elsewhere = screen.getByRole('button', { name: 'elsewhere' });
     elsewhere.focus();
-    fireEvent.click(toggle());
+    // The block records #104's Withdraw (a focus event, as from script) with no blur to an element outside it after.
+    fireEvent.focus(withdrawButton(104));
     expect(document.activeElement).toBe(elsewhere);
+    fireEvent.click(toggle());
+    await flush();
+    expect(document.activeElement).toBe(elsewhere);
+  });
+  it('focus moved outside the block before rolling up: nothing moves', async () => {
+    render(<Card state={stateOf(lineView())} />);
+    fireEvent.click(toggle());
+    withdrawButton(104).focus();
+    const elsewhere = screen.getByRole('button', { name: 'elsewhere' });
+    elsewhere.focus();
+    fireEvent.click(toggle());
+    await flush();
+    expect(document.activeElement).toBe(elsewhere);
+  });
+  it('opening with focus on the disclosure leaves it there', async () => {
+    render(<Card state={stateOf(lineView())} />);
+    toggle().focus();
+    fireEvent.click(toggle());
+    await flush();
+    expect(document.activeElement).toBe(toggle());
   });
   // The disclosure's place in the chains: after the pause button, before the card. With the sheet open the block can only
   // be rolled up from outside it, which is how these cases take the pause button and the rows away.
@@ -224,17 +277,8 @@ describe('focus (ruling 6)', () => {
     await flush();
     expect(document.activeElement).toBe(withdrawButton(107));
   });
-  it('a read that removes the focused control with the pause button gone: the disclosure, as after Done', async () => {
-    const { rerender } = render(<Card state={stateOf(lineView())} />);
-    fireEvent.click(toggle());
-    withdrawButton(104).focus();
-    // Rolled up from outside the block: its controls go, focus falls to the page, and the block still holds the record.
-    act(() => toggleLandingLineOpen(P));
-    expect(document.activeElement).toBe(document.body);
-    rerender(<Card state={stateOf(lineView({ entries: lineView().entries.filter((x) => x.pr !== 109) }))} />);
-    await flush();
-    expect(document.activeElement).toBe(toggle());
-  });
+  // The read's chain and the roll-up's are one effect, so the two cases at the top of this block (a removed row's button,
+  // a removed pause button: the disclosure) are where the disclosure's place in that chain is held.
   it('the block removing itself while rolled up: the card', async () => {
     const { rerender } = render(<Card state={stateOf(pausedEmpty())} onReload={() => {}} />);
     toggle().focus();
