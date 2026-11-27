@@ -157,7 +157,8 @@ describe('the built review page (M-X3.12, N8, R2.1)', () => {
   });
 
   // The page's sheet is built into the shared `assets/` beside the shell's, where a reader of "every sheet under assets/"
-  // (the browser leg's `linear-items` rows, for one) applies it to the shell's document. Every selector is therefore scoped
+  // would apply it to the shell's document (the browser leg's `linear-items` rows did, until they took only the sheets the
+  // shell's own chunks load, `shellSheets` in `browser/linear-items.browser.test.ts`). Every selector is therefore scoped
   // to the review document (`:root.review-page`, which review.html's root carries) or to a `review-` name. An unscoped
   // `body { padding: 16px }` moved the shell's act bar 5.5 px under its phone bar there (measured 2026-11-25).
   it("the page's built sheet styles only the review document: every selector is scoped to it", () => {

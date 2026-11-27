@@ -176,14 +176,26 @@ function treeAt(root: string): BuiltTree {
   };
 }
 
+/** The sheets one built page links, in its own order, whichever of `rel` and `href` comes first. */
+function linkedSheets(html: string): string[] {
+  return [...html.matchAll(/<link[^>]*rel="stylesheet"[^>]*href="([^"]+)"/g)].map((m) => m[1]!)
+    .concat([...html.matchAll(/<link[^>]*href="([^"]+\.css)"[^>]*rel="stylesheet"/g)].map((m) => m[1]!));
+}
+
+/** The reference forms `reached` reads, for the throw's message. */
+const REFERENCE_FORMS = 'page links and scripts as /assets/…, chunk imports as ./…, and preload lists and worker URLs as assets/…, '
+  + 'each in double quotes, single quotes, backticks or parentheses';
+
 /** Every file under `assets/` one page loads, as `/assets/<name>`: what the page names, then what each script it reaches names,
  *  read from the build's own text. A page names its sheets and its entry script as `/assets/…`; a chunk names a chunk it imports
- *  as `./…` (beside it) and the files of a dynamic import, sheets among them, as `assets/…` (Vite's preload list). A name that
- *  is no file under `assets/` is not followed, so a string that merely looks like one costs nothing. */
+ *  as `./…` (beside it), the files of a dynamic import, sheets among them, as `assets/…` (Vite's preload list), and a worker
+ *  as `/assets/…`. The build writes them in double quotes, and some as template literals in backticks (a dynamic import of a
+ *  chunk, a worker's URL); a name in any other form is not read, which `shellSheets` turns into a throw. A name that is no file
+ *  under `assets/` is not followed, so a string that merely looks like one costs nothing. */
 function reached(tree: BuiltTree, page: string): Set<string> {
   const files = new Set(tree.assets);
   const named = (text: string): string[] =>
-    [...text.matchAll(/["'(](?:\/?assets\/|\.\/)([\w.-]+\.(?:css|js))["')]/g)].map((m) => m[1]!);
+    [...text.matchAll(/["'`(](?:\/?assets\/|\.\/)([\w.-]+\.(?:css|js))["'`)]/g)].map((m) => m[1]!);
   const seen = new Set<string>();
   const queue = named(tree.read(page)).filter((f) => files.has(f));
   for (let f = queue.shift(); f !== undefined; f = queue.shift()) {
@@ -199,17 +211,20 @@ function reached(tree: BuiltTree, page: string): Set<string> {
  *  build's root, today `review.html`, the Docs reader's review page) is that page's own and never the shell's: applied here,
  *  its document-level rules restyle the shell. The shell's set is read from its own chunks (`reached`), not from what the
  *  other pages link, so a sheet another page links that a lazily loaded shell chunk also imports stays in. The build writes
- *  no manifest (`vite.config.ts` sets none), so the chunks' text is the record. A sheet that no page reaches throws: the
- *  build's way of naming its files has changed, and a sheet dropped quietly would leave the shell unstyled where it loads. */
+ *  no manifest (`vite.config.ts` sets none), so the chunks' text is the record. A script or sheet under `assets/` that no
+ *  page's walk reaches throws: the build names a file in a form `reached` does not read, and a file it cannot follow could
+ *  hold a sheet the shell loads, which, dropped quietly, would leave the shell unstyled where it loads. */
 function shellSheets(tree: BuiltTree): string[] {
-  const index = tree.read('index.html');
-  const linked = [...index.matchAll(/<link[^>]*rel="stylesheet"[^>]*href="([^"]+)"/g)].map((m) => m[1]!)
-    .concat([...index.matchAll(/<link[^>]*href="([^"]+\.css)"[^>]*rel="stylesheet"/g)].map((m) => m[1]!));
+  const linked = linkedSheets(tree.read('index.html'));
   const all = tree.assets.filter((f) => f.endsWith('.css')).map((f) => `/assets/${f}`);
   const shell = reached(tree, 'index.html');
   const byPages = tree.pages.map((p) => reached(tree, p));
-  const unreached = all.filter((h) => !byPages.some((r) => r.has(h)));
-  if (unreached.length > 0) throw new Error(`no page of the build loads ${unreached.join(', ')}: the sheet walk misreads the build`);
+  const unreached = tree.assets.filter((f) => /\.(?:css|js)$/.test(f)).map((f) => `/assets/${f}`)
+    .filter((h) => !byPages.some((r) => r.has(h)));
+  if (unreached.length > 0) {
+    throw new Error(`reached() follows no page to ${unreached.join(', ')}: each is a file under assets/, but no page's walk `
+      + `(${tree.pages.join(', ')}) reaches it. The walk reads ${REFERENCE_FORMS}; the build names these another way.`);
+  }
   return [...new Set([...linked, ...all])].filter((h) => shell.has(h));
 }
 const stylesheets = (root: string): string[] => shellSheets(treeAt(root));
@@ -465,8 +480,14 @@ describe('the item route draws the body from the migration read', () => {
 });
 
 describe('the shell\'s sheets from the shared build', () => {
-  const linkedBy = (html: string): string[] => [...html.matchAll(/<link[^>]*rel="stylesheet"[^>]*href="([^"]+)"/g)].map((m) => m[1]!);
-  const page = (sheets: string[], script: string | null): string => `<!doctype html><html><head>${
+  const linksOf = (file: string): string[] => linkedSheets(readFileSync(path.join(dist!, file), 'utf8'));
+  /** The real build's other pages, and the sheets they link that the index does not, read from the links alone (not the walk). */
+  const foreignOf = (): { others: string[]; foreign: string[] } => {
+    const others = readdirSync(dist!).filter((f) => f.endsWith('.html') && f !== 'index.html');
+    const shell = linksOf('index.html');
+    return { others, foreign: others.flatMap(linksOf).filter((h) => !shell.includes(h)) };
+  };
+  const page =(sheets: string[], script: string | null): string => `<!doctype html><html><head>${
     script === null ? '' : `<script type="module" crossorigin src="/assets/${script}"></script>`}${
     sheets.map((s) => `<link rel="stylesheet" crossorigin href="/assets/${s}">`).join('')}</head><body></body></html>`;
   const tree = (files: Record<string, string>): BuiltTree => ({
@@ -476,17 +497,32 @@ describe('the shell\'s sheets from the shared build', () => {
   });
 
   it('leave out a sheet that only another entry page links, in the real build', () => {
-    const others = readdirSync(dist!).filter((f) => f.endsWith('.html') && f !== 'index.html');
-    const shell = linkedBy(readFileSync(path.join(dist!, 'index.html'), 'utf8'));
-    const foreign = others.flatMap((f) => linkedBy(readFileSync(path.join(dist!, f), 'utf8'))).filter((h) => !shell.includes(h));
+    const { others, foreign } = foreignOf();
+    // Not vacuous: the review page is built, and links a sheet of its own.
+    expect(others).toContain('review.html');
+    expect(foreign.length, `sheets only ${others.join(', ')} link`).toBeGreaterThan(0);
     expect(stylesheets(dist!).filter((h) => foreign.includes(h)), `pages ${others.join(', ')}`).toEqual([]);
   });
 
-  it('keep every sheet the shell loads, in the real build: its links first, then what its chunks load later', () => {
-    const sheets = stylesheets(dist!);
-    const shell = linkedBy(readFileSync(path.join(dist!, 'index.html'), 'utf8'));
-    expect(sheets.slice(0, shell.length)).toEqual(shell);
-    expect(sheets.length, `${sheets.join(', ')}`).toBeGreaterThan(shell.length);
+  it('keep every other sheet, in the real build: the index\'s links first, then the rest of the folder in its order', () => {
+    const { foreign } = foreignOf();
+    const shell = linksOf('index.html');
+    const rest = readdirSync(path.join(dist!, 'assets')).filter((f) => f.endsWith('.css')).map((f) => `/assets/${f}`)
+      .filter((h) => !shell.includes(h) && !foreign.includes(h));
+    expect(rest.length, 'the shell loads sheets later, from its chunks').toBeGreaterThan(0);
+    expect(stylesheets(dist!)).toEqual([...shell, ...rest]);
+  });
+
+  it('follow a chunk named only as ./x.js, in quotes or in backticks', () => {
+    const t = tree({
+      'index.html': page(['a.css'], 'entry.js'),
+      'assets/entry.js': 'import{y}from"./dep.js";const w=()=>import(`./tpl.js`);',
+      'assets/dep.js': 'export const y=["assets/c.css"];',
+      'assets/tpl.js': 'export const s=new URL(`/assets/worker.js`,import.meta.url);export const z=[`assets/d.css`];',
+      'assets/worker.js': '',
+      'assets/a.css': '', 'assets/c.css': '', 'assets/d.css': '',
+    });
+    expect(shellSheets(t)).toEqual(['/assets/a.css', '/assets/c.css', '/assets/d.css']);
   });
 
   it('keep a lazily loaded shell sheet, and one another page links too, and drop the other page\'s own', () => {
@@ -516,6 +552,16 @@ describe('the shell\'s sheets from the shared build', () => {
 
   it('throw on a sheet that no page loads, never drop it quietly', () => {
     const t = tree({ 'index.html': page(['a.css'], null), 'assets/a.css': '', 'assets/e.css': '' });
-    expect(() => shellSheets(t)).toThrow(/no page of the build loads \/assets\/e\.css/);
+    expect(() => shellSheets(t)).toThrow(/reached\(\) follows no page to \/assets\/e\.css: each is a file under assets\/, but no page's walk/);
+  });
+
+  it('throw on a script that no page reaches, so a reference form the walk cannot read stays loud for chunks too', () => {
+    const t = tree({
+      'index.html': page(['a.css'], 'entry.js'),
+      'assets/entry.js': 'const f=()=>import("./"+"hidden.js");',
+      'assets/hidden.js': 'export const s=["assets/a.css"];',
+      'assets/a.css': '',
+    });
+    expect(() => shellSheets(t)).toThrow(/reached\(\) follows no page to \/assets\/hidden\.js: .*The walk reads page links/);
   });
 });
