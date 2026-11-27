@@ -932,7 +932,8 @@ describe('X5 A3.3: artifact jobs on the read lane', () => {
     const first = lane.run(ART_PREPARE, live(), b.exec);
     const second = lane.run(ART_PREPARE, live(), b.exec);
     expect(b.started()).toBe(1);
-    expect(lane.load()).toMatchObject({ execs: 1, prepares: 1, artifact: 1, artifactQueued: 1 });
+    // D-9146: the prepare is counted by `prepares`, not by the artifact read share.
+    expect(lane.load()).toMatchObject({ execs: 1, prepares: 1, artifact: 0, artifactQueued: 1 });
     b.release(0, 'a');
     await flush();
     expect(await first).toStrictEqual({ kind: 'ran', value: 'a' });
@@ -998,5 +999,91 @@ describe('X5 A3.3: artifact jobs on the read lane', () => {
     b.release(1, 'b');
     await flush();
     expect(b.started()).toBe(2);
+  });
+
+  // D-9146: an artifact range prepare is held by the prepare clause alone; the artifact share is for artifact READS.
+  it('lane: an artifact frame runs beside an artifact prepare (D-9146)', async () => {
+    const lane = readLane();
+    const b = blocker<string>();
+    const order: string[] = [];
+    void lane.run(ART_PREPARE, live(), named(order, 'p', b));
+    expect(order).toStrictEqual(['p']);
+    const frame = lane.run(ART, live(), named(order, 'f', b));
+    expect(order, 'the frame starts at once beside the prepare').toStrictEqual(['p', 'f']);
+    expect(lane.load()).toMatchObject({ execs: 2, prepares: 1, artifact: 1, artifactQueued: 0 });
+    // The prepare is still running past the lane's wait: the frame never answered busy for the prepare alone.
+    await vi.advanceTimersByTimeAsync(DOCS_LANE_MAX_WAIT_MS + 1);
+    expect(await settledOrPending(frame)).toBe('pending');
+    b.release(1, 'frame');
+    expect(await frame).toStrictEqual({ kind: 'ran', value: 'frame' });
+    b.release(0, 'prepare');
+    await flush();
+    expect(lane.load()).toStrictEqual(IDLE);
+  });
+
+  it('lane: the console is next beside an artifact prepare and frame (D-9146)', async () => {
+    const lane = readLane();
+    const b = blocker<string>();
+    const order: string[] = [];
+    void lane.run(ART_PREPARE, live(), named(order, 'p', b));
+    void lane.run(ART, live(), named(order, 'f1', b));
+    void lane.run(ART, live(), named(order, 'f2', b));
+    void lane.run(ART, live(), named(order, 'f3', b));
+    expect(order).toStrictEqual(['p', 'f1']);
+    expect(lane.load()).toMatchObject({ execs: 2, artifactQueued: 2 });
+    // A console job waits (both execs busy); the next free exec is the console's, not the queued frames'.
+    void lane.run(SMALL, live(), named(order, 'c', b));
+    expect(lane.load()).toMatchObject({ queued: 1, artifactQueued: 2 });
+    b.release(1, 'x');
+    await flush();
+    expect(order).toStrictEqual(['p', 'f1', 'c']);
+    expect(lane.load()).toMatchObject({ queued: 0, artifactQueued: 2 });
+    b.release(2, 'y');
+    await flush();
+    expect(order).toStrictEqual(['p', 'f1', 'c', 'f2']);
+    // The decider itself: a console head that admits is first even though artifact heads wait.
+    const beside: LaneLoad = { execs: 1, bytes: 100, large: 0, prepares: 1, artifact: 0 };
+    expect(laneNext(beside, SMALL, ART)).toBe('reader');
+    expect(laneNext(beside, null, ART)).toBe('artifact');
+  });
+
+  it('lane: never two prepares, never two artifact reads (D-9146)', async () => {
+    // An artifact prepare runs: a second prepare, artifact or console, waits.
+    const lane = readLane();
+    const b = blocker<string>();
+    const order: string[] = [];
+    void lane.run(ART_PREPARE, live(), named(order, 'p1', b));
+    void lane.run(ART_PREPARE, live(), named(order, 'p2', b));
+    void lane.run(RANGE_PREPARE_JOB, live(), named(order, 'p3', b));
+    expect(order).toStrictEqual(['p1']);
+    expect(lane.load()).toMatchObject({ execs: 1, prepares: 1, queued: 1, artifactQueued: 1 });
+
+    // An artifact read runs: a second artifact read waits, though an exec is free.
+    const lane2 = readLane();
+    const b2 = blocker<string>();
+    const order2: string[] = [];
+    void lane2.run(ART, live(), named(order2, 'r1', b2));
+    void lane2.run(ART, live(), named(order2, 'r2', b2));
+    expect(order2).toStrictEqual(['r1']);
+    expect(lane2.load()).toMatchObject({ execs: 1, artifact: 1, artifactQueued: 1 });
+
+    // Both at once: a prepare and a read run; a second of either waits.
+    const lane3 = readLane();
+    const b3 = blocker<string>();
+    const order3: string[] = [];
+    void lane3.run(ART_PREPARE, live(), named(order3, 'p1', b3));
+    void lane3.run(ART, live(), named(order3, 'r1', b3));
+    void lane3.run(ART, live(), named(order3, 'r2', b3));
+    expect(order3).toStrictEqual(['p1', 'r1']);
+    expect(lane3.load()).toMatchObject({ execs: 2, prepares: 1, artifact: 1, artifactQueued: 1 });
+
+    // The decider: the share counts reads only, and the prepare clause is unchanged.
+    const readRunning: LaneLoad = { execs: 1, bytes: 2000, large: 0, prepares: 0, artifact: 1 };
+    const prepareRunning: LaneLoad = { execs: 1, bytes: 1000, large: 0, prepares: 1, artifact: 0 };
+    expect(laneAdmit(readRunning, ART)).toBe(false);
+    expect(laneAdmit(readRunning, ART_PREPARE)).toBe(true);
+    expect(laneAdmit(prepareRunning, ART)).toBe(true);
+    expect(laneAdmit(prepareRunning, ART_PREPARE)).toBe(false);
+    expect(laneAdmit(prepareRunning, RANGE_PREPARE_JOB)).toBe(false);
   });
 });

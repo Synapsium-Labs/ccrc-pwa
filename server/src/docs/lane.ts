@@ -12,7 +12,7 @@
 // not started.
 import type { DocsFailureBody } from '../../../shared/docs.js';
 import {
-  DOCS_FETCH_MAX_WAIT_MS, DOCS_LANE_MAX_WAIT_MS, docsBusyBody, fetchAdmit, laneAdmit, laneLarge, laneNext, lanePrepare, laneOverflow, laneStep,
+  DOCS_FETCH_MAX_WAIT_MS, DOCS_LANE_MAX_WAIT_MS, docsBusyBody, fetchAdmit, laneAdmit, laneArtifactRead, laneLarge, laneNext, lanePrepare, laneOverflow, laneStep,
   type DocsJob, type DocsLaneName, type LaneLoad,
 } from './policy.js';
 
@@ -24,8 +24,9 @@ import {
 export type DocsLaneRun<T> = { kind: 'ran'; value: T } | { kind: 'busy'; body: DocsFailureBody } | { kind: 'abandoned' };
 
 /** One node's read lane (section 6.3). `load()` is a fresh snapshot: the counters `laneAdmit` reads, plus how many
- *  jobs wait in the console FIFO (`queued`). The artifact fields (X5 A3.3), `artifact` (artifact jobs running) and
- *  `artifactQueued` (jobs waiting in the artifact FIFO), are present only while one artifact job runs or waits, so a
+ *  jobs wait in the console FIFO (`queued`). The artifact fields (X5 A3.3), `artifact` (artifact READ jobs running: at most
+ *  one; an artifact prepare is counted in `prepares` instead, D-9146) and `artifactQueued` (jobs waiting in the artifact
+ *  FIFO), are present only while one artifact read runs or any artifact job waits, so a
  *  lane that never saw an artifact job answers exactly the fields it always did. `close()` answers every queued job of
  *  both FIFOs `busy` and every later `run` too. */
 export interface DocsReadLane {
@@ -83,7 +84,8 @@ interface ReadWaiter {
  * starts, and while it answers `artifact` starts the artifact head. An artifact job starts at once only when both FIFOs
  * are empty and `laneNext` says so; else it queues (or is `busy` when `laneOverflow` says `DOCS_LANE_ARTIFACT_QUEUE`
  * artifact jobs already wait, a count that never touches the console's bound), with the same wait, abort and refuse
- * paths as a console job. Every settle of a running exec releases its share exactly once (in `finally`) and pumps; so
+ * paths as a console job. At most one artifact READ job runs; an artifact prepare is held by the prepare clause, not by that
+ * share, so a read may run beside it (D-9146). Every settle of a running exec releases its share exactly once (in `finally`) and pumps; so
  * does a queued job leaving, since the job behind it may now admit.
  */
 export function docsReadLane(): DocsReadLane {
@@ -137,7 +139,7 @@ export function docsReadLane(): DocsReadLane {
     load.bytes -= job.wire;
     if (laneLarge(job)) load.large -= 1;
     if (lanePrepare(job)) load.prepares -= 1;
-    if (job.source === 'artifact') load.artifact = (load.artifact ?? 0) - 1;
+    if (laneArtifactRead(job)) load.artifact = (load.artifact ?? 0) - 1;
     pump();
   };
 
@@ -146,7 +148,7 @@ export function docsReadLane(): DocsReadLane {
     load.bytes += job.wire;
     if (laneLarge(job)) load.large += 1;
     if (lanePrepare(job)) load.prepares += 1;
-    if (job.source === 'artifact') load.artifact = (load.artifact ?? 0) + 1;
+    if (laneArtifactRead(job)) load.artifact = (load.artifact ?? 0) + 1;
     try {
       return { kind: 'ran', value: await exec() };
     } finally {

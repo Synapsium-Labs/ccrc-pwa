@@ -10,7 +10,7 @@ import type { CcdResult } from '../src/lifecycle.js';
 import type { ArtifactReadAt, ArtifactSinkAnswer } from '../src/artifacts/ports.js';
 import type { ArtifactManifestEntry } from '../src/artifacts/store.js';
 import { docsReadLane, type DocsReadLane } from '../src/docs/lane.js';
-import { artifactJob, artifactReadWord, artifactShowJob, showWire, type DocsJob } from '../src/docs/policy.js';
+import { DOCS_LANE_MAX_WAIT_MS, artifactJob, artifactReadWord, artifactShowJob, showWire, type DocsJob } from '../src/docs/policy.js';
 import { artifactBytes, composeDocs } from '../src/docs/routes.js';
 import { DOCS_RANGE_FRAME_BYTES, type DocPin, type DocsRangePin } from '../../shared/docs.js';
 import { line, nodeLanes, okRes, scripted, sha256Hex, showLine, until } from './docsRouteHelpers.js';
@@ -469,5 +469,56 @@ describe('bytes: jobs are the artifact lane\'s', () => {
     expect(made).toEqual({ raw: 3, wire: 9, prepare: true, source: 'artifact' });
     expect(made).not.toBe(base);
     expect(base.source).toBeUndefined();
+  });
+
+  it('bytes: two large files on a first load both complete (D-9146)', async () => {
+    // Only the timers the lane's wait uses are faked: the helpers here wait on real immediates.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const pathB = 'x/big.bin';
+      const fileA = framedFile(3);
+      const fileB = Buffer.alloc(FRAME + 10, 9);
+      const overA = ccdOver(fileA);
+      const overB = ccdOver(fileB);
+      const PREPARE_MS = 20000;
+      // File B's prepare is slow (ccd copies and hashes for up to about 23 s); every other exec answers at once.
+      const { rec, bytes } = rig((argv) => {
+        const forB = flag(argv, '--path') === pathB;
+        const answer = (forB ? overB : overA)(argv);
+        return forB && argv.includes('--prepare')
+          ? new Promise<CcdResult>((resolve) => { setTimeout(() => resolve(answer), PREPARE_MS); })
+          : answer;
+      });
+      const atB: ArtifactReadAt = { ...COMMITTED_AT, path: pathB };
+      const eA = entry(blobPin(), fileA.length);
+      const eB = entry(blobPin('c'.repeat(40)), fileB.length);
+
+      // File A streams in frames; its first frame reaches the sink, which holds there while B's prepare starts.
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      const sunkA = collector(async (n): Promise<ArtifactSinkAnswer> => {
+        if (n === 1) await held;
+        return 'next';
+      });
+      const readA = bytes.read(COMMITTED_AT, eA, { start: 0, end: fileA.length - 1 }, SNAP, sunkA.sink, LIVE);
+      await until(() => sunkA.frames.length === 1, 'the first frame of A reaches the sink');
+      const prepareB = bytes.prepare(atB, eB, LIVE);
+      await until(() => rec.calls.some((argv) => argv.includes('--prepare')), 'the prepare of B is sent');
+      release();
+
+      // Past the lane's wait, with B's prepare still running: A's next frames are read and A completes.
+      await vi.advanceTimersByTimeAsync(DOCS_LANE_MAX_WAIT_MS + 1000);
+      expect(await readA).toEqual({ ok: true });
+      expect(sunkA.joined().equals(fileA)).toBe(true);
+
+      // Then B's prepare settles, and B is read and completes.
+      await vi.advanceTimersByTimeAsync(PREPARE_MS - DOCS_LANE_MAX_WAIT_MS);
+      expect(await prepareB).toEqual({ ok: true, snapshot: SNAP });
+      const sunkB = collector();
+      expect(await bytes.read(atB, eB, { start: 0, end: fileB.length - 1 }, SNAP, sunkB.sink, LIVE)).toEqual({ ok: true });
+      expect(sunkB.joined().equals(fileB)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

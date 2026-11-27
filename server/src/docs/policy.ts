@@ -809,15 +809,18 @@ export type DocsJobSource = 'reader' | 'artifact';
 
 /** A read lane's load at the moment its head job is considered: execs in flight, their summed `wire` estimates, how
  *  many of them are large (`raw` over `DOCS_LANE_LARGE_RAW`) and how many are range prepares (`job.prepare`), and
- *  (X5 A3.3) how many are artifact jobs (absent means 0). The lane keeps the counters; this only reads them. */
+ *  (X5 A3.3, D-9146) how many are artifact READ jobs, a frame or a small show (absent means 0); an artifact range prepare
+ *  is counted by `prepares`, never by `artifact`. The lane keeps the counters; this only reads them. */
 export interface LaneLoad { execs: number; bytes: number; large: number; prepares: number; artifact?: number }
 
 /**
  * Whether the read lane admits `job` now (section 6.3), its five clauses in order, the first that answers winning.
  * Two rules for a job whose `source` is `artifact` come BEFORE them (X5 A3.3), so they hold on an idle lane too: its
  * `raw` above `DOCS_LANE_LARGE_RAW` is refused (an artifact reads a larger file as range frames, so the door never
- * sends such a job), and while an artifact job runs (`load.artifact` above 0) it is refused (at most one artifact job
- * runs). Then:
+ * sends such a job), and an artifact READ job (not a prepare) is refused while an artifact read runs (`load.artifact`
+ * above 0): at most one artifact read job runs. An artifact range prepare does NOT take that share (D-9146): clause 5
+ * alone holds it to one prepare across every caller, so a page's second large file can prepare while the first streams
+ * its frames, and a frame never waits out a prepare's ~23 s. Then:
  * 1. an idle lane always admits one job, so a job larger than the budget still runs, alone;
  * 2. `DOCS_LANE_EXECS` execs in flight refuse;
  * 3. the summed wire estimate past `DOCS_LANE_BYTES` refuses (exactly at it admits);
@@ -830,10 +833,8 @@ export interface LaneLoad { execs: number; bytes: number; large: number; prepare
  * A refusal here is "not yet", never `docs-busy`: the lane keeps the job at the head of its FIFO (W3).
  */
 export function laneAdmit(load: LaneLoad, job: DocsJob): boolean {
-  if (job.source === 'artifact') {
-    if (laneLarge(job)) return false;
-    if ((load.artifact ?? 0) > 0) return false;
-  }
+  if (job.source === 'artifact' && laneLarge(job)) return false;
+  if (laneArtifactRead(job) && (load.artifact ?? 0) > 0) return false;
   if (load.execs === 0) return true;
   if (load.execs >= DOCS_LANE_EXECS) return false;
   if (load.bytes + job.wire > DOCS_LANE_BYTES) return false;
@@ -1947,6 +1948,15 @@ export function laneLarge(job: DocsJob): boolean {
  */
 export function lanePrepare(job: DocsJob): boolean {
   return job.prepare === true;
+}
+
+/**
+ * Whether `job` is an artifact READ job (X5 A3.3, D-9146): `source` `artifact` and not a range prepare. THE one predicate
+ * of the artifact share: `laneAdmit` holds a second one back with it, and the read lane counts a started and a finished
+ * job in `LaneLoad.artifact` with it. An artifact range prepare is not one: the prepare clause alone holds it to one.
+ */
+export function laneArtifactRead(job: DocsJob): boolean {
+  return job.source === 'artifact' && !lanePrepare(job);
 }
 
 /**
