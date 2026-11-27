@@ -6,14 +6,29 @@
 // "dark" case was its light case run a second time, and nothing went red. Those files never measured contrast in either
 // theme; what went unmeasured was the dark palette's fit, sideways scroll and tap checks.
 //
-// The browser files run in no pull request's fast run, so this scan is the guard every pull request sees: it parses
-// every file under pwa/browser with the repository's one parser (`server/test/scan/parse.ts`, D-8288) and holds each
-// string literal that reaches the app as a theme to `resolveTheme(t) === t`. The ids come from @ccrc/ui, never from a
-// second list here. What the scan cannot resolve
-// (a value built at run time, imported from another module, or spread out of an argument array) is refused at run time
-// by `openApp` itself, before any context opens.
+// The browser files run in no pull request's fast run, so this scan is the guard every pull request sees. It parses every
+// file under pwa/browser, subdirectories included, with the repository's one parser (`server/test/scan/parse.ts`,
+// D-8288), and holds each string literal it finds reaching the app as a theme to `resolveTheme(t) === t`. The ids come
+// from @ccrc/ui, never from a second list here. It reads these shapes (`SHAPES`):
+//   - theme property: `{ theme: 'x' }`, a spread object or a conditional included, and `{ theme }` or `{ theme: X }`
+//     where the name is a constant of the same file holding a literal;
+//   - themes list: a list bound to a name or a property matching /themes|palettes/i;
+//   - theme loop and tuple loop: `for (const theme of [...])`, and `for (const [theme, width] of [[...], ...])` (the cell
+//     in theme's position of each row);
+//   - theme argument: a literal in the place of a `theme` parameter of a function declared or bound in the same file;
+//   - mapped list: a literal list whose method's callback binds `theme` (or a tuple holding it) as its first parameter,
+//     `[PHOSPHOR, 'light'].flatMap((theme) => …)`;
+//   - each table: `it.each(table)(title, (…, theme, …) => …)`, the cell in theme's parameter position of each row.
+//
+// It does NOT read (measured by review 4015 and this wave's mutants): a string built by concatenation (`'da' + 'rk'`) or
+// a template with a substitution; a value or a list imported from another module; a value computed at run time (a call,
+// an element or member read, a `let` reassigned); a spread argument list (`open(...[skin, 'dark'])`); and a list mapped
+// by a callback whose parameter has another name (`[...].map((t) => ({ theme: t }))`) or by a list that is not a literal.
+// `openApp` refuses every one of those at run time, before any context opens (pinned in browser-dist.test.ts), but that
+// runs only in the merge queue's browser leg, never in a pull request's fast run.
 import { describe, expect, it } from 'vitest';
-import { readdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { ts } from '../../server/test/scan/parse';
 import { PHOSPHOR, SYSTEM, THEMES, resolveTheme } from '@ccrc/ui';
@@ -28,8 +43,13 @@ interface ThemeLiteral {
   readonly line: number;
   readonly text: string;
   /** Which shape carried it, so a red names how the value got there. */
-  readonly shape: 'theme property' | 'themes list' | 'theme loop' | 'theme argument';
+  readonly shape: Shape;
 }
+
+/** Every shape the scan reads. The floor holds each to at least one literal in the real tree, so a shape the visitor
+ *  stops reading is red whatever the total is. */
+const SHAPES = ['theme property', 'themes list', 'theme loop', 'tuple loop', 'theme argument', 'mapped list', 'each table'] as const;
+type Shape = typeof SHAPES[number];
 
 const THEME_NAME = /^theme$/i;
 const LIST_NAME = /themes|palettes/i;
@@ -52,13 +72,15 @@ function themeLiterals(fileName: string, source: string): ThemeLiteral[] {
     fileName.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
   const found: ThemeLiteral[] = [];
 
-  // Pass 1: the file's own string constants (`const DARK = 'dark'`) and its own functions' theme parameter positions.
+  // Pass 1: the file's own string constants (`const DARK = 'dark'`; a `let` can be reassigned, so it is not one) and its
+  // own functions' theme parameter positions.
   const constants = new Map<string, ts.StringLiteralLike>();
   const themeParam = new Map<string, number>();
   const visitDecls = (node: ts.Node): void => {
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer !== undefined) {
       const init = unwrap(node.initializer);
-      if (ts.isStringLiteralLike(init)) constants.set(node.name.text, init);
+      const isConst = ts.isVariableDeclarationList(node.parent) && (node.parent.flags & ts.NodeFlags.Const) !== 0;
+      if (isConst && ts.isStringLiteralLike(init)) constants.set(node.name.text, init);
       if ((ts.isArrowFunction(init) || ts.isFunctionExpression(init))) {
         const at = init.parameters.findIndex((p) => THEME_NAME.test(nameOf(p.name) ?? ''));
         if (at >= 0) themeParam.set(node.name.text, at);
@@ -72,7 +94,7 @@ function themeLiterals(fileName: string, source: string): ThemeLiteral[] {
   };
   visitDecls(sf);
 
-  const take = (expr: ts.Expression, shape: ThemeLiteral['shape']): void => {
+  const take = (expr: ts.Expression, shape: Shape): void => {
     const e = unwrap(expr);
     if (ts.isConditionalExpression(e)) {
       take(e.whenTrue, shape);
@@ -83,29 +105,77 @@ function themeLiterals(fileName: string, source: string): ThemeLiteral[] {
     if (lit === undefined) return;
     found.push({ line: sf.getLineAndCharacterOfPosition(lit.getStart(sf)).line + 1, text: lit.text, shape });
   };
-  const takeList = (expr: ts.Expression, shape: ThemeLiteral['shape']): void => {
+  const takeList = (expr: ts.Expression, shape: Shape): void => {
     const e = unwrap(expr);
     if (ts.isArrayLiteralExpression(e)) for (const el of e.elements) if (!ts.isSpreadElement(el)) take(el, shape);
   };
 
-  // Pass 2: the four shapes.
+  /** A binding laid over each element of a literal list: `theme` itself takes every element; `[…, theme, …]` takes the
+   *  element in theme's position of each tuple row (a row that is not a literal tuple is skipped). */
+  const takeBound = (name: ts.BindingName, list: ts.Expression, whole: Shape, tuple: Shape): void => {
+    const rows = unwrap(list);
+    if (!ts.isArrayLiteralExpression(rows)) return;
+    if (ts.isIdentifier(name)) {
+      if (THEME_NAME.test(name.text)) takeList(rows, whole);
+      return;
+    }
+    if (!ts.isArrayBindingPattern(name)) return;
+    const at = name.elements.findIndex((el) => ts.isBindingElement(el) && THEME_NAME.test(nameOf(el.name) ?? ''));
+    if (at < 0) return;
+    for (const row of rows.elements) {
+      const r = ts.isSpreadElement(row) ? undefined : unwrap(row);
+      const cell = r !== undefined && ts.isArrayLiteralExpression(r) ? r.elements[at] : undefined;
+      if (cell !== undefined && !ts.isSpreadElement(cell)) take(cell, tuple);
+    }
+  };
+  const callbackOf = (args: readonly ts.Expression[]): ts.SignatureDeclarationBase | undefined =>
+    args.map(unwrap).find((a): a is ts.ArrowFunction | ts.FunctionExpression => ts.isArrowFunction(a) || ts.isFunctionExpression(a));
+
+  // Pass 2: the shapes.
   const visit = (node: ts.Node): void => {
     if (ts.isPropertyAssignment(node)) {
       const key = nameOf(node.name) ?? '';
       if (THEME_NAME.test(key)) take(node.initializer, 'theme property');
       else if (LIST_NAME.test(key)) takeList(node.initializer, 'themes list');
     }
+    // `{ skin, theme, width }`: judged when `theme` is a constant of this file holding a literal.
+    if (ts.isShorthandPropertyAssignment(node) && THEME_NAME.test(node.name.text)) take(node.name, 'theme property');
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && LIST_NAME.test(node.name.text) && node.initializer !== undefined) {
       takeList(node.initializer, 'themes list');
     }
     if (ts.isForOfStatement(node) && ts.isVariableDeclarationList(node.initializer)) {
       const decl = node.initializer.declarations[0];
-      if (decl !== undefined && THEME_NAME.test(nameOf(decl.name) ?? '')) takeList(node.expression, 'theme loop');
+      if (decl !== undefined) takeBound(decl.name, node.expression, 'theme loop', 'tuple loop');
     }
     if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
       const at = themeParam.get(node.expression.text);
       const arg = at === undefined ? undefined : node.arguments[at];
       if (arg !== undefined && !ts.isSpreadElement(arg)) take(arg, 'theme argument');
+    }
+    // `[PHOSPHOR, 'light'].flatMap((theme) => …)`, and `.map`, `.forEach` and the rest: a literal list whose method's
+    // callback binds `theme` (or a tuple holding it) as its first parameter.
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
+      && ts.isArrayLiteralExpression(unwrap(node.expression.expression))) {
+      const first = callbackOf(node.arguments)?.parameters[0];
+      if (first !== undefined) takeBound(first.name, node.expression.expression, 'mapped list', 'mapped list');
+    }
+    // `it.each(table)(title, (theme, …) => …)`: each row's cell in theme's parameter position; a row that is not a tuple is
+    // the first parameter's value.
+    if (ts.isCallExpression(node) && ts.isCallExpression(node.expression) && ts.isPropertyAccessExpression(node.expression.expression)
+      && node.expression.expression.name.text === 'each' && node.expression.arguments[0] !== undefined) {
+      const params = callbackOf(node.arguments)?.parameters ?? [];
+      const at = params.findIndex((p) => THEME_NAME.test(nameOf(p.name) ?? ''));
+      const rows = unwrap(node.expression.arguments[0]);
+      if (at >= 0 && ts.isArrayLiteralExpression(rows)) {
+        for (const row of rows.elements) {
+          if (ts.isSpreadElement(row)) continue;
+          const r = unwrap(row);
+          if (ts.isArrayLiteralExpression(r)) {
+            const cell = r.elements[at];
+            if (cell !== undefined && !ts.isSpreadElement(cell)) take(cell, 'each table');
+          } else if (at === 0) take(r, 'each table');
+        }
+      }
     }
     ts.forEachChild(node, visit);
   };
@@ -115,7 +185,7 @@ function themeLiterals(fileName: string, source: string): ThemeLiteral[] {
 
 const kept = (t: string): boolean => resolveTheme(t) === t;
 
-describe('the scan finds every shape a theme reaches the app by', () => {
+describe('the scan reads the shapes it names (SHAPES), and only those', () => {
   const texts = (src: string) => themeLiterals('x.browser.test.ts', src).map((l) => `${l.shape}:${l.text}`);
 
   it('a theme property, directly, through a conditional, a file constant or a spread object', () => {
@@ -138,9 +208,41 @@ describe('the scan finds every shape a theme reaches the app by', () => {
     expect(texts("const open = async (skin: string, theme: string) => {};\nopen(REFINED, 'dark');")).toEqual(['theme argument:dark']);
   });
 
-  it('what it cannot resolve, it leaves to the opener: a spread argument list, a value from elsewhere', () => {
-    expect(texts("async function open(skin: string, theme: string) {}\nopen(...['r', 'dark']);")).toEqual([]);
+  it('a shorthand theme property whose name is a constant of the file holding a literal', () => {
+    expect(texts("const theme = 'dark';\nopenApp(b, { skin, theme, width }, F);")).toEqual(['theme property:dark']);
+    expect(texts("function f(theme: string) { return openApp(b, { skin, theme, width }, F); }")).toEqual([]);
+  });
+
+  it("a tuple loop: the cell in theme's position of each literal row", () => {
+    expect(texts("for (const [theme, width] of [[PHOSPHOR, 360], ['dark', 390]] as const) {}")).toEqual(['tuple loop:dark']);
+    expect(texts("for (const [skin, theme] of [[REFINED, 'light'], [INSTRUMENT, 'dusk']]) {}")).toEqual(['tuple loop:light', 'tuple loop:dusk']);
+    expect(texts("for (const [skin, width] of [['dark', 360]]) {}")).toEqual([]);
+  });
+
+  it('a mapped list: a literal list whose callback binds theme first, nested or not, as a name or in a tuple', () => {
+    expect(texts("const V = [REFINED, INSTRUMENT].flatMap((skin) => [PHOSPHOR, 'dark'].flatMap((theme) => [{ skin, theme }]));"))
+      .toEqual(['mapped list:dark']);
+    expect(texts("[PHOSPHOR, 'dark'].map((theme): View => ({ theme }));")).toEqual(['mapped list:dark']);
+    expect(texts("[[PHOSPHOR, 360], ['dark', 390]].forEach(([theme, width]) => {});")).toEqual(['mapped list:dark']);
+    expect(texts("[360, 390].map((width) => width);")).toEqual([]);
+  });
+
+  it("an each table: the cell in theme's parameter position, or the row itself for a first parameter", () => {
+    expect(texts("it.each([['light', 'dark'], ['dusk', 'light']] as const)('%s', async (theme, stale) => {});"))
+      .toEqual(['each table:light', 'each table:dusk']);
+    expect(texts("it.each(['light', 'dark'])('%s', async (theme) => {});")).toEqual(['each table:light', 'each table:dark']);
+    expect(texts("it.each(['light', 'dark'])('%s', async (device) => {});")).toEqual([]);
+  });
+
+  it('what it does not read, it leaves to the opener (each named in the header)', () => {
+    expect(texts("openApp(b, { theme: 'da' + 'rk' }, F);")).toEqual([]);
+    expect(texts("openApp(b, { theme: `${'da'}rk` }, F);")).toEqual([]);
     expect(texts("import { DUSK } from './elsewhere';\nopenApp(b, { theme: DUSK }, F);")).toEqual([]);
+    expect(texts("import { MODES } from '../test/modes';\nfor (const theme of MODES) {}")).toEqual([]);
+    expect(texts("openApp(b, { theme: pick() }, F);\nopenApp(b, { theme: M.dark }, F);")).toEqual([]);
+    expect(texts("let theme = 'light';\ntheme = 'dark';\nopenApp(b, { theme }, F);")).toEqual([]);
+    expect(texts("async function open(skin: string, theme: string) {}\nopen(...['r', 'dark']);")).toEqual([]);
+    expect(texts("['dark'].map((t) => ({ theme: t }));")).toEqual([]);
   });
 
   it('an identifier from the catalogue is not a literal at all', () => {
@@ -148,8 +250,33 @@ describe('the scan finds every shape a theme reaches the app by', () => {
   });
 });
 
+/** Every TypeScript source under `dir`, as a path relative to it, the way the browser leg collects its files
+ *  (`browser/**`, vitest.browser.config.ts): subdirectories included. */
+function browserSources(dir: string): string[] {
+  return readdirSync(dir, { recursive: true, encoding: 'utf8' }).filter((f) => /\.tsx?$/.test(f)).sort();
+}
+
+describe('the scan lists the browser directory as the browser leg collects it', () => {
+  it('reads a source in a subdirectory too', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'browser-theme-ids-'));
+    try {
+      mkdirSync(path.join(dir, 'nested'));
+      writeFileSync(path.join(dir, 'a.browser.test.ts'), '');
+      writeFileSync(path.join(dir, 'nested', 'b.browser.test.tsx'), '');
+      writeFileSync(path.join(dir, 'nested', 'notes.md'), '');
+      expect(browserSources(dir)).toEqual(['a.browser.test.ts', path.join('nested', 'b.browser.test.tsx')]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+/** The totals' floors (the floor case below says how they are set). */
+const TOTAL_FLOOR = 120;
+const FILES_FLOOR = 80;
+
 describe('no browser file hands the app a theme the app does not keep', () => {
-  const files = readdirSync(BROWSER).filter((f) => /\.tsx?$/.test(f)).sort();
+  const files = browserSources(BROWSER);
   const scanned = files.map((file) => ({ file, literals: themeLiterals(file, readFileSync(path.join(BROWSER, file), 'utf8')) }));
 
   it('reads the catalogue it judges by from @ccrc/ui', () => {
@@ -158,11 +285,15 @@ describe('no browser file hands the app a theme the app does not keep', () => {
     expect(kept('dark'), "'dark' is not an id").toBe(false);
   });
 
-  it('finds theme literals at all (a scan that finds nothing proves nothing)', () => {
+  // Measured on this wave's head merged with main 6df8f8bb63 (the note, section 4): 152 literals in 105 of 143 files, every
+  // shape at least 4. The totals' floors are about four fifths of that, rounded down to ten; each shape must find at least one literal in the real tree, so a shape the visitor
+  // stops reading is red whatever the total is.
+  it('finds theme literals at all, in every shape it reads (a scan that finds nothing proves nothing)', () => {
     const literals = scanned.flatMap((s) => s.literals);
     const withAny = scanned.filter((s) => s.literals.length > 0);
-    expect(literals.length, 'theme literals found').toBeGreaterThanOrEqual(120);
-    expect(withAny.length, 'browser files with a theme literal').toBeGreaterThanOrEqual(80);
+    for (const shape of SHAPES) expect(literals.filter((l) => l.shape === shape).length, `${shape} literals found`).toBeGreaterThanOrEqual(1);
+    expect(literals.length, 'theme literals found').toBeGreaterThanOrEqual(TOTAL_FLOOR);
+    expect(withAny.length, 'browser files with a theme literal').toBeGreaterThanOrEqual(FILES_FLOOR);
   });
 
   it('every theme literal is a catalogue id or SYSTEM', () => {

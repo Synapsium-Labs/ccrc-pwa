@@ -3,6 +3,8 @@
 // paint; a value the app does not keep resolves to the system choice instead, which is light in a context that sets no
 // colour scheme, so a case named for the dark palette measured the light one twice and nothing went red. `openApp`
 // refuses such a value; this reads back what the page actually carries, so a case's title and its palette cannot part.
+// Its light half is true in any context that sets no colour scheme, kept or not; the phosphor half is the one that proves
+// the choice was kept, because a fall back to the system choice stamps light there.
 import type { Page } from 'playwright-core';
 import { expect } from 'vitest';
 import { PHOSPHOR, SYSTEM } from '@ccrc/ui';
