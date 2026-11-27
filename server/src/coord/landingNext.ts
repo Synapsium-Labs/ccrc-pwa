@@ -9,7 +9,7 @@
 // that run waits at `merging` with a current episode whose PR and head are the pinned row's own. A no-run row goes to the
 // claimant of its journal creation claim (a later order setter never replaces it). A missing source is a no-send.
 import { landingBindingOf } from './landingLine.js';
-import type { LandingInfrastructureFailure, LandingBindingReason } from '../../../shared/landingLine.js';
+import type { LandingInfrastructureFailure, LandingBindingReason, LandingEntry } from '../../../shared/landingLine.js';
 import type { LandingControlRead } from './radar.js';
 import type { LandingMutationFacts } from './landingWrites.js';
 
@@ -55,6 +55,22 @@ export function nextLandingRunId(facts: LandingMutationFacts, control: LandingCo
 
 const noSend = (reason: NextLandingNoSendReason): NextLandingNotice => ({ kind: 'no-send', reason });
 
+/** The cue's recipient rule (wave 5i), one private helper (wave 5o, D-9159): a run row's current claimant while its run waits
+ *  at `merging` in the pinned episode, or a no-run row's journal creation claimant. A word is the no-send reason. */
+function episodeOf(entry: LandingEntry, facts: LandingMutationFacts, run: NextLandingFacts['run']): NextLandingEpisode | NextLandingNoSendReason {
+  if (entry.runId !== null) {
+    if (run === 'missing' || run === 'unreadable' || run.id !== entry.runId || run.project !== entry.project) return 'run-unreadable';
+    if (run.state !== 'merging') return 'run-not-merging';
+    if (run.claimedBy === null) return 'recipient-missing';
+    if (run.episode === null || !Number.isSafeInteger(run.episode.e)) return 'episode-unreadable';
+    if (run.episode.pr !== entry.pr || run.episode.head !== entry.pinnedSha) return 'episode-changed';
+    return { kind: 'run', runId: run.id, episode: run.episode.e, toId: run.claimedBy };
+  }
+  const creation = facts.creations.find((c) => c.id === entry.id);
+  if (creation === undefined) return 'creation-unrecorded';
+  return { kind: 'no-run', creationSeq: creation.seq, toId: creation.setBy };
+}
+
 export function nextLandingNoticeOf(f: NextLandingFacts): NextLandingNotice {
   const { facts, control, run } = f;
   const binding = landingBindingOf(facts, control, f.nowMs);
@@ -63,19 +79,8 @@ export function nextLandingNoticeOf(f: NextLandingFacts): NextLandingNotice {
   const entry = facts.entries.find((e) => e.id === binding.entryId);
   if (entry === undefined) return noSend('empty-or-blocked');
 
-  let episode: NextLandingEpisode;
-  if (entry.runId !== null) {
-    if (run === 'missing' || run === 'unreadable' || run.id !== entry.runId || run.project !== entry.project) return noSend('run-unreadable');
-    if (run.state !== 'merging') return noSend('run-not-merging');
-    if (run.claimedBy === null) return noSend('recipient-missing');
-    if (run.episode === null || !Number.isSafeInteger(run.episode.e)) return noSend('episode-unreadable');
-    if (run.episode.pr !== entry.pr || run.episode.head !== entry.pinnedSha) return noSend('episode-changed');
-    episode = { kind: 'run', runId: run.id, episode: run.episode.e, toId: run.claimedBy };
-  } else {
-    const creation = facts.creations.find((c) => c.id === entry.id);
-    if (creation === undefined) return noSend('creation-unrecorded');
-    episode = { kind: 'no-run', creationSeq: creation.seq, toId: creation.setBy };
-  }
+  const episode = episodeOf(entry, facts, run);
+  if (typeof episode === 'string') return noSend(episode);
 
   const identity = JSON.stringify(['landing-next', 1, entry.project, entry.id, entry.pr, entry.pinnedSha, entry.handoffCommit, entry.pinnedAt,
     episode.kind, episode.kind === 'run' ? episode.runId : null, episode.kind === 'run' ? episode.episode : episode.creationSeq,
