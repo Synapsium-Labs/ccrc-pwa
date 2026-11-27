@@ -503,6 +503,7 @@ describe('the toggle under a send in flight (review 4084 F2)', () => {
     await act(async () => { answer({ kind: 'recorded', messageId: 9, cut: false, replay: false, offRecord: false }); });
     await flush();
     expect(box().value).toBe('');
+    expect(toggle(), 'off after the clear').toHaveAttribute('aria-pressed', 'false');
     expect(toggle()).toBeEnabled();
     expect(toggle()).not.toHaveAccessibleDescription('Held while the message is sent.');
     fireEvent.click(toggle());
@@ -534,5 +535,47 @@ describe('a trigger past a slower pick-up timer reads at the coalescer\'s spacin
     expect(port.threadCalls, 'then the 30 s timer again, not before').toBe(2);
     await tick(1_000);
     expect(port.threadCalls).toBe(3);
+  });
+});
+
+// ── fix round 3 (review 4120, call 1845) ───────────────────────────────────────────────────────────────────────────────
+
+describe('a read refused by the ceiling reads again after the server\'s retry time, on a quiet thread too (review 4120 F2)', () => {
+  beforeEach(() => { vi.useFakeTimers({ now: T0 + 60_000 }); });
+  const tick = async (ms: number): Promise<void> => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
+  const quiet = (): ChatThread => thread([divider(2, 1, 0, { current: true }), message(settled(3, 5))]);
+
+  it('a quiet thread (no message awaiting its pick-up): the refused read of a trigger is read again at retryAfterS, and the line goes', async () => {
+    let push: (m: SessionStreamMsg) => void = () => {};
+    const port = fakePort({ kind: 'thread', thread: quiet() });
+    port.threads.push({ kind: 'refused', error: 'read-ceiling', retryAfterS: 60 }, { kind: 'thread', thread: quiet() });
+    await mount(port, [], (f) => { push = f; return () => {}; });
+    expect(port.threadCalls).toBe(1);
+    await tick(20_000);
+    act(() => { push({ type: 'events', uuid: 'u', events: [user('u9', 80, 'a turn')], offset: 0 }); });
+    await tick(0);
+    expect(port.threadCalls, 'the trigger reads, and is refused').toBe(2);
+    expect(screen.getByText(READ_CEILING_WORDS)).toBeInTheDocument();
+    await tick(59_000);
+    expect(port.threadCalls, 'not before retryAfterS').toBe(2);
+    await tick(1_000);
+    expect(port.threadCalls, 'read again at retryAfterS, with no other trigger').toBe(3);
+    expect(screen.queryByText(READ_CEILING_WORDS)).toBeNull();
+    await tick(120_000);
+    expect(port.threadCalls, 'a quiet thread then reads nothing on a timer').toBe(3);
+  });
+
+  it('the first read refused by the ceiling: no thread yet, read again at retryAfterS', async () => {
+    const port = fakePort({ kind: 'refused', error: 'read-ceiling', retryAfterS: 30 });
+    port.threads.push({ kind: 'thread', thread: quiet() });
+    await mount(port);
+    expect(port.threadCalls).toBe(1);
+    await tick(29_000);
+    expect(port.threadCalls, 'not before retryAfterS').toBe(1);
+    await tick(1_000);
+    expect(port.threadCalls, 'read again at retryAfterS').toBe(2);
+    expect(screen.getByText('fixture message 3'), 'the thread is drawn').toBeInTheDocument();
+    await tick(120_000);
+    expect(port.threadCalls).toBe(2);
   });
 });

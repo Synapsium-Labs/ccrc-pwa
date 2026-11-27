@@ -10,8 +10,9 @@
 // with the text as data. `mergeLive` places the record's messages in the live transcript; `historyItemsToChat` draws an earlier
 // page; `draftAfterSend` keeps the composer's text on every answer but a recorded one. The refresh's three deciders
 // (`chatReadTrigger`, `nextReadAt`, `pickUpReadEvery`), what an earlier page answer becomes (`earlierPageOf`) and every sentence
-// the part says are here too, so no policy lives in the hook or the part: they keep only the timer's bookkeeping, the view's
-// own state and a few guards, which is where scheduling belongs.
+// the part says are here too. The hook decides two things of its own, named in its header (review 4120 F3): the send key's
+// lifetime and the read after a send. Beyond those, the hook and the part keep only the timer's bookkeeping, the view's own state
+// and a few guards.
 //
 // The one harness surface this leans on is Claude Code's transcript (the live generation's stream, and what a pane turn is).
 // It is read only through the readers that already exist (`buildChatItems`, the history door's items), so another harness

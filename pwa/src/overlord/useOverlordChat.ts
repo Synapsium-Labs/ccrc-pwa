@@ -3,7 +3,10 @@
 //
 // L4: it reads the thread, refreshes it through ONE coalescer, reads earlier pages and sends. It keeps the scheduling's own
 // bookkeeping (the pending timer and when it fires, a read in flight, a hidden tab's missed read) and a few guards (a read after
-// unmount, a send with no thread); every policy is `chatWords.ts`'s (L1): which stream frames ask for a read (`chatReadTrigger`), when the next read may run (`nextReadAt`),
+// unmount, a send with no thread). Two decisions are its own (review 4120 F3): the send key's lifetime (the kept draft, below:
+// one key per draft text, kept across a retry after no answer, dropped on a recorded answer or a moved designation) and the read
+// after a send (an answered send asks for a read, a moved designation's at once, no answer asks for none). Every other policy is
+// `chatWords.ts`'s (L1): which stream frames ask for a read (`chatReadTrigger`), when the next read may run (`nextReadAt`),
 // whether and how often the pick-up timer reads (`pickUpReadEvery`, which ends it ten minutes after a message), what an earlier
 // page answer becomes and what comes next (`earlierPageOf`), whether a send clears the draft (`draftAfterSend`), and every
 // sentence it sets (`sendNotice`, `NOBODY_TO_SEND_WORDS`). A refusal word's sentence is the shared client's tables'
@@ -121,6 +124,8 @@ export function useOverlordChat(port: OverlordChatPort): OverlordChat {
     } else if (r.kind === 'refused' && chatRefusalRole(r.error) === 'ceiling') {
       notBefore.current = Date.now() + (r.retryAfterS ?? 0) * 1000;
       setTrouble({ kind: 'ceiling' });
+      // Read again after the server's retry time (question 9), a quiet thread and a refused first read too (review 4120 F2).
+      ask.current();
     } else {
       setTrouble(r.kind === 'refused' ? { kind: 'refused', words: refusalWords(r.error) } : { kind: r.kind });
     }

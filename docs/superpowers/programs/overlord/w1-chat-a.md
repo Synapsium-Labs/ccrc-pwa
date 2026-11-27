@@ -282,8 +282,9 @@ Door mutations by hand (F8, F9), each red, each reverted, on the fix round's tre
 
 ## Fix round 2 (review 4084, the coordinator's call 1767)
 
-Round 1 held; five items survived, none critical. Three cases were added: one red first (the toggle under a send in flight), two
-pins of behaviour round 1 already had, each proven by a mutant that reds it.
+Round 1 held; five items survived, none critical. Four cases were added: one red first (the toggle under a send in flight), and
+three pins of behaviour round 1 already had (the part's trigger case, the words case and its twin in the mutant sets), each
+proven by a mutant that reds it.
 
 | Item | What changed | Where |
 |---|---|---|
@@ -301,6 +302,38 @@ Mutants, each red, each reverted, the part's suite alone (31 cases):
 - P7 a stamp in the future skipped (`age >= PICK_UP_WAIT_MS || age < 0`), registered in `sim/chatSets.ts` under
   `pickUpReadEvery`'s set: killed; the chat words sets 7 of 7 with every mutant killed.
 
+## Fix round 3 (review 4120, the coordinator's call 1845)
+
+Rounds 1 and 2 and the merge of main 539aa48b11 held; one fix and six wording points, none critical. Two cases were added,
+both red first.
+
+| Item | What changed | Where |
+|---|---|---|
+| F2, a read the ceiling refused scheduled nothing | The ceiling arm asks the coalescer, which reads at the server's retry time (`nextReadAt` takes the not-before), so a quiet thread (no message awaiting its pick-up) and a refused first read each read again then, and the pause line goes (question 9). Nothing else in the hook changed. Red first: two part cases, a quiet thread whose trigger read is refused, and a first read refused | the hook's ceiling arm, the part's suite |
+| F8, the toggle case's title | The one assertion it lacked: the toggle is off after the clear | the part's suite |
+| F1, F4, F5, F7 | The failed first read's limit worded as it is; the console-clock limit carries its number; four cases in round 2, not three; the rebind limit by slug | here |
+| F3, prose | The hook's header names its two decisions, the send key's lifetime and the read after a send; the words module's header says so too (no code moved) | the hook's and the words module's headers |
+| F6, the merges of main | Each recorded below, with which main, the hand resolutions and the counts | here |
+
+Mutants, each red, each reverted, the part's suite alone (33 cases):
+- K-C1 the ceiling arm schedules nothing (its ask removed): 2 red, both new cases;
+- K-C2 the ceiling arm asks only once a thread was read (`if (threadNow.current !== null) ask.current();`): 1 red, the refused
+  first read's case.
+
+## The merges of main
+
+- `3fda0fc9b1` (home B, #3457; the sequence doors, #3456), before stage 2's wiring: one hand resolution, the writers map suite,
+  both sides' describes kept. Stage 2's counts were measured after it.
+- `9e5f592c24` (the board, #3463): the resolutions and the counts are in the Known limits bullet below (344 scanned, 341 HTTP,
+  222 gated, 119 exempt, thirty-three route files).
+- `539aa48b11` (home C, #3489; the board follow-up, #3566), after fix round 2, the coordinator's call 1793: two hand
+  resolutions. The shared client: home C's Settings calls first, then the chat's three calls, with one definition each of the
+  shared helpers. The mail-routes suite: the board follow-up's comment and its board guard, then the chat's door guard and the
+  read ledger's two guards; its message names all four words. Merged without a hand: the Overlord routes file (home C's rebind
+  pair beside the chat's two reads), `server.ts`, the box-token census, the renewal readings suite, the writers map, the floors
+  file, the control census and the contrast suite's sheet list. Counts re-measured on the merged tree: 344 scanned, 341 HTTP, 222
+  gated, 119 exempt, thirty-three route files; growth against it, the shared client +17 and `server.ts` +8.
+
 ## Known limits (so far)
 
 - `chat-thread-shows-the-newest-100` (F2): the thread holds the newest 100 messages; when older ones exist one line says so, and
@@ -314,12 +347,20 @@ Mutants, each red, each reverted, the part's suite alone (31 cases):
 
 - `chat-pick-up-age-is-the-console-clock` (review 4084 F3): a message's age is the console's clock against the server's stamp,
   so the timer's read count holds while the two clocks roughly agree; a console far ahead of the server reads nothing on the
-  timer for a new message, and one far behind reads for longer and still stops. Ageing against a server time is an additive wire
-  field, the coordinator's ticket.
+  timer for a new message, and one far behind reads for longer and still stops. With the console an hour behind, a message's age
+  starts at minus sixty minutes, so it is read every 10 s for 61 minutes (366 reads) and every 30 s for the 9 after (18): about
+  384 timer reads over 70 minutes, against the about 24 above, and about 360 of them in the first hour, half the thread door's
+  ceiling of 720 an hour. Ageing against a server time is an additive wire field, the coordinator's ticket.
 - `chat-at-once-read-waits-for-a-read-in-flight` (review 4084 F4): a read already in flight makes the at-once read wait for the
   next spacing, since the coalescer marks it to run again after that read rather than at once.
-- `chat-first-read-failure-waits-for-a-trigger`: a first read that fails is retried only by the next trigger (a stream frame, a
-  send, the tab shown again), not on a timer.
+- `chat-first-read-failure-waits-for-a-trigger` (worded again in fix round 3, review 4120 F1): a first read that fails (no
+  answer, or a refusal other than the read ceiling's) is retried only by the next stream trigger frame or by the part mounting
+  again; not by a send (no send leaves before a thread is read), not by the tab being shown (that reads again only a read the
+  hidden tab missed), not on a timer. A first read the read ceiling refuses is read again after the server's retry time (fix
+  round 3).
+- `chat-send-in-flight-at-a-rebind-loses-its-draft` (review 4120 F7, the coordinator's ticket): a designation change remounts
+  the chat, so a send in flight at a live rebind loses its draft, its toggle and its key, and its answer goes nowhere. Not fixed
+  in this PR.
 - `chat-part-mounted-mid-turn-misses-its-end`: a part mounted while the Overlord is already busy has no `busy` status before the
   turn's `idle`, so it can miss that turn's end as a trigger; the next trigger reads.
 - Earlier generations are not paged in W1 (the measured arm); the divider names `ccrc history` instead. The part draws a
