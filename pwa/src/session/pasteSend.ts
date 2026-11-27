@@ -16,8 +16,22 @@
 import { PASTE_POINTER_MAX, pastePointer, readPastePointer } from '../../../shared/pastePointer';
 import { parseChips, stripMarkers, type PasteChips } from './pasteChips';
 
-/** The file each chip number was saved to: the path the upload answered. */
-export type SavedPastes = ReadonlyMap<number, string>;
+/** A file a pasted text was saved to: the path the upload answered, and the exact text it was saved from. */
+export interface SavedPaste {
+  readonly path: string;
+  readonly text: string;
+}
+
+/** The files saved for this draft, by chip number. A saved path is used only while the chip's text is identical to the
+ *  text it was saved from (the coordinator's condition 3): a pointer naming another text's file is the one failure the
+ *  operator could not see, so the plan never trusts the number alone. */
+export type SavedPastes = ReadonlyMap<number, SavedPaste>;
+
+/** The file chip `n` may point at now, or undefined when it has none for its current text. */
+const fileOf = (n: number, chips: PasteChips, saved: SavedPastes): string | undefined => {
+  const s = saved.get(n);
+  return s !== undefined && s.text === chips.get(n)?.text ? s.path : undefined;
+};
 
 /** What a send with chips comes to: the text to send, or the chip numbers that stop it. */
 export type PointerSend =
@@ -35,7 +49,19 @@ const sentNumbers = (value: string, chips: PasteChips): number[] => {
 /** The chips the draft sends that have no saved file yet, each once, in field order. A chip removed from the draft is
  *  not sent, so it is never saved. */
 export const pastesToSave = (value: string, chips: PasteChips, saved: SavedPastes): number[] =>
-  sentNumbers(value, chips).filter((n) => !saved.has(n));
+  sentNumbers(value, chips).filter((n) => fileOf(n, chips, saved) === undefined);
+
+/** Whether the draft goes out as a shell line: its text, as it will be typed, begins with `!`, which Claude Code runs
+ *  as a shell command (the operator's ruling on item 667). Measured as the send measures it: after the trim (so a
+ *  leading space or newline does not stop it, the coordinator's ruling on this wave's question), and on the composed
+ *  prompt, where the tray's paths lead (`composePrompt`), so a draft with an attachment never is one. A pointer begins
+ *  with a letter, so a draft that opens with a chip is not one either. A shell line's chips go as typed text, by
+ *  today's route: a pointer there would hand its sentence to the shell. */
+export function sendsAsShellLine(value: string, chips: PasteChips, attachments: number): boolean {
+  if (attachments > 0) return false;
+  const first = parseChips(value, chips)[0];
+  return stripMarkers(value.slice(0, first?.start ?? value.length)).trim().startsWith('!');
+}
 
 /** The pointer for chip `n` saved at `path`, or null when it would not read back as this session's own or is too long. */
 const pointerOf = (path: string, lines: number, sessionId: string): string | null => {
@@ -50,7 +76,7 @@ export function pointerSend(value: string, chips: PasteChips, saved: SavedPastes
   const pointers = new Map<number, string>();
   const bad: number[] = [];
   for (const n of sentNumbers(value, chips)) {
-    const line = pointerOf(saved.get(n)!, chips.get(n)!.lines, sessionId);
+    const line = pointerOf(fileOf(n, chips, saved)!, chips.get(n)!.lines, sessionId);
     if (line === null) bad.push(n);
     else pointers.set(n, line);
   }

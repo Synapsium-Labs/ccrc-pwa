@@ -10,6 +10,7 @@ import type { ReactNode } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import type { ChatEvent } from '../../../shared/api';
 import { splitClipPaths } from '../../../shared/api';
+import { isPastePointerLine } from '../../../shared/pastePointer';
 import { OlderEdge, OlderGap, TaskCard, ToolCard, askCardLines } from '@ccrc/ui';
 import { RenderBoundary } from '../components/RenderBoundary';
 import { MsgPlain } from '../lib/markdown';
@@ -334,6 +335,15 @@ function thumbRows(clips: number): number {
   return clips <= 0 ? 0 : clips === 1 ? 1 : Math.ceil(clips / 2);
 }
 
+/** A user turn's text as priced: each pasted-text pointer line is drawn as one chip row (desktop-polish wave 194,
+ *  `PastedTextChip`), one line high; the rest is the turn's text. The list knows no session here, so a pointer is
+ *  recognised by its own path's folder (`isPastePointerLine`): a price, never what is drawn. */
+function pointerRows(text: string): { text: string; chips: number } {
+  const lines = text.split('\n');
+  const chips = lines.filter(isPastePointerLine).length;
+  return chips === 0 ? { text, chips } : { text: lines.filter((l) => !isPastePointerLine(l)).join('\n'), chips };
+}
+
 /** A message row, by the form `MessageBubble` draws it in. */
 function messageShape(event: MessageEvent, m: Measures): RowShape {
   if (foldsAway(event)) return { bucket: 'folded', lines: 0 };
@@ -344,8 +354,9 @@ function messageShape(event: MessageEvent, m: Measures): RowShape {
     case 'user': {
       // `pre-wrap` prose with the clip paths taken out — they are drawn as a
       // grid of thumbnails above the bubble, not as lines of text.
-      const { paths, rest } = splitClipPaths(event.text);
-      return { bucket: 'user', lines: plainLines(rest, m.bubble), attach: thumbRows(paths.length) };
+      const priced = pointerRows(event.text);
+      const { paths, rest } = splitClipPaths(priced.text);
+      return { bucket: 'user', lines: plainLines(rest, m.bubble) + priced.chips, attach: thumbRows(paths.length) };
     }
     case 'assistant':
       return { bucket: 'assistant', lines: nominalLines(event.text, m.prose) };
@@ -416,12 +427,14 @@ export function shapeOf(item: TranscriptItem, m: Measures = NOMINAL_MEASURES, ch
     case 'task':
       // The summary row, and the "n more" toggle when there are details — closed.
       return { bucket: 'task', lines: item.notification.fields.length > 0 ? 2 : 1 };
-    case 'pending':
+    case 'pending': {
+      const priced = pointerRows(item.send.text);
       return {
         bucket: 'pending',
-        lines: plainLines(item.send.text, m.bubble),
+        lines: plainLines(priced.text, m.bubble) + priced.chips,
         attach: thumbRows(item.send.attachments?.length ?? 0),
       };
+    }
     case 'working': return { bucket: 'working', lines: 0 };
   }
 }

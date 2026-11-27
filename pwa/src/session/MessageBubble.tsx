@@ -5,7 +5,7 @@
 import { memo, useContext, useState, type ReactNode } from 'react';
 import { Prose } from '@ccrc/ui';
 import type { ChatEvent } from '../../../shared/api';
-import { isImageClip, splitClipPaths } from '../../../shared/api';
+import { isImageClip } from '../../../shared/api';
 import { clipUrl } from '../lib/api';
 import { resetClock } from '../lib/clock';
 import { timeOf } from '../lib/format';
@@ -14,6 +14,8 @@ import { refHref, type ChatRefContext } from '../lib/chatRefs';
 import { messageRepos } from '../lib/chatRepoEvidence';
 import { ChatLink, ChatMarkdown, openExternal } from '../lib/markdown';
 import { ChatRefsContext } from './chatRefsContext';
+import { userTurnView } from './pastedTurn';
+import { TurnParts } from './PastedTextChip';
 import './chat.css';
 
 export type MessageEvent = Extract<ChatEvent, { kind: 'user' | 'assistant' | 'system' }>;
@@ -264,12 +266,16 @@ export const MessageBubble = memo(function MessageBubble({
   }
 
   if (event.kind === 'user') {
-    const { paths, rest } = splitClipPaths(event.text);
+    // A pasted text the session received as a file (desktop-polish wave 194) is a chip in its place; the attachment
+    // paths come out of the text parts only, as before (`pastedTurn.ts`).
+    const { paths, parts } = userTurnView(event.text, id);
     const time = timeOf(event.ts);
     return (
       <>
-        {paths.length > 0 && <ClipThumbs id={id} paths={paths} />}
-        {rest !== '' && <div className="msg-user">{linkify(rest, refs)}</div>}
+        {paths.length > 0 && <ClipThumbs id={id} paths={[...paths]} />}
+        {parts.length > 0 && (
+          <div className="msg-user"><TurnParts id={id} parts={parts} text={(t) => linkify(t, refs)} /></div>
+        )}
         <p className="msg-receipt msg-receipt--ok">
           {time} <b aria-label="delivered">✓</b>
         </p>

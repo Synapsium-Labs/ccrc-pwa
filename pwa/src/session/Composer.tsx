@@ -7,7 +7,11 @@
 // keeps its Retry/Discard). A long text paste enters the draft as a chip (desktop-polish wave 169): its label wrapped in
 // two invisible markers, so the field's value itself says which chips it holds. The decisions are pasteChips.ts (L1),
 // the row that acts on chips is PasteChipBar, every edit the composer makes is the browser's own (`execCommand`), and a
-// send expands every chip to its full text before today's send rules run, unchanged.
+// send expands every chip to its full text before today's send rules run, unchanged. Since desktop-polish wave 194 a
+// send with chips first saves each pasted text as a file in the session's folder (`usePasteSave`), then sends the
+// draft with a pointer line naming that file in each chip's place (`pasteSend.ts`); Send is held while it saves, and a
+// failed save sends nothing until the operator taps Retry or "Send as typed text" (today's send). A shell line's chips
+// go as typed text.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ClipboardEvent, KeyboardEvent, ReactNode } from 'react';
 import { AttachButton, AttachTray, Button, Icon, KeyHint, Sheet, Well } from '@ccrc/ui';
@@ -23,6 +27,9 @@ import {
   normalizePaste, planEdit, planPaste, removeChip, selectionText, snapSelection, type PasteChips, type Plan,
 } from './pasteChips';
 import { PasteChipBar } from './PasteChipBar';
+import { pointerSend, sendsAsShellLine } from './pasteSend';
+import { usePasteSave } from './usePasteSave';
+import { pasteUnpointableText } from './longPasteWords';
 import './chat.css';
 
 export interface ComposerProps {
@@ -136,6 +143,10 @@ export function Composer({
   // without a round trip through the filesystem and the file picker. Drop and
   // the file picker feed the same staged-images tray.
   const staged = useStagedImages(id ?? '');
+  // The saves behind a send with chips (wave 194): Send is held while one runs, and the field, the paste and the tray
+  // take nothing new, so what goes out is what was on screen at the tap.
+  const pasteSave = usePasteSave(id ?? '');
+  const saving = pasteSave.saving;
   const [dropping, setDropping] = useState(false);
 
   const put = (next: string, caret: number | null = null): void => {
@@ -177,6 +188,10 @@ export function Composer({
 
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>): void => {
     if (disabled) return;
+    if (saving) {
+      e.preventDefault();
+      return;
+    }
     const files = id === undefined ? [] : clipboardFiles(e.clipboardData);
     if (files.length > 0) {
       e.preventDefault();
@@ -363,7 +378,7 @@ export function Composer({
   // A marker outside every chip (an edit the composer did not plan broke a block, markers came with no chip, or an undo
   // brought back an old label). Sending holds until none is left, so a broken label never goes out in place of its text.
   const broken = inertMarkers(value, chips.current).length > 0;
-  const canSend = !disabled && !staged.hasFailed && !staged.uploading && !broken
+  const canSend = !disabled && !staged.hasFailed && !staged.uploading && !broken && !saving
     && (expanded.trim() !== '' || attachments.length > 0);
 
   // Stop in the send slot (W2 Task S7b; D-5471, inside D-5099's "Later"). While a turn runs and nothing is drafted,
@@ -378,14 +393,12 @@ export function Composer({
     onInterrupt?.('keycap');
   };
 
-  const send = (): void => {
-    if (!canSend) return;
-    // A local deferral while the inline card is mounted, whatever the server would say about the pane: no request is made
-    // and the text stays in the field. The Send button is disabled for the same reason (R77 F1), so this guard is the
-    // defence for Enter, which calls `send()` directly. The sentence above the field (R93) is the surface's own and shows
-    // while the card is up, not after a try.
-    if (askUp) return;
-    const text = expanded.trim();
+  /** Hand `text` to the session and start a new draft. It runs from the latest render, because a save may have run
+   *  between the tap and here: a session that went away or a card that came up meanwhile keeps the draft (and its saved
+   *  files, which a later Send reuses). */
+  const deliver = useRef<(text: string) => void>(() => undefined);
+  deliver.current = (text: string): void => {
+    if (disabled || askUp) return;
     // An explicit `undefined` second argument still counts as a 2-arg call to
     // a caller matching on arity — only pass opts when there is one.
     if (attachments.length > 0) onSend(text, { attachments });
@@ -394,6 +407,36 @@ export function Composer({
     put('');
     chips.current = emptyChips(); // a new draft's table; its numbers go on from the last one
     staged.release();
+    pasteSave.reset();
+  };
+
+  const send = (): void => {
+    if (!canSend) return;
+    // A local deferral while the inline card is mounted, whatever the server would say about the pane: no request is made
+    // and the text stays in the field. The Send button is disabled for the same reason (R77 F1), so this guard is the
+    // defence for Enter, which calls `send()` directly. The sentence above the field (R93) is the surface's own and shows
+    // while the card is up, not after a try.
+    if (askUp) return;
+    const v = valueNow.current;
+    const table = chips.current;
+    // A long paste goes as a saved file with a pointer line in its place (wave 194): every chip is saved first, and
+    // nothing is sent unless every one was. A shell line's chips go as typed text, as today (`sendsAsShellLine`).
+    if (id !== undefined && pasted.length > 0 && !sendsAsShellLine(v, table, attachments.length)) {
+      const sid = id;
+      void pasteSave.save(v, table).then((files) => {
+        if (files === null || valueNow.current !== v) return;
+        const plan = pointerSend(v, table, files, sid);
+        if (plan.kind === 'ready') deliver.current(plan.text);
+        else if (plan.kind === 'unpointable') pasteSave.fail(new Map(plan.numbers.map((n) => [n, pasteUnpointableText(n)])));
+      });
+      return;
+    }
+    deliver.current(expanded.trim());
+  };
+  /** "Send as typed text", on a chip whose save failed: today's send, every chip its full text, by the tap only. */
+  const sendTyped = (): void => {
+    if (!canSend || askUp) return;
+    deliver.current(expanded.trim());
   };
 
   // A physical keyboard exists → Enter is the send key, as in every desktop
@@ -512,7 +555,7 @@ export function Composer({
         // (e.g. the session dying) could otherwise leave `dropping` armed
         // from an earlier dragover with no drop handler branch left to clear it.
         setDropping(false);
-        if (id === undefined || disabled) return;
+        if (id === undefined || disabled || saving) return;
         if (e.dataTransfer.files.length === 0) return; // a text/URL drop — leave it to the browser
         e.preventDefault();
         // `isAttachable`, not a bare `image/` type test: a dragged .md reports
@@ -538,8 +581,9 @@ export function Composer({
         </ul>
       )}
       <AttachTray images={staged.images} onRemove={staged.remove} onRetry={staged.retry} />
-      <PasteChipBar chips={pasted} onExpand={expandPaste} onRemove={removePaste} disabled={disabled}
-        broken={broken} onUndo={undoBreak} onDismiss={dismissBreak} />
+      <PasteChipBar chips={pasted} onExpand={expandPaste} onRemove={removePaste} disabled={disabled || saving}
+        broken={broken} onUndo={undoBreak} onDismiss={dismissBreak}
+        saving={saving} failures={pasteSave.failures} onRetry={send} onSendTyped={sendTyped} />
       {/* ABOVE the field (R93): the composer is at the foot of the pane, so a line here grows it upward and the field,
           Send and Stop stay where they were; below the field the same line pushed them up by its own height. */}
       {askUp && (
@@ -560,6 +604,7 @@ export function Composer({
           value={value}
           placeholder={placeholder}
           disabled={disabled}
+          readOnly={saving}
           onChange={(e) => change(e.target.value)}
           onCompositionStart={() => { composing.current = true; }}
           onCompositionEnd={endComposition}
@@ -575,7 +620,7 @@ export function Composer({
           onPaste={onPaste}
         />
         {id !== undefined && (
-          <AttachButton accept={ATTACH_ACCEPT} disabled={disabled} onPick={(files) => staged.add(files)} />
+          <AttachButton accept={ATTACH_ACCEPT} disabled={disabled || saving} onPick={(files) => staged.add(files)} />
         )}
         {stopping && !drafted ? (
           <Button variant="danger" size="fit" className="stop-slot flex-none gap-2 rounded-full" onClick={stop}>
@@ -595,6 +640,7 @@ export function Composer({
               className="send-btn"
               aria-label="Send"
               disabled={!canSend || askUp}
+              aria-busy={saving || undefined}
               title={broken ? BROKEN_NOTICE : undefined}
               onClick={send}
             >

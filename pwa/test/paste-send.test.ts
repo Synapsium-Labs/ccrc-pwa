@@ -4,7 +4,7 @@
 // `composer-long-paste.test.tsx`.
 import { describe, expect, it } from 'vitest';
 import { addChip, emptyChips, expandValue, type PasteChips } from '../src/session/pasteChips';
-import { pasteBytes, pastesToSave, pointerSend, type SavedPastes } from '../src/session/pasteSend';
+import { pasteBytes, pastesToSave, pointerSend, sendsAsShellLine, type SavedPastes } from '../src/session/pasteSend';
 import { PASTE_POINTER_MAX, pastePointer, readPastePointer } from '../../shared/pastePointer';
 
 const SID = 'acct-a-project-a';
@@ -22,7 +22,10 @@ function table(): { chips: PasteChips; f1: string; f2: string } {
   return { chips: b.chips, f1: a.field, f2: b.field };
 }
 
-const saved = (entries: [number, string][]): SavedPastes => new Map(entries);
+/** The files saved so far, each beside the text it was saved from: chip 1's and chip 2's own unless said otherwise. */
+const TEXT: Record<number, string> = { 1: LONG, 2: SHORT_LONG };
+const saved = (entries: [number, string, string?][]): SavedPastes =>
+  new Map(entries.map(([n, p, text]) => [n, { path: p, text: text ?? TEXT[n]! }]));
 
 describe('which pasted texts still need saving', () => {
   it('names every chip the draft sends that has no file, once each, in field order', () => {
@@ -42,6 +45,73 @@ describe('which pasted texts still need saving', () => {
 
   it('names nothing for a draft with no chip', () => {
     expect(pastesToSave('typed text', emptyChips(), saved([]))).toEqual([]);
+  });
+
+  it('saves again a chip whose saved file was made from any other text, so no pointer names another text\'s file', () => {
+    const { chips, f1, f2 } = table();
+    expect(pastesToSave(`${f1} ${f2}`, chips, saved([[1, P1, `${LONG}\n`], [2, P2, SHORT_LONG]]))).toEqual([1]);
+    expect(pointerSend(`${f1} ${f2}`, chips, saved([[1, P1, 'other'], [2, P2]]), SID))
+      .toEqual({ kind: 'unsaved', numbers: [1] });
+  });
+});
+
+describe('a shell line', () => {
+  it('is a draft whose typed text, as it will be typed, begins with `!`', () => {
+    const { chips, f1 } = table();
+    expect(sendsAsShellLine(`!ls ${f1}`, chips, 0)).toBe(true);
+  });
+
+  it('is one after a leading space or newline too, which the send trims away', () => {
+    const { chips, f1 } = table();
+    expect(sendsAsShellLine(` !ls ${f1}`, chips, 0)).toBe(true);
+    expect(sendsAsShellLine(`\t!ls ${f1}`, chips, 0)).toBe(true);
+    expect(sendsAsShellLine(`\n\n!ls ${f1}`, chips, 0)).toBe(true);
+  });
+
+  it('is not one when the `!` is typed after a chip or anywhere but the start', () => {
+    const { chips, f1 } = table();
+    expect(sendsAsShellLine(`${f1}!ls`, chips, 0)).toBe(false);
+    expect(sendsAsShellLine(`${f1}\n!ls`, chips, 0)).toBe(false);
+    expect(sendsAsShellLine(`x !ls ${f1}`, chips, 0)).toBe(false);
+  });
+
+  it('agrees with the pointer text as it will be typed', () => {
+    const { chips, f1 } = table();
+    for (const v of [`!ls ${f1}`, ` \t\n!ls ${f1}`, `${f1}!ls`, `say ${f1}`]) {
+      const r = pointerSend(v, chips, saved([[1, P1]]), SID);
+      if (r.kind !== 'ready') throw new Error(r.kind);
+      expect(sendsAsShellLine(v, chips, 0), v).toBe(r.text.startsWith('!'));
+    }
+  });
+
+  it('is not one when a tray attachment leads the composed prompt', () => {
+    const { chips, f1 } = table();
+    expect(sendsAsShellLine(`!ls ${f1}`, chips, 1)).toBe(false);
+  });
+
+  it('is not one when the draft opens with a chip, even a paste that itself begins with `!`', () => {
+    const bang = addChip(emptyChips(), `!${LONG}`, 1);
+    expect(sendsAsShellLine(`${bang.field} !after`, bang.chips, 0)).toBe(false);
+  });
+
+  it('is not one for a slash command or plain text', () => {
+    const { chips, f1 } = table();
+    expect(sendsAsShellLine(`/review ${f1}`, chips, 0)).toBe(false);
+    expect(sendsAsShellLine(`say !hi ${f1}`, chips, 0)).toBe(false);
+  });
+
+  it('ignores the field\'s own stray markers before the `!`', () => {
+    const { chips, f1 } = table();
+    expect(sendsAsShellLine(`⁢!ls ${f1}`, chips, 0)).toBe(true);
+  });
+});
+
+describe('a slash command with a chip', () => {
+  it('takes the pointer like any draft', () => {
+    const { chips, f1 } = table();
+    expect(pointerSend(`/review ${f1}`, chips, saved([[1, P1]]), SID)).toEqual({
+      kind: 'ready', text: `/review \n${pastePointer(P1, 214)}`,
+    });
   });
 });
 

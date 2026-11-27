@@ -76,6 +76,13 @@ export function readPastePointer(line: string, sessionId: string): PastePointer 
   return { path, name, lines };
 }
 
+/** Whether `line` is a pointer of the session its own path names. For the chat list's row PRICING only, which knows
+ *  no session: it never decides what is drawn or linked, which `readPastePointer` with the real session id does. */
+export function isPastePointerLine(line: string): boolean {
+  const folder = POINTER_RE.exec(line)?.[3]?.split('/').at(-2);
+  return folder !== undefined && readPastePointer(line, folder) !== null;
+}
+
 /** One part of a user turn, in order: its text, or a pointer the chat draws as a chip in that place. */
 export type TurnPart =
   | { readonly kind: 'text'; readonly text: string }

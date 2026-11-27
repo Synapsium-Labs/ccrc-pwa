@@ -16,6 +16,8 @@ import { toast } from '@ccrc/ui';
 import { isImageClip } from '../../../shared/api';
 import { api, ApiError, apiErrorText, clipUrl, submitErrorText } from '../lib/api';
 import type { PendingAttachment, PendingSend } from '../stores/session';
+import { pendingTurnParts } from './pastedTurn';
+import { TurnParts } from './PastedTextChip';
 import './chat.css';
 
 /** Optimistic-send thumbnails: rendered straight from the object URL the
@@ -133,13 +135,15 @@ export function PendingBubble({
   sendHeld?: boolean;
 }): ReactNode {
   const attachments = send.attachments;
+  // A pasted text sent as a file (desktop-polish wave 194) is the same chip in its place as in the confirmed bubble.
+  const body = <TurnParts id={id} parts={pendingTurnParts(send.text, id)} text={(t) => t} />;
   if (send.state === 'sending') {
     return (
       <>
         {attachments && attachments.length > 0 && (
           <PendingClipThumbs id={id} attachments={attachments} />
         )}
-        <div className="msg-user">{send.text}</div>
+        <div className="msg-user">{body}</div>
         <p className="msg-receipt">
           <span aria-hidden="true">◌</span> sending
         </p>
@@ -151,7 +155,7 @@ export function PendingBubble({
       {attachments && attachments.length > 0 && (
         <PendingClipThumbs id={id} attachments={attachments} />
       )}
-      <div className="msg-user msg-user--failed">{send.text}</div>
+      <div className="msg-user msg-user--failed">{body}</div>
       <p className="msg-receipt msg-receipt--failed">
         <span aria-hidden="true">!</span> not sent
       </p>
