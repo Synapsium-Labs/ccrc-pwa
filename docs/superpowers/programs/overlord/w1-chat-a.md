@@ -304,13 +304,13 @@ Mutants, each red, each reverted, the part's suite alone (31 cases):
 
 ## Fix round 3 (review 4120, the coordinator's call 1845)
 
-Rounds 1 and 2 and the merge of main 539aa48b11 held; one fix and six wording points, none critical. Two cases were added,
-both red first.
+Rounds 1 and 2 and the merge of main 539aa48b11 held; one fix, six wording points and one test assertion, none critical.
+Two cases were added, both red first.
 
 | Item | What changed | Where |
 |---|---|---|
-| F2, a read the ceiling refused scheduled nothing | The ceiling arm asks the coalescer, which reads at the server's retry time (`nextReadAt` takes the not-before), so a quiet thread (no message awaiting its pick-up) and a refused first read each read again then, and the pause line goes (question 9). Nothing else in the hook changed. Red first: two part cases, a quiet thread whose trigger read is refused, and a first read refused | the hook's ceiling arm, the part's suite |
-| F8, the toggle case's title | The one assertion it lacked: the toggle is off after the clear | the part's suite |
+| F2, a read the ceiling refused scheduled nothing | The ceiling arm asks the coalescer, which reads at the server's retry time (`nextReadAt` takes the not-before), so a quiet thread (no message awaiting its pick-up) and a refused first read each read again then, and the pause line goes (question 9). Nothing else in the hook changed in code, but timing can differ: with a pending message past its first minute, a ceiling refusal whose retry time is under 30 s is read again up to 20 s sooner than the pick-up timer would have, and never before the server's time. Red first: two part cases, a quiet thread whose trigger read is refused, and a first read refused | the hook's ceiling arm, the part's suite |
+| F8, the toggle case's title | The one assertion it lacked: the toggle is off after the clear. The toggle is never on in that case, so the reset itself is guarded by two other cases (the toggle-resets case and the edit-while-in-flight case) | the part's suite |
 | F1, F4, F5, F7 | The failed first read's limit worded as it is; the console-clock limit carries its number; four cases in round 2, not three; the rebind limit by slug | here |
 | F3, prose | The hook's header names its two decisions, the send key's lifetime and the read after a send; the words module's header says so too (no code moved) | the hook's and the words module's headers |
 | F6, the merges of main | Each recorded below, with which main, the hand resolutions and the counts | here |
@@ -361,10 +361,14 @@ Mutants, each red, each reverted, the part's suite alone (33 cases):
 - `chat-at-once-read-waits-for-a-read-in-flight` (review 4084 F4): a read already in flight makes the at-once read wait for the
   next spacing, since the coalescer marks it to run again after that read rather than at once.
 - `chat-first-read-failure-waits-for-a-trigger` (worded again in fix round 3, review 4120 F1): a first read that fails (no
-  answer, or a refusal other than the read ceiling's) is retried only by the next stream trigger frame or by the part mounting
-  again; not by a send (no send leaves before a thread is read), not by the tab being shown (that reads again only a read the
+  answer, an answer the console cannot read, or a refusal other than the read ceiling's) is retried only by the next
+  stream trigger frame or by the part mounting again; not by a send (no send leaves before a thread is read), not by the tab being shown (that reads again only a read the
   hidden tab missed), not on a timer. A first read the read ceiling refuses is read again after the server's retry time (fix
   round 3).
+- `chat-ceiling-retry-delay-unbounded` (review 4130 F1): the retry after a ceiling refusal trusts the server's retry time
+  with no upper bound. The shipped server answers at most one hour, and a value far beyond that would not be handled
+  well by the console's timer. A bound in the words module's decider, and a case for a refusal with no retry time, are
+  carried to PR B (the coordinator's ticket).
 - `chat-send-in-flight-at-a-rebind-loses-its-draft` (review 4120 F7, the coordinator's ticket): a designation change remounts
   the chat, so a send in flight at a live rebind loses its draft, its toggle and its key, and its answer goes nowhere. Not fixed
   in this PR.
@@ -381,3 +385,15 @@ Mutants, each red, each reverted, the part's suite alone (33 cases):
   ledger's. The board's door suite's rig passes the ceiling counter's caller too (as the sequence route's does).
 - The full server test-project type check is killed by the test slice's memory cap on this box; the changed test files are type
   checked in a narrowed project instead, and `typecheck-tests` in CI covers the whole.
+
+## Corrected on the programme's ledger PR after review 4130 (2026-11-27)
+
+The fourth review (round 4, narrow, at 430ad85e83) found six minor points and none held the landing (call 1865). Five
+were wording and are corrected here; the sixth (F4, no case for a ceiling refusal with no retry time) goes to PR B with
+F1.
+
+- F1: the Known limit `chat-ceiling-retry-delay-unbounded` is added.
+- F2: the fix round 3 table says timing can differ for a retry time under 30 s.
+- F3: `chat-first-read-failure-waits-for-a-trigger` names an answer the console cannot read.
+- F5: the F8 row says the reset is guarded by two other cases.
+- F6: the fix round 3 count reads one fix, six wording points and one test assertion.
