@@ -516,7 +516,8 @@ describe('the Overlord\'s break: the operator\'s quiet or the place hidden, eith
     const f = passOver(r.coord, r.time, 'overlord');
     expect(f.pass().waits).toEqual({ unmeasured: 1 });
     const i = f.soft.at(-1)!;
-    expect(i.placeHiddenObservedMs).toMatchObject({ kind: 'unmeasured' });
+    // The place's own answer to an unread marks read, never the later-wave placeholder the lane read before this reading.
+    expect(i.placeHiddenObservedMs).toEqual({ kind: 'unmeasured', why: 'place-mark: the marks could not be read' });
     expect(softRenewalMay({ ...i, operatorQuietObservedMs: { kind: 'measured', value: BREAK_NO_MESSAGE_MS - 1 } })).toEqual({ start: false, waitFor: 'unmeasured' });
     expect(softRenewalMay({ ...i, operatorQuietObservedMs: { kind: 'measured', value: BREAK_NO_MESSAGE_MS } })).toEqual({ start: true });
   });

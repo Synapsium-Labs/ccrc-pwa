@@ -1157,8 +1157,9 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
   // THE ACCOUNT HOLDS' DOORS (spec §3.6; renewal readings PR H, plan Task 11, questions 6 and 7 of the home plan): the operator's,
   // session-gated when sign-in is armed, never EXEMPT, consulting no box token, the backstop's shape. A hold only narrows (it
   // leaves one account out of the Overlord's ordered list), so its clear widens back to the set the operator chose: no step-up,
-  // and the clear records who cleared it (`operatorActor`). `clearAccountHold` is the clear's one writer; the generations pass is
-  // the hold's. `box-token-census.test.ts`'s `CONTINUITY_SESSION_DOORS` names both paths.
+  // and the clear records who cleared it (`operatorActor`). `clearAccountHold` is the clear's one writer; `holdAccount` is the
+  // hold's, with two callers behind `holdOfStart`: the generations pass, and the settle's `failPending` (renewal readings G).
+  // `box-token-census.test.ts`'s `CONTINUITY_SESSION_DOORS` names both paths.
 
   /** `GET /api/continuity/account-holds`: the standing holds, oldest first, each its lane, its cause word, the start that held it
    *  and when (`{ ok, holds: [{ lane, cause, startId, heldAt }] }`): no session text, only the lane names Settings shows. A table

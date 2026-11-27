@@ -288,6 +288,29 @@ describe('failPending', () => {
     expect(rowOf(db)).toMatchObject({ pendingId: A });
     expect(holdsOf(db)).toEqual({ ok: true, lanes: [] });
   });
+  it('no reader ever sees the failure without its hold: at the hold\'s write, a second connection still reads the attempt pending', () => {
+    const dir = path.join(mkTmp('ccrc-designation-'), '.ccrc');
+    mkdirSync(dir, { recursive: true });
+    copyFileSync(template, path.join(dir, 'coord.db'));
+    const db = openCoordDb(path.join(dir, 'coord.db')); opened.push(db);
+    const reader = openCoordDb(path.join(dir, 'coord.db')); opened.push(reader);
+    const f = fake(db);
+    des(db, f);
+    // The hold's own insert asks the other connection what it can see: a hold written after the failure's commit, as a call of
+    // its own, would find the failure already visible there.
+    const seen: unknown[] = [];
+    db.function('peek_attempt', () => {
+      seen.push(reader.prepare('SELECT pendingId, attemptOutcome FROM overlord_designation').get());
+      return 0;
+    });
+    db.exec('CREATE TRIGGER peek_hold AFTER INSERT ON overlord_account_holds BEGIN SELECT peek_attempt(); END');
+    expect(failPending(db, A, 'overlord-sandbox-unmet', NOW + 1, true, { lane: 'lane-a', startId: 7 }))
+      .toEqual({ ok: true, changed: true, held: { ok: true, changed: true } });
+    expect(seen).toEqual([{ pendingId: A, attemptOutcome: null }]);
+    expect(reader.prepare('SELECT pendingId, attemptOutcome FROM overlord_designation').get())
+      .toEqual({ pendingId: null, attemptOutcome: 'overlord-sandbox-unmet' });
+    expect(holdsOf(reader)).toEqual({ ok: true, lanes: ['lane-a'] });
+  });
   it('a hold the table refuses leaves the failure recorded and its stop owed, and says so', () => {
     const db = openDb(); const f = fake(db);
     des(db, f);

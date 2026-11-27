@@ -34,7 +34,7 @@ issued for this piece, so none is defined; the coordinator folds these slugs int
 
 ### Item 2: a failed first start holds its account (ticket first-start-failure-holds-its-account)
 
-- **Where the hold is written.** In the settle's `fail-pending` arm (`continuity/routes.ts#settleLoads`). The settle asks the
+- **Where the hold is written.** In the settle's `fail-pending` arm (`continuity/routes.ts#settleOnce`, which `settleLoads` runs on the serialiser). The settle asks the
   one hold decider, `holdOfStart`, over the sandbox verdict it already holds and the account the body runs on. On `hold` it
   hands `{ lane, startId }` to the failure record. `overlordDesignationStore.ts#failPending` then writes the hold through the
   one hold writer, `accountHolds.ts#holdAccount`, **inside the failure's own transaction**, after the generation ends and
@@ -58,8 +58,9 @@ issued for this piece, so none is defined; the coordinator folds these slugs int
   `hold-writer-two-callers`).
 - **Seen and cleared like any hold.** Every reader goes through the table, not through a generation: the holds door
   (`standingHolds`), readiness (`coord.accountHolds()`), and every builder of `AccountFacts` (`held`). No reader keys on the
-  designated generation, so none was widened. The operator's clear door clears it, and `holdAccount`'s own guard
-  (`excluded.startId > startId`) means the same start never puts a cleared hold back.
+  designated generation, so none was widened. The operator's clear door clears it. The same failed start never puts a cleared
+  hold back: its failure cleared the pending slot, so a second settle of it answers `none` and asks the writer nothing. The
+  writer's own guard (`excluded.startId > startId`) is what keeps a caller that does ask again, the pass, from doing so.
 
 ## Where main differed from the plan
 
@@ -71,18 +72,23 @@ issued for this piece, so none is defined; the coordinator folds these slugs int
 | `place-tests-in-own-file` | Task 10's cases are in a new `continuity-renewal-readings-place.test.ts`, not in the two readings suites (other open work edits those), as PR F did. |
 | `operator-quiet-case-reads-the-place` | One case of PR F's suite (`continuity-renewal-readings-operator.test.ts`) asserted "with the place unmeasured the permit waits `unmeasured`". The place is now measured, so the case sets the place on the recorded inputs and asserts both answers (`no-break` with the place visible, `unmeasured` with it unmeasured). Its first case's comment says the place is held visible. |
 | `generation-day-inputs-unchanged` | The simulator's generation day (`sim/generationDay.ts`) builds its own `SoftInputs`, with the place unmeasured. Nothing there reads the lane, so it is unchanged. |
+| `hold-writer-two-callers` | The plan has `holdAccount` called only by the generations pass. It now has two callers behind the one decider, `holdOfStart`: the pass, for the designated Overlord's start, and `failPending`, for a designate or rebind attempt whose start failed. Its header, the census comment, the holds table's comment in `schema.ts` and the holds doors' comment in `continuity/routes.ts` say so. |
+| `live-exchange-reads-as-the-place-on-screen` | The spec (§3.3.11, R19) says a soft trigger waits however long a live exchange lasts. The lane has no separate reading of a live exchange: it reads the two breaks, and a break is either one. An exchange holds a soft renewal off only while the place is on screen and the operator keeps acting. An exchange carried on from a surface that does not show the place meets a break once the place has been hidden for five minutes (fix round 1's case "the place hidden for five minutes and the operator just acted: a break, by the place (the OR)"). |
 
 ## Rules, and the case that goes red when each is broken
 
 | Rule | Case (file) |
 |---|---|
 | Five minutes hidden opens the break; a visible report resets it | "five minutes hidden opens the break; a visible report resets it, and a place kept visible never opens it" (place suite: the real pass, home B's real reporter, the real store) |
-| An unread mark waits unmeasured unless the quiet disjunct passes | "marks that cannot be read make the place unmeasured: the permit waits `unmeasured` unless the quiet disjunct passes" |
+| An unread mark waits unmeasured unless the quiet disjunct passes | "marks that cannot be read make the place unmeasured: the permit waits `unmeasured` unless the quiet disjunct passes" (place suite), and "the place mark unread: the permit waits unmeasured, unless the quiet passes" (operator-mark paths suite, which asserts the place's own reason since fix round 2) |
 | The reading is asked once per pass | "the marks are read once per pass for the permit: the place adds no read beside the operator's quiet" (the store's mark reader is counted: 2 a pass, step ONE's and step FOUR's) |
 | A mark never written is not "visible just now" | "a place mark never written reads as long hidden ..." and the decider's G2 case |
 | A mark from the future is not trusted as visible | "a place mark dated after the pass is not trusted as visible ..." and the decider's G3/G6 case |
 | The Overlord's only | "the place is the Overlord's only: a coordinator's and a worker's generation read not applicable, whatever the mark" |
-| The hold and the failure are one fact | "a failure that rolls back leaves no hold" (store suite) |
+| The hold and the failure are one fact | "a failure that rolls back leaves no hold" (store suite), and "no reader ever sees the failure without its hold: at the hold's write, a second connection still reads the attempt pending" (store suite: the hold's own insert asks a second connection what is committed) |
+| An unmeasured wrapper holds nothing, never a hold on an empty name | "an unmeasured wrapper holds nothing, never a hold on an empty name; the failure and the stop go on (the real account read)" (loads door: the real server's account read over a registry row that lists the wrapper but cannot read it) |
+| A swap recorded before the settle holds neither account | "a swap whose new start is recorded before the old report settles holds neither account; the new start's own failure holds its own" (loads door) |
+| The known limit `swap-before-the-settle`, as it stands | "known limit swap-before-the-settle: a wrapper rewritten before the swap's new start is recorded holds the new account" (loads door) |
 | A refused hold never undoes the failure or skips the stop | "a hold the table refuses leaves the failure recorded and its stop owed" (store) and "... still records the failure and stops the body, and says so" (loads door) |
 | Fail, then left out of the list, then cleared, then offered again | "a failed first start holds its account: the holds read shows it, the next ordered list leaves it out, the clear offers it again" (the real server, its real settle port and its real clear door) |
 | The never-empty rule stands for this path | "the never-empty rule stands for this path: with every candidate held, the list is kept as it was" |
@@ -126,6 +132,36 @@ or asserts a soft wait word: `grep` over `server/test` for `softRenewalMay`, `So
 readings, `'no-break'`, `.waits` and `generationsPass(`, kept where the file imports the lane, the soft decider or their sets.
 Each was run alone; the wave-done lists them.
 
+## Fix round 2: review 4045 (call 1695)
+
+Nothing critical or important was found. The round ties up four points and the prose, and every new case was measured red
+under its mutant before this note was written (the mutation table below).
+
+- **F1, the account a hold lands on.** The ruling's direction was to hold only when the registry's lane and the failed
+  attempt's own generation's lane agree. That is not a tie, for two reasons read from the code. First, a generation's `lane` is the same
+  registry wrapper, read at the pass's listing (`generationStart.ts#startVerdict`, `registry.lane`), so after a swap both
+  reads name the new account and agree. Second, the attempt usually has no generation when it settles: the loads door settles
+  seconds after the start, the pass runs every 30 seconds, and once the failure clears the pending slot the body is no longer
+  read as the Overlord's, so no Overlord generation is minted for it. So the hold would almost never be written. No fact the start carries names its
+  account: the start row holds the conversation uuid, the row incarnation (minted once per registry row, kept across a swap),
+  the source and the model; the loads report holds what was loaded, not where from. A tie needs a column or a hook field, so
+  the window is a known limit (`swap-before-the-settle`, below). Two cases with differing lanes pin where the line falls. A
+  swap whose new start is recorded first leaves the old report `no-report`, holding neither account, and the new start's own
+  failure holds its own. A wrapper rewritten before the new start is recorded holds the new account, pinned as it stands so a
+  tie shows there when one is built.
+- **F3, the unmeasured wrapper through the real read.** The loads door's attribution refuses a registry row it cannot
+  measure (`registry-unmeasurable`), so the case makes the wrapper unreadable after the door's answer, at the settle's first
+  read. The real account read then answers null. No row is written in the holds table, the failure is recorded, and the drain
+  goes on. The stop's own registry read cannot measure the row either, so the stop stays owed for the sweep, as any stop that
+  does not complete does.
+- **F4, one fact, one transaction, from the other side.** The new store case has the hold's own insert ask a second
+  connection what is committed. It sees the attempt still pending, so no reader ever sees the failure without its hold.
+- **F2, the case that could not fail.** "The place mark unread" in the operator-mark paths suite now asserts the place's own
+  reason (`place-mark: the marks could not be read`). With the lane's line back to `later('W1')` it goes red.
+- **F5, prose.** The holds table's comment in `schema.ts` and the holds doors' comment in `continuity/routes.ts` name both
+  callers. This note names `settleOnce` for the arm, and its table gains `hold-writer-two-callers`. The loads door suite's
+  comment on the second settle says why it holds nothing: the pending slot is gone, not the writer's guard.
+
 ## Mutation
 
 **The floors' set.** `server/src/continuity/renewalReadings.ts#placeHiddenOf` joins `MUTANT_SETS` through
@@ -158,6 +194,9 @@ the source was restored (`git checkout`). Before: every named file green.
 | the settle never hands the hold | loads door suite | 4 of 74 |
 | the settle holds the account whatever the decider says | loads door suite | 1 of 74 |
 | an account read that throws is not caught | loads door suite | 1 of 74 |
+| fix round 2: the hold written after the failure's commit, as a call of its own (F4) | store suite | 1 of 55 (the second-connection case) |
+| fix round 2: the real account read hands an unmeasured wrapper's empty value on (F3) | loads door suite | 1 of 77 (the unmeasured-wrapper case) |
+| fix round 2: the Overlord's place back to `later('W1')` (F2) | operator-mark paths suite, R19's describe | 4 of 4 (the unread case among them) |
 
 ## What a merge arms
 
@@ -202,7 +241,19 @@ the source was restored (`git checkout`). Before: every named file green.
 - **One more registry read per settle.** Item 2 reads the session's registry record a second time beside `workspaceOf`.
   Both reads happen once per settle, which runs once per designate or rebind start.
 - **An unmeasured wrapper holds nothing.** When the registry does not measure the failed body's wrapper, the account is
-  unknown and no hold is written. The failure is still recorded and the body still stopped.
+  unknown and no hold is written. The failure is still recorded and the drain goes on. A stop that cannot measure the row
+  stays owed for the sweep.
+- **A swap caught before the settle holds the new account (`swap-before-the-settle`).** The account is the registry's wrapper
+  when the settle runs. No fact the start carried names its account, so nothing ties the hold to the failed start's own
+  account. If a swap rewrites the wrapper after the failed start and before the swap's own start is recorded, the settle holds
+  the new account for the old start's failure, until the operator clears it. A swap whose new start is recorded first holds
+  nothing. Closing the window needs the start to carry its account (a column, or a field of the hook's report).
+- **A settle that never completes before the deadline holds nothing.** A failure from the account's own configuration whose
+  settle does not complete before the attempt's deadline is ended by the deadline's own failure record (`deadline-passed`),
+  which writes no hold.
+- **A rebind can hold the live Overlord's own account.** A failed rebind attempt whose body ran on the account the live
+  Overlord runs on holds that account. The account then reads as outside the set, so the live Overlord is due a hard renewal.
+  That is the spec's meaning of a held account (§3.6), stated here so nobody is surprised by it.
 - **The floors run on the test box** reds two `pwa/src/face/mood.ts` sets whose baseline cannot resolve `@ccrc/ui` in the
   box's checkout. This branch changes nothing in `pwa/`, so it is the run's environment (reported in the wave-done).
 

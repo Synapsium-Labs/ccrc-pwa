@@ -4,7 +4,7 @@
 // sender, then `insertStartLoads`, which finds the start the `reportId` names (`unknown-start`, 404) and keeps the first body.
 // The read side (`startLoadsOfNewestStart`, `startLoadsRowOf`) is pinned here too. Fixture HOMEs only.
 import { describe, it, expect, afterEach, beforeAll, beforeEach, vi } from 'vitest';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import type { FastifyInstance } from 'fastify';
@@ -285,7 +285,8 @@ describe('the settle step at the loads door (Task 9)', { timeout: 90_000 }, () =
     const cleared = await app.inject({ method: 'POST', url: '/api/continuity/account-holds/lane-a/clear' });
     expect(cleared.statusCode, cleared.body).toBe(200);
     expect(listOf(two).list).toStrictEqual(['lane-a', 'lane-c']);
-    // The same failed start, settled again from its stored report, never puts the cleared hold back.
+    // The same failed start, settled again from its stored report, never puts the cleared hold back: its failure cleared the
+    // pending slot, so the settle answers none and never asks the writer.
     expect((await report(app, foreignHook())).act).toBe('none');
     expect(coord!.accountHolds()).toStrictEqual({ ok: true, lanes: [] });
   });
@@ -323,6 +324,52 @@ describe('the settle step at the loads door (Task 9)', { timeout: 90_000 }, () =
     expect(d.kind === 'not-designated' && d.row?.lastAttempt).toMatchObject({ sessionId: OV, outcome: 'overlord-sandbox-unmet' });
     expect(stops()).toStrictEqual([STOP_OV]);
     expect(coord!.accountHolds()).toStrictEqual({ ok: true, lanes: [] });
+  });
+
+  it('an unmeasured wrapper holds nothing, never a hold on an empty name; the failure and the stop go on (the real account read)', async () => {
+    app = await openOv(); seedRow(home, OV, { uuid: OV_UUID, project: 'overlord', wrapper: 'lane-a' }); pend();
+    await startOv(app);
+    // The door's attribution reads the registry whole (it refuses a row it cannot measure), so the wrapper turns unreadable
+    // after the door's answer, at the settle's first read: the registry lists it but cannot read it, and the record's wrapper is
+    // unmeasured, its measured value empty, when the server's own account read asks.
+    const w = path.join(home, '.cc-sessions', `${OV}.wrapper`);
+    const real = coord!.startLoadsOfNewestStart.bind(coord!);
+    const first = vi.spyOn(coord!, 'startLoadsOfNewestStart').mockImplementationOnce((id) => { rmSync(w); mkdirSync(w); return real(id); });
+    try {
+      expect((await report(app, foreignHook())).act).toBe('fail-pending');
+      expect(first).toHaveBeenCalled();
+    } finally { first.mockRestore(); }
+    const d = view();
+    expect(d.kind === 'not-designated' && d.row?.lastAttempt).toMatchObject({ sessionId: OV, outcome: 'overlord-sandbox-unmet' });
+    // The drain goes on to that body (its markers off); the stop's own registry read cannot measure the row, so the stop
+    // stays owed on the failure record for the sweep, as for any stop that does not complete.
+    expect(calls, JSON.stringify(calls)).toContainEqual(['keep-awake', '--session', OV, '--state', 'off']);
+    expect(d.kind === 'not-designated' && d.row?.stopsOwed).toStrictEqual([OV]);
+    expect(coord!.db.prepare('SELECT lane FROM overlord_account_holds').all()).toStrictEqual([]);
+  });
+
+  // The account a hold lands on is the registry's wrapper when the settle runs (slug first-start-lane-from-the-registry); no
+  // fact the start carried names its account. A swap whose new start is recorded first leaves the old report nothing to
+  // settle; a swap caught between its wrapper write and its new start is the known limit `swap-before-the-settle`.
+  it('a swap whose new start is recorded before the old report settles holds neither account; the new start\'s own failure holds its own', async () => {
+    app = await openOv(); seedRow(home, OV, { uuid: OV_UUID, project: 'overlord', wrapper: 'lane-a' }); pend();
+    await startOv(app);
+    seedRow(home, OV, { uuid: OV_UUID, project: 'overlord', wrapper: 'lane-b' });
+    await startOv(app, 'r-ov2-abcd', 'resume');
+    // The newest start is the swap's, with no report yet: the old start's report settles nothing.
+    expect((await report(app, foreignHook())).act).toBe('no-report');
+    expect(coord!.accountHolds()).toStrictEqual({ ok: true, lanes: [] });
+    expect((await report(app, { ...foreignHook(), reportId: 'r-ov2-abcd' })).act).toBe('fail-pending');
+    expect(coord!.accountHolds()).toStrictEqual({ ok: true, lanes: ['lane-b'] });
+  });
+
+  it('known limit swap-before-the-settle: a wrapper rewritten before the swap\'s new start is recorded holds the new account', async () => {
+    app = await openOv(); seedRow(home, OV, { uuid: OV_UUID, project: 'overlord', wrapper: 'lane-a' }); pend();
+    await startOv(app);
+    seedRow(home, OV, { uuid: OV_UUID, project: 'overlord', wrapper: 'lane-b' });
+    expect((await report(app, foreignHook())).act).toBe('fail-pending');
+    // Pinned as it stands, so a tie to the start's own account shows here when one is built.
+    expect(coord!.accountHolds()).toStrictEqual({ ok: true, lanes: ['lane-b'] });
   });
 
   it('a stop that throws keeps the failure record, leaves the stop owed and logs it', async () => {
