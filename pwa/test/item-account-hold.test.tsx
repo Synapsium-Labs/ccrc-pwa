@@ -81,4 +81,5 @@ describe('the hold item draws the Clear for the lane it names', () => {
     show(holdItem({ action: { verb: 'linear-report', migrationId: 3 } }), false);
     expect(document.querySelector('[data-item-hold="lane-a"]')).not.toBeNull();
     expect(document.querySelector('[data-current="false"]')?.textContent).toBe(NOT_CURRENT_ACTS_WORD);
-  });});
+  });
+});

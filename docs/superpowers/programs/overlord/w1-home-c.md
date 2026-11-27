@@ -233,10 +233,28 @@ taken out. Counts are measured, one file at a time through `ccrc test`.
 - **F8, the empty set is sent (ruled).** Red first: `settings-overlord`'s empty-set case (the wait line and a disabled Save).
   Mutant, Save disabled on an empty set: red, 1 of 28.
 - **F10.** The browser file pins 24 and 15 controls, exactly, and passed 40 of 40 on the merged tree.
-- **F12.** Hold 2 asserts the three asks in order: the moved pair's plain ask, then the equal pair's plain ask and its step-up.
-  Hold 4's second pattern is anchored to the whole line.
+- **F12.** Hold 2 now asserts the equal pair's asks in its stale step-up scenario: after the moved pair's one plain ask, the equal
+  pair asks the plain gate and then the step-up. It rejects no order the case's earlier lines accepted; it adds what the equal pair
+  asks (worded by review 4065 F3). Hold 4's second pattern is anchored to the whole line.
 - **F3, F5 and the prose:** the three Settings headers say context K, `section-status` has a direct Overlord case, and the
   routes comment, the Fleet line's sentence and this note's merge pointer are corrected.
+
+## Fix round 2 (review 4065, ruled call 1728)
+
+Round 1 held; its F7 fix brought a defect of its own, the Clear answer's latch. Each case was red first; each mutant was put in by
+hand, seen red, and taken out (`settings-account-facts`, 14 cases).
+
+- **The latch follows the hold (review 4065 F1).** The latch now holds the held-at of the hold that answer ended, and the control
+  is keyed by it. A hold that returns with another held-at is a new hold: its line and a live Clear, with none of the old answer.
+  Red first: the case that clears a lane and re-reads it held again (no Clear was drawn). Mutant, the control's key and the latch's
+  reset both taken out: red, 1 of 14. Mutant, the reset alone taken out: red, 1 of 14, in the case where the returned hold goes in
+  a re-read another row's Clear triggers (the old latch drew a live Clear with no hold line).
+- **The latch only on an answer that ended the hold (review 4065 F2).** Clear now reports `cleared`, `gone` or `refused`, and the
+  row latches only on the first two. Red first: the refused-Clear case (a live Clear stayed with no hold line). Mutant, the latch on
+  every outcome: red, 1 of 14.
+- **Slips and prose (review 4065 F3, F4).** The save handler's spacing, the two closers on one line in `item-account-hold`, the two
+  stacked doc comments on `SetBox`, and hold 2's comment and this note's F12 line. The answered case also asserts no owed-stops line
+  when nothing is owed.
 
 **The one merge of `main`:** `97dd3d303b`, an ordinary merge as the coordinator ruled. Its item screen had not been rebuilt, so
 Clear stays after History, in "Your move" (call 1684). The browser files' dark-palette guard (#3472) came with it, and both of this

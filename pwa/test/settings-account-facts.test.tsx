@@ -161,6 +161,55 @@ describe('the account-hold Clear', () => {
     expect(row('lane-a').querySelector('[data-hold-clear]')).toBeNull();
   });
 
+  it('a hold that returns after a clear is a new hold: its line and a live Clear, and no old answer (review 4065 F1)', async () => {
+    // The server holds a cleared lane again on a later failing start: the re-read names the lane with a new held-at.
+    const holds = vi.spyOn(api, 'accountHolds')
+      .mockResolvedValueOnce({ ok: true, holds: [{ lane: 'lane-b', cause: 'launch-profile-unmet', startId: 4, heldAt: AT }] })
+      .mockResolvedValue({ ok: true, holds: [{ lane: 'lane-b', cause: 'launch-profile-unmet', startId: 5, heldAt: AT + 60_000 }] });
+    vi.spyOn(api, 'clearAccountHold').mockResolvedValue({ ok: true, lane: 'lane-b' });
+    show([lane('lane-b')]);
+    await settle();
+    fireEvent.click(row('lane-b').querySelector('[data-hold-clear="lane-b"]')!);
+    await waitFor(() => expect(holds).toHaveBeenCalledTimes(2));
+    await settle();
+    expect(within(row('lane-b')).getByText('Held: launch profile unmet')).toBeTruthy();
+    expect(row('lane-b').querySelector<HTMLButtonElement>('[data-hold-clear="lane-b"]')?.disabled).toBe(false);
+    expect(row('lane-b').querySelector('[data-hold-cleared]')).toBeNull();
+  });
+
+  it('the returned hold supersedes the old answer: when it goes in a re-read another row\'s Clear triggers, the row draws no Clear (review 4065 F1)', async () => {
+    const A = { lane: 'lane-a', cause: 'launch-profile-unmet', startId: 4, heldAt: AT };
+    const B = { lane: 'lane-b', cause: 'launch-profile-unmet', startId: 4, heldAt: AT };
+    const holds = vi.spyOn(api, 'accountHolds')
+      .mockResolvedValueOnce({ ok: true, holds: [A, B] })
+      .mockResolvedValueOnce({ ok: true, holds: [A, { ...B, startId: 5, heldAt: AT + 60_000 }] })
+      .mockResolvedValue({ ok: true, holds: [] });
+    vi.spyOn(api, 'clearAccountHold').mockResolvedValue({ ok: true });
+    show([lane('lane-a'), lane('lane-b')]);
+    await settle();
+    fireEvent.click(row('lane-b').querySelector('[data-hold-clear="lane-b"]')!);
+    await waitFor(() => expect(holds).toHaveBeenCalledTimes(2));
+    await settle();
+    fireEvent.click(row('lane-a').querySelector('[data-hold-clear="lane-a"]')!);
+    await waitFor(() => expect(holds).toHaveBeenCalledTimes(3));
+    await settle();
+    expect(row('lane-b').querySelector('[data-account-hold]')).toBeNull();
+  });
+
+  it('a refused Clear latches nothing: a re-read that drops the hold leaves no Clear behind (review 4065 F2)', async () => {
+    const holds = vi.spyOn(api, 'accountHolds')
+      .mockResolvedValueOnce({ ok: true, holds: [{ lane: 'lane-a', cause: 'launch-profile-unmet', startId: 4, heldAt: AT }] })
+      .mockResolvedValue({ ok: true, holds: [] });
+    vi.spyOn(api, 'clearAccountHold').mockRejectedValue(new ApiError(503, { ok: false, error: 'unavailable' }));
+    show([lane('lane-a')]);
+    await settle();
+    fireEvent.click(row('lane-a').querySelector('[data-hold-clear="lane-a"]')!);
+    await waitFor(() => expect(holds).toHaveBeenCalledTimes(2));
+    await settle();
+    expect(row('lane-a').querySelector('[data-hold-clear]')).toBeNull();
+    expect(row('lane-a').querySelector('[data-account-hold]')).toBeNull();
+  });
+
   it('holds that cannot be read are said, and no Clear is drawn', async () => {
     vi.spyOn(api, 'accountHolds').mockRejectedValue(new ApiError(502, { ok: false, error: 'unmeasured' }));
     show([lane('lane-a')]);

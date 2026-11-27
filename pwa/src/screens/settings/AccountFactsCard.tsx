@@ -12,7 +12,7 @@
 //
 // `AccountHoldClear` (its own file) is also mounted on the hold item's detail (`ItemView.tsx`, plan F17), so the item and the
 // card share one control.
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Button, Section } from '@ccrc/ui';
 import type { RosterWire } from '../../../../shared/api';
 import { SETTINGS_CARDS } from '../../fleet/settingsText';
@@ -53,10 +53,16 @@ function FactRow({ ctx, account, hold, onHoldCleared }: {
   // The fact door's refusals are the account words' (`accountFactRefusalText`), not the Overlord's.
   const door = useCardDoor(ctx, card, (err) => accountFactRefusalText(err, account.id));
   const refreshAccounts = useFleetStore((s) => s.refreshAccounts);
-  // Once Clear has answered, its control stays mounted, so its answer line outlives the holds re-read it triggers: that re-read
-  // no longer names the lane when the clear landed, or when no hold stood (review 4056 F7).
-  const [clearAnswered, setClearAnswered] = useState(false);
-  const save =(field: { fableBilling: 'included' | 'credits' } | { continuity: 'on' | 'off' }): void => {
+  // The latch keeps an answered Clear mounted, so its answer outlives the holds re-read it triggers: that re-read no longer names
+  // the lane when the clear landed, or when no hold stood (review 4056 F7). It holds the held-at of the hold that answer ended, so
+  // it is set only by `cleared` or `gone`, never by a refusal, which ended nothing (review 4065 F2), and a hold that returns with
+  // another held-at is a new hold, with its own live Clear and none of the old answer (review 4065 F1). The control is keyed by
+  // that held-at too.
+  const [latch, setLatch] = useState<number | null>(null);
+  const heldAt = hold?.heldAt ?? null;
+  useEffect(() => { if (heldAt !== null && latch !== null && heldAt !== latch) setLatch(null); }, [heldAt, latch]);
+  const shownAt = heldAt ?? latch;
+  const save = (field: { fableBilling: 'included' | 'credits' } | { continuity: 'on' | 'off' }): void => {
     void door.run(() => api.accountSet(account.id, field), () => [W.saved], refreshAccounts);
   };
   return (
@@ -76,10 +82,13 @@ function FactRow({ ctx, account, hold, onHoldCleared }: {
           { control: 'continuity-off', label: FACT_WORDS.recordOff, pressed: null, act: () => save({ continuity: 'off' }) },
         ]}
       />
-      {(hold !== null || clearAnswered) && (
+      {shownAt !== null && (
         <div className="ovs-actions" data-account-hold={account.id}>
           {hold !== null && <p className="ovs-note">{holdLineOf(hold)}</p>}
-          <AccountHoldClear lane={account.id} onCleared={() => { setClearAnswered(true); onHoldCleared(); }} />
+          <AccountHoldClear
+            key={shownAt} lane={account.id}
+            onAnswered={(outcome) => { if (outcome !== 'refused') setLatch(shownAt); onHoldCleared(); }}
+          />
         </div>
       )}
       {ctx.confirmFor(card)}

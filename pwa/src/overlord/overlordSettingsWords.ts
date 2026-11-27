@@ -217,9 +217,9 @@ export function accountSetAnswerWords(body: unknown): readonly string[] {
 
 // ── The account set card's boxes ──
 
-/** One box of the set: a pool, or the untagged accounts. `rostered` false is a saved pool no roster account carries. */
-/** `rostered: null` is unread: the roster has not been heard, so whether any account carries the pool is not known (review
- *  4056 F6: unread is not absent, so no "no account carries this pool" verdict is drawn before the roster answers). */
+/** One box of the set: a pool, or the untagged accounts. `rostered` false is a saved pool no roster account carries; `null` is
+ *  unread: the roster has not been heard, so whether any account carries the pool is not known (review 4056 F6: unread is not
+ *  absent, so no "no account carries this pool" verdict is drawn before the roster answers). */
 export interface SetBox { readonly key: string; readonly pool: string | null; readonly rostered: boolean | null }
 
 /** The boxes, in the SAVED set's order: the saved pools first, as saved, then each roster pool (`poolOptions`' answer, the

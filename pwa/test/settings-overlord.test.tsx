@@ -107,6 +107,7 @@ describe('every card in each store state', () => {
     await settle();
     expect(controlsIn('designation')).toEqual(['open-place', 'retire']);
     expect(within(card('designation')).getByText(`Bound to ${ID} (term 2).`)).toBeTruthy();
+    expect(card('designation').querySelector('[data-settings-owed]')).toBeNull();
     expect(controlsIn('model')).toEqual(['model-save']);
     expect(controlsIn('account-set')).toEqual(['set-save', 'set-save-again']);
     expect(document.querySelector('[data-settings-stale]')).toBeNull();

@@ -446,8 +446,9 @@ describe('POST /api/overlord/rebind: the pair the caller saw', () => {
     // An equal pair with the step-up not fresh is asked for it, as today.
     const same = await rebind(r, { force: true, sessionId: r.oldId, term: termOf(r) });
     expect(same.json()).toMatchObject({ error: 'step-up-required' });
-    // Both halves of the ordering (review 4056 F12): the moved pair asked only the plain gate, and the equal pair asked the plain
-    // gate and then the step-up, so the compare sits between the two asks.
+    // The equal pair's asks in this stale step-up scenario (review 4056 F12, worded by review 4065 F3): after the moved pair's one
+    // plain ask, the equal pair asks the plain gate and then the step-up. This rejects no order the lines above accepted; it adds
+    // what the equal pair asks.
     expect(r.gate.asks).toEqual([{ cap: null }, { cap: null }, { cap: null, stepUp: true }]);
     expect(r.body.log).toEqual([]);
   });
