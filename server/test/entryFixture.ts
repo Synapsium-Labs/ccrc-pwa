@@ -2,10 +2,11 @@
 // owns the installer's behaviour; the launcher's own tests only need a working ~/.local/bin/ccd).
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync, type SpawnSyncOptions, type SpawnSyncReturns } from 'node:child_process';
+import { spawnSync, type SpawnSyncOptions, type SpawnSyncOptionsWithStringEncoding, type SpawnSyncReturns } from 'node:child_process';
 import { posixPath } from './helpers.js';
 import { plantCore } from './coreBuild.js';
 import { assertFencedEnv, fenceEnv } from './pathFence.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { seedAccountsSh, CCD, CCD_LIB, CCD_TRAIN_LIB, CCD_LEASE_LIB, CCD_POOLSET_LIB, CCD_LONGLIVED_LIB, CCD_DOOR_LIB, CCD_ALIASES_LIB, CCD_REDACT, CCD_REDACT_CLI, CCD_DOOR_PROG, canonicalPython3 } from './ccdWsHelpers.js';
 
 const REPO = path.resolve(__dirname, '..', '..');
@@ -86,7 +87,7 @@ export function spawnEntry(entry: string, argv: string[], o: SpawnSyncOptions = 
   // The Windows fence (pathFence.ts), then its guard: a caller's raw spread of the worker's env never reaches the launcher.
   const env = fenceEnv(o.env ?? process.env);
   assertFencedEnv(env);
-  return spawnSync(run[0], run[1], { encoding: 'utf8', ...o, env }) as SpawnSyncReturns<string>;
+  return spawnSyncGroup(run[0], run[1], { encoding: 'utf8', ...o, env } as SpawnSyncOptionsWithStringEncoding);
 }
 
 /** Plant the tree and run the installer into a fixture HOME: afterwards `<home>/.local/bin/ccd` works. */

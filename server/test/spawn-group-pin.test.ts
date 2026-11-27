@@ -17,8 +17,8 @@ import { SPAWN_GROUP_ALLOWLIST } from './spawnGroupAllowlist.js';
 // commit and leaves no slack for a new row to use. NEVER RAISE IT: a new timed spawn uses `spawnSyncGroup` instead.
 // Measured: 150 once the census read renamed imports, conditional spreads and assignments, and part 1 of #896 had
 // moved 28 sites. 151: the Windows port's ccd-harness timeout, a row added deliberately (`spawnGroupAllowlist.ts`
-// says why); lower it with that row.
-const SPAWN_GROUP_CEILING = 148;
+// says why); lower it with that row. 144: the session hook's suites moved onto hookTwin's group spawn (Go core wave 2).
+const SPAWN_GROUP_CEILING = 144;
 
 const kinds = (src: string): string[] => timedSpawnsInSource(src).map((s) => `${s.name} ${s.command} ${s.kind}`);
 

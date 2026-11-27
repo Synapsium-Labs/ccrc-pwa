@@ -1,9 +1,9 @@
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, HARNESS_BASH, type CcdHarness } from './ccdWsHelpers.js';
 import { coreBinary } from './coreBuild.js';
 import { assertFencedEnv } from './pathFence.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 
 export type Impl = 'bash' | 'go';
 export const IMPLS: readonly Impl[] = ['bash', 'go'];
@@ -22,6 +22,6 @@ export function runImpl(h: CcdHarness, impl: Impl, argv: string[], extra: NodeJS
   const [cmd, pre] = impl === 'bash' ? [HARNESS_BASH, [CCD]] : [installedCore(), ['ccd']];
   const env = h.env(extra);
   assertFencedEnv(env); // the Windows guard (pathFence.ts): a harness env outside its fixture throws before the start
-  const r = spawnSync(cmd, [...pre, ...argv], { cwd: h.home, env, encoding: 'utf8', timeout: 120_000 });
+  const r = spawnSyncGroup(cmd, [...pre, ...argv], { cwd: h.home, env, encoding: 'utf8', timeout: 120_000 });
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 }

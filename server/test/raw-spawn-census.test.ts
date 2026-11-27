@@ -281,7 +281,7 @@ const walk = (dir: string): string[] => fs.readdirSync(dir, { withFileTypes: tru
 });
 const toSrc = (rel: string, raw: string): Src => ({ rel, raw, ...mask(raw) });
 const SOURCES: Src[] = ROOTS.flatMap((r) => walk(path.join(REPO, r)))
-  .map((p) => path.relative(REPO, p))
+  .map((p) => path.relative(REPO, p).split(path.sep).join('/')) // keys in `/` spelling on every platform
   .filter((rel) => rel !== SELF)
   .map((rel) => toSrc(rel, fs.readFileSync(path.join(REPO, rel), 'utf8')));
 const lineOf = (s: Src, at: number): number => s.raw.slice(0, at).split('\n').length;
@@ -435,7 +435,7 @@ function exportsOf(srcs: Src[]): Map<string, Paths> {
 function importsOf(s: Src, exported: Map<string, Paths>): Paths {
   const out: Paths = { scripts: new Set(), dirs: new Set(), texts: new Set() };
   const target = (spec: string): string =>
-    path.relative(REPO, path.resolve(REPO, path.dirname(s.rel), spec)).replace(/\.js$/, '.ts');
+    path.relative(REPO, path.resolve(REPO, path.dirname(s.rel), spec)).split(path.sep).join('/').replace(/\.js$/, '.ts');
   for (const m of s.text.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"](\.{1,2}\/[^'"]+)['"]/g)) {
     const ex = exported.get(target(m[2]!));
     if (!ex) continue;

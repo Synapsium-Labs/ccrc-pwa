@@ -7,6 +7,7 @@ import { writeFileSync, readFileSync, mkdirSync, symlinkSync, rmSync, chmodSync,
 import path, { join } from 'node:path';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { scaled } from './timeScale.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { ghContainedEnv, seedAccountsSh } from './ccdWsHelpers.js';
 import { CORE_GOARCH, CORE_GOOS, coreExe, coreGoEntries } from './coreBuild.js';
 import { POOLED_TEST_ROSTER } from './fixtures/poolRule.js';
@@ -683,7 +684,7 @@ describe('ccrc doctor: ccd-core — the installed Go core is the shipped tree\'s
   const installed = (home: string): string => join(home, '.local', 'libexec', 'ccrc', 'core', coreExe());
   /** The check alone, sourced as `cmd_doctor` sources it; `pre` runs just before it (a case's own shell state). */
   const check = (home: string, pre = ''): { line: string; remedy: string; code: number } => {
-    const r = spawnSync(BASH, ['-c', `set -uo pipefail\n. ${shq(CCRC_SRC)}\n. ${shq(CHECKS_SRC)}\n${pre}\n_check_ccd-core`],
+    const r = spawnSyncGroup(BASH, ['-c', `set -uo pipefail\n. ${shq(CCRC_SRC)}\n. ${shq(CHECKS_SRC)}\n${pre}\n_check_ccd-core`],
       { env: doctorEnv(home), encoding: 'utf8', timeout: scaled(30_000) });
     const lines = (r.stdout ?? '').split('\n');
     const i = lines.findIndex((l) => /^(PASS|WARN|FAIL|SKIP) ccd-core: /.test(l));
