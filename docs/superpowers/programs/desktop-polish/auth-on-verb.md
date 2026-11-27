@@ -97,9 +97,10 @@ Every residual of the build and of fix rounds 1 and 2. "Read" means read on the 
   requires the installed unit to be the tree's `deploy/ccrc.service` byte for byte, the file `_inst_units` and
   deploy.sh copy unchanged, and systemd to answer `NeedDaemonReload=no` for it; since wave 190 the same read must name
   that file as the one systemd loaded (`FragmentPath`), with no separate source (`SourcePath`), section 11. So every
-  hand edit of the unit refuses, on and off alike, naming the file and never the difference, with `ccrc install` (which
-  puts the shipped file back and reloads systemd; an update leaves a box already on its version alone) or the README's
-  hand route as the way on. That covers an assignment in `ExecStart` (`env CCRC_HOST=0.0.0.0
+  hand edit of the unit refuses, on and off alike, naming the file and never the difference, with `ccrc install --role
+  <the recorded role>` (which puts the shipped file back and reloads systemd; an update leaves a box already on its
+  version alone; a bare install takes role `both`, section 12) or the README's hand route as the way on. A `systemctl`
+  read with no `SourcePath` line refuses as not measured (section 12). That covers an assignment in `ExecStart` (`env CCRC_HOST=0.0.0.0
   node`), which this section used to state as a residual, and the shapes the line reading parses differently from
   systemd: a space around `=`, a continued line, an escape in a name. Each is a red case (section 10). A unit systemd has
   not reloaded since it changed refuses with the reload as the way on, and a systemd that does not say refuses as not
@@ -231,7 +232,8 @@ All 4 killed.
   >   (`_ccrc_operator_only`, `ccd/ccrc`): **speed bumps, not walls** (`env -u CLAUDECODE` defeats the first). Never run
   >   it from a session, and never against the live host from a test.
   Quoted as it lands in #3476: review 4023 corrected the parenthesis, which said a script file or another interpreter
-  runs past them (wave 190 A12).
+  runs past them (wave 190 A12). Checked in wave 190's fix round 1 against the root CLAUDE.md at main `00b6f5e230`,
+  where #3476 has landed: word for word the same.
   Re-read after fix round 1 against the final `off` (section 9): unchanged. The bullet says the verb rewrites `ccrc.env`
   and restarts `ccrc.service`, and names the session, terminal and pane refusals as speed bumps, which all still holds.
   It says nothing about what `off` refuses, so the R1 ruling leaves no sentence false.
@@ -575,9 +577,9 @@ anything outside it is mailed first. Each change was red first.
      kept the copy.
    - A6: section 9.3's line about the second push names both later pushes.
 
-Not in this round, as ticketed by the coordinator: A3c and A4 (auth-verb-remedy-dead-ends), a Mac measurement and a
-darwin fixture (issue #3475), the shellcheck pin (A7), and the readers' trailing-whitespace split
-(auth-readers-one-reader).
+Not in this round, left by the coordinator for later: A3c and A4 (a follow-up on ways on that lead to no working
+step), a Mac measurement and a darwin fixture (issue #3475), the shellcheck pin (A7), and the readers'
+trailing-whitespace split (a follow-up that makes those readers one reader). Neither follow-up has a public issue.
 
 ### 10.1 Red first, and the mutants
 
@@ -733,15 +735,18 @@ the file systemd loaded), so there they may name a verb that then refuses by nam
 ### 11.1 Red first, and the mutants
 
 The new and changed cases were written first and run against `e1994896dc`'s `ccd/ccrc` (main, #3405's merge), through
-`ccrc test`. In the verb's suite, 18 of its 100 cases were red there, each a behaviour this round adds:
+`ccrc test`. In the verb's suite, 17 of its 100 cases were red there, each a behaviour this round adds:
 - the five installer's-unit edit cases (their way on, A3);
 - the four F1 cases (two fragments elsewhere, a `SourcePath`, an empty or absent answer) and the passing read, which
   asks for `FragmentPath` in the reload read;
 - the four helper rows (A4);
 - H2 and H5 (A2);
-- the two failed-restore cases. "On this run's lines" was first red for a fixture slip: its home's name held
-  `auth-restore`, so the `mv` stub refused the write's own rename. The prefix was renamed, and the case is green on the
-  old code, because that sentence already existed; mutant A6b holds it.
+- the failed removal of a file this run created.
+
+The other failed-restore case, "on this run's lines", is green on the old code, because that sentence already existed;
+mutant A6b holds it. It was first red for a fixture slip: its home's name held `auth-restore`, so the `mv` stub refused
+the write's own rename, and the prefix was renamed. (This section and the PR body first said 18; review 4040 counted
+17, and 16 table rows below where they said 18. The counts are corrected here; the earlier commit message stays.)
 The Mac cases, the compare's two unmeasured arms and H6 were green there, because those refusals and words already
 existed: the mutants below hold them. In doctor's suite, the two declining rows written then were red. The third row
 (no `cmp`) was added once the measurement in item 6 found doctor's PATH has none; mutant A4 holds it.
@@ -767,8 +772,16 @@ its wave 190 rows) through `ccrc test`, and was put back from HEAD and compared 
 | A5c | the created file's kept-copy arm names a copy | H6 |
 | A6a | the created file named "the previous" one | the failed removal case |
 | A6b | the kept-copy re-proof said "back as it was" | "on this run's lines, not on its old file" |
+| D1 (fix round 1) | `FragmentPath` matched as anything under the unit directory | "systemd loaded ccrc.service from another file in the user unit directory" |
+| D6 (fix round 1) | "not on its old file" printed for a file this run created too | the failed removal with the re-proof passing ("on this run's lines" alone) |
+| D7 (fix round 1) | the handler's failed removal of a created file reworded as an old file kept | H7 |
+| PE (fix round 1) | `PassEnvironment` dropped from the sources read | "a PassEnvironment systemd loaded" |
+| R1 (fix round 1) | a read with no `SourcePath` line accepted | "refuses as not measured a read that prints no SourcePath line" |
+| R2a (fix round 1) | the recorded role not named in the way on | "names the recorded role in the install that puts a hand-edited unit back" |
+| R2b (fix round 1) | the no-role words dropped from the way on | the five edit cases |
 
-All 18 are red (17 on the verb's suite, and A4 on doctor's too).
+The first 16 rows are this round's build: all 16 are red on the verb's suite, and A4 on doctor's too. The last seven are
+fix round 1's (section 12), each red by its own case on the 106-case suite: 23 rows, all red.
 
 ### 11.2 Evidence
 
@@ -788,9 +801,10 @@ only this note.
 
   The 48 of them that read `ccd/ccrc` as text, with the anchor, citation, deviation-ref and die-containment guards, ran
   again on `e2abf378c2`: 51 of 52 pass, and the red is `ccd-tmux-anchor`.
-- **Growth:** `ccd/ccrc` +23 net code lines against the merge base `e1994896dc` (14490 to 14513), counted with the
-  growth check's own rule for bash (the test box does not pass `GROWTH_CHECK` to the run, so its rows skip there). That
-  is under the per-PR limit of 40, so no waiver; `growth-check` passes.
+- **Growth:** the growth check on the exact head (CI) prints `ccd/ccrc base 14871 head 14894 delta +23`, counting
+  code and heredoc lines. My count here was of code lines alone against the merge base `e1994896dc` (14490 to 14513),
+  the same +23 (the test box does not pass `GROWTH_CHECK` to the run, so its rows skip there). That is under the per-PR
+  limit of 40, so no waiver; `growth-check` passes.
 - **The shellcheck ratchet** cannot run here (the test slice's memory cap); the exact head's CI job measures it.
 - **Merge probe:** clean against main `f93a521927`.
 
@@ -803,3 +817,74 @@ A12 and a re-wrap), and the plan once. No holder's lines are shared. The README 
 characters, re-wrapped in the second. One shell call was refused by the session hook because a draft's text named the
 program the unit starts node through; nothing ran, it was reported word for word, and the coordinator ruled the file
 tools right for such text.
+
+## 12. Wave 190 fix round 1 (review 4040)
+
+Review 4040 found nothing that must stay off main and five minor items; the coordinator ruled on each (R1 to R5). What
+must not move did not: the order of refusals, nothing written before the last refusal, the secret handling, what `off`
+refuses, the Mac refusal and its place before the lock, the offered-commands guard; no case was removed and no
+assertion loosened. R1 adds one refusal arm and R2 changes one printed sentence; nothing else in `ccd/ccrc` changed.
+
+1. **R1: no `SourcePath` line is no answer.** `_auth_unit_own` starts `srcp` as a newline, which no line read can hold,
+   so a read that prints no `SourcePath` line refuses as not measured, in the same step and after the `FragmentPath`
+   compare, with words in the shape of the `FragmentPath` one and the same way on (run `systemctl --user
+   daemon-reload`, then re-run). An empty `SourcePath=` still passes: it says there is no other source.
+2. **R2: the way on names the role.** A bare `ccrc install` takes role `both` and never reads the recorded
+   `CCRC_ROLE` (`_kf_remedy`'s reason), and the verb serves a `server` box. `_auth_unit_cmp` takes the role its
+   callers already read (`_auth_fits_here` and `cmd_auth` each read it once, for the fleet refusal), so there is no
+   second reader: with a role recorded the sentence prints `ccrc install --role <it>`, and with none it prints
+   `--role <role>` and says this box records no role and a bare install takes role `both`. The README's sentence
+   names the role the same way. Doctor asks the compare for its yes alone, so the sentence never reaches it.
+3. **R3: the counts.** Section 11.1 says 17 cases red on the old file and 16 table rows, as measured; the PR body says
+   the same. The earlier commit message stays.
+4. **R4: the docs.** (a) The two internal ticket slugs in section 10 are said in words. (b) The plan's D-9105 entry
+   says which refusals `on` and `off` share and which are each one's alone, read from the code, in lines of ordinary
+   length. (c) Section 11.2 gives the growth check's own figures (base 14871, head 14894, +23, code and heredoc lines)
+   beside my count of code lines alone.
+5. **R5: the cases.** A `FragmentPath` naming another file in the user unit directory refuses (exact equality); a file
+   this run created whose removal fails, with the re-proof passing, prints "on this run's lines" with no old file
+   named; the handler's own failed removal of a created file (H7) is asserted word for word; and a `PassEnvironment`
+   systemd loaded refuses. No row for an installed unit that exists but cannot be read: `cmp` on it exits 2 and falls
+   to the same answer, so a row could not tell them apart.
+
+**The stub.** It still answers any `--user show ccrc.service -p …` read with the properties asked, in systemd's order.
+Two of its arms changed shape so that a case can plant what R1 and R5 need: `SourcePath` now prints `<home>/sd-sourcepath`
+whole when a case plants it (its lines, or nothing for no line), as `FragmentPath` already did, and `PassEnvironment`
+prints `<home>/sd-passenv` when planted. A loaded `PassEnvironment` can only come through its own arm, so dropping it
+from the read is red.
+
+**The case with no file before the run and a passing re-proof.** With no `ccrc.env` the verb asks the default port,
+7788, and an exposure file to carry the port would refuse as reached from elsewhere. So the case plants a `curl` in
+front of the suite's loopback front (planted first, which the containment then leaves alone) that sends 7788 to the
+fixture console's port; the front still reaches only the ports listed, so nothing on this box's own 7788 is asked.
+
+### 12.1 Red first, and the mutants
+
+The new and changed cases were written first and run against `e26dc177a1`'s `ccd/ccrc` through `ccrc test`. Of the
+suite's 106 cases, 7 were red there: the `SourcePath` case (R1), the role case (R2) and the five edit cases, whose way
+on now names the role. The four R5 cases were green there, because they pin what the code already did; each is red
+under its mutant. The mutants are the last seven rows of section 11.1's table. D1, D6, D7 and PE edited `e26dc177a1`'s
+`ccd/ccrc`; R1, R2a and R2b edited the fix's code. Each ran the whole verb suite through `ccrc test`, and then the file
+was put back from HEAD and compared with it.
+
+### 12.2 Evidence
+
+All runs went through `ccrc test`, one file at a time, on the fix's code (`6a2aca27c2`); the head adds only this note
+and the plan entry.
+
+- **The verb's suite** 106 of 106; **doctor core-auth** 73 (8 skipped); expose 66 (3 skipped), doctor exposure 195
+  (4 skipped) and the offered-commands guard 12, all pass.
+- **Growth, armed** (`GROWTH_CHECK=1`): `growth-check` and `growth-caps` pass, 112 of 112. This round adds three code
+  lines to `ccd/ccrc` (the no-role words, and R1's arm on two lines), so about +26 against the merge base, under the
+  per-PR limit of 40; no waiver. The exact head's CI job prints the check's own line.
+- **The shellcheck ratchet** cannot run here (the test slice's memory cap kills `shellcheck` on `ccd/ccrc`); the exact
+  head's CI job measures it.
+- **Merge probe:** clean against main `00b6f5e230`, so nothing was absorbed.
+
+### 12.3 The packets
+
+`ccd/ccrc` (the Docs reader's artifacts run) and the plan (the hook cost carries run) were held; the README was free and
+is claimed by this run. Each change went to its holder first as a unified diff, and was applied byte for byte only on
+its holder's yes: `ccd/ccrc` against this branch's head `e26dc177a1` (it also applies to the branch merged with main
+`00b6f5e230`), yes in mail 39164; the plan's D-9105 entry against main `00b6f5e230`, yes in mail 39146. No holder's
+lines are shared.
