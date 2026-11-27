@@ -4086,6 +4086,8 @@ button.proj-card-pool::before {
 .acct-frame { display: grid; gap: var(--sp-3); min-width: 0; }
 .acct-field,
 .acct-secret { display: grid; gap: var(--sp-1); min-width: 0; }
+/* The secret field's multiline form (the private-name list): two floors tall, growing by its own resize handle. */
+.acct-secret-text { width: 100%; box-sizing: border-box; min-width: 0; min-height: calc(var(--tap-min) * 2); resize: vertical; }
 .acct-field > label,
 .acct-secret > label {
   font-family: var(--family-mono);

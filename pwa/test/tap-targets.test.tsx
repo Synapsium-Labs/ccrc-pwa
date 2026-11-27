@@ -61,6 +61,7 @@ import { COMMIT_A, SERVED, draftOf, entry, failedAnswer, fakeLoaders, fileRespon
 import { ExportSheet } from '../src/docs/ExportSheet';
 import { EXPORT_TEXT } from '../src/docs/docsText';
 import type { ExportRequest } from '../src/docs/export/exportInput';
+import { SecretField } from '../src/accounts/SecretField';
 
 const read = (...seg: string[]): string =>
   readFileSync(path.join(import.meta.dirname, '..', 'src', ...seg), 'utf8');
@@ -1447,5 +1448,23 @@ describe('TextLink stays inside a line of text — a link alone is a control', (
     const hits = files(path.join(import.meta.dirname, '..', 'src')).flatMap((f) =>
       [...readFileSync(f, 'utf8').matchAll(alone)].map(() => path.relative(path.join(import.meta.dirname, '..'), f)));
     expect(hits).toEqual([]);
+  });
+});
+
+// Overlord W2 Settings: the secret field's multiline form, the private-name list's box in Settings › Overlord. The section's other
+// new controls are `@ccrc/ui`'s (`Button`, `RadioFieldset`, `TextInput`, `Select`), whose floors this file reads off the components;
+// the browser file measures all of them at 44 px at every phone width.
+describe('.acct-secret-text — the secret field\'s multiline form (Overlord W2 Settings)', () => {
+  it('is two floors tall, off the shared token, never a bare 44px literal', () => {
+    const rule = norm(stripComments(ruleIn(fleetCss, '.acct-secret-text')));
+    expect(rule).toContain(norm('min-height: calc(var(--tap-min) * 2)'));
+    expect(rule).not.toContain('44px');
+  });
+
+  it('is the class the rendered box actually carries', () => {
+    render(<SecretField label="Names" handle={{ current: null }} onPresence={() => {}} multiline />);
+    const box = screen.getByLabelText('Names');
+    expect(box.tagName).toBe('TEXTAREA');
+    expect(box).toHaveClass('acct-secret-text');
   });
 });

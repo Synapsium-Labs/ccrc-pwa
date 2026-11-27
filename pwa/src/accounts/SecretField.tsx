@@ -17,10 +17,18 @@ import { useLocation } from '../lib/router';
  *   once, with {@link SecretFieldHandle.take}, which empties the field in the same call.
  * - IT IS CLEARED on submit (`take`), on close and on a route change (both unmount it, and a route change that keeps it
  *   mounted clears it), and on `visibilitychange` to hidden. A refusal therefore always re-presents it empty.
+ * - A HOST WHOSE DOOR MAY ASK THE STEP-UP reads with {@link SecretFieldHandle.peek} instead (Overlord W2 Settings, ruled call
+ *   1815): the value stays in the field, so the press after the confirm sends it once more, and the host empties the field with
+ *   `clear` on the door's answer and on a final refusal, never on `step-up-required`. What `peek` returns lives in the request
+ *   body it builds and nowhere else. The account sheets read with `take`, as before.
+ * - `multiline` draws an uncontrolled text area instead (the private-name list): unmasked, because the operator must see the
+ *   names, with no Show control, and the same attributes and the same emptying on page hide and route change.
  */
 export interface SecretFieldHandle {
   /** The value, read once: the field is empty when this returns. */
   take(): string;
+  /** The value, read without emptying the field: the host empties it itself (`clear`) once the door has answered. */
+  peek(): string;
   /** Empties the field. */
   clear(): void;
 }
@@ -32,10 +40,12 @@ export interface SecretFieldProps {
   onPresence: (has: boolean) => void;
   /** The sentence under the field (a refusal), by id. */
   describedBy?: string;
+  /** An uncontrolled, unmasked text area of several lines, with no Show control. */
+  multiline?: boolean;
 }
 
-export function SecretField({ label, handle, onPresence, describedBy }: SecretFieldProps): ReactNode {
-  const input = useRef<HTMLInputElement>(null);
+export function SecretField({ label, handle, onPresence, describedBy, multiline = false }: SecretFieldProps): ReactNode {
+  const input = useRef<HTMLInputElement & HTMLTextAreaElement>(null);
   const [shown, setShown] = useState(false);
   const fieldId = useId();
   const presence = useRef(onPresence);
@@ -51,6 +61,7 @@ export function SecretField({ label, handle, onPresence, describedBy }: SecretFi
       clear();
       return v;
     },
+    peek: () => input.current?.value ?? '',
     clear,
   }), []);
 
@@ -68,6 +79,22 @@ export function SecretField({ label, handle, onPresence, describedBy }: SecretFi
     clear();
   }, [path, search]);
 
+  if (multiline) {
+    return (
+      <div className="acct-secret">
+        <label htmlFor={fieldId}>{label}</label>
+        <textarea
+          ref={input}
+          id={fieldId}
+          className="acct-secret-text font-mono"
+          rows={6}
+          {...SECRET_INPUT}
+          aria-describedby={describedBy}
+          onInput={(e) => presence.current(e.currentTarget.value !== '')}
+        />
+      </div>
+    );
+  }
   return (
     <div className="acct-secret">
       <label htmlFor={fieldId}>{label}</label>
