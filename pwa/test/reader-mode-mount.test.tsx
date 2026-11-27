@@ -327,6 +327,7 @@ interface BodyMount {
   readonly destroy: Mock<() => void>;
   readonly command: Mock<(name: string) => void>;
   readonly openAt: Mock<(id: string) => void>;
+  readonly closeOverlay: Mock<() => void>;
 }
 
 interface BodyRig {
@@ -358,6 +359,7 @@ function bodyRig(): BodyRig {
         destroy: vi.fn(() => { log.push(`destroy ${n}`); }),
         command: vi.fn(),
         openAt: vi.fn(),
+        closeOverlay: vi.fn(),
       };
       mounts.push(m);
       return { seed: { hosted: false }, follow: vi.fn(), setPrefs: vi.fn(), ...m } as unknown as ReaderMount;
@@ -936,6 +938,7 @@ describe('reader mode: not offered while a figure is open (X6 XR fix round 1, it
     const host = placesFake.host.mock.calls.map((c) => c[0] as { closeOverlay?(): void } | null).filter((h) => h !== null).at(-1);
     expect(host, 'the body registered no host').toBeDefined();
     act(() => { host!.closeOverlay?.(); });
+    expect(rig.mounts[0]!.closeOverlay, 'the mount was not told to close the figure').toHaveBeenCalledTimes(1);
     expect(latest.offered, 'a Back that closed the figure left reader mode unoffered').toBe(true);
     // A figure open when the body ends (a new commit): the next body's frame has none.
     act(() => { rig.inputs[0]!.onPlace!('overlay'); });
@@ -944,5 +947,16 @@ describe('reader mode: not offered while a figure is open (X6 XR fix round 1, it
     await flush();
     await frameReady(rig, 1);
     expect(latest.offered, 'a figure of the ended body kept reader mode unoffered').toBe(true);
+  });
+
+  it('figure: a frame replaced without being dropped (a same-page reopening reports ready again) has no figure open (review M1)', async () => {
+    const { rig } = await ready();
+    act(() => { rig.inputs[0]!.onPlace!('overlay'); });
+    expect(latest.offered, 'CONTROL: a figure is open').toBe(false);
+    // The same mount's frame is made anew and reports ready again: the context is handed a new frame and no `dropFrame` came.
+    const before = latest.frame;
+    await frameReady(rig, 0);
+    expect(latest.frame, 'CONTROL: the context was handed a new frame').not.toBe(before);
+    expect(latest.offered, 'a figure of the replaced frame kept reader mode unoffered').toBe(true);
   });
 });

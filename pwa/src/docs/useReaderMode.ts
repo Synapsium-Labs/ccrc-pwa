@@ -440,6 +440,8 @@ function createController(sink: Sink, initialTurn: ReaderTurn) {
         if (frame !== null) dropFrame(frame);
         return;
       }
+      // A frame replaced without being dropped (a same-page reopening publishes a new one) has no figure open at its ready.
+      if (frame !== f) setFigure(false);
       frame = f;
       sink.frame(f);
       // A frame that is ready is brought to the reading in force, however it was mounted: the decider answers (L1).

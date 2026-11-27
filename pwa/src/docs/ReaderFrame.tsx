@@ -640,7 +640,12 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
       // The pops that are the frame's reach the mount through this host. A figure the dispatcher closes (a Back) is closed by
       // the host's own command, which the frame does not report, so reader mode hears of it here.
       places.host({
-        closeOverlay: () => { m.closeOverlay?.(); live.current.readerMode?.setFigure(false); },
+        // A mount with no `closeOverlay` has no figure to close (it was made without places), so only a real close clears it.
+        closeOverlay: () => {
+          if (m.closeOverlay === undefined) return;
+          m.closeOverlay();
+          live.current.readerMode?.setFigure(false);
+        },
         goto: (id, from) => m.goto?.(id, from),
         gotoTop: (id) => m.gotoTop?.(id),
       });
