@@ -869,8 +869,8 @@ was put back from HEAD and compared with it.
 
 ### 12.2 Evidence
 
-All runs went through `ccrc test`, one file at a time, on the fix's code (`6a2aca27c2`); the head adds only this note
-and the plan entry.
+All runs went through `ccrc test`, one file at a time, on the fix's code (`6a2aca27c2`); the commits after it add this
+note, the plan entry and a merge of main.
 
 - **The verb's suite** 106 of 106; **doctor core-auth** 73 (8 skipped); expose 66 (3 skipped), doctor exposure 195
   (4 skipped) and the offered-commands guard 12, all pass.
@@ -879,7 +879,11 @@ and the plan entry.
   per-PR limit of 40; no waiver. The exact head's CI job prints the check's own line.
 - **The shellcheck ratchet** cannot run here (the test slice's memory cap kills `shellcheck` on `ccd/ccrc`); the exact
   head's CI job measures it.
-- **Merge probe:** clean against main `00b6f5e230`, so nothing was absorbed.
+- **Merge probe:** clean against main `00b6f5e230` at the start of the round; against main `f3b3cceed7`, before the
+  push, it exited 1 on the plan: this branch's re-wrapped D-9105 entry ends next to the D-9118 entry main added after
+  the branch point. So main was merged once (`c5439fec28`), the plan resolved as the approved packet (main's file with
+  the new entry, nothing else), and the probe is clean again. On the merge, the verb's suite 106 of 106, doctor
+  core-auth 73 (8 skipped) and the offered-commands guard 12 pass.
 
 ### 12.3 The packets
 
