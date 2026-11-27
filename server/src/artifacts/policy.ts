@@ -9,6 +9,7 @@
 // never too little: its one way to be wrong is a refusal.
 import { isExactHttpsOrigin } from '../../../shared/httpsOrigin.js';
 import {
+  ARTIFACT_MAX_INFLIGHT, ARTIFACT_MAX_INFLIGHT_BOX, ARTIFACT_QUEUE_PER_CAPABILITY, ARTIFACT_SANDBOX_BASE, ARTIFACT_SANDBOX_WINDOWS,
   ARTIFACT_MAX_ORIGINS, ARTIFACT_PUBLIC_SUFFIXES, artifactMime, type ArtifactListOk, type ArtifactMintOk, type ArtifactOffWhy,
   type ArtifactRefusal, type ArtifactRevokeOk, type ArtifactRow, type ArtifactScopeOk,
 } from '../../../shared/artifacts.js';
@@ -569,4 +570,133 @@ export function capabilityInput(
     section: ask.pin.section, dir: slash < 0 ? '' : ask.pin.path.slice(0, slash), page: ask.pin.path,
     manifest: new Map(scope.entries.map((e) => [e.rel, e])), origins: [...origins], windows,
   };
+}
+
+// ---- The content door's policy: CSP, headers, fetch fences, cache, ranges, admission (X5 A3.2; spec 4.3 and 5) -----------------
+// Pure decisions the content door (`routes.ts`, L4) applies and never makes itself. Every directive, header and fence row is the
+// design's text; a change here is a change to the design.
+
+/** The header CSP of every content response (spec 4.3, directives in the design's order). `S` is the capability path on the content
+ *  host, so a source never admits another capability's files, and `'self'` is never used. The confirmed `origins` go to script,
+ *  style, image and font only, never to `connect-src` (or media, worker, frame or child): a page that fetches from an outside API
+ *  still fails. The `sandbox` directive repeats the frame's, so a content URL opened top-level is sandboxed too; `allow-popups`
+ *  joins it only for a capability minted with windows. */
+export function contentCsp(
+  contentOrigin: string, artifactOrigin: string, token: string, origins: readonly string[], windows: boolean,
+): string {
+  const s = `${contentOrigin}/c/${token}/`;
+  const o = origins.length === 0 ? '' : ` ${origins.join(' ')}`;
+  const sandbox = windows ? [...ARTIFACT_SANDBOX_BASE, ARTIFACT_SANDBOX_WINDOWS] : [...ARTIFACT_SANDBOX_BASE];
+  return [
+    `default-src 'none'`,
+    `script-src ${s} 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data:${o}`,
+    `style-src ${s} 'unsafe-inline' data:${o}`,
+    `img-src ${s} data: blob:${o}`,
+    `font-src ${s} data:${o}`,
+    `media-src ${s} data: blob:`,
+    `connect-src ${s} data: blob:`,
+    `worker-src ${s} blob:`,
+    `frame-src ${s}`,
+    `child-src ${s} blob:`,
+    `manifest-src 'none'`,
+    `object-src 'none'`,
+    `base-uri ${s}`,
+    `form-action 'none'`,
+    `frame-ancestors ${artifactOrigin} ${contentOrigin}`,
+    `sandbox ${sandbox.join(' ')}`,
+  ].join('; ');
+}
+
+/** The other headers on every content response (spec 4.3 and 5), lower-case names. No `access-control-allow-origin`: every
+ *  legitimate request is same-origin. Frozen, so no importer adds a header to it at run time. */
+export const CONTENT_HEADERS: Readonly<Record<string, string>> = Object.freeze({
+  'x-content-type-options': 'nosniff',
+  'cross-origin-resource-policy': 'same-origin',
+  'referrer-policy': 'no-referrer',
+  'x-dns-prefetch-control': 'off',
+  'x-robots-tag': 'noindex, nofollow',
+  'accept-ranges': 'bytes',
+  'permissions-policy':
+    'camera=(), microphone=(), geolocation=(), usb=(), serial=(), hid=(), bluetooth=(), payment=(), display-capture=(), fullscreen=(self), clipboard-write=(self)',
+});
+
+/** The fetch-metadata fence (spec 4.3's table), decided before a byte is read. The first row that matches wins. The caller passes
+ *  the header values lower-cased, as browsers send them. A client that is not a browser can send any header, so for such a client
+ *  the capability is the whole check (spec 7). */
+export function fetchFence(
+  h: { dest?: string; mode?: string; site?: string; serviceWorker?: string }, windows: boolean,
+): 'ok' | 'refused' {
+  // Fails closed: all three fetch-metadata headers must be there.
+  if (!h.dest || !h.mode || !h.site) return 'refused';
+  // A `Service-Worker` header, even an empty one, is a service worker's script fetch.
+  if (h.serviceWorker !== undefined) return 'refused';
+  if (h.dest === 'serviceworker' || h.dest === 'embed' || h.dest === 'object') return 'refused';
+  if (h.mode === 'navigate') {
+    if (h.dest === 'iframe') return 'ok';
+    if (h.dest === 'document') return windows ? 'ok' : 'refused';
+    // A download the page starts (`<a download>`) is sent as a navigation with dest `empty`, from the same origin only.
+    if (h.dest === 'empty') return h.site === 'same-origin' ? 'ok' : 'refused';
+    return 'refused';
+  }
+  return h.site === 'same-origin' ? 'ok' : 'refused';
+}
+
+/** The browser cache rule (spec 5, "Browser cache"): an HTML response is never cached, so a dead capability cannot start a page;
+ *  any other file is cached for the seconds the capability may still live, at most an hour, because a pin's bytes never change. */
+export function cacheControl(kind: 'html' | 'other', secondsLeft: number): string {
+  if (kind === 'html') return 'no-store';
+  // A value that is not a number (a missing expiry) is 0, never a malformed `max-age=NaN`.
+  const n = Number.isFinite(secondsLeft) ? Math.min(3600, Math.max(0, Math.floor(secondsLeft))) : 0;
+  return `private, max-age=${n}, immutable`;
+}
+
+/** What a `Range` header asks of a file of `size` bytes (spec 5, "Ranges"; RFC 9110 section 14). `end` is inclusive. A header that
+ *  is not one `bytes=` range spec is ignored (the whole file), which RFC 9110 lets a server do with a Range it cannot parse;
+ *  several ranges, or one the file cannot satisfy, are unsatisfiable (416). */
+export function parseRange(
+  header: string | undefined, size: number,
+): { kind: 'whole' } | { kind: 'one'; start: number; end: number } | { kind: 'unsatisfiable' } {
+  const whole = { kind: 'whole' } as const;
+  const unsatisfiable = { kind: 'unsatisfiable' } as const;
+  if (header === undefined) return whole;
+  if (!header.startsWith('bytes=')) return whole;
+  const spec = header.slice('bytes='.length);
+  if (spec.includes(',')) return unsatisfiable;
+  const m = /^(\d*)-(\d*)$/.exec(spec);
+  if (m === null) return whole;
+  const [, a, b] = m as unknown as [string, string, string];
+  if (a === '' && b === '') return whole;
+  // More than 15 digits can pass `Number.MAX_SAFE_INTEGER`; such a spec is ignored.
+  if (a.length > 15 || b.length > 15) return whole;
+  if (a === '') {
+    const n = Number(b);
+    if (n === 0 || size === 0) return unsatisfiable;
+    return { kind: 'one', start: Math.max(0, size - n), end: size - 1 };
+  }
+  const start = Number(a);
+  if (b !== '') {
+    const end = Number(b);
+    if (start > end) return whole;
+    if (start >= size) return unsatisfiable;
+    return { kind: 'one', start, end: Math.min(end, size - 1) };
+  }
+  if (start >= size) return unsatisfiable;
+  return { kind: 'one', start, end: size - 1 };
+}
+
+/** The `Content-Type` a served file carries: its MIME, with the charset on served text, so a browser never guesses one. */
+export function artifactContentType(mime: string): string {
+  return mime.startsWith('text/') || mime === 'application/json' || mime === 'image/svg+xml' ? `${mime}; charset=utf-8` : mime;
+}
+
+/** A new request's admission (spec 5, "Waiting, not refusing"): it runs when nothing of its capability waits and both the
+ *  capability and the box have room; else it waits in its capability's queue; past the queue's bound it is refused (429). */
+export function admitLoad(c: { inflight: number; queued: number }, boxInflight: number): 'run' | 'wait' | 'full' {
+  if (c.queued === 0 && c.inflight < ARTIFACT_MAX_INFLIGHT && boxInflight < ARTIFACT_MAX_INFLIGHT_BOX) return 'run';
+  return c.queued < ARTIFACT_QUEUE_PER_CAPABILITY ? 'wait' : 'full';
+}
+
+/** Whether a request already at the head of its capability's queue may start now: the same two bounds, with no queue to look at. */
+export function admitQueued(c: { inflight: number }, boxInflight: number): boolean {
+  return c.inflight < ARTIFACT_MAX_INFLIGHT && boxInflight < ARTIFACT_MAX_INFLIGHT_BOX;
 }
