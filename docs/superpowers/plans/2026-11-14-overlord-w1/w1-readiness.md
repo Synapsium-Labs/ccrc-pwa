@@ -560,8 +560,10 @@ row of `READINESS_WORD_MAP`, and an older build ignores the table (Table 11.5).
    start. A word this process has not refreshed is never served.
 3. **Never `dead` for a restart or a renewal in bounds, always `dead` for a third.** A body down within the restart
    bound, with at most two restarts in the hour counting the one in progress, reads `restarting`. A generation the lane
-   renews reads `renewing`. A third restart reads `dead` while down and after its generation mints, until the hour
-   clears.
+   renews reads `renewing`. A third restart reads `dead` while down when the generation is proven, and after its
+   generation mints, until the hour clears. An unproven generation reads `renewing` and the restart under way is not
+   added while it does, so in a crash loop whose previous generation never proved, a third restart reads `restarting`
+   or `renewing` until its generation mints, then `dead` (review 3941, R3, ruled: the table stands).
 4. **One push per episode.** The push fires only on the edge that writes the episode's first `dead` row, marked by
    `pushedAt` in that transaction. A dead stretch broken by `unmeasured` pushes once, and a rebind starts a new
    episode. The Restart action is present exactly when the door would act.

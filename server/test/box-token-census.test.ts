@@ -59,8 +59,9 @@ import { readdirSync } from 'node:fs';
 import path from 'node:path';
 import { DOCS_PAGE_PREFIX } from '../../shared/docs.js';
 import { ccdSource } from './ccdWsHelpers.js';
+import { HELPER_ROUTES } from './boxTokenHelperRoutes.js';
 import {
-  REPO, read, COORD_SRC, SERVER_SRC, UPDATE_SRC, TOKEN_SRC, LEDGER_SRC, LINEAR_PROXY_SRC, LINKING_SRC, CALLS_SRC, REMAINING_SRC, PLAN_SRC, CONTINUITY_SRC, GATE_PATTERNS, registrationsIn, lanesIn, UNGATED_DOORS, SESSION_ONLY_DOORS,
+  REPO, read, COORD_SRC, SERVER_SRC, UPDATE_SRC, TOKEN_SRC, LEDGER_SRC, LINEAR_PROXY_SRC, LINKING_SRC, CALLS_SRC, REMAINING_SRC, PLAN_SRC, CONTINUITY_SRC, GATE_PATTERNS, registrationsIn, lanesIn, handlerBody, UNGATED_DOORS, SESSION_ONLY_DOORS,
 } from './routeRegistrations.js';
 
 /** The Overlord's designation doors' file (Overlord W1 designation A): three session-gated routes and no box-token lane, so no lane source. */
@@ -99,7 +100,23 @@ const CLAUDE_MD = read('CLAUDE.md');
 const AUTH_GATE_TEST = read('server/test/auth-gate.test.ts');
 const CCD_SRC = ccdSource();
 
-const COORD_LANES = lanesIn(COORD_SRC);
+/** The box frames recipe's read (Desktop polish wave 187; review 4069's F6): `GET /api/testbox/frames`, a routes file of its
+ *  own whose box-token check is COMPOSED in `coord/routes.ts` and handed in (`registerTestboxFramesRoute(app, { boxToken })`).
+ *  The helper's call is that route's registration there, read from the one table of helper routes, `boxTokenHelperRoutes.ts`,
+ *  which `coord-token.test.ts` reads too (review 4086's F-F), so the check in its arguments is credited to the frames read and
+ *  not to `GET /api/testbox`, the status read registered above it. Each row is held to its own file below. */
+const HELPER_KEYS = new Set(Object.values(HELPER_ROUTES).map((r) => r.key));
+/** `lanesIn` with the helper calls of `HELPER_ROUTES` counted as registrations, so each slice runs to the next of either. */
+const lanesWithHelpersIn = (src: string): string[] => {
+  const helpers = [...src.matchAll(/\b(register\w+)\(app\b/g)].filter((m) => HELPER_ROUTES[m[1]!] !== undefined)
+    .map((m) => ({ key: HELPER_ROUTES[m[1]!]!.key, at: m.index! }));
+  const starts = [...registrationsIn(src), ...helpers].sort((x, y) => x.at - y.at);
+  return starts.filter(({ at }, i) => GATE_PATTERNS.some((re) => re.test(src.slice(at, starts[i + 1]?.at ?? src.length)))).map((s) => s.key);
+};
+const COORD_SLICED = lanesWithHelpersIn(COORD_SRC);
+const COORD_LANES = COORD_SLICED.filter((k) => !HELPER_KEYS.has(k));
+/** The helper routes whose composed check consults the box token: the frames read's one. */
+const TESTBOX_FRAMES_LANES = COORD_SLICED.filter((k) => HELPER_KEYS.has(k));
 const UPDATE_LANES = lanesIn(UPDATE_SRC);
 const TOKEN_LANES = lanesIn(TOKEN_SRC);
 const LEDGER_LANES = lanesIn(LEDGER_SRC);
@@ -124,10 +141,10 @@ const OVERLORD_SEQUENCE_SRC = read('server/src/coord/overlordSequenceRoutes.ts')
 const OVERLORD_SEQUENCE_LANES = lanesIn(OVERLORD_SEQUENCE_SRC);
 const OVERLORD_BOARD_SRC = read('server/src/coord/overlordBoardRoutes.ts');
 const OVERLORD_BOARD_LANES = lanesIn(OVERLORD_BOARD_SRC);
-const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC), ...UPDATE_LANES, ...TOKEN_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...PLAN_LANES, ...CONTINUITY_LANES, ...QUIZ_LANES, ...OVERLORD_INBOX_LANES, ...OVERLORD_HISTORY_LANES, ...OVERLORD_SEQUENCE_LANES, ...OVERLORD_BOARD_LANES];
+const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC), ...UPDATE_LANES, ...TOKEN_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...PLAN_LANES, ...CONTINUITY_LANES, ...QUIZ_LANES, ...OVERLORD_INBOX_LANES, ...OVERLORD_HISTORY_LANES, ...OVERLORD_SEQUENCE_LANES, ...OVERLORD_BOARD_LANES, ...TESTBOX_FRAMES_LANES];
 /** The box-token machine lanes gate.ts counts first (#1444, PL3): the coordination routes, the Linear proxy's and the programme
  *  ledgers', before `/api/notify`, `/api/pools/epoch` and the update projection read join them in the total. */
-const MACHINE_LANES = [...COORD_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...PLAN_LANES, ...CONTINUITY_LANES, ...QUIZ_LANES, ...OVERLORD_INBOX_LANES, ...OVERLORD_HISTORY_LANES, ...OVERLORD_SEQUENCE_LANES, ...OVERLORD_BOARD_LANES];
+const MACHINE_LANES = [...COORD_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...PLAN_LANES, ...CONTINUITY_LANES, ...QUIZ_LANES, ...OVERLORD_INBOX_LANES, ...OVERLORD_HISTORY_LANES, ...OVERLORD_SEQUENCE_LANES, ...OVERLORD_BOARD_LANES, ...TESTBOX_FRAMES_LANES];
 
 /** The one session-only write that cannot be harvested, with the reason stated so
  *  it is a recorded exception rather than a retyped list. `SESSION_ONLY` lives in
@@ -358,7 +375,9 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   // The Overlord's cursor read of the sequence (W1 sequence C): GET /api/overlord/sequence, a box-token lane in the sequence routes file: one hundred and seven in all.
   'one hundred and seven',
   // The Overlord's board (W1, PR B2): GET /api/overlord/board, a box-token lane in the board routes file: one hundred and eight in all.
-  'one hundred and eight'];
+  'one hundred and eight',
+  // The box frames recipe's read (Desktop polish wave 187): GET /api/testbox/frames, its check composed in coord/routes.ts: one hundred and nine in all.
+  'one hundred and nine'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`
@@ -541,7 +560,10 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     // …and the board's one (Overlord W1, PR B2).
     expect(OVERLORD_BOARD_LANES, 'coord/overlordBoardRoutes.ts lost its box-token lane, or gained a door with no census row')
       .toEqual(['GET /api/overlord/board']);
-    expect(ALL_LANES.length).toBe(COORD_LANES.length + 3 + LINEAR_PROXY_LANES.length + LEDGER_LANES.length + LINKING_LANES.length + CALLS_LANES.length + REMAINING_LANES.length + PLAN_LANES.length + CONTINUITY_LANES.length + QUIZ_LANES.length + OVERLORD_INBOX_LANES.length + OVERLORD_HISTORY_LANES.length + OVERLORD_SEQUENCE_LANES.length + OVERLORD_BOARD_LANES.length);
+    // …and the frames read's one (Desktop polish wave 187), credited to its own route, not to the status read above it.
+    expect(TESTBOX_FRAMES_LANES, 'the frames read lost its composed box-token check, or the check is credited to another route')
+      .toEqual(['GET /api/testbox/frames']);
+    expect(ALL_LANES.length).toBe(COORD_LANES.length + 3 + LINEAR_PROXY_LANES.length + LEDGER_LANES.length + LINKING_LANES.length + CALLS_LANES.length + REMAINING_LANES.length + PLAN_LANES.length + CONTINUITY_LANES.length + QUIZ_LANES.length + OVERLORD_INBOX_LANES.length + OVERLORD_HISTORY_LANES.length + OVERLORD_SEQUENCE_LANES.length + OVERLORD_BOARD_LANES.length + TESTBOX_FRAMES_LANES.length);
     expect(UNGATED_DOORS.length, 'the door list collapsed').toBeGreaterThan(3);
   });
 
@@ -1741,5 +1763,23 @@ describe('the reader lab door: three session-gated routes, an exempt probe pair,
     expect(LAB_SRC, 'the open registration line moved: re-point this control at it').toContain(OPEN_LINE);
     const planted = LAB_SRC.replace(OPEN_LINE, `${OPEN_LINE}\n    requireMailToken(req, reply);`);
     expect(lanesIn(planted)).toEqual(['POST /api/reader-lab/runs']);
+  });
+});
+
+// Review 4069's F6 (the coordinator's ruling): the frames read is a box-token lane of its own, as `coord-token.test.ts` was
+// widened to read it. Mutant W2b (the composed check replaced by `() => false`) reds the first case by name.
+describe('the frames read: a helper-registered route whose box-token check is composed in coord/routes.ts', () => {
+  it('its composed box-token check is credited to GET /api/testbox/frames, and the status read keeps its own', () => {
+    expect(TESTBOX_FRAMES_LANES).toEqual(['GET /api/testbox/frames']);
+    expect(COORD_LANES, 'the status read lost its own box-token check').toContain('GET /api/testbox');
+    expect(COORD_LANES, 'a helper route was counted twice').not.toContain('GET /api/testbox/frames');
+  });
+  it('each helper row is held to its own file: the file registers exactly that route, and its handler asks the check it is given', () => {
+    for (const { key, file } of Object.values(HELPER_ROUTES)) {
+      const src = read(file);
+      expect(registrationsIn(src).map((r) => r.key)).toEqual([key]);
+      expect(handlerBody(src, key)).toMatch(/d\.boxToken\(req\)/);
+    }
+    expect(COORD_SRC.match(/\bregisterTestboxFramesRoute\(app\b/g), 'the helper is called once in coord/routes.ts').toHaveLength(1);
   });
 });

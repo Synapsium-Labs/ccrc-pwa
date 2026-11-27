@@ -462,7 +462,9 @@ describe('the client stays closed', () => {
     // PR B1: a body built whole by its own grammar, the pane's pair appended last) to one hundred and two. `overlord.sequence`
     // (Overlord W1, sequence C: the pane's pair in the query after the cursor's keys, no body) to one hundred and three.
     // `overlord.board` (Overlord W1, PR B2: no keys, the pane's pair in the query, no body) to one hundred and four.
-    expect(routeKeys().size).toBe(104);
+    // `testbox.frames` (Desktop polish wave 187: a read with two query values held to their own grammars, no body, no splice,
+    // no fill) to one hundred and five.
+    expect(routeKeys().size).toBe(105);
     // The call record's fill is the one that REFUSES a caller's identity (D-8126): it tests the stripped copy for both keys and
     // refuses, then derives the pair from the pane and appends it LAST, byId then byUuid (review 2039 F7, review 3245 A2). Each
     // slice below ends at its own block's closing `fi`, so a later block's splice (`runs.review-rounds`) cannot satisfy it

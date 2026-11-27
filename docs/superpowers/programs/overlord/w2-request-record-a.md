@@ -17,7 +17,7 @@ Measured at `5576023f25` (2026-11-27).
 
 | Question | Answer on `main` |
 |---|---|
-| The coordination database's migrations | 133 entries. This piece takes the next free slot by position; whoever lands second renumbers. |
+| The coordination database's migrations | 133 entries at dispatch. #3487 then took the next slot (its box frames table), and this branch merged that `main` (`86b2c2d6e2`) once, on the coordinator's word: this piece's migration is now the next free slot after it, and the version pins of `coord-db.test.ts` (three) and the undo step and its prose in `run-close-switch.test.ts` were re-derived on the merged tree. |
 | `REQUEST_TRANSITIONS`, its store, its tables | None: every file and table here is new. |
 | The sequence kinds | `generation`, `designation`, `message`, `ladder-rung`, `ladder-latch`, `readiness`. This piece adds `request`. |
 | The row-revision census | Typed over `asks` and `operator_items` only. |

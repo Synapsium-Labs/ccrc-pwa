@@ -4773,13 +4773,42 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 134: user_version 133 -> 134 ──────────────────────────────────────────
+  // The box frames recipe's capture lane (Desktop polish wave 187; plan docs/superpowers/plans/2026-11-26-box-frames-recipe.md
+  // section 5.3): `claude_build_frames`, one row per (build, part), beside the trust and delivery tables and never in them.
+  // ONE writer, the capture lane, through `coord/claudeBuildFramesStore.ts` (`CoordStore` keeps the delegates). `record` is
+  // the result's JSON with its frame text set to null, and `text` that frame's reduced text, kept for the newest four framed
+  // builds and set aside for older ones; `checked` is the receiver's word at store time (`clear` or a refusal word, and then
+  // no text). `version`, `word`, `record`, `checked` and `at` are set together, and null on a row that holds attempts only.
+  // A NEW TABLE only: an older build opening a file at this entry's version takes rule 3 and never names it. The slot is the
+  // first free one by position on `main` at this branch's last merge of it (133 was taken first, by the account holds).
+  // RE-MEASURE the slot before merge (it must print 133 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE claude_build_frames (
+    build         TEXT    NOT NULL,
+    part          INTEGER NOT NULL CHECK (part >= 0),
+    version       TEXT,
+    word          TEXT,
+    record        TEXT,
+    text          TEXT,
+    checked       TEXT,
+    at            INTEGER,
+    attempts      INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    lastAttemptAt INTEGER,
+    notSent       TEXT,
+    PRIMARY KEY (build, part)
+  );
+  `,
+
+  // ── 135: user_version 134 -> 135 ──────────────────────────────────────────
   // The Overlord's request record (spec §5.1, C9, H7, H22; plan `docs/superpowers/plans/2026-11-16-overlord-w2/w2-requests.md`
   // Task A3): `overlord_requests`, one row per request, its cited operator messages by id and hash (never their words), and one
   // append-only row per move. ONE owner of the three tables' SQL, `coord/overlordRequestStore.ts`. No CHECK holds a word or a close
   // note: `shared/overlordRequests.ts` governs every word. The id is issued by `nextRequestId`, never AUTOINCREMENT. The partial
   // unique index makes one message found one root request. NEW TABLES only: an older build takes rule 3 and never names them.
-  // The slot is the next free one by position on `main`; whoever lands second renumbers. RE-MEASURE the slot before merge (it
-  // must print 133 before this entry is counted):
+  // The slot is the next free one by position on `main` at this branch's last merge of it (134 was taken first, by the box
+  // frames). RE-MEASURE the slot before merge (it must print 134 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

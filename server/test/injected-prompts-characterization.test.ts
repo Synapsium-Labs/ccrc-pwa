@@ -75,11 +75,12 @@ const callersOf = (name: string): string[] => {
 };
 
 describe('the server\'s typers, by parsedFile', () => {
-  it('sendPrompt has seven callers (renewalHostOf types renewal-first-prompt and overlord-first-prompt, one call each; the paste delivery recipe\'s driver one, on a capture\'s own session)', () => {
+  it('sendPrompt has eight callers (renewalHostOf types renewal-first-prompt and overlord-first-prompt, one call each; the paste delivery recipe\'s driver one, and the box frames recipe\'s step one, each on a capture\'s own session)', () => {
     expect(callersOf('sendPrompt')).toEqual([
       'server/src/continuity/renewalWiring.ts#renewalHostOf',
       'server/src/continuity/renewalWiring.ts#renewalHostOf',
       'server/src/inject/deliveryDrive.ts#driveCase',
+      'server/src/inject/deliveryDrive.ts#driveFramesStep.send',
       'server/src/inject/send.ts#clearSender',
       'server/src/server.ts#buildServer',
       'server/src/watch.ts#FleetWatcher.idleNudgeOne',
@@ -87,10 +88,13 @@ describe('the server\'s typers, by parsedFile', () => {
     ]);
   });
 
-  it('sendLiteral has two callers, inside the two primitives', () => {
+  // The send's line loop is `typeComposedLines` since Desktop polish wave 187 (a move with no behaviour change); the box
+  // frames recipe's step types a draft as a person types it, in bursts, on a capture's own session.
+  it('sendLiteral has three callers: the two primitives (the send through its line loop) and the box frames step', () => {
     expect(callersOf('sendLiteral')).toEqual([
+      'server/src/inject/deliveryDrive.ts#driveFramesStep',
       'server/src/inject/send.ts#answerDialogText',
-      'server/src/inject/send.ts#sendPrompt.attempt',
+      'server/src/inject/send.ts#typeComposedLines',
     ]);
   });
 
@@ -98,7 +102,7 @@ describe('the server\'s typers, by parsedFile', () => {
     expect(callersOf('answerDialogText')).toEqual(['server/src/server.ts#buildServer']);
   });
 
-  it('sendKey\'s literal keys, and its four computed-key sites', () => {
+  it('sendKey\'s literal keys, and its nine computed-key sites', () => {
     const literal = new Set<string>();
     const computed: string[] = [];
     for (const f of walkSrc({ roots: ['server/src'], min: 300, match: /\.ts$/ })) {
@@ -112,11 +116,19 @@ describe('the server\'s typers, by parsedFile', () => {
         computed.push(`${f}#${enc?.name ?? '(top)'}`);
       }
     }
-    expect([...literal].sort()).toEqual(['C-s', 'C-u', 'Enter', 'Escape', 'M-Enter', 'Tab', 'Up']);
+    // `C-s` is `STASH_KEY` since Desktop polish wave 187 (one spelling, read by the stash, the pop and the box frames step).
+    expect([...literal].sort()).toEqual(['C-u', 'Enter', 'Escape', 'M-Enter', 'Tab', 'Up']);
     expect(computed.sort()).toEqual([
       'server/src/inject/ask.ts#answerAsk',
+      // The box frames step (Desktop polish wave 187): `STASH_KEY`, a view key of the case, and the person's newline.
+      'server/src/inject/deliveryDrive.ts#driveFramesStep',
+      'server/src/inject/deliveryDrive.ts#driveFramesStep',
+      'server/src/inject/deliveryDrive.ts#driveFramesStep',
       'server/src/inject/send.ts#answerDialogMulti',
       'server/src/inject/send.ts#moveDialogTab',
+      // The stash and its pop press `STASH_KEY` (Desktop polish wave 187: the one spelling of `C-s`).
+      'server/src/inject/send.ts#popHeldStash',
+      'server/src/inject/send.ts#stashDraft',
       'server/src/inject/send.ts#walkCursor',
     ]);
   });

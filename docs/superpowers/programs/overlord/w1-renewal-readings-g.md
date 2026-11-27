@@ -140,7 +140,8 @@ under its mutant before this note was written (the mutation table below).
 - **F1, the account a hold lands on.** The ruling's direction was to hold only when the registry's lane and the failed
   attempt's own generation's lane agree. That is not a tie, for two reasons read from the code. First, a generation's `lane` is the same
   registry wrapper, read at the pass's listing (`generationStart.ts#startVerdict`, `registry.lane`), so after a swap both
-  reads name the new account and agree. Second, the attempt usually has no generation when it settles: the loads door settles
+  reads name the new account and agree when the generation is minted after the swap (one minted before it carries the old
+  account, and the two reads would then differ). Second, the attempt usually has no generation when it settles: the loads door settles
   seconds after the start, the pass runs every 30 seconds, and once the failure clears the pending slot the body is no longer
   read as the Overlord's, so no Overlord generation is minted for it. So the hold would almost never be written. No fact the start carries names its
   account: the start row holds the conversation uuid, the row incarnation (minted once per registry row, kept across a swap),
@@ -152,8 +153,9 @@ under its mutant before this note was written (the mutation table below).
 - **F3, the unmeasured wrapper through the real read.** The loads door's attribution refuses a registry row it cannot
   measure (`registry-unmeasurable`), so the case makes the wrapper unreadable after the door's answer, at the settle's first
   read. The real account read then answers null. No row is written in the holds table, the failure is recorded, and the drain
-  goes on. The stop's own registry read cannot measure the row either, so the stop stays owed for the sweep, as any stop that
-  does not complete does.
+  goes on. The stop's own registry read cannot measure the row either, so the stop stays owed, as any stop that does not
+  complete does: it is retried automatically while the continuity lane is Live, and otherwise at the next designate, retire
+  or rebind.
 - **F4, one fact, one transaction, from the other side.** The new store case has the hold's own insert ask a second
   connection what is committed. It sees the attempt still pending, so no reader ever sees the failure without its hold.
 - **F2, the case that could not fail.** "The place mark unread" in the operator-mark paths suite now asserts the place's own
@@ -242,7 +244,7 @@ the source was restored (`git checkout`). Before: every named file green.
   Both reads happen once per settle, which runs once per designate or rebind start.
 - **An unmeasured wrapper holds nothing.** When the registry does not measure the failed body's wrapper, the account is
   unknown and no hold is written. The failure is still recorded and the drain goes on. A stop that cannot measure the row
-  stays owed for the sweep.
+  stays owed, retried while the continuity lane is Live and otherwise at the next designate, retire or rebind.
 - **A swap caught before the settle holds the new account (`swap-before-the-settle`).** The account is the registry's wrapper
   when the settle runs. No fact the start carried names its account, so nothing ties the hold to the failed start's own
   account. If a swap rewrites the wrapper after the failed start and before the swap's own start is recorded, the settle holds
