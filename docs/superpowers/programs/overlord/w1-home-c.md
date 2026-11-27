@@ -256,7 +256,13 @@ hand, seen red, and taken out (`settings-account-facts`, 14 cases).
   stacked doc comments on `SetBox`, and hold 2's comment and this note's F12 line. The answered case also asserts no owed-stops line
   when nothing is owed.
 
-**The one merge of `main`:** `97dd3d303b`, an ordinary merge as the coordinator ruled. Its item screen had not been rebuilt, so
+**The landing line's ejection (after acceptance, call 1740).** The line ejected the PR for a conflict with `main` at `276555102d`
+in `pwa/test/command-registry.test.ts`: reader mode's `toggle-reader-mode` and this PR's `go-settings-overlord` were each added in
+the same three places. The one merge of exactly that commit keeps both: both ids in the registry's list, both read apart from the
+ranked table, Go to Measure highlighting still right after Settings' seventh page, and "reader" ranking reader mode before the
+reader lab. Its item screen had still not been rebuilt, so Clear stays after History.
+
+**The one merge of `main` in fix round 1:** `97dd3d303b`, an ordinary merge as the coordinator ruled. Its item screen had not been rebuilt, so
 Clear stays after History, in "Your move" (call 1684). The browser files' dark-palette guard (#3472) came with it, and both of this
 PR's browser files pass under it.
 
