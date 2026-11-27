@@ -15,7 +15,7 @@ import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 import { openCoordDb } from '../src/coord/db.js';
 import type { CoordStore } from '../src/coord/store.js';
 import { landingStoreOver } from './landingFixture.js';
-import { landingBindingOf, mainRedNext } from '../src/coord/landingLine.js';
+import { landingBindingOf, mainRedNext, probedHeadOf } from '../src/coord/landingLine.js';
 import type { LandingMutationFacts } from '../src/coord/landingWrites.js';
 import { isLandingEntryState, type LandingEntry, type LandingEntryState } from '../../shared/landingLine.js';
 
@@ -535,6 +535,27 @@ describe('landingBindingOf: precedence and the evidence it binds', () => {
     const stale = factsOf([entry(7)], { flags: { operatorPaused: false, mainRedHold: true } });
     expect(landingBindingOf(stale, controlRead(), now).mode).toBe('ready');
     expect(landingBindingOf(stale, controlRead({ health: { ok: false, reason: 'unmeasured' } }), now)).toMatchObject({ reason: 'health-unmeasured' });
+  });
+  it('probedHeadOf answers the one head for a PR, or null', () => {
+    const base = controlRead();
+    if (!base.probe.ok) throw new Error('fixture');
+    const doc = base.probe.doc;
+    expect(probedHeadOf(doc, 7)).toBe(doc.heads[0]);
+    expect(probedHeadOf(doc, 8)).toBeNull();
+    // A hand-built doc listing #7 twice: `parseProbe` refuses one, and the reader still answers null.
+    const twice = { ...doc, heads: [doc.heads[0]!, { ...doc.heads[0]!, branch: 'ws/beta' }] };
+    expect(probedHeadOf(twice, 7)).toBeNull();
+  });
+  it('the probe\'s heads are searched for a PR only inside probedHeadOf (D-9159)', () => {
+    const src = readFileSync(path.join(import.meta.dirname, '../src/coord/landingLine.ts'), 'utf8');
+    const hits = [...src.matchAll(/\.heads\b/g)].map((m) => m.index);
+    expect(hits).toHaveLength(1);
+    const start = src.indexOf('export function probedHeadOf(');
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = src.indexOf('\n}\n', start);
+    expect(end).toBeGreaterThan(start);
+    expect(hits[0]).toBeGreaterThan(start);
+    expect(hits[0]).toBeLessThan(end);
   });
 });
 
