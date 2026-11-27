@@ -97,6 +97,53 @@ func TestPreToolArmsOrder(t *testing.T) {
 	}
 }
 
+// A lookup miss (Task 9c) asks for no session fact: the arms that need none refuse as everywhere, and the rows that need
+// one are left (the wave's merge, the child's rows, the heavy test route, a joined reader) or not run (the graph gate,
+// the landing advisory). Every row read fails the test if asked.
+func TestPreToolArmsOnALookupMiss(t *testing.T) {
+	asked := func(what string) { t.Helper(); t.Errorf("a miss asked for %s", what) }
+	g := func(string) bool { asked("the graph"); return false }
+	rd := PreReads{
+		Graph:        GraphIO{Workdir: func() string { asked("the workdir"); return "" }, IsDir: g, IsLink: g, IsFile: g},
+		Generation:   func() bool { asked("the generation"); return true },
+		Reg:          func(n string) ([]byte, int) { asked(n); return []byte("program:p wave:1"), 0 },
+		Exists:       func(n string) bool { asked(n); return true },
+		AdminAllowed: func(string) bool { asked("the allowance"); return true },
+		DenyFile:     func() ([]byte, bool) { asked("the deny file"); return nil, false },
+		HasCcrc:      func() bool { return true },
+		ScriptStat:   func(string) (bool, int64) { return false, 0 }, ScriptText: func(string) string { return "" },
+	}
+	call := func(tool, input, verdict string, paid bool) string {
+		p := `{"hook_event_name":"PreToolUse","tool_name":"` + tool + `","tool_input":` + input + `}`
+		rd.Classify = func(string, bool) string { return verdict }
+		return PreToolArms(PreIn{Tool: tool, Payload: p, V: parse(t, p), Paid: paid, Gq: "0", Gd: "0", Subs: "[]", UTF8: true,
+			GOOS: "linux", Miss: true}, rd).Json
+	}
+	for _, c := range []struct {
+		name, tool, input, verdict string
+		paid                       bool
+		want                       string // "" for no envelope
+	}{
+		{"the admin bypass, its allowance unprovable", "Bash", `{"command":"gh pr merge 5 --admin"}`, "", false, "merges are refused in every session"},
+		{"a plain merge: the wave's row is left", "Bash", `{"command":"gh pr merge 5"}`, "", false, ""},
+		{"the account row", "Bash", `{"command":"ccrc account remove --id lane-x"}`, "", false, "ccrc account remove"},
+		{"the prune row", "Bash", `{"command":"git worktree prune"}`, "", false, "git worktree prune"},
+		{"a child's verb row is left", "Bash", `{"command":"ccd ws-rm lane-a"}`, "", false, ""},
+		{"the role skill from a subagent", "Skill", `{"skill":"ccrc-worker"}`, "", true, "loads the `ccrc-worker` skill"},
+		{"Fable", "Agent", `{"model":"fable","prompt":"x"}`, "", false, "names a Fable model"},
+		{"a fan-out with no model", "Agent", `{"prompt":"x"}`, "", false, "names no model"},
+		{"a wrapped test", "Bash", `{"command":"systemd-run --user --scope npx vitest run"}`, "wrapped", false, "never under a systemd-run of your own"},
+		{"a heavy test: not a fleet session's", "Bash", `{"command":"npx vitest run"}`, "heavy", false, ""},
+		{"a search: the graph gate is off", "Grep", `{"pattern":"x"}`, "", false, ""},
+		{"a sync: the advisory is off", "Bash", `{"command":"git merge origin/main"}`, "", false, ""},
+	} {
+		got := call(c.tool, c.input, c.verdict, c.paid)
+		if c.want == "" && got != "" || c.want != "" && !(strings.Contains(got, c.want) && Denied(got)) {
+			t.Errorf("%s: %s", c.name, got)
+		}
+	}
+}
+
 func TestScriptSource(t *testing.T) {
 	rd := func(regular bool, size int64, text string) PreReads {
 		return PreReads{ScriptStat: func(string) (bool, int64) { return regular, size }, ScriptText: func(string) string { return text }}

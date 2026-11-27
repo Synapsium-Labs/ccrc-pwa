@@ -32,6 +32,9 @@ type PreIn struct {
 	Force, SubagentModel string // CLAUDE_CODE_SUBAGENT_MODEL_FORCE and CLAUDE_CODE_SUBAGENT_MODEL
 	ID                   string // the session id
 	Home                 string // HOME, as the guard's jq reads $ENV.HOME
+	// Miss is a session lookup that matched no session (Task 9c, D-TBD-go-hook-lookup-miss): ID is empty, no session
+	// fact is read, and every arm that needs one reads it as absent; the graph gate and the landing advisory do not run.
+	Miss bool
 }
 
 // PreReads are the observations the arms ask for.
@@ -130,7 +133,7 @@ func PreToolArms(in PreIn, rd PreReads) PreOut {
 	tool := in.Tool
 
 	// ── The search gate and the Read nudge (D-1613, D-1745) ──
-	if !in.Unreadable && numTest(in.Gq, "==", 0) && !in.GateOff {
+	if !in.Miss && !in.Unreadable && numTest(in.Gq, "==", 0) && !in.GateOff {
 		gated, nudged := false, false
 		switch tool {
 		case "Grep", "Glob":
@@ -187,7 +190,7 @@ func PreToolArms(in PreIn, rd PreReads) PreOut {
 
 	// ── The landing-order advisory (landing-order spec 2026-09-23 §5.1): advice, never a decision ──
 	p := in.Payload
-	if pre == "" && tool == "Bash" &&
+	if !in.Miss && pre == "" && tool == "Bash" &&
 		((strings.Contains(p, "main") || strings.Contains(p, "origin")) && (strings.Contains(p, "merge") || strings.Contains(p, "pull") || strings.Contains(p, "rebase")) ||
 			strings.Contains(p, "update-branch") || strings.Contains(p, "updatePullRequestBranch")) {
 		lcmd := ""
@@ -238,7 +241,7 @@ func PreToolArms(in PreIn, rd PreReads) PreOut {
 
 	// ── Tests run through `ccrc test` (D-7298) ──
 	if !denied(pre) && tool == "Bash" {
-		fleet := ostypeLinux(in.GOOS, in.OSType, in.OSTypeSet) && rd.Generation()
+		fleet := ostypeLinux(in.GOOS, in.OSType, in.OSTypeSet) && !in.Miss && rd.Generation()
 		task := false
 		switch {
 		case strings.Contains(p, "systemd-run"):

@@ -116,6 +116,11 @@ func ClassifyShell(cmd string, bounded bool) string {
 // on stderr when it has read the command, just before it execs `timeout` around ccrc, and the Go timer starts there.
 // The MSYS2 bash start before it is Go's alone (the bash hook's `timeout` starts in a shell already running), so it is
 // never charged to the bound. ccrc's stderr is dropped, as the bash's `2>/dev/null` drops it.
+//
+// D-TBD-go-hook-windows-classify-slow: the classifier itself answers slowly on Windows, in both hooks (about 5 to 18 s
+// over a 9 KB command, measured in the fix wave), past the 5 s a paned session gives it. Cut there, it answers nothing,
+// and the test route fails open: the command runs as written, outside `ccrc test`'s slice and queue. That routes
+// nothing; it is not a deny the hook owes for safety (no account, child, merge or build row reads the classifier).
 func classifyOnWindows(stdin io.Reader, bound time.Duration) string {
 	script := `IFS= read -r -d '' c; exec "$0" test --classify-shell -- "$c" 2>/dev/null`
 	ctx, cancel := context.WithCancel(context.Background())

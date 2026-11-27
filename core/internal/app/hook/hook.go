@@ -171,8 +171,14 @@ func (h *run) main(stdin io.Reader) {
 		return
 	}
 	payload := attention.Payload(raw)
-	if h.id = h.identity(); h.id == "" || !attention.ValidID(h.id) {
-		return
+	// A lookup miss (Task 9c): every event but a PreToolUse ends here, as the bash's builtin prefilter ends it.
+	h.id = h.identity()
+	miss := !attention.ValidID(h.id) // the empty id too
+	if miss {
+		if !strings.Contains(payload, "PreToolUse") {
+			return
+		}
+		h.id = ""
 	}
 	if st, err := h.FS.Stat(h.reg); err != nil || !st.IsDir() {
 		return
@@ -184,7 +190,27 @@ func (h *run) main(stdin io.Reader) {
 	if !ok {
 		return
 	}
+	if miss {
+		h.missed(ps, payload)
+		return
+	}
 	h.session(ps, payload, h.buildSpool(ps, payload))
+}
+
+// missed is a PreToolUse whose session lookup matched no session (ccd/session-hook.sh#@hook-miss-end,
+// D-TBD-go-hook-lookup-miss): the deny arms with every session fact absent, the envelope printed, and nothing else (no
+// stage reads or writes a row).
+func (h *run) missed(ps attention.Parsed, payload string) {
+	if ps.Event != "PreToolUse" {
+		return
+	}
+	c := attention.ClassifyPayload(ps.Event, payload, ps)
+	if c.Exit {
+		return
+	}
+	if o := h.preTool(ps, c, payload, attention.Prev{Subs: "[]"}, false); o.Json != "" {
+		h.out.WriteString(o.Json + "\n")
+	}
 }
 
 // identity is "which session this is": the pane's tmux session `cc-<id>`, else, with no pane, the job marker's

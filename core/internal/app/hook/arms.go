@@ -17,7 +17,7 @@ func (h *run) preTool(ps attention.Parsed, c attention.Class, payload string, pr
 		GateOff: h.exists(filepath.Join(h.home, ".ccrc", vocab.GraphGateOffFile)),
 		GOOS:    h.GOOS,
 		OSType:  h.Getenv("OSTYPE"), OSTypeSet: h.ostypeSet(), DoorNonce: h.Getenv("CCRC_DOOR_NONCE_SHA256"), Force: h.Getenv("CLAUDE_CODE_SUBAGENT_MODEL_FORCE"),
-		SubagentModel: h.Getenv("CLAUDE_CODE_SUBAGENT_MODEL"), ID: h.id, Home: h.home}
+		SubagentModel: h.Getenv("CLAUDE_CODE_SUBAGENT_MODEL"), ID: h.id, Home: h.home, Miss: h.id == ""}
 	return attention.PreToolArms(in, attention.PreReads{
 		Graph:      h.graphIO(),
 		Generation: func() bool { return h.isRegular(h.p(h.id + ".generation")) },
