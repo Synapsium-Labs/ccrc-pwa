@@ -753,3 +753,19 @@ All green after the round:
 - the server typecheck, and the tests-inclusive typecheck over the changed test files, `artifacts-binding.test.ts` now among them.
 
 The merge probe against `main` at `aba5845760` was clean, and `main` had changed no route or count file since `87c64a957a`, so nothing was absorbed. The counts stand: 339, 336, 218, 118, docs 20. **Not measured locally:** the whole suites, the browser folder and the whole tests typecheck.
+
+#### Absorb of `main` at `bb21a1e56c` (after #3455)
+
+The review accepted the round at `3d40b7eef0`. On the coordinator's word, another programme's #3455 (two session-gated doors in `continuity/routes.ts`) landed first. `main` at `bb21a1e56c` was then absorbed once, by merge. The probe answered exit 1, and the merge conflicted in exactly the two count files, `server/src/auth/gate.ts` and `server/test/auth-gate.test.ts`; `server.ts`, the census files and every other file merged by themselves.
+
+- **The merge commit** (`e73207ad62`) carries only the resolutions:
+  - the count lines take `main`'s figures;
+  - both sides' history comments are kept byte for byte, in time order: sequence C's, then #3455's, then this wave's.
+- **The counts commit** (`a80b60523b`) moves the figures to what the merged tree derives, with nothing else in it. The gate's scanned routes go 336 -> 341, the HTTP half 333 -> 338 and gated 215 -> 220; exempt stays 118. The changes are in `gate.ts`'s header, the gate suite's count case and its history line for the five doors, the real-table comment and the sweep's two HTTP sentences. No other suite pins these figures: `box-token-census`, `secret-mask` and `docs-headers` pass unchanged on the merged tree.
+
+Green after the absorb:
+- `auth-gate` 431, `box-token-census` 90, `secret-mask` 99 (1 skipped), `docs-headers` 65;
+- the artifact files: binding 2, mint 42, store 28, liveness 7, listener 29, vocabulary 8; `auth-sessions-liveness` 8;
+- the server typecheck, and the tests-inclusive typecheck over the changed test files.
+
+**Not measured locally:** the whole suites, the browser folder and the whole tests typecheck.
