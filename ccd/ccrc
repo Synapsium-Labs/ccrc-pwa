@@ -6470,10 +6470,12 @@ _auth_unit_sources() {   # <unit dir>
 # compare, which needs no service manager, so `_auth_fits_here` asks it too (wave 190 A4). rc 0 the installer's; rc 1
 # not, AUO_WHY which and AUO_FIX the way on; rc 2 UNMEASURED, AUO_WHY the cause. A path is printed, never a difference.
 # The role is the caller's own read of the recorded CCRC_ROLE (empty when none): the way on names it, because a bare
-# install takes role both and never reads the recorded one (`_kf_remedy`'s reason; wave 190 fix round 1, R2).
+# install takes role both and never reads the recorded one (`_kf_remedy`'s reason; wave 190 fix round 1, R2). It is
+# printed only when it is a word the install takes for a box this verb serves (the fleet word has refused already),
+# matched whole as the other readers of the role match it; any other content is never printed (fix round 2, R1).
 AUO_WHY=""; AUO_FIX=""
 _auth_unit_cmp() {   # <unit dir> <recorded role or "">
-  local uf tf crc=0 none=""
+  local uf tf crc=0 none="" r="<role>"
   AUO_WHY=""; AUO_FIX=""
   uf="$1/$(_box_unit_file ccrc.service)"
   tf="$BOX_TREE_DIR/deploy/ccrc.service"
@@ -6488,8 +6490,9 @@ _auth_unit_cmp() {   # <unit dir> <recorded role or "">
     0) return 0 ;;
     1) AUO_WHY="$uf is not the unit file ccrc installs ($tf), and this verb acts only on its own"
        # Wave 190 A3: an update leaves a box already on its version alone unless forced; an install always lands it.
-       [ -n "${2:-}" ] || none="; this box records no role, and a bare install takes role both"
-       AUO_FIX="ccrc install --role ${2:-<role>} puts the shipped file back and reloads systemd (an update does not, on a box already on its version$none); or set the keys by hand (the README's 'The session gate')"
+       case "${2:-}" in server|both) r="$2" ;; '') none="; this box records no role, and a bare install takes role both" ;;
+         *) none="; the role $BOX_ENV_FILE records is not one ccrc install takes, and a bare install takes role both" ;; esac
+       AUO_FIX="ccrc install --role $r puts the shipped file back and reloads systemd (an update does not, on a box already on its version$none); or set the keys by hand (the README's 'The session gate')"
        return 1 ;;
   esac
   AUO_WHY="$uf could not be compared with $tf, so whether it is that file was not measured"; return 2
@@ -6522,7 +6525,7 @@ _auth_unit_own() {   # <unit dir> <recorded role or "">
   AUO_FIX="take that unit away (or what puts it there), run systemctl --user daemon-reload, then re-run; or set the keys by hand (the README's 'The session gate')"
   [ "$frag" = "$uf" ] \
     || { AUO_WHY="systemd loaded ccrc.service from $frag, not from $uf, the file this verb read (a unit of the same name earlier on its search path), so the restart would apply a file this verb did not read"; return 1; }
-  [ "$srcp" != $'\n' ] || { AUO_FIX="run systemctl --user daemon-reload, then re-run"
+  [ "$srcp" != $'\n' ] || { AUO_FIX="this systemd does not answer SourcePath, so this verb cannot prove the unit on this box; set the keys by hand (the README's 'The session gate')"
     AUO_WHY="systemctl --user show did not say whether systemd made ccrc.service from another source (SourcePath), so what the restart would apply was not measured"; return 2; }
   [ -z "$srcp" ] \
     || { AUO_WHY="systemd made ccrc.service from $srcp (SourcePath), not from $uf alone, so the restart would apply something other than the file this verb read"; return 1; }
