@@ -341,8 +341,10 @@ describe('testboxReaders(): nothing outside docs/ reads a test box setting or th
   // The ledger's old and new values (D-8399) add their own test and the lane's, whose staged changes name a box key.
   const LEDGER_VALUES_HOLDERS = ['server/test/testbox-ledger-values.test.ts', 'server/test/testbox-admin-lane.test.ts'];
   // The build capture runner (spec 2026-11-22) adds the capture's paths and its desk, which name the box root in comments,
-  // and the capture op's two tests, which plant the fleet host's settings.
-  const CAPTURE_HOLDERS = ['agent/src/testbox/capture.ts', 'agent/src/testbox/captureDesk.ts', 'agent/test/testbox-capture-op.test.ts', 'agent/test/testbox-capture-op-delivery.test.ts'];
+  // and the capture op's two tests, which plant the fleet host's settings. The box frames recipe (Desktop polish wave 187) adds
+  // the frames op's test, which plants them the same way, and its transport test, whose local-arm case plants them in a
+  // fixture HOME (review 4069's F5).
+  const CAPTURE_HOLDERS = ['agent/src/testbox/capture.ts', 'agent/src/testbox/captureDesk.ts', 'agent/test/testbox-capture-op.test.ts', 'agent/test/testbox-capture-op-delivery.test.ts', 'agent/test/testbox-capture-op-frames.test.ts', 'server/test/frames-transport.test.ts'];
   // The managed node's box updater (D-8903, spec 2026-11-22 §9 PR 2) adds the installer's steps as a file of their own,
   // which reads the box keys the installer read (they moved with the code), the updater, which reads the registry
   // proxy, the upstream and the token file through the same table, the installer's characterization and its record,

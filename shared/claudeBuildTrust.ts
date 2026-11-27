@@ -226,8 +226,9 @@ export function captureBlockedBy(records: readonly ClaudeBuildRecord[]): BuildCa
 export interface BuildCaptureJob {
   readonly build: string;
   /** Absent: a build-trust capture. `delivery`: one part of the paste delivery recipe (Desktop polish wave 178), named by
-   *  `part`; its result is never a verdict and never touches a trust row. Additive: a job without either is a trust job. */
-  readonly recipe?: 'delivery';
+   *  `part`; its result is never a verdict and never touches a trust row. `frames` (Desktop polish wave 187): one part of the
+   *  box frames recipe, named the same way, its result never a verdict either. Additive: a job without either is a trust job. */
+  readonly recipe?: 'delivery' | 'frames';
   readonly part?: number;
 }
 
