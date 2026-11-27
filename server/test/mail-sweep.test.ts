@@ -34,6 +34,7 @@ import type { StallSettingsPatch } from '../src/coord/stallsettings.js';
 import { queueProgramKickoff } from '../src/coord/kickoff.js';
 import { buildServer } from '../src/server.js';
 import type { DesignationRead } from '../../shared/overlord-designation.js';
+import { boxPane, EMPTY_BOX } from './inputBoxPane.js';
 
 // Stall watch settings (design 2026-10-05 §9, M20): a resolver that really throws, switched on by one row at a time.
 // Every other row runs the real `resolveStallWatch`; the mock passes straight through while `fault.resolve` is null.
@@ -93,8 +94,10 @@ const ENVELOPE = 'ccrc-mail test payload';
 // delivery triggered it (spec §1.1's "ID-AGNOSTIC… one nudge drains all").
 const NUDGE = renderMailNudge(ID);
 
-const emptyBox = '❯ \n';
-const echoedBox = (text: string): string => `❯ ${text}\n`;
+// Desktop polish wave 185: a closed box, drawn by the send suite's builder (`inputBoxPane.ts`). A bare marker row is no
+// box any build draws, and the resume no longer presses Enter on one; the bare shape keeps one case of its own below.
+const emptyBox = EMPTY_BOX;
+const echoedBox = (text: string): string => boxPane([text]);
 /** The exact three-capture script a clean `sendPrompt` success consumes:
  *  empty-draft check, echo verification, empty-after-Enter. Lifted from
  *  send.test.ts's own "happy path" fixture. */
@@ -805,6 +808,25 @@ describe('sweepMail: the send', () => {
     await w.sweepMail();
     // D-5912: `onDraft: 'stash'`, never `replace`: the only key is the stash's `C-s` (this scripted pane never
     // empties, so `stash-failed`). `replace` would have fired a C-u.
+    expect(keyPresses(h.calls)).toEqual(['C-s']);
+    expect(literalSends(h.calls)).toEqual([]);
+    expect(deliveryRow(coord, id).lastError).toBe('stash-failed');
+  });
+
+  it('wave 185: a nudge on a bare marker row with no closing rule is never resumed: no Enter, stashed', async () => {
+    // THE HAZARD'S SHAPE at the lane. The newest glyph row is our nudge but not the box's (a past user turn above a box
+    // whose own marker is out of view): under it a reply, no closing rule. The resume used to press Enter here, which
+    // submits whatever the real box holds. Now the lane takes its stash arm (this scripted pane never empties, so
+    // `stash-failed`), and no Enter is sent.
+    const h = harness({ panes: [`❯ ${NUDGE}\n\n⏺ ok\n`] });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
     expect(keyPresses(h.calls)).toEqual(['C-s']);
     expect(literalSends(h.calls)).toEqual([]);
     expect(deliveryRow(coord, id).lastError).toBe('stash-failed');
@@ -3968,7 +3990,7 @@ describe('sweepMail: a live recipient\'s mail PARKS, never rejects (D-5838)', ()
       }
       if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
       if (args[0] === 'capture-pane') {
-        return st.gone === true ? { ran: true, code: 1, stdout: '', stderr: '' } : { ran: true, code: 0, stdout: `❯ ${st.box}\n`, stderr: '' };
+        return st.gone === true ? { ran: true, code: 1, stdout: '', stderr: '' } : { ran: true, code: 0, stdout: boxPane([st.box]), stderr: '' };
       }
       if (args[0] === 'send-keys') {
         if (args[3] === '-l') st.box += args[5]!;

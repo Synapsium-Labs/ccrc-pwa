@@ -288,10 +288,52 @@ export type BoxRead =
  * `box-unreadable`.
  */
 export const draftOfMeasured = (ansiPane: string): BoxRead => {
-  const boxLine = ansiPane.split('\n').filter((l) => startsWithPromptGlyph(stripSgr(l))).at(-1);
-  if (boxLine === undefined) return { box: 'absent' };
-  return { box: 'present', draft: stripSgr(undim(boxLine)).slice(1).trim() };
+  const lines = ansiPane.split('\n');
+  const marker = boxMarkerIndex(lines);
+  if (marker === -1) return { box: 'absent' };
+  return { box: 'present', draft: stripSgr(undim(lines[marker]!)).slice(1).trim() };
 };
+
+/**
+ * Desktop polish wave 185. A LABELLED RULE: a row, SGR stripped and NOT trimmed, that starts at the pane's first column
+ * with a run of three or more rule characters and is not a plain rule (`isRuleRow`). The operator's picture of Claude
+ * Code 2.1.332 shows the top rule of a box taller than its row cap drawn with words on it ("↑ 156 more") and no prompt
+ * glyph on the first row in view. THE GRAMMAR IS UNCONFIRMED: no capture of that build's box is on record yet (task note
+ * `docs/superpowers/programs/desktop-polish/tall-draft-submit.md`), so this is a SHAPE, not the row's bytes. If the real
+ * row is drawn otherwise, this never fires and nothing changes.
+ *
+ * THE FIRST COLUMN is what tells the box's own rule from a row of a draft, ours included (a message holding "─── notes
+ * ───" or a table's crossing line): measured on every recorded pane, each of the 280 rules starts at the first column,
+ * and none of the 124 draft rows below a marker row in the 61 input boxes does. The marker row starts with the glyph,
+ * and every row below it is indented, wrapped rows too. No recorded pane carries a labelled rule at all. A rule's width
+ * is not used: the box corpus records rules shorter than the pane.
+ */
+const LABELLED_RULE_START = /^─{3,}/;
+const isLabelledRule = (row: string): boolean => !isRuleRow(row) && LABELLED_RULE_START.test(row);
+
+/**
+ * THE ONE ANSWER to "which row is the box's marker row", for `draftOfMeasured`, `boxRows` and `continuationRows`: the
+ * LAST row that starts with the prompt glyph (past user turns above the box start with it too, so the box is the last),
+ * or -1 when there is none.
+ *
+ * Wave 185: also -1 when a LABELLED RULE (`isLabelledRule`) lies between that row and the plain rule that closes it.
+ * Then the glyph row is not inside the box: it is a past user turn above a box whose own marker is not in view, and
+ * reading it as the box made every reader describe the wrong text (a past turn read as the draft) and let the mail
+ * lane's resume press Enter on a person's draft. The box reads absent instead, so every caller refuses `box-unreadable`
+ * and nothing is typed, cleared or pressed. A person's draft holding such a row inside a real box is refused the same
+ * way: the safe direction.
+ */
+function boxMarkerIndex(lines: readonly string[]): number {
+  let marker = -1;
+  for (let i = 0; i < lines.length; i++) if (startsWithPromptGlyph(stripSgr(lines[i]!))) marker = i;
+  if (marker === -1) return -1;
+  for (let i = marker + 1; i < lines.length; i++) {
+    const row = stripSgr(undim(lines[i]!));
+    if (isRuleRow(row)) break;
+    if (isLabelledRule(row)) return -1;
+  }
+  return marker;
+}
 
 /**
  * THE DELIBERATE COLLAPSE, kept so every older caller keeps its exact meaning:
@@ -872,8 +914,7 @@ const boxRowCap = (paneRows: number): number => Math.floor((paneRows - 10) / 2);
  */
 function boxRows(ansiPane: string): string[] | null {
   const lines = ansiPane.split('\n');
-  let marker = -1;
-  for (let i = 0; i < lines.length; i++) if (startsWithPromptGlyph(stripSgr(lines[i]!))) marker = i;
+  const marker = boxMarkerIndex(lines);
   if (marker === -1) return null;
   const rows = [stripSgr(undim(lines[marker]!)).slice(1).trim()];
   for (let i = marker + 1; i < lines.length; i++) {
@@ -1490,7 +1531,15 @@ export function sendPrompt(
       // because this branch only ever PRESSES ENTER, never clears or types.
       // A generic nudge never resumes an operator message's line: it names one message, and opens with the generic head, so
       // the prefix test below cannot tell them apart; the line is a draft here (review 2550 F2).
-      if (opts.resumeIfOwn === true && needle !== '' && draft.startsWith(needle) && !carriesOperatorMessageMarker(boxText(pane)) && matchesOwnDraft(pane, parts)) {
+      //
+      // Desktop polish wave 185: AND THE BOX, READ WHOLE AND CLOSED, IS OUR TEXT (`renderedAsTyped` in `'whole'` mode:
+      // every row from the marker row down to the closing rule equals the composed text up to whitespace, and the rule
+      // is there). The prefix and the second row alone pressed Enter on a box nobody read below them: a LONGER draft that
+      // starts with ours, and, when the box's own marker is out of view (a box taller than its row cap on Claude Code
+      // 2.1.332), the newest past user turn above it, which in a fleet session is most often an earlier generic nudge
+      // with exactly our needle. That Enter submitted a person's unfinished draft and answered `ok`.
+      if (opts.resumeIfOwn === true && needle !== '' && draft.startsWith(needle) && !carriesOperatorMessageMarker(boxText(pane)) && matchesOwnDraft(pane, parts)
+          && renderedAsTyped(pane, parts, 'whole') !== null) {
         // D-6011: the resume goes through the same `submit`, so a held stash gates its retry Enter too.
         return submit(stillStartsWith(needle));
       }
@@ -1880,10 +1929,7 @@ const isRuleRow = (line: string): boolean => {
  */
 function continuationRows(ansiPane: string): string[] {
   const lines = ansiPane.split('\n');
-  let markerIdx = -1;
-  for (let i = 0; i < lines.length; i++) {
-    if (startsWithPromptGlyph(stripSgr(lines[i]!))) markerIdx = i;   // last ❯ line, same as draftOf
-  }
+  const markerIdx = boxMarkerIndex(lines);   // the same marker row as draftOf
   if (markerIdx === -1) return [];
   const rows: string[] = [];
   for (let i = markerIdx + 1; i < lines.length; i++) {
