@@ -10,7 +10,8 @@
 // lowered through the driver's `consts`, never waited out. Tokens are synthetic JWTs built at runtime.
 import { afterEach, describe, it, expect } from 'vitest';
 import {
-  chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync,
+  chmodSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, renameSync,
+  rmSync, statSync, symlinkSync, writeFileSync, writeSync,
 } from 'node:fs';
 import { request as httpRequest, type IncomingHttpHeaders } from 'node:http';
 import { connect } from 'node:net';
@@ -191,8 +192,10 @@ function readStats(lane: BridgeLane): Json {
 }
 
 /** The stats file once `ready` holds of it: the bridge flushes after the answer's last byte, so a case polls (at most
- *  3 s) rather than racing the flush. Only for a case whose last answer met no write in flight: a case that sends
- *  answers back to back reads `readStats` after `bridge.stop()`'s drain instead (D-6997). */
+ *  3 s) rather than racing the flush. Answers back to back too, when the write in flight ends inside that poll: an
+ *  answer whose own flush met a write in flight is written by its idle flush once that write ends (#3462). A case that
+ *  reads `readStats` after `bridge.stop()`'s drain instead (D-6997) reads the same counts, written by the drain's forced
+ *  flush. */
 async function statsWhen(lane: BridgeLane, ready: (s: Json) => boolean): Promise<Json> {
   const t0 = Date.now();
   for (;;) {
@@ -329,7 +332,7 @@ describe.skipIf(!PY)('the direct-mode server: one streamed reply (codex-bridge s
       expect(up.requests[0].values['chatgpt-account-id']).toBe(FIXTURE_ACCOUNT_ID);
       expect(up.requests[0].values['chatgpt-account-id']).not.toBe(LANE);
       // D-6997: two answers back to back, so the second's flush can meet the first's write in flight and write nothing;
-      // nothing flushes an idle lane again until the next request or the drain's forced flush. Read after the drain.
+      // its idle flush writes it once that write ends (#3462), and the drain's forced flush in any case. Read after the drain.
       expect(await bridge.stop()).toEqual({ code: 0, signal: null });
       const stats = readStats(lane);
       expect(stats.outcomes['2xx']).toBe(2);
@@ -1197,9 +1200,9 @@ describe.skipIf(!PY)('the credential (spec §2.4, §2.6; the plan contract\'s er
       }
       expect(up.requests).toHaveLength(2);
       expect(auth!.requests).toHaveLength(0);
-      // D-6997: read after the drain, never by polling. An unforced flush that meets a write in flight leaves its counts
-      // dirty (stats.flush's in-flight rule, pinned in codex-bridge-count-stats), and nothing flushes an idle lane
-      // again until the next request or the drain's forced flush, so the second answer's counts can stay in memory.
+      // D-6997: read after the drain. An unforced flush that meets a write in flight leaves its counts dirty (stats.flush's
+      // in-flight rule, pinned in codex-bridge-count-stats); the answer's idle flush waits for that write and writes them
+      // (#3462), and the drain's forced flush writes whatever is still in memory.
       expect(await bridge.stop()).toEqual({ code: 0, signal: null });
       const stats = readStats(lane);
       expect(stats.outcomes['4xx']).toBe(2);
@@ -2199,6 +2202,97 @@ describe.skipIf(!PY)('the stats file is written once the bridge is idle for FLUS
       expect(Date.now() - t0).toBeLessThan(12_000);
       expect(bridge.exited()).toBeNull();
     }, { consts: { 'stats.FLUSH_S': 4 } });
+  });
+});
+
+// ── an idle flush that meets a write in flight (#3462) ──────────────────────────────────────────────────────────────
+// The idle flush is the last word on an idle lane, so it waits for a write in flight, where a handler's flush does not.
+// A FIFO at the stats file's temp name, its pipe filled by the case, holds a write in flight for as long as the case
+// keeps its end open: the writer's open succeeds and its write blocks on the full pipe, holding the write lock. Closing
+// the case's end fails that write (a broken pipe: counted `stats:flush-failed`, retried at the next flush). Linux only:
+// the hold is seen as the bridge's descriptor on the temp name in /proc.
+describe.skipIf(!PY || !HAS_PROC)('an idle flush that meets a write in flight waits for it, a handler\'s never does (#3462)', () => {
+  const FLUSH_S = 3;
+  const tmpName = (lane: BridgeLane): string => `${lane.stats}.tmp`;
+  /** Whether the bridge holds the temp name open: a write in flight. */
+  const writing = (b: SpawnedBridge, lane: BridgeLane): boolean => readdirSync(`/proc/${b.proc.pid}/fd`).some((fd) => {
+    try { return readlinkSync(`/proc/${b.proc.pid}/fd/${fd}`) === tmpName(lane); } catch { return false; }
+  });
+  /** An answer, ended within `ms` or null; a later rejection (the bridge killed at the case's end) is dropped. */
+  const answered = (b: SpawnedBridge, ms: number): Promise<Answer | null> => {
+    const a = call(b, '/v1/messages', { body: messages() });
+    a.catch(() => undefined);
+    return Promise.race([a, sleep(ms).then(() => null)]);
+  };
+  /** One answer, then the FIFO, then a second answer at once: inside FLUSH_S of the first one's write, so its own flush
+   *  is throttled and its idle flush, FLUSH_S later, is the writer the FIFO holds. Resolves with the case's end. */
+  const holdIdleWrite = async (b: SpawnedBridge, lane: BridgeLane): Promise<number> => {
+    expect((await call(b, '/v1/messages', { body: messages() })).status).toBe(200);
+    const t0 = Date.now();
+    while (readStats(lane).outcomes['2xx'] !== 1 && Date.now() - t0 < (FLUSH_S + 5) * 1000) await sleep(25);
+    expect(readStats(lane).outcomes['2xx'], 'the first answer is written (its flush or its idle flush)').toBe(1);
+    execFileSync('mkfifo', [tmpName(lane)]);
+    const end = openSync(tmpName(lane), constants.O_RDWR | constants.O_NONBLOCK);
+    const chunk = Buffer.alloc(65_536);
+    for (;;) {
+      try { writeSync(end, chunk); } catch (e) { if ((e as NodeJS.ErrnoException).code === 'EAGAIN') break; throw e; }
+    }
+    expect((await answered(b, 5000))?.status, 'the second answer ends: its flush is throttled').toBe(200);
+    const t1 = Date.now();
+    while (!writing(b, lane) && Date.now() - t1 < (FLUSH_S + 5) * 1000) await sleep(25);
+    expect(writing(b, lane), 'the second answer\'s idle flush took the write, and the FIFO holds it').toBe(true);
+    return end;
+  };
+  const answers = (n: number): ResponsesAnswer[] => Array.from({ length: n }, () => ({ status: 200, sse: textReply('ok') }));
+
+  it('answers behind a held idle write end at once, on both routes, and all of them reach the file once that write ends, with no further request', async () => {
+    await withBridge(answers(4), async ({ bridge, lane }) => {
+      const end = await holdIdleWrite(bridge, lane);
+      try {
+        // a handler's flush meets the write in flight and returns at once, so the answer ends (it ends at the close)
+        for (const nth of ['third', 'fourth']) expect((await answered(bridge, 5000))?.status, `the ${nth} answer ended`).toBe(200);
+        // the token count route's handler flushes too, after its answer's last byte: over a raw socket, which resolves at
+        // the bridge's close, that close comes only once its flush has returned
+        const body = JSON.stringify(messages());
+        const counted = rawCall(bridge, ['POST /v1/messages/count_tokens HTTP/1.1', `Host: 127.0.0.1:${bridge.port}`,
+          `x-api-key: ${bridge.key}`, 'Content-Type: application/json', `Content-Length: ${Buffer.byteLength(body)}`], body);
+        counted.catch(() => undefined);
+        expect((await Promise.race([counted, sleep(5000).then(() => null)]))?.status, 'the token count answer ended').toBe(200);
+        await sleep((FLUSH_S + 1.5) * 1000);  // the token count's idle flush has come, and met the write in flight
+        expect(writing(bridge, lane), 'the write is still held').toBe(true);
+        expect(readStats(lane).outcomes['2xx']).toBe(1);
+      } finally {
+        closeSync(end);
+      }
+      // the held write fails; the idle flush that waited behind it writes what is dirty then: both answers behind it
+      const stats = await statsWhen(lane, (d) => d.outcomes['2xx'] === 4 && d.outcomes.countTokens === 1);
+      expect(stats.outcomes['2xx']).toBe(4);
+      expect(stats.outcomes.countTokens).toBe(1);
+      expect(stats.outcomes['stats:flush-failed']).toBe(1);
+      expect(existsSync(tmpName(lane))).toBe(false);
+      expect(bridge.exited()).toBeNull();
+    }, { consts: { 'stats.FLUSH_S': FLUSH_S } });
+  });
+
+  it('the stop\'s drain ends once the write in flight ends, with an idle flush waiting behind it', async () => {
+    await withBridge(answers(3), async ({ bridge, lane }) => {
+      const end = await holdIdleWrite(bridge, lane);
+      let stopped: Promise<{ code: number | null; signal: string | null }>;
+      try {
+        expect((await answered(bridge, 5000))?.status).toBe(200);
+        await sleep((FLUSH_S + 1.5) * 1000);  // the third answer's idle flush waits behind the write
+        stopped = bridge.stop();
+        await sleep(1000);
+        // the drain's forced flush waits for the write in flight (stats.flush's forced rule), so the stop waits too
+        expect(bridge.exited()).toBeNull();
+      } finally {
+        closeSync(end);
+      }
+      expect(await stopped!).toEqual({ code: 0, signal: null });
+      const stats = readStats(lane);
+      expect(stats.outcomes['2xx']).toBe(3);
+      expect(stats.outcomes['stats:flush-failed']).toBe(1);
+    }, { consts: { 'stats.FLUSH_S': FLUSH_S } });
   });
 });
 
