@@ -10,6 +10,17 @@
 // overlay, or go back to where a jump left from), consumed (the console's own `history.back()` landing, or a place with
 // no command to give), or a skip (a place of an ended visit, or one the console cannot act on: step history once more,
 // in the direction of travel, and run nothing).
+//
+// The reader place (X6 XR1.3, reader mode's spec 3.3). Reader mode pushes one more kind of place, `reader`, made by the
+// console and never by the frame, and answered by its own host (`popstate.ts`'s `setReaderPlaceHost`), not the frame's.
+// The record gains `baseIdx` (the `docsIdx` of the visit's own entry, which no place tags, so the doc's entry and the
+// previous screen's can be told apart) and `exitPending` (an exit that was not a pop has happened and its landing is
+// still expected). `decidePop` takes one more input, `readerOn`, and answers two more words: `exit-reader` (a pop that
+// crosses the reader place that counts, with reader mode on or its exit pending) and `leave-dead-reader` (a pop onto a
+// reader entry whose reader mode has ended, or a place above one). Every other pop is X2's own answer with the reader
+// places left out of the places it reads. The pure helpers at the end (`readerPlaceOf`, `readerStepBack`,
+// `landedBelowReader`, `standingOnDeadReader`, `readerPlaceFree`, `withExitPending`) are what the reader's places module
+// and its hook ask; none of them touches a browser global.
 import { isCount, isRecord } from './wire';
 
 /** The most places one doc visit pushes; the next is not pushed (the frame still works, Back just leaves the doc). A
@@ -27,7 +38,7 @@ export const PLACE_KEY = 'docsPlace';
 /** The key of the tab record in the tab's storage. */
 export const PLACES_RECORD_KEY = 'ccrc:docs:v1:places';
 
-export type PlaceKind = 'overlay' | 'jump';
+export type PlaceKind = 'overlay' | 'jump' | 'reader';
 
 /** One place of the visit, as the tab record keeps it. `idx` is the `docsIdx` of its entry. */
 export interface Place {
@@ -74,17 +85,29 @@ export interface TabRecord {
   /** The release gate's mark that a full-page replace of the entry numbered `idx` is about to load `to` (a path and
    *  query), or null: the page that loads there takes the number back. */
   carry: { idx: number; to: string } | null;
+  /** The `docsIdx` of the visit's own base entry (the doc's entry before any place), stamped when the visit starts; null
+   *  when unknown (no visit, or an older record). Without it the doc's entry and the previous screen's cannot be told apart:
+   *  neither carries a place. */
+  baseIdx: number | null;
+  /** An exit of reader mode that was not a pop has happened and its landing is still expected: the next pop that crosses
+   *  the reader place is that exit's own. Cleared when that landing is consumed, and when the visit ends. */
+  exitPending: boolean;
 }
 
 /** What the dispatcher does with one pop. A `goto` with no `from` and `toTop` goes to the top of the doc (the library
  *  answers no anchor at the very top); `close` says an overlay place of the visit is also in the span left, so the
- *  figure closes first. */
+ *  figure closes first. `exit-reader`: the pop crossed the reader place, so reader mode ends (`closeOverlay`: a figure
+ *  overlay place lies between the landing and the entry last shown; `route`: the landing is below the doc's own entry, so
+ *  X2's answer for it follows in the same event). `leave-dead-reader`: the tab stands on a reader entry whose reader mode
+ *  is over, and steps back below it. */
 export type PopDecision =
   | { readonly kind: 'close-overlay' }
   | { readonly kind: 'goto'; readonly id: string; readonly from?: string; readonly toTop?: true; readonly close?: true }
   | { readonly kind: 'consume' }
   | { readonly kind: 'skip'; readonly dir: 'back' | 'forward' }
-  | { readonly kind: 'router' };
+  | { readonly kind: 'router' }
+  | { readonly kind: 'exit-reader'; readonly closeOverlay: boolean; readonly route: boolean }
+  | { readonly kind: 'leave-dead-reader' };
 
 /** The record of a tab that has seen nothing. Frozen: a function that needs a record of its own copies it. */
 export const EMPTY_RECORD: TabRecord = Object.freeze({
@@ -99,12 +122,14 @@ export const EMPTY_RECORD: TabRecord = Object.freeze({
   skipDir: null,
   top: null,
   carry: null,
+  baseIdx: null,
+  exitPending: false,
 });
 
 /** A record of its own with the empty record's values. */
 const fresh = (): TabRecord => ({ ...EMPTY_RECORD, places: [] });
 
-const isKind = (v: unknown): v is PlaceKind => v === 'overlay' || v === 'jump';
+const isKind = (v: unknown): v is PlaceKind => v === 'overlay' || v === 'jump' || v === 'reader';
 
 /** The index and the place of a history entry's state. Tolerant: anything that is not the exact shape reads null for
  *  its half. `idx` is a non-negative safe integer; a place is `{visit: string, seq >= 1, kind, id?, from?}` with each
@@ -171,6 +196,11 @@ export function parseRecord(raw: string | null): TabRecord {
   // An older record has neither of these: absent reads as unknown / no mark. A present one of the wrong shape is no record.
   const top = v.top === undefined ? null : v.top;
   if (top !== null && !isCount(top)) return fresh();
+  // The reader place's two fields (X6 XR1.3): an older record has neither, and reads no base and no pending exit.
+  const baseIdx = v.baseIdx === undefined ? null : v.baseIdx;
+  if (baseIdx !== null && !isCount(baseIdx)) return fresh();
+  const exitPending = v.exitPending === undefined ? false : v.exitPending;
+  if (typeof exitPending !== 'boolean') return fresh();
   let carry: TabRecord['carry'] = null;
   if (v.carry !== undefined && v.carry !== null) {
     const c = v.carry;
@@ -190,7 +220,7 @@ export function parseRecord(raw: string | null): TabRecord {
   if (!isCount(seq) || !isCount(next) || !isCount(skips)) return fresh();
   if (pendingSeq !== null && !isCount(pendingSeq)) return fresh();
   if (typeof lastIdx !== 'number' || !Number.isSafeInteger(lastIdx) || lastIdx < -1) return fresh();
-  return { visit, doc, places: read, seq, pendingSeq, lastIdx, next, skips, skipDir, top, carry };
+  return { visit, doc, places: read, seq, pendingSeq, lastIdx, next, skips, skipDir, top, carry, baseIdx, exitPending };
 }
 
 /** `top` never below an entry the tab is seen to hold: a numbered entry above the recorded `top` (a store that refused
@@ -207,7 +237,8 @@ const atLeast = (top: number | null, idx: number): number | null => (top === nul
  *  numbered entry above the recorded `top` raises it (`atLeast`). */
 export function seedPage(rec: TabRecord, state: unknown, here: string): { rec: TabRecord; stamp: number | null } {
   const { idx } = readEntry(state);
-  const base: TabRecord = { ...rec, places: rec.places.slice(), carry: null };
+  // `exitPending` is cleared: a landing cannot cross a page load, so a stored mark is stale and never blocks a check.
+  const base: TabRecord = { ...rec, places: rec.places.slice(), carry: null, exitPending: false };
   if (idx !== null) {
     return { rec: { ...base, lastIdx: idx, next: Math.max(rec.next, idx + 1), top: atLeast(rec.top, idx) }, stamp: null };
   }
@@ -243,6 +274,21 @@ export interface PopTab {
   readonly host: boolean;
   /** The record's `top`; absent reads as unknown (null). */
   readonly top?: number | null;
+  /** The record's `baseIdx`; absent reads as unknown (null). */
+  readonly baseIdx?: number | null;
+  /** The record's `exitPending`; absent reads as false. */
+  readonly exitPending?: boolean;
+  /** Whether a reader-mode host is registered to step back over a dead reader entry; absent reads as false. */
+  readonly readerHost?: boolean;
+}
+
+/** The topmost `reader` place among `places` at or below `lastIdx`, or null: the reader place that counts. */
+function countingReader(places: readonly Place[], lastIdx: number): Place | null {
+  let counts: Place | null = null;
+  for (const p of places) {
+    if (p.kind === 'reader' && p.idx <= lastIdx && (counts === null || p.idx > counts.idx)) counts = p;
+  }
+  return counts;
 }
 
 /** What one `popstate` means, decided before any subscriber runs. `popped` is the state of the entry landed on. The
@@ -266,12 +312,45 @@ export interface PopTab {
  *     place, consumed.
  *  8. Forward onto a place of this visit that the record holds: a jump goes to its id again (no `from`), an overlay is
  *     consumed (nothing reopens it). A place the record does not hold is stale, as 5.
- *  9. Anything else (a base entry, no place): the router's. */
-export function decidePop(popped: unknown, tab: PopTab): PopDecision {
+ *  9. Anything else (a base entry, no place): the router's.
+ *
+ *  The reader place (X6 XR1.3) adds rules between 2 and 3, over the record's `reader` places (the record holds only the
+ *  current visit's). `R` is the topmost of them at or below the entry last shown. A pop whose entry is below `R` crosses
+ *  it, however many frame places sit between: with `readerOn`, or with the record's `exitPending` (the landing of the exit
+ *  that just happened), it is `exit-reader` (`route`: the landing is below `baseIdx`, or `baseIdx` is unknown; `closeOverlay`: an overlay place
+ *  lies between the landing and the entry last shown); any other crossing is X2's own answer. With `readerOn` false, a
+ *  Forward onto a place of this visit that moves onto or over a reader place (one above the entry last shown and at or
+ *  below the popped one: a place the record holds but history discarded is crossed by nothing) is `leave-dead-reader`, when no exit is pending
+ *  and a reader host is registered (`tab.readerHost`). The rest, rules 3 to 9, read the record's
+ *  places with every reader place removed, so a reader place is never "left" as a frame place and a Forward onto one is
+ *  never a frame place either; a reader place of another visit is stale as rule 5 says. */
+export function decidePop(popped: unknown, tab: PopTab, readerOn = false): PopDecision {
   const { idx, place } = readEntry(popped);
   if (idx === null) return { kind: 'router' };
   if (idx === tab.lastIdx) return { kind: 'router' };
   const dir = idx < tab.lastIdx ? 'back' : 'forward';
+  const readers = tab.places.filter((p) => p.kind === 'reader');
+  const frames: readonly Place[] = readers.length === 0 ? tab.places : tab.places.filter((p) => p.kind !== 'reader');
+  if (readers.length > 0) {
+    const counts = countingReader(readers, tab.lastIdx);
+    if (counts !== null && idx < counts.idx && (readerOn || tab.exitPending === true)) {
+      const base = tab.baseIdx ?? null;
+      return {
+        kind: 'exit-reader',
+        closeOverlay: frames.some((p) => p.kind === 'overlay' && p.idx > idx && p.idx <= tab.lastIdx),
+        // An unknown base (an older record) routes: a router run on the doc's own URL is harmless, a landing on another
+        // screen that is consumed is not.
+        route: base === null || idx < base,
+      };
+    }
+    // A dead reader entry, left at once: Forward only (a gesture of its own each time), with no exit pending (that exit's
+    // own landing is coming), a reader host to step (a record that outlived its visit has none), onto a place of THIS visit
+    // (a routed or plain entry is another screen's), at or above a reader place. Anything else is X2's, readers left out.
+    if (
+      !readerOn && dir === 'forward' && tab.exitPending !== true && tab.readerHost === true
+      && place !== null && place.visit === tab.visit && readers.some((p) => p.idx > tab.lastIdx && p.idx <= idx)
+    ) return { kind: 'leave-dead-reader' };
+  }
   if (tab.pendingSeq !== null && dir === 'back') {
     const expected = tab.pendingSeq === 0
       ? place === null
@@ -289,14 +368,14 @@ export function decidePop(popped: unknown, tab: PopTab): PopDecision {
   if (place !== null && !tab.host) return stale();
   if (dir === 'back') {
     let left: Place | undefined;
-    for (const p of tab.places) {
+    for (const p of frames) {
       if (p.idx > idx && p.idx <= tab.lastIdx && (left === undefined || p.idx < left.idx)) left = p;
     }
     if (left !== undefined) {
       if (!tab.host) return { kind: 'consume' };
       if (left.kind === 'overlay') return { kind: 'close-overlay' };
       if (left.id === undefined) return { kind: 'consume' };
-      const closes = tab.places.some((p) => p.kind === 'overlay' && p.idx > idx && p.idx <= tab.lastIdx);
+      const closes = frames.some((p) => p.kind === 'overlay' && p.idx > idx && p.idx <= tab.lastIdx);
       return {
         kind: 'goto', id: left.id,
         ...(left.from !== undefined ? { from: left.from } : { toTop: true as const }),
@@ -307,7 +386,7 @@ export function decidePop(popped: unknown, tab: PopTab): PopDecision {
     return { kind: 'router' };
   }
   if (place !== null) {
-    const held = tab.places.find((p) => p.seq === place.seq);
+    const held = frames.find((p) => p.seq === place.seq);
     if (held === undefined) return stale();
     if (held.kind === 'jump' && held.id !== undefined) return { kind: 'goto', id: held.id };
     return { kind: 'consume' };
@@ -333,6 +412,8 @@ export function afterPop(rec: TabRecord, popped: unknown, d: PopDecision): { rec
     skips: d.kind === 'skip' ? (rec.skipDir === d.dir ? rec.skips : 0) + 1 : 0,
     skipDir: d.kind === 'skip' ? d.dir : null,
     pendingSeq: d.kind === 'skip' ? rec.pendingSeq : null,
+    // The exit's landing is consumed: only `exit-reader` clears the mark; every other decision leaves it as it was.
+    exitPending: d.kind === 'exit-reader' ? false : rec.exitPending,
   };
   if (idx !== null) {
     out.lastIdx = idx;
@@ -354,25 +435,59 @@ export function afterPop(rec: TabRecord, popped: unknown, d: PopDecision): { rec
  *  sign-in remount, a reload), the record untouched except that its counter rises above the entry's index. Any other
  *  doc starts a new visit under `newVisitId` with no places and no budget spent; the entry the visit stands on is its
  *  base entry, stamped when it has no index, and `lastIdx` is that entry's. The caller strips an ended visit's
- *  `docsPlace` from a base entry when `continued` is false. */
+ *  `docsPlace` from a base entry when `continued` is false.
+ *
+ *  One exception (X6 XR1.3): a new visit at the SAME address as the record's visit (only the scope changed: a new commit
+ *  of the doc remounts its frame, the next part of a doc starts a part) takes over the old visit's reader places, with
+ *  their budget count and the old visit's `baseIdx`, because reader mode outlives the frame; the frame's places are not
+ *  taken over (the new frame has none of them). When the entry the page stands on is one of those reader places
+ *  (`current.place`, `current.idx`), `retag` is true: the caller rewrites its `docsPlace` with the new visit's id instead
+ *  of stripping it. A visit that carried no reader place changes nothing here. */
 export function beginVisit(
-  rec: TabRecord, doc: string, newVisitId: string, current: { idx: number | null },
-): { rec: TabRecord; continued: boolean; stamp: number | null } {
+  rec: TabRecord, doc: string, newVisitId: string, current: { idx: number | null; place?: EntryPlace | null },
+): { rec: TabRecord; continued: boolean; stamp: number | null; retag: boolean } {
   const seeded = current.idx === null ? rec.next : Math.max(rec.next, current.idx + 1);
   if (rec.visit !== null && rec.doc === doc) {
-    return { rec: { ...rec, places: rec.places.slice(), next: seeded }, continued: true, stamp: null };
+    return { rec: { ...rec, places: rec.places.slice(), next: seeded }, continued: true, stamp: null, retag: false };
   }
+  const carried: Place[] = rec.visit !== null && rec.doc !== null && addressOf(rec.doc) === addressOf(doc)
+    ? rec.places.filter((p) => p.kind === 'reader').map((p) => ({ ...p }))
+    : [];
   const base: TabRecord = {
-    ...rec, visit: newVisitId, doc, places: [], seq: 0, pendingSeq: null, skips: 0, skipDir: null, next: seeded,
+    ...rec, visit: newVisitId, doc, places: carried, seq: carried.reduce((n, p) => Math.max(n, p.seq), 0), pendingSeq: null,
+    skips: 0, skipDir: null, next: seeded, baseIdx: carried.length > 0 ? rec.baseIdx : null, exitPending: false,
   };
-  if (current.idx !== null) return { rec: { ...base, lastIdx: current.idx }, continued: false, stamp: null };
-  return { rec: { ...base, lastIdx: seeded, next: seeded + 1 }, continued: false, stamp: seeded };
+  const at = current.place;
+  const retag = current.idx !== null && at !== undefined && at !== null && at.kind === 'reader' && at.visit === rec.visit
+    && carried.some((p) => p.idx === current.idx && p.seq === at.seq);
+  if (current.idx !== null) return { rec: { ...base, lastIdx: current.idx }, continued: false, stamp: null, retag };
+  return { rec: { ...base, lastIdx: seeded, next: seeded + 1 }, continued: false, stamp: seeded, retag: false };
 }
 
-/** The reader's body ended for another doc or a screen that is not a doc: the visit is over, its places with it. The
- *  entry counter and the entry last shown are the tab's, and stay. */
+/** The address of a visit's key: its text before the first NUL, or the whole key when it has none. */
+const addressOf = (doc: string): string => {
+  const cut = doc.indexOf('\u0000');
+  return cut < 0 ? doc : doc.slice(0, cut);
+};
+
+/** The record `beginVisit` made, with a NEW visit's base set: `baseIdx` is the `docsIdx` of the entry the visit started on
+ *  (that entry's own number, `current.idx`, or the one `beginVisit` stamped into it). A continued visit is left as it was,
+ *  and so is a record when neither number exists. `beginVisit` itself leaves `baseIdx` null; the caller hands this its
+ *  answer and the same `current`. */
+export function stampVisitBase(
+  begun: { rec: TabRecord; continued: boolean; stamp: number | null }, current: { idx: number | null },
+): TabRecord {
+  const base = current.idx ?? begun.stamp;
+  // A visit that took over a reader place (it has places now) keeps the old visit's base, known or not: the entry stood on
+  // may be that place, and is not the base.
+  if (begun.continued || begun.rec.places.length > 0 || base === null) return begun.rec;
+  return { ...begun.rec, places: begun.rec.places.slice(), baseIdx: base };
+}
+
+/** The reader's body ended for another doc or a screen that is not a doc: the visit is over, its places with it, and its
+ *  base and pending exit. The entry counter and the entry last shown are the tab's, and stay. */
 export function endVisit(rec: TabRecord): TabRecord {
-  return { ...rec, visit: null, doc: null, places: [], seq: 0, pendingSeq: null };
+  return { ...rec, visit: null, doc: null, places: [], seq: 0, pendingSeq: null, baseIdx: null, exitPending: false };
 }
 
 /** The key of one body's visit: its address, then a NUL, then its scope (a body shown in parts has one scope per part, so
@@ -384,9 +499,7 @@ export const visitKey = (address: string, scope: string): string => `${address}\
  *  on the same address (the next part of a doc) ends nothing: the next body's start sees another key. */
 export function visitEnds(rec: TabRecord, visit: string | null, address: string): boolean {
   if (visit === null || rec.visit !== visit) return false;
-  const doc = rec.doc ?? '';
-  const cut = doc.indexOf('\u0000');
-  return (cut < 0 ? doc : doc.slice(0, cut)) !== address;
+  return addressOf(rec.doc ?? '') !== address;
 }
 
 /** The frame reported a place. With no visit, or with `PLACES_MAX` places already pushed in this one, nothing is
@@ -436,4 +549,51 @@ export function closedByFrame(rec: TabRecord): { rec: TabRecord; back: boolean }
   if (left === undefined || left.kind !== 'overlay') return { rec, back: false };
   const before = rec.places[i - 1];
   return { rec: { ...rec, places: rec.places.slice(), pendingSeq: before === undefined ? 0 : before.seq }, back: true };
+}
+
+/** The reader place that counts: the topmost `reader` place of the record (the current visit's) at or below the entry
+ *  last shown, or null. A visit normally holds one; two stand only between a dead entry's step-back and its landing. */
+export function readerPlaceOf(rec: TabRecord): Place | null {
+  return countingReader(rec.places, rec.lastIdx);
+}
+
+/** What an exit that was not a pop does to history: `n` entries to step back over, and the record, unchanged. `n` is 0
+ *  when no reader place counts (nothing to step). Otherwise it is one for the reader place plus the number of recorded
+ *  places, of any kind, above it and at or below the entry last shown: live entries, never an index difference (`docsIdx`
+ *  only grows, and a push drops the places it discards). It does NOT mark the exit pending: the hook, and `leaveDead`
+ *  for a dead entry, are the only writers of that mark, and set it before they step (`withExitPending`). */
+export function readerStepBack(rec: TabRecord): { rec: TabRecord; n: number } {
+  const counts = readerPlaceOf(rec);
+  if (counts === null) return { rec, n: 0 };
+  const above = rec.places.filter((p) => p.idx > counts.idx && p.idx <= rec.lastIdx).length;
+  return { rec, n: 1 + above };
+}
+
+/** Whether a pop has already landed below the reader place: the record holds a reader place and the entry last shown is
+ *  below it. It reads the topmost reader place at ANY index, not the one at or below `lastIdx` (`readerPlaceOf`): after a
+ *  pop landed below the place, no reader place is at or below `lastIdx` any more, so that one would find nothing. The
+ *  settle after a lost full screen asks it before it steps back. */
+export function landedBelowReader(rec: TabRecord): boolean {
+  let top: number | null = null;
+  for (const p of rec.places) if (p.kind === 'reader' && (top === null || p.idx > top)) top = p.idx;
+  return top !== null && rec.lastIdx < top;
+}
+
+/** Whether the tab stands on a dead reader entry: reader mode is off, no step is already on its way (`exitPending`: a
+ *  second registration before the first step lands must not step again), the entry last shown (`current`, the place of the
+ *  entry the page stands on) is a place of this visit, and a reader place of the record is at or below it. A record that
+ *  outlived its visit, or a plain entry, is not one. The hook asks it when it registers after a reload. */
+export function standingOnDeadReader(rec: TabRecord, readerOn: boolean, current: EntryPlace | null): boolean {
+  return !readerOn && !rec.exitPending && current !== null && current.visit === rec.visit
+    && countingReader(rec.places, rec.lastIdx) !== null;
+}
+
+/** Whether a reader place can still be pushed: a visit is open and its budget (`PLACES_MAX`) is not spent. */
+export function readerPlaceFree(rec: TabRecord): boolean {
+  return rec.visit !== null && rec.seq < PLACES_MAX;
+}
+
+/** The record with its pending-exit mark set or cleared. */
+export function withExitPending(rec: TabRecord, on: boolean): TabRecord {
+  return { ...rec, places: rec.places.slice(), exitPending: on };
 }

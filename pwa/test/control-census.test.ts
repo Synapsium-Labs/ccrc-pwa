@@ -523,6 +523,9 @@ const CONTROLS: Record<string, string> = {
   'docs/DocsHead.tsx <button> docs-action docs-export':
     "TOKEN. Export (spec 4.17), after Share on a leaf: a <button> wearing the header's link-action class, `.docs-action`, "
     + 'whose rule carries the floor.',
+  'docs/DocsHead.tsx <button> docs-action docs-reader-mode':
+    "TOKEN. Reader mode (the reader-mode spec 3.1), the first action of the row: a <button> wearing the header's link-action "
+    + 'class, `.docs-action`, whose rule carries the floor.',
   'docs/DocsHead.tsx <a> docs-action': 'TOKEN. View on GitHub and Open committed version, standalone links in the header.',
   'docs/DocsIndexView.tsx <button> docs-row': 'TOKEN. A project row of the Docs index, one button per row (spec 4.4).',
   'docs/DocsTreeView.tsx <button> docs-row': 'TOKEN. A section or entry row of a Docs directory, the same rule.',
@@ -543,6 +546,17 @@ const CONTROLS: Record<string, string> = {
   'docs/DocImage.tsx <button> doc-img-load': 'TOKEN. Load image, for an image the page budget held back.',
   'docs/DocImage.tsx <button> doc-img-action': "TOKEN. A refused image's Open externally or Open in the viewer.",
   'docs/DocImage.tsx <button> doc-img-link': "TOKEN. A loaded image's own button, which opens its leaf.",
+  'docs/ReaderModeOverlay.tsx <button> docs-reading-exit': "TOKEN. Reader mode's Exit, at the left end of the overlay's bottom strip.",
+  'docs/ReaderModeOverlay.tsx <button> docs-reading-aa': "TOKEN. Reader mode's Aa, which opens the reader's settings (D-8803).",
+  'docs/ReaderModeOverlay.tsx <button> docs-reading-turn':
+    "TOKEN. Reader mode's turn setting: the Pages and Scroll buttons between Exit and Aa in the overlay's bottom strip.",
+  'docs/ReaderModeOverlay.tsx <div> docs-reading-top':
+    "TOKEN. Reader mode's top strip: the document's title, and a tap anywhere on it hides the overlay; it holds no control, "
+    + 'and its rule declares the floor.',
+  'docs/ReaderModeOverlay.tsx <div> docs-reading-layer':
+    "TOKEN. Reader mode's clear layer between the strips (`aria-hidden`, not focusable): a tap hides the overlay and does "
+    + "nothing else, as the terminal drawer's wrapped view does with its glass. It is `inset: 0` over the reading area, and "
+    + 'its rule declares the floor.',
   'docs/DocLink.tsx <a> (none)':
     'INLINE. The links inside a rendered document, react-markdown\'s `a` for Docs (in-app, fragment and external). '
     + 'WCAG 2.2 SC 2.5.8 exempts a target in a sentence or block of text, as for chat\'s `lib/markdown.tsx <a> (none)`.',

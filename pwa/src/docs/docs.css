@@ -52,6 +52,16 @@
 /* — the screen — */
 .docs-screen { display: grid; gap: var(--sp-3); padding: var(--sp-2); min-width: 0; }
 .docs-screen > * { min-width: 0; }
+/* The reading container (X6 XR1.2, spec 2026-11-20 4.1) sits between the screen and the Docs body on every page, so the body is
+   its child now and the two rules the screen keeps for its children are kept for the body through it. In the normal view the
+   container has no box (`display: contents`): no z-index, transform or clip, so the layout is exactly the screen's own. Its
+   guards and live region are out of flow, and its controls and portal target are empty boxes that take no grid row. */
+.docs-reading { display: contents; }
+.docs-reading > * { min-width: 0; }
+.docs-reading-guard {
+  position: absolute; inline-size: 1px; block-size: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%);
+}
+.docs-reading-controls, .docs-reading-portal { display: contents; }
 .docs-index, .docs-project, .docs-listing, .docs-leaf, .docs-missing, .docs-invalid,
 .docs-svg, .docs-raster, .docs-standin, .docs-changing, .docs-mockup {
   display: grid; gap: var(--sp-2); min-width: 0;
@@ -248,6 +258,7 @@
 .docs-full > .docs-head-bar[data-words='off'] .docs-action-words { display: none; }
 @container docs-head (width < 530px) {
   .docs-action-words { display: none; }
+  .docs-reader-words { display: none; }
 }
 .docs-full > .docs-truth {
   display: flex; flex-wrap: wrap; align-items: center; min-height: var(--docs-line-h);
@@ -426,13 +437,103 @@
   .app-shell:has(.docs-reader) > .shell-detail { flex: 1 1 auto; }
 }
 .shell-detail > .docs-screen:has(.docs-reader) { display: flex; flex-direction: column; flex: 1 1 auto; min-block-size: 0; }
-.docs-screen:has(.docs-reader) > * { flex: none; }
-.docs-screen:has(.docs-reader) > .docs-leaf { display: flex; flex-direction: column; flex: 1 1 auto; min-block-size: 0; gap: var(--sp-2); }
+.docs-screen:has(.docs-reader) > *, .docs-screen:has(.docs-reader) > .docs-reading > * { flex: none; }
+.docs-screen:has(.docs-reader) > .docs-reading > .docs-leaf { display: flex; flex-direction: column; flex: 1 1 auto; min-block-size: 0; gap: var(--sp-2); }
 .docs-leaf:has(.docs-reader) > .doc-formatting { flex: none; }
 /* The frame fills its host by position, and the host takes the room by `flex-basis: 0`, so neither a percentage height
    nor an auto flex basis has to resolve: the same in every engine. */
 .docs-reader { position: relative; flex: 1 1 0; inline-size: 100%; min-block-size: 20rem; }
 .docs-reader iframe { position: absolute; inset: 0; border: 0; inline-size: 100%; block-size: 100%; }
+/* X6 XR1.4, the amendment's first-paint row: a frame made while reader mode is on stays under the reading ground (the host is not
+   drawn, and keeps its box) from before it is inserted until its `ready` has applied the turn, so its bar, running head and
+   progress line are never painted. ReaderFrame.tsx sets and clears the attribute. */
+.docs-reader[data-reader-hold] { visibility: hidden; }
+/* §4.1 (reader mode, X6 XR1.2): the fill. `data-reader-mode` is set on the container before full screen is asked for, and the
+   container is then drawn fixed over the whole viewport on the reader's ground (`--bg-page`, the one the host sits on today),
+   inside the safe areas, on `--z-reading` (above the toast, below the block screen). The Docs leaf and the host take the whole
+   area, and every other child of the body is undrawn, so no focusable control sits between the frame and ccrc's own controls
+   (the focus guards' wrap, spec 6.5). The guards, the live region, the controls and the portal target keep their own rules. The
+   rules carry the screen's class so they outrank the normal view's flex rules above, which sit at the same specificity. */
+/* The fill covers the viewport and the console's bars with it, so it reads the device's own safe areas, never the console's:
+   inside the phone's `.app-shell` the bar's mount redefines `--safe-bottom` as the inset plus `--phone-bar-h` (shell.css), which
+   would leave a blank band under the fill and float the bottom strip above it. (`--safe-top` is declared once, on the root, in
+   the tokens, and no shell rule redefines it, so it needs no restatement.) */
+.docs-reading[data-reader-mode] {
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  display: block; position: fixed; inset: 0; z-index: var(--z-reading);
+  padding: var(--safe-top) env(safe-area-inset-right, 0px) var(--safe-bottom) env(safe-area-inset-left, 0px);
+  background: var(--bg-page);
+}
+.docs-screen > .docs-reading[data-reader-mode] > :not(.docs-leaf, .docs-reading-guard, .docs-reading-controls, .docs-reading-live, .docs-reading-portal) {
+  display: none;
+}
+.docs-screen > .docs-reading[data-reader-mode] > .docs-leaf { block-size: 100%; gap: 0; }
+/* The reader host's path through the leaf stays drawn and every other element on it is undrawn, at each level, so only the host
+   shows, in both shapes of a leaf: `.docs-leaf > .docs-reader`, and, for Markdown shown in parts (above the render gate, one part's
+   frame mounted at a time), `.docs-leaf > .docs-in-parts > … > .docs-reader`, where the part bar, its notes and "Formatting…" are
+   the host's siblings. An element is on the path when it holds the host (`:has(.docs-reader)`); the path's elements are columns that
+   hand the host the room, and the children of each that are neither the host nor on the path are the undrawn ones. (No comma inside
+   a `:not()`: test/cssRule.ts reads a rule's selector list by commas, and reader-mode.test.tsx pins these three over both shapes.) */
+.docs-screen > .docs-reading[data-reader-mode] > .docs-leaf :has(.docs-reader) {
+  display: flex; flex-direction: column; flex: 1 1 auto; min-block-size: 0; gap: 0;
+}
+.docs-screen > .docs-reading[data-reader-mode] > .docs-leaf:has(.docs-reader) > :not(.docs-reader):not(:has(.docs-reader)) { display: none; }
+.docs-screen > .docs-reading[data-reader-mode] > .docs-leaf :has(.docs-reader) > :not(.docs-reader):not(:has(.docs-reader)) { display: none; }
+.docs-screen > .docs-reading[data-reader-mode] > .docs-leaf .docs-reader { min-block-size: 0; }
+/* §4.2 and §6.5 (reader mode, X6 XR2.1: the overlay, drawn by ReaderModeOverlay.tsx inside `.docs-reading-controls`, which has no
+   box, so these are positioned against the fixed container). Two thin strips on the reader's ground and a clear layer between
+   them. The top strip runs the full width below `--safe-top`, holds the title alone and no control, and a tap anywhere on it hides
+   the overlay (so its height is the tap floor); the bottom strip sits above `--safe-bottom` and holds Exit, then (from XR2.2) the
+   turn setting, then Aa, then the progress text, which takes the strip's far end (the spec's order). The layer covers the reading area under the strips,
+   `touch-action: none` so it takes the touch (a drag on it does not scroll the frame beneath), with no ground of its own. The
+   strips are above the layer, and every control is at least `--tap-min` in both dimensions. §6.2: they fade in over
+   `--dur-fast`, and with no transition under reduced motion (the block at the end of this file names them). */
+.docs-reading-top, .docs-reading-bottom {
+  position: absolute; z-index: 2;
+  inset-inline: env(safe-area-inset-left, 0px) env(safe-area-inset-right, 0px);
+  display: flex; align-items: center; min-width: 0;
+  background: var(--bg-page);
+  opacity: 1; transition: opacity var(--dur-fast) var(--ease-swift);
+}
+/* The fade is a transition from the starting style (no keyframes: the keyframe census registers every opacity trough). An engine
+   without `@starting-style` draws the strips at once, which is the reduced-motion look. */
+@starting-style { .docs-reading-top, .docs-reading-bottom { opacity: 0; } }
+.docs-reading-top {
+  inset-block-start: var(--safe-top); min-height: var(--tap-min); padding: 0 var(--sp-3);
+  font: var(--weight-medium) var(--text-sm) / var(--leading-tight) var(--font-ui);
+  cursor: pointer;
+}
+.docs-reading-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The strip wraps (X6 XR2.2): on a phone Exit, the turn setting, Aa and "41% · about 12 min left" do not fit one line, and the progress
+   text, which takes the far end, then sits on the next line rather than running off the screen. */
+.docs-reading-bottom { inset-block-end: var(--safe-bottom); flex-wrap: wrap; gap: var(--sp-2); padding: var(--sp-1) var(--sp-3); }
+.docs-reading-exit, .docs-reading-aa {
+  flex: none; min-width: var(--tap-min); min-height: var(--tap-min); padding: 0 var(--sp-3);
+  border: 0; border-radius: var(--r-sm); background: none;
+  font: var(--weight-medium) var(--text-sm) / 1 var(--font-ui);
+  cursor: pointer;
+}
+/* The turn setting (X6 XR2.2): a radio group of two buttons, Pages and Scroll, between Exit and Aa. Each is a tap target in both
+   dimensions; the checked one wears the house's pressed ground. It has no transition of its own, so the reduced-motion block
+   has nothing to name for it. */
+.docs-reading-turns { flex: none; display: flex; align-items: center; gap: var(--sp-1); }
+.docs-reading-turn {
+  flex: none; min-width: var(--tap-min); min-height: var(--tap-min); padding: 0 var(--sp-2);
+  border: 0; border-radius: var(--r-sm); background: none;
+  font: var(--weight-medium) var(--text-sm) / 1 var(--font-ui);
+  cursor: pointer;
+}
+.docs-reading-turn[aria-checked='true'] { background: var(--bg-pressed); font-weight: var(--weight-semibold); }
+.docs-reading-percent {
+  flex: none; margin-inline-start: auto;
+  font: var(--weight-regular) var(--text-sm) / 1 var(--font-ui); font-variant-numeric: tabular-nums;
+}
+.docs-reading-layer {
+  position: absolute; inset: 0; z-index: 1;
+  /* The whole reading area is the tap that hides the overlay; it declares the floor anyway, as the terminal's glass does. */
+  min-height: var(--tap-min); min-width: var(--tap-min);
+  touch-action: none; overscroll-behavior: contain;
+}
 .docs-reader-sheet { display: grid; gap: var(--sp-3); min-width: 0; }
 .docs-reader-sheet-url { margin: 0; font: var(--weight-regular) var(--text-sm) / var(--leading-mono) var(--font-mono); overflow-wrap: anywhere; }
 .docs-reader-sheet-note { margin: 0; font-size: var(--text-sm); line-height: var(--leading-normal); }
@@ -466,6 +567,23 @@
 .docs-export-facts > div { display: contents; }
 .docs-export-facts dt, .docs-export-facts dd { margin: 0; overflow-wrap: anywhere; font-size: var(--text-sm); }
 .docs-export-note { margin: 0; font-size: var(--text-sm); line-height: var(--leading-normal); }
+
+/* — Reader mode's entry on the desk head (X6 XR1.5, spec 2026-11-20 3.1). The row's first action is a <button> wearing
+   `.docs-action`, as Share's and Export's are: its floor and its icon beside its words are the row's own rules above
+   (`.docs-full .docs-action`). `.docs-reader-mode` adds the pointer and drops the underline (the row's own rule for an action
+   with words matches `.docs-action-words` only, and this word is `.docs-reader-words`). It sets no colour, ground or border
+   colour, so design/audit.mjs owes it no entry.
+   ITS WORD GIVES WAY LATER THAN ITS NEIGHBOURS'. The word is `.docs-reader-words`, not `.docs-action-words`: the row's first
+   stage (`data-words='off'`) hides GitHub's, Share's and Export's words and leaves this one; `HeadRow` hides it too
+   (`data-reader-word='off'`) only at the stage where the row, before reader mode was drawn, had hidden its words, and the
+   `docs-head` container query below hides it at the width where it hid them. So at every width where the row showed words
+   before, Reader mode shows its word, and it is its neighbours' words that make way for it (each keeps its icon, its name and
+   its tooltip).
+   On a phone the one bar's control is a `.docs-tool`, which takes its floor and size from that rule: the bar's height, its
+   title's place and the tools' floor are unchanged, and the title's width falls by the control's own 44 px, which its ellipsis
+   absorbs. — */
+.docs-reader-mode { cursor: pointer; text-decoration: none; }
+.docs-full > .docs-head-bar[data-reader-word='off'] .docs-reader-words { display: none; }
 
 /* — the compact and one-bar heads (the phone-header and library 1.1 take-up plans). `docsHeadWords#headLayoutFor`
    is the sole layout policy; DocsHead renders its answer. The rules key on classes, never viewport width: a phone-born
@@ -569,8 +687,8 @@
 }
 /* "Formatting…" lies over the frame's host instead of taking a line above it, so the frame does not move when the
    reader is ready. It paints the page's own ground, so its registered ink (.doc-formatting, on --bg-page) holds there. */
-.docs-screen:has(> .docs-compact) > .docs-leaf:has(> .docs-reader) { position: relative; }
-.docs-screen:has(> .docs-compact) > .docs-leaf:has(> .docs-reader) > .doc-formatting {
+.docs-screen:has(> .docs-compact) > .docs-reading > .docs-leaf:has(> .docs-reader) { position: relative; }
+.docs-screen:has(> .docs-compact) > .docs-reading > .docs-leaf:has(> .docs-reader) > .doc-formatting {
   position: absolute; inset-block-start: 0; inset-inline: 0; z-index: 1;
   padding: var(--sp-2); background: var(--bg-page);
 }
@@ -613,4 +731,5 @@
    halves). — */
 @media (prefers-reduced-motion: reduce) {
   .docs-door, .docs-back, .docs-row, .docs-fresh, .docs-copy, .docs-leaf-action, .doc-img-load, .doc-img-action, .doc-plain-action, .doc-gate-btn { transition: none; }
+  .docs-reading-top, .docs-reading-bottom { transition: none; }
 }
