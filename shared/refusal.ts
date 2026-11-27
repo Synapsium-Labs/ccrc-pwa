@@ -278,6 +278,9 @@ export const OVERLORD_REFUSALS = {
   'overlord-body-alive': 409,
   // Rebind: an attempt is pending on the designation's one slot (designation B; the designation plan, question 9). 409.
   'overlord-attempt-pending': 409,
+  // Rebind: the call named the binding its caller saw (session and term), and what is bound now is another, or nothing (home C,
+  // slug forced-rebind-names-the-session-it-stops). Nothing was stopped or created. 409, a state of the world.
+  'overlord-binding-moved': 409,
   // Designate, rebind and the account set's Settings row: fewer than two accounts (designation A and C). 409.
   'overlord-single-account': 409,
   // Designate and rebind: a property of the sandbox check failed (sandbox B). 409.

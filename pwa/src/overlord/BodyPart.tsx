@@ -28,6 +28,7 @@ import { navigate } from '../lib/router';
 import { sessionPath } from '../lib/routes';
 import { refreshOverlord, useDesignationState, useOverlordStore, useReadiness } from '../stores/overlord';
 import { useFleetStore } from '../stores/fleet';
+import { AccountSetFieldset } from './AccountSetFieldset';
 import {
   BODY_WORDS, DEFAULT_MODEL_CLASS, MODEL_CLASS_OPTIONS, accountSetOf, attemptOutcomeText, bodyControlsOf, bodyLeadOf,
   designateWarningText, forceOfferOf, forceStands, pendingOf, pendingWords, refusalStands, refusalWordOf, startGateOf, startLabelOf,
@@ -108,7 +109,10 @@ export function BodyPart({ stepUp }: { readonly stepUp: StepUp }): ReactNode {
     if (outcome === 'done' && mounted.current) setWarnings(said.warnings);
     return outcome;
   });
-  const rebind = (force: boolean): Promise<void> => run('rebind', () => stepUp.runAct(() => api.overlordRebind(force)));
+  // A forced rebind names the binding its offer was made for (slug `forced-rebind-names-the-session-it-stops`): the door compares
+  // it with what is bound and refuses `overlord-binding-moved` when it moved, so it never stops a session the operator did not see.
+  const rebind = (forced: boolean): Promise<void> =>
+    run('rebind', () => stepUp.runAct(() => api.overlordRebind(forced, forced && force !== null ? force : undefined)));
   const restart = (): Promise<void> => run('restart', async () => { await api.overlordRestart(); return 'done'; });
 
   const flip = (pool: string, on: boolean): void => setOff((cur) => (on ? cur.filter((p) => p !== pool) : [...cur, pool]));
@@ -126,18 +130,13 @@ export function BodyPart({ stepUp }: { readonly stepUp: StepUp }): ReactNode {
             legend={BODY_WORDS.model} name="overlord-model" options={MODEL_CLASS_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
             value={model} onPick={setModel} disabled={busy !== null}
           />
-          <fieldset className="ov-account-set" disabled={busy !== null} data-overlord-account-set>
-            <legend className="ov-account-legend">{BODY_WORDS.accounts}</legend>
-            {[
+          <AccountSetFieldset
+            legend={BODY_WORDS.accounts} disabled={busy !== null} marker="data-overlord-account-set"
+            boxes={[
               ...options.map((pool) => ({ key: pool, label: pool, on: !off.includes(pool), set: (v: boolean) => flip(pool, v) })),
               { key: '(untagged)', label: BODY_WORDS.untagged, on: untagged, set: setUntaggedPick },
-            ].map((box) => (
-              <label key={box.key} className="ov-account-hit">
-                <input type="checkbox" checked={box.on} onChange={(e) => box.set(e.currentTarget.checked)} />
-                {box.label}
-              </label>
-            ))}
-          </fieldset>
+            ]}
+          />
           {gate !== null && <p className="overlord-body-note" role="status" data-overlord-start-wait={gate.kind === 'waiting' ? '' : undefined}>{gate.text}</p>}
         </div>
       )}

@@ -29,8 +29,8 @@ const settings = (over: Partial<SettingsView> = {}): SettingsView => ({
   rereadPush: noop,
   ...over,
 });
-const FACTS: { skin: string; theme: string | null; hostname: string; now: number } = {
-  skin: 'Refined', theme: 'Phosphor & Ink', hostname: 'localhost', now: Date.now(),
+const FACTS: Parameters<typeof sectionStatus>[2] = {
+  skin: 'Refined', theme: 'Phosphor & Ink', hostname: 'localhost', now: Date.now(), overlord: { state: 'loading' },
 };
 const of = (id: Parameters<typeof sectionStatus>[0], v: SettingsView, facts = FACTS): SectionStatus => sectionStatus(id, v, facts);
 const text = (s: SectionStatus): string => (s.kind === 'line' ? s.text : '<skeleton>');

@@ -12,6 +12,7 @@ import type { HandoffRefusal, RouteRefusal } from '../../../shared/refusal';
 import { ANSWER_MAX, type LinearItemAct } from '../../../shared/ledgers';
 import { ApiError } from './apiError';
 import { busyHolderSentence } from '../fleet/testboxAdminWords';
+import { laneActRefusal } from '../fleet/accountWords';
 
 /** The send and submit tables share this sentence: a resumed Retry (D-6367) and `/submit` both answer `nothing-to-submit`. */
 const NOTHING_TO_SUBMIT_TEXT = 'The box is empty — nothing was sent from here. Check the transcript before sending again.';
@@ -872,7 +873,8 @@ export function testboxRouteText(err: unknown): string | null {
  */
 export const OVERLORD_PLACE_REFUSAL_TEXT: Readonly<Record<
   | 'capability-missing' | 'authority-rolled-back' | 'journal-unreadable' | 'unavailable' | 'overlord-exists' | 'overlord-single-account'
-  | 'launch-profile-unmet' | 'overlord-sandbox-unmet' | 'overlord-body-alive' | 'overlord-attempt-pending' | 'auth-off' | 'not-found',
+  | 'launch-profile-unmet' | 'overlord-sandbox-unmet' | 'overlord-body-alive' | 'overlord-attempt-pending' | 'overlord-binding-moved'
+  | 'auth-off' | 'not-found',
   string>> = {
   'capability-missing': 'This server does not advertise a capability word this needs, so nothing was changed.',
   'authority-rolled-back': "The Overlord's authority reads rolled back, so nothing was changed. Confirm the restore first.",
@@ -884,24 +886,29 @@ export const OVERLORD_PLACE_REFUSAL_TEXT: Readonly<Record<
   'overlord-sandbox-unmet': "The Overlord's sandbox check failed, so it was not started.",
   'overlord-body-alive': 'The Overlord session in place does not measure dead, so it was not replaced.',
   'overlord-attempt-pending': 'A start is already pending on the designation. Wait for it to go live or fail.',
+  'overlord-binding-moved': 'The Overlord changed since you looked, so nothing was stopped. The page reads it again.',
   'auth-off': 'Sign-in must be on to start the Overlord.',
   'not-found': 'No Overlord is designated, so there is nothing to act on.',
 };
 
-/** The place's doors, by the act the operator pressed (review 3998 M3): a word whose sentence depends on the act reads it here. */
-export type OverlordDoorAct = 'start' | 'rebind' | 'restart' | 'pause' | 'lower' | 'raise' | 'clear';
+/** The Overlord's doors, by the act the operator pressed (review 3998 M3): the place's, and Settings › Overlord's three
+ *  designation doors (home C). A word whose sentence depends on the act reads it here. */
+export type OverlordDoorAct = 'start' | 'rebind' | 'restart' | 'pause' | 'lower' | 'raise' | 'clear' | 'retire' | 'model' | 'account-set';
 
-/** The words whose sentence names the act, one sentence per act: `auth-off` refuses every stepped door while sign-in is off, and
- *  "to start the Overlord" is true of Start alone. Keyed by word and read by `Object.hasOwn`, never a literal branch. */
-const OVERLORD_ACT_TEXT: Readonly<Record<string, Readonly<Record<OverlordDoorAct, string>>>> = {
+/** The words whose sentence names the act: `auth-off` refuses a door that asks the account gate while sign-in is off, and
+ *  "to start the Overlord" is true of Start alone. Only the acts whose door asks the gate have a sentence (home C's carried
+ *  4a): Pause and a lowered rung never do (the server asks sign-in only of a raise), so a word one of them never answers is
+ *  drawn raw rather than claimed. Keyed by word and read by `Object.hasOwn`, never a literal branch. */
+const OVERLORD_ACT_TEXT: Readonly<Record<string, Readonly<Partial<Record<OverlordDoorAct, string>>>>> = {
   'auth-off': {
     start: OVERLORD_PLACE_REFUSAL_TEXT['auth-off'],
     rebind: 'Sign-in must be on to rebind the Overlord.',
     restart: 'Sign-in must be on to restart the Overlord.',
-    pause: 'Sign-in must be on to pause the Overlord.',
-    lower: "Sign-in must be on to lower the Overlord's rung.",
     raise: "Sign-in must be on to raise the Overlord's rung.",
     clear: "Sign-in must be on to clear a latch of the Overlord's ladder.",
+    retire: 'Sign-in must be on to retire the Overlord.',
+    model: "Sign-in must be on to change the Overlord's model class.",
+    'account-set': "Sign-in must be on to change the Overlord's account set.",
   },
 };
 
@@ -925,11 +932,80 @@ export function overlordRefusalText(err: unknown, act: OverlordDoorAct): string 
   const body = err.body as Record<string, unknown>;
   const word = body.error;
   if (typeof word !== 'string') return err.message;
-  if (Object.hasOwn(OVERLORD_ACT_TEXT, word)) return OVERLORD_ACT_TEXT[word]![act];
+  if (Object.hasOwn(OVERLORD_ACT_TEXT, word)) return OVERLORD_ACT_TEXT[word]![act] ?? `Refused: ${word}`;
   const said = refusalText(err, OVERLORD_PLACE_REFUSAL_TEXT);
   if (said === null) return `Refused: ${word}`;
   const named = Object.hasOwn(OVERLORD_NAMED_TEXT, word) ? OVERLORD_NAMED_TEXT[word]!(body) : null;
   if (named !== null) return `${said} ${named}`;
   if (OVERLORD_DETAIL_WORDS.has(word) && typeof body.detail === 'string' && body.detail.length > 0) return `${said} (${body.detail})`;
   return said;
+}
+
+/**
+ * Settings › Overlord's refusals (Overlord W1 home C, Tasks 8 and 9). The three designation doors (Retire, the model class, the
+ * account set) read the place's table through `overlordRefusalText`, except `not-found`. That word means "no designation row"
+ * only after the store has answered the designation (plan question 3): any unknown `/api` route also answers 404 `not-found`,
+ * so before an answer it says the door did not answer. The backstop, the retention and a hold's Clear have their own words
+ * here, with the server's detail drawn where it names the fault, and a word this build does not know is drawn raw.
+ */
+export type OverlordSettingsAct = 'retire' | 'model' | 'account-set' | 'backstop' | 'retention' | 'hold-clear';
+
+export const OVERLORD_SETTINGS_REFUSAL_TEXT = {
+  'no-row': 'There is no Overlord designation row any more, so nothing was changed. The page reads it again.',
+  'no-door': 'This server did not answer that door (not-found): it may be older than this console. Nothing was changed.',
+  'no-hold': 'No hold stands on this account any more, so there was nothing to clear.',
+  'bad-request': 'The server refused the value, so nothing was saved.',
+  'write-failed': 'The server could not write it, so nothing was saved. Try again.',
+  unavailable: 'It could not be read just now, so nothing was changed. Try again in a minute.',
+  'not-configured': 'This server keeps no coordination database, so this setting is not kept here.',
+  'retention-auth-off': 'Sign-in must be on to lower the response retention.',
+} as const;
+
+type DesignationSettingsAct = Extract<OverlordSettingsAct, OverlordDoorAct>;
+const SETTINGS_DESIGNATION_ACTS: ReadonlySet<OverlordSettingsAct> = new Set<DesignationSettingsAct>(['retire', 'model', 'account-set']);
+interface SettingsCtx { readonly act: OverlordSettingsAct; readonly answered: boolean; readonly detail: string | null }
+const ST = OVERLORD_SETTINGS_REFUSAL_TEXT;
+const withDetail = (said: string) => (c: SettingsCtx): string => (c.detail === null ? said : `${said} (${c.detail})`);
+/** The designation doors' own words: only `not-found`, ruled by whether the store has answered. The rest are the place's. */
+const DESIGNATION_SETTINGS_WORDS: Readonly<Record<string, (c: SettingsCtx) => string>> = {
+  'not-found': (c) => (c.answered ? ST['no-row'] : ST['no-door']),
+};
+/** The backstop's, the retention's and a Clear's words, each keyed by the word and read by `Object.hasOwn`. */
+const OTHER_SETTINGS_WORDS: Readonly<Record<string, (c: SettingsCtx) => string | null>> = {
+  'not-found': (c) => (c.act === 'hold-clear' ? ST['no-hold'] : ST['no-door']),
+  'auth-off': (c) => (c.act === 'retention' ? ST['retention-auth-off'] : null),
+  'bad-request': withDetail(ST['bad-request']),
+  'write-failed': withDetail(ST['write-failed']),
+  unavailable: withDetail(ST.unavailable),
+  'not-configured': () => ST['not-configured'],
+};
+
+export function overlordSettingsRefusalText(err: unknown, act: OverlordSettingsAct, storeAnswered: boolean): string {
+  const body = err instanceof ApiError && typeof err.body === 'object' && err.body !== null ? err.body as Record<string, unknown> : null;
+  const word = body === null ? null : body.error;
+  if (typeof word !== 'string') return err instanceof Error ? err.message : String(err);
+  const ctx: SettingsCtx = { act, answered: storeAnswered, detail: typeof body!.detail === 'string' && body!.detail.length > 0 ? body!.detail : null };
+  if (SETTINGS_DESIGNATION_ACTS.has(act)) {
+    return Object.hasOwn(DESIGNATION_SETTINGS_WORDS, word) ? DESIGNATION_SETTINGS_WORDS[word]!(ctx) : overlordRefusalText(err, act as DesignationSettingsAct);
+  }
+  return (Object.hasOwn(OTHER_SETTINGS_WORDS, word) ? OTHER_SETTINGS_WORDS[word]!(ctx) : null) ?? `Refused: ${word}`;
+}
+
+/** An account fact's refusal (home C, Task 9), from its code only. An older fleet node's `ccrc account set` does not know the
+ *  fact's flag and answers `unknown-argument`, which the door carries as `lane-act-refused` with that verb code: nothing was
+ *  written. `outcome-unknown` is a result nobody measured, so the card reads the roster again. Every other word is the lane
+ *  acts' own sentence (`laneActRefusal`). */
+export const ACCOUNT_FACT_REFUSAL_TEXT = {
+  older: 'This fleet node is older: update it to set this. Nothing was written.',
+  unknown: 'The result was not measured, so it may or may not have been written. The roster is read again.',
+} as const;
+const ACCOUNT_FACT_WORDS: Readonly<Record<string, (body: Record<string, unknown>) => string | null>> = {
+  'lane-act-refused': (b) => (b.verbCode === 'unknown-argument' ? ACCOUNT_FACT_REFUSAL_TEXT.older : null),
+  'outcome-unknown': () => ACCOUNT_FACT_REFUSAL_TEXT.unknown,
+};
+export function accountFactRefusalText(err: unknown, lane: string): string {
+  const body = err instanceof ApiError && typeof err.body === 'object' && err.body !== null ? err.body as Record<string, unknown> : null;
+  const word = body === null ? null : body.error;
+  const said = typeof word === 'string' && Object.hasOwn(ACCOUNT_FACT_WORDS, word) ? ACCOUNT_FACT_WORDS[word]!(body!) : null;
+  return said ?? laneActRefusal('placement', lane, err);
 }
