@@ -388,13 +388,17 @@ describe('the linearity verdict is the median of the per-round differences (D-91
 // What holds each row's wiring (review 4024 M1). `ROW_BASELINE` says which row reads which program. Between its row's
 // programs and its assertion a measuring case does one thing: it calls `costReading` or `linearityReading`, pure but
 // for the programs and the timing function it is handed, and `timed` is `timedBy` on the real child runner. HELD BY A
-// CASE that burns no CPU: the table; `rowPrograms`; the reader (it returns the bytes it hashed and refuses a wrong
-// hash); `timedBy` (it runs the program, mode and payload it is given); and, for all eight rows through stand-ins,
-// which program each reading came from, the cell it landed in, the order and the count of calls, and the cost bound.
-// HELD BY THE SCAN, which reads text: that each measuring case's body is that one call on the real `programsOf` and
-// `timed`, that the three lines composing them hand in the real reader, the hook's program and the real runner, and
-// that no name a measuring case reaches is bound twice. HELD BY READING only: what the note lists in §9, among it
-// `childCpu`'s own choice of what to run.
+// CASE that burns no CPU: the table; that the file registers one measuring case per row of it, eight, and that the
+// loop's shape and mode lists cross to its rows; `rowPrograms`; the reader (it returns the bytes it hashed and refuses
+// a wrong hash); `timedBy` (it runs the program, mode and payload it is given); for all eight rows through stand-ins,
+// which program each reading came from, the cell it landed in, the order and the count of calls; and the bound of the
+// four cost rows, quotes/deny, quotes/class, dqsub/deny and dqsub/class. HELD BY THE SCAN, which reads text: that each
+// measuring case's body is that one call on the real `programsOf` and `timed`, with the linearity case's two timeout
+// literals and the cost case's one; that the five lines composing the hook's path, the hook's program, the reader,
+// `programsOf` and `timed` are the real ones; and that each name in its table is written a fixed number of times, so a
+// second binding of one reds. NOT HELD: the crossings measured as still passing every case, listed with who measured
+// them in the note's §9, among them a `childCpu` that runs another program when keyed on something its own cases do
+// not exercise. That list is what was measured, not a claim that nothing else passes.
 //
 // What each row can see. The rules are here; the figures are in the task note,
 // docs/superpowers/programs/desktop-polish/hook-cost-row.md, by section, so that each figure has one source.
@@ -402,7 +406,9 @@ describe('the linearity verdict is the median of the per-round differences (D-91
 //   A deny row's bound is 1.5x its baseline, today's program (D-9141), with FD8's 25 ms floor: it catches a cost of
 //   ANY shape on the deny path once that path costs about 1.5x the baseline. On a loaded box a quadratic deny step is
 //   sure red near +90% of the gated cost and is decided by the baseline sample's own spread between about +28% and
-//   +50%; hosted, where the two samples agree to under 1%, the edge is near +50% (note §8).
+//   +50%; hosted, where the two samples agree to under 1%, the edge is near +50%. Those step sizes are scaled by 1/k²
+//   from review 4009's reading of (n/7.6)², +94% of the gated cost on its box; on the note's own +80% for that step
+//   each is 0.85 times as large (note §8).
 // - A class row's bound is its baseline plus the 100 ms class floor (`COST_FLOOR_MS`), the owner's: a class cost row
 //   misses a class step dearer by less than the floor (note §8 and §9 hold the readings and the +80 ms / +120 ms
 //   mutants).
@@ -589,6 +595,22 @@ describe('the forbidden program\'s cost on quote-dense payloads naming worktree 
     expect(Object.keys(ROW_BASELINE).sort(), 'one entry for each of the eight rows').toEqual([...rows].sort());
     for (const row of rows) expect(ROW_BASELINE[row], row).toBe(row.endsWith(' cost') ? 'gate' : 'original');
   });
+  it('the file registers one measuring case for each row of the table, eight in all, and the loop\'s shape and mode lists cross to the table\'s rows', ({ task }) => {
+    expect(SHAPE_NAMES.flatMap((s) => MODES.flatMap((m) => [`${s}/${m} cost`, `${s}/${m} linearity`])).sort(),
+      'the loop\'s lists, crossed, are the table\'s rows').toEqual(Object.keys(ROW_BASELINE).sort());
+    const measuring = (task.suite?.tasks ?? []).map((t) => t.name)
+      .filter((n) => / stays within the (?:startup-adjusted 06aed21ff bound at 64 KB|inherited-cost bound)$/.test(n));
+    expect(measuring, 'the measuring cases this describe registers, in order').toEqual([
+      'quotes: deny stays within the startup-adjusted 06aed21ff bound at 64 KB',
+      'quotes: deny linearity from 32 to 64 KB stays within the inherited-cost bound',
+      'quotes: class stays within the startup-adjusted 06aed21ff bound at 64 KB',
+      'quotes: class linearity from 64 to 128 KB stays within the inherited-cost bound',
+      'dqsub: deny stays within the startup-adjusted 06aed21ff bound at 64 KB',
+      'dqsub: deny linearity from 64 to 128 KB stays within the inherited-cost bound',
+      'dqsub: class stays within the startup-adjusted 06aed21ff bound at 64 KB',
+      'dqsub: class linearity from 64 to 128 KB stays within the inherited-cost bound',
+    ]);
+  });
   it('each row\'s two programs are its baseline from the table in the original\'s cell and the hook\'s program in the current one (programsOf)', () => {
     const of = rowPrograms((b) => `the vendored ${b} program`, 'the hook\'s program');
     for (const row of Object.keys(ROW_BASELINE) as Row[]) {
@@ -643,14 +665,15 @@ describe('the forbidden program\'s cost on quote-dense payloads naming worktree 
         .toEqual({ referenceMs: 2_064_097, currentMs: 3_064_096 });
     }
   });
-  it('a cost row\'s bound is 1.5x its baseline, or its baseline plus its mode\'s floor where that is more: 25 ms deny, 100 ms class (costReading)', () => {
+  it('each of the four cost rows\' bound is 1.5x its baseline, or its baseline plus its mode\'s floor where that is more: 25 ms deny, 100 ms class (costReading)', () => {
     const fixed = (referenceMs: number, currentMs: number): Time => (text) => (text === STAND_IN.hook ? currentMs : referenceMs);
     const cases: Array<[Mode, number, number]> = [
       ['deny', 40, 65], ['deny', 1000, 1500], ['class', 40, 140], ['class', 300, 450], ['class', 1000, 1500],
     ];
-    for (const [mode, referenceMs, bound] of cases) {
-      const r = costReading('quotes', mode, standInPrograms, fixed(referenceMs, 7));
-      expect(r.bound, `${mode}, baseline ${referenceMs}`).toBe(bound);
+    // The shapes are spelt here, not taken from the loop's list, so a narrowed list does not narrow this case.
+    for (const shape of ['quotes', 'dqsub'] as const) for (const [mode, referenceMs, bound] of cases) {
+      const r = costReading(shape, mode, standInPrograms, fixed(referenceMs, 7));
+      expect(r.bound, `${shape}/${mode} cost, baseline ${referenceMs}`).toBe(bound);
     }
     expect(costReading('dqsub', 'class', standInPrograms, fixed(52, 63)).measured)
       .toBe('dqsub/class 64 KB: current 63 cpu ms, baseline 52 cpu ms, bound 152 cpu ms');
@@ -690,17 +713,21 @@ describe('the forbidden program\'s cost on quote-dense payloads naming worktree 
         + `current ${v.currentRatio}x, bound ${v.bound}x; cpu ms ${fastest.join(', ')}; per-round differences ${v.differences.map((d) => d.toFixed(3)).join(', ')}`);
     }
   });
-  // review 4016 F1, narrowed by review 4024 M1: a scan of this file's own code, for what a case that runs the wiring
-  // cannot see, whether the measuring cases use it. It holds three things. Each measuring case's body, whitespace aside,
-  // is its one call of `costReading` or `linearityReading` on the real `programsOf` and `timed`, and its assertion. The
-  // three lines that compose those hand in the real reader, the hook's program and the real runner. And each name a
-  // measuring case reaches is written a fixed number of times in the file, so a second binding (a shadow in the loop)
-  // or a new use reds. It reads text: a crossing spelt so that every line and count stays the same is not seen, and
-  // the note's §9 names the ones known. Comments are taken out only where they start a line (`//` or `/*` after
-  // indentation): a string or template line that starts with a comment opener would be misread, and a comment after
-  // code is read as code (it reds a count, loudly); today the file holds neither. Its needles carry a `~`, which
+  // review 4016 F1, narrowed by reviews 4024 M1 and 4046 M1': a scan of this file's own code, for what a case that runs
+  // the wiring cannot see, whether the measuring cases use it. It holds three things. Each measuring case's body,
+  // whitespace aside, is its one call of `costReading` or `linearityReading` on the real `programsOf` and `timed`, and
+  // its assertion; each body is found by its title and its timeout literals, so a changed timeout reds too. The five
+  // lines that compose the hook's path, the hook's program, the reader, `programsOf` and `timed` each occur once, as
+  // written. And each name in `uses` below (the seventeen it lists, `expect`, `scaled`, `linearityKb` and the two lists
+  // among them) is written a fixed number of times in the file, test titles included, so a second binding (a shadow in
+  // the loop), a new use or a retitled case reds; a name not in the table is not counted. It reads text: a crossing
+  // spelt so that every line and count stays the same is not seen, and the note's §9 lists the crossings measured as
+  // still passing, not claimed complete. Whitespace aside means runs of whitespace, and a space just inside a
+  // parenthesis: a reflow that adds a trailing comma reds it. Comments are taken out only where they start a line (`//`
+  // or `/*` after indentation): a string or template line that starts with a comment opener would be misread, and a
+  // comment after code is read as code (it reds, loudly); today the file holds neither. Its needles carry a `~`, which
   // `unsplit` takes out, so this case's own text never matches them.
-  it('a measuring case reaches its programs through the table and nothing else: its body is one call on the real reader and runner, and no name it reaches is bound twice (a scan of this file)', () => {
+  it('a measuring case reaches its programs through the table and nothing else: its body is one call on the real reader and runner, and no name in its table is bound twice (a scan of this file)', () => {
     const code = fs.readFileSync(__filename, 'utf8').replace(/^\s*\/\*[\s\S]*?\*\//gm, '').replace(/^\s*\/\/.*$/gm, '');
     const unsplit = (s: string): string => s.split('~').join('');
     const count = (text: string, needle: string): number => text.split(needle).length - 1;
@@ -714,7 +741,7 @@ describe('the forbidden program\'s cost on quote-dense payloads naming worktree 
       return code.slice(at + title.length, stop);
     };
     const cost = body(unsplit('stays within the startup-adjusted 06aed21ff bound at 64 KB~`'), unsplit('}, scaled(~300_000)'));
-    const linearity = body(unsplit('KB stays within the inherited-cost bound~`'), unsplit('}, scaled(~smallKb'));
+    const linearity = body(unsplit('KB stays within the inherited-cost bound~`'), unsplit('}, scaled(~smallKb === 32 ? 600_000 : 300_000)'));
     expect(flat(cost), 'the cost case\'s body').toBe(flat(unsplit(`, () => {
       const r = cost~Reading(name, mode, programs~Of, tim~ed);
       console.info(r.measured);
@@ -723,13 +750,16 @@ describe('the forbidden program\'s cost on quote-dense payloads naming worktree 
       const r = linearity~Reading(name, mode, programs~Of, tim~ed);
       console.info(r.measured);
       expect(r.verdict.currentRatio, r.measured).toBeLessThanOrEqual(r.verdict.bound);`)));
-    for (const line of ['const read~Vendored = vendored~Reader((file) => fs.readFileSync(file), BASELINES);',
+    for (const line of ['const HO~OK = path.resolve(__dirname, \'../../ccd/session-hook.sh\');',
+      'const pr~og = extract(fs.readFileSync(HOOK, \'utf8\'));',
+      'const read~Vendored = vendored~Reader((file) => fs.readFileSync(file), BASELINES);',
       'const programs~Of = row~Programs(read~Vendored, pr~og);', 'const tim~ed = ti~medBy(child~Cpu);']) {
       expect(count(code, unsplit(line)), `composed once, on the real one: ${unsplit(line)}`).toBe(1);
     }
     const uses: Record<string, number> = {
       'programs~Of': 4, 'tim~ed': 3, 'cost~Reading': 7, 'linearity~Reading': 4, 'row~Programs': 4, 'read~Vendored': 4,
       'vendored~Reader': 5, 'ti~medBy': 6, 'child~Cpu': 6, 'pair~Cells': 4, 'linearity~Verdict': 10, 'pr~og': 2,
+      'exp~ect': 101, 'sca~led': 6, 'linearity~Kb': 3, 'SHAPE~_NAMES': 6, 'MO~DES': 6,
     };
     for (const [split, n] of Object.entries(uses)) {
       const name = unsplit(split);

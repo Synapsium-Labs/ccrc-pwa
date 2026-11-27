@@ -44,9 +44,10 @@ not in the tree, and the tables below are copied from them.
   timing function it is handed; the timing function is `timedBy` on the real child runner, and the reader is
   `vendoredReader` on the real file read. Cases that burn no CPU run each of them on recording stand-ins and pin, for
   all eight rows, which program each reading came from, its cell, the order and the count of calls. The scan shrinks
-  to what only text can hold: each measuring case's body is that one call on the real `programsOf` and `timed`, and no
-  name it reaches is bound twice. Every mutant review 4024 built, and eight of this wave's, reads red by case name; two
-  crossings still pass every case and are named (§9).
+  to what only text can hold: each measuring case's body is that one call on the real `programsOf` and `timed`, and
+  no name in its table is bound twice. Every mutant review 4024 built, eight of this wave's and the five of review
+  4046 (U1 to U5, pinned in fix round 1) read red by case name. §9 lists the crossings measured as still passing every
+  case and who measured them; that list is what was measured, not a claim that nothing else passes.
 - **The class floor is 100 ms** (the hook owner's call 1643, after review 4009 showed 250 ms let a class path 5.5 times
   dearer through). Hosted, every class reading less its baseline was within 2 ms on baff80048a's four readings, and
   within 11 ms across the eight read on three heads, well under the owner's 50 ms line (§8). Through the real file, about +80 ms reads green and about +120 ms red (§9).
@@ -339,16 +340,20 @@ the CPU it reads comes from `timedBy` on the real child runner (wave 191, review
 
 What holds the wiring, case by case and by reading:
 - **Held by a case that burns no CPU:** the table (the four cost rows read the program at the gate, the four
-  linearity rows the original); the mapping, `rowPrograms`; `pairCells`' order and cells; the reader, which returns
-  the very bytes it hashed and refuses a wrong hash; `timedBy`, which runs the program, mode and payload it is given;
-  and, for all eight rows through stand-ins, which program each reading came from, its cell, its size, the order and
-  the count of calls, and the cost bound.
+  linearity rows the original); that the file registers one measuring case per row of it, eight, and that the loop's
+  shape and mode lists cross to its rows; the mapping, `rowPrograms`; `pairCells`' order and cells; the reader, which
+  returns the very bytes it hashed and refuses a wrong hash; `timedBy`, which runs the program, mode and payload it is
+  given; for all eight rows through stand-ins, which program each reading came from, its cell, its size, the order and
+  the count of calls; and the bound of the four cost rows (quotes/deny, quotes/class, dqsub/deny and dqsub/class).
 - **Held by the scan, which reads text:** each measuring case's body, whitespace aside, is its one call on the real
-  `programsOf` and `timed` and its assertion; the three lines that compose the reader, `programsOf` and `timed` hand
-  in the real file read, the hook's program and the real runner; and each name a measuring case reaches is written a
-  fixed number of times, so a second binding (a shadow) reds.
-- **Held by reading only:** `childCpu`'s own choice of what to run, and any crossing that fires only on the real
-  program texts (both measured green, §9).
+  `programsOf` and `timed` and its assertion, found by its title and its timeout literals (the cost case's one, the
+  linearity case's two); the five lines that compose the hook's path, the hook's program, the reader, `programsOf`
+  and `timed` occur once each, as written; and each of the seventeen names in its table (`programsOf`, `timed`,
+  `costReading`, `linearityReading`, `rowPrograms`, `readVendored`, `vendoredReader`, `timedBy`, `childCpu`,
+  `pairCells`, `linearityVerdict`, `prog`, `expect`, `scaled`, `linearityKb`, `SHAPE_NAMES`, `MODES`) is written a
+  fixed number of times, so a second binding of one (a shadow) reds. A name not in the table is not counted.
+- **Not held:** the crossings measured as still passing every case, in §9 with who measured them. The list is what was
+  measured, not a claim that nothing else passes.
 
 **What is pinned now, and what D-9141 changed in each bound** (review 4009 F1):
 
@@ -457,52 +462,73 @@ Fix round 2 moved the row-to-text mapping into a pure `rowPrograms` (`programsOf
 case named above. They were spellings, not the defect: review 4024 built the same crossings spelt otherwise, and they
 stayed green (next table).
 
-**Wave 191 (review 4024 M1): the mutants of the test file, by behaviour.** Each was applied to a scratch copy of this
-wave's test file (a `git archive` of its build commit, `node_modules` linked) and run through `ccrc test --local` with
-the cases that burn no CPU, by name (the D-9118 block, the hash, the table, `programsOf`, the reader, `timedBy`,
-`costReading` twice, `linearityReading` and the scan: 15 cases). Unmutated: 15 passed, 27 skipped (42). Then the file
-was put back and compared byte for byte. "Red" is the case named; where two read red, both are given.
+**Wave 191 (reviews 4024 M1 and 4046 M1'): the mutants of the test file, by behaviour.** Each was applied to a scratch
+copy of this wave's test file at fix round 1 (`node_modules` linked) and run through `ccrc test --local` with the cases
+that burn no CPU, by name (the D-9118 block, the hash, the table, the registration case, `programsOf`, the reader,
+`timedBy`, `costReading` twice, `linearityReading` and the scan: 16 cases). Unmutated: 16 passed, 27 skipped (43). The
+`S` probes also ran the three D-8334 cases (unmutated: 19 passed). After each run the file was put back and compared
+byte for byte. "Red" is the case named; where two read red, both are given.
 
 | id | mutant of the test file | case that reads red | its message (first line) |
 |---|---|---|---|
-| O1 | `programsOf` shadowed in the name loop by a function that swaps the pair (review 4024) | the scan | programsOf is written this many times …: expected 6 to be 4 |
-| O2 | a helper outside the case swaps the result of the cost case's `programsOf` (review 4024) | the scan | the cost case's body: expected … to be … |
-| O3 | `timedBy` runs the hook's program in place of the one it is given (review 4024) | `timedBy`'s case; the scan | it answers the run's CPU ms: expected 29668 to be 34; prog is written this many times: expected 3 to be 2 |
+| O1 | `programsOf` shadowed in the name loop by a function that swaps the pair (review 4024) | the scan | programsOf is written this many times … |
+| O2 | a helper outside the case swaps the result of the linearity case's `programsOf` (review 4024's O2) | the scan | the linearity case's body: expected … to be … |
+| O2c | the same helper around the cost case's `programsOf` | the scan | the cost case's body: expected … to be … |
+| O3 | `timedBy` runs the hook's program in place of the one it is given (review 4024) | `timedBy`'s case; the scan | it answers the run's CPU ms: expected 29668 to be 34; prog is written this many times … |
 | C1 | the two cells crossed between the reader and the pairing (review 4024) | `linearityReading`'s case | quotes/deny linearity: what it ran, where, in which order, how often |
-| C3 | the reader shadowed in the name loop, every row the hook against itself (review 4024 c3) | the scan | programsOf is written this many times …: expected 5 to be 4 |
-| P1 | the pairing function shadowed inside `linearityReading`, cells in run order | `linearityReading`'s case; the scan | quotes/deny linearity: each round [original small, current small, original large, current large]; pairCells … expected 5 to be 4 |
-| P2 | the pairing function shadowed in the name loop (review 4024) | the scan | pairCells is written this many times …: expected 6 to be 4 |
-| X1 | the cost case's destructure crossed (review 4024) | `costReading`'s case; the bound case | quotes/deny cost: what it ran, where, in which order, how often; deny, baseline 40: expected 32 to be 65 |
+| A1 | an in-place swap after `programs()` in `linearityReading`, `Object.assign` (review 4024) | `linearityReading`'s case | quotes/deny linearity: what it ran, where, in which order, how often |
+| C3 | the reader shadowed in the name loop, every row the hook against itself (review 4024 c3) | the scan | programsOf is written this many times … |
+| T1 | `timed` shadowed in the name loop by a timer of the hook's program, `outerTimed` (review 4024) | the scan | timed is written this many times …: expected 5 to be 3 |
+| P1 | the pairing function shadowed inside `linearityReading`, cells in run order | `linearityReading`'s case; the scan | quotes/deny linearity: each round [original small, current small, original large, current large]; pairCells is written this many times … |
+| P2 | the pairing function shadowed in the name loop (review 4024) | the scan | pairCells is written this many times … |
+| X1 | the cost case's destructure crossed (review 4024) | `costReading`'s case; the bound case | quotes/deny cost: what it ran, where, in which order, how often; quotes/deny cost, baseline 40: expected 32 to be 65 |
 | X2 | the cost case's pair order crossed (review 4024) | `costReading`'s case; the bound case | the same two |
 | X3 | the cost case's indices crossed (review 4024) | `costReading`'s case; the bound case | quotes/deny cost: each cell the faster of its own program's two: expected { referenceMs: 3064096, … } |
-| X4 | the cost pair times the gate against itself (review 4024) | `costReading`'s case; the bound case | quotes/deny cost: what it ran …; the measured line reads current 52 for 63 |
+| X4 | the cost pair times the gate against itself (review 4024) | `costReading`'s case; the bound case | quotes/deny cost: what it ran …; the printed line reads current 52 for 63 |
+| M2 | a linearity case reads the gate's program directly (review 4024) | the scan | the linearity case's body: expected … to be … |
+| M3 | the row keys swapped: `costReading` asks the linearity row, `linearityReading` the cost row (review 4024) | `costReading`'s case; `linearityReading`'s case | quotes/deny cost: what it ran …; quotes/deny linearity: what it ran … |
 | R1 | the reader returns the hook's text for the gate (review 4024 a10) | the reader's case; the scan | expected 'def WS: …' to be 'the bytes of g.jq' |
-| R2 | the reader skips its hash check (review 4024 R2) | the reader's case | a wrong hash refuses: expected [Function] to throw an error |
+| R2 | the reader skips its hash check (review 4024 R2) | the reader's case; the scan | a wrong hash refuses: expected [Function] to throw an error |
 | K1 | a cost case reads the original directly, past the table (review 4016's first) | the scan | the cost case's body: expected … to be … |
-| K2 | the linearity reading pairs inline, not through `pairCells` (review 4016) | `linearityReading`'s case; the scan | quotes/deny linearity: what it ran …; pairCells … expected 3 to be 4 |
+| K2 | the linearity reading pairs inline, not through `pairCells` (review 4016) | `linearityReading`'s case; the scan | quotes/deny linearity: what it ran …; pairCells is written this many times … |
 | K3 | the pairing callback runs the other program's text (review 4016) | `linearityReading`'s case | quotes/deny linearity: what it ran, where, in which order, how often |
 | N1 | this wave's: the cost row times at 32 KB | `costReading`'s case | quotes/deny cost: what it ran, where, in which order, how often |
 | N2 | this wave's: a linearity round takes its large pair first | `linearityReading`'s case | quotes/deny linearity: what it ran, where, in which order, how often |
 | N3 | this wave's: `timedBy` runs every sample in deny mode | `timedBy`'s case | quotes/class 32 KB: the argv |
-| N4 | this wave's: the class rows take the deny floor | the bound case | class, baseline 40: expected 65 to be 140 |
-| N5 | this wave's: `timed` composed on a runner that swaps in the hook's program | the scan | composed once, on the real one: const timed = timedBy(childCpu);: expected +0 to be 1 |
+| N4 | this wave's: the class rows take the deny floor | the bound case | quotes/class cost, baseline 40: expected 65 to be 140 |
+| N5 | this wave's: `timed` composed on a runner that swaps in the hook's program | the scan | composed once, on the real one: const timed = timedBy(childCpu); |
 | N6 | this wave's: the two shapes' units crossed | `timedBy`'s case | quotes/deny 32 KB: the payload |
 | N7 | this wave's: a cost cell keeps the first pair's sample, not the faster of two | `costReading`'s case | quotes/deny cost: each cell the faster of its own program's two: expected { referenceMs: 2064099, … } |
 | N8 | this wave's: the printed minima read the first round only | `linearityReading`'s case | quotes/deny linearity: the printed line, each cell the fastest of its four |
-| H1 | harmless: the cost call reflowed over three lines | none: 15 passed | - |
+| U1a | the mode list narrowed to `class` (review 4046 U1) | the registration case | the loop's lists, crossed, are the table's rows |
+| U1b | the shape list narrowed to `quotes` (review 4046 U1) | the registration case | the loop's lists, crossed, are the table's rows |
+| U1c | `linearityKb` shadowed in the name loop (review 4046 U1) | the registration case; the scan | the measuring cases this describe registers, in order; linearityKb is written this many times … |
+| U2 | `expect` shadowed in the measuring loop, every assertion a no-op (review 4046 U2) | the scan | expect is written this many times …: expected 102 to be 101 |
+| U3 | the dqsub/deny bound keyed ten times looser (review 4046 U3) | the bound case | dqsub/deny cost, baseline 40: expected 650 to be 65 |
+| U4a | the hook's program taken from the gate fixture (review 4046 U4) | the scan | composed once, on the real one: const prog = extract(fs.readFileSync(HOOK, 'utf8')); |
+| U4b | the hook's path pointed at the original fixture (review 4046 U4) | the scan | composed once, on the real one: const HOOK = path.resolve(…) |
+| U5 | the linearity case's timeouts cut tenfold (review 4046 U5) | the scan | the end of the case titled …KB stays within the inherited-cost bound: expected -1 to be greater than … |
+| S1j | `childCpu` runs the hook's program whenever the program it runs is `jq` (review 4046 U6) | the D-8334 case "a run that computes reads its compute…" | jq: error: $mode is not defined |
+| H1 | harmless: the cost call reflowed over three lines | none: 16 passed | - |
+| H2 | a reflow with a trailing comma and the parenthesis on its own line | the scan | the cost case's body: expected … to be … (the scan's comment says so) |
 
 The two mutants review 4024 measured hiding a real slowdown are among them: O3 (`timedBy` ignoring its program) and the
-cost case's destructure or order crossed (X1, X2). Each now reads red with no CPU measured.
+cost case's destructure or order crossed (X1, X2). Each reads red with no CPU measured.
 
-**What still passes every case, in so many words** (each measured green, 15 passed, on the same scratch copy):
-- **S1, `childCpu` runs the hook's program in place of any forbidden program it is handed.** `childCpu` is the real
-  child runner; the D-8334 cases hold that it passes output, status and input through and reads CPU, not wall time,
-  but nothing holds that it runs the argv it is given. Held by reading.
-- **S2, a crossing that fires only on the real program texts** (here `costReading` timing the hook's program in the
-  baseline's place when the baseline starts `def WS:`). The stand-ins never start that way, and a mutant can key on
-  anything about the real texts. Held by reading.
-- More generally, the scan holds text: a crossing spelt so that every body line, composition line and name count stays
-  the same is not seen by it (for example a shadow that adds one use of a name and removes another).
+**The crossings measured as still passing every case.** This is the list of what was measured green, by whom; it is
+not claimed complete, and a crossing not on it may pass too.
+- **S1, measured by this wave and by review 4046 (its U6): `childCpu` runs another program than its argv names, when
+  keyed on something its own cases do not exercise.** Keyed on the mode argument (S1m) or on a forbidden program text
+  (S1): green, 19 passed with the D-8334 cases. Keyed on the program being `jq` (S1j): red, by the D-8334 case that
+  runs `jq`. Held by reading.
+- **S2, measured by this wave: a crossing that fires only on the real program texts** (here `costReading` timing the
+  hook's program in the baseline's place when the baseline starts `def WS:`): green, 19 passed. The stand-ins never
+  start that way, and a mutant can key on anything about the real texts. Held by reading.
+- **Measured by review 4046, equivalent:** `costReading` asking for the other shape's cost row. The texts a cost row
+  reads are the same for both shapes, so no reading can differ.
+- **Of the scan's kind, by reading:** a crossing spelt so that every body line, composition line and count stays the
+  same (for example a shadow that adds one use of a counted name and removes another), and a shadow of a name the
+  scan's table does not count.
 
 **The class floor at 100 ms, through the real test file** (a fixed burn in the hook's class path only, scratch copies,
 jq 1.7.1, the two class cost rows by name; "quotes: class stays within the startup-adjusted 06aed21ff bound at 64 KB"

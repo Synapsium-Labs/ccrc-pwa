@@ -5931,7 +5931,9 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   green, and about +105% sat at the bound. Through the real test file a lighter step, (n/8)², about +72% of the gated
   cost by scaling from +80% for (n/7.6)², was green against the original (a cell reconstructed from the printed samples, about 1.30 of it) and reads red
   on the new baseline (15.5 s against 13.4 s). On the deny path, on a loaded box, a quadratic step is sure red near
-  +90% of the gated cost, and is decided by the baseline sample's own spread between about +28% and +50%. Hosted,
+  +90% of the gated cost, and is decided by the baseline sample's own spread between about +28% and +50%; those step
+  sizes are scaled by 1/k² from review 4009's reading of (n/7.6)², +94% of the gated cost on its box, and on the task
+  note's own +80% for that step each is 0.85 times as large. Hosted,
   where the two samples agree to under 1%, the edge is near +50%. The deny rows keep the 25 ms floor.
 
   The class rows, whose program costs about one jq start-up, take a floor of their own, 100 ms (`COST_FLOOR_MS`). It
@@ -5954,12 +5956,16 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   Which row reads which file is one table, `ROW_BASELINE`. `programsOf` maps a row to its two program texts, and
   `pairCells` puts each text's sample in its own cell. Between its row's programs and its assertion a measuring case
   calls `costReading` or `linearityReading`, pure but for the programs and the timing function it is handed, and the
-  timing function is `timedBy` on the real child runner (wave 191, review 4024 M1). Held by a case that burns no CPU:
-  the table, the mapping, the cells, the reader (it returns the bytes it hashed and refuses a wrong hash), `timedBy`
-  (it runs the program it is given), and for all eight rows which program each reading came from, its cell, the order
-  and the count. Held by a scan of the test file, which reads text: that each measuring case's body is that one call
-  on the real `programsOf` and `timed`, and that no name it reaches is bound twice. Held by reading only: the child
-  runner's own choice of what to run, and a crossing that fires only on the real program texts (the task note, §9).
+  timing function is `timedBy` on the real child runner (wave 191, reviews 4024 M1 and 4046 M1'). Held by a case that
+  burns no CPU: the table, that the file registers one measuring case per row of it, the mapping, the cells, the reader
+  (it returns the bytes it hashed and refuses a wrong hash), `timedBy` (it runs the program it is given), for all eight
+  rows which program each reading came from, its cell, the order and the count, and the bound of the four cost rows
+  (quotes/deny, quotes/class, dqsub/deny and dqsub/class). Held by a scan of the test file, which reads text: that each
+  measuring case's body is that one call on the real `programsOf` and `timed`, with its timeout literals; that the
+  five lines composing the hook's path, the hook's program, the reader, `programsOf` and `timed` are the real ones; and
+  that none of the seventeen names in its table is bound twice. Not held: the crossings measured as still passing
+  every case, which the task note's §9 lists with who measured them; the list is what was measured, not a claim that
+  nothing else passes.
   What is pinned now: the linearity rows pin doubling-size
   scaling against the original, the cost rows pin cost against the program at the gate, and no row bounds cost
   against the original, so FD8's historical-cost half no longer holds for any row.
