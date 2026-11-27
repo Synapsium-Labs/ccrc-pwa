@@ -430,12 +430,18 @@ box's reducer and the server's check both run, and each case shows both hosts.
     regular expressions have no East Asian Width property, so no property escape could stand in for the table.
   - **The walk.** A case walks every range: its first and last code points and one inside must be two cells. The code
     point just outside each range that the table does not list (246 samples, 226 distinct code points) must be what the
-    rest of the function gives it: two cells for an emoji drawn as one or an unassigned code point, one otherwise.
-    Against the function before this wave, measured over every code point by a scratch script: 767,047 code points now
-    count two cells where they counted one (the table's ranges the hand list missed, and every unassigned code point), and
-    8 count one cell where they counted two: U+3248 to U+324F, circled numbers that the data file gives A (ambiguous), which
-    the hand list's range U+3041 to U+33FF took in. Of the 226 code points just outside a range, 73 count wider (all
-    unassigned) and two narrower (U+3248 and U+324F).
+    rest of the function gives it: two cells for the stated addition (below), an emoji drawn as one or an unassigned
+    code point, one otherwise.
+  - **Nothing counts narrower than on main (the coordinator's ruling on this wave, after the first push).** The first
+    push counted 8 code points one cell where main's hand list counted two: U+3248 to U+324F, circled numbers on black
+    squares, which the data file gives A (ambiguous) and the hand list's range U+3041 to U+33FF took in. A terminal that
+    draws an ambiguous character wide draws them in two, and this wave closes under-counting, so they stay two cells:
+    `FRAMES_WIDE_KEPT`, the one stated addition beside the generated table, with its reason in its comment. The table
+    case still requires the generated table to be exactly the fixture's ranges, so the addition is the only thing beside
+    it. A case holds main's rule as data (its hand list's twelve ranges, from 86b2c2d6e2, and an emoji drawn as one) and
+    compares every code point: **none counts narrower than on main, and 767,047 count wider** (the table's ranges the
+    hand list missed, and every unassigned code point). Of the 226 code points just outside a range, 73 count wider than
+    on main (all unassigned) and none narrower. Wider is the safe direction: it only refuses.
   - **The engine's version.** A case requires that the engine's Unicode version is not newer than 17.0, so a character
     the engine knows and a newer terminal may draw wide is never missing from the table. Measured: this engine reports
     17.0.
@@ -449,7 +455,8 @@ box's reducer and the server's check both run, and each case shows both hosts.
   private-use code point never reaches the width: rule 1 refuses the frame whole (`not-a-frame`) first, as it does a
   surrogate, a control and a format character. Were it asked, a private-use code point would count one cell (the data
   file gives it A). An engine on an older Unicode version reads more code points as unassigned, and so counts them wider:
-  the safe direction. One comment in the shared file says this, and one case pins it.
+  the safe direction. One comment in the shared file says this, and one case pins it. The stated addition (above) is
+  answered first.
 - **A straddle is at the edge (ruling 3).** A row that ends one cell short of the pane's width, whose next row begins
   with a wide character, is at the edge: the wide character did not fit in the last cell and the terminal wrapped it
   whole, leaving that cell blank. "One cell short" is measured **after the row's trailing spaces are dropped**, because a
@@ -476,10 +483,11 @@ box's reducer and the server's check both run, and each case shows both hosts.
   of 90, before and after this wave (measured with the old rule by a scratch script, and with the new one by the case).
 - **F8b.** The third stash pane's case now requires that the one row the path rule replaces is the stash notice row, that
   it reads the whole working-directory token, and that the stored text holds no `stashed`.
-- **F9.** The version fingerprint gains four probes: a bare quote (kept), a Hangul syllable row reaching the edge, a row
-  at the probe's own width, and a straddle. A case pins their four answers. **The frames recipe's version moves once:
-  `03f101670690507b` before this wave, `bec098af3496f523` after.** No file in the tree pins either value (searched:
-  none), so no pin follows. The delivery recipe's version still prints `da16fe2f55551e0b`.
+- **F9.** The version fingerprint gains five probes: a bare quote (kept), a Hangul syllable row reaching the edge, a row
+  at the probe's own width, a straddle, and (with the ruling) a row reaching the edge through U+3248. A case pins their
+  five answers. **The frames recipe's version: `03f101670690507b` on `main`, `bec098af3496f523` at this wave's first push,
+  `962a0b5e963e0b92` at its final tip.** No file in the tree pins any of the three (searched: none, outside this note), so
+  no pin follows. The delivery recipe's version still prints `da16fe2f55551e0b`.
 
 ### 9.2 The note corrected to the code (ruling 8)
 
@@ -487,9 +495,10 @@ box's reducer and the server's check both run, and each case shows both hosts.
   the exact matchers only, and the limit now names them: the path rule, the private shapes and the credential shapes.
 - **F7, the first half** (section 4, round 2's F-B): the sentence that a row is never read as narrower than it is drawn
   was not true with the hand list. It is replaced by a pointer here. What is true now: a character counts two cells when
-  the table lists it, when it is an emoji drawn as one, or when it is unassigned, and one otherwise. A row can still be
-  read narrower than it is drawn in one place: an ambiguous-width character (A in the data file) counts one cell, which
-  a terminal draws in two only in an East Asian locale (eight of them, U+3248 to U+324F, counted two before this wave). The frames driver runs under `LANG=C.UTF-8` (read in
+  the table lists it, when it is the stated addition, when it is an emoji drawn as one, or when it is unassigned, and one
+  otherwise. A row can still be read narrower than it is drawn in one place: an ambiguous-width character (A in the data
+  file) other than the eight of the stated addition counts one cell, which a terminal draws in two only in an East Asian
+  locale; each of them counted one cell on `main` too. The frames driver runs under `LANG=C.UTF-8` (read in
   `agent/src/testbox/captureFramesRun.ts`), and how the terminal draws an ambiguous character there is inferred, not
   measured. Every combining or zero-width mark counts one cell though it is drawn in none, so there the row reads wider
   than it is drawn, the safe direction.
@@ -518,22 +527,27 @@ Every run went through `ccrc test --local`, in the foreground, one file per comm
 - **Red first.** The 11 new cases that need the new rule were run against the old `shared/framesReduce.ts` and each was
   red by name: the six table and width cases, the three capture-owner cases (the unlisted wide character, the straddle
   with no trailing space and with one), F5, and F8a. The F3 and F8b cases hold on the old code too (they make the suite
-  stronger; F3's is proved by M8 below). On the new code the reducer suite passes 90 of 90.
+  stronger; F3's is proved by M8 below). The ruling's case, the comparison with main, is new at the second push and is
+  proved by its mutant below. On the final tip the reducer suite passes 91 of 91.
 - **Mutants**, on the final code tip, in a scratch clone of this branch (never this workspace), one row at a time,
   with the first wave's runner (from the coordinator's copy, not in the tree): each edit applied, `frames-reduce.test.ts`
-  run once (one row, N18, runs the agent's `testbox-capture-frames-run.test.ts`), the file restored. **176 mutants, 176
-  killed.** The scratch tree read clean by git after each batch.
+  run once (one row, N18, runs the agent's `testbox-capture-frames-run.test.ts`), the file restored. **178 mutants, 178
+  killed** on the final tip (176 of 176 at the first push). The scratch tree read clean by git after each batch.
   - Every reducer row of the first wave's list, 38 rows (rules 1 to 10, round 1's and round 2's), three of them
     re-anchored where the code moved: P6 (the edge counted in code points) now on the cell count, P7 (an emoji counted
-    one cell) as an early one-cell answer for an emoji, and P8 (a CJK ideograph counted one cell) as the unified
+    one cell) as a one-cell answer for an emoji at the top of the width function, and P8 (a CJK ideograph counted one cell) as the unified
     ideographs carved out of their table range.
   - 15 for this wave: the reviewer's M4 (the Hangul syllables range removed) and M5 (the fullwidth forms range removed),
     each red through the table case and the walk; M8 (only a row's first closing quote examined), red through the F3
     case; the straddle branch removed; the edge measured on the row as drawn; the path token read on the row as drawn;
     an unassigned code point counted one cell; an emoji drawn as one but N in the table counted one cell; the table
     search missing a range's first, and its last, code point; F5 reverted; F9's four probes removed; a straddle read under
-    a narrow first character; a straddle read two cells short; the table emptied.
-  - One per range: each of the 123 ranges dropped from the table, each red through the table case by name.
+    a narrow first character; a straddle read two cells short; the table emptied. And two for the ruling: the stated
+    addition dropped, red by the case that compares every code point with main; the fifth probe removed, red by the
+    probe case.
+  - One per range: each of the 123 ranges dropped from the table, each red through the table case by name (the runner
+    records two names a row; for the one row whose first two were other cases, D49, a run alone showed the table case red
+    too).
 - **Suites on this branch** (`main` had not moved from 86b2c2d6e2, the branch's base, when they ran), each alone: on the
   server, `frames-reduce` 90, `frames-result` 54, `frames-lane-decider` 9, `frames-lane-store` 25, `frames-lane-capture` 25,
   `frames-transport` 25, `frames-capture` 13, `frames-capture-frames` 24, `box-frame-fixtures` 8, `testbox-frames-route`
@@ -544,10 +558,15 @@ Every run went through `ccrc test --local`, in the foreground, one file per comm
   `testbox-capture-op-frames` 11, `testbox-imports` 7 and `testbox-capture-deadline` 26; and the tree guards
   `topology-clean` 62, `public-text` 20, `private-names` 47, `oss-metadata` 29, `growth-check` 63 (3 skipped) and
   `growth-caps` 12. All pass. The server's and the agent's own compiles pass.
-- **On this head merged with `main` 8a7bcacc8b** (which had moved by one merge that touches none of these files; the merge
-  probe answered clean, so nothing was absorbed), in the scratch clone, each alone: the nineteen server suites of the
-  list above from `frames-reduce` to `send` (the gate's suite among them, 434) and the six agent suites, with the same counts. Both
-  recipe versions print the same there: frames `bec098af3496f523`, delivery `da16fe2f55551e0b`.
+- **On each pushed head merged with `main` 8a7bcacc8b** (which had moved by one merge that touches none of these files;
+  the merge probe answered clean each time, so nothing was absorbed), in the scratch clone, each alone: the nineteen
+  server suites of the list above from `frames-reduce` to `send` (the gate's suite among them, 434) and the six agent
+  suites, with the same counts (`frames-reduce` 90 at the first push, 91 at the final tip), and on the final tip also
+  `public-text`, `private-names`, `growth-check` and `growth-caps`. `topology-clean` cannot run in that clone (its tree
+  read overflows git's output buffer there, `spawnSync git ENOBUFS`), so it ran in the workspace at the final tip: one
+  timeout under load (`nothing in the tree speaks it`, 24.6 s against its 20 s), then 62 of 62 alone. The recipe
+  versions print the same on the merge as on the tip: frames `962a0b5e963e0b92` at the final tip, delivery
+  `da16fe2f55551e0b`.
 - **Unmeasured here: the server's test-project compile** (`test/tsconfig.tests.json`). The test slice's memory cap killed
   it twice under the fleet's load (exit 137, no type error printed); CI's `typecheck (server)` job is its arbiter.
 - **Tests that read a file this wave changes as text** (#3562): the server tests that name `shared/framesReduce.ts` in a
@@ -557,7 +576,9 @@ Every run went through `ccrc test --local`, in the foreground, one file per comm
 - **Count lines.** No file this wave touches states the gate's count lines, so none was re-derived.
 - **This note** is an existing task note, edited with the coordinator's direction; the head commit carries the ledger
   guard's edit trailer for it.
-- **Process.** One hook refusal, reported and not retried another way: the graph gate refused a search command until one
-  graph query had answered (its own instruction), so a query ran and the search was not repeated. The file tools turn a
+- **Process.** Three hook refusals, each reported. The graph gate refused a search command until one graph query had
+  answered (its own instruction), so a query ran and the search was not repeated. The test slice's hook refused two
+  commands whose text named the compiler, though neither ran one: a status mail to the coordinator, sent again with that
+  word left out, and a memory note, written with the file tools instead. The file tools turn a
   `\u` escape typed into an edit into the character itself, so the table was written as numbers and spliced in by a
   script, and the four new probes spell their wide characters with `String.fromCodePoint`.
