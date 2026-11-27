@@ -311,9 +311,12 @@
   /* The strip's edges sit on the inset, so at 390, the commonest phone width, its controls win the room back inside it: their
      side padding is `--sp-2` in place of the button's own 12 (`px-3`), and the strip stays one line in both skins (fix round 2's
      ruling on review 4029 F1; at the inset with the button's own padding it wrapped to two lines, 60 to 108 tall). Their
-     height keeps the 44 tap floor, and no word moves. At 360 the strip is two lines, as it was on main before this wave. */
-  .wi-nav .wi-back,
-  .wi-nav .wi-step { padding-inline: var(--sp-2); }
+     height keeps the 44 tap floor, and no word moves. At 360 the strip is two lines, as it was on main before this wave.
+     The item strip's alone: the run pages' Back strip shares the class (`.wi-nav.rd-strip`) and keeps the button's own
+     padding, as on main (fix round 3, review 4044 F1). From position 10 of a list Refined's strip wraps at 390 again, as
+     main's does there (the coordinator's ruling on F2: carried). */
+  .wi-nav:not(.rd-strip) .wi-back,
+  .wi-nav:not(.rd-strip) .wi-step { padding-inline: var(--sp-2); }
 }
 /* The buttons are flex boxes, which drop a space beside the glyph: the gap is that space. */
 .wi-nav .wi-back,
@@ -331,7 +334,9 @@
 .wl-beside { max-width: none; }
 /* One pane, one inset: the list beside an item sits in the fleet list column's place, so it takes that column's side gutter
    (`.fleet`'s `--sp-4`, fleet.css), not the detail screens' `--gutter`; in Refined opening an item no longer moves the pane's
-   text from 16 to 24 (fix round 2's ruling on review 4029 F2). Two classes, so it wins over `.wl`'s inset in any sheet order. */
+   text from 16 to 24 (fix round 2's ruling on review 4029 F2). In Instrument the list column reads `--gutter`, which is
+   `--sp-4` at a desk by Instrument's role, so the two are equal today by the role, not by one source; the R2 case
+   (console-spacing) reds if they part. Two classes, so it wins over `.wl`'s inset in any sheet order. */
 .wl.wl-beside { padding-inline: var(--sp-4); }
 /* The fleet's banner stack above the list beside an item, in a skin that draws it in its left column (Instrument; follow-up
    F1): the fleet column's own top space, side gutters and gap (`.fleet`, fleet.css: the same tokens), so a banner sits where

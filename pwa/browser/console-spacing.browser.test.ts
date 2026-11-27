@@ -846,12 +846,12 @@ describe('at a desk: the item view, its step strip and the coordinator digest st
 describe("the phone: the item route's step strip is one line at 390 and two at 360, as main drew it, its controls at the tap floor (fix round 2's R1)", () => {
   for (const skin of [INSTRUMENT, REFINED]) {
     for (const [width, lines] of [[390, 1], [360, 2]] as const) {
-      it(`${skin}, ${width}x844: the strip's Back and its steps on ${lines === 1 ? 'one line' : 'two lines'}, every control the tap floor tall, nothing past the strip's inset`, async () => {
+      it(`${skin}, ${width}x844: the strip's Back and its steps on ${lines === 1 ? 'one line' : 'two lines'}, its height that many tap-floor lines, every control the tap floor tall, nothing past the strip's inset`, async () => {
         const { ctx, page, errors } = await openApp(browser!, { skin, theme: PHOSPHOR, width }, SCREENS);
         try {
           const strip = '.shell-detail .wi-nav:not(.rd-strip)';
           const m = await at(page, '/waiting/1', strip, {
-            stripPad: strip, back: `${strip} .wi-back`, steps: `${strip} .wi-steps-nav`,
+            stripPad: strip, stripBox: strip, back: `${strip} .wi-back`, steps: `${strip} .wi-steps-nav`,
             prev: `${strip} .wi-step`, next: `${strip} .wi-step:last-of-type`,
           });
           const back = need(m, 'back');
@@ -866,7 +866,66 @@ describe("the phone: the item route's step strip is one line at 390 and two at 3
             expect(b[3] - b[1], `${name}: ${b[3] - b[1]} tall, against the tap floor ${m.tokens.tapMin}`).toBeGreaterThanOrEqual(m.tokens.tapMin - NEAR);
           }
           expect(steps[2], "the steps end inside the strip's inset").toBeLessThanOrEqual(need(m, 'stripPad')[2] + NEAR);
+          // Its height (fix round 3, review 4044 F3): --sp-2 above and below, a tap-floor line each, --sp-1 between two lines,
+          // 60 at 390 and 108 at 360 with these tokens.
+          const { sp1, sp2, tapMin } = m.tokens;
+          const tall = need(m, 'stripBox')[3] - need(m, 'stripBox')[1];
+          const want = 2 * sp2 + lines * tapMin + (lines - 1) * sp1;
+          expect(Math.abs(tall - want), `the strip is ${tall} tall, against ${want}`).toBeLessThan(NEAR);
           expect(await sidewaysScroll(page), 'nothing scrolls sideways').toBeLessThanOrEqual(0);
+          expect(errors).toEqual([]);
+        } finally {
+          await ctx.close();
+        }
+      }, 120_000);
+    }
+  }
+});
+
+/** The inline padding of each control a selector matches, beside the button's own (`px-3`, read from the built sheet on a
+ *  probe, never written here). */
+const controlPads = (page: Page, sel: string): Promise<{ own: number; pads: number[][] }> =>
+  page.evaluate((s) => {
+    const probe = document.createElement('span');
+    probe.className = 'px-3';
+    document.body.appendChild(probe);
+    const own = parseFloat(getComputedStyle(probe).paddingLeft);
+    probe.remove();
+    const pads = [...document.querySelectorAll(s)].map((e) => {
+      const cs = getComputedStyle(e);
+      return [parseFloat(cs.paddingLeft), parseFloat(cs.paddingRight)];
+    });
+    return { own, pads };
+  }, sel);
+
+describe("the strip's controls take --sp-2 on the phone's item strip alone: the run pages' Back and the desk keep the button's own padding (fix round 3)", () => {
+  for (const skin of [INSTRUMENT, REFINED]) {
+    for (const width of [360, 390]) {
+      it(`${skin}, ${width}x844: on a run and on Runs advanced the Back button keeps the button's own side padding, as on main (review 4044 F1)`, async () => {
+        const { ctx, page, errors } = await openApp(browser!, { skin, theme: PHOSPHOR, width }, SCREENS);
+        try {
+          for (const path of ['/runs/100', '/runs/advanced']) {
+            await at(page, path, '.shell-detail .rd-strip .wi-back', { back: '.shell-detail .rd-strip .wi-back' });
+            const { own, pads } = await controlPads(page, '.shell-detail .rd-strip .wi-back');
+            expect(pads.length, `${path}: the Back button is drawn`).toBeGreaterThan(0);
+            for (const [l, r] of pads) expect([l, r], `${path}: the Back button's side padding, against the button's own ${own}`).toEqual([own, own]);
+          }
+          expect(errors).toEqual([]);
+        } finally {
+          await ctx.close();
+        }
+      }, 120_000);
+    }
+    for (const [width, height] of DESKS) {
+      it(`${skin}, ${width}x${height}: at a desk the item strip's Back, Previous and Next keep the button's own side padding (review 4044 F3)`, async () => {
+        const { ctx, page, errors } = await openApp(browser!, { skin, theme: PHOSPHOR, width }, SCREENS);
+        try {
+          await page.setViewportSize({ width, height });
+          const strip = '.shell-detail .wi-nav:not(.rd-strip)';
+          await at(page, '/waiting/1', `${strip} .wi-step`, { step: `${strip} .wi-step` });
+          const { own, pads } = await controlPads(page, `${strip} .wi-back, ${strip} .wi-step`);
+          expect(pads.length, 'Back, Previous and Next are drawn').toBe(3);
+          for (const [l, r] of pads) expect([l, r], `a strip control's side padding, against the button's own ${own}`).toEqual([own, own]);
           expect(errors).toEqual([]);
         } finally {
           await ctx.close();

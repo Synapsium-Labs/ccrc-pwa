@@ -25,7 +25,9 @@ throwaway browser file that was never committed.
 - **The phone** holds its figures except on the ledger screens: Waiting on you, Programme, Epic, Upkeep and the item route
   (its body and its step strip) sit at the scaffold's inset, 12 in Instrument and 16 in Refined (rulings 6 and 1, fix
   round 1, §15.1). The item's step strip stays one line at 390 (its controls' side padding is `--sp-2` on the phone) and
-  is two lines at 360, as on main (fix round 2, §16.1). The gap below the closed Accounts disclosure moved on the phone too,
+  is two lines at 360, as on main (fix round 2, §16.1). One line at 390 holds in Instrument for every position, and in
+  Refined while the position has one digit; from position 10 of a list Refined's strip wraps to two lines at 390, as
+  main's does there: no regression, carried (fix round 3, §17.2). The gap below the closed Accounts disclosure moved on the phone too,
   8 to 4, equal to the gap above it, which is what ruling 3 meant (fix round 2, §16.3).
 - **The Accounts head block**, built on merged main after #3402: the door's reason starts on the body's edge, the roll-up
   and the projection are one group, and four points of that PR's review are closed here; see §10.
@@ -557,14 +559,20 @@ block; the button's `px-3` is in the utilities layer, so the sheet's rule wins w
 and the steps 207.6. No word moved, the strip's gaps are as they were, and every control keeps the 44 tap floor. The
 strip's two gaps alone (each to `--sp-1`) were measured too: they fit Instrument at 390 but not Refined, so they stay.
 
-| Phone, the item route's step strip | Main | Reviewed head (f2c3672334) | After |
+| Phone, the item route's step strip (the two-item fixture, "1 of 2") | Main | Reviewed head (f2c3672334) | After |
 |---|---|---|---|
 | Its side pad | 8 | 12 Instrument, 16 Refined | 12 Instrument, 16 Refined |
 | At 390, both skins: lines, height | one line, 60 | two lines, 108 | one line, 60 |
 | At 360, both skins: lines, height | two lines, 108 | two lines, 108 | two lines, 108 |
 | Back, Previous and Next: height | 44 | 44 | 44 |
 
-At a desk nothing moved: the rule is in the strip's phone block. Pictures at 390, the reviewed head then this round's head:
+The Main column is for this two-item fixture: with 12 waiting items main's strip is 108 at 390 too (review 4044's
+measure). In Refined at 390 the strip needs Back 130.5, a gap of 8, the position, a gap of 8, Previous 87.8, a gap of 8 and
+Next 60.6 against 358 inside its pad: about 4.7 px to spare with a one-digit position, and about 2.5 px short from position
+10 ("10 of 12", 57.6 wide), where it wraps to two lines, 108 tall, as on main and on the reviewed head. Instrument (pad 12)
+stays one line at every position drawn. The coordinator ruled it no regression and carried it (§17.2).
+
+At a desk nothing moved: the rule is in the strip's phone block, and a case pins it since fix round 3 (§17.3). Pictures at 390, the reviewed head then this round's head:
 `before-fr2-instrument-390-item.png`, `after-fr2-instrument-390-item.png`, `before-fr2-refined-390-item.png` and
 `after-fr2-refined-390-item.png`, in `docs/design/2026-10-22-desktop-polish/console-spacing/`.
 
@@ -574,7 +582,8 @@ In Refined at a desk, opening an item drew the list beside it (`aside.wl.wl-besi
 24, while the fleet list column in the same pane is held at 16 (§9). The list beside an item now takes the fleet column's
 own side gutter, `--sp-4` (`.wl.wl-beside`, two classes, so it wins over `.wl`'s inset in any sheet order). Refined at 1280
 and 1440: 24 before, 16 after, the fleet list column 16; Instrument 16 throughout (its `--gutter` is `--sp-4` at a desk).
-§9 names it.
+In Instrument the 16 is its desk gutter written as a token: the list column reads `--gutter` and the list beside an item
+`--sp-4`, equal today by Instrument's role, not by one source, and the R2 case reds if they part. §9 names it.
 
 ### 16.3 R3: the Accounts disclosure on the phone
 
@@ -642,3 +651,63 @@ a45831a795; the merge queue is their arbiter. The pull request's own fast run on
 
 Ledger-Edit: not needed. This note is new in this pull request, so the head commit edits no existing file under the
 programme notes folder.
+
+## 17. Fix round 3 (review run 4044, the coordinator's rulings A to E)
+
+The review read 4e9213d02b and found nothing unsafe and nothing that must not reach main; R1 to R5 were built as ruled, and
+the four mutants of §16.6 reproduce. The round exists because main moved: #3472 (the browser files' dark palette by its real
+id) merged and conflicted with this branch in `pwa/browser/run-tally.browser.test.ts`. Since the head had to change, the
+review's small items ride the same push. Before is 4e9213d02b; after is this round's head.
+
+### 17.1 A: the absorb
+
+The coordinator's conflict mail named the base f3b3cceed7 (#3472's merge); the probe of it exited 1 with a tree id, on
+`run-tally` alone. The branch merged it once, with `git merge` (b3a2b0e6fb). The only conflicting hunk was the import block:
+this branch had added `type Page` for the page-clock pin (§12), and #3472 added `PHOSPHOR`. Both are kept. Every line of
+#3472's stays whole: `THEMES` with `PHOSPHOR`, and `expectStampedTheme` after each `goto`. Against that base the resolved
+file differs only by this wave's existing change (the `pinClock` helper and its two calls). The file was held by #3472's wave
+(wave 188); it had a peer packet with the diff and answered yes before the commit, then released it, and this branch
+claimed it.
+
+#3472's two palette guards, `pwa/test/browser-theme-ids.test.ts` and `pwa/test/browser-dist.test.ts` (with the helper
+`pwa/browser/stampedTheme.ts`), read every file under `pwa/browser`. On the merge both are green (36 of 36), `console-spacing`
+included: it already picks the dark palette by its real id (`PHOSPHOR`), so no line of it needed #3472's form, and neither
+guard nor its allow lists was touched.
+
+### 17.2 D: one line at 390 holds while the position has one digit (ruled, carried)
+
+Not built here. In Instrument the strip is one line at 390 for every position; in Refined while the position has one digit.
+From position 10 Refined's strip wraps to two lines at 390, as main's does there, so it is no regression, and it goes to
+the carry ticket (console-spacing-review-4029-carries) with the review's arithmetic, which §16.1 now gives. §1 says so too,
+and §16.1's table says its Main column is for the two-item fixture.
+
+### 17.3 B and C: the strip rule is the item strip's alone, and pinned
+
+The phone rule for the strip's controls (`--sp-2` of side padding, §16.1) also reached the run pages' Back strip, which
+shares the strip's class (`.wi-nav.rd-strip`): on a run and on Runs advanced the Back button's side padding went from 12 to 8
+on the phone. No ruling named the run pages. The rule now reads `.wi-nav:not(.rd-strip) .wi-back`,
+`.wi-nav:not(.rd-strip) .wi-step`, the selector the item route's own cases already use, so the run pages draw as on main.
+
+| Phone, both skins, 360 and 390 | Main | Reviewed head (4e9213d02b) | After |
+|---|---|---|---|
+| A run and Runs advanced: the Back button's side padding | 12 | 8 | 12 |
+| The item strip's controls: side padding | 12 | 8 | 8 |
+| At a desk, the item strip's controls: side padding | 12 | 12 | 12 |
+| The item strip's height, the two-item fixture: 390 and 360 | 60 and 108 | 60 and 108 | 60 and 108 |
+
+New and changed pins (`console-spacing`, now 90 cases):
+
+| Case | Red first, or red under | Why |
+|---|---|---|
+| On a run and on Runs advanced, the Back button keeps the button's own side padding (both skins, 360 and 390) | red first 4 of 4 on 4e9213d02b's sheet | 8 against the button's own 12, read from `px-3` on a probe, never written in the case |
+| At a desk, the item strip's Back, Previous and Next keep the button's own side padding (both skins, both desk sizes) | 0 of 4 on the source; red 4 of 4 under the review's mutant (the rule moved out of the phone block) | 8 against 12 |
+| The R1 case also pins the strip's height: `2 × --sp-2 + lines × --tap-min + (lines − 1) × --sp-1`, 60 at 390 and 108 at 360 | 0 of 4 on the source; red 4 of 4 under a mutant (the item strip's bottom pad `--sp-1` on the phone) | 56 against 60, 104 against 108 |
+
+Each mutant was run on a saved copy of the sheet and restored, compared with `cmp`.
+
+### 17.4 E: words
+
+- The comment on the list beside an item (`ledgers.css`) and §16.2: in Instrument the 16 is its desk gutter written as a
+  token, `--sp-4`, equal to the list column's `--gutter` today by Instrument's role, not by one source; the R2 case reds if
+  they part.
+- §16.7's `linear-items` count and the main its merge runs were against are as they were then; §17.5 gives both on this head.
