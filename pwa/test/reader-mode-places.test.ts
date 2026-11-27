@@ -7,7 +7,7 @@
 // own entry B is entry 1 (numbered by the visit's start, its `baseIdx`), and every place pushed takes the next number.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  EMPTY_RECORD, IDX_KEY, PLACES_MAX, PLACE_KEY, SKIPS_MAX, afterPop, beginVisit, decidePop, endVisit, landedBelowReader, parseRecord,
+  EMPTY_RECORD, IDX_KEY, PLACES_MAX, PLACE_KEY, afterPop, beginVisit, decidePop, endVisit, landedBelowReader, parseRecord,
   pushPlace, readerPlaceFree, readerPlaceOf, readerStepBack, seedPage, stampVisitBase, standingOnDeadReader, visitKey, withExitPending,
   type PopDecision, type Place, type PopTab, type TabRecord,
 } from '../src/lib/historyPlaces';
@@ -819,95 +819,5 @@ describe('reader place: the record and its helpers', () => {
     expect(r.lastIdx).toBe(3);
     // Exit: one step over R is not enough, the tab stands on an entry above it. Two land on entry 1, below the reader place.
     expect(readerStepBack(r).n).toBe(2);
-  });
-
-  // ── X6 XR fix round 1, item 4, review I1: more than one entry the record does not hold above the reader place ──
-
-  const ADDRESS = '/docs/demo/specs/a.md';
-  const RETAGGED = { visit: 'v2', seq: 1, kind: 'reader' as const };
-  /** A live history entry: its number and the place its state carries. */
-  interface Live { readonly idx: number; readonly place?: { visit: string; seq: number; kind: 'overlay' | 'jump' | 'reader'; id?: string } }
-
-  /** The path of item 4: the visit starts on entry 1, R is pushed at 2, one jump per id above it, then Back to R and a new commit
-   *  of the same document (the new visit carries only R across). Answers the record and the entries the tab's history holds. */
-  function reopenedAtReader(ids: readonly string[]): { rec: TabRecord; live: Live[] } {
-    let r = beginVisit(rec({ next: 0 }), visitKey(ADDRESS, 'k1'), 'v1', { idx: 1 }).rec;
-    r = stampVisitBase({ rec: r, continued: false, stamp: null }, { idx: 1 });
-    const live: Live[] = [{ idx: 1 }];
-    r = pushPlace(r, { kind: 'reader' }, { idx: 1 }).rec;
-    live.push({ idx: 2, place: { visit: 'v1', seq: 1, kind: 'reader' } });
-    ids.forEach((id, i) => {
-      r = pushPlace(r, { kind: 'jump', id }, { idx: 2 + i }).rec;
-      live.push({ idx: 3 + i, place: { visit: 'v1', seq: 2 + i, kind: 'jump', id } });
-    });
-    const toR = entry(2, live[1]!.place);
-    r = afterPop(r, toR, decidePop(toR, tabOf(r, true), true)).rec;
-    r = beginVisit(r, visitKey(ADDRESS, 'k2'), 'v2', { idx: 2, place: { visit: 'v1', seq: 1, kind: 'reader' } }).rec;
-    live[1] = { idx: 2, place: RETAGGED };   // the new visit re-tags the reader place it took over (`startPlaces`'s `retag`)
-    return { rec: r, live };
-  }
-
-  /** Forward through every entry above the tab's, as the dispatcher answers each, up to the newest. */
-  function forwardTo(r: TabRecord, live: readonly Live[], idx: number): TabRecord {
-    let at = live.findIndex((e) => e.idx === r.lastIdx);
-    let now = r;
-    for (let i = 0; i < 6 && live[at]!.idx !== idx; i += 1) {
-      const popped = entry(live[at + 1]!.idx, live[at + 1]!.place);
-      const d = decidePop(popped, tabOf(now, true), false);
-      now = afterPop(now, popped, d).rec;
-      at = d.kind === 'skip' ? at + 1 : live.findIndex((e) => e.idx === now.lastIdx);
-    }
-    return now;
-  }
-
-  /** An exit that is not a pop, as the hook makes it: the mark is set, one `history.go(-n)` over the entries, and every pop that
-   *  follows is decided and recorded as the dispatcher does, a skip stepping once more, until a decision that is not a skip. */
-  function exitWalk(r: TabRecord, live: readonly Live[]): { kinds: string[]; final: PopDecision } {
-    let now = withExitPending(r, true);
-    let at = live.findIndex((e) => e.idx === now.lastIdx) - readerStepBack(now).n;
-    const kinds: string[] = [];
-    for (let i = 0; i < 8; i += 1) {
-      const popped = entry(live[at]!.idx, live[at]!.place);
-      const d = decidePop(popped, tabOf(now, true), false);
-      kinds.push(d.kind);
-      now = afterPop(now, popped, d).rec;
-      if (d.kind !== 'skip') return { kinds, final: d };
-      at += d.dir === 'back' ? -1 : 1;
-    }
-    throw new Error('the exit never settled');
-  }
-
-  it('reader place: two entries the record does not hold above the reader place: an exit still lands below it (review I1 a)', () => {
-    const { rec: opened, live } = reopenedAtReader(['j1', 'j2']);
-    // Forward: the first jump is stale below the newest entry (skipped over), the second is stale and newest (the router's).
-    const r = forwardTo(opened, live, 4);
-    expect(r.lastIdx, 'CONTROL: the tab stands on the second jump').toBe(4);
-    expect(r.places.map((p) => p.kind), 'CONTROL: the record holds only the reader place').toEqual(['reader']);
-    const walk = exitWalk(r, live);
-    expect(walk.final, `the exit crossed the reader place (${walk.kinds.join(', ')})`).toEqual({ kind: 'exit-reader', closeOverlay: false, route: false });
-    expect(walk.kinds.at(-2), 'the landing on the reader place was stepped over').toBe('skip');
-  });
-
-  it('reader place: a frame jump above an entry the record does not hold: an exit lands below the reader place and scrolls nothing (review I1 b)', () => {
-    const { rec: opened, live } = reopenedAtReader(['j']);
-    let r = forwardTo(opened, live, 3);
-    expect(r.lastIdx, 'CONTROL: the tab stands on the jump').toBe(3);
-    // One more jump of the frame: the push drops the places above the entry it is pushed from, and the entry it stands on is not recorded.
-    r = pushPlace(r, { kind: 'jump', id: 'j2', from: 'f' }, { idx: 3, place: { visit: 'v1', seq: 2, kind: 'jump', id: 'j' } }).rec;
-    live.push({ idx: r.lastIdx, place: { visit: 'v2', seq: r.seq, kind: 'jump', id: 'j2' } });
-    expect(r.places.map((p) => p.kind), 'CONTROL: the record holds the reader place and the new jump').toEqual(['reader', 'jump']);
-    const walk = exitWalk(r, live);
-    expect(walk.kinds, 'a landing on the reader place answered the frame (a scroll)').not.toContain('goto');
-    expect(walk.final, `the exit crossed the reader place (${walk.kinds.join(', ')})`).toEqual({ kind: 'exit-reader', closeOverlay: false, route: false });
-  });
-
-  it('reader place: the exit\'s extra step over unheld entries is a skip, bounded by SKIPS_MAX like any other (review I1)', () => {
-    const t = tab({ visit: 'v', places: [R], lastIdx: 9, exitPending: true, skips: 0, skipDir: null });
-    const landing = entry(2, { visit: 'v', seq: 1, kind: 'reader' });
-    expect(decidePop(landing, t, false), 'CONTROL: seven entries crossed, none held').toEqual({ kind: 'skip', dir: 'back' });
-    expect(decidePop(landing, { ...t, skips: SKIPS_MAX, skipDir: 'back' }, false).kind, 'the run of skips is spent').not.toBe('skip');
-    expect(decidePop(landing, { ...t, exitPending: false }, false).kind, 'no exit is pending: not the exit\'s').not.toBe('skip');
-    expect(decidePop(landing, { ...t, places: [R, { seq: 2, kind: 'jump', idx: 3, id: 'j' }], lastIdx: 3 }, false).kind,
-      'every entry crossed is held: X2\'s answer').not.toBe('skip');
   });
 });

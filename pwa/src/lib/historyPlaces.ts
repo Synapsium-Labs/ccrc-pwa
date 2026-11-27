@@ -323,9 +323,7 @@ function countingReader(places: readonly Place[], lastIdx: number): Place | null
  *  below the popped one: a place the record holds but history discarded is crossed by nothing) is `leave-dead-reader`, when no exit is pending
  *  and a reader host is registered (`tab.readerHost`). The rest, rules 3 to 9, read the record's
  *  places with every reader place removed, so a reader place is never "left" as a frame place and a Forward onto one is
- *  never a frame place either; a reader place of another visit is stale as rule 5 says. With the record's `exitPending`, a
- *  Back that lands on or above `R` after crossing more entries than the record holds places for (entries it does not hold
- *  sit above `R`) is a back skip, bounded as any skip is: the exit's landing is below `R`, and no frame command runs. */
+ *  never a frame place either; a reader place of another visit is stale as rule 5 says. */
 export function decidePop(popped: unknown, tab: PopTab, readerOn = false): PopDecision {
   const { idx, place } = readEntry(popped);
   if (idx === null) return { kind: 'router' };
@@ -344,14 +342,6 @@ export function decidePop(popped: unknown, tab: PopTab, readerOn = false): PopDe
         // screen that is consumed is not.
         route: base === null || idx < base,
       };
-    }
-    // An exit's own step-back that fell short: it landed on or above the counting reader place, and the pop crossed more entries
-    // than the record holds places for (live entries the record does not hold, more than `readerStepBack` could count). It steps
-    // once more, bounded as any skip is, and nothing else runs (no frame command): the landing below the place is the exit's.
-    // A pop over exactly the places held (a frame's own Back landing on the place during an exit's settle) is X2's answer.
-    if (counts !== null && tab.exitPending === true && dir === 'back' && idx >= counts.idx && (tab.skipDir === 'back' ? tab.skips : 0) < SKIPS_MAX) {
-      const held = tab.places.filter((p) => p.idx > idx && p.idx <= tab.lastIdx).length;
-      if (tab.lastIdx - idx > held) return { kind: 'skip', dir: 'back' };
     }
     // A dead reader entry, left at once: Forward only (a gesture of its own each time), with no exit pending (that exit's
     // own landing is coming), a reader host to step (a record that outlived its visit has none), onto a place of THIS visit
