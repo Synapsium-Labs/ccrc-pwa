@@ -208,6 +208,15 @@ export interface ProgrammesLifecycleAnswer {
   coordinatorsWithoutProgramme?: CoordinatorWithoutProgramme[];
 }
 
+/** The programmes read's applied window (Overlord W1 home B, review 3998 F6, call 1618). `appliedSince` is the `since` the counts
+ *  were taken from, epoch ms, after the read held the asked one to the last 48 hours and to now: set on every answer, so a
+ *  reader compares the window it asked with the one applied. Absent from an older server: the window is unknown, never the
+ *  asked one. Declared here, beside the read's other additive part, because `shared/api.ts` is capped (D-8635):
+ *  `ProgrammesAnswer` extends both. */
+export interface ProgrammesWindowAnswer {
+  appliedSince?: number;
+}
+
 /** One line of a programme's story (spec §11): a programme event (its own, or a placeholder's filed into it), or a run's
  *  transition, oldest first. */
 export type ProgrammeHistoryEntry =

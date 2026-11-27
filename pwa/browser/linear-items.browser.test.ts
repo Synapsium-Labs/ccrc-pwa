@@ -165,14 +165,69 @@ function pageOf(verb: 'linear-map' | 'linear-report', width: number): string {
   } finally { g.matchMedia = before; }
 }
 
-/** The shared build's stylesheets, entry sheets first (the index's own links), then every other under assets/. */
-function stylesheets(root: string): string[] {
-  const index = readFileSync(path.join(root, 'index.html'), 'utf8');
-  const linked = [...index.matchAll(/<link[^>]*rel="stylesheet"[^>]*href="([^"]+)"/g)].map((m) => m[1]!)
-    .concat([...index.matchAll(/<link[^>]*href="([^"]+\.css)"[^>]*rel="stylesheet"/g)].map((m) => m[1]!));
-  const all = readdirSync(path.join(root, 'assets')).filter((f) => f.endsWith('.css')).map((f) => `/assets/${f}`);
-  return [...new Set([...linked, ...all])];
+/** A built tree as the sheet helper reads it: a file's text by its root-relative name (`index.html`, `assets/x.js`), the root's
+ *  pages and the names under `assets/`. The real build is `treeAt`; the helper's own cases build small ones in memory. */
+type BuiltTree = { read: (file: string) => string; pages: string[]; assets: string[] };
+function treeAt(root: string): BuiltTree {
+  return {
+    read: (file) => readFileSync(path.join(root, file), 'utf8'),
+    pages: readdirSync(root).filter((f) => f.endsWith('.html')),
+    assets: readdirSync(path.join(root, 'assets')),
+  };
 }
+
+/** The sheets one built page links, in its own order, whichever of `rel` and `href` comes first. */
+function linkedSheets(html: string): string[] {
+  return [...html.matchAll(/<link[^>]*rel="stylesheet"[^>]*href="([^"]+)"/g)].map((m) => m[1]!)
+    .concat([...html.matchAll(/<link[^>]*href="([^"]+\.css)"[^>]*rel="stylesheet"/g)].map((m) => m[1]!));
+}
+
+/** The reference forms `reached` reads, for the throw's message. */
+const REFERENCE_FORMS = 'page links and scripts as /assets/…, chunk imports as ./…, preload lists as assets/… and worker URLs as (/)assets/…, '
+  + 'each in double quotes, single quotes, backticks or parentheses';
+
+/** Every file under `assets/` one page loads, as `/assets/<name>`: what the page names, then what each script it reaches names,
+ *  read from the build's own text. A page names its sheets and its entry script as `/assets/…`; a chunk names a chunk it imports
+ *  as `./…` (beside it), the files of a dynamic import, sheets among them, as `assets/…` (Vite's preload list), and a worker
+ *  as `/assets/…`. The build writes them in double quotes, and some as template literals in backticks (a dynamic import of a
+ *  chunk, a worker's URL); a name in any other form is not read, which `shellSheets` turns into a throw. A name that is no file
+ *  under `assets/` is not followed, so a string that merely looks like one costs nothing. */
+function reached(tree: BuiltTree, page: string): Set<string> {
+  const files = new Set(tree.assets);
+  const named = (text: string): string[] =>
+    [...text.matchAll(/["'`(](?:\/?assets\/|\.\/)([\w.-]+\.(?:css|js))["'`)]/g)].map((m) => m[1]!);
+  const seen = new Set<string>();
+  const queue = named(tree.read(page)).filter((f) => files.has(f));
+  for (let f = queue.shift(); f !== undefined; f = queue.shift()) {
+    if (seen.has(f)) continue;
+    seen.add(f);
+    if (f.endsWith('.js')) queue.push(...named(tree.read(`assets/${f}`)).filter((g) => files.has(g)));
+  }
+  return new Set([...seen].map((f) => `/assets/${f}`));
+}
+
+/** The SHELL's stylesheets from the shared build: the index's own links first, then every other sheet under `assets/` that the
+ *  shell's chunks load later, in the folder's order. A sheet that only ANOTHER entry page loads (any other `*.html` at the
+ *  build's root, today `review.html`, the Docs reader's review page) is that page's own and never the shell's: applied here,
+ *  its document-level rules restyle the shell. The shell's set is read from its own chunks (`reached`), not from what the
+ *  other pages link, so a sheet another page links that a lazily loaded shell chunk also imports stays in. The build writes
+ *  no manifest (`vite.config.ts` sets none), so the chunks' text is the record. A script or sheet under `assets/` that no
+ *  page's walk reaches throws: the build names a file in a form `reached` does not read, and a file it cannot follow could
+ *  hold a sheet the shell loads, which, dropped quietly, would leave the shell unstyled where it loads. */
+function shellSheets(tree: BuiltTree): string[] {
+  const linked = linkedSheets(tree.read('index.html'));
+  const all = tree.assets.filter((f) => f.endsWith('.css')).map((f) => `/assets/${f}`);
+  const shell = reached(tree, 'index.html');
+  const byPages = tree.pages.map((p) => reached(tree, p));
+  const unreached = tree.assets.filter((f) => /\.(?:css|js)$/.test(f)).map((f) => `/assets/${f}`)
+    .filter((h) => !byPages.some((r) => r.has(h)));
+  if (unreached.length > 0) {
+    throw new Error(`reached() follows no page to ${unreached.join(', ')}: each is a file under assets/, but no page's walk `
+      + `(${tree.pages.join(', ')}) reaches it. The walk reads ${REFERENCE_FORMS}; the build names these another way.`);
+  }
+  return [...new Set([...linked, ...all])].filter((h) => shell.has(h));
+}
+const stylesheets = (root: string): string[] => shellSheets(treeAt(root));
 
 /** A stand-in for the shell's phone bar, in the shell's own classes (shell.css: fixed at the foot, `:root:has(.shell-phone-nav)`
  *  publishes `--phone-bar-h` from it, and `.app-shell:has(> .shell-phone-nav)` lifts `--safe-bottom` above it), so the stuck act
@@ -422,4 +477,108 @@ describe('the item route draws the body from the migration read', () => {
       }
     }, 60_000);
   }
+});
+
+describe('the shell\'s sheets from the shared build', () => {
+  /** A tree's other pages, and the sheets their walks reach that the index's walk does not. Read from the walk, not the links,
+   *  so a sheet another page links that a lazily loaded shell chunk also imports is the shell's, never foreign. */
+  const foreignOf = (t: BuiltTree): { others: string[]; foreign: string[] } => {
+    const others = t.pages.filter((p) => p !== 'index.html');
+    const shell = reached(t, 'index.html');
+    return { others, foreign: [...new Set(others.flatMap((p) => [...reached(t, p)]))].filter((h) => h.endsWith('.css') && !shell.has(h)) };
+  };
+  /** Cases 1 and 2's checks on one tree: no foreign sheet among the shell's, and every other sheet kept, the index's links first. */
+  const leavesOutForeign = (t: BuiltTree): void => {
+    const { others, foreign } = foreignOf(t);
+    expect(shellSheets(t).filter((h) => foreign.includes(h)), `pages ${others.join(', ')}`).toEqual([]);
+  };
+  const keepsTheRest = (t: BuiltTree): string[] => {
+    const { foreign } = foreignOf(t);
+    const shell = linkedSheets(t.read('index.html'));
+    const rest = t.assets.filter((f) => f.endsWith('.css')).map((f) => `/assets/${f}`)
+      .filter((h) => !shell.includes(h) && !foreign.includes(h));
+    expect(shellSheets(t)).toEqual([...shell, ...rest]);
+    return rest;
+  };
+  const page =(sheets: string[], script: string | null): string => `<!doctype html><html><head>${
+    script === null ? '' : `<script type="module" crossorigin src="/assets/${script}"></script>`}${
+    sheets.map((s) => `<link rel="stylesheet" crossorigin href="/assets/${s}">`).join('')}</head><body></body></html>`;
+  const tree = (files: Record<string, string>): BuiltTree => ({
+    read: (f) => { const t = files[f]; if (t === undefined) throw new Error(`no ${f}`); return t; },
+    pages: Object.keys(files).filter((f) => !f.includes('/') && f.endsWith('.html')),
+    assets: Object.keys(files).filter((f) => f.startsWith('assets/')).map((f) => f.slice('assets/'.length)),
+  });
+  /** review.html links b.css and d.css; a lazily loaded shell chunk imports d.css too, so d.css is the shell's. */
+  const sharedSheet = (): BuiltTree => tree({
+    'index.html': page(['a.css'], 'entry.js'),
+    'review.html': page(['b.css', 'd.css'], 'review.js'),
+    'assets/entry.js': 'import{x}from"./shared.js";const m=()=>__vitePreload(()=>import("./lazy.js"),__vite__mapDeps([0,1]));'
+      + 'function __vite__mapDeps(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/lazy.js","assets/c.css"])))',
+    'assets/lazy.js': 'const n=()=>import("./later.js");export const d=["assets/d.css"];',
+    'assets/later.js': 'export const z=1;',
+    'assets/shared.js': 'export const x=1;',
+    'assets/review.js': 'import{x}from"./shared.js";',
+    'assets/a.css': '', 'assets/b.css': '', 'assets/c.css': '', 'assets/d.css': '',
+  });
+
+  it('leave out a sheet that only another entry page links, in the real build', () => {
+    const real = treeAt(dist!);
+    const { others, foreign } = foreignOf(real);
+    // Not vacuous: the review page is built, and links a sheet of its own.
+    expect(others).toContain('review.html');
+    expect(foreign.length, `sheets only ${others.join(', ')} load`).toBeGreaterThan(0);
+    leavesOutForeign(real);
+  });
+
+  it('keep every other sheet, in the real build: the index\'s links first, then the rest of the folder in its order', () => {
+    expect(keepsTheRest(treeAt(dist!)).length, 'the shell loads sheets later, from its chunks').toBeGreaterThan(0);
+  });
+
+  it('judge a sheet another page links that a lazy shell chunk imports as the shell\'s, in the real-build cases\' checks', () => {
+    const t = sharedSheet();
+    leavesOutForeign(t);
+    expect(keepsTheRest(t)).toEqual(['/assets/c.css', '/assets/d.css']);
+    expect(foreignOf(t).foreign).toEqual(['/assets/b.css']);
+  });
+
+  it('follow a chunk named only as ./x.js, in quotes or in backticks', () => {
+    const t = tree({
+      'index.html': page(['a.css'], 'entry.js'),
+      'assets/entry.js': 'import{y}from"./dep.js";const w=()=>import(`./tpl.js`);',
+      'assets/dep.js': 'export const y=["assets/c.css"];',
+      'assets/tpl.js': 'export const s=new URL(`/assets/worker.js`,import.meta.url);export const z=[`assets/d.css`];',
+      'assets/worker.js': '',
+      'assets/a.css': '', 'assets/c.css': '', 'assets/d.css': '',
+    });
+    expect(shellSheets(t)).toEqual(['/assets/a.css', '/assets/c.css', '/assets/d.css']);
+  });
+
+  it('keep a lazily loaded shell sheet, and one another page links too, and drop the other page\'s own', () => {
+    expect(shellSheets(sharedSheet())).toEqual(['/assets/a.css', '/assets/c.css', '/assets/d.css']);
+  });
+
+  it('answer as before with one entry page: its links first, then every other sheet in the folder\'s order', () => {
+    const t = tree({
+      'index.html': page(['b.css', 'a.css'], 'entry.js'),
+      'assets/entry.js': 'const f=()=>import("./lazy.js");const m=["assets/lazy.js","assets/c.css"];',
+      'assets/lazy.js': '',
+      'assets/a.css': '', 'assets/b.css': '', 'assets/c.css': '',
+    });
+    expect(shellSheets(t)).toEqual(['/assets/b.css', '/assets/a.css', '/assets/c.css']);
+  });
+
+  it('throw on a sheet that no page loads, never drop it quietly', () => {
+    const t = tree({ 'index.html': page(['a.css'], null), 'assets/a.css': '', 'assets/e.css': '' });
+    expect(() => shellSheets(t)).toThrow(/reached\(\) follows no page to \/assets\/e\.css: each is a file under assets\/, but no page's walk/);
+  });
+
+  it('throw on a script that no page reaches, so a reference form the walk cannot read stays loud for chunks too', () => {
+    const t = tree({
+      'index.html': page(['a.css'], 'entry.js'),
+      'assets/entry.js': 'const f=()=>import("./"+"hidden.js");',
+      'assets/hidden.js': 'export const s=["assets/a.css"];',
+      'assets/a.css': '',
+    });
+    expect(() => shellSheets(t)).toThrow(/reached\(\) follows no page to \/assets\/hidden\.js: .*The walk reads page links/);
+  });
 });

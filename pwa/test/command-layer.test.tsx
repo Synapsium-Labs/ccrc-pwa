@@ -2,7 +2,7 @@
 // the two ways Escape could reach through the palette to the session header.
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, createEvent, fireEvent, render, screen, within } from '@testing-library/react';
 import { INSTRUMENT, SKINS, Sheet } from '@ccrc/ui';
 import { AUTH_VERDICTS, type RunSummary } from '../../shared/api';
 import { CommandLayer } from '../src/command/CommandLayer';
@@ -10,6 +10,7 @@ import { fleetOrder } from '../src/command/commands';
 import { COMMAND_FIELD_WORDS, SEARCH_EMPTY } from '../src/command/registry';
 import { actionDoor, commandDoor, doorMark } from '../src/command/door';
 import { CHORD_MS } from '../src/command/useShortcuts';
+import { setReaderModeHandle } from '../src/docs/readerModeHandle';
 import { clearAuthLost, raiseAuthLost, useAuthLost } from '../src/lib/auth';
 import { useLocation } from '../src/lib/router';
 import { setSkin } from '../src/lib/skin';
@@ -872,5 +873,72 @@ describe('the top search finds sessions (D-6714)', () => {
     fireEvent.keyDown(pageInput, { key: 'Enter' });
     expect(window.location.pathname, 'the page opens it too').toBe(`/s/${encodeURIComponent(TITLED.id)}`);
     expect(palette()).toBeNull();
+  });
+});
+
+// While reader mode is on (native Docs reader, reader-mode plan Task XR1.5, spec 2026-11-20 sections 3.1 and 3.2) the console is
+// hidden and the page is the reader's: Cmd or Ctrl+K opens no palette over it, and the single keys and the `g` chords are held
+// except `r`, which leaves. The handle is the Docs screen's; a stand-in answers it here.
+describe('while reader mode is on', () => {
+  it('commands: while reader mode is on, Cmd or Ctrl+K opens no palette and the single keys but r are held', () => {
+    const state = { on: true };
+    const toggle = vi.fn(() => { state.on = !state.on; });
+    setReaderModeHandle({ offered: () => false, available: () => false, on: () => state.on, toggle });
+    try {
+      render(<CommandLayer openNewSession={vi.fn()} />);
+      // Cmd+K and Ctrl+K: no palette, from the page and from inside it, and the browser's own Ctrl+K (its search bar) is
+      // stopped too, so it never runs over reader mode.
+      for (const [label, mod] of [['Cmd+K', { metaKey: true }], ['Ctrl+K', { ctrlKey: true }]] as const) {
+        const event = createEvent.keyDown(document.body, { key: 'k', ...mod });
+        fireEvent(document.body, event);
+        expect(palette(), label).toBeNull();
+        expect(event.defaultPrevented, `${label}: the browser's own default is stopped`).toBe(true);
+      }
+      // The single keys and the chords are the console's, which is hidden: none acts.
+      fireEvent.keyDown(document.body, { key: ']' });
+      expect(window.location.pathname, ']').toBe('/');
+      fireEvent.keyDown(document.body, { key: '[' });
+      expect(window.location.pathname, '[').toBe('/');
+      fireEvent.keyDown(document.body, { key: '?', shiftKey: true });
+      expect(shortcutsSheet(), '?').toBeNull();
+      fireEvent.keyDown(document.body, { key: 'g' });
+      fireEvent.keyDown(document.body, { key: 'i' });
+      expect(window.location.pathname, 'g i').toBe('/');
+      expect(toggle, 'nothing but r acted').not.toHaveBeenCalled();
+      // `r` is the exit: it acts, once.
+      fireEvent.keyDown(document.body, { key: 'r' });
+      expect(toggle).toHaveBeenCalledTimes(1);
+      // Reader mode off again: everything is as it was.
+      fireEvent.keyDown(document.body, { key: 'k', ctrlKey: true });
+      expect(palette(), 'Ctrl+K opens once reader mode is off').not.toBeNull();
+      fireEvent.keyDown(palette()!, { key: 'Escape' });
+      fireEvent.keyDown(document.body, { key: ']' });
+      expect(window.location.pathname, '] moves again').toBe(`/s/${A.id}`);
+    } finally {
+      setReaderModeHandle(null);
+    }
+  });
+
+  it('commands: a g pressed before reader mode began never makes r the second of g r', () => {
+    const state = { on: false };
+    const toggle = vi.fn(() => { state.on = !state.on; });
+    setReaderModeHandle({ offered: () => true, available: () => true, on: () => state.on, toggle });
+    try {
+      render(<CommandLayer openNewSession={vi.fn()} />);
+      // `g` opens a chord window; reader mode begins inside it (by the button, which no key press made).
+      fireEvent.keyDown(document.body, { key: 'g' });
+      state.on = true;
+      // `r` is the single key: it leaves, once, and goes nowhere (`g r` is Go to Runs).
+      fireEvent.keyDown(document.body, { key: 'r' });
+      expect(toggle).toHaveBeenCalledTimes(1);
+      expect(window.location.pathname, 'no Go to Runs').toBe('/');
+      // And with reader mode off again the chord is not left half-pressed either: `r` alone only enters.
+      expect(state.on).toBe(false);
+      fireEvent.keyDown(document.body, { key: 'r' });
+      expect(toggle).toHaveBeenCalledTimes(2);
+      expect(window.location.pathname).toBe('/');
+    } finally {
+      setReaderModeHandle(null);
+    }
   });
 });

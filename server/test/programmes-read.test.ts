@@ -167,6 +167,16 @@ describe('GET /api/programmes', () => {
     expect(narrow.body.closedToday).toEqual({ operator: 0, sweep: 1, coordinator: 1 });
   });
 
+  // Overlord W1 home B, review 3998 F6 (call 1618): every answer says the window it counted from, so a reader compares the
+  // window it asked with the window applied and never words a clamped count as the one it asked for.
+  it('every answer says the since it applied: a since older than the clamp answers the clamped since, one ahead of the clock answers now, one inside answers itself', async () => {
+    expect((await read(0)).body.appliedSince).toBe(NOW - 48 * HOUR);
+    expect((await read(NOW + HOUR)).body.appliedSince).toBe(NOW);
+    expect((await read(NOW - 90 * 60_000)).body.appliedSince).toBe(NOW - 90 * 60_000);
+    const res = await app!.inject({ method: 'GET', url: '/api/programmes' });
+    expect(res.json().appliedSince, 'the default window, asked with no since, is said too').toBe(NOW - 24 * HOUR);
+  });
+
   it('a bad since is refused', async () => {
     const res = await app!.inject({ method: 'GET', url: '/api/programmes?since=yesterday' });
     expect(res.statusCode).toBe(400);

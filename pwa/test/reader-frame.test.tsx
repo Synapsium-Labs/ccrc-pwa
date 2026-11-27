@@ -1325,13 +1325,14 @@ describe('ccrc\'s bar (the take-up plan, Task 5)', () => {
     expect(typeof input.onProgress).toBe('function');
   });
 
-  it('a frame-bar slot, and no slot, mount with the frame\'s own bar and ask for no progress; nothing is published', async () => {
+  it('a frame-bar slot, and no slot, mount with the frame\'s own bar and still ask for progress (D-8805); nothing is published', async () => {
     const h1 = harness();
     const publish = vi.fn<(bar: ReaderBar | null) => void>();
     render(slotted(h1, 'frame-bar', publish));
     const i1 = await ready(h1);
     expect(i1.chrome).toBe('frame-bar');
-    expect(i1.onProgress).toBeUndefined();
+    // Every production mount asks for progress (X6 XR1.4, D-8805): reader mode's overlay and its wake lock read the share.
+    expect(i1.onProgress).toBeTypeOf('function');
     act(() => { i1.onReady(); });
     expect(publish.mock.calls.filter((c) => c[0] !== null)).toEqual([]);
     cleanup();
@@ -1339,7 +1340,7 @@ describe('ccrc\'s bar (the take-up plan, Task 5)', () => {
     render(frame(h2));
     const i2 = await ready(h2);
     expect(i2.chrome).toBe('frame-bar');
-    expect(i2.onProgress).toBeUndefined();
+    expect(i2.onProgress).toBeTypeOf('function');
   });
 
   it('the bar is published at ready, not before', async () => {

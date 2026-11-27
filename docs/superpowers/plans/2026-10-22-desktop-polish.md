@@ -5902,14 +5902,98 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   `docs/superpowers/programs/desktop-polish/add-account-safari.md` §4.4.
 - **D-9105** — `auth-on-verb`: wave 181, issued on 2026-11-26. The accounts design's gate-dark remedy named a verb ccrc
   did not have; the operator ruled on 2026-11-25 to build it for a local box, so `ccrc auth on|off` arms or disarms the
-  console's sign-in on a server box used only at http://localhost. `on` refuses without a usable passphrase, on a box
-  reached from elsewhere (that is `ccrc expose`), while an update holds the lock, inside a session, without a terminal
-  and in a fleet pane, and otherwise writes `CCRC_AUTH=on`, `CCRC_RP_ID=localhost`, `CCRC_ORIGIN=http://localhost:<port>`
-  and `CCRC_COOKIE_INSECURE=on` into `ccrc.env` (the cookie line because WebKit drops a Secure cookie on plain-http
-  localhost, measured), restarts `ccrc.service` and proves the mode, restoring the file if the proof fails; `off`
-  removes exactly those lines. `ccd/ccrc` grows by the verb past the per-PR limit, waived as
-  `growth-waivers/D-9105-ccd-ccrc.json`: `passwd`, `expose` and `auth` are one family kept inline together. Measurements,
-  guards, residuals and mutants in `programs/desktop-polish/auth-on-verb.md`.
+  console's sign-in on a server box used only at http://localhost. `on` and `off` share these refusals: inside a
+  session, without a terminal and in a fleet pane; on a Mac (Linux only for now, issue #3475); on a fleet box, or one
+  with no installed `ccrc.service`; while an update holds the lock, or while a copy that a killed run left stands
+  beside `ccrc.env`; on a box reached from elsewhere (that is `ccrc expose`); on a bind address, port or key it cannot
+  read as `ccrc.service` receives it; on a box whose `ccrc.service` can take its bind or a sign-in key from anywhere
+  but `ccrc.env` and the exposure file; on a box whose installed `ccrc.service` is not the installer's file byte for
+  byte, is not the file systemd loaded, or has not been reloaded since it changed; and on a symlinked `ccrc.env`.
+  `on` alone refuses a loopback bind other than 127.0.0.1 or `localhost`; any of `CCRC_RP_ID`, `CCRC_ORIGIN` and
+  `CCRC_COOKIE_INSECURE` holding a value it does not write (a `CCRC_AUTH` it did not write is replaced, not refused); a
+  `CCRC_SESSIONS_PATH` line its reader cannot decide; and a passphrase that is missing, unusable or cannot be checked.
+  It otherwise writes `CCRC_AUTH=on`, `CCRC_RP_ID=localhost`, `CCRC_ORIGIN=http://localhost:<port>` and
+  `CCRC_COOKIE_INSECURE=on` into `ccrc.env` (the cookie line because WebKit drops a Secure cookie on plain-http
+  localhost, measured). `off` alone refuses a `CCRC_ORIGIN` or `CCRC_RP_ID` holding a value it did not write (armed by
+  hand for another address), and otherwise removes exactly those lines. Either way it restarts `ccrc.service` and
+  proves the mode, restoring the file if the proof fails. `ccd/ccrc` grows by the verb past the per-PR limit, waived as
+  `growth-waivers/D-9105-ccd-ccrc.json`: `passwd`, `expose` and `auth` are one family kept inline together.
+  Measurements, guards, residuals and mutants in `programs/desktop-polish/auth-on-verb.md`.
+- **D-9118** — `linearity-median-of-four`: desktop-polish wave 183, issued on 2026-11-26. The four linearity rows of
+  `server/test/session-hook-prune-deny.test.ts` measure four rounds instead of two, reverse which program runs first
+  on alternate rounds, and read the current program's ratio as the original's plus the median of the per-round
+  differences (`linearityVerdict`), where D-8334 took the faster of two measurements cell by cell. This amends D-8334
+  for the linearity rows only: the 64 KB cost rows keep the faster of two, and FD8's 0.5 margin, the sizes and the
+  vendored baseline's hash do not move. The margin was not consumed by the program's growth (the difference's mean
+  was -0.035 on hosted runs before #3169 and -0.029 after); the reds were one change of CPU contention inside a round
+  deciding the row. A load whose period matches one 64 KB sample still reds the row, before and after. The order and
+  each sample's cell go through `pairCells`, which a case pins with no CPU measured (review 4009 F2). Task note:
+  `docs/superpowers/programs/desktop-polish/hook-cost-row.md`.
+- **D-9141** — `cost-rows-own-baseline`: desktop-polish wave 183, issued on 2026-11-26, the hook owner's ruling (its
+  calls 1562 and 1643). The four 64 KB cost rows of `server/test/session-hook-prune-deny.test.ts` read a baseline of
+  their own, `fixtures/prune-deny/forbidden-jq-06aed21ff.jq`: the hook's forbidden program at the quiz row's gate,
+  06aed21ff7, pinned by its own sha256; the factor stays 1.5. The linearity rows keep `forbidden-jq-33e521e07.jq` and
+  its hash. The two files answer two rulings: inherited scaling against the program the deny was added to, and today's
+  accepted cost; each is frozen by its own hash and named by its commit; a test cannot read a commit through git. Why:
+  the gated program costs 0.75 of the original at 64 KB, so 1.5 x the original let the deny path's cost about double
+  before the row went red. In the bracket runs a quadratic step of about +80%, (n/7.6)², read 1.34 of the original,
+  green, and about +105% sat at the bound. Through the real test file a lighter step, (n/8)², about +72% of the gated
+  cost by scaling from +80% for (n/7.6)², was green against the original (a cell reconstructed from the printed samples, about 1.30 of it) and reads red
+  on the new baseline (15.5 s against 13.4 s). On the deny path, on a loaded box, a quadratic step is sure red near
+  +90% of the gated cost, and is decided by the baseline sample's own spread between about +28% and +50%; those step
+  sizes are scaled by 1/k² from review 4009's reading of (n/7.6)², +94% of the gated cost on its box, and on the task
+  note's own +80% for that step each is 0.85 times as large. Hosted,
+  where the two samples agree to under 1%, the edge is near +50%. The deny rows keep the 25 ms floor.
+
+  The class rows, whose program costs about one jq start-up, take a floor of their own, 100 ms (`COST_FLOOR_MS`). It
+  is the owner's call 1643, amending the class-floor part of call 1562, which had set 250 ms. The floor exists for one
+  reason, to keep run-to-run noise off the bound: a class cost row is green on a class path dearer by less than the
+  floor (through the real test file: about +80 ms green, about +120 ms red). The class bound is the baseline plus
+  100 ms, about 150 to 195 ms on the hosted runs read (152 and 163 ms on the merged head's fast run, 164 and 193 ms at
+  fix round 1's head). The owner's rule for the value: on
+  hosted runs, each class row's reading less its own baseline must be at or under 50 ms, half the floor; if any is
+  over, the floor is 150 ms, and this entry names the row and the run. Read on baff80048a, before the floor changed (a
+  reading does not depend on the floor):
+
+  | hosted run on baff80048a | quotes/class current, baseline, difference | dqsub/class current, baseline, difference |
+  |---|---|---|
+  | full run 45900000033 | 67, 66 ms: +1 ms | 66, 68 ms: -2 ms |
+  | fast run 45899992077 | 51, 53 ms: -2 ms | 52, 52 ms: 0 ms |
+
+  Every difference is at or under 50 ms, so 100 ms stands. Each cost row prints its figures on green.
+
+  Which row reads which file is one table, `ROW_BASELINE`. `programsOf` maps a row to its two program texts, and
+  `pairCells` puts each text's sample in its own cell. Between its row's programs and its assertion a measuring case
+  calls `costReading` or `linearityReading`, pure but for the programs and the timing function it is handed, and the
+  timing function is `timedBy` on the real child runner (wave 191, reviews 4024 M1 and 4046 M1'). Held by a case that
+  burns no CPU: the table, that the file registers one measuring case per row of it, the mapping, the cells, the reader
+  (it returns the bytes it hashed and refuses a wrong hash), `timedBy` (it runs the program it is given), for all eight
+  rows which program each reading came from, its cell, the order and the count, and the bound of the four cost rows
+  (quotes/deny, quotes/class, dqsub/deny and dqsub/class). Held by a scan of the test file, which reads text: that each
+  measuring case's body is that one call on the real `programsOf` and `timed`, with its timeout literals; that the
+  five lines composing the hook's path, the hook's program, the reader, `programsOf` and `timed` are the real ones; and
+  that none of the seventeen names in its table is bound twice. Not held: the crossings measured as still passing
+  every case, which the task note's §9 lists with who measured them; the list is what was measured, not a claim that
+  nothing else passes.
+  What is pinned now: the linearity rows pin doubling-size
+  scaling against the original, the cost rows pin cost against the program at the gate, and no row bounds cost
+  against the original, so FD8's historical-cost half no longer holds for any row.
+
+  The ruling tightened two bounds (hosted: quotes/deny about 27 s to 20.7 s, quotes/class about 6.7 s to about
+  166 ms). It widened two:
+  - dqsub/class from 81 to about 168 ms.
+  - dqsub/deny from 310.5 to 352.5 ms. That is 1.5 x the original's 207 ms against 1.5 x the gate program's 235 ms, the
+    cost row's own hosted baseline, because the gated program costs more than the original on the dqsub shape.
+
+  What each row cannot see:
+  - A class cost row misses a class step dearer by less than the floor.
+  - The quotes/class linearity row sees no quadratic step of any weight, because the original's class path is itself
+    quadratic on that input.
+  - The dqsub/class linearity row does see a quadratic class step, and reds it below the floor (from about +37 ms).
+  - So on the quotes shape a quadratic class step shows only in the quotes/class cost row, once it is dearer than the
+    floor.
+
+  The file is replaced only on the owner's next ruling on accepted cost, never to turn a row green.
 
 ## Out of scope
 

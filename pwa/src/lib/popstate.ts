@@ -10,6 +10,14 @@
 // module (`docs/reader/places.ts`) registers the mounted frame as the place host (`setPlaceHost`) and reads and writes the
 // tab record through `readPlaces` and `writePlaces`, as the release gate does for the one mark it leaves before a
 // full-page replace (`swupdate.ts#reloadOnMove`); every record they write is one `historyPlaces.ts` built.
+//
+// Reader mode's place (X6 XR1.3) has a host of its own, `setReaderPlaceHost`, held in a slot independent of the frame's:
+// the frame's slot is empty while the frame remounts, and reader mode outlives that. The dispatcher reads the reader
+// host's `on()` once per pop and hands it to the decider (L1 never calls a host). On `exit-reader` it closes the figure
+// through the frame's host when asked, tells the reader host, and, when the landing is below the doc, asks the decider
+// again for the same pop with no place of the visit (a landing below the doc leaves them all) and acts on that answer as
+// on any pop; on `leave-dead-reader`
+// it tells the reader host, which steps back. No subscriber runs for either unless that second answer is the router's.
 import {
   PLACES_RECORD_KEY, afterPop, decidePop, parseRecord, seedPage, type PopDecision, type TabRecord,
 } from './historyPlaces';
@@ -24,6 +32,15 @@ export interface PlaceHost {
   gotoTop(id: string): void;
 }
 
+/** What the reader-mode hook gives the dispatcher for the pops that are reader mode's. `on` is whether reader mode is on
+ *  now; `exitReader` ends it (`closeOverlay`: the frame's figure was already closed by the dispatcher, for the hook to
+ *  know); `leaveDead` steps back below a reader entry whose reader mode is over. */
+export interface ReaderPlaceHost {
+  on(): boolean;
+  exitReader(closeOverlay: boolean): void;
+  leaveDead(): void;
+}
+
 interface Subscription {
   readonly listener: () => void;
   active: boolean;
@@ -34,6 +51,7 @@ let installed = false;
 /** Whether this page has read the entry it loaded on into the record (`seedPage`). */
 let seeded = false;
 let host: PlaceHost | null = null;
+let readerHost: ReaderPlaceHost | null = null;
 /** The record as this page last wrote it: a store that throws or loses the key still works within the page. */
 let memo: TabRecord | null = null;
 
@@ -63,6 +81,15 @@ export function setPlaceHost(next: PlaceHost | null): () => void {
   };
 }
 
+/** The reader-mode hook's: it takes the pops that cross or stand on the reader place. `null` when none is registered. The
+ *  same unregister contract as `setPlaceHost`: it clears the slot only while it is still `next`, and is idempotent. */
+export function setReaderPlaceHost(next: ReaderPlaceHost | null): () => void {
+  readerHost = next;
+  return () => {
+    if (next !== null && readerHost === next) readerHost = null;
+  };
+}
+
 /** Run every subscriber, in subscription order, each one even when an earlier one threw; the first throw is rethrown
  *  after all have run, and every later one is reported as an uncaught error would be, as separate listeners' were. A
  *  subscriber that left while the pass ran is skipped. */
@@ -87,6 +114,15 @@ function runSubscribers(): void {
   if (failed) throw first;
 }
 
+/** Run one command of a host: a throwing host changes nothing else. */
+function run(command: () => void): void {
+  try {
+    command();
+  } catch (e) {
+    console.warn('ccrc: the reader frame refused a history command', e);
+  }
+}
+
 /** Act on a decision that is not the router's. A throwing frame changes nothing else. */
 function act(d: PopDecision, at: PlaceHost | null): void {
   if (d.kind === 'skip') {
@@ -94,13 +130,6 @@ function act(d: PopDecision, at: PlaceHost | null): void {
     else history.forward();
     return;
   }
-  const run = (command: () => void): void => {
-    try {
-      command();
-    } catch (e) {
-      console.warn('ccrc: the reader frame refused a history command', e);
-    }
-  };
   if (d.kind === 'close-overlay') {
     run(() => at?.closeOverlay());
   } else if (d.kind === 'goto') {
@@ -123,19 +152,57 @@ function stampEntry(stamp: number): void {
   }
 }
 
+/** What the decider reads of the record, with `places` as given (the second ask of a routed exit leaves the reader places out). */
+function tabOf(rec: TabRecord, places: TabRecord['places']): Parameters<typeof decidePop>[1] {
+  return {
+    visit: rec.visit, places, pendingSeq: rec.pendingSeq, lastIdx: rec.lastIdx, skips: rec.skips,
+    skipDir: rec.skipDir, host: host !== null, top: rec.top, baseIdx: rec.baseIdx, exitPending: rec.exitPending,
+    readerHost: readerHost !== null,
+  };
+}
+
+/** Whether reader mode is on, as its host says; no host, or a host that throws, reads false (the throw is warned, as any
+ *  host call's is). */
+function readerIsOn(): boolean {
+  try {
+    return readerHost?.on() ?? false;
+  } catch (e) {
+    console.warn('ccrc: the reader-mode host refused to say whether it is on', e);
+    return false;
+  }
+}
+
+/** Act on the answer of a pop: the router's runs the subscribers, any other one acts on a host. */
+function perform(d: PopDecision): void {
+  if (d.kind === 'router') runSubscribers();
+  else act(d, host);
+}
+
 function onWindowPop(): void {
   const state: unknown = history.state;
   const rec = readPlaces();
-  const d = decidePop(state, {
-    visit: rec.visit, places: rec.places, pendingSeq: rec.pendingSeq, lastIdx: rec.lastIdx, skips: rec.skips,
-    skipDir: rec.skipDir, host: host !== null, top: rec.top,
-  });
+  const d = decidePop(state, tabOf(rec, rec.places), readerIsOn());
+  if (d.kind === 'exit-reader') {
+    // The exit's landing is consumed (`afterPop` clears the mark). A landing below the doc is below the visit's base, so
+    // it leaves every place of the visit: it is asked again with none, which answers for the screen landed on (the router's,
+    // or a skip over another visit's place), and that answer is acted on and recorded in the pop's place.
+    const inner: PopDecision = d.route
+      ? decidePop(state, tabOf({ ...rec, exitPending: false }, []), false)
+      : d;
+    const after = afterPop({ ...rec, exitPending: false }, state, inner);
+    writePlaces(after.rec);
+    if (after.stamp !== null) stampEntry(after.stamp);
+    if (d.closeOverlay) act({ kind: 'close-overlay' }, host);
+    run(() => readerHost?.exitReader(d.closeOverlay));
+    if (d.route) perform(inner);
+    return;
+  }
   const after = afterPop(rec, state, d);
   writePlaces(after.rec);
   // The entry keeps its state and its URL; only its number is added, and the pop still routes if the browser refuses.
   if (after.stamp !== null) stampEntry(after.stamp);
-  if (d.kind === 'router') runSubscribers();
-  else act(d, host);
+  if (d.kind === 'leave-dead-reader') run(() => readerHost?.leaveDead());
+  else perform(d);
 }
 
 function uninstall(): void {
@@ -180,6 +247,7 @@ export function resetPopstateForTests(): void {
   subscribers = [];
   uninstall();
   host = null;
+  readerHost = null;
   memo = null;
   seeded = false;
   removeKey(PLACES_RECORD_KEY, tabStorage);

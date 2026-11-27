@@ -14,9 +14,16 @@
 // filter survives) and nothing from the frame but the id and the position token it gave: the port's nonce is the
 // port's alone and never reaches the state. When the body ends, the visit ends only if the page has moved to another
 // doc or to a screen that is not a doc.
+//
+// Reader mode's place (X6 XR1.3) is one more place of the visit, made by the console and not by the frame: the module
+// functions below push it (`pushReaderPlace`, through the same push the frame's places use), step back over it when an exit
+// was not a pop (`stepBelowReaderPlace`: one `history.go(-n)`; the caller marks the landing expected first, `markReaderExitPending`), and read the record for the hook
+// (`readerPlaceFreeNow`, `landedBelowReaderPlace`, `standingOnDeadReaderEntry`, `markReaderExitPending`). They read and
+// write the tab record only through `readPlaces` and `writePlaces`; every number and every decision is `historyPlaces.ts`'s.
+// A new visit's base entry is stamped into the record (`baseIdx`) when the visit starts.
 import {
-  IDX_KEY, PLACE_KEY, beginVisit, closedByFrame, endVisit, jumpEntryUrl, pushPlace, readEntry, visitEnds, visitKey,
-  type PlaceKind,
+  IDX_KEY, PLACE_KEY, beginVisit, closedByFrame, endVisit, jumpEntryUrl, landedBelowReader, pushPlace, readEntry, readerPlaceFree,
+  readerStepBack, stampVisitBase, standingOnDeadReader, visitEnds, visitKey, withExitPending, type PlaceKind,
 } from '../../lib/historyPlaces';
 import { readPlaces, setPlaceHost, writePlaces } from '../../lib/popstate';
 import { replaceFragment } from '../../lib/router';
@@ -54,18 +61,91 @@ const currentState = (): Record<string, unknown> => {
   return typeof s === 'object' && s !== null && !Array.isArray(s) ? { ...(s as Record<string, unknown>) } : {};
 };
 
+/** Pushes one place's entry over the current state, at `url` (the page's current URL by default). False when nothing was
+ *  pushed (the visit's budget is spent, there is no visit, or the history call was refused). The one push: the frame's
+ *  places and the reader place both go through it. */
+function pushEntry(p: { kind: PlaceKind; id?: string; from?: string }, url: string = location.href): boolean {
+  const rec = readPlaces();
+  const here = readEntry(history.state);
+  const pushed = pushPlace(rec, p, { idx: here.idx, place: here.place });
+  if (pushed.push === null) return false;
+  let numbered = false;
+  try {
+    if (pushed.stamp !== null || pushed.strip) {
+      // The entry pushed from is rewritten in place: numbered when it had no number, and without another visit's place
+      // when it holds one (as a new visit's start does), so one Back from the new place lands on a live entry.
+      const next = currentState();
+      if (pushed.strip) delete next[PLACE_KEY];
+      if (pushed.stamp !== null) next[IDX_KEY] = pushed.stamp;
+      history.replaceState(next, '');
+    }
+    numbered = pushed.stamp !== null;
+    history.pushState({ ...currentState(), [IDX_KEY]: pushed.push.idx, [PLACE_KEY]: pushed.push.place }, '', url);
+  } catch (e) {
+    console.warn('ccrc: the history entry for a place could not be pushed', e);
+    // A refused push after the number was written leaves the entry numbered: keep that number taken.
+    if (numbered && pushed.numbered !== null) writePlaces(pushed.numbered);
+    return false;
+  }
+  writePlaces(pushed.rec);
+  return true;
+}
+
+/** Whether a reader place can still be pushed now: a visit is open and its budget is not spent. */
+export function readerPlaceFreeNow(): boolean {
+  return readerPlaceFree(readPlaces());
+}
+
+/** Pushes reader mode's place: one entry of kind `reader` at the page's current URL, over the current state, exactly as the
+ *  frame's places are pushed. False when nothing was pushed (budget spent, no visit, or the history call refused). */
+export function pushReaderPlace(): boolean {
+  return pushEntry({ kind: 'reader' });
+}
+
+/** An exit of reader mode that was not a pop: steps history back below the reader place, over it and every live place
+ *  above it, with one `history.go(-n)`. Returns `n`; 0 (nothing stepped) when no reader place counts. It does not mark the
+ *  exit pending: the caller (the hook, or `leaveDead`) does that first, with `markReaderExitPending(true)`, so the
+ *  landing is expected before the step is made. */
+export function stepBelowReaderPlace(): number {
+  const step = readerStepBack(readPlaces());
+  if (step.n === 0) return 0;
+  history.go(-step.n);
+  return step.n;
+}
+
+/** Whether a pop has already landed below the reader place (the settle after a lost full screen asks it before it steps). */
+export function landedBelowReaderPlace(): boolean {
+  return landedBelowReader(readPlaces());
+}
+
+/** Sets or clears the record's mark that an exit's landing is expected. */
+export function markReaderExitPending(on: boolean): void {
+  writePlaces(withExitPending(readPlaces(), on));
+}
+
+/** Whether the tab stands on a dead reader entry: reader mode is off and the entry the page stands on is a place of this
+ *  visit at or above a reader place. */
+export function standingOnDeadReaderEntry(readerOn: boolean): boolean {
+  return standingOnDeadReader(readPlaces(), readerOn, readEntry(history.state).place);
+}
+
 /** Starts one body's visit. Reads the tab's record, begins or continues the visit for the body (`o.doc` under `o.scope`:
  *  a doc shown in parts has one scope per part, so each part is a visit of its own), drops an ended visit's place from the
  *  base entry it stands on (a new visit only), numbers that entry when it has no number, and keeps the record. */
 export function startPlaces(o: { doc: string; scope?: string; newVisitId?: () => string }): Places {
   const entry = readEntry(history.state);
-  const begun = beginVisit(readPlaces(), visitKey(o.doc, o.scope ?? ''), (o.newVisitId ?? randomVisitId)(), { idx: entry.idx });
-  writePlaces(begun.rec);
-  const strip = !begun.continued && entry.place !== null;
-  if (strip || begun.stamp !== null) {
-    // The entry keeps its state and its URL: only the ended visit's place goes, and the number is added.
+  const begun = beginVisit(
+    readPlaces(), visitKey(o.doc, o.scope ?? ''), (o.newVisitId ?? randomVisitId)(), { idx: entry.idx, place: entry.place },
+  );
+  writePlaces(stampVisitBase(begun, { idx: entry.idx }));
+  // A reader place the new visit took over (a new commit of the same doc) is re-tagged with the new visit, not stripped.
+  const retag = begun.retag && entry.place !== null;
+  const strip = !begun.continued && entry.place !== null && !retag;
+  if (strip || retag || begun.stamp !== null) {
+    // The entry keeps its state and its URL: only the ended visit's place goes (or is re-tagged), and the number is added.
     const next = currentState();
     if (strip) delete next[PLACE_KEY];
+    if (retag && entry.place !== null && begun.rec.visit !== null) next[PLACE_KEY] = { ...entry.place, visit: begun.rec.visit };
     if (begun.stamp !== null) next[IDX_KEY] = begun.stamp;
     try {
       history.replaceState(next, '');
@@ -77,34 +157,7 @@ export function startPlaces(o: { doc: string; scope?: string; newVisitId?: () =>
   /** Clears this body's host from the dispatcher, only while that host is still the dispatcher's. */
   let unregister: (() => void) | null = null;
 
-  /** Pushes one place's entry over the current state, at `url` (the page's current URL by default). False when nothing
-   *  was pushed (the visit's budget is spent, or the history call was refused). */
-  const push = (p: { kind: PlaceKind; id?: string; from?: string }, url: string = location.href): boolean => {
-    const rec = readPlaces();
-    const here = readEntry(history.state);
-    const pushed = pushPlace(rec, p, { idx: here.idx, place: here.place });
-    if (pushed.push === null) return false;
-    let numbered = false;
-    try {
-      if (pushed.stamp !== null || pushed.strip) {
-        // The entry pushed from is rewritten in place: numbered when it had no number, and without another visit's place
-        // when it holds one (as a new visit's start does), so one Back from the new place lands on a live entry.
-        const next = currentState();
-        if (pushed.strip) delete next[PLACE_KEY];
-        if (pushed.stamp !== null) next[IDX_KEY] = pushed.stamp;
-        history.replaceState(next, '');
-      }
-      numbered = pushed.stamp !== null;
-      history.pushState({ ...currentState(), [IDX_KEY]: pushed.push.idx, [PLACE_KEY]: pushed.push.place }, '', url);
-    } catch (e) {
-      console.warn('ccrc: the history entry for a place could not be pushed', e);
-      // A refused push after the number was written leaves the entry numbered: keep that number taken.
-      if (numbered && pushed.numbered !== null) writePlaces(pushed.numbered);
-      return false;
-    }
-    writePlaces(pushed.rec);
-    return true;
-  };
+  const push = pushEntry;
 
   const host: Places['host'] = (mount) => {
     unregister?.();

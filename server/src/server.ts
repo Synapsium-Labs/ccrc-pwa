@@ -85,7 +85,7 @@ import { createQuestions, type OperatorDoorDeps, type Questions } from './coord/
 import { heldFor } from './coord/heldFor.js';
 import { registerUpdateRoutes } from './update/routes.js';
 import {
-  composeDocs, readTree, registerDocsArtifactRoutes, registerDocsFolderReadRoutes, registerDocsFolderRegistryRoutes,
+  artifactBytes, composeDocs, readTree, registerDocsArtifactRoutes, registerDocsFolderReadRoutes, registerDocsFolderRegistryRoutes,
   registerDocsReadRoutes, registerDocsRefreshRoute, registerDocsSettingsRoutes,
 } from './docs/routes.js';
 import { registerReviewOpenRoute, registerReviewPageRoutes } from './review/routes.js';
@@ -95,6 +95,7 @@ import { startReviewSweep } from './review/sweep.js';
 import { createReaderLabRuns } from './readerLab/runs.js';
 import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/routes.js';
 import { buildArtifactServer, createArtifactListenerState, installConsoleHostFence } from './artifacts/routes.js';
+import { frameworkErrorPhrase, frameworkErrorStatus } from './artifacts/policy.js';
 import { createArtifactStore } from './artifacts/store.js';
 import { sessionLiveness } from './artifacts/liveness.js';
 import { operatorActRoute, servedFleetReads, servedFromWatcher, servedProjectReads, takenAfter } from './servedRead.js';
@@ -133,6 +134,7 @@ import { registerOverlordInboxRoutes } from './coord/overlordInboxRoutes.js';
 import { runOverlordRead } from './coord/overlordRead.js';
 import { registerOverlordHistoryRoutes } from './coord/overlordHistoryRoutes.js';
 import { registerOverlordSequenceRoutes } from './coord/overlordSequenceRoutes.js';
+import { boardPortsOf, registerOverlordBoardRoutes } from './coord/overlordBoardRoutes.js';
 import { sequenceAfter } from './coord/overlordSequenceStore.js';
 import { invariantsReadOver } from './coord/invariantLane.js';
 import { readTurnMarkMeasured } from './turnmark.js';
@@ -140,6 +142,7 @@ import { actKeyFact, advanceCounterGuarded, recordFenceRefusal } from './coord/o
 import { CONTINUITY_LANE } from '../../shared/lane-arm.js';
 import { NO_LADDER_AUTHORITY } from './coord/overlordAuthorityJournal.js';
 import { renewalHostOf } from './continuity/renewalWiring.js';
+import { placeMarkReporter } from './continuity/placeMarkReport.js';
 import { registerResponseRoutes } from './responses/routes.js';
 import { readLinearStore } from './linear/store.js';
 import { trackerIdsIn } from './linking/policy.js';
@@ -330,6 +333,8 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/portfolio', '/api/overlord/ladder', '/api/overlord/readiness',
   // The operator's messages, one by its id (W1 inbox piece): the text is the operator's own words, masked by the one answer hook.
   '/api/overlord/inbox', '/api/overlord/messages/:id',
+  // The Overlord's board (W1 PR B2): programme titles, session ids and item titles a session wrote, each marked untrusted.
+  '/api/overlord/board',
   // The operator's read of the invariant monitor (sequence C): findings' messages and unmeasured reasons carry composed text, a
   // producer's error detail among it, as the ladder's and the readiness word's `why` do.
   '/api/overlord/invariants',
@@ -432,7 +437,22 @@ function findPwaRoot(): string | null {
 }
 
 export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWatcher): Promise<FastifyInstance> {
-  const app = Fastify({ logger: false });
+  // `frameworkErrors` (X5 A3, from the A1 reviews): Fastify answers a malformed percent-escape (400) and an over-long path
+  // parameter (414) itself, before any hook (the artifact host fence included), with a body whose `message` ECHOES the request
+  // path. A request misrouted here from an artifact host carries a capability token in its path. The answer keeps Fastify's
+  // own status (`frameworkErrorStatus`, L1) and body less its `message`: `error` (the status's own reason phrase,
+  // `frameworkErrorPhrase`, L1), `code` and `statusCode`, nothing of the path.
+  const app = Fastify({
+    logger: false,
+    frameworkErrors: (err, _req, reply) => {
+      const code = (err as { code?: unknown }).code;
+      const status = frameworkErrorStatus(code);
+      return (reply as FastifyReply).code(status).send({
+        error: frameworkErrorPhrase(status), code: typeof code === 'string' ? code : undefined,
+        statusCode: status,
+      });
+    },
+  });
   await app.register(fastifyWebsocket);
   await app.register(fastifyMultipart, { limits: { fileSize: 25 * 1024 * 1024 } });
   // `global: false`: only a route that opts in with `config.rateLimit` is limited (coord/routes.ts).
@@ -614,15 +634,15 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // listen state, and closes it with the console. The console's host fence is an onRequest hook added before every
   // other, so a request naming an artifact host answers 421 before the gate runs; with the tier off it adds nothing.
   const artifactCfg = deps.cfg.artifact;
-  const artifactApp = artifactCfg.state === 'on' ? buildArtifactServer({ cfg: artifactCfg }) : null;
-  app.decorate('artifactServer', artifactApp);
-  const artifactListener = artifactApp === null ? null : createArtifactListenerState();
+  // The one capability store (X5 A2.2), in memory, built first when the tier is on: the artifact instance reads it (A3.1's
+  // wrapper) and it is handed to the docs plugin's mint-side doors below. Its liveness port asks `authStore` with the secret
+  // measured afresh on every call: `secretNow` is declared further down this body and is only called at a request, after it exists.
+  // The instance itself is built further down, after `composeDocs`: its content door (A3.3) reads bytes through that composition's
+  // readers and lanes, so it is made, decorated and closed with the console there. The console's host fence stays here, an early
+  // onRequest hook, and so do the store and the listen state.
+  const artifactStore = artifactCfg.state === 'on' ? createArtifactStore(Date.now, sessionLiveness(authStore, () => secretNow())) : null;
+  const artifactListener = artifactCfg.state === 'on' ? createArtifactListenerState() : null;
   app.decorate('artifactListener', artifactListener);
-  // The one capability store (X5 A2.2), in memory, built beside the listener state when the tier is on and handed to the docs
-  // plugin's mint-side doors below. Its liveness port asks `authStore` with the secret measured afresh on every call: `secretNow`
-  // is declared further down this body and is only called at a request, after it exists.
-  const artifactStore = artifactApp === null ? null : createArtifactStore(Date.now, sessionLiveness(authStore, () => secretNow()));
-  if (artifactApp !== null) app.addHook('onClose', async () => { await artifactApp.close(); });
   installConsoleHostFence(app, artifactCfg);
   // The reader lab's door (the reader lab design, section 4): its counter is an onRequest hook added HERE, before the
   // gate's, so a probe the gate refuses (a sandboxed frame's WebSocket upgrade on an armed box) is still counted. It only
@@ -2365,13 +2385,17 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   registerOverlordSequenceRoutes(app, { mailToken: () => deps.mailToken ?? null, gate, readRunner,
     sequence: (after, limit) => (deps.coord === undefined ? { kind: 'unmeasured', why: 'no coordination store' } : sequenceAfter(deps.coord.db, after, limit)),
     restoreGeneration: () => deps.overlordRestore?.restoreGeneration() ?? { kind: 'unmeasured' } });
+  // The Overlord's board (W1 PR B2): one composed read over the readers the console's own reads call, through this server's walk cache.
+  registerOverlordBoardRoutes(app, { mailToken: () => deps.mailToken ?? null, gate, readRunner, board: boardPortsOf({ coord: deps.coord, io: deps.io,
+    cfg: deps.cfg, cache: () => projectWalk, watcher, liveAsk, now: () => deps.time.clock.wall(), readiness: deps.overlordReadiness, isolation: deps.isolation,
+    ladder: ladderDeps === undefined ? undefined : () => ladderRead(ladderDeps.coord, ladderDeps.inputs, ladderDeps.witness ?? NO_WITNESS_YET, ladderDeps.serverCaps) }) });
   // The Overlord's account reads, one object for the designation doors and the designation's lane port.
   const overlordAccountReads = { roster: () => deps.cfg.roster, limits: () => readLimits(deps.io, deps.cfg), shares: () => readSharesMeasured(deps.io, deps.cfg.registryDir) };
   // The loads door's settle step (W1 sandbox B, Task 9): the designation's writers and its one drain, on the serialiser.
   const settlePort: SandboxSettlePort | undefined = designationStore === undefined ? undefined : { serial: coordRoutes.serial, read: () => designationStore.coord.designationRead(),
       expected: () => expectedSurfaceOf('overlord', deps.overlordSandbox?.ownLists), settled: deps.overlordSandbox?.settled,
       goLive: (id, g, at) => { const r = designationStore.coord.goLive(designationStore.journal, id, g, at); return r.ok ? { ok: true, previous: r.changed ? r.previous : null } : { ok: false, detail: r.detail }; },
-      failPending: (id, at) => designationStore.coord.failPending(id, 'overlord-sandbox-unmet', at, true),
+      failPending: (id, at, hold) => designationStore.coord.failPending(id, 'overlord-sandbox-unmet', at, true, hold), laneOf: async (id) => { const r = await readSessionRecord(deps.io, deps.cfg, id); return r.kind === 'found' && !r.record.unmeasured.includes('wrapper') ? r.record.wrapper : null; },
       drain: async (id, unrecorded) => { await drainOwedStops({ body: overlordBody, coord: designationStore.coord }, [id], new Set(unrecorded ? [id] : [])); },
       workspaceOf: async (id) => { const p = measuredProjectOf(await readSessionRecord(deps.io, deps.cfg, id)); return p === null ? { kind: 'unmeasured', reason: 'the registry did not measure its project' } : { kind: 'measured', project: p }; } };
   // Designation B: the watcher's one port into the designation (the deadline sweep, the write-set before each renewal).
@@ -2489,6 +2513,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       write: (...args) => docsCoord.writeDocsSettings(...args),
     },
   });
+  // The artifact tier's own instance (X5 A1.3, A3.3), built here because its content door reads bytes through the docs composition
+  // above (`artifactBytes` over its readers and lanes, the console's own read path). It is handed out as the `artifactServer`
+  // decoration (null when the tier is off), before this function returns, and closed with the console.
+  const artifactApp = artifactCfg.state === 'on' && artifactStore !== null
+    ? buildArtifactServer({ cfg: artifactCfg, store: artifactStore, bytes: artifactBytes(docs.readers, docs.lanes), now: Date.now })
+    : null;
+  app.decorate('artifactServer', artifactApp);
+  if (artifactApp !== null) app.addHook('onClose', async () => { await artifactApp.close(); });
   await app.register(async (app) => {
     installDocsRequestPolicy(app);
     installDocsResponsePolicy(app);
@@ -2537,6 +2569,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   });
   registerResponseRoutes(app, { coord: deps.coord, time: deps.time, gate: accountGate, notice, actorOf: consoleActor });
 
+  // The visible Overlord place's report: a visible frame of the bound session refreshes the @overlord-place mark, at most once a minute.
+  const reportPlaceVisible = placeMarkReporter(deps.coord, () => deps.time.clock.wall());
   app.get('/ws/session/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };
     const q = req.query as { since?: string; sinceFile?: string };
@@ -2559,7 +2593,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       viewers.touch(token);
       try {
         const m = asSessionClientMsg(JSON.parse(String(raw)));
-        if (m?.type === 'visible') viewers.setVisible(token, m.visible ? id : null);
+        if (m?.type === 'visible') { viewers.setVisible(token, m.visible ? id : null); reportPlaceVisible(id, m.visible); }
         else if (m?.type === 'helper-report') stream.helperReport(m.id);
         else if (m?.type === 'older-page') stream.olderPage(m.continuation);
       } catch { /* a client that sends garbage simply isn't reporting visibility */ }

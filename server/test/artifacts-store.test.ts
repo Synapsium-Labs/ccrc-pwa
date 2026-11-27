@@ -4,7 +4,8 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
-  ARTIFACT_IDLE_MS, ARTIFACT_MAX_AGE_DRAFT_MS, ARTIFACT_MAX_AGE_MS, ARTIFACT_MAX_LIVE, ARTIFACT_MAX_LIVE_PER_SESSION,
+  ARTIFACT_HOURLY_BYTES, ARTIFACT_IDLE_MS, ARTIFACT_MAX_AGE_DRAFT_MS, ARTIFACT_MAX_AGE_MS, ARTIFACT_MAX_LIVE,
+  ARTIFACT_MAX_LIVE_PER_SESSION, ARTIFACT_MAX_INFLIGHT, ARTIFACT_MAX_INFLIGHT_BOX, ARTIFACT_QUEUE_PER_CAPABILITY,
 } from '../../shared/artifacts.js';
 import { isCapabilityToken } from '../../shared/capabilityToken.js';
 import type { DocPin } from '../../shared/docs.js';
@@ -480,5 +481,288 @@ describe('store: an end is announced', () => {
     expect(r.store.revokeAll()).toBe(1);
     expect(bEnds).toBe(1);
     expect(r.store.list()).toEqual([]);
+  });
+});
+
+// X5 A3.3 (D-9135): the store is the one writer of a capability's in-flight, queued and hourly counters and of the box-wide
+// in-flight count; `admitLoad` and `admitQueued` (policy.ts) decide, the store only counts and hands out tickets.
+type Admit = ReturnType<ReturnType<typeof rig>['store']['admit']>;
+
+/** Admit `n` requests on one capability and answer each answer, in order. */
+function admitN(r: ReturnType<typeof rig>, id: string, n: number): Admit[] {
+  const out: Admit[] = [];
+  for (let i = 0; i < n; i++) out.push(r.store.admit(id));
+  return out;
+}
+
+const ticketOf = (a: Admit): number => {
+  if (a.kind !== 'run' && a.kind !== 'wait') throw new Error(`no ticket in ${a.kind}`);
+  return a.ticket;
+};
+
+describe('X5 A3.3: admission, budget and snapshots (D-9135)', () => {
+  it('store: admission runs four, then waits', () => {
+    const r = rig();
+    const m = mintOk(r);
+    const answers = admitN(r, m.id, ARTIFACT_MAX_INFLIGHT + 2);
+    expect(answers.map((a) => a.kind)).toEqual(['run', 'run', 'run', 'run', 'wait', 'wait']);
+    expect(new Set(answers.map(ticketOf)).size, 'every ticket is its own').toBe(6);
+    expect(r.store.boxInflight()).toBe(4);
+    r.store.release(ticketOf(answers[0]!));
+    expect(r.store.promote(ticketOf(answers[4]!))).toEqual({ kind: 'run' });
+    expect(r.store.promote(ticketOf(answers[5]!))).toEqual({ kind: 'wait' });
+    expect(r.store.boxInflight()).toBe(4);
+    const view = r.store.lookup(m.token)!;
+    expect(view.inflight).toBe(4);
+    expect(view.queued).toBe(1);
+    // a request that arrives behind a queue waits, even when a slot stands free
+    r.store.release(ticketOf(answers[1]!));
+    expect(r.store.admit(m.id).kind).toBe('wait');
+  });
+
+  it('store: the box holds sixteen', () => {
+    const r = rig();
+    const ids = [0, 1, 2, 3, 4].map(() => mintOk(r).id);
+    const running: number[] = [];
+    for (const id of ids.slice(0, 4)) {
+      for (const a of admitN(r, id, ARTIFACT_MAX_INFLIGHT)) {
+        expect(a.kind).toBe('run');
+        running.push(ticketOf(a));
+      }
+    }
+    expect(running).toHaveLength(ARTIFACT_MAX_INFLIGHT_BOX);
+    expect(r.store.boxInflight()).toBe(16);
+    const fifth = r.store.admit(ids[4]!);
+    expect(fifth.kind).toBe('wait');
+    expect(r.store.promote(ticketOf(fifth))).toEqual({ kind: 'wait' });
+    r.store.release(running[9]!);
+    expect(r.store.boxInflight()).toBe(15);
+    expect(r.store.promote(ticketOf(fifth))).toEqual({ kind: 'run' });
+    expect(r.store.boxInflight()).toBe(16);
+  });
+
+  it('store: a full queue refuses', () => {
+    const r = rig();
+    const m = mintOk(r);
+    admitN(r, m.id, ARTIFACT_MAX_INFLIGHT);
+    const waiting = admitN(r, m.id, ARTIFACT_QUEUE_PER_CAPABILITY);
+    expect(waiting.every((a) => a.kind === 'wait')).toBe(true);
+    expect(r.store.admit(m.id)).toEqual({ kind: 'full' });
+    expect(r.store.lookup(m.token)!.queued).toBe(64);
+    r.store.release(ticketOf(waiting[10]!));
+    expect(r.store.lookup(m.token)!.queued).toBe(63);
+    expect(r.store.admit(m.id).kind).toBe('wait');
+    expect(r.store.admit(m.id)).toEqual({ kind: 'full' });
+  });
+
+  it('store: a slot is freed once', () => {
+    const r = rig();
+    const caps = [0, 1, 2, 3, 4].map(() => mintOk(r).id);
+    for (const id of caps.slice(0, 3)) admitN(r, id, ARTIFACT_MAX_INFLIGHT);
+    admitN(r, caps[3]!, 3);
+    const mine = ticketOf(r.store.admit(caps[4]!));
+    expect(r.store.boxInflight()).toBe(16);
+    r.store.release(mine);
+    r.store.release(mine);
+    r.store.release(mine);
+    expect(r.store.boxInflight()).toBe(15);
+    expect(r.store.admit(caps[4]!).kind).toBe('run');
+    expect(r.store.admit(caps[4]!).kind).toBe('wait');
+    // an unknown ticket frees nothing
+    r.store.release(987654);
+    expect(r.store.boxInflight()).toBe(16);
+  });
+
+  it('store: a slot is freed once, a waiting ticket too, and a promoted ticket is a running one', () => {
+    const r = rig();
+    const m = mintOk(r);
+    const held = admitN(r, m.id, ARTIFACT_MAX_INFLIGHT).map(ticketOf);
+    const w = ticketOf(r.store.admit(m.id));
+    r.store.release(w);
+    r.store.release(w);
+    expect(r.store.lookup(m.token)!.queued).toBe(0);
+    expect(r.store.promote(w), 'a released ticket is gone').toEqual({ kind: 'gone' });
+    expect(r.store.promote(987654)).toEqual({ kind: 'gone' });
+    const w2 = ticketOf(r.store.admit(m.id));
+    expect(r.store.lookup(m.token)!.queued).toBe(1);
+    r.store.release(held[0]!);
+    expect(r.store.promote(w2)).toEqual({ kind: 'run' });
+    expect(r.store.promote(w2), 'it is running now, not waiting').toEqual({ kind: 'gone' });
+    r.store.release(w2);
+    r.store.release(w2);
+    const v = r.store.lookup(m.token)!;
+    expect(v.inflight).toBe(3);
+    expect(v.queued).toBe(0);
+    expect(r.store.boxInflight()).toBe(3);
+  });
+
+  it('store: a dead capability frees its box slots only by release', () => {
+    const r = rig();
+    const other = mintOk(r);
+    const m = mintOk(r);
+    const otherRun = ticketOf(r.store.admit(other.id));
+    const running = admitN(r, m.id, ARTIFACT_MAX_INFLIGHT).map(ticketOf);
+    const waiting = admitN(r, m.id, 2).map(ticketOf);
+    expect(r.store.boxInflight()).toBe(5);
+    expect(r.store.revoke(m.id)).toBe(true);
+    expect(r.store.boxInflight(), 'running tickets still hold their box slots').toBe(5);
+    for (const t of waiting) expect(r.store.promote(t)).toEqual({ kind: 'dead' });
+    for (const t of waiting) expect(r.store.promote(t), 'the ended ticket is spent').toEqual({ kind: 'gone' });
+    r.store.release(waiting[0]!);
+    expect(r.store.boxInflight()).toBe(5);
+    for (const t of running) r.store.release(t);
+    expect(r.store.boxInflight()).toBe(1);
+    for (const t of running) r.store.release(t);
+    expect(r.store.boxInflight(), 'a second release frees nothing').toBe(1);
+    r.store.release(otherRun);
+    expect(r.store.boxInflight()).toBe(0);
+  });
+
+  it('store: a dead capability frees its box slots only by release, ended by the clock too', () => {
+    const r = rig();
+    const m = mintOk(r);
+    const running = ticketOf(r.store.admit(m.id));
+    const waiting = admitN(r, m.id, ARTIFACT_MAX_INFLIGHT + 1).map(ticketOf).slice(-1)[0]!;
+    r.advance(ARTIFACT_IDLE_MS);
+    expect(r.store.promote(waiting)).toEqual({ kind: 'dead' });
+    expect(r.store.boxInflight()).toBe(ARTIFACT_MAX_INFLIGHT);
+    r.store.release(running);
+    expect(r.store.boxInflight()).toBe(ARTIFACT_MAX_INFLIGHT - 1);
+  });
+
+  it('store: admit after an end is dead', () => {
+    const r = rig();
+    const ends = { revoke: 0, idle: 0, session: 0 };
+    const a = mintOk(r);
+    r.store.onEnd(a.id, () => { ends.revoke++; });
+    r.store.revoke(a.id);
+    expect(r.store.admit(a.id)).toEqual({ kind: 'dead' });
+    expect(r.store.admit(a.id)).toEqual({ kind: 'dead' });
+    expect(ends.revoke).toBe(1);
+
+    const b = mintOk(r);
+    r.store.onEnd(b.id, () => { ends.idle++; });
+    r.advance(ARTIFACT_IDLE_MS);
+    expect(r.store.admit(b.id)).toEqual({ kind: 'dead' });
+    expect(r.store.admit(b.id)).toEqual({ kind: 'dead' });
+    expect(ends.idle).toBe(1);
+
+    const c = mintOk(r);
+    r.store.onEnd(c.id, () => { ends.session++; });
+    r.ended.add(S1);
+    expect(r.store.admit(c.id)).toEqual({ kind: 'dead' });
+    expect(r.store.admit(c.id)).toEqual({ kind: 'dead' });
+    expect(ends.session).toBe(1);
+
+    expect(r.store.admit('never-minted')).toEqual({ kind: 'dead' });
+    expect(r.store.boxInflight()).toBe(0);
+  });
+
+  it('store: the hour\'s budget', () => {
+    const r = rig();
+    const m = mintOk(r);
+    const start = r.store.lookup(m.token)!;
+    expect(start.servedThisHour).toBe(0);
+    expect(start.hourStart).toBe(T0);
+    expect(r.store.charge(m.id, ARTIFACT_HOURLY_BYTES - 10)).toBe('ok');
+    expect(r.store.charge(m.id, 10)).toBe('ok');
+    expect(r.store.lookup(m.token)!.servedThisHour).toBe(ARTIFACT_HOURLY_BYTES);
+    expect(r.store.charge(m.id, 1)).toBe('over-budget');
+    expect(r.store.lookup(m.token)!.servedThisHour, 'a refused charge charges nothing').toBe(ARTIFACT_HOURLY_BYTES);
+    // the window is an hour from its start, not from the last request
+    r.set(T0 + 3_000_000);
+    r.store.touch(m.id); // keeps the capability from idling out across the hour
+    r.set(T0 + 3_600_000 - 1);
+    expect(r.store.charge(m.id, 1)).toBe('over-budget');
+    r.set(T0 + 3_600_000);
+    expect(r.store.charge(m.id, 5)).toBe('ok');
+    expect(r.store.lookup(m.token)).toMatchObject({ hourStart: T0 + 3_600_000, servedThisHour: 5 });
+  });
+
+  it('store: the hour\'s budget restarts its window', () => {
+    const r = rig();
+    const m = mintOk(r);
+    expect(r.store.charge(m.id, ARTIFACT_HOURLY_BYTES)).toBe('ok');
+    expect(r.store.charge(m.id, 1)).toBe('over-budget');
+    r.set(T0 + 3_000_000);
+    r.store.touch(m.id);
+    r.set(T0 + 3_600_000);
+    expect(r.store.charge(m.id, 5)).toBe('ok');
+    const v = r.store.lookup(m.token)!;
+    expect(v.hourStart).toBe(T0 + 3_600_000);
+    expect(v.servedThisHour).toBe(5);
+    // a charge that is not a whole, non-negative count of bytes is a caller's error: it throws, and charges nothing
+    for (const bad of [-1, Number.NaN, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() => r.store.charge(m.id, bad), `a count of ${bad}`).toThrow(RangeError);
+    }
+    expect(r.store.lookup(m.token)!.servedThisHour).toBe(5);
+    // and the throw names neither the id nor a count of the caller's
+    let thrown: unknown;
+    try { r.store.charge(m.id, -1); } catch (e) { thrown = e; }
+    expect(String((thrown as Error).message)).not.toContain(m.id);
+    expect(String((thrown as Error).message)).not.toContain('-1');
+  });
+
+  it('store: the hour\'s budget fails shut for a dead capability', () => {
+    const r = rig();
+    const m = mintOk(r);
+    r.store.revoke(m.id);
+    // an ended capability is `dead`, which is not a spent hour (`over-budget`): the door answers the two differently
+    expect(r.store.charge(m.id, 1)).toBe('dead');
+    expect(r.store.charge('never-minted', 1)).toBe('dead');
+    // a bad count throws whatever the capability's state: it is never folded into `dead`
+    expect(() => r.store.charge(m.id, -1)).toThrow(RangeError);
+    expect(() => r.store.charge('never-minted', Number.NaN)).toThrow(RangeError);
+  });
+
+  it('store: snapshots per entry', () => {
+    const r = rig();
+    const m = mintOk(r, { manifest: new Map([['x/page.html', entry('x/page.html')], ['x/a.js', entry('x/a.js')]]) });
+    expect(r.store.lookup(m.token)!.snapshots.size).toBe(0);
+    r.store.recordSnapshot(m.id, 'x/a.js', 'snap-1');
+    expect(r.store.lookup(m.token)!.snapshots.get('x/a.js')).toBe('snap-1');
+    r.store.recordSnapshot(m.id, 'x/a.js', 'snap-2');
+    expect(r.store.lookup(m.token)!.snapshots.get('x/a.js')).toBe('snap-2');
+    r.store.recordSnapshot(m.id, 'x/page.html', 'snap-p');
+    expect(r.store.lookup(m.token)!.snapshots.size).toBe(2);
+    r.store.recordSnapshot(m.id, 'x/a.js', null);
+    expect(r.store.lookup(m.token)!.snapshots.has('x/a.js')).toBe(false);
+    expect(r.store.lookup(m.token)!.snapshots.get('x/page.html')).toBe('snap-p');
+    // a key outside the manifest is left alone, and so is a dead or unknown id
+    r.store.recordSnapshot(m.id, 'x/other.js', 'snap-x');
+    expect(r.store.lookup(m.token)!.snapshots.has('x/other.js')).toBe(false);
+    r.store.recordSnapshot('never-minted', 'x/a.js', 'snap-y');
+    const ended = mintOk(r);
+    r.store.revoke(ended.id);
+    expect(() => r.store.recordSnapshot(ended.id, 'x/page.html', 'snap-z')).not.toThrow();
+    // the face is read-only: no writer, frozen, and a cast write changes nothing the store reads
+    const face = r.store.lookup(m.token)!.snapshots as unknown as Record<string, unknown>;
+    expect(Object.isFrozen(face)).toBe(true);
+    for (const w of ['set', 'delete', 'clear']) expect(face[w], w).toBeUndefined();
+    expect(() => { face['set'] = () => {}; }).toThrow();
+    expect(r.store.lookup(m.token)!.snapshots.size).toBe(1);
+    expect([...r.store.lookup(m.token)!.snapshots]).toEqual([['x/page.html', 'snap-p']]);
+  });
+
+  it('store: the view\'s counters are read-only and the record\'s own', () => {
+    const r = rig();
+    const m = mintOk(r);
+    admitN(r, m.id, ARTIFACT_MAX_INFLIGHT);
+    const v = r.store.lookup(m.token)!;
+    expect(Object.isFrozen(v)).toBe(true);
+    const w = v as unknown as Record<string, unknown>;
+    for (const k of ['inflight', 'queued', 'servedThisHour', 'hourStart']) {
+      expect(() => { w[k] = 0; }, k).toThrow();
+    }
+    expect(v.inflight).toBe(ARTIFACT_MAX_INFLIGHT);
+    // the view is the record at the moment of the lookup: a later admit moves the record, not the old view
+    const t = ticketOf(r.store.admit(m.id));
+    expect(t).toBeGreaterThan(0);
+    expect(v.queued).toBe(0);
+    expect(r.store.lookup(m.token)!.queued).toBe(1);
+    expect(r.store.admit(m.id).kind).toBe('wait');
+    // and a list row carries none of the counters
+    expect(Object.keys(r.store.list()[0]!)).not.toContain('inflight');
+    expect(Object.keys(r.store.list()[0]!)).not.toContain('snapshots');
   });
 });
