@@ -115,6 +115,21 @@ describe('the two answers', () => {
     const r = await get(app({ masker: { maskText: (t: string) => t.replace('abcdefghij', '‹secret masked›') } }), `/api/testbox/frames?build=${BUILD}&frame=rows-3@220x50`);
     expect(r.json()).toMatchObject({ text: null, refused: 'masked' });
   });
+  // Review 4086's F-G: the two mutants of the read's re-check that no case killed (O4, O5).
+  it('a stored row whose record says over-cap but holds a text is refused not-a-frame: the whole result is read again, not the text alone', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const over: FramesRow = { ...row(part, TEXT), record: { ...record(part), frame: { ...record(part).frame, outcome: 'over-cap' } } };
+    const r = await get(app({}, [over]), `/api/testbox/frames?build=${BUILD}&frame=rows-3@220x50`);
+    expect(r.json()).toMatchObject({ ok: true, text: null, refused: 'not-a-frame' });
+    expect(r.body).not.toContain('frames row 001');
+  });
+  it('the live masker is asked in rows mode, on the text the read would serve', async () => {
+    const maskText = vi.fn((t: string, _opts?: { rows?: boolean }) => t);
+    const r = await get(app({ masker: { maskText } }), `/api/testbox/frames?build=${BUILD}&frame=rows-3@220x50`);
+    expect(r.json()).toMatchObject({ text: TEXT });
+    expect(maskText).toHaveBeenCalledWith(TEXT, { rows: true });
+    expect(maskText.mock.calls.map((c) => c[1])).toEqual(maskText.mock.calls.map(() => ({ rows: true })));
+  });
 });
 
 // Review 4069's L1: the read's own four words, each at its status by value, in the one table and on the wire (each answer's

@@ -22,6 +22,7 @@ import {
 import { matchDigestSlots } from '../src/token/digestSlots.js';
 import { PENDING_HARD_CAP } from '../src/token/policy.js';
 import { buildServer } from '../src/server.js';
+import { HELPER_ROUTES } from './boxTokenHelperRoutes.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { testDeps } from './helpers.js';
@@ -508,10 +509,7 @@ describe('every box-token lane names itself to the check', () => {
   // the test box status read does; its route is registered in `testboxFramesRoutes.ts`, and its check is composed here.
   const CALL = /checkMailToken\(deps\.mailToken \?\? null, req\.headers\[MAIL_TOKEN_HEADER\](?:, ([^)]+))?\)/g;
   // A route its own file registers, with its check composed in the calling file: the helper's call is that route's
-  // registration there. Each row is held to its file below.
-  const HELPER_ROUTES: Readonly<Record<string, { key: string; file: string }>> = {
-    registerTestboxFramesRoute: { key: 'GET /api/testbox/frames', file: 'testboxFramesRoutes.ts' },
-  };
+  // registration there. The one table (`boxTokenHelperRoutes.ts`, which the census reads too); each row is held to its file below.
   const sites = (rel: string): { lane: string | null; route: string | null }[] => {
     const src = readFileSync(path.join(repoRoot, 'server', 'src', rel), 'utf8');
     const regs = [
@@ -528,7 +526,7 @@ describe('every box-token lane names itself to the check', () => {
   it('each helper route is registered by its own file, at the path its row names', () => {
     for (const { key, file } of Object.values(HELPER_ROUTES)) {
       const [method, route] = key.split(' ');
-      expect(readFileSync(path.join(repoRoot, 'server', 'src', file), 'utf8')).toContain(`app.${method!.toLowerCase()}('${route!}'`);
+      expect(readFileSync(path.join(repoRoot, file), 'utf8')).toContain(`app.${method!.toLowerCase()}('${route!}'`);
     }
   });
 
