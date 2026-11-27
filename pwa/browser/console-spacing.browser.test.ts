@@ -179,9 +179,10 @@ async function measure(page: Page, anchorSet: Readonly<Record<string, string>> =
   }, anchorSet);
 }
 
-/** Waits for the layout to settle, a condition and never a fixed pause: the fonts are loaded and every box the selectors
- *  match has read the same on three polls in a row, 100 ms apart. The accounts poll and the fleet frames land after the
- *  first paint and can move the head block, so a loaded box waits as long as that takes and an idle one no longer. */
+/** Waits for a quiet window, a condition and never a fixed pause: the fonts are loaded and every box the selectors match has
+ *  read the same on three polls in a row, 100 ms apart (about 200 ms unchanged). It does not wait for a later frame or poll:
+ *  one that lands after a quiet 200 ms is not waited for, as the 300 ms pause it replaced did not wait for one either. Each
+ *  caller first waits for a selector its screen draws (`at`'s `ready`). */
 const settle = (page: Page, selectors: readonly string[] = Object.values(ANCHORS)): Promise<unknown> =>
   page.waitForFunction((list) => {
     const w = window as unknown as { spacingSig?: string; spacingSame?: number };
@@ -605,6 +606,43 @@ describe("Refined's desk runs line: the door and New project share it, the choos
   }
 });
 
+/** The Accounts disclosure under one skin, size and pointer: its summary min(--row-h, --tap-min) under a mouse and the tap
+ *  floor under touch, with equal --sp-1 gaps above and below it (ruling 3; on the phone too, fix round 2's ruling R3). */
+const disclosureCase = async (skin: string, width: number, height: number, touch: boolean): Promise<void> => {
+  const pointer = touch ? 'touch' : 'mouse';
+  const { ctx, page, errors } = await openApp(browser!, { skin, theme: PHOSPHOR, width, touch }, FIRST);
+  try {
+    await page.setViewportSize({ width, height });
+    await at(page, '/accounts', '.acct-door-reason details > summary');
+    await settle(page, ['.acct-door-reason', '.acct-door-reason > *', '.acct-door-reason details > summary']);
+    const m = await page.evaluate(() => {
+      const tok = (name: string): number => {
+        const probe = document.createElement('div');
+        probe.style.cssText = `position:absolute;visibility:hidden;height:var(${name})`;
+        document.body.appendChild(probe);
+        const h = probe.getBoundingClientRect().height;
+        probe.remove();
+        return h;
+      };
+      const details = document.querySelector('.acct-door-reason details')!;
+      const summary = details.querySelector('summary')!.getBoundingClientRect();
+      const before = details.previousElementSibling!.getBoundingClientRect();
+      const after = details.nextElementSibling!.getBoundingClientRect();
+      return {
+        rowH: tok('--row-h'), tapMin: tok('--tap-min'), sp1: tok('--sp-1'),
+        height: summary.height, above: summary.top - before.bottom, below: after.top - summary.bottom,
+      };
+    });
+    const want = touch ? m.tapMin : Math.min(m.rowH, m.tapMin);
+    expect(m.height, `the summary under ${pointer}: ${m.height}, against ${want}`).toBeCloseTo(want, 0);
+    expect(m.above, `above the disclosure: ${m.above}, against --sp-1 ${m.sp1}`).toBeCloseTo(m.sp1, 0);
+    expect(m.below, `below the closed disclosure: ${m.below}, against the gap above it, --sp-1 ${m.sp1}`).toBeCloseTo(m.sp1, 0);
+    expect(errors).toEqual([]);
+  } finally {
+    await ctx.close();
+  }
+};
+
 describe('the Accounts head block on the merged door (#3402): one edge for its lines, the roll-up and projection one group', () => {
   for (const skin of [INSTRUMENT, REFINED]) {
     for (const [width, height] of DESKS) {
@@ -660,41 +698,13 @@ describe('the Accounts head block on the merged door (#3402): one edge for its l
       }, 120_000);
 
       for (const touch of [false, true]) {
-        const pointer = touch ? 'touch' : 'mouse';
-        it(`${skin}, ${width}x${height}, ${pointer}: the disclosure is min(--row-h, --tap-min) under a mouse and the tap floor under touch, with equal --sp-1 gaps above and below it (ruling 3)`, async () => {
-          const { ctx, page, errors } = await openApp(browser!, { skin, theme: PHOSPHOR, width, touch }, FIRST);
-          try {
-            await page.setViewportSize({ width, height });
-            await at(page, '/accounts', '.acct-door-reason details > summary');
-            await settle(page, ['.acct-door-reason', '.acct-door-reason > *', '.acct-door-reason details > summary']);
-            const m = await page.evaluate(() => {
-              const tok = (name: string): number => {
-                const probe = document.createElement('div');
-                probe.style.cssText = `position:absolute;visibility:hidden;height:var(${name})`;
-                document.body.appendChild(probe);
-                const h = probe.getBoundingClientRect().height;
-                probe.remove();
-                return h;
-              };
-              const details = document.querySelector('.acct-door-reason details')!;
-              const summary = details.querySelector('summary')!.getBoundingClientRect();
-              const before = details.previousElementSibling!.getBoundingClientRect();
-              const after = details.nextElementSibling!.getBoundingClientRect();
-              return {
-                rowH: tok('--row-h'), tapMin: tok('--tap-min'), sp1: tok('--sp-1'),
-                height: summary.height, above: summary.top - before.bottom, below: after.top - summary.bottom,
-              };
-            });
-            const want = touch ? m.tapMin : Math.min(m.rowH, m.tapMin);
-            expect(m.height, `the summary under ${pointer}: ${m.height}, against ${want}`).toBeCloseTo(want, 0);
-            expect(m.above, `above the disclosure: ${m.above}, against --sp-1 ${m.sp1}`).toBeCloseTo(m.sp1, 0);
-            expect(m.below, `below the closed disclosure: ${m.below}, against the gap above it, --sp-1 ${m.sp1}`).toBeCloseTo(m.sp1, 0);
-            expect(errors).toEqual([]);
-          } finally {
-            await ctx.close();
-          }
-        }, 120_000);
+        it(`${skin}, ${width}x${height}, ${touch ? 'touch' : 'mouse'}: the disclosure is min(--row-h, --tap-min) under a mouse and the tap floor under touch, with equal --sp-1 gaps above and below it (ruling 3)`,
+          () => disclosureCase(skin, width, height, touch), 120_000);
       }
+    }
+    for (const width of [360, 390]) {
+      it(`${skin}, ${width}x844, touch: the disclosure is the tap floor, with equal --sp-1 gaps above and below it, on the phone too (ruling 3; fix round 2's R3)`,
+        () => disclosureCase(skin, width, 844, true), 120_000);
     }
   }
 });
@@ -757,6 +767,7 @@ const LEDGER_ANCHORS: Readonly<Record<string, string>> = {
   itemPad: '.shell-detail .wi', itemBox: '.shell-detail .wi',
   stripPad: '.shell-detail .wi-nav:not(.rd-strip)', stripBox: '.shell-detail .wi-nav:not(.rd-strip)',
   digestPad: '.shell-detail .digest-screen', digestBox: '.shell-detail .digest-screen',
+  wrapperPad: '.shell-detail .wl-route > .wl', wrapperBox: '.shell-detail .wl-route > .wl',
 };
 const sidewaysScroll = (page: Page): Promise<number> =>
   page.evaluate(() => document.scrollingElement!.scrollWidth - document.scrollingElement!.clientWidth);
@@ -767,14 +778,18 @@ describe('the phone: every ledger root and the item route sit at the scaffold\'s
     { name: 'Epic', path: '/programmes/prog-b/epics/e-1', parts: ['ledger'] },
     { name: 'Upkeep', path: '/projects/project-a/upkeep', parts: ['ledger'] },
     { name: 'the item route', path: '/waiting/1', parts: ['item', 'strip'] },
+    // A missing item is the cheapest state that draws the route's own `.wl` wrapper (fix round 2's R4): a rule scoped to the
+    // wrapper alone would otherwise regress unseen.
+    { name: "the item route's wrapper (a missing item)", path: '/waiting/999', parts: ['wrapper'] },
   ] as const;
+  const READY = { ledger: '.wl', item: '.wi', strip: '.wi', wrapper: '.wl-route > .wl' } as const;
   for (const skin of [INSTRUMENT, REFINED]) {
     for (const width of [360, 390]) {
-      it(`${skin}, ${width}x844: Programme, Epic and Upkeep's roots, and the item route's body and step strip, start --gutter from the screen's edge; nothing scrolls sideways`, async () => {
+      it(`${skin}, ${width}x844: Programme, Epic and Upkeep's roots, the item route's body and step strip, and its wrapper drawn for a missing item, start --gutter from the screen's edge; nothing scrolls sideways`, async () => {
         const { ctx, page, errors } = await openApp(browser!, { skin, theme: PHOSPHOR, width }, SCREENS);
         try {
           for (const l of LEDGERS) {
-            const m = await at(page, l.path, `.shell-detail ${l.parts[0] === 'ledger' ? '.wl' : '.wi'}`, LEDGER_ANCHORS);
+            const m = await at(page, l.path, `.shell-detail ${READY[l.parts[0]]}`, LEDGER_ANCHORS);
             const g = m.tokens.gutter;
             for (const part of l.parts) {
               const left = need(m, `${part}Pad`)[0] - m.detail!.left;
@@ -817,6 +832,62 @@ describe('at a desk: the item view, its step strip and the coordinator digest st
               expect(Math.abs(before - after), `${p.name}: Refined's column centres (${before} and ${after})`).toBeLessThan(1);
             }
           }
+          expect(errors).toEqual([]);
+        } finally {
+          await ctx.close();
+        }
+      }, 120_000);
+    }
+  }
+});
+
+// ---- Fix round 2 (the coordinator's rulings on review run 4029) ----
+
+describe("the phone: the item route's step strip is one line at 390 and two at 360, as main drew it, its controls at the tap floor (fix round 2's R1)", () => {
+  for (const skin of [INSTRUMENT, REFINED]) {
+    for (const [width, lines] of [[390, 1], [360, 2]] as const) {
+      it(`${skin}, ${width}x844: the strip's Back and its steps on ${lines === 1 ? 'one line' : 'two lines'}, every control the tap floor tall, nothing past the strip's inset`, async () => {
+        const { ctx, page, errors } = await openApp(browser!, { skin, theme: PHOSPHOR, width }, SCREENS);
+        try {
+          const strip = '.shell-detail .wi-nav:not(.rd-strip)';
+          const m = await at(page, '/waiting/1', strip, {
+            stripPad: strip, back: `${strip} .wi-back`, steps: `${strip} .wi-steps-nav`,
+            prev: `${strip} .wi-step`, next: `${strip} .wi-step:last-of-type`,
+          });
+          const back = need(m, 'back');
+          const steps = need(m, 'steps');
+          if (lines === 1) {
+            expect(Math.abs(steps[1] - back[1]), `the steps share Back's line (Back's top ${back[1]}, the steps' ${steps[1]})`).toBeLessThan(NEAR);
+          } else {
+            expect(steps[1], `the steps sit on a line under Back (Back's bottom ${back[3]}, the steps' top ${steps[1]})`).toBeGreaterThanOrEqual(back[3] - NEAR);
+          }
+          for (const name of ['back', 'prev', 'next']) {
+            const b = need(m, name);
+            expect(b[3] - b[1], `${name}: ${b[3] - b[1]} tall, against the tap floor ${m.tokens.tapMin}`).toBeGreaterThanOrEqual(m.tokens.tapMin - NEAR);
+          }
+          expect(steps[2], "the steps end inside the strip's inset").toBeLessThanOrEqual(need(m, 'stripPad')[2] + NEAR);
+          expect(await sidewaysScroll(page), 'nothing scrolls sideways').toBeLessThanOrEqual(0);
+          expect(errors).toEqual([]);
+        } finally {
+          await ctx.close();
+        }
+      }, 120_000);
+    }
+  }
+});
+
+describe("at a desk, one pane, one inset: the list beside an open item starts where the fleet list column does (fix round 2's R2)", () => {
+  for (const skin of [INSTRUMENT, REFINED]) {
+    for (const [width, height] of DESKS) {
+      it(`${skin}, ${width}x${height}: the list pane's text starts at the same inset with an item open (the list beside it) as without (the fleet list column)`, async () => {
+        const { ctx, page, errors } = await openApp(browser!, { skin, theme: PHOSPHOR, width }, SCREENS);
+        try {
+          await page.setViewportSize({ width, height });
+          const f = await at(page, '/accounts', '.shell-nav .fleet', { fleetPad: '.shell-nav .fleet' });
+          const without = need(f, 'fleetPad')[0] - f.nav!.left;
+          const b = await at(page, '/waiting/1', '.shell-nav .wl-beside', { besidePad: '.shell-nav .wl-beside' });
+          const withItem = need(b, 'besidePad')[0] - b.nav!.left;
+          expect(Math.abs(withItem - without), `the list beside the item at ${withItem}, the fleet list column at ${without}`).toBeLessThan(NEAR);
           expect(errors).toEqual([]);
         } finally {
           await ctx.close();

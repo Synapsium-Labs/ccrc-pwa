@@ -24,7 +24,9 @@ throwaway browser file that was never committed.
 - **The session screen** has one edge: header, banners, transcript and composer read one `--chat-inset` (16) in both skins.
 - **The phone** holds its figures except on the ledger screens: Waiting on you, Programme, Epic, Upkeep and the item route
   (its body and its step strip) sit at the scaffold's inset, 12 in Instrument and 16 in Refined (rulings 6 and 1, fix
-  round 1, §15.1).
+  round 1, §15.1). The item's step strip stays one line at 390 (its controls' side padding is `--sp-2` on the phone) and
+  is two lines at 360, as on main (fix round 2, §16.1). The gap below the closed Accounts disclosure moved on the phone too,
+  8 to 4, equal to the gap above it, which is what ruling 3 meant (fix round 2, §16.3).
 - **The Accounts head block**, built on merged main after #3402: the door's reason starts on the body's edge, the roll-up
   and the projection are one group, and four points of that PR's review are closed here; see §10.
 
@@ -228,7 +230,9 @@ What stays 44, and why:
   composer share `--chat-inset` (16), an accepted limit (the session amendment). Moving the transcript and composer onto
   `--gutter` would move every Refined session's reading column, which is more than this wave.
 - **Refined's list column stays at 16 and its page column stays centred** (ruling 4): equal panes would mean a 24 list
-  column, which worsens the runs line, or dropping Refined's centred column, which is its look.
+  column, which worsens the runs line, or dropping Refined's centred column, which is its look. The list drawn beside an
+  open item, in the same pane, reads the same 16 (`.wl.wl-beside`, the fleet column's `--sp-4`), so opening an item no
+  longer moves the pane's text from 16 to 24 (fix round 2, §16.2).
 - **The touch focus ring**: a 44 control in a 44 head row draws its 2 px ring outside the row under touch, as before.
 - **The pool lag line on a single-box install** ("epoch 0 / observed never synced") is something a first-run person
   cannot act on; whether it shows there at all is its owner's question, not this wave's. It now sits under the head row,
@@ -383,7 +387,12 @@ wins whatever order the sheets load in.
 | Sideways scroll, every screen above, at 360 and 390 | 0 | 0 | 0 |
 
 The same at 360 and 390 (measured both). With this fixture the item route draws no `.wl` wrapper on the phone; where it
-draws one, the wrapper takes the same rule as the body. The Epic screen was opened this time (it was inferred in §4). Nothing scrolls
+draws one, the wrapper takes the same rule as the body. Fix round 2 pins the wrapper too, drawn for a missing item (§16.4).
+
+What else moved (fix round 2, review 4029 F1): with its sides at the inset and its buttons' own 12 of side padding, the
+step strip wrapped to two lines at 390 in both skins, 60 to 108 tall, and it is the bar that stays stuck at the top while a
+person reads the item. Its controls now take `--sp-2` of side padding on the phone, so at 390 it is one line again in both
+skins, its edges still on the inset; at 360 it is two lines, as main drew it there. §16.1 has the figures. The Epic screen was opened this time (it was inferred in §4). Nothing scrolls
 sideways and no line was seen cut in the pictures of the throwaway file; the browser files that hold "nothing cut, nothing
 scrolls sideways" at 360 and 390 for these screens (`epic-page`, `programme-page`, `item-wrap`, `item-nav`) are in the
 final evidence run (§15.8). §1 and §4 are corrected: the phone is not otherwise unchanged.
@@ -434,15 +443,19 @@ Instrument and centres in Refined. The describes and case titles name the screen
 
 ### 15.6 Ruling 6: small things
 
-- Stale comments corrected: the Refined runs-line wrap guard in `fleet.css` (the door and New project now fit at 1280 and
-  1440; the rules act from 900 to under 1280), `FleetTable.tsx`'s chooser paragraph (it is on a line of its own, not the
+- Stale comments corrected: the Refined runs-line wrap guard in `fleet.css` (the door and New project fit on one line at
+  every desk width measured, so the rules act at none of them, only when the door's words outgrow the line, as with
+  larger text; no case pins them; corrected in fix round 2, review 4029 F3), `FleetTable.tsx`'s chooser paragraph (it is on a line of its own, not the
   toggle's row), `page-scaffold.tsx` (Refined's row is 56, not 52; the primary pointer, ruling 2) and `skins.ts`'s role
   comment (the page margin role is read outside the scaffold too).
 - The chevron case in `connect-sheet.browser.test.ts` fails with a message naming the state it waited for and what it read
-  (an `expect.poll` with a message, in place of a bare `waitForFunction` timeout). #3405 edits the same file beside it; the
-  second of the two to land absorbs main and re-runs the file, taking #3405's line as it stands on main.
-- `console-spacing`'s fixed 300 ms pauses (three of them) are a wait for a condition: the fonts loaded and every measured box
-  the same on three polls in a row, 100 ms apart.
+  (an `expect.poll` with a message, in place of a bare `waitForFunction` timeout). #3405 edits the same file beside it.
+  #3405 landed first, and this branch's probe against main with it was clean, so this branch absorbed nothing for it; the
+  file on the merge with #3405 (main a45831a795) was measured by review 4029, 20 of 20, not by an absorb of mine.
+- `console-spacing`'s fixed 300 ms pauses (three of them) are a wait for a quiet window: the fonts loaded and every measured
+  box the same on three polls in a row, 100 ms apart, about 200 ms unchanged. It does not wait for a later frame or poll; one
+  that lands after a quiet 200 ms is not waited for, as the pause it replaced did not wait for one either (wording corrected
+  in fix round 2, review 4029 F5).
 
 ### 15.7 New cases, red first, and the mutants
 
@@ -526,3 +539,84 @@ files, nor the helpers they import (the two that import a changed helper, `frame
 they did change source that some of them render (the Docs reader's other files), which this wave does not touch, so those
 files are unmeasured on this head by me, and the merge queue runs them. After this note, the probe against main a45831a795
 was clean (exit 0), so nothing more was absorbed.
+
+## 16. Fix round 2 (review run 4029, the coordinator's rulings R1 to R5)
+
+The review read f2c3672334 and found nothing unsafe; round 1's five findings were each closed and guarded. One finding was
+a side effect of ruling 1 (F1, the item's step strip at 390); the rest was small. The coordinator ruled the list below and
+nothing wider. Before is f2c3672334 unless named; after is this round's head. Figures are measured in Chrome on the sealed
+production build with a throwaway browser file (never committed), PHOSPHOR, the screens fixture (§15).
+
+### 16.1 R1: the item's step strip is one line at 390
+
+At the inset (12 Instrument, 16 Refined) with its buttons' own 12 of side padding, the strip needed Back 138.5, a gap of
+8 and the steps 223.6, 370.1 in all, against 366 (Instrument) and 358 (Refined) inside its pad, so the steps dropped to a
+second line. The room is won inside the strip, its edges kept on the inset: on the phone its controls (Back, Previous,
+Next) take `--sp-2` of side padding in place of the button's 12 (`pwa/src/ledgers/ledgers.css`, in the strip's phone
+block; the button's `px-3` is in the utilities layer, so the sheet's rule wins without `!important`). Back is then 130.5
+and the steps 207.6. No word moved, the strip's gaps are as they were, and every control keeps the 44 tap floor. The
+strip's two gaps alone (each to `--sp-1`) were measured too: they fit Instrument at 390 but not Refined, so they stay.
+
+| Phone, the item route's step strip | Main | Reviewed head (f2c3672334) | After |
+|---|---|---|---|
+| Its side pad | 8 | 12 Instrument, 16 Refined | 12 Instrument, 16 Refined |
+| At 390, both skins: lines, height | one line, 60 | two lines, 108 | one line, 60 |
+| At 360, both skins: lines, height | two lines, 108 | two lines, 108 | two lines, 108 |
+| Back, Previous and Next: height | 44 | 44 | 44 |
+
+At a desk nothing moved: the rule is in the strip's phone block. Pictures at 390, the reviewed head then this round's head:
+`before-fr2-instrument-390-item.png`, `after-fr2-instrument-390-item.png`, `before-fr2-refined-390-item.png` and
+`after-fr2-refined-390-item.png`, in `docs/design/2026-10-22-desktop-polish/console-spacing/`.
+
+### 16.2 R2: one pane, one inset
+
+In Refined at a desk, opening an item drew the list beside it (`aside.wl.wl-beside`) at the detail screens' `--gutter`,
+24, while the fleet list column in the same pane is held at 16 (§9). The list beside an item now takes the fleet column's
+own side gutter, `--sp-4` (`.wl.wl-beside`, two classes, so it wins over `.wl`'s inset in any sheet order). Refined at 1280
+and 1440: 24 before, 16 after, the fleet list column 16; Instrument 16 throughout (its `--gutter` is `--sp-4` at a desk).
+§9 names it.
+
+### 16.3 R3: the Accounts disclosure on the phone
+
+Round 1's rule that drops the closed disclosure's hidden track (`.acct-door-more:not([open]) { gap: 0; }`) sits outside any
+media query, so the gap below the closed disclosure moved on the phone too, 8 to 4 at 360 and 390 in both skins, equal to
+the gap above it. The coordinator accepted it as what ruling 3 meant; §1 says so, and the ruling 3 case now also runs at
+360 and 390 (touch, the tap floor).
+
+### 16.4 R4: the item route's wrapper is drawn and read
+
+The phone case now also opens a missing item (`/waiting/999`), the cheapest state that draws the route's own `.wl`
+wrapper, and reads its inset, so a rule scoped to the wrapper alone cannot regress unseen.
+
+### 16.5 R5: words
+
+- `fleet.css`'s Refined runs-line wrap comment and §15.6: the rules act at no measured desk width (the list column is 320
+  wide from 900 to about 1333 and the door and New project fit it on one line), only when the door's words outgrow the line
+  (larger text), and no case pins them.
+- The settle helper's comment and §15.6: it waits for a quiet window of about 200 ms and loaded fonts, not for a later frame.
+- §15.6: `connect-sheet` on the merge with #3405 was measured by review 4029 (20 of 20), not by an absorb of mine.
+
+Not in this pull request, on a ticket of their own (console-spacing-review-4029-carries), as ruled: the digest's 8 inset on
+the phone, the 4 px between the two panes' first lines in Instrument under a mouse, Refined's edges above 1440, and the
+Back strip's rule made a shared class.
+
+### 16.6 New cases, red first, and the mutants
+
+In `pwa/browser/console-spacing.browser.test.ts` (now 82 cases), each run against the reviewed head's source before its fix
+(measured):
+
+| Case | Red first | Why it was red, or what makes it red |
+|---|---|---|
+| The phone: the item's step strip one line at 390, two at 360, every control the tap floor, nothing past the inset (both skins) | 2 of 4: both skins at 390 | the steps on a second line; at 360 the case pins main's two lines, green before and after |
+| At a desk: the list pane's inset with an item open equals the fleet list column's (both skins, both desk sizes) | 2 of 4: Refined at 1280 and 1440 | 24 against 16; Instrument was 16 already |
+| The Accounts disclosure on the phone, 360 and 390, touch (both skins) | 0 of 4 on the source (the rule was there, unpinned on the phone) | red under the mutant below |
+| The phone ledger case's new entry: the item route's wrapper, drawn for a missing item | 0 of 4 on the source | red under the mutant below |
+
+Mutants on this round's source, each restored from a saved copy and compared with `cmp` (measured):
+
+| Mutant | Who named it | Result |
+|---|---|---|
+| The strip's phone padding rule removed (the reviewed head's sheet) | the review's F1 | 2 red (the strip at 390, both skins) |
+| `.wl.wl-beside`'s inset removed (the same sheet) | the review's F2 | 2 red (Refined, 1280 and 1440) |
+| The closed disclosure's gap rule removed | the review's F4 | 12 red: the 4 new phone cells and the 8 desk cells |
+| `.wl-route > .wl { padding-inline: var(--sp-2) }` added | the review's F6 | 4 red (the phone ledger case, at the wrapper) |

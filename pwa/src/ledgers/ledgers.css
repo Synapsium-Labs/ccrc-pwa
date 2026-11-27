@@ -308,6 +308,12 @@
     position: sticky; top: 0; z-index: var(--z-header);
     padding-top: calc(var(--sp-2) + var(--safe-top)); padding-bottom: var(--sp-2);
   }
+  /* The strip's edges sit on the inset, so at 390, the commonest phone width, its controls win the room back inside it: their
+     side padding is `--sp-2` in place of the button's own 12 (`px-3`), and the strip stays one line in both skins (fix round 2's
+     ruling on review 4029 F1; at the inset with the button's own padding it wrapped to two lines, 60 to 108 tall). Their
+     height keeps the 44 tap floor, and no word moves. At 360 the strip is two lines, as it was on main before this wave. */
+  .wi-nav .wi-back,
+  .wi-nav .wi-step { padding-inline: var(--sp-2); }
 }
 /* The buttons are flex boxes, which drop a space beside the glyph: the gap is that space. */
 .wi-nav .wi-back,
@@ -323,6 +329,10 @@
    list's own, stacked for the column's width; the open item's row is marked current by an accent ring (a non-text edge, and
    `aria-current` says it too). */
 .wl-beside { max-width: none; }
+/* One pane, one inset: the list beside an item sits in the fleet list column's place, so it takes that column's side gutter
+   (`.fleet`'s `--sp-4`, fleet.css), not the detail screens' `--gutter`; in Refined opening an item no longer moves the pane's
+   text from 16 to 24 (fix round 2's ruling on review 4029 F2). Two classes, so it wins over `.wl`'s inset in any sheet order. */
+.wl.wl-beside { padding-inline: var(--sp-4); }
 /* The fleet's banner stack above the list beside an item, in a skin that draws it in its left column (Instrument; follow-up
    F1): the fleet column's own top space, side gutters and gap (`.fleet`, fleet.css: the same tokens), so a banner sits where
    it sits on the list. The stack's slots are `display: contents`, so their banners are this box's own items. Some slots stay

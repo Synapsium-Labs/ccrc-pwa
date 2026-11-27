@@ -3976,8 +3976,9 @@ button.proj-card-pool::before {
   /* AT A DESK THE RUNS LINE WRAPS RATHER THAN CRUSH (desktop polish wave 182). Refined's desk runs line carries the Runs
      door and New project (the chooser has a line of its own under it, ruling A). Measured before that move, the line was
      287 and 313 wide at 1280 and 1440 and the door's words were squeezed onto three and four lines in a 27 px box; now
-     the two fit there on one line, and these rules act only where they do not (from 900 to under 1280): the door is never
-     narrower than its words, and New project takes a second line at its end. The phone keeps its one line (its height
+     the two fit on one line at every desk width measured (the list column is 320 wide from 900 to about 1333), so these
+     rules act at none of them, only when the door's words outgrow the line (larger text): the door is never narrower than
+     its words, and New project takes a second line at its end. No case pins them. The phone keeps its one line (its height
      budget is pinned). In this block, the sheet's first desk block, beside the other desk rules. */
   .fleet-runs-line { flex-wrap: wrap; row-gap: var(--sp-2); }
   .fleet-runs-line .fleet-runs-row { flex: 1 0 auto; }
