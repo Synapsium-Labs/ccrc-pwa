@@ -732,6 +732,13 @@ describe.skipIf(IS_DARWIN)('ccrc auth: the installed unit is the installer\'s, a
   }
 
   // Wave 190 fix round 1 (R2): a bare install takes role both and never reads the recorded role, so the way on names it.
+  // Fix round 2 (R1): only a role word the install takes for a box this verb serves is printed; any other content is
+  // never printed, and the sentence says the recorded role is not one the install takes. Each case asserts the whole
+  // printed line, so nothing of the file's content can ride along.
+  const ownLine = (h: string, fix: string): string =>
+    `ccrc: auth on: ${installed(h)} is not the unit file ccrc installs (${join(h, 'ccrc', 'deploy', 'ccrc.service')}), and this `
+    + `verb acts only on its own. To go on: ${fix}; or set the keys by hand (the README's 'The session gate'). Nothing was changed.`;
+  const printed = (out: string): string => out.replace(/\r/g, '').trim();
   it('names the recorded role in the install that puts a hand-edited unit back', async () => {
     const b = box('ccrc-auth-own-role-', `CCRC_ROLE=server\n${portLines()}`);
     writeFileSync(installed(b.home), `${SHIPPED_UNIT}# edited\n`);
@@ -739,7 +746,29 @@ describe.skipIf(IS_DARWIN)('ccrc auth: the installed unit is the installer\'s, a
     await expectRefused(b, r, bytes(envFile(b.home)), /ccrc\.service is not the unit file ccrc installs/);
     expect(r.out).toMatch(/To go on: ccrc install --role server puts the shipped file back and reloads systemd \(an update does not, on a box already on its version\); or set/);
     expect(r.out).not.toMatch(/<role>|records no role/);
+    expect(printed(r.out)).toBe(ownLine(b.home,
+      'ccrc install --role server puts the shipped file back and reloads systemd (an update does not, on a box already on its version)'));
   });
+
+  const notTaken: [string, string][] = [
+    ['an unknown word', 'Server'],
+    ['a shell metacharacter', 'server; touch /tmp/x'],
+    ['a control character', 'server\x1b[31mRED'],
+    ['a very long value', 'x'.repeat(3000)],
+  ];
+  for (const [name, value] of notTaken) {
+    it(`never prints a recorded role the install does not take: ${name}`, async () => {
+      const b = box('ccrc-auth-own-badrole-', `CCRC_ROLE=${value}\n${portLines()}`);
+      writeFileSync(installed(b.home), `${SHIPPED_UNIT}# edited\n`);
+      const r = await runTty(b.home, ['auth', 'on']);
+      await expectRefused(b, r, bytes(envFile(b.home)), /ccrc\.service is not the unit file ccrc installs/);
+      expect(printed(r.out)).toBe(ownLine(b.home, 'ccrc install --role <role> puts the shipped file back and reloads systemd (an '
+        + `update does not, on a box already on its version; the role ${envFile(b.home)} records is not one ccrc install takes, and a `
+        + 'bare install takes role both)'));
+      expect(r.out).not.toContain(value);
+      expect(r.out).not.toMatch(/records no role/);
+    });
+  }
 
   it('refuses a unit systemd has not reloaded since it changed, and a systemd that does not say, naming the reload', async () => {
     const a = box('ccrc-auth-own-stale-', portLines());
@@ -796,7 +825,23 @@ describe.skipIf(IS_DARWIN)('ccrc auth: the installed unit is the installer\'s, a
       const r = await runTty(b.home, ['auth', sub]);
       await expectRefused(b, r, bytes(envFile(b.home)),
         /systemctl --user show did not say whether systemd made ccrc\.service from another source \(SourcePath\), so what the restart would apply was not measured/);
-      expect(r.out).toMatch(/To go on: run systemctl --user daemon-reload, then re-run/);
+      // Fix round 2 (R3): a reload cannot make the manager print a property it left out, so the way on is the hand route.
+      expect(r.out).toMatch(/To go on: this systemd does not answer SourcePath, so this verb cannot prove the unit on this box; set the keys by hand \(the README's 'The session gate'\)\. Nothing was changed/);
+      expect(r.out).not.toMatch(/daemon-reload/);
+    }
+  });
+
+  // Fix round 2 (R2): the no-SourcePath arm comes after the FragmentPath compare, so a unit loaded from elsewhere is
+  // refused for that, whatever the SourcePath answer.
+  it('refuses a fragment loaded elsewhere for that, even when the read prints no SourcePath line', async () => {
+    const b = box('ccrc-auth-frag-src-unsaid-', portLines());
+    writeFileSync(join(b.home, 'sd-fragment'), 'FragmentPath=/run/user/1000/systemd/transient/ccrc.service\n');
+    writeFileSync(join(b.home, 'sd-sourcepath'), '');
+    for (const sub of ['on', 'off']) {
+      const r = await runTty(b.home, ['auth', sub]);
+      await expectRefused(b, r, bytes(envFile(b.home)),
+        /systemd loaded ccrc\.service from \/run\/user\/1000\/systemd\/transient\/ccrc\.service, not from .*\/\.config\/systemd\/user\/ccrc\.service, the file this verb read/);
+      expect(r.out).not.toMatch(/SourcePath/);
     }
   });
 
