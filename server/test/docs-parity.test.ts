@@ -4,6 +4,9 @@
 // helper's rows below (row 48, row 62, M3.12, helper hygiene); W4 appends M7.3's doctor half. APPEND ONLY.
 // W8a edits M7.9's block in place for the shared Markdown library's import specifiers (rich-docs spec A21, M8.18):
 // the one exception to append-only, recorded in its plan.
+// X1's wave C edits M7.9's block in place a second time (D-8995), retiring the library exception (A21, M8.18): the
+// library is now `@synapsium-labs/pinax-lib`, whose name holds no needle, so the PWA imports it with nothing to
+// except, and the old name is a hit everywhere in the PWA.
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -548,38 +551,9 @@ import * as m79Cp from 'node:child_process';
 
 const M79_DIR = ['claude', 'docs' + '-preview'].join('-');
 const M79_NAME = ['doc', 'server'].join('');
-/**
- * The one exception to the name (rich-docs spec A21, M8.18): in pwa/src only, the shared Markdown library's four
- * import specifiers, as the quoted string right after `from` or `import(` (quotes matching) AT AN IMPORT POSITION: what
- * stands before the `from` or `import(` on its line is code, not a comment and not a string (`m79InCode`). The four are
- * `/render`, `/frame`, `/host`, and `/assets/<path>?raw` (a path with a `..` segment is no specifier). The bare package and
- * every other subpath stay hits. The W8a plan's refinement (i): the PWA's vite.config.ts keeps the unmodified check.
- * NOT EXHAUSTIVE: the scan is line by line, so a line inside a multi-line template literal or inside a block comment
- * that does not start with `*` is read as code, and so is JSX text (`<p>import('…')</p>`: what stands before `import(` is
- * markup, which the scan cannot tell from code).
- */
-const M79_LIBRARY_SPECIFIER = /(\bfrom\s*|\bimport\s*\(\s*)(['"])@synapsium-labs\/docserver\/(?:render|frame|host|assets\/(?!(?:[A-Za-z0-9._-]+\/)*\.\.[\/?])[A-Za-z0-9._\/-]+\?raw)\2/g;
-
-/** True iff the end of `prefix` (the text of a line before a match) is code: not inside a string, a template, a block
- *  comment or a line comment, and not on a line that continues a block comment (`*` first). */
-function m79InCode(prefix: string): boolean {
-  if (prefix.trimStart().startsWith('*')) return false;
-  let quote = '';
-  for (let i = 0; i < prefix.length; i++) {
-    const c = prefix[i] ?? '';
-    const two = prefix.slice(i, i + 2);
-    if (quote !== '') {
-      if (c === '\\') i++;
-      else if (c === quote) quote = '';
-    } else if (two === '//') return false;
-    else if (two === '/*') {
-      const end = prefix.indexOf('*/', i + 2);
-      if (end === -1) return false;
-      i = end + 1;
-    } else if (c === "'" || c === '"' || c === '`') quote = c;
-  }
-  return quote === '';
-}
+// The name needle had one exception (rich-docs spec A21, M8.18): the shared Markdown library's import specifiers in
+// pwa/src, while its package was named after the needle. The package is `@synapsium-labs/pinax-lib` since 1.2.0, so the
+// exception is retired (D-8995): no import specifier is excepted, and the old package's name is a hit like any other.
 /** The two ruling comments: file -> the anchor sentence that locates the paragraph. */
 const M79_RULINGS: ReadonlyMap<string, string> = new Map([
   ['ccd/ccrc', 'A named `.' + M79_DIR + '` skip used to sit here.'],
@@ -614,10 +588,7 @@ function m79Scan(files: ReadonlyArray<readonly [string, string]>): string[] {
       if (line.includes(M79_DIR) && !allowed.has(i)) {
         out.push(`${name}:${i + 1}: the directory name outside the two ruling comments`);
       }
-      const checked = name.startsWith('pwa/src/')
-        ? line.replace(M79_LIBRARY_SPECIFIER, (hit, lead: string, quote: string, at: number) => (m79InCode(line.slice(0, at)) ? lead + quote + quote : hit))
-        : line;
-      if (pwa && checked.toLowerCase().includes(M79_NAME)) {
+      if (pwa && line.toLowerCase().includes(M79_NAME)) {
         out.push(`${name}:${i + 1}: the standalone server's name in the PWA`);
       }
     });
@@ -706,26 +677,39 @@ m79Vitest.describe('M7.9: the tree does not know a standalone docs server', () =
   });
 
   // ---- W8a (rich-docs spec A21, M8.18): the shared Markdown library's import specifiers in pwa/src ----
+  // Retired by X1's wave C (D-8995): the three cases that held an old-name import specifier green now hold it a hit, so
+  // restoring the exception reds them; the library's new name is not a hit because it holds no needle. The old-name
+  // cases below them marked the exception's edges and are now plain needle hits, kept as a record of those edges.
   const SRC_FILE = 'pwa/src/app.tsx';
   const hitLine = (file: string): string => {
     const n = textOf(file).split('\n').length;
     return `${file}:${n + 1}: the standalone server's name in the PWA`;
   };
 
-  m79Vitest.it('M8.18: a /frame import specifier in pwa/src is not a hit', () => {
+  m79Vitest.it('M8.18 (retired, D-8995): the library\'s new import specifiers in pwa/src hold no needle and are not hits', () => {
     m79Vitest.expect(added(swapped(SRC_FILE, textOf(SRC_FILE) + '\n' +
-      "import { frameCsp } from '@synapsium-labs/docserver/frame';"))).toEqual([]);
+      "import { frameCsp } from '@synapsium-labs/pinax-lib/frame';\n" +
+      "import { mountDocFrame } from '@synapsium-labs/pinax-lib/host';\n" +
+      "const r = await import('@synapsium-labs/pinax-lib/render');\n" +
+      'const g = await import("@synapsium-labs/pinax-lib/assets/frame/guard.js?raw");'))).toEqual([]);
   });
 
-  m79Vitest.it('M8.18: /host and /render import specifiers in pwa/src are not hits', () => {
+  m79Vitest.it('M8.18 (retired, D-8995): an old-name /frame import specifier in pwa/src is a hit', () => {
+    m79Vitest.expect(added(swapped(SRC_FILE, textOf(SRC_FILE) + '\n' +
+      "import { frameCsp } from '@synapsium-labs/docserver/frame';"))).toEqual([hitLine(SRC_FILE)]);
+  });
+
+  m79Vitest.it('M8.18 (retired, D-8995): old-name /host and /render import specifiers in pwa/src are hits', () => {
+    const n = textOf(SRC_FILE).split('\n').length;
     m79Vitest.expect(added(swapped(SRC_FILE, textOf(SRC_FILE) + '\n' +
       "import { mountDocFrame } from '@synapsium-labs/docserver/host';\n" +
-      "const r = await import('@synapsium-labs/docserver/render');"))).toEqual([]);
+      "const r = await import('@synapsium-labs/docserver/render');")))
+      .toEqual([`${SRC_FILE}:${n + 1}: the standalone server's name in the PWA`, `${SRC_FILE}:${n + 2}: the standalone server's name in the PWA`]);
   });
 
-  m79Vitest.it('M8.18: an /assets ?raw dynamic import specifier in pwa/src is not a hit', () => {
+  m79Vitest.it('M8.18 (retired, D-8995): an old-name /assets ?raw dynamic import specifier in pwa/src is a hit', () => {
     m79Vitest.expect(added(swapped(SRC_FILE, textOf(SRC_FILE) + '\n' +
-      'const g = await import("@synapsium-labs/docserver/assets/frame/guard.js?raw");'))).toEqual([]);
+      'const g = await import("@synapsium-labs/docserver/assets/frame/guard.js?raw");'))).toEqual([hitLine(SRC_FILE)]);
   });
 
   m79Vitest.it('M8.18: the word in a pwa/src comment is a hit', () => {
@@ -763,7 +747,7 @@ m79Vitest.describe('M7.9: the tree does not know a standalone docs server', () =
       .toEqual([hitLine(SRC_FILE)]);
   });
 
-  m79Vitest.it('M8.18: a trailing comment after an allowed import is a hit', () => {
+  m79Vitest.it('M8.18: a trailing comment after a library import is a hit', () => {
     m79Vitest.expect(added(swapped(SRC_FILE, textOf(SRC_FILE) + "\nimport { frameCsp } from '@synapsium-labs/docserver/frame'; // " + M79_NAME)))
       .toEqual([hitLine(SRC_FILE)]);
   });
@@ -778,7 +762,7 @@ m79Vitest.describe('M7.9: the tree does not know a standalone docs server', () =
       .toEqual([hitLine(SRC_FILE)]);
   });
 
-  m79Vitest.it('M8.18: an allowed specifier in pwa/vite.config.ts is still a hit', () => {
+  m79Vitest.it('M8.18: a library specifier in pwa/vite.config.ts is a hit', () => {
     m79Vitest.expect(added(swapped(M79_PWA_CONFIG, textOf(M79_PWA_CONFIG) + "\nimport { frameCsp } from '@synapsium-labs/docserver/frame';")))
       .toEqual([hitLine(M79_PWA_CONFIG)]);
   });

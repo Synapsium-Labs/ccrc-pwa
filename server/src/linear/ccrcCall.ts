@@ -15,7 +15,7 @@
 import type { FetchLike, LinearCall } from './client.js';
 import { callLinear, LINEAR_RATE_LIMITED_FALLBACK_S } from './client.js';
 import {
-  LINEAR_CCRC_OPS, type CcrcOpInput, type CcrcOpName, type CcrcOpRow,
+  LINEAR_CCRC_OPS, type CcrcOpInput, type CcrcOpName, type CcrcOpRow, type CcrcShaped,
 } from './hierarchyOps.js';
 import {
   ccrcActor, type LinearJournal, type LinearJournalCode, type LinearPendingInput, type LinearSettledOutcome,
@@ -65,6 +65,10 @@ export type CcrcOpOutcome =
     maybeSent: boolean;
     /** C1: a create's retry-guard answer (`linear-invalid` with the object already there), told from a real refusal. */
     detail?: 'conflict' | 'name-taken';
+    /** D-9132: Linear answered (a body arrived) but with an error the closed table does not know, or a payload that is not
+     *  `success`. The word stays `unreachable` (spec §6.8's rule, unchanged for every other reader); this marks it apart from a
+     *  transport failure, which never carries it. Set only on that answer, never on a timeout, a rate limit or a thrown fetch. */
+    outsideTable?: true;
   };
 
 type ObjectKind = 'initiative' | 'project' | 'milestone' | 'issue';
@@ -150,20 +154,10 @@ async function run(deps: CcrcCallDeps, ask: CcrcOpAsk): Promise<CcrcOpOutcome> {
     }
 
     sent = { ok: false, reason: 'unreachable' };
-    const r = await callLinear(k.key, row.document, row.variables(ask.input), { fetch: deps.fetch, timeoutMs: deps.timeoutMs, now: deps.now });
+    const r = await callLinear(k.key, row.document, row.variables(ask.input), { fetch: deps.fetch, timeoutMs: deps.timeoutMs, now: deps.now, keepErrors: true });
     sent = r;
-    if (!r.ok) {
-      if (r.reason === 'rate-limited') {
-        journalEnd('failed', 'rate-limited', null, decisionId);
-        return { ok: false, word: 'rate-limited', retryAfterS: r.retryAfterS };
-      }
-      const c = callWord(r);
-      journalEnd(c.outcome, c.word, null, decisionId);
-      return { ok: false, word: c.word, maybeSent: write && c.outcome === 'unknown' };
-    }
-
-    const shaped = row.shape(r.body);
-    if (!shaped.ok) {
+    /** An answer outside the table's `success`: its word, journaled, and (D-9132) marked when it is the `unreachable` word of a body. */
+    const refused = (shaped: Extract<CcrcShaped, { ok: false }>): CcrcOpOutcome => {
       if (shaped.word === 'rate-limited') {
         // A RATELIMITED body on a 200 carries no wait: the fallback's, as `callLinear` reads a 429 with none.
         sent = { ok: false, reason: 'rate-limited', retryAfterS: LINEAR_RATE_LIMITED_FALLBACK_S };
@@ -172,10 +166,28 @@ async function run(deps: CcrcCallDeps, ask: CcrcOpAsk): Promise<CcrcOpOutcome> {
       }
       const outcome = shaped.word === 'malformed' || shaped.word === 'unreachable' ? 'unknown' : 'failed';
       journalEnd(outcome, shaped.word, null, decisionId);
+      // D-9132: a body was received and shaped, and its answer is outside the closed table (or not `success`): `unreachable` in word.
+      const outsideTable = shaped.word === 'unreachable' ? { outsideTable: true as const } : {};
       return shaped.detail === undefined
-        ? { ok: false, word: shaped.word, maybeSent: write && outcome === 'unknown' }
-        : { ok: false, word: shaped.word, maybeSent: write && outcome === 'unknown', detail: shaped.detail };
+        ? { ok: false, word: shaped.word, maybeSent: write && outcome === 'unknown', ...outsideTable }
+        : { ok: false, word: shaped.word, maybeSent: write && outcome === 'unknown', detail: shaped.detail, ...outsideTable };
+    };
+    if (!r.ok) {
+      if (r.reason === 'rate-limited') {
+        journalEnd('failed', 'rate-limited', null, decisionId);
+        return { ok: false, word: 'rate-limited', retryAfterS: r.retryAfterS };
+      }
+      // D-9132: a non-2xx answer that carried an `errors` body is read against the closed table as a 200 is. One the table calls a
+      // success is no success on a failing status: it stays a plain `unreachable`.
+      const answered = r.reason === 'unreachable' && r.answered !== undefined ? row.shape(r.answered) : null;
+      if (answered !== null && !answered.ok) return refused(answered);
+      const c = callWord(r);
+      journalEnd(c.outcome, c.word, null, decisionId);
+      return { ok: false, word: c.word, maybeSent: write && c.outcome === 'unknown' };
     }
+
+    const shaped = row.shape(r.body);
+    if (!shaped.ok) return refused(shaped);
     // A session-grammar create is journaled by the issue's identifier; every other op by the created UUID.
     const identifier = shaped.value['identifier'];
     const result = row.journalOp === 'create' ? (typeof identifier === 'string' ? identifier : null) : shaped.created;

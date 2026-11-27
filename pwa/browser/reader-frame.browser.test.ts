@@ -36,8 +36,8 @@ import path from 'node:path';
 import { crc32 } from 'node:zlib';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type BrowserContext, type Frame, type Page, type Route } from 'playwright-core';
-import { INSTRUMENT, REFINED } from '@ccrc/ui';
-import { FRAME_MANIFEST, frameCsp } from '@synapsium-labs/docserver/frame';
+import { INSTRUMENT, REFINED, SKINS } from '@ccrc/ui';
+import { FRAME_MANIFEST, frameCsp } from '@synapsium-labs/pinax-lib/frame';
 import {
   DOC_SECTION_SLUGS, DOCS_MAX_IMAGES_PER_PAGE, DOCS_RASTER_TYPES, DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, DOCS_RESPONSE_HEADERS, sniffRaster,
 } from '../../shared/docs';
@@ -56,6 +56,8 @@ import { onePixelPng, resolveChrome, startOrigins, type OriginAnswer, type Origi
 
 const PROJECT = 'demo';
 const SECTION = DOC_SECTION_SLUGS[0]!;
+/** Every skin the PWA offers, read from its catalogue: the worst case's watchdog budget holds once per skin (AP-7). */
+const SKIN_IDS = SKINS.map((s) => s.id);
 /** Built, never typed: an ESC, a line separator, and a script close that would end the seed's element if it were raw. */
 const ESC = String.fromCharCode(27);
 const LS = String.fromCharCode(0x2028);
@@ -108,14 +110,15 @@ const FIGURES = 5;
 const DRAW = docsDrawFor(READER_E17_MERMAID);
 
 /** The global names the installed frame bootstrap guards against clobbering: the first array literal of
- *  `assets/frame/bootstrap.js` (`var O=[...]`), read from the installed file so a library change moves the fixture. Some are
+ *  `assets/frame/bootstrap.js` (`var <name>=[...]`, whatever name the minifier gave it: `O` in 1.1.0, `M` in 1.2.0), read
+ *  from the installed file so a library change moves the fixture. Some are
  *  natives no element id can shadow (`location`, `window`); the rest, Mermaid's and cytoscape's among them
  *  (`instance`, `next`, `update`, `processed`, `cytoscape`, `mermaidCaptureSizes`, `__mermaidProfiler`), a named
  *  access could. The seed element has no id (the bootstrap finds it by its place before its own script), so there is no
  *  seed name to plant. */
 const BOOTSTRAP_GLOBALS: readonly string[] = ((): string[] => {
-  const text = readFileSync(path.join(import.meta.dirname, '..', 'node_modules/@synapsium-labs/docserver/assets/frame/bootstrap.js'), 'utf8');
-  const m = /var O=(\[[^\]]*\])/.exec(text);
+  const text = readFileSync(path.join(import.meta.dirname, '..', 'node_modules/@synapsium-labs/pinax-lib/assets/frame/bootstrap.js'), 'utf8');
+  const m = /var [A-Za-z_$][\w$]*=(\[[^\]]*\])/.exec(text);
   if (m === null) throw new Error('the installed bootstrap holds no global list in the expected place');
   const names = JSON.parse(m[1] ?? '[]') as string[];
   if (names.length < 100 || new Set(names).size !== names.length) throw new Error('the bootstrap global list is not the list this fixture reads');
@@ -1597,7 +1600,7 @@ describe('W8a reader frame in Chrome', () => {
     expect(problems, 'the reader is one pane tall and only its frame scrolls, at both sizes').toEqual([]);
   }, 180_000);
 
-  it('the worst case renders inside the watchdog', async () => {
+  it.each(SKIN_IDS)('%s: the worst case renders inside the watchdog', async (skin) => {
     const files = FILES.get('worst.md');
     expect(typeof files === 'string' && Buffer.byteLength(files, 'utf8')).toBe(WORST_BYTES);
     const images = [...FILES].filter(([p]) => p.startsWith('pix-'));
@@ -1605,7 +1608,7 @@ describe('W8a reader frame in Chrome', () => {
     expect(images.reduce((n, [, b]) => n + sizeOf(b), 0), '30 images totalling the budget').toBe(READER_IMAGE_BUDGET_BYTES);
     expect(sniffRaster('png', images[0]?.[1] as Uint8Array)).toBe('match');
     const t0 = Date.now();
-    const { s, outcome } = await open('worst.md');
+    const { s, outcome } = await open('worst.md', { skin });
     const wall = Date.now() - t0;
     expect(outcome, 'ready inside the watchdog, not the fallback').toBe('ready');
     const m = await s.page.evaluate(() => {
@@ -1625,7 +1628,7 @@ describe('W8a reader frame in Chrome', () => {
       imgs: document.querySelectorAll('img').length, decoded: [...document.querySelectorAll('img')].filter((i) => i.naturalWidth === 1).length,
       elements: document.querySelectorAll('*').length,
     }));
-    console.log(`T10-FIGURES worst ${JSON.stringify({ ...m, wallMs: wall, budget: READER_IMAGE_BUDGET_BYTES, seedImages: imageCount, painted })}`);
+    console.log(`T10-FIGURES worst ${skin} ${JSON.stringify({ ...m, wallMs: wall, budget: READER_IMAGE_BUDGET_BYTES, seedImages: imageCount, painted })}`);
     expect(summary.head.filter((h) => h.sha256 === FRAME_MANIFEST.mermaid.sha256).length,
       DRAW === 'after-ready' ? 'no head script is the Mermaid text (it loads after ready)' : 'the Mermaid text is inlined once (the gate passed)')
       .toBe(DRAW === 'after-ready' ? 0 : 1);
@@ -1981,21 +1984,32 @@ describe('W8a reader frame in Chrome', () => {
       expect(s.app.errors, 'no page error').toEqual([]);
     }, 120_000);
 
-    it('a bare #id link scrolls in the frame, remounts nothing, updates the fragment, adds no history entry and reads nothing', async () => {
+    // A bare #id link is a jump, a place to return to (X2 P5.3, D-8763; parity spec 4.7): the console pushes one entry at
+    // the doc's path and query unchanged and the jump's id as its fragment (D-9117), tagged as the jump's place, so Back
+    // returns. Before D-8763 the jump replaced the fragment and added no entry.
+    it('a bare #id link scrolls in the frame, remounts nothing, pushes one place whose address names the id and reads nothing', async () => {
       const { s, frame } = await openSelf();
       const handle = await s.page.locator('.docs-reader iframe').elementHandle();
       const entries = await s.page.evaluate(() => history.length);
+      const href = (): Promise<string> => s.page.evaluate(() => location.href);
+      const url = await href();
       const reads = s.apiHits.length;
       await frame.getByRole('link', { name: 'the bare link' }).click();
       await expect.poll(async () => inView(await topIn(frame, FAR_ID)), {
         timeout: 30_000, message: 'the target is not in the frame\'s viewport after the bare link (the frame did not scroll to it)',
       }).toBe(true);
-      await s.page.waitForFunction((h) => location.hash === h, `#${FAR_ID}`, { timeout: 10_000 });
+      await expect.poll(() => s.page.evaluate(() => history.length), {
+        timeout: 10_000, message: 'the jump pushed no history entry',
+      }).toBe(entries + 1);
+      const place = await s.page.evaluate(() => (history.state as { docsPlace?: { kind?: string; id?: string; seq?: number; from?: unknown } } | null)?.docsPlace);
+      expect(place, 'the new entry is the jump\'s place, the visit\'s first').toMatchObject({ kind: 'jump', id: FAR_ID, seq: 1 });
+      expect(typeof place?.from, 'with the position it left, so Back can return there').toBe('string');
+      expect(await href(), 'the URL before with its fragment replaced by the id: path and search unchanged').toBe(`${url.split('#')[0]}#${FAR_ID}`);
       expect(await framesCount(s), 'still one iframe').toBe(1);
       expect(await handle!.evaluate((e) => e.isConnected), 'the same frame element').toBe(true);
-      expect(await s.page.evaluate(() => history.length), 'no history entry').toBe(entries);
       expect(s.apiHits.length, 'no request at all').toBe(reads);
       expect((await postsSeen(s.page)).length, 'no second hello').toBe(1);
+      expect(await s.page.evaluate(() => history.length), 'exactly one entry').toBe(entries + 1);
     }, 120_000);
 
     it('the remount keeps the persisted reader state: the width pref, the marks, the folds and the last visit survive, and the frame shows them', async () => {

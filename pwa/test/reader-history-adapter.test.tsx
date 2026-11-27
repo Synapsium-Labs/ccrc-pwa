@@ -113,7 +113,7 @@ interface Rig {
 
 function rig(over: { files?: ReturnType<typeof fakeLoaders>; history?: DocsHistoryLoader['history'] } = {}): Rig {
   const inputs: ReaderMountInput[] = [];
-  const handle = { destroy: vi.fn(), setPrefs: vi.fn(), command: vi.fn() };
+  const handle = { destroy: vi.fn(), setPrefs: vi.fn(), command: vi.fn(), seed: { hosted: false as const }, follow: vi.fn() };
   const renderFn = vi.fn<ReaderDeps['render']>(async () => RENDERED);
   const mountFn = vi.fn<ReaderDeps['mount']>(async (_el, input) => {
     inputs.push(input);
@@ -536,7 +536,12 @@ describe('the visit\'s own filter (history.state, rich-docs spec M8.22)', () => 
     // An ordinary link to the same page: a new entry with no state, then `popstate`, as the router fires it.
     act(() => { history.pushState(null, '', url); window.dispatchEvent(new PopStateEvent('popstate')); });
     await waitFor(() => expect(r.inputs.at(-1)?.version?.only).toBeNull());
-    expect(history.state).toBeNull();
+    // Changed by X2 P5.3 (D-8763), an intended behaviour change: the entry the router lands on is stamped with the tab's
+    // index (`docsIdx`), so its state is no longer null. It still holds no filter.
+    const state = history.state as Record<string, unknown> | null;
+    expect(state?.[READER_ONLY_STATE_KEY], 'the new entry holds no filter').toBeUndefined();
+    expect(Object.keys(state ?? {}), 'only the index the dispatcher stamped').toEqual(['docsIdx']);
+    expect(typeof state?.docsIdx, 'a number').toBe('number');
     const probed: Array<string | null> = [];
     function Probe(): ReactNode { probed.push(useReaderOnly()); return null; }
     render(<Probe />);

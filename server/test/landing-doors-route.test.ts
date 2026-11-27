@@ -246,7 +246,8 @@ describe('the doors\' bodies and refusals (section 4.5)', () => {
   });
 
   // The two words only the writer itself can answer (review run 3864's F3 ruling): the deps hand the door the real store, whose
-  // writer is spied to answer each word once. No seam in source; the route's status and word are what is pinned.
+  // writer is spied to answer each word on every call, so both doors meet it in one case. No seam in source; the route's
+  // status and word are what is pinned.
   it.each([['landing-record-unparseable', 500], ['landing-sequence-overflow', 409]] as const)('the writer\'s %s answers %i with its word', async (word, status) => {
     const w = await world();
     const spy = vi.spyOn(w.store, 'writeLandingAuthority').mockReturnValue({ ok: false, error: word } as never);

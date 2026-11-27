@@ -12,6 +12,7 @@
 //
 // - `sandboxVerdict`: per property, held, failed or unmeasured, and `engaged`.
 // - `profileEngagedOf`: the ladder's condition input (`launch-profile-unengaged`, read by the gate order's step 6).
+// - `newestStartVerdict`: the newest start's verdict with its id, for the generations pass's account hold (renewal readings H).
 // - `sandboxSettle`: what the first report of a pending designation does to it: go live, fail the attempt, or nothing.
 // - `skewNoticeOf`: the one operator notice when a dead Overlord waits for the two boxes to run one build (question 5).
 import { createHash } from 'node:crypto';
@@ -63,7 +64,18 @@ export function expectedSurfaceOf(role: FleetRole, ownLists: ClaudeCodeOwnLists 
 }
 
 export type PropertyState = 'held' | 'failed' | 'unmeasured';
-export interface PropertyVerdict { readonly property: SandboxProperty; readonly state: PropertyState; readonly detail: string }
+/** `fromAccount` (renewal readings PR H, §3.6): the property failed because the start loaded something the profile does not
+ *  list from the account's own config directory, so another account may start clean; false for every other answer (held,
+ *  unmeasured, something missing, the launch's own composition, or a file the workspace or its parents hold). THE HARNESS
+ *  KNOWLEDGE LIVES HERE, beside the check that reads the report, never in the hold's decider (`holdOfStart`): an extra tool,
+ *  tool server, skill, agent type or SessionStart hook is read as the account's, because the profile pins the setting sources
+ *  to the project, names the one tool server under the strict tool-server config and stages the workspace's only skills and
+ *  file, and no project settings file can stand in the workspace (§3.6), so what is left is the account's config directory
+ *  (its mods, skills, agents and settings); an extra instruction file is the account's only when Claude Code typed it `User`
+ *  (the config directory's own memory file) and it lies outside the workspace. */
+export interface PropertyVerdict {
+  readonly property: SandboxProperty; readonly state: PropertyState; readonly detail: string; readonly fromAccount: boolean;
+}
 export interface SandboxVerdict { readonly engaged: boolean; readonly properties: readonly PropertyVerdict[] }
 
 /** What the server knows of the session's workspace: the registry row's project, measured or not. */
@@ -80,7 +92,10 @@ export type CarryFact =
   | { readonly kind: 'absent' }
   | { readonly kind: 'unmeasured'; readonly reason: string };
 
-const v = (property: SandboxProperty, state: PropertyState, detail: string): PropertyVerdict => ({ property, state, detail });
+const v = (property: SandboxProperty, state: PropertyState, detail: string, fromAccount = false): PropertyVerdict =>
+  ({ property, state, detail, fromAccount });
+/** A loaded instruction file that is the account's own: Claude Code's `User` memory file, outside the workspace. */
+const accountFile = (f: LoadedInstruction): boolean => f.type === 'User' && !f.inWorkspace;
 const names = (k: readonly LoadedEntry[]): string[] => k.filter((e): e is string => typeof e === 'string');
 const list = (xs: readonly string[]): string => xs.join(', ');
 
@@ -108,7 +123,7 @@ function listed(property: 'skills' | 'agents', got: readonly LoadedEntry[], prof
   const allowed = new Set([...profile, ...lists[property]]);
   const have = names(got);
   const extra = have.filter((n) => !allowed.has(n));
-  if (extra.length > 0) return v(property, 'failed', `not in the profile: ${list(extra)}`);
+  if (extra.length > 0) return v(property, 'failed', `not in the profile: ${list(extra)}`, true);
   const missing = profile.filter((n) => !have.includes(n));
   if (missing.length > 0) return v(property, 'failed', `the profile's ${list(missing)} not loaded`);
   return v(property, 'held', `${have.length} listed`);
@@ -136,7 +151,7 @@ export function sandboxVerdict(expected: ExpectedSurface, report: StartLoadsRow 
   if (L.tools === UNMEASURED) out.push(v('tools', 'unmeasured', 'the offered tools were not read'));
   else {
     const extra = names(L.tools).filter((t) => !expected.tools.includes(t) && !t.startsWith(door));
-    if (extra.length > 0) out.push(v('tools', 'failed', `not in the profile: ${list(extra)}`));
+    if (extra.length > 0) out.push(v('tools', 'failed', `not in the profile: ${list(extra)}`, true));
     else if (!names(L.tools).some((t) => t.startsWith(door))) out.push(v('tools', 'failed', `no ${expected.toolServer} tool offered`));
     else out.push(v('tools', 'held', `${L.tools.length} offered`));
   }
@@ -144,14 +159,15 @@ export function sandboxVerdict(expected: ExpectedSurface, report: StartLoadsRow 
   // tool-servers: exactly the one server.
   if (L.toolServers === UNMEASURED) out.push(v('tool-servers', 'unmeasured', 'the tool servers were not read'));
   else if (L.toolServers.length === 1 && L.toolServers[0] === expected.toolServer) out.push(v('tool-servers', 'held', expected.toolServer));
-  else out.push(v('tool-servers', 'failed', L.toolServers.length === 0 ? 'no tool server' : `servers: ${list(names(L.toolServers))}`));
+  else if (L.toolServers.length === 0) out.push(v('tool-servers', 'failed', 'no tool server'));
+  else out.push(v('tool-servers', 'failed', `servers: ${list(names(L.toolServers))}`, names(L.toolServers).some((n) => n !== expected.toolServer)));
 
   // instructions: exactly one file, the workspace's CLAUDE.md, with the constitution's digest.
   const instr = L.instructions === UNMEASURED ? null : L.instructions.filter((e): e is LoadedInstruction => typeof e !== 'string');
   if (carried !== null) out.push(v('instructions', 'unmeasured', carried));
   else if (instr === null) out.push(v('instructions', 'unmeasured', 'the instruction files were not read'));
-  else if (instr.length !== 1) out.push(v('instructions', 'failed', `${instr.length} instruction files`));
-  else if (instr[0]!.name !== 'CLAUDE.md' || !instr[0]!.inWorkspace) out.push(v('instructions', 'failed', `the file is ${instr[0]!.name}`));
+  else if (instr.length !== 1) out.push(v('instructions', 'failed', `${instr.length} instruction files`, instr.some(accountFile)));
+  else if (instr[0]!.name !== 'CLAUDE.md' || !instr[0]!.inWorkspace) out.push(v('instructions', 'failed', `the file is ${instr[0]!.name}`, accountFile(instr[0]!)));
   else if (instr[0]!.sha256 !== expected.constitutionSha256) out.push(v('instructions', 'failed', 'the file is not the constitution'));
   else out.push(v('instructions', 'held', 'the constitution'));
 
@@ -166,7 +182,7 @@ export function sandboxVerdict(expected: ExpectedSurface, report: StartLoadsRow 
   else if (L.hooks === UNMEASURED) out.push(v('hooks', 'unmeasured', 'the SessionStart hooks were not read'));
   else {
     const foreign = names(L.hooks).filter((h) => h !== expected.hookSha256).length;
-    if (foreign > 0) out.push(v('hooks', 'failed', `${foreign} SessionStart hook(s) not ccrc's`));
+    if (foreign > 0) out.push(v('hooks', 'failed', `${foreign} SessionStart hook(s) not ccrc's`, true));
     else if (!names(L.hooks).includes(expected.hookSha256)) out.push(v('hooks', 'failed', "ccrc's hook did not run"));
     else out.push(v('hooks', 'held', "ccrc's hook only"));
   }
@@ -199,6 +215,16 @@ export function profileEngagedOf(newest: { readonly start: StartRow; readonly re
   if (newest === null || newest.report === null) return 'not-engaged';
   if (newest.report.startId !== newest.start.id) return 'not-engaged';
   return sandboxVerdict(expected, newest.report, workspace, carry).engaged ? 'engaged' : 'not-engaged';
+}
+
+/** The verdict of the session's newest `startup` or `resume` start, by that start's own report, with the start's id: the read
+ *  the generations pass asks before it holds an account (renewal readings PR H, `holdOfStart`). No such start is null; a start
+ *  with no report yet, or a report of another start (as `profileEngagedOf` reads it), is `unmeasured`, so the pass asks again. */
+export function newestStartVerdict(newest: { readonly start: StartRow; readonly report: StartLoadsRow | null; readonly carry: CarryFact } | null,
+  expected: ExpectedSurface, workspace: WorkspaceFact): { readonly startId: number; readonly verdict: SandboxVerdict | 'unmeasured' } | null {
+  if (newest === null) return null;
+  if (newest.report === null || newest.report.startId !== newest.start.id) return { startId: newest.start.id, verdict: 'unmeasured' };
+  return { startId: newest.start.id, verdict: sandboxVerdict(expected, newest.report, workspace, newest.carry) };
 }
 
 export type SettleAct =
