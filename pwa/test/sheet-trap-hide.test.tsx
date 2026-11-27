@@ -29,6 +29,7 @@ import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { recordModalLayer } from '../../ui/src/lib/modal-layers';
 import { CommandPalette, QuickConfirm, Sheet, SheetPortalContext, hideAsPage, releaseAsPage, type PageHiding } from '@ccrc/ui';
 
 afterEach(() => {
@@ -1419,5 +1420,43 @@ describe('reader mode: a sheet unmounted while open after reader mode ended give
     view.rerender(<Unmount first="closed" second={false} />);
     await settle();
     expect(hiddenNow(), 'a sheet\'s unmount lifted the hiding of the reader mode that stands').toEqual([true, true]);
+  });
+
+  // Review M1 of the round: the set outlives the modal's normal close. A node a sheet's close gave back stays in it until some later
+  // unmount finds it visible; if another layer (the command palette, which lifts nothing of its own) hides the console by then, that
+  // unmount would take the other layer's `aria-hidden` off early. A new layer's mount drops from the set what is visible by then.
+  it('reader mode: a node handed to a sheet that then closed normally is not lifted later from under another layer\'s hiding (review M1)', async () => {
+    const view = render(<Unmount first={false} second={false} />);
+    const hiding = hideConsole();
+    view.rerender(<Unmount first second={false} />);
+    await settle();
+    releaseAsPage(hiding);
+    expect(hiddenNow(), 'CONTROL: the open sheet keeps the console hidden after reader mode ends').toEqual([true, true]);
+    view.rerender(<Unmount first="closed" second={false} />);
+    await settle();
+    expect(document.querySelector('[role="dialog"]'), 'CONTROL: the sheet is closed and gone').toBeNull();
+    expect(hiddenNow(), 'CONTROL: the sheet\'s close lifted the console').toEqual([false, false]);
+    // A later layer mounts its panel (the palette's callback ref does this) and hides the console as Radix's `hideOthers` would.
+    const panel = document.createElement('div');
+    document.body.appendChild(panel);
+    try {
+      recordModalLayer(panel);
+      for (const node of consoleNodes()) {
+        node.setAttribute('aria-hidden', 'true');
+        node.setAttribute('data-aria-hidden', 'true');
+      }
+      expect(document.querySelector('[role="dialog"][data-state="open"]'), 'CONTROL: no dialog is open').toBeNull();
+      view.rerender(<Unmount first={false} second="closed" />);
+      await settle();
+      view.rerender(<Unmount first={false} second={false} />);
+      await settle();
+      expect(hiddenNow(), 'a later sheet\'s unmount lifted the console from under the other layer\'s hiding').toEqual([true, true]);
+    } finally {
+      panel.remove();
+      for (const node of consoleNodes()) {
+        node.removeAttribute('aria-hidden');
+        node.removeAttribute('data-aria-hidden');
+      }
+    }
   });
 });
