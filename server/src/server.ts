@@ -133,6 +133,7 @@ import { registerOverlordInboxRoutes } from './coord/overlordInboxRoutes.js';
 import { runOverlordRead } from './coord/overlordRead.js';
 import { registerOverlordHistoryRoutes } from './coord/overlordHistoryRoutes.js';
 import { registerOverlordSequenceRoutes } from './coord/overlordSequenceRoutes.js';
+import { boardPortsOf, registerOverlordBoardRoutes } from './coord/overlordBoardRoutes.js';
 import { sequenceAfter } from './coord/overlordSequenceStore.js';
 import { invariantsReadOver } from './coord/invariantLane.js';
 import { readTurnMarkMeasured } from './turnmark.js';
@@ -332,6 +333,8 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/portfolio', '/api/overlord/ladder', '/api/overlord/readiness',
   // The operator's messages, one by its id (W1 inbox piece): the text is the operator's own words, masked by the one answer hook.
   '/api/overlord/inbox', '/api/overlord/messages/:id',
+  // The Overlord's board (W1 PR B2): programme titles, session ids and item titles a session wrote, each marked untrusted.
+  '/api/overlord/board',
   // The chat's thread and an earlier generation's page (W1 chat): the operator's words, and the Overlord's text from its transcript.
   '/api/overlord/chat', '/api/overlord/chat/earlier',
   // The operator's read of the invariant monitor (sequence C): findings' messages and unmeasured reasons carry composed text, a
@@ -2369,6 +2372,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   registerOverlordSequenceRoutes(app, { mailToken: () => deps.mailToken ?? null, gate, readRunner,
     sequence: (after, limit) => (deps.coord === undefined ? { kind: 'unmeasured', why: 'no coordination store' } : sequenceAfter(deps.coord.db, after, limit)),
     restoreGeneration: () => deps.overlordRestore?.restoreGeneration() ?? { kind: 'unmeasured' } });
+  // The Overlord's board (W1 PR B2): one composed read over the readers the console's own reads call, through this server's walk cache.
+  registerOverlordBoardRoutes(app, { mailToken: () => deps.mailToken ?? null, gate, readRunner, board: boardPortsOf({ coord: deps.coord, io: deps.io,
+    cfg: deps.cfg, cache: () => projectWalk, watcher, liveAsk, now: () => deps.time.clock.wall(), readiness: deps.overlordReadiness, isolation: deps.isolation,
+    ladder: ladderDeps === undefined ? undefined : () => ladderRead(ladderDeps.coord, ladderDeps.inputs, ladderDeps.witness ?? NO_WITNESS_YET, ladderDeps.serverCaps) }) });
   // The Overlord's account reads, one object for the designation doors and the designation's lane port.
   const overlordAccountReads = { roster: () => deps.cfg.roster, limits: () => readLimits(deps.io, deps.cfg), shares: () => readSharesMeasured(deps.io, deps.cfg.registryDir) };
   // The loads door's settle step (W1 sandbox B, Task 9): the designation's writers and its one drain, on the serialiser.

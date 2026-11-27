@@ -378,6 +378,8 @@
   "server/src/coord/overlordSequenceDoor.ts#restoreGenerationOf": 1,
   "server/src/coord/overlordSequenceDoor.ts#sequenceDoorAnswer": 1,
   "server/src/coord/overlordSequenceDoor.ts#invariantsReadAnswer": 1,
+  "server/src/coord/overlordBoard.ts#composeBoard": 1,
+  "server/src/coord/overlordBoard.ts#timersByProgramme": 1,
   "shared/isolation.ts#readHostReport": 1,
   "server/src/isolationWord.ts#holdingExposure": 1,
   "server/src/isolationWord.ts#linkKernel": 1,

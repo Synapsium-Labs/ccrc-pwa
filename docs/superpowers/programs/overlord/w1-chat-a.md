@@ -236,7 +236,12 @@ and every pwa leg were green (the chat's browser file, 36 cases, and the place's
 
 - Earlier generations are not paged in W1 (the measured arm); the divider names `ccrc history` instead. The part draws a
   `readable` divider's page and its "Show earlier" (the next page asks `around` the page's first item) for when paging joins.
-- The gate counts are re-derived once more at this branch's last merge, after the board (#3463) lands (the coordinator, call
-  1687): expected 344 scanned, 341 HTTP, 222 gated, 119 exempt, the flag-aware count still forty-one.
+- The gate counts were re-derived at this branch's merge of main 9e5f592c24, the board (#3463) on main (the coordinator, calls
+  1687 and 1713), measured on the merged tree: 344 scanned, 341 HTTP, 222 gated, 119 exempt, the flag-aware count still
+  forty-one, thirty-three route files. The merge's resolutions: the masked GET routes keep the board's line, then the chat's; the
+  gate's docstring reads 341; the gate suite keeps the board's history comment, then the chat's, re-based on it (339 -> 341, 220
+  -> 222, 119 exempt), and its three count lines; the read runner's header keeps the board's attribution sentence inside the two
+  callers' paragraph; its suite imports both sides' types; the kebab census admits the board's guard, then the chat's and the read
+  ledger's. The board's door suite's rig passes the ceiling counter's caller too (as the sequence route's does).
 - The full server test-project type check is killed by the test slice's memory cap on this box; the changed test files are type
   checked in a narrowed project instead, and `typecheck-tests` in CI covers the whole.

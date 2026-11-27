@@ -9,13 +9,16 @@
 // refusal writes one line for each door and window (the counter answers the newest), so a caller held at the ceiling cannot grow
 // the store; a composed answer is sent only when its line landed. A failed write answers 503 `write-failed` and sends nothing.
 //
-// TWO CALLERS, ONE RUNNER (the chat plan, question 9). The Overlord's doors pass `OverlordReadArgs`: its `caller` is `overlord`
-// (readers never reach these doors), and a row whose `write` is false is not fenced, so its ceiling would count a forger's reads
-// (question 18): the runner refuses to run for it unless the caller says `unfenced`. The operator's signed-in console, past the
-// account gate, passes `OperatorReadArgs` (the chat's doors): it holds no session, so there is no fence row, no turn state and no
-// generation; its counter is its own (`servedReadsSince(door, since, 'operator')`), so the console never spends the Overlord's
-// ceilings and the Overlord never spends the console's, and every line it writes carries `caller: 'operator'`, a null `generation`,
-// `generationRead: 'not-a-session'` and a null `turnState`, which is exactly what the ledger's `CHECK`s require of the console.
+// TWO CALLERS, ONE RUNNER (the chat plan, question 9). The Overlord's doors pass `OverlordReadArgs`: its `caller` is `overlord`,
+// and the line names the identity the gate passed. Since board B2 a reader reaches the unfenced rows (the board and history)
+// through the door process's read tool, as the Overlord, so its read is recorded as the Overlord's: attributed, not proven (slug
+// `history-and-board-reads-attributed-not-proven`). A row whose `write` is false is not fenced, so its ceiling counts a forger's
+// served reads too (question 18): the runner refuses to run for it unless the caller says `unfenced`. The operator's signed-in
+// console, past the account gate, passes `OperatorReadArgs` (the chat's doors): it holds no session, so there is no fence row, no
+// turn state and no generation; its counter is its own (`servedReadsSince(door, since, 'operator')`), so the console never spends
+// the Overlord's ceilings and the Overlord never spends the console's, and every line it writes carries `caller: 'operator'`, a
+// null `generation`, `generationRead: 'not-a-session'` and a null `turnState`, which is exactly what the ledger's `CHECK`s require
+// of the console.
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { refuseRoute } from '../refuse.js';
 import type { RouteRefusal } from '../../../shared/refusal.js';
@@ -34,12 +37,13 @@ export interface OverlordReadDeps {
   readonly now: () => number;
 }
 
+/** A refusal's own closed fields: named keys only. The runner picks each by name, so a value built elsewhere that also
+ *  carries `ok`, `error` or `detail` cannot override the answer's own (review 3730 F6, review 3749 F4: the type alone held only
+ *  fresh literals). A door that needs another field names it here and in the runner's pick. */
+export type ReadRefusalExtra = { readonly cause?: string; readonly refusal?: string };
 /** What a door's compose answers: rows to send, another 200 that hands no session text (the history door's `busy`,
  *  `deadline` and the rest: a line with its outcome word, never a served line, ruled R8), or a refusal word with its
- *  detail or its own closed fields (`extra`, spread after `detail`); either way its line's scope, count and outcome. */
-/** A refusal's own closed fields: named keys only, so none can be the answer's `ok`, `error` or `detail` (review 3730 F6).
- *  A door that needs another field names it here. */
-export type ReadRefusalExtra = { readonly cause?: string; readonly refusal?: string };
+ *  detail or its own closed fields (`extra`, each picked by name after `detail`); either way its line's scope, count and outcome. */
 export type ReadComposed =
   | { readonly kind: 'rows'; readonly body: unknown; readonly scope: string; readonly count: number }
   | { readonly kind: 'answer'; readonly body: unknown; readonly scope: string; readonly outcome: string }
@@ -52,7 +56,7 @@ export interface OverlordReadArgs {
   readonly pass: Extract<GateRun, { kind: 'pass' }>;
   /** Its row: `write` must be true (the fence), unless `unfenced`. */
   readonly row: OverlordDoorRow;
-  /** Question 18: a door not yet fenced says so, and its ceiling counts every attributed line. */
+  /** Question 18: a door not yet fenced says so, and its ceiling counts every attributed served line. */
   readonly unfenced?: true;
   readonly compose: () => ReadComposed | Promise<ReadComposed>;
 }
@@ -112,6 +116,8 @@ export function runOverlordRead(deps: OverlordReadDeps): (req: FastifyRequest, r
     // 8. A line that did not land sends nothing; one that did sends the rows, the other 200, or the refusal.
     if (!wrote.ok) return refuseRoute(reply, 'write-failed', { detail: 'the read could not be recorded' });
     if (composed.kind === 'rows' || composed.kind === 'answer') return reply.code(200).send(composed.body);
-    return refuseRoute(reply, composed.word, { ...(composed.detail === undefined ? {} : { detail: composed.detail }), ...composed.extra });
+    const x = composed.extra;
+    return refuseRoute(reply, composed.word, { ...(composed.detail === undefined ? {} : { detail: composed.detail }),
+      ...(x?.cause === undefined ? {} : { cause: x.cause }), ...(x?.refusal === undefined ? {} : { refusal: x.refusal }) });
   };
 }

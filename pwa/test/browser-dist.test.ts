@@ -17,6 +17,7 @@ import { DIST_KEY, removeDist, sealDist } from '../browser/dist';
 import { buildOnce } from '../browser/globalSetup';
 import { openApp, sharedDist } from '../browser/app';
 import type { Browser, BrowserContextOptions } from 'playwright-core';
+import { PHOSPHOR, SYSTEM } from '@ccrc/ui';
 
 const PWA = path.join(import.meta.dirname, '..');
 const BROWSER = path.join(PWA, 'browser');
@@ -196,5 +197,37 @@ describe('openApp blocks service workers, unless a view opts in (reader lab 10, 
     const optedIn = browserFiles().filter((f) => /serviceWorkers\s*:\s*'allow'/.test(textOf(f)));
     expect(optedIn.sort()).toEqual(Object.keys(SERVICE_WORKER_OPT_INS).sort());
     for (const [f, why] of Object.entries(SERVICE_WORKER_OPT_INS)) expect(why.length, f).toBeGreaterThan(40);
+  });
+});
+
+describe('openApp refuses a theme the app does not keep, before any context opens (desktop polish wave 188)', () => {
+  /** How many contexts `openApp` opened for `theme`, over a stand-in browser that counts them, and what it threw. */
+  async function open(theme: string): Promise<{ contexts: number; thrown: unknown }> {
+    let contexts = 0;
+    const ctx = {
+      addInitScript: async (): Promise<void> => undefined, route: async (): Promise<void> => undefined,
+      routeWebSocket: async (): Promise<void> => undefined, newPage: async (): Promise<{ on: () => void }> => ({ on: () => undefined }),
+    };
+    const browser = { newContext: async (): Promise<typeof ctx> => { contexts += 1; return ctx; } };
+    try {
+      await openApp(browser as unknown as Browser, { width: 1280, skin: 'refined', theme }, { api: {}, fleetFrames: [] });
+      return { contexts, thrown: undefined };
+    } catch (e) {
+      return { contexts, thrown: e };
+    }
+  }
+
+  // 'dark' is the value seven browser files once handed it (the dark palette is PHOSPHOR); '' is a cleared store; 'Light'
+  // is a catalogue id in the wrong case. Each resolves to SYSTEM, so a case would measure the system palette under its name.
+  it.each(['dark', '', 'Light'])('%j throws the refusal, naming the theme, and opens no context', async (theme) => {
+    const { contexts, thrown } = await open(theme);
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toBe(`openApp: theme ${JSON.stringify(theme)} is not one the app keeps (an id of `
+      + `@ccrc/ui's THEMES, or SYSTEM); the app would draw "system" in its place`);
+    expect(contexts).toBe(0);
+  });
+
+  it.each(['light', PHOSPHOR, SYSTEM])('%s, a theme the app keeps, opens one context', async (theme) => {
+    expect(await open(theme)).toEqual({ contexts: 1, thrown: undefined });
   });
 });

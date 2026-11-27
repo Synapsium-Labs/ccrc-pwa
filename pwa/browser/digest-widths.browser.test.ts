@@ -8,14 +8,15 @@
 //   CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/digest-widths.browser.test.ts
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright-core';
-import { INSTRUMENT, REFINED } from '@ccrc/ui';
+import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
 import {
   FIXTURE_NOW_MS, fleetApi, fleetFixture, fleetFrame, openApp, serveDist, sharedDist, type AppFixture, type DistServer,
   type OpenedApp,
 } from './app';
+import { expectStampedTheme } from './stampedTheme';
 
-const MATRIX = { widths: [360, 390, 1280, 1920], skins: [REFINED, INSTRUMENT], themes: ['light', 'dark'] } as const;
+const MATRIX = { widths: [360, 390, 1280, 1920], skins: [REFINED, INSTRUMENT], themes: ['light', PHOSPHOR] } as const;
 
 const H = 3_600_000;
 const DAY_END = Date.parse('2026-11-10T07:00:00Z');
@@ -72,6 +73,7 @@ afterAll(async () => {
 async function openDigest(width: number, skin: string, theme: string): Promise<OpenedApp> {
   const opened = await openApp(browser!, { skin, theme, width }, FIXTURE);
   await opened.page.goto(`${server!.origin}/digest`);
+  await expectStampedTheme(opened.page, theme);
   await opened.page.locator('.digest-drift-line').first().waitFor({ timeout: 20_000 });
   // The session and run lines are controls only once the fleet's frames have landed.
   await opened.page.locator('.digest-drift-open').nth(2).waitFor({ timeout: 20_000 });
