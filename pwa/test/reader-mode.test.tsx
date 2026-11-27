@@ -1234,8 +1234,9 @@ describe('reader mode: an Exit with no frame standing (X6 XR fix round 1, item 2
     expect(latest.state.on, 'the Exit did not leave reader mode').toBe(false);
     expect(places.stepBack, 'the exit did not step back once').toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('button', { name: READER_MODE_TEXT.exit }), 'the Exit stayed after leaving').toBeNull();
-    // X6 XR fix round 2, item 3 (review 4043 A2): the Exit unmounted with the focus on it and no frame to give it to, so it must not
-    // be left on the page's body: with no head action on screen it goes to the main region.
+    // X6 XR fix round 2, item 3 (review 4043 A2): the Exit was tapped and unmounted with no frame to give focus to, so focus must not
+    // be left on the page's body: with no head action on screen it goes to the main region. This case clicks without focusing the
+    // Exit first (focus starts on the body); the Exit that holds the focus as it unmounts is `tapExit`'s, below (review 4052 A5).
     expect(document.activeElement, 'focus was left on the body').not.toBe(document.body);
     expect(document.activeElement, 'focus did not go to the main region').toBe(document.getElementById('content'));
   });
