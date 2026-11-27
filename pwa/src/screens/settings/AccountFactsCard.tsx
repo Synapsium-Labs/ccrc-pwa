@@ -28,6 +28,24 @@ import { DoorLines, useCardDoor, useCardRead, type SectionCtx } from './overlord
 const CARD = SETTINGS_CARDS.overlord.accounts;
 const dateOf = (ms: number): string => new Date(ms).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 
+/** One fact: its line, then one button per value the door takes. `pressed` marks the stored value (`null`: not a pressed pair). */
+function Fact({ fact, line, busy, choices }: {
+  readonly fact: string; readonly line: string; readonly busy: boolean;
+  readonly choices: readonly { readonly control: string; readonly label: string; readonly pressed: boolean | null; readonly act: () => void }[];
+}): ReactNode {
+  return (
+    <>
+      <p className="ovs-note" data-fact={fact}>{line}</p>
+      <div className="ovs-actions">
+        {choices.map((c) => (
+          <Button key={c.control} variant="ghost" size="fit" data-fact-control={c.control} disabled={busy}
+            {...(c.pressed === null ? {} : { 'aria-pressed': c.pressed })} onClick={c.act}>{c.label}</Button>
+        ))}
+      </div>
+    </>
+  );
+}
+
 function FactRow({ ctx, account, hold, onHoldCleared }: {
   readonly ctx: SectionCtx; readonly account: RosterWire; readonly hold: StandingHold | null; readonly onHoldCleared: () => void;
 }): ReactNode {
@@ -41,20 +59,20 @@ function FactRow({ ctx, account, hold, onHoldCleared }: {
   return (
     <li className="ovs-account" data-account-facts={account.id}>
       <p className="ovs-account-name">{account.label === account.id ? account.id : `${account.label} (${account.id})`}</p>
-      <p className="ovs-note" data-fact="billing">{`${FACT_WORDS.billingLegend}: ${billingWordOf(account)}`}</p>
-      <div className="ovs-actions">
-        <Button variant="ghost" size="fit" data-fact-control="included" disabled={door.busy} aria-pressed={account.fableBilling === 'included'}
-          onClick={() => save({ fableBilling: 'included' })}>{FACT_WORDS.included}</Button>
-        <Button variant="ghost" size="fit" data-fact-control="credits" disabled={door.busy} aria-pressed={account.fableBilling === 'credits'}
-          onClick={() => save({ fableBilling: 'credits' })}>{FACT_WORDS.credits}</Button>
-      </div>
-      <p className="ovs-note" data-fact="continuity">{`${FACT_WORDS.continuityLegend}: ${continuityWordOf(account, dateOf)}`}</p>
-      <div className="ovs-actions">
-        <Button variant="ghost" size="fit" data-fact-control="continuity-on" disabled={door.busy}
-          onClick={() => save({ continuity: 'on' })}>{FACT_WORDS.recordOn}</Button>
-        <Button variant="ghost" size="fit" data-fact-control="continuity-off" disabled={door.busy}
-          onClick={() => save({ continuity: 'off' })}>{FACT_WORDS.recordOff}</Button>
-      </div>
+      <Fact
+        fact="billing" line={`${FACT_WORDS.billingLegend}: ${billingWordOf(account)}`} busy={door.busy}
+        choices={[
+          { control: 'included', label: FACT_WORDS.included, pressed: account.fableBilling === 'included', act: () => save({ fableBilling: 'included' }) },
+          { control: 'credits', label: FACT_WORDS.credits, pressed: account.fableBilling === 'credits', act: () => save({ fableBilling: 'credits' }) },
+        ]}
+      />
+      <Fact
+        fact="continuity" line={`${FACT_WORDS.continuityLegend}: ${continuityWordOf(account, dateOf)}`} busy={door.busy}
+        choices={[
+          { control: 'continuity-on', label: FACT_WORDS.recordOn, pressed: null, act: () => save({ continuity: 'on' }) },
+          { control: 'continuity-off', label: FACT_WORDS.recordOff, pressed: null, act: () => save({ continuity: 'off' }) },
+        ]}
+      />
       {hold !== null && (
         <div className="ovs-actions" data-account-hold={account.id}>
           <p className="ovs-note">{holdLineOf(hold)}</p>
