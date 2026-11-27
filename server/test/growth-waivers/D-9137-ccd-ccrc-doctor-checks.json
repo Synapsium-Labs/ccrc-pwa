@@ -1,0 +1,8 @@
+{
+  "file": "ccd/ccrc-doctor-checks",
+  "maxDelta": 111,
+  "d": "D-9137",
+  "reason": "doctor's `artifacts` check (native docs X5 wave A4.2): the keys judged through ccrc's mirror of the site rule, the second site block found in the generated Caddyfile, the listener asked on loopback once per artifact name, the two FAILs bound by the coordinator (artifact keys beside an address, beside a sign-in that is not whole), and from review 4022's fix round the FAIL for keys beside a console origin that is an address and a remedy per port key, and the WARN for a file the check reads that is a directory or unreadable, plus `name` resolving every host of its comma list; measured against the merge base, `main` at #3405's merge; kept in the check table because every doctor check lives there and is listed by name",
+  "added": "2026-11-27",
+  "createdAt": "2026-11-27"
+}

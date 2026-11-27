@@ -1909,6 +1909,8 @@ export const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "approval-key": "SKIP",
   "approval-key-colocated": "SKIP",
   "approval-verifier-runnable": "SKIP",
+  // Native Docs artifacts (X5 A4.2): SKIP at every stage, re-measured the same way (a fresh install writes no exposure file).
+  "artifacts": "SKIP",
   "auth": "SKIP",
   "auto-memory": "PASS",
   "box-settings": "PASS",
