@@ -20,7 +20,7 @@
 // listen state `down`, and the console's own listen, which follows it in `index.ts`, still runs.
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import {
-  artifactMethodAllowed, clientErrorStatus, hostFence, namesArtifactHost, type ArtifactConfig, type ArtifactListenWord,
+  artifactMethodAllowed, clientErrorAction, frameworkErrorStatus, hostFence, namesArtifactHost, type ArtifactConfig, type ArtifactListenWord,
 } from './policy.js';
 import { refuseRoute } from '../refuse.js';
 import { ARTIFACT_FENCE_REFUSALS } from '../../../shared/refusal.js';
@@ -75,8 +75,9 @@ function answer(reply: FastifyReply, status: number, contentType: string, body: 
 
 /** A whole HTTP/1.1 answer for a socket no request object reached: the status, the hardening headers, a fixed text body, and
  *  `connection: close`. */
-function rawAnswer(status: 400 | 408 | 431, body: string): string {
-  const reason = status === 431 ? 'Request Header Fields Too Large' : status === 408 ? 'Request Timeout' : 'Bad Request';
+function rawAnswer(status: 400 | 408 | 413 | 431, body: string): string {
+  const reason = status === 431 ? 'Request Header Fields Too Large' : status === 413 ? 'Payload Too Large'
+    : status === 408 ? 'Request Timeout' : 'Bad Request';
   const headers = { ...HARDENING, 'content-type': TEXT, 'content-length': String(Buffer.byteLength(body)), connection: 'close' };
   return `HTTP/1.1 ${status} ${reason}\r\n${Object.entries(headers).map(([k, v]) => `${k}: ${v}\r\n`).join('')}\r\n${body}`;
 }
@@ -85,10 +86,13 @@ function rawAnswer(status: 400 | 408 | 431, body: string): string {
 export function buildArtifactServer(deps: ArtifactRouteDeps): FastifyInstance {
   // `frameworkErrors`: Fastify answers a malformed percent-escape (400) and an over-long path parameter (414) itself, before any
   // hook, with a body that ECHOES the request path, and the path holds a capability token. Answered here with fixed words and
-  // the same headers instead; the host fence has not run for these two, which reach no route.
+  // the same headers instead (the status from `frameworkErrorStatus`); the host fence has not run for these two, which reach no
+  // route.
   // `clientErrorHandler`: a request Node cannot parse (a bad request line, an unknown method, Transfer-Encoding beside
-  // Content-Length, an oversized header) or one that outlives Node's request timeout is answered on the socket before Fastify
-  // sees it; here with fixed words and the same headers (the status from `clientErrorStatus`), never the default bare answer. Nothing is logged and nothing of the request is echoed.
+  // Content-Length, an oversized header, a chunk extension past Node's limit) or one that outlives Node's request timeout is
+  // answered on the socket before Fastify sees it; here with fixed words and the same headers, never the default bare answer.
+  // `clientErrorAction` decides: the status from `clientErrorStatus` (400, 408, 413 or 431), or a destroy with nothing written
+  // when the socket's response in flight has its headers on the wire. Nothing is logged and nothing of the request is echoed.
   // `http.requireHostHeader: false`: Node answers a request with no `Host` line with a bare 400 before Fastify runs; without
   // the check the request reaches the host fence, which answers its 421 with the hardening headers. Node's own default
   // handling of an `Expect` other than 100-continue is a bare 417, so a `checkExpectation` listener (below) answers it.
@@ -99,13 +103,18 @@ export function buildArtifactServer(deps: ArtifactRouteDeps): FastifyInstance {
     logger: false,
     return503OnClosing: false,
     http: { requireHostHeader: false },
-    frameworkErrors: (err, _req, reply) =>
-      answer(reply, (err as { code?: unknown }).code === 'FST_ERR_MAX_PARAM_LENGTH' ? 414 : 400, TEXT, BAD_REQUEST_BODY),
+    frameworkErrors: (err, _req, reply) => {
+      const status = frameworkErrorStatus((err as { code?: unknown }).code);
+      return answer(reply, status, TEXT, status === 500 ? ERROR_BODY : BAD_REQUEST_BODY);
+    },
     clientErrorHandler: (err, socket) => {
-      const code = (err as { code?: unknown }).code;
-      if (code === 'ECONNRESET' || !socket.writable) { socket.destroy(); return; }
-      const status = clientErrorStatus(code);
-      socket.end(rawAnswer(status, status === 408 ? TIMEOUT_BODY : BAD_REQUEST_BODY));
+      // The response in flight on this socket, if any, and whether its headers are on the wire: the two fields Node's own
+      // handler reads (`_httpMessage._headerSent`). Once they are, an answer written now would land inside its body, so
+      // `clientErrorAction` destroys instead (X5 A3).
+      const inflight = (socket as { _httpMessage?: { _headerSent?: unknown } | null })._httpMessage;
+      const act = clientErrorAction((err as { code?: unknown }).code, socket.writable, inflight?._headerSent === true);
+      if (act.kind === 'destroy') { socket.destroy(); return; }
+      socket.end(rawAnswer(act.status, act.status === 408 ? TIMEOUT_BODY : BAD_REQUEST_BODY));
     },
   });
   const hosts = [deps.cfg.artifactHost, deps.cfg.contentHost];

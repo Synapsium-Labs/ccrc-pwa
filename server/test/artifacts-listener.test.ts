@@ -10,7 +10,7 @@ import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildServer, type Deps } from '../src/server.js';
 import {
-  artifactConfig, artifactMethodAllowed, clientErrorStatus, hostFence, hostMatches, namesArtifactHost, type ArtifactConfig,
+  artifactConfig, artifactMethodAllowed, clientErrorAction, clientErrorStatus, frameworkErrorStatus, hostFence, hostMatches, namesArtifactHost, type ArtifactConfig,
 } from '../src/artifacts/policy.js';
 import {
   ARTIFACT_NOT_FOUND_BODY, buildArtifactServer, createArtifactListenerState, listenArtifactServer,
@@ -159,6 +159,39 @@ describe('policy: the status of a request Node could not parse (L1)', () => {
     for (const other of ['HPE_INVALID_METHOD', 'HPE_INVALID_CONSTANT', 'ECONNRESET', '', undefined, null, 431, {}]) {
       expect(clientErrorStatus(other), String(other)).toBe(400);
     }
+  });
+
+  it('clientErrorStatus: a chunk extension past Node\'s limit is 413, as Node\'s own default answers it (X5 A3)', () => {
+    expect(clientErrorStatus('HPE_CHUNK_EXTENSIONS_OVERFLOW')).toBe(413);
+  });
+
+  it('clientErrorAction: an answer only while the socket is writable and no response on it has sent its headers (X5 A3)', () => {
+    expect(clientErrorAction('HPE_INVALID_METHOD', true, false)).toEqual({ kind: 'answer', status: 400 });
+    expect(clientErrorAction('HPE_CHUNK_EXTENSIONS_OVERFLOW', true, false)).toEqual({ kind: 'answer', status: 413 });
+    expect(clientErrorAction('HPE_CHUNK_EXTENSIONS_OVERFLOW', true, true)).toEqual({ kind: 'destroy' });
+    expect(clientErrorAction('HPE_INVALID_METHOD', false, false)).toEqual({ kind: 'destroy' });
+    expect(clientErrorAction('ECONNRESET', true, false)).toEqual({ kind: 'destroy' });
+  });
+
+  it('the instance\'s clientError handler writes nothing on a socket whose response has sent its headers (X5 A3)', () => {
+    const app = artifactApp();
+    const handler = app.server.listeners('clientError')[0] as (err: Error, socket: unknown) => void;
+    const written: string[] = [];
+    let destroyed = 0;
+    // `_httpMessage._headerSent`: the two fields Node's own handler reads for a response in flight on the socket.
+    const socket = {
+      writable: true, _httpMessage: { _headerSent: true },
+      end: (t: string) => { written.push(t); }, write: (t: string) => { written.push(t); }, destroy: () => { destroyed++; },
+    };
+    handler(Object.assign(new Error('overflow'), { code: 'HPE_CHUNK_EXTENSIONS_OVERFLOW' }), socket);
+    expect(written).toEqual([]);
+    expect(destroyed).toBe(1);
+    // The same error before any response has sent its headers is answered 413, with the fixed words.
+    const before = { ...socket, _httpMessage: { _headerSent: false } };
+    handler(Object.assign(new Error('overflow'), { code: 'HPE_CHUNK_EXTENSIONS_OVERFLOW' }), before);
+    expect(written).toHaveLength(1);
+    expect(written[0]!.startsWith('HTTP/1.1 413 Payload Too Large\r\n')).toBe(true);
+    expect(written[0]!.endsWith('\r\n\r\nBad request.')).toBe(true);
   });
 
   it('the instance\'s clientError handler words a request timeout as 408 with the hardening headers', () => {
@@ -607,5 +640,30 @@ describe('listener: a taken port leaves the console up', () => {
     expect(s.read()).toBe('listening');
     s.mark('down');
     expect(s.read()).toBe('down');
+  });
+});
+
+describe('the console\'s early answers echo nothing (X5 A3, from the A1 reviews)', () => {
+  it('frameworkErrorStatus: a malformed escape is 400, an over-long parameter 414, anything else 500, as Fastify answers them', () => {
+    expect(frameworkErrorStatus('FST_ERR_BAD_URL')).toBe(400);
+    expect(frameworkErrorStatus('FST_ERR_MAX_PARAM_LENGTH')).toBe(414);
+    for (const other of ['FST_ERR_ASYNC_CONSTRAINT', '', undefined, null, 400, {}]) expect(frameworkErrorStatus(other), String(other)).toBe(500);
+  });
+
+  it('the console answers a malformed percent-escape and an over-long parameter with Fastify\'s body less its message, before the fence', async () => {
+    const app = await openConsole(onConfig(), true);
+    toClose.push(app);
+    for (const host of [ART, CONSOLE_HOST]) {
+      const bad = await app.inject({ method: 'GET', url: `/c/${TOKEN}/%zz`, headers: { host } });
+      expect(bad.statusCode, host).toBe(400);
+      expect(bad.json(), host).toEqual({ error: 'Bad Request', code: 'FST_ERR_BAD_URL', statusCode: 400 });
+      expect(bad.body, host).not.toContain(TOKEN);
+      expect(bad.body, host).not.toContain('%zz');
+    }
+    const long = 'p'.repeat(150);
+    const over = await app.inject({ method: 'GET', url: `/api/docs/${long}/tree`, headers: { host: CONSOLE_HOST } });
+    expect(over.statusCode).toBe(414);
+    expect(over.json()).toEqual({ error: 'Bad Request', code: 'FST_ERR_MAX_PARAM_LENGTH', statusCode: 414 });
+    expect(over.body).not.toContain(long);
   });
 });

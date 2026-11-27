@@ -95,6 +95,7 @@ import { startReviewSweep } from './review/sweep.js';
 import { createReaderLabRuns } from './readerLab/runs.js';
 import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/routes.js';
 import { buildArtifactServer, createArtifactListenerState, installConsoleHostFence } from './artifacts/routes.js';
+import { frameworkErrorStatus } from './artifacts/policy.js';
 import { createArtifactStore } from './artifacts/store.js';
 import { sessionLiveness } from './artifacts/liveness.js';
 import { operatorActRoute, servedFleetReads, servedFromWatcher, servedProjectReads, takenAfter } from './servedRead.js';
@@ -432,7 +433,21 @@ function findPwaRoot(): string | null {
 }
 
 export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWatcher): Promise<FastifyInstance> {
-  const app = Fastify({ logger: false });
+  // `frameworkErrors` (X5 A3, from the A1 reviews): Fastify answers a malformed percent-escape (400) and an over-long path
+  // parameter (414) itself, before any hook (the artifact host fence included), with a body whose `message` ECHOES the request
+  // path. A request misrouted here from an artifact host carries a capability token in its path. The answer keeps Fastify's
+  // own status (`frameworkErrorStatus`, L1) and body less its `message`: `error`, `code` and `statusCode`, nothing of the path.
+  const app = Fastify({
+    logger: false,
+    frameworkErrors: (err, _req, reply) => {
+      const code = (err as { code?: unknown }).code;
+      const status = frameworkErrorStatus(code);
+      return (reply as FastifyReply).code(status).send({
+        error: status === 500 ? 'Internal Server Error' : 'Bad Request', code: typeof code === 'string' ? code : undefined,
+        statusCode: status,
+      });
+    },
+  });
   await app.register(fastifyWebsocket);
   await app.register(fastifyMultipart, { limits: { fileSize: 25 * 1024 * 1024 } });
   // `global: false`: only a route that opts in with `config.rateLimit` is limited (coord/routes.ts).

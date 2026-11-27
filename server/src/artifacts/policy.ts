@@ -253,14 +253,35 @@ export function artifactMethodAllowed(method: string): boolean {
   return method === 'GET' || method === 'HEAD';
 }
 
-/** The status of an answer for a request Node could not parse (its `clientError` code): an oversized header is 431, a request
- *  that outlived Node's request timeout is 408 (both of Node's own defaults answer so), anything else is 400. Node's own
- *  default maps a few more codes to other statuses (a chunk-extension overflow to 413, for one); here those are 400, with the
- *  same fixed words. */
-export function clientErrorStatus(code: unknown): 400 | 408 | 431 {
+/** The status of an answer for a request Node could not parse (its `clientError` code), as Node's own default answers it: an
+ *  oversized header is 431, a chunk extension past Node's limit is 413, a request that outlived Node's request timeout is 408,
+ *  anything else is 400 (X5 A3 took the 413 from the A1 review, which measured 400 here where Node answers 413). */
+export function clientErrorStatus(code: unknown): 400 | 408 | 413 | 431 {
   if (code === 'HPE_HEADER_OVERFLOW') return 431;
+  if (code === 'HPE_CHUNK_EXTENSIONS_OVERFLOW') return 413;
   if (code === 'ERR_HTTP_REQUEST_TIMEOUT') return 408;
   return 400;
+}
+
+/** What the artifact instance does with a request Node could not parse, by Node's own rule (`socketOnError` in its HTTP server):
+ *  answer with `clientErrorStatus` only while the socket is writable and the response in flight on it, if any, has not sent its
+ *  headers. A connection reset, a socket that cannot be written, or a response already under way (its headers on the wire, its
+ *  body streaming) is destroyed with nothing written, because a status line written then would land inside that response's
+ *  body (X5 A3, from the A1 review). */
+export function clientErrorAction(code: unknown, writable: boolean, headersSent: boolean):
+  { kind: 'answer'; status: 400 | 408 | 413 | 431 } | { kind: 'destroy' } {
+  if (code === 'ECONNRESET' || !writable || headersSent) return { kind: 'destroy' };
+  return { kind: 'answer', status: clientErrorStatus(code) };
+}
+
+/** The status of Fastify's own answer to an error it raises before any hook runs (its `frameworkErrors` codes), as Fastify's
+ *  defaults answer it: a malformed percent-escape in the path is 400, an over-long path parameter is 414, anything else (an
+ *  async constraint's failure) is 500. Both instances answer with this status and fixed words, never the default body, whose
+ *  `message` echoes the request path, and a path on this tier holds a capability token (X5 A3, from the A1 reviews). */
+export function frameworkErrorStatus(code: unknown): 400 | 414 | 500 {
+  if (code === 'FST_ERR_BAD_URL') return 400;
+  if (code === 'FST_ERR_MAX_PARAM_LENGTH') return 414;
+  return 500;
 }
 
 // ---- The availability read, the scope read and the mint (plan Task A2.3, spec 3.2) ----
