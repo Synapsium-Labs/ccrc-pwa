@@ -22,9 +22,10 @@ export interface Route {
   readonly accepts?: (param: string) => boolean;
 }
 
-/** Settings' six sections, in the index's order (D-5503): each is its own route, `/settings/<id>` (D-5504). The one
- *  list: the route entries below, the index rows and the section pages all read it. Integrations is the last
- *  (D-8932): Linear, project linking and GitHub, which sat on Security. */
+/** Settings' seven sections, in the index's order (D-5503): each is its own route, `/settings/<id>` (D-5504). The one
+ *  list: the route entries below, the index rows and the section pages all read it. Integrations (D-8932: Linear, project
+ *  linking and GitHub, which sat on Security) comes before the Overlord's, which is last and drawn only under `overlord-v1`
+ *  (Overlord W1 home C). */
 export const SETTINGS_SECTIONS = [
   { id: 'updates', title: 'Updates' },
   { id: 'appearance', title: 'Appearance' },
@@ -32,6 +33,9 @@ export const SETTINGS_SECTIONS = [
   { id: 'automation', title: 'Automation' },
   { id: 'security', title: 'Security' },
   { id: 'integrations', title: 'Integrations' },
+  // Settings › Overlord (Overlord W1 home C, slug `settings-gains-an-overlord-section`): its index row, its page and its "Go to"
+  // entry are drawn only while the server advertises `overlord-v1`; without the word `/settings/overlord` draws the index.
+  { id: 'overlord', title: 'Overlord' },
 ] as const;
 
 export type SettingsSectionId = (typeof SETTINGS_SECTIONS)[number]['id'];

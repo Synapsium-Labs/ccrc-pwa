@@ -52,9 +52,13 @@ import type { RenewalMode, RenewalModeView } from '../../../shared/continuity';
 import type { TestboxAdminFields, TestboxAdminSub } from '../../../shared/testbox-admin';
 import type { ProjectAddAnswer, ProjectAddBody } from '../../../shared/projectAdd';
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking';
-import type { DesignateBody, DesignationView } from '../../../shared/overlord-designation';
+import type { DesignateBody, DesignationView, OverlordModelClass, RebindSaw } from '../../../shared/overlord-designation';
+import type { PoolSet } from '../../../shared/poolset';
 import type { LadderWire, NarrowingState, Rung } from '../../../shared/overlord-ladder';
 import type { ReadinessWire } from '../../../shared/overlord-readiness';
+import {
+  readChatEarlierAnswer, readChatSendAnswer, readChatThreadAnswer, type ChatEarlierAnswer, type ChatSendAnswer, type ChatThreadAnswer, type GenerationKey,
+} from '../../../shared/overlordChat';
 import type { PortfolioView, RankWrite } from '../../../shared/portfolio';
 import type { PoolRunwayWire } from '../../../shared/loadLines';
 import type { EpicView, HierarchyAnswer, HierarchyProjectRow, MigrationView, PlanView, WorkAnswer } from '../../../shared/plan';
@@ -227,6 +231,12 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
 
   const sid = (id: string): string => `/api/sessions/${encodeURIComponent(id)}`;
 
+  /** A call whose every answer is read (the Overlord chat's three): a 2xx and a refusal each go to `read` with its status and body,
+   *  through the one funnel (a 401 still raises the login screen); only a request with no answer is `none`. */
+  const readAnswer = async <T>(path: string, init: RequestInit | undefined, read: (status: number, body: unknown) => T, none: T): Promise<T> => {
+    try { const res = await request(path, init); return read(res.status, await res.json().catch(() => null)); } catch (err) { return err instanceof ApiError ? read(err.status, err.body) : none; }
+  };
+
   /** A worktree door's POST (delegation broker wave 5, PR10). A 2xx is read by `readDoorAnswer` (`postJsonOr`: a body that
    *  is not JSON reads `unreadable`, never a thrown parse). A failed request is a door's ANSWER (`readDoorRefusal`, review
    *  1623 F2) in four parts: (1) a door word only at its own status; (2) a word the route vocabulary names that is no door
@@ -367,8 +377,25 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     /** Start, Rebind and Restart (home B, Task 5). Designate and Rebind ask the step-up; Restart does not. */
     overlordDesignate: (body: DesignateBody) =>
       postJson<{ readonly sessionId: string; readonly deadlineAt: number; readonly warnings: readonly { readonly warning: string; readonly pool?: string }[] }>('/api/overlord/designate', body),
-    overlordRebind: (force: boolean) => postJson<{ readonly sessionId: string; readonly deadlineAt: number }>('/api/overlord/rebind', { force }),
+    overlordRebind: (force: boolean, saw?: RebindSaw) => postJson<{ readonly sessionId: string; readonly deadlineAt: number }>('/api/overlord/rebind', { force, ...saw }),
     overlordRestart: () => postJson<{ readonly sessionId: string }>('/api/overlord/restart'),
+    /** Settings › Overlord (home C): Retire, the model class and the account set (each door asks its own step-up), the backstop
+     *  and the account holds. Each answer is `unknown`: `overlordSettingsWords.ts` is its one reader. */
+    overlordRetire: async () => (await request('/api/overlord/designate', { method: 'DELETE' })).json() as Promise<unknown>,
+    overlordModel: (model: OverlordModelClass) => postJson<unknown>('/api/overlord/model', { model }),
+    overlordAccountSet: (accountPools: PoolSet) => postJson<unknown>('/api/overlord/account-set', { accountPools }),
+    renewalBackstop: () => getJsonOrAbsent<unknown>('/api/continuity/renewal-backstop'),
+    setRenewalBackstop: (body: { readonly hour: number; readonly zone: string }) => postJson<unknown>('/api/continuity/renewal-backstop', body),
+    accountHolds: () => getJsonOrAbsent<unknown>('/api/continuity/account-holds'),
+    clearAccountHold: (lane: string) => postJson<unknown>(`/api/continuity/account-holds/${encodeURIComponent(lane)}/clear`),
+    /** The Overlord chat's three calls (W1 chat), the port `overlord/useOverlordChat.ts` declares: the thread, an earlier
+     *  generation's page and a send to the prompt route. Each is read by its L0 reader, none throws on a refusal, and a request
+     *  with no answer is `no-answer`, so a send's draft and key are kept. */
+    overlordChat: () => readAnswer<ChatThreadAnswer>('/api/overlord/chat', undefined, readChatThreadAnswer, { kind: 'no-answer' }),
+    overlordChatEarlier: (gen: GenerationKey, around: string | null) => readAnswer<ChatEarlierAnswer | 'off-shape' | 'no-answer'>(`/api/overlord/chat/earlier?term=${gen.term}&n=${gen.n}`
+      + (around === null ? '' : `&around=${encodeURIComponent(around)}`), undefined, (_status, body) => readChatEarlierAnswer(body), 'no-answer'),
+    overlordSend: (id: string, text: string, o: { readonly offRecord: boolean; readonly sendKey: string; readonly overlordTerm: number }) =>
+      readAnswer<ChatSendAnswer>(`${sid(id)}/prompt`, jsonInit({ text, offRecord: o.offRecord, sendKey: o.sendKey, overlordTerm: o.overlordTerm }), readChatSendAnswer, { kind: 'no-answer' }),
     /** The portfolio strip and the capacity line (home B, Task 6): `absent` on a server without the read. */
     portfolio: () => getJsonOrAbsent<{ readonly portfolio: PortfolioView }>('/api/portfolio'),
     rankPortfolio: (body: RankWrite) => postJson<{ readonly revision: number; readonly portfolio: PortfolioView }>('/api/portfolio/rank', body),
@@ -524,8 +551,9 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       postJson<{ ok: true }>(`/api/accounts/${encodeURIComponent(id)}/auth/code`, body),
     accountAuthCancel: (id: string, body: AccountAuthCancelBody) =>
       postJson<{ ok: true }>(`/api/accounts/${encodeURIComponent(id)}/auth/cancel`, body),
-    /** `org` is the organization label, or `none` to clear it (account organization B1): the facts door's own field. */
-    accountSet: (id: string, body: AccountSetBody & Pick<RosterFactsChange, 'org'>) =>
+    /** `org` is the organization label, or `none` to clear it (account organization B1); `fableBilling` and `continuity` are the
+     *  account facts (Overlord W1 home C). All three are the facts door's own fields. */
+    accountSet: (id: string, body: AccountSetBody & RosterFactsChange) =>
       postJson<AccountSwitchAnswer>(`/api/accounts/${encodeURIComponent(id)}/set`, body),
     accountSignOut: (id: string) =>
       postJson<AccountSignOutAnswer>(`/api/accounts/${encodeURIComponent(id)}/credential`, { signOut: true }),
@@ -1264,8 +1292,8 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     responsesFor: (ref: string) => getJson<{ readonly ok: true; readonly rows: readonly ResponseRowBrief[] }>(`/api/responses?ref=${encodeURIComponent(ref)}`),
     /** `POST /api/responses/:id/handled` (C69): the operator handled that message elsewhere; no body, no undo. */
     markResponseHandled: (id: number) => postJson<{ readonly ok: true; readonly id: number; readonly handledAt: number | null; readonly changed: boolean }>(`/api/responses/${id}/handled`),
-    /** `GET /api/responses/retention`: the retention in days, `days: null` with `unreadable` when the setting cannot be read (for a later Settings row). */
-    responseRetention: () => getJson<ResponseRetentionView>('/api/responses/retention'),
+    /** `GET /api/responses/retention`: the retention in days, `days: null` with `unreadable` when the setting cannot be read; `absent` on an older server. */
+    responseRetention: () => getJsonOrAbsent<ResponseRetentionView>('/api/responses/retention'),
     /** `POST /api/responses/retention`: sets the days; lowering takes a step-up, a refusal rejects with its `ApiError`. */
     setResponseRetention: (days: number) => postJson<ResponseRetentionView>('/api/responses/retention', { days }),
     /** `GET /api/sessions/:id/timers` (Overlord W1a, timers Task 13): the session's pending timers, notes masked and marked

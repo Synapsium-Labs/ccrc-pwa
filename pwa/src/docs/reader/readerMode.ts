@@ -254,8 +254,9 @@ export function readerModeExitShown(input: { on: boolean; frameStands: boolean }
 
 /** Where the `focus-frame` act puts focus (X6 XR fix round 2, item 3, review 4043 A2). `frame`: the frame, as it always was: a
  *  focus request while reader mode stays on (Esc, the overlay's menu, a dropped frame's dismiss), and every exit that has a frame
- *  standing. `head-action`: an exit with no frame standing (the frameless Exit's own), while the Docs head draws its Reader mode
- *  action. `main`: the same exit with no such action on screen. The frameless Exit unmounts holding the focus, and with no frame
+ *  standing. `head-action`: an exit with no frame standing (the frameless Exit's own), while the Docs head's Reader mode action is
+ *  shown and stays (delivery reads that from its own offer after the step, never from a scan of the page alone, review 4052 F1).
+ *  `main`: the same exit with no such action on screen. The frameless Exit unmounts holding the focus, and with no frame
  *  to give it to, focus would otherwise fall to the page's body with nothing announced. A frame that arrives afterwards is
  *  neither asked nor given focus: this is an answer for the act that ran, not a state. */
 export type ReaderExitFocus = 'frame' | 'head-action' | 'main';

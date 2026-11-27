@@ -62,15 +62,15 @@ describe('the maps and their derived lists', () => {
     expect(vocab.PROBE_ROUND_NUDGE).toEqual({ start: 'renewal-feed', spot: 'spot-probe-notice', compaction: 'none' });
     expect(PROBE_ROUND_KINDS.filter((k) => vocab.PROBE_ROUND_NUDGE[k] === 'none')).toEqual(['compaction']);
   });
-  it('READ_CEILINGS has a row for exactly READ_DOORS, sequence included, each a positive integer', () => {
-    expect([...READ_DOORS].sort()).toEqual(['board', 'history', 'inbox', 'messages', 'sequence']);
+  it('READ_CEILINGS has a row for exactly READ_DOORS, sequence and the chat\'s two included, each a positive integer', () => {
+    expect([...READ_DOORS].sort()).toEqual(['board', 'chat', 'chat-history', 'history', 'inbox', 'messages', 'sequence']);
     expect(Object.keys(vocab.READ_CEILINGS).sort()).toEqual([...READ_DOORS].sort());
     for (const door of READ_DOORS) {
       const n = vocab.READ_CEILINGS[door].perHour;
       expect(Number.isInteger(n) && n > 0, door).toBe(true);
     }
     expect(Object.fromEntries(READ_DOORS.map((d) => [d, vocab.READ_CEILINGS[d].perHour]))).toEqual({
-      inbox: 240, messages: 120, board: 120, history: 60, sequence: 120,
+      inbox: 240, messages: 120, board: 120, history: 60, sequence: 120, chat: 720, 'chat-history': 240,
     });
   });
   it('the constants hold their plan values', () => {

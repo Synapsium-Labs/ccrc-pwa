@@ -25,6 +25,8 @@ import { AppearanceSection } from './AppearanceSection';
 import { AutomationSection } from './AutomationSection';
 import { IntegrationsSection } from './IntegrationsSection';
 import { NotificationsSection } from './NotificationsSection';
+import { OverlordSection } from './OverlordSection';
+import { useOverlordShown } from '../../stores/overlord';
 import { SecuritySection } from './SecuritySection';
 import { SignInGateBanner } from './SignInGateCard';
 import { indexRowOf, SettingsIndex } from './SettingsIndex';
@@ -35,10 +37,13 @@ import './settings.css';
 /** Where a path sits in Settings: the index, a section, or an id that names none. */
 type At = { kind: 'index' } | { kind: 'section'; id: SettingsSectionId } | { kind: 'unknown' };
 
-function settingsAt(path: string): At {
+/** Without `overlord-v1` (or before the word is read) `/settings/overlord` draws the index, as if the section were not there
+ *  (plan question 9). */
+function settingsAt(path: string, overlordShown: boolean): At {
   const route = matchRoute(path)?.route.id ?? null;
   const section = SETTINGS_SECTIONS.find((s) => route === `settings-${s.id}`);
-  if (section !== undefined) return { kind: 'section', id: section.id };
+  if (section !== undefined && (section.id !== 'overlord' || overlordShown)) return { kind: 'section', id: section.id };
+  if (section !== undefined) return { kind: 'index' };
   return route === 'settings-section' ? { kind: 'unknown' } : { kind: 'index' };
 }
 
@@ -53,12 +58,13 @@ function SectionBody({ id, view }: { id: SettingsSectionId; view: SettingsPageVi
     case 'security':
       return <SecuritySection poll={view.updates} auth={view.auth} passkeys={view.passkeys} refreshAuth={view.refreshAuth} />;
     case 'integrations': return <IntegrationsSection linear={view.linear} />;
+    case 'overlord': return <OverlordSection />;
   }
 }
 
 export function SettingsScreen(): ReactNode {
   const { path } = useLocation();
-  const at = settingsAt(path);
+  const at = settingsAt(path, useOverlordShown());
   const view = useSettingsView();
   const section = at.kind === 'section' ? SETTINGS_SECTIONS.find((s) => s.id === at.id)! : null;
   const headingId = useId();

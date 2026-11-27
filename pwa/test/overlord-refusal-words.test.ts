@@ -2,20 +2,41 @@
 // whose sentence depends on the act says the act that was refused (`auth-off` refuses every stepped door while sign-in is off, and
 // "to start the Overlord" is true of Start alone); the facts an answer names are added; an unknown word is drawn raw.
 import { describe, expect, it } from 'vitest';
-import { ApiError, OVERLORD_PLACE_REFUSAL_TEXT, overlordRefusalText, type OverlordDoorAct } from '../src/lib/api';
+import { ApiError, OVERLORD_PLACE_REFUSAL_TEXT, REBIND_MOVED_TEXT, overlordRefusalText, type OverlordDoorAct } from '../src/lib/api';
 
 const refused = (error: string, extra: Record<string, unknown> = {}): ApiError => new ApiError(409, { ok: false, error, ...extra });
-const ACTS: readonly OverlordDoorAct[] = ['start', 'rebind', 'restart', 'pause', 'lower', 'raise', 'clear'];
+/** The acts whose door asks the account gate, so sign-in off refuses them `auth-off`. Pause and a lowered rung are not among
+ *  them: the server asks sign-in only of a raise (home C's carried 4a). */
+const GATED: readonly OverlordDoorAct[] = ['start', 'rebind', 'restart', 'raise', 'clear', 'retire', 'model', 'account-set'];
+const UNGATED: readonly OverlordDoorAct[] = ['pause', 'lower'];
+const ACTS: readonly OverlordDoorAct[] = [...GATED, ...UNGATED];
 
 describe('overlordRefusalText', () => {
-  it('auth-off says the act that was refused, one sentence per act, and Start keeps its own', () => {
-    const said = ACTS.map((act) => overlordRefusalText(refused('auth-off'), act));
+  it('auth-off says the act that was refused, one sentence per gated act, and Start keeps its own', () => {
+    const said = GATED.map((act) => overlordRefusalText(refused('auth-off'), act));
     expect(said[0]).toBe(OVERLORD_PLACE_REFUSAL_TEXT['auth-off']);
-    expect(new Set(said).size, 'each act its own sentence').toBe(ACTS.length);
+    expect(new Set(said).size, 'each act its own sentence').toBe(GATED.length);
     expect(overlordRefusalText(refused('auth-off'), 'rebind')).toBe('Sign-in must be on to rebind the Overlord.');
     expect(overlordRefusalText(refused('auth-off'), 'raise')).toBe("Sign-in must be on to raise the Overlord's rung.");
     expect(overlordRefusalText(refused('auth-off'), 'clear')).toBe("Sign-in must be on to clear a latch of the Overlord's ladder.");
-    for (const act of ACTS.slice(1)) expect(overlordRefusalText(refused('auth-off'), act), act).not.toContain('to start the Overlord');
+    expect(overlordRefusalText(refused('auth-off'), 'retire')).toBe('Sign-in must be on to retire the Overlord.');
+    for (const act of GATED.slice(1)) expect(overlordRefusalText(refused('auth-off'), act), act).not.toContain('to start the Overlord');
+  });
+
+  it('Pause and a lowered rung never claim sign-in is needed: the server asks it only of a raise, so the word is drawn raw', () => {
+    for (const act of UNGATED) {
+      const said = overlordRefusalText(refused('auth-off'), act);
+      expect(said, act).toBe('Refused: auth-off');
+      expect(said, act).not.toMatch(/Sign-in must be on/);
+    }
+  });
+
+  it('stale-designation has a sentence for Rebind alone (call 1685): every other act draws it raw, so no other screen\'s meaning changes', () => {
+    expect(overlordRefusalText(refused('stale-designation', { detail: 'lane-b-overlord is bound, at term 2' }), 'rebind')).toBe(REBIND_MOVED_TEXT);
+    for (const act of ACTS.filter((a) => a !== 'rebind')) {
+      expect(overlordRefusalText(refused('stale-designation'), act), act).toBe('Refused: stale-designation');
+    }
+    expect(Object.values(OVERLORD_PLACE_REFUSAL_TEXT)).not.toContain(REBIND_MOVED_TEXT);
   });
 
   it('a word whose sentence does not depend on the act says the same for every act', () => {

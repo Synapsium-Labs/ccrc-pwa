@@ -245,7 +245,8 @@ describe('every ccrc command the console shows is one the CLI has (desktop-polis
     expect(VERBS.has('passwd')).toBe(true);
     expect(VERBS.has('expose')).toBe(true);
     expect(requiredSubs('passwd')).toBeNull();
-    expect([...requiredSubs('expose')!].sort()).toEqual(['byo', 'duckdns', 'ip', 'status']);
+    // `artifacts` since native docs X5 wave A4 (`ccrc expose artifacts`).
+    expect([...requiredSubs('expose')!].sort()).toEqual(['artifacts', 'byo', 'duckdns', 'ip', 'status']);
     expect(requiredSubs('account')!.has('check')).toBe(true);
     // An invented verb nobody will build is not one, and a verb that needs a subcommand needs it.
     expect(VERBS.has('frobnicate-zz')).toBe(false);

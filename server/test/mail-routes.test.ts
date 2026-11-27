@@ -82,6 +82,8 @@ import { isLadderKebab } from '../src/coord/overlordLadder.js';
 import { isInvariantKebab } from '../src/coord/invariants.js';
 import { isSequenceDoorKebab } from '../src/coord/overlordSequenceDoor.js';
 import { isBoardKebab } from '../src/coord/overlordBoard.js';
+import { isChatDoorKebab } from '../src/coord/overlordChatDoor.js';
+import { isGenerationRead, isReadDoor } from '../../shared/operatorMessages.js';
 import { isReadinessKebab } from '../src/coord/overlordReadiness.js';
 import { isOverlapsKebab } from '../src/coord/overlaps.js';
 import { isDoneTestKebab } from '../src/coord/doneTests.js';
@@ -1404,8 +1406,18 @@ describe('the rejection table is total, in both directions', () => {
         // switchboard's own list and are spelled as literals nowhere in the board; the guard admits them beside the settings names.
         // Each rides a 200's part, never a refusal. Admitted through the module's guard, derived from the wire's and the
         // switchboard's lists, never NOT_CODES.
-        || isBoardKebab(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, edge state, health word, edge kind, spend state, service class, Overlord door word, actor issuer, Overlord refusal, designation word, unforecastable reason, approval census word, untrusted-build reason, Overlord gate word, Overlord inbox word, Overlord history word, linking refusal, block-wake word, sequence stamp word, invariant monitor word, readiness word, sequence door word or board word`).toBe(true);
+        || isBoardKebab(tok)
+        // THE CHAT (Overlord W1 chat A): `coord/overlordChat.ts` names an earlier page's refusal reasons and a thread entry's kinds
+        // as literals, and `coord/overlordChatDoor.ts` its doors' ledger outcomes. The earlier door words a reason as `bad-request`'s
+        // detail or a thread's `earlier` mark, an entry kind rides a 200's `kind`, and an outcome is a ledger line's; none is a mail
+        // or run code. Admitted through the door module's guard, derived from the two maps, never NOT_CODES.
+        || isChatDoorKebab(tok)
+        // THE READ LEDGER (Overlord W1 private store, widened by chat A): a read door's name (`'chat-history'`) and how a line's
+        // generation was read (`'not-a-session'`, the console's) are the ledger's own words (`shared/operatorMessages.ts`), which the
+        // read runner and the doors pass as literals. A line's column, never a mail or run code; admitted through their guards.
+        || isReadDoor(tok)
+        || isGenerationRead(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, edge state, health word, edge kind, spend state, service class, Overlord door word, actor issuer, Overlord refusal, designation word, unforecastable reason, approval census word, untrusted-build reason, Overlord gate word, Overlord inbox word, Overlord history word, linking refusal, block-wake word, sequence stamp word, invariant monitor word, readiness word, sequence door word, board word, chat word or read-ledger word`).toBe(true);
     }
   });
 });

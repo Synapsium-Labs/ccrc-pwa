@@ -1681,6 +1681,15 @@ describe('W8a reader frame in Chrome', () => {
     const PHONE_VIEW = { width: 412, height: 915 } as const;
     /** ccrc's phone bar: its doors are outside the Docs head and outside the reader, and the head's swap does not touch them. */
     const PHONE_DOOR = '.phone-bar-door';
+    /** THE HEAD'S SWAP TO THE ONE BAR COMMITS AFTER THE READER'S READY (issue #3558, measured): the frame's `ready` takes the
+     *  formatting line away in one DOM update, and the bar's handle reaches the head through a passive effect (`ReaderBarShown`'s
+     *  publish), so the one-bar class lands in a later one; a frame that reports ready before its mount's promise lands sets the
+     *  bar later still (`setBar` after the mount). A MutationObserver read the two in consecutive
+     *  callbacks, about 1.3 ms apart on this box and 100 to 170 ms apart under a 20x to 40x CPU throttle, and under 60x the class
+     *  read straight after `settle` answered false in 2 of 3 runs, the issue's answer. So a row waits for the swap, as
+     *  docs-compact-head's `oneBar` does, before it reads the class; a swap that never comes still fails the row's own read. */
+    const swappedToOneBar = (page: Page): Promise<unknown> =>
+      page.waitForSelector('.docs-head.docs-one-bar', { timeout: 30_000 }).catch(() => undefined);
 
     it('phone-born, a phone bar door: it keeps the focus a reader of the page gave it, the frame is not focused at insertion, and Tab goes to the next stop of the host, not into the frame', async () => {
       const s = await openSession(PHONE_VIEW);
@@ -1692,6 +1701,7 @@ describe('W8a reader frame in Chrome', () => {
       await tabTo(s.page, PHONE_DOOR, 'Tab');
       await bridge.release();
       expect(await settle(s.page), 'the reader came up').toBe('ready');
+      await swappedToOneBar(s.page);
       expect(await s.page.evaluate(() => document.querySelector('.docs-head')?.classList.contains('docs-one-bar')), 'on ccrc\'s one bar').toBe(true);
       expect(await insertFocus(s.page), 'one frame, not focused when it was inserted').toEqual([false]);
       const door = await s.page.evaluate((sel) => document.activeElement?.matches(sel) === true, PHONE_DOOR);
@@ -1728,6 +1738,7 @@ describe('W8a reader frame in Chrome', () => {
       const handle = await s.page.evaluateHandle(() => document.activeElement);
       await bridge.release();
       expect(await settle(s.page), 'the reader came up').toBe('ready');
+      await swappedToOneBar(s.page);
       expect(await s.page.evaluate(() => document.querySelector('.docs-head')?.classList.contains('docs-one-bar')), 'on ccrc\'s one bar').toBe(true);
       expect(await insertFocus(s.page), 'one frame, not focused when it was inserted').toEqual([false]);
       expect((await activeOf(s.page)).onFrame, 'and the frame does not hold the focus at ready').toBe(false);
@@ -1802,6 +1813,7 @@ describe('W8a reader frame in Chrome', () => {
       const handle = await s.page.evaluateHandle(() => document.activeElement);
       await bridge.release();
       expect(await settle(s.page), 'the reader came up').toBe('ready');
+      await swappedToOneBar(s.page);
       expect(await s.page.evaluate(() => document.querySelector('.docs-head')?.classList.contains('docs-one-bar')), 'on ccrc\'s one bar').toBe(true);
       expect(await insertFocus(s.page), 'one frame, not focused when it was inserted').toEqual([false]);
       const kept = await s.page.evaluate((el) => ({

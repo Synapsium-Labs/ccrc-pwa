@@ -62,6 +62,9 @@ const READ_IDENT = /^[0-9a-f]{64}$/;
  *  the `not-taken` it answers, which the capture lane's one line carries (review 3898 F6). */
 export const DELIVERY_BAD_REQUEST_DETAIL = 'the fleet agent answered bad-request to a delivery job (likely an agent older than the recipe\'s fields)';
 
+/** The frames twin of {@link DELIVERY_BAD_REQUEST_DETAIL}: the detail of the `not-taken` a frames job's `bad-request` answers. */
+export const FRAMES_BAD_REQUEST_DETAIL = 'the fleet agent answered bad-request to a frames job (likely an agent older than the recipe\'s fields)';
+
 /** The `readdir` answer's names, exactly as `readdirMeasured` has always read them (one reader; the times arm reuses it). */
 function readdirAnswer(res: unknown): { read: MeasuredDirectoryRead } {
   const r = res as { names?: unknown; absent?: unknown } | null;
@@ -365,18 +368,20 @@ export function createIo(client: FleetClient): FleetIO {
      *  `readTestboxCaptureReply` refuses for this build is `unanswered`: a job may have gone out. The one exception is a
      *  DELIVERY job the agent answers `bad-request` (most likely an agent older than the recipe fields): `not-taken`, with one
      *  log line saying what was measured. */
-    async testboxCapture(build: string, recipe?: 'delivery', part?: number) {
+    async testboxCapture(build: string, recipe?: 'delivery' | 'frames', part?: number) {
       if (!(client.state.agentOps ?? []).includes(TESTBOX_CAPTURE_OP)) return { ok: false, reason: 'no-op' };
       // `recipe` and `part` travel only for a delivery job, and together (Desktop polish wave 178); a delivery ask with no
       // part, which the member's arguments leave only an untyped caller, is never sent: `not-started`, no job went out.
-      if (recipe === 'delivery' && part === undefined) return { ok: false, reason: 'not-started' };
+      if (recipe !== undefined && part === undefined) return { ok: false, reason: 'not-started' };
       try {
-        const req = recipe === 'delivery'
-          ? { t: 'req', op: TESTBOX_CAPTURE_OP, build, recipe, part } as const
-          : { t: 'req', op: TESTBOX_CAPTURE_OP, build } as const;
-        const reply = recipe === 'delivery'
-          ? readTestboxCaptureReply(await client.request(req, TESTBOX_CAPTURE_REQUEST_MS), build, 'delivery', part)
-          : readTestboxCaptureReply(await client.request(req, TESTBOX_CAPTURE_REQUEST_MS), build);
+        const req = recipe === undefined
+          ? { t: 'req', op: TESTBOX_CAPTURE_OP, build } as const
+          : { t: 'req', op: TESTBOX_CAPTURE_OP, build, recipe, part } as const;
+        const reply = recipe === undefined
+          ? readTestboxCaptureReply(await client.request(req, TESTBOX_CAPTURE_REQUEST_MS), build)
+          : recipe === 'delivery'
+            ? readTestboxCaptureReply(await client.request(req, TESTBOX_CAPTURE_REQUEST_MS), build, 'delivery', part)
+            : readTestboxCaptureReply(await client.request(req, TESTBOX_CAPTURE_REQUEST_MS), build, 'frames', part);
         return reply === null ? { ok: false, reason: 'unanswered' } : { ok: true, reply };
       } catch (e) {
         if (e instanceof LinkNotSentError) return { ok: false, reason: 'not-started' };
@@ -384,7 +389,10 @@ export function createIo(client: FleetClient): FleetIO {
         // A fleet agent that answers a delivery job `bad-request`, most likely one that lists the op but predates the recipe
         // and part fields (review 3882 A1): that is the word an older test box's closed connection already gets,
         // `not-taken`, which the lane counts as no attempt, never an `unanswered` one every hour with no cause logged.
-        // A build-trust job never carries the fields, so its `bad-request` stays `unanswered`.
+        // A frames job's `bad-request` answers the same, with its own detail. A build-trust job never carries the fields, so its `bad-request` stays `unanswered`.
+        if (recipe === 'frames' && e instanceof AgentOpError && e.code === 'bad-request') {
+          return { ok: true, reply: { outcome: 'not-taken', refusal: null, result: null, detail: FRAMES_BAD_REQUEST_DETAIL, frames: null } };
+        }
         if (recipe === 'delivery' && e instanceof AgentOpError && e.code === 'bad-request') {
           // The detail says what was measured; the older agent is the likely cause, not a measured one (a current agent that
           // refused a malformed delivery ask would land here too; the capture owner's answer to the round's packet). This arm

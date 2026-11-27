@@ -13,6 +13,9 @@ import { releaseWaitingWords } from '../../fleet/releaseWaiting';
 import { haltingNodes } from '../../fleet/updateHalt';
 import { readBoxTokenView } from '../../lib/wireReaders';
 import type { SettingsSectionId } from '../../lib/routes';
+import type { DesignationView } from '../../../../shared/overlord-designation';
+import { overlordStatusOf } from '../../overlord/overlordSettingsWords';
+import type { ReadState } from '../../overlord/readState';
 import type { PushState, SettingsView } from './SettingsDataProvider';
 import { boxTokenSummary } from './boxTokenWords';
 import { unarmedExposure } from './signInGate';
@@ -154,9 +157,11 @@ function integrationsStatus(view: SettingsView): SectionStatus {
       : `Linear: ${keys.length} workspace${keys.length === 1 ? '' : 's'} connected`;
   return line(`${linear} · ${INTEGRATIONS_GITHUB_STATUS}`, troubled > 0 ? 'amber' : 'calm');
 }
-/** The status of section `id`, from the one view. */
+/** The status of section `id`, from the one view. The Overlord's reads the Overlord store's one designation read (`overlord`),
+ *  through `overlordStatusOf`: loading is the skeleton, and absent, none and unmeasured are three different lines (home C). */
 export function sectionStatus(
-  id: SettingsSectionId, view: SettingsView, facts: AppearanceFacts & { hostname: string; now: number },
+  id: SettingsSectionId, view: SettingsView,
+  facts: AppearanceFacts & { hostname: string; now: number; overlord: ReadState<DesignationView | null> },
 ): SectionStatus {
   switch (id) {
     case 'updates': {
@@ -175,5 +180,9 @@ export function sectionStatus(
       return securityStatus(view, facts.hostname, facts.now);
     case 'integrations':
       return integrationsStatus(view);
+    case 'overlord': {
+      const s = overlordStatusOf(facts.overlord);
+      return s === null ? SKELETON : line(s.text, s.tone);
+    }
   }
 }

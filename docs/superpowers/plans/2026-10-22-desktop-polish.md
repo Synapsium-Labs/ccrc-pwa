@@ -5994,6 +5994,21 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
     floor.
 
   The file is replaced only on the owner's next ruling on accepted cost, never to turn a row green.
+- **D-9153** — `landing-line-title-disclosure`: desktop-polish wave 192, issued on 2026-11-27. The landing line's block
+  on a project card starts rolled up behind a disclosure button on its title row, a second control there beside the
+  pause button; the console plan's sections 5 and 11 had one
+  (`docs/superpowers/plans/2026-11-26-landing-order-wave5k-console.md`). The title itself is the button
+  (`aria-expanded`, and `aria-controls` naming the body, which is in the document only while open). The order is the
+  disclosure, the status, the stale sentence, then rolled up one summary line naming every open entry, or open the
+  pause button, its alert and the rows; the stylesheet still places the pause button on the title row by grid
+  placement, through the body drawn with `display: contents`. Tab order follows what is seen: disclosure, pause, rows.
+  The choice is kept per project in memory for the page's life (`foldState.ts`), never in the browser. Focus, which
+  the console plan's rules set: after Done it goes to the pause button, else the disclosure, else the card (the plan
+  had the pause button, else the card); after Cancel to the row's Withdraw, else the pause button, else the
+  disclosure, else the card. The effect that puts focus back after a read removes the control that held it also runs
+  when the block opens or closes, with the same fallback, and still moves focus only when focus has fallen to the page
+  and the block holds a record of the control that had it. Task note:
+  `docs/superpowers/programs/desktop-polish/landing-line-rolled-up.md`.
 
 ## Out of scope
 

@@ -10,7 +10,7 @@ import type { DesignationView } from '../../shared/overlord-designation';
 import type { ReadinessWire } from '../../shared/overlord-readiness';
 import { ConfirmItsYou } from '../src/accounts/ConfirmItsYou';
 import { useStepUp, type StepUpDeps } from '../src/accounts/useStepUp';
-import { ApiError, OVERLORD_PLACE_REFUSAL_TEXT, api } from '../src/lib/api';
+import { ApiError, OVERLORD_PLACE_REFUSAL_TEXT, REBIND_MOVED_TEXT, api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { BodyPart } from '../src/overlord/BodyPart';
 import {
@@ -374,7 +374,7 @@ describe('Rebind', () => {
     const rebind = vi.spyOn(api, 'overlordRebind').mockResolvedValue({ sessionId: 'lane-b-overlord', deadlineAt: AT });
     show(answered(BOUND));
     click(BODY_WORDS.rebind);
-    await waitFor(() => expect(rebind).toHaveBeenCalledWith(false));
+    await waitFor(() => expect(rebind).toHaveBeenCalledWith(false, undefined));
     await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
     expect(screen.queryByText(BODY_WORDS.forceSentence)).toBeNull();
   });
@@ -401,7 +401,8 @@ describe('Rebind', () => {
     expect(screen.getByText(BODY_WORDS.forceSentence)).toBeTruthy();
     expect(BODY_WORDS.forceSentence).toContain('stops it first');
     click(BODY_WORDS.rebindAnyway);
-    await waitFor(() => expect(rebind).toHaveBeenLastCalledWith(true));
+    // The forced call names the binding the offer was made for (home C, slug forced-rebind-names-the-session-it-stops).
+    await waitFor(() => expect(rebind).toHaveBeenLastCalledWith(true, { sessionId: ID, term: 1 }));
     // the forced call was refused for a step-up: the step shows, and nothing runs until it is pressed again
     await waitFor(() => expect(client.stepUpStart).toHaveBeenCalled());
     expect(rebind).toHaveBeenCalledTimes(2);
@@ -411,7 +412,23 @@ describe('Rebind', () => {
     click(BODY_WORDS.rebindAnyway);
     await waitFor(() => expect(rebind).toHaveBeenCalledTimes(3));
     expect(rebind.mock.calls.map((c) => c[0])).toEqual([false, true, true]);
+    // A plain rebind names nothing; each forced one names what the offer stood on.
+    expect(rebind.mock.calls.map((c) => c[1])).toEqual([undefined, { sessionId: ID, term: 1 }, { sessionId: ID, term: 1 }]);
     await waitFor(() => expect(screen.queryByText(BODY_WORDS.forceSentence)).toBeNull());
+  });
+
+  it('a forced rebind refused stale-designation draws its sentence, drops the offer and reads the designation again', async () => {
+    vi.spyOn(api, 'overlordRebind')
+      .mockRejectedValueOnce(new ApiError(409, { ok: false, error: 'overlord-body-alive', detail: 'the body is running' }))
+      .mockRejectedValueOnce(new ApiError(409, { ok: false, error: 'stale-designation', detail: 'lane-b-overlord is bound, at term 2' }));
+    show(answered(BOUND));
+    click(BODY_WORDS.rebind);
+    await screen.findByRole('button', { name: BODY_WORDS.rebindAnyway });
+    refresh.mockClear();
+    click(BODY_WORDS.rebindAnyway);
+    expect((await screen.findByRole('alert')).textContent).toBe(REBIND_MOVED_TEXT);
+    expect(screen.queryByRole('button', { name: BODY_WORDS.rebindAnyway })).toBeNull();
+    await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
   });
 
   describe('"Rebind anyway" stands only while the binding it was refused for stands', () => {

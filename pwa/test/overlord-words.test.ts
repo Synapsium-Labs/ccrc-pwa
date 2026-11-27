@@ -168,53 +168,60 @@ describe('the ladder deciders', () => {
 });
 
 describe('takingEffectLine', () => {
-  /** The door answered at `NOW`; a read is built at `at` (default: the same moment, a read that postdates the door). */
-  const DOOR_AT = NOW;
+  /** The door answered when the store had issued ladder call `DOOR_SEQ`; a read holds the answer of call `LATER` (issued after
+   *  the door answered) unless a case says otherwise (home C's carried 4d: the store's own sequence, not two clock stamps). */
+  const DOOR_SEQ = 4;
+  const LATER = DOOR_SEQ + 1;
   const ladder = (narrowing: unknown, at = NOW): ReadState<LadderWire> => ({
     state: 'answered', at,
     value: { ok: true, operatorRung: 'off', lastChange: narrowing === undefined ? null : { at, actor: 'operator', narrowing } } as unknown as LadderWire,
   });
   const TAKING = { state: 'taking-effect', why: 'no-witness-yet' } as const;
   it('is null unless a narrowing door answered a narrowing', () => {
-    expect(takingEffectLine(null, ladder(TAKING), DOOR_AT)).toBeNull();
-    expect(takingEffectLine(undefined, ladder(TAKING), DOOR_AT)).toBeNull();
+    expect(takingEffectLine(null, ladder(TAKING), LATER, DOOR_SEQ)).toBeNull();
+    expect(takingEffectLine(undefined, ladder(TAKING), LATER, DOOR_SEQ)).toBeNull();
   });
   it('reads the ladder\'s lastChange.narrowing while it says taking-effect, one sentence per why', () => {
     for (const why of NARROWING_WHYS) {
-      expect(takingEffectLine(TAKING, ladder({ state: 'taking-effect', why }), DOOR_AT)).toBe(takingEffectWords[why]);
+      expect(takingEffectLine(TAKING, ladder({ state: 'taking-effect', why }), LATER, DOOR_SEQ)).toBe(takingEffectWords[why]);
     }
   });
-  it('is null once a read that postdates the door reads done', () => {
-    expect(takingEffectLine(TAKING, ladder({ state: 'done' }), DOOR_AT)).toBeNull();
-    expect(takingEffectLine(TAKING, ladder({ state: 'done' }, DOOR_AT + 5_000), DOOR_AT)).toBeNull();
+  it('is null once a read issued after the door answered reads done', () => {
+    expect(takingEffectLine(TAKING, ladder({ state: 'done' }), LATER, DOOR_SEQ)).toBeNull();
+    expect(takingEffectLine(TAKING, ladder({ state: 'done' }), LATER + 5, DOOR_SEQ)).toBeNull();
   });
   it('falls back to the door\'s own narrowing before the ladder has a reading of the change', () => {
-    expect(takingEffectLine(TAKING, { state: 'loading' }, DOOR_AT)).toBe(takingEffectWords['no-witness-yet']);
-    expect(takingEffectLine(TAKING, { state: 'unmeasured', error: 'HTTP 503' }, DOOR_AT)).toBe(takingEffectWords['no-witness-yet']);
-    expect(takingEffectLine(TAKING, ladder(undefined), DOOR_AT)).toBe(takingEffectWords['no-witness-yet']);
-    expect(takingEffectLine({ state: 'done' }, { state: 'loading' }, DOOR_AT)).toBeNull();
+    expect(takingEffectLine(TAKING, { state: 'loading' }, LATER, DOOR_SEQ)).toBe(takingEffectWords['no-witness-yet']);
+    expect(takingEffectLine(TAKING, { state: 'unmeasured', error: 'HTTP 503' }, LATER, DOOR_SEQ)).toBe(takingEffectWords['no-witness-yet']);
+    expect(takingEffectLine(TAKING, ladder(undefined), LATER, DOOR_SEQ)).toBe(takingEffectWords['no-witness-yet']);
+    expect(takingEffectLine({ state: 'done' }, { state: 'loading' }, LATER, DOOR_SEQ)).toBeNull();
   });
-  it('a stale ladder read that postdates the door still carries its last change', () => {
+  it('a stale ladder read whose answer came from a later call still carries its last change', () => {
     const stale: ReadState<LadderWire> = { ...(ladder({ state: 'done' }) as { value: LadderWire; at: number }), state: 'stale', error: 'timeout' };
-    expect(takingEffectLine(TAKING, stale, DOOR_AT)).toBeNull();
+    expect(takingEffectLine(TAKING, stale, LATER, DOOR_SEQ)).toBeNull();
   });
-  // F5: a read that may predate the door is not the door's change.
-  it('F5: an older read that says done does not hide the line a door just answered', () => {
-    expect(takingEffectLine(TAKING, ladder({ state: 'done' }, DOOR_AT - 1), DOOR_AT)).toBe(takingEffectWords['no-witness-yet']);
+  // A read issued before the door answered is not the door's change, whenever it landed (review 3998 F5, home C's 4d).
+  it('4d: a read issued before the door answered does not speak for it, though it landed in the same millisecond or later', () => {
+    // The answer's clock stamp equals the door's, and a later one too: what rules is the call's number, at or below the door's.
+    expect(takingEffectLine(TAKING, ladder({ state: 'done' }, NOW), DOOR_SEQ, DOOR_SEQ)).toBe(takingEffectWords['no-witness-yet']);
+    expect(takingEffectLine(TAKING, ladder({ state: 'done' }, NOW + 1), DOOR_SEQ, DOOR_SEQ)).toBe(takingEffectWords['no-witness-yet']);
+    expect(takingEffectLine(TAKING, ladder({ state: 'done' }, NOW), DOOR_SEQ - 1, DOOR_SEQ)).toBe(takingEffectWords['no-witness-yet']);
+    // The next call issued, in the same millisecond, does.
+    expect(takingEffectLine(TAKING, ladder({ state: 'done' }, NOW), DOOR_SEQ + 1, DOOR_SEQ)).toBeNull();
   });
   it('F5: a refresh that failed after the door leaves the old read stale, and the line stays the door\'s', () => {
-    const stale: ReadState<LadderWire> = { ...(ladder({ state: 'done' }, DOOR_AT - 30_000) as { value: LadderWire; at: number }), state: 'stale', error: 'timeout' };
-    expect(takingEffectLine(TAKING, stale, DOOR_AT)).toBe(takingEffectWords['no-witness-yet']);
+    const stale: ReadState<LadderWire> = { ...(ladder({ state: 'done' }, NOW - 30_000) as { value: LadderWire; at: number }), state: 'stale', error: 'timeout' };
+    expect(takingEffectLine(TAKING, stale, DOOR_SEQ, DOOR_SEQ)).toBe(takingEffectWords['no-witness-yet']);
   });
   it('F5: an older read that says taking-effect for another reason does not speak for the door either', () => {
-    expect(takingEffectLine(TAKING, ladder({ state: 'taking-effect', why: 'not-journalled' }, DOOR_AT - 1), DOOR_AT))
+    expect(takingEffectLine(TAKING, ladder({ state: 'taking-effect', why: 'not-journalled' }), DOOR_SEQ, DOOR_SEQ))
       .toBe(takingEffectWords['no-witness-yet']);
   });
-  it('F5: a read newer than the door that records no narrowing (another device changed the rung) ends the line', () => {
-    expect(takingEffectLine(TAKING, ladder(null, DOOR_AT + 1), DOOR_AT)).toBeNull();
+  it('F5: a later read that records no narrowing (another device changed the rung) ends the line', () => {
+    expect(takingEffectLine(TAKING, ladder(null), LATER, DOOR_SEQ)).toBeNull();
   });
-  it('F5: a door whose time is unknown trusts no read', () => {
-    expect(takingEffectLine(TAKING, ladder({ state: 'done' }), null)).toBe(takingEffectWords['no-witness-yet']);
-    expect(takingEffectLine(TAKING, ladder({ state: 'done' }), undefined)).toBe(takingEffectWords['no-witness-yet']);
+  it('F5: a door whose number is unknown trusts no read', () => {
+    expect(takingEffectLine(TAKING, ladder({ state: 'done' }), LATER, null)).toBe(takingEffectWords['no-witness-yet']);
+    expect(takingEffectLine(TAKING, ladder({ state: 'done' }), LATER, undefined)).toBe(takingEffectWords['no-witness-yet']);
   });
 });

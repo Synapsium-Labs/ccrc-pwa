@@ -29,7 +29,7 @@ import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { recordModalLayer } from '../../ui/src/lib/modal-layers';
+import { heldNodeCount, recordModalLayer } from '../../ui/src/lib/modal-layers';
 import { CommandPalette, QuickConfirm, Sheet, SheetPortalContext, hideAsPage, releaseAsPage, type PageHiding } from '@ccrc/ui';
 
 afterEach(() => {
@@ -1457,6 +1457,141 @@ describe('reader mode: a sheet unmounted while open after reader mode ended give
         node.removeAttribute('aria-hidden');
         node.removeAttribute('data-aria-hidden');
       }
+    }
+  });
+
+  // X6 follow-up, review 4052 A1. The held console is given back when the LAST dialog over it closes, whichever layer that is:
+  // the command palette lifts none of its own marks, so its close gives back what reader mode held (the five steps through the
+  // real Docs screen are `reader-mode.test.tsx`'s "Go to" row). And a node still held when the next reader mode starts (no
+  // layer is in the document then) is adopted by that hiding, so its release gives it back instead of leaving it hidden for good.
+  function WithPalette({ first, palette }: { first: boolean; palette: boolean | 'gone' }): ReactNode {
+    return (
+      <>
+        <Unmount first={first} second={false} />
+        {palette !== 'gone' && (
+          <CommandPalette open={palette} onClose={() => undefined} query="" onQueryChange={() => undefined} options={[]} onRun={() => undefined} />
+        )}
+      </>
+    );
+  }
+
+  it('reader mode: a node held for a sheet that unmounts under the open palette is given back when the palette closes, and not before (review 4052 A1)', async () => {
+    const view = render(<WithPalette first={false} palette={false} />);
+    const hiding = hideConsole();
+    view.rerender(<WithPalette first palette={false} />);
+    await settle();
+    releaseAsPage(hiding);
+    expect(hiddenNow(), 'CONTROL: the open sheet keeps the console hidden after reader mode ends').toEqual([true, true]);
+    view.rerender(<WithPalette first palette />);
+    await settle();
+    expect(screen.getByRole('dialog', { name: 'Command palette' }).getAttribute('data-state'), 'CONTROL: the palette is open').toBe('open');
+    view.rerender(<WithPalette first={false} palette />);
+    await settle();
+    expect(screen.queryByRole('dialog', { name: 'First' }), 'CONTROL: the sheet unmounted').toBeNull();
+    expect(hiddenNow(), 'the console was announced under the open palette').toEqual([true, true]);
+    view.rerender(<WithPalette first={false} palette={false} />);
+    await settle();
+    expect(document.querySelector('[role="dialog"][data-state="open"]'), 'CONTROL: no dialog is open').toBeNull();
+    expect(hiddenNow(), 'the console stayed aria-hidden after the palette, the last dialog over it, closed').toEqual([false, false]);
+  });
+
+  it('reader mode: a node held for a sheet that unmounts under the open palette is given back when the palette unmounts open (review 4052 A1)', async () => {
+    const view = render(<WithPalette first={false} palette={false} />);
+    const hiding = hideConsole();
+    view.rerender(<WithPalette first palette={false} />);
+    await settle();
+    releaseAsPage(hiding);
+    view.rerender(<WithPalette first palette />);
+    await settle();
+    view.rerender(<WithPalette first={false} palette />);
+    await settle();
+    expect(hiddenNow(), 'CONTROL: hidden under the open palette').toEqual([true, true]);
+    const head = screen.getByTestId('console-head');
+    view.rerender(<WithPalette first={false} palette="gone" />);
+    await settle();
+    expect(document.querySelector('[role="dialog"]'), 'CONTROL: the palette unmounted').toBeNull();
+    expect(screen.getByTestId('console-head'), 'CONTROL: the console nodes are the same elements').toBe(head);
+    expect(hiddenNow(), 'the console stayed aria-hidden after the palette unmounted open').toEqual([false, false]);
+  });
+
+  it('reader mode: a node still held when the next reader mode starts is adopted by it, so leaving gives it back (review 4052 A1)', async () => {
+    const view = render(<Unmount first={false} second={false} />);
+    const hiding = hideConsole();
+    view.rerender(<Unmount first second={false} />);
+    await settle();
+    releaseAsPage(hiding);
+    // A dialog no modal layer owns (no lift of its own) stands while the sheet unmounts, then goes: the console is still held.
+    const other = document.createElement('div');
+    other.setAttribute('role', 'dialog');
+    other.setAttribute('data-state', 'open');
+    document.body.appendChild(other);
+    view.rerender(<Unmount first={false} second={false} />);
+    await settle();
+    other.remove();
+    expect(document.querySelector('[role="dialog"]'), 'CONTROL: no dialog is left').toBeNull();
+    expect(hiddenNow(), 'CONTROL: the console is still held hidden, with no modal left to lift it').toEqual([true, true]);
+    expect(consoleNodes().map((n) => n.hasAttribute('data-aria-hidden')), 'CONTROL: no modal marks it').toEqual([false, false]);
+    const second = hideConsole();
+    expect(hiddenNow(), 'CONTROL: the second reader mode hides it').toEqual([true, true]);
+    releaseAsPage(second);
+    expect(hiddenNow(), 'the node held from before stayed hidden after the second reader mode ended').toEqual([false, false]);
+    expect(consoleNodes().map((n) => n.hasAttribute('inert'))).toEqual([false, false]);
+  });
+
+  it('reader mode: a held node the next hiding does not reach stays held, so a later unmount with no dialog open gives it back (review 4052 A1)', async () => {
+    const view = render(<Unmount first={false} second={false} />);
+    const hiding = hideConsole();
+    view.rerender(<Unmount first second={false} />);
+    await settle();
+    releaseAsPage(hiding);
+    const other = document.createElement('div');
+    other.setAttribute('role', 'dialog');
+    other.setAttribute('data-state', 'open');
+    document.body.appendChild(other);
+    view.rerender(<Unmount first={false} second={false} />);
+    await settle();
+    other.remove();
+    expect(hiddenNow(), 'CONTROL: the console is still held hidden').toEqual([true, true]);
+    // A hiding kept inside the console head: the head contains `keep`, so this hiding does not reach it.
+    const inner = hideAsPage(screen.getByRole('button', { name: 'Console button', hidden: true }));
+    made.push(inner);
+    releaseAsPage(inner);
+    expect(hiddenNow(), 'CONTROL: the reached node is given back, the head is not reached').toEqual([true, false]);
+    view.rerender(<Unmount first="closed" second={false} />);
+    await settle();
+    view.rerender(<Unmount first={false} second={false} />);
+    await settle();
+    expect(document.querySelector('[role="dialog"]'), 'CONTROL: no dialog is left').toBeNull();
+    expect(hiddenNow(), 'a held node the hiding did not reach was not given back by the next unmount with no dialog open').toEqual([false, false]);
+  });
+
+  it('modal layers: with reader mode never used, the held set stays empty through every sheet\'s mount, close and unmount and the palette\'s, and a node the page hid stays hidden (review 4052 A1)', async () => {
+    const pageOwn = document.createElement('aside');
+    pageOwn.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(pageOwn);
+    try {
+      const view = render(<WithPalette first={false} palette={false} />);
+      expect(heldNodeCount(), 'CONTROL: nothing held at the start').toBe(0);
+      view.rerender(<WithPalette first palette={false} />);
+      await settle();
+      view.rerender(<WithPalette first palette />);
+      await settle();
+      view.rerender(<WithPalette first={false} palette />);
+      await settle();
+      expect(heldNodeCount(), 'a sheet unmounting under the palette held a node').toBe(0);
+      expect(consoleNodes().map(hiddenUp), 'CONTROL: the palette hides the console while open').toEqual([true, true]);
+      view.rerender(<WithPalette first={false} palette={false} />);
+      await settle();
+      view.rerender(<WithPalette first palette={false} />);
+      await settle();
+      view.rerender(<WithPalette first={false} palette="gone" />);
+      await settle();
+      expect(heldNodeCount(), 'the palette\'s close or unmount or a sheet\'s unmount held a node').toBe(0);
+      expect(document.querySelector('[role="dialog"]'), 'CONTROL: every layer is gone').toBeNull();
+      expect(consoleNodes().map(hiddenUp), 'CONTROL: the console is announced as on main').toEqual([false, false]);
+      expect(pageOwn.getAttribute('aria-hidden'), 'a lift took the page\'s own hiding').toBe('true');
+    } finally {
+      pageOwn.remove();
     }
   });
 });

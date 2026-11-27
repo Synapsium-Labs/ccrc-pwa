@@ -20,7 +20,7 @@ import type { BuildAgreement, RouteFields } from '../../../shared/api.js';
 import { STATE_DEADLINE_S } from '../../../shared/continuity.js';
 import {
   OVERLORD_PROJECT, parseAccountSetBody, parseDesignateBody, parseModelBody, parseRebindBody,
-  type DesignateBody, type OverlordModelClass, type SettleFact,
+  type DesignateBody, type OverlordModelClass, type RebindSaw, type SettleFact,
 } from '../../../shared/overlord-designation.js';
 import type { OverlordLanePort } from '../continuity/renewalActs.js';
 import type { Roster } from '../../../shared/roster.js';
@@ -41,7 +41,7 @@ import type { CoordRoutesHandle } from './routes.js';
 import type { AuthorityAppendError } from './overlordAuthorityJournal.js';
 import type { AuthorityState } from './overlordAuthorityCoherence.js';
 import {
-  accountSetStepUp, accountSetVerdict, designateVerdict, modelClassVerdict, modelStepUp, overlordAccounts, rebindVerdict, restartVerdict,
+  accountSetStepUp, accountSetVerdict, designateVerdict, modelClassVerdict, modelStepUp, overlordAccounts, rebindMovedDetail, rebindVerdict, restartVerdict,
   renewalSetOf, retireVerdict, routeOf, type AccountFacts, type DesignateVerdict, type OldBodyState, type OverlordBodyState,
 } from './overlordDesignation.js';
 import type { ActorRefused, AuthorityAppender, AuthorityRefused, RowUnreadable } from './overlordDesignationStore.js';
@@ -55,6 +55,15 @@ import { rungMoveVerdict, narrowingState, type LadderWriterRefusal } from './ove
 import { LadderStampRefused, type LadderWrite } from './overlordLadderStore.js';
 import type { OverlordAuthorityExchange } from './overlordAuthorityExchange.js';
 import type { OverlordRestoreState } from './overlordRestoreState.js';
+import { readChatEarlierQuery, readChatThreadQuery } from '../../../shared/overlordChat.js';
+import type { FleetIO } from '../io.js';
+import { composeChat } from './overlordChat.js';
+import {
+  CHAT_EARLIER_PAGEABLE, CHAT_PAGE_ROWS, chatDesignation, chatThreadComposed, earlierComposed, earlierStep, generationsFact, messagesFact,
+  readinessFact, type GenerationsRead, type MessagesPageRead, type ReadinessChangesRead,
+} from './overlordChatDoor.js';
+import { historyAgentFor, historyDoorAnswer, type HistoryLink } from './overlordHistory.js';
+import type { runOverlordRead } from './overlordRead.js';
 
 // ── the port ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -128,6 +137,18 @@ export interface OverlordRouteDeps {
   readonly restore?: Pick<OverlordRestoreState, 'confirm' | 'authority'>;
   /** The authority journal (`AuthorityAppender`), handed to the writers that append. */
   readonly journal: AuthorityAppender;
+  /** The chat's two reads (Overlord W1 chat, Tasks 2 and 3): the one read runner, in its operator mode; the private store's page of
+   *  messages (the store itself, so the words are read in the door's handler: `operator-message-readers`), absent without a store;
+   *  one identity's generations; the readiness changes; and the history door's agent links and port. Absent (a test server, a
+   *  script): both doors answer 503 `unavailable` after the gate and the designation. */
+  readonly chat?: {
+    readonly readRunner: ReturnType<typeof runOverlordRead>;
+    readonly messages: { messagesPage(beforeId: number | null, limit: number): MessagesPageRead } | undefined;
+    readonly generationsOf: (identity: string) => GenerationsRead;
+    readonly readinessChanges: (sinceMs: number, untilMs: number) => ReadinessChangesRead;
+    readonly links: () => readonly HistoryLink[];
+    readonly io: Pick<FleetIO, 'overlordHistory'>;
+  };
   readonly body: OverlordBody;
   /** The first prompt goes through the renewal lane's port (X4). */
   readonly host: Pick<SessionHost, 'deliver'>;
@@ -448,22 +469,33 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
   }
 
   // POST: Rebind the Overlord (designation B, plan Task 6): a replacement for a lost body, pending beside the live binding.
+  // A call that names the binding its caller saw (home C, slug forced-rebind-names-the-session-it-stops) is compared with the
+  // designation behind the plain gate and BEFORE the step-up, so a binding that moved is refused before the operator is asked to
+  // confirm an act that would then be refused; and again on the serialiser, where nothing can move it between the read and the
+  // stop. The pair is only compared: the door acts on what it read itself. A call with no pair behaves as before.
   app.post('/api/overlord/rebind', async (req, reply) => {
+    const parsed = parseRebindBody(req.body);
+    if (parsed?.saw !== undefined) {
+      if (!deps.gate(req, reply, { cap: null }).pass) return reply;
+      const moved = rebindMovedDetail(coord.designationRead(), parsed.saw);
+      if (moved !== null) return refuseRoute(reply, 'stale-designation', { detail: moved });
+    }
     const g = deps.gate(req, reply, { cap: null, stepUp: true });
     if (!g.pass) return reply;
-    const parsed = parseRebindBody(req.body);
     if (parsed === null) return refuseRoute(reply, 'bad-request', { detail: 'body' });
     const actor = deps.identity.operator(g.actor);
     const dec = deps.dec(req);
-    return deps.serial(() => rebind(reply, parsed.force, actor, dec));
+    return deps.serial(() => rebind(reply, parsed.force, parsed.saw, actor, dec));
   });
 
-  async function rebind(reply: FastifyReply, force: boolean, actor: RecordedActor, dec: ActorFlags | null): Promise<FastifyReply | Record<string, unknown>> {
+  async function rebind(reply: FastifyReply, force: boolean, saw: RebindSaw | undefined, actor: RecordedActor, dec: ActorFlags | null): Promise<FastifyReply | Record<string, unknown>> {
     // A rebind's go-live is a widening the journal must record: refuse before any stop or create while it is not coherent.
     const auth = facts.authority?.() ?? { kind: 'coherent' };
     if (auth.kind === 'rolled-back') return refuseRoute(reply, 'authority-rolled-back', { detail: `the authority journal reads rolled-back: ${auth.cause}` });
     if (auth.kind === 'unmeasured') return refuseRoute(reply, 'journal-unreadable', { detail: `the authority journal reads unmeasured: ${auth.why}` });
     const read = coord.designationRead();
+    const moved = saw === undefined ? null : rebindMovedDetail(read, saw);
+    if (moved !== null) return refuseRoute(reply, 'stale-designation', { detail: moved });
     const oldId = read.kind === 'designated' ? read.sessionId : null;
     const slug = shortId();
     const id = workspaceId(OVERLORD_PROJECT, slug);
@@ -604,6 +636,56 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
       const owedIds = standing.kind === 'unmeasured' || standing.row === null ? r.owed : standing.row.stopsOwed;
       const drained = await drainOwedStops(deps, owedIds);
       return { ok: true, changed: true, term: r.term, stopped: drained.stopped, owed: drained.owed };
+    });
+  });
+
+  // The chat's thread (Overlord W1 chat, Task 2): the account gate with no cap (refused while sign-in is off, before any read), the
+  // query, the designation's three arms, then the read runner in its operator mode, door `chat`: the console's ceiling, the facts
+  // each read once, and one line. No designation is a measured absence: 200, no read, no line.
+  app.get('/api/overlord/chat', async (req, reply) => {
+    if (!deps.gate(req, reply, { cap: null }).pass) return reply;
+    const q = readChatThreadQuery(req.query);
+    if (!q.ok) return refuseRoute(reply, 'bad-request', { detail: q.detail });
+    const d = chatDesignation(coord.designationRead());
+    if (d.kind === 'refuse') return refuseRoute(reply, d.word, { detail: d.detail });
+    if (d.kind === 'none') return d.thread;
+    const chat = deps.chat;
+    if (chat === undefined) return refuseRoute(reply, 'unavailable', { detail: 'the chat reads are not wired on this server' });
+    return chat.readRunner(req, reply, {
+      door: 'chat', caller: 'operator',
+      compose: () => chatThreadComposed(composeChat({
+        designation: { kind: 'designated', sessionId: d.sessionId, term: d.term },
+        messages: messagesFact(chat.messages?.messagesPage(q.before, CHAT_PAGE_ROWS) ?? { kind: 'unmeasured', why: 'no private store' }),
+        generations: generationsFact(chat.generationsOf(d.identity)),
+        readiness: readinessFact(chat.readinessChanges(0, Number.MAX_SAFE_INTEGER)),
+        pageable: CHAT_EARLIER_PAGEABLE,
+      })),
+    });
+  });
+
+  // An earlier generation's page (Overlord W1 chat, Task 3), through the history door's own choice and mapping: the gate, the
+  // query, the designation, then the runner's operator mode, door `chat-history`. No designation has no generation to read: 400
+  // `no-generation`, with no line because no read is attempted and nothing is counted (slug `earlier-door-none-is-no-generation`).
+  app.get('/api/overlord/chat/earlier', async (req, reply) => {
+    if (!deps.gate(req, reply, { cap: null }).pass) return reply;
+    const q = readChatEarlierQuery(req.query);
+    if (!q.ok) return refuseRoute(reply, 'bad-request', { detail: q.detail });
+    const d = chatDesignation(coord.designationRead());
+    if (d.kind === 'refuse') return refuseRoute(reply, d.word, { detail: d.detail });
+    if (d.kind === 'none') return refuseRoute(reply, 'bad-request', { detail: 'no-generation' });
+    const chat = deps.chat;
+    if (chat === undefined) return refuseRoute(reply, 'unavailable', { detail: 'the chat reads are not wired on this server' });
+    const ac = new AbortController();
+    reply.raw.once('close', () => { if (!reply.raw.writableFinished) ac.abort(); });
+    const { gen, around } = q.req;
+    return chat.readRunner(req, reply, {
+      door: 'chat-history', caller: 'operator',
+      compose: async () => {
+        const step = earlierStep(generationsFact(chat.generationsOf(d.identity)), gen, around, CHAT_EARLIER_PAGEABLE);
+        if (step.kind === 'composed') return step.composed;
+        const choice = historyAgentFor(chat.links());
+        return earlierComposed(gen, historyDoorAnswer(choice.kind === 'agent' ? await chat.io.overlordHistory(step.request, ac.signal) : choice), step.scope);
+      },
     });
   });
 

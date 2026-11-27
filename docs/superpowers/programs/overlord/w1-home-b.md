@@ -204,7 +204,8 @@ a slug, and the coordinator mints its number when it folds this note into the le
   - F7: a missing approvals field read as none: both missing-field cases red;
   - M1 with M7: the accounts wait dropped, untagged always on, untagged always off: each red in its cases;
   - M2: the plain table index and a blank default: the unknown-reason case red; M6 (capacity): the shape guard as `true`: two
-    cases red; M6 (ladder): an unread ladder not a raise: two cases red;
+    cases red; M6 (ladder): an unread ladder not a raise: two cases red (these two are pins of old behaviour, not red before the
+    fix: the old hook already counted an unread ladder as a raise, so only the mutant reds them; review 4021, F4);
   - M3: every act reading Start's sentence: the act case red; M4: a literal body word back in the words file: the scan red, a
     literal rank-changed sentence: its case red; M5: the early return back: both step-up cases red; M8: the overflow line
     back in the routine section: its case red; M11: the visible ruling removed: the hidden-frame case red (two reads).

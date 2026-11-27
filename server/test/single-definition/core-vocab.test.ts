@@ -856,7 +856,9 @@ describe('Build 7 nouns', () => {
     // The admission wake (D-6095, capacity Task 4): `admissionWakeTx.ts` is its one write, the observation row, the mail and
     // the woken stamp in one transaction, in `rundefsTx.ts`' idiom (`queueStallNotice`), beside it while that file is frozen.
     // The one sequence (Overlord W1, §10.4): `overlordSequenceStore.ts` is `overlord_sequence`'s SQL, in the same idiom.
-    const HANDLE_HOLDERS = new Set(['store.ts', 'rundefsTx.ts', 'routes.ts', 'db.ts', 'schema.ts', 'tx.ts', 'ledgersStore.ts', 'reviewCapStore.ts', 'linkingStore.ts', 'coordCallsStore.ts', 'practiceCasesStore.ts', 'planStore.ts', 'claudeBuildsStore.ts', 'claudeBuildDeliveriesStore.ts', 'pushOutboxStore.ts', 'portfolioStore.ts', 'answerMarkStore.ts', 'overlordAuthorityJournal.ts', 'overlordLadderStore.ts',
+    // The box frames recipe (Desktop polish wave 187): `claudeBuildFramesStore.ts` is `claude_build_frames`' SQL, in the
+    // delivery store's idiom, behind `CoordStore`'s delegates.
+    const HANDLE_HOLDERS = new Set(['claudeBuildFramesStore.ts','store.ts', 'rundefsTx.ts', 'routes.ts', 'db.ts', 'schema.ts', 'tx.ts', 'ledgersStore.ts', 'reviewCapStore.ts', 'linkingStore.ts', 'coordCallsStore.ts', 'practiceCasesStore.ts', 'planStore.ts', 'claudeBuildsStore.ts', 'claudeBuildDeliveriesStore.ts', 'pushOutboxStore.ts', 'portfolioStore.ts', 'answerMarkStore.ts', 'overlordAuthorityJournal.ts', 'overlordLadderStore.ts',
       'responsesStore.ts', 'claimCollisions.ts', 'programmePairsStore.ts', 'decisionModelStore.ts',
       'programmeFactsStore.ts', 'overlordDesignationStore.ts', 'approvalCensusStore.ts', 'overlordGateStore.ts', 'approvalParkStore.ts', 'admissionWakeTx.ts', 'skillRolloutTx.ts', 'overlordSequenceStore.ts',
       'overlordRestoreState.ts', 'lifecycleLaneRows.ts',
@@ -1089,8 +1091,10 @@ describe('store.ts docstrings that describe their own callers', () => {
 // ── the Overlord gate's words have one home (Overlord W1 gates B, plan w1-gates.md Task 6; spec §11.2) ──────────────
 //
 // The gate's own words are spelled where the gate decides: `not-the-overlord`, `stale-designation` and `card-unread` as string
-// literals only in `coord/overlordGate.ts`, with two measured exceptions pinned below for `stale-designation` (the
-// private-store message door and the prompt door, both older than the gate). `stale-generation` and `unwitnessed` are pinned
+// literals only in `coord/overlordGate.ts`, with three measured exceptions pinned below for `stale-designation` (the
+// private-store message door and the prompt door, both older than the gate, and the forced rebind's pair at the rebind door,
+// home C, ruled call 1685: the console's session and term against the binding, asked before the gate's step-up, which is not
+// a gate fence). `stale-generation` and `unwitnessed` are pinned
 // holder lists. Literals only, comments excluded: a string literal, a template without substitutions or a type's literal
 // member, read with the repo's one parser wrapper. A door that refuses with a gate word of its own instead of asking the
 // runner turns this red. Loaded dynamically so this file's import block, and the lines cited from it, stay where they are.
@@ -1127,8 +1131,10 @@ describe('the Overlord gate words have one home (W1 gates B, Task 6)', () => {
     expect(await holders('not-the-overlord')).toEqual([GATE]);
     expect(await holders('card-unread')).toEqual([GATE]);
   });
-  it("'stale-designation' is held by the gate and by exactly two older doors (measured; the plan expected the gate alone)", async () => {
-    expect(await holders('stale-designation')).toEqual([GATE, 'server/src/operatorModel/messages.ts', 'server/src/server.ts']);
+  it("'stale-designation' is held by the gate, by exactly two older doors and by the rebind door's pair (measured; the plan expected the gate alone)", async () => {
+    expect(await holders('stale-designation')).toEqual([
+      GATE, 'server/src/coord/overlordRoutes.ts', 'server/src/operatorModel/messages.ts', 'server/src/server.ts',
+    ]);
   });
   it("'stale-generation' is held exactly by the pinned list: the gate, the delegation lease's three files, retire, and the continuity claim door's two", async () => {
     expect(await holders('stale-generation')).toEqual([

@@ -6,7 +6,7 @@ import { Drawer } from 'vaul';
 import { createContext, useCallback, useContext, useEffect, useRef } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode, RefObject } from 'react';
 import { cn } from '../lib/cn';
-import { liftHandedAtUnmount, recordModalLayer } from '../lib/modal-layers';
+import { liftHeld, recordModalLayer } from '../lib/modal-layers';
 import { EYEBROW } from '../lib/text';
 import { SHEET_DESK_MOTION_VARS, SHEET_MOTION_VARS, VAUL_MOTION } from '../lib/motion';
 import { useDesk } from '../lib/use-media-query';
@@ -214,7 +214,7 @@ function useSheetFocus(open: boolean, initialFocus: RefObject<HTMLElement | null
  *  is lifted (review 2334 F1 and F2). Radix's focus guards are left too. Radix's own undo at the unmount then removes what
  *  is left, but never an `aria-hidden` it found set. One such node is left: the console reader mode hid as the page's own and
  *  released while this sheet was open, which stays hidden for the close to lift. A sheet that UNMOUNTS open is no close, so
- *  its unmount gives that node back once no open dialog stands (`liftHandedAtUnmount`; X6 XR fix round 2, review 4043 F1).
+ *  its unmount gives that node back once no open dialog stands (`liftHeld`; X6 XR fix round 2, review 4043 F1).
  *
  *  THE READ IS AT THE PANEL'S MOUNT, in its callback ref. Radix mounts a dialog's content at least one commit after `open`
  *  turns true (its portal, and for a Root that mounted closed its presence, mount first), so the ref runs in a layout
@@ -257,10 +257,13 @@ function useHidingFollowsOpen(open: boolean): (el: HTMLElement | null) => void {
   }, [open]);
   // THE UNMOUNT'S LIFT (X6 XR fix round 2, review 4043 F1). A sheet that unmounts while open lifts nothing above (`open` never
   // turns false), and reader mode may have ended behind it, leaving the console hidden for it (`releaseAsPage`). The passive
-  // cleanup runs after the panel has left the document, so this sheet's own dialog no longer counts as open there. StrictMode's
-  // simulated unmount lifts nothing, because the panel is then still in the document and still open, and neither does an
-  // unmount while another dialog is open: the lift looks for no open dialog at all.
-  useEffect(() => liftHandedAtUnmount, []);
+  // cleanup runs after the panel has left the document, so this sheet's own dialog no longer counts as open there. An unmount
+  // while another dialog is open lifts nothing: the lift looks for no open dialog at all. StrictMode's simulated unmount lifts
+  // nothing from behind an open dialog for the same reason. For a sheet portaled into the reading container (every Docs body sheet,
+  // the only kind reader mode can hand to) that dialog includes the sheet's own panel, which is then still in the document and
+  // open; a body-portaled sheet draws its panel one commit after its mount (Radix's portal), so at its simulated unmount only
+  // another open dialog holds the lift back (review 4052 A2).
+  useEffect(() => liftHeld, []);
   return useCallback((el: HTMLElement | null): void => {
     if (el !== null) pageOwn.current = recordModalLayer(el);
     panel.current = el;

@@ -142,6 +142,7 @@ import { actKeyFact, advanceCounterGuarded, recordFenceRefusal } from './coord/o
 import { CONTINUITY_LANE } from '../../shared/lane-arm.js';
 import { NO_LADDER_AUTHORITY } from './coord/overlordAuthorityJournal.js';
 import { renewalHostOf } from './continuity/renewalWiring.js';
+import { generationsOf } from './continuity/continuityStore.js';
 import { placeMarkReporter } from './continuity/placeMarkReport.js';
 import { registerResponseRoutes } from './responses/routes.js';
 import { readLinearStore } from './linear/store.js';
@@ -335,11 +336,16 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/overlord/inbox', '/api/overlord/messages/:id',
   // The Overlord's board (W1 PR B2): programme titles, session ids and item titles a session wrote, each marked untrusted.
   '/api/overlord/board',
+  // The chat's thread and an earlier generation's page (W1 chat): the operator's words, and the Overlord's text from its transcript.
+  '/api/overlord/chat', '/api/overlord/chat/earlier',
   // The operator's read of the invariant monitor (sequence C): findings' messages and unmeasured reasons carry composed text, a
   // producer's error detail among it, as the ladder's and the readiness word's `why` do.
   '/api/overlord/invariants',
   // Docs settings (X2 P4.3): the link rules are operator-entered text, not fixed server vocabulary.
   '/api/docs/settings',
+  // The box frames read (Desktop polish wave 187): a frame is text a build drew, reduced at source and checked again before it
+  // is served; a text the masker would change is refused there, so this hook never changes a frame it passes.
+  '/api/testbox/frames',
 ]);
 /** Whether the one answer hook masks a route's answer (D-5995). */
 export const answerMasked = (method: string, url: string | undefined): boolean =>
@@ -2554,6 +2560,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   registerOverlordRoutes(app, {
     gate: accountGate, identity, serial: coordRoutes.serial, ...overlordStore, exchange: deps.overlordAuthorityExchange, consoleFacts: (req) => ({ armed: deps.cfg.authEnabled, device: deps.cfg.authEnabled ? sessionAuth(req).device : null }), host: renewalHostOf(deps, deps.coord ?? { startsOf: () => ({ ok: false, detail: 'no coordination store' }) }, null),
     ladder: ladderDeps, restore: deps.overlordRestore, readiness: () => deps.overlordReadiness?.read() ?? null,
+    // The chat's two reads (W1 chat): the one runner, the store's page, the identity's generations, the readiness changes, the link.
+    chat: { readRunner, messages: deps.operatorModel,
+      generationsOf: (i) => (deps.coord === undefined ? { ok: false, detail: 'no coordination store' } : generationsOf(deps.coord.db, i)),
+      readinessChanges: (s, u) => deps.coord?.readinessChanges(s, u) ?? { ok: false, detail: 'no coordination store' },
+      links: () => (deps.fleetState === undefined ? [] : [deps.fleetState]), io: deps.io },
     invariants: deps.invariantMonitor === undefined || deps.coord === undefined ? undefined : invariantsReadOver(deps.invariantMonitor, deps.coord.db),
     // Read at call time, as the continuity routes read `deps.time`: a test server may hand none.
     clock: { wall: () => deps.time.clock.wall() }, entropy: { uuid: () => deps.time.entropy.uuid(), hex: (n) => deps.time.entropy.hex(n) }, dec: pwaDec,
