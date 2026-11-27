@@ -4,7 +4,8 @@
 // In the normal view it is `display: contents` (docs.css): no box, no z-index, transform or clip.
 //
 // It holds, in order: the leading focus guard, the body, `div.docs-reading-controls` (ccrc's overlay draws there, only while
-// reader mode is on and its state says the overlay is shown: `ReaderModeOverlay`, X6 XR2.1), the trailing focus guard, the polite
+// reader mode is on and its state says the overlay is shown: `ReaderModeOverlay`, X6 XR2.1; and, while reader mode is on with no frame
+// standing, the Exit alone: `ReaderModeExitOnly`, as `readerModeExitShown` says), the trailing focus guard, the polite
 // live region (inside the container, so the console's hiding never silences it) and `div.docs-reading-portal`, which it hands to
 // every `Sheet` under the body as its portal target (`SheetPortalContext`), so a sheet is drawn inside the element that goes full
 // screen, in both views, and is never moved as reader mode starts or ends.
@@ -13,7 +14,8 @@
 // focus on the trailing one goes into the frame.
 import { useContext, useRef, useState, type ReactNode } from 'react';
 import { SheetPortalContext } from '@ccrc/ui';
-import { ReaderModeOverlay, type ReaderModeOverlayHandle } from './ReaderModeOverlay';
+import { ReaderModeExitOnly, ReaderModeOverlay, type ReaderModeOverlayHandle } from './ReaderModeOverlay';
+import { readerModeExitShown } from './reader/readerMode';
 import { ReaderModeContext, type ReaderModeContainer } from './useReaderMode';
 
 /** One focus guard of the reading container's wrap (spec §6.5): in the tab order only while reader mode is on, and moving the focus
@@ -30,9 +32,12 @@ export function DocsReading(p: { reading: ReaderModeContainer; children: ReactNo
   const tabIndex = reading.on ? 0 : -1;
   // What the state says: the overlay is drawn only while reader mode is on, it is shown, and a frame stands to give its title.
   const shown = ctx !== null && ctx.state.on && ctx.state.overlay && ctx.frame !== null ? ctx.frame : null;
+  // With reader mode on and no frame standing (the leaf is changing or failed), the Exit alone is drawn with no tap (X6 XR fix
+  // round 1): `readerModeExitShown` decides, and no phone has a key or a browser Back to leave with.
+  const exitOnly = ctx !== null && readerModeExitShown({ on: ctx.state.on, frameStands: ctx.frame !== null });
   const onLeadingGuard = (): void => {
     if (!reading.on) return;
-    if (shown !== null) overlay.current?.focusLast();
+    if (shown !== null || exitOnly) overlay.current?.focusLast();
     else reading.focusFrame();
   };
   const onTrailingGuard = (): void => {
@@ -51,6 +56,7 @@ export function DocsReading(p: { reading: ReaderModeContainer; children: ReactNo
             {...(shown.readingMinutes === undefined ? {} : { readingMinutes: shown.readingMinutes })}
           />
         )}
+        {ctx !== null && exitOnly && <ReaderModeExitOnly ref={overlay} onExit={() => ctx.exit('exit-tap')} onActivity={ctx.activity} />}
       </div>
       <FocusGuard tabIndex={tabIndex} onFocus={onTrailingGuard} />
       <p className="docs-reading-live sr-only" aria-live="polite">{reading.live}</p>

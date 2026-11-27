@@ -79,6 +79,31 @@ function useShare(progress: ReaderProgress): number {
   return share;
 }
 
+/** The Exit button, written once: the overlay's and the frameless form's. A tap counts as activity, then leaves. */
+function ExitButton(p: { onExit(): void; onActivity(): void; buttonRef?: Ref<HTMLButtonElement> }): ReactNode {
+  return (
+    <button
+      type="button" className="docs-reading-exit" ref={p.buttonRef} aria-label={READER_MODE_TEXT.exit}
+      onClick={() => { p.onActivity(); p.onExit(); }}
+    >
+      {READER_MODE_TEXT.exitShown}
+    </button>
+  );
+}
+
+/** The toolbar with Exit alone, for reader mode on with no frame standing (X6 XR fix round 1): no title, no turn switch, no Aa and
+ *  no progress, since each of those belongs to a frame. It is drawn with no tap and takes no focus when it appears (a frame
+ *  that comes back must not find focus pulled to it unasked); the leading focus guard reaches it through `focusLast`. */
+export function ReaderModeExitOnly(p: { onExit(): void; onActivity(): void; ref?: Ref<ReaderModeOverlayHandle> }): ReactNode {
+  const bar = useRef<HTMLDivElement>(null);
+  useImperativeHandle(p.ref, () => ({ focusLast: () => { bar.current?.querySelector('button')?.focus(); } }), []);
+  return (
+    <div className="docs-reading-bottom" role="toolbar" aria-label={READER_MODE_TEXT.toolbar} ref={bar}>
+      <ExitButton onExit={p.onExit} onActivity={p.onActivity} />
+    </div>
+  );
+}
+
 export function ReaderModeOverlay(p: ReaderModeOverlayProps): ReactNode {
   const { progress, onExit, onAa, onDismiss, onEsc, onActivity, turn, onTurn } = p;
   const exit = useRef<HTMLButtonElement>(null);
@@ -123,12 +148,7 @@ export function ReaderModeOverlay(p: ReaderModeOverlayProps): ReactNode {
       </div>
       <div className="docs-reading-layer" aria-hidden="true" onClick={onDismiss} />
       <div className="docs-reading-bottom" role="toolbar" aria-label={READER_MODE_TEXT.toolbar} ref={bar} onKeyDown={onKeyDown}>
-        <button
-          type="button" className="docs-reading-exit" ref={exit} aria-label={READER_MODE_TEXT.exit}
-          onClick={() => { onActivity(); onExit(); }}
-        >
-          {READER_MODE_TEXT.exitShown}
-        </button>
+        <ExitButton buttonRef={exit} onExit={onExit} onActivity={onActivity} />
         <div className="docs-reading-turns" role="radiogroup" aria-label={READER_MODE_TEXT.turn} onKeyDown={onTurnKey}>
           {TURNS.map(([way, word]) => (
             <button

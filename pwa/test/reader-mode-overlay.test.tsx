@@ -467,7 +467,10 @@ describe('overlay: a dropped frame (X6 XR1.4)', () => {
     frame.focus.mockClear();
     // The body ends (a new commit, a part switch): its frame is dropped, as `ReaderFrame`'s cleanup does.
     act(() => { latest.dropFrame(frame); });
-    expect(toolbar(), 'the overlay outlived its frame').toBeNull();
+    // With no frame standing the Exit alone is drawn (X6 XR fix round 1): none of the overlay's own controls outlives its frame.
+    expect(toolbar()?.querySelectorAll('button').length, 'more than the Exit outlived the frame').toBe(1);
+    expect(toolbar()?.querySelector('[role="radiogroup"]'), 'the turn setting outlived its frame').toBeNull();
+    expect(document.querySelector('.docs-reading-top'), 'the title strip outlived its frame').toBeNull();
     expect(layer(), 'the layer outlived its frame').toBeNull();
     expect(latest.state.on, 'dropping the frame left reader mode').toBe(true);
     expect(latest.state.on && latest.state.overlay, 'the state still says the overlay shows').toBe(false);

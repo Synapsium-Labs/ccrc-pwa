@@ -240,6 +240,14 @@ export function readerModeOffered(input: { frameReady: boolean; plainView: boole
   return input.frameReady && !input.plainView && !input.modalMounted;
 }
 
+/** Whether ccrc draws its own Exit with no frame to give an overlay (X6 XR fix round 1): reader mode is on and no frame stands.
+ *  The document's leaf has left `ok` (changing, failed) or the next mount is not in yet, the console is hidden under the fill, and
+ *  on a phone's installed app there is no key and no browser Back: without this the operator has nothing of ccrc's to leave with.
+ *  It is the frameless form's only decision; a standing frame has the overlay (`state.overlay`) and its own menu. */
+export function readerModeExitShown(input: { on: boolean; frameStands: boolean }): boolean {
+  return input.on && !input.frameStands;
+}
+
 /** The one wake-lock decider, re-read on every state change: on, visible, and active within `READER_WAKE_IDLE_MS`. */
 export function wakeLockWanted(input: { on: boolean; visible: boolean; lastActivityMs: number; nowMs: number }): boolean {
   return input.on && input.visible && input.nowMs - input.lastActivityMs < READER_WAKE_IDLE_MS;

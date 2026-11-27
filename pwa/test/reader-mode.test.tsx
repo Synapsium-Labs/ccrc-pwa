@@ -1034,3 +1034,57 @@ describe('reader place: the hook with the real port (X6 XR1.3)', () => {
     expect(location.pathname).toBe('/before');
   });
 });
+
+// ─── fix round 1 (X6 XR fix round 1) ───────────────────────────────────────────────────────────────────────────────────
+
+/** The hook, its context and the container, as the Docs screen draws them: the overlay and the frameless Exit read the context. */
+function CtxHarness(p: { frame: ReaderModeFrame | null; places?: ReaderModePlaces }): ReactNode {
+  const { value, container } = useReaderMode({ doc: 'doc-a', plainView: false, places: p.places });
+  latest = value;
+  const setFrame = value.setFrame;
+  const { frame } = p;
+  useEffect(() => { setFrame(frame); }, [setFrame, frame]);
+  return (
+    <ReaderModeContext value={value}>
+      <DocsReading reading={container}>
+        <div className="docs-leaf"><div className="docs-reader" data-testid="host" /></div>
+      </DocsReading>
+    </ReaderModeContext>
+  );
+}
+
+describe('reader mode: an Exit with no frame standing (X6 XR fix round 1, item 2)', () => {
+  it('no frame: with reader mode on and the leaf failed, the Exit control is drawn without a tap, and it leaves once', async () => {
+    installFullScreen();
+    const places = fakePlaces();
+    const frame = fakeFrame();
+    const view = render(<CtxHarness frame={frame} places={places} />);
+    act(() => { latest.enter('button'); });
+    await flush();
+    expect(latest.state.on).toBe(true);
+    expect(screen.queryByRole('button', { name: READER_MODE_TEXT.exit }), 'CONTROL: the overlay is hidden while a frame stands').toBeNull();
+    // The leaf leaves `ok` (changing or failed): its frame is dropped, and reader mode stays on.
+    view.rerender(<CtxHarness frame={null} places={places} />);
+    await flush();
+    expect(latest.state.on, 'dropping the frame ended reader mode').toBe(true);
+    const exit = screen.getByRole('button', { name: READER_MODE_TEXT.exit });
+    expect(reading().contains(exit), 'the Exit is outside the reading container').toBe(true);
+    expect(screen.queryByRole('radio'), 'the frameless form draws a turn switch').toBeNull();
+    expect(screen.queryByRole('button', { name: READER_MODE_TEXT.aa }), 'the frameless form draws Aa').toBeNull();
+    act(() => { exit.click(); });
+    expect(latest.state.on, 'the Exit did not leave reader mode').toBe(false);
+    expect(places.stepBack, 'the exit did not step back once').toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: READER_MODE_TEXT.exit }), 'the Exit stayed after leaving').toBeNull();
+  });
+
+  it('no frame: reader mode off draws no Exit, and a standing frame with the overlay hidden draws none either', async () => {
+    installFullScreen();
+    const view = render(<CtxHarness frame={null} places={fakePlaces()} />);
+    expect(screen.queryByRole('button', { name: READER_MODE_TEXT.exit }), 'an Exit while reader mode is off').toBeNull();
+    view.rerender(<CtxHarness frame={fakeFrame()} places={fakePlaces()} />);
+    act(() => { latest.enter('button'); });
+    await flush();
+    expect(screen.queryByRole('button', { name: READER_MODE_TEXT.exit }), 'an Exit beside a standing frame').toBeNull();
+  });
+});
+
