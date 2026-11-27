@@ -64,6 +64,7 @@ import { HOST_UNMEASURED_WHYS } from '../../shared/pressure.js';
 import { isClaimsMoveRefusal, isDriftKind, isRunSpendUnmeasuredReason, isStuckCause, isStuckReason, isRunWaitsOn } from '../../shared/api.js';
 import { isDelegationPolicyKebab } from '../src/coord/delegation-policy.js';
 import { isDelegationCompactionKebab } from '../src/coord/delegation-compaction.js';
+import { isDelegationEventProjectionKebab } from '../src/coord/delegation-event-projection.js';
 import { isDelegationProjectionKebab } from '../src/coord/delegation-projection.js';
 import { isDelegationLeaseStateKebab } from '../src/coord/delegation-lease-state.js';
 import { isDelegationAdoptionKebab } from '../src/coord/delegation-adoption.js';
@@ -1160,6 +1161,11 @@ describe('the rejection table is total, in both directions', () => {
         // a mail rejection or a run refusal: they ride the journal and the lease doors' outcomes. Admitted through the exported guard,
         // derived from the module's three tables, never NOT_CODES.
         || isDelegationLeaseStateKebab(tok)
+        // DELEGATION EVENTS RETENTION (D-9167, D-9170): the kept-classes rule's words, beside the lease table's and never merged into it.
+        // `coord/delegation-event-projection.ts` spells its record classes (`bash-plain`, ...), the automatic stop's reasons and the stop
+        // notice's feed key as literals. None is a mail rejection or a run refusal: they ride the contract row, the daily line and the
+        // notice. Admitted through the exported guard, derived from the module's tables, never NOT_CODES.
+        || isDelegationEventProjectionKebab(tok)
         // DELEGATION BROKER, WAVE 5 (PR8): the lease doors' words, beside the lease table's and never merged into it.
         // `coord/delegation-lease-acts.ts` spells the doors' refusals (`shared/api.ts#LEASE_DOOR_REFUSALS`, read and never re-spelled)
         // and the `operator-retain` reason. The doors' refusals ARE route refusals, sent through `refuseRoute` at the one status that
