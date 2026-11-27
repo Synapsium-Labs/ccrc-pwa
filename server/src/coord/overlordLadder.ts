@@ -1,17 +1,19 @@
 // The Overlord's authority ladder, deciders (Overlord spec §7.5, Table 7.5a, §7.6, §11.2; plan
 // `docs/superpowers/plans/2026-11-14-overlord-w1/w1-ladder.md` Task 1). Ring L1, context C5: pure decisions over facts a
-// door or a reader gathers. It imports L0 (`shared/overlord-ladder.ts`) only, makes no I/O and reads no clock, and it
+// door or a reader gathers. It imports L0 (`shared/overlord-ladder.ts`, and the act catalogue `shared/overlord.ts` for the
+// rung cells) only, makes no I/O and reads no clock, and it
 // declares no wire type of its own: every word the wire carries is L0's. Deciders: `effectiveRung` (computed, never
 // stepped), `rungMoveVerdict` (the rung door's and Pause's one decider), `offStep` and `rungStep` (the gate order's
 // steps 4 and 10), `narrowingState` (§7.6's "taking effect") and the rung-word pair, `highestHeldRung` and
 // `rungWordReading` (the W2 route plan's RV8 row, `rung-word-missing`).
 import {
-  LADDER_DEFAULT_RUNG, RUNGS, RUNG_CELLS, rungNeeds, rungRank, LADDER_EFFECT_KINDS, NARROWING_STATES,
-  NARROWING_WHYS, LADDER_CAUSES, LADDER_READERS, LADDER_ACT_KINDS,
+  LADDER_DEFAULT_RUNG, RUNGS, rungNeeds, rungRank, LADDER_EFFECT_KINDS, NARROWING_STATES,
+  NARROWING_WHYS, LADDER_CAUSES, LADDER_READERS,
 } from '../../../shared/overlord-ladder.js';
 import type {
-  Binding, ConditionReading, LadderActKind, LadderCauseRow, NarrowingState, ReadByEntry, Rung,
+  Binding, ConditionReading, LadderCauseRow, NarrowingState, ReadByEntry, Rung,
 } from '../../../shared/overlord-ladder.js';
+import { OVERLORD_ACT_KINDS, OVERLORD_ACT_KIND_LIST, type OverlordActKind } from '../../../shared/overlord.js';
 import type { DesignationRead } from '../../../shared/overlord-designation.js';
 import type { GenerationState } from '../../../shared/continuity.js';
 
@@ -129,7 +131,7 @@ export const LANE_RAISER_MAP = { 'renewal-lane': 'the renewal readings, for prob
 
 /** The ladder's local and shared vocabulary, for the coordination kebab census. */
 export const isLadderKebab = (word: string): boolean =>
-  [LADDER_EFFECT_KINDS, NARROWING_STATES, NARROWING_WHYS, LADDER_CAUSES, LADDER_READERS, LADDER_ACT_KINDS,
+  [LADDER_EFFECT_KINDS, NARROWING_STATES, NARROWING_WHYS, LADDER_CAUSES, LADDER_READERS, OVERLORD_ACT_KIND_LIST,
     Object.keys(LADDER_WRITER_REFUSAL_MAP), Object.keys(RUNG_MOVE_WHY_MAP), Object.keys(DOOR_CLASS_MAP), Object.keys(WITNESS_READING_MAP), Object.keys(GENERATION_ABSENCE_MAP), Object.keys(LANE_RAISER_MAP)]
     .some((words) => (words as readonly string[]).includes(word));
 
@@ -171,11 +173,13 @@ export function offStep(operatorRung: Rung, door: DoorClass): { readonly pass: t
 }
 
 type RungCells = Readonly<Record<string, Readonly<Record<Exclude<Rung, 'off'>, 'allow' | 'refuse'>>>>;
+/** The act catalogue's cells by kind, derived from its rows (`shared/overlord.ts`, the one home), never written out here. */
+const CATALOGUE_CELLS: RungCells = Object.fromEntries(OVERLORD_ACT_KIND_LIST.map((k) => [k, OVERLORD_ACT_KINDS[k].rungs]));
 
-/** Step 10's rung half: the act's cell at the effective rung, skipped by card, probe and note at `off`. `cells` is
- *  `RUNG_CELLS`; a caller passes no other table, a test passes a synthetic one. A cell no rung allows names `full`. */
+/** Step 10's rung half: the act's cell at the effective rung, skipped by card, probe and note at `off`. `cells` is the act
+ *  catalogue's; a caller passes no other table, a test passes a synthetic one. A cell no rung allows names `full`. */
 export function rungStep(
-  effective: Rung, door: DoorClass, act: LadderActKind, cells: RungCells = RUNG_CELLS,
+  effective: Rung, door: DoorClass, act: OverlordActKind, cells: RungCells = CATALOGUE_CELLS,
 ): { readonly pass: true } | { readonly pass: false; readonly word: 'rung-below'; readonly needs: Rung } {
   if (effective === 'off' && door === 'card-probe-note') return { pass: true };
   const cell = cells[act]!;

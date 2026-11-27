@@ -10,7 +10,7 @@
 // `continuity/routes.ts` has a row or a `NOT_OVERLORD_DOORS` entry. An Overlord door carries the ladder's two columns (gates B):
 // its door class (steps 4 and 10) and its act kind (step 10's cell). The ladder's operator doors are listed below.
 import type { VerbClass } from '../../../shared/overlord-identity.js';
-import type { LadderActKind } from '../../../shared/overlord-ladder.js';
+import type { OverlordActKind } from '../../../shared/overlord.js';
 import type { DoorClass } from './overlordLadder.js';
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
@@ -34,9 +34,9 @@ export interface OverlordDoorRow extends DoorBase {
   readonly others: 'refuse' | 'hook';
   /** The ladder's door class: `card-probe-note` skips steps 3, 4, 6, 8, 9 and 10 (§11.2; slug handover-is-a-note-door). */
   readonly ladderClass: DoorClass;
-  /** Step 10's cell (the ladder's W1 act kinds), or null: the door performs no act kind, so step 10 is skipped for it and
-   *  only for it (the timer doors, §11.2: "a timer is no act kind"; slug timer-doors-name-no-act-kind). */
-  readonly act: LadderActKind | null;
+  /** Step 10's cell (an act kind of the catalogue, `shared/overlord.ts`), or null: the door performs no act kind, so step 10
+   *  is skipped for it and only for it (the timer doors, §11.2: "a timer is no act kind"; slug timer-doors-name-no-act-kind). */
+  readonly act: OverlordActKind | null;
   /** What step 1 does when the designation cannot be read: `refuse` every caller (gates B's answer), or decide `by-profile`:
    *  a caller whose launch profile is measured and not the Overlord's, or absent, is another session (the timer doors, so a
    *  coordinator's and a worker's timers keep working; slug timer-doors-unmeasured-designation-by-profile). */
@@ -59,7 +59,7 @@ const BOARD = 'server/src/coord/overlordBoardRoutes.ts';
 
 const operator = (method: HttpMethod, path: string, file: string, verbClass: VerbClass): OperatorDoorRow =>
   ({ group: 'operator', method, path, file, verbClass });
-const continuity = (method: HttpMethod, path: string, verbClass: VerbClass, write: boolean, act: LadderActKind): OverlordDoorRow =>
+const continuity = (method: HttpMethod, path: string, verbClass: VerbClass, write: boolean, act: OverlordActKind): OverlordDoorRow =>
   ({ group: 'overlord', method, path, file: CONTINUITY, verbClass, write, word: 'continuity-v1', others: 'hook', ladderClass: 'card-probe-note', act,
     unmeasuredDesignation: 'refuse' });
 /** A timer door (Overlord W1, the Overlord's timers): every other session keeps W1a's path (`hook`), all ten steps run but

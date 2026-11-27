@@ -5,7 +5,8 @@
 //     where `.github/ci/fast-plan.mjs#GUARD_TESTS` runs it on every fast pull request.
 // (2) One home for the rung words and for the rung cells: no `'off' | 'chat' | 'advise' | 'full'` union and no SQL `IN`
 //     list of the four words is spelled outside `shared/overlord-ladder.ts` (the tables carry no CHECK on the rung
-//     words; the writer validates against `RUNGS`), and `RUNG_MAP` and `RUNG_CELL_MAP` are defined once.
+//     words; the writer validates against `RUNGS`), and `RUNG_MAP` is defined once. The rung cells moved into the act
+//     catalogue (`shared/overlord.ts`, W2 act catalogue A1), which is their one home.
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -59,6 +60,7 @@ const code = (f: string): string =>
 const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(code(f))).map(rel).sort();
 
 const HOME = 'shared/overlord-ladder.ts';
+const CATALOGUE_HOME = 'shared/overlord.ts';
 // Scan whole consecutive literal lists, rather than one order or quote style. Extra literals are allowed, but all four
 // distinct rung words must be in the same list; separate smaller lists must never be joined into a false positive.
 const literalList = (separator: '|' | ','): RegExp => {
@@ -94,10 +96,11 @@ describe('one home for the rung words and the rung cells (F15)', () => {
   it('the four words are spelled as one list in no file (the authority journal reads RUNGS)', () => {
     expect(rungListHolders(',')).toEqual([]);
   });
-  it('RUNG_MAP and RUNG_CELL_MAP are defined in the home file and nowhere else', () => {
+  it('RUNG_MAP is defined in the home file and nowhere else, and the rung cells only in the act catalogue (W2 act catalogue A1)', () => {
     expect(holders(/\bconst RUNG_MAP\b/)).toEqual([HOME]);
-    expect(holders(/\bconst RUNG_CELL_MAP\b/)).toEqual([HOME]);
-    expect(holders(/\bexport const RUNG_CELLS\b/)).toEqual([HOME]);
     expect(holders(/\bexport const RUNGS\b/)).toEqual([HOME]);
+    // The cells moved: the catalogue's map is their one home, and the ladder's old names are gone everywhere, no alias left.
+    expect(holders(/\bconst OVERLORD_ACT_KIND_MAP\b/)).toEqual([CATALOGUE_HOME]);
+    expect(holders(/\bRUNG_CELL_MAP\b|\bRUNG_CELLS\b|\bLadderActKind\b|\bLADDER_ACT_KINDS\b/)).toEqual([]);
   });
 });

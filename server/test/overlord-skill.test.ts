@@ -10,7 +10,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { OVERLORD_DOORS } from '../src/coord/overlordDoors.js';
-import { RUNG_CELLS } from '../../shared/overlord-ladder.js';
+import { OVERLORD_ACT_KINDS } from '../../shared/overlord.js';
 import { TEAM_CONFIRM_REFUSALS, type TeamConfirmRefusal } from '../../shared/linking.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -387,7 +387,7 @@ describe('the Overlord skill: the team candidate (D-8809)', () => {
     const end = text.indexOf('\n\n', at);
     return text.slice(at, end === -1 ? undefined : end).replace(/\s*\n\s*/g, ' ');
   };
-  const cellsOf = RUNG_CELLS['link-team'] as Readonly<Record<string, string>>;
+  const cellsOf = OVERLORD_ACT_KINDS['link-team'].rungs as Readonly<Record<string, string>>;
 
   it('exists and names link team', () => {
     expect(paragraph()).toContain('`link team`');
