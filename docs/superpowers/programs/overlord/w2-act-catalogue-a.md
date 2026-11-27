@@ -111,6 +111,25 @@ other areas that changed: the floors pair (`server/test/sim/mutation-floors.test
 answered yes) and the inbox simulator's gate-word table with its count pin (`server/test/sim/overlordInboxSets.ts`,
 `server/test/overlord-inbox-deciders.test.ts`), because `GateWord` gained `act-ceiling`.
 
+## The three files the judge calls weakened
+
+The judge (horkos) is red on #3608 for `rules-mixed` (the skill suite's one import line, which the move required) and
+`proof-not-built`; the coordinator ruled to leave it so, with no alias and no split. Its non-blocking `test-weakened`
+names three files; for each, what the old assertion held, what the new one holds, and why nothing is lost:
+
+- **`server/test/overlord-inbox-deciders.test.ts`**: the old pin held the gate-word list the wake cases walk at exactly
+  fourteen; the new one holds exactly fifteen, the new row being `act-ceiling`, gate step 10's ceiling refusal. Nothing is
+  lost: the count stays exact, the list is a record over `GateWord`, so the compiler still holds it total, and every
+  case that walked the fourteen walks the fifteen, the wake holding on `act-ceiling` as on every refusal word.
+- **`server/test/sim/mutation-floors.test.ts`**: no assertion changed. The file gained one import and one spread
+  (`ACT_CATALOGUE_MUTANT_SETS`), and its floors file four keys at 1. Nothing is lost: every existing set and floor is as
+  on main, "no floor falls below its value at the merge-base" passes, and four more deciders now have every mutant killed.
+- **`server/test/single-definition/ladder-rung-words.test.ts`**: the old check held `RUNG_CELL_MAP` and `RUNG_CELLS`
+  defined only in `shared/overlord-ladder.ts`. The new one holds the cells' map, `OVERLORD_ACT_KIND_MAP`, defined only in
+  `shared/overlord.ts`, and the four old names absent from every source root, with three one-home scans added (a cell
+  map, the class-to-covers map, a list of act kinds). Nothing is lost: "defined once, in its home" still holds for the
+  new home, and the old names cannot come back as an alias.
+
 ## Mutation, before and after
 
 | Decider | Before (main) | After |
