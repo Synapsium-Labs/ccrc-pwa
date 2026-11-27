@@ -14,7 +14,7 @@
 //   ?build=<b>              the list: every stored frame's record with NO TEXT, and the parts with no current row
 //   ?build=<b>&frame=<id>   one frame: its row and its reduced text, or no text and why
 // So no answer is larger than one frame. The answer passes the one answer hook too (`MASKED_GET_ROUTES`).
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { isClaudeVersion } from '../../shared/claudeVersion.js';
 import { framesOurs } from '../../shared/framesCapture.js';
 import { framesListOf, type FramesRow } from '../../shared/framesLane.js';
@@ -22,12 +22,14 @@ import { checkReducedFrame } from '../../shared/framesReduce.js';
 import { FRAMES_PARTS, framesPartOfId, readFramesCaptureResult } from '../../shared/framesResult.js';
 import { framesScan } from '../../shared/framesScan.mjs';
 import type { SecretMasker } from './accounts/mask.js';
+import { refuseRoute } from './refuse.js';
 
 /** The route's path, its one spelling. */
 export const TESTBOX_FRAMES_ROUTE = '/api/testbox/frames';
 
-/** The refusal words, each its own. */
-export type FramesReadRefusal = 'unauthenticated' | 'bad-request' | 'bad-build' | 'bad-frame' | 'no-text' | 'unreadable' | 'not-configured';
+/** The refusals, each its own word, each answered at the one status `REFUSAL_STATUS` gives it (`refuseRoute`, D-5381):
+ *  `unauthenticated`, `bad-request` and `not-configured` are the table's shared words, and the read's own four are
+ *  `shared/refusal.ts#FRAMES_READ_REFUSALS`. */
 
 export interface TestboxFramesDeps {
   /** The store's rows, read fresh; absent: no coordination store. A throw is `unreadable`. */
@@ -49,28 +51,26 @@ export function readFramesQuery(q: unknown): { readonly build: string; readonly 
   return { build: o['build'], frame: keys === 'build,frame' ? (o['frame'] as string) : null };
 }
 
-const no = (reply: FastifyReply, code: number, error: FramesReadRefusal): FastifyReply => reply.code(code).send({ ok: false, error });
-
 export function registerTestboxFramesRoute(app: FastifyInstance, d: TestboxFramesDeps): void {
   // The path is written out, not the constant: the gate suite's source scan reads every route by its literal path.
   app.get('/api/testbox/frames', async (req, reply) => {
-    if (!d.session(req) && !d.boxToken(req)) return no(reply, 401, 'unauthenticated');
+    if (!d.session(req) && !d.boxToken(req)) return refuseRoute(reply, 'unauthenticated');
     const q = readFramesQuery(req.query);
-    if (q === null) return no(reply, 400, 'bad-request');
-    if (!isClaudeVersion(q.build)) return no(reply, 400, 'bad-build');
+    if (q === null) return refuseRoute(reply, 'bad-request');
+    if (!isClaudeVersion(q.build)) return refuseRoute(reply, 'bad-build');
     const part = q.frame === null ? null : framesPartOfId(q.frame);
-    if (q.frame !== null && part === null) return no(reply, 400, 'bad-frame');
-    if (d.frames === undefined) return no(reply, 503, 'not-configured');
+    if (q.frame !== null && part === null) return refuseRoute(reply, 'bad-frame');
+    if (d.frames === undefined) return refuseRoute(reply, 'not-configured');
     let rows: readonly FramesRow[];
     try { rows = d.frames(); } catch (err) {
       console.warn(`ccrc-server: GET ${TESTBOX_FRAMES_ROUTE}: the frames store could not be read (${err instanceof Error ? err.message : String(err)})`);
-      return no(reply, 503, 'unreadable');
+      return refuseRoute(reply, 'unreadable');
     }
     const list = framesListOf(rows, q.build);
     if (part === null) return reply.code(200).send({ ok: true, build: q.build, frames: list.frames, unmeasured: list.unmeasured });
     const row = list.frames.find((f) => f.part === part);
     const stored = rows.find((r) => r.build === q.build && r.part === part);
-    if (row === undefined || stored === undefined || stored.record === null || stored.text === null || !row.hasText) return no(reply, 404, 'no-text');
+    if (row === undefined || stored === undefined || stored.record === null || stored.text === null || !row.hasText) return refuseRoute(reply, 'no-text');
     // Served only as a whole result the one reader accepts, and only past the reducer's own check and the live masker,
     // run again here (the capture owner's condition 1): a text that fails goes out as its row and its word, never changed.
     const p = FRAMES_PARTS[part]!;

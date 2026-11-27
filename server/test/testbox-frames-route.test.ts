@@ -71,7 +71,8 @@ describe('the closed query', () => {
 
 describe('the store', () => {
   it('no store: not-configured; a store read that throws: unreadable, the error in one log line and never on the wire', async () => {
-    expect((await get(app({ frames: undefined }), `/api/testbox/frames?build=${BUILD}`)).json().error).toBe('not-configured');
+    const none = await get(app({ frames: undefined }), `/api/testbox/frames?build=${BUILD}`);
+    expect([none.statusCode, none.json().error]).toEqual([501, 'not-configured']); // the table's status for the word (D-5381)
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const r = await get(app({ frames: () => { throw new Error('disk SECRETWORD'); } }), `/api/testbox/frames?build=${BUILD}`);
     expect([r.statusCode, r.json().error]).toEqual([503, 'unreadable']);
