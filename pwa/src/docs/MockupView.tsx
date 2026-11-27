@@ -408,7 +408,8 @@ function MockupLive(p: MockupViewProps & {
     remount();
   };
 
-  const overBudget = build !== null && build.ok && loaderOverBudget(build.plan.rows);
+  // Only once scripts run: a static frame runs no module and fetches nothing, so it shows as before (review finding 5).
+  const overBudget = scripted && build !== null && build.ok && loaderOverBudget(build.plan.rows);
   let region: ReactNode;
   if (build === null) {
     region = <p className="docs-loading">{DOCS_VIEW_TEXT.loading}</p>;

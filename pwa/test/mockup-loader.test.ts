@@ -7,7 +7,7 @@
 import { createHash } from 'node:crypto';
 import { createElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { DocPin, DocsEntry, DocsPageLocation, DocsShowOk } from '../../shared/docs';
 import { DocsAssetContext, type DocsAssetContextValue } from '../src/docs/DocImage';
 import { MockupView } from '../src/docs/MockupView';
@@ -204,6 +204,8 @@ describe('X2 P6.2 the plan\'s seven cases', () => {
     const download = createElement('button', { type: 'button' }, 'Download');
     const { container } = render(createElement(DocsAssetContext, { value: assets },
       createElement(MockupView, { show, context: ctxOf(files), reader, page, relist: () => {}, download })));
+    // With scripts off the frame shows as before: nothing would load. Run scripts brings the answer.
+    fireEvent.click(await screen.findByRole('button', { name: MOCKUP_TEXT.runScripts }));
     expect(await screen.findByText(fillSentence(MOCKUP_TEXT.overBudget, { n: MOCKUP_MAX_ASSETS, size: kib(MOCKUP_MAX_ASSET_BYTES) }))).toBeTruthy();
     expect(container.querySelector('iframe')).toBeNull();
     expect(screen.getByRole('button', { name: DOCS_VIEW_TEXT.source })).toBeTruthy();
@@ -269,6 +271,34 @@ const c = await import('https://cdn.example/x.js');
     const shim = shimOf(r.out);
     expect(await (await shim.fetch('data.json')).json()).toEqual({ s: hostile });
     for (const s of scripts) expect(s.textContent ?? '').not.toMatch(/<\/script|<!--|\u2028|\u0000/i);
+  });
+
+  it('an inline module whose text holds <!-- is left as written: its imports are unreadable, and no hidden markup goes live', async () => {
+    const html = `<!doctype html><html><head><script type="module">import "./a.js"; //<!--<script>
+</script><script type="importmap">{"imports":{"x":"data:text/javascript,1"}}</script> --></script></head><body></body></html>`;
+    const r = await run(html, { 'a.js': 'export default 1;' });
+    const original = parseMockup(html);
+    if (!original.ok) throw new Error('refused');
+    const text = original.doc.querySelector('script[type="module"]')!.textContent;
+    expect(verdictOf(r, './a.js')).toEqual({ v: 'unsupported', why: 'unreadable' });
+    expect(r.calls).toEqual([]);
+    expect(mapsOf(r.out)).toHaveLength(0);
+    expect([...r.out.querySelectorAll('script[type="module"]')].map((s) => s.textContent)).toEqual([text]);
+  });
+
+  it('a literal https dynamic import in a sibling module is offered through Load external', async () => {
+    const r = await run('<!doctype html><html><head><script type="module" src="main.js"></script></head><body></body></html>', {
+      'main.js': "const m = await import('https://cdn.example/lazy.js');\n",
+    });
+    expect(verdictOf(r, 'https://cdn.example/lazy.js')).toEqual({ v: 'external', origin: 'https://cdn.example', via: 'src' });
+    expect(originsOf(r.plan.rows, [], 'console.example').offered.map((o) => o.origin)).toEqual(['https://cdn.example']);
+  });
+
+  it('a page map entry named __proto__ is written back like any other', async () => {
+    const r = await run(`<!doctype html><html><head><script type="importmap">{"imports":{"__proto__":"./lib.js"}}</script>
+<script type="module">import '__proto__';</script></head><body></body></html>`, { 'lib.js': 'export default 1;' });
+    const text = mapsOf(r.out)[0]!.textContent ?? '';
+    expect(text).toContain(`"__proto__":"${JS_PREFIX}`);
   });
 
   it('a three-deep graph is inlined bottom up, each module once', async () => {

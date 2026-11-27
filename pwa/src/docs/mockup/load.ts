@@ -146,9 +146,18 @@ export function extractMockupRefs(doc: Document, page: MockupBase): MockupExtrac
   /** An inline script's text, scanned: its imports (a module's) are rewritten at their sites, its fetch names are rows. */
   const inlineScript = (el: Element, module: boolean): void => {
     const text = el.textContent ?? '';
-    const { refs: found, sites } = scriptRefs(scanScript(text), {
+    const scanned = scriptRefs(scanScript(text), {
       module, inline: true, base: page, page, depth: 1, mapKeys, key: () => nextKey(),
     });
+    // A script whose text holds `<!--` was parsed through the HTML script escape states, where `<script`, `-->` and the
+    // text around them decide where the element ends: a rewrite inside it could move that end when the built page is parsed
+    // again, and make markup live that this extraction never saw (review of the P6.2 build, finding 3). Its imports are left
+    // as written and reported `unreadable`; nothing in it is rewritten.
+    const escaping = /<!--/.test(text);
+    const found = escaping
+      ? scanned.refs.map((r, i) => (scanned.sites[i] === null ? r : { ...r, unread: 'unreadable' as const }))
+      : scanned.refs;
+    const sites = escaping ? scanned.sites.map(() => null) : scanned.sites;
     refs.push(...found);
     const edits = found.map((r, i) => ({ key: r.key, site: sites[i] ?? null })).filter((x) => x.site !== null);
     if (edits.length === 0) return;
@@ -947,7 +956,8 @@ export function buildMockupSrcdoc(
   let mapText: string | null = null;
   const valueChanged = pageMap !== null && pageMap.entries.some((e) => replacements.has(e.key));
   if (idEntries.length > 0 || valueChanged) {
-    const imports: Record<string, string> = {};
+    // No prototype, so a page's own `__proto__` entry is a key like any other (review finding 7).
+    const imports = Object.create(null) as Record<string, string>;
     for (const e of pageMap?.entries ?? []) imports[e.name] = replacements.get(e.key) ?? e.value;
     for (const [id, url] of idEntries) imports[id] = url;
     mapText = scriptJson({ imports });

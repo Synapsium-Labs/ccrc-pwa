@@ -292,7 +292,9 @@ function byteString(bytes: Uint8Array): string {
 }
 
 /** `scanScript` over bytes: spans are byte offsets, and each string's `raw` is decoded as UTF-8. Every byte above 0x7f is
- *  read as an identifier character, which is what it is inside a name and harmless inside a string or a comment. */
+ *  read as an identifier character (what it is inside a name, and harmless inside a string or a comment), but for 0xA0, which
+ *  `scanScript` reads as a no-break space: a UTF-8 continuation byte of that value inside a name then splits the name in two,
+ *  which can only make the scan miss or find a specifier, never move a wall. */
 export function scanScriptBytes(bytes: Uint8Array): ScriptScan {
   if (bytes.length > MOCKUP_SCRIPT_SCAN_BYTES) return { specifiers: [], dynamic: [], literals: [], over: true };
   const s = scanScript(byteString(bytes));
@@ -378,7 +380,13 @@ export function scriptRefs(
     });
   }
   scan.dynamic.forEach((d, i) => {
-    if (d.literal !== null && specifierForm(d.literal) === 'url' && /^https:/i.test(d.literal)) return;
+    // A literal https dynamic import: in an inline page script the script-text census offers its origin, as before this
+    // loader; in a sibling script, which that census does not read, it is a reference the planner offers through Load
+    // external (review finding 4).
+    if (d.literal !== null && specifierForm(d.literal) === 'url' && /^https:/i.test(d.literal)) {
+      if (!opts.inline) push({ key: key('d', i), raw: d.literal, basePath: base, kind: 'module', depth, spec: 'import' }, null);
+      return;
+    }
     if (d.literal !== null && specifierForm(d.literal) === 'bare' && mapNames(opts.mapKeys, d.literal)) return;
     push({ key: key('d', i), raw: d.literal ?? d.text, basePath: base, kind: 'module', depth, spec: 'import', unread: 'dynamic' }, null);
   });
