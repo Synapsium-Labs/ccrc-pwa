@@ -6369,7 +6369,7 @@ _auth_fits_here() {   # <unit dir>
   [ "${CCD_OS:-linux}" != darwin ] || return 1
   [ ! -f "$BOX_ENV_FILE" ] || [ ! -r "$BOX_ENV_FILE" ] || role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
   [ "$role" != fleet ] && [ -f "$1/$(_box_unit_file ccrc.service)" ] || return 1
-  _auth_unit_cmp "$1" || return 1
+  _auth_unit_cmp "$1" "$role" || return 1
   _box_reach "$1"
   [ "${#BRE_REASONS[@]}" -eq 0 ] && [ "$BRE_HOSTRC" -eq 0 ] || return 1
   _box_unit_env CCRC_PORT || return 1
@@ -6469,9 +6469,11 @@ _auth_unit_sources() {   # <unit dir>
 # `=`, a continuation, an escape in a name), is a difference, and a difference refuses. `_auth_unit_cmp` is that
 # compare, which needs no service manager, so `_auth_fits_here` asks it too (wave 190 A4). rc 0 the installer's; rc 1
 # not, AUO_WHY which and AUO_FIX the way on; rc 2 UNMEASURED, AUO_WHY the cause. A path is printed, never a difference.
+# The role is the caller's own read of the recorded CCRC_ROLE (empty when none): the way on names it, because a bare
+# install takes role both and never reads the recorded one (`_kf_remedy`'s reason; wave 190 fix round 1, R2).
 AUO_WHY=""; AUO_FIX=""
-_auth_unit_cmp() {   # <unit dir>
-  local uf tf crc=0
+_auth_unit_cmp() {   # <unit dir> <recorded role or "">
+  local uf tf crc=0 none=""
   AUO_WHY=""; AUO_FIX=""
   uf="$1/$(_box_unit_file ccrc.service)"
   tf="$BOX_TREE_DIR/deploy/ccrc.service"
@@ -6486,7 +6488,8 @@ _auth_unit_cmp() {   # <unit dir>
     0) return 0 ;;
     1) AUO_WHY="$uf is not the unit file ccrc installs ($tf), and this verb acts only on its own"
        # Wave 190 A3: an update leaves a box already on its version alone unless forced; an install always lands it.
-       AUO_FIX="ccrc install puts the shipped file back and reloads systemd (an update does not, on a box already on its version); or set the keys by hand (the README's 'The session gate')"
+       [ -n "${2:-}" ] || none="; this box records no role, and a bare install takes role both"
+       AUO_FIX="ccrc install --role ${2:-<role>} puts the shipped file back and reloads systemd (an update does not, on a box already on its version$none); or set the keys by hand (the README's 'The session gate')"
        return 1 ;;
   esac
   AUO_WHY="$uf could not be compared with $tf, so whether it is that file was not measured"; return 2
@@ -6495,10 +6498,11 @@ _auth_unit_cmp() {   # <unit dir>
 # unit directory's own, made from no other source (SourcePath empty), and loaded as it is now (NeedDaemonReload=no), or
 # the restart applies something else: a unit of the same name earlier on the search path (the control directories, the
 # runtime transient directory, the early generators) passes the compare and the reload answer alike. systemd prints
-# the properties in its own order, so each is read by name; an empty or absent answer is unmeasured.
-_auth_unit_own() {   # <unit dir>
-  local uf out line need="" frag="" srcp=""
-  _auth_unit_cmp "$1" || return $?
+# the properties in its own order, so each is read by name; an absent answer is unmeasured, and so is an empty one but
+# SourcePath's, where empty is no other source (`srcp` starts as a newline, which no line read can hold: fix round 1, R1).
+_auth_unit_own() {   # <unit dir> <recorded role or "">
+  local uf out line need="" frag="" srcp=$'\n'
+  _auth_unit_cmp "$1" "${2:-}" || return $?
   uf="$1/$(_box_unit_file ccrc.service)"
   out="$(_plat_timeout 10 systemctl --user show ccrc.service -p NeedDaemonReload -p FragmentPath -p SourcePath 2>/dev/null)" || out=""
   while IFS= read -r line; do
@@ -6518,6 +6522,8 @@ _auth_unit_own() {   # <unit dir>
   AUO_FIX="take that unit away (or what puts it there), run systemctl --user daemon-reload, then re-run; or set the keys by hand (the README's 'The session gate')"
   [ "$frag" = "$uf" ] \
     || { AUO_WHY="systemd loaded ccrc.service from $frag, not from $uf, the file this verb read (a unit of the same name earlier on its search path), so the restart would apply a file this verb did not read"; return 1; }
+  [ "$srcp" != $'\n' ] || { AUO_FIX="run systemctl --user daemon-reload, then re-run"
+    AUO_WHY="systemctl --user show did not say whether systemd made ccrc.service from another source (SourcePath), so what the restart would apply was not measured"; return 2; }
   [ -z "$srcp" ] \
     || { AUO_WHY="systemd made ccrc.service from $srcp (SourcePath), not from $uf alone, so the restart would apply something other than the file this verb read"; return 1; }
 }
@@ -6745,7 +6751,7 @@ cmd_auth() {
   # The unit is the installer's file and the one systemd loaded, as it is now (review 3971 R1, wave 190 F1): what the
   # readings above cannot parse.
   local orc=0
-  _auth_unit_own "$BOX_UNIT_DIR" || orc=$?
+  _auth_unit_own "$BOX_UNIT_DIR" "$role" || orc=$?
   [ "$orc" -eq 0 ] || _ccrc_die "auth $sub: $AUO_WHY${AUO_FIX:+. To go on: $AUO_FIX}. Nothing was changed."
   [ ! -L "$BOX_ENV_FILE" ] \
     || _ccrc_die "auth $sub: $BOX_ENV_FILE is a symlink, and a rename would replace the link with a file; set the keys by hand (the README's 'The session gate'). Nothing was changed."

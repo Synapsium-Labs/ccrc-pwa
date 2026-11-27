@@ -1475,8 +1475,9 @@ reached from elsewhere (an exposure file, a Caddyfile or the ddns unit: that box
 hand), on a box whose `ccrc.service` can take its bind or a sign-in key from anywhere but `ccrc.env` and the exposure
 file (a drop-in, an `Environment=` line, another environment file, the service manager's own environment), on a box
 whose `ccrc.service` is not, byte for byte, the unit file ccrc installs (any hand edit of it, an `ExecStart=` one
-included: `ccrc install` puts the shipped file back and reloads systemd, which an update does not do on a box already on
-its version), or is not the file systemd loaded (a unit of the same name earlier on its search path), or has not been
+included: `ccrc install --role <the role ccrc.env records>` puts the shipped file back and reloads systemd, which an
+update does not do on a box already on its version; name the role, since a bare install takes role `both`), or is not
+the file systemd loaded (a unit of the same name earlier on its search path), or has not been
 reloaded since it changed, while an update or rollback holds `~/.ccrc/update.lock`, and inside a Claude Code session,
 without a terminal or in a fleet session's pane. Those last three are speed bumps, not walls: `env -u CLAUDECODE` runs
 past the session refusal, a terminal made with `script` past the terminal refusal and an unset `TMUX_PANE` past the pane
