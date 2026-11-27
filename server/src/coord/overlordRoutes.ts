@@ -20,7 +20,7 @@ import type { BuildAgreement, RouteFields } from '../../../shared/api.js';
 import { STATE_DEADLINE_S } from '../../../shared/continuity.js';
 import {
   OVERLORD_PROJECT, parseAccountSetBody, parseDesignateBody, parseModelBody, parseRebindBody,
-  type DesignateBody, type OverlordModelClass, type SettleFact,
+  type DesignateBody, type OverlordModelClass, type RebindSaw, type SettleFact,
 } from '../../../shared/overlord-designation.js';
 import type { OverlordLanePort } from '../continuity/renewalActs.js';
 import type { Roster } from '../../../shared/roster.js';
@@ -41,7 +41,7 @@ import type { CoordRoutesHandle } from './routes.js';
 import type { AuthorityAppendError } from './overlordAuthorityJournal.js';
 import type { AuthorityState } from './overlordAuthorityCoherence.js';
 import {
-  accountSetStepUp, accountSetVerdict, designateVerdict, modelClassVerdict, modelStepUp, overlordAccounts, rebindVerdict, restartVerdict,
+  accountSetStepUp, accountSetVerdict, designateVerdict, modelClassVerdict, modelStepUp, overlordAccounts, rebindMovedDetail, rebindVerdict, restartVerdict,
   renewalSetOf, retireVerdict, routeOf, type AccountFacts, type DesignateVerdict, type OldBodyState, type OverlordBodyState,
 } from './overlordDesignation.js';
 import type { ActorRefused, AuthorityAppender, AuthorityRefused, RowUnreadable } from './overlordDesignationStore.js';
@@ -448,22 +448,33 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
   }
 
   // POST: Rebind the Overlord (designation B, plan Task 6): a replacement for a lost body, pending beside the live binding.
+  // A call that names the binding its caller saw (home C, slug forced-rebind-names-the-session-it-stops) is compared with the
+  // designation behind the plain gate and BEFORE the step-up, so a binding that moved is refused before the operator is asked to
+  // confirm an act that would then be refused; and again on the serialiser, where nothing can move it between the read and the
+  // stop. The pair is only compared: the door acts on what it read itself. A call with no pair behaves as before.
   app.post('/api/overlord/rebind', async (req, reply) => {
+    const parsed = parseRebindBody(req.body);
+    if (parsed?.saw !== undefined) {
+      if (!deps.gate(req, reply, { cap: null }).pass) return reply;
+      const moved = rebindMovedDetail(coord.designationRead(), parsed.saw);
+      if (moved !== null) return refuseRoute(reply, 'stale-designation', { detail: moved });
+    }
     const g = deps.gate(req, reply, { cap: null, stepUp: true });
     if (!g.pass) return reply;
-    const parsed = parseRebindBody(req.body);
     if (parsed === null) return refuseRoute(reply, 'bad-request', { detail: 'body' });
     const actor = deps.identity.operator(g.actor);
     const dec = deps.dec(req);
-    return deps.serial(() => rebind(reply, parsed.force, actor, dec));
+    return deps.serial(() => rebind(reply, parsed.force, parsed.saw, actor, dec));
   });
 
-  async function rebind(reply: FastifyReply, force: boolean, actor: RecordedActor, dec: ActorFlags | null): Promise<FastifyReply | Record<string, unknown>> {
+  async function rebind(reply: FastifyReply, force: boolean, saw: RebindSaw | undefined, actor: RecordedActor, dec: ActorFlags | null): Promise<FastifyReply | Record<string, unknown>> {
     // A rebind's go-live is a widening the journal must record: refuse before any stop or create while it is not coherent.
     const auth = facts.authority?.() ?? { kind: 'coherent' };
     if (auth.kind === 'rolled-back') return refuseRoute(reply, 'authority-rolled-back', { detail: `the authority journal reads rolled-back: ${auth.cause}` });
     if (auth.kind === 'unmeasured') return refuseRoute(reply, 'journal-unreadable', { detail: `the authority journal reads unmeasured: ${auth.why}` });
     const read = coord.designationRead();
+    const moved = saw === undefined ? null : rebindMovedDetail(read, saw);
+    if (moved !== null) return refuseRoute(reply, 'stale-designation', { detail: moved });
     const oldId = read.kind === 'designated' ? read.sessionId : null;
     const slug = shortId();
     const id = workspaceId(OVERLORD_PROJECT, slug);

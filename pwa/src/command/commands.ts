@@ -26,6 +26,8 @@ const CHORDS: Readonly<Record<string, string>> = { overlord: 'o', fleet: 'f', in
  *  nothing (review 3319 A1), as the inspector's `i` does with no rail placed. */
 const GO_TO_WHEN: Readonly<Record<string, (ctx: CommandContext) => boolean>> = {
   'go-overlord': (ctx) => ctx.overlordShown,
+  // Settings › Overlord (home C): its "Go to" only under the word too, as its index row and its page.
+  'go-settings-overlord': (ctx) => ctx.overlordShown,
 };
 
 /** The top row whose page a path sits under (`/settings` for `/settings/updates`), or null. */

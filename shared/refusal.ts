@@ -290,7 +290,9 @@ export const OVERLORD_REFUSALS = {
   // Every door but card, probe and note: boot coherence failed, the authority journal rolled back (authority journal A).
   // 503, a box fault.
   'authority-rolled-back': 503,
-  // Every write door: the call carries an older term, or a wrong generation or act key (gates B). 409.
+  // Every write door: the call carries an older term, or a wrong generation or act key (gates B). 409. The prompt route's chat
+  // send and a forced rebind's pair (home C, slug forced-rebind-names-the-session-it-stops) answer it too, for a designation
+  // that no longer binds the session at the term the console sent.
   'stale-designation': 409, 'stale-generation': 409,
   // Every door but card, probe and note: this generation has not read the current card (gates B). 409.
   'card-unread': 409,

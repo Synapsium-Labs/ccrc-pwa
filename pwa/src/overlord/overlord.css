@@ -135,3 +135,22 @@
 .ov-portfolio-said { margin: 0; font-size: var(--fs-meta); }
 .ov-portfolio-controls,
 .ov-portfolio-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-width: 0; }
+
+/* ── Settings › Overlord (home C): its cards are `Section`s, which paint the surface; these rules lay out what sits inside them,
+   and every rule that sets an ink states the surface beside it. The account set reuses Start's `ov-account-*` rules above. ── */
+.ovs-section { display: grid; gap: var(--sp-3); min-width: 0; }
+.ovs-note,
+.ovs-said { margin: 0; padding: 0; list-style: none; font-size: var(--fs-meta); overflow-wrap: anywhere; background: var(--bg-surface); color: var(--ink-secondary); }
+.ovs-refusal { margin: 0; font-size: var(--fs-meta); overflow-wrap: anywhere; background: var(--bg-surface); color: var(--status-dead-text); }
+.ovs-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-width: 0; }
+.ovs-fields { display: grid; gap: var(--sp-2); min-width: 0; }
+.ovs-field {
+  display: grid; gap: var(--sp-1); min-width: 0; font-size: var(--fs-meta); background: var(--bg-surface); color: var(--ink-primary);
+}
+.ovs-field select,
+.ovs-field input { min-height: var(--tap-min); min-width: 0; max-width: 100%; }
+.ovs-accounts { display: grid; gap: var(--sp-2); margin: 0; padding: 0; list-style: none; min-width: 0; }
+.ovs-account { display: grid; gap: var(--sp-1); min-width: 0; padding: var(--sp-1) 0; border-top: 1px solid var(--edge-subtle); }
+.ovs-account-name {
+  margin: 0; font-weight: var(--weight-medium); overflow-wrap: anywhere; background: var(--bg-surface); color: var(--ink-primary);
+}
