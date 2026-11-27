@@ -4,20 +4,27 @@
 // door (`useCardDoor`) and its one step-up, and every word is `decisionModelWords.ts`' (L1) or the section's refusal table's.
 //
 // DRAWN LIKE THE BACKSTOP AND THE RETENTION (the brief's ruling 3): not gated on a designation. A server without the read (404)
-// draws no card; a read that failed draws its sentence and Read again; a read with no rows says so.
+// draws no card (slug `absent-decision-model-draws-no-card`); a read that failed draws its sentence and Read again; a read with
+// no rows says so. An answer the shared reader refuses (a row, a held cause, a host kind, a ceiling or a side key this console
+// does not know) means a console older than its server: the host card says so with the reader's own detail and offers Reload, not
+// a Read again that cannot cure it (review 4139 F4).
 //
 // EVERY ROW IS DRAWN FROM THE READ (plan SQ3, SQ4). Its radio set's checked choice is the stored mode, never the tap's, so a tap
-// changes nothing until the door answers and the card reads again. Shadow and armed go through the arm door, off through the off
+// changes nothing until the door answers. The door's answer is installed into the read (its side, and its held cause), and the
+// card then reads again, so a re-read that fails still shows the stored mode (review 4139 A5). Shadow and armed go through the arm door, off through the off
 // door, the ceiling through the ceiling door, each with the row's side as read (`expected`). Resume, for a held row, is the arm
 // door with the stored mode and no line; Approve, for an armed gate offered a newer line, is the arm door with that line. The
 // console never asks which move widens: the door asks the step-up for a widening and lands a narrowing in one tap (ruling 2).
 import { useState, type ReactNode } from 'react';
 import { Button, RadioFieldset, Section, TextInput } from '@ccrc/ui';
-import { DECISION_ROW_MODES, type DecisionModelView, type DecisionRowMode, type DecisionRowView } from '../../../../shared/decisionModel';
+import {
+  DECISION_ROW_MODES, type DecisionModelView, type DecisionRowId, type DecisionRowMode, type DecisionRowView,
+} from '../../../../shared/decisionModel';
 import { SETTINGS_CARDS } from '../../fleet/settingsText';
 import { api } from '../../lib/api';
 import {
-  DECISION_MODE_LABELS, DECISION_WORDS as W, ceilingOf, decisionRowLine, decisionViewOf, rowAnswerWords,
+  DECISION_MODE_LABELS, DECISION_WORDS as W, ceilingOf, decisionRowLine, decisionViewDetail, decisionViewOf, rowAnswerOf, rowAnswerWords,
+  withRowAnswer,
 } from '../../overlord/decisionModelWords';
 import { DecisionHostCard } from './DecisionHostCard';
 import { CardField, DoorLines, NoteRow, ReadLine, settingsRefusal, useCardDoor, useCardRead, valueOf, type SectionCtx } from './overlordCards';
@@ -25,7 +32,10 @@ import { CardField, DoorLines, NoteRow, ReadLine, settingsRefusal, useCardDoor, 
 const CARDS = SETTINGS_CARDS.overlord;
 
 /** One row: its question, its state as read, its controls. */
-function DecisionRow({ ctx, row, reread }: { readonly ctx: SectionCtx; readonly row: DecisionRowView; readonly reread: () => Promise<void> }): ReactNode {
+function DecisionRow({ ctx, row, reread, install }: {
+  readonly ctx: SectionCtx; readonly row: DecisionRowView; readonly reread: () => Promise<void>;
+  readonly install: (id: DecisionRowId, answer: unknown) => void;
+}): ReactNode {
   const card = `decision:${row.id}`;
   const door = useCardDoor(ctx, card, settingsRefusal(ctx, 'decision-row'));
   const [ceilingText, setCeilingText] = useState<string | null>(null);
@@ -34,9 +44,11 @@ function DecisionRow({ ctx, row, reread }: { readonly ctx: SectionCtx; readonly 
   const shown = ceilingText ?? String(side.ceiling);
   const ceiling = ceilingOf(shown);
   const after = async (): Promise<void> => { await reread(); };
+  /** A row door's call, its answer installed into the read before the card reads again (plan SQ4). */
+  const sent = (call: Promise<unknown>): Promise<unknown> => call.then((a) => { install(row.id, a); return a; });
+  // The radio set fires only for a choice that is not checked (a native radio has no change for its own), so every pick is a move.
   const move = (mode: DecisionRowMode): void => {
-    if (mode === side.mode) return;
-    void door.run(() => (mode === 'off' ? api.offDecisionRow(row.id, { expected: side }) : api.armDecisionRow(row.id, { mode, expected: side })),
+    void door.run(() => sent(mode === 'off' ? api.offDecisionRow(row.id, { expected: side }) : api.armDecisionRow(row.id, { mode, expected: side })),
       rowAnswerWords, after);
   };
   return (
@@ -54,7 +66,7 @@ function DecisionRow({ ctx, row, reread }: { readonly ctx: SectionCtx; readonly 
           {side.mode !== 'off' && (
             <Button
               variant="ghost" size="fit" data-settings-control="decision-resume" disabled={door.busy}
-              onClick={() => { void door.run(() => api.armDecisionRow(row.id, { mode: side.mode as 'shadow' | 'armed', expected: side }), rowAnswerWords, after); }}
+              onClick={() => { void door.run(() => sent(api.armDecisionRow(row.id, { mode: side.mode as 'shadow' | 'armed', expected: side })), rowAnswerWords, after); }}
             >
               {W.resume}
             </Button>
@@ -70,7 +82,7 @@ function DecisionRow({ ctx, row, reread }: { readonly ctx: SectionCtx; readonly 
           <NoteRow note={offered.text} data={{ 'data-decision-offered': row.id }}>
             <Button
               variant="ghost" size="fit" data-settings-control="decision-approve" disabled={door.busy}
-              onClick={() => { void door.run(() => api.armDecisionRow(row.id, { mode: 'armed', line: offered.id, expected: side }), rowAnswerWords, after); }}
+              onClick={() => { void door.run(() => sent(api.armDecisionRow(row.id, { mode: 'armed', line: offered.id, expected: side })), rowAnswerWords, after); }}
             >
               {W.approve}
             </Button>
@@ -88,7 +100,7 @@ function DecisionRow({ ctx, row, reread }: { readonly ctx: SectionCtx; readonly 
           variant="primary" size="fit" data-settings-control="decision-ceiling-save" disabled={door.busy || ceiling === null || ceiling === side.ceiling}
           onClick={() => {
             if (ceiling === null) return;
-            void door.run(() => api.setDecisionCeiling(row.id, { ceiling, expected: side }), rowAnswerWords,
+            void door.run(() => sent(api.setDecisionCeiling(row.id, { ceiling, expected: side })), rowAnswerWords,
               async (o) => { if (o === 'done') setCeilingText(null); await reread(); });
           }}
         >
@@ -103,14 +115,21 @@ function DecisionRow({ ctx, row, reread }: { readonly ctx: SectionCtx; readonly 
 
 /** The decision model's two cards over one read: the host and its key, then the rows. */
 export function DecisionModelCards({ ctx }: { readonly ctx: SectionCtx }): ReactNode {
-  const { read, reread } = useCardRead<DecisionModelView>(() => api.decisionModel(), decisionViewOf);
+  const { read, reread, patch, unreadable } = useCardRead<DecisionModelView>(() => api.decisionModel(), decisionViewOf, decisionViewDetail);
   if (read.state === 'absent') return null;
   const v = valueOf(read);
+  const install = (id: DecisionRowId, answer: unknown): void => {
+    const a = rowAnswerOf(answer);
+    if (a !== null) patch((view) => withRowAnswer(view, id, a));
+  };
   return (
     <>
       <DecisionHostCard ctx={ctx} view={v} reread={reread}>
         {/* The one read's loading and failure line, once, in the first of its two cards. */}
-        <ReadLine read={read} unread={W.unread} card="decision-host" reread={() => { void reread(); }} />
+        <ReadLine
+          read={read} unread={W.unread} card="decision-host" reread={() => { void reread(); }}
+          unreadable={unreadable === null ? null : { sentence: W.unreadable(unreadable), reload: W.reload }}
+        />
       </DecisionHostCard>
       {v !== null && <Section level={3} scope={CARDS.decisionRows.scope} title={CARDS.decisionRows.title} purpose={CARDS.decisionRows.purpose} data-settings-card="decision-rows">
         {v.rows.length === 0 ? (
@@ -119,7 +138,7 @@ export function DecisionModelCards({ ctx }: { readonly ctx: SectionCtx }): React
           <>
             <p className="ovs-note" data-decision-fleet>{W.fleet(v.fleetToday, v.fleetCap)}</p>
             <ul className="ovs-rows">
-              {v.rows.map((r) => <DecisionRow key={r.id} ctx={ctx} row={r} reread={reread} />)}
+              {v.rows.map((r) => <DecisionRow key={r.id} ctx={ctx} row={r} reread={reread} install={install} />)}
             </ul>
           </>
         )}

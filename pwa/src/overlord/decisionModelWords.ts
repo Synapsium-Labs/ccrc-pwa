@@ -1,6 +1,7 @@
 // Settings › Overlord's decision model: its words and its pure readers (Overlord W2 Settings, plan `w2-settings.md` Tasks 1 and
 // 2; spec 2026-11-09 §3.7 H6 and Table 3.7b). Ring L1: no store, no React, no DOM, no clock and no `lib/api.ts`. It imports L0
-// shared vocabulary only. The decision model's cards (`DecisionModelCard.tsx`, `DecisionHostCard.tsx`, L4) draw what these answer.
+// shared vocabulary and `lib/wire.ts` only. The decision model's cards (`DecisionModelCard.tsx`, `DecisionHostCard.tsx`, L4) draw
+// what these answer.
 //
 // THE CONSOLE NEVER DECIDES WHAT A DOOR DECIDES (the brief's ruling 2). Nothing here says whether a move widens or narrows, which
 // line a row is armed on, or whether a ceiling is in bounds: a card sends the move with the side it read, and the door asks the
@@ -9,15 +10,22 @@
 // - a row is drawn from the read, its checked mode the stored one, and a held row says why, by a closed list of causes;
 // - a door's answer is read for the row it installed, and an off the journal refused says "held, not off".
 import {
-  DECISION_QUESTIONS, readDecisionModelView, readDecisionRowSide, type DecisionHeldCause, type DecisionHostKind, type DecisionModelView,
-  type DecisionRowMode, type DecisionRowSide, type DecisionRowView,
+  DECISION_HELD_CAUSES, DECISION_QUESTIONS, readDecisionModelView, readDecisionRowSide, type DecisionHeldCause, type DecisionHostKind,
+  type DecisionModelView, type DecisionRowId, type DecisionRowMode, type DecisionRowSide, type DecisionRowView,
 } from '../../../shared/decisionModel';
-import { isRecord as isObj } from '../lib/wire';
+import { isOneOf, isRecord as isObj } from '../lib/wire';
 
 /** The read's view, or null for an answer the one reader refuses (the card says the read could not be read). */
 export function decisionViewOf(body: unknown): DecisionModelView | null {
   const r = readDecisionModelView(body);
   return r.ok ? r.view : null;
+}
+
+/** Why the one reader refused an answer, in its own words (review 4139 F4), or null for an answer it reads. The console and the
+ *  server ship together, so an answer this console cannot read means a console older than its server: the card says so. */
+export function decisionViewDetail(body: unknown): string | null {
+  const r = readDecisionModelView(body);
+  return r.ok ? null : r.detail;
 }
 
 /** A row's three states, in the order the radio set draws them. Keyed by the mode, so a mode the shared list gains without a label
@@ -56,8 +64,16 @@ export const DECISION_WORDS = {
   approve: 'Approve the new line',
   hostKindLabel: 'Host',
   chooseKind: 'Choose a host',
-  /** A second `step-up-required` on the one retry after the confirm (the coordinator's condition 4): final, and the key is gone. */
+  /** A `step-up-required` on the retry the confirm started (the coordinator's condition 4, review 4139 F1): final, and the key is
+   *  gone. A Save that carried no key says its own (A4). */
   stepUpFinal: "Confirm it's you did not hold for this save, so nothing was saved. Type the key again, then save.",
+  stepUpFinalHost: "Confirm it's you did not hold for this save, so the host was not saved. Save it again.",
+  /** The retry found the key field emptied (the page was hidden while the step showed): it sends nothing, never less than the
+   *  first send carried (review 4139 F2). */
+  keyGone: 'The key was cleared when the page was hidden, so nothing was saved. Type it again, then save.',
+  /** An answer the one reader refuses, with its detail (F4): a Read again cannot cure it, a reload can. */
+  unreadable: (detail: string) => `This console could not read the decision model (${detail}). It may be older than the server: reload it.`,
+  reload: 'Reload',
   saving: 'Saving…',
   endpointLabel: 'Endpoint',
   modelIdLabel: 'Model id',
@@ -113,16 +129,28 @@ export function decisionRowLine(r: DecisionRowView): DecisionRowLine {
   };
 }
 
-
-/** A row door's answer (arm, off, ceiling): the side it installed and, for an off the journal refused, `offRefused` with the
- *  guard's cause (ruling F1). Null for an answer it cannot read, which the card answers by reading the view again. */
-export interface RowAnswer { readonly side: DecisionRowSide; readonly offRefused: boolean; readonly cause: string | null }
+/** A row door's answer (arm, off, ceiling): the side it installed, the cause it holds the row for (`heldWhy`: a cause, null for
+ *  none, undefined when the answer does not say), and, for an off the journal refused, `offRefused` with the guard's cause (ruling
+ *  F1). Null for an answer it cannot read, which the card answers by reading the view again. */
+export interface RowAnswer {
+  readonly side: DecisionRowSide; readonly heldWhy: DecisionHeldCause | null | undefined; readonly offRefused: boolean; readonly cause: string | null;
+}
 export function rowAnswerOf(body: unknown): RowAnswer | null {
   if (!isObj(body) || body.ok !== true) return null;
   const side = readDecisionRowSide(body.side);
   if (side === null) return null;
   const offRefused = body.offRefused === true;
-  return { side, offRefused, cause: offRefused && typeof body.cause === 'string' ? body.cause : null };
+  const heldWhy = body.heldWhy === null ? null : isOneOf(DECISION_HELD_CAUSES, body.heldWhy) ? body.heldWhy : undefined;
+  return { side, heldWhy, offRefused, cause: offRefused && typeof body.cause === 'string' ? body.cause : null };
+}
+
+/** The view with one row's answer installed (plan SQ4, review 4139 A5): its side, and its held cause when the answer says one.
+ *  The card installs it, then reads the view again, so a re-read that fails still shows the stored mode. */
+export function withRowAnswer(view: DecisionModelView, id: DecisionRowId, a: RowAnswer): DecisionModelView {
+  return {
+    ...view,
+    rows: view.rows.map((r) => (r.id !== id ? r : { ...r, side: a.side, heldWhy: a.heldWhy === undefined ? r.heldWhy : a.heldWhy })),
+  };
 }
 
 /** A row door's answer in words: "Held, not off" with the cause when the journal refused an off (SQ4), else "Saved.". An answer

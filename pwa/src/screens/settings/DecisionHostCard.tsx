@@ -4,11 +4,15 @@
 //
 // THE KEY (the brief's ruling 6, ruled call 1815). The key is typed into the accounts' secret field (`SecretField`), whose value
 // lives only in its own DOM node, never in component state or a store. Save reads it without emptying it (`peek`), builds the
-// body, and sends it; the field is emptied on the door's answer and on a final refusal, never on `step-up-required`, so the press
-// after the section's confirm sends the same key once more (plan F3). A second `step-up-required`, on that retry, is final: it is
-// worded and the field is emptied (the coordinator's condition 4). The key is sent only when the field holds one, so a host change
-// with no new key reaches the door's own `key-required`. The read never carries any part of the key: only when it was set, and
-// whether the egress masker catches it.
+// body, and sends it; the field is emptied on the door's answer and on every refusal, never on a first `step-up-required`. That
+// Save hands the section its retry, which the confirm sends (review 4139 F1, ruled call 1876): while the step shows, Save and the
+// host's fields are held, so nothing else is sent to a door that will refuse it, and the retry sends the host as it was pressed.
+// A press is always a first send; the retry's own `step-up-required` is final: worded for what was refused (a key, or the host
+// alone, A4) and the field emptied (the coordinator's condition 4). The retry never sends less than the first send carried (F2):
+// the Save keeps one boolean, whether a key was typed (never the key), and a retry that finds the field emptied (the page was
+// hidden while the step showed) sends nothing and says so. The key is sent only when the field holds one, so a host change with
+// no new key reaches the door's own `key-required`. The read never carries any part of the key: only when it was set, and whether
+// the egress masker catches it.
 //
 // THE HOST. The kind, the endpoint and the model id are filled from the read (`host.endpoint`, ruled F4, so a change of the model
 // id alone sends the endpoint as stored, path included), and an edit is kept until the door answers. A hosted kind says that each
@@ -40,34 +44,40 @@ export function DecisionHostCard({ ctx, view, reread, children }: {
   const [askRemove, setAskRemove] = useState(false);
   const [final, setFinal] = useState<string | null>(null);
   const key = useRef<SecretFieldHandle>(null);
-  /** Whether the last Save was answered `step-up-required`: the press after the confirm is its one retry. */
-  const steppedUp = useRef(false);
+  const held = ctx.stepShows('decision-host', 'save');
   const busy = door.busy || removeDoor.busy;
   const host = view?.host ?? null;
   const k = kind ?? host?.kind ?? null;
   const e = endpoint ?? host?.endpoint ?? '';
   const m = modelId ?? host?.modelId ?? '';
   const unchanged = host !== null && k === host.kind && e === host.endpoint && m === host.modelId;
-  const save = (): void => {
-    if (k === null) return;
+  /** One send of the host and, when `carried`, the key the field holds now. `retry` is the send the confirm starts. */
+  const send = (to: { kind: DecisionHostKind; endpoint: string; modelId: string }, carried: boolean, retry: boolean): void => {
     setFinal(null);
-    const typed = key.current?.peek() ?? '';
+    const typed = carried ? (key.current?.peek() ?? '') : '';
+    if (retry && carried && typed === '') { ctx.ask(null); setFinal(W.keyGone); return; }
     void door.run(
-      () => api.setDecisionKey({ kind: k, endpoint: e, modelId: m, ...(typed === '' ? {} : { key: typed }) }),
+      () => api.setDecisionKey({ ...to, ...(typed === '' ? {} : { key: typed }) }),
       keyAnswerWords,
       async (o) => {
-        if (o === 'step-up' && !steppedUp.current) {
-          steppedUp.current = true;
-        } else {
-          // The answer, a refusal, or a second step-up on the retry (final): the key leaves the field.
-          if (o === 'step-up') setFinal(W.stepUpFinal);
-          steppedUp.current = false;
+        if (o === 'step-up' && retry) {
+          // The retry's own step-up: final. The step is put away and the key leaves the field.
+          ctx.ask(null);
+          setFinal(carried ? W.stepUpFinal : W.stepUpFinalHost);
+          key.current?.clear();
+        } else if (o !== 'step-up') {
+          // The answer or a refusal: the key leaves the field.
           key.current?.clear();
           if (o === 'done') { setKind(null); setEndpoint(null); setModelId(null); }
         }
         await reread();
       },
+      retry ? undefined : { act: 'save', send: () => send(to, carried, true) },
     );
+  };
+  const save = (): void => {
+    if (k === null) return;
+    send({ kind: k, endpoint: e, modelId: m }, (key.current?.peek() ?? '') !== '', false);
   };
   return (
     <Section level={3} scope={CARD.scope} title={CARD.title} purpose={CARD.purpose} data-settings-card="decision-host">
@@ -79,24 +89,24 @@ export function DecisionHostCard({ ctx, view, reread, children }: {
           {view.key !== null && !view.key.masked && <p className="ovs-note" data-decision-key-unmasked>{W.keyNotMasked}</p>}
           <div className="ovs-fields">
             <CardField label={W.hostKindLabel}>
-              <Select value={k ?? ''} disabled={busy} data-settings-input="decision-kind" onChange={(ev) => setKind(ev.currentTarget.value as DecisionHostKind)}>
+              <Select value={k ?? ''} disabled={busy || held} data-settings-input="decision-kind" onChange={(ev) => setKind(ev.currentTarget.value as DecisionHostKind)}>
                 {k === null && <option value="" disabled>{W.chooseKind}</option>}
                 {DECISION_HOST_KINDS.map((x) => <option key={x} value={x}>{DECISION_HOST_KIND_LABELS[x]}</option>)}
               </Select>
             </CardField>
             {k === 'hosted' && <p className="ovs-note" data-decision-hosted>{W.hosted}</p>}
             <CardField label={W.endpointLabel}>
-              <TextInput value={e} disabled={busy} inputMode="url" data-settings-input="decision-endpoint" onChange={(ev) => setEndpoint(ev.currentTarget.value)} />
+              <TextInput value={e} disabled={busy || held} inputMode="url" data-settings-input="decision-endpoint" onChange={(ev) => setEndpoint(ev.currentTarget.value)} />
             </CardField>
             <CardField label={W.modelIdLabel}>
-              <TextInput value={m} disabled={busy} data-settings-input="decision-model-id" onChange={(ev) => setModelId(ev.currentTarget.value)} />
+              <TextInput value={m} disabled={busy || held} data-settings-input="decision-model-id" onChange={(ev) => setModelId(ev.currentTarget.value)} />
             </CardField>
             <SecretField label={W.keyLabel} handle={key} onPresence={setHasKey} />
           </div>
           <div className="ovs-actions">
             <Button
               variant="primary" size="fit" data-settings-control="decision-host-save"
-              disabled={busy || k === null || e === '' || m === '' || (unchanged && !hasKey)} onClick={save}
+              disabled={busy || held || k === null || e === '' || m === '' || (unchanged && !hasKey)} onClick={save}
             >
               {door.busy ? W.saving : W.saveHost}
             </Button>

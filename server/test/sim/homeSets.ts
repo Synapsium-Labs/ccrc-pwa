@@ -456,6 +456,7 @@ type NameListText =
 interface NameListModule {
   nameListRowsOf(text: string): NameListText;
   nameListRefusalText(err: unknown, lines: readonly number[], otherwise: (err: unknown) => string): string;
+  nameListKeepsText(err: unknown): boolean;
   NAME_LIST_ROW_TEXT: Readonly<Record<string, string>>;
 }
 interface ApiErrorModule { ApiError: new (status: number, body: unknown) => Error }
@@ -467,7 +468,8 @@ interface DecisionRow {
 }
 interface DecisionWordsModule {
   decisionRowLine(r: DecisionRow): { held: string | null; today: string; armedOn: string | null; offered: { text: string; id: number } | null };
-  rowAnswerOf(body: unknown): { side: RowSide; offRefused: boolean; cause: string | null } | null;
+  rowAnswerOf(body: unknown): { side: RowSide; heldWhy: string | null | undefined; offRefused: boolean; cause: string | null } | null;
+  withRowAnswer(view: { rows: readonly DecisionRow[] }, id: string, a: { side: RowSide; heldWhy: string | null | undefined }): { rows: readonly DecisionRow[] };
   ceilingOf(text: string): number | null;
 }
 
@@ -490,6 +492,15 @@ export function nameListCases(m: NameListModule): Record<string, SuiteCase> {
       const { ApiError } = (await import(API_ERROR)) as ApiErrorModule;
       const err = new ApiError(400, { ok: false, error: 'bad-request', detail: 'row 1', row: 1, reason: 'length' });
       expect(m.nameListRefusalText(err, [1, 3], () => 'otherwise')).toBe(`Line 3: ${m.NAME_LIST_ROW_TEXT['length']}`);
+    },
+    // Review 4139 A2: the box keeps the names only to be edited, a refused row or a refused cap; a 401 and any other word empty it.
+    'the names stay only for a refused row or cap, never after a 401 or another word': async () => {
+      const { ApiError } = (await import(API_ERROR)) as ApiErrorModule;
+      expect(m.nameListKeepsText(new ApiError(400, { ok: false, error: 'bad-request', row: 0, reason: 'length' }))).toBe(true);
+      expect(m.nameListKeepsText(new ApiError(400, { ok: false, error: 'bad-request', detail: 'at most 500 rows' }))).toBe(true);
+      expect(m.nameListKeepsText(new ApiError(413, { ok: false, error: 'oversize' }))).toBe(true);
+      expect(m.nameListKeepsText(new ApiError(401, { ok: false, error: 'bad-request' }))).toBe(false);
+      expect(m.nameListKeepsText(new ApiError(500, { ok: false, error: 'write-failed' }))).toBe(false);
     },
   };
 }
@@ -516,6 +527,18 @@ export function decisionWordsCases(m: DecisionWordsModule): Record<string, Suite
       expect(m.rowAnswerOf({ ok: true, side: { ...SIDE, held: true }, offRefused: true, cause: 'x' })?.offRefused).toBe(true);
       expect(m.rowAnswerOf({ ok: true, side: SIDE })?.offRefused).toBe(false);
     },
+    // Review 4139 A5: a row's answer is installed in the view, its held cause only when the answer says one.
+    "a row's answer installs its side in its row only, and its held cause when it says one": () => {
+      const off: RowSide = { ...SIDE, mode: 'off', armedLine: null };
+      const view = { rows: [decisionRow({ heldWhy: 'drift' }), decisionRow({ id: 'programme.pick' })] };
+      expect(m.rowAnswerOf({ ok: true, side: off, heldWhy: 'canary' })?.heldWhy).toBe('canary');
+      expect(m.rowAnswerOf({ ok: true, side: off })?.heldWhy).toBeUndefined();
+      const kept = m.withRowAnswer(view, 'scope.widens', { side: off, heldWhy: undefined });
+      expect(kept.rows[0]!.side).toEqual(off);
+      expect(kept.rows[0]!.heldWhy).toBe('drift');
+      expect(kept.rows[1]!.side).toEqual(SIDE);
+      expect(m.withRowAnswer(view, 'scope.widens', { side: off, heldWhy: null }).rows[0]!.heldWhy).toBeNull();
+    },
     'the ceiling field sends a whole number only': () => {
       expect(m.ceilingOf('600')).toBe(600);
       expect(m.ceilingOf('6.5')).toBeNull();
@@ -530,12 +553,16 @@ const NAME_LIST_SET: MutantSet<NameListModule> = {
   modulePath: NAME_LIST,
   mutants: [
     // The plan's W1: a line with no mode read as `exact`.
-    { id: 'N1', old: "rows.push({ text: line, mode: 'part' })", new: "rows.push({ text: line, mode: 'exact' })" },
+    { id: 'N1', old: 'rows.push({ text: line, mode: DEFAULT_MODE })', new: "rows.push({ text: line, mode: 'exact' })" },
     // The plan's W4: empty text answers zero rows.
     { id: 'N2', old: "return rows.length === 0 ? { ok: false, why: 'empty' } : { ok: true, rows, lines };", new: 'return { ok: true, rows, lines };' },
     { id: 'N3', old: "    if (line === '') continue;\n", new: '' },
     { id: 'N4', old: "if (!isMode(word)) return { ok: false, why: 'mode', line: i + 1 };", new: '' },
     { id: 'N5', old: 'const line = lines[body.row];', new: 'const line = body.row + 1;' },
+    // Review 4139 A2: a 401 keeps the names; the refused row's and the caps' words empty them; any word keeps them.
+    { id: 'N6', old: "err.status === 401 || !isObj(err.body)", new: '!isObj(err.body)' },
+    { id: 'N7', old: "new Set(['bad-request', 'oversize'])", new: 'new Set<string>([])' },
+    { id: 'N8', old: "return typeof err.body.error === 'string' && KEEP_WORDS.has(err.body.error);", new: 'return true;' },
   ],
   suite: nameListCases,
 };
@@ -547,6 +574,10 @@ const DECISION_WORDS_SET: MutantSet<DecisionWordsModule> = {
     { id: 'DW3', old: 'armedOn: r.side.armedLine === null ? null', new: 'armedOn: r.offered === null ? null' },
     { id: 'DW4', old: 'const offRefused = body.offRefused === true;', new: 'const offRefused = false;' },
     { id: 'DW5', old: '/^\\d{1,9}$/', new: '/^[\\d.]{1,9}$/' },
+    // Review 4139 A5: the answer installed in every row, its silence read as "not held", and the side left as it was.
+    { id: 'DW6', old: 'r.id !== id ? r :', new: 'false ? r :' },
+    { id: 'DW7', old: 'a.heldWhy === undefined ? r.heldWhy : a.heldWhy', new: 'a.heldWhy ?? null' },
+    { id: 'DW8', old: '{ ...r, side: a.side, heldWhy:', new: '{ ...r, side: r.side, heldWhy:' },
   ],
   suite: decisionWordsCases,
 };

@@ -15,6 +15,10 @@
 // - `w2` (Overlord W2 Settings): no designation, as `none`, and the W2 cards drawn from their reads: the decision model's host (a
 //   long endpoint, a key set) and its seven rows (one armed gate offered a newer line, one held row with Resume), and the
 //   private-name list with a list stored (Upload and Clear the list).
+// - `w2-refused`: `w2` with one Upload sent and refused for its first row, so a refusal line (the longest row sentence) is drawn
+//   and measured at every width too.
+// The W2 cards are measured here, in the section's own file and at its widths, not in a file of their own (the brief's ruling 7,
+// slug `w2-cards-measured-in-the-section-browser-file`).
 //
 // At 320, 360, 390, 899 and 1280 px, in both skins and in the light and the dark palette (the dark palette's id is `PHOSPHOR`;
 // each case asserts the theme the page stamped, so a name the app does not keep can never pass as dark):
@@ -40,19 +44,22 @@ const ROW = {
   accountPools: { pools: [LONG_POOLS[0]], untagged: false }, pastIds: [], actor: 'operator', lastAttempt: null, stopsOwed: [],
 };
 
-type State = 'bound' | 'none' | 'w2';
+type State = 'bound' | 'none' | 'w2' | 'w2-refused';
+const W2_DRAWS = ['[data-settings-control="start-on-place"]', '[data-settings-control="decision-approve"]', '[data-settings-control="decision-resume"]',
+  '[data-settings-control="names-clear"]'] as const;
 /** What each state must draw before it is measured (a hook inside the section). */
 const DRAWS: Readonly<Record<State, readonly string[]>> = {
   bound: ['[data-settings-control="retire"]', '[data-settings-control="model-save"]', '[data-settings-account-set] input[type="checkbox"]'],
   none: ['[data-settings-control="start-on-place"]'],
-  w2: ['[data-settings-control="start-on-place"]', '[data-settings-control="decision-approve"]', '[data-settings-control="decision-resume"]',
-    '[data-settings-control="names-clear"]'],
+  w2: W2_DRAWS,
+  'w2-refused': W2_DRAWS,
 };
 /** The cards each state draws, in order. */
 const W1_CARDS = ['designation', 'model', 'account-set', 'backstop', 'retention', 'accounts'] as const;
-const CARDS: Readonly<Record<State, readonly string[]>> = {
-  bound: W1_CARDS, none: W1_CARDS, w2: [...W1_CARDS, 'decision-host', 'decision-rows', 'private-names'],
-};
+const W2_CARDS = [...W1_CARDS, 'decision-host', 'decision-rows', 'private-names'] as const;
+const CARDS: Readonly<Record<State, readonly string[]>> = { bound: W1_CARDS, none: W1_CARDS, w2: W2_CARDS, 'w2-refused': W2_CARDS };
+/** `w2-refused`'s upload answer: a refused row with the longest of the row sentences, drawn under the list's controls. */
+const ROW_REFUSED = { ok: false, error: 'bad-request', row: 0, reason: 'non-ascii', detail: 'row 0: a letter or digit outside a-z and 0-9' };
 
 /** An endpoint as long as a real one may be, with a path: it must wrap, not push the page sideways. */
 const LONG_ENDPOINT = 'https://decision-model-host-a.example/v1/projects/project-a-long-name/locations/region-a/endpoints/ask';
@@ -81,14 +88,16 @@ const DECISION_VIEW = {
   key: { setAt: NOW - 86_400_000, masked: true },
 };
 
+const w2 = (state: State): boolean => state === 'w2' || state === 'w2-refused';
+
 function fixtureFor(state: State): AppFixture {
   return {
     fleetFrames: [{ type: 'fleet', sessions: [] }],
     api: {
       '/health': { ok: true, build: null, caps: ['overlord-v1'] },
       '/api/overlord/designation': { ok: true, designation: state === 'bound' ? ROW : null },
-      '/api/decision-model': state === 'w2' ? DECISION_VIEW : { absent: true },
-      '/api/overlord/private-names': state === 'w2' ? { state: 'list', rows: 12, uploadedAt: NOW - 3_600_000 } : { absent: true },
+      '/api/decision-model': w2(state) ? DECISION_VIEW : { absent: true },
+      '/api/overlord/private-names': w2(state) ? { state: 'list', rows: 12, uploadedAt: NOW - 3_600_000 } : { absent: true },
       '/api/accounts': {
         accounts: [], projected: null,
         roster: [
@@ -107,7 +116,7 @@ const SKINS = [REFINED, INSTRUMENT] as const;
 const WIDTHS = [320, 360, 390, 899, 1280] as const;
 /** The light palette and the dark one, by the ids the app keeps (`@ccrc/ui`'s `THEMES`): `PHOSPHOR` is the dark palette. */
 const PALETTES = ['light', PHOSPHOR] as const;
-const STATES: readonly State[] = ['bound', 'none', 'w2'];
+const STATES: readonly State[] = ['bound', 'none', 'w2', 'w2-refused'];
 
 let dist: string | undefined;
 let server: DistServer | undefined;
@@ -162,8 +171,19 @@ async function settle(page: Page, drawn: readonly string[]): Promise<void> {
 
 async function open(skin: string, theme: string, width: number, state: State) {
   const opened = await openApp(browser!, { skin, theme, width }, fixtureFor(state));
+  // `w2-refused`: the upload alone is answered with a refusal (a page route outranks the harness's context route, which answers
+  // every other call, the status read included).
+  if (state === 'w2-refused') {
+    await opened.page.route('**/api/overlord/private-names', (route) => (route.request().method() === 'PUT'
+      ? route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify(ROW_REFUSED) }) : route.fallback()));
+  }
   await opened.page.goto(server!.origin + '/settings/overlord');
   await settle(opened.page, DRAWS[state]);
+  if (state === 'w2-refused') {
+    await opened.page.fill('[data-settings-card="private-names"] textarea', 'zz-alpha');
+    await opened.page.click('[data-settings-control="names-upload"]');
+    await opened.page.waitForSelector('.ovs-section [data-settings-refusal="private-names"]', { timeout: 20_000 });
+  }
   return opened;
 }
 
@@ -187,8 +207,17 @@ describe.each(SKINS)('Settings › Overlord in %s', (skin) => {
             // (3), and the account set's three boxes, Save and Save again (5): 24. `none` adds the place's Start link (1): 15. `w2`
             // is `none`'s 15, then the decision model's host (its kind, endpoint, model id, the key field and its Show, Save and
             // Remove the key: 7), its seven rows (three radios, the ceiling and its Save each: 35, with Approve and Resume: 37), and
-            // the list (its box, Upload and Clear the list: 3): 62.
-            expect(m.controls.length, 'the section draws exactly its controls').toBe({ bound: 24, none: 15, w2: 62 }[state]);
+            // the list (its box, Upload and Clear the list: 3): 62. `w2-refused` is `w2` with a refused row's line drawn: 62.
+            expect(m.controls.length, 'the section draws exactly its controls').toBe({ bound: 24, none: 15, w2: 62, 'w2-refused': 62 }[state]);
+            if (state === 'w2-refused') {
+              const line = await page.$eval('[data-settings-refusal="private-names"]', (el) => {
+                const b = el.getBoundingClientRect();
+                return { left: b.left, right: b.right, text: el.textContent ?? '' };
+              });
+              expect(line.text, 'the refused row is named by its line').toMatch(/^Line 1: /);
+              expect(line.left, 'the refusal line starts inside the page').toBeGreaterThanOrEqual(0);
+              expect(line.right, 'the refusal line ends inside the page').toBeLessThanOrEqual(m.vw + 0.5);
+            }
             if (state === 'bound') {
               const boxes = await page.$$eval('[data-settings-account-set] label', (ls) => ls.map((l) => l.textContent?.trim() ?? ''));
               expect(boxes, 'the account set draws the saved pool first, the other long pool and untagged').toEqual([...LONG_POOLS, 'Untagged accounts']);

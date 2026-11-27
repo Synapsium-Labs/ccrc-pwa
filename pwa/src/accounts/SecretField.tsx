@@ -18,11 +18,16 @@ import { useLocation } from '../lib/router';
  * - IT IS CLEARED on submit (`take`), on close and on a route change (both unmount it, and a route change that keeps it
  *   mounted clears it), and on `visibilitychange` to hidden. A refusal therefore always re-presents it empty.
  * - A HOST WHOSE DOOR MAY ASK THE STEP-UP reads with {@link SecretFieldHandle.peek} instead (Overlord W2 Settings, ruled call
- *   1815): the value stays in the field, so the press after the confirm sends it once more, and the host empties the field with
- *   `clear` on the door's answer and on a final refusal, never on `step-up-required`. What `peek` returns lives in the request
- *   body it builds and nowhere else. The account sheets read with `take`, as before.
+ *   1815, review 4139 F1): the value stays in the field, so the retry the confirm starts sends it once more, and the host empties
+ *   the field with `clear` on the door's answer and on every refusal, never on a first `step-up-required`. What `peek` returns
+ *   lives in the request body it builds and nowhere else. A retry that finds the field emptied (the page was hidden while the step
+ *   showed) sends nothing and says so: it never sends less than the first send carried. The account sheets read with `take`, as
+ *   before.
  * - `multiline` draws an uncontrolled text area instead (the private-name list): unmasked, because the operator must see the
- *   names, with no Show control, and the same attributes and the same emptying on page hide and route change.
+ *   names, with no Show control, and the same attributes and the same emptying on page hide and route change. ITS ONE EXCEPTION
+ *   to "a refusal re-presents it empty" (review 4139 A2, slug `names-kept-only-to-be-edited`): the names stay only where the
+ *   operator must edit or confirm them, a refused row, a refused cap and a first step-up. A 401 empties it, because the person at
+ *   the screen is no longer proven, and so does every other refusal.
  */
 export interface SecretFieldHandle {
   /** The value, read once: the field is empty when this returns. */

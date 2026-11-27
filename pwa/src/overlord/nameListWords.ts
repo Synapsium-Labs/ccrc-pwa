@@ -1,8 +1,8 @@
 // Settings › Overlord's private-name list: its words and its pure readers (Overlord W2 Settings, plan `w2-settings.md` Tasks 1
 // and 3; spec 2026-11-09 §9.4 rule 7; the private-names plan's question 9). Ring L1: no store, no React, no DOM, no clock and no
-// `lib/api.ts`. It imports L0 shared vocabulary and `lib/apiError.ts` only, so the server's mutation floors can load it (the
-// section's refusal table, which a refused upload falls back to, is handed in by the card). `PrivateNamesCard.tsx` (L4) draws what
-// these answer.
+// `lib/api.ts`. It imports L0 shared vocabulary, `lib/apiError.ts` and `lib/wire.ts` only, so the server's mutation floors can
+// load it (the section's refusal table, which a refused upload falls back to, is handed in by the card). `PrivateNamesCard.tsx`
+// (L4) draws what these answer.
 //
 // THE NAMES NEVER PASS THROUGH HERE ON THEIR WAY TO A SCREEN. `nameListRowsOf` turns the operator's text into the upload's rows for
 // one request, and returns them to the caller only; nothing here keeps, logs or words a name. A refusal names a line by its number
@@ -41,12 +41,21 @@ export const NAME_LIST_UNREADABLE_TEXT: Readonly<Record<NameListUnreadable, stri
   'key-mismatch': 'the list was not made under the key the server holds',
 };
 
+/** The word the operator types before the colon for each mode (`NAME_LIST_MODES`, the matcher's list): typed over the shared list,
+ *  so a mode it gains without a word is a compile error, and every sentence that names the modes is built from it. */
+export const NAME_LIST_MODE_WORDS: Readonly<Record<NameListMode, string>> = { part: 'part', exact: 'exact', run: 'run', words: 'words' };
+/** A line with no mode word in front of it: the committed list's default. */
+const DEFAULT_MODE: NameListMode = 'part';
+const orList = (xs: readonly string[]): string => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} or ${xs[xs.length - 1]}`);
+const ALL_MODES = orList(NAME_LIST_MODES.map((m) => NAME_LIST_MODE_WORDS[m]));
+const OTHER_MODES = orList(NAME_LIST_MODES.filter((m) => m !== DEFAULT_MODE).map((m) => `${NAME_LIST_MODE_WORDS[m]}:`));
+
 /** Why the door refused one row, one sentence per reason (`NAME_LIST_ROW_REFUSALS`, the door's closed list). */
 export const NAME_LIST_ROW_TEXT: Readonly<Record<NameListRowRefusal, string>> = {
   shape: 'the server could not read this line as a name.',
   keys: 'the server could not read this line as a name.',
   length: `a name is 1 to ${NAME_LIST_MAX_CHARS} characters.`,
-  mode: 'the mode in front of the name is not one of part, exact, run or words.',
+  mode: `the mode in front of the name is not one of ${ALL_MODES}.`,
   'non-ascii': "it holds a letter or digit outside a to z and 0 to 9, which the check cannot match. Enter the name's ASCII spelling.",
   'no-token': 'it holds no letter or digit the check can match (a to z, 0 to 9).',
 };
@@ -54,24 +63,32 @@ export const NAME_LIST_ROW_TEXT: Readonly<Record<NameListRowRefusal, string>> = 
 export const NAME_LIST_WORDS = {
   none: 'No list uploaded. The relay does not check outgoing text for private names.',
   list: (rows: number, at: string) => `${rows} ${rows === 1 ? 'name' : 'names'}, uploaded ${at}. Every outgoing relay is checked against them.`,
+  /** A list read back with no names (after Clear the list): the door stored its check alone, so the relay still checks that the
+   *  list reads, and matches no name (review 4139 A3). */
+  listEmpty: (at: string) => `The list is empty, cleared ${at}. No name is matched; the relay still refuses outgoing text if the list cannot be read.`,
   unreadable: (reason: NameListUnreadable) =>
     `The list cannot be read (${NAME_LIST_UNREADABLE_TEXT[reason]}). The relay refuses outgoing text until you upload the list again.`,
   unread: (error: string) => `The list's status could not be read (${error}).`,
   replaces: 'Uploading replaces the whole list. The server keeps only a keyed hash of each name, so the list cannot be shown back to you.',
-  format: 'One name per line. Put exact:, run: or words: in front of a name to change how it is matched; a line without one matches any part.',
+  format: `One name per line. Put ${OTHER_MODES} in front of a name to change how it is matched; a line without one matches any ${NAME_LIST_MODE_WORDS[DEFAULT_MODE]}.`,
   textLabel: 'Names',
   upload: 'Upload the list',
   uploading: 'Uploading…',
   uploaded: (rows: number) => `Uploaded: ${rows} ${rows === 1 ? 'name' : 'names'}.`,
   empty: 'Type at least one name. To empty the list, use Clear the list.',
-  badMode: (line: number) => `Line ${line}: the word before the colon is not part, exact, run or words.`,
+  badMode: (line: number) => `Line ${line}: the word before the colon is not ${ALL_MODES}.`,
   rowRefused: (line: number, reason: NameListRowRefusal) => `Line ${line}: ${NAME_LIST_ROW_TEXT[reason]}`,
   clear: 'Clear the list',
   clearTitle: (rows: number) => `Clear all ${rows} ${rows === 1 ? 'name' : 'names'}?`,
   clearWhy: 'The relay will stop checking outgoing text.',
   cleared: 'The list was cleared.',
-  /** A second `step-up-required` on the one retry after the confirm (the coordinator's condition 4): final, and the text is gone. */
+  /** A `step-up-required` on the retry the confirm started (the coordinator's condition 4, review 4139 F1): final, and the text is
+   *  gone. Each act says its own (A4). */
   stepUpFinal: "Confirm it's you did not hold for this upload, so nothing was uploaded. Type the names again, then upload.",
+  clearFinal: "Confirm it's you did not hold for clearing the list, so the list was not cleared. Clear it again.",
+  /** The retry found the box emptied (the page was hidden while the step showed): it sends nothing, never less than the first send
+   *  carried (review 4139 F2). */
+  namesGone: 'The names were cleared when the page was hidden, so nothing was uploaded. Type them again, then upload.',
 } as const;
 
 /** The operator's text as the upload's rows, with the line each came from; or why not: no name in it (`empty`), or a line whose
@@ -92,7 +109,7 @@ export function nameListRowsOf(text: string): NameListText {
     const line = all[i]!.trim();
     if (line === '') continue;
     const m = MODE_PREFIX.exec(line);
-    if (m === null) { rows.push({ text: line, mode: 'part' }); lines.push(i + 1); continue; }
+    if (m === null) { rows.push({ text: line, mode: DEFAULT_MODE }); lines.push(i + 1); continue; }
     const word = m[1]!;
     if (!isMode(word)) return { ok: false, why: 'mode', line: i + 1 };
     rows.push({ text: m[2]!.trim(), mode: word });
@@ -113,6 +130,19 @@ export function nameListRefusalText(err: unknown, lines: readonly number[], othe
     if (line !== undefined) return NAME_LIST_WORDS.rowRefused(line, body.reason);
   }
   return otherwise(err);
+}
+
+/** The upload door's words after which the box keeps the names (review 4139 A2, slug `names-kept-only-to-be-edited`): its
+ *  `bad-request`, which a refused row (with its row and its reason) and the row count's cap both answer, and `oversize`, the
+ *  body's cap. Each is met by editing the list. */
+const KEEP_WORDS: ReadonlySet<string> = new Set(['bad-request', 'oversize']);
+
+/** Whether a refused upload leaves the names in the box: only where the operator must edit them, a refused row or a refused cap.
+ *  Every other refusal empties it, as the secret field's own rule has it, and a 401 does too: the person at the screen is no
+ *  longer proven. A first step-up keeps them too, which is the card's (it is no refusal). */
+export function nameListKeepsText(err: unknown): boolean {
+  if (!(err instanceof ApiError) || err.status === 401 || !isObj(err.body)) return false;
+  return typeof err.body.error === 'string' && KEEP_WORDS.has(err.body.error);
 }
 
 /** The upload's answer in words: how many names the server took. */

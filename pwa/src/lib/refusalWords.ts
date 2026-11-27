@@ -1012,8 +1012,9 @@ const AUTH_OFF_BY_ACT: Readonly<Partial<Record<OverlordSettingsAct, string>>> = 
 const BAD_REQUEST_BY_ACT: Readonly<Partial<Record<OverlordSettingsAct, string>>> = {
   'decision-key': ST['key-bad-request'], 'name-list': ST['names-bad-request'],
 };
-/** The decision model's words whose answer's `detail` (the door's own fixed text) is drawn beside the sentence. */
-const DECISION_DETAIL_WORDS: ReadonlySet<string> = new Set(['bad-endpoint', 'stored-not-applied', 'removed-not-held']);
+/** The decision model's words whose answer's `detail` (the door's own fixed text) is drawn beside the sentence: `bad-ceiling`'s
+ *  is the range (review 4139 F3), so the console never restates the bounds. */
+const DECISION_DETAIL_WORDS: ReadonlySet<string> = new Set(['bad-endpoint', 'bad-ceiling', 'stored-not-applied', 'removed-not-held']);
 const DECISION_SETTINGS_ACTS: ReadonlySet<OverlordSettingsAct> = new Set<OverlordSettingsAct>(['decision-row', 'decision-key', 'decision-key-remove']);
 /** The backstop's, the retention's, a Clear's, the decision model's and the list's other words, each keyed by the word and read by
  *  `Object.hasOwn`. */
